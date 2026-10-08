@@ -103,7 +103,7 @@ import {
 } from '../lib/tradovateLiveTab';
 import { supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
-import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup } from '../lib/copierArmPreparation';
+import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
 import {
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
@@ -843,7 +843,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         }
       }
     }
-    await runConfigMutation(async () => {
+    const armNow = () => runConfigMutation(async () => {
       // Re-read after any camera dialog/repair; the worker still rejects any
       // concurrent tightening that happened after this UI snapshot.
       const prepared = prepare();
@@ -857,6 +857,35 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         setArmRulesNotice(`Při zapnutí zůstala zachována dnešní potvrzená pravidla: ${prepared.preservedRules.join(', ')}. Aktuální hodnoty najdeš v Risk.`);
       }
     });
+    try {
+      await armNow();
+    } catch (reason) {
+      // 8. 10. 2026: stará skupina má účty, které už v Tradovate nejsou
+      // (breach). Worker je sám nevyřadí; po potvrzení uživatelem je vyřadí
+      // explicitním activate-group a teprve pak novou skupinu zapne.
+      const retirement = retireMissingFromError(reason);
+      if (!retirement) throw reason;
+      const confirmed = await confirmAction({
+        title: 'Vyřadit breachnuté účty staré skupiny?',
+        message: `Účty ${retirement.accountIds.join(', ')} staré skupiny už v Tradovate nejsou nebo jsou neaktivní (breach). `
+          + 'Kopírka je vyřadí a přepne na tuto skupinu. Jejich případné zbylé pozice už hlídat nebude — zkontroluj je u propfirmy.',
+        confirmLabel: 'Vyřadit a zapnout',
+        cancelLabel: 'Zrušit',
+      });
+      if (!confirmed) return;
+      await runConfigMutation(async () => {
+        acceptConfigAck((await executeAgent({
+          type: 'activate-group',
+          group: prepare().group,
+          retireMissingOldGroup: {
+            groupId: retirement.groupId,
+            accountIds: retirement.accountIds,
+            reason: `Uživatel v appce potvrdil vyřazení účtů ${retirement.accountIds.join(', ')}, které v Tradovate už nejsou nebo jsou neaktivní (breach)`,
+          },
+        })).status);
+      });
+      await armNow();
+    }
   }, [acceptAgentStatus, acceptConfigAck, accountEligibilityExclusions, agentStatus?.snapshotHealth, confirmAction, effectiveAccountEligibility, executeAgent, live.connectionData, runConfigMutation, waitForSnapshotReady]);
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;

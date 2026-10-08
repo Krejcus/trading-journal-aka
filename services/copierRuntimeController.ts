@@ -619,6 +619,12 @@ export interface CopierRuntimeController {
   }): Promise<void>;
   /** Důvod, proč teď nesmí začít plánovaná obměna broker socketu. */
   connectionRenewalBlocker(): string | null;
+  /**
+   * Proč teď nejde worker bezpečně restartovat kvůli údržbě (nové účty):
+   * rozpracovaný lifecycle, nedokončená epocha/cut, durable stopa kopií
+   * nebo cokoli z `connectionRenewalBlocker`. `null` = klid.
+   */
+  maintenanceRestartBlocker(): string | null;
   status(): CopierControllerStatus;
   waitForIdle(): Promise<void>;
   stop(): void;
@@ -14578,7 +14584,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           leaderEventId: `manual-group-retirement:${group.id}:${retiredAt}`,
           kind: 'blocked',
           accountId: group.leaderAccountId,
-          reason: `operator-attested retirement of OAuth-missing group ${group.id}; accounts=${[...retiredAccountIds].sort((a, b) => a - b).join(',')}; reason=${retirement.reason.trim()}; no broker flat proof for retired accounts`,
+          reason: `operator-attested retirement of OAuth-missing or inactive accounts of group ${group.id}; accounts=${[...retiredAccountIds].sort((a, b) => a - b).join(',')}; reason=${retirement.reason.trim()}; no broker flat proof for retired accounts`,
         }]);
       }
 
@@ -14823,6 +14829,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   });
 
   return {
+    maintenanceRestartBlocker() {
+      return readOnlyRecoveryBlocker() ?? this.connectionRenewalBlocker();
+    },
     connectionRenewalBlocker() {
       if (autoCloseInFlight) return 'auto-close';
       if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery

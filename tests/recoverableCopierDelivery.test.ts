@@ -89,11 +89,15 @@ describe('recoverable copier delivery', () => {
     expect(f.options.request).toHaveBeenCalledTimes(3);
   });
   it.each(['polling', 'executing', 'completed'] as const)('never executes a persisted %s command after restart', async phase => {
-    const f = fixture(); f.saved = { version: 1, session: randomUUID(), deliveryId: randomUUID(), phase,
+    const f = fixture(); f.remote.command = { type: 'reconcile' };
+    f.saved = { version: 1, session: randomUUID(), deliveryId: randomUUID(), phase,
       ...(phase !== 'polling' ? { commandId: f.remote.id, result: { armed: true } } : {}) };
     await recoverableCopierDelivery(f.options)();
     expect(f.options.agent.execute).not.toHaveBeenCalled();
-    expect(f.options.request.mock.calls[1][0]).toMatchObject({ error: 'command-outcome-unknown-worker-session-changed', result: null });
+    // 8. 10. 2026: durable výsledek z předchozí session se jen znovu potvrdí.
+    expect(f.options.request.mock.calls[1][0]).toMatchObject(phase === 'completed'
+      ? { result: { armed: true } }
+      : { error: 'command-outcome-unknown-worker-session-changed', result: null });
   });
   it('does not repeat execution if saving its result fails', async () => {
     const f = fixture(); const step = recoverableCopierDelivery(f.options);
@@ -107,7 +111,8 @@ describe('recoverable copier delivery', () => {
     expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
   });
   it('will not execute after its intent could not be synced to disk', async () => {
-    const f = fixture(); const step = recoverableCopierDelivery(f.options);
+    // Neidempotentní příkaz; DISARM/kill switch se smí zopakovat (jen zpřísňují).
+    const f = fixture(); f.remote.command = { type: 'reconcile' }; const step = recoverableCopierDelivery(f.options);
     const write = f.options.store.write; let fail = true;
     f.options.store.write = async row => { if (row?.phase === 'executing' && fail) { fail = false; throw new Error('disk'); } await write(row); };
     await expect(step()).rejects.toThrow('disk'); await step();
@@ -115,10 +120,67 @@ describe('recoverable copier delivery', () => {
   });
   it.each(['expired', 'old', 'invalid'])('rejects a %s command rather than extending its TTL', async kind => {
     const f = fixture();
+    // Brzdy (disarm/kill switch) zadané před restartem se provádějí; test
+    // stáří proto používá příkaz, který brzdou není.
+    f.remote.command = { type: 'reconcile' };
     if (kind === 'expired') f.remote.expiresAt = new Date(999).toISOString();
     if (kind === 'old') f.remote.createdAt = new Date(999).toISOString();
     if (kind === 'invalid') f.remote.expiresAt = 'invalid';
     await recoverableCopierDelivery(f.options)(); expect(f.options.agent.execute).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['disarm', 'polling'], ['disarm', 'executing'], ['kill-switch', 'polling'], ['kill-switch', 'executing'],
+  ] as const)('claim brzdy %s z předchozí session (%s) se po restartu provede', async (type, phase) => {
+    const f = fixture(); f.remote.command = { type } as never;
+    f.saved = { version: 1, session: randomUUID(), deliveryId: randomUUID(), phase,
+      ...(phase !== 'polling' ? { commandId: f.remote.id } : {}) };
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
+    expect(f.options.request.mock.calls[1][0]).not.toMatchObject({ error: 'command-outcome-unknown-worker-session-changed' });
+  });
+  it.each(['disarm', 'kill-switch'] as const)('brzda %s se po neúspěšném zápisu checkpointu provede (nikdy se nezahodí)', async type => {
+    const f = fixture(); f.remote.command = { type };
+    const write = f.options.store.write; let fail = true;
+    f.options.store.write = async row => { if (row?.phase === 'executing' && fail) { fail = false; throw new Error('disk'); } await write(row); };
+    const step = recoverableCopierDelivery(f.options);
+    await expect(step()).rejects.toThrow('disk');
+    await step();
+    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
+  });
+  it('denní zámek: server o 300 ms napřed, normalizovaný čas přes hranici 17:00 CT → odmítnut', async () => {
+    const f = fixture();
+    f.remote.command = { type: 'lock-until-session-end', reason: 'test' } as never;
+    f.remote.createdAt = '2026-10-08T22:00:00.200Z'; // serverový čas (server +300 ms)
+    f.remote.expiresAt = '2026-10-08T22:10:00.000Z';
+    f.setNow(Date.parse('2026-10-08T21:59:58.000Z'));
+    const step = recoverableCopierDelivery(f.options);
+    const localNow = Date.parse('2026-10-08T21:59:59.950Z');
+    f.setNow(localNow);
+    // Server hlásí serverNow o 300 ms napřed; skutečný vznik byl 16:59:59.900 CT.
+    f.options.request.mockImplementation(async (body: { action: string }) => body.action === 'poll-v2'
+      ? { protocol: 2, command: f.remote, serverNow: new Date(localNow + 300).toISOString() }
+      : { protocol: 2, accepted: true });
+    await step();
+    expect(f.options.agent.execute).not.toHaveBeenCalled();
+  });
+  it('denní zámek těsně u hranice session (17:00 CT) se odmítne, ať nezamkne další den', async () => {
+    const f = fixture();
+    f.remote.command = { type: 'lock-until-session-end', reason: 'test' } as never;
+    // 16:59:59.900 Chicago; nejistota posunu hodin přesahuje hranici session.
+    f.remote.createdAt = '2026-10-08T21:59:59.900Z';
+    f.remote.expiresAt = '2026-10-08T22:10:00.000Z';
+    f.setNow(Date.parse('2026-10-08T21:59:58.000Z')); // worker běží už před vznikem zámku
+    const step = recoverableCopierDelivery(f.options);
+    f.setNow(Date.parse('2026-10-08T21:59:59.950Z'));
+    await step();
+    expect(f.options.agent.execute).not.toHaveBeenCalled();
+  });
+  it.each(['disarm', 'kill-switch'] as const)('brzda %s zadaná před restartem workeru se provede', async type => {
+    const f = fixture();
+    f.remote.command = { type };
+    f.remote.createdAt = new Date(999).toISOString();
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
   });
   it('checks expiry again after disk writes', async () => {
     const f = fixture(); const write = f.options.store.write;

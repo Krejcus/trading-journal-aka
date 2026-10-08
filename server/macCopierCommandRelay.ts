@@ -35,6 +35,12 @@ export interface MacCopierCommandRelay {
   }): Promise<{ devices: number; sent: number }>;
   /** Předběžné 1m svíčky z TradingView pro graf hodnocení (jen zobrazení). */
   uploadBars(capture: TvBarsCapture): Promise<void>;
+  /**
+   * Kdy začal poslední poll, který našel frontu příkazů prázdnou a nic
+   * nedoručoval; `null` = právě se doručuje nebo prázdnou frontu zatím
+   * nikdo neviděl. Údržbový restart (8. 10. 2026) čeká na čerstvou hodnotu.
+   */
+  commandQueueIdleSince?(): number | null;
   close(): Promise<void>;
 }
 
@@ -233,12 +239,25 @@ export function startMacCopierCommandRelay(options: {
     isActive: () => !stopped,
     onComplete: id => { completedNotifications.add(id); publishBackground(); },
   }) : null;
+  let deliveryBusy = false;
+  let lastEmptyPollStartedAt: number | null = null;
   const loop = async () => {
     let failures = 0;
     while (!stopped) {
       try {
         if (delivery) {
-          const response = await delivery();
+          const pollStartedAt = Date.now();
+          // Starý důkaz prázdné fronty neplatí, dokud tento poll neskončí
+          // prázdný (chyba nebo claim ho nesmí nechat platit).
+          lastEmptyPollStartedAt = null;
+          deliveryBusy = true;
+          let response: Awaited<ReturnType<typeof delivery>>;
+          try {
+            response = await delivery();
+          } finally {
+            deliveryBusy = false;
+          }
+          if (response.command == null) lastEmptyPollStartedAt = pollStartedAt;
           await maybeSubscribeKick(response.realtime);
           failures = 0;
         } else {
@@ -322,6 +341,7 @@ export function startMacCopierCommandRelay(options: {
   publishBackground();
   publishStatus();
   return {
+    commandQueueIdleSince: () => (deliveryBusy || !delivery ? null : lastEmptyPollStartedAt),
     nudgeCopyEvents() {
       copyEventsRevision += 1;
       publishBackground();

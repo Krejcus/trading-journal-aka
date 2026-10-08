@@ -1524,6 +1524,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }
   } : undefined;
 
+  // 8. 10. 2026: místo „není připojená k execution runtime“ srozumitelně, proč
+  // příkaz nedošel na Mac worker a co udělat.
+  const inactiveGroupNotice = (workerUnavailable: boolean, needsArmed: boolean) => {
+    if (workerUnavailable) return 'Mac worker teď není dostupný, příkaz nikam neodešel.';
+    if (needsArmed) return 'Kopírka je vypnutá, příkaz nikam neodešel.';
+    const active = groups.find(group => group.id === executionGroupId)?.name;
+    return `Tahle skupina ve workeru neběží${active ? ` (aktivní je „${active}“)` : ''}, příkaz nikam neodešel. Zapni ji tlačítkem Zapnout — worker se na ni přepne.`;
+  };
   const runCommand = async (
     command: LiveCopyTradingCommand,
     update?: () => void | Promise<void>,
@@ -1547,7 +1555,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       }
       if (brokerWrite && (!commandAdapter || !targetsExecutionRuntime || (requiresArmed && !copierArmed))) {
         await update?.();
-        setToast({ tone: 'info', text: 'Preview pouze: tato skupina není připojená k připravenému execution runtime.' });
+        setToast({ tone: 'info', text: inactiveGroupNotice(!commandAdapter, requiresArmed && !copierArmed) });
         return true;
       }
       const result = commandAdapter && targetsExecutionRuntime
@@ -1584,7 +1592,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         tone: commandAdapter && targetsExecutionRuntime ? 'success' : 'info',
         text: commandAdapter && targetsExecutionRuntime
           ? successText
-          : 'Konfigurace byla uložena pouze lokálně. Tato skupina není připojená k execution runtime.',
+          : `Uloženo jen v appce. ${inactiveGroupNotice(!commandAdapter, false)}`,
       });
       return true;
     } catch (reason) {

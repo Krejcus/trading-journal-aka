@@ -640,6 +640,33 @@ describe('Tradovate copier command relay', () => {
     })).rejects.toThrow('invalid-relay-command-payload');
   });
 
+  it('activate-group přenese uživatelem potvrzené vyřazení breachnutých účtů a odmítne vadné', async () => {
+    const group = {
+      id: 'group-2', name: 'Nová', enabled: false, leaderAccountId: 11,
+      followers: [{ accountId: 22, mode: 'on-submit' as const, multiplier: 1 }],
+    };
+    const retireMissingOldGroup = { groupId: 'group-1', accountIds: [100, 200], reason: 'Uživatel v appce potvrdil vyřazení účtů 100, 200' };
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert), userId, connectionId,
+      command: { type: 'activate-group', group, retireMissingOldGroup },
+    });
+    expect(upsert.mock.calls[0][0].payload).toMatchObject({ retireMissingOldGroup });
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'command-id', command_type: 'activate-group',
+        payload: { group, retireMissingOldGroup },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toMatchObject({ type: 'activate-group', retireMissingOldGroup });
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn()), userId, connectionId,
+      command: { type: 'activate-group', group, retireMissingOldGroup: { groupId: 'group-1', accountIds: [-1], reason: 'x' } },
+    } as never)).rejects.toThrow('invalid-relay-command-payload');
+  });
+
   it('claim odmítne starý nebo ručně vložený cancel-order payload', async () => {
     await expect(claimTradovateCopierCommand({
       db: claimDb({

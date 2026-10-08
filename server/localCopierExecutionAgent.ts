@@ -113,6 +113,8 @@ export interface LocalCopierExecutionAgent {
   execute(command: LocalCopierAgentCommand, context?: LocalCopierAgentExecutionContext): Promise<LocalCopierAgentCommandResult>;
   /** Synchronně odmítne nový/pending command ingress před graceful drainem. */
   beginShutdown(): void;
+  /** Rozpracované příkazy a čas posledního dokončeného (údržbový restart). */
+  commandActivity?(): { pending: number; lastSettledAt: number };
   close(): Promise<void>;
 }
 
@@ -182,6 +184,11 @@ const sameCopyGroupConfig = (left: CopyGroupConfig, right: CopyGroupConfig): boo
   JSON.stringify(canonicalConfig(left)) === JSON.stringify(canonicalConfig(right));
 
 const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Strojově čitelná značka pro UI: kterou skupinu a účty potvrdit k vyřazení. */
+export const retireMissingMarker = (groupId: string, accountIds: readonly number[]) => (
+  `[retire-missing:${encodeURIComponent(groupId)}:${accountIds.join(',')}]`
+);
 
 const accountsForRoutingChange = (
   previous: CopyGroupConfig,
@@ -378,9 +385,40 @@ export async function startLocalCopierExecutionAgent(
         retireMissingOldGroup: {
           groupId: group.id,
           accountIds: [...startupRepair.unavailableAccountIds],
-          reason: `UI oprava skupiny po startu: účty ${startupRepair.unavailableAccountIds.join(', ')} nejsou v OAuth (breached/odpojené); vyřazeny bez broker flat důkazu`,
+          reason: `UI oprava skupiny po startu: účty ${startupRepair.unavailableAccountIds.join(', ')} nejsou v OAuth nebo jsou neaktivní (breached/odpojené); vyřazeny bez broker flat důkazu`,
         },
       };
+    }
+    if (next.id !== group.id && mode === 'activate' && !reconfigurationRequest.retireMissingOldGroup
+      // Bez read-only dry-runu nejde chybějící účty zjistit — beze změny chování.
+      && options.previewGroupAccounts) {
+      // 8. 10. 2026: přepnutí na JINOU skupinu, když stará má účty, které už
+      // v Tradovate nejsou (breach). Worker je sám NEvyřadí (nemá broker flat
+      // důkaz, E6); odmítne s přesným seznamem a UI nabídne potvrzení
+      // uživatelem — pak pošle activate-group s retireMissingOldGroup.
+      const nextIds = new Set(copyGroupAccountIds(next));
+      const previousIds = copyGroupAccountIds(group);
+      const repair = startupRepair?.groupId === group.id ? [...startupRepair.unavailableAccountIds].sort((x, y) => x - y) : null;
+      const candidates = repair ?? previousIds.filter(accountId => !nextIds.has(accountId));
+      if (candidates.length > 0) {
+        // Fail-closed: selhání dry-runu přepnutí odmítne.
+        // Mimo režim opravy jen účty, které Tradovate vůbec nevrací (viditelný
+        // neaktivní účet může mít pozici). Režim opravy drží klasifikaci ze
+        // startu (chybějící i neaktivní) — jinak by z něj nebyla cesta ven.
+        const probe = await previewAccounts({ required: [], optional: candidates, inactiveOptionalAsMissing: repair != null });
+        const missing = new Set(probe.missingOptional);
+        const unavailable = candidates.filter(accountId => missing.has(accountId));
+        if (unavailable.length > 0) {
+          const retirable = repair
+            ? unavailable.length === repair.length && !unavailable.some(accountId => nextIds.has(accountId))
+            : unavailable.length === previousIds.length;
+          throw new Error(retirable
+            ? `Stará skupina „${group.name || group.id}“ má účty ${unavailable.join(', ')}, které v Tradovate už nejsou${repair ? ' nebo jsou neaktivní' : ''}. `
+              + `Potvrď jejich vyřazení a přepnutí. ${retireMissingMarker(group.id, unavailable)}`
+            : `Účty ${unavailable.join(', ')} staré skupiny už v Tradovate nejsou. `
+              + 'Worker to za chvíli sám zachytí a restartuje se; přepnutí pak půjde. Zkus to znovu za pár minut.');
+        }
+      }
     }
     const requested = next;
     const normalized = sanitizeCopyGroups([next]);
@@ -451,7 +489,10 @@ export async function startLocalCopierExecutionAgent(
       ? {
         required: copyGroupAccountIds(next),
         optional: previousIds.filter(accountId => !copyGroupAccountIds(next).includes(accountId)),
-        inactiveOptionalAsMissing: true,
+        // 8. 10. 2026 (review): mimo režim opravy jde bez flat důkazu vyřadit
+        // jen účet, který Tradovate vůbec nevrací (neaktivní může mít pozici).
+        // Režim opravy (E1) zachovává klasifikaci ze startu včetně neaktivních.
+        inactiveOptionalAsMissing: startupRepair?.groupId === previous.id,
       }
       : accountsForRoutingChange(previous, next);
     if ((mode === 'activate' || topologyChanged) && options.controller.status().armed) {
@@ -1019,6 +1060,22 @@ export async function startLocalCopierExecutionAgent(
     tail = pending.then(() => undefined, () => undefined);
     return pending;
   };
+  // Aktivita příkazů pro údržbový restart (8. 10. 2026): restart nesmí
+  // přerušit rozpracovaný ani právě dokončený příkaz, jehož ACK ještě letí.
+  let pendingCommands = 0;
+  let lastCommandSettledAt = 0;
+  const dispatchTracked: typeof dispatch = (...args) => {
+    pendingCommands += 1;
+    const settle = () => { pendingCommands -= 1; lastCommandSettledAt = Date.now(); };
+    let result: ReturnType<typeof dispatch>;
+    try {
+      result = dispatch(...args);
+    } catch (error) {
+      settle();
+      throw error;
+    }
+    return result.finally(settle);
+  };
 
   const server: Server = createServer((request, response) => {
     const origin = request.headers.origin ?? '';
@@ -1070,7 +1127,7 @@ export async function startLocalCopierExecutionAgent(
         }
         const rawDeadline = request.headers['x-alphatrade-command-deadline'];
         const localDeadline = boundedLocalArmDeadline(rawDeadline, requestCreatedAt);
-        const payload = await dispatch(command, command.type === 'arm-live'
+        const payload = await dispatchTracked(command, command.type === 'arm-live'
           ? { source: 'loopback', createdAt: requestCreatedAt, deadlineAt: localDeadline }
           : { source: 'loopback', createdAt: requestCreatedAt }, admittedBrakeEpoch);
         json(response, 200, payload);
@@ -1106,7 +1163,8 @@ export async function startLocalCopierExecutionAgent(
   return {
     origin: `http://${host}:${address.port}`,
     status,
-    execute: dispatch,
+    execute: dispatchTracked,
+    commandActivity: () => ({ pending: pendingCommands, lastSettledAt: lastCommandSettledAt }),
     beginShutdown,
     async close() {
       beginShutdown();
