@@ -475,6 +475,8 @@ interface Props {
   lastDisarm?: CopierDisarmRecord;
   /** Read-only broker reconciliation for a currently unverifiable account. */
   onVerifyEligibility?: (accountId: number) => Promise<void> | void;
+  /** Jen starší worker bez potvrzení incidentu v ON: ruční Kontrola pozic. */
+  legacyReconcile?: () => Promise<void>;
   executionGroupId?: string | null;
   /** `marketPrices` z workeru (TradingView) — jen pro zobrazení vzdálenosti k limitu. */
   marketPrices?: readonly unknown[];
@@ -777,6 +779,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   unverifiableFollowerOwnership = [],
   lastDisarm,
   onVerifyEligibility,
+  legacyReconcile,
   executionGroupId = null,
   runtimeGroup = null,
   workerAccountRoutes,
@@ -793,6 +796,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     <CopierMaintenancePanel
       status={runtimeStatus}
       known={runtimeAvailable && !copierStatusPending}
+      legacyReconcile={legacyReconcile}
     />
   );
   const cooldownPanel = <CopierCooldownPanel
@@ -4301,14 +4305,35 @@ const timeWithSecondsLabel = (at: number) => new Date(at).toLocaleTimeString('cs
  * po incidentu. Samostatné tlačítko Kontrola pozic zmizelo (8. 10. 2026):
  * kontrolu u brokera dělá Zapnout a incident potvrdíš v jeho dialogu.
  */
-export const CopierMaintenancePanel = ({ status, known }: {
+export const CopierMaintenancePanel = ({ status, known, legacyReconcile }: {
   status: CopierControllerStatus | null | undefined;
   known: boolean;
+  /** Starší worker bez potvrzení incidentu v ON: zachová ruční Kontrolu pozic. */
+  legacyReconcile?: () => Promise<void>;
 }) => {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   if (!known || !status) return null;
   const repair = status.startupGroupRepair ?? null;
   const incident = status.manualRecovery ?? null;
-  if (!repair && (!incident || status.armed)) return null;
+  const preparation = status.armPreparation;
+  const legacyNeedsCheck = legacyReconcile != null && !status.armed && (preparation?.blockedBy != null
+    ? preparation.blockedBy === 'incident'
+    : preparation?.manualRecoveryRequired === true || (status.reconciliationRequired && !preparation));
+  if (!repair && !legacyNeedsCheck && !result && (!incident || status.armed)) return null;
+  const runLegacyCheck = async () => {
+    if (!legacyReconcile || busy) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      await legacyReconcile();
+      setResult({ ok: true, text: 'Kontrola pozic proběhla. Účty jsou ověřené u brokera, kopírka zůstává vypnutá.' });
+    } catch (reason) {
+      setResult({ ok: false, text: reason instanceof Error ? reason.message : String(reason) });
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <section
       aria-live="polite"
@@ -4326,13 +4351,30 @@ export const CopierMaintenancePanel = ({ status, known }: {
               {' '}Kopírka běží jen vypnutá. <span className="font-black">Uprav skupinu: odeber tyto účty a vyber nového leadera.</span>
               <span className="block font-medium text-[var(--text-secondary)]">Při uložení je worker auditovaně vyřadí bez ověření jejich pozic u brokera; ostatní účty projdou normální kontrolou.</span>
             </p>
+          ) : legacyNeedsCheck ? (
+            <p>
+              {preparation?.reason ?? 'Před zapnutím je potřeba Kontrola pozic (read-only u brokera, nic neobchoduje).'}
+            </p>
           ) : incident ? (
             <p>
               Po incidentu: {incident.reason}
               <span className="block font-medium text-[var(--text-secondary)]">Ověří se při zapnutí — Zapnout se nejdřív zeptá, pak zkontroluje účty u brokera a zapne jen při čistém stavu.</span>
             </p>
           ) : null}
+          {result ? (
+            <p className={`mt-1 font-medium ${result.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{result.text}</p>
+          ) : null}
         </div>
+        {legacyNeedsCheck && !repair ? (
+          <button
+            type="button"
+            onClick={() => { void runLegacyCheck(); }}
+            disabled={busy}
+            className="shrink-0 rounded-md border border-current px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50"
+          >
+            {busy ? 'Kontroluji…' : 'Zkontrolovat pozice'}
+          </button>
+        ) : null}
       </div>
     </section>
   );

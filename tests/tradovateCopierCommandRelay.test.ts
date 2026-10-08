@@ -623,20 +623,20 @@ describe('Tradovate copier command relay', () => {
     const upsert = vi.fn();
     await enqueueTradovateCopierCommand({
       db: enqueueDb(upsert), userId, connectionId,
-      command: { type: 'arm-live', group, acknowledgeIncidentAt: 1_791_000_000_000 },
+      command: { type: 'arm-live', group, acknowledgeIncidentId: 'b2c1-incident' },
     });
-    expect(upsert.mock.calls[0][0].payload).toMatchObject({ acknowledgeIncidentAt: 1_791_000_000_000 });
+    expect(upsert.mock.calls[0][0].payload).toMatchObject({ acknowledgeIncidentId: 'b2c1-incident' });
     const claimed = await claimTradovateCopierCommand({
       db: claimDb({
-        id: 'command-id', command_type: 'arm-live', payload: { group, acknowledgeIncidentAt: 1_791_000_000_000 },
+        id: 'command-id', command_type: 'arm-live', payload: { group, acknowledgeIncidentId: 'b2c1-incident' },
         expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
       }),
       deviceId,
     });
-    expect(claimed?.command).toMatchObject({ type: 'arm-live', acknowledgeIncidentAt: 1_791_000_000_000 });
+    expect(claimed?.command).toMatchObject({ type: 'arm-live', acknowledgeIncidentId: 'b2c1-incident' });
     await expect(enqueueTradovateCopierCommand({
       db: enqueueDb(vi.fn()), userId, connectionId,
-      command: { type: 'arm-live', group, acknowledgeIncidentAt: 'ano' },
+      command: { type: 'arm-live', group, acknowledgeIncidentId: 'ne platné!' },
     } as never)).rejects.toThrow('invalid-relay-command-payload');
     await expect(enqueueTradovateCopierCommand({
       db: enqueueDb(vi.fn()), userId, connectionId, command: { type: 'reconcile' },

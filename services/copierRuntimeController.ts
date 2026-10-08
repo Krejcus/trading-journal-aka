@@ -191,8 +191,8 @@ export interface CopierControllerStatus {
     blockedBy: CopierArmPreparationBlocker | null;
     manualRecoveryRequired: boolean;
   };
-  /** Durable incident čekající na lidské potvrzení (čistou Kontrolou nebo ON s potvrzením). */
-  manualRecovery?: { at: number; reason: string } | null;
+  /** Durable incident čekající na lidské potvrzení v ON (8. 10. 2026). */
+  manualRecovery?: { id: string; at: number; reason: string } | null;
   divergentAccounts: number[];
   workingOrderAccounts: number[];
   stuckOutbox: boolean;
@@ -464,8 +464,9 @@ export interface CopierReconciliationOptions {
   /**
    * ON s výslovným potvrzením incidentu (8. 10. 2026): čistý výsledek smaže
    * durable incident jen tehdy, je-li to právě tento potvrzený incident.
+   * Bez potvrzení kontrola existující incident nikdy nesmaže.
    */
-  acknowledgedIncidentAt?: number;
+  acknowledgedIncidentId?: string;
 }
 
 export interface CopierGroupReconfigurationOptions {
@@ -1482,8 +1483,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       && storedManualRecovery.at > 0
       && typeof storedManualRecovery.reason === 'string'
       && storedManualRecovery.reason.trim().length > 0
-      ? { at: storedManualRecovery.at, reason: storedManualRecovery.reason.trim() }
-      : { at: clock(), reason: 'Durable příznak ruční obnovy je neplatný; proveď Kontrolu pozic' };
+      ? {
+        at: storedManualRecovery.at,
+        reason: storedManualRecovery.reason.trim(),
+        // Starší marker bez ID: deterministické ID, ať platí i po restartu.
+        id: typeof storedManualRecovery.id === 'string' && storedManualRecovery.id.length > 0
+          ? storedManualRecovery.id
+          : `legacy-${storedManualRecovery.at}`,
+      }
+      : { at: clock(), reason: 'Durable příznak ruční obnovy je neplatný; ověř účty a potvrď incident při zapnutí', id: `invalid-${clock()}` };
   let lastError: Error | null = startupGroupRepair
     ? new Error(
       `Uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); `
@@ -1715,7 +1723,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let armPreparationInFlight: Promise<void> | null = null;
   let armPreparationError: string | null = null;
   let armPreparationIncidentRequiresRecovery = restoredManualRecovery != null;
-  let currentManualRecovery: { at: number; reason: string } | null = restoredManualRecovery;
+  let currentManualRecovery: { id: string; at: number; reason: string } | null = restoredManualRecovery;
   let armPreparationLastAttemptAt = -Infinity;
   let armPreparationInterestUntil = -Infinity;
   let automaticArmPreparation = false;
@@ -4307,7 +4315,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     lastError = errorOf(reason);
     if (!failure.transportLost) {
       armPreparationIncidentRequiresRecovery = true;
-      const manualRecoveryRequired = { at: clock(), reason: lastError.message };
+      const manualRecoveryRequired = { at: clock(), reason: lastError.message, id: globalThis.crypto.randomUUID() };
       currentManualRecovery = manualRecoveryRequired;
       disarmPersistenceTail = disarmPersistenceTail.then(() => persistSafetyUpdate(current => ({
         ...current,
@@ -15127,39 +15135,39 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
       // Interní kontrola (SHADOW, kompatibilní ARM) incident nikdy nemaže.
-      const userRecovery = reconciliationOptions.internal !== true;
-      const expectedIncidentAt = reconciliationOptions.acknowledgedIncidentAt;
-      if (userRecovery && expectedIncidentAt != null && currentManualRecovery?.at !== expectedIncidentAt) {
+      // Existující durable incident smaže jen kontrola s výslovným potvrzením
+      // právě tohoto incidentu (ON s dialogem); bez něj je to jen ověření.
+      const expectedIncidentId = reconciliationOptions.acknowledgedIncidentId;
+      if (reconciliationOptions.internal !== true && expectedIncidentId != null
+        && currentManualRecovery?.id !== expectedIncidentId) {
         throw new Error('Incident se mezitím změnil; potvrď ho znovu.');
       }
-      const result = await performReconciliation({
-        ...reconciliationOptions,
-        clearLastError: userRecovery
-          // ON smí smazat chybu jen potvrzeného incidentu (nebo když žádný není).
-          && (expectedIncidentAt == null || currentManualRecovery?.at === expectedIncidentAt),
-      });
       const incidentToClear = currentManualRecovery;
-      if (result.authoritativelyClean && userRecovery && (
-        expectedIncidentAt == null || incidentToClear == null || incidentToClear.at === expectedIncidentAt
-      )) {
+      const mayClear = reconciliationOptions.internal !== true
+        && (incidentToClear == null || incidentToClear.id === expectedIncidentId);
+      const result = await performReconciliation({ ...reconciliationOptions, clearLastError: mayClear });
+      if (result.authoritativelyClean && mayClear && currentManualRecovery === incidentToClear) {
+        const acknowledgedAt = clock();
         await persistSafetyUpdate(current => {
           // Jen ten incident, který uživatel potvrdil — novější zůstává.
-          if (current.manualRecoveryRequired && incidentToClear
-            && current.manualRecoveryRequired.at !== incidentToClear.at) return current;
+          if (incidentToClear && current.manualRecoveryRequired
+            && (current.manualRecoveryRequired.id ?? `legacy-${current.manualRecoveryRequired.at}`) !== incidentToClear.id) {
+            return current;
+          }
           const { manualRecoveryRequired: _cleared, ...rest } = current;
-          return rest;
+          return incidentToClear
+            ? { ...rest, lastIncidentAcknowledgement: { ...incidentToClear, acknowledgedAt, via: 'arm' as const } }
+            : rest;
         });
         if (currentManualRecovery === incidentToClear) {
           armPreparationIncidentRequiresRecovery = false;
           currentManualRecovery = null;
           if (incidentToClear) {
             options.onAudit?.([{
-              at: clock(),
-              leaderEventId: `incident-acknowledged:${incidentToClear.at}`,
+              at: acknowledgedAt,
+              leaderEventId: `incident-acknowledged:${incidentToClear.id}`,
               kind: 'recovered',
-              reason: expectedIncidentAt != null
-                ? `Incident potvrdil uživatel přes Zapnout (čistá kontrola u brokera): ${incidentToClear.reason}`
-                : `Incident uzavřen čistou Kontrolou pozic: ${incidentToClear.reason}`,
+              reason: `Incident potvrdil uživatel přes Zapnout (čistá kontrola u brokera): ${incidentToClear.reason}`,
             }]);
           }
         }

@@ -315,10 +315,10 @@ const validatedRelayGroup = (value: unknown): CopyGroupConfig => {
   return groups[0];
 };
 
-/** Potvrzení incidentu z dialogu ON: čas `manualRecovery.at` (8. 10. 2026). */
-const validatedIncidentAck = (value: unknown): number | undefined => {
+/** Potvrzení incidentu z dialogu ON: `manualRecovery.id` (8. 10. 2026). */
+const validatedIncidentAck = (value: unknown): string | undefined => {
   if (value === undefined) return undefined;
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(value)) {
     throw new Error('invalid-relay-command-payload');
   }
   return value;
@@ -363,13 +363,13 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
     // svou zastaralou konfigurací — 24. 8. s enabled:false, takže se první
     // obchod nezkopíroval. UI skupinu posílá vždy; její absence je chyba
     // volajícího a musí selhat nahlas, ne potichu změnit význam příkazu.
-    const acknowledgeIncidentAt = validatedIncidentAck((command as { acknowledgeIncidentAt?: unknown }).acknowledgeIncidentAt);
+    const acknowledgeIncidentId = validatedIncidentAck((command as { acknowledgeIncidentId?: unknown }).acknowledgeIncidentId);
     return {
       group: validatedRelayGroup((command as { group?: unknown }).group),
       accountEligibilityExclusions: validatedEligibilityExclusions(
         (command as { accountEligibilityExclusions?: unknown }).accountEligibilityExclusions,
       ),
-      ...(acknowledgeIncidentAt != null ? { acknowledgeIncidentAt } : {}),
+      ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
     };
   }
   if (command.type === 'activate-group') {
@@ -422,12 +422,12 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
   }
   if (row.command_type === 'arm-live') {
-    const acknowledgeIncidentAt = validatedIncidentAck(row.payload?.acknowledgeIncidentAt);
+    const acknowledgeIncidentId = validatedIncidentAck(row.payload?.acknowledgeIncidentId);
     return {
       type: 'arm-live',
       group: validatedRelayGroup(row.payload?.group),
       accountEligibilityExclusions: validatedEligibilityExclusions(row.payload?.accountEligibilityExclusions),
-      ...(acknowledgeIncidentAt != null ? { acknowledgeIncidentAt } : {}),
+      ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
     };
   }
   if (row.command_type === 'activate-group') {

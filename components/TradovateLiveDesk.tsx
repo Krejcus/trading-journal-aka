@@ -100,7 +100,7 @@ import {
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
-import { supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup } from '../lib/copierArmPreparation';
 import {
@@ -839,8 +839,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     // 8. 10. 2026: Kontrola pozic je součástí Zapnout. Durable incident
     // ale smaže jen výslovné potvrzení — zvykové kliknutí ho nepřejde.
-    const incident = armStatusRef.current.status?.controller.manualRecovery ?? null;
-    let acknowledgeIncidentAt: number | undefined;
+    // Starší worker (bez `incident-ack-v1`) potvrzení nezná: dialog se neukáže
+    // a o incidentu rozhoduje jeho vlastní brána (Kontrola pozic níže).
+    const incident = supportsCopierIncidentAck(armStatusRef.current.status)
+      ? armStatusRef.current.status?.controller.manualRecovery ?? null
+      : null;
+    let acknowledgeIncidentId: string | undefined;
     if (incident) {
       const acknowledged = await confirmAction({
         title: 'Zapnout po incidentu?',
@@ -849,7 +853,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         cancelLabel: 'Zrušit',
       });
       if (!acknowledged) return;
-      acknowledgeIncidentAt = incident.at;
+      acknowledgeIncidentId = incident.id;
     }
     await runConfigMutation(async () => {
       // Re-read after any camera dialog/repair; the worker still rejects any
@@ -859,7 +863,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         type: 'arm-live',
         group: prepared.group,
         accountEligibilityExclusions: exclusions,
-        ...(acknowledgeIncidentAt != null ? { acknowledgeIncidentAt } : {}),
+        ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
       });
       acceptConfigAck(result.status);
       if (prepared.preservedRules.length) {
@@ -1330,6 +1334,18 @@ acceptAgentStatus((await executeAgent({
                   ?.find(entry => entry.accountId === accountId && entry.state !== 'active');
                 if (remaining) {
                   throw new Error(`Broker účet stále nepotvrdil jako způsobilý: ${remaining.reason ?? remaining.state}`);
+                }
+              }}
+              legacyReconcile={copierUiDemo || supportsCopierIncidentAck(agentStatus) ? undefined : async () => {
+                // Jen starší worker bez potvrzení incidentu v ON (přechod při nasazení).
+                const result = await executeAgent({ type: 'reconcile' });
+                acceptAgentStatus(result.status);
+                await live.refreshData();
+                const controller = result.status.controller;
+                if (controller.reconciliationRequired || controller.divergentAccounts.length > 0
+                  || controller.workingOrderAccounts.length > 0) {
+                  throw new Error(controller.lastError
+                    ?? 'Kontrola pozic nepotvrdila čistý stav: účty nejsou flat nebo mají pracovní příkazy.');
                 }
               }}
               executionGroupId={executionGroup?.id ?? null}

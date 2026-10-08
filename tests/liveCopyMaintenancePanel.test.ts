@@ -10,8 +10,8 @@ const status = (overrides: Partial<CopierControllerStatus> = {}): CopierControll
   stuckOperations: [], lastError: null, revision: 1, lastSequence: 0, groupFlat: true,
   ...overrides,
 });
-const render = (value: CopierControllerStatus, known = true) => renderToStaticMarkup(
-  React.createElement(CopierMaintenancePanel, { status: value, known }),
+const render = (value: CopierControllerStatus, known = true, legacyReconcile?: () => Promise<void>) => renderToStaticMarkup(
+  React.createElement(CopierMaintenancePanel, { status: value, known, legacyReconcile }),
 );
 
 describe('CopierMaintenancePanel', () => {
@@ -34,7 +34,7 @@ describe('CopierMaintenancePanel', () => {
   });
 
   it('za ARM nic nezobrazí', () => {
-    expect(render(status({ armed: true, manualRecovery: { at: 1, reason: 'x' } }))).toBe('');
+    expect(render(status({ armed: true, manualRecovery: { id: 'i', at: 1, reason: 'x' } }))).toBe('');
   });
 
   it('v režimu opravy vysvětlí nedostupné účty a tlačítko neukáže', () => {
@@ -72,7 +72,7 @@ describe('CopierMaintenancePanel', () => {
 
   it('po incidentu ukáže důvod a že se ověří při zapnutí; tlačítko Kontrola pozic už neexistuje', () => {
     const html = render(status({ reconciliationRequired: true,
-      manualRecovery: { at: 1_791_000_000_000, reason: 'leader-flat guard: follower 200 nesedí' },
+      manualRecovery: { id: 'i', at: 1_791_000_000_000, reason: 'leader-flat guard: follower 200 nesedí' },
       armPreparation: { state: 'blocked', verifiedAt: null,
         reason: 'Po incidentu je potřeba ruční Kontrola pozic', blockedBy: 'incident',
         manualRecoveryRequired: true } }));
@@ -80,5 +80,13 @@ describe('CopierMaintenancePanel', () => {
     expect(html).toContain('Ověří se při zapnutí');
     expect(html).not.toContain('Zkontrolovat pozice');
     expect(html).not.toContain('<button');
+  });
+
+  it('starší worker bez potvrzení v ON: zachová ruční Kontrolu pozic (přechod při nasazení)', () => {
+    const html = render(status({ reconciliationRequired: true,
+      armPreparation: { state: 'blocked', verifiedAt: null,
+        reason: 'Po incidentu je potřeba ruční Kontrola pozic', blockedBy: 'incident',
+        manualRecoveryRequired: true } }), true, async () => undefined);
+    expect(html).toContain('Zkontrolovat pozice');
   });
 });

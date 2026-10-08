@@ -282,8 +282,8 @@ describe('worker read-only ARM preparation', () => {
     await expect(agent.execute({ type: 'arm-live' })).rejects.toThrow('[ack-incident:');
     expect(reconcile).not.toHaveBeenCalled();
     expect(runtime.status().lastError).toBe(incident);
-    const acknowledgeIncidentAt = runtime.status().manualRecovery!.at;
-    await agent.execute({ type: 'arm-live', acknowledgeIncidentAt });
+    const acknowledgeIncidentId = runtime.status().manualRecovery!.id;
+    await agent.execute({ type: 'arm-live', acknowledgeIncidentId });
     expect(reconcile).toHaveBeenCalledTimes(1);
     expect(runtime.status()).toMatchObject({ armed: true, lastError: null, manualRecovery: null });
   });
@@ -320,7 +320,11 @@ describe('worker read-only ARM preparation', () => {
     });
     await expect(restarted.prepareArm!()).rejects.toThrow('incidentu');
 
+    // 8. 10. 2026: kontrola bez potvrzení incident nesmaže; smaže ho jen
+    // potvrzení právě tohoto incidentu (ON s dialogem).
     await restarted.reconcile();
+    expect((await store.load()).safety?.manualRecoveryRequired).toBeDefined();
+    await restarted.reconcile({ acknowledgedIncidentId: restarted.status().manualRecovery!.id });
     expect((await store.load()).safety?.manualRecoveryRequired).toBeUndefined();
     await restarted.prepareArm!();
     expect(restarted.status()).toMatchObject({

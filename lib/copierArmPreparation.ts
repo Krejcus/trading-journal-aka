@@ -123,10 +123,10 @@ export function copierArmRejection(reason: unknown): string | null {
   if (reason instanceof CopierArmBlockedError) return reason.message;
   if (!(reason instanceof Error)) return null;
   const message = reason.message.replace(/\s+/g, ' ').trim();
-  if (/\[ack-incident:\d+\]/.test(message)) {
+  if (/\[ack-incident:[^\]]+\]/.test(message)) {
     // Worker hlásí incident, který UI ještě nevidělo (nebo nový): žádné
     // automatické opakování, uživatel ho potvrdí dalším Zapnout.
-    return `${message.replace(/\s*\[ack-incident:\d+\]/, '').replace(/^Zapnutí po incidentu vyžaduje tvoje potvrzení: /, 'Mezitím vznikl incident: ')} Dej znovu Zapnout a potvrď ho.`;
+    return `${message.replace(/\s*\[ack-incident:[^\]]+\]/, '').replace(/^Zapnutí po incidentu vyžaduje tvoje potvrzení: /, 'Mezitím vznikl incident: ')} Dej znovu Zapnout a potvrď ho.`;
   }
   if (message === 'Incident se mezitím změnil; potvrď ho znovu.') {
     return 'Mezitím vznikl nový incident. Dej znovu Zapnout a potvrď ho.';

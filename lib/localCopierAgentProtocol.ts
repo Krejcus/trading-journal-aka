@@ -176,10 +176,10 @@ export type LocalCopierAgentCommand =
       group?: CopyGroupConfig;
       accountEligibilityExclusions?: LocalCopierAccountExclusion[];
       /**
-       * Uživatel v dialogu potvrdil tento durable incident (`manualRecovery.at`).
+       * Uživatel v dialogu potvrdil tento durable incident (`manualRecovery.id`).
        * Bez shody worker ON po incidentu odmítne (8. 10. 2026).
        */
-      acknowledgeIncidentAt?: number;
+      acknowledgeIncidentId?: string;
     }
   /** Bezpečně vybere jedinou execution skupinu; vždy zůstane DISARMED. */
   | {

@@ -14,7 +14,7 @@ const group = (): CopyGroupConfig => ({
 });
 type Check = { divergentAccounts: number[]; workingOrderAccounts: number[]; authoritativelyClean: boolean; missingAccounts: number[] };
 const clean: Check = { divergentAccounts: [], workingOrderAccounts: [], authoritativelyClean: true, missingAccounts: [] };
-const INCIDENT = { at: 1_791_000_000_000, reason: 'leader-flat guard: follower 22 nesedí' };
+const INCIDENT = { id: 'incident-1', at: 1_791_000_000_000, reason: 'leader-flat guard: follower 22 nesedí' };
 
 const mockController = (nextCheck: Check = clean) => {
   let status: CopierControllerStatus = {
@@ -29,7 +29,7 @@ const mockController = (nextCheck: Check = clean) => {
     disarm: vi.fn(() => { status = { ...status, armed: false }; }),
     engageKillSwitch: vi.fn(),
     applyAccountEligibilityExclusions: vi.fn(async () => undefined),
-    reconcile: vi.fn(async (options?: { acknowledgedIncidentAt?: number; internal?: true }) => {
+    reconcile: vi.fn(async (options?: { acknowledgedIncidentId?: string; internal?: true }) => {
       if (nextCheck.authoritativelyClean && !options?.internal) {
         status = {
           ...status, reconciliationRequired: false, lastError: null, manualRecovery: null,
@@ -57,7 +57,7 @@ describe('Zapnout po incidentu', () => {
     const runtime = mockController();
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmAfterTransport: false });
     const error = await running.execute({ type: 'arm-live' }).catch(reason => reason as Error);
-    expect(String(error)).toContain(`[ack-incident:${INCIDENT.at}]`);
+    expect(String(error)).toContain(`[ack-incident:${INCIDENT.id}]`);
     expect(copierArmRejection(error)).toContain('Mezitím vznikl incident: leader-flat guard');
     expect(runtime.reconcile).not.toHaveBeenCalled();
     expect(runtime.arm).not.toHaveBeenCalled();
@@ -67,22 +67,22 @@ describe('Zapnout po incidentu', () => {
   it('potvrzení jiného (staršího) incidentu nestačí', async () => {
     const runtime = mockController();
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmAfterTransport: false });
-    await expect(running.execute({ type: 'arm-live', acknowledgeIncidentAt: INCIDENT.at - 1 })).rejects.toThrow('[ack-incident:');
+    await expect(running.execute({ type: 'arm-live', acknowledgeIncidentId: 'incident-0' })).rejects.toThrow('[ack-incident:');
     expect(runtime.arm).not.toHaveBeenCalled();
   });
 
   it('s potvrzením: kontrola vázaná na tento incident, čistá → zapne', async () => {
     const runtime = mockController();
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmAfterTransport: false });
-    await running.execute({ type: 'arm-live', acknowledgeIncidentAt: INCIDENT.at });
-    expect(runtime.reconcile).toHaveBeenCalledWith({ acknowledgedIncidentAt: INCIDENT.at });
+    await running.execute({ type: 'arm-live', acknowledgeIncidentId: INCIDENT.id });
+    expect(runtime.reconcile).toHaveBeenCalledWith({ acknowledgedIncidentId: INCIDENT.id });
     expect(runtime.status().armed).toBe(true);
   });
 
   it('s potvrzením, ale nečistá kontrola → nezapne, vypíše účty, incident trvá', async () => {
     const runtime = mockController({ ...clean, authoritativelyClean: false, divergentAccounts: [22] });
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmAfterTransport: false });
-    await expect(running.execute({ type: 'arm-live', acknowledgeIncidentAt: INCIDENT.at })).rejects.toThrow(/účtech 22/);
+    await expect(running.execute({ type: 'arm-live', acknowledgeIncidentId: INCIDENT.id })).rejects.toThrow(/účtech 22/);
     expect(runtime.arm).not.toHaveBeenCalled();
     expect(runtime.status().manualRecovery).toEqual(INCIDENT);
   });
@@ -115,6 +115,34 @@ describe('controller: kdo smí durable incident smazat', () => {
     return { controller, store, audit };
   };
 
+  it('kontrola bez potvrzení (CLI / lokální reconcile) incident ani chybu nesmaže', async () => {
+    const { controller, store } = await boot();
+    try {
+      const result = await controller.reconcile();
+      expect(result.authoritativelyClean).toBe(true);
+      expect(controller.status().manualRecovery).toEqual(INCIDENT);
+      expect(controller.status().lastError).toContain(INCIDENT.reason);
+      expect((await store.load()).safety?.manualRecoveryRequired).toEqual(INCIDENT);
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('starší marker bez ID dostane deterministické ID platné i po restartu', async () => {
+    let now = 1_800_000_000_000;
+    const snapshot = emptySnapshot();
+    snapshot.safety = { ...snapshot.safety!, manualRecoveryRequired: { at: 42, reason: 'starý' } };
+    const controller = await bootstrapCopierRuntime({
+      broker: createMockBroker({ behavior: () => ({ kind: 'working' }) }),
+      store: createMemoryCopierStore(snapshot), group: group(), clock: () => ++now,
+    });
+    try {
+      expect(controller.status().manualRecovery).toEqual({ id: 'legacy-42', at: 42, reason: 'starý' });
+    } finally {
+      controller.stop();
+    }
+  });
+
   it('interní kontrola (SHADOW / kompatibilní ARM) incident ani chybu nesmaže', async () => {
     const { controller, store } = await boot();
     try {
@@ -131,9 +159,12 @@ describe('controller: kdo smí durable incident smazat', () => {
   it('potvrzený incident čistá kontrola smaže a zapíše audit „potvrdil uživatel přes Zapnout“', async () => {
     const { controller, store, audit } = await boot();
     try {
-      await controller.reconcile({ acknowledgedIncidentAt: INCIDENT.at });
+      await controller.reconcile({ acknowledgedIncidentId: INCIDENT.id });
       expect(controller.status().manualRecovery).toBeNull();
-      expect((await store.load()).safety?.manualRecoveryRequired).toBeUndefined();
+      const saved = (await store.load()).safety;
+      expect(saved?.manualRecoveryRequired).toBeUndefined();
+      // Crash-safe audit: potvrzení je ve stejném durable zápisu jako smazání.
+      expect(saved?.lastIncidentAcknowledgement).toMatchObject({ id: INCIDENT.id, reason: INCIDENT.reason, via: 'arm' });
       expect(audit.some(entry => entry.kind === 'recovered' && entry.reason?.includes('potvrdil uživatel přes Zapnout'))).toBe(true);
     } finally {
       controller.stop();
@@ -143,7 +174,7 @@ describe('controller: kdo smí durable incident smazat', () => {
   it('potvrzení jiného incidentu kontrolu odmítne a nic nesmaže', async () => {
     const { controller, store } = await boot();
     try {
-      await expect(controller.reconcile({ acknowledgedIncidentAt: INCIDENT.at + 5 })).rejects.toThrow('Incident se mezitím změnil');
+      await expect(controller.reconcile({ acknowledgedIncidentId: 'jiny-incident' })).rejects.toThrow('Incident se mezitím změnil');
       expect((await store.load()).safety?.manualRecoveryRequired).toEqual(INCIDENT);
     } finally {
       controller.stop();

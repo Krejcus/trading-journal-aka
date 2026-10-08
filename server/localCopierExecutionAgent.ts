@@ -19,7 +19,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_INCIDENT_ACK_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -70,7 +70,7 @@ export const armSelfCheckFailureMessage = (check: {
 };
 
 /** Strojově čitelná značka pro UI: který incident uživatel potvrzuje. */
-export const incidentAckMarker = (at: number) => `[ack-incident:${at}]`;
+export const incidentAckMarker = (id: string) => `[ack-incident:${encodeURIComponent(id)}]`;
 
 export const boundedLocalArmDeadline = (rawDeadline: unknown, receivedAt = Date.now()): number => {
   const parsed = typeof rawDeadline === 'string' ? Number(rawDeadline) : NaN;
@@ -360,7 +360,7 @@ export async function startLocalCopierExecutionAgent(
 
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
-    capabilities: [COPIER_RISK_CONFIG_CAPABILITY,
+    capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY,
       ...(options.controller.prepareArm ? ['arm-preparation-v1'] : []),
       ...(options.accountDisplay ? ['account-display-v1'] : [])],
     environment: 'demo',
@@ -881,14 +881,14 @@ export async function startLocalCopierExecutionAgent(
         // ON smazat jen s výslovným potvrzením právě tohoto incidentu
         // (INV-DEFAULT-03). Zvykové kliknutí ho nepřejde.
         const incident = options.controller.status().manualRecovery ?? null;
-        if (incident && command.acknowledgeIncidentAt !== incident.at) {
+        if (incident && command.acknowledgeIncidentId !== incident.id) {
           throw new Error(
-            `Zapnutí po incidentu vyžaduje tvoje potvrzení: ${incident.reason} ${incidentAckMarker(incident.at)}`,
+            `Zapnutí po incidentu vyžaduje tvoje potvrzení: ${incident.reason} ${incidentAckMarker(incident.id)}`,
           );
         }
         if (incident || armNeedsSelfCheck(options.controller.status())) {
           const check = await awaitArmDeadline(
-            options.controller.reconcile(incident ? { acknowledgedIncidentAt: incident.at } : {}),
+            options.controller.reconcile(incident ? { acknowledgedIncidentId: incident.id } : {}),
             deadlineAt,
           );
           assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);

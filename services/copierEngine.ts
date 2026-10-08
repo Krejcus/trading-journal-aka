@@ -193,6 +193,19 @@ export interface CopierState {
     manualRecoveryRequired?: {
       at: number;
       reason: string;
+      /** Jednoznačná identita incidentu pro potvrzení v ON (8. 10. 2026). */
+      id?: string;
+    };
+    /**
+     * Poslední incident, který uživatel výslovně potvrdil přes ON; zapisuje se
+     * ve stejném durable zápisu, který incident maže (crash-safe audit).
+     */
+    lastIncidentAcknowledgement?: {
+      id: string;
+      at: number;
+      reason: string;
+      acknowledgedAt: number;
+      via: 'arm';
     };
     /**
      * Degraded live mode: no new exposure may be copied, but lifecycle and
