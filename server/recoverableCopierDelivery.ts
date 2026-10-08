@@ -8,7 +8,10 @@ type Request = (body: Record<string, unknown>) => Promise<Record<string, unknown
 export const COPIER_COMMAND_ACK_RESERVE_MS = 10_000;
 export const COPIER_RELAY_CLOCK_SKEW_RESERVE_MS = 2_000;
 /** Serial, durable transport recovery. Only HTTP delivery/ACK is retried;
- * once execution starts the command can NEVER be executed by this relay again. */
+ * once execution starts a trading or configuration command can NEVER be
+ * executed by this relay again. Idempotent brakes (DISARM, kill switch, day
+ * lock) are the deliberate exception: a claimed brake is replayed after a
+ * restart or a failed checkpoint write, because it only tightens. */
 export function recoverableCopierDelivery(options: {
   store: RelayDeliveryStore; agent: LocalCopierExecutionAgent; request: Request;
   nextRevision: () => number; onComplete: (id: string) => void;

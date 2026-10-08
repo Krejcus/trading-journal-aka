@@ -1620,15 +1620,14 @@ async function runLocalAgent(
           }
           const usable = new Map(read.map(account => [account.accountId, account.active && account.canTrade]));
           const current = read.map(account => directoryKey(account.accountId, account.active && account.canTrade));
-          // První srovnání proti startu: účet použitelný při startu a teď
-          // neaktivní = změna (breach mezi startem a prvním čtením se tak
-          // nevstřebá). Opačný směr bere z tohoto čtení — neaktivní při startu
-          // už v režimu opravy je.
+          // První srovnání proti stavu ze startu v obou směrech: breach mezi
+          // startem a prvním čtením se nevstřebá a obnovený účet vyvede worker
+          // z režimu opravy restartem. Jen účet bez záznamu bere toto čtení.
           const startupUsable = connectionWatch.startupUsableByConnection.get(candidate.connectionId);
           const knownKeys = connectionWatch.directoryBaselineByConnection.get(candidate.connectionId)
             ?? startupIds.map(accountId => directoryKey(
               accountId,
-              startupUsable?.get(accountId) === true ? true : (usable.get(accountId) ?? true),
+              startupUsable?.has(accountId) ? startupUsable.get(accountId) === true : (usable.get(accountId) ?? true),
             ));
           const sameAsKnown = knownKeys.length === current.length && knownKeys.every(key => current.includes(key));
           if (sameAsKnown) connectionWatch.directoryBaselineByConnection.set(candidate.connectionId, current);

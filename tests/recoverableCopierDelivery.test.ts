@@ -147,6 +147,22 @@ describe('recoverable copier delivery', () => {
     await step();
     expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
   });
+  it('denní zámek: server o 300 ms napřed, normalizovaný čas přes hranici 17:00 CT → odmítnut', async () => {
+    const f = fixture();
+    f.remote.command = { type: 'lock-until-session-end', reason: 'test' } as never;
+    f.remote.createdAt = '2026-10-08T22:00:00.200Z'; // serverový čas (server +300 ms)
+    f.remote.expiresAt = '2026-10-08T22:10:00.000Z';
+    f.setNow(Date.parse('2026-10-08T21:59:58.000Z'));
+    const step = recoverableCopierDelivery(f.options);
+    const localNow = Date.parse('2026-10-08T21:59:59.950Z');
+    f.setNow(localNow);
+    // Server hlásí serverNow o 300 ms napřed; skutečný vznik byl 16:59:59.900 CT.
+    f.options.request.mockImplementation(async (body: { action: string }) => body.action === 'poll-v2'
+      ? { protocol: 2, command: f.remote, serverNow: new Date(localNow + 300).toISOString() }
+      : { protocol: 2, accepted: true });
+    await step();
+    expect(f.options.agent.execute).not.toHaveBeenCalled();
+  });
   it('denní zámek těsně u hranice session (17:00 CT) se odmítne, ať nezamkne další den', async () => {
     const f = fixture();
     f.remote.command = { type: 'lock-until-session-end', reason: 'test' } as never;
