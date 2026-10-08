@@ -301,7 +301,7 @@ function makePendingOso(harness: ArmedOsoHarness, accountId = 200): void {
 }
 
 describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
-  it('dnešní terminální stav ze streamu stačí bez REST, cancelu a DISARM', async () => {
+  it('dnešní terminální stav ze streamu stačí bez čtení orderů, cancelu a DISARM (pozice se ověří jedním čtením)', async () => {
     const harness = await armedOsoHarness();
     let restReads = 0;
     try {
@@ -319,10 +319,13 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
         restReads += 1;
       });
       emitFollowerFlat(harness);
+      const listPositions = vi.spyOn(harness.broker, 'listPositions');
       await harness.controller.waitForIdle();
 
       expect(restReads).toBe(0);
       expect(listOrders).not.toHaveBeenCalled();
+      // 8. 10. 2026: nula fillu ve streamu není důkaz → jedno čtení pozice.
+      expect(listPositions.mock.calls.filter(([accountId]) => accountId === 200).length).toBe(1);
       expect(findOrderById).not.toHaveBeenCalled();
       expect(ids.map(id => harness.broker.cancelRequestCount(id))).toEqual([0, 0]);
       expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
