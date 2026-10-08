@@ -1117,7 +1117,8 @@ acceptAgentStatus((await executeAgent({
     coldRevealDoneRef.current, liveData != null, connectedConnectionIds, live.dataEnrichmentByConnection,
   );
   if (liveData != null && (!coldReadsPending || coldRevealCapReached)) coldRevealDoneRef.current = true;
-  const holdColdReveal = coldReadsPending && !coldRevealCapReached;
+  // Zapnutá kopírka: přehled s vypnutím (OFF, kill) se nedrží ani chvíli.
+  const holdColdReveal = coldReadsPending && !coldRevealCapReached && agentStatus?.controller.armed !== true;
   useEffect(() => {
     if (!holdColdReveal) return;
     const timer = window.setTimeout(() => setColdRevealCapReached(true), LIVE_COLD_REVEAL_CAP_MS);
@@ -1160,7 +1161,7 @@ acceptAgentStatus((await executeAgent({
         snapshotHealth={agentStatus?.snapshotHealth}
         journalHealth={agentStatus?.journalHealth}
         onRepairSnapshots={repairSnapshots}
-        hideDisarmNotice={tab === 'overview' && !checkingConnection && !requiresConnection
+        hideDisarmNotice={tab === 'overview' && !checkingConnection && !requiresConnection && !holdColdReveal
           && !!liveData && !!copyTradeSnapshot && !!executionGroup?.id && !copierUiDemo}
         quiet
       />

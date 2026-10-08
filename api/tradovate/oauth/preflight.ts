@@ -22,12 +22,14 @@ import { handleNativeCors } from '../../../server/nativeCors.js';
  * výsledek, dokud není starší než PREFLIGHT_COALESCE_MS.
  */
 const PREFLIGHT_COALESCE_MS = 20_000;
-const recentPreflights = new Map<string, { at: number; result: Promise<unknown> }>();
+const recentPreflights = new Map<string, { at: number; result: Promise<unknown>; settled?: boolean }>();
 function coalescePreflight<T>(key: string, now: number, read: () => Promise<T>): Promise<T> {
   const cached = recentPreflights.get(key);
   if (cached && now - cached.at < PREFLIGHT_COALESCE_MS) return cached.result as Promise<T>;
   const result = read();
-  recentPreflights.set(key, { at: now, result });
+  const entry: { at: number; result: Promise<unknown>; settled?: boolean } = { at: now, result };
+  recentPreflights.set(key, entry);
+  result.then(() => { entry.settled = true; }, () => undefined);
   result.catch(() => { if (recentPreflights.get(key)?.result === result) recentPreflights.delete(key); });
   if (recentPreflights.size > 200) {
     for (const [candidate, entry] of recentPreflights) if (now - entry.at >= PREFLIGHT_COALESCE_MS) recentPreflights.delete(candidate);
@@ -53,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const probeOnly = req.body?.mode === 'historical-probe';
     // Probe report hostu (timeout až 8 s) nesmí držet první úplná data LIVE.
     // Studený start ho vynechá a zeptá se zvlášť (mode 'historical-probe').
-    const skipProbe = req.body?.historicalProbe === false;
+    const skipProbe = !bootstrap && req.body?.historicalProbe === false;
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
     const { accessToken } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
@@ -75,8 +77,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // `full` se sdílí, ať starší klient (iPhone) a nový studený start
     // nepouštějí dvě dávky na stejný login. Opačně ne — starý klient by bez
     // samostatného probe zůstal u „not-checked“.
-    const recentFull = skipProbe ? recentPreflights.get(fullKey) : undefined;
-    const sharedFull = recentFull && Date.now() - recentFull.at < PREFLIGHT_COALESCE_MS
+    // Jen hotové `full`: běžící čeká i na probe (až 8 s), na který studený
+    // start čekat nemá.
+    const recentFull = skipProbe && !bootstrap ? recentPreflights.get(fullKey) : undefined;
+    const sharedFull = recentFull?.settled && Date.now() - recentFull.at < PREFLIGHT_COALESCE_MS
       ? recentFull.result as ReturnType<typeof readPreflight>
       : null;
     const readPreflight = () => Promise.all([
