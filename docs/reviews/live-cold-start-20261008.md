@@ -92,3 +92,15 @@ Všechny potvrzené opraveny:
   takže úprava A se nikdy neuloží pod B.
 - Studený start počká jeden mikrotask, než spustí čtení. Odpojení (StrictMode, odchod
   z LIVE) tak neodešle osiřelé čtení u brokera.
+
+## Druhé kolo (oponent commitu cfe904bf) — opraveno v 855b6f14
+- Měření ukázalo další mezistav: přehled se odkryl po prvním připojení a účty druhého
+  připojení ~0,3 s svítily „nedostupný“. Kostra proto čeká, až doběhne první úplné
+  čtení všech připojení (strop 2,5 s od prvních dat, návrat s daty nečeká nikdy).
+- Při zapnuté kopírce se kostra nedrží vůbec, aby OFF/kill nebyly ani o chvíli dál.
+  Hláška po DISARM se pod kostrou neschová.
+- Server sdílí jen hotové `full` (běžící čeká i na probe); bootstrap nikdy nejde
+  cestou bez probe.
+- Navigace nepředává React event jako volby záměru LIVE.
+- Localhost po opravách: kostra 1,04 s → kompletní přehled 1,65 s v jednom kroku.
+  Testy: 4988/4988, tsc bez nových chyb, iOS build prošel.
