@@ -5640,8 +5640,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       throw error;
     }
     result = mergeProtectedAccounts(result, `Flatten ${operationId}`);
+    // Cílený flatten ověřil jen target symboly — zbytek účtu v cache zůstává.
+    const symbolScoped = cleanupScope === 'target-symbol' && writableTargets != null && writableTargets.length > 0;
     if (preserveArm) {
-      for (const accountId of writableAccountIds) workingOrderAccounts.delete(accountId);
+      for (const accountId of writableAccountIds) {
+        if (!symbolScoped) workingOrderAccounts.delete(accountId);
+      }
       for (const accountId of result.workingOrderAccounts) workingOrderAccounts.add(accountId);
     } else {
       workingOrderAccounts = new Set([
@@ -5661,7 +5665,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (failed.some(account => !protectedAccountIds.has(account.accountId))) throw error;
     }
     if (preserveArm) {
-      for (const accountId of writableAccountIds) positionsByAccount.set(accountId, new Map());
+      for (const accountId of writableAccountIds) {
+        if (!symbolScoped) {
+          positionsByAccount.set(accountId, new Map());
+          continue;
+        }
+        const cached = new Map(positionsByAccount.get(accountId) ?? []);
+        for (const target of writableTargets!) {
+          if (target.accountId === accountId) cached.delete(target.symbol);
+        }
+        positionsByAccount.set(accountId, cached);
+      }
     }
     return result;
   };
@@ -6888,8 +6902,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
           throw new Error(message);
         }
-        workingOrderAccounts.delete(accountId);
-        positionsByAccount.set(accountId, new Map());
+        const closedScope = followerCutTargetSymbols.get(accountId);
+        if (closedScope) {
+          // Cílený close ověřil jen vlastněné symboly; ruční expozice na
+          // pozastaveném symbolu v cache zůstává (working flag také).
+          const cached = new Map(positionsByAccount.get(accountId) ?? []);
+          for (const symbol of closedScope) cached.delete(symbol);
+          positionsByAccount.set(accountId, cached);
+        } else {
+          workingOrderAccounts.delete(accountId);
+          positionsByAccount.set(accountId, new Map());
+        }
       } else {
         // Etapa 2 (kolo 4): účet s ruční expozicí na pozastaveném symbolu
         // se zavírá jen na vlastněných symbolech, nikdy account-wide.
@@ -7623,6 +7646,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         .filter(pause => pause.symbol === epoch.symbol)
         .map(pause => pause.accountId),
     ])];
+    // Fence pro uvolnění pauzy: jakákoli nová broker událost leadera nebo
+    // pozastaveného účtu přijatá během readu snapshot zneplatní.
+    const pauseReleaseFence = new Map(accountIds.map(accountId => [
+      accountId,
+      tradeObservationVersionByAccount.get(accountId) ?? 0,
+    ]));
+    const pauseReleaseFenceHolds = (accountId: number) => (
+      (tradeObservationVersionByAccount.get(accountId) ?? 0) === pauseReleaseFence.get(accountId)
+      && (pendingTradeIngressByAccount.get(accountId) ?? 0) === 0
+    );
     const rows = await Promise.all(accountIds.map(async accountId => {
       const maxSnapshotAttempts = 3;
       const retryWait = options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
@@ -7763,6 +7796,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // OCO/OSO nohu. Guard smí uklidit jen broker ID doložená durable copier
     // outboxem pro přesný účet+symbol; ruční příkaz ani jiný symbol nečte jako
     // oprávnění k cancelu. Po write následuje pouze autoritativní read kontrola.
+    // Etapa 2 (kolo 5): úklid běží záměrně i na pozastaveném účtu. Ruší jen
+    // copier-owned ochrannou nohu na flat symbolu — osiřelý copier příkaz by
+    // jinak mohl sám otevřít pozici bez řízení. Ruční příkazy nikdy.
     for (const row of allowWrites ? rows : []) {
       if (!row.ok || row.accountId === epoch.leaderAccountId) continue;
       const net = row.positions
@@ -7906,12 +7942,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             && row.positions.every(position => position.symbol !== epoch.symbol || position.netQuantity === 0)
             && row.orders.every(order => order.symbol !== epoch.symbol || !isOpenOrderStatus(order.status)))
           .map(row => row.accountId));
-        if (cleanPaused.size > 0) {
+        const leaderSnapshot = evaluationRows.find(row => row.accountId === epoch.leaderAccountId);
+        // Čekající vstup leadera (např. limit) = nový obchod už začal; pauza
+        // se neuvolní, jinak by účet dostal jen jeho zbytek.
+        const leaderIdle = leaderSnapshot?.ok === true
+          && leaderSnapshot.orders.every(order => order.symbol !== epoch.symbol || !isOpenOrderStatus(order.status))
+          // I stream cache: příkaz přijatý po snapshotu nebo snapshotem
+          // ještě nevrácený blokuje (fail-safe; čistí ho Kontrola pozic).
+          && ![...(liveOrdersByAccount.get(epoch.leaderAccountId)?.values() ?? [])]
+            .some(order => order.symbol === epoch.symbol && isOpenOrderStatus(order.status));
+        if (cleanPaused.size > 0 && leaderIdle) {
           await releaseAccountSyncPausesSafely((pause, state) => (
             pause.symbol === epoch.symbol
             && cleanPaused.has(pause.accountId)
             && !symbolHasOpenEpoch(state, pause.symbol)
             && !pendingIsolationCommandForAccount(pause.accountId)
+            && pauseReleaseFenceHolds(epoch.leaderAccountId)
+            && pauseReleaseFenceHolds(pause.accountId)
           ));
         }
       }
@@ -9538,6 +9585,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   ): boolean => (
     group.leaderAccountId != null
     && !symbolHasOpenEpoch(state, pause.symbol)
+    && (pendingTradeIngressByAccount.get(group.leaderAccountId) ?? 0) === 0
+    && (pendingTradeIngressByAccount.get(pause.accountId) ?? 0) === 0
     && hasAuthoritativeFlatNoWorking(group.leaderAccountId, pause.symbol)
     && hasAuthoritativeFlatNoWorking(pause.accountId, pause.symbol)
   );
@@ -14364,8 +14413,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         accountIds: group.followers
           .filter(follower => {
             const snapshot = byAccount.get(follower.accountId);
+            // Účet s čekajícím příkazem (i ručním na pozastaveném symbolu)
+            // není čistý — incident na něm zůstává otevřený.
             return snapshot != null
-              && snapshot.positions.every(position => position.netQuantity === 0);
+              && snapshot.positions.every(position => position.netQuantity === 0)
+              && snapshot.orders.every(order => !isOpenOrderStatus(order.status));
           })
           .map(follower => follower.accountId),
         kind: 'follower-flat',

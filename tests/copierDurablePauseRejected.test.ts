@@ -194,6 +194,7 @@ describe('etapa 2 (kolo 4) — pauza přežije flat leadera', () => {
     return {
       controller, follower, leaderTrade, manualPosition200, store,
       heartbeat: () => leader.emitEvent({ type: 'heartbeat', at: now } as never),
+      leaderEmit: (o: BrokerOrder) => leader.emitEvent({ type: 'order', order: o }),
       advance: (ms: number) => { now += ms; },
       allowEntries: () => { rejectEntries200 = false; },
       requestsFor: (accountId: number) => follower.placedRequests().filter(r => r.accountId === accountId),
@@ -252,6 +253,26 @@ describe('etapa 2 (kolo 4) — pauza přežije flat leadera', () => {
       expect(controller.status()).toMatchObject({ armed: true, lastError: null });
       expect(controller.status().accountSyncPauses).toEqual([expect.objectContaining({ accountId: 200 })]);
       expect(follower.liquidateRequests().some(request => request.accountId === 200)).toBe(false);
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('čekající limitní vstup leadera uvolnění pauzy zablokuje (kolo 5)', async () => {
+    const { controller, leaderTrade, requestsFor, allowEntries, advance, leaderEmit } = await boot(10);
+    try {
+      controller.arm();
+      await leaderTrade('e1', 'Buy', 1);
+      allowEntries();
+      await leaderTrade('x1', 'Sell', 0);
+      // Leader hned zadá limitní vstup, který zatím čeká — nový obchod začal.
+      leaderEmit(order({ brokerOrderId: 'l2', orderType: 'Limit', limitPrice: 30_400 }));
+      await controller.waitForIdle();
+      const before = requestsFor(200).length;
+      for (let i = 0; i < 5; i += 1) { advance(2_000); await sleep(30); await controller.waitForIdle(); }
+      await sleep(100); await controller.waitForIdle();
+      expect(controller.status().accountSyncPauses).toEqual([expect.objectContaining({ accountId: 200 })]);
+      expect(requestsFor(200).length).toBe(before);
     } finally {
       controller.stop();
     }
