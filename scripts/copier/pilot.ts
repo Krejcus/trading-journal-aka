@@ -1138,7 +1138,18 @@ async function runLocalAgent(
       && controller?.maintenanceRestartBlocker() == null
       && activity != null
       && activity.pending === 0
-      && Date.now() - activity.lastSettledAt >= 30_000;
+      && Date.now() - activity.lastSettledAt >= 30_000
+      && relayQueueQuiet(activity.lastSettledAt);
+  };
+  /**
+   * Fronta vzdálených příkazů musí být čerstvě prázdná (poll < 15 s, začatý
+   * po posledním dokončeném příkazu) a nic se právě nedoručuje. Bez relay
+   * (lokální běh) není co čekat; relay bez té informace = fail-closed.
+   */
+  const relayQueueQuiet = (lastSettledAt: number) => {
+    if (!relay) return true;
+    const idleSince = relay.commandQueueIdleSince?.() ?? null;
+    return idleSince != null && idleSince > lastSettledAt && Date.now() - idleSince <= 15_000;
   };
   let restartGate: () => boolean = () => canSafelyRestartLocalCopierAgent(controller?.status());
   const requestSafePairingRestart = (gate: 'pairing' | 'discovery' = 'pairing') => {

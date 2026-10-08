@@ -93,7 +93,10 @@ describe('recoverable copier delivery', () => {
       ...(phase !== 'polling' ? { commandId: f.remote.id, result: { armed: true } } : {}) };
     await recoverableCopierDelivery(f.options)();
     expect(f.options.agent.execute).not.toHaveBeenCalled();
-    expect(f.options.request.mock.calls[1][0]).toMatchObject({ error: 'command-outcome-unknown-worker-session-changed', result: null });
+    // 8. 10. 2026: durable výsledek z předchozí session se jen znovu potvrdí.
+    expect(f.options.request.mock.calls[1][0]).toMatchObject(phase === 'completed'
+      ? { result: { armed: true } }
+      : { error: 'command-outcome-unknown-worker-session-changed', result: null });
   });
   it('does not repeat execution if saving its result fails', async () => {
     const f = fixture(); const step = recoverableCopierDelivery(f.options);
@@ -115,10 +118,20 @@ describe('recoverable copier delivery', () => {
   });
   it.each(['expired', 'old', 'invalid'])('rejects a %s command rather than extending its TTL', async kind => {
     const f = fixture();
+    // Brzdy (disarm/kill switch) zadané před restartem se provádějí; test
+    // stáří proto používá příkaz, který brzdou není.
+    f.remote.command = { type: 'reconcile' };
     if (kind === 'expired') f.remote.expiresAt = new Date(999).toISOString();
     if (kind === 'old') f.remote.createdAt = new Date(999).toISOString();
     if (kind === 'invalid') f.remote.expiresAt = 'invalid';
     await recoverableCopierDelivery(f.options)(); expect(f.options.agent.execute).not.toHaveBeenCalled();
+  });
+  it.each(['disarm', 'kill-switch'] as const)('brzda %s zadaná před restartem workeru se provede', async type => {
+    const f = fixture();
+    f.remote.command = { type };
+    f.remote.createdAt = new Date(999).toISOString();
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
   });
   it('checks expiry again after disk writes', async () => {
     const f = fixture(); const write = f.options.store.write;

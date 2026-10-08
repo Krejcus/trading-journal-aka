@@ -402,7 +402,10 @@ export async function startLocalCopierExecutionAgent(
       const candidates = repair ?? previousIds.filter(accountId => !nextIds.has(accountId));
       if (candidates.length > 0) {
         // Fail-closed: selhání dry-runu přepnutí odmítne.
-        const probe = await previewAccounts({ required: [], optional: candidates, inactiveOptionalAsMissing: true });
+        // Jen účty, které Tradovate vůbec nevrací. Viditelný, ale neaktivní
+        // účet může mít pozici — ten nabízet k vyřazení nesmíme (resolver
+        // na něm sám selže s jasnou hláškou).
+        const probe = await previewAccounts({ required: [], optional: candidates, inactiveOptionalAsMissing: false });
         const missing = new Set(probe.missingOptional);
         const unavailable = candidates.filter(accountId => missing.has(accountId));
         if (unavailable.length > 0) {
@@ -410,9 +413,9 @@ export async function startLocalCopierExecutionAgent(
             ? unavailable.length === repair.length && !unavailable.some(accountId => nextIds.has(accountId))
             : unavailable.length === previousIds.length;
           throw new Error(retirable
-            ? `Stará skupina „${group.name || group.id}“ má účty ${unavailable.join(', ')}, které v Tradovate už nejsou nebo jsou neaktivní. `
+            ? `Stará skupina „${group.name || group.id}“ má účty ${unavailable.join(', ')}, které v Tradovate už nejsou. `
               + `Potvrď jejich vyřazení a přepnutí. ${retireMissingMarker(group.id, unavailable)}`
-            : `Účty ${unavailable.join(', ')} staré skupiny už v Tradovate nejsou nebo jsou neaktivní. `
+            : `Účty ${unavailable.join(', ')} staré skupiny už v Tradovate nejsou. `
               + 'Worker to za chvíli sám zachytí a restartuje se; přepnutí pak půjde. Zkus to znovu za pár minut.');
         }
       }
@@ -486,7 +489,9 @@ export async function startLocalCopierExecutionAgent(
       ? {
         required: copyGroupAccountIds(next),
         optional: previousIds.filter(accountId => !copyGroupAccountIds(next).includes(accountId)),
-        inactiveOptionalAsMissing: true,
+        // 8. 10. 2026 (review): vyřadit bez flat důkazu jde jen účet, který
+        // Tradovate vůbec nevrací. Viditelný neaktivní účet může mít pozici.
+        inactiveOptionalAsMissing: false,
       }
       : accountsForRoutingChange(previous, next);
     if ((mode === 'activate' || topologyChanged) && options.controller.status().armed) {

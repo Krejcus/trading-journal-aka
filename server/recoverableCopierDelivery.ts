@@ -45,7 +45,10 @@ export function recoverableCopierDelivery(options: {
       await persist(null); return response;
     }
     if (remote.status !== 'claimed') throw new Error('relay-delivery-status-invalid');
-    if (current.session !== session || current.phase === 'executing') {
+    if (current.phase === 'completed') {
+      // Výsledek už je durable (i z předchozí session): jen ho znovu
+      // potvrdíme, nepřepisujeme na „neznámý“ (8. 10. 2026).
+    } else if (current.session !== session || current.phase === 'executing') {
       await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
         error: 'command-outcome-unknown-worker-session-changed' });
     } else if (current.phase === 'polling') {
@@ -61,8 +64,11 @@ export function recoverableCopierDelivery(options: {
       const validPrestartDayLock = remote.command.type === 'lock-until-session-end'
         && Number.isFinite(created)
         && tradovateSessionEndAt(created) > now();
+      // Brzda zadaná před restartem workeru se provede i v nové session:
+      // jen zpřísňuje (DISARM / kill switch) a nesmí se ztratit (8. 10. 2026).
+      const validPrestartBrake = remote.command.type === 'kill-switch' || remote.command.type === 'disarm';
       if (!Number.isFinite(created) || !Number.isFinite(expires) || expires <= now()
-        || (created < startedAt && !validPrestartDayLock)) {
+        || (created < startedAt && !validPrestartDayLock && !validPrestartBrake)) {
         await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
           error: 'command-expired-or-predates-worker-session' });
       } else {
