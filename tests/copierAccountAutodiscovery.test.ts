@@ -7,6 +7,7 @@ import {
   createAccountDirectoryWatch,
   DIRECTORY_RESTART_MIN_INTERVAL_MS,
   directoryKey,
+  firstDirectoryKnownKeys,
   directoryRestartAllowed,
   EMPTY_DIRECTORY_ERROR,
   EMPTY_DIRECTORY_RETRY_MS,
@@ -46,6 +47,33 @@ describe('hlídání adresáře účtů', () => {
     const read = () => evaluateAccountDirectory({ watch, connectionId: 'c', knownKeys: keys(1, 2), currentKeys: current });
     read();
     expect(read()).toEqual({ changed: true, added: ['2:inactive'], removed: ['2'] });
+  });
+
+  it('první srovnání: účet neaktivní při startu a teď aktivní = změna (odchod z režimu opravy)', () => {
+    const watch = createAccountDirectoryWatch();
+    const current = new Map([[1, true], [2, true]]);
+    const known = firstDirectoryKnownKeys([1, 2], new Map([[1, true], [2, false]]), current);
+    const read = () => evaluateAccountDirectory({ watch, connectionId: 'c', knownKeys: known, currentKeys: keys(1, 2) });
+    read();
+    expect(read()).toEqual({ changed: true, added: ['2'], removed: ['2:inactive'] });
+  });
+
+  it('první srovnání: stejná normalizace při startu i v hlídání = žádný restart (dva běhy)', () => {
+    // Start i hlídání čtou použitelnost stejnou funkcí → shodné mapy.
+    const sameRead = new Map([[1, true], [2, false]]);
+    for (let run = 0; run < 2; run += 1) {
+      const watch = createAccountDirectoryWatch();
+      const known = firstDirectoryKnownKeys([1, 2], sameRead, sameRead);
+      const current = [directoryKey(1, true), directoryKey(2, false)];
+      const read = () => evaluateAccountDirectory({ watch, connectionId: 'c', knownKeys: known, currentKeys: current });
+      expect(read()).toEqual({ changed: false });
+      expect(read()).toEqual({ changed: false });
+    }
+  });
+
+  it('první srovnání: účet bez záznamu ze startu převezme aktuální čtení', () => {
+    expect(firstDirectoryKnownKeys([5], new Map(), new Map([[5, false]]))).toEqual(['5:inactive']);
+    expect(firstDirectoryKnownKeys([5], undefined, new Map())).toEqual(['5']);
   });
 
   it('prázdný adresář se zkouší znovu za 3 min, ne za hodiny', () => {

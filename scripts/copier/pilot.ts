@@ -85,6 +85,7 @@ import {
   EMPTY_DIRECTORY_ERROR,
   directoryKey,
   evaluateAccountDirectory,
+  firstDirectoryKnownKeys,
   evaluateConnectionPoll,
   failedWithEmptyDirectory,
   loadConnectionDiscoveryState,
@@ -422,9 +423,18 @@ async function runMultiConnectionAgent(): Promise<void> {
     for (const item of loaded) {
       connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, item.context.connectionId);
       connectionWatch.accountIdsByConnection.set(item.context.connectionId, item.accounts.map(account => account.id));
-      connectionWatch.startupUsableByConnection.set(item.context.connectionId, new Map(item.accounts.map(account => [
-        account.id, account.active && account.canTrade,
-      ])));
+      // Použitelnost ze stejné funkce, kterou čte hlídání (refreshAccountDirectory):
+      // startovní loader normalizuje `active` jinak a rozdíl by roztočil
+      // periodické restarty (review kola 8). Bez čtení se nic neuloží a první
+      // srovnání vezme aktuální stav.
+      try {
+        const directory = await item.broker.refreshAccountDirectory();
+        connectionWatch.startupUsableByConnection.set(item.context.connectionId, new Map(directory.map(account => [
+          account.accountId, account.active && account.canTrade,
+        ])));
+      } catch {
+        // Fail-safe: jen slabší detekce změn, žádný falešný restart.
+      }
     }
   }
   if (connectionWatch && failedManifest.length > 0) {
@@ -1623,12 +1633,12 @@ async function runLocalAgent(
           // První srovnání proti stavu ze startu v obou směrech: breach mezi
           // startem a prvním čtením se nevstřebá a obnovený účet vyvede worker
           // z režimu opravy restartem. Jen účet bez záznamu bere toto čtení.
-          const startupUsable = connectionWatch.startupUsableByConnection.get(candidate.connectionId);
           const knownKeys = connectionWatch.directoryBaselineByConnection.get(candidate.connectionId)
-            ?? startupIds.map(accountId => directoryKey(
-              accountId,
-              startupUsable?.has(accountId) ? startupUsable.get(accountId) === true : (usable.get(accountId) ?? true),
-            ));
+            ?? firstDirectoryKnownKeys(
+              startupIds,
+              connectionWatch.startupUsableByConnection.get(candidate.connectionId),
+              usable,
+            );
           const sameAsKnown = knownKeys.length === current.length && knownKeys.every(key => current.includes(key));
           if (sameAsKnown) connectionWatch.directoryBaselineByConnection.set(candidate.connectionId, current);
           const result = evaluateAccountDirectory({

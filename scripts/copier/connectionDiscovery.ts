@@ -116,6 +116,20 @@ export function evaluateAccountDirectory(options: {
   return { changed: true, added, removed };
 }
 
+/**
+ * Klíče pro první srovnání hlídání po startu: ID ze startu s použitelností
+ * zaznamenanou při startu (stejnou funkcí jako hlídání), v obou směrech.
+ * Jen účet bez záznamu převezme aktuální čtení.
+ */
+export const firstDirectoryKnownKeys = (
+  startupIds: readonly number[],
+  startupUsable: ReadonlyMap<number, boolean> | undefined,
+  currentUsable: ReadonlyMap<number, boolean>,
+): string[] => startupIds.map(accountId => directoryKey(
+  accountId,
+  startupUsable?.has(accountId) ? startupUsable.get(accountId) === true : (currentUsable.get(accountId) ?? true),
+));
+
 /** Restart kvůli adresáři nejvýš jednou za 10 min (ochrana proti smyčce). */
 export const DIRECTORY_RESTART_MIN_INTERVAL_MS = 10 * 60_000;
 export const directoryRestartAllowed = (state: ConnectionDiscoveryState, now: number): boolean => (
