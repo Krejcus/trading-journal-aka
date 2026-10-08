@@ -1341,7 +1341,8 @@ acceptAgentStatus((await executeAgent({
                   throw new Error(`Broker účet stále nepotvrdil jako způsobilý: ${remaining.reason ?? remaining.state}`);
                 }
               }}
-              legacyReconcile={copierUiDemo || supportsCopierIncidentAck(agentStatus) ? undefined : async () => {
+              // Relay `reconcile` nepouští — tlačítko jen u lokálního spojení na Macu.
+              legacyReconcile={copierUiDemo || supportsCopierIncidentAck(agentStatus) || agentTransport !== 'local' ? undefined : async () => {
                 // Jen starší worker bez potvrzení incidentu v ON (přechod při nasazení).
                 const result = await executeAgent({ type: 'reconcile' });
                 acceptAgentStatus(result.status);
