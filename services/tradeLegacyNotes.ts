@@ -1,3 +1,4 @@
+import { orderedBatchReads } from '../lib/orderedBatchReads';
 import type { Trade } from '../types';
 export const LEGACY_TRADE_NOTE_FIELDS = ['notes', 'sessionPreNotes', 'sessionPostNotes'] as const;
 export type LegacyTradeNotes = Pick<Trade, typeof LEGACY_TRADE_NOTE_FIELDS[number]>;
@@ -35,14 +36,18 @@ export const hydrateLegacyTradeNotes = async <T extends { id: string | number }>
   const clean = trades.map(stripLegacyTradeNotes);
   const ids = [...new Set(trades.map(t => String(t.id)))];
   const notes = new Map<string, Partial<LegacyTradeNotes>>();
-  for (let index = 0; index < ids.length; index += 100) {
+  // Dávky běží souběžně (nejvýš 4), vyhodnocení zůstává v pořadí jako dřív.
+  const pages = await orderedBatchReads(Math.ceil(ids.length / 100), async page => {
     if (!await stillCurrent()) throw new Error('Účet se během načítání poznámek změnil.');
-    const batch = ids.slice(index,index+100);
+    const batch = ids.slice(page * 100, page * 100 + 100);
     if (signal?.aborted) throw new Error('dashboard-read-aborted');
     const query = client.rpc(TRADE_NOTE_PROJECTION_RPC, { p_trade_ids: batch, p_context: context });
     const { data, error } = await (signal ? query.abortSignal(AbortSignal.any([signal, AbortSignal.timeout(20_000)])) : query);
     if (signal?.aborted) throw new Error('dashboard-read-aborted');
     if (!await stillCurrent()) throw new Error('Účet se během načítání poznámek změnil.');
+    return { batch, data, error };
+  });
+  for (const { batch, data, error } of pages) {
     if (error) {
       if (missing(error)) return context === 'owner' ? trades : clean;
       throw new Error('Poznámky se nepodařilo bezpečně načíst. Obnovte data a zkuste to znovu.');

@@ -1,3 +1,4 @@
+import { orderedBatchReads } from '../lib/orderedBatchReads';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Trade } from '../types';
 import { hydrateJournalSnapshots } from './journalSnapshotHydration';
@@ -62,15 +63,19 @@ export async function hydrateOwnedJournalTrades(
   const ids = [...new Set(journal.map(trade => String(trade.id)))];
   const records: StoredJournalTradeFacts[] = [];
   const seen = new Set<string>();
-  for (let index = 0; index < ids.length; index += 100) {
+  // Dávky běží souběžně (nejvýš 4); validace řádků zůstává v pořadí dávek.
+  const pages = await orderedBatchReads(Math.ceil(ids.length / 100), async page => {
     await active();
-    const selected = ids.slice(index, index + 100);
+    const selected = ids.slice(page * 100, page * 100 + 100);
     const { data, error } = await client.from('tradovate_journal_positions')
       .select(`trade_id,journal_account_id,status,facts,connection_id,external_account_id,revision${options.detail ? ',history' : ''}`)
       .eq('user_id', ownerId).in('trade_id', selected)
       .returns<Array<StoredJournalTradeFacts & { connection_id: string; external_account_id: number; revision: number }>>()
       .abortSignal(signal());
     await active();
+    return { selected, data, error };
+  });
+  for (const { selected, data, error } of pages) {
     if (error || !Array.isArray(data)) throw new Error('journal-facts-unavailable');
     for (const row of data) {
       if (!selected.includes(row.trade_id) || seen.has(row.trade_id) || !heads.has(row.connection_id)

@@ -1,3 +1,4 @@
+import { orderedBatchReads } from '../lib/orderedBatchReads';
 import type { Trade } from '../types';
 import { validateTradeNoteHistory, type TradeNoteHistory } from './tradeNoteHistory';
 
@@ -43,20 +44,24 @@ export const hydrateOwnedTradeNoteHistories = async <T extends Pick<Trade, 'id'>
   // Bound URL size for large exports. All pages must succeed before hydration.
   const ids = [...new Set(trades.map(trade => String(trade.id)))];
   const idSet = new Set(ids);
-  for (let index = 0; index < ids.length; index += 100) {
+  // Dávky běží souběžně (nejvýš 4), vyhodnocení zůstává v pořadí jako dřív.
+  const pages = await orderedBatchReads(Math.ceil(ids.length / 100), async page => {
     if (signal?.aborted) throw new Error('dashboard-read-aborted');
     const query = client.from(PRIVATE_TRADE_NOTES_TABLE)
-      .select('trade_id, history').eq('user_id', ownerId).in('trade_id', ids.slice(index, index + 100));
+      .select('trade_id, history').eq('user_id', ownerId).in('trade_id', ids.slice(page * 100, page * 100 + 100));
     const { data, error } = await (signal ? query.abortSignal(AbortSignal.any([signal, AbortSignal.timeout(20_000)])) : query);
     if (signal?.aborted) throw new Error('dashboard-read-aborted');
     if (!await stillOwner()) throw new Error('Účet se během načítání soukromých poznámek změnil.');
+    return { data, error };
+  });
+  for (const { data, error } of pages) {
     if (error) {
       // Feature is intentionally unavailable before the approved migration.
       // Other trade fields remain usable; saves use a separate strict RPC gate.
       if (missingPrivateTable(error)) return clean;
       throw new Error('Soukromou historii poznámek se nepodařilo načíst. Obnovte data před úpravou poznámek.');
     }
-    for (const row of data ?? []) {
+    for (const row of (data ?? []) as Array<{ trade_id: unknown; history: TradeNoteHistory }>) {
       if (!idSet.has(String(row.trade_id))) continue;
       histories.set(String(row.trade_id), validateTradeNoteHistory(row.history));
     }

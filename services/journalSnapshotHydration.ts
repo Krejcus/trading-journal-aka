@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Trade } from '../types';
 import { isEvidenceJournalTrade } from '../lib/journalTradeFacts';
+import { orderedBatchReads } from '../lib/orderedBatchReads';
 
 type Snapshot = NonNullable<Trade['copierSnapshots']>[number];
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -12,8 +13,10 @@ export async function hydrateJournalSnapshots(client: SupabaseClient, trades: re
   const journal = trades.filter(isEvidenceJournalTrade);
   if (!journal.length) return [...trades];
   const results = new Map<string, Partial<Trade>>();
-  for (let index = 0; index < journal.length; index += 100) {
-    const selected = journal.slice(index, index + 100);
+  // Každá stovka obchodů je samostatný oddíl (vlastní stránkování); oddíly běží
+  // souběžně (nejvýš 4). Zápisy do `results` jsou per obchod, pořadí nehraje roli.
+  await orderedBatchReads(Math.ceil(journal.length / 100), async page => {
+    const selected = journal.slice(page * 100, page * 100 + 100);
     const byId = new Map(selected.map(trade => [String(trade.id), trade]));
     const snapshots = new Map<string, Snapshot[]>(), episodes = new Map<string, string>();
     try {
@@ -54,7 +57,7 @@ export async function hydrateJournalSnapshots(client: SupabaseClient, trades: re
         copierSnapshots: [], copierEpisodeId: undefined, copierSnapshotLoadError: true,
       });
     }
-  }
+  });
   await active();
   return trades.map(trade => ({ ...trade, ...results.get(String(trade.id)) }));
 }
