@@ -184,6 +184,8 @@ interface ConnectionWatch {
    * startu; přechod stejného ID na neaktivní se pozná mezi čteními.
    */
   directoryBaselineByConnection: Map<string, string[]>;
+  /** Použitelnost účtů podle startovního načtení (active && canTrade). */
+  startupUsableByConnection: Map<string, Map<number, boolean>>;
 }
 
 interface PilotContextOptions {
@@ -420,6 +422,9 @@ async function runMultiConnectionAgent(): Promise<void> {
     for (const item of loaded) {
       connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, item.context.connectionId);
       connectionWatch.accountIdsByConnection.set(item.context.connectionId, item.accounts.map(account => account.id));
+      connectionWatch.startupUsableByConnection.set(item.context.connectionId, new Map(item.accounts.map(account => [
+        account.id, account.active && account.canTrade,
+      ])));
     }
   }
   if (connectionWatch && failedManifest.length > 0) {
@@ -607,6 +612,7 @@ async function discoverOwnerConnections<T extends { context: PilotContext }>(opt
     scope: null,
     accountIdsByConnection: new Map(),
     directoryBaselineByConnection: new Map(),
+    startupUsableByConnection: new Map(),
   };
   let listed: Awaited<ReturnType<typeof listMacCopierDeviceConnections>>;
   try {
@@ -1610,10 +1616,16 @@ async function runLocalAgent(
           }
           const usable = new Map(read.map(account => [account.accountId, account.active && account.canTrade]));
           const current = read.map(account => directoryKey(account.accountId, account.active && account.canTrade));
-          // První srovnání: jen ID ze startu (použitelnost bere z tohoto čtení,
-          // ať rozdílná sémantika startovního loaderu nespustí falešný restart).
+          // První srovnání proti startu: účet použitelný při startu a teď
+          // neaktivní = změna (breach mezi startem a prvním čtením se tak
+          // nevstřebá). Opačný směr bere z tohoto čtení — neaktivní při startu
+          // už v režimu opravy je.
+          const startupUsable = connectionWatch.startupUsableByConnection.get(candidate.connectionId);
           const knownKeys = connectionWatch.directoryBaselineByConnection.get(candidate.connectionId)
-            ?? startupIds.map(accountId => directoryKey(accountId, usable.get(accountId) ?? true));
+            ?? startupIds.map(accountId => directoryKey(
+              accountId,
+              startupUsable?.get(accountId) === true ? true : (usable.get(accountId) ?? true),
+            ));
           const sameAsKnown = knownKeys.length === current.length && knownKeys.every(key => current.includes(key));
           if (sameAsKnown) connectionWatch.directoryBaselineByConnection.set(candidate.connectionId, current);
           const result = evaluateAccountDirectory({

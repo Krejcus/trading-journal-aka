@@ -19,10 +19,13 @@ export function recoverableCopierDelivery(options: {
   const startedAt = now();
   let loaded = false;
   let checkpoint: RelayDelivery | null = null;
+  const armSequenceAtClaim = new Map<string, number>();
   const persist = async (next: RelayDelivery | null) => {
     // Update memory first, even if fsync fails after execution. A later attempt
     // must persist this same state before sending any request or doing work.
     checkpoint = next;
+    // Doručení skončilo: další claim si stav ARM zaznamená znovu.
+    if (next === null) armSequenceAtClaim.clear();
     await options.store.write(next);
   };
   return async () => {
@@ -45,10 +48,16 @@ export function recoverableCopierDelivery(options: {
       await persist(null); return response;
     }
     if (remote.status !== 'claimed') throw new Error('relay-delivery-status-invalid');
-    // DISARM / kill switch jsou idempotentní a jen zpřísňují: claim z předchozí
-    // session (ztracená odpověď při restartu) se proto provede, ne ACKne jako
-    // neznámý. Obchodní a konfigurační příkazy se nikdy neopakují.
-    const idempotentBrake = remote.command.type === 'disarm' || remote.command.type === 'kill-switch';
+    // DISARM / kill switch / denní zámek jsou idempotentní a jen zpřísňují:
+    // claim z předchozí session (ztracená odpověď při restartu) se proto
+    // provede, ne ACKne jako neznámý. Obchodní a konfigurační příkazy se nikdy
+    // neopakují.
+    const idempotentBrake = remote.command.type === 'disarm' || remote.command.type === 'kill-switch'
+      || remote.command.type === 'lock-until-session-end';
+    // Stav ARM v okamžiku, kdy tato session brzdu poprvé převzala.
+    if (!armSequenceAtClaim.has(current.deliveryId)) {
+      armSequenceAtClaim.set(current.deliveryId, options.agent.armSequence?.() ?? 0);
+    }
     if (current.phase === 'completed') {
       // Výsledek už je durable (i z předchozí session): jen ho znovu
       // potvrdíme, nepřepisujeme na „neznámý“ (8. 10. 2026).
@@ -84,9 +93,11 @@ export function recoverableCopierDelivery(options: {
         // Recheck TTL after durable disk writes, immediately before execution.
         if (options.isActive?.() === false) executionError = 'command-cancelled-worker-shutdown';
         else if (expires <= now()) executionError = 'command-expired-before-execution';
-        // Brzda zadaná dřív než uživatelův úspěšný ARM (např. replay po
-        // restartu, ARM mezitím lokálně) novější záměr nepřebije (8. 10. 2026).
-        else if (idempotentBrake && (options.agent.lastArmAcceptedAt?.() ?? 0) > created) {
+        // DISARM převzatý dřív, než uživatel úspěšně zapnul (ARM proběhl
+        // až PO claimu — tedy je prokazatelně novější, bez hodin), novější
+        // záměr nepřebije. Kill switch ani denní zámek se nikdy nezahazují.
+        else if (remote.command.type === 'disarm'
+          && (options.agent.armSequence?.() ?? 0) > (armSequenceAtClaim.get(current.deliveryId) ?? Number.POSITIVE_INFINITY)) {
           executionError = 'superseded-by-newer-arm';
         }
         else {

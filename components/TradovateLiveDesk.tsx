@@ -880,7 +880,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           retireMissingOldGroup: {
             groupId: retirement.groupId,
             accountIds: retirement.accountIds,
-            reason: `Uživatel v appce potvrdil vyřazení účtů ${retirement.accountIds.join(', ')}, které v Tradovate už nejsou (breach)`,
+            reason: `Uživatel v appce potvrdil vyřazení účtů ${retirement.accountIds.join(', ')}, které v Tradovate už nejsou nebo jsou neaktivní (breach)`,
           },
         })).status);
       });
