@@ -354,6 +354,60 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
     }
   }, 12_000);
 
+  // 8. 10. 2026 (produkce, účet 68931462): cancel ochranné nohy dostal
+  // TooLate, protože order právě rušil dřívější cancel; broker ho ještě ~1,4 s
+  // hlásil jako Working a sweep kopírku zbytečně vypnul.
+  it('TooLate cancel: počká, až broker order doběhne (jen čtení), a kopírku nevypne', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        // Dřívější cancel doběhne u brokera až za chvíli; tenhle je TooLate.
+        setTimeout(() => {
+          const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
+          leg.status = 'canceled';
+          harness.broker.emitEvent({ type: 'order', order: { ...leg } });
+        }, 600);
+        throw new Error('cancelOrder rejected: TooLate');
+      };
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      await harness.controller.waitForIdle();
+
+      expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(harness.broker.cancelRequestCount(targetId)).toBe(0);
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
+  it('TooLate cancel: order zůstane working i po čekání → dál fail-closed (žádný další cancel)', async () => {
+    const harness = await armedOsoHarness(baseGroup, { flatSweepBudgetMs: 3_000 });
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      let attempts = 0;
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        attempts += 1;
+        throw new Error('cancelOrder rejected: TooLate');
+      };
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('nejasný cancel');
+      expect(attempts).toBe(1);
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
   it('B6/R6/V7: první streamově working cancel má vlastní broker timeout a neopakuje se', async () => {
     const harness = await armedOsoHarness(baseGroup, {
       flatSweepBudgetMs: 80,
