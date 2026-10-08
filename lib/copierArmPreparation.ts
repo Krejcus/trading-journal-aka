@@ -137,6 +137,17 @@ export function copierArmRejection(reason: unknown): string | null {
   if (reason instanceof CopierArmBlockedError) return reason.message;
   if (!(reason instanceof Error)) return null;
   const message = reason.message.replace(/\s+/g, ' ').trim();
+  if (/\[ack-incident:[^\]]+\]/.test(message)) {
+    // Worker hlásí incident, který UI ještě nevidělo (nebo nový): žádné
+    // automatické opakování, uživatel ho potvrdí dalším Zapnout.
+    return `${message
+      .replace(/\s*\[ack-incident:[^\]]+\]/, '')
+      .replace(/\s*\(starší appka[^)]*\)/, '')
+      .replace(/^Zapnutí po incidentu vyžaduje tvoje potvrzení: /, 'Mezitím vznikl incident: ')} Dej znovu Zapnout a potvrď ho.`;
+  }
+  if (message === 'Incident se mezitím změnil; potvrď ho znovu.') {
+    return 'Mezitím vznikl nový incident. Dej znovu Zapnout a potvrď ho.';
+  }
   if (message === 'tighten-only') {
     return 'Zapnutí bylo odmítnuto, protože požadovaná pravidla jsou mírnější než dnešní potvrzené nastavení. Obnov stav a zkontroluj Risk.';
   }

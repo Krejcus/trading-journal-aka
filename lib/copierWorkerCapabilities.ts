@@ -2,6 +2,13 @@ import type { LocalCopierAgentStatus } from './localCopierAgentProtocol.js';
 import { sanitizeCopyGroups, type CopyGroupConfig } from '../services/liveCopyTrading.js';
 
 export const COPIER_RISK_CONFIG_CAPABILITY = 'risk-config-v1';
+/** Worker vyžaduje u ON po incidentu výslovné potvrzení (8. 10. 2026). */
+export const COPIER_INCIDENT_ACK_CAPABILITY = 'incident-ack-v1';
+
+export const supportsCopierIncidentAck = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_INCIDENT_ACK_CAPABILITY);
 
 export const supportsCopierRiskConfig = (
   status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,

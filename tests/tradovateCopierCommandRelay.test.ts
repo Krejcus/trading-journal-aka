@@ -420,31 +420,6 @@ describe('Tradovate copier command relay', () => {
     expect(claimed?.command).toEqual({ type: 'verify-account-eligibility', accountId: 63338752 });
   });
 
-  it('přenese read-only Kontrolu pozic z telefonu (reconcile) s prázdným payloadem', async () => {
-    const upsert = vi.fn();
-    await enqueueTradovateCopierCommand({
-      db: enqueueDb(upsert),
-      userId,
-      connectionId,
-      command: { type: 'reconcile' },
-      idempotencyKey: 'reconcile-from-phone-001',
-      now: Date.parse('2026-08-21T12:00:00.000Z'),
-    });
-    expect(upsert.mock.calls[0][0]).toMatchObject({ command_type: 'reconcile', payload: {} });
-
-    const claimed = await claimTradovateCopierCommand({
-      db: claimDb({
-        id: 'reconcile-command-id',
-        command_type: 'reconcile',
-        payload: {},
-        expires_at: '2026-08-21T12:00:30.000Z',
-        status: 'claimed', result: null, error: null,
-      }),
-      deviceId,
-    });
-    expect(claimed?.command).toEqual({ type: 'reconcile' });
-  });
-
   it('odmítne neplatné ID cíleného ověření', async () => {
     const upsert = vi.fn();
     await expect(enqueueTradovateCopierCommand({
@@ -665,6 +640,34 @@ describe('Tradovate copier command relay', () => {
       db: enqueueDb(vi.fn()), userId, connectionId,
       command: { type: 'activate-group', group, retireMissingOldGroup: { groupId: 'group-1', accountIds: [-1], reason: 'x' } },
     } as never)).rejects.toThrow('invalid-relay-command-payload');
+  });
+
+  it('arm-live přenese potvrzení incidentu; vadné odmítne; Kontrola pozic relay neprojde', async () => {
+    const group = {
+      id: 'group-1', name: 'Hlavní', enabled: true, leaderAccountId: 11,
+      followers: [{ accountId: 22, mode: 'on-submit' as const, multiplier: 1 }],
+    };
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert), userId, connectionId,
+      command: { type: 'arm-live', group, acknowledgeIncidentId: 'b2c1-incident' },
+    });
+    expect(upsert.mock.calls[0][0].payload).toMatchObject({ acknowledgeIncidentId: 'b2c1-incident' });
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'command-id', command_type: 'arm-live', payload: { group, acknowledgeIncidentId: 'b2c1-incident' },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toMatchObject({ type: 'arm-live', acknowledgeIncidentId: 'b2c1-incident' });
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn()), userId, connectionId,
+      command: { type: 'arm-live', group, acknowledgeIncidentId: 'ne platné!' },
+    } as never)).rejects.toThrow('invalid-relay-command-payload');
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn()), userId, connectionId, command: { type: 'reconcile' },
+    })).rejects.toThrow('unsupported-relay-command');
   });
 
   it('claim odmítne starý nebo ručně vložený cancel-order payload', async () => {

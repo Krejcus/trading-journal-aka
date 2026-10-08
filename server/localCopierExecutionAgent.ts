@@ -19,7 +19,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_INCIDENT_ACK_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -42,6 +42,36 @@ const DEFAULT_DEVELOPMENT_ORIGINS = new Set([
 const LOCAL_ARM_DEADLINE_MS = 30_000;
 const FOLLOWER_TRADE_FLATTEN_ACK_MS = 3_000;
 
+/** Zapnutí potřebuje vlastní Kontrolu pozic (incident, chybějící reconciliation, recovery blokace). */
+export const armNeedsSelfCheck = (status: {
+  reconciliationRequired?: boolean;
+  armPreparation?: { state: string; blockedBy: string | null; manualRecoveryRequired: boolean } | undefined;
+}): boolean => {
+  const preparation = status.armPreparation;
+  return status.reconciliationRequired === true
+    || preparation?.manualRecoveryRequired === true
+    || preparation?.blockedBy === 'incident'
+    || preparation?.blockedBy === 'recovery'
+    || preparation?.state === 'needed';
+};
+
+/** Lidská zpráva, proč vestavěná kontrola zapnutí zastavila — jen aktuální stav, jmenovitě účty. */
+export const armSelfCheckFailureMessage = (check: {
+  divergentAccounts: readonly number[];
+  workingOrderAccounts: readonly number[];
+  missingAccounts: readonly number[];
+}): string => {
+  const parts = [
+    check.divergentAccounts.length > 0 ? `pozice nesedí s leaderem na účtech ${check.divergentAccounts.join(', ')}` : '',
+    check.workingOrderAccounts.length > 0 ? `čekající příkazy na účtech ${check.workingOrderAccounts.join(', ')}` : '',
+    check.missingAccounts.length > 0 ? `nedostupné účty ${check.missingAccounts.join(', ')}` : '',
+  ].filter(Boolean);
+  return `Zapnutí zastaveno kontrolou u brokera: ${parts.join('; ') || 'stav se nepodařilo autoritativně ověřit'}.`;
+};
+
+/** Strojově čitelná značka pro UI: který incident uživatel potvrzuje. */
+export const incidentAckMarker = (id: string) => `[ack-incident:${encodeURIComponent(id)}]`;
+
 export const boundedLocalArmDeadline = (rawDeadline: unknown, receivedAt = Date.now()): number => {
   const parsed = typeof rawDeadline === 'string' ? Number(rawDeadline) : NaN;
   return Number.isFinite(parsed)
@@ -63,6 +93,12 @@ export interface PrepareGroupAccountsResult {
 
 interface LocalCopierExecutionAgentOptions {
   controller: CopierRuntimeController;
+  /** Automatické zapnutí po vypnutí kvůli výpadku spojení (výchozí vypnuto do serverové fronty). */
+  autoRearmAfterTransport?: boolean;
+  /** Interval kontroly automatického zapnutí (test override). */
+  autoRearmTickMs?: number;
+  /** Prodleva po obnovení spojení před automatickým zapnutím (test override). */
+  autoRearmGraceMs?: number;
   /**
    * B1: jak dlouho po durable přijetí čekat na potvrzené zavření followera,
    * než příkaz vrátí `pending`. Relay i FIFO agenta jsou sériové; dřív tu
@@ -115,6 +151,12 @@ export interface LocalCopierExecutionAgent {
   beginShutdown(): void;
   /** Rozpracované příkazy a čas posledního dokončeného (údržbový restart). */
   commandActivity?(): { pending: number; lastSettledAt: number };
+  /**
+   * Napojí relay: čas začátku posledního prázdného vyzvednutí fronty. Bez
+   * něj se kopírka po výpadku sama nikdy nezapne (brzda z telefonu by mohla
+   * čekat ve frontě).
+   */
+  setRemoteQueueProbe?(probe: () => number): void;
   close(): Promise<void>;
 }
 
@@ -266,6 +308,31 @@ export async function startLocalCopierExecutionAgent(
   let lastBrakeCreatedAt = Number.NEGATIVE_INFINITY;
   let armPending = false;
   let shuttingDown = false;
+  /** Poslední úspěšné ostré zapnutí (bez změny skupiny) pro automatický návrat po výpadku. */
+  let lastSuccessfulArm: {
+    command: Extract<LocalCopierAgentCommand, { type: 'arm-live' }>;
+    at: number;
+    /** Brzda po tomto zapnutí (i ještě před tickem) automatický návrat zruší. */
+    brakeEpoch: number;
+    /** Automatický návrat smí zapnout jen tutéž skupinu, která byla ručně zapnutá. */
+    groupFingerprint: string;
+  } | null = null;
+  /**
+   * Čekající automatické zapnutí po vypnutí kvůli výpadku spojení (Filip
+   * 6. 10. 2026). Zruší ho jakákoli brzda, kill switch, nové vypnutí,
+   * konec session nebo uplynutí okna; samotné zapnutí jde přes stejnou
+   * bránu `arm-live` včetně vestavěné Kontroly pozic.
+   */
+  let autoRearm: {
+    brakeEpoch: number;
+    disarmAt: number;
+    attempts: number;
+    nextAttemptAt: number;
+    connectedSince: number | null;
+  } | null = null;
+  let autoRearmHandledDisarmAt = 0;
+  let remoteQueueProbe: (() => number) | null = null;
+  let autoRearmRunning = false;
   let serverClosePromise: Promise<void> | null = null;
   const shutdownError = () => new Error('Lokální execution agent se právě bezpečně ukončuje');
   const prepareAccounts = async (
@@ -300,7 +367,7 @@ export async function startLocalCopierExecutionAgent(
 
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
-    capabilities: [COPIER_RISK_CONFIG_CAPABILITY,
+    capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY,
       ...(options.controller.prepareArm ? ['arm-preparation-v1'] : []),
       ...(options.accountDisplay ? ['account-display-v1'] : [])],
     environment: 'demo',
@@ -843,6 +910,32 @@ export async function startLocalCopierExecutionAgent(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
         );
         assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
+        // Etapa 1 (6. 10. 2026): Zapnout si samo provede Kontrolu pozic.
+        // Dřívější incident ani chybějící ruční kontrola zapnutí neblokují;
+        // rozhoduje jen aktuální autoritativní stav u brokera.
+        if (context.source === 'internal' && options.controller.status().armPreparation?.manualRecoveryRequired) {
+          // Automatický návrat po výpadku nesmí vestavěnou kontrolou smazat
+          // nový incident, který vznikl až po výpadku; ten zůstává ruční.
+          throw new Error('Automatické zapnutí zastaveno: po výpadku vznikl incident, který vyžaduje ruční Kontrolu pozic');
+        }
+        // 8. 10. 2026: tlačítko Kontrola pozic zmizelo; durable incident smí
+        // ON smazat jen s výslovným potvrzením právě tohoto incidentu
+        // (INV-DEFAULT-03). Zvykové kliknutí ho nepřejde.
+        const incident = options.controller.status().manualRecovery ?? null;
+        if (incident && command.acknowledgeIncidentId !== incident.id) {
+          throw new Error(
+            `Zapnutí po incidentu vyžaduje tvoje potvrzení: ${incident.reason} `
+            + `(starší appka potvrzení neumí — použij aktuální web nebo aktualizovanou iPhone appku) ${incidentAckMarker(incident.id)}`,
+          );
+        }
+        if (incident || armNeedsSelfCheck(options.controller.status())) {
+          const check = await awaitArmDeadline(
+            options.controller.reconcile(incident ? { acknowledgedIncidentId: incident.id } : {}),
+            deadlineAt,
+          );
+          assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
+          if (!check.authoritativelyClean) throw new Error(armSelfCheckFailureMessage(check));
+        }
         const preparation = options.controller.status().armPreparation;
         if (!routingPrepared && (!options.controller.prepareArm
           || (preparation?.state !== 'ready' && preparation?.state !== 'checking'))) {
@@ -856,7 +949,8 @@ export async function startLocalCopierExecutionAgent(
           await awaitArmDeadline(options.controller.prepareArm(), deadlineAt);
         } else {
           // Compatibility for controller adapters without preparation support.
-          const reconciliation = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
+          // Interní kontrola: incident nemaže (INV-RECON-02).
+          const reconciliation = await awaitArmDeadline(options.controller.reconcile({ internal: true }), deadlineAt);
           if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
             throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
           }
@@ -880,6 +974,15 @@ export async function startLocalCopierExecutionAgent(
         if (!armedStatus.armed || armedStatus.shadowMode || !(armedStatus.sessionArmedAt && armedStatus.sessionArmedAt > 0)) {
           throw new Error(armedStatus.lastError ?? 'ARM nebyl durable potvrzen');
         }
+        // Pro automatické zapnutí po výpadku spojení: stejné parametry bez
+        // změny skupiny (ta se po výpadku znovu neaplikuje).
+        const { group: _appliedGroup, ...repeatable } = command;
+        lastSuccessfulArm = {
+          command: repeatable,
+          at: Date.now(),
+          brakeEpoch: admittedBrakeEpoch,
+          groupFingerprint: JSON.stringify(group),
+        };
         return;
       }
       case 'shadow': {
@@ -888,7 +991,8 @@ export async function startLocalCopierExecutionAgent(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
         );
         await prepareAccounts(allAccountsRequired(copyGroupAccountIds(group)));
-        const reconciliation = await options.controller.reconcile();
+        // Interní kontrola: SHADOW incident nemaže (INV-DEFAULT-03).
+        const reconciliation = await options.controller.reconcile({ internal: true });
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('SHADOW odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
         }
@@ -1149,8 +1253,83 @@ export async function startLocalCopierExecutionAgent(
     });
   });
   const address = server.address() as AddressInfo;
+  const AUTO_REARM_WINDOW_MS = 30 * 60_000;
+  const AUTO_REARM_RETRY_MS = 15_000;
+  const AUTO_REARM_MAX_ATTEMPTS = 40;
+  const autoRearmLog = (message: string) => console.log(`${new Date().toISOString()} AUTO-REARM ${message}`);
+  const autoRearmTick = async () => {
+    // Výchozí VYPNUTO (6. 10. 2026): bez serverové atomické fronty (ARM vs.
+    // brzda z telefonu) zůstává sub-sekundové okno; zapne se až s ní.
+    if (shuttingDown || autoRearmRunning || options.autoRearmAfterTransport !== true) return;
+    const current = options.controller.status();
+    const disarm = current.lastDisarm;
+    if (!autoRearm) {
+      if (
+        !lastSuccessfulArm
+        || current.armed
+        || disarm?.trigger !== 'transport'
+        || disarm.at <= lastSuccessfulArm.at
+        || disarm.at === autoRearmHandledDisarmAt
+      ) return;
+      autoRearmHandledDisarmAt = disarm.at;
+      // Brzdová epocha se bere z okamžiku ručního zapnutí, ne z ticku: brzda
+      // poslaná kdykoli po zapnutí (i těsně po výpadku) návrat zruší.
+      autoRearm = {
+        brakeEpoch: lastSuccessfulArm.brakeEpoch,
+        disarmAt: disarm.at,
+        attempts: 0,
+        nextAttemptAt: Date.now(),
+        connectedSince: null,
+      };
+      autoRearmLog('čeká na obnovu spojení; zapne se samo, pokud kontrola u brokera vyjde čistě');
+    }
+    const pending = autoRearm;
+    const cancel = (reason: string) => {
+      autoRearmLog(`zrušeno: ${reason}`);
+      autoRearm = null;
+    };
+    if (brakeEpoch !== pending.brakeEpoch) return cancel('přišla ruční brzda');
+    if (current.killSwitch) return cancel('kill switch');
+    if (current.armPreparation?.manualRecoveryRequired) return cancel('po výpadku vznikl incident, který vyžaduje ruční kontrolu');
+    if (!lastSuccessfulArm || JSON.stringify(group) !== lastSuccessfulArm.groupFingerprint) {
+      return cancel('skupina se od posledního ručního zapnutí změnila');
+    }
+    if (current.armed) return cancel('kopírka už je zapnutá');
+    if (current.lastDisarm && current.lastDisarm.at !== pending.disarmAt) return cancel('nové vypnutí');
+    if (Date.now() - pending.disarmAt > AUTO_REARM_WINDOW_MS) return cancel('vypršelo okno 30 min');
+    if (tradovateSessionEndAt(pending.disarmAt) !== tradovateSessionEndAt(Date.now())) return cancel('skončila obchodní session');
+    if (pending.attempts >= AUTO_REARM_MAX_ATTEMPTS) return cancel('vyčerpány pokusy');
+    if (!current.connected) {
+      pending.connectedSince = null;
+      return;
+    }
+    pending.connectedSince ??= Date.now();
+    if (Date.now() - pending.connectedSince < (options.autoRearmGraceMs ?? 0)) return;
+    // Pojistka proti brzdě z telefonu, která během výpadku čekala ve frontě:
+    // relay musí po obnovení spojení dokončit vyzvednutí, při kterém server
+    // neměl žádný čekající příkaz. Bez relay se kopírka sama nezapne.
+    if (!remoteQueueProbe) return cancel('relay nehlásí stav fronty příkazů');
+    if (remoteQueueProbe() <= Math.max(pending.connectedSince, pending.disarmAt)) return;
+    if (Date.now() < pending.nextAttemptAt) return;
+    autoRearmRunning = true;
+    pending.attempts += 1;
+    try {
+      await dispatch(lastSuccessfulArm.command, { source: 'internal', createdAt: Date.now() }, pending.brakeEpoch);
+      autoRearmLog(`kopírka po výpadku spojení znovu zapnuta (pokus ${pending.attempts})`);
+      if (autoRearm === pending) autoRearm = null;
+    } catch (error) {
+      pending.nextAttemptAt = Date.now() + AUTO_REARM_RETRY_MS;
+      autoRearmLog(`pokus ${pending.attempts} nevyšel: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      autoRearmRunning = false;
+    }
+  };
+  const autoRearmTimer = setInterval(() => { void autoRearmTick(); }, options.autoRearmTickMs ?? 5_000);
+  (autoRearmTimer as { unref?: () => void }).unref?.();
+
   options.controller.startArmPreparation?.();
   const beginShutdown = () => {
+    clearInterval(autoRearmTimer);
     if (shuttingDown && serverClosePromise) return;
     shuttingDown = true;
     if (!serverClosePromise) {
@@ -1166,6 +1345,9 @@ export async function startLocalCopierExecutionAgent(
     execute: dispatchTracked,
     commandActivity: () => ({ pending: pendingCommands, lastSettledAt: lastCommandSettledAt }),
     beginShutdown,
+    setRemoteQueueProbe(probe) {
+      remoteQueueProbe = probe;
+    },
     async close() {
       beginShutdown();
       await tail;

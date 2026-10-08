@@ -101,7 +101,7 @@ import {
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
-import { supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
 import {
@@ -843,6 +843,29 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         }
       }
     }
+    // 8. 10. 2026: Kontrola pozic je součástí Zapnout. Durable incident
+    // ale smaže jen výslovné potvrzení — zvykové kliknutí ho nepřejde.
+    // Starší worker (bez `incident-ack-v1`) potvrzení nezná. Po incidentu ho
+    // proto ON vůbec nespustí — jinak by worker etapy 1 incident smazal sám.
+    const legacyIncident = !supportsCopierIncidentAck(armStatusRef.current.status)
+      && armStatusRef.current.status?.controller.armPreparation?.blockedBy === 'incident';
+    if (legacyIncident) {
+      throw new CopierArmBlockedError('Po incidentu je potřeba Kontrola pozic. Worker ještě neumí potvrzení incidentu při zapnutí — použij Zkontrolovat pozice na Macu, nebo nejdřív aktualizuj worker.');
+    }
+    const incident = supportsCopierIncidentAck(armStatusRef.current.status)
+      ? armStatusRef.current.status?.controller.manualRecovery ?? null
+      : null;
+    let acknowledgeIncidentId: string | undefined;
+    if (incident) {
+      const acknowledged = await confirmAction({
+        title: 'Zapnout po incidentu?',
+        message: `Po incidentu: ${incident.reason} Ověřím účty u brokera a zapnu jen při čistém stavu. Když nesedí, kopírka zůstane vypnutá a vypíše účty — srovnáš je ručně v Tradovate.`,
+        confirmLabel: 'Ověřit a zapnout',
+        cancelLabel: 'Zrušit',
+      });
+      if (!acknowledged) return;
+      acknowledgeIncidentId = incident.id;
+    }
     const armNow = () => runConfigMutation(async () => {
       // Re-read after any camera dialog/repair; the worker still rejects any
       // concurrent tightening that happened after this UI snapshot.
@@ -851,6 +874,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         type: 'arm-live',
         group: prepared.group,
         accountEligibilityExclusions: exclusions,
+        ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
       });
       acceptConfigAck(result.status);
       if (prepared.preservedRules.length) {
@@ -1369,7 +1393,9 @@ acceptAgentStatus((await executeAgent({
                   throw new Error(`Broker účet stále nepotvrdil jako způsobilý: ${remaining.reason ?? remaining.state}`);
                 }
               }}
-              onReconcile={copierUiDemo ? undefined : async () => {
+              // Relay `reconcile` nepouští — tlačítko jen u lokálního spojení na Macu.
+              legacyReconcile={copierUiDemo || supportsCopierIncidentAck(agentStatus) || agentTransport !== 'local' ? undefined : async () => {
+                // Jen starší worker bez potvrzení incidentu v ON (přechod při nasazení).
                 const result = await executeAgent({ type: 'reconcile' });
                 acceptAgentStatus(result.status);
                 await live.refreshData();

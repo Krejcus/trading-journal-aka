@@ -191,6 +191,8 @@ export interface CopierControllerStatus {
     blockedBy: CopierArmPreparationBlocker | null;
     manualRecoveryRequired: boolean;
   };
+  /** Durable incident čekající na lidské potvrzení v ON (8. 10. 2026). */
+  manualRecovery?: { id: string; at: number; reason: string } | null;
   divergentAccounts: number[];
   workingOrderAccounts: number[];
   stuckOutbox: boolean;
@@ -454,6 +456,17 @@ export interface CopierReconciliationOptions {
    * připojených OAuth adresářů. Leader zde nikdy nesmí být.
    */
   missingOptionalAccountIds?: readonly number[];
+  /**
+   * Interní read-only kontrola (SHADOW, kompatibilní ARM): nikdy nemaže
+   * `lastError` ani durable incident (INV-DEFAULT-03, INV-RECON-02).
+   */
+  internal?: true;
+  /**
+   * ON s výslovným potvrzením incidentu (8. 10. 2026): čistý výsledek smaže
+   * durable incident jen tehdy, je-li to právě tento potvrzený incident.
+   * Bez potvrzení kontrola existující incident nikdy nesmaže.
+   */
+  acknowledgedIncidentId?: string;
 }
 
 export interface CopierGroupReconfigurationOptions {
@@ -812,6 +825,20 @@ const normalizedRuntimeGroup = (group: CopyGroupConfig): CopyGroupConfig => {
  * Pořadí je záměrné: load durable snapshot -> recover unknown side effects ->
  * teprve potom subscribe. Controller vždy startuje DISARMED + shadow.
  */
+/**
+ * Stabilní identita durable incidentu (8. 10. 2026): uložené ID, u staršího
+ * markeru `legacy-<at>`, u poškozeného pevné `invalid-marker`. Stejná funkce
+ * se používá při obnově i při mazání, takže se identity vždy shodnou.
+ */
+const durableIncidentId = (marker: unknown): string => {
+  const value = marker as { id?: unknown; at?: unknown } | null;
+  if (value && typeof value === 'object' && typeof value.id === 'string' && value.id.length > 0) return value.id;
+  if (value && typeof value === 'object' && typeof value.at === 'number' && Number.isFinite(value.at) && value.at > 0) {
+    return `legacy-${value.at}`;
+  }
+  return 'invalid-marker';
+};
+
 export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): Promise<CopierRuntimeController> {
   assertRuntimeGroup(options.group);
   const clock = options.clock ?? Date.now;
@@ -1476,8 +1503,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       && storedManualRecovery.at > 0
       && typeof storedManualRecovery.reason === 'string'
       && storedManualRecovery.reason.trim().length > 0
-      ? { at: storedManualRecovery.at, reason: storedManualRecovery.reason.trim() }
-      : { at: clock(), reason: 'Durable příznak ruční obnovy je neplatný; proveď Kontrolu pozic' };
+      ? {
+        at: storedManualRecovery.at,
+        reason: storedManualRecovery.reason.trim(),
+        id: durableIncidentId(storedManualRecovery),
+      }
+      : {
+        at: clock(),
+        reason: 'Durable příznak ruční obnovy je neplatný; ověř účty a potvrď incident při zapnutí',
+        id: durableIncidentId(storedManualRecovery),
+      };
   let lastError: Error | null = startupGroupRepair
     ? new Error(
       `Uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); `
@@ -1709,6 +1744,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let armPreparationInFlight: Promise<void> | null = null;
   let armPreparationError: string | null = null;
   let armPreparationIncidentRequiresRecovery = restoredManualRecovery != null;
+  let currentManualRecovery: { id: string; at: number; reason: string } | null = restoredManualRecovery;
   let armPreparationLastAttemptAt = -Infinity;
   let armPreparationInterestUntil = -Infinity;
   let automaticArmPreparation = false;
@@ -4370,7 +4406,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     lastError = errorOf(reason);
     if (!failure.transportLost) {
       armPreparationIncidentRequiresRecovery = true;
-      const manualRecoveryRequired = { at: clock(), reason: lastError.message };
+      const manualRecoveryRequired = { at: clock(), reason: lastError.message, id: globalThis.crypto.randomUUID() };
+      currentManualRecovery = manualRecoveryRequired;
       disarmPersistenceTail = disarmPersistenceTail.then(() => persistSafetyUpdate(current => ({
         ...current,
         manualRecoveryRequired,
@@ -8599,10 +8636,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (currentRuntime().state.safety.liveCopyOpenSince != null) {
       return 'durable stopa otevřených kopií';
     }
+    // Etapa 1 (6. 10. 2026): epocha, kterou čistá autoritativní Kontrola
+    // pozic potvrdila flat (všechny účty skupiny flat bez příkazů), zapnutí
+    // nebrzdí. Durable záznam se nemění (unresolved markery se nemažou).
     const unfinishedEpoch = currentRuntime().state.safety.leaderExposureEpochs?.some(epoch => (
       epoch.groupId === group.id
       && epoch.leaderAccountId === group.leaderAccountId
       && unfinishedLeaderFlatPhase(epoch.phase)
+      && !flatReconciledLeaderEpochIds.has(epoch.id)
     )) === true;
     if (unfinishedEpoch) return 'nedokončená leader exposure epocha';
     if (
@@ -15187,13 +15228,48 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Veřejná Kontrola pozic je explicitní uživatelská recovery akce.
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
-      const result = await performReconciliation({ ...reconciliationOptions, clearLastError: true });
-      if (result.authoritativelyClean) {
+      // Interní kontrola (SHADOW, kompatibilní ARM) incident nikdy nemaže.
+      // Existující durable incident smaže jen kontrola s výslovným potvrzením
+      // právě tohoto incidentu (ON s dialogem); bez něj je to jen ověření.
+      const expectedIncidentId = reconciliationOptions.acknowledgedIncidentId;
+      if (reconciliationOptions.internal !== true && expectedIncidentId != null
+        && currentManualRecovery?.id !== expectedIncidentId) {
+        throw new Error('Incident se mezitím změnil; potvrď ho znovu.');
+      }
+      const incidentToClear = currentManualRecovery;
+      const mayClear = reconciliationOptions.internal !== true
+        && (incidentToClear == null || incidentToClear.id === expectedIncidentId);
+      const result = await performReconciliation({ ...reconciliationOptions, clearLastError: mayClear });
+      if (result.authoritativelyClean && mayClear && currentManualRecovery === incidentToClear) {
+        const acknowledgedAt = clock();
+        let durablyCleared = false;
         await persistSafetyUpdate(current => {
+          // Updater se může při CAS opakovat: výsledek platí z posledního běhu.
+          durablyCleared = false;
+          // Jen ten incident, který uživatel potvrdil — novější zůstává.
+          if (incidentToClear && current.manualRecoveryRequired != null
+            && durableIncidentId(current.manualRecoveryRequired) !== incidentToClear.id) {
+            return current;
+          }
           const { manualRecoveryRequired: _cleared, ...rest } = current;
-          return rest;
+          durablyCleared = true;
+          return incidentToClear
+            ? { ...rest, lastIncidentAcknowledgement: { ...incidentToClear, acknowledgedAt, via: 'arm' as const } }
+            : rest;
         });
-        armPreparationIncidentRequiresRecovery = false;
+        // Paměť se srovná jen s tím, co je opravdu durable (fail-closed).
+        if (durablyCleared && currentManualRecovery === incidentToClear) {
+          armPreparationIncidentRequiresRecovery = false;
+          currentManualRecovery = null;
+          if (incidentToClear) {
+            options.onAudit?.([{
+              at: acknowledgedAt,
+              leaderEventId: `incident-acknowledged:${incidentToClear.id}`,
+              kind: 'recovered',
+              reason: `Incident potvrdil uživatel přes Zapnout (čistá kontrola u brokera): ${incidentToClear.reason}`,
+            }]);
+          }
+        }
       }
       const riskAccountIds = followersRequiringVerifiedRisk(clock()).map(follower => follower.accountId);
       if (result.authoritativelyClean && riskAccountIds.length > 0) {
@@ -15216,6 +15292,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             reason: 'management-only ukončen po autoritativně potvrzeném flat/no-active stavu',
           }]);
         }
+        await syncLiveCopyExposureFlag('update');
       }
       if (
         result.authoritativelyClean
@@ -15701,6 +15778,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             manualRecoveryRequired: blocker?.blockedBy === 'incident',
           };
         })(),
+        manualRecovery: currentManualRecovery ? { ...currentManualRecovery } : null,
         divergentAccounts: [...gate.divergentAccounts],
         workingOrderAccounts: [...workingOrderAccounts],
         stuckOutbox: stuckOperations.length > 0,

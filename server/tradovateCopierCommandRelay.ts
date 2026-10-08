@@ -95,11 +95,9 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   // konce broker session. Patří do stejné vzdálené třídy jako disarm a
   // kill-switch — bez něj „Zamknout den" z produkční PWA nikdy nedorazil.
   'lock-until-session-end',
-  // Kontrola pozic je čistě read-only u brokera. Za ARM ji worker nejdřív
-  // auditovaně vypne (kód reconcile-request) a během správy otevřených kopií
-  // ji odmítne; nikdy nic neobchoduje. Bez ní telefon nemá jak zrušit
-  // „Čeká kontrola pozic“.
-  'reconcile',
+  // 8. 10. 2026: samostatná Kontrola pozic z UI zmizela — kontrolu si dělá
+  // ON (arm-live), incident maže jen s výslovným potvrzením. Produkční DB
+  // check `reconcile` stejně nikdy nepustil, takže se nic neztrácí.
 ]);
 
 const BRAKE_COMMAND_TYPES = ['disarm', 'kill-switch', 'lock-until-session-end'] as const;
@@ -344,6 +342,15 @@ const validatedRetirement = (value: unknown): { groupId: string; accountIds: num
   return { groupId: candidate.groupId, accountIds: [...candidate.accountIds] as number[], reason: candidate.reason };
 };
 
+/** Potvrzení incidentu z dialogu ON: `manualRecovery.id` (8. 10. 2026). */
+const validatedIncidentAck = (value: unknown): string | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(value)) {
+    throw new Error('invalid-relay-command-payload');
+  }
+  return value;
+};
+
 const validatedEligibilityExclusions = (value: unknown) => {
   if (value == null) return [];
   if (!Array.isArray(value) || value.length > 100) throw new Error('invalid-relay-command-payload');
@@ -383,11 +390,13 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
     // svou zastaralou konfigurací — 24. 8. s enabled:false, takže se první
     // obchod nezkopíroval. UI skupinu posílá vždy; její absence je chyba
     // volajícího a musí selhat nahlas, ne potichu změnit význam příkazu.
+    const acknowledgeIncidentId = validatedIncidentAck((command as { acknowledgeIncidentId?: unknown }).acknowledgeIncidentId);
     return {
       group: validatedRelayGroup((command as { group?: unknown }).group),
       accountEligibilityExclusions: validatedEligibilityExclusions(
         (command as { accountEligibilityExclusions?: unknown }).accountEligibilityExclusions,
       ),
+      ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
     };
   }
   if (command.type === 'activate-group') {
@@ -442,10 +451,12 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
   }
   if (row.command_type === 'arm-live') {
+    const acknowledgeIncidentId = validatedIncidentAck(row.payload?.acknowledgeIncidentId);
     return {
       type: 'arm-live',
       group: validatedRelayGroup(row.payload?.group),
       accountEligibilityExclusions: validatedEligibilityExclusions(row.payload?.accountEligibilityExclusions),
+      ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
     };
   }
   if (row.command_type === 'activate-group') {
