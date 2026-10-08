@@ -488,4 +488,22 @@ describe('studený start LIVE: jedno úplné čtení a trvalá nápověda připo
     expect(after.historicalSync.status).toBe('available');
     expect(after.accounts).toEqual(unchecked.accounts);
   });
+
+  it('neúspěšný probe se zkusí právě jednou znovu a pak zůstane „neověřeno“', async () => {
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['c']));
+    const unchecked = { ...await dataset('c'), historicalSync: { status: 'not-checked' } } as TradovatePreflightResult;
+    api.runTradovateReadOnlyPreflight.mockResolvedValue(unchecked);
+    api.runTradovateHistoricalProbe.mockRejectedValue(new Error('network'));
+    await view('cold-probe-retry').refreshStatus();
+    await settle();
+    expect(api.runTradovateHistoricalProbe).toHaveBeenCalledTimes(1);
+    const retry = timers.filter(timer => !timer.cleared && timer.delay === 15_000);
+    expect(retry).toHaveLength(1);
+    retry[0].cleared = true;
+    retry[0].callback();
+    await settle();
+    expect(api.runTradovateHistoricalProbe).toHaveBeenCalledTimes(2);
+    expect(timers.filter(timer => !timer.cleared && timer.delay === 15_000)).toHaveLength(0);
+    expect(view('cold-probe-retry').connectionData.c.historicalSync.status).toBe('not-checked');
+  });
 });

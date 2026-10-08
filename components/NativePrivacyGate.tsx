@@ -30,7 +30,9 @@ export default function NativePrivacyGate() {
   // Před prvním nativním čtením nevíme, jestli je zámek zapnutý: data zůstávají
   // zakrytá, ale bez textu zámku, který by při vypnutém zámku jen problikl.
   if (!state.known && !state.error) {
-    return <div aria-hidden="true" className="fixed inset-0 z-[10000] bg-[var(--bg-page,#020617)]" />;
+    // Plně neprůhledné v každém tématu: --bg-page je v Auroře průsvitné,
+    // --aurora-base je pevný základ (mimo Auroru platí tmavý fallback).
+    return <div aria-hidden="true" className="fixed inset-0 z-[10000] bg-[var(--aurora-base,#020617)]" />;
   }
   return (
     <div role="dialog" aria-modal="true" aria-labelledby="privacy-title" className="fixed inset-0 z-[10000] grid place-items-center bg-slate-950/95 px-6 text-center backdrop-blur-3xl">

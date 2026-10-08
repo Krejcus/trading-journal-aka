@@ -62,26 +62,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       connectionId,
     });
     if (probeOnly) {
-      const historicalSync = await probeTradovateHistoricalSync({ environment: config.environment, accessToken });
+      const historicalSync = await coalescePreflight(
+        `${userId}:${connectionId}:historical-probe`,
+        Date.now(),
+        () => probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
+      );
       return res.status(200).json({ connectionId, environment: config.environment, historicalSync });
     }
     const baseUrl = tradovateApiBaseUrl(config.environment);
-    const [result, historicalSync] = await coalescePreflight(
+    const fullKey = `${userId}:${connectionId}:full`;
+    // Úplné čtení s probe je nadmnožina čtení bez něj: běžící nebo čerstvé
+    // `full` se sdílí, ať starší klient (iPhone) a nový studený start
+    // nepouštějí dvě dávky na stejný login. Opačně ne — starý klient by bez
+    // samostatného probe zůstal u „not-checked“.
+    const recentFull = skipProbe ? recentPreflights.get(fullKey) : undefined;
+    const sharedFull = recentFull && Date.now() - recentFull.at < PREFLIGHT_COALESCE_MS
+      ? recentFull.result as ReturnType<typeof readPreflight>
+      : null;
+    const readPreflight = () => Promise.all([
+      loadTradovateAccountData({
+        baseUrl,
+        accessToken,
+        detail: bootstrap ? 'bootstrap' : 'full',
+      }),
+      bootstrap
+        ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
+        : skipProbe
+          ? Promise.resolve(notCheckedTradovateHistoricalSync({ environment: config.environment }))
+          : probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
+    ]);
+    const [result, historicalSync] = await (sharedFull ?? coalescePreflight(
       `${userId}:${connectionId}:${bootstrap ? 'bootstrap' : skipProbe ? 'full-no-probe' : 'full'}`,
       Date.now(),
-      () => Promise.all([
-        loadTradovateAccountData({
-          baseUrl,
-          accessToken,
-          detail: bootstrap ? 'bootstrap' : 'full',
-        }),
-        bootstrap
-          ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
-          : skipProbe
-            ? Promise.resolve(notCheckedTradovateHistoricalSync({ environment: config.environment }))
-            : probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
-      ]),
-    );
+      readPreflight,
+    ));
     return res.status(200).json({
       connectionId,
       environment: config.environment,

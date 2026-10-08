@@ -642,6 +642,8 @@ const App: React.FC = () => {
 
         // Reset flags
         isPrepsDirty.current = false;
+        isAccountsDirty.current = false;
+        accountsDirtyOwnerRef.current = null;
         isReviewsDirty.current = false;
         isWeeklyFocusDirty.current = false;
         isPreferencesDirty.current = false;
@@ -724,9 +726,13 @@ const App: React.FC = () => {
   // Automatické uložení účtů jen po úpravě v aplikaci. Načtení z mezipaměti,
   // obnova z DB ani realtime nic neukládají: starší mezipaměť (třeba z jiného
   // zařízení) by jinak po startu přepsala archivaci nebo OAuth vazby v DB.
+  // Příznak nese vlastníka: úprava uživatele A se nikdy neuloží pod B (přímé
+  // přepnutí účtu nebo odhlášení v jiném okně bez reloadu).
   const isAccountsDirty = useRef(false);
+  const accountsDirtyOwnerRef = useRef<string | null>(null);
   const updateAccountsLocally = useCallback((next: React.SetStateAction<Account[]>) => {
     isAccountsDirty.current = true;
+    accountsDirtyOwnerRef.current = sessionRef.current?.user.id ?? null;
     setAccounts(next);
   }, []);
   const [activeAccountId, setActiveAccountId] = useState<string>('');
@@ -1222,11 +1228,13 @@ const App: React.FC = () => {
   }, [isInitialLoadDone, session?.user?.id, copierImportRunning, copierImportError, copierImportReport, runCopierJournalSync]);
   const [liveIntentPending, setLiveIntentPending] = useState(false);
   const prefetchLiveData = tradovateLive.prefetch;
-  const prepareLiveNavigation = useCallback(() => {
+  const prepareLiveNavigation = useCallback((options?: { speculative?: boolean }) => {
     if (tradovateLiveEnabled || !canAccess('live', currentUser.role)) return;
     void loadLiveDesk().catch(() => { /* Normal navigation handles a failed chunk load. */ });
     prefetchLiveData();
-    if (!tradovateLive.data) setLiveIntentPending(true);
+    // Otevření menu Více ještě není volba LIVE: neodkládat kvůli němu čtení
+    // ostatních stránek.
+    if (!tradovateLive.data && !options?.speculative) setLiveIntentPending(true);
   }, [currentUser.role, prefetchLiveData, tradovateLive.data, tradovateLiveEnabled]);
   useEffect(() => {
     if (!liveIntentPending) return;
@@ -1391,7 +1399,7 @@ const App: React.FC = () => {
         // Na iPhonu se na LIVE jde přes menu Více; čas mezi otevřením menu a
         // klepnutím stačí na rozjetí read-only čtení (na webu to dělá hover).
         prepare: (page) => {
-          if (page === 'live') nativeActions.current.prepareLive();
+          if (page === 'live') nativeActions.current.prepareLive({ speculative: true });
         },
       }),
     []
@@ -2732,9 +2740,15 @@ const App: React.FC = () => {
     }
     if (!sharedTrade && session && isInitialLoadDone && accounts.length > 0 && !isSyncingAccounts.current) {
       if (!isAccountsDirty.current) return;
+      if (accountsDirtyOwnerRef.current !== session.user.id) {
+        // Úprava patřila jinému uživateli: zahodit, nikdy neukládat pod tohoto.
+        isAccountsDirty.current = false;
+        accountsDirtyOwnerRef.current = null;
+        return;
+      }
       const isCurrentSession = captureSessionRequest(session.user.id);
       const timer = setTimeout(() => {
-        if (!isCurrentSession() || !isAccountsDirty.current) return;
+        if (!isCurrentSession() || !isAccountsDirty.current || accountsDirtyOwnerRef.current !== session.user.id) return;
         isAccountsDirty.current = false;
         isSyncingAccounts.current = true;
         storageService.saveAccounts(accounts, session.user.id).then(updatedAccounts => {

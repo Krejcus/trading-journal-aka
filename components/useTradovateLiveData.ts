@@ -250,22 +250,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   if (!intentPrefetchRef.current) {
     intentPrefetchRef.current = createTradovateIntentPrefetch({
       status: loadTradovateOAuthStatus,
-      bootstrap: connectionId => {
-        const until = rateLimitUntilByConnectionRef.current[connectionId] ?? 0;
-        if (Date.now() < until) {
-          return Promise.reject(new TradovateRequestError('Tradovate rate limit stále platí.', 429, until - Date.now()));
-        }
-        // Přednačtení studeného startu čte rovnou úplná data (viz refreshStatus).
-        return runTradovateReadOnlyPreflight(connectionId, 'full', undefined, { historicalProbe: false }).catch(reason => {
-          if (reason instanceof TradovateRequestError && reason.status === 429) {
-            rateLimitUntilByConnectionRef.current[connectionId] = Math.max(
-              rateLimitUntilByConnectionRef.current[connectionId] ?? 0,
-              Date.now() + tradovateClientBackoffMs(reason.retryAfterMs),
-            );
-          }
-          throw reason;
-        });
-      },
+      // Najetí myší / otevření menu Více je jen záměr: zahřeje OAuth status
+      // a profily. Úplné čtení účtů (~17–30 volání na login) spustí až
+      // skutečný vstup na LIVE, ať spekulace nezatěžuje login kopírky.
       profiles: loadTradovateAccountProfiles,
     });
   }
@@ -645,7 +632,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
 
   /** Doplní probe historických reportů, který studený start vynechal. Mění jen
    *  `historicalSync` (záložka Připojení), nikdy účty, pozice ani risk. */
-  const refreshHistoricalProbe = useCallback(async (connectionIds: string[]) => {
+  const refreshHistoricalProbe = useCallback(async (connectionIds: string[], attempt = 0): Promise<void> => {
     const requestedUserId = activeUserIdRef.current;
     const requestedEpoch = identityEpochRef.current.epoch;
     const requestedConnectionEpoch = connectionEpochRef.current;
@@ -654,6 +641,12 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       && connectionEpochRef.current === requestedConnectionEpoch;
     await Promise.all(connectionIds.map(async connectionId => {
       if (connectionDataRef.current[connectionId]?.historicalSync.status !== 'not-checked') return;
+      // Připojení v Tradovate backoffu se neptáme; zkusí se to po jeho konci.
+      const limitedUntil = rateLimitUntilByConnectionRef.current[connectionId] ?? 0;
+      if (Date.now() < limitedUntil) {
+        if (attempt === 0) window.setTimeout(() => void refreshHistoricalProbe([connectionId], 1), limitedUntil - Date.now() + 1_000);
+        return;
+      }
       try {
         const { historicalSync } = await runTradovateHistoricalProbe(connectionId);
         const current = connectionDataRef.current[connectionId];
@@ -661,8 +654,20 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         const next = { ...connectionDataRef.current, [connectionId]: { ...current, historicalSync } };
         connectionDataRef.current = next;
         setConnectionData(next);
-      } catch {
-        // Bez výsledku zůstane „ověřuji“; další úplné načtení probe obsahuje.
+      } catch (reason) {
+        if (!isCurrent()) return;
+        if (reason instanceof TradovateRequestError && reason.status === 429) {
+          rateLimitUntilByConnectionRef.current[connectionId] = Math.max(
+            rateLimitUntilByConnectionRef.current[connectionId] ?? 0,
+            Date.now() + tradovateClientBackoffMs(reason.retryAfterMs),
+          );
+        }
+        // Jeden další pokus; pak zůstane „neověřeno“ do příštího úplného
+        // načtení, které probe obsahuje.
+        if (attempt === 0) window.setTimeout(() => void refreshHistoricalProbe([connectionId], 1), Math.max(
+          15_000,
+          (rateLimitUntilByConnectionRef.current[connectionId] ?? 0) - Date.now() + 1_000,
+        ));
       }
     }));
   }, []);
@@ -675,7 +680,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     const run = async () => {
       setBusy('status');
       setError(null);
-      const warmed = await intentPrefetchRef.current?.claim(userId);
+      // Jeden mikrotask: odpojení hned po spuštění (StrictMode, odchod z LIVE)
+      // zneplatní běh dřív, než se vůbec pošle čtení u brokera.
+      await Promise.resolve();
       if (!isCurrent()) return null;
       const hasConfirmedData = Object.keys(connectionDataRef.current).length > 0;
       const shellConnectionIds = (statusRef.current?.connections ?? [])
@@ -694,11 +701,15 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       // bootstrap → full: přehled se odkryje jednou, už kompletní. Probe
       // historických reportů jde zvlášť, aby nedržel první data (až 8 s).
       // Připojení, jehož úplné čtení už běží (např. retry), se nespouští znovu.
-      const prestartedFull = warmed?.bootstrap ?? startTradovatePreflights(
+      const prestartedFull = startTradovatePreflights(
         cachedConnectionIds.filter(id => Date.now() >= (rateLimitUntilByConnectionRef.current[id] ?? 0)
           && !fullRefreshInFlightRef.current.has(id)),
         connectionId => runTradovateReadOnlyPreflight(connectionId, 'full', undefined, { historicalProbe: false }),
       );
+      // Zahřátý status/profily ze záměru (hover, menu Více) až po startu čtení,
+      // ať čekání na status nezdrží preflight z nápovědy.
+      const warmed = await intentPrefetchRef.current?.claim(userId);
+      if (!isCurrent()) return null;
       const profilesPromise = warmed?.profiles ?? loadTradovateAccountProfiles().catch(() => null);
       try {
         const nextStatus = warmed?.status ?? await loadTradovateOAuthStatus();

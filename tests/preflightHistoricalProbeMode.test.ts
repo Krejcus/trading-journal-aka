@@ -53,4 +53,18 @@ describe('preflight: probe historických reportů mimo kritickou cestu LIVE', ()
     expect(accountData.loadTradovateAccountData).not.toHaveBeenCalled();
     expect(body).toEqual({ connectionId: 'probe-only', environment: 'demo', historicalSync: { status: 'available' } });
   });
+
+  it('čtení bez probe převezme čerstvé úplné čtení s probe (jedna dávka na login)', async () => {
+    await call({ connectionId: 'shared', mode: 'full' });
+    const body = await call({ connectionId: 'shared', mode: 'full', historicalProbe: false });
+    expect(accountData.loadTradovateAccountData).toHaveBeenCalledTimes(1);
+    expect(body.historicalSync).toEqual({ status: 'available' });
+  });
+
+  it('úplné čtení s probe nikdy nepřevezme výsledek bez probe', async () => {
+    await call({ connectionId: 'one-way', mode: 'full', historicalProbe: false });
+    const body = await call({ connectionId: 'one-way', mode: 'full' });
+    expect(accountData.loadTradovateAccountData).toHaveBeenCalledTimes(2);
+    expect(body.historicalSync).toEqual({ status: 'available' });
+  });
 });

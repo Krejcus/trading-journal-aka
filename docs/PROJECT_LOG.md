@@ -256,6 +256,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-08 — LIVE studený start: kostra → úplná data bez probliknutí (Claude)
+- Měřeno na produkci: obsah → prázdná plocha 315 ms → přehled. Příčina: lazy
+  `LiveJournalHistory` suspendoval stránkovou Suspense hranici a React 19 drží
+  fallback ≥ 300 ms. Dále bootstrap → full (2 kola čtení, „Ověřuji“ u DLL), probe
+  historie (až 8 s) uvnitř full, preflight bez session shellu čekal na OAuth status.
+- Větev `claude/live-cold-start-20261008`:
+  - statické importy na LIVE, karty deníku až s daty;
+  - „Žádné skupiny“ až po načtení knihovny, banner plánu až s profily;
+  - studený start = jeden full preflight bez probe, probe zvlášť na pozadí;
+  - trvalá nápověda ID připojení (jen ID, user-scoped);
+  - relay resolver paralelně;
+  - iPhone: menu Více přednačte status/profily, zámek soukromí neproblikne;
+  - auto-save účtů jen po úpravě v appce (s vlastníkem).
+- Rozbor 5 čtenářů + 2 skeptici na každou ze 17 navržených změn, pak oponentura
+  diffu (9 potvrzených nálezů opraveno). Detail:
+  `docs/reviews/live-cold-start-20261008.md`.
+- Localhost: kostra 0,94 s → kompletní přehled 1,53 s bez prázdné plochy. Serverová
+  část (probe mimo full) se na localhostu neověří (proxy na produkci), kryjí ji testy.
+  Nezměřeno: fyzický iPhone, více účtů na připojení. Nenasazeno.
+
 ### 2026-10-08 — Předání invariantů jádra kopírky (Codex)
 
 - Přidán `docs/COPIER_INVARIANTS.md`: mapa execution/durable/relay/UI vrstev,
