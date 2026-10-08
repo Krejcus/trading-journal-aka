@@ -819,6 +819,20 @@ const normalizedRuntimeGroup = (group: CopyGroupConfig): CopyGroupConfig => {
  * Pořadí je záměrné: load durable snapshot -> recover unknown side effects ->
  * teprve potom subscribe. Controller vždy startuje DISARMED + shadow.
  */
+/**
+ * Stabilní identita durable incidentu (8. 10. 2026): uložené ID, u staršího
+ * markeru `legacy-<at>`, u poškozeného pevné `invalid-marker`. Stejná funkce
+ * se používá při obnově i při mazání, takže se identity vždy shodnou.
+ */
+const durableIncidentId = (marker: unknown): string => {
+  const value = marker as { id?: unknown; at?: unknown } | null;
+  if (value && typeof value === 'object' && typeof value.id === 'string' && value.id.length > 0) return value.id;
+  if (value && typeof value === 'object' && typeof value.at === 'number' && Number.isFinite(value.at) && value.at > 0) {
+    return `legacy-${value.at}`;
+  }
+  return 'invalid-marker';
+};
+
 export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): Promise<CopierRuntimeController> {
   assertRuntimeGroup(options.group);
   const clock = options.clock ?? Date.now;
@@ -1486,12 +1500,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ? {
         at: storedManualRecovery.at,
         reason: storedManualRecovery.reason.trim(),
-        // Starší marker bez ID: deterministické ID, ať platí i po restartu.
-        id: typeof storedManualRecovery.id === 'string' && storedManualRecovery.id.length > 0
-          ? storedManualRecovery.id
-          : `legacy-${storedManualRecovery.at}`,
+        id: durableIncidentId(storedManualRecovery),
       }
-      : { at: clock(), reason: 'Durable příznak ruční obnovy je neplatný; ověř účty a potvrď incident při zapnutí', id: `invalid-${clock()}` };
+      : {
+        at: clock(),
+        reason: 'Durable příznak ruční obnovy je neplatný; ověř účty a potvrď incident při zapnutí',
+        id: durableIncidentId(storedManualRecovery),
+      };
   let lastError: Error | null = startupGroupRepair
     ? new Error(
       `Uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); `
@@ -15148,18 +15163,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const result = await performReconciliation({ ...reconciliationOptions, clearLastError: mayClear });
       if (result.authoritativelyClean && mayClear && currentManualRecovery === incidentToClear) {
         const acknowledgedAt = clock();
+        let durablyCleared = false;
         await persistSafetyUpdate(current => {
+          // Updater se může při CAS opakovat: výsledek platí z posledního běhu.
+          durablyCleared = false;
           // Jen ten incident, který uživatel potvrdil — novější zůstává.
-          if (incidentToClear && current.manualRecoveryRequired
-            && (current.manualRecoveryRequired.id ?? `legacy-${current.manualRecoveryRequired.at}`) !== incidentToClear.id) {
+          if (incidentToClear && current.manualRecoveryRequired != null
+            && durableIncidentId(current.manualRecoveryRequired) !== incidentToClear.id) {
             return current;
           }
           const { manualRecoveryRequired: _cleared, ...rest } = current;
+          durablyCleared = true;
           return incidentToClear
             ? { ...rest, lastIncidentAcknowledgement: { ...incidentToClear, acknowledgedAt, via: 'arm' as const } }
             : rest;
         });
-        if (currentManualRecovery === incidentToClear) {
+        // Paměť se srovná jen s tím, co je opravdu durable (fail-closed).
+        if (durablyCleared && currentManualRecovery === incidentToClear) {
           armPreparationIncidentRequiresRecovery = false;
           currentManualRecovery = null;
           if (incidentToClear) {

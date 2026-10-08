@@ -59,6 +59,7 @@ describe('Zapnout po incidentu', () => {
     const error = await running.execute({ type: 'arm-live' }).catch(reason => reason as Error);
     expect(String(error)).toContain(`[ack-incident:${INCIDENT.id}]`);
     expect(copierArmRejection(error)).toContain('Mezitím vznikl incident: leader-flat guard');
+    expect(copierArmRejection(error)).not.toContain('starší appka');
     expect(runtime.reconcile).not.toHaveBeenCalled();
     expect(runtime.arm).not.toHaveBeenCalled();
     expect(runtime.status().manualRecovery).toEqual(INCIDENT);
@@ -138,6 +139,28 @@ describe('controller: kdo smí durable incident smazat', () => {
     });
     try {
       expect(controller.status().manualRecovery).toEqual({ id: 'legacy-42', at: 42, reason: 'starý' });
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('poškozený marker: potvrzení ho durable smaže a teprve pak i z paměti (stabilní ID)', async () => {
+    let now = 1_800_000_000_000;
+    const snapshot = emptySnapshot();
+    snapshot.safety = { ...snapshot.safety!, manualRecoveryRequired: { at: 0, reason: '' } };
+    const store = createMemoryCopierStore(snapshot);
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({ broker, store, group: group(), clock: () => ++now });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    try {
+      const incident = controller.status().manualRecovery!;
+      expect(incident.id).toBe('invalid-marker');
+      await controller.reconcile({ acknowledgedIncidentId: incident.id });
+      const saved = (await store.load()).safety;
+      expect(saved?.manualRecoveryRequired).toBeUndefined();
+      expect(saved?.lastIncidentAcknowledgement).toMatchObject({ id: 'invalid-marker' });
+      expect(controller.status().manualRecovery).toBeNull();
     } finally {
       controller.stop();
     }

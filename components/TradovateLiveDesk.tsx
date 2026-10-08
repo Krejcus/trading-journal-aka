@@ -839,8 +839,13 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     // 8. 10. 2026: Kontrola pozic je součástí Zapnout. Durable incident
     // ale smaže jen výslovné potvrzení — zvykové kliknutí ho nepřejde.
-    // Starší worker (bez `incident-ack-v1`) potvrzení nezná: dialog se neukáže
-    // a o incidentu rozhoduje jeho vlastní brána (Kontrola pozic níže).
+    // Starší worker (bez `incident-ack-v1`) potvrzení nezná. Po incidentu ho
+    // proto ON vůbec nespustí — jinak by worker etapy 1 incident smazal sám.
+    const legacyIncident = !supportsCopierIncidentAck(armStatusRef.current.status)
+      && armStatusRef.current.status?.controller.armPreparation?.blockedBy === 'incident';
+    if (legacyIncident) {
+      throw new CopierArmBlockedError('Po incidentu je potřeba Kontrola pozic. Worker ještě neumí potvrzení incidentu při zapnutí — použij Zkontrolovat pozice na Macu, nebo nejdřív aktualizuj worker.');
+    }
     const incident = supportsCopierIncidentAck(armStatusRef.current.status)
       ? armStatusRef.current.status?.controller.manualRecovery ?? null
       : null;

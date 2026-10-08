@@ -126,7 +126,10 @@ export function copierArmRejection(reason: unknown): string | null {
   if (/\[ack-incident:[^\]]+\]/.test(message)) {
     // Worker hlásí incident, který UI ještě nevidělo (nebo nový): žádné
     // automatické opakování, uživatel ho potvrdí dalším Zapnout.
-    return `${message.replace(/\s*\[ack-incident:[^\]]+\]/, '').replace(/^Zapnutí po incidentu vyžaduje tvoje potvrzení: /, 'Mezitím vznikl incident: ')} Dej znovu Zapnout a potvrď ho.`;
+    return `${message
+      .replace(/\s*\[ack-incident:[^\]]+\]/, '')
+      .replace(/\s*\(starší appka[^)]*\)/, '')
+      .replace(/^Zapnutí po incidentu vyžaduje tvoje potvrzení: /, 'Mezitím vznikl incident: ')} Dej znovu Zapnout a potvrď ho.`;
   }
   if (message === 'Incident se mezitím změnil; potvrď ho znovu.') {
     return 'Mezitím vznikl nový incident. Dej znovu Zapnout a potvrď ho.';

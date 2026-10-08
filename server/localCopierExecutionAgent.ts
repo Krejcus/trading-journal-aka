@@ -883,7 +883,8 @@ export async function startLocalCopierExecutionAgent(
         const incident = options.controller.status().manualRecovery ?? null;
         if (incident && command.acknowledgeIncidentId !== incident.id) {
           throw new Error(
-            `Zapnutí po incidentu vyžaduje tvoje potvrzení: ${incident.reason} ${incidentAckMarker(incident.id)}`,
+            `Zapnutí po incidentu vyžaduje tvoje potvrzení: ${incident.reason} `
+            + `(starší appka potvrzení neumí — použij aktuální web nebo aktualizovanou iPhone appku) ${incidentAckMarker(incident.id)}`,
           );
         }
         if (incident || armNeedsSelfCheck(options.controller.status())) {
