@@ -594,6 +594,31 @@ existující ochranu.
   potvrzeném flat/no-working a durable commitu. Nebezpečné je odvodit flat z
   nulové hodnoty v UI.
 
+### INV-PART-03: Vyřazení followera s vlastní (cizí) expozicí — „Zapnout bez tohoto účtu“ (10. 10. 2026)
+
+- Proč: Ruční obchod na jednom followerovi nemá navždy blokovat zapnutí
+  zdravých účtů; kopírka ale nesmí převzít ani opustit vlastní kopii.
+- Vynucuje: `setFollowerEnabled(..., { allowOwnExposure: true })` — jen
+  `enabled:false`, jen za DISARM, leader flat bez příkazů (stream i dvě REST
+  čtení), bez recovery/nejasného outboxu, shodný tvar expozice followera
+  v obou čteních a `copierOwnedExposureReasons(account)` prázdné (neusazené
+  záznamy kopírky, ID z outboxu/links, nedokončená epocha s lineage, pending
+  exposure, nevyřešený příkaz, cut). `excludedForeignFollowerIds()` = vypnutí
+  followeři bez stopy kopírky; jejich expozice se nepočítá do
+  `groupIsFlat` (cooldown, day-lock, stopa kopie, managementOnly), divergence,
+  working orders ani `allFlat` v preflightu/reconciliaci/`arm()`; leader-flat
+  guard je vynechá jako neparticipanty; přechod pozice ani route-gap na nich
+  nespustí fail-closed. Status `groupFlat` (údržba) zůstává přes všechny účty.
+- Hlídá test: `tests/copierFollowerExcludeWithExposure.test.ts`,
+  `tests/copierFollowerParticipation.test.ts`.
+- Nikdy: Neposílat vyřazenému účtu příkaz měnící expozici (jediná výjimka je
+  cancel příkazu prokazatelně z outboxu kopírky); nevyřadit účet, jehož
+  expozice může být z kopírky; nezapnout ho zpět bez flat (INV-PART-01).
+  Flatten účtu / Flatten All (explicitní akce) ho zavřou.
+- Bezpečné změny vs. nebezpečné: Bezpečné je rozšířit důkazy vlastnictví
+  (konzervativněji). Nebezpečné je opírat „cizí“ o cokoli jiného než absenci
+  vlastní stopy kopírky na účtu.
+
 ### INV-PART-02: Follower cut izoluje účet od nových entry, ale dokončení existující kopie zůstává risk-reducing a přesně ohraničené
 
 - Proč: Jeden DLL/breached follower nemá nutně zastavit zdravé účty, ale jeho

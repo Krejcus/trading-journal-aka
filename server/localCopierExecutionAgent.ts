@@ -19,7 +19,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_INCIDENT_ACK_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -367,7 +367,7 @@ export async function startLocalCopierExecutionAgent(
 
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
-    capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY,
+    capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY,
       ...(options.controller.prepareArm ? ['arm-preparation-v1'] : []),
       ...(options.accountDisplay ? ['account-display-v1'] : [])],
     environment: 'demo',
@@ -709,12 +709,17 @@ export async function startLocalCopierExecutionAgent(
       case 'set-follower-enabled': {
         assertGroupTarget(group, command.groupId);
         if (!options.onGroupChanged) throw new Error('Trvalé uložení skupiny není dostupné');
+        const allowOwnExposure = (command as { allowOwnExposure?: unknown }).allowOwnExposure;
+        if (allowOwnExposure !== undefined && (allowOwnExposure !== true || command.enabled !== false)) {
+          throw new Error('Neplatný příznak vyřazení s vlastní pozicí');
+        }
         const next = await options.controller.setFollowerEnabled(
           command.accountId,
           command.enabled,
           async updated => {
             await options.onGroupChanged!(structuredClone(updated));
           },
+          allowOwnExposure === true ? { allowOwnExposure: true } : undefined,
         );
         group = next;
         return configurationResult();

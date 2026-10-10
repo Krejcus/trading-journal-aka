@@ -234,7 +234,11 @@ export type LiveCopyTradingCommand =
   | { type: 'delete-group'; groupId: string }
   | { type: 'set-group-enabled'; groupId: string; enabled: boolean }
   | { type: 'set-replication'; groupId: string; accountId: number; mode: CopyReplicationMode }
-  | { type: 'set-follower-enabled'; groupId: string; accountId: number; enabled: boolean }
+  | {
+    type: 'set-follower-enabled'; groupId: string; accountId: number; enabled: boolean;
+    /** „Zapnout bez tohoto účtu“: vyřadit i s vlastní pozicí/příkazy (jen enabled:false). */
+    allowOwnExposure?: true;
+  }
   | { type: 'set-multiplier'; groupId: string; accountId: number; multiplier: number }
   | { type: 'flatten-account'; groupId: string; accountId: number; operationId: string }
   /** Zavře potvrzenou kopii followera a vyřadí jej jen do čistého konce aktuálního obchodu. */

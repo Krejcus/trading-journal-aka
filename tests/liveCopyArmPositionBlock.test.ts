@@ -114,3 +114,37 @@ describe('bod 5e — průběh zapínání', () => {
     expect(markup).toContain('nic se nezapne a dozvíš se proč');
   });
 });
+
+describe('Zapnout bez tohoto účtu (10. 10. 2026)', () => {
+  const follower = (exclusion: { allowed: boolean; reason: string | null } | undefined) => ({
+    accountId: 2, name: 'Účet 2', isLeader: false, positions: ['MNQZ6 Long 1'], workingOrders: 0,
+    ...(exclusion ? { exclusion } : {}),
+  });
+  const render = (props: Record<string, unknown>) => renderToStaticMarkup(React.createElement(ArmPositionBlockDialog, {
+    groupName: 'Hlavní', busy: false, onClose: () => undefined, onCloseAccount: () => undefined,
+    onExcludeAccount: () => undefined, participatingFollowerCount: 2, ...props,
+  } as never));
+
+  it('nabídne vyřazení jen když ho worker povolí a zbude další follower', () => {
+    expect(render({ accounts: [follower({ allowed: true, reason: null })] })).toContain('Zapnout bez tohoto účtu');
+    expect(render({ accounts: [follower({ allowed: true, reason: null })], participatingFollowerCount: 1 }))
+      .not.toContain('Zapnout bez tohoto účtu');
+    expect(render({ accounts: [follower({ allowed: true, reason: null })], onExcludeAccount: undefined }))
+      .not.toContain('Zapnout bez tohoto účtu');
+    expect(render({ accounts: [follower(undefined)] })).not.toContain('Zapnout bez tohoto účtu');
+    const blocked = render({ accounts: [follower({ allowed: false, reason: 'Pozice může být z kopírky (příkaz kopírky v outboxu)' })] });
+    expect(blocked).not.toContain('>Zapnout bez tohoto účtu<');
+    expect(blocked).toContain('Bez tohoto účtu teď zapnout nejde: Pozice může být z kopírky');
+    const leader = render({ accounts: [{ ...follower({ allowed: true, reason: null }), accountId: 1, isLeader: true }] });
+    expect(leader).not.toContain('Zapnout bez tohoto účtu');
+  });
+
+  it('výčet blokací vynechá ručně vypnuté followery a nese stav vyřazení', () => {
+    const accounts = new Map([[2, account(2, 1)], [3, account(3, -1)]]);
+    const block = buildArmPositionBlock(group, accounts, [], names, {
+      skipAccountIds: new Set([3]),
+      exclusionOf: id => (id === 2 ? { allowed: true, reason: null } : undefined),
+    });
+    expect(block).toEqual([expect.objectContaining({ accountId: 2, exclusion: { allowed: true, reason: null } })]);
+  });
+});

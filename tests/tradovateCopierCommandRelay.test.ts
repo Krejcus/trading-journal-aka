@@ -480,6 +480,36 @@ describe('Tradovate copier command relay', () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
+  it('relay pustí „Zapnout bez tohoto účtu“ jen jako allowOwnExposure:true při vypnutí', async () => {
+    for (const bad of [
+      { enabled: false, allowOwnExposure: 'yes' },
+      { enabled: true, allowOwnExposure: true },
+      { enabled: false, allowOwnExposure: false },
+    ]) {
+      const upsert = vi.fn();
+      await expect(enqueueTradovateCopierCommand({
+        db: enqueueDb(upsert), userId, connectionId,
+        command: { type: 'copy-command', command: {
+          type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, ...bad,
+        } } as unknown as LocalCopierAgentCommand,
+      })).rejects.toThrow('invalid-relay-command-payload');
+      expect(upsert).not.toHaveBeenCalled();
+    }
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'exclude-command-id', command_type: 'copy-command',
+        payload: { command: {
+          type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, enabled: false, allowOwnExposure: true,
+        } },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'copy-command', command: {
+      type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, enabled: false, allowOwnExposure: true,
+    } });
+  });
+
   it('claim validuje a předá follower toggle workeru', async () => {
     const claimed = await claimTradovateCopierCommand({
       db: claimDb({

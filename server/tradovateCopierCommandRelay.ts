@@ -270,7 +270,7 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
     enabled?: unknown;
     mode?: unknown;
     multiplier?: unknown;
-    waiveUnverifiableFollowerOwnership?: unknown;
+    waiveUnverifiableFollowerOwnership?: unknown; allowOwnExposure?: unknown;
   };
   if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
     throw new Error('unsupported-remote-copy-command');
@@ -291,6 +291,8 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
     typeof command.groupId !== 'string' || command.groupId.trim() === ''
     || typeof command.accountId !== 'number' || !Number.isSafeInteger(command.accountId) || command.accountId <= 0
     || typeof command.enabled !== 'boolean'
+    || (command.allowOwnExposure !== undefined
+      && (command.allowOwnExposure !== true || command.enabled !== false))
   )) throw new Error('invalid-relay-command-payload');
   if (command.type === 'set-multiplier' && (
     typeof command.groupId !== 'string' || command.groupId.trim() === ''

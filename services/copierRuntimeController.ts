@@ -291,6 +291,11 @@ export interface CopierControllerStatus {
     canToggle: boolean;
     blockers: string[];
     automaticExclusion?: string;
+    /**
+     * „Zapnout bez tohoto účtu“: zapnutý follower s vlastní pozicí/příkazy
+     * jde vyřadit i s nimi (jen za DISARM, leader flat, bez stopy kopírky).
+     */
+    exclusionWithExposure?: { allowed: boolean; reason: string | null };
   }>;
   /** Poslední broker risk snapshot per účet (vč. limitu propky). */
   accountRisk?: CopierAccountRiskSnapshot[];
@@ -623,6 +628,11 @@ export interface CopierRuntimeController {
     accountId: number,
     enabled: boolean,
     persistGroup: (group: CopyGroupConfig) => Promise<void>,
+    /**
+     * „Zapnout bez tohoto účtu“: vypnout followera i s jeho vlastní (cizí)
+     * pozicí/příkazy. Jen za DISARM, leader flat a bez stopy kopírky na účtu.
+     */
+    options?: { allowOwnExposure?: true },
   ): Promise<CopyGroupConfig>;
   /** Explicitní ruční Flatten jednoho účtu. Nikdy se nespouští automaticky. */
   flattenAccount(accountId: number, operationId: string): Promise<ManualFlattenResult>;
@@ -3475,13 +3485,52 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     ), { autoClose: false, episodeId: epoch.id, recordWhenDisarmed: true });
   };
 
-  const groupIsFlat = () => [group.leaderAccountId, ...group.followers.map(item => item.accountId)]
+  /**
+   * „Zapnout bez tohoto účtu“ (10. 10. 2026): důkazy, že expozice účtu může
+   * patřit kopírce. Prázdné pole = prokazatelně cizí (ruční obchod, stará
+   * pozice). Konzervativní — jakákoli vlastní stopa kopírky na účtu znamená
+   * „kopie“ a účet se dál chová jako dosud (divergence, blokace).
+   */
+  const copierOwnedExposureReasons = (accountId: number): string[] => {
+    const reasons: string[] = [];
+    if (unsettledCopierEntries(accountId).length > 0) reasons.push('neusazený příkaz kopírky');
+    if (controllerCopyOrderIds(accountId).length > 0) reasons.push('příkaz kopírky v outboxu');
+    if (unverifiableFollowerOwnership(new Set([accountId])).length > 0) reasons.push('nedokončená epocha kopie');
+    if ([...currentRuntimePendingExposure.values()].some(item => item.accountId === accountId)) reasons.push('čekající kopie');
+    if (pendingIsolationCommandForAccount(accountId)) reasons.push('nevyřešený příkaz kopírky');
+    if (followerCutBackgroundAccounts.has(accountId) || followerCutExecutionProvenance.has(accountId)
+      || followerCuts.has(accountId)) reasons.push('vyřazení followera kopírkou');
+    return reasons;
+  };
+  /**
+   * Ručně vypnutí followeři bez stopy kopírky. Jejich vlastní pozice a
+   * příkazy kopírka neřídí, a proto nesmí blokovat ani spouštět pojistky
+   * zapojených účtů (cooldown, day-lock, flat skupiny).
+   */
+  const excludedForeignFollowerIds = (): ReadonlySet<number> => {
+    if (!group.followers.some(follower => follower.enabled === false)) return new Set();
+    return new Set(group.followers
+      .filter(follower => follower.enabled === false && copierOwnedExposureReasons(follower.accountId).length === 0)
+      .map(follower => follower.accountId));
+  };
+  const accountsFlatInCache = (accountIds: Iterable<number | null>) => [...accountIds]
     .filter((accountId): accountId is number => accountId != null)
     .every(accountId => [...(positionsByAccount.get(accountId)?.values() ?? [])]
       .every(quantity => quantity === 0));
+  /** Všechny účty skupiny včetně vyřazených — jen pro status `groupFlat` (údržba). */
+  const allGroupAccountsFlat = () => accountsFlatInCache(
+    [group.leaderAccountId, ...group.followers.map(item => item.accountId)],
+  );
+  /** Flat zapojených účtů (vyřazení followeři s cizí expozicí se nepočítají). */
+  const groupIsFlat = () => {
+    const excluded = excludedForeignFollowerIds();
+    return accountsFlatInCache([group.leaderAccountId, ...group.followers
+      .map(item => item.accountId).filter(accountId => !excluded.has(accountId))]);
+  };
 
   const managementOnlyGroupPositionsAreKnownFlat = () => (
-    [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
+    [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)
+      .filter(accountId => !excludedForeignFollowerIds().has(accountId))]
       .filter((accountId): accountId is number => accountId != null)
       .every(accountId => {
         const positions = positionsByAccount.get(accountId);
@@ -4621,6 +4670,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       );
       return;
     }
+    if (excludedForeignFollowerIds().has(pending.accountId)) return;
 
     try {
       // Po krátkém kauzálním okně rozhoduje broker, ne pořadí lokálního
@@ -7404,7 +7454,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
     const generationAtStart = safetyGeneration;
     const observationAtStart = tradeBoundaryObservationVersion;
-    const accountIds = [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)];
+    // Vyřazený follower s cizí expozicí návrat ostatních neblokuje.
+    const excludedForeign = excludedForeignFollowerIds();
+    const accountIds = [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)
+      .filter(accountId => !excludedForeign.has(accountId))];
     const readSnapshot = () => Promise.all(accountIds.map(async accountId => {
       const [positions, orders] = await Promise.all([
         broker.listPositions(accountId),
@@ -8100,11 +8153,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const pausedInEpoch = new Set((currentRuntime().state.safety.accountSyncPauses ?? [])
       .filter(pause => pause.symbol === epoch.symbol)
       .map(pause => pause.accountId));
-    const pausedParticipants = epoch.followers
-      .filter(participant => pausedInEpoch.has(participant.accountId))
-      .map(participant => ({ ...participant, copyLineage: 'unproven' as const, confirmedNetQuantity: undefined }));
+    // „Zapnout bez tohoto účtu“ (10. 10.): ručně vypnutý follower, který
+    // v epoše nemá prokázanou kopii, je pro guard stejně cizí — jeho ruční
+    // pozice na stejném symbolu nesmí shodit skupinu. Vrací se beze změny.
+    const disabledFollowerIds = new Set(group.followers
+      .filter(follower => follower.enabled === false)
+      .map(follower => follower.accountId));
+    const excludedParticipants = epoch.followers.filter(participant => (
+      !pausedInEpoch.has(participant.accountId)
+      && disabledFollowerIds.has(participant.accountId)
+      && !isLeaderFlatLineageParticipant(participant)
+    ));
+    const skippedInEpoch = new Set([...pausedInEpoch, ...excludedParticipants.map(participant => participant.accountId)]);
+    const pausedParticipants = [
+      ...epoch.followers
+        .filter(participant => pausedInEpoch.has(participant.accountId))
+        .map(participant => ({ ...participant, copyLineage: 'unproven' as const, confirmedNetQuantity: undefined })),
+      ...excludedParticipants,
+    ];
     const batchAccounts: LeaderFlatAccountBatchSnapshot[] = evaluationRows
-      .filter(row => !pausedInEpoch.has(row.accountId))
+      .filter(row => !skippedInEpoch.has(row.accountId))
       .map(row => row.ok
         ? {
           accountId: row.accountId,
@@ -8118,7 +8186,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         : { accountId: row.accountId, ok: false, error: row.error });
     const guardEpoch: LeaderFlatEpoch = pausedParticipants.length === 0 ? epoch : {
       ...epoch,
-      followers: epoch.followers.filter(participant => !pausedInEpoch.has(participant.accountId)),
+      followers: epoch.followers.filter(participant => !skippedInEpoch.has(participant.accountId)),
     };
     const evaluated = evaluateLeaderFlatBatch({
       epoch: guardEpoch,
@@ -9153,12 +9221,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       (snapshots.find(snapshot => snapshot.accountId === group.leaderAccountId)?.positions ?? [])
         .map(position => [position.symbol, position.netQuantity]),
     );
+    // „Zapnout bez tohoto účtu“: cizí expozice ručně vypnutého followera
+    // (bez jakékoli stopy kopírky) nebrání zapnutí zapojených účtů.
+    const excludedForeign = excludedForeignFollowerIds();
     const nextWorkingOrderAccounts = new Set(snapshots
+      .filter(snapshot => !excludedForeign.has(snapshot.accountId))
       .filter(snapshot => snapshot.orders.some(order => isOpenOrderStatus(order.status)))
       .map(snapshot => snapshot.accountId));
     const nextDivergentAccounts = new Set<number>();
     for (const follower of group.followers) {
       if (optionalFollowers.has(follower.accountId) || explicitOptional.has(follower.accountId)) continue;
+      if (excludedForeign.has(follower.accountId)) continue;
       const followerPositions = nextPositions.get(follower.accountId) ?? new Map<string, number>();
       const symbols = new Set([...nextLeaderPositions.keys(), ...followerPositions.keys()]);
       for (const symbol of symbols) {
@@ -9171,7 +9244,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
     const allFlat = snapshots.every(snapshot => (
-      snapshot.positions.every(position => position.netQuantity === 0)
+      excludedForeign.has(snapshot.accountId)
+      || snapshot.positions.every(position => position.netQuantity === 0)
     ));
 
     positionsByAccount.clear();
@@ -12260,7 +12334,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       );
     }
 
+    // Ručně vypnutý follower bez stopy kopírky: jeho ruční změny v mezeře
+    // nejsou rozdíl skupiny; cache se jen obnoví z broker důkazu níže.
+    const excludedForeign = excludedForeignFollowerIds();
     for (const accountId of accountIds) {
+      if (excludedForeign.has(accountId)) continue;
       const previousPositions = positionsByAccount.get(accountId);
       const previousOrders = liveOrdersByAccount.get(accountId);
       if (!previousPositions || !previousOrders) {
@@ -12333,7 +12411,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         accountId,
         snapshot.orders.filter(order => order.accountId === accountId),
       );
-      if (snapshot.orders.some(order => order.accountId === accountId && isOpenOrderStatus(order.status))) {
+      if (!excludedForeign.has(accountId)
+        && snapshot.orders.some(order => order.accountId === accountId && isOpenOrderStatus(order.status))) {
         workingOrderAccounts.add(accountId);
       } else {
         workingOrderAccounts.delete(accountId);
@@ -13003,7 +13082,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               + cause.brokerOrderId,
             ), { autoClose: false });
           }
-        } else {
+        } else if (!excludedForeignFollowerIds().has(event.position.accountId)) {
+          // Ručně vypnutý follower bez stopy kopírky: jeho ruční obchod není
+          // divergence skupiny („Zapnout bez tohoto účtu“, 10. 10.).
           scheduleFollowerTransitionVerification(
             event.position.accountId, event.position.symbol, event.position.netQuantity,
           );
@@ -14443,8 +14524,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (completedCutChanged) await persistRiskSafety();
       const divergent = new Set<number>(conditionalRefreshUnverifiedAccounts);
+      // „Zapnout bez tohoto účtu“: cizí expozice ručně vypnutého followera
+      // není divergence ani pracovní příkaz skupiny.
+      const excludedForeign = excludedForeignFollowerIds();
       workingOrderAccounts = new Set(
-        snapshots.filter(item => (
+        snapshots.filter(item => !excludedForeign.has(item.accountId)).filter(item => (
           // Etapa 2: ruční příkaz na pozastaveném symbolu je observe-only.
           item.orders.some(order => isOpenOrderStatus(order.status)
             && activeAccountSyncPause(item.accountId, order.symbol) == null)
@@ -14502,6 +14586,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       const ineligibleAfterReactivation = currentIneligibleAccounts();
       for (const follower of group.followers) {
+        if (excludedForeign.has(follower.accountId)) continue;
         const hasOpenEpisode = (currentRuntime().state.safety.leaderExposureEpochs ?? []).some(epoch => (
           epoch.groupId === group.id
           && epoch.leaderAccountId === group.leaderAccountId
@@ -15473,6 +15558,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           group.leaderAccountId,
           ...group.followers
             .filter(follower => !ineligible.has(follower.accountId) && !activeFollowerCut(follower.accountId, now))
+            // Ručně vypnutý follower s cizí expozicí („Zapnout bez tohoto účtu“).
+            .filter(follower => !excludedForeignFollowerIds().has(follower.accountId))
             .map(follower => follower.accountId),
         ];
         const allArmAccountsAuthoritativelyFlat = armAccountIds.every(accountId => {
@@ -15986,9 +16073,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         forceEpoch: true,
       });
     },
-    async setFollowerEnabled(accountId, enabled, persistGroup) {
+    async setFollowerEnabled(accountId, enabled, persistGroup, participationOptions) {
       const follower = group.followers.find(item => item.accountId === accountId);
       const before = follower?.enabled !== false;
+      const allowOwnExposure = participationOptions?.allowOwnExposure === true;
       const audit = (outcome: 'changed' | 'blocked', reason: string, after = before) => {
         const at = clock();
         options.onAudit?.([{
@@ -16000,6 +16088,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       try {
         if (!Number.isSafeInteger(accountId) || !follower) throw new Error('Účet není follower této skupiny');
         if (typeof enabled !== 'boolean') throw new Error('Neplatný stav přepínače followera');
+        if (allowOwnExposure && enabled) throw new Error('Vlastní pozici lze ponechat jen při vypnutí followera');
         const eligibility = currentIneligibleAccounts().get(accountId);
         const cut = activeFollowerCut(accountId);
         if (enabled && (eligibility || cut || follower.mode === 'off')) {
@@ -16008,6 +16097,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (enabled === before) return group;
         if (stopped || shutdownRequested || !gate.connected || (enabled && gate.killSwitch)) {
           throw new Error('Worker není připravený nebo připojený');
+        }
+        const ownedExposure = () => copierOwnedExposureReasons(accountId);
+        if (allowOwnExposure) {
+          if (gate.armed) throw new Error('Účet s otevřenou pozicí jde vyřadit jen při vypnuté kopírce');
+          if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
+            || reconciliationRequestsPending > 0) {
+            throw new Error('Čeká kontrola pozic nebo obnova spojení');
+          }
+          if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
+            throw new Error('Probíhá nejasný příkaz kopírky');
+          }
         }
         if (enabled && (source.needsReconciliation() || !positionCheckComplete
           || reconciliationRequestsPending > 0 || recoveryInFlight
@@ -16027,12 +16127,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const controlVersion = configurationControlVersion;
         const participation = participationGeneration;
         const observations = new Map(accountIds.map(id => [id, tradeObservationVersionByAccount.get(id) ?? 0]));
-        for (const id of accountIds) {
+        // S `allowOwnExposure` se flat ověřuje jen u leadera; vlastní
+        // expozice followera zůstává a musí být v obou čteních stejná.
+        const flatRequiredIds = allowOwnExposure ? [leaderAccountId] : accountIds;
+        for (const id of flatRequiredIds) {
           if ([...(positionsByAccount.get(id)?.values() ?? [])].some(quantity => quantity !== 0)) {
             throw new Error(`Účet ${id} má podle živého streamu otevřenou pozici`);
           }
           if ((liveOrdersByAccount.get(id)?.size ?? 0) > 0) {
             throw new Error(`Účet ${id} má podle živého streamu čekající příkaz`);
+          }
+        }
+        if (allowOwnExposure) {
+          const owned = ownedExposure();
+          if (owned.length > 0) {
+            throw new Error(`Pozice nebo příkaz na účtu ${accountId} může být z kopírky (${owned.join(', ')}); zavři ji tlačítkem Zavřít pozici`);
           }
         }
         const assertUnchanged = () => {
@@ -16048,7 +16157,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               || reconciliationRequestsPending > 0 || participationLifecyclePending()
               || currentStuckOperations().length > 0
               || hasBrokerUncertainOutbox()))
-            || (!enabled && participationLifecyclePendingFor(accountIds))) {
+            || (!enabled && participationLifecyclePendingFor(accountIds))
+            || (allowOwnExposure && (gate.armed || ownedExposure().length > 0))) {
             throw new Error('Stav se během ověření změnil; přepnutí followera opakuj');
           }
         };
@@ -16061,12 +16171,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }),
         ));
         let confirmedSnapshots: Awaited<ReturnType<typeof readRound>> = [];
+        let exposureShape: string | null = null;
         // Dvě shodná autoritativní čtení; bezpečnostní strop jsou tři a žádný
         // retry nikdy neposílá broker write.
         for (let round = 0; round < 2; round += 1) {
           const snapshots = await readRound();
           assertUnchanged();
           for (const snapshot of snapshots) {
+            if (allowOwnExposure && snapshot.accountId === accountId) {
+              const shape = JSON.stringify({
+                positions: snapshot.positions.filter(position => position.netQuantity !== 0)
+                  .map(position => `${position.symbol}:${position.netQuantity}`).sort(),
+                orders: snapshot.orders.filter(order => isOpenOrderStatus(order.status))
+                  .map(order => order.brokerOrderId).sort(),
+              });
+              if (exposureShape != null && exposureShape !== shape) {
+                throw new Error('Stav se během ověření změnil; přepnutí followera opakuj');
+              }
+              exposureShape = shape;
+              continue;
+            }
             if (snapshot.positions.some(position => position.netQuantity !== 0)) {
               throw new Error(`Účet ${snapshot.accountId} má otevřenou pozici`);
             }
@@ -16104,7 +16228,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           group = next;
           groupRevision += 1;
           participationGeneration += 1;
-          // The two fresh rounds are now the authoritative flat baseline.
+          // The two fresh rounds are now the authoritative baseline (flat, or
+          // the excluded follower's own exposure with `allowOwnExposure`).
           for (const snapshot of confirmedSnapshots) {
             positionsByAccount.set(snapshot.accountId, new Map(
               snapshot.positions.map(position => [position.symbol, position.netQuantity]),
@@ -16113,7 +16238,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
           lastAuthoritativeReadAt = clock();
           lastBrokerPositionAt = lastAuthoritativeReadAt;
-          audit('changed', `ruční účast změněna ${before} → ${enabled}`, enabled);
+          const exposureDetail = allowOwnExposure && exposureShape != null
+            ? (() => {
+              const shape = JSON.parse(exposureShape) as { positions: string[]; orders: string[] };
+              return `; vyřazen s vlastní expozicí: ${shape.positions.join(', ') || 'flat'}; `
+                + `${shape.orders.length} příkaz(ů); kopírka ji neřídí`;
+            })()
+            : '';
+          audit('changed', `ruční účast změněna ${before} → ${enabled}${exposureDetail}`, enabled);
           return group;
         });
         eventTail = run.then(() => undefined, () => undefined);
@@ -16360,6 +16492,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               const held = positionsByAccount.get(id);
               const nonFlat = held == null || [...held.values()].some(quantity => quantity !== 0);
               const working = (liveOrdersByAccount.get(id)?.size ?? 0) > 0;
+              if ((nonFlat || working) && held != null && excludedForeignFollowerIds().has(id)
+                && !gate.divergentAccounts.has(id)) {
+                return { accountId: id, ok: true, detail: 'vyřazen — vlastní pozice, kopírka ji neřídí' };
+              }
               return nonFlat || working || gate.divergentAccounts.has(id)
                 ? { accountId: id, ok: false, detail: working
                   ? 'vypnutý follower má aktivní příkaz'
@@ -16426,7 +16562,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           : null,
         revision: current.revision,
         lastSequence: current.state.lastSequence,
-        groupFlat: groupIsFlat(),
+        groupFlat: allGroupAccountsFlat(),
         entryCooldownUntil: current.state.safety.entryCooldownUntil,
         dayLockUntil: current.state.safety.dayLockUntil,
         dayLockReason: current.state.safety.dayLockReason ?? null,
@@ -16486,6 +16622,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             blockers.push('Nejasný outbox nebo obnova spojení');
           }
           if (enabling && gate.killSwitch) blockers.push('Kill switch je aktivní');
+          const followerExposed = [...(positionsByAccount.get(follower.accountId)?.values() ?? [])]
+            .some(quantity => quantity !== 0) || (liveOrdersByAccount.get(follower.accountId)?.size ?? 0) > 0;
+          const exclusionWithExposure = configuredEnabled && followerExposed
+            ? (() => {
+              const owned = copierOwnedExposureReasons(follower.accountId);
+              const reason = !gate.connected || stopped || shutdownRequested ? 'Worker není připojený'
+                : gate.armed ? 'Kopírka je zapnutá'
+                  : [...(positionsByAccount.get(group.leaderAccountId!)?.values() ?? [])].some(quantity => quantity !== 0)
+                    ? 'Leader má otevřenou pozici'
+                    : (liveOrdersByAccount.get(group.leaderAccountId!)?.size ?? 0) > 0 ? 'Leader má čekající příkaz'
+                      : owned.length > 0 ? `Pozice může být z kopírky (${owned.join(', ')})`
+                        : recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
+                          || reconciliationRequestsPending > 0 ? 'Čeká kontrola pozic nebo obnova spojení'
+                          : hasBrokerUncertainOutbox() || currentStuckOperations().length > 0 ? 'Nejasný příkaz kopírky'
+                            : null;
+              return { allowed: reason == null, reason };
+            })()
+            : undefined;
           return {
             accountId: follower.accountId,
             configuredEnabled,
@@ -16493,6 +16647,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             canToggle: blockers.length === 0,
             blockers,
             ...(automaticExclusion ? { automaticExclusion } : {}),
+            ...(exclusionWithExposure ? { exclusionWithExposure } : {}),
           };
         }),
         accountRisk: [...accountRisk.values()]

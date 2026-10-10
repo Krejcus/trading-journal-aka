@@ -130,6 +130,38 @@ describe('local copier execution agent', () => {
     runtime.stop();
   });
 
+  it('„Zapnout bez tohoto účtu“: capability, předání příznaku a odmítnutí neplatného', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const runtime = await bootstrapCopierRuntime({ broker, store: createMemoryCopierStore(), group: group(), followerTransitionCorrelationWindowMs: 5 } as never);
+    broker.setConnected(true);
+    await runtime.waitForIdle();
+    await runtime.reconcile();
+    let persisted = group();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0,
+      onGroupChanged: async next => { persisted = structuredClone(next); },
+    });
+    expect(running.status().capabilities).toContain('follower-exclude-exposure-v1');
+    const nonce = running.status().nonce;
+    const invalid = await post(running, nonce, {
+      type: 'copy-command',
+      command: { type: 'set-follower-enabled', groupId: 'runtime-test', accountId: 22, enabled: true, allowOwnExposure: true },
+    });
+    expect(invalid.status).not.toBe(200);
+    broker.setPosition(22, 'MNQZ6', 1);
+    broker.emitEvent({ type: 'position', position: { accountId: 22, symbol: 'MNQZ6', netQuantity: 1 } });
+    await runtime.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await runtime.waitForIdle();
+    const excluded = await post(running, nonce, {
+      type: 'copy-command',
+      command: { type: 'set-follower-enabled', groupId: 'runtime-test', accountId: 22, enabled: false, allowOwnExposure: true },
+    });
+    expect(excluded.status).toBe(200);
+    expect(persisted.followers[0]).toMatchObject({ enabled: false });
+    runtime.stop();
+  });
+
   it('is loopback-only, exposes status to the approved origin and updates the follower multiplier', async () => {
     const runtime = controller();
     const installation = {
