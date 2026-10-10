@@ -4611,6 +4611,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   ) => {
     const wasArmed = gate.armed;
     const wasLiveArmed = gate.armed && !gate.shadowMode;
+    const wasConnected = gate.connected;
     invalidateReconciliation();
     lastError = errorOf(reason);
     if (!failure.transportLost) {
@@ -4643,7 +4644,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         )
       : undefined;
     if (failure.transportLost && disarm && wasLiveArmed) beginTransportResume(disarm.at);
-    else if (failure.transportLost && !wasArmed) noteDisconnectWhileResumeWaiting();
+    else if (failure.transportLost && !wasArmed && wasConnected) noteDisconnectWhileResumeWaiting();
     gate = {
       ...gate,
       armed: false,
@@ -8341,7 +8342,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Výpadek uprostřed obchodu: kopie byly drženy do konce obchodu. Teď je
       // skupina flat — read-only kontrola obnovu dokončí (čistá = zapnutí
       // už neblokuje), nic neobchoduje.
-      if (pendingConnectionRecovery && gate.connected && !gate.armed && !recoveryInFlight) {
+      const heldEpisodeWaiting = transportResume?.state === 'waiting' && transportResume.heldOpen
+        && transportResume.rebaselinedAt == null;
+      if ((pendingConnectionRecovery || heldEpisodeWaiting) && gate.connected && !gate.armed) {
+        // Držený obchod bez SL/TP měl čistou obnovu — konec se ověří stejně.
+        if (heldEpisodeWaiting) pendingConnectionRecovery = true;
         scheduleConnectionRecovery();
       }
       if (pausedInEpoch.size > 0) {
@@ -8938,11 +8943,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     };
     const leaderOrders = openOrders(leaderAccountId);
     if (leaderOrders.some(order => !reduces(leaderAccountId, order))) return 'leader má příkaz, který pozici nesnižuje';
-    const leaderClasses = new Map<string, Set<'stop' | 'target'>>();
+    // Zbytky leaderových nohou per (symbol, třída) — požadovaná ochrana
+    // followera se odvozuje z nich a z jeho násobku (runner: stop 2, TP 1).
+    const leaderLegs = new Map<string, Map<'stop' | 'target', number[]>>();
     for (const order of leaderOrders) {
-      const classes = leaderClasses.get(order.symbol) ?? new Set();
-      classes.add(classOf(order)!);
-      leaderClasses.set(order.symbol, classes);
+      const bySymbol = leaderLegs.get(order.symbol) ?? new Map<'stop' | 'target', number[]>();
+      const orderClass = classOf(order)!;
+      bySymbol.set(orderClass, [...(bySymbol.get(orderClass) ?? []), remaining(order)]);
+      leaderLegs.set(order.symbol, bySymbol);
     }
     const excluded = excludedForeignFollowerIds();
     for (const follower of group.followers) {
@@ -8964,8 +8972,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if ([...sums.values()].some(sum => sum > Math.abs(net))) {
           return `follower ${follower.accountId} má na ${symbol} víc ochranných nohou než pozice`;
         }
-        for (const orderClass of leaderClasses.get(symbol) ?? []) {
-          if ((sums.get(orderClass) ?? 0) !== Math.abs(net)) {
+        for (const [orderClass, legs] of leaderLegs.get(symbol) ?? []) {
+          const scaled = legs.reduce((sum, quantity) => sum + Math.trunc(quantity * follower.multiplier), 0);
+          const required = Math.max(1, Math.min(Math.abs(net), scaled));
+          if ((sums.get(orderClass) ?? 0) < required) {
             return `follower ${follower.accountId} nemá na ${symbol} ${orderClass === 'stop' ? 'stop' : 'target'} jako leader`;
           }
         }
@@ -9062,6 +9072,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             reconciliation = candidate;
             break;
           }
+          // Skupina je flat a jediné pracovní příkazy má leader (nový vstup
+          // nebo zbylá noha) — nic se nedrží, ale ani to není incident.
+          const allParticipantsFlat = [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
+            .filter(accountId => !disabledFollowerIds.has(accountId))
+            .every(accountId => [...(positionsByAccount.get(accountId)?.values() ?? [])].every(quantity => quantity === 0));
+          if (
+            missingOwnership.length === 0
+            && candidate.generationUnchanged
+            && participatingDivergence.length === 0
+            && allParticipantsFlat
+            && participatingWorking.every(accountId => accountId === group.leaderAccountId)
+          ) {
+            reconciliation = candidate;
+            break;
+          }
           // Výpadek uprostřed obchodu s brackety: kopie synchronní a jediné
           // pracovní příkazy jsou ochranné nohy → držet DISARMED, žádný
           // incident. Leader-flat guard je po konci obchodu dočistí.
@@ -9070,6 +9095,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             && candidate.generationUnchanged
             && participatingDivergence.length === 0
             && participatingWorking.length > 0
+            && [...(positionsByAccount.get(group.leaderAccountId)?.values() ?? [])].some(quantity => quantity !== 0)
             && protectiveHoldProblem() == null
           ) {
             reconciliation = candidate;
@@ -9131,10 +9157,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const guardedSymbols = await resumeLeaderFlatEpochsAfterSnapshot();
     reportDisabledFollowerExposure('connection-recovery');
     if (!hasFollowerExposure()) {
+      const leaderFlatNow = [...(positionsByAccount.get(group.leaderAccountId)?.values() ?? [])]
+        .every(quantity => quantity === 0);
+      // Chyba transportu (heartbeat timeout) není incident; čistá obnova po
+      // výpadku ji smaže stejně jako read-only obnova.
+      if (reconciliation.authoritativelyClean && leaderFlatNow && !currentManualRecovery
+        && !armPreparationIncidentRequiresRecovery && lastDisarm?.trigger === 'transport'
+        && lastError?.message === lastDisarm.detail) {
+        lastError = null;
+      }
       if (transportResume?.state === 'waiting' && transportResume.heldOpen) {
-        const leaderFlatNow = [...(positionsByAccount.get(group.leaderAccountId)?.values() ?? [])]
-          .every(quantity => quantity === 0);
         if (reconciliation.authoritativelyClean && leaderFlatNow) rebaselineHeldTransportResume();
+        else if (leaderFlatNow) declineTransportResume('po konci obchodu má leader čekající příkaz — zapni ručně');
         else declineTransportResume('kopie skončily jinak než obchod leadera — zapni ručně');
       }
       if (lastDisarm?.trigger === 'transport') updateDisarmOutcome(lastDisarm.at, 'flat');
@@ -12909,6 +12943,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     if (event.type === 'connection') {
+      // Fill leadera v mezeře (reconnect i plánovaná obměna socketu) =
+      // automatické pokračování by nevědělo o celém obchodu.
+      if (event.connected && event.resync?.gapFills?.some(fill => fill.accountId === group.leaderAccountId)) {
+        declineTransportResume('leader během výpadku obchodoval (fill v mezeře)');
+      }
       // Snapshot po skutečném reconnectu, jehož disconnect controller viděl
       // (přímý broker bez routeru), je obyčejné obnovení spojení s plnou
       // reconnect recovery; snapshot sám nic neautorizuje.
@@ -12959,7 +12998,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       } else if (!event.connected && !pendingConnectionRecovery) {
         pendingReadOnlyConnectionRecovery = true;
       }
-      if (!event.connected && !wasArmed) noteDisconnectWhileResumeWaiting();
+      // Jen skutečný další výpadek po pozorovaném reconnectu; `error` +
+      // `connection:false` jednoho výpadku (Tradovate posílá obojí) ne.
+      if (!event.connected && !wasArmed && gate.connected) noteDisconnectWhileResumeWaiting();
       if (!event.connected && wasArmed) {
         const transportDisarm = recordDisarm(
           'transport',
@@ -12982,9 +13023,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (!event.connected || source.needsReconciliation()) {
         leaderPositionSnapshotComplete = false;
         invalidateReconciliation();
-      }
-      if (event.connected && event.resync?.gapFills?.some(fill => fill.accountId === group.leaderAccountId)) {
-        declineTransportResume('leader během výpadku obchodoval (fill v mezeře)');
       }
       if (event.connected) {
         // Boot po pádu: durable stopa říká, že kopie vznikly za živého ARM.

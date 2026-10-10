@@ -414,7 +414,14 @@ existující ochranu.
   pak běžné kontroly a 60min strop od něj. Samotné držení omezuje jen konec
   původního zapnutí (nejvýš do konce session). Obchod ukončený už během
   výpadku nebo kopie skončené jinak než leader = odmítnout.
-- Hlídá test: `tests/copierTransportAutoResume.test.ts`,
+- Výpadek je jeden i když Tradovate pošle `error` a pak `connection:false`;
+  „další výpadek“ je jen disconnect po pozorovaném reconnectu. Požadovaná
+  ochrana followera per třída = min(pozice, Σ trunc(zbytek leaderovy nohy ×
+  násobek)), nejméně 1 a nejvýš pozice (runner: stop 2, TP 1). Flat skupina,
+  kde pracovní příkaz má jen leader = žádný incident, jen nepokračuje.
+  Držený obchod bez SL/TP: po vyřešení guardu se obnova vynutí taky. Čistá
+  obnova smaže `lastError` z transportu (není to incident).
+- Hlídá test: `tests/copierTransportAutoResume.test.ts`, `tests/copierOutageMidTrade.test.ts`,
   `tests/copierArmSelfCheck.test.ts`, `tests/copierAutoResumeAdmission.test.ts`,
   `tests/copierIncidentWatchdog.test.ts`.
 - Nikdy: Opakovat pokus, prodloužit TTL, pokračovat po restartu workeru,

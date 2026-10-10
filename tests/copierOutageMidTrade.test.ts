@@ -57,7 +57,7 @@ async function openBracketTrade() {
   leaderRest.push(order('entry', { status: 'filled', filledQuantity: 2 }), stop, target);
   await settle();
   expect(controller.status()).toMatchObject({ armed: true, lastError: null });
-  const endTrade = async () => {
+  const endTrade = async (extraLeaderOrders: BrokerOrder[] = []) => {
     const followerTarget = broker.orders().find(item => item.accountId === 200 && item.orderType === 'Limit' && item.side === 'Sell')!;
     const followerStop = broker.orders().find(item => item.accountId === 200 && item.orderType === 'Stop')!;
     followerTarget.status = 'filled'; followerTarget.filledQuantity = 2; followerStop.status = 'canceled';
@@ -66,7 +66,7 @@ async function openBracketTrade() {
     broker.emitEvent({ type: 'order', order: { ...followerStop } });
     position(200, 0);
     leaderRest.splice(0, leaderRest.length, order('entry', { status: 'filled', filledQuantity: 2 }),
-      { ...stop, status: 'canceled' }, { ...target, status: 'filled', filledQuantity: 2 });
+      { ...stop, status: 'canceled' }, { ...target, status: 'filled', filledQuantity: 2 }, ...extraLeaderOrders);
     broker.emitEvent({ type: 'order', order: { ...target, status: 'filled', filledQuantity: 2, sourceVersion: '3' } });
     broker.emitEvent({ type: 'fill', fill: { fillId: 'f100x', tag: '', brokerOrderId: 'target', accountId: 100, symbol, side: 'Sell', quantity: 2, price: 30_100, filledAt: 2_000 } });
     broker.emitEvent({ type: 'order', order: { ...stop, status: 'canceled', sourceVersion: '3' } });
@@ -188,6 +188,73 @@ describe('výpadek uprostřed obchodu s SL/TP', () => {
     const status = h.controller.status();
     expect(status.manualRecovery ?? null).toBeNull();
     expect(status.transportResume).toMatchObject({ phase: 'declined', reason: expect.stringContaining('nesedí s deníkem') });
+    h.controller.stop();
+  });
+
+  it('jeden výpadek jako error + connection:false (Tradovate) nezruší pokračování; chyba transportu se po konci obchodu smaže', async () => {
+    const h = await openBracketTrade();
+    h.broker.emitEvent({ type: 'error', error: new Error('connection=leader phase=websocket Tradovate WebSocket heartbeat timeout') } as never);
+    await h.settle();
+    h.broker.setConnected(false);
+    await h.settle();
+    expect(h.controller.status().transportResume?.phase).toBe('waiting');
+    h.broker.setConnected(true);
+    await h.settle(100);
+    expect(h.controller.status().manualRecovery ?? null).toBeNull();
+    await h.endTrade();
+    expect(h.controller.status().lastError).toBeNull();
+    await h.controller.prepareArm?.();
+    expect(h.controller.status().transportResume?.phase).toBe('ready');
+    h.controller.stop();
+  });
+
+  it('runner (stop 2, TP jen na 1 kontrakt) se drží bez incidentu', async () => {
+    const h = await openBracketTrade();
+    for (const order of h.leaderRest) if (order.status === 'working' && order.orderType === 'Limit') order.quantity = 1;
+    const followerTarget = h.broker.orders().find(item => item.accountId === 200 && item.orderType === 'Limit' && item.side === 'Sell')!;
+    followerTarget.quantity = 1;
+    h.broker.setConnected(false); await h.settle();
+    h.broker.setConnected(true); await h.settle(100);
+    expect(h.controller.status().manualRecovery ?? null).toBeNull();
+    expect(h.controller.status().lastDisarm?.copiesOutcome).toBe('left-open-protected');
+    h.controller.stop();
+  });
+
+  it('po živém konci drženého obchodu má leader nový čekající vstup = bez incidentu, jen nepokračuje', async () => {
+    const h = await openBracketTrade();
+    h.broker.setConnected(false); await h.settle();
+    h.broker.setConnected(true); await h.settle(100);
+    await h.endTrade([h.order('next-entry', { limitPrice: 29_800 })]);
+    const status = h.controller.status();
+    expect(status.manualRecovery ?? null).toBeNull();
+    expect(status.transportResume).toMatchObject({ phase: 'declined', reason: expect.stringContaining('čekající příkaz') });
+    h.controller.stop();
+  });
+
+  it('obchod bez SL/TP: po živém konci se obnova spustí i bez čekající obnovy a pokračování dojde do ready', async () => {
+    const h = await openBracketTrade();
+    // Leader SL/TP zruší; kopírka zruší i nohy followera.
+    for (const order of h.leaderRest) {
+      if (order.status !== 'working') continue;
+      order.status = 'canceled';
+      h.broker.emitEvent({ type: 'order', order: { ...order, sourceVersion: '9' } });
+    }
+    await h.settle(60);
+    for (const order of h.broker.orders().filter(item => item.accountId === 200 && item.status === 'working')) {
+      await h.broker.cancelOrder(200, order.brokerOrderId);
+    }
+    await h.settle();
+    h.broker.setConnected(false); await h.settle();
+    h.broker.setConnected(true); await h.settle(100);
+    expect(h.controller.status()).toMatchObject({ manualRecovery: null, workingOrderAccounts: [] });
+    expect(h.controller.status().transportResume?.phase).toBe('waiting');
+    // Konec obchodu živě: leader exit fill, follower flat.
+    h.broker.emitEvent({ type: 'fill', fill: { fillId: 'f100exit', tag: '', brokerOrderId: 'manual-exit', accountId: 100, symbol, side: 'Sell', quantity: 2, price: 30_050, filledAt: 3_000 } });
+    h.position(200, 0);
+    h.position(100, 0);
+    await h.settle(150);
+    await h.controller.prepareArm?.();
+    expect(h.controller.status().transportResume?.phase).toBe('ready');
     h.controller.stop();
   });
 });
