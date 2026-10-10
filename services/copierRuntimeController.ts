@@ -4674,6 +4674,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       const risk = snapshots.find(item => item.accountId === accountId);
       if (!risk) return null;
+      // Drawdown floor (trvalý breach) má přednost před denním zámkem: oba
+      // mohou nastat zároveň a trvalý konec účtu nesmí vypadat jako denní.
+      // `minNetLiq` je odvozený floor propky (high-watermark − trailing, nejvýš
+      // trailing limit), equity je skutečné net liq nebo realizovaný cash.
+      // Čerstvý účet (cash = high-watermark = start) tak floor nikdy „nedosáhne“.
+      const equity = brokerRiskEquity(risk);
+      if (equity != null && risk.minNetLiq != null && equity <= risk.minNetLiq) {
+        return {
+          state: 'breached',
+          reason: `equity ${equity.toFixed(2)} USD dosáhla drawdown flooru ${risk.minNetLiq.toFixed(2)} USD`,
+        };
+      }
       if (
         risk.realizedPnlUsd != null && risk.dailyLossAutoLiq != null && risk.dailyLossAutoLiq > 0
         && risk.realizedPnlUsd <= -risk.dailyLossAutoLiq
@@ -4683,16 +4695,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return {
           state: 'dll-locked',
           reason: `realizovaná ztráta ${risk.realizedPnlUsd.toFixed(2)} USD dosáhla daily loss auto-liq ${risk.dailyLossAutoLiq} USD`,
-        };
-      }
-      // `minNetLiq` je odvozený floor propky (high-watermark − trailing, nejvýš
-      // trailing limit), equity je skutečné net liq nebo realizovaný cash.
-      // Čerstvý účet (cash = high-watermark = start) tak floor nikdy „nedosáhne“.
-      const equity = brokerRiskEquity(risk);
-      if (equity != null && risk.minNetLiq != null && equity <= risk.minNetLiq) {
-        return {
-          state: 'breached',
-          reason: `equity ${equity.toFixed(2)} USD dosáhla drawdown flooru ${risk.minNetLiq.toFixed(2)} USD`,
         };
       }
       return null;

@@ -4177,6 +4177,14 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     controller.stop();
   });
 
+  it('drawdown floor i denní limit zároveň: trvalý breached má přednost', async () => {
+    const { controller } = await propLiquidationHarness({ realizedPnlUsd: -1_312.5, dailyLossAutoLiq: 1_250, netLiq: 48_000 });
+    expect(controller.status().accountEligibility).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 200, state: 'breached', reason: expect.stringContaining('drawdown flooru') }),
+    ]));
+    controller.stop();
+  });
+
   it('starý záznam „breached“ z denního auto-liq se po startu vrátí jako denní zámek, ne breach', async () => {
     const snapshot = emptySnapshot();
     const at = Date.parse('2026-10-08T14:57:58.826Z');
