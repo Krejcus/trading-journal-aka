@@ -838,6 +838,8 @@ const newestBrakeCreatedAt = async (db: SupabaseClient, deviceId: string): Promi
 
 /** Rezerva na rozdíl hodin Macu a serveru — chyba vede jen k odmítnutí. */
 export const AUTO_RESUME_BRAKE_MARGIN_MS = 60_000;
+/** Jak daleko před zapnutím na Macu smí ležet serverový záznam téhož zapnutí. */
+export const AUTO_RESUME_ARM_MATCH_WINDOW_MS = 5 * 60_000;
 
 /**
  * Serverová pojistka automatického pokračování po výpadku (10. 10. 2026):
@@ -859,9 +861,14 @@ export async function admitCopierAutoResume(options: {
     .limit(1);
   if (lastArm.error) throw new Error(`copier-relay-auto-resume-arm-lookup-failed: ${lastArm.error.message}`);
   const lastArmAt = Date.parse((lastArm.data?.[0] as { created_at?: string } | undefined)?.created_at ?? '');
+  // Serverový čas zapnutí jen pokud patří k tomuto zapnutí (ON z lokálního
+  // UI do tabulky nic nezapíše — starý vzdálený ON by kotvu posunul do včera).
+  const relevantLastArm = Number.isFinite(lastArmAt)
+    && lastArmAt >= options.since - AUTO_RESUME_ARM_MATCH_WINDOW_MS
+    && lastArmAt <= options.since + AUTO_RESUME_BRAKE_MARGIN_MS;
   const anchor = Math.min(
     options.since - AUTO_RESUME_BRAKE_MARGIN_MS,
-    Number.isFinite(lastArmAt) ? lastArmAt : Number.POSITIVE_INFINITY,
+    relevantLastArm ? lastArmAt : Number.POSITIVE_INFINITY,
   );
   // Brzdy celého uživatele (i směrované na jiné zařízení téhož připojení).
   const brakes = await options.db.from('tradovate_copier_commands')

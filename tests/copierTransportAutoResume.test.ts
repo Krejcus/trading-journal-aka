@@ -250,4 +250,51 @@ describe('automatické pokračování po výpadku — jádro', () => {
     expect(h.controller.status().transportResume ?? null).toBeNull();
     h.controller.stop();
   });
+
+  it('nový příkaz leadera podle ID (hodiny Macu a Tradovate se rozcházejí) = nepokračuje', async () => {
+    for (const newOrder of [false, true]) {
+      const h = await harness();
+      let leaderExtra = [{ brokerOrderId: '1000', status: 'filled' }];
+      const originalList = h.broker.listOrders.bind(h.broker);
+      (h.broker as { listOrders: typeof h.broker.listOrders }).listOrders = (async (accountId: number, ...rest: unknown[]) => {
+        const base = await (originalList as (...args: unknown[]) => Promise<unknown[]>)(accountId, ...rest);
+        if (accountId !== 100) return base;
+        // Čas příkazu leží „před výpadkem“ (hodiny Tradovate pozadu) — rozhodne ID.
+        return [...base, ...leaderExtra.map(order => ({
+          tag: '', accountId: 100, symbol, side: 'Buy', orderType: 'Market', quantity: 1, filledQuantity: 1,
+          updatedAt: 1, ...order,
+        }))];
+      }) as never;
+      await h.controller.reconcile();
+      await h.armLive();
+      const disarmAt = await h.outage();
+      if (newOrder) leaderExtra = [...leaderExtra, { brokerOrderId: '1001', status: 'filled' }];
+      await h.reconnect();
+      if (newOrder) {
+        expect(h.controller.status().transportResume).toMatchObject({ phase: 'declined', reason: expect.stringContaining('nový příkaz') });
+      } else {
+        expect(h.controller.status().transportResume?.phase).toBe('ready');
+        h.controller.arm({ requirePreparation: true, autoResume: { disarmAt: disarmAt! } });
+        expect(h.controller.status().armed).toBe(true);
+      }
+      h.controller.stop();
+    }
+  });
+
+  it('po hodině čekání už sama nepokračuje', async () => {
+    let now = Date.now();
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const { bootstrapCopierRuntime: boot } = await import('../services/copierRuntimeController');
+    const controller = await boot({ broker, store: createMemoryCopierStore(), group: group(), clock: () => now } as never);
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    await controller.prepareArm?.();
+    controller.arm({ requirePreparation: true, ttlMs: 5 * 3_600_000 });
+    broker.setConnected(false);
+    await controller.waitForIdle();
+    now += 61 * 60_000;
+    expect(controller.checkTransportResume?.()).toMatchObject({ kind: 'decline', reason: 'výpadek trval přes hodinu' });
+    controller.stop();
+  });
 });

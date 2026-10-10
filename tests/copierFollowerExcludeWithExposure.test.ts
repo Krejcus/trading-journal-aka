@@ -192,6 +192,17 @@ describe('Zapnout bez tohoto účtu — vyřazení followera s vlastní pozicí'
     h.controller.stop();
   });
 
+  it('„zavřít jen pro tento obchod“ u vyřazeného followera worker odmítne (cut by ho zamkl)', async () => {
+    const h = await harness();
+    await h.manual200(1);
+    await h.controller.setFollowerEnabled(200, false, h.persist, { allowOwnExposure: true });
+    await h.controller.reconcile();
+    h.controller.arm();
+    await expect(h.controller.flattenFollowerTrade(200, 'cut-excluded-001')).rejects.toThrow('ručně vypnutý');
+    expect(h.controller.status().excludedForeignFollowers).toEqual([200]);
+    h.controller.stop();
+  });
+
   it('opětovné zapnutí vyřazeného účtu s pozicí zůstává zakázané', async () => {
     const h = await harness();
     await h.manual200(1);

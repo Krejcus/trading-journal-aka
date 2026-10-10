@@ -1275,6 +1275,8 @@ export async function startLocalCopierExecutionAgent(
   const autoRearmLog = (message: string) => console.log(`${new Date().toISOString()} AUTO-RESUME ${message}`);
   /** Pojistka nedostupná (síť) — nic se nezapnulo, smí se zkusit znovu. */
   class AutoResumeAdmissionUnavailable extends Error {}
+  /** Souběh s ručním ON — ten epizodu ukončí sám; žádné „nepokračuje“. */
+  class AutoResumeSuperseded extends Error {}
   const AUTO_RESUME_ADMISSION_RETRIES = 3;
   /**
    * Jediný pokus o automatické pokračování (10. 10. 2026). Stejné řazení
@@ -1283,7 +1285,7 @@ export async function startLocalCopierExecutionAgent(
    * `arm({ autoResume })`, který sám ověří, že epizoda je `ready`.
    */
   const autoResumeAttempt = (disarmAt: number, admittedBrakeEpoch: number, since: number): Promise<void> => {
-    if (armPending) return Promise.reject(new Error('jiný ARM už čeká na provedení'));
+    if (armPending) return Promise.reject(new AutoResumeSuperseded('ruční zapnutí právě probíhá'));
     armPending = true;
     const deadlineAt = Date.now() + LOCAL_ARM_DEADLINE_MS;
     const pending = tail.then(async () => {
@@ -1304,6 +1306,9 @@ export async function startLocalCopierExecutionAgent(
         );
       }
       if (!admission.admitted) throw new Error(`server nepovolil: ${admission.reason ?? 'neznámý důvod'}`);
+      // Síťová cesta k pojistce trvá; neškodná událost brokera mezitím mohla
+      // zneplatnit přípravu. Read-only obnova, žádné reconcile().
+      if (options.controller.prepareArm) await awaitArmDeadline(options.controller.prepareArm(), deadlineAt);
       assertArmAdmissible(deadlineAt, admittedBrakeEpoch, createdAt);
       options.controller.arm({
         shadowMode: false,
@@ -1382,6 +1387,10 @@ export async function startLocalCopierExecutionAgent(
       autoRearmLog('kopírka po výpadku spojení sama pokračuje');
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      if (error instanceof AutoResumeSuperseded) {
+        autoRearmLog(`přenecháno ručnímu zapnutí: ${reason}`);
+        return;
+      }
       if (error instanceof AutoResumeAdmissionUnavailable
         && pending.admissionFailures + 1 < AUTO_RESUME_ADMISSION_RETRIES) {
         pending.admissionFailures += 1;

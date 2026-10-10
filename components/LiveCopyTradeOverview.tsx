@@ -1944,9 +1944,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   useFlipReorder(orderedGroups.map(group => group.id).join('|'));
 
   const requestAccountFlatten = (group: CopyGroupConfig, accountId: number, options: { ordersOnly?: boolean } = {}) => {
+    // Ručně vypnutý follower kopii nemá — jeho vlastní pozici zavře jen Flatten účtu.
     const followerInRunningTrade = copierArmed
       && group.id === executionGroupId
-      && group.followers.some(follower => follower.accountId === accountId);
+      && group.followers.some(follower => follower.accountId === accountId && follower.enabled !== false)
+      && participationByAccount.get(accountId)?.configuredEnabled !== false;
     setPendingAction({
       title: followerInRunningTrade ? 'Zavřít účet jen pro tento obchod?' : options.ordersOnly ? 'Zrušit příkazy na účtu?' : 'Flatten účet?',
       detail: followerInRunningTrade

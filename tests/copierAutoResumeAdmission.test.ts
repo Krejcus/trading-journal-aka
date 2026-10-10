@@ -50,14 +50,22 @@ describe('admitCopierAutoResume', () => {
       db: fakeDb([row({ user_id: 'someone', device_id: 'other', command_type: 'kill-switch', created_at: iso(NOW - 1_000) })]),
       userId: 'user', deviceId: 'dev', since, now: NOW,
     })).admitted).toBe(true);
-    // Kotva serverovým časem posledního zapnutí: Mac s hodinami napřed brzdu neschová.
+    // Kotva serverovým časem téhož zapnutí: Mac s hodinami napřed brzdu neschová.
     expect((await admitCopierAutoResume({
       db: fakeDb([
-        row({ command_type: 'arm-live', created_at: iso(NOW - 20 * 60_000) }),
-        row({ id: 'b', command_type: 'disarm', created_at: iso(NOW - 15 * 60_000) }),
+        row({ command_type: 'arm-live', created_at: iso(NOW - 3 * 60_000) }),
+        row({ id: 'b', command_type: 'disarm', created_at: iso(NOW - 150_000) }),
       ]),
       userId: 'user', deviceId: 'dev', since: NOW - 60_000, now: NOW,
     })).admitted).toBe(false);
+    // Starý vzdálený ON (včera) kotvu neposune: dnešní ON byl z lokálního UI.
+    expect((await admitCopierAutoResume({
+      db: fakeDb([
+        row({ command_type: 'arm-live', created_at: iso(NOW - 20 * 3_600_000) }),
+        row({ id: 'b', command_type: 'disarm', created_at: iso(NOW - 19 * 3_600_000) }),
+      ]),
+      userId: 'user', deviceId: 'dev', since: NOW - 10 * 60_000, now: NOW,
+    })).admitted).toBe(true);
   });
 
   it('čekající neexpirovaný příkaz = zamítnuto, prošlý ne', async () => {

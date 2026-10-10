@@ -372,6 +372,10 @@ existující ochranu.
   grace 15 s, server potvrdí, že od ručního ON (−60 s rezerva) nepřišla žádná
   brzda a nic nečeká; jeden pokus za epizodu; nejvýš 2 automatická pokračování
   na jedno ruční ON. Zapnutí jde přes `armCore` se všemi branami INV-ARM-01.
+- Obchod leadera v mezeře nezávisle na hodinách: jakýkoli příkaz leadera
+  s vyšším (monotónním Tradovate) ID, než controller znal při výpadku
+  (maximum z eventů, preflightu i reconciliace) = odmítnout. Čekání má strop
+  60 min od výpadku (a nikdy přes konec původního zapnutí).
 - Slepé okno: tichý výpadek se pozná až po idle timeoutu a heartbeat může
   dodat socket followera — příkaz leadera s časem ≥ min(výpadek − 30 s,
   poslední heartbeat − 5 s) i jakýkoli fill leadera v resync `gapFills` =
@@ -381,7 +385,9 @@ existující ochranu.
   přepíše na `declined`. Dedup stejné chyby ve `failClosed` platí jen za už
   vypnuté kopírky (jinak by druhý stejný výpadek nezaložil epizodu).
 - Serverová pojistka: brzdy celého uživatele (všechna zařízení) od
-  min(ON na Macu − 60 s, serverový čas posledního vzdáleného `arm-live`);
+  min(ON na Macu − 60 s, serverový čas posledního vzdáleného `arm-live`,
+  pokud patří k tomuto zapnutí — leží v okně ON − 5 min … ON + 60 s);
+  po pojistce se příprava read-only obnoví (žádné `reconcile()`);
   nedostupnost sítě = až 3 opakování pojistky, nikdy ARM. Zbytkové okno:
   brzda zařazená až PO odpovědi pojistky a před `arm()` (~latence relay)
   se provede až po zapnutí — stejně jako u ručního ON (INV-ARM-03).
@@ -659,6 +665,8 @@ existující ochranu.
   nespustí fail-closed. Status `groupFlat` (údržba) zůstává přes všechny účty.
 - Hlídá test: `tests/copierFollowerExcludeWithExposure.test.ts`,
   `tests/copierFollowerParticipation.test.ts`.
+- „Zavřít jen pro tento obchod“ (`flattenFollowerTrade`) vypnutý follower
+  odmítne — cut by jeho vlastní pozici nezavřel a zamkl by ho mezi „kopie“.
 - Nikdy: Neposílat vyřazenému účtu příkaz měnící expozici (jediná výjimka je
   cancel příkazu prokazatelně z outboxu kopírky); nevyřadit účet, jehož
   expozice může být z kopírky; nezapnout ho zpět bez flat (INV-PART-01).

@@ -2092,6 +2092,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     disarmAt: number;
     /** Poslední zpráva brokera před výpadkem (heartbeat = každá zpráva socketu). */
     lastHeardAt: number;
+    /** Nejvyšší známé ID příkazu leadera při výpadku (string kvůli BigInt). */
+    leaderMaxOrderId: string | null;
     armExpiresAt: number;
     configuration: string;
     leaderStats: string;
@@ -2101,6 +2103,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   } | null = null;
   /** Nejnovější čas příkazu leadera z posledního read-only preflightu (null = nelze prokázat). */
   let lastPreflightLeaderOrderActivityAt: number | null = null;
+  /**
+   * Nejvyšší ID příkazu leadera, které controller viděl (eventy i snímky).
+   * Tradovate ID rostou monotónně — srovnání nezávisí na hodinách Macu.
+   */
+  let leaderMaxSeenOrderId: bigint | null = null;
+  let lastPreflightLeaderMaxOrderId: bigint | null = null;
+  const numericOrderId = (orderId: string): bigint | null => (/^\d{1,30}$/.test(orderId) ? BigInt(orderId) : null);
+  const maxOrderId = (ids: Iterable<string>, start: bigint | null = null): bigint | null => {
+    let max = start;
+    for (const id of ids) {
+      const value = numericOrderId(id);
+      if (value != null && (max == null || value > max)) max = value;
+    }
+    return max;
+  };
   const TRANSPORT_RESUME_ORDER_SKEW_MS = 5_000;
   /**
    * Tichý výpadek socketu se pozná až po idle timeoutu; heartbeat může navíc
@@ -2108,6 +2125,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * slepého okna před zjištěním výpadku se počítá jako obchod v mezeře.
    */
   const TRANSPORT_RESUME_BLIND_WINDOW_MS = 30_000;
+  /** Po delším výpadku se kopírka sama nezapne (překvapení po hodinách). */
+  const TRANSPORT_RESUME_MAX_WAIT_MS = 60 * 60_000;
   const declineTransportResume = (reason: string, { overrideResumed = false }: { overrideResumed?: boolean } = {}) => {
     // `resumed` se přepíše jen když kopírka ve skutečnosti zapnutá není
     // (selhání po zapnutí) — jinak by panel i push dál tvrdily „pokračuje“.
@@ -7441,6 +7460,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const prepared = eventTail.then(async () => {
       const follower = group.followers.find(item => item.accountId === accountId);
       if (!follower) throw new Error('Do konce obchodu lze vyřadit pouze follower účet');
+      // Vypnutý follower kopii v obchodu nemá; cut by jeho vlastní pozici
+      // nezavřel a jen by ho do konce session zařadil mezi „kopie“.
+      if (follower.enabled === false) throw new Error('Follower je ručně vypnutý — pro jeho vlastní pozici použij Flatten účtu');
       if (!gate.connected) throw new Error('Follower nelze zavřít: worker nemá živé spojení s brokerem');
       if (!gate.armed || gate.shadowMode) {
         throw new Error('Tato akce vyžaduje zapnutou LIVE kopírku; jinak použij nouzový Flatten účtu');
@@ -9312,6 +9334,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Auto-pokračování: příkaz leadera z mezery = leader během výpadku
       // obchodoval. Bez čitelného času to nejde prokázat (null).
       const leaderOrders = snapshots.find(snapshot => snapshot.accountId === group.leaderAccountId)?.orders ?? [];
+      lastPreflightLeaderMaxOrderId = maxOrderId(leaderOrders.map(order => order.brokerOrderId));
+      leaderMaxSeenOrderId = maxOrderId(leaderOrders.map(order => order.brokerOrderId), leaderMaxSeenOrderId);
       lastPreflightLeaderOrderActivityAt = leaderOrders.some(order => !Number.isFinite(order.updatedAt) || order.updatedAt <= 0)
         ? null
         : leaderOrders.reduce((latest, order) => Math.max(latest, order.updatedAt), 0);
@@ -9408,6 +9432,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     transportResume = {
       disarmAt,
       lastHeardAt: gate.lastHeartbeatAt,
+      leaderMaxOrderId: leaderMaxSeenOrderId?.toString() ?? null,
       armExpiresAt,
       configuration: armPreparationConfiguration(),
       leaderStats: transportResumeLeaderStats(disarmAt),
@@ -9440,6 +9465,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (gate.armed) return decline('kopírka už je zapnutá');
     if (lastDisarm && lastDisarm.at !== pending.disarmAt) return decline('kopírka se mezitím vypnula z jiného důvodu');
     if (now >= pending.armExpiresAt) return decline('vypršelo okno původního zapnutí');
+    if (now - pending.disarmAt >= TRANSPORT_RESUME_MAX_WAIT_MS) return decline('výpadek trval přes hodinu');
     if (currentManualRecovery || armPreparationIncidentRequiresRecovery) return decline('po výpadku vznikl incident');
     if (currentRuntime().state.safety.managementOnly) return decline('kopírka je v režimu správy otevřených kopií');
     if (armPreparationConfiguration() !== pending.configuration) return decline('změnila se konfigurace skupiny');
@@ -9463,6 +9489,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     );
     if (lastPreflightLeaderOrderActivityAt >= quietSince) {
       return decline('leader během výpadku (nebo těsně před jeho zjištěním) zadal příkaz');
+    }
+    // Nezávisle na hodinách: příkaz leadera s vyšším ID, než znal controller
+    // při výpadku (ON vždy předchází příprava, která načte příkazy dne).
+    const knownAtDisarm = pending.leaderMaxOrderId != null ? BigInt(pending.leaderMaxOrderId) : null;
+    if (lastPreflightLeaderMaxOrderId != null
+      && (knownAtDisarm == null || lastPreflightLeaderMaxOrderId > knownAtDisarm)) {
+      return decline('leader během výpadku zadal nový příkaz');
     }
     return { kind: 'ready', reason: null };
   };
@@ -12674,7 +12707,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (stopped) return;
     restampZeroSuppressionAfterBenignIngress(event, ingressObservationVersion);
     const now = clock();
-    if (event.type === 'order') rememberLiveOrder(event.order);
+    if (event.type === 'order') {
+      rememberLiveOrder(event.order);
+      if (event.order.accountId === group.leaderAccountId) {
+        leaderMaxSeenOrderId = maxOrderId([event.order.brokerOrderId], leaderMaxSeenOrderId);
+      }
+    }
     scheduleRouteEpochRefresh();
     if (event.type === 'heartbeat') {
       gate = { ...gate, lastHeartbeatAt: event.at };
@@ -14716,6 +14754,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (completedCutChanged) await persistRiskSafety();
       const divergent = new Set<number>(conditionalRefreshUnverifiedAccounts);
+      leaderMaxSeenOrderId = maxOrderId(
+        (byAccount.get(group.leaderAccountId!)?.orders ?? []).map(order => order.brokerOrderId),
+        leaderMaxSeenOrderId,
+      );
       // „Zapnout bez tohoto účtu“: cizí expozice ručně vypnutého followera
       // není divergence ani pracovní příkaz skupiny.
       const excludedForeign = excludedForeignFollowerIds();
@@ -16823,7 +16865,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               : check.kind === 'ready' ? 'ready' : check.kind === 'decline' ? 'declined' : 'waiting';
             return {
               disarmAt: transportResume.disarmAt,
-              armExpiresAt: transportResume.armExpiresAt,
+              // Pro UI „nejpozději do“: kratší z okna zapnutí a hodinového stropu.
+              armExpiresAt: Math.min(transportResume.armExpiresAt, transportResume.disarmAt + TRANSPORT_RESUME_MAX_WAIT_MS),
               phase,
               reason: transportResume.state === 'waiting' ? check.reason : transportResume.reason,
               at: transportResume.at,
