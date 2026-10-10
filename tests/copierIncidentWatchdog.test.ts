@@ -518,3 +518,58 @@ it('durable boundary replay preserves silence for a historical bootstrap baselin
   });
   expect(result.notifications).toEqual([]);
 });
+
+describe('účet mimo synchron (etapa 2, bod 5d)', () => {
+  const armedWith = (accountSyncPauses: unknown[]) => runtime({ status: {
+    armed: true, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null,
+    accountSyncPauses,
+  } });
+  const pause = { accountId: 68356280, symbol: 'MNQZ6', reasonCode: 'protective-filled-early', reason: 'x', pausedAt: NOW - 1_000 };
+  const pausedState = (detail: string): CopierAlertStateRow => ({ ...state('account-sync:68356280'), detail });
+
+  it('nová pauza pošle jednu zprávu a podruhé už nic', () => {
+    const first = evaluate([armedWith([pause])], [state('state:armed', true)]);
+    const opened = first.notifications.filter(item => item.incidentKey === 'account-sync:68356280');
+    expect(opened).toEqual([expect.objectContaining({
+      kind: 'opened', title: 'Účet 68356280 mimo synchron',
+      body: expect.stringContaining('ostatní kopírují dál. Nic nedělej.'),
+    })]);
+    expect(first.upserts).toContainEqual(expect.objectContaining({
+      incidentKey: 'account-sync:68356280', active: true, detail: String(pause.pausedAt),
+    }));
+    const second = evaluate([armedWith([pause])], [state('state:armed', true), pausedState(String(pause.pausedAt))]);
+    expect(second.notifications.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+  });
+
+  it('odmítnutý vstup neříká „nic nedělej“', () => {
+    const result = evaluate([armedWith([{ ...pause, reasonCode: 'entry-rejected' }])], [state('state:armed', true)]);
+    const body = result.notifications.find(item => item.incidentKey === 'account-sync:68356280')?.body;
+    expect(body).toContain('Broker odmítl vstup');
+    expect(body).not.toContain('Nic nedělej');
+  });
+
+  it('konec pauzy při zapnuté kopírce ohlásí návrat', () => {
+    const result = evaluate([armedWith([])], [state('state:armed', true), pausedState('1')]);
+    expect(result.notifications).toContainEqual(expect.objectContaining({
+      incidentKey: 'account-sync:68356280', kind: 'resolved', title: 'Účet 68356280 zase v synchronu',
+    }));
+  });
+
+  it('konec pauzy po vypnutí kopírky se jen tiše zavře', () => {
+    const result = evaluate([runtime({ status: {
+      armed: false, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null, accountSyncPauses: [],
+    } })], [state('state:armed', false), pausedState('1')]);
+    expect(result.notifications.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+    expect(result.upserts).toContainEqual(expect.objectContaining({
+      incidentKey: 'account-sync:68356280', active: false, notified: false,
+    }));
+  });
+
+  it('pauzy z vnořeného controller statusu relay heartbeatu', () => {
+    const result = evaluate([runtime({ status: { controller: {
+      armed: true, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null,
+      accountSyncPauses: [pause],
+    } } })], [state('state:armed', true)]);
+    expect(result.notifications.some(item => item.incidentKey === 'account-sync:68356280')).toBe(true);
+  });
+});

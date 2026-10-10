@@ -86,6 +86,9 @@ const RESUME_OFFER_MARKER_KEY = 'state:resume-offer';
 /** Interní marker: `detail` nese `at` posledního odeslaného copy eventu. */
 export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
 
+/** Per-účtový incident „mimo synchron“ (etapa 2): `account-sync:<accountId>`. */
+const ACCOUNT_SYNC_KEY_PREFIX = 'account-sync:';
+
 /**
  * ENTRY/EXIT dostane krátké okno pro jediný push už s obrázkem. Po vypršení
  * okna stejný planner pošle textovou zálohu; obchodní cesta na nic nečeká.
@@ -410,7 +413,7 @@ const INCIDENTS: IncidentSpec[] = [
     present: (status, uptimeMs) => uptimeMs > BOOT_GRACE_MS && status.connected === false,
     detail: () => null,
     openTitle: 'Copier: Tradovate odpojen',
-    openBody: () => 'Worker běží, ale spojení k Tradovate je dole. Kopírování stojí.',
+    openBody: () => 'Spojení k Tradovate vypadlo, kopírování stojí. Kopie mají u brokera své SL/TP; po obnovení si kopírka stav ověří sama.',
     resolvedTitle: 'Copier: Tradovate připojen',
     resolvedBody: 'Spojení k brokerovi je obnovené.',
   },
@@ -485,6 +488,37 @@ export function evaluateCopierIncidents(options: {
         open(spec.key, detail, spec.openTitle, spec.openBody(detail));
       } else if (!present && state?.active) {
         resolve(spec.key, spec.resolvedTitle, spec.resolvedBody);
+      }
+    }
+
+    // --- Účet mimo synchron (etapa 2): per účet otevření i návrat ---------
+    // Pauza = follower vynechá zbytek leader obchodu; ostatní kopírují dál.
+    // Návrat hlásíme jen při zapnuté kopírce — po DISARM by „zase kopíruje“
+    // byla nepravda, marker se pak jen tiše zavře.
+    const syncPauses = new Map<number, { reasonCode: string; pausedAt: number }>();
+    for (const item of Array.isArray(status.accountSyncPauses) ? status.accountSyncPauses : []) {
+      const pause = item as { accountId?: unknown; reasonCode?: unknown; pausedAt?: unknown };
+      if (typeof pause.accountId !== 'number' || !Number.isSafeInteger(pause.accountId)) continue;
+      syncPauses.set(pause.accountId, { reasonCode: String(pause.reasonCode ?? ''), pausedAt: asNumber(pause.pausedAt) });
+    }
+    for (const [accountId, pause] of syncPauses) {
+      const key = `${ACCOUNT_SYNC_KEY_PREFIX}${accountId}`;
+      const state = activeState(userId, deviceId, key);
+      if (state?.active && state.detail === String(pause.pausedAt)) continue;
+      open(key, String(pause.pausedAt), `Účet ${accountId} mimo synchron`, pause.reasonCode === 'protective-filled-early'
+        ? 'Stop nebo target se vyplnil dřív než u leadera. Vynechá zbytek obchodu, ostatní kopírují dál. Nic nedělej.'
+        : 'Broker odmítl vstup. Vynechá zbytek obchodu, ostatní kopírují dál.');
+    }
+    const syncArmed = asBool(status.armed) && status.shadowMode !== true;
+    for (const row of options.alertStates) {
+      if (row.user_id !== userId || row.device_id !== deviceId || !row.active
+        || !row.incident_key.startsWith(ACCOUNT_SYNC_KEY_PREFIX)) continue;
+      const accountId = Number(row.incident_key.slice(ACCOUNT_SYNC_KEY_PREFIX.length));
+      if (syncPauses.has(accountId)) continue;
+      if (syncArmed) {
+        resolve(row.incident_key, `Účet ${accountId} zase v synchronu`, 'K dalšímu obchodu leadera se připojí automaticky.');
+      } else {
+        upserts.push({ userId, deviceId, incidentKey: row.incident_key, active: false, detail: null, notified: false });
       }
     }
 
