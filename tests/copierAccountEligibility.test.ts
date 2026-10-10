@@ -325,10 +325,18 @@ describe('account eligibility — DLL incident', () => {
     await emitLeaderEntry(h, 'leader-entry-3', '1:Working');
     expect(followerOrdersFor(h.broker, 205).length).toBe(1);
 
-    // Autoritativní ověření (reconciliation po nové session) reaktivuje.
+    // 10. 10. 2026: bez risk dat (equity, floor propky) zůstává mimo kopii.
+    await h.controller.reconcile();
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 205)?.state ?? 'active')
+      .not.toBe('active');
+
+    // Autoritativní ověření s equity nad drawdown floorem reaktivuje.
+    h.broker.listAccountRiskSnapshots = async accountIds => accountIds.filter(id => id === 205).map(accountId => ({
+      accountId, at: 1, realizedPnlUsd: 0, netLiq: 50_000, minNetLiq: 48_000, dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 2_000,
+    }));
     await h.controller.reconcile();
     const afterReconcile = h.controller.status().accountEligibility?.find(entry => entry.accountId === 205);
-    expect(afterReconcile?.state).toBe('active');
+    expect(afterReconcile?.state ?? 'active').toBe('active');
 
     h.controller.stop();
   });

@@ -1143,6 +1143,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           // Bez denních statistik se hranice odvodí ze session kalendáře.
           lockSessionEndAt: currentRuntimeValue.state.safety.dailyStats?.sessionEndAt
             ?? (at + msUntilTradovateSessionEnd(at)),
+          // 10. 10. 2026: všechny cesty denního zámku mají stejnou návratovou
+          // politiku — zpět jen s důkazem equity nad drawdown floorem.
+          requiresRiskFloorProof: true,
         });
       } else {
         // Neurčitý reject: jen execution událost, eligibility se nemění.
@@ -15272,6 +15275,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           lockSessionEndAt: exclusion.state === 'dll-locked'
             ? existingDllSessionEnd ?? now + msUntilTradovateSessionEnd(now)
             : undefined,
+          // Každý denní zámek se vrací jen s důkazem nad drawdown floorem.
+          ...(exclusion.state === 'dll-locked' ? { requiresRiskFloorProof: true as const } : {}),
         };
         if (
           current?.state === next.state
