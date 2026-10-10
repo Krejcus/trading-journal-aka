@@ -60,6 +60,21 @@ describe('bod 5b — průvodce zablokovaným zapnutím', () => {
     expect(ordersOnly).toContain('Zrušit příkazy');
   });
 
+  it('bez ověřených dat netvrdí flat a leader má vlastní popisek', () => {
+    const unverified = renderToStaticMarkup(React.createElement(ArmPositionBlockDialog, {
+      groupName: 'Hlavní', accounts: [], unverifiedNames: ['Účet 2'], busy: false,
+      onClose: () => undefined, onCloseAccount: () => undefined, onArm: () => undefined,
+    }));
+    expect(unverified).toContain('Čekám na ověřená data účtů');
+    expect(unverified).not.toContain('Skupina je flat');
+    expect(unverified).toContain('>Zkusit zapnout<');
+    const leader = renderToStaticMarkup(React.createElement(ArmPositionBlockDialog, {
+      groupName: 'Hlavní', busy: false, onClose: () => undefined, onCloseAccount: () => undefined,
+      accounts: [{ accountId: 1, name: 'Účet 1', isLeader: true, positions: ['MNQZ6 Long 1'], workingOrders: 0 }],
+    }));
+    expect(leader).toContain('Zavřít pozici leadera');
+  });
+
   it('po flat nabídne Zapnout', () => {
     const markup = renderToStaticMarkup(React.createElement(ArmPositionBlockDialog, {
       groupName: 'Hlavní', accounts: [], busy: false,
@@ -80,6 +95,12 @@ describe('bod 5b — průvodce zablokovaným zapnutím', () => {
       expect(copierArmRejection(new Error(message))).toContain('Nic se nezapnulo');
     }
     expect(isArmPositionRejection(new Error('ARM odmítnut: worker není připojen k brokeru'))).toBe(false);
+    // Incident k potvrzení a nedostupné účty nesmí zakrýt věta o pozici.
+    const ack = new Error('Zapnutí po incidentu vyžaduje tvoje potvrzení: Connection recovery není autoritativně čistá: divergence=123 [ack-incident:abc]');
+    expect(isArmPositionRejection(ack)).toBe(false);
+    expect(copierArmRejection(ack)).toContain('Dej znovu Zapnout a potvrď ho');
+    const missing = new Error('Zapnutí zastaveno kontrolou u brokera: pozice nesedí s leaderem na účtech 1; nedostupné účty 2.');
+    expect(isArmPositionRejection(missing)).toBe(false);
   });
 });
 

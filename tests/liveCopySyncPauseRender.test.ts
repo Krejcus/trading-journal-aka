@@ -52,7 +52,7 @@ const pause = (reasonCode: 'entry-rejected' | 'protective-filled-early') => ({
 const render = async (props: Record<string, unknown>) => {
   const { LiveCopyTradeOverview } = await import('../components/LiveCopyTradeOverview');
   return renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
-    snapshot, orders: [], runtimeAvailable: true, executionGroupId: 'group-main', ...props,
+    snapshot, orders: [], runtimeAvailable: true, executionGroupId: 'group-main', copierArmed: true, ...props,
   } as never));
 };
 
@@ -111,6 +111,35 @@ describe('bod 5a — účet mimo synchron', () => {
     expect(markup).toContain('1× BREACHED');
     expect(markup).not.toContain('MIMO SYNCHRON');
     expect(markup).not.toContain('account-sync-pause-banner');
+  });
+
+  it('vypnutá kopírka pauzu neukazuje — durable pauza přežije DISARM', async () => {
+    viewport.compact = true;
+    const markup = await render({ copierArmed: false, accountSyncPauses: [pause('entry-rejected')] });
+    expect(markup).not.toContain('MIMO SYNCHRON');
+    expect(markup).not.toContain('account-sync-pause-banner');
+    expect(markup).not.toContain('Ostatní kopírují dál');
+  });
+
+  it('lišta u účtu s pozicí neslibuje návrat', async () => {
+    viewport.compact = true;
+    const withPosition: LiveSnapshot = {
+      ...snapshot,
+      accounts: snapshot.accounts.map(account => account.id === pausedId ? {
+        ...account,
+        positions: [{ accountId: pausedId, symbol: 'MNQZ6', netPosition: 1, netPrice: 30_500, realizedPnl: 0, unrealizedPnl: 0, updatedAt: '2026-10-10T08:00:00.000Z' }],
+      } : account),
+    };
+    const markup = await render({ snapshot: withPosition, accountSyncPauses: [pause('entry-rejected')] });
+    expect(markup).toContain('Drží ale otevřenou pozici, kterou kopírka neřídí');
+    expect(markup).not.toContain('k dalšímu se připojí sám');
+  });
+
+  it('dva účty naráz: souhrnná lišta', async () => {
+    viewport.compact = true;
+    const markup = await render({ accountSyncPauses: [pause('entry-rejected'), { ...pause('entry-rejected'), accountId: copyingId }] });
+    expect(markup).toContain('2 účty jsou mimo synchron');
+    expect(markup).toContain('K dalšímu obchodu se připojí samy.');
   });
 
   it('bez pauz se nic nezobrazí', async () => {

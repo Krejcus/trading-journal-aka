@@ -266,7 +266,9 @@ claude.ai/artifact/Nqk99xxvwNsg1tcvGKocow:
   „Mimo synchron“ + „Pauza do konce obchodu“ (červeně, když drží pozici —
   kopírka ji neřídí), nepočítá se mezi kopírující a skupina ukáže lištu
   s účtem a důvodem. Kontext pauz se plní jen kolem execution skupiny.
-  Přednost: ruční vyřazení > DLL/breach > pauza.
+  Přednost: ruční vyřazení > DLL/breach > pauza. Jen při ZAPNUTÉ kopírce —
+  durable pauza přežije DISARM i restart a „ostatní kopírují dál“ by jinak
+  lhalo (oponentura).
 - **5b** Když zapnutí blokuje pozice/příkaz ve skupině, místo „použij
   Flatten All“ přijde průvodce s účty a tlačítkem Zavřít u každého
   (stávající potvrzení flatten-account); po potvrzení se vrátí s čerstvým
@@ -275,8 +277,12 @@ claude.ai/artifact/Nqk99xxvwNsg1tcvGKocow:
 - **5c** Texty už neradí „spusť Kontrolu pozic“ (tlačítko zmizelo 8. 10.).
   Řetězce workeru beze změny — podle nich se klasifikují kódy disarmu.
 - **5d** Watchdog: per-účtový incident `account-sync:<id>` — push při
-  vzniku pauzy, „zase v synchronu“ jen při zapnuté kopírce (po DISARM se
-  marker tiše zavře, jinak by push lhal).
+  vzniku pauzy i „zase v synchronu“ jen při zapnuté kopírce (po DISARM se
+  marker tiše zavře, jinak by push lhal); víc účtů v jednom ticku = jedna
+  souhrnná zpráva; starší worker bez pole se neřeší vůbec.
+- Oponentura (Claude subagent): nasaditelné ANO; opraveno i to, že převod
+  odmítnutí na „pozice“ nesmí schovat `[ack-incident]` ani nedostupné účty,
+  a průvodce bez čerstvých dat netvrdí „skupina je flat“.
 - **5e** Během zapínání panel „Zapínám · N s“ s tím, co se ověřuje.
 
 **Co z náhledu NEplatí a proč:** (1) „Zapnout bez tohoto účtu“ — jádro

@@ -531,8 +531,8 @@ describe('účet mimo synchron (etapa 2, bod 5d)', () => {
     const first = evaluate([armedWith([pause])], [state('state:armed', true)]);
     const opened = first.notifications.filter(item => item.incidentKey === 'account-sync:68356280');
     expect(opened).toEqual([expect.objectContaining({
-      kind: 'opened', title: 'Účet 68356280 mimo synchron',
-      body: expect.stringContaining('ostatní kopírují dál. Nic nedělej.'),
+      kind: 'opened', title: 'Účet 68356280 mimo synchron (MNQZ6)',
+      body: 'Stop nebo target se vyplnil dřív než u leadera. Vynechá zbytek obchodu, ostatní kopírují dál.',
     })]);
     expect(first.upserts).toContainEqual(expect.objectContaining({
       incidentKey: 'account-sync:68356280', active: true, detail: String(pause.pausedAt),
@@ -541,11 +541,34 @@ describe('účet mimo synchron (etapa 2, bod 5d)', () => {
     expect(second.notifications.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
   });
 
-  it('odmítnutý vstup neříká „nic nedělej“', () => {
+  it('odmítnutý vstup má vlastní důvod', () => {
     const result = evaluate([armedWith([{ ...pause, reasonCode: 'entry-rejected' }])], [state('state:armed', true)]);
     const body = result.notifications.find(item => item.incidentKey === 'account-sync:68356280')?.body;
     expect(body).toContain('Broker odmítl vstup');
-    expect(body).not.toContain('Nic nedělej');
+  });
+
+  it('při vypnuté kopírce pauzu neohlásí — „ostatní kopírují“ by nebyla pravda', () => {
+    const result = evaluate([runtime({ status: {
+      armed: false, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null, accountSyncPauses: [pause],
+    } })]);
+    expect(result.notifications.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+  });
+
+  it('víc pauz v jednom ticku = jedna souhrnná zpráva, markery pro všechny', () => {
+    const result = evaluate([armedWith([pause, { ...pause, accountId: 68356281 }, { ...pause, accountId: 68356282 }])], [state('state:armed', true)]);
+    const opened = result.notifications.filter(item => item.incidentKey.startsWith('account-sync:'));
+    expect(opened).toEqual([expect.objectContaining({ title: '3 účty mimo synchron' })]);
+    expect(result.upserts.filter(item => item.incidentKey.startsWith('account-sync:') && item.active)).toHaveLength(3);
+  });
+
+  it('starší worker bez pole nic neresolvuje, poškozený klíč se tiše zavře', () => {
+    const noField = evaluate([runtime({ status: {
+      armed: true, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null,
+    } })], [state('state:armed', true), pausedState('1')]);
+    expect(noField.upserts.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+    const broken = evaluate([armedWith([])], [state('state:armed', true), { ...state('account-sync:abc'), detail: '1' }]);
+    expect(broken.notifications.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+    expect(broken.upserts).toContainEqual(expect.objectContaining({ incidentKey: 'account-sync:abc', active: false }));
   });
 
   it('konec pauzy při zapnuté kopírce ohlásí návrat', () => {

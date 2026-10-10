@@ -135,15 +135,20 @@ export function retireMissingFromError(reason: unknown): { groupId: string; acco
 
 /** Worker odmítl zapnutí, protože některý účet skupiny není flat / má příkaz (bod 5b). */
 const ARM_POSITION_REJECTION = /divergence=|working=|některý účet není flat|nejsou flat|pozice nesedí s leaderem|čekající příkazy na účtech/i;
+// Incident k potvrzení a nedostupné účty mají vlastní, důležitější hlášku —
+// převod na „otevřená pozice“ by je schoval (review 10. 10.).
+const positionOnlyRejection = (message: string): boolean => ARM_POSITION_REJECTION.test(message)
+  && !/\[ack-incident:/.test(message)
+  && !/nedostupné účty|missing=/i.test(message);
 export function isArmPositionRejection(reason: unknown): boolean {
-  return reason instanceof Error && ARM_POSITION_REJECTION.test(reason.message);
+  return reason instanceof Error && positionOnlyRejection(reason.message);
 }
 
 export function copierArmRejection(reason: unknown): string | null {
   if (reason instanceof CopierArmBlockedError) return reason.message;
   if (!(reason instanceof Error)) return null;
   const message = reason.message.replace(/\s+/g, ' ').trim();
-  if (ARM_POSITION_REJECTION.test(message)) {
+  if (positionOnlyRejection(message)) {
     return 'Kontrola u brokera našla na některém účtu skupiny otevřenou pozici nebo čekající příkaz. Nic se nezapnulo. Až bude skupina flat, zapni znovu.';
   }
   if (/\[ack-incident:[^\]]+\]/.test(message)) {

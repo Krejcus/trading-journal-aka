@@ -520,13 +520,15 @@ const EMPTY_SYNC_PAUSES: ReadonlyMap<number, AccountSyncPause> = new Map();
 /**
  * Etapa 2: followeři „mimo synchron“ — broker odmítl vstup nebo se jim SL/TP
  * vyplnil dřív než leaderovi. Vynechají zbytek obchodu a k dalšímu se vrátí
- * sami; ostatní kopírují dál. Pauzy patří execution skupině, proto se kontext
- * plní jen kolem ní (jinde zůstane prázdný).
+ * sami; ostatní kopírují dál. Pauzy patří execution skupině a dávají smysl
+ * jen při zapnuté kopírce: durable pauza přežije DISARM i restart, a „ostatní
+ * kopírují dál“ by u vypnuté kopírky byla nepravda. Kontext se proto plní jen
+ * kolem zapnuté execution skupiny (jinde zůstane prázdný).
  */
 const AccountSyncPauseContext = React.createContext<ReadonlyMap<number, AccountSyncPause>>(EMPTY_SYNC_PAUSES);
-const useAccountSyncPause = (accountId: number | null | undefined, isLeader: boolean) => {
+const useAccountSyncPause = (row: { accountId?: number | null; isLeader: boolean; mode?: string }) => {
   const pauses = React.useContext(AccountSyncPauseContext);
-  return accountId == null || isLeader ? undefined : pauses.get(accountId);
+  return row.accountId == null || row.isLeader || row.mode === 'off' ? undefined : pauses.get(row.accountId);
 };
 
 /** Uživatelé, jejichž cloudová knihovna skupin se v této session už načetla.
@@ -1886,17 +1888,19 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   // a nebylo by poznat, co se kam posunulo.
   useFlipReorder(orderedGroups.map(group => group.id).join('|'));
 
-  const requestAccountFlatten = (group: CopyGroupConfig, accountId: number) => {
+  const requestAccountFlatten = (group: CopyGroupConfig, accountId: number, options: { ordersOnly?: boolean } = {}) => {
     const followerInRunningTrade = copierArmed
       && group.id === executionGroupId
       && group.followers.some(follower => follower.accountId === accountId);
     setPendingAction({
-      title: followerInRunningTrade ? 'Zavřít účet jen pro tento obchod?' : 'Flatten účet?',
+      title: followerInRunningTrade ? 'Zavřít účet jen pro tento obchod?' : options.ordersOnly ? 'Zrušit příkazy na účtu?' : 'Flatten účet?',
       detail: followerInRunningTrade
         ? 'Zavře pouze potvrzenou kopii a její čekající příkazy na tomto followerovi. Ostatní účty pokračují; účet se automaticky vrátí až po flat celé skupiny bez aktivních příkazů.'
-        : 'Připraví uzavření všech otevřených pozic pouze na tomto účtu a kopírku z bezpečnostních důvodů vypne.',
+        : options.ordersOnly
+          ? 'Zruší čekající příkazy na tomto účtu (případnou pozici by zavřel taky) a kopírku z bezpečnostních důvodů vypne.'
+          : 'Připraví uzavření všech otevřených pozic pouze na tomto účtu a kopírku z bezpečnostních důvodů vypne.',
       accountIds: [accountId],
-      confirmLabel: followerInRunningTrade ? 'Zavřít jen tento účet' : 'Flatten',
+      confirmLabel: followerInRunningTrade ? 'Zavřít jen tento účet' : options.ordersOnly ? 'Zrušit příkazy' : 'Flatten',
       danger: true,
       command: followerInRunningTrade
         ? { type: 'flatten-follower-trade', groupId: group.id, accountId, operationId: manualOperationId() }
@@ -2120,7 +2124,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               const selected = group.id === executionGroupId;
               const armed = selected && copierArmed;
               return (
-                <AccountSyncPauseContext.Provider key={group.id} value={selected ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
+                <AccountSyncPauseContext.Provider key={group.id} value={armed ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
                 <CompactGroupCard
                   key={group.id}
                   group={group}
@@ -2212,7 +2216,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         ? `live-island-group live-island-group-${islandModel.tone}`
                         : undefined}
                     >
-                      <AccountSyncPauseContext.Provider value={selected ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
+                      <AccountSyncPauseContext.Provider value={armed ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
                       <GroupRow
                         group={group} rows={rows} armed={armed}
                         dailyPnlPending={dailyPnlPending}
@@ -2411,23 +2415,30 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           saving={busyCommand != null || groupSaveBusy}
         />
       )}
-      {pendingArmBlockGroupId && !pendingAction && (() => {
+      {/* Když se skupina mezitím zapnula (jiné zařízení), průvodce už neplatí. */}
+      {pendingArmBlockGroupId && !pendingAction && !(copierArmed && executionGroupId === pendingArmBlockGroupId) && (() => {
         const blockGroup = groups.find(group => group.id === pendingArmBlockGroupId)
           ?? (runtimeGroup?.id === pendingArmBlockGroupId ? runtimeGroup : null);
         if (!blockGroup) return null;
         const accounts = buildArmPositionBlock(blockGroup, accountsById, orders, accountId => redactAccountName(
           accountsById.get(accountId)?.name ?? accountLabel(accountId, blockGroup.id), redactNames, redaction,
         ));
+        const blockName = (accountId: number) => redactAccountName(
+          accountsById.get(accountId)?.name ?? accountLabel(accountId, blockGroup.id), redactNames, redaction,
+        );
         return (
           <ArmPositionBlockDialogPortal
             groupName={blockGroup.name}
             accounts={accounts}
+            unverifiedNames={armBlockUnverifiedAccounts(blockGroup, accountsById).map(blockName)}
             busy={busyCommand != null}
             onClose={() => setPendingArmBlockGroupId(null)}
             onCloseAccount={accountId => {
               reopenArmBlockRef.current = blockGroup.id;
               setPendingArmBlockGroupId(null);
-              requestAccountFlatten(blockGroup, accountId);
+              requestAccountFlatten(blockGroup, accountId, {
+                ordersOnly: !accounts.some(account => account.accountId === accountId && account.positions.length > 0),
+              });
             }}
             onArm={() => {
               setPendingArmBlockGroupId(null);
@@ -3345,13 +3356,18 @@ export const AccountSyncPauseBanner = ({ rows, eligibilityByAccount, tradeCutsBy
   const pauses = React.useContext(AccountSyncPauseContext);
   // Stejná přednost jako v řádku: ruční vyřazení, DLL a breach pauzu přebíjí.
   const paused = rows.flatMap(row => {
-    if (row.isLeader || row.accountId == null || tradeCutsByAccount.has(row.accountId)) return [];
+    if (row.isLeader || row.mode === 'off' || row.accountId == null || tradeCutsByAccount.has(row.accountId)) return [];
     if ((eligibilityByAccount.get(row.accountId)?.state ?? 'active') !== 'active') return [];
     const pause = pauses.get(row.accountId);
     return pause ? [{ row, pause }] : [];
   });
   if (paused.length === 0) return null;
   const single = paused.length === 1 ? paused[0] : null;
+  // „K dalšímu se připojí sám“ platí jen pro flat účet; pauza se uvolní až
+  // s důkazem flat. Otevřenou pozici na pozastaveném účtu kopírka neřídí.
+  const holdingNames = paused
+    .filter(({ row }) => row.account?.positions.some(position => position.netPosition !== 0))
+    .map(({ row }) => redactAccountName(row.name, redactNames, redaction));
   const singleName = single ? redactAccountName(single.row.name, redactNames, redaction) : '';
   return (
     <div role="status" data-testid="account-sync-pause-banner" className="border-t border-amber-500/25 bg-amber-500/[0.07] px-3 py-2.5">
@@ -3365,10 +3381,15 @@ export const AccountSyncPauseBanner = ({ rows, eligibilityByAccount, tradeCutsBy
               {single.pause.reasonCode === 'protective-filled-early'
                 ? <>Účtu <b className="text-[var(--text-primary)]">{singleName}</b> se vyplnil stop nebo target dřív než leaderovi</>
                 : <>Účtu <b className="text-[var(--text-primary)]">{singleName}</b> broker odmítl vstup</>}
-              {' '}({formatClockTime(single.pause.pausedAt)}). Zbytek tohoto obchodu vynechá a k dalšímu se připojí sám. Ostatní kopírují dál.
+              {' '}({formatClockTime(single.pause.pausedAt)}). {holdingNames.length > 0
+                ? 'Drží ale otevřenou pozici, kterou kopírka neřídí — zkontroluj ji.'
+                : 'Zbytek tohoto obchodu vynechá a k dalšímu se připojí sám.'} Ostatní kopírují dál.
             </>
           : <>
-              {paused.map(({ row }) => redactAccountName(row.name, redactNames, redaction)).join(', ')} vynechají zbytek tohoto obchodu a k dalšímu se připojí samy. Ostatní kopírují dál.
+              {paused.map(({ row }) => redactAccountName(row.name, redactNames, redaction)).join(', ')} vynechají zbytek tohoto obchodu.
+              {holdingNames.length > 0
+                ? ` Otevřenou pozici, kterou kopírka neřídí, drží ${holdingNames.join(', ')} — zkontroluj ji.`
+                : ' K dalšímu obchodu se připojí samy.'} Ostatní kopírují dál.
             </>}
       </p>
     </div>
@@ -3446,7 +3467,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   // s pomlčkami pod sebou vypadá jako rozbitá data.
   const quiet = daily == null && a != null && liveDayReadAnswered(a, Date.now(), dailyPnlPending);
   // Pauza „mimo synchron“ ustoupí silnějším stavům (ruční vyřazení, DLL, breach).
-  const syncPauseRaw = useAccountSyncPause(accountId, row.isLeader);
+  const syncPauseRaw = useAccountSyncPause(row);
   const syncPause = !tradeCut && (eligibility?.state ?? 'active') === 'active' ? syncPauseRaw : undefined;
   const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null || syncPause != null;
   // Stejná pravidla čerstvosti jako desktop: staré čtení nesmí nést zelený
@@ -5119,7 +5140,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   const accountUnavailable = !a && accountId != null;
   // Odchylka = cokoli, co není „živý a způsobilý účet“. Jen ta se vykreslí.
   // „Ověřuji“ drží řádek se štítkem už předem — DLL do něj jen naskočí.
-  const syncPauseRaw = useAccountSyncPause(accountId, row.isLeader);
+  const syncPauseRaw = useAccountSyncPause(row);
   const syncPause = !tradeCut && eligibilityState === 'active' ? syncPauseRaw : undefined;
   const rowHoldsPosition = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const stateIsDeviation = tradeCut != null || syncPause != null || eligibilityState !== 'active' || accountUnavailable || !live;
@@ -5137,7 +5158,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
         detail: 'Účet se v aktuálním snapshotu připojení neobjevil. Zkontroluj připojení firmy v záložce Připojení.' }
     : syncPause
     ? { dotClass: 'bg-amber-500', accentClass: 'text-amber-500', label: 'Mimo synchron',
-        detail: `${accountSyncPauseReasonText(syncPause)}. Účet vynechá zbytek tohoto obchodu a k dalšímu se připojí sám; ostatní kopírují dál.` }
+        detail: `${accountSyncPauseReasonText(syncPause)}. Účet vynechá zbytek tohoto obchodu${rowHoldsPosition ? '; drží otevřenou pozici, kterou kopírka neřídí' : ' a k dalšímu se připojí sám'}. Ostatní kopírují dál.` }
     : live && eligibilityUndecided
     ? VERIFYING_ACCOUNT_TONE
     : live
@@ -6771,13 +6792,28 @@ export function buildArmPositionBlock(
   });
 }
 
+/** Účty skupiny bez čerstvě ověřeného čtení pozic/příkazů — o nich nejde tvrdit „flat“. */
+export function armBlockUnverifiedAccounts(
+  group: CopyGroupConfig,
+  accountsById: ReadonlyMap<number, LiveAccount>,
+): number[] {
+  const ids = [group.leaderAccountId, ...group.followers.filter(follower => follower.mode !== 'off').map(follower => follower.accountId)]
+    .filter((accountId): accountId is number => accountId != null);
+  return [...new Set(ids)].filter(accountId => {
+    const account = accountsById.get(accountId);
+    return !account || !isLiveAccountReadVerified(account, 'positions') || !isLiveAccountReadVerified(account, 'orders');
+  });
+}
+
 const czechOrderCount = (count: number) => (
   count === 1 ? '1 čekající příkaz' : count >= 2 && count <= 4 ? `${count} čekající příkazy` : `${count} čekajících příkazů`
 );
 
-export const ArmPositionBlockDialog = ({ groupName, accounts, busy, onClose, onCloseAccount, onArm }: {
+export const ArmPositionBlockDialog = ({ groupName, accounts, unverifiedNames = [], busy, onClose, onCloseAccount, onArm }: {
   groupName: string;
   accounts: ArmPositionBlockAccount[];
+  /** Účty bez čerstvě ověřených dat — výčet výše pro ně nemusí být úplný. */
+  unverifiedNames?: string[];
   busy: boolean;
   onClose: () => void;
   onCloseAccount: (accountId: number) => void;
@@ -6785,10 +6821,11 @@ export const ArmPositionBlockDialog = ({ groupName, accounts, busy, onClose, onC
   onArm?: () => void;
 }) => {
   const clear = accounts.length === 0;
+  const unverified = unverifiedNames.length > 0;
   const leaderBusy = accounts.some(account => account.isLeader);
   const onlyOrders = !clear && accounts.every(account => account.positions.length === 0);
   const title = clear
-    ? 'Skupina je flat'
+    ? unverified ? 'Čekám na ověřená data účtů' : 'Skupina je flat'
     : onlyOrders ? 'Zapnutí blokuje čekající příkaz' : 'Zapnutí blokuje otevřená pozice';
   return (
     <section role="alertdialog" aria-modal="true" aria-label={title} data-testid="arm-position-block" className="flex w-full max-w-md max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
@@ -6798,7 +6835,9 @@ export const ArmPositionBlockDialog = ({ groupName, accounts, busy, onClose, onC
         </div>
         <h3 className="mt-4 text-lg font-black text-[var(--text-primary)]">{title}</h3>
         <p className="mt-1.5 text-sm leading-relaxed text-[var(--text-secondary)]">
-          {clear
+          {clear && unverified
+            ? `U účtů ${unverifiedNames.join(', ')} teď appka nemá čerstvě ověřené pozice, takže neříká, že je skupina flat. Zapnutí si stav u brokera ověří samo.`
+            : clear
             ? `Ve skupině ${groupName} už nic otevřeného není. Zapnutí ještě jednou ověří účty u brokera.`
             : `Kopírka se zapíná jen když je celá skupina ${groupName} flat a bez čekajících příkazů — jinak by nevěděla, co je její. Nic se nezapnulo.`}
         </p>
@@ -6821,7 +6860,7 @@ export const ArmPositionBlockDialog = ({ groupName, accounts, busy, onClose, onC
                   onClick={() => onCloseAccount(account.accountId)}
                   className="h-9 shrink-0 rounded-lg border border-rose-500/30 bg-rose-500/[0.06] px-3 text-[11px] font-black text-rose-500 disabled:opacity-50"
                 >
-                  {account.positions.length > 0 ? 'Zavřít pozici' : 'Zrušit příkazy'}
+                  {account.positions.length === 0 ? 'Zrušit příkazy' : account.isLeader ? 'Zavřít pozici leadera' : 'Zavřít pozici'}
                 </button>
               </li>
             ))}
@@ -6829,13 +6868,13 @@ export const ArmPositionBlockDialog = ({ groupName, accounts, busy, onClose, onC
         )}
         {leaderBusy && !clear ? (
           <p className="mt-3 rounded-xl border border-blue-500/15 bg-blue-500/[0.055] px-3 py-2.5 text-[11px] font-bold leading-relaxed text-blue-600">
-            Leader je v obchodě. Do běžícího obchodu se kopírka nepřipojuje — dokonči ho a zapni po flat.
+            Leader je v obchodě. Do běžícího obchodu se kopírka nepřipojuje — dokonči ho (nebo ho zavři) a zapni po flat.
           </p>
         ) : null}
       </div>
       <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-3">
         <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Nechat vypnuté</button>
-        {clear && onArm ? <button type="button" onClick={onArm} disabled={busy} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white hover:bg-emerald-500 disabled:opacity-50">Zapnout</button> : null}
+        {clear && onArm ? <button type="button" onClick={onArm} disabled={busy} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white hover:bg-emerald-500 disabled:opacity-50">{unverified ? 'Zkusit zapnout' : 'Zapnout'}</button> : null}
       </div>
     </section>
   );

@@ -88,6 +88,7 @@ export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
 
 /** Per-účtový incident „mimo synchron“ (etapa 2): `account-sync:<accountId>`. */
 const ACCOUNT_SYNC_KEY_PREFIX = 'account-sync:';
+const czechAccounts = (count: number) => `${count} ${count >= 2 && count <= 4 ? 'účty' : 'účtů'}`;
 
 /**
  * ENTRY/EXIT dostane krátké okno pro jediný push už s obrázkem. Po vypršení
@@ -493,32 +494,66 @@ export function evaluateCopierIncidents(options: {
 
     // --- Účet mimo synchron (etapa 2): per účet otevření i návrat ---------
     // Pauza = follower vynechá zbytek leader obchodu; ostatní kopírují dál.
-    // Návrat hlásíme jen při zapnuté kopírce — po DISARM by „zase kopíruje“
-    // byla nepravda, marker se pak jen tiše zavře.
-    const syncPauses = new Map<number, { reasonCode: string; pausedAt: number }>();
-    for (const item of Array.isArray(status.accountSyncPauses) ? status.accountSyncPauses : []) {
-      const pause = item as { accountId?: unknown; reasonCode?: unknown; pausedAt?: unknown };
-      if (typeof pause.accountId !== 'number' || !Number.isSafeInteger(pause.accountId)) continue;
-      syncPauses.set(pause.accountId, { reasonCode: String(pause.reasonCode ?? ''), pausedAt: asNumber(pause.pausedAt) });
-    }
-    for (const [accountId, pause] of syncPauses) {
-      const key = `${ACCOUNT_SYNC_KEY_PREFIX}${accountId}`;
-      const state = activeState(userId, deviceId, key);
-      if (state?.active && state.detail === String(pause.pausedAt)) continue;
-      open(key, String(pause.pausedAt), `Účet ${accountId} mimo synchron`, pause.reasonCode === 'protective-filled-early'
-        ? 'Stop nebo target se vyplnil dřív než u leadera. Vynechá zbytek obchodu, ostatní kopírují dál. Nic nedělej.'
-        : 'Broker odmítl vstup. Vynechá zbytek obchodu, ostatní kopírují dál.');
-    }
-    const syncArmed = asBool(status.armed) && status.shadowMode !== true;
-    for (const row of options.alertStates) {
-      if (row.user_id !== userId || row.device_id !== deviceId || !row.active
-        || !row.incident_key.startsWith(ACCOUNT_SYNC_KEY_PREFIX)) continue;
-      const accountId = Number(row.incident_key.slice(ACCOUNT_SYNC_KEY_PREFIX.length));
-      if (syncPauses.has(accountId)) continue;
+    // Obojí hlásíme jen při zapnuté kopírce: durable pauza přežije DISARM
+    // i restart a „ostatní kopírují dál / zase kopíruje“ by pak byla nepravda.
+    // Starší worker pole neposílá — bez něj nevíme nic, nic se neřeší.
+    if (Array.isArray(status.accountSyncPauses)) {
+      const syncArmed = asBool(status.armed) && status.shadowMode !== true;
+      const syncPauses = new Map<number, { reasonCode: string; pausedAt: number; symbols: string[] }>();
+      for (const item of status.accountSyncPauses) {
+        const pause = item as { accountId?: unknown; symbol?: unknown; reasonCode?: unknown; pausedAt?: unknown };
+        if (typeof pause.accountId !== 'number' || !Number.isSafeInteger(pause.accountId)) continue;
+        const pausedAt = asNumber(pause.pausedAt);
+        const current = syncPauses.get(pause.accountId);
+        const symbol = asText(pause.symbol);
+        // Víc symbolů jednoho účtu: nejstarší pauza určuje marker, aby
+        // přeřazení pole neposlalo zprávu znovu.
+        if (!current || pausedAt < current.pausedAt) {
+          syncPauses.set(pause.accountId, { reasonCode: String(pause.reasonCode ?? ''), pausedAt, symbols: [...(current?.symbols ?? []), ...(symbol ? [symbol] : [])] });
+        } else if (symbol) current.symbols.push(symbol);
+      }
+      const opened: Array<{ key: string; accountId: number; pause: { reasonCode: string; pausedAt: number; symbols: string[] } }> = [];
       if (syncArmed) {
-        resolve(row.incident_key, `Účet ${accountId} zase v synchronu`, 'K dalšímu obchodu leadera se připojí automaticky.');
-      } else {
-        upserts.push({ userId, deviceId, incidentKey: row.incident_key, active: false, detail: null, notified: false });
+        for (const [accountId, pause] of syncPauses) {
+          const key = `${ACCOUNT_SYNC_KEY_PREFIX}${accountId}`;
+          const state = activeState(userId, deviceId, key);
+          if (state?.active && state.detail === String(pause.pausedAt)) continue;
+          opened.push({ key, accountId, pause });
+        }
+      }
+      const returned: Array<{ key: string; accountId: number }> = [];
+      for (const row of options.alertStates) {
+        if (row.user_id !== userId || row.device_id !== deviceId || !row.active
+          || !row.incident_key.startsWith(ACCOUNT_SYNC_KEY_PREFIX)) continue;
+        const accountId = Number(row.incident_key.slice(ACCOUNT_SYNC_KEY_PREFIX.length));
+        if (Number.isSafeInteger(accountId) && syncPauses.has(accountId)) continue;
+        if (syncArmed && Number.isSafeInteger(accountId)) returned.push({ key: row.incident_key, accountId });
+        else upserts.push({ userId, deviceId, incidentKey: row.incident_key, active: false, detail: null, notified: false });
+      }
+      // Jedna zpráva za tick: při hromadném odmítnutí nepřijde N pushů.
+      for (const item of opened) {
+        upserts.push({ userId, deviceId, incidentKey: item.key, active: true, detail: String(item.pause.pausedAt), notified: true });
+      }
+      if (opened.length === 1) {
+        const [{ key, accountId, pause }] = opened;
+        const symbols = pause.symbols.length > 0 ? ` (${[...new Set(pause.symbols)].join(', ')})` : '';
+        notifications.push({ userId, deviceId, incidentKey: key, kind: 'opened',
+          title: `Účet ${accountId} mimo synchron${symbols}`,
+          body: `${pause.reasonCode === 'protective-filled-early' ? 'Stop nebo target se vyplnil dřív než u leadera.' : 'Broker odmítl vstup.'} Vynechá zbytek obchodu, ostatní kopírují dál.` });
+      } else if (opened.length > 1) {
+        notifications.push({ userId, deviceId, incidentKey: opened[0].key, kind: 'opened',
+          title: `${czechAccounts(opened.length)} mimo synchron`,
+          body: `${opened.map(item => item.accountId).join(', ')} vynechají zbytek obchodu, ostatní kopírují dál.` });
+      }
+      for (const item of returned) {
+        upserts.push({ userId, deviceId, incidentKey: item.key, active: false, detail: null, notified: true });
+      }
+      if (returned.length === 1) {
+        notifications.push({ userId, deviceId, incidentKey: returned[0].key, kind: 'resolved',
+          title: `Účet ${returned[0].accountId} zase v synchronu`, body: 'K dalšímu obchodu leadera se připojí automaticky.' });
+      } else if (returned.length > 1) {
+        notifications.push({ userId, deviceId, incidentKey: returned[0].key, kind: 'resolved',
+          title: `${czechAccounts(returned.length)} zase v synchronu`, body: `${returned.map(item => item.accountId).join(', ')} se k dalšímu obchodu leadera připojí automaticky.` });
       }
     }
 
