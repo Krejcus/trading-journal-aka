@@ -631,9 +631,14 @@ existující ochranu.
 - Vynucuje: `setFollowerEnabled(..., { allowOwnExposure: true })` — jen
   `enabled:false`, jen za DISARM, leader flat bez příkazů (stream i dvě REST
   čtení), bez recovery/nejasného outboxu, shodný tvar expozice followera
-  v obou čteních a `copierOwnedExposureReasons(account)` prázdné (neusazené
-  záznamy kopírky, ID z outboxu/links, nedokončená epocha s lineage, pending
-  exposure, nevyřešený příkaz, cut). `excludedForeignFollowerIds()` = vypnutí
+  v obou čteních a `copierOwnedExposureReasons(account, { atExclusion })`
+  prázdné (stejná klasifikace jako „účet bez kopie“ při přepnutí skupiny:
+  neusazené záznamy kopírky, OTEVŘENÝ příkaz s ID kopírky, nedokončená epocha
+  s lineage, pending exposure, nevyřešený/zaseknutý příkaz, cut; při vyřazení
+  navíc globální `liveCopyOpenSince`). Historické ID v outboxu samo o sobě ne
+  — outbox se maže jen přepnutím skupiny. Status nese
+  `excludedForeignFollowers` (UI podle něj, ne podle konfigurace) a
+  `participatingGroupFlat` (obnova socketů). `excludedForeignFollowerIds()` = vypnutí
   followeři bez stopy kopírky; jejich expozice se nepočítá do
   `groupIsFlat` (cooldown, day-lock, stopa kopie, managementOnly), divergence,
   working orders ani `allFlat` v preflightu/reconciliaci/`arm()`; leader-flat
