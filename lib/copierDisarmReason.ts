@@ -70,35 +70,35 @@ export const COPIER_DISARM_HISTORY_LIMIT = 20;
 const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }> = {
   'connection-removed': {
     title: 'Kopírka se vypnula, protože bylo odpojeno připojení propfirmy.',
-    nextStep: 'Připoj propfirmu znovu v Připojeních, nebo její účty odeber ze skupiny; potom spusť Kontrolu pozic.',
+    nextStep: 'Připoj propfirmu znovu v Připojeních, nebo její účty odeber ze skupiny; potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'config-change': {
     title: 'Kopírka se vypnula kvůli uložení změny skupiny.',
     nextStep: 'Zkontroluj uložené účty a pravidla; nový ARM zapni až po ověření skupiny.',
   },
   'reconcile-request': {
-    title: 'Kopírka se vypnula před ruční Kontrolou pozic.',
+    title: 'Kopírka se vypnula kvůli kontrole pozic.',
     nextStep: 'Počkej na dokončení read-only kontroly a nový ARM zapni jen po čistém výsledku.',
   },
   'prop-reserve': {
     title: 'Kopírka zůstala vypnutá kvůli nedostatečné rezervě followera nad prop floorem.',
-    nextStep: 'Ověř aktuální rezervu a denní P&L účtu u prop firmy; po opravě nastavení spusť Kontrolu pozic.',
+    nextStep: 'Ověř aktuální rezervu a denní P&L účtu u prop firmy; po opravě nastavení kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'route-gap-divergence': {
     title: 'Stav účtu se během obměny broker spojení změnil mimo stream kopírky.',
-    nextStep: 'Ověř pozice a working příkazy dotčené route v Tradovate a potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř pozice a working příkazy dotčené route v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'host-sleep': {
     title: 'Mac se uspal nebo přestal odpovídat; kopírka zůstala bezpečně vypnutá.',
-    nextStep: 'Otevři Tradovate, ověř pozice a working příkazy a potom spusť Kontrolu pozic.',
+    nextStep: 'Otevři Tradovate, ověř pozice a working příkazy a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'leader-flat-read-failed': {
     title: 'Dozor po flat leaderovi nedostal včas spolehlivý broker snapshot.',
-    nextStep: 'Oveř pozice leadera i followerů v Tradovate a potom spusť Kontrolu pozic.',
+    nextStep: 'Oveř pozice leadera i followerů v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'unexplained-position-divergence': {
     title: 'Pozice followerů se odchýlily od očekávané kopie.',
-    nextStep: 'Ověř pozice a ochranné příkazy všech dotčených účtů v Tradovate, potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř pozice a ochranné příkazy všech dotčených účtů v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'prop-limit': {
     title: 'Prop limit zablokoval nebo ukončil kopírování na účtu.',
@@ -106,19 +106,19 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   },
   'follower-position-mismatch': {
     title: 'Pozice followera nesouhlasí s očekávaným násobkem leadera.',
-    nextStep: 'Otevři Tradovate, porovnej pozice a potom spusť Kontrolu pozic.',
+    nextStep: 'Otevři Tradovate, porovnej pozice a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'follower-transition-unverified': {
     title: 'Follower má neočekávanou pozici a její vznik nelze bezpečně přiřadit.',
-    nextStep: 'Ověř pozici i ochranné příkazy v Tradovate a potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř pozici i ochranné příkazy v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'follower-position-check-failed': {
     title: 'Broker nepotvrdil aktuální pozici followera.',
-    nextStep: 'Zkontroluj spojení a skutečný stav účtu v Tradovate, potom spusť Kontrolu pozic.',
+    nextStep: 'Zkontroluj spojení a skutečný stav účtu v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'leader-flat-follower-open': {
     title: 'Leader je flat, ale alespoň jedna kopie zůstala otevřená.',
-    nextStep: 'Ověř všechny follower pozice a ochranné příkazy v Tradovate, potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř všechny follower pozice a ochranné příkazy v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'leader-flat-guard-failed': {
     title: 'Ochranné zavření kopií při flat leaderovi nebylo potvrzené.',
@@ -126,15 +126,15 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   },
   'modify-unconfirmed-filled': {
     title: 'Změnu příkazu nešlo potvrdit, protože objednávka mezitím skončila jako filled.',
-    nextStep: 'Ověř výslednou pozici a ochranné příkazy v Tradovate, potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř výslednou pozici a ochranné příkazy v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'flat-sweep-deadline': {
     title: 'Úklid ochranných příkazů po zploštění překročil bezpečný časový limit.',
-    nextStep: 'Ověř v Tradovate, že nezůstal working SL nebo target, a potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř v Tradovate, že nezůstal working SL nebo target a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'flat-sweep-failed': {
     title: 'Úklid ochranných příkazů po zploštění se nepodařilo potvrdit.',
-    nextStep: 'Ověř v Tradovate, že nezůstal working SL nebo target, a potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř v Tradovate, že nezůstal working SL nebo target a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'protective-stop-retained': {
     title: 'Follower drží svůj SL, který leader zrušil — rozhodni ručně v Tradovate.',
@@ -146,23 +146,23 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   },
   'protective-order-incomplete': {
     title: 'Ochranné SL a target se nepodařilo bezpečně spárovat.',
-    nextStep: 'Ověř v Tradovate pozici i obě ochranné nohy a potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř v Tradovate pozici i obě ochranné nohy a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'sequence-broken': {
     title: 'Události příkazů přišly v pořadí, které nelze bezpečně zpracovat.',
-    nextStep: 'Počkej na ustálení broker stavu a potom spusť Kontrolu pozic.',
+    nextStep: 'Počkej na ustálení broker stavu a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'order-rejected': {
     title: 'Broker odmítl alespoň jeden kopírovaný příkaz.',
-    nextStep: 'Ověř odmítnutý účet, pozici a ochranné příkazy v Tradovate, potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř odmítnutý účet, pozici a ochranné příkazy v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'order-blocked': {
     title: 'Bezpečnostní pravidlo zablokovalo kopírovaný příkaz.',
-    nextStep: 'Ověř konkrétní blokaci v technickém detailu a potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř konkrétní blokaci v technickém detailu a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'oversized-broker-order': {
     title: 'Broker hlásí větší objednávku, než kopírka povolila.',
-    nextStep: 'Ověř objednávku a pozici v Tradovate a potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř objednávku a pozici v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
   'leader-order-limit': {
     title: 'Byl překročen bezpečnostní limit nových leader příkazů pro tuto session.',
@@ -178,7 +178,7 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   },
   'transport-lost': {
     title: 'Kopírka ztratila spojení s brokerem.',
-    nextStep: 'Zkontroluj Tradovate a po obnovení spojení spusť Kontrolu pozic.',
+    nextStep: 'Otevřené kopie drží u brokera své SL/TP. Po obnovení spojení si kopírka stav účtů ověří sama; znovu ji zapneš přepínačem skupiny.',
   },
   'arm-expired': {
     title: 'Platnost ostrého ARM skončila.',
@@ -186,7 +186,7 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   },
   'kill-switch': {
     title: 'Kill switch nouzově zastavil kopírku.',
-    nextStep: 'Ověř účty v Tradovate; nový start vyžaduje restart runtime a novou kontrolu pozic.',
+    nextStep: 'Ověř účty v Tradovate; nový start vyžaduje restart runtime.',
   },
   manual: {
     title: 'Kopírka byla vypnuta ručně.',
@@ -194,7 +194,7 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   },
   unknown: {
     title: 'Kopírka se bezpečně vypnula z neznámého technického důvodu.',
-    nextStep: 'Ověř pozice a working příkazy v Tradovate a potom spusť Kontrolu pozic.',
+    nextStep: 'Ověř pozice a working příkazy v Tradovate a potom kopírku znovu zapni — zapnutí si stav u brokera ověří samo.',
   },
 };
 

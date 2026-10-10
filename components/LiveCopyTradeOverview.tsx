@@ -6669,7 +6669,7 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
 
       {state.error ? (
         <div role="alert" className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2.5 text-xs font-bold leading-relaxed text-rose-600">
-          {state.error} Změna nebyla uložena. Spusť Kontrolu pozic a zkus znovu.
+          {state.error} Změna nebyla uložena. Zkontroluj účty a zkus to znovu.
         </div>
       ) : null}
 

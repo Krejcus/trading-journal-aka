@@ -72,7 +72,7 @@ export const LiveRiskTab = ({
       status.killSwitch ? 'Je aktivní nouzové zastavení.' : null,
       status.started === false ? 'Worker nemá spuštěný běh kopírky.' : null,
       !status.connected ? 'Worker není připojený k brokerovi. Počkej na obnovení spojení.' : null,
-      status.reconciliationRequired ? `Worker vyžaduje kontrolu stavu účtů. ${status.connected ? 'Spusť Kontrolu pozic.' : 'Po obnovení spojení spusť Kontrolu pozic.'}` : null,
+      status.reconciliationRequired ? `Worker ještě ověřuje stav účtů. ${status.connected ? 'Zapnutí si ho ověří samo.' : 'Po obnovení spojení si ho ověří sám.'}` : null,
       status.divergentAccounts?.length ? 'Pozice účtů nejsou v souladu. Před dalším kopírováním je potřeba ověření.' : null,
       status.stuckOutbox ? 'Výsledek odeslaných příkazů není potvrzený. Je potřeba prověřit nevyřešené operace.' : null,
       status.unverifiableFollowerOwnership?.length ? 'Vlastnictví kopií není ověřené. Je potřeba kontrola účtů.' : null,
