@@ -102,6 +102,20 @@ describe('etapa 2 — odmítnutý vstup followera', () => {
     }
   });
 
+  it('Kontrola pozic nevykáže pozastavený účet s ručním příkazem jako čistý (kolo 6)', async () => {
+    const { controller, follower, leaderTrade } = await bootRejected();
+    try {
+      await leaderTrade('e1', 'Buy', 1);
+      // Uživatel na pozastaveném účtu zadá ruční limitní příkaz.
+      await follower.placeOrder({ tag: 'manual-200', accountId: 200, symbol: SYM, side: 'Sell', orderType: 'Limit', quantity: 1, limitPrice: 31_000 } as never);
+      const result = await controller.reconcile();
+      expect(result.workingOrderAccounts).not.toContain(200);
+      expect(result.pausedWorkingOrderAccounts).toEqual([200]);
+    } finally {
+      controller.stop();
+    }
+  });
+
   it('ruční pozice na pozastaveném účtu: leader exit na ni nic nepošle', async () => {
     const { controller, follower, leaderTrade, requestsFor } = await bootRejected();
     try {

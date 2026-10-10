@@ -583,6 +583,12 @@ export interface CopierRuntimeController {
     workingOrderAccounts: number[];
     authoritativelyClean: boolean;
     missingAccounts: number[];
+    /**
+     * Etapa 2: pozastavené účty s čekajícím (ručním) příkazem na pozastaveném
+     * symbolu. Skupinu neblokují (`authoritativelyClean` se týká skupiny bez
+     * pozastavených účtů), ale tyto účty čisté nejsou.
+     */
+    pausedWorkingOrderAccounts?: number[];
   }>;
   /**
    * Autoritativně ověří jediný účet u brokera bez změny execution skupiny.
@@ -5776,6 +5782,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       invalidateReconciliation();
       cancelFollowerCutBackgroundLanes(`flatten:${operationId}`);
     }
+    // Etapa 2 (kolo 6): cílený flatten smí z cache mazat jen symboly účtu,
+    // na kterém během operace nepřišla žádná nová broker událost.
+    const observationAtStart = new Map(accountIds.map(accountId => [
+      accountId, tradeObservationVersionByAccount.get(accountId) ?? 0,
+    ]));
     const protectedAccountIds = await settleFollowerCutBackgroundAccounts(accountIds);
     const writableAccountIds = accountIds.filter(accountId => !protectedAccountIds.has(accountId));
     const writableTargets = targets?.filter(target => !protectedAccountIds.has(target.accountId));
@@ -5870,6 +5881,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           positionsByAccount.set(accountId, new Map());
           continue;
         }
+        // Novější Position událost během operace už cache aktualizovala;
+        // starší „flat“ z flattenu ji nesmí přepsat.
+        if ((tradeObservationVersionByAccount.get(accountId) ?? 0) !== observationAtStart.get(accountId)) continue;
         const cached = new Map(positionsByAccount.get(accountId) ?? []);
         for (const target of writableTargets!) {
           if (target.accountId === accountId) cached.delete(target.symbol);
@@ -7051,6 +7065,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const flattenOperationId = cut.operationId
           ?? `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`;
         const backgroundStore = createBackgroundFlattenStore(flattenOperationId);
+        const cutObservationAtStart = tradeObservationVersionByAccount.get(accountId) ?? 0;
         const processed = await processManualFlatten({
           runtime: isolatedRuntime,
           broker: background.broker,
@@ -7105,10 +7120,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const closedScope = followerCutTargetSymbols.get(accountId);
         if (closedScope) {
           // Cílený close ověřil jen vlastněné symboly; ruční expozice na
-          // pozastaveném symbolu v cache zůstává (working flag také).
-          const cached = new Map(positionsByAccount.get(accountId) ?? []);
-          for (const symbol of closedScope) cached.delete(symbol);
-          positionsByAccount.set(accountId, cached);
+          // pozastaveném symbolu v cache zůstává (working flag také). Nová
+          // broker událost během operace má přednost před jejím „flat“.
+          if ((tradeObservationVersionByAccount.get(accountId) ?? 0) === cutObservationAtStart) {
+            const cached = new Map(positionsByAccount.get(accountId) ?? []);
+            for (const symbol of closedScope) cached.delete(symbol);
+            positionsByAccount.set(accountId, cached);
+          }
         } else {
           workingOrderAccounts.delete(accountId);
           positionsByAccount.set(accountId, new Map());
@@ -14012,6 +14030,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   type ReconciliationResult = {
     divergentAccounts: number[];
     workingOrderAccounts: number[];
+    pausedWorkingOrderAccounts: number[];
     authoritativelyClean: boolean;
     missingAccounts: number[];
     generationUnchanged: boolean;
@@ -14417,6 +14436,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             && activeAccountSyncPause(item.accountId, order.symbol) == null)
         )).map(item => item.accountId),
       );
+      // …ale nesmí se vykázat jako čistý: hlásí se zvlášť (review kola 6).
+      const pausedWorkingOrderAccounts = snapshots.filter(item => (
+        item.orders.some(order => isOpenOrderStatus(order.status)
+          && activeAccountSyncPause(item.accountId, order.symbol) != null)
+      )).map(item => item.accountId);
       // Reaktivace eligibility: JEDINÉ místo, kde se DLL/unverifiable vrací
       // do 'active' — autoritativní snapshot účtu se povedl. Čas sám nikdy
       // nestačí (rollEligibilityToNewSession umí jen zpřísnit na
@@ -14688,6 +14712,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return {
         divergentAccounts: [...divergent],
         workingOrderAccounts: [...workingOrderAccounts],
+        pausedWorkingOrderAccounts,
         authoritativelyClean,
         missingAccounts,
         generationUnchanged,
@@ -15791,6 +15816,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         workingOrderAccounts: result.workingOrderAccounts,
         authoritativelyClean: result.authoritativelyClean,
         missingAccounts: result.missingAccounts,
+        ...(result.pausedWorkingOrderAccounts.length > 0
+          ? { pausedWorkingOrderAccounts: result.pausedWorkingOrderAccounts }
+          : {}),
       };
     },
     async verifyAccountEligibility(accountId) {
