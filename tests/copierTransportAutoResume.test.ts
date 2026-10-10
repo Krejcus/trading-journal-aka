@@ -297,4 +297,17 @@ describe('automatické pokračování po výpadku — jádro', () => {
     expect(controller.checkTransportResume?.()).toMatchObject({ kind: 'decline', reason: 'výpadek trval přes hodinu' });
     controller.stop();
   });
+
+  it('jen čekající vstup leadera bez pozice při výpadku = hned nepokračuje (nic se nedrží)', async () => {
+    const h = await harness();
+    await h.armLive();
+    h.broker.emitEvent({ type: 'order', order: {
+      tag: '', brokerOrderId: 'resting', accountId: 100, symbol, side: 'Buy', orderType: 'Limit', quantity: 1,
+      filledQuantity: 0, limitPrice: 1, status: 'working', sourceVersion: '1', updatedAt: 1,
+    } });
+    await h.settle();
+    await h.outage();
+    expect(h.controller.status().transportResume).toMatchObject({ phase: 'declined', reason: expect.stringContaining('bez otevřené pozice') });
+    h.controller.stop();
+  });
 });

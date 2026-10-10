@@ -361,8 +361,9 @@ existující ochranu.
   `autoResumeAttempt`; serverová pojistka `admitCopierAutoResume`
   (`server/tradovateCopierCommandRelay.ts`, akce relay `auto-resume-admit`).
 - Podmínky (všechny): disarm triggerem `transport` z živého ARM; skupina byla
-  při výpadku flat bez příkazů (zapojené účty), bez incidentu a mimo
-  managementOnly; mezitím žádné jiné vypnutí, ruční DISARM, kill switch,
+  při výpadku flat bez příkazů (zapojené účty) NEBO v obchodu, který první
+  obnova přijala jako „držené kopie“ (viz níže); bez incidentu a mimo
+  managementOnly; čekající příkaz bez pozice = odmítnout; mezitím žádné jiné vypnutí, ruční DISARM, kill switch,
   uspání Macu, incident ani změna konfigurace; leader v mezeře neobchodoval
   (denní statistiky beze změny, žádný příkaz leadera s časem ≥
   min(výpadek − 30 s, poslední heartbeat − 5 s) ani s vyšším ID; bez
@@ -382,7 +383,8 @@ existující ochranu.
 - Slepé okno: tichý výpadek se pozná až po idle timeoutu a heartbeat může
   dodat socket followera — příkaz leadera s časem ≥ min(výpadek − 30 s,
   poslední heartbeat − 5 s) i jakýkoli fill leadera v resync `gapFills` =
-  odmítnout. Ruční Flatten (účet / All / follower) a waive epizodu ruší;
+  odmítnout. Pozor: router při skutečném reconnectu `resync` neposílá, takže
+  `gapFills` je jen doplněk; rozhodují statistiky, čas a ID příkazů. Ruční Flatten (účet / All / follower) a waive epizodu ruší;
   zámek dne a obchodní okno ji ruší, cooldown jen odkládá. Stav `resumed`
   se po jakémkoli dalším vypnutí ve statusu nehlásí; selhání po zapnutí ho
   přepíše na `declined`. Dedup stejné chyby ve `failClosed` platí jen za už
@@ -395,17 +397,23 @@ existující ochranu.
   brzda zařazená až PO odpovědi pojistky a před `arm()` (~latence relay)
   se provede až po zapnutí — stejně jako u ručního ON (INV-ARM-03).
 - Otevřený obchod při výpadku (10. 10. 2026): první obnova přijme stav jako
-  „držené kopie“ (bez incidentu), pokud nejsou divergence ani chybějící
-  lineage a jediné pracovní příkazy jsou ochranné nohy — u followera ID
-  kopírky (outbox/links), u leadera jeho vlastní; každý jen snižuje pozici
-  (opačná strana, zbytek ≤ pozice, ne Market). Jinak incident jako dřív.
-  Kopírka zůstává DISARMED, posuny SL leadera se nezrcadlí, ARM blokuje
-  `pendingConnectionRecovery`. Po vyřešení leader-flat guardu se obnova
-  spustí znovu (read-only); čistá ji dokončí. Automatické pokračování jen
-  když první obnova potvrdila živý obchod a jeho konec byl pozorován živě
-  (nový výchozí bod statistik a ID příkazů, 60min strop od něj); obchod
-  ukončený už během výpadku nebo kopie, které skončily jinak než leader =
-  odmítnout (zapíná člověk).
+  „držené kopie“ (bez incidentu) jen když nejsou divergence ani chybějící
+  lineage a `protectiveHoldProblem()` nic nenajde: leader má jen příkazy
+  snižující pozici; každý zapojený follower s pozicí má jen ochranné nohy
+  kopírky (ID z outboxu/links), každou snižující, a pro každou třídu
+  (stop / target), kterou má leader, součet zbytků přesně = pozice; žádná
+  třída pozici nepřesáhne. Jinak incident jako dřív. Kopírka zůstává
+  DISARMED, posuny SL leadera se nezrcadlí, ARM blokuje
+  `pendingConnectionRecovery`; po vyřešení leader-flat guardu se obnova
+  spustí znovu (read-only) a čistá ji dokončí.
+  Automatické pokračování z drženého obchodu: první obnova musí potvrdit
+  živý obchod a deník leadera musí sedět s jeho pozicí bez nového ID
+  příkazu (jinak = obchodoval v mezeře, odmítnout); další výpadek během
+  držení = odmítnout; konec obchodu pozorovaný živě s deníkem flat (bez
+  otevřených a nepotvrzených lotů) = nový výchozí bod statistik a ID,
+  pak běžné kontroly a 60min strop od něj. Samotné držení omezuje jen konec
+  původního zapnutí (nejvýš do konce session). Obchod ukončený už během
+  výpadku nebo kopie skončené jinak než leader = odmítnout.
 - Hlídá test: `tests/copierTransportAutoResume.test.ts`,
   `tests/copierArmSelfCheck.test.ts`, `tests/copierAutoResumeAdmission.test.ts`,
   `tests/copierIncidentWatchdog.test.ts`.

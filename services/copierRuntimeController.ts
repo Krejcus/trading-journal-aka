@@ -4643,6 +4643,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         )
       : undefined;
     if (failure.transportLost && disarm && wasLiveArmed) beginTransportResume(disarm.at);
+    else if (failure.transportLost && !wasArmed) noteDisconnectWhileResumeWaiting();
     gate = {
       ...gate,
       armed: false,
@@ -8913,23 +8914,64 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * risk-redukčně zavřou. Nikdy se sám neARMuje.
    */
   /**
-   * Výpadek uprostřed obchodu (10. 10. 2026): pracovní příkazy účtu jsou
-   * jen ochranné nohy otevřené pozice — u followera prokazatelně příkazy
-   * kopírky (ID z outboxu/links), u leadera jeho vlastní SL/TP. Každý musí
-   * pozici jen snižovat (opačná strana, množství ≤ pozice); Market ne.
+   * Výpadek uprostřed obchodu (10. 10. 2026): smí se držet bez incidentu jen
+   * když celá skupina vypadá jako chráněný obchod. Leader: každý pracovní
+   * příkaz pozici jen snižuje (jeho vlastní SL/TP). Zapojený follower
+   * s pozicí: jen ochranné nohy kopírky (ID z outboxu/links), každá snižuje,
+   * a pro každou třídu (stop / target), kterou má leader, součet zbytků
+   * přesně = pozice; žádná třída nesmí pozici přesáhnout (dvě samostatné
+   * stopky by followera otočily). Vrací důvod, proč držet nejde, nebo null.
    */
-  const workingOrdersAreProtectiveHold = (accountId: number): boolean => {
-    const orders = [...(liveOrdersByAccount.get(accountId)?.values() ?? [])]
+  const protectiveHoldProblem = (): string | null => {
+    const leaderAccountId = group.leaderAccountId!;
+    const classOf = (order: BrokerOrder): 'stop' | 'target' | null => (
+      order.orderType === 'Limit' ? 'target'
+        : order.orderType === 'Stop' || order.orderType === 'StopLimit' ? 'stop' : null
+    );
+    const openOrders = (accountId: number) => [...(liveOrdersByAccount.get(accountId)?.values() ?? [])]
       .filter(order => isOpenOrderStatus(order.status));
-    if (orders.length === 0) return true;
-    const copierIds = accountId === group.leaderAccountId ? null : new Set(controllerCopyOrderIds(accountId));
-    return orders.every(order => {
+    const remaining = (order: BrokerOrder) => Math.max(0, order.quantity - order.filledQuantity);
+    const reduces = (accountId: number, order: BrokerOrder) => {
       const net = positionsByAccount.get(accountId)?.get(order.symbol) ?? 0;
-      if (net === 0 || order.orderType === 'Market') return false;
-      if (copierIds && !copierIds.has(order.brokerOrderId)) return false;
-      const reducingSide = net > 0 ? 'Sell' : 'Buy';
-      return order.side === reducingSide && order.quantity - order.filledQuantity <= Math.abs(net);
-    });
+      return net !== 0 && classOf(order) != null
+        && order.side === (net > 0 ? 'Sell' : 'Buy') && remaining(order) <= Math.abs(net);
+    };
+    const leaderOrders = openOrders(leaderAccountId);
+    if (leaderOrders.some(order => !reduces(leaderAccountId, order))) return 'leader má příkaz, který pozici nesnižuje';
+    const leaderClasses = new Map<string, Set<'stop' | 'target'>>();
+    for (const order of leaderOrders) {
+      const classes = leaderClasses.get(order.symbol) ?? new Set();
+      classes.add(classOf(order)!);
+      leaderClasses.set(order.symbol, classes);
+    }
+    const excluded = excludedForeignFollowerIds();
+    for (const follower of group.followers) {
+      if (excluded.has(follower.accountId)) continue;
+      const orders = openOrders(follower.accountId);
+      const positions = positionsByAccount.get(follower.accountId) ?? new Map<string, number>();
+      if (orders.length === 0 && [...positions.values()].every(quantity => quantity === 0)) continue;
+      const copierIds = new Set(controllerCopyOrderIds(follower.accountId));
+      if (orders.some(order => !copierIds.has(order.brokerOrderId) || !reduces(follower.accountId, order))) {
+        return `follower ${follower.accountId} má příkaz mimo ochranné nohy kopírky`;
+      }
+      for (const [symbol, net] of positions) {
+        if (net === 0) continue;
+        const sums = new Map<'stop' | 'target', number>();
+        for (const order of orders.filter(item => item.symbol === symbol)) {
+          const orderClass = classOf(order)!;
+          sums.set(orderClass, (sums.get(orderClass) ?? 0) + remaining(order));
+        }
+        if ([...sums.values()].some(sum => sum > Math.abs(net))) {
+          return `follower ${follower.accountId} má na ${symbol} víc ochranných nohou než pozice`;
+        }
+        for (const orderClass of leaderClasses.get(symbol) ?? []) {
+          if ((sums.get(orderClass) ?? 0) !== Math.abs(net)) {
+            return `follower ${follower.accountId} nemá na ${symbol} ${orderClass === 'stop' ? 'stop' : 'target'} jako leader`;
+          }
+        }
+      }
+    }
+    return null;
   };
 
   const runConnectionRecovery = async () => {
@@ -9028,7 +9070,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             && candidate.generationUnchanged
             && participatingDivergence.length === 0
             && participatingWorking.length > 0
-            && participatingWorking.every(workingOrdersAreProtectiveHold)
+            && protectiveHoldProblem() == null
           ) {
             reconciliation = candidate;
             break;
@@ -9468,9 +9510,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
   /** Obnova po výpadku uprostřed obchodu potvrdila synchronní držené kopie. */
   const markTransportResumeHeld = () => {
-    if (transportResume?.state === 'waiting' && transportResume.heldOpen && transportResume.rebaselinedAt == null) {
-      transportResume = { ...transportResume, heldConfirmed: true };
+    const pending = transportResume;
+    if (pending?.state !== 'waiting' || !pending.heldOpen || pending.rebaselinedAt != null) return;
+    // Ledger leadera musí sedět s pozicí po reconnectu (žádný částečný
+    // výstup ani otočka v mezeře) a žádný nový příkaz leadera z mezery.
+    const stats = currentDailyStats(clock());
+    const ledger = new Map<string, number>();
+    for (const lot of stats.openLots) ledger.set(lot.symbol, (ledger.get(lot.symbol) ?? 0) + lot.netQuantity);
+    const leaderPositions = positionsByAccount.get(group.leaderAccountId!) ?? new Map<string, number>();
+    const symbols = new Set([...ledger.keys(), ...leaderPositions.keys()]);
+    const ledgerMatches = [...symbols].every(symbol => (ledger.get(symbol) ?? 0) === (leaderPositions.get(symbol) ?? 0));
+    const knownAtDisarm = pending.leaderMaxOrderId != null ? BigInt(pending.leaderMaxOrderId) : null;
+    const newLeaderOrder = leaderMaxSeenOrderId != null && (knownAtDisarm == null || leaderMaxSeenOrderId > knownAtDisarm);
+    if (!ledgerMatches || newLeaderOrder || (stats.unconfirmedFlatLots?.length ?? 0) > 0) {
+      declineTransportResume('leader během výpadku obchodoval (pozice nebo příkazy nesedí s deníkem) — zapni ručně');
+      return;
     }
+    transportResume = { ...pending, heldConfirmed: true };
   };
   /**
    * Skupina je po drženém obchodu autoritativně flat. Konec obchodu byl
@@ -9485,6 +9541,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     const at = clock();
+    const stats = currentDailyStats(at);
+    if (stats.openLots.some(lot => lot.netQuantity !== 0) || (stats.unconfirmedFlatLots?.length ?? 0) > 0) {
+      declineTransportResume('konec obchodu se nepromítl do denních statistik — zapni ručně');
+      return;
+    }
     transportResume = {
       ...pending,
       rebaselinedAt: at,
@@ -9496,6 +9557,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       at, leaderEventId: `auto-resume:${pending.disarmAt}`, kind: 'recovered',
       reason: 'držený obchod skončil (pozorováno živě) — automatické pokračování čeká na čistou kontrolu',
     }]);
+  };
+
+  /** Další výpadek za už vypnuté kopírky: držený obchod pak nejde ověřit živě. */
+  const noteDisconnectWhileResumeWaiting = () => {
+    if (transportResume?.state === 'waiting' && transportResume.heldOpen && transportResume.rebaselinedAt == null) {
+      declineTransportResume('další výpadek během drženého obchodu — zapni ručně');
+    }
   };
 
   /** Volat při transport disarmu, ještě PŘED shozením `gate.armed`. */
@@ -9515,8 +9583,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ? 'před výpadkem byl otevřený incident'
         : armExpiresAt <= 0
           ? 'zapnutí nemělo časový limit'
-          : null;
-    const heldOpen = !groupIsFlat() || ordersOpen;
+          : groupIsFlat() && ordersOpen
+            ? 'při výpadku čekal příkaz bez otevřené pozice — zapni ručně'
+            : null;
+    const heldOpen = !groupIsFlat();
     transportResume = {
       disarmAt,
       lastHeardAt: gate.lastHeartbeatAt,
@@ -12889,6 +12959,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       } else if (!event.connected && !pendingConnectionRecovery) {
         pendingReadOnlyConnectionRecovery = true;
       }
+      if (!event.connected && !wasArmed) noteDisconnectWhileResumeWaiting();
       if (!event.connected && wasArmed) {
         const transportDisarm = recordDisarm(
           'transport',

@@ -141,4 +141,53 @@ describe('výpadek uprostřed obchodu s SL/TP', () => {
     expect(h.controller.status().manualRecovery).toMatchObject({ reason: expect.stringContaining('working=') });
     h.controller.stop();
   });
+
+  it('druhý výpadek během drženého obchodu = nepokračuje (konec obchodu by nešel ověřit živě)', async () => {
+    const h = await openBracketTrade();
+    h.broker.setConnected(false); await h.settle();
+    h.broker.setConnected(true); await h.settle(100);
+    expect(h.controller.status().transportResume?.phase).toBe('waiting');
+    h.broker.setConnected(false); await h.settle();
+    expect(h.controller.status().transportResume).toMatchObject({ phase: 'declined', reason: expect.stringContaining('další výpadek') });
+    h.controller.stop();
+  });
+
+  it('follower bez SL/TP (nohy zmizely v mezeře) = incident, ne „chráněné kopie“', async () => {
+    const h = await openBracketTrade();
+    h.broker.setConnected(false); await h.settle();
+    for (const order of h.broker.orders().filter(item => item.accountId === 200 && item.status === 'working')) order.status = 'canceled';
+    h.broker.setConnected(true); await h.settle(100);
+    expect(h.controller.status().manualRecovery).not.toBeNull();
+    expect(h.controller.status().lastDisarm?.copiesOutcome).not.toBe('left-open-protected');
+    h.controller.stop();
+  });
+
+  it('dvě ochranné nohy stejné třídy nad pozici (follower by se otočil) = incident', async () => {
+    const h = await openBracketTrade();
+    h.broker.setConnected(false); await h.settle();
+    // Leader v mezeře SL/TP zrušil; follower má obě copier nohy jako stopky (2 + 2 > pozice 2).
+    for (const order of h.leaderRest) if (order.status === 'working') order.status = 'canceled';
+    const target = h.broker.orders().find(item => item.accountId === 200 && item.orderType === 'Limit' && item.side === 'Sell')!;
+    target.orderType = 'Stop';
+    target.stopPrice = 29_900;
+    h.broker.setConnected(true); await h.settle(100);
+    expect(h.controller.status().manualRecovery).not.toBeNull();
+    expect(h.controller.status().lastDisarm?.copiesOutcome).not.toBe('left-open-protected');
+    h.controller.stop();
+  });
+
+  it('částečný výstup leadera i followera v mezeře = drží bez incidentu, ale sama nepokračuje', async () => {
+    const h = await openBracketTrade();
+    h.broker.setConnected(false); await h.settle();
+    // Obě strany v mezeře zmenšily pozici na 1 a nohy na zbytek 1.
+    for (const order of h.broker.orders().filter(item => item.accountId === 200 && item.status === 'working')) order.quantity = 1;
+    h.broker.setPosition(200, symbol, 1);
+    h.broker.setPosition(100, symbol, 1);
+    for (const order of h.leaderRest) if (order.status === 'working') order.quantity = 1;
+    h.broker.setConnected(true); await h.settle(100);
+    const status = h.controller.status();
+    expect(status.manualRecovery ?? null).toBeNull();
+    expect(status.transportResume).toMatchObject({ phase: 'declined', reason: expect.stringContaining('nesedí s deníkem') });
+    h.controller.stop();
+  });
 });
