@@ -86,6 +86,7 @@ import {
   devLiveCopyFixtureOrders,
   devLiveCopyFixtureParticipation,
   devLiveCopyFixtureSnapshot,
+  devLiveCopyFixtureSyncPauses,
 } from '../lib/devLiveCopyFixture';
 import LiveRiskTab from './LiveRiskTab';
 import LiveStatusStrip from './LiveStatusStrip';
@@ -198,6 +199,7 @@ const DevLiveCopyFixtureOverview = () => {
       cooldownUntil={Date.now() + 6 * 60_000}
       sessionArmedAt={0}
       followerParticipation={participation}
+      accountSyncPauses={devLiveCopyFixtureSyncPauses}
       commandAdapter={commandAdapter}
     />
   );
@@ -1376,6 +1378,7 @@ acceptAgentStatus((await executeAgent({
               sessionArmedAt={agentStatus?.controller.sessionArmedAt ?? 0}
               followerCuts={agentStatus?.controller.followerCuts ?? []}
               followerParticipation={agentStatus?.controller.followerParticipation ?? []}
+              accountSyncPauses={agentStatus?.controller.accountSyncPauses ?? []}
               accountRisk={agentStatus?.controller.accountRisk ?? []}
               onOpenRisk={() => navigateToTab('risk')}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}

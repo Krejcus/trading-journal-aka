@@ -464,6 +464,8 @@ interface Props {
   followerCuts?: CopierControllerStatus['followerCuts'];
   /** Ruční per-follower přepínač kopírování: stav a zda jde teď přepnout. */
   followerParticipation?: CopierControllerStatus['followerParticipation'];
+  /** Followeři „mimo synchron“ v aktuální leader epizodě (etapa 2). */
+  accountSyncPauses?: CopierControllerStatus['accountSyncPauses'];
   accountRisk?: CopierControllerStatus['accountRisk'];
   onOpenRisk?: () => void;
   /** Konec anti-revenge cooldownu (epoch ms); 0 = neběží. */
@@ -513,6 +515,19 @@ interface PendingAction {
 type ActiveFollowerCut = NonNullable<CopierControllerStatus['followerCuts']>[number];
 type FollowerParticipation = NonNullable<CopierControllerStatus['followerParticipation']>[number];
 const EMPTY_PARTICIPATION: ReadonlyMap<number, FollowerParticipation> = new Map();
+type AccountSyncPause = NonNullable<CopierControllerStatus['accountSyncPauses']>[number];
+const EMPTY_SYNC_PAUSES: ReadonlyMap<number, AccountSyncPause> = new Map();
+/**
+ * Etapa 2: followeři „mimo synchron“ — broker odmítl vstup nebo se jim SL/TP
+ * vyplnil dřív než leaderovi. Vynechají zbytek obchodu a k dalšímu se vrátí
+ * sami; ostatní kopírují dál. Pauzy patří execution skupině, proto se kontext
+ * plní jen kolem ní (jinde zůstane prázdný).
+ */
+const AccountSyncPauseContext = React.createContext<ReadonlyMap<number, AccountSyncPause>>(EMPTY_SYNC_PAUSES);
+const useAccountSyncPause = (accountId: number | null | undefined, isLeader: boolean) => {
+  const pauses = React.useContext(AccountSyncPauseContext);
+  return accountId == null || isLeader ? undefined : pauses.get(accountId);
+};
 
 /** Uživatelé, jejichž cloudová knihovna skupin se v této session už načetla.
  * Návrat na LIVE pak nezačíná ve stavu „loading“ (šedé „Přidat skupinu“);
@@ -771,6 +786,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   sessionArmedAt = 0,
   followerCuts = [],
   followerParticipation = [],
+  accountSyncPauses = [],
   accountRisk = [],
   onOpenRisk,
   cooldownUntil = 0,
@@ -1069,6 +1085,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const participationByAccount = useMemo(() => new Map(
     (followerParticipation ?? []).map(item => [item.accountId, item]),
   ), [followerParticipation]);
+  const syncPausesByAccount = useMemo<ReadonlyMap<number, AccountSyncPause>>(() => (
+    accountSyncPauses && accountSyncPauses.length > 0
+      ? new Map(accountSyncPauses.map(pause => [pause.accountId, pause]))
+      : EMPTY_SYNC_PAUSES
+  ), [accountSyncPauses]);
   // B1: zavírání followera do konce obchodu doběhne na pozadí. Selhání
   // (`closed === false`) musí být vidět hned, ne jen v řádku účtu.
   const seenTradeCutCloseRef = useRef(new Map<string, ActiveFollowerCut['closed']>());
@@ -2074,6 +2095,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               const selected = group.id === executionGroupId;
               const armed = selected && copierArmed;
               return (
+                <AccountSyncPauseContext.Provider key={group.id} value={selected ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
                 <CompactGroupCard
                   key={group.id}
                   group={group}
@@ -2113,12 +2135,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   redaction={redaction}
                   templates={templates}
                   tightenOnly={tightenOnly}
-                  cooldownPanel={selected ? <>{maintenancePanel}{cooldownPanel}</> : null}
+                  cooldownPanel={selected ? <>{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</> : null}
                   disarmPanel={selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual'
                     ? <CopierDisarmPanel lastDisarm={disarmNotice} />
                     : null}
                   {...compactGroupActions(group)}
                 />
+                </AccountSyncPauseContext.Provider>
               );
             })}
           </div>
@@ -2161,6 +2184,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         ? `live-island-group live-island-group-${islandModel.tone}`
                         : undefined}
                     >
+                      <AccountSyncPauseContext.Provider value={selected ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
                       <GroupRow
                         group={group} rows={rows} armed={armed}
                         dailyPnlPending={dailyPnlPending}
@@ -2238,7 +2262,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                           </td>
                         </tr>
                       ) : null}
-                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{maintenancePanel}{cooldownPanel}</td></tr> : null}
+                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</td></tr> : null}
                       <tr
                         aria-hidden={!expanded.has(group.id)}
                       >
@@ -2278,6 +2302,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                           </div>
                         </td>
                       </tr>
+                      </AccountSyncPauseContext.Provider>
                     </tbody>
                   );
                 })}
@@ -2964,6 +2989,10 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
     : rows.some(row => row.account?.unrealizedPnlSource === 'estimated') ? 'estimated' : 'broker';
   const firms = groupFirmList(rows);
   const enabledFollowerCount = group.followers.filter(follower => follower.mode !== 'off').length;
+  // Ruční vyřazení do konce obchodu i pauza „mimo synchron“ = follower
+  // v tomto obchodu nekopíruje.
+  const syncPauses = React.useContext(AccountSyncPauseContext);
+  const excludedForTrade = (accountId: number) => tradeCutsByAccount.has(accountId) || syncPauses.has(accountId);
   const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
   const unavailableLeader = rows.some(row => row.isLeader && row.accountId != null && !row.account);
   const unavailableFollowerCount = enabledFollowerRows.filter((row, index) =>
@@ -2971,7 +3000,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
   const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account
     || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
-    || (row.accountId != null && tradeCutsByAccount.has(row.accountId))).length;
+    || (row.accountId != null && excludedForTrade(row.accountId))).length;
   // Ručně vypnutí followeři (přepínač v řádku) nejsou problém, jen volba —
   // počítají se zvlášť a ukazují neutrálně, ne jantarově.
   const manuallyOffIds = new Set(group.followers.filter(follower => follower.enabled === false).map(follower => follower.accountId));
@@ -2979,13 +3008,13 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
     row.accountId != null && manuallyOffIds.has(row.accountId)
     && !(!row.account
       || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
-      || tradeCutsByAccount.has(row.accountId))).length;
+      || excludedForTrade(row.accountId))).length;
   // Před první odpovědí workeru: follower bez potvrzeného stavu není
   // „zařazený“ ani vyřazený — nezapočítá se a počty se neukazují.
   const eligibilityUndecided = useEligibilityUndecided();
   const unknownFollowerCount = enabledFollowerRows.filter((row, index) =>
     row.account != null && eligibilityUndecided(row.accountId, eligibility[index])
-    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length;
+    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || excludedForTrade(row.accountId)))).length;
   const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount - manuallyOffCount - unknownFollowerCount);
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
@@ -3193,6 +3222,77 @@ const TradeCutPill = ({ cut }: { cut?: Pick<ActiveFollowerCut, 'closed'> }) => (
   )
 );
 
+/** Proč je follower mimo synchron — krátce, do řádku účtu. */
+export const accountSyncPauseReasonText = (pause: Pick<AccountSyncPause, 'reasonCode'>): string => (
+  pause.reasonCode === 'protective-filled-early'
+    ? 'Stop nebo target se vyplnil dřív než leaderovi'
+    : 'Broker odmítl vstup'
+);
+
+/**
+ * Řádek pozastaveného followera. Flat je očekávaný stav; otevřená pozice na
+ * pozastaveném účtu ale kopírka neřídí a musí ji vidět člověk.
+ */
+export const accountSyncPauseNoteText = (holdsPosition: boolean): string => (
+  holdsPosition
+    ? 'Pauza do konce obchodu · má otevřenou pozici, kopírka ji neřídí'
+    : 'Pauza do konce obchodu · vrátí se sám u dalšího obchodu'
+);
+
+const SyncPausePill = () => (
+  <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.08] px-2 py-1 text-[10px] font-black leading-none text-amber-600">
+    <Unplug aria-hidden="true" size={10} strokeWidth={2.5} /> MIMO SYNCHRON
+  </span>
+);
+
+const czechAccountCount = (count: number) => (
+  count >= 2 && count <= 4 ? `${count} účty jsou` : `${count} účtů je`
+);
+
+/**
+ * Lišta skupiny: který účet vypadl ze synchronu a že ostatní kopírují dál.
+ * Text bere z pauz workeru; nic se tu neodhaduje.
+ */
+export const AccountSyncPauseBanner = ({ rows, eligibilityByAccount, tradeCutsByAccount, redactNames, redaction }: {
+  rows: Row[];
+  eligibilityByAccount: ReadonlyMap<number, CopierAccountEligibility>;
+  tradeCutsByAccount: ReadonlyMap<number, ActiveFollowerCut>;
+  redactNames: boolean;
+  redaction: RedactionSettings;
+}) => {
+  const pauses = React.useContext(AccountSyncPauseContext);
+  // Stejná přednost jako v řádku: ruční vyřazení, DLL a breach pauzu přebíjí.
+  const paused = rows.flatMap(row => {
+    if (row.isLeader || row.accountId == null || tradeCutsByAccount.has(row.accountId)) return [];
+    if ((eligibilityByAccount.get(row.accountId)?.state ?? 'active') !== 'active') return [];
+    const pause = pauses.get(row.accountId);
+    return pause ? [{ row, pause }] : [];
+  });
+  if (paused.length === 0) return null;
+  const single = paused.length === 1 ? paused[0] : null;
+  const singleName = single ? redactAccountName(single.row.name, redactNames, redaction) : '';
+  return (
+    <div role="status" data-testid="account-sync-pause-banner" className="border-t border-amber-500/25 bg-amber-500/[0.07] px-3 py-2.5">
+      <p className="flex items-center gap-1.5 text-[12px] font-black text-amber-600">
+        <Unplug aria-hidden="true" size={13} strokeWidth={2.5} />
+        {single ? 'Jeden účet je mimo synchron' : `${czechAccountCount(paused.length)} mimo synchron`}
+      </p>
+      <p className="mt-1 text-[11px] leading-snug text-[var(--text-secondary)]">
+        {single
+          ? <>
+              {single.pause.reasonCode === 'protective-filled-early'
+                ? <>Účtu <b className="text-[var(--text-primary)]">{singleName}</b> se vyplnil stop nebo target dřív než leaderovi</>
+                : <>Účtu <b className="text-[var(--text-primary)]">{singleName}</b> broker odmítl vstup</>}
+              {' '}({formatClockTime(single.pause.pausedAt)}). Zbytek tohoto obchodu vynechá a k dalšímu se připojí sám. Ostatní kopírují dál.
+            </>
+          : <>
+              {paused.map(({ row }) => redactAccountName(row.name, redactNames, redaction)).join(', ')} vynechají zbytek tohoto obchodu a k dalšímu se připojí samy. Ostatní kopírují dál.
+            </>}
+      </p>
+    </div>
+  );
+};
+
 /** Kódy automatického vyřazení z workeru → věta pro člověka. */
 const AUTOMATIC_EXCLUSION_LABEL: Record<string, string> = {
   'dll-locked': 'denní limit ztráty (DLL), uvolní se další obchodní den',
@@ -3263,7 +3363,10 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   // který se do celkového součtu nahoře započítává jako nula — a součet
   // s pomlčkami pod sebou vypadá jako rozbitá data.
   const quiet = daily == null && a != null && liveDayReadAnswered(a, Date.now(), dailyPnlPending);
-  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null;
+  // Pauza „mimo synchron“ ustoupí silnějším stavům (ruční vyřazení, DLL, breach).
+  const syncPauseRaw = useAccountSyncPause(accountId, row.isLeader);
+  const syncPause = !tradeCut && (eligibility?.state ?? 'active') === 'active' ? syncPauseRaw : undefined;
+  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null || syncPause != null;
   // Stejná pravidla čerstvosti jako desktop: staré čtení nesmí nést zelený
   // štít ani tvářit se jako „flat“.
   const positionsVerified = a ? isLiveAccountReadVerified(a, 'positions') : true;
@@ -3288,6 +3391,10 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
 
   const note = tradeCut
     ? <p className={`text-[10px] font-semibold leading-tight ${tradeCut.closed === false ? 'text-rose-600' : 'text-amber-600'}`}>{tradeCutNoteText(tradeCut)}</p>
+    : syncPause
+    ? <p title={accountSyncPauseReasonText(syncPause)} className={`text-[10px] font-semibold leading-tight ${hasOpenPositions ? 'text-rose-600' : 'text-amber-600'}`}>
+        {accountSyncPauseNoteText(hasOpenPositions)}
+      </p>
     : compactRejection
     ? <RejectedExecutionStatus
         execution={compactRejection}
@@ -3310,7 +3417,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   const multiplierBadge = <span title="Násobek změníš v nastavení skupiny" className="compact-row-dim shrink-0 rounded bg-[var(--bg-page)] px-1 text-[9.5px] font-bold tabular-nums text-[var(--text-secondary)]">×{row.scale}</span>;
 
   return (
-    <li className={`px-3 ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''} ${copyOff ? 'compact-row-off' : ''}`} style={style} data-copy-off={copyOff || undefined}>
+    <li className={`px-3 ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : syncPause ? 'bg-amber-500/[0.05]' : ''} ${copyOff ? 'compact-row-off' : ''}`} style={style} data-copy-off={copyOff || undefined} data-sync-paused={syncPause ? true : undefined}>
       <div
         role={a ? 'button' : undefined}
         onClick={() => a && onAccount?.(a)}
@@ -3422,7 +3529,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
           ) : null}
           {flatReadWarning}
           {attention ? (
-            tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
+            tradeCut ? <TradeCutPill cut={tradeCut} /> : syncPause ? <SyncPausePill /> : <AccountEligibilityPill
               accountId={accountId}
               eligibility={eligibility}
               live={live}
@@ -3530,11 +3637,15 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
   const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
+  // Ruční vyřazení do konce obchodu i pauza „mimo synchron“ = follower
+  // v tomto obchodu nekopíruje.
+  const syncPauses = React.useContext(AccountSyncPauseContext);
+  const excludedForTrade = (accountId: number) => tradeCutsByAccount.has(accountId) || syncPauses.has(accountId);
   const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
   const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account
     || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
-    || (row.accountId != null && tradeCutsByAccount.has(row.accountId))).length;
+    || (row.accountId != null && excludedForTrade(row.accountId))).length;
   // Ručně vypnutí followeři (přepínač v řádku) nejsou problém, jen volba —
   // počítají se zvlášť a ukazují neutrálně, ne jantarově.
   // Worker hlásí ruční účast dřív, než se změna propíše do uložené skupiny.
@@ -3545,10 +3656,10 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
     row.accountId != null && manuallyOffIds.has(row.accountId)
     && !(!row.account
       || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
-      || tradeCutsByAccount.has(row.accountId))).length;
+      || excludedForTrade(row.accountId))).length;
   const unknownFollowerCount = enabledFollowerRows.filter((row, index) =>
     row.account != null && eligibilityUndecided(row.accountId, eligibility[index])
-    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length;
+    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || excludedForTrade(row.accountId)))).length;
   const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount - manuallyOffCount - unknownFollowerCount);
   const unavailableFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account && (eligibility[index]?.state ?? 'active') === 'active').length;
@@ -4926,7 +5037,10 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   const accountUnavailable = !a && accountId != null;
   // Odchylka = cokoli, co není „živý a způsobilý účet“. Jen ta se vykreslí.
   // „Ověřuji“ drží řádek se štítkem už předem — DLL do něj jen naskočí.
-  const stateIsDeviation = tradeCut != null || eligibilityState !== 'active' || accountUnavailable || !live;
+  const syncPauseRaw = useAccountSyncPause(accountId, row.isLeader);
+  const syncPause = !tradeCut && eligibilityState === 'active' ? syncPauseRaw : undefined;
+  const rowHoldsPosition = a?.positions.some(position => position.netPosition !== 0) ?? false;
+  const stateIsDeviation = tradeCut != null || syncPause != null || eligibilityState !== 'active' || accountUnavailable || !live;
   const stateTone: AccountStateTone = eligibilityState === 'breached'
     ? { dotClass: 'bg-rose-500', accentClass: 'text-rose-500', label: 'Breached',
         detail: 'Účet je trvale vyřazen z kopírování. Zrušit to může jen read-only důkaz od brokera — že je účet aktivní a equity nad floorem propky.' }
@@ -4939,6 +5053,9 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
     : accountUnavailable
     ? { dotClass: 'bg-slate-400', accentClass: 'text-slate-400', label: 'Chybí v OAuth snapshotu',
         detail: 'Účet se v aktuálním snapshotu připojení neobjevil. Zkontroluj připojení firmy v záložce Připojení.' }
+    : syncPause
+    ? { dotClass: 'bg-amber-500', accentClass: 'text-amber-500', label: 'Mimo synchron',
+        detail: `${accountSyncPauseReasonText(syncPause)}. Účet vynechá zbytek tohoto obchodu a k dalšímu se připojí sám; ostatní kopírují dál.` }
     : live && eligibilityUndecided
     ? VERIFYING_ACCOUNT_TONE
     : live
@@ -4974,7 +5091,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
             </span>
             {stateIsDeviation ? (
               <span className="mt-1 flex flex-wrap items-center gap-1.5 pl-3.5">
-                {tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
+                {tradeCut ? <TradeCutPill cut={tradeCut} /> : syncPause ? <SyncPausePill /> : <AccountEligibilityPill
                   accountId={accountId}
                   eligibility={eligibility}
                   live={live}
@@ -4989,6 +5106,10 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
             {tradeCut ? (
               <span className={`block pl-3.5 text-[10px] font-semibold leading-tight ${tradeCut.closed === false ? 'text-rose-600' : 'text-amber-600'}`}>
                 {tradeCutNoteText(tradeCut)}
+              </span>
+            ) : syncPause ? (
+              <span title={accountSyncPauseReasonText(syncPause)} className={`block pl-3.5 text-[10px] font-semibold leading-tight ${rowHoldsPosition ? 'text-rose-600' : 'text-amber-600'}`}>
+                {accountSyncPauseNoteText(rowHoldsPosition)}
               </span>
             ) : rowRejection ? (
               <RejectedExecutionStatus
@@ -5008,7 +5129,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
           </span>
         );
       case 'status':
-        return tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
+        return tradeCut ? <TradeCutPill cut={tradeCut} /> : syncPause ? <SyncPausePill /> : <AccountEligibilityPill
           accountId={accountId}
           eligibility={eligibility}
           live={live}
@@ -5063,8 +5184,9 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   return (
     <tr
       onClick={() => a && onAccount?.(a)}
-      className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''} ${a ? 'cursor-pointer hover:bg-[var(--bg-card)]' : ''}`}
+      className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : syncPause ? 'bg-amber-500/[0.05]' : ''} ${a ? 'cursor-pointer hover:bg-[var(--bg-card)]' : ''}`}
       data-copy-off={copyOff || undefined}
+      data-sync-paused={syncPause ? true : undefined}
     >
       {columns.map(col => (
         <td key={col.key} className={`px-3 ${col.key === 'actions' ? 'py-0' : 'py-1.5'} ${col.key === 'qtyMult' ? 'text-center' : col.align === 'right' ? 'text-right' : ''} follower-cell ${copyOff && col.key !== 'account' && col.key !== 'actions' ? 'follower-row-off' : ''}`}>
