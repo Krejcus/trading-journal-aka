@@ -849,7 +849,10 @@ const DLL_BREACH_REASON = /^propka zlikvidovala účet: realizovaná ztráta .* 
 const migrateDllBreach = (entry: CopierAccountEligibility): CopierAccountEligibility => (
   // Starší denní zámek (reject / LIVE preflight) bez příznaku dostane stejnou
   // návratovou politiku jako nové cesty.
-  entry.state === 'dll-locked' && !entry.requiresRiskFloorProof
+  // Totéž pro denní zámek, který stará verze po konci session už převedla
+  // na `unverifiable` (pozná se podle zachovaného `lockSessionEndAt`).
+  (entry.state === 'dll-locked' || (entry.state === 'unverifiable' && entry.lockSessionEndAt != null))
+    && !entry.requiresRiskFloorProof
     ? { ...entry, requiresRiskFloorProof: true }
     : entry.state === 'breached' && DLL_BREACH_REASON.test(entry.reason ?? '')
     ? {

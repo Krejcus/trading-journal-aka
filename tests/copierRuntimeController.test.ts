@@ -4236,6 +4236,23 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     }
   });
 
+  it.each(['dll-locked', 'unverifiable'] as const)('starší %s z denního zámku bez příznaku dostane po startu požadavek důkazu nad floorem', async state => {
+    const snapshot = emptySnapshot();
+    snapshot.safety = { ...snapshot.safety!, accountEligibility: [{
+      accountId: 200, state, at: Date.parse('2026-10-08T14:00:00Z'),
+      lockSessionEndAt: Date.parse('2026-10-08T22:00:00Z'), reason: 'DLL session skončila — čeká na autoritativní ověření u brokera',
+    }] };
+    const controller = await bootstrapCopierRuntime({
+      broker: createMockBroker({ behavior: () => ({ kind: 'working' }) }),
+      store: createMemoryCopierStore(snapshot), group, clock: () => Date.parse('2026-10-10T08:00:00Z'),
+    });
+    try {
+      expect(controller.status().accountEligibility?.find(item => item.accountId === 200)?.requiresRiskFloorProof).toBe(true);
+    } finally {
+      controller.stop();
+    }
+  });
+
   it('nečekaný flat followera bez důkazu o likvidaci zůstává fail-closed', async () => {
     const { controller } = await propLiquidationHarness({ realizedPnlUsd: -120, dailyLossAutoLiq: 1_250 });
 
