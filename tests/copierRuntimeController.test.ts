@@ -4200,6 +4200,37 @@ describe('reconciliation vs abandoned cancel/modify', () => {
       const entry = controller.status().accountEligibility?.find(item => item.accountId === 200);
       expect(entry?.state).not.toBe('breached');
       expect(['dll-locked', 'unverifiable']).toContain(entry?.state);
+      // Převedený záznam se vrátí jen s důkazem equity nad floorem.
+      expect(entry?.requiresRiskFloorProof).toBe(true);
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it.each([
+    { netLiq: 50_200, expected: 'active' },
+    { netLiq: 47_900, expected: 'breached' },
+  ])('po denním zámku reconciliation v nové session: equity $netLiq → $expected', async ({ netLiq, expected }) => {
+    const snapshot = emptySnapshot();
+    const at = Date.parse('2026-10-08T14:57:58.826Z');
+    snapshot.safety = { ...snapshot.safety!, accountEligibility: [{
+      accountId: 200, state: 'dll-locked', at, requiresRiskFloorProof: true,
+      lockSessionEndAt: Date.parse('2026-10-08T22:00:00Z'),
+      reason: 'propka zamkla účet do konce dne: realizovaná ztráta -1253.50 USD dosáhla daily loss auto-liq 1200 USD',
+    }] };
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'working' }),
+      accountRiskSnapshots: [{ accountId: 200, at: 1, netLiq, minNetLiq: 48_000, trailingMaxDrawdown: 2_000, realizedPnlUsd: 0, dailyLossAutoLiq: 1_200 }],
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(snapshot), group, clock: () => Date.parse('2026-10-12T14:00:00Z'),
+    });
+    try {
+      broker.setConnected(true);
+      await controller.waitForIdle();
+      await controller.reconcile();
+      // Status vykazuje jen odchylky; aktivní účet v něm chybí.
+      expect(controller.status().accountEligibility?.find(item => item.accountId === 200)?.state ?? 'active').toBe(expected);
     } finally {
       controller.stop();
     }

@@ -144,6 +144,11 @@ export interface CopierAccountEligibility {
   at: number;
   lockSessionEndAt?: number;
   lastExecution?: CopierRejectedExecution;
+  /**
+   * Denní zámek z auto-liq propky (10. 10. 2026): zpět do kopie jen s
+   * autoritativním důkazem, že equity je nad drawdown floorem propky.
+   */
+  requiresRiskFloorProof?: true;
 }
 
 /**

@@ -223,6 +223,7 @@ function validSafety(value: unknown): boolean {
         || entry.state === 'breached' || entry.state === 'unverifiable')
       && finite(entry.at) && optionalString(entry.reason)
       && (entry.lockSessionEndAt == null || finite(entry.lockSessionEndAt))
+      && (entry.requiresRiskFloorProof == null || entry.requiresRiskFloorProof === true)
       && (entry.lastExecution == null || validRejectedExecution(entry.lastExecution)))
   );
   const validSeenRejects = value.seenTerminalRejects == null || (

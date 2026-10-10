@@ -853,6 +853,9 @@ const migrateDllBreach = (entry: CopierAccountEligibility): CopierAccountEligibi
       state: 'dll-locked',
       reason: (entry.reason ?? '').replace('propka zlikvidovala účet:', 'propka zamkla účet do konce dne:'),
       lockSessionEndAt: entry.at + msUntilTradovateSessionEnd(entry.at),
+      // Starý záznam mohl vzniknout i nad drawdown floorem (starší pořadí
+      // klasifikace): návrat jen s důkazem equity nad floorem.
+      requiresRiskFloorProof: true,
     }
     : entry
 );
@@ -4704,6 +4707,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   /**
+   * Důkaz pro návrat účtu po denním zámku z auto-liq: broker potvrdí aktivní
+   * obchodovatelný účet a equity nad drawdown floorem propky. Cokoli
+   * neúplného = 'unknown' (účet zůstává mimo kopii).
+   */
+  const riskFloorProof = async (
+    accountId: number,
+  ): Promise<{ kind: 'above-floor' } | { kind: 'breached'; reason: string } | { kind: 'unknown' }> => {
+    const breach = await classifyFollowerBrokerBreach(accountId);
+    if (breach?.state === 'breached') return { kind: 'breached', reason: breach.reason };
+    if (breach) return { kind: 'unknown' };
+    try {
+      const [risk] = await broker.listAccountRiskSnapshots([accountId]);
+      const equity = risk ? brokerRiskEquity(risk) : null;
+      if (!risk || equity == null || risk.minNetLiq == null) return { kind: 'unknown' };
+      return equity > risk.minNetLiq ? { kind: 'above-floor' } : { kind: 'unknown' };
+    } catch {
+      return { kind: 'unknown' };
+    }
+  };
+
+  /**
    * Follower, kterého zlikvidovala propka, přestává být účastníkem kopie:
    * durable `breached`, úklid vlastních ochranných noh, audit. Skupina
    * zůstává ARMED — ostatní followeři dál drží stejnou expozici jako leader
@@ -4728,6 +4752,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // autoritativní ověření u brokera (stejně jako DLL z rejectu).
         lockSessionEndAt: currentRuntime().state.safety.dailyStats?.sessionEndAt
           ?? (now + msUntilTradovateSessionEnd(now)),
+        requiresRiskFloorProof: true,
         ...(current?.lastExecution ? { lastExecution: cloneRejectedExecution(current.lastExecution) } : {}),
       }
       : {
@@ -14029,8 +14054,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             && entry.lockSessionEndAt > 0
             && reactivationNow >= entry.lockSessionEndAt;
           if (entry.state === 'unverifiable' || (entry.state === 'dll-locked' && newSessionBegan)) {
+            if (entry.requiresRiskFloorProof) {
+              const proof = await riskFloorProof(accountId);
+              if (proof.kind === 'breached') {
+                accountEligibility.set(accountId, {
+                  accountId, state: 'breached', at: reactivationNow,
+                  reason: `propka zlikvidovala účet: ${proof.reason}`,
+                  ...(entry.lastExecution ? { lastExecution: cloneRejectedExecution(entry.lastExecution) } : {}),
+                });
+                eligibilityChanged = true;
+                continue;
+              }
+              // Bez důkazu nad floorem zůstává mimo kopii (fail-closed).
+              if (proof.kind !== 'above-floor') continue;
+            }
+            const { requiresRiskFloorProof: _proven, ...rest } = entry;
             accountEligibility.set(accountId, {
-              ...entry, state: 'active', at: reactivationNow,
+              ...rest, state: 'active', at: reactivationNow,
               reason: 'autoritativně ověřeno při reconciliaci po nové session',
             });
             eligibilityChanged = true;
@@ -15401,6 +15441,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (effective?.state === 'dll-locked') {
         throw new Error(`DLL stále platí do konce broker session: ${effective.reason ?? 'bez důvodu'}`);
       }
+      // Denní zámek z auto-liq: návrat jen s důkazem equity nad floorem.
+      if (current?.requiresRiskFloorProof) {
+        const proof = await riskFloorProof(accountId);
+        if (proof.kind === 'breached') throw new Error(`Účet je pod floorem propky: ${proof.reason}`);
+        if (proof.kind !== 'above-floor') {
+          throw new Error('Broker nevydal equity a floor propky, kterými by šlo ověřit, že účet je nad drawdown floorem');
+        }
+      }
 
       const capabilities = await broker.listAccountCapabilities([accountId]);
       const capability = capabilities.find(item => item.accountId === accountId);
@@ -15415,8 +15463,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         broker.listOrders(accountId),
       ]);
 
+      const { requiresRiskFloorProof: _proven, ...withoutProofFlag } = current ?? {} as Partial<CopierAccountEligibility>;
       const verified: CopierAccountEligibility = {
-        ...(current ?? {}),
+        ...withoutProofFlag,
         accountId,
         state: 'active',
         reason: breachedProof
