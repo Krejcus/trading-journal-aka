@@ -2094,6 +2094,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     lastHeardAt: number;
     /** Nejvyšší známé ID příkazu leadera při výpadku (string kvůli BigInt). */
     leaderMaxOrderId: string | null;
+    /**
+     * Výpadek uprostřed obchodu: kopie se drží s SL/TP do konce obchodu.
+     * `heldConfirmed` = první obnova potvrdila synchronní kopie (obchod žije
+     * i po reconnectu); `rebaselinedAt` = konec obchodu byl pozorován živě
+     * a od tohoto okamžiku platí stejné kontroly jako u flat výpadku.
+     */
+    heldOpen: boolean;
+    heldConfirmed: boolean;
+    rebaselinedAt: number | null;
     armExpiresAt: number;
     configuration: string;
     leaderStats: string;
@@ -8328,6 +8337,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         detail: 'leader-flat guard autoritativně potvrdil followera flat',
       });
       updateDisarmOutcome(disarmAtForEpisode(epoch.id), 'flat');
+      // Výpadek uprostřed obchodu: kopie byly drženy do konce obchodu. Teď je
+      // skupina flat — read-only kontrola obnovu dokončí (čistá = zapnutí
+      // už neblokuje), nic neobchoduje.
+      if (pendingConnectionRecovery && gate.connected && !gate.armed && !recoveryInFlight) {
+        scheduleConnectionRecovery();
+      }
       if (pausedInEpoch.size > 0) {
         // Leader je guardem autoritativně flat; pozastavený follower se
         // uvolní jen podle téhož čerstvého snapshotu (flat, bez příkazů).
@@ -8897,6 +8912,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * a čeká se na jediný klik ARM; osiřelé nebo rozjeté kopie se
    * risk-redukčně zavřou. Nikdy se sám neARMuje.
    */
+  /**
+   * Výpadek uprostřed obchodu (10. 10. 2026): pracovní příkazy účtu jsou
+   * jen ochranné nohy otevřené pozice — u followera prokazatelně příkazy
+   * kopírky (ID z outboxu/links), u leadera jeho vlastní SL/TP. Každý musí
+   * pozici jen snižovat (opačná strana, množství ≤ pozice); Market ne.
+   */
+  const workingOrdersAreProtectiveHold = (accountId: number): boolean => {
+    const orders = [...(liveOrdersByAccount.get(accountId)?.values() ?? [])]
+      .filter(order => isOpenOrderStatus(order.status));
+    if (orders.length === 0) return true;
+    const copierIds = accountId === group.leaderAccountId ? null : new Set(controllerCopyOrderIds(accountId));
+    return orders.every(order => {
+      const net = positionsByAccount.get(accountId)?.get(order.symbol) ?? 0;
+      if (net === 0 || order.orderType === 'Market') return false;
+      if (copierIds && !copierIds.has(order.brokerOrderId)) return false;
+      const reducingSide = net > 0 ? 'Sell' : 'Buy';
+      return order.side === reducingSide && order.quantity - order.filledQuantity <= Math.abs(net);
+    });
+  };
+
   const runConnectionRecovery = async () => {
     if (!pendingConnectionRecovery || stopped) return;
     // `armExpiryFlatten: off` vypíná jen automatickou broker akci, nikoli
@@ -8985,6 +9020,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             reconciliation = candidate;
             break;
           }
+          // Výpadek uprostřed obchodu s brackety: kopie synchronní a jediné
+          // pracovní příkazy jsou ochranné nohy → držet DISARMED, žádný
+          // incident. Leader-flat guard je po konci obchodu dočistí.
+          if (
+            missingOwnership.length === 0
+            && candidate.generationUnchanged
+            && participatingDivergence.length === 0
+            && participatingWorking.length > 0
+            && participatingWorking.every(workingOrdersAreProtectiveHold)
+          ) {
+            reconciliation = candidate;
+            break;
+          }
           connectionRecoveryMissingOwnership = missingOwnership;
           const details = [
             missingOwnership.length > 0
@@ -9041,6 +9089,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const guardedSymbols = await resumeLeaderFlatEpochsAfterSnapshot();
     reportDisabledFollowerExposure('connection-recovery');
     if (!hasFollowerExposure()) {
+      if (transportResume?.state === 'waiting' && transportResume.heldOpen) {
+        const leaderFlatNow = [...(positionsByAccount.get(group.leaderAccountId)?.values() ?? [])]
+          .every(quantity => quantity === 0);
+        if (reconciliation.authoritativelyClean && leaderFlatNow) rebaselineHeldTransportResume();
+        else declineTransportResume('kopie skončily jinak než obchod leadera — zapni ručně');
+      }
       if (lastDisarm?.trigger === 'transport') updateDisarmOutcome(lastDisarm.at, 'flat');
       await syncLiveCopyExposureFlag('clear');
       options.onAudit?.([{
@@ -9057,6 +9111,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (quantity !== 0 && (leaderPositions.get(symbol) ?? 0) === 0) orphanSymbols.add(symbol);
       }
     }
+    if (orphanSymbols.size > 0) declineTransportResume('leader je po výpadku flat a kopie ne — zapni ručně');
     const unguardedOrphanSymbols = [...orphanSymbols].filter(symbol => !guardedSymbols.has(symbol));
     if (unguardedOrphanSymbols.length > 0) {
       failClosed(new Error(
@@ -9086,6 +9141,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (lastDisarm?.trigger === 'transport') {
         updateDisarmOutcome(lastDisarm.at, 'left-open-protected');
       }
+      markTransportResumeHeld();
       lastResumeOffer = null;
       options.onAudit?.([{
         at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
@@ -9093,6 +9149,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }]);
       return;
     }
+    declineTransportResume('kopie po výpadku nesedí s leaderem — kopírka je zavírá; zapni ručně');
     const autoClose = await autoFlattenCopies('reconnect', clock());
     if (lastDisarm?.trigger === 'transport') {
       updateDisarmOutcome(
@@ -9409,6 +9466,38 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       unconfirmed: stats.unconfirmedFlatLots?.length ?? 0,
     });
   };
+  /** Obnova po výpadku uprostřed obchodu potvrdila synchronní držené kopie. */
+  const markTransportResumeHeld = () => {
+    if (transportResume?.state === 'waiting' && transportResume.heldOpen && transportResume.rebaselinedAt == null) {
+      transportResume = { ...transportResume, heldConfirmed: true };
+    }
+  };
+  /**
+   * Skupina je po drženém obchodu autoritativně flat. Konec obchodu byl
+   * pozorován živě (fills se započítaly), proto nový výchozí bod; obchod
+   * ukončený už během výpadku ne (denní statistiky by o něm nevěděly).
+   */
+  const rebaselineHeldTransportResume = () => {
+    const pending = transportResume;
+    if (pending?.state !== 'waiting' || !pending.heldOpen || pending.rebaselinedAt != null) return;
+    if (!pending.heldConfirmed) {
+      declineTransportResume('obchod skončil během výpadku — denní statistiky ho nemusí znát; zapni ručně');
+      return;
+    }
+    const at = clock();
+    transportResume = {
+      ...pending,
+      rebaselinedAt: at,
+      lastHeardAt: at,
+      leaderStats: transportResumeLeaderStats(at),
+      leaderMaxOrderId: leaderMaxSeenOrderId?.toString() ?? null,
+    };
+    options.onAudit?.([{
+      at, leaderEventId: `auto-resume:${pending.disarmAt}`, kind: 'recovered',
+      reason: 'držený obchod skončil (pozorováno živě) — automatické pokračování čeká na čistou kontrolu',
+    }]);
+  };
+
   /** Volat při transport disarmu, ještě PŘED shozením `gate.armed`. */
   const beginTransportResume = (disarmAt: number) => {
     if (!gate.armed || gate.shadowMode) {
@@ -9426,13 +9515,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ? 'před výpadkem byl otevřený incident'
         : armExpiresAt <= 0
           ? 'zapnutí nemělo časový limit'
-          : !groupIsFlat() || ordersOpen
-            ? 'při výpadku byl otevřený obchod nebo čekající příkaz — kopie drží u brokera své SL/TP, po flat zapni ručně'
-            : null;
+          : null;
+    const heldOpen = !groupIsFlat() || ordersOpen;
     transportResume = {
       disarmAt,
       lastHeardAt: gate.lastHeartbeatAt,
       leaderMaxOrderId: leaderMaxSeenOrderId?.toString() ?? null,
+      heldOpen,
+      heldConfirmed: false,
+      rebaselinedAt: null,
       armExpiresAt,
       configuration: armPreparationConfiguration(),
       leaderStats: transportResumeLeaderStats(disarmAt),
@@ -9444,7 +9535,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       at: disarmAt, leaderEventId: `auto-resume:${disarmAt}`, kind: reason ? 'blocked' : 'recovered',
       reason: reason
         ? `automatické pokračování po výpadku nebude: ${reason}`
-        : 'automatické pokračování po výpadku čeká na obnovu spojení a čistou kontrolu účtů',
+        : heldOpen
+          ? 'výpadek uprostřed obchodu: kopie se drží s SL/TP; pokračování až po živě pozorovaném konci obchodu'
+          : 'automatické pokračování po výpadku čeká na obnovu spojení a čistou kontrolu účtů',
     }]);
   };
   /**
@@ -9465,10 +9558,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (gate.armed) return decline('kopírka už je zapnutá');
     if (lastDisarm && lastDisarm.at !== pending.disarmAt) return decline('kopírka se mezitím vypnula z jiného důvodu');
     if (now >= pending.armExpiresAt) return decline('vypršelo okno původního zapnutí');
-    if (now - pending.disarmAt >= TRANSPORT_RESUME_MAX_WAIT_MS) return decline('výpadek trval přes hodinu');
+    const heldWaiting = pending.heldOpen && pending.rebaselinedAt == null;
+    if (!heldWaiting && now - (pending.rebaselinedAt ?? pending.disarmAt) >= TRANSPORT_RESUME_MAX_WAIT_MS) {
+      return decline('výpadek trval přes hodinu');
+    }
     if (currentManualRecovery || armPreparationIncidentRequiresRecovery) return decline('po výpadku vznikl incident');
     if (currentRuntime().state.safety.managementOnly) return decline('kopírka je v režimu správy otevřených kopií');
     if (armPreparationConfiguration() !== pending.configuration) return decline('změnila se konfigurace skupiny');
+    if (heldWaiting) {
+      return wait('výpadek uprostřed obchodu — kopie drží u brokera své SL/TP (posuny SL leadera se teď nekopírují); pokračuje po konci obchodu leadera');
+    }
     if (transportResumeLeaderStats(now) !== pending.leaderStats) return decline('leader během výpadku obchodoval');
     const resumeSafety = currentRuntime().state.safety;
     if (now < resumeSafety.dayLockUntil) return decline('platí zámek dne');
@@ -9487,7 +9586,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       pending.disarmAt - TRANSPORT_RESUME_BLIND_WINDOW_MS,
       (pending.lastHeardAt > 0 ? pending.lastHeardAt : pending.disarmAt) - TRANSPORT_RESUME_ORDER_SKEW_MS,
     );
-    if (lastPreflightLeaderOrderActivityAt >= quietSince) {
+    // Po živě pozorovaném konci obchodu rozhoduje ID (stejné hodiny nejsou).
+    if (pending.rebaselinedAt == null && lastPreflightLeaderOrderActivityAt >= quietSince) {
       return decline('leader během výpadku (nebo těsně před jeho zjištěním) zadal příkaz');
     }
     // Nezávisle na hodinách: příkaz leadera s vyšším ID, než znal controller
@@ -16866,7 +16966,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             return {
               disarmAt: transportResume.disarmAt,
               // Pro UI „nejpozději do“: kratší z okna zapnutí a hodinového stropu.
-              armExpiresAt: Math.min(transportResume.armExpiresAt, transportResume.disarmAt + TRANSPORT_RESUME_MAX_WAIT_MS),
+              armExpiresAt: transportResume.heldOpen && transportResume.rebaselinedAt == null
+                ? transportResume.armExpiresAt
+                : Math.min(
+                  transportResume.armExpiresAt,
+                  (transportResume.rebaselinedAt ?? transportResume.disarmAt) + TRANSPORT_RESUME_MAX_WAIT_MS,
+                ),
               phase,
               reason: transportResume.state === 'waiting' ? check.reason : transportResume.reason,
               at: transportResume.at,

@@ -88,7 +88,7 @@ describe('automatické pokračování po výpadku — jádro', () => {
     shadow.controller.stop();
   });
 
-  it('otevřený obchod při výpadku = nepokračuje (kopie drží SL/TP, ON ručně po flat)', async () => {
+  it('otevřený obchod při výpadku = drží kopie a čeká na konec obchodu (detail v copierOutageMidTrade)', async () => {
     const h = await harness();
     await h.armLive();
     h.broker.setPosition(100, symbol, 1);
@@ -100,7 +100,7 @@ describe('automatické pokračování po výpadku — jádro', () => {
     await h.settle();
     await h.outage();
     expect(h.controller.status().transportResume).toMatchObject({
-      phase: 'declined', reason: expect.stringContaining('otevřený obchod'),
+      phase: 'waiting', reason: expect.stringContaining('uprostřed obchodu'),
     });
     h.controller.stop();
   });

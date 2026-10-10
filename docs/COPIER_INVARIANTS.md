@@ -394,8 +394,18 @@ existující ochranu.
   nedostupnost sítě = až 3 opakování pojistky, nikdy ARM. Zbytkové okno:
   brzda zařazená až PO odpovědi pojistky a před `arm()` (~latence relay)
   se provede až po zapnutí — stejně jako u ručního ON (INV-ARM-03).
-- Otevřený obchod při výpadku = nepokračuje (fáze 1); kopie drží SL/TP u
-  brokera, zapíná člověk po flat.
+- Otevřený obchod při výpadku (10. 10. 2026): první obnova přijme stav jako
+  „držené kopie“ (bez incidentu), pokud nejsou divergence ani chybějící
+  lineage a jediné pracovní příkazy jsou ochranné nohy — u followera ID
+  kopírky (outbox/links), u leadera jeho vlastní; každý jen snižuje pozici
+  (opačná strana, zbytek ≤ pozice, ne Market). Jinak incident jako dřív.
+  Kopírka zůstává DISARMED, posuny SL leadera se nezrcadlí, ARM blokuje
+  `pendingConnectionRecovery`. Po vyřešení leader-flat guardu se obnova
+  spustí znovu (read-only); čistá ji dokončí. Automatické pokračování jen
+  když první obnova potvrdila živý obchod a jeho konec byl pozorován živě
+  (nový výchozí bod statistik a ID příkazů, 60min strop od něj); obchod
+  ukončený už během výpadku nebo kopie, které skončily jinak než leader =
+  odmítnout (zapíná člověk).
 - Hlídá test: `tests/copierTransportAutoResume.test.ts`,
   `tests/copierArmSelfCheck.test.ts`, `tests/copierAutoResumeAdmission.test.ts`,
   `tests/copierIncidentWatchdog.test.ts`.
