@@ -278,6 +278,37 @@ describe('etapa 2 (kolo 4) — pauza přežije flat leadera', () => {
     }
   });
 
+  it('vstup leadera přijatý během durable zápisu uvolnění: pauza se obnoví a vstup účet mine (kolo 6)', async () => {
+    const { controller, leaderTrade, requestsFor, allowEntries, advance, leaderEmit, store } = await boot(10);
+    try {
+      controller.arm();
+      await leaderTrade('e1', 'Buy', 1);
+      allowEntries();
+      await leaderTrade('x1', 'Sell', 0);
+      // Přesně ve chvíli, kdy se zapisuje odstranění pauzy, leader zadá vstup.
+      const realCommit = store.commit.bind(store);
+      let injected = false;
+      store.commit = async (snapshot, expectedRevision) => {
+        const releasing = (snapshot.safety?.accountSyncPauses ?? []).length === 0
+          && ((await store.load()).safety?.accountSyncPauses ?? []).length > 0;
+        if (releasing && !injected) {
+          injected = true;
+          leaderEmit(order({ brokerOrderId: 'race-entry', orderType: 'Limit', limitPrice: 30_400 }));
+        }
+        return realCommit(snapshot, expectedRevision);
+      };
+      const before = requestsFor(200).length;
+      for (let i = 0; i < 5; i += 1) { advance(2_000); await sleep(30); await controller.waitForIdle(); }
+      await sleep(100); await controller.waitForIdle();
+      expect(injected).toBe(true);
+      expect(controller.status().accountSyncPauses).toEqual([expect.objectContaining({ accountId: 200 })]);
+      expect(requestsFor(200).length).toBe(before);
+      expect(controller.status().armed).toBe(true);
+    } finally {
+      controller.stop();
+    }
+  });
+
   it('leader-flat guard uvolní pauzu čistého účtu a další vstup se mu zkopíruje', async () => {
     const { controller, leaderTrade, requestsFor, allowEntries, advance } = await boot(10);
     try {

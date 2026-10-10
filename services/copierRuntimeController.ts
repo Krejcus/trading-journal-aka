@@ -9814,6 +9814,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const releasable = (current.state.safety.accountSyncPauses ?? [])
         .filter(pause => isReleasable(pause, current.state));
       if (releasable.length === 0) return current;
+      // Fence přes durable commit (review kola 6): broker událost leadera nebo
+      // uvolňovaného účtu přijatá během zápisu ještě nebyla zpracována a po
+      // odstranění pauzy by prošla dispatchí. Verze se proto porovnají i po
+      // commitu a při změně se pauza obnoví dřív, než processor stav zveřejní
+      // (currentRuntime se mění až návratem z mutate).
+      const fenceIds = [...new Set([
+        ...(group.leaderAccountId != null ? [group.leaderAccountId] : []),
+        ...releasable.map(pause => pause.accountId),
+      ])];
+      const fenceBefore = fenceIds.map(id => tradeObservationVersionByAccount.get(id) ?? 0);
+      const fenceHolds = () => fenceIds.every((id, index) => (
+        (tradeObservationVersionByAccount.get(id) ?? 0) === fenceBefore[index]
+        && (pendingTradeIngressByAccount.get(id) ?? 0) === 0
+      ));
+      if (!fenceHolds()) return current;
       const state = {
         ...current.state,
         safety: withAccountSyncPauses(
@@ -9822,17 +9837,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           new Set(releasable.map(pause => `${pause.accountId}:${pause.symbol}`)),
         ),
       };
-      const committed = await durableStore.commit(
+      const commitState = async (next: CopierRuntime['state'], revision: number) => durableStore.commit(
         toSnapshot(
-          state,
+          next,
           current.outbox.values(),
           current.cancelOutbox.values(),
-          current.revision,
+          revision,
           current.bracketOutbox.values(),
           current.osoOutbox.values(),
         ),
-        current.revision,
+        revision,
       );
+      const committed = await commitState(state, current.revision);
+      if (!fenceHolds()) {
+        // Nová aktivita během zápisu: pauzy durable vrátit (fail-closed).
+        const restored = await commitState(current.state, committed.revision);
+        return { ...current, revision: restored.revision };
+      }
       released.push(...releasable);
       return { ...current, state, revision: committed.revision };
     });
