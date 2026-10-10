@@ -278,9 +278,16 @@ Oponentura Claude subagenty ve 3 kolech (kolo 1 auto-resume = NE → opraveno).
   vč. 30s slepého okna, monotónní ID příkazu, gap fills), zámek dne, okno,
   restart, 60 min, 2× za ruční ON. Serverová pojistka `auto-resume-admit`
   (brzdy uživatele od zapnutí, prázdná fronta) — bez migrace DB.
-- **Otevřené:** výpadek uprostřed obchodu s brackety dnes podle čtení kódu
-  končí incidentem (working ordery = SL/TP) — auto-resume ho nepokrývá;
-  navazující změna jádra („držet kopie, pokračovat při dalším flat“).
+- **Výpadek uprostřed obchodu** (dřív incident `working=100,200` — ověřeno
+  testem): synchronní kopie s ochrannými nohami kopírky se drží bez
+  incidentu (`protectiveHoldProblem`: leader jen snižující příkazy, follower
+  copier nohy tříd jako leader), DISARMED, posuny SL leadera se nezrcadlí.
+  Po vyřešení leader-flat guardu se obnova dokončí sama. Auto-resume jen po
+  živě pozorovaném konci obchodu s flat deníkem; další výpadek, obchod
+  v mezeře, nesoulad deníku nebo nový příkaz leadera = zapíná člověk.
+  Pozor: router při reconnectu neposílá `resync`, gap fills nejsou vidět —
+  rozhodují statistiky, čas a ID příkazů. Tradovate posílá u jednoho
+  výpadku `error` i `connection:false` (nesmí se počítat dvakrát).
 
 ### 2026-10-10 — Etapa 2, bod 5: účet mimo synchron v appce a v notifikacích (Claude)
 

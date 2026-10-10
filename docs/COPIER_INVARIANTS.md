@@ -420,7 +420,11 @@ existující ochranu.
   násobek)), nejméně 1 a nejvýš pozice (runner: stop 2, TP 1). Flat skupina,
   kde pracovní příkaz má jen leader = žádný incident, jen nepokračuje.
   Držený obchod bez SL/TP: po vyřešení guardu se obnova vynutí taky. Čistá
-  obnova smaže `lastError` z transportu (není to incident).
+  obnova smaže `lastError`, jen když pochází výhradně z výpadků spojení
+  (`lastErrorTransportOnly`; i víc různých chyb jednoho výpadku) a není
+  incident. Ochrana followera je odvozená per nohu (floor × násobek) stejně,
+  jak ji kopírka zakládá — může tedy být o zbytek menší než pozice; panel
+  proto mluví o „ochraně z doby před výpadkem“, ne o plném krytí.
 - Hlídá test: `tests/copierTransportAutoResume.test.ts`, `tests/copierOutageMidTrade.test.ts`,
   `tests/copierArmSelfCheck.test.ts`, `tests/copierAutoResumeAdmission.test.ts`,
   `tests/copierIncidentWatchdog.test.ts`.

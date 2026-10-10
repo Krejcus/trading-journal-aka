@@ -257,4 +257,57 @@ describe('výpadek uprostřed obchodu s SL/TP', () => {
     expect(h.controller.status().transportResume?.phase).toBe('ready');
     h.controller.stop();
   });
+
+  it('víc různých chyb spojení během jednoho výpadku: po živém konci obchodu se smažou a pokračování je ready', async () => {
+    const h = await openBracketTrade();
+    h.broker.emitEvent({ type: 'error', error: new Error('connection=leader Tradovate WebSocket heartbeat timeout') } as never);
+    h.broker.setConnected(false);
+    await h.settle();
+    h.broker.emitEvent({ type: 'error', error: new Error('connection=follower connect timeout') } as never);
+    await h.settle();
+    h.broker.setConnected(true);
+    await h.settle(100);
+    await h.endTrade();
+    expect(h.controller.status().lastError).toBeNull();
+    await h.controller.prepareArm?.();
+    expect(h.controller.status().transportResume?.phase).toBe('ready');
+    h.controller.stop();
+  });
+
+  it('druhý výpadek jen přes error po pozorovaném reconnectu = nepokračuje', async () => {
+    const h = await openBracketTrade();
+    h.broker.setConnected(false); await h.settle();
+    h.broker.setConnected(true); await h.settle(100);
+    h.broker.emitEvent({ type: 'error', error: new Error('connection=leader heartbeat timeout') } as never);
+    await h.settle();
+    expect(h.controller.status().transportResume).toMatchObject({ phase: 'declined', reason: expect.stringContaining('další výpadek') });
+    h.controller.stop();
+  });
+
+  it('fill leadera v mezeře při plánované obměně socketu (scoped resync) = nepokračuje', async () => {
+    const h = await openBracketTrade();
+    h.broker.setConnected(false); await h.settle();
+    h.broker.setConnected(true); await h.settle(100);
+    h.broker.emitEvent({ type: 'connection', connected: true, resynced: true, at: Date.now(), resync: {
+      complete: true, accountIds: [100], positions: [], orders: [],
+      gapFills: [{ fillId: 'gap', brokerOrderId: 'x', accountId: 100, symbol, side: 'Sell', quantity: 1, price: 1, filledAt: 1, tag: '' }],
+    } } as never);
+    await h.settle();
+    expect(h.controller.status().transportResume?.phase).toBe('declined');
+    h.controller.stop();
+  });
+
+  it('nekonzistentní chyba (ne z výpadku) se po konci obchodu nemaže', async () => {
+    const h = await openBracketTrade();
+    h.broker.setConnected(false); await h.settle();
+    h.broker.setConnected(true); await h.settle(100);
+    // Route-gap divergence apod. nastaví lastError jinou cestou — musí zůstat.
+    h.broker.emitEvent({ type: 'connection', connected: true, resynced: true, at: Date.now(), resync: { complete: false, failureReason: 'test', accountIds: [], positions: [], orders: [], gapFills: [] } } as never);
+    await h.settle();
+    const before = h.controller.status().lastError;
+    await h.endTrade();
+    expect(before).not.toBeNull();
+    expect(h.controller.status().lastError).not.toBeNull();
+    h.controller.stop();
+  });
 });

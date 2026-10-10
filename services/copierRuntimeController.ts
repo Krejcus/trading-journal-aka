@@ -2082,6 +2082,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   }> = [];
   let bootRecoveryChecked = false;
   let lastResumeOffer: { at: number } | null = null;
+  /** `lastError` pochází výhradně z výpadků spojení (ne incident). */
+  let lastErrorTransportOnly = false;
   /**
    * Automatické pokračování po výpadku spojení (10. 10. 2026), jen v paměti:
    * restart workeru ho vždy zahodí. Vzniká jen z živého ARM a jen když byla
@@ -4613,6 +4615,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const wasLiveArmed = gate.armed && !gate.shadowMode;
     const wasConnected = gate.connected;
     invalidateReconciliation();
+    // Chyba jen z transportu (i víc různých během jednoho výpadku) není
+    // incident; jakákoli jiná ji trvale „zabarví“.
+    lastErrorTransportOnly = failure.transportLost === true && (lastError == null || lastErrorTransportOnly);
     lastError = errorOf(reason);
     if (!failure.transportLost) {
       armPreparationIncidentRequiresRecovery = true;
@@ -5683,6 +5688,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       );
       return { ...current, state, cancelOutbox, revision: committed.revision };
     });
+    lastErrorTransportOnly = false;
     lastError = new Error(reason);
     options.onError?.(lastError);
     options.onAudit?.([
@@ -9163,8 +9169,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // výpadku ji smaže stejně jako read-only obnova.
       if (reconciliation.authoritativelyClean && leaderFlatNow && !currentManualRecovery
         && !armPreparationIncidentRequiresRecovery && lastDisarm?.trigger === 'transport'
-        && lastError?.message === lastDisarm.detail) {
+        && lastError != null && lastErrorTransportOnly) {
         lastError = null;
+        lastErrorTransportOnly = false;
       }
       if (transportResume?.state === 'waiting' && transportResume.heldOpen) {
         if (reconciliation.authoritativelyClean && leaderFlatNow) rebaselineHeldTransportResume();
@@ -9670,7 +9677,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (currentRuntime().state.safety.managementOnly) return decline('kopírka je v režimu správy otevřených kopií');
     if (armPreparationConfiguration() !== pending.configuration) return decline('změnila se konfigurace skupiny');
     if (heldWaiting) {
-      return wait('výpadek uprostřed obchodu — kopie drží u brokera své SL/TP (posuny SL leadera se teď nekopírují); pokračuje po konci obchodu leadera');
+      return wait('výpadek uprostřed obchodu — kopie drží u brokera ochranu z doby před výpadkem (posuny SL leadera se teď nekopírují); pokračuje po konci obchodu leadera');
     }
     if (transportResumeLeaderStats(now) !== pending.leaderStats) return decline('leader během výpadku obchodoval');
     const resumeSafety = currentRuntime().state.safety;
@@ -9833,6 +9840,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // V režimu opravy po startu je hlavní příčina už známá (nedostupné účty
     // uložené skupiny); technická chyba recovery ji v UI nesmí přepsat.
     if (!startupGroupRepair) {
+      lastErrorTransportOnly = false;
       lastError = new Error(
         `Po reconnectu se nepodařilo automaticky potvrdit flat/no-working stav: ${lastRecoveryError ?? 'bez důvodu'}`,
       );
@@ -12969,6 +12977,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
           if (wasArmed) failClosed(new Error(`Copier fail-closed: ${divergence}`), { autoClose: false });
           else {
+            lastErrorTransportOnly = false;
             lastError = new Error(`Copier fail-closed: ${divergence}`);
             invalidateReconciliation();
             options.onError?.(lastError);
@@ -14921,6 +14930,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               ));
             }
           } else {
+            lastErrorTransportOnly = false;
             lastError = new Error(
               `Follower cut ${follower.accountId} zůstal po restartu nedokončený; `
               + 'bez durable live ARM markeru nelze let-run cancel side effect bezpečně obnovit',
@@ -14955,6 +14965,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ));
           }
         } else {
+          lastErrorTransportOnly = false;
           lastError = new Error(
             `Follower cut ${follower.accountId} zůstal po restartu nedokončený; `
             + 'bez durable live ARM markeru nelze close-copy side effect bezpečně obnovit',
@@ -15749,6 +15760,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       bootRecoveryChecked = true;
       invalidateReconciliation();
       // Nová skupina startuje bez staré chyby; změna během zápisu ale zůstane vidět.
+      lastErrorTransportOnly = false;
       lastError = commitIngressError;
       gate = {
         ...gate,
@@ -15773,6 +15785,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await run;
     } catch (reason) {
       const error = errorOf(reason);
+      lastErrorTransportOnly = false;
       lastError = error;
       options.onError?.(error);
       throw error;
@@ -16163,6 +16176,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (stopped) return;
       const wasArmed = gate.armed;
       invalidateReconciliation();
+      lastErrorTransportOnly = false;
       lastError = new Error(reason.trim() || 'Ruční nouzové zastavení');
       if (wasArmed || !lastDisarm || lastDisarm.trigger !== 'kill-switch') {
         recordDisarm(
