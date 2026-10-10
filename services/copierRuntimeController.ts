@@ -8472,17 +8472,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // jinak zrušil account-wide úklid.
     const hasAnyPause = (accountId: number) => (currentRuntime().state.safety.accountSyncPauses ?? [])
       .some(pause => pause.accountId === accountId);
-    accountIds = accountIds.filter(accountId => (
-      targetSymbolsByAccount.has(accountId) || !hasAnyPause(accountId)
+    const skippedPausedAccountIds = accountIds.filter(accountId => (
+      !targetSymbolsByAccount.has(accountId) && hasAnyPause(accountId)
     ));
+    accountIds = accountIds.filter(accountId => !skippedPausedAccountIds.includes(accountId));
     const participatingFollowerIdSet = new Set(participatingFollowerIds);
-    const unscopedExposure = accountIds.flatMap(accountId => {
+    // Vynechaný pozastavený účet s pozicí mimo pozastavený symbol se jen
+    // nahlásí jako neznámá expozice (žádný broker write), aby výsledek nemlčel.
+    const unscopedSkippedExposure = skippedPausedAccountIds
+      .filter(accountId => participatingFollowerIdSet.has(accountId))
+      .flatMap(accountId => [...(positionsByAccount.get(accountId) ?? [])]
+        .filter(([symbol, quantity]) => quantity !== 0 && !pausedSymbol(accountId, symbol))
+        .map(([symbol, quantity]) => ({ accountId, symbol, quantity })));
+    const unscopedExposure = [...unscopedSkippedExposure, ...accountIds.flatMap(accountId => {
       if (!participatingFollowerIdSet.has(accountId) || !targetSymbolsByAccount.has(accountId)) return [];
       const scopedSymbols = targetSymbolsByAccount.get(accountId)!;
       return [...(positionsByAccount.get(accountId) ?? [])]
         .filter(([symbol, quantity]) => quantity !== 0 && !scopedSymbols.has(symbol) && !pausedSymbol(accountId, symbol))
         .map(([symbol, quantity]) => ({ accountId, symbol, quantity }));
-    });
+    })];
     const reportUnscopedExposure = () => {
       const accountIdsWithUnscopedExposure = [...new Set(
         unscopedExposure.map(exposure => exposure.accountId),
