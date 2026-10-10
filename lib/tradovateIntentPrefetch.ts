@@ -6,7 +6,8 @@ export const TRADOVATE_INTENT_PREFETCH_TTL_MS = 3_000;
 
 interface Dependencies {
   status(): Promise<TradovateOAuthStatus>;
-  bootstrap(connectionId: string): Promise<TradovatePreflightResult>;
+  /** Volitelné: bez něj záměr zahřeje jen status a profily, žádné čtení účtů. */
+  bootstrap?: (connectionId: string) => Promise<TradovatePreflightResult>;
   profiles(): Promise<TradovateAccountProfilesResult>;
   now?: () => number;
   blocked?: () => boolean;
@@ -51,11 +52,13 @@ export function createTradovateIntentPrefetch(deps: Dependencies) {
     }
   };
   const startBootstrap = (candidate: Entry, ids: readonly string[]) => {
+    const read = deps.bootstrap;
+    if (!read) return;
     for (const id of new Set(ids)) {
       if (!id || candidate.bootstrap.has(id) || !fresh(candidate) || deps.blocked?.()) continue;
       const pending: PendingRead = { promise: Promise.resolve({ status: 'rejected', reason: 'not-started' }), failed: false };
       candidate.bootstrap.set(id, pending);
-      pending.promise = settled(() => deps.bootstrap(id), candidate).then(result => {
+      pending.promise = settled(() => read(id), candidate).then(result => {
         pending.failed = result.status === 'rejected';
         return result;
       });

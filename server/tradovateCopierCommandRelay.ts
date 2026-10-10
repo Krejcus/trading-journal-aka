@@ -95,11 +95,9 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   // konce broker session. Patří do stejné vzdálené třídy jako disarm a
   // kill-switch — bez něj „Zamknout den" z produkční PWA nikdy nedorazil.
   'lock-until-session-end',
-  // Kontrola pozic je čistě read-only u brokera. Za ARM ji worker nejdřív
-  // auditovaně vypne (kód reconcile-request) a během správy otevřených kopií
-  // ji odmítne; nikdy nic neobchoduje. Bez ní telefon nemá jak zrušit
-  // „Čeká kontrola pozic“.
-  'reconcile',
+  // 8. 10. 2026: samostatná Kontrola pozic z UI zmizela — kontrolu si dělá
+  // ON (arm-live), incident maže jen s výslovným potvrzením. Produkční DB
+  // check `reconcile` stejně nikdy nepustil, takže se nic neztrácí.
 ]);
 
 const BRAKE_COMMAND_TYPES = ['disarm', 'kill-switch', 'lock-until-session-end'] as const;
@@ -142,27 +140,37 @@ export async function resolveCopierRelayConnectionId(options: {
   userId: string;
   connectionId: string;
 }): Promise<string> {
-  const { data: owned, error: ownedError } = await options.db.from('tradovate_oauth_connections')
-    .select('id')
-    .eq('id', options.connectionId)
-    .eq('user_id', options.userId)
-    .maybeSingle<{ id: string }>();
-  if (ownedError) throw new Error(`copier-relay-connection-lookup-failed: ${ownedError.message}`);
-  if (!owned) return options.connectionId;
+  // Tři nezávislé dotazy (všechny omezené na user_id) běží souběžně: každý
+  // round trip Vercel ↔ Supabase stojí ~100 ms a status relay se čte každé 2 s.
+  // Výsledky se vyhodnocují ve stejném pořadí jako dřív — cizí připojení se
+  // nepřesměruje a chyba zařízení se uplatní jen u vlastního připojení.
   // Kandidáti: neodvolaná zařízení uživatele přímo pro toto připojení a
   // owner-scope zařízení (Mac pro všechny propfirmy). Před migrací scope
   // dotaz na `scope` selže — pak zůstávají jen přímá zařízení.
-  const { data: direct, error: directError } = await options.db.from('tradovate_copier_devices')
-    .select('id,connection_id')
-    .eq('user_id', options.userId)
-    .eq('connection_id', options.connectionId)
-    .is('revoked_at', null);
+  const [
+    { data: owned, error: ownedError },
+    { data: direct, error: directError },
+    { data: ownerDevices, error: ownerError },
+  ] = await Promise.all([
+    options.db.from('tradovate_oauth_connections')
+      .select('id')
+      .eq('id', options.connectionId)
+      .eq('user_id', options.userId)
+      .maybeSingle<{ id: string }>(),
+    options.db.from('tradovate_copier_devices')
+      .select('id,connection_id')
+      .eq('user_id', options.userId)
+      .eq('connection_id', options.connectionId)
+      .is('revoked_at', null),
+    options.db.from('tradovate_copier_devices')
+      .select('id,connection_id')
+      .eq('user_id', options.userId)
+      .eq('scope', 'owner')
+      .is('revoked_at', null),
+  ]);
+  if (ownedError) throw new Error(`copier-relay-connection-lookup-failed: ${ownedError.message}`);
+  if (!owned) return options.connectionId;
   if (directError) throw new Error(`copier-relay-device-lookup-failed: ${directError.message}`);
-  const { data: ownerDevices, error: ownerError } = await options.db.from('tradovate_copier_devices')
-    .select('id,connection_id')
-    .eq('user_id', options.userId)
-    .eq('scope', 'owner')
-    .is('revoked_at', null);
   const candidates = [...(direct ?? []), ...(ownerError ? [] : ownerDevices ?? [])] as Array<{ id: string; connection_id: string | null }>;
   if (candidates.length === 0) return options.connectionId;
   const { data: runtimes, error: runtimeError } = await options.db.from('tradovate_copier_device_runtime')
@@ -317,6 +325,32 @@ const validatedRelayGroup = (value: unknown): CopyGroupConfig => {
   return groups[0];
 };
 
+/**
+ * Operátorem potvrzené vyřazení účtů staré skupiny, které už v Tradovate nejsou
+ * (8. 10. 2026). Worker ho znovu validuje proti své skupině a OAuth.
+ */
+const validatedRetirement = (value: unknown): { groupId: string; accountIds: number[]; reason: string } | undefined => {
+  if (value === undefined) return undefined;
+  const candidate = value as { groupId?: unknown; accountIds?: unknown; reason?: unknown } | null;
+  if (!candidate || typeof candidate !== 'object'
+    || typeof candidate.groupId !== 'string' || candidate.groupId.length === 0 || candidate.groupId.length > 200
+    || !Array.isArray(candidate.accountIds) || candidate.accountIds.length === 0 || candidate.accountIds.length > 100
+    || candidate.accountIds.some(id => !Number.isSafeInteger(id) || (id as number) <= 0)
+    || typeof candidate.reason !== 'string' || candidate.reason.trim().length < 20 || candidate.reason.length > 500) {
+    throw new Error('invalid-relay-command-payload');
+  }
+  return { groupId: candidate.groupId, accountIds: [...candidate.accountIds] as number[], reason: candidate.reason };
+};
+
+/** Potvrzení incidentu z dialogu ON: `manualRecovery.id` (8. 10. 2026). */
+const validatedIncidentAck = (value: unknown): string | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(value)) {
+    throw new Error('invalid-relay-command-payload');
+  }
+  return value;
+};
+
 const validatedEligibilityExclusions = (value: unknown) => {
   if (value == null) return [];
   if (!Array.isArray(value) || value.length > 100) throw new Error('invalid-relay-command-payload');
@@ -356,20 +390,24 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
     // svou zastaralou konfigurací — 24. 8. s enabled:false, takže se první
     // obchod nezkopíroval. UI skupinu posílá vždy; její absence je chyba
     // volajícího a musí selhat nahlas, ne potichu změnit význam příkazu.
+    const acknowledgeIncidentId = validatedIncidentAck((command as { acknowledgeIncidentId?: unknown }).acknowledgeIncidentId);
     return {
       group: validatedRelayGroup((command as { group?: unknown }).group),
       accountEligibilityExclusions: validatedEligibilityExclusions(
         (command as { accountEligibilityExclusions?: unknown }).accountEligibilityExclusions,
       ),
+      ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
     };
   }
   if (command.type === 'activate-group') {
     const waiver = (command as { waiveUnverifiableFollowerOwnership?: unknown })
       .waiveUnverifiableFollowerOwnership;
     if (waiver !== undefined && waiver !== true) throw new Error('invalid-relay-command-payload');
+    const retirement = validatedRetirement((command as { retireMissingOldGroup?: unknown }).retireMissingOldGroup);
     return {
       group: validatedRelayGroup((command as { group?: unknown }).group),
       ...(waiver === true ? { waiveUnverifiableFollowerOwnership: true } : {}),
+      ...(retirement ? { retireMissingOldGroup: retirement } : {}),
     };
   }
   if (command.type === 'shadow') {
@@ -413,19 +451,23 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
   }
   if (row.command_type === 'arm-live') {
+    const acknowledgeIncidentId = validatedIncidentAck(row.payload?.acknowledgeIncidentId);
     return {
       type: 'arm-live',
       group: validatedRelayGroup(row.payload?.group),
       accountEligibilityExclusions: validatedEligibilityExclusions(row.payload?.accountEligibilityExclusions),
+      ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
     };
   }
   if (row.command_type === 'activate-group') {
     const waiver = row.payload?.waiveUnverifiableFollowerOwnership;
     if (waiver !== undefined && waiver !== true) throw new Error('invalid-relay-command-payload');
+    const retirement = validatedRetirement(row.payload?.retireMissingOldGroup);
     return {
       type: 'activate-group',
       group: validatedRelayGroup(row.payload?.group),
       ...(waiver === true ? { waiveUnverifiableFollowerOwnership: true } : {}),
+      ...(retirement ? { retireMissingOldGroup: retirement } : {}),
     };
   }
   if (row.command_type === 'shadow') {

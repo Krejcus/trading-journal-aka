@@ -19,7 +19,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_INCIDENT_ACK_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -68,6 +68,9 @@ export const armSelfCheckFailureMessage = (check: {
   ].filter(Boolean);
   return `Zapnutí zastaveno kontrolou u brokera: ${parts.join('; ') || 'stav se nepodařilo autoritativně ověřit'}.`;
 };
+
+/** Strojově čitelná značka pro UI: který incident uživatel potvrzuje. */
+export const incidentAckMarker = (id: string) => `[ack-incident:${encodeURIComponent(id)}]`;
 
 export const boundedLocalArmDeadline = (rawDeadline: unknown, receivedAt = Date.now()): number => {
   const parsed = typeof rawDeadline === 'string' ? Number(rawDeadline) : NaN;
@@ -146,6 +149,8 @@ export interface LocalCopierExecutionAgent {
   execute(command: LocalCopierAgentCommand, context?: LocalCopierAgentExecutionContext): Promise<LocalCopierAgentCommandResult>;
   /** Synchronně odmítne nový/pending command ingress před graceful drainem. */
   beginShutdown(): void;
+  /** Rozpracované příkazy a čas posledního dokončeného (údržbový restart). */
+  commandActivity?(): { pending: number; lastSettledAt: number };
   /**
    * Napojí relay: čas začátku posledního prázdného vyzvednutí fronty. Bez
    * něj se kopírka po výpadku sama nikdy nezapne (brzda z telefonu by mohla
@@ -221,6 +226,11 @@ const sameCopyGroupConfig = (left: CopyGroupConfig, right: CopyGroupConfig): boo
   JSON.stringify(canonicalConfig(left)) === JSON.stringify(canonicalConfig(right));
 
 const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Strojově čitelná značka pro UI: kterou skupinu a účty potvrdit k vyřazení. */
+export const retireMissingMarker = (groupId: string, accountIds: readonly number[]) => (
+  `[retire-missing:${encodeURIComponent(groupId)}:${accountIds.join(',')}]`
+);
 
 const accountsForRoutingChange = (
   previous: CopyGroupConfig,
@@ -357,7 +367,7 @@ export async function startLocalCopierExecutionAgent(
 
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
-    capabilities: [COPIER_RISK_CONFIG_CAPABILITY,
+    capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY,
       ...(options.controller.prepareArm ? ['arm-preparation-v1'] : []),
       ...(options.accountDisplay ? ['account-display-v1'] : [])],
     environment: 'demo',
@@ -442,9 +452,40 @@ export async function startLocalCopierExecutionAgent(
         retireMissingOldGroup: {
           groupId: group.id,
           accountIds: [...startupRepair.unavailableAccountIds],
-          reason: `UI oprava skupiny po startu: účty ${startupRepair.unavailableAccountIds.join(', ')} nejsou v OAuth (breached/odpojené); vyřazeny bez broker flat důkazu`,
+          reason: `UI oprava skupiny po startu: účty ${startupRepair.unavailableAccountIds.join(', ')} nejsou v OAuth nebo jsou neaktivní (breached/odpojené); vyřazeny bez broker flat důkazu`,
         },
       };
+    }
+    if (next.id !== group.id && mode === 'activate' && !reconfigurationRequest.retireMissingOldGroup
+      // Bez read-only dry-runu nejde chybějící účty zjistit — beze změny chování.
+      && options.previewGroupAccounts) {
+      // 8. 10. 2026: přepnutí na JINOU skupinu, když stará má účty, které už
+      // v Tradovate nejsou (breach). Worker je sám NEvyřadí (nemá broker flat
+      // důkaz, E6); odmítne s přesným seznamem a UI nabídne potvrzení
+      // uživatelem — pak pošle activate-group s retireMissingOldGroup.
+      const nextIds = new Set(copyGroupAccountIds(next));
+      const previousIds = copyGroupAccountIds(group);
+      const repair = startupRepair?.groupId === group.id ? [...startupRepair.unavailableAccountIds].sort((x, y) => x - y) : null;
+      const candidates = repair ?? previousIds.filter(accountId => !nextIds.has(accountId));
+      if (candidates.length > 0) {
+        // Fail-closed: selhání dry-runu přepnutí odmítne.
+        // Mimo režim opravy jen účty, které Tradovate vůbec nevrací (viditelný
+        // neaktivní účet může mít pozici). Režim opravy drží klasifikaci ze
+        // startu (chybějící i neaktivní) — jinak by z něj nebyla cesta ven.
+        const probe = await previewAccounts({ required: [], optional: candidates, inactiveOptionalAsMissing: repair != null });
+        const missing = new Set(probe.missingOptional);
+        const unavailable = candidates.filter(accountId => missing.has(accountId));
+        if (unavailable.length > 0) {
+          const retirable = repair
+            ? unavailable.length === repair.length && !unavailable.some(accountId => nextIds.has(accountId))
+            : unavailable.length === previousIds.length;
+          throw new Error(retirable
+            ? `Stará skupina „${group.name || group.id}“ má účty ${unavailable.join(', ')}, které v Tradovate už nejsou${repair ? ' nebo jsou neaktivní' : ''}. `
+              + `Potvrď jejich vyřazení a přepnutí. ${retireMissingMarker(group.id, unavailable)}`
+            : `Účty ${unavailable.join(', ')} staré skupiny už v Tradovate nejsou. `
+              + 'Worker to za chvíli sám zachytí a restartuje se; přepnutí pak půjde. Zkus to znovu za pár minut.');
+        }
+      }
     }
     const requested = next;
     const normalized = sanitizeCopyGroups([next]);
@@ -515,7 +556,10 @@ export async function startLocalCopierExecutionAgent(
       ? {
         required: copyGroupAccountIds(next),
         optional: previousIds.filter(accountId => !copyGroupAccountIds(next).includes(accountId)),
-        inactiveOptionalAsMissing: true,
+        // 8. 10. 2026 (review): mimo režim opravy jde bez flat důkazu vyřadit
+        // jen účet, který Tradovate vůbec nevrací (neaktivní může mít pozici).
+        // Režim opravy (E1) zachovává klasifikaci ze startu včetně neaktivních.
+        inactiveOptionalAsMissing: startupRepair?.groupId === previous.id,
       }
       : accountsForRoutingChange(previous, next);
     if ((mode === 'activate' || topologyChanged) && options.controller.status().armed) {
@@ -874,8 +918,21 @@ export async function startLocalCopierExecutionAgent(
           // nový incident, který vznikl až po výpadku; ten zůstává ruční.
           throw new Error('Automatické zapnutí zastaveno: po výpadku vznikl incident, který vyžaduje ruční Kontrolu pozic');
         }
-        if (armNeedsSelfCheck(options.controller.status())) {
-          const check = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
+        // 8. 10. 2026: tlačítko Kontrola pozic zmizelo; durable incident smí
+        // ON smazat jen s výslovným potvrzením právě tohoto incidentu
+        // (INV-DEFAULT-03). Zvykové kliknutí ho nepřejde.
+        const incident = options.controller.status().manualRecovery ?? null;
+        if (incident && command.acknowledgeIncidentId !== incident.id) {
+          throw new Error(
+            `Zapnutí po incidentu vyžaduje tvoje potvrzení: ${incident.reason} `
+            + `(starší appka potvrzení neumí — použij aktuální web nebo aktualizovanou iPhone appku) ${incidentAckMarker(incident.id)}`,
+          );
+        }
+        if (incident || armNeedsSelfCheck(options.controller.status())) {
+          const check = await awaitArmDeadline(
+            options.controller.reconcile(incident ? { acknowledgedIncidentId: incident.id } : {}),
+            deadlineAt,
+          );
           assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
           if (!check.authoritativelyClean) throw new Error(armSelfCheckFailureMessage(check));
         }
@@ -892,7 +949,8 @@ export async function startLocalCopierExecutionAgent(
           await awaitArmDeadline(options.controller.prepareArm(), deadlineAt);
         } else {
           // Compatibility for controller adapters without preparation support.
-          const reconciliation = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
+          // Interní kontrola: incident nemaže (INV-RECON-02).
+          const reconciliation = await awaitArmDeadline(options.controller.reconcile({ internal: true }), deadlineAt);
           if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
             throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
           }
@@ -933,7 +991,8 @@ export async function startLocalCopierExecutionAgent(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
         );
         await prepareAccounts(allAccountsRequired(copyGroupAccountIds(group)));
-        const reconciliation = await options.controller.reconcile();
+        // Interní kontrola: SHADOW incident nemaže (INV-DEFAULT-03).
+        const reconciliation = await options.controller.reconcile({ internal: true });
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('SHADOW odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
         }
@@ -1105,6 +1164,22 @@ export async function startLocalCopierExecutionAgent(
     tail = pending.then(() => undefined, () => undefined);
     return pending;
   };
+  // Aktivita příkazů pro údržbový restart (8. 10. 2026): restart nesmí
+  // přerušit rozpracovaný ani právě dokončený příkaz, jehož ACK ještě letí.
+  let pendingCommands = 0;
+  let lastCommandSettledAt = 0;
+  const dispatchTracked: typeof dispatch = (...args) => {
+    pendingCommands += 1;
+    const settle = () => { pendingCommands -= 1; lastCommandSettledAt = Date.now(); };
+    let result: ReturnType<typeof dispatch>;
+    try {
+      result = dispatch(...args);
+    } catch (error) {
+      settle();
+      throw error;
+    }
+    return result.finally(settle);
+  };
 
   const server: Server = createServer((request, response) => {
     const origin = request.headers.origin ?? '';
@@ -1156,7 +1231,7 @@ export async function startLocalCopierExecutionAgent(
         }
         const rawDeadline = request.headers['x-alphatrade-command-deadline'];
         const localDeadline = boundedLocalArmDeadline(rawDeadline, requestCreatedAt);
-        const payload = await dispatch(command, command.type === 'arm-live'
+        const payload = await dispatchTracked(command, command.type === 'arm-live'
           ? { source: 'loopback', createdAt: requestCreatedAt, deadlineAt: localDeadline }
           : { source: 'loopback', createdAt: requestCreatedAt }, admittedBrakeEpoch);
         json(response, 200, payload);
@@ -1267,7 +1342,8 @@ export async function startLocalCopierExecutionAgent(
   return {
     origin: `http://${host}:${address.port}`,
     status,
-    execute: dispatch,
+    execute: dispatchTracked,
+    commandActivity: () => ({ pending: pendingCommands, lastSettledAt: lastCommandSettledAt }),
     beginShutdown,
     setRemoteQueueProbe(probe) {
       remoteQueueProbe = probe;

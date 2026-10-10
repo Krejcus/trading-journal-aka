@@ -1,320 +1,353 @@
 /**
- * TradeShareModal — fullscreen preview shareable trade card s floating actions.
+ * TradeShareModal — sdílení obchodu jako karta ve stylu Karty dne z LIVE.
  *
- * UX flow:
- *   1. User klikne Share2 v TradeDetailModal
- *   2. Backdrop + card scaled to fit viewport (no wrapper modal)
- *   3. Floating Download / Copy buttons bottom-center, X close top-right
- *   4. Click backdrop = close
+ * Karta se naklání za myší/prstem, ovládání je v jejím pravém horním rohu
+ * (sdílení + zavření) a odhalí se po najetí. Sdílení: odkaz na /share/:id,
+ * obrázek do schránky, PNG ke stažení a v nativní appce systémový list.
+ * Obrázek se kreslí z neviditelné kopie karty v plátně 1200×630.
  *
- * Důležité: Action buttons jsou MIMO `cardRef` div — takže nezachytí se
- * v exportovaném PNG (jsou jen v previewu).
+ * Obchod se zveřejní až první akcí sdílení — samotné otevření okna nic
+ * nemění (dřív se obchod zveřejnil hned při otevření náhledu).
  */
-import React, { useRef, useState, useEffect, useCallback, useLayoutEffect } from 'react';
-import { motion } from 'framer-motion';
-import { X, Download, Copy, Loader2, Link as LinkIcon, Share2 } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Check, Copy, Download, Link as LinkIcon, Loader2, Share2, X } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import type { Trade } from '../types';
 import { storageService } from '../services/storageService';
 import TradeShareCard from './TradeShareCard';
+import ImageZoomModal from './ImageZoomModal';
 import { isNativeBuild } from '../utils/runtimeConfig';
-import { shareTradeImageNative, tradeShareFileName } from '../services/nativeShare';
+import { shareTextNative, shareTradeImageNative, tradeShareFileName } from '../services/nativeShare';
+import { currentLiveDayShareTheme } from '../lib/liveDayShare';
+
+export interface TradeShareImage {
+    url: string;
+    label: string;
+    /** Soukromý snímek z kopírky — na veřejné stránce za odkazem není. */
+    private?: boolean;
+}
 
 interface Props {
     trade: Trade;
-    username?: string;
-    avatarUrl?: string;
+    owner: { name: string; avatar?: string | null };
+    /** Snímky z detailu obchodu (ruční + podepsané z kopírky), v pořadí detailu. */
+    images?: TradeShareImage[];
     onClose: () => void;
 }
 
-const CARD_W = 1600;
-const CARD_H = 900;
+/** Výchozí obrázek karty: ruční screenshot, jinak snímek výstupu, jinak první. */
+export const defaultShareImageIndex = (images: readonly TradeShareImage[]): number => {
+    const manual = images.findIndex(image => !image.private);
+    if (manual >= 0) return manual;
+    const exit = images.findIndex(image => image.label === 'Výstup');
+    return exit >= 0 ? exit : 0;
+};
 
-const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', avatarUrl, onClose }) => {
-    const cardRef = useRef<HTMLDivElement>(null);
-    const [generating, setGenerating] = useState(false);
+const EXPORT_W = 1200;
+const EXPORT_H = 630;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const readPref = (key: string): boolean => {
+    try { return localStorage.getItem(key) === '1'; } catch { return false; }
+};
+const writePref = (key: string, value: boolean) => {
+    try { localStorage.setItem(key, value ? '1' : '0'); } catch { /* soukromé okno */ }
+};
+
+const waitForAssets = async (root: HTMLElement): Promise<void> => {
+    await document.fonts?.ready;
+    await Promise.all([...root.querySelectorAll('img')].map(async image => {
+        if (!image.complete) await new Promise<void>(resolve => {
+            image.addEventListener('load', () => resolve(), { once: true });
+            image.addEventListener('error', () => resolve(), { once: true });
+        });
+        await image.decode?.().catch(() => undefined);
+    }));
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+};
+
+const Toggle: React.FC<{ on: boolean; label: string; onChange: () => void }> = ({ on, label, onChange }) => (
+    <button type="button" role="switch" aria-checked={on} onClick={onChange} className="live-day-sharepop-alt trade-card-toggle">
+        <span className={`trade-card-switch${on ? ' trade-card-switch-on' : ''}`} aria-hidden />
+        {label}
+    </button>
+);
+
+const TradeShareModal: React.FC<Props> = ({ trade, owner, images: imagesProp, onClose }) => {
+    const exportRef = useRef<HTMLDivElement>(null);
+    const popRef = useRef<HTMLDivElement>(null);
+    const [open, setOpen] = useState(false);
+    const [busy, setBusy] = useState<string | null>(null);
     const [feedback, setFeedback] = useState<string | null>(null);
-    const [scale, setScale] = useState(0.6);
-    // Sdílet i poznámku? Default vypnuto (soukromí). Pamatuje si poslední volbu.
+    const [published, setPublished] = useState(false);
+    const [zoom, setZoom] = useState(false);
+    const [theme] = useState(currentLiveDayShareTheme);
     const hasNotes = !!(trade.notes && String(trade.notes).trim());
-    const [shareNotes, setShareNotes] = useState<boolean>(() => {
-        try { return localStorage.getItem('alphatrade_share_notes') === '1'; } catch { return false; }
-    });
+    const [shareNotes, setShareNotes] = useState(() => readPref('alphatrade_share_notes'));
+    const [hideAmount, setHideAmount] = useState(() => readPref('alphatrade_share_hide_amount'));
+    const notesOn = shareNotes && hasNotes;
 
-    // Sestaví share URL — `/share/:id` route s OG meta tagy přes Vercel rewrite na /api/share/:id.
-    // Crawlery (Discord/X/Slack) si stáhnou preview z meta tagů, humany JS redirect na app.
-    const shareUrl = (() => {
-        if (!trade.id) return window.location.origin;
-        const isUUID = typeof trade.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trade.id);
-        if (isUUID) return `${window.location.origin}/share/${trade.id}`;
-        return window.location.origin;
-    })();
-
-    // Mark trade as public for QR scan flow + propaguj share_notes flag (přepíná, jestli
-    // veřejný link smí ukázat poznámku). Re-běží i při změně toggle.
+    const tradeId = typeof trade.id === 'string' && UUID.test(trade.id) ? trade.id : null;
+    const shareUrl = tradeId ? `${window.location.origin}/share/${tradeId}` : null;
+    const fallbackShots = trade.screenshots?.length ? trade.screenshots : trade.screenshot ? [trade.screenshot] : [];
+    const images: TradeShareImage[] = imagesProp?.length ? imagesProp : fallbackShots.map(url => ({ url, label: 'Screenshot' }));
+    const [imageIndex, setImageIndex] = useState(() => defaultShareImageIndex(images));
+    // Snímky z kopírky se podepisují až po otevření detailu — dokud uživatel
+    // sám nepřepnul, výchozí obrázek se přepočítá, jakmile dorazí.
+    const pickedRef = useRef(false);
+    const imagesKey = images.map(item => item.url).join('|');
     useEffect(() => {
-        const isUUID = typeof trade.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trade.id);
-        if (isUUID) {
-            storageService.markTradeAsPublic(trade.id as string, shareNotes && hasNotes).catch(err => {
-                console.warn('[Share] Failed to mark trade as public:', err);
-            });
-        }
-    }, [trade.id, shareNotes, hasNotes]);
+        if (!pickedRef.current) setImageIndex(defaultShareImageIndex(images));
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- klíčem je seznam URL, ne identita pole
+    }, [imagesKey]);
+    const image = images[Math.min(imageIndex, images.length - 1)] ?? null;
+    const step = (delta: number) => {
+        pickedRef.current = true;
+        setImageIndex(index => (index + delta + images.length) % images.length);
+    };
 
-    // Lock scroll while modal open
     useEffect(() => {
         const original = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
-        return () => { document.body.style.overflow = original; };
-    }, []);
-
-    // Compute scale to fit viewport — card has fixed 1600×900
-    // Leave ~80px horizontal padding, ~140px vertical for action buttons
-    useLayoutEffect(() => {
-        const computeScale = () => {
-            const padH = 80;
-            // top: close button (40) + bottom: action buttons (~70) + gap (~24)
-            const padV = 180;
-            const fitW = (window.innerWidth - padH) / CARD_W;
-            const fitH = (window.innerHeight - padV) / CARD_H;
-            setScale(Math.min(0.85, fitW, fitH));
+        const key = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape' || zoom) return;
+            if (open) setOpen(false); else onClose();
         };
-        computeScale();
-        window.addEventListener('resize', computeScale);
-        return () => window.removeEventListener('resize', computeScale);
-    }, []);
+        window.addEventListener('keydown', key);
+        return () => {
+            document.body.style.overflow = original;
+            window.removeEventListener('keydown', key);
+        };
+    }, [onClose, open, zoom]);
 
-    /** Vygeneruje PNG blob z card divu — používáno pro download i clipboard */
-    const generatePng = useCallback(async (): Promise<Blob | null> => {
-        if (!cardRef.current) return null;
-        try {
-            const dataUrl = await toPng(cardRef.current, {
-                pixelRatio: 2,
-                cacheBust: true,
-                backgroundColor: '#050810',
-                skipFonts: true, // Skip Google Fonts CSS embedding (CORS-restricted); -apple-system fallback funguje
-            });
-            const res = await fetch(dataUrl);
-            return await res.blob();
-        } catch (e) {
-            console.error('[Share] PNG generation failed:', e);
-            return null;
-        }
-    }, []);
+    // Bublina se zavře klepnutím mimo ni (ne mimo kartu — to zavírá okno).
+    useEffect(() => {
+        if (!open) return;
+        const down = (event: PointerEvent) => {
+            if (popRef.current && !popRef.current.contains(event.target as Node)) setOpen(false);
+        };
+        window.addEventListener('pointerdown', down, true);
+        return () => window.removeEventListener('pointerdown', down, true);
+    }, [open]);
 
-    const handleDownload = useCallback(async () => {
-        setGenerating(true);
+    // Už zveřejněný obchod musí změnu „poznámka ano/ne“ promítnout i do odkazu.
+    useEffect(() => {
+        if (!published || !tradeId) return;
+        storageService.markTradeAsPublic(tradeId, notesOn).catch(error => {
+            console.warn('[Share] Failed to update public notes flag:', error);
+            setFeedback('Změnu poznámky v odkazu se nepodařilo uložit.');
+        });
+    }, [notesOn, published, tradeId]);
+
+    const publish = useCallback(async () => {
+        if (!tradeId) throw new Error('Tento obchod zatím nejde sdílet odkazem — ulož ho a zkus to znovu.');
+        if (published) return;
+        await storageService.markTradeAsPublic(tradeId, notesOn);
+        setPublished(true);
+    }, [notesOn, published, tradeId]);
+
+    const renderPng = useCallback(async (): Promise<Blob> => {
+        const node = exportRef.current;
+        if (!node) throw new Error('Náhled karty není připravený.');
+        await waitForAssets(node);
+        const dataUrl = await toPng(node, {
+            width: EXPORT_W,
+            height: EXPORT_H,
+            pixelRatio: 2,
+            cacheBust: true,
+            skipFonts: true,
+            backgroundColor: theme === 'light' ? '#e2e8f0' : '#020617',
+        }).catch((error: unknown) => {
+            if (error instanceof Error) throw error;
+            // html-to-image při nenačteném obrázku hází holý Event, ne Error.
+            throw new Error('Obrázek se nepodařilo vykreslit — graf obchodu se nenačetl.');
+        });
+        const blob = await fetch(dataUrl).then(response => response.blob());
+        if (blob.size < 1000) throw new Error('Obrázek se nepodařilo vykreslit.');
+        return blob;
+    }, [theme]);
+
+    const run = useCallback(async (key: string, action: () => Promise<string | null>) => {
+        if (busy) return;
+        setBusy(key);
         setFeedback(null);
-        const blob = await generatePng();
-        setGenerating(false);
-        if (!blob) {
-            setFeedback('Generování selhalo');
-            setTimeout(() => setFeedback(null), 2500);
-            return;
-        }
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `alphatrade_${trade.instrument || 'trade'}_${new Date(trade.date || Date.now()).toISOString().slice(0, 10)}.png`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        setFeedback('Staženo ✓');
-        setTimeout(() => setFeedback(null), 2000);
-    }, [generatePng, trade]);
-
-    const handleNativeShare = useCallback(async () => {
-        setGenerating(true);
-        setFeedback(null);
         try {
-            const blob = await generatePng();
-            if (!blob || blob.size < 1000) throw new Error('Obrázek se nepodařilo vygenerovat.');
-            const result = await shareTradeImageNative({
-                image: blob,
-                fileName: tradeShareFileName(trade.instrument, trade.date),
-                text: `${trade.instrument || 'Trade'} · AlphaTrade`,
-                url: shareUrl,
-            });
-            if (result.completed) {
-                setFeedback('Sdíleno přes iOS ✓');
-                setTimeout(() => setFeedback(null), 2500);
-            }
+            const message = await action();
+            if (message) setFeedback(message);
         } catch (error) {
-            console.error('[Share] Native share failed:', error);
-            setFeedback(error instanceof Error ? error.message : 'Sdílení selhalo');
-            setTimeout(() => setFeedback(null), 3500);
+            if (error instanceof DOMException && error.name === 'AbortError') return;
+            console.error('[Share]', error);
+            setFeedback(error instanceof Error ? error.message : 'Sdílení se nepodařilo.');
         } finally {
-            setGenerating(false);
+            setBusy(null);
         }
-    }, [generatePng, shareUrl, trade.date, trade.instrument]);
+    }, [busy]);
 
-    const handleCopyLink = useCallback(async () => {
-        // Debug log — pomůže zjistit pokud trade.id chybí nebo není UUID
-        console.log('[Share] Copying URL:', shareUrl, 'trade.id:', trade.id, 'type:', typeof trade.id);
-        try {
-            await navigator.clipboard.writeText(shareUrl);
-            setFeedback(`Zkopírováno: ${shareUrl.length > 50 ? shareUrl.slice(0, 47) + '...' : shareUrl}`);
-            setTimeout(() => setFeedback(null), 4000);
-        } catch (e) {
-            console.error('[Share] Link copy failed:', e);
-            setFeedback('Nepodařilo se zkopírovat link');
-            setTimeout(() => setFeedback(null), 2500);
+    const copyLink = () => run('link', async () => {
+        await publish();
+        // Sdílí se jen odkaz — průvodní text by chat slepil s URL do jednoho řetězce.
+        if (isNativeBuild) {
+            const result = await shareTextNative({ text: shareUrl! });
+            return result.completed ? 'Odkaz sdílen' : null;
         }
-    }, [shareUrl, trade.id]);
+        await navigator.clipboard.writeText(shareUrl!);
+        return 'Odkaz zkopírován';
+    });
 
-    const handleCopy = useCallback(async () => {
-        if (!cardRef.current) return;
-        setGenerating(true);
-        setFeedback(null);
+    const copyImage = () => run('image', async () => {
+        if (typeof ClipboardItem === 'undefined') throw new Error('Prohlížeč neumí kopírovat obrázek — použij Stáhnout PNG.');
+        // Safari chce ClipboardItem vytvořit hned v gestu (před prvním await),
+        // obsah smí dorazit později.
+        const png = (async () => {
+            if (shareUrl) await publish();
+            return renderPng();
+        })();
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+        return 'Obrázek zkopírován — vlož ⌘V';
+    });
 
-        try {
-            if (typeof ClipboardItem === 'undefined') {
-                throw new Error('ClipboardItem not supported');
-            }
+    const download = () => run('download', async () => {
+        if (shareUrl) await publish();
+        const blob = await renderPng();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = tradeShareFileName(trade.instrument, trade.date);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        return 'Staženo';
+    });
 
-            // Generate PNG sync-first (verify blob), then write
-            const dataUrl = await toPng(cardRef.current, {
-                pixelRatio: 2,
-                cacheBust: true,
-                backgroundColor: '#050810',
-                // Skip external font embedding — Google Fonts CSS is CORS-restricted.
-                // Karta používá -apple-system fallback, takže font fallback funguje OK.
-                skipFonts: true,
-            });
+    const shareImageNative = () => run('native', async () => {
+        if (shareUrl) await publish();
+        const result = await shareTradeImageNative({
+            image: await renderPng(),
+            fileName: tradeShareFileName(trade.instrument, trade.date),
+            url: shareUrl ?? undefined,
+        });
+        return result.completed ? 'Sdíleno' : null;
+    });
 
-            const res = await fetch(dataUrl);
-            const blob = await res.blob();
+    const icon = (key: string, idle: React.ReactNode) => (busy === key ? <Loader2 size={13} className="animate-spin" /> : idle);
 
-            // Verify blob is valid (não-empty)
-            console.log('[Share] Generated blob:', { size: blob.size, type: blob.type });
-            if (!blob || blob.size < 1000) {
-                throw new Error(`Invalid blob (size: ${blob?.size || 0} bytes) — možný CORS issue se screenshotem`);
-            }
-
-            await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-
-            setGenerating(false);
-            setFeedback('Zkopírováno ✓ Vlož do chatu (⌘+v)');
-            setTimeout(() => setFeedback(null), 3000);
-        } catch (e: any) {
-            setGenerating(false);
-            console.error('[Share] Clipboard write failed:', e);
-            let msg = 'Použij raději Stáhnout';
-            if (e?.message?.includes('CORS') || e?.message?.includes('Invalid blob')) {
-                msg = 'Obrázek se nepodařilo vygenerovat (CORS). Použij Stáhnout.';
-            } else if (e?.name === 'NotAllowedError') msg = 'Browser nepovolil clipboard. Použij Stáhnout.';
-            else if (e?.message?.includes('not supported') || e?.message?.includes('ClipboardItem')) msg = 'Tvůj browser neumí kopírovat obrázek. Použij Stáhnout.';
-            else if (e?.name === 'SecurityError') msg = 'Nezabezpečené připojení. Použij Stáhnout.';
-            setFeedback(msg);
-            setTimeout(() => setFeedback(null), 4000);
-        }
-    }, []);
-
-    // Compute card visible size (after scale) for layout reservation
-    const visibleW = CARD_W * scale;
-    const visibleH = CARD_H * scale;
-
-    return (
-        <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center gap-6">
-            {/* Backdrop — klik zavírá modal */}
-            <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={onClose}
-                className="absolute inset-0 bg-black/85 backdrop-blur-md"
-            />
-
-            {/* Close button (mimo card div — neexportuje se) */}
-            <button
-                onClick={onClose}
-                className="absolute top-6 right-6 z-20 p-3 rounded-full bg-white/5 hover:bg-white/10 text-white border border-white/10 transition-all"
-            >
-                <X size={22} />
+    const tools = (
+        <>
+            <div className="relative" ref={popRef}>
+                <button
+                    type="button"
+                    onClick={() => setOpen(value => !value)}
+                    aria-label="Sdílet obchod"
+                    aria-expanded={open}
+                    title="Sdílet obchod"
+                    className="live-day-ghost"
+                >
+                    {busy ? <Loader2 size={13} className="animate-spin" /> : published ? <Check size={13} /> : <Share2 size={13} />}
+                </button>
+                {open ? (
+                    <div className="live-day-sharepop trade-card-sharepop" role="dialog" aria-label="Sdílení obchodu">
+                        {isNativeBuild ? (
+                            <button type="button" onClick={() => void shareImageNative()} disabled={!!busy} className="live-day-sharepop-main">
+                                {icon('native', <Share2 size={13} />)} Sdílet obrázek
+                            </button>
+                        ) : null}
+                        {shareUrl ? (
+                            <button type="button" onClick={() => void copyLink()} disabled={!!busy} className={isNativeBuild ? 'live-day-sharepop-alt' : 'live-day-sharepop-main'}>
+                                {icon('link', <LinkIcon size={13} />)} {isNativeBuild ? 'Sdílet odkaz' : 'Kopírovat odkaz'}
+                            </button>
+                        ) : null}
+                        {!isNativeBuild ? (
+                            <button type="button" onClick={() => void copyImage()} disabled={!!busy} className="live-day-sharepop-alt">
+                                {icon('image', <Copy size={13} />)} Kopírovat obrázek
+                            </button>
+                        ) : null}
+                        <button type="button" onClick={() => void download()} disabled={!!busy} className="live-day-sharepop-alt">
+                            {icon('download', <Download size={13} />)} Stáhnout PNG
+                        </button>
+                        <span className="trade-card-sharepop-sep" aria-hidden />
+                        <Toggle on={hideAmount} label="Skrýt částku" onChange={() => { const next = !hideAmount; setHideAmount(next); writePref('alphatrade_share_hide_amount', next); }} />
+                        {hasNotes ? (
+                            <Toggle on={shareNotes} label="Přidat poznámku" onChange={() => { const next = !shareNotes; setShareNotes(next); writePref('alphatrade_share_notes', next); }} />
+                        ) : null}
+                        <p aria-live="polite" className="live-day-sharepop-note">
+                            {feedback ?? (!shareUrl
+                                ? 'Sloučený obchod z více účtů jde sdílet jen jako obrázek.'
+                                : image?.private
+                                    ? 'Snímek z kopírky je jen v obrázku — stránka za odkazem ukáže cenovou dráhu.'
+                                : hideAmount
+                                    ? 'Částka zmizí z obrázku. Stránka za odkazem ji ukazuje dál.'
+                                    : 'Odkaz i QR zpřístupní obchod každému, kdo je dostane.')}
+                        </p>
+                    </div>
+                ) : null}
+            </div>
+            <button type="button" onClick={onClose} className="live-day-close" aria-label="Zavřít">
+                <X size={14} />
             </button>
+        </>
+    );
 
-            {/* Card wrapper — rezervuje místo pro scaled card */}
-            <div style={{ width: visibleW, height: visibleH, position: 'relative', zIndex: 10 }}>
-                <motion.div
-                    initial={{ opacity: 0, scale: scale * 0.95, y: 20 }}
-                    animate={{ opacity: 1, scale, y: 0 }}
-                    exit={{ opacity: 0, scale: scale * 0.95, y: 20 }}
+    return createPortal(
+        <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sdílení obchodu"
+            className="trade-share-overlay fixed inset-0 z-[200] overflow-y-auto bg-slate-900/25 p-4 backdrop-blur-md sm:p-7"
+            onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}
+        >
+            <div
+                className="mx-auto flex min-h-full w-full max-w-[1040px] items-center justify-center"
+                onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}
+            >
+                <div className="w-full">
+                    <TradeShareCard
+                        trade={trade}
+                        owner={owner}
+                        shareUrl={shareUrl ?? undefined}
+                        showNotes={notesOn}
+                        hideAmount={hideAmount}
+                        toolsSlot={tools}
+                        screenshotUrl={image?.url}
+                        imageNav={image ? { label: image.label, index: Math.min(imageIndex, images.length - 1), total: images.length, onPrev: () => step(-1), onNext: () => step(1) } : undefined}
+                        onScreenshotClick={image ? () => setZoom(true) : undefined}
+                    />
+                </div>
+            </div>
+
+            {/* Neviditelná kopie pro export: pevné plátno 1200×630, motiv appky. */}
+            <div
+                aria-hidden="true"
+                className={theme === 'light' ? 'light-theme' : theme === 'oled' ? 'oled-theme' : undefined}
+                style={{ position: 'fixed', left: -20_000, top: 0, width: EXPORT_W, height: EXPORT_H, pointerEvents: 'none' }}
+            >
+                <div
+                    ref={exportRef}
+                    className="trade-card-export"
                     style={{
-                        width: CARD_W,
-                        height: CARD_H,
-                        transformOrigin: 'top left',
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
+                        width: EXPORT_W,
+                        height: EXPORT_H,
+                        background: theme === 'light'
+                            ? 'radial-gradient(circle at 20% 5%, #cffafe 0, transparent 38%), radial-gradient(circle at 90% 90%, #d1fae5 0, transparent 36%), #e2e8f0'
+                            : 'radial-gradient(circle at 20% 5%, #083344 0, transparent 38%), radial-gradient(circle at 90% 90%, #052e2b 0, transparent 36%), #020617',
                     }}
-                    className="shadow-2xl shadow-black/50"
                 >
-                    <div ref={cardRef} style={{ width: CARD_W, height: CARD_H, borderRadius: 24, overflow: 'hidden' }}>
-                        <TradeShareCard trade={trade} username={username} avatarUrl={avatarUrl} shareUrl={shareUrl} showQR={true} showNotes={shareNotes && hasNotes} />
-                    </div>
-                </motion.div>
+                    <TradeShareCard
+                        trade={trade}
+                        owner={owner}
+                        shareUrl={shareUrl ?? undefined}
+                        showNotes={notesOn}
+                        hideAmount={hideAmount}
+                        screenshotUrl={image?.url}
+                        captureMode
+                    />
+                </div>
             </div>
 
-            {/* Toggle: sdílet i poznámku (jen když trade poznámku má) */}
-            {hasNotes && (
-                <button
-                    onClick={() => {
-                        const next = !shareNotes;
-                        setShareNotes(next);
-                        try { localStorage.setItem('alphatrade_share_notes', next ? '1' : '0'); } catch { /* ignore */ }
-                    }}
-                    className="relative z-10 flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/15 text-white border border-white/15 backdrop-blur transition-all"
-                >
-                    <span className={`relative w-9 h-5 rounded-full transition-colors ${shareNotes ? 'bg-emerald-500' : 'bg-white/20'}`}>
-                        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${shareNotes ? 'translate-x-4' : ''}`} />
-                    </span>
-                    <span className="text-[11px] font-black uppercase tracking-widest">Sdílet i poznámku</span>
-                </button>
-            )}
-
-            {/* Action buttons — centered under card via flex parent */}
-            <div className="relative z-10 flex items-center gap-3">
-                {feedback && (
-                    <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold whitespace-nowrap animate-in fade-in slide-in-from-bottom-2">
-                        {feedback}
-                    </div>
-                )}
-                {isNativeBuild && <button
-                    onClick={() => void handleNativeShare()}
-                    disabled={generating}
-                    className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black uppercase tracking-widest transition-all shadow-lg shadow-blue-600/40 disabled:opacity-50"
-                >
-                    {generating ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}
-                    Sdílet přes iOS
-                </button>}
-                <button
-                    onClick={handleDownload}
-                    disabled={generating}
-                    className={`flex items-center gap-2 px-5 py-3 rounded-2xl ${isNativeBuild ? 'bg-white/10 hover:bg-white/15 border border-white/15 backdrop-blur' : 'bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/40'} text-white text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-50`}
-                >
-                    {generating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                    Stáhnout PNG
-                </button>
-                <button
-                    onClick={handleCopy}
-                    disabled={generating}
-                    className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/15 text-white text-[11px] font-black uppercase tracking-widest transition-all border border-white/15 backdrop-blur disabled:opacity-50"
-                >
-                    {generating ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
-                    Kopírovat obrázek
-                </button>
-                <button
-                    onClick={handleCopyLink}
-                    disabled={generating}
-                    className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/15 text-white text-[11px] font-black uppercase tracking-widest transition-all border border-white/15 backdrop-blur disabled:opacity-50"
-                    title={shareUrl}
-                >
-                    <LinkIcon size={14} />
-                    Kopírovat link
-                </button>
-            </div>
-        </div>
+            {zoom && images.length > 0 ? <ImageZoomModal images={images.map(item => item.url)} initialIndex={Math.min(imageIndex, images.length - 1)} onIndexChange={setImageIndex} onClose={() => setZoom(false)} /> : null}
+        </div>,
+        document.body,
     );
 };
 

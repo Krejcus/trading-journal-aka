@@ -241,7 +241,7 @@ function streamFirstStatusLookupFromMock(
   ): Promise<BrokerOrderStatusLookup> => {
     const streamed = broker.orders().find(item => item.accountId === accountId && item.brokerOrderId === orderId);
     if (streamed) {
-      return { status: streamed.status, completeness: 'authoritative', observedAt: Date.now() };
+      return { status: streamed.status, completeness: 'authoritative', observedAt: Date.now(), filledQuantity: streamed.filledQuantity };
     }
     if (options?.streamOnly) return { status: null, completeness: 'eventual', observedAt: Date.now() };
     await onRest?.(accountId, orderId);
@@ -319,10 +319,13 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
         restReads += 1;
       });
       emitFollowerFlat(harness);
+      const listPositions = vi.spyOn(harness.broker, 'listPositions');
       await harness.controller.waitForIdle();
 
       expect(restReads).toBe(0);
       expect(listOrders).not.toHaveBeenCalled();
+      // Čisté zrušení bez fillu: žádné čtení pozice navíc (beze změny proti produkci).
+      expect(listPositions.mock.calls.filter(([accountId]) => accountId === 200).length).toBe(0);
       expect(findOrderById).not.toHaveBeenCalled();
       expect(ids.map(id => harness.broker.cancelRequestCount(id))).toEqual([0, 0]);
       expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
@@ -353,6 +356,150 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
       harness.controller.stop();
     }
   }, 12_000);
+
+  // 8. 10. 2026 (produkce, účet 68931462): cancel ochranné nohy dostal
+  // TooLate, protože order právě rušil dřívější cancel; broker ho ještě ~1,4 s
+  // hlásil jako Working a sweep kopírku zbytečně vypnul.
+  it('TooLate cancel: počká, až broker order doběhne (jen čtení), a kopírku nevypne', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      let cancelCalls = 0;
+      const graphReads = vi.spyOn(harness.broker, 'listOrders');
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        // Dřívější cancel doběhne u brokera až za chvíli; tenhle je TooLate.
+        cancelCalls += 1;
+        setTimeout(() => {
+          const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
+          leg.status = 'canceled';
+          harness.broker.emitEvent({ type: 'order', order: { ...leg } });
+        }, 600);
+        throw new Error('cancelOrder rejected: TooLate');
+      };
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      await harness.controller.waitForIdle();
+
+      expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(cancelCalls).toBe(1);
+      // Čeká se jen na levný stream status, ne opakovaná REST čtení.
+      expect(graphReads.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
+  it('TooLate a noha se místo zrušení vyplnila: projde postkontrolou pozice (žádná rychlá cesta)', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
+        leg.status = 'filled';
+        leg.filledQuantity = leg.quantity;
+        harness.broker.setPosition(200, 'MNQU6', -1);
+        throw new Error('cancelOrder rejected: TooLate');
+      };
+      const positionReads = vi.spyOn(harness.broker, 'listPositions');
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+      expect(positionReads.mock.calls.some(([accountId]) => accountId === 200)).toBe(true);
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('pozici');
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
+  it('fill mezi čtením orderů a pozice: pozice se čte až po orderech a otevřenou pozici odhalí', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        throw new Error('cancelOrder rejected: TooLate');
+      };
+      emitFollowerFlat(harness);
+      // Ochranná noha se vyplní přesně během postkontroly orderů (po TooLate čekání).
+      const realListOrders = harness.broker.listOrders.bind(harness.broker);
+      let flipped = false;
+      harness.broker.listOrders = async accountId => {
+        const result = await realListOrders(accountId);
+        if (!flipped && accountId === 200 && harness.broker.cancelRequestCount(targetId) === 0) {
+          const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
+          if (leg.status === 'working' && result.some(order => order.brokerOrderId === targetId)) {
+            flipped = true;
+            leg.status = 'filled';
+            leg.filledQuantity = leg.quantity;
+            harness.broker.setPosition(200, 'MNQU6', -1);
+            return result.map(order => order.brokerOrderId === targetId ? { ...order, status: 'filled' as const, filledQuantity: order.quantity } : order);
+          }
+        }
+        return result;
+      };
+      await harness.controller.waitForIdle();
+      expect(flipped).toBe(true);
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('pozici');
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
+  it('partial cancel (canceled s fillem) neprojde rychlou cestou: čerstvá pozice odhalí otevřenou pozici', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        // Část nohy se vyplnila, zbytek zrušen — Tradovate hlásí canceled s fillem.
+        const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
+        leg.status = 'canceled';
+        leg.filledQuantity = 1;
+        harness.broker.setPosition(200, 'MNQU6', -1);
+      };
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('pozici');
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
+  it('TooLate cancel: order zůstane working i po čekání → dál fail-closed (žádný další cancel)', async () => {
+    const harness = await armedOsoHarness(baseGroup, { flatSweepBudgetMs: 3_000 });
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      let attempts = 0;
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        attempts += 1;
+        throw new Error('cancelOrder rejected: TooLate');
+      };
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('nejasný cancel');
+      expect(attempts).toBe(1);
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
 
   it('B6/R6/V7: první streamově working cancel má vlastní broker timeout a neopakuje se', async () => {
     const harness = await armedOsoHarness(baseGroup, {

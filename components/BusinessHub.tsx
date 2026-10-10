@@ -494,8 +494,8 @@ function FirmDetailModal({ summary, expenses, payouts, accountOf, formatValue, s
 
     return createPortal(
         <div className="fixed inset-0 z-[200] flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-[6vh]" onMouseDown={onClose}>
-            <div role="dialog" aria-modal="true" aria-label={firmDisplayName(summary.key)} className="glass-modal w-full max-w-[760px] overflow-hidden" onMouseDown={e => e.stopPropagation()}>
-                <header className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-3">
+            <div role="dialog" aria-modal="true" aria-label={firmDisplayName(summary.key)} className="glass-modal flex max-h-full w-full max-w-[760px] flex-col overflow-hidden" onMouseDown={e => e.stopPropagation()}>
+                <header className="flex shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-3">
                     <FirmMark firm={summary.key} size={36} />
                     <div className="min-w-0">
                         <h2 className="text-[15px] font-bold text-[var(--text-primary)]">{firmDisplayName(summary.key)}</h2>
@@ -503,7 +503,7 @@ function FirmDetailModal({ summary, expenses, payouts, accountOf, formatValue, s
                     </div>
                     <button type="button" onClick={onClose} aria-label="Zavřít" className={`${btnGhost} ml-auto w-[30px] px-0`}><X size={16} /></button>
                 </header>
-                <div className="grid gap-3.5 px-4 py-3.5">
+                <div className="grid min-h-0 gap-3.5 overflow-y-auto overscroll-contain px-4 py-3.5">
                     <div className="grid grid-cols-2 overflow-hidden rounded-md border border-[var(--border-subtle)] sm:grid-cols-4 [&>div:nth-child(2)]:border-l [&>div:nth-child(4)]:border-l [&>div:nth-child(n+3)]:border-t sm:[&>div:nth-child(3)]:border-l sm:[&>div:nth-child(n+3)]:border-t-0 [&>div]:border-[var(--border-subtle)]">
                         {stat('Náklady', formatValue(summary.cost))}
                         {stat('Výplaty', formatValue(summary.paid), 'text-emerald-500')}

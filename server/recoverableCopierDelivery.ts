@@ -8,7 +8,10 @@ type Request = (body: Record<string, unknown>) => Promise<Record<string, unknown
 export const COPIER_COMMAND_ACK_RESERVE_MS = 10_000;
 export const COPIER_RELAY_CLOCK_SKEW_RESERVE_MS = 2_000;
 /** Serial, durable transport recovery. Only HTTP delivery/ACK is retried;
- * once execution starts the command can NEVER be executed by this relay again. */
+ * once execution starts a trading or configuration command can NEVER be
+ * executed by this relay again. Idempotent brakes (DISARM, kill switch, day
+ * lock) are the deliberate exception: a claimed brake is replayed after a
+ * restart or a failed checkpoint write, because it only tightens. */
 export function recoverableCopierDelivery(options: {
   store: RelayDeliveryStore; agent: LocalCopierExecutionAgent; request: Request;
   nextRevision: () => number; onComplete: (id: string) => void;
@@ -45,10 +48,20 @@ export function recoverableCopierDelivery(options: {
       await persist(null); return response;
     }
     if (remote.status !== 'claimed') throw new Error('relay-delivery-status-invalid');
-    if (current.session !== session || current.phase === 'executing') {
+    // DISARM / kill switch / denní zámek jsou idempotentní a jen zpřísňují:
+    // claim z předchozí session (ztracená odpověď při restartu) se proto
+    // provede, ne ACKne jako neznámý. Obchodní a konfigurační příkazy se nikdy
+    // neopakují.
+    const idempotentBrake = remote.command.type === 'disarm' || remote.command.type === 'kill-switch'
+      || remote.command.type === 'lock-until-session-end';
+
+    if (current.phase === 'completed') {
+      // Výsledek už je durable (i z předchozí session): jen ho znovu
+      // potvrdíme, nepřepisujeme na „neznámý“ (8. 10. 2026).
+    } else if ((current.session !== session || current.phase === 'executing') && !idempotentBrake) {
       await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
         error: 'command-outcome-unknown-worker-session-changed' });
-    } else if (current.phase === 'polling') {
+    } else if (current.phase === 'polling' || idempotentBrake) {
       const serverNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
       const localMidpoint = pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2);
       const serverClockOffsetMs = Number.isFinite(serverNow) ? serverNow - localMidpoint : 0;
@@ -58,11 +71,21 @@ export function recoverableCopierDelivery(options: {
       );
       const created = Date.parse(remote.createdAt) - serverClockOffsetMs;
       const expires = Date.parse(remote.expiresAt) - serverClockOffsetMs;
+      // Denní zámek blízko hranice session (17:00 CT) nejde bez hodin přiřadit
+      // ke správnému dni; odhad posunu by mohl zamknout celý další den.
+      const dayLockSessionAmbiguous = remote.command.type === 'lock-until-session-end'
+        && Number.isFinite(created)
+        && tradovateSessionEndAt(created - clockSkewReserveMs) !== tradovateSessionEndAt(created + clockSkewReserveMs);
       const validPrestartDayLock = remote.command.type === 'lock-until-session-end'
         && Number.isFinite(created)
+        && !dayLockSessionAmbiguous
         && tradovateSessionEndAt(created) > now();
+      // Brzda zadaná před restartem workeru se provede i v nové session:
+      // jen zpřísňuje (DISARM / kill switch) a nesmí se ztratit (8. 10. 2026).
+      const validPrestartBrake = remote.command.type === 'kill-switch' || remote.command.type === 'disarm';
       if (!Number.isFinite(created) || !Number.isFinite(expires) || expires <= now()
-        || (created < startedAt && !validPrestartDayLock)) {
+        || dayLockSessionAmbiguous
+        || (created < startedAt && !validPrestartDayLock && !validPrestartBrake)) {
         await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
           error: 'command-expired-or-predates-worker-session' });
       } else {
@@ -74,6 +97,9 @@ export function recoverableCopierDelivery(options: {
         // Recheck TTL after durable disk writes, immediately before execution.
         if (options.isActive?.() === false) executionError = 'command-cancelled-worker-shutdown';
         else if (expires <= now()) executionError = 'command-expired-before-execution';
+        // Brzdy se nikdy nezahazují (8. 10. 2026, review kola 4–6): pořadí
+        // záměrů nejde bez hodin spolehlivě doložit. Pozdě doručený DISARM
+        // novějšího ARM je fail-safe — kopírka zůstane vypnutá a ukáže důvod.
         else {
           try {
             result = await options.agent.execute(remote.command, {

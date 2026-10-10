@@ -1,11 +1,13 @@
-type PrivacyState = { locked: boolean; busy: boolean; error: boolean };
+/** `known`: aspoň jedno nativní čtení dopadlo. Do té doby je appka zakrytá,
+ * ale neukazujeme zámek — u vypnutého zámku by při každém spuštění problikl. */
+type PrivacyState = { locked: boolean; busy: boolean; error: boolean; known: boolean };
 type NativeState = { enabled: boolean; generation: number };
 
 /** A native lock generation separates a cancelled prompt from a new background lock. */
 export function createNativePrivacyController(deps: {
   read: () => Promise<NativeState>; authenticate: () => Promise<boolean>;
 }) {
-  let state: PrivacyState = { locked: true, busy: false, error: false };
+  let state: PrivacyState = { locked: true, busy: false, error: false, known: false };
   let generation = 0;
   let unlockedGeneration: number | null = null;
   let attemptedGeneration: number | null = null;
@@ -26,7 +28,7 @@ export function createNativePrivacyController(deps: {
       if (current.generation >= generation) {
         generation = current.generation;
         if (success && generation === attempt) unlockedGeneration = generation;
-        update({ locked: current.enabled && unlockedGeneration !== generation, error: !success });
+        update({ locked: current.enabled && unlockedGeneration !== generation, error: !success, known: true });
       }
     } catch { update({ locked: true, error: true }); }
     finally { update({ busy: false }); }
@@ -41,7 +43,7 @@ export function createNativePrivacyController(deps: {
       if (current.generation < generation) return;
       generation = current.generation;
       if (!current.enabled) { unlockedGeneration = null; attemptedGeneration = null; }
-      update({ locked: current.enabled && unlockedGeneration !== generation });
+      update({ locked: current.enabled && unlockedGeneration !== generation, known: true });
       if (state.locked && !state.busy && attemptedGeneration !== generation) await unlock();
     } catch { if (request === refreshSequence) update({ locked: true, error: true }); }
   }

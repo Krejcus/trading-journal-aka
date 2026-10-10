@@ -824,6 +824,8 @@ export interface DashboardWidgetConfig {
   order?: number;
   // Widget metadata
   showDisciplinedCurve?: boolean;
+  /** Telefon: widget v polovině šířky (vedle dalšího). Jen v `phone` rozložení. */
+  mobileHalf?: boolean;
 }
 
 /** Per-breakpoint layout storage. Keys: 'lg' (12 cols, notebook), 'xxl' (24 cols, ultrawide). */

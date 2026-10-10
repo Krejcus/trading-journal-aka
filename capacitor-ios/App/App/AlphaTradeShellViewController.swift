@@ -755,6 +755,10 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     private func openMoreMenu() {
         guard moreMenuHost == nil else { return }
         let isBacktest = activeWorld == "backtest"
+        // LIVE bývá v menu Více: read-only přednačtení během výběru položky.
+        if !isBacktest && !tabSlots.contains("live") {
+            evaluate("window.__alphaTradeNative?.prepare?.('live')")
+        }
         let isLight = activeTheme == "light"
         // Everything the bar does not show. Backtest hides LIVE-only surfaces
         // and, like the web sidebar, presents Účty as the backtest Session.

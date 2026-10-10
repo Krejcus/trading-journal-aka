@@ -83,10 +83,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       správně routuje na nejčerstvější heartbeat, ale není to fencing.
       Budoucí oprava má odmítnout ARM při více čerstvých workerech a brzdu
       fan-outovat na všechna nerevokovaná zařízení connection.
-- [ ] **N10 day-lock snapshot race v controlleru** — `maybeEngageDayLock`
-      má ukládat funkčním `persistSafetyUpdate(current => ...)`, aby
-      nepřepsal souběžnou novější safety hodnotu. Balíček 7a-2 soubor
-      `services/copierRuntimeController.ts` podle dělby práce neměnil.
+- [x] **N10 day-lock snapshot race v controlleru** — VYŘEŠENO 29. 9. v
+      controller balíčku 5c: `maybeEngageDayLock` používá funkční
+      `persistSafetyUpdate(current => ...)`; deterministická regrese
+      `N10 day-lock functional update preserves a concurrent sessionArmedAt commit`
+      zachovává oba souběžné zápisy.
 - [x] **Zápis venue risk limitů / skutečný broker-side day lock** — UZAVŘENO
       3. 9. rozhodnutím uživatele: nepokračovat. Fáze 1 (read-only sonda,
       `docs/TRADOVATE_RISK_LIMITS_CAPABILITY_20260903.md`) prokázala jen read
@@ -242,13 +243,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       ochranný posun SL nesmí zamítnout jen kvůli stáří a neodeslaný ochranný
       posun se musí po čerstvém lookupu znovu prosadit. Runner 5b-2 tyto body
       záměrně nemění bez controller kontraktu.
-- [ ] **ST6 pending okno musí běžet od přijetí leader eventu** — balíček 11b
-      odstranil serializovanou REST hydrataci před doručením eventu, ale timer
-      v `copierRuntimeController.ts` se stále zakládá až po zpracování eventu
-      na plných `pendingWindowMs() + 50`. Navazující controller změna má počítat
-      jen zbývající rozpočet z `leaderEvent.receivedAt`, včetně testu, kde
-      brokerová hydratace spotřebuje celé okno. Soubor je záměrně beze změny,
-      protože ho v této worktree vlastní paralelní Codex.
+- [x] **ST6 pending okno musí běžet od přijetí leader eventu** — VYŘEŠENO
+      29. 9. v controller balíčku 5c: bracket/OSO timeouts počítají jen
+      zbývající rozpočet z `leaderEvent.receivedAt`; cílená stale-ingress/ST6
+      regrese před opravou padala a po opravě prošla.
 - [ ] **ST17 baseline množiny účtů pro session tighten-only** — balíček 8b
       sjednotil relay/loopback podle P-B pro ruční re-enable followera a změnu
       on-submit/on-fill, ale záměrně nerozhodl, zda má session držet zvláštní
@@ -257,6 +255,93 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       zůstává fail-closed.
 
 ## Deník
+
+### 2026-10-10 — Denní auto-liq propky ≠ breach (Claude)
+
+8. 10. tři Lucid followeři trefili daily loss auto-liq 1200 USD a `classifyFollowerBrokerBreach`
+je zapsal jako trvalý `breached`; appka je tak v pátek ukazovala jako breached, i když ještě
+nebyly (skutečný drawdown breach přišel až v pátek). Oprava (větev
+`claude/copier-dll-not-breach-20261010`, oponentní review Claude subagentem ANO po 5 kolech —
+Codex už není k dispozici): drawdown floor / vypnutý účet = `breached`, denní auto-liq =
+`dll-locked` do konce session. Všechny cesty denního zámku nesou `requiresRiskFloorProof`;
+zpět do kopie jen s brokerovým důkazem aktivního účtu a equity nad floorem (jinak breached /
+mimo kopii). Staré záznamy se při startu převedou. Worker zatím NEnasazen: skupina dvsvds
+má breachnutého leadera (není v OAuth), reconcile i brána reinstallu neprojdou.
+
+### 2026-10-08 — Kopírka: nové účty bez restartu, ON s potvrzením incidentu, TooLate (Claude + Codex)
+
+Release `claude/copier-release-20261008` = tři Codexem schválené větve:
+
+- **Autodiscovery** (`claude/copier-account-autodiscovery-20261008`, 9 kol): prázdný
+  adresář po breachi se ověřuje levnou sondou každé 3 min (dřív backoff až 6 h);
+  při vypnuté kopírce worker každou minutu porovná `/account/list` (ID + použitelnost)
+  a po dvou shodných čteních se bezpečně restartuje (max 1×/10 min; brána: vypnuto,
+  bez kill switche, flat, bez lifecycle/epochy, prázdná relay fronta, 30 s od
+  příkazu). Breachnuté účty staré skupiny worker NIKDY nevyřadí sám — vrátí
+  `[retire-missing:…]`, UI se zeptá a pošle `activate-group` s `retireMissingOldGroup`.
+  Brzdy (DISARM, kill, day-lock) se po restartu vždy přehrají a nikdy nezahazují
+  (pravidlo „superseded“ zrušeno: pořadí záměrů nejde bez hodin doložit).
+  Incident 8. 10.: worker v režimu opravy uvízl (recovery čekala na breachnutého
+  leadera) → ruční přepis durable `group.json` (postup v paměti worker-deploy-policy).
+- **ON s potvrzením incidentu** (`claude/copier-on-acknowledge-incident-20261008`,
+  na etapě 1): tlačítko „Zkontrolovat pozice“ zmizelo. Durable incident má UUID;
+  smaže ho jen ON s `acknowledgeIncidentId` přesně tohoto incidentu, potvrzení se
+  zapíše do `safety.lastIncidentAcknowledgement` ve stejném durable zápisu.
+  SHADOW i kompatibilní ARM jen interní kontrola (INV-DEFAULT-03). Capability
+  `incident-ack-v1`; web se starším workerem po incidentu ON odmítne. Relay
+  `reconcile` odebrán (DB check ho stejně nepouštěl). iPhone appku nutno přebuildit.
+- **TooLate** (`claude/copier-sweep-toolate-20261008`, 7 kol): flat sweep po
+  `cancelOrder rejected: TooLate` čeká ≤1,5 s jen na stream status (incident
+  14:06 UTC, účet 68931462: order rušil dřívější cancel, stream Canceled za ~0,8 s);
+  známý fill vždy vynutí čerstvou pozici, pozice se čte až po order grafu.
+  Předexistující dluh (důkaz nulového fillu ve fast-path, freshness sdíleného
+  `/position/list`, A5) je samostatný úkol.
+
+Etapa 2 (durable per-account pauza) nasazena NENÍ — po 6. kole Codexe zbývají
+nálezy (DISARM vs. uvolnění pauzy, cache po cut, reporting).
+
+### 2026-10-08 — LIVE studený start: kostra → úplná data bez probliknutí (Claude)
+- Měřeno na produkci: obsah → prázdná plocha 315 ms → přehled. Příčina: lazy
+  `LiveJournalHistory` suspendoval stránkovou Suspense hranici a React 19 drží
+  fallback ≥ 300 ms. Dále bootstrap → full (2 kola čtení, „Ověřuji“ u DLL), probe
+  historie (až 8 s) uvnitř full, preflight bez session shellu čekal na OAuth status.
+- Větev `claude/live-cold-start-20261008`:
+  - statické importy na LIVE, karty deníku až s daty;
+  - „Žádné skupiny“ až po načtení knihovny, banner plánu až s profily;
+  - studený start = jeden full preflight bez probe, probe zvlášť na pozadí;
+  - trvalá nápověda ID připojení (jen ID, user-scoped);
+  - relay resolver paralelně;
+  - iPhone: menu Více přednačte status/profily, zámek soukromí neproblikne;
+  - auto-save účtů jen po úpravě v appce (s vlastníkem).
+- Rozbor 5 čtenářů + 2 skeptici na každou ze 17 navržených změn, pak oponentura
+  diffu (9 potvrzených nálezů opraveno). Detail:
+  `docs/reviews/live-cold-start-20261008.md`.
+- Localhost: kostra 0,94 s → kompletní přehled 1,53 s bez prázdné plochy. Serverová
+  část (probe mimo full) se na localhostu neověří (proxy na produkci), kryjí ji testy.
+  Nezměřeno: fyzický iPhone, více účtů na připojení. Web nasazen 8. 10. (push na
+  main na Filipovo „nasaď“); iPhone build čeká na připojení telefonu.
+
+### 2026-10-08 — Předání invariantů jádra kopírky (Codex)
+
+- Přidán `docs/COPIER_INVARIANTS.md`: mapa execution/durable/relay/UI vrstev,
+  tok leader eventu a 48 očíslovaných invariantů. Každý má důvod, konkrétní
+  místo vynucení v aktuálním kódu, testovou oporu, zákaz zjednodušení a hranici
+  bezpečných změn. Samostatně jsou ARM brány, checklist pro oponenta, incidenty
+  a otevřené mezery včetně N6, nezapojeného VPS lease a distribuovaného ACK.
+- Při ověření proti aktuálnímu kódu byly jako zastaralé opraveny dvě položky
+  výše: N10 už používá funkční `persistSafetyUpdate` a ST6 počítá bracket/OSO
+  budget z `leaderEvent.receivedAt`; obě mají deterministické regrese.
+- Ověření dokumentu: všech 48 pravidel obsahuje všech pět povinných polí,
+  všechny citované source symboly a konkrétní test/doc soubory existují,
+  `git diff --check` je čistý. Bez změny kódu, instalace závislostí, broker
+  příkazu, ARM/Flatten, deploye, workeru nebo pushnutí.
+- Dovětek po nezávislém review: opraveny zavádějící symboly a testové odkazy,
+  přesně popsány terminal-cancel/Flatten výjimky, account-wide auto-close
+  fallback, UI display grace a relay idempotency. Nově jsou výslovně vedeny
+  tři mezery: SHADOW/legacy ARM volají veřejné `reconcile()` a mohou smazat
+  incident, relay negarantuje stejný klíč napříč novým klientským pokusem a
+  mrtvý `planReconciliation` by po zapojení porušil zákaz Auto-Sync. Jen
+  dokumentace; runtime kód se neměnil.
 
 ### 2026-10-06 — Ranní incidenty a nasazení (Claude + Codex)
 - 07:31 UTC: leader posunul stop, stopy followerů vyplnily na původní ceně ~90 ms před potvrzením
@@ -478,6 +563,84 @@ primární připojení.
   Nainstalovaný worker ani iPhone tuto opravu zatím nemají. Latence telefonu
   přes relay není změřená; offline test prokazuje vynechaná čtení, nikoli
   konkrétní zrychlení v sekundách. OFF transport se sám touto změnou nezrychlí.
+
+### 2026-10-06 — Úpravy dashboardu: prohození, uvolnění místa, knihovna, telefon (Claude)
+
+Podle náhledu `mockups/dashboard-edit-preview.html` (odsouhlasen Filipem).
+- Mřížka (`Dashboard.tsx`): vlastní `Compactor` během tažení počítá náhled od
+  stavu před tahem (`lib/dashboardLayoutEdit.ts` `arrangeDuringDrag`) —
+  stejně velké widgety se prohodí (cíl odjede na místo taženého), jinak
+  tažený odtlačí ostatní dolů. Ostatní dojedou CSS přechody (`.dbe-*`).
+  Dřív `transition: none` v úpravách a odtlačení bez prohození.
+- Minimum/maximum velikosti drží i vizuálně během tažení rohu (inline
+  `min/max-width/height` na položce; RGL pouští vizuálně až 1×1 buňku),
+  štítek „6 × 4“ / „· minimum“. Úchyt v úpravách vidět vždy.
+- Úpravy bez `scale-[0.98]` (knihovna o transformaci nevěděla → ujíždění
+  od kurzoru) a bez `opacity-60`. Lišta Zpět (⌘Z, historie po dobu úprav),
+  Obnovit výchozí (nový prop `defaultLayouts` z App), Zrušit změny (snímek
+  při otevření), Hotovo. Odebrání s animací a „Vrátit“.
+- Knihovna widgetů (`DashboardWidgetLibrary.tsx`) místo doku s posuvníkem:
+  hledání, kategorie, poloviční miniatury vzhledu, tažení na plochu
+  (`dropConfig` + náhled uvolnění místa) nebo klik → první volné místo.
+- Střední šířka (`sm`, 6 sloupců): `packMidLayout` místo oříznuté šířky
+  (pravá půlka se skládala do sloupce). Úpravy na `sm/xs` vypnuté s
+  poznámkou — `handleDragOrResizeStop` by uložil 6sloupcové souřadnice do `lg`.
+- Telefon: vlastní rozložení pod klíčem `phone` (y = pořadí, nové pole
+  `mobileHalf`), mřížku počítače nemění; bez něj odvozené z `lg` a dvojice
+  KPI jako dřív. `DashboardPhoneEditor.tsx` (pořadí tažením přes
+  framer-motion `Reorder`, ½ / celá šířka, odebrání, přidání nahoru) místo
+  sheetu se šipkami (`moveMobileWidget` psal do `lg`). iPhone appka to
+  uvidí až po rebuildu nativního bundlu.
+- Ověřeno: testy logiky (`tests/dashboardLayoutEdit.test.ts`), náhled se
+  skutečnou mřížkou; v appce jen vykreslení (úpravy, knihovna, střední
+  šířka, editor telefonu) — tažením se v appce nezkoušelo, ukládá do
+  Filipova skutečného rozložení.
+
+### 2026-10-06 — Plány účtů: okno seskupené podle propky (Claude)
+
+- `TradovateAccountProfileSetup` (LIVE → Přiřadit plán) přestavěn podle
+  `mockups/account-plans.html`: místo tabulky se 13 sloupci a společného
+  řádku „Použít na všechny“ (propisoval plán i do jiných propek) jsou účty
+  seskupené podle propky, hromadné nastavení plán + fáze má každá propka
+  zvlášť. Řádek: účet, plán (jen plány propky, rodiny pohromadě), fáze
+  Eval/Funded/Live, přehled pravidel; čísla se rozbalí pod řádkem.
+- Logika přesunuta beze změny do `lib/tradovateProfileSetup.ts`
+  (`profileFormFromAccount`, `identityPatch` = dřívější `changeIdentity`,
+  `profileFormToInput`), nově `profileSetupMissing` (stejná kritéria jako
+  `tradovateAccountProfileNeedsPlan`), `profileRuleSummary`, `groupProfilesByFirm`.
+  Ukládání (`saveTradovateAccountProfiles`) beze změny.
+- Animace (`.aps-*` v index.css): nájezd okna, rozbalení mřížkou 0fr→1fr,
+  jezdec fáze, výměna přehledu, bliknutí řádků po „Použít“; reduced-motion vypíná.
+- Aurora: dialogy (`role="dialog"`/`aria-modal`, ne `inset-0`) s výplní
+  `bg-card` dostaly plnou výplň `--modal-bg` — okno skupiny v LIVE, nastavení
+  tabulky, šablony, knihovna workspace a backtest dialogy prosvítaly.
+- Sdílecí karta obchodu: náklon zmírněn (`useCardTilt` přijímá úhly, karta
+  obchodu 12/16/12°, Karta dne beze změny 30/30/20°).
+
+### 2026-10-04 — Sdílecí karta obchodu ve stylu Karty dne + plovoucí menu (Claude)
+
+- `TradeShareCard` přepsána podle `mockups/trade-share.html` (varianta A):
+  stojí na třídách `live-day-*` (rámeček, sklo, světla, světlý motiv,
+  ovládání v rohu), vlevo P&L/R/kontrakty/vstup–výstup, vpravo graf, bez
+  grafu cenová dráha (SL/vstup/výstup/TP z `lib/tradeShareCard.ts`). Ztráta
+  má konečně mínus (dřív `$1 727` jen červeně), ztrátový obchod růžový lem.
+- Náklon karty vyčleněn do `hooks/useCardTilt.ts` (Karta dne beze změny
+  chování, `primeDeviceTilt` dál exportuje `LiveDayCard`).
+- `TradeShareModal`: portál se světlým blurem, sdílení v bublině v rohu karty
+  (odkaz, obrázek do schránky, PNG, v nativu systémový list), přepínače
+  Skrýt částku (jen R — jen obrázek, stránka za odkazem částku ukazuje dál)
+  a Poznámka. Export z neviditelné kopie 1200×630 v motivu appky.
+  **Obchod se zveřejní (`markTradeAsPublic`) až první akcí sdílení**, dřív
+  hned otevřením náhledu. Sloučený obchod (víc účtů, ID není UUID) jde
+  sdílet jen obrázkem.
+- Obrázek karty: ruční screenshot, jinak podepsaný snímek z kopírky (výstup)
+  z detailu; přepínač snímků na kartě. Snímky z kopírky jsou soukromé —
+  veřejná stránka /share ukáže místo nich cenovou dráhu. Snímek se kreslí
+  celý (`contain`) s rozmazanou výplní (snímky kopírky jsou ~čtvercové).
+- `SharedTradeView` používá stejnou kartu (bez ovládání).
+- Aurora: plovoucí menu/popovery (absolute/fixed + shadow + `bg-card`)
+  dostaly plnou výplň `--menu-bg` (ve světlém čiré sklo 80 % + blur) — přes
+  10% kartu prosvítala tabulka (menu skupiny v LIVE).
 
 ### 2026-10-04 — Profil: okno ve stylu appky, karta v panelu bez odhlášení (Claude)
 

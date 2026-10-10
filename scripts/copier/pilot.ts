@@ -80,7 +80,14 @@ import {
 } from '../../server/macCopierDevice';
 import {
   connectionsToLoadAtStartup,
+  createAccountDirectoryWatch,
+  directoryRestartAllowed,
+  EMPTY_DIRECTORY_ERROR,
+  directoryKey,
+  evaluateAccountDirectory,
+  firstDirectoryKnownKeys,
   evaluateConnectionPoll,
+  failedWithEmptyDirectory,
   loadConnectionDiscoveryState,
   recordConnectionDiscoveryFailure,
   recordConnectionDiscoverySuccess,
@@ -172,6 +179,14 @@ interface ConnectionWatch {
   scope: 'owner' | 'connection' | null;
   /** Účty z adresáře každého připojení při startu (pro guard odpojení). */
   accountIdsByConnection: Map<string, number[]>;
+  /**
+   * Výchozí stav adresáře z posledního shodného čtení hlídání (8. 10. 2026):
+   * klíče `directoryKey` (ID + použitelnost). Bez něj se srovnávají jen ID ze
+   * startu; přechod stejného ID na neaktivní se pozná mezi čteními.
+   */
+  directoryBaselineByConnection: Map<string, string[]>;
+  /** Použitelnost účtů podle startovního načtení (active && canTrade). */
+  startupUsableByConnection: Map<string, Map<number, boolean>>;
 }
 
 interface PilotContextOptions {
@@ -350,7 +365,7 @@ async function runMultiConnectionAgent(): Promise<void> {
     // a discovery to brala jako zdravé načtení (bez dalších pokusů). Prázdný
     // adresář nově objeveného připojení je selhání s backoffem, ne úspěch.
     if (loadOptions.strictDirectory && data.accounts.length === 0) {
-      throw new Error('adresář účtů je prázdný (propfirma účty skryla nebo zavřela)');
+      throw new Error(EMPTY_DIRECTORY_ERROR);
     }
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
@@ -408,6 +423,18 @@ async function runMultiConnectionAgent(): Promise<void> {
     for (const item of loaded) {
       connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, item.context.connectionId);
       connectionWatch.accountIdsByConnection.set(item.context.connectionId, item.accounts.map(account => account.id));
+      // Použitelnost ze stejné funkce, kterou čte hlídání (refreshAccountDirectory):
+      // startovní loader normalizuje `active` jinak a rozdíl by roztočil
+      // periodické restarty (review kola 8). Bez čtení se nic neuloží a první
+      // srovnání vezme aktuální stav.
+      try {
+        const directory = await item.broker.refreshAccountDirectory();
+        connectionWatch.startupUsableByConnection.set(item.context.connectionId, new Map(directory.map(account => [
+          account.accountId, account.active && account.canTrade,
+        ])));
+      } catch {
+        // Fail-safe: jen slabší detekce změn, žádný falešný restart.
+      }
     }
   }
   if (connectionWatch && failedManifest.length > 0) {
@@ -515,6 +542,13 @@ async function runMultiConnectionAgent(): Promise<void> {
         for (const account of refreshed.accounts) {
           const known = connectionWatch.accountIdsByConnection.get(account.connectionId) ?? [];
           if (!known.includes(account.id)) connectionWatch.accountIdsByConnection.set(account.connectionId, [...known, account.id]);
+          // Nově nasměrovaný účet je v routingu: výchozí stav hlídání se
+          // znovu sestaví z ID; jeho tehdejší použitelnost se zapamatuje, ať se
+          // pozdější přechod na neaktivní nevstřebá (review kola 6).
+          connectionWatch.directoryBaselineByConnection.delete(account.connectionId);
+          const startupUsable = connectionWatch.startupUsableByConnection.get(account.connectionId) ?? new Map<number, boolean>();
+          startupUsable.set(account.id, account.active && account.canTrade);
+          connectionWatch.startupUsableByConnection.set(account.connectionId, startupUsable);
         }
       }
       // Závod ARM ↔ odpojení propfirmy (5. 10. 2026): těsně před ARM / změnou
@@ -591,6 +625,8 @@ async function discoverOwnerConnections<T extends { context: PilotContext }>(opt
     state: await loadConnectionDiscoveryState(statePath),
     scope: null,
     accountIdsByConnection: new Map(),
+    directoryBaselineByConnection: new Map(),
+    startupUsableByConnection: new Map(),
   };
   let listed: Awaited<ReturnType<typeof listMacCopierDeviceConnections>>;
   try {
@@ -1109,13 +1145,54 @@ async function runLocalAgent(
     controller?.stop();
     return true;
   };
-  const requestSafePairingRestart = () => {
+  /**
+   * Restart kvůli novým/zmizelým účtům (8. 10. 2026). Po breachi worker
+   * typicky čeká na Kontrolu pozic a má „divergentní“ zmizelé účty, takže
+   * přísná brána párování (reconciled, bez divergence) by restart nikdy
+   * nepustila a nové účty by nenačetl. Tyhle dva stavy jsou durable a
+   * restart je nezahodí. Všechno ostatní zůstává: vypnutá kopírka bez kill
+   * switche (ten durable není), flat bez pracovních příkazů, žádný
+   * rozpracovaný lifecycle/epocha/cut a žádný UI příkaz posledních 30 s.
+   */
+  const canRestartForDiscovery = () => {
+    const status = controller?.status();
+    const activity = agent?.commandActivity?.();
+    return status != null
+      && status.started
+      && !status.armed
+      && !status.killSwitch
+      && status.connected
+      && status.groupFlat === true
+      && status.workingOrderAccounts.length === 0
+      && !status.stuckOutbox
+      && status.stuckOperations.length === 0
+      && controller?.maintenanceRestartBlocker() == null
+      && activity != null
+      && activity.pending === 0
+      && Date.now() - activity.lastSettledAt >= 30_000
+      && relayQueueQuiet(activity.lastSettledAt);
+  };
+  /**
+   * Fronta vzdálených příkazů musí být čerstvě prázdná (poll < 15 s, začatý
+   * po posledním dokončeném příkazu) a nic se právě nedoručuje. Bez relay
+   * (lokální běh) není co čekat; relay bez té informace = fail-closed.
+   */
+  const relayQueueQuiet = (lastSettledAt: number) => {
+    if (!relay) return true;
+    const idleSince = relay.commandQueueIdleSince?.() ?? null;
+    return idleSince != null && idleSince > lastSettledAt && Date.now() - idleSince <= 15_000;
+  };
+  let restartGate: () => boolean = () => canSafelyRestartLocalCopierAgent(controller?.status());
+  const requestSafePairingRestart = (gate: 'pairing' | 'discovery' = 'pairing') => {
+    // Párování (nová identita zařízení) vyžaduje dál přísnou bránu.
+    if (gate === 'pairing') restartGate = () => canSafelyRestartLocalCopierAgent(controller?.status());
+    else if (!pairingRestartPending) restartGate = canRestartForDiscovery;
     if (pairingRestartPending) return;
     pairingRestartPending = true;
     const check = () => {
       pairingRestartTimer = null;
       if (stopPromise) return;
-      if (!canSafelyRestartLocalCopierAgent(controller?.status())) {
+      if (!restartGate()) {
         pairingRestartTimer = setTimeout(check, 1_000);
         pairingRestartTimer.unref();
         return;
@@ -1125,7 +1202,7 @@ async function runLocalAgent(
         delayMs: 750,
         restart: () => {
           if (stopPromise) return;
-          if (!canSafelyRestartLocalCopierAgent(controller?.status())) {
+          if (!restartGate()) {
             pairingRestartTimer = setTimeout(check, 1_000);
             pairingRestartTimer.unref();
             return;
@@ -1500,6 +1577,82 @@ async function runLocalAgent(
       let pollInFlight = false;
       let lastPollWarningAt = 0;
       let manifestRemovalLogged = false;
+      const directoryWatch = createAccountDirectoryWatch();
+      /**
+       * Read-only sonda adresáře účtů připojení (8. 10. 2026). Nic se z ní
+       * nesměruje — slouží jen k rozhodnutí, zda má smysl bezpečný restart.
+       */
+      /** Jediný GET /account/list — žádné per-account dotazy (zátěž Tradovate). */
+      const readAccountListIds = async (
+        getAccessToken: () => Promise<string>,
+        environment: PilotContext['environment'],
+      ): Promise<number[]> => {
+        const response = await fetch(`${tradovateApiBaseUrl(environment)}/account/list`, {
+          headers: { Authorization: `Bearer ${await getAccessToken()}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) throw new Error(`account/list HTTP ${response.status}`);
+        const body = await response.json() as unknown;
+        if (!Array.isArray(body)) throw new Error('account/list nevrátil seznam');
+        return body
+          .map(item => (item as { id?: unknown })?.id)
+          .filter((id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0);
+      };
+      const probeEmptyDirectoryConnection = async (connectionId: string): Promise<boolean> => {
+        try {
+          const probe = await discoveredPilotContext(connectionWatch.device, connectionId);
+          const accountIds = await readAccountListIds(probe.getAccessToken, probe.environment);
+          if (accountIds.length === 0) throw new Error(EMPTY_DIRECTORY_ERROR);
+          connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, connectionId);
+          console.log(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(connectionId)} má znovu účty (${accountIds.length}); restart, až bude kopírka vypnutá`);
+          return true;
+        } catch (error) {
+          connectionWatch.state = recordConnectionDiscoveryFailure(connectionWatch.state, connectionId, error, Date.now());
+          return false;
+        } finally {
+          await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
+        }
+      };
+      const pollAccountDirectories = async (): Promise<boolean> => {
+        // Za ARM se restart stejně neprovede; adresář se čte jen u vypnuté
+        // kopírky, ať zbytečně nezatěžujeme Tradovate.
+        if (controller?.status().armed !== false) return false;
+        let changed = false;
+        for (const candidate of renewableBrokers) {
+          const startupIds = connectionWatch.accountIdsByConnection.get(candidate.connectionId);
+          if (!startupIds) continue;
+          let read: Awaited<ReturnType<typeof candidate.broker.refreshAccountDirectory>>;
+          try {
+            // Týž jediný /account/list, který používá routing při ARM.
+            read = await candidate.broker.refreshAccountDirectory();
+          } catch {
+            continue; // Chyba čtení není změna adresáře.
+          }
+          const usable = new Map(read.map(account => [account.accountId, account.active && account.canTrade]));
+          const current = read.map(account => directoryKey(account.accountId, account.active && account.canTrade));
+          // První srovnání proti stavu ze startu v obou směrech: breach mezi
+          // startem a prvním čtením se nevstřebá a obnovený účet vyvede worker
+          // z režimu opravy restartem. Jen účet bez záznamu bere toto čtení.
+          const knownKeys = connectionWatch.directoryBaselineByConnection.get(candidate.connectionId)
+            ?? firstDirectoryKnownKeys(
+              startupIds,
+              connectionWatch.startupUsableByConnection.get(candidate.connectionId),
+              usable,
+            );
+          const sameAsKnown = knownKeys.length === current.length && knownKeys.every(key => current.includes(key));
+          if (sameAsKnown) connectionWatch.directoryBaselineByConnection.set(candidate.connectionId, current);
+          const result = evaluateAccountDirectory({
+            watch: directoryWatch,
+            connectionId: candidate.connectionId,
+            knownKeys,
+            currentKeys: current,
+          });
+          if (!result.changed) continue;
+          changed = true;
+          console.log(`${new Date().toISOString()} DISCOVERY účty připojení ${connectionLabel(candidate.connectionId)} se změnily +[${result.added.join(',')}] -[${result.removed.join(',')}]; restart, až bude kopírka vypnutá`);
+        }
+        return changed;
+      };
       const pollConnections = async () => {
         if (pollInFlight || stopPromise) return;
         pollInFlight = true;
@@ -1514,6 +1667,14 @@ async function runLocalAgent(
             state: connectionWatch.state,
             now: Date.now(),
           });
+          // Připojení s prázdným adresářem se nejdřív ověří sondou; restart
+          // jen když propfirma účty zase ukazuje (žádná smyčka restartů).
+          const added: string[] = [];
+          for (const connectionId of decision.added) {
+            if (!failedWithEmptyDirectory(connectionWatch.state, connectionId)
+              || await probeEmptyDirectoryConnection(connectionId)) added.push(connectionId);
+          }
+          decision.added = added;
           connectionWatchPending = decision.added;
           if (decision.removed.length > 0 && controller?.status().armed) {
             // Za ARM vypne kopírku jen odpojená propfirma, jejíž účty skupina
@@ -1550,9 +1711,15 @@ async function runLocalAgent(
           }
           if (decision.added.length > 0 || removedDiscovered.length > 0) {
             if (!pairingRestartPending) {
-              console.log(`${new Date().toISOString()} DISCOVERY změna připojení +[${decision.added.map(connectionLabel).join(',')}] -[${removedDiscovered.map(connectionLabel).join(',')}]; restart, až bude kopírka vypnutá a flat`);
+              console.log(`${new Date().toISOString()} DISCOVERY změna připojení +[${decision.added.map(connectionLabel).join(',')}] -[${removedDiscovered.map(connectionLabel).join(',')}]; restart, až bude kopírka vypnutá`);
             }
-            requestSafePairingRestart();
+            requestSafePairingRestart('discovery');
+          } else if (!pairingRestartPending
+            && directoryRestartAllowed(connectionWatch.state, Date.now())
+            && await pollAccountDirectories()) {
+            connectionWatch.state = { ...connectionWatch.state, directoryRestartAt: Date.now() };
+            await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
+            requestSafePairingRestart('discovery');
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

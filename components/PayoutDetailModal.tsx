@@ -154,7 +154,9 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
         if (busy.current) return;
         drag.current = { x0: e.clientX, dx: 0, moved: false };
         setAnimating(false);
-        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        // Prst se nezabírá: svislý posun okna nechává iOS (touch-pan-y), vodorovné
+        // tažení na další výplatu chodí dál jako pointermove. Myš se zabírá kvůli tažení mimo box.
+        if (e.pointerType !== 'touch') (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     };
     const onPointerMove = (e: React.PointerEvent) => {
         const d = drag.current; if (!d) return;
@@ -167,6 +169,12 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
         const d = drag.current; drag.current = null; if (!d) return;
         if (!d.moved) { if (payout.image) setZoomOpen(true); return; }
         if (Math.abs(d.dx) > 60) slide(d.dx < 0 ? 1 : -1); else snapBack();
+    };
+    // iPhone: když prohlížeč převezme svislý posun, pošle pointercancel. Dřív se
+    // bral jako klepnutí a místo posunu otevřel zvětšení — v detailu nešlo scrollovat.
+    const onPointerCancel = () => {
+        const d = drag.current; drag.current = null;
+        if (d?.moved) snapBack();
     };
 
     const Row: React.FC<{ label: string; children: React.ReactNode; hint?: string }> = ({ label, children, hint }) => (
@@ -182,17 +190,17 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
                 <div
                     role="dialog" aria-modal="true" aria-label="Detail výplaty"
                     onClick={(e) => e.stopPropagation()}
-                    className="glass-modal grid max-h-[92vh] w-full max-w-[calc(100vw-32px)] gap-2.5 overflow-y-auto p-2.5 sm:w-auto lg:grid-cols-[auto_270px]"
+                    className="glass-modal grid max-h-[92vh] w-full max-w-[calc(100vw-32px)] gap-2.5 overflow-y-auto overscroll-contain p-2.5 sm:w-auto lg:grid-cols-[auto_270px]"
                 >
                     <div
                         ref={boxRef}
-                        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
+                        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}
                         className="relative grid cursor-grab touch-pan-y select-none place-items-center overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--text-primary)]/[0.04] active:cursor-grabbing"
                         title={payout.image ? 'Klikni pro zvětšení · táhni pro další výplatu' : 'Táhni pro další výplatu'}
                     >
                         <div className={`payout-slide ${animating ? 'is-animating' : ''}`} style={{ transform: `translateX(${offset}px)`, opacity: fade }}>
                             {payout.image ? (
-                                <img src={payout.image} alt="Důkaz výplaty" draggable={false} className="block max-h-[76vh] w-auto max-w-full lg:max-w-[640px]" />
+                                <img src={payout.image} alt="Důkaz výplaty" draggable={false} className="block max-h-[55vh] w-auto max-w-full lg:max-h-[76vh] lg:max-w-[640px]" />
                             ) : (
                                 <div className="flex h-[260px] w-[min(420px,calc(100vw-64px))] flex-col items-center justify-center gap-2 text-[var(--text-muted)]">
                                     <Trophy size={22} className="opacity-50" />

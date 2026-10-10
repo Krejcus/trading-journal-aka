@@ -36,6 +36,12 @@ export interface MacCopierCommandRelay {
   /** Předběžné 1m svíčky z TradingView pro graf hodnocení (jen zobrazení). */
   uploadBars(capture: TvBarsCapture): Promise<void>;
   /**
+   * Kdy začal poslední poll, který našel frontu příkazů prázdnou a nic
+   * nedoručoval; `null` = právě se doručuje nebo prázdnou frontu zatím
+   * nikdo neviděl. Údržbový restart (8. 10. 2026) čeká na čerstvou hodnotu.
+   */
+  commandQueueIdleSince?(): number | null;
+  /**
    * Začátek posledního úspěšného vyzvednutí, při kterém server neměl žádný
    * čekající příkaz (0 = zatím žádné). Automatické zapnutí po výpadku podle
    * něj prokáže, že ve frontě nečeká brzda z telefonu.
@@ -239,6 +245,9 @@ export function startMacCopierCommandRelay(options: {
     isActive: () => !stopped,
     onComplete: id => { completedNotifications.add(id); publishBackground(); },
   }) : null;
+  let deliveryBusy = false;
+  /** Důkaz prázdné fronty pro údržbový restart; maže se začátkem každého pollu. */
+  let idleProofSince: number | null = null;
   let lastEmptyPollStartedAt = 0;
   const loop = async () => {
     let failures = 0;
@@ -246,7 +255,17 @@ export function startMacCopierCommandRelay(options: {
       try {
         const pollStartedAt = Date.now();
         if (delivery) {
-          const response = await delivery();
+          // Starý důkaz prázdné fronty neplatí, dokud tento poll neskončí
+          // prázdný (chyba nebo claim ho nesmí nechat platit).
+          idleProofSince = null;
+          deliveryBusy = true;
+          let response: Awaited<ReturnType<typeof delivery>>;
+          try {
+            response = await delivery();
+          } finally {
+            deliveryBusy = false;
+          }
+          if (response.command == null) idleProofSince = pollStartedAt;
           await maybeSubscribeKick(response.realtime);
           failures = 0;
           if (response.command == null) lastEmptyPollStartedAt = pollStartedAt;
@@ -332,6 +351,7 @@ export function startMacCopierCommandRelay(options: {
   publishBackground();
   publishStatus();
   return {
+    commandQueueIdleSince: () => (deliveryBusy || !delivery ? null : idleProofSince),
     lastEmptyPollStartedAt: () => lastEmptyPollStartedAt,
     nudgeCopyEvents() {
       copyEventsRevision += 1;

@@ -306,6 +306,35 @@ describe('account eligibility — DLL incident', () => {
     h.controller.stop();
   });
 
+  it('neurčitý reject na zamčeném účtu nesmaže požadavek důkazu nad floorem', async () => {
+    const h = await harness();
+    await emitLeaderEntry(h, 'leader-entry-1', '1:Working');
+    await asyncDllReject(h, 205);
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 205))
+      .toMatchObject({ state: 'dll-locked', requiresRiskFloorProof: true });
+    // Pozdější reject s neklasifikovaným textem (např. liquidation only).
+    const [order] = followerOrdersFor(h.broker, 205);
+    h.broker.emitEvent({ type: 'order', order: {
+      ...order!, brokerOrderId: 'later-reject', status: 'rejected',
+      rejectReason: 'Your account is currently set to liquidation only due to low net liquidating value.',
+      sourceVersion: 'later-reject', updatedAt: (order!.updatedAt ?? 0) + 10_000,
+    } });
+    await h.controller.waitForIdle();
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 205)?.requiresRiskFloorProof).toBe(true);
+    h.controller.stop();
+  });
+
+  it('LIVE preflight denní zámek nese požadavek důkazu nad floorem', async () => {
+    const h = await harness();
+    h.controller.disarm();
+    await h.controller.applyAccountEligibilityExclusions([{
+      accountId: 205, state: 'dll-locked', reason: 'LIVE denní P&L -1206.50 USD dosáhlo DLL 1200.00 USD',
+    }]);
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 205))
+      .toMatchObject({ state: 'dll-locked', requiresRiskFloorProof: true });
+    h.controller.stop();
+  });
+
   it('DLL se neodemkne pouhým časem — reaktivaci smí provést jen autoritativní ověření', async () => {
     const h = await harness();
     await emitLeaderEntry(h, 'leader-entry-1', '1:Working');
@@ -325,10 +354,18 @@ describe('account eligibility — DLL incident', () => {
     await emitLeaderEntry(h, 'leader-entry-3', '1:Working');
     expect(followerOrdersFor(h.broker, 205).length).toBe(1);
 
-    // Autoritativní ověření (reconciliation po nové session) reaktivuje.
+    // 10. 10. 2026: bez risk dat (equity, floor propky) zůstává mimo kopii.
+    await h.controller.reconcile();
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 205)?.state ?? 'active')
+      .not.toBe('active');
+
+    // Autoritativní ověření s equity nad drawdown floorem reaktivuje.
+    h.broker.listAccountRiskSnapshots = async accountIds => accountIds.filter(id => id === 205).map(accountId => ({
+      accountId, at: 1, realizedPnlUsd: 0, netLiq: 50_000, minNetLiq: 48_000, dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 2_000,
+    }));
     await h.controller.reconcile();
     const afterReconcile = h.controller.status().accountEligibility?.find(entry => entry.accountId === 205);
-    expect(afterReconcile?.state).toBe('active');
+    expect(afterReconcile?.state ?? 'active').toBe('active');
 
     h.controller.stop();
   });
@@ -357,6 +394,8 @@ describe('account eligibility — DLL incident', () => {
       accountCapabilities: [100, 201, 202, 203, 205].map(accountId => ({
         accountId, active: true, canTrade: true,
       })),
+      // 10. 10. 2026: bývalý denní zámek se vrací jen s equity nad floorem.
+      accountRiskSnapshots: [{ accountId: 205, at: 950, realizedPnlUsd: 0, netLiq: 50_000, minNetLiq: 48_000, dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 2_000 }],
     });
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(initial), group, clock,
@@ -398,6 +437,7 @@ describe('account eligibility — DLL incident', () => {
       clock,
       behavior: () => ({ kind: 'working' }),
       accountCapabilities: [{ accountId: 63338752, active: true, canTrade: true }],
+      accountRiskSnapshots: [{ accountId: 63338752, at: 950, realizedPnlUsd: 0, netLiq: 50_000, minNetLiq: 48_000, dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 2_000 }],
     });
     const store = createMemoryCopierStore(initial);
     const controller = await bootstrapCopierRuntime({

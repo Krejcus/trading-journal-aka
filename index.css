@@ -1063,9 +1063,10 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 }
 
 .react-grid-item.react-grid-placeholder {
-  background: #6366f1 !important;
-  opacity: 0.15 !important;
-  border-radius: 24px;
+  background: color-mix(in srgb, #2563eb 8%, transparent) !important;
+  border: 1.5px dashed color-mix(in srgb, #2563eb 55%, transparent);
+  opacity: 1 !important;
+  border-radius: 8px;
 }
 
 .react-grid-item > .react-resizable-handle::after {
@@ -1110,14 +1111,9 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 
 .react-grid-item.react-draggable-dragging {
   z-index: 100;
-  opacity: 0.85;
-  box-shadow: 0 20px 60px -15px rgba(99, 102, 241, 0.3);
-  border-radius: 24px;
 }
 
-.react-grid-layout.editing .react-grid-item {
-  transition: none !important;
-}
+/* Úpravy dashboardu mají vlastní plynulé přesuny (.dbe-grid níže). */
 
 /* ImageZoomModal slide animations */
 @keyframes slideInRight {
@@ -3545,6 +3541,412 @@ html.native-shell .compact-sheet {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+   Sdílecí karta obchodu
+
+   Stojí na třídách Karty dne (rámeček, sklo, světla, náklon, ovládání
+   v rohu, světlý motiv), tady je jen to, co má obchod navíc: číslo vlevo,
+   graf nebo cenová dráha vpravo a patička s QR. Ztrátový obchod přebarví
+   rámeček a záři z tyrkysovo-zelené do tyrkysovo-růžové.
+   ───────────────────────────────────────────────────────────────────────── */
+.trade-card-loss .live-day-card {
+  background: linear-gradient(140deg, rgba(34, 211, 238, 0.3), rgba(255, 255, 255, 0.05) 40%, rgba(244, 63, 94, 0.26));
+}
+
+.trade-card-loss .live-day-inner {
+  background:
+    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34, 211, 238, 0.12) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(244, 63, 94, 0.1) 0%, transparent 60%),
+    #000;
+}
+
+.light-theme .trade-card-loss .live-day-card {
+  background: linear-gradient(140deg, rgba(8, 145, 178, 0.45), rgba(15, 23, 42, 0.1) 40%, rgba(244, 63, 94, 0.38));
+}
+
+.light-theme .trade-card-loss .live-day-inner {
+  background:
+    radial-gradient(ellipse 100% 100% at 50% 45%, transparent 40%, rgba(15, 23, 42, 0.07) 100%),
+    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34, 211, 238, 0.18) 0%, transparent 62%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(244, 63, 94, 0.12) 0%, transparent 62%),
+    #fbfdff;
+}
+
+.trade-card-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+@media (min-width: 760px) {
+  .trade-card-body { grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); }
+}
+
+.trade-card-total {
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.trade-card-sym { display: flex; align-items: center; gap: 10px; }
+
+.trade-card-sym b {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.trade-card-dir {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.trade-card-long { color: #34d399; background: rgba(16, 185, 129, 0.14); border: 1px solid rgba(16, 185, 129, 0.35); }
+.trade-card-short { color: #fb7185; background: rgba(244, 63, 94, 0.14); border: 1px solid rgba(244, 63, 94, 0.35); }
+.light-theme .trade-card-long { color: #047857; }
+.light-theme .trade-card-short { color: #be123c; }
+
+.trade-card-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.72);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.trade-card-note::before { content: '„'; }
+.trade-card-note::after { content: '“'; }
+.light-theme .trade-card-note { color: rgba(15, 23, 42, 0.72); }
+
+.trade-card-result { margin-top: auto; }
+.trade-card-big { font-size: 60px; }
+
+.trade-card-meta {
+  margin-top: 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.light-theme .trade-card-meta { color: rgba(15, 23, 42, 0.6); }
+
+/* Graf je vidět celý (contain) — snímky z kopírky jsou skoro čtvercové
+   a `cover` by z nich nechal jen pruh kolem ceny. Volné místo po stranách
+   vyplní rozmazaná kopie téhož snímku, takže nevzniknou prázdné pruhy. */
+.trade-card-media {
+  min-width: 0;
+  min-height: 300px;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Snímek grafu má poměr 16:9 — v nízkém širokém panelu by ho `cover`
+   ořízl na pruh kolem ceny. Levý panel se výšce přizpůsobí (řádek mřížky). */
+.trade-card-media-shot { padding: 8px; aspect-ratio: 16 / 9; min-height: 0; }
+
+.trade-card-shot {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0b0f19;
+}
+
+.light-theme .trade-card-shot { background: #fff; border-color: rgba(15, 23, 42, 0.08); }
+
+.trade-card-shot img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.trade-card-shot-img { object-fit: contain; }
+
+.trade-card-shot-fill {
+  object-fit: cover;
+  filter: blur(18px) saturate(1.2);
+  transform: scale(1.15);
+  opacity: 0.55;
+}
+
+.trade-card-shot-zoom { cursor: zoom-in; }
+
+.trade-card-cap {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+.trade-card-cap span {
+  padding: 4px 8px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: rgba(2, 6, 23, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.trade-card-zoom-hint {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: rgba(2, 6, 23, 0.6);
+  opacity: 0;
+  transition: opacity 0.16s;
+}
+
+.trade-card-shot-zoom:hover .trade-card-zoom-hint { opacity: 1; }
+
+/* Přepínač snímků (ruční screenshot / vstup / výstup z kopírky). Jen v appce. */
+.trade-card-imgnav {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  color: #fff;
+  background: rgba(2, 6, 23, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: default;
+}
+
+.trade-card-imgnav span {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.trade-card-imgnav button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.trade-card-imgnav button:hover { color: #fff; background: rgba(255, 255, 255, 0.14); }
+
+/* Cenová dráha: čáry v SVG (natažené na panel), popisky v HTML, aby se
+   písmo nedeformovalo s poměrem stran. */
+.trade-card-path {
+  position: relative;
+  flex: 1;
+  min-height: 150px;
+  margin: 6px 0;
+}
+
+.trade-card-path svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.trade-card-path-line { stroke-width: 1.5; }
+.trade-card-path-line.trade-card-path-tp { stroke: #34d399; stroke-dasharray: 5 5; }
+.trade-card-path-line.trade-card-path-sl { stroke: #fb7185; stroke-dasharray: 5 5; }
+.trade-card-path-line.trade-card-path-entry { stroke: rgba(255, 255, 255, 0.7); }
+.trade-card-path-line.trade-card-path-exit { stroke: currentColor; }
+.trade-card-path-run { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; }
+.trade-card-path-fill { fill: currentColor; opacity: 0.16; }
+.trade-card-path-win { color: #34d399; }
+.trade-card-path-loss { color: #fb7185; }
+.trade-card-path-flat { color: rgba(255, 255, 255, 0.6); }
+
+.trade-card-path-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 999px;
+}
+
+.trade-card-path-dot-entry { background: #fff; }
+.trade-card-path-dot-exit { background: currentColor; box-shadow: 0 0 0 2px #000; }
+
+.trade-card-path-label {
+  position: absolute;
+  left: 67%;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  transform: translateY(-50%);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.trade-card-path-label b { font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; font-size: 10px; }
+.trade-card-path-label span { color: rgba(255, 255, 255, 0.75); }
+.trade-card-path-label.trade-card-path-tp b { color: #34d399; }
+.trade-card-path-label.trade-card-path-sl b { color: #fb7185; }
+.trade-card-path-label.trade-card-path-entry b { color: rgba(255, 255, 255, 0.85); }
+.trade-card-path-label.trade-card-path-exit b { color: currentColor; }
+
+.light-theme .trade-card-path-line.trade-card-path-tp { stroke: #059669; }
+.light-theme .trade-card-path-line.trade-card-path-sl { stroke: #e11d48; }
+.light-theme .trade-card-path-line.trade-card-path-entry { stroke: rgba(15, 23, 42, 0.6); }
+.light-theme .trade-card-path-win { color: #059669; }
+.light-theme .trade-card-path-loss { color: #e11d48; }
+.light-theme .trade-card-path-flat { color: rgba(15, 23, 42, 0.55); }
+.light-theme .trade-card-path-dot-entry { background: #0f172a; }
+.light-theme .trade-card-path-dot-exit { box-shadow: 0 0 0 2px #fff; }
+.light-theme .trade-card-path-label span { color: rgba(15, 23, 42, 0.7); }
+.light-theme .trade-card-path-label.trade-card-path-tp b { color: #059669; }
+.light-theme .trade-card-path-label.trade-card-path-sl b { color: #e11d48; }
+.light-theme .trade-card-path-label.trade-card-path-entry b { color: rgba(15, 23, 42, 0.8); }
+
+.trade-card-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.trade-card-empty b {
+  font-size: 54px;
+  font-weight: 200;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.16);
+}
+
+.light-theme .trade-card-empty { color: rgba(15, 23, 42, 0.45); }
+.light-theme .trade-card-empty b { color: rgba(15, 23, 42, 0.14); }
+
+.trade-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.light-theme .trade-card-foot { color: rgba(15, 23, 42, 0.45); }
+
+.trade-card-qr { display: inline-flex; align-items: center; gap: 10px; }
+
+.trade-card-qr-code {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.trade-card-qr-code svg { display: block; }
+
+/* Export: pevné plátno 1200×630, karta uprostřed ve stejném rozložení jako
+   na širokém displeji bez ohledu na šířku okna, ze kterého se sdílí. */
+.trade-card-export {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 26px 50px;
+}
+
+.trade-card-export > .trade-card { width: 1100px; }
+.trade-card-capture .trade-card-body { grid-template-columns: 370px minmax(0, 1fr); height: 392px; }
+.trade-card-capture .trade-card-media { min-height: 0; aspect-ratio: auto; }
+.trade-card-capture .live-day-card { box-shadow: 0 30px 60px -34px rgba(0, 0, 0, 0.9); }
+
+/* Ovládání sdílení v bublině: přepínače vypadají jako řádky bubliny. */
+.trade-card-sharepop { min-width: 210px; }
+
+.trade-card-sharepop-sep {
+  height: 1px;
+  margin: 2px 0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.light-theme .trade-card-sharepop-sep { background: rgba(15, 23, 42, 0.08); }
+
+.trade-card-toggle { font-weight: 700; }
+.live-day-sharepop button:disabled { opacity: 0.55; cursor: default; }
+
+.trade-card-switch {
+  position: relative;
+  flex: none;
+  width: 24px;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  transition: background 0.15s;
+}
+
+.trade-card-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.trade-card-switch-on { background: #10b981; }
+.trade-card-switch-on::after { transform: translateX(10px); }
+.light-theme .trade-card-switch { background: rgba(15, 23, 42, 0.2); }
+.light-theme .trade-card-switch-on { background: #10b981; }
+
+@media (max-width: 759px) {
+  .trade-card-media { min-height: 0; }
+  .trade-card-path { min-height: 170px; }
+}
+
+@media (max-width: 480px) {
+  .trade-card-big { font-size: 44px; }
+  .trade-card-total { padding: 18px; gap: 14px; }
+  .trade-card-foot { font-size: 10px; }
+  /* Ceny úrovní by se do úzkého panelu nevešly — vstup a výstup stojí
+     hned nad ním v řádku čísel, u dráhy zůstanou jen názvy. */
+  .trade-card-path-label { justify-content: flex-start; }
+  .trade-card-path-label span { display: none; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    Karta dne → prosvítající deska (jen veřejná sdílená stránka)
 
    Za kartou tam běží graf svíček, který byl dosud úplně zakrytý. Deska se
@@ -3833,6 +4235,15 @@ html.aurora .compact-sheet-scrim {
   backdrop-filter: blur(10px) saturate(140%);
 }
 
+/* Aurora: celoobrazovková okna s pozadím karty/stránky (editor kopírovací
+   skupiny v LIVE, graf přes celou obrazovku, Síť, Backtest) by byla průsvitná
+   jako karty a pod textem by prosvítala stránka (4. 10. 2026, iPhone: „Upravit
+   skupinu“ přes LIVE). Tón karty se položí na pevný základ Aurory. Ztmavení
+   s průhledností (bg-theme-page-95 apod.) se netýká — `~=` bere jen přesnou třídu. */
+html.aurora .fixed.inset-0:is([class*="bg-[var(--bg-card)]"], [class*="bg-[var(--bg-page)]"], [class~="bg-theme-card"], [class~="bg-theme-page"]) {
+  background: linear-gradient(var(--bg-card), var(--bg-card)), var(--aurora-base);
+}
+
 /* Aurora: položky postranního panelu bez vlastních „kapek“. Panel je jedno
    sklo a položky jsou v něm jen řádky (jako v náhledu mockups/app-styles.html);
    najetí = jemný tón, aktivní položka = světlejší sklo s horní hranou.
@@ -3898,9 +4309,371 @@ html.aurora:not(.light-theme) .floating-glass-header.header-clear {
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   backdrop-filter: blur(18px) saturate(140%);
 }
-html.aurora.aurora.light-theme { --modal-bg: rgba(248, 250, 253, 0.95); --modal-sheen: rgba(255, 255, 255, 0.6); }
-html.aurora.aurora:not(.light-theme) { --modal-bg: rgba(13, 18, 36, 0.95); --modal-sheen: rgba(255, 255, 255, 0.05); }
+html.aurora.aurora.light-theme { --modal-bg: rgba(248, 250, 253, 0.95); --menu-bg: rgba(250, 251, 253, 0.985); --modal-sheen: rgba(255, 255, 255, 0.6); }
+html.aurora.aurora:not(.light-theme) { --modal-bg: rgba(13, 18, 36, 0.95); --menu-bg: rgba(15, 20, 38, 0.985); --modal-sheen: rgba(255, 255, 255, 0.05); }
+
+/* Plovoucí menu, popovery a tooltipy (absolute/fixed se stínem) stojí nad
+   obsahem — s 10% Aurora výplní karty pod nimi prosvítal text tabulky.
+   Dostanou plnou skleněnou výplň jako okna, jen ještě hustší — malé menu
+   leží přímo na textu a bez blur by čísla pod ním prosvítala. */
+html.aurora :is(.absolute, .fixed):is(.shadow-lg, .shadow-xl, .shadow-2xl):is([class*="bg-[var(--bg-card)]"], .bg-theme-card) {
+  background-color: var(--menu-bg);
+  background-image: linear-gradient(180deg, var(--modal-sheen, transparent) 0%, transparent 38%);
+  border-color: var(--glass-border, var(--border-subtle));
+}
+/* Dialogy (role="dialog" / aria-modal) s výplní karty: v Auroře je karta
+   z 10 % neprůhledná a pod oknem prosvítal obsah stránky (okno skupiny nad
+   tabulkou LIVE). Dostanou stejnou plnou výplň a lesk jako `.glass-modal`.
+   Celoobrazovkové overlaye (`inset-0`) se netýká. */
+html.aurora :is([role="dialog"], [aria-modal="true"]):not(.inset-0):not(.glass-modal):is([class*="bg-[var(--bg-card)]"], .bg-theme-card) {
+  background-color: var(--modal-bg);
+  background-image: linear-gradient(180deg, var(--modal-sheen, transparent) 0%, transparent 38%);
+  border-color: var(--glass-border, var(--border-subtle));
+}
+
+/* Ve světlém čiré sklo, ne mléčný papír: ~80 % bílé s leskem nahoře,
+   pod tím rozmazání a saturace pozadí (barvy Aurory prosvítají, text ne). */
+html.aurora.light-theme :is(.absolute, .fixed):is(.shadow-lg, .shadow-xl, .shadow-2xl):is([class*="bg-[var(--bg-card)]"], .bg-theme-card) {
+  background-color: rgba(255, 255, 255, 0.8);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 45%);
+  border-color: rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 4px 10px -4px rgba(30, 41, 80, 0.08),
+    0 18px 40px -12px rgba(30, 41, 80, 0.18);
+}
 
 /* Listování důkazy výplat: obrázek odjede do strany, nový přijede z druhé. */
 .payout-slide { will-change: transform, opacity; }
 .payout-slide.is-animating { transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.22s ease; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Plány účtů (TradovateAccountProfileSetup)
+
+   Okno vyjede, skupiny propek naskočí postupně, úpravy se rozbalí výškou
+   (mřížka 0fr → 1fr) a obsah dojede shora. Fáze má jezdec, který přejede na
+   vybranou možnost, přehled pravidel se při změně vymění přejezdem a po
+   hromadném „Použít“ řádky propky postupně bliknou.
+   ───────────────────────────────────────────────────────────────────────── */
+.aps-modal { animation: aps-modal-in 0.32s cubic-bezier(0.32, 0.72, 0, 1) both; }
+@keyframes aps-modal-in { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
+
+.aps-firm { animation: aps-firm-in 0.4s cubic-bezier(0.32, 0.72, 0, 1) both; }
+@keyframes aps-firm-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.aps-seg {
+  position: relative;
+  display: inline-flex;
+  padding: 1px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+.aps-seg::before {
+  content: '';
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  left: var(--seg-x, 0);
+  width: var(--seg-w, 0);
+  border-radius: 5px;
+  background: var(--bg-input, #fff);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
+  opacity: var(--seg-o, 0);
+  transition: left 0.26s cubic-bezier(0.32, 0.72, 0, 1), width 0.26s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.15s;
+}
+
+html.aurora.light-theme .aps-seg::before { background: #fff; }
+html:not(.light-theme) .aps-seg::before { background: rgba(255, 255, 255, 0.13); }
+
+.aps-seg button {
+  position: relative;
+  z-index: 1;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: color 0.2s;
+}
+
+.aps-seg button[aria-pressed='true'] { color: var(--text-primary); }
+.aps-seg button:hover { color: var(--text-primary); }
+
+.aps-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: #d97706;
+  opacity: 0;
+  transform: scale(0.3);
+  transition: opacity 0.25s, transform 0.25s;
+}
+
+.aps-warn .aps-dot { opacity: 1; transform: none; }
+.aps-warn-text { color: #d97706; }
+.aps-ok-text { color: #059669; }
+html:not(.light-theme) .aps-dot { background: #fbbf24; }
+html:not(.light-theme) .aps-warn-text { color: #fbbf24; }
+html:not(.light-theme) .aps-ok-text { color: #34d399; }
+
+.aps-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.1fr) minmax(150px, 0.9fr) auto minmax(0, 1.8fr) 28px;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  transition: background 0.2s;
+}
+
+/* Úzké okno: účet + šipka nahoře, pod tím plán a fáze, pod tím pravidla. */
+@media (max-width: 767px) {
+  .aps-row { grid-template-columns: minmax(0, 1fr) auto 28px; }
+  .aps-cell-acc { grid-column: 1 / 3; }
+  .aps-cell-chev { grid-column: 3; grid-row: 1; }
+  .aps-cell-plan { grid-column: 1 / 2; }
+  .aps-cell-phase { grid-column: 2 / 4; }
+  .aps-cell-rules { grid-column: 1 / -1; }
+}
+.aps-rows > .aps-row:not(:first-child) { border-top: 1px solid var(--border-subtle); }
+.aps-chev svg { transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
+.aps-open .aps-chev svg { transform: rotate(180deg); }
+
+.aps-edit {
+  display: grid;
+  grid-template-rows: 0fr;
+  padding: 0 12px;
+  transition: grid-template-rows 0.3s cubic-bezier(0.32, 0.72, 0, 1), padding 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.aps-edit > div { min-height: 0; overflow: hidden; }
+.aps-edit-in { opacity: 0; transform: translateY(-6px); transition: opacity 0.2s, transform 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
+.aps-edit-open { grid-template-rows: 1fr; padding: 2px 12px 14px; }
+.aps-edit-open .aps-edit-in { opacity: 1; transform: none; transition-delay: 0.06s; }
+
+.aps-swap > * { animation: aps-swap 0.32s cubic-bezier(0.32, 0.72, 0, 1) both; }
+.aps-swap > :nth-child(2) { animation-delay: 0.04s; }
+@keyframes aps-swap { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.aps-flash { animation: aps-flash 0.9s ease both; animation-delay: var(--aps-delay, 0s); }
+@keyframes aps-flash { 0%, 100% { background: transparent; } 25% { background: rgba(37, 99, 235, 0.1); } }
+
+.aps-bump { animation: aps-bump 0.35s cubic-bezier(0.32, 0.72, 0, 1); }
+@keyframes aps-bump { 40% { transform: translateY(-2px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .aps-modal, .aps-firm, .aps-swap > *, .aps-flash, .aps-bump { animation: none; }
+  .aps-seg::before, .aps-edit, .aps-edit-in, .aps-chev svg, .aps-dot { transition: none; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Úpravy dashboardu (.dbe-*)
+
+   Widgety v úpravách vypadají jako normálně (žádné zmenšení ani průhlednost),
+   jen mají modrý rámeček. Během tažení ostatní plynule ujedou do náhledu
+   výsledku (prohození / uvolnění místa), tažený se lehce zvedne, roh ukazuje
+   velikost. Nový widget naskočí a zazáří, odebraný zmizí.
+   ───────────────────────────────────────────────────────────────────────── */
+.dbe-grid .react-grid-item {
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1), width 0.3s cubic-bezier(0.32, 0.72, 0, 1), height 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.dbe-grid .react-grid-item.react-draggable-dragging,
+.dbe-grid .react-grid-item.resizing { transition: none; z-index: 30; }
+.dbe-grid .react-grid-item.react-grid-placeholder { transition: transform 0.16s cubic-bezier(0.32, 0.72, 0, 1), width 0.16s, height 0.16s; }
+
+.dbe-shell { border-radius: 8px; transition: box-shadow 0.25s, transform 0.25s cubic-bezier(0.32, 0.72, 0, 1); }
+.dbe-editing .react-grid-item { cursor: grab; }
+.dbe-editing .react-grid-item.react-draggable-dragging { cursor: grabbing; }
+.dbe-editing .dbe-shell { box-shadow: 0 0 0 1.5px color-mix(in srgb, #2563eb 22%, transparent); }
+.dbe-editing .react-grid-item:hover .dbe-shell { box-shadow: 0 0 0 2px color-mix(in srgb, #2563eb 50%, transparent); }
+.dbe-grid .react-grid-item.react-draggable-dragging .dbe-shell { transform: scale(1.02); box-shadow: 0 0 0 2px #2563eb, 0 24px 50px -18px rgba(15, 23, 42, 0.45); }
+.dbe-grid .react-grid-item.resizing .dbe-shell { box-shadow: 0 0 0 2px #2563eb, 0 18px 40px -18px rgba(15, 23, 42, 0.35); }
+.dbe-swap .dbe-shell { box-shadow: 0 0 0 2px #10b981, 0 0 0 6px rgba(16, 185, 129, 0.15) !important; }
+
+/* úchyt v rohu: v úpravách vidět vždy */
+.dbe-editing .react-grid-item > .react-resizable-handle { opacity: 0.55; width: 22px; height: 22px; z-index: 40; transition: opacity 0.2s; }
+.dbe-editing .react-grid-item:hover > .react-resizable-handle { opacity: 1; }
+.dbe-editing .react-grid-item > .react-resizable-handle::after {
+  width: 9px !important; height: 9px !important; right: 5px !important; bottom: 5px !important;
+  border-right: 2px solid #2563eb !important; border-bottom: 2px solid #2563eb !important; border-radius: 0 0 3px 0;
+}
+
+.dbe-size {
+  position: absolute; right: 30px; bottom: 8px; z-index: 45; padding: 3px 8px; border-radius: 6px;
+  background: #0f172a; color: #fff; font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  animation: dbe-pop 0.18s cubic-bezier(0.32, 0.72, 0, 1) both; pointer-events: none;
+}
+.dbe-size-min { background: #d97706; }
+
+.dbe-new .dbe-shell { animation: dbe-pop-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both, dbe-glow 1.4s ease 0.1s both; }
+.dbe-out .dbe-shell { animation: dbe-pop-out 0.2s ease both; }
+@keyframes dbe-pop-in { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: none; } }
+@keyframes dbe-glow { 0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.55); } 100% { box-shadow: 0 0 0 14px rgba(37, 99, 235, 0); } }
+@keyframes dbe-pop-out { to { opacity: 0; transform: scale(0.92); } }
+@keyframes dbe-pop { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: none; } }
+@keyframes dbe-rise { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+
+/* lišta úprav a tlačítka */
+.dbe-editbar { display: flex; align-items: center; gap: 6px; animation: dbe-rise 0.32s cubic-bezier(0.32, 0.72, 0, 1) both; }
+.dbe-btn {
+  height: 32px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--border-subtle);
+  background: var(--bg-input, #fff); color: var(--text-primary); font-size: 12.5px; font-weight: 600; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px; transition: background 0.15s, opacity 0.15s, transform 0.15s;
+}
+.dbe-btn:hover:not(:disabled) { background: var(--bg-page); }
+.dbe-btn:active:not(:disabled) { transform: scale(0.97); }
+.dbe-btn:disabled { opacity: 0.4; }
+.dbe-btn-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.dbe-btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+.dbe-btn-ok { background: #059669; border-color: #059669; color: #fff; }
+.dbe-btn-ok:hover:not(:disabled) { background: #047857; }
+.dbe-note {
+  margin: 0 8px 12px; padding: 9px 12px; border-radius: 8px; font-size: 12px; color: var(--text-secondary);
+  background: color-mix(in srgb, #2563eb 6%, transparent); border: 1px solid color-mix(in srgb, #2563eb 18%, transparent);
+}
+.dbe-toast {
+  position: fixed; left: 50%; bottom: 96px; z-index: 160; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border-radius: 10px;
+  background: #0f172a; color: #fff; font-size: 12.5px; font-weight: 600; box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.6);
+  animation: dbe-toast 0.3s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.dbe-toast button { height: 26px; padding: 0 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.14); color: #fff; font-weight: 700; }
+@keyframes dbe-toast { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* knihovna widgetů */
+.dbe-lib {
+  position: fixed; left: 50%; bottom: 16px; z-index: 150; width: min(980px, calc(100% - 32px)); transform: translateX(-50%);
+  border-radius: 14px; overflow: hidden;
+  background: var(--modal-bg, rgba(248, 250, 253, 0.96)); background-image: linear-gradient(180deg, var(--modal-sheen, transparent), transparent 30%);
+  border: 1px solid var(--glass-border, var(--border-subtle)); box-shadow: 0 24px 60px -24px rgba(15, 23, 42, 0.45);
+  animation: dbe-dock-in 0.4s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+html:not(.aurora) .dbe-lib { background: var(--bg-card); }
+html:not(.light-theme) .dbe-lib { background-color: rgba(13, 18, 36, 0.96); }
+@keyframes dbe-dock-in { from { opacity: 0; transform: translate(-50%, 24px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.dbe-lib-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.38s cubic-bezier(0.32, 0.72, 0, 1); }
+.dbe-lib-open .dbe-lib-panel { grid-template-rows: 1fr; }
+.dbe-lib-panel > div { min-height: 0; overflow: hidden; }
+.dbe-lib-in { opacity: 0; transform: translateY(8px); transition: opacity 0.2s, transform 0.35s cubic-bezier(0.32, 0.72, 0, 1); }
+.dbe-lib-open .dbe-lib-in { opacity: 1; transform: none; transition-delay: 0.05s; }
+.dbe-lib-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 12px 8px; }
+.dbe-lib-search { flex: 1; min-width: 180px; height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border-subtle); background: var(--bg-input, #fff); color: var(--text-muted); }
+.dbe-lib-search:focus-within { border-color: #2563eb; }
+.dbe-lib-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: 12.5px; color: var(--text-primary); }
+.dbe-seg { display: inline-flex; flex-wrap: wrap; padding: 2px; border-radius: 7px; border: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--text-primary) 4%, transparent); }
+.dbe-seg button { height: 26px; padding: 0 10px; border-radius: 5px; font-size: 12px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; transition: background 0.15s, color 0.15s; }
+.dbe-seg button.on { background: var(--bg-input, #fff); color: var(--text-primary); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14); }
+html:not(.light-theme) .dbe-seg button.on { background: rgba(255, 255, 255, 0.12); }
+.dbe-seg small { font-size: 10.5px; color: var(--text-muted); }
+.dbe-lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 8px; padding: 4px 12px 12px; max-height: 228px; overflow-y: auto; }
+.dbe-lib-card {
+  position: relative; display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 10px 7px 7px;
+  border-radius: 10px; border: 1px solid var(--border-subtle); background: var(--bg-input, #fff); cursor: grab; user-select: none; outline: none;
+  transition: transform 0.18s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.18s, border-color 0.18s;
+  animation: dbe-pop 0.28s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.dbe-lib-card:hover, .dbe-lib-card:focus-visible { transform: translateY(-2px); border-color: color-mix(in srgb, #2563eb 40%, transparent); box-shadow: 0 10px 22px -14px rgba(37, 99, 235, 0.55); }
+.dbe-lib-card:active { cursor: grabbing; transform: scale(0.98); }
+html:not(.light-theme) .dbe-lib-card, html:not(.light-theme) .dbe-lib-search { background: rgba(255, 255, 255, 0.04); }
+.dbe-lib-txt { min-width: 0; }
+.dbe-lib-txt b { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dbe-lib-txt small { display: block; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dbe-lib-dim { align-self: start; padding: 2px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-secondary); background: color-mix(in srgb, var(--text-primary) 5%, transparent); }
+.dbe-lib-plus { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; border-radius: 99px; display: grid; place-items: center; color: #fff; background: #2563eb; opacity: 0; transform: scale(0.6); transition: opacity 0.15s, transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.dbe-lib-card:hover .dbe-lib-plus { opacity: 1; transform: none; }
+.dbe-lib-empty { grid-column: 1 / -1; margin: 10px 0; text-align: center; font-size: 12.5px; color: var(--text-muted); }
+.dbe-lib-bar { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-top: 1px solid transparent; transition: border-color 0.3s; }
+.dbe-lib-open .dbe-lib-bar { border-top-color: var(--border-subtle); }
+.dbe-lib-toggle { display: inline-grid; place-items: center; animation: dbe-pop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.dbe-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: rgba(255, 255, 255, 0.25); font-size: 11px; display: inline-grid; place-items: center; }
+.dbe-hint { font-size: 12px; color: var(--text-secondary); }
+
+/* miniatury (poloviční): vzhled widgetu v poměru jeho velikosti */
+.dbe-mini-stage { height: 44px; display: grid; place-items: center; padding: 4px; border-radius: 7px; overflow: hidden;
+  background: radial-gradient(ellipse 80% 70% at 0% 0%, rgba(34, 211, 238, 0.14), transparent 60%), radial-gradient(ellipse 70% 70% at 100% 100%, rgba(16, 185, 129, 0.12), transparent 60%), color-mix(in srgb, var(--text-primary) 4%, transparent); }
+.dbe-mini-card { max-width: 100%; max-height: 100%; display: flex; flex-direction: column; gap: 1px; padding: 3px 4px; border-radius: 4px; overflow: hidden;
+  background: var(--bg-input, #fff); border: 1px solid var(--border-subtle); box-shadow: 0 3px 8px -5px rgba(15, 23, 42, 0.3); transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1); }
+html:not(.light-theme) .dbe-mini-card { background: rgba(255, 255, 255, 0.07); }
+.dbe-lib-card:hover .dbe-mini-card { transform: scale(1.06); }
+.dbe-mini-k { font-size: 5px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
+.dbe-mini-body { flex: 1; min-height: 0; display: flex; align-items: flex-end; }
+.dbe-mini-v { font-size: 8px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--text-primary); white-space: nowrap; }
+.dbe-mini-v.win { color: #059669; } .dbe-mini-v.loss { color: #e11d48; }
+.dbe-mini-fill { width: 100%; height: 100%; }
+.dbe-mini-area { fill: rgba(16, 185, 129, 0.18); } .dbe-mini-line { fill: none; stroke: #10b981; stroke-width: 1.2; }
+.dbe-mini-fan { fill: none; stroke: rgba(37, 99, 235, 0.6); stroke-width: 0.9; }
+.dbe-mini-cal { width: 100%; height: 100%; display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+.dbe-mini-cal i { border-radius: 1px; background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+.dbe-mini-cal i.w, .dbe-mini-bars i.w, .dbe-mini-split i.w { background: rgba(16, 185, 129, 0.5); }
+.dbe-mini-cal i.l, .dbe-mini-bars i.l, .dbe-mini-split i.l { background: rgba(244, 63, 94, 0.45); }
+.dbe-mini-bars { width: 100%; height: 100%; display: flex; align-items: flex-end; gap: 2px; }
+.dbe-mini-bars i { flex: 1; border-radius: 1px 1px 0 0; }
+.dbe-mini-split { width: 100%; height: 4px; display: flex; border-radius: 99px; overflow: hidden; align-self: center; }
+.dbe-mini-lines { width: 100%; display: grid; gap: 2px; }
+.dbe-mini-lines i { height: 2px; border-radius: 99px; background: color-mix(in srgb, var(--text-primary) 18%, transparent); }
+
+/* telefon: úpravy plochy */
+.dbe-ph { background: var(--bg-page-solid, #eef2f7); }
+html.aurora.light-theme .dbe-ph { background: radial-gradient(ellipse 80% 40% at 0% 0%, rgba(34, 211, 238, 0.16), transparent 60%), #eef2f7; }
+html:not(.light-theme) .dbe-ph { background: #070b16; }
+.dbe-ph-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: calc(env(safe-area-inset-top, 0px) + 14px) 18px 10px; font-size: 15px; color: var(--text-primary); }
+.dbe-ph-link { padding: 6px 2px; color: #2563eb; font-size: 15px; font-weight: 600; }
+.dbe-ph-done { font-weight: 700; }
+.dbe-ph-scroll { flex: 1; overflow-y: auto; padding: 4px 14px calc(env(safe-area-inset-bottom, 0px) + 96px); }
+.dbe-ph-tip { margin: 4px 2px 10px; text-align: center; font-size: 12px; color: var(--text-muted); }
+.dbe-ph-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.dbe-ph-row { position: relative; display: grid; grid-template-columns: 24px 32px minmax(0, 1fr) auto 30px; align-items: center; gap: 10px; padding: 10px 8px; border-radius: 14px;
+  background: var(--bg-input, #fff); border: 1px solid var(--border-subtle); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05); color: var(--text-primary); }
+html:not(.light-theme) .dbe-ph-row, html:not(.light-theme) .dbe-ph-sheet-item { background: rgba(255, 255, 255, 0.05); }
+.dbe-ph-fresh { animation: dbe-glow 1.4s ease both; }
+.dbe-ph-minus { width: 22px; height: 22px; border-radius: 99px; background: #e11d48; color: #fff; display: grid; place-items: center; }
+.dbe-ph-ico { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, #2563eb 10%, transparent); color: #2563eb; }
+.dbe-ph-txt { min-width: 0; text-align: left; }
+.dbe-ph-txt b { display: block; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dbe-ph-txt small { display: block; font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dbe-ph-size { display: inline-flex; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--text-primary) 5%, transparent); }
+.dbe-ph-size button { width: 28px; height: 24px; border-radius: 6px; color: var(--text-secondary); font-size: 13px; font-weight: 700; transition: background 0.18s, color 0.18s; }
+.dbe-ph-size button.on { background: var(--bg-input, #fff); color: var(--text-primary); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.16); }
+html:not(.light-theme) .dbe-ph-size button.on { background: rgba(255, 255, 255, 0.14); }
+.dbe-ph-full { font-size: 11px; color: var(--text-muted); }
+.dbe-ph-handle { width: 30px; height: 34px; display: grid; place-items: center; color: var(--text-muted); cursor: grab; touch-action: none; }
+.dbe-ph-add { width: 100%; margin-top: 12px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1.5px dashed color-mix(in srgb, #2563eb 45%, transparent); background: color-mix(in srgb, #2563eb 6%, transparent); color: #2563eb; font-size: 14px; font-weight: 700; }
+.dbe-ph-add:disabled { opacity: 0.45; }
+.dbe-ph-add span { padding: 1px 7px; border-radius: 99px; background: #2563eb; color: #fff; font-size: 11px; }
+.dbe-ph-dim { position: absolute; inset: 0; z-index: 10; background: rgba(15, 23, 42, 0.28); }
+.dbe-ph-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 11; max-height: 72%; display: flex; flex-direction: column; gap: 10px;
+  padding: 8px 14px calc(env(safe-area-inset-bottom, 0px) + 22px); border-radius: 26px 26px 0 0;
+  background: var(--modal-bg, rgba(248, 250, 253, 0.98)); box-shadow: 0 -20px 50px -20px rgba(15, 23, 42, 0.4); color: var(--text-primary); }
+html:not(.light-theme) .dbe-ph-sheet { background: rgba(13, 18, 36, 0.98); }
+.dbe-ph-sheet > b { font-size: 16px; padding: 0 4px; }
+.dbe-ph-grab { align-self: center; width: 38px; height: 5px; border-radius: 99px; background: color-mix(in srgb, var(--text-primary) 20%, transparent); margin-bottom: 4px; }
+.dbe-ph-sheet-list { overflow-y: auto; display: grid; gap: 8px; }
+.dbe-ph-sheet-item { display: grid; grid-template-columns: 32px minmax(0, 1fr) 28px; align-items: center; gap: 10px; padding: 10px; border-radius: 14px; border: 1px solid var(--border-subtle); background: var(--bg-input, #fff); color: var(--text-primary); }
+.dbe-ph-plus { width: 26px; height: 26px; border-radius: 99px; display: grid; place-items: center; background: #2563eb; color: #fff; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dbe-grid .react-grid-item, .dbe-shell, .dbe-lib-card, .dbe-lib-panel, .dbe-lib-in, .dbe-mini-card { transition: none !important; }
+  .dbe-new .dbe-shell, .dbe-out .dbe-shell, .dbe-lib, .dbe-toast, .dbe-editbar, .dbe-size, .dbe-lib-card, .dbe-ph-fresh { animation: none !important; }
+}
+
+/* Tažení widgetu z knihovny: pod kurzorem celý widget ve skutečné velikosti. */
+.dbe-drag-ghost {
+  position: fixed; left: 0; top: 0; z-index: 200; pointer-events: none; opacity: 0;
+  border-radius: 8px; overflow: hidden;
+  /* Plná výplň: karta widgetu je v Auroře z 10 % neprůhledná a prosvítal by graf pod ní. */
+  background: var(--modal-bg, var(--bg-card));
+  box-shadow: 0 0 0 2px #2563eb, 0 28px 60px -20px rgba(15, 23, 42, 0.5);
+  transition: opacity 0.15s;
+  animation: dbe-ghost-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes dbe-ghost-in { from { scale: 0.92; } to { scale: 1.02; } }
+.dbe-lib { transition: opacity 0.25s, translate 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
+/* `animation: none` — vstupní animace s `both` by jinak držela plnou viditelnost. */
+.dbe-lib-dragging { animation: none; opacity: 0.28; translate: 0 40%; pointer-events: none; }

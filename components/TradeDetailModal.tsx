@@ -31,6 +31,7 @@ const defaultLoadTradeDetail = (id: string) => storageService.getTradeById(id);
 const ManualTradeForm = React.lazy(() => import('./ManualTradeForm'));
 const AccountExecutionChart = React.lazy(() => import('./AccountExecutionChart'));
 import TradeShareModal from './TradeShareModal';
+import { tradeShareOwnerName } from '../lib/tradeShareCard';
 import { initialRiskPoints } from '../lib/tradeReplay';
 import { HistoryScreenshotSlot, clipboardImage, pasteTargetsEditable, type ScreenshotAttachStatus } from './HistoryScreenshotSlot';
 
@@ -1139,13 +1140,15 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
             {isShareCardOpen && (
                 <TradeShareModal
                     trade={activeTrade}
-                    username={(() => {
-                        // Priority: name → email prefix → fallback
-                        if (user?.name) return `@${user.name.toLowerCase().replace(/\s+/g, '')}`;
-                        if (user?.email) return `@${user.email.split('@')[0]}`;
-                        return '@trader';
-                    })()}
-                    avatarUrl={user?.avatar}
+                    owner={{ name: tradeShareOwnerName(user), avatar: user?.avatar }}
+                    images={[
+                        ...manualImages.map(url => ({ url, label: 'Screenshot' })),
+                        ...currentSignedCopierSnapshots.map(snapshot => ({
+                            url: snapshot.url,
+                            label: snapshot.kind === 'entry' ? 'Vstup' : snapshot.kind === 'exit' ? 'Výstup' : 'Snímek',
+                            private: true,
+                        })),
+                    ]}
                     onClose={() => setIsShareCardOpen(false)}
                 />
             )}

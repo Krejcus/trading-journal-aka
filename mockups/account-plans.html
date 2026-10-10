@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plány účtů — návrh</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --page:#eef2f7; --ink:#0f172a; --ink2:#475569; --ink3:#94a3b8; --line:rgba(15,23,42,.08); --line2:rgba(15,23,42,.05);
+  --glass:rgba(255,255,255,.62); --glass-border:rgba(255,255,255,.75); --field:#fff; --hover:rgba(15,23,42,.035);
+  --modal-bg:rgba(248,250,253,.96); --sheen:rgba(255,255,255,.6); --accent:#2563eb; --win:#10b981; --warn:#d97706;
+}
+.dark { --page:#070b16; --ink:#e2e8f0; --ink2:#94a3b8; --ink3:#64748b; --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.05);
+  --glass:rgba(255,255,255,.04); --glass-border:rgba(255,255,255,.08); --field:rgba(255,255,255,.04); --hover:rgba(255,255,255,.04);
+  --modal-bg:rgba(13,18,36,.96); --sheen:rgba(255,255,255,.05); --warn:#fbbf24; }
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; }
+body { font-family:Inter,-apple-system,system-ui,sans-serif; color:var(--ink); background:var(--page); font-size:13px; }
+button, select, input { font:inherit; color:inherit; }
+.bg { position:fixed; inset:0; background:
+  radial-gradient(ellipse 60% 50% at 10% 0%, rgba(34,211,238,.2), transparent 60%),
+  radial-gradient(ellipse 50% 50% at 95% 90%, rgba(16,185,129,.16), transparent 60%), var(--page); }
+.fake { position:fixed; inset:0; display:grid; grid-template-columns:64px 1fr; gap:16px; padding:16px; }
+.fake div { background:var(--glass); border:1px solid var(--glass-border); border-radius:8px; }
+.themebtn { position:fixed; top:10px; right:10px; z-index:70; padding:6px 10px; border-radius:7px; border:1px solid var(--line); background:var(--modal-bg); cursor:pointer; font-size:12px; font-weight:600; }
+
+.scrim { position:fixed; inset:0; z-index:50; background:rgba(15,23,42,.22); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  display:flex; align-items:center; justify-content:center; padding:16px; }
+.dark .scrim { background:rgba(2,6,23,.45); }
+.modal { width:100%; max-width:980px; max-height:92vh; display:flex; flex-direction:column; border-radius:10px; overflow:hidden;
+  background:var(--modal-bg); background-image:linear-gradient(180deg,var(--sheen),transparent 30%);
+  border:1px solid var(--glass-border); box-shadow:0 1px 0 rgba(255,255,255,.7) inset, 0 30px 80px -24px rgba(2,6,23,.45); }
+.head { display:flex; align-items:flex-start; gap:12px; padding:16px 18px 14px; border-bottom:1px solid var(--line); }
+.head h2 { margin:0; font-size:16px; font-weight:700; }
+.head p { margin:3px 0 0; font-size:12px; color:var(--ink2); }
+.x { margin-left:auto; width:30px; height:30px; border:0; border-radius:6px; background:transparent; color:var(--ink2); display:grid; place-items:center; cursor:pointer; }
+.x:hover { background:var(--hover); }
+svg.i { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+.body { overflow:auto; padding:14px 18px 18px; display:flex; flex-direction:column; gap:14px; }
+.body > * { flex:none; }
+
+/* firma */
+.firm { border:1px solid var(--line); border-radius:8px; background:var(--glass); overflow:hidden; }
+.dark .firm { background:rgba(255,255,255,.025); }
+.fhead { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 12px; border-bottom:1px solid var(--line); }
+.logo { width:24px; height:24px; border-radius:99px; object-fit:cover; background:#fff; border:1px solid var(--line); flex:none; }
+.fhead b { font-size:14px; font-weight:700; }
+.count { font-size:12px; color:var(--ink3); font-weight:500; }
+.bulk { margin-left:auto; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.bulk > span { font-size:12px; color:var(--ink2); }
+.field { height:30px; border-radius:6px; border:1px solid var(--line); background:var(--field); padding:0 8px; font-size:12.5px; font-weight:500; }
+select.field { padding-right:24px; }
+.plan .field { width:100%; min-width:0; text-overflow:ellipsis; }
+.seg { display:inline-flex; padding:2px; border-radius:7px; background:var(--hover); border:1px solid var(--line); }
+.seg button { border:0; background:transparent; height:24px; padding:0 9px; border-radius:5px; font-size:12px; font-weight:600; color:var(--ink2); cursor:pointer; }
+.seg button.on { background:var(--field); color:var(--ink); box-shadow:0 1px 2px rgba(15,23,42,.14); }
+.dark .seg button.on { background:rgba(255,255,255,.12); }
+.btn { height:30px; padding:0 11px; border-radius:6px; border:1px solid var(--line); background:var(--field); font-size:12.5px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+.btn:hover { background:var(--hover); }
+.btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+.btn.ghost { background:transparent; border-color:transparent; color:var(--ink2); }
+
+/* řádky účtů */
+.row { display:grid; grid-template-columns:minmax(170px,1.1fr) minmax(160px,.9fr) auto minmax(0,1.8fr) 28px; gap:12px; align-items:center; padding:9px 12px; }
+.row + .row, .edit + .row { border-top:1px solid var(--line2); }
+.row:hover { background:var(--hover); }
+.acc b { display:block; font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.acc small { font:500 10.5px 'JetBrains Mono',monospace; color:var(--ink3); }
+.rules { min-width:0; font-variant-numeric:tabular-nums; }
+.rules .r1 { font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rules .r1 i { font-style:normal; color:var(--ink3); font-weight:500; }
+.rules .r2 { margin-top:2px; font-size:11.5px; color:var(--ink3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.miss { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600; color:var(--warn); }
+.chev { width:28px; height:28px; border:0; border-radius:6px; background:transparent; color:var(--ink3); cursor:pointer; display:grid; place-items:center; transition:transform .15s; }
+.chev:hover { background:var(--hover); color:var(--ink); }
+.open .chev { transform:rotate(180deg); }
+
+/* rozbalené úpravy */
+.grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; padding:12px; border-radius:8px; border:1px solid var(--line); background:var(--field); }
+.dark .grid { background:rgba(255,255,255,.02); }
+.grid label { display:grid; gap:4px; font-size:11.5px; color:var(--ink2); font-weight:500; }
+.grid .field { width:100%; }
+.grid .wide { grid-column:span 2; }
+.edit p { margin:8px 2px 0; font-size:11.5px; color:var(--ink3); }
+
+.foot { display:flex; align-items:center; gap:8px; padding:12px 18px; border-top:1px solid var(--line); }
+.foot .src { font-size:11.5px; color:var(--ink3); }
+.foot .src a { color:var(--accent); text-decoration:none; font-weight:600; }
+.foot .grow { flex:1; }
+.status { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; color:var(--warn); }
+.status.ok { color:var(--win); }
+.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:80; padding:7px 12px; border-radius:7px; background:#0f172a; color:#fff; font-size:12px; font-weight:600; opacity:0; transition:opacity .2s; pointer-events:none; }
+.toast.on { opacity:1; }
+
+.seg.mini { padding:1px; border-radius:6px; }
+.seg.mini button { height:22px; padding:0 7px; font-size:11.5px; border-radius:5px; }
+
+/* ── animace ── */
+.modal { animation:modal-in .32s cubic-bezier(.32,.72,0,1) both; }
+@keyframes modal-in { from { opacity:0; transform:translateY(10px) scale(.985); } to { opacity:1; transform:none; } }
+.firm { animation:firm-in .4s cubic-bezier(.32,.72,0,1) both; }
+.firm:nth-child(2) { animation-delay:.05s; } .firm:nth-child(3) { animation-delay:.1s; } .firm:nth-child(4) { animation-delay:.15s; }
+@keyframes firm-in { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+
+/* rozbalení: výška přes mřížku 0fr → 1fr, obsah dojede shora */
+.edit { display:grid; grid-template-rows:0fr; padding:0 12px; transition:grid-template-rows .3s cubic-bezier(.32,.72,0,1), padding .3s cubic-bezier(.32,.72,0,1); }
+.edit > div { min-height:0; overflow:hidden; }
+.edit .in { opacity:0; transform:translateY(-6px); transition:opacity .2s, transform .3s cubic-bezier(.32,.72,0,1); }
+.edit.on { grid-template-rows:1fr; padding:4px 12px 14px; }
+.edit.on .in { opacity:1; transform:none; transition-delay:.06s; }
+.chev { transition:transform .3s cubic-bezier(.32,.72,0,1), background .15s, color .15s; }
+.row { transition:background .2s; }
+
+/* přepínač fáze: bílý jezdec přejede na vybranou možnost */
+.seg { position:relative; }
+.seg::before { content:''; position:absolute; top:var(--t,2px); bottom:var(--t,2px); left:var(--x,0); width:var(--w,0); border-radius:5px;
+  background:var(--field); box-shadow:0 1px 2px rgba(15,23,42,.14); opacity:var(--o,0);
+  transition:left .26s cubic-bezier(.32,.72,0,1), width .26s cubic-bezier(.32,.72,0,1), opacity .15s; }
+.dark .seg::before { background:rgba(255,255,255,.12); }
+.seg.mini::before { --t:1px; }
+.seg button { position:relative; z-index:1; transition:color .2s; }
+.seg button.on { background:transparent !important; box-shadow:none !important; }
+
+/* změna pravidel a hromadné použití */
+.rules.swap > div { animation:swap .32s cubic-bezier(.32,.72,0,1) both; }
+.rules.swap .r2 { animation-delay:.04s; }
+@keyframes swap { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+.row.flash { animation:flash .9s ease both; animation-delay:var(--d,0s); }
+@keyframes flash { 0% { background:transparent; } 25% { background:rgba(37,99,235,.10); } 100% { background:transparent; } }
+.dark .row.flash { animation-name:flash-d; }
+@keyframes flash-d { 0% { background:transparent; } 25% { background:rgba(96,165,250,.14); } 100% { background:transparent; } }
+.row .acc b::after { transition:opacity .25s, transform .25s; }
+.row .acc b::after { content:''; display:inline-block; width:6px; height:6px; border-radius:99px; background:var(--warn); margin-left:6px; vertical-align:middle; opacity:0; transform:scale(.3); }
+.row.warn .acc b::after { opacity:1; transform:none; }
+.status { transition:color .25s; }
+.status.bump { animation:bump .35s cubic-bezier(.32,.72,0,1); }
+@keyframes bump { 40% { transform:translateY(-2px); } }
+.toast { transform:translate(-50%, 6px); transition:opacity .2s, transform .25s cubic-bezier(.32,.72,0,1); }
+.toast.on { transform:translate(-50%, 0); }
+@media (prefers-reduced-motion: reduce) { *, *::before { animation:none !important; transition:none !important; } }
+
+@media (max-width:760px) {
+  .row { grid-template-columns:1fr 28px; }
+  .row > .plan, .row > .phase, .row > .rules { grid-column:1 / -1; }
+  .grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .bulk { margin-left:0; width:100%; }
+}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="fake"><div></div><div></div></div>
+<button class="themebtn" onclick="document.documentElement.classList.toggle('dark')">Světlý / tmavý</button>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+</svg>
+
+<div class="scrim">
+  <section class="modal" role="dialog" aria-label="Plány účtů">
+    <div class="head">
+      <div>
+        <h2>Plány účtů</h2>
+        <p id="sub"></p>
+      </div>
+      <button class="x" title="Zavřít"><svg class="i" style="width:16px;height:16px"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="body" id="body"></div>
+    <div class="foot">
+      <span class="src">Pravidla z plánů ověřena 15. 9. 2026 · <a href="#">Lucid ↗</a> · <a href="#">FundedNext ↗</a> · <a href="#">Tradeify ↗</a></span>
+      <span class="grow"></span>
+      <span class="status" id="status"></span>
+      <button class="btn ghost">Později</button>
+      <button class="btn primary" id="save"><svg class="i"><use href="#i-check"/></svg>Uložit</button>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const PLANS = {
+  Lucid: [
+    { name:'LucidFlex 50K', size:50000, dd:'EOD', mll:2000, dll:null, cons:50, target:3000, mini:4 },
+    { name:'LucidFlex 100K', size:100000, dd:'EOD', mll:3000, dll:null, cons:50, target:6000, mini:6 },
+    { name:'LucidPro 50K', size:50000, dd:'EOD', mll:2000, dll:1200, cons:40, target:3000, mini:4 },
+  ],
+  FundedNext: [
+    { name:'Rapid Pro DLL OFF 50K', size:50000, dd:'EOD', mll:2000, dll:null, cons:null, target:3000, mini:4 },
+    { name:'Rapid Pro DLL ON 50K', size:50000, dd:'EOD', mll:2000, dll:1000, cons:null, target:3000, mini:4 },
+    { name:'Legacy 50K', size:50000, dd:'EOD', mll:2000, dll:null, cons:40, target:3000, mini:3 },
+    { name:'Flex 50K', size:50000, dd:'EOD', mll:2000, dll:null, cons:40, target:3000, mini:4 },
+  ],
+  Tradeify: [
+    { name:'Select 50K', size:50000, dd:'EOD', mll:2000, dll:null, cons:40, target:2500, mini:4 },
+    { name:'Growth 50K', size:50000, dd:'EOD', mll:2000, dll:1250, cons:null, target:3000, mini:4 },
+  ],
+};
+const LOGO = { Lucid:'/firms/lucid.jpg', FundedNext:'/firms/fundednext.svg', Tradeify:'/firms/tradeify.svg' };
+const PHASES = [['evaluation','Eval','Evaluation'],['funded','Funded','Funded'],['live','Live','Live']];
+const accounts = [
+  { id:'68356271', name:'LFE05066846490021', firm:'Lucid', plan:'LucidFlex 50K', phase:null },
+  { id:'68356277', name:'LFE05066846490023', firm:'Lucid', plan:'LucidFlex 50K', phase:null },
+  { id:'68356274', name:'LFE05066846490022', firm:'Lucid', plan:'LucidFlex 50K', phase:null },
+  { id:'68356280', name:'LFE05066846490024', firm:'Lucid', plan:'LucidFlex 50K', phase:null },
+  { id:'68374374', name:'FNFTCHFILIPKREJCA87338', firm:'FundedNext', plan:null, phase:null },
+  { id:'68374357', name:'FNFTCHFILIPKREJCA8290', firm:'FundedNext', plan:null, phase:null },
+  { id:'68374361', name:'FNFTCHFILIPKREJCA96362', firm:'FundedNext', plan:null, phase:null },
+  { id:'68311020', name:'FTDFYG50488642119', firm:'Tradeify', plan:'Select 50K', phase:'funded', custom:'Leader' },
+  { id:'68311028', name:'FTDFYG50719650896', firm:'Tradeify', plan:'Select 50K', phase:'funded' },
+];
+const open = new Set();
+const bulk = {};
+const money = v => '$' + v.toLocaleString('cs-CZ');
+const planOf = a => (PLANS[a.firm] || []).find(p => p.name === a.plan);
+const missing = a => !a.plan ? 'Chybí plán' : !a.phase ? 'Chybí fáze' : null;
+
+function rules(a) {
+  const p = planOf(a);
+  if (!p) return '<span class="miss"><svg class="i"><use href="#i-alert"/></svg>Vyber plán — pravidla se doplní</span>';
+  const r1 = `<i>MLL</i> ${money(p.mll)} <i>· DLL</i> ${p.dll ? money(p.dll) : '—'}` + (a.phase !== 'funded' && a.phase !== 'live' ? ` <i>· cíl</i> ${money(p.target)}` : '');
+  const r2 = [`${p.size/1000}K · ${p.dd} trailing`, p.cons ? `konzistence ${p.cons} %` : null, `${p.mini} mini / ${p.mini*10} micro`].filter(Boolean).join(' · ');
+  return `<div class="r1">${r1}</div><div class="r2">${r2}</div>`;
+}
+function planSelect(firm, value, attrs) {
+  return `<select class="field" ${attrs}><option value="">Vyber plán…</option>${(PLANS[firm]||[]).map(p => `<option ${p.name===value?'selected':''}>${p.name}</option>`).join('')}</select>`;
+}
+function phaseSeg(value, attrs) {
+  return `<span class="seg mini" ${attrs}>${PHASES.map(([k,l,full]) => `<button data-phase="${k}" title="${full}" class="${k===value?'on':''}">${l}</button>`).join('')}</span>`;
+}
+function editor(a) {
+  const p = planOf(a) || {};
+  const f = (label, val, cls='') => `<label class="${cls}">${label}<input class="field" value="${val ?? ''}" placeholder="—"></label>`;
+  return `<div class="grid">
+    ${f('Vlastní název', a.custom || '', 'wide')}
+    ${f('Velikost účtu', p.size)}
+    <label>Drawdown<select class="field"><option>EOD trailing</option><option>Trailing</option><option>Static</option></select></label>
+    ${f('Max loss (MLL)', p.mll)}${f('Denní limit (DLL)', p.dll)}${f('Cíl zisku', p.target)}${f('Konzistence %', p.cons)}
+    ${f('Max mini', p.mini)}${f('Max micro', p.mini ? p.mini*10 : '')}
+  </div><p>Hodnoty předvyplnil plán. Uprav je, jen když ti propka přidělila jiné limity (třeba reálný Live účet).</p>`;
+}
+function render() {
+  const firms = [...new Set(accounts.map(a => a.firm))];
+  document.getElementById('body').innerHTML = firms.map(firm => {
+    const list = accounts.filter(a => a.firm === firm);
+    const b = bulk[firm] || {};
+    return `<div class="firm">
+      <div class="fhead">
+        <img class="logo" src="${LOGO[firm]}" alt=""><b>${firm}</b><span class="count">${list.length} ${list.length===1?'účet':list.length<5?'účty':'účtů'}</span>
+        <div class="bulk">
+          <span>Všem v ${firm}:</span>
+          ${planSelect(firm, b.plan, `data-bulk-plan="${firm}"`)}
+          ${phaseSeg(b.phase, `data-bulk-phase="${firm}"`)}
+          <button class="btn" data-apply="${firm}"><svg class="i"><use href="#i-copy"/></svg>Použít</button>
+        </div>
+      </div>
+      ${list.map(a => {
+        const m = missing(a);
+        return `<div class="row ${m?'warn':''} ${open.has(a.id)?'open':''}" data-id="${a.id}">
+          <div class="acc"><b title="${a.name}">${a.custom || a.name}</b><small>${a.custom ? a.name : 'ID ' + a.id}</small></div>
+          <div class="plan">${planSelect(firm, a.plan, `data-plan="${a.id}"`)}</div>
+          <div class="phase">${phaseSeg(a.phase, `data-row-phase="${a.id}"`)}</div>
+          <div class="rules">${rules(a)}</div>
+          <button class="chev" data-toggle="${a.id}" title="Upravit hodnoty"><svg class="i"><use href="#i-chev"/></svg></button>
+        </div>
+        <div class="edit ${open.has(a.id)?'on':''}" data-edit="${a.id}"><div><div class="in">${editor(a)}</div></div></div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+  const todo = accounts.filter(missing).length;
+  document.getElementById('sub').textContent = `${accounts.length} účtů z Tradovate · plán určuje pravidla pro Risk, LIVE a kopírku`;
+  const st = document.getElementById('status');
+  st.className = 'status' + (todo ? '' : ' ok');
+  st.innerHTML = todo ? `<svg class="i"><use href="#i-alert"/></svg>${todo} ${todo<5?'účty':'účtů'} bez plánu nebo fáze` : `<svg class="i"><use href="#i-check"/></svg>Všechny účty mají plán`;
+}
+function toast(t) { const el = document.getElementById('toast'); el.textContent = t; el.classList.add('on'); setTimeout(() => el.classList.remove('on'), 1500); }
+function placeSeg(seg) {
+  const on = seg.querySelector('button.on');
+  if (!on) { seg.style.setProperty('--o', 0); return; }
+  seg.style.setProperty('--x', on.offsetLeft + 'px');
+  seg.style.setProperty('--w', on.offsetWidth + 'px');
+  seg.style.setProperty('--o', 1);
+}
+function setSeg(seg, phase) {
+  seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.phase === phase));
+  placeSeg(seg);
+}
+function status() {
+  const todo = accounts.filter(missing).length;
+  const st = document.getElementById('status');
+  const html = todo ? `<svg class="i"><use href="#i-alert"/></svg>${todo} ${todo<5?'účty':'účtů'} bez plánu nebo fáze` : `<svg class="i"><use href="#i-check"/></svg>Všechny účty mají plán`;
+  if (st.innerHTML === html) return;
+  st.className = 'status' + (todo ? '' : ' ok');
+  st.innerHTML = html;
+  void st.offsetWidth; st.classList.add('bump');
+}
+/* Jen změněný řádek — bez překreslení celého okna, aby animace měly odkud přejít. */
+function updateRow(a, { flash = false, delay = 0 } = {}) {
+  const row = document.querySelector(`.row[data-id="${a.id}"]`);
+  row.classList.toggle('warn', !!missing(a));
+  row.querySelector('[data-plan]').value = a.plan || '';
+  setSeg(row.querySelector('[data-row-phase]'), a.phase);
+  const box = row.querySelector('.rules');
+  const html = rules(a);
+  if (box.innerHTML !== html) { box.innerHTML = html; box.classList.remove('swap'); void box.offsetWidth; box.classList.add('swap'); }
+  const edit = document.querySelector(`[data-edit="${a.id}"] .in`);
+  edit.innerHTML = editor(a);
+  if (flash) { row.style.setProperty('--d', delay + 's'); row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash'); }
+  status();
+}
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.plan) { const a = accounts.find(x => x.id === t.dataset.plan); a.plan = t.value || null; updateRow(a); }
+  if (t.dataset.bulkPlan) { (bulk[t.dataset.bulkPlan] ||= {}).plan = t.value || null; }
+});
+document.addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  const seg = btn.closest('.seg');
+  if (seg && btn.dataset.phase) {
+    if (seg.dataset.rowPhase) { const a = accounts.find(x => x.id === seg.dataset.rowPhase); a.phase = btn.dataset.phase; updateRow(a); }
+    if (seg.dataset.bulkPhase) { (bulk[seg.dataset.bulkPhase] ||= {}).phase = btn.dataset.phase; setSeg(seg, btn.dataset.phase); }
+    return;
+  }
+  if (btn.dataset.toggle) {
+    const id = btn.dataset.toggle;
+    open.has(id) ? open.delete(id) : open.add(id);
+    document.querySelector(`.row[data-id="${id}"]`).classList.toggle('open', open.has(id));
+    document.querySelector(`[data-edit="${id}"]`).classList.toggle('on', open.has(id));
+  }
+  if (btn.dataset.apply) {
+    const firm = btn.dataset.apply, b = bulk[firm] || {};
+    if (!b.plan && !b.phase) { toast('Vyber plán nebo fázi'); return; }
+    accounts.filter(a => a.firm === firm).forEach((a, i) => {
+      if (b.plan) a.plan = b.plan; if (b.phase) a.phase = b.phase;
+      updateRow(a, { flash: true, delay: i * 0.06 });
+    });
+    toast(`Nastaveno všem účtům ${firm}`);
+  }
+  if (btn.id === 'save') toast('Uloženo (náhled)');
+});
+render();
+requestAnimationFrame(() => document.querySelectorAll('.seg').forEach(placeSeg));
+addEventListener('resize', () => document.querySelectorAll('.seg').forEach(placeSeg));
+</script>
+</body>
+</html>

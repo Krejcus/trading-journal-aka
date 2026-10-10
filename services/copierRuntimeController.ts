@@ -199,6 +199,8 @@ export interface CopierControllerStatus {
     reason: string;
     pausedAt: number;
   }>;
+  /** Durable incident čekající na lidské potvrzení v ON (8. 10. 2026). */
+  manualRecovery?: { id: string; at: number; reason: string } | null;
   divergentAccounts: number[];
   workingOrderAccounts: number[];
   stuckOutbox: boolean;
@@ -462,6 +464,17 @@ export interface CopierReconciliationOptions {
    * připojených OAuth adresářů. Leader zde nikdy nesmí být.
    */
   missingOptionalAccountIds?: readonly number[];
+  /**
+   * Interní read-only kontrola (SHADOW, kompatibilní ARM): nikdy nemaže
+   * `lastError` ani durable incident (INV-DEFAULT-03, INV-RECON-02).
+   */
+  internal?: true;
+  /**
+   * ON s výslovným potvrzením incidentu (8. 10. 2026): čistý výsledek smaže
+   * durable incident jen tehdy, je-li to právě tento potvrzený incident.
+   * Bez potvrzení kontrola existující incident nikdy nesmaže.
+   */
+  acknowledgedIncidentId?: string;
 }
 
 export interface CopierGroupReconfigurationOptions {
@@ -627,6 +640,12 @@ export interface CopierRuntimeController {
   }): Promise<void>;
   /** Důvod, proč teď nesmí začít plánovaná obměna broker socketu. */
   connectionRenewalBlocker(): string | null;
+  /**
+   * Proč teď nejde worker bezpečně restartovat kvůli údržbě (nové účty):
+   * rozpracovaný lifecycle, nedokončená epocha/cut, durable stopa kopií
+   * nebo cokoli z `connectionRenewalBlocker`. `null` = klid.
+   */
+  maintenanceRestartBlocker(): string | null;
   status(): CopierControllerStatus;
   waitForIdle(): Promise<void>;
   stop(): void;
@@ -814,6 +833,48 @@ const normalizedRuntimeGroup = (group: CopyGroupConfig): CopyGroupConfig => {
  * Pořadí je záměrné: load durable snapshot -> recover unknown side effects ->
  * teprve potom subscribe. Controller vždy startuje DISARMED + shadow.
  */
+/**
+ * Stabilní identita durable incidentu (8. 10. 2026): uložené ID, u staršího
+ * markeru `legacy-<at>`, u poškozeného pevné `invalid-marker`. Stejná funkce
+ * se používá při obnově i při mazání, takže se identity vždy shodnou.
+ */
+const durableIncidentId = (marker: unknown): string => {
+  const value = marker as { id?: unknown; at?: unknown } | null;
+  if (value && typeof value === 'object' && typeof value.id === 'string' && value.id.length > 0) return value.id;
+  if (value && typeof value === 'object' && typeof value.at === 'number' && Number.isFinite(value.at) && value.at > 0) {
+    return `legacy-${value.at}`;
+  }
+  return 'invalid-marker';
+};
+
+/**
+ * 10. 10. 2026: dřívější verze zapisovala denní auto-liq propky jako trvalý
+ * `breached`. Takový záznam (rozpoznaný podle důvodu, který zapsala jen tato
+ * cesta) se převede na `dll-locked` do konce session, ve které vznikl; po ní
+ * přejde do `unverifiable` a vrátí ho autoritativní ověření u brokera.
+ */
+const DLL_BREACH_REASON = /^propka zlikvidovala účet: realizovaná ztráta .* dosáhla daily loss auto-liq /;
+const migrateDllBreach = (entry: CopierAccountEligibility): CopierAccountEligibility => (
+  // Starší denní zámek (reject / LIVE preflight) bez příznaku dostane stejnou
+  // návratovou politiku jako nové cesty.
+  // Totéž pro denní zámek, který stará verze po konci session už převedla
+  // na `unverifiable` (pozná se podle zachovaného `lockSessionEndAt`).
+  (entry.state === 'dll-locked' || (entry.state === 'unverifiable' && entry.lockSessionEndAt != null))
+    && !entry.requiresRiskFloorProof
+    ? { ...entry, requiresRiskFloorProof: true }
+    : entry.state === 'breached' && DLL_BREACH_REASON.test(entry.reason ?? '')
+    ? {
+      ...entry,
+      state: 'dll-locked',
+      reason: (entry.reason ?? '').replace('propka zlikvidovala účet:', 'propka zamkla účet do konce dne:'),
+      lockSessionEndAt: entry.at + msUntilTradovateSessionEnd(entry.at),
+      // Starý záznam mohl vzniknout i nad drawdown floorem (starší pořadí
+      // klasifikace): návrat jen s důkazem equity nad floorem.
+      requiresRiskFloorProof: true,
+    }
+    : entry
+);
+
 export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): Promise<CopierRuntimeController> {
   assertRuntimeGroup(options.group);
   const clock = options.clock ?? Date.now;
@@ -1003,7 +1064,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // Drží jen odchylky od 'active'; účet bez záznamu je způsobilý.
   const accountEligibility = new Map<number, CopierAccountEligibility>(
     (runtime.state.safety.accountEligibility ?? []).map(entry => [entry.accountId, {
-      ...entry,
+      ...migrateDllBreach(entry),
       ...(entry.lastExecution ? { lastExecution: cloneRejectedExecution(entry.lastExecution) } : {}),
     }]),
   );
@@ -1097,6 +1158,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           // Bez denních statistik se hranice odvodí ze session kalendáře.
           lockSessionEndAt: currentRuntimeValue.state.safety.dailyStats?.sessionEndAt
             ?? (at + msUntilTradovateSessionEnd(at)),
+          // 10. 10. 2026: všechny cesty denního zámku mají stejnou návratovou
+          // politiku — zpět jen s důkazem equity nad drawdown floorem.
+          requiresRiskFloorProof: true,
         });
       } else {
         // Neurčitý reject: jen execution událost, eligibility se nemění.
@@ -1106,6 +1170,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           reason: current?.reason,
           at: current?.at ?? at,
           lockSessionEndAt: current?.lockSessionEndAt,
+          // Požadavek důkazu nad floorem se neurčitým rejectem nesmí ztratit.
+          ...(current?.requiresRiskFloorProof ? { requiresRiskFloorProof: true as const } : {}),
           lastExecution: effectiveLastExecution,
         });
       }
@@ -1478,8 +1544,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       && storedManualRecovery.at > 0
       && typeof storedManualRecovery.reason === 'string'
       && storedManualRecovery.reason.trim().length > 0
-      ? { at: storedManualRecovery.at, reason: storedManualRecovery.reason.trim() }
-      : { at: clock(), reason: 'Durable příznak ruční obnovy je neplatný; proveď Kontrolu pozic' };
+      ? {
+        at: storedManualRecovery.at,
+        reason: storedManualRecovery.reason.trim(),
+        id: durableIncidentId(storedManualRecovery),
+      }
+      : {
+        at: clock(),
+        reason: 'Durable příznak ruční obnovy je neplatný; ověř účty a potvrď incident při zapnutí',
+        id: durableIncidentId(storedManualRecovery),
+      };
   let lastError: Error | null = startupGroupRepair
     ? new Error(
       `Uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); `
@@ -1711,6 +1785,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let armPreparationInFlight: Promise<void> | null = null;
   let armPreparationError: string | null = null;
   let armPreparationIncidentRequiresRecovery = restoredManualRecovery != null;
+  let currentManualRecovery: { id: string; at: number; reason: string } | null = restoredManualRecovery;
   let armPreparationLastAttemptAt = -Infinity;
   let armPreparationInterestUntil = -Infinity;
   let automaticArmPreparation = false;
@@ -2050,6 +2125,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Horní mez skutečně pracovních noh v jedné okamžité sweep dávce. */
   const SWEEP_MAX_LEGS_PER_CALL = 6;
   const STREAM_SWEEP_READ_TIMEOUT_MS = 250;
+  /** TooLate cancel: krátké čtení streamu, než order u brokera doběhne. */
+  const TOO_LATE_STREAM_SETTLE_DELAYS_MS = [250, 500, 750] as const;
+  /** Rezerva rozpočtu sweepu na závěrečnou postkontrolu (orders + pozice). */
+  const FLAT_SWEEP_SETTLE_RESERVE_MS = 2_000;
 
   interface FlatSweepBudget {
     startedAt: number;
@@ -2314,10 +2393,42 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const hasStreamOpenParent = osoParentIds.some(id => (
         isOpenOrderStatus(streamStatuses.get(id)?.status ?? null)
       ));
+      // Terminální status neříká, zda order nebyl částečně vyplněn (Tradovate
+      // hlásí partial cancel jako canceled s fillem). Návrat bez cancelu proto
+      // při fillu nebo neznámém množství potvrdí čerstvou nulovou pozici —
+      // až po důkazu z orderů. Bez fillu zůstává čistě in-memory (P6/V5a).
+      // Známý fill (filled / filledQuantity > 0) vyžaduje čerstvou pozici.
+      // Čisté zrušení zůstává in-memory beze změny proti produkci (P6/V5a,
+      // žádné REST ani zdržení eventTail); důkaz nulového fillu u
+      // canceled/rejected s nulou je evidovaný samostatný dluh.
+      const knownFill = (lookup: BrokerOrderStatusLookup | undefined) => (
+        lookup != null && (lookup.status === 'filled' || (lookup.filledQuantity ?? 0) > 0)
+      );
+      const confirmFlatAfterTerminal = async (label: string, lookups: Array<BrokerOrderStatusLookup | undefined>) => {
+        if (lookups.some(knownFill)) await confirmFreshFlat(label);
+      };
+      const confirmFreshFlat = async (label: string) => {
+        const fresh = await withFlatSweepBudget(
+          budget,
+          label + ' ' + accountId + '/' + symbol,
+          () => broker.listPositions(accountId),
+        );
+        const freshNet = fresh.find(position => position.symbol === symbol)?.netQuantity ?? 0;
+        if (freshNet !== 0) {
+          followerFlatConfirmed = false;
+          throw new Error('ochranná noha skončila a broker hlásí pozici ' + freshNet);
+        }
+      };
       if (!hasStreamOpenParent && candidateIds.every(id => {
         const status = streamStatuses.get(id)?.status;
         return status != null && !isOpenOrderStatus(status);
-      })) return;
+      })) {
+        await confirmFlatAfterTerminal(
+          'kontrola pozice po terminálních nohách',
+          candidateIds.map(id => streamStatuses.get(id)),
+        );
+        return;
+      }
 
       const osoParentByLeg = new Map<string, string>();
       for (const entry of osoEntries) {
@@ -2542,6 +2653,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
         if (attemptedIds.length === 0) {
           if (classificationFailures.length > 0) throw new Error(classificationFailures.join(', '));
+          // Pozice čtená před cancelem je starší než důkaz z orderů.
+          await confirmFlatAfterTerminal(
+            'kontrola pozice po terminálních nohách',
+            candidateIds.map(id => {
+              const order = byId.get(id);
+              return order != null
+                ? { status: order.status, completeness: 'authoritative' as const, observedAt: clock(), filledQuantity: order.filledQuantity }
+                : streamStatuses.get(id);
+            }),
+          );
           return;
         }
 
@@ -2550,11 +2671,33 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           postStreamStatuses.get(brokerOrderId)?.status,
           streamStatuses.get(brokerOrderId)?.status,
         );
+        // 8. 10. 2026 (produkce, účet 68931462): cancel dostal TooLate, protože
+        // order už rušil dřívější cancel; stream doručil Canceled ~0,8 s po
+        // odmítnutí a sweep mezitím kopírku zbytečně vypnul. Jen pro TooLate
+        // proto krátce (≤ 1,5 s) čteme levný stream status — žádné REST grafy,
+        // žádný další cancel ani jiný write.
+        const tooLateOpen = () => attemptedIds.filter(id => (
+          /TooLate/i.test(cancelErrors.get(id)?.message ?? '')
+          && (streamOutcome(id) == null || isOpenOrderStatus(streamOutcome(id)!))
+        ));
+        for (const delayMs of TOO_LATE_STREAM_SETTLE_DELAYS_MS) {
+          const pending = tooLateOpen();
+          if (pending.length === 0) break;
+          // Rezerva počítá i s visícím stream lookupem po spánku.
+          if (flatSweepRemainingMs(budget) < delayMs + STREAM_SWEEP_READ_TIMEOUT_MS + FLAT_SWEEP_SETTLE_RESERVE_MS) break;
+          await (options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms))))(delayMs);
+          for (const [id, lookup] of await streamSweepStatuses(accountId, pending)) postStreamStatuses.set(id, lookup);
+        }
         const allAttemptsTerminalInStream = attemptedIds.every(id => {
           const status = streamOutcome(id);
           return status != null && !isOpenOrderStatus(status);
         });
         if (allAttemptsTerminalInStream && classificationFailures.length === 0) {
+          // Zrušení se známým fillem: nejdřív čerstvá pozice.
+          await confirmFlatAfterTerminal(
+            'postkontrola pozice',
+            attemptedIds.map(id => postStreamStatuses.get(id) ?? streamStatuses.get(id)),
+          );
           for (const brokerOrderId of attemptedIds) {
             const outcome = streamOutcome(brokerOrderId);
             recordTerminalSweepState(accountId, brokerOrderId, outcome);
@@ -2579,11 +2722,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return;
         }
 
-        const positions = await withFlatSweepBudget(
-          budget,
-          'postkontrola pozice ' + accountId + '/' + symbol,
-          () => broker.listPositions(accountId),
-        );
         const needsPostOrderGraph = attemptedIds.some(id => {
           const lookup = postStreamStatuses.get(id);
           return lookup == null || isOpenOrderStatus(lookup.status);
@@ -2595,6 +2733,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             () => broker.listOrders(accountId),
           )
           : [];
+        // Pozice až po orderech: kdyby graf ukázal Filled, pozice je novější
+        // než tento důkaz a otevřená pozice se neschová (review 8. 10.).
+        const positions = await withFlatSweepBudget(
+          budget,
+          'postkontrola pozice ' + accountId + '/' + symbol,
+          () => broker.listPositions(accountId),
+        );
         const netQuantity = positions.find(position => position.symbol === symbol)?.netQuantity ?? 0;
         const postById = new Map([
           ...orders.map(order => [order.brokerOrderId, order] as const),
@@ -4302,7 +4447,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     lastError = errorOf(reason);
     if (!failure.transportLost) {
       armPreparationIncidentRequiresRecovery = true;
-      const manualRecoveryRequired = { at: clock(), reason: lastError.message };
+      const manualRecoveryRequired = { at: clock(), reason: lastError.message, id: globalThis.crypto.randomUUID() };
+      currentManualRecovery = manualRecoveryRequired;
       disarmPersistenceTail = disarmPersistenceTail.then(() => persistSafetyUpdate(current => ({
         ...current,
         manualRecoveryRequired,
@@ -4534,7 +4680,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * auto-liq, drawdown floor, účet už nesmí obchodovat). Jen čtení; při
    * jakékoli chybě vrací null a volající zůstává fail-closed.
    */
-  const classifyFollowerBrokerBreach = async (accountId: number): Promise<string | null> => {
+  const classifyFollowerBrokerBreach = async (
+    accountId: number,
+  ): Promise<{ state: 'breached' | 'dll-locked'; reason: string } | null> => {
     try {
       const [capabilities, snapshots] = await Promise.all([
         broker.listAccountCapabilities([accountId]),
@@ -4542,26 +4690,60 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ]);
       const capability = capabilities.find(item => item.accountId === accountId);
       if (capability && (!capability.active || !capability.canTrade)) {
-        return `broker účet už nepovoluje obchodování (active=${capability.active}, canTrade=${capability.canTrade})`;
+        return {
+          state: 'breached',
+          reason: `broker účet už nepovoluje obchodování (active=${capability.active}, canTrade=${capability.canTrade})`,
+        };
       }
       const risk = snapshots.find(item => item.accountId === accountId);
       if (!risk) return null;
-      if (
-        risk.realizedPnlUsd != null && risk.dailyLossAutoLiq != null && risk.dailyLossAutoLiq > 0
-        && risk.realizedPnlUsd <= -risk.dailyLossAutoLiq
-      ) {
-        return `realizovaná ztráta ${risk.realizedPnlUsd.toFixed(2)} USD dosáhla daily loss auto-liq ${risk.dailyLossAutoLiq} USD`;
-      }
+      // Drawdown floor (trvalý breach) má přednost před denním zámkem: oba
+      // mohou nastat zároveň a trvalý konec účtu nesmí vypadat jako denní.
       // `minNetLiq` je odvozený floor propky (high-watermark − trailing, nejvýš
       // trailing limit), equity je skutečné net liq nebo realizovaný cash.
       // Čerstvý účet (cash = high-watermark = start) tak floor nikdy „nedosáhne“.
       const equity = brokerRiskEquity(risk);
       if (equity != null && risk.minNetLiq != null && equity <= risk.minNetLiq) {
-        return `equity ${equity.toFixed(2)} USD dosáhla drawdown flooru ${risk.minNetLiq.toFixed(2)} USD`;
+        return {
+          state: 'breached',
+          reason: `equity ${equity.toFixed(2)} USD dosáhla drawdown flooru ${risk.minNetLiq.toFixed(2)} USD`,
+        };
+      }
+      if (
+        risk.realizedPnlUsd != null && risk.dailyLossAutoLiq != null && risk.dailyLossAutoLiq > 0
+        && risk.realizedPnlUsd <= -risk.dailyLossAutoLiq
+      ) {
+        // 10. 10. 2026: denní auto-liq je zámek do konce session, ne konec
+        // účtu (Lucid 8. 10.: tři zdravé účty zůstaly „breached“ i další dny).
+        return {
+          state: 'dll-locked',
+          reason: `realizovaná ztráta ${risk.realizedPnlUsd.toFixed(2)} USD dosáhla daily loss auto-liq ${risk.dailyLossAutoLiq} USD`,
+        };
       }
       return null;
     } catch {
       return null;
+    }
+  };
+
+  /**
+   * Důkaz pro návrat účtu po denním zámku z auto-liq: broker potvrdí aktivní
+   * obchodovatelný účet a equity nad drawdown floorem propky. Cokoli
+   * neúplného = 'unknown' (účet zůstává mimo kopii).
+   */
+  const riskFloorProof = async (
+    accountId: number,
+  ): Promise<{ kind: 'above-floor' } | { kind: 'breached'; reason: string } | { kind: 'unknown' }> => {
+    const breach = await classifyFollowerBrokerBreach(accountId);
+    if (breach?.state === 'breached') return { kind: 'breached', reason: breach.reason };
+    if (breach) return { kind: 'unknown' };
+    try {
+      const [risk] = await broker.listAccountRiskSnapshots([accountId]);
+      const equity = risk ? brokerRiskEquity(risk) : null;
+      if (!risk || equity == null || risk.minNetLiq == null) return { kind: 'unknown' };
+      return equity > risk.minNetLiq ? { kind: 'above-floor' } : { kind: 'unknown' };
+    } catch {
+      return { kind: 'unknown' };
     }
   };
 
@@ -4571,17 +4753,35 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * zůstává ARMED — ostatní followeři dál drží stejnou expozici jako leader
    * a odzbrojení by jim jen sebralo synchronizaci SL/TP (incident 7. 9.).
    */
-  const isolateBreachedFollower = async (accountId: number, symbol: string, reason: string): Promise<boolean> => {
+  const isolateBreachedFollower = async (
+    accountId: number,
+    symbol: string,
+    breach: { state: 'breached' | 'dll-locked'; reason: string },
+  ): Promise<boolean> => {
     const now = clock();
+    const reason = breach.reason;
     const current = accountEligibility.get(accountId);
     const next = new Map(accountEligibility);
-    setEligibilityIn(next, accountId, {
-      accountId,
-      state: 'breached',
-      reason: `propka zlikvidovala účet: ${reason}`,
-      at: now,
-      ...(current?.lastExecution ? { lastExecution: cloneRejectedExecution(current.lastExecution) } : {}),
-    });
+    setEligibilityIn(next, accountId, breach.state === 'dll-locked'
+      ? {
+        accountId,
+        state: 'dll-locked',
+        reason: `propka zamkla účet do konce dne: ${reason}`,
+        at: now,
+        // Po konci session přejde do 'unverifiable' a vrátí ho až
+        // autoritativní ověření u brokera (stejně jako DLL z rejectu).
+        lockSessionEndAt: currentRuntime().state.safety.dailyStats?.sessionEndAt
+          ?? (now + msUntilTradovateSessionEnd(now)),
+        requiresRiskFloorProof: true,
+        ...(current?.lastExecution ? { lastExecution: cloneRejectedExecution(current.lastExecution) } : {}),
+      }
+      : {
+        accountId,
+        state: 'breached',
+        reason: `propka zlikvidovala účet: ${reason}`,
+        at: now,
+        ...(current?.lastExecution ? { lastExecution: cloneRejectedExecution(current.lastExecution) } : {}),
+      });
     const previous = new Map(accountEligibility);
     accountEligibility.clear();
     for (const [id, entry] of next) accountEligibility.set(id, entry);
@@ -14209,8 +14409,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             && entry.lockSessionEndAt > 0
             && reactivationNow >= entry.lockSessionEndAt;
           if (entry.state === 'unverifiable' || (entry.state === 'dll-locked' && newSessionBegan)) {
+            if (entry.requiresRiskFloorProof) {
+              const proof = await riskFloorProof(accountId);
+              // Během čtení mohla jiná cesta (reject, LIVE exclusion) stav
+              // zpřísnit; zastaralý záznam nikdy nepřepisujeme.
+              if (accountEligibility.get(accountId) !== entry) continue;
+              if (proof.kind === 'breached') {
+                accountEligibility.set(accountId, {
+                  accountId, state: 'breached', at: reactivationNow,
+                  reason: `propka zlikvidovala účet: ${proof.reason}`,
+                  ...(entry.lastExecution ? { lastExecution: cloneRejectedExecution(entry.lastExecution) } : {}),
+                });
+                eligibilityChanged = true;
+                continue;
+              }
+              // Bez důkazu nad floorem zůstává mimo kopii (fail-closed).
+              if (proof.kind !== 'above-floor') continue;
+            }
+            const { requiresRiskFloorProof: _proven, ...rest } = entry;
             accountEligibility.set(accountId, {
-              ...entry, state: 'active', at: reactivationNow,
+              ...rest, state: 'active', at: reactivationNow,
               reason: 'autoritativně ověřeno při reconciliaci po nové session',
             });
             eligibilityChanged = true;
@@ -14862,7 +15080,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           leaderEventId: `manual-group-retirement:${group.id}:${retiredAt}`,
           kind: 'blocked',
           accountId: group.leaderAccountId,
-          reason: `operator-attested retirement of OAuth-missing group ${group.id}; accounts=${[...retiredAccountIds].sort((a, b) => a - b).join(',')}; reason=${retirement.reason.trim()}; no broker flat proof for retired accounts`,
+          reason: `operator-attested retirement of OAuth-missing or inactive accounts of group ${group.id}; accounts=${[...retiredAccountIds].sort((a, b) => a - b).join(',')}; reason=${retirement.reason.trim()}; no broker flat proof for retired accounts`,
         }]);
       }
 
@@ -15107,6 +15325,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   });
 
   return {
+    maintenanceRestartBlocker() {
+      return readOnlyRecoveryBlocker() ?? this.connectionRenewalBlocker();
+    },
     connectionRenewalBlocker() {
       if (autoCloseInFlight) return 'auto-close';
       if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
@@ -15416,6 +15637,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           lockSessionEndAt: exclusion.state === 'dll-locked'
             ? existingDllSessionEnd ?? now + msUntilTradovateSessionEnd(now)
             : undefined,
+          // Každý denní zámek se vrací jen s důkazem nad drawdown floorem.
+          ...(exclusion.state === 'dll-locked' ? { requiresRiskFloorProof: true as const } : {}),
         };
         if (
           current?.state === next.state
@@ -15462,15 +15685,50 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Veřejná Kontrola pozic je explicitní uživatelská recovery akce.
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
-      const result = await performReconciliation({ ...reconciliationOptions, clearLastError: true });
+      // Interní kontrola (SHADOW, kompatibilní ARM) incident nikdy nemaže.
+      // Existující durable incident smaže jen kontrola s výslovným potvrzením
+      // právě tohoto incidentu (ON s dialogem); bez něj je to jen ověření.
+      const expectedIncidentId = reconciliationOptions.acknowledgedIncidentId;
+      if (reconciliationOptions.internal !== true && expectedIncidentId != null
+        && currentManualRecovery?.id !== expectedIncidentId) {
+        throw new Error('Incident se mezitím změnil; potvrď ho znovu.');
+      }
+      const incidentToClear = currentManualRecovery;
+      const mayClear = reconciliationOptions.internal !== true
+        && (incidentToClear == null || incidentToClear.id === expectedIncidentId);
+      const result = await performReconciliation({ ...reconciliationOptions, clearLastError: mayClear });
       // Čistá Kontrola pozic = čerstvý autoritativní snapshot všech účtů.
       if (result.authoritativelyClean) await releaseAccountSyncPausesSafely(accountSyncPauseReleasableFromCache);
-      if (result.authoritativelyClean) {
+      if (result.authoritativelyClean && mayClear && currentManualRecovery === incidentToClear) {
+        const acknowledgedAt = clock();
+        let durablyCleared = false;
         await persistSafetyUpdate(current => {
+          // Updater se může při CAS opakovat: výsledek platí z posledního běhu.
+          durablyCleared = false;
+          // Jen ten incident, který uživatel potvrdil — novější zůstává.
+          if (incidentToClear && current.manualRecoveryRequired != null
+            && durableIncidentId(current.manualRecoveryRequired) !== incidentToClear.id) {
+            return current;
+          }
           const { manualRecoveryRequired: _cleared, ...rest } = current;
-          return rest;
+          durablyCleared = true;
+          return incidentToClear
+            ? { ...rest, lastIncidentAcknowledgement: { ...incidentToClear, acknowledgedAt, via: 'arm' as const } }
+            : rest;
         });
-        armPreparationIncidentRequiresRecovery = false;
+        // Paměť se srovná jen s tím, co je opravdu durable (fail-closed).
+        if (durablyCleared && currentManualRecovery === incidentToClear) {
+          armPreparationIncidentRequiresRecovery = false;
+          currentManualRecovery = null;
+          if (incidentToClear) {
+            options.onAudit?.([{
+              at: acknowledgedAt,
+              leaderEventId: `incident-acknowledged:${incidentToClear.id}`,
+              kind: 'recovered',
+              reason: `Incident potvrdil uživatel přes Zapnout (čistá kontrola u brokera): ${incidentToClear.reason}`,
+            }]);
+          }
+        }
       }
       const riskAccountIds = followersRequiringVerifiedRisk(clock()).map(follower => follower.accountId);
       if (result.authoritativelyClean && riskAccountIds.length > 0) {
@@ -15538,7 +15796,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       let breachedProof: string | null = null;
       if (effective?.state === 'breached') {
         const breach = await classifyFollowerBrokerBreach(accountId);
-        if (breach) throw new Error(`Účet je BREACHED a broker to potvrzuje: ${breach}`);
+        if (breach) throw new Error(`Účet je BREACHED a broker to potvrzuje: ${breach.reason}`);
         const [risk] = await broker.listAccountRiskSnapshots([accountId]);
         const equity = risk ? brokerRiskEquity(risk) : null;
         if (!risk || equity == null || risk.minNetLiq == null) {
@@ -15551,6 +15809,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (effective?.state === 'dll-locked') {
         throw new Error(`DLL stále platí do konce broker session: ${effective.reason ?? 'bez důvodu'}`);
+      }
+      // Denní zámek z auto-liq: návrat jen s důkazem equity nad floorem.
+      if (current?.requiresRiskFloorProof) {
+        const proof = await riskFloorProof(accountId);
+        if (proof.kind === 'breached') throw new Error(`Účet je pod floorem propky: ${proof.reason}`);
+        if (proof.kind !== 'above-floor') {
+          throw new Error('Broker nevydal equity a floor propky, kterými by šlo ověřit, že účet je nad drawdown floorem');
+        }
       }
 
       const capabilities = await broker.listAccountCapabilities([accountId]);
@@ -15566,8 +15832,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         broker.listOrders(accountId),
       ]);
 
+      // Během čtení u brokera mohla jiná cesta stav zpřísnit (fail-closed).
+      if (accountEligibility.get(accountId) !== current) {
+        throw new Error('Stav účtu se během ověření změnil; ověř ho znovu');
+      }
+      const { requiresRiskFloorProof: _proven, ...withoutProofFlag } = current ?? {} as Partial<CopierAccountEligibility>;
       const verified: CopierAccountEligibility = {
-        ...(current ?? {}),
+        ...withoutProofFlag,
         accountId,
         state: 'active',
         reason: breachedProof
@@ -15982,6 +16253,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             manualRecoveryRequired: blocker?.blockedBy === 'incident',
           };
         })(),
+        manualRecovery: currentManualRecovery ? { ...currentManualRecovery } : null,
         divergentAccounts: [...gate.divergentAccounts],
         workingOrderAccounts: [...workingOrderAccounts],
         stuckOutbox: stuckOperations.length > 0,

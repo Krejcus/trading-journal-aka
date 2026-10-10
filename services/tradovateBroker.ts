@@ -2278,7 +2278,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         && streamed?.accountId === accountId
         && (options?.streamOnly || !isOpenOrderStatus(streamed.status))
       ) {
-        return { status: streamed.status, completeness: 'authoritative', observedAt: clock() };
+        return {
+          status: streamed.status,
+          completeness: 'authoritative',
+          observedAt: clock(),
+          filledQuantity: streamed.filledQuantity,
+        };
       }
       if (options?.streamOnly) {
         return { status: null, completeness: 'eventual', observedAt: clock() };

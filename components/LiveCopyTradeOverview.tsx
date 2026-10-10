@@ -475,8 +475,8 @@ interface Props {
   lastDisarm?: CopierDisarmRecord;
   /** Read-only broker reconciliation for a currently unverifiable account. */
   onVerifyEligibility?: (accountId: number) => Promise<void> | void;
-  /** Read-only Kontrola pozic celé skupiny (worker reconcile). */
-  onReconcile?: () => Promise<void>;
+  /** Jen starší worker bez potvrzení incidentu v ON: ruční Kontrola pozic. */
+  legacyReconcile?: () => Promise<void>;
   executionGroupId?: string | null;
   /** `marketPrices` z workeru (TradingView) — jen pro zobrazení vzdálenosti k limitu. */
   marketPrices?: readonly unknown[];
@@ -779,7 +779,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   unverifiableFollowerOwnership = [],
   lastDisarm,
   onVerifyEligibility,
-  onReconcile,
+  legacyReconcile,
   executionGroupId = null,
   runtimeGroup = null,
   workerAccountRoutes,
@@ -796,7 +796,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     <CopierMaintenancePanel
       status={runtimeStatus}
       known={runtimeAvailable && !copierStatusPending}
-      onReconcile={onReconcile}
+      legacyReconcile={legacyReconcile}
     />
   );
   const cooldownPanel = <CopierCooldownPanel
@@ -1524,6 +1524,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }
   } : undefined;
 
+  // 8. 10. 2026: místo „není připojená k execution runtime“ srozumitelně, proč
+  // příkaz nedošel na Mac worker a co udělat.
+  const inactiveGroupNotice = (workerUnavailable: boolean, needsArmed: boolean) => {
+    if (workerUnavailable) return 'Mac worker teď není dostupný, příkaz nikam neodešel.';
+    if (needsArmed) return 'Kopírka je vypnutá, příkaz nikam neodešel.';
+    const active = groups.find(group => group.id === executionGroupId)?.name;
+    return `Tahle skupina ve workeru neběží${active ? ` (aktivní je „${active}“)` : ''}, příkaz nikam neodešel. Zapni ji tlačítkem Zapnout — worker se na ni přepne.`;
+  };
   const runCommand = async (
     command: LiveCopyTradingCommand,
     update?: () => void | Promise<void>,
@@ -1547,7 +1555,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       }
       if (brokerWrite && (!commandAdapter || !targetsExecutionRuntime || (requiresArmed && !copierArmed))) {
         await update?.();
-        setToast({ tone: 'info', text: 'Preview pouze: tato skupina není připojená k připravenému execution runtime.' });
+        setToast({ tone: 'info', text: inactiveGroupNotice(!commandAdapter, requiresArmed && !copierArmed) });
         return true;
       }
       const result = commandAdapter && targetsExecutionRuntime
@@ -1584,7 +1592,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         tone: commandAdapter && targetsExecutionRuntime ? 'success' : 'info',
         text: commandAdapter && targetsExecutionRuntime
           ? successText
-          : 'Konfigurace byla uložena pouze lokálně. Tato skupina není připojená k execution runtime.',
+          : `Uloženo jen v appce. ${inactiveGroupNotice(!commandAdapter, false)}`,
       });
       return true;
     } catch (reason) {
@@ -2041,7 +2049,15 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           </div>
         </header>
 
-        {groups.length === 0 ? (
+        {groups.length === 0 && groupLibraryState === 'loading' ? (
+          // Knihovna se teprve načítá: „Žádné skupiny“ by byla nepravda, která
+          // za chvíli zmizí. Držíme místo jako kostra, dokud není jasno.
+          <div className="space-y-2 px-3 pb-3 pt-1" aria-label="Načítání kopírovacích skupin" aria-busy="true" data-testid="group-library-loading">
+            {[0, 1].map(index => (
+              <div key={index} className="h-14 animate-pulse rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]" />
+            ))}
+          </div>
+        ) : groups.length === 0 ? (
           <div className="px-6 pb-8 pt-2 text-center">
             <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center mx-auto mb-3">
               <Inbox size={22} />
@@ -4301,36 +4317,32 @@ const timeWithSecondsLabel = (at: number) => new Date(at).toLocaleTimeString('cs
  * vypnutí panel nemá; technický detail i historie jsou v záložce Události.
  */
 /**
- * Režim opravy po startu (breached/nedostupné účty uložené skupiny) a ruční
- * read-only Kontrola pozic. Kontrola se nabízí jen za VYPNUTÉ kopírky: za ARM
- * by ji worker nejdřív auditovaně vypnul.
+ * Režim opravy po startu (breached/nedostupné účty uložené skupiny) a stav
+ * po incidentu. Samostatné tlačítko Kontrola pozic zmizelo (8. 10. 2026):
+ * kontrolu u brokera dělá Zapnout a incident potvrdíš v jeho dialogu.
  */
-export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
+export const CopierMaintenancePanel = ({ status, known, legacyReconcile }: {
   status: CopierControllerStatus | null | undefined;
   known: boolean;
-  onReconcile?: () => Promise<void>;
+  /** Starší worker bez potvrzení incidentu v ON: zachová ruční Kontrolu pozic. */
+  legacyReconcile?: () => Promise<void>;
 }) => {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   if (!known || !status) return null;
   const repair = status.startupGroupRepair ?? null;
-  // Jen skutečný požadavek workeru. Zastaralý snímek pro zapnutí vypnutého
-  // followera platí za DISARMED skoro pořád a panel by svítil zbytečně.
+  const incident = status.manualRecovery ?? null;
   const preparation = status.armPreparation;
-  const preparationRequiresCheck = preparation?.blockedBy != null
+  const legacyNeedsCheck = legacyReconcile != null && !status.armed && (preparation?.blockedBy != null
     ? preparation.blockedBy === 'incident'
-    : preparation?.manualRecoveryRequired === true;
-  const needsCheck = !status.armed && (preparationRequiresCheck
-    || (status.reconciliationRequired && !preparation));
-  // Background warming must not insert/remove a panel every refresh. The
-  // ON switch owns progress; this panel is only for operator recovery.
-  if (!repair && !needsCheck && !result) return null;
-  const runCheck = async () => {
-    if (!onReconcile || busy) return;
+    : preparation?.manualRecoveryRequired === true || (status.reconciliationRequired && !preparation));
+  if (!repair && !legacyNeedsCheck && !result && (!incident || status.armed)) return null;
+  const runLegacyCheck = async () => {
+    if (!legacyReconcile || busy) return;
     setBusy(true);
     setResult(null);
     try {
-      await onReconcile();
+      await legacyReconcile();
       setResult({ ok: true, text: 'Kontrola pozic proběhla. Účty jsou ověřené u brokera, kopírka zůstává vypnutá.' });
     } catch (reason) {
       setResult({ ok: false, text: reason instanceof Error ? reason.message : String(reason) });
@@ -4355,19 +4367,24 @@ export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
               {' '}Kopírka běží jen vypnutá. <span className="font-black">Uprav skupinu: odeber tyto účty a vyber nového leadera.</span>
               <span className="block font-medium text-[var(--text-secondary)]">Při uložení je worker auditovaně vyřadí bez ověření jejich pozic u brokera; ostatní účty projdou normální kontrolou.</span>
             </p>
-          ) : needsCheck ? (
+          ) : legacyNeedsCheck ? (
             <p>
               {preparation?.reason ?? 'Před zapnutím je potřeba Kontrola pozic (read-only u brokera, nic neobchoduje).'}
+            </p>
+          ) : incident ? (
+            <p>
+              Po incidentu: {incident.reason}
+              <span className="block font-medium text-[var(--text-secondary)]">Ověří se při zapnutí — Zapnout se nejdřív zeptá, pak zkontroluje účty u brokera a zapne jen při čistém stavu.</span>
             </p>
           ) : null}
           {result ? (
             <p className={`mt-1 font-medium ${result.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{result.text}</p>
           ) : null}
         </div>
-        {needsCheck && !repair && onReconcile ? (
+        {legacyNeedsCheck && !repair ? (
           <button
             type="button"
-            onClick={() => { void runCheck(); }}
+            onClick={() => { void runLegacyCheck(); }}
             disabled={busy}
             className="shrink-0 rounded-md border border-current px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50"
           >
@@ -6451,7 +6468,11 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
     : accountLabel(state.leaderUnavailableAccountId, 'leader');
 
   return (
-    <section role="alertdialog" aria-modal="true" aria-label={title} className="w-full max-w-lg rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 shadow-2xl">
+    // Výška omezená na okno: s víc spálenými účty se náhled změn protáhl a okno
+    // přeteklo obrazovku — tlačítka byla mimo a posouvat nešlo. Hlavička a
+    // tlačítka stojí, posouvá se jen obsah mezi nimi.
+    <section role="alertdialog" aria-modal="true" aria-label={title} className="flex w-full max-w-lg max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 pb-4">
       <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${state.savedSuccessfully ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
         {state.savedSuccessfully ? <CheckCircle2 size={21} /> : <AlertTriangle size={21} />}
       </div>
@@ -6487,8 +6508,9 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
             : 'Po potvrzení se odešle stejný příkaz Update group jako z editoru. Execution agent chybějící odebírané followery předá do reconfigure jako missingOptionalAccountIds.'}
         </div>
       ) : null}
+      </div>
 
-      <div className="mt-5 flex flex-wrap justify-end gap-2">
+      <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-3">
         {state.savedSuccessfully ? (
           <>
             <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zavřít</button>

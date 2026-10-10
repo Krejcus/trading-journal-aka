@@ -75,13 +75,13 @@ export default function ExpenseModal({ isOpen, onClose, onSave, accounts }: {
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-[7vh]" onMouseDown={onClose}>
-      <div role="dialog" aria-modal="true" aria-label="Nový náklad" className="glass-modal w-full max-w-[520px] overflow-hidden" onMouseDown={event => event.stopPropagation()}>
-        <header className="flex items-center border-b border-[var(--border-subtle)] px-4 py-3">
+      <div role="dialog" aria-modal="true" aria-label="Nový náklad" className="glass-modal flex max-h-full w-full max-w-[520px] flex-col overflow-hidden" onMouseDown={event => event.stopPropagation()}>
+        <header className="flex shrink-0 items-center border-b border-[var(--border-subtle)] px-4 py-3">
           <h2 className="text-[15px] font-bold text-[var(--text-primary)]">Nový náklad</h2>
           <button type="button" onClick={onClose} aria-label="Zavřít" className={`${btnGhost} ml-auto w-[30px] px-0`}><X size={16} /></button>
         </header>
 
-        <div className="grid gap-3.5 px-4 py-3.5">
+        <div className="grid min-h-0 gap-3.5 overflow-y-auto overscroll-contain px-4 py-3.5">
           <div className="grid gap-1.5">
             <span className="text-[11.5px] font-semibold text-[var(--text-secondary)]">Typ</span>
             <div className="overflow-x-auto no-scrollbar">
@@ -152,7 +152,7 @@ export default function ExpenseModal({ isOpen, onClose, onSave, accounts }: {
           {error && <p role="alert" className="text-xs font-semibold text-rose-500">{error}</p>}
         </div>
 
-        <footer className="flex justify-end gap-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-page)]/40 px-4 py-3">
+        <footer className="flex shrink-0 justify-end gap-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-page)]/40 px-4 py-3">
           <button type="button" onClick={onClose} className={btnGhost}>Zrušit</button>
           <button type="button" onClick={save} className={btnPrimary}>Přidat náklad</button>
         </footer>
