@@ -839,6 +839,24 @@ const durableIncidentId = (marker: unknown): string => {
   return 'invalid-marker';
 };
 
+/**
+ * 10. 10. 2026: dřívější verze zapisovala denní auto-liq propky jako trvalý
+ * `breached`. Takový záznam (rozpoznaný podle důvodu, který zapsala jen tato
+ * cesta) se převede na `dll-locked` do konce session, ve které vznikl; po ní
+ * přejde do `unverifiable` a vrátí ho autoritativní ověření u brokera.
+ */
+const DLL_BREACH_REASON = /^propka zlikvidovala účet: realizovaná ztráta .* dosáhla daily loss auto-liq /;
+const migrateDllBreach = (entry: CopierAccountEligibility): CopierAccountEligibility => (
+  entry.state === 'breached' && DLL_BREACH_REASON.test(entry.reason ?? '')
+    ? {
+      ...entry,
+      state: 'dll-locked',
+      reason: (entry.reason ?? '').replace('propka zlikvidovala účet:', 'propka zamkla účet do konce dne:'),
+      lockSessionEndAt: entry.at + msUntilTradovateSessionEnd(entry.at),
+    }
+    : entry
+);
+
 export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): Promise<CopierRuntimeController> {
   assertRuntimeGroup(options.group);
   const clock = options.clock ?? Date.now;
@@ -1028,7 +1046,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // Drží jen odchylky od 'active'; účet bez záznamu je způsobilý.
   const accountEligibility = new Map<number, CopierAccountEligibility>(
     (runtime.state.safety.accountEligibility ?? []).map(entry => [entry.accountId, {
-      ...entry,
+      ...migrateDllBreach(entry),
       ...(entry.lastExecution ? { lastExecution: cloneRejectedExecution(entry.lastExecution) } : {}),
     }]),
   );
@@ -4639,7 +4657,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * auto-liq, drawdown floor, účet už nesmí obchodovat). Jen čtení; při
    * jakékoli chybě vrací null a volající zůstává fail-closed.
    */
-  const classifyFollowerBrokerBreach = async (accountId: number): Promise<string | null> => {
+  const classifyFollowerBrokerBreach = async (
+    accountId: number,
+  ): Promise<{ state: 'breached' | 'dll-locked'; reason: string } | null> => {
     try {
       const [capabilities, snapshots] = await Promise.all([
         broker.listAccountCapabilities([accountId]),
@@ -4647,7 +4667,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ]);
       const capability = capabilities.find(item => item.accountId === accountId);
       if (capability && (!capability.active || !capability.canTrade)) {
-        return `broker účet už nepovoluje obchodování (active=${capability.active}, canTrade=${capability.canTrade})`;
+        return {
+          state: 'breached',
+          reason: `broker účet už nepovoluje obchodování (active=${capability.active}, canTrade=${capability.canTrade})`,
+        };
       }
       const risk = snapshots.find(item => item.accountId === accountId);
       if (!risk) return null;
@@ -4655,14 +4678,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         risk.realizedPnlUsd != null && risk.dailyLossAutoLiq != null && risk.dailyLossAutoLiq > 0
         && risk.realizedPnlUsd <= -risk.dailyLossAutoLiq
       ) {
-        return `realizovaná ztráta ${risk.realizedPnlUsd.toFixed(2)} USD dosáhla daily loss auto-liq ${risk.dailyLossAutoLiq} USD`;
+        // 10. 10. 2026: denní auto-liq je zámek do konce session, ne konec
+        // účtu (Lucid 8. 10.: tři zdravé účty zůstaly „breached“ i další dny).
+        return {
+          state: 'dll-locked',
+          reason: `realizovaná ztráta ${risk.realizedPnlUsd.toFixed(2)} USD dosáhla daily loss auto-liq ${risk.dailyLossAutoLiq} USD`,
+        };
       }
       // `minNetLiq` je odvozený floor propky (high-watermark − trailing, nejvýš
       // trailing limit), equity je skutečné net liq nebo realizovaný cash.
       // Čerstvý účet (cash = high-watermark = start) tak floor nikdy „nedosáhne“.
       const equity = brokerRiskEquity(risk);
       if (equity != null && risk.minNetLiq != null && equity <= risk.minNetLiq) {
-        return `equity ${equity.toFixed(2)} USD dosáhla drawdown flooru ${risk.minNetLiq.toFixed(2)} USD`;
+        return {
+          state: 'breached',
+          reason: `equity ${equity.toFixed(2)} USD dosáhla drawdown flooru ${risk.minNetLiq.toFixed(2)} USD`,
+        };
       }
       return null;
     } catch {
@@ -4676,17 +4707,34 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * zůstává ARMED — ostatní followeři dál drží stejnou expozici jako leader
    * a odzbrojení by jim jen sebralo synchronizaci SL/TP (incident 7. 9.).
    */
-  const isolateBreachedFollower = async (accountId: number, symbol: string, reason: string): Promise<boolean> => {
+  const isolateBreachedFollower = async (
+    accountId: number,
+    symbol: string,
+    breach: { state: 'breached' | 'dll-locked'; reason: string },
+  ): Promise<boolean> => {
     const now = clock();
+    const reason = breach.reason;
     const current = accountEligibility.get(accountId);
     const next = new Map(accountEligibility);
-    setEligibilityIn(next, accountId, {
-      accountId,
-      state: 'breached',
-      reason: `propka zlikvidovala účet: ${reason}`,
-      at: now,
-      ...(current?.lastExecution ? { lastExecution: cloneRejectedExecution(current.lastExecution) } : {}),
-    });
+    setEligibilityIn(next, accountId, breach.state === 'dll-locked'
+      ? {
+        accountId,
+        state: 'dll-locked',
+        reason: `propka zamkla účet do konce dne: ${reason}`,
+        at: now,
+        // Po konci session přejde do 'unverifiable' a vrátí ho až
+        // autoritativní ověření u brokera (stejně jako DLL z rejectu).
+        lockSessionEndAt: currentRuntime().state.safety.dailyStats?.sessionEndAt
+          ?? (now + msUntilTradovateSessionEnd(now)),
+        ...(current?.lastExecution ? { lastExecution: cloneRejectedExecution(current.lastExecution) } : {}),
+      }
+      : {
+        accountId,
+        state: 'breached',
+        reason: `propka zlikvidovala účet: ${reason}`,
+        at: now,
+        ...(current?.lastExecution ? { lastExecution: cloneRejectedExecution(current.lastExecution) } : {}),
+      });
     const previous = new Map(accountEligibility);
     accountEligibility.clear();
     for (const [id, entry] of next) accountEligibility.set(id, entry);
@@ -15337,7 +15385,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       let breachedProof: string | null = null;
       if (effective?.state === 'breached') {
         const breach = await classifyFollowerBrokerBreach(accountId);
-        if (breach) throw new Error(`Účet je BREACHED a broker to potvrzuje: ${breach}`);
+        if (breach) throw new Error(`Účet je BREACHED a broker to potvrzuje: ${breach.reason}`);
         const [risk] = await broker.listAccountRiskSnapshots([accountId]);
         const equity = risk ? brokerRiskEquity(risk) : null;
         if (!risk || equity == null || risk.minNetLiq == null) {

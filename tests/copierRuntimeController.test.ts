@@ -4099,7 +4099,7 @@ describe('reconciliation vs abandoned cancel/modify', () => {
   });
 
   const propLiquidationHarness = async (riskSnapshot: {
-    realizedPnlUsd: number | null; dailyLossAutoLiq: number | null;
+    realizedPnlUsd: number | null; dailyLossAutoLiq: number | null; netLiq?: number;
   }) => {
     const audit = vi.fn();
     const broker = createMockBroker({
@@ -4142,7 +4142,7 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     return { broker, controller, audit };
   };
 
-  it('followera zlikvidovaného propkou vyřadí jako breached a skupinu nechá ARMED', async () => {
+  it('followera zamčeného denním limitem propky vyřadí do konce dne (dll-locked, ne breached) a skupinu nechá ARMED', async () => {
     const { controller, audit } = await propLiquidationHarness({ realizedPnlUsd: -1_312.5, dailyLossAutoLiq: 1_250 });
 
     expect(controller.status()).toMatchObject({
@@ -4154,8 +4154,10 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     expect(controller.status().accountEligibility).toEqual(expect.arrayContaining([
       expect.objectContaining({
         accountId: 200,
-        state: 'breached',
+        // 10. 10. 2026: denní auto-liq je zámek do konce session, ne konec účtu.
+        state: 'dll-locked',
         reason: expect.stringContaining('daily loss auto-liq 1250'),
+        lockSessionEndAt: expect.any(Number),
       }),
     ]));
     expect(audit.mock.calls.flat(2)).toEqual(expect.arrayContaining([
@@ -4165,6 +4167,34 @@ describe('reconciliation vs abandoned cancel/modify', () => {
       }),
     ]));
     controller.stop();
+  });
+
+  it('drawdown floor propky zůstává trvalý breached', async () => {
+    const { controller } = await propLiquidationHarness({ realizedPnlUsd: -400, dailyLossAutoLiq: 1_250, netLiq: 48_000 });
+    expect(controller.status().accountEligibility).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 200, state: 'breached', reason: expect.stringContaining('drawdown flooru') }),
+    ]));
+    controller.stop();
+  });
+
+  it('starý záznam „breached“ z denního auto-liq se po startu vrátí jako denní zámek, ne breach', async () => {
+    const snapshot = emptySnapshot();
+    const at = Date.parse('2026-10-08T14:57:58.826Z');
+    snapshot.safety = { ...snapshot.safety!, accountEligibility: [{
+      accountId: 200, state: 'breached', at,
+      reason: 'propka zlikvidovala účet: realizovaná ztráta -1253.50 USD dosáhla daily loss auto-liq 1200 USD',
+    }] };
+    const controller = await bootstrapCopierRuntime({
+      broker: createMockBroker({ behavior: () => ({ kind: 'working' }) }),
+      store: createMemoryCopierStore(snapshot), group, clock: () => Date.parse('2026-10-10T08:00:00Z'),
+    });
+    try {
+      const entry = controller.status().accountEligibility?.find(item => item.accountId === 200);
+      expect(entry?.state).not.toBe('breached');
+      expect(['dll-locked', 'unverifiable']).toContain(entry?.state);
+    } finally {
+      controller.stop();
+    }
   });
 
   it('nečekaný flat followera bez důkazu o likvidaci zůstává fail-closed', async () => {
