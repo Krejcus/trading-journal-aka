@@ -202,6 +202,13 @@ export interface CopierControllerStatus {
   /** Durable incident čekající na lidské potvrzení v ON (8. 10. 2026). */
   manualRecovery?: { id: string; at: number; reason: string } | null;
   /**
+   * „Zapnout bez tohoto účtu“: ručně vypnutí followeři, jejichž vlastní
+   * expozici kopírka neřídí (klasifikace workeru, ne jen konfigurace).
+   */
+  excludedForeignFollowers?: number[];
+  /** Flat zapojených účtů (bez vyřazených cizích); `groupFlat` zůstává přes všechny. */
+  participatingGroupFlat?: boolean;
+  /**
    * Automatické pokračování po výpadku spojení (10. 10. 2026). `ready` jen
    * říká, že smí projít stejnou bránou jako ruční ON; zapíná agent.
    */
@@ -3542,10 +3549,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * pozice). Konzervativní — jakákoli vlastní stopa kopírky na účtu znamená
    * „kopie“ a účet se dál chová jako dosud (divergence, blokace).
    */
-  const copierOwnedExposureReasons = (accountId: number): string[] => {
+  const copierOwnedExposureReasons = (
+    accountId: number,
+    /** Jen při vyřazení (DISARM): globální stopa živých kopií = bez výjimek. */
+    { atExclusion = false }: { atExclusion?: boolean } = {},
+  ): string[] => {
     const reasons: string[] = [];
+    // Stejná klasifikace jako „účet bez kopie“ při přepnutí skupiny: každá
+    // kopie musí být ověřeně usazená. Historické ID v outboxu (ten se maže
+    // jen přepnutím skupiny) je důkazem jen u příkazu, který je pořád otevřený.
+    // Globální stopa se za běhu nepoužije: vypnutý účet nové kopie nedostává
+    // a staré pokrývají záznamy po účtech.
+    if (atExclusion && (currentRuntime().state.safety.liveCopyOpenSince ?? 0) > 0) reasons.push('stopa otevřených kopií');
     if (unsettledCopierEntries(accountId).length > 0) reasons.push('neusazený příkaz kopírky');
-    if (controllerCopyOrderIds(accountId).length > 0) reasons.push('příkaz kopírky v outboxu');
+    const openOrderIds = [...(liveOrdersByAccount.get(accountId)?.keys() ?? [])];
+    if (openOrderIds.length > 0) {
+      const copierIds = new Set(controllerCopyOrderIds(accountId));
+      if (openOrderIds.some(orderId => copierIds.has(orderId))) reasons.push('otevřený příkaz kopírky');
+    }
+    if (currentStuckOperations().some(operation => operation.accountId === accountId)) reasons.push('nejasný příkaz kopírky');
     if (unverifiableFollowerOwnership(new Set([accountId])).length > 0) reasons.push('nedokončená epocha kopie');
     if ([...currentRuntimePendingExposure.values()].some(item => item.accountId === accountId)) reasons.push('čekající kopie');
     if (pendingIsolationCommandForAccount(accountId)) reasons.push('nevyřešený příkaz kopírky');
@@ -8210,12 +8232,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // „Zapnout bez tohoto účtu“ (10. 10.): ručně vypnutý follower, který
     // v epoše nemá prokázanou kopii, je pro guard stejně cizí — jeho ruční
     // pozice na stejném symbolu nesmí shodit skupinu. Vrací se beze změny.
-    const disabledFollowerIds = new Set(group.followers
-      .filter(follower => follower.enabled === false)
-      .map(follower => follower.accountId));
+    const excludedForeign = excludedForeignFollowerIds();
     const excludedParticipants = epoch.followers.filter(participant => (
       !pausedInEpoch.has(participant.accountId)
-      && disabledFollowerIds.has(participant.accountId)
+      && excludedForeign.has(participant.accountId)
       && !isLeaderFlatLineageParticipant(participant)
     ));
     const skippedInEpoch = new Set([...pausedInEpoch, ...excludedParticipants.map(participant => participant.accountId)]);
@@ -16292,7 +16312,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (stopped || shutdownRequested || !gate.connected || (enabled && gate.killSwitch)) {
           throw new Error('Worker není připravený nebo připojený');
         }
-        const ownedExposure = () => copierOwnedExposureReasons(accountId);
+        const ownedExposure = () => copierOwnedExposureReasons(accountId, { atExclusion: true });
         if (allowOwnExposure) {
           if (gate.armed) throw new Error('Účet s otevřenou pozicí jde vyřadit jen při vypnuté kopírce');
           if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
@@ -16373,6 +16393,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           assertUnchanged();
           for (const snapshot of snapshots) {
             if (allowOwnExposure && snapshot.accountId === accountId) {
+              const copierIds = new Set(controllerCopyOrderIds(accountId));
+              if (snapshot.orders.some(order => isOpenOrderStatus(order.status) && copierIds.has(order.brokerOrderId))) {
+                throw new Error(`Pozice nebo příkaz na účtu ${accountId} může být z kopírky (otevřený příkaz kopírky); zavři ji tlačítkem Zavřít pozici`);
+              }
               const shape = JSON.stringify({
                 positions: snapshot.positions.filter(position => position.netQuantity !== 0)
                   .map(position => `${position.symbol}:${position.netQuantity}`).sort(),
@@ -16757,6 +16781,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         revision: current.revision,
         lastSequence: current.state.lastSequence,
         groupFlat: allGroupAccountsFlat(),
+        participatingGroupFlat: groupIsFlat(),
+        excludedForeignFollowers: [...excludedForeignFollowerIds()],
         transportResume: transportResume
           ? (() => {
             const check = evaluateTransportResume(statusNow);
@@ -16835,7 +16861,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             .some(quantity => quantity !== 0) || (liveOrdersByAccount.get(follower.accountId)?.size ?? 0) > 0;
           const exclusionWithExposure = configuredEnabled && followerExposed
             ? (() => {
-              const owned = copierOwnedExposureReasons(follower.accountId);
+              const owned = copierOwnedExposureReasons(follower.accountId, { atExclusion: true });
               const reason = !gate.connected || stopped || shutdownRequested ? 'Worker není připojený'
                 : gate.armed ? 'Kopírka je zapnutá'
                   : [...(positionsByAccount.get(group.leaderAccountId!)?.values() ?? [])].some(quantity => quantity !== 0)

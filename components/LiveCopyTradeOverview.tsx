@@ -468,6 +468,8 @@ interface Props {
   accountSyncPauses?: CopierControllerStatus['accountSyncPauses'];
   /** Worker umí „Zapnout bez tohoto účtu“ (follower-exclude-exposure-v1). */
   followerExclusionSupported?: boolean;
+  /** Klasifikace workeru: vypnutí followeři, jejichž vlastní expozici kopírka neřídí. */
+  excludedForeignFollowers?: number[];
   /** Automatické pokračování po výpadku (jen s capability transport-auto-resume-v1). */
   transportResume?: CopierControllerStatus['transportResume'];
   transportResumeSupported?: boolean;
@@ -795,6 +797,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   followerParticipation = [],
   accountSyncPauses = [],
   followerExclusionSupported = false,
+  excludedForeignFollowers,
   transportResume = null,
   transportResumeSupported = false,
   accountRisk = [],
@@ -1186,8 +1189,16 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     !!account && (connectionByFirm.get(account.firm)?.connected ?? false);
 
   const anyLive = snapshot.accounts.some(isLive);
-  /** Ručně vypnutý follower (uložená skupina nebo čerstvá odpověď workeru). */
+  /**
+   * Vyřazený follower, jehož vlastní expozici kopírka neřídí — podle
+   * klasifikace workeru (vypnutý účet se stopou kopírky sem nepatří a dál
+   * blokuje), a jen u execution skupiny. Bez odpovědi workeru nic.
+   */
   const followerManuallyOff = (candidate: CopyGroupConfig, accountId: number) => (
+    candidate.id === executionGroupId && (excludedForeignFollowers?.includes(accountId) ?? false)
+  );
+  /** Ručně vypnutý v konfiguraci (uložená skupina nebo čerstvá odpověď workeru). */
+  const followerConfiguredOff = (candidate: CopyGroupConfig, accountId: number) => (
     candidate.followers.some(follower => follower.accountId === accountId && follower.enabled === false)
     || (candidate.id === executionGroupId && participationByAccount.get(accountId)?.configuredEnabled === false)
   );
@@ -1361,7 +1372,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     });
   };
 
-  const requestGroupPower = (candidate: CopyGroupConfig, powerOptions: { manuallyOffConfirmed?: boolean } = {}) => {
+  const requestGroupPower = (candidate: CopyGroupConfig, powerOptions: { confirmedOffAccountIds?: ReadonlySet<number> } = {}) => {
     if (copierTransitionRef.current === 'connecting') {
       if (onDisarm) void runCopierTransition(candidate.id, false, onDisarm);
       return;
@@ -1407,7 +1418,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       ?? null;
     // Vybraná skupina: jen zapojené účty. Přepnutí na jinou skupinu: přísně
     // všechny účty (worker tam vyžaduje flat i u vyřazených).
-    const candidateActivity = groupActivityDetail(candidate, currentGroup == null || currentGroup.id === candidate.id);
+    const candidateActivity = groupActivityDetail(candidate, currentGroup?.id === candidate.id);
     const currentActivity = currentGroup
       ? groupActivityDetail(currentGroup, currentGroup.id === candidate.id)
       : null;
@@ -1487,13 +1498,17 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     // zapnutím to připomeneme, jinak se ráno snadno přehlédne, že účet nekopíruje.
     const manuallyOff = candidate.followers.filter(follower => follower.enabled === false
       || (candidate.id === executionGroupId && participationByAccount.get(follower.accountId)?.configuredEnabled === false));
-    if (manuallyOff.length > 0 && !powerOptions.manuallyOffConfirmed) {
+    // Právě vyřazený účet uživatel potvrdil v průvodci; ostatní připomeneme.
+    if (manuallyOff.some(follower => !powerOptions.confirmedOffAccountIds?.has(follower.accountId))) {
       const names = manuallyOff.map(follower => accountLabel(follower.accountId, candidate.id));
       setPendingAction({
         title: 'Zapnout kopírování?',
-        detail: manuallyOff.length === 1
+        detail: (manuallyOff.length === 1
           ? `${names[0]} je ručně vypnutý a kopírovat se na něj nebude. Zapneš ho přepínačem v řádku účtu, až bude skupina flat.`
-          : `${manuallyOff.length} followeři jsou ručně vypnutí a kopírovat se na ně nebude: ${names.join(', ')}. Zapneš je přepínačem v řádku účtu, až bude skupina flat.`,
+          : `${manuallyOff.length} followeři jsou ručně vypnutí a kopírovat se na ně nebude: ${names.join(', ')}. Zapneš je přepínačem v řádku účtu, až bude skupina flat.`)
+          + (manuallyOff.some(follower => accountsById.get(follower.accountId)?.positions.some(position => position.netPosition !== 0))
+            ? ' Vypnutý účet drží vlastní pozici — kopírka ji neřídí; pozor na hedging napříč účty propky.'
+            : ''),
         confirmLabel: 'Zapnout',
         accountIds: manuallyOff.map(follower => follower.accountId),
         proceed: () => { void runCopierTransition(candidate.id, true, () => armAction(candidate)); },
@@ -2462,7 +2477,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             : undefined,
         });
         const participatingFollowerCount = blockGroup.followers
-          .filter(follower => follower.mode !== 'off' && !manuallyOffIds.has(follower.accountId)).length;
+          .filter(follower => follower.mode !== 'off'
+            && !followerConfiguredOff(blockGroup, follower.accountId)
+            && (blockGroup.id !== executionGroupId
+              || participationByAccount.get(follower.accountId)?.effectiveEnabled !== false)).length;
         const blockName = (accountId: number) => redactAccountName(
           accountsById.get(accountId)?.name ?? accountLabel(accountId, blockGroup.id), redactNames, redaction,
         );
@@ -2497,7 +2515,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                     followers: blockGroup.followers.map(follower => follower.accountId === accountId
                       ? { ...follower, enabled: false }
                       : follower),
-                  }, { manuallyOffConfirmed: true });
+                  }, { confirmedOffAccountIds: new Set([accountId]) });
                 });
               }
               : undefined}

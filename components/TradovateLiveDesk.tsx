@@ -1380,6 +1380,7 @@ acceptAgentStatus((await executeAgent({
               followerParticipation={agentStatus?.controller.followerParticipation ?? []}
               accountSyncPauses={agentStatus?.controller.accountSyncPauses ?? []}
               followerExclusionSupported={supportsCopierFollowerExcludeWithExposure(agentStatus)}
+              excludedForeignFollowers={agentStatus?.controller.excludedForeignFollowers}
               transportResume={agentStatus?.controller.transportResume ?? null}
               transportResumeSupported={supportsCopierTransportAutoResume(agentStatus)}
               accountRisk={agentStatus?.controller.accountRisk ?? []}

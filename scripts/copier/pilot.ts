@@ -1855,7 +1855,9 @@ async function runLocalAgent(
       if (!status?.connected) return;
       const result = socketRenewals.poll({
         connected: true,
-        groupFlat: status.groupFlat,
+        // Vyřazený follower s vlastní pozicí nesmí obnovu socketů odsouvat
+        // do vynuceného okna uprostřed kopírovaného obchodu.
+        groupFlat: status.participatingGroupFlat ?? status.groupFlat,
         blocker: controller?.connectionRenewalBlocker() ?? 'controller unavailable',
       });
       if (!result) return;

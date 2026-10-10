@@ -30,6 +30,7 @@ async function harness(config = group()) {
   const controller = await bootstrapCopierRuntime({
     broker, store: createMemoryCopierStore(), group: config,
     followerTransitionCorrelationWindowMs: 5,
+    copierSettlementMinAgeMs: 0, copierSettlementQuietMs: 0, copierSettlementTerminalAgeMs: 0,
     leaderFlatGraceMs: 0, leaderFlatExitSettlementGraceMs: 0, leaderFlatInflightRetryMs: 10,
     onAudit: entries => { audits.push(...entries as never[]); },
   } as never);
@@ -104,6 +105,32 @@ describe('Zapnout bez tohoto účtu — vyřazení followera s vlastní pozicí'
     h.controller.stop();
   });
 
+  it('follower s usazenou historií kopií jde vyřadit (outbox se nečistí, rozhoduje usazení)', async () => {
+    const h = await harness();
+    h.controller.arm();
+    h.broker.emitEvent({ type: 'order', order: leaderOrder('entry-old') });
+    await h.controller.waitForIdle();
+    const copy = h.broker.orders().find(order => order.accountId === 200);
+    expect(copy).toBeDefined();
+    h.controller.disarm();
+    h.broker.emitEvent({ type: 'order', order: leaderOrder('entry-old', { status: 'canceled', sourceVersion: '2:Canceled' }) });
+    for (const order of h.broker.orders().filter(item => item.status === 'working')) {
+      await h.broker.cancelOrder(order.accountId, order.brokerOrderId);
+    }
+    await h.controller.waitForIdle();
+    // Flat event spustí ověřené usazení kopie (za DISARM, dvě kola).
+    await h.position(200, 0);
+    await h.position(300, 0);
+    await sleep(60);
+    await h.controller.waitForIdle();
+    await h.manual200(1);
+    expect(h.controller.status().followerParticipation?.find(item => item.accountId === 200)?.exclusionWithExposure)
+      .toEqual({ allowed: true, reason: null });
+    await h.controller.setFollowerEnabled(200, false, h.persist, { allowOwnExposure: true });
+    expect(h.persisted().followers[0]).toMatchObject({ enabled: false });
+    h.controller.stop();
+  });
+
   it('po vyřazení je kontrola čistá, ON projde a vstup leadera dostane jen 300', async () => {
     const h = await harness();
     await h.manual200(-1);
@@ -171,6 +198,27 @@ describe('Zapnout bez tohoto účtu — vyřazení followera s vlastní pozicí'
     await h.controller.setFollowerEnabled(200, false, h.persist, { allowOwnExposure: true });
     await expect(h.controller.setFollowerEnabled(200, true, h.persist)).rejects.toThrow();
     expect(h.persisted().followers[0]).toMatchObject({ enabled: false });
+    h.controller.stop();
+  });
+
+  it('vypnutý follower s neusazenou kopií není „cizí“ — pozice dál blokuje', async () => {
+    const h = await harness();
+    h.controller.arm();
+    h.broker.emitEvent({ type: 'order', order: leaderOrder('entry-trace') });
+    await h.controller.waitForIdle();
+    h.controller.disarm();
+    h.broker.emitEvent({ type: 'order', order: leaderOrder('entry-trace', { status: 'canceled', sourceVersion: '2:Canceled' }) });
+    for (const order of h.broker.orders().filter(item => item.status === 'working')) {
+      await h.broker.cancelOrder(order.accountId, order.brokerOrderId);
+    }
+    await h.controller.waitForIdle();
+    // Bez flat eventu se kopie neusadí; běžné vypnutí (flat, bez příkazů) projde.
+    await h.controller.setFollowerEnabled(200, false, h.persist);
+    h.broker.setPosition(200, symbol, 1);
+    h.broker.emitEvent({ type: 'position', position: { accountId: 200, symbol, netQuantity: 1 } });
+    await h.controller.waitForIdle();
+    expect(h.controller.status().excludedForeignFollowers).toEqual([]);
+    expect(await h.controller.reconcile()).toMatchObject({ divergentAccounts: [200] });
     h.controller.stop();
   });
 
