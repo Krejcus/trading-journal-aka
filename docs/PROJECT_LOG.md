@@ -256,6 +256,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-10 — Etapa 2, bod 5: účet mimo synchron v appce a v notifikacích (Claude)
+
+Větev `claude/copier-durable-account-pause-20261006` (worktree
+`~/alphatrade-worktrees/copier-device`), zatím NEnasazeno. Podle náhledu
+claude.ai/artifact/Nqk99xxvwNsg1tcvGKocow:
+
+- **5a** Pozastavený follower (`accountSyncPauses`) má v řádku štítek
+  „Mimo synchron“ + „Pauza do konce obchodu“ (červeně, když drží pozici —
+  kopírka ji neřídí), nepočítá se mezi kopírující a skupina ukáže lištu
+  s účtem a důvodem. Kontext pauz se plní jen kolem execution skupiny.
+  Přednost: ruční vyřazení > DLL/breach > pauza.
+- **5b** Když zapnutí blokuje pozice/příkaz ve skupině, místo „použij
+  Flatten All“ přijde průvodce s účty a tlačítkem Zavřít u každého
+  (stávající potvrzení flatten-account); po potvrzení se vrátí s čerstvým
+  výčtem a po flat nabídne Zapnout. Technické odmítnutí workeru
+  (`divergence=…`) se překládá do věty.
+- **5c** Texty už neradí „spusť Kontrolu pozic“ (tlačítko zmizelo 8. 10.).
+  Řetězce workeru beze změny — podle nich se klasifikují kódy disarmu.
+- **5d** Watchdog: per-účtový incident `account-sync:<id>` — push při
+  vzniku pauzy, „zase v synchronu“ jen při zapnuté kopírce (po DISARM se
+  marker tiše zavře, jinak by push lhal).
+- **5e** Během zapínání panel „Zapínám · N s“ s tím, co se ověřuje.
+
+**Co z náhledu NEplatí a proč:** (1) „Zapnout bez tohoto účtu“ — jádro
+zapíná jen při flat CELÉ skupiny (`readFlatPreflightSnapshot` → `allFlat`
+počítá i ručně vypnuté followery), takže by volba nefungovala; vyžaduje
+změnu jádra + oponenturu. (2) „Po obnovení spojení pokračuje sama“ — jádro
+po výpadku zůstává DISARMED a zapnutí je ruční (`resumeOffer` se nikde
+nenastavuje); auto-ARM by byla změna bezpečnostního modelu. (3) Checklist
+kroků zapínání — worker průběh po krocích nehlásí, panel proto nic
+smyšleného neodškrtává.
+
 ### 2026-10-10 — Denní auto-liq propky ≠ breach (Claude)
 
 8. 10. tři Lucid followeři trefili daily loss auto-liq 1200 USD a `classifyFollowerBrokerBreach`
