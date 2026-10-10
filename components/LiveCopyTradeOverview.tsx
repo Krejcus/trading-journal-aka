@@ -2160,7 +2160,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   redaction={redaction}
                   templates={templates}
                   tightenOnly={tightenOnly}
-                  cooldownPanel={selected ? <>{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</> : null}
+                  cooldownPanel={<>
+                    {transitionGroupId === group.id && copierTransition === 'connecting' ? <CopierArmProgressPanel /> : null}
+                    {selected ? <>{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</> : null}
+                  </>}
                   disarmPanel={selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual'
                     ? <CopierDisarmPanel lastDisarm={disarmNotice} />
                     : null}
@@ -2286,6 +2289,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                             <CopierDisarmPanel lastDisarm={disarmNotice} />
                           </td>
                         </tr>
+                      ) : null}
+                      {transitionGroupId === group.id && copierTransition === 'connecting' ? (
+                        <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0"><CopierArmProgressPanel /></td></tr>
                       ) : null}
                       {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</td></tr> : null}
                       <tr
@@ -3271,6 +3277,32 @@ const TradeCutPill = ({ cut }: { cut?: Pick<ActiveFollowerCut, 'closed'> }) => (
     </span>
   )
 );
+
+/**
+ * Bod 5e: co se děje po stisku Zapnout. Worker neposílá průběh po krocích,
+ * proto panel neodškrtává smyšlené kroky — jen poctivě říká, co se ověřuje,
+ * a ukazuje, jak dlouho to trvá.
+ */
+export const CopierArmProgressPanel = () => {
+  const [startedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(startedAt);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1_000));
+  return (
+    <div role="status" data-testid="copier-arm-progress" className="border-t border-emerald-500/20 bg-emerald-500/[0.06] px-3 py-2.5">
+      <p className="flex items-center gap-1.5 text-[12px] font-black text-emerald-600">
+        <RefreshCw aria-hidden="true" size={12} strokeWidth={2.5} className="animate-spin" />
+        Zapínám · {seconds} s
+      </p>
+      <p className="mt-1 text-[11px] leading-snug text-[var(--text-secondary)]">
+        Kopírka u brokera ověřuje spojení, pozice a čekající příkazy všech účtů a limity propfirem. Obvykle to trvá pár sekund; když něco nesedí, nic se nezapne a dozvíš se proč.
+      </p>
+    </div>
+  );
+};
 
 /** Proč je follower mimo synchron — krátce, do řádku účtu. */
 export const accountSyncPauseReasonText = (pause: Pick<AccountSyncPause, 'reasonCode'>): string => (

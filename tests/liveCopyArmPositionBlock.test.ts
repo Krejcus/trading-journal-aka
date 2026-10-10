@@ -82,3 +82,14 @@ describe('bod 5b — průvodce zablokovaným zapnutím', () => {
     expect(isArmPositionRejection(new Error('ARM odmítnut: worker není připojen k brokeru'))).toBe(false);
   });
 });
+
+describe('bod 5e — průběh zapínání', () => {
+  it('říká, co se ověřuje, a neodškrtává smyšlené kroky', async () => {
+    const { CopierArmProgressPanel } = await import('../components/LiveCopyTradeOverview');
+    const markup = renderToStaticMarkup(React.createElement(CopierArmProgressPanel));
+    expect(markup).toContain('data-testid="copier-arm-progress"');
+    expect(markup).toContain('Zapínám · 0 s');
+    expect(markup).toContain('pozice a čekající příkazy všech účtů a limity propfirem');
+    expect(markup).toContain('nic se nezapne a dozvíš se proč');
+  });
+});
