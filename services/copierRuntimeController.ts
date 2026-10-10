@@ -8467,10 +8467,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // nezařadí — jinak by flatten bez targetu spadl na celý účet a zavřel
     // ruční pozici. Pozice na pozastaveném symbolu není ani „unscoped“.
     const pausedSymbol = (accountId: number, symbol: string) => activeAccountSyncPause(accountId, symbol) != null;
+    // Rozhodnutí nestojí na cache (review kola 7): účet s jakoukoli pauzou a
+    // bez cíle se vynechá vždy — i ruční příkaz na pozastaveném symbolu by
+    // jinak zrušil account-wide úklid.
+    const hasAnyPause = (accountId: number) => (currentRuntime().state.safety.accountSyncPauses ?? [])
+      .some(pause => pause.accountId === accountId);
     accountIds = accountIds.filter(accountId => (
-      targetSymbolsByAccount.has(accountId)
-      || ![...(positionsByAccount.get(accountId) ?? [])]
-        .some(([symbol, quantity]) => quantity !== 0 && pausedSymbol(accountId, symbol))
+      targetSymbolsByAccount.has(accountId) || !hasAnyPause(accountId)
     ));
     const participatingFollowerIdSet = new Set(participatingFollowerIds);
     const unscopedExposure = accountIds.flatMap(accountId => {
@@ -8864,6 +8867,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const orphanSymbols = new Set<string>();
     for (const follower of group.followers.filter(item => item.enabled !== false)) {
       for (const [symbol, quantity] of positionsByAccount.get(follower.accountId) ?? []) {
+        // Etapa 2: ruční pozice na pozastaveném symbolu není osiřelá kopie.
+        if (activeAccountSyncPause(follower.accountId, symbol)) continue;
         if (quantity !== 0 && (leaderPositions.get(symbol) ?? 0) === 0) orphanSymbols.add(symbol);
       }
     }
@@ -9808,19 +9813,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     && hasAuthoritativeFlatNoWorking(group.leaderAccountId, pause.symbol)
     && hasAuthoritativeFlatNoWorking(pause.accountId, pause.symbol)
   );
-  /** Selhání uvolnění pauzu jen ponechá (fail-safe), skupinu nevypíná. */
+  /**
+   * Selhání uvolnění = selhání durable zápisu: processor se znovu načte
+   * z úložiště, kde pauza už být nemusí (zápis prošel, odpověď ne). Bez
+   * jistoty o pauze se proto skupina vypne (fail-closed, review kola 7).
+   */
   const releaseAccountSyncPausesSafely = async (
     releasable: (pause: CopierAccountSyncPause, state: CopierRuntime['state']) => boolean,
   ): Promise<void> => {
     try {
       await releaseAccountSyncPauses(releasable);
     } catch (reason) {
-      options.onAudit?.([{
-        at: clock(),
-        leaderEventId: `account-sync-pause-release-failed:${clock()}`,
-        kind: 'skipped',
-        reason: `uvolnění pozastavených účtů se nepovedlo, zůstávají pozastavené: ${errorOf(reason).message}`,
-      }]);
+      failClosed(new Error(
+        `Copier fail-closed: uvolnění pozastavených účtů nejde durable potvrdit: ${errorOf(reason).message}`,
+      ), { autoClose: false });
     }
   };
   const releaseAccountSyncPauses = async (

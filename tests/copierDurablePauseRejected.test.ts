@@ -323,6 +323,63 @@ describe('etapa 2 (kolo 4) — pauza přežije flat leadera', () => {
     }
   });
 
+  it.each(['restore-fails', 'ambiguous-commit'] as const)('chyba zápisu uvolnění (%s): skupina se vypne, vstup na účet nejde (kolo 7)', async variant => {
+    const { controller, leaderTrade, requestsFor, allowEntries, advance, leaderEmit, store } = await boot(10);
+    try {
+      controller.arm();
+      await leaderTrade('e1', 'Buy', 1);
+      allowEntries();
+      await leaderTrade('x1', 'Sell', 0);
+      const realCommit = store.commit.bind(store);
+      let injected = false;
+      let failedRestore = false;
+      store.commit = async (snapshot, expectedRevision) => {
+        const stored = (await store.load()).safety?.accountSyncPauses ?? [];
+        const next = snapshot.safety?.accountSyncPauses ?? [];
+        if (next.length === 0 && stored.length > 0 && !injected) {
+          injected = true;
+          leaderEmit(order({ brokerOrderId: 'race-entry', orderType: 'Limit', limitPrice: 30_400 }));
+          if (variant === 'ambiguous-commit') {
+            await realCommit(snapshot, expectedRevision);
+            throw new Error('timeout po zápisu');
+          }
+        } else if (variant === 'restore-fails' && injected && !failedRestore && next.length > 0 && stored.length === 0) {
+          failedRestore = true;
+          throw new Error('výpadek sítě při obnově');
+        }
+        return realCommit(snapshot, expectedRevision);
+      };
+      const before = requestsFor(200).length;
+      for (let i = 0; i < 5; i += 1) { advance(2_000); await sleep(30); await controller.waitForIdle(); }
+      await sleep(200); await controller.waitForIdle();
+      expect(injected).toBe(true);
+      expect(requestsFor(200).length).toBe(before);
+      expect(controller.status().armed).toBe(false);
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('vypršení zapnutí nezruší ruční příkaz na pozastaveném symbolu (kolo 7)', async () => {
+    const { controller, leaderTrade, follower, advance, heartbeat } = await boot();
+    try {
+      controller.arm({ ttlMs: 60_000 });
+      await leaderTrade('e1', 'Buy', 1);
+      await follower.placeOrder({ tag: 'manual-200', accountId: 200, symbol: SYM, side: 'Sell', orderType: 'Limit', quantity: 1, limitPrice: 31_000 } as never);
+      const manual = follower.orders().find(item => item.accountId === 200 && item.orderType === 'Limit')!;
+      follower.emitEvent({ type: 'order', order: manual });
+      await controller.waitForIdle(); await sleep(30); await controller.waitForIdle();
+      advance(120_000);
+      heartbeat();
+      for (let i = 0; i < 5; i += 1) { await controller.waitForIdle(); await sleep(50); }
+      expect(controller.status().armed).toBe(false);
+      expect(follower.cancelRequestCount(manual.brokerOrderId)).toBe(0);
+      expect(follower.orders().find(item => item.brokerOrderId === manual.brokerOrderId)?.status).toBe('working');
+    } finally {
+      controller.stop();
+    }
+  });
+
   it('leader-flat guard uvolní pauzu čistého účtu a další vstup se mu zkopíruje', async () => {
     const { controller, leaderTrade, requestsFor, allowEntries, advance } = await boot(10);
     try {
