@@ -394,6 +394,8 @@ describe('account eligibility — DLL incident', () => {
       accountCapabilities: [100, 201, 202, 203, 205].map(accountId => ({
         accountId, active: true, canTrade: true,
       })),
+      // 10. 10. 2026: bývalý denní zámek se vrací jen s equity nad floorem.
+      accountRiskSnapshots: [{ accountId: 205, at: 950, realizedPnlUsd: 0, netLiq: 50_000, minNetLiq: 48_000, dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 2_000 }],
     });
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(initial), group, clock,
@@ -435,6 +437,7 @@ describe('account eligibility — DLL incident', () => {
       clock,
       behavior: () => ({ kind: 'working' }),
       accountCapabilities: [{ accountId: 63338752, active: true, canTrade: true }],
+      accountRiskSnapshots: [{ accountId: 63338752, at: 950, realizedPnlUsd: 0, netLiq: 50_000, minNetLiq: 48_000, dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 2_000 }],
     });
     const store = createMemoryCopierStore(initial);
     const controller = await bootstrapCopierRuntime({
