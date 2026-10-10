@@ -306,6 +306,35 @@ describe('account eligibility — DLL incident', () => {
     h.controller.stop();
   });
 
+  it('neurčitý reject na zamčeném účtu nesmaže požadavek důkazu nad floorem', async () => {
+    const h = await harness();
+    await emitLeaderEntry(h, 'leader-entry-1', '1:Working');
+    await asyncDllReject(h, 205);
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 205))
+      .toMatchObject({ state: 'dll-locked', requiresRiskFloorProof: true });
+    // Pozdější reject s neklasifikovaným textem (např. liquidation only).
+    const [order] = followerOrdersFor(h.broker, 205);
+    h.broker.emitEvent({ type: 'order', order: {
+      ...order!, brokerOrderId: 'later-reject', status: 'rejected',
+      rejectReason: 'Your account is currently set to liquidation only due to low net liquidating value.',
+      sourceVersion: 'later-reject', updatedAt: (order!.updatedAt ?? 0) + 10_000,
+    } });
+    await h.controller.waitForIdle();
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 205)?.requiresRiskFloorProof).toBe(true);
+    h.controller.stop();
+  });
+
+  it('LIVE preflight denní zámek nese požadavek důkazu nad floorem', async () => {
+    const h = await harness();
+    h.controller.disarm();
+    await h.controller.applyAccountEligibilityExclusions([{
+      accountId: 205, state: 'dll-locked', reason: 'LIVE denní P&L -1206.50 USD dosáhlo DLL 1200.00 USD',
+    }]);
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 205))
+      .toMatchObject({ state: 'dll-locked', requiresRiskFloorProof: true });
+    h.controller.stop();
+  });
+
   it('DLL se neodemkne pouhým časem — reaktivaci smí provést jen autoritativní ověření', async () => {
     const h = await harness();
     await emitLeaderEntry(h, 'leader-entry-1', '1:Working');

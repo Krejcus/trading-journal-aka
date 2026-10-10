@@ -847,7 +847,11 @@ const durableIncidentId = (marker: unknown): string => {
  */
 const DLL_BREACH_REASON = /^propka zlikvidovala účet: realizovaná ztráta .* dosáhla daily loss auto-liq /;
 const migrateDllBreach = (entry: CopierAccountEligibility): CopierAccountEligibility => (
-  entry.state === 'breached' && DLL_BREACH_REASON.test(entry.reason ?? '')
+  // Starší denní zámek (reject / LIVE preflight) bez příznaku dostane stejnou
+  // návratovou politiku jako nové cesty.
+  entry.state === 'dll-locked' && !entry.requiresRiskFloorProof
+    ? { ...entry, requiresRiskFloorProof: true }
+    : entry.state === 'breached' && DLL_BREACH_REASON.test(entry.reason ?? '')
     ? {
       ...entry,
       state: 'dll-locked',
@@ -1155,6 +1159,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           reason: current?.reason,
           at: current?.at ?? at,
           lockSessionEndAt: current?.lockSessionEndAt,
+          // Požadavek důkazu nad floorem se neurčitým rejectem nesmí ztratit.
+          ...(current?.requiresRiskFloorProof ? { requiresRiskFloorProof: true as const } : {}),
           lastExecution: effectiveLastExecution,
         });
       }
@@ -14059,6 +14065,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           if (entry.state === 'unverifiable' || (entry.state === 'dll-locked' && newSessionBegan)) {
             if (entry.requiresRiskFloorProof) {
               const proof = await riskFloorProof(accountId);
+              // Během čtení mohla jiná cesta (reject, LIVE exclusion) stav
+              // zpřísnit; zastaralý záznam nikdy nepřepisujeme.
+              if (accountEligibility.get(accountId) !== entry) continue;
               if (proof.kind === 'breached') {
                 accountEligibility.set(accountId, {
                   accountId, state: 'breached', at: reactivationNow,
@@ -15468,6 +15477,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         broker.listOrders(accountId),
       ]);
 
+      // Během čtení u brokera mohla jiná cesta stav zpřísnit (fail-closed).
+      if (accountEligibility.get(accountId) !== current) {
+        throw new Error('Stav účtu se během ověření změnil; ověř ho znovu');
+      }
       const { requiresRiskFloorProof: _proven, ...withoutProofFlag } = current ?? {} as Partial<CopierAccountEligibility>;
       const verified: CopierAccountEligibility = {
         ...withoutProofFlag,
