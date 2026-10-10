@@ -256,6 +256,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-10 — Zapnout bez účtu + automatické pokračování po výpadku (Claude, rozhodnutí Filipa)
+
+Větev `claude/copier-arm-without-account-20261010` (worktree
+`~/alphatrade-worktrees/copier-device`, navazuje na etapu 2), NEnasazeno.
+Oponentura Claude subagenty ve 3 kolech (kolo 1 auto-resume = NE → opraveno).
+
+- **Zapnout bez tohoto účtu** (INV-PART-03): follower s vlastní (cizí)
+  pozicí jde za DISARM vyřadit i s ní; kopírka ji neřídí, zbytek skupiny
+  zapne. „Cizí“ = žádná stopa kopírky (pravidlo jako u přepnutí skupiny:
+  neusazené záznamy, OTEVŘENÝ příkaz s ID kopírky, epocha s lineage, pending,
+  cut; při vyřazení i globální stopa kopií). Taková expozice nevstupuje do
+  flat skupiny (cooldown, day-lock…), divergence ani ARM bran; guard a
+  přechody ji ignorují. Pozor: dřív byla pozice na vypnutém followerovi
+  vždy divergence — teď jen když nese stopu kopírky.
+- **Automatické pokračování** (INV-RECON-04): mechanismus z 6. 10. dokončen
+  a znovu zapnut (pilot default, `ALPHATRADE_COPIER_AUTO_RESUME=0` vypne).
+  Jen z živého ARM a flat skupiny; jeden pokus přes `armCore` (všechny brány
+  ON), nikdy `reconcile()`; ruší ho jakékoli jiné vypnutí, brzda, Flatten,
+  incident, změna skupiny, obchod leadera v mezeře (statistiky, čas příkazu
+  vč. 30s slepého okna, monotónní ID příkazu, gap fills), zámek dne, okno,
+  restart, 60 min, 2× za ruční ON. Serverová pojistka `auto-resume-admit`
+  (brzdy uživatele od zapnutí, prázdná fronta) — bez migrace DB.
+- **Otevřené:** výpadek uprostřed obchodu s brackety dnes podle čtení kódu
+  končí incidentem (working ordery = SL/TP) — auto-resume ho nepokrývá;
+  navazující změna jádra („držet kopie, pokračovat při dalším flat“).
+
 ### 2026-10-10 — Etapa 2, bod 5: účet mimo synchron v appce a v notifikacích (Claude)
 
 Větev `claude/copier-durable-account-pause-20261006` (worktree

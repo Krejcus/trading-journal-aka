@@ -1307,8 +1307,19 @@ export async function startLocalCopierExecutionAgent(
       }
       if (!admission.admitted) throw new Error(`server nepovolil: ${admission.reason ?? 'neznámý důvod'}`);
       // Síťová cesta k pojistce trvá; neškodná událost brokera mezitím mohla
-      // zneplatnit přípravu. Read-only obnova, žádné reconcile().
-      if (options.controller.prepareArm) await awaitArmDeadline(options.controller.prepareArm(), deadlineAt);
+      // zneplatnit přípravu. Read-only obnova, žádné reconcile(). Souběh
+      // s eventem během čtení je přechodný (stejný limit jako pojistka).
+      if (options.controller.prepareArm) {
+        try {
+          await awaitArmDeadline(options.controller.prepareArm(), deadlineAt);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/stav se změnil během read-only preflightu|zneplatnila změna stavu/.test(message)) {
+            throw new AutoResumeAdmissionUnavailable(`kontrola se během čtení změnila: ${message}`);
+          }
+          throw error;
+        }
+      }
       assertArmAdmissible(deadlineAt, admittedBrakeEpoch, createdAt);
       options.controller.arm({
         shadowMode: false,
@@ -1388,6 +1399,9 @@ export async function startLocalCopierExecutionAgent(
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (error instanceof AutoResumeSuperseded) {
+        // Úspěšné ruční ON epizodu ukončí samo; když selže, další tick zkusí
+        // znovu (epizoda nesmí viset jako „čeká“ bez dalšího pokusu).
+        pending.done = false;
         autoRearmLog(`přenecháno ručnímu zapnutí: ${reason}`);
         return;
       }
