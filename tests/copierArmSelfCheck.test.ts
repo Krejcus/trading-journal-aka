@@ -102,151 +102,123 @@ describe('etapa 1 — zapnutí s vlastní kontrolou', () => {
   });
 });
 
-describe('etapa 1 — automatické zapnutí po výpadku spojení', () => {
+describe('automatické pokračování po výpadku spojení (10. 10. 2026)', () => {
   let running: LocalCopierExecutionAgent | null = null;
   afterEach(async () => { await running?.close(); running = null; });
 
-  const transportDisarm = (runtime: ReturnType<typeof controller>) => runtime.setStatus({
-    armed: false, connected: false, reconciliationRequired: true,
-    lastDisarm: {
-      at: Date.now() + 1, trigger: 'transport', title: 'Spojení k brokerovi bylo přerušeno',
-      detail: 'Spojení k brokerovi bylo přerušeno', copiesOutcome: 'flat',
-    } as CopierControllerStatus['lastDisarm'],
-  });
-
-  it('po obnovení spojení a čisté kontrole se zapne samo', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0, autoRearmAfterTransport: true });
-    running.setRemoteQueueProbe?.(() => Date.now());
-    await running.execute({ type: 'arm-live' });
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-    transportDisarm(runtime);
-    await new Promise(resolve => setTimeout(resolve, 80));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-    runtime.setStatus({ connected: true });
-    await vi.waitFor(() => expect(runtime.arm).toHaveBeenCalledTimes(2), { timeout: 1_000 });
-    expect(runtime.reconcile).toHaveBeenCalled();
-    expect(runtime.status().armed).toBe(true);
-  });
-
-  it('nečistá kontrola po obnovení nechá kopírku vypnutou', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0, autoRearmAfterTransport: true });
-    running.setRemoteQueueProbe?.(() => Date.now());
-    await running.execute({ type: 'arm-live' });
-    transportDisarm(runtime);
-    runtime.setNextCheck({ ...clean, authoritativelyClean: false, workingOrderAccounts: [22] });
-    runtime.setStatus({ connected: true });
-    await vi.waitFor(() => expect(runtime.reconcile).toHaveBeenCalled(), { timeout: 1_000 });
-    await new Promise(resolve => setTimeout(resolve, 60));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-    expect(runtime.status().armed).toBe(false);
-  });
-
-  it('ruční vypnutí po výpadku automatické zapnutí zruší', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0, autoRearmAfterTransport: true });
-    running.setRemoteQueueProbe?.(() => Date.now());
-    await running.execute({ type: 'arm-live' });
-    transportDisarm(runtime);
-    await new Promise(resolve => setTimeout(resolve, 60));
-    await running.execute({ type: 'disarm' });
-    runtime.setStatus({ connected: true });
-    await new Promise(resolve => setTimeout(resolve, 120));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-  });
-
-  it('vypnutí hned po výpadku, ještě před prvním tickem, návrat zruší', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 50, autoRearmGraceMs: 0, autoRearmAfterTransport: true });
-    running.setRemoteQueueProbe?.(() => Date.now());
-    await running.execute({ type: 'arm-live' });
-    transportDisarm(runtime);
-    await running.execute({ type: 'disarm' });
-    runtime.setStatus({ connected: true });
-    await new Promise(resolve => setTimeout(resolve, 250));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-  });
-
-  it('změna skupiny během výpadku návrat zruší (zapnula by se jiná konfigurace)', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0, autoRearmAfterTransport: true });
-    running.setRemoteQueueProbe?.(() => Date.now());
-    await running.execute({ type: 'arm-live' });
-    transportDisarm(runtime);
-    await running.execute({ type: 'copy-command', command: { type: 'update-group', group: {
-      ...group(), followers: [{ accountId: 22, mode: 'on-submit', multiplier: 2 }],
-    } } });
-    expect(running.status().group.followers[0].multiplier).toBe(2);
-    runtime.setStatus({ connected: true });
-    await new Promise(resolve => setTimeout(resolve, 200));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-  });
-
-  it('nový incident po výpadku automatický návrat zastaví a nesmaže ho', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0, autoRearmAfterTransport: true });
-    running.setRemoteQueueProbe?.(() => Date.now());
-    await running.execute({ type: 'arm-live' });
-    transportDisarm(runtime);
-    runtime.setStatus({
-      connected: true,
-      lastError: 'Copier fail-closed: store CAS',
-      armPreparation: { state: 'blocked', verifiedAt: null, reason: 'incident', blockedBy: 'incident', manualRecoveryRequired: true },
+  const realSetup = async (agentOptions: Record<string, unknown> = { autoRearmAfterTransport: true }) => {
+    const { createMemoryCopierStore } = await import('../services/copierStore');
+    const { createMockBroker } = await import('../services/mockBroker');
+    const { bootstrapCopierRuntime } = await import('../services/copierRuntimeController');
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const runtime = await bootstrapCopierRuntime({ broker, store: createMemoryCopierStore(), group: group() });
+    broker.setConnected(true);
+    await runtime.waitForIdle();
+    await runtime.reconcile();
+    const reconcileSpy = vi.spyOn(runtime, 'reconcile');
+    const armSpy = vi.spyOn(runtime, 'arm');
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, autoRearmTickMs: 15, autoRearmGraceMs: 0, ...agentOptions,
     });
+    const admit = vi.fn(async (_since: number) => ({ admitted: true, reason: null as string | null }));
+    return { broker, runtime, reconcileSpy, armSpy, admit };
+  };
+  const outageAndReturn = async (broker: { setConnected(next: boolean): void }) => {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    broker.setConnected(false);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    broker.setConnected(true);
+  };
+
+  it('flat výpadek: po čisté kontrole jeden pokus, bez reconcile(), pojistka s časem ručního ON', async () => {
+    const h = await realSetup();
+    running!.setRemoteQueueProbe?.(() => Date.now());
+    running!.setAutoResumeAdmission?.(h.admit);
+    expect(running!.status().capabilities).toContain('transport-auto-resume-v1');
+    await running!.execute({ type: 'arm-live' });
+    expect(h.runtime.status().armed).toBe(true);
+    h.reconcileSpy.mockClear();
+    await outageAndReturn(h.broker);
+    await vi.waitFor(() => expect(h.runtime.status().armed).toBe(true), { timeout: 2_000 });
+    expect(h.runtime.status().transportResume?.phase).toBe('resumed');
+    expect(h.admit).toHaveBeenCalledTimes(1);
+    expect(h.reconcileSpy).not.toHaveBeenCalled();
+    expect(h.armSpy.mock.calls.at(-1)?.[0]).toMatchObject({ autoResume: expect.any(Object), requirePreparation: true });
+  });
+
+  it('server pojistku odmítne (brzda z telefonu) → zůstane vypnutá a důvod je vidět', async () => {
+    const h = await realSetup();
+    running!.setRemoteQueueProbe?.(() => Date.now());
+    h.admit.mockResolvedValue({ admitted: false, reason: 'od posledního zapnutí přišla brzda' });
+    running!.setAutoResumeAdmission?.(h.admit);
+    await running!.execute({ type: 'arm-live' });
+    await outageAndReturn(h.broker);
+    await vi.waitFor(() => expect(h.runtime.status().transportResume?.phase).toBe('declined'), { timeout: 2_000 });
+    expect(h.runtime.status().transportResume?.reason).toContain('přišla brzda');
+    expect(h.runtime.status().armed).toBe(false);
+  });
+
+  it('brzda během výpadku, chybějící pojistka i výchozí nastavení = nikdy samo', async () => {
+    const braked = await realSetup();
+    running!.setRemoteQueueProbe?.(() => Date.now());
+    running!.setAutoResumeAdmission?.(braked.admit);
+    await running!.execute({ type: 'arm-live' });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    braked.broker.setConnected(false);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await running!.execute({ type: 'disarm' });
+    braked.broker.setConnected(true);
     await new Promise(resolve => setTimeout(resolve, 200));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-    expect(runtime.reconcile).not.toHaveBeenCalled();
+    expect(braked.runtime.status().armed).toBe(false);
+    expect(braked.admit).not.toHaveBeenCalled();
+    await running!.close(); running = null;
+
+    const noFence = await realSetup();
+    running!.setRemoteQueueProbe?.(() => Date.now());
+    expect(running!.status().capabilities).not.toContain('transport-auto-resume-v1');
+    await running!.execute({ type: 'arm-live' });
+    await outageAndReturn(noFence.broker);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(noFence.runtime.status().armed).toBe(false);
+    await running!.close(); running = null;
+
+    const byDefault = await realSetup({});
+    running!.setRemoteQueueProbe?.(() => Date.now());
+    running!.setAutoResumeAdmission?.(byDefault.admit);
+    expect(running!.status().capabilities).not.toContain('transport-auto-resume-v1');
+    await running!.execute({ type: 'arm-live' });
+    await outageAndReturn(byDefault.broker);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(byDefault.runtime.status().armed).toBe(false);
+    expect(byDefault.admit).not.toHaveBeenCalled();
   });
 
-  it('ruční vypnutí (ne výpadek) se nikdy samo nezapne', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0, autoRearmAfterTransport: true });
-    running.setRemoteQueueProbe?.(() => Date.now());
-    await running.execute({ type: 'arm-live' });
-    runtime.setStatus({
-      armed: false,
-      lastDisarm: { at: Date.now() + 1, trigger: 'manual', title: 'ručně', detail: 'ručně', copiesOutcome: 'flat' } as CopierControllerStatus['lastDisarm'],
-    });
-    await new Promise(resolve => setTimeout(resolve, 120));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-  });
-
-  it('čekající brzda z telefonu: bez prázdného vyzvednutí fronty po obnovení se nezapne', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0, autoRearmAfterTransport: true });
+  it('čeká na prázdné vyzvednutí fronty relay po obnovení spojení', async () => {
+    const h = await realSetup();
     let lastEmptyPoll = Date.now();
-    running.setRemoteQueueProbe?.(() => lastEmptyPoll);
-    await running.execute({ type: 'arm-live' });
-    transportDisarm(runtime);
-    runtime.setStatus({ connected: true });
-    // Relay po obnovení ještě neodbavilo frontu (brzda může čekat).
+    running!.setRemoteQueueProbe?.(() => lastEmptyPoll);
+    running!.setAutoResumeAdmission?.(h.admit);
+    await running!.execute({ type: 'arm-live' });
+    await outageAndReturn(h.broker);
     await new Promise(resolve => setTimeout(resolve, 150));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-    // Relay dokončí prázdné vyzvednutí až teď → teprve pak se smí zapnout.
+    expect(h.runtime.status().armed).toBe(false);
     lastEmptyPoll = Date.now() + 5;
-    await vi.waitFor(() => expect(runtime.arm).toHaveBeenCalledTimes(2), { timeout: 1_000 });
+    await vi.waitFor(() => expect(h.runtime.status().armed).toBe(true), { timeout: 2_000 });
   });
 
-  it('bez napojeného relay se po výpadku nikdy samo nezapne', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0, autoRearmAfterTransport: true });
-    await running.execute({ type: 'arm-live' });
-    transportDisarm(runtime);
-    runtime.setStatus({ connected: true });
-    await new Promise(resolve => setTimeout(resolve, 150));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
-  });
-
-  it('ve výchozím nastavení se po výpadku samo nezapne', async () => {
-    const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20 });
-    running.setRemoteQueueProbe?.(() => Date.now());
-    await running.execute({ type: 'arm-live' });
-    transportDisarm(runtime);
-    runtime.setStatus({ connected: true });
-    await new Promise(resolve => setTimeout(resolve, 150));
-    expect(runtime.arm).toHaveBeenCalledTimes(1);
+  it('strop: nejvýš 2 automatická pokračování na jedno ruční zapnutí', async () => {
+    const h = await realSetup();
+    running!.setRemoteQueueProbe?.(() => Date.now() + 60_000);
+    running!.setAutoResumeAdmission?.(h.admit);
+    await running!.execute({ type: 'arm-live' });
+    for (let round = 0; round < 2; round += 1) {
+      await outageAndReturn(h.broker);
+      await vi.waitFor(() => expect(h.runtime.status().armed).toBe(true), { timeout: 2_000 });
+    }
+    await outageAndReturn(h.broker);
+    await vi.waitFor(() => expect(h.runtime.status().transportResume?.phase).toBe('declined'), { timeout: 2_000 });
+    expect(h.runtime.status().transportResume?.reason).toContain('zapni ji ručně');
+    expect(h.runtime.status().armed).toBe(false);
   });
 });
 

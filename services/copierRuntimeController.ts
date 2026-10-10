@@ -201,6 +201,17 @@ export interface CopierControllerStatus {
   }>;
   /** Durable incident čekající na lidské potvrzení v ON (8. 10. 2026). */
   manualRecovery?: { id: string; at: number; reason: string } | null;
+  /**
+   * Automatické pokračování po výpadku spojení (10. 10. 2026). `ready` jen
+   * říká, že smí projít stejnou bránou jako ruční ON; zapíná agent.
+   */
+  transportResume?: {
+    disarmAt: number;
+    armExpiresAt: number;
+    phase: 'waiting' | 'ready' | 'declined' | 'resumed';
+    reason: string | null;
+    at: number;
+  } | null;
   divergentAccounts: number[];
   workingOrderAccounts: number[];
   stuckOutbox: boolean;
@@ -555,7 +566,20 @@ export interface CopierRuntimeController {
    * Bez něj platí výchozí TTL z risk gate. Expirace odzbrojí a podle
    * `safety.armExpiryFlatten` risk-redukčně zavře otevřené kopie.
    */
-  arm(options?: { shadowMode?: boolean; ttlMs?: number; requirePreparation?: boolean }): void;
+  arm(options?: {
+    shadowMode?: boolean;
+    ttlMs?: number;
+    requirePreparation?: boolean;
+    /** Automatické pokračování po výpadku: jen epizoda `disarmAt`, jeden pokus. */
+    autoResume?: { disarmAt: number };
+  }): void;
+  /**
+   * Stav automatického pokračování po výpadku; trvalé odmítnutí rovnou
+   * zapíše. Nic nečte u brokera ani nezapíná.
+   */
+  checkTransportResume?(): { kind: 'none' | 'wait' | 'ready' | 'decline'; reason: string | null; disarmAt: number | null };
+  /** Agent zruší čekající pokračování z vlastních důvodů (brzda, skupina, pojistka). */
+  cancelTransportResume?(reason: string): void;
   /** Deduplicated read-only preparation; never acknowledges an incident or arms. */
   prepareArm?(): Promise<void>;
   /** Enable background warming when an execution agent starts serving ON/OFF. */
@@ -2051,6 +2075,33 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   }> = [];
   let bootRecoveryChecked = false;
   let lastResumeOffer: { at: number } | null = null;
+  /**
+   * Automatické pokračování po výpadku spojení (10. 10. 2026), jen v paměti:
+   * restart workeru ho vždy zahodí. Vzniká jen z živého ARM a jen když byla
+   * skupina při výpadku flat bez příkazů. Samo nic nezapíná — rozhoduje
+   * agent přes stejnou bránu jako ruční ON (`arm({ autoResume })`).
+   */
+  let transportResume: {
+    disarmAt: number;
+    armExpiresAt: number;
+    configuration: string;
+    leaderStats: string;
+    state: 'waiting' | 'declined' | 'resumed';
+    reason: string | null;
+    at: number;
+  } | null = null;
+  /** Nejnovější čas příkazu leadera z posledního read-only preflightu (null = nelze prokázat). */
+  let lastPreflightLeaderOrderActivityAt: number | null = null;
+  const TRANSPORT_RESUME_ORDER_SKEW_MS = 5_000;
+  const declineTransportResume = (reason: string) => {
+    if (transportResume?.state !== 'waiting') return;
+    const at = clock();
+    transportResume = { ...transportResume, state: 'declined', reason, at };
+    options.onAudit?.([{
+      at, leaderEventId: `auto-resume:${transportResume.disarmAt}`, kind: 'blocked',
+      reason: `automatické pokračování po výpadku zrušeno: ${reason}`,
+    }]);
+  };
   const pendingBracketTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingOsoTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingOsoEvents = new Map<string, LeaderEvent>();
@@ -3550,6 +3601,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     copiesOutcome: CopierCopiesOutcome,
     recordOptions: { episodeId?: string; code?: CopierDisarmRecord['code'] } = {},
   ): CopierDisarmRecord => {
+    if (trigger !== 'transport') declineTransportResume(`kopírka se vypnula: ${detail}`);
     const openEpochIds = (currentRuntime().state.safety.leaderExposureEpochs ?? [])
       .filter(epoch => (
         epoch.groupId === group.id
@@ -4516,6 +4568,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const existingSameIncident = lastDisarm
       && lastDisarm.detail === lastError.message
       && lastDisarm.episodeId === failure.episodeId;
+    if (!failure.transportLost) declineTransportResume(`incident: ${lastError.message}`);
     const disarm = (wasArmed || failure.recordWhenDisarmed) && !existingSameIncident
       ? recordDisarm(
           failure.transportLost ? 'transport' : 'fail-closed',
@@ -4526,6 +4579,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           { episodeId: failure.episodeId },
         )
       : undefined;
+    if (failure.transportLost && disarm && wasLiveArmed) beginTransportResume(disarm.at);
     gate = {
       ...gate,
       armed: false,
@@ -9221,6 +9275,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       (snapshots.find(snapshot => snapshot.accountId === group.leaderAccountId)?.positions ?? [])
         .map(position => [position.symbol, position.netQuantity]),
     );
+    {
+      // Auto-pokračování: příkaz leadera z mezery = leader během výpadku
+      // obchodoval. Bez čitelného času to nejde prokázat (null).
+      const leaderOrders = snapshots.find(snapshot => snapshot.accountId === group.leaderAccountId)?.orders ?? [];
+      lastPreflightLeaderOrderActivityAt = leaderOrders.some(order => !Number.isFinite(order.updatedAt) || order.updatedAt <= 0)
+        ? null
+        : leaderOrders.reduce((latest, order) => Math.max(latest, order.updatedAt), 0);
+    }
     // „Zapnout bez tohoto účtu“: cizí expozice ručně vypnutého followera
     // (bez jakékoli stopy kopírky) nebrání zapnutí zapojených účtů.
     const excludedForeign = excludedForeignFollowerIds();
@@ -9277,6 +9339,89 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     ].filter(Boolean).join('; ');
     if (positionCheckComplete) recordArmPreparation(snapshotAccountIds, routesAtStart);
     return { clean: positionCheckComplete, reason: reason || null };
+  };
+
+  // --- Automatické pokračování po výpadku spojení (10. 10. 2026) ---------
+  const transportResumeLeaderStats = (at: number) => {
+    const stats = currentDailyStats(at);
+    return JSON.stringify({
+      trades: stats.tradesToday ?? 0,
+      pnl: stats.realizedPnlUsd,
+      losing: stats.losingTrades,
+      open: stats.openLots.length,
+      unconfirmed: stats.unconfirmedFlatLots?.length ?? 0,
+    });
+  };
+  /** Volat při transport disarmu, ještě PŘED shozením `gate.armed`. */
+  const beginTransportResume = (disarmAt: number) => {
+    if (!gate.armed || gate.shadowMode) {
+      transportResume = null;
+      return;
+    }
+    const armExpiresAt = gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : 0;
+    const excluded = excludedForeignFollowerIds();
+    const participating = [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
+      .filter((accountId): accountId is number => accountId != null && !excluded.has(accountId));
+    const ordersOpen = participating.some(accountId => (liveOrdersByAccount.get(accountId)?.size ?? 0) > 0);
+    const reason = currentRuntime().state.safety.managementOnly
+      ? 'kopírka byla v režimu správy otevřených kopií'
+      : currentManualRecovery
+        ? 'před výpadkem byl otevřený incident'
+        : armExpiresAt <= 0
+          ? 'zapnutí nemělo časový limit'
+          : !groupIsFlat() || ordersOpen
+            ? 'při výpadku byl otevřený obchod nebo čekající příkaz — kopie drží u brokera své SL/TP, po flat zapni ručně'
+            : null;
+    transportResume = {
+      disarmAt,
+      armExpiresAt,
+      configuration: armPreparationConfiguration(),
+      leaderStats: transportResumeLeaderStats(disarmAt),
+      state: reason ? 'declined' : 'waiting',
+      reason,
+      at: disarmAt,
+    };
+    options.onAudit?.([{
+      at: disarmAt, leaderEventId: `auto-resume:${disarmAt}`, kind: reason ? 'blocked' : 'recovered',
+      reason: reason
+        ? `automatické pokračování po výpadku nebude: ${reason}`
+        : 'automatické pokračování po výpadku čeká na obnovu spojení a čistou kontrolu účtů',
+    }]);
+  };
+  /**
+   * Čistá kontrola bez vedlejších efektů. `decline` = v této epizodě už nikdy,
+   * `wait` = zatím ne (spojení, kontrola u brokera), `ready` = smí projít
+   * stejnou bránou jako ruční ON.
+   */
+  const evaluateTransportResume = (now = clock()): {
+    kind: 'none' | 'wait' | 'ready' | 'decline';
+    reason: string | null;
+  } => {
+    const pending = transportResume;
+    if (!pending || pending.state !== 'waiting') return { kind: 'none', reason: pending?.reason ?? null };
+    const decline = (reason: string) => ({ kind: 'decline' as const, reason });
+    const wait = (reason: string) => ({ kind: 'wait' as const, reason });
+    if (stopped || shutdownRequested) return decline('worker se ukončuje');
+    if (gate.killSwitch) return decline('kill switch');
+    if (gate.armed) return decline('kopírka už je zapnutá');
+    if (lastDisarm && lastDisarm.at !== pending.disarmAt) return decline('kopírka se mezitím vypnula z jiného důvodu');
+    if (now >= pending.armExpiresAt) return decline('vypršelo okno původního zapnutí');
+    if (currentManualRecovery || armPreparationIncidentRequiresRecovery) return decline('po výpadku vznikl incident');
+    if (currentRuntime().state.safety.managementOnly) return decline('kopírka je v režimu správy otevřených kopií');
+    if (armPreparationConfiguration() !== pending.configuration) return decline('změnila se konfigurace skupiny');
+    if (transportResumeLeaderStats(now) !== pending.leaderStats) return decline('leader během výpadku obchodoval');
+    if (!gate.connected) return wait('čeká na obnovu spojení s brokerem');
+    if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
+      || reconciliationRequestsPending > 0) return wait('ověřuje účty u brokera');
+    if (lastError) return wait('čeká na čistou kontrolu po výpadku');
+    if (!hasFreshArmPreparation()) return wait('čeká na čerstvou kontrolu pozic');
+    if (lastPreflightLeaderOrderActivityAt == null) {
+      return decline('nejde prokázat, že leader během výpadku neobchodoval');
+    }
+    if (lastPreflightLeaderOrderActivityAt >= pending.disarmAt - TRANSPORT_RESUME_ORDER_SKEW_MS) {
+      return decline('leader během výpadku zadal příkaz');
+    }
+    return { kind: 'ready', reason: null };
   };
 
   const prepareArm = (refresh = false): Promise<void> => {
@@ -12564,11 +12709,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         pendingReadOnlyConnectionRecovery = true;
       }
       if (!event.connected && wasArmed) {
-        recordDisarm(
+        const transportDisarm = recordDisarm(
           'transport',
           'Spojení k brokerovi bylo přerušeno',
           groupIsFlat() ? 'flat' : 'unknown',
         );
+        beginTransportResume(transportDisarm.at);
       }
       source.connection(event.connected);
       gate = {
@@ -15469,6 +15615,135 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
   });
 
+  /** Ruční i automatické zapnutí sdílí přesně tytéž brány (INV-ARM-01). */
+  const armCore = ({ shadowMode = false, ttlMs, requirePreparation = false }: {
+    shadowMode?: boolean; ttlMs?: number; requirePreparation?: boolean;
+  } = {}): void => {
+      if (stopped) throw new Error('Copier runtime is stopped');
+    if (shutdownRequested) throw new Error('Copier runtime se právě bezpečně ukončuje');
+    const processorRecovery = processor.recoveryStatus();
+    if (processorRecovery.state !== 'ready') {
+      throw new Error(
+        `Copier nelze armovat: durable reload processoru není dokončen (${processorRecovery.reason})`,
+      );
+    }
+    if (startupGroupRepair) {
+      throw new Error(
+        `Copier nelze armovat: uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); nejdřív je odeber v editoru skupiny`,
+      );
+    }
+    if (startupMissingLeaderRoute) throw new Error(`Copier nelze armovat: starý leader nemá OAuth route (${startupMissingLeaderRoute.message})`);
+    if (gate.killSwitch) throw new Error('Copier nelze armovat: kill switch je aktivní');
+    if (ttlMs != null && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
+      throw new Error('ARM TTL musí být kladný počet milisekund');
+    }
+    const now = clock();
+    if (requirePreparation && !hasFreshArmPreparation()) {
+      throw new Error('ARM blokován: předběžné ověření bylo zneplatněno');
+    }
+    const startedNewRiskSession = rollRiskSessionMemoryIfExpired(now);
+    if (!shadowMode) assertVerifiedArmRisk(now);
+    if (!group.enabled) throw new Error('Copier nelze armovat: skupina je vypnutá');
+    if (!gate.connected) throw new Error('Copier nelze armovat bez dokončeného broker syncu');
+    if (hasStuckOutbox()) throw new Error('Copier má nevyřešený outbox');
+    if (gate.divergentAccounts.size > 0) throw new Error('Pozice leader/follower se rozcházejí');
+    if (workingOrderAccounts.size > 0) throw new Error('Před ARM musí být všechny účty bez pracovních příkazů');
+    if (source.needsReconciliation()) {
+      throw new Error('Po reconnectu je nutná kontrola pozic; před ARM proveď kontrolu pozic');
+    }
+    const safety = currentRuntime().state.safety;
+    if (!shadowMode && safety.managementOnly) {
+      throw new Error('ARM blokován: kopírka je v režimu správy otevřených kopií; po flat proveď Kontrolu pozic');
+    }
+    if (!shadowMode && currentDailyStats(now).unconfirmedFlatLots?.length) {
+      throw new Error('ARM blokován: nepotvrzený výsledek uzavření leadera v této session; ověř close fills a denní risk');
+    }
+    if (!shadowMode && now < safety.dayLockUntil) {
+      throw new Error(`ARM blokován denním lockem: ${safety.dayLockReason ?? 'risk lock'}`);
+    }
+    const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
+    if (!shadowMode && tradingWindow.enabled
+      && tradingWindowStateAt(tradingWindow, now) !== 'inside') {
+      throw new Error(
+        `ARM blokován mimo obchodní okno ${formatTradingWindows(tradingWindow)} (${tradingWindow.timeZone})`,
+      );
+    }
+    if (!shadowMode && now < safety.entryCooldownUntil) {
+      const remainingMin = Math.ceil((safety.entryCooldownUntil - now) / 60_000);
+      throw new Error(`ARM blokován anti-revenge cooldownem ještě ${remainingMin} min`);
+    }
+    if (!shadowMode && !positionCheckComplete) throw new Error('Před live dispatch je nutné potvrdit kontrolu pozic');
+    const ineligible = currentIneligibleAccounts();
+    if (!shadowMode) {
+      const armAccountIds = [
+        group.leaderAccountId,
+        ...group.followers
+          .filter(follower => !ineligible.has(follower.accountId) && !activeFollowerCut(follower.accountId, now))
+          // Ručně vypnutý follower s cizí expozicí („Zapnout bez tohoto účtu“).
+          .filter(follower => !excludedForeignFollowerIds().has(follower.accountId))
+          .map(follower => follower.accountId),
+      ];
+      const allArmAccountsAuthoritativelyFlat = armAccountIds.every(accountId => {
+        const positions = positionsByAccount.get(accountId);
+        return positions != null && [...positions.values()].every(quantity => quantity === 0);
+      });
+      if (!allArmAccountsAuthoritativelyFlat) {
+        throw new Error(
+          'Před ARM musí být všechny zapojené účty flat; otevřený obchod se nikdy automaticky nepřebírá ani nedorovnává',
+        );
+      }
+    }
+    const leaderReason = ineligible.get(group.leaderAccountId);
+    if (leaderReason) throw new Error(`Leader účet není způsobilý pro nové vstupy: ${leaderReason}`);
+    if (!shadowMode) {
+      const participatingFollowers = group.followers.filter(follower =>
+        follower.enabled !== false && follower.mode !== 'off'
+        && !ineligible.has(follower.accountId)
+        && !activeFollowerCut(follower.accountId, now));
+      if (participatingFollowers.length === 0) {
+        throw new Error('ARM blokován: skupina nemá žádný způsobilý follower účet');
+      }
+    }
+    // Kratší z limitů vyhrává: session TTL nesmí ARM prodloužit za výchozí strop.
+    const armTtlMs = ttlMs != null ? Math.min(ttlMs, defaultArmTtlMs) : defaultArmTtlMs;
+    safetyGeneration += 1;
+    tradeEpochGeneration += 1;
+    gate = { ...gate, armed: true, armedAt: now, now, shadowMode, armTtlMs };
+    if (!shadowMode && sessionArmedAt <= 0) {
+      sessionArmedAt = now;
+      const firstLiveArmAt = now;
+      eventTail = eventTail
+        .then(async () => {
+          if (startedNewRiskSession) await ensureDailySession(firstLiveArmAt);
+          // `ensureDailySession` nuluje starou session; marker tohoto
+          // úspěšného ARM proto patří do téhož navazujícího commitu.
+          sessionArmedAt = firstLiveArmAt;
+          await persistRiskSafety();
+        })
+        .catch(reason => failClosed(reason, { autoClose: false }));
+    } else if (startedNewRiskSession) {
+      // Shadow ARM marker nezakládá, ale reset nové session musí být
+      // stejně durable dřív, než se zpracuje další broker event.
+      eventTail = eventTail
+        .then(() => ensureDailySession(now).then(() => undefined))
+        .catch(reason => failClosed(reason, { autoClose: false }));
+    }
+    if (requirePreparation) {
+      // Enforce the verified risk limits immediately, before newly queued
+      // leader events, without another REST round-trip. Merely deferring
+      // the old forced poll would leave cuts unenforced until a heartbeat.
+      eventTail = eventTail.then(() => applyAccountRiskPoll(
+        [], currentDailyStats(clock()).sessionEndAt, [],
+      )).catch(reason => failClosed(reason, { autoClose: false }));
+    } else scheduleAccountRiskPoll(
+      [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)], true,
+    );
+    lastResumeOffer = null;
+    // Nová epizoda: ARM prošel všemi branami (flat, žádný stuck outbox),
+    // takže počítadlo nouzových zavření začíná znovu.
+    autoCloseEpisodeAttempts = 0;
+  };
+
   return {
     maintenanceRestartBlocker() {
       return readOnlyRecoveryBlocker() ?? this.connectionRenewalBlocker();
@@ -15497,130 +15772,44 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       );
       scheduleArmPreparation();
     },
-    arm({ shadowMode = false, ttlMs, requirePreparation = false } = {}) {
-      if (stopped) throw new Error('Copier runtime is stopped');
-      if (shutdownRequested) throw new Error('Copier runtime se právě bezpečně ukončuje');
-      const processorRecovery = processor.recoveryStatus();
-      if (processorRecovery.state !== 'ready') {
-        throw new Error(
-          `Copier nelze armovat: durable reload processoru není dokončen (${processorRecovery.reason})`,
-        );
+    cancelTransportResume(reason) {
+      declineTransportResume(reason);
+    },
+    checkTransportResume() {
+      const result = evaluateTransportResume();
+      if (result.kind === 'decline' && result.reason) declineTransportResume(result.reason);
+      return { ...result, disarmAt: transportResume?.disarmAt ?? null };
+    },
+    arm({ shadowMode = false, ttlMs, requirePreparation = false, autoResume } = {}) {
+      if (!autoResume) {
+        armCore({ shadowMode, ttlMs, requirePreparation });
+        // Ruční ON (nebo shadow) ukončuje případnou epizodu výpadku.
+        transportResume = null;
+        return;
       }
-      if (startupGroupRepair) {
-        throw new Error(
-          `Copier nelze armovat: uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); nejdřív je odeber v editoru skupiny`,
-        );
+      // Automatické pokračování: jen přesně tato epizoda, jen ve stavu
+      // `ready`, vždy s přípravou a nikdy déle než původní zapnutí.
+      const pending = transportResume;
+      const check = evaluateTransportResume();
+      if (!pending || pending.disarmAt !== autoResume.disarmAt || check.kind !== 'ready' || shadowMode || !requirePreparation) {
+        const reason = !pending || pending.disarmAt !== autoResume.disarmAt
+          ? 'epizoda výpadku neodpovídá'
+          : check.reason ?? 'chybí příprava zapnutí';
+        if (check.kind === 'decline' || check.kind === 'ready') declineTransportResume(reason);
+        throw new Error(`Automatické pokračování odmítnuto: ${reason}`);
       }
-      if (startupMissingLeaderRoute) throw new Error(`Copier nelze armovat: starý leader nemá OAuth route (${startupMissingLeaderRoute.message})`);
-      if (gate.killSwitch) throw new Error('Copier nelze armovat: kill switch je aktivní');
-      if (ttlMs != null && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
-        throw new Error('ARM TTL musí být kladný počet milisekund');
+      const remaining = pending.armExpiresAt - clock();
+      try {
+        armCore({ shadowMode: false, ttlMs: Math.min(ttlMs ?? remaining, remaining), requirePreparation: true });
+      } catch (reason) {
+        declineTransportResume(errorOf(reason).message);
+        throw reason;
       }
-      const now = clock();
-      if (requirePreparation && !hasFreshArmPreparation()) {
-        throw new Error('ARM blokován: předběžné ověření bylo zneplatněno');
-      }
-      const startedNewRiskSession = rollRiskSessionMemoryIfExpired(now);
-      if (!shadowMode) assertVerifiedArmRisk(now);
-      if (!group.enabled) throw new Error('Copier nelze armovat: skupina je vypnutá');
-      if (!gate.connected) throw new Error('Copier nelze armovat bez dokončeného broker syncu');
-      if (hasStuckOutbox()) throw new Error('Copier má nevyřešený outbox');
-      if (gate.divergentAccounts.size > 0) throw new Error('Pozice leader/follower se rozcházejí');
-      if (workingOrderAccounts.size > 0) throw new Error('Před ARM musí být všechny účty bez pracovních příkazů');
-      if (source.needsReconciliation()) {
-        throw new Error('Po reconnectu je nutná kontrola pozic; před ARM proveď kontrolu pozic');
-      }
-      const safety = currentRuntime().state.safety;
-      if (!shadowMode && safety.managementOnly) {
-        throw new Error('ARM blokován: kopírka je v režimu správy otevřených kopií; po flat proveď Kontrolu pozic');
-      }
-      if (!shadowMode && currentDailyStats(now).unconfirmedFlatLots?.length) {
-        throw new Error('ARM blokován: nepotvrzený výsledek uzavření leadera v této session; ověř close fills a denní risk');
-      }
-      if (!shadowMode && now < safety.dayLockUntil) {
-        throw new Error(`ARM blokován denním lockem: ${safety.dayLockReason ?? 'risk lock'}`);
-      }
-      const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
-      if (!shadowMode && tradingWindow.enabled
-        && tradingWindowStateAt(tradingWindow, now) !== 'inside') {
-        throw new Error(
-          `ARM blokován mimo obchodní okno ${formatTradingWindows(tradingWindow)} (${tradingWindow.timeZone})`,
-        );
-      }
-      if (!shadowMode && now < safety.entryCooldownUntil) {
-        const remainingMin = Math.ceil((safety.entryCooldownUntil - now) / 60_000);
-        throw new Error(`ARM blokován anti-revenge cooldownem ještě ${remainingMin} min`);
-      }
-      if (!shadowMode && !positionCheckComplete) throw new Error('Před live dispatch je nutné potvrdit kontrolu pozic');
-      const ineligible = currentIneligibleAccounts();
-      if (!shadowMode) {
-        const armAccountIds = [
-          group.leaderAccountId,
-          ...group.followers
-            .filter(follower => !ineligible.has(follower.accountId) && !activeFollowerCut(follower.accountId, now))
-            // Ručně vypnutý follower s cizí expozicí („Zapnout bez tohoto účtu“).
-            .filter(follower => !excludedForeignFollowerIds().has(follower.accountId))
-            .map(follower => follower.accountId),
-        ];
-        const allArmAccountsAuthoritativelyFlat = armAccountIds.every(accountId => {
-          const positions = positionsByAccount.get(accountId);
-          return positions != null && [...positions.values()].every(quantity => quantity === 0);
-        });
-        if (!allArmAccountsAuthoritativelyFlat) {
-          throw new Error(
-            'Před ARM musí být všechny zapojené účty flat; otevřený obchod se nikdy automaticky nepřebírá ani nedorovnává',
-          );
-        }
-      }
-      const leaderReason = ineligible.get(group.leaderAccountId);
-      if (leaderReason) throw new Error(`Leader účet není způsobilý pro nové vstupy: ${leaderReason}`);
-      if (!shadowMode) {
-        const participatingFollowers = group.followers.filter(follower =>
-          follower.enabled !== false && follower.mode !== 'off'
-          && !ineligible.has(follower.accountId)
-          && !activeFollowerCut(follower.accountId, now));
-        if (participatingFollowers.length === 0) {
-          throw new Error('ARM blokován: skupina nemá žádný způsobilý follower účet');
-        }
-      }
-      // Kratší z limitů vyhrává: session TTL nesmí ARM prodloužit za výchozí strop.
-      const armTtlMs = ttlMs != null ? Math.min(ttlMs, defaultArmTtlMs) : defaultArmTtlMs;
-      safetyGeneration += 1;
-      tradeEpochGeneration += 1;
-      gate = { ...gate, armed: true, armedAt: now, now, shadowMode, armTtlMs };
-      if (!shadowMode && sessionArmedAt <= 0) {
-        sessionArmedAt = now;
-        const firstLiveArmAt = now;
-        eventTail = eventTail
-          .then(async () => {
-            if (startedNewRiskSession) await ensureDailySession(firstLiveArmAt);
-            // `ensureDailySession` nuluje starou session; marker tohoto
-            // úspěšného ARM proto patří do téhož navazujícího commitu.
-            sessionArmedAt = firstLiveArmAt;
-            await persistRiskSafety();
-          })
-          .catch(reason => failClosed(reason, { autoClose: false }));
-      } else if (startedNewRiskSession) {
-        // Shadow ARM marker nezakládá, ale reset nové session musí být
-        // stejně durable dřív, než se zpracuje další broker event.
-        eventTail = eventTail
-          .then(() => ensureDailySession(now).then(() => undefined))
-          .catch(reason => failClosed(reason, { autoClose: false }));
-      }
-      if (requirePreparation) {
-        // Enforce the verified risk limits immediately, before newly queued
-        // leader events, without another REST round-trip. Merely deferring
-        // the old forced poll would leave cuts unenforced until a heartbeat.
-        eventTail = eventTail.then(() => applyAccountRiskPoll(
-          [], currentDailyStats(clock()).sessionEndAt, [],
-        )).catch(reason => failClosed(reason, { autoClose: false }));
-      } else scheduleAccountRiskPoll(
-        [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)], true,
-      );
-      lastResumeOffer = null;
-      // Nová epizoda: ARM prošel všemi branami (flat, žádný stuck outbox),
-      // takže počítadlo nouzových zavření začíná znovu.
-      autoCloseEpisodeAttempts = 0;
+      transportResume = { ...pending, state: 'resumed', reason: null, at: clock() };
+      options.onAudit?.([{
+        at: clock(), leaderEventId: `auto-resume:${pending.disarmAt}`, kind: 'recovered',
+        reason: 'kopírka po výpadku spojení sama pokračuje — účty ověřené flat bez příkazů',
+      }]);
     },
     beginShutdown() {
       if (shutdownPromise) return shutdownPromise;
@@ -15644,6 +15833,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return shutdownPromise;
     },
     disarm(trigger = 'manual') {
+      // I za už vypnuté kopírky (výpadek): ruční/konfigurační DISARM ruší
+      // čekající automatické pokračování.
+      declineTransportResume(trigger === 'manual' ? 'kopírka byla ručně vypnuta' : `vypnutí (${trigger})`);
       safetyGeneration += 1;
       armPreparationLastAttemptAt = -Infinity;
       const wasArmed = gate.armed;
@@ -15670,6 +15862,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       scheduleCopierSettlementSweep();
     },
     engageKillSwitch(reason = 'Ruční nouzové zastavení') {
+      declineTransportResume('kill switch');
       if (stopped) return;
       const wasArmed = gate.armed;
       invalidateReconciliation();
@@ -15693,6 +15886,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       options.onError?.(lastError);
     },
     reportHostSleep(incident) {
+      declineTransportResume('Mac byl uspaný');
       if (stopped) return;
       if (!Number.isFinite(incident.unresponsiveSince)
         || !Number.isFinite(incident.detectedAt)
@@ -16563,6 +16757,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         revision: current.revision,
         lastSequence: current.state.lastSequence,
         groupFlat: allGroupAccountsFlat(),
+        transportResume: transportResume
+          ? (() => {
+            const check = evaluateTransportResume(statusNow);
+            const phase = transportResume.state !== 'waiting'
+              ? transportResume.state
+              : check.kind === 'ready' ? 'ready' : check.kind === 'decline' ? 'declined' : 'waiting';
+            return {
+              disarmAt: transportResume.disarmAt,
+              armExpiresAt: transportResume.armExpiresAt,
+              phase,
+              reason: transportResume.state === 'waiting' ? check.reason : transportResume.reason,
+              at: transportResume.at,
+            };
+          })()
+          : null,
         entryCooldownUntil: current.state.safety.entryCooldownUntil,
         dayLockUntil: current.state.safety.dayLockUntil,
         dayLockReason: current.state.safety.dayLockReason ?? null,

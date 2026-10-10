@@ -83,6 +83,9 @@ const AUTO_CLOSE_MARKER_KEY = 'state:auto-close';
 /** Marker: `detail` nese `at` poslední ohlášené resume nabídky. */
 const RESUME_OFFER_MARKER_KEY = 'state:resume-offer';
 
+/** Výsledek automatického pokračování po výpadku: `${disarmAt}:${phase}`. */
+const AUTO_RESUME_MARKER_KEY = 'state:auto-resume';
+
 /** Interní marker: `detail` nese `at` posledního odeslaného copy eventu. */
 export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
 
@@ -643,11 +646,34 @@ export function evaluateCopierIncidents(options: {
       });
     }
 
+    // --- Automatické pokračování po výpadku (10. 10. 2026): výsledek jednou
+    // per epizoda. Jen u workeru, který funkci opravdu má zapnutou.
+    const capabilities = Array.isArray(runtime.status?.capabilities) ? runtime.status.capabilities as unknown[] : [];
+    const resume = status.transportResume as { disarmAt?: unknown; phase?: unknown; reason?: unknown } | null | undefined;
+    const resumeDisarmAt = asNumber(resume?.disarmAt);
+    const resumeAutoResumed = capabilities.includes('transport-auto-resume-v1')
+      && resume?.phase === 'resumed';
+    if (capabilities.includes('transport-auto-resume-v1') && resumeDisarmAt > 0
+      && (resume?.phase === 'resumed' || resume?.phase === 'declined')) {
+      const detail = `${resumeDisarmAt}:${String(resume.phase)}`;
+      const resumeMarker = activeState(userId, deviceId, AUTO_RESUME_MARKER_KEY);
+      if (resumeMarker?.detail !== detail) {
+        notifications.push({
+          userId, deviceId, incidentKey: 'auto-resume', kind: 'opened',
+          ...(resume.phase === 'resumed'
+            ? { title: 'Kopírka pokračuje', body: 'Spojení s brokerem je zpět, účty ověřené flat bez příkazů — kopírování jede dál.' }
+            : { title: 'Kopírka po výpadku nepokračuje', body: `${asText(resume.reason) ?? 'Kontrola nevyšla'}. Zapni ji ručně.` }),
+        });
+        upserts.push({ userId, deviceId, incidentKey: AUTO_RESUME_MARKER_KEY, active: false, detail, notified: true });
+      }
+    }
+
     // --- Hrany DISARMED <-> ARMED (jednorázově, bez replaye při bootstrapu)
     // Zajímá nás jen ostrý ARM: shadow nic neposílá, o ten uživatel nepřijde.
     const liveArmed = asBool(status.armed) && status.shadowMode !== true;
     const marker = activeState(userId, deviceId, ARMED_MARKER_KEY);
-    if (marker && marker.active === false && liveArmed) {
+    // Automatické pokračování má vlastní zprávu — bez druhého „ARM zapnut“.
+    if (marker && marker.active === false && liveArmed && !resumeAutoResumed) {
       // Stejný text jako okamžitý relay push; snapshotHealth leží mimo
       // controller část heartbeatu, proto se bere z celého runtime statusu.
       notifications.push({

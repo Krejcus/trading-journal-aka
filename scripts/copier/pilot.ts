@@ -1414,6 +1414,9 @@ async function runLocalAgent(
       controller,
       group,
       port: Number(portValue),
+      // Automatické pokračování po výpadku spojení (10. 10. 2026, rozhodnutí
+      // Filipa). Bez serverové pojistky (relay níže) se stejně nikdy nezapne.
+      autoRearmAfterTransport: process.env.ALPHATRADE_COPIER_AUTO_RESUME !== '0',
       ...(installation ? { installation } : {}),
       devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
       snapshotHealth: () => snapshotHealth,
@@ -1823,6 +1826,7 @@ async function runLocalAgent(
       // vyzvednutí fronty (žádná čekající brzda z telefonu).
       const queueRelay = relay;
       agent.setRemoteQueueProbe?.(() => queueRelay.lastEmptyPollStartedAt());
+      agent.setAutoResumeAdmission?.(since => queueRelay.admitAutoResume(since));
     }
     console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} followers=${group.followers.map(item => `${item.accountId}@${item.multiplier}${item.maxContracts != null ? `@max${item.maxContracts}` : ''}`).join(',')}`);
     console.log('Stav je DISARMED. ARM, Flatten, Flatten All a násobek vyžadují explicitní akci v AlphaTrade LIVE UI.');

@@ -13,6 +13,14 @@ export const supportsCopierFollowerExcludeWithExposure = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY);
 
+/** Worker po výpadku spojení sám pokračuje (10. 10. 2026; jen se serverovou pojistkou). */
+export const COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY = 'transport-auto-resume-v1';
+
+export const supportsCopierTransportAutoResume = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY);
+
 export const supportsCopierIncidentAck = (
   status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
 ): boolean => Array.isArray(status?.capabilities)

@@ -596,3 +596,31 @@ describe('účet mimo synchron (etapa 2, bod 5d)', () => {
     expect(result.notifications.some(item => item.incidentKey === 'account-sync:68356280')).toBe(true);
   });
 });
+
+describe('automatické pokračování po výpadku (10. 10. 2026)', () => {
+  const withResume = (phase: string, capabilities = ['transport-auto-resume-v1'], armed = phase === 'resumed') => runtime({ status: {
+    capabilities,
+    controller: {
+      armed, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null,
+      transportResume: { disarmAt: 1_000, armExpiresAt: 9_000, phase, reason: phase === 'declined' ? 'leader během výpadku obchodoval' : null, at: 2_000 },
+    },
+  } });
+
+  it('pokračování ohlásí jednou a bez druhého „ARM zapnut“', () => {
+    const first = evaluate([withResume('resumed')], [state('state:armed', false)]);
+    expect(first.notifications.map(item => item.incidentKey)).toEqual(['auto-resume']);
+    expect(first.notifications[0].title).toBe('Kopírka pokračuje');
+    const again = evaluate([withResume('resumed')], [state('state:armed', true), { ...state('state:auto-resume', false), detail: '1000:resumed' }]);
+    expect(again.notifications).toHaveLength(0);
+  });
+
+  it('odmítnutí ohlásí s důvodem; bez capability nic', () => {
+    const declined = evaluate([withResume('declined')]);
+    expect(declined.notifications).toContainEqual(expect.objectContaining({
+      incidentKey: 'auto-resume', title: 'Kopírka po výpadku nepokračuje',
+      body: 'leader během výpadku obchodoval. Zapni ji ručně.',
+    }));
+    expect(evaluate([withResume('declined', [])]).notifications.filter(item => item.incidentKey === 'auto-resume')).toHaveLength(0);
+    expect(evaluate([withResume('waiting')]).notifications.filter(item => item.incidentKey === 'auto-resume')).toHaveLength(0);
+  });
+});

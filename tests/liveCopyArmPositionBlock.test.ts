@@ -148,3 +148,20 @@ describe('Zapnout bez tohoto účtu (10. 10. 2026)', () => {
     expect(block).toEqual([expect.objectContaining({ accountId: 2, exclusion: { allowed: true, reason: null } })]);
   });
 });
+
+describe('panel automatického pokračování po výpadku', () => {
+  it('čekání, výsledek i odmítnutí říkají pravdu', async () => {
+    const { CopierAutoResumePanel } = await import('../components/LiveCopyTradeOverview');
+    const base = { disarmAt: 1, armExpiresAt: Date.parse('2026-10-10T20:00:00Z'), reason: null, at: Date.now() };
+    const waiting = renderToStaticMarkup(React.createElement(CopierAutoResumePanel, { resume: { ...base, phase: 'waiting', reason: 'čeká na obnovu spojení s brokerem' } }));
+    expect(waiting).toContain('Po výpadku spojení kopírka pokračuje sama');
+    expect(waiting).toContain('Vypnutím to zrušíš.');
+    expect(waiting).toContain('Teď: čeká na obnovu spojení s brokerem.');
+    const resumed = renderToStaticMarkup(React.createElement(CopierAutoResumePanel, { resume: { ...base, phase: 'resumed' } }));
+    expect(resumed).toContain('Kopírka po výpadku sama pokračuje');
+    const declined = renderToStaticMarkup(React.createElement(CopierAutoResumePanel, { resume: { ...base, phase: 'declined', reason: 'přišla brzda' } }));
+    expect(declined).toContain('přišla brzda. Zapni ji ručně.');
+    const old = renderToStaticMarkup(React.createElement(CopierAutoResumePanel, { resume: { ...base, phase: 'resumed', at: Date.now() - 60 * 60_000 } }));
+    expect(old).toBe('');
+  });
+});

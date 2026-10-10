@@ -836,6 +836,40 @@ const newestBrakeCreatedAt = async (db: SupabaseClient, deviceId: string): Promi
   return typeof data?.created_at === 'string' ? data.created_at : null;
 };
 
+/** Rezerva na rozdíl hodin Macu a serveru — chyba vede jen k odmítnutí. */
+export const AUTO_RESUME_BRAKE_MARGIN_MS = 60_000;
+
+/**
+ * Serverová pojistka automatického pokračování po výpadku (10. 10. 2026):
+ * od posledního ručního zapnutí nesmí existovat žádná brzda (v jakémkoli
+ * stavu) a ve frontě nesmí čekat žádný neexpirovaný příkaz. Jinak by brzda
+ * z telefonu poslaná během výpadku doběhla až po automatickém zapnutí.
+ */
+export async function admitCopierAutoResume(options: {
+  db: SupabaseClient; deviceId: string; since: number; now?: number;
+}): Promise<{ admitted: boolean; reason: string | null }> {
+  if (!Number.isFinite(options.since) || options.since <= 0) return { admitted: false, reason: 'invalid-since' };
+  const sinceIso = new Date(options.since - AUTO_RESUME_BRAKE_MARGIN_MS).toISOString();
+  const brakes = await options.db.from('tradovate_copier_commands')
+    .select('id')
+    .eq('device_id', options.deviceId)
+    .in('command_type', [...BRAKE_COMMAND_TYPES])
+    .gte('created_at', sinceIso)
+    .limit(1);
+  if (brakes.error) throw new Error(`copier-relay-auto-resume-brake-lookup-failed: ${brakes.error.message}`);
+  if ((brakes.data ?? []).length > 0) return { admitted: false, reason: 'od posledního zapnutí přišla brzda' };
+  const nowIso = new Date(options.now ?? Date.now()).toISOString();
+  const pending = await options.db.from('tradovate_copier_commands')
+    .select('id')
+    .eq('device_id', options.deviceId)
+    .in('status', ['pending', 'claimed'])
+    .gt('expires_at', nowIso)
+    .limit(1);
+  if (pending.error) throw new Error(`copier-relay-auto-resume-queue-lookup-failed: ${pending.error.message}`);
+  if ((pending.data ?? []).length > 0) return { admitted: false, reason: 've frontě čeká příkaz' };
+  return { admitted: true, reason: null };
+}
+
 const IN_FLIGHT_FLATTEN_WINDOW_MS = 5 * 60_000;
 
 /** Čekající (neexpirovaný) nebo právě vykonávaný Flatten stejného cíle, k němuž se nový požadavek přichytí. */

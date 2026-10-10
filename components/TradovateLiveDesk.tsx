@@ -102,7 +102,7 @@ import {
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
-import { supportsCopierFollowerExcludeWithExposure, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { supportsCopierFollowerExcludeWithExposure, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
 import {
@@ -1380,6 +1380,8 @@ acceptAgentStatus((await executeAgent({
               followerParticipation={agentStatus?.controller.followerParticipation ?? []}
               accountSyncPauses={agentStatus?.controller.accountSyncPauses ?? []}
               followerExclusionSupported={supportsCopierFollowerExcludeWithExposure(agentStatus)}
+              transportResume={agentStatus?.controller.transportResume ?? null}
+              transportResumeSupported={supportsCopierTransportAutoResume(agentStatus)}
               accountRisk={agentStatus?.controller.accountRisk ?? []}
               onOpenRisk={() => navigateToTab('risk')}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}

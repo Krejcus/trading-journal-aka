@@ -47,6 +47,11 @@ export interface MacCopierCommandRelay {
    * něj prokáže, že ve frontě nečeká brzda z telefonu.
    */
   lastEmptyPollStartedAt(): number;
+  /**
+   * Serverová pojistka automatického pokračování: od `since` žádná brzda
+   * a prázdná fronta. Chyba = nepokračovat.
+   */
+  admitAutoResume(since: number): Promise<{ admitted: boolean; reason: string | null }>;
   close(): Promise<void>;
 }
 
@@ -353,6 +358,13 @@ export function startMacCopierCommandRelay(options: {
   return {
     commandQueueIdleSince: () => (deliveryBusy || !delivery ? null : idleProofSince),
     lastEmptyPollStartedAt: () => lastEmptyPollStartedAt,
+    async admitAutoResume(since: number) {
+      const body = await request({ action: 'auto-resume-admit', since }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
+      return {
+        admitted: body.admitted === true,
+        reason: typeof body.reason === 'string' ? body.reason : null,
+      };
+    },
     nudgeCopyEvents() {
       copyEventsRevision += 1;
       publishBackground();

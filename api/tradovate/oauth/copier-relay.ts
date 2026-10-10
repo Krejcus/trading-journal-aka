@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierDevice.js';
 import {
+  admitCopierAutoResume,
   claimTradovateCopierCommandV2, completeTradovateCopierCommandV2,
   claimTradovateCopierCommand, completeTradovateCopierCommand, enqueueTradovateCopierCommand,
   copierRelayValidationErrorStatus,
@@ -48,6 +49,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization,
         ...(['poll-v2', 'complete-v2'].includes(action) ? { touchLastUsed: false } : {}),
       });
+      if (action === 'auto-resume-admit') {
+        const since = Number(req.body?.since);
+        const admission = await admitCopierAutoResume({ db, deviceId: device.id, since });
+        return res.status(200).json(admission);
+      }
       if (action === 'poll-v2') {
         const deliveryId = String(req.body?.deliveryId ?? '');
         if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId)) return res.status(400).json({ error: 'invalid-delivery-id' });

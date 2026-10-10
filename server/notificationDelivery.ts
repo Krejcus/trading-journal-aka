@@ -35,7 +35,7 @@ export function copierEventDeliveryKey(input: { deviceId: string; eventId?: stri
 export function markerForIncident(key: string): string {
   if (key === 'arm-started' || key === 'arm-ended') return 'state:armed';
   if (key === 'cooldown-ended') return 'state:cooldown';
-  if (['day-lock', 'cooldown', 'auto-close', 'resume-offer'].includes(key)) return `state:${key}`;
+  if (['day-lock', 'cooldown', 'auto-close', 'resume-offer', 'auto-resume'].includes(key)) return `state:${key}`;
   return key;
 }
 export function incidentDeliveryKey(input: { deviceId: string; key: string; kind: string }, previous?: VersionedAlertState): string {

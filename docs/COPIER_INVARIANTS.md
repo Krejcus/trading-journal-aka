@@ -271,7 +271,8 @@ existující ochranu.
   bootstrapem, který opět startuje DISARMED a vyžaduje kontrolu.
 - Hlídá test: `tests/copierRuntimeController.test.ts`,
   `tests/copierChaosScenarios.test.ts`, `tests/localCopierExecutionAgent.test.ts`.
-- Nikdy: Nepřidávat „unlock kill“ za běhu ani automatický re-ARM po reconnectu.
+- Nikdy: Nepřidávat „unlock kill“ za běhu ani automatický re-ARM po reconnectu
+  mimo INV-RECON-03 (kill switch ho vždy ruší).
   `dispatchBroker` smí přes kill pustit jen úzký `terminalCancel` hlídaný
   `cancelLifecycleHaltReason`; ruční Flatten je samostatná výslovná safety
   akce. Ani jedna výjimka nesmí vytvořit nebo zvětšit expozici.
@@ -337,7 +338,7 @@ existující ochranu.
 
 ### Kontrola pozic a reconciliation
 
-### INV-RECON-01: Reconnect, restart a invalidace vyžadují novou autoritativní kontrolu; reconnect nikdy sám neARMuje
+### INV-RECON-01: Reconnect, restart a invalidace vyžadují novou autoritativní kontrolu; reconnect nikdy sám neARMuje (jedinou výjimkou je INV-RECON-03)
 
 - Proč: Události mohly během mezery chybět a historický model nemusí odpovídat
   venue.
@@ -348,7 +349,36 @@ existující ochranu.
   `tests/copierChaosScenarios.test.ts`, `tests/copierGraceReconnectD1.test.ts`.
 - Nikdy: Nepovažovat `connected=true` nebo úspěšný WS sync za povolení k ARM.
 - Bezpečné změny vs. nebezpečné: Bezpečné je po reconnectu automaticky udělat
-  read-only kontrolu a zůstat OFF. Nebezpečné je obnovit minulý ON stav.
+  read-only kontrolu a zůstat OFF. Nebezpečné je obnovit minulý ON stav —
+  kromě úzké cesty INV-RECON-03, která stejně projde všemi branami ON.
+
+### INV-RECON-03: Automatické pokračování po výpadku spojení (10. 10. 2026, rozhodnutí Filipa)
+
+- Proč: Krátký výpadek ve flat stavu nemá znamenat, že kopírka zbytek dne
+  stojí, dokud si toho člověk nevšimne.
+- Vynucuje: controller `transportResume` (jen v paměti; restart ho zahodí),
+  `evaluateTransportResume`, `arm({ autoResume })`; agent `autoRearmTick` +
+  `autoResumeAttempt`; serverová pojistka `admitCopierAutoResume`
+  (`server/tradovateCopierCommandRelay.ts`, akce relay `auto-resume-admit`).
+- Podmínky (všechny): disarm triggerem `transport` z živého ARM; skupina byla
+  při výpadku flat bez příkazů (zapojené účty), bez incidentu a mimo
+  managementOnly; mezitím žádné jiné vypnutí, ruční DISARM, kill switch,
+  uspání Macu, incident ani změna konfigurace; leader v mezeře neobchodoval
+  (denní statistiky beze změny a žádný příkaz leadera s časem ≥ výpadek − 5 s;
+  bez čitelného času = odmítnout); čerstvá read-only příprava
+  (`hasFreshArmPreparation`), nikdy veřejné `reconcile()`; TTL nejvýš do
+  konce původního zapnutí; agent: stejná brzdová epocha a skupina jako při
+  ručním ON, tatáž session, prázdné vyzvednutí relay fronty po reconnectu,
+  grace 15 s, server potvrdí, že od ručního ON (−60 s rezerva) nepřišla žádná
+  brzda a nic nečeká; jeden pokus za epizodu; nejvýš 2 automatická pokračování
+  na jedno ruční ON. Zapnutí jde přes `armCore` se všemi branami INV-ARM-01.
+- Otevřený obchod při výpadku = nepokračuje (fáze 1); kopie drží SL/TP u
+  brokera, zapíná člověk po flat.
+- Hlídá test: `tests/copierTransportAutoResume.test.ts`,
+  `tests/copierArmSelfCheck.test.ts`, `tests/copierAutoResumeAdmission.test.ts`,
+  `tests/copierIncidentWatchdog.test.ts`.
+- Nikdy: Opakovat pokus, prodloužit TTL, pokračovat po restartu workeru,
+  pokračovat bez serverové pojistky, mazat incident nebo managementOnly.
 
 ### INV-RECON-02: Veřejné `reconcile()` je auditovaný recovery úkon; interní kontroly nesmí mazat incident
 

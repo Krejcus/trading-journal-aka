@@ -468,6 +468,9 @@ interface Props {
   accountSyncPauses?: CopierControllerStatus['accountSyncPauses'];
   /** Worker umí „Zapnout bez tohoto účtu“ (follower-exclude-exposure-v1). */
   followerExclusionSupported?: boolean;
+  /** Automatické pokračování po výpadku (jen s capability transport-auto-resume-v1). */
+  transportResume?: CopierControllerStatus['transportResume'];
+  transportResumeSupported?: boolean;
   accountRisk?: CopierControllerStatus['accountRisk'];
   onOpenRisk?: () => void;
   /** Konec anti-revenge cooldownu (epoch ms); 0 = neběží. */
@@ -792,6 +795,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   followerParticipation = [],
   accountSyncPauses = [],
   followerExclusionSupported = false,
+  transportResume = null,
+  transportResumeSupported = false,
   accountRisk = [],
   onOpenRisk,
   cooldownUntil = 0,
@@ -2190,6 +2195,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   tightenOnly={tightenOnly}
                   cooldownPanel={<>
                     {transitionGroupId === group.id && copierTransition === 'connecting' ? <CopierArmProgressPanel /> : null}
+                    {selected && transportResumeSupported && transportResume ? <CopierAutoResumePanel resume={transportResume} /> : null}
                     {selected ? <>{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</> : null}
                   </>}
                   disarmPanel={selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual'
@@ -2321,7 +2327,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                       {transitionGroupId === group.id && copierTransition === 'connecting' ? (
                         <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0"><CopierArmProgressPanel /></td></tr>
                       ) : null}
-                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</td></tr> : null}
+                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{transportResumeSupported && transportResume ? <CopierAutoResumePanel resume={transportResume} /> : null}{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</td></tr> : null}
                       <tr
                         aria-hidden={!expanded.has(group.id)}
                       >
@@ -3374,6 +3380,45 @@ export const CopierArmProgressPanel = () => {
       </p>
       <p className="mt-1 text-[11px] leading-snug text-[var(--text-secondary)]">
         Kopírka u brokera ověřuje spojení, pozice a čekající příkazy všech účtů a limity propfirem. Obvykle to trvá pár sekund; když něco nesedí, nic se nezapne a dozvíš se proč.
+      </p>
+    </div>
+  );
+};
+
+/**
+ * Automatické pokračování po výpadku spojení (10. 10. 2026). Bez panelu by
+ * vypnutá kopírka „lhala“ — za chvíli se může sama zapnout.
+ */
+export const CopierAutoResumePanel = ({ resume, now = Date.now() }: {
+  resume: NonNullable<CopierControllerStatus['transportResume']>;
+  now?: number;
+}) => {
+  // Výsledek (pokračovala / nepokračuje) stačí ukazovat chvíli po rozhodnutí.
+  if ((resume.phase === 'resumed' || resume.phase === 'declined') && now - resume.at > 15 * 60_000) return null;
+  const tone = resume.phase === 'resumed'
+    ? 'border-emerald-500/20 bg-emerald-500/[0.06] text-emerald-600'
+    : resume.phase === 'declined'
+      ? 'border-amber-500/25 bg-amber-500/[0.07] text-amber-600'
+      : 'border-blue-500/20 bg-blue-500/[0.06] text-blue-600';
+  const until = formatClockTime(resume.armExpiresAt).slice(0, 5);
+  return (
+    <div role="status" data-testid="copier-auto-resume" className={`border-t px-3 py-2.5 ${tone}`}>
+      <p className="flex items-center gap-1.5 text-[12px] font-black">
+        {resume.phase === 'resumed' ? <CheckCircle2 aria-hidden="true" size={13} />
+          : resume.phase === 'declined' ? <AlertTriangle aria-hidden="true" size={13} />
+            : <RefreshCw aria-hidden="true" size={12} strokeWidth={2.5} className="animate-spin" />}
+        {resume.phase === 'resumed'
+          ? `Kopírka po výpadku sama pokračuje · ${formatClockTime(resume.at)}`
+          : resume.phase === 'declined'
+            ? 'Kopírka po výpadku nepokračuje'
+            : 'Po výpadku spojení kopírka pokračuje sama'}
+      </p>
+      <p className="mt-1 text-[11px] leading-snug text-[var(--text-secondary)]">
+        {resume.phase === 'resumed'
+          ? 'Všechny účty ověřené u brokera flat a bez příkazů.'
+          : resume.phase === 'declined'
+            ? `${resume.reason ?? 'Kontrola nevyšla'}. Zapni ji ručně.`
+            : `Až se spojení vrátí, ověří si všechny účty u brokera a když sedí, zapne se (nejpozději do ${until}). Vypnutím to zrušíš.${resume.reason ? ` Teď: ${resume.reason}.` : ''}`}
       </p>
     </div>
   );
