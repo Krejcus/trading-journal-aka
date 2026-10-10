@@ -5,7 +5,7 @@ import LiveCopierIsland from './LiveCopierIsland';
 import { LiveDayTrigger, LiveDayCardDialog } from './LiveDayCard';
 import { buildLiveDaySummary, liveDayReadAnswered } from '../lib/liveDaySummary';
 import { buildLiveCopierIsland } from '../lib/liveCopierIsland';
-import { copierArmRejection } from '../lib/copierArmPreparation';
+import { copierArmRejection, isArmPositionRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { formatReadAge, isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
 import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
@@ -882,6 +882,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [editorGroup, setEditorGroup] = useState<CopyGroupConfig | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [pendingUnavailableFollowerRemoval, setPendingUnavailableFollowerRemoval] = useState<PendingUnavailableFollowerRemoval | null>(null);
+  /** Bod 5b: zapnutí zablokované otevřenou pozicí/příkazem ve skupině. */
+  const [pendingArmBlockGroupId, setPendingArmBlockGroupId] = useState<string | null>(null);
+  // Po potvrzení (nebo zrušení) zavření účtu se průvodce vrátí s čerstvým výčtem.
+  const reopenArmBlockRef = useRef<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [tableSettingsOpen, setTableSettingsOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -1266,6 +1270,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         : connecting ? 'Copier se nepodařilo připojit.' : 'Copier se nepodařilo odpojit.';
       const affectedGroup = groups.find(group => group.id === groupId)
         ?? (runtimeGroup?.id === groupId ? runtimeGroup : null);
+      // Bod 5b: worker našel pozici/příkaz, který už vidí i appka → průvodce.
+      if (connecting && affectedGroup && isArmPositionRejection(reason)) {
+        const activity = activityForGroup(affectedGroup);
+        if (activity.positionAccounts.length > 0 || activity.workingOrderAccounts.length > 0) {
+          setPendingArmBlockGroupId(affectedGroup.id);
+          return;
+        }
+      }
       setPendingAction({
         title: rejected ? 'Zapnutí kopírky je zablokované' : connecting ? 'Zapnutí kopírky není potvrzené' : 'Vypnutí kopírky není potvrzené',
         detail: rejected ?? `${detail} AlphaTrade nebude pokračovat bez autoritativního potvrzení runtime. Zkontroluj aktuální stav skupiny a akci zopakuj až po ověření.`,
@@ -1390,6 +1402,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         candidate,
         unavailable.leaderAccountId,
       );
+      return;
+    }
+    // Bod 5b: když zapnutí brání jen pozice/příkaz ve vlastní skupině, místo
+    // obecné hlášky ukážeme, na kterých účtech a co s tím jde udělat.
+    if (!powered && validationErrors.length === 0 && candidateActivity
+      && (!currentActivity || currentGroup?.id === candidate.id)) {
+      setPendingArmBlockGroupId(candidate.id);
       return;
     }
     const blocker = copyGroupPowerBlocker({
@@ -1884,6 +1903,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         : { type: 'flatten-account', groupId: group.id, accountId, operationId: manualOperationId() },
     });
   };
+
+  useEffect(() => {
+    if (pendingAction || busyCommand != null || reopenArmBlockRef.current == null) return;
+    setPendingArmBlockGroupId(reopenArmBlockRef.current);
+    reopenArmBlockRef.current = null;
+  }, [pendingAction, busyCommand]);
 
   // Výčet pro potvrzení Flatten All na telefonu se počítá z živých dat při
   // každém renderu, takže se list sám aktualizuje, když se mezitím něco zavře.
@@ -2380,6 +2405,31 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           saving={busyCommand != null || groupSaveBusy}
         />
       )}
+      {pendingArmBlockGroupId && !pendingAction && (() => {
+        const blockGroup = groups.find(group => group.id === pendingArmBlockGroupId)
+          ?? (runtimeGroup?.id === pendingArmBlockGroupId ? runtimeGroup : null);
+        if (!blockGroup) return null;
+        const accounts = buildArmPositionBlock(blockGroup, accountsById, orders, accountId => redactAccountName(
+          accountsById.get(accountId)?.name ?? accountLabel(accountId, blockGroup.id), redactNames, redaction,
+        ));
+        return (
+          <ArmPositionBlockDialogPortal
+            groupName={blockGroup.name}
+            accounts={accounts}
+            busy={busyCommand != null}
+            onClose={() => setPendingArmBlockGroupId(null)}
+            onCloseAccount={accountId => {
+              reopenArmBlockRef.current = blockGroup.id;
+              setPendingArmBlockGroupId(null);
+              requestAccountFlatten(blockGroup, accountId);
+            }}
+            onArm={() => {
+              setPendingArmBlockGroupId(null);
+              requestGroupPower(blockGroup);
+            }}
+          />
+        );
+      })()}
       {pendingUnavailableFollowerRemoval && (
         <UnavailableFollowerRemovalDialogPortal
           state={pendingUnavailableFollowerRemoval}
@@ -6653,6 +6703,115 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
 const UnavailableFollowerRemovalDialogPortal = (props: React.ComponentProps<typeof UnavailableFollowerRemovalDialog>) => createPortal(
   <div className="fixed inset-0 z-[165] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={event => { if (event.target === event.currentTarget && !props.busy) props.onClose(); }}>
     <UnavailableFollowerRemovalDialog {...props} />
+  </div>,
+  document.body,
+);
+
+export interface ArmPositionBlockAccount {
+  accountId: number;
+  name: string;
+  isLeader: boolean;
+  /** „MNQZ6 Long 2“ — z posledního potvrzeného snapshotu účtu. */
+  positions: string[];
+  workingOrders: number;
+}
+
+/**
+ * Bod 5b: co blokuje zapnutí skupiny. Kopírka se zapíná jen ze stavu, kdy
+ * je celá skupina flat a bez čekajících příkazů (worker to ověří znovu u
+ * brokera); tady je jen srozumitelný výčet z živých dat UI.
+ */
+export function buildArmPositionBlock(
+  group: CopyGroupConfig,
+  accountsById: ReadonlyMap<number, LiveAccount>,
+  orders: readonly LiveOrder[],
+  nameOf: (accountId: number) => string,
+): ArmPositionBlockAccount[] {
+  const ids = [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
+    .filter((accountId): accountId is number => accountId != null);
+  return [...new Set(ids)].flatMap(accountId => {
+    const positions = (accountsById.get(accountId)?.positions ?? [])
+      .filter(position => position.netPosition !== 0)
+      .map(position => `${position.symbol} ${position.netPosition > 0 ? 'Long' : 'Short'} ${Math.abs(position.netPosition)}`);
+    const workingOrders = orders.filter(order => order.accountId === accountId && liveOrderIsOpenForSafety(order)).length;
+    if (positions.length === 0 && workingOrders === 0) return [];
+    return [{ accountId, name: nameOf(accountId), isLeader: accountId === group.leaderAccountId, positions, workingOrders }];
+  });
+}
+
+const czechOrderCount = (count: number) => (
+  count === 1 ? '1 čekající příkaz' : count >= 2 && count <= 4 ? `${count} čekající příkazy` : `${count} čekajících příkazů`
+);
+
+export const ArmPositionBlockDialog = ({ groupName, accounts, busy, onClose, onCloseAccount, onArm }: {
+  groupName: string;
+  accounts: ArmPositionBlockAccount[];
+  busy: boolean;
+  onClose: () => void;
+  onCloseAccount: (accountId: number) => void;
+  /** Skupina už je flat — nabídnout zapnutí (znovu projde celou kontrolou). */
+  onArm?: () => void;
+}) => {
+  const clear = accounts.length === 0;
+  const leaderBusy = accounts.some(account => account.isLeader);
+  const onlyOrders = !clear && accounts.every(account => account.positions.length === 0);
+  const title = clear
+    ? 'Skupina je flat'
+    : onlyOrders ? 'Zapnutí blokuje čekající příkaz' : 'Zapnutí blokuje otevřená pozice';
+  return (
+    <section role="alertdialog" aria-modal="true" aria-label={title} data-testid="arm-position-block" className="flex w-full max-w-md max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 pb-4">
+        <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${clear ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
+          {clear ? <CheckCircle2 size={21} /> : <AlertTriangle size={21} />}
+        </div>
+        <h3 className="mt-4 text-lg font-black text-[var(--text-primary)]">{title}</h3>
+        <p className="mt-1.5 text-sm leading-relaxed text-[var(--text-secondary)]">
+          {clear
+            ? `Ve skupině ${groupName} už nic otevřeného není. Zapnutí ještě jednou ověří účty u brokera.`
+            : `Kopírka se zapíná jen když je celá skupina ${groupName} flat a bez čekajících příkazů — jinak by nevěděla, co je její. Nic se nezapnulo.`}
+        </p>
+        {clear ? null : (
+          <ul className="mt-4 space-y-2">
+            {accounts.map(account => (
+              <li key={account.accountId} className="flex items-center gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)]/60 px-3 py-2.5">
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5 text-[13px] font-black text-[var(--text-primary)]">
+                    {account.isLeader ? <Crown aria-label="Leader" size={12} className="shrink-0 text-amber-500" /> : null}
+                    <span className="truncate">{account.name}</span>
+                  </span>
+                  <span className="mt-0.5 block text-[11px] font-semibold text-amber-600">
+                    {[...account.positions, account.workingOrders > 0 ? czechOrderCount(account.workingOrders) : ''].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onCloseAccount(account.accountId)}
+                  className="h-9 shrink-0 rounded-lg border border-rose-500/30 bg-rose-500/[0.06] px-3 text-[11px] font-black text-rose-500 disabled:opacity-50"
+                >
+                  {account.positions.length > 0 ? 'Zavřít pozici' : 'Zrušit příkazy'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {leaderBusy && !clear ? (
+          <p className="mt-3 rounded-xl border border-blue-500/15 bg-blue-500/[0.055] px-3 py-2.5 text-[11px] font-bold leading-relaxed text-blue-600">
+            Leader je v obchodě. Do běžícího obchodu se kopírka nepřipojuje — dokonči ho a zapni po flat.
+          </p>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-3">
+        <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Nechat vypnuté</button>
+        {clear && onArm ? <button type="button" onClick={onArm} disabled={busy} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white hover:bg-emerald-500 disabled:opacity-50">Zapnout</button> : null}
+      </div>
+    </section>
+  );
+};
+
+const ArmPositionBlockDialogPortal = (props: React.ComponentProps<typeof ArmPositionBlockDialog>) => createPortal(
+  <div className="fixed inset-0 z-[165] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={event => { if (event.target === event.currentTarget && !props.busy) props.onClose(); }}>
+    <ArmPositionBlockDialog {...props} />
   </div>,
   document.body,
 );

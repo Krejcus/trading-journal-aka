@@ -133,10 +133,19 @@ export function retireMissingFromError(reason: unknown): { groupId: string; acco
   }
 }
 
+/** Worker odmítl zapnutí, protože některý účet skupiny není flat / má příkaz (bod 5b). */
+const ARM_POSITION_REJECTION = /divergence=|working=|některý účet není flat|nejsou flat|pozice nesedí s leaderem|čekající příkazy na účtech/i;
+export function isArmPositionRejection(reason: unknown): boolean {
+  return reason instanceof Error && ARM_POSITION_REJECTION.test(reason.message);
+}
+
 export function copierArmRejection(reason: unknown): string | null {
   if (reason instanceof CopierArmBlockedError) return reason.message;
   if (!(reason instanceof Error)) return null;
   const message = reason.message.replace(/\s+/g, ' ').trim();
+  if (ARM_POSITION_REJECTION.test(message)) {
+    return 'Kontrola u brokera našla na některém účtu skupiny otevřenou pozici nebo čekající příkaz. Nic se nezapnulo. Až bude skupina flat, zapni znovu.';
+  }
   if (/\[ack-incident:[^\]]+\]/.test(message)) {
     // Worker hlásí incident, který UI ještě nevidělo (nebo nový): žádné
     // automatické opakování, uživatel ho potvrdí dalším Zapnout.
