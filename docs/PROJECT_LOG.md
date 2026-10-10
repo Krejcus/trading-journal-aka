@@ -256,6 +256,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-10 — Denní auto-liq propky ≠ breach (Claude)
+
+8. 10. tři Lucid followeři trefili daily loss auto-liq 1200 USD a `classifyFollowerBrokerBreach`
+je zapsal jako trvalý `breached`; appka je tak v pátek ukazovala jako breached, i když ještě
+nebyly (skutečný drawdown breach přišel až v pátek). Oprava (větev
+`claude/copier-dll-not-breach-20261010`, oponentní review Claude subagentem ANO po 5 kolech —
+Codex už není k dispozici): drawdown floor / vypnutý účet = `breached`, denní auto-liq =
+`dll-locked` do konce session. Všechny cesty denního zámku nesou `requiresRiskFloorProof`;
+zpět do kopie jen s brokerovým důkazem aktivního účtu a equity nad floorem (jinak breached /
+mimo kopii). Staré záznamy se při startu převedou. Worker zatím NEnasazen: skupina dvsvds
+má breachnutého leadera (není v OAuth), reconcile i brána reinstallu neprojdou.
+
 ### 2026-10-08 — Kopírka: nové účty bez restartu, ON s potvrzením incidentu, TooLate (Claude + Codex)
 
 Release `claude/copier-release-20261008` = tři Codexem schválené větve:
