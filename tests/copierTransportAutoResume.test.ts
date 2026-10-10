@@ -179,4 +179,75 @@ describe('automatické pokračování po výpadku — jádro', () => {
     expect(h.controller.status().transportResume ?? null).toBeNull();
     h.controller.stop();
   });
+
+  it('výpadek přes error event (failClosed transport) založí epizodu; druhý stejný výpadek po pokračování taky', async () => {
+    const h = await harness();
+    await h.armLive();
+    for (let round = 0; round < 2; round += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      h.broker.emitEvent({ type: 'error', error: new Error('Tradovate WebSocket heartbeat timeout [leader]') } as never);
+      await h.settle();
+      const resume = h.controller.status().transportResume;
+      expect(resume?.phase).toBe('waiting');
+      await h.reconnect();
+      expect(h.controller.status().transportResume?.phase).toBe('ready');
+      h.controller.arm({ requirePreparation: true, autoResume: { disarmAt: resume!.disarmAt } });
+      expect(h.controller.status().armed).toBe(true);
+    }
+    h.controller.stop();
+  });
+
+  it('slepé okno: příkaz leadera těsně před zjištěním výpadku = nepokračuje', async () => {
+    let offsetMs = -10_000;
+    const h = await harness({ brokerClock: () => Date.now() + offsetMs });
+    await h.broker.placeOrder({ tag: 'manual-in', accountId: 100, symbol, side: 'Buy', orderType: 'Market', quantity: 1 } as never);
+    await h.broker.placeOrder({ tag: 'manual-out', accountId: 100, symbol, side: 'Sell', orderType: 'Market', quantity: 1 } as never);
+    await h.settle();
+    offsetMs = 0;
+    await h.controller.reconcile();
+    await h.armLive();
+    await h.outage();
+    await h.reconnect();
+    expect(h.controller.status().transportResume).toMatchObject({
+      phase: 'declined', reason: expect.stringContaining('těsně před jeho zjištěním'),
+    });
+    h.controller.stop();
+  });
+
+  it('fill leadera v mezeře (resync snapshot) = nepokračuje', async () => {
+    const h = await harness();
+    await h.armLive();
+    await h.outage();
+    h.broker.emitEvent({ type: 'connection', connected: true, at: Date.now(), resync: {
+      complete: true, accountIds: [100, 200, 300], positions: [], orders: [],
+      gapFills: [{ fillId: 'gap-1', brokerOrderId: 'o-gap', accountId: 100, symbol, side: 'Buy', quantity: 1, price: 1, filledAt: Date.now(), tag: '' }],
+    } } as never);
+    await h.settle();
+    expect(h.controller.status().transportResume?.phase).toBe('declined');
+    h.controller.stop();
+  });
+
+  it('zámek dne během výpadku = nepokračuje; cooldown jen čeká', async () => {
+    const h = await harness();
+    await h.armLive();
+    await h.outage();
+    await h.controller.lockUntil(Date.now() + 60 * 60_000, 'test zámek');
+    await h.reconnect();
+    expect(h.controller.status().transportResume?.phase).toBe('declined');
+    h.controller.stop();
+  });
+
+  it('„pokračuje“ zmizí, jakmile se kopírka znovu vypne', async () => {
+    const h = await harness();
+    await h.armLive();
+    const disarmAt = await h.outage();
+    await h.reconnect();
+    h.controller.arm({ requirePreparation: true, autoResume: { disarmAt: disarmAt! } });
+    expect(h.controller.status().transportResume?.phase).toBe('resumed');
+    h.controller.cancelTransportResume?.('zapnutí nebylo durable potvrzeno');
+    expect(h.controller.status().transportResume?.phase).toBe('resumed');
+    h.controller.disarm();
+    expect(h.controller.status().transportResume ?? null).toBeNull();
+    h.controller.stop();
+  });
 });

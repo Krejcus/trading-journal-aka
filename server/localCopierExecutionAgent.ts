@@ -339,6 +339,8 @@ export async function startLocalCopierExecutionAgent(
     connectedSince: number | null;
     /** Jeden pokus za epizodu: po rozhodnutí se už nic nezkouší. */
     done: boolean;
+    /** Nedostupná pojistka (síť) pokus nespálí, ale jen omezeně. */
+    admissionFailures: number;
   } | null = null;
   let autoResumeAdmission: ((since: number) => Promise<{ admitted: boolean; reason: string | null }>) | null = null;
   let remoteQueueProbe: (() => number) | null = null;
@@ -1271,6 +1273,9 @@ export async function startLocalCopierExecutionAgent(
   });
   const address = server.address() as AddressInfo;
   const autoRearmLog = (message: string) => console.log(`${new Date().toISOString()} AUTO-RESUME ${message}`);
+  /** Pojistka nedostupná (síť) — nic se nezapnulo, smí se zkusit znovu. */
+  class AutoResumeAdmissionUnavailable extends Error {}
+  const AUTO_RESUME_ADMISSION_RETRIES = 3;
   /**
    * Jediný pokus o automatické pokračování (10. 10. 2026). Stejné řazení
    * a brzdové brány jako ruční ARM, ale NIKDY veřejné `reconcile()` (smazalo
@@ -1290,7 +1295,14 @@ export async function startLocalCopierExecutionAgent(
       // Serverová pojistka až těsně před zapnutím: brzda z telefonu poslaná
       // kdykoli od ručního zapnutí (i během výpadku) pokračování zruší.
       if (!autoResumeAdmission) throw new Error('chybí serverová pojistka proti brzdě z telefonu');
-      const admission = await awaitArmDeadline(autoResumeAdmission(since), deadlineAt);
+      let admission: { admitted: boolean; reason: string | null };
+      try {
+        admission = await awaitArmDeadline(autoResumeAdmission(since), deadlineAt);
+      } catch (error) {
+        throw new AutoResumeAdmissionUnavailable(
+          `serverová pojistka nedostupná: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       if (!admission.admitted) throw new Error(`server nepovolil: ${admission.reason ?? 'neznámý důvod'}`);
       assertArmAdmissible(deadlineAt, admittedBrakeEpoch, createdAt);
       options.controller.arm({
@@ -1327,6 +1339,7 @@ export async function startLocalCopierExecutionAgent(
         groupFingerprint: lastSuccessfulArm?.groupFingerprint ?? '',
         connectedSince: null,
         done: false,
+        admissionFailures: 0,
       };
       autoRearmLog('čeká na obnovu spojení; pokračuje samo, pokud kontrola u brokera vyjde čistě');
     }
@@ -1369,6 +1382,13 @@ export async function startLocalCopierExecutionAgent(
       autoRearmLog('kopírka po výpadku spojení sama pokračuje');
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      if (error instanceof AutoResumeAdmissionUnavailable
+        && pending.admissionFailures + 1 < AUTO_RESUME_ADMISSION_RETRIES) {
+        pending.admissionFailures += 1;
+        pending.done = false;
+        autoRearmLog(`${reason}; zkusím znovu (${pending.admissionFailures}/${AUTO_RESUME_ADMISSION_RETRIES})`);
+        return;
+      }
       options.controller.cancelTransportResume?.(reason);
       autoRearmLog(`nepokračuje: ${reason}`);
     } finally {

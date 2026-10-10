@@ -206,6 +206,31 @@ describe('automatické pokračování po výpadku spojení (10. 10. 2026)', () =
     await vi.waitFor(() => expect(h.runtime.status().armed).toBe(true), { timeout: 2_000 });
   });
 
+  it('výpadek sítě u pojistky pokus nespálí (omezeně), pak pokračuje', async () => {
+    const h = await realSetup();
+    running!.setRemoteQueueProbe?.(() => Date.now() + 60_000);
+    h.admit
+      .mockRejectedValueOnce(new Error('copier-relay-request-timeout'))
+      .mockResolvedValue({ admitted: true, reason: null });
+    running!.setAutoResumeAdmission?.(h.admit);
+    await running!.execute({ type: 'arm-live' });
+    await outageAndReturn(h.broker);
+    await vi.waitFor(() => expect(h.runtime.status().armed).toBe(true), { timeout: 2_000 });
+    expect(h.admit).toHaveBeenCalledTimes(2);
+  });
+
+  it('pojistka trvale nedostupná = po 3 pokusech nepokračuje', async () => {
+    const h = await realSetup();
+    running!.setRemoteQueueProbe?.(() => Date.now() + 60_000);
+    h.admit.mockRejectedValue(new Error('copier-relay-request-timeout'));
+    running!.setAutoResumeAdmission?.(h.admit);
+    await running!.execute({ type: 'arm-live' });
+    await outageAndReturn(h.broker);
+    await vi.waitFor(() => expect(h.runtime.status().transportResume?.phase).toBe('declined'), { timeout: 2_000 });
+    expect(h.admit).toHaveBeenCalledTimes(3);
+    expect(h.runtime.status().armed).toBe(false);
+  });
+
   it('strop: nejvýš 2 automatická pokračování na jedno ruční zapnutí', async () => {
     const h = await realSetup();
     running!.setRemoteQueueProbe?.(() => Date.now() + 60_000);

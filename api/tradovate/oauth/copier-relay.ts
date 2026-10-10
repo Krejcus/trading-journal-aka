@@ -51,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       if (action === 'auto-resume-admit') {
         const since = Number(req.body?.since);
-        const admission = await admitCopierAutoResume({ db, deviceId: device.id, since });
+        const admission = await admitCopierAutoResume({ db, userId: device.userId, deviceId: device.id, since });
         return res.status(200).json(admission);
       }
       if (action === 'poll-v2') {

@@ -155,7 +155,9 @@ describe('panel automatického pokračování po výpadku', () => {
     const base = { disarmAt: 1, armExpiresAt: Date.parse('2026-10-10T20:00:00Z'), reason: null, at: Date.now() };
     const waiting = renderToStaticMarkup(React.createElement(CopierAutoResumePanel, { resume: { ...base, phase: 'waiting', reason: 'čeká na obnovu spojení s brokerem' } }));
     expect(waiting).toContain('Po výpadku spojení kopírka pokračuje sama');
-    expect(waiting).toContain('Vypnutím to zrušíš.');
+    expect(waiting).not.toContain('Zrušit automatické pokračování');
+    const cancellable = renderToStaticMarkup(React.createElement(CopierAutoResumePanel, { resume: { ...base, phase: 'ready' }, onCancel: () => undefined }));
+    expect(cancellable).toContain('Zrušit automatické pokračování');
     expect(waiting).toContain('Teď: čeká na obnovu spojení s brokerem.');
     const resumed = renderToStaticMarkup(React.createElement(CopierAutoResumePanel, { resume: { ...base, phase: 'resumed' } }));
     expect(resumed).toContain('Kopírka po výpadku sama pokračuje');

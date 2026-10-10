@@ -372,6 +372,19 @@ existující ochranu.
   grace 15 s, server potvrdí, že od ručního ON (−60 s rezerva) nepřišla žádná
   brzda a nic nečeká; jeden pokus za epizodu; nejvýš 2 automatická pokračování
   na jedno ruční ON. Zapnutí jde přes `armCore` se všemi branami INV-ARM-01.
+- Slepé okno: tichý výpadek se pozná až po idle timeoutu a heartbeat může
+  dodat socket followera — příkaz leadera s časem ≥ min(výpadek − 30 s,
+  poslední heartbeat − 5 s) i jakýkoli fill leadera v resync `gapFills` =
+  odmítnout. Ruční Flatten (účet / All / follower) a waive epizodu ruší;
+  zámek dne a obchodní okno ji ruší, cooldown jen odkládá. Stav `resumed`
+  se po jakémkoli dalším vypnutí ve statusu nehlásí; selhání po zapnutí ho
+  přepíše na `declined`. Dedup stejné chyby ve `failClosed` platí jen za už
+  vypnuté kopírky (jinak by druhý stejný výpadek nezaložil epizodu).
+- Serverová pojistka: brzdy celého uživatele (všechna zařízení) od
+  min(ON na Macu − 60 s, serverový čas posledního vzdáleného `arm-live`);
+  nedostupnost sítě = až 3 opakování pojistky, nikdy ARM. Zbytkové okno:
+  brzda zařazená až PO odpovědi pojistky a před `arm()` (~latence relay)
+  se provede až po zapnutí — stejně jako u ručního ON (INV-ARM-03).
 - Otevřený obchod při výpadku = nepokračuje (fáze 1); kopie drží SL/TP u
   brokera, zapíná člověk po flat.
 - Hlídá test: `tests/copierTransportAutoResume.test.ts`,

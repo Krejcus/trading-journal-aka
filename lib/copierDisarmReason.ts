@@ -178,7 +178,7 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   },
   'transport-lost': {
     title: 'Kopírka ztratila spojení s brokerem.',
-    nextStep: 'Otevřené kopie drží u brokera své SL/TP. Po obnovení spojení si kopírka stav účtů ověří sama.',
+    nextStep: 'Otevřené kopie drží u brokera své SL/TP. Po obnovení spojení si kopírka stav účtů ověří sama; pokud nepokračuje sama, zapneš ji přepínačem skupiny.',
   },
   'arm-expired': {
     title: 'Platnost ostrého ARM skončila.',

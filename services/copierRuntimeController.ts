@@ -2090,6 +2090,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    */
   let transportResume: {
     disarmAt: number;
+    /** Poslední zpráva brokera před výpadkem (heartbeat = každá zpráva socketu). */
+    lastHeardAt: number;
     armExpiresAt: number;
     configuration: string;
     leaderStats: string;
@@ -2100,8 +2102,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Nejnovější čas příkazu leadera z posledního read-only preflightu (null = nelze prokázat). */
   let lastPreflightLeaderOrderActivityAt: number | null = null;
   const TRANSPORT_RESUME_ORDER_SKEW_MS = 5_000;
-  const declineTransportResume = (reason: string) => {
-    if (transportResume?.state !== 'waiting') return;
+  /**
+   * Tichý výpadek socketu se pozná až po idle timeoutu; heartbeat může navíc
+   * dodat socket followera, zatímco leaderův mlčí. Příkaz leadera z tohoto
+   * slepého okna před zjištěním výpadku se počítá jako obchod v mezeře.
+   */
+  const TRANSPORT_RESUME_BLIND_WINDOW_MS = 30_000;
+  const declineTransportResume = (reason: string, { overrideResumed = false }: { overrideResumed?: boolean } = {}) => {
+    // `resumed` se přepíše jen když kopírka ve skutečnosti zapnutá není
+    // (selhání po zapnutí) — jinak by panel i push dál tvrdily „pokračuje“.
+    if (transportResume?.state !== 'waiting'
+      && !(overrideResumed && transportResume?.state === 'resumed' && !gate.armed)) return;
     const at = clock();
     transportResume = { ...transportResume, state: 'declined', reason, at };
     options.onAudit?.([{
@@ -4587,7 +4598,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ));
       });
     }
-    const existingSameIncident = lastDisarm
+    // Dedup jen za už vypnuté kopírky; nové zapnutí (i automatické) a pak
+    // stejná chyba je nový výpadek a musí se zapsat.
+    const existingSameIncident = !wasArmed && lastDisarm
       && lastDisarm.detail === lastError.message
       && lastDisarm.episodeId === failure.episodeId;
     if (!failure.transportLost) declineTransportResume(`incident: ${lastError.message}`);
@@ -9394,6 +9407,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             : null;
     transportResume = {
       disarmAt,
+      lastHeardAt: gate.lastHeartbeatAt,
       armExpiresAt,
       configuration: armPreparationConfiguration(),
       leaderStats: transportResumeLeaderStats(disarmAt),
@@ -9430,7 +9444,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (currentRuntime().state.safety.managementOnly) return decline('kopírka je v režimu správy otevřených kopií');
     if (armPreparationConfiguration() !== pending.configuration) return decline('změnila se konfigurace skupiny');
     if (transportResumeLeaderStats(now) !== pending.leaderStats) return decline('leader během výpadku obchodoval');
+    const resumeSafety = currentRuntime().state.safety;
+    if (now < resumeSafety.dayLockUntil) return decline('platí zámek dne');
+    const resumeWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
+    if (resumeWindow.enabled && tradingWindowStateAt(resumeWindow, now) !== 'inside') return decline('mimo obchodní okno');
     if (!gate.connected) return wait('čeká na obnovu spojení s brokerem');
+    if (now < resumeSafety.entryCooldownUntil) return wait('běží pauza po obchodu (cooldown)');
     if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
       || reconciliationRequestsPending > 0) return wait('ověřuje účty u brokera');
     if (lastError) return wait('čeká na čistou kontrolu po výpadku');
@@ -9438,8 +9457,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (lastPreflightLeaderOrderActivityAt == null) {
       return decline('nejde prokázat, že leader během výpadku neobchodoval');
     }
-    if (lastPreflightLeaderOrderActivityAt >= pending.disarmAt - TRANSPORT_RESUME_ORDER_SKEW_MS) {
-      return decline('leader během výpadku zadal příkaz');
+    const quietSince = Math.min(
+      pending.disarmAt - TRANSPORT_RESUME_BLIND_WINDOW_MS,
+      (pending.lastHeardAt > 0 ? pending.lastHeardAt : pending.disarmAt) - TRANSPORT_RESUME_ORDER_SKEW_MS,
+    );
+    if (lastPreflightLeaderOrderActivityAt >= quietSince) {
+      return decline('leader během výpadku (nebo těsně před jeho zjištěním) zadal příkaz');
     }
     return { kind: 'ready', reason: null };
   };
@@ -12751,6 +12774,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         leaderPositionSnapshotComplete = false;
         invalidateReconciliation();
       }
+      if (event.connected && event.resync?.gapFills?.some(fill => fill.accountId === group.leaderAccountId)) {
+        declineTransportResume('leader během výpadku obchodoval (fill v mezeře)');
+      }
       if (event.connected) {
         // Boot po pádu: durable stopa říká, že kopie vznikly za živého ARM.
         if (!bootRecoveryChecked) {
@@ -15793,7 +15819,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       scheduleArmPreparation();
     },
     cancelTransportResume(reason) {
-      declineTransportResume(reason);
+      declineTransportResume(reason, { overrideResumed: true });
     },
     checkTransportResume() {
       const result = evaluateTransportResume();
@@ -16562,13 +16588,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...group.followers.map(follower => follower.accountId),
       ]);
       if (!allowed.has(accountId)) throw new Error('Účet není součástí této copy group');
+      declineTransportResume('ruční Flatten účtu');
       return emergencyFlatten([accountId], operationId);
     },
     async flattenFollowerTrade(accountId, operationId, flattenOptions) {
+      declineTransportResume('ruční zavření followera');
       return flattenFollowerForCurrentTrade(accountId, operationId, flattenOptions?.onAdmitted);
     },
     async flattenGroup(operationId) {
       if (group.leaderAccountId == null) throw new Error('Copy group nemá leader účet');
+      declineTransportResume('ruční Flatten All');
       return emergencyFlatten(
         [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)],
         operationId,
@@ -16577,6 +16606,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     async waiveStuckOperation({ kind, key, reason }) {
       const explanation = reason.trim();
       if (explanation.length < 5) throw new Error('Ruční resolution vyžaduje konkrétní důvod');
+      declineTransportResume('ruční vyřešení nejasného příkazu');
       gate = { ...gate, armed: false };
       invalidateReconciliation();
       await processor.mutate(async current => {
@@ -16783,7 +16813,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         groupFlat: allGroupAccountsFlat(),
         participatingGroupFlat: groupIsFlat(),
         excludedForeignFollowers: [...excludedForeignFollowerIds()],
-        transportResume: transportResume
+        // „Pokračuje“ platí jen dokud je kopírka zapnutá; po pozdějším
+        // vypnutí (jakémkoli) panel ani push nesmí tvrdit, že jede.
+        transportResume: transportResume && !(transportResume.state === 'resumed' && !gate.armed)
           ? (() => {
             const check = evaluateTransportResume(statusNow);
             const phase = transportResume.state !== 'waiting'

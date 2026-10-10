@@ -1586,6 +1586,17 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     return false;
   };
 
+  const cancelAutoResume = onDisarm ? () => {
+    void Promise.resolve(onDisarm()).then(() => {
+      setToast({ tone: 'info', text: 'Automatické pokračování zrušeno — kopírka zůstává vypnutá.' });
+    }).catch(reason => {
+      setToast({
+        tone: isCopierBrakeQueuedError(reason) ? 'info' : 'error',
+        text: reason instanceof Error ? reason.message : 'Zrušení se nepodařilo potvrdit.',
+      });
+    });
+  } : undefined;
+
   const triggerKillSwitch = onEmergencyStop ? async () => {
     try {
       await onEmergencyStop();
@@ -2210,7 +2221,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   tightenOnly={tightenOnly}
                   cooldownPanel={<>
                     {transitionGroupId === group.id && copierTransition === 'connecting' ? <CopierArmProgressPanel /> : null}
-                    {selected && transportResumeSupported && transportResume ? <CopierAutoResumePanel resume={transportResume} /> : null}
+                    {selected && transportResumeSupported && transportResume ? <CopierAutoResumePanel resume={transportResume} onCancel={cancelAutoResume} /> : null}
                     {selected ? <>{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</> : null}
                   </>}
                   disarmPanel={selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual'
@@ -2342,7 +2353,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                       {transitionGroupId === group.id && copierTransition === 'connecting' ? (
                         <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0"><CopierArmProgressPanel /></td></tr>
                       ) : null}
-                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{transportResumeSupported && transportResume ? <CopierAutoResumePanel resume={transportResume} /> : null}{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</td></tr> : null}
+                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{transportResumeSupported && transportResume ? <CopierAutoResumePanel resume={transportResume} onCancel={cancelAutoResume} /> : null}{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</td></tr> : null}
                       <tr
                         aria-hidden={!expanded.has(group.id)}
                       >
@@ -3407,9 +3418,11 @@ export const CopierArmProgressPanel = () => {
  * Automatické pokračování po výpadku spojení (10. 10. 2026). Bez panelu by
  * vypnutá kopírka „lhala“ — za chvíli se může sama zapnout.
  */
-export const CopierAutoResumePanel = ({ resume, now = Date.now() }: {
+export const CopierAutoResumePanel = ({ resume, now = Date.now(), onCancel }: {
   resume: NonNullable<CopierControllerStatus['transportResume']>;
   now?: number;
+  /** Brzda (DISARM) — worker ji provede i za vypnuté kopírky a pokračování zruší. */
+  onCancel?: () => void;
 }) => {
   // Výsledek (pokračovala / nepokračuje) stačí ukazovat chvíli po rozhodnutí.
   if ((resume.phase === 'resumed' || resume.phase === 'declined') && now - resume.at > 15 * 60_000) return null;
@@ -3436,8 +3449,17 @@ export const CopierAutoResumePanel = ({ resume, now = Date.now() }: {
           ? 'Všechny účty ověřené u brokera flat a bez příkazů.'
           : resume.phase === 'declined'
             ? `${resume.reason ?? 'Kontrola nevyšla'}. Zapni ji ručně.`
-            : `Až se spojení vrátí, ověří si všechny účty u brokera a když sedí, zapne se (nejpozději do ${until}). Vypnutím to zrušíš.${resume.reason ? ` Teď: ${resume.reason}.` : ''}`}
+            : `Až se spojení vrátí, ověří si všechny účty u brokera a když sedí, zapne se (nejpozději do ${until}).${resume.reason ? ` Teď: ${resume.reason}.` : ''}`}
       </p>
+      {(resume.phase === 'waiting' || resume.phase === 'ready') && onCancel ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-2 h-8 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 text-[11px] font-black text-[var(--text-secondary)]"
+        >
+          Zrušit automatické pokračování
+        </button>
+      ) : null}
     </div>
   );
 };

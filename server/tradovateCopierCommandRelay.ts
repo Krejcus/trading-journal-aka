@@ -846,15 +846,29 @@ export const AUTO_RESUME_BRAKE_MARGIN_MS = 60_000;
  * z telefonu poslaná během výpadku doběhla až po automatickém zapnutí.
  */
 export async function admitCopierAutoResume(options: {
-  db: SupabaseClient; deviceId: string; since: number; now?: number;
+  db: SupabaseClient; userId: string; deviceId: string; since: number; now?: number;
 }): Promise<{ admitted: boolean; reason: string | null }> {
   if (!Number.isFinite(options.since) || options.since <= 0) return { admitted: false, reason: 'invalid-since' };
-  const sinceIso = new Date(options.since - AUTO_RESUME_BRAKE_MARGIN_MS).toISOString();
+  // Kotva: dřívější z času Macu (−60 s) a serverového času posledního
+  // vzdáleného zapnutí tohoto zařízení — posun hodin okno jen zvětší.
+  const lastArm = await options.db.from('tradovate_copier_commands')
+    .select('created_at')
+    .eq('device_id', options.deviceId)
+    .eq('command_type', 'arm-live')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (lastArm.error) throw new Error(`copier-relay-auto-resume-arm-lookup-failed: ${lastArm.error.message}`);
+  const lastArmAt = Date.parse((lastArm.data?.[0] as { created_at?: string } | undefined)?.created_at ?? '');
+  const anchor = Math.min(
+    options.since - AUTO_RESUME_BRAKE_MARGIN_MS,
+    Number.isFinite(lastArmAt) ? lastArmAt : Number.POSITIVE_INFINITY,
+  );
+  // Brzdy celého uživatele (i směrované na jiné zařízení téhož připojení).
   const brakes = await options.db.from('tradovate_copier_commands')
     .select('id')
-    .eq('device_id', options.deviceId)
+    .eq('user_id', options.userId)
     .in('command_type', [...BRAKE_COMMAND_TYPES])
-    .gte('created_at', sinceIso)
+    .gte('created_at', new Date(anchor).toISOString())
     .limit(1);
   if (brakes.error) throw new Error(`copier-relay-auto-resume-brake-lookup-failed: ${brakes.error.message}`);
   if ((brakes.data ?? []).length > 0) return { admitted: false, reason: 'od posledního zapnutí přišla brzda' };

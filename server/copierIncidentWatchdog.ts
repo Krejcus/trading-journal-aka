@@ -657,7 +657,11 @@ export function evaluateCopierIncidents(options: {
       && (resume?.phase === 'resumed' || resume?.phase === 'declined')) {
       const detail = `${resumeDisarmAt}:${String(resume.phase)}`;
       const resumeMarker = activeState(userId, deviceId, AUTO_RESUME_MARKER_KEY);
-      if (resumeMarker?.detail !== detail) {
+      // Vlastní ruční vypnutí není zpráva, jen se zapíše marker.
+      const silent = resume.phase === 'declined' && /ručně vypnuta|vypnul kopírku ručně/.test(asText(resume.reason) ?? '');
+      if (resumeMarker?.detail !== detail && silent) {
+        upserts.push({ userId, deviceId, incidentKey: AUTO_RESUME_MARKER_KEY, active: false, detail, notified: false });
+      } else if (resumeMarker?.detail !== detail) {
         notifications.push({
           userId, deviceId, incidentKey: 'auto-resume', kind: 'opened',
           ...(resume.phase === 'resumed'
