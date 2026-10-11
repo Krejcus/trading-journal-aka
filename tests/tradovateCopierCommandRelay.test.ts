@@ -420,31 +420,6 @@ describe('Tradovate copier command relay', () => {
     expect(claimed?.command).toEqual({ type: 'verify-account-eligibility', accountId: 63338752 });
   });
 
-  it('přenese read-only Kontrolu pozic z telefonu (reconcile) s prázdným payloadem', async () => {
-    const upsert = vi.fn();
-    await enqueueTradovateCopierCommand({
-      db: enqueueDb(upsert),
-      userId,
-      connectionId,
-      command: { type: 'reconcile' },
-      idempotencyKey: 'reconcile-from-phone-001',
-      now: Date.parse('2026-08-21T12:00:00.000Z'),
-    });
-    expect(upsert.mock.calls[0][0]).toMatchObject({ command_type: 'reconcile', payload: {} });
-
-    const claimed = await claimTradovateCopierCommand({
-      db: claimDb({
-        id: 'reconcile-command-id',
-        command_type: 'reconcile',
-        payload: {},
-        expires_at: '2026-08-21T12:00:30.000Z',
-        status: 'claimed', result: null, error: null,
-      }),
-      deviceId,
-    });
-    expect(claimed?.command).toEqual({ type: 'reconcile' });
-  });
-
   it('odmítne neplatné ID cíleného ověření', async () => {
     const upsert = vi.fn();
     await expect(enqueueTradovateCopierCommand({
@@ -494,6 +469,36 @@ describe('Tradovate copier command relay', () => {
     });
   });
 
+  it('relay pustí smazání skupiny (11. 10. 2026) jen s groupId a ničím navíc', async () => {
+    const accepted = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(accepted), userId, connectionId,
+      command: { type: 'copy-command', command: { type: 'delete-group', groupId: 'group-1' } },
+      idempotencyKey: 'key-delete-group',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(accepted.mock.calls[0][0]).toMatchObject({
+      command_type: 'copy-command', payload: { command: { type: 'delete-group', groupId: 'group-1' } },
+    });
+    for (const bad of [{ groupId: '' }, { groupId: 42 }, { groupId: 'group-1', force: true }]) {
+      const upsert = vi.fn();
+      await expect(enqueueTradovateCopierCommand({
+        db: enqueueDb(upsert), userId, connectionId,
+        command: { type: 'copy-command', command: { type: 'delete-group', ...bad } } as unknown as LocalCopierAgentCommand,
+      })).rejects.toThrow('invalid-relay-command-payload');
+      expect(upsert).not.toHaveBeenCalled();
+    }
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'delete-command-id', command_type: 'copy-command',
+        payload: { command: { type: 'delete-group', groupId: 'group-1' } },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'copy-command', command: { type: 'delete-group', groupId: 'group-1' } });
+  });
+
   it('relay odmítne neplatný follower toggle ještě před enqueue', async () => {
     const upsert = vi.fn();
     await expect(enqueueTradovateCopierCommand({
@@ -503,6 +508,36 @@ describe('Tradovate copier command relay', () => {
       } } as unknown as LocalCopierAgentCommand,
     })).rejects.toThrow('invalid-relay-command-payload');
     expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('relay pustí „Zapnout bez tohoto účtu“ jen jako allowOwnExposure:true při vypnutí', async () => {
+    for (const bad of [
+      { enabled: false, allowOwnExposure: 'yes' },
+      { enabled: true, allowOwnExposure: true },
+      { enabled: false, allowOwnExposure: false },
+    ]) {
+      const upsert = vi.fn();
+      await expect(enqueueTradovateCopierCommand({
+        db: enqueueDb(upsert), userId, connectionId,
+        command: { type: 'copy-command', command: {
+          type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, ...bad,
+        } } as unknown as LocalCopierAgentCommand,
+      })).rejects.toThrow('invalid-relay-command-payload');
+      expect(upsert).not.toHaveBeenCalled();
+    }
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'exclude-command-id', command_type: 'copy-command',
+        payload: { command: {
+          type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, enabled: false, allowOwnExposure: true,
+        } },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'copy-command', command: {
+      type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, enabled: false, allowOwnExposure: true,
+    } });
   });
 
   it('claim validuje a předá follower toggle workeru', async () => {
@@ -638,6 +673,61 @@ describe('Tradovate copier command relay', () => {
         },
       } as unknown as LocalCopierAgentCommand,
     })).rejects.toThrow('invalid-relay-command-payload');
+  });
+
+  it('activate-group přenese uživatelem potvrzené vyřazení breachnutých účtů a odmítne vadné', async () => {
+    const group = {
+      id: 'group-2', name: 'Nová', enabled: false, leaderAccountId: 11,
+      followers: [{ accountId: 22, mode: 'on-submit' as const, multiplier: 1 }],
+    };
+    const retireMissingOldGroup = { groupId: 'group-1', accountIds: [100, 200], reason: 'Uživatel v appce potvrdil vyřazení účtů 100, 200' };
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert), userId, connectionId,
+      command: { type: 'activate-group', group, retireMissingOldGroup },
+    });
+    expect(upsert.mock.calls[0][0].payload).toMatchObject({ retireMissingOldGroup });
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'command-id', command_type: 'activate-group',
+        payload: { group, retireMissingOldGroup },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toMatchObject({ type: 'activate-group', retireMissingOldGroup });
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn()), userId, connectionId,
+      command: { type: 'activate-group', group, retireMissingOldGroup: { groupId: 'group-1', accountIds: [-1], reason: 'x' } },
+    } as never)).rejects.toThrow('invalid-relay-command-payload');
+  });
+
+  it('arm-live přenese potvrzení incidentu; vadné odmítne; Kontrola pozic relay neprojde', async () => {
+    const group = {
+      id: 'group-1', name: 'Hlavní', enabled: true, leaderAccountId: 11,
+      followers: [{ accountId: 22, mode: 'on-submit' as const, multiplier: 1 }],
+    };
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert), userId, connectionId,
+      command: { type: 'arm-live', group, acknowledgeIncidentId: 'b2c1-incident' },
+    });
+    expect(upsert.mock.calls[0][0].payload).toMatchObject({ acknowledgeIncidentId: 'b2c1-incident' });
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'command-id', command_type: 'arm-live', payload: { group, acknowledgeIncidentId: 'b2c1-incident' },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toMatchObject({ type: 'arm-live', acknowledgeIncidentId: 'b2c1-incident' });
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn()), userId, connectionId,
+      command: { type: 'arm-live', group, acknowledgeIncidentId: 'ne platné!' },
+    } as never)).rejects.toThrow('invalid-relay-command-payload');
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn()), userId, connectionId, command: { type: 'reconcile' },
+    })).rejects.toThrow('unsupported-relay-command');
   });
 
   it('claim odmítne starý nebo ručně vložený cancel-order payload', async () => {

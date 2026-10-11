@@ -531,4 +531,38 @@ describe('recoverable relay lane isolation', () => {
       expect(actions).not.toContain('poll');
     } finally { await relay.close(); }
   });
+
+  it('hlásí začátek posledního prázdného vyzvednutí; čekající příkaz ho neposune (pojistka auto-zapnutí)', async () => {
+    let pending = true;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const request = JSON.parse(String(init?.body ?? '{}')) as { action?: string };
+      if (request.action === 'poll') {
+        if (pending) {
+          pending = false;
+          return Response.json({ command: {
+            id: 'brake-1', command: { type: 'disarm' },
+            createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          } });
+        }
+        return Response.json({ command: null });
+      }
+      return Response.json({ ok: true });
+    });
+    const execute = vi.fn(async () => ({ ok: true, status: status() }));
+    const agent = { status, execute, origin: '', beginShutdown: vi.fn(), close: vi.fn() } as unknown as LocalCopierExecutionAgent;
+    const startedAt = Date.now();
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://alpha.example', authorizationHeader: async () => 'Device id.secret',
+      agent, fetchImpl: fetchImpl as typeof fetch, pollMs: 500,
+    });
+    try {
+      // První vyzvednutí vrátí brzdu: prázdné vyzvednutí zatím žádné.
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+      expect(relay.lastEmptyPollStartedAt()).toBe(0);
+      // Další vyzvednutí je prázdné → čas jeho začátku.
+      await vi.waitFor(() => expect(relay.lastEmptyPollStartedAt()).toBeGreaterThanOrEqual(startedAt), { timeout: 3_000 });
+    } finally {
+      await relay.close();
+    }
+  });
 });

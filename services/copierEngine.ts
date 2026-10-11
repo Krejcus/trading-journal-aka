@@ -144,6 +144,11 @@ export interface CopierAccountEligibility {
   at: number;
   lockSessionEndAt?: number;
   lastExecution?: CopierRejectedExecution;
+  /**
+   * Denní zámek z auto-liq propky (10. 10. 2026): zpět do kopie jen s
+   * autoritativním důkazem, že equity je nad drawdown floorem propky.
+   */
+  requiresRiskFloorProof?: true;
 }
 
 /**
@@ -158,6 +163,17 @@ export interface CopierSeenTerminalReject {
   brokerOrderId: string;
   /** Broker timestamp rejectu (fallback je čas prvního přijetí). */
   at: number;
+}
+
+export interface CopierAccountSyncPause {
+  accountId: number;
+  symbol: string;
+  /** Leader entry order epizody; před otevřením epochy jediná vazba. */
+  leaderEntryOrderId: string;
+  epochId: string | null;
+  reasonCode: 'entry-rejected' | 'protective-filled-early';
+  reason: string;
+  pausedAt: number;
 }
 
 export interface CopierState {
@@ -193,6 +209,19 @@ export interface CopierState {
     manualRecoveryRequired?: {
       at: number;
       reason: string;
+      /** Jednoznačná identita incidentu pro potvrzení v ON (8. 10. 2026). */
+      id?: string;
+    };
+    /**
+     * Poslední incident, který uživatel výslovně potvrdil přes ON; zapisuje se
+     * ve stejném durable zápisu, který incident maže (crash-safe audit).
+     */
+    lastIncidentAcknowledgement?: {
+      id: string;
+      at: number;
+      reason: string;
+      acknowledgedAt: number;
+      via: 'arm';
     };
     /**
      * Degraded live mode: no new exposure may be copied, but lifecycle and
@@ -277,6 +306,19 @@ export interface CopierState {
      * pole (starší snapshot) = nic usazeno, tedy konzervativně.
      */
     settledCopierEntries?: string[];
+    /**
+     * Účty vyřazené z jedné leader epizody („mimo synchron“): odmítnutý vstup
+     * nebo ochranná noha vyplněná dřív než leaderova. Durable, aby restart
+     * workeru nezapomněl, že flat follower během otevřeného obchodu je záměr.
+     * Platí jen pro tutéž epochu; nový obchod pauzu automaticky ukončí.
+     */
+    accountSyncPauses?: CopierAccountSyncPause[];
+    /**
+     * Skupina workeru smazaná operátorem (11. 10. 2026): worker běží bez
+     * skupiny, dokud se neaktivuje jiná. Zapisuje se ve stejném CAS commitu
+     * jako čistý stav a maže ji až commit aktivace nové skupiny.
+     */
+    retiredGroup?: { groupId: string; at: number; reason: string };
     /** Durable eligibility západky účtů; chybějící položka znamená active. */
     accountEligibility?: CopierAccountEligibility[];
     /** Bounded durable dedupe přímé controller větve pro async/leader rejecty. */

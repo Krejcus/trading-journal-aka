@@ -117,7 +117,7 @@ export function buildLiveStatusStrip(input: LiveStatusStripInput): LiveStatusStr
     chips.push(current.reconciliationRequired
       ? {
         id: 'worker', label: 'Worker', value: 'Čeká na ověření účtů', tone: 'warn',
-        title: 'Worker ještě potřebuje ověřit stav účtů u brokera. Spusť Kontrolu pozic nebo počkej na reconciliation.',
+        title: 'Worker ještě ověřuje stav účtů u brokera. Zapnutí si ho ověří samo, ručně nic spouštět nemusíš.',
       }
       : { id: 'worker', label: 'Worker', value: input.transport === 'local' ? 'Tento Mac' : 'Cloud', tone: 'muted' });
   }

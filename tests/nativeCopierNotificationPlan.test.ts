@@ -171,7 +171,7 @@ describe('okamžité incidenty', () => {
     const result = plan(snapshot(), snapshot({ reconciliationRequired: true }));
     expect(result.fireNow).toEqual([expect.objectContaining({
       title: 'Copier: nutná kontrola',
-      body: expect.stringContaining('Před dalším ARM'),
+      body: expect.stringContaining('Při dalším zapnutí ji potvrdíš'),
     })]);
 
     // Reconnect má vlastní lifecycle notifikaci a nemá přidat duplicitní

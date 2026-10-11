@@ -85,7 +85,9 @@ describe('A2: vyřazený follower a neškodné události jeho účtu', () => {
       controller.stop();
     }
   });
-  it('skutečná pozice na vyřazeném účtu výjimku dál zneplatní a kopírka se vypne', async () => {
+  // Etapa 2 (6. 10. 2026, Filip: problém účtu = pauza jen účtu): ruční
+  // pozice na pozastaveném účtu skupinu nevypíná; kopírka se jí nedotkne.
+  it('skutečná pozice na vyřazeném účtu: skupina jede dál a na účet nic neodejde', { timeout: 15_000 }, async () => {
     let now = 1_000_000;
     const clock = () => ++now;
     let rejectEntryFor200 = false;
@@ -113,16 +115,23 @@ describe('A2: vyřazený follower a neškodné události jeho účtu', () => {
       broker.setPosition(200, SYM, 2);
       broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: SYM, netQuantity: 2 } });
       await controller.waitForIdle();
+      // Zpožděná kontrola velikosti followera (výchozí okno 2 s) musí doběhnout.
+      await new Promise(resolve => setTimeout(resolve, 2_300));
+      await controller.waitForIdle();
+      expect(controller.status().armed).toBe(true);
+      const before200 = broker.placedRequests().filter((request: { accountId: number }) => request.accountId === 200).length;
       broker.emitEvent({ type: 'order', order: order({
         brokerOrderId: 'sl', side: 'Sell', orderType: 'Stop', stopPrice: 30_400,
       }) });
       await controller.waitForIdle();
-      expect(controller.status().armed).toBe(false);
+      expect(controller.status().armed).toBe(true);
+      expect(controller.status().accountSyncPauses).toEqual([expect.objectContaining({ accountId: 200 })]);
+      expect(broker.placedRequests().filter((request: { accountId: number }) => request.accountId === 200).length).toBe(before200);
     } finally {
       controller.stop();
     }
   });
-  it('první výskyt ručního orderu jako filled s nulovým fillem výjimku neposune', async () => {
+  it('ruční order na vyřazeném účtu (filled s nulovým fillem): skupina jede dál a na účet nic neodejde', { timeout: 15_000 }, async () => {
     let now = 1_000_000;
     const clock = () => ++now;
     let rejectEntryFor200 = false;
@@ -151,11 +160,18 @@ describe('A2: vyřazený follower a neškodné události jeho účtu', () => {
         brokerOrderId: 'man1', accountId: 200, status: 'filled', filledQuantity: 0, sourceVersion: 'm:Filled',
       }) });
       await controller.waitForIdle();
+      // Zpožděná kontrola velikosti followera (výchozí okno 2 s) musí doběhnout.
+      await new Promise(resolve => setTimeout(resolve, 2_300));
+      await controller.waitForIdle();
+      expect(controller.status().armed).toBe(true);
+      const before200 = broker.placedRequests().filter((request: { accountId: number }) => request.accountId === 200).length;
       broker.emitEvent({ type: 'order', order: order({
         brokerOrderId: 'sl', side: 'Sell', orderType: 'Stop', stopPrice: 30_400,
       }) });
       await controller.waitForIdle();
-      expect(controller.status().armed).toBe(false);
+      expect(controller.status().armed).toBe(true);
+      expect(controller.status().accountSyncPauses).toEqual([expect.objectContaining({ accountId: 200 })]);
+      expect(broker.placedRequests().filter((request: { accountId: number }) => request.accountId === 200).length).toBe(before200);
     } finally {
       controller.stop();
     }

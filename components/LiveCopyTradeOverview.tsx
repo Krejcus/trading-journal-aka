@@ -5,7 +5,7 @@ import LiveCopierIsland from './LiveCopierIsland';
 import { LiveDayTrigger, LiveDayCardDialog } from './LiveDayCard';
 import { buildLiveDaySummary, liveDayReadAnswered } from '../lib/liveDaySummary';
 import { buildLiveCopierIsland } from '../lib/liveCopierIsland';
-import { copierArmRejection } from '../lib/copierArmPreparation';
+import { copierArmRejection, isArmPositionRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { formatReadAge, isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
 import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
@@ -464,6 +464,15 @@ interface Props {
   followerCuts?: CopierControllerStatus['followerCuts'];
   /** Ruční per-follower přepínač kopírování: stav a zda jde teď přepnout. */
   followerParticipation?: CopierControllerStatus['followerParticipation'];
+  /** Followeři „mimo synchron“ v aktuální leader epizodě (etapa 2). */
+  accountSyncPauses?: CopierControllerStatus['accountSyncPauses'];
+  /** Worker umí „Zapnout bez tohoto účtu“ (follower-exclude-exposure-v1). */
+  followerExclusionSupported?: boolean;
+  /** Klasifikace workeru: vypnutí followeři, jejichž vlastní expozici kopírka neřídí. */
+  excludedForeignFollowers?: number[];
+  /** Automatické pokračování po výpadku (jen s capability transport-auto-resume-v1). */
+  transportResume?: CopierControllerStatus['transportResume'];
+  transportResumeSupported?: boolean;
   accountRisk?: CopierControllerStatus['accountRisk'];
   onOpenRisk?: () => void;
   /** Konec anti-revenge cooldownu (epoch ms); 0 = neběží. */
@@ -475,12 +484,16 @@ interface Props {
   lastDisarm?: CopierDisarmRecord;
   /** Read-only broker reconciliation for a currently unverifiable account. */
   onVerifyEligibility?: (accountId: number) => Promise<void> | void;
-  /** Read-only Kontrola pozic celé skupiny (worker reconcile). */
-  onReconcile?: () => Promise<void>;
+  /** Jen starší worker bez potvrzení incidentu v ON: ruční Kontrola pozic. */
+  legacyReconcile?: () => Promise<void>;
   executionGroupId?: string | null;
   /** `marketPrices` z workeru (TradingView) — jen pro zobrazení vzdálenosti k limitu. */
   marketPrices?: readonly unknown[];
   runtimeGroup?: CopyGroupConfig | null;
+  /** Worker umí smazat svou skupinu a běžet bez ní (`group-delete-v1`). */
+  groupDeleteSupported?: boolean;
+  /** Skupinu workeru operátor smazal; kopírka teď žádnou nemá. */
+  workerWithoutGroup?: boolean;
   /** Čerstvé spojení OAuth adresáře s manifestem Mac workeru; jen UI precheck. */
   workerAccountRoutes?: CopierWorkerAccountRoutes;
   /** Načítání nových propfirem spárovaným Macem (4. 10. 2026); null = neověřeno. */
@@ -513,6 +526,21 @@ interface PendingAction {
 type ActiveFollowerCut = NonNullable<CopierControllerStatus['followerCuts']>[number];
 type FollowerParticipation = NonNullable<CopierControllerStatus['followerParticipation']>[number];
 const EMPTY_PARTICIPATION: ReadonlyMap<number, FollowerParticipation> = new Map();
+type AccountSyncPause = NonNullable<CopierControllerStatus['accountSyncPauses']>[number];
+const EMPTY_SYNC_PAUSES: ReadonlyMap<number, AccountSyncPause> = new Map();
+/**
+ * Etapa 2: followeři „mimo synchron“ — broker odmítl vstup nebo se jim SL/TP
+ * vyplnil dřív než leaderovi. Vynechají zbytek obchodu a k dalšímu se vrátí
+ * sami; ostatní kopírují dál. Pauzy patří execution skupině a dávají smysl
+ * jen při zapnuté kopírce: durable pauza přežije DISARM i restart, a „ostatní
+ * kopírují dál“ by u vypnuté kopírky byla nepravda. Kontext se proto plní jen
+ * kolem zapnuté execution skupiny (jinde zůstane prázdný).
+ */
+const AccountSyncPauseContext = React.createContext<ReadonlyMap<number, AccountSyncPause>>(EMPTY_SYNC_PAUSES);
+const useAccountSyncPause = (row: { accountId?: number | null; isLeader: boolean; mode?: string }) => {
+  const pauses = React.useContext(AccountSyncPauseContext);
+  return row.accountId == null || row.isLeader || row.mode === 'off' ? undefined : pauses.get(row.accountId);
+};
 
 /** Uživatelé, jejichž cloudová knihovna skupin se v této session už načetla.
  * Návrat na LIVE pak nezačíná ve stavu „loading“ (šedé „Přidat skupinu“);
@@ -771,6 +799,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   sessionArmedAt = 0,
   followerCuts = [],
   followerParticipation = [],
+  accountSyncPauses = [],
+  followerExclusionSupported = false,
+  excludedForeignFollowers,
+  transportResume = null,
+  transportResumeSupported = false,
   accountRisk = [],
   onOpenRisk,
   cooldownUntil = 0,
@@ -779,9 +812,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   unverifiableFollowerOwnership = [],
   lastDisarm,
   onVerifyEligibility,
-  onReconcile,
+  legacyReconcile,
   executionGroupId = null,
   runtimeGroup = null,
+  groupDeleteSupported = false,
+  workerWithoutGroup = false,
   workerAccountRoutes,
   workerDiscovery = null,
   onGrantWorkerOwnerScope,
@@ -796,7 +831,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     <CopierMaintenancePanel
       status={runtimeStatus}
       known={runtimeAvailable && !copierStatusPending}
-      onReconcile={onReconcile}
+      legacyReconcile={legacyReconcile}
     />
   );
   const cooldownPanel = <CopierCooldownPanel
@@ -866,6 +901,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [editorGroup, setEditorGroup] = useState<CopyGroupConfig | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [pendingUnavailableFollowerRemoval, setPendingUnavailableFollowerRemoval] = useState<PendingUnavailableFollowerRemoval | null>(null);
+  /** Bod 5b: zapnutí zablokované otevřenou pozicí/příkazem ve skupině. */
+  const [pendingArmBlockGroupId, setPendingArmBlockGroupId] = useState<string | null>(null);
+  const [excludingAccountId, setExcludingAccountId] = useState<number | null>(null);
+  // Po potvrzení (nebo zrušení) zavření účtu se průvodce vrátí s čerstvým výčtem.
+  const reopenArmBlockRef = useRef<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [tableSettingsOpen, setTableSettingsOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -1069,6 +1109,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const participationByAccount = useMemo(() => new Map(
     (followerParticipation ?? []).map(item => [item.accountId, item]),
   ), [followerParticipation]);
+  const syncPausesByAccount = useMemo<ReadonlyMap<number, AccountSyncPause>>(() => (
+    accountSyncPauses && accountSyncPauses.length > 0
+      ? new Map(accountSyncPauses.map(pause => [pause.accountId, pause]))
+      : EMPTY_SYNC_PAUSES
+  ), [accountSyncPauses]);
   // B1: zavírání followera do konce obchodu doběhne na pozadí. Selhání
   // (`closed === false`) musí být vidět hned, ne jen v řádku účtu.
   const seenTradeCutCloseRef = useRef(new Map<string, ActiveFollowerCut['closed']>());
@@ -1150,10 +1195,29 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     !!account && (connectionByFirm.get(account.firm)?.connected ?? false);
 
   const anyLive = snapshot.accounts.some(isLive);
-  const activityForGroup = (candidate: CopyGroupConfig) => {
+  /**
+   * Vyřazený follower, jehož vlastní expozici kopírka neřídí — podle
+   * klasifikace workeru (vypnutý účet se stopou kopírky sem nepatří a dál
+   * blokuje), a jen u execution skupiny. Bez odpovědi workeru nic.
+   */
+  const followerManuallyOff = (candidate: CopyGroupConfig, accountId: number) => (
+    candidate.id === executionGroupId && (excludedForeignFollowers?.includes(accountId) ?? false)
+  );
+  /** Ručně vypnutý v konfiguraci (uložená skupina nebo čerstvá odpověď workeru). */
+  const followerConfiguredOff = (candidate: CopyGroupConfig, accountId: number) => (
+    candidate.followers.some(follower => follower.accountId === accountId && follower.enabled === false)
+    || (candidate.id === executionGroupId && participationByAccount.get(accountId)?.configuredEnabled === false)
+  );
+  /**
+   * `participatingOnly`: vlastní pozice ručně vypnutého followera kopírka
+   * neřídí („Zapnout bez tohoto účtu“) — zapnutí ani vypnutí vybrané skupiny
+   * nesmí blokovat. Worker to u zapnutí ověří znovu.
+   */
+  const activityForGroup = (candidate: CopyGroupConfig, participatingOnly = false) => {
     const accountIds = new Set([
       candidate.leaderAccountId,
-      ...candidate.followers.map(follower => follower.accountId),
+      ...candidate.followers.map(follower => follower.accountId)
+        .filter(accountId => !participatingOnly || !followerManuallyOff(candidate, accountId)),
     ].filter((accountId): accountId is number => accountId != null));
     const positionAccounts = snapshot.accounts
       .filter(account => accountIds.has(account.id)
@@ -1167,8 +1231,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     return { positionAccounts, workingOrderAccounts };
   };
 
-  const groupActivityDetail = (candidate: CopyGroupConfig): string | null => {
-    const activity = activityForGroup(candidate);
+  const groupActivityDetail = (candidate: CopyGroupConfig, participatingOnly = false): string | null => {
+    const activity = activityForGroup(candidate, participatingOnly);
     const parts = [
       activity.positionAccounts.length > 0
         ? `otevřená pozice: ${activity.positionAccounts.map(accountId => accountLabel(accountId, candidate.id)).join(', ')}`
@@ -1245,6 +1309,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         : connecting ? 'Copier se nepodařilo připojit.' : 'Copier se nepodařilo odpojit.';
       const affectedGroup = groups.find(group => group.id === groupId)
         ?? (runtimeGroup?.id === groupId ? runtimeGroup : null);
+      // Bod 5b: worker našel pozici/příkaz, který už vidí i appka → průvodce.
+      if (connecting && affectedGroup && isArmPositionRejection(reason)) {
+        const activity = activityForGroup(affectedGroup, true);
+        if (activity.positionAccounts.length > 0 || activity.workingOrderAccounts.length > 0) {
+          setPendingArmBlockGroupId(affectedGroup.id);
+          return;
+        }
+      }
       setPendingAction({
         title: rejected ? 'Zapnutí kopírky je zablokované' : connecting ? 'Zapnutí kopírky není potvrzené' : 'Vypnutí kopírky není potvrzené',
         detail: rejected ?? `${detail} AlphaTrade nebude pokračovat bez autoritativního potvrzení runtime. Zkontroluj aktuální stav skupiny a akci zopakuj až po ověření.`,
@@ -1284,9 +1356,24 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       });
       return;
     }
+    const workerGroup = candidate.id === executionGroupId;
+    if (workerGroup && !groupDeleteSupported) {
+      setPendingAction({
+        title: 'Skupinu teď smazat nejde',
+        detail: `Skupinu ${candidate.name} drží Mac worker a jeho verze ji smazat neumí. Nejdřív worker aktualizuj.`,
+        confirmLabel: 'Rozumím',
+        danger: true,
+        blocked: true,
+      });
+      return;
+    }
     setPendingAction({
       title: 'Smazat skupinu?',
-      detail: `Skupina ${candidate.name} bude odstraněna z konfigurace. Otevřené pozice ani příkazy na účtech to nijak nezmění.`,
+      detail: workerGroup
+        ? `Skupina ${candidate.name} je připojená ke kopírce. Po smazání kopírka zůstane vypnutá a nebude mít žádnou skupinu, dokud nezapneš jinou. `
+          + 'Účty, které už v Tradovate nejsou, se vyřadí bez kontroly; u ostatních kopírka nejdřív ověří, že na nich nezůstala její kopie. '
+          + 'Kopírka nic nezavírá ani neruší: případné otevřené pozice a příkazy zůstanou, jak jsou, a kopírka je dál hlídat nebude.'
+        : `Skupina ${candidate.name} bude odstraněna z konfigurace. Otevřené pozice ani příkazy na účtech to nijak nezmění.`,
       confirmLabel: 'Smazat',
       danger: true,
       command: { type: 'delete-group', groupId: candidate.id },
@@ -1306,7 +1393,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     });
   };
 
-  const requestGroupPower = (candidate: CopyGroupConfig) => {
+  const requestGroupPower = (candidate: CopyGroupConfig, powerOptions: { confirmedOffAccountIds?: ReadonlySet<number> } = {}) => {
     if (copierTransitionRef.current === 'connecting') {
       if (onDisarm) void runCopierTransition(candidate.id, false, onDisarm);
       return;
@@ -1350,8 +1437,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     const currentGroup = runtimeGroup
       ?? groups.find(group => group.id === executionGroupId)
       ?? null;
-    const candidateActivity = groupActivityDetail(candidate);
-    const currentActivity = currentGroup ? groupActivityDetail(currentGroup) : null;
+    // Vybraná skupina: jen zapojené účty. Přepnutí na jinou skupinu: přísně
+    // všechny účty (worker tam vyžaduje flat i u vyřazených).
+    const candidateActivity = groupActivityDetail(candidate, currentGroup?.id === candidate.id);
+    const currentActivity = currentGroup
+      ? groupActivityDetail(currentGroup, currentGroup.id === candidate.id)
+      : null;
 
     const validation = powered
       ? null
@@ -1369,6 +1460,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         candidate,
         unavailable.leaderAccountId,
       );
+      return;
+    }
+    // Bod 5b: když zapnutí brání jen pozice/příkaz ve vlastní skupině, místo
+    // obecné hlášky ukážeme, na kterých účtech a co s tím jde udělat.
+    if (!powered && validationErrors.length === 0 && candidateActivity
+      && (!currentActivity || currentGroup?.id === candidate.id)) {
+      setPendingArmBlockGroupId(candidate.id);
       return;
     }
     const blocker = copyGroupPowerBlocker({
@@ -1421,13 +1519,17 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     // zapnutím to připomeneme, jinak se ráno snadno přehlédne, že účet nekopíruje.
     const manuallyOff = candidate.followers.filter(follower => follower.enabled === false
       || (candidate.id === executionGroupId && participationByAccount.get(follower.accountId)?.configuredEnabled === false));
-    if (manuallyOff.length > 0) {
+    // Právě vyřazený účet uživatel potvrdil v průvodci; ostatní připomeneme.
+    if (manuallyOff.some(follower => !powerOptions.confirmedOffAccountIds?.has(follower.accountId))) {
       const names = manuallyOff.map(follower => accountLabel(follower.accountId, candidate.id));
       setPendingAction({
         title: 'Zapnout kopírování?',
-        detail: manuallyOff.length === 1
+        detail: (manuallyOff.length === 1
           ? `${names[0]} je ručně vypnutý a kopírovat se na něj nebude. Zapneš ho přepínačem v řádku účtu, až bude skupina flat.`
-          : `${manuallyOff.length} followeři jsou ručně vypnutí a kopírovat se na ně nebude: ${names.join(', ')}. Zapneš je přepínačem v řádku účtu, až bude skupina flat.`,
+          : `${manuallyOff.length} followeři jsou ručně vypnutí a kopírovat se na ně nebude: ${names.join(', ')}. Zapneš je přepínačem v řádku účtu, až bude skupina flat.`)
+          + (manuallyOff.some(follower => accountsById.get(follower.accountId)?.positions.some(position => position.netPosition !== 0))
+            ? ' Vypnutý účet drží vlastní pozici — kopírka ji neřídí; pozor na hedging napříč účty propky.'
+            : ''),
         confirmLabel: 'Zapnout',
         accountIds: manuallyOff.map(follower => follower.accountId),
         proceed: () => { void runCopierTransition(candidate.id, true, () => armAction(candidate)); },
@@ -1454,8 +1556,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     enabled: boolean,
     /** Telefon ukazuje důvod přímo pod řádkem účtu, ne v toastu. */
     onRejected?: (message: string) => void,
+    toggleOptions: { allowOwnExposure?: true } = {},
   ): Promise<boolean> => {
-    const run = followerToggleQueue.current.then(() => toggleFollowerNow(groupId, accountId, enabled, onRejected));
+    const run = followerToggleQueue.current.then(() => toggleFollowerNow(groupId, accountId, enabled, onRejected, toggleOptions));
     followerToggleQueue.current = run.catch(() => undefined);
     return run;
   };
@@ -1464,6 +1567,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     accountId: number,
     enabled: boolean,
     onRejected?: (message: string) => void,
+    toggleOptions: { allowOwnExposure?: true } = {},
   ): Promise<boolean> => {
     const report = (text: string) => {
       if (onRejected) onRejected(text);
@@ -1485,7 +1589,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       }
       let message: string | null = null;
       const ok = await runCommand(
-        { type: 'set-follower-enabled', groupId, accountId, enabled },
+        {
+          type: 'set-follower-enabled', groupId, accountId, enabled,
+          ...(toggleOptions.allowOwnExposure ? { allowOwnExposure: true as const } : {}),
+        },
         undefined,
         reason => { message = reason; },
       );
@@ -1499,6 +1606,17 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }
     return false;
   };
+
+  const cancelAutoResume = onDisarm ? () => {
+    void Promise.resolve(onDisarm()).then(() => {
+      setToast({ tone: 'info', text: 'Automatické pokračování zrušeno — kopírka zůstává vypnutá.' });
+    }).catch(reason => {
+      setToast({
+        tone: isCopierBrakeQueuedError(reason) ? 'info' : 'error',
+        text: reason instanceof Error ? reason.message : 'Zrušení se nepodařilo potvrdit.',
+      });
+    });
+  } : undefined;
 
   const triggerKillSwitch = onEmergencyStop ? async () => {
     try {
@@ -1524,6 +1642,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }
   } : undefined;
 
+  // 8. 10. 2026: místo „není připojená k execution runtime“ srozumitelně, proč
+  // příkaz nedošel na Mac worker a co udělat.
+  const inactiveGroupNotice = (workerUnavailable: boolean, needsArmed: boolean) => {
+    if (workerUnavailable) return 'Mac worker teď není dostupný, příkaz nikam neodešel.';
+    if (needsArmed) return 'Kopírka je vypnutá, příkaz nikam neodešel.';
+    const active = groups.find(group => group.id === executionGroupId)?.name;
+    return `Tahle skupina ve workeru neběží${active ? ` (aktivní je „${active}“)` : ''}, příkaz nikam neodešel. Zapni ji tlačítkem Zapnout — worker se na ni přepne.`;
+  };
   const runCommand = async (
     command: LiveCopyTradingCommand,
     update?: () => void | Promise<void>,
@@ -1547,7 +1673,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       }
       if (brokerWrite && (!commandAdapter || !targetsExecutionRuntime || (requiresArmed && !copierArmed))) {
         await update?.();
-        setToast({ tone: 'info', text: 'Preview pouze: tato skupina není připojená k připravenému execution runtime.' });
+        setToast({ tone: 'info', text: inactiveGroupNotice(!commandAdapter, requiresArmed && !copierArmed) });
         return true;
       }
       const result = commandAdapter && targetsExecutionRuntime
@@ -1575,6 +1701,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         ? command.type === 'flatten-follower-trade'
           ? 'Účet je potvrzeně flat a čeká na další obchod. Ostatní účty i kopírka pokračují.'
           : `Flatten potvrzen: ${result.accountIds.length} účtů je flat, zrušeno ${result.canceledOrders} příkazů, odesláno ${result.submittedClosures} close příkazů.`
+        : command.type === 'delete-group'
+          ? 'Skupina je smazaná. Kopírka zůstává vypnutá a nemá žádnou skupinu — až budeš chtít kopírovat, zapni jinou.'
         : command.type === 'resolve-stuck-operation'
           ? 'Operace označena za vyřešenou. Runtime je VYPNUTO; před zapnutím proběhne nová kontrola pozic.'
           : command.type === 'set-multiplier'
@@ -1584,7 +1712,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         tone: commandAdapter && targetsExecutionRuntime ? 'success' : 'info',
         text: commandAdapter && targetsExecutionRuntime
           ? successText
-          : 'Konfigurace byla uložena pouze lokálně. Tato skupina není připojená k execution runtime.',
+          : `Uloženo jen v appce. ${inactiveGroupNotice(!commandAdapter, false)}`,
       });
       return true;
     } catch (reason) {
@@ -1838,23 +1966,33 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   // a nebylo by poznat, co se kam posunulo.
   useFlipReorder(orderedGroups.map(group => group.id).join('|'));
 
-  const requestAccountFlatten = (group: CopyGroupConfig, accountId: number) => {
+  const requestAccountFlatten = (group: CopyGroupConfig, accountId: number, options: { ordersOnly?: boolean } = {}) => {
+    // Ručně vypnutý follower kopii nemá — jeho vlastní pozici zavře jen Flatten účtu.
     const followerInRunningTrade = copierArmed
       && group.id === executionGroupId
-      && group.followers.some(follower => follower.accountId === accountId);
+      && group.followers.some(follower => follower.accountId === accountId && follower.enabled !== false)
+      && participationByAccount.get(accountId)?.configuredEnabled !== false;
     setPendingAction({
-      title: followerInRunningTrade ? 'Zavřít účet jen pro tento obchod?' : 'Flatten účet?',
+      title: followerInRunningTrade ? 'Zavřít účet jen pro tento obchod?' : options.ordersOnly ? 'Zrušit příkazy na účtu?' : 'Flatten účet?',
       detail: followerInRunningTrade
         ? 'Zavře pouze potvrzenou kopii a její čekající příkazy na tomto followerovi. Ostatní účty pokračují; účet se automaticky vrátí až po flat celé skupiny bez aktivních příkazů.'
-        : 'Připraví uzavření všech otevřených pozic pouze na tomto účtu a kopírku z bezpečnostních důvodů vypne.',
+        : options.ordersOnly
+          ? 'Zruší čekající příkazy na tomto účtu (případnou pozici by zavřel taky) a kopírku z bezpečnostních důvodů vypne.'
+          : 'Připraví uzavření všech otevřených pozic pouze na tomto účtu a kopírku z bezpečnostních důvodů vypne.',
       accountIds: [accountId],
-      confirmLabel: followerInRunningTrade ? 'Zavřít jen tento účet' : 'Flatten',
+      confirmLabel: followerInRunningTrade ? 'Zavřít jen tento účet' : options.ordersOnly ? 'Zrušit příkazy' : 'Flatten',
       danger: true,
       command: followerInRunningTrade
         ? { type: 'flatten-follower-trade', groupId: group.id, accountId, operationId: manualOperationId() }
         : { type: 'flatten-account', groupId: group.id, accountId, operationId: manualOperationId() },
     });
   };
+
+  useEffect(() => {
+    if (pendingAction || busyCommand != null || reopenArmBlockRef.current == null) return;
+    setPendingArmBlockGroupId(reopenArmBlockRef.current);
+    reopenArmBlockRef.current = null;
+  }, [pendingAction, busyCommand]);
 
   // Výčet pro potvrzení Flatten All na telefonu se počítá z živých dat při
   // každém renderu, takže se list sám aktualizuje, když se mezitím něco zavře.
@@ -2005,6 +2143,18 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         </div>
       ) : null}
 
+      {workerWithoutGroup ? (
+        <div data-testid="copier-no-group" className="flex items-start gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4">
+          <Power size={16} className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
+          <div className="flex-1">
+            <p className="text-sm font-black text-[var(--text-primary)]">Kopírka nemá žádnou skupinu</p>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+              Skupina připojená ke kopírce byla smazaná. Mac worker běží vypnutý a nic nekopíruje ani nehlídá. Až budeš chtít kopírovat, zapni některou skupinu nebo vytvoř novou.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <section id="live-copy-groups" className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
         <header className="flex items-center justify-between gap-3 px-5 lg:px-6 py-4 flex-wrap">
           <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
@@ -2066,6 +2216,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               const selected = group.id === executionGroupId;
               const armed = selected && copierArmed;
               return (
+                <AccountSyncPauseContext.Provider key={group.id} value={armed ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
                 <CompactGroupCard
                   key={group.id}
                   group={group}
@@ -2105,12 +2256,17 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   redaction={redaction}
                   templates={templates}
                   tightenOnly={tightenOnly}
-                  cooldownPanel={selected ? <>{maintenancePanel}{cooldownPanel}</> : null}
+                  cooldownPanel={<>
+                    {transitionGroupId === group.id && copierTransition === 'connecting' ? <CopierArmProgressPanel /> : null}
+                    {selected && transportResumeSupported && transportResume ? <CopierAutoResumePanel resume={transportResume} onCancel={cancelAutoResume} /> : null}
+                    {selected ? <>{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</> : null}
+                  </>}
                   disarmPanel={selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual'
                     ? <CopierDisarmPanel lastDisarm={disarmNotice} />
                     : null}
                   {...compactGroupActions(group)}
                 />
+                </AccountSyncPauseContext.Provider>
               );
             })}
           </div>
@@ -2153,6 +2309,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         ? `live-island-group live-island-group-${islandModel.tone}`
                         : undefined}
                     >
+                      <AccountSyncPauseContext.Provider value={armed ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
                       <GroupRow
                         group={group} rows={rows} armed={armed}
                         dailyPnlPending={dailyPnlPending}
@@ -2230,7 +2387,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                           </td>
                         </tr>
                       ) : null}
-                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{maintenancePanel}{cooldownPanel}</td></tr> : null}
+                      {transitionGroupId === group.id && copierTransition === 'connecting' ? (
+                        <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0"><CopierArmProgressPanel /></td></tr>
+                      ) : null}
+                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{transportResumeSupported && transportResume ? <CopierAutoResumePanel resume={transportResume} onCancel={cancelAutoResume} /> : null}{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</td></tr> : null}
                       <tr
                         aria-hidden={!expanded.has(group.id)}
                       >
@@ -2270,6 +2430,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                           </div>
                         </td>
                       </tr>
+                      </AccountSyncPauseContext.Provider>
                     </tbody>
                   );
                 })}
@@ -2339,14 +2500,86 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           )}
           onDelete={groups.some(group => group.id === editorGroup.id) ? () => {
             setEditorGroup(null);
-            setPendingAction({
-              title: 'Smazat skupinu?', detail: `Skupina ${editorGroup.name} bude odstraněna z konfigurace.`,
-              confirmLabel: 'Smazat', danger: true, command: { type: 'delete-group', groupId: editorGroup.id },
-            });
+            requestGroupDelete(editorGroup);
           } : undefined}
           saving={busyCommand != null || groupSaveBusy}
         />
       )}
+      {/* Když se skupina mezitím zapnula (jiné zařízení), průvodce už neplatí. */}
+      {pendingArmBlockGroupId && !pendingAction && !(copierArmed && executionGroupId === pendingArmBlockGroupId) && (() => {
+        const blockGroup = groups.find(group => group.id === pendingArmBlockGroupId)
+          ?? (runtimeGroup?.id === pendingArmBlockGroupId ? runtimeGroup : null);
+        if (!blockGroup) return null;
+        const manuallyOffIds = new Set(blockGroup.followers
+          .map(follower => follower.accountId)
+          .filter(accountId => followerManuallyOff(blockGroup, accountId)));
+        const accounts = buildArmPositionBlock(blockGroup, accountsById, orders, accountId => redactAccountName(
+          accountsById.get(accountId)?.name ?? accountLabel(accountId, blockGroup.id), redactNames, redaction,
+        ), {
+          skipAccountIds: manuallyOffIds,
+          exclusionOf: accountId => blockGroup.id === executionGroupId
+            ? participationByAccount.get(accountId)?.exclusionWithExposure
+            : undefined,
+        });
+        const participatingFollowerCount = blockGroup.followers
+          .filter(follower => follower.mode !== 'off'
+            && !followerConfiguredOff(blockGroup, follower.accountId)
+            && (blockGroup.id !== executionGroupId
+              || participationByAccount.get(follower.accountId)?.effectiveEnabled !== false)).length;
+        const blockName = (accountId: number) => redactAccountName(
+          accountsById.get(accountId)?.name ?? accountLabel(accountId, blockGroup.id), redactNames, redaction,
+        );
+        return (
+          <ArmPositionBlockDialogPortal
+            groupName={blockGroup.name}
+            accounts={accounts}
+            unverifiedNames={armBlockUnverifiedAccounts(blockGroup, accountsById)
+              .filter(accountId => !manuallyOffIds.has(accountId)).map(blockName)}
+            participatingFollowerCount={participatingFollowerCount}
+            excludingAccountId={excludingAccountId}
+            onExcludeAccount={followerExclusionSupported && commandAdapter && blockGroup.id === executionGroupId
+              ? accountId => {
+                if (excludingAccountId != null) return;
+                setExcludingAccountId(accountId);
+                void toggleFollower(blockGroup.id, accountId, false, message => {
+                  setToast({
+                    tone: 'error',
+                    text: /může být z kopírky/.test(message)
+                      ? 'Pozice na tomto účtu může být z kopírky — zavři ji tlačítkem Zavřít pozici.'
+                      : message,
+                    accountIds: [accountId],
+                  });
+                }, { allowOwnExposure: true }).then(ok => {
+                  setExcludingAccountId(null);
+                  if (!ok) return;
+                  // Zapnutí projde celou kontrolou u workeru znovu; když něco
+                  // dál blokuje, průvodce se ukáže s aktuálním výčtem.
+                  setPendingArmBlockGroupId(null);
+                  requestGroupPower({
+                    ...blockGroup,
+                    followers: blockGroup.followers.map(follower => follower.accountId === accountId
+                      ? { ...follower, enabled: false }
+                      : follower),
+                  }, { confirmedOffAccountIds: new Set([accountId]) });
+                });
+              }
+              : undefined}
+            busy={busyCommand != null}
+            onClose={() => setPendingArmBlockGroupId(null)}
+            onCloseAccount={accountId => {
+              reopenArmBlockRef.current = blockGroup.id;
+              setPendingArmBlockGroupId(null);
+              requestAccountFlatten(blockGroup, accountId, {
+                ordersOnly: !accounts.some(account => account.accountId === accountId && account.positions.length > 0),
+              });
+            }}
+            onArm={() => {
+              setPendingArmBlockGroupId(null);
+              requestGroupPower(blockGroup);
+            }}
+          />
+        );
+      })()}
       {pendingUnavailableFollowerRemoval && (
         <UnavailableFollowerRemovalDialogPortal
           state={pendingUnavailableFollowerRemoval}
@@ -2956,6 +3189,10 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
     : rows.some(row => row.account?.unrealizedPnlSource === 'estimated') ? 'estimated' : 'broker';
   const firms = groupFirmList(rows);
   const enabledFollowerCount = group.followers.filter(follower => follower.mode !== 'off').length;
+  // Ruční vyřazení do konce obchodu i pauza „mimo synchron“ = follower
+  // v tomto obchodu nekopíruje.
+  const syncPauses = React.useContext(AccountSyncPauseContext);
+  const excludedForTrade = (accountId: number) => tradeCutsByAccount.has(accountId) || syncPauses.has(accountId);
   const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
   const unavailableLeader = rows.some(row => row.isLeader && row.accountId != null && !row.account);
   const unavailableFollowerCount = enabledFollowerRows.filter((row, index) =>
@@ -2963,7 +3200,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
   const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account
     || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
-    || (row.accountId != null && tradeCutsByAccount.has(row.accountId))).length;
+    || (row.accountId != null && excludedForTrade(row.accountId))).length;
   // Ručně vypnutí followeři (přepínač v řádku) nejsou problém, jen volba —
   // počítají se zvlášť a ukazují neutrálně, ne jantarově.
   const manuallyOffIds = new Set(group.followers.filter(follower => follower.enabled === false).map(follower => follower.accountId));
@@ -2971,13 +3208,13 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
     row.accountId != null && manuallyOffIds.has(row.accountId)
     && !(!row.account
       || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
-      || tradeCutsByAccount.has(row.accountId))).length;
+      || excludedForTrade(row.accountId))).length;
   // Před první odpovědí workeru: follower bez potvrzeného stavu není
   // „zařazený“ ani vyřazený — nezapočítá se a počty se neukazují.
   const eligibilityUndecided = useEligibilityUndecided();
   const unknownFollowerCount = enabledFollowerRows.filter((row, index) =>
     row.account != null && eligibilityUndecided(row.accountId, eligibility[index])
-    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length;
+    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || excludedForTrade(row.accountId)))).length;
   const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount - manuallyOffCount - unknownFollowerCount);
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
@@ -3185,6 +3422,163 @@ const TradeCutPill = ({ cut }: { cut?: Pick<ActiveFollowerCut, 'closed'> }) => (
   )
 );
 
+/**
+ * Bod 5e: co se děje po stisku Zapnout. Worker neposílá průběh po krocích,
+ * proto panel neodškrtává smyšlené kroky — jen poctivě říká, co se ověřuje,
+ * a ukazuje, jak dlouho to trvá.
+ */
+export const CopierArmProgressPanel = () => {
+  const [startedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(startedAt);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1_000));
+  return (
+    <div role="status" data-testid="copier-arm-progress" className="border-t border-emerald-500/20 bg-emerald-500/[0.06] px-3 py-2.5">
+      <p className="flex items-center gap-1.5 text-[12px] font-black text-emerald-600">
+        <RefreshCw aria-hidden="true" size={12} strokeWidth={2.5} className="animate-spin" />
+        Zapínám · {seconds} s
+      </p>
+      <p className="mt-1 text-[11px] leading-snug text-[var(--text-secondary)]">
+        Kopírka u brokera ověřuje spojení, pozice a čekající příkazy všech účtů a limity propfirem. Obvykle to trvá pár sekund; když něco nesedí, nic se nezapne a dozvíš se proč.
+      </p>
+    </div>
+  );
+};
+
+/**
+ * Automatické pokračování po výpadku spojení (10. 10. 2026). Bez panelu by
+ * vypnutá kopírka „lhala“ — za chvíli se může sama zapnout.
+ */
+export const CopierAutoResumePanel = ({ resume, now = Date.now(), onCancel }: {
+  resume: NonNullable<CopierControllerStatus['transportResume']>;
+  now?: number;
+  /** Brzda (DISARM) — worker ji provede i za vypnuté kopírky a pokračování zruší. */
+  onCancel?: () => void;
+}) => {
+  // Výsledek (pokračovala / nepokračuje) stačí ukazovat chvíli po rozhodnutí.
+  if ((resume.phase === 'resumed' || resume.phase === 'declined') && now - resume.at > 15 * 60_000) return null;
+  const tone = resume.phase === 'resumed'
+    ? 'border-emerald-500/20 bg-emerald-500/[0.06] text-emerald-600'
+    : resume.phase === 'declined'
+      ? 'border-amber-500/25 bg-amber-500/[0.07] text-amber-600'
+      : 'border-blue-500/20 bg-blue-500/[0.06] text-blue-600';
+  const until = formatClockTime(resume.armExpiresAt).slice(0, 5);
+  return (
+    <div role="status" data-testid="copier-auto-resume" className={`border-t px-3 py-2.5 ${tone}`}>
+      <p className="flex items-center gap-1.5 text-[12px] font-black">
+        {resume.phase === 'resumed' ? <CheckCircle2 aria-hidden="true" size={13} />
+          : resume.phase === 'declined' ? <AlertTriangle aria-hidden="true" size={13} />
+            : <RefreshCw aria-hidden="true" size={12} strokeWidth={2.5} className="animate-spin" />}
+        {resume.phase === 'resumed'
+          ? `Kopírka po výpadku sama pokračuje · ${formatClockTime(resume.at)}`
+          : resume.phase === 'declined'
+            ? 'Kopírka po výpadku nepokračuje'
+            : 'Po výpadku spojení kopírka pokračuje sama'}
+      </p>
+      <p className="mt-1 text-[11px] leading-snug text-[var(--text-secondary)]">
+        {resume.phase === 'resumed'
+          ? 'Všechny účty ověřené u brokera flat a bez příkazů.'
+          : resume.phase === 'declined'
+            ? `${resume.reason ?? 'Kontrola nevyšla'}. Zapni ji ručně.`
+            : `Až se spojení vrátí, ověří si všechny účty u brokera a když sedí, zapne se (nejpozději do ${until}).${resume.reason ? ` Teď: ${resume.reason}.` : ''}`}
+      </p>
+      {(resume.phase === 'waiting' || resume.phase === 'ready') && onCancel ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-2 h-8 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 text-[11px] font-black text-[var(--text-secondary)]"
+        >
+          Zrušit automatické pokračování
+        </button>
+      ) : null}
+    </div>
+  );
+};
+
+/** Proč je follower mimo synchron — krátce, do řádku účtu. */
+export const accountSyncPauseReasonText = (pause: Pick<AccountSyncPause, 'reasonCode'>): string => (
+  pause.reasonCode === 'protective-filled-early'
+    ? 'Stop nebo target se vyplnil dřív než leaderovi'
+    : 'Broker odmítl vstup'
+);
+
+/**
+ * Řádek pozastaveného followera. Flat je očekávaný stav; otevřená pozice na
+ * pozastaveném účtu ale kopírka neřídí a musí ji vidět člověk.
+ */
+export const accountSyncPauseNoteText = (holdsPosition: boolean): string => (
+  holdsPosition
+    ? 'Pauza do konce obchodu · má otevřenou pozici, kopírka ji neřídí'
+    : 'Pauza do konce obchodu · vrátí se sám u dalšího obchodu'
+);
+
+const SyncPausePill = () => (
+  <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.08] px-2 py-1 text-[10px] font-black leading-none text-amber-600">
+    <Unplug aria-hidden="true" size={10} strokeWidth={2.5} /> MIMO SYNCHRON
+  </span>
+);
+
+const czechAccountCount = (count: number) => (
+  count >= 2 && count <= 4 ? `${count} účty jsou` : `${count} účtů je`
+);
+
+/**
+ * Lišta skupiny: který účet vypadl ze synchronu a že ostatní kopírují dál.
+ * Text bere z pauz workeru; nic se tu neodhaduje.
+ */
+export const AccountSyncPauseBanner = ({ rows, eligibilityByAccount, tradeCutsByAccount, redactNames, redaction }: {
+  rows: Row[];
+  eligibilityByAccount: ReadonlyMap<number, CopierAccountEligibility>;
+  tradeCutsByAccount: ReadonlyMap<number, ActiveFollowerCut>;
+  redactNames: boolean;
+  redaction: RedactionSettings;
+}) => {
+  const pauses = React.useContext(AccountSyncPauseContext);
+  // Stejná přednost jako v řádku: ruční vyřazení, DLL a breach pauzu přebíjí.
+  const paused = rows.flatMap(row => {
+    if (row.isLeader || row.mode === 'off' || row.accountId == null || tradeCutsByAccount.has(row.accountId)) return [];
+    if ((eligibilityByAccount.get(row.accountId)?.state ?? 'active') !== 'active') return [];
+    const pause = pauses.get(row.accountId);
+    return pause ? [{ row, pause }] : [];
+  });
+  if (paused.length === 0) return null;
+  const single = paused.length === 1 ? paused[0] : null;
+  // „K dalšímu se připojí sám“ platí jen pro flat účet; pauza se uvolní až
+  // s důkazem flat. Otevřenou pozici na pozastaveném účtu kopírka neřídí.
+  const holdingNames = paused
+    .filter(({ row }) => row.account?.positions.some(position => position.netPosition !== 0))
+    .map(({ row }) => redactAccountName(row.name, redactNames, redaction));
+  const singleName = single ? redactAccountName(single.row.name, redactNames, redaction) : '';
+  return (
+    <div role="status" data-testid="account-sync-pause-banner" className="border-t border-amber-500/25 bg-amber-500/[0.07] px-3 py-2.5">
+      <p className="flex items-center gap-1.5 text-[12px] font-black text-amber-600">
+        <Unplug aria-hidden="true" size={13} strokeWidth={2.5} />
+        {single ? 'Jeden účet je mimo synchron' : `${czechAccountCount(paused.length)} mimo synchron`}
+      </p>
+      <p className="mt-1 text-[11px] leading-snug text-[var(--text-secondary)]">
+        {single
+          ? <>
+              {single.pause.reasonCode === 'protective-filled-early'
+                ? <>Účtu <b className="text-[var(--text-primary)]">{singleName}</b> se vyplnil stop nebo target dřív než leaderovi</>
+                : <>Účtu <b className="text-[var(--text-primary)]">{singleName}</b> broker odmítl vstup</>}
+              {' '}({formatClockTime(single.pause.pausedAt)}). {holdingNames.length > 0
+                ? 'Drží ale otevřenou pozici, kterou kopírka neřídí — zkontroluj ji.'
+                : 'Zbytek tohoto obchodu vynechá a k dalšímu se připojí sám.'} Ostatní kopírují dál.
+            </>
+          : <>
+              {paused.map(({ row }) => redactAccountName(row.name, redactNames, redaction)).join(', ')} vynechají zbytek tohoto obchodu.
+              {holdingNames.length > 0
+                ? ` Otevřenou pozici, kterou kopírka neřídí, drží ${holdingNames.join(', ')} — zkontroluj ji.`
+                : ' K dalšímu obchodu se připojí samy.'} Ostatní kopírují dál.
+            </>}
+      </p>
+    </div>
+  );
+};
+
 /** Kódy automatického vyřazení z workeru → věta pro člověka. */
 const AUTOMATIC_EXCLUSION_LABEL: Record<string, string> = {
   'dll-locked': 'denní limit ztráty (DLL), uvolní se další obchodní den',
@@ -3255,7 +3649,10 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   // který se do celkového součtu nahoře započítává jako nula — a součet
   // s pomlčkami pod sebou vypadá jako rozbitá data.
   const quiet = daily == null && a != null && liveDayReadAnswered(a, Date.now(), dailyPnlPending);
-  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null;
+  // Pauza „mimo synchron“ ustoupí silnějším stavům (ruční vyřazení, DLL, breach).
+  const syncPauseRaw = useAccountSyncPause(row);
+  const syncPause = !tradeCut && (eligibility?.state ?? 'active') === 'active' ? syncPauseRaw : undefined;
+  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null || syncPause != null;
   // Stejná pravidla čerstvosti jako desktop: staré čtení nesmí nést zelený
   // štít ani tvářit se jako „flat“.
   const positionsVerified = a ? isLiveAccountReadVerified(a, 'positions') : true;
@@ -3280,6 +3677,10 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
 
   const note = tradeCut
     ? <p className={`text-[10px] font-semibold leading-tight ${tradeCut.closed === false ? 'text-rose-600' : 'text-amber-600'}`}>{tradeCutNoteText(tradeCut)}</p>
+    : syncPause
+    ? <p title={accountSyncPauseReasonText(syncPause)} className={`text-[10px] font-semibold leading-tight ${hasOpenPositions ? 'text-rose-600' : 'text-amber-600'}`}>
+        {accountSyncPauseNoteText(hasOpenPositions)}
+      </p>
     : compactRejection
     ? <RejectedExecutionStatus
         execution={compactRejection}
@@ -3302,7 +3703,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   const multiplierBadge = <span title="Násobek změníš v nastavení skupiny" className="compact-row-dim shrink-0 rounded bg-[var(--bg-page)] px-1 text-[9.5px] font-bold tabular-nums text-[var(--text-secondary)]">×{row.scale}</span>;
 
   return (
-    <li className={`px-3 ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''} ${copyOff ? 'compact-row-off' : ''}`} style={style} data-copy-off={copyOff || undefined}>
+    <li className={`px-3 ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : syncPause ? 'bg-amber-500/[0.05]' : ''} ${copyOff ? 'compact-row-off' : ''}`} style={style} data-copy-off={copyOff || undefined} data-sync-paused={syncPause ? true : undefined}>
       <div
         role={a ? 'button' : undefined}
         onClick={() => a && onAccount?.(a)}
@@ -3414,7 +3815,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
           ) : null}
           {flatReadWarning}
           {attention ? (
-            tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
+            tradeCut ? <TradeCutPill cut={tradeCut} /> : syncPause ? <SyncPausePill /> : <AccountEligibilityPill
               accountId={accountId}
               eligibility={eligibility}
               live={live}
@@ -3522,11 +3923,15 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
   const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
+  // Ruční vyřazení do konce obchodu i pauza „mimo synchron“ = follower
+  // v tomto obchodu nekopíruje.
+  const syncPauses = React.useContext(AccountSyncPauseContext);
+  const excludedForTrade = (accountId: number) => tradeCutsByAccount.has(accountId) || syncPauses.has(accountId);
   const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
   const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account
     || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
-    || (row.accountId != null && tradeCutsByAccount.has(row.accountId))).length;
+    || (row.accountId != null && excludedForTrade(row.accountId))).length;
   // Ručně vypnutí followeři (přepínač v řádku) nejsou problém, jen volba —
   // počítají se zvlášť a ukazují neutrálně, ne jantarově.
   // Worker hlásí ruční účast dřív, než se změna propíše do uložené skupiny.
@@ -3537,10 +3942,10 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
     row.accountId != null && manuallyOffIds.has(row.accountId)
     && !(!row.account
       || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
-      || tradeCutsByAccount.has(row.accountId))).length;
+      || excludedForTrade(row.accountId))).length;
   const unknownFollowerCount = enabledFollowerRows.filter((row, index) =>
     row.account != null && eligibilityUndecided(row.accountId, eligibility[index])
-    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length;
+    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || excludedForTrade(row.accountId)))).length;
   const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount - manuallyOffCount - unknownFollowerCount);
   const unavailableFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account && (eligibility[index]?.state ?? 'active') === 'active').length;
@@ -4309,36 +4714,32 @@ const timeWithSecondsLabel = (at: number) => new Date(at).toLocaleTimeString('cs
  * vypnutí panel nemá; technický detail i historie jsou v záložce Události.
  */
 /**
- * Režim opravy po startu (breached/nedostupné účty uložené skupiny) a ruční
- * read-only Kontrola pozic. Kontrola se nabízí jen za VYPNUTÉ kopírky: za ARM
- * by ji worker nejdřív auditovaně vypnul.
+ * Režim opravy po startu (breached/nedostupné účty uložené skupiny) a stav
+ * po incidentu. Samostatné tlačítko Kontrola pozic zmizelo (8. 10. 2026):
+ * kontrolu u brokera dělá Zapnout a incident potvrdíš v jeho dialogu.
  */
-export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
+export const CopierMaintenancePanel = ({ status, known, legacyReconcile }: {
   status: CopierControllerStatus | null | undefined;
   known: boolean;
-  onReconcile?: () => Promise<void>;
+  /** Starší worker bez potvrzení incidentu v ON: zachová ruční Kontrolu pozic. */
+  legacyReconcile?: () => Promise<void>;
 }) => {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   if (!known || !status) return null;
   const repair = status.startupGroupRepair ?? null;
-  // Jen skutečný požadavek workeru. Zastaralý snímek pro zapnutí vypnutého
-  // followera platí za DISARMED skoro pořád a panel by svítil zbytečně.
+  const incident = status.manualRecovery ?? null;
   const preparation = status.armPreparation;
-  const preparationRequiresCheck = preparation?.blockedBy != null
+  const legacyNeedsCheck = legacyReconcile != null && !status.armed && (preparation?.blockedBy != null
     ? preparation.blockedBy === 'incident'
-    : preparation?.manualRecoveryRequired === true;
-  const needsCheck = !status.armed && (preparationRequiresCheck
-    || (status.reconciliationRequired && !preparation));
-  // Background warming must not insert/remove a panel every refresh. The
-  // ON switch owns progress; this panel is only for operator recovery.
-  if (!repair && !needsCheck && !result) return null;
-  const runCheck = async () => {
-    if (!onReconcile || busy) return;
+    : preparation?.manualRecoveryRequired === true || (status.reconciliationRequired && !preparation));
+  if (!repair && !legacyNeedsCheck && !result && (!incident || status.armed)) return null;
+  const runLegacyCheck = async () => {
+    if (!legacyReconcile || busy) return;
     setBusy(true);
     setResult(null);
     try {
-      await onReconcile();
+      await legacyReconcile();
       setResult({ ok: true, text: 'Kontrola pozic proběhla. Účty jsou ověřené u brokera, kopírka zůstává vypnutá.' });
     } catch (reason) {
       setResult({ ok: false, text: reason instanceof Error ? reason.message : String(reason) });
@@ -4363,19 +4764,24 @@ export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
               {' '}Kopírka běží jen vypnutá. <span className="font-black">Uprav skupinu: odeber tyto účty a vyber nového leadera.</span>
               <span className="block font-medium text-[var(--text-secondary)]">Při uložení je worker auditovaně vyřadí bez ověření jejich pozic u brokera; ostatní účty projdou normální kontrolou.</span>
             </p>
-          ) : needsCheck ? (
+          ) : legacyNeedsCheck ? (
             <p>
               {preparation?.reason ?? 'Před zapnutím je potřeba Kontrola pozic (read-only u brokera, nic neobchoduje).'}
+            </p>
+          ) : incident ? (
+            <p>
+              Po incidentu: {incident.reason}
+              <span className="block font-medium text-[var(--text-secondary)]">Ověří se při zapnutí — Zapnout se nejdřív zeptá, pak zkontroluje účty u brokera a zapne jen při čistém stavu.</span>
             </p>
           ) : null}
           {result ? (
             <p className={`mt-1 font-medium ${result.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{result.text}</p>
           ) : null}
         </div>
-        {needsCheck && !repair && onReconcile ? (
+        {legacyNeedsCheck && !repair ? (
           <button
             type="button"
-            onClick={() => { void runCheck(); }}
+            onClick={() => { void runLegacyCheck(); }}
             disabled={busy}
             className="shrink-0 rounded-md border border-current px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50"
           >
@@ -4917,7 +5323,10 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   const accountUnavailable = !a && accountId != null;
   // Odchylka = cokoli, co není „živý a způsobilý účet“. Jen ta se vykreslí.
   // „Ověřuji“ drží řádek se štítkem už předem — DLL do něj jen naskočí.
-  const stateIsDeviation = tradeCut != null || eligibilityState !== 'active' || accountUnavailable || !live;
+  const syncPauseRaw = useAccountSyncPause(row);
+  const syncPause = !tradeCut && eligibilityState === 'active' ? syncPauseRaw : undefined;
+  const rowHoldsPosition = a?.positions.some(position => position.netPosition !== 0) ?? false;
+  const stateIsDeviation = tradeCut != null || syncPause != null || eligibilityState !== 'active' || accountUnavailable || !live;
   const stateTone: AccountStateTone = eligibilityState === 'breached'
     ? { dotClass: 'bg-rose-500', accentClass: 'text-rose-500', label: 'Breached',
         detail: 'Účet je trvale vyřazen z kopírování. Zrušit to může jen read-only důkaz od brokera — že je účet aktivní a equity nad floorem propky.' }
@@ -4930,6 +5339,9 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
     : accountUnavailable
     ? { dotClass: 'bg-slate-400', accentClass: 'text-slate-400', label: 'Chybí v OAuth snapshotu',
         detail: 'Účet se v aktuálním snapshotu připojení neobjevil. Zkontroluj připojení firmy v záložce Připojení.' }
+    : syncPause
+    ? { dotClass: 'bg-amber-500', accentClass: 'text-amber-500', label: 'Mimo synchron',
+        detail: `${accountSyncPauseReasonText(syncPause)}. Účet vynechá zbytek tohoto obchodu${rowHoldsPosition ? '; drží otevřenou pozici, kterou kopírka neřídí' : ' a k dalšímu se připojí sám'}. Ostatní kopírují dál.` }
     : live && eligibilityUndecided
     ? VERIFYING_ACCOUNT_TONE
     : live
@@ -4965,7 +5377,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
             </span>
             {stateIsDeviation ? (
               <span className="mt-1 flex flex-wrap items-center gap-1.5 pl-3.5">
-                {tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
+                {tradeCut ? <TradeCutPill cut={tradeCut} /> : syncPause ? <SyncPausePill /> : <AccountEligibilityPill
                   accountId={accountId}
                   eligibility={eligibility}
                   live={live}
@@ -4980,6 +5392,10 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
             {tradeCut ? (
               <span className={`block pl-3.5 text-[10px] font-semibold leading-tight ${tradeCut.closed === false ? 'text-rose-600' : 'text-amber-600'}`}>
                 {tradeCutNoteText(tradeCut)}
+              </span>
+            ) : syncPause ? (
+              <span title={accountSyncPauseReasonText(syncPause)} className={`block pl-3.5 text-[10px] font-semibold leading-tight ${rowHoldsPosition ? 'text-rose-600' : 'text-amber-600'}`}>
+                {accountSyncPauseNoteText(rowHoldsPosition)}
               </span>
             ) : rowRejection ? (
               <RejectedExecutionStatus
@@ -4999,7 +5415,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
           </span>
         );
       case 'status':
-        return tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
+        return tradeCut ? <TradeCutPill cut={tradeCut} /> : syncPause ? <SyncPausePill /> : <AccountEligibilityPill
           accountId={accountId}
           eligibility={eligibility}
           live={live}
@@ -5054,8 +5470,9 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   return (
     <tr
       onClick={() => a && onAccount?.(a)}
-      className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''} ${a ? 'cursor-pointer hover:bg-[var(--bg-card)]' : ''}`}
+      className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : syncPause ? 'bg-amber-500/[0.05]' : ''} ${a ? 'cursor-pointer hover:bg-[var(--bg-card)]' : ''}`}
       data-copy-off={copyOff || undefined}
+      data-sync-paused={syncPause ? true : undefined}
     >
       {columns.map(col => (
         <td key={col.key} className={`px-3 ${col.key === 'actions' ? 'py-0' : 'py-1.5'} ${col.key === 'qtyMult' ? 'text-center' : col.align === 'right' ? 'text-right' : ''} follower-cell ${copyOff && col.key !== 'account' && col.key !== 'actions' ? 'follower-row-off' : ''}`}>
@@ -6488,7 +6905,7 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
 
       {state.error ? (
         <div role="alert" className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2.5 text-xs font-bold leading-relaxed text-rose-600">
-          {state.error} Změna nebyla uložena. Spusť Kontrolu pozic a zkus znovu.
+          {state.error} Změna nebyla uložena. Zkontroluj účty a zkus to znovu.
         </div>
       ) : null}
 
@@ -6522,6 +6939,187 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
 const UnavailableFollowerRemovalDialogPortal = (props: React.ComponentProps<typeof UnavailableFollowerRemovalDialog>) => createPortal(
   <div className="fixed inset-0 z-[165] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={event => { if (event.target === event.currentTarget && !props.busy) props.onClose(); }}>
     <UnavailableFollowerRemovalDialog {...props} />
+  </div>,
+  document.body,
+);
+
+export interface ArmPositionBlockAccount {
+  accountId: number;
+  name: string;
+  isLeader: boolean;
+  /** Worker: jde follower vyřadit i s jeho pozicí („Zapnout bez tohoto účtu“)? */
+  exclusion?: { allowed: boolean; reason: string | null };
+  /** „MNQZ6 Long 2“ — z posledního potvrzeného snapshotu účtu. */
+  positions: string[];
+  workingOrders: number;
+}
+
+/**
+ * Bod 5b: co blokuje zapnutí skupiny. Kopírka se zapíná jen ze stavu, kdy
+ * je celá skupina flat a bez čekajících příkazů (worker to ověří znovu u
+ * brokera); tady je jen srozumitelný výčet z živých dat UI.
+ */
+export function buildArmPositionBlock(
+  group: CopyGroupConfig,
+  accountsById: ReadonlyMap<number, LiveAccount>,
+  orders: readonly LiveOrder[],
+  nameOf: (accountId: number) => string,
+  options: {
+    /** Ručně vypnutí followeři — jejich vlastní pozice zapnutí neblokuje. */
+    skipAccountIds?: ReadonlySet<number>;
+    exclusionOf?: (accountId: number) => ArmPositionBlockAccount['exclusion'];
+  } = {},
+): ArmPositionBlockAccount[] {
+  const ids = [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)
+    .filter(accountId => !options.skipAccountIds?.has(accountId))]
+    .filter((accountId): accountId is number => accountId != null);
+  return [...new Set(ids)].flatMap(accountId => {
+    const positions = (accountsById.get(accountId)?.positions ?? [])
+      .filter(position => position.netPosition !== 0)
+      .map(position => `${position.symbol} ${position.netPosition > 0 ? 'Long' : 'Short'} ${Math.abs(position.netPosition)}`);
+    const workingOrders = orders.filter(order => order.accountId === accountId && liveOrderIsOpenForSafety(order)).length;
+    if (positions.length === 0 && workingOrders === 0) return [];
+    const isLeader = accountId === group.leaderAccountId;
+    const exclusion = isLeader ? undefined : options.exclusionOf?.(accountId);
+    return [{ accountId, name: nameOf(accountId), isLeader, ...(exclusion ? { exclusion } : {}), positions, workingOrders }];
+  });
+}
+
+/** Účty skupiny bez čerstvě ověřeného čtení pozic/příkazů — o nich nejde tvrdit „flat“. */
+export function armBlockUnverifiedAccounts(
+  group: CopyGroupConfig,
+  accountsById: ReadonlyMap<number, LiveAccount>,
+): number[] {
+  const ids = [group.leaderAccountId, ...group.followers.filter(follower => follower.mode !== 'off').map(follower => follower.accountId)]
+    .filter((accountId): accountId is number => accountId != null);
+  return [...new Set(ids)].filter(accountId => {
+    const account = accountsById.get(accountId);
+    return !account || !isLiveAccountReadVerified(account, 'positions') || !isLiveAccountReadVerified(account, 'orders');
+  });
+}
+
+const czechOrderCount = (count: number) => (
+  count === 1 ? '1 čekající příkaz' : count >= 2 && count <= 4 ? `${count} čekající příkazy` : `${count} čekajících příkazů`
+);
+
+export const ArmPositionBlockDialog = ({ groupName, accounts, unverifiedNames = [], busy, onClose, onCloseAccount, onArm, onExcludeAccount, participatingFollowerCount = 0, excludingAccountId = null }: {
+  groupName: string;
+  accounts: ArmPositionBlockAccount[];
+  /**
+   * „Zapnout bez tohoto účtu“ — jen když ho worker umí. Follower se vyřadí
+   * i se svou pozicí a ON pak znovu projde celou kontrolou u brokera.
+   */
+  onExcludeAccount?: (accountId: number) => void;
+  /** Zapojení followeři skupiny; poslední zapojený vyřadit nejde. */
+  participatingFollowerCount?: number;
+  excludingAccountId?: number | null;
+  /** Účty bez čerstvě ověřených dat — výčet výše pro ně nemusí být úplný. */
+  unverifiedNames?: string[];
+  busy: boolean;
+  onClose: () => void;
+  onCloseAccount: (accountId: number) => void;
+  /** Skupina už je flat — nabídnout zapnutí (znovu projde celou kontrolou). */
+  onArm?: () => void;
+}) => {
+  const [confirmExcludeId, setConfirmExcludeId] = useState<number | null>(null);
+  const clear = accounts.length === 0;
+  const unverified = unverifiedNames.length > 0;
+  const excludeOffer = (account: ArmPositionBlockAccount) => onExcludeAccount != null
+    && !account.isLeader
+    && account.exclusion != null
+    && participatingFollowerCount > 1;
+  const leaderBusy = accounts.some(account => account.isLeader);
+  const onlyOrders = !clear && accounts.every(account => account.positions.length === 0);
+  const title = clear
+    ? unverified ? 'Čekám na ověřená data účtů' : 'Skupina je flat'
+    : onlyOrders ? 'Zapnutí blokuje čekající příkaz' : 'Zapnutí blokuje otevřená pozice';
+  return (
+    <section role="alertdialog" aria-modal="true" aria-label={title} data-testid="arm-position-block" className="flex w-full max-w-md max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 pb-4">
+        <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${clear ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
+          {clear ? <CheckCircle2 size={21} /> : <AlertTriangle size={21} />}
+        </div>
+        <h3 className="mt-4 text-lg font-black text-[var(--text-primary)]">{title}</h3>
+        <p className="mt-1.5 text-sm leading-relaxed text-[var(--text-secondary)]">
+          {clear && unverified
+            ? `U účtů ${unverifiedNames.join(', ')} teď appka nemá čerstvě ověřené pozice, takže neříká, že je skupina flat. Zapnutí si stav u brokera ověří samo.`
+            : clear
+            ? `Ve skupině ${groupName} už nic otevřeného není. Zapnutí ještě jednou ověří účty u brokera.`
+            : `Kopírka se zapíná jen když je celá skupina ${groupName} flat a bez čekajících příkazů — jinak by nevěděla, co je její. Nic se nezapnulo.`}
+        </p>
+        {clear ? null : (
+          <ul className="mt-4 space-y-2">
+            {accounts.map(account => (
+              <li key={account.accountId} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)]/60 px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5 text-[13px] font-black text-[var(--text-primary)]">
+                    {account.isLeader ? <Crown aria-label="Leader" size={12} className="shrink-0 text-amber-500" /> : null}
+                    <span className="truncate">{account.name}</span>
+                  </span>
+                  <span className="mt-0.5 block text-[11px] font-semibold text-amber-600">
+                    {[...account.positions, account.workingOrders > 0 ? czechOrderCount(account.workingOrders) : ''].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onCloseAccount(account.accountId)}
+                  className="h-9 shrink-0 rounded-lg border border-rose-500/30 bg-rose-500/[0.06] px-3 text-[11px] font-black text-rose-500 disabled:opacity-50"
+                >
+                  {account.positions.length === 0 ? 'Zrušit příkazy' : account.isLeader ? 'Zavřít pozici leadera' : 'Zavřít pozici'}
+                </button>
+                </div>
+                {excludeOffer(account) ? (
+                  confirmExcludeId === account.accountId ? (
+                    <div data-testid="arm-exclude-confirm" className="mt-2.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-2.5">
+                      <p className="text-[11px] leading-snug text-[var(--text-secondary)]">
+                        {account.name} zůstane vypnutý, dokud ho sám nezapneš. Jeho pozice a příkazy zůstanou otevřené a kopírka na ně nesáhne — hlídáš je ty.
+                        {' '}Pozor na hedging: opačná pozice na stejném instrumentu napříč účty propky obvykle zakazují. Flatten All by je zavřel taky.
+                      </p>
+                      <div className="mt-2 flex justify-end gap-2">
+                        <button type="button" disabled={busy} onClick={() => setConfirmExcludeId(null)} className="h-8 rounded-lg border border-[var(--border-subtle)] px-3 text-[11px] font-bold text-[var(--text-secondary)]">Zpět</button>
+                        <button type="button" disabled={busy} onClick={() => onExcludeAccount?.(account.accountId)} className="h-8 rounded-lg bg-emerald-600 px-3 text-[11px] font-black text-white hover:bg-emerald-500 disabled:opacity-50">
+                          {excludingAccountId === account.accountId ? 'Vyřazuji…' : 'Vyřadit a zapnout'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : account.exclusion?.allowed ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setConfirmExcludeId(account.accountId)}
+                      className="mt-2 h-8 w-full rounded-lg border border-emerald-500/30 bg-emerald-500/[0.06] text-[11px] font-black text-emerald-600 disabled:opacity-50"
+                    >
+                      Zapnout bez tohoto účtu
+                    </button>
+                  ) : (
+                    <p className="mt-1.5 text-[10px] leading-snug text-[var(--text-muted)]">
+                      Bez tohoto účtu teď zapnout nejde: {account.exclusion?.reason ?? 'worker to nepovolil'}.
+                    </p>
+                  )
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+        {leaderBusy && !clear ? (
+          <p className="mt-3 rounded-xl border border-blue-500/15 bg-blue-500/[0.055] px-3 py-2.5 text-[11px] font-bold leading-relaxed text-blue-600">
+            Leader je v obchodě. Do běžícího obchodu se kopírka nepřipojuje — dokonči ho (nebo ho zavři) a zapni po flat.
+          </p>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-3">
+        <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Nechat vypnuté</button>
+        {clear && onArm ? <button type="button" onClick={onArm} disabled={busy} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white hover:bg-emerald-500 disabled:opacity-50">{unverified ? 'Zkusit zapnout' : 'Zapnout'}</button> : null}
+      </div>
+    </section>
+  );
+};
+
+const ArmPositionBlockDialogPortal = (props: React.ComponentProps<typeof ArmPositionBlockDialog>) => createPortal(
+  <div className="fixed inset-0 z-[165] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={event => { if (event.target === event.currentTarget && !props.busy) props.onClose(); }}>
+    <ArmPositionBlockDialog {...props} />
   </div>,
   document.body,
 );

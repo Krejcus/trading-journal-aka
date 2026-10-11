@@ -119,10 +119,49 @@ export function assertCopierArmConnections(
   }
 }
 
+/** Značka workeru `[retire-missing:<groupId>:<ids>]` → co nabídnout k potvrzení. */
+export function retireMissingFromError(reason: unknown): { groupId: string; accountIds: number[] } | null {
+  const message = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : '';
+  const match = /\[retire-missing:([^:\]]+):([0-9,]+)\]/.exec(message);
+  if (!match) return null;
+  const accountIds = match[2].split(',').map(Number).filter(id => Number.isSafeInteger(id) && id > 0);
+  if (accountIds.length === 0) return null;
+  try {
+    return { groupId: decodeURIComponent(match[1]), accountIds };
+  } catch {
+    return null;
+  }
+}
+
+/** Worker odmítl zapnutí, protože některý účet skupiny není flat / má příkaz (bod 5b). */
+const ARM_POSITION_REJECTION = /divergence=|working=|některý účet není flat|nejsou flat|pozice nesedí s leaderem|čekající příkazy na účtech/i;
+// Incident k potvrzení a nedostupné účty mají vlastní, důležitější hlášku —
+// převod na „otevřená pozice“ by je schoval (review 10. 10.).
+const positionOnlyRejection = (message: string): boolean => ARM_POSITION_REJECTION.test(message)
+  && !/\[ack-incident:/.test(message)
+  && !/nedostupné účty|missing=/i.test(message);
+export function isArmPositionRejection(reason: unknown): boolean {
+  return reason instanceof Error && positionOnlyRejection(reason.message);
+}
+
 export function copierArmRejection(reason: unknown): string | null {
   if (reason instanceof CopierArmBlockedError) return reason.message;
   if (!(reason instanceof Error)) return null;
   const message = reason.message.replace(/\s+/g, ' ').trim();
+  if (positionOnlyRejection(message)) {
+    return 'Kontrola u brokera našla na některém účtu skupiny otevřenou pozici nebo čekající příkaz. Nic se nezapnulo. Až bude skupina flat, zapni znovu.';
+  }
+  if (/\[ack-incident:[^\]]+\]/.test(message)) {
+    // Worker hlásí incident, který UI ještě nevidělo (nebo nový): žádné
+    // automatické opakování, uživatel ho potvrdí dalším Zapnout.
+    return `${message
+      .replace(/\s*\[ack-incident:[^\]]+\]/, '')
+      .replace(/\s*\(starší appka[^)]*\)/, '')
+      .replace(/^Zapnutí po incidentu vyžaduje tvoje potvrzení: /, 'Mezitím vznikl incident: ')} Dej znovu Zapnout a potvrď ho.`;
+  }
+  if (message === 'Incident se mezitím změnil; potvrď ho znovu.') {
+    return 'Mezitím vznikl nový incident. Dej znovu Zapnout a potvrď ho.';
+  }
   if (message === 'tighten-only') {
     return 'Zapnutí bylo odmítnuto, protože požadovaná pravidla jsou mírnější než dnešní potvrzené nastavení. Obnov stav a zkontroluj Risk.';
   }

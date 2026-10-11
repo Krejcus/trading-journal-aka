@@ -264,7 +264,7 @@ describe('worker read-only ARM preparation', () => {
     expect(() => runtime.arm({ requirePreparation: true })).toThrow('zneplatněno');
   });
 
-  it('an incident cannot be cleared by ON, background preparation or a later reconnect', async () => {
+  it('an incident cannot be cleared by background preparation or a reconnect; ON clears it only when acknowledged', async () => {
     const broker = await boot();
     runtime.reportHostSleep({ unresponsiveSince: now - 1_000, detectedAt: now, sleepDurationMs: 1_000 });
     await runtime.waitForIdle();
@@ -275,14 +275,17 @@ describe('worker read-only ARM preparation', () => {
     broker.setConnected(true);
     await runtime.waitForIdle();
     expect(runtime.status().armPreparation?.manualRecoveryRequired).toBe(true);
+    // 8. 10. 2026: ON si kontrolu udělá samo, ale durable incident smaže
+    // jen s výslovným potvrzením právě tohoto incidentu.
     const reconcile = vi.spyOn(runtime, 'reconcile');
-    agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
-    await expect(agent.execute({ type: 'arm-live' })).rejects.toThrow('incidentu');
+    agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmAfterTransport: false });
+    await expect(agent.execute({ type: 'arm-live' })).rejects.toThrow('[ack-incident:');
     expect(reconcile).not.toHaveBeenCalled();
-    expect(runtime.status().armed).toBe(false);
-    await runtime.reconcile();
-    await runtime.prepareArm!();
-    expect(runtime.status()).toMatchObject({ armed: false, lastError: null, armPreparation: { state: 'ready' } });
+    expect(runtime.status().lastError).toBe(incident);
+    const acknowledgeIncidentId = runtime.status().manualRecovery!.id;
+    await agent.execute({ type: 'arm-live', acknowledgeIncidentId });
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(runtime.status()).toMatchObject({ armed: true, lastError: null, manualRecovery: null });
   });
 
   it('keeps an incident blocked across restart until a clean manual reconciliation', async () => {
@@ -317,7 +320,11 @@ describe('worker read-only ARM preparation', () => {
     });
     await expect(restarted.prepareArm!()).rejects.toThrow('incidentu');
 
+    // 8. 10. 2026: kontrola bez potvrzení incident nesmaže; smaže ho jen
+    // potvrzení právě tohoto incidentu (ON s dialogem).
     await restarted.reconcile();
+    expect((await store.load()).safety?.manualRecoveryRequired).toBeDefined();
+    await restarted.reconcile({ acknowledgedIncidentId: restarted.status().manualRecovery!.id });
     expect((await store.load()).safety?.manualRecoveryRequired).toBeUndefined();
     await restarted.prepareArm!();
     expect(restarted.status()).toMatchObject({

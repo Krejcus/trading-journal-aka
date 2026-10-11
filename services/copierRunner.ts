@@ -1465,8 +1465,16 @@ export async function processLeaderEvent(
   const planningState = context.shadowMode && durableCancels.length === 0
     ? { ...state, links: shadowLinks }
     : state;
-  const cancels = planCancel(event, planningState, group);
-  const modifications = planModify(event, planningState, group);
+  // Etapa 2 (6. 10. 2026): pozastavený účet nemá v epizodě pracovní kopii
+  // (pauza vzniká nad autoritativně flat/no-working účtem) — lifecycle na něj
+  // nesahá, jinak by modify vyplněné nohy shodil skupinu.
+  const syncPausedAccounts = new Set([...context.ineligibleAccounts]
+    .filter(([, reason]) => reason === 'account-sync-paused')
+    .map(([accountId]) => accountId));
+  const cancels = planCancel(event, planningState, group)
+    .filter(item => !syncPausedAccounts.has(item.accountId));
+  const modifications = planModify(event, planningState, group)
+    .filter(item => !syncPausedAccounts.has(item.accountId));
   if (event.kind === 'replaced' && event.executionShapeChanged === true && group.enabled) {
     const linkedAccounts = new Set(
       (planningState.links.get(event.orderId) ?? []).map(link => link.accountId),

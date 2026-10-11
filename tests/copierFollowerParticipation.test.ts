@@ -397,13 +397,16 @@ describe('manual follower participation', () => {
     h.controller.stop();
   });
 
-  it('nenulovou pozici či working order vypnutého followera ukáže jako safety problém', async () => {
+  // 10. 10. 2026 („Zapnout bez tohoto účtu“): cizí pozice/příkaz ručně
+  // vypnutého followera bez stopy kopírky už není problém skupiny — je vidět,
+  // kopírka ho neřídí a ARM zapojených účtů neblokuje.
+  it('cizí pozici či working order vypnutého followera ukáže, ale neblokuje', async () => {
     const h = await harness();
     await h.controller.setFollowerEnabled(200, false, h.persist);
     h.broker.setPosition(200, symbol, 1);
-    expect(await h.controller.reconcile()).toMatchObject({ divergentAccounts: [200] });
+    expect(await h.controller.reconcile()).toMatchObject({ divergentAccounts: [], authoritativelyClean: true });
     expect(h.controller.status().exposure?.followers).toContainEqual(expect.objectContaining({
-      accountId: 200, ok: false,
+      accountId: 200, ok: true, detail: 'vyřazen — vlastní pozice, kopírka ji neřídí',
     }));
     h.broker.setPosition(200, symbol, 0);
     await h.broker.placeOrder({
@@ -411,7 +414,7 @@ describe('manual follower participation', () => {
       orderType: 'Limit', quantity: 1, limitPrice: 29_000,
     });
     await h.controller.waitForIdle();
-    expect(await h.controller.reconcile()).toMatchObject({ workingOrderAccounts: [200] });
+    expect(await h.controller.reconcile()).toMatchObject({ workingOrderAccounts: [] });
     h.controller.stop();
   });
 

@@ -256,6 +256,142 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-11 — Smazání skupiny workeru, kopírka bez skupiny (Claude, rozhodnutí Filipa)
+
+Větev `claude/copier-delete-active-group-20261011` (nad a0d0df90). Spouštěč:
+všechny účty skupiny dvsvds (Lucid) breachly a zmizely z OAuth; worker visel
+v režimu opravy a skupinu nešlo smazat (worker ji odmítl, UI ji z runtime
+statusu znovu adoptovalo). Web a worker a0d0df90 nasazeny 11. 10. ráno —
+worker běží v režimu opravy, kopírka vypnutá.
+
+- **Smazání** (INV-GROUP-01) = přepnutí skupiny s prázdnou novou topologií:
+  jen DISARMED, stejné brány a fence; účty chybějící/neaktivní v OAuth se
+  vyřadí bez flat důkazu (audit), viditelné se stopou kopírky musí být flat,
+  ruční obchod na viditelném účtu nevadí. Durable značka
+  `safety.retiredGroup` v témže CAS commitu; žádný broker zápis.
+- **Bez skupiny**: nic se nekopíruje ani nehlídá, eventy starých účtů se
+  ignorují, restart naběhne DISARMED bez validace staré skupiny. Zapnout jde
+  jen aktivací skupiny (i stejné jako čerstvé). Incident (manualRecovery)
+  přežije a ON nové skupiny ho chce potvrdit.
+- **Pozor**: „Zrušit BREACHED“ se opírá jen o Tradovate (active + equity nad
+  minNetLiq). 68931496 je u propky breached, přesto prošel — Tradovate pravidla
+  propky nevidí. Zvážit potvrzení „opravdu tě propka neukončila?“.
+
+### 2026-10-10 — Zapnout bez účtu + automatické pokračování po výpadku (Claude, rozhodnutí Filipa)
+
+Větev `claude/copier-arm-without-account-20261010` (worktree
+`~/alphatrade-worktrees/copier-device`, navazuje na etapu 2), NEnasazeno.
+Oponentura Claude subagenty ve 3 kolech (kolo 1 auto-resume = NE → opraveno).
+
+- **Zapnout bez tohoto účtu** (INV-PART-03): follower s vlastní (cizí)
+  pozicí jde za DISARM vyřadit i s ní; kopírka ji neřídí, zbytek skupiny
+  zapne. „Cizí“ = žádná stopa kopírky (pravidlo jako u přepnutí skupiny:
+  neusazené záznamy, OTEVŘENÝ příkaz s ID kopírky, epocha s lineage, pending,
+  cut; při vyřazení i globální stopa kopií). Taková expozice nevstupuje do
+  flat skupiny (cooldown, day-lock…), divergence ani ARM bran; guard a
+  přechody ji ignorují. Pozor: dřív byla pozice na vypnutém followerovi
+  vždy divergence — teď jen když nese stopu kopírky.
+- **Automatické pokračování** (INV-RECON-04): mechanismus z 6. 10. dokončen
+  a znovu zapnut (pilot default, `ALPHATRADE_COPIER_AUTO_RESUME=0` vypne).
+  Jen z živého ARM a flat skupiny; jeden pokus přes `armCore` (všechny brány
+  ON), nikdy `reconcile()`; ruší ho jakékoli jiné vypnutí, brzda, Flatten,
+  incident, změna skupiny, obchod leadera v mezeře (statistiky, čas příkazu
+  vč. 30s slepého okna, monotónní ID příkazu, gap fills), zámek dne, okno,
+  restart, 60 min, 2× za ruční ON. Serverová pojistka `auto-resume-admit`
+  (brzdy uživatele od zapnutí, prázdná fronta) — bez migrace DB.
+- **Výpadek uprostřed obchodu** (dřív incident `working=100,200` — ověřeno
+  testem): synchronní kopie s ochrannými nohami kopírky se drží bez
+  incidentu (`protectiveHoldProblem`: leader jen snižující příkazy, follower
+  copier nohy tříd jako leader), DISARMED, posuny SL leadera se nezrcadlí.
+  Po vyřešení leader-flat guardu se obnova dokončí sama. Auto-resume jen po
+  živě pozorovaném konci obchodu s flat deníkem; další výpadek, obchod
+  v mezeře, nesoulad deníku nebo nový příkaz leadera = zapíná člověk.
+  Pozor: router při reconnectu neposílá `resync`, gap fills nejsou vidět —
+  rozhodují statistiky, čas a ID příkazů. Tradovate posílá u jednoho
+  výpadku `error` i `connection:false` (nesmí se počítat dvakrát).
+
+### 2026-10-10 — Etapa 2, bod 5: účet mimo synchron v appce a v notifikacích (Claude)
+
+Větev `claude/copier-durable-account-pause-20261006` (worktree
+`~/alphatrade-worktrees/copier-device`), zatím NEnasazeno. Podle náhledu
+claude.ai/artifact/Nqk99xxvwNsg1tcvGKocow:
+
+- **5a** Pozastavený follower (`accountSyncPauses`) má v řádku štítek
+  „Mimo synchron“ + „Pauza do konce obchodu“ (červeně, když drží pozici —
+  kopírka ji neřídí), nepočítá se mezi kopírující a skupina ukáže lištu
+  s účtem a důvodem. Kontext pauz se plní jen kolem execution skupiny.
+  Přednost: ruční vyřazení > DLL/breach > pauza. Jen při ZAPNUTÉ kopírce —
+  durable pauza přežije DISARM i restart a „ostatní kopírují dál“ by jinak
+  lhalo (oponentura).
+- **5b** Když zapnutí blokuje pozice/příkaz ve skupině, místo „použij
+  Flatten All“ přijde průvodce s účty a tlačítkem Zavřít u každého
+  (stávající potvrzení flatten-account); po potvrzení se vrátí s čerstvým
+  výčtem a po flat nabídne Zapnout. Technické odmítnutí workeru
+  (`divergence=…`) se překládá do věty.
+- **5c** Texty už neradí „spusť Kontrolu pozic“ (tlačítko zmizelo 8. 10.).
+  Řetězce workeru beze změny — podle nich se klasifikují kódy disarmu.
+- **5d** Watchdog: per-účtový incident `account-sync:<id>` — push při
+  vzniku pauzy i „zase v synchronu“ jen při zapnuté kopírce (po DISARM se
+  marker tiše zavře, jinak by push lhal); víc účtů v jednom ticku = jedna
+  souhrnná zpráva; starší worker bez pole se neřeší vůbec.
+- Oponentura (Claude subagent): nasaditelné ANO; opraveno i to, že převod
+  odmítnutí na „pozice“ nesmí schovat `[ack-incident]` ani nedostupné účty,
+  a průvodce bez čerstvých dat netvrdí „skupina je flat“.
+- **5e** Během zapínání panel „Zapínám · N s“ s tím, co se ověřuje.
+
+**Co z náhledu NEplatí a proč:** (1) „Zapnout bez tohoto účtu“ — jádro
+zapíná jen při flat CELÉ skupiny (`readFlatPreflightSnapshot` → `allFlat`
+počítá i ručně vypnuté followery), takže by volba nefungovala; vyžaduje
+změnu jádra + oponenturu. (2) „Po obnovení spojení pokračuje sama“ — jádro
+po výpadku zůstává DISARMED a zapnutí je ruční (`resumeOffer` se nikde
+nenastavuje); auto-ARM by byla změna bezpečnostního modelu. (3) Checklist
+kroků zapínání — worker průběh po krocích nehlásí, panel proto nic
+smyšleného neodškrtává.
+
+### 2026-10-10 — Denní auto-liq propky ≠ breach (Claude)
+
+8. 10. tři Lucid followeři trefili daily loss auto-liq 1200 USD a `classifyFollowerBrokerBreach`
+je zapsal jako trvalý `breached`; appka je tak v pátek ukazovala jako breached, i když ještě
+nebyly (skutečný drawdown breach přišel až v pátek). Oprava (větev
+`claude/copier-dll-not-breach-20261010`, oponentní review Claude subagentem ANO po 5 kolech —
+Codex už není k dispozici): drawdown floor / vypnutý účet = `breached`, denní auto-liq =
+`dll-locked` do konce session. Všechny cesty denního zámku nesou `requiresRiskFloorProof`;
+zpět do kopie jen s brokerovým důkazem aktivního účtu a equity nad floorem (jinak breached /
+mimo kopii). Staré záznamy se při startu převedou. Worker zatím NEnasazen: skupina dvsvds
+má breachnutého leadera (není v OAuth), reconcile i brána reinstallu neprojdou.
+
+### 2026-10-08 — Kopírka: nové účty bez restartu, ON s potvrzením incidentu, TooLate (Claude + Codex)
+
+Release `claude/copier-release-20261008` = tři Codexem schválené větve:
+
+- **Autodiscovery** (`claude/copier-account-autodiscovery-20261008`, 9 kol): prázdný
+  adresář po breachi se ověřuje levnou sondou každé 3 min (dřív backoff až 6 h);
+  při vypnuté kopírce worker každou minutu porovná `/account/list` (ID + použitelnost)
+  a po dvou shodných čteních se bezpečně restartuje (max 1×/10 min; brána: vypnuto,
+  bez kill switche, flat, bez lifecycle/epochy, prázdná relay fronta, 30 s od
+  příkazu). Breachnuté účty staré skupiny worker NIKDY nevyřadí sám — vrátí
+  `[retire-missing:…]`, UI se zeptá a pošle `activate-group` s `retireMissingOldGroup`.
+  Brzdy (DISARM, kill, day-lock) se po restartu vždy přehrají a nikdy nezahazují
+  (pravidlo „superseded“ zrušeno: pořadí záměrů nejde bez hodin doložit).
+  Incident 8. 10.: worker v režimu opravy uvízl (recovery čekala na breachnutého
+  leadera) → ruční přepis durable `group.json` (postup v paměti worker-deploy-policy).
+- **ON s potvrzením incidentu** (`claude/copier-on-acknowledge-incident-20261008`,
+  na etapě 1): tlačítko „Zkontrolovat pozice“ zmizelo. Durable incident má UUID;
+  smaže ho jen ON s `acknowledgeIncidentId` přesně tohoto incidentu, potvrzení se
+  zapíše do `safety.lastIncidentAcknowledgement` ve stejném durable zápisu.
+  SHADOW i kompatibilní ARM jen interní kontrola (INV-DEFAULT-03). Capability
+  `incident-ack-v1`; web se starším workerem po incidentu ON odmítne. Relay
+  `reconcile` odebrán (DB check ho stejně nepouštěl). iPhone appku nutno přebuildit.
+- **TooLate** (`claude/copier-sweep-toolate-20261008`, 7 kol): flat sweep po
+  `cancelOrder rejected: TooLate` čeká ≤1,5 s jen na stream status (incident
+  14:06 UTC, účet 68931462: order rušil dřívější cancel, stream Canceled za ~0,8 s);
+  známý fill vždy vynutí čerstvou pozici, pozice se čte až po order grafu.
+  Předexistující dluh (důkaz nulového fillu ve fast-path, freshness sdíleného
+  `/position/list`, A5) je samostatný úkol.
+
+Etapa 2 (durable per-account pauza) nasazena NENÍ — po 6. kole Codexe zbývají
+nálezy (DISARM vs. uvolnění pauzy, cache po cut, reporting).
+
 ### 2026-10-08 — LIVE studený start: kostra → úplná data bez probliknutí (Claude)
 - Měřeno na produkci: obsah → prázdná plocha 315 ms → přehled. Příčina: lazy
   `LiveJournalHistory` suspendoval stránkovou Suspense hranici a React 19 drží

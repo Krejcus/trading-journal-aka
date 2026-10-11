@@ -35,6 +35,23 @@ export interface MacCopierCommandRelay {
   }): Promise<{ devices: number; sent: number }>;
   /** Předběžné 1m svíčky z TradingView pro graf hodnocení (jen zobrazení). */
   uploadBars(capture: TvBarsCapture): Promise<void>;
+  /**
+   * Kdy začal poslední poll, který našel frontu příkazů prázdnou a nic
+   * nedoručoval; `null` = právě se doručuje nebo prázdnou frontu zatím
+   * nikdo neviděl. Údržbový restart (8. 10. 2026) čeká na čerstvou hodnotu.
+   */
+  commandQueueIdleSince?(): number | null;
+  /**
+   * Začátek posledního úspěšného vyzvednutí, při kterém server neměl žádný
+   * čekající příkaz (0 = zatím žádné). Automatické zapnutí po výpadku podle
+   * něj prokáže, že ve frontě nečeká brzda z telefonu.
+   */
+  lastEmptyPollStartedAt(): number;
+  /**
+   * Serverová pojistka automatického pokračování: od `since` žádná brzda
+   * a prázdná fronta. Chyba = nepokračovat.
+   */
+  admitAutoResume(since: number): Promise<{ admitted: boolean; reason: string | null }>;
   close(): Promise<void>;
 }
 
@@ -233,14 +250,30 @@ export function startMacCopierCommandRelay(options: {
     isActive: () => !stopped,
     onComplete: id => { completedNotifications.add(id); publishBackground(); },
   }) : null;
+  let deliveryBusy = false;
+  /** Důkaz prázdné fronty pro údržbový restart; maže se začátkem každého pollu. */
+  let idleProofSince: number | null = null;
+  let lastEmptyPollStartedAt = 0;
   const loop = async () => {
     let failures = 0;
     while (!stopped) {
       try {
+        const pollStartedAt = Date.now();
         if (delivery) {
-          const response = await delivery();
+          // Starý důkaz prázdné fronty neplatí, dokud tento poll neskončí
+          // prázdný (chyba nebo claim ho nesmí nechat platit).
+          idleProofSince = null;
+          deliveryBusy = true;
+          let response: Awaited<ReturnType<typeof delivery>>;
+          try {
+            response = await delivery();
+          } finally {
+            deliveryBusy = false;
+          }
+          if (response.command == null) idleProofSince = pollStartedAt;
           await maybeSubscribeKick(response.realtime);
           failures = 0;
+          if (response.command == null) lastEmptyPollStartedAt = pollStartedAt;
         } else {
           const sentCopyEventsRevision = copyEventsRevision;
           const notifyCopyEvents = sentCopyEventsRevision !== acknowledgedCopyEventsRevision;
@@ -273,6 +306,7 @@ export function startMacCopierCommandRelay(options: {
             createdAt?: string;
             expiresAt?: string;
           } | null;
+          if (!remote) lastEmptyPollStartedAt = pollStartedAt;
           if (remote?.id && remote.command) {
             // createdAt je autoritativní pro telemetrii i workerový brake fence;
             // z expiresAt už enqueue čas odvodit nelze, protože brzdy mají delší TTL.
@@ -322,6 +356,15 @@ export function startMacCopierCommandRelay(options: {
   publishBackground();
   publishStatus();
   return {
+    commandQueueIdleSince: () => (deliveryBusy || !delivery ? null : idleProofSince),
+    lastEmptyPollStartedAt: () => lastEmptyPollStartedAt,
+    async admitAutoResume(since: number) {
+      const body = await request({ action: 'auto-resume-admit', since }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
+      return {
+        admitted: body.admitted === true,
+        reason: typeof body.reason === 'string' ? body.reason : null,
+      };
+    },
     nudgeCopyEvents() {
       copyEventsRevision += 1;
       publishBackground();

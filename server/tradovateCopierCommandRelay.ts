@@ -95,11 +95,9 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   // konce broker session. Patří do stejné vzdálené třídy jako disarm a
   // kill-switch — bez něj „Zamknout den" z produkční PWA nikdy nedorazil.
   'lock-until-session-end',
-  // Kontrola pozic je čistě read-only u brokera. Za ARM ji worker nejdřív
-  // auditovaně vypne (kód reconcile-request) a během správy otevřených kopií
-  // ji odmítne; nikdy nic neobchoduje. Bez ní telefon nemá jak zrušit
-  // „Čeká kontrola pozic“.
-  'reconcile',
+  // 8. 10. 2026: samostatná Kontrola pozic z UI zmizela — kontrolu si dělá
+  // ON (arm-live), incident maže jen s výslovným potvrzením. Produkční DB
+  // check `reconcile` stejně nikdy nepustil, takže se nic neztrácí.
 ]);
 
 const BRAKE_COMMAND_TYPES = ['disarm', 'kill-switch', 'lock-until-session-end'] as const;
@@ -246,9 +244,11 @@ const validatedDayLockReason = (value: unknown): string => {
 // iPhone app, where the direct loopback agent is unreachable. Every other
 // broker-write command (cancel-order, replication changes mid-flight, …)
 // stays deliberately rejected on this remote path.
+// `delete-group` (11. 10. 2026) nic neposílá brokerovi: worker skupinu smaže
+// jen za DISARMED a po stejných kontrolách jako přepnutí skupiny.
 const remoteCopyCommands = new Set([
   'update-group', 'set-group-enabled', 'set-replication', 'set-follower-enabled', 'set-multiplier',
-  'flatten-account', 'flatten-follower-trade', 'flatten-group',
+  'flatten-account', 'flatten-follower-trade', 'flatten-group', 'delete-group',
 ]);
 
 // Stejný formát vynucuje controller (operationToken); validace už na ingressu
@@ -272,11 +272,15 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
     enabled?: unknown;
     mode?: unknown;
     multiplier?: unknown;
-    waiveUnverifiableFollowerOwnership?: unknown;
+    waiveUnverifiableFollowerOwnership?: unknown; allowOwnExposure?: unknown;
   };
   if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
     throw new Error('unsupported-remote-copy-command');
   }
+  if (command.type === 'delete-group' && (
+    typeof command.groupId !== 'string' || command.groupId.trim() === '' || command.groupId.length > 200
+    || Object.keys(command).some(key => key !== 'type' && key !== 'groupId')
+  )) throw new Error('invalid-relay-command-payload');
   if (command.type === 'flatten-account' || command.type === 'flatten-follower-trade' || command.type === 'flatten-group') {
     if (typeof command.groupId !== 'string' || command.groupId.trim() === '') {
       throw new Error('invalid-relay-command-payload');
@@ -293,6 +297,8 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
     typeof command.groupId !== 'string' || command.groupId.trim() === ''
     || typeof command.accountId !== 'number' || !Number.isSafeInteger(command.accountId) || command.accountId <= 0
     || typeof command.enabled !== 'boolean'
+    || (command.allowOwnExposure !== undefined
+      && (command.allowOwnExposure !== true || command.enabled !== false))
   )) throw new Error('invalid-relay-command-payload');
   if (command.type === 'set-multiplier' && (
     typeof command.groupId !== 'string' || command.groupId.trim() === ''
@@ -325,6 +331,32 @@ const validatedRelayGroup = (value: unknown): CopyGroupConfig => {
   const groups = sanitizeCopyGroups([value]);
   if (!groups || groups.length !== 1) throw new Error('invalid-relay-command');
   return groups[0];
+};
+
+/**
+ * Operátorem potvrzené vyřazení účtů staré skupiny, které už v Tradovate nejsou
+ * (8. 10. 2026). Worker ho znovu validuje proti své skupině a OAuth.
+ */
+const validatedRetirement = (value: unknown): { groupId: string; accountIds: number[]; reason: string } | undefined => {
+  if (value === undefined) return undefined;
+  const candidate = value as { groupId?: unknown; accountIds?: unknown; reason?: unknown } | null;
+  if (!candidate || typeof candidate !== 'object'
+    || typeof candidate.groupId !== 'string' || candidate.groupId.length === 0 || candidate.groupId.length > 200
+    || !Array.isArray(candidate.accountIds) || candidate.accountIds.length === 0 || candidate.accountIds.length > 100
+    || candidate.accountIds.some(id => !Number.isSafeInteger(id) || (id as number) <= 0)
+    || typeof candidate.reason !== 'string' || candidate.reason.trim().length < 20 || candidate.reason.length > 500) {
+    throw new Error('invalid-relay-command-payload');
+  }
+  return { groupId: candidate.groupId, accountIds: [...candidate.accountIds] as number[], reason: candidate.reason };
+};
+
+/** Potvrzení incidentu z dialogu ON: `manualRecovery.id` (8. 10. 2026). */
+const validatedIncidentAck = (value: unknown): string | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(value)) {
+    throw new Error('invalid-relay-command-payload');
+  }
+  return value;
 };
 
 const validatedEligibilityExclusions = (value: unknown) => {
@@ -366,20 +398,24 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
     // svou zastaralou konfigurací — 24. 8. s enabled:false, takže se první
     // obchod nezkopíroval. UI skupinu posílá vždy; její absence je chyba
     // volajícího a musí selhat nahlas, ne potichu změnit význam příkazu.
+    const acknowledgeIncidentId = validatedIncidentAck((command as { acknowledgeIncidentId?: unknown }).acknowledgeIncidentId);
     return {
       group: validatedRelayGroup((command as { group?: unknown }).group),
       accountEligibilityExclusions: validatedEligibilityExclusions(
         (command as { accountEligibilityExclusions?: unknown }).accountEligibilityExclusions,
       ),
+      ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
     };
   }
   if (command.type === 'activate-group') {
     const waiver = (command as { waiveUnverifiableFollowerOwnership?: unknown })
       .waiveUnverifiableFollowerOwnership;
     if (waiver !== undefined && waiver !== true) throw new Error('invalid-relay-command-payload');
+    const retirement = validatedRetirement((command as { retireMissingOldGroup?: unknown }).retireMissingOldGroup);
     return {
       group: validatedRelayGroup((command as { group?: unknown }).group),
       ...(waiver === true ? { waiveUnverifiableFollowerOwnership: true } : {}),
+      ...(retirement ? { retireMissingOldGroup: retirement } : {}),
     };
   }
   if (command.type === 'shadow') {
@@ -423,19 +459,23 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
   }
   if (row.command_type === 'arm-live') {
+    const acknowledgeIncidentId = validatedIncidentAck(row.payload?.acknowledgeIncidentId);
     return {
       type: 'arm-live',
       group: validatedRelayGroup(row.payload?.group),
       accountEligibilityExclusions: validatedEligibilityExclusions(row.payload?.accountEligibilityExclusions),
+      ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
     };
   }
   if (row.command_type === 'activate-group') {
     const waiver = row.payload?.waiveUnverifiableFollowerOwnership;
     if (waiver !== undefined && waiver !== true) throw new Error('invalid-relay-command-payload');
+    const retirement = validatedRetirement(row.payload?.retireMissingOldGroup);
     return {
       type: 'activate-group',
       group: validatedRelayGroup(row.payload?.group),
       ...(waiver === true ? { waiveUnverifiableFollowerOwnership: true } : {}),
+      ...(retirement ? { retireMissingOldGroup: retirement } : {}),
     };
   }
   if (row.command_type === 'shadow') {
@@ -801,6 +841,61 @@ const newestBrakeCreatedAt = async (db: SupabaseClient, deviceId: string): Promi
   if (error) throw new Error(`copier-relay-brake-epoch-lookup-failed: ${error.message}`);
   return typeof data?.created_at === 'string' ? data.created_at : null;
 };
+
+/** Rezerva na rozdíl hodin Macu a serveru — chyba vede jen k odmítnutí. */
+export const AUTO_RESUME_BRAKE_MARGIN_MS = 60_000;
+/** Jak daleko před zapnutím na Macu smí ležet serverový záznam téhož zapnutí. */
+export const AUTO_RESUME_ARM_MATCH_WINDOW_MS = 5 * 60_000;
+
+/**
+ * Serverová pojistka automatického pokračování po výpadku (10. 10. 2026):
+ * od posledního ručního zapnutí nesmí existovat žádná brzda (v jakémkoli
+ * stavu) a ve frontě nesmí čekat žádný neexpirovaný příkaz. Jinak by brzda
+ * z telefonu poslaná během výpadku doběhla až po automatickém zapnutí.
+ */
+export async function admitCopierAutoResume(options: {
+  db: SupabaseClient; userId: string; deviceId: string; since: number; now?: number;
+}): Promise<{ admitted: boolean; reason: string | null }> {
+  if (!Number.isFinite(options.since) || options.since <= 0) return { admitted: false, reason: 'invalid-since' };
+  // Kotva: dřívější z času Macu (−60 s) a serverového času posledního
+  // vzdáleného zapnutí tohoto zařízení — posun hodin okno jen zvětší.
+  const lastArm = await options.db.from('tradovate_copier_commands')
+    .select('created_at')
+    .eq('device_id', options.deviceId)
+    .eq('command_type', 'arm-live')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (lastArm.error) throw new Error(`copier-relay-auto-resume-arm-lookup-failed: ${lastArm.error.message}`);
+  const lastArmAt = Date.parse((lastArm.data?.[0] as { created_at?: string } | undefined)?.created_at ?? '');
+  // Serverový čas zapnutí jen pokud patří k tomuto zapnutí (ON z lokálního
+  // UI do tabulky nic nezapíše — starý vzdálený ON by kotvu posunul do včera).
+  const relevantLastArm = Number.isFinite(lastArmAt)
+    && lastArmAt >= options.since - AUTO_RESUME_ARM_MATCH_WINDOW_MS
+    && lastArmAt <= options.since + AUTO_RESUME_BRAKE_MARGIN_MS;
+  const anchor = Math.min(
+    options.since - AUTO_RESUME_BRAKE_MARGIN_MS,
+    relevantLastArm ? lastArmAt : Number.POSITIVE_INFINITY,
+  );
+  // Brzdy celého uživatele (i směrované na jiné zařízení téhož připojení).
+  const brakes = await options.db.from('tradovate_copier_commands')
+    .select('id')
+    .eq('user_id', options.userId)
+    .in('command_type', [...BRAKE_COMMAND_TYPES])
+    .gte('created_at', new Date(anchor).toISOString())
+    .limit(1);
+  if (brakes.error) throw new Error(`copier-relay-auto-resume-brake-lookup-failed: ${brakes.error.message}`);
+  if ((brakes.data ?? []).length > 0) return { admitted: false, reason: 'od posledního zapnutí přišla brzda' };
+  const nowIso = new Date(options.now ?? Date.now()).toISOString();
+  const pending = await options.db.from('tradovate_copier_commands')
+    .select('id')
+    .eq('device_id', options.deviceId)
+    .in('status', ['pending', 'claimed'])
+    .gt('expires_at', nowIso)
+    .limit(1);
+  if (pending.error) throw new Error(`copier-relay-auto-resume-queue-lookup-failed: ${pending.error.message}`);
+  if ((pending.data ?? []).length > 0) return { admitted: false, reason: 've frontě čeká příkaz' };
+  return { admitted: true, reason: null };
+}
 
 const IN_FLIGHT_FLATTEN_WINDOW_MS = 5 * 60_000;
 

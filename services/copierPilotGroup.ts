@@ -49,6 +49,8 @@ export const copierPilotGroupPath = (
   leaderAccountId: number,
 ): string => resolve(root, `${copierPilotStateKey(connectionId, leaderAccountId)}.group.json`);
 
+export { isRetiredDurableGroup } from './copierRetiredGroup';
+
 /**
  * One explicitly named, OAuth-vanished durable group may start DISARMED so it
  * can be retired through the audited runtime command. This does not validate

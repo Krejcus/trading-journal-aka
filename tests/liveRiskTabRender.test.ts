@@ -495,7 +495,7 @@ describe('LIVE Risk záložka', () => {
 
   it.each([
     [{ connected: false }, 'Worker není připojený k brokerovi'],
-    [{ reconciliationRequired: true }, 'Worker vyžaduje kontrolu stavu účtů'],
+    [{ reconciliationRequired: true }, 'Worker ještě ověřuje stav účtů'],
     [{ killSwitch: true }, 'Je aktivní nouzové zastavení'],
     [{ divergentAccounts: [2] }, 'Pozice účtů nejsou v souladu'],
     [{ stuckOutbox: true }, 'Výsledek odeslaných příkazů není potvrzený'],

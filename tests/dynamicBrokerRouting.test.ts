@@ -45,6 +45,7 @@ describe('dynamic account -> OAuth routing', () => {
         expect.objectContaining({ id: 33, connectionId: 'second' }),
       ],
       missingOptional: [],
+      inactiveOptional: [],
     });
     expect(replaceRoutes).not.toHaveBeenCalled();
   });
@@ -65,6 +66,7 @@ describe('dynamic account -> OAuth routing', () => {
         expect.objectContaining({ id: 63338592, connectionId: 'lucid' }),
       ],
       missingOptional: [],
+      inactiveOptional: [],
     });
     await router.placeOrder({
       tag: 'dynamic', accountId: 63338592, symbol: 'MNQ', side: 'Buy', quantity: 1, orderType: 'Market',
@@ -106,6 +108,7 @@ describe('dynamic account -> OAuth routing', () => {
         expect.objectContaining({ id: 22, connectionId: 'first' }),
       ],
       missingOptional: [999],
+      inactiveOptional: [],
     });
     await router.placeOrder({
       tag: 'visible-optional', accountId: 22, symbol: 'MNQ', side: 'Buy', quantity: 1, orderType: 'Market',

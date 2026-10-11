@@ -218,7 +218,7 @@ export function planCopierNotifications(options: {
     ) {
       fireNow.push({
         title: 'Copier: nutná kontrola',
-        body: 'Během DISARMED vznikla nová bezpečnostní událost. Před dalším ARM proveď Kontrolu pozic.',
+        body: 'Během vypnutí vznikla nová bezpečnostní událost. Při dalším zapnutí ji potvrdíš v dialogu.',
         kind: 'risk',
       });
     }

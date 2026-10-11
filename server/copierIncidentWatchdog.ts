@@ -83,8 +83,15 @@ const AUTO_CLOSE_MARKER_KEY = 'state:auto-close';
 /** Marker: `detail` nese `at` poslední ohlášené resume nabídky. */
 const RESUME_OFFER_MARKER_KEY = 'state:resume-offer';
 
+/** Výsledek automatického pokračování po výpadku: `${disarmAt}:${phase}`. */
+const AUTO_RESUME_MARKER_KEY = 'state:auto-resume';
+
 /** Interní marker: `detail` nese `at` posledního odeslaného copy eventu. */
 export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
+
+/** Per-účtový incident „mimo synchron“ (etapa 2): `account-sync:<accountId>`. */
+const ACCOUNT_SYNC_KEY_PREFIX = 'account-sync:';
+const czechAccounts = (count: number) => `${count} ${count >= 2 && count <= 4 ? 'účty' : 'účtů'}`;
 
 /**
  * ENTRY/EXIT dostane krátké okno pro jediný push už s obrázkem. Po vypršení
@@ -410,7 +417,7 @@ const INCIDENTS: IncidentSpec[] = [
     present: (status, uptimeMs) => uptimeMs > BOOT_GRACE_MS && status.connected === false,
     detail: () => null,
     openTitle: 'Copier: Tradovate odpojen',
-    openBody: () => 'Worker běží, ale spojení k Tradovate je dole. Kopírování stojí.',
+    openBody: () => 'Spojení k Tradovate vypadlo, kopírování stojí. Kopie mají u brokera své SL/TP; po obnovení si kopírka stav ověří sama.',
     resolvedTitle: 'Copier: Tradovate připojen',
     resolvedBody: 'Spojení k brokerovi je obnovené.',
   },
@@ -485,6 +492,71 @@ export function evaluateCopierIncidents(options: {
         open(spec.key, detail, spec.openTitle, spec.openBody(detail));
       } else if (!present && state?.active) {
         resolve(spec.key, spec.resolvedTitle, spec.resolvedBody);
+      }
+    }
+
+    // --- Účet mimo synchron (etapa 2): per účet otevření i návrat ---------
+    // Pauza = follower vynechá zbytek leader obchodu; ostatní kopírují dál.
+    // Obojí hlásíme jen při zapnuté kopírce: durable pauza přežije DISARM
+    // i restart a „ostatní kopírují dál / zase kopíruje“ by pak byla nepravda.
+    // Starší worker pole neposílá — bez něj nevíme nic, nic se neřeší.
+    if (Array.isArray(status.accountSyncPauses)) {
+      const syncArmed = asBool(status.armed) && status.shadowMode !== true;
+      const syncPauses = new Map<number, { reasonCode: string; pausedAt: number; symbols: string[] }>();
+      for (const item of status.accountSyncPauses) {
+        const pause = item as { accountId?: unknown; symbol?: unknown; reasonCode?: unknown; pausedAt?: unknown };
+        if (typeof pause.accountId !== 'number' || !Number.isSafeInteger(pause.accountId)) continue;
+        const pausedAt = asNumber(pause.pausedAt);
+        const current = syncPauses.get(pause.accountId);
+        const symbol = asText(pause.symbol);
+        // Víc symbolů jednoho účtu: nejstarší pauza určuje marker, aby
+        // přeřazení pole neposlalo zprávu znovu.
+        if (!current || pausedAt < current.pausedAt) {
+          syncPauses.set(pause.accountId, { reasonCode: String(pause.reasonCode ?? ''), pausedAt, symbols: [...(current?.symbols ?? []), ...(symbol ? [symbol] : [])] });
+        } else if (symbol) current.symbols.push(symbol);
+      }
+      const opened: Array<{ key: string; accountId: number; pause: { reasonCode: string; pausedAt: number; symbols: string[] } }> = [];
+      if (syncArmed) {
+        for (const [accountId, pause] of syncPauses) {
+          const key = `${ACCOUNT_SYNC_KEY_PREFIX}${accountId}`;
+          const state = activeState(userId, deviceId, key);
+          if (state?.active && state.detail === String(pause.pausedAt)) continue;
+          opened.push({ key, accountId, pause });
+        }
+      }
+      const returned: Array<{ key: string; accountId: number }> = [];
+      for (const row of options.alertStates) {
+        if (row.user_id !== userId || row.device_id !== deviceId || !row.active
+          || !row.incident_key.startsWith(ACCOUNT_SYNC_KEY_PREFIX)) continue;
+        const accountId = Number(row.incident_key.slice(ACCOUNT_SYNC_KEY_PREFIX.length));
+        if (Number.isSafeInteger(accountId) && syncPauses.has(accountId)) continue;
+        if (syncArmed && Number.isSafeInteger(accountId)) returned.push({ key: row.incident_key, accountId });
+        else upserts.push({ userId, deviceId, incidentKey: row.incident_key, active: false, detail: null, notified: false });
+      }
+      // Jedna zpráva za tick: při hromadném odmítnutí nepřijde N pushů.
+      for (const item of opened) {
+        upserts.push({ userId, deviceId, incidentKey: item.key, active: true, detail: String(item.pause.pausedAt), notified: true });
+      }
+      if (opened.length === 1) {
+        const [{ key, accountId, pause }] = opened;
+        const symbols = pause.symbols.length > 0 ? ` (${[...new Set(pause.symbols)].join(', ')})` : '';
+        notifications.push({ userId, deviceId, incidentKey: key, kind: 'opened',
+          title: `Účet ${accountId} mimo synchron${symbols}`,
+          body: `${pause.reasonCode === 'protective-filled-early' ? 'Stop nebo target se vyplnil dřív než u leadera.' : 'Broker odmítl vstup.'} Vynechá zbytek obchodu, ostatní kopírují dál.` });
+      } else if (opened.length > 1) {
+        notifications.push({ userId, deviceId, incidentKey: opened[0].key, kind: 'opened',
+          title: `${czechAccounts(opened.length)} mimo synchron`,
+          body: `${opened.map(item => item.accountId).join(', ')} vynechají zbytek obchodu, ostatní kopírují dál.` });
+      }
+      for (const item of returned) {
+        upserts.push({ userId, deviceId, incidentKey: item.key, active: false, detail: null, notified: true });
+      }
+      if (returned.length === 1) {
+        notifications.push({ userId, deviceId, incidentKey: returned[0].key, kind: 'resolved',
+          title: `Účet ${returned[0].accountId} zase v synchronu`, body: 'K dalšímu obchodu leadera se připojí automaticky.' });
+      } else if (returned.length > 1) {
+        notifications.push({ userId, deviceId, incidentKey: returned[0].key, kind: 'resolved',
+          title: `${czechAccounts(returned.length)} zase v synchronu`, body: `${returned.map(item => item.accountId).join(', ')} se k dalšímu obchodu leadera připojí automaticky.` });
       }
     }
 
@@ -574,11 +646,38 @@ export function evaluateCopierIncidents(options: {
       });
     }
 
+    // --- Automatické pokračování po výpadku (10. 10. 2026): výsledek jednou
+    // per epizoda. Jen u workeru, který funkci opravdu má zapnutou.
+    const capabilities = Array.isArray(runtime.status?.capabilities) ? runtime.status.capabilities as unknown[] : [];
+    const resume = status.transportResume as { disarmAt?: unknown; phase?: unknown; reason?: unknown } | null | undefined;
+    const resumeDisarmAt = asNumber(resume?.disarmAt);
+    const resumeAutoResumed = capabilities.includes('transport-auto-resume-v1')
+      && resume?.phase === 'resumed';
+    if (capabilities.includes('transport-auto-resume-v1') && resumeDisarmAt > 0
+      && (resume?.phase === 'resumed' || resume?.phase === 'declined')) {
+      const detail = `${resumeDisarmAt}:${String(resume.phase)}`;
+      const resumeMarker = activeState(userId, deviceId, AUTO_RESUME_MARKER_KEY);
+      // Vlastní ruční vypnutí není zpráva, jen se zapíše marker.
+      const silent = resume.phase === 'declined' && /ručně vypnuta|vypnul kopírku ručně/.test(asText(resume.reason) ?? '');
+      if (resumeMarker?.detail !== detail && silent) {
+        upserts.push({ userId, deviceId, incidentKey: AUTO_RESUME_MARKER_KEY, active: false, detail, notified: false });
+      } else if (resumeMarker?.detail !== detail) {
+        notifications.push({
+          userId, deviceId, incidentKey: 'auto-resume', kind: 'opened',
+          ...(resume.phase === 'resumed'
+            ? { title: 'Kopírka pokračuje', body: 'Spojení s brokerem je zpět, účty ověřené flat bez příkazů — kopírování jede dál.' }
+            : { title: 'Kopírka po výpadku nepokračuje', body: `${asText(resume.reason) ?? 'Kontrola nevyšla'}. Zapni ji ručně.` }),
+        });
+        upserts.push({ userId, deviceId, incidentKey: AUTO_RESUME_MARKER_KEY, active: false, detail, notified: true });
+      }
+    }
+
     // --- Hrany DISARMED <-> ARMED (jednorázově, bez replaye při bootstrapu)
     // Zajímá nás jen ostrý ARM: shadow nic neposílá, o ten uživatel nepřijde.
     const liveArmed = asBool(status.armed) && status.shadowMode !== true;
     const marker = activeState(userId, deviceId, ARMED_MARKER_KEY);
-    if (marker && marker.active === false && liveArmed) {
+    // Automatické pokračování má vlastní zprávu — bez druhého „ARM zapnut“.
+    if (marker && marker.active === false && liveArmed && !resumeAutoResumed) {
       // Stejný text jako okamžitý relay push; snapshotHealth leží mimo
       // controller část heartbeatu, proto se bere z celého runtime statusu.
       notifications.push({

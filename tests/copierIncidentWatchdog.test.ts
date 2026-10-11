@@ -518,3 +518,109 @@ it('durable boundary replay preserves silence for a historical bootstrap baselin
   });
   expect(result.notifications).toEqual([]);
 });
+
+describe('účet mimo synchron (etapa 2, bod 5d)', () => {
+  const armedWith = (accountSyncPauses: unknown[]) => runtime({ status: {
+    armed: true, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null,
+    accountSyncPauses,
+  } });
+  const pause = { accountId: 68356280, symbol: 'MNQZ6', reasonCode: 'protective-filled-early', reason: 'x', pausedAt: NOW - 1_000 };
+  const pausedState = (detail: string): CopierAlertStateRow => ({ ...state('account-sync:68356280'), detail });
+
+  it('nová pauza pošle jednu zprávu a podruhé už nic', () => {
+    const first = evaluate([armedWith([pause])], [state('state:armed', true)]);
+    const opened = first.notifications.filter(item => item.incidentKey === 'account-sync:68356280');
+    expect(opened).toEqual([expect.objectContaining({
+      kind: 'opened', title: 'Účet 68356280 mimo synchron (MNQZ6)',
+      body: 'Stop nebo target se vyplnil dřív než u leadera. Vynechá zbytek obchodu, ostatní kopírují dál.',
+    })]);
+    expect(first.upserts).toContainEqual(expect.objectContaining({
+      incidentKey: 'account-sync:68356280', active: true, detail: String(pause.pausedAt),
+    }));
+    const second = evaluate([armedWith([pause])], [state('state:armed', true), pausedState(String(pause.pausedAt))]);
+    expect(second.notifications.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+  });
+
+  it('odmítnutý vstup má vlastní důvod', () => {
+    const result = evaluate([armedWith([{ ...pause, reasonCode: 'entry-rejected' }])], [state('state:armed', true)]);
+    const body = result.notifications.find(item => item.incidentKey === 'account-sync:68356280')?.body;
+    expect(body).toContain('Broker odmítl vstup');
+  });
+
+  it('při vypnuté kopírce pauzu neohlásí — „ostatní kopírují“ by nebyla pravda', () => {
+    const result = evaluate([runtime({ status: {
+      armed: false, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null, accountSyncPauses: [pause],
+    } })]);
+    expect(result.notifications.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+  });
+
+  it('víc pauz v jednom ticku = jedna souhrnná zpráva, markery pro všechny', () => {
+    const result = evaluate([armedWith([pause, { ...pause, accountId: 68356281 }, { ...pause, accountId: 68356282 }])], [state('state:armed', true)]);
+    const opened = result.notifications.filter(item => item.incidentKey.startsWith('account-sync:'));
+    expect(opened).toEqual([expect.objectContaining({ title: '3 účty mimo synchron' })]);
+    expect(result.upserts.filter(item => item.incidentKey.startsWith('account-sync:') && item.active)).toHaveLength(3);
+  });
+
+  it('starší worker bez pole nic neresolvuje, poškozený klíč se tiše zavře', () => {
+    const noField = evaluate([runtime({ status: {
+      armed: true, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null,
+    } })], [state('state:armed', true), pausedState('1')]);
+    expect(noField.upserts.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+    const broken = evaluate([armedWith([])], [state('state:armed', true), { ...state('account-sync:abc'), detail: '1' }]);
+    expect(broken.notifications.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+    expect(broken.upserts).toContainEqual(expect.objectContaining({ incidentKey: 'account-sync:abc', active: false }));
+  });
+
+  it('konec pauzy při zapnuté kopírce ohlásí návrat', () => {
+    const result = evaluate([armedWith([])], [state('state:armed', true), pausedState('1')]);
+    expect(result.notifications).toContainEqual(expect.objectContaining({
+      incidentKey: 'account-sync:68356280', kind: 'resolved', title: 'Účet 68356280 zase v synchronu',
+    }));
+  });
+
+  it('konec pauzy po vypnutí kopírky se jen tiše zavře', () => {
+    const result = evaluate([runtime({ status: {
+      armed: false, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null, accountSyncPauses: [],
+    } })], [state('state:armed', false), pausedState('1')]);
+    expect(result.notifications.filter(item => item.incidentKey.startsWith('account-sync:'))).toHaveLength(0);
+    expect(result.upserts).toContainEqual(expect.objectContaining({
+      incidentKey: 'account-sync:68356280', active: false, notified: false,
+    }));
+  });
+
+  it('pauzy z vnořeného controller statusu relay heartbeatu', () => {
+    const result = evaluate([runtime({ status: { controller: {
+      armed: true, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null,
+      accountSyncPauses: [pause],
+    } } })], [state('state:armed', true)]);
+    expect(result.notifications.some(item => item.incidentKey === 'account-sync:68356280')).toBe(true);
+  });
+});
+
+describe('automatické pokračování po výpadku (10. 10. 2026)', () => {
+  const withResume = (phase: string, capabilities = ['transport-auto-resume-v1'], armed = phase === 'resumed') => runtime({ status: {
+    capabilities,
+    controller: {
+      armed, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null,
+      transportResume: { disarmAt: 1_000, armExpiresAt: 9_000, phase, reason: phase === 'declined' ? 'leader během výpadku obchodoval' : null, at: 2_000 },
+    },
+  } });
+
+  it('pokračování ohlásí jednou a bez druhého „ARM zapnut“', () => {
+    const first = evaluate([withResume('resumed')], [state('state:armed', false)]);
+    expect(first.notifications.map(item => item.incidentKey)).toEqual(['auto-resume']);
+    expect(first.notifications[0].title).toBe('Kopírka pokračuje');
+    const again = evaluate([withResume('resumed')], [state('state:armed', true), { ...state('state:auto-resume', false), detail: '1000:resumed' }]);
+    expect(again.notifications).toHaveLength(0);
+  });
+
+  it('odmítnutí ohlásí s důvodem; bez capability nic', () => {
+    const declined = evaluate([withResume('declined')]);
+    expect(declined.notifications).toContainEqual(expect.objectContaining({
+      incidentKey: 'auto-resume', title: 'Kopírka po výpadku nepokračuje',
+      body: 'leader během výpadku obchodoval. Zapni ji ručně.',
+    }));
+    expect(evaluate([withResume('declined', [])]).notifications.filter(item => item.incidentKey === 'auto-resume')).toHaveLength(0);
+    expect(evaluate([withResume('waiting')]).notifications.filter(item => item.incidentKey === 'auto-resume')).toHaveLength(0);
+  });
+});

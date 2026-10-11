@@ -143,7 +143,7 @@ describe('nedostupný follower — potvrzení přímo z blokujícího místa', (
       error: 'Změnu leadera blokuje rozpracovaný lifecycle: connection recovery',
     })));
     expect(failedMarkup).toContain('Změnu leadera blokuje rozpracovaný lifecycle: connection recovery');
-    expect(failedMarkup).toContain('Spusť Kontrolu pozic a zkus znovu');
+    expect(failedMarkup).toContain('Zkontroluj účty a zkus to znovu');
     expect(failedMarkup).toContain('Odebrat nedostupné účty a uložit');
   });
 

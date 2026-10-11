@@ -88,6 +88,7 @@ export function createCopierRuntimeCommandAdapter(
             command.accountId,
             command.enabled,
             async updated => { options.setGroup(updated); },
+            command.allowOwnExposure === true ? { allowOwnExposure: true } : undefined,
           );
           return { type: 'configuration', group: next };
         }

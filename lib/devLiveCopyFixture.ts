@@ -155,6 +155,15 @@ export const devLiveCopyFixtureEligibility: CopierAccountEligibility[] = [
   { accountId: FOLLOWER_D, state: 'active', at: Date.now() - 60_000 },
 ];
 
+/** Etapa 2: follower D je „mimo synchron“ — SL se mu vyplnil dřív než leaderovi. */
+export const devLiveCopyFixtureSyncPauses = [{
+  accountId: FOLLOWER_D,
+  symbol: 'MNQZ6',
+  reasonCode: 'protective-filled-early' as const,
+  reason: 'Ochranný příkaz followera se vyplnil dřív než u leadera',
+  pausedAt: Date.now() - 3 * 60_000,
+}];
+
 export const devLiveCopyFixtureDailyStats = {
   sessionEndAt: Date.now() + 5 * 60 * 60_000,
   realizedPnlUsd: 240,

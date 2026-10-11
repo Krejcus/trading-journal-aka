@@ -271,7 +271,8 @@ existující ochranu.
   bootstrapem, který opět startuje DISARMED a vyžaduje kontrolu.
 - Hlídá test: `tests/copierRuntimeController.test.ts`,
   `tests/copierChaosScenarios.test.ts`, `tests/localCopierExecutionAgent.test.ts`.
-- Nikdy: Nepřidávat „unlock kill“ za běhu ani automatický re-ARM po reconnectu.
+- Nikdy: Nepřidávat „unlock kill“ za běhu ani automatický re-ARM po reconnectu
+  mimo INV-RECON-04 (kill switch ho vždy ruší).
   `dispatchBroker` smí přes kill pustit jen úzký `terminalCancel` hlídaný
   `cancelLifecycleHaltReason`; ruční Flatten je samostatná výslovná safety
   akce. Ani jedna výjimka nesmí vytvořit nebo zvětšit expozici.
@@ -337,7 +338,7 @@ existující ochranu.
 
 ### Kontrola pozic a reconciliation
 
-### INV-RECON-01: Reconnect, restart a invalidace vyžadují novou autoritativní kontrolu; reconnect nikdy sám neARMuje
+### INV-RECON-01: Reconnect, restart a invalidace vyžadují novou autoritativní kontrolu; reconnect nikdy sám neARMuje (jedinou výjimkou je INV-RECON-04)
 
 - Proč: Události mohly během mezery chybět a historický model nemusí odpovídat
   venue.
@@ -348,7 +349,87 @@ existující ochranu.
   `tests/copierChaosScenarios.test.ts`, `tests/copierGraceReconnectD1.test.ts`.
 - Nikdy: Nepovažovat `connected=true` nebo úspěšný WS sync za povolení k ARM.
 - Bezpečné změny vs. nebezpečné: Bezpečné je po reconnectu automaticky udělat
-  read-only kontrolu a zůstat OFF. Nebezpečné je obnovit minulý ON stav.
+  read-only kontrolu a zůstat OFF. Nebezpečné je obnovit minulý ON stav —
+  kromě úzké cesty INV-RECON-04, která stejně projde všemi branami ON.
+
+### INV-RECON-04: Automatické pokračování po výpadku spojení (10. 10. 2026, rozhodnutí Filipa)
+
+- Proč: Krátký výpadek ve flat stavu nemá znamenat, že kopírka zbytek dne
+  stojí, dokud si toho člověk nevšimne.
+- Vynucuje: controller `transportResume` (jen v paměti; restart ho zahodí),
+  `evaluateTransportResume`, `arm({ autoResume })`; agent `autoRearmTick` +
+  `autoResumeAttempt`; serverová pojistka `admitCopierAutoResume`
+  (`server/tradovateCopierCommandRelay.ts`, akce relay `auto-resume-admit`).
+- Podmínky (všechny): disarm triggerem `transport` z živého ARM; skupina byla
+  při výpadku flat bez příkazů (zapojené účty) NEBO v obchodu, který první
+  obnova přijala jako „držené kopie“ (viz níže); bez incidentu a mimo
+  managementOnly; čekající příkaz bez pozice = odmítnout; mezitím žádné jiné vypnutí, ruční DISARM, kill switch,
+  uspání Macu, incident ani změna konfigurace; leader v mezeře neobchodoval
+  (denní statistiky beze změny, žádný příkaz leadera s časem ≥
+  min(výpadek − 30 s, poslední heartbeat − 5 s) ani s vyšším ID; bez
+  čitelného času = odmítnout); čerstvá read-only příprava
+  (`hasFreshArmPreparation`), nikdy veřejné `reconcile()`; TTL nejvýš do
+  konce původního zapnutí; agent: stejná brzdová epocha a skupina jako při
+  ručním ON, tatáž session, prázdné vyzvednutí relay fronty po reconnectu,
+  grace 15 s, server potvrdí, že od ručního ON (−60 s rezerva) nepřišla žádná
+  brzda a nic nečeká; jeden pokus za epizodu; nejvýš 2 automatická pokračování
+  na jedno ruční ON. Zapnutí jde přes `armCore` se všemi branami INV-ARM-01.
+  Souběh s ručním ON: automatický pokus ustoupí; úspěšné ruční ON epizodu
+  ukončí, neúspěšné ji nechá k dalšímu ticku.
+- Obchod leadera v mezeře nezávisle na hodinách: jakýkoli příkaz leadera
+  s vyšším (monotónním Tradovate) ID, než controller znal při výpadku
+  (maximum z eventů, preflightu i reconciliace) = odmítnout. Čekání má strop
+  60 min od výpadku (a nikdy přes konec původního zapnutí).
+- Slepé okno: tichý výpadek se pozná až po idle timeoutu a heartbeat může
+  dodat socket followera — příkaz leadera s časem ≥ min(výpadek − 30 s,
+  poslední heartbeat − 5 s) i jakýkoli fill leadera v resync `gapFills` =
+  odmítnout. Pozor: router při skutečném reconnectu `resync` neposílá, takže
+  `gapFills` je jen doplněk; rozhodují statistiky, čas a ID příkazů. Ruční Flatten (účet / All / follower) a waive epizodu ruší;
+  zámek dne a obchodní okno ji ruší, cooldown jen odkládá. Stav `resumed`
+  se po jakémkoli dalším vypnutí ve statusu nehlásí; selhání po zapnutí ho
+  přepíše na `declined`. Dedup stejné chyby ve `failClosed` platí jen za už
+  vypnuté kopírky (jinak by druhý stejný výpadek nezaložil epizodu).
+- Serverová pojistka: brzdy celého uživatele (všechna zařízení) od
+  min(ON na Macu − 60 s, serverový čas posledního vzdáleného `arm-live`,
+  pokud patří k tomuto zapnutí — leží v okně ON − 5 min … ON + 60 s);
+  po pojistce se příprava read-only obnoví (žádné `reconcile()`);
+  nedostupnost sítě = až 3 opakování pojistky, nikdy ARM. Zbytkové okno:
+  brzda zařazená až PO odpovědi pojistky a před `arm()` (~latence relay)
+  se provede až po zapnutí — stejně jako u ručního ON (INV-ARM-03).
+- Otevřený obchod při výpadku (10. 10. 2026): první obnova přijme stav jako
+  „držené kopie“ (bez incidentu) jen když nejsou divergence ani chybějící
+  lineage a `protectiveHoldProblem()` nic nenajde: leader má jen příkazy
+  snižující pozici; každý zapojený follower s pozicí má jen ochranné nohy
+  kopírky (ID z outboxu/links), každou snižující, a pro každou třídu
+  (stop / target), kterou má leader, součet zbytků přesně = pozice; žádná
+  třída pozici nepřesáhne. Jinak incident jako dřív. Kopírka zůstává
+  DISARMED, posuny SL leadera se nezrcadlí, ARM blokuje
+  `pendingConnectionRecovery`; po vyřešení leader-flat guardu se obnova
+  spustí znovu (read-only) a čistá ji dokončí.
+  Automatické pokračování z drženého obchodu: první obnova musí potvrdit
+  živý obchod a deník leadera musí sedět s jeho pozicí bez nového ID
+  příkazu (jinak = obchodoval v mezeře, odmítnout); další výpadek během
+  držení = odmítnout; konec obchodu pozorovaný živě s deníkem flat (bez
+  otevřených a nepotvrzených lotů) = nový výchozí bod statistik a ID,
+  pak běžné kontroly a 60min strop od něj. Samotné držení omezuje jen konec
+  původního zapnutí (nejvýš do konce session). Obchod ukončený už během
+  výpadku nebo kopie skončené jinak než leader = odmítnout.
+- Výpadek je jeden i když Tradovate pošle `error` a pak `connection:false`;
+  „další výpadek“ je jen disconnect po pozorovaném reconnectu. Požadovaná
+  ochrana followera per třída = min(pozice, Σ trunc(zbytek leaderovy nohy ×
+  násobek)), nejméně 1 a nejvýš pozice (runner: stop 2, TP 1). Flat skupina,
+  kde pracovní příkaz má jen leader = žádný incident, jen nepokračuje.
+  Držený obchod bez SL/TP: po vyřešení guardu se obnova vynutí taky. Čistá
+  obnova smaže `lastError`, jen když pochází výhradně z výpadků spojení
+  (`lastErrorTransportOnly`; i víc různých chyb jednoho výpadku) a není
+  incident. Ochrana followera je odvozená per nohu (floor × násobek) stejně,
+  jak ji kopírka zakládá — může tedy být o zbytek menší než pozice; panel
+  proto mluví o „ochraně z doby před výpadkem“, ne o plném krytí.
+- Hlídá test: `tests/copierTransportAutoResume.test.ts`, `tests/copierOutageMidTrade.test.ts`,
+  `tests/copierArmSelfCheck.test.ts`, `tests/copierAutoResumeAdmission.test.ts`,
+  `tests/copierIncidentWatchdog.test.ts`.
+- Nikdy: Opakovat pokus, prodloužit TTL, pokračovat po restartu workeru,
+  pokračovat bez serverové pojistky, mazat incident nebo managementOnly.
 
 ### INV-RECON-02: Veřejné `reconcile()` je auditovaný recovery úkon; interní kontroly nesmí mazat incident
 
@@ -593,6 +674,84 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je vypnout/aktivovat až po
   potvrzeném flat/no-working a durable commitu. Nebezpečné je odvodit flat z
   nulové hodnoty v UI.
+
+### INV-PART-03: Vyřazení followera s vlastní (cizí) expozicí — „Zapnout bez tohoto účtu“ (10. 10. 2026)
+
+- Proč: Ruční obchod na jednom followerovi nemá navždy blokovat zapnutí
+  zdravých účtů; kopírka ale nesmí převzít ani opustit vlastní kopii.
+- Vynucuje: `setFollowerEnabled(..., { allowOwnExposure: true })` — jen
+  `enabled:false`, jen za DISARM, leader flat bez příkazů (stream i dvě REST
+  čtení), bez recovery/nejasného outboxu, shodný tvar expozice followera
+  v obou čteních a `copierOwnedExposureReasons(account, { atExclusion })`
+  prázdné (stejná klasifikace jako „účet bez kopie“ při přepnutí skupiny:
+  neusazené záznamy kopírky, OTEVŘENÝ příkaz s ID kopírky, nedokončená epocha
+  s lineage, pending exposure, nevyřešený/zaseknutý příkaz, cut; při vyřazení
+  navíc globální `liveCopyOpenSince`). Historické ID v outboxu samo o sobě ne
+  — outbox se maže jen přepnutím skupiny. Status nese
+  `excludedForeignFollowers` (UI podle něj, ne podle konfigurace) a
+  `participatingGroupFlat` (obnova socketů). `excludedForeignFollowerIds()` = vypnutí
+  followeři bez stopy kopírky; jejich expozice se nepočítá do
+  `groupIsFlat` (cooldown, day-lock, stopa kopie, managementOnly), divergence,
+  working orders ani `allFlat` v preflightu/reconciliaci/`arm()`; leader-flat
+  guard je vynechá jako neparticipanty; přechod pozice ani route-gap na nich
+  nespustí fail-closed. Status `groupFlat` (údržba) zůstává přes všechny účty.
+- Hlídá test: `tests/copierFollowerExcludeWithExposure.test.ts`,
+  `tests/copierFollowerParticipation.test.ts`.
+- „Zavřít jen pro tento obchod“ (`flattenFollowerTrade`) vypnutý follower
+  odmítne — cut by jeho vlastní pozici nezavřel a zamkl by ho mezi „kopie“.
+- Nikdy: Neposílat vyřazenému účtu příkaz měnící expozici (jediná výjimka je
+  cancel příkazu prokazatelně z outboxu kopírky); nevyřadit účet, jehož
+  expozice může být z kopírky; nezapnout ho zpět bez flat (INV-PART-01).
+  Flatten účtu / Flatten All (explicitní akce) ho zavřou.
+- Bezpečné změny vs. nebezpečné: Bezpečné je rozšířit důkazy vlastnictví
+  (konzervativněji). Nebezpečné je opírat „cizí“ o cokoli jiného než absenci
+  vlastní stopy kopírky na účtu.
+
+### INV-GROUP-01: Smazání skupiny workeru a běh bez skupiny (11. 10. 2026)
+
+- Proč: Po breachi všech účtů (skupina dvsvds) worker držel nepoužitelnou
+  skupinu v režimu opravy a smazat ji nešlo — worker měl vždy právě jednu
+  skupinu a UI ji ze statusu znovu adoptovalo.
+- Vynucuje: `retireGroup({ reason, missingAccountIds })` = cesta přepnutí
+  skupiny (`reconfigureLeaderEpoch`) s prázdnou novou topologií: jen DISARMED
+  a bez kill switche, bez stuck/nejistého outboxu, bez rozpracovaného
+  lifecycle (pending connection recovery a leader-flat guard smazání
+  neblokují — nedostupné účty nejde obsloužit a účty se stopou kopírky musí
+  být flat; rozpracovaný follower cut, zápis outboxu, cut lifecycle ani
+  reconciliace běžet nesmí), stejný fence a dvě autoritativní kola čtení.
+  Účty, které OAuth vůbec nevrací, se vyřadí auditovaně bez flat důkazu.
+  Účty, které OAuth vrací jako neaktivní (`inactiveOptional`), jde bez důkazu
+  vyřadit jen bez stopy kopírky (neusazená kopie, epocha, cut, izolace,
+  stuck, `liveCopyOpenSince`) — mohou držet pozici; chybí-li rozlišení, bere
+  se každý chybějící jako neaktivní. Aktivní viditelné účty se stopou kopírky
+  musí být flat a bez příkazů; bez stopy (ruční obchod) zůstávají jak jsou.
+  Značka `safety.retiredGroup` jde ve stejném CAS commitu jako čistý stav
+  a maže ji až commit aktivace další skupiny. Neprovedené smazání nenastaví
+  `lastError` (nic se nezměnilo).
+- Běh bez skupiny: ARM, `prepareArm`, `reconcile`, Flatten, úpravy skupiny
+  a účast followerů odmítnou; obchodní eventy starých účtů se nezpracují
+  (výjimka: účty ve fence probíhající aktivace); heartbeat jen liveness;
+  reconnect bez connection recovery, transport-only `lastError` po návratu
+  spojení zmizí. Status: `retiredGroup`, `groupFlat`/`participatingGroupFlat`
+  true, žádné divergence/working/exposure/účast, `reconciliationRequired`
+  false. Restart: pilot (`isRetiredDurableGroup`) uloženou skupinu nevaliduje
+  proti OAuth, controller nemá kritický účet a startuje DISARMED bez skupiny.
+- Aktivace ze stavu bez skupiny je vždy čerstvá aktivace (i stejného ID):
+  stará topologie je prázdná, nic se z ní nečte ani nepřebírá (účast, cut),
+  routují se jen účty nové skupiny a ty musí být flat (dvě kola). Agent bez
+  nové konfigurace nic nezapne.
+- Durable incident (`manualRecovery`) smazání nemaže; ON nové skupiny ho dál
+  vyžaduje výslovně potvrdit (INV-DEFAULT-03).
+- UI: execution skupina je `copierWorkerExecutionGroup(status)` — smazaná
+  skupina se nepředává jako `runtimeGroup` (jinak ji `adoptRuntimeCopyGroup`
+  vrátí do seznamu). Mazání skupiny workeru jen s capability `group-delete-v1`;
+  relay pouští `delete-group` jen s `groupId`.
+- Hlídá test: `tests/copierDeleteActiveGroup.test.ts`,
+  `tests/localCopierDeleteGroup.test.ts`, `tests/liveCopyDeleteGroupUi.test.ts`,
+  relay v `tests/tradovateCopierCommandRelay.test.ts`.
+- Nikdy: Smazáním neposlat brokerový příkaz ani nevypnout zapnutou kopírku;
+  nevyřadit viditelný účet se stopou kopírky bez flat důkazu; nezapnout nic
+  bez aktivace skupiny.
 
 ### INV-PART-02: Follower cut izoluje účet od nových entry, ale dokončení existující kopie zůstává risk-reducing a přesně ohraničené
 

@@ -86,6 +86,7 @@ import {
   devLiveCopyFixtureOrders,
   devLiveCopyFixtureParticipation,
   devLiveCopyFixtureSnapshot,
+  devLiveCopyFixtureSyncPauses,
 } from '../lib/devLiveCopyFixture';
 import LiveRiskTab from './LiveRiskTab';
 import LiveStatusStrip from './LiveStatusStrip';
@@ -101,9 +102,9 @@ import {
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
-import { supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
-import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup } from '../lib/copierArmPreparation';
+import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
 import {
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
@@ -198,6 +199,7 @@ const DevLiveCopyFixtureOverview = () => {
       cooldownUntil={Date.now() + 6 * 60_000}
       sessionArmedAt={0}
       followerParticipation={participation}
+      accountSyncPauses={devLiveCopyFixtureSyncPauses}
       commandAdapter={commandAdapter}
     />
   );
@@ -651,7 +653,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       accounts: liveData.accounts,
       profiles: live.profiles,
       controller: agentStatus?.controller ?? null,
-      followerCount: agentStatus?.group.followers.length ?? 0,
+      followerCount: copierWorkerExecutionGroup(agentStatus)?.followers.length ?? 0,
       workerObservedAtMs: agentStatusObservedAt,
       brokerCapturedAtMs: Date.parse(liveData.capturedAt),
       positionsAvailable: ['available', 'empty'].includes(liveData.coverage.positions.availability),
@@ -659,13 +661,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     });
     void syncNativeLiveWidgetSnapshot(state);
   }, [agentStatus, agentStatusObservedAt, liveData, live.profiles]);
+  // Smazaná skupina workeru (11. 10. 2026) už není execution skupina; UI ji
+  // nesmí znovu adoptovat ani na ni posílat příkazy.
+  const workerGroup = useMemo(() => copierWorkerExecutionGroup(agentStatus), [agentStatus]);
   const executionGroup = useMemo(() => {
-    if (!agentStatus) return null;
-    return resolveLocalExecutionGroup(copyGroups, agentStatus.group);
-  }, [agentStatus, copyGroups]);
+    if (!workerGroup) return null;
+    return resolveLocalExecutionGroup(copyGroups, workerGroup);
+  }, [workerGroup, copyGroups]);
   useEffect(() => {
-    onCopierJournalRefresh?.(agentStatus?.group ?? executionGroup ?? null);
-  }, [agentStatus?.group, executionGroup, liveData?.capturedAt, onCopierJournalRefresh]);
+    onCopierJournalRefresh?.(workerGroup ?? executionGroup ?? null);
+  }, [workerGroup, executionGroup, liveData?.capturedAt, onCopierJournalRefresh]);
   const executeAgent = useCallback(async (command: Parameters<typeof agentClient.execute>[0]) => {
     // Stav obnovený z paměti po návratu na LIVE je jen zobrazení. Dokud tato
     // instance sama nepřijme odpověď workeru, projdou jen riziko snižující
@@ -739,9 +744,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     // Parent cache smí po konfiguračním zápisu převzít jen potvrzený worker
     // snapshot. Jinak by následný ARM mohl sáhnout po starší same-id skupině.
     setCopyGroups(current => {
-      const match = resolveLocalExecutionGroup(current, status.group);
+      const acknowledged = copierWorkerExecutionGroup(status);
+      if (!acknowledged) return current;
+      const match = resolveLocalExecutionGroup(current, acknowledged);
       if (!match) return current;
-      return current.map(group => group.id === match.id ? status.group : group);
+      return current.map(group => group.id === match.id ? acknowledged : group);
     });
   }, [acceptAgentStatus]);
   const runConfigMutation = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
@@ -843,7 +850,30 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         }
       }
     }
-    await runConfigMutation(async () => {
+    // 8. 10. 2026: Kontrola pozic je součástí Zapnout. Durable incident
+    // ale smaže jen výslovné potvrzení — zvykové kliknutí ho nepřejde.
+    // Starší worker (bez `incident-ack-v1`) potvrzení nezná. Po incidentu ho
+    // proto ON vůbec nespustí — jinak by worker etapy 1 incident smazal sám.
+    const legacyIncident = !supportsCopierIncidentAck(armStatusRef.current.status)
+      && armStatusRef.current.status?.controller.armPreparation?.blockedBy === 'incident';
+    if (legacyIncident) {
+      throw new CopierArmBlockedError('Po incidentu je potřeba Kontrola pozic. Worker ještě neumí potvrzení incidentu při zapnutí — použij Zkontrolovat pozice na Macu, nebo nejdřív aktualizuj worker.');
+    }
+    const incident = supportsCopierIncidentAck(armStatusRef.current.status)
+      ? armStatusRef.current.status?.controller.manualRecovery ?? null
+      : null;
+    let acknowledgeIncidentId: string | undefined;
+    if (incident) {
+      const acknowledged = await confirmAction({
+        title: 'Zapnout po incidentu?',
+        message: `Po incidentu: ${incident.reason} Ověřím účty u brokera a zapnu jen při čistém stavu. Když nesedí, kopírka zůstane vypnutá a vypíše účty — srovnáš je ručně v Tradovate.`,
+        confirmLabel: 'Ověřit a zapnout',
+        cancelLabel: 'Zrušit',
+      });
+      if (!acknowledged) return;
+      acknowledgeIncidentId = incident.id;
+    }
+    const armNow = () => runConfigMutation(async () => {
       // Re-read after any camera dialog/repair; the worker still rejects any
       // concurrent tightening that happened after this UI snapshot.
       const prepared = prepare();
@@ -851,12 +881,42 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         type: 'arm-live',
         group: prepared.group,
         accountEligibilityExclusions: exclusions,
+        ...(acknowledgeIncidentId != null ? { acknowledgeIncidentId } : {}),
       });
       acceptConfigAck(result.status);
       if (prepared.preservedRules.length) {
         setArmRulesNotice(`Při zapnutí zůstala zachována dnešní potvrzená pravidla: ${prepared.preservedRules.join(', ')}. Aktuální hodnoty najdeš v Risk.`);
       }
     });
+    try {
+      await armNow();
+    } catch (reason) {
+      // 8. 10. 2026: stará skupina má účty, které už v Tradovate nejsou
+      // (breach). Worker je sám nevyřadí; po potvrzení uživatelem je vyřadí
+      // explicitním activate-group a teprve pak novou skupinu zapne.
+      const retirement = retireMissingFromError(reason);
+      if (!retirement) throw reason;
+      const confirmed = await confirmAction({
+        title: 'Vyřadit breachnuté účty staré skupiny?',
+        message: `Účty ${retirement.accountIds.join(', ')} staré skupiny už v Tradovate nejsou nebo jsou neaktivní (breach). `
+          + 'Kopírka je vyřadí a přepne na tuto skupinu. Jejich případné zbylé pozice už hlídat nebude — zkontroluj je u propfirmy.',
+        confirmLabel: 'Vyřadit a zapnout',
+        cancelLabel: 'Zrušit',
+      });
+      if (!confirmed) return;
+      await runConfigMutation(async () => {
+        acceptConfigAck((await executeAgent({
+          type: 'activate-group',
+          group: prepare().group,
+          retireMissingOldGroup: {
+            groupId: retirement.groupId,
+            accountIds: retirement.accountIds,
+            reason: `Uživatel v appce potvrdil vyřazení účtů ${retirement.accountIds.join(', ')}, které v Tradovate už nejsou nebo jsou neaktivní (breach)`,
+          },
+        })).status);
+      });
+      await armNow();
+    }
   }, [acceptAgentStatus, acceptConfigAck, accountEligibilityExclusions, agentStatus?.snapshotHealth, confirmAction, effectiveAccountEligibility, executeAgent, live.connectionData, runConfigMutation, waitForSnapshotReady]);
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;
@@ -893,7 +953,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       throw new Error('Čekám na čerstvý stav kopírky. Risk nastavení ulož, až ho worker potvrdí.');
     }
     if (!supportsCopierRiskConfig(agentStatus)) throw new Error('Risk nastavení vyžaduje aktualizaci Mac workeru.');
-    if (group.id !== agentStatus.group.id) {
+    if (!workerGroup || group.id !== workerGroup.id) {
       throw new Error('Risk nastavení nemíří na skupinu připojenou k execution workeru.');
     }
     await runConfigMutation(async () => {
@@ -906,7 +966,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       // Vždy proto použijeme autoritativní odpověď a nic neměníme před worker ACK.
       acceptConfigAck(result.status);
     });
-  }, [acceptConfigAck, agentStatus, executeAgent, runConfigMutation]);
+  }, [acceptConfigAck, agentStatus, executeAgent, runConfigMutation, workerGroup]);
 
   // Přímý loopback agent zkoušíme i z produkčního HTTPS webu: na Macu
   // s běžícím workerem to sráží ARM/Flatten z relay sekund na stovky ms
@@ -1323,6 +1383,11 @@ acceptAgentStatus((await executeAgent({
               sessionArmedAt={agentStatus?.controller.sessionArmedAt ?? 0}
               followerCuts={agentStatus?.controller.followerCuts ?? []}
               followerParticipation={agentStatus?.controller.followerParticipation ?? []}
+              accountSyncPauses={agentStatus?.controller.accountSyncPauses ?? []}
+              followerExclusionSupported={supportsCopierFollowerExcludeWithExposure(agentStatus)}
+              excludedForeignFollowers={agentStatus?.controller.excludedForeignFollowers}
+              transportResume={agentStatus?.controller.transportResume ?? null}
+              transportResumeSupported={supportsCopierTransportAutoResume(agentStatus)}
               accountRisk={agentStatus?.controller.accountRisk ?? []}
               onOpenRisk={() => navigateToTab('risk')}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
@@ -1340,7 +1405,9 @@ acceptAgentStatus((await executeAgent({
                   throw new Error(`Broker účet stále nepotvrdil jako způsobilý: ${remaining.reason ?? remaining.state}`);
                 }
               }}
-              onReconcile={copierUiDemo ? undefined : async () => {
+              // Relay `reconcile` nepouští — tlačítko jen u lokálního spojení na Macu.
+              legacyReconcile={copierUiDemo || supportsCopierIncidentAck(agentStatus) || agentTransport !== 'local' ? undefined : async () => {
+                // Jen starší worker bez potvrzení incidentu v ON (přechod při nasazení).
                 const result = await executeAgent({ type: 'reconcile' });
                 acceptAgentStatus(result.status);
                 await live.refreshData();
@@ -1352,7 +1419,9 @@ acceptAgentStatus((await executeAgent({
                 }
               }}
               executionGroupId={executionGroup?.id ?? null}
-              runtimeGroup={agentStatus?.group ?? null}
+              runtimeGroup={workerGroup}
+              groupDeleteSupported={supportsCopierGroupDelete(agentStatus)}
+              workerWithoutGroup={agentStatus != null && workerGroup == null}
               workerAccountRoutes={workerAccountRoutes}
               workerDiscovery={agentStatusFresh ? agentStatus?.connectionDiscovery ?? null : null}
               onGrantWorkerOwnerScope={agentStatus?.connectionDiscovery?.deviceId
@@ -1388,7 +1457,7 @@ acceptAgentStatus((await executeAgent({
               riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
               snapshot={displaySnapshot ?? copyTradeSnapshot}
               accountProfiles={live.profiles}
-              group={agentStatus?.group ?? null}
+              group={workerGroup}
               status={agentStatus?.controller ?? null}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               brokerDailyPnlPending={false}
