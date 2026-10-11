@@ -585,7 +585,7 @@ async function runMultiConnectionAgent(): Promise<void> {
     },
     async request => {
       const preview = await previewDynamicBrokerRoutes(routingConnections, request);
-      return { missingOptional: preview.missingOptional };
+      return { missingOptional: preview.missingOptional, inactiveOptional: preview.inactiveOptional };
     },
     connectionWatch ?? undefined,
     manifest.primaryConnectionId,

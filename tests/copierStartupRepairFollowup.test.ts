@@ -102,9 +102,12 @@ describe('režim opravy po startu: navazující opravy', () => {
   it('C4: breached účet viditelný jako neaktivní jde vyřadit, jinde routing dál blokuje', () => {
     const oauth = connection(() => []);
     const snapshots = new Map([['c1', [visible(100, false), visible(400)]]]);
-    expect(resolveDynamicBrokerRoutes([oauth], snapshots, {
-      required: [400], optional: [100], inactiveOptionalAsMissing: true,
-    }).missingOptional).toEqual([100]);
+    const resolved = resolveDynamicBrokerRoutes([oauth], snapshots, {
+      required: [400], optional: [100, 300], inactiveOptionalAsMissing: true,
+    });
+    expect(resolved.missingOptional).toEqual([100, 300]);
+    // 11. 10.: neaktivní (viditelný) se odliší od úplně chybějícího.
+    expect(resolved.inactiveOptional).toEqual([100]);
     expect(() => resolveDynamicBrokerRoutes([oauth], snapshots, { required: [400], optional: [100] }))
       .toThrow('není u Tradovate aktivní');
   });

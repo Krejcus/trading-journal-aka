@@ -50,7 +50,10 @@ async function setup(options: { incident?: boolean } = {}) {
     for (const accountId of request.required) {
       if (!visible.has(accountId)) throw new Error(`Účet ${accountId} není viditelný v žádném připojeném OAuth.`);
     }
-    return { missingOptional: request.optional.filter(accountId => !visible.has(accountId)) };
+    return {
+      missingOptional: request.optional.filter(accountId => !visible.has(accountId)),
+      inactiveOptional: [] as number[],
+    };
   };
   const previewGroupAccounts = vi.fn(async (request: PrepareGroupAccountsRequest) => routing(request));
   const prepareGroupAccounts = vi.fn(async (request: PrepareGroupAccountsRequest) => routing(request));
@@ -69,7 +72,11 @@ describe('agent: smazání skupiny workeru', () => {
   it('smaže skupinu, chybějící účty pozná z OAuth a UI ji přestane brát jako execution skupinu', async () => {
     const h = await setup();
     expect(supportsCopierGroupDelete(running!.status())).toBe(true);
+    const retire = vi.spyOn(h.runtime, 'retireGroup');
     const result = await deleteGroup();
+    expect(retire).toHaveBeenCalledWith(expect.objectContaining({
+      missingAccountIds: [100, 300], inactiveAccountIds: [],
+    }));
     expect(h.previewGroupAccounts).toHaveBeenCalledWith({
       required: [], optional: [100, 200, 300], inactiveOptionalAsMissing: true,
     });

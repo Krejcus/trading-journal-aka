@@ -37,11 +37,17 @@ export interface DynamicBrokerRouteResolution {
   routes: BrokerRoute[];
   accounts: DynamicRoutedAccount[];
   missingOptional: number[];
+  /**
+   * Podmnožina `missingOptional`: účty, které OAuth vrací, ale jsou neaktivní
+   * nebo bez execution oprávnění (jen s `inactiveOptionalAsMissing`).
+   */
+  inactiveOptional: number[];
 }
 
 export interface DynamicBrokerRouteRefresh {
   accounts: DynamicRoutedAccount[];
   missingOptional: number[];
+  inactiveOptional: number[];
 }
 
 /**
@@ -78,6 +84,7 @@ export function resolveDynamicBrokerRoutes(
   const optionalSet = new Set(optional);
   const selected: AccountOwner[] = [];
   const missingOptional: number[] = [];
+  const inactiveOptional: number[] = [];
   for (const accountId of requested) {
     if (!Number.isSafeInteger(accountId) || accountId <= 0) throw new Error(`Neplatné ID účtu ${accountId}`);
     const matches = owners.get(accountId) ?? [];
@@ -98,6 +105,7 @@ export function resolveDynamicBrokerRoutes(
       && (!match.account.active || !match.account.canTrade)
     ) {
       missingOptional.push(accountId);
+      inactiveOptional.push(accountId);
       continue;
     }
     if (!match.account.active) throw new Error(`Účet ${accountId} není u Tradovate aktivní`);
@@ -119,6 +127,7 @@ export function resolveDynamicBrokerRoutes(
       connectionId: connection.connectionId,
     })),
     missingOptional,
+    inactiveOptional,
   };
 }
 
@@ -136,6 +145,7 @@ export async function refreshDynamicBrokerRoutes(
   return {
     accounts: resolution.accounts,
     missingOptional: resolution.missingOptional,
+    inactiveOptional: resolution.inactiveOptional,
   };
 }
 
@@ -151,5 +161,6 @@ export async function previewDynamicBrokerRoutes(
   return {
     accounts: resolution.accounts,
     missingOptional: resolution.missingOptional,
+    inactiveOptional: resolution.inactiveOptional,
   };
 }

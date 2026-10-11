@@ -89,6 +89,11 @@ export interface PrepareGroupAccountsRequest {
 export interface PrepareGroupAccountsResult {
   /** Optional účty, které nevrátil žádný z právě obnovených OAuth adresářů. */
   missingOptional: readonly number[];
+  /**
+   * Podmnožina `missingOptional`: OAuth účet vrací, ale je neaktivní/bez
+   * oprávnění. Chybí-li pole, bere se konzervativně každý jako neaktivní.
+   */
+  inactiveOptional?: readonly number[];
 }
 
 interface LocalCopierExecutionAgentOptions {
@@ -374,7 +379,14 @@ export async function startLocalCopierExecutionAgent(
         throw new Error(`Routing dry-run vrátil neplatný missing optional účet ${accountId}`);
       }
     }
-    return { missingOptional };
+    // Bez rozlišení (starší routing) je konzervativně každý chybějící „neaktivní“.
+    const inactiveOptional = prepared?.inactiveOptional == null
+      ? missingOptional
+      : [...new Set(prepared.inactiveOptional)];
+    if (inactiveOptional.some(accountId => !missingOptional.includes(accountId))) {
+      throw new Error('Routing dry-run vrátil neaktivní účet mimo chybějící optional účty');
+    }
+    return { missingOptional, inactiveOptional };
   };
 
   const status = (): LocalCopierAgentStatus => ({
@@ -819,6 +831,7 @@ export async function startLocalCopierExecutionAgent(
         await options.controller.retireGroup({
           reason: `Uživatel v appce smazal skupinu ${group.name || group.id}`,
           missingAccountIds: topology.filter(accountId => missing.has(accountId)),
+          inactiveAccountIds: topology.filter(accountId => (probe.inactiveOptional ?? []).includes(accountId)),
         });
         // Bez skupiny není co automaticky obnovovat.
         lastSuccessfulArm = null;
@@ -1057,6 +1070,7 @@ export async function startLocalCopierExecutionAgent(
         return;
       }
       case 'shadow': {
+        if (groupRetired()) throw new Error(RETIRED_GROUP_COMMAND_ERROR);
         options.controller.disarm();
         await options.controller.applyAccountEligibilityExclusions(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
@@ -1086,6 +1100,7 @@ export async function startLocalCopierExecutionAgent(
         recordExecutedBrake(context);
         return;
       case 'reconcile':
+        if (groupRetired()) throw new Error(RETIRED_GROUP_COMMAND_ERROR);
         // Samostatná read-only kontrola musí obnovit stejné multi-OAuth
         // routování jako ARM/SHADOW. Jinak účet z druhého připojení zůstane
         // po nové session navždy `unverifiable`, i když je u brokera zdravý.

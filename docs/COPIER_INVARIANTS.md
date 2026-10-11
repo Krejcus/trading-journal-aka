@@ -717,10 +717,14 @@ existující ochranu.
   a bez kill switche, bez stuck/nejistého outboxu, bez rozpracovaného
   lifecycle (pending connection recovery a leader-flat guard smazání
   neblokují — nedostupné účty nejde obsloužit a účty se stopou kopírky musí
-  být flat), stejný fence a dvě autoritativní kola čtení. Účty, které agent
-  nenašel v OAuth nebo jsou neaktivní (`inactiveOptionalAsMissing`), se vyřadí
-  auditovaně bez flat důkazu; viditelné účty se stopou kopírky musí být flat
-  a bez příkazů; viditelné účty bez stopy (ruční obchod) zůstávají jak jsou.
+  být flat; rozpracovaný follower cut, zápis outboxu, cut lifecycle ani
+  reconciliace běžet nesmí), stejný fence a dvě autoritativní kola čtení.
+  Účty, které OAuth vůbec nevrací, se vyřadí auditovaně bez flat důkazu.
+  Účty, které OAuth vrací jako neaktivní (`inactiveOptional`), jde bez důkazu
+  vyřadit jen bez stopy kopírky (neusazená kopie, epocha, cut, izolace,
+  stuck, `liveCopyOpenSince`) — mohou držet pozici; chybí-li rozlišení, bere
+  se každý chybějící jako neaktivní. Aktivní viditelné účty se stopou kopírky
+  musí být flat a bez příkazů; bez stopy (ruční obchod) zůstávají jak jsou.
   Značka `safety.retiredGroup` jde ve stejném CAS commitu jako čistý stav
   a maže ji až commit aktivace další skupiny. Neprovedené smazání nenastaví
   `lastError` (nic se nezměnilo).

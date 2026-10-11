@@ -1,3 +1,4 @@
+import { isRetiredDurableGroup } from './copierRetiredGroup';
 import {
   brokerRiskEquity,
   isOpenOrderStatus,
@@ -658,7 +659,16 @@ export interface CopierRuntimeController {
    * bez flat důkazu, viditelné účty se stopou kopírky musí být flat a bez
    * příkazů. Nikdy neposílá brokerový příkaz; worker pak běží bez skupiny.
    */
-  retireGroup(options: { reason: string; missingAccountIds: readonly number[] }): Promise<void>;
+  retireGroup(options: {
+    reason: string;
+    missingAccountIds: readonly number[];
+    /**
+     * Podmnožina `missingAccountIds`, kterou OAuth vrací, ale je neaktivní.
+     * Takový účet může držet pozici: se stopou kopírky smazání odmítne.
+     * Chybí-li pole, bere se každý chybějící jako neaktivní (konzervativně).
+     */
+    inactiveAccountIds?: readonly number[];
+  }): Promise<void>;
   /** Čistý synchronní preflight změny konfigurace; nikdy nemění gate ani routing. */
   preflightGroupChange(group: CopyGroupConfig, options?: { allowGroupChange?: boolean }): void;
   /** Synchronní změna follower/risk konfigurace při nezměněném leaderovi. */
@@ -957,11 +967,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // nemá kritický účet a její chybějící leader route start neblokuje.
   const initialSnapshot = await durableStore.load();
   const storedRetirement = initialSnapshot.safety?.retiredGroup;
-  let retiredGroup: { groupId: string; at: number; reason: string } | null = (
-    storedRetirement != null
-    && storedRetirement.groupId === group.id
-    && Number.isFinite(storedRetirement.at)
-  )
+  let retiredGroup: { groupId: string; at: number; reason: string } | null = storedRetirement
+    && isRetiredDurableGroup(group, initialSnapshot.safety)
     ? { groupId: storedRetirement.groupId, at: storedRetirement.at, reason: String(storedRetirement.reason ?? '') }
     : null;
   let startupMissingLeaderRoute: Error | null = null;
@@ -15381,7 +15388,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
        * worker pak běží bez skupiny. `missingAccountIds` = účty, které agent
        * právě nenašel v OAuth (nebo jsou neaktivní); vyřadí se bez flat důkazu.
        */
-      retireCurrent?: { reason: string; missingAccountIds: readonly number[] };
+      retireCurrent?: {
+        reason: string;
+        missingAccountIds: readonly number[];
+        inactiveAccountIds: readonly number[];
+      };
     } = {},
   ): Promise<void> => {
     nextGroup = normalizedRuntimeGroup(nextGroup);
@@ -15413,6 +15424,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           || switchOptions.retireMissingOldGroup || (switchOptions.missingOptionalAccountIds?.length ?? 0) > 0
           || reason.length < 3 || reason.length > 500
           || !Array.isArray(retireCurrent.missingAccountIds)
+          || !Array.isArray(retireCurrent.inactiveAccountIds)
+          || retireCurrent.inactiveAccountIds.some(accountId => !retireCurrent.missingAccountIds.includes(accountId))
           || retireCurrent.missingAccountIds.some(accountId => (
             !Number.isSafeInteger(accountId)
             || (accountId !== group.leaderAccountId && !group.followers.some(item => item.accountId === accountId))
@@ -15514,6 +15527,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // Smazání skupiny guard staré skupiny nenahrazuje čekáním: účty se
         // stopou kopírky níže musí být autoritativně flat, chybějící nejdou
         // obsloužit vůbec (u vypnuté kopírky je nic nespravuje).
+        // Smazání navíc nesmí smazat outbox pod běžícím cutem/zápisem.
+        retireCurrent && (followerCutBackgroundJobs.size > 0 || hasInFlightOutbox()
+          || participationLifecyclePending() || reconciliationRequestsPending > 0)
+          ? 'rozpracovaný follower cut, zápis nebo kontrola'
+          : '',
         !retireCurrent && [...leaderFlatGuardTimers.keys()].some(epochId => (
           !ownershipRisks.some(item => item.epochId === epochId)
         )) ? 'leader-flat guard' : '',
@@ -15541,6 +15559,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Durable značka živých kopií (pád za ARM bez dokončené recovery) = bez
       // výjimek: jejich vlastnictví nejde spolehlivě vyloučit.
       const liveCopyTrace = (currentRuntime().state.safety.liveCopyOpenSince ?? 0) > 0;
+      if (retireCurrent) {
+        // Účet, který OAuth vrací, ale je neaktivní, nejde přečíst a přitom může
+        // držet pozici. Bez důkazu ho jde vyřadit jen bez stopy kopírky.
+        const tracedInactive = retireCurrent.inactiveAccountIds.filter(accountId => (
+          liveCopyTrace
+          || unverifiableFollowerOwnership(new Set([accountId])).length > 0
+          || pendingIsolationCommandForAccount(accountId)
+          || followerCutBackgroundAccounts.has(accountId)
+          || stuckAccountIds.has(accountId)
+          || unsettledCopierEntries(accountId).length > 0
+        ));
+        if (tracedInactive.length > 0) {
+          throw new Error(
+            `Smazání skupiny odmítnuto: účty ${tracedInactive.join(', ')} jsou u brokera vidět, ale neaktivní, `
+            + 'a kopírka na nich může mít kopii. Ověř je v Tradovate; až je propka odebere nebo budou flat a aktivní, zkus to znovu.',
+          );
+        }
+      }
       const copierFreeLeavingAccountIds = new Set(liveCopyTrace ? [] : [...currentTopology]
         .filter((accountId): accountId is number => accountId != null)
         .filter(accountId => (
@@ -16768,6 +16804,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         retireCurrent: {
           reason: retireOptions.reason,
           missingAccountIds: [...retireOptions.missingAccountIds],
+          inactiveAccountIds: [...(retireOptions.inactiveAccountIds ?? retireOptions.missingAccountIds)],
         },
       });
     },

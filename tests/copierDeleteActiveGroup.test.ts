@@ -164,6 +164,28 @@ describe('smazání skupiny workeru', () => {
     }
   });
 
+  it('obchodní event účtu nové skupiny během aktivace z „bez skupiny“ aktivaci odmítne', async () => {
+    const { connection, controller } = await bootDeadGroup();
+    try {
+      await controller.retireGroup({ reason, missingAccountIds: [100, 300] });
+      const read = connection.listPositions.bind(connection);
+      let injected = false;
+      vi.spyOn(connection, 'listPositions').mockImplementation(async accountId => {
+        const positions = await read(accountId);
+        if (!injected && accountId === 400) {
+          injected = true;
+          connection.emitEvent({ type: 'position', position: { accountId: 400, symbol: SYM, netQuantity: 1 } });
+        }
+        return positions;
+      });
+      await expect(controller.activateGroup(newGroup)).rejects.toThrow('stav se změnil');
+      expect(injected).toBe(true);
+      expect(controller.status().retiredGroup?.groupId).toBe('dvsvds');
+    } finally {
+      controller.stop();
+    }
+  });
+
   it('ze stavu bez skupiny nejde skupinu jen upravit, jen aktivovat', async () => {
     const { controller } = await bootDeadGroup();
     try {
@@ -220,8 +242,14 @@ describe('smazání skupiny workeru', () => {
       expect((await broker.listPositions(200))[0]?.netQuantity).toBe(1);
       controller.disarm();
       await controller.waitForIdle();
-      // Agent nenašel 200 v OAuth (breach): auditované vyřazení bez flat důkazu.
-      await controller.retireGroup({ reason, missingAccountIds: [200] });
+      // Neaktivní (ale viditelný) účet může držet pozici: se stopou kopírky ne.
+      await expect(controller.retireGroup({ reason, missingAccountIds: [200], inactiveAccountIds: [200] }))
+        .rejects.toThrow('neaktivní');
+      // Bez rozlišení agentem se bere konzervativně jako neaktivní.
+      await expect(controller.retireGroup({ reason, missingAccountIds: [200] })).rejects.toThrow('neaktivní');
+      expect(controller.status().retiredGroup).toBeNull();
+      // Agent ho v OAuth vůbec nenašel (breach): auditované vyřazení bez flat důkazu.
+      await controller.retireGroup({ reason, missingAccountIds: [200], inactiveAccountIds: [] });
       expect(controller.status().retiredGroup?.groupId).toBe('hlavni');
     } finally {
       controller.stop();
@@ -313,8 +341,10 @@ describe('smazání skupiny workeru', () => {
 describe('start pilota se smazanou skupinou', () => {
   it('bez skupiny startuje jen při značce přesně uložené skupiny', async () => {
     const { isRetiredDurableGroup } = await import('../services/copierPilotGroup');
-    expect(isRetiredDurableGroup(deadGroup, { retiredGroup: { groupId: 'dvsvds' } })).toBe(true);
-    expect(isRetiredDurableGroup(deadGroup, { retiredGroup: { groupId: 'jina' } })).toBe(false);
+    expect(isRetiredDurableGroup(deadGroup, { retiredGroup: { groupId: 'dvsvds', at: 5 } })).toBe(true);
+    expect(isRetiredDurableGroup(deadGroup, { retiredGroup: { groupId: 'jina', at: 5 } })).toBe(false);
+    // Poškozená značka (bez času) se nepoužije — shodně s bootstrapem controlleru.
+    expect(isRetiredDurableGroup(deadGroup, { retiredGroup: { groupId: 'dvsvds' } })).toBe(false);
     expect(isRetiredDurableGroup(deadGroup, {})).toBe(false);
     expect(isRetiredDurableGroup(deadGroup, null)).toBe(false);
     // Bez uložené skupiny (první instalace) se značka nepoužije.

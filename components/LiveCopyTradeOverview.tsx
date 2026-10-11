@@ -1371,8 +1371,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       title: 'Smazat skupinu?',
       detail: workerGroup
         ? `Skupina ${candidate.name} je připojená ke kopírce. Po smazání kopírka zůstane vypnutá a nebude mít žádnou skupinu, dokud nezapneš jinou. `
-          + 'Účty, které už v Tradovate nejsou nebo jsou zablokované (breach), se vyřadí bez kontroly; u ostatních kopírka nejdřív ověří, že na nich nezůstala její kopie. '
-          + 'Otevřené pozice ani příkazy na účtech to nijak nezmění.'
+          + 'Účty, které už v Tradovate nejsou, se vyřadí bez kontroly; u ostatních kopírka nejdřív ověří, že na nich nezůstala její kopie. '
+          + 'Kopírka nic nezavírá ani neruší: případné otevřené pozice a příkazy zůstanou, jak jsou, a kopírka je dál hlídat nebude.'
         : `Skupina ${candidate.name} bude odstraněna z konfigurace. Otevřené pozice ani příkazy na účtech to nijak nezmění.`,
       confirmLabel: 'Smazat',
       danger: true,
