@@ -256,6 +256,33 @@ describe('smazání skupiny workeru', () => {
     }
   });
 
+  it('chybějící účet s neusazenou kopií smazání nečeká (11. 10.: 68931374 „zkus to za minutu“ donekonečna)', async () => {
+    let now = 1_000_000;
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: healthyGroup, clock: () => ++now,
+      followerTransitionCorrelationWindowMs: 10,
+      // Produkční lhůta: noha bez pozorovaného konce je „čerstvá“.
+      copierSettlementTerminalAgeMs: 30_000,
+    });
+    try {
+      broker.setConnected(true);
+      await controller.waitForIdle();
+      await controller.reconcile();
+      controller.arm();
+      broker.emitEvent({ type: 'order', order: order({ brokerOrderId: 'limit', orderType: 'Limit', limitPrice: 29_000 }) });
+      await controller.waitForIdle();
+      expect((await broker.listPositions(200))[0]?.netQuantity).toBe(1);
+      controller.disarm();
+      await controller.waitForIdle();
+      // 200 zmizel z OAuth (breach): kopírka ho nikdy neusadí ani nepřečte.
+      await controller.retireGroup({ reason, missingAccountIds: [200], inactiveAccountIds: [] });
+      expect(controller.status().retiredGroup?.groupId).toBe('hlavni');
+    } finally {
+      controller.stop();
+    }
+  });
+
   it('bez skupiny se obchodní eventy starých účtů nezpracují', async () => {
     const onLeaderEvent = vi.fn();
     const { broker, controller } = await bootHealthy(undefined, createMemoryCopierStore(), onLeaderEvent);

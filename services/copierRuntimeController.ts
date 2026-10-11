@@ -15596,9 +15596,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         .filter((accountId): accountId is number => accountId != null)
         .filter(accountId => !nextAccountIds.has(accountId));
       let leavingVersionsAtCommit: Map<number, number> | null = null;
+      // Účet bez route (chybí v OAuth) se nikdy neusadí — kopírka ho nepřečte;
+      // vyřazuje se auditovaně bez důkazu, čekání na něj by bylo věčné.
       const awaitingSettlementAccountIds = [...currentTopology]
         .filter((accountId): accountId is number => accountId != null)
         .filter(accountId => !nextAccountIds.has(accountId) && !copierFreeLeavingAccountIds.has(accountId)
+          && !retiredAccountIds.has(accountId) && !optionalFollowerIds.has(accountId)
           && unsettledCopierEntries(accountId).length > 0);
       const requiredAccountIds = accountIds.filter(accountId => !optionalFollowerIds.has(accountId)
         && !retiredAccountIds.has(accountId)
