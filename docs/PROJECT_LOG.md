@@ -256,6 +256,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-11 — Oponent jádra kopírky, rychlejší dashboard, přepnutí účtu A→B (Claude)
+
+Větev `claude/copier-critic-and-speed-20261008` (práce z 8. 10.) sloučena
+s aktuálním main a nasazena 11. 10. jako merge `a3118f87`. Bez změny kódu
+kopírky; worker se nepřeinstalovával.
+
+- **Pravidlo 4 v `CLAUDE.md`**: změny jádra kopírky (ARM/DISARM, brzdy,
+  reconcile, outbox, relay, incidenty, eligibility, risk, durable safety)
+  vypíšou dotčená `INV-*` a návrh i diff před commitem projdou agentem
+  `.claude/agents/copier-design-critic.md`; verdikt BLOKUJE / OPRAVIT PŘED
+  COMMITEM se řeší před commitem.
+- **Dashboard**: `get_dashboard_data_light_v1` trávil 1,24 s z 1,7 s
+  rekurzivním čištěním privátních klíčů poznámek, i když je od backfillu
+  5. 9. žádný obchod nemá. Textová předkontrola ho přeskočí (výstup RPC na
+  produkčních datech shodný); klient 6,9 s → ~1,5 s. Deník čte ~70 dříve
+  sériových dotazů po čtyřech dávkách, validace dál v pořadí dávek.
+- **Migrace `20261008200000_dashboard_light_fast_note_strip`**: v produkci
+  aplikovaná ručně už 8. 10.; 11. 10. ověřeno, že obě funkce v DB jsou znak po
+  znaku shodné se souborem (vč. volatility, security, `search_path ''`, práva
+  jen `authenticated`), a teprve pak zapsána `migration repair`. Pozor:
+  `supabase db push` zůstává zakázaný (rozešlá historie).
+- **Přepnutí účtu A→B** bez SIGNED_OUT (jiný tab, nové přihlášení) už
+  neukáže data A pod B: obě auth cesty resetují stav jako odhlášení
+  a loader drží, dokud se B nenačte. iPhone to dostane až s novým buildem.
+- Oponentura změny ON (vestavěná Kontrola pozic) pro session „kvalita
+  kopírky“: jen dokument (`docs/reviews/copier-on-self-check-critic-20261008.md`).
+  Větev `claude/relay-reconcile-check-20261008`
+  smazána — relay `reconcile` mezitím z povolených příkazů zmizel.
+
 ### 2026-10-11 — Smazání skupiny workeru, kopírka bez skupiny (Claude, rozhodnutí Filipa)
 
 Větev `claude/copier-delete-active-group-20261011` (nad a0d0df90). Spouštěč:
