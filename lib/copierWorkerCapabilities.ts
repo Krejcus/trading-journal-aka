@@ -21,6 +21,26 @@ export const supportsCopierTransportAutoResume = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY);
 
+/** Worker umí smazat svou skupinu a běžet bez skupiny (11. 10. 2026). */
+export const COPIER_GROUP_DELETE_CAPABILITY = 'group-delete-v1';
+
+export const supportsCopierGroupDelete = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_GROUP_DELETE_CAPABILITY);
+
+/**
+ * Execution skupina workeru, nebo `null`, když ji operátor smazal a worker
+ * běží bez skupiny (`group` ve statusu je pak jen poslední známý zástupce).
+ */
+export const copierWorkerExecutionGroup = (
+  status: Pick<LocalCopierAgentStatus, 'group' | 'controller'> | null | undefined,
+): CopyGroupConfig | null => {
+  if (!status) return null;
+  const retired = status.controller?.retiredGroup;
+  return retired && retired.groupId === status.group.id ? null : status.group;
+};
+
 export const supportsCopierIncidentAck = (
   status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
 ): boolean => Array.isArray(status?.capabilities)

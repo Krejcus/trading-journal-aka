@@ -102,7 +102,7 @@ import {
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
-import { supportsCopierFollowerExcludeWithExposure, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
 import {
@@ -653,7 +653,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       accounts: liveData.accounts,
       profiles: live.profiles,
       controller: agentStatus?.controller ?? null,
-      followerCount: agentStatus?.group.followers.length ?? 0,
+      followerCount: copierWorkerExecutionGroup(agentStatus)?.followers.length ?? 0,
       workerObservedAtMs: agentStatusObservedAt,
       brokerCapturedAtMs: Date.parse(liveData.capturedAt),
       positionsAvailable: ['available', 'empty'].includes(liveData.coverage.positions.availability),
@@ -661,13 +661,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     });
     void syncNativeLiveWidgetSnapshot(state);
   }, [agentStatus, agentStatusObservedAt, liveData, live.profiles]);
+  // Smazaná skupina workeru (11. 10. 2026) už není execution skupina; UI ji
+  // nesmí znovu adoptovat ani na ni posílat příkazy.
+  const workerGroup = useMemo(() => copierWorkerExecutionGroup(agentStatus), [agentStatus]);
   const executionGroup = useMemo(() => {
-    if (!agentStatus) return null;
-    return resolveLocalExecutionGroup(copyGroups, agentStatus.group);
-  }, [agentStatus, copyGroups]);
+    if (!workerGroup) return null;
+    return resolveLocalExecutionGroup(copyGroups, workerGroup);
+  }, [workerGroup, copyGroups]);
   useEffect(() => {
-    onCopierJournalRefresh?.(agentStatus?.group ?? executionGroup ?? null);
-  }, [agentStatus?.group, executionGroup, liveData?.capturedAt, onCopierJournalRefresh]);
+    onCopierJournalRefresh?.(workerGroup ?? executionGroup ?? null);
+  }, [workerGroup, executionGroup, liveData?.capturedAt, onCopierJournalRefresh]);
   const executeAgent = useCallback(async (command: Parameters<typeof agentClient.execute>[0]) => {
     // Stav obnovený z paměti po návratu na LIVE je jen zobrazení. Dokud tato
     // instance sama nepřijme odpověď workeru, projdou jen riziko snižující
@@ -741,9 +744,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     // Parent cache smí po konfiguračním zápisu převzít jen potvrzený worker
     // snapshot. Jinak by následný ARM mohl sáhnout po starší same-id skupině.
     setCopyGroups(current => {
-      const match = resolveLocalExecutionGroup(current, status.group);
+      const acknowledged = copierWorkerExecutionGroup(status);
+      if (!acknowledged) return current;
+      const match = resolveLocalExecutionGroup(current, acknowledged);
       if (!match) return current;
-      return current.map(group => group.id === match.id ? status.group : group);
+      return current.map(group => group.id === match.id ? acknowledged : group);
     });
   }, [acceptAgentStatus]);
   const runConfigMutation = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
@@ -948,7 +953,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       throw new Error('Čekám na čerstvý stav kopírky. Risk nastavení ulož, až ho worker potvrdí.');
     }
     if (!supportsCopierRiskConfig(agentStatus)) throw new Error('Risk nastavení vyžaduje aktualizaci Mac workeru.');
-    if (group.id !== agentStatus.group.id) {
+    if (!workerGroup || group.id !== workerGroup.id) {
       throw new Error('Risk nastavení nemíří na skupinu připojenou k execution workeru.');
     }
     await runConfigMutation(async () => {
@@ -961,7 +966,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       // Vždy proto použijeme autoritativní odpověď a nic neměníme před worker ACK.
       acceptConfigAck(result.status);
     });
-  }, [acceptConfigAck, agentStatus, executeAgent, runConfigMutation]);
+  }, [acceptConfigAck, agentStatus, executeAgent, runConfigMutation, workerGroup]);
 
   // Přímý loopback agent zkoušíme i z produkčního HTTPS webu: na Macu
   // s běžícím workerem to sráží ARM/Flatten z relay sekund na stovky ms
@@ -1414,7 +1419,9 @@ acceptAgentStatus((await executeAgent({
                 }
               }}
               executionGroupId={executionGroup?.id ?? null}
-              runtimeGroup={agentStatus?.group ?? null}
+              runtimeGroup={workerGroup}
+              groupDeleteSupported={supportsCopierGroupDelete(agentStatus)}
+              workerWithoutGroup={agentStatus != null && workerGroup == null}
               workerAccountRoutes={workerAccountRoutes}
               workerDiscovery={agentStatusFresh ? agentStatus?.connectionDiscovery ?? null : null}
               onGrantWorkerOwnerScope={agentStatus?.connectionDiscovery?.deviceId
@@ -1450,7 +1457,7 @@ acceptAgentStatus((await executeAgent({
               riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
               snapshot={displaySnapshot ?? copyTradeSnapshot}
               accountProfiles={live.profiles}
-              group={agentStatus?.group ?? null}
+              group={workerGroup}
               status={agentStatus?.controller ?? null}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               brokerDailyPnlPending={false}

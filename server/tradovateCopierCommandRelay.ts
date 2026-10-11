@@ -244,9 +244,11 @@ const validatedDayLockReason = (value: unknown): string => {
 // iPhone app, where the direct loopback agent is unreachable. Every other
 // broker-write command (cancel-order, replication changes mid-flight, …)
 // stays deliberately rejected on this remote path.
+// `delete-group` (11. 10. 2026) nic neposílá brokerovi: worker skupinu smaže
+// jen za DISARMED a po stejných kontrolách jako přepnutí skupiny.
 const remoteCopyCommands = new Set([
   'update-group', 'set-group-enabled', 'set-replication', 'set-follower-enabled', 'set-multiplier',
-  'flatten-account', 'flatten-follower-trade', 'flatten-group',
+  'flatten-account', 'flatten-follower-trade', 'flatten-group', 'delete-group',
 ]);
 
 // Stejný formát vynucuje controller (operationToken); validace už na ingressu
@@ -275,6 +277,10 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
   if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
     throw new Error('unsupported-remote-copy-command');
   }
+  if (command.type === 'delete-group' && (
+    typeof command.groupId !== 'string' || command.groupId.trim() === '' || command.groupId.length > 200
+    || Object.keys(command).some(key => key !== 'type' && key !== 'groupId')
+  )) throw new Error('invalid-relay-command-payload');
   if (command.type === 'flatten-account' || command.type === 'flatten-follower-trade' || command.type === 'flatten-group') {
     if (typeof command.groupId !== 'string' || command.groupId.trim() === '') {
       throw new Error('invalid-relay-command-payload');

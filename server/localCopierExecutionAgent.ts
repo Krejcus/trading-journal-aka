@@ -19,7 +19,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -381,6 +381,9 @@ export async function startLocalCopierExecutionAgent(
     version: 1,
     capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY,
       ...(options.autoRearmAfterTransport === true && autoResumeAdmission ? [COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY] : []),
+      ...(typeof options.controller.retireGroup === 'function' && options.previewGroupAccounts
+        ? [COPIER_GROUP_DELETE_CAPABILITY]
+        : []),
       ...(options.controller.prepareArm ? ['arm-preparation-v1'] : []),
       ...(options.accountDisplay ? ['account-display-v1'] : [])],
     environment: 'demo',
@@ -412,6 +415,9 @@ export async function startLocalCopierExecutionAgent(
     type: 'configuration',
     group: structuredClone(group),
   });
+  /** Skupina workeru je smazaná; `group` je jen poslední známý zástupce. */
+  const groupRetired = (): boolean => options.controller.status().retiredGroup?.groupId === group.id;
+  const RETIRED_GROUP_COMMAND_ERROR = 'Skupina byla smazána a kopírka teď žádnou nemá. Vyber nebo vytvoř skupinu a zapni ji.';
 
   const applyGroup = async (
     next: CopyGroupConfig,
@@ -423,11 +429,21 @@ export async function startLocalCopierExecutionAgent(
       allowStartupRepair?: true;
     } = {},
   ): Promise<LiveCopyTradingCommandResult> => {
+    // Smazaná skupina (11. 10. 2026): jedinou změnou je čerstvá aktivace
+    // celé skupiny. Stará topologie neexistuje, nic se z ní nevyřazuje ani
+    // nepřebírá (ani účast followerů) a routuje se jen nová skupina.
+    const retiredBefore = groupRetired();
+    if (retiredBefore) {
+      if (reconfigurationRequest.retireMissingOldGroup) {
+        throw new Error('Skupina už je smazaná; není co vyřazovat');
+      }
+      mode = 'activate';
+    }
     // Režim opravy po startu: uložená skupina má účty, které nejsou v OAuth
     // (breached). Úprava stejné skupiny, která je všechny odebere, se provede
     // jako auditované vyřazení právě těchto účtů; bez jejich odebrání se
     // změna odmítne, jinak by ARM zůstal zablokovaný.
-    const startupRepair = options.controller.status().startupGroupRepair;
+    const startupRepair = retiredBefore ? null : options.controller.status().startupGroupRepair;
     if (startupRepair && startupRepair.groupId === group.id && next.id === group.id
       && !reconfigurationRequest.retireMissingOldGroup
       && reconfigurationRequest.allowStartupRepair !== true) {
@@ -469,7 +485,7 @@ export async function startLocalCopierExecutionAgent(
         },
       };
     }
-    if (next.id !== group.id && mode === 'activate' && !reconfigurationRequest.retireMissingOldGroup
+    if (!retiredBefore && next.id !== group.id && mode === 'activate' && !reconfigurationRequest.retireMissingOldGroup
       // Bez read-only dry-runu nejde chybějící účty zjistit — beze změny chování.
       && options.previewGroupAccounts) {
       // 8. 10. 2026: přepnutí na JINOU skupinu, když stará má účty, které už
@@ -565,7 +581,9 @@ export async function startLocalCopierExecutionAgent(
     options.controller.preflightGroupChange(next, { allowGroupChange: mode === 'activate' });
     // E1 (review 30. 9.): částečná oprava ponechává část starých účtů;
     // účet nesmí být současně required (nová skupina) i optional (stará).
-    const routingRequest = retirement
+    const routingRequest = retiredBefore
+      ? allAccountsRequired(copyGroupAccountIds(next))
+      : retirement
       ? {
         required: copyGroupAccountIds(next),
         optional: previousIds.filter(accountId => !copyGroupAccountIds(next).includes(accountId)),
@@ -697,6 +715,8 @@ export async function startLocalCopierExecutionAgent(
     };
   };
   const executeCopyCommand = async (command: LiveCopyTradingCommand): Promise<LiveCopyTradingCommandResult> => {
+    // Smazaná skupina se už neupravuje ani nezavírá; zbývá jen aktivace jiné.
+    if (command.type !== 'delete-group' && groupRetired()) throw new Error(RETIRED_GROUP_COMMAND_ERROR);
     switch (command.type) {
       case 'update-group': {
         const next = mappedGroup(group, command.group);
@@ -775,8 +795,37 @@ export async function startLocalCopierExecutionAgent(
         return { type: 'flatten', ...await options.controller.flattenGroup(command.operationId) };
       case 'create-group':
         throw new Error('Lokální agent už má jednu aktivní skupinu');
-      case 'delete-group':
-        throw new Error('Skupinu nejdřív DISARM a ukonči lokální agent');
+      case 'delete-group': {
+        // 11. 10. 2026: smazání skupiny workeru. Jen vypnutá kopírka; nic se
+        // tu samo nevypíná ani neposílá brokerovi. Účty, které OAuth nevrací
+        // nebo jsou neaktivní, se vyřadí bez flat důkazu; ostatní ověří
+        // controller stejně jako při přepnutí skupiny.
+        if (command.groupId !== group.id) {
+          throw new Error('Smazání míří na jinou skupinu, než jakou má lokální execution agent');
+        }
+        if (groupRetired()) return configurationResult();
+        if (typeof options.controller.retireGroup !== 'function' || !options.previewGroupAccounts) {
+          throw new Error('Tento worker skupinu smazat neumí; nejdřív ho aktualizuj');
+        }
+        if (options.controller.status().armed) {
+          throw new Error('Skupinu nejde smazat, dokud kopírka jede. Nejdřív ji vypni.');
+        }
+        const topology = copyGroupAccountIds(group);
+        const probe = await previewAccounts({ required: [], optional: topology, inactiveOptionalAsMissing: true });
+        const missing = new Set(probe.missingOptional);
+        const visible = topology.filter(accountId => !missing.has(accountId));
+        // Viditelné účty potřebují route pro autoritativní čtení controlleru.
+        if (visible.length > 0) await prepareAccounts({ required: visible, optional: [] });
+        await options.controller.retireGroup({
+          reason: `Uživatel v appce smazal skupinu ${group.name || group.id}`,
+          missingAccountIds: topology.filter(accountId => missing.has(accountId)),
+        });
+        // Bez skupiny není co automaticky obnovovat.
+        lastSuccessfulArm = null;
+        autoRearm = null;
+        console.log(`${new Date().toISOString()} CONFIG DELETE-GROUP groupId=${group.id} missing=${[...missing].join(',') || '-'} visible=${visible.join(',') || '-'}`);
+        return configurationResult();
+      }
       case 'resolve-stuck-operation':
         // Durable waive: nic neposílá brokerovi, odzbrojí a vynutí novou
         // reconciliation. Stejná cesta jako mac-install resolve-stuck.
@@ -862,7 +911,7 @@ export async function startLocalCopierExecutionAgent(
         return executeCopyCommand(command.command);
       case 'activate-group': {
         const next: CopyGroupConfig = {
-          ...(command.group.id === group.id
+          ...(command.group.id === group.id && !groupRetired()
             ? mappedGroup(group, command.group)
             : structuredClone(command.group)),
           enabled: true,
@@ -877,6 +926,8 @@ export async function startLocalCopierExecutionAgent(
         return;
       }
       case 'arm-live': {
+        // Bez skupiny jde zapnout jen s konfigurací skupiny, kterou UI aktivuje.
+        if (!command.group && groupRetired()) throw new Error(RETIRED_GROUP_COMMAND_ERROR);
         const deadlineAt = context.deadlineAt ?? (Date.now() + LOCAL_ARM_DEADLINE_MS);
         const commandCreatedAt = context.createdAt ?? Date.now();
         assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
@@ -895,7 +946,8 @@ export async function startLocalCopierExecutionAgent(
         // + arm-live jako dva relay round-tripy (~5 s); teď jde obojí naráz.
         let routingPrepared = false;
         if (command.group) {
-          if (command.group.id !== group.id) {
+          // Ze stavu bez skupiny je každé zapnutí aktivací (i stejného ID).
+          if (command.group.id !== group.id || groupRetired()) {
             // Jediná atomická cesta pro bezpečné UI přepnutí bez brokerových
             // side effectů: DISARM, read-only preflight staré i nové
             // topologie, změna durable epochy a teprve potom reconciliation

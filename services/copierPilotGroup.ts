@@ -50,6 +50,19 @@ export const copierPilotGroupPath = (
 ): string => resolve(root, `${copierPilotStateKey(connectionId, leaderAccountId)}.group.json`);
 
 /**
+ * Uložená skupina, kterou operátor smazal (11. 10. 2026): durable snapshot nese
+ * značku přesně této skupiny. Worker ji pak nevaliduje proti OAuth a startuje
+ * DISARMED bez skupiny; značka jiné skupiny (starý soubor) se ignoruje.
+ */
+export function isRetiredDurableGroup(
+  persistedGroup: Pick<CopyGroupConfig, 'id'> | null | undefined,
+  safety: { retiredGroup?: { groupId?: unknown } | null } | null | undefined,
+): boolean {
+  return persistedGroup != null && typeof safety?.retiredGroup?.groupId === 'string'
+    && safety.retiredGroup.groupId === persistedGroup.id;
+}
+
+/**
  * One explicitly named, OAuth-vanished durable group may start DISARMED so it
  * can be retired through the audited runtime command. This does not validate
  * broker flatness or grant ARM: the runtime retains its missing-leader latch.

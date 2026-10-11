@@ -256,6 +256,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-11 — Smazání skupiny workeru, kopírka bez skupiny (Claude, rozhodnutí Filipa)
+
+Větev `claude/copier-delete-active-group-20261011` (nad a0d0df90). Spouštěč:
+všechny účty skupiny dvsvds (Lucid) breachly a zmizely z OAuth; worker visel
+v režimu opravy a skupinu nešlo smazat (worker ji odmítl, UI ji z runtime
+statusu znovu adoptovalo). Web a worker a0d0df90 nasazeny 11. 10. ráno —
+worker běží v režimu opravy, kopírka vypnutá.
+
+- **Smazání** (INV-GROUP-01) = přepnutí skupiny s prázdnou novou topologií:
+  jen DISARMED, stejné brány a fence; účty chybějící/neaktivní v OAuth se
+  vyřadí bez flat důkazu (audit), viditelné se stopou kopírky musí být flat,
+  ruční obchod na viditelném účtu nevadí. Durable značka
+  `safety.retiredGroup` v témže CAS commitu; žádný broker zápis.
+- **Bez skupiny**: nic se nekopíruje ani nehlídá, eventy starých účtů se
+  ignorují, restart naběhne DISARMED bez validace staré skupiny. Zapnout jde
+  jen aktivací skupiny (i stejné jako čerstvé). Incident (manualRecovery)
+  přežije a ON nové skupiny ho chce potvrdit.
+- **Pozor**: „Zrušit BREACHED“ se opírá jen o Tradovate (active + equity nad
+  minNetLiq). 68931496 je u propky breached, přesto prošel — Tradovate pravidla
+  propky nevidí. Zvážit potvrzení „opravdu tě propka neukončila?“.
+
 ### 2026-10-10 — Zapnout bez účtu + automatické pokračování po výpadku (Claude, rozhodnutí Filipa)
 
 Větev `claude/copier-arm-without-account-20261010` (worktree

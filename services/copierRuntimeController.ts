@@ -177,6 +177,12 @@ export interface CopierStuckOperation {
 export interface CopierControllerStatus {
   /** Režim opravy po startu s nepoužitelnou uloženou skupinou (null = normální běh). */
   startupGroupRepair?: { groupId: string; unavailableAccountIds: number[] } | null;
+  /**
+   * Skupina workeru je smazaná: worker běží bez skupiny, nic nekopíruje ani
+   * nehlídá a zapnout jde až jiná (nově aktivovaná) skupina. `group` ve
+   * statusu agenta je pak jen poslední známý zástupce, ne execution skupina.
+   */
+  retiredGroup?: { groupId: string; at: number } | null;
   started: boolean;
   armed: boolean;
   killSwitch: boolean;
@@ -646,6 +652,13 @@ export interface CopierRuntimeController {
    * Vždy založí novou durable epochu a končí DISARMED.
    */
   activateGroup(group: CopyGroupConfig, options?: CopierGroupReconfigurationOptions): Promise<void>;
+  /**
+   * Smaže skupinu workeru (jen DISARMED): stejné kontroly jako přepnutí
+   * skupiny bez nové topologie. Účty chybějící v OAuth se vyřadí auditovaně
+   * bez flat důkazu, viditelné účty se stopou kopírky musí být flat a bez
+   * příkazů. Nikdy neposílá brokerový příkaz; worker pak běží bez skupiny.
+   */
+  retireGroup(options: { reason: string; missingAccountIds: readonly number[] }): Promise<void>;
   /** Čistý synchronní preflight změny konfigurace; nikdy nemění gate ani routing. */
   preflightGroupChange(group: CopyGroupConfig, options?: { allowGroupChange?: boolean }): void;
   /** Synchronní změna follower/risk konfigurace při nezměněném leaderovi. */
@@ -922,6 +935,8 @@ const migrateDllBreach = (entry: CopierAccountEligibility): CopierAccountEligibi
     : entry
 );
 
+const RETIRED_GROUP_ERROR = 'Kopírka nemá skupinu (byla smazána); vyber nebo vytvoř skupinu a zapni ji';
+
 export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): Promise<CopierRuntimeController> {
   assertRuntimeGroup(options.group);
   const clock = options.clock ?? Date.now;
@@ -938,8 +953,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     },
   };
   let group = normalizedRuntimeGroup(options.group);
+  // Durable stav se čte před kontrolou rout: smazaná skupina (11. 10. 2026)
+  // nemá kritický účet a její chybějící leader route start neblokuje.
+  const initialSnapshot = await durableStore.load();
+  const storedRetirement = initialSnapshot.safety?.retiredGroup;
+  let retiredGroup: { groupId: string; at: number; reason: string } | null = (
+    storedRetirement != null
+    && storedRetirement.groupId === group.id
+    && Number.isFinite(storedRetirement.at)
+  )
+    ? { groupId: storedRetirement.groupId, at: storedRetirement.at, reason: String(storedRetirement.reason ?? '') }
+    : null;
   let startupMissingLeaderRoute: Error | null = null;
-  try {
+  if (retiredGroup) {
+    options.broker.setCriticalAccounts?.([]);
+  } else try {
     options.broker.setCriticalAccounts?.([group.leaderAccountId]);
   } catch (reason) {
     const error = errorOf(reason);
@@ -979,7 +1007,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     startupMissingLeaderRoute = error;
   }
   let startupGroupRepair: { groupId: string; unavailableAccountIds: number[] } | null = (
-    options.unusableGroupRepairBootstrap?.groupId === group.id
+    !retiredGroup
+    && options.unusableGroupRepairBootstrap?.groupId === group.id
     && options.unusableGroupRepairBootstrap.unavailableAccountIds.length > 0
   )
     ? {
@@ -992,7 +1021,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     options.broker,
     accountId => group.followers.find(item => item.accountId === accountId)?.maxContracts,
   );
-  let runtime: CopierRuntime = runtimeFromSnapshot(await durableStore.load());
+  let runtime: CopierRuntime = runtimeFromSnapshot(initialSnapshot);
   const metrics = options.metrics ?? createCopierMetrics();
   const recovered = await recoverOutbox({
     runtime,
@@ -1601,7 +1630,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         reason: 'Durable příznak ruční obnovy je neplatný; ověř účty a potvrď incident při zapnutí',
         id: durableIncidentId(storedManualRecovery),
       };
-  let lastError: Error | null = startupGroupRepair
+  // Smazaná skupina: chyby staré skupiny už nic neblokují (ARM blokuje sama
+  // značka). Durable incident zůstává v `manualRecovery` a ON nové skupiny ho
+  // dál vyžaduje výslovně potvrdit.
+  let lastError: Error | null = retiredGroup ? null : startupGroupRepair
     ? new Error(
       `Uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); `
       + 'worker běží jen VYPNUTÝ v režimu opravy. Uprav skupinu v UI a nedostupné účty z ní odeber.',
@@ -9283,6 +9315,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const armPreparationBlocker = (): { blockedBy: CopierArmPreparationBlocker; reason: string } | null => {
     if (stopped || shutdownRequested) return { blockedBy: 'shutdown', reason: 'Worker se ukončuje' };
     if (gate.killSwitch) return { blockedBy: 'kill-switch', reason: 'Kill switch je aktivní' };
+    if (retiredGroup) {
+      return { blockedBy: 'configuration', reason: 'Kopírka nemá skupinu — vyber nebo vytvoř skupinu a zapni ji' };
+    }
     if (startupGroupRepair || startupMissingLeaderRoute) {
       return { blockedBy: 'configuration', reason: 'Nejdřív oprav uloženou skupinu' };
     }
@@ -9853,6 +9888,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   const scheduleConnectionRecovery = () => {
+    if (retiredGroup) {
+      // Bez skupiny není co obnovovat; aktivace nové skupiny ověří vše sama.
+      pendingConnectionRecovery = false;
+      pendingReadOnlyConnectionRecovery = false;
+      return;
+    }
     if (recoveryInFlight || stopped) return;
     recoveryInFlight = true;
     eventTail = eventTail
@@ -12926,6 +12967,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
     scheduleRouteEpochRefresh();
+    if (event.type === 'heartbeat' && retiredGroup) {
+      // Bez skupiny: heartbeat dokládá jen liveness; žádná pravidla dne,
+      // risk poll účtů ani příprava ON.
+      gate = { ...gate, lastHeartbeatAt: event.at };
+      return;
+    }
     if (event.type === 'heartbeat') {
       gate = { ...gate, lastHeartbeatAt: event.at };
       ensureLeaderFlatEpochWatchdogs();
@@ -12948,6 +12995,32 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       s1bCanceledZeroFillOrderIds.clear();
       s1bUnresolvedCopyOrderIds.clear();
       failClosed(event.error, { transportLost: true });
+      return;
+    }
+    if (event.type === 'connection' && retiredGroup) {
+      // Bez skupiny (11. 10. 2026): jen stav spojení. Žádný snapshot účtů ani
+      // connection recovery — nikdo není spravovaný; aktivace nové skupiny si
+      // flat stav ověří sama. Zbylá transportní chyba po návratu spojení zmizí.
+      if (event.connected && event.resynced && !(event.reconnected && !gate.connected)) {
+        if (gate.connected) gate = { ...gate, lastHeartbeatAt: now };
+        return;
+      }
+      connectionSyncGeneration += 1;
+      source.connection(event.connected);
+      gate = {
+        ...gate,
+        connected: event.connected,
+        lastHeartbeatAt: event.connected ? now : gate.lastHeartbeatAt,
+        armed: false,
+      };
+      invalidateReconciliation();
+      pendingConnectionRecovery = false;
+      pendingReadOnlyConnectionRecovery = false;
+      bootRecoveryChecked = true;
+      if (event.connected && lastError && lastErrorTransportOnly) {
+        lastError = null;
+        lastErrorTransportOnly = false;
+      }
       return;
     }
     if (event.type === 'connection') {
@@ -15303,11 +15376,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     switchOptions: CopierGroupReconfigurationOptions & {
       allowGroupChange?: boolean;
       forceEpoch?: boolean;
+      /**
+       * Smazání skupiny workeru (11. 10. 2026): nová topologie je prázdná a
+       * worker pak běží bez skupiny. `missingAccountIds` = účty, které agent
+       * právě nenašel v OAuth (nebo jsou neaktivní); vyřadí se bez flat důkazu.
+       */
+      retireCurrent?: { reason: string; missingAccountIds: readonly number[] };
     } = {},
   ): Promise<void> => {
     nextGroup = normalizedRuntimeGroup(nextGroup);
     assertTightenOnly(nextGroup);
-    const operation = switchOptions.forceEpoch ? 'Aktivaci skupiny' : 'Změnu skupiny';
+    const retireCurrent = switchOptions.retireCurrent;
+    const operation = retireCurrent
+      ? 'Smazání skupiny'
+      : switchOptions.forceEpoch ? 'Aktivaci skupiny' : 'Změnu skupiny';
     const run = reconfigurationTail.then(async () => {
       // Čekáme jen na eventy přijaté před startem kontroly. Samotná REST čtení
       // nesmějí zadržet nový leader order/fill/position.
@@ -15318,27 +15400,48 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('Nelze změnit runtime na jinou copy group bez explicitní aktivace');
       }
       assertRuntimeGroup(nextGroup);
-      const currentTopology = new Set([
+      // Ze stavu bez skupiny je jedinou změnou čerstvá aktivace: stará
+      // topologie neexistuje, nic z ní neodchází a nic se z ní nepřebírá.
+      const fromRetired = retiredGroup != null;
+      if (retireCurrent && fromRetired) return;
+      if (fromRetired && (!switchOptions.forceEpoch || switchOptions.retireMissingOldGroup)) {
+        throw new Error('Kopírka nemá skupinu; vyber skupinu a zapni ji');
+      }
+      if (retireCurrent) {
+        const reason = typeof retireCurrent.reason === 'string' ? retireCurrent.reason.trim() : '';
+        if (!switchOptions.forceEpoch || nextGroup.id !== group.id || gate.armed || gate.killSwitch
+          || switchOptions.retireMissingOldGroup || (switchOptions.missingOptionalAccountIds?.length ?? 0) > 0
+          || reason.length < 3 || reason.length > 500
+          || !Array.isArray(retireCurrent.missingAccountIds)
+          || retireCurrent.missingAccountIds.some(accountId => (
+            !Number.isSafeInteger(accountId)
+            || (accountId !== group.leaderAccountId && !group.followers.some(item => item.accountId === accountId))
+          ))) {
+          throw new Error('Smazání skupiny má neplatné parametry nebo kopírka není vypnutá; nic se nezměnilo');
+        }
+      }
+      const currentMembers = fromRetired ? [] : [
         group.leaderAccountId,
         ...group.followers.map(item => item.accountId),
-      ]);
-      const accountIds = [...new Set([
-        group.leaderAccountId,
-        ...group.followers.map(item => item.accountId),
+      ];
+      const currentFollowers = fromRetired ? [] : group.followers;
+      const nextMembers = retireCurrent ? [] : [
         nextGroup.leaderAccountId,
         ...nextGroup.followers.map(item => item.accountId),
-      ])];
-      const leaderIds = new Set([group.leaderAccountId, nextGroup.leaderAccountId]);
-      const nextAccountIds = new Set([
-        nextGroup.leaderAccountId,
-        ...nextGroup.followers.map(item => item.accountId),
+      ];
+      const currentTopology = new Set(currentMembers);
+      const accountIds = [...new Set([...currentMembers, ...nextMembers])];
+      const leaderIds = new Set([
+        ...(fromRetired ? [] : [group.leaderAccountId]),
+        ...(retireCurrent ? [] : [nextGroup.leaderAccountId]),
       ]);
+      const nextAccountIds = new Set(nextMembers);
       const retirement = switchOptions.retireMissingOldGroup;
       if (retirement && (!Array.isArray(retirement.accountIds)
         || retirement.accountIds.some(accountId => !Number.isSafeInteger(accountId) || accountId <= 0))) {
         throw new Error('Vyřazení nedostupné skupiny obsahuje neplatná ID účtů');
       }
-      const retiredAccountIds = new Set(retirement?.accountIds ?? []);
+      const retiredAccountIds = new Set(retireCurrent?.missingAccountIds ?? retirement?.accountIds ?? []);
       // Částečné vyřazení je dovolené jen v režimu opravy po startu a jen pro
       // přesně ty účty, které worker při startu v OAuth neviděl. Ostatní účty
       // staré skupiny dál procházejí autoritativní flat/no-working kontrolou.
@@ -15360,7 +15463,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           throw new Error('Vyřazení nedostupné skupiny má neplatné nebo změněné účty; runtime zůstává vypnutý');
         }
       }
-      const removableFollowerIds = new Set(group.followers
+      const removableFollowerIds = new Set(currentFollowers
         .map(item => item.accountId)
         .filter(accountId => !nextAccountIds.has(accountId) && !leaderIds.has(accountId)));
       const optionalFollowerIds = new Set(switchOptions.missingOptionalAccountIds ?? []);
@@ -15389,7 +15492,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         && connectionRecoveryMissingOwnership.every(item => ownershipRisks.some(risk => (
           risk.accountId === item.accountId && risk.epochId === item.epochId
         )));
-      if (!gate.connected) {
+      // Smazání skupiny, jejíž účty v OAuth už vůbec nejsou, nemá co číst;
+      // jen tehdy smí proběhnout i bez živého broker syncu.
+      const retireReadsBroker = retireCurrent != null && currentMembers.some(accountId => (
+        accountId != null && !retiredAccountIds.has(accountId)
+      ));
+      if (!gate.connected && (!retireCurrent || retireReadsBroker)) {
         throw new Error(`${operation} nelze potvrdit bez živého broker syncu workeru`);
       }
       if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
@@ -15403,14 +15511,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         pendingFollowerTransitions.size > 0 ? 'follower transition' : '',
         pendingFollowerMagnitudeChecks.size > 0 ? 'follower magnitude check' : '',
         sweepingProtectiveLegs.size > 0 ? 'protective sweep' : '',
-        [...leaderFlatGuardTimers.keys()].some(epochId => (
+        // Smazání skupiny guard staré skupiny nenahrazuje čekáním: účty se
+        // stopou kopírky níže musí být autoritativně flat, chybějící nejdou
+        // obsloužit vůbec (u vypnuté kopírky je nic nespravuje).
+        !retireCurrent && [...leaderFlatGuardTimers.keys()].some(epochId => (
           !ownershipRisks.some(item => item.epochId === epochId)
         )) ? 'leader-flat guard' : '',
         autoCloseInFlight ? 'auto-close' : '',
         // E2 (review 30. 9.): v režimu opravy recovery nikdy neuspěje, protože
         // nedostupný leader nemá route. Vyřazení právě nedostupných účtů ji
         // nahrazuje; zbylé účty níže projdou autoritativní flat kontrolou.
-        recoveryInFlight || (pendingConnectionRecovery && !waivesBlockedRecovery && !partialRepairRetirement)
+        // Totéž platí pro smazání skupiny.
+        recoveryInFlight || (pendingConnectionRecovery && !waivesBlockedRecovery && !partialRepairRetirement
+          && !retireCurrent)
           ? 'connection recovery'
           : '',
         cooldownPending ? 'cooldown transition' : '',
@@ -15464,7 +15577,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const generationAtStart = safetyGeneration;
       const revisionAtStart = groupRevision;
       const assertFreshPreflight = () => {
-        if (stopped || shutdownRequested || gate.armed || gate.killSwitch || !gate.connected
+        if (stopped || shutdownRequested || gate.armed || gate.killSwitch
+          || (!gate.connected && (!retireCurrent || retireReadsBroker))
           || safetyGeneration !== generationAtStart || groupRevision !== revisionAtStart
           || brokerObservationVersion !== observationAtStart
           || pendingTradeEventsFor([...requiredAccountIds, ...copierFreeLeavingAccountIds])) {
@@ -15591,7 +15705,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               + 'kopírka ještě ověřuje její konec, zkus to znovu za minutu');
           }
         }
-        const pendingCutClosures = tightenedCutClosures(group, nextGroup);
+        // Smazaná (nebo právě mazaná) skupina nemá konfiguraci, proti které by
+        // se cut zpřísňoval; účty nové skupiny jsou navíc ověřeně flat.
+        const pendingCutClosures = retireCurrent || fromRetired ? [] : tightenedCutClosures(group, nextGroup);
+        const retiredMarker = retireCurrent
+          ? { groupId: group.id, at: clock(), reason: retireCurrent.reason.trim() }
+          : null;
 
         const apply = eventTail.then(async () => {
         // Všechny eventy přijaté během REST čtení jsou už před námi. Skutečná
@@ -15617,6 +15736,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           // odcházející pozice bez stopy kopírky patří uživateli.
           settledCopierEntries: _dropSettledCopierEntries,
           accountSyncPauses: _dropAccountSyncPauses,
+          // Značka smazané skupiny platí jen do commitu další aktivace.
+          retiredGroup: _dropRetiredGroup,
           ...preservedSafety
         } = current.state.safety;
         // A current broker snapshot settles exposure, not the missing exit price.
@@ -15634,7 +15755,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ],
           };
         }
-        const cleanState = createCopierState([], 0, [], [], [], preservedSafety);
+        const cleanState = createCopierState([], 0, [], [], [], retiredMarker
+          ? { ...preservedSafety, retiredGroup: { ...retiredMarker } }
+          : preservedSafety);
         // Poslední odmítnutí musí být ještě před durable CAS. Event přijatý
         // během samotného fsyncu už čeká za tímto eventTail krokem; po commitu
         // proto dokončíme přepnutí group v DISARMED stavu místo kombinace
@@ -15682,15 +15805,35 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           reason: `operator-attested retirement of OAuth-missing or inactive accounts of group ${group.id}; accounts=${[...retiredAccountIds].sort((a, b) => a - b).join(',')}; reason=${retirement.reason.trim()}; no broker flat proof for retired accounts`,
         }]);
       }
+      if (retiredMarker) {
+        options.onAudit?.([{
+          at: retiredMarker.at,
+          leaderEventId: `group-deleted:${group.id}:${retiredMarker.at}`,
+          kind: 'blocked',
+          reason: `operator deleted worker group ${group.id}; worker runs without a group until another is activated; `
+            + `missing accounts without broker flat proof=${[...retiredAccountIds].sort((a, b) => a - b).join(',') || '-'}; `
+            + `copier-free accounts left as is=${[...copierFreeLeavingAccountIds].sort((a, b) => a - b).join(',') || '-'}; `
+            + `reason=${retiredMarker.reason}`,
+        }]);
+      }
+      if (fromRetired) {
+        options.onAudit?.([{
+          at: clock(),
+          leaderEventId: `group-activated-after-delete:${nextGroup.id}:${clock()}`,
+          kind: 'recovered',
+          reason: `worker má znovu skupinu ${nextGroup.id}; účty ověřeny flat a bez příkazů`,
+        }]);
+      }
 
       // Od tohoto bodu je durable stará epocha pryč a teprve teď se stává
       // nový leader autoritativní pro event source i risk vrstvu.
       group = nextGroup;
       groupRevision += 1;
+      retiredGroup = retiredMarker ? { ...retiredMarker } : null;
       for (const pending of pendingCutClosures) {
         await executeFollowerCutAction(pending.cut, pending.follower, true, false);
       }
-      options.broker.setCriticalAccounts?.([nextGroup.leaderAccountId]);
+      options.broker.setCriticalAccounts?.(retiredMarker ? [] : [nextGroup.leaderAccountId]);
       startupMissingLeaderRoute = null;
       if (startupGroupRepair) {
         startupGroupRepair = null;
@@ -15732,12 +15875,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       leaderPositionSnapshotComplete = false;
       flatReconciledLeaderEpochIds.clear();
       leaderFillAheadOfPosition.clear();
-      for (const snapshot of snapshots.required) {
-        positionsByAccount.set(snapshot.accountId, new Map(
-          snapshot.positions.map(position => [position.symbol, position.netQuantity]),
-        ));
+      if (retiredMarker) {
+        // Bez skupiny se žádný účet nesleduje; stará evidence příkazů zmizí.
+        for (const accountId of currentMembers) {
+          if (accountId != null) liveOrdersByAccount.delete(accountId);
+        }
+      } else {
+        for (const snapshot of snapshots.required) {
+          positionsByAccount.set(snapshot.accountId, new Map(
+            snapshot.positions.map(position => [position.symbol, position.netQuantity]),
+          ));
+        }
+        for (const snapshot of snapshots.required) rememberLiveOrderSnapshot(snapshot.accountId, snapshot.orders);
       }
-      for (const snapshot of snapshots.required) rememberLiveOrderSnapshot(snapshot.accountId, snapshot.orders);
       lastAuthoritativeReadAt = clock();
       lastBrokerPositionAt = lastAuthoritativeReadAt;
       untrackedTradeSymbols.clear();
@@ -15785,8 +15935,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await run;
     } catch (reason) {
       const error = errorOf(reason);
-      lastErrorTransportOnly = false;
-      lastError = error;
+      // Neprovedené smazání nic nezměnilo (žádný commit, žádný broker write);
+      // není to incident, jen odmítnutý administrativní krok.
+      if (!retireCurrent) {
+        lastErrorTransportOnly = false;
+        lastError = error;
+      }
       options.onError?.(error);
       throw error;
     }
@@ -15797,6 +15951,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   await ensureDailySession(clock());
 
   const unsubscribe = broker.subscribe(event => {
+    if (retiredGroup && (event.type === 'order' || event.type === 'fill' || event.type === 'position')) {
+      // Smazaná skupina nic nespravuje: obchodní eventy starých účtů se
+      // nezpracovávají. Výjimka: účty právě ověřované aktivací nové skupiny
+      // (konfigurační fence) — jejich event musí aktivaci odmítnout.
+      const accountId = event.type === 'order'
+        ? event.order.accountId
+        : event.type === 'fill'
+          ? event.fill.accountId
+          : event.position.accountId;
+      if (!configurationFenceAccountRefs.has(accountId)) return;
+    }
 
     const ingressPerformanceAt = performance.now();
     observeS1bIngress(event);
@@ -15937,6 +16102,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         `Copier nelze armovat: durable reload processoru není dokončen (${processorRecovery.reason})`,
       );
     }
+    if (retiredGroup) {
+      throw new Error('Copier nelze armovat: skupina byla smazána; vyber nebo vytvoř skupinu a zapni ji');
+    }
     if (startupGroupRepair) {
       throw new Error(
         `Copier nelze armovat: uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); nejdřív je odeber v editoru skupiny`,
@@ -16056,6 +16224,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   return {
     maintenanceRestartBlocker() {
+      // Bez skupiny nejsou žádné kopie ani epocha; restart kvůli novým účtům
+      // brzdí jen rozběhnutý transport/outbox.
+      if (retiredGroup) return this.connectionRenewalBlocker();
       return readOnlyRecoveryBlocker() ?? this.connectionRenewalBlocker();
     },
     connectionRenewalBlocker() {
@@ -16303,6 +16474,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (changed) await persistEligibility();
     },
     async reconcile(reconciliationOptions = {}) {
+      if (retiredGroup) throw new Error(RETIRED_GROUP_ERROR);
       scheduleCopierSettlementSweep();
       // Správa otevřených kopií (management-only) se nesmí vypnout ruční
       // Kontrolou pozic — odmítnutí musí přijít dřív než auditovaný DISARM.
@@ -16535,7 +16707,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
         throw new Error('Změnu konfigurace blokuje nevyřešený durable outbox');
       }
-      const currentAccounts = [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
+      if (retiredGroup && !preflightOptions.allowGroupChange) {
+        throw new Error('Kopírka nemá skupinu; vyber skupinu a zapni ji');
+      }
+      // Smazaná skupina už žádné účty nespravuje.
+      const currentAccounts = retiredGroup
+        ? []
+        : [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
       const weaker = isWeakerRiskConfig(group, nextGroup);
       const inPlaceChange = weaker.length === 0 && (
         isMetadataOnlyGroupChange(group, nextGroup)
@@ -16562,6 +16740,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     },
     async reconfigureGroup(nextGroup, reconfigurationOptions = {}) {
+      if (retiredGroup) throw new Error('Kopírka nemá skupinu; vyber skupinu a zapni ji');
       // UI dostane okamžitě fail-safe DISARM ještě před čekáním na eventTail.
       gate = { ...gate, armed: false };
       invalidateReconciliation();
@@ -16578,7 +16757,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         forceEpoch: true,
       });
     },
+    async retireGroup(retireOptions) {
+      if (retiredGroup) return;
+      // Mazat jde jen vypnutou kopírku; nic se tu samo nevypíná.
+      if (gate.armed) throw new Error('Skupinu nejde smazat, dokud kopírka jede. Nejdřív ji vypni.');
+      if (stopped || shutdownRequested) throw new Error('Copier runtime se právě ukončuje');
+      await reconfigureLeaderEpoch(group, {
+        allowGroupChange: true,
+        forceEpoch: true,
+        retireCurrent: {
+          reason: retireOptions.reason,
+          missingAccountIds: [...retireOptions.missingAccountIds],
+        },
+      });
+    },
     async setFollowerEnabled(accountId, enabled, persistGroup, participationOptions) {
+      if (retiredGroup) throw new Error(RETIRED_GROUP_ERROR);
       const follower = group.followers.find(item => item.accountId === accountId);
       const before = follower?.enabled !== false;
       const allowOwnExposure = participationOptions?.allowOwnExposure === true;
@@ -16765,6 +16959,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     },
     updateGroup(nextGroup) {
+      if (retiredGroup) throw new Error(RETIRED_GROUP_ERROR);
       const wasArmed = gate.armed;
       // Jakýkoli pokus o změnu konfigurace nejdřív zavře live dispatch.
       gate = { ...gate, armed: false };
@@ -16793,6 +16988,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     },
     updateGroupMetadata(nextGroup) {
+      if (retiredGroup) throw new Error(RETIRED_GROUP_ERROR);
       nextGroup = normalizedRuntimeGroup(nextGroup);
       if (!isMetadataOnlyGroupChange(group, nextGroup)) {
         throw new Error('Metadata cesta smí měnit pouze name, color a bezpečně zpřísněná safety pravidla');
@@ -16810,6 +17006,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       groupRevision += 1;
     },
     async updateGroupRiskInPlace(nextGroup) {
+      if (retiredGroup) throw new Error(RETIRED_GROUP_ERROR);
       nextGroup = normalizedRuntimeGroup(nextGroup);
       if (!isInPlaceCutTightening(group, nextGroup)) {
         throw new Error('In-place cesta smí pouze přidat/snížit cut nebo změnit let-run na close-copy');
@@ -16848,6 +17045,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await run;
     },
     async flattenAccount(accountId, operationId) {
+      if (retiredGroup) throw new Error(RETIRED_GROUP_ERROR);
       const allowed = new Set([
         group.leaderAccountId as number,
         ...group.followers.map(follower => follower.accountId),
@@ -16857,10 +17055,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return emergencyFlatten([accountId], operationId);
     },
     async flattenFollowerTrade(accountId, operationId, flattenOptions) {
+      if (retiredGroup) throw new Error(RETIRED_GROUP_ERROR);
       declineTransportResume('ruční zavření followera');
       return flattenFollowerForCurrentTrade(accountId, operationId, flattenOptions?.onAdmitted);
     },
     async flattenGroup(operationId) {
+      if (retiredGroup) throw new Error(RETIRED_GROUP_ERROR);
       if (group.leaderAccountId == null) throw new Error('Copy group nemá leader účet');
       declineTransportResume('ruční Flatten All');
       return emergencyFlatten(
@@ -16945,8 +17145,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         killSwitch: gate.killSwitch,
         shadowMode: gate.shadowMode,
         connected: gate.connected,
-        reconciliationRequired: source.needsReconciliation() || !positionCheckComplete,
-        accountSyncPauses: (currentRuntime().state.safety.accountSyncPauses ?? [])
+        // Bez skupiny není co kontrolovat ani srovnávat (11. 10. 2026).
+        reconciliationRequired: !retiredGroup && (source.needsReconciliation() || !positionCheckComplete),
+        retiredGroup: retiredGroup ? { groupId: retiredGroup.groupId, at: retiredGroup.at } : null,
+        accountSyncPauses: retiredGroup ? [] : (currentRuntime().state.safety.accountSyncPauses ?? [])
           .filter(pause => activeAccountSyncPause(pause.accountId, pause.symbol) === pause)
           .map(({ accountId, symbol, reasonCode, reason, pausedAt }) => ({ accountId, symbol, reasonCode, reason, pausedAt })),
         armPreparation: (() => {
@@ -16962,8 +17164,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           };
         })(),
         manualRecovery: currentManualRecovery ? { ...currentManualRecovery } : null,
-        divergentAccounts: [...gate.divergentAccounts],
-        workingOrderAccounts: [...workingOrderAccounts],
+        divergentAccounts: retiredGroup ? [] : [...gate.divergentAccounts],
+        workingOrderAccounts: retiredGroup ? [] : [...workingOrderAccounts],
         stuckOutbox: stuckOperations.length > 0,
         stuckOperations,
         accountEligibility: (() => {
@@ -16993,7 +17195,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return [...byAccount].map(([accountId, epochIds]) => ({ accountId, epochIds }));
         })(),
         exposure: (() => {
-          if (lastAuthoritativeReadAt == null || !gate.connected) return null;
+          if (retiredGroup || lastAuthoritativeReadAt == null || !gate.connected) return null;
           const positions = [...positionsByAccount].flatMap(([accountId, bySymbol]) => [...bySymbol]
             .filter(([, netQuantity]) => netQuantity !== 0)
             .map(([symbol, netQuantity]) => ({ accountId, symbol, netQuantity })));
@@ -17075,9 +17277,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           : null,
         revision: current.revision,
         lastSequence: current.state.lastSequence,
-        groupFlat: allGroupAccountsFlat(),
-        participatingGroupFlat: groupIsFlat(),
-        excludedForeignFollowers: [...excludedForeignFollowerIds()],
+        // Smazaná skupina nemá účty, takže je triviálně flat.
+        groupFlat: retiredGroup ? true : allGroupAccountsFlat(),
+        participatingGroupFlat: retiredGroup ? true : groupIsFlat(),
+        excludedForeignFollowers: retiredGroup ? [] : [...excludedForeignFollowerIds()],
         // „Pokračuje“ platí jen dokud je kopírka zapnutá; po pozdějším
         // vypnutí (jakémkoli) panel ani push nesmí tvrdit, že jede.
         transportResume: transportResume && !(transportResume.state === 'resumed' && !gate.armed)
@@ -17124,10 +17327,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           : null,
         sessionArmedAt: effectiveSessionArmedAt,
         followerCuts: [...followerCuts.values()]
-          .filter(cut => cut.until > statusNow
+          .filter(cut => !retiredGroup && cut.until > statusNow
             && group.followers.some(follower => follower.accountId === cut.accountId))
           .map(cut => ({ ...cut })),
-        followerParticipation: group.followers.map(follower => {
+        followerParticipation: (retiredGroup ? [] : group.followers).map(follower => {
           const configuredEnabled = follower.enabled !== false;
           const eligibility = currentIneligibleAccounts(statusNow).get(follower.accountId);
           const cut = activeFollowerCut(follower.accountId, statusNow);

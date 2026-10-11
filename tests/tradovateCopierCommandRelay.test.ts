@@ -469,6 +469,36 @@ describe('Tradovate copier command relay', () => {
     });
   });
 
+  it('relay pustí smazání skupiny (11. 10. 2026) jen s groupId a ničím navíc', async () => {
+    const accepted = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(accepted), userId, connectionId,
+      command: { type: 'copy-command', command: { type: 'delete-group', groupId: 'group-1' } },
+      idempotencyKey: 'key-delete-group',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(accepted.mock.calls[0][0]).toMatchObject({
+      command_type: 'copy-command', payload: { command: { type: 'delete-group', groupId: 'group-1' } },
+    });
+    for (const bad of [{ groupId: '' }, { groupId: 42 }, { groupId: 'group-1', force: true }]) {
+      const upsert = vi.fn();
+      await expect(enqueueTradovateCopierCommand({
+        db: enqueueDb(upsert), userId, connectionId,
+        command: { type: 'copy-command', command: { type: 'delete-group', ...bad } } as unknown as LocalCopierAgentCommand,
+      })).rejects.toThrow('invalid-relay-command-payload');
+      expect(upsert).not.toHaveBeenCalled();
+    }
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'delete-command-id', command_type: 'copy-command',
+        payload: { command: { type: 'delete-group', groupId: 'group-1' } },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'copy-command', command: { type: 'delete-group', groupId: 'group-1' } });
+  });
+
   it('relay odmítne neplatný follower toggle ještě před enqueue', async () => {
     const upsert = vi.fn();
     await expect(enqueueTradovateCopierCommand({

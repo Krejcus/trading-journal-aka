@@ -264,6 +264,12 @@ function validSafety(value: unknown): boolean {
     && value.managementOnly.accountIds.every(accountId => integer(accountId) && accountId > 0)
     && unique(value.managementOnly.accountIds.map(String))
   );
+  const validRetiredGroup = value.retiredGroup == null || (
+    isRecord(value.retiredGroup)
+    && string(value.retiredGroup.groupId) && value.retiredGroup.groupId.length > 0
+    && finite(value.retiredGroup.at) && value.retiredGroup.at >= 0
+    && string(value.retiredGroup.reason)
+  );
   return finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
     && finite(value.dayLockUntil) && Number(value.dayLockUntil) >= 0
     && optionalString(value.dayLockReason)
@@ -274,6 +280,7 @@ function validSafety(value: unknown): boolean {
     && validEligibility
     && validSettledEntries
     && validSyncPauses
+    && validRetiredGroup
     && validSeenRejects;
 }
 

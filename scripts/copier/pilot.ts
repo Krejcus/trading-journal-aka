@@ -22,6 +22,7 @@ import { createFileCopyGroupStore } from '../../services/fileCopyGroupStore';
 import {
   canBootstrapMissingDurableGroupForRetirement,
   copierDispatchConcurrency,
+  isRetiredDurableGroup,
   copierPilotGroupPath,
   copierPilotStateKey,
   parseCopierFollowersFlag,
@@ -828,8 +829,17 @@ async function runLocalAgent(
     follower.enabled === false
     && !accounts.some(account => account.id === follower.accountId)
   ));
+  // Skupinu operátor smazal (11. 10. 2026): worker běží bez skupiny a její
+  // účty se nevalidují ani nerouteují; ARM blokuje controller do aktivace jiné.
+  const retiredAtStartup = isRetiredDurableGroup(persistedGroup, durableSnapshot.safety);
+  if (retiredAtStartup) {
+    console.warn(
+      `${new Date().toISOString()} STARTUP BEZ SKUPINY smazaná skupina=${group.id}; `
+      + 'worker startuje DISARMED a čeká na aktivaci jiné skupiny v UI',
+    );
+  }
   const retireMissingGroupId = stringFlag('retire-missing-group-id', false);
-  const retirementBootstrap = persistedGroup != null && canBootstrapMissingDurableGroupForRetirement(
+  const retirementBootstrap = !retiredAtStartup && persistedGroup != null && canBootstrapMissingDurableGroupForRetirement(
     group, accounts.map(account => account.id), retireMissingGroupId,
   );
   // Breached/odpojený účet uložené skupiny nesmí shodit worker do launchd
@@ -844,7 +854,7 @@ async function runLocalAgent(
   ].filter((accountId): accountId is number => accountId != null && !accounts.some(account => (
     account.id === accountId && account.active && account.canTrade
   )));
-  const repairBootstrap = !validation.valid && !retirementBootstrap
+  const repairBootstrap = !retiredAtStartup && !validation.valid && !retirementBootstrap
     && unavailableGroupAccountIds.length > 0
     && validateStoredCopyGroupForStartup(
       group,
@@ -860,7 +870,7 @@ async function runLocalAgent(
       + 'worker startuje jen DISARMED, ARM je blokovaný do opravy skupiny v UI',
     );
   }
-  if (!validation.valid && !retirementBootstrap && !repairBootstrap) {
+  if (!retiredAtStartup && !validation.valid && !retirementBootstrap && !repairBootstrap) {
     throw new Error(
       `Uložená copy group není bezpečně použitelná: ${validation.errors.join(' ')} `
       + `Durable soubor: ${groupPath}. Oprav ho ručně (nejdřív vytvoř zálohu), nebo po bezpečné kontrole spusť `

@@ -187,6 +187,7 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
     ...(base.accountSyncPauses
       ? { accountSyncPauses: base.accountSyncPauses.map(pause => ({ ...pause })) }
       : {}),
+    ...(base.retiredGroup ? { retiredGroup: { ...base.retiredGroup } } : {}),
     ...(base.seenTerminalRejects
       ? { seenTerminalRejects: base.seenTerminalRejects.map(entry => ({ ...entry })) }
       : {}),

@@ -707,6 +707,48 @@ existující ochranu.
   (konzervativněji). Nebezpečné je opírat „cizí“ o cokoli jiného než absenci
   vlastní stopy kopírky na účtu.
 
+### INV-GROUP-01: Smazání skupiny workeru a běh bez skupiny (11. 10. 2026)
+
+- Proč: Po breachi všech účtů (skupina dvsvds) worker držel nepoužitelnou
+  skupinu v režimu opravy a smazat ji nešlo — worker měl vždy právě jednu
+  skupinu a UI ji ze statusu znovu adoptovalo.
+- Vynucuje: `retireGroup({ reason, missingAccountIds })` = cesta přepnutí
+  skupiny (`reconfigureLeaderEpoch`) s prázdnou novou topologií: jen DISARMED
+  a bez kill switche, bez stuck/nejistého outboxu, bez rozpracovaného
+  lifecycle (pending connection recovery a leader-flat guard smazání
+  neblokují — nedostupné účty nejde obsloužit a účty se stopou kopírky musí
+  být flat), stejný fence a dvě autoritativní kola čtení. Účty, které agent
+  nenašel v OAuth nebo jsou neaktivní (`inactiveOptionalAsMissing`), se vyřadí
+  auditovaně bez flat důkazu; viditelné účty se stopou kopírky musí být flat
+  a bez příkazů; viditelné účty bez stopy (ruční obchod) zůstávají jak jsou.
+  Značka `safety.retiredGroup` jde ve stejném CAS commitu jako čistý stav
+  a maže ji až commit aktivace další skupiny. Neprovedené smazání nenastaví
+  `lastError` (nic se nezměnilo).
+- Běh bez skupiny: ARM, `prepareArm`, `reconcile`, Flatten, úpravy skupiny
+  a účast followerů odmítnou; obchodní eventy starých účtů se nezpracují
+  (výjimka: účty ve fence probíhající aktivace); heartbeat jen liveness;
+  reconnect bez connection recovery, transport-only `lastError` po návratu
+  spojení zmizí. Status: `retiredGroup`, `groupFlat`/`participatingGroupFlat`
+  true, žádné divergence/working/exposure/účast, `reconciliationRequired`
+  false. Restart: pilot (`isRetiredDurableGroup`) uloženou skupinu nevaliduje
+  proti OAuth, controller nemá kritický účet a startuje DISARMED bez skupiny.
+- Aktivace ze stavu bez skupiny je vždy čerstvá aktivace (i stejného ID):
+  stará topologie je prázdná, nic se z ní nečte ani nepřebírá (účast, cut),
+  routují se jen účty nové skupiny a ty musí být flat (dvě kola). Agent bez
+  nové konfigurace nic nezapne.
+- Durable incident (`manualRecovery`) smazání nemaže; ON nové skupiny ho dál
+  vyžaduje výslovně potvrdit (INV-DEFAULT-03).
+- UI: execution skupina je `copierWorkerExecutionGroup(status)` — smazaná
+  skupina se nepředává jako `runtimeGroup` (jinak ji `adoptRuntimeCopyGroup`
+  vrátí do seznamu). Mazání skupiny workeru jen s capability `group-delete-v1`;
+  relay pouští `delete-group` jen s `groupId`.
+- Hlídá test: `tests/copierDeleteActiveGroup.test.ts`,
+  `tests/localCopierDeleteGroup.test.ts`, `tests/liveCopyDeleteGroupUi.test.ts`,
+  relay v `tests/tradovateCopierCommandRelay.test.ts`.
+- Nikdy: Smazáním neposlat brokerový příkaz ani nevypnout zapnutou kopírku;
+  nevyřadit viditelný účet se stopou kopírky bez flat důkazu; nezapnout nic
+  bez aktivace skupiny.
+
 ### INV-PART-02: Follower cut izoluje účet od nových entry, ale dokončení existující kopie zůstává risk-reducing a přesně ohraničené
 
 - Proč: Jeden DLL/breached follower nemá nutně zastavit zdravé účty, ale jeho

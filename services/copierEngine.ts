@@ -313,6 +313,12 @@ export interface CopierState {
      * Platí jen pro tutéž epochu; nový obchod pauzu automaticky ukončí.
      */
     accountSyncPauses?: CopierAccountSyncPause[];
+    /**
+     * Skupina workeru smazaná operátorem (11. 10. 2026): worker běží bez
+     * skupiny, dokud se neaktivuje jiná. Zapisuje se ve stejném CAS commitu
+     * jako čistý stav a maže ji až commit aktivace nové skupiny.
+     */
+    retiredGroup?: { groupId: string; at: number; reason: string };
     /** Durable eligibility západky účtů; chybějící položka znamená active. */
     accountEligibility?: CopierAccountEligibility[];
     /** Bounded durable dedupe přímé controller větve pro async/leader rejecty. */

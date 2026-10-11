@@ -490,6 +490,10 @@ interface Props {
   /** `marketPrices` z workeru (TradingView) — jen pro zobrazení vzdálenosti k limitu. */
   marketPrices?: readonly unknown[];
   runtimeGroup?: CopyGroupConfig | null;
+  /** Worker umí smazat svou skupinu a běžet bez ní (`group-delete-v1`). */
+  groupDeleteSupported?: boolean;
+  /** Skupinu workeru operátor smazal; kopírka teď žádnou nemá. */
+  workerWithoutGroup?: boolean;
   /** Čerstvé spojení OAuth adresáře s manifestem Mac workeru; jen UI precheck. */
   workerAccountRoutes?: CopierWorkerAccountRoutes;
   /** Načítání nových propfirem spárovaným Macem (4. 10. 2026); null = neověřeno. */
@@ -811,6 +815,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   legacyReconcile,
   executionGroupId = null,
   runtimeGroup = null,
+  groupDeleteSupported = false,
+  workerWithoutGroup = false,
   workerAccountRoutes,
   workerDiscovery = null,
   onGrantWorkerOwnerScope,
@@ -1350,9 +1356,24 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       });
       return;
     }
+    const workerGroup = candidate.id === executionGroupId;
+    if (workerGroup && !groupDeleteSupported) {
+      setPendingAction({
+        title: 'Skupinu teď smazat nejde',
+        detail: `Skupinu ${candidate.name} drží Mac worker a jeho verze ji smazat neumí. Nejdřív worker aktualizuj.`,
+        confirmLabel: 'Rozumím',
+        danger: true,
+        blocked: true,
+      });
+      return;
+    }
     setPendingAction({
       title: 'Smazat skupinu?',
-      detail: `Skupina ${candidate.name} bude odstraněna z konfigurace. Otevřené pozice ani příkazy na účtech to nijak nezmění.`,
+      detail: workerGroup
+        ? `Skupina ${candidate.name} je připojená ke kopírce. Po smazání kopírka zůstane vypnutá a nebude mít žádnou skupinu, dokud nezapneš jinou. `
+          + 'Účty, které už v Tradovate nejsou nebo jsou zablokované (breach), se vyřadí bez kontroly; u ostatních kopírka nejdřív ověří, že na nich nezůstala její kopie. '
+          + 'Otevřené pozice ani příkazy na účtech to nijak nezmění.'
+        : `Skupina ${candidate.name} bude odstraněna z konfigurace. Otevřené pozice ani příkazy na účtech to nijak nezmění.`,
       confirmLabel: 'Smazat',
       danger: true,
       command: { type: 'delete-group', groupId: candidate.id },
@@ -1680,6 +1701,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         ? command.type === 'flatten-follower-trade'
           ? 'Účet je potvrzeně flat a čeká na další obchod. Ostatní účty i kopírka pokračují.'
           : `Flatten potvrzen: ${result.accountIds.length} účtů je flat, zrušeno ${result.canceledOrders} příkazů, odesláno ${result.submittedClosures} close příkazů.`
+        : command.type === 'delete-group'
+          ? 'Skupina je smazaná. Kopírka zůstává vypnutá a nemá žádnou skupinu — až budeš chtít kopírovat, zapni jinou.'
         : command.type === 'resolve-stuck-operation'
           ? 'Operace označena za vyřešenou. Runtime je VYPNUTO; před zapnutím proběhne nová kontrola pozic.'
           : command.type === 'set-multiplier'
@@ -2120,6 +2143,18 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         </div>
       ) : null}
 
+      {workerWithoutGroup ? (
+        <div data-testid="copier-no-group" className="flex items-start gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4">
+          <Power size={16} className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
+          <div className="flex-1">
+            <p className="text-sm font-black text-[var(--text-primary)]">Kopírka nemá žádnou skupinu</p>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+              Skupina připojená ke kopírce byla smazaná. Mac worker běží vypnutý a nic nekopíruje ani nehlídá. Až budeš chtít kopírovat, zapni některou skupinu nebo vytvoř novou.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <section id="live-copy-groups" className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
         <header className="flex items-center justify-between gap-3 px-5 lg:px-6 py-4 flex-wrap">
           <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
@@ -2465,10 +2500,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           )}
           onDelete={groups.some(group => group.id === editorGroup.id) ? () => {
             setEditorGroup(null);
-            setPendingAction({
-              title: 'Smazat skupinu?', detail: `Skupina ${editorGroup.name} bude odstraněna z konfigurace.`,
-              confirmLabel: 'Smazat', danger: true, command: { type: 'delete-group', groupId: editorGroup.id },
-            });
+            requestGroupDelete(editorGroup);
           } : undefined}
           saving={busyCommand != null || groupSaveBusy}
         />
