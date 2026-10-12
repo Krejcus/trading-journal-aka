@@ -5407,7 +5407,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return;
       }
       const suppression = currentIntentionalSuppression(accountId, symbol);
-      if (suppression && followerNet === suppression.allowedNet) return;
+      if (suppression && followerNet === suppression.allowedNet) {
+        awaitingCopiedEntries.delete(key);
+        return;
+      }
       if (leaderNet !== 0 && awaitingCopiedEntry(accountId, symbol, followerNet, expectedFollowerNet)) {
         if (!awaitingCopiedEntries.has(key)) {
           awaitingCopiedEntries.set(key, { since: clock() });
@@ -12088,6 +12091,38 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     };
   };
 
+  /**
+   * Kopie vstupu, které S1b u tohoto redukujícího leader příkazu zruší
+   * (12. 10. 2026). Market: všechny kandidáty jako dosud. Ne-Market: jen
+   * kopie celé vyplněného leader příkazu (follower čeká) — kromě ochranného
+   * Stopu za cenou čekajícího Limit vstupu u followera bez jakéhokoli fillu:
+   * ten se nemůže vyplnit dřív než vstup a zrcadlí se jako dosud (V12/R12).
+   */
+  const s1bReadCandidates = (
+    event: LeaderEvent,
+    follower: CopyGroupConfig['followers'][number],
+  ) => {
+    const s1b = s1bCandidatesFor(event, follower);
+    if (event.orderType === 'Market') return { s1b, candidates: s1b.candidates };
+    const protectiveStopBehindEntry = (followerOrderId: string): boolean => {
+      // Jen follower bez jakéhokoli fillu (pozice i vstup): jinak by plný Stop
+      // nad částečnou pozicí followera přehedgoval. Částečná kopie navíc končí
+      // v S1b jako unsafe; obě podmínky jsou pojistka do hloubky.
+      if (s1b.followerNet !== 0) return false;
+      if (event.orderType !== 'Stop' || event.stopPrice == null) return false;
+      const pendingEntry = liveOrdersByAccount.get(follower.accountId)?.get(followerOrderId);
+      if (!pendingEntry || pendingEntry.orderType !== 'Limit' || pendingEntry.limitPrice == null) return false;
+      if (pendingEntry.filledQuantity !== 0 || pendingEntry.side === event.side) return false;
+      return pendingEntry.side === 'Buy'
+        ? event.stopPrice < pendingEntry.limitPrice
+        : event.stopPrice > pendingEntry.limitPrice;
+    };
+    return {
+      s1b,
+      candidates: s1b.filledLeaderCandidates.filter(orderId => !protectiveStopBehindEntry(orderId)),
+    };
+  };
+
   const cutAwareDispatchFor = async (
     event: LeaderEvent,
     increasesExposure: boolean,
@@ -12177,27 +12212,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ? follower.mode === 'on-fill'
           : follower.mode === 'on-submit';
         if (!modeAcceptsEvent || follower.enabled === false || follower.mode === 'off') return;
-        const s1b = s1bCandidatesFor(event, follower);
+        const { s1b, candidates } = s1bReadCandidates(event, follower);
         const { expectedPreNet } = s1b;
         const oppositePendingCandidates = event.orderType === 'Market' ? s1b.oppositePendingCandidates : [];
-        // Ochranný Stop za cenou čekajícího Limit vstupu (u longu pod ním,
-        // u shortu nad ním) se nemůže vyplnit dřív než vstup — cena musí
-        // vstupem nejdřív projít. Takový výstup se followerovi zrcadlí jako
-        // dosud (V12/R12) a follower čeká dál. Cokoli jiného (TP limit, stop
-        // mezi vstupem a trhem, Stop vstup) by ho mohlo otočit do protipozice:
-        // kopie vstupu se zruší a follower obchod vynechá.
-        const protectiveStopBehindEntry = (followerOrderId: string): boolean => {
-          if (event.orderType !== 'Stop' || event.stopPrice == null) return false;
-          const pendingEntry = liveOrdersByAccount.get(follower.accountId)?.get(followerOrderId);
-          if (!pendingEntry || pendingEntry.orderType !== 'Limit' || pendingEntry.limitPrice == null) return false;
-          if (pendingEntry.side === event.side) return false;
-          return pendingEntry.side === 'Buy'
-            ? event.stopPrice < pendingEntry.limitPrice
-            : event.stopPrice > pendingEntry.limitPrice;
-        };
-        const candidates = event.orderType === 'Market'
-          ? s1b.candidates
-          : s1b.filledLeaderCandidates.filter(orderId => !protectiveStopBehindEntry(orderId));
         // Každý opačný pending je součást rozhodnutí. U více kandidátů nelze
         // jedním order lookupem doložit, který z nich už pozici změnil; větev
         // proto zůstává fail-closed jako před V12 a neposílá přímý exit.
@@ -12271,31 +12288,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           } finally {
             clearTimeout(timer);
           }
-          // Zrušený OSO vstup nesmí nechat viset své pozastavené SL/TP nohy
-          // (12. 10. 2026): bez nich neprojde důkaz „účet bez příkazů“ a
-          // skupina by zbytečně skončila fail-closed. Rušení nohy nikdy
-          // nevyplněného vstupu je risk-snižující; chyba (už zrušená noha)
-          // nevadí — o výsledku rozhodne následující autoritativní čtení.
-          const osoLegs = [...currentRuntime().osoOutbox.values()]
-            .filter(entry => entry.request.accountId === follower.accountId
-              && entry.entryBrokerOrderId === candidates[0])
-            .flatMap(entry => [entry.firstBrokerOrderId, entry.secondBrokerOrderId])
-            .filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId));
-          await Promise.all(osoLegs.map(async brokerOrderId => {
-            let legTimer: ReturnType<typeof setTimeout> | undefined;
-            try {
-              await Promise.race([
-                dispatchBroker(safetyGeneration, event).cancelOrder(follower.accountId, brokerOrderId),
-                new Promise<never>((_, reject) => {
-                  legTimer = setTimeout(() => reject(new Error('S1b OSO leg cancel deadline 1000 ms')), 1_000);
-                }),
-              ]);
-            } catch {
-              // Výsledek ověří postkontrola níže; write se neopakuje.
-            } finally {
-              clearTimeout(legTimer);
-            }
-          }));
           // ACK cancelu není důkaz nevyplnění. Po úspěchu i chybě následuje
           // právě jedno read-only čtení téže kopie a pozice; write se neopakuje.
           const postCancelStartedAt = performance.now();
@@ -12337,6 +12329,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             );
             return;
           }
+          // Až po důkazu nulového fillu vstupu (12. 10. 2026): kopírkou vlastněné
+          // ochranné příkazy flat followera (pozastavené OSO nohy zrušeného
+          // vstupu, zrcadlený ochranný Stop) jdou pryč stejným flat sweepem,
+          // který nejdřív autoritativně ověří flat. Dřív zůstávaly viset a
+          // důkaz „bez příkazů“ skupinu shodil; zrušit je před důkazem by
+          // vyplněnému followerovi vzalo SL.
+          awaitingCopiedEntries.delete(followerTransitionKey(follower.accountId, event.symbol));
+          await sweepFollowerProtectiveLegs(follower.accountId, event.symbol, clock(), {}, createFlatSweepBudget());
           const currentEpoch = leaderExposureEpoch(event.symbol);
           s1bCanceledZeroFillOrderIds.set(candidates[0], {
             accountId: follower.accountId,
@@ -13761,20 +13761,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           // jinak by se mohla vyplnit později bez dozoru. Risk-redukující
           // cancel smí proběhnout i po DISARM (stejně jako flat sweep).
           const symbol = event.position.symbol;
-          for (const follower of group.followers) {
+          await Promise.all(group.followers.map(async follower => {
             const followerNet = positionsByAccount.get(follower.accountId)?.get(symbol) ?? 0;
-            if (followerNet !== 0) continue;
+            if (followerNet !== 0) return;
             const openCopiedEntry = [...currentRuntime().osoOutbox.values()].some(entry => {
               if (entry.request.accountId !== follower.accountId || entry.request.symbol !== symbol) return false;
               if (!entry.entryBrokerOrderId) return false;
               const parent = liveOrdersByAccount.get(follower.accountId)?.get(entry.entryBrokerOrderId);
               return parent != null && isOpenOrderStatus(parent.status);
             });
-            if (!openCopiedEntry) continue;
+            if (!openCopiedEntry) return;
             awaitingCopiedEntries.delete(followerTransitionKey(follower.accountId, symbol));
             clearPendingFollowerMagnitudeCheck(follower.accountId, symbol);
             await sweepFollowerProtectiveLegs(follower.accountId, symbol, now, {}, createFlatSweepBudget());
-          }
+          }));
         }
         for (const follower of group.followers) {
           const followerNet = positionsByAccount.get(follower.accountId)?.get(event.position.symbol) ?? 0;
@@ -14539,8 +14539,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         admittedLeaderOrders.add(leaderEvent.orderId);
       }
     }
+    // Ne-Market redukce jde rozděleně jen tehdy, když nějaký follower čeká
+    // na kopii vstupu (12. 10. 2026): jeho S1b čtení/cancel nesmí zdržet ani
+    // zablokovat příkaz synchronním followerům.
+    const nonMarketS1bSplit = leaderEvent.orderType !== 'Market'
+      && gate.armed && !gate.shadowMode
+      && group.followers.some(follower => (
+        follower.enabled !== false && follower.mode === 'on-submit'
+        && s1bReadCandidates(leaderEvent, follower).candidates.length > 0
+      ));
     if (
-      leaderEvent.orderType === 'Market'
+      (leaderEvent.orderType === 'Market' || nonMarketS1bSplit)
       && !eventIncreasesExposure
       && leaderReducingQuantityFor(leaderEvent) > 0
       && group.followers.length > 1
@@ -14602,7 +14611,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           && follower.enabled !== false && follower.mode !== 'off'
           && (
             isolationEligibilityState(follower.accountId, leaderEvent.receivedAt) != null
-            || s1bCandidatesFor(leaderEvent, follower).candidates.length > 0
+            || s1bReadCandidates(leaderEvent, follower).candidates.length > 0
           );
         if (needsRead) readFollowers.push(follower);
         else immediateFollowers.push(follower);

@@ -539,14 +539,22 @@ existující ochranu.
   `awaitingCopiedEntry` (čerstvá pending expozice: leader celý vyplněný, kopie
   otevřená a pokrývá přesně zbytek do očekávané pozice) a nefailne; konec kopie
   (cancel/reject/fill) spustí novou kontrolu. Nic se nedokupuje. Když leader
-  dřív snižuje: Market i Limit/Stop výstup jde přes S1b — kopie vstupu se zruší
-  i s pozastavenými OSO nohami, ověří se nulový fill a follower vynechá obchod
-  (suppression allowedNet 0). Výjimka: ochranný Stop za cenou čekajícího Limit
-  vstupu (u longu pod ním) se nemůže vyplnit dřív než vstup, zrcadlí se jako
-  dosud (V12/R12). Leader flat (vlastní SL/TP nohou) zruší otevřený OSO vstup
-  flat followera přes `sweepFollowerProtectiveLegs`. Hlídá test:
-  `tests/copierAwaitingCopiedEntry.test.ts`. Známý limit: po reconnectu je
-  pending expozice prázdná, čekající follower pak vede k incidentu jako dřív.
+  dřív snižuje: Market i Limit/Stop výstup jde přes S1b (`s1bReadCandidates`)
+  — kopie vstupu se zruší, a teprve po důkazu jejího nulového fillu flat sweep
+  zruší kopírkou vlastněné ochranné příkazy followera (pozastavené OSO nohy,
+  zrcadlený Stop); follower vynechá obchod (suppression allowedNet 0). Nohy se
+  nikdy neruší před tím důkazem — kopie se mohla mezitím vyplnit. Ne-Market
+  redukce s čekajícím followerem jde rozděleně (`nonMarketS1bSplit`), aby S1b
+  čekajícího nezdrželo ani nezablokovalo synchronní followery. Výjimka:
+  ochranný Stop za cenou čekajícího Limit vstupu followera bez jakéhokoli fillu
+  se nemůže vyplnit dřív než vstup, zrcadlí se jako dosud (V12/R12). Leader flat
+  (vlastní SL/TP nohou) zruší otevřený OSO vstup flat followera přes
+  `sweepFollowerProtectiveLegs` (souběžně pro všechny). Hlídá test:
+  `tests/copierAwaitingCopiedEntry.test.ts`. Známé limity: částečně vyplněná
+  čekající kopie u ne-Market redukce dál končí incidentem (V12/Z10); po
+  reconnectu je pending expozice prázdná a čekající follower vede k incidentu;
+  jakýkoli fail-closed/DISARM během čekání nechá kopii vstupu v knize (jako
+  před změnou) — risk-redukční zrušení těchto kopií při DISARM je otevřený bod.
 
 ### Pořadí a čerstvost stavu
 
