@@ -170,7 +170,6 @@ import { isSupabaseConfigured, supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
 import { playNativeHapticIfAvailable } from './services/nativeCapabilities';
-import MorningBriefBanner from './components/MorningBriefBanner';
 import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage, reportNativeShellReview, reportNativeShellReviewCount, type NativeReviewRequest } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 import {
@@ -258,7 +257,6 @@ const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: num
   hourly_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   daily_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   calendar: { minW: 4, minH: 5, maxW: 12, maxH: 10 },
-  daily_insight: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   lab_top_leak: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   bt_avg_r: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   bt_confluence_wr: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
@@ -287,7 +285,6 @@ const WIDGET_CONSTRAINTS_XXL: Record<string, { minW: number; minH: number; maxW:
   hourly_edge: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
   daily_edge: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
   calendar: { minW: 6, minH: 5, maxW: 24, maxH: 10 },
-  daily_insight: { minW: 3, minH: 2, maxW: 8, maxH: 4 },
   lab_top_leak: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
   bt_avg_r: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
   bt_confluence_wr: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
@@ -4469,16 +4466,6 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <React.Suspense fallback={<div className="flex-1" />}>
-                  {activePage === 'dashboard' && dashboardMode !== 'backtesting' && loadedUserId && (
-                    <MorningBriefBanner
-                      userId={loadedUserId}
-                      theme={theme}
-                      onOpenCoach={(prompt) => {
-                        setAiInitialPrompt(prompt);
-                        setActivePage('ai');
-                      }}
-                    />
-                  )}
                   {activePage === 'dashboard' && (
                     <Dashboard
                       labTopLeak={labTopLeak}
