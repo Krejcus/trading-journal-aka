@@ -1,3 +1,4 @@
+import { perfDuration } from '../lib/perfTrace';
 import { alphaTradeNativePlugin } from './alphaTradeNativePlugin';
 
 export interface AsyncStorageLike {
@@ -33,8 +34,10 @@ export function createNativeSecureAuthStorage(
   return {
     async getItem(key) {
       let secured: { value: string | null };
+      const startedAt = typeof performance === 'undefined' ? 0 : performance.now();
       try {
         secured = await vault.secureGet({ key });
+        if (startedAt) perfDuration('keychain:get', performance.now() - startedAt);
       } catch (error) {
         if (!isUnavailableNativeVaultError(error)) throw error;
         return legacyStorage.getItem(key);

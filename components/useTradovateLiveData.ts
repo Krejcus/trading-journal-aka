@@ -1,3 +1,4 @@
+import { perfMark } from '../lib/perfTrace';
 import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { createTradovateIntentPrefetch } from '../lib/tradovateIntentPrefetch';
 import { consumeTradovateReads } from '../lib/tradovateReadCoordinator';
@@ -478,10 +479,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       };
       return next;
     });
-    const markSuccess = (connectionId: string) => updateEnrichment(current => ({
+    const markSuccess = (connectionId: string) => (perfMark('live:conn-ready'), updateEnrichment(current => ({
       ...current,
       [connectionId]: { pending: false, lastFullSuccessAt: Date.now(), retryAt: null, failureCount: 0, error: null },
-    }));
+    })));
     const markFailure = (connectionId: string, reason: unknown) => updateEnrichment(current => {
       const previous = current[connectionId] ?? emptyEnrichment();
       const failureCount = previous.failureCount + 1;
@@ -701,6 +702,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       // bootstrap → full: přehled se odkryje jednou, už kompletní. Probe
       // historických reportů jde zvlášť, aby nedržel první data (až 8 s).
       // Připojení, jehož úplné čtení už běží (např. retry), se nespouští znovu.
+      perfMark('live:preflight-start');
       const prestartedFull = startTradovatePreflights(
         cachedConnectionIds.filter(id => Date.now() >= (rateLimitUntilByConnectionRef.current[id] ?? 0)
           && !fullRefreshInFlightRef.current.has(id)),
@@ -720,6 +722,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           connectionEpochRef.current += 1;
           fullRefreshInFlightRef.current.clear();
         }
+        perfMark('live:status');
         setStatus(nextStatus);
         statusRef.current = nextStatus;
         // Fresh authorization revokes removed connections even on warm returns

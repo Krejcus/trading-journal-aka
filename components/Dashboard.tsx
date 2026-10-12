@@ -113,6 +113,7 @@ import MonteCarloLab from './MonteCarloLab';
 import { Responsive as ResponsiveGridLayout, useContainerWidth, verticalCompactor } from 'react-grid-layout';
 import type { Compactor } from 'react-grid-layout/core';
 import type { Layout, LayoutItem } from 'react-grid-layout';
+import { perfMarkOnce } from '../lib/perfTrace';
 
 // react-grid-layout configuration
 const GRID_BREAKPOINTS = { xxl: 1920, lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 };
@@ -1643,6 +1644,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   defaultLayouts,
 }) => {
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => perfMarkOnce('boot:dashboard-paint'));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const isMobileEditing = isMobileEditingProp;
   const setIsMobileEditing = setIsMobileEditingProp ?? (() => {});
 

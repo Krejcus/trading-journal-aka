@@ -1,3 +1,4 @@
+import { perfDuration, perfMark, perfServerTiming, perfSlug } from '../lib/perfTrace';
 import type { TradovateAccountDisplaySnapshot } from '../lib/tradovateAccountDisplayTypes';
 import { recordTradovateBrokerCalls } from '../lib/tradovateApiTelemetry';
 import { supabase } from './supabase';
@@ -178,16 +179,23 @@ const authenticatedRequest = async <T>(path: string, init: RequestInit = {}, rea
     // V Capacitor buildu je origin capacitor://localhost — relativní /api/
     // cesta by skončila v bundlu (vrátí index.html místo API odpovědi).
     // apiUrl() ji v nativním buildu přesměruje na Vercel; web nechává být.
+    const perfName = perfSlug(path);
+    const authStartedAt = performance.now();
+    const authHeader = await authorization();
+    const fetchStartedAt = performance.now();
+    perfDuration(`net:${perfName}:auth`, fetchStartedAt - authStartedAt);
     const response = await fetch(apiUrl(path), {
       ...init,
       credentials: 'same-origin',
       signal: readController?.signal ?? callerSignal,
       headers: {
         Accept: 'application/json',
-        Authorization: await authorization(),
+        Authorization: authHeader,
         ...init.headers,
       },
     });
+    perfDuration(`net:${perfName}:fetch`, performance.now() - fetchStartedAt);
+    perfServerTiming(perfName, response.headers.get('server-timing'));
     const body = await response.json().catch(() => ({})) as { error?: string; retryAfterMs?: number } & T;
     const retryAfterMs = typeof body.retryAfterMs === 'number' ? body.retryAfterMs : null;
     finishTradovateApiRequest(telemetry, response.status, retryAfterMs);
@@ -335,6 +343,8 @@ export async function executeTradovateCopierRelayCommand(
   options: { signal?: AbortSignal } = {},
 ): Promise<LocalCopierAgentCommandResult> {
   const idempotencyKey = crypto.randomUUID();
+  const perfCommand = `relay:${perfSlug(command.type)}`;
+  perfMark(`${perfCommand}:send`);
   const queued = await authenticatedRequest<{
     id: string;
     expiresAt: string;
@@ -345,6 +355,7 @@ export async function executeTradovateCopierRelayCommand(
     body: JSON.stringify({ connectionId, command, idempotencyKey }),
     signal: options.signal,
   });
+  perfMark(`${perfCommand}:${queued.resolution ? 'inline' : 'queued'}`);
   if (queued.resolution) {
     if (queued.resolution.status === 'succeeded' && queued.resolution.result) return queued.resolution.result as LocalCopierAgentCommandResult;
     const details = localCopierAgentErrorDetails(
@@ -373,6 +384,7 @@ export async function executeTradovateCopierRelayCommand(
       `/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}&commandId=${encodeURIComponent(queued.id)}`,
       { signal: options.signal },
     );
+    perfMark(`${perfCommand}:poll`);
     if (result.status === 'succeeded' && result.result) return result.result as LocalCopierAgentCommandResult;
     if (result.status === 'rejected' || result.status === 'expired') {
       const details = localCopierAgentErrorDetails(

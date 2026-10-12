@@ -13,6 +13,7 @@ import { withAttachedScreenshot } from './components/HistoryScreenshotSlot';
 import { withChartNotes, type ChartNote } from './lib/chartNotes';
 import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
+import { perfMark, perfMarkOnce } from './lib/perfTrace';
 import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { calculateStats } from './services/analysis';
@@ -589,7 +590,9 @@ const App: React.FC = () => {
 
     setInitStatus("Kontrola přihlášení...");
     const initialAuthEpoch = authEpochRef.current;
+    perfMark('boot:auth-start');
     supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
+      perfMark('boot:auth-done');
       if (authEpochRef.current !== initialAuthEpoch) return;
       if (activeSession) {
         if (sessionRef.current?.user.id !== activeSession.user.id) {
@@ -804,6 +807,7 @@ const App: React.FC = () => {
   }, []);
 
   const runCopierJournalSync = useCallback(async (force = false) => {
+    perfMark('journal:sync-call');
     const userId = session?.user?.id;
     if (!userId || copierJournalSyncBusyRef.current) return;
     const isCurrentSession = captureSessionRequest(userId);
@@ -1206,6 +1210,7 @@ const App: React.FC = () => {
     } catch { /* sessionStorage unavailable — URL still works */ }
     return requestedByUrl || requestedByLoginRoundTrip;
   });
+  useEffect(() => { perfMark(`nav:${activePage}`); }, [activePage]);
   const tradovateLiveEnabled = activePage === 'live'
     || (activePage === 'accounts' && dashboardMode !== 'backtesting');
   const tradovateLive = useTradovateLiveData(
@@ -1249,6 +1254,7 @@ const App: React.FC = () => {
   const [liveIntentPending, setLiveIntentPending] = useState(false);
   const prefetchLiveData = tradovateLive.prefetch;
   const prepareLiveNavigation = useCallback((options?: { speculative?: boolean }) => {
+    perfMark(options?.speculative ? 'live:prepare-menu' : 'live:prepare');
     if (tradovateLiveEnabled || !canAccess('live', currentUser.role)) return;
     void loadLiveDesk().catch(() => { /* Normal navigation handles a failed chunk load. */ });
     prefetchLiveData();
@@ -2063,7 +2069,9 @@ const App: React.FC = () => {
       safeSetItem('alphatrade_last_session_user', session.user.id);
 
       // --- CACHE-FIRST LOADING: Instant from IndexedDB, then background refresh ---
+      perfMark('boot:cache-start');
       const cached = await storageService.getCachedDashboardData(session.user.id).catch(() => null);
+      perfMark(cached ? 'boot:cache-done' : 'boot:cache-miss');
       if (!isCurrentSession()) {
         clearTimeout(safetyTimer);
         return;
@@ -2106,7 +2114,9 @@ const App: React.FC = () => {
         storageService.getConversations().catch(() => { /* silent */ });
 
         // Refresh complete contents, including edits that preserve row identity.
+        perfMark('boot:refresh-start');
         storageService.getDashboardData().then(fresh => {
+          perfMark('boot:refresh-done');
           if (!isCurrentSession()) return;
           setTrades(prev => reconcileDashboardRows(prev, fresh.trades));
           setAccounts(prev => reconcileDashboardRows(prev, fresh.accounts));
@@ -3962,6 +3972,7 @@ const App: React.FC = () => {
   if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb) || renderedUserMismatch) {
     return <QuantumLoader theme={theme} />;
   }
+  if (session) perfMarkOnce('boot:splash-end');
 
   if (!session) {
     return <Auth onLogin={(user) => { }} theme={theme} />;

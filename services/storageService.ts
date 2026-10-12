@@ -27,6 +27,7 @@ import { journalReviewPatch } from '../lib/journalReviewPatch';
 import { readJournalInbox, readJournalRetainedReview, type JournalInboxKind } from './journalReviewInbox';
 import { readJournalSourceStatus } from './journalSourceStatus';
 import { loadTradovateJournalSourceStatus } from './tradovateOAuthConnection';
+import { perfMark } from '../lib/perfTrace';
 
 const embedTrade = (trade: Trade) => void import('./embeddingService').then(module => module.embedTrade(trade));
 // All ordinary trade saves remove both private ledgers. Each has a dedicated
@@ -240,6 +241,7 @@ export const storageService = {
     // the full call took 6 s / 12.7 MB and a phone could not finish it.
     const result = preferPaged ? null : await supabase.rpc('get_dashboard_data_light_v1')
       .abortSignal(signal ?? AbortSignal.timeout(DASHBOARD_RPC_TIMEOUT_MS));
+    perfMark('dash:rpc-done');
     const data = result?.data;
     const error = result?.error;
     if (error) console.error('[RPC] get_dashboard_data_light_v1 error:', error.code, error.message);
@@ -386,8 +388,11 @@ export const storageService = {
     // full dashboard refreshes. Cache failures must never turn a successful
     // server response into an application error.
     const userId = raw.user?.id;
+    perfMark('dash:mapped');
     trades = await hydratePrivateJournalFacts(trades, userId ?? null, signal);
+    perfMark('dash:journal-facts-done');
     trades = await hydratePrivateTradeNotes(trades, userId ?? null, signal);
+    perfMark('dash:notes-done');
     if (signal?.aborted) throw new Error('dashboard-read-invalidated');
     if (userId && user) {
       const cachedAt = Date.now();

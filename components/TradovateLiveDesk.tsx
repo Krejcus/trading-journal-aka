@@ -1,3 +1,4 @@
+import { perfMark, perfMarkOnce } from '../lib/perfTrace';
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { createCopierForegroundPoller, isCopierStatusFresh } from '../lib/copierForegroundPoller';
 import { copierRelayObservedAt, newestCopierRelaySnapshot } from '../lib/copierRelayStatusPoll';
@@ -393,6 +394,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (statusIdentityRef.current !== userId) return false;
     if (commandSequence != null && !statusAckFenceRef.current.accept(commandSequence)) return false;
     if (!shouldAcceptCopierStatus(status, acceptedAgentStatusRef.current)) return false;
+    perfMarkOnce('live:copier-status-first');
     acceptedAgentStatusRef.current = status;
     setAgentStatus(status);
     setAgentStatusObservedAt(observedAt);
@@ -1077,6 +1079,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     };
     // Popředí = viditelný dokument A (v iOS shellu) aktivní appka. Čtení
     // zahájené před uspáním poller po návratu nepřijme (hidden generation).
+    perfMark('live:poll-start');
     const poller = createCopierForegroundPoller({
       visible: isAppForeground,
       read: poll,
@@ -1176,7 +1179,10 @@ acceptAgentStatus((await executeAgent({
   const coldReadsPending = liveColdReadsPending(
     coldRevealDoneRef.current, liveData != null, connectedConnectionIds, live.dataEnrichmentByConnection,
   );
-  if (liveData != null && (!coldReadsPending || coldRevealCapReached)) coldRevealDoneRef.current = true;
+  if (liveData != null && (!coldReadsPending || coldRevealCapReached)) {
+    if (!coldRevealDoneRef.current) perfMarkOnce('live:reveal');
+    coldRevealDoneRef.current = true;
+  }
   // Zapnutá kopírka: přehled s vypnutím (OFF, kill) se nedrží ani chvíli.
   const holdColdReveal = coldReadsPending && !coldRevealCapReached && agentStatus?.controller.armed !== true;
   useEffect(() => {
