@@ -117,7 +117,10 @@ describe('follower čeká na vyplnění zkopírovaného vstupu (varianta 1)', ()
   it('leader vyplněný, kopie followera v knize: žádný fail-closed, kopírka jede dál', async () => {
     const { controller, audit, followerEntry } = await leaderFilledFollowerWaiting();
     try {
-      expect(controller.status()).toMatchObject({ armed: true, lastError: null, divergentAccounts: [] });
+      expect(controller.status()).toMatchObject({
+        armed: true, lastError: null, divergentAccounts: [],
+        awaitingCopiedEntries: [{ accountId: 200, symbol: SYM, since: expect.any(Number) }],
+      });
       expect(followerEntry.status).toBe('working');
       expect(audit.mock.calls.flat(2)).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: 'skipped', accountId: 200, reason: expect.stringContaining('čeká na vyplnění zkopírovaného vstupu') }),
@@ -140,7 +143,7 @@ describe('follower čeká na vyplnění zkopírovaného vstupu (varianta 1)', ()
       broker.setPosition(200, SYM, 5);
       broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: SYM, netQuantity: 5 } });
       await settle(controller);
-      expect(controller.status()).toMatchObject({ armed: true, lastError: null, divergentAccounts: [] });
+      expect(controller.status()).toMatchObject({ armed: true, lastError: null, divergentAccounts: [], awaitingCopiedEntries: [] });
     } finally {
       controller.stop();
     }
@@ -163,7 +166,7 @@ describe('follower čeká na vyplnění zkopírovaného vstupu (varianta 1)', ()
       expect((await broker.findOrderById(200, followerEntry.brokerOrderId)).order?.status).toBe('canceled');
       expect(broker.orders().filter(order => order.accountId === 200 && order.status === 'working')).toEqual([]);
       expect((await broker.listPositions(200)).find(position => position.symbol === SYM)?.netQuantity ?? 0).toBe(0);
-      expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(controller.status()).toMatchObject({ armed: true, lastError: null, awaitingCopiedEntries: [] });
     } finally {
       controller.stop();
     }

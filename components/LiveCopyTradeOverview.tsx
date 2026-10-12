@@ -21,7 +21,7 @@ import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
   RefreshCw, Inbox, RotateCcw, X, Save, Trash2, Power,
   EyeOff, AlertTriangle, CheckCircle2, SlidersHorizontal, ShieldAlert, ShieldCheck, Clock3,
-  Lock, Ban, Unplug, ChevronLeft, Check,
+  Lock, Ban, Unplug, ChevronLeft, Check, Clock,
 } from 'lucide-react';
 import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
@@ -466,6 +466,8 @@ interface Props {
   followerParticipation?: CopierControllerStatus['followerParticipation'];
   /** Followeři „mimo synchron“ v aktuální leader epizodě (etapa 2). */
   accountSyncPauses?: CopierControllerStatus['accountSyncPauses'];
+  /** Followeři, jejichž kopie vstupu ještě čeká v knize (12. 10. 2026). */
+  awaitingCopiedEntries?: CopierControllerStatus['awaitingCopiedEntries'];
   /** Worker umí „Zapnout bez tohoto účtu“ (follower-exclude-exposure-v1). */
   followerExclusionSupported?: boolean;
   /** Klasifikace workeru: vypnutí followeři, jejichž vlastní expozici kopírka neřídí. */
@@ -541,6 +543,26 @@ const useAccountSyncPause = (row: { accountId?: number | null; isLeader: boolean
   const pauses = React.useContext(AccountSyncPauseContext);
   return row.accountId == null || row.isLeader || row.mode === 'off' ? undefined : pauses.get(row.accountId);
 };
+
+/**
+ * Follower čeká na vyplnění své kopie vstupu (leader se vyplnil dřív, 12. 10.
+ * 2026). Není to divergence ani chyba: když leader skončí dřív, kopie se
+ * zruší a účet obchod vynechá. Plní se jen kolem zapnuté execution skupiny.
+ */
+type AwaitingCopiedEntry = NonNullable<CopierControllerStatus['awaitingCopiedEntries']>[number];
+const EMPTY_AWAITING_ENTRIES: ReadonlyMap<number, AwaitingCopiedEntry> = new Map();
+const AwaitingCopiedEntryContext = React.createContext<ReadonlyMap<number, AwaitingCopiedEntry>>(EMPTY_AWAITING_ENTRIES);
+const useAwaitingCopiedEntry = (row: { accountId?: number | null; isLeader: boolean; mode?: string }) => {
+  const awaiting = React.useContext(AwaitingCopiedEntryContext);
+  return row.accountId == null || row.isLeader || row.mode === 'off' ? undefined : awaiting.get(row.accountId);
+};
+const AWAITING_ENTRY_DETAIL = 'Leaderův vstup se vyplnil dřív než kopie. Kopie čeká v knize se svým SL/TP; '
+  + 'když leader skončí dřív, kopie se zruší a účet tento obchod vynechá.';
+const AwaitingEntryPill = () => (
+  <span title={AWAITING_ENTRY_DETAIL} className="inline-flex items-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/[0.08] px-2 py-1 text-[10px] font-black leading-none text-sky-600">
+    <Clock aria-hidden="true" size={10} strokeWidth={2.5} /> ČEKÁ NA VSTUP
+  </span>
+);
 
 /** Uživatelé, jejichž cloudová knihovna skupin se v této session už načetla.
  * Návrat na LIVE pak nezačíná ve stavu „loading“ (šedé „Přidat skupinu“);
@@ -800,6 +822,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   followerCuts = [],
   followerParticipation = [],
   accountSyncPauses = [],
+  awaitingCopiedEntries = [],
   followerExclusionSupported = false,
   excludedForeignFollowers,
   transportResume = null,
@@ -1114,6 +1137,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       ? new Map(accountSyncPauses.map(pause => [pause.accountId, pause]))
       : EMPTY_SYNC_PAUSES
   ), [accountSyncPauses]);
+  const awaitingEntriesByAccount = useMemo<ReadonlyMap<number, AwaitingCopiedEntry>>(() => (
+    awaitingCopiedEntries && awaitingCopiedEntries.length > 0
+      ? new Map(awaitingCopiedEntries.map(entry => [entry.accountId, entry]))
+      : EMPTY_AWAITING_ENTRIES
+  ), [awaitingCopiedEntries]);
   // B1: zavírání followera do konce obchodu doběhne na pozadí. Selhání
   // (`closed === false`) musí být vidět hned, ne jen v řádku účtu.
   const seenTradeCutCloseRef = useRef(new Map<string, ActiveFollowerCut['closed']>());
@@ -2217,6 +2245,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               const armed = selected && copierArmed;
               return (
                 <AccountSyncPauseContext.Provider key={group.id} value={armed ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
+                <AwaitingCopiedEntryContext.Provider value={armed ? awaitingEntriesByAccount : EMPTY_AWAITING_ENTRIES}>
                 <CompactGroupCard
                   key={group.id}
                   group={group}
@@ -2266,6 +2295,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                     : null}
                   {...compactGroupActions(group)}
                 />
+                </AwaitingCopiedEntryContext.Provider>
                 </AccountSyncPauseContext.Provider>
               );
             })}
@@ -2310,6 +2340,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         : undefined}
                     >
                       <AccountSyncPauseContext.Provider value={armed ? syncPausesByAccount : EMPTY_SYNC_PAUSES}>
+                      <AwaitingCopiedEntryContext.Provider value={armed ? awaitingEntriesByAccount : EMPTY_AWAITING_ENTRIES}>
                       <GroupRow
                         group={group} rows={rows} armed={armed}
                         dailyPnlPending={dailyPnlPending}
@@ -2430,6 +2461,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                           </div>
                         </td>
                       </tr>
+                      </AwaitingCopiedEntryContext.Provider>
                       </AccountSyncPauseContext.Provider>
                     </tbody>
                   );
@@ -3652,6 +3684,8 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   // Pauza „mimo synchron“ ustoupí silnějším stavům (ruční vyřazení, DLL, breach).
   const syncPauseRaw = useAccountSyncPause(row);
   const syncPause = !tradeCut && (eligibility?.state ?? 'active') === 'active' ? syncPauseRaw : undefined;
+  const awaitingEntryRaw = useAwaitingCopiedEntry(row);
+  const awaitingEntry = !tradeCut && !syncPause && (eligibility?.state ?? 'active') === 'active' ? awaitingEntryRaw : undefined;
   const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null || syncPause != null;
   // Stejná pravidla čerstvosti jako desktop: staré čtení nesmí nést zelený
   // štít ani tvářit se jako „flat“.
@@ -3680,6 +3714,10 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
     : syncPause
     ? <p title={accountSyncPauseReasonText(syncPause)} className={`text-[10px] font-semibold leading-tight ${hasOpenPositions ? 'text-rose-600' : 'text-amber-600'}`}>
         {accountSyncPauseNoteText(hasOpenPositions)}
+      </p>
+    : awaitingEntry
+    ? <p title={AWAITING_ENTRY_DETAIL} className="text-[10px] font-semibold leading-tight text-sky-600">
+        Čeká na vyplnění kopie vstupu
       </p>
     : compactRejection
     ? <RejectedExecutionStatus
@@ -3742,7 +3780,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
                 ? crownInSlot ? null : <span title="Leader účet" className="flex shrink-0 text-amber-500"><Crown aria-label="Leader účet" size={12} strokeWidth={2.6} /></span>
                 /* Bez řádku rizika (účet mimo snapshot) zůstává násobek tady. */
                 : risk ? null : multiplierBadge}
-              {!row.synced && <span title="Nesedí s leaderem" className="shrink-0 text-amber-500">⚠</span>}
+              {!row.synced && !awaitingEntry && <span title="Nesedí s leaderem" className="shrink-0 text-amber-500">⚠</span>}
             </span>
             {/* DLL a DD jsou jediné údaje o vzdálenosti od limitů propky —
                 na telefonu tichý řádek pod jménem, barvy jako na desktopu.
@@ -5325,6 +5363,8 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   // „Ověřuji“ drží řádek se štítkem už předem — DLL do něj jen naskočí.
   const syncPauseRaw = useAccountSyncPause(row);
   const syncPause = !tradeCut && eligibilityState === 'active' ? syncPauseRaw : undefined;
+  const awaitingEntryRaw = useAwaitingCopiedEntry(row);
+  const awaitingEntry = !tradeCut && !syncPause && eligibilityState === 'active' ? awaitingEntryRaw : undefined;
   const rowHoldsPosition = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const stateIsDeviation = tradeCut != null || syncPause != null || eligibilityState !== 'active' || accountUnavailable || !live;
   const stateTone: AccountStateTone = eligibilityState === 'breached'
@@ -5373,7 +5413,9 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
                 <Crown size={14} strokeWidth={2.4} />
               </span>
             )}
-            {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
+            {awaitingEntry
+              ? <AwaitingEntryPill />
+              : !row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
             </span>
             {stateIsDeviation ? (
               <span className="mt-1 flex flex-wrap items-center gap-1.5 pl-3.5">

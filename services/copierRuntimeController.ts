@@ -206,6 +206,12 @@ export interface CopierControllerStatus {
     reason: string;
     pausedAt: number;
   }>;
+  /**
+   * Followeři, jejichž kopie vstupu ještě čeká v knize, zatímco leaderův
+   * příkaz je celý vyplněný (12. 10. 2026). Nejde o divergenci: když leader
+   * skončí dřív, kopie se zruší a follower obchod vynechá.
+   */
+  awaitingCopiedEntries?: Array<{ accountId: number; symbol: string; since: number }>;
   /** Durable incident čekající na lidské potvrzení v ON (8. 10. 2026). */
   manualRecovery?: { id: string; at: number; reason: string } | null;
   /**
@@ -2226,7 +2232,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * leaderův limit se vyplnil hned, kopie followera dorazila o pár stovek ms
    * později a cena mezitím utekla. Kopie zůstává v knize; není to divergence.
    */
-  const awaitingCopiedEntries = new Map<string, { since: number }>();
+  const awaitingCopiedEntries = new Map<string, { since: number; accountId: number; symbol: string }>();
   const leaderFlatGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const leaderFlatGuardGenerationRetries = new Map<string, number>();
   const LEADER_FLAT_GENERATION_RETRY_LIMIT = 3;
@@ -5425,7 +5431,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (leaderNet !== 0 && awaitingCopiedEntry(accountId, symbol, followerNet, expectedFollowerNet)) {
         if (!awaitingCopiedEntries.has(key)) {
-          awaitingCopiedEntries.set(key, { since: clock() });
+          awaitingCopiedEntries.set(key, { since: clock(), accountId, symbol });
           options.onAudit?.([{
             at: clock(),
             leaderEventId: `follower-awaiting-entry:${accountId}:${symbol}:${clock()}`,
@@ -14014,6 +14020,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             scheduleFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
           } else {
             clearPendingFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
+            // V6: kopie vstupu se vyplnila (nebo leader skončil) — už nečeká.
+            awaitingCopiedEntries.delete(followerTransitionKey(follower.accountId, event.position.symbol));
           }
         }
       }
@@ -14073,6 +14081,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             scheduleFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
           } else {
             clearPendingFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
+            awaitingCopiedEntries.delete(followerTransitionKey(follower.accountId, event.position.symbol));
           }
           // Incident 5. 10.: Position followera téhož přírůstku dorazila dřív
           // než leaderova a tehdy se nedala potvrdit. Dodatečné potvrzení
@@ -17615,6 +17624,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         accountSyncPauses: retiredGroup ? [] : (currentRuntime().state.safety.accountSyncPauses ?? [])
           .filter(pause => activeAccountSyncPause(pause.accountId, pause.symbol) === pause)
           .map(({ accountId, symbol, reasonCode, reason, pausedAt }) => ({ accountId, symbol, reasonCode, reason, pausedAt })),
+        awaitingCopiedEntries: retiredGroup || !gate.armed ? [] : [...awaitingCopiedEntries.values()]
+          .map(({ accountId, symbol, since }) => ({ accountId, symbol, since })),
         armPreparation: (() => {
           const blocker = armPreparationBlocker();
           return {
