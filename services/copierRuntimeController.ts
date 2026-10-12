@@ -12187,6 +12187,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     eventTail = eventTail.then(settleS1bPostCancelCleanups).catch(reason => failClosed(reason));
   };
 
+  /** Přesný order lookup s deadline; timeout nebo chyba = žádný důkaz (null). */
+  const boundedOrderLookup = async (accountId: number, brokerOrderId: string): Promise<BrokerOrder | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const lookup = await Promise.race([
+        broker.findOrderById(accountId, brokerOrderId),
+        new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), FLAT_SWEEP_CANCEL_TIMEOUT_MS); }),
+      ]);
+      return lookup?.completeness === 'authoritative' ? lookup.order : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   /**
    * V2 (12. 10. 2026): po vypnutí kopírky (incident, ruční DISARM, Kontrola
    * pozic, obnova po výpadku) nesmí kopie vstupu, na kterou follower čeká,
@@ -12231,15 +12246,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // streamu ještě pracují bez fillu.
     const working = candidates.filter(candidate => {
       const live = liveOrdersByAccount.get(candidate.accountId)?.get(candidate.brokerOrderId);
-      return live != null && isOpenOrderStatus(live.status) && live.filledQuantity === 0;
+      // Leader příkaz, o kterém stream ví, že není vyplněný, REST nečte.
+      const leaderStreamStatus = observedOrderStatusesByAccount.get(leaderAccountId)?.get(candidate.leaderOrderId);
+      return live != null && isOpenOrderStatus(live.status) && live.filledQuantity === 0
+        && (leaderStreamStatus == null || leaderStreamStatus === 'filled')
+        // Jen flat follower: z části vyplněná kopie není „čekající“.
+        && (positionsByAccount.get(candidate.accountId)?.get(candidate.symbol) ?? 0) === 0;
     });
     for (const candidate of working) {
       if (stopped || gate.armed || !gate.connected || gate.killSwitch) return;
-      const leaderLookup = await broker.findOrderById(leaderAccountId, candidate.leaderOrderId).catch(() => null);
-      const leaderOrder = leaderLookup?.completeness === 'authoritative' ? leaderLookup.order : null;
+      const leaderOrder = await boundedOrderLookup(leaderAccountId, candidate.leaderOrderId);
       if (!leaderOrder || leaderOrder.status !== 'filled' || leaderOrder.filledQuantity !== leaderOrder.quantity) continue;
-      const followerLookup = await broker.findOrderById(candidate.accountId, candidate.brokerOrderId).catch(() => null);
-      const followerOrder = followerLookup?.completeness === 'authoritative' ? followerLookup.order : null;
+      const followerOrder = await boundedOrderLookup(candidate.accountId, candidate.brokerOrderId);
       if (
         !followerOrder
         || !isOpenOrderStatus(followerOrder.status)
@@ -12258,8 +12276,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       } catch (reason) {
         cancelError = errorOf(reason);
       }
-      const after = await broker.findOrderById(candidate.accountId, candidate.brokerOrderId).catch(() => null);
-      const afterOrder = after?.completeness === 'authoritative' ? after.order : null;
+      const afterOrder = await boundedOrderLookup(candidate.accountId, candidate.brokerOrderId);
       const zeroFillTerminal = afterOrder != null
         && (afterOrder.status === 'canceled' || afterOrder.status === 'rejected')
         && afterOrder.filledQuantity === 0;
@@ -12332,8 +12349,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         && parent.filledQuantity > 0 && parent.filledQuantity < parent.quantity;
     });
     for (const entry of remainders) {
-      const leaderLookup = await broker.findOrderById(leaderAccountId, entry.leaderEntryOrderId).catch(() => null);
-      const leaderOrder = leaderLookup?.completeness === 'authoritative' ? leaderLookup.order : null;
+      const leaderOrder = await boundedOrderLookup(leaderAccountId, entry.leaderEntryOrderId);
       if (!leaderOrder || leaderOrder.status !== 'filled') continue;
       const brokerOrderId = entry.entryBrokerOrderId!;
       let cancelError: Error | null = null;
@@ -12342,8 +12358,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       } catch (reason) {
         cancelError = errorOf(reason);
       }
-      const after = await broker.findOrderById(accountId, brokerOrderId).catch(() => null);
-      const afterOrder = after?.completeness === 'authoritative' ? after.order : null;
+      const afterOrder = await boundedOrderLookup(accountId, brokerOrderId);
       const remainderGone = afterOrder != null && !isOpenOrderStatus(afterOrder.status);
       options.onAudit?.([{
         at: clock(),
@@ -12387,7 +12402,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // V5: rozhodnutí stojí na cache pozice a fillu; nezpracovaný obchodní
       // event followera (např. právě dorazivší částečný fill) ji může
       // předbíhat. Pak rozhodne autoritativní S1b čtení.
-      if ((pendingTradeIngressByAccount.get(follower.accountId) ?? 0) > 0) return false;
+      if ((pendingTradeIngressByKey.get(`${follower.accountId}:symbol:${event.symbol}`) ?? 0) > 0) return false;
       if (event.orderType !== 'Stop' || event.stopPrice == null) return false;
       const pendingEntry = liveOrdersByAccount.get(follower.accountId)?.get(followerOrderId);
       if (!pendingEntry || pendingEntry.orderType !== 'Limit' || pendingEntry.limitPrice == null) return false;
