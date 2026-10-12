@@ -256,6 +256,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-12 — iPhone: měření a zrychlení startu a LIVE; odstranění AI insightu a briefu (Claude)
+- Měřeno přímo na iPhonu (značky `AT-PERF` do syslogu přes kabel, `scripts/ios/perf-measure.sh`
+  + `perf-report.mjs`; časová osa požadavků přes Web Inspector). Hlavní příčiny: auth-js četl
+  session z Keychainu 65–120× při startu pod zámkem (jednotlivé dotazy čekaly až 4,6 s), start
+  zahltil síť telefonu (obnova dashboardu 6 MB, deník, AI funkce), relay stav kopírky jde
+  Vercel iad1 ↔ Supabase eu-north-1 (4 dotazy za sebou).
+- Nasazeno (`5ed33f10`): paměťové zrcadlo Keychain session, souběžné čtení mezipaměti s
+  přihlášením a snapshot jen jako záloha, přednačtení Dashboardu, odklad LIVE chunku a
+  widget/Live Activity registrace, přednost LIVE před obnovou dashboardu a deníkem (max 6 s),
+  stabilní klíč seznamu připojení pro poller (oponent kopírky: OK s výhradami, zapracováno),
+  CORS Max-Age 600 a Server-Timing na relay. LIVE studený start: přehled 7,6 → 1,9–2,9 s,
+  stav kopírky 7,5–8,3 → 3,2–7,4 s.
+- AI „Insight Dne“ a ranní brief od 31. 8. vždy vracely 502 a chyba se necachovala → volání
+  při každém startu. Na Filipův pokyn odstraněno z appky (`d0d5967b`, dlaždice se filtruje
+  z uložených rozvržení) a edge funkce `generate-insight` a `morning-brief` smazány ze
+  Supabase. Tabulka `daily_insights` zůstává (čte ji AI coach). Nové sestavení v iPhonu.
+- Otevřené: přesun relay funkcí do regionu u DB (arn1) — čeká na Filipovo rozhodnutí;
+  obnova dashboardu stahuje 6 MB (delta sync); ostatní AI funkce mohou mít stejnou 502 příčinu.
+
 ### 2026-10-11 — Oponent jádra kopírky, rychlejší dashboard, přepnutí účtu A→B (Claude)
 
 Větev `claude/copier-critic-and-speed-20261008` (práce z 8. 10.) sloučena
