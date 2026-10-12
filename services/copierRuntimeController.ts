@@ -10047,7 +10047,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const event = { ...pending, orderType: order.orderType, quantity: order.quantity,
       stopPrice: order.stopPrice, limitPrice: order.limitPrice };
     const adjusted = await cutAwareDispatchFor(event, false);
-    if (adjusted.unsafeDivergenceAccounts.length > 0) throw new Error('Samostatný SL: neověřená follower expozice');
+    // V4 (12. 10. 2026): SL je čistě risk-redukující (ověřeno výše), takže ho
+    // ověření followeři dostanou i vedle neověřeného; ten je v ineligible a
+    // nic nedostane. Fail-closed až po jejich dispatchi.
+    const unsafeStopAccounts = adjusted.unsafeDivergenceAccounts;
     const result = await processor.process({ event, group: adjusted.dispatchGroup,
       context: { ...gate, now: clock(), sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
         stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
@@ -10061,6 +10064,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     rememberExitOnlyReservations(adjusted.exitOnlyAccounts, result.plan, result.audit);
     if (result.audit.length > 0) options.onAudit?.(result.audit);
     await failClosedOnCriticalAudit(result.audit);
+    if (unsafeStopAccounts.length > 0) {
+      throw new Error(`Samostatný SL: neověřená follower expozice (účty ${unsafeStopAccounts.join(', ')})`);
+    }
     return true;
   };
 
@@ -12131,17 +12137,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     leaderEntryOrderId: string | undefined,
   ): void => {
     const liveArmed = gate.armed && !gate.shadowMode;
+    const outcome: { failure?: { error: Error; flatConfirmed: boolean } } = {};
+    // V5: sweep startuje hned po důkazu nulového fillu (zrcadlený stop nad
+    // flat followerem nesmí čekat na dispatch ostatních); na jeho konec a
+    // na důkaz suppression se čeká až po dispatchi.
+    const sweep = sweepFollowerProtectiveLegs(
+      accountId,
+      symbol,
+      clock(),
+      {},
+      createFlatSweepBudget(),
+      (error, flatConfirmed) => { outcome.failure = { error, flatConfirmed }; },
+    ).catch(reason => { outcome.failure = { error: errorOf(reason), flatConfirmed: false }; });
     s1bPostCancelCleanups.push(async () => {
-      const outcome: { failure?: { error: Error; flatConfirmed: boolean } } = {};
       try {
-        await sweepFollowerProtectiveLegs(
-          accountId,
-          symbol,
-          clock(),
-          {},
-          createFlatSweepBudget(),
-          (error, flatConfirmed) => { outcome.failure = { error, flatConfirmed }; },
-        );
+        await sweep;
         if (
           !outcome.failure
           && (!leaderEntryOrderId
@@ -12293,6 +12303,64 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   }
 
   /**
+   * V3 (12. 10. 2026): leader skončil, follower má kopii vstupu vyplněnou jen
+   * z části (jeho TP se ve frontě nevyplnil spolu s leaderovým). Zbytek
+   * kopie by se mohl dobrat později a zvětšit pozici, kterou leader už nemá.
+   * Zruší se jen zbytek přesné lineage z durable OSO outboxu, když broker
+   * autoritativně hlásí leaderův vstup vyplněný; pozici followera dál chrání
+   * jeho nohy a uzavře ji leader-flat guard. Jediný cancel bez retry.
+   */
+  const cancelPartialCopiedEntryRemainder = async (
+    accountId: number,
+    symbol: string,
+    previousLeaderNet: number,
+  ): Promise<void> => {
+    const leaderAccountId = group.leaderAccountId;
+    if (leaderAccountId == null || stopped || !gate.connected || gate.killSwitch) return;
+    const followerNet = positionsByAccount.get(accountId)?.get(symbol) ?? 0;
+    if (followerNet === 0 || Math.sign(followerNet) !== Math.sign(previousLeaderNet)) return;
+    const remainders = [...currentRuntime().osoOutbox.values()].filter(entry => {
+      if (entry.request.accountId !== accountId || entry.request.symbol !== symbol || !entry.entryBrokerOrderId) return false;
+      const parent = liveOrdersByAccount.get(accountId)?.get(entry.entryBrokerOrderId);
+      return parent != null && isOpenOrderStatus(parent.status)
+        && parent.filledQuantity > 0 && parent.filledQuantity < parent.quantity;
+    });
+    for (const entry of remainders) {
+      const leaderLookup = await broker.findOrderById(leaderAccountId, entry.leaderEntryOrderId).catch(() => null);
+      const leaderOrder = leaderLookup?.completeness === 'authoritative' ? leaderLookup.order : null;
+      if (!leaderOrder || leaderOrder.status !== 'filled') continue;
+      const brokerOrderId = entry.entryBrokerOrderId!;
+      let cancelError: Error | null = null;
+      try {
+        await withFlatSweepCancelDeadline(accountId, brokerOrderId, () => broker.cancelOrder(accountId, brokerOrderId));
+      } catch (reason) {
+        cancelError = errorOf(reason);
+      }
+      const after = await broker.findOrderById(accountId, brokerOrderId).catch(() => null);
+      const afterOrder = after?.completeness === 'authoritative' ? after.order : null;
+      const remainderGone = afterOrder != null && !isOpenOrderStatus(afterOrder.status);
+      options.onAudit?.([{
+        at: clock(),
+        leaderEventId: `partial-entry-remainder-${brokerOrderId}`,
+        accountId,
+        brokerOrderId,
+        kind: remainderGone ? 'canceled' : 'cancel-failed',
+        reason: remainderGone
+          ? `leader skončil: zbytek z části vyplněné kopie vstupu se zrušil (vyplněno ${afterOrder!.filledQuantity}/${afterOrder!.quantity})`
+          : 'leader skončil: zbytek z části vyplněné kopie vstupu se nepodařilo prokazatelně zrušit'
+            + (cancelError ? ` (${cancelError.message})` : ''),
+      }]);
+      if (!remainderGone) {
+        const error = new Error(
+          `Zbytek kopie vstupu ${brokerOrderId} na účtu ${accountId} po konci leadera dál pracuje`,
+        );
+        if (gate.armed) failClosed(error);
+        else options.onError?.(error);
+      }
+    }
+  };
+
+  /**
    * Kopie vstupu, které S1b u tohoto redukujícího leader příkazu zruší
    * (12. 10. 2026). Market: všechny kandidáty jako dosud. Ne-Market: jen
    * kopie celé vyplněného leader příkazu (follower čeká) — kromě ochranného
@@ -12310,6 +12378,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // nad částečnou pozicí followera přehedgoval. Částečná kopie navíc končí
       // v S1b jako unsafe; obě podmínky jsou pojistka do hloubky.
       if (s1b.followerNet !== 0) return false;
+      // V5: rozhodnutí stojí na cache pozice a fillu; nezpracovaný obchodní
+      // event followera (např. právě dorazivší částečný fill) ji může
+      // předbíhat. Pak rozhodne autoritativní S1b čtení.
+      if ((pendingTradeIngressByAccount.get(follower.accountId) ?? 0) > 0) return false;
       if (event.orderType !== 'Stop' || event.stopPrice == null) return false;
       const pendingEntry = liveOrdersByAccount.get(follower.accountId)?.get(followerOrderId);
       if (!pendingEntry || pendingEntry.orderType !== 'Limit' || pendingEntry.limitPrice == null) return false;
@@ -13969,7 +14041,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           const symbol = event.position.symbol;
           await Promise.all(group.followers.map(async follower => {
             const followerNet = positionsByAccount.get(follower.accountId)?.get(symbol) ?? 0;
-            if (followerNet !== 0) return;
+            if (followerNet !== 0) {
+              await cancelPartialCopiedEntryRemainder(follower.accountId, symbol, previousNet);
+              return;
+            }
             const openCopiedEntry = [...currentRuntime().osoOutbox.values()].some(entry => {
               if (entry.request.accountId !== follower.accountId || entry.request.symbol !== symbol) return false;
               if (!entry.entryBrokerOrderId) return false;

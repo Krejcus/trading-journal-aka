@@ -466,4 +466,72 @@ describe('follower čeká na vyplnění zkopírovaného vstupu (varianta 1)', ()
       controller.stop();
     }
   });
+
+  it('z části vyplněný follower, leader skončí TP a followerův TP ne: zbytek kopie vstupu se zruší (V3)', async () => {
+    const { broker, controller, followerEntry } = await leaderFilledFollowerWaiting();
+    try {
+      fillFollowerEntry(broker, followerEntry, 2);
+      await settle(controller);
+      expect(controller.status().armed).toBe(true);
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'target', parentOrderId: 'entry', side: 'Sell', orderType: 'Limit',
+        limitPrice: 31_233.25, status: 'filled', filledQuantity: 5, sourceVersion: '3:Filled',
+      }) });
+      broker.emitEvent({ type: 'fill', fill: {
+        fillId: 'leader-tp', tag: '', brokerOrderId: 'target', accountId: 100, symbol: SYM,
+        side: 'Sell', quantity: 5, price: 31_233.25, filledAt: 4,
+      } });
+      broker.setPosition(100, SYM, 0);
+      broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: SYM, netQuantity: 0 } });
+      await settle(controller, 150);
+      const parent = (await broker.findOrderById(200, followerEntry.brokerOrderId)).order;
+      expect(parent).toMatchObject({ status: 'canceled', filledQuantity: 2 });
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('zrcadlený stop se vyplní během rušení vstupu: incident s vlastní příčinou a auto-close (V5)', async () => {
+    const { broker, controller, followerEntry, advance } = await leaderFilledFollowerWaiting();
+    try {
+      advance(5_000);
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'manual-sl', side: 'Sell', orderType: 'Stop', limitPrice: undefined,
+        stopPrice: 31_160, status: 'working',
+      }) });
+      await settle(controller, 150);
+      const mirroredStop = broker.orders().find(order => order.accountId === 200 && order.orderType === 'Stop'
+        && order.stopPrice === 31_160)!;
+      expect(mirroredStop).toBeDefined();
+      const realCancel = broker.cancelOrder.bind(broker);
+      broker.cancelOrder = async (accountId: number, brokerOrderId: string) => {
+        if (accountId === 200 && brokerOrderId === mirroredStop.brokerOrderId) {
+          // Vstup je prokazatelně zrušený, ale trh mezitím propadl:
+          // zrcadlený stop flat followera se vyplnil dřív, než ho úklid zrušil.
+          mirroredStop.status = 'filled';
+          mirroredStop.filledQuantity = 5;
+          broker.setPosition(200, SYM, -5);
+          broker.emitEvent({ type: 'order', order: { ...mirroredStop, sourceVersion: 'stop-filled' } });
+          broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: SYM, netQuantity: -5 } });
+          throw new Error('TooLate: order already filled');
+        }
+        return realCancel(accountId, brokerOrderId);
+      };
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'manual-exit', side: 'Sell', orderType: 'Market', limitPrice: undefined, status: 'working',
+      }) });
+      await settle(controller, 300);
+      await settle(controller, 3_000);
+      expect(controller.status()).toMatchObject({
+        armed: false,
+        lastDisarm: expect.objectContaining({ detail: expect.stringContaining('Flat sweep nedokončen — účet 200') }),
+      });
+      // Auto-close followera z nečekané protipozice.
+      expect(broker.placedRequests()).toContainEqual(expect.objectContaining({
+        accountId: 200, side: 'Buy', quantity: 5,
+      }));
+    } finally {
+      controller.stop();
+    }
+  }, 20_000);
 });
