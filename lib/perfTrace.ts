@@ -76,3 +76,24 @@ export function perfServerTiming(slug: string, header: string | null): void {
     if (metric && dur) perfDuration(`srv:${slug}:${metric}`, Number(dur.slice(4)));
   }
 }
+
+/**
+ * Hlídání zamrzlého hlavního vlákna (WebKit nemá longtask): mezera mezi
+ * snímky nad 100 ms se zapíše jako `jank:frame:dur` a konec jako `jank:end`.
+ * Jen prvních 25 s po startu a jen tam, kde je měření zapnuté.
+ */
+export function startJankMonitor(durationMs = 25_000): void {
+  if (!enabled() || typeof requestAnimationFrame === 'undefined') return;
+  const startedAt = performance.now();
+  let last = startedAt;
+  const tick = (now: number) => {
+    const gap = now - last;
+    if (gap > 100 && document.visibilityState === 'visible') {
+      perfDuration('jank:frame', gap);
+      perfMark('jank:end');
+    }
+    last = now;
+    if (now - startedAt < durationMs) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}

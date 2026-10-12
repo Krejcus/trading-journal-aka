@@ -25,7 +25,9 @@ for (const line of lines) {
 runs.forEach((run, index) => {
   const at = new Date(run.origin).toISOString().slice(11, 23);
   console.log(`\n=== Spuštění ${index + 1} (začátek ${at} UTC) ===`);
-  for (const [name, ms] of run.marks) console.log(`${String(ms).padStart(7)} ms  ${name}`);
+  const janks = run.marks.filter(([name]) => name === 'jank:end').length;
+  for (const [name, ms] of run.marks) if (name !== 'jank:end') console.log(`${String(ms).padStart(7)} ms  ${name}`);
+  if (janks) console.log(`  (zamrznutí hlavního vlákna: ${janks}× — viz jank:frame níž; časy konců: ${run.marks.filter(([n]) => n === 'jank:end').map(([, ms]) => ms).join(', ')})`);
   if (run.durations.size) {
     console.log('\n  trvání (počet × průměr / max ms):');
     for (const [name, d] of [...run.durations].sort((a, b) => b[1].total - a[1].total)) {

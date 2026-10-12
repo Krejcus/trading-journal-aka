@@ -9,8 +9,9 @@ import { registerNativeOAuthCallback } from './services/nativeOAuth';
 import { registerNativeNotificationActions } from './services/nativeNotifications';
 import NativePrivacyGate from './components/NativePrivacyGate';
 import { parseSnapshotRenderParams } from './lib/snapshotRender';
-import { perfMark } from './lib/perfTrace';
+import { perfMark, startJankMonitor } from './lib/perfTrace';
 perfMark('boot:js-eval');
+startJankMonitor();
 
 // Vykreslovací stránka automatických snímků (skrytý prohlížeč workeru): jen
 // graf obchodu, bez appky, service workeru a jeho dialogu o nové verzi.
