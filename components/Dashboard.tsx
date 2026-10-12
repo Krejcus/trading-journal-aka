@@ -1,3 +1,4 @@
+import { withoutRetiredWidgets } from '../lib/retiredDashboardWidgets';
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -53,7 +54,6 @@ import {
   Undo2,
 } from 'lucide-react';
 import { fmtUsd as labFmtUsd, type LeakFinding } from '../services/labAnalytics';
-import DailyInsightWidget from './DailyInsightWidget';
 import DailyFocusWidget from './DailyFocusWidget';
 import EquityIncidentModal from './EquityIncidentModal';
 import PayoutDetailModal from './PayoutDetailModal';
@@ -113,6 +113,7 @@ import MonteCarloLab from './MonteCarloLab';
 import { Responsive as ResponsiveGridLayout, useContainerWidth, verticalCompactor } from 'react-grid-layout';
 import type { Compactor } from 'react-grid-layout/core';
 import type { Layout, LayoutItem } from 'react-grid-layout';
+import { perfMarkOnce } from '../lib/perfTrace';
 
 // react-grid-layout configuration
 const GRID_BREAKPOINTS = { xxl: 1920, lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 };
@@ -763,7 +764,6 @@ const MASTER_WIDGET_LIST = [
   { id: 'hourly_edge', label: 'Hodinový Výkon', category: 'Analýza', icon: <Clock size={18} />, description: 'Výkonnost podle hodin.', preview: <div className="text-blue-500 font-black text-xs">NY Open</div>, defaultRowSpan: 2 },
   { id: 'daily_edge', label: 'Denní Výkon', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Výkonnost podle dnů v týdnu.', preview: <div className="text-blue-500 font-black text-xs">Tue/Thu Focus</div>, defaultRowSpan: 2 },
   { id: 'calendar', label: 'Obchodní Kalendář', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Denní zisky v kalendáři.', preview: <div className={`${COLORS.textProfit} font-black text-xs`}>Green Month</div>, defaultRowSpan: 3 },
-  { id: 'daily_insight', label: 'Insight Dne (AI)', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Coach každý den vygeneruje jeden personalizovaný insight z tvé historie.', preview: <div className="text-purple-500 font-black text-xs">Sparkles ✨</div>, defaultRowSpan: 1 },
   { id: 'daily_focus', label: 'Dnes Hlídat', category: 'Chování', icon: <Target size={18} />, description: 'Aktivní Iron Rules a checklisty z AI Coache — připomínka co dnes hlídat.', preview: <div className="text-blue-500 font-black text-xs">📋 3 pravidla</div>, defaultRowSpan: 2 },
   { id: 'lab_top_leak', label: 'Největší Leak (Lab)', category: 'Chování', icon: <Droplets size={18} />, description: 'Top nález deterministických Lab detektorů — co tě teď stojí nejvíc peněz.', preview: <div className="text-rose-500 font-black text-xs">Revenge −$420</div>, defaultRowSpan: 1 },
   { id: 'bt_avg_r', label: 'Avg R / Expectancy', category: 'Backtest', icon: <Target size={18} />, description: 'Průměrný R-multiple a expectancy na obchod.', preview: <div className="text-violet-500 font-black text-xl">+1.38R</div>, defaultRowSpan: 1 },
@@ -1632,7 +1632,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
 };
 
 const Dashboard: React.FC<DashboardProps> = ({
-  stats, labTopLeak, theme, preps, reviews, layouts, sessions, ironRules, onUpdateLayouts,
+  stats, labTopLeak, theme, preps, reviews, layouts: savedLayouts, sessions, ironRules, onUpdateLayouts,
   isEditing, onCloseEdit, accounts, emotions, viewMode, dashboardMode,
   setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
   allTrades = [], payouts = [],
@@ -1642,7 +1642,14 @@ const Dashboard: React.FC<DashboardProps> = ({
   onNavigateToSettings,
   defaultLayouts,
 }) => {
+  // Odstraněné dlaždice (AI „Insight Dne“, 12. 10. 2026) můžou zůstat v uloženém
+  // rozvržení; bez filtru by po nich zůstala prázdná karta.
+  const layouts = useMemo(() => withoutRetiredWidgets(savedLayouts), [savedLayouts]);
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => perfMarkOnce('boot:dashboard-paint'));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const isMobileEditing = isMobileEditingProp;
   const setIsMobileEditing = setIsMobileEditingProp ?? (() => {});
 
@@ -2236,7 +2243,6 @@ const Dashboard: React.FC<DashboardProps> = ({
         />
       );
       case 'calendar': return <div className="h-full flex flex-col"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} onOpenTrade={trade => setSelectedTradeId(trade.id)} /></div>;
-      case 'daily_insight': return <DailyInsightWidget theme={theme} trades={allTrades.length > 0 ? allTrades : stats.trades} onOpenTrade={(t) => setSelectedTradeId(String(t.id))} />;
       case 'daily_focus': return <DailyFocusWidget ironRules={ironRules} theme={theme} onManage={onNavigateToSettings} />;
       case 'bt_avg_r': {
         const valid = stats.trades.filter(t => t.executionStatus !== 'Missed');
@@ -2365,10 +2371,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               } else {
                 // Full-width widget (komplexní karty)
                 const fixedHeight = chartHeights[item.widget.id];
-                const isSelfSizing = item.widget.id === 'daily_insight';
-                const style = isSelfSizing
-                  ? {}
-                  : fixedHeight ? { height: fixedHeight } : { minHeight: 260 };
+                const style = fixedHeight ? { height: fixedHeight } : { minHeight: 260 };
                 rows.push(
                   <motion.div key={item.widget.id} style={style} animate={wiggleAnimate} transition={wiggleTransition} className={`dashboard-widget-shell ${editClass}`}>
                     {item.content}

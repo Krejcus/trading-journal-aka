@@ -1,3 +1,5 @@
+import { perfMark, perfMarkOnce } from '../lib/perfTrace';
+import { releaseLivePriority } from '../lib/livePriority';
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { createCopierForegroundPoller, isCopierStatusFresh } from '../lib/copierForegroundPoller';
 import { copierRelayObservedAt, newestCopierRelaySnapshot } from '../lib/copierRelayStatusPoll';
@@ -393,6 +395,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (statusIdentityRef.current !== userId) return false;
     if (commandSequence != null && !statusAckFenceRef.current.accept(commandSequence)) return false;
     if (!shouldAcceptCopierStatus(status, acceptedAgentStatusRef.current)) return false;
+    perfMarkOnce('live:copier-status-first');
     acceptedAgentStatusRef.current = status;
     setAgentStatus(status);
     setAgentStatusObservedAt(observedAt);
@@ -492,9 +495,19 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     });
   }), []);
   const agentClient = useMemo(() => createLocalCopierAgentClient(), []);
+  // Klíč podle obsahu, ne podle identity pole: každý čerstvý OAuth status je
+  // nové pole i se stejnými ID, a efekt pollu stavu workeru by se restartoval —
+  // rozjeté čtení přes relay se zahodilo a další čekalo pevné 2 s (iPhone při
+  // návratu na LIVE). `null` = status ještě neznámý, '' = známý bez připojení.
+  const connectedConnectionKey = useMemo(
+    () => live.status
+      ? JSON.stringify([...new Set(live.status.connections.filter(connection => connection.connected).map(connection => connection.id))].sort())
+      : null,
+    [live.status],
+  );
   const connectedConnectionIds = useMemo(
-    () => live.status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [],
-    [live.status?.connections],
+    () => connectedConnectionKey ? JSON.parse(connectedConnectionKey) as string[] : [],
+    [connectedConnectionKey],
   );
   const pilotDevices = useMemo(
     () => agentStatus?.devices ?? (agentStatus?.device ? [agentStatus.device] : []),
@@ -1077,6 +1090,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     };
     // Popředí = viditelný dokument A (v iOS shellu) aktivní appka. Čtení
     // zahájené před uspáním poller po návratu nepřijme (hidden generation).
+    perfMark('live:poll-start');
     const poller = createCopierForegroundPoller({
       visible: isAppForeground,
       read: poll,
@@ -1176,7 +1190,16 @@ acceptAgentStatus((await executeAgent({
   const coldReadsPending = liveColdReadsPending(
     coldRevealDoneRef.current, liveData != null, connectedConnectionIds, live.dataEnrichmentByConnection,
   );
-  if (liveData != null && (!coldReadsPending || coldRevealCapReached)) coldRevealDoneRef.current = true;
+  if (liveData != null && (!coldReadsPending || coldRevealCapReached)) {
+    if (!coldRevealDoneRef.current) perfMarkOnce('live:reveal');
+    coldRevealDoneRef.current = true;
+  }
+  // Přednost LIVE (lib/livePriority) končí, až je přehled vidět i se stavem
+  // kopírky; strop hlídá modul sám. Uvolnění nic neautorizuje.
+  const livePriorityReleasable = coldRevealDoneRef.current && agentStatus != null;
+  useEffect(() => {
+    if (livePriorityReleasable) releaseLivePriority();
+  }, [livePriorityReleasable]);
   // Zapnutá kopírka: přehled s vypnutím (OFF, kill) se nedrží ani chvíli.
   const holdColdReveal = coldReadsPending && !coldRevealCapReached && agentStatus?.controller.armed !== true;
   useEffect(() => {

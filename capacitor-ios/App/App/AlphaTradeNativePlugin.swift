@@ -1,4 +1,5 @@
 import Capacitor
+import os
 import ActivityKit
 import AVFoundation
 import EventKit
@@ -16,6 +17,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     public let jsName = "AlphaTradeNative"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "authenticate", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "perfTrace", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getBadgeCount", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setBadgeCount", returnType: CAPPluginReturnPromise),
@@ -970,6 +972,21 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         guard hasAudioTap else { return }
         audioEngine.inputNode.removeTap(onBus: 0)
         hasAudioTap = false
+    }
+
+    /// Časové značky výkonu do systémového logu (měření z Macu přes syslog).
+    /// Jen název fáze z omezené abecedy a celé milisekundy — nikdy data,
+    /// tokeny ani obsah požadavků (loggingBehavior zůstává 'none').
+    private static let perfLog = OSLog(subsystem: "app.alphatrade.native", category: "perf")
+    @objc public func perfTrace(_ call: CAPPluginCall) {
+        guard let name = call.getString("name"),
+              name.range(of: "^[a-z0-9:._-]{1,80}$", options: .regularExpression) != nil,
+              let ms = call.getInt("ms"), ms >= 0, ms < 86_400_000 else {
+            call.reject("invalid perf trace")
+            return
+        }
+        os_log("AT-PERF %{public}@ %{public}d", log: Self.perfLog, type: .default, name, ms)
+        call.resolve()
     }
 
     @objc public func getPrivacyState(_ call: CAPPluginCall) {

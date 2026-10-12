@@ -327,6 +327,30 @@ describe('private history ordinary write guard', () => {
     h.tradeReadError = true; h.switchOwnerOnRead = true;
     await expect(storageService.getTrades()).rejects.toThrow('trade-list-unavailable');
   });
+  it('přednačtená mezipaměť: o soukromé historii rozhodne až spotřeba po obnově přihlášení', async () => {
+    const item = { ...trade(), noteHistory: ledger() };
+    h.cache.set(`alphatrade_trades_${h.userId}`, [item]);
+    h.cache.set(`alphatrade_user_profile_${h.userId}`, { id: h.userId });
+    // Prefetch při bootu, kdy je přihlášený někdo jiný (nebo ještě nikdo).
+    h.auth?.('SIGNED_IN', { user: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' } });
+    storageService.prefetchCachedDashboardData(h.userId);
+    // Obnova session vlastníka doběhne dřív, než load() mezipaměť spotřebuje.
+    h.auth?.('SIGNED_IN', { user: { id: h.userId } });
+    expect((await storageService.getCachedDashboardData(h.userId))?.trades[0]).toHaveProperty('noteHistory');
+    // Cizí session při spotřebě: historie pryč.
+    storageService.prefetchCachedDashboardData(h.userId);
+    h.auth?.('SIGNED_IN', { user: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' } });
+    expect((await storageService.getCachedDashboardData(h.userId))?.trades[0]).not.toHaveProperty('noteHistory');
+    h.auth?.('SIGNED_IN', { user: { id: h.userId } });
+  });
+  it('přednačtená mezipaměť jednoho uživatele se nikdy nepoužije pro jiného', async () => {
+    const other = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    h.cache.set(`alphatrade_trades_${h.userId}`, [trade()]);
+    h.cache.set(`alphatrade_user_profile_${h.userId}`, { id: h.userId });
+    storageService.prefetchCachedDashboardData(h.userId);
+    // Jiný uživatel nemá vlastní profil v mezipaměti → null, ne data prvního.
+    expect(await storageService.getCachedDashboardData(other)).toBeNull();
+  });
   it('bulk saves keep confirmed private history out of the public blob and return the private value', async () => {
     const item = trade(); const history = ledger();
     h.rows.set(String(item.id), row(item)); h.privateHistories.set(String(item.id), history);

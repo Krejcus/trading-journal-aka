@@ -13,6 +13,10 @@ import { withAttachedScreenshot } from './components/HistoryScreenshotSlot';
 import { withChartNotes, type ChartNote } from './lib/chartNotes';
 import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
+import { perfMark, perfMarkOnce } from './lib/perfTrace';
+import { isNativeBuild } from './utils/runtimeConfig';
+import { TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS } from './lib/tradovateIntentPrefetch';
+import { afterLivePriority, holdForLive, releaseLivePriority } from './lib/livePriority';
 import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { calculateStats } from './services/analysis';
@@ -48,7 +52,21 @@ import { mergeDeferredAvatar } from './lib/avatarImage';
 import { isEvidenceJournalTrade, isRetiredJournalTrade } from './lib/journalTradeFacts';
 import { loadTradovateOAuthStatus, importTradovateJournalConnection } from './services/tradovateOAuthConnection';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
-const Dashboard = React.lazy(() => import('./components/Dashboard'));
+type DashboardModule = typeof import('./components/Dashboard');
+let loadedDashboard: DashboardModule | null = null;
+const loadDashboard = () => import('./components/Dashboard').then(module => {
+  loadedDashboard = module;
+  return module;
+});
+// iPhone: kód Dashboardu (s grafy ~650 KB) se stahuje už při startu, souběžně
+// s přihlášením a mezipamětí — dřív až po zmizení úvodní obrazovky.
+if (isNativeBuild) void loadDashboard().catch(() => { /* lazy cesta níž to zkusí znovu */ });
+const LazyDashboard = React.lazy(loadDashboard);
+/** Načtený Dashboard se vykreslí hned bez Suspense; volba platí po celé připojení. */
+const Dashboard: React.FC<React.ComponentProps<DashboardModule['default']>> = props => {
+  const [Board] = React.useState(() => loadedDashboard?.default ?? LazyDashboard);
+  return <Board {...props} />;
+};
 const TradeReview = React.lazy(() => import('./components/TradeReview'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
 const JournalReviewInbox = React.lazy(() => import('./components/JournalReviewInbox'));
@@ -152,7 +170,6 @@ import { isSupabaseConfigured, supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
 import { playNativeHapticIfAvailable } from './services/nativeCapabilities';
-import MorningBriefBanner from './components/MorningBriefBanner';
 import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage, reportNativeShellReview, reportNativeShellReviewCount, type NativeReviewRequest } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 import {
@@ -240,7 +257,6 @@ const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: num
   hourly_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   daily_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   calendar: { minW: 4, minH: 5, maxW: 12, maxH: 10 },
-  daily_insight: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   lab_top_leak: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   bt_avg_r: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   bt_confluence_wr: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
@@ -269,7 +285,6 @@ const WIDGET_CONSTRAINTS_XXL: Record<string, { minW: number; minH: number; maxW:
   hourly_edge: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
   daily_edge: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
   calendar: { minW: 6, minH: 5, maxW: 24, maxH: 10 },
-  daily_insight: { minW: 3, minH: 2, maxW: 8, maxH: 4 },
   lab_top_leak: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
   bt_avg_r: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
   bt_confluence_wr: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
@@ -589,7 +604,15 @@ const App: React.FC = () => {
 
     setInitStatus("Kontrola přihlášení...");
     const initialAuthEpoch = authEpochRef.current;
+    perfMark('boot:auth-start');
+    // Mezipaměť posledního uživatele se čte souběžně s obnovou přihlášení;
+    // load() ji použije jen pro stejného uživatele, jiného zahodí.
+    try {
+      const lastSessionUser = localStorage.getItem('alphatrade_last_session_user');
+      if (lastSessionUser) storageService.prefetchCachedDashboardData(lastSessionUser);
+    } catch { /* blokované úložiště: čte se až v load() jako dřív */ }
     supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
+      perfMark('boot:auth-done');
       if (authEpochRef.current !== initialAuthEpoch) return;
       if (activeSession) {
         if (sessionRef.current?.user.id !== activeSession.user.id) {
@@ -804,6 +827,7 @@ const App: React.FC = () => {
   }, []);
 
   const runCopierJournalSync = useCallback(async (force = false) => {
+    perfMark('journal:sync-call');
     const userId = session?.user?.id;
     if (!userId || copierJournalSyncBusyRef.current) return;
     const isCurrentSession = captureSessionRequest(userId);
@@ -815,6 +839,9 @@ const App: React.FC = () => {
     setCopierImportRunning(true);
     const before = copierRowsRef.current;
     try {
+      // Při studeném otevření LIVE deník počká, až se LIVE zobrazí.
+      await afterLivePriority();
+      if (!isCurrentSession() || abort.signal.aborted) return;
       const result = await syncJournalConnections({ accounts, signal: abort.signal, verifiedReads: journalVerifiedReadsRef.current,
         isCurrent: isCurrentSession, loadStatus: loadTradovateOAuthStatus,
         importConnection: importTradovateJournalConnection, loadTrades: () => storageService.getTrades(),
@@ -1018,25 +1045,39 @@ const App: React.FC = () => {
     let cancelled = false;
     const isCurrentSession = captureSessionRequest(userId);
     if (isNativeShell()) {
-      const refreshNative = async () => {
+      const refreshNative = async (includePush = true) => {
         if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
         await waitForNativeSessionCleanup();
         if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
         const [, , pushResult] = await Promise.allSettled([
           initializeNativeLiveActivityPush(userId),
           initializeNativeWidgetRemote(userId),
-          initializeNativeRemoteNotifications(userId),
+          includePush ? initializeNativeRemoteNotifications(userId) : Promise.resolve(null),
         ]);
-        if (!cancelled && !logoutInProgressRef.current && isCurrentSession()) setIsPushActive(pushResult.status === 'fulfilled' && pushResult.value);
+        if (!includePush) return;
+        if (!cancelled && !logoutInProgressRef.current && isCurrentSession()) setIsPushActive(pushResult.status === 'fulfilled' && pushResult.value === true);
       };
       const onVisible = () => { if (document.visibilityState === 'visible') void refreshNative(); };
       const onOnline = () => { void refreshNative(); };
-      void refreshNative();
+      // Registrace push, widgetu a Live Activity (každá s /api voláním a
+      // Keychain) se při startu přetahovala o síť s Dashboardem. Spustí se až
+      // po něm; návrat z pozadí a „online“ dál obnovují hned.
+      const initialRefresh = window.setTimeout(() => { void refreshNative(false); }, 3_000);
+      // Posluchač klepnutí na push (a token) hned: studený start z notifikace
+      // (copier alert) nesmí čekat 3 s. Odkládá se jen widget a Live Activity.
+      void (async () => {
+        if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
+        await waitForNativeSessionCleanup();
+        if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
+        const active = await initializeNativeRemoteNotifications(userId).catch(() => false);
+        if (!cancelled && !logoutInProgressRef.current && isCurrentSession()) setIsPushActive(active);
+      })();
       document.addEventListener('visibilitychange', onVisible);
       window.addEventListener('online', onOnline);
       window.addEventListener('alphatrade:native-push-retry', onOnline);
       return () => {
         cancelled = true;
+        window.clearTimeout(initialRefresh);
         document.removeEventListener('visibilitychange', onVisible);
         window.removeEventListener('online', onOnline);
         window.removeEventListener('alphatrade:native-push-retry', onOnline);
@@ -1186,6 +1227,7 @@ const App: React.FC = () => {
   // posuvný kontejner, takže bez resetu nová stránka zdědila pozici staré
   // (sjel jsi dolů na Dashboardu → Historie se otevřela dole).
   const pageScrollRef = useRef<HTMLDivElement>(null);
+  const tradovateLiveDataRef = useRef<unknown>(null);
   const previousScrollPageRef = useRef(activePage);
   useLayoutEffect(() => {
     if (previousScrollPageRef.current === activePage) return;
@@ -1206,6 +1248,15 @@ const App: React.FC = () => {
     } catch { /* sessionStorage unavailable — URL still works */ }
     return requestedByUrl || requestedByLoginRoundTrip;
   });
+  useEffect(() => { perfMark(`nav:${activePage}`); }, [activePage]);
+  // Studené otevření LIVE (ještě bez dat): těžké čtení na pozadí počká, než
+  // se LIVE zobrazí (uvolní TradovateLiveDesk), nejdéle 6 s. Odchod z LIVE
+  // přednost hned ukončí.
+  useEffect(() => {
+    if (activePage !== 'live') return;
+    if (!tradovateLiveDataRef.current) holdForLive();
+    return () => releaseLivePriority();
+  }, [activePage]);
   const tradovateLiveEnabled = activePage === 'live'
     || (activePage === 'accounts' && dashboardMode !== 'backtesting');
   const tradovateLive = useTradovateLiveData(
@@ -1216,6 +1267,7 @@ const App: React.FC = () => {
     },
     tradovateLiveEnabled,
   );
+  tradovateLiveDataRef.current = tradovateLive.data;
   const hasJournalConnection = accounts.some(account => account.oauth?.provider === 'tradovate') || Boolean(tradovateLive.status?.connections.length);
   useEffect(() => {
     if (!isInitialLoadDone || !session?.user?.id || !hasJournalConnection) return;
@@ -1249,9 +1301,10 @@ const App: React.FC = () => {
   const [liveIntentPending, setLiveIntentPending] = useState(false);
   const prefetchLiveData = tradovateLive.prefetch;
   const prepareLiveNavigation = useCallback((options?: { speculative?: boolean }) => {
+    perfMark(options?.speculative ? 'live:prepare-menu' : 'live:prepare');
     if (tradovateLiveEnabled || !canAccess('live', currentUser.role)) return;
     void loadLiveDesk().catch(() => { /* Normal navigation handles a failed chunk load. */ });
-    prefetchLiveData();
+    prefetchLiveData(options?.speculative ? TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS : undefined);
     // Otevření menu Více ještě není volba LIVE: neodkládat kvůli němu čtení
     // ostatních stránek.
     if (!tradovateLive.data && !options?.speculative) setLiveIntentPending(true);
@@ -2063,7 +2116,9 @@ const App: React.FC = () => {
       safeSetItem('alphatrade_last_session_user', session.user.id);
 
       // --- CACHE-FIRST LOADING: Instant from IndexedDB, then background refresh ---
+      perfMark('boot:cache-start');
       const cached = await storageService.getCachedDashboardData(session.user.id).catch(() => null);
+      perfMark(cached ? 'boot:cache-done' : 'boot:cache-miss');
       if (!isCurrentSession()) {
         clearTimeout(safetyTimer);
         return;
@@ -2106,7 +2161,12 @@ const App: React.FC = () => {
         storageService.getConversations().catch(() => { /* silent */ });
 
         // Refresh complete contents, including edits that preserve row identity.
-        storageService.getDashboardData().then(fresh => {
+        perfMark('boot:refresh-start');
+        afterLivePriority().then(() => {
+          perfMark('boot:refresh-request');
+          return storageService.getDashboardData();
+        }).then(fresh => {
+          perfMark('boot:refresh-done');
           if (!isCurrentSession()) return;
           setTrades(prev => reconcileDashboardRows(prev, fresh.trades));
           setAccounts(prev => reconcileDashboardRows(prev, fresh.accounts));
@@ -2433,7 +2493,15 @@ const App: React.FC = () => {
 
   // LIVE code is small enough to warm independently of other page prefetches.
   useEffect(() => {
-    if (isInitialLoadDone) void loadLiveDesk().catch(() => {});
+    if (!isInitialLoadDone) return;
+    // iPhone: kód LIVE se přednačítá až po vykreslení Dashboardu, ať se o síť
+    // a parsování nepřetahuje s ním. Vstup na LIVE si ho načte sám.
+    if (!isNativeBuild) {
+      void loadLiveDesk().catch(() => {});
+      return;
+    }
+    const timer = window.setTimeout(() => { void loadLiveDesk().catch(() => {}); }, 2_500);
+    return () => window.clearTimeout(timer);
   }, [isInitialLoadDone]);
 
   // Secondary modules yield while LIVE is being opened or displayed. A page
@@ -3962,6 +4030,7 @@ const App: React.FC = () => {
   if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb) || renderedUserMismatch) {
     return <QuantumLoader theme={theme} />;
   }
+  if (session) perfMarkOnce('boot:splash-end');
 
   if (!session) {
     return <Auth onLogin={(user) => { }} theme={theme} />;
@@ -4397,16 +4466,6 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <React.Suspense fallback={<div className="flex-1" />}>
-                  {activePage === 'dashboard' && dashboardMode !== 'backtesting' && loadedUserId && (
-                    <MorningBriefBanner
-                      userId={loadedUserId}
-                      theme={theme}
-                      onOpenCoach={(prompt) => {
-                        setAiInitialPrompt(prompt);
-                        setActivePage('ai');
-                      }}
-                    />
-                  )}
                   {activePage === 'dashboard' && (
                     <Dashboard
                       labTopLeak={labTopLeak}

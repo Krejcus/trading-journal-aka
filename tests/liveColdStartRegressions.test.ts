@@ -122,3 +122,22 @@ describe('oponentura cfe904bf', () => {
     }
   });
 });
+
+describe('iPhone: návrat na LIVE nezahodí rozjeté čtení stavu kopírky', () => {
+  it('seznam připojení pro poller je klíčovaný obsahem, ne identitou pole', () => {
+    const desk = source('components/TradovateLiveDesk.tsx');
+    expect(desk).toMatch(/const connectedConnectionKey = useMemo\(\s*\(\) => live\.status\s*\? JSON\.stringify\(\[\.\.\.new Set\(/);
+    expect(desk).toMatch(/connectedConnectionKey \? JSON\.parse\(connectedConnectionKey\) as string\[\] : \[\],\s*\[connectedConnectionKey\]/);
+  });
+});
+
+describe('iPhone: přednost LIVE před těžkým čtením na pozadí', () => {
+  it('obnova dashboardu i deník počkají a LIVE přednost uvolní až se stavem kopírky', () => {
+    const app = source('App.tsx');
+    expect(app).toMatch(/afterLivePriority\(\)\.then\(\(\) => \{\s*perfMark\('boot:refresh-request'\);\s*return storageService\.getDashboardData\(\);/);
+    expect(app).toMatch(/await afterLivePriority\(\);\s*if \(!isCurrentSession\(\) \|\| abort\.signal\.aborted\) return;\s*const result = await syncJournalConnections/);
+    expect(app).toMatch(/if \(activePage !== 'live'\) return;\s*if \(!tradovateLiveDataRef\.current\) holdForLive\(\);\s*return \(\) => releaseLivePriority\(\);/);
+    const desk = source('components/TradovateLiveDesk.tsx');
+    expect(desk).toContain('const livePriorityReleasable = coldRevealDoneRef.current && agentStatus != null;');
+  });
+});

@@ -27,6 +27,7 @@ import { journalReviewPatch } from '../lib/journalReviewPatch';
 import { readJournalInbox, readJournalRetainedReview, type JournalInboxKind } from './journalReviewInbox';
 import { readJournalSourceStatus } from './journalSourceStatus';
 import { loadTradovateJournalSourceStatus } from './tradovateOAuthConnection';
+import { perfMark } from '../lib/perfTrace';
 
 const embedTrade = (trade: Trade) => void import('./embeddingService').then(module => module.embedTrade(trade));
 // All ordinary trade saves remove both private ledgers. Each has a dedicated
@@ -228,6 +229,62 @@ type DashboardSnapshot = {
 /** Full-history reads span a slow mobile link; 20 s used to cut the refresh short. */
 const DASHBOARD_RPC_TIMEOUT_MS = 45_000;
 
+type CachedDashboardData = {
+  trades: Trade[]; accounts: Account[]; preps: DailyPrep[];
+  reviews: DailyReview[]; preferences: UserPreferences | null;
+  user: User | null; weeklyFocus: WeeklyFocus[]; cachedAt: number | null;
+};
+const CACHED_DASHBOARD_PREFETCH_MAX_AGE_MS = 15_000;
+let cachedDashboardPrefetch: { userId: string; at: number; promise: Promise<CachedDashboardData | null> } | null = null;
+
+/**
+ * Jednotlivé klíče mají přednost a snapshot je jen záloha (`x || snapshot.x`).
+ * Snapshot (stejně velký jako obchody, 5–8 MB) se proto čte jen tehdy, když
+ * některý zdroj chybí — dřív se na každém startu deserializoval zbytečně.
+ */
+async function readCachedDashboardData(userId: string): Promise<CachedDashboardData | null> {
+  try {
+    const [trades, preps, reviews, user, weeklyFocus] = await Promise.all([
+      get(`alphatrade_trades_${userId}`),
+      get(`alphatrade_daily_preps_${userId}`),
+      get(`alphatrade_daily_reviews_${userId}`),
+      get(`alphatrade_user_profile_${userId}`),
+      get(`alphatrade_weekly_focus_${userId}`)
+    ]);
+    const accountsRaw = localStorage.getItem(`alphatrade_accounts_${userId}`);
+    const prefsRaw = localStorage.getItem(`alphatrade_preferences_${userId}`);
+    const timestampRaw = localStorage.getItem(`alphatrade_cache_timestamp_${userId}`);
+    const timestamp = timestampRaw ? Number(timestampRaw) : NaN;
+    const needsSnapshot = !trades || !preps || !reviews || !user || !weeklyFocus
+      || !accountsRaw || !prefsRaw || !Number.isFinite(timestamp);
+    const snapshot = needsSnapshot ? await get(dashboardSnapshotKey(userId)) as DashboardSnapshot | undefined : undefined;
+    const validSnapshot = snapshot?.version === 1 && snapshot.userId === userId && snapshot.user?.id === userId
+      ? snapshot
+      : undefined;
+    const cachedUser = (user as User | undefined) || validSnapshot?.user;
+    // A user-scoped authenticated profile is the minimum proof that this
+    // cache belongs to the active Supabase session.
+    if (!cachedUser || cachedUser.id !== userId) return null;
+    const accounts = accountsRaw ? JSON.parse(accountsRaw) : (validSnapshot?.accounts || []);
+    const preferences = prefsRaw ? JSON.parse(prefsRaw) : (validSnapshot?.preferences || null);
+    // Rozhodnutí o soukromých poznámkách (vlastník vs. cizí) až při spotřebě
+    // v getCachedDashboardData — prefetch běží ještě před obnovou přihlášení.
+    return {
+      trades: visibleJournalTrades((trades || validSnapshot?.trades || []) as Trade[]),
+      accounts: accounts as Account[],
+      preps: (preps || validSnapshot?.preps || []) as DailyPrep[],
+      reviews: (reviews || validSnapshot?.reviews || []) as DailyReview[],
+      preferences,
+      user: cachedUser,
+      weeklyFocus: (weeklyFocus || validSnapshot?.weeklyFocus || []) as WeeklyFocus[],
+      cachedAt: Number.isFinite(timestamp) ? timestamp : (validSnapshot?.cachedAt || null),
+    };
+  } catch (e) {
+    console.warn('[Cache] getCachedDashboardData failed:', e);
+    return null;
+  }
+}
+
 export const storageService = {
 
   // Single RPC call to load all dashboard data at once (replaces 7 parallel HTTP requests)
@@ -240,6 +297,7 @@ export const storageService = {
     // the full call took 6 s / 12.7 MB and a phone could not finish it.
     const result = preferPaged ? null : await supabase.rpc('get_dashboard_data_light_v1')
       .abortSignal(signal ?? AbortSignal.timeout(DASHBOARD_RPC_TIMEOUT_MS));
+    perfMark('dash:rpc-done');
     const data = result?.data;
     const error = result?.error;
     if (error) console.error('[RPC] get_dashboard_data_light_v1 error:', error.code, error.message);
@@ -386,8 +444,11 @@ export const storageService = {
     // full dashboard refreshes. Cache failures must never turn a successful
     // server response into an application error.
     const userId = raw.user?.id;
+    perfMark('dash:mapped');
     trades = await hydratePrivateJournalFacts(trades, userId ?? null, signal);
+    perfMark('dash:journal-facts-done');
     trades = await hydratePrivateTradeNotes(trades, userId ?? null, signal);
+    perfMark('dash:notes-done');
     if (signal?.aborted) throw new Error('dashboard-read-invalidated');
     if (userId && user) {
       const cachedAt = Date.now();
@@ -425,50 +486,27 @@ export const storageService = {
   },
 
   // Read all dashboard data from IndexedDB/localStorage cache (instant, no network)
-  async getCachedDashboardData(userId: string): Promise<{
-    trades: Trade[]; accounts: Account[]; preps: DailyPrep[];
-    reviews: DailyReview[]; preferences: UserPreferences | null;
-    user: User | null; weeklyFocus: WeeklyFocus[]; cachedAt: number | null;
-  } | null> {
-    try {
-      const [snapshotValue, trades, preps, reviews, user, weeklyFocus] = await Promise.all([
-        get(dashboardSnapshotKey(userId)),
-        get(`alphatrade_trades_${userId}`),
-        get(`alphatrade_daily_preps_${userId}`),
-        get(`alphatrade_daily_reviews_${userId}`),
-        get(`alphatrade_user_profile_${userId}`),
-        get(`alphatrade_weekly_focus_${userId}`)
-      ]);
-      const snapshot = snapshotValue as DashboardSnapshot | undefined;
-      const validSnapshot = snapshot?.version === 1 && snapshot.userId === userId && snapshot.user?.id === userId
-        ? snapshot
-        : undefined;
-      const cachedUser = (user as User | undefined) || validSnapshot?.user;
-      // A user-scoped authenticated profile is the minimum proof that this
-      // cache belongs to the active Supabase session.
-      if (!cachedUser || cachedUser.id !== userId) return null;
-      const accountsRaw = localStorage.getItem(`alphatrade_accounts_${userId}`);
-      const accounts = accountsRaw ? JSON.parse(accountsRaw) : (validSnapshot?.accounts || []);
-      const prefsRaw = localStorage.getItem(`alphatrade_preferences_${userId}`);
-      const preferences = prefsRaw ? JSON.parse(prefsRaw) : (validSnapshot?.preferences || null);
-      const timestampRaw = localStorage.getItem(`alphatrade_cache_timestamp_${userId}`);
-      const timestamp = timestampRaw ? Number(timestampRaw) : NaN;
-      const cachedTrades = visibleJournalTrades((trades || validSnapshot?.trades || []) as Trade[]);
-      const activeOwner = await getUserId();
-      return {
-        trades: activeOwner === userId ? cachedTrades : cachedTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t))),
-        accounts: accounts as Account[],
-        preps: (preps || validSnapshot?.preps || []) as DailyPrep[],
-        reviews: (reviews || validSnapshot?.reviews || []) as DailyReview[],
-        preferences,
-        user: cachedUser,
-        weeklyFocus: (weeklyFocus || validSnapshot?.weeklyFocus || []) as WeeklyFocus[],
-        cachedAt: Number.isFinite(timestamp) ? timestamp : (validSnapshot?.cachedAt || null),
-      };
-    } catch (e) {
-      console.warn('[Cache] getCachedDashboardData failed:', e);
-      return null;
-    }
+  /**
+   * Studený start: čtení mezipaměti se rozjede hned při bootu, souběžně s
+   * obnovou přihlášení (na iPhonu Keychain + případně obnova tokenu po síti).
+   * Výsledek použije jen load() pro TÉHOŽ uživatele, jinak se zahodí.
+   */
+  prefetchCachedDashboardData(userId: string): void {
+    if (!userId || cachedDashboardPrefetch?.userId === userId) return;
+    cachedDashboardPrefetch = { userId, at: Date.now(), promise: readCachedDashboardData(userId) };
+  },
+
+  async getCachedDashboardData(userId: string): Promise<CachedDashboardData | null> {
+    const prefetched = cachedDashboardPrefetch;
+    cachedDashboardPrefetch = null;
+    const cached = prefetched && prefetched.userId === userId && Date.now() - prefetched.at < CACHED_DASHBOARD_PREFETCH_MAX_AGE_MS
+      ? await prefetched.promise
+      : await readCachedDashboardData(userId);
+    if (!cached) return null;
+    const activeOwner = await getUserId();
+    return activeOwner === userId
+      ? cached
+      : { ...cached, trades: cached.trades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t))) };
   },
 
   // User Profile

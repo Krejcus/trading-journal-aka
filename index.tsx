@@ -9,6 +9,9 @@ import { registerNativeOAuthCallback } from './services/nativeOAuth';
 import { registerNativeNotificationActions } from './services/nativeNotifications';
 import NativePrivacyGate from './components/NativePrivacyGate';
 import { parseSnapshotRenderParams } from './lib/snapshotRender';
+import { perfMark, startJankMonitor } from './lib/perfTrace';
+perfMark('boot:js-eval');
+startJankMonitor();
 
 // Vykreslovací stránka automatických snímků (skrytý prohlížeč workeru): jen
 // graf obchodu, bez appky, service workeru a jeho dialogu o nové verzi.
@@ -101,6 +104,7 @@ const handleDismiss = () => {
 };
 
 const renderApp = () => {
+  perfMark('boot:render-app');
   const rootElement = document.getElementById('root');
   if (!rootElement) {
     throw new Error("Could not find root element to mount to");

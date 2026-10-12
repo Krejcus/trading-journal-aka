@@ -1,3 +1,4 @@
+import { perfMark } from '../lib/perfTrace';
 import { LiveRiskValue } from './LiveRiskValue';
 import { ColumnOrderList, type ColumnOrderItem } from './ColumnOrderList';
 import { applyColumnOrder, moveColumn, pinColumnEdges } from '../lib/tableColumnOrder';
@@ -1303,6 +1304,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   ) => {
     if (copierTransitionRef.current && (connecting || copierTransitionRef.current === 'disconnecting')) return;
     const request = ++copierTransitionRequest.current;
+    perfMark(connecting ? 'copier:on-tap' : 'copier:off-tap');
     copierTransitionRef.current = connecting ? 'connecting' : 'disconnecting';
     setTransitionGroupId(groupId);
     setCopierTransition(connecting ? 'connecting' : 'disconnecting');
@@ -1359,6 +1361,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           : undefined,
       });
     } finally {
+      perfMark('copier:transition-end');
       if (request === copierTransitionRequest.current) {
         copierTransitionRef.current = null;
         setCopierTransition(null);

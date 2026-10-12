@@ -3,6 +3,8 @@ import type { TradovateOAuthStatus, TradovatePreflightResult } from '../services
 import type { PrestartedTradovatePreflights, SettledTradovatePreflight } from './tradovatePreflightCoordinator';
 
 export const TRADOVATE_INTENT_PREFETCH_TTL_MS = 3_000;
+/** Menu Více na iPhonu: výběr položky trvá déle než najetí myší na odkaz. */
+export const TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS = 15_000;
 
 interface Dependencies {
   status(): Promise<TradovateOAuthStatus>;
@@ -21,6 +23,7 @@ interface PendingRead {
 interface Entry {
   userId: string;
   startedAt: number;
+  ttlMs: number;
   status: Promise<PromiseSettledResult<TradovateOAuthStatus>>;
   profiles: Promise<TradovateAccountProfilesResult | null>;
   profilesFailed: boolean;
@@ -42,7 +45,7 @@ export function createTradovateIntentPrefetch(deps: Dependencies) {
   const current = (candidate: Entry) => entry === candidate && candidate.userId === userId;
   const fresh = (candidate: Entry) => current(candidate)
     && now() >= candidate.startedAt
-    && now() - candidate.startedAt < TRADOVATE_INTENT_PREFETCH_TTL_MS;
+    && now() - candidate.startedAt < candidate.ttlMs;
   const settled = async <T>(read: () => Promise<T>, candidate: Entry): Promise<PromiseSettledResult<T>> => {
     try {
       return { status: 'fulfilled', value: await read() };
@@ -73,10 +76,10 @@ export function createTradovateIntentPrefetch(deps: Dependencies) {
       userId = nextUserId;
       entry = null;
     },
-    prefetch(knownConnectionIds: readonly string[]) {
+    prefetch(knownConnectionIds: readonly string[], ttlMs = TRADOVATE_INTENT_PREFETCH_TTL_MS) {
       if (!userId || deps.blocked?.() || entry && fresh(entry)) return;
       const candidate: Entry = {
-        userId, startedAt: now(),
+        userId, startedAt: now(), ttlMs,
         status: Promise.resolve({ status: 'rejected', reason: 'not-started' }),
         profiles: Promise.resolve(null), profilesFailed: false, bootstrap: new Map(),
       };

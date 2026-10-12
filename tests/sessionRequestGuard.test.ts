@@ -41,6 +41,7 @@ function fixture() {
     isPrepsDirty: { current: false }, isReviewsDirty: { current: false },
     isPreferencesDirty: { current: false }, document: { visibilityState: 'visible' },
     lastVisibleAt: { current: Date.now() - 60_000 },
+    perfMark: vi.fn(), perfMarkOnce: vi.fn(), afterLivePriority: () => Promise.resolve(),
   };
   return { context, storage, setTrades, switchUser: (userId: string | null) => { identity = { userId, epoch: identity.epoch + 1 }; } };
 }

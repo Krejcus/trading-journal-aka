@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createTradovateIntentPrefetch, TRADOVATE_INTENT_PREFETCH_TTL_MS } from '../lib/tradovateIntentPrefetch';
+import { createTradovateIntentPrefetch, TRADOVATE_INTENT_PREFETCH_TTL_MS, TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS } from '../lib/tradovateIntentPrefetch';
 import { consumeTradovatePreflights } from '../lib/tradovatePreflightCoordinator';
 import type { TradovateOAuthStatus, TradovatePreflightResult } from '../services/tradovateOAuthConnection';
 
@@ -28,6 +28,17 @@ const fixture = () => {
 };
 
 describe('LIVE intent prefetch', () => {
+  it('menu Více drží zahřátý status 15 s, hover dál jen 3 s', async () => {
+    const menu = fixture();
+    menu.cache.prefetch(['c'], TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS);
+    menu.advance(10_000);
+    expect(await menu.cache.claim('user-a')).not.toBeNull();
+    const hover = fixture();
+    hover.cache.prefetch(['c']);
+    hover.advance(TRADOVATE_INTENT_PREFETCH_TTL_MS + 1);
+    expect(await hover.cache.claim('user-a')).toBeNull();
+  });
+
   it('deduplicates hover, focus and pointerdown while keeping the original snapshot time', async () => {
     const f = fixture();
     f.cache.prefetch(['c', 'c']);

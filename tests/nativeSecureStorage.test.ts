@@ -79,4 +79,40 @@ describe('native secure auth storage', () => {
 
     await expect(storage.getItem('token')).rejects.toMatchObject({ code: 'SECURITY_ERROR' });
   });
+
+  it('opakované čtení session nejde do Keychainu; zápis a smazání zrcadlo aktualizují', async () => {
+    const secure = vault({ session: 'a' });
+    const storage = createNativeSecureAuthStorage(legacyStorage().storage, secure.api);
+    expect(await storage.getItem('session')).toBe('a');
+    expect(await storage.getItem('session')).toBe('a');
+    expect(secure.api.secureGet).toHaveBeenCalledTimes(1);
+    await storage.setItem('session', 'b');
+    expect(await storage.getItem('session')).toBe('b');
+    await storage.removeItem('session');
+    expect(await storage.getItem('session')).toBeNull();
+    expect(secure.api.secureGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('neúspěšný zápis nenechá v zrcadle starou ani novou hodnotu', async () => {
+    const secure = vault({ session: 'a' });
+    const storage = createNativeSecureAuthStorage(legacyStorage().storage, secure.api);
+    await storage.getItem('session');
+    secure.api.secureSet.mockRejectedValueOnce(new Error('keychain locked'));
+    await expect(storage.setItem('session', 'b')).rejects.toThrow('keychain locked');
+    expect(await storage.getItem('session')).toBe('a');
+    expect(secure.api.secureGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('pomalé čtení, které doběhne po zápisu, nepřepíše zrcadlo starou hodnotou', async () => {
+    const secure = vault({ session: 'old' });
+    let releaseRead!: () => void;
+    const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+    secure.api.secureGet.mockImplementationOnce(async () => { await gate; return { value: 'old' }; });
+    const storage = createNativeSecureAuthStorage(legacyStorage().storage, secure.api);
+    const slowRead = storage.getItem('session');
+    await storage.setItem('session', 'new');
+    releaseRead();
+    expect(await slowRead).toBe('old');
+    expect(await storage.getItem('session')).toBe('new');
+  });
 });
