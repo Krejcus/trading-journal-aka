@@ -4720,8 +4720,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     cancelFollowerCutBackgroundLanes(
       failure.transportLost ? 'transport-lost' : 'fail-closed',
     );
-    // V2: čekající kopie vstupu nesmí po incidentu followera otevřít bez dozoru.
-    if (wasLiveArmed && !failure.transportLost) scheduleStrandedCopiedEntryCancel('incident');
     // Interní nejistota odzbrojí copier a vynutí novou autoritativní kontrolu,
     // ale nesmí předstírat fyzický disconnect. Živé spojení je potřeba právě
     // proto, aby mohly doběhnout risk-redukující cancely už známých objednávek.
@@ -4736,6 +4734,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         reconcileAfterTerminalFill: failure.reconcileAfterTerminalFill === true,
       }, disarm?.at);
     }
+    // V2: čekající kopie vstupu nesmí po incidentu followera otevřít bez
+    // dozoru. Ve frontě až za auto-close, aby nouzové zavření nečekalo na
+    // její čtení (kontrola 12. 10., R1); po auto-close už nic nenajde.
+    if (wasLiveArmed && !failure.transportLost) scheduleStrandedCopiedEntryCancel('incident');
     if (wasLiveArmed && failure.transportLost && hasFollowerExposure()) {
       // Bez transportu zavírat nejde — rozhodne se po reconnectu podle stavu.
       pendingConnectionRecovery = true;
@@ -12134,7 +12136,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       failClosed(incident.error, { autoClose: incident.autoClose });
       // Dřívější fail-closed v téže události už kopírku odzbrojil; pozice
       // vzniklá na flat followerovi se přesto musí zavřít.
-      if (incident.autoClose && incident.liveArmed && !gate.killSwitch) scheduleAutoClose('fail-closed');
+      // Jen když kopírku vypnul incident: ruční DISARM není příkaz zavřít vše.
+      if (incident.autoClose && incident.liveArmed && !gate.killSwitch && lastDisarm?.trigger === 'fail-closed') {
+        scheduleAutoClose('fail-closed');
+      }
     }
   };
   const queueS1bPostCancelCleanup = (
@@ -12202,6 +12207,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       clearTimeout(timer);
     }
   };
+  /** Čerstvá pozice účtu na symbolu s deadline; timeout nebo chyba = null. */
+  const boundedNetPosition = async (accountId: number, symbol: string): Promise<number | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const positions = await Promise.race([
+        broker.listPositions(accountId),
+        new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), FLAT_SWEEP_CANCEL_TIMEOUT_MS); }),
+      ]);
+      return positions == null ? null : positions
+        .filter(position => position.symbol === symbol)
+        .reduce((sum, position) => sum + position.netQuantity, 0);
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   /**
    * V2 (12. 10. 2026): po vypnutí kopírky (incident, ruční DISARM, Kontrola
    * pozic, obnova po výpadku) nesmí kopie vstupu, na kterou follower čeká,
@@ -12219,6 +12241,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const followerIds = new Set(group.followers.map(follower => follower.accountId));
     const candidates: Array<{
       accountId: number; symbol: string; brokerOrderId: string; leaderOrderId: string; quantity: number;
+      side: 'Buy' | 'Sell';
     }> = [];
     for (const entry of runtime.osoOutbox.values()) {
       if (!entry.entryBrokerOrderId || !followerIds.has(entry.request.accountId)) continue;
@@ -12228,6 +12251,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         brokerOrderId: entry.entryBrokerOrderId,
         leaderOrderId: entry.leaderEntryOrderId,
         quantity: entry.request.quantity,
+        side: entry.request.side,
       });
     }
     for (const entry of runtime.outbox.values()) {
@@ -12240,6 +12264,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         brokerOrderId: entry.brokerOrderId,
         leaderOrderId: entry.leaderOrderId,
         quantity: entry.request.quantity,
+        side: entry.request.side,
       });
     }
     // Levný předvýběr z order cache: REST čte jen kopie, které podle
@@ -12248,10 +12273,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const live = liveOrdersByAccount.get(candidate.accountId)?.get(candidate.brokerOrderId);
       // Leader příkaz, o kterém stream ví, že není vyplněný, REST nečte.
       const leaderStreamStatus = observedOrderStatusesByAccount.get(leaderAccountId)?.get(candidate.leaderOrderId);
+      const cachedNet = positionsByAccount.get(candidate.accountId)?.get(candidate.symbol) ?? 0;
       return live != null && isOpenOrderStatus(live.status) && live.filledQuantity === 0
         && (leaderStreamStatus == null || leaderStreamStatus === 'filled')
-        // Jen flat follower: z části vyplněná kopie není „čekající“.
-        && (positionsByAccount.get(candidate.accountId)?.get(candidate.symbol) ?? 0) === 0;
+        // Flat follower, nebo scale-in stejným směrem (R2); kopie proti
+        // pozici followera (reverz) se neruší — nechala by mu pozici,
+        // kterou leader zavřel.
+        && (cachedNet === 0 || Math.sign(cachedNet) === (candidate.side === 'Buy' ? 1 : -1));
     });
     for (const candidate of working) {
       if (stopped || gate.armed || !gate.connected || gate.killSwitch) return;
@@ -12265,8 +12293,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         || followerOrder.accountId !== candidate.accountId
         || followerOrder.symbol !== candidate.symbol
       ) continue;
+      // Autoritativní pozice: flat follower čeká na celý vstup; follower
+      // s pozicí jen tehdy, když ho kopie doplní přesně na leadera (scale-in
+      // čeká). Z části vyplněnou kopii ani jinou pozici to nepustí.
+      const followerNet = await boundedNetPosition(candidate.accountId, candidate.symbol);
+      if (followerNet == null) continue;
+      if (followerNet !== 0) {
+        const multiplier = group.followers.find(item => item.accountId === candidate.accountId)?.multiplier ?? 1;
+        const leaderNet = await boundedNetPosition(leaderAccountId, candidate.symbol);
+        const copySign = candidate.side === 'Buy' ? 1 : -1;
+        if (
+          leaderNet == null
+          || Math.sign(followerNet) !== copySign
+          || followerNet + copySign * followerOrder.quantity !== Math.trunc(leaderNet * multiplier)
+        ) continue;
+      }
       if (stopped || gate.armed || !gate.connected || gate.killSwitch) return;
       let cancelError: Error | null = null;
+      // Jeden zápis: pozdější sweep tentýž příkaz znovu neruší (R5).
+      flatSweepCancelAttempts.add(candidate.brokerOrderId);
+      flatSweepCancelAttemptAccounts.set(candidate.brokerOrderId, candidate.accountId);
       try {
         await withFlatSweepCancelDeadline(
           candidate.accountId,
@@ -12300,6 +12346,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ));
         continue;
       }
+      // Nohy flat followera uklidí sweep s vlastním důkazem flat; u scale-inu
+      // chrání nohy existující pozici a pozastavené nohy zrušeného vstupu
+      // padají s parentem.
+      if (followerNet !== 0) continue;
       await sweepFollowerProtectiveLegs(
         candidate.accountId,
         candidate.symbol,
@@ -12353,6 +12403,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (!leaderOrder || leaderOrder.status !== 'filled') continue;
       const brokerOrderId = entry.entryBrokerOrderId!;
       let cancelError: Error | null = null;
+      flatSweepCancelAttempts.add(brokerOrderId);
+      flatSweepCancelAttemptAccounts.set(brokerOrderId, accountId);
       try {
         await withFlatSweepCancelDeadline(accountId, brokerOrderId, () => broker.cancelOrder(accountId, brokerOrderId));
       } catch (reason) {
@@ -12360,13 +12412,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       const afterOrder = await boundedOrderLookup(accountId, brokerOrderId);
       const remainderGone = afterOrder != null && !isOpenOrderStatus(afterOrder.status);
+      const remainderFilled = afterOrder?.status === 'filled';
       options.onAudit?.([{
         at: clock(),
         leaderEventId: `partial-entry-remainder-${brokerOrderId}`,
         accountId,
         brokerOrderId,
-        kind: remainderGone ? 'canceled' : 'cancel-failed',
-        reason: remainderGone
+        kind: remainderFilled ? 'filled' : remainderGone ? 'canceled' : 'cancel-failed',
+        reason: remainderFilled
+          ? 'leader skončil: zbytek kopie vstupu se vyplnil dřív, než ho šlo zrušit; pozici followera řeší leader-flat guard'
+          : remainderGone
           ? `leader skončil: zbytek z části vyplněné kopie vstupu se zrušil (vyplněno ${afterOrder!.filledQuantity}/${afterOrder!.quantity})`
           : 'leader skončil: zbytek z části vyplněné kopie vstupu se nepodařilo prokazatelně zrušit'
             + (cancelError ? ` (${cancelError.message})` : ''),
@@ -14395,7 +14450,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
                 }]);
                 if (gate.armed) failClosed(new Error(`Bracket ${bracketEntryOrderId} nemá bezpečně spárovaný SL i TP`));
                 else invalidateReconciliation();
-              } finally { bracketCorrelator.abandonPendingPair(bracketEntryOrderId); }
+              } finally {
+                bracketCorrelator.abandonPendingPair(bracketEntryOrderId);
+                // S1b úklid čekajícího followera ve stejném kroku fronty (R4):
+                // jinak by ho předběhly mezitím zařazené eventy.
+                await settleS1bPostCancelCleanups();
+              }
             }).catch(reason => failClosed(reason));
           }, Math.max(
             0,

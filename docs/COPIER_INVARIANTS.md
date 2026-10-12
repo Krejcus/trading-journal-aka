@@ -565,7 +565,12 @@ existující ochranu.
   `cancelStrandedCopiedEntries` jednou zruší ne-Market kopii vstupu s přesnou
   lineage z durable outboxu, když broker autoritativně hlásí leaderův vstup
   celý vyplněný a kopii followera pracující s nulovým fillem; nohy pak uklidí
-  sweep (V2). Stav čekání je ve statusu (`awaitingCopiedEntries`, jen za ARM)
+  sweep (V2). Follower s pozicí (scale-in stejným směrem) se zruší jen tehdy,
+  když ho kopie podle čerstvé pozice followera i leadera doplní přesně na
+  leadera; kopie proti pozici followera (reverz) ani z části vyplněná se
+  neruší. V2 jde ve frontě až za auto-close a při kill switch neběží
+  (explicitní freeze, žádná automatika). Odložený S1b incident spustí
+  auto-close jen tehdy, když kopírku vypnul incident, ne ruční DISARM. Stav čekání je ve statusu (`awaitingCopiedEntries`, jen za ARM)
   a v LIVE řádku jako „Čeká na vstup“ (V6). Hlídají testy:
   `tests/copierAwaitingCopiedEntry.test.ts`,
   `tests/copierAwaitingEntryBracketStop.test.ts`,
@@ -575,6 +580,9 @@ existující ochranu.
   (kopii pak zruší V2 při obnově); reverzní Limit/Stop leadera při čekajícím
   followerovi jde nerozděleně — neověřený follower zastaví i otevření
   protipozice ostatním (záměrně: před incidentem se nová expozice neotevírá);
+  čekání u scale-inu (follower už v pozici) varianta 1 nepokrývá — kontrola
+  velikosti skupinu vypne a čekající kopii pak zruší V2; stav čekání se
+  ukazuje jen za ARM;
   zrušení zbytku z části vyplněného OSO vstupu u Tradovate (kaskáda na aktivní
   nohy) není ověřené proti živému brokeru.
 

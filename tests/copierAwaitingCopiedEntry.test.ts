@@ -537,4 +537,93 @@ describe('follower čeká na vyplnění zkopírovaného vstupu (varianta 1)', ()
       controller.stop();
     }
   }, 20_000);
+
+  it('scale-in: druhá kopie vstupu čeká, po vypnutí se zruší jen ona, první pozice i nohy zůstanou (R2)', async () => {
+    const { broker, controller, followerEntry } = await leaderFilledFollowerWaiting();
+    try {
+      fillFollowerEntry(broker, followerEntry, 5);
+      await settle(controller);
+      const firstLegs = workingOn(broker, 200).map(order => order.brokerOrderId).sort();
+      expect(firstLegs.length).toBeGreaterThan(0);
+      // Druhý vstup leadera (scale-in) s vlastním SL/TP se vyplní hned.
+      const entry2 = (partial: Partial<BrokerOrder>) => leaderOrder({ brokerOrderId: 'entry2', ...partial });
+      broker.emitEvent({ type: 'order', order: entry2({ status: 'pending', sourceVersion: '1:PendingNew' }) });
+      broker.emitEvent({ type: 'order', order: entry2({
+        brokerOrderId: 'stop2', parentOrderId: 'entry2', side: 'Sell', orderType: 'Stop',
+        limitPrice: undefined, stopPrice: 31_150, status: 'pending', sourceVersion: '1:Suspended',
+      }) });
+      broker.emitEvent({ type: 'order', order: entry2({
+        brokerOrderId: 'target2', parentOrderId: 'entry2', side: 'Sell', orderType: 'Limit',
+        limitPrice: 31_240, status: 'pending', sourceVersion: '1:Suspended',
+      }) });
+      await settle(controller, 60);
+      const secondCopy = broker.orders().find(order => order.accountId === 200 && order.side === 'Buy'
+        && order.brokerOrderId !== followerEntry.brokerOrderId)!;
+      expect(secondCopy).toMatchObject({ status: 'working', filledQuantity: 0 });
+      broker.emitEvent({ type: 'order', order: entry2({ status: 'filled', filledQuantity: 5, sourceVersion: '2:Filled' }) });
+      broker.emitEvent({ type: 'fill', fill: {
+        fillId: 'leader-fill-2', tag: '', brokerOrderId: 'entry2', accountId: 100, symbol: SYM,
+        side: 'Buy', quantity: 5, price: 31_177.75, filledAt: 5,
+      } });
+      broker.setPosition(100, SYM, 10);
+      broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: SYM, netQuantity: 10 } });
+      const find = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId: number, brokerOrderId: string) => (
+        accountId === 100 && brokerOrderId === 'entry2'
+          ? { order: entry2({ status: 'filled', filledQuantity: 5, sourceVersion: '2:Filled' }), completeness: 'authoritative' as const, observedAt: 0 }
+          : find(accountId, brokerOrderId)
+      );
+      await settle(controller);
+      // Čekání u scale-inu varianta 1 nepokrývá: kontrola velikosti skupinu
+      // vypne (autoClose:false). Po vypnutí se čekající kopie musí zrušit.
+      controller.disarm();
+      await settle(controller, 150);
+      expect((await broker.findOrderById(200, secondCopy.brokerOrderId)).order?.status).toBe('canceled');
+      expect((await broker.listPositions(200)).find(position => position.symbol === SYM)?.netQuantity).toBe(5);
+      for (const id of firstLegs) {
+        expect(['working', 'pending']).toContain((await broker.findOrderById(200, id)).order?.status);
+      }
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('ruční vypnutí během úklidu čekajícího followera nespustí auto-close skupiny (R3)', async () => {
+    const { broker, controller, advance } = await leaderFilledFollowerWaiting();
+    try {
+      advance(5_000);
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'manual-sl', side: 'Sell', orderType: 'Stop', limitPrice: undefined,
+        stopPrice: 31_160, status: 'working',
+      }) });
+      await settle(controller, 150);
+      const mirroredStop = broker.orders().find(order => order.accountId === 200 && order.orderType === 'Stop'
+        && order.stopPrice === 31_160)!;
+      const realCancel = broker.cancelOrder.bind(broker);
+      broker.cancelOrder = async (accountId: number, brokerOrderId: string) => {
+        if (accountId === 200 && brokerOrderId === mirroredStop.brokerOrderId) {
+          // Uživatel právě zmáčkl DISARM a zrcadlený stop se mezitím vyplnil.
+          controller.disarm();
+          mirroredStop.status = 'filled';
+          mirroredStop.filledQuantity = 5;
+          broker.setPosition(200, SYM, -5);
+          broker.emitEvent({ type: 'order', order: { ...mirroredStop, sourceVersion: 'stop-filled' } });
+          broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: SYM, netQuantity: -5 } });
+          throw new Error('TooLate: order already filled');
+        }
+        return realCancel(accountId, brokerOrderId);
+      };
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'manual-exit', side: 'Sell', orderType: 'Market', limitPrice: undefined, status: 'working',
+      }) });
+      await settle(controller, 300);
+      await settle(controller, 3_000);
+      expect(controller.status().armed).toBe(false);
+      expect(controller.status().lastDisarm).toMatchObject({ trigger: 'manual' });
+      expect(broker.placedRequests().some(request => request.accountId === 200 && request.side === 'Buy'
+        && request.orderType === 'Market')).toBe(false);
+    } finally {
+      controller.stop();
+    }
+  }, 20_000);
 });
