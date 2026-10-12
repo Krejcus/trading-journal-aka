@@ -538,7 +538,10 @@ describe('follower čeká na vyplnění zkopírovaného vstupu (varianta 1)', ()
     }
   }, 20_000);
 
-  it('scale-in: druhá kopie vstupu čeká, po vypnutí se zruší jen ona, první pozice i nohy zůstanou (R2)', async () => {
+  it.each([
+    ['leader dál v pozici', false],
+    ['leader mezitím flat', true],
+  ])('scale-in: druhá kopie vstupu čeká, po vypnutí se zruší jen ona, první pozice i nohy zůstanou (R2, %s)', async (_label, leaderFlat) => {
     const { broker, controller, followerEntry } = await leaderFilledFollowerWaiting();
     try {
       fillFollowerEntry(broker, followerEntry, 5);
@@ -567,6 +570,8 @@ describe('follower čeká na vyplnění zkopírovaného vstupu (varianta 1)', ()
       } });
       broker.setPosition(100, SYM, 10);
       broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: SYM, netQuantity: 10 } });
+      // Broker REST už leadera vidí flat (zavřel), stream to ještě nedoručil.
+      if (leaderFlat) broker.setPosition(100, SYM, 0);
       const find = broker.findOrderById.bind(broker);
       broker.findOrderById = async (accountId: number, brokerOrderId: string) => (
         accountId === 100 && brokerOrderId === 'entry2'

@@ -12302,10 +12302,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const multiplier = group.followers.find(item => item.accountId === candidate.accountId)?.multiplier ?? 1;
         const leaderNet = await boundedNetPosition(leaderAccountId, candidate.symbol);
         const copySign = candidate.side === 'Buy' ? 1 : -1;
+        // Flat leader: každá kopie vstupu ve směru pozice followera s nulovým
+        // fillem už jen zvětšuje expozici, kterou leader nemá (R2 zbytek).
         if (
           leaderNet == null
           || Math.sign(followerNet) !== copySign
-          || followerNet + copySign * followerOrder.quantity !== Math.trunc(leaderNet * multiplier)
+          || (leaderNet !== 0
+            && followerNet + copySign * followerOrder.quantity !== Math.trunc(leaderNet * multiplier))
         ) continue;
       }
       if (stopped || gate.armed || !gate.connected || gate.killSwitch) return;
