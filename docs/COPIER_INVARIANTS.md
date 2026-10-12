@@ -549,12 +549,34 @@ existující ochranu.
   ochranný Stop za cenou čekajícího Limit vstupu followera bez jakéhokoli fillu
   se nemůže vyplnit dřív než vstup, zrcadlí se jako dosud (V12/R12). Leader flat
   (vlastní SL/TP nohou) zruší otevřený OSO vstup flat followera přes
-  `sweepFollowerProtectiveLegs` (souběžně pro všechny). Hlídá test:
-  `tests/copierAwaitingCopiedEntry.test.ts`. Známé limity: částečně vyplněná
+  `sweepFollowerProtectiveLegs` (souběžně pro všechny); u z části vyplněného
+  followera zruší jen nevyplněný zbytek kopie vstupu
+  (`cancelPartialCopiedEntryRemainder`, V3), pozici dál chrání jeho nohy a
+  leader-flat guard. Sweep a důkaz suppression po S1b zrušení
+  (`queueS1bPostCancelCleanup`, V1) startují hned po důkazu nulového fillu, ale
+  čeká se na ně a jejich selhání se uplatní jako incident až po rozeslání
+  příkazu všem followerům (`settleS1bPostCancelCleanups` ve `finally` broker
+  eventu, jinak další krok `eventTail`); incident nese vlastní příčinu a při
+  pozici na followerovi (vyplněný zrcadlený stop) vede k auto-close (V5).
+  Výjimka zrcadleného Stopu se nepoužije, dokud má follower nezpracovaný
+  obchodní event (V5). Samostatný SL leadera z bracket okna dostanou ověření
+  followeři i vedle neověřeného; fail-closed až po dispatchi (V4). Po každém
+  vypnutí (incident, ruční DISARM, Kontrola pozic, obnova po výpadku)
+  `cancelStrandedCopiedEntries` jednou zruší ne-Market kopii vstupu s přesnou
+  lineage z durable outboxu, když broker autoritativně hlásí leaderův vstup
+  celý vyplněný a kopii followera pracující s nulovým fillem; nohy pak uklidí
+  sweep (V2). Stav čekání je ve statusu (`awaitingCopiedEntries`, jen za ARM)
+  a v LIVE řádku jako „Čeká na vstup“ (V6). Hlídají testy:
+  `tests/copierAwaitingCopiedEntry.test.ts`,
+  `tests/copierAwaitingEntryBracketStop.test.ts`,
+  `tests/liveCopyAwaitingEntryRender.test.ts`. Známé limity: částečně vyplněná
   čekající kopie u ne-Market redukce dál končí incidentem (V12/Z10); po
-  reconnectu je pending expozice prázdná a čekající follower vede k incidentu;
-  jakýkoli fail-closed/DISARM během čekání nechá kopii vstupu v knize (jako
-  před změnou) — risk-redukční zrušení těchto kopií při DISARM je otevřený bod.
+  reconnectu je pending expozice prázdná a čekající follower vede k incidentu
+  (kopii pak zruší V2 při obnově); reverzní Limit/Stop leadera při čekajícím
+  followerovi jde nerozděleně — neověřený follower zastaví i otevření
+  protipozice ostatním (záměrně: před incidentem se nová expozice neotevírá);
+  zrušení zbytku z části vyplněného OSO vstupu u Tradovate (kaskáda na aktivní
+  nohy) není ověřené proti živému brokeru.
 
 ### Pořadí a čerstvost stavu
 
