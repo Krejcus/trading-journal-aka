@@ -500,12 +500,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // návratu na LIVE). `null` = status ještě neznámý, '' = známý bez připojení.
   const connectedConnectionKey = useMemo(
     () => live.status
-      ? [...new Set(live.status.connections.filter(connection => connection.connected).map(connection => connection.id))].sort().join(',')
+      ? JSON.stringify([...new Set(live.status.connections.filter(connection => connection.connected).map(connection => connection.id))].sort())
       : null,
     [live.status],
   );
   const connectedConnectionIds = useMemo(
-    () => connectedConnectionKey ? connectedConnectionKey.split(',') : [],
+    () => connectedConnectionKey ? JSON.parse(connectedConnectionKey) as string[] : [],
     [connectedConnectionKey],
   );
   const pilotDevices = useMemo(
