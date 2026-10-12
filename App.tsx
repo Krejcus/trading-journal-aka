@@ -1044,23 +1044,33 @@ const App: React.FC = () => {
     let cancelled = false;
     const isCurrentSession = captureSessionRequest(userId);
     if (isNativeShell()) {
-      const refreshNative = async () => {
+      const refreshNative = async (includePush = true) => {
         if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
         await waitForNativeSessionCleanup();
         if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
         const [, , pushResult] = await Promise.allSettled([
           initializeNativeLiveActivityPush(userId),
           initializeNativeWidgetRemote(userId),
-          initializeNativeRemoteNotifications(userId),
+          includePush ? initializeNativeRemoteNotifications(userId) : Promise.resolve(null),
         ]);
-        if (!cancelled && !logoutInProgressRef.current && isCurrentSession()) setIsPushActive(pushResult.status === 'fulfilled' && pushResult.value);
+        if (!includePush) return;
+        if (!cancelled && !logoutInProgressRef.current && isCurrentSession()) setIsPushActive(pushResult.status === 'fulfilled' && pushResult.value === true);
       };
       const onVisible = () => { if (document.visibilityState === 'visible') void refreshNative(); };
       const onOnline = () => { void refreshNative(); };
       // Registrace push, widgetu a Live Activity (každá s /api voláním a
       // Keychain) se při startu přetahovala o síť s Dashboardem. Spustí se až
       // po něm; návrat z pozadí a „online“ dál obnovují hned.
-      const initialRefresh = window.setTimeout(() => { void refreshNative(); }, 3_000);
+      const initialRefresh = window.setTimeout(() => { void refreshNative(false); }, 3_000);
+      // Posluchač klepnutí na push (a token) hned: studený start z notifikace
+      // (copier alert) nesmí čekat 3 s. Odkládá se jen widget a Live Activity.
+      void (async () => {
+        if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
+        await waitForNativeSessionCleanup();
+        if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
+        const active = await initializeNativeRemoteNotifications(userId).catch(() => false);
+        if (!cancelled && !logoutInProgressRef.current && isCurrentSession()) setIsPushActive(active);
+      })();
       document.addEventListener('visibilitychange', onVisible);
       window.addEventListener('online', onOnline);
       window.addEventListener('alphatrade:native-push-retry', onOnline);

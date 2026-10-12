@@ -102,4 +102,17 @@ describe('native secure auth storage', () => {
     expect(await storage.getItem('session')).toBe('a');
     expect(secure.api.secureGet).toHaveBeenCalledTimes(2);
   });
+
+  it('pomalé čtení, které doběhne po zápisu, nepřepíše zrcadlo starou hodnotou', async () => {
+    const secure = vault({ session: 'old' });
+    let releaseRead!: () => void;
+    const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+    secure.api.secureGet.mockImplementationOnce(async () => { await gate; return { value: 'old' }; });
+    const storage = createNativeSecureAuthStorage(legacyStorage().storage, secure.api);
+    const slowRead = storage.getItem('session');
+    await storage.setItem('session', 'new');
+    releaseRead();
+    expect(await slowRead).toBe('old');
+    expect(await storage.getItem('session')).toBe('new');
+  });
 });

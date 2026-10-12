@@ -267,10 +267,10 @@ async function readCachedDashboardData(userId: string): Promise<CachedDashboardD
     if (!cachedUser || cachedUser.id !== userId) return null;
     const accounts = accountsRaw ? JSON.parse(accountsRaw) : (validSnapshot?.accounts || []);
     const preferences = prefsRaw ? JSON.parse(prefsRaw) : (validSnapshot?.preferences || null);
-    const cachedTrades = visibleJournalTrades((trades || validSnapshot?.trades || []) as Trade[]);
-    const activeOwner = await getUserId();
+    // Rozhodnutí o soukromých poznámkách (vlastník vs. cizí) až při spotřebě
+    // v getCachedDashboardData — prefetch běží ještě před obnovou přihlášení.
     return {
-      trades: activeOwner === userId ? cachedTrades : cachedTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t))),
+      trades: visibleJournalTrades((trades || validSnapshot?.trades || []) as Trade[]),
       accounts: accounts as Account[],
       preps: (preps || validSnapshot?.preps || []) as DailyPrep[],
       reviews: (reviews || validSnapshot?.reviews || []) as DailyReview[],
@@ -499,10 +499,14 @@ export const storageService = {
   async getCachedDashboardData(userId: string): Promise<CachedDashboardData | null> {
     const prefetched = cachedDashboardPrefetch;
     cachedDashboardPrefetch = null;
-    if (prefetched && prefetched.userId === userId && Date.now() - prefetched.at < CACHED_DASHBOARD_PREFETCH_MAX_AGE_MS) {
-      return prefetched.promise;
-    }
-    return readCachedDashboardData(userId);
+    const cached = prefetched && prefetched.userId === userId && Date.now() - prefetched.at < CACHED_DASHBOARD_PREFETCH_MAX_AGE_MS
+      ? await prefetched.promise
+      : await readCachedDashboardData(userId);
+    if (!cached) return null;
+    const activeOwner = await getUserId();
+    return activeOwner === userId
+      ? cached
+      : { ...cached, trades: cached.trades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t))) };
   },
 
   // User Profile
