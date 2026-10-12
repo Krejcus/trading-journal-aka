@@ -322,9 +322,15 @@ describe('Z8 S1b variants: leader limit filled, follower copy working, non-Marke
           order.accountId === 200 && order.status === 'working'
         ))).toHaveLength(0);
       } else {
-        expect(broker.placedRequests()).toContainEqual(expect.objectContaining({
+        // 12. 10. 2026: TP limit by se čekajícímu followerovi mohl vyplnit dřív
+        // než jeho vstup a otočit ho do shortu. Kopie vstupu se zruší a follower
+        // obchod vynechá; TP se mu nezrcadlí.
+        expect(broker.placedRequests()).not.toContainEqual(expect.objectContaining({
           accountId: 200, side: 'Sell', orderType: 'Limit', quantity: 8,
         }));
+        expect(broker.orders().filter((order: any) => (
+          order.accountId === 200 && order.status === 'working'
+        ))).toHaveLength(0);
       }
       console.log('Z8', exitType, summary(broker, controller));
       controller.stop();

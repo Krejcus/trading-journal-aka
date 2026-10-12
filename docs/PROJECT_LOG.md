@@ -256,6 +256,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-12 — Follower čeká na svou kopii vstupu (Claude, varianta 1 Filipa)
+
+Větev `claude/copier-entry-wait-20261012`. Dva produkční obchody 12. 10. ráno:
+leaderův Buy limit přesně na ceně se vyplnil do 0,1 s, kopie followerů dorazila
+o ~0,3 s později a cena utekla. Kontrola followera po 2,5 s hlásila „pozice 0,
+očekáváno 5“ a kopírku vypnula; limity followerů se pak vyplnily bez dozoru
+(posuny SL se nekopírovaly).
+
+- Nevyplněná kopie vstupu u vyplněného leadera není divergence; follower na ni
+  čeká, nic se nedokupuje (INV-DIVERGENCE-01, odstavec 12. 10.).
+- Leader snižuje dřív (Market, Limit i Stop): kopie vstupu se zruší i s OSO
+  nohami a follower obchod vynechá. Ochranný Stop za cenou vstupu se zrcadlí
+  dál (nemůže se vyplnit dřív než vstup). TP limit už se čekajícímu followerovi
+  nezrcadlí — dřív mohl otočit followera do protipozice (test Z8 upraven).
+- Leader skončí SL/TP nohou: otevřený OSO vstup flat followera se zruší.
+- Opravena i stará díra S1b: zrušení OSO vstupu nechávalo viset jeho nohy a
+  důkaz „bez příkazů“ pak skupinu shodil.
+
 ### 2026-10-11 — Oponent jádra kopírky, rychlejší dashboard, přepnutí účtu A→B (Claude)
 
 Větev `claude/copier-critic-and-speed-20261008` (práce z 8. 10.) sloučena

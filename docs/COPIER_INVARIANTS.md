@@ -533,6 +533,20 @@ existující ochranu.
   důkazní izolaci jednoho followera. `services/copierEngine.ts:planReconciliation`
   je nevolaný mrtvý export, který plánuje Market dorovnání; pravidlo nevynucuje
   a jeho zapojení by je porušilo.
+- **Follower čeká na svou kopii vstupu (12. 10. 2026, varianta 1 Filipa)** není
+  divergence: leaderův Limit/OSO vstup se vyplnil hned, kopie followera dorazila
+  pozdě a pracuje dál. `verifyFollowerMagnitude` ji pozná přes
+  `awaitingCopiedEntry` (čerstvá pending expozice: leader celý vyplněný, kopie
+  otevřená a pokrývá přesně zbytek do očekávané pozice) a nefailne; konec kopie
+  (cancel/reject/fill) spustí novou kontrolu. Nic se nedokupuje. Když leader
+  dřív snižuje: Market i Limit/Stop výstup jde přes S1b — kopie vstupu se zruší
+  i s pozastavenými OSO nohami, ověří se nulový fill a follower vynechá obchod
+  (suppression allowedNet 0). Výjimka: ochranný Stop za cenou čekajícího Limit
+  vstupu (u longu pod ním) se nemůže vyplnit dřív než vstup, zrcadlí se jako
+  dosud (V12/R12). Leader flat (vlastní SL/TP nohou) zruší otevřený OSO vstup
+  flat followera přes `sweepFollowerProtectiveLegs`. Hlídá test:
+  `tests/copierAwaitingCopiedEntry.test.ts`. Známý limit: po reconnectu je
+  pending expozice prázdná, čekající follower pak vede k incidentu jako dřív.
 
 ### Pořadí a čerstvost stavu
 

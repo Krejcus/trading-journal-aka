@@ -2219,6 +2219,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const recentFollowerFillCauses = new Map<string, RecentFollowerFillCause>();
   const pendingFollowerTransitions = new Map<string, PendingFollowerTransition>();
   const pendingFollowerMagnitudeChecks = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Followeři, kteří čekají na vyplnění vlastní kopie vstupu (12. 10. 2026):
+   * leaderův limit se vyplnil hned, kopie followera dorazila o pár stovek ms
+   * později a cena mezitím utekla. Kopie zůstává v knize; není to divergence.
+   */
+  const awaitingCopiedEntries = new Map<string, { since: number }>();
   const leaderFlatGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const leaderFlatGuardGenerationRetries = new Map<string, number>();
   const LEADER_FLAT_GENERATION_RETRY_LIMIT = 3;
@@ -5346,6 +5352,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     })));
   };
 
+  /**
+   * Varianta 1 (Filip 12. 10. 2026): leader je vyplněný a followerova kopie
+   * vstupu (limit / OSO vstup) dál pracuje a pokrývá přesně zbytek do
+   * očekávané pozice. Follower na ni čeká; kopírka nic nedokupuje. Když
+   * leader dřív snižuje nebo končí, kopie se zruší a follower obchod vynechá.
+   */
+  const awaitingCopiedEntry = (
+    accountId: number,
+    symbol: string,
+    followerNet: number,
+    expectedNet: number,
+  ): boolean => {
+    if (expectedNet === 0) return false;
+    if (followerNet !== 0 && Math.sign(followerNet) !== Math.sign(expectedNet)) return false;
+    if (Math.abs(followerNet) >= Math.abs(expectedNet)) return false;
+    const pending = currentRuntimePendingNet(accountId, symbol, followerNet, expectedNet, '');
+    return !pending.invalidEvidence
+      && pending.filledLeaderWorkingOrderIds.length > 0
+      && pending.net !== 0
+      && Math.sign(pending.net) === Math.sign(expectedNet)
+      && followerNet + pending.net === expectedNet;
+  };
+
   const verifyFollowerMagnitude = async (accountId: number, symbol: string) => {
     const key = followerTransitionKey(accountId, symbol);
     if (!pendingFollowerMagnitudeChecks.has(key) || stopped) return;
@@ -5373,9 +5402,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       followerPositions.set(symbol, followerNet);
       positionsByAccount.set(accountId, followerPositions);
 
-      if (followerNet === expectedFollowerNet) return;
+      if (followerNet === expectedFollowerNet) {
+        awaitingCopiedEntries.delete(key);
+        return;
+      }
       const suppression = currentIntentionalSuppression(accountId, symbol);
       if (suppression && followerNet === suppression.allowedNet) return;
+      if (leaderNet !== 0 && awaitingCopiedEntry(accountId, symbol, followerNet, expectedFollowerNet)) {
+        if (!awaitingCopiedEntries.has(key)) {
+          awaitingCopiedEntries.set(key, { since: clock() });
+          options.onAudit?.([{
+            at: clock(),
+            leaderEventId: `follower-awaiting-entry:${accountId}:${symbol}:${clock()}`,
+            kind: 'skipped',
+            accountId,
+            reason: `follower ${accountId} čeká na vyplnění zkopírovaného vstupu (${followerNet}/${expectedFollowerNet} na ${symbol}); `
+              + 'leader se vyplnil dřív, kopie zůstává v knize',
+          }]);
+        }
+        return;
+      }
+      awaitingCopiedEntries.delete(key);
       if (followerNet === 0 && leaderNet !== 0) {
         // Follower zmizel z trhu za otevřeného leadera. Než skupinu
         // odzbrojíme, ověříme u brokera, zda ho nezlikvidovala propka —
@@ -12032,6 +12079,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       followerNet,
       expectedPreNet,
       oppositePendingCandidates,
+      filledLeaderCandidates,
       candidates: [...new Set([
         ...filledLeaderCandidates,
         ...oppositePendingCandidates,
@@ -12118,17 +12166,38 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const pendingReadSkipAccounts = new Set<number>();
     const pendingReadUnsafeAccounts = new Map<number, string>();
     const conditionalMirrorCandidates = new Map<number, string[]>();
-    if (event.orderType === 'Market' && gate.armed && !gate.shadowMode) {
+    // S1b platí pro každý redukující leader příkaz, ne jen Market (12. 10.
+    // 2026): follower, který čeká na vyplnění kopie vstupu (leader už
+    // vyplněný), by jinak dostal Limit/Stop exit v plné velikosti a ten by
+    // ho při vyplnění dřív než vstup otočil do protipozice. U ne-Market
+    // příkazů jde jen o kopie vstupu, jejichž leader příkaz je celý vyplněný.
+    if (gate.armed && !gate.shadowMode) {
       await Promise.all(dispatchBaseGroup.followers.map(async follower => {
         const modeAcceptsEvent = event.kind === 'filled'
           ? follower.mode === 'on-fill'
           : follower.mode === 'on-submit';
         if (!modeAcceptsEvent || follower.enabled === false || follower.mode === 'off') return;
-        const {
-          expectedPreNet,
-          oppositePendingCandidates,
-          candidates,
-        } = s1bCandidatesFor(event, follower);
+        const s1b = s1bCandidatesFor(event, follower);
+        const { expectedPreNet } = s1b;
+        const oppositePendingCandidates = event.orderType === 'Market' ? s1b.oppositePendingCandidates : [];
+        // Ochranný Stop za cenou čekajícího Limit vstupu (u longu pod ním,
+        // u shortu nad ním) se nemůže vyplnit dřív než vstup — cena musí
+        // vstupem nejdřív projít. Takový výstup se followerovi zrcadlí jako
+        // dosud (V12/R12) a follower čeká dál. Cokoli jiného (TP limit, stop
+        // mezi vstupem a trhem, Stop vstup) by ho mohlo otočit do protipozice:
+        // kopie vstupu se zruší a follower obchod vynechá.
+        const protectiveStopBehindEntry = (followerOrderId: string): boolean => {
+          if (event.orderType !== 'Stop' || event.stopPrice == null) return false;
+          const pendingEntry = liveOrdersByAccount.get(follower.accountId)?.get(followerOrderId);
+          if (!pendingEntry || pendingEntry.orderType !== 'Limit' || pendingEntry.limitPrice == null) return false;
+          if (pendingEntry.side === event.side) return false;
+          return pendingEntry.side === 'Buy'
+            ? event.stopPrice < pendingEntry.limitPrice
+            : event.stopPrice > pendingEntry.limitPrice;
+        };
+        const candidates = event.orderType === 'Market'
+          ? s1b.candidates
+          : s1b.filledLeaderCandidates.filter(orderId => !protectiveStopBehindEntry(orderId));
         // Každý opačný pending je součást rozhodnutí. U více kandidátů nelze
         // jedním order lookupem doložit, který z nich už pozici změnil; větev
         // proto zůstává fail-closed jako před V12 a neposílá přímý exit.
@@ -12202,6 +12271,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           } finally {
             clearTimeout(timer);
           }
+          // Zrušený OSO vstup nesmí nechat viset své pozastavené SL/TP nohy
+          // (12. 10. 2026): bez nich neprojde důkaz „účet bez příkazů“ a
+          // skupina by zbytečně skončila fail-closed. Rušení nohy nikdy
+          // nevyplněného vstupu je risk-snižující; chyba (už zrušená noha)
+          // nevadí — o výsledku rozhodne následující autoritativní čtení.
+          const osoLegs = [...currentRuntime().osoOutbox.values()]
+            .filter(entry => entry.request.accountId === follower.accountId
+              && entry.entryBrokerOrderId === candidates[0])
+            .flatMap(entry => [entry.firstBrokerOrderId, entry.secondBrokerOrderId])
+            .filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId));
+          await Promise.all(osoLegs.map(async brokerOrderId => {
+            let legTimer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([
+                dispatchBroker(safetyGeneration, event).cancelOrder(follower.accountId, brokerOrderId),
+                new Promise<never>((_, reject) => {
+                  legTimer = setTimeout(() => reject(new Error('S1b OSO leg cancel deadline 1000 ms')), 1_000);
+                }),
+              ]);
+            } catch {
+              // Výsledek ověří postkontrola níže; write se neopakuje.
+            } finally {
+              clearTimeout(legTimer);
+            }
+          }));
           // ACK cancelu není důkaz nevyplnění. Po úspěchu i chybě následuje
           // právě jedno read-only čtení téže kopie a pozice; write se neopakuje.
           const postCancelStartedAt = performance.now();
@@ -12969,6 +13063,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const now = clock();
     if (event.type === 'order') {
       rememberLiveOrder(event.order);
+      // Kopie, na kterou follower čeká, skončila (zrušená/odmítnutá/vyplněná):
+      // stav followera se musí znovu ověřit, jinak by výpadek kopie zapadl.
+      if (
+        event.order.accountId !== group.leaderAccountId
+        && !isOpenOrderStatus(event.order.status)
+        && awaitingCopiedEntries.has(followerTransitionKey(event.order.accountId, event.order.symbol))
+      ) {
+        scheduleFollowerMagnitudeCheck(event.order.accountId, event.order.symbol);
+      }
       if (event.order.accountId === group.leaderAccountId) {
         leaderMaxSeenOrderId = maxOrderId([event.order.brokerOrderId], leaderMaxSeenOrderId);
       }
@@ -13652,6 +13755,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           now,
         );
         rememberLeaderPosition(event.position.symbol, event.position.netQuantity);
+        if (previousNet !== 0 && event.position.netQuantity === 0) {
+          // Leader skončil (typicky vlastní SL/TP nohou) a follower pořád čeká
+          // na vyplnění kopie vstupu: kopie i její pozastavené nohy musí pryč,
+          // jinak by se mohla vyplnit později bez dozoru. Risk-redukující
+          // cancel smí proběhnout i po DISARM (stejně jako flat sweep).
+          const symbol = event.position.symbol;
+          for (const follower of group.followers) {
+            const followerNet = positionsByAccount.get(follower.accountId)?.get(symbol) ?? 0;
+            if (followerNet !== 0) continue;
+            const openCopiedEntry = [...currentRuntime().osoOutbox.values()].some(entry => {
+              if (entry.request.accountId !== follower.accountId || entry.request.symbol !== symbol) return false;
+              if (!entry.entryBrokerOrderId) return false;
+              const parent = liveOrdersByAccount.get(follower.accountId)?.get(entry.entryBrokerOrderId);
+              return parent != null && isOpenOrderStatus(parent.status);
+            });
+            if (!openCopiedEntry) continue;
+            awaitingCopiedEntries.delete(followerTransitionKey(follower.accountId, symbol));
+            clearPendingFollowerMagnitudeCheck(follower.accountId, symbol);
+            await sweepFollowerProtectiveLegs(follower.accountId, symbol, now, {}, createFlatSweepBudget());
+          }
+        }
         for (const follower of group.followers) {
           const followerNet = positionsByAccount.get(follower.accountId)?.get(event.position.symbol) ?? 0;
           const suppression = currentIntentionalSuppression(
@@ -15933,6 +16057,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       recentFollowerFillCauses.clear();
       for (const timer of pendingFollowerMagnitudeChecks.values()) clearTimeout(timer);
       pendingFollowerMagnitudeChecks.clear();
+      awaitingCopiedEntries.clear();
       for (const timer of leaderFlatGuardTimers.values()) clearTimeout(timer);
       leaderFlatGuardTimers.clear();
       leaderFlatGuardGenerationRetries.clear();
@@ -17533,6 +17658,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       pendingFollowerTransitions.clear();
       for (const timer of pendingFollowerMagnitudeChecks.values()) clearTimeout(timer);
       pendingFollowerMagnitudeChecks.clear();
+      awaitingCopiedEntries.clear();
       for (const timer of leaderFlatGuardTimers.values()) clearTimeout(timer);
       leaderFlatGuardTimers.clear();
       leaderFlatGuardGenerationRetries.clear();
