@@ -25,7 +25,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (message.startsWith('invalid-journal-')) return res.status(400).json({ error: message });
     if (message === 'journal-import-partition-required') return res.status(409).json({ error: message });
     if (['journal-legacy-reference-ambiguous', 'journal-legacy-connection-unavailable'].includes(message)) return res.status(409).json({ error: message });
-    console.warn('[journal-import] position persistence failed');
+    // Jen kód chyby (žádná data): bez něj nejde zjistit, proč import stojí.
+    const code = /^[a-z0-9-]{1,80}$/.test(message) ? message : `unexpected:${error instanceof Error ? error.name : typeof error}`;
+    console.warn('[journal-import] position persistence failed', code);
     return res.status(502).json({ error: 'journal-unavailable' });
   }
 }
