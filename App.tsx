@@ -16,6 +16,7 @@ import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 import { perfMark, perfMarkOnce } from './lib/perfTrace';
 import { isNativeBuild } from './utils/runtimeConfig';
 import { TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS } from './lib/tradovateIntentPrefetch';
+import { afterLivePriority, holdForLive, releaseLivePriority } from './lib/livePriority';
 import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { calculateStats } from './services/analysis';
@@ -841,6 +842,9 @@ const App: React.FC = () => {
     setCopierImportRunning(true);
     const before = copierRowsRef.current;
     try {
+      // Při studeném otevření LIVE deník počká, až se LIVE zobrazí.
+      await afterLivePriority();
+      if (!isCurrentSession() || abort.signal.aborted) return;
       const result = await syncJournalConnections({ accounts, signal: abort.signal, verifiedReads: journalVerifiedReadsRef.current,
         isCurrent: isCurrentSession, loadStatus: loadTradovateOAuthStatus,
         importConnection: importTradovateJournalConnection, loadTrades: () => storageService.getTrades(),
@@ -1226,6 +1230,7 @@ const App: React.FC = () => {
   // posuvný kontejner, takže bez resetu nová stránka zdědila pozici staré
   // (sjel jsi dolů na Dashboardu → Historie se otevřela dole).
   const pageScrollRef = useRef<HTMLDivElement>(null);
+  const tradovateLiveDataRef = useRef<unknown>(null);
   const previousScrollPageRef = useRef(activePage);
   useLayoutEffect(() => {
     if (previousScrollPageRef.current === activePage) return;
@@ -1247,6 +1252,14 @@ const App: React.FC = () => {
     return requestedByUrl || requestedByLoginRoundTrip;
   });
   useEffect(() => { perfMark(`nav:${activePage}`); }, [activePage]);
+  // Studené otevření LIVE (ještě bez dat): těžké čtení na pozadí počká, než
+  // se LIVE zobrazí (uvolní TradovateLiveDesk), nejdéle 6 s. Odchod z LIVE
+  // přednost hned ukončí.
+  useEffect(() => {
+    if (activePage !== 'live') return;
+    if (!tradovateLiveDataRef.current) holdForLive();
+    return () => releaseLivePriority();
+  }, [activePage]);
   const tradovateLiveEnabled = activePage === 'live'
     || (activePage === 'accounts' && dashboardMode !== 'backtesting');
   const tradovateLive = useTradovateLiveData(
@@ -1257,6 +1270,7 @@ const App: React.FC = () => {
     },
     tradovateLiveEnabled,
   );
+  tradovateLiveDataRef.current = tradovateLive.data;
   const hasJournalConnection = accounts.some(account => account.oauth?.provider === 'tradovate') || Boolean(tradovateLive.status?.connections.length);
   useEffect(() => {
     if (!isInitialLoadDone || !session?.user?.id || !hasJournalConnection) return;
@@ -2151,7 +2165,10 @@ const App: React.FC = () => {
 
         // Refresh complete contents, including edits that preserve row identity.
         perfMark('boot:refresh-start');
-        storageService.getDashboardData().then(fresh => {
+        afterLivePriority().then(() => {
+          perfMark('boot:refresh-request');
+          return storageService.getDashboardData();
+        }).then(fresh => {
           perfMark('boot:refresh-done');
           if (!isCurrentSession()) return;
           setTrades(prev => reconcileDashboardRows(prev, fresh.trades));

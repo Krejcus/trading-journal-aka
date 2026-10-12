@@ -1,4 +1,5 @@
 import { perfMark, perfMarkOnce } from '../lib/perfTrace';
+import { releaseLivePriority } from '../lib/livePriority';
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { createCopierForegroundPoller, isCopierStatusFresh } from '../lib/copierForegroundPoller';
 import { copierRelayObservedAt, newestCopierRelaySnapshot } from '../lib/copierRelayStatusPoll';
@@ -1193,6 +1194,12 @@ acceptAgentStatus((await executeAgent({
     if (!coldRevealDoneRef.current) perfMarkOnce('live:reveal');
     coldRevealDoneRef.current = true;
   }
+  // Přednost LIVE (lib/livePriority) končí, až je přehled vidět i se stavem
+  // kopírky; strop hlídá modul sám. Uvolnění nic neautorizuje.
+  const livePriorityReleasable = coldRevealDoneRef.current && agentStatus != null;
+  useEffect(() => {
+    if (livePriorityReleasable) releaseLivePriority();
+  }, [livePriorityReleasable]);
   // Zapnutá kopírka: přehled s vypnutím (OFF, kill) se nedrží ani chvíli.
   const holdColdReveal = coldReadsPending && !coldRevealCapReached && agentStatus?.controller.armed !== true;
   useEffect(() => {
