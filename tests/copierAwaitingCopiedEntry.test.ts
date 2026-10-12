@@ -72,9 +72,22 @@ async function leaderFilledFollowerWaiting(options: { group?: CopyGroupConfig } 
   } });
   broker.setPosition(100, SYM, 5);
   broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: SYM, netQuantity: 5 } });
+  // Mock broker eventy leadera neukládá; REST by vyplněný vstup vrátil.
+  const realFind = broker.findOrderById.bind(broker);
+  broker.findOrderById = async (accountId: number, brokerOrderId: string) => (
+    accountId === 100 && brokerOrderId === 'entry'
+      ? { order: leaderOrder({ status: 'filled', filledQuantity: 5, sourceVersion: '2:Filled' }), completeness: 'authoritative' as const, observedAt: 0 }
+      : realFind(accountId, brokerOrderId)
+  );
   await settle(controller);
   const entryOf = (accountId: number) => broker.orders().find(order => order.accountId === accountId && order.side === 'Buy')!;
-  return { broker, controller, audit, advance: time.advance, followerEntry: followerEntry!, entryOf };
+  /** Posun hodin s heartbeatem: jinak dispatchBroker zápis odmítne jako stale-heartbeat. */
+  const advanceLive = async (ms: number) => {
+    time.advance(ms);
+    broker.emitEvent({ type: 'heartbeat', at: time.clock() });
+    await controller.waitForIdle();
+  };
+  return { broker, controller, audit, advance: time.advance, advanceLive, followerEntry: followerEntry!, entryOf };
 }
 
 
@@ -318,6 +331,137 @@ describe('follower čeká na vyplnění zkopírovaného vstupu (varianta 1)', ()
         armed: false,
         lastError: expect.stringContaining('follower 200 má autoritativně pozici 0'),
       });
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('úklid čekajícího followera selže: druhý follower s ingress backlogem exit stejně dostane (V1)', async () => {
+    const h = await leaderFilledFollowerWaiting({ group: twoFollowers });
+    try {
+      fillFollowerEntry(h.broker, h.entryOf(300), 5);
+      await settle(h.controller);
+      const waitingEntryId = h.entryOf(200).brokerOrderId;
+      const realCancel = h.broker.cancelOrder.bind(h.broker);
+      // Vstup se zruší, ale cancel jeho ochranných noh broker odmítne.
+      h.broker.cancelOrder = async (accountId: number, brokerOrderId: string) => {
+        if (accountId === 200 && brokerOrderId !== waitingEntryId) throw new Error('síť: cancel nohy selhal');
+        return realCancel(accountId, brokerOrderId);
+      };
+      h.advance(5_000);
+      h.broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'manual-exit', side: 'Sell', orderType: 'Market', limitPrice: undefined, status: 'working',
+      }) });
+      // Event followera 300 ve frontě za leader exitem = ingress backlog (deferredForIngress).
+      h.broker.emitEvent({ type: 'position', position: { accountId: 300, symbol: SYM, netQuantity: 5 } });
+      await settle(h.controller, 250);
+      expect(h.broker.placedRequests()).toContainEqual(expect.objectContaining({
+        accountId: 300, side: 'Sell', orderType: 'Market', quantity: 5,
+      }));
+      expect(h.broker.placedRequests().some(request => request.accountId === 200 && request.side === 'Sell'
+        && request.orderType === 'Market')).toBe(false);
+      // Incident s vlastní příčinou, ne obecná „nevysvětlená divergence“.
+      expect(h.controller.status()).toMatchObject({
+        armed: false,
+        lastError: expect.stringContaining('Flat sweep nedokončen — účet 200'),
+      });
+    } finally {
+      h.controller.stop();
+    }
+  });
+
+  it('zrcadlený ochranný stop a pak TP limitem: na flat followerovi nic nezůstane', async () => {
+    const { broker, controller, advanceLive } = await leaderFilledFollowerWaiting();
+    try {
+      await advanceLive(5_000);
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'manual-sl', side: 'Sell', orderType: 'Stop', limitPrice: undefined,
+        stopPrice: 31_160, status: 'working',
+      }) });
+      await settle(controller, 150);
+      expect(broker.placedRequests()).toContainEqual(expect.objectContaining({ accountId: 200, orderType: 'Stop', stopPrice: 31_160 }));
+      // Mimo okno párování bracketu, jinak by se TP spároval se stopem.
+      await advanceLive(5_000);
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'manual-tp', side: 'Sell', orderType: 'Limit', limitPrice: 31_200, status: 'working',
+      }) });
+      await settle(controller, 200);
+      expect(workingOn(broker, 200)).toEqual([]);
+      expect(broker.placedRequests().some(request => request.accountId === 200 && request.orderType === 'Limit'
+        && request.side === 'Sell')).toBe(false);
+      expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('ruční vypnutí kopírky: čekající kopie vstupu i její SL/TP se zruší, follower obchod vynechá (V2)', async () => {
+    const { broker, controller, followerEntry } = await leaderFilledFollowerWaiting();
+    try {
+      controller.disarm();
+      await settle(controller, 150);
+      expect((await broker.findOrderById(200, followerEntry.brokerOrderId)).order?.status).toBe('canceled');
+      expect(workingOn(broker, 200)).toEqual([]);
+      expect(broker.placedRequests().some(request => request.accountId === 200)).toBe(false);
+      expect(controller.status().armed).toBe(false);
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('incident na jiném followerovi: čekající kopie se po vypnutí zruší (V2)', async () => {
+    const h = await leaderFilledFollowerWaiting({ group: twoFollowers });
+    try {
+      fillFollowerEntry(h.broker, h.entryOf(300), 5);
+      await settle(h.controller);
+      // Někdo ručně zmenší pozici followera 300 → kontrola velikosti ho vypne.
+      h.broker.setPosition(300, SYM, 3);
+      h.broker.emitEvent({ type: 'position', position: { accountId: 300, symbol: SYM, netQuantity: 3 } });
+      await settle(h.controller, 200);
+      expect(h.controller.status().armed).toBe(false);
+      expect((await h.broker.findOrderById(200, h.entryOf(200).brokerOrderId)).order?.status).toBe('canceled');
+      expect(workingOn(h.broker, 200)).toEqual([]);
+      // Vyplněný follower 300 si své nohy drží.
+      expect(workingOn(h.broker, 300).length).toBeGreaterThan(0);
+    } finally {
+      h.controller.stop();
+    }
+  });
+
+  it('leader vstup ještě pracuje: vypnutí kopii followera nezruší (není osiřelá)', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const time = manualClock();
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: time.clock,
+      osoCorrelationWindowMs: 25, followerTransitionCorrelationWindowMs: 20,
+    });
+    try {
+      broker.setConnected(true);
+      await controller.waitForIdle();
+      await controller.reconcile();
+      controller.arm();
+      broker.emitEvent({ type: 'order', order: leaderOrder({ status: 'pending', sourceVersion: '1:PendingNew' }) });
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'stop', parentOrderId: 'entry', side: 'Sell', orderType: 'Stop',
+        limitPrice: undefined, stopPrice: 31_155.25, status: 'pending', sourceVersion: '1:Suspended',
+      }) });
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'target', parentOrderId: 'entry', side: 'Sell', orderType: 'Limit',
+        limitPrice: 31_233.25, status: 'pending', sourceVersion: '1:Suspended',
+      }) });
+      await settle(controller, 60);
+      broker.emitEvent({ type: 'order', order: leaderOrder({ status: 'working', sourceVersion: '2:Working' }) });
+      await settle(controller);
+      const followerEntry = broker.orders().find(order => order.accountId === 200 && order.side === 'Buy')!;
+      const realFind = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId: number, brokerOrderId: string) => (
+        accountId === 100 && brokerOrderId === 'entry'
+          ? { order: leaderOrder({ status: 'working', sourceVersion: '2:Working' }), completeness: 'authoritative' as const, observedAt: 0 }
+          : realFind(accountId, brokerOrderId)
+      );
+      controller.disarm();
+      await settle(controller, 150);
+      expect((await broker.findOrderById(200, followerEntry.brokerOrderId)).order?.status).toBe('working');
     } finally {
       controller.stop();
     }

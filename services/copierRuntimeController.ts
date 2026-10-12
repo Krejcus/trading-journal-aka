@@ -1727,6 +1727,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     },
   );
   let eventTail: Promise<void> = Promise.resolve();
+  /** V2: úklid čekajících kopií vstupu po vypnutí je ve frontě (viz cancelStrandedCopiedEntries). */
+  let strandedEntryCancelQueued = false;
   /** Durable audit writes are serialized separately from broker event ingress. */
   let disarmPersistenceTail: Promise<void> = Promise.resolve();
   /** Konfigurační read-only preflighty jsou sériové, broker eventy ale neblokují. */
@@ -2483,6 +2485,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     at: number,
     hint: FlatSweepHint = {},
     sharedBudget?: FlatSweepBudget,
+    /**
+     * S1b úklid (12. 10. 2026, V1): selhání se nevolá jako failClosed uprostřed
+     * dispatchu, ale předá se volajícímu; ten incident uplatní až po rozeslání
+     * leader příkazu ostatním followerům. `followerFlatConfirmed` = false
+     * znamená, že broker hlásí pozici a incident potřebuje auto-close.
+     */
+    onFailure?: (error: Error, followerFlatConfirmed: boolean) => void,
   ): Promise<void> => {
     const budget = sharedBudget ?? createFlatSweepBudget();
     const runtime = currentRuntime();
@@ -2532,7 +2541,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const error = new Error(
         'Flat sweep nedokončen — účet ' + accountId + ' ' + symbol + ': ' + reason,
       );
-      if (followerFlatConfirmed) failClosed(error, { autoClose: false });
+      if (onFailure) onFailure(error, followerFlatConfirmed);
+      else if (followerFlatConfirmed) failClosed(error, { autoClose: false });
       else failClosed(error);
     };
 
@@ -4704,6 +4714,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     cancelFollowerCutBackgroundLanes(
       failure.transportLost ? 'transport-lost' : 'fail-closed',
     );
+    // V2: čekající kopie vstupu nesmí po incidentu followera otevřít bez dozoru.
+    if (wasLiveArmed && !failure.transportLost) scheduleStrandedCopiedEntryCancel('incident');
     // Interní nejistota odzbrojí copier a vynutí novou autoritativní kontrolu,
     // ale nesmí předstírat fyzický disconnect. Živé spojení je potřeba právě
     // proto, aby mohly doběhnout risk-redukující cancely už známých objednávek.
@@ -9958,6 +9970,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         try {
           if (pendingConnectionRecovery) await runConnectionRecovery();
           else await runReadOnlyConnectionRecovery();
+          scheduleStrandedCopiedEntryCancel('obnova po výpadku');
         } finally {
           recoveryInFlight = false;
           scheduleArmPreparation();
@@ -12092,6 +12105,194 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   /**
+   * Úklid po S1b zrušení čekající kopie vstupu (12. 10. 2026, V1). Flat sweep
+   * ochranných příkazů a důkaz suppression běží až po rozeslání leader
+   * příkazu všem followerům: jeho latence ani selhání nesmí ostatním vzít
+   * exit. Selhání se pak uplatní jako incident s vlastní příčinou; pozice
+   * na followerovi (zrcadlený stop se mezitím vyplnil) vede k auto-close.
+   */
+  const s1bPostCancelCleanups: Array<() => Promise<void>> = [];
+  const s1bDeferredIncidents: Array<{ error: Error; autoClose: boolean; liveArmed: boolean }> = [];
+  const settleS1bPostCancelCleanups = async (): Promise<void> => {
+    while (s1bPostCancelCleanups.length > 0) {
+      await Promise.all(s1bPostCancelCleanups.splice(0).map(run => run()));
+    }
+    for (const incident of s1bDeferredIncidents.splice(0)) {
+      if (stopped) return;
+      failClosed(incident.error, { autoClose: incident.autoClose });
+      // Dřívější fail-closed v téže události už kopírku odzbrojil; pozice
+      // vzniklá na flat followerovi se přesto musí zavřít.
+      if (incident.autoClose && incident.liveArmed && !gate.killSwitch) scheduleAutoClose('fail-closed');
+    }
+  };
+  const queueS1bPostCancelCleanup = (
+    accountId: number,
+    symbol: string,
+    leaderEntryOrderId: string | undefined,
+  ): void => {
+    const liveArmed = gate.armed && !gate.shadowMode;
+    s1bPostCancelCleanups.push(async () => {
+      const outcome: { failure?: { error: Error; flatConfirmed: boolean } } = {};
+      try {
+        await sweepFollowerProtectiveLegs(
+          accountId,
+          symbol,
+          clock(),
+          {},
+          createFlatSweepBudget(),
+          (error, flatConfirmed) => { outcome.failure = { error, flatConfirmed }; },
+        );
+        if (
+          !outcome.failure
+          && (!leaderEntryOrderId
+            || !await authoritativelyConfirmSuppression(accountId, symbol, leaderEntryOrderId))
+        ) {
+          outcome.failure = {
+            error: new Error(
+              `Copier fail-closed: po zrušení čekající kopie vstupu účtu ${accountId} ${symbol} `
+              + 'chybí autoritativní flat/no-working/no-pending důkaz',
+            ),
+            flatConfirmed: true,
+          };
+        }
+      } catch (reason) {
+        outcome.failure = { error: errorOf(reason), flatConfirmed: false };
+      }
+      if (outcome.failure) {
+        s1bDeferredIncidents.push({
+          error: outcome.failure.error,
+          autoClose: !outcome.failure.flatConfirmed,
+          liveArmed,
+        });
+      }
+    });
+    // Volající mimo broker event (časovače bracket/OSO): úklid doběhne
+    // nejpozději jako další krok fronty.
+    eventTail = eventTail.then(settleS1bPostCancelCleanups).catch(reason => failClosed(reason));
+  };
+
+  /**
+   * V2 (12. 10. 2026): po vypnutí kopírky (incident, ruční DISARM, Kontrola
+   * pozic, obnova po výpadku) nesmí kopie vstupu, na kterou follower čeká,
+   * zůstat v knize a později ho bez dozoru otevřít — druhý obchod 12. 10.
+   * Ruší se jen přesná lineage z durable outboxu (ne-Market vstup kopírky),
+   * když broker autoritativně hlásí leaderův vstup celý vyplněný a kopii
+   * followera pracující s nulovým fillem. Jediný risk-redukující cancel bez
+   * retry; pozastavené SL/TP nohy pak uklidí flat sweep s vlastním důkazem
+   * flat. Nejasný výsledek se jen nahlásí a nemění příčinu vypnutí.
+   */
+  const cancelStrandedCopiedEntries = async (trigger: string): Promise<void> => {
+    const leaderAccountId = group.leaderAccountId;
+    if (stopped || retiredGroup || gate.armed || !gate.connected || gate.killSwitch || leaderAccountId == null) return;
+    const runtime = currentRuntime();
+    const followerIds = new Set(group.followers.map(follower => follower.accountId));
+    const candidates: Array<{
+      accountId: number; symbol: string; brokerOrderId: string; leaderOrderId: string; quantity: number;
+    }> = [];
+    for (const entry of runtime.osoOutbox.values()) {
+      if (!entry.entryBrokerOrderId || !followerIds.has(entry.request.accountId)) continue;
+      candidates.push({
+        accountId: entry.request.accountId,
+        symbol: entry.request.symbol,
+        brokerOrderId: entry.entryBrokerOrderId,
+        leaderOrderId: entry.leaderEntryOrderId,
+        quantity: entry.request.quantity,
+      });
+    }
+    for (const entry of runtime.outbox.values()) {
+      if (!entry.brokerOrderId || !followerIds.has(entry.request.accountId)) continue;
+      if (entry.request.orderType === 'Market' || isStandaloneProtective(entry)) continue;
+      if (entry.leaderEventId == null || leaderExposureIncreaseByEventId.get(entry.leaderEventId) !== true) continue;
+      candidates.push({
+        accountId: entry.request.accountId,
+        symbol: entry.request.symbol,
+        brokerOrderId: entry.brokerOrderId,
+        leaderOrderId: entry.leaderOrderId,
+        quantity: entry.request.quantity,
+      });
+    }
+    // Levný předvýběr z order cache: REST čte jen kopie, které podle
+    // streamu ještě pracují bez fillu.
+    const working = candidates.filter(candidate => {
+      const live = liveOrdersByAccount.get(candidate.accountId)?.get(candidate.brokerOrderId);
+      return live != null && isOpenOrderStatus(live.status) && live.filledQuantity === 0;
+    });
+    for (const candidate of working) {
+      if (stopped || gate.armed || !gate.connected || gate.killSwitch) return;
+      const leaderLookup = await broker.findOrderById(leaderAccountId, candidate.leaderOrderId).catch(() => null);
+      const leaderOrder = leaderLookup?.completeness === 'authoritative' ? leaderLookup.order : null;
+      if (!leaderOrder || leaderOrder.status !== 'filled' || leaderOrder.filledQuantity !== leaderOrder.quantity) continue;
+      const followerLookup = await broker.findOrderById(candidate.accountId, candidate.brokerOrderId).catch(() => null);
+      const followerOrder = followerLookup?.completeness === 'authoritative' ? followerLookup.order : null;
+      if (
+        !followerOrder
+        || !isOpenOrderStatus(followerOrder.status)
+        || followerOrder.filledQuantity !== 0
+        || followerOrder.accountId !== candidate.accountId
+        || followerOrder.symbol !== candidate.symbol
+      ) continue;
+      if (stopped || gate.armed || !gate.connected || gate.killSwitch) return;
+      let cancelError: Error | null = null;
+      try {
+        await withFlatSweepCancelDeadline(
+          candidate.accountId,
+          candidate.brokerOrderId,
+          () => broker.cancelOrder(candidate.accountId, candidate.brokerOrderId),
+        );
+      } catch (reason) {
+        cancelError = errorOf(reason);
+      }
+      const after = await broker.findOrderById(candidate.accountId, candidate.brokerOrderId).catch(() => null);
+      const afterOrder = after?.completeness === 'authoritative' ? after.order : null;
+      const zeroFillTerminal = afterOrder != null
+        && (afterOrder.status === 'canceled' || afterOrder.status === 'rejected')
+        && afterOrder.filledQuantity === 0;
+      awaitingCopiedEntries.delete(followerTransitionKey(candidate.accountId, candidate.symbol));
+      options.onAudit?.([{
+        at: clock(),
+        leaderEventId: `stranded-entry-${candidate.brokerOrderId}`,
+        accountId: candidate.accountId,
+        brokerOrderId: candidate.brokerOrderId,
+        kind: zeroFillTerminal ? 'canceled' : 'cancel-failed',
+        reason: zeroFillTerminal
+          ? `kopírka vypnutá (${trigger}): čekající kopie vstupu se zrušila, leader už je v obchodu a follower ho vynechá`
+          : `kopírka vypnutá (${trigger}): čekající kopii vstupu se nepodařilo prokazatelně zrušit`
+            + (cancelError ? ` (${cancelError.message})` : '')
+            + (afterOrder ? `; broker hlásí ${afterOrder.status}, fill ${afterOrder.filledQuantity}` : ''),
+      }]);
+      if (!zeroFillTerminal) {
+        options.onError?.(new Error(
+          `Čekající kopie vstupu ${candidate.brokerOrderId} na účtu ${candidate.accountId} po vypnutí kopírky `
+          + 'nebyla prokazatelně zrušena; zkontroluj účet ručně (případné SL/TP jsou nativní nohy kopie).',
+        ));
+        continue;
+      }
+      await sweepFollowerProtectiveLegs(
+        candidate.accountId,
+        candidate.symbol,
+        clock(),
+        {},
+        createFlatSweepBudget(),
+        error => options.onError?.(error),
+      );
+    }
+  };
+  // Deklarace funkce: volá ji i dříve definovaný failClosed.
+  function scheduleStrandedCopiedEntryCancel(trigger: string): void {
+    if (stopped || strandedEntryCancelQueued) return;
+    strandedEntryCancelQueued = true;
+    eventTail = eventTail
+      .then(() => {
+        strandedEntryCancelQueued = false;
+        return cancelStrandedCopiedEntries(trigger);
+      })
+      .catch(reason => {
+        strandedEntryCancelQueued = false;
+        options.onError?.(errorOf(reason));
+      });
+  }
+
+  /**
    * Kopie vstupu, které S1b u tohoto redukujícího leader příkazu zruší
    * (12. 10. 2026). Market: všechny kandidáty jako dosud. Ne-Market: jen
    * kopie celé vyplněného leader příkazu (follower čeká) — kromě ochranného
@@ -12329,14 +12530,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             );
             return;
           }
-          // Až po důkazu nulového fillu vstupu (12. 10. 2026): kopírkou vlastněné
-          // ochranné příkazy flat followera (pozastavené OSO nohy zrušeného
-          // vstupu, zrcadlený ochranný Stop) jdou pryč stejným flat sweepem,
-          // který nejdřív autoritativně ověří flat. Dřív zůstávaly viset a
-          // důkaz „bez příkazů“ skupinu shodil; zrušit je před důkazem by
-          // vyplněnému followerovi vzalo SL.
           awaitingCopiedEntries.delete(followerTransitionKey(follower.accountId, event.symbol));
-          await sweepFollowerProtectiveLegs(follower.accountId, event.symbol, clock(), {}, createFlatSweepBudget());
           const currentEpoch = leaderExposureEpoch(event.symbol);
           s1bCanceledZeroFillOrderIds.set(candidates[0], {
             accountId: follower.accountId,
@@ -12344,12 +12538,32 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             epochId: currentEpoch?.id ?? null,
           });
           s1bUnresolvedCopyOrderIds.delete(candidates[0]);
+          options.onAudit?.([{
+            at: clock(),
+            leaderEventId: event.id,
+            kind: 'canceled',
+            accountId: follower.accountId,
+            brokerOrderId: candidates[0],
+            reason: 'V12: postkontrola potvrdila canceled/rejected kopii s nulovým fillem',
+          }]);
           const currentEpochEntryOrderId = currentEpoch?.leaderEntryOrderIds[0];
+          if (postCancel.noWorkingOrders !== true || postCancel.accountAllFlat !== true) {
+            // Až po důkazu nulového fillu vstupu (12. 10. 2026): kopírkou
+            // vlastněné ochranné příkazy flat followera (pozastavené OSO nohy
+            // zrušeného vstupu, zrcadlený ochranný Stop) jdou pryč flat
+            // sweepem, který nejdřív autoritativně ověří flat; zrušit je před
+            // důkazem by vyplněnému followerovi vzalo SL. Follower nemá co
+            // zavírat, takže z tohoto příkazu vypadne hned. Sweep a důkaz
+            // suppression běží až po rozeslání příkazu ostatním (V1): jeho
+            // selhání ani latence nesmí ostatním followerům vzít exit.
+            pendingReadSkipAccounts.add(follower.accountId);
+            ineligibleAccounts.set(follower.accountId, 'pending-entry-copy-canceled-before-exit');
+            queueS1bPostCancelCleanup(follower.accountId, event.symbol, currentEpochEntryOrderId);
+            return;
+          }
           if (
             currentEpoch?.phase === 'open'
             && currentEpochEntryOrderId
-            && postCancel.accountAllFlat === true
-            && postCancel.noWorkingOrders === true
             && postCancel.observationVersion
               === (tradeObservationVersionByAccount.get(follower.accountId) ?? 0)
             && !pendingIsolationCommandForAccount(follower.accountId)
@@ -12367,14 +12581,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             });
             suppressionConfirmedByPostCancel = true;
           }
-          options.onAudit?.([{
-            at: clock(),
-            leaderEventId: event.id,
-            kind: 'canceled',
-            accountId: follower.accountId,
-            brokerOrderId: candidates[0],
-            reason: 'V12: postkontrola potvrdila canceled/rejected kopii s nulovým fillem',
-          }]);
           targeted.kind = 'terminal-zero-fill';
         }
         if (targeted.kind === 'terminal-zero-fill') {
@@ -16249,7 +16455,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           eventReceivedAt,
           flatSweepIngressWave,
           ingressObservationVersion,
-        ).finally(flushDeferredStaleFailClosed);
+        ).finally(async () => {
+          // S1b úklid a jeho incident až po dispatchi celé události (V1).
+          try {
+            await settleS1bPostCancelCleanups();
+          } finally {
+            flushDeferredStaleFailClosed();
+          }
+        });
       })
       .catch(failClosed)
       .finally(() => {
@@ -16514,6 +16727,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       void syncLiveCopyExposureFlag('clear').catch(() => undefined);
       // Odmítnuté a ukončené kopie na flat účtech se usadí hned, ne až sweepem.
       scheduleCopierSettlementSweep();
+      if (wasArmed) scheduleStrandedCopiedEntryCancel(trigger === 'manual' ? 'ruční vypnutí' : trigger);
     },
     engageKillSwitch(reason = 'Ruční nouzové zastavení') {
       declineTransportResume('kill switch');
@@ -16762,6 +16976,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // shodí až po kompletním doběhu; při selhání zůstává pending.
         scheduleConnectionRecovery();
       }
+      scheduleStrandedCopiedEntryCancel('Kontrola pozic');
       return {
         divergentAccounts: result.divergentAccounts,
         workingOrderAccounts: result.workingOrderAccounts,
