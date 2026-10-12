@@ -273,6 +273,15 @@ očekáváno 5“ a kopírku vypnula; limity followerů se pak vyplnily bez dozo
 - Leader skončí SL/TP nohou: otevřený OSO vstup flat followera se zruší.
 - Opravena i stará díra S1b: zrušení OSO vstupu nechávalo viset jeho nohy a
   důkaz „bez příkazů“ pak skupinu shodil.
+- Navazující opravy po 4 kolech oponenta (V1–V6, R1–R5, všechny „nasaditelné
+  ANO“): úklid SL/TP čekajícího followera a jeho incident až po rozeslání
+  výstupu ostatním (V1); po každém vypnutí kopírky se čekající kopie vstupu
+  s vyplněným leaderem zruší, i u scale-inu s autoritativním důkazem pozice
+  (V2/R2), ve frontě až za auto-close (R1); po konci leadera se zruší zbytek
+  z části vyplněné kopie (V3); samostatný SL leadera dostanou ověření followeři
+  i vedle neověřeného (V4); po ručním DISARM žádný auto-close skupiny (R3);
+  LIVE ukazuje „ČEKÁ NA VSTUP“ (V6). Limity v INV-DIVERGENCE-01 (scale-in
+  čekání nepokryté, reverz nerozdělen, kaskáda nohou u Tradovate neověřená).
 
 ### 2026-10-11 — Oponent jádra kopírky, rychlejší dashboard, přepnutí účtu A→B (Claude)
 
