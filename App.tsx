@@ -14,6 +14,8 @@ import { withChartNotes, type ChartNote } from './lib/chartNotes';
 import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
 import { perfMark, perfMarkOnce } from './lib/perfTrace';
+import { isNativeBuild } from './utils/runtimeConfig';
+import { TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS } from './lib/tradovateIntentPrefetch';
 import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { calculateStats } from './services/analysis';
@@ -49,7 +51,21 @@ import { mergeDeferredAvatar } from './lib/avatarImage';
 import { isEvidenceJournalTrade, isRetiredJournalTrade } from './lib/journalTradeFacts';
 import { loadTradovateOAuthStatus, importTradovateJournalConnection } from './services/tradovateOAuthConnection';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
-const Dashboard = React.lazy(() => import('./components/Dashboard'));
+type DashboardModule = typeof import('./components/Dashboard');
+let loadedDashboard: DashboardModule | null = null;
+const loadDashboard = () => import('./components/Dashboard').then(module => {
+  loadedDashboard = module;
+  return module;
+});
+// iPhone: kód Dashboardu (s grafy ~650 KB) se stahuje už při startu, souběžně
+// s přihlášením a mezipamětí — dřív až po zmizení úvodní obrazovky.
+if (isNativeBuild) void loadDashboard().catch(() => { /* lazy cesta níž to zkusí znovu */ });
+const LazyDashboard = React.lazy(loadDashboard);
+/** Načtený Dashboard se vykreslí hned bez Suspense; volba platí po celé připojení. */
+const Dashboard: React.FC<React.ComponentProps<DashboardModule['default']>> = props => {
+  const [Board] = React.useState(() => loadedDashboard?.default ?? LazyDashboard);
+  return <Board {...props} />;
+};
 const TradeReview = React.lazy(() => import('./components/TradeReview'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
 const JournalReviewInbox = React.lazy(() => import('./components/JournalReviewInbox'));
@@ -591,6 +607,12 @@ const App: React.FC = () => {
     setInitStatus("Kontrola přihlášení...");
     const initialAuthEpoch = authEpochRef.current;
     perfMark('boot:auth-start');
+    // Mezipaměť posledního uživatele se čte souběžně s obnovou přihlášení;
+    // load() ji použije jen pro stejného uživatele, jiného zahodí.
+    try {
+      const lastSessionUser = localStorage.getItem('alphatrade_last_session_user');
+      if (lastSessionUser) storageService.prefetchCachedDashboardData(lastSessionUser);
+    } catch { /* blokované úložiště: čte se až v load() jako dřív */ }
     supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
       perfMark('boot:auth-done');
       if (authEpochRef.current !== initialAuthEpoch) return;
@@ -1035,12 +1057,16 @@ const App: React.FC = () => {
       };
       const onVisible = () => { if (document.visibilityState === 'visible') void refreshNative(); };
       const onOnline = () => { void refreshNative(); };
-      void refreshNative();
+      // Registrace push, widgetu a Live Activity (každá s /api voláním a
+      // Keychain) se při startu přetahovala o síť s Dashboardem. Spustí se až
+      // po něm; návrat z pozadí a „online“ dál obnovují hned.
+      const initialRefresh = window.setTimeout(() => { void refreshNative(); }, 3_000);
       document.addEventListener('visibilitychange', onVisible);
       window.addEventListener('online', onOnline);
       window.addEventListener('alphatrade:native-push-retry', onOnline);
       return () => {
         cancelled = true;
+        window.clearTimeout(initialRefresh);
         document.removeEventListener('visibilitychange', onVisible);
         window.removeEventListener('online', onOnline);
         window.removeEventListener('alphatrade:native-push-retry', onOnline);
@@ -1257,7 +1283,7 @@ const App: React.FC = () => {
     perfMark(options?.speculative ? 'live:prepare-menu' : 'live:prepare');
     if (tradovateLiveEnabled || !canAccess('live', currentUser.role)) return;
     void loadLiveDesk().catch(() => { /* Normal navigation handles a failed chunk load. */ });
-    prefetchLiveData();
+    prefetchLiveData(options?.speculative ? TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS : undefined);
     // Otevření menu Více ještě není volba LIVE: neodkládat kvůli němu čtení
     // ostatních stránek.
     if (!tradovateLive.data && !options?.speculative) setLiveIntentPending(true);
@@ -2443,7 +2469,15 @@ const App: React.FC = () => {
 
   // LIVE code is small enough to warm independently of other page prefetches.
   useEffect(() => {
-    if (isInitialLoadDone) void loadLiveDesk().catch(() => {});
+    if (!isInitialLoadDone) return;
+    // iPhone: kód LIVE se přednačítá až po vykreslení Dashboardu, ať se o síť
+    // a parsování nepřetahuje s ním. Vstup na LIVE si ho načte sám.
+    if (!isNativeBuild) {
+      void loadLiveDesk().catch(() => {});
+      return;
+    }
+    const timer = window.setTimeout(() => { void loadLiveDesk().catch(() => {}); }, 2_500);
+    return () => window.clearTimeout(timer);
   }, [isInitialLoadDone]);
 
   // Secondary modules yield while LIVE is being opened or displayed. A page

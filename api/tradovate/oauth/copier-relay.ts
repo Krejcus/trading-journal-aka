@@ -1,3 +1,4 @@
+import { createServerTiming } from '../../../server/serverTiming.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierDevice.js';
 import {
@@ -317,21 +318,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'invalid-copier-relay-action' });
     }
 
+    // Měření z telefonu: kde server tráví čas (přihlášení, DB). Jen hlavička.
+    const timing = createServerTiming();
+    const timed = <T>(status: number, body: T) => {
+      res.setHeader('Server-Timing', timing.header());
+      return res.status(status).json(body);
+    };
     const userId = await requireSupabaseUserId(req.headers.authorization, config);
+    timing.mark('auth');
     const requestedConnectionId = String(req.method === 'GET' ? req.query.connectionId ?? '' : req.body?.connectionId ?? '').trim();
     if (!requestedConnectionId) return res.status(400).json({ error: 'missing-connection-id' });
     // Libovolné připojení uživatele najde jeho Mac worker (owner scope).
     const connectionId = await resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId });
+    timing.mark('resolve');
     if (req.method === 'GET') {
       const commandId = typeof req.query.commandId === 'string' ? req.query.commandId : '';
-      if (commandId) return res.status(200).json(await readTradovateCopierCommand({ db, userId, commandId }));
-      return res.status(200).json(await readTradovateCopierDeviceRuntime({ db, userId, connectionId }));
+      if (commandId) {
+        const command = await readTradovateCopierCommand({ db, userId, commandId });
+        timing.mark('command');
+        return timed(200, command);
+      }
+      const runtime = await readTradovateCopierDeviceRuntime({ db, userId, connectionId });
+      timing.mark('runtime');
+      return timed(200, runtime);
     }
     if (req.method === 'POST') {
       if (req.body?.command?.type === 'snapshot-test' && req.body?.command?.repairCamera !== true) {
         return res.status(400).json({ error: 'snapshot-test-use-dedicated-endpoint' });
       }
       const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: req.body?.command, idempotencyKey: req.body?.idempotencyKey });
+      timing.mark('enqueue');
       // Budíček pro worker: bez něj příkaz čeká na další poll (~750 ms).
       // Kick je jen optimalizace — selhání nesmí shodit enqueue.
       try {
@@ -348,6 +364,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch {
         // Poll fallback příkaz doručí i bez kicku.
       }
+      timing.mark('kick');
       // Long-poll: worker s kickem vyřídí příkaz typicky do ~1,5 s — když
       // výsledek stihneme, UI ušetří celé polling kolečko (další RTT).
       // POZOR: enqueue už durable proběhl — selhání long-pollu se MUSÍ
@@ -368,7 +385,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch {
         // UI si výsledek vyzvedne klasickým pollingem.
       }
-      return res.status(202).json({ ...queued, ...(resolution ? { resolution } : {}) });
+      timing.mark(resolution ? 'longpoll-hit' : 'longpoll-miss');
+      return timed(202, { ...queued, ...(resolution ? { resolution } : {}) });
     }
     return res.status(405).json({ error: 'method-not-allowed' });
   } catch (error) {

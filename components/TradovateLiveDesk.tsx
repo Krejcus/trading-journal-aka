@@ -494,9 +494,19 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     });
   }), []);
   const agentClient = useMemo(() => createLocalCopierAgentClient(), []);
+  // Klíč podle obsahu, ne podle identity pole: každý čerstvý OAuth status je
+  // nové pole i se stejnými ID, a efekt pollu stavu workeru by se restartoval —
+  // rozjeté čtení přes relay se zahodilo a další čekalo pevné 2 s (iPhone při
+  // návratu na LIVE). `null` = status ještě neznámý, '' = známý bez připojení.
+  const connectedConnectionKey = useMemo(
+    () => live.status
+      ? [...new Set(live.status.connections.filter(connection => connection.connected).map(connection => connection.id))].sort().join(',')
+      : null,
+    [live.status],
+  );
   const connectedConnectionIds = useMemo(
-    () => live.status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [],
-    [live.status?.connections],
+    () => connectedConnectionKey ? connectedConnectionKey.split(',') : [],
+    [connectedConnectionKey],
   );
   const pilotDevices = useMemo(
     () => agentStatus?.devices ?? (agentStatus?.device ? [agentStatus.device] : []),

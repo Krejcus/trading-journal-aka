@@ -31,8 +31,14 @@ export function createNativeSecureAuthStorage(
   legacyStorage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>,
   vault: SecureVault = AlphaTradeNative,
 ): AsyncStorageLike {
+  // Zrcadlo v paměti: auth-js čte session z úložiště u KAŽDÉHO požadavku (pod
+  // zámkem), na iPhonu to byl bridge + Keychain pokaždé. Jediný zapisovatel
+  // tohoto klíče je tento adaptér (widget má vlastní token), takže zrcadlo
+  // je write-through a při chybě zápisu se zahodí.
+  const mirror = new Map<string, string | null>();
   return {
     async getItem(key) {
+      if (mirror.has(key)) return mirror.get(key) ?? null;
       let secured: { value: string | null };
       const startedAt = typeof performance === 'undefined' ? 0 : performance.now();
       try {
@@ -42,15 +48,23 @@ export function createNativeSecureAuthStorage(
         if (!isUnavailableNativeVaultError(error)) throw error;
         return legacyStorage.getItem(key);
       }
-      if (secured.value !== null) return secured.value;
+      if (secured.value !== null) {
+        mirror.set(key, secured.value);
+        return secured.value;
+      }
 
       const legacyValue = legacyStorage.getItem(key);
-      if (legacyValue === null) return null;
+      if (legacyValue === null) {
+        mirror.set(key, null);
+        return null;
+      }
       await vault.secureSet({ key, value: legacyValue });
       legacyStorage.removeItem(key);
+      mirror.set(key, legacyValue);
       return legacyValue;
     },
     async setItem(key, value) {
+      mirror.delete(key);
       try {
         await vault.secureSet({ key, value });
       } catch (error) {
@@ -59,14 +73,17 @@ export function createNativeSecureAuthStorage(
         return;
       }
       legacyStorage.removeItem(key);
+      mirror.set(key, value);
     },
     async removeItem(key) {
+      mirror.delete(key);
       try {
         await vault.secureRemove({ key });
       } catch (error) {
         if (!isUnavailableNativeVaultError(error)) throw error;
       }
       legacyStorage.removeItem(key);
+      mirror.set(key, null);
     },
   };
 }

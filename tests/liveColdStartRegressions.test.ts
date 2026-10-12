@@ -122,3 +122,11 @@ describe('oponentura cfe904bf', () => {
     }
   });
 });
+
+describe('iPhone: návrat na LIVE nezahodí rozjeté čtení stavu kopírky', () => {
+  it('seznam připojení pro poller je klíčovaný obsahem, ne identitou pole', () => {
+    const desk = source('components/TradovateLiveDesk.tsx');
+    expect(desk).toMatch(/const connectedConnectionKey = useMemo\(\s*\(\) => live\.status\s*\? \[\.\.\.new Set\(/);
+    expect(desk).toMatch(/connectedConnectionKey \? connectedConnectionKey\.split\(','\) : \[\],\s*\[connectedConnectionKey\]/);
+  });
+});

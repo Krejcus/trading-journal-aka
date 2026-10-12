@@ -259,14 +259,14 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   }
   intentPrefetchRef.current.setUser(userId);
   const refreshStatusInFlightRef = useRef<{ userId: string; epoch: number; promise: Promise<TradovateOAuthStatus | null> } | null>(null);
-  const prefetch = useCallback(() => {
+  const prefetch = useCallback((ttlMs?: number) => {
     if (enabled || !userId || activeUserIdRef.current !== userId || Object.keys(connectionDataRef.current).length > 0) return;
     if (refreshStatusInFlightRef.current?.userId === userId && refreshStatusInFlightRef.current.epoch === identityEpochRef.current.epoch) return;
     const shellIds = (statusRef.current?.connections ?? [])
       .filter(connection => connection.connected).map(connection => connection.id);
     intentPrefetchRef.current?.prefetch(shellIds.length > 0
       ? shellIds
-      : readTradovateConnectionHint(userId, typeof window === 'undefined' ? undefined : window.localStorage));
+      : readTradovateConnectionHint(userId, typeof window === 'undefined' ? undefined : window.localStorage), ttlMs);
   }, [enabled, userId]);
   const [busy, setBusy] = useState<BusyState>('status');
   const [error, setError] = useState<string | null>(null);
