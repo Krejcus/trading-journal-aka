@@ -22,6 +22,7 @@ function readLatestEntity(value:unknown,scope:JournalFeedScope):JournalEvidence 
 }
 /** Rows per snapshot page (13. 10. 2026): 250 meant ~500 sequential calls. */
 export const JOURNAL_SNAPSHOT_PAGE_ROWS=1000;
+export const JOURNAL_SNAPSHOT_MAX_BYTES=160_000_000;
 
 /** Each committed source batch is durable independently of final projection.
  * A caller timeout cannot publish a prefix or force a restart from source zero. */
@@ -66,7 +67,9 @@ export async function prepareJournalInput(db:SupabaseClient,scope:JournalFeedSco
         if (data?.generation!==context.generation || data.through!==through || !Array.isArray(data.rows) || data.rows.length>JOURNAL_SNAPSHOT_PAGE_ROWS) throw new Error('journal-input-snapshot-invalid');
         if (!data.rows.length) break;
         bytes+=Buffer.byteLength(JSON.stringify(data.rows));
-        if (bytes>96_000_000 || retained.length+entities.length+data.rows.length>250_000) throw new Error('journal-import-partition-required');
+        // 13. 10. 2026: 96 MB → 160 MB of row JSON (snapshot without orderedThrough
+        // was 81 MB). A stopgap until finalized trades leave the live input.
+        if (bytes>JOURNAL_SNAPSHOT_MAX_BYTES || retained.length+entities.length+data.rows.length>250_000) throw new Error('journal-import-partition-required');
         for(const row of data.rows) {
           if (typeof row.key!=='string' || Buffer.compare(Buffer.from(row.key),Buffer.from(after))<=0) throw new Error('journal-input-snapshot-invalid');
           after=row.key;
