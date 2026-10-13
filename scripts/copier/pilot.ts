@@ -114,7 +114,7 @@ const leaseRetry = (connectionId: string): RetryTransientOptions => ({
 });
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
-import { scheduleTradingViewBarsCapture } from '../../services/tradingViewBars';
+import { scheduleTradingViewBarsCapture, startTradingViewLiveBars, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
 import { tvSymbolRoot } from '../../lib/tradingViewBars';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
@@ -1059,6 +1059,22 @@ async function runLocalAgent(
       log: message => console.log(`${new Date().toISOString()} ${message}`),
     }));
   };
+  // Živé 1m svíčky pro přípravu a pohled dne (1×/min, jen zobrazení, nikdy do
+  // copieru). Potřebuje TradingView s CDP stejně jako snímky; vypíná se
+  // ALPHATRADE_TV_LIVE_BARS=off, kořeny mění ALPHATRADE_TV_LIVE_ROOTS (výchozí MNQ).
+  const tvLiveBarsFeed: TradingViewLiveBarsFeed | null = snapshotsEnabled
+    && process.env.ALPHATRADE_TV_LIVE_BARS?.trim().toLowerCase() !== 'off'
+    ? startTradingViewLiveBars({
+      roots: (process.env.ALPHATRADE_TV_LIVE_ROOTS?.trim() || 'MNQ').split(',').map(root => root.trim()).filter(Boolean),
+      ready: () => relay?.uploadLiveBars != null,
+      upload: async capture => {
+        if (!relay?.uploadLiveBars) throw new Error('relay-unavailable');
+        await relay.uploadLiveBars(capture);
+      },
+      log: message => console.log(`${new Date().toISOString()} ${message}`),
+    })
+    : null;
+  if (tvLiveBarsFeed) console.log(`${new Date().toISOString()} TV LIVE čtení 1m svíček z TradingView zapnuto (1 min, jen zobrazení).`);
   let snapshotTestInFlight = false;
   let stopPromise: Promise<void> | null = null;
   let pairingProbeTimer: ReturnType<typeof setInterval> | null = null;
@@ -1085,6 +1101,7 @@ async function runLocalAgent(
     if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
     if (snapshotDeliveryTimer) clearInterval(snapshotDeliveryTimer);
     for (const cancel of tvBarsSchedules.values()) cancel();
+    tvLiveBarsFeed?.stop();
     // Do not delay broker shutdown for an image request; the disk spool survives restart.
     void snapshotDelivery?.close().catch(() => {});
     marketPriceFeed?.stop();

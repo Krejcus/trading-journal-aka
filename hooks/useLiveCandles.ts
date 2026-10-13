@@ -1,0 +1,66 @@
+import { useEffect, useRef, useState } from 'react';
+import { LIVE_CANDLES_STALE_MS, loadLiveCandles, type LiveCandles } from '../services/liveCandles';
+
+export const LIVE_CANDLES_POLL_MS = 60_000;
+
+export type LiveCandlesStatus = 'loading' | 'live' | 'stale' | 'unavailable';
+
+/**
+ * Živé svíčky pro přípravu a pohled dne: načte poslední čtení workeru a
+ * dokud je stránka viditelná, obnovuje ho 1×/min. `stale` = worker nebo
+ * TradingView neběží (poslední čtení je starší než 3 min); `unavailable` =
+ * žádné čtení zatím neexistuje. Jen zobrazení.
+ */
+export function useLiveCandles(symbol: string | null, options: { enabled?: boolean; pollMs?: number } = {}) {
+  const enabled = options.enabled !== false && !!symbol;
+  const pollMs = Math.max(15_000, options.pollMs ?? LIVE_CANDLES_POLL_MS);
+  const [live, setLive] = useState<LiveCandles | null>(null);
+  const [status, setStatus] = useState<LiveCandlesStatus>(enabled ? 'loading' : 'unavailable');
+  const generation = useRef(0);
+
+  useEffect(() => {
+    if (!enabled || !symbol) { setLive(null); setStatus('unavailable'); return; }
+    const current = ++generation.current;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let inFlight = false;
+    // Jiný symbol: data předchozího instrumentu se nesmí ukázat ani chvíli.
+    setLive(null);
+    setStatus('loading');
+    const refresh = async () => {
+      if (inFlight || document.visibilityState === 'hidden') return;
+      inFlight = true;
+      try {
+        const next = await loadLiveCandles(symbol);
+        if (generation.current !== current) return;
+        if (next) { setLive(next); setStatus(next.stale ? 'stale' : 'live'); }
+        else setStatus(previous => (previous === 'loading' ? 'unavailable' : previous));
+      } catch {
+        if (generation.current === current) setStatus(previous => (previous === 'loading' ? 'unavailable' : previous));
+      } finally {
+        inFlight = false;
+      }
+    };
+    const schedule = () => {
+      timer = setTimeout(async () => { await refresh(); if (generation.current === current) schedule(); }, pollMs);
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
+    void refresh();
+    schedule();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      generation.current += 1;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [enabled, symbol, pollMs]);
+
+  // Čtení, které mezi obnovami zestárne, přepne stav i bez nového stažení.
+  useEffect(() => {
+    if (!live || live.stale) return;
+    const left = live.capturedAt + LIVE_CANDLES_STALE_MS - Date.now();
+    const timer = setTimeout(() => setStatus('stale'), Math.max(0, left));
+    return () => clearTimeout(timer);
+  }, [live]);
+
+  return { live, status };
+}
