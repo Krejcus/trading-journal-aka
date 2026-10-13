@@ -52,12 +52,12 @@ function PinSheet({ ctl, point, autoRecord, onClose }: { ctl: DayController; poi
   return (
     <Sheet label="Poznámka do grafu" dismissable={!draft.trim() && dictation.phase !== 'recording' && dictation.phase !== 'transcribing'} onClose={() => { dictation.cancel(); onClose(); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className="dj-mono" style={{ fontSize: 11, fontWeight: 700, color: '#a5b4fc' }}>{point ? `${clock(point.time * 1000)} · ${priceText(point.price)}` : 'do časové osy'}</span>
+        <span className="dj-mono" style={{ fontSize: 11, fontWeight: 700, color: 'var(--dj-indigo)' }}>{point ? `${clock(point.time * 1000)} · ${priceText(point.price)}` : 'do časové osy'}</span>
         <span style={{ flex: 1 }} />
         <span className="dj-mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' }}>zapíše se {clock(ctl.now)}</span>
       </div>
       <textarea className="dj-input" rows={3} value={draft} onChange={event => setDraft(event.target.value)} placeholder={busy ? '' : 'Mluv, nebo piš…'} aria-label="Text poznámky" style={{ marginTop: 10, fontSize: 14.5, minHeight: 66 }} />
-      {status && <p style={{ margin: '6px 0 0', fontSize: 12, color: status.color }}>{status.text}{dictation.canRetry && <> · <button type="button" onClick={() => { void dictation.retry().then(text => { if (text) { setDraft(current => (current.trim() ? `${current.trim()} ${text}` : text)); setVoice(true); } }); }} style={{ border: 0, background: 'none', padding: 0, color: '#a5b4fc', fontWeight: 700, cursor: 'pointer', font: 'inherit' }}>zkusit přepis znovu</button></>}</p>}
+      {status && <p style={{ margin: '6px 0 0', fontSize: 12, color: status.color }}>{status.text}{dictation.canRetry && <> · <button type="button" onClick={() => { void dictation.retry().then(text => { if (text) { setDraft(current => (current.trim() ? `${current.trim()} ${text}` : text)); setVoice(true); } }); }} style={{ border: 0, background: 'none', padding: 0, color: 'var(--dj-indigo)', fontWeight: 700, cursor: 'pointer', font: 'inherit' }}>zkusit přepis znovu</button></>}</p>}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 14 }}>
         <MicButton phase={dictation.phase} onStart={() => void record()} onStop={() => void dictation.stop()} size={60} />
         {dictation.phase === 'recording' ? <span style={{ flex: 1 }}><Waveform levels={dictation.levels.slice(-20)} height={34} /></span> : (
@@ -85,8 +85,8 @@ function TradeSheet({ ctl, trade, onClose, onOpenTrade }: { ctl: DayController; 
       <p style={{ margin: '10px 0 0', fontSize: 34, fontWeight: 300, letterSpacing: '-0.04em', color: tone(trade.pnl) }}>{money(trade.pnl)}</p>
       <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--dj-text-2)' }}>{rText(r)}{trade.signal ? ` · ${trade.signal}` : ''}</p>
       <div style={{ marginTop: 16 }}><TradeRating size="lg" trade={trade} onRate={choice => { ctl.rateTrade(trade, choice).then(() => setError(null), reason => setError(reason instanceof Error ? reason.message : 'Neuloženo.')); }} /></div>
-      {error && <p role="alert" style={{ margin: '6px 0 0', fontSize: 12, color: '#fb7185' }}>{error}</p>}
-      {trade.notes?.trim() && <p style={{ margin: '14px 0 0', padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(251,191,36,0.3)', background: 'rgba(120,53,15,0.18)', fontSize: 12.5 }}>„{trade.notes}“</p>}
+      {error && <p role="alert" style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--dj-rose)' }}>{error}</p>}
+      {trade.notes?.trim() && <p style={{ margin: '14px 0 0', padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(251,191,36,0.3)', background: 'var(--dj-amber-bg-soft)', fontSize: 12.5 }}>„{trade.notes}“</p>}
       <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
         {onOpenTrade && <button type="button" className="dj-btn" onClick={() => onOpenTrade(trade)} style={{ flex: 1, height: 46, borderRadius: 12, font: '700 13px Inter, sans-serif', color: 'var(--dj-text)', background: 'var(--dj-chip)', border: 0 }}>Detail</button>}
         <button type="button" className="dj-btn" onClick={onClose} style={{ flex: 2, height: 46, borderRadius: 12, font: '700 13px Inter, sans-serif', color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', border: 0 }}>Hotovo</button>
@@ -213,8 +213,8 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
             </div>
             {action && (
               <button type="button" className="dj-btn" onClick={() => (action.kind === 'prep' ? ctl.openPrep(action.session) : ctl.openClose(action.session))} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '8px 10px', borderRadius: 12, cursor: 'pointer', ...(action.kind === 'prep' ? { border: '1px solid rgba(99,102,241,0.45)', background: 'rgba(99,102,241,0.12)' } : { border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.1)' }) }}>
-                <span className="dj-mono" style={{ fontSize: 15, fontWeight: 800, color: action.kind === 'prep' ? '#a5b4fc' : '#fbbf24' }}>{done}/{ctl.checklist.length}</span>
-                <span style={{ fontSize: 10.5, fontWeight: 700, color: action.kind === 'prep' ? '#c7d2fe' : '#fde68a' }}>{action.label}</span>
+                <span className="dj-mono" style={{ fontSize: 15, fontWeight: 800, color: action.kind === 'prep' ? 'var(--dj-indigo)' : 'var(--dj-amber)' }}>{done}/{ctl.checklist.length}</span>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: action.kind === 'prep' ? 'var(--dj-indigo-text)' : 'var(--dj-amber-text)' }}>{action.label}</span>
               </button>
             )}
           </div>
@@ -231,8 +231,8 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
               const close = ctl.journal.closes[item];
               return (
                 <div key={item} style={{ flex: 1, display: 'flex', gap: 6 }}>
-                  <button type="button" className="dj-btn" onClick={() => ctl.openPrep(item)} style={{ ...phoneChip, color: prep ? '#c7d2fe' : 'var(--dj-text-2)', borderColor: prep ? 'rgba(99,102,241,0.4)' : 'var(--dj-line)' }}>{prep ? '✓ ' : ''}Příprava {item === 'ny' ? 'NY' : 'LDN'}</button>
-                  <button type="button" className="dj-btn" disabled={ctl.isToday && sessionStage(item, ctl.windows, ctl.now) === 'upcoming'} onClick={() => ctl.openClose(item)} style={{ ...phoneChip, color: close ? '#93c5fd' : 'var(--dj-text-2)', borderColor: close ? 'rgba(59,130,246,0.4)' : 'var(--dj-line)', opacity: ctl.isToday && sessionStage(item, ctl.windows, ctl.now) === 'upcoming' ? 0.4 : 1 }}>{close ? '✓ ' : ''}Uzavřít</button>
+                  <button type="button" className="dj-btn" onClick={() => ctl.openPrep(item)} style={{ ...phoneChip, color: prep ? 'var(--dj-indigo-text)' : 'var(--dj-text-2)', borderColor: prep ? 'rgba(99,102,241,0.4)' : 'var(--dj-line)' }}>{prep ? '✓ ' : ''}Příprava {item === 'ny' ? 'NY' : 'LDN'}</button>
+                  <button type="button" className="dj-btn" disabled={ctl.isToday && sessionStage(item, ctl.windows, ctl.now) === 'upcoming'} onClick={() => ctl.openClose(item)} style={{ ...phoneChip, color: close ? 'var(--dj-blue)' : 'var(--dj-text-2)', borderColor: close ? 'rgba(59,130,246,0.4)' : 'var(--dj-line)', opacity: ctl.isToday && sessionStage(item, ctl.windows, ctl.now) === 'upcoming' ? 0.4 : 1 }}>{close ? '✓ ' : ''}Uzavřít</button>
                 </div>
               );
             })}
@@ -277,7 +277,7 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
           >
             {celebration.kind === 'close' && ctl.journal.closes[celebration.session]?.summary && (
               <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 11, textAlign: 'left', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)' }}>
-                <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#a5b4fc' }}>{celebration.session === 'london' ? 'Do New Yorku si ber' : 'Na zítra'}</span>
+                <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--dj-indigo)' }}>{celebration.session === 'london' ? 'Do New Yorku si ber' : 'Na zítra'}</span>
                 <span style={{ display: 'block', marginTop: 3, fontSize: 13 }}>„{carryForward(ctl.journal.closes[celebration.session]!.summary)}“</span>
               </div>
             )}

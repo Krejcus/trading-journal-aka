@@ -39,8 +39,8 @@ export function CloseHeaderBar({ ctl, session, onSwitch }: { ctl: DayController;
         <h1 style={{ margin: '1px 0 0', fontSize: 19, fontWeight: 800, letterSpacing: '-0.02em' }}>Uzavření {SESSION_STYLE[session].name}</h1>
       </div>
       <SessionSwitch value={session} onChange={onSwitch} status={closeSessionStatus(ctl)} />
-      {prep?.bias && <span style={{ fontSize: 12, color: 'var(--dj-text-2)' }}>Plán: <b style={{ color: prep.bias === 'long' ? '#34d399' : prep.bias === 'short' ? '#fb7185' : 'var(--dj-text)' }}>{DAY_BIAS_LABEL[prep.bias]}</b> · zapsáno {clock(Date.parse(prep.writtenAt))}</span>}
-      {!prep && <span style={{ fontSize: 12, color: '#fbbf24' }}>K téhle session chybí příprava.</span>}
+      {prep?.bias && <span style={{ fontSize: 12, color: 'var(--dj-text-2)' }}>Plán: <b style={{ color: prep.bias === 'long' ? 'var(--dj-green)' : prep.bias === 'short' ? 'var(--dj-rose)' : 'var(--dj-text)' }}>{DAY_BIAS_LABEL[prep.bias]}</b> · zapsáno {clock(Date.parse(prep.writtenAt))}</span>}
+      {!prep && <span style={{ fontSize: 12, color: 'var(--dj-amber)' }}>K téhle session chybí příprava.</span>}
     </header>
   );
 }
@@ -90,21 +90,21 @@ export function CloseSide({ ctl, session, width }: { ctl: DayController; session
         </div>
         {rules.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 10 }}>
-            {rules.map(rule => <span key={rule} style={{ height: 22, padding: '0 7px', display: 'inline-flex', alignItems: 'center', borderRadius: 6, fontSize: 11, fontWeight: 600, color: '#fecdd3', background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.25)' }}>{rule}</span>)}
+            {rules.map(rule => <span key={rule} style={{ height: 22, padding: '0 7px', display: 'inline-flex', alignItems: 'center', borderRadius: 6, fontSize: 11, fontWeight: 600, color: 'var(--dj-rose-soft)', background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.25)' }}>{rule}</span>)}
           </div>
         )}
       </section>
 
-      <section style={{ borderRadius: 14, border: '1px solid rgba(129,140,248,0.3)', background: 'rgba(30,27,75,0.25)', padding: '12px 14px' }}>
-        <p style={{ margin: '0 0 8px', fontSize: 12.5, fontWeight: 700, color: '#e0e7ff' }}>Plán vs. realita</p>
+      <section style={{ borderRadius: 14, border: '1px solid rgba(129,140,248,0.3)', background: 'var(--dj-indigo-bg-soft)', padding: '12px 14px' }}>
+        <p style={{ margin: '0 0 8px', fontSize: 12.5, fontWeight: 700, color: 'var(--dj-indigo-strong)' }}>Plán vs. realita</p>
         {!pins.length && <p style={{ margin: 0, fontSize: 12, color: 'var(--dj-muted)' }}>V přípravě jsi nic nepřipíchl do grafu. Příště tam dej, kde čekáš vstup a kde se mýlíš.</p>}
         {pins.map((pin, i) => {
           const near = nearestTrade(trades, pin.time);
           return (
             <div key={pin.id} style={{ padding: '9px 0', borderTop: '1px solid rgba(129,140,248,0.15)', animation: `dj-rise .35s ${i * 0.06}s ease both` }}>
               <button type="button" onClick={() => ctl.setSelected({ kind: 'note', id: pin.id })} style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: 'inherit', fontFamily: 'inherit' }}>
-                <span className="dj-mono" style={{ display: 'block', fontSize: 10, fontWeight: 600, color: '#a5b4fc' }}>zapsáno {clock(Date.parse(pin.writtenAt))}{pin.time != null ? ` → ${clock(pin.time * 1000)}` : ''}{pin.price != null ? ` · ${priceText(pin.price)}` : ''}</span>
-                <span style={{ display: 'block', marginTop: 2, fontSize: 12, color: '#e0e7ff' }}>{pin.text}</span>
+                <span className="dj-mono" style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--dj-indigo)' }}>zapsáno {clock(Date.parse(pin.writtenAt))}{pin.time != null ? ` → ${clock(pin.time * 1000)}` : ''}{pin.price != null ? ` · ${priceText(pin.price)}` : ''}</span>
+                <span style={{ display: 'block', marginTop: 2, fontSize: 12, color: 'var(--dj-indigo-strong)' }}>{pin.text}</span>
               </button>
               <div style={{ marginTop: 7 }}>
                 <SpringSegmented
@@ -145,7 +145,7 @@ export function SummaryBar({ ctl, session, compact = false }: { ctl: DayControll
   };
   const recording = dictation.phase === 'recording';
   return (
-    <section style={{ display: 'flex', alignItems: 'stretch', gap: 12, padding: '10px 12px 10px 10px', borderRadius: 18, border: `1px solid ${recording ? 'rgba(244,63,94,0.5)' : 'var(--dj-line)'}`, background: 'linear-gradient(180deg, rgba(30,41,59,0.45), var(--dj-card))', boxShadow: recording ? '0 0 0 3px rgba(244,63,94,0.12)' : 'inset 0 1px 0 rgba(255,255,255,0.05)', transition: 'border-color .3s ease, box-shadow .3s ease' }}>
+    <section style={{ display: 'flex', alignItems: 'stretch', gap: 12, padding: '10px 12px 10px 10px', borderRadius: 18, border: `1px solid ${recording ? 'rgba(244,63,94,0.5)' : 'var(--dj-line)'}`, background: 'linear-gradient(180deg, var(--dj-slate-bg), var(--dj-card))', boxShadow: recording ? '0 0 0 3px rgba(244,63,94,0.12)' : 'inset 0 1px 0 rgba(255,255,255,0.05)', transition: 'border-color .3s ease, box-shadow .3s ease' }}>
       <div style={{ alignSelf: 'center' }}><MicButton phase={dictation.phase} onStart={() => void record()} onStop={() => void dictation.stop()} size={compact ? 46 : 52} label="Nadiktovat shrnutí" /></div>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 18 }}>

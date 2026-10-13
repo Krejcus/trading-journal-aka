@@ -12,10 +12,58 @@
   --dj-muted: #8391a7;
   --dj-overlay: rgba(2, 6, 23, 0.72);
   --dj-seg: rgba(15, 23, 42, 0.6);
+  /* Akcentové texty a plochy: na tmavém světlé odstíny (…-200/300), ve
+     světlém režimu tmavé (…-600/800), aby šly číst na bílé kartě. */
+  --dj-indigo: #a5b4fc;
+  --dj-indigo-text: #c7d2fe;
+  --dj-indigo-strong: #e0e7ff;
+  --dj-indigo-bg-soft: rgba(30, 27, 75, 0.35);
+  --dj-amber: #fbbf24;
+  --dj-amber-text: #fde68a;
+  --dj-amber-bg-soft: rgba(120, 53, 15, 0.18);
+  --dj-green: #34d399;
+  --dj-green-text: #6ee7b7;
+  --dj-rose: #fb7185;
+  --dj-rose-text: #fda4af;
+  --dj-rose-soft: #fecdd3;
+  --dj-blue: #93c5fd;
+  --dj-blue-text: #dbeafe;
+  --dj-blue-soft: #bfdbfe;
+  --dj-blue-bg: rgba(30, 58, 138, 0.18);
+  --dj-slate-bg: rgba(30, 41, 59, 0.5);
+  --dj-tab-on: rgba(255, 255, 255, 0.08);
+  --dj-seg-on: #e2e8f0;
+  --dj-seg-on-ink: #0b1120;
+  --dj-phase-prep: #818cf8;
+  --dj-phase-live: #f59e0b;
+  --dj-phase-later: #94a3b8;
   color: var(--dj-text);
   font-feature-settings: 'tnum' 1;
 }
 .light-theme .dj {
+  --dj-indigo: #4f46e5;
+  --dj-indigo-text: #4338ca;
+  --dj-indigo-strong: #312e81;
+  --dj-indigo-bg-soft: rgba(99, 102, 241, 0.08);
+  --dj-amber: #b45309;
+  --dj-amber-text: #92400e;
+  --dj-amber-bg-soft: rgba(245, 158, 11, 0.1);
+  --dj-green: #059669;
+  --dj-green-text: #047857;
+  --dj-rose: #e11d48;
+  --dj-rose-text: #be123c;
+  --dj-rose-soft: #9f1239;
+  --dj-blue: #2563eb;
+  --dj-blue-text: #1e3a8a;
+  --dj-blue-soft: #1d4ed8;
+  --dj-blue-bg: rgba(59, 130, 246, 0.1);
+  --dj-slate-bg: rgba(226, 232, 240, 0.65);
+  --dj-tab-on: rgba(15, 23, 42, 0.07);
+  --dj-seg-on: #0f172a;
+  --dj-seg-on-ink: #ffffff;
+  --dj-phase-prep: #4f46e5;
+  --dj-phase-live: #b45309;
+  --dj-phase-later: #64748b;
   --dj-bg: #f8fafc;
   --dj-card: #ffffff;
   --dj-card-soft: #ffffff;

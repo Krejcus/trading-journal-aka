@@ -262,6 +262,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-13 večer — Deník dne: světlý režim a méně nahňácané rozložení (Claude, lokálně, NEnasazeno)
+- Filip: „je to docela nahňácané a ve světlém režimu to není úplně hezké“. Příčiny: (1) komponenty
+  deníku měly ~95 pevných barev typu „světlý text na tmavém“ (indigo-200, amber-200, …) a tmavé
+  tónované plochy → ve světlém režimu nečitelné chipy, tlačítka Připravit/Uzavřít, žurnál, Plán vs.
+  realita, bublina poznámky; (2) vložený graf dědil rozložení z detailu obchodu (výchozí `2h` = dva
+  grafy vedle sebe) a klíč `alphatrade:chart-workspace-layout` byl sdílený; (3) levý sloupec se
+  ukazoval až od 1440 px šířky obsahu, takže na 13" MacBooku (obsah ~1320 px) šlo všechno do pravého
+  panelu a časová osa zmizela pod okraj.
+- Oprava: tokeny `--dj-indigo/amber/green/rose/blue…`, `--dj-phase-*`, `--dj-seg-on`, `--dj-tab-on`
+  v `components/day/dayJournal.css` s variantou pro `.light-theme` (tmavé odstíny 600–800); bublina
+  nad grafem zůstává tmavá s pevnými světlými texty (`PHASE_STYLE.bubble`), `line` zůstává literál
+  (SVG atribut). `AlphaTradeChartWorkspace` má nové props `layoutScope` (vlastní klíč rozložení)
+  a `defaultLayoutId`; deník dne používá `day` + `1`. `DayDesktop`: široké rozložení od 1280 px,
+  levý sloupec 280 px; pravý panel: karta časové osy vyplní zbytek a roluje uvnitř, streak jen
+  v levém sloupci. Příprava: pravá karta `clamp(300px, 34%, 380px)`, tlačítka do grafu se zalamují.
+- Ověřeno: tsc čistý, `dayJournal`/`dayJournalView`/`mcpDayJournal` 32/32, lint bez chyb
+  (jen staré warnings workspace), vizuálně na localhostu den/příprava/uzavření ve světlém i tmavém
+  režimu. Změny jsou necommitnuté v Documents (main), čekají na Filipovo OK.
+- **Dnešní svíčky až od 15:25 (Filipův dotaz):** TradingView má v paměti jen svíčky, které graf
+  načetl — po reloadu layoutu „AlphaTrade Snapshoty“ / restartu workeru jen ~5 h (log: 16:19Z
+  760 svíček → 16:30Z 423 → po reinstallu 18:34Z 310). Server soubor `tv-live/NQ.json` přepisoval,
+  takže z pohledu dne zmizela noc a dopoledne; Databento končí u now−24 h 20 min → mezera
+  včera ~20:50 až dnes 15:25. Oprava `server/copierSnapshotStore.ts` `storeTvLiveBars`: nové čtení
+  se slučuje s předchozím souborem (`mergeTvBarCaptures`, novější minuta vyhrává, okno 27 h od
+  nového čtení, strop `TV_BARS_MAX`), vadný/chybějící soubor = čistý start. Jen server, worker
+  beze změny. Test `tests/copierSnapshotStoreLiveBars.test.ts` (5). Dnešní dopoledne se už
+  nevrátí (TV ho nemá), zítra ho doplní Databento; od nasazení se díry netvoří.
+
 ### 2026-10-13 — Deník dne nasazen: web, MCP funkce a Mac worker (Claude)
 - **Merge:** PR #32 `feat/day-journal` fast-forwardem do `main` (`6f12e548..bcd56939`, ne squash).
 - **Web:** Vercel produkce `dpl_9eG2FnnzF2Bn3A3hywTp6TCtoVwd` = `bcd56939`, READY a na aliasu
@@ -589,6 +617,15 @@ nálezy (DISARM vs. uvolnění pauzy, cache po cut, reporting).
   incident, relay negarantuje stejný klíč napříč novým klientským pokusem a
   mrtvý `planReconciliation` by po zapojení porušil zákaz Auto-Sync. Jen
   dokumentace; runtime kód se neměnil.
+
+### 2026-10-08 — Zrušení lokální úpravy cold startu (Codex)
+- Na výslovný pokyn uživatele vráceny všechny právě rozpracované změny režimu `overview`, postupného doplňování dat, souvisejícího zobrazení a dřívějšího přednačtení LIVE; odstraněny jejich nové testy. Aplikační soubory odpovídají původnímu HEAD. Nic z této úpravy nebylo nasazeno.
+- Požadavek uživatele je zrychlit samotné načtení úplných dat, nikoli dříve vykreslit stránku a data doplňovat později. Předchozí diagnostika zachována; cizí rozpracované soubory beze změny.
+
+### 2026-10-08 — LIVE cold start a chybějící relay CHECK (Codex, diagnostika)
+- Produkční web běží na `a558c376` (stejný jako `main`), Mac worker má `arm-preparation-v1`; pomalý první vstup do LIVE tedy není důkaz nenasazeného webového buildu. V prohlížeči po reloadu první LIVE tabulka dorazila nejpozději za ~8,5 s, návrat přes Dashboard za ~0,9 s. Kód drží read model v paměti; první vstup čeká na OAuth status a alespoň jeden broker `bootstrap` preflight. Ten i v rychlém režimu čeká na cash snapshoty účtů po třech paralelních čteních. Přesné rozdělení těch ~8,5 s mezi požadavky zatím nezměřeno.
+- Produkční Vercel v 05:26:59 UTC odmítl vložení relay příkazu na `tradovate_copier_commands_command_type_check`. Nasazený server povoluje `reconcile`, ale produkční CHECK i poslední migrace `20260904120000_allow_copier_day_lock_commands.sql` ho neobsahují. `Zkontrolovat pozice` se tedy z webu nedoručí workeru; je to samostatná schématová chyba, ne prokázaná příčina cold startu. Žádná změna DB ani broker akce neprovedena.
+- Worker při kontrole zůstal DISARMED, `reconciliationRequired=true`, `armPreparation=blocked` po WebSocket incidentu a s divergentními účty; ON se nemá obcházet. Konzole při reloadu ukázala timeout dashboard RPC `57014`; jeho vliv na LIVE latency je zatím jen hypotéza. Oprava CHECK vyžaduje samostatný export/zálohu produkční DB a verzovanou migraci.
 
 ### 2026-10-06 — Ranní incidenty a nasazení (Claude + Codex)
 - 07:31 UTC: leader posunul stop, stopy followerů vyplnily na původní ceně ~90 ms před potvrzením

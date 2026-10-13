@@ -5,16 +5,21 @@ import type { DayBias, DayExecution, DayNotePhase, DaySession } from '../../lib/
 import './dayJournal.css';
 
 /** Barvy fáze poznámky z návrhu: příprava fialová, živě jantar, zpětně šedá. */
-export const PHASE_STYLE: Record<DayNotePhase, { color: string; label: string; soft: string; line: string; text: string; bg: string }> = {
-  prep: { color: '#818cf8', label: 'příprava', soft: 'rgba(99,102,241,0.14)', line: 'rgba(129,140,248,0.55)', text: '#c7d2fe', bg: 'rgba(30,27,75,0.35)' },
-  live: { color: '#f59e0b', label: 'živě', soft: 'rgba(245,158,11,0.14)', line: 'rgba(251,191,36,0.5)', text: '#fef3c7', bg: 'rgba(120,53,15,0.14)' },
-  later: { color: '#94a3b8', label: 'dopsáno zpětně', soft: 'rgba(148,163,184,0.14)', line: 'rgba(148,163,184,0.5)', text: '#e2e8f0', bg: 'rgba(30,41,59,0.45)' },
+/**
+ * `color`/`text`/`bg` jsou tokeny s variantou pro světlý režim (karty, feed).
+ * `bubble` jsou pevné světlé odstíny pro tmavou bublinu nad grafem; `line`
+ * jde do SVG atributu, kde se CSS proměnná nerozvine.
+ */
+export const PHASE_STYLE: Record<DayNotePhase, { color: string; label: string; soft: string; line: string; text: string; bg: string; bubble: { accent: string; text: string } }> = {
+  prep: { color: 'var(--dj-phase-prep)', label: 'příprava', soft: 'rgba(99,102,241,0.14)', line: 'rgba(129,140,248,0.55)', text: 'var(--dj-indigo-text)', bg: 'var(--dj-indigo-bg-soft)', bubble: { accent: '#818cf8', text: '#c7d2fe' } },
+  live: { color: 'var(--dj-phase-live)', label: 'živě', soft: 'rgba(245,158,11,0.14)', line: 'rgba(251,191,36,0.5)', text: 'var(--dj-amber-text)', bg: 'var(--dj-amber-bg-soft)', bubble: { accent: '#f59e0b', text: '#fef3c7' } },
+  later: { color: 'var(--dj-phase-later)', label: 'dopsáno zpětně', soft: 'rgba(148,163,184,0.14)', line: 'rgba(148,163,184,0.5)', text: 'var(--dj-text)', bg: 'var(--dj-slate-bg)', bubble: { accent: '#94a3b8', text: '#e2e8f0' } },
 };
 
 export const SESSION_STYLE: Record<DaySession | 'day', { color: string; name: string; tint: string }> = {
   london: { color: '#3b82f6', name: 'London', tint: 'rgba(59,130,246,' },
   ny: { color: '#f97316', name: 'New York', tint: 'rgba(249,115,22,' },
-  day: { color: '#94a3b8', name: 'Celý den', tint: 'rgba(148,163,184,' },
+  day: { color: 'var(--dj-muted)', name: 'Celý den', tint: 'rgba(148,163,184,' },
 };
 
 export const BIAS_OPTIONS: { id: DayBias; icon: string; text: string; ink: string; bg: string; glow: string; anim: string }[] = [
@@ -183,7 +188,7 @@ export function SessionSwitch({ value, onChange, status, itemWidth = 140, fill =
             <span style={{ width: 8, height: 8, borderRadius: 9, background: SESSION_STYLE[id].color, flex: 'none' }} />
             <span style={{ minWidth: 0 }}>
               <span style={{ display: 'block', fontSize: 12.5, fontWeight: 800, lineHeight: 1.15 }}>{SESSION_STYLE[id].name}</span>
-              <span style={{ display: 'block', fontSize: 10.5, fontWeight: 600, lineHeight: 1.2, whiteSpace: 'nowrap', color: state.tone === 'done' ? '#34d399' : state.tone === 'active' ? '#a5b4fc' : 'var(--dj-muted)' }}>{state.text}</span>
+              <span style={{ display: 'block', fontSize: 10.5, fontWeight: 600, lineHeight: 1.2, whiteSpace: 'nowrap', color: state.tone === 'done' ? 'var(--dj-green)' : state.tone === 'active' ? 'var(--dj-indigo)' : 'var(--dj-muted)' }}>{state.text}</span>
             </span>
           </span>
         );
@@ -218,7 +223,7 @@ export function BigSaveButton({ ready, saving, label, readyLabel, savingLabel = 
           {saving ? savingLabel : ready ? readyLabel : label}
         </span>
       </button>
-      {error && <p role="alert" style={{ margin: 0, fontSize: 11.5, color: '#fb7185' }}>{error}</p>}
+      {error && <p role="alert" style={{ margin: 0, fontSize: 11.5, color: 'var(--dj-rose)' }}>{error}</p>}
     </div>
   );
 }
@@ -325,7 +330,7 @@ export function MicButton({ phase, onStart, onStop, size = 52, label = 'Nadiktov
 }
 
 export const recordingStatus = (phase: DictationPhase, seconds: number, error: string | null) =>
-  phase === 'recording' ? { text: `Nahrávám ${formatDictationClock(seconds)} · klepnutím zastavíš`, color: '#fda4af' }
-    : phase === 'transcribing' ? { text: 'Přepisuji…', color: '#a5b4fc' }
-      : phase === 'error' ? { text: error ?? 'Diktování se nepodařilo.', color: '#fb7185' }
+  phase === 'recording' ? { text: `Nahrávám ${formatDictationClock(seconds)} · klepnutím zastavíš`, color: 'var(--dj-rose-text)' }
+    : phase === 'transcribing' ? { text: 'Přepisuji…', color: 'var(--dj-indigo)' }
+      : phase === 'error' ? { text: error ?? 'Diktování se nepodařilo.', color: 'var(--dj-rose)' }
         : null;

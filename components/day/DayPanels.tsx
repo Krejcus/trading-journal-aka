@@ -22,9 +22,9 @@ const clock = (ms: number) => pragueClock(ms);
 const exitMs = (trade: Trade) => (typeof trade.timestamp === 'number' && trade.timestamp > 0 ? trade.timestamp : tradeTimeMs(trade));
 
 export const PLAN_OPTIONS: { id: PlanChoice; label: string; style: React.CSSProperties; on: React.CSSProperties }[] = [
-  { id: 'yes', label: 'Podle plánu', style: { color: '#6ee7b7', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)' }, on: { color: '#052e16', background: '#34d399', border: '1px solid #34d399' } },
-  { id: 'partial', label: 'Částečně', style: { color: '#fcd34d', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)' }, on: { color: '#1c1203', background: '#fbbf24', border: '1px solid #fbbf24' } },
-  { id: 'no', label: 'Mimo plán', style: { color: '#fda4af', background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)' }, on: { color: '#4c0519', background: '#fb7185', border: '1px solid #fb7185' } },
+  { id: 'yes', label: 'Podle plánu', style: { color: 'var(--dj-green-text)', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)' }, on: { color: '#052e16', background: '#34d399', border: '1px solid #34d399' } },
+  { id: 'partial', label: 'Částečně', style: { color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)' }, on: { color: '#1c1203', background: '#fbbf24', border: '1px solid #fbbf24' } },
+  { id: 'no', label: 'Mimo plán', style: { color: 'var(--dj-rose-text)', background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)' }, on: { color: '#4c0519', background: '#fb7185', border: '1px solid #fb7185' } },
 ];
 const planLabel = (choice: PlanChoice) => PLAN_OPTIONS.find(option => option.id === choice)!;
 
@@ -39,7 +39,7 @@ export function LiveChip({ status, capturedAt }: { status: DayController['chart'
       : status === 'stale' ? `TradingView stojí${capturedAt ? ` od ${clock(capturedAt)}` : ''}`
         : 'Živé svíčky nejsou — spusť worker s TradingView';
   return (
-    <span title="Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z grafu TradingView (jen zobrazení)." style={{ height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: live ? '#6ee7b7' : '#fcd34d', background: live ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)' }}>
+    <span title="Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z grafu TradingView (jen zobrazení)." style={{ height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: live ? 'var(--dj-green-text)' : 'var(--dj-amber-text)', background: live ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)' }}>
       <span style={{ width: 6, height: 6, borderRadius: 9, background: live ? '#10b981' : '#f59e0b', animation: live ? 'dj-blink 2s ease-in-out infinite' : undefined }} />
       {text}
     </span>
@@ -52,7 +52,7 @@ export function DayNav({ ctl, compact = false }: { ctl: DayController; compact?:
       <button type="button" className="dj-btn" aria-label="Předchozí den" onClick={() => ctl.shiftDay(-1)} style={{ height: 32, width: 32, display: 'grid', placeItems: 'center', border: 0, background: 'transparent', color: 'var(--dj-text-2)', borderRadius: 9, cursor: 'pointer' }}><ChevronLeft size={15} /></button>
       <span style={{ padding: '0 10px', fontSize: compact ? 14 : 15, fontWeight: 800, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>{dayTitle(ctl.day)}</span>
       <button type="button" className="dj-btn" aria-label="Další den" disabled={ctl.isToday} onClick={() => ctl.shiftDay(1)} style={{ height: 32, width: 32, display: 'grid', placeItems: 'center', border: 0, background: 'transparent', color: 'var(--dj-text-2)', borderRadius: 9, cursor: ctl.isToday ? 'default' : 'pointer', opacity: ctl.isToday ? 0.3 : 1 }}><ChevronRight size={15} /></button>
-      {!ctl.isToday && <button type="button" className="dj-btn" onClick={() => ctl.setDay(ctl.today)} style={{ height: 28, padding: '0 9px', marginRight: 2, borderRadius: 8, border: 0, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: '#a5b4fc', background: 'rgba(99,102,241,0.12)' }}>Dnes</button>}
+      {!ctl.isToday && <button type="button" className="dj-btn" onClick={() => ctl.setDay(ctl.today)} style={{ height: 28, padding: '0 9px', marginRight: 2, borderRadius: 8, border: 0, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: 'var(--dj-indigo)', background: 'rgba(99,102,241,0.12)' }}>Dnes</button>}
     </div>
   );
 }
@@ -97,7 +97,7 @@ export function ScopeSwitch({ ctl, fill = false }: { ctl: DayController; fill?: 
       {scopes.map(scope => {
         const on = ctl.scope === scope.id;
         return (
-          <button key={scope.id} type="button" className="dj-btn" aria-pressed={on} onClick={() => ctl.setScope(scope.id)} style={{ height: 34, padding: '0 12px', borderRadius: 8, border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, font: '600 12.5px Inter, sans-serif', background: on ? '#e2e8f0' : 'transparent', color: on ? '#0b1120' : 'var(--dj-text-2)' }}>
+          <button key={scope.id} type="button" className="dj-btn" aria-pressed={on} onClick={() => ctl.setScope(scope.id)} style={{ height: 34, padding: '0 12px', borderRadius: 8, border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, font: '600 12.5px Inter, sans-serif', background: on ? 'var(--dj-seg-on)' : 'transparent', color: on ? 'var(--dj-seg-on-ink)' : 'var(--dj-text-2)' }}>
             <span style={{ width: 7, height: 7, borderRadius: 9, background: SESSION_STYLE[scope.id].color }} />{scope.label}
           </button>
         );
@@ -114,7 +114,7 @@ export function DayHeaderBar({ ctl, onDictate, onOpenLegacy }: { ctl: DayControl
       <ChevronRight size={12} color="#475569" />
       <DayNav ctl={ctl} />
       <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} />
-      {ctl.journalStatus === 'error' && <span role="alert" style={{ fontSize: 11.5, color: '#fb7185' }}>Deník se nenačetl · <button type="button" onClick={ctl.reload} style={{ border: 0, background: 'none', color: '#fda4af', textDecoration: 'underline', cursor: 'pointer', padding: 0, font: 'inherit' }}>zkusit znovu</button></span>}
+      {ctl.journalStatus === 'error' && <span role="alert" style={{ fontSize: 11.5, color: 'var(--dj-rose)' }}>Deník se nenačetl · <button type="button" onClick={ctl.reload} style={{ border: 0, background: 'none', color: 'var(--dj-rose-text)', textDecoration: 'underline', cursor: 'pointer', padding: 0, font: 'inherit' }}>zkusit znovu</button></span>}
       <span style={{ flex: '1 1 20px' }} />
       <ScopeSwitch ctl={ctl} />
       <button type="button" className="dj-btn" onClick={onDictate} style={{ height: 40, padding: '0 14px 0 12px', borderRadius: 10, border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, color: '#fff', font: '700 13px Inter, sans-serif', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.28), 0 6px 14px -6px rgba(79,70,229,0.65)' }}>
@@ -122,8 +122,8 @@ export function DayHeaderBar({ ctl, onDictate, onOpenLegacy }: { ctl: DayControl
       </button>
       {action && (
         <button type="button" className="dj-btn" onClick={() => (action.kind === 'prep' ? ctl.openPrep(action.session) : ctl.openClose(action.session))} style={{ height: 40, padding: '0 14px', borderRadius: 10, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', font: '700 13px Inter, sans-serif', ...(action.kind === 'prep'
-          ? { color: '#c7d2fe', border: '1px solid rgba(99,102,241,0.45)', background: 'rgba(99,102,241,0.12)' }
-          : { color: '#fde68a', border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.10)' }) }}>
+          ? { color: 'var(--dj-indigo-text)', border: '1px solid rgba(99,102,241,0.45)', background: 'rgba(99,102,241,0.12)' }
+          : { color: 'var(--dj-amber-text)', border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.10)' }) }}>
           <span style={{ width: 7, height: 7, borderRadius: 9, background: action.kind === 'prep' ? '#818cf8' : '#f59e0b', animation: 'dj-blink 1.6s ease-in-out infinite' }} />
           {action.label}
         </button>
@@ -175,7 +175,7 @@ export function JournalChecklist({ ctl, onOpenCoach }: { ctl: DayController; onO
     <section className="dj-card" style={{ padding: '14px 14px 10px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
         <p style={sectionTitle}>Žurnál dne</p>
-        <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: done === total ? '#34d399' : '#fbbf24' }}>{done}/{total}</p>
+        <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: done === total ? 'var(--dj-green)' : 'var(--dj-amber)' }}>{done}/{total}</p>
       </div>
       <div style={{ height: 5, borderRadius: 9, background: 'var(--dj-line-soft)', margin: '10px 0 8px', overflow: 'hidden' }}>
         <div style={{ height: '100%', borderRadius: 9, transition: 'width .5s cubic-bezier(.22,1,.36,1)', background: 'linear-gradient(90deg,#6366f1,#10b981)', width: `${total ? (done / total) * 100 : 0}%` }} />
@@ -186,15 +186,15 @@ export function JournalChecklist({ ctl, onOpenCoach }: { ctl: DayController; onO
         return (
           <button key={item.id} type="button" disabled={!clickable} onClick={() => { if (action?.kind === 'prep') ctl.openPrep(action.session); else if (action?.kind === 'close') ctl.openClose(action.session); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '7px 0', border: 0, borderTop: '1px solid var(--dj-line-soft)', background: 'transparent', cursor: clickable ? 'pointer' : 'default', textAlign: 'left', fontFamily: 'inherit', color: 'inherit' }}>
             {item.done
-              ? <span style={{ width: 18, height: 18, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(16,185,129,0.16)', color: '#34d399', flex: 'none', fontSize: 11, fontWeight: 900 }}>✓</span>
+              ? <span style={{ width: 18, height: 18, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(16,185,129,0.16)', color: 'var(--dj-green)', flex: 'none', fontSize: 11, fontWeight: 900 }}>✓</span>
               : <span style={{ width: 18, height: 18, borderRadius: 9, border: '1.5px dashed rgba(245,158,11,0.7)', flex: 'none' }} />}
-            <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: item.done ? 'var(--dj-text-2)' : '#fde68a' }}>{item.label}</span>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: item.done ? 'var(--dj-text-2)' : 'var(--dj-amber-text)' }}>{item.label}</span>
             <span style={{ fontSize: 11, color: 'var(--dj-muted)', whiteSpace: 'nowrap' }}>{item.meta}</span>
           </button>
         );
       })}
       {onOpenCoach && (
-        <button type="button" className="dj-btn" onClick={onOpenCoach} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, width: '100%', marginTop: 4, padding: '9px 10px', borderRadius: 9, cursor: 'pointer', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)', color: '#c7d2fe', fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit' }}>
+        <button type="button" className="dj-btn" onClick={onOpenCoach} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, width: '100%', marginTop: 4, padding: '9px 10px', borderRadius: 9, cursor: 'pointer', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)', color: 'var(--dj-indigo-text)', fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit' }}>
           <span>Coach vidí {ctl.dayTrades.length} {ctl.dayTrades.length === 1 ? 'obchod' : ctl.dayTrades.length < 5 && ctl.dayTrades.length > 0 ? 'obchody' : 'obchodů'} · {notes} {notes === 1 ? 'poznámku' : notes < 5 && notes > 0 ? 'poznámky' : 'poznámek'} s časem zápisu</span>
           <ChevronRight size={13} />
         </button>
@@ -240,7 +240,7 @@ export const streakStyle = (state: 'full' | 'part' | 'none' | 'open'): React.CSS
 
 export function DayLeftColumn({ ctl, streak, onOpenCoach }: { ctl: DayController; streak: Parameters<typeof StreakStrip>[0]['streak']; onOpenCoach?: () => void }) {
   return (
-    <aside className="dj dj-scroll" style={{ width: 300, flex: 'none', display: 'flex', flexDirection: 'column', gap: 12, padding: 12, overflowY: 'auto', borderRight: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
+    <aside className="dj dj-scroll" style={{ width: 280, flex: 'none', display: 'flex', flexDirection: 'column', gap: 12, padding: 12, overflowY: 'auto', borderRight: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
       <ResultCard ctl={ctl} />
       <JournalChecklist ctl={ctl} onOpenCoach={onOpenCoach} />
       <DayRules ctl={ctl} />
@@ -280,13 +280,13 @@ function NoteCard({ ctl, note, phase }: { ctl: DayController; note: DayNote; pha
           <span style={{ height: 19, padding: '0 6px', display: 'inline-flex', alignItems: 'center', borderRadius: 5, fontSize: 10.5, fontWeight: 700, color: style.color, background: style.soft }}>{style.label}</span>
           <span style={{ fontSize: 11, color: 'var(--dj-muted)' }}>{note.voice ? 'hlasem' : 'psáno'}</span>
           {editedAt(note.writtenAt, note.updatedAt) && <span style={{ fontSize: 10.5, color: 'var(--dj-muted)' }}>· upraveno {clock(Date.parse(editedAt(note.writtenAt, note.updatedAt)!))}</span>}
-          {ctl.pendingNotes.has(note.id) && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#34d399' }}>ukládám…</span>}
+          {ctl.pendingNotes.has(note.id) && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--dj-green)' }}>ukládám…</span>}
         </span>
         {note.time != null && note.price != null && <span className="dj-mono" style={{ display: 'block', marginTop: 4, fontSize: 10.5, color: 'var(--dj-muted)' }}>→ ukazuje na {clock(note.time * 1000)} · {priceText(note.price)}</span>}
         {editing == null && <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, whiteSpace: 'pre-wrap' }}>{note.text}</span>}
       </button>
       {failed && (
-        <button type="button" onClick={() => ctl.retryNote(note.id)} style={{ marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5, border: 0, background: 'none', padding: 0, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: '#fb7185', fontFamily: 'inherit' }}><RotateCcw size={12} />Neuloženo — zkusit znovu</button>
+        <button type="button" onClick={() => ctl.retryNote(note.id)} style={{ marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5, border: 0, background: 'none', padding: 0, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: 'var(--dj-rose)', fontFamily: 'inherit' }}><RotateCcw size={12} />Neuloženo — zkusit znovu</button>
       )}
       {selected && editing != null && (
         <div style={{ marginTop: 8 }}>
@@ -305,12 +305,12 @@ function NoteCard({ ctl, note, phase }: { ctl: DayController; note: DayNote; pha
           <button type="button" className="dj-btn" onClick={() => setEditing(note.text)} style={smallGhost}><PenLine size={12} /> Upravit</button>
           <button type="button" className="dj-btn" onClick={async () => {
             try { await ctl.removeNote(note.id); ctl.setSelected(null); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Smazání se nepodařilo.'); }
-          }} style={{ ...smallGhost, color: '#fb7185' }}><Trash2 size={12} /> Smazat</button>
+          }} style={{ ...smallGhost, color: 'var(--dj-rose)' }}><Trash2 size={12} /> Smazat</button>
           <span style={{ flex: 1 }} />
           <span style={{ fontSize: 10.5, color: 'var(--dj-muted)', alignSelf: 'center' }}>čas zápisu zůstane, úprava se označí</span>
         </div>
       )}
-      {error && <p role="alert" style={{ margin: '6px 0 0', fontSize: 11.5, color: '#fb7185' }}>{error}</p>}
+      {error && <p role="alert" style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--dj-rose)' }}>{error}</p>}
     </div>
   );
 }
@@ -324,7 +324,7 @@ function TradeCard({ ctl, item }: { ctl: DayController; item: Extract<FeedItem, 
   const [error, setError] = useState<string | null>(null);
   const note = item.notes[0];
   return (
-    <div className="dj-feed" style={{ borderRadius: 11, padding: '10px 12px', border: selected ? '1px solid rgba(226,232,240,0.7)' : item.plan ? '1px solid var(--dj-line)' : '1px solid rgba(245,158,11,0.5)', background: selected ? 'rgba(30,41,59,0.55)' : 'var(--dj-chip)' }}>
+    <div className="dj-feed" style={{ borderRadius: 11, padding: '10px 12px', border: selected ? '1px solid rgba(226,232,240,0.7)' : item.plan ? '1px solid var(--dj-line)' : '1px solid rgba(245,158,11,0.5)', background: selected ? 'var(--dj-slate-bg)' : 'var(--dj-chip)' }}>
       <button type="button" onClick={() => ctl.setSelected(selected ? null : { kind: 'trade', id: String(trade.id) })} style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: 'inherit', fontFamily: 'inherit' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--dj-text-2)' }}>{clock(tradeTimeMs(trade))} → {clock(exitMs(trade))}</span>
@@ -341,15 +341,15 @@ function TradeCard({ ctl, item }: { ctl: DayController; item: Extract<FeedItem, 
       {item.plan ? (
         <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
           <span style={{ height: 21, padding: '0 7px', display: 'inline-flex', alignItems: 'center', borderRadius: 6, fontSize: 10.5, fontWeight: 700, ...planLabel(item.plan).style }}>{planLabel(item.plan).label}</span>
-          {note && <span style={{ fontSize: 12, color: 'var(--dj-text-2)', flexBasis: '100%', marginTop: 3 }}>„{note.text}“ <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: '#fbbf24', whiteSpace: 'nowrap' }}>zapsáno {clock(Date.parse(note.writtenAt))}</span></span>}
+          {note && <span style={{ fontSize: 12, color: 'var(--dj-text-2)', flexBasis: '100%', marginTop: 3 }}>„{note.text}“ <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--dj-amber)', whiteSpace: 'nowrap' }}>zapsáno {clock(Date.parse(note.writtenAt))}</span></span>}
         </span>
       ) : (
         <div style={{ marginTop: 9, paddingTop: 9, borderTop: '1px dashed rgba(245,158,11,0.4)' }}>
-          <p style={{ margin: '0 0 7px', fontSize: 11.5, fontWeight: 700, color: '#fbbf24' }}>Ohodnoť jedním klikem</p>
+          <p style={{ margin: '0 0 7px', fontSize: 11.5, fontWeight: 700, color: 'var(--dj-amber)' }}>Ohodnoť jedním klikem</p>
           <TradeRating trade={trade} onRate={choice => { ctl.rateTrade(trade, choice).then(() => setError(null), reason => setError(reason instanceof Error ? reason.message : 'Hodnocení se neuložilo.')); }} />
         </div>
       )}
-      {error && <p role="alert" style={{ margin: '6px 0 0', fontSize: 11.5, color: '#fb7185' }}>{error}</p>}
+      {error && <p role="alert" style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--dj-rose)' }}>{error}</p>}
     </div>
   );
 }
@@ -364,23 +364,23 @@ export function FeedList({ ctl, items }: { ctl: DayController; items: readonly F
         if (item.kind === 'prep') return (
           <button key={item.key} type="button" className="dj-btn" onClick={() => ctl.openPrep(item.session)} style={{ display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', borderRadius: 11, padding: '10px 12px', border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.08)', color: 'inherit', fontFamily: 'inherit' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: '#a5b4fc' }}>{clock(item.at)}</span>
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: '#e0e7ff' }}>Příprava {SESSION_STYLE[item.session].name}</span>
+              <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--dj-indigo)' }}>{clock(item.at)}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--dj-indigo-strong)' }}>Příprava {SESSION_STYLE[item.session].name}</span>
               <span style={{ flex: 1 }} />
-              <span style={{ fontSize: 11, color: '#a5b4fc' }}>{item.prep.durationSec != null ? `${item.prep.durationSec < 60 ? `${item.prep.durationSec} s` : `${Math.round(item.prep.durationSec / 60)} min`}` : ''}</span>
+              <span style={{ fontSize: 11, color: 'var(--dj-indigo)' }}>{item.prep.durationSec != null ? `${item.prep.durationSec < 60 ? `${item.prep.durationSec} s` : `${Math.round(item.prep.durationSec / 60)} min`}` : ''}</span>
             </span>
-            <span style={{ display: 'block', marginTop: 5, fontSize: 12, color: '#c7d2fe' }}>{prepSummary(item.prep, item.pins)}</span>
+            <span style={{ display: 'block', marginTop: 5, fontSize: 12, color: 'var(--dj-indigo-text)' }}>{prepSummary(item.prep, item.pins)}</span>
           </button>
         );
         return (
-          <button key={item.key} type="button" className="dj-btn" onClick={() => ctl.openClose(item.session)} style={{ display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', borderRadius: 11, padding: '10px 12px', border: '1px solid rgba(59,130,246,0.35)', background: 'rgba(30,58,138,0.18)', color: 'inherit', fontFamily: 'inherit' }}>
+          <button key={item.key} type="button" className="dj-btn" onClick={() => ctl.openClose(item.session)} style={{ display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', borderRadius: 11, padding: '10px 12px', border: '1px solid rgba(59,130,246,0.35)', background: 'var(--dj-blue-bg)', color: 'inherit', fontFamily: 'inherit' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: '#93c5fd' }}>{clock(item.at)}</span>
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: '#dbeafe' }}>{SESSION_STYLE[item.session].name} uzavřen</span>
+              <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--dj-blue)' }}>{clock(item.at)}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--dj-blue-text)' }}>{SESSION_STYLE[item.session].name} uzavřen</span>
               <span style={{ flex: 1 }} />
-              {item.close.execution && <span style={{ fontSize: 11, color: '#93c5fd' }}>{DAY_EXECUTION_LABEL[item.close.execution]}</span>}
+              {item.close.execution && <span style={{ fontSize: 11, color: 'var(--dj-blue)' }}>{DAY_EXECUTION_LABEL[item.close.execution]}</span>}
             </span>
-            {item.close.summary && <span style={{ display: 'block', marginTop: 5, fontSize: 12, color: '#bfdbfe' }}>„{item.close.summary}“</span>}
+            {item.close.summary && <span style={{ display: 'block', marginTop: 5, fontSize: 12, color: 'var(--dj-blue-soft)' }}>„{item.close.summary}“</span>}
           </button>
         );
       })}
@@ -405,11 +405,11 @@ export function NoteComposer({ ctl, point, onDone }: { ctl: DayController; point
     onDone();
   };
   return (
-    <section className="dj" style={{ borderRadius: 14, border: '1px solid rgba(251,191,36,0.45)', background: 'linear-gradient(180deg, rgba(120,53,15,0.28), var(--dj-card))', padding: 14, animation: 'dj-rise .25s ease both' }}>
+    <section className="dj" style={{ borderRadius: 14, border: '1px solid rgba(251,191,36,0.45)', background: 'linear-gradient(180deg, var(--dj-amber-bg-soft), var(--dj-card))', padding: 14, animation: 'dj-rise .25s ease both' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ width: 8, height: 8, borderRadius: 9, background: '#f59e0b' }} />
         <p style={sectionTitle}>Nová poznámka</p>
-        {point && <span className="dj-mono" style={{ fontSize: 11, fontWeight: 600, color: '#fbbf24' }}>{clock(point.time * 1000)} · {priceText(point.price)}</span>}
+        {point && <span className="dj-mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--dj-amber)' }}>{clock(point.time * 1000)} · {priceText(point.price)}</span>}
         <span style={{ flex: 1 }} />
         <span className="dj-mono" style={{ fontSize: 10.5, color: 'var(--dj-muted)' }}>zapíše se {clock(ctl.now)}</span>
       </div>
@@ -464,12 +464,12 @@ function TradeTab({ ctl, onOpenTrade }: { ctl: DayController; onOpenTrade?: (tra
       </div>
       <p style={{ ...label11, margin: '14px 0 7px' }}>Hodnocení</p>
       <TradeRating trade={trade} onRate={choice => { ctl.rateTrade(trade, choice).then(() => setError(null), reason => setError(reason instanceof Error ? reason.message : 'Hodnocení se neuložilo.')); }} />
-      {error && <p role="alert" style={{ margin: '6px 0 0', fontSize: 11.5, color: '#fb7185' }}>{error}</p>}
+      {error && <p role="alert" style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--dj-rose)' }}>{error}</p>}
       <p style={{ ...label11, margin: '14px 0 7px' }}>Poznámky k obchodu</p>
       {trade.notes?.trim() && <div style={{ borderRadius: 9, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)', padding: '8px 10px', marginBottom: 6, fontSize: 12.5, whiteSpace: 'pre-wrap' }}>{trade.notes}</div>}
       {notes.map(note => (
-        <div key={note.id} style={{ borderRadius: 9, border: '1px solid rgba(251,191,36,0.3)', background: 'rgba(120,53,15,0.18)', padding: '8px 10px', marginBottom: 6 }}>
-          <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: '#fbbf24' }}>zapsáno {clock(Date.parse(note.writtenAt))}</span>
+        <div key={note.id} style={{ borderRadius: 9, border: '1px solid rgba(251,191,36,0.3)', background: 'var(--dj-amber-bg-soft)', padding: '8px 10px', marginBottom: 6 }}>
+          <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--dj-amber)' }}>zapsáno {clock(Date.parse(note.writtenAt))}</span>
           <span style={{ display: 'block', marginTop: 3, fontSize: 12.5 }}>{note.text}</span>
         </div>
       ))}
@@ -491,27 +491,27 @@ function PlanTab({ ctl }: { ctl: DayController }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: 9, background: SESSION_STYLE[session].color }} />
               <span style={{ fontSize: 13, fontWeight: 700 }}>{SESSION_STYLE[session].name}</span>
-              {prep?.bias && <span style={{ height: 22, padding: '0 8px', display: 'inline-flex', alignItems: 'center', borderRadius: 7, fontSize: 11.5, fontWeight: 700, ...(prep.bias === 'long' ? { color: '#6ee7b7', background: 'rgba(16,185,129,0.12)' } : prep.bias === 'short' ? { color: '#fda4af', background: 'rgba(244,63,94,0.12)' } : { color: '#e2e8f0', background: 'rgba(148,163,184,0.14)' }) }}>{DAY_BIAS_LABEL[prep.bias]}</span>}
+              {prep?.bias && <span style={{ height: 22, padding: '0 8px', display: 'inline-flex', alignItems: 'center', borderRadius: 7, fontSize: 11.5, fontWeight: 700, ...(prep.bias === 'long' ? { color: 'var(--dj-green-text)', background: 'rgba(16,185,129,0.12)' } : prep.bias === 'short' ? { color: 'var(--dj-rose-text)', background: 'rgba(244,63,94,0.12)' } : { color: 'var(--dj-text)', background: 'rgba(148,163,184,0.14)' }) }}>{DAY_BIAS_LABEL[prep.bias]}</span>}
               <span style={{ flex: 1 }} />
               <span style={{ fontSize: 11, color: 'var(--dj-muted)' }}>{prep ? `zapsáno ${clock(Date.parse(prep.writtenAt))}${editedAt(prep.writtenAt, prep.savedAt) ? ` · upraveno ${clock(Date.parse(prep.savedAt))}` : ''}` : 'bez přípravy'}</span>
             </div>
             {prep?.scenario && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--dj-text-2)', whiteSpace: 'pre-wrap' }}>{prep.scenario}</p>}
             {prep && prep.rules.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {prep.rules.map(rule => <span key={rule} style={{ padding: '4px 8px', borderRadius: 7, fontSize: 11.5, color: '#fecdd3', background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)' }}>{rule}</span>)}
+                {prep.rules.map(rule => <span key={rule} style={{ padding: '4px 8px', borderRadius: 7, fontSize: 11.5, color: 'var(--dj-rose-soft)', background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)' }}>{rule}</span>)}
               </div>
             )}
             {pins.map(pin => {
               const verdict = close?.verdicts[pin.id];
               return (
-                <button key={pin.id} type="button" className="dj-btn" onClick={() => ctl.setSelected({ kind: 'note', id: pin.id })} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', borderRadius: 9, cursor: 'pointer', fontFamily: 'inherit', color: '#e0e7ff', background: 'rgba(30,27,75,0.35)', border: '1px solid rgba(129,140,248,0.35)' }}>
-                  <span className="dj-mono" style={{ display: 'block', fontSize: 10.5, fontWeight: 600, color: '#a5b4fc' }}>zapsáno {clock(Date.parse(pin.writtenAt))}{pin.time != null ? ` → ${clock(pin.time * 1000)}` : ''}{pin.price != null ? ` · ${priceText(pin.price)}` : ''}</span>
+                <button key={pin.id} type="button" className="dj-btn" onClick={() => ctl.setSelected({ kind: 'note', id: pin.id })} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', borderRadius: 9, cursor: 'pointer', fontFamily: 'inherit', color: 'var(--dj-indigo-strong)', background: 'var(--dj-indigo-bg-soft)', border: '1px solid rgba(129,140,248,0.35)' }}>
+                  <span className="dj-mono" style={{ display: 'block', fontSize: 10.5, fontWeight: 600, color: 'var(--dj-indigo)' }}>zapsáno {clock(Date.parse(pin.writtenAt))}{pin.time != null ? ` → ${clock(pin.time * 1000)}` : ''}{pin.price != null ? ` · ${priceText(pin.price)}` : ''}</span>
                   <span style={{ display: 'block', marginTop: 3, fontSize: 12.5 }}>{pin.text}</span>
-                  {verdict && <span style={{ display: 'block', marginTop: 4, fontSize: 11, fontWeight: 600, color: verdict === 'ok' ? '#34d399' : verdict === 'bad' ? '#fb7185' : '#94a3b8' }}>{DAY_VERDICT_LABEL[verdict]}</span>}
+                  {verdict && <span style={{ display: 'block', marginTop: 4, fontSize: 11, fontWeight: 600, color: verdict === 'ok' ? 'var(--dj-green)' : verdict === 'bad' ? 'var(--dj-rose)' : 'var(--dj-muted)' }}>{DAY_VERDICT_LABEL[verdict]}</span>}
                 </button>
               );
             })}
-            <button type="button" className="dj-btn" onClick={() => ctl.openPrep(session)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 34, borderRadius: 9, cursor: 'pointer', font: '700 12px Inter, sans-serif', color: '#e0e7ff', background: 'rgba(99,102,241,0.14)', border: '1px solid rgba(99,102,241,0.4)' }}>{prep ? 'Otevřít přípravu' : `Připravit ${SESSION_STYLE[session].name}`}</button>
+            <button type="button" className="dj-btn" onClick={() => ctl.openPrep(session)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 34, borderRadius: 9, cursor: 'pointer', font: '700 12px Inter, sans-serif', color: 'var(--dj-indigo-strong)', background: 'rgba(99,102,241,0.14)', border: '1px solid rgba(99,102,241,0.4)' }}>{prep ? 'Otevřít přípravu' : `Připravit ${SESSION_STYLE[session].name}`}</button>
             {close && closeCarry(close) && <p style={{ margin: 0, fontSize: 11.5, color: 'var(--dj-muted)' }}>Na příště: „{closeCarry(close)}“</p>}
           </div>
         );
@@ -520,7 +520,7 @@ function PlanTab({ ctl }: { ctl: DayController }) {
   );
 }
 
-export function DaySidePanel({ ctl, onOpenTrade, onAddNote, width = 380, compactSummary = false, streak = [], onOpenCoach }: {
+export function DaySidePanel({ ctl, onOpenTrade, onAddNote, width = 380, compactSummary = false, onOpenCoach }: {
   ctl: DayController;
   onOpenTrade?: (trade: Trade) => void;
   onAddNote: () => void;
@@ -543,28 +543,30 @@ export function DaySidePanel({ ctl, onOpenTrade, onAddNote, width = 380, compact
     <aside className="dj dj-scroll" style={{ width, flex: 'none', display: 'flex', flexDirection: 'column', gap: 12, padding: 12, overflowY: 'auto', borderLeft: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
       {compactSummary && <ResultCard ctl={ctl} compact />}
       {compactSummary && <JournalChecklist ctl={ctl} onOpenCoach={onOpenCoach} />}
-      {compactSummary && streak.length > 0 && <StreakStrip streak={streak} />}
       {ctl.mode === 'day' && ctl.pendingPoint && (
         <NoteComposer ctl={ctl} point={ctl.pendingPoint} onDone={() => ctl.setPendingPoint(null)} />
       )}
-      <section className="dj-card" style={{ overflow: 'hidden', flex: 'none' }}>
-        <div role="tablist" aria-label="Panel dne" style={{ display: 'flex', gap: 2, padding: 6, borderBottom: '1px solid var(--dj-line)' }}>
+      {/* Časová osa vyplní zbytek panelu a roluje uvnitř — nesmí zmizet pod okraj. */}
+      <section className="dj-card" style={{ overflow: 'hidden', flex: '1 1 auto', minHeight: 280, display: 'flex', flexDirection: 'column' }}>
+        <div role="tablist" aria-label="Panel dne" style={{ display: 'flex', gap: 2, padding: 6, borderBottom: '1px solid var(--dj-line)', flex: 'none' }}>
           {tabs.map(item => (
-            <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} className="dj-btn" onClick={() => setTab(item.id)} style={{ flex: 1, height: 34, borderRadius: 8, border: 0, cursor: 'pointer', font: '700 12px Inter, sans-serif', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: tab === item.id ? 'rgba(255,255,255,0.08)' : 'transparent', color: tab === item.id ? 'var(--dj-text)' : 'var(--dj-muted)', whiteSpace: 'nowrap' }}>
+            <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} className="dj-btn" onClick={() => setTab(item.id)} style={{ flex: 1, height: 34, borderRadius: 8, border: 0, cursor: 'pointer', font: '700 12px Inter, sans-serif', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: tab === item.id ? 'var(--dj-tab-on)' : 'transparent', color: tab === item.id ? 'var(--dj-text)' : 'var(--dj-muted)', whiteSpace: 'nowrap' }}>
               {item.label}<span style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 9, ...(item.warn ? { color: '#1c1203', background: '#f59e0b' } : { color: 'var(--dj-text-2)', background: 'var(--dj-line-soft)' }) }}>{item.badge}</span>
             </button>
           ))}
         </div>
-        {tab === 'feed' && (
-          <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button type="button" className="dj-btn" onClick={onAddNote} aria-pressed={ctl.placing === 'note'} style={{ height: 34, borderRadius: 9, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, font: '700 12px Inter, sans-serif', ...(ctl.placing === 'note' ? { color: '#1c1203', background: '#fbbf24', border: '1px solid #fbbf24' } : { color: '#fde68a', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.35)' }) }}>
-              <Plus size={14} />{ctl.placing === 'note' ? 'Klikni do grafu…' : 'Poznámka do grafu'}
-            </button>
-            <FeedList ctl={ctl} items={ctl.feed} />
-          </div>
-        )}
-        {tab === 'trade' && <TradeTab ctl={ctl} onOpenTrade={onOpenTrade} />}
-        {tab === 'plan' && <PlanTab ctl={ctl} />}
+        <div className="dj-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          {tab === 'feed' && (
+            <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button type="button" className="dj-btn" onClick={onAddNote} aria-pressed={ctl.placing === 'note'} style={{ height: 34, borderRadius: 9, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, font: '700 12px Inter, sans-serif', flex: 'none', ...(ctl.placing === 'note' ? { color: '#1c1203', background: '#fbbf24', border: '1px solid #fbbf24' } : { color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.35)' }) }}>
+                <Plus size={14} />{ctl.placing === 'note' ? 'Klikni do grafu…' : 'Poznámka do grafu'}
+              </button>
+              <FeedList ctl={ctl} items={ctl.feed} />
+            </div>
+          )}
+          {tab === 'trade' && <TradeTab ctl={ctl} onOpenTrade={onOpenTrade} />}
+          {tab === 'plan' && <PlanTab ctl={ctl} />}
+        </div>
       </section>
     </aside>
   );
@@ -580,10 +582,10 @@ export function SessionCards({ ctl }: { ctl: DayController }) {
         const stage = sessionStage(session, ctl.windows, ctl.isToday ? ctl.now : Infinity);
         const active = ctl.scope === session;
         const color = SESSION_STYLE[session].color;
-        const status = close ? { text: 'Uzavřeno', style: { color: '#93c5fd', background: 'rgba(59,130,246,0.14)' } }
-          : stage === 'upcoming' ? { text: prep ? 'Připraveno' : 'Čeká na přípravu', style: { color: '#c7d2fe', background: 'rgba(99,102,241,0.14)' } }
-            : stage === 'running' ? { text: 'Běží', style: { color: '#6ee7b7', background: 'rgba(16,185,129,0.14)' } }
-              : { text: 'Neuzavřeno', style: { color: '#fde68a', background: 'rgba(245,158,11,0.14)' } };
+        const status = close ? { text: 'Uzavřeno', style: { color: 'var(--dj-blue)', background: 'rgba(59,130,246,0.14)' } }
+          : stage === 'upcoming' ? { text: prep ? 'Připraveno' : 'Čeká na přípravu', style: { color: 'var(--dj-indigo-text)', background: 'rgba(99,102,241,0.14)' } }
+            : stage === 'running' ? { text: 'Běží', style: { color: 'var(--dj-green-text)', background: 'rgba(16,185,129,0.14)' } }
+              : { text: 'Neuzavřeno', style: { color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.14)' } };
         const quote = close?.summary ? `„${close.summary}“` : stage === 'upcoming' ? (prep ? prepSummary(prep, 0) : 'Připrav bias a scénář před otevřením.') : 'Chybí uzavření · cca 90 s';
         return (
           <div key={session} style={{ display: 'flex', borderRadius: 12, background: 'var(--dj-card-soft)', border: `1px solid ${active ? color : 'var(--dj-line)'}`, boxShadow: active ? `0 0 0 1px ${color}` : undefined, overflow: 'hidden' }}>
@@ -602,8 +604,8 @@ export function SessionCards({ ctl }: { ctl: DayController }) {
               <span style={{ display: 'block', marginTop: 4, fontSize: 11.5, color: 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{quote}</span>
             </button>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 10, borderLeft: '1px solid var(--dj-line)', justifyContent: 'center' }}>
-              <button type="button" className="dj-btn" onClick={() => ctl.openPrep(session)} style={{ ...miniAction, color: '#c7d2fe', borderColor: 'rgba(99,102,241,0.4)' }}>{prep ? 'Příprava' : 'Připravit'}</button>
-              <button type="button" className="dj-btn" disabled={stage === 'upcoming'} onClick={() => ctl.openClose(session)} style={{ ...miniAction, color: close ? '#93c5fd' : '#fde68a', borderColor: close ? 'rgba(59,130,246,0.4)' : 'rgba(245,158,11,0.4)', opacity: stage === 'upcoming' ? 0.4 : 1, cursor: stage === 'upcoming' ? 'default' : 'pointer' }}>{close ? 'Uzavření' : 'Uzavřít'}</button>
+              <button type="button" className="dj-btn" onClick={() => ctl.openPrep(session)} style={{ ...miniAction, color: 'var(--dj-indigo-text)', borderColor: 'rgba(99,102,241,0.4)' }}>{prep ? 'Příprava' : 'Připravit'}</button>
+              <button type="button" className="dj-btn" disabled={stage === 'upcoming'} onClick={() => ctl.openClose(session)} style={{ ...miniAction, color: close ? 'var(--dj-blue)' : 'var(--dj-amber-text)', borderColor: close ? 'rgba(59,130,246,0.4)' : 'rgba(245,158,11,0.4)', opacity: stage === 'upcoming' ? 0.4 : 1, cursor: stage === 'upcoming' ? 'default' : 'pointer' }}>{close ? 'Uzavření' : 'Uzavřít'}</button>
             </div>
           </div>
         );

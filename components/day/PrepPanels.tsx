@@ -31,13 +31,13 @@ export function PrepTimer({ openedAt }: { openedAt: number }) {
     const timer = window.setInterval(() => setSeconds(Math.floor((Date.now() - openedAt) / 1000)), 1000);
     return () => window.clearInterval(timer);
   }, [openedAt]);
-  const color = seconds <= 60 ? '#a5b4fc' : '#fbbf24';
+  const color = seconds <= 60 ? 'var(--dj-indigo)' : 'var(--dj-amber)';
   const capped = Math.min(seconds, 99 * 60);
   return (
     <div title="Jak dlouho připravuješ" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 11px 5px 5px', borderRadius: 12, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)' }}>
       <svg width="30" height="30" viewBox="0 0 36 36" aria-hidden="true">
         <circle cx="18" cy="18" r="15" fill="none" stroke="var(--dj-line)" strokeWidth="3" />
-        <circle cx="18" cy="18" r="15" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeDasharray="94.25" strokeDashoffset={(94.25 * (1 - Math.min(1, seconds / 60))).toFixed(2)} transform="rotate(-90 18 18)" style={{ transition: 'stroke-dashoffset 1s linear' }} />
+        <circle cx="18" cy="18" r="15" fill="none" strokeWidth="3" strokeLinecap="round" strokeDasharray="94.25" strokeDashoffset={(94.25 * (1 - Math.min(1, seconds / 60))).toFixed(2)} transform="rotate(-90 18 18)" style={{ stroke: color, transition: 'stroke-dashoffset 1s linear' }} />
       </svg>
       <span className="dj-mono" style={{ fontSize: 14, fontWeight: 700, color }}>{Math.floor(capped / 60)}:{String(capped % 60).padStart(2, '0')}</span>
     </div>
@@ -67,8 +67,8 @@ export function PrepHeaderBar({ ctl, session, onSwitch }: { ctl: DayController; 
 /** Tlačítka „Napsat / Nadiktovat do grafu“. */
 export function PinModeButtons({ ctl, onVoice }: { ctl: DayController; onVoice: () => void }) {
   return (
-    <div style={{ display: 'flex', gap: 8 }}>
-      <button type="button" className="dj-btn" aria-pressed={ctl.placing === 'note'} onClick={() => { ctl.setPendingPoint(null); ctl.setPlacing(ctl.placing === 'note' ? null : 'note'); }} style={{ height: 34, padding: '0 12px', borderRadius: 9, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, font: '700 12px Inter, sans-serif', ...(ctl.placing === 'note' ? { color: '#1e1b4b', background: '#a5b4fc', border: '1px solid #a5b4fc' } : { color: '#c7d2fe', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.35)' }) }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+      <button type="button" className="dj-btn" aria-pressed={ctl.placing === 'note'} onClick={() => { ctl.setPendingPoint(null); ctl.setPlacing(ctl.placing === 'note' ? null : 'note'); }} style={{ height: 34, padding: '0 12px', borderRadius: 9, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, font: '700 12px Inter, sans-serif', ...(ctl.placing === 'note' ? { color: '#1e1b4b', background: '#a5b4fc', border: '1px solid #a5b4fc' } : { color: 'var(--dj-indigo-text)', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.35)' }) }}>
         <PenLine size={14} /> Napsat do grafu
       </button>
       <button type="button" className="dj-btn" aria-pressed={ctl.placing === 'voice'} onClick={onVoice} style={{ height: 34, padding: '0 13px', borderRadius: 9, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, font: '700 12px Inter, sans-serif', color: '#fff', ...(ctl.placing === 'voice' ? { background: '#f43f5e', border: '1px solid #f43f5e' } : { background: 'linear-gradient(180deg,#6366f1,#4f46e5)', border: '1px solid #6366f1' }) }}>
@@ -106,29 +106,29 @@ export function PinPopover({ ctl, point, autoRecord, onClose, accent = 'indigo' 
   };
   const border = accent === 'amber' ? 'rgba(251,191,36,0.55)' : 'rgba(129,140,248,0.55)';
   return (
-    <div className="dj" onClick={event => event.stopPropagation()} style={{ width: 290, borderRadius: 12, border: `1px solid ${border}`, background: 'rgba(10,13,32,0.98)', color: '#f1f5f9', boxShadow: '0 24px 50px -16px rgba(0,0,0,0.9)', padding: '11px 12px', ['--dj-input' as string]: 'rgba(2,6,23,0.8)', ['--dj-line' as string]: 'rgba(255,255,255,0.12)', ['--dj-text' as string]: '#f1f5f9', ['--dj-muted' as string]: '#8391a7' } as React.CSSProperties}>
+    <div className="dj" onClick={event => event.stopPropagation()} style={{ width: 290, borderRadius: 12, border: `1px solid ${border}`, background: 'var(--dj-card)', color: 'var(--dj-text)', boxShadow: '0 24px 50px -16px rgba(0,0,0,0.55)', padding: '11px 12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 700, color: '#a5b4fc' }}>{clock(point.time * 1000)} · {priceText(point.price)}</span>
+        <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--dj-indigo)' }}>{clock(point.time * 1000)} · {priceText(point.price)}</span>
         <span style={{ flex: 1 }} />
-        <span className="dj-mono" style={{ fontSize: 10, fontWeight: 600, color: '#8391a7' }}>zapíše se {clock(ctl.now)}</span>
+        <span className="dj-mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--dj-muted)' }}>zapíše se {clock(ctl.now)}</span>
       </div>
       {recording || dictation.phase === 'transcribing' ? (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
             <MicButton phase={dictation.phase} onStart={() => void record()} onStop={() => void dictation.stop()} size={40} />
-            {recording ? <Waveform levels={dictation.levels.slice(-18)} /> : <span style={{ fontSize: 12, color: '#a5b4fc' }}>Přepisuji…</span>}
+            {recording ? <Waveform levels={dictation.levels.slice(-18)} /> : <span style={{ fontSize: 12, color: 'var(--dj-indigo)' }}>Přepisuji…</span>}
           </div>
-          <p style={{ margin: '8px 0 0', fontSize: 11.5, color: '#8391a7' }}>{recording ? 'Mluv. Klepnutím zastavíš, text se objeví tady.' : 'Za chvíli tu bude přesný přepis.'}</p>
+          <p style={{ margin: '8px 0 0', fontSize: 11.5, color: 'var(--dj-muted)' }}>{recording ? 'Mluv. Klepnutím zastavíš, text se objeví tady.' : 'Za chvíli tu bude přesný přepis.'}</p>
         </>
       ) : (
         <>
           <textarea className="dj-input" autoFocus rows={3} value={draft} onChange={event => setDraft(event.target.value)} placeholder="Co tady čekáš? Kde vstoupíš, kde se mýlíš…" aria-label="Text poznámky v grafu" style={{ marginTop: 8, fontSize: 12.5 }}
             onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); save(); } if (event.key === 'Escape' && !draft.trim()) onClose(); }} />
-          {status && dictation.phase === 'error' && <p role="alert" style={{ margin: '6px 0 0', fontSize: 11.5, color: status.color }}>{status.text}{dictation.canRetry && <> · <button type="button" onClick={() => { void dictation.retry().then(text => { if (text) { setDraft(current => (current.trim() ? `${current.trim()} ${text}` : text)); setVoice(true); } }); }} style={{ border: 0, background: 'none', padding: 0, color: '#a5b4fc', fontWeight: 700, cursor: 'pointer', font: 'inherit' }}>zkusit přepis znovu</button></>}</p>}
+          {status && dictation.phase === 'error' && <p role="alert" style={{ margin: '6px 0 0', fontSize: 11.5, color: status.color }}>{status.text}{dictation.canRetry && <> · <button type="button" onClick={() => { void dictation.retry().then(text => { if (text) { setDraft(current => (current.trim() ? `${current.trim()} ${text}` : text)); setVoice(true); } }); }} style={{ border: 0, background: 'none', padding: 0, color: 'var(--dj-indigo)', fontWeight: 700, cursor: 'pointer', font: 'inherit' }}>zkusit přepis znovu</button></>}</p>}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
-            <button type="button" className="dj-btn" onClick={() => void record()} aria-label="Nadiktovat" style={{ height: 32, width: 32, borderRadius: 8, cursor: 'pointer', display: 'grid', placeItems: 'center', color: '#e0e7ff', background: 'rgba(99,102,241,0.16)', border: '1px solid rgba(99,102,241,0.4)' }}><Mic size={14} /></button>
+            <button type="button" className="dj-btn" onClick={() => void record()} aria-label="Nadiktovat" style={{ height: 32, width: 32, borderRadius: 8, cursor: 'pointer', display: 'grid', placeItems: 'center', color: 'var(--dj-indigo-strong)', background: 'rgba(99,102,241,0.16)', border: '1px solid rgba(99,102,241,0.4)' }}><Mic size={14} /></button>
             <span style={{ flex: 1 }} />
-            <button type="button" className="dj-btn" onClick={() => { dictation.cancel(); onClose(); }} style={{ height: 32, padding: '0 10px', borderRadius: 8, cursor: 'pointer', font: '600 12px Inter, sans-serif', color: '#a3b0c2', background: 'transparent', border: '1px solid rgba(255,255,255,0.12)' }}>Zrušit</button>
+            <button type="button" className="dj-btn" onClick={() => { dictation.cancel(); onClose(); }} style={{ height: 32, padding: '0 10px', borderRadius: 8, cursor: 'pointer', font: '600 12px Inter, sans-serif', color: 'var(--dj-text-2)', background: 'transparent', border: '1px solid var(--dj-line)' }}>Zrušit</button>
             <button type="button" className="dj-btn" onClick={save} disabled={!draft.trim()} style={{ height: 32, padding: '0 12px', borderRadius: 8, cursor: draft.trim() ? 'pointer' : 'not-allowed', opacity: draft.trim() ? 1 : 0.5, font: '700 12px Inter, sans-serif', color: '#1e1b4b', background: '#a5b4fc', border: 0 }}>Připíchnout</button>
           </div>
         </>
@@ -147,7 +147,7 @@ export function RuleChips({ ctl, session }: { ctl: DayController; session: DaySe
       {options.map(rule => {
         const on = draft.rules.includes(rule);
         return (
-          <button key={rule} type="button" className="dj-btn" aria-pressed={on} onClick={() => toggle(rule)} style={{ height: 27, padding: '0 9px', borderRadius: 7, cursor: 'pointer', font: '600 11.5px Inter, sans-serif', ...(on ? { color: '#fecdd3', background: 'rgba(244,63,94,0.12)', border: '1px solid rgba(244,63,94,0.45)' } : { color: 'var(--dj-muted)', background: 'transparent', border: '1px dashed var(--dj-line)' }) }}>{rule}</button>
+          <button key={rule} type="button" className="dj-btn" aria-pressed={on} onClick={() => toggle(rule)} style={{ height: 27, padding: '0 9px', borderRadius: 7, cursor: 'pointer', font: '600 11.5px Inter, sans-serif', ...(on ? { color: 'var(--dj-rose-soft)', background: 'rgba(244,63,94,0.12)', border: '1px solid rgba(244,63,94,0.45)' } : { color: 'var(--dj-muted)', background: 'transparent', border: '1px dashed var(--dj-line)' }) }}>{rule}</button>
         );
       })}
       {adding == null ? (
@@ -178,14 +178,14 @@ export function ScenarioField({ ctl, session, rows }: { ctl: DayController; sess
     <div style={{ flex: 1.1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
         <label htmlFor={`prep-scenario-${session}`} style={{ fontSize: 12, fontWeight: 700 }}>Scénář</label>
-        <span style={{ fontSize: 11, color: 'var(--dj-muted)' }}>jedna věta, nebo připíchni do grafu</span>
+        <span style={{ fontSize: 11, color: 'var(--dj-muted)', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>jedna věta, nebo připíchni do grafu</span>
         <span style={{ flex: 1 }} />
-        <button type="button" className="dj-btn" onClick={() => (recording ? void dictation.stop() : busy ? undefined : void record())} aria-label={recording ? 'Zastavit nahrávání' : 'Nadiktovat scénář do kolonky'} style={{ height: 28, padding: '0 9px', borderRadius: 7, cursor: busy ? 'progress' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, font: '700 11px Inter, sans-serif', ...(recording ? { color: '#fff', background: '#f43f5e', border: '1px solid #f43f5e', animation: 'dj-rec 1.4s ease-out infinite' } : { color: '#e0e7ff', background: 'rgba(99,102,241,0.16)', border: '1px solid rgba(99,102,241,0.4)' }) }}>
+        <button type="button" className="dj-btn" onClick={() => (recording ? void dictation.stop() : busy ? undefined : void record())} aria-label={recording ? 'Zastavit nahrávání' : 'Nadiktovat scénář do kolonky'} style={{ height: 28, padding: '0 9px', borderRadius: 7, cursor: busy ? 'progress' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, font: '700 11px Inter, sans-serif', ...(recording ? { color: '#fff', background: '#f43f5e', border: '1px solid #f43f5e', animation: 'dj-rec 1.4s ease-out infinite' } : { color: 'var(--dj-indigo-strong)', background: 'rgba(99,102,241,0.16)', border: '1px solid rgba(99,102,241,0.4)' }) }}>
           <Mic size={12} /> {recording ? 'Nahrávám… stop' : busy ? 'Přepisuji…' : 'Nadiktovat'}
         </button>
       </div>
       <textarea id={`prep-scenario-${session}`} className="dj-input" rows={rows} value={draft.scenario} onChange={event => ctl.updatePrepDraft(session, { scenario: event.target.value })} placeholder="Co musí trh udělat, abys vstoupil? Kde je cíl, kde se mýlíš?" style={{ flex: rows ? undefined : 1, minHeight: 0, fontSize: 13 }} />
-      {fieldRecording && dictation.phase === 'error' && <p role="alert" style={{ margin: '4px 0 0', fontSize: 11.5, color: '#fb7185' }}>{dictation.error}</p>}
+      {fieldRecording && dictation.phase === 'error' && <p role="alert" style={{ margin: '4px 0 0', fontSize: 11.5, color: 'var(--dj-rose)' }}>{dictation.error}</p>}
     </div>
   );
 }
@@ -198,17 +198,17 @@ export function PinList({ ctl, session }: { ctl: DayController; session: DaySess
       <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700 }}>V grafu <span style={{ fontWeight: 600, color: 'var(--dj-muted)' }}>· {pins.length}</span></p>
       <div className="dj-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }}>
         {[...pins].reverse().map(pin => (
-          <div key={pin.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 8px', borderRadius: 8, border: `1px solid ${ctl.failedNotes.has(pin.id) ? 'rgba(244,63,94,0.5)' : 'rgba(129,140,248,0.25)'}`, background: 'rgba(30,27,75,0.3)', animation: 'dj-rise .2s ease both' }}>
-            <span className="dj-mono" style={{ fontSize: 10, fontWeight: 700, color: '#a5b4fc', whiteSpace: 'nowrap', paddingTop: 2 }}>zapsáno {clock(Date.parse(pin.writtenAt))}</span>
+          <div key={pin.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 8px', borderRadius: 8, border: `1px solid ${ctl.failedNotes.has(pin.id) ? 'rgba(244,63,94,0.5)' : 'rgba(129,140,248,0.25)'}`, background: 'var(--dj-indigo-bg-soft)', animation: 'dj-rise .2s ease both' }}>
+            <span className="dj-mono" style={{ fontSize: 10, fontWeight: 700, color: 'var(--dj-indigo)', whiteSpace: 'nowrap', paddingTop: 2 }}>zapsáno {clock(Date.parse(pin.writtenAt))}</span>
             <span style={{ flex: 1, minWidth: 0 }}>
-              <span style={{ display: 'block', fontSize: 12, color: '#e0e7ff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={pin.text}>{pin.text}</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--dj-indigo-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={pin.text}>{pin.text}</span>
               {pin.time != null && pin.price != null && <span className="dj-mono" style={{ display: 'block', fontSize: 10, fontWeight: 500, color: 'var(--dj-muted)' }}>→ {clock(pin.time * 1000)} · {priceText(pin.price)}</span>}
             </span>
             <button type="button" className="dj-btn" onClick={() => { ctl.removeNote(pin.id).then(() => setError(null), reason => setError(reason instanceof Error ? reason.message : 'Smazání se nepodařilo.')); }} aria-label="Odebrat poznámku" style={{ width: 24, height: 24, flex: 'none', borderRadius: 6, cursor: 'pointer', border: 0, background: 'transparent', color: 'var(--dj-muted)', display: 'grid', placeItems: 'center' }}><X size={12} strokeWidth={2.4} /></button>
           </div>
         ))}
         {!pins.length && <p style={{ margin: 0, padding: 10, borderRadius: 8, border: '1px dashed rgba(129,140,248,0.35)', fontSize: 12, color: 'var(--dj-muted)' }}>Klikni „Nadiktovat do grafu“ a pak na místo, kde něco čekáš.</p>}
-        {error && <p role="alert" style={{ margin: 0, fontSize: 11.5, color: '#fb7185' }}>{error}</p>}
+        {error && <p role="alert" style={{ margin: 0, fontSize: 11.5, color: 'var(--dj-rose)' }}>{error}</p>}
       </div>
     </div>
   );
@@ -225,7 +225,7 @@ export function RequirementChips({ items }: { items: { label: string; ok: boolea
   return (
     <div style={{ display: 'flex', gap: 6 }}>
       {items.map(item => (
-        <span key={item.label} style={{ height: 24, padding: '0 9px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11.5, fontWeight: 700, transition: 'all .25s ease', ...(item.ok ? { color: '#6ee7b7', background: 'rgba(16,185,129,0.12)' } : { color: 'var(--dj-muted)', background: 'var(--dj-line-soft)' }) }}>
+        <span key={item.label} style={{ height: 24, padding: '0 9px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11.5, fontWeight: 700, transition: 'all .25s ease', ...(item.ok ? { color: 'var(--dj-green-text)', background: 'rgba(16,185,129,0.12)' } : { color: 'var(--dj-muted)', background: 'var(--dj-line-soft)' }) }}>
           <span style={{ width: 14, height: 14, borderRadius: 9, display: 'grid', placeItems: 'center', ...(item.ok ? { background: '#34d399' } : { border: '1.5px dashed var(--dj-line)' }) }}>
             {item.ok && <span style={{ fontSize: 9, fontWeight: 900, color: '#052e16', animation: 'dj-check .3s ease both' }}>✓</span>}
           </span>
@@ -251,7 +251,7 @@ export function PrepBottom({ ctl, session, saving, error, onSave, onVoice }: { c
           <PinList ctl={ctl} session={session} />
         </div>
       </div>
-      <div className="dj-card" style={{ width: 380, flex: 'none', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 9 }}>
+      <div className="dj-card" style={{ flex: '0 0 clamp(300px, 34%, 380px)', minWidth: 0, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 9 }}>
         <div>
           <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700 }}>Neobchoduju, pokud…</p>
           <RuleChips ctl={ctl} session={session} />

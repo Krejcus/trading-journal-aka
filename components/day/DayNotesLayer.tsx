@@ -288,11 +288,11 @@ export default function DayNotesLayer({ chartApi, containerRef, barTimes, interv
               {!pin.ghost && (pin.voice ? <Mic size={10} strokeWidth={3} color="#1c1203" /> : <PenLine size={10} strokeWidth={3} color="#1c1203" />)}
             </button>
             {showBubble && (
-              <div data-day-bubble={pin.id} style={{ position: 'absolute', visibility: 'hidden', zIndex: selected ? 9 : 5, width: 'max-content', maxWidth: 230, padding: '7px 9px', borderRadius: 8, border: `1px solid ${style.line}`, background: 'rgba(14,16,30,0.95)', color: style.text, fontSize: 11.5, lineHeight: 1.4, boxShadow: '0 12px 28px -10px rgba(0,0,0,0.8)', pointerEvents: 'none', transform: 'translate(14px, -50%)', animation: 'dj-fade .2s ease both' }}>
-                <span className="dj-mono" style={{ display: 'block', fontSize: 9.5, fontWeight: 700, color: style.color }}>{pin.meta}</span>
+              <div data-day-bubble={pin.id} style={{ position: 'absolute', visibility: 'hidden', zIndex: selected ? 9 : 5, width: 'max-content', maxWidth: 230, padding: '7px 9px', borderRadius: 8, border: `1px solid ${style.line}`, background: 'rgba(14,16,30,0.95)', color: style.bubble.text, fontSize: 11.5, lineHeight: 1.4, boxShadow: '0 12px 28px -10px rgba(0,0,0,0.8)', pointerEvents: 'none', transform: 'translate(14px, -50%)', animation: 'dj-fade .2s ease both' }}>
+                <span className="dj-mono" style={{ display: 'block', fontSize: 9.5, fontWeight: 700, color: style.bubble.accent }}>{pin.meta}</span>
                 {bubbles === 'selected' && <span className="dj-mono" style={{ display: 'block', fontSize: 9.5, fontWeight: 500, color: '#8391a7', marginBottom: 3 }}>ukazuje na {timeLabel(pin.time)} · {priceText(pin.price)}</span>}
                 <span style={{ display: '-webkit-box', WebkitLineClamp: selected ? 12 : 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap' }}>{pin.text}</span>
-                {pin.status === 'failed' && <span style={{ display: 'block', marginTop: 3, fontSize: 10, fontWeight: 700, color: '#fb7185' }}>Neuloženo — zkusím znovu</span>}
+                {pin.status === 'failed' && <span style={{ display: 'block', marginTop: 3, fontSize: 10, fontWeight: 700, color: 'var(--dj-rose)' }}>Neuloženo — zkusím znovu</span>}
               </div>
             )}
           </React.Fragment>
@@ -327,8 +327,8 @@ export default function DayNotesLayer({ chartApi, containerRef, barTimes, interv
             </>
           )}
           <div style={{ position: 'absolute', left: '50%', top: 12, transform: 'translateX(-50%)', padding: '7px 12px', borderRadius: 9, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', pointerEvents: 'none', ...(placing === 'voice'
-            ? { color: '#fecdd3', background: 'rgba(76,5,25,0.92)', border: '1px solid rgba(244,63,94,0.5)' }
-            : { color: '#e0e7ff', background: 'rgba(30,27,75,0.92)', border: '1px solid rgba(129,140,248,0.5)' }) }}>
+            ? { color: 'var(--dj-rose-soft)', background: 'rgba(76,5,25,0.92)', border: '1px solid rgba(244,63,94,0.5)' }
+            : { color: 'var(--dj-indigo-strong)', background: 'rgba(30,27,75,0.92)', border: '1px solid rgba(129,140,248,0.5)' }) }}>
             {placingHint ?? (placing === 'voice' ? 'Klikni, kam patří to, co nadiktuješ' : 'Klikni na čas a cenu, ke které poznámka patří')} · Esc zruší
           </div>
         </div>

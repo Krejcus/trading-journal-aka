@@ -78,7 +78,7 @@ function SessionSwitchFx({ session, sub }: { session: DaySession; sub: string })
     <div aria-hidden="true" style={{ position: 'absolute', inset: 0, zIndex: 30, pointerEvents: 'none', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(2,6,23,0.35)', animation: 'dj-dim .8s ease both' }} />
       <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: '45%', background: `linear-gradient(90deg,transparent,${tint}0.28),transparent)`, animation: 'dj-wipe .8s cubic-bezier(.4,0,.2,1) both' }} />
-      <div className="dj" style={{ position: 'absolute', left: '50%', top: '46%', padding: '12px 22px', borderRadius: 14, textAlign: 'center', animation: 'dj-badge .95s cubic-bezier(.2,.9,.3,1) both', color: session === 'ny' ? '#ffedd5' : '#dbeafe', background: session === 'ny' ? 'rgba(67,20,7,0.85)' : 'rgba(23,37,84,0.85)', border: `1px solid ${tint}0.6)`, boxShadow: `0 20px 50px -12px ${tint}0.55)` }}>
+      <div className="dj" style={{ position: 'absolute', left: '50%', top: '46%', padding: '12px 22px', borderRadius: 14, textAlign: 'center', animation: 'dj-badge .95s cubic-bezier(.2,.9,.3,1) both', color: session === 'ny' ? '#ffedd5' : 'var(--dj-blue-text)', background: session === 'ny' ? 'rgba(67,20,7,0.85)' : 'rgba(23,37,84,0.85)', border: `1px solid ${tint}0.6)`, boxShadow: `0 20px 50px -12px ${tint}0.55)` }}>
         <span style={{ display: 'block', fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em' }}>{SESSION_STYLE[session].name}</span>
         <span className="dj-mono" style={{ display: 'block', marginTop: 2, fontSize: 11.5, fontWeight: 600, opacity: 0.8 }}>{sub}</span>
       </div>
@@ -126,8 +126,10 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
     setWidth(element.getBoundingClientRect().width);
     return () => observer.disconnect();
   }, []);
-  const wide = width >= 1440;
-  const sideWidth = width >= 1280 ? 380 : 330;
+  // 13" MacBook má po odečtení postranní lišty ~1360 px: levý sloupec se
+  // musí vejít i tam, jinak se všechno tlačí do pravého panelu.
+  const wide = width >= 1280;
+  const sideWidth = wide ? 340 : width >= 1180 ? 360 : 330;
   useEffect(() => { setPopover(null); setSaveError(null); setCelebration(null); }, [mode, session, ctl.day]);
 
   // ── Záběr grafu ───────────────────────────────────────────────────────
@@ -247,6 +249,8 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
           entryMs={selectedChartTrade ? tradeChartTiming(selectedChartTrade).entryMs : anchor.entryTime!}
           exitMs={selectedChartTrade ? tradeChartTiming(selectedChartTrade).exitMs : anchor.timestamp}
           initialRoot="MNQ"
+          layoutScope="day"
+          defaultLayoutId="1"
           initialCandles={candles}
           isDark={isDark}
           tradeIndicators={tradeIndicators}
@@ -325,7 +329,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
             <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--dj-muted)', textAlign: 'left' }}>Posledních {streak.length} dní · plný čtverec = připravený i uzavřený den</p>
             {carry && (
               <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 11, textAlign: 'left', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)' }}>
-                <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#a5b4fc' }}>{celebration.session === 'london' ? 'Do New Yorku si ber' : 'Na zítra'}</span>
+                <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--dj-indigo)' }}>{celebration.session === 'london' ? 'Do New Yorku si ber' : 'Na zítra'}</span>
                 <span style={{ display: 'block', marginTop: 3, fontSize: 13 }}>„{carry}“</span>
               </div>
             )}

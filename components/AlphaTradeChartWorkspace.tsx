@@ -269,6 +269,12 @@ interface AlphaTradeChartWorkspaceProps {
    * vyplní rodiče a nemá tlačítka zavřít.
    */
   embedded?: boolean;
+  /**
+   * Vlastní paměť rozložení (deník dne si pamatuje své panely zvlášť,
+   * nezdědí dva grafy z detailu obchodu) a výchozí rozložení pro ni.
+   */
+  layoutScope?: string;
+  defaultLayoutId?: ChartWorkspaceLayoutId;
 }
 
 export interface WorkspaceReviewSlots {
@@ -414,12 +420,12 @@ const buildWorkspaceLayout = (
   });
 };
 
-const loadLayoutId = (): ChartWorkspaceLayoutId => {
+const loadLayoutId = (storageKey: string, fallback: ChartWorkspaceLayoutId): ChartWorkspaceLayoutId => {
   try {
-    const value = window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY) as ChartWorkspaceLayoutId | null;
+    const value = window.localStorage.getItem(storageKey) as ChartWorkspaceLayoutId | null;
     if (value && getChartWorkspaceLayout(value).id === value) return value;
   } catch { /* private storage */ }
-  return '2h';
+  return fallback;
 };
 
 const loadSyncSettings = (): ChartWorkspaceSyncSettings => {
@@ -853,7 +859,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   onSaveSnapshot,
   review,
   embedded = false,
+  layoutScope,
+  defaultLayoutId = '2h',
 }) => {
+  const layoutStorageKey = layoutScope ? `${WORKSPACE_LAYOUT_STORAGE_KEY}:${layoutScope}` : WORKSPACE_LAYOUT_STORAGE_KEY;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceShellRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
@@ -862,7 +871,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const indicatorDefaults = backtestSession ? undefined : tradeIndicators;
   const savedLayoutId = backtestSession?.workspaceState?.layoutId as ChartWorkspaceLayoutId | undefined;
   const initialLayoutIdRef = useRef<ChartWorkspaceLayoutId>(
-    savedLayoutId && getChartWorkspaceLayout(savedLayoutId).id === savedLayoutId ? savedLayoutId : loadLayoutId(),
+    savedLayoutId && getChartWorkspaceLayout(savedLayoutId).id === savedLayoutId ? savedLayoutId : loadLayoutId(layoutStorageKey, defaultLayoutId),
   );
   const nextPanelNumberRef = useRef(getChartWorkspaceLayout(initialLayoutIdRef.current).panelCount + 1);
   const [status, setStatus] = useState('Layout je možné přetahovat a měnit jeho velikost');
@@ -1613,9 +1622,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setLayoutId(nextLayoutId);
     setActivePanelId(`${PANEL_ID_PREFIX}1`);
     setLayoutPickerOpen(false);
-    try { window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, nextLayoutId); } catch { /* private storage */ }
+    try { window.localStorage.setItem(layoutStorageKey, nextLayoutId); } catch { /* private storage */ }
     setStatus(`Layout ${nextLayoutId} · ${template.panelCount} graf${template.panelCount === 1 ? '' : 'y'}`);
-  }, [activeControl?.config, indicatorDefaults, initialRoot, workspace]);
+  }, [activeControl?.config, indicatorDefaults, initialRoot, layoutStorageKey, workspace]);
 
   useEffect(() => installChartWorkspaceSync(panelControls, syncSettings), [
     panelControls,
@@ -1640,15 +1649,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       name: 'default',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      tree: buildWorkspaceLayout(initialRoot, '2h', undefined, indicatorDefaults),
+      tree: buildWorkspaceLayout(initialRoot, defaultLayoutId, undefined, indicatorDefaults),
       panels: {},
     });
-    setLayoutId('2h');
-    nextPanelNumberRef.current = 3;
-    try { window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, '2h'); } catch { /* private storage */ }
+    setLayoutId(defaultLayoutId);
+    nextPanelNumberRef.current = getChartWorkspaceLayout(defaultLayoutId).panelCount + 1;
+    try { window.localStorage.setItem(layoutStorageKey, defaultLayoutId); } catch { /* private storage */ }
     setActivePanelId('alphatrade-chart-1');
     setStatus('Výchozí rozložení obnoveno');
-  }, [indicatorDefaults, initialRoot, workspace]);
+  }, [defaultLayoutId, indicatorDefaults, initialRoot, layoutStorageKey, workspace]);
 
   const persistWorkspaceStatus = useCallback(async (message: string) => {
     const result = await backtestSessionRef.current?.onSaveWorkspace?.();

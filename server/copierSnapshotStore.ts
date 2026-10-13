@@ -1,4 +1,4 @@
-import { tvBarsStoragePath, tvLiveBarsStoragePath, type TvBarsCapture } from '../lib/tradingViewBars.js';
+import { TV_BARS_MAX, mergeTvBarCaptures, sanitizeTvBars, tvBarsStoragePath, tvLiveBarsStoragePath, type TvBarsCapture } from '../lib/tradingViewBars.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const COPIER_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
@@ -178,21 +178,47 @@ export async function storeTvBarsCapture(options: {
 
 /**
  * Živé 1m svíčky z TradingView pro přípravu a pohled dne (jen zobrazení).
- * Jeden soubor na cenovou rodinu, každé čtení ho přepíše — žádný úklid ani
- * růst úložiště. Čtení hlídá existující policy „vlastní složka“.
+ * Jeden soubor na cenovou rodinu. Nové čtení se SLUČUJE s předchozím obsahem
+ * souboru (okno 27 h, max `TV_BARS_MAX` svíček): TradingView má v paměti jen
+ * svíčky, které graf načetl — po reloadu grafu nebo restartu workeru třeba
+ * jen ~5 h — a prosté přepsání by z pohledu dne odmazalo noc a dopoledne.
+ * Úložiště zůstává omezené (jeden soubor, pevný strop svíček). Čtení hlídá
+ * existující policy „vlastní složka“.
  */
 export async function storeTvLiveBars(options: {
   db: SupabaseClient;
   userId: string;
   capture: TvBarsCapture;
-}): Promise<{ storagePath: string }> {
+}): Promise<{ storagePath: string; bars: number }> {
   const storagePath = tvLiveBarsStoragePath(options.userId, options.capture.root);
-  const body = JSON.stringify({ v: 1, ...options.capture });
-  const { error } = await options.db.storage
-    .from('copier-snapshots')
+  const bucket = options.db.storage.from('copier-snapshots');
+  const previous = await readPreviousTvLiveBars(bucket, storagePath, options.capture.at);
+  const bars = previous ? mergeTvBarCaptures([previous, options.capture]).slice(-TV_BARS_MAX) : options.capture.bars;
+  const body = JSON.stringify({ v: 1, ...options.capture, bars });
+  const { error } = await bucket
     .upload(storagePath, Buffer.from(body), { contentType: 'application/json', upsert: true, cacheControl: '0' });
   if (error) throw new Error(`tv-live-bars-upload-failed: ${error.message}`);
-  return { storagePath };
+  return { storagePath, bars: bars.length };
+}
+
+/** Předchozí soubor živých svíček; chybějící nebo vadný = `null`, nikdy výjimka. */
+async function readPreviousTvLiveBars(
+  bucket: ReturnType<SupabaseClient['storage']['from']>,
+  storagePath: string,
+  nowMs: number,
+): Promise<Pick<TvBarsCapture, 'at' | 'bars'> | null> {
+  try {
+    const { data } = await bucket.download(storagePath);
+    if (!data) return null;
+    const body = JSON.parse(await data.text()) as { at?: unknown; bars?: unknown } | null;
+    const at = Number(body?.at);
+    if (!Number.isFinite(at)) return null;
+    // Stáří se měří od nového čtení: svíčky za hranicí okna odpadnou při sloučení.
+    const bars = sanitizeTvBars(body?.bars, nowMs);
+    return bars.length ? { at, bars } : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Předběžné svíčky po ~3 dnech nahradí Databento — starší dny se mažou. */

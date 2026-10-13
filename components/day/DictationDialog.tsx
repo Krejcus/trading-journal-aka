@@ -58,7 +58,7 @@ export default function DictationDialog({ ctl, onClose, sheet = false }: { ctl: 
             <span style={{ width: 22, height: 22, borderRadius: 5, background: '#fff' }} />
           </button>
           <Waveform levels={dictation.levels} height={34} />
-          <p className="dj-mono" style={{ margin: 0, fontSize: 13, fontWeight: 600, color: '#fda4af' }}>{formatDictationClock(dictation.seconds)}</p>
+          <p className="dj-mono" style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--dj-rose-text)' }}>{formatDictationClock(dictation.seconds)}</p>
           <p style={{ margin: 0, fontSize: 12, color: 'var(--dj-muted)', textAlign: 'center' }}>Mluv normálně. Klepnutím zastavíš, uloží se přesný přepis.</p>
         </div>
       )}
@@ -70,7 +70,7 @@ export default function DictationDialog({ ctl, onClose, sheet = false }: { ctl: 
       )}
       {phase === 'error' && (
         <div style={{ padding: '18px 0 4px' }}>
-          <p role="alert" style={{ margin: 0, fontSize: 13, color: '#fb7185' }}>{dictation.error}</p>
+          <p role="alert" style={{ margin: 0, fontSize: 13, color: 'var(--dj-rose)' }}>{dictation.error}</p>
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button type="button" className="dj-btn" onClick={cancel} style={ghost}>Zavřít</button>
             {dictation.canRetry
