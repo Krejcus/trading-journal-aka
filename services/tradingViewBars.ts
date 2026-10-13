@@ -1,4 +1,4 @@
-import { pickTvBars, tvSymbolRoot, TV_BARS_EXPRESSION, type TvBarsCapture } from '../lib/tradingViewBars';
+import { pickTvBars, tvPriceFamily, tvSymbolRoot, TV_BARS_EXPRESSION, type TvBarsCapture } from '../lib/tradingViewBars';
 import { evaluateTradingViewChartTargets, type TradingViewMarketPriceOptions } from './tradingViewMarketPrice';
 
 /**
@@ -56,4 +56,97 @@ export function scheduleTradingViewBarsCapture(options: {
     return timer;
   });
   return () => { for (const timer of timers) clearTimeout(timer); };
+}
+
+/** Živé svíčky: jak často worker čte graf, když nic neobchoduje. */
+export const TV_LIVE_BARS_INTERVAL_MS = 60_000;
+/**
+ * I beze změny grafu (přestávka, víkend) se čtení po této době pošle znovu,
+ * aby klient poznal, že worker běží (klient hlásí „stojí“ po 5 min).
+ */
+export const TV_LIVE_BARS_KEEPALIVE_MS = 2 * 60_000;
+/** Víc cenových rodin worker nečte — limit serveru je 4 zápisy/min. */
+export const TV_LIVE_BARS_MAX_ROOTS = 2;
+
+export interface TradingViewLiveBarsFeed {
+  stop(): void;
+}
+
+/**
+ * Worker: průběžně (výchozí 1×/min) čte 1m svíčky z grafu TradingView a
+ * posílá je na server jako „živý“ graf pro přípravu a pohled dne. Stejné
+ * read-only čtení jako po obchodu; jen zobrazení, nikdy nevstupuje do
+ * copieru. Běhy se nepřekrývají, beze změny poslední svíčky se nic
+ * neposílá a jakákoli chyba končí tichým skipem s logem při změně stavu.
+ */
+export function startTradingViewLiveBars(options: {
+  roots: readonly string[];
+  upload: (capture: TvBarsCapture) => Promise<void>;
+  /** Bez spárovaného relaye se graf vůbec nečte (zbytečné CDP čtení). */
+  ready?: () => boolean;
+  read?: (root: string) => Promise<TvBarsCapture | null>;
+  log?: (message: string) => void;
+  intervalMs?: number;
+  now?: () => number;
+  setIntervalImpl?: typeof setInterval;
+  clearIntervalImpl?: typeof clearInterval;
+}): TradingViewLiveBarsFeed {
+  // MNQ a NQ sdílí na serveru jeden soubor — čte se jen první kořen z rodiny.
+  const byFamily = new Map<string, string>();
+  for (const raw of options.roots) {
+    const root = tvSymbolRoot(raw);
+    if (root && !byFamily.has(tvPriceFamily(root))) byFamily.set(tvPriceFamily(root), root);
+  }
+  const roots = [...byFamily.values()].slice(0, TV_LIVE_BARS_MAX_ROOTS);
+  const ready = options.ready ?? (() => true);
+  const now = options.now ?? Date.now;
+  const read = options.read ?? (root => readTradingViewBars(root));
+  const log = options.log ?? (() => {});
+  const intervalMs = Math.max(15_000, options.intervalMs ?? TV_LIVE_BARS_INTERVAL_MS);
+  // Podpis posledního odeslaného čtení na kořen: čas, close a počet svíček.
+  const sent = new Map<string, { signature: string; at: number }>();
+  // Poslední zalogovaný stav na kořen, aby log nehlásil totéž každou minutu.
+  const reported = new Map<string, string>();
+  const report = (root: string, state: string, message: string) => {
+    if (reported.get(root) === state) return;
+    reported.set(root, state);
+    log(message);
+  };
+  let inFlight = false;
+  let stopped = false;
+  const tick = async () => {
+    if (inFlight || stopped || !ready()) return;
+    inFlight = true;
+    try {
+      for (const root of roots) {
+        if (stopped) return;
+        try {
+          const capture = await read(root);
+          if (stopped) return;
+          if (!capture) { report(root, 'no-chart', `TV LIVE skip root=${root} reason=no-1m-chart`); continue; }
+          const last = capture.bars[capture.bars.length - 1];
+          const signature = `${last[0]}:${last[4]}:${capture.bars.length}`;
+          const previous = sent.get(root);
+          if (previous?.signature === signature && now() - previous.at < TV_LIVE_BARS_KEEPALIVE_MS) continue;
+          await options.upload(capture);
+          sent.set(root, { signature, at: now() });
+          report(root, 'ok', `TV LIVE uploading root=${root} bars=${capture.bars.length} source=${capture.source}`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          report(root, `error:${message}`, `TV LIVE failed root=${root} error=${message}`);
+        }
+      }
+    } finally {
+      inFlight = false;
+    }
+  };
+  const timer = (options.setIntervalImpl ?? setInterval)(() => { void tick(); }, intervalMs);
+  (timer as { unref?: () => void }).unref?.();
+  void tick();
+  return {
+    stop: () => {
+      stopped = true;
+      (options.clearIntervalImpl ?? clearInterval)(timer);
+    },
+  };
 }

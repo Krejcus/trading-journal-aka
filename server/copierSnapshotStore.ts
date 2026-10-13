@@ -1,4 +1,4 @@
-import { tvBarsStoragePath, type TvBarsCapture } from '../lib/tradingViewBars.js';
+import { tvBarsStoragePath, tvLiveBarsStoragePath, type TvBarsCapture } from '../lib/tradingViewBars.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const COPIER_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
@@ -173,6 +173,25 @@ export async function storeTvBarsCapture(options: {
     .upload(storagePath, Buffer.from(body), { contentType: 'application/json', upsert: true });
   if (error) throw new Error(`tv-bars-upload-failed: ${error.message}`);
   await pruneTvBars(options.db, options.userId, options.capture.at);
+  return { storagePath };
+}
+
+/**
+ * Živé 1m svíčky z TradingView pro přípravu a pohled dne (jen zobrazení).
+ * Jeden soubor na cenovou rodinu, každé čtení ho přepíše — žádný úklid ani
+ * růst úložiště. Čtení hlídá existující policy „vlastní složka“.
+ */
+export async function storeTvLiveBars(options: {
+  db: SupabaseClient;
+  userId: string;
+  capture: TvBarsCapture;
+}): Promise<{ storagePath: string }> {
+  const storagePath = tvLiveBarsStoragePath(options.userId, options.capture.root);
+  const body = JSON.stringify({ v: 1, ...options.capture });
+  const { error } = await options.db.storage
+    .from('copier-snapshots')
+    .upload(storagePath, Buffer.from(body), { contentType: 'application/json', upsert: true, cacheControl: '0' });
+  if (error) throw new Error(`tv-live-bars-upload-failed: ${error.message}`);
   return { storagePath };
 }
 

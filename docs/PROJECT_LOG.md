@@ -256,6 +256,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-13 (Claude, větev feat/live-tv-candles)
+Živé 1m svíčky z TradingView pro přípravu a pohled dne. Databento má ~24 h
+zpoždění, takže ranní příprava neviděla noc ani včerejší NY. Worker 1×/min
+(keepalive 2 min beze změny) čte stejným read-only CDP výrazem jako po obchodu
+a posílá novou relay akci `live-bars`; server přepisuje jeden soubor
+`<user>/tv-live/<rodina>.json` (vlastní limit 4/min, oddělený od snímků,
+bez `last_used`, čtení starší 2 min = 409). Klient: `services/liveCandles.ts`,
+`hooks/useLiveCandles.ts` (stale po 5 min). Jen zobrazení, nikdy do copieru.
+copier-design-critic: OK S VÝHRADAMI, všechny výhrady opraveny + testy.
+Ověřeno: cílené testy 55/55, tsc čistý (mimo staré chyby `extension/`);
+celá sada a build neproběhly. Nasazení: nejdřív server, pak worker.
+TradingView musí mít graf MNQ/NQ na 1 min. Hook zatím nikde v UI.
+
 ### 2026-10-12 — Follower čeká na svou kopii vstupu (Claude, varianta 1 Filipa)
 
 Větev `claude/copier-entry-wait-20261012`. Dva produkční obchody 12. 10. ráno:

@@ -126,6 +126,14 @@ export const tvBarsFolder = (userId: string, dayMs: number) => `${userId}/tv-bar
 export const tvBarsStoragePath = (userId: string, capture: Pick<TvBarsCapture, 'root' | 'at'>) =>
   `${tvBarsFolder(userId, capture.at)}/${capture.root}-${capture.at}.json`;
 
+/**
+ * Živé svíčky pro přípravu a den: jeden soubor na cenovou rodinu
+ * (`<user>/tv-live/NQ.json` pro MNQ i NQ), každé čtení ho přepíše. Úložiště
+ * tak zůstává omezené bez ohledu na to, jak dlouho worker běží.
+ */
+export const tvLiveBarsStoragePath = (userId: string, root: string) =>
+  `${userId}/tv-live/${tvPriceFamily(root)}.json`;
+
 /** `MNQ-1790798880000.json` → { root, at }. */
 export function parseTvBarsFileName(name: string): { root: string; at: number } | null {
   const match = /^([A-Z0-9]{1,6})-(\d{10,16})\.json$/.exec(name);

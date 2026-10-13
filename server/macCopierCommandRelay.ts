@@ -35,6 +35,8 @@ export interface MacCopierCommandRelay {
   }): Promise<{ devices: number; sent: number }>;
   /** Předběžné 1m svíčky z TradingView pro graf hodnocení (jen zobrazení). */
   uploadBars(capture: TvBarsCapture): Promise<void>;
+  /** Živé 1m svíčky pro přípravu a pohled dne (jen zobrazení, přepisuje jeden soubor). */
+  uploadLiveBars?(capture: TvBarsCapture): Promise<void>;
   /**
    * Kdy začal poslední poll, který našel frontu příkazů prázdnou a nic
    * nedoručoval; `null` = právě se doručuje nebo prázdnou frontu zatím
@@ -415,6 +417,11 @@ export function startMacCopierCommandRelay(options: {
     async uploadBars(capture) {
       const response = await request({ action: 'bars', ...capture }, 8_000);
       if (response.accepted !== true) throw new Error('copier-bars-store-rejected');
+    },
+    async uploadLiveBars(capture) {
+      if (stopped) throw new Error('copier-relay-closed');
+      const response = await request({ ...capture, action: 'live-bars' }, 8_000, loopAbort.signal);
+      if (response.accepted !== true) throw new Error('copier-live-bars-store-rejected');
     },
     async close() {
       stopped = true;
