@@ -65,6 +65,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
+- [ ] **Deník dne — nasazení**: aplikovat migraci `20261013120000_day_journal_entries`
+      (+ advisory), nastavit `GROQ_API_KEY` ve Vercelu a odebrat `VITE_GROQ_API_KEY`,
+      nasadit server (relay `live-bars`, `TV_BARS_MAX` 1700) před workerem, redeploy
+      MCP edge funkce. Viz zápis 2026-10-13 feat/day-journal.
 - [ ] **UI větev po balíčku 7a-3 (F4 + texty ARM odmítnutí)** — brzdy mají
       desetiminutovou relay TTL, takže UI po 35 s nesmí tvrdit, že se příkaz
       už automaticky neprovede; má ukázat čekající brzdu/platnost do konkrétního
@@ -255,6 +259,47 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       zůstává fail-closed.
 
 ## Deník
+
+### 2026-10-13 (Claude, větev feat/day-journal) — Deník dne
+Nový výchozí pohled Deník → **Den** (starý deník dne je za ikonou historie):
+jeden graf dne (vložený `AlphaTradeChartWorkspace`, prop `embedded`, sloty
+review + `renderPanelOverlay` pro poznámky), sessions London/NY, obchody dne,
+poznámky připíchnuté k času a ceně. Režimy **Příprava** (per session: bias,
+scénář, „Neobchoduju, pokud…“, piny diktované do grafu i do budoucnosti,
+výrazné Uložit s animací) a **Uzavření** (plán vs. realita s verdikty, čisté
+shrnutí diktováním, exekuce Podle plánu/Částečně/Mimo plán). Telefon má vlastní
+rozložení (`DayPhone`, kompaktní graf). Příprava NIC nezamyká ani nesahá na copier.
+- Data: nová tabulka `day_journal_entries` (owner RLS, 1 řádek na poznámku,
+  1 příprava a 1 uzavření na session; upsert na `(user_id, day, entry_key)`;
+  trigger drží `written_at` neměnný, budoucí čas ořízne na now()). Proč ne JSON
+  v `daily_preps/reviews`: starý Deník je 30s autosavem přepisuje celé — poznámka
+  z druhého zařízení by zmizela. **Migrace `20261013120000` zatím NENÍ na
+  produkci** (dvakrát zrušené schválení) — appka bez ní Den nenačte/neuloží.
+  Záloha `daily_preps`/`daily_reviews`/`trades` je v `migration_backups.*_pre_day_journal_20261013`.
+- Čas zápisu je jádro funkce: fáze příprava/živě/dopsáno zpětně se odvozuje
+  z `written_at` proti oknům session uživatele; pozdější úprava textu se všude
+  (UI, kouč, MCP, export) hlásí jako „upraveno HH:MM“.
+- Diktování: iOS app = on-device cs-CZ (zdarma, bez limitu), web = Groq Whisper
+  (prod potřebuje `GROQ_API_KEY`). Čistý přepis, žádné AI úpravy; přepis nejde
+  ztratit klikem vedle, chybu přepisu jde zopakovat bez nového nahrávání.
+- Svíčky dne: Databento do now−24 h 20 min (po 15 min, nikdy placený fallback),
+  zbytek živě z TradingView; `TV_BARS_MAX` 1700 a stáří 27 h, aby se zdroje
+  překrývaly (**nasadit server před workerem**).
+- Kouč v appce dostává 14 dní deníku dne (čerstvě při odeslání, max 3 s,
+  strop 8k znaků); MCP `load_journal` + `get_journal_day` (`denik_dne`).
+  Opraven MCP `mapTrade`: chybějící `isValid` už neznamená „NEVALIDNÍ“.
+- Export dne do Markdownu (web stáhne, iOS sdílí).
+- Ověřeno: celá sada běžela PŘED posledním kolem oprav (5263 prošlo, 4 pády:
+  flat sweep V13 jen pod zátěží, sám prochází; `tradovateBrokerReconnect` padá
+  i na čistém `origin/main`). Po opravách (review + zvýšení `TV_BARS_MAX`) jen
+  cílené testy (deník dne, MCP, TV bars/relay: vše zelené) — **celou sadu po
+  posledních změnách ještě pustit**. tsc čistý (i `extension/` po `npm ci`),
+  lint bez chyb, build OK (před posledním kolem), vizuální kontrola v harnessu
+  (desktop, úzký desktop, telefon, příprava, uzavření). code-reviewer: bez
+  blokerů, nálezy 1–8 a 10 opraveny; copier-design-critic ke změně TV_BARS_MAX:
+  na kopírku bez vlivu, rozbité 2 testy opraveny + doplněny hraniční testy.
+- Známé limity: kontinuální řady Databento (.v.0) a TV (MNQ1!) se v týdnu
+  rolloveru mohou lišit; embeddingy (search_history) deník dne zatím nemají.
 
 ### 2026-10-13 (Claude, větev feat/live-tv-candles)
 Živé 1m svíčky z TradingView pro přípravu a pohled dne. Databento má ~24 h

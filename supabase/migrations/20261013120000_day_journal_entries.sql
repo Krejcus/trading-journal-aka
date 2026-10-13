@@ -7,9 +7,11 @@
 --
 -- written_at = kdy byl záznam poprvé zapsán (příprava / živě / dopsáno
 -- zpětně se odvozuje z něj a z časů session). Po vložení se nemění;
--- úpravy ukazuje updated_at. Čas je z klienta (offline zápis), proto jen
--- hrubá kontrola proti budoucnosti — jde o vlastní data uživatele.
--- Před nasazením zálohováno do migration_backups.*_pre_day_journal_20261013.
+-- úpravy ukazuje updated_at. Čas je z klienta (offline zápis se nahraje
+-- později s původním časem); budoucí čas (rozjeté hodiny zařízení) se při
+-- vložení ořízne na now(). Jde o vlastní data uživatele.
+-- Stávající data se nemění; pro jistotu zálohovány tabulky daily_preps,
+-- daily_reviews a trades do migration_backups.*_pre_day_journal_20261013.
 
 create table if not exists public.day_journal_entries (
   id uuid primary key default gen_random_uuid(),
@@ -23,7 +25,6 @@ create table if not exists public.day_journal_entries (
   written_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint day_journal_entries_written_at_sane check (written_at <= created_at + interval '10 minutes'),
   constraint day_journal_entries_prep_close_session check (kind = 'note' or session <> 'day'),
   constraint day_journal_entries_entry_key_shape check (
     (kind <> 'note' and entry_key = kind || ':' || session)
@@ -56,6 +57,26 @@ begin
 end;
 $$;
 
+create or replace function public.day_journal_entries_clamp_written_at()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.created_at := now();
+  new.updated_at := now();
+  if new.written_at is null or new.written_at > now() then
+    new.written_at := now();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists day_journal_entries_clamp on public.day_journal_entries;
+create trigger day_journal_entries_clamp
+  before insert on public.day_journal_entries
+  for each row execute function public.day_journal_entries_clamp_written_at();
+
 drop trigger if exists day_journal_entries_touch on public.day_journal_entries;
 create trigger day_journal_entries_touch
   before update on public.day_journal_entries
@@ -66,6 +87,10 @@ revoke all on public.day_journal_entries from public, anon, authenticated;
 grant select, insert, update, delete on public.day_journal_entries to authenticated;
 grant select on public.day_journal_entries to service_role;
 
+drop policy if exists day_journal_entries_select_own on public.day_journal_entries;
+drop policy if exists day_journal_entries_insert_own on public.day_journal_entries;
+drop policy if exists day_journal_entries_update_own on public.day_journal_entries;
+drop policy if exists day_journal_entries_delete_own on public.day_journal_entries;
 create policy day_journal_entries_select_own on public.day_journal_entries
   for select to authenticated using ((select auth.uid()) = user_id);
 create policy day_journal_entries_insert_own on public.day_journal_entries

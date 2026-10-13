@@ -25,6 +25,7 @@ import {
   prepBiasFromPreps, prepDaysFromPreps,
 } from './labAnalytics.ts';
 import { incidentForMcp, incidentJournalLine, incidentLoss } from './journalIncidents.ts';
+import { dayJournalForMcp, dayJournalLines, sessionClocksFrom, type DayJournalMcpRow } from './dayJournal.ts';
 // Single deterministic incident analyzer shared with the in-app Coach. Keeping
 // one source prevents ChatGPT/MCP and the app from deriving different decision
 // counts or order-type confidence from the same Tradecopia rows.
@@ -101,7 +102,8 @@ function mapTrade(t: any): Trade {
     maeR: num(d.maeR),
     isMaster: bool(d.isMaster),
     isBE: bool(d.isBE),
-    isValid: bool(d.isValid),
+    // Chybějící příznak není „nevalidní“ — jinak load_journal značil většinu obchodů NEVALIDNÍ.
+    isValid: d.isValid == null ? undefined : bool(d.isValid),
     biasAligned: d.biasAligned == null ? undefined : bool(d.biasAligned),
     excursionAvailable: bool(d.excursionAvailable),
   } as Trade;
@@ -121,6 +123,10 @@ type Core = {
   trades: Trade[]; accounts: Account[];
   preps: any[]; reviews: any[];
   groupSizes: Map<string, number>;
+  /** Deník dne za posledních ~60 dní (příprava/uzavření per session, poznámky s časem zápisu). */
+  dayJournal: DayJournalMcpRow[];
+  /** `{ sessions }` z preferencí uživatele (časy session pro fáze poznámek). */
+  sessionPreferences: unknown;
 };
 let coreCache: { at: number; data: Core } | null = null;
 
@@ -162,14 +168,67 @@ async function loadOwnerLegacyTradeNotes(): Promise<{ supported: boolean; rows: 
   }
 }
 
+// Deník dne je doplňkový: chyba (i chybějící tabulka) nesmí shodit ostatní
+// nástroje — vrátí se prázdný. Jen posledních ~60 dní (load_journal ukazuje
+// 14, get_journal_day starší den dotahuje zvlášť).
+const DAY_JOURNAL_COLUMNS = 'day, session, kind, entry_key, data, written_at, updated_at';
+async function loadOwnerDayJournal(days: number): Promise<DayJournalMcpRow[]> {
+  const sinceDay = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const rows: DayJournalMcpRow[] = [];
+  try {
+    for (let offset = 0; offset < 20_000; offset += 1000) {
+      const { data, error } = await db.from('day_journal_entries').select(DAY_JOURNAL_COLUMNS)
+        .eq('user_id', USER_ID).gte('day', sinceDay)
+        .order('day', { ascending: false }).order('entry_key', { ascending: true })
+        .range(offset, offset + 999);
+      if (error) {
+        if (!['42P01', 'PGRST205'].includes(String(error.code))) console.warn('[mcp] deník dne se nenačetl:', error.message);
+        return rows;
+      }
+      rows.push(...((data ?? []) as DayJournalMcpRow[]));
+      if (!data || data.length < 1000) return rows;
+    }
+  } catch (reason) {
+    console.warn('[mcp] deník dne se nenačetl:', reason instanceof Error ? reason.message : reason);
+  }
+  return rows;
+}
+
+async function loadDayJournalDay(day: string): Promise<DayJournalMcpRow[]> {
+  try {
+    const { data, error } = await db.from('day_journal_entries').select(DAY_JOURNAL_COLUMNS)
+      .eq('user_id', USER_ID).eq('day', day).order('entry_key', { ascending: true }).limit(2000);
+    if (error) {
+      if (!['42P01', 'PGRST205'].includes(String(error.code))) console.warn('[mcp] deník dne se nenačetl:', error.message);
+      return [];
+    }
+    return (data ?? []) as DayJournalMcpRow[];
+  } catch {
+    return [];
+  }
+}
+
+// Jen uživatelské časy session (fáze poznámek); chyba = výchozí časy.
+async function loadOwnerSessionPreferences(): Promise<unknown> {
+  try {
+    const { data } = await db.from('profiles').select('preferences').eq('id', USER_ID).maybeSingle();
+    const preferences = (data as { preferences?: { sessions?: unknown } } | null)?.preferences;
+    return preferences ? { sessions: preferences.sessions } : null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadCore(): Promise<Core> {
   if (coreCache && Date.now() - coreCache.at < 60_000) return coreCache.data;
-  const [tr, ac, pr, rv, privateNotes] = await Promise.all([
+  const [tr, ac, pr, rv, privateNotes, dayJournal, sessionPreferences] = await Promise.all([
     loadAllUserRows('trades', 'id, date, timestamp, instrument, direction, pnl, data, account_id', 'date'),
     loadAllUserRows('accounts', 'id, name, status, type, initial_balance, currency, meta'),
     loadAllUserRows('daily_preps', 'id, date, data', 'date'),
     loadAllUserRows('daily_reviews', 'id, date, data', 'date'),
     loadOwnerLegacyTradeNotes(),
+    loadOwnerDayJournal(60),
+    loadOwnerSessionPreferences(),
   ]);
   const trades = tr.map(row => {
     const publicData = Object.fromEntries(Object.entries(row.data ?? {}).filter(([key]) => key !== 'noteHistory'
@@ -189,6 +248,8 @@ async function loadCore(): Promise<Core> {
     preps: pr.map((p: any) => ({ ...(p.data || {}), id: p.id, date: p.date })),
     reviews: rv.map((r: any) => ({ ...(r.data || {}), id: r.id, date: r.date })),
     groupSizes,
+    dayJournal,
+    sessionPreferences,
   };
   coreCache = { at: Date.now(), data };
   return data;
@@ -381,6 +442,14 @@ function buildJournalText(core: Core, days: number, includeNotes: boolean): stri
         if (sb?.notes) L.push(`   · ${sb.sessionLabel || 'session'}: ${trim(sb.notes, includeNotes ? 400 : 100)}`);
       }
     }
+  }
+
+  // Deník dne (nový): příprava a uzavření per session, poznámky s časem zápisu.
+  const journalLines = dayJournalLines(core.dayJournal, isoTZ(subDays(now, 14)), includeNotes ? 400 : 140, sessionClocksFrom(core.sessionPreferences));
+  if (journalLines.length) {
+    L.push('');
+    L.push('[DENÍK DNE — posledních 14 dní] Čas „zapsáno“ = kdy to trader skutečně napsal/nadiktoval; fáze příprava/živě/dopsáno zpětně se z něj odvozuje. Text je čistý přepis diktování; „upraveno“ = text později změněn (zpětný pohled).');
+    L.push(...journalLines);
   }
 
   return L.join('\n');
@@ -756,7 +825,9 @@ mcp.tool('get_trade', {
 
 mcp.tool('get_journal_day', {
   description:
-    'KOMPLETNÍ detail jednoho dne BEZ zkracování: ranní příprava (plné plány per session, ' +
+    'KOMPLETNÍ detail jednoho dne BEZ zkracování: deník dne (denik_dne: příprava a uzavření London/NY, ' +
+    'poznámky v grafu s časem zápisu a fází příprava/živě/dopsáno zpětně, plán vs. realita), ' +
+    'ranní příprava (plné plány per session, ' +
     'fokus, cíle, checklist, mindset), večerní audit (takeaway, lekce, chyby, poznámky ' +
     'během dne, session breakdowny, stresory/vděčnost, incidenty bez tradů) a všechny obchody dne s plnými ' +
     'poznámkami. Použij pro debrief konkrétního dne nebo když load_journal nestačí.',
@@ -810,6 +881,7 @@ mcp.tool('get_journal_day', {
     } : null;
     return text(JSON.stringify({
       den: args.date,
+      denik_dne: dayJournalForMcp(await loadDayJournalDay(args.date), args.date, sessionClocksFrom(core.sessionPreferences)) ?? '(nový deník dne bez zápisu)',
       priprava: priprava ?? '(žádná ranní příprava)',
       audit: audit ?? '(žádný večerní audit)',
       obchody: trades.length ? trades : '(žádné obchody)',

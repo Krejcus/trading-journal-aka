@@ -1,0 +1,87 @@
+/* Deník dne — barvy, plochy a animace z návrhu (canvas Den / Příprava / Uzavření). */
+.dj {
+  --dj-bg: #020617;
+  --dj-card: #0a0f1d;
+  --dj-card-soft: rgba(10, 15, 29, 0.72);
+  --dj-chip: rgba(15, 23, 42, 0.45);
+  --dj-input: rgba(2, 6, 23, 0.7);
+  --dj-line: rgba(255, 255, 255, 0.08);
+  --dj-line-soft: rgba(255, 255, 255, 0.045);
+  --dj-text: #f1f5f9;
+  --dj-text-2: #a3b0c2;
+  --dj-muted: #8391a7;
+  --dj-overlay: rgba(2, 6, 23, 0.72);
+  --dj-seg: rgba(15, 23, 42, 0.6);
+  color: var(--dj-text);
+  font-feature-settings: 'tnum' 1;
+}
+.light-theme .dj {
+  --dj-bg: #f8fafc;
+  --dj-card: #ffffff;
+  --dj-card-soft: #ffffff;
+  --dj-chip: #f1f5f9;
+  --dj-input: #f8fafc;
+  --dj-line: #e2e8f0;
+  --dj-line-soft: #f1f5f9;
+  --dj-text: #0f172a;
+  --dj-text-2: #475569;
+  --dj-muted: #64748b;
+  --dj-overlay: rgba(248, 250, 252, 0.78);
+  --dj-seg: #eef2f7;
+}
+.oled-theme .dj { --dj-bg: #000; --dj-card: #050505; --dj-card-soft: #050505; }
+
+.dj-mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
+.dj-card { border-radius: 14px; border: 1px solid var(--dj-line); background: var(--dj-card-soft); }
+.dj-input {
+  display: block; width: 100%; box-sizing: border-box; resize: none; border-radius: 10px;
+  border: 1px solid var(--dj-line); background: var(--dj-input); color: var(--dj-text);
+  padding: 9px 11px; font: 400 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.dj-input:focus { border-color: rgba(129, 140, 248, 0.6); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15); }
+.dj-input::placeholder { color: var(--dj-muted); }
+.dj-btn { transition: background-color .15s ease, border-color .15s ease, color .15s ease, transform .15s ease, opacity .15s ease, filter .15s ease; }
+.dj-btn:hover { filter: brightness(1.12); }
+.dj-btn:active { transform: scale(.98); }
+.dj-btn:focus-visible, .dj-seg-btn:focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
+.dj-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.dj-scroll::-webkit-scrollbar-thumb { background: rgba(127, 127, 127, .25); border-radius: 9px; }
+
+/* Segmentový přepínač s „pružinovým“ indikátorem (session, bias, exekuce). */
+.dj-ind { transition: transform .5s cubic-bezier(.34, 1.56, .64, 1), width .5s cubic-bezier(.34, 1.56, .64, 1), background-color .35s ease, box-shadow .35s ease, opacity .3s ease; }
+.dj-seg-btn { transition: color .3s ease, transform .2s ease; }
+.dj-seg-btn:active { transform: scale(.96); }
+
+.dj-pin { transition: transform .15s ease; }
+.dj-pin:hover { transform: translate(-50%, -50%) scale(1.25) !important; }
+
+@keyframes dj-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes dj-pop { from { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(.94); } to { opacity: 1; transform: translate(var(--tx), var(--ty)); } }
+@keyframes dj-rec { 0% { box-shadow: 0 0 0 0 rgba(244, 63, 94, .5); } 70% { box-shadow: 0 0 0 16px rgba(244, 63, 94, 0); } 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); } }
+@keyframes dj-pulse { 0% { box-shadow: 0 0 0 0 rgba(129, 140, 248, .6); } 70% { box-shadow: 0 0 0 12px rgba(129, 140, 248, 0); } 100% { box-shadow: 0 0 0 0 rgba(129, 140, 248, 0); } }
+@keyframes dj-blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes dj-spin { to { transform: rotate(360deg); } }
+@keyframes dj-draw { to { stroke-dashoffset: 0; } }
+@keyframes dj-sheen { from { transform: translateX(-120%) skewX(-20deg); } to { transform: translateX(320%) skewX(-20deg); } }
+@keyframes dj-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0), 0 10px 30px -10px rgba(99, 102, 241, .8); } 50% { box-shadow: 0 0 0 5px rgba(99, 102, 241, .18), 0 14px 40px -8px rgba(99, 102, 241, .95); } }
+@keyframes dj-fill { from { width: 0; } to { width: 100%; } }
+@keyframes dj-burst { 0% { opacity: 1; transform: translate(-50%, -50%) scale(.4); } 80% { opacity: 1; } 100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(1) rotate(var(--rot)); } }
+@keyframes dj-ring { 0% { opacity: .9; transform: translate(-50%, -50%) scale(.2); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1); } }
+@keyframes dj-frame { 0% { box-shadow: inset 0 0 0 0 rgba(52, 211, 153, 0); } 25% { box-shadow: inset 0 0 0 3px rgba(52, 211, 153, .9), inset 0 0 120px rgba(16, 185, 129, .25); } 100% { box-shadow: inset 0 0 0 0 rgba(52, 211, 153, 0); } }
+@keyframes dj-card { 0% { opacity: 0; transform: translateY(26px) scale(.94); } 60% { opacity: 1; transform: translateY(-4px) scale(1.01); } 100% { opacity: 1; transform: none; } }
+@keyframes dj-row { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+@keyframes dj-check { 0% { transform: scale(0); } 60% { transform: scale(1.18); } 100% { transform: scale(1); } }
+@keyframes dj-wipe { 0% { transform: translateX(-110%); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateX(110%); opacity: 0; } }
+@keyframes dj-badge { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.85); filter: blur(6px); } 25% { opacity: 1; transform: translate(-50%, -50%) scale(1); filter: blur(0); } 75% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.04); filter: blur(4px); } }
+@keyframes dj-dim { 0% { opacity: 0; } 30% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes dj-ripple { from { opacity: .55; transform: translate(-50%, -50%) scale(.3); } to { opacity: 0; transform: translate(-50%, -50%) scale(1.6); } }
+@keyframes dj-pop2 { 0% { transform: scale(1); } 35% { transform: scale(1.12); } 100% { transform: scale(1); } }
+@keyframes dj-arrow-up { 0% { transform: translateY(0); } 40% { transform: translateY(-4px); } 100% { transform: translateY(0); } }
+@keyframes dj-arrow-down { 0% { transform: translateY(0); } 40% { transform: translateY(4px); } 100% { transform: translateY(0); } }
+@keyframes dj-sheet { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes dj-fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dj *, .dj *::before, .dj *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+}

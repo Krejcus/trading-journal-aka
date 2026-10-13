@@ -383,6 +383,13 @@ export function noteSessionFor(anchorMs: number | null, nowMs: number, windows: 
   return sessionAt(anchorMs ?? nowMs, windows);
 }
 
+/** Čas pozdější úpravy, pokud je od zápisu víc než 2 min (jinak `null`). */
+export function editedAt(writtenAt: string, updatedAt: string | null | undefined): string | null {
+  const written = Date.parse(writtenAt);
+  const updated = updatedAt ? Date.parse(updatedAt) : NaN;
+  return Number.isFinite(written) && Number.isFinite(updated) && updated - written > 2 * 60_000 ? new Date(updated).toISOString() : null;
+}
+
 export const DAY_PHASE_LABEL: Record<DayNotePhase, string> = { prep: 'příprava', live: 'živě', later: 'dopsáno zpětně' };
 export const DAY_BIAS_LABEL: Record<DayBias, string> = { long: 'Long', neutral: 'Neutrál', short: 'Short' };
 export const DAY_EXECUTION_LABEL: Record<DayExecution, string> = { plan: 'Podle plánu', partial: 'Částečně', off: 'Mimo plán' };

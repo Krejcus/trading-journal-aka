@@ -20,8 +20,10 @@ export interface TvBarsCapture {
   bars: TvBar[];
 }
 
-export const TV_BARS_MAX = 1_500;
-const MAX_AGE_S = 24 * 60 * 60;
+// Živé svíčky dne musí sahat až za hranici Databenta (~24 h) — 27 h s rezervou
+// na denní pauzu CME. Server (validace) se nasazuje před workerem.
+export const TV_BARS_MAX = 1_700;
+const MAX_AGE_S = 27 * 60 * 60;
 const MONTH_CODES = 'FGHJKMNQUVXZ';
 
 /** Mikro a plný kontrakt mají stejnou cenu — graf kteréhokoli z nich stačí. */

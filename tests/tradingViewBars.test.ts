@@ -7,6 +7,7 @@ import {
   tvBarsStoragePath,
   tvSymbolRoot,
   validateTvBarsCapture,
+  TV_BARS_MAX,
   type TvBar,
 } from '../lib/tradingViewBars';
 import { scheduleTradingViewBarsCapture } from '../services/tradingViewBars';
@@ -39,8 +40,9 @@ describe('sanitizeTvBars', () => {
     expect(clean[1][5]).toBe(0);
   });
 
-  it('drops candles older than a day', () => {
-    expect(sanitizeTvBars([[minute(-24 * 60 - 1), 1, 1, 1, 1, 1]], AT)).toEqual([]);
+  it('keeps candles back to 27 h (past the ~24 h Databento delay) and drops older ones', () => {
+    expect(sanitizeTvBars([[minute(-27 * 60 - 1), 1, 1, 1, 1, 1]], AT)).toEqual([]);
+    expect(sanitizeTvBars([[minute(-24 * 60 - 1), 1, 1, 1, 1, 1]], AT)).toHaveLength(1);
   });
 });
 
@@ -63,8 +65,17 @@ describe('validateTvBarsCapture', () => {
     expect(capture.bars).toHaveLength(2);
     expect(() => validateTvBarsCapture({ root: 'MNQ/../x', at: AT, bars: [bar(0)] }, AT)).toThrow('tv-bars-invalid-root');
     expect(() => validateTvBarsCapture({ root: 'MNQ', at: AT + 3_600_000, bars: [bar(0)] }, AT)).toThrow('tv-bars-invalid-at');
-    expect(() => validateTvBarsCapture({ root: 'MNQ', at: AT, bars: Array(1_501).fill(bar(0)) }, AT)).toThrow('tv-bars-invalid-bars');
+    expect(() => validateTvBarsCapture({ root: 'MNQ', at: AT, bars: Array(TV_BARS_MAX + 1).fill(bar(0)) }, AT)).toThrow('tv-bars-invalid-bars');
     expect(() => validateTvBarsCapture({ root: 'MNQ', at: AT, bars: [['x']] }, AT)).toThrow('tv-bars-empty');
+  });
+});
+
+describe('validateTvBarsCapture limit', () => {
+  it('accepts a full 27 h live read of distinct minute candles', () => {
+    const bars = Array.from({ length: TV_BARS_MAX }, (_, i) => bar(-(TV_BARS_MAX - 1) + i)).filter(item => item[0] > minute(-27 * 60));
+    const capture = validateTvBarsCapture({ root: 'MNQ', at: AT, source: 'CME_MINI:MNQ1!', bars }, AT);
+    expect(capture.bars).toHaveLength(bars.length);
+    expect(capture.bars.length).toBeGreaterThan(1_500);
   });
 });
 
