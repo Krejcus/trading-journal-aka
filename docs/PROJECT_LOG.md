@@ -65,10 +65,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
-- [ ] **Deník dne — nasazení**: migrace `20261013120000_day_journal_entries` už je
+- [x] **Deník dne — nasazení**: migrace `20261013120000_day_journal_entries` už je
       na produkci (13. 10.); zbývá merge větve, nastavit `GROQ_API_KEY` ve Vercelu a odebrat `VITE_GROQ_API_KEY`,
       nasadit server (relay `live-bars`, `TV_BARS_MAX` 1700) před workerem, redeploy
       MCP edge funkce. Viz zápis 2026-10-13 feat/day-journal.
+      VYŘEŠENO 13. 10. — viz zápis „Deník dne nasazen“ (merge bcd56939, web, MCP v15, worker);
+      zbývá jen ruční ověření `load_journal` / `get_journal_day` z MCP klienta.
 - [ ] **UI větev po balíčku 7a-3 (F4 + texty ARM odmítnutí)** — brzdy mají
       desetiminutovou relay TTL, takže UI po 35 s nesmí tvrdit, že se příkaz
       už automaticky neprovede; má ukázat čekající brzdu/platnost do konkrétního
@@ -259,6 +261,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       zůstává fail-closed.
 
 ## Deník
+
+### 2026-10-13 — Deník dne nasazen: web, MCP funkce a Mac worker (Claude)
+- **Merge:** PR #32 `feat/day-journal` fast-forwardem do `main` (`6f12e548..bcd56939`, ne squash).
+- **Web:** Vercel produkce `dpl_9eG2FnnzF2Bn3A3hywTp6TCtoVwd` = `bcd56939`, READY a na aliasu
+  `alphatrade-mentor-15.vercel.app`. Runtime chyby za 2 h jen stará DeprecationWarning
+  `url.parse()` v `/api/cron/send-alerts` (od června), nové nasazení bez chyb. Env (bez
+  dešifrování): `GROQ_API_KEY` v Production je, `VITE_GROQ_API_KEY` už ne.
+- **MCP edge funkce `mcp-server`:** v14 (`ezbr f2a0611e…`) zálohována
+  (`~/alphatrade-build/mcp-backup-v14`; stažené soubory v14 shodné s `6f12e54`). Nasazena v15
+  (`ezbr c1265c53…`, `verify_jwt=false`) z čistého checkoutu `bcd56939` přes Supabase CLI
+  (`--use-api`) místo vkládání ~230 kB přes `deploy_edge_function` — stejný výsledek, přesné
+  soubory. `get_edge_function` v15: přesně 10 souborů, všech 10 bajt po bajtu shodných s main
+  (vč. nového `dayJournal.ts`). Funkce nabootovala 18:24:32 UTC (75 ms), v logu bez chyb.
+  `load_journal` / `get_journal_day` ověřit z MCP klienta — volání vyžaduje tajnou cestu, kterou
+  jsem nepoužil.
+- **Mac worker:** `scripts/copier/mac-reinstall-safe.sh` v čistém checkoutu `bcd56939` prošel
+  bránou (DISARMED, flat, bez chyb), převzal durable skupinu (leader 69241663 + 3 followeři;
+  plist měl starší CLI skupinu → `--adopt-durable-group` jak má být). Po restartu
+  `armed=False connected=True reconciliationRequired=True divergent=[] lastError=None`.
+  Žádný ARM, Flatten, reconcile ani zásah do skupiny.
 
 ### 2026-10-13 (Claude, větev feat/day-journal) — Deník dne
 Nový výchozí pohled Deník → **Den** (starý deník dne je za ikonou historie):
