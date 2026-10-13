@@ -67,10 +67,12 @@ try {
     const end = privacyMigration.indexOf('$$;', privacyMigration.indexOf('as $$', start) + 5);
     assert.ok(start >= 0 && end > start); await db.exec(privacyMigration.slice(start, end + 3));
   }
-  for (const filename of ['20260912100450_tradovate_journal_evidence.sql', '20260912115949_journal_trade_projection.sql', '20260912122352_journal_position_persistence.sql', '20260912162137_journal_incremental_input.sql', '20260912164531_journal_snapshot_links.sql', '20260912190422_journal_confirmed_root_projection.sql']) {
+  for (const filename of ['20260912100450_tradovate_journal_evidence.sql', '20260912115949_journal_trade_projection.sql', '20260912122352_journal_position_persistence.sql', '20260912162137_journal_incremental_input.sql', '20261013070000_journal_snapshot_latest_only.sql', '20260917153000_journal_input_snapshot_indexed_paging.sql', '20260917154500_journal_input_changed_no_retry.sql', '20260917190000_journal_import_lease.sql', '20260912164531_journal_snapshot_links.sql', '20260912190422_journal_confirmed_root_projection.sql']) {
     try { await db.exec(await readFile(resolve(root, 'supabase/migrations', filename), 'utf8')); }
     catch (error) { const sql = error as { message: string; position?: string }; throw new Error(`${filename}: ${sql.message} at ${sql.position}`, { cause: error }); }
   }
+  // Supabase grants service_role on every public table by default.
+  await db.exec('grant all on public.tradovate_journal_import_leases to service_role');
   await db.exec('set role service_role');
   for (const account of accounts) await db.query('insert into public.accounts values ($1, $2, $3)', [account.id, owner, JSON.stringify({ oauth: account.oauth })]);
   const append = (rows: typeof events) => db.query('select public.append_tradovate_journal_evidence($1,$2,$3,$4::jsonb)', [owner, connection, device, JSON.stringify(rows)]);
@@ -95,6 +97,9 @@ try {
           commit_journal_input_batch:['p_user_id','p_connection_id','p_generation','p_after','p_next','p_updates'],
           read_journal_input_entity_history:['p_user_id','p_connection_id','p_key','p_after','p_through'],
           read_journal_input_snapshot:['p_user_id','p_connection_id','p_generation','p_after'],
+          read_journal_input_snapshot_latest:['p_user_id','p_connection_id','p_generation','p_after','p_limit'],
+          claim_journal_import_lease:['p_user_id','p_connection_id','p_holder','p_ttl_ms'],
+          release_journal_import_lease:['p_user_id','p_connection_id','p_holder'],
           begin_journal_position_stage: ['p_user_id','p_connection_id','p_revision','p_run_key','p_chunk_count','p_position_count','p_import_receipt'],
           write_journal_position_stage: ['p_user_id','p_connection_id','p_run_id','p_chunk_index','p_positions'],
           publish_journal_position_stage: ['p_user_id','p_connection_id','p_run_id'],

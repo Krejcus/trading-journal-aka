@@ -47,7 +47,7 @@ export async function compactJournalInputEntities(events: readonly JournalEviden
 /** Preserve the receipt watermark even if the last raw observation was a stale
  * entity patch or coverage-only metadata. Never overwrite a merged entity with
  * its same-ID unmerged raw counterpart. */
-export function journalCompactedEvidence(retained: readonly JournalEvidence[], entities: readonly JournalInputEntity[], watermark: JournalEvidence | null) {
+export function journalCompactedEvidence(retained: readonly JournalEvidence[], entities: readonly Pick<JournalInputEntity,'latest'>[], watermark: JournalEvidence | null) {
   const events=[...retained,...entities.map(row=>row.latest)];
   if (watermark && !events.some(event=>event.receivedAt>=watermark.receivedAt)) events.push(watermark);
   return events;

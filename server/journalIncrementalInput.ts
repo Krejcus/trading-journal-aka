@@ -12,6 +12,16 @@ function readEntity(value:unknown,scope:JournalFeedScope):JournalInputEntity {
     || journalInputMode(orderedThrough)!=='entity' || compareJournalInputOrder(latest,orderedThrough)>0) throw new Error('journal-input-entity-invalid');
   return { key:row.key,latest,orderedThrough };
 }
+/** Snapshot rows carry only `latest`: the projection never reads `orderedThrough`. */
+function readLatestEntity(value:unknown,scope:JournalFeedScope):JournalEvidence {
+  if (!value || typeof value!=='object') throw new Error('journal-input-entity-invalid');
+  const row=value as { key?:unknown; latest?:unknown };
+  const latest=readStoredJournalEvidence(row.latest,scope);
+  if (row.key!==journalInputKey(latest) || journalInputMode(latest)!=='entity') throw new Error('journal-input-entity-invalid');
+  return latest;
+}
+/** Rows per snapshot page (13. 10. 2026): 250 meant ~500 sequential calls. */
+export const JOURNAL_SNAPSHOT_PAGE_ROWS=1000;
 
 /** Each committed source batch is durable independently of final projection.
  * A caller timeout cannot publish a prefix or force a restart from source zero. */
@@ -48,12 +58,12 @@ export async function prepareJournalInput(db:SupabaseClient,scope:JournalFeedSco
     const page=validateJournalEvidencePage({ ...context,scope },scope,context.after);
     through=page.after; targetThrough=page.through;
     if (context.ready) {
-      const retained:JournalEvidence[]=[],entities:JournalInputEntity[]=[];
+      const retained:JournalEvidence[]=[],entities:JournalEvidence[]=[];
       let after='',bytes=0;
       const watermark=context.watermark==null ? null : readStoredJournalEvidence(context.watermark,scope);
       for(;;) {
-        const data=await invoke('read_journal_input_snapshot',{ p_generation:context.generation,p_after:after });
-        if (data?.generation!==context.generation || data.through!==through || !Array.isArray(data.rows) || data.rows.length>250) throw new Error('journal-input-snapshot-invalid');
+        const data=await invoke('read_journal_input_snapshot_latest',{ p_generation:context.generation,p_after:after,p_limit:JOURNAL_SNAPSHOT_PAGE_ROWS });
+        if (data?.generation!==context.generation || data.through!==through || !Array.isArray(data.rows) || data.rows.length>JOURNAL_SNAPSHOT_PAGE_ROWS) throw new Error('journal-input-snapshot-invalid');
         if (!data.rows.length) break;
         bytes+=Buffer.byteLength(JSON.stringify(data.rows));
         if (bytes>96_000_000 || retained.length+entities.length+data.rows.length>250_000) throw new Error('journal-import-partition-required');
@@ -61,9 +71,9 @@ export async function prepareJournalInput(db:SupabaseClient,scope:JournalFeedSco
           if (typeof row.key!=='string' || Buffer.compare(Buffer.from(row.key),Buffer.from(after))<=0) throw new Error('journal-input-snapshot-invalid');
           after=row.key;
           if (row.entity!==null) {
-            const entity=readEntity(row.entity,scope);
-            if (row.event!==null || row.key!==`e:${entity.key}`) throw new Error('journal-input-snapshot-invalid');
-            entities.push(entity);
+            const latest=readLatestEntity(row.entity,scope);
+            if (row.event!==null || row.key!==`e:${journalInputKey(latest)}`) throw new Error('journal-input-snapshot-invalid');
+            entities.push(latest);
           } else {
             const event=readStoredJournalEvidence(row.event,scope);
             if (row.key!==`r:${event.id}` || journalInputMode(event)!=='retained') throw new Error('journal-input-snapshot-invalid');
@@ -71,7 +81,7 @@ export async function prepareJournalInput(db:SupabaseClient,scope:JournalFeedSco
           }
         }
       }
-      return { ready:true as const,through,targetThrough,events:journalCompactedEvidence(retained,entities,watermark) };
+      return { ready:true as const,through,targetThrough,events:journalCompactedEvidence(retained,entities.map(latest=>({ latest })),watermark) };
     }
     if (!page.rows.length) throw new Error('journal-input-context-invalid');
     const events=page.rows.map(row=>row.event);

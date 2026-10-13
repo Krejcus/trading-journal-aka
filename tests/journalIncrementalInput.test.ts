@@ -27,7 +27,7 @@ describe('durable projection input protocol', () => {
     expect(c.rpc).toHaveBeenLastCalledWith('commit_journal_input_batch', expect.objectContaining({ p_after: 0, p_next: 1, p_updates: [entity] }));
     const resumed = client([ready, snapshot, { ...snapshot, rows: [] }]);
     expect(await prepareJournalInput(resumed.db, scope)).toEqual({ ready: true, through: 1, targetThrough: 1, events: [event] });
-    expect(resumed.rpc).toHaveBeenLastCalledWith('read_journal_input_snapshot', expect.objectContaining({ p_after: 'e:contract:1' }));
+    expect(resumed.rpc).toHaveBeenLastCalledWith('read_journal_input_snapshot_latest', expect.objectContaining({ p_after: 'e:contract:1', p_limit: 1000 }));
   });
   it('does not turn a lost CAS or transport failure into a completed projection', async () => {
     const stale = client([context, { accepted: false, stale: true }]);
