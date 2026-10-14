@@ -11,7 +11,7 @@ import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChart
 import { tradeChartTiming } from '../../services/tradeChartData';
 import { getDrawingMagnetSettings, setDrawingMagnetSettings, subscribeDrawingMagnetSettings } from '../../services/chartDrawingMagnet';
 import { setNativeShellTabBarHidden } from '../../utils/nativeShell';
-import { DAY_DRAW_COLORS, DAY_DRAW_TOOLS, dayDrawColorOf, dayDrawStyle, lastManualDrawingId, nextDayChartTimeframe, type DayDrawColorId } from '../../lib/dayChartTools';
+import { DAY_DRAW_COLORS, DAY_DRAW_TOOLS, DAY_PATH_TOOL, dayDrawColorOf, dayDrawStyle, lastManualDrawingId, nextDayChartTimeframe, pathGroupOf, pathSegmentIds, type DayDrawColorId } from '../../lib/dayChartTools';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
 import DayTouchDrawLayer from './DayTouchDrawLayer';
 import { dayAnchorTrade, focusTarget, useReviewFocus } from './dayFocus';
@@ -114,18 +114,39 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
     sync();
     return engine.onChange(sync);
   }, [engine]);
+  // Cesta (Šipka) je virtuální nástroj: vede ji dotyková vrstva, motor
+  // dostává jen hotové úseky. Chip svítí přes `pathActive`.
+  const [pathActive, setPathActive] = useState(false);
+  const endPath = useCallback(() => setPathActive(false), []);
+  const pathStyle = useMemo(() => ({ color: dayDrawStyle(colorId, 'Arrow').color, width: 2 }), [colorId]);
   const startTool = useCallback((tool: DrawingToolId) => {
     if (!engine) return;
     onCancelPlacing();
+    if (tool === DAY_PATH_TOOL) {
+      engine.stopTool();
+      engine.select(null);
+      setPathActive(active => !active);
+      return;
+    }
+    setPathActive(false);
     if (engine.getActiveTool() === tool) { engine.stopTool(); return; }
     engine.setDefaultStyle(dayDrawStyle(colorId, tool));
     engine.startTool(tool);
   }, [colorId, engine, onCancelPlacing]);
+  const selectedGroup = pathGroupOf(selected?.id);
   const pickColor = (id: DayDrawColorId) => {
     setColorId(id);
     if (!engine) return;
-    if (selected) engine.setStyle(selected.id, dayDrawStyle(id, selected.tool));
+    if (selected) {
+      const ids = selectedGroup ? pathSegmentIds(engine.getDrawings(), selectedGroup) : [selected.id];
+      for (const drawingId of ids) engine.setStyle(drawingId, dayDrawStyle(id, engine.getById(drawingId)?.tool));
+    }
     engine.setDefaultStyle(dayDrawStyle(id, engine.getActiveTool()));
+  };
+  const removeSelected = () => {
+    if (!engine || !selected) return;
+    const ids = selectedGroup ? pathSegmentIds(engine.getDrawings(), selectedGroup) : [selected.id];
+    for (const drawingId of ids) engine.remove(drawingId);
   };
   const undo = () => {
     if (!engine) return;
@@ -133,6 +154,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
     if (id) engine.remove(id);
   };
   const finishDrawing = () => {
+    setPathActive(false);
     engine?.stopTool();
     engine?.select(null);
     onCancelPlacing();
@@ -215,7 +237,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
           nowTime={nowTime}
           bands={bands}
         />
-        <DayTouchDrawLayer chartApi={api} containerRef={containerRef} enabled={drawing && !placing} />
+        <DayTouchDrawLayer chartApi={api} containerRef={containerRef} enabled={drawing && !placing} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={endPath} />
         {/* Lišta vybrané kresby: barva, koš (jako plovoucí lišta v TradingView, jen nahoře uprostřed). */}
         {drawing && selected && (
           <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 25, display: 'flex', alignItems: 'center', gap: 6, padding: 6, borderRadius: 12, border: '1px solid var(--dj-line)', background: 'var(--dj-card)', boxShadow: '0 12px 30px -12px rgba(0,0,0,0.6)', animation: 'dj-rise .18s ease both' }}>
@@ -223,7 +245,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
               <button key={item.id} type="button" className="dj-btn" aria-label={item.label} aria-pressed={selectedColor === item.id} onClick={() => pickColor(item.id)} style={{ width: 32, height: 32, borderRadius: 9, border: selectedColor === item.id ? '2px solid var(--dj-text)' : '2px solid transparent', background: item.color, cursor: 'pointer', padding: 0 }} />
             ))}
             <span style={{ width: 1, height: 22, background: 'var(--dj-line)', margin: '0 2px' }} />
-            <button type="button" className="dj-btn" aria-label="Smazat kresbu" onClick={() => engine?.remove(selected.id)} style={{ ...iconButton, color: 'var(--dj-rose)' }}><Trash2 size={16} /></button>
+            <button type="button" className="dj-btn" aria-label={selectedGroup ? 'Smazat cestu' : 'Smazat kresbu'} onClick={removeSelected} style={{ ...iconButton, color: 'var(--dj-rose)' }}><Trash2 size={16} /></button>
           </div>
         )}
         {chromeHidden && (
@@ -244,9 +266,9 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
       {!chromeHidden && drawing && (
         <div style={{ ...bar, gap: narrow ? 4 : 6 }}>
           {DAY_DRAW_TOOLS.map(tool => (
-            <button key={tool.id} type="button" className="dj-btn" aria-pressed={activeTool === tool.id} onClick={() => startTool(tool.id)} style={{ ...chip, height: 36, padding: narrow ? '0 6px' : '0 10px', fontSize: narrow ? 11.5 : 12, flex: 'none', ...(activeTool === tool.id ? { color: 'var(--dj-seg-on-ink)', background: 'var(--dj-seg-on)' } : {}) }}>{tool.label}</button>
+            <button key={tool.id} type="button" className="dj-btn" aria-pressed={tool.virtual ? pathActive : activeTool === tool.id} onClick={() => startTool(tool.id)} style={{ ...chip, height: 36, padding: narrow ? '0 6px' : '0 10px', fontSize: narrow ? 11.5 : 12, flex: 'none', ...((tool.virtual ? pathActive : activeTool === tool.id) ? { color: 'var(--dj-seg-on-ink)', background: 'var(--dj-seg-on)' } : {}) }}>{tool.label}</button>
           ))}
-          <button type="button" className="dj-btn" aria-label="Poznámka do grafu" aria-pressed={placing === 'note'} onClick={() => { engine?.stopTool(); ctl.setPendingPoint(null); ctl.setPlacing(placing === 'note' ? null : 'note'); }} style={{ ...chip, height: 36, padding: narrow ? '0 6px' : '0 10px', fontSize: narrow ? 11.5 : 12, flex: 'none', ...(placing === 'note' ? { color: '#1c1203', background: '#fbbf24' } : {}) }}>Pozn.</button>
+          <button type="button" className="dj-btn" aria-label="Poznámka do grafu" aria-pressed={placing === 'note'} onClick={() => { setPathActive(false); engine?.stopTool(); ctl.setPendingPoint(null); ctl.setPlacing(placing === 'note' ? null : 'note'); }} style={{ ...chip, height: 36, padding: narrow ? '0 6px' : '0 10px', fontSize: narrow ? 11.5 : 12, flex: 'none', ...(placing === 'note' ? { color: '#1c1203', background: '#fbbf24' } : {}) }}>Pozn.</button>
           <span style={{ flex: 1 }} />
           <button type="button" className="dj-btn" aria-label={`Magnet ${magnet.mode === 'off' ? 'vypnutý' : 'zapnutý'}`} aria-pressed={magnet.mode !== 'off'} onClick={() => setDrawingMagnetSettings({ mode: magnet.mode === 'off' ? magnet.lastEnabledMode : 'off' })} style={{ ...iconButton, width: 36, ...(magnet.mode !== 'off' ? { color: 'var(--dj-indigo)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><Magnet size={17} /></button>
           <button type="button" className="dj-btn" aria-label="Vrátit poslední kresbu" disabled={!manualCount} onClick={undo} style={{ ...iconButton, width: 36, opacity: manualCount ? 1 : 0.35 }}><RotateCcw size={16} /></button>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DAY_CHART_TIMEFRAME_KEY, DAY_DRAW_TOOLS, dayDrawColorOf, dayDrawStyle, dayDrawingsStorageKey, isChainedDrawTool, lastManualDrawingId,
+  DAY_CHART_TIMEFRAME_KEY, DAY_DRAW_TOOLS, dayDrawColorOf, dayDrawStyle, dayDrawingsStorageKey, lastManualDrawingId, pathGroupOf, pathSegmentId, pathSegmentIds,
   nextDayChartTimeframe, readStoredDayChartTimeframe, writeStoredDayChartTimeframe,
 } from '../lib/dayChartTools';
 
@@ -37,14 +37,18 @@ describe('dayChartTools', () => {
     expect(dayDrawStyle('long', 'Rectangle')).toEqual({ color: '#10b981', fill: 'rgba(16,185,129,0.18)' });
     expect(dayDrawStyle('short', 'TrendLine')).toEqual({ color: '#f43f5e', fill: null });
     expect(dayDrawStyle('neutral', null).fill).toBeNull();
-    expect(DAY_DRAW_TOOLS.map(tool => tool.id)).toEqual(['Arrow', 'Rectangle', 'HorizontalLine', 'TrendLine']);
+    expect(DAY_DRAW_TOOLS.map(tool => tool.id)).toEqual(['Path', 'Rectangle', 'HorizontalLine', 'TrendLine']);
     expect(dayDrawStyle('long', 'Arrow').fill).toBeNull();
   });
 
-  it('jen šipka zůstává po dokončení v ruce; klíč kreseb dne má tvar CandleKit', () => {
-    expect(isChainedDrawTool('Arrow')).toBe(true);
-    expect(isChainedDrawTool('Rectangle')).toBe(false);
-    expect(isChainedDrawTool(null)).toBe(false);
+  it('cesta = skupina úseček se společným ID; klíč kreseb dne má tvar CandleKit', () => {
+    expect(pathSegmentId('abc', 3)).toBe('path:abc:3');
+    expect(pathGroupOf('path:abc:3')).toBe('abc');
+    expect(pathGroupOf('d1')).toBeNull();
+    expect(pathGroupOf('auto-fvg-1')).toBeNull();
+    expect(pathGroupOf(null)).toBeNull();
+    const drawings = [{ id: 'path:abc:1' }, { id: 'd1' }, { id: 'path:abc:2' }, { id: 'path:xyz:1' }];
+    expect(pathSegmentIds(drawings, 'abc')).toEqual(['path:abc:1', 'path:abc:2']);
     expect(dayDrawingsStorageKey('2026-10-14')).toBe('alphatrade:candlekit:day:2026-10-14:day');
   });
 

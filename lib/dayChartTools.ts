@@ -30,20 +30,31 @@ export function writeStoredDayChartTimeframe(storage: StorageLike | null | undef
   try { storage?.setItem(DAY_CHART_TIMEFRAME_KEY, timeframe); } catch { /* soukromý režim */ }
 }
 
+/** Virtuální nástroj „cesta“ (TradingView Path): CandleKit ho nemá, skládá se z úseček. */
+export const DAY_PATH_TOOL = 'Path';
+
 /**
- * Nástroje, které v deníku dávají smysl; zbytek má TradingView. Šipka je
- * hlavní (Filip si kreslí „co a jak“ jako Path v TradingView): `chain`
- * nechá nástroj v ruce, takže další tah hned kreslí další šipku.
+ * Nástroje, které v deníku dávají smysl; zbytek má TradingView. Cesta
+ * (Šipka) je hlavní: klepnutí = bod, další klepnutí = zlom, dvojklep = konec,
+ * šipka jen na posledním úseku. Jde o skupinu úseček se společným ID
+ * (`path:<skupina>:<n>`), ne o nativní nástroj CandleKit.
  */
-export const DAY_DRAW_TOOLS: readonly { id: DrawingToolId; label: string; points: number; chain?: boolean }[] = [
-  { id: 'Arrow', label: 'Šipka', points: 2, chain: true },
+export const DAY_DRAW_TOOLS: readonly { id: DrawingToolId; label: string; points: number; virtual?: boolean }[] = [
+  { id: DAY_PATH_TOOL, label: 'Šipka', points: Infinity, virtual: true },
   { id: 'Rectangle', label: 'Zóna', points: 2 },
   { id: 'HorizontalLine', label: 'Úroveň', points: 1 },
   { id: 'TrendLine', label: 'Trend', points: 2 },
 ];
 
-/** Nástroj zůstává po dokončení kresby v ruce (řetězení šipek). */
-export const isChainedDrawTool = (tool: string | null | undefined) => DAY_DRAW_TOOLS.some(item => item.id === tool && item.chain === true);
+export const pathSegmentId = (group: string, index: number) => `path:${group}:${index}`;
+/** Skupina cesty z ID úsečky; jiná kresba = null. */
+export const pathGroupOf = (id: string | null | undefined): string | null => {
+  const match = /^path:([^:]+):\d+$/.exec(id ?? '');
+  return match ? match[1] : null;
+};
+/** Všechny úsečky jedné cesty (mazání a obarvení celé cesty najednou). */
+export const pathSegmentIds = (drawings: readonly { id: string }[], group: string) =>
+  drawings.filter(item => pathGroupOf(item.id) === group).map(item => item.id);
 
 /** Klíč kreseb dne v CandleKit (stejný tvar skládá `CandleKitTradeChart`). */
 export const dayDrawingsStorageKey = (day: string) => `alphatrade:candlekit:day:${day}:day`;
