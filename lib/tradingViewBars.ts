@@ -20,8 +20,10 @@ export interface TvBarsCapture {
   bars: TvBar[];
 }
 
-export const TV_BARS_MAX = 1_500;
-const MAX_AGE_S = 24 * 60 * 60;
+// Živé svíčky dne musí sahat až za hranici Databenta (~24 h) — 27 h s rezervou
+// na denní pauzu CME. Server (validace) se nasazuje před workerem.
+export const TV_BARS_MAX = 1_700;
+const MAX_AGE_S = 27 * 60 * 60;
 const MONTH_CODES = 'FGHJKMNQUVXZ';
 
 /** Mikro a plný kontrakt mají stejnou cenu — graf kteréhokoli z nich stačí. */
@@ -125,6 +127,14 @@ const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 export const tvBarsFolder = (userId: string, dayMs: number) => `${userId}/tv-bars/${utcDay(dayMs)}`;
 export const tvBarsStoragePath = (userId: string, capture: Pick<TvBarsCapture, 'root' | 'at'>) =>
   `${tvBarsFolder(userId, capture.at)}/${capture.root}-${capture.at}.json`;
+
+/**
+ * Živé svíčky pro přípravu a den: jeden soubor na cenovou rodinu
+ * (`<user>/tv-live/NQ.json` pro MNQ i NQ), každé čtení ho přepíše. Úložiště
+ * tak zůstává omezené bez ohledu na to, jak dlouho worker běží.
+ */
+export const tvLiveBarsStoragePath = (userId: string, root: string) =>
+  `${userId}/tv-live/${tvPriceFamily(root)}.json`;
 
 /** `MNQ-1790798880000.json` → { root, at }. */
 export function parseTvBarsFileName(name: string): { root: string; at: number } | null {

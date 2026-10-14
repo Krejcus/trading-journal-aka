@@ -85,6 +85,7 @@ const AccountsManager = React.lazy(() => import('./components/AccountsManager'))
 const Graveyard = React.lazy(() => import('./components/Graveyard'));
 import WorldShiftOverlay, { WORLD_SHIFT_TIMING } from './components/WorldShiftOverlay';
 const DailyJournal = React.lazy(() => import('./components/DailyJournal'));
+const DayJournalView = React.lazy(() => import('./components/day/DayJournalView'));
 const BacktestSessionsView = React.lazy(() => import('./components/BacktestSessionsView'));
 const BacktestSessionsManager = React.lazy(() => import('./components/BacktestSessionsManager'));
 const BacktestWorkspace = React.lazy(() => import('./components/BacktestWorkspace'));
@@ -3278,6 +3279,8 @@ const App: React.FC = () => {
   const [quickNote, setQuickNote] = useState('');
 
   const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
+  // Původní deník dne (starší přípravy a hodnocení) — nový pohled dne je výchozí.
+  const [legacyDailyJournal, setLegacyDailyJournal] = useState(false);
   const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTab>('trading');
   const [businessActiveTab, setBusinessActiveTab] = useState<'financials' | 'goals'>('financials');
   const [historyLayoutMode, setHistoryLayoutMode] = useState<'grid' | 'table'>('grid');
@@ -4168,13 +4171,13 @@ const App: React.FC = () => {
             <div className="hidden md:flex flex-1 justify-center relative z-10">
               <div className="p-1 rounded-lg border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
-                  { id: 'daily', label: 'Dnešek', icon: Clock },
+                  { id: 'daily', label: 'Den', icon: Clock },
                   { id: 'weekly', label: 'Týden', icon: Calendar },
                   { id: 'archives', label: 'Deník', icon: History }
                 ].map(tab => (
                   <button
                     key={tab.id}
-                    onClick={() => setJournalActiveTab(tab.id as any)}
+                    onClick={() => { setJournalActiveTab(tab.id as any); if (tab.id === 'daily') setLegacyDailyJournal(false); }}
                     className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${journalActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {journalActiveTab === tab.id && (
@@ -4657,7 +4660,21 @@ const App: React.FC = () => {
                     <BacktestSessionsView theme={theme} accounts={accounts} trades={trades} />
                   )}
 
-                  {activePage === 'journal' && dashboardMode !== 'backtesting' && (
+                  {activePage === 'journal' && dashboardMode !== 'backtesting' && journalActiveTab === 'daily' && !legacyDailyJournal && (
+                    <DayJournalView
+                      trades={filteredDisplayTrades}
+                      allTrades={trades}
+                      sessions={activeSessions}
+                      isDark={theme !== 'light'}
+                      initialDate={journalTargetDate}
+                      onUpdateTrade={handleUpdateTrade}
+                      onOpenTrade={trade => setAiChatTrade(trade)}
+                      onOpenLegacy={() => setLegacyDailyJournal(true)}
+                      onOpenCoach={() => setActivePage('ai')}
+                    />
+                  )}
+
+                  {activePage === 'journal' && dashboardMode !== 'backtesting' && (journalActiveTab !== 'daily' || legacyDailyJournal) && (
                     <DailyJournal
                       theme={theme}
                       trades={filteredDisplayTrades}

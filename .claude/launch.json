@@ -16,8 +16,23 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
+        "dev:live",
+        "--",
+        "--port",
+        "5273",
+        "--strictPort"
+      ],
+      "port": 5273,
+      "autoPort": false,
+      "url": "http://localhost:5273"
+    },
+    {
+      "name": "alphatrade-glass",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
         "--prefix",
-        "/private/tmp/alphatrade-main-preview",
+        "/private/tmp/alphatrade-trade-detail-glass",
         "dev:live",
         "--",
         "--port",
@@ -44,8 +59,6 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
-        "--prefix",
-        "/private/tmp/alphatrade-main-preview",
         "dev:live",
         "--",
         "--port",
@@ -54,6 +67,57 @@
       ],
       "port": 5274,
       "autoPort": false
+    },
+    {
+      "name": "alphatrade-aurora",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "--prefix",
+        "/Users/filipkrejca/alphatrade-worktrees/aurora",
+        "dev:live",
+        "--",
+        "--port",
+        "5273",
+        "--strictPort"
+      ],
+      "port": 5273,
+      "autoPort": false,
+      "url": "http://localhost:5273"
+    },
+    {
+      "name": "alphatrade-live-cold-start",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "--prefix",
+        "/Users/filipkrejca/alphatrade-worktrees/critic-speed",
+        "dev:live",
+        "--",
+        "--port",
+        "3000",
+        "--strictPort"
+      ],
+      "port": 3000,
+      "autoPort": false,
+      "url": "http://localhost:3000"
+    },
+    {
+      "name": "alphatrade-live-connections",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "--prefix",
+        "/Users/filipkrejca/alphatrade-worktrees/copier-device",
+        "dev:live",
+        "--",
+        "--port",
+        "3000",
+        "--strictPort"
+      ],
+      "port": 3000,
+      "autoPort": false,
+      "url": "http://localhost:3000"
     }
   ]
 }

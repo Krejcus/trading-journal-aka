@@ -20,6 +20,7 @@ import {
   storeCopierSnapshot,
   storeCopierSnapshotTest,
   storeTvBarsCapture,
+  storeTvLiveBars,
   validateCopierSnapshotPayload,
   validateCopierSnapshotPng,
 } from '../../../server/copierSnapshotStore.js';
@@ -32,6 +33,10 @@ import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '
 import { validateTvBarsCapture } from '../../../lib/tradingViewBars.js';
 
 const snapshotRateLimiter = new CopierSnapshotRateLimiter();
+// Živé svíčky mají vlastní limit, aby 1×/min čtení nikdy neubralo kapacitu
+// snímkům vstupu a výstupu (ty sdílejí snapshotRateLimiter i DB limit).
+const liveBarsRateLimiter = new CopierSnapshotRateLimiter(4, 60_000);
+const LIVE_BARS_MAX_AGE_MS = 2 * 60_000;
 const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -48,7 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
       const action = String(req.body?.action ?? '');
       const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization,
-        ...(['poll-v2', 'complete-v2'].includes(action) ? { touchLastUsed: false } : {}),
+        ...(['poll-v2', 'complete-v2', 'live-bars'].includes(action) ? { touchLastUsed: false } : {}),
       });
       if (action === 'auto-resume-admit') {
         const since = Number(req.body?.since);
@@ -138,6 +143,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } catch (reason) {
           // Stejně jako snímek: předběžný graf nesmí ovlivnit poll ani obchodní cestu.
           console.warn('[TV BARS] store failed', reason instanceof Error ? reason.message : String(reason));
+          return res.status(202).json({ accepted: false });
+        }
+      }
+      if (action === 'live-bars') {
+        let capture;
+        try { capture = validateTvBarsCapture(req.body); }
+        catch (reason) { return res.status(400).json({ error: reason instanceof Error ? reason.message : 'tv-bars-invalid' }); }
+        // Živé čtení musí být čerstvé: opožděný request nepřepíše novější soubor starým grafem.
+        if (Date.now() - capture.at > LIVE_BARS_MAX_AGE_MS) return res.status(409).json({ error: 'live-bars-stale' });
+        if (!liveBarsRateLimiter.consume(device.id)) return res.status(429).json({ error: 'live-bars-rate-limit' });
+        try {
+          const stored = await storeTvLiveBars({ db, userId: device.userId, capture });
+          return res.status(202).json({ accepted: true, path: stored.storagePath });
+        } catch (reason) {
+          // Jen zobrazení: chyba úložiště nesmí ovlivnit poll ani obchodní cestu.
+          console.warn('[TV LIVE] store failed', reason instanceof Error ? reason.message : String(reason));
           return res.status(202).json({ accepted: false });
         }
       }

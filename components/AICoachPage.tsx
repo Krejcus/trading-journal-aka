@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, ChevronDown, Send, Loader2, Sparkles, X, PanelLeftClose, PanelLeftOpen, Headphones, Brain, Zap, Search } from 'lucide-react';
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation, SessionConfig, RuleCompletion, SessionAnalysis, LabExperiment } from '../types';
+import { loadDayJournalRange } from '../services/dayJournalService';
+import { dayJournalCoachText } from '../lib/dayJournalExport';
+import { pragueDayKey, sessionWindows } from '../lib/dayJournal';
 import { streamAIResponse, buildTraderContext, parseAllRefs, prewarmCoachMemory, invalidateMemoryCache, type AIMessage } from '../services/aiService';
 import { storageService } from '../services/storageService';
 import { summarizeConversation, extractConversationMemory } from '../services/coachMemoryService';
@@ -863,6 +866,24 @@ const AICoachPage: React.FC<Props> = ({
     return `=== BACKTEST SESSIONS (tvoje pre/post přípravy a audity pro backtest, ${sessions.length}) ===\n${lines.join('\n')}`;
   }, [scopedAccounts]);
 
+  const fetchDayJournalText = useCallback(async (): Promise<string> => {
+    try {
+      const today = pragueDayKey(Date.now());
+      const [y, m, d] = today.split('-').map(Number);
+      const from = new Date(Date.UTC(y, m - 1, d - 14)).toISOString().slice(0, 10);
+      // Odeslání zprávy nesmí čekat na pomalé Supabase — max 3 s, jinak bez deníku.
+      const journals = await Promise.race([
+        loadDayJournalRange(from, today),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3_000)),
+      ]);
+      const text = dayJournalCoachText(journals, day => sessionWindows(day, sessions || []));
+      // Strop pro prompt: nejnovější dny mají přednost (detail si kouč dotáhne nástrojem).
+      return text.length > 8_000 ? `…(starší dny zkráceny)\n${text.slice(text.length - 8_000)}` : text;
+    } catch {
+      return '';
+    }
+  }, [sessions]);
+
   /** Sada labelů již existujících pravidel + cílů — pro ActionPanel "applied" detekci.
    *  Když se label akce shoduje s existujícím pravidlem, tlačítko ukáže ✓ Přidáno
    *  (i po reloadu / přepnutí konverzace). */
@@ -1284,6 +1305,8 @@ const AICoachPage: React.FC<Props> = ({
 
     // Backtest session poznámky — čerstvě, ať je prompt má i hned po /backtest.
     const btSessionsText = coachScope === 'backtest' ? await fetchBacktestSessionsText() : '';
+    // Deník dne (posledních 14 dní) — čerstvě, ať kouč vidí i poznámku zapsanou před chvílí.
+    const dayJournalText = coachScope === 'live' ? await fetchDayJournalText() : '';
 
     await streamAIResponse(
       history,
@@ -1456,6 +1479,7 @@ const AICoachPage: React.FC<Props> = ({
         scope: coachScope,
         // Backtest session poznámky (jen v backtest scope) — kvalitativní kontext.
         backtestSessions: btSessionsText || undefined,
+        dayJournal: dayJournalText || undefined,
         // Účty v aktuálním scope (live/backtest) — tools filtrují a reportují jen v rámci scope.
         accounts: scopedAccounts,
         // Sum of active account starting balances — Coach uses for $ → % conversion when user prefers %.
@@ -1477,7 +1501,7 @@ const AICoachPage: React.FC<Props> = ({
 
     // Vrať finální text — voice mód ho přečte nahlas.
     return finalContent;
-  }, [messages, traderContext, trades, scopedTrades, scopedAccounts, scopedPreps, scopedReviews, coachScope, fetchBacktestSessionsText, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, activeSessionMode, ironRules, sessions]);
+  }, [messages, traderContext, trades, scopedTrades, scopedAccounts, scopedPreps, scopedReviews, coachScope, fetchBacktestSessionsText, fetchDayJournalText, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, activeSessionMode, ironRules, sessions]);
 
   // ─── Start with quick prompt (declared after sendMessage to avoid TDZ) ──────
 

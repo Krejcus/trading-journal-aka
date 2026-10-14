@@ -193,6 +193,7 @@ import {
   removeManualChartDrawings,
   resetChartView,
 } from '../services/chartContextMenu';
+import { sameCandleSeries } from '../lib/candleSeries';
 import {
   futureAxisTimes,
   nearestReplayCandleTime,
@@ -4119,6 +4120,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const previous = reviewSeriesRef.current;
     reviewSeriesRef.current = rawCandles;
     if (!previous.length || !rawCandles.length) return;
+    // Stejná série jen prodloužená o živé svíčky (deník dne) — záběr nechat,
+    // kde ho uživatel má. Jiný kontrakt má jinou cenu už v první svíčce.
+    if (sameCandleSeries(previous, rawCandles)) return;
     const frame = window.requestAnimationFrame(() => window.requestAnimationFrame(() => focusTradeRef.current()));
     return () => window.cancelAnimationFrame(frame);
   }, [rawCandles, reviewMode]);

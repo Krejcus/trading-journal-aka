@@ -135,6 +135,30 @@ describe('Mac copier command relay', () => {
     await relay.close();
   });
 
+  it('posílá živé svíčky jako samostatnou neobchodní akci a odmítnutí hlásí chybou', async () => {
+    const calls: Record<string, unknown>[] = [];
+    let accept = true;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      calls.push(request);
+      if (request.action === 'live-bars') return Response.json({ accepted: accept }, { status: 202 });
+      return Response.json({ command: null });
+    });
+    const agent = { status, execute: vi.fn(), origin: '', close: vi.fn() } as unknown as LocalCopierExecutionAgent;
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://alpha.example', authorizationHeader: async () => 'Device id.secret',
+      agent, fetchImpl: fetchImpl as typeof fetch, pollMs: 60_000,
+    });
+    const capture = { root: 'MNQ', at: 1_791_830_000_000, source: 'CME_MINI:MNQ1!', bars: [[1_791_829_980, 1, 2, 0.5, 1.5, 3]] as [number, number, number, number, number, number][] };
+
+    await expect(relay.uploadLiveBars!(capture)).resolves.toBeUndefined();
+    expect(calls).toContainEqual({ action: 'live-bars', ...capture });
+    accept = false;
+    await expect(relay.uploadLiveBars!(capture)).rejects.toThrow('copier-live-bars-store-rejected');
+    expect(calls.some(call => call.action === 'complete' || call.action === 'complete-v2')).toBe(false);
+    await relay.close();
+  });
+
   it('snapshot upload retryne nejvýše dvakrát a pak skončí', async () => {
     const snapshotRequests: unknown[] = [];
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

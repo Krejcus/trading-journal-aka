@@ -34,7 +34,8 @@ it('actual MCP loader scopes every page and hydrates only supported legacy field
   expect(core.trades[0]).not.toHaveProperty('noteHistory');
   expect(core.trades[0]).not.toHaveProperty('legacy_fragments');
   expect(f.calls.filter(call => call.table === 'trade_private_notes').map(call => call.range)).toEqual([[0, 999], [1000, 1999]]);
-  expect(f.calls.every(call => call.scope?.[0] === 'user_id' && call.scope[1] === 'synthetic-owner')).toBe(true);
+  // profiles má vlastníka v `id` (= user id); vše ostatní přes user_id.
+  expect(f.calls.every(call => call.scope?.[0] === (call.table === 'profiles' ? 'id' : 'user_id') && call.scope[1] === 'synthetic-owner')).toBe(true);
 });
 it('actual MCP loader preserves old-owner notes only for a missing table', async () => {
   const old = fixture(() => ({ error: { code: 'PGRST205', message: 'missing table' } }));

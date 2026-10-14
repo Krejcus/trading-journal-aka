@@ -788,6 +788,8 @@ export interface StreamOptions {
   scope?: 'live' | 'backtest';
   /** Předformátovaný blok backtest session poznámek (pre/post) — jen v backtest scope. */
   backtestSessions?: string;
+  /** Deník dne (příprava/uzavření per session, poznámky s časem zápisu) — jen live scope. */
+  dayJournal?: string;
 }
 
 export async function streamAIResponse(
@@ -967,6 +969,11 @@ DŮLEŽITÉ: Tohle JSOU tvoje backtest přípravy/audity (pre/post session). Kdy
     systemPrompt += `\n\n=== ROZSAH DAT (SCOPE) — KRITICKÉ ===
 Aktuálně vidíš POUZE ŽIVÁ (live) data. Backtest data EXISTUJÍ, ale jsou ZÁMĚRNĚ SKRYTÁ — v živém režimu k nim NEMÁŠ přístup (oddělení backtestu od reálného obchodování, abys nikdy neradil z backtest dat).
 Když se uživatel zeptá, jestli vidíš backtest / backtest data: upřímně řekni, že je teď NEVIDÍŠ, protože jsi v živém režimu a backtest je oddělený přepážkou. Dodej, že je můžeš zpřístupnit, když přepne příkazem /backtest. NIKDY si backtest data nevymýšlej ani neodhaduj.`;
+    if (options.dayJournal) {
+      systemPrompt += `\n\n=== DENÍK DNE (posledních 14 dní) ===
+${options.dayJournal}
+Jak to číst: „zapsáno“ je skutečný čas, kdy trader poznámku napsal nebo nadiktoval. Fáze příprava = před otevřením session (plán), živě = během session, dopsáno zpětně = po jejím konci (paměť, ne záznam v okamžiku). Text je čistý přepis diktování; „upraveno HH:MM“ znamená, že trader text později změnil — ber ho pak jako zpětný pohled, ne záznam z okamžiku zápisu. „→ HH:MM @ cena“ = místo v grafu, na které poznámka ukazuje. Porovnávej plán z přípravy s obchody a s verdiktem v uzavření; upozorni, když se plán opakovaně nedodržuje nebo když se píše jen zpětně.`;
+    }
   }
 
   if (options.sessionPrompt) {

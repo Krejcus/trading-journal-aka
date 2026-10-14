@@ -264,6 +264,17 @@ interface AlphaTradeChartWorkspaceProps {
   onSaveSnapshot?: (image: Blob) => Promise<boolean>;
   /** Review týdne: pruh pod lištou, panel vpravo a pás obchodů dole (místo časové osy plnění). */
   review?: WorkspaceReviewSlots;
+  /**
+   * Workspace vložený do stránky (deník dne) místo fullscreen vrstvy:
+   * vyplní rodiče a nemá tlačítka zavřít.
+   */
+  embedded?: boolean;
+  /**
+   * Vlastní paměť rozložení (deník dne si pamatuje své panely zvlášť,
+   * nezdědí dva grafy z detailu obchodu) a výchozí rozložení pro ni.
+   */
+  layoutScope?: string;
+  defaultLayoutId?: ChartWorkspaceLayoutId;
 }
 
 export interface WorkspaceReviewSlots {
@@ -276,6 +287,27 @@ export interface WorkspaceReviewSlots {
   trades: readonly Trade[];
   /** Kresby v review patří týdnu (klíč úložiště). */
   drawingKey: string;
+  /**
+   * Vlastní vrstva nad grafem každého panelu (deník dne: poznámky
+   * připíchnuté k času a ceně). Dostane API grafu a obal panelu.
+   */
+  renderPanelOverlay?: (panel: WorkspacePanelOverlay) => React.ReactNode;
+  /**
+   * Svíčky pro jiný kořen v panelu (deník dne: MNQ i NQ mají stejnou cenu,
+   * panel s NQ dostane svíčky dne místo nového — možná placeného — dotazu).
+   */
+  candlesForRoot?: (root: MarketRoot) => MarketCandle[] | null;
+}
+export interface WorkspacePanelOverlay {
+  panelId: string;
+  chartApi: ChartViewApi | null;
+  /** Obal grafu panelu (position: relative). */
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  /** Časy svíček v grafu panelu (unix s). */
+  barTimes: readonly number[];
+  root: MarketRoot;
+  timeframe: MarketTimeframe;
+  isActive: boolean;
 }
 export interface ReviewSlotElements { header: HTMLElement; side: HTMLElement; bottom: HTMLElement; /** Panel vlevo od grafu (hodnocení obchodu). */ left: HTMLElement }
 
@@ -312,7 +344,7 @@ interface WorkspaceDataContextValue {
   onTradeIndicatorsChange?: (next: TradeChartIndicators) => void;
   chartNotes?: readonly ChartNote[];
   onChartNotesChange?: (notes: ChartNote[]) => void;
-  review?: { trades: readonly Trade[]; drawingKey: string };
+  review?: { trades: readonly Trade[]; drawingKey: string; renderPanelOverlay?: WorkspaceReviewSlots['renderPanelOverlay']; candlesForRoot?: WorkspaceReviewSlots['candlesForRoot'] };
 }
 
 interface WorkspacePanelControl {
@@ -388,12 +420,12 @@ const buildWorkspaceLayout = (
   });
 };
 
-const loadLayoutId = (): ChartWorkspaceLayoutId => {
+const loadLayoutId = (storageKey: string, fallback: ChartWorkspaceLayoutId): ChartWorkspaceLayoutId => {
   try {
-    const value = window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY) as ChartWorkspaceLayoutId | null;
+    const value = window.localStorage.getItem(storageKey) as ChartWorkspaceLayoutId | null;
     if (value && getChartWorkspaceLayout(value).id === value) return value;
   } catch { /* private storage */ }
-  return '2h';
+  return fallback;
 };
 
 const loadSyncSettings = (): ChartWorkspaceSyncSettings => {
@@ -582,6 +614,13 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       setError(null);
       return;
     }
+    const provided = context.review?.candlesForRoot?.(config.root);
+    if (provided?.length) {
+      setRawCandles(provided);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let cancelled = false;
     const { start, end } = marketDataWindowForEntry(context.entryMs);
     const entryFill = context.trade.executionHistory?.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0];
@@ -600,7 +639,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [config.root, context.backtestSession?.id, context.entryMs, context.initialCandles, context.initialRoot, context.trade.instrument, context.trade.symbol, context.trade.entryPrice, context.trade.executionHistory, sessionCandles]);
+  }, [config.root, context.backtestSession?.id, context.entryMs, context.initialCandles, context.initialRoot, context.review?.candlesForRoot, context.trade.instrument, context.trade.symbol, context.trade.entryPrice, context.trade.executionHistory, sessionCandles]);
 
   // Older session context is intentionally lazy. Eagerly requesting another
   // full minute-data segment for every panel/root doubled the initial MNQ + NQ
@@ -740,6 +779,10 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             contextTrades={context.review?.trades}
             drawingKeyId={context.review?.drawingKey}
           />
+          {context.review?.renderPanelOverlay?.({
+            panelId: instance.id, chartApi, containerRef: chartAreaRef, barTimes: noteBarTimes,
+            root: config.root, timeframe: config.timeframe, isActive,
+          })}
           {context.chartNotes && (
             <ChartNotesLayer
               chartApi={chartApi}
@@ -815,7 +858,11 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   onChartNotesChange,
   onSaveSnapshot,
   review,
+  embedded = false,
+  layoutScope,
+  defaultLayoutId = '2h',
 }) => {
+  const layoutStorageKey = layoutScope ? `${WORKSPACE_LAYOUT_STORAGE_KEY}:${layoutScope}` : WORKSPACE_LAYOUT_STORAGE_KEY;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceShellRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
@@ -824,7 +871,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const indicatorDefaults = backtestSession ? undefined : tradeIndicators;
   const savedLayoutId = backtestSession?.workspaceState?.layoutId as ChartWorkspaceLayoutId | undefined;
   const initialLayoutIdRef = useRef<ChartWorkspaceLayoutId>(
-    savedLayoutId && getChartWorkspaceLayout(savedLayoutId).id === savedLayoutId ? savedLayoutId : loadLayoutId(),
+    savedLayoutId && getChartWorkspaceLayout(savedLayoutId).id === savedLayoutId ? savedLayoutId : loadLayoutId(layoutStorageKey, defaultLayoutId),
   );
   const nextPanelNumberRef = useRef(getChartWorkspaceLayout(initialLayoutIdRef.current).panelCount + 1);
   const [status, setStatus] = useState('Layout je možné přetahovat a měnit jeho velikost');
@@ -1203,6 +1250,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   }, [backtestSession, replay.cursorTime]);
   const reviewTrades = review?.trades;
   const reviewDrawingKey = review?.drawingKey;
+  const reviewPanelOverlay = review?.renderPanelOverlay;
+  const reviewCandlesForRoot = review?.candlesForRoot;
   // Hodnocení: Bar Replay je připravený na obchod jako přehrávač v detailu —
   // ▶ spustí přehrávání 15 min před vstupem (zarovnáno na 15 min, ať sedí
   // na svíčku 1m/5m/15m grafu).
@@ -1260,9 +1309,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     openBacktestTradeReview,
     onTradeIndicatorsChange: backtestSession ? undefined : onTradeIndicatorsChange,
     chartNotes: backtestSession ? undefined : chartNotes,
-    review: reviewTrades && reviewDrawingKey ? { trades: reviewTrades, drawingKey: reviewDrawingKey } : undefined,
+    review: reviewTrades && reviewDrawingKey ? { trades: reviewTrades, drawingKey: reviewDrawingKey, renderPanelOverlay: reviewPanelOverlay, candlesForRoot: reviewCandlesForRoot } : undefined,
     onChartNotesChange: backtestSession ? undefined : onChartNotesChange,
-  }), [reviewTrades, reviewDrawingKey, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+  }), [reviewTrades, reviewDrawingKey, reviewPanelOverlay, reviewCandlesForRoot, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const reviewTrade = reviewTradeId
     ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)
@@ -1573,9 +1622,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setLayoutId(nextLayoutId);
     setActivePanelId(`${PANEL_ID_PREFIX}1`);
     setLayoutPickerOpen(false);
-    try { window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, nextLayoutId); } catch { /* private storage */ }
+    try { window.localStorage.setItem(layoutStorageKey, nextLayoutId); } catch { /* private storage */ }
     setStatus(`Layout ${nextLayoutId} · ${template.panelCount} graf${template.panelCount === 1 ? '' : 'y'}`);
-  }, [activeControl?.config, indicatorDefaults, initialRoot, workspace]);
+  }, [activeControl?.config, indicatorDefaults, initialRoot, layoutStorageKey, workspace]);
 
   useEffect(() => installChartWorkspaceSync(panelControls, syncSettings), [
     panelControls,
@@ -1600,15 +1649,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       name: 'default',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      tree: buildWorkspaceLayout(initialRoot, '2h', undefined, indicatorDefaults),
+      tree: buildWorkspaceLayout(initialRoot, defaultLayoutId, undefined, indicatorDefaults),
       panels: {},
     });
-    setLayoutId('2h');
-    nextPanelNumberRef.current = 3;
-    try { window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, '2h'); } catch { /* private storage */ }
+    setLayoutId(defaultLayoutId);
+    nextPanelNumberRef.current = getChartWorkspaceLayout(defaultLayoutId).panelCount + 1;
+    try { window.localStorage.setItem(layoutStorageKey, defaultLayoutId); } catch { /* private storage */ }
     setActivePanelId('alphatrade-chart-1');
     setStatus('Výchozí rozložení obnoveno');
-  }, [indicatorDefaults, initialRoot, workspace]);
+  }, [defaultLayoutId, indicatorDefaults, initialRoot, layoutStorageKey, workspace]);
 
   const persistWorkspaceStatus = useCallback(async (message: string) => {
     const result = await backtestSessionRef.current?.onSaveWorkspace?.();
@@ -1923,7 +1972,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   positionQuickOrderRef.current = submitSelectedPositionQuickOrder;
   return (
     <React.Profiler id="chart-workspace" onRender={devWorkspaceProfilerOnRender}>
-    <div className={`fixed inset-0 z-[300] flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
+    <div className={`${embedded ? 'relative h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
       <div className={`h-12 shrink-0 flex items-center gap-1 px-2 border-b ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
         <div className="flex items-center gap-2 mr-1 min-w-0">
           <img
@@ -2050,8 +2099,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         ><Redo2 size={15} /></button>
         <span className="ml-auto hidden 2xl:block text-[8px] font-bold uppercase tracking-wider text-slate-600">{status}</span>
         <span className={topDivider} />
+        {!embedded && <>
         <button type="button" className={`${topButton} px-2`} onClick={onClose} title="Zavřít fullscreen (Esc)"><Maximize2 size={14} className="rotate-180" /><span className="hidden sm:inline">Zpět</span></button>
         <button type="button" onClick={onClose} className={`w-8 h-8 inline-flex items-center justify-center rounded-md ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950'}`} aria-label="Zavřít fullscreen workspace"><X size={16} /></button>
+        </>}
       </div>
       {review && <div ref={reviewHeaderRef} className="shrink-0" />}
       <div className="flex flex-1 min-h-0">
