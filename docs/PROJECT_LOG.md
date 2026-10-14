@@ -412,6 +412,19 @@ pozic trval 8,8 s proti 8 s timeoutu.
   bodu). Záloha před migrací: `~/alphatrade-backups/journal-20261014-1341`.
 - Otevřené: časy z příjmu u verzí příkazů (first-seen) a index pro čtení při
   velkém množství archivovaných řádků; klient po zapnutí může pollovat po 20 s.
+- Produkce 14. 10. odpoledne: Tradeify stál od 2. 10. na
+  `journal-legacy-reference-ambiguous` (finální exit rozdělený na víc fillů,
+  starý záznam kopírky jen u jednoho) → migrace `20261014150000`
+  (`journal_legacy_identity` bere přesně zaznamenaný fill). Cron napřed
+  obsluhuje připojení s rozpracovaným bodem (Lucid archivace jinak hladověla).
+  Stav: Lucid epocha 3 aktivní, 502 zmrazených pozic, živý vstup ~10k řádků
+  (z ~125k); Tradeify epocha 2, 271 zmrazených, importuje do konce evidence.
+- Oprava rozestupu: interval 6 h se měřil od „teď“, ale K je vždy > 24 h
+  staré → bod se posouval o kolo snímků každý běh (epochy 1–3 po 15 min).
+  Teď K_n+1 ≥ K_n + 6 h v čase brokera; rozpracovaný bod se dokončí.
+  Klient polluje deník po 20 s (`JOURNAL_SYNC_INTERVAL_MS`).
+- Zbývá: vrátit `service_role` timeout na 8 s (po souhlasu), 2 Tradeify a
+  1 Lucid pozice zmrazené jako `pending/incomplete` (5. a 7. 10.).
 
 ### 2026-10-12 — Follower čeká na svou kopii vstupu (Claude, varianta 1 Filipa)
 
