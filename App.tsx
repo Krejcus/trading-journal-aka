@@ -54,6 +54,8 @@ import { loadTradovateOAuthStatus, importTradovateJournalConnection } from './se
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 type DashboardModule = typeof import('./components/Dashboard');
 let loadedDashboard: DashboardModule | null = null;
+/** Jak často se otevřená appka ptá na nový stav deníku (zpracovává ho server). */
+const JOURNAL_SYNC_INTERVAL_MS = 20_000;
 const loadDashboard = () => import('./components/Dashboard').then(module => {
   loadedDashboard = module;
   return module;
@@ -832,7 +834,9 @@ const App: React.FC = () => {
     if (!userId || copierJournalSyncBusyRef.current) return;
     const isCurrentSession = captureSessionRequest(userId);
     if (!isCurrentSession()) return;
-    if (!force && Date.now() - copierJournalLastSyncRef.current < 60_000) return;
+    // Živý deník (14. 10. 2026): server zpracuje nové obchody sám; klient se
+    // jen levně ptá, zda je nový stav (bez změny = jedno RPC).
+    if (!force && Date.now() - copierJournalLastSyncRef.current < JOURNAL_SYNC_INTERVAL_MS) return;
     copierJournalSyncBusyRef.current = true;
     const abort = new AbortController();
     copierImportAbortRef.current = abort;
@@ -1273,7 +1277,7 @@ const App: React.FC = () => {
     if (!isInitialLoadDone || !session?.user?.id || !hasJournalConnection) return;
     const refresh = () => { if (document.visibilityState === 'visible') void runCopierJournalSync(); };
     refresh();
-    const timer = window.setInterval(refresh, 60_000);
+    const timer = window.setInterval(refresh, JOURNAL_SYNC_INTERVAL_MS);
     window.addEventListener('online', refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => { window.clearInterval(timer); window.removeEventListener('online', refresh); document.removeEventListener('visibilitychange', refresh); };

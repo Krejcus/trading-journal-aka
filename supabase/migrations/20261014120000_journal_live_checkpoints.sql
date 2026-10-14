@@ -458,6 +458,24 @@ begin
   return result;
 end; $$;
 
+-- Beze změny i když poslední evidence jen vyhodnotila stejné pozice (evaluated_through).
+create or replace function public.read_journal_import_checkpoint(p_user_id uuid,p_connection_id uuid)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+declare receipt jsonb;
+begin
+  if not exists(select 1 from public.tradovate_oauth_connections c where c.id=p_connection_id and c.user_id=p_user_id and c.environment='demo') then
+    raise exception 'journal-connection-not-found' using errcode='42501';
+  end if;
+  select jsonb_build_object('accepted',true,'unchanged',true,'through',h.completed_revision,
+    'confirmed',h.import_receipt->'confirmed','pending',h.import_receipt->'pending','unassigned',h.import_receipt->'unassigned') into receipt
+    from public.tradovate_journal_projection_heads h where h.user_id=p_user_id and h.connection_id=p_connection_id
+      and h.revision=h.completed_revision
+      and greatest(h.completed_revision,h.evaluated_through)=coalesce((select max(e.ingest_id) from public.tradovate_journal_evidence e where e.user_id=p_user_id and e.connection_id=p_connection_id and e.environment='demo'),0)
+      and h.import_receipt->>'version'='2'
+      and h.import_receipt->'accounts'=public.journal_import_bindings(p_user_id,p_connection_id);
+  return receipt;
+end; $$;
+
 -- Vyhodnoceno beze změny pozic: posune vstup dál bez zápisu (žádná nová
 -- generace pro čtenáře). Jen nad aktuální generací vstupu a kontrolním bodem.
 create function public.mark_journal_projection_evaluated(p_user_id uuid, p_connection_id uuid, p_revision bigint,
