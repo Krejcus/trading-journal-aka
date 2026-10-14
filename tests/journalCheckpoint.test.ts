@@ -4,6 +4,8 @@ import {
   compareJournalWindows, journalCheckpointBlockers, journalCheckpointManifest, journalFlatCaptures, journalLateEvidenceAt, journalLateEvidenceCheck,
   journalLateQueries, journalLiveAfterArchive, journalOrdersOpenSince,
 } from '../lib/journalCheckpoint';
+import { advanceJournalCheckpoint, JOURNAL_CHECKPOINT_INTERVAL_MS, JOURNAL_CHECKPOINT_SETTLE_MS, type JournalCheckpointState } from '../server/journalCheckpointStore';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { positionSnapshotObservations } from '../lib/journalPositionSnapshot';
 import { journalObservation, type JournalEntityType, type JournalEvidence } from '../lib/tradovateJournalEvidence';
 
@@ -188,5 +190,26 @@ describe('kontrolní bod živého deníku', () => {
     const { events, add, K } = scenario();
     add('order', { id: 500, accountId: 1, contractId: 7, action: 'Buy', ordStatus: 'Working', timestamp: iso(K - 30_000) }, K - 30_000);
     expect(journalOrdersOpenSince(events, K)).toEqual(['500']);
+  });
+});
+
+describe('rozestup kontrolních bodů', () => {
+  // Bez zápisu: kandidát se odmítne dřív, než se sáhne do DB.
+  const noDb = new Proxy({}, { get: () => { throw new Error('db-touched'); } }) as unknown as SupabaseClient;
+  const scope = { ownerId: '11111111-1111-4111-8111-111111111111', connectionId, environment: 'demo' as const };
+  const advance = (events: JournalEvidence[], state: JournalCheckpointState, now: number) => advanceJournalCheckpoint(noDb, scope,
+    { events, inputGeneration: 1, state, bindings: [], reference: { episodes: [], untakenOrders: [] }, deadline: Date.now() + 60_000, now });
+  const active = (at: number): JournalCheckpointState => {
+    const point = { epoch: 1, at, flatAccounts: [1, 2], bindings: [], status: 'active' as const };
+    return { epoch: 1, checkpoints: [point], active: point };
+  };
+
+  it('další bod nejdřív 6 h po předchozím v čase brokera, ne podle „teď“ (14. 10.: epochy po 15 min)', async () => {
+    const { events } = scenario();
+    const last = T0 + 1_000;
+    // Usazená kola snímků (K, s2) existují, ale jsou méně než 6 h po bodu.
+    await expect(advance(events, active(last), T0 + 3 * JOURNAL_CHECKPOINT_SETTLE_MS)).resolves.toBe('no-candidate');
+    // Dokud není usazený ani čas bod + 6 h, nic se ani nepočítá.
+    await expect(advance(events, active(last), last + JOURNAL_CHECKPOINT_SETTLE_MS + JOURNAL_CHECKPOINT_INTERVAL_MS - 1)).resolves.toBe('not-due');
   });
 });

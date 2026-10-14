@@ -29,7 +29,11 @@ export interface JournalCheckpointState { epoch: number; checkpoints: JournalChe
 
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 
-/** Kontrolní bod se posouvá nejvýš jednou za tuto dobu. */
+/**
+ * Rozestup kontrolních bodů v čase brokera (K_n+1 ≥ K_n + tohle). Měřit od
+ * „teď“ nejde: K je kvůli usazení vždy starší než den, posouval by se pak
+ * každou minutu o jedno kolo snímků (14. 10.: epochy 1–3 po 15 min).
+ */
 export const JOURNAL_CHECKPOINT_INTERVAL_MS = 6 * 60 * 60_000;
 /**
  * Bod musí být starší než tohle: dorazí opožděné filly, poplatky a účetnictví
@@ -116,18 +120,23 @@ export interface JournalAdvanceInput {
 
 /**
  * Posun kontrolního bodu: nejnovější kolo snímků s ověřeně flat účty, bez
- * příkazu zadaného dřív a ještě otevřeného, starší než 15 min. Posune se jen
- * když okno od nového bodu nad vstupem po archivaci dá pro vše po bodu totéž
- * co aktuální výpočet. Archivace po dávkách; aktivace zmrazí pozice před ním.
+ * příkazu zadaného dřív a ještě otevřeného, usazené (24 h) a aspoň 6 h po
+ * předchozím bodu. Posune se jen když okno od nového bodu nad vstupem po
+ * archivaci dá pro vše po bodu totéž co aktuální výpočet. Archivace po dávkách; aktivace zmrazí pozice před ním.
  */
 export async function advanceJournalCheckpoint(db: SupabaseClient, scope: JournalFeedScope, input: JournalAdvanceInput)
   : Promise<'advanced' | 'not-due' | 'no-candidate' | 'deferred' | 'stale'> {
   const now = input.now ?? Date.now();
   const lastAt = input.state.active?.at ?? 0;
-  if (now - lastAt < JOURNAL_CHECKPOINT_INTERVAL_MS) return 'not-due';
-  const common = { p_user_id: scope.ownerId, p_connection_id: scope.connectionId };
+  // První bod (i po návratu na epochu 0) bez rozestupu.
+  const earliest = lastAt > 0 ? lastAt + JOURNAL_CHECKPOINT_INTERVAL_MS : 1;
+  const settled = now - JOURNAL_CHECKPOINT_SETTLE_MS;
   const pending = input.state.checkpoints.find(point => point.epoch === input.state.epoch + 1 && point.status === 'archiving');
-  const all = journalFlatCaptures(input.events).filter(capture => capture.at > lastAt && capture.at <= now - JOURNAL_CHECKPOINT_SETTLE_MS);
+  // Rozpracovaný bod se dokončí i když vznikl podle dřívějšího pravidla.
+  if (!pending && settled < earliest) return 'not-due';
+  const common = { p_user_id: scope.ownerId, p_connection_id: scope.connectionId };
+  const all = journalFlatCaptures(input.events).filter(capture => capture.at > lastAt && capture.at <= settled
+    && (capture.at >= earliest || capture.at === pending?.at));
   // Rozpracovaný bod vždy první (i mimo nejnovější kandidáty), jinak by se
   // archivace při novém kole snímků začínala pořád znovu.
   const candidates = [...(pending ? all.filter(capture => capture.at === pending.at) : []),

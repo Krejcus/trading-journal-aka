@@ -54,9 +54,9 @@ import { loadTradovateOAuthStatus, importTradovateJournalConnection } from './se
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 type DashboardModule = typeof import('./components/Dashboard');
 let loadedDashboard: DashboardModule | null = null;
-/** Jak často se otevřená appka ptá na nový stav deníku. Na 20 s až se zapnutým
- * živým deníkem (JOURNAL_CHECKPOINTS): bez něj každý import čte celou historii. */
-const JOURNAL_SYNC_INTERVAL_MS = 60_000;
+/** Jak často se otevřená appka ptá na nový stav deníku. Se živým deníkem
+ * (kontrolní body, 14. 10.) čte import jen okno od bodu, takže stačí levně. */
+const JOURNAL_SYNC_INTERVAL_MS = 20_000;
 const loadDashboard = () => import('./components/Dashboard').then(module => {
   loadedDashboard = module;
   return module;
