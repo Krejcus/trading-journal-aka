@@ -6,6 +6,7 @@
 -- Bez kontrolního bodu (epoch 0) se nic nemění.
 
 alter table public.tradovate_journal_input_heads add column checkpoint_epoch bigint not null default 0;
+alter table public.tradovate_journal_input_heads add column verified_at timestamptz;
 alter table public.tradovate_journal_input_entities add column archived_epoch bigint;
 alter table public.tradovate_journal_input_retained add column archived_epoch bigint;
 alter table public.tradovate_journal_positions add column frozen_epoch bigint;
@@ -30,7 +31,7 @@ create table public.tradovate_journal_checkpoints (
   at_ms bigint not null check (at_ms > 0),
   flat_accounts bigint[] not null,
   bindings jsonb not null,
-  status text not null check (status in ('archiving', 'active')),
+  status text not null check (status in ('archiving', 'active', 'reopened')),
   created_at timestamptz not null default now(),
   activated_at timestamptz,
   primary key (user_id, connection_id, epoch),
@@ -48,6 +49,13 @@ create table public.tradovate_journal_archived_refs (
   primary key (user_id, connection_id, kind, ref_id),
   foreign key (user_id, connection_id) references public.tradovate_journal_input_heads on delete cascade
 );
+-- Identita propojení účtů (bez firmy a dalších popisků v meta.oauth).
+create function public.journal_binding_identity(p_bindings jsonb) returns jsonb
+language sql immutable set search_path='' as $$
+  select coalesce(jsonb_agg(jsonb_build_object('id',x->'id','provider',x#>'{oauth,provider}','environment',x#>'{oauth,environment}',
+    'connectionId',x#>'{oauth,connectionId}','externalAccountId',x#>'{oauth,externalAccountId}') order by x->>'id'),'[]'::jsonb)
+  from jsonb_array_elements(coalesce(p_bindings,'[]'::jsonb)) x
+$$;
 create index tradovate_journal_archived_refs_epoch_idx on public.tradovate_journal_archived_refs (user_id, connection_id, epoch);
 alter table public.tradovate_journal_checkpoints enable row level security;
 alter table public.tradovate_journal_archived_refs enable row level security;
@@ -472,9 +480,48 @@ begin
       and h.revision=h.completed_revision
       and greatest(h.completed_revision,h.evaluated_through)=coalesce((select max(e.ingest_id) from public.tradovate_journal_evidence e where e.user_id=p_user_id and e.connection_id=p_connection_id and e.environment='demo'),0)
       and h.import_receipt->>'version'='2'
+      -- Spočteno pod stejným kontrolním bodem (po posunu/návratu se počítá znovu).
+      and coalesce((h.import_receipt->>'checkpointEpoch')::bigint,0)=coalesce((select i.checkpoint_epoch from public.tradovate_journal_input_heads i where i.user_id=p_user_id and i.connection_id=p_connection_id),0)
       and h.import_receipt->'accounts'=public.journal_import_bindings(p_user_id,p_connection_id);
   return receipt;
 end; $$;
+
+-- Denní plná kontrola čte celý vstup včetně archivovaného (jinak shodné se snapshot_latest).
+create function public.read_journal_input_all(p_user_id uuid,p_connection_id uuid,p_generation bigint,
+  p_after text default '',p_limit integer default 1000)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+declare head public.tradovate_journal_input_heads%rowtype; result jsonb;
+begin
+  select * into head from public.tradovate_journal_input_heads h where h.user_id=p_user_id and h.connection_id=p_connection_id;
+  if not found or head.version<>1 or head.generation is distinct from p_generation or head.through<>head.target_through then
+    raise exception 'journal-input-changed' using errcode='55000';
+  end if;
+  if p_after is null or length(p_after)>800 then raise exception 'invalid-journal-input-page' using errcode='22023'; end if;
+  if p_limit is null or p_limit<1 or p_limit>2000 then raise exception 'invalid-journal-input-page' using errcode='22023'; end if;
+  with entity_page as (
+    select ('e:'||c.entity_key) collate "C" as key,
+      jsonb_build_object('key',c.entity_key,'latest',c.latest) as entity,
+      null::jsonb as event
+    from public.tradovate_journal_input_entities c
+    where c.user_id=p_user_id and c.connection_id=p_connection_id
+      and ('e:'||c.entity_key) collate "C" > p_after collate "C"
+    order by ('e:'||c.entity_key) collate "C" limit p_limit
+  ), retained_page as (
+    select ('r:'||r.event_id) collate "C" as key, null::jsonb as entity, r.evidence as event
+    from public.tradovate_journal_input_retained r
+    where r.user_id=p_user_id and r.connection_id=p_connection_id
+      and ('r:'||r.event_id) collate "C" > p_after collate "C"
+    order by ('r:'||r.event_id) collate "C" limit p_limit
+  ), page as (
+    select * from (select * from entity_page union all select * from retained_page) u
+    order by u.key collate "C" limit p_limit
+  )
+  select jsonb_build_object('generation',head.generation,'through',head.through,'watermark',head.watermark,'checkpointEpoch',head.checkpoint_epoch,
+    'rows',coalesce(jsonb_agg(jsonb_build_object('key',key,'entity',entity,'event',event) order by key collate "C"),'[]'::jsonb)) into result from page;
+  return result;
+end; $$;
+revoke all on function public.read_journal_input_all(uuid,uuid,bigint,text,integer) from public,anon,authenticated;
+grant execute on function public.read_journal_input_all(uuid,uuid,bigint,text,integer) to service_role;
 
 -- Vyhodnoceno beze změny pozic: posune vstup dál bez zápisu (žádná nová
 -- generace pro čtenáře). Jen nad aktuální generací vstupu a kontrolním bodem.
@@ -516,39 +563,75 @@ begin
   if not found or input_head.checkpoint_epoch is distinct from p_expected_epoch then
     return jsonb_build_object('accepted',false,'stale',true);
   end if;
-  select coalesce(max(c.at_ms),0) into previous from public.tradovate_journal_checkpoints c
-    where c.user_id=p_user_id and c.connection_id=p_connection_id and c.status='active';
   -- Rozpracovaný stejný bod se dokončí (dávky archivace jsou idempotentní).
   if exists(select 1 from public.tradovate_journal_checkpoints c where c.user_id=p_user_id and c.connection_id=p_connection_id
-    and c.epoch=p_expected_epoch+1 and c.status='archiving' and c.at_ms=p_at_ms and c.bindings=p_bindings
-    and c.flat_accounts=p_flat_accounts) then
+    and c.epoch=p_expected_epoch+1 and c.status='archiving' and c.at_ms=p_at_ms and c.flat_accounts=p_flat_accounts
+    and public.journal_binding_identity(c.bindings)=public.journal_binding_identity(p_bindings)) then
     return jsonb_build_object('accepted',true,'epoch',p_expected_epoch+1,'resumed',true);
   end if;
+  -- Zbytky zrušeného nebo jiného rozpracovaného bodu nejdřív uklidit po dávkách.
+  if exists(select 1 from public.tradovate_journal_checkpoints c where c.user_id=p_user_id and c.connection_id=p_connection_id and c.epoch>p_expected_epoch)
+    or exists(select 1 from public.tradovate_journal_input_entities e where e.user_id=p_user_id and e.connection_id=p_connection_id and e.archived_epoch>p_expected_epoch)
+    or exists(select 1 from public.tradovate_journal_input_retained r where r.user_id=p_user_id and r.connection_id=p_connection_id and r.archived_epoch>p_expected_epoch)
+    or exists(select 1 from public.tradovate_journal_archived_refs a where a.user_id=p_user_id and a.connection_id=p_connection_id and a.epoch>p_expected_epoch) then
+    return jsonb_build_object('accepted',false,'cleanup',true);
+  end if;
+  select coalesce(max(c.at_ms),0) into previous from public.tradovate_journal_checkpoints c
+    where c.user_id=p_user_id and c.connection_id=p_connection_id and c.status='active';
   if p_at_ms is null or p_at_ms<=previous or p_at_ms>(extract(epoch from now())*1000)::bigint
     or p_flat_accounts is null or cardinality(p_flat_accounts) not between 1 and 250
     or jsonb_typeof(p_bindings) is distinct from 'array'
-    or p_bindings is distinct from public.journal_import_bindings(p_user_id,p_connection_id) then
+    or public.journal_binding_identity(p_bindings) is distinct from public.journal_binding_identity(public.journal_import_bindings(p_user_id,p_connection_id)) then
     raise exception 'invalid-journal-checkpoint' using errcode='22023';
   end if;
-  update public.tradovate_journal_input_entities e set archived_epoch=null
-    where e.user_id=p_user_id and e.connection_id=p_connection_id and e.archived_epoch>p_expected_epoch;
-  update public.tradovate_journal_input_retained r set archived_epoch=null
-    where r.user_id=p_user_id and r.connection_id=p_connection_id and r.archived_epoch>p_expected_epoch;
-  delete from public.tradovate_journal_archived_refs a where a.user_id=p_user_id and a.connection_id=p_connection_id and a.epoch>p_expected_epoch;
-  delete from public.tradovate_journal_checkpoints c where c.user_id=p_user_id and c.connection_id=p_connection_id and c.epoch>p_expected_epoch;
   insert into public.tradovate_journal_checkpoints(user_id,connection_id,epoch,at_ms,flat_accounts,bindings,status)
     values(p_user_id,p_connection_id,p_expected_epoch+1,p_at_ms,p_flat_accounts,p_bindings,'archiving');
   return jsonb_build_object('accepted',true,'epoch',p_expected_epoch+1);
 end; $$;
 
+-- Úklid po zrušeném bodu (znovuotevření, opuštěný pokus) po dávkách — žádná
+-- jedna transakce nepřepisuje celou historii. Čtení vstupu i kontrola refs
+-- berou vše nad aktivní epochou jako živé, takže úklid správnost neovlivňuje.
+create function public.cleanup_journal_checkpoints(p_user_id uuid, p_connection_id uuid, p_expected_epoch bigint, p_limit integer)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+declare input_head public.tradovate_journal_input_heads%rowtype; entities int; retained int; refs int;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('journal:' || p_user_id::text,0));
+  select * into input_head from public.tradovate_journal_input_heads h where h.user_id=p_user_id and h.connection_id=p_connection_id;
+  if not found or input_head.checkpoint_epoch is distinct from p_expected_epoch then return jsonb_build_object('accepted',false,'stale',true); end if;
+  if p_limit is null or p_limit not between 1 and 20000 then raise exception 'invalid-journal-checkpoint-cleanup' using errcode='22023'; end if;
+  update public.tradovate_journal_input_entities e set archived_epoch=null
+    where (e.user_id,e.connection_id,e.entity_key) in (select x.user_id,x.connection_id,x.entity_key from public.tradovate_journal_input_entities x
+      where x.user_id=p_user_id and x.connection_id=p_connection_id and x.archived_epoch>p_expected_epoch limit p_limit);
+  get diagnostics entities = row_count;
+  update public.tradovate_journal_input_retained r set archived_epoch=null
+    where (r.user_id,r.connection_id,r.event_id) in (select x.user_id,x.connection_id,x.event_id from public.tradovate_journal_input_retained x
+      where x.user_id=p_user_id and x.connection_id=p_connection_id and x.archived_epoch>p_expected_epoch limit p_limit);
+  get diagnostics retained = row_count;
+  delete from public.tradovate_journal_archived_refs a
+    where (a.user_id,a.connection_id,a.kind,a.ref_id) in (select x.user_id,x.connection_id,x.kind,x.ref_id from public.tradovate_journal_archived_refs x
+      where x.user_id=p_user_id and x.connection_id=p_connection_id and x.epoch>p_expected_epoch limit p_limit);
+  get diagnostics refs = row_count;
+  if entities+retained+refs=0 then
+    delete from public.tradovate_journal_checkpoints c where c.user_id=p_user_id and c.connection_id=p_connection_id and c.epoch>p_expected_epoch;
+    return jsonb_build_object('accepted',true,'done',true);
+  end if;
+  return jsonb_build_object('accepted',true,'done',false,'entities',entities,'retained',retained,'refs',refs);
+end; $$;
+
 -- Jedna dávka archivace. Řádek už archivovaný starším bodem se nemění.
 create function public.archive_journal_checkpoint_chunk(p_user_id uuid, p_connection_id uuid, p_epoch bigint,
-  p_entity_keys text[], p_retained_ids text[], p_refs jsonb)
+  p_entity_keys text[], p_retained_ids text[], p_refs jsonb, p_input_generation bigint)
 returns jsonb language plpgsql security invoker set search_path='' as $$
 declare entities int; retained int; refs int;
 begin
+  perform pg_advisory_xact_lock(hashtextextended('journal:' || p_user_id::text,0));
+  -- Stejná generace vstupu jako výpočet manifestu: mezitím zkompaktovaná
+  -- změna by se jinak archivovala s novým obsahem a starým otiskem.
   if not exists(select 1 from public.tradovate_journal_checkpoints c where c.user_id=p_user_id and c.connection_id=p_connection_id
-    and c.epoch=p_epoch and c.status='archiving') then
+      and c.epoch=p_epoch and c.status='archiving')
+    or not exists(select 1 from public.tradovate_journal_input_heads h where h.user_id=p_user_id and h.connection_id=p_connection_id
+      and h.generation=p_input_generation and h.checkpoint_epoch=p_epoch-1) then
     return jsonb_build_object('accepted',false,'stale',true);
   end if;
   if coalesce(cardinality(p_entity_keys),0)+coalesce(cardinality(p_retained_ids),0)>10000
@@ -561,25 +644,27 @@ begin
   update public.tradovate_journal_input_retained r set archived_epoch=p_epoch
     where r.user_id=p_user_id and r.connection_id=p_connection_id and r.event_id=any(p_retained_ids) and r.archived_epoch is null;
   get diagnostics retained = row_count;
-  insert into public.tradovate_journal_archived_refs(user_id,connection_id,kind,ref_id,epoch,fingerprint)
+  -- Otisk rozpracované epochy se při navázání aktualizuje; starší epochy se nemění.
+  insert into public.tradovate_journal_archived_refs as a (user_id,connection_id,kind,ref_id,epoch,fingerprint)
     select p_user_id,p_connection_id,x->>'kind',x->>'id',p_epoch,x->>'fingerprint' from jsonb_array_elements(p_refs) x
     where coalesce(x->>'kind','')<>'' and coalesce(x->>'id','')<>''
-    on conflict do nothing;
+    on conflict (user_id,connection_id,kind,ref_id) do update set fingerprint=excluded.fingerprint where a.epoch=excluded.epoch;
   get diagnostics refs = row_count;
   return jsonb_build_object('accepted',true,'entities',entities,'retained',retained,'refs',refs);
 end; $$;
 
 -- Aktivace: zmrazí pozice před K a přepne čtení na živý vstup. CAS na
 -- předchozí bod; nová generace vstupu zneplatní rozpracované výpočty.
-create function public.activate_journal_checkpoint(p_user_id uuid, p_connection_id uuid, p_epoch bigint, p_position_ids text[])
+create function public.activate_journal_checkpoint(p_user_id uuid, p_connection_id uuid, p_epoch bigint, p_position_ids text[], p_input_generation bigint)
 returns jsonb language plpgsql security invoker set search_path='' as $$
 declare input_head public.tradovate_journal_input_heads%rowtype; point public.tradovate_journal_checkpoints%rowtype; frozen int;
 begin
   perform pg_advisory_xact_lock(hashtextextended('journal:' || p_user_id::text,0));
   select * into input_head from public.tradovate_journal_input_heads h where h.user_id=p_user_id and h.connection_id=p_connection_id for update;
   select * into point from public.tradovate_journal_checkpoints c where c.user_id=p_user_id and c.connection_id=p_connection_id and c.epoch=p_epoch for update;
-  if input_head.checkpoint_epoch is distinct from p_epoch-1 or point.status is distinct from 'archiving'
-    or point.bindings is distinct from public.journal_import_bindings(p_user_id,p_connection_id) then
+  if input_head.checkpoint_epoch is distinct from p_epoch-1 or input_head.generation is distinct from p_input_generation
+    or point.status is distinct from 'archiving'
+    or public.journal_binding_identity(point.bindings) is distinct from public.journal_binding_identity(public.journal_import_bindings(p_user_id,p_connection_id)) then
     return jsonb_build_object('accepted',false,'stale',true);
   end if;
   if exists(select 1 from public.tradovate_journal_positions j where j.user_id=p_user_id and j.connection_id=p_connection_id
@@ -608,14 +693,12 @@ begin
   if not found or input_head.checkpoint_epoch is distinct from p_expected_epoch or p_to_epoch is null or p_to_epoch<0 or p_to_epoch>=p_expected_epoch then
     return jsonb_build_object('accepted',false,'stale',true);
   end if;
-  update public.tradovate_journal_input_entities e set archived_epoch=null
-    where e.user_id=p_user_id and e.connection_id=p_connection_id and e.archived_epoch>p_to_epoch;
-  update public.tradovate_journal_input_retained r set archived_epoch=null
-    where r.user_id=p_user_id and r.connection_id=p_connection_id and r.archived_epoch>p_to_epoch;
+  -- Okamžitě: čtení vstupu bere archivované nad p_to_epoch jako živé a
+  -- odmrazí se jen pozice (malé). Řádky vstupu uklidí cleanup po dávkách.
   update public.tradovate_journal_positions j set frozen_epoch=null
     where j.user_id=p_user_id and j.connection_id=p_connection_id and j.frozen_epoch>p_to_epoch;
-  delete from public.tradovate_journal_archived_refs a where a.user_id=p_user_id and a.connection_id=p_connection_id and a.epoch>p_to_epoch;
-  delete from public.tradovate_journal_checkpoints c where c.user_id=p_user_id and c.connection_id=p_connection_id and c.epoch>p_to_epoch;
+  update public.tradovate_journal_checkpoints c set status='reopened'
+    where c.user_id=p_user_id and c.connection_id=p_connection_id and c.epoch>p_to_epoch;
   update public.tradovate_journal_input_heads h set checkpoint_epoch=p_to_epoch, generation=h.generation+1
     where h.user_id=p_user_id and h.connection_id=p_connection_id;
   return jsonb_build_object('accepted',true,'epoch',p_to_epoch);
@@ -624,22 +707,36 @@ end; $$;
 -- Které z odkazů živého vstupu míří do zmrazených dat (a s jakým otiskem).
 create function public.journal_archived_ref_hits(p_user_id uuid, p_connection_id uuid, p_refs jsonb)
 returns jsonb language plpgsql stable security invoker set search_path='' as $$
-declare result jsonb;
+declare result jsonb; active bigint;
 begin
   if jsonb_typeof(p_refs) is distinct from 'array' or jsonb_array_length(p_refs)>20000 then
     raise exception 'invalid-journal-refs' using errcode='22023';
   end if;
+  select h.checkpoint_epoch into active from public.tradovate_journal_input_heads h where h.user_id=p_user_id and h.connection_id=p_connection_id;
+  -- Jen aktivní body; rozpracovaný nebo zrušený bod se neposuzuje.
   select coalesce(jsonb_agg(jsonb_build_object('kind',a.kind,'id',a.ref_id,'epoch',a.epoch,'fingerprint',a.fingerprint)),'[]'::jsonb) into result
     from (select distinct x->>'kind' kind, x->>'id' id from jsonb_array_elements(p_refs) x) r
-    join public.tradovate_journal_archived_refs a on a.user_id=p_user_id and a.connection_id=p_connection_id and a.kind=r.kind and a.ref_id=r.id;
+    join public.tradovate_journal_archived_refs a on a.user_id=p_user_id and a.connection_id=p_connection_id and a.kind=r.kind and a.ref_id=r.id
+    where a.epoch<=coalesce(active,0);
   return result;
 end; $$;
 
 revoke all on function public.mark_journal_projection_evaluated(uuid,uuid,bigint,bigint,bigint), public.read_journal_checkpoints(uuid,uuid),
-  public.begin_journal_checkpoint(uuid,uuid,bigint,bigint,bigint[],jsonb), public.archive_journal_checkpoint_chunk(uuid,uuid,bigint,text[],text[],jsonb),
-  public.activate_journal_checkpoint(uuid,uuid,bigint,text[]), public.reopen_journal_checkpoint(uuid,uuid,bigint,bigint),
-  public.journal_archived_ref_hits(uuid,uuid,jsonb) from public, anon, authenticated;
+  public.begin_journal_checkpoint(uuid,uuid,bigint,bigint,bigint[],jsonb), public.archive_journal_checkpoint_chunk(uuid,uuid,bigint,text[],text[],jsonb,bigint),
+  public.activate_journal_checkpoint(uuid,uuid,bigint,text[],bigint), public.reopen_journal_checkpoint(uuid,uuid,bigint,bigint),
+  public.journal_archived_ref_hits(uuid,uuid,jsonb), public.cleanup_journal_checkpoints(uuid,uuid,bigint,integer) from public, anon, authenticated;
 grant execute on function public.mark_journal_projection_evaluated(uuid,uuid,bigint,bigint,bigint), public.read_journal_checkpoints(uuid,uuid),
-  public.begin_journal_checkpoint(uuid,uuid,bigint,bigint,bigint[],jsonb), public.archive_journal_checkpoint_chunk(uuid,uuid,bigint,text[],text[],jsonb),
-  public.activate_journal_checkpoint(uuid,uuid,bigint,text[]), public.reopen_journal_checkpoint(uuid,uuid,bigint,bigint),
-  public.journal_archived_ref_hits(uuid,uuid,jsonb) to service_role;
+  public.begin_journal_checkpoint(uuid,uuid,bigint,bigint,bigint[],jsonb), public.archive_journal_checkpoint_chunk(uuid,uuid,bigint,text[],text[],jsonb,bigint),
+  public.activate_journal_checkpoint(uuid,uuid,bigint,text[],bigint), public.reopen_journal_checkpoint(uuid,uuid,bigint,bigint),
+  public.journal_archived_ref_hits(uuid,uuid,jsonb), public.cleanup_journal_checkpoints(uuid,uuid,bigint,integer) to service_role;
+
+-- Denní plná kontrola: kdy naposledy plné přehrání potvrdilo zmrazené obchody.
+create function public.mark_journal_verified(p_user_id uuid, p_connection_id uuid, p_checkpoint_epoch bigint)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+begin
+  update public.tradovate_journal_input_heads h set verified_at=now()
+    where h.user_id=p_user_id and h.connection_id=p_connection_id and h.checkpoint_epoch=p_checkpoint_epoch;
+  return jsonb_build_object('accepted',found);
+end; $$;
+revoke all on function public.mark_journal_verified(uuid,uuid,bigint) from public, anon, authenticated;
+grant execute on function public.mark_journal_verified(uuid,uuid,bigint) to service_role;

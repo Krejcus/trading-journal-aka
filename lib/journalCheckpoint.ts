@@ -55,6 +55,46 @@ export function journalOrdersOpenSince(evidence: readonly JournalEvidence[], at:
   return result.sort();
 }
 
+/**
+ * Proč bod K nelze použít (prázdné = lze). Pozdní doplnění čehokoli z toho by
+ * se do zmrazených obchodů nepropsalo, protože na straně zmrazených dat chybí
+ * objekt, ke kterému by se dalo vázat (kontrola oponenta 14. 10.).
+ */
+export function journalCheckpointBlockers(evidence: readonly JournalEvidence[], at: number): string[] {
+  const blockers: string[] = [];
+  const open = journalOrdersOpenSince(evidence, at);
+  if (open.length) blockers.push(`open-orders:${open.length}`);
+  const latest = latestJournalEvidence(evidence);
+  const has = (type: string, id: unknown) => id != null && latest.has(`${type}:${id}`);
+  const projection = projectJournalEvidence(evidence);
+  const fillTime = new Map<string, number>();
+  for (const [key, event] of latest) if (key.startsWith('fill:')) fillTime.set(String(event.entity.id), brokerTime(event) ?? event.receivedAt);
+  for (const issue of projection.issues) {
+    const [kind, id] = [issue.slice(0, issue.indexOf(':')), issue.slice(issue.indexOf(':') + 1)];
+    if (kind === 'incomplete-fill' && (fillTime.get(id) ?? -Infinity) < at) blockers.push(issue);
+    if (kind === 'missing-id') {
+      const event = evidence.find(row => row.id === id);
+      if (!event || event.receivedAt < at) blockers.push(issue);
+    }
+  }
+  for (const [key, event] of latest) {
+    const type = key.slice(0, key.indexOf(':')), row = event.entity;
+    const time = brokerTime(event) ?? event.receivedAt;
+    if (type === 'fill' && time < at) {
+      if (!has('order', row.orderId)) blockers.push(`missing-order:${row.orderId}`);
+      if (!has('contract', row.contractId)) blockers.push(`missing-contract:${row.contractId}`);
+    }
+    if (['orderversion', 'command', 'executionreport'].includes(type) && row.orderId != null && !has('order', row.orderId)
+      && time < at) blockers.push(`missing-order:${row.orderId}`);
+    if ((type === 'fillfee' || type === 'cashbalancelog') && time < at) {
+      for (const [field, value] of Object.entries(row)) {
+        if (/CurrencyId$|^currencyId$/.test(field) && value != null && !has('currency', value)) blockers.push(`missing-currency:${value}`);
+      }
+    }
+  }
+  return [...new Set(blockers)].sort();
+}
+
 type Comparable = Omit<JournalPositionEpisode, 'history'> & { history: Omit<JournalPositionEpisode['history'], 'issues' | 'complete'> };
 const comparable = (episode: JournalPositionEpisode): Comparable => {
   const { issues: _issues, complete: _complete, ...history } = episode.history;
@@ -180,6 +220,12 @@ export function journalCheckpointManifest(evidence: readonly JournalEvidence[], 
     refs.push({ kind: type, id: String(event.entity.id), fingerprint: fingerprintOf(event) });
     if (type !== 'fill') entityKeys.push(key);
   }
+  // Účty s historií před K: když některý z nich v kole snímků chyběl a znovu
+  // obchoduje, okno by jeho lane začalo neznámé — kontrola pak K vrátí.
+  const accounts = new Set<string>();
+  for (const [key, event] of latest) if (key.startsWith('fill:') && (brokerTime(event) ?? event.receivedAt) < at
+    && event.entity.accountId != null) accounts.add(String(event.entity.accountId));
+  for (const id of accounts) refs.push({ kind: 'account', id });
   const retainedIds: string[] = [];
   const seenPositions = new Set<string>();
   for (const event of evidence) {
@@ -226,7 +272,8 @@ export interface JournalLateCheck {
  * neznámý záznam s časem před K, nebo nový záznam odkazující na zmrazený
  * objekt (pozdní fee, pár, ledger, report…). Totožné opakování je v pořádku.
  */
-export function journalLateEvidenceCheck(evidence: readonly JournalEvidence[], at: number): JournalLateCheck {
+export function journalLateEvidenceCheck(evidence: readonly JournalEvidence[], at: number,
+  flatAccounts: ReadonlySet<number> = new Set()): JournalLateCheck {
   const rows: JournalLateRow[] = [];
   let lateAt: number | null = null;
   const connectionId = evidence[0]?.connectionId;
@@ -244,6 +291,8 @@ export function journalLateEvidenceCheck(evidence: readonly JournalEvidence[], a
     if (type === 'fillpair') { reference('fill', row.buyFillId); reference('fill', row.sellFillId); }
     if (type === 'cashbalancelog') { reference('fillpair', row.fillPairId); reference('fill', row.fillId); }
     if (type === 'copylink' && row.leaderConnectionId === connectionId) reference('order', row.leaderOrderId);
+    // Fill účtu, který v kole snímků K chyběl, ale má historii před K.
+    if (type === 'fill' && row.accountId != null && !flatAccounts.has(Number(row.accountId))) reference('account', row.accountId);
     rows.push({ own: { kind: type, id: String(row.id), fingerprint: fingerprintOf(event) }, at: broker ?? event.receivedAt,
       beforeCheckpoint: broker != null && broker < at, references });
   }
@@ -266,6 +315,21 @@ export function journalLateQueries(check: JournalLateCheck): Array<{ kind: strin
   return [...seen.values()];
 }
 
+/**
+ * Opakovaný fill z jiného kanálu (REST vs stream) může nést jen část polí.
+ * Totožný = stejný typ události a každé přítomné pole stejné jako u zmrazeného.
+ */
+function sameObservedFields(live: string, frozen: string | null): boolean {
+  if (frozen == null) return false;
+  try {
+    const a = JSON.parse(live) as { eventType: string; entity: Record<string, unknown> };
+    const b = JSON.parse(frozen) as { eventType: string; entity: Record<string, unknown> };
+    return a.eventType === b.eventType && Object.entries(a.entity).every(([key, value]) => stable(value) === stable(b.entity[key]));
+  } catch {
+    return false;
+  }
+}
+
 export interface JournalLateEvidence {
   /** Nejstarší čas pozdní události bez vazby na zmrazený objekt (spojení, snímek, neznámý fill/pozice před K). */
   at: number | null;
@@ -283,7 +347,8 @@ export function journalLateEvidenceAt(check: JournalLateCheck,
   for (const row of check.rows) {
     const own = known.get(`${row.own.kind}:${row.own.id}`);
     if (own) {
-      if (row.own.fingerprint !== undefined && own.fingerprint !== row.own.fingerprint) lateEpoch(own.epoch);
+      if (row.own.fingerprint !== undefined && own.fingerprint !== row.own.fingerprint
+        && !(row.own.kind === 'fill' && sameObservedFields(row.own.fingerprint, own.fingerprint))) lateEpoch(own.epoch);
       continue;
     }
     const referenced = row.references.map(ref => known.get(`${ref.kind}:${ref.id}`)).filter(hit => hit != null);

@@ -42,7 +42,10 @@
     ],
     "functions": {
         "api/cron/journal-import.ts": {
-            "maxDuration": 60
+            "maxDuration": 300
+        },
+        "api/tradovate/oauth/journal-import.ts": {
+            "maxDuration": 300
         }
     }
 }

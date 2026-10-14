@@ -79,7 +79,7 @@ function liveAfterAdvance(events: readonly JournalEvidence[], before: number, ma
 
 function hitsFor(manifest: ReturnType<typeof journalCheckpointManifest>, live: readonly JournalEvidence[], at: number) {
   const refs = new Map(manifest.refs.map(ref => [`${ref.kind}:${ref.id}`, ref]));
-  const check = journalLateEvidenceCheck(live, at);
+  const check = journalLateEvidenceCheck(live, at, new Set([1, 2]));
   const hits = journalLateQueries(check).filter(query => refs.has(`${query.kind}:${query.id}`))
     .map(query => ({ ...query, fingerprint: refs.get(`${query.kind}:${query.id}`)!.fingerprint ?? null, epoch: 1 }));
   return journalLateEvidenceAt(check, hits);
@@ -144,6 +144,23 @@ describe('kontrolní bod živého deníku', () => {
     expect(late).not.toBeNull();
     // Buď vazba na zmrazený objekt (bod 1 se vrátí), nebo pozdní čas před K.
     expect(late!.epoch === 1 || (late!.at != null && late!.at < s.K)).toBe(true);
+  });
+
+  it('účet s historií, který v kole snímků K chyběl, znovu obchoduje → K se vrátí; jiný účet ne', () => {
+    const s = scenario();
+    const manifest = journalCheckpointManifest(s.events, s.K);
+    const before = s.events.length;
+    s.add('order', { id: 900, accountId: 2, contractId: 7, action: 'Buy', ordStatus: 'Filled', timestamp: iso(s.K + 1_500_000) }, s.K + 1_500_000);
+    s.add('fill', { id: 901, orderId: 900, accountId: 2, contractId: 7, action: 'Buy', qty: 1, price: 20_100, timestamp: iso(s.K + 1_500_000) }, s.K + 1_500_000);
+    const live = liveAfterAdvance(s.events, before, manifest);
+    const refs = new Map(manifest.refs.map(ref => [`${ref.kind}:${ref.id}`, ref]));
+    const late = (flat: number[]) => {
+      const check = journalLateEvidenceCheck(live, s.K, new Set(flat));
+      return journalLateEvidenceAt(check, journalLateQueries(check).filter(query => refs.has(`${query.kind}:${query.id}`))
+        .map(query => ({ ...query, fingerprint: refs.get(`${query.kind}:${query.id}`)!.fingerprint ?? null, epoch: 1 })));
+    };
+    expect(late([1])).toEqual({ at: null, epoch: 1 });
+    expect(late([1, 2])).toBeNull();
   });
 
   it('příkaz zadaný před K a vyplněný po něm: posun se odmítne (pracující příkaz / rozdíl)', () => {

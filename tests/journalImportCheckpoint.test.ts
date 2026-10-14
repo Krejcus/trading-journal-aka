@@ -33,7 +33,7 @@ describe('server import checkpoint trust boundary', () => {
     await expect(importJournalPositions(db, scope)).rejects.toThrow('full-import-required');
     const claim = rpc.mock.calls.find(([name]) => name === 'claim_journal_import_lease');
     const release = rpc.mock.calls.find(([name]) => name === 'release_journal_import_lease');
-    expect(claim?.[1]).toMatchObject({ p_user_id: scope.ownerId, p_connection_id: scope.connectionId, p_ttl_ms: 120_000 });
+    expect(claim?.[1]).toMatchObject({ p_user_id: scope.ownerId, p_connection_id: scope.connectionId, p_ttl_ms: 280_000 });
     expect(release?.[1]).toEqual({ p_user_id: scope.ownerId, p_connection_id: scope.connectionId, p_holder: (claim?.[1] as { p_holder: string }).p_holder });
     expect(rpc.mock.calls.map(([name]) => name).indexOf('release_journal_import_lease'))
       .toBeGreaterThan(rpc.mock.calls.map(([name]) => name).indexOf('claim_journal_import_lease'));

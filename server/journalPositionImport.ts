@@ -7,8 +7,7 @@ import type { JournalFeedScope } from '../lib/journalEvidenceFeed.js';
 import { persistStagedJournalPositions } from './journalStagedImport.js';
 import { prepareJournalInput } from './journalIncrementalInput.js';
 import { persistJournalUntakenOrders } from './journalUntakenOrders.js';
-import { stable } from '../lib/journalCheckpoint.js';
-import { advanceJournalCheckpoint, journalReopenTarget, markJournalEvaluated, readJournalCheckpoints, reopenJournalCheckpoint } from './journalCheckpointStore.js';
+import { advanceJournalCheckpoint, journalBindingIdentity, journalCheckpointsEnabled, journalReopenTarget, markJournalEvaluated, readJournalCheckpoints, reopenJournalCheckpoint } from './journalCheckpointStore.js';
 
 export interface JournalImportResult {
   accepted: boolean;
@@ -26,7 +25,8 @@ export interface JournalImportResult {
  * owner-scoped immutable evidence; do not trust prices or PnL in a request.
  * New source batches update durable derived input; the financial account set is
  * published only after that fixed source snapshot is fully processed. */
-export async function importJournalPositions(db: SupabaseClient, scope: JournalFeedScope): Promise<JournalImportResult> {
+export async function importJournalPositions(db: SupabaseClient, scope: JournalFeedScope,
+  options: { budgetMs?: number } = {}): Promise<JournalImportResult> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scope.connectionId)) throw new Error('invalid-journal-cursor');
   if (scope.environment !== 'demo') throw new Error('invalid-journal-environment');
   const { data: checkpoint, error: checkpointError } = await db.rpc('read_journal_import_checkpoint', {
@@ -56,8 +56,8 @@ export async function importJournalPositions(db: SupabaseClient, scope: JournalF
   if (leaseError) throw new Error('journal-lease-unavailable');
   if (acquired !== true) return { accepted: false, processing: true, through: 0, targetThrough: 0, confirmed: 0, pending: 0, unassigned: 0 };
   try {
-    // Rezerva před vypršením lease (120 s): posun bodu se jinak dokončí příště.
-    return await importWithLease(db, scope, Date.now() + JOURNAL_IMPORT_LEASE_MS - 30_000);
+    // Rozpočet: kratší z lease a limitu funkce volajícího (s rezervou).
+    return await importWithLease(db, scope, Date.now() + Math.min(JOURNAL_IMPORT_LEASE_MS, options.budgetMs ?? 240_000) - 30_000);
   } finally {
     await db.rpc('release_journal_import_lease', { p_user_id: scope.ownerId, p_connection_id: scope.connectionId, p_holder: holder })
       .then(() => undefined, () => undefined);
@@ -65,7 +65,7 @@ export async function importJournalPositions(db: SupabaseClient, scope: JournalF
 }
 
 /** Longest single import a holder may run before another importer may take over. */
-export const JOURNAL_IMPORT_LEASE_MS = 120_000;
+export const JOURNAL_IMPORT_LEASE_MS = 280_000;
 
 async function importWithLease(db: SupabaseClient, scope: JournalFeedScope, deadline: number): Promise<JournalImportResult> {
   const input=await prepareJournalInput(db,scope);
@@ -84,7 +84,7 @@ async function importWithLease(db: SupabaseClient, scope: JournalFeedScope, dead
   const state = await readJournalCheckpoints(db, scope);
   if (state.epoch !== input.checkpointEpoch) return processing();
   if (state.active) {
-    const target = stable(state.active.bindings) !== stable(bindings) ? 0
+    const target = journalBindingIdentity(state.active.bindings) !== journalBindingIdentity(bindings) ? 0
       : await journalReopenTarget(db, scope, events, state);
     if (target != null) {
       await reopenJournalCheckpoint(db, scope, target, state.epoch);
@@ -95,8 +95,11 @@ async function importWithLease(db: SupabaseClient, scope: JournalFeedScope, dead
   const projection = projectJournalAccounts(events, accounts, window);
   const positions = [...projection.ready.map(journalPositionWrite), ...projection.pending.map(journalPositionWrite)];
   const counts = { confirmed: projection.ready.length, pending: projection.pending.length, unassigned: projection.unassignedFillIds.length };
-  const hash = createHash('sha256').update(JSON.stringify({ epoch: state.epoch, positions, bindings, counts })).digest('hex');
-  const receipt = { version: 2, accounts: bindings, ...counts, hash };
+  // Den v otisku: aspoň jeden plný zápis denně (párování se starými záznamy
+  // kopírky běží jen v persistu a může záviset na jiném připojení).
+  const hash = createHash('sha256').update(JSON.stringify({ epoch: state.epoch, positions, bindings, counts,
+    day: new Date().toISOString().slice(0, 10) })).digest('hex');
+  const receipt = { version: 2, accounts: bindings, ...counts, hash, checkpointEpoch: state.epoch };
   const cas = { checkpointEpoch: state.epoch, inputGeneration: input.generation };
   const { data: head } = await db.from('tradovate_journal_projection_heads').select('revision,completed_revision,import_receipt')
     .eq('user_id', scope.ownerId).eq('connection_id', scope.connectionId).maybeSingle();
@@ -131,8 +134,8 @@ async function importWithLease(db: SupabaseClient, scope: JournalFeedScope, dead
   }
   await persistJournalUntakenOrders(db, scope, projection.untaken);
   // Posun bodu jen nad právě zapsaným (nebo nezměněným) stavem a v rozpočtu.
-  try {
-    await advanceJournalCheckpoint(db, scope, { events, state, bindings, deadline,
+  if (journalCheckpointsEnabled()) try {
+    await advanceJournalCheckpoint(db, scope, { events, state, bindings, deadline, inputGeneration: input.generation,
       reference: { episodes: projection.episodes.episodes, untakenOrders: projection.episodes.untakenOrders } });
   } catch (reason) {
     console.warn('[journal-import] checkpoint not advanced', reason instanceof Error ? reason.message : String(reason));

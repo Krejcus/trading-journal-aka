@@ -11,6 +11,7 @@ import { journalAccountsFixture } from '../tests/fixtures/journalAccounts';
 import { positionSnapshotObservations } from '../lib/journalPositionSnapshot';
 import { journalObservation, type JournalEvidence as LiveEvidence } from '../lib/tradovateJournalEvidence';
 import { importJournalPositions } from '../server/journalPositionImport';
+import { verifyJournalConnection } from '../server/journalVerification';
 import { compactJournalInputEntities } from '../lib/journalInputCompaction';
 import { prepareJournalInput } from '../server/journalIncrementalInput';
 import { projectJournalAccounts } from '../lib/journalAccountProjection';
@@ -107,10 +108,13 @@ try {
           read_journal_checkpoints:['p_user_id','p_connection_id'],
           journal_archived_ref_hits:['p_user_id','p_connection_id','p_refs'],
           begin_journal_checkpoint:['p_user_id','p_connection_id','p_expected_epoch','p_at_ms','p_flat_accounts','p_bindings'],
-          archive_journal_checkpoint_chunk:['p_user_id','p_connection_id','p_epoch','p_entity_keys','p_retained_ids','p_refs'],
-          activate_journal_checkpoint:['p_user_id','p_connection_id','p_epoch','p_position_ids'],
+          archive_journal_checkpoint_chunk:['p_user_id','p_connection_id','p_epoch','p_entity_keys','p_retained_ids','p_refs','p_input_generation'],
+          activate_journal_checkpoint:['p_user_id','p_connection_id','p_epoch','p_position_ids','p_input_generation'],
+          cleanup_journal_checkpoints:['p_user_id','p_connection_id','p_expected_epoch','p_limit'],
           reopen_journal_checkpoint:['p_user_id','p_connection_id','p_to_epoch','p_expected_epoch'],
           mark_journal_projection_evaluated:['p_user_id','p_connection_id','p_revision','p_checkpoint_epoch','p_input_generation'],
+          read_journal_input_all:['p_user_id','p_connection_id','p_generation','p_after','p_limit'],
+          mark_journal_verified:['p_user_id','p_connection_id','p_checkpoint_epoch'],
           write_journal_position_stage: ['p_user_id','p_connection_id','p_run_id','p_chunk_index','p_positions'],
           publish_journal_position_stage: ['p_user_id','p_connection_id','p_run_id'],
         };
@@ -135,13 +139,14 @@ try {
           .catch(error=>{ console.error('Local persist failed:',error.message); throw error; });
         return new Response(JSON.stringify(result.rows[0].ack), { headers: { 'Content-Type': 'application/json' } });
       }
-      assert.ok(['trades', 'accounts', 'tradovate_journal_evidence', 'tradovate_oauth_connections', 'tradovate_journal_positions', 'tradovate_journal_projection_heads','journal_trade_snapshots'].includes(table));
+      assert.ok(['trades', 'accounts', 'tradovate_journal_evidence', 'tradovate_oauth_connections', 'tradovate_journal_positions', 'tradovate_journal_projection_heads','journal_trade_snapshots','tradovate_journal_input_heads'].includes(table));
       if (table === 'tradovate_journal_evidence') evidenceReads++;
       const values: string[] = []; const conditions: string[] = [];
       for (const [key, value] of url.searchParams) {
         if (['select', 'order', 'limit'].includes(key)) continue;
-        assert.ok(['id', 'user_id', 'connection_id', 'environment', 'ingest_id', 'meta', 'trade_id','page_key'].includes(key));
+        assert.ok(['id', 'user_id', 'connection_id', 'environment', 'ingest_id', 'meta', 'trade_id','page_key','frozen_epoch','position_id'].includes(key));
         const separator = value.indexOf('.');
+        if (value === 'not.is.null') { conditions.push(`${key} is not null`); continue; }
         if (value.startsWith('in.')) {
           const ids = value.slice(4, -1).split(',');
           for (const id of ids) { assert.match(id, /^[0-9a-f-]+$/); values.push(id); }
@@ -152,10 +157,11 @@ try {
         assert.ok(operator); values.push(value.slice(separator + 1)); conditions.push(`${key} ${operator} $${values.length}${operator === '@>' ? '::jsonb' : ''}`);
       }
       const columns = url.searchParams.get('select'); assert.ok(['*', 'id', 'id,meta', 'ingest_id,evidence', 'connection_id,revision,completed_revision,generation', 'revision,completed_revision,import_receipt',
+        'generation,through,target_through,checkpoint_epoch', 'position_id,status,pending_reason,facts,history,frozen_epoch',
         'trade_id,journal_account_id,status,facts,connection_id,external_account_id,revision',
         'trade_id,journal_account_id,status,facts,connection_id,external_account_id,revision,history',
         'page_key,user_id,trade_id,journal_account_id,snapshot_id,episode_id,kind,at,storage_path'].includes(columns!));
-      const order = url.searchParams.get('order'); assert.ok(order == null || ['ingest_id.asc', 'ingest_id.desc', 'connection_id.asc','page_key.asc'].includes(order));
+      const order = url.searchParams.get('order'); assert.ok(order == null || ['ingest_id.asc', 'ingest_id.desc', 'connection_id.asc','page_key.asc','position_id.asc'].includes(order));
       const limit = Number(url.searchParams.get('limit') ?? 1000); assert.ok(Number.isInteger(limit) && limit <= 1000);
       const result = await db.query(`select ${columns} from public.${table} where ${conditions.join(' and ')}${order ? ` order by ${order.split('.')[0]} ${order.endsWith('desc') ? 'desc' : 'asc'}` : ''} limit ${limit}`, values);
       const single = new Headers(init?.headers).get('Accept')?.includes('vnd.pgrst.object');
@@ -578,6 +584,7 @@ try {
     // Živý deník (14. 10. 2026): kontrolní bod po obchodech, zmrazení,
     // nový obchod po bodu, pozdní poplatek → návrat bodu, pojistka proti
     // staršímu nasazení s plnou projekcí.
+    process.env.JOURNAL_CHECKPOINTS='on';
     const liveConnection='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', liveDevice='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const liveScope={ ownerId: owner, connectionId: liveConnection, environment: 'demo' as const };
     const fixture=journalAccountsFixture(liveConnection,3,true);
@@ -594,7 +601,10 @@ try {
     const appendLive=(rows:LiveEvidence[])=>db.query('select public.append_tradovate_journal_evidence($1,$2,$3,$4::jsonb)',[owner,liveConnection,liveDevice,JSON.stringify(rows)]);
     const K=5_000;
     const capture=positionSnapshotObservations('k',[{ id:1 },{ id:2 },{ id:3 }],[],K-200,K).map(row=>liveEvent(row.entityType,row.entity,row.receivedAt,'snapshot'));
-    await appendLive([...fixture.events,...capture]);
+    // Příkazy k fillům (produkční data je mají vždy; bez nich se bod neposune).
+    const orders=fixture.events.filter(e=>e.entityType==='fill').map(e=>liveEvent('order',{ id:Number(e.entity.orderId), accountId:Number(e.entity.accountId),
+      contractId:1, action:String(e.entity.action), ordStatus:'Filled', timestamp:String(e.entity.timestamp) },e.receivedAt));
+    await appendLive([...fixture.events,...orders,...capture]);
     const imported=await completeImport(liveScope);
     assert.equal(imported.confirmed+imported.pending>=0,true);
     const points=(await db.query('select public.read_journal_checkpoints($1,$2) as data',[owner,liveConnection])).rows[0].data;
@@ -610,6 +620,8 @@ try {
       [owner,liveConnection,Number((await db.query('select max(ingest_id) m from public.tradovate_journal_evidence where connection_id=$1',[liveConnection])).rows[0].m),'[]']),/journal-import-upgrade-required/);
     // Nový obchod po K: zapíše se jen okno, zmrazené obchody zůstanou.
     const after=[
+      liveEvent('order',{ id:901, accountId:1, contractId:1, action:'Buy', ordStatus:'Filled', timestamp:new Date(6_000).toISOString() },6_000),
+      liveEvent('order',{ id:902, accountId:1, contractId:1, action:'Sell', ordStatus:'Filled', timestamp:new Date(7_000).toISOString() },7_000),
       liveEvent('fill',{ id:901, orderId:901, accountId:1, contractId:1, action:'Buy', price:20_100, qty:1, timestamp:new Date(6_000).toISOString() },6_000),
       liveEvent('fill',{ id:902, orderId:902, accountId:1, contractId:1, action:'Sell', price:20_110, qty:1, timestamp:new Date(7_000).toISOString() },7_000),
       liveEvent('fillfee',{ id:901, commission:0.5, commissionCurrencyId:1 },7_100),
@@ -632,6 +644,26 @@ try {
     const corrected=(await db.query('select t.pnl from public.trades t where t.id=$1',[frozenTrade.id])).rows[0];
     assert.notEqual(Number(corrected.pnl),Number(frozenTrade.pnl));
     assert.equal((await db.query("select count(*)::int as n from public.tradovate_journal_positions where connection_id=$1 and status='invalidated'",[liveConnection])).rows[0].n,0);
-    console.log('PASS: live journal checkpoint — freeze after a verified flat round, window-only writes for a new trade, intact frozen trades and revisions, late fee reopens and corrects PnL, old full-projection deployments fenced.');
+    // Po znovuotevření se zbytky zrušeného bodu uklidí po dávkách a bod se
+    // znovu posune (zmrazí se opravený stav).
+    const reopened=(await db.query('select public.read_journal_checkpoints($1,$2) as data',[owner,liveConnection])).rows[0].data;
+    assert.ok(reopened.epoch>=1);
+    assert.equal(reopened.checkpoints.filter((c:any)=>c.status==='active' && c.epoch===reopened.epoch).length,1);
+    assert.equal(Number((await db.query('select t.pnl from public.trades t where t.id=$1',[frozenTrade.id])).rows[0].pnl),Number(corrected.pnl));
+    // Změna popisku účtu (firma) bod nevrací; identita účtu ano.
+    const epochBefore=reopened.epoch;
+    await db.query("update public.accounts set meta=jsonb_set(meta,'{oauth,firm}','\"Lucid\"') where id=$1",[liveAccounts[0].id]);
+    await completeImport(liveScope);
+    assert.equal((await db.query('select public.read_journal_checkpoints($1,$2) as data',[owner,liveConnection])).rows[0].data.epoch,epochBefore);
+    // Denní plná kontrola: shoda; pak simulovaná nezachycená změna → návrat bodu.
+    const firstCheck=await verifyJournalConnection(localApi, liveScope, Date.now() + 60_000);
+    assert.equal(firstCheck.state, 'verified', JSON.stringify(firstCheck));
+    await db.query("update public.tradovate_journal_positions set facts=jsonb_set(facts,'{pnl}','12345') where connection_id=$1 and frozen_epoch is not null and external_account_id=3",[liveConnection]);
+    const verified=await verifyJournalConnection(localApi, liveScope, Date.now() + 60_000);
+    assert.equal(verified.state,'reopened'); assert.equal(verified.mismatches,1);
+    await completeImport(liveScope);
+    assert.notEqual(Number((await db.query("select t.pnl from public.trades t join public.tradovate_journal_positions j on j.trade_id=t.id where j.connection_id=$1 and j.external_account_id=3",[liveConnection])).rows[0].pnl),12345);
+    process.env.JOURNAL_CHECKPOINTS='off';
+    console.log('PASS: live journal checkpoint — freeze after a verified flat round, window-only writes for a new trade, intact frozen trades and revisions, late fee reopens and corrects PnL, batched cleanup and re-advance, label-only binding change keeps K, daily full verification detects a divergent frozen trade and reopens, old full-projection deployments fenced.');
   }
 } finally { await db.close(); }
