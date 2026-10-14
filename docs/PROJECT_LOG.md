@@ -262,7 +262,22 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-13 večer — Deník dne: světlý režim a méně nahňácané rozložení (Claude, lokálně, NEnasazeno)
+### 2026-10-14 — Zadání: celoobrazovkový graf dne na telefonu s kreslením (Claude + Filip)
+- Nasazeno ráno: `685e5af5` (světlý režim deníku, jeden graf, levý sloupec od 1280 px, slučování
+  živých svíček) na web i do iPhonu (čistá reinstalace z `~/alphatrade-build/ios-dd`).
+- Filip: na telefonu je grafu málo, chce ho zvětšit na celou obrazovku a kreslit zóny/poznámky
+  jako v TradingView, okolí nechat. Prošli jsme 4 reálné obrazovky TradingView na jeho iPhonu
+  (graf, sheet Drawings, vybraná kresba s plovoucí lištou, otočení na šířku) přes
+  `pymobiledevice3 developer dvt screenshot`.
+- Zadání v `docs/DAY_CHART_PHONE_FULLSCREEN.md`: fáze 1 celá obrazovka + gesta + poznámky
+  (nová metoda pluginu na skrytí nativního `UITabBar`), prototyp zóny prstem jako brána,
+  fáze 2 tři nástroje (zóna, úroveň, trendline) s magnetem a synchronizací kreseb přes novou
+  tabulku `day_chart_drawings`. Zjištěno: kresby dne se dnes ukládají jen do `localStorage`
+  per zařízení a per timeframe (`drawingScope || timeframe`), takže bez cloudové tabulky
+  a `drawingScope="day"` se telefon a Mac neuvidí. Dotykové kreslení v CandleKit zatím
+  nikdo netestoval. Nic z toho zatím nestavíme.
+
+### 2026-10-13 večer — Deník dne: světlý režim a méně nahňácané rozložení (Claude, nasazeno 14. 10. ráno)
 - Filip: „je to docela nahňácané a ve světlém režimu to není úplně hezké“. Příčiny: (1) komponenty
   deníku měly ~95 pevných barev typu „světlý text na tmavém“ (indigo-200, amber-200, …) a tmavé
   tónované plochy → ve světlém režimu nečitelné chipy, tlačítka Připravit/Uzavřít, žurnál, Plán vs.
