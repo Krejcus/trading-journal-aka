@@ -1,5 +1,5 @@
 import type { Account } from '../types.js';
-import { buildJournalPositionEpisodes, type JournalPositionEpisode } from './journalPositionEpisodes.js';
+import { buildJournalPositionEpisodes, type JournalPositionEpisode, type JournalProjectionWindow } from './journalPositionEpisodes.js';
 import type { JournalEvidence } from './tradovateJournalEvidence.js';
 
 export interface JournalAccountPosition extends JournalPositionEpisode { journalAccountId: string }
@@ -10,8 +10,9 @@ export interface PendingJournalPosition {
 }
 
 /** Account names, current leader and configured multipliers are never identity. */
-export function projectJournalAccounts(events: readonly JournalEvidence[], accounts: readonly Pick<Account, 'id' | 'oauth'>[]) {
-  const projection = buildJournalPositionEpisodes(events);
+export function projectJournalAccounts(events: readonly JournalEvidence[], accounts: readonly Pick<Account, 'id' | 'oauth'>[],
+  window?: JournalProjectionWindow) {
+  const projection = buildJournalPositionEpisodes(events, window);
   const ready: JournalAccountPosition[] = [];
   const pending: PendingJournalPosition[] = [];
   for (const position of projection.episodes) {
@@ -33,5 +34,5 @@ export function projectJournalAccounts(events: readonly JournalEvidence[], accou
       && account.oauth.externalAccountId === String(order.accountId));
     return matches.length === 1 ? [{ order, journalAccountId: matches[0].id }] : [];
   });
-  return { ready, pending, untaken, unassignedFillIds: projection.unassignedFillIds, issues: projection.issues };
+  return { ready, pending, untaken, unassignedFillIds: projection.unassignedFillIds, issues: projection.issues, episodes: projection };
 }

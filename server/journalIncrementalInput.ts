@@ -62,9 +62,12 @@ export async function prepareJournalInput(db:SupabaseClient,scope:JournalFeedSco
       const retained:JournalEvidence[]=[],entities:JournalEvidence[]=[];
       let after='',bytes=0;
       const watermark=context.watermark==null ? null : readStoredJournalEvidence(context.watermark,scope);
+      let checkpointEpoch:number|null=null;
       for(;;) {
         const data=await invoke('read_journal_input_snapshot_latest',{ p_generation:context.generation,p_after:after,p_limit:JOURNAL_SNAPSHOT_PAGE_ROWS });
-        if (data?.generation!==context.generation || data.through!==through || !Array.isArray(data.rows) || data.rows.length>JOURNAL_SNAPSHOT_PAGE_ROWS) throw new Error('journal-input-snapshot-invalid');
+        if (data?.generation!==context.generation || data.through!==through || !Array.isArray(data.rows) || data.rows.length>JOURNAL_SNAPSHOT_PAGE_ROWS
+          || !integer(data.checkpointEpoch) || (checkpointEpoch!=null && data.checkpointEpoch!==checkpointEpoch)) throw new Error('journal-input-snapshot-invalid');
+        checkpointEpoch=data.checkpointEpoch;
         if (!data.rows.length) break;
         bytes+=Buffer.byteLength(JSON.stringify(data.rows));
         // 13. 10. 2026: 96 MB → 160 MB of row JSON (snapshot without orderedThrough
@@ -84,7 +87,8 @@ export async function prepareJournalInput(db:SupabaseClient,scope:JournalFeedSco
           }
         }
       }
-      return { ready:true as const,through,targetThrough,events:journalCompactedEvidence(retained,entities.map(latest=>({ latest })),watermark) };
+      return { ready:true as const,through,targetThrough,generation:context.generation as number,checkpointEpoch:checkpointEpoch ?? 0,
+        events:journalCompactedEvidence(retained,entities.map(latest=>({ latest })),watermark) };
     }
     if (!page.rows.length) throw new Error('journal-input-context-invalid');
     const events=page.rows.map(row=>row.event);

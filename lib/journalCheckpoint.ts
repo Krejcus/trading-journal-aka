@@ -60,7 +60,8 @@ const comparable = (episode: JournalPositionEpisode): Comparable => {
   const { issues: _issues, complete: _complete, ...history } = episode.history;
   return { ...episode, history };
 };
-const stable = (value: unknown): string => JSON.stringify(value, (_key, item) => item instanceof Set ? [...item].sort()
+/** JSON s seřazenými klíči (jsonb z databáze klíče přeřazuje). */
+export const stable = (value: unknown): string => JSON.stringify(value, (_key, item) => item instanceof Set ? [...item].sort()
   : item && typeof item === 'object' && !Array.isArray(item)
     ? Object.fromEntries(Object.entries(item as Record<string, unknown>).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)))
     : item);
@@ -265,18 +266,29 @@ export function journalLateQueries(check: JournalLateCheck): Array<{ kind: strin
   return [...seen.values()];
 }
 
-/** Čas nejstarší pozdní evidence (→ K se vrátí na bod před ní), nebo null. */
-export function journalLateEvidenceAt(check: JournalLateCheck, hits: ReadonlyArray<{ kind: string; id: string; fingerprint: string | null }>): number | null {
-  const known = new Map(hits.map(hit => [`${hit.kind}:${hit.id}`, hit.fingerprint]));
-  let lateAt = check.lateAt;
-  const late = (time: number) => { lateAt = lateAt == null ? time : Math.min(lateAt, time); };
+export interface JournalLateEvidence {
+  /** Nejstarší čas pozdní události bez vazby na zmrazený objekt (spojení, snímek, neznámý fill/pozice před K). */
+  at: number | null;
+  /** Nejstarší kontrolní bod, který zmrazil změněný nebo nově odkazovaný objekt. */
+  epoch: number | null;
+}
+
+/** Pozdní evidence (→ K se vrátí na bod před ní), nebo null. */
+export function journalLateEvidenceAt(check: JournalLateCheck,
+  hits: ReadonlyArray<{ kind: string; id: string; fingerprint: string | null; epoch?: number }>): JournalLateEvidence | null {
+  const known = new Map(hits.map(hit => [`${hit.kind}:${hit.id}`, hit]));
+  let at = check.lateAt, epoch: number | null = null;
+  const lateAt = (time: number) => { at = at == null ? time : Math.min(at, time); };
+  const lateEpoch = (value: number | undefined) => { const e = value ?? 0; epoch = epoch == null ? e : Math.min(epoch, e); };
   for (const row of check.rows) {
-    const key = `${row.own.kind}:${row.own.id}`;
-    if (known.has(key)) {
-      if (row.own.fingerprint !== undefined && known.get(key) !== row.own.fingerprint) late(row.at);
+    const own = known.get(`${row.own.kind}:${row.own.id}`);
+    if (own) {
+      if (row.own.fingerprint !== undefined && own.fingerprint !== row.own.fingerprint) lateEpoch(own.epoch);
       continue;
     }
-    if (row.beforeCheckpoint || row.references.some(ref => known.has(`${ref.kind}:${ref.id}`))) late(row.at);
+    const referenced = row.references.map(ref => known.get(`${ref.kind}:${ref.id}`)).filter(hit => hit != null);
+    if (referenced.length) lateEpoch(Math.min(...referenced.map(hit => hit!.epoch ?? 0)));
+    else if (row.beforeCheckpoint) lateAt(row.at);
   }
-  return lateAt;
+  return at == null && epoch == null ? null : { at, epoch };
 }

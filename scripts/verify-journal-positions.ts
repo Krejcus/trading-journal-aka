@@ -8,6 +8,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { journalAccountsFixture } from '../tests/fixtures/journalAccounts';
+import { positionSnapshotObservations } from '../lib/journalPositionSnapshot';
+import { journalObservation, type JournalEvidence as LiveEvidence } from '../lib/tradovateJournalEvidence';
 import { importJournalPositions } from '../server/journalPositionImport';
 import { compactJournalInputEntities } from '../lib/journalInputCompaction';
 import { prepareJournalInput } from '../server/journalIncrementalInput';
@@ -67,7 +69,7 @@ try {
     const end = privacyMigration.indexOf('$$;', privacyMigration.indexOf('as $$', start) + 5);
     assert.ok(start >= 0 && end > start); await db.exec(privacyMigration.slice(start, end + 3));
   }
-  for (const filename of ['20260912100450_tradovate_journal_evidence.sql', '20260912115949_journal_trade_projection.sql', '20260912122352_journal_position_persistence.sql', '20260912162137_journal_incremental_input.sql', '20261013070000_journal_snapshot_latest_only.sql', '20260917153000_journal_input_snapshot_indexed_paging.sql', '20260917154500_journal_input_changed_no_retry.sql', '20260917190000_journal_import_lease.sql', '20260912164531_journal_snapshot_links.sql', '20260912190422_journal_confirmed_root_projection.sql']) {
+  for (const filename of ['20260912100450_tradovate_journal_evidence.sql', '20260912115949_journal_trade_projection.sql', '20260912122352_journal_position_persistence.sql', '20260912162137_journal_incremental_input.sql', '20261013070000_journal_snapshot_latest_only.sql', '20260917153000_journal_input_snapshot_indexed_paging.sql', '20260917154500_journal_input_changed_no_retry.sql', '20260917190000_journal_import_lease.sql', '20260912164531_journal_snapshot_links.sql', '20260912190422_journal_confirmed_root_projection.sql', '20261014120000_journal_live_checkpoints.sql']) {
     try { await db.exec(await readFile(resolve(root, 'supabase/migrations', filename), 'utf8')); }
     catch (error) { const sql = error as { message: string; position?: string }; throw new Error(`${filename}: ${sql.message} at ${sql.position}`, { cause: error }); }
   }
@@ -76,7 +78,8 @@ try {
   await db.exec('set role service_role');
   for (const account of accounts) await db.query('insert into public.accounts values ($1, $2, $3)', [account.id, owner, JSON.stringify({ oauth: account.oauth })]);
   const append = (rows: typeof events) => db.query('select public.append_tradovate_journal_evidence($1,$2,$3,$4::jsonb)', [owner, connection, device, JSON.stringify(rows)]);
-  const persist = (revision: number | null, rows: unknown[], userId = owner, receipt: unknown = null) => db.query('select public.persist_tradovate_journal_positions($1,$2,$3,$4::jsonb,$5::jsonb) as ack', [userId, connection, revision, JSON.stringify(rows), receipt == null ? null : JSON.stringify(receipt)]);
+  const persist = (revision: number | null, rows: unknown[], userId = owner, receipt: unknown = null, epoch: number | null = null, generation: number | null = null, connectionId = connection) =>
+    db.query('select public.persist_tradovate_journal_positions($1,$2,$3,$4::jsonb,$5::jsonb,null,$6,$7) as ack', [userId, connectionId, revision, JSON.stringify(rows), receipt == null ? null : JSON.stringify(receipt), epoch, generation]);
   const count = async () => (await db.query('select count(*)::int as count from public.trades')).rows[0].count;
   let writes = 0; let evidenceReads = 0;
   let interruptStage = false;
@@ -100,10 +103,18 @@ try {
           read_journal_input_snapshot_latest:['p_user_id','p_connection_id','p_generation','p_after','p_limit'],
           claim_journal_import_lease:['p_user_id','p_connection_id','p_holder','p_ttl_ms'],
           release_journal_import_lease:['p_user_id','p_connection_id','p_holder'],
-          begin_journal_position_stage: ['p_user_id','p_connection_id','p_revision','p_run_key','p_chunk_count','p_position_count','p_import_receipt'],
+          begin_journal_position_stage: ['p_user_id','p_connection_id','p_revision','p_run_key','p_chunk_count','p_position_count','p_import_receipt','p_checkpoint_epoch','p_input_generation'],
+          read_journal_checkpoints:['p_user_id','p_connection_id'],
+          journal_archived_ref_hits:['p_user_id','p_connection_id','p_refs'],
+          begin_journal_checkpoint:['p_user_id','p_connection_id','p_expected_epoch','p_at_ms','p_flat_accounts','p_bindings'],
+          archive_journal_checkpoint_chunk:['p_user_id','p_connection_id','p_epoch','p_entity_keys','p_retained_ids','p_refs'],
+          activate_journal_checkpoint:['p_user_id','p_connection_id','p_epoch','p_position_ids'],
+          reopen_journal_checkpoint:['p_user_id','p_connection_id','p_to_epoch','p_expected_epoch'],
+          mark_journal_projection_evaluated:['p_user_id','p_connection_id','p_revision','p_checkpoint_epoch','p_input_generation'],
           write_journal_position_stage: ['p_user_id','p_connection_id','p_run_id','p_chunk_index','p_positions'],
           publish_journal_position_stage: ['p_user_id','p_connection_id','p_run_id'],
         };
+        const arrayArguments=new Set(['p_flat_accounts','p_entity_keys','p_retained_ids','p_position_ids']);
         if (stageArguments[table]) {
           if (table==='write_journal_position_stage') {
             stagedChunkWrites.push(args.p_chunk_index);
@@ -114,13 +125,14 @@ try {
           }
           const keys=stageArguments[table];
           const result=await db.query(`select public.${table}(${keys.map((_key,i)=>`$${i+1}`).join(',')}) as ack`,
-            keys.map(key=>typeof args[key]==='object' ? JSON.stringify(args[key]) : args[key])).catch(error=>{ console.error('Local RPC failed:',table,error.message); throw error; });
+            keys.map(key=>arrayArguments.has(key) ? args[key] : typeof args[key]==='object' && args[key]!==null ? JSON.stringify(args[key]) : args[key])).catch(error=>{ console.error('Local RPC failed:',table,error.message); throw error; });
           if (table==='read_journal_input_batch' || table==='read_journal_input_entity_history') evidenceReads+=result.rows[0].ack.rows.length;
           return Response.json(result.rows[0].ack);
         }
         assert.equal(table, 'persist_tradovate_journal_positions');
         writes++;
-        const result = await persist(args.p_revision, args.p_positions, args.p_user_id, args.p_import_receipt);
+        const result = await persist(args.p_revision, args.p_positions, args.p_user_id, args.p_import_receipt, args.p_checkpoint_epoch ?? null, args.p_input_generation ?? null, args.p_connection_id ?? connection)
+          .catch(error=>{ console.error('Local persist failed:',error.message); throw error; });
         return new Response(JSON.stringify(result.rows[0].ack), { headers: { 'Content-Type': 'application/json' } });
       }
       assert.ok(['trades', 'accounts', 'tradovate_journal_evidence', 'tradovate_oauth_connections', 'tradovate_journal_positions', 'tradovate_journal_projection_heads','journal_trade_snapshots'].includes(table));
@@ -139,14 +151,15 @@ try {
         const operator = { eq: '=', gt: '>', lte: '<=', cs: '@>' }[value.slice(0, separator)];
         assert.ok(operator); values.push(value.slice(separator + 1)); conditions.push(`${key} ${operator} $${values.length}${operator === '@>' ? '::jsonb' : ''}`);
       }
-      const columns = url.searchParams.get('select'); assert.ok(['*', 'id', 'id,meta', 'ingest_id,evidence', 'connection_id,revision,completed_revision,generation',
+      const columns = url.searchParams.get('select'); assert.ok(['*', 'id', 'id,meta', 'ingest_id,evidence', 'connection_id,revision,completed_revision,generation', 'revision,completed_revision,import_receipt',
         'trade_id,journal_account_id,status,facts,connection_id,external_account_id,revision',
         'trade_id,journal_account_id,status,facts,connection_id,external_account_id,revision,history',
         'page_key,user_id,trade_id,journal_account_id,snapshot_id,episode_id,kind,at,storage_path'].includes(columns!));
       const order = url.searchParams.get('order'); assert.ok(order == null || ['ingest_id.asc', 'ingest_id.desc', 'connection_id.asc','page_key.asc'].includes(order));
       const limit = Number(url.searchParams.get('limit') ?? 1000); assert.ok(Number.isInteger(limit) && limit <= 1000);
       const result = await db.query(`select ${columns} from public.${table} where ${conditions.join(' and ')}${order ? ` order by ${order.split('.')[0]} ${order.endsWith('desc') ? 'desc' : 'asc'}` : ''} limit ${limit}`, values);
-      return new Response(JSON.stringify(result.rows), { headers: { 'Content-Type': 'application/json' } });
+      const single = new Headers(init?.headers).get('Accept')?.includes('vnd.pgrst.object');
+      return new Response(JSON.stringify(single ? result.rows[0] ?? null : result.rows), { headers: { 'Content-Type': 'application/json' } });
     } },
   });
   const scope = { ownerId: owner, connectionId: connection, environment: 'demo' as const };
@@ -561,4 +574,64 @@ try {
   assert.deepEqual((await db.query('select public.commit_journal_input_batch($1,$2,$3,$4,$5,$6::jsonb) as ack',
     [owner,largeConnection,inputHead.generation,inputHead.through,inputResult.through,'[]'])).rows[0].ack,{accepted:false,stale:true});
   console.log('PASS: durable input rollback, exact cursor/CAS, owner and authenticated-role isolation, bounded continuation, one-row source correction and affected-entity-only replay with stale snapshot rejection.');
+  {
+    // Živý deník (14. 10. 2026): kontrolní bod po obchodech, zmrazení,
+    // nový obchod po bodu, pozdní poplatek → návrat bodu, pojistka proti
+    // staršímu nasazení s plnou projekcí.
+    const liveConnection='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', liveDevice='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const liveScope={ ownerId: owner, connectionId: liveConnection, environment: 'demo' as const };
+    const fixture=journalAccountsFixture(liveConnection,3,true);
+    await db.query('insert into public.tradovate_oauth_connections values($1,$2,$3)',[liveConnection,owner,'demo']);
+    await db.query('insert into public.tradovate_copier_devices values($1,$2,$3,$4,null)',[liveDevice,owner,liveConnection,'demo']);
+    const liveAccounts=fixture.accounts.map((a,i)=>({ ...a,id:`ce4990b0-0c8c-40e0-a790-5${String(i+1).padStart(11,'0')}` }));
+    for (const a of liveAccounts) await db.query('insert into public.accounts values($1,$2,$3)',[a.id,owner,JSON.stringify({ oauth:a.oauth })]);
+    let liveSequence=10_000;
+    const liveEvent=(entityType:string,entity:Record<string,string|number|boolean|null>,at:number,source:'stream'|'snapshot'|'transport'='stream'):LiveEvidence=>{
+      liveSequence++;
+      return { ...journalObservation(entityType,entity,source,'Created',at)!, connectionId:liveConnection, environment:'demo',
+        sequence:liveSequence, id:'c'+liveSequence.toString(16).padStart(63,'0'), sessionId:'55555555-5555-4555-8555-555555555555' };
+    };
+    const appendLive=(rows:LiveEvidence[])=>db.query('select public.append_tradovate_journal_evidence($1,$2,$3,$4::jsonb)',[owner,liveConnection,liveDevice,JSON.stringify(rows)]);
+    const K=5_000;
+    const capture=positionSnapshotObservations('k',[{ id:1 },{ id:2 },{ id:3 }],[],K-200,K).map(row=>liveEvent(row.entityType,row.entity,row.receivedAt,'snapshot'));
+    await appendLive([...fixture.events,...capture]);
+    const imported=await completeImport(liveScope);
+    assert.equal(imported.confirmed+imported.pending>=0,true);
+    const points=(await db.query('select public.read_journal_checkpoints($1,$2) as data',[owner,liveConnection])).rows[0].data;
+    assert.equal(points.epoch,1); assert.equal(points.checkpoints[0].at,K); assert.equal(points.checkpoints[0].status,'active');
+    const frozen=async()=>(await db.query('select count(*)::int as n from public.tradovate_journal_positions where connection_id=$1 and frozen_epoch is not null',[liveConnection])).rows[0].n;
+    const liveTrades=async()=>(await db.query("select t.id,t.pnl from public.trades t join public.tradovate_journal_positions j on j.trade_id=t.id where j.connection_id=$1 order by t.id",[liveConnection])).rows;
+    assert.equal(await frozen(),3);
+    const tradesAtK=await liveTrades();
+    assert.equal(tradesAtK.length,3);
+    assert.ok((await db.query('select count(*)::int as n from public.tradovate_journal_input_retained where connection_id=$1 and archived_epoch=1',[liveConnection])).rows[0].n>0);
+    // Starší nasazení s plnou projekcí nesmí po zmrazení zapisovat.
+    await assert.rejects(db.query('select public.persist_tradovate_journal_positions($1,$2,$3,$4::jsonb,null) as ack',
+      [owner,liveConnection,Number((await db.query('select max(ingest_id) m from public.tradovate_journal_evidence where connection_id=$1',[liveConnection])).rows[0].m),'[]']),/journal-import-upgrade-required/);
+    // Nový obchod po K: zapíše se jen okno, zmrazené obchody zůstanou.
+    const after=[
+      liveEvent('fill',{ id:901, orderId:901, accountId:1, contractId:1, action:'Buy', price:20_100, qty:1, timestamp:new Date(6_000).toISOString() },6_000),
+      liveEvent('fill',{ id:902, orderId:902, accountId:1, contractId:1, action:'Sell', price:20_110, qty:1, timestamp:new Date(7_000).toISOString() },7_000),
+      liveEvent('fillfee',{ id:901, commission:0.5, commissionCurrencyId:1 },7_100),
+      liveEvent('fillfee',{ id:902, commission:0.5, commissionCurrencyId:1 },7_100),
+      liveEvent('fillpair',{ id:950, buyFillId:901, sellFillId:902, qty:1, active:true },7_200),
+    ];
+    await appendLive(after);
+    const next=await completeImport(liveScope);
+    assert.equal(next.confirmed,1);
+    assert.equal(await frozen(),3);
+    const tradesAfter=await liveTrades();
+    assert.equal(tradesAfter.length,4);
+    for (const trade of tradesAtK) assert.deepEqual(tradesAfter.find((row:any)=>row.id===trade.id),trade);
+    const heads=(await db.query('select revision,completed_revision from public.tradovate_journal_projection_heads where connection_id=$1',[liveConnection])).rows[0];
+    assert.equal((await db.query('select count(*)::int as n from public.tradovate_journal_positions where connection_id=$1 and revision<>$2',[liveConnection,heads.revision])).rows[0].n,0);
+    // Pozdní jiný poplatek k zmrazenému fillu: bod se vrátí a P&L se opraví.
+    const frozenTrade=(await db.query("select t.id,t.pnl,j.position_id from public.trades t join public.tradovate_journal_positions j on j.trade_id=t.id where j.connection_id=$1 and j.external_account_id=2",[liveConnection])).rows[0];
+    await appendLive([liveEvent('fillfee',{ id:20, commission:9, commissionCurrencyId:1 },9_000,'snapshot')]);
+    await completeImport(liveScope);
+    const corrected=(await db.query('select t.pnl from public.trades t where t.id=$1',[frozenTrade.id])).rows[0];
+    assert.notEqual(Number(corrected.pnl),Number(frozenTrade.pnl));
+    assert.equal((await db.query("select count(*)::int as n from public.tradovate_journal_positions where connection_id=$1 and status='invalidated'",[liveConnection])).rows[0].n,0);
+    console.log('PASS: live journal checkpoint — freeze after a verified flat round, window-only writes for a new trade, intact frozen trades and revisions, late fee reopens and corrects PnL, old full-projection deployments fenced.');
+  }
 } finally { await db.close(); }

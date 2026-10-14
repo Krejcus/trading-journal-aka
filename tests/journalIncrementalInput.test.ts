@@ -10,7 +10,7 @@ const context = { version: 1, generation: 1, after: 0, through: 1, ready: false,
   hasMore: false, next: 1, rows: [{ cursor: 1, event }], entities: [] };
 const ready = { ...context, generation: 2, after: 1, ready: true, rows: [], watermark: event };
 const ack = { accepted: true, generation: 2, through: 1, targetThrough: 1 };
-const snapshot = { generation: 2, through: 1, rows: [{ key: 'e:contract:1', entity, event: null }] };
+const snapshot = { generation: 2, through: 1, checkpointEpoch: 0, rows: [{ key: 'e:contract:1', entity, event: null }] };
 function client(responses: unknown[]) {
   const rpc = vi.fn(async () => {
     if (!responses.length) throw new Error('unexpected-rpc');
@@ -26,7 +26,7 @@ describe('durable projection input protocol', () => {
     expect(c.rpc.mock.calls).toHaveLength(2);
     expect(c.rpc).toHaveBeenLastCalledWith('commit_journal_input_batch', expect.objectContaining({ p_after: 0, p_next: 1, p_updates: [entity] }));
     const resumed = client([ready, snapshot, { ...snapshot, rows: [] }]);
-    expect(await prepareJournalInput(resumed.db, scope)).toEqual({ ready: true, through: 1, targetThrough: 1, events: [event] });
+    expect(await prepareJournalInput(resumed.db, scope)).toEqual({ ready: true, through: 1, targetThrough: 1, generation: 2, checkpointEpoch: 0, events: [event] });
     expect(resumed.rpc).toHaveBeenLastCalledWith('read_journal_input_snapshot_latest', expect.objectContaining({ p_after: 'e:contract:1', p_limit: 1000 }));
   });
   it('does not turn a lost CAS or transport failure into a completed projection', async () => {
