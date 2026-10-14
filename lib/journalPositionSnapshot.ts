@@ -33,11 +33,28 @@ export function positionSnapshotObservations(snapshotId: string, accounts: unkno
 }
 
 export interface JournalPositionAnchor { accountId: number; contractId: number; at: number; net: number }
+/** Jeden ověřený snímek jednoho účtu: všechny jeho pozice v čase `completedAt`. */
+export interface JournalValidSnapshot { key: string; snapshotId: string; sessionId: string; accountId: number; startedAt: number; completedAt: number; positions: Map<number, number> }
 
 /** A snapshot only establishes forward state. Missing rows, gaps and exposure
  * changes during its REST window invalidate it, including late-arriving fills. */
 export function journalSnapshotAnchors(evidence: readonly JournalEvidence[],
   lanes: readonly { accountId: number; contractId: number }[], gaps: readonly { from: number; to: number | null }[]): JournalPositionAnchor[] {
+  const contracts = new Map<number, Set<number>>();
+  for (const lane of lanes) {
+    const ids = contracts.get(lane.accountId) ?? new Set<number>(); ids.add(lane.contractId); contracts.set(lane.accountId, ids);
+  }
+  const result: JournalPositionAnchor[] = [];
+  for (const snapshot of journalValidSnapshots(evidence, gaps)) {
+    for (const contractId of new Set([...contracts.get(snapshot.accountId) ?? [], ...snapshot.positions.keys()])) {
+      result.push({ accountId: snapshot.accountId, contractId, at: snapshot.completedAt, net: snapshot.positions.get(contractId) ?? 0 });
+    }
+  }
+  return result;
+}
+
+/** Ověřené snímky (stejná pravidla jako kotvy výše), po účtech. */
+export function journalValidSnapshots(evidence: readonly JournalEvidence[], gaps: readonly { from: number; to: number | null }[]): JournalValidSnapshot[] {
   const groups = new Map<string, JournalEvidence[]>();
   const latest = latestJournalEvidence(evidence);
   const activity = new Map<number, number[]>();
@@ -67,12 +84,8 @@ export function journalSnapshotAnchors(evidence: readonly JournalEvidence[],
     while (low < high) { const middle = (low + high) >>> 1; if (times[middle] < from) low = middle + 1; else high = middle; }
     return low < times.length && times[low] <= to;
   };
-  const contracts = new Map<number, Set<number>>();
-  for (const lane of lanes) {
-    const ids = contracts.get(lane.accountId) ?? new Set<number>(); ids.add(lane.contractId); contracts.set(lane.accountId, ids);
-  }
-  const result: JournalPositionAnchor[] = [];
-  for (const group of groups.values()) {
+  const result: JournalValidSnapshot[] = [];
+  for (const [key, group] of groups) {
     const completions = group.filter(event => event.entity.kind === 'complete');
     if (completions.length !== 1) continue;
     const complete = completions[0], row = complete.entity;
@@ -93,9 +106,7 @@ export function journalSnapshotAnchors(evidence: readonly JournalEvidence[],
       positions.set(position.contractId, position.netPos);
     }
     if (!valid) continue;
-    for (const contractId of new Set([...contracts.get(accountId) ?? [], ...positions.keys()])) {
-      result.push({ accountId, contractId, at: completedAt, net: positions.get(contractId) ?? 0 });
-    }
+    result.push({ key, snapshotId: String(row.snapshotId), sessionId: complete.sessionId, accountId, startedAt, completedAt, positions });
   }
   return result;
 }

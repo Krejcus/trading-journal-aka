@@ -41,11 +41,21 @@ type Item = { at: number; type: 'fill'; fill: JournalFill }
 const scope = (account: number, contract: number) => `${account}:${contract}`;
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
+/** Okno živého deníku (14. 10. 2026): kontrolní bod K, ve kterém byly všechny
+ * účty připojení podle platného snímku flat a nepracoval žádný příkaz. Pozice
+ * před K jsou zmrazené jinde; tady se každá lane začne s net 0 a baselineAt K
+ * a položky před K se přeskočí. Ekvivalenci s plným přehráním ověřuje posun K. */
+export interface JournalProjectionWindow {
+  start: number;
+  /** Účty, které platný snímek v K ukázal flat; ostatní lane začnou neznámé (jako plné přehrání). */
+  flatAccounts: ReadonlySet<number>;
+}
+
 /** Reconstruct netted futures episodes only after an observed flat anchor.
  * A current flat snapshot cannot establish the initial state of older fills.
  * Reversal fills are split by quantity; their fees are split in the same ratio.
  */
-export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[]): {
+export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[], window?: JournalProjectionWindow): {
   episodes: JournalPositionEpisode[]; untakenOrders: JournalUntakenOrder[]; unassignedFillIds: string[]; issues: string[];
 } {
   const projection = projectJournalEvidence(evidence);
@@ -86,8 +96,9 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
   for (const current of lanes.values()) {
     current.items.push(...projection.gaps.map(gap => ({ at: gap.from, type: 'gap' as const })));
     current.items.sort((a, b) => a.at - b.at);
-    let net: number | null = null;
-    let baselineAt = 0;
+    if (window) current.items = current.items.filter(item => item.at >= window.start);
+    let net: number | null = window?.flatAccounts.has(current.accountId) ? 0 : null;
+    let baselineAt = window ? window.start : 0;
     let active: WorkingEpisode | null = null;
     const interrupt = (reason: string, at: number) => {
       const last = working.at(-1);
@@ -288,11 +299,12 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
       bracketChildren.set(key, [...new Set([...(bracketChildren.get(key) ?? []), String(row.entity.orderId)])]);
     }
   }
-  const untakenOrders = journalUntakenOrders({
+  const untakenOrders = (window ? (orders: JournalUntakenOrder[]) => orders.filter(order => order.placedAt >= window.start)
+    : (orders: JournalUntakenOrder[]) => orders)(journalUntakenOrders({
     protectionByOrder, latest, childrenByParent: bracketChildren, usedOrderIds, copiedOrderKeys,
     positionWindows: episodes.map(episode => ({ accountId: episode.accountId, contractId: episode.contractId,
       from: episode.entryAt, to: positionWindowEnd(episode) })),
-  });
+  }));
   return { episodes: episodes.sort((a, b) => a.entryAt - b.entryAt || a.id.localeCompare(b.id)),
     untakenOrders, unassignedFillIds: [...unassigned].sort(), issues: [...issues] };
 }
