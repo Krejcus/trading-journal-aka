@@ -14,6 +14,7 @@ import { installKeepDrawingBehavior } from '../../services/chartDrawingContinuat
 import { setNativeShellTabBarHidden } from '../../utils/nativeShell';
 import { DAY_DRAW_COLORS, DAY_DRAW_TOOLS, dayDrawColorOf, dayDrawStyle, lastManualDrawingId, nextDayChartTimeframe, type DayDrawColorId } from '../../lib/dayChartTools';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
+import DayTouchDrawLayer from './DayTouchDrawLayer';
 import { dayAnchorTrade, focusTarget, useReviewFocus } from './dayFocus';
 import { LiveChip, ScopeSwitch, dayTitle } from './DayPanels';
 import type { DayController } from './useDayController';
@@ -181,6 +182,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
             contextTrades={ctl.chart.chartTrades}
             drawingKeyId={`day:${ctl.day}`}
             drawingScope="day"
+            drawingHitTolerance={14}
             onChartApiReady={setApi}
             onToggleFvg={() => toggleIndicator('fvg')}
             onToggleLevels={() => toggleIndicator('levels')}
@@ -208,6 +210,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
           nowTime={nowTime}
           bands={bands}
         />
+        <DayTouchDrawLayer chartApi={api} containerRef={containerRef} enabled={drawing && !placing} />
         {/* Lišta vybrané kresby: barva, koš (jako plovoucí lišta v TradingView, jen nahoře uprostřed). */}
         {drawing && selected && (
           <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 25, display: 'flex', alignItems: 'center', gap: 6, padding: 6, borderRadius: 12, border: '1px solid var(--dj-line)', background: 'var(--dj-card)', boxShadow: '0 12px 30px -12px rgba(0,0,0,0.6)', animation: 'dj-rise .18s ease both' }}>

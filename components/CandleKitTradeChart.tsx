@@ -238,6 +238,8 @@ interface CandleKitTradeChartProps {
   contextTrades?: readonly Trade[];
   /** Klíč úložiště kreseb místo id obchodu (review: kresby patří týdnu). */
   drawingKeyId?: string;
+  /** Tolerance výběru kresby v px (prst potřebuje víc než myš). */
+  drawingHitTolerance?: number;
   activeLibraryIndicators?: string[];
   onToggleFvg?: () => void;
   onToggleLevels?: () => void;
@@ -1745,6 +1747,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   reviewMode = false,
   contextTrades,
   drawingKeyId,
+  drawingHitTolerance,
   activeLibraryIndicators = [],
   onToggleFvg,
   onToggleLevels,
@@ -3031,7 +3034,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const drawingStorageId = drawingKeyId ?? String(trade.id);
   const drawingOptions = useMemo(() => ({
     storageKey: `alphatrade:candlekit:${drawingStorageId}:${drawingScope || timeframe}`,
-  }), [drawingStorageId, drawingScope, timeframe]);
+    ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
+  }), [drawingHitTolerance, drawingStorageId, drawingScope, timeframe]);
 
   // Obchod uprostřed a celý vidět; okraje rostou s délkou obchodu (minimum
   // pokryje i 10 min před vstupem, odkud startuje přehrávání). Během
