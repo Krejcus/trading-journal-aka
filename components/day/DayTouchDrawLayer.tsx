@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { priceText } from './DayPrimitives';
+import { isChainedDrawTool } from '../../lib/dayChartTools';
 
 /**
  * Dotykové kreslení pro CandleKit na telefonu. Řadič kreslení v CandleKit
@@ -24,6 +25,7 @@ interface ControllerLike {
     cancelDraft: () => void;
     isLocked: () => boolean;
     stopTool: () => void;
+    startTool: (tool: string) => void;
   };
   onDown: (event: FakeMouseEvent) => void;
   onMove: (event: FakeMouseEvent) => void;
@@ -154,7 +156,14 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled }: {
       if (captured && !tool) controller.onUp();
       // Desktopová volba „kreslit dál“ nástroj po dokončení znovu nasadí; na
       // telefonu chceme jednu kresbu na výběr nástroje (klepnutí pak vybírá).
-      if (captured && tool && !controller.engine.getDraft() && controller.engine.getActiveTool()) controller.engine.stopTool();
+      if (captured && tool && !controller.engine.getDraft()) {
+        if (isChainedDrawTool(tool)) {
+          // Šipka: další tah hned kreslí další šipku (jako Path v TradingView).
+          if (!controller.engine.getActiveTool()) controller.engine.startTool(tool);
+        } else if (controller.engine.getActiveTool()) {
+          controller.engine.stopTool();
+        }
+      }
       if (captured) { event.preventDefault(); event.stopPropagation(); }
       reset();
     };

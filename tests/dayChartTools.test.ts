@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DAY_CHART_TIMEFRAME_KEY, DAY_DRAW_TOOLS, dayDrawColorOf, dayDrawStyle, lastManualDrawingId,
+  DAY_CHART_TIMEFRAME_KEY, DAY_DRAW_TOOLS, dayDrawColorOf, dayDrawStyle, dayDrawingsStorageKey, isChainedDrawTool, lastManualDrawingId,
   nextDayChartTimeframe, readStoredDayChartTimeframe, writeStoredDayChartTimeframe,
 } from '../lib/dayChartTools';
 
@@ -37,7 +37,15 @@ describe('dayChartTools', () => {
     expect(dayDrawStyle('long', 'Rectangle')).toEqual({ color: '#10b981', fill: 'rgba(16,185,129,0.18)' });
     expect(dayDrawStyle('short', 'TrendLine')).toEqual({ color: '#f43f5e', fill: null });
     expect(dayDrawStyle('neutral', null).fill).toBeNull();
-    expect(DAY_DRAW_TOOLS.map(tool => tool.id)).toEqual(['Rectangle', 'HorizontalLine', 'TrendLine']);
+    expect(DAY_DRAW_TOOLS.map(tool => tool.id)).toEqual(['Arrow', 'Rectangle', 'HorizontalLine', 'TrendLine']);
+    expect(dayDrawStyle('long', 'Arrow').fill).toBeNull();
+  });
+
+  it('jen šipka zůstává po dokončení v ruce; klíč kreseb dne má tvar CandleKit', () => {
+    expect(isChainedDrawTool('Arrow')).toBe(true);
+    expect(isChainedDrawTool('Rectangle')).toBe(false);
+    expect(isChainedDrawTool(null)).toBe(false);
+    expect(dayDrawingsStorageKey('2026-10-14')).toBe('alphatrade:candlekit:day:2026-10-14:day');
   });
 
   it('barva kresby se mapuje zpět na předvolbu', () => {

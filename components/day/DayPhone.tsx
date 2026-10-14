@@ -142,7 +142,12 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
     : mode === 'close' ? ctl.pinViews(note => note.session === session) : ctl.pinViews(note => ctl.scope === 'day' || note.session === ctl.scope || note.session === 'day');
   const selectedChartTrade = mode === 'day' && ctl.selectedTrade ? ctl.chart.chartTrades.find(trade => String(trade.id) === String(ctl.selectedTrade!.id)) ?? null : null;
   const pick = (point: DayPinPoint) => { const record = ctl.placing === 'voice'; ctl.setPlacing(null); ctl.setPendingPoint(point); setSheet({ kind: 'pin', point, record }); };
-  const chart = (height: number) => (
+  // Při celé obrazovce se kompaktní graf odpojí: oba grafy sdílí jeden klíč
+  // kreseb a skrytý graf by při překreslení překryvů přepsal úložiště starým
+  // stavem. Po zavření se znovu připojí a načte kresby z celé obrazovky.
+  const chart = (height: number) => fullscreen ? (
+    <div className="dj" style={{ height: height + 37, display: 'grid', placeItems: 'center', borderTop: '1px solid var(--dj-line)', borderBottom: '1px solid var(--dj-line)', fontSize: 12, color: 'var(--dj-muted)' }}>Graf je otevřený na celou obrazovku</div>
+  ) : (
     <DayCompactChart
       ctl={ctl} isDark={isDark} height={height} range={range} focusKeyPrefix={`${mode}:${session}:${ctl.scope}`}
       selectedTrade={selectedChartTrade} pins={pins} bubbles={mode === 'prep' ? 'all' : 'selected'}

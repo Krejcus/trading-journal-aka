@@ -30,12 +30,23 @@ export function writeStoredDayChartTimeframe(storage: StorageLike | null | undef
   try { storage?.setItem(DAY_CHART_TIMEFRAME_KEY, timeframe); } catch { /* soukromý režim */ }
 }
 
-/** Tři nástroje, které v deníku dávají smysl; zbytek má TradingView. */
-export const DAY_DRAW_TOOLS: readonly { id: DrawingToolId; label: string; points: number }[] = [
+/**
+ * Nástroje, které v deníku dávají smysl; zbytek má TradingView. Šipka je
+ * hlavní (Filip si kreslí „co a jak“ jako Path v TradingView): `chain`
+ * nechá nástroj v ruce, takže další tah hned kreslí další šipku.
+ */
+export const DAY_DRAW_TOOLS: readonly { id: DrawingToolId; label: string; points: number; chain?: boolean }[] = [
+  { id: 'Arrow', label: 'Šipka', points: 2, chain: true },
   { id: 'Rectangle', label: 'Zóna', points: 2 },
   { id: 'HorizontalLine', label: 'Úroveň', points: 1 },
-  { id: 'TrendLine', label: 'Trendline', points: 2 },
+  { id: 'TrendLine', label: 'Trend', points: 2 },
 ];
+
+/** Nástroj zůstává po dokončení kresby v ruce (řetězení šipek). */
+export const isChainedDrawTool = (tool: string | null | undefined) => DAY_DRAW_TOOLS.some(item => item.id === tool && item.chain === true);
+
+/** Klíč kreseb dne v CandleKit (stejný tvar skládá `CandleKitTradeChart`). */
+export const dayDrawingsStorageKey = (day: string) => `alphatrade:candlekit:day:${day}:day`;
 
 export type DayDrawColorId = 'long' | 'short' | 'neutral';
 export const DAY_DRAW_COLORS: readonly { id: DayDrawColorId; label: string; color: string; fill: string }[] = [
