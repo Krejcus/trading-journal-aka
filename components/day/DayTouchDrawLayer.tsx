@@ -152,6 +152,9 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled }: {
         finishOnEnd = false;
       }
       if (captured && !tool) controller.onUp();
+      // Desktopová volba „kreslit dál“ nástroj po dokončení znovu nasadí; na
+      // telefonu chceme jednu kresbu na výběr nástroje (klepnutí pak vybírá).
+      if (captured && tool && !controller.engine.getDraft() && controller.engine.getActiveTool()) controller.engine.stopTool();
       if (captured) { event.preventDefault(); event.stopPropagation(); }
       reset();
     };
