@@ -70,7 +70,7 @@ try {
     const end = privacyMigration.indexOf('$$;', privacyMigration.indexOf('as $$', start) + 5);
     assert.ok(start >= 0 && end > start); await db.exec(privacyMigration.slice(start, end + 3));
   }
-  for (const filename of ['20260912100450_tradovate_journal_evidence.sql', '20260912115949_journal_trade_projection.sql', '20260912122352_journal_position_persistence.sql', '20260912162137_journal_incremental_input.sql', '20261013070000_journal_snapshot_latest_only.sql', '20260917153000_journal_input_snapshot_indexed_paging.sql', '20260917154500_journal_input_changed_no_retry.sql', '20260917190000_journal_import_lease.sql', '20260912164531_journal_snapshot_links.sql', '20260912190422_journal_confirmed_root_projection.sql', '20261014120000_journal_live_checkpoints.sql', '20261014150000_journal_legacy_split_exit.sql']) {
+  for (const filename of ['20260912100450_tradovate_journal_evidence.sql', '20260912115949_journal_trade_projection.sql', '20260912122352_journal_position_persistence.sql', '20260912162137_journal_incremental_input.sql', '20261013070000_journal_snapshot_latest_only.sql', '20260917153000_journal_input_snapshot_indexed_paging.sql', '20260917154500_journal_input_changed_no_retry.sql', '20260917190000_journal_import_lease.sql', '20260912164531_journal_snapshot_links.sql', '20260912190422_journal_confirmed_root_projection.sql', '20261014120000_journal_live_checkpoints.sql', '20261014150000_journal_legacy_split_exit.sql', '20261014170000_journal_live_read_index.sql']) {
     try { await db.exec(await readFile(resolve(root, 'supabase/migrations', filename), 'utf8')); }
     catch (error) { const sql = error as { message: string; position?: string }; throw new Error(`${filename}: ${sql.message} at ${sql.position}`, { cause: error }); }
   }

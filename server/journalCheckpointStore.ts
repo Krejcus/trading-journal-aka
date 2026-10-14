@@ -41,8 +41,11 @@ export const JOURNAL_CHECKPOINT_INTERVAL_MS = 6 * 60 * 60_000;
  * (párování se starými záznamy kopírky běží jen při zápisu).
  */
 export const JOURNAL_CHECKPOINT_SETTLE_MS = 24 * 60 * 60_000;
-const ARCHIVE_CHUNK_ROWS = 5_000;
-const ARCHIVE_CHUNK_REFS = 10_000;
+// Dávky pod 8 s timeoutem API: archivace 5 000 řádků trvala v produkci až
+// 16,5 s (update velkých řádků + všechny indexy), úklid je stejně drahý.
+const ARCHIVE_CHUNK_ROWS = 1_000;
+const ARCHIVE_CHUNK_REFS = 2_000;
+const CLEANUP_CHUNK_ROWS = 1_000;
 const HIT_CHUNK = 5_000;
 
 async function rpc(db: SupabaseClient, name: string, args: Record<string, unknown>, failure: string) {
@@ -156,7 +159,7 @@ export async function advanceJournalCheckpoint(db: SupabaseClient, scope: Journa
     // Zbytky zrušeného bodu uklidit po dávkách, pak znovu začít.
     for (let round = 0; begun?.cleanup === true && round < 50; round++) {
       if (Date.now() > input.deadline) return 'deferred';
-      const cleaned = await rpc(db, 'cleanup_journal_checkpoints', { ...common, p_expected_epoch: input.state.epoch, p_limit: 10_000 },
+      const cleaned = await rpc(db, 'cleanup_journal_checkpoints', { ...common, p_expected_epoch: input.state.epoch, p_limit: CLEANUP_CHUNK_ROWS },
         'journal-checkpoint-write-failed');
       if (cleaned?.accepted !== true) return 'stale';
       if (cleaned.done === true) begun = await rpc(db, 'begin_journal_checkpoint', { ...common, p_expected_epoch: input.state.epoch,
