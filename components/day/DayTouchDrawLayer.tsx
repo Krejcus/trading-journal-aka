@@ -23,6 +23,7 @@ interface ControllerLike {
     getDraft: () => unknown;
     cancelDraft: () => void;
     isLocked: () => boolean;
+    stopTool: () => void;
   };
   onDown: (event: FakeMouseEvent) => void;
   onMove: (event: FakeMouseEvent) => void;
@@ -101,6 +102,17 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled }: {
       const tool = controller.engine.getActiveTool();
       touching = true; start = point; last = point; moved = false;
       if (tool) {
+        // Prst na existující kresbě má přednost před novou kresbou: vybere
+        // a táhne (TradingView se chová stejně). Nástroj se tím vypne.
+        const hit = !controller.engine.getDraft() && typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
+        if (hit) {
+          controller.engine.stopTool();
+          const down = fakeEvent(point.x, point.y);
+          controller.onDown(down);
+          captured = down.handled;
+          if (captured) { event.preventDefault(); event.stopPropagation(); }
+          return;
+        }
         captured = true;
         if (controller.engine.getDraft()) {
           // Druhé klepnutí: konec kresby jde pod prst, dokončí se při puštění.

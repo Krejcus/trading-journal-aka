@@ -262,6 +262,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-14 odpoledne — Fáze 1 celoobrazovkového grafu + dotykové kreslení (Claude, větev, NEnasazeno)
+- Větev `claude/day-chart-fullscreen-20261014` (v Documents): `DayFullscreenChart` (portál přes celý
+  displej, hlavička, sbalené indikátory, spodní pruh normální/kreslení, lišta vybrané kresby s barvami
+  long/short/neutrál a košem), `DayCompactChart` má tlačítko „zvětšit“ a řízený timeframe (sdílený,
+  `at:day-chart:timeframe`), otočení na šířku otevře celou obrazovku. Kresby `day:<den>` se scope
+  `day` (společné pro timeframy i kompaktní graf; zatím jen localStorage zařízení). iOS plugin
+  `setShellChrome({ tabBarHidden })` schová `UITabBar` (flag `tabBarHiddenByWeb`, jinak ho
+  `viewDidLayoutSubviews` vracel). `lib/dayChartTools.ts` + test (6).
+- **Zjištění z prototypu na iPhonu: prstem se nic nenakreslilo.** Řadič kreslení CandleKit
+  (`api.drawing` = `DrawingController`) poslouchá jen `mousedown/mousemove/mouseup`; iOS při
+  `touch-action: none` (nastavuje `attachChartTouchGestures`) žádné náhradní události myši
+  neposílá. Oprava `DayTouchDrawLayer`: dotyky se překládají na `onDown/onMove/onUp` řadiče
+  (souřadnice vůči `chartElement()`), takže nástroje, magnet, výběr i přesun jedou stejně jako
+  myší. UX jako TradingView mobil (Filipův popis): klepnutí = první bod, tah natáhne, puštění
+  dokončí; klepnutí bez tahu nechá kresbu otevřenou pro druhé klepnutí; bez nástroje klepnutí
+  vybere, tah přesune, jinde graf posouvá; dva prsty = pinch. `drawingHitTolerance=14` (nový prop
+  `CandleKitTradeChart`), nástroj zůstává v ruce (`installKeepDrawingBehavior`). Čeká na test prstem.
+- Mimochodem ověřeno zadání z 13. 10.: Filipova hlasová poznámka z telefonu 14:53 má v DB
+  `written_at` 12:53:14 UTC (= 14:53 Praha), `session london`, `origin chart`, `voice true`;
+  MCP `get_journal_day` hlásí `zapsáno 14:53 · fáze živě · London · ukazuje na 14:02 @ 30737`.
+
 ### 2026-10-14 — Zadání: celoobrazovkový graf dne na telefonu s kreslením (Claude + Filip)
 - Nasazeno ráno: `685e5af5` (světlý režim deníku, jeden graf, levý sloupec od 1280 px, slučování
   živých svíček) na web i do iPhonu (čistá reinstalace z `~/alphatrade-build/ios-dd`).

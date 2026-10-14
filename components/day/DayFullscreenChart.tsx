@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Drawing, DrawingToolId } from '@getcandlekit/charts';
-import { ChevronDown, Magnet, Maximize2, Mic, Minimize2, PenLine, RotateCcw, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Magnet, Maximize2, Mic, Minimize2, PenLine, RotateCcw, Trash2, X } from 'lucide-react';
 import type { Trade } from '../../types';
 import CandleKitTradeChart from '../CandleKitTradeChart';
 import { QuantumSpinner } from '../QuantumLoader';
@@ -10,7 +10,6 @@ import { aggregateCandles, MARKET_TIMEFRAME_MINUTES, type MarketTimeframe } from
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
 import { getDrawingMagnetSettings, setDrawingMagnetSettings, subscribeDrawingMagnetSettings } from '../../services/chartDrawingMagnet';
-import { installKeepDrawingBehavior } from '../../services/chartDrawingContinuation';
 import { setNativeShellTabBarHidden } from '../../utils/nativeShell';
 import { DAY_DRAW_COLORS, DAY_DRAW_TOOLS, dayDrawColorOf, dayDrawStyle, lastManualDrawingId, nextDayChartTimeframe, type DayDrawColorId } from '../../lib/dayChartTools';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
@@ -61,6 +60,16 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
   const [magnet, setMagnet] = useState(getDrawingMagnetSettings);
   useEffect(() => subscribeDrawingMagnetSettings(setMagnet), []);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Na výšku (375–430 px) se do pruhů nevejde všechno: zkrácené popisky, bez živého chipu.
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 440);
+  useEffect(() => {
+    const element = rootRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width < 440));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   // Nativní lišta pryč po dobu celé obrazovky; stránka pod vrstvou neroluje.
   useEffect(() => {
@@ -105,11 +114,6 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
     sync();
     return engine.onChange(sync);
   }, [engine]);
-  // Jako v TradingView: po dokončení kresby nástroj zůstává v ruce, dokud
-  // se neklepne na Hotovo (nebo na stejný nástroj znovu).
-  const drawingRef = useRef(drawing);
-  drawingRef.current = drawing;
-  useEffect(() => (engine ? installKeepDrawingBehavior(engine, () => drawingRef.current) : undefined), [engine]);
   const startTool = useCallback((tool: DrawingToolId) => {
     if (!engine) return;
     onCancelPlacing();
@@ -141,15 +145,16 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
   const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px calc(6px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', flex: 'none', minHeight: 52 };
 
   return createPortal(
-    <div className="dj" role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', animation: 'dj-fade .18s ease both' }}>
+    <div ref={rootRef} className="dj" role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', animation: 'dj-fade .18s ease both' }}>
       {!chromeHidden && (
-        <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px 6px 14px', flex: 'none', borderBottom: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
-          <span style={{ fontSize: 13.5, fontWeight: 800, whiteSpace: 'nowrap' }}>MNQ · {timeframe} · {dayTitle(ctl.day)}</span>
-          <button type="button" className="dj-btn" aria-expanded={indicatorsOpen} onClick={() => setIndicatorsOpen(open => !open)} style={{ ...chip, gap: 3 }}>
+        <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 6px 6px 14px', flex: 'none', borderBottom: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
+          <span style={{ fontSize: 13.5, fontWeight: 800, whiteSpace: 'nowrap', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>MNQ · {timeframe} · {dayTitle(ctl.day)}</span>
+          <button type="button" className="dj-btn" aria-expanded={indicatorsOpen} aria-label="Indikátory" onClick={() => setIndicatorsOpen(open => !open)} style={{ ...chip, gap: 3, flex: 'none' }}>
             <ChevronDown size={12} style={{ transform: indicatorsOpen ? 'rotate(180deg)' : undefined, transition: 'transform .2s' }} /> {indicatorCount}
           </button>
           <span style={{ flex: 1 }} />
-          <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} />
+          {!narrow && <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} />}
+          <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={18} /></button>
         </header>
       )}
       {!chromeHidden && indicatorsOpen && (
@@ -228,25 +233,24 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
 
       {!chromeHidden && !drawing && (
         <div style={bar}>
-          <ScopeSwitch ctl={ctl} />
-          <button type="button" className="dj-btn" aria-label={`Timeframe ${timeframe}, další`} onClick={() => onTimeframe(nextDayChartTimeframe(timeframe))} style={{ ...chip, minWidth: 44, justifyContent: 'center', fontWeight: 800 }}>{timeframe}</button>
-          <span style={{ flex: 1 }} />
+          <div style={{ flex: narrow ? 1 : 'none', minWidth: 0 }}><ScopeSwitch ctl={ctl} fill={narrow} /></div>
+          <button type="button" className="dj-btn" aria-label={`Timeframe ${timeframe}, další`} onClick={() => onTimeframe(nextDayChartTimeframe(timeframe))} style={{ ...chip, minWidth: 44, justifyContent: 'center', fontWeight: 800, flex: 'none' }}>{timeframe}</button>
+          {!narrow && <span style={{ flex: 1 }} />}
           <button type="button" className="dj-btn" aria-label="Kreslit" onClick={() => setDrawing(true)} style={iconButton}><PenLine size={18} /></button>
           <button type="button" className="dj-btn" aria-label="Poznámka hlasem" aria-pressed={placing === 'voice'} onClick={onVoice} style={{ ...iconButton, ...(placing === 'voice' ? { color: '#fff', background: '#f43f5e' } : {}) }}><Mic size={18} /></button>
           <button type="button" className="dj-btn" aria-label="Skrýt ovládání" onClick={() => setChromeHidden(true)} style={iconButton}><Maximize2 size={17} /></button>
-          <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={18} /></button>
         </div>
       )}
       {!chromeHidden && drawing && (
-        <div style={{ ...bar, gap: 4 }}>
+        <div style={{ ...bar, gap: narrow ? 4 : 6 }}>
           {DAY_DRAW_TOOLS.map(tool => (
-            <button key={tool.id} type="button" className="dj-btn" aria-pressed={activeTool === tool.id} onClick={() => startTool(tool.id)} style={{ ...chip, height: 36, padding: '0 10px', ...(activeTool === tool.id ? { color: 'var(--dj-seg-on-ink)', background: 'var(--dj-seg-on)' } : {}) }}>{tool.label}</button>
+            <button key={tool.id} type="button" className="dj-btn" aria-pressed={activeTool === tool.id} onClick={() => startTool(tool.id)} style={{ ...chip, height: 36, padding: narrow ? '0 7px' : '0 10px', fontSize: narrow ? 11.5 : 12, flex: 'none', ...(activeTool === tool.id ? { color: 'var(--dj-seg-on-ink)', background: 'var(--dj-seg-on)' } : {}) }}>{tool.label}</button>
           ))}
-          <button type="button" className="dj-btn" aria-label="Poznámka do grafu" aria-pressed={placing === 'note'} onClick={() => { engine?.stopTool(); ctl.setPendingPoint(null); ctl.setPlacing(placing === 'note' ? null : 'note'); }} style={{ ...chip, height: 36, padding: '0 10px', ...(placing === 'note' ? { color: '#1c1203', background: '#fbbf24' } : {}) }}>Pozn.</button>
+          <button type="button" className="dj-btn" aria-label="Poznámka do grafu" aria-pressed={placing === 'note'} onClick={() => { engine?.stopTool(); ctl.setPendingPoint(null); ctl.setPlacing(placing === 'note' ? null : 'note'); }} style={{ ...chip, height: 36, padding: narrow ? '0 7px' : '0 10px', fontSize: narrow ? 11.5 : 12, flex: 'none', ...(placing === 'note' ? { color: '#1c1203', background: '#fbbf24' } : {}) }}>Pozn.</button>
           <span style={{ flex: 1 }} />
-          <button type="button" className="dj-btn" aria-label={`Magnet ${magnet.mode === 'off' ? 'vypnutý' : 'zapnutý'}`} aria-pressed={magnet.mode !== 'off'} onClick={() => setDrawingMagnetSettings({ mode: magnet.mode === 'off' ? magnet.lastEnabledMode : 'off' })} style={{ ...iconButton, ...(magnet.mode !== 'off' ? { color: 'var(--dj-indigo)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><Magnet size={17} /></button>
-          <button type="button" className="dj-btn" aria-label="Vrátit poslední kresbu" disabled={!manualCount} onClick={undo} style={{ ...iconButton, opacity: manualCount ? 1 : 0.35 }}><RotateCcw size={16} /></button>
-          <button type="button" className="dj-btn" onClick={finishDrawing} style={{ ...chip, height: 36, padding: '0 12px', fontWeight: 800, color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', border: 0 }}>Hotovo</button>
+          <button type="button" className="dj-btn" aria-label={`Magnet ${magnet.mode === 'off' ? 'vypnutý' : 'zapnutý'}`} aria-pressed={magnet.mode !== 'off'} onClick={() => setDrawingMagnetSettings({ mode: magnet.mode === 'off' ? magnet.lastEnabledMode : 'off' })} style={{ ...iconButton, width: 36, ...(magnet.mode !== 'off' ? { color: 'var(--dj-indigo)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><Magnet size={17} /></button>
+          <button type="button" className="dj-btn" aria-label="Vrátit poslední kresbu" disabled={!manualCount} onClick={undo} style={{ ...iconButton, width: 36, opacity: manualCount ? 1 : 0.35 }}><RotateCcw size={16} /></button>
+          <button type="button" className="dj-btn" aria-label="Hotovo" onClick={finishDrawing} style={{ ...iconButton, width: 44, color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' }}><Check size={20} strokeWidth={2.6} /></button>
         </div>
       )}
     </div>,
