@@ -41,6 +41,41 @@ export async function hydrateOwnedJournalTrades(
   client: SupabaseClient, trades: readonly Trade[], ownerId: string | null, targetOwnerId: string | null,
   stillOwner: () => boolean | Promise<boolean>, options: { signal?: AbortSignal; detail?: boolean } = {},
 ): Promise<Trade[]> {
+  // Živý deník (14. 10. 2026) zapisuje novou revizi i během otevřené pozice
+  // (~každou minutu). Čtení, které zápis protne, se zopakuje celé; nikdy se
+  // nesmíchají řádky dvou revizí.
+  for (let attempt = 1; ; attempt++) {
+    const moved = { before: null as string | null };
+    try {
+      return await hydrateOnce(client, trades, ownerId, targetOwnerId, stillOwner, options, moved);
+    } catch (reason) {
+      if (attempt >= JOURNAL_READ_ATTEMPTS || !(await journalReadRaced(client, ownerId, reason, moved.before, options.signal))) throw reason;
+    }
+  }
+}
+
+/** Kolikrát zkusit čtení, které protnul zápis projekce. */
+export const JOURNAL_READ_ATTEMPTS = 4;
+
+/** Chyba vznikla souběžným zápisem projekce (hlavy se mezitím změnily), ne vadnými daty. */
+export async function journalReadRaced(client: SupabaseClient, ownerId: string | null, reason: unknown, before: string | null,
+  signal?: AbortSignal): Promise<boolean> {
+  const message = reason instanceof Error ? reason.message : '';
+  if (message === 'journal-facts-changed-during-read') return true;
+  if (message !== 'journal-facts-incomplete' || before === null || !ownerId || signal?.aborted) return false;
+  try {
+    return fingerprint(await loadJournalHeads(client, ownerId, signal)) !== before;
+  } catch {
+    // Rozepsaná hlava (revision ≠ completed) = zápis právě běží.
+    return true;
+  }
+}
+
+async function hydrateOnce(
+  client: SupabaseClient, trades: readonly Trade[], ownerId: string | null, targetOwnerId: string | null,
+  stillOwner: () => boolean | Promise<boolean>, options: { signal?: AbortSignal; detail?: boolean },
+  moved: { before: string | null },
+): Promise<Trade[]> {
   const clean = visibleJournalTrades(trades.map(stripPrivateJournalHistory));
   const journal = clean.filter(isEvidenceJournalTrade);
   if (!journal.length) return clean;
@@ -59,6 +94,7 @@ export async function hydrateOwnedJournalTrades(
     return rows;
   };
   const before = await readHeads();
+  moved.before = fingerprint(before);
   const heads = new Map(before.map(row => [row.connection_id, row]));
   const ids = [...new Set(journal.map(trade => String(trade.id)))];
   const records: StoredJournalTradeFacts[] = [];

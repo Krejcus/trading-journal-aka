@@ -61,9 +61,22 @@ describe('shared owner journal facts reader', () => {
   it('bounds URL batches and rejects an intervening same-revision reprojection', async () => {
     const f = fixture(101); expect(await f.read()).toHaveLength(101);
     expect(f.calls.filter(call => call.table.endsWith('_positions')).map(call => (call.filters.find(([key]) => key === 'trade_id')![1] as string[]).length)).toEqual([100, 1]);
+    // Živý deník: jeden zápis během čtení = celé čtení znovu, výsledek z jedné revize.
     const race = fixture(101);
     race.state.onRead = (_table, count) => { if (count === 3) race.state.heads[0].generation++; };
-    await expect(race.read()).rejects.toThrow('changed-during-read');
+    expect(await race.read()).toHaveLength(101);
+    // Zápis, který posune revizi hlavy i řádků mezi hlavou a řádky.
+    const moved = fixture(12);
+    moved.state.onRead = (table, count) => { if (count === 2 && table.endsWith('_positions')) {
+      moved.state.heads[0].revision = moved.state.heads[0].completed_revision = 81; moved.state.heads[0].generation++;
+      for (const row of moved.state.records) row.revision = 81; } };
+    const before = moved.calls.length;
+    expect(await moved.read()).toHaveLength(12);
+    expect(moved.calls.slice(before).filter(call => call.table.endsWith('_heads')).length).toBeGreaterThan(2);
+    // Zápis při každém čtení: po omezeném počtu pokusů chyba, ne smíchaná data.
+    const busy = fixture(101);
+    busy.state.onRead = table => { if (table.endsWith('_positions')) busy.state.heads[0].generation++; };
+    await expect(busy.read()).rejects.toThrow('changed-during-read');
   });
   it('never publishes a partial batch, missing record, unavailable table or mismatched revision', async () => {
     const missing = fixture(); missing.state.records.pop(); await expect(missing.read()).rejects.toThrow('facts-incomplete');
