@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildJournalPositionEpisodes } from '../lib/journalPositionEpisodes';
 import {
-  compareJournalWindows, journalCheckpointManifest, journalFlatCaptures, journalLateEvidenceAt, journalLateEvidenceCheck,
+  compareJournalWindows, journalCheckpointBlockers, journalCheckpointManifest, journalFlatCaptures, journalLateEvidenceAt, journalLateEvidenceCheck,
   journalLateQueries, journalLiveAfterArchive, journalOrdersOpenSince,
 } from '../lib/journalCheckpoint';
 import { positionSnapshotObservations } from '../lib/journalPositionSnapshot';
@@ -46,9 +46,10 @@ function scenario() {
         execType: kind === 'New' ? 'New' : 'Replaced', ordStatus: 'Working' }, at + 5);
     }
     const fillIn = base + 1, fillOut = base + 2;
-    add('fill', { id: fillIn, orderId: entry, accountId: account, contractId: 7, action: 'Buy', qty: 2, price, timestamp: iso(start + 30_000) }, start + 30_000);
+    // Jako v produkci: Tradovate u fillu účet neposílá, bere se z příkazu.
+    add('fill', { id: fillIn, orderId: entry, contractId: 7, action: 'Buy', qty: 2, price, timestamp: iso(start + 30_000) }, start + 30_000);
     add('position', { id: account * 100 + 7, accountId: account, contractId: 7, netPos: 2, timestamp: iso(start + 30_000) }, start + 30_000);
-    add('fill', { id: fillOut, orderId: target, accountId: account, contractId: 7, action: 'Sell', qty: 2, price: price + 30, timestamp: iso(start + 120_000) }, start + 120_000);
+    add('fill', { id: fillOut, orderId: target, contractId: 7, action: 'Sell', qty: 2, price: price + 30, timestamp: iso(start + 120_000) }, start + 120_000);
     add('position', { id: account * 100 + 7, accountId: account, contractId: 7, netPos: 0, timestamp: iso(start + 120_000) }, start + 120_000);
     add('executionreport', { id: base + order(stop) , commandId: null, orderId: stop, accountId: account, contractId: 7, timestamp: iso(start + 120_001),
       execType: 'Canceled', ordStatus: 'Canceled' }, start + 120_001);
@@ -151,7 +152,7 @@ describe('kontrolní bod živého deníku', () => {
     const manifest = journalCheckpointManifest(s.events, s.K);
     const before = s.events.length;
     s.add('order', { id: 900, accountId: 2, contractId: 7, action: 'Buy', ordStatus: 'Filled', timestamp: iso(s.K + 1_500_000) }, s.K + 1_500_000);
-    s.add('fill', { id: 901, orderId: 900, accountId: 2, contractId: 7, action: 'Buy', qty: 1, price: 20_100, timestamp: iso(s.K + 1_500_000) }, s.K + 1_500_000);
+    s.add('fill', { id: 901, orderId: 900, contractId: 7, action: 'Buy', qty: 1, price: 20_100, timestamp: iso(s.K + 1_500_000) }, s.K + 1_500_000);
     const live = liveAfterAdvance(s.events, before, manifest);
     const refs = new Map(manifest.refs.map(ref => [`${ref.kind}:${ref.id}`, ref]));
     const late = (flat: number[]) => {
@@ -161,6 +162,26 @@ describe('kontrolní bod živého deníku', () => {
     };
     expect(late([1])).toEqual({ at: null, epoch: 1 });
     expect(late([1, 2])).toBeNull();
+  });
+
+  it('posun → opakovaný fill od brokera → druhý posun není zablokovaný a dá totéž', () => {
+    const s = scenario();
+    const manifest = journalCheckpointManifest(s.events, s.K);
+    const before = s.events.length;
+    const old = s.events.find(event => event.entityType === 'fill' && Date.parse(String(event.entity.timestamp)) < s.K)!;
+    s.add('fill', { ...old.entity }, s.K + 700_000, 'snapshot');
+    const live = liveAfterAdvance(s.events, before, manifest);
+    const K2 = T0 + 1_200_000;
+    // Bez znalosti aktivního bodu by archivovaný příkaz vypadal jako chybějící.
+    expect(journalCheckpointBlockers(live, K2)).toContain(`missing-order:${old.entity.orderId}`);
+    expect(journalCheckpointBlockers(live, K2, s.K)).toEqual([]);
+    const capture1 = journalFlatCaptures(s.events).find(item => item.at === s.K)!;
+    const capture2 = journalFlatCaptures(live).find(item => item.at === K2)!;
+    const reference = buildJournalPositionEpisodes(live, capture1.window);
+    const manifest2 = journalCheckpointManifest(live, K2);
+    const live2 = journalLiveAfterArchive(live, manifest2);
+    expect(compareJournalWindows(reference, buildJournalPositionEpisodes(live2, capture2.window), K2)).toEqual([]);
+    expect(compareJournalWindows(buildJournalPositionEpisodes(s.events), reference, s.K)).toEqual([]);
   });
 
   it('příkaz zadaný před K a vyplněný po něm: posun se odmítne (pracující příkaz / rozdíl)', () => {

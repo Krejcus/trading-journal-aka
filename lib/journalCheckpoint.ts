@@ -60,7 +60,7 @@ export function journalOrdersOpenSince(evidence: readonly JournalEvidence[], at:
  * se do zmrazených obchodů nepropsalo, protože na straně zmrazených dat chybí
  * objekt, ke kterému by se dalo vázat (kontrola oponenta 14. 10.).
  */
-export function journalCheckpointBlockers(evidence: readonly JournalEvidence[], at: number): string[] {
+export function journalCheckpointBlockers(evidence: readonly JournalEvidence[], at: number, since = 0): string[] {
   const blockers: string[] = [];
   const open = journalOrdersOpenSince(evidence, at);
   if (open.length) blockers.push(`open-orders:${open.length}`);
@@ -69,17 +69,22 @@ export function journalCheckpointBlockers(evidence: readonly JournalEvidence[], 
   const projection = projectJournalEvidence(evidence);
   const fillTime = new Map<string, number>();
   for (const [key, event] of latest) if (key.startsWith('fill:')) fillTime.set(String(event.entity.id), brokerTime(event) ?? event.receivedAt);
+  // Data před aktivním bodem (`since`) jsou zmrazená; jejich opakování od
+  // brokera (resync) hlídají otisky, ne tahle kontrola — jejich příkaz už je
+  // archivovaný a vypadal by jako chybějící.
   for (const issue of projection.issues) {
     const [kind, id] = [issue.slice(0, issue.indexOf(':')), issue.slice(issue.indexOf(':') + 1)];
-    if (kind === 'incomplete-fill' && (fillTime.get(id) ?? -Infinity) < at) blockers.push(issue);
+    const time = fillTime.get(id);
+    if (kind === 'incomplete-fill' && (time ?? -Infinity) < at && (time ?? Infinity) >= since) blockers.push(issue);
     if (kind === 'missing-id') {
       const event = evidence.find(row => row.id === id);
-      if (!event || event.receivedAt < at) blockers.push(issue);
+      if (!event || (event.receivedAt < at && event.receivedAt >= since)) blockers.push(issue);
     }
   }
   for (const [key, event] of latest) {
     const type = key.slice(0, key.indexOf(':')), row = event.entity;
     const time = brokerTime(event) ?? event.receivedAt;
+    if (time < since) continue;
     if (type === 'fill' && time < at) {
       if (!has('order', row.orderId)) blockers.push(`missing-order:${row.orderId}`);
       if (!has('contract', row.contractId)) blockers.push(`missing-contract:${row.contractId}`);
@@ -150,6 +155,11 @@ const brokerTime = (event: JournalEvidence) => {
   return Number.isFinite(at) ? at : null;
 };
 const DICTIONARY_TYPES = new Set(['contract', 'currency']);
+/** Účet fillu: Tradovate ho u fillu většinou neposílá, projekce ho bere z příkazu. */
+const fillAccount = (latest: ReadonlyMap<string, JournalEvidence>, fill: JournalEvidence): number | null => {
+  const value = fill.entity.accountId ?? (fill.entity.orderId != null ? latest.get(`order:${fill.entity.orderId}`)?.entity.accountId : undefined);
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : null;
+};
 const idOf = (value: unknown) => value == null ? null : String(value);
 
 export interface JournalCheckpointRef { kind: string; id: string; fingerprint?: string }
@@ -223,8 +233,10 @@ export function journalCheckpointManifest(evidence: readonly JournalEvidence[], 
   // Účty s historií před K: když některý z nich v kole snímků chyběl a znovu
   // obchoduje, okno by jeho lane začalo neznámé — kontrola pak K vrátí.
   const accounts = new Set<string>();
-  for (const [key, event] of latest) if (key.startsWith('fill:') && (brokerTime(event) ?? event.receivedAt) < at
-    && event.entity.accountId != null) accounts.add(String(event.entity.accountId));
+  for (const [key, event] of latest) {
+    const account = key.startsWith('fill:') && (brokerTime(event) ?? event.receivedAt) < at ? fillAccount(latest, event) : null;
+    if (account != null) accounts.add(String(account));
+  }
   for (const id of accounts) refs.push({ kind: 'account', id });
   const retainedIds: string[] = [];
   const seenPositions = new Set<string>();
@@ -277,7 +289,8 @@ export function journalLateEvidenceCheck(evidence: readonly JournalEvidence[], a
   const rows: JournalLateRow[] = [];
   let lateAt: number | null = null;
   const connectionId = evidence[0]?.connectionId;
-  for (const [key, event] of latestJournalEvidence(evidence)) {
+  const latest = latestJournalEvidence(evidence);
+  for (const [key, event] of latest) {
     const type = key.slice(0, key.indexOf(':'));
     if (DICTIONARY_TYPES.has(type) || type === 'positionsnapshot' || type === 'journalbackfill' || type === 'position') continue;
     const row = event.entity, broker = brokerTime(event);
@@ -292,7 +305,8 @@ export function journalLateEvidenceCheck(evidence: readonly JournalEvidence[], a
     if (type === 'cashbalancelog') { reference('fillpair', row.fillPairId); reference('fill', row.fillId); }
     if (type === 'copylink' && row.leaderConnectionId === connectionId) reference('order', row.leaderOrderId);
     // Fill účtu, který v kole snímků K chyběl, ale má historii před K.
-    if (type === 'fill' && row.accountId != null && !flatAccounts.has(Number(row.accountId))) reference('account', row.accountId);
+    const account = type === 'fill' ? fillAccount(latest, event) : null;
+    if (account != null && !flatAccounts.has(account)) reference('account', account);
     rows.push({ own: { kind: type, id: String(row.id), fingerprint: fingerprintOf(event) }, at: broker ?? event.receivedAt,
       beforeCheckpoint: broker != null && broker < at, references });
   }

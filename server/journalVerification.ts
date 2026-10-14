@@ -7,6 +7,7 @@ import type { JournalEvidence } from '../lib/tradovateJournalEvidence.js';
 import { projectJournalAccounts } from '../lib/journalAccountProjection.js';
 import { journalPositionWrite } from '../lib/journalTradeFacts.js';
 import { stable } from '../lib/journalCheckpoint.js';
+import { randomUUID } from 'node:crypto';
 import { readJournalCheckpoints, reopenJournalCheckpoint } from './journalCheckpointStore.js';
 
 /**
@@ -18,13 +19,40 @@ import { readJournalCheckpoints, reopenJournalCheckpoint } from './journalCheckp
 export type JournalVerification = { state: 'skipped' | 'verified' | 'reopened' | 'deferred'; mismatches?: number; reason?: string };
 
 const PAGE_ROWS = 1000;
+/**
+ * Bez issues/complete (zobrazení) a bez časů, které nejsou od brokera: verze
+ * příkazu nemá vlastní čas, takže po restartu workeru (nové pozorování) by
+ * se lišil jen čas příjmu, ne obchod.
+ */
 const comparableHistory = (history: unknown) => {
   if (!history || typeof history !== 'object') return history;
-  const { issues: _issues, complete: _complete, ...rest } = history as Record<string, unknown>;
-  return rest;
+  const { issues: _issues, complete: _complete, protection, entryOrders, ...rest } = history as Record<string, unknown>;
+  const events = Array.isArray(protection) ? protection.map(event => (event as { timeSource?: string }).timeSource === 'received'
+    ? { ...(event as Record<string, unknown>), at: null } : event) : protection;
+  const orders = Array.isArray(entryOrders) ? entryOrders.map(order => {
+    const { placedAt: _placed, legs, end, ...base } = order as Record<string, unknown>;
+    return { ...base, legs: Array.isArray(legs) ? legs.map(leg => ({ price: (leg as { price: unknown }).price })) : legs,
+      end: end && typeof end === 'object' ? { kind: (end as { kind: unknown }).kind } : end };
+  }) : entryOrders;
+  return { ...rest, protection: events, entryOrders: orders };
 };
 
 export async function verifyJournalConnection(db: SupabaseClient, scope: JournalFeedScope, deadline: number): Promise<JournalVerification> {
+  const common = { p_user_id: scope.ownerId, p_connection_id: scope.connectionId };
+  // Pod stejným zámkem jako import: jinak by kompaktace mezi stránkami
+  // posouvala generaci a kontrola by se pořád odkládala.
+  const holder = randomUUID();
+  const { data: acquired, error: leaseError } = await db.rpc('claim_journal_import_lease', { ...common, p_holder: holder,
+    p_ttl_ms: Math.max(1_000, Math.min(280_000, deadline - Date.now() + 10_000)) });
+  if (leaseError || acquired !== true) return { state: 'deferred', reason: 'lease-busy' };
+  try {
+    return await verifyWithLease(db, scope, deadline);
+  } finally {
+    await db.rpc('release_journal_import_lease', { ...common, p_holder: holder }).then(() => undefined, () => undefined);
+  }
+}
+
+async function verifyWithLease(db: SupabaseClient, scope: JournalFeedScope, deadline: number): Promise<JournalVerification> {
   const state = await readJournalCheckpoints(db, scope);
   const common = { p_user_id: scope.ownerId, p_connection_id: scope.connectionId };
   if (!state.active) return { state: 'skipped' };

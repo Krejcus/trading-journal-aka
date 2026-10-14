@@ -134,7 +134,7 @@ export async function advanceJournalCheckpoint(db: SupabaseClient, scope: Journa
     ...all.filter(capture => capture.at !== pending?.at).reverse().slice(0, 20)];
   for (const capture of candidates) {
     if (Date.now() > input.deadline) return 'deferred';
-    if (journalCheckpointBlockers(input.events, capture.at).length) continue;
+    if (journalCheckpointBlockers(input.events, capture.at, lastAt).length) continue;
     const before = input.reference.episodes.filter(episode => episode.entryAt < capture.at);
     if (before.some(episode => episode.history.position?.status === 'open')) continue;
     const manifest = journalCheckpointManifest(input.events, capture.at);

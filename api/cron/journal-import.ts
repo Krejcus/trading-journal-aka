@@ -4,8 +4,13 @@ import { importJournalPositions } from '../../server/journalPositionImport.js';
 import { journalCheckpointsEnabled } from '../../server/journalCheckpointStore.js';
 import { verifyJournalConnection } from '../../server/journalVerification.js';
 
-/** Denní plná kontrola v klidu: denní pauza CME (21–22 UTC) nebo víkend. */
-const quietForVerification = (at: Date) => at.getUTCHours() === 21 || at.getUTCDay() === 6 || (at.getUTCDay() === 0 && at.getUTCHours() < 21);
+/** Denní plná kontrola v klidu: denní pauza CME 16–17 h chicagského času, nebo víkend (sobota, neděle před 17 h). */
+const quietForVerification = (at: Date) => {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short', hour: 'numeric', hourCycle: 'h23' }).formatToParts(at);
+  const hour = Number(parts.find(part => part.type === 'hour')?.value);
+  const day = parts.find(part => part.type === 'weekday')?.value;
+  return hour === 16 || day === 'Sat' || (day === 'Sun' && hour < 17) || (day === 'Fri' && hour >= 16);
+};
 const VERIFY_EVERY_MS = 20 * 60 * 60_000;
 
 /**
