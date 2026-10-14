@@ -10,6 +10,7 @@ import { aggregateCandles, MARKET_TIMEFRAME_MINUTES, type MarketTimeframe } from
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
 import { getDrawingMagnetSettings, setDrawingMagnetSettings, subscribeDrawingMagnetSettings } from '../../services/chartDrawingMagnet';
+import { installKeepDrawingBehavior } from '../../services/chartDrawingContinuation';
 import { setNativeShellTabBarHidden } from '../../utils/nativeShell';
 import { DAY_DRAW_COLORS, DAY_DRAW_TOOLS, dayDrawColorOf, dayDrawStyle, lastManualDrawingId, nextDayChartTimeframe, type DayDrawColorId } from '../../lib/dayChartTools';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
@@ -103,6 +104,11 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
     sync();
     return engine.onChange(sync);
   }, [engine]);
+  // Jako v TradingView: po dokončení kresby nástroj zůstává v ruce, dokud
+  // se neklepne na Hotovo (nebo na stejný nástroj znovu).
+  const drawingRef = useRef(drawing);
+  drawingRef.current = drawing;
+  useEffect(() => (engine ? installKeepDrawingBehavior(engine, () => drawingRef.current) : undefined), [engine]);
   const startTool = useCallback((tool: DrawingToolId) => {
     if (!engine) return;
     onCancelPlacing();
