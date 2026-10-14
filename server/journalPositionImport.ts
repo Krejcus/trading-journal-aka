@@ -135,8 +135,9 @@ async function importWithLease(db: SupabaseClient, scope: JournalFeedScope, dead
   await persistJournalUntakenOrders(db, scope, projection.untaken);
   // Posun bodu jen nad právě zapsaným (nebo nezměněným) stavem a v rozpočtu.
   if (journalCheckpointsEnabled()) try {
-    await advanceJournalCheckpoint(db, scope, { events, state, bindings, deadline, inputGeneration: input.generation,
+    const outcome = await advanceJournalCheckpoint(db, scope, { events, state, bindings, deadline, inputGeneration: input.generation,
       reference: { episodes: projection.episodes.episodes, untakenOrders: projection.episodes.untakenOrders } });
+    if (outcome !== 'not-due') console.info('[journal-import] checkpoint', outcome, scope.connectionId.slice(0, 8), state.epoch);
   } catch (reason) {
     console.warn('[journal-import] checkpoint not advanced', reason instanceof Error ? reason.message : String(reason));
   }

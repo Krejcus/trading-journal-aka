@@ -37,8 +37,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data, error } = await db.from('tradovate_oauth_connections').select('id,user_id')
       .eq('environment', 'demo').order('updated_at', { ascending: false }).limit(MAX_CONNECTIONS);
     if (error || !Array.isArray(data)) throw new Error('journal-connections-unavailable');
+    // Rozpracovaný kontrolní bod první: jeho dokončení zmenší vstup a nesmí
+    // ho trvale vytlačovat jiné připojení, které spotřebuje rozpočet běhu.
+    const { data: archiving } = await db.from('tradovate_journal_checkpoints').select('connection_id').eq('status', 'archiving').limit(MAX_CONNECTIONS);
+    const pending = new Set((archiving ?? []).map(row => String(row.connection_id)));
+    const ordered = [...data].sort((a, b) => Number(pending.has(String(b.id))) - Number(pending.has(String(a.id))));
     const results: Array<{ connectionId: string; state: string }> = [];
-    for (const row of data) {
+    for (const row of ordered) {
       if (Date.now() - started > RUN_BUDGET_MS) break;
       const scope = { ownerId: String(row.user_id), connectionId: String(row.id), environment: 'demo' as const };
       try {
