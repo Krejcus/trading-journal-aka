@@ -379,6 +379,40 @@ Ověřeno: cílené testy 55/55, tsc čistý (mimo staré chyby `extension/`);
 celá sada a build neproběhly. Nasazení: nejdřív server, pak worker.
 TradingView musí mít graf MNQ/NQ na 1 min. Hook zatím nikde v UI.
 
+### 2026-10-14 — Živý deník: kontrolní body, archivace, serverový import (Claude)
+
+Větev `claude/live-journal-20261013`, plán a revize v `docs/JOURNAL_LIVE_PLAN.md`.
+Import deníku od 7. 10. nefungoval: každý import četl celou historii připojení
+(126k řádků, 102 MB) a nedoběhl (`journal-input-unavailable`), pak publish 510
+pozic trval 8,8 s proti 8 s timeoutu.
+
+- Krok 0 (13. 10.): čtení vstupu bez `orderedThrough`, stránky po 1000
+  (`read_journal_input_snapshot_latest`), strop 160 MB; `service_role`
+  statement_timeout 30 s (migrace `20261014082500`, se souhlasem Filipa).
+- Živý deník (migrace `20261014120000`): kontrolní bod K = kolo snímků s
+  ověřeně flat účty, bez otevřeného příkazu, ≥ 24 h staré, bez chybějících
+  příkazů/slovníků; posun ověřen porovnáním okna od K (po archivaci) s
+  aktuálním výsledkem. Pozice před K zmrazené (`frozen_epoch`), jejich vstup
+  archivovaný (`archived_epoch`) a otisknutý (`tradovate_journal_archived_refs`).
+  Import čte jen živý vstup a píše jen okno; CAS na generaci vstupu a epochu;
+  starý kód bez epochy po zmrazení odmítnut (`journal-import-upgrade-required`).
+  Pozdní evidence (změněný otisk, neznámý fill/pozice před K, nový záznam na
+  zmrazený objekt, spojení/snímek před K, účet mimo kolo, změna identity účtů)
+  vrátí K — líně, úklid po dávkách. Denní plná kontrola (pauza CME / víkend)
+  porovná všechny zmrazené pozice s plným přehráním a při rozdílu K vrátí.
+  Nezměněné pozice (hash) jen `evaluated_through`, žádná nová generace.
+  Trigger do `trades` jen při změně status/účtu/faktů/obchodu.
+- Serverový import: cron `/api/cron/journal-import` každou minutu (jen se
+  zapnutým `JOURNAL_CHECKPOINTS=on`, Vercel env, nastaveno 14. 10.).
+- Ověření: produkční export (146k událostí) — okno == plné přehrání u 31
+  denních a 200 náhodných bodů i po archivaci, žádná falešná pozdní evidence;
+  `scripts/verify-journal-positions.ts` v PGlite (10 PASS) vč. zmrazení,
+  návratu, úklidu, denní kontroly a plotu; tři kola oponentury.
+- Vypnutí: `JOURNAL_CHECKPOINTS=off` (cron stojí, import zůstane na aktivním
+  bodu). Záloha před migrací: `~/alphatrade-backups/journal-20261014-1341`.
+- Otevřené: časy z příjmu u verzí příkazů (first-seen) a index pro čtení při
+  velkém množství archivovaných řádků; klient po zapnutí může pollovat po 20 s.
+
 ### 2026-10-12 — Follower čeká na svou kopii vstupu (Claude, varianta 1 Filipa)
 
 Větev `claude/copier-entry-wait-20261012`. Dva produkční obchody 12. 10. ráno:
