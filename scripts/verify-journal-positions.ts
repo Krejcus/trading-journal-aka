@@ -70,7 +70,7 @@ try {
     const end = privacyMigration.indexOf('$$;', privacyMigration.indexOf('as $$', start) + 5);
     assert.ok(start >= 0 && end > start); await db.exec(privacyMigration.slice(start, end + 3));
   }
-  for (const filename of ['20260912100450_tradovate_journal_evidence.sql', '20260912115949_journal_trade_projection.sql', '20260912122352_journal_position_persistence.sql', '20260912162137_journal_incremental_input.sql', '20261013070000_journal_snapshot_latest_only.sql', '20260917153000_journal_input_snapshot_indexed_paging.sql', '20260917154500_journal_input_changed_no_retry.sql', '20260917190000_journal_import_lease.sql', '20260912164531_journal_snapshot_links.sql', '20260912190422_journal_confirmed_root_projection.sql', '20261014120000_journal_live_checkpoints.sql']) {
+  for (const filename of ['20260912100450_tradovate_journal_evidence.sql', '20260912115949_journal_trade_projection.sql', '20260912122352_journal_position_persistence.sql', '20260912162137_journal_incremental_input.sql', '20261013070000_journal_snapshot_latest_only.sql', '20260917153000_journal_input_snapshot_indexed_paging.sql', '20260917154500_journal_input_changed_no_retry.sql', '20260917190000_journal_import_lease.sql', '20260912164531_journal_snapshot_links.sql', '20260912190422_journal_confirmed_root_projection.sql', '20261014120000_journal_live_checkpoints.sql', '20261014150000_journal_legacy_split_exit.sql']) {
     try { await db.exec(await readFile(resolve(root, 'supabase/migrations', filename), 'utf8')); }
     catch (error) { const sql = error as { message: string; position?: string }; throw new Error(`${filename}: ${sql.message} at ${sql.position}`, { cause: error }); }
   }
@@ -444,6 +444,19 @@ try {
   await assert.rejects(db.query('select public.journal_legacy_identity($1,$2,$3,$4,$5)', [other,legacyConnection,JSON.stringify(absentHistory),JSON.stringify(legacyPositions[0].facts),JSON.stringify(legacyPositions)]), /journal-legacy-connection-unavailable/);
   await db.query('insert into public.tradovate_copier_trades values ($1,$2,$3)', [other, connection, '11']);
   await assert.rejects(db.query('select public.journal_legacy_identity($1,$2,$3,$4,$5)', [other,legacyConnection,JSON.stringify(legacyPositions[0].history),JSON.stringify(legacyPositions[0].facts),JSON.stringify(legacyPositions)]), /journal-legacy-reference-ambiguous/);
+  // Rozdělený finální výstup (dva filly ve stejné ms, jeden příkaz): identita
+  // je jediný fill se záznamem kopírky; dva záznamy nebo dva příkazy = nejednoznačné.
+  {
+    const split = (orders: [string, string]) => JSON.stringify({ ...legacyPositions[0].history, position: { ...legacyPositions[0].history.position, status: 'closed', closedAt: 777 },
+      fills: [{ role: 'exit', id: '7001', orderId: orders[0], at: 777 }, { role: 'exit', id: '7002', orderId: orders[1], at: 777 }] });
+    const identity = (history: string) => db.query('select public.journal_legacy_identity($1,$2,$3,$4,$5) as id', [other, legacyConnection, history, JSON.stringify(legacyPositions[0].facts), '[]']);
+    await db.query('insert into public.tradovate_copier_trades values ($1,$2,$3)', [other, legacyConnection, '7001']);
+    await db.query(`insert into public.trades(id,user_id,account_id,instrument,pnl,direction,date,timestamp,data) values('f1f1f1f1-f1f1-4f1f-8f1f-f1f1f1f1f1f1',$1,$2,'MNQ',1,'Long','2026-01-01',1,'{"copierTradeId":"copier-7001"}')`, [other, legacyAccounts[0].id]).catch(() => undefined);
+    assert.equal((await identity(split(['70', '70']))).rows[0].id, 'copier-7001');
+    await assert.rejects(identity(split(['70', '71'])), /journal-legacy-reference-ambiguous/);
+    await db.query('insert into public.tradovate_copier_trades values ($1,$2,$3)', [other, legacyConnection, '7002']);
+    await assert.rejects(identity(split(['70', '70'])), /journal-legacy-reference-ambiguous/);
+  }
   console.log('PASS: exact legacy leader/follower UUID adoption, wrong-account correction, duplicate review retention, old-browser insert fencing, protected identities and ambiguous-source rejection.');
   assert.equal(writes, 6);
   console.log('PASS: unchanged import performs no evidence reads, writes or generation change; account relinking, source correction, version/incomplete-head invalidation, receipt rollback, owner isolation and deletion with forced reimport.');
