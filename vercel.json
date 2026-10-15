@@ -8,6 +8,10 @@
         {
             "path": "/api/cron/weekly-report",
             "schedule": "0 17 * * 0"
+        },
+        {
+            "path": "/api/cron/journal-import",
+            "schedule": "* * * * *"
         }
     ],
     "rewrites": [
@@ -35,5 +39,13 @@
             "source": "/day/:token/",
             "destination": "/api/live-day-share/:token"
         }
-    ]
+    ],
+    "functions": {
+        "api/cron/journal-import.ts": {
+            "maxDuration": 300
+        },
+        "api/tradovate/oauth/journal-import.ts": {
+            "maxDuration": 300
+        }
+    }
 }

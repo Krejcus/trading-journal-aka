@@ -400,6 +400,68 @@ Ověřeno: cílené testy 55/55, tsc čistý (mimo staré chyby `extension/`);
 celá sada a build neproběhly. Nasazení: nejdřív server, pak worker.
 TradingView musí mít graf MNQ/NQ na 1 min. Hook zatím nikde v UI.
 
+### 2026-10-14 — Živý deník: kontrolní body, archivace, serverový import (Claude)
+
+Větev `claude/live-journal-20261013`, plán a revize v `docs/JOURNAL_LIVE_PLAN.md`.
+Import deníku od 7. 10. nefungoval: každý import četl celou historii připojení
+(126k řádků, 102 MB) a nedoběhl (`journal-input-unavailable`), pak publish 510
+pozic trval 8,8 s proti 8 s timeoutu.
+
+- Krok 0 (13. 10.): čtení vstupu bez `orderedThrough`, stránky po 1000
+  (`read_journal_input_snapshot_latest`), strop 160 MB; `service_role`
+  statement_timeout 30 s (migrace `20261014082500`, se souhlasem Filipa).
+- Živý deník (migrace `20261014120000`): kontrolní bod K = kolo snímků s
+  ověřeně flat účty, bez otevřeného příkazu, ≥ 24 h staré, bez chybějících
+  příkazů/slovníků; posun ověřen porovnáním okna od K (po archivaci) s
+  aktuálním výsledkem. Pozice před K zmrazené (`frozen_epoch`), jejich vstup
+  archivovaný (`archived_epoch`) a otisknutý (`tradovate_journal_archived_refs`).
+  Import čte jen živý vstup a píše jen okno; CAS na generaci vstupu a epochu;
+  starý kód bez epochy po zmrazení odmítnut (`journal-import-upgrade-required`).
+  Pozdní evidence (změněný otisk, neznámý fill/pozice před K, nový záznam na
+  zmrazený objekt, spojení/snímek před K, účet mimo kolo, změna identity účtů)
+  vrátí K — líně, úklid po dávkách. Denní plná kontrola (pauza CME / víkend)
+  porovná všechny zmrazené pozice s plným přehráním a při rozdílu K vrátí.
+  Nezměněné pozice (hash) jen `evaluated_through`, žádná nová generace.
+  Trigger do `trades` jen při změně status/účtu/faktů/obchodu.
+- Serverový import: cron `/api/cron/journal-import` každou minutu (jen se
+  zapnutým `JOURNAL_CHECKPOINTS=on`, Vercel env, nastaveno 14. 10.).
+- Ověření: produkční export (146k událostí) — okno == plné přehrání u 31
+  denních a 200 náhodných bodů i po archivaci, žádná falešná pozdní evidence;
+  `scripts/verify-journal-positions.ts` v PGlite (10 PASS) vč. zmrazení,
+  návratu, úklidu, denní kontroly a plotu; tři kola oponentury.
+- Vypnutí: `JOURNAL_CHECKPOINTS=off` (cron stojí, import zůstane na aktivním
+  bodu). Záloha před migrací: `~/alphatrade-backups/journal-20261014-1341`.
+- Otevřené: časy z příjmu u verzí příkazů (first-seen) a index pro čtení při
+  velkém množství archivovaných řádků; klient po zapnutí může pollovat po 20 s.
+- Produkce 14. 10. odpoledne: Tradeify stál od 2. 10. na
+  `journal-legacy-reference-ambiguous` (finální exit rozdělený na víc fillů,
+  starý záznam kopírky jen u jednoho) → migrace `20261014150000`
+  (`journal_legacy_identity` bere přesně zaznamenaný fill). Cron napřed
+  obsluhuje připojení s rozpracovaným bodem (Lucid archivace jinak hladověla).
+  Stav: Lucid epocha 3 aktivní, 502 zmrazených pozic, živý vstup ~10k řádků
+  (z ~125k); Tradeify epocha 2, 271 zmrazených, importuje do konce evidence.
+- Oprava rozestupu: interval 6 h se měřil od „teď“, ale K je vždy > 24 h
+  staré → bod se posouval o kolo snímků každý běh (epochy 1–3 po 15 min).
+  Teď K_n+1 ≥ K_n + 6 h v čase brokera; rozpracovaný bod se dokončí.
+  Klient polluje deník po 20 s (`JOURNAL_SYNC_INTERVAL_MS`).
+- Zrychlení a návrat `service_role` na 8 s (14. 10. odpoledne, se souhlasem
+  Filipa; měřeno v produkci v transakcích s návratem):
+  `20261014170000` částečné indexy živých řádků ve stránkovém pořadí (stránka
+  vstupu 2,6 s → 30–130 ms); `20261014180000` index `trades(user_id,
+  data->>'copierTradeId')` + mapa leaderů jednou za persist
+  (`journal_legacy_identity` bralo 10,4 s z 11,4 s; celý přepočet Lucidu
+  594 pozic 0,73 s, okno 0,16 s); archivace/úklid po 1 000 řádcích;
+  `20261014190000` reset timeoutu. Pak padalo čtení: PL/pgSQL po 5 voláních
+  obecný plán → `archived_epoch > $epoch` přes stránkový index (14,5 s) →
+  `20261014200000` `plan_cache_mode = force_custom_plan` (čtení, begin,
+  cleanup bodu). Výpadek importu 13:21–13:28 UTC, pak stabilní.
+  Poučení: plány PL/pgSQL testovat i s `force_generic_plan`.
+- Zbývá: archivační dávku změřit při dalším posunu bodu (≥ 18:25 UTC);
+  revize u zmrazených řádků se přepisují při každém persistu (roste s
+  historií → čtení appky by mělo brát zmrazené řádky bez stejné revize, nový
+  build iOS); 2 Tradeify a 1 Lucid pozice zmrazené jako `pending/incomplete`
+  (5. a 7. 10.).
+
 ### 2026-10-12 — Follower čeká na svou kopii vstupu (Claude, varianta 1 Filipa)
 
 Větev `claude/copier-entry-wait-20261012`. Dva produkční obchody 12. 10. ráno:

@@ -33,7 +33,7 @@ export type JournalStageResult = { accepted: true; staged: true }
 
 export async function persistStagedJournalPositions(db: SupabaseClient, scope: JournalFeedScope,
   revision: number, positions: readonly JournalPositionWrite[], receipt: Record<string, unknown>,
-  options: { maxChunks?: number; maxMs?: number } = {}): Promise<JournalStageResult> {
+  options: { maxChunks?: number; maxMs?: number; checkpointEpoch?: number; inputGeneration?: number } = {}): Promise<JournalStageResult> {
   const maxChunks = options.maxChunks ?? 8, maxMs = options.maxMs ?? 5000;
   if (!Number.isSafeInteger(maxChunks) || maxChunks < 1 || maxChunks > 64 || !Number.isFinite(maxMs) || maxMs <= 0) {
     throw new Error('invalid-journal-stage-budget');
@@ -48,14 +48,15 @@ export async function persistStagedJournalPositions(db: SupabaseClient, scope: J
     const { data, error } = await db.rpc(name, { ...common, ...args });
     if (error) {
       const known = ['journal-legacy-reference-ambiguous', 'journal-legacy-connection-unavailable',
-        'journal-import-checkpoint-mismatch', 'journal-stage-conflict', 'journal-stage-superseded']
+        'journal-import-checkpoint-mismatch', 'journal-stage-conflict', 'journal-stage-superseded', 'journal-frozen-conflict']
         .find(code => error.message.includes(code));
       throw new Error(known ?? 'journal-stage-write-failed');
     }
     return data;
   };
   const started = await invoke('begin_journal_position_stage', { p_revision: revision, p_run_key: hash.digest('hex'),
-    p_chunk_count: chunks.length, p_position_count: positions.length, p_import_receipt: receipt });
+    p_chunk_count: chunks.length, p_position_count: positions.length, p_import_receipt: receipt,
+    ...(options.checkpointEpoch != null ? { p_checkpoint_epoch: options.checkpointEpoch, p_input_generation: options.inputGeneration } : {}) });
   if (started?.accepted === false && started.stale === true) return { accepted: false, stale: true };
   if (started?.accepted !== true || typeof started.runId !== 'string'
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(started.runId)

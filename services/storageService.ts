@@ -18,7 +18,7 @@ import { clearAppStorage } from '../utils/appStorage';
 import { parseOptionalTradeValidity } from './tradeValidity';
 import { containsTradeNoteHistory, hydrateOwnedTradeNoteHistories, publicTradeNotes, stripTradeNoteHistory as stripNoteHistory } from './tradeNotePrivacy';
 import { backtestReviewDataFromRow, backtestReviewPatch, requestBacktestReviewPatch, type BacktestReviewSnapshot } from './backtestReviewPersistence';
-import { hydrateOwnedJournalTrades, stripPrivateJournalHistory, journalProjectionFingerprint } from './journalTradeHydration';
+import { hydrateOwnedJournalTrades, stripPrivateJournalHistory, journalProjectionFingerprint, JOURNAL_READ_ATTEMPTS } from './journalTradeHydration';
 import { cacheVerifiedJournalDetail, getCachedJournalDetail, readOwnedJournalDetails } from './journalTradeDetail';
 import { getCachedCopierSnapshotSignedUrls } from './copierSnapshotSignedUrlCache';
 import { readTradeListPages } from './tradeListPages';
@@ -627,6 +627,18 @@ export const storageService = {
   },
 
   async getTrades(targetUserId?: string): Promise<Trade[]> {
+    // Kořenové stránky hlídá otisk projekce; zápis živého deníku během čtení
+    // (otevřená pozice ~každou minutu) = zopakovat celé čtení.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await storageService.getTradesOnce(targetUserId);
+      } catch (reason) {
+        if (attempt >= JOURNAL_READ_ATTEMPTS || !(reason instanceof Error) || reason.message !== 'journal-facts-changed-during-read') throw reason;
+      }
+    }
+  },
+
+  async getTradesOnce(targetUserId?: string): Promise<Trade[]> {
     const requestVersion=authStateVersion;
     const ownerId=await getUserId();
     const userId = targetUserId || ownerId;
