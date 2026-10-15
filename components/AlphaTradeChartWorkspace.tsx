@@ -20,7 +20,7 @@ import {
 import { IndicatorController, createBuiltinRegistry, type ChartViewApi } from '@getcandlekit/charts/react';
 import type { Drawing } from '@getcandlekit/charts';
 import 'flexlayout-react/style/light.css';
-import { Actions as FlexLayoutActions, type Model as FlexLayoutModel, type Node as FlexLayoutNode } from 'flexlayout-react';
+import { Actions as FlexLayoutActions, DockLocation as FlexLayoutDockLocation, type Model as FlexLayoutModel, type Node as FlexLayoutNode } from 'flexlayout-react';
 import {
   Download,
   GripVertical,
@@ -28,6 +28,7 @@ import {
   Loader2,
   LocateFixed,
   Maximize2,
+  Minimize2,
   Pause,
   Play,
   Plus,
@@ -35,6 +36,7 @@ import {
   Rewind,
   RotateCcw,
   Save,
+  SkipForward,
   StepForward,
   Undo2,
   Upload,
@@ -101,13 +103,21 @@ import {
   CHART_REPLAY_STEP_MINUTES,
   CHART_REPLAY_SPEEDS,
   DEFAULT_CHART_REPLAY_STATE,
+  chartReplaySpeedDescription,
   isReplayAtLatestCandle,
+  nearestReplayCandleTime,
   replayCandleCountAt,
+  replayLatestTime,
+  replayStartPresetTime,
   type ChartReplaySpeed,
+  type ReplayStartPreset,
   type ChartReplayState,
   type ChartReplayStepMinutes,
 } from '../services/chartReplay';
 import ReplayGoToMenu from './ReplayGoToMenu';
+import { ReplayChoiceMenu, ReplayStartMenu } from './ReplayToolbarMenus';
+import ChartWorkspaceStatusRow, { type ChartWorkspaceRange } from './ChartWorkspaceStatusRow';
+import { logicalRangeCenteredOn, logicalRangeForLastSeconds } from '../services/chartWorkspaceRange';
 import { tradeChartTiming } from '../services/tradeChartData';
 import { prepareBacktestReplayGoTo, prepareBacktestReplayStep, ReplayDataRequestCoordinator } from '../services/backtestReplayData';
 import {
@@ -345,6 +355,15 @@ interface WorkspaceDataContextValue {
   chartNotes?: readonly ChartNote[];
   onChartNotesChange?: (notes: ChartNote[]) => void;
   review?: { trades: readonly Trade[]; drawingKey: string; renderPanelOverlay?: WorkspaceReviewSlots['renderPanelOverlay']; candlesForRoot?: WorkspaceReviewSlots['candlesForRoot'] };
+  /** Ovládání panelu při najetí myší — nahrazuje tab strip (maximalizace, zavření). */
+  paneActions: WorkspacePaneActions;
+}
+
+interface WorkspacePaneActions {
+  panelCount: number;
+  maximizedPanelId: string | null;
+  toggleMaximize: (panelId: string) => void;
+  close: (panelId: string) => void;
 }
 
 interface WorkspacePanelControl {
@@ -376,6 +395,10 @@ const DEFAULT_SYNC_SETTINGS: ChartWorkspaceSyncSettings = {
   drawings: true,
 };
 const WORKSPACE_GLOBAL = {
+  // Panely bez tabů jako v TradingView. Tab strip se vrací jen tabsetu, který
+  // má víc tabů (starší rozložení), jinak by byly schované — viz
+  // `syncWorkspaceTabStrips`.
+  tabSetEnableTabStrip: false,
   tabEnableClose: true,
   tabEnableRename: false,
   tabSetEnableMaximize: true,
@@ -711,7 +734,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
 
   return (
     <div
-      className={`absolute inset-0 flex flex-col alphatrade-workspace-panel ${isActive ? 'is-active' : ''} ${context.isDark ? 'is-dark bg-[#090d12]' : 'bg-white'}`}
+      className={`group/pane absolute inset-0 flex flex-col alphatrade-workspace-panel ${isActive ? 'is-active' : ''} ${context.isDark ? 'is-dark bg-[#090d12]' : 'bg-white'}`}
       onPointerDownCapture={() => context.activatePanel(instance.id)}
       data-panel-id={instance.id}
       data-active-panel={isActive || undefined}
@@ -719,6 +742,31 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       data-panel-timeframe={config.timeframe}
     >
       <div ref={chartAreaRef} className="relative flex-1 min-h-0">
+        {(context.paneActions.panelCount > 1 || context.paneActions.maximizedPanelId === instance.id) && (
+          // Místo tab stripu: ovládání panelu se ukáže až po najetí myší, jako
+          // v TradingView. Vlevo od cenové osy, aby nepřekrylo legendu.
+          <div
+            data-snapshot-hide
+            className={`absolute right-[76px] top-1 z-[640] flex items-center gap-0.5 rounded-md border p-0.5 opacity-0 transition-opacity group-hover/pane:opacity-100 focus-within:opacity-100 ${context.isDark ? 'border-white/10 bg-[#101720]/90 text-slate-400' : 'border-slate-200 bg-white/90 text-slate-500'}`}
+          >
+            <button
+              type="button"
+              className={`grid h-6 w-6 place-items-center rounded ${context.isDark ? 'hover:bg-white/10 hover:text-white' : 'hover:bg-slate-100 hover:text-slate-900'}`}
+              onClick={() => context.paneActions.toggleMaximize(instance.id)}
+              title={context.paneActions.maximizedPanelId === instance.id ? 'Obnovit rozložení' : 'Maximalizovat graf'}
+              aria-label={context.paneActions.maximizedPanelId === instance.id ? 'Obnovit rozložení' : 'Maximalizovat graf'}
+            >{context.paneActions.maximizedPanelId === instance.id ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
+            {context.paneActions.panelCount > 1 && (
+              <button
+                type="button"
+                className={`grid h-6 w-6 place-items-center rounded ${context.isDark ? 'hover:bg-white/10 hover:text-white' : 'hover:bg-slate-100 hover:text-slate-900'}`}
+                onClick={() => context.paneActions.close(instance.id)}
+                title="Zavřít graf"
+                aria-label="Zavřít graf"
+              ><X size={12} /></button>
+            )}
+          </div>
+        )}
         {!loading && !error && candles.length > 0 && (
           <>
           <CandleKitTradeChart
@@ -1166,6 +1214,59 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       () => setReplayDataLoading(false),
     );
   }, [activePanelId, chartTimeZone, goToSettings]);
+  /**
+   * Start z menu panelu (datum, první, náhodná svíčka). Jen mimo backtest:
+   * session hlídá zpracované obchody a data dotahuje po kouscích, takže tam
+   * start jde vybrat výhradně nůžkami se stejnými kontrolami jako dosud.
+   */
+  const startReplayAtTime = useCallback((requestedTime: number, label: string) => {
+    if (backtestSessionRef.current || replayInteractionPausedRef.current) return;
+    const source = panelControlsRef.current.get(activePanelId)?.rawCandles ?? [];
+    const time = nearestReplayCandleTime(source, requestedTime);
+    if (time === null) {
+      setStatus('Bar Replay: graf ještě nemá načtená data');
+      return;
+    }
+    selectReplayStart(time);
+    setStatus(`Bar Replay: ${label} ${goToTimeLabel(time, chartTimeZone)}`);
+  }, [activePanelId, chartTimeZone, selectReplayStart]);
+  const startReplayPreset = useCallback((preset: ReplayStartPreset) => {
+    const source = panelControlsRef.current.get(activePanelId)?.rawCandles ?? [];
+    const time = replayStartPresetTime(source, preset);
+    if (time === null) {
+      setStatus('Bar Replay: graf ještě nemá načtená data');
+      return;
+    }
+    startReplayAtTime(time, preset === 'first' ? 'první dostupná svíčka' : 'náhodná svíčka');
+  }, [activePanelId, startReplayAtTime]);
+  const enterReplaySelection = useCallback(() => {
+    if (replayInteractionPausedRef.current) return;
+    replayDataRequestsRef.current.cancel();
+    setReplayDataLoading(false);
+    setReplaySelectionTime(null);
+    setReplay(current => ({ ...current, phase: 'selecting', playing: false }));
+    setStatus('Klikni do libovolného grafu na svíčku, od které chceš replay spustit');
+  }, []);
+  /** „Jump to real-time chart“ — kurzor na poslední svíčku, replay zůstává zapnutý. */
+  const jumpReplayToEnd = useCallback(() => {
+    if (backtestSessionRef.current || replayInteractionPausedRef.current) return;
+    const latest = replayLatestTime(panelControlsRef.current.get(activePanelId)?.rawCandles ?? []);
+    if (latest === null) return;
+    replayDataRequestsRef.current.cancel();
+    setReplayDataLoading(false);
+    setReplay(current => current.phase === 'active'
+      ? { ...current, cursorTime: latest, playing: false }
+      : current);
+    setStatus('Bar Replay: konec dat');
+  }, [activePanelId]);
+  const exitReplay = useCallback(() => {
+    if (backtestSessionRef.current) return;
+    replayDataRequestsRef.current.cancel();
+    setReplayDataLoading(false);
+    setReplaySelectionTime(null);
+    setReplay(DEFAULT_CHART_REPLAY_STATE);
+    setStatus('Bar Replay ukončen');
+  }, []);
   useEffect(() => {
     if (replay.phase !== 'active' || !replay.playing || replayDataLoading) return;
     const delay = chartReplayDelayMs(replay.speed);
@@ -1239,6 +1340,123 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     restoredSessionLayoutRef.current = true;
   }, [backtestSession, workspace]);
 
+  const getLiveModel = useCallback(() => (workspace as unknown as { driver?: { getModel?: () => FlexLayoutModel | null } })
+    .driver?.getModel?.() ?? null, [workspace]);
+  const [paneLayout, setPaneLayout] = useState<{ count: number; maximizedPanelId: string | null }>({ count: 1, maximizedPanelId: null });
+  /**
+   * Bez tab stripu by druhý tab v jednom tabsetu nebyl vidět. Starší uložená
+   * rozložení (a import) takové tabsety mít můžou, proto jim strip vracíme;
+   * tabsety s jedním grafem ho nemají, jako panely v TradingView.
+   */
+  useEffect(() => {
+    let frame: number | null = null;
+    let retry: number | null = null;
+    let attempts = 0;
+    const sync = () => {
+      frame = null;
+      const model = getLiveModel();
+      if (!model) {
+        // FlexLayout driver vzniká až s prvním renderem adapteru.
+        if (attempts++ < 50) retry = window.setTimeout(schedule, 100);
+        return;
+      }
+      let count = 0;
+      let maximizedPanelId: string | null = null;
+      const updates: { id: string; enableTabStrip: boolean }[] = [];
+      model.visitNodes(node => {
+        if (node.getType() === 'tab') count += 1;
+        if (node.getType() !== 'tabset') return;
+        const tabset = node as FlexLayoutNode & { isMaximized?: () => boolean; isEnableTabStrip?: () => boolean; getSelectedNode?: () => FlexLayoutNode | undefined };
+        const wantsStrip = node.getChildren().length > 1;
+        if (tabset.isEnableTabStrip?.() !== wantsStrip) updates.push({ id: node.getId(), enableTabStrip: wantsStrip });
+        if (tabset.isMaximized?.()) maximizedPanelId = tabset.getSelectedNode?.()?.getId() ?? null;
+      });
+      updates.forEach(update => model.doAction(FlexLayoutActions.updateNodeAttributes(update.id, { enableTabStrip: update.enableTabStrip })));
+      setPaneLayout(current => current.count === count && current.maximizedPanelId === maximizedPanelId
+        ? current
+        : { count, maximizedPanelId });
+    };
+    const schedule = () => { if (frame === null) frame = window.requestAnimationFrame(sync); };
+    schedule();
+    const unsubscribe = workspace.subscribe(schedule);
+    // Maximalizace se do uloženého rozložení nepromítá okamžitě (debounce),
+    // tlačítko ji ale hlásí hned — viz toggleMaximize.
+    return () => {
+      unsubscribe();
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      if (retry !== null) window.clearTimeout(retry);
+    };
+  }, [getLiveModel, workspace, workspaceMountVersion]);
+  const findTabset = useCallback((model: FlexLayoutModel, panelId: string) => {
+    let tabsetId: string | null = null;
+    model.visitNodes(node => {
+      if (!tabsetId && node.getType() === 'tab' && node.getId() === panelId) tabsetId = node.getParent()?.getId() ?? null;
+    });
+    return tabsetId;
+  }, []);
+  /** Nový graf vedle aktivního (vpravo), ne jako schovaný tab. */
+  const addPanelBeside = useCallback((config: WorkspacePanelConfig, title: string) => {
+    const model = getLiveModel();
+    const targetTabset = model ? (model.getActiveTabset()?.getId() ?? findTabset(model, activePanelId)) : null;
+    if (!model || !targetTabset) {
+      workspace.addPanel(WORKSPACE_KIND, config, title);
+      return;
+    }
+    const id = `panel-${WORKSPACE_KIND}-${Date.now().toString(36)}`;
+    const instance = { id, kind: WORKSPACE_KIND, title, config };
+    model.doAction(FlexLayoutActions.addNode(
+      { id, type: 'tab', name: title, component: WORKSPACE_KIND, config: instance },
+      targetTabset,
+      FlexLayoutDockLocation.RIGHT,
+      -1,
+      true,
+    ));
+    pendingActivePanelRef.current = id;
+  }, [activePanelId, findTabset, getLiveModel, workspace]);
+  const toggleMaximizePanel = useCallback((panelId: string) => {
+    const model = getLiveModel();
+    const tabsetId = model ? findTabset(model, panelId) : null;
+    if (!model || !tabsetId) return;
+    model.doAction(FlexLayoutActions.maximizeToggle(tabsetId));
+    setPaneLayout(current => ({ ...current, maximizedPanelId: current.maximizedPanelId === panelId ? null : panelId }));
+  }, [findTabset, getLiveModel]);
+  const closePanel = useCallback((panelId: string) => {
+    if (paneLayout.count <= 1) return;
+    workspace.removePanel(panelId);
+    setStatus('Graf zavřen');
+  }, [paneLayout.count, workspace]);
+  const showActiveRange = useCallback((range: ChartWorkspaceRange) => {
+    const control = panelControlsRef.current.get(activePanelId);
+    const chart = control?.chartApi?.controller.getChart();
+    const target = control ? logicalRangeForLastSeconds(control.getCandles(), range.seconds) : null;
+    if (!chart || !target) return;
+    chart.timeScale().setVisibleLogicalRange(target);
+    setStatus(range.seconds === null ? 'Celý rozsah dat' : `Posledních ${range.label}`);
+  }, [activePanelId]);
+  const goToActiveTime = useCallback((unixSeconds: number) => {
+    const control = panelControlsRef.current.get(activePanelId);
+    const chart = control?.chartApi?.controller.getChart();
+    if (!control || !chart) return;
+    const current = chart.timeScale().getVisibleLogicalRange();
+    const target = logicalRangeCenteredOn(control.getCandles(), unixSeconds, current ? current.to - current.from : NaN);
+    if (!target) {
+      setStatus('Tenhle čas graf nemá načtený — data jsou jen kolem obchodu');
+      return;
+    }
+    chart.timeScale().setVisibleLogicalRange(target);
+    setStatus(`Graf na ${goToTimeLabel(unixSeconds, chartTimeZone)}`);
+  }, [activePanelId, chartTimeZone]);
+  const activeLatestTime = useCallback(
+    () => panelControlsRef.current.get(activePanelId)?.getCandles().at(-1)?.time ?? null,
+    [activePanelId],
+  );
+  const paneActions = useMemo<WorkspacePaneActions>(() => ({
+    panelCount: paneLayout.count,
+    maximizedPanelId: paneLayout.maximizedPanelId,
+    toggleMaximize: toggleMaximizePanel,
+    close: closePanel,
+  }), [closePanel, paneLayout.count, paneLayout.maximizedPanelId, toggleMaximizePanel]);
+
   // Stejné pravidlo jako v selectReplayStart — graf podle něj ukáže, že nůžky
   // v dané oblasti nic neustřihnou, místo tichého odmítnutí.
   const replaySelectionMinimumTime = useMemo(() => {
@@ -1311,7 +1529,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     chartNotes: backtestSession ? undefined : chartNotes,
     review: reviewTrades && reviewDrawingKey ? { trades: reviewTrades, drawingKey: reviewDrawingKey, renderPanelOverlay: reviewPanelOverlay, candlesForRoot: reviewCandlesForRoot } : undefined,
     onChartNotesChange: backtestSession ? undefined : onChartNotesChange,
-  }), [reviewTrades, reviewDrawingKey, reviewPanelOverlay, reviewCandlesForRoot, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+    paneActions,
+  }), [paneActions, reviewTrades, reviewDrawingKey, reviewPanelOverlay, reviewCandlesForRoot, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const reviewTrade = reviewTradeId
     ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)
@@ -1923,6 +2142,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const topButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-md text-[9px] font-bold transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`;
   const topDivider = `h-6 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
   const replaySource = backtestSession?.candlesByRoot[backtestSession.executionInstrument] ?? activeControl?.rawCandles ?? [];
+  const replayDivider = `mx-0.5 h-5 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
   const replayAtEnd = isReplayAtLatestCandle(replaySource, replay.cursorTime)
     && (!backtestSession?.onEnsureReplayData || (backtestSession.loadedUntilMs ?? 0) >= backtestSession.endMs);
   // Poslední odhalená svíčka. Dřív se tu při každém renderu kopírovalo
@@ -2031,7 +2251,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         <button type="button" className={topButton} onClick={() => {
           const panelNumber = nextPanelNumberRef.current;
           nextPanelNumberRef.current += 1;
-          workspace.addPanel(WORKSPACE_KIND, panelConfig(initialRoot, '1m', indicatorDefaults), `Graf ${panelNumber}`);
+          addPanelBeside(panelConfig(initialRoot, '1m', indicatorDefaults), `Graf ${panelNumber}`);
           setStatus('Nový panel přidán');
         }} title="Přidat nový graf"><Plus size={15} /> <span className="hidden md:inline">Graf</span></button>
         <span className={topDivider} />
@@ -2145,9 +2365,19 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           />
           <div
             ref={workspaceShellRef}
-            className={`alphatrade-candlekit-workspace absolute top-0 left-[52px] right-0 ${tradingPanel ? 'bottom-[88px]' : 'bottom-0'} ${isDark ? 'is-dark' : ''}`}
+            className={`alphatrade-candlekit-workspace absolute top-0 left-[52px] right-0 ${tradingPanel ? 'bottom-[116px]' : 'bottom-7'} ${isDark ? 'is-dark' : ''}`}
           >
             <FlexLayoutAdapter key={workspaceMountVersion} workspace={workspace} hideToolbar />
+          </div>
+          <div className={`absolute left-[52px] right-0 z-40 ${tradingPanel ? 'bottom-[88px]' : 'bottom-0'}`}>
+            <ChartWorkspaceStatusRow
+              onRange={showActiveRange}
+              onGoToTime={goToActiveTime}
+              defaultGoToTime={activeLatestTime}
+              timeZone={chartTimeZone}
+              timeZoneLabel={chartTimeZoneLabel}
+              isDark={isDark}
+            />
           </div>
           {tradingPanel && (
             <div className={`absolute bottom-0 left-[52px] right-0 z-40 h-[88px] border-t ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
@@ -2161,7 +2391,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               className={`absolute z-[650] flex h-10 items-center gap-0.5 rounded-lg border p-1 shadow-xl backdrop-blur-md ${isDark ? 'border-white/10 bg-[#101720]/95 text-slate-300 shadow-black/40' : 'border-slate-200 bg-white/95 text-slate-700 shadow-slate-900/15'}`}
               style={replayToolbarPosition
                 ? { left: replayToolbarPosition.left, top: replayToolbarPosition.top }
-                : { left: '50%', bottom: tradingPanel ? 100 : 12, transform: 'translateX(-50%)' }}
+                : { left: '50%', bottom: tradingPanel ? 128 : 40, transform: 'translateX(-50%)' }}
               role="toolbar"
               aria-label="Bar Replay ovládání"
             >
@@ -2172,11 +2402,23 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 title="Přetáhnout Bar Replay panel"
                 aria-label="Přetáhnout Bar Replay panel"
               ><GripVertical size={14} /></button>
+              <ReplayStartMenu
+                onSelectBar={enterReplaySelection}
+                onSelectDate={time => startReplayAtTime(time, 'start')}
+                onSelectPreset={startReplayPreset}
+                allowJumps={!backtestSession}
+                selecting={replay.phase === 'selecting'}
+                cursorTime={replay.cursorTime}
+                timeZone={chartTimeZone}
+                timeZoneLabel={chartTimeZoneLabel}
+                isDark={isDark}
+                buttonClassName={topButton}
+              />
+              <span className={replayDivider} />
               <button
                 type="button"
                 className={`${topButton} px-2 disabled:opacity-30`}
-                disabled={!reviewReplayIdle && (replay.phase !== 'active' || replayAtEnd)}
-                onClick={() => reviewReplayIdle ? startReviewReplay('play') : setReplay(current => ({ ...current, playing: !current.playing }))}
+                disabled={!reviewReplayIdle && (replay.phase !== 'active' || replayAtEnd)}                onClick={() => reviewReplayIdle ? startReviewReplay('play') : setReplay(current => ({ ...current, playing: !current.playing }))}
                 title={replay.playing ? 'Pozastavit' : 'Přehrát'}
                 aria-label={replay.playing ? 'Pozastavit Bar Replay' : 'Přehrát Bar Replay'}
               >{replay.playing ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button>
@@ -2200,29 +2442,46 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 buttonClassName={topButton}
               />
               {replayDataLoading && <span role="status" className="whitespace-nowrap px-2 text-[10px] text-blue-400">Načítám data…</span>}
-              <select
+              <ReplayChoiceMenu
                 value={replay.speed}
-                onChange={event => setReplay(current => ({ ...current, speed: Number(event.target.value) as ChartReplaySpeed }))}
-                className={`h-8 rounded-md border-0 px-2 text-[10px] font-bold outline-none ${isDark ? 'bg-transparent text-slate-300 hover:bg-white/5' : 'bg-transparent text-slate-700 hover:bg-slate-100'}`}
-                aria-label="Rychlost Bar Replay"
+                options={CHART_REPLAY_SPEEDS.map(speed => ({ value: speed, label: `${speed}x`, description: chartReplaySpeedDescription(speed) }))}
+                heading="Rychlost replaye"
+                onChange={speed => setReplay(current => ({ ...current, speed: speed as ChartReplaySpeed }))}
+                isDark={isDark}
+                buttonClassName={topButton}
+                ariaLabel="Rychlost Bar Replay"
                 title="Rychlost Bar Replay"
-              >
-                {CHART_REPLAY_SPEEDS.map(speed => <option key={speed} value={speed}>{speed}x</option>)}
-              </select>
-              <select
+              />
+              <ReplayChoiceMenu
                 value={replay.stepMinutes ?? 1}
-                onChange={event => setReplay(current => ({
-                  ...current,
-                  stepMinutes: Number(event.target.value) as ChartReplayStepMinutes,
-                }))}
-                className={`h-8 rounded-md border-0 px-2 text-[10px] font-bold outline-none ${isDark ? 'bg-transparent text-slate-300 hover:bg-white/5' : 'bg-transparent text-slate-700 hover:bg-slate-100'}`}
-                aria-label="Timeframe kroku Bar Replay"
+                options={CHART_REPLAY_STEP_MINUTES.map(minutes => ({ value: minutes, label: REPLAY_TIMEFRAME_LABELS[minutes] }))}
+                heading="Interval kroku"
+                onChange={minutes => setReplay(current => ({ ...current, stepMinutes: minutes as ChartReplayStepMinutes }))}
+                isDark={isDark}
+                buttonClassName={topButton}
+                ariaLabel="Timeframe kroku Bar Replay"
                 title="Timeframe jednoho replay kroku"
-              >
-                {CHART_REPLAY_STEP_MINUTES.map(minutes => (
-                  <option key={minutes} value={minutes}>{REPLAY_TIMEFRAME_LABELS[minutes]}</option>
-                ))}
-              </select>
+              />
+              {!backtestSession && (
+                <>
+                  <span className={replayDivider} />
+                  <button
+                    type="button"
+                    className={`${topButton} px-2 disabled:opacity-30`}
+                    disabled={replay.phase !== 'active' || replayAtEnd}
+                    onClick={jumpReplayToEnd}
+                    title="Skočit na konec dat"
+                    aria-label="Bar Replay skok na konec dat"
+                  ><SkipForward size={15} /></button>
+                  <button
+                    type="button"
+                    className={`${topButton} px-2`}
+                    onClick={exitReplay}
+                    title="Ukončit Bar Replay"
+                    aria-label="Ukončit Bar Replay"
+                  ><X size={15} /></button>
+                </>
+              )}
             </div>
           )}
           {reviewTrade && backtestSession?.onTradeReviewSave ? (

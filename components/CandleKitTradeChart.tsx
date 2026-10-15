@@ -42,6 +42,7 @@ import {
   GripVertical,
   Lock,
   LocateFixed,
+  Rewind,
   RotateCcw,
   Scissors,
   Settings,
@@ -2888,7 +2889,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           ? keepView ? actualViewportBeforeUpdate! : { from: newestLogicalIndex - centeredSpan / 2, to: newestLogicalIndex + centeredSpan / 2 }
           : transition
             ? { from: newestLogicalIndex + 6 - transition.logicalSpan, to: newestLogicalIndex + 6 }
-            : { from: Math.max(0, visibleCandles.length - replayBars), to: visibleCandles.length + 6 };
+            // Bez kliknutí (start z menu: datum, první, náhodná svíčka) drží
+            // výchozí šířku i u startu na začátku dat — záporné `from` nechá
+            // vlevo prázdno jako TradingView, místo jedné svíčky přes celý graf.
+            : { from: visibleCandles.length - replayBars, to: visibleCandles.length + 6 };
         const initialRange = transition
           ? {
             from: newestLogicalIndex - transition.logicalSpan * transition.cutRatio,
@@ -3977,8 +3981,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           }
         } else {
           const replayBars = compactMode ? 90 : 130;
+          // Stejně jako po skoku zpět: šířka zůstává i u startu na začátku dat.
           chart.timeScale().setVisibleLogicalRange({
-            from: Math.max(0, visibleCandles.length - replayBars),
+            from: visibleCandles.length - replayBars,
             to: visibleCandles.length + 6,
           });
         }
@@ -5088,6 +5093,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             <span className="truncate font-semibold">{instrumentLegend.name}</span>
           )}
           <span className={`shrink-0 font-semibold ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>· {instrumentLegend.timeframe}</span>
+          {(replayActive || replaySelecting) && (
+            // Jako v TradingView: modrá ikona u symbolu, aby bylo vidět, že
+            // graf neukazuje živá data, i když je replay panel odtažený jinam.
+            <span
+              data-replay-legend
+              className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-[#2962ff] text-white"
+              title="Bar Replay"
+              aria-label="Graf je v Bar Replay"
+            ><Rewind size={9} fill="currentColor" /></span>
+          )}
         </div>
         <div className={`flex h-4 items-center gap-2 font-medium ${isDark ? 'text-slate-300' : 'text-slate-600'}`} aria-label="OHLC označené svíčky">
           <span ref={ohlcValuesRef} hidden={!chartSettings.statusLine.chartValues} />

@@ -166,6 +166,49 @@ export const chartReplayShortcut = (
   return null;
 };
 
+/**
+ * Popis rychlosti jako v TradingView („10 kroků za 1 s“, „1 krok za 5 s“).
+ * Rychlost znamená počet replay kroků za sekundu, viz `chartReplayDelayMs`.
+ */
+export const chartReplaySpeedDescription = (speed: ChartReplaySpeed): string => {
+  if (speed >= 1) {
+    const steps = Math.round(speed);
+    const noun = steps === 1 ? 'krok' : steps < 5 ? 'kroky' : 'kroků';
+    return `${steps} ${noun} za 1 s`;
+  }
+  return `1 krok za ${Math.round(1 / speed)} s`;
+};
+
+export type ReplayStartPreset = 'first' | 'random';
+
+/** Kolik svíček nechat za náhodným startem, aby bylo co přehrávat (8 h na 1m). */
+const RANDOM_START_RESERVE = 480;
+
+/**
+ * Start replaye bez klikání do grafu — „First available date“ a „Random bar“
+ * z TradingView. Náhodný start vynechá úplný začátek (indikátory by neměly
+ * historii) i posledních pár hodin (nebylo by co přehrávat); u krátké řady se
+ * omezení zmenší, aby zbyla aspoň nějaká volba.
+ */
+export const replayStartPresetTime = (
+  candles: MarketCandle[],
+  preset: ReplayStartPreset,
+  random: () => number = Math.random,
+): number | null => {
+  if (candles.length === 0) return null;
+  if (preset === 'first') return candles[0].time;
+  const reserve = Math.min(RANDOM_START_RESERVE, Math.floor(candles.length / 2));
+  const lead = Math.min(Math.floor(candles.length / 10), Math.max(0, candles.length - reserve - 1));
+  const lastAllowed = Math.max(lead, candles.length - 1 - reserve);
+  const span = lastAllowed - lead + 1;
+  const index = lead + Math.min(span - 1, Math.max(0, Math.floor(random() * span)));
+  return candles[index].time;
+};
+
+/** Poslední dostupná svíčka — „Jump to real-time chart“ v TradingView. */
+export const replayLatestTime = (candles: MarketCandle[]): number | null =>
+  candles.length === 0 ? null : candles[candles.length - 1].time;
+
 export const isReplayAtLatestCandle = (
   candles: MarketCandle[],
   cursorTime: number | null,

@@ -5,11 +5,14 @@ import {
   advanceReplayTimeByInterval,
   chartReplayDelayMs,
   chartReplayShortcut,
+  chartReplaySpeedDescription,
   futureAxisTimes,
   isReplayAtLatestCandle,
   nearestReplayCandleTime,
   retainReplayChartDataSeed,
+  replayLatestTime,
   replayLogicalRangeAfterPrepend,
+  replayStartPresetTime,
   replayViewportAfterBarsUpdate,
   revealReplayCandles,
 } from '../services/chartReplay';
@@ -206,5 +209,49 @@ describe('futureAxisTimes — protažení časové osy za poslední svíčku', (
 
   it('nikdy nevrátí čas poslední svíčky — ten už v datech je', () => {
     expect(futureAxisTimes(1_000, 60, 4)).not.toContain(1_000);
+  });
+});
+
+describe('Bar Replay — start a popisky jako v TradingView', () => {
+  const series = (count: number): MarketCandle[] => Array.from({ length: count }, (_, index) => ({
+    time: 1_700_000_000 + index * 60, open: 1, high: 1, low: 1, close: 1, volume: 0,
+  }));
+
+  it('popisuje rychlost počtem kroků za sekundu', () => {
+    expect(chartReplaySpeedDescription(10)).toBe('10 kroků za 1 s');
+    expect(chartReplaySpeedDescription(3)).toBe('3 kroky za 1 s');
+    expect(chartReplaySpeedDescription(1)).toBe('1 krok za 1 s');
+    expect(chartReplaySpeedDescription(0.5)).toBe('1 krok za 2 s');
+    expect(chartReplaySpeedDescription(0.3)).toBe('1 krok za 3 s');
+    expect(chartReplaySpeedDescription(0.1)).toBe('1 krok za 10 s');
+  });
+
+  it('první dostupná svíčka je začátek řady', () => {
+    const candles = series(100);
+    expect(replayStartPresetTime(candles, 'first')).toBe(candles[0].time);
+  });
+
+  it('náhodná svíčka nechá rezervu na začátku i na konci', () => {
+    const candles = series(2_000);
+    expect(replayStartPresetTime(candles, 'random', () => 0)).toBe(candles[200].time);
+    expect(replayStartPresetTime(candles, 'random', () => 0.999999)).toBe(candles[2_000 - 1 - 480].time);
+  });
+
+  it('náhodná svíčka funguje i na krátké řadě a nikdy nepřeteče', () => {
+    for (const count of [1, 2, 3, 10, 50]) {
+      const candles = series(count);
+      for (const value of [0, 0.5, 0.999999]) {
+        const time = replayStartPresetTime(candles, 'random', () => value);
+        expect(candles.some(candle => candle.time === time)).toBe(true);
+      }
+    }
+    expect(replayStartPresetTime([], 'random')).toBeNull();
+    expect(replayStartPresetTime([], 'first')).toBeNull();
+  });
+
+  it('konec dat je poslední svíčka', () => {
+    const candles = series(5);
+    expect(replayLatestTime(candles)).toBe(candles[4].time);
+    expect(replayLatestTime([])).toBeNull();
   });
 });
