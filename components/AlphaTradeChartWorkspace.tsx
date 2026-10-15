@@ -1,5 +1,6 @@
 import { sharedRevealedCandles } from '../services/chartReplayPaint';
-import TradeExecutionTimeline from './TradeExecutionTimeline';
+import TradeProgress from './TradeProgress';
+import { tradeTimelineEvents } from '../lib/tradeReplay';
 import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWorkspaceLibraryDialog';
 import { saveWorkspaceTemplate } from '../services/chartWorkspaceLibrary';
 import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
@@ -2164,6 +2165,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     };
   }, [centerSplitter, selectedDrawing, selectedFib, selectedPosition, workspaceHistory]);
 
+  const timelineEvents = useMemo(
+    () => !backtestSession && !review ? tradeTimelineEvents(trade.executionHistory) : [],
+    [backtestSession, review, trade.executionHistory],
+  );
   const topButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-md text-[9px] font-bold transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`;
   const topDivider = `h-6 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
   const replaySource = backtestSession?.candlesByRoot[backtestSession.executionInstrument] ?? activeControl?.rawCandles ?? [];
@@ -2272,6 +2277,16 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           disabled={!activeControl}
           title="Zaměřit aktivní graf na obchod"
         ><LocateFixed size={14} /><span className="hidden xl:inline">Obchod</span></button>
+        {/* Stejně jako v detailu obchodu: průběh je seznam pod tlačítkem, ne panel
+            pod grafem — graf má celou výšku. */}
+        {timelineEvents.length > 0 && (
+          <TradeProgress
+            events={timelineEvents}
+            cursorMs={replay.phase === 'active' && replay.cursorTime !== null ? replay.cursorTime * 1_000 : null}
+            isDark={isDark}
+            orderDetails
+          />
+        )}
         <span className={topDivider} />
         <button type="button" className={topButton} onClick={() => {
           const panelNumber = nextPanelNumberRef.current;
@@ -2550,8 +2565,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       </WorkspaceDataContext.Provider>
       {review && <div ref={reviewSideRef} className="shrink-0 flex min-h-0" />}
       </div>
-      {review ? <div ref={reviewBottomRef} className="shrink-0" /> : !backtestSession && replay.phase === 'off' && trade.executionHistory
-        && <TradeExecutionTimeline history={trade.executionHistory} isDark={isDark} />}
+      {review && <div ref={reviewBottomRef} className="shrink-0" />}
     </div>
     </React.Profiler>
   );
