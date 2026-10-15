@@ -1496,15 +1496,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const reviewDrawingKey = review?.drawingKey;
   const reviewPanelOverlay = review?.renderPanelOverlay;
   const reviewCandlesForRoot = review?.candlesForRoot;
-  // Hodnocení: Bar Replay je připravený na obchod jako přehrávač v detailu —
-  // ▶ spustí přehrávání 15 min před vstupem (zarovnáno na 15 min, ať sedí
-  // na svíčku 1m/5m/15m grafu).
+  // Hodnocení i fullscreen obchodu: Bar Replay je připravený na obchod jako
+  // přehrávač v detailu — panel je vidět hned a ▶ spustí přehrávání 15 min
+  // před vstupem (zarovnáno na 15 min, ať sedí na svíčku 1m/5m/15m grafu).
   const reviewReplayStart = useMemo(() => {
+    if (backtestSession) return null;
     const first = reviewTrades?.[0];
-    if (!first || backtestSession) return null;
-    const { entryMs } = tradeChartTiming(first);
-    return Number.isFinite(entryMs) ? Math.floor((entryMs - 15 * 60_000) / 900_000) * 900 : null;
-  }, [backtestSession, reviewTrades]);
+    const startMs = first ? tradeChartTiming(first).entryMs : review ? NaN : entryMs;
+    return Number.isFinite(startMs) ? Math.floor((startMs - 15 * 60_000) / 900_000) * 900 : null;
+  }, [backtestSession, entryMs, review, reviewTrades]);
   // Jiný obchod ve frontě = přehrávání předchozího obchodu končí.
   useEffect(() => {
     if (reviewReplayStart == null) return;
@@ -2516,7 +2516,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                   ><SkipForward size={15} /></button>
                   <button
                     type="button"
-                    className={`${topButton} px-2`}
+                    className={`${topButton} px-2 disabled:opacity-30`}
+                    disabled={replay.phase === 'off'}
                     onClick={exitReplay}
                     title="Ukončit Bar Replay"
                     aria-label="Ukončit Bar Replay"
