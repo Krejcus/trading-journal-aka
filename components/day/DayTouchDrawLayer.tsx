@@ -12,13 +12,14 @@ import { pathSegmentId } from '../../lib/dayChartTools';
  * (`onDown`/`onMove`/`onUp` se souřadnicemi vůči prvku grafu), takže
  * nástroje, magnet, výběr i přesun kresby fungují stejně jako myší.
  *
- * Nástroje CandleKit: klepnutí položí první bod, tah natáhne a puštění
- * dokončí; klepnutí bez tahu nechá kresbu otevřenou pro druhé klepnutí.
- * Bez nástroje klepnutí na kresbu vybere, tah vybranou kresbu přesune;
- * jinde se graf normálně posouvá. Dva prsty vždy patří grafu (pinch).
+ * Ovládání jako mobilní TradingView: s nástrojem v ruce se objeví
+ * crosshair, tah prstem ho posouvá jako touchpad (bod není pod prstem),
+ * klepnutí potvrdí bod v místě crosshairu a rozdělaná kresba se táhne za
+ * ním. Bez nástroje klepnutí na kresbu vybere a tah ji přesune; jinde se
+ * graf normálně posouvá. Dva prsty vždy patří grafu (pinch).
  *
  * Cesta (`pathActive`, TradingView Path): klepnutí = bod, další klepnutí
- * nebo tah = další úsek (zlom), dvojklep = konec. Úseky jsou samostatné
+ * = zlom, dvojklep = konec. Úseky jsou samostatné
  * kresby CandleKit (`TrendLine`, poslední `Arrow`) se společnou skupinou
  * v ID, takže se dají smazat a obarvit najednou.
  */
@@ -97,14 +98,18 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       series = chartApi.controller.getSeries();
     } catch { return; }
 
+    // Kurzor (crosshair) jako v mobilním TradingView: tah prstem ho posouvá
+    // relativně (touchpad), takže bod není schovaný pod prstem; klepnutí
+    // potvrdí bod v místě kurzoru. Souřadnice vůči prvku grafu.
+    let cursor: { x: number; y: number } | null = null;
     let touching = false;
-    let start: { x: number; y: number } | null = null;
-    let last: { x: number; y: number } | null = null;
+    let touchStart: { x: number; y: number } | null = null;
+    let touchLast: { x: number; y: number } | null = null;
     let moved = false;
-    /** Druhé klepnutí dokončuje otevřenou kresbu (po klepnutí bez tahu). */
-    let finishOnEnd = false;
-    /** Dotyk zasáhl kresbu nebo nástroj — graf nesmí posouvat. */
+    /** Dotyk patří kreslení / kresbě — graf nesmí posouvat. */
     let captured = false;
+    /** Dotyk táhne existující kresbu (řadič, bez kurzoru). */
+    let dragging = false;
 
     // Cesta: skupina, poslední bod, index úseku, poslední klepnutí (dvojklep).
     const pathGroup = engine.newDrawingId().replace(/[^a-z0-9]/gi, '').slice(-12) || String(Date.now());
@@ -116,16 +121,21 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       const rect = element.getBoundingClientRect();
       return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
     };
+    const clamp = (point: { x: number; y: number }) => {
+      const rect = element.getBoundingClientRect();
+      return { x: Math.max(0, Math.min(rect.width - 60, point.x)), y: Math.max(0, Math.min(rect.height - 30, point.y)) };
+    };
     const unproject = (point: { x: number; y: number }): DrawingPoint | null => (typeof controller.unproject === 'function' ? controller.unproject(point.x, point.y) : null);
-    const showCrosshair = (point: { x: number; y: number }) => {
+    const showCrosshair = (point: { x: number; y: number } | null) => {
+      if (!point) { setCrosshair(null); return; }
       const box = containerRef.current?.getBoundingClientRect();
       const rect = element.getBoundingClientRect();
       if (!box) return;
       const price = series?.coordinateToPrice(point.y);
       setCrosshair({ x: point.x + rect.left - box.left, y: point.y + rect.top - box.top, price: price == null ? null : priceText(Number(price)) });
     };
-    const reset = () => { touching = false; start = null; last = null; moved = false; captured = false; setCrosshair(null); };
     const block = (event: TouchEvent) => { event.preventDefault(); event.stopPropagation(); };
+    const drawingMode = () => pathActive || Boolean(engine.getActiveTool());
 
     // ── Cesta ────────────────────────────────────────────────────────────
     const segmentStyle = (): DrawingStyle => ({ ...engine.getDefaultStyle(), color: pathStyle?.color ?? engine.getDefaultStyle().color, width: pathStyle?.width ?? 2, fill: null });
@@ -151,128 +161,118 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     const endPath = () => {
       if (engine.getDraft()) engine.cancelDraft();
       if (engine.getActiveTool()) engine.stopTool();
-      pathLast = null; pathIndex = 0; lastTap = null;
+      pathLast = null; pathIndex = 0; lastTap = null; cursor = null;
+      showCrosshair(null);
       onPathEnd?.();
+    };
+
+    /** Rozdělaná kresba sleduje kurzor. */
+    const followCursor = () => {
+      if (!cursor) return;
+      if (pathActive) {
+        const data = unproject(cursor);
+        if (data && engine.getDraft()) engine.updateDraftEnd(data);
+      } else if (engine.getActiveTool()) {
+        controller.onMove(fakeEvent(cursor.x, cursor.y));
+      }
+      showCrosshair(cursor);
+    };
+    /** Klepnutí: bod v místě kurzoru. */
+    const placeAtCursor = () => {
+      if (!cursor) return;
+      if (pathActive) {
+        const data = unproject(cursor);
+        if (!data) return;
+        if (!pathLast) { pathLast = data; beginPathDraft(data); }
+        else commitPathSegment(data);
+        return;
+      }
+      const tool = engine.getActiveTool();
+      if (!tool) return;
+      controller.onDown(fakeEvent(cursor.x, cursor.y));
+      if (!engine.getDraft()) {
+        // Kresba hotová: nástroj z ruky (desktopové „kreslit dál“ by ho vrátilo), kurzor pryč.
+        if (engine.getActiveTool()) engine.stopTool();
+        cursor = null;
+        showCrosshair(null);
+        onPathEnd?.();
+      }
     };
 
     const onTouchStart = (event: TouchEvent) => {
       if (event.touches.length !== 1) {
         // Druhý prst: pinch patří grafu, rozdělaný tah ukončíme bez změny.
-        if (touching) { if (!pathActive) controller.onUp(); reset(); }
+        if (touching && dragging) controller.onUp();
+        touching = false; captured = false; dragging = false;
         return;
       }
       if (engine.isLocked()) return;
       const point = offset(event.touches[0]);
-      touching = true; start = point; last = point; moved = false;
+      touching = true; touchStart = point; touchLast = point; moved = false; dragging = false;
 
-      if (pathActive) {
-        const data = unproject(point);
-        if (!data) { reset(); return; }
-        captured = true;
-        if (!pathLast) { pathLast = data; beginPathDraft(data); }
-        else if (engine.getDraft()) engine.updateDraftEnd(data);
-        else beginPathDraft(pathLast);
-        showCrosshair(point);
-        block(event);
-        return;
-      }
-
-      const tool = engine.getActiveTool();
-      if (tool) {
-        // Prst na existující kresbě má přednost před novou kresbou: vybere
-        // a táhne (TradingView se chová stejně). Nástroj se tím vypne.
-        const hit = !engine.getDraft() && typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
+      if (drawingMode()) {
+        // Prst na existující kresbě (bez rozdělané kresby) ji vybere a táhne.
+        const idle = !engine.getDraft() && !pathLast;
+        const hit = idle && !cursor && typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
         if (hit) {
-          engine.stopTool();
+          if (engine.getActiveTool()) engine.stopTool();
           const down = fakeEvent(point.x, point.y);
           controller.onDown(down);
-          captured = down.handled;
+          captured = down.handled; dragging = captured;
           if (captured) block(event);
           return;
         }
         captured = true;
-        if (engine.getDraft()) {
-          // Druhé klepnutí: konec kresby jde pod prst, dokončí se při puštění.
-          controller.onMove(fakeEvent(point.x, point.y));
-          finishOnEnd = true;
-        } else {
-          controller.onDown(fakeEvent(point.x, point.y));
-          finishOnEnd = false;
-        }
-        showCrosshair(point);
+        if (!cursor) cursor = clamp(point);
+        followCursor();
         block(event);
         return;
       }
       const down = fakeEvent(point.x, point.y);
       controller.onDown(down);
-      captured = down.handled;
+      captured = down.handled; dragging = captured;
       if (captured) block(event);
     };
 
     const onTouchMove = (event: TouchEvent) => {
-      if (!touching || event.touches.length !== 1) return;
+      if (!touching || event.touches.length !== 1 || !captured) return;
       const point = offset(event.touches[0]);
-      if (start && Math.hypot(point.x - start.x, point.y - start.y) > TAP_TOLERANCE_PX) moved = true;
-      last = point;
-      if (!captured) return;
-      if (pathActive) {
-        const data = unproject(point);
-        if (data && engine.getDraft()) engine.updateDraftEnd(data);
-        showCrosshair(point);
-        block(event);
-        return;
+      if (touchStart && Math.hypot(point.x - touchStart.x, point.y - touchStart.y) > TAP_TOLERANCE_PX) moved = true;
+      if (dragging) {
+        controller.onMove(fakeEvent(point.x, point.y));
+      } else if (cursor && touchLast) {
+        cursor = clamp({ x: cursor.x + point.x - touchLast.x, y: cursor.y + point.y - touchLast.y });
+        followCursor();
       }
-      controller.onMove(fakeEvent(point.x, point.y));
-      if (engine.getActiveTool()) showCrosshair(point);
+      touchLast = point;
       block(event);
     };
 
     const onTouchEnd = (event: TouchEvent) => {
       if (!touching) return;
-      if (pathActive && captured && last) {
-        const now = Date.now();
-        const doubleTap = !moved && lastTap && now - lastTap.at < DOUBLE_TAP_MS && Math.hypot(last.x - lastTap.x, last.y - lastTap.y) < DOUBLE_TAP_PX;
-        if (doubleTap) {
-          endPath();
-        } else {
-          const data = unproject(last);
-          // První klepnutí bez tahu jen položí začátek; tah nebo další klepnutí uzavře úsek.
-          if (data && (moved || pathIndex > 0 || (pathLast && !samePoint(pathLast, data)))) commitPathSegment(data);
-          lastTap = { at: now, x: last.x, y: last.y };
-        }
-        block(event);
-        reset();
-        return;
-      }
-      const tool = engine.getActiveTool();
-      if (captured && tool && engine.getDraft() && last && (moved || finishOnEnd)) {
-        // Tah nebo druhé klepnutí: řadič dokončí kresbu stejně jako druhý klik myší.
-        controller.onDown(fakeEvent(last.x, last.y));
-        finishOnEnd = false;
-      }
-      if (captured && !tool) {
+      touching = false;
+      if (!captured) return;
+      block(event);
+      if (dragging) {
         controller.onUp();
         // Myš by hover zrušila odjetím; prst neodjíždí, úchyty by zůstaly svítit.
         controller.onLeave?.();
+        dragging = false; captured = false;
+        return;
       }
-      // Desktopová volba „kreslit dál“ nástroj po dokončení znovu nasadí; na
-      // telefonu chceme jednu kresbu na výběr nástroje (klepnutí pak vybírá).
-      if (captured && tool && !engine.getDraft() && engine.getActiveTool()) engine.stopTool();
-      if (captured) block(event);
-      reset();
+      captured = false;
+      if (moved) return; // tah jen posunul kurzor
+      const now = Date.now();
+      const doubleTap = pathActive && lastTap && now - lastTap.at < DOUBLE_TAP_MS && touchLast && Math.hypot(touchLast.x - lastTap.x, touchLast.y - lastTap.y) < DOUBLE_TAP_PX;
+      if (doubleTap) { endPath(); return; }
+      placeAtCursor();
+      if (touchLast) lastTap = { at: now, x: touchLast.x, y: touchLast.y };
     };
 
     const onTouchCancel = () => {
       if (!touching) return;
-      if (pathActive) {
-        if (engine.getDraft()) engine.cancelDraft();
-        if (pathLast) beginPathDraft(pathLast);
-      } else {
-        if (engine.getDraft()) engine.cancelDraft();
-        controller.onUp();
-        finishOnEnd = false;
-      }
-      reset();
+      if (dragging) controller.onUp();
+      touching = false; captured = false; dragging = false;
     };
 
     const options: AddEventListenerOptions = { capture: true, passive: false };
