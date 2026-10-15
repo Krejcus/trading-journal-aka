@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Drawing, DrawingPoint, DrawingStyle } from '@getcandlekit/charts';
 import { priceText } from './DayPrimitives';
-import { pathSegmentId } from '../../lib/dayChartTools';
+import { pathGroupOf, pathSegmentId } from '../../lib/dayChartTools';
 
 /**
  * Dotykové kreslení pro CandleKit na telefonu. Řadič kreslení v CandleKit
@@ -36,6 +36,9 @@ interface EngineLike {
   commit: (drawing: Drawing) => void;
   remove: (id: string) => void;
   getById: (id: string) => Drawing | undefined;
+  getDrawings: () => readonly Drawing[];
+  setPoints: (id: string, points: DrawingPoint[]) => void;
+  onChange: (listener: () => void) => () => void;
   getDefaultStyle: () => DrawingStyle;
   select: (id: string | null) => void;
   newDrawingId: () => string;
@@ -47,7 +50,7 @@ interface ControllerLike {
   onMove: (event: FakeMouseEvent) => void;
   onUp: () => void;
   onLeave?: () => void;
-  hitTest?: (x: number, y: number) => unknown;
+  hitTest?: (x: number, y: number) => { id: string; kind: string; anchorIndex?: number } | null;
   unproject?: (x: number, y: number) => DrawingPoint | null;
 }
 
@@ -199,6 +202,67 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       }
     };
 
+    // ── Úprava hotové cesty: úseky drží pohromadě ───────────────────────
+    // Řadič táhne jen zasažený úsek; tady se dorovnají sousední úseky
+    // (zlom = společný bod) nebo, při tahu celým úsekem, celá cesta.
+    let pathDrag: { id: string; group: string; index: number; kind: string; anchorIndex: number; before: DrawingPoint[] } | null = null;
+    const segmentIndex = (id: string) => Number(id.split(':')[2]);
+    const startDrag = (point: { x: number; y: number }, event: TouchEvent) => {
+      const hit = typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
+      const down = fakeEvent(point.x, point.y);
+      controller.onDown(down);
+      captured = down.handled; dragging = captured;
+      pathDrag = null;
+      const group = pathGroupOf(hit?.id);
+      const drawing = hit && group ? engine.getById(hit.id) : undefined;
+      if (captured && hit && group && drawing) {
+        pathDrag = { id: hit.id, group, index: segmentIndex(hit.id), kind: hit.kind, anchorIndex: hit.anchorIndex ?? 0, before: drawing.points.map(item => ({ ...item })) };
+      }
+      if (captured) block(event);
+      return captured;
+    };
+    const syncPathDrag = () => {
+      if (!pathDrag) return;
+      const current = engine.getById(pathDrag.id);
+      if (!current) return;
+      if (pathDrag.kind === 'anchor') {
+        const moved = current.points[pathDrag.anchorIndex];
+        const neighbourId = pathSegmentId(pathDrag.group, pathDrag.anchorIndex === 0 ? pathDrag.index - 1 : pathDrag.index + 1);
+        const neighbour = engine.getById(neighbourId);
+        if (neighbour && moved) {
+          const points = neighbour.points.slice();
+          points[pathDrag.anchorIndex === 0 ? 1 : 0] = { ...moved };
+          engine.setPoints(neighbourId, points);
+        }
+        return;
+      }
+      const dt = current.points[0].time - pathDrag.before[0].time;
+      const dp = current.points[0].price - pathDrag.before[0].price;
+      if (!dt && !dp) return;
+      for (const drawing of engine.getDrawings()) {
+        if (drawing.id === pathDrag.id || pathGroupOf(drawing.id) !== pathDrag.group) continue;
+        engine.setPoints(drawing.id, drawing.points.map(item => ({ time: item.time + dt, price: item.price + dp })));
+      }
+      pathDrag.before = current.points.map(item => ({ ...item }));
+    };
+
+    // Nástroj v ruce = crosshair hned (uprostřed grafu), ne až po prvním dotyku.
+    const ensureCursor = () => {
+      if (touching) return;
+      if (drawingMode()) {
+        if (!cursor) {
+          const rect = element.getBoundingClientRect();
+          cursor = clamp({ x: rect.width / 2 - 30, y: rect.height / 2 });
+          followCursor();
+        }
+      } else if (cursor) {
+        cursor = null;
+        showCrosshair(null);
+      }
+    };
+    const offEngine = engine.onChange(ensureCursor);
+    ensureCursor();
+
     const onTouchStart = (event: TouchEvent) => {
       if (event.touches.length !== 1) {
         // Druhý prst: pinch patří grafu, rozdělaný tah ukončíme bez změny.
@@ -211,27 +275,14 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       touching = true; touchStart = point; touchLast = point; moved = false; dragging = false;
 
       if (drawingMode()) {
-        // Prst na existující kresbě (bez rozdělané kresby) ji vybere a táhne.
-        const idle = !engine.getDraft() && !pathLast;
-        const hit = idle && !cursor && typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
-        if (hit) {
-          if (engine.getActiveTool()) engine.stopTool();
-          const down = fakeEvent(point.x, point.y);
-          controller.onDown(down);
-          captured = down.handled; dragging = captured;
-          if (captured) block(event);
-          return;
-        }
+        // S crosshairem nic nevybíráme: dotyk jen posouvá crosshair (jako TV).
         captured = true;
         if (!cursor) cursor = clamp(point);
         followCursor();
         block(event);
         return;
       }
-      const down = fakeEvent(point.x, point.y);
-      controller.onDown(down);
-      captured = down.handled; dragging = captured;
-      if (captured) block(event);
+      startDrag(point, event);
     };
 
     const onTouchMove = (event: TouchEvent) => {
@@ -240,6 +291,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       if (touchStart && Math.hypot(point.x - touchStart.x, point.y - touchStart.y) > TAP_TOLERANCE_PX) moved = true;
       if (dragging) {
         controller.onMove(fakeEvent(point.x, point.y));
+        syncPathDrag();
       } else if (cursor && touchLast) {
         cursor = clamp({ x: cursor.x + point.x - touchLast.x, y: cursor.y + point.y - touchLast.y });
         followCursor();
@@ -257,7 +309,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
         controller.onUp();
         // Myš by hover zrušila odjetím; prst neodjíždí, úchyty by zůstaly svítit.
         controller.onLeave?.();
-        dragging = false; captured = false;
+        dragging = false; captured = false; pathDrag = null;
         return;
       }
       captured = false;
@@ -281,6 +333,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     element.addEventListener('touchend', onTouchEnd, options);
     element.addEventListener('touchcancel', onTouchCancel, options);
     return () => {
+      offEngine();
       element.removeEventListener('touchstart', onTouchStart, options);
       element.removeEventListener('touchmove', onTouchMove, options);
       element.removeEventListener('touchend', onTouchEnd, options);
