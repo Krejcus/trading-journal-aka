@@ -3079,7 +3079,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const span = to - from;
     const context = Math.round(span * 0.5);
     const before = Math.max(reviewMode ? 30 : tradeViewFrame?.before ?? 15, context);
-    const after = Math.max(reviewMode ? 30 : tradeViewFrame?.after ?? 15, tradeViewFrame?.endMs != null ? 0 : context);
+    // Za obchodem víc svíček než před ním — v detailu je důležité, co přišlo po výstupu.
+    const after = Math.max(reviewMode ? 30 : tradeViewFrame?.after ?? 25, tradeViewFrame?.endMs != null ? 0 : context);
     return { from: from - before, to: to + after };
   }, [visibleCandles, timeframe, trade, entryMs, exitMs, reviewMode, tradeViewFrame, untakenFrameEndMs]);
   const centeredTradeRangeRef = useRef(centeredTradeRange);

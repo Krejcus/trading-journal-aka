@@ -244,7 +244,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const [speed, setSpeed] = useState<TradeReplaySpeed>(1);
   const [focusRequest, setFocusRequest] = useState(0);
   const replayStart = floorMinute(Math.floor(entryMs / 1000)) - 10 * 60;
-  const replayEnd = floorMinute(Math.floor(exitMs / 1000)) + 5 * 60;
+  // Po výstupu ještě čtvrthodina — je vidět, kam trh šel dál.
+  const replayEnd = floorMinute(Math.floor(exitMs / 1000)) + 15 * 60;
   // Události v právě odkryté svíčce už proběhly — svíčka pokrývá celou minutu.
   const cutoffMs = snapshotEntry ? snapshotEntry.cutoffMs : cursor == null ? null : (cursor + REPLAY_STEP_S) * 1000 - 1;
   const replayAnimationRef = useRef<{ time: number; progress: number } | null>(null);

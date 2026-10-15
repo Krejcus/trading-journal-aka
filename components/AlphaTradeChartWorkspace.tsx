@@ -2588,7 +2588,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 title="Přetáhnout Bar Replay panel"
                 aria-label="Přetáhnout Bar Replay panel"
               ><GripVertical size={14} /></button>
-              <ReplayStartMenu
+              {/* Fullscreen obchodu: start je obchod (Go To → Začátek), výběr
+                  data nebo náhodné svíčky by tu jen překážel. */}
+              {(backtestSession || review) && <ReplayStartMenu
                 onSelectBar={enterReplaySelection}
                 onSelectDate={time => startReplayAtTime(time, 'start')}
                 onSelectPreset={startReplayPreset}
@@ -2599,8 +2601,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 timeZoneLabel={chartTimeZoneLabel}
                 isDark={isDark}
                 buttonClassName={topButton}
-              />
-              <span className={replayDivider} />
+              />}
+              {(backtestSession || review) && <span className={replayDivider} />}
               <button
                 type="button"
                 className={`${topButton} px-2 disabled:opacity-30`}
