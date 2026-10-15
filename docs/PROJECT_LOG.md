@@ -262,6 +262,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-15 — Dotykové kreslení podle TradingView mobilu (Claude, větev, NEnasazeno na web)
+- Podle Filipova videa z TradingView: s nástrojem v ruce je crosshair hned uprostřed, tah prstem ho
+  posouvá jako touchpad, klepnutí potvrdí bod. Nový virtuální nástroj **Šipka = Path**: klepnutí =
+  zlom, dvojklep = konec; úseky jsou kresby CandleKit se skupinou v ID (`path:<skupina>:<n>`,
+  `TrendLine` + poslední `Arrow`), barva/koš platí pro celou cestu, tah zlomu posune i sousední úsek,
+  tah úsekem celou cestu. Kompaktní graf se při celé obrazovce odpojí a po zavření načte kresby.
+- Filip potvrdil na iPhonu, že kreslení i úpravy fungují. Jiná session mezitím přeinstalovala appku
+  z `main` bez téhle větve → do větve sloučen `origin/main` (live journal), sada 5302/5302, tsc čistý,
+  appka znovu nainstalovaná. Dokud větev není na `main`, každá cizí reinstalace ji z telefonu smaže.
+
 ### 2026-10-14 odpoledne — Fáze 1 celoobrazovkového grafu + dotykové kreslení (Claude, větev, NEnasazeno)
 - Větev `claude/day-chart-fullscreen-20261014` (v Documents): `DayFullscreenChart` (portál přes celý
   displej, hlavička, sbalené indikátory, spodní pruh normální/kreslení, lišta vybrané kresby s barvami
