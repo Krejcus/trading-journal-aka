@@ -379,6 +379,37 @@ Ověřeno: cílené testy 55/55, tsc čistý (mimo staré chyby `extension/`);
 celá sada a build neproběhly. Nasazení: nejdřív server, pak worker.
 TradingView musí mít graf MNQ/NQ na 1 min. Hook zatím nikde v UI.
 
+### 2026-10-15 — Kopírka nešla zapnout po incidentu + reconnectu (Claude)
+
+Větev `claude/copier-incident-recovery-deadlock-20261015`. 14. 10. 19:27 Mac na
+baterii usnul → `stale-heartbeat` fail-closed (správně, kopie flat, durable
+incident). Ráno ON s potvrzením incidentu i po restartu workeru odmítnut:
+„Změnu konfigurace blokuje probíhající connection recovery/reconciliation“.
+Příčina: po reconnectu `pendingReadOnlyConnectionRecovery = true`, ale
+`runReadOnlyConnectionRecovery` se při nepotvrzeném incidentu vrátí a příznak
+nechá; ON z UI posílá skupinu → `preflightGroupChange`/`updateGroupMetadata`
+odmítne dřív, než dojde na potvrzení (deadlock). Stejná past i bez incidentu
+(ruční pozice leadera při reconnectu, 5× selhaná read-only kontrola) — do
+dalšího reconnectu. Odblokováno ručně loopback `reconcile` (čistý flat shodí
+příznak, incident nechá), pak ON s potvrzením.
+
+- Oprava (jen agent, brány controlleru beze změny): ON se skupinou (ne
+  internal, neběží živě, ne retired, ne režim opravy po startu) při incidentu
+  nebo `armNeedsSelfCheck` u stejné skupiny udělá kontrolu Etapy 1 už před
+  `applyGroup` (`reconcile(incident ? {acknowledgedIncidentId} : {})`, bez
+  `missingOptional`). Bez potvrzení rovnou `[ack-incident:]`.
+- Varianta „povolit příznak v branách“ zamítnuta (klasifikátor: oslabení;
+  oponent: neřeší metadata cestu).
+- copier-design-critic: C „OK S VÝHRADAMI“ → výhrady (missingOptional, shadow,
+  E6 režim opravy) opraveny; finální „OPRAVIT PŘED COMMITEM“ = jen E6, opraveno.
+- Testy: `tests/copierIncidentReconnectArm.test.ts` (8; bez opravy padá 5/7
+  původních), plná sada 5303 zelená, tsc čistý. `COPIER_INVARIANTS.md`:
+  INV-DEFAULT-03 / INV-RECON-02 bez zastaralého „známého porušení“ (SHADOW a
+  kompatibilní ARM už volají `reconcile({internal:true})`).
+- Zbývá: `connectionRenewalBlocker` drží visící příznak (plánovaná obměna
+  socketů se odkládá do reconnectu) — samostatně; Mac během obchodování
+  nesmí usnout (nabíječka).
+
 ### 2026-10-14 — Živý deník: kontrolní body, archivace, serverový import (Claude)
 
 Větev `claude/live-journal-20261013`, plán a revize v `docs/JOURNAL_LIVE_PLAN.md`.

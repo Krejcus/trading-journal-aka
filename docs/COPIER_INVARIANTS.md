@@ -142,20 +142,27 @@ existující ochranu.
   je account-wide fallback tiše rozšířit do ručního DISARMu nebo tvrdit, že
   nemůže zasáhnout ruční pozici.
 
-### INV-DEFAULT-03: Ne-transportní incident má přežít restart a odstranit jej smí jen čistá ruční kontrola; dvě agentní cesty to dnes porušují
+### INV-DEFAULT-03: Ne-transportní incident má přežít restart a odstranit jej smí jen čistá ruční kontrola
 
 - Proč: Background preflight nebo benigní reconnect nesmí schovat incident,
   který má vidět člověk.
 - Vynucuje: `services/copierRuntimeController.ts:bootstrapCopierRuntime`,
   `failClosed`, `performReconciliation`; durable
-  `safety.manualRecoveryRequired`. **ZNÁMÉ PORUŠENÍ:**
-  `server/localCopierExecutionAgent.ts:execute` volá veřejné `reconcile()` pro
-  SHADOW a pro kompatibilní ARM bez `prepareArm`; čistý výsledek proto smaže
-  `lastError` i `manualRecoveryRequired`, přestože uživatel nespustil
-  „Kontrolu pozic“.
+  `safety.manualRecoveryRequired`. SHADOW a kompatibilní ARM bez `prepareArm`
+  už volají `reconcile({ internal: true })` (incident nemažou; dřívější známé
+  porušení je opravené, ověřeno 15. 10. 2026). Incident smaže jen ON
+  s potvrzením právě tohoto incidentu (`acknowledgeIncidentId`). ON se skupinou
+  tuto potvrzenou kontrolu dělá před změnou konfigurace (15. 10. 2026): po
+  incidentu + reconnectu visí `pendingReadOnlyConnectionRecovery` a brány
+  změny konfigurace by ON jinak odmítly dřív, než dojde na potvrzení
+  (produkční deadlock). Incident tak zmizí i když ON pak skončí na validaci
+  konfigurace — byl potvrzen a čistě zkontrolován.
 - Hlídá test: `tests/copierWorkerArmPreparation.test.ts` kryje restart,
-  preparation a reconnect; **chybí regrese pro zachování incidentu přes SHADOW
-  a kompatibilní ARM bez `prepareArm`**.
+  preparation a reconnect; `tests/copierIncidentReconnectArm.test.ts` incident
+  + reconnect + ON se skupinou (i po restartu, nepřečtený follower, zastaralé
+  potvrzení) a past bez incidentu (nečistá/5× selhaná read-only kontrola po
+  reconnectu); `tests/copierOnAcknowledgeIncident.test.ts`. **Chybí regrese
+  pro zachování incidentu přes SHADOW a kompatibilní ARM bez `prepareArm`**.
 - Nikdy: Nemazat `lastError` ani manual-recovery marker při přípravě ON,
   heartbeatu, interním reconnect recovery nebo pouhém restartu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je odstranit marker po
@@ -439,11 +446,10 @@ existující ochranu.
   `performReconciliation({clearLastError:true})`; interní volání používají
   výchozí `clearLastError=false`; `runReconciliation` maže chybu jen při
   `authoritativelyClean`, nezměněné generation a neaktivním kill switchi.
-  **ZNÁMÉ PORUŠENÍ HRANICE:** SHADOW a kompatibilní ARM bez `prepareArm` v
-  `server/localCopierExecutionAgent.ts:execute` volají právě veřejnou metodu,
-  takže čistý automatický výsledek má stejnou autoritu jako ruční kontrola a
-  může smazat incident. Je-li runtime v tu chvíli ARMED, veřejná metoda jej
-  navíc auditovaně DISARMuje.
+  SHADOW a kompatibilní ARM bez `prepareArm` volají `reconcile({ internal: true })`
+  (dřívější porušení hranice opravené; ověřeno 15. 10. 2026). Veřejné
+  `reconcile()` volá jen výslovný úkon uživatele: ON (Etapa 1 i časná kontrola
+  před změnou konfigurace) a samostatná Kontrola pozic.
 - Hlídá test: `tests/copierPreflightDisarmedReconcile.test.ts`,
   `tests/copierWorkerArmPreparation.test.ts`, `tests/copierRuntimeController.test.ts`.
 - Nikdy: Nevolat veřejné `reconcile()` z background preflightu, SHADOW,

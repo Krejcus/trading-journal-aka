@@ -72,6 +72,10 @@ export const armSelfCheckFailureMessage = (check: {
 /** Strojově čitelná značka pro UI: který incident uživatel potvrzuje. */
 export const incidentAckMarker = (id: string) => `[ack-incident:${encodeURIComponent(id)}]`;
 
+const incidentAckRequiredMessage = (incident: { id: string; reason: string }) =>
+  `Zapnutí po incidentu vyžaduje tvoje potvrzení: ${incident.reason} `
+  + `(starší appka potvrzení neumí — použij aktuální web nebo aktualizovanou iPhone appku) ${incidentAckMarker(incident.id)}`;
+
 export const boundedLocalArmDeadline = (rawDeadline: unknown, receivedAt = Date.now()): number => {
   const parsed = typeof rawDeadline === 'string' ? Number(rawDeadline) : NaN;
   return Number.isFinite(parsed)
@@ -955,6 +959,37 @@ export async function startLocalCopierExecutionAgent(
           // DISARM -> activate/preflight -> reconciliation -> ARM. Jakákoli
           // chyba ji nechá explicitně DISARMED, nikdy jako falešný úspěch.
         }
+        // 15. 10. 2026 (produkce): po reconnectu visí požadavek read-only
+        // kontroly, když se nespustila (nepotvrzený incident) nebo skončila
+        // nečistě/chybou (ruční pozice leadera, 5× timeout). Změna konfigurace
+        // níže ho bere jako běžící recovery a ON se skupinou by odmítla dřív,
+        // než se ke kontrole dostane — až do dalšího reconnectu. Kontrolu, kterou
+        // ON stejně dělá (Etapa 1, níže), proto provede už tady: stejné volání,
+        // stejná autorita (výslovné ON, incident jen s potvrzením). Čistý flat
+        // výsledek požadavek shodí; konfigurace pak projde nezměněnými branami
+        // a po ní se kontroluje znovu. Incident se tím smaže i když ON pak
+        // skončí na validaci konfigurace — potvrzený a čistě zkontrolovaný
+        // (INV-DEFAULT-03). Bez `missingOptional`: nepřečtený aktivní follower
+        // kontrolu shodí stejně jako dosud.
+        const earlyIncident = options.controller.status().manualRecovery ?? null;
+        const earlyCheck = command.group != null && context.source !== 'internal'
+          && !(current.armed && !current.shadowMode) && !groupRetired()
+          // Režim opravy po startu vrací vlastní návod (E6) z applyGroup;
+          // kontrola by ho přebila chybou chybějících účtů.
+          && !options.controller.status().startupGroupRepair
+          && (earlyIncident != null
+            || (command.group.id === group.id && armNeedsSelfCheck(options.controller.status())));
+        if (earlyCheck && earlyIncident && command.acknowledgeIncidentId !== earlyIncident.id) {
+          throw new Error(incidentAckRequiredMessage(earlyIncident));
+        }
+        if (earlyCheck) {
+          const check = await awaitArmDeadline(
+            options.controller.reconcile(earlyIncident ? { acknowledgedIncidentId: earlyIncident.id } : {}),
+            deadlineAt,
+          );
+          assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
+          if (!check.authoritativelyClean) throw new Error(armSelfCheckFailureMessage(check));
+        }
         // Volitelný atomický sync konfigurace: dřív UI posílalo update-group
         // + arm-live jako dva relay round-tripy (~5 s); teď jde obojí naráz.
         let routingPrepared = false;
@@ -1006,10 +1041,7 @@ export async function startLocalCopierExecutionAgent(
         // (INV-DEFAULT-03). Zvykové kliknutí ho nepřejde.
         const incident = options.controller.status().manualRecovery ?? null;
         if (incident && command.acknowledgeIncidentId !== incident.id) {
-          throw new Error(
-            `Zapnutí po incidentu vyžaduje tvoje potvrzení: ${incident.reason} `
-            + `(starší appka potvrzení neumí — použij aktuální web nebo aktualizovanou iPhone appku) ${incidentAckMarker(incident.id)}`,
-          );
+          throw new Error(incidentAckRequiredMessage(incident));
         }
         if (incident || armNeedsSelfCheck(options.controller.status())) {
           const check = await awaitArmDeadline(
