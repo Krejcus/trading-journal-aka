@@ -1,6 +1,8 @@
 import { sharedRevealedCandles } from '../services/chartReplayPaint';
 import TradeProgress from './TradeProgress';
-import { tradeTimelineEvents } from '../lib/tradeReplay';
+import { historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
+import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
+import { formingReplayBar, formingReplayBase } from '../services/chartReplayForming';
 import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWorkspaceLibraryDialog';
 import { saveWorkspaceTemplate } from '../services/chartWorkspaceLibrary';
 import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
@@ -110,6 +112,7 @@ import {
   replayCandleCountAt,
   replayLatestTime,
   replayStartPresetTime,
+  replayViewportAfterBarsUpdate,
   type ChartReplaySpeed,
   type ReplayStartPreset,
   type ChartReplayState,
@@ -729,6 +732,19 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   }, [activeLibraryIndicators, applyIndicatorState, chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.registerPanel, focusTrade, getCandles, getIndicatorState, indicatorController, instance.id, rawCandles, updatePanelConfig]);
 
   const isActive = context.activePanelId === instance.id;
+  // Fullscreen obchodu: v replayi se obchod kreslí jen do kurzoru, stejně jako
+  // v přehrávači detailu (vstup, SL/TP a plnění přibývají, jak čas běží).
+  // Backtest a hodnocení kreslí obchody vlastními vrstvami.
+  const journalReplay = !context.backtestSession && !context.review;
+  const replayCutoffMs = journalReplay && context.replay.phase === 'active' && context.replay.cursorTime !== null
+    ? (context.replay.cursorTime + 60) * 1_000 - 1
+    : null;
+  const replayTrade = useMemo(
+    () => replayCutoffMs !== null && context.trade.executionHistory
+      ? { ...context.trade, executionHistory: historyAt(context.trade.executionHistory, replayCutoffMs) }
+      : context.trade,
+    [context.trade, replayCutoffMs],
+  );
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const [noteAddRequest, setNoteAddRequest] = useState<ChartNoteAddRequest | null>(null);
   const noteBarTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
@@ -771,7 +787,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
         {!loading && !error && candles.length > 0 && (
           <>
           <CandleKitTradeChart
-            trade={context.trade}
+            trade={replayTrade}
+            journalHistoryInReplay={journalReplay}
             candles={candles}
             rawCandles={replayRawCandles}
             timeframe={config.timeframe}
@@ -1297,6 +1314,85 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     const timer = window.setInterval(tick, Math.min(delay, 50));
     return () => window.clearInterval(timer);
   }, [advanceReplayBy, replay.phase, replay.playing, replay.speed, replayDataLoading]);
+  /**
+   * Plynulé přehrávání jako v detailu obchodu: mezi kroky se další 1m svíčka
+   * „rodí“ po cestě z candleReplayPath (plnění obchodu v ní padnou na svůj čas
+   * a cenu). Kreslí se přímo do grafu mimo React; po dokončení kroku svíčku
+   * převezme kurzor a běžná aktualizace dat. Jen krok 1m a mimo backtest —
+   * session zpracovává příkazy po celých svíčkách.
+   */
+  useEffect(() => {
+    if (backtestSession || replay.phase !== 'active' || !replay.playing || replayDataLoading) return;
+    if ((replay.stepMinutes ?? 1) !== 1) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const delay = chartReplayDelayMs(replay.speed);
+    if (delay < 150) return;
+    const fills = trade.executionHistory?.fills ?? [];
+    let frame = 0;
+    let stepStartedAt = performance.now();
+    let lastCursor = replayRef.current.cursorTime;
+    // Cesta svíčky podle instrumentu panelu (MNQ a NQ mají jiné svíčky).
+    const paths = new Map<string, { candle: MarketCandle; points: PathPoint[] } | null>();
+    const bases = new Map<string, { cursor: number; base: MarketCandle | null }>();
+    const appended = new Set<string>();
+    const tick = (now: number) => {
+      const cursor = replayRef.current.cursorTime;
+      if (cursor !== lastCursor) {
+        lastCursor = cursor;
+        stepStartedAt = now;
+        paths.clear();
+        appended.clear();
+      }
+      if (cursor === null) { frame = window.requestAnimationFrame(tick); return; }
+      const progress = Math.min(0.98, (now - stepStartedAt) / delay);
+      panelControlsRef.current.forEach((control, panelId) => {
+        const api = control.chartApi;
+        if (!api) return;
+        const root = control.config.root;
+        if (!paths.has(root)) {
+          const next = control.rawCandles.find(candle => candle.time > cursor);
+          const minuteFills = next ? fills.filter(fill => fill.at >= next.time * 1_000 && fill.at < next.time * 1_000 + 60_000) : [];
+          paths.set(root, next ? { candle: next, points: candleReplayPath(next, minuteFills) } : null);
+        }
+        const path = paths.get(root);
+        if (!path) return;
+        // Cena mezi body cesty je interpolace — zaokrouhlit na tick MNQ/NQ (0,25).
+        const tick025 = (price: number) => Math.round(price * 4) / 4;
+        const raw = partialReplayCandle(path.candle, path.points, progress);
+        const partial = { ...raw, high: tick025(raw.high), low: tick025(raw.low), close: tick025(raw.close) };
+        const timeframe = control.config.timeframe;
+        let bar: MarketCandle = partial;
+        if (timeframe !== '1m') {
+          let cached = bases.get(panelId);
+          if (!cached || cached.cursor !== cursor) {
+            cached = { cursor, base: formingReplayBase(control.rawCandles, cursor, timeframe) };
+            bases.set(panelId, cached);
+          }
+          bar = formingReplayBar(cached.base, partial, timeframe);
+        }
+        try {
+          const controller = api.controller;
+          const lastTs = controller.getBars().at(-1)?.ts;
+          if (lastTs !== undefined && lastTs > bar.time * 1_000) return;
+          const isNewBar = lastTs === undefined || lastTs < bar.time * 1_000;
+          const timeScale = controller.getChart().timeScale();
+          const rangeBefore = isNewBar ? timeScale.getVisibleLogicalRange() : null;
+          const countBefore = controller.getBars().length;
+          controller.updateBar({ ts: bar.time * 1_000, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume });
+          if (isNewBar && rangeBefore && !appended.has(panelId)) {
+            // Nový bar posune záběr stejně jako běžný replay krok (graf, který
+            // sleduje poslední svíčku, ji drží na místě); pozdější data kroku
+            // pak už žádný nový bar nepřinesou.
+            timeScale.setVisibleLogicalRange(replayViewportAfterBarsUpdate(rangeBefore, countBefore, countBefore + 1));
+          }
+          appended.add(panelId);
+        } catch { /* panel se právě přestavuje */ }
+      });
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [backtestSession, replay.phase, replay.playing, replay.speed, replay.stepMinutes, replayDataLoading, trade.executionHistory]);
   useEffect(() => {
     if (!replayToolbarPosition) return;
     const clampToolbarPosition = () => {
@@ -1517,6 +1613,56 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     if (action === 'play') setReplay(current => current.phase === 'active' ? { ...current, playing: true } : current);
   }, [reviewReplayStart, selectReplayStart]);
   const reviewReplayIdle = reviewReplayStart != null && replay.phase === 'off';
+  /** Obchod, ke kterému Go To nabízí skoky — v hodnocení první z fronty. */
+  const replayTradeSource = backtestSession ? null : reviewTrades?.[0] ?? (review ? null : trade);
+  const replayTradeEvents = useMemo(
+    () => replayTradeSource ? tradeTimelineEvents(replayTradeSource.executionHistory) : [],
+    [replayTradeSource],
+  );
+  const tradeGoTo = useMemo(() => {
+    if (!replayTradeSource || reviewReplayStart == null) return null;
+    const timing = tradeChartTiming(replayTradeSource);
+    const minute = (ms: number) => Math.floor(ms / 60_000) * 60;
+    const clock = (seconds: number) => new Intl.DateTimeFormat('cs-CZ', { timeZone: chartTimeZone, hour: '2-digit', minute: '2-digit' }).format(seconds * 1_000);
+    const firstSeries = replayTradeEvents.find(event => event.seriesKey);
+    const times: Record<string, number> = { start: reviewReplayStart };
+    if (Number.isFinite(timing.entryMs)) times.entry = minute(timing.entryMs);
+    if (firstSeries) times.series = minute(firstSeries.at);
+    if (Number.isFinite(timing.exitMs)) times.exit = minute(timing.exitMs);
+    const targets = [
+      ...(replayTradeEvents.length ? [{ id: 'next', label: 'Další událost', hint: '→' }] : []),
+      { id: 'start', label: 'Začátek', hint: clock(times.start) },
+      ...(times.entry !== undefined ? [{ id: 'entry', label: 'Vstup', hint: clock(times.entry) }] : []),
+      ...(times.series !== undefined ? [{ id: 'series', label: 'Posuny SL', hint: clock(times.series) }] : []),
+      ...(times.exit !== undefined ? [{ id: 'exit', label: 'Výstup', hint: clock(times.exit) }] : []),
+      { id: 'all', label: 'Celý obchod', hint: 'konec' },
+    ];
+    return { targets, times };
+  }, [chartTimeZone, replayTradeEvents, replayTradeSource, reviewReplayStart]);
+  /** Skok na událost obchodu jako v přehrávači detailu; před spuštěním replay rovnou nastartuje. */
+  const goToTradeTarget = useCallback((id: string) => {
+    if (!tradeGoTo || backtestSessionRef.current) return;
+    if (id === 'all') { exitReplay(); return; }
+    let time: number | undefined = tradeGoTo.times[id];
+    if (id === 'next') {
+      const cursor = replayRef.current.phase === 'active' ? replayRef.current.cursorTime : null;
+      const cutoffMs = cursor === null ? -Infinity : (cursor + 60) * 1_000 - 1;
+      const next = replayTradeEvents.find(event => event.at > cutoffMs);
+      if (!next) { setStatus('Go To: žádná další událost obchodu'); return; }
+      time = Math.floor(next.at / 60_000) * 60;
+    }
+    if (time === undefined) return;
+    const source = panelControlsRef.current.get(activePanelId)?.rawCandles ?? [];
+    const snapped = nearestReplayCandleTime(source, time);
+    if (snapped === null) return;
+    if (replayRef.current.phase === 'active') {
+      replayDataRequestsRef.current.cancel();
+      setReplay(current => ({ ...current, cursorTime: snapped, playing: false }));
+    } else {
+      selectReplayStart(snapped);
+    }
+    setStatus(`Go To: ${goToTimeLabel(snapped, chartTimeZone)}`);
+  }, [activePanelId, chartTimeZone, exitReplay, replayTradeEvents, selectReplayStart, tradeGoTo]);
   const reviewHeaderRef = useRef<HTMLDivElement>(null);
   const reviewSideRef = useRef<HTMLDivElement>(null);
   const reviewBottomRef = useRef<HTMLDivElement>(null);
@@ -2475,7 +2621,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 settings={goToSettings}
                 onSettingsChange={setGoToSettings}
                 onGoTo={replayGoTo}
-                disabled={replay.phase !== 'active' || replayAtEnd}
+                disabled={!tradeGoTo && (replay.phase !== 'active' || replayAtEnd)}
+                tradeTargets={tradeGoTo?.targets}
+                onTradeTarget={goToTradeTarget}
+                standardTargets={replay.phase === 'active' && !replayAtEnd}
                 isDark={isDark}
                 cursorTime={replay.cursorTime}
                 timeZone={chartTimeZone}
