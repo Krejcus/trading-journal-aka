@@ -396,8 +396,8 @@ const DEFAULT_SYNC_SETTINGS: ChartWorkspaceSyncSettings = {
 };
 const WORKSPACE_GLOBAL = {
   // Panely bez tabů jako v TradingView. Tab strip se vrací jen tabsetu, který
-  // má víc tabů (starší rozložení), jinak by byly schované — viz
-  // `syncWorkspaceTabStrips`.
+  // má víc tabů (starší rozložení), jinak by byly schované — viz efekt
+  // synchronizace tab stripů u `getLiveModel`.
   tabSetEnableTabStrip: false,
   tabEnableClose: true,
   tabEnableRename: false,
@@ -1222,6 +1222,13 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const startReplayAtTime = useCallback((requestedTime: number, label: string) => {
     if (backtestSessionRef.current || replayInteractionPausedRef.current) return;
     const source = panelControlsRef.current.get(activePanelId)?.rawCandles ?? [];
+    const first = source[0]?.time;
+    const last = source.at(-1)?.time;
+    // Mimo načtená data by se start tiše přichytil na okraj — radši říct proč ne.
+    if (first !== undefined && last !== undefined && (requestedTime < first - 60 || requestedTime > last + 60)) {
+      setStatus(`Bar Replay: graf má data jen ${goToTimeLabel(first, chartTimeZone)} – ${goToTimeLabel(last, chartTimeZone)}`);
+      return;
+    }
     const time = nearestReplayCandleTime(source, requestedTime);
     if (time === null) {
       setStatus('Bar Replay: graf ještě nemá načtená data');
@@ -1230,6 +1237,14 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     selectReplayStart(time);
     setStatus(`Bar Replay: ${label} ${goToTimeLabel(time, chartTimeZone)}`);
   }, [activePanelId, chartTimeZone, selectReplayStart]);
+  /** Hodina před kurzorem (nebo koncem dat), ale nikdy před první svíčkou. */
+  const replayDefaultStartTime = useCallback(() => {
+    const source = panelControlsRef.current.get(activePanelId)?.rawCandles ?? [];
+    const first = source[0]?.time;
+    const anchor = replayRef.current.cursorTime ?? source.at(-1)?.time;
+    if (first === undefined || anchor === undefined || anchor === null) return null;
+    return Math.max(first, anchor - 3_600);
+  }, [activePanelId]);
   const startReplayPreset = useCallback((preset: ReplayStartPreset) => {
     const source = panelControlsRef.current.get(activePanelId)?.rawCandles ?? [];
     const time = replayStartPresetTime(source, preset);
@@ -1352,14 +1367,21 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     let frame: number | null = null;
     let retry: number | null = null;
     let attempts = 0;
+    let lastModel: FlexLayoutModel | null = null;
     const sync = () => {
       frame = null;
       const model = getLiveModel();
       if (!model) {
         // FlexLayout driver vzniká až s prvním renderem adapteru.
-        if (attempts++ < 50) retry = window.setTimeout(schedule, 100);
+        if (attempts++ < 50) retry = window.setTimeout(() => { retry = null; schedule(); }, 100);
         return;
       }
+      // Import/reset rozložení vymění model až v efektu adapteru, tedy po
+      // oznámení změny — nový model proto zkontroluj ještě jednou.
+      if (lastModel !== null && model !== lastModel && retry === null) {
+        retry = window.setTimeout(() => { retry = null; schedule(); }, 150);
+      }
+      lastModel = model;
       let count = 0;
       let maximizedPanelId: string | null = null;
       const updates: { id: string; enableTabStrip: boolean }[] = [];
@@ -1378,7 +1400,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     };
     const schedule = () => { if (frame === null) frame = window.requestAnimationFrame(sync); };
     schedule();
-    const unsubscribe = workspace.subscribe(schedule);
+    const unsubscribe = workspace.subscribe(() => {
+      schedule();
+      if (retry === null) retry = window.setTimeout(() => { retry = null; schedule(); }, 150);
+    });
     // Maximalizace se do uloženého rozložení nepromítá okamžitě (debounce),
     // tlačítko ji ale hlásí hned — viz toggleMaximize.
     return () => {
@@ -1397,7 +1422,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   /** Nový graf vedle aktivního (vpravo), ne jako schovaný tab. */
   const addPanelBeside = useCallback((config: WorkspacePanelConfig, title: string) => {
     const model = getLiveModel();
-    const targetTabset = model ? (model.getActiveTabset()?.getId() ?? findTabset(model, activePanelId)) : null;
+    const targetTabset = model ? (findTabset(model, activePanelId) ?? model.getActiveTabset()?.getId() ?? null) : null;
     if (!model || !targetTabset) {
       workspace.addPanel(WORKSPACE_KIND, config, title);
       return;
@@ -2408,7 +2433,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 onSelectPreset={startReplayPreset}
                 allowJumps={!backtestSession}
                 selecting={replay.phase === 'selecting'}
-                cursorTime={replay.cursorTime}
+                defaultDateTime={replayDefaultStartTime}
                 timeZone={chartTimeZone}
                 timeZoneLabel={chartTimeZoneLabel}
                 isDark={isDark}
@@ -2418,7 +2443,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               <button
                 type="button"
                 className={`${topButton} px-2 disabled:opacity-30`}
-                disabled={!reviewReplayIdle && (replay.phase !== 'active' || replayAtEnd)}                onClick={() => reviewReplayIdle ? startReviewReplay('play') : setReplay(current => ({ ...current, playing: !current.playing }))}
+                disabled={!reviewReplayIdle && (replay.phase !== 'active' || replayAtEnd)}
+                onClick={() => reviewReplayIdle ? startReviewReplay('play') : setReplay(current => ({ ...current, playing: !current.playing }))}
                 title={replay.playing ? 'Pozastavit' : 'Přehrát'}
                 aria-label={replay.playing ? 'Pozastavit Bar Replay' : 'Přehrát Bar Replay'}
               >{replay.playing ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button>

@@ -28,7 +28,8 @@ const useReplayMenu = (open: boolean, setOpen: (open: boolean) => void) => {
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      // Esc zavře jen menu, ne fullscreen graf pod ním.
+      // Esc zavře jen menu. Fullscreen graf má vlastní posluchač v capture
+      // fázi; ten otevřené menu pozná podle `data-chart-overlay-menu`.
       event.stopPropagation();
       setOpen(false);
     };
@@ -97,6 +98,7 @@ export const ReplayChoiceMenu = <T extends string | number>({
       {open && (
         <div
           ref={menuRef}
+          data-chart-overlay-menu
           role="menu"
           aria-label={heading}
           className={`absolute ${menuPosition(openUp)} left-1/2 z-[700] w-[200px] -translate-x-1/2 overflow-hidden rounded-lg border py-1 shadow-2xl ${menuSurface(isDark)}`}
@@ -151,12 +153,13 @@ export const ReplayStartMenu: React.FC<{
   allowJumps: boolean;
   /** V režimu výběru svítí tlačítko jako aktivní, stejně jako v TradingView. */
   selecting: boolean;
-  cursorTime: number | null;
+  /** Předvyplněný čas pole „Datum…“ — musí ležet v načtených datech grafu. */
+  defaultDateTime: () => number | null;
   timeZone: string;
   timeZoneLabel: string;
   isDark: boolean;
   buttonClassName: string;
-}> = ({ onSelectBar, onSelectDate, onSelectPreset, allowJumps, selecting, cursorTime, timeZone, timeZoneLabel, isDark, buttonClassName }) => {
+}> = ({ onSelectBar, onSelectDate, onSelectPreset, allowJumps, selecting, defaultDateTime, timeZone, timeZoneLabel, isDark, buttonClassName }) => {
   const [open, setOpen] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
   const [dateValue, setDateValue] = useState('');
@@ -165,8 +168,7 @@ export const ReplayStartMenu: React.FC<{
 
   const close = () => { setOpen(false); setDateOpen(false); };
   const openDate = () => {
-    // Výchozí datum je den zpátky od kurzoru — typicky „zopakuj si včerejšek“.
-    const seed = (cursorTime ?? Math.floor(Date.now() / 1_000)) - 86_400;
+    const seed = defaultDateTime() ?? Math.floor(Date.now() / 1_000);
     setDateValue(zonedDateTimeLocalValue(seed, timeZone));
     setDateOpen(true);
   };
@@ -196,6 +198,7 @@ export const ReplayStartMenu: React.FC<{
       {open && (
         <div
           ref={menuRef}
+          data-chart-overlay-menu
           role="menu"
           aria-label="Start replaye"
           className={`absolute ${menuPosition(openUp)} left-0 z-[700] w-[240px] overflow-hidden rounded-lg border py-1 shadow-2xl ${menuSurface(isDark)}`}

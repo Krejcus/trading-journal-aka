@@ -202,6 +202,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
             showStructure={indicators.structure}
             isDark={isDark}
             compactMode
+            phoneLayout
             compactToolbar
             hideDrawingToolbar
             hideFocusButton

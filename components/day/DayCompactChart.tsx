@@ -90,6 +90,7 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
             showStructure={indicators.structure}
             isDark={isDark}
             compactMode
+            phoneLayout
             compactToolbar
             hideDrawingToolbar
             hideFocusButton

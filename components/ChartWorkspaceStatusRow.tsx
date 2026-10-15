@@ -111,6 +111,7 @@ export const ChartWorkspaceStatusRow: React.FC<{
         ><CalendarClock size={13} /></button>
         {goToOpen && (
           <form
+            data-chart-overlay-menu
             className={`absolute bottom-8 left-0 z-[700] flex w-[230px] flex-col gap-2 rounded-lg border p-3 shadow-2xl ${isDark ? 'border-white/10 bg-[#1e222d] text-slate-200' : 'border-slate-200 bg-white text-slate-800'}`}
             onSubmit={event => {
               event.preventDefault();

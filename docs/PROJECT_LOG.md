@@ -262,6 +262,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-15 dopoledne — Grafy blíž TradingView: replay panel, panely, telefon (Claude, větev, NEnasazeno)
+- Inventura grafů: tři replaye (detail `TradeReplayBar`, workspace Bar Replay, iOS lab), dva
+  kreslicí systémy (desktop toolbar vs. telefonní `dayChartTools`), dvě vrstvy poznámek. Varianta
+  `TradeMarketChart` „full“ (klasický lightweight-charts + `lightweight-charts-drawing`) nemá
+  volajícího. Srovnání proti živému TradingView přes MCP (rychlosti 10…0,1×, ⇧↓/⇧→, start
+  Bar/Date/First/Random, X, skok na realtime, ikona ⏪ v legendě).
+- Filip rozhodl: replay panel jako TV, ale **dál volně přesouvatelný** (nekotvit pod graf);
+  sjednocení replaye v detailu obchodu (+ TV zkratky) **nedělat**; telefon a spodní řádek ano.
+  REA (reverse engineering) a TradingView Advanced Charts se pro tohle nepoužijí.
+- Větev `claude/tv-replay-parity-20261015` (worktree `~/alphatrade-worktrees/tv-parity`, nad
+  `claude/day-chart-fullscreen-20261014`, protože sahá na stejné grafy dne):
+  - Bar Replay panel: menu Start (svíčka / datum v pásmu grafu / první / náhodná), vlastní menu
+    rychlosti s popisem „N kroků za 1 s“, skok na konec dat, X. Start/konec/X jen mimo backtest —
+    session hlídá zpracované obchody a data dotahuje po kouscích. Start bez kliknutí drží šířku
+    svíček (záporné `from`), dřív byla jedna svíčka přes celý graf.
+  - Panely bez tab stripu (`tabSetEnableTabStrip: false`; tabset s víc taby ze starších rozložení
+    strip dostane zpátky), „+ Graf“ přidá panel vedle aktivního (dřív schovaný tab), maximalizace
+    a zavření při najetí myší. Spodní řádek: 30m/1H/4H/Vše, „Přejít na“ datum, hodiny v pásmu
+    grafu. Delší rozsahy (5D, 1M) záměrně ne — graf obchodu má načtené jedno denní okno Databento.
+  - Telefon (`phoneLayout` jen pro `DayCompactChart`/`DayFullscreenChart`): legenda bez dlouhého
+    názvu instrumentu a oříznutá před osou, štítky úrovní/VWAP na ose prořídnuté bez překryvů
+    (`thinPriceAxisLabels`). Úzký „sloupek“ pozice uvnitř jedné svíčky je správně (min. šířka
+    = jedna svíčka už existovala).
+
 ### 2026-10-15 — Dotykové kreslení podle TradingView mobilu (Claude, větev, NEnasazeno na web)
 - Podle Filipova videa z TradingView: s nástrojem v ruce je crosshair hned uprostřed, tah prstem ho
   posouvá jako touchpad, klepnutí potvrdí bod. Nový virtuální nástroj **Šipka = Path**: klepnutí =

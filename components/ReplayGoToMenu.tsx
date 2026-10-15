@@ -111,7 +111,7 @@ export const ReplayGoToMenu: React.FC<{
       </button>
 
       {open && (
-        <div className={`absolute bottom-10 left-0 z-[700] w-[230px] overflow-hidden rounded-lg border py-1 shadow-2xl ${menuSurface}`}>
+        <div data-chart-overlay-menu className={`absolute bottom-10 left-0 z-[700] w-[230px] overflow-hidden rounded-lg border py-1 shadow-2xl ${menuSurface}`}>
           {favorites.length === 0 && (
             <p className="px-3 py-3 text-[10px] font-medium text-slate-500">
               Žádný oblíbený cíl. Přidej si ho hvězdičkou v nastavení.
@@ -234,6 +234,7 @@ const ReplayGoToSettingsDialog: React.FC<{
 
   return createPortal(
     <div
+      data-chart-overlay-menu
       className="fixed inset-0 z-[900] flex items-center justify-center bg-black/50 p-4"
       onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}
     >

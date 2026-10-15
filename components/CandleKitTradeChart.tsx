@@ -66,6 +66,7 @@ import {
   resolveNasdaqFuturesRoot,
   type NasdaqFuturesRoot,
 } from '../services/chartInstrumentLegend';
+import { thinPriceAxisLabels } from '../services/chartPriceAxisLabels';
 import {
   calculateMarketStructure,
   findEntryEdgeFairValueGap,
@@ -278,6 +279,11 @@ interface CandleKitTradeChartProps {
    * globálně (jako fullscreen obchodu), nikdy do otevřené backtest session.
    */
   onIndicatorSettingsSaved?: () => void;
+  /**
+   * Úzký graf na telefonu (deník dne): legenda jen se symbolem a timeframem
+   * a štítky úrovní na cenové ose bez překryvů, jako TradingView mobile.
+   */
+  phoneLayout?: boolean;
   replaySelecting?: boolean;
   replaySelectionCandles?: MarketCandle[];
   replaySelectionTime?: number | null;
@@ -1763,6 +1769,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   hideTradeResult = false,
   indicatorSettingsOverride,
   onIndicatorSettingsSaved,
+  phoneLayout = false,
   replaySelecting = false,
   replaySelectionMinimumTime = null,
   replaySelectionCandles = [],
@@ -1910,6 +1917,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   }, [indicatorSettingsOverride, legacySettingsStorageKey, settingsPanelId]);
   const indicatorSettingsRef = useRef(indicatorSettings);
   indicatorSettingsRef.current = indicatorSettings;
+  // Čte se z primitivy na cenové ose — ta se kvůli přepnutí nepřestavuje.
+  const phoneLayoutRef = useRef(phoneLayout);
+  phoneLayoutRef.current = phoneLayout;
   const [settingsDialogIndicator, setSettingsDialogIndicator] = useState<AlphaTradeIndicatorId | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     left: number;
@@ -3434,8 +3444,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const priceAxisViews = (): ISeriesPrimitiveAxisView[] => {
         const timeRange = chart.timeScale().getVisibleRange();
         const rightTime = timeRange ? Number(timeRange.to) : visibleCandlesRef.current.at(-1)?.time;
-        return indicatorSettingsRef.current.levels.showLabels
-          ? currentLevelLabels(rightTime).map(level => ({
+        if (!indicatorSettingsRef.current.levels.showLabels) return [];
+        const allLabels = currentLevelLabels(rightTime);
+        const lastClose = visibleCandlesRef.current.at(-1)?.close;
+        const lastCloseY = Number.isFinite(lastClose) ? series.priceToCoordinate(Number(lastClose)) : null;
+        const shownLabels = phoneLayoutRef.current
+          ? thinPriceAxisLabels(allLabels, price => series.priceToCoordinate(price), lastCloseY == null ? [] : [lastCloseY], 17)
+          : allLabels;
+        return shownLabels.length
+          ? shownLabels.map(level => ({
           coordinate: () => series.priceToCoordinate(level.price) ?? -1000,
           text: () => level.price.toFixed(2),
           textColor: () => '#ffffff',
@@ -5079,7 +5096,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         isDark={isDark}
         onOpenSettings={() => setDrawingSettingsOpen(true)}
       />}
-      <div className={`pointer-events-none absolute left-2 top-1.5 z-20 max-w-[calc(100%-72px)] whitespace-nowrap text-[10px] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+      <div className={`pointer-events-none absolute left-2 top-1.5 z-20 ${phoneLayout ? 'max-w-[calc(100%-96px)]' : 'max-w-[calc(100%-72px)]'} whitespace-nowrap text-[10px] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
         <div className="flex h-4 min-w-0 items-center gap-1.5" aria-label="Instrument a timeframe grafu">
           {chartSettings.statusLine.symbolTitle && (
             <>
@@ -5089,7 +5106,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
               <span className={`shrink-0 font-semibold ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{resolvedInstrumentRoot}</span>
             </>
           )}
-          {chartSettings.statusLine.symbolDescription && (
+          {chartSettings.statusLine.symbolDescription && !phoneLayout && (
             <span className="truncate font-semibold">{instrumentLegend.name}</span>
           )}
           <span className={`shrink-0 font-semibold ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>· {instrumentLegend.timeframe}</span>
@@ -5104,7 +5121,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             ><Rewind size={9} fill="currentColor" /></span>
           )}
         </div>
-        <div className={`flex h-4 items-center gap-2 font-medium ${isDark ? 'text-slate-300' : 'text-slate-600'}`} aria-label="OHLC označené svíčky">
+        <div className={`flex h-4 items-center gap-2 font-medium ${phoneLayout ? 'overflow-hidden' : ''} ${isDark ? 'text-slate-300' : 'text-slate-600'}`} aria-label="OHLC označené svíčky">
           <span ref={ohlcValuesRef} hidden={!chartSettings.statusLine.chartValues} />
           <span ref={ohlcChangeRef} hidden={!chartSettings.statusLine.barChangeValues} />
           {chartSettings.statusLine.volume && <span ref={volumeValueRef} />}
