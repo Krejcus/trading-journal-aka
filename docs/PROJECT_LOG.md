@@ -262,6 +262,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-17 odpoledne — Kresby a poznámky jako jedna vrstva podle trhu a času (Claude, větev, tabulka NASAZENA, appka NE)
+- Filip schválil novou tabulku **`chart_drawings`** (bez zálohy, jen přidání). Aplikováno na produkci
+  přes MCP `apply_migration` (soubor `supabase/migrations/20261017100000_chart_drawings.sql`,
+  SQL testy `tests/sql/chartDrawings.pg.mjs`); advisory bez nálezů k nové tabulce kromě očekávaných
+  „unused index“ (prázdná tabulka). Řádek = kresba: `market 'NQ'` (MNQ i NQ sdílí), `day` = pražské
+  datum prvního bodu, `carry_forward` (z `style.carryForward`), měkké mazání, trigger: starší
+  `edited_at` novější nepřepíše, úprava z budoucnosti se ořízne, `auto-*` odmítnuto.
+- Klient `services/chartDrawingLayer.ts`: cache v localStorage per uživatel, graf čte/zapisuje přes
+  CandleKit `kv` okno svých **dnů** (ne časů — replay mění data každý krok), diff po kresbách,
+  smazat smí jen kresby, které graf měl (`known`), push se zpožděním + zpětné čtení (trigger mohl
+  starší úpravu odmítnout), pull přírůstkově podle `updated_at`. Backtest dál po staru (session).
+- Zjištěno při inventuře: v localStorage jsou i **automatické vrstvy** (`auto-structure-*`,
+  `auto-risk-*`) — `engine.export()` je ukládá; převod je vynechává. Stejná kresba je ve víc
+  panelech (synchronizace kreseb) → slučuje se podle id.
+- Převod: `DrawingMigrationPrompt` jednou na zařízení (localStorage je per prohlížeč — produkce,
+  localhost a iPhone zvlášť) ukáže náhled (odkud, dny, sloučené kopie, konflikty) a převede až po
+  „Převést“; staré klíče zůstávají jako záloha. Na localhostu: 28 klíčů → 2 skutečné kresby.
+  Do potvrzení grafy ukazují jen vrstvu (staré kresby „zmizí“, dokud se nepřevedou).
+- Poznámky bez převodu a bez nové tabulky: grafy obchodu ukazují poznámky dne (jen pro čtení,
+  s fází Příprava/Živě/Retro), grafy Deníku poznámky k obchodům dne. Zapisuje se dál tam, kde dřív.
+
 ### 2026-10-17 — Profil grafů pro celý deník, barvy podle motivu (Claude, větev, NEnasazeno)
 - Filip rozhodl: grafy normální appky (detail, fullscreen, přehrávání, Review, Deník dne, telefon,
   snímky) mají **jeden profil**; backtest je úplně stranou (vlastní session nastavení). Změna

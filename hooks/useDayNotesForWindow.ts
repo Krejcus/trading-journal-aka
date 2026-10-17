@@ -12,6 +12,8 @@ import { loadDayJournalRange } from '../services/dayJournalService';
 
 const PHASE_LABELS: Record<DayNotePhase, string> = { prep: 'Příprava', live: 'Živě', later: 'Retro' };
 const cache = new Map<string, { at: number; notes: ChartNote[] }>();
+/** Víc panelů se stejným oknem = jeden dotaz. */
+const inflight = new Map<string, Promise<ChartNote[]>>();
 const FRESH_MS = 60_000;
 
 export const dayNotesAsChartNotes = (journals: readonly DayJournal[]): ChartNote[] => journals.flatMap(journal => {
@@ -37,12 +39,20 @@ export function useDayNotesForWindow(fromDay: string | null, toDay: string | nul
       const cached = cache.get(key);
       if (cached) setNotes(cached.notes);
       if (cached && Date.now() - cached.at < FRESH_MS) return;
-      loadDayJournalRange(fromDay, toDay)
-        .then(journals => {
-          const next = dayNotesAsChartNotes(journals);
-          cache.set(key, { at: Date.now(), notes: next });
-          if (!cancelled) setNotes(next);
-        })
+      if (!cached) setNotes([]);
+      let request = inflight.get(key);
+      if (!request) {
+        request = loadDayJournalRange(fromDay, toDay)
+          .then(journals => {
+            const next = dayNotesAsChartNotes(journals);
+            cache.set(key, { at: Date.now(), notes: next });
+            return next;
+          })
+          .finally(() => inflight.delete(key!));
+        inflight.set(key, request);
+      }
+      request
+        .then(next => { if (!cancelled) setNotes(next); })
         .catch(() => { /* bez poznámek dne — graf obchodu funguje dál */ });
     };
     load();

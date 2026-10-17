@@ -8,7 +8,9 @@ import {
   type DrawingSourceKind,
 } from '../services/chartAnnotationMigration';
 import {
-  drawingLayerReady,
+  activateDrawingLayer,
+  drawingLayerActive,
+  drawingLayerPulled,
   drawingLayerUserId,
   importDrawingsIntoLayer,
   subscribeDrawingLayer,
@@ -20,8 +22,6 @@ import { announceChartProfileChange } from '../services/chartProfileToast';
  * zařízení zvlášť (localStorage je per prohlížeč) a až po potvrzení náhledu.
  * Staré klíče v localStorage zůstávají jako záloha.
  */
-
-const migratedKey = (userId: string) => `alphatrade:chart-drawings-migrated:v1:user:${userId}`;
 
 const readPreview = (): DrawingMigrationPreview => {
   const entries: [string, string | null][] = [];
@@ -38,38 +38,41 @@ const dayLabel = (day: string) => {
 };
 
 export default function DrawingMigrationPrompt() {
-  const [ready, setReady] = useState(drawingLayerReady);
-  const [preview, setPreview] = useState<DrawingMigrationPreview | null>(null);
+  // Až po prvním načtení serveru — převod musí vidět, co už ve vrstvě je.
+  const readState = () => (drawingLayerPulled() ? drawingLayerUserId() : null);
+  const [owner, setOwner] = useState<string | null>(readState);
+  const [preview, setPreview] = useState<{ owner: string; data: DrawingMigrationPreview } | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
-  useEffect(() => subscribeDrawingLayer(() => setReady(drawingLayerReady())), []);
+  useEffect(() => subscribeDrawingLayer(() => setOwner(readState())), []);
   useEffect(() => {
-    const owner = drawingLayerUserId();
-    if (!ready || !owner) return;
+    setDismissed(false);
+    if (!owner) { setPreview(null); return; }
+    if (drawingLayerActive()) { setPreview(null); return; }
     try {
-      if (window.localStorage.getItem(migratedKey(owner))) return;
       const next = readPreview();
       if (next.drawings.length === 0) {
-        window.localStorage.setItem(migratedKey(owner), new Date().toISOString());
+        activateDrawingLayer();
+        setPreview(null);
         return;
       }
-      setPreview(next);
+      setPreview({ owner, data: next });
     } catch { /* bez úložiště není co převádět */ }
-  }, [ready]);
+  }, [owner]);
 
-  const sources = useMemo(() => preview
-    ? (Object.entries(preview.bySource) as [DrawingSourceKind, number][]).sort((a, b) => b[1] - a[1])
-    : [], [preview]);
-  const days = useMemo(() => preview ? Object.entries(preview.byDay).sort((a, b) => b[0].localeCompare(a[0])) : [], [preview]);
+  const data = preview?.data ?? null;
+  const sources = useMemo(() => data
+    ? (Object.entries(data.bySource) as [DrawingSourceKind, number][]).sort((a, b) => b[1] - a[1])
+    : [], [data]);
+  const days = useMemo(() => data ? Object.entries(data.byDay).sort((a, b) => b[0].localeCompare(a[0])) : [], [data]);
 
-  if (!preview || dismissed) return null;
-  const owner = drawingLayerUserId();
+  if (!preview || !data || dismissed || preview.owner !== owner) return null;
 
   const migrate = () => {
-    const imported = importDrawingsIntoLayer(preview.drawings.map(item => item.drawing));
-    if (owner) {
-      try { window.localStorage.setItem(migratedKey(owner), new Date().toISOString()); } catch { /* jen značka */ }
-    }
+    // Odhlášení nebo jiný účet mezitím — nic nepřevádět.
+    if (drawingLayerUserId() !== preview.owner) { setPreview(null); return; }
+    const imported = importDrawingsIntoLayer(data.drawings.map(item => item.drawing));
+    activateDrawingLayer();
     setPreview(null);
     announceChartProfileChange(`Převedeno ${imported} kreseb — teď jsou ve všech grafech a na všech zařízeních`);
   };
@@ -83,7 +86,7 @@ export default function DrawingMigrationPrompt() {
           </h2>
           <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
             Kresba patří k trhu a času: uvidíš ji v detailu obchodu, fullscreenu, Review i Deníku dne,
-            na všech zařízeních. Na tomto zařízení je <strong>{preview.drawings.length}</strong> {preview.drawings.length === 1 ? 'kresba' : preview.drawings.length < 5 ? 'kresby' : 'kreseb'} k převodu.
+            na všech zařízeních. Na tomto zařízení je <strong>{data.drawings.length}</strong> {data.drawings.length === 1 ? 'kresba' : data.drawings.length < 5 ? 'kresby' : 'kreseb'} k převodu.
           </p>
         </header>
 
@@ -107,9 +110,9 @@ export default function DrawingMigrationPrompt() {
         </div>
 
         <ul className="space-y-1 text-[11px] text-[var(--text-secondary)]">
-          {preview.duplicateCopies > 0 && <li>{preview.duplicateCopies}× stejná kresba ve víc panelech se sloučí do jedné.</li>}
-          {preview.conflicts > 0 && <li>{preview.conflicts} {preview.conflicts === 1 ? 'kresba se' : 'kreseb se'} mezi panely liší — vezme se první nalezená verze.</li>}
-          {preview.autoOverlaysSkipped > 0 && <li>Automatické vrstvy grafu ({preview.autoOverlaysSkipped}) se nepřevádí — graf si je kreslí sám.</li>}
+          {data.duplicateCopies > 0 && <li>{data.duplicateCopies}× stejná kresba ve víc panelech se sloučí do jedné.</li>}
+          {data.conflicts > 0 && <li>{data.conflicts} {data.conflicts === 1 ? 'kresba se' : 'kreseb se'} mezi panely liší — vezme se první nalezená verze.</li>}
+          {data.autoOverlaysSkipped > 0 && <li>Automatické vrstvy grafu ({data.autoOverlaysSkipped}) se nepřevádí — graf si je kreslí sám.</li>}
           <li>Kresby v backtestu zůstávají v session. Původní data v prohlížeči zůstanou jako záloha.</li>
         </ul>
 

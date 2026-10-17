@@ -110,6 +110,15 @@ export interface DrawingMigrationPreview {
 
 const signature = (drawing: StoredDrawingLike) => JSON.stringify(normalizeDrawingForLayer(drawing));
 
+/**
+ * Při konfliktu (stejné ID, jiný obsah) vyhraje kopie z obrazovky, kde se
+ * kreslí — tam ji uživatel naposledy upravoval spíš než v detailu, který
+ * kresby jen zobrazuje. Starý zápis čas úpravy nemá.
+ */
+const SOURCE_PRIORITY: Record<DrawingSourceKind, number> = {
+  'trade-fullscreen': 5, 'day-desktop': 4, 'day-phone': 4, 'weekly-review': 3, 'trade-detail': 1, other: 0, backtest: -1,
+};
+
 export const buildDrawingMigrationPreview = (entries: readonly [string, string | null][]): DrawingMigrationPreview => {
   const preview: DrawingMigrationPreview = {
     keysScanned: 0, emptyKeys: 0, unreadableKeys: [], autoOverlaysSkipped: 0, backtestSkipped: 0,
@@ -135,7 +144,15 @@ export const buildDrawingMigrationPreview = (entries: readonly [string, string |
       if (existing) {
         preview.duplicateCopies += 1;
         if (!existing.sources.includes(source.kind)) existing.sources.push(source.kind);
-        if (existing.signature !== sig) existing.conflict = true;
+        if (existing.signature !== sig) {
+          existing.conflict = true;
+          const bestSoFar = Math.max(...existing.sources.slice(0, -1).map(kind => SOURCE_PRIORITY[kind]));
+          if (SOURCE_PRIORITY[source.kind] > bestSoFar) {
+            existing.drawing = normalizeDrawingForLayer(drawing);
+            existing.signature = sig;
+            existing.day = drawing.points[0] ? pragueDay(drawing.points[0].time) : existing.day;
+          }
+        }
         existing.root ??= source.root;
         continue;
       }

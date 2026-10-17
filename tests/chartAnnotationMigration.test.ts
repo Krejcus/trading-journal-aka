@@ -48,6 +48,15 @@ describe('buildDrawingMigrationPreview — co by se slilo', () => {
     expect(preview.conflicts).toBe(1);
   });
 
+  it('při konfliktu vyhraje kopie z obrazovky, kde se kreslí', () => {
+    const preview = buildDrawingMigrationPreview([
+      [`alphatrade:candlekit:${TRADE}:1m`, JSON.stringify([drawing('dw_a')])],
+      [`alphatrade:candlekit:${TRADE}:workspace:alphatrade-chart-1:MNQ:1m`, JSON.stringify([drawing('dw_a', 1_792_169_460)])],
+    ]);
+    expect(preview.conflicts).toBe(1);
+    expect(preview.drawings[0].drawing.points[0].time).toBe(1_792_169_460);
+  });
+
   it('rozdíl jen v runtime polích panelu konflikt není', () => {
     const one = drawing('dw_p', 1_792_169_400, { position: { intervalSeconds: 60, risk: 1 } });
     const two = drawing('dw_p', 1_792_169_400, { position: { intervalSeconds: 300, risk: 1 } });

@@ -3099,18 +3099,26 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const drawingStorageId = drawingKeyId ?? String(trade.id);
   // Deník (mimo backtest): kresby jsou jedna vrstva podle trhu a času —
   // graf čte a zapisuje okno svých dnů (services/chartDrawingLayer.ts).
-  const [drawingLayerVersion, setDrawingLayerVersion] = useState(0);
-  const layerEnabled = !String(drawingScope ?? '').startsWith('backtest:')
-    && activeChartAppearanceScope() === null
-    && drawingLayerReady();
-  const layerFromDay = rawCandles.length ? drawingLayerDay(rawCandles[0].time) : null;
-  const layerToDay = rawCandles.length ? drawingLayerDay(rawCandles[rawCandles.length - 1].time) : null;
+  // Na zařízení se vrstva zapne až po převodu starých kreseb.
+  const [layerActive, setLayerActive] = useState(drawingLayerReady);
+  const layerEnabled = layerActive
+    && !String(drawingScope ?? '').startsWith('backtest:')
+    && activeChartAppearanceScope() === null;
+  // Okno podle všech načtených dat, ne odkrytých v replayi — jinak by přechod
+  // přes půlnoc v přehrávání postavil nový kreslicí ovladač.
+  const layerSource = replaySelectionCandles.length ? replaySelectionCandles : rawCandles;
+  const layerFromDay = layerSource.length ? drawingLayerDay(layerSource[0].time) : null;
+  const layerToDay = layerSource.length ? drawingLayerDay(layerSource[layerSource.length - 1].time) : null;
   const layerWindow = layerEnabled && layerFromDay && layerToDay ? { fromDay: layerFromDay, toDay: layerToDay } : null;
-  useEffect(() => subscribeDrawingLayer(() => setDrawingLayerVersion(value => value + 1)), []);
-  const drawingOptions = useMemo(() => (layerWindow
+  const layerKV = useMemo(
+    () => (layerWindow ? drawingLayerKV(layerWindow.fromDay, layerWindow.toDay) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [layerWindow?.fromDay, layerWindow?.toDay],
+  );
+  const drawingOptions = useMemo(() => (layerWindow && layerKV
     ? {
       storageKey: `layer:${layerWindow.fromDay}:${layerWindow.toDay}`,
-      kv: drawingLayerKV(layerWindow.fromDay, layerWindow.toDay),
+      kv: layerKV,
       ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
     }
     : {
@@ -3119,21 +3127,31 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
   // Klíč okna (dny), ne objekt — jinak by každý render postavil nový ovladač.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [drawingHitTolerance, drawingStorageId, drawingScope, timeframe, layerWindow?.fromDay, layerWindow?.toDay]);
-  // Změna vrstvy z jiného grafu nebo zařízení → přenést do tohoto grafu.
+  ), [drawingHitTolerance, drawingStorageId, drawingScope, timeframe, layerKV]);
+  // Změna vrstvy z jiného grafu nebo zařízení → rovnou do enginu tohoto grafu,
+  // bez překreslení Reactu (při tahu myší by se jinak překreslovaly všechny grafy).
+  const layerSyncRef = useRef({ layerWindow, layerKV, timeframe });
+  layerSyncRef.current = { layerWindow, layerKV, timeframe };
   useEffect(() => {
-    if (!layerWindow) return;
-    const engine = apiRef.current?.drawing?.engine;
-    if (!engine) return;
-    const target = windowDrawings(layerWindow.fromDay, layerWindow.toDay);
-    const current = engine.getDrawings();
-    const manual = current.filter(drawing => !drawing.id.startsWith('auto-'));
-    const signature = (items: readonly unknown[]) => JSON.stringify(items.map(item => normalizeDrawingForLayer(item as StoredDrawingLike)));
-    if (signature(manual) === signature(target)) return;
-    const autos = current.filter(drawing => drawing.id.startsWith('auto-'));
-    engine.import(JSON.stringify([...autos, ...target]));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawingLayerVersion, layerWindow?.fromDay, layerWindow?.toDay]);
+    const syncFromLayer = () => {
+      const active = drawingLayerReady();
+      setLayerActive(current => (current === active ? current : active));
+      const { layerWindow: window, layerKV: kv, timeframe: frame } = layerSyncRef.current;
+      const engine = apiRef.current?.drawing?.engine;
+      if (!window || !kv || !engine) return;
+      const target = windowDrawings(window.fromDay, window.toDay);
+      const current = engine.getDrawings();
+      const manual = current.filter(drawing => !drawing.id.startsWith('auto-'));
+      const signature = (items: readonly unknown[]) => JSON.stringify(items.map(item => normalizeDrawingForLayer(item as StoredDrawingLike)));
+      if (signature(manual) === signature(target)) return;
+      const autos = current.filter(drawing => drawing.id.startsWith('auto-'));
+      kv.markLoaded();
+      engine.import(JSON.stringify([...autos, ...target]));
+      // Runtime pole Fibu (timeframe grafu) se do vrstvy neukládají — dopočítat.
+      applyFibRuntimeTimeframe(engine, frame);
+    };
+    return subscribeDrawingLayer(syncFromLayer);
+  }, []);
 
   // Obchod uprostřed a celý vidět; okraje rostou s délkou obchodu (minimum
   // pokryje i 10 min před vstupem, odkud startuje přehrávání). Během

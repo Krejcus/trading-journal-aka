@@ -10,7 +10,7 @@ import type { TradeChartIndicators } from '../services/detailIndicators';
 import type { ChartNote } from '../lib/chartNotes';
 import ChartNotesLayer, { type ChartNoteAddRequest } from './ChartNotesLayer';
 import { useDayNotesForWindow } from '../hooks/useDayNotesForWindow';
-import { drawingLayerDay } from '../services/chartDrawingLayer';
+import { drawingLayerDay, drawingLayerReady, subscribeDrawingLayer } from '../services/chartDrawingLayer';
 import ChartSnapshotButton from './ChartSnapshotButton';
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createBacktestWorkspaceCheckpoint, mergeWorkspacePanelSnapshots, workspaceLayoutPanelIds, workspacePanelsReady } from '../services/backtestWorkspaceCheckpoint';
@@ -2090,14 +2090,20 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     syncSettings.time,
   ]);
 
+  // Panely deníku na vrstvě kreseb sdílí kresby přes vrstvu (podle trhu a času);
+  // kopírování mezi panely by se s ní tlouklo — u panelů s jiným oknem dnů by
+  // dokonce smazalo kresbu. Zůstává pro backtest a pro zařízení bez převodu.
+  const [drawingLayerOn, setDrawingLayerOn] = useState(drawingLayerReady);
+  useEffect(() => subscribeDrawingLayer(() => setDrawingLayerOn(drawingLayerReady())), []);
   useEffect(() => {
     if (!syncSettings.drawings) return () => undefined;
+    if (!backtestSession && drawingLayerOn) return () => undefined;
     const activeEngine = activeControl?.drawingEngine;
     const orderedEngines = activeEngine
       ? [activeEngine, ...drawingEngines.filter(engine => engine !== activeEngine)]
       : drawingEngines;
     return installWorkspaceDrawingSync(orderedEngines);
-  }, [activeControl?.drawingEngine, drawingEngines, syncSettings.drawings]);
+  }, [activeControl?.drawingEngine, backtestSession, drawingEngines, drawingLayerOn, syncSettings.drawings]);
 
   const resetWorkspace = useCallback(() => {
     workspace.importLayout({

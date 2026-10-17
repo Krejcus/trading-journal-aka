@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { normalizeDrawingForLayer, type StoredDrawingLike } from './chartAnnotationMigration';
+import { wallClockToUnix } from './replayGoTo';
 
 /**
  * Kresby v grafech deníku jako jedna vrstva podle trhu a času (tabulka
@@ -8,23 +9,32 @@ import { normalizeDrawingForLayer, type StoredDrawingLike } from './chartAnnotat
  * Kresba má absolutní kotvy (unix sekundy + cena), takže se ukáže v každém
  * grafu, který ten čas zobrazuje — detail obchodu, fullscreen, Review, Deník
  * dne na desktopu i telefonu — a na všech zařízeních. Graf vidí jen „okno“
- * (dny svých dat) a přenesené úrovně (`style.carryForward`).
+ * (dny svých dat; kresba patří do okna, když se s ním časově překrývá) a
+ * přenesené úrovně (`style.carryForward`).
  *
+ * - Vrstva se na zařízení zapne až po převodu starých kreseb (nebo když žádné
+ *   nejsou) — do té doby grafy jedou po staru, ať staré kresby „nezmizí“.
  * - Místní cache v localStorage dává grafu kresby okamžitě (CandleKit čte
- *   synchronně přes `kv`).
- * - Změna z grafu se porovná po kresbách (jen kresby okna), označí jako
- *   neodeslaná a nahraje se se zpožděním; smazání je měkké.
- * - Server se čte přírůstkově (`updated_at`), po přihlášení, při návratu do
- *   appky a každou minutu. Starší úprava novější nepřepíše (trigger v DB,
- *   a stejně tak tady při slévání).
+ *   synchronně přes `kv`); zápis cache je odložený.
+ * - Změna z grafu se porovná po kresbách (jen kresby okna, smazat smí jen ty,
+ *   které graf měl), označí jako neodeslaná a nahraje se v dávkách se
+ *   zpožděním; smazání je měkké. Chyby: prodleva roste, vadný řádek se odloží.
+ * - Server se čte přírůstkově podle `updated_at` s pevným pořadím a překryvem
+ *   (stejný čas celé dávky nesmí přeskočit řádky), po přihlášení, při návratu
+ *   do appky a každou minutu. Starší úprava novější nepřepíše (trigger v DB,
+ *   stejně tak tady při slévání).
  * - Automatické vrstvy grafu (`auto-*`) se do vrstvy nikdy nedostanou.
  */
 
 export const CHART_DRAWINGS_MARKET = 'NQ';
 const TABLE = 'chart_drawings';
 const PUSH_DELAY_MS = 1_500;
+const PUSH_BATCH = 100;
+const MAX_BACKOFF_MS = 60_000;
 const PULL_INTERVAL_MS = 60_000;
+const PULL_OVERLAP_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+const SAVE_DELAY_MS = 400;
 const PAGE = 500;
 
 export interface ChartDrawingRow {
@@ -39,6 +49,8 @@ export interface ChartDrawingRow {
   deletedAt: number | null;
   /** Změna, kterou server ještě nemá. */
   dirty?: boolean;
+  /** Server řádek opakovaně odmítl (např. příliš velký) — neposílá se znovu. */
+  parked?: boolean;
 }
 
 interface LayerCache {
@@ -47,10 +59,21 @@ interface LayerCache {
   pulledAt: string | null;
 }
 
+const PRAGUE = 'Europe/Prague';
 const pragueDayFormatter = new Intl.DateTimeFormat('sv-SE', {
-  timeZone: 'Europe/Prague', year: 'numeric', month: '2-digit', day: '2-digit',
+  timeZone: PRAGUE, year: 'numeric', month: '2-digit', day: '2-digit',
 });
 export const drawingLayerDay = (unixSeconds: number): string => pragueDayFormatter.format(unixSeconds * 1_000);
+
+/** Začátek pražského dne `YYYY-MM-DD` v unix sekundách. */
+export const pragueDayStart = (day: string): number => {
+  const [year, month, date] = day.split('-').map(Number);
+  return wallClockToUnix(year, month, date, 0, 0, PRAGUE);
+};
+const nextDay = (day: string): string => {
+  const [year, month, date] = day.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, date + 1)).toISOString().slice(0, 10);
+};
 
 export const isLayerDrawing = (value: unknown): value is StoredDrawingLike => Boolean(value)
   && typeof value === 'object'
@@ -66,11 +89,10 @@ export const drawingCarriesForward = (drawing: StoredDrawingLike): boolean => (d
 export const rowForDrawing = (drawing: StoredDrawingLike, editedAt: number): ChartDrawingRow => {
   const normalized = normalizeDrawingForLayer(drawing);
   const times = normalized.points.map(point => point.time);
-  const startTime = Math.min(...times);
   return {
     id: normalized.id,
     day: drawingLayerDay(normalized.points[0].time),
-    startTime,
+    startTime: Math.min(...times),
     endTime: Math.max(...times),
     carryForward: drawingCarriesForward(normalized),
     drawing: normalized,
@@ -81,29 +103,36 @@ export const rowForDrawing = (drawing: StoredDrawingLike, editedAt: number): Cha
 };
 
 /**
- * Patří kresba do okna grafu (dny jeho dat, pražská data `YYYY-MM-DD`), nebo
- * je to přenesená úroveň z dřívějšího dne? Okno je po dnech záměrně: během
- * přehrávání se data grafu mění každý krok, dny skoro nikdy.
+ * Patří kresba do okna grafu? Okno = pražské dny jeho dat (od začátku `fromDay`
+ * do konce `toDay`); kresba patří dovnitř, když se s ním časově překrývá —
+ * i čára začatá předchozí den. Přenesená úroveň platí od svého začátku dál.
+ * Okno je po dnech záměrně: během přehrávání se data mění každý krok, dny ne.
  */
 export const rowInWindow = (row: ChartDrawingRow, fromDay: string, toDay: string): boolean => {
   if (row.deletedAt !== null) return false;
-  if (row.carryForward && row.day <= toDay) return true;
-  return row.day >= fromDay && row.day <= toDay;
+  const windowStart = pragueDayStart(fromDay);
+  const windowEnd = pragueDayStart(nextDay(toDay));
+  if (row.carryForward) return row.startTime < windowEnd;
+  return row.startTime < windowEnd && row.endTime >= windowStart;
 };
 
 const drawingSignature = (drawing: StoredDrawingLike) => JSON.stringify(normalizeDrawingForLayer(drawing));
 
 /**
  * Rozdíl mezi tím, co graf v okně ukazuje, a vrstvou: nové a změněné kresby,
- * a kresby okna, které z grafu zmizely (smazané). Kresby mimo okno graf
- * nevidí, takže je smazat nemůže.
+ * a kresby okna, které z grafu zmizely (smazané).
+ * - Smazat smí jen kresby, které graf opravdu měl (`known`) — nová kresba
+ *   z jiného zařízení ještě nemusí být v grafu.
+ * - Kresbu smazanou jinde po posledním načtení grafu (`deletedSince`) zastaralý
+ *   graf nevzkřísí; dřív smazanou (např. vrácení přes Zpět) ano.
  */
 export const diffWindowExport = (
   windowRows: readonly ChartDrawingRow[],
   exported: readonly unknown[],
   now: number,
-  /** Kresby, které graf opravdu měl — jen ty může smazat (nová kresba z jiného zařízení ještě nemusí být v grafu). */
   known?: ReadonlySet<string>,
+  deletedRows?: ReadonlyMap<string, ChartDrawingRow>,
+  loadedAt?: number,
 ): { upserts: ChartDrawingRow[]; deletions: ChartDrawingRow[] } => {
   const current = new Map(windowRows.map(row => [row.id, row]));
   const seen = new Set<string>();
@@ -113,6 +142,8 @@ export const diffWindowExport = (
     seen.add(item.id);
     const existing = current.get(item.id);
     if (existing && drawingSignature(existing.drawing) === drawingSignature(item)) continue;
+    const deleted = deletedRows?.get(item.id);
+    if (!existing && deleted && loadedAt !== undefined && (deleted.deletedAt ?? 0) >= loadedAt) continue;
     upserts.push(rowForDrawing(item, now));
   }
   const deletions = windowRows
@@ -121,9 +152,15 @@ export const diffWindowExport = (
   return { upserts, deletions };
 };
 
+const sameRow = (a: ChartDrawingRow | undefined, b: ChartDrawingRow) => Boolean(a)
+  && a!.editedAt === b.editedAt
+  && a!.deletedAt === b.deletedAt
+  && a!.carryForward === b.carryForward
+  && drawingSignature(a!.drawing) === drawingSignature(b.drawing);
+
 /** Slít řádek ze serveru s místním — neodeslaná novější místní úprava zůstane. */
 export const mergeServerRow = (local: ChartDrawingRow | undefined, server: ChartDrawingRow): ChartDrawingRow => (
-  local?.dirty && local.editedAt > server.editedAt ? local : { ...server, dirty: false }
+  local?.dirty && local.editedAt > server.editedAt ? local : { ...server, dirty: false, parked: false }
 );
 
 interface ServerRow {
@@ -169,12 +206,16 @@ const toServerRow = (userId: string, row: ChartDrawingRow) => ({
 // ── Stav vrstvy (jeden na stránku) ───────────────────────────────────────────
 
 let userId: string | null = null;
+let pulledOnce = false;
 let cache: LayerCache = { rows: {}, pulledAt: null };
 const listeners = new Set<() => void>();
-let notifyFrame: ReturnType<typeof setTimeout> | null = null;
+let notifyTimer: ReturnType<typeof setTimeout> | null = null;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let backoffMs = 0;
 
 const cacheKey = (owner: string) => `alphatrade:chart-drawings:v1:user:${owner}`;
+const activatedKey = (owner: string) => `alphatrade:chart-drawings-migrated:v1:user:${owner}`;
 
 const loadCache = (owner: string): LayerCache => {
   try {
@@ -183,16 +224,22 @@ const loadCache = (owner: string): LayerCache => {
   } catch { /* poškozená cache = načte se ze serveru znovu */ }
   return { rows: {}, pulledAt: null };
 };
-const saveCache = () => {
+const flushCache = () => {
+  if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null; }
   if (!userId) return;
   try { window.localStorage.setItem(cacheKey(userId), JSON.stringify(cache)); } catch { /* bez úložiště jen v paměti */ }
+};
+/** Zápis celé cache je drahý — při tahu myší se slučuje. */
+const saveCache = () => {
+  if (saveTimer !== null) return;
+  saveTimer = setTimeout(flushCache, SAVE_DELAY_MS);
 };
 
 /** Ostatní grafy se dozvědí o změně — sloučeně, ať tah myší nepřestavuje všechny panely v každém snímku. */
 const notify = () => {
-  if (notifyFrame !== null) return;
-  notifyFrame = setTimeout(() => {
-    notifyFrame = null;
+  if (notifyTimer !== null) return;
+  notifyTimer = setTimeout(() => {
+    notifyTimer = null;
     listeners.forEach(listener => { try { listener(); } catch { /* jeden graf nesmí shodit ostatní */ } });
   }, 60);
 };
@@ -205,21 +252,38 @@ export const subscribeDrawingLayer = (listener: () => void): (() => void) => {
 /** Přihlášený vlastník vrstvy (null = ještě neznámý / odhlášený). */
 export const drawingLayerUserId = (): string | null => userId;
 
-/** Je vrstva připravená (známe uživatele)? Bez něj grafy jedou po staru z localStorage. */
-export const drawingLayerReady = (): boolean => userId !== null;
+/** Proběhlo po přihlášení aspoň jedno úspěšné čtení serveru? (Převod až potom.) */
+export const drawingLayerPulled = (): boolean => userId !== null && pulledOnce;
 
-export const windowDrawings = (fromDay: string, toDay: string): StoredDrawingLike[] => Object.values(cache.rows)
-  .filter(row => rowInWindow(row, fromDay, toDay))
+/** Je vrstva na tomto zařízení zapnutá (staré kresby převedené / žádné)? */
+export const drawingLayerActive = (): boolean => {
+  if (!userId) return false;
+  try { return window.localStorage.getItem(activatedKey(userId)) !== null; } catch { return false; }
+};
+
+/** Po převodu (nebo když nebylo co převádět): grafy přejdou na vrstvu. */
+export const activateDrawingLayer = (): void => {
+  if (!userId) return;
+  try { window.localStorage.setItem(activatedKey(userId), new Date().toISOString()); } catch { /* jen značka */ }
+  notify();
+};
+
+/** Vrstva připravená pro grafy: známe uživatele a zařízení je převedené. */
+export const drawingLayerReady = (): boolean => drawingLayerActive();
+
+const windowRowsOf = (fromDay: string, toDay: string) => Object.values(cache.rows).filter(row => rowInWindow(row, fromDay, toDay));
+
+export const windowDrawings = (fromDay: string, toDay: string): StoredDrawingLike[] => windowRowsOf(fromDay, toDay)
   .sort((a, b) => a.startTime - b.startTime || a.id.localeCompare(b.id))
   .map(row => row.drawing);
 
-const schedulePush = () => {
+const schedulePush = (delay = PUSH_DELAY_MS) => {
   if (pushTimer !== null) clearTimeout(pushTimer);
-  pushTimer = setTimeout(() => { pushTimer = null; void push(); }, PUSH_DELAY_MS);
+  pushTimer = setTimeout(() => { pushTimer = null; void push(); }, delay);
 };
 
 const applyRows = (rows: readonly ChartDrawingRow[]) => {
-  if (rows.length === 0) return;
+  if (rows.length === 0 || !userId) return;
   rows.forEach(row => { cache.rows[row.id] = row; });
   saveCache();
   notify();
@@ -227,41 +291,68 @@ const applyRows = (rows: readonly ChartDrawingRow[]) => {
 };
 
 /** Graf uložil svoje kresby (export enginu) — zapsat rozdíl do vrstvy. */
-export const applyWindowExport = (fromDay: string, toDay: string, exported: readonly unknown[], known?: ReadonlySet<string>): void => {
-  const windowRows = Object.values(cache.rows).filter(row => rowInWindow(row, fromDay, toDay));
-  const { upserts, deletions } = diffWindowExport(windowRows, exported, Date.now(), known);
+export const applyWindowExport = (
+  fromDay: string,
+  toDay: string,
+  exported: readonly unknown[],
+  known?: ReadonlySet<string>,
+  loadedAt?: number,
+): void => {
+  // Odhlášený (nebo ještě nepřihlášený) graf do vrstvy nezapisuje.
+  if (!userId) return;
+  const deletedRows = new Map(Object.values(cache.rows).filter(row => row.deletedAt !== null).map(row => [row.id, row]));
+  const { upserts, deletions } = diffWindowExport(windowRowsOf(fromDay, toDay), exported, Date.now(), known, deletedRows, loadedAt);
   applyRows([...upserts, ...deletions]);
 };
 
-/** Úložiště pro DrawingController CandleKit: čte a zapisuje okno grafu ve vrstvě. */
+/**
+ * Úložiště pro DrawingController CandleKit: čte a zapisuje okno grafu ve vrstvě.
+ * `markLoaded` volá graf těsně před importem změn z vrstvy.
+ */
 export const drawingLayerKV = (fromDay: string, toDay: string) => {
   // Co graf skutečně má: načtené kresby a jeho poslední export (i po importu změn z vrstvy).
   let known = new Set<string>();
+  let loadedAt = Date.now();
+  let lastManual = '';
+  const manualOf = (items: readonly unknown[]) => JSON.stringify(items.filter(isLayerDrawing));
   return {
     get: (): string | null => {
       const drawings = windowDrawings(fromDay, toDay);
       known = new Set(drawings.map(drawing => drawing.id));
+      loadedAt = Date.now();
+      lastManual = manualOf(drawings);
       return JSON.stringify(drawings);
     },
     set: (_key: string, value: string): void => {
       let parsed: unknown;
       try { parsed = JSON.parse(value); } catch { return; }
       if (!Array.isArray(parsed)) return;
-      applyWindowExport(fromDay, toDay, parsed, known);
+      // Výběr, krok přehrávání, přestavba automatických vrstev: ruční kresby beze změny.
+      const manual = manualOf(parsed);
+      if (manual === lastManual) return;
+      lastManual = manual;
+      applyWindowExport(fromDay, toDay, parsed, known, loadedAt);
       known = new Set(parsed.filter(isLayerDrawing).map(drawing => drawing.id));
     },
+    markLoaded: (): void => { loadedAt = Date.now(); },
   };
 };
 
-/** Převod starých kreseb z localStorage (po potvrzení náhledu). */
+/**
+ * Převod starých kreseb z localStorage (po potvrzení náhledu). Starý zápis nemá
+ * čas úpravy — dostane nejstarší možný, takže verze na serveru (převedená
+ * jinde a třeba upravená) vždycky vyhraje a nová kresba se jen přidá.
+ */
 export const importDrawingsIntoLayer = (drawings: readonly StoredDrawingLike[]): number => {
-  const now = Date.now();
-  const rows = drawings.filter(isLayerDrawing).filter(drawing => !cache.rows[drawing.id]).map(drawing => rowForDrawing(drawing, now));
+  if (!userId) return 0;
+  const rows = drawings.filter(isLayerDrawing).filter(drawing => !cache.rows[drawing.id]).map(drawing => rowForDrawing(drawing, 1));
   applyRows(rows);
   return rows.length;
 };
 
 const isMissingTable = (error: { code?: string } | null | undefined) => error?.code === '42P01' || error?.code === 'PGRST205';
+/** Chyba v datech (ne v síti) — řádek opakovaně neprojde. */
+const isClientError = (error: { code?: string; status?: number } | null | undefined) => Boolean(error?.code && /^(22|23|42)/.test(error.code));
 let disabled = false;
 let pushing = false;
 let pulling = false;
@@ -271,36 +362,63 @@ const withTimeout = <T,>(promise: PromiseLike<T>): Promise<T> => Promise.race([
   new Promise<T>((_, reject) => { setTimeout(() => reject(new Error('chart-drawings-timeout')), REQUEST_TIMEOUT_MS); }),
 ]);
 
+/** Nahrát dávku; vrací řádky po triggeru (u odmítnuté starší úpravy ty ze serveru). */
+const upsertBatch = async (owner: string, rows: ChartDrawingRow[]) => withTimeout(
+  supabase.from(TABLE).upsert(rows.map(row => toServerRow(owner, row)), { onConflict: 'user_id,id' }).select('*'),
+);
+
 async function push(): Promise<void> {
   const owner = userId;
   if (!owner || disabled || pushing) return;
-  const dirty = Object.values(cache.rows).filter(row => row.dirty);
+  const dirty = Object.values(cache.rows).filter(row => row.dirty && !row.parked);
   if (dirty.length === 0) return;
   pushing = true;
+  let failed = false;
   try {
-    const { error } = await withTimeout(supabase.from(TABLE).upsert(dirty.map(row => toServerRow(owner, row)), { onConflict: 'user_id,id' }));
-    if (error) { if (isMissingTable(error)) disabled = true; return; }
-    if (userId !== owner) return;
-    // Server mohl starší úpravu odmítnout (trigger) — přečíst, co tam skutečně je.
-    const ids = dirty.map(row => row.id);
-    const { data } = await withTimeout(supabase.from(TABLE).select('*').in('id', ids));
-    const pushedAt = new Map(dirty.map(row => [row.id, row.editedAt]));
-    (data as ServerRow[] | null ?? []).forEach(serverRow => {
-      const parsed = fromServerRow(serverRow);
-      if (!parsed) return;
-      const local = cache.rows[parsed.id];
-      // Mezitím znovu upravená kresba zůstává neodeslaná.
-      if (local && local.editedAt !== pushedAt.get(parsed.id)) return;
-      cache.rows[parsed.id] = mergeServerRow(undefined, parsed);
-    });
+    for (let index = 0; index < dirty.length && userId === owner; index += PUSH_BATCH) {
+      const batch = dirty.slice(index, index + PUSH_BATCH);
+      const sentAt = new Map(batch.map(row => [row.id, row.editedAt]));
+      let { data, error } = await upsertBatch(owner, batch);
+      if (error && isMissingTable(error)) { disabled = true; return; }
+      if (error && isClientError(error)) {
+        // Jeden vadný řádek nesmí zablokovat dávku — po jednom, vadný se odloží.
+        const accepted: ServerRow[] = [];
+        for (const row of batch) {
+          const single = await upsertBatch(owner, [row]);
+          if (single.error && isClientError(single.error)) cache.rows[row.id] = { ...row, parked: true };
+          else if (single.error) failed = true;
+          else accepted.push(...((single.data as ServerRow[] | null) ?? []));
+        }
+        data = accepted;
+        error = null;
+      }
+      if (error) { failed = true; continue; }
+      ((data as ServerRow[] | null) ?? []).forEach(serverRow => {
+        const parsed = fromServerRow(serverRow);
+        const local = cache.rows[serverRow.id];
+        if (!parsed) {
+          if (local) cache.rows[serverRow.id] = { ...local, dirty: false };
+          return;
+        }
+        // Mezitím znovu upravená kresba zůstává neodeslaná.
+        if (local && local.editedAt !== sentAt.get(parsed.id)) return;
+        cache.rows[parsed.id] = mergeServerRow(undefined, parsed);
+      });
+    }
     saveCache();
     notify();
   } catch {
-    // Síť nebo časový limit — zkusí se znovu při další změně nebo načtení.
+    failed = true;
   } finally {
     pushing = false;
   }
-  if (Object.values(cache.rows).some(row => row.dirty)) schedulePush();
+  if (failed) {
+    backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs ? backoffMs * 2 : 2_000);
+    schedulePush(backoffMs);
+  } else {
+    backoffMs = 0;
+    if (Object.values(cache.rows).some(row => row.dirty && !row.parked)) schedulePush();
+  }
 }
 
 async function pull(): Promise<void> {
@@ -309,9 +427,15 @@ async function pull(): Promise<void> {
   pulling = true;
   try {
     let changed = false;
-    for (let page = 0; page < 20; page += 1) {
-      let query = supabase.from(TABLE).select('*').order('updated_at', { ascending: true }).limit(PAGE);
-      if (cache.pulledAt) query = query.gt('updated_at', cache.pulledAt);
+    // Překryv: transakce s dřívějším now() mohla doběhnout po našem posledním čtení.
+    const since = cache.pulledAt ? new Date(Date.parse(cache.pulledAt) - PULL_OVERLAP_MS).toISOString() : null;
+    let newest = cache.pulledAt;
+    for (let page = 0; page < 40; page += 1) {
+      let query = supabase.from(TABLE).select('*')
+        .order('updated_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(page * PAGE, page * PAGE + PAGE - 1);
+      if (since) query = query.gte('updated_at', since);
       const { data, error } = await withTimeout(query);
       if (userId !== owner) return;
       if (error) { if (isMissingTable(error)) disabled = true; return; }
@@ -320,14 +444,16 @@ async function pull(): Promise<void> {
         const parsed = fromServerRow(serverRow);
         if (parsed) {
           const merged = mergeServerRow(cache.rows[parsed.id], parsed);
-          if (merged !== cache.rows[parsed.id]) { cache.rows[parsed.id] = merged; changed = true; }
+          if (!sameRow(cache.rows[parsed.id], merged)) { cache.rows[parsed.id] = merged; changed = true; }
         }
-        cache.pulledAt = serverRow.updated_at;
+        if (!newest || serverRow.updated_at > newest) newest = serverRow.updated_at;
       });
       if (rows.length < PAGE) break;
     }
-    saveCache();
-    if (changed) notify();
+    cache.pulledAt = newest;
+    pulledOnce = true;
+    if (changed) { saveCache(); notify(); } else if (cache.pulledAt) saveCache();
+    notify();
   } catch {
     // Síť — další pokus podle plánu.
   } finally {
@@ -339,25 +465,35 @@ async function pull(): Promise<void> {
 /** Spustí vrstvu: po přihlášení načte cache a server, pak průběžně synchronizuje. */
 export function startChartDrawingLayer(): () => void {
   const begin = (owner: string) => {
+    flushCache();
     userId = owner;
+    pulledOnce = false;
     disabled = false;
+    pushing = false;
+    pulling = false;
+    backoffMs = 0;
     cache = loadCache(owner);
     notify();
     void pull();
   };
   const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
     const owner = session?.user.id ?? null;
-    if (!owner) { userId = null; cache = { rows: {}, pulledAt: null }; notify(); return; }
+    if (!owner) { flushCache(); userId = null; pulledOnce = false; cache = { rows: {}, pulledAt: null }; notify(); return; }
     if (owner !== userId) setTimeout(() => begin(owner), 0);
   });
   const timer = setInterval(() => { if (document.visibilityState === 'visible') void pull(); }, PULL_INTERVAL_MS);
-  const onVisibility = () => { if (document.visibilityState === 'visible') void pull(); else void push(); };
+  const onVisibility = () => {
+    if (document.visibilityState === 'visible') void pull();
+    else { flushCache(); void push(); }
+  };
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('focus', onVisibility);
+  window.addEventListener('pagehide', flushCache);
   return () => {
     subscription.unsubscribe();
     clearInterval(timer);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('focus', onVisibility);
+    window.removeEventListener('pagehide', flushCache);
   };
 }
