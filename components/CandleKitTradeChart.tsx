@@ -3150,7 +3150,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // Runtime pole Fibu (timeframe grafu) se do vrstvy neukládají — dopočítat.
       applyFibRuntimeTimeframe(engine, frame);
     };
-    return subscribeDrawingLayer(syncFromLayer);
+    const unsubscribe = subscribeDrawingLayer(syncFromLayer);
+    // Oznámení mohlo přijít mezi prvním renderem a přihlášením k odběru.
+    syncFromLayer();
+    return unsubscribe;
   }, []);
 
   // Obchod uprostřed a celý vidět; okraje rostou s délkou obchodu (minimum

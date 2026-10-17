@@ -108,13 +108,17 @@ export const rowForDrawing = (drawing: StoredDrawingLike, editedAt: number): Cha
  * i čára začatá předchozí den. Přenesená úroveň platí od svého začátku dál.
  * Okno je po dnech záměrně: během přehrávání se data mění každý krok, dny ne.
  */
-export const rowInWindow = (row: ChartDrawingRow, fromDay: string, toDay: string): boolean => {
+export interface DrawingWindowBounds { start: number; end: number }
+export const drawingWindowBounds = (fromDay: string, toDay: string): DrawingWindowBounds => ({
+  start: pragueDayStart(fromDay),
+  end: pragueDayStart(nextDay(toDay)),
+});
+const rowInBounds = (row: ChartDrawingRow, bounds: DrawingWindowBounds): boolean => {
   if (row.deletedAt !== null) return false;
-  const windowStart = pragueDayStart(fromDay);
-  const windowEnd = pragueDayStart(nextDay(toDay));
-  if (row.carryForward) return row.startTime < windowEnd;
-  return row.startTime < windowEnd && row.endTime >= windowStart;
+  if (row.carryForward) return row.startTime < bounds.end;
+  return row.startTime < bounds.end && row.endTime >= bounds.start;
 };
+export const rowInWindow = (row: ChartDrawingRow, fromDay: string, toDay: string): boolean => rowInBounds(row, drawingWindowBounds(fromDay, toDay));
 
 const drawingSignature = (drawing: StoredDrawingLike) => JSON.stringify(normalizeDrawingForLayer(drawing));
 
@@ -133,6 +137,8 @@ export const diffWindowExport = (
   known?: ReadonlySet<string>,
   deletedRows?: ReadonlyMap<string, ChartDrawingRow>,
   loadedAt?: number,
+  /** Kresby, které smazal tenhle graf sám — jejich vrácení (Zpět) se vždy zapíše. */
+  revivable?: ReadonlySet<string>,
 ): { upserts: ChartDrawingRow[]; deletions: ChartDrawingRow[] } => {
   const current = new Map(windowRows.map(row => [row.id, row]));
   const seen = new Set<string>();
@@ -143,7 +149,7 @@ export const diffWindowExport = (
     const existing = current.get(item.id);
     if (existing && drawingSignature(existing.drawing) === drawingSignature(item)) continue;
     const deleted = deletedRows?.get(item.id);
-    if (!existing && deleted && loadedAt !== undefined && (deleted.deletedAt ?? 0) >= loadedAt) continue;
+    if (!existing && deleted && !revivable?.has(item.id) && loadedAt !== undefined && (deleted.deletedAt ?? 0) >= loadedAt) continue;
     upserts.push(rowForDrawing(item, now));
   }
   const deletions = windowRows
@@ -271,7 +277,10 @@ export const activateDrawingLayer = (): void => {
 /** Vrstva připravená pro grafy: známe uživatele a zařízení je převedené. */
 export const drawingLayerReady = (): boolean => drawingLayerActive();
 
-const windowRowsOf = (fromDay: string, toDay: string) => Object.values(cache.rows).filter(row => rowInWindow(row, fromDay, toDay));
+const windowRowsOf = (fromDay: string, toDay: string) => {
+  const bounds = drawingWindowBounds(fromDay, toDay);
+  return Object.values(cache.rows).filter(row => rowInBounds(row, bounds));
+};
 
 export const windowDrawings = (fromDay: string, toDay: string): StoredDrawingLike[] => windowRowsOf(fromDay, toDay)
   .sort((a, b) => a.startTime - b.startTime || a.id.localeCompare(b.id))
@@ -297,12 +306,14 @@ export const applyWindowExport = (
   exported: readonly unknown[],
   known?: ReadonlySet<string>,
   loadedAt?: number,
-): void => {
+  revivable?: ReadonlySet<string>,
+): string[] => {
   // Odhlášený (nebo ještě nepřihlášený) graf do vrstvy nezapisuje.
-  if (!userId) return;
+  if (!userId) return [];
   const deletedRows = new Map(Object.values(cache.rows).filter(row => row.deletedAt !== null).map(row => [row.id, row]));
-  const { upserts, deletions } = diffWindowExport(windowRowsOf(fromDay, toDay), exported, Date.now(), known, deletedRows, loadedAt);
+  const { upserts, deletions } = diffWindowExport(windowRowsOf(fromDay, toDay), exported, Date.now(), known, deletedRows, loadedAt, revivable);
   applyRows([...upserts, ...deletions]);
+  return deletions.map(row => row.id);
 };
 
 /**
@@ -314,6 +325,7 @@ export const drawingLayerKV = (fromDay: string, toDay: string) => {
   let known = new Set<string>();
   let loadedAt = Date.now();
   let lastManual = '';
+  const selfDeleted = new Set<string>();
   const manualOf = (items: readonly unknown[]) => JSON.stringify(items.filter(isLayerDrawing));
   return {
     get: (): string | null => {
@@ -331,7 +343,7 @@ export const drawingLayerKV = (fromDay: string, toDay: string) => {
       const manual = manualOf(parsed);
       if (manual === lastManual) return;
       lastManual = manual;
-      applyWindowExport(fromDay, toDay, parsed, known, loadedAt);
+      applyWindowExport(fromDay, toDay, parsed, known, loadedAt, selfDeleted).forEach(id => selfDeleted.add(id));
       known = new Set(parsed.filter(isLayerDrawing).map(drawing => drawing.id));
     },
     markLoaded: (): void => { loadedAt = Date.now(); },
@@ -352,10 +364,14 @@ export const importDrawingsIntoLayer = (drawings: readonly StoredDrawingLike[]):
 
 const isMissingTable = (error: { code?: string } | null | undefined) => error?.code === '42P01' || error?.code === 'PGRST205';
 /** Chyba v datech (ne v síti) — řádek opakovaně neprojde. */
-const isClientError = (error: { code?: string; status?: number } | null | undefined) => Boolean(error?.code && /^(22|23|42)/.test(error.code));
+// Jen chyby dat (22 = neplatná hodnota, 23 = porušené omezení) — ne oprávnění
+// (42501 při vypršelém přihlášení), po kterém se má dál zkoušet.
+const isClientError = (error: { code?: string; status?: number } | null | undefined) => Boolean(error?.code && /^(22|23)/.test(error.code));
 let disabled = false;
 let pushing = false;
 let pulling = false;
+/** Přihlášení jiného účtu: starý dotaz v letu nesmí uvolnit příznak nového. */
+let generation = 0;
 
 const withTimeout = <T,>(promise: PromiseLike<T>): Promise<T> => Promise.race([
   Promise.resolve(promise),
@@ -372,6 +388,7 @@ async function push(): Promise<void> {
   if (!owner || disabled || pushing) return;
   const dirty = Object.values(cache.rows).filter(row => row.dirty && !row.parked);
   if (dirty.length === 0) return;
+  const run = generation;
   pushing = true;
   let failed = false;
   try {
@@ -385,13 +402,18 @@ async function push(): Promise<void> {
         const accepted: ServerRow[] = [];
         for (const row of batch) {
           const single = await upsertBatch(owner, [row]);
-          if (single.error && isClientError(single.error)) cache.rows[row.id] = { ...row, parked: true };
+          if (userId !== owner) return;
+          if (single.error && isClientError(single.error)) {
+            // Mezitím upravenou kresbu neodkládat — nová verze možná projde.
+            if (cache.rows[row.id]?.editedAt === row.editedAt) cache.rows[row.id] = { ...cache.rows[row.id], parked: true };
+          }
           else if (single.error) failed = true;
           else accepted.push(...((single.data as ServerRow[] | null) ?? []));
         }
         data = accepted;
         error = null;
       }
+      if (userId !== owner) return;
       if (error) { failed = true; continue; }
       ((data as ServerRow[] | null) ?? []).forEach(serverRow => {
         const parsed = fromServerRow(serverRow);
@@ -410,8 +432,9 @@ async function push(): Promise<void> {
   } catch {
     failed = true;
   } finally {
-    pushing = false;
+    if (run === generation) pushing = false;
   }
+  if (run !== generation) return;
   if (failed) {
     backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs ? backoffMs * 2 : 2_000);
     schedulePush(backoffMs);
@@ -424,18 +447,23 @@ async function push(): Promise<void> {
 async function pull(): Promise<void> {
   const owner = userId;
   if (!owner || disabled || pulling) return;
+  const run = generation;
   pulling = true;
   try {
     let changed = false;
     // Překryv: transakce s dřívějším now() mohla doběhnout po našem posledním čtení.
     const since = cache.pulledAt ? new Date(Date.parse(cache.pulledAt) - PULL_OVERLAP_MS).toISOString() : null;
     let newest = cache.pulledAt;
+    // Stránky podle klíče (updated_at, id) — offset by při souběžném zápisu řádek přeskočil.
+    let after: { updatedAt: string; id: string } | null = null;
     for (let page = 0; page < 40; page += 1) {
       let query = supabase.from(TABLE).select('*')
         .order('updated_at', { ascending: true })
         .order('id', { ascending: true })
-        .range(page * PAGE, page * PAGE + PAGE - 1);
+        .limit(PAGE);
       if (since) query = query.gte('updated_at', since);
+      // Hodnoty v uvozovkách: časy i ID cest (path:…) obsahují vyhrazené znaky PostgREST.
+      if (after) query = query.or(`updated_at.gt."${after.updatedAt}",and(updated_at.eq."${after.updatedAt}",id.gt."${after.id}")`);
       const { data, error } = await withTimeout(query);
       if (userId !== owner) return;
       if (error) { if (isMissingTable(error)) disabled = true; return; }
@@ -448,6 +476,8 @@ async function pull(): Promise<void> {
         }
         if (!newest || serverRow.updated_at > newest) newest = serverRow.updated_at;
       });
+      const last = rows[rows.length - 1];
+      if (last) after = { updatedAt: last.updated_at, id: last.id };
       if (rows.length < PAGE) break;
     }
     cache.pulledAt = newest;
@@ -457,15 +487,16 @@ async function pull(): Promise<void> {
   } catch {
     // Síť — další pokus podle plánu.
   } finally {
-    pulling = false;
+    if (run === generation) pulling = false;
   }
-  void push();
+  if (run === generation) void push();
 }
 
 /** Spustí vrstvu: po přihlášení načte cache a server, pak průběžně synchronizuje. */
 export function startChartDrawingLayer(): () => void {
   const begin = (owner: string) => {
     flushCache();
+    generation += 1;
     userId = owner;
     pulledOnce = false;
     disabled = false;
@@ -473,12 +504,14 @@ export function startChartDrawingLayer(): () => void {
     pulling = false;
     backoffMs = 0;
     cache = loadCache(owner);
+    // Odložené řádky zkusit znovu (mohly selhat jen kvůli vypršelému přihlášení).
+    Object.values(cache.rows).forEach(row => { if (row.parked) cache.rows[row.id] = { ...row, parked: false }; });
     notify();
     void pull();
   };
   const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
     const owner = session?.user.id ?? null;
-    if (!owner) { flushCache(); userId = null; pulledOnce = false; cache = { rows: {}, pulledAt: null }; notify(); return; }
+    if (!owner) { flushCache(); generation += 1; userId = null; pulledOnce = false; cache = { rows: {}, pulledAt: null }; notify(); return; }
     if (owner !== userId) setTimeout(() => begin(owner), 0);
   });
   const timer = setInterval(() => { if (document.visibilityState === 'visible') void pull(); }, PULL_INTERVAL_MS);

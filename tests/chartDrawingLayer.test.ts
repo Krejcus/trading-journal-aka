@@ -17,6 +17,8 @@ vi.mock('../services/supabase', () => {
   const query = () => {
     let since: string | null = null;
     let range: [number, number] | null = null;
+    let limit: number | null = null;
+    let after: { updatedAt: string; id: string } | null = null;
     let pendingUpsert: Record<string, unknown>[] | null = null;
     const run = () => {
       if (pendingUpsert) {
@@ -37,13 +39,22 @@ vi.mock('../services/supabase', () => {
       let rows = [...server.rows.values()]
         .filter(row => since === null || String(row.updated_at) >= since)
         .sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)) || String(a.id).localeCompare(String(b.id)));
+      if (after) rows = rows.filter(row => String(row.updated_at) > after!.updatedAt || (String(row.updated_at) === after!.updatedAt && String(row.id) > after!.id));
       if (range) rows = rows.slice(range[0], range[1] + 1);
+      if (limit !== null) rows = rows.slice(0, limit);
       return { data: rows, error: null };
     };
     const builder = {
       select: () => builder,
       order: () => builder,
       range: (from: number, to: number) => { range = [from, to]; return builder; },
+      limit: (value: number) => { limit = value; return builder; },
+      or: (filter: string) => {
+        const match = /^updated_at\.gt\."([^"]+)",and\(updated_at\.eq\."([^"]+)",id\.gt\."([^"]+)"\)$/.exec(filter);
+        if (!match) throw new Error(`neočekávaný filtr ${filter}`);
+        after = { updatedAt: match[1], id: match[3] };
+        return builder;
+      },
       gte: (_column: string, value: string) => { since = value; return builder; },
       upsert: (rows: Record<string, unknown>[]) => { pendingUpsert = rows; return builder; },
       then: (resolve: (value: unknown) => void) => resolve(run()),
@@ -189,6 +200,23 @@ describe('vrstva kreseb — synchronizace se serverem', () => {
     kv.set('x', JSON.stringify([line('dw_a'), line('auto-structure-9')]));
     await vi.advanceTimersByTimeAsync(2_000);
     expect(server.upserts.length).toBe(pushes);
+  });
+
+  it('Zpět po vlastním smazání kresbu vrátí i na server', async () => {
+    const layer = await start();
+    const kv = layer.drawingLayerKV('2026-10-15', '2026-10-15');
+    kv.get();
+    kv.set('x', JSON.stringify([line('dw_u')]));
+    await vi.advanceTimersByTimeAsync(2_000);
+    vi.setSystemTime(new Date('2026-10-17T08:01:00Z'));
+    kv.set('x', JSON.stringify([]));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(server.rows.get('dw_u')?.deleted_at).not.toBeNull();
+    vi.setSystemTime(new Date('2026-10-17T08:02:00Z'));
+    kv.set('x', JSON.stringify([line('dw_u')]));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(server.rows.get('dw_u')?.deleted_at).toBeNull();
+    expect(layer.windowDrawings('2026-10-15', '2026-10-15').map(drawing => drawing.id)).toEqual(['dw_u']);
   });
 
   it('stránkování nepřeskočí řádky se stejným updated_at', async () => {
