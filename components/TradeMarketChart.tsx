@@ -27,6 +27,8 @@ import ChartNotesLayer, { type ChartNoteAddRequest } from './ChartNotesLayer';
 import ChartSnapshotButton from './ChartSnapshotButton';
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
+import { useDayNotesForWindow } from '../hooks/useDayNotesForWindow';
+import { drawingLayerDay } from '../services/chartDrawingLayer';
 import TradeReplayBar, { type TradeReplayGoTo, type TradeReplaySpeed } from './TradeReplayBar';
 import { entrySnapshotMoment, historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
 import { candleReplayPath, candleUntilFill, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
@@ -559,6 +561,12 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const [noteAddRequest, setNoteAddRequest] = useState<ChartNoteAddRequest | null>(null);
   const notes = useMemo(() => chartNotes ?? chartNotesOf(trade), [chartNotes, trade]);
   const noteBarTimes = useMemo(() => replayRawCandles.map(candle => candle.time), [replayRawCandles]);
+  // Poznámky dne (příprava / živě / retro) pro dny grafu — jen pro čtení.
+  const dayNotes = useDayNotesForWindow(
+    rawCandles.length ? drawingLayerDay(rawCandles[0].time) : null,
+    rawCandles.length ? drawingLayerDay(rawCandles[rawCandles.length - 1].time) : null,
+    !snapshotMode,
+  );
   replayLoopRef.current = { cursor, rawCandles, chartApi, timeframe };
   const entryFill = useMemo(() => history?.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0], [history]);
   const showEntryLevel = entryFill != null && entryFill.at <= (cutoffMs ?? Infinity);
@@ -1067,6 +1075,19 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             isDark={isDark}
             addRequest={noteAddRequest}
             onChange={next => onChartNotesChange?.(next)}
+          />
+        )}
+        {candles.length > 0 && !loading && !error && dayNotes.length > 0 && (
+          <ChartNotesLayer
+            chartApi={chartApi}
+            containerRef={chartAreaRef}
+            notes={dayNotes}
+            barTimes={noteBarTimes}
+            replayCursor={cursor}
+            editable={false}
+            isDark={isDark}
+            addRequest={null}
+            onChange={() => {}}
           />
         )}
         {candles.length > 0 && !loading && !error && !snapshotMode && (

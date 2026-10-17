@@ -63,4 +63,13 @@ export function visibleChartNotes(notes: readonly ChartNote[], replayCursor: num
   return replayCursor == null ? [...notes] : notes.filter(note => note.time <= replayCursor);
 }
 
+/**
+ * Poznámky k obchodům dne pro graf Deníku (jen pro čtení). Kombinovaný obchod
+ * dává stejné poznámky všem členům — počítají se jednou.
+ */
+export function chartNotesOfTrades(trades: readonly Pick<Trade, 'drawings'>[]): ChartNote[] {
+  const seen = new Set<string>();
+  return trades.flatMap(chartNotesOf).filter(note => (seen.has(note.id) ? false : (seen.add(note.id), true)));
+}
+
 export const newChartNoteId = () => `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;

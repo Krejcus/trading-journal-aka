@@ -9,6 +9,8 @@ import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
 import type { TradeChartIndicators } from '../services/detailIndicators';
 import type { ChartNote } from '../lib/chartNotes';
 import ChartNotesLayer, { type ChartNoteAddRequest } from './ChartNotesLayer';
+import { useDayNotesForWindow } from '../hooks/useDayNotesForWindow';
+import { drawingLayerDay } from '../services/chartDrawingLayer';
 import ChartSnapshotButton from './ChartSnapshotButton';
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createBacktestWorkspaceCheckpoint, mergeWorkspacePanelSnapshots, workspaceLayoutPanelIds, workspacePanelsReady } from '../services/backtestWorkspaceCheckpoint';
@@ -361,6 +363,8 @@ interface WorkspaceDataContextValue {
   review?: { trades: readonly Trade[]; drawingKey: string; renderPanelOverlay?: WorkspaceReviewSlots['renderPanelOverlay']; candlesForRoot?: WorkspaceReviewSlots['candlesForRoot'] };
   /** Ovládání panelu při najetí myší — nahrazuje tab strip (maximalizace, zavření). */
   paneActions: WorkspacePaneActions;
+  /** Poznámky dne do grafu (fullscreen obchodu, Review). Deník dne je kreslí vlastní vrstvou. */
+  showDayNotes: boolean;
 }
 
 interface WorkspacePaneActions {
@@ -765,6 +769,11 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const [noteAddRequest, setNoteAddRequest] = useState<ChartNoteAddRequest | null>(null);
   const noteBarTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
+  const dayNotes = useDayNotesForWindow(
+    rawCandles.length ? drawingLayerDay(rawCandles[0].time) : null,
+    rawCandles.length ? drawingLayerDay(rawCandles[rawCandles.length - 1].time) : null,
+    context.showDayNotes,
+  );
 
   return (
     <div
@@ -877,6 +886,19 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               isDark={context.isDark}
               addRequest={noteAddRequest}
               onChange={next => context.onChartNotesChange?.(next)}
+            />
+          )}
+          {dayNotes.length > 0 && (
+            <ChartNotesLayer
+              chartApi={chartApi}
+              containerRef={chartAreaRef}
+              notes={dayNotes}
+              barTimes={noteBarTimes}
+              replayCursor={context.replay.phase === 'active' ? context.replay.cursorTime : null}
+              editable={false}
+              isDark={context.isDark}
+              addRequest={null}
+              onChange={() => {}}
             />
           )}
           {context.tradingSettings.orderLines && chartApi && config.root === context.backtestSession?.executionInstrument && context.backtestSession.orderLines?.length && context.backtestSession.onOrderLineChange && context.backtestSession.onOrderLineCancel ? (
@@ -1745,7 +1767,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     review: reviewTrades && reviewDrawingKey ? { trades: reviewTrades, drawingKey: reviewDrawingKey, renderPanelOverlay: reviewPanelOverlay, candlesForRoot: reviewCandlesForRoot } : undefined,
     onChartNotesChange: backtestSession ? undefined : onChartNotesChange,
     paneActions,
-  }), [paneActions, reviewTrades, reviewDrawingKey, reviewPanelOverlay, reviewCandlesForRoot, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+    showDayNotes: !backtestSession && layoutScope !== 'day',
+  }), [layoutScope, paneActions, reviewTrades, reviewDrawingKey, reviewPanelOverlay, reviewCandlesForRoot, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const reviewTrade = reviewTradeId
     ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)

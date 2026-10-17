@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { Trade } from '../../types';
 import AlphaTradeChartWorkspace, { type ReviewSlotElements, type WorkspacePanelOverlay } from '../AlphaTradeChartWorkspace';
 import { QuantumSpinner } from '../QuantumLoader';
+import { chartNotesOfTrades } from '../../lib/chartNotes';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { MARKET_TIMEFRAME_MINUTES } from '../../services/marketData';
 import { tradeChartTiming } from '../../services/tradeChartData';
@@ -144,6 +145,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
     : null;
   const chartTrade = selectedChartTrade ?? anchor;
   const contextTrades = ctl.chart.chartTrades;
+  const tradeNotes = useMemo(() => chartNotesOfTrades(contextTrades), [contextTrades]);
   const focusKey = selectedChartTrade ? `trade:${selectedChartTrade.id}` : `${mode}:${session}:${ctl.scope}:${Math.round(target.entryMs / 60_000)}:${Math.round(target.exitMs / 60_000)}`;
   const focusDetail = selectedChartTrade
     ? { ...tradeChartTiming(selectedChartTrade), id: String(selectedChartTrade.id) }
@@ -255,6 +257,8 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
           isDark={isDark}
           tradeIndicators={tradeIndicators}
           onTradeIndicatorsChange={writeTradeChartIndicators}
+          // Poznámky k obchodům dne — jen pro čtení (píšou se v detailu obchodu).
+          chartNotes={tradeNotes}
           review={review}
           onClose={ctl.backToDay}
         />

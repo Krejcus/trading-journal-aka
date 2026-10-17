@@ -7,6 +7,8 @@ import { QuantumSpinner } from '../QuantumLoader';
 import { aggregateCandles, MARKET_TIMEFRAME_MINUTES, type MarketTimeframe } from '../../services/marketData';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
+import ChartNotesLayer from '../ChartNotesLayer';
+import { chartNotesOfTrades } from '../../lib/chartNotes';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
 import { dayAnchorTrade, focusTarget, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
@@ -47,6 +49,7 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
   const raw = ctl.chart.candles;
   const candles = useMemo(() => aggregateCandles(raw, timeframe), [raw, timeframe]);
   const barTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
+  const tradeNotes = useMemo(() => chartNotesOfTrades(ctl.chart.chartTrades), [ctl.chart.chartTrades]);
 
   const target = focusTarget(range);
   const anchorRef = useRef<{ day: string; trade: Trade } | null>(null);
@@ -107,6 +110,20 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
           <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 16, textAlign: 'center' }}>
             {ctl.chart.loading ? <QuantumSpinner /> : <p style={{ margin: 0, fontSize: 12, color: 'var(--dj-text-2)' }}>{ctl.chart.error ?? 'Svíčky pro tenhle den zatím nejsou. Živé čtení z TradingView chybí.'}</p>}
           </div>
+        )}
+        {/* Poznámky k obchodům dne (detail obchodu, Review) — jen pro čtení. */}
+        {tradeNotes.length > 0 && (
+          <ChartNotesLayer
+            chartApi={api}
+            containerRef={containerRef}
+            notes={tradeNotes}
+            barTimes={barTimes}
+            replayCursor={null}
+            editable={false}
+            isDark={isDark}
+            addRequest={null}
+            onChange={() => {}}
+          />
         )}
         <DayNotesLayer
           chartApi={api}
