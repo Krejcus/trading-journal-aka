@@ -7,6 +7,7 @@ import {
   type ChartWorkspaceLayoutId,
 } from '../services/chartWorkspaceLayouts';
 import type { ChartWorkspaceSyncSettings } from '../services/chartWorkspaceSync';
+import { useKeepInViewport } from '../hooks/useKeepInViewport';
 
 interface ChartLayoutPickerProps {
   isDark: boolean;
@@ -61,6 +62,7 @@ const ChartLayoutPicker: React.FC<ChartLayoutPickerProps> = ({
   onClose,
 }) => {
   const ref = useRef<HTMLDivElement>(null);
+  useKeepInViewport(ref);
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       if (!ref.current?.contains(event.target as Node)) onClose();
@@ -79,7 +81,7 @@ const ChartLayoutPicker: React.FC<ChartLayoutPickerProps> = ({
   return (
     <div
       ref={ref}
-      className={`absolute right-0 top-[38px] z-[600] w-[430px] overflow-hidden rounded-md border shadow-xl ${isDark ? 'border-[#363a45] bg-[#1e222d] text-[#d1d4dc]' : 'border-[#d1d4dc] bg-white text-[#131722]'}`}
+      className={`absolute right-0 top-[38px] z-[600] w-[430px] max-w-[calc(100vw-16px)] overflow-hidden rounded-md border shadow-xl ${isDark ? 'border-[#363a45] bg-[#1e222d] text-[#d1d4dc]' : 'border-[#d1d4dc] bg-white text-[#131722]'}`}
       role="dialog"
       aria-label="Nastavení layoutu grafů"
     >

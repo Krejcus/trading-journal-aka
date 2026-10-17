@@ -27,6 +27,8 @@ import type { Drawing } from '@getcandlekit/charts';
 import 'flexlayout-react/style/light.css';
 import { Actions as FlexLayoutActions, DockLocation as FlexLayoutDockLocation, type Model as FlexLayoutModel, type Node as FlexLayoutNode } from 'flexlayout-react';
 import {
+  ChevronLeft,
+  ChevronRight,
   Download,
   GripVertical,
   LayoutGrid,
@@ -2392,6 +2394,87 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     () => !backtestSession && !review ? tradeTimelineEvents(trade.executionHistory) : [],
     [backtestSession, review, trade.executionHistory],
   );
+  // ── Horní lišta posuvná do stran ────────────────────────────────────────
+  const toolbarViewportRef = useRef<HTMLDivElement>(null);
+  const toolbarRowRef = useRef<HTMLDivElement>(null);
+  const [toolbarOffset, setToolbarOffset] = useState(0);
+  const [toolbarMaxOffset, setToolbarMaxOffset] = useState(0);
+  const toolbarDragRef = useRef<{ startX: number; startOffset: number; moved: boolean } | null>(null);
+  const toolbarDraggedRef = useRef(false);
+  /** Kolik lišta přesahuje — měřeno vždy čerstvě, ResizeObserver může být o krok pozadu. */
+  const toolbarOverflow = useCallback(() => {
+    const viewport = toolbarViewportRef.current;
+    const row = toolbarRowRef.current;
+    return viewport && row ? Math.max(0, Math.ceil(row.scrollWidth - viewport.clientWidth)) : 0;
+  }, []);
+  /** Posun v mezích lišty; mez se spočítá mimo updater stavu. */
+  const moveToolbar = useCallback((next: (current: number) => number) => {
+    const max = toolbarOverflow();
+    setToolbarMaxOffset(max);
+    setToolbarOffset(current => Math.min(max, Math.max(0, next(current))));
+  }, [toolbarOverflow]);
+  const scrollToolbarBy = useCallback((delta: number) => moveToolbar(current => current + delta), [moveToolbar]);
+  useLayoutEffect(() => {
+    const viewport = toolbarViewportRef.current;
+    const row = toolbarRowRef.current;
+    if (!viewport || !row) return;
+    const measure = () => {
+      const max = toolbarOverflow();
+      setToolbarMaxOffset(max);
+      setToolbarOffset(current => Math.min(max, current));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [toolbarOverflow]);
+  // Kolečko i trackpad: svislý i vodorovný pohyb posune lištu (jen když se nevejde).
+  useEffect(() => {
+    const viewport = toolbarViewportRef.current;
+    if (!viewport) return;
+    const onWheel = (event: WheelEvent) => {
+      if (toolbarOverflow() <= 0) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (!delta) return;
+      event.preventDefault();
+      moveToolbar(current => current + delta);
+    };
+    viewport.addEventListener('wheel', onWheel, { passive: false });
+    return () => viewport.removeEventListener('wheel', onWheel);
+  }, [moveToolbar, toolbarOverflow]);
+  /** Tah myší nebo prstem; klik na tlačítko po tahu se nepočítá. */
+  const beginToolbarDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || toolbarOverflow() <= 0) return;
+    toolbarDraggedRef.current = false;
+    toolbarDragRef.current = { startX: event.clientX, startOffset: toolbarOffset, moved: false };
+    const move = (moveEvent: PointerEvent) => {
+      const drag = toolbarDragRef.current;
+      if (!drag) return;
+      const dx = moveEvent.clientX - drag.startX;
+      if (!drag.moved && Math.abs(dx) < 6) return;
+      drag.moved = true;
+      toolbarDraggedRef.current = true;
+      const target = drag.startOffset - dx;
+      moveToolbar(() => target);
+    };
+    const end = () => {
+      toolbarDragRef.current = null;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  }, [moveToolbar, toolbarOffset, toolbarOverflow]);
+  const suppressToolbarClickAfterDrag = useCallback((event: React.MouseEvent) => {
+    if (!toolbarDraggedRef.current) return;
+    toolbarDraggedRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+  const toolbarSurface = isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white';
   const topButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-md text-[9px] font-bold transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`;
   const topDivider = `h-6 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
   const replaySource = backtestSession?.candlesByRoot[backtestSession.executionInstrument] ?? activeControl?.rawCandles ?? [];
@@ -2446,14 +2529,38 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   return (
     <React.Profiler id="chart-workspace" onRender={devWorkspaceProfilerOnRender}>
     <div className={`${embedded ? 'relative h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
-      <div className={`h-12 shrink-0 flex items-center gap-1 px-2 border-b ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
-        <div className="flex items-center gap-2 mr-1 min-w-0">
+      <div className={`relative z-[660] h-12 shrink-0 flex items-center gap-1 px-2 border-b ${toolbarSurface}`}>
+        <div className={`relative z-[120] flex h-full items-center gap-2 pr-1 min-w-0 ${toolbarSurface}`}>
           <img
             src="/logos/at_logo_light_clean.png"
             alt="Alpha Trade"
             className={`h-8 w-8 shrink-0 object-contain ${isDark ? 'drop-shadow-[0_0_12px_rgba(34,211,238,0.35)]' : ''}`}
           />
         </div>
+        {/* Nástroje se na úzkém okně posouvají do stran (kolečko, trackpad, tah
+            prstem, šipky na okrajích). Posun je přes transform, ne overflow —
+            rozbalovací menu z lišty (timeframy, indikátory, Průběh, Layout) by
+            overflow ořízl. Logo a „Zpět“ zůstávají a zakrývají, co pod ně odjede. */}
+        <div
+          ref={toolbarViewportRef}
+          className="relative flex h-full min-w-0 flex-1 items-center touch-pan-y"
+          onPointerDown={beginToolbarDrag}
+          onClickCapture={suppressToolbarClickAfterDrag}
+        >
+          {toolbarOffset > 0 && (
+            <button
+              type="button"
+              className={`absolute left-0 z-[115] grid h-8 w-6 place-items-center rounded-md ${toolbarSurface} ${isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-950'} shadow-[8px_0_10px_-6px_rgba(0,0,0,0.25)]`}
+              onClick={() => scrollToolbarBy(-240)}
+              aria-label="Posunout lištu doleva"
+              title="Posunout lištu doleva"
+            ><ChevronLeft size={15} /></button>
+          )}
+          <div
+            ref={toolbarRowRef}
+            className="flex h-full w-max shrink-0 items-center gap-1 transition-transform duration-150 ease-out"
+            style={{ transform: `translateX(${-toolbarOffset}px)` }}
+          >
         <select
           value={activeControl?.config.root ?? initialRoot}
           onChange={event => updateInstrument(event.target.value as MarketRoot)}
@@ -2580,12 +2687,25 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           title={workspaceHistoryState.redoLabel ? `Dopředu: ${workspaceHistoryState.redoLabel} (Shift+⌘/Ctrl+Z)` : 'Dopředu (Shift+⌘/Ctrl+Z)'}
           aria-label="Opakovat poslední změnu workspace"
         ><Redo2 size={15} /></button>
-        <span className="ml-auto hidden 2xl:block text-[8px] font-bold uppercase tracking-wider text-slate-600">{status}</span>
+        <span className="hidden 2xl:block text-[8px] font-bold uppercase tracking-wider text-slate-600">{status}</span>
+          </div>
+          {toolbarOffset < toolbarMaxOffset && (
+            <button
+              type="button"
+              className={`absolute right-0 z-[115] grid h-8 w-6 place-items-center rounded-md ${toolbarSurface} ${isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-950'} shadow-[-8px_0_10px_-6px_rgba(0,0,0,0.25)]`}
+              onClick={() => scrollToolbarBy(240)}
+              aria-label="Posunout lištu doprava"
+              title="Posunout lištu doprava"
+            ><ChevronRight size={15} /></button>
+          )}
+        </div>
+        <div className={`relative z-[120] flex h-full shrink-0 items-center gap-1 pl-1 ${toolbarSurface}`}>
         <span className={topDivider} />
         {!embedded && <>
         <button type="button" className={`${topButton} px-2`} onClick={onClose} title="Zavřít fullscreen (Esc)"><Maximize2 size={14} className="rotate-180" /><span className="hidden sm:inline">Zpět</span></button>
         <button type="button" onClick={onClose} className={`w-8 h-8 inline-flex items-center justify-center rounded-md ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950'}`} aria-label="Zavřít fullscreen workspace"><X size={16} /></button>
         </>}
+        </div>
       </div>
       {review && <div ref={reviewHeaderRef} className="shrink-0" />}
       <div className="flex flex-1 min-h-0">
