@@ -491,6 +491,27 @@ Ověřeno: cílené testy 55/55, tsc čistý (mimo staré chyby `extension/`);
 celá sada a build neproběhly. Nasazení: nejdřív server, pak worker.
 TradingView musí mít graf MNQ/NQ na 1 min. Hook zatím nikde v UI.
 
+### 2026-10-17 — Přeměna čekající kopie vstupu na OSO (Claude, přání Filipa)
+
+Navazuje na variantu B níže. Follower, jehož Limit kopie vstupu po okamžitém
+vyplnění leadera čeká v knize, už obchod nevynechá: když dorazí leaderův pár
+SL+TP, kopie se zruší a nahradí OSO (stejná cena a velikost, SL/TP z páru) —
+SL/TP jsou u brokera neaktivní do vyplnění vstupu, posuny leadera se zrcadlí na
+nativní nohy. `convertAwaitingCopyToOso` ve `guardBracketPairFollowers`; jen
+čistý případ (vstupní brány vč. `haltReason`, bez `maxContracts`, leader dál
+v obchodu bez nezpracovaného eventu, jen Limit), jinak S1b (vynechání).
+
+- Oponentura: návrh „convert“ 11 vad → OPRAVIT; diff → OPRAVIT (P1 částečný
+  TP leadera = falešný incident, P2 odmítnuté OSO = auto-close chráněných,
+  P3 opožděné OSO eventy = falešný incident + osiřelé OSO, P4 pozdní fill
+  zrušené kopie, P5 odvolaný cancel) → opraveno → finální OK S VÝHRADAMI
+  (úklid `convertedOsoFollowers`, přesná příčina incidentu — opraveno).
+- Testy: `tests/copierBracketAwaitingEntryFill.test.ts` 18 (4 přeměnové padají
+  na předchozí verzi), plná sada zelená, tsc čistý; INV-DIVERGENCE-01 přepsán.
+- Neověřeno naživo: neaktivní (Suspended) nohy OSO, posun suspended nohy,
+  velikost nohou po částečném fillu, kaskáda při zrušení — první převod
+  sledovat (logy `čekající kopie vstupu převedena na OSO`).
+
 ### 2026-10-17 — TP leadera otevřel flat followery do shortu (Claude, varianta B Filipa)
 
 Větev `claude/copier-protect-unfilled-follower-20261016`. 16. 10. 18:08 leaderův

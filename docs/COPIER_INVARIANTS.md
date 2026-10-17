@@ -588,23 +588,45 @@ existující ochranu.
   Teď OCO dostane jen follower s kladným důkazem pozice
   (`bracketFollowerPositionProven`: cache = trunc(preNet × mult) bez
   nezpracovaného eventu, nebo přesně doplněná potvrzenou Market kopií aktuální
-  epochy) — hned. Ostatní jdou přes `guardBracketPairFollowers`: pár se posoudí
-  celý jako ne-Market redukce (TP Limit, bez výjimky ochranného Stopu) stávajícím
-  S1b (`cutAwareDispatchFor`) — čekající kopie se zruší a follower obchod vynechá
-  stejně jako u samostatného TP; jinak čtení pozice u brokera (1,5 s): shoda =
-  OCO; ochranu bez incidentu vynechá jen follower prokazatelně flat bez
-  otevřených příkazů a bez čekající kopie (ruční zavření → kontrola velikosti);
-  cokoli jiného (kopie, o které stream ještě neví, částečná pozice, nečitelný
-  účet) = fail-closed **bez auto-close** (jako S1b divergence: jeden nejasný
-  účet nezavře kopie chráněným followerům) po rozeslání ostatním. Čerstvý
-  výpis příkazů se zapíše do `liveOrdersByAccount`, aby čekající kopii po
-  vypnutí zrušil V2. S1b běží jen pro followery se skutečným kandidátem —
-  divergence jen z cache (zpožděný position event) skupinu nevypne. Přeměna
-  čekající kopie na OSO (follower by čekal dál) je plánovaný další krok
-  (Filip 17. 10.). Známé limity: DISARM mezi okamžitým OCO a ověřením ostatních
-  ověření přeskočí (follower se zastaralou cache zůstane bez OCO; kopírka je
-  vypnutá, DISARM nic nezavírá — INV-BRAKE-01); ověření drží frontu eventů až
-  ~10 s (prokázaní followeři jsou chránění hned, brzdy obcházejí FIFO);
+  epochy) — hned. Ostatní jdou přes `guardBracketPairFollowers`:
+  1. **Přeměna na OSO (Filip 17. 10.)** `convertAwaitingCopyToOso` — follower
+     čeká dál na svůj limit, SL/TP jsou u brokera neaktivní do vyplnění
+     vstupu. Jen čistý případ: flat follower, jediná **Limit** kopie s nulovým
+     fillem a platnou pending expozicí, otevřené vstupní brány včetně celé
+     `haltReason`, bez `maxContracts`, leader dál v obchodu (obě nohy pracují
+     bez fillu, pozice beze změny, žádný nezpracovaný leader event). Čtení →
+     cancel přes `dispatchBroker(admissionGeneration)` (jediný zápis, odvolaný
+     = zpět na S1b) → postkontrola: vyplněno = OCO; nulový fill a cancel náš =
+     OSO se stejnou cenou/velikostí a cenami nohou z páru (pozdější replace
+     zrcadlí planModify na nativní nohy), obal `placeOso` těsně před zápisem
+     znovu ověří brány a leadera; kopii zrušil někdo jiný nebo brány pominuly
+     = follower vynechá (úklid jako S1b); částečné/nejasné = unsafe. Po OSO:
+     registrace pending expozice (vlastní id eventu `:oso-convert:`), vstup
+     z ACK do `liveOrdersByAccount` (kontrola velikosti i V2 o něm ví před
+     order eventem), zrušená kopie do `s1bCanceledZeroFillOrderIds` (pozdní
+     fill = stop skupiny), `convertedOsoFollowers`. Když leader pak sníží
+     pozici dřív, než se followerovi vstup vyplní, kontrola velikosti OSO
+     zruší (sweep + suppression) a follower obchod vynechá. Odmítnuté nebo
+     nejisté OSO = fail-closed bez auto-close.
+  2. Co se přeměnit nedá před zrušením kopie: pár se posoudí celý jako ne-Market
+     redukce (TP Limit, bez výjimky ochranného Stopu) stávajícím S1b
+     (`cutAwareDispatchFor`) — čekající kopie se zruší a follower obchod vynechá.
+  3. Followeři bez kandidáta: čtení pozice + čerstvých příkazů u brokera (1,5 s):
+     shoda = OCO; ochranu bez incidentu vynechá jen follower prokazatelně flat
+     bez otevřených příkazů a bez čekající kopie (ruční zavření → kontrola
+     velikosti); cokoli jiného = fail-closed **bez auto-close**. Čerstvý výpis
+     příkazů se zapíše do `liveOrdersByAccount` (V2 po vypnutí). Divergence jen
+     z cache (zpožděný position event) skupinu nevypne.
+  Známé limity: přeměna ztrácí pořadí ve frontě na limitu (cancel/replace) a
+  mezi cancel a OSO nemá follower v knize nic; neaktivní nohy OSO a jejich
+  velikost po částečném fillu stojí na nativní sémantice Tradovate (stejně jako
+  u kopírovaných OSO tiketů), na mocku neověřitelné; ověřování drží frontu eventů
+  až ~14 s (prokázaní followeři jsou chránění hned, brzdy obcházejí FIFO);
+  DISARM mezi okamžitým OCO a ověřením ostatních ověření přeskočí;
+  převedený OSO vstup z části vyplněný a leader sníží přesně na jeho úroveň:
+  zbytek vstupu dál pracuje a pozdější fill skončí divergencí (incident, ne
+  nechráněná pozice); `unknown` OSO z přeměny bez ID nezruší V2 (ručně podle
+  incidentu); scale-in leadera při čekajícím převedeném OSO neověřen;
   `rememberLiveOrderSnapshot` z REST čtení bez observation fence. Známé limity: částečně vyplněná
   čekající kopie u ne-Market redukce dál končí incidentem (V12/Z10); po
   reconnectu je pending expozice prázdná a čekající follower vede k incidentu

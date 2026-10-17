@@ -41,7 +41,7 @@ import {
   type LeaderFlatGuardToken,
 } from './copierLeaderFlatGuard';
 import { CopierBracketCorrelator, type LeaderBracketPair } from './copierBracketCorrelator';
-import { CopierOsoCorrelator } from './copierOsoCorrelator';
+import { CopierOsoCorrelator, type LeaderOsoPair } from './copierOsoCorrelator';
 import {
   stuckCancelEntries,
   waiveCancelEntry,
@@ -2233,6 +2233,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * později a cena mezitím utekla. Kopie zůstává v knize; není to divergence.
    */
   const awaitingCopiedEntries = new Map<string, { since: number; accountId: number; symbol: string }>();
+  /**
+   * Follower, jehož čekající kopie vstupu se přeměnila na OSO (17. 10. 2026),
+   * podle followerTransitionKey. Když leader pak sníží pozici dřív, než se
+   * followerovi vstup vyplní, OSO se zruší a follower obchod vynechá.
+   */
+  const convertedOsoFollowers = new Map<string, {
+    preNet: number;
+    leaderEntryOrderId: string;
+    entryBrokerOrderId: string | null;
+    epochId: string | null;
+  }>();
   const leaderFlatGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const leaderFlatGuardGenerationRetries = new Map<string, number>();
   const LEADER_FLAT_GENERATION_RETRY_LIMIT = 3;
@@ -5424,6 +5435,36 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
       if (followerNet === expectedFollowerNet) {
         awaitingCopiedEntries.delete(key);
+        if (followerNet !== 0) convertedOsoFollowers.delete(key);
+        return;
+      }
+      // 17. 10. 2026 (P1): follower čeká na vyplnění přeměněného OSO a leader
+      // mezitím sníží pozici (část TP/SL). Pravidlo z 12. 10.: leader snižuje
+      // dřív → čekající vstup se zruší a follower obchod vynechá. Úklid OSO
+      // (sweep po autoritativním flat) a suppression jako po S1b cancel.
+      const converted = convertedOsoFollowers.get(key);
+      if (
+        converted
+        && followerNet === 0
+        && leaderNet !== 0
+        && Math.sign(leaderNet) === Math.sign(converted.preNet)
+        && Math.abs(leaderNet) < Math.abs(converted.preNet)
+        && (leaderExposureEpoch(symbol)?.id ?? null) === converted.epochId
+      ) {
+        convertedOsoFollowers.delete(key);
+        awaitingCopiedEntries.delete(key);
+        // Čekající vstup se ruší: záznam pending expozice by jinak blokoval
+        // důkaz suppression (pendingIsolationCommandForAccount). Vyplnění
+        // mezitím odhalí sweep (pozice) → incident s auto-close.
+        if (converted.entryBrokerOrderId) currentRuntimePendingExposure.delete(converted.entryBrokerOrderId);
+        options.onAudit?.([{
+          at: clock(),
+          leaderEventId: `oso-convert-leader-reduced:${accountId}:${symbol}:${clock()}`,
+          kind: 'skipped',
+          accountId,
+          reason: `leader snížil pozici dřív, než se followerovi ${accountId} vyplnil převedený OSO vstup; OSO se ruší, follower obchod vynechá`,
+        }]);
+        queueS1bPostCancelCleanup(accountId, symbol, converted.leaderEntryOrderId);
         return;
       }
       const suppression = currentIntentionalSuppression(accountId, symbol);
@@ -13429,6 +13470,271 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   /**
+   * Přeměna čekající kopie vstupu na OSO (Filip 17. 10. 2026): follower dál
+   * čeká na svůj limit (varianta 1), ale SL/TP jsou u brokera neaktivní, dokud
+   * se vstup nevyplní — TP na flat účtu se vyplnit nemůže. Jen pro čistý
+   * případ (flat follower, jediná ne-Market kopie s nulovým fillem, otevřené
+   * vstupní brány, leader dál v obchodu bez nezpracovaného eventu); cokoli
+   * jiného před cancelem = 'fallback' na stávající S1b (vynechání obchodu).
+   * Po potvrzeném zrušení kopie: OSO se stejnou cenou a velikostí a cenami
+   * leaderových nohou z páru (pozdější replace zrcadlí planModify na nativní
+   * nohy). Když OSO poslat nesmí = 'skip' (vynechání přes stejný úklid jako
+   * S1b), částečný/nejasný stav = 'unsafe'.
+   */
+  const convertAwaitingCopyToOso = async (
+    pairEvent: LeaderEvent,
+    legEvent: LeaderEvent,
+    pair: LeaderBracketPair,
+    follower: CopyGroupConfig['followers'][number],
+    preNet: number,
+    admissionGeneration: number,
+  ): Promise<'converted' | 'oco' | 'skip' | 'unsafe' | 'failed' | 'fallback'> => {
+    const leaderAccountId = group.leaderAccountId;
+    if (leaderAccountId == null) return 'fallback';
+    const { symbol } = pair;
+    const { accountId } = follower;
+    const expectedPreNet = Math.trunc(preNet * follower.multiplier);
+    const entryGatesOpen = (): boolean => {
+      const now = clock();
+      const safety = currentRuntime().state.safety;
+      const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
+      return gate.armed && !gate.shadowMode && !gate.killSwitch
+        && !gate.stuckOutbox && !hasDispatchBlockingStuckOutbox()
+        && follower.enabled !== false && follower.mode === 'on-submit'
+        // Strop kontraktů počítá otevřené příkazy z REST cache; právě zrušená
+        // kopie by se mohla započítat a OSO odmítnout → vynechání (S1b).
+        && follower.maxContracts == null
+        && !currentEntryIneligibleAccounts(now).has(accountId)
+        && !activeFollowerCut(accountId, now)
+        && !activeAccountSyncPause(accountId, symbol)
+        && safety.managementOnly == null && dayLockPending == null
+        && !(safety.dayLockUntil > now)
+        && !((safety.pauseUntil ?? 0) > now && safety.pauseRule != null)
+        && !(tradingWindow.enabled && tradingWindowStateAt(tradingWindow, now) !== 'inside')
+        && !blockedLeaderEntryOrderIds.has(pair.entryOrderId)
+        // P2: celá halt brána (spojení, heartbeat, TTL, reconciliation,
+        // divergence…) — jinak by riziková brána OSO zablokovala až po
+        // zrušení kopie.
+        && haltReason({
+          ...gate,
+          now,
+          sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
+          stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+        }) == null;
+    };
+    // Leader dál v obchodu: obě nohy pracují bez fillu, pozice beze změny a
+    // žádný nezpracovaný leader event na symbolu (exit ve frontě by jinak
+    // vedl k OSO po konci leadera).
+    const leaderStillInTrade = (): boolean => {
+      const leaderOrders = liveOrdersByAccount.get(leaderAccountId);
+      const stop = leaderOrders?.get(pair.stopOrderId);
+      const target = leaderOrders?.get(pair.targetOrderId);
+      return (pendingTradeIngressByKey.get(`${leaderAccountId}:symbol:${symbol}`) ?? 0) === 0
+        && stop != null && isOpenOrderStatus(stop.status) && stop.filledQuantity === 0
+        && target != null && isOpenOrderStatus(target.status) && target.filledQuantity === 0
+        && (leaderPositions.get(symbol) ?? 0) === preNet;
+    };
+    if (!entryGatesOpen() || !leaderStillInTrade()) return 'fallback';
+    if ((positionsByAccount.get(accountId)?.get(symbol) ?? 0) !== 0) return 'fallback';
+    const { candidates } = s1bReadCandidates(pairEvent, follower);
+    if (candidates.length !== 1) return 'fallback';
+    const candidate = candidates[0];
+    const pending = currentRuntimePendingExposure.get(candidate);
+    const copy = liveOrdersByAccount.get(accountId)?.get(candidate);
+    if (
+      !pending || pending.evidenceInvalid || pending.accountId !== accountId || pending.symbol !== symbol
+      || pending.leaderOrderId !== pair.entryOrderId
+      || !copy || copy.filledQuantity !== 0 || copy.side === pair.side
+      // P2: jen Limit — znovu podaný Stop/StopLimit může broker odmítnout
+      // (stop už za trhem); takové kopie jdou stávajícím S1b.
+      || copy.orderType !== 'Limit'
+      || followerQuantity(pending.leaderQuantity, follower.multiplier) !== copy.quantity
+    ) return 'fallback';
+    const entryOrderType = copy.orderType;
+
+    const ingressBaseline = s1bIngressVersion;
+    const readStartedAt = performance.now();
+    const firstRead = performPendingCopyAndPositionRead(accountId, symbol, candidate, expectedPreNet);
+    let targeted = await pendingReadWithin(firstRead, 1_500);
+    if (targeted.kind === 'unverified') {
+      const lateRead = firstRead.then(result => (
+        result.kind === 'unverified' ? new Promise<never>(() => undefined) : result
+      ));
+      targeted = await Promise.race([
+        lateRead,
+        waitForS1bStreamResolution(accountId, symbol, candidate, expectedPreNet, ingressBaseline, readStartedAt + 3_000),
+      ]);
+    }
+    if (targeted.kind === 'filled-synced') return 'oco';
+    if (
+      targeted.kind !== 'working-flat' || targeted.freshNet !== 0 || !targeted.order
+      || !isOpenOrderStatus(targeted.order.status) || targeted.order.filledQuantity !== 0
+      || !entryGatesOpen() || !leaderStillInTrade()
+    ) return 'fallback';
+
+    // Jediný risk-snižující zápis před OSO; po nejasném výsledku se neopakuje.
+    let cancelError: Error | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const postCancelBaseline = s1bIngressVersion;
+    try {
+      await Promise.race([
+        dispatchBroker(admissionGeneration, pairEvent).cancelOrder(accountId, candidate),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('OSO convert cancel deadline 1000 ms')), 1_000);
+        }),
+      ]);
+    } catch (reason) {
+      cancelError = errorOf(reason);
+    } finally {
+      clearTimeout(timer);
+    }
+    // P5: zápis odvolaný bránou (generace, halt) se k brokerovi nedostal —
+    // kopie dál pracuje; rozhodne stávající S1b.
+    if (cancelError instanceof CopierDispatchRevokedError) return 'fallback';
+    const postCancelStartedAt = performance.now();
+    let postCancel = await readPendingCopyAndPosition(accountId, symbol, candidate, expectedPreNet, 1_000, true);
+    if (postCancel.kind !== 'filled-synced' && postCancel.kind !== 'terminal-zero-fill') {
+      postCancel = await waitForS1bStreamResolution(
+        accountId, symbol, candidate, expectedPreNet, postCancelBaseline, postCancelStartedAt + 3_000,
+      );
+    }
+    if (postCancel.kind === 'filled-synced') {
+      clearPendingFollowerMagnitudeCheck(accountId, symbol);
+      clearPendingFollowerTransition(followerTransitionKey(accountId, symbol));
+      return 'oco';
+    }
+    if (postCancel.kind !== 'terminal-zero-fill') {
+      s1bUnresolvedCopyOrderIds.set(candidate, { accountId, symbol, leaderEventId: legEvent.id });
+      return 'unsafe';
+    }
+    s1bUnresolvedCopyOrderIds.delete(candidate);
+    const skip = (reason: string): 'skip' => {
+      const epoch = leaderExposureEpoch(symbol);
+      awaitingCopiedEntries.delete(followerTransitionKey(accountId, symbol));
+      convertedOsoFollowers.delete(followerTransitionKey(accountId, symbol));
+      s1bCanceledZeroFillOrderIds.set(candidate, { accountId, symbol, epochId: epoch?.id ?? null });
+      options.onAudit?.([{
+        at: clock(), leaderEventId: legEvent.id, kind: 'canceled', accountId, brokerOrderId: candidate, reason,
+      }]);
+      queueS1bPostCancelCleanup(accountId, symbol, epoch?.leaderEntryOrderIds[0]);
+      return 'skip';
+    };
+    // Kopii zrušil někdo jiný (uživatel, broker): nevzkřísit ji.
+    if (cancelError) return skip(`kopie vstupu skončila bez fillu mimo kopírku; follower obchod vynechá (${cancelError.message})`);
+    if (postCancel.freshNet !== 0 || !entryGatesOpen() || !leaderStillInTrade()) {
+      return skip('kopie vstupu zrušena; podmínky pro OSO pominuly, follower obchod vynechá');
+    }
+
+    const osoPair: LeaderOsoPair = {
+      entryOrderId: pair.entryOrderId,
+      stopOrderId: pair.stopOrderId,
+      targetOrderId: pair.targetOrderId,
+      accountId: leaderAccountId,
+      symbol,
+      entrySide: copy.side,
+      quantity: pending.leaderQuantity,
+      entryOrderType,
+      ...(copy.limitPrice != null ? { entryLimitPrice: copy.limitPrice } : {}),
+      ...(copy.stopPrice != null ? { entryStopPrice: copy.stopPrice } : {}),
+      stopPrice: pair.stopPrice,
+      targetPrice: pair.targetPrice,
+      detectedAt: clock(),
+      correlation: pair.correlation,
+    };
+    // Vlastní id kvůli registraci čekající expozice (vstup zvyšuje expozici);
+    // sekvence je druhé nohy → runner ji bere jako duplicate.
+    const convertEvent: LeaderEvent = { ...legEvent, id: `${legEvent.id}:oso-convert:${accountId}` };
+    cacheExposureClassification(convertEvent.id, true, preNet, 0);
+    const innerBroker = dispatchBroker(admissionGeneration, convertEvent, [pair.stopOrderId, pair.targetOrderId]);
+    const fencedBroker: BrokerPort = {
+      ...innerBroker,
+      placeOso: async request => {
+        // Těsně před zápisem: leader stále v obchodu a vstupní brány otevřené.
+        if (!entryGatesOpen() || !leaderStillInTrade()) {
+          throw new CopierDispatchRevokedError('oso-convert-leader-or-gate-changed');
+        }
+        return innerBroker.placeOso!(request);
+      },
+    };
+    const result = await processor.processOso({
+      pair: osoPair,
+      event: convertEvent,
+      group: { ...group, followers: [follower] },
+      context: {
+        ...gate,
+        now: clock(),
+        sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
+        stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+        nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
+        ineligibleAccounts: currentEntryIneligibleAccounts(),
+      },
+      broker: fencedBroker,
+      clock,
+      store: durableStore,
+      metrics,
+      maxConcurrentDispatches: options.maxConcurrentDispatches,
+    });
+    runtime = result.runtime;
+    rememberCurrentRuntimePendingOsoExposure(osoPair, result.audit);
+    if (result.audit.length > 0) options.onAudit?.(result.audit);
+    const placedEntry = result.audit.find(item => (
+      item.kind === 'dispatched' && item.reason === 'native-oso' && item.accountId === accountId
+    ));
+    if (!placedEntry) {
+      // P2: blokace rizikovou bránou nic neodeslala → follower (flat, bez
+      // kopie) obchod vynechá. Odmítnutí / nejistý výsledek u brokera =
+      // incident jen kvůli tomuto followerovi, BEZ auto-close ostatních.
+      const uncertain = result.audit.filter(item => isCriticalAuditEntry(item) && item.kind !== 'blocked');
+      if (uncertain.length > 0) {
+        failClosed(new Error(
+          `Copier fail-closed: OSO z přeměny čekající kopie followera ${accountId} ${symbol} skončilo `
+          + `${uncertain.map(item => item.kind).join(', ')}; ověř účet v Tradovate`,
+        ), { autoClose: false });
+        // Vlastní incident s přesnou příčinou; ověřovací krok ji nepřepíše.
+        return 'failed';
+      }
+      return skip('kopie vstupu zrušena; OSO se neodeslalo, follower obchod vynechá');
+    }
+    const key = followerTransitionKey(accountId, symbol);
+    const epoch = leaderExposureEpoch(symbol);
+    // P4: pozdní fill zrušené obyčejné kopie musí skupinu zastavit
+    // (follower by měl pozici bez SL/TP a k tomu čekající OSO).
+    s1bCanceledZeroFillOrderIds.set(candidate, { accountId, symbol, epochId: epoch?.id ?? null });
+    // P3: vstup OSO podle ACK do přehledu živých příkazů, aby kontrola
+    // velikosti i úklid po vypnutí (V2) věděly o čekajícím vstupu dřív, než
+    // dorazí jeho order event (stream jej pak přepíše skutečným stavem).
+    const osoEntry = placedEntry.key ? currentRuntime().osoOutbox.get(placedEntry.key) : undefined;
+    if (osoEntry?.entryBrokerOrderId && !liveOrdersByAccount.get(accountId)?.has(osoEntry.entryBrokerOrderId)) {
+      rememberLiveOrder({
+        tag: osoEntry.request.tag,
+        brokerOrderId: osoEntry.entryBrokerOrderId,
+        accountId,
+        symbol,
+        side: osoEntry.request.side,
+        orderType: osoEntry.request.orderType,
+        quantity: osoEntry.request.quantity,
+        filledQuantity: 0,
+        ...(osoEntry.request.limitPrice != null ? { limitPrice: osoEntry.request.limitPrice } : {}),
+        status: 'working',
+        sourceVersion: 'oso-convert-ack',
+        updatedAt: clock(),
+      });
+    }
+    convertedOsoFollowers.set(key, {
+      preNet,
+      leaderEntryOrderId: pair.entryOrderId,
+      entryBrokerOrderId: osoEntry?.entryBrokerOrderId ?? null,
+      epochId: epoch?.id ?? null,
+    });
+    if (!awaitingCopiedEntries.has(key)) awaitingCopiedEntries.set(key, { since: clock(), accountId, symbol });
+    options.onAudit?.([{
+      at: clock(), leaderEventId: legEvent.id, kind: 'skipped', accountId,
+      reason: `čekající kopie vstupu převedena na OSO (SL/TP aktivní až po vyplnění vstupu followera ${accountId})`,
+    }]);
+    return 'converted';
+  };
+
+  /**
    * Pár se posoudí celý jako ne-Market redukce (TP Limit) stávajícím S1b —
    * bez výjimky ochranného Stopu za vstupem (V12), protože pár TP obsahuje.
    * Čekající kopie vstupu se zruší a follower obchod vynechá (varianta 1:
@@ -13439,6 +13745,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     legEvent: LeaderEvent,
     pair: LeaderBracketPair,
     accountIds: readonly number[],
+    admissionGeneration: number,
   ): Promise<{ ineligibleAccounts: Map<number, string>; unsafeAccounts: number[] }> => {
     const ineligibleAccounts = new Map<number, string>();
     const unsafeAccounts: number[] = [];
@@ -13462,8 +13769,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // S1b jen pro followery se skutečnou čekající kopií (kandidátem). Ostatní
     // rozhodne čtení u brokera: divergence odvozená jen z cache (zpožděný
     // position event) nesmí skupinu vypnout.
-    const s1bFollowers = followers.filter(follower => s1bReadCandidates(pairEvent, follower).candidates.length > 0);
-    if (s1bFollowers.length > 0) {
+    const candidateFollowers = followers.filter(follower => s1bReadCandidates(pairEvent, follower).candidates.length > 0);
+    // Nejdřív přeměna čekající kopie na OSO (follower čeká dál); co se
+    // přeměnit nedá před zrušením kopie, jde stávajícím S1b (vynechání).
+    const conversions = await Promise.all(candidateFollowers.map(async follower => ({
+      follower,
+      outcome: await convertAwaitingCopyToOso(pairEvent, legEvent, pair, follower, preNet, admissionGeneration),
+    })));
+    const s1bFollowers: CopyGroupConfig['followers'] = [];
+    for (const { follower, outcome } of conversions) {
+      if (outcome === 'converted') ineligibleAccounts.set(follower.accountId, 'bracket-copy-converted-to-oso');
+      else if (outcome === 'skip') ineligibleAccounts.set(follower.accountId, 'pending-entry-copy-canceled-before-exit');
+      else if (outcome === 'unsafe') unsafeAccounts.push(follower.accountId);
+      else if (outcome === 'failed') ineligibleAccounts.set(follower.accountId, 'oso-convert-failed');
+      else if (outcome === 'fallback') s1bFollowers.push(follower);
+      // 'oco': kopie vyplněná → rozhodne důkaz/čtení pozice níže.
+    }
+    if (s1bFollowers.length > 0 && gate.armed) {
       const s1b = await cutAwareDispatchFor(pairEvent, false, { ...group, followers: s1bFollowers });
       for (const accountId of s1b.unsafeDivergenceAccounts) unsafeAccounts.push(accountId);
       for (const follower of s1bFollowers) {
@@ -14202,6 +14524,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             clearPendingFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
             // V6: kopie vstupu se vyplnila (nebo leader skončil) — už nečeká.
             awaitingCopiedEntries.delete(followerTransitionKey(follower.accountId, event.position.symbol));
+            convertedOsoFollowers.delete(followerTransitionKey(follower.accountId, event.position.symbol));
           }
         }
       }
@@ -14241,6 +14564,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             });
             if (!openCopiedEntry) return;
             awaitingCopiedEntries.delete(followerTransitionKey(follower.accountId, symbol));
+            convertedOsoFollowers.delete(followerTransitionKey(follower.accountId, symbol));
             clearPendingFollowerMagnitudeCheck(follower.accountId, symbol);
             await sweepFollowerProtectiveLegs(follower.accountId, symbol, now, {}, createFlatSweepBudget());
           }));
@@ -14262,6 +14586,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           } else {
             clearPendingFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
             awaitingCopiedEntries.delete(followerTransitionKey(follower.accountId, event.position.symbol));
+            convertedOsoFollowers.delete(followerTransitionKey(follower.accountId, event.position.symbol));
           }
           // Incident 5. 10.: Position followera téhož přírůstku dorazila dřív
           // než leaderova a tehdy se nedala potvrdit. Dodatečné potvrzení
@@ -14626,7 +14951,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await failClosedOnCriticalAudit(result.audit);
       const bracketAudit = [...result.audit];
       if (verifyLater.length > 0 && gate.armed && !result.audit.some(isCriticalAuditEntry)) {
-        const guard = await guardBracketPairFollowers(leaderEvent, bracketPair, verifyLater);
+        const guard = await guardBracketPairFollowers(leaderEvent, bracketPair, verifyLater, admissionGeneration);
         const verified = verifyLater.filter(accountId => (
           !guard.ineligibleAccounts.has(accountId) && !guard.unsafeAccounts.includes(accountId)
         ));
@@ -16597,6 +16922,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       for (const timer of pendingFollowerMagnitudeChecks.values()) clearTimeout(timer);
       pendingFollowerMagnitudeChecks.clear();
       awaitingCopiedEntries.clear();
+      convertedOsoFollowers.clear();
       for (const timer of leaderFlatGuardTimers.values()) clearTimeout(timer);
       leaderFlatGuardTimers.clear();
       leaderFlatGuardGenerationRetries.clear();
@@ -18209,6 +18535,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       for (const timer of pendingFollowerMagnitudeChecks.values()) clearTimeout(timer);
       pendingFollowerMagnitudeChecks.clear();
       awaitingCopiedEntries.clear();
+      convertedOsoFollowers.clear();
       for (const timer of leaderFlatGuardTimers.values()) clearTimeout(timer);
       leaderFlatGuardTimers.clear();
       leaderFlatGuardGenerationRetries.clear();
