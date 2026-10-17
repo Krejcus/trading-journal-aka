@@ -262,6 +262,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-17 — iPhone appka z `main` s novými grafy (Claude)
+- Čistý worktree `~/alphatrade-worktrees/ios-20261017` nad `origin/main` `c7eb5cda` (obsahuje
+  `469d172c`), symlink `.env.local`, `npm ci`, `ios:sync` se `set -o pipefail`: `✓ built`,
+  `capacitor-ios/App/App/public/index.html` čerstvý (09:58), Supabase URL v bundlu, strom čistý.
+  `xcodebuild` do `~/alphatrade-build/ios-dd` OK, balíček obsahuje `chartDrawingLayer-*.js`.
+  Čistá reinstalace (uninstall + install + launch) na iPhone 13 Pro Max.
+- Ověřeno: appka naběhla přihlášená na Deník → Den, graf v barvách tmavého motivu. Na serveru
+  `chart_drawings` má testovací kresby (NQ šipka 20. 7., NQ obdélník 14. 10., celkem 4 živé).
+  Body 1–3 ze zadání (kresby z Macu v telefonu, kresba z telefonu na Macu do minuty, kreslení
+  prstem na celé obrazovce) potvrzuje Filip na telefonu.
+- Po čisté reinstalaci iOS znovu žádá oprávnění k oznámením (push, Live Activity).
+
 ### 2026-10-17 dopoledne — NASAZENO: grafy, profil grafů, vrstva kreseb a poznámek (Claude)
 - Na Filipovo „nasaď“ sloučeno `claude/tv-replay-parity-20261015` (obsahuje
   `claude/day-chart-fullscreen-20261014`) do `main` jako `91441160` přes čistý release worktree
@@ -342,6 +354,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
     názvu instrumentu a oříznutá před osou, štítky úrovní/VWAP na ose prořídnuté bez překryvů
     (`thinPriceAxisLabels`). Úzký „sloupek“ pozice uvnitř jedné svíčky je správně (min. šířka
     = jedna svíčka už existovala).
+
+### 2026-10-16 — Rozbor tiltu dne a návrh agresivních pojistek (Claude, jen čtení + návrh)
+- Den (3 Lucid účty, read-only z `trades`, relay příkazů a logů workeru): dopoledne čisté (leader +876).
+  Spouštěč 18:08–18:15 Praha: leader Limit long 4 se vyplnil, kopie followerů ne (awaiting entry),
+  ale zrcadlený native OCO jim nechal TP Sell Limit 29707 → při TP leadera se followerům vyplnil jako
+  OTEVÍRACÍ Short 4 → fail-closed `leader-flat-follower-open` (leader +650, followeři +10). **Podezření
+  na díru v jádru:** výjimka „ochranný Stop čekajícího vstupu se nevyplní dřív než vstup“ neplatí pro
+  TP Limit nohu — samostatná session. Pak během 70 s flatten/ARM/DISARM/změna leadera, ruční obchod
+  mimo skupinu, 18:33–19:00 šest ztrát, re-entry 9 s–3 min, velikost 4→9→10→15 MNQ→2 NQ;
+  follower −1 724 od vrcholu dne, oba účty večer ~10–16 USD pod trailing floor (EOD Lucid?).
+- Všechny denní pojistky skupiny byly 0/vypnuté. Samotné `dailyMaxLosingTrades = 2` (výchozí akce
+  pauza 20 → zámek) by followera nechalo ≈ +740 místo −826.
+- Návrh N1–N6 prošel `copier-design-critic`: OPRAVIT PŘED IMPLEMENTACÍ. N1 pauza po každé ztrátě,
+  N2 giveback z vrcholu (i per follower), N3 allowlist instrumentů, N4B blokace vstupu nad strop
+  velikosti (micro ekvivalent), N5 ARM blokovaný po incidentu/změně skupiny — použitelné po opravách.
+  **BLOKUJE:** N4A ořez kopie (exposureCappedBroker neořezává, odmítá celý příkaz; reconciler strop
+  nezná) a N6 zavírání nové leaderovy pozice za zámku (INV-BRAKE-01/04). Upozornění kritika:
+  `maxContracts` je v kusech (2 NQ projdou stropem 4), překročení = incident+DISARM, ne ořez;
+  únik ST17 + zvýšení násobku za DISARM; riziko `replaced` nohy > pozice followera při `allowedNet ≠ 0`.
+  Kód ani nastavení se neměnily.
 
 ### 2026-10-15 — Dotykové kreslení podle TradingView mobilu (Claude, větev, NEnasazeno na web)
 - Podle Filipova videa z TradingView: s nástrojem v ruce je crosshair hned uprostřed, tah prstem ho
