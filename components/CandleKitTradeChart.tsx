@@ -42,6 +42,7 @@ import {
   GripVertical,
   Lock,
   LocateFixed,
+  Rewind,
   RotateCcw,
   Scissors,
   Settings,
@@ -65,6 +66,16 @@ import {
   resolveNasdaqFuturesRoot,
   type NasdaqFuturesRoot,
 } from '../services/chartInstrumentLegend';
+import { thinPriceAxisLabels } from '../services/chartPriceAxisLabels';
+import { announceChartProfileChange, dismissChartProfileToast } from '../services/chartProfileToast';
+import {
+  drawingLayerDay,
+  drawingLayerKV,
+  drawingLayerReady,
+  subscribeDrawingLayer,
+  windowDrawings,
+} from '../services/chartDrawingLayer';
+import { normalizeDrawingForLayer, type StoredDrawingLike } from '../services/chartAnnotationMigration';
 import {
   calculateMarketStructure,
   findEntryEdgeFairValueGap,
@@ -122,6 +133,7 @@ import GenericDrawingFloatingToolbar from './GenericDrawingFloatingToolbar';
 import GenericDrawingSettingsDialog from './GenericDrawingSettingsDialog';
 import { getDrawingStyleDefault, installDrawingStyleDefaults } from '../services/chartDrawingStyleDefaults';
 import {
+  activeChartAppearanceScope,
   chartAppearanceUserId,
   inheritGlobalAppearance,
   onChartAppearanceScopeBroadcast,
@@ -134,10 +146,9 @@ import { bindChartAppearanceAuth } from '../services/chartAppearanceAuth';
 import { supabase } from '../services/supabase';
 import { mergeIndicatorSettings } from '../services/chartIndicatorSettings';
 import { nearestCandleIndex } from '../services/candleSearch';
-import { rememberLatestIndicatorSettings, rememberLatestIndicatorSettingsIfMissing } from '../services/detailIndicators';
+import { journalIndicatorProfile, readTradeChartIndicators, rememberLatestIndicatorSettings, writeTradeChartIndicators } from '../services/detailIndicators';
 import {
   DEFAULT_CHART_PANEL_ID,
-  panelSettingsEnvelope,
   panelSettingsTargetMatches,
   readPanelSettings,
   writeAllPanelSettings,
@@ -163,6 +174,7 @@ import {
   chartCanvasOptions,
   chartPriceScaleMode,
   chartSeriesOptions,
+  isChartSettingsJournalProfile,
   loadChartSettings,
   lockedPriceRange,
   chartPriceFormatter,
@@ -238,6 +250,8 @@ interface CandleKitTradeChartProps {
   contextTrades?: readonly Trade[];
   /** Klíč úložiště kreseb místo id obchodu (review: kresby patří týdnu). */
   drawingKeyId?: string;
+  /** Tolerance výběru kresby v px (prst potřebuje víc než myš). */
+  drawingHitTolerance?: number;
   activeLibraryIndicators?: string[];
   onToggleFvg?: () => void;
   onToggleLevels?: () => void;
@@ -275,6 +289,11 @@ interface CandleKitTradeChartProps {
    * globálně (jako fullscreen obchodu), nikdy do otevřené backtest session.
    */
   onIndicatorSettingsSaved?: () => void;
+  /**
+   * Úzký graf na telefonu (deník dne): legenda jen se symbolem a timeframem
+   * a štítky úrovní na cenové ose bez překryvů, jako TradingView mobile.
+   */
+  phoneLayout?: boolean;
   replaySelecting?: boolean;
   replaySelectionCandles?: MarketCandle[];
   replaySelectionTime?: number | null;
@@ -463,8 +482,17 @@ const ChartIndicatorLegend: React.FC<{
   };
   const remove = (item: ChartIndicatorLegendItem) => {
     if (item.customId) {
-      ({ fvg: onToggleFvg, levels: onToggleLevels, structure: onToggleStructure }[item.customId])?.();
+      const toggle = ({ fvg: onToggleFvg, levels: onToggleLevels, structure: onToggleStructure }[item.customId]);
+      toggle?.();
       setCustomHidden(item.customId, false);
+      // Křížek = pryč ze všech grafů (oko jen dočasně schová v tomhle grafu).
+      if (toggle && activeChartAppearanceScope() === null) {
+        const id = item.customId;
+        // Zpět přímo do profilu (ne přes `toggle` — ten má v closure starý stav).
+        announceChartProfileChange(`${item.title} odebrán ze všech grafů`, () => {
+          if (activeChartAppearanceScope() === null) writeTradeChartIndicators({ ...readTradeChartIndicators(), [id]: true });
+        });
+      }
     } else if (controller && item.libraryName) {
       controller.remove(item.libraryName);
       setHiddenLibrary(current => {
@@ -1637,7 +1665,7 @@ const colorWithOpacity = (hex: string, opacity: number): string => {
 
 const releaseAppearanceAuth = bindChartAppearanceAuth(supabase.auth);
 if (import.meta.hot) import.meta.hot.dispose(releaseAppearanceAuth);
-const SHARED_INDICATOR_SETTINGS_EVENT = 'alphatrade:chart-indicators-change';
+export const SHARED_INDICATOR_SETTINGS_EVENT = 'alphatrade:chart-indicators-change';
 const sharedIndicatorSettingsCache = new Map<string, AlphaTradeIndicatorSettings>();
 
 /** Uložená obálka — buď z backtest session, nebo z globálního localStorage. */
@@ -1656,12 +1684,24 @@ const storedIndicatorEnvelope = (legacyKey: string): unknown => {
   }
 };
 
+/**
+ * Mimo backtest platí jeden styl indikátorů pro všechny grafy appky (profil
+ * deníku); backtest session si drží vlastní styl po panelech.
+ */
+const isIndicatorJournalProfile = () => activeChartAppearanceScope() === null;
+const indicatorCacheKey = (panelId: string) => isIndicatorJournalProfile() ? 'profile' : panelId;
+
 const loadPanelIndicatorSettings = (panelId: string, legacyKey: string): AlphaTradeIndicatorSettings => {
-  const cached = sharedIndicatorSettingsCache.get(panelId);
+  const key = indicatorCacheKey(panelId);
+  const cached = sharedIndicatorSettingsCache.get(key);
   if (cached) return structuredClone(cached);
-  const stored = readPanelSettings(storedIndicatorEnvelope(legacyKey), panelId);
-  const settings = mergeIndicatorSettings(stored === undefined ? null : JSON.stringify(stored));
-  sharedIndicatorSettingsCache.set(panelId, settings);
+  const settings = isIndicatorJournalProfile()
+    ? journalIndicatorProfile(storedIndicatorEnvelope(legacyKey))
+    : (() => {
+      const stored = readPanelSettings(storedIndicatorEnvelope(legacyKey), panelId);
+      return mergeIndicatorSettings(stored === undefined ? null : JSON.stringify(stored));
+    })();
+  sharedIndicatorSettingsCache.set(key, settings);
   return structuredClone(settings);
 };
 
@@ -1670,13 +1710,15 @@ const persistPanelIndicatorSettings = (
   target: PanelSettingsTarget,
   legacyKey: string,
 ) => {
-  const envelope = target.allPanels
+  const journal = isIndicatorJournalProfile();
+  const allPanels = journal || target.allPanels;
+  const envelope = allPanels
     ? writeAllPanelSettings(settings)
     : writePanelSettings(storedIndicatorEnvelope(legacyKey), target.panelId, settings);
-  if (target.allPanels) sharedIndicatorSettingsCache.clear();
-  sharedIndicatorSettingsCache.set(target.panelId, structuredClone(settings));
-  // Detail obchodu čte styl jen odsud (nikdy z otevřené session).
-  rememberLatestIndicatorSettings(settings);
+  sharedIndicatorSettingsCache.clear();
+  sharedIndicatorSettingsCache.set(indicatorCacheKey(target.panelId), structuredClone(settings));
+  // Styl backtestu zůstává v session — do deníku (ani detailu) neprosakuje.
+  if (journal) rememberLatestIndicatorSettings(settings);
   if (writeChartAppearance('indicatorSettings', envelope)) return;
   writeGlobalChartAppearance('indicatorSettings', envelope);
 };
@@ -1686,24 +1728,32 @@ const persistPanelIndicatorSettings = (
  * nastavení, jeho první 1m panel) a „naposledy použitý“ styl, ze kterého
  * detail čte. Otevřenou backtest session nikdy nepřepíše.
  */
-const TRADE_FULLSCREEN_PANEL_ID = 'alphatrade-chart-1';
 const persistTradeChartIndicatorSettings = (settings: AlphaTradeIndicatorSettings) => {
-  const envelope = writePanelSettings(inheritGlobalAppearance('indicatorSettings'), TRADE_FULLSCREEN_PANEL_ID, settings);
-  sharedIndicatorSettingsCache.delete(TRADE_FULLSCREEN_PANEL_ID);
+  // Profil deníku: styl platí pro všechny grafy appky.
+  writeGlobalChartAppearance('indicatorSettings', writeAllPanelSettings(settings));
+  if (isIndicatorJournalProfile()) {
+    sharedIndicatorSettingsCache.clear();
+    sharedIndicatorSettingsCache.set('profile', structuredClone(settings));
+  }
   rememberLatestIndicatorSettings(settings);
-  writeGlobalChartAppearance('indicatorSettings', envelope);
 };
 
 // Otevření i zavření session mění platný zdroj nastavení. Cache musí padnout a
 // namontované grafy se to dozvědí stejnou cestou jako při běžné úpravě.
 onChartAppearanceScopeReset(() => {
   sharedIndicatorSettingsCache.clear();
-  // Styl uložený dřív jen v session se jednou povýší na „naposledy použitý“,
-  // ať ho detail obchodu vidí i bez nové úpravy.
-  const envelope = panelSettingsEnvelope<AlphaTradeIndicatorSettings>(readChartAppearance('indicatorSettings'));
-  const scoped = envelope.shared ?? Object.values(envelope.panels)[0];
-  if (scoped) rememberLatestIndicatorSettingsIfMissing(mergeIndicatorSettings(JSON.stringify(scoped)));
+  // „Vrátit“ z deníku po přepnutí do backtestu (nebo zpět) už neplatí.
+  dismissChartProfileToast();
 });
+// Profil ze serveru (jiné zařízení) — styl indikátorů si grafy přečtou znovu.
+if (typeof window !== 'undefined') {
+  window.addEventListener('alphatrade:chart-profile-applied', () => {
+    sharedIndicatorSettingsCache.clear();
+    window.dispatchEvent(new CustomEvent(SHARED_INDICATOR_SETTINGS_EVENT, {
+      detail: { source: Symbol('chart-profile-sync'), reload: true },
+    }));
+  });
+}
 onChartAppearanceScopeBroadcast(() => {
   // Každý panel si po přepnutí session načte vlastní hodnotu sám; událost je
   // jen pokyn „přečti si to znovu".
@@ -1745,6 +1795,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   reviewMode = false,
   contextTrades,
   drawingKeyId,
+  drawingHitTolerance,
   activeLibraryIndicators = [],
   onToggleFvg,
   onToggleLevels,
@@ -1759,6 +1810,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   hideTradeResult = false,
   indicatorSettingsOverride,
   onIndicatorSettingsSaved,
+  phoneLayout = false,
   replaySelecting = false,
   replaySelectionMinimumTime = null,
   replaySelectionCandles = [],
@@ -1877,12 +1929,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const updateIndicatorSettings = useCallback((
     next: AlphaTradeIndicatorSettings,
     allPanels = false,
+    persisted = false,
   ) => {
-    const target: PanelSettingsTarget = { panelId: settingsPanelId, allPanels };
-    sharedIndicatorSettingsCache.set(settingsPanelId, next);
+    const target: PanelSettingsTarget = { panelId: settingsPanelId, allPanels: allPanels || isIndicatorJournalProfile() };
+    sharedIndicatorSettingsCache.set(indicatorCacheKey(settingsPanelId), next);
     setIndicatorSettings(next);
     window.dispatchEvent(new CustomEvent(SHARED_INDICATOR_SETTINGS_EVENT, {
-      detail: { settings: next, source: settingsSyncSourceRef.current, target },
+      detail: { settings: next, source: settingsSyncSourceRef.current, target, persisted },
     }));
   }, [settingsPanelId]);
   useEffect(() => {
@@ -1906,6 +1959,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   }, [indicatorSettingsOverride, legacySettingsStorageKey, settingsPanelId]);
   const indicatorSettingsRef = useRef(indicatorSettings);
   indicatorSettingsRef.current = indicatorSettings;
+  // Čte se z primitivy na cenové ose — ta se kvůli přepnutí nepřestavuje.
+  const phoneLayoutRef = useRef(phoneLayout);
+  phoneLayoutRef.current = phoneLayout;
   const [settingsDialogIndicator, setSettingsDialogIndicator] = useState<AlphaTradeIndicatorId | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     left: number;
@@ -1945,9 +2001,18 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   ) => {
     const target: PanelSettingsTarget = { panelId: settingsPanelId, allPanels };
     setChartSettings(next);
-    if (persist) saveChartSettings(next, chartSettingsSourceRef.current, target);
+    if (persist) saveChartSettings(next, chartSettingsSourceRef.current, target, isDark);
     else broadcastChartSettings(next, chartSettingsSourceRef.current, target);
-  }, [settingsPanelId]);
+  }, [isDark, settingsPanelId]);
+
+  // Přepnutí motivu appky: barvy, které ho sledují (pozadí, mřížka, písmo os…),
+  // se musí přepočítat — dřív graf zůstal v barvách motivu, ve kterém vznikl.
+  const loadedThemeRef = useRef(isDark);
+  useEffect(() => {
+    if (loadedThemeRef.current === isDark) return;
+    loadedThemeRef.current = isDark;
+    setChartSettings(loadChartSettings(isDark, settingsPanelId));
+  }, [isDark, settingsPanelId]);
 
   useEffect(() => {
     const sync = (event: Event) => {
@@ -2885,7 +2950,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           ? keepView ? actualViewportBeforeUpdate! : { from: newestLogicalIndex - centeredSpan / 2, to: newestLogicalIndex + centeredSpan / 2 }
           : transition
             ? { from: newestLogicalIndex + 6 - transition.logicalSpan, to: newestLogicalIndex + 6 }
-            : { from: Math.max(0, visibleCandles.length - replayBars), to: visibleCandles.length + 6 };
+            // Bez kliknutí (start z menu: datum, první, náhodná svíčka) drží
+            // výchozí šířku i u startu na začátku dat — záporné `from` nechá
+            // vlevo prázdno jako TradingView, místo jedné svíčky přes celý graf.
+            : { from: visibleCandles.length - replayBars, to: visibleCandles.length + 6 };
         const initialRange = transition
           ? {
             from: newestLogicalIndex - transition.logicalSpan * transition.cutRatio,
@@ -3029,9 +3097,64 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // připojí znovu). Review ukládá kresby pod klíčem týdne — přepnutí obchodu
   // proto graf znovu nestaví.
   const drawingStorageId = drawingKeyId ?? String(trade.id);
-  const drawingOptions = useMemo(() => ({
-    storageKey: `alphatrade:candlekit:${drawingStorageId}:${drawingScope || timeframe}`,
-  }), [drawingStorageId, drawingScope, timeframe]);
+  // Deník (mimo backtest): kresby jsou jedna vrstva podle trhu a času —
+  // graf čte a zapisuje okno svých dnů (services/chartDrawingLayer.ts).
+  // Na zařízení se vrstva zapne až po převodu starých kreseb.
+  const [layerActive, setLayerActive] = useState(drawingLayerReady);
+  const layerEnabled = layerActive
+    && !String(drawingScope ?? '').startsWith('backtest:')
+    && activeChartAppearanceScope() === null;
+  // Okno podle všech načtených dat, ne odkrytých v replayi — jinak by přechod
+  // přes půlnoc v přehrávání postavil nový kreslicí ovladač.
+  const layerSource = replaySelectionCandles.length ? replaySelectionCandles : rawCandles;
+  const layerFromDay = layerSource.length ? drawingLayerDay(layerSource[0].time) : null;
+  const layerToDay = layerSource.length ? drawingLayerDay(layerSource[layerSource.length - 1].time) : null;
+  const layerWindow = layerEnabled && layerFromDay && layerToDay ? { fromDay: layerFromDay, toDay: layerToDay } : null;
+  const layerKV = useMemo(
+    () => (layerWindow ? drawingLayerKV(layerWindow.fromDay, layerWindow.toDay) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [layerWindow?.fromDay, layerWindow?.toDay],
+  );
+  const drawingOptions = useMemo(() => (layerWindow && layerKV
+    ? {
+      storageKey: `layer:${layerWindow.fromDay}:${layerWindow.toDay}`,
+      kv: layerKV,
+      ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
+    }
+    : {
+      storageKey: `alphatrade:candlekit:${drawingStorageId}:${drawingScope || timeframe}`,
+      ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
+    }
+  // Klíč okna (dny), ne objekt — jinak by každý render postavil nový ovladač.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [drawingHitTolerance, drawingStorageId, drawingScope, timeframe, layerKV]);
+  // Změna vrstvy z jiného grafu nebo zařízení → rovnou do enginu tohoto grafu,
+  // bez překreslení Reactu (při tahu myší by se jinak překreslovaly všechny grafy).
+  const layerSyncRef = useRef({ layerWindow, layerKV, timeframe });
+  layerSyncRef.current = { layerWindow, layerKV, timeframe };
+  useEffect(() => {
+    const syncFromLayer = () => {
+      const active = drawingLayerReady();
+      setLayerActive(current => (current === active ? current : active));
+      const { layerWindow: window, layerKV: kv, timeframe: frame } = layerSyncRef.current;
+      const engine = apiRef.current?.drawing?.engine;
+      if (!window || !kv || !engine) return;
+      const target = windowDrawings(window.fromDay, window.toDay);
+      const current = engine.getDrawings();
+      const manual = current.filter(drawing => !drawing.id.startsWith('auto-'));
+      const signature = (items: readonly unknown[]) => JSON.stringify(items.map(item => normalizeDrawingForLayer(item as StoredDrawingLike)));
+      if (signature(manual) === signature(target)) return;
+      const autos = current.filter(drawing => drawing.id.startsWith('auto-'));
+      kv.markLoaded();
+      engine.import(JSON.stringify([...autos, ...target]));
+      // Runtime pole Fibu (timeframe grafu) se do vrstvy neukládají — dopočítat.
+      applyFibRuntimeTimeframe(engine, frame);
+    };
+    const unsubscribe = subscribeDrawingLayer(syncFromLayer);
+    // Oznámení mohlo přijít mezi prvním renderem a přihlášením k odběru.
+    syncFromLayer();
+    return unsubscribe;
+  }, []);
 
   // Obchod uprostřed a celý vidět; okraje rostou s délkou obchodu (minimum
   // pokryje i 10 min před vstupem, odkud startuje přehrávání). Během
@@ -3061,7 +3184,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const span = to - from;
     const context = Math.round(span * 0.5);
     const before = Math.max(reviewMode ? 30 : tradeViewFrame?.before ?? 15, context);
-    const after = Math.max(reviewMode ? 30 : tradeViewFrame?.after ?? 15, tradeViewFrame?.endMs != null ? 0 : context);
+    // Za obchodem víc svíček než před ním — v detailu je důležité, co přišlo po výstupu.
+    const after = Math.max(reviewMode ? 30 : tradeViewFrame?.after ?? 25, tradeViewFrame?.endMs != null ? 0 : context);
     return { from: from - before, to: to + after };
   }, [visibleCandles, timeframe, trade, entryMs, exitMs, reviewMode, tradeViewFrame, untakenFrameEndMs]);
   const centeredTradeRangeRef = useRef(centeredTradeRange);
@@ -3426,8 +3550,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const priceAxisViews = (): ISeriesPrimitiveAxisView[] => {
         const timeRange = chart.timeScale().getVisibleRange();
         const rightTime = timeRange ? Number(timeRange.to) : visibleCandlesRef.current.at(-1)?.time;
-        return indicatorSettingsRef.current.levels.showLabels
-          ? currentLevelLabels(rightTime).map(level => ({
+        if (!indicatorSettingsRef.current.levels.showLabels) return [];
+        const allLabels = currentLevelLabels(rightTime);
+        const lastClose = visibleCandlesRef.current.at(-1)?.close;
+        const lastCloseY = Number.isFinite(lastClose) ? series.priceToCoordinate(Number(lastClose)) : null;
+        const shownLabels = phoneLayoutRef.current
+          ? thinPriceAxisLabels(allLabels, price => series.priceToCoordinate(price), lastCloseY == null ? [] : [lastCloseY], 17)
+          : allLabels;
+        return shownLabels.length
+          ? shownLabels.map(level => ({
           coordinate: () => series.priceToCoordinate(level.price) ?? -1000,
           text: () => level.price.toFixed(2),
           textColor: () => '#ffffff',
@@ -3973,8 +4104,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           }
         } else {
           const replayBars = compactMode ? 90 : 130;
+          // Stejně jako po skoku zpět: šířka zůstává i u startu na začátku dat.
           chart.timeScale().setVisibleLogicalRange({
-            from: Math.max(0, visibleCandles.length - replayBars),
+            from: visibleCandles.length - replayBars,
             to: visibleCandles.length + 6,
           });
         }
@@ -5070,7 +5202,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         isDark={isDark}
         onOpenSettings={() => setDrawingSettingsOpen(true)}
       />}
-      <div className={`pointer-events-none absolute left-2 top-1.5 z-20 max-w-[calc(100%-72px)] whitespace-nowrap text-[10px] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+      <div className={`pointer-events-none absolute left-2 top-1.5 z-20 ${phoneLayout ? 'max-w-[calc(100%-96px)]' : 'max-w-[calc(100%-72px)]'} whitespace-nowrap text-[10px] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
         <div className="flex h-4 min-w-0 items-center gap-1.5" aria-label="Instrument a timeframe grafu">
           {chartSettings.statusLine.symbolTitle && (
             <>
@@ -5080,12 +5212,22 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
               <span className={`shrink-0 font-semibold ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{resolvedInstrumentRoot}</span>
             </>
           )}
-          {chartSettings.statusLine.symbolDescription && (
+          {chartSettings.statusLine.symbolDescription && !phoneLayout && (
             <span className="truncate font-semibold">{instrumentLegend.name}</span>
           )}
           <span className={`shrink-0 font-semibold ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>· {instrumentLegend.timeframe}</span>
+          {(replayActive || replaySelecting) && (
+            // Jako v TradingView: modrá ikona u symbolu, aby bylo vidět, že
+            // graf neukazuje živá data, i když je replay panel odtažený jinam.
+            <span
+              data-replay-legend
+              className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-[#2962ff] text-white"
+              title="Bar Replay"
+              aria-label="Graf je v Bar Replay"
+            ><Rewind size={9} fill="currentColor" /></span>
+          )}
         </div>
-        <div className={`flex h-4 items-center gap-2 font-medium ${isDark ? 'text-slate-300' : 'text-slate-600'}`} aria-label="OHLC označené svíčky">
+        <div className={`flex h-4 items-center gap-2 font-medium ${phoneLayout ? 'overflow-hidden' : ''} ${isDark ? 'text-slate-300' : 'text-slate-600'}`} aria-label="OHLC označené svíčky">
           <span ref={ohlcValuesRef} hidden={!chartSettings.statusLine.chartValues} />
           <span ref={ohlcChangeRef} hidden={!chartSettings.statusLine.barChangeValues} />
           {chartSettings.statusLine.volume && <span ref={volumeValueRef} />}
@@ -5205,6 +5347,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         <ChartSettingsDialog
           settings={chartSettings}
           isDark={isDark}
+          journalProfile={isChartSettingsJournalProfile()}
           onPreview={next => updateChartSettings(next, false)}
           onCancel={() => {
             if (chartSettingsBackupRef.current) updateChartSettings(chartSettingsBackupRef.current, false);
@@ -5212,9 +5355,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             setChartSettingsOpen(false);
           }}
           onApply={(next, allPanels) => {
+            const previous = chartSettingsBackupRef.current;
             chartSettingsBackupRef.current = null;
             updateChartSettings(next, true, allPanels);
             setChartSettingsOpen(false);
+            if (previous && isChartSettingsJournalProfile()) {
+              announceChartProfileChange('Nastavení grafu změněno pro všechny grafy', () => {
+                if (isChartSettingsJournalProfile()) updateChartSettings(previous, true, true);
+              });
+            }
           }}
         />,
         document.body,
@@ -5223,7 +5372,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         <ChartIndicatorSettingsDialog
           indicator={settingsDialogIndicator}
           settings={indicatorSettings}
-          singleChart={indicatorSettingsOverride != null}
+          // Profil deníku: uložení platí vždy pro všechny grafy, volba „všechny grafy“ tu nemá smysl.
+          singleChart={indicatorSettingsOverride != null || isIndicatorJournalProfile()}
           onPreview={next => updateIndicatorSettings(next)}
           onCancel={() => {
             if (settingsBackupRef.current) updateIndicatorSettings(settingsBackupRef.current);
@@ -5231,19 +5381,31 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             setSettingsDialogIndicator(null);
           }}
           onApply={(next, allPanels) => {
-            updateIndicatorSettings(next, allPanels);
-            if (indicatorSettingsOverride) {
-              persistTradeChartIndicatorSettings(next);
-              onIndicatorSettingsSaved?.();
-            } else {
-              persistPanelIndicatorSettings(
-                next,
-                { panelId: settingsPanelId, allPanels },
-                legacySettingsStorageKey,
-              );
-            }
+            const previous = settingsBackupRef.current;
+            const save = (value: AlphaTradeIndicatorSettings) => {
+              // Nejdřív uložit, pak rozeslat — ostatní grafy si při události
+              // přečtou profil z úložiště a musí už najít novou hodnotu.
+              if (indicatorSettingsOverride) {
+                persistTradeChartIndicatorSettings(value);
+                onIndicatorSettingsSaved?.();
+              } else {
+                persistPanelIndicatorSettings(
+                  value,
+                  { panelId: settingsPanelId, allPanels },
+                  legacySettingsStorageKey,
+                );
+              }
+              updateIndicatorSettings(value, allPanels, true);
+            };
+            save(next);
             settingsBackupRef.current = null;
             setSettingsDialogIndicator(null);
+            if (previous && isIndicatorJournalProfile()) {
+              announceChartProfileChange('Styl indikátoru změněn ve všech grafech', () => {
+                // Mezitím otevřený backtest: návrat deníku do session nepatří.
+                if (isIndicatorJournalProfile()) save(previous);
+              });
+            }
           }}
         />,
         // Mimo graf: v detailu obchodu by ho modal (transform + overflow) ořízl.

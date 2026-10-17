@@ -42,6 +42,8 @@ const toDateTimeLocalValue = (unixSeconds: number): string => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
+export interface ReplayTradeGoTo { id: string; label: string; hint: string }
+
 export const ReplayGoToMenu: React.FC<{
   settings: ReplayGoToSettings;
   onSettingsChange: (settings: ReplayGoToSettings) => void;
@@ -55,7 +57,12 @@ export const ReplayGoToMenu: React.FC<{
   /** Lidský název pásma do popisku dialogu ("Praha"). */
   timeZoneLabel: string;
   buttonClassName: string;
-}> = ({ settings, onSettingsChange, onGoTo, disabled, isDark, cursorTime, timeZone, timeZoneLabel, buttonClassName }) => {
+  /** Skoky na události obchodu (fullscreen obchodu) — fungují i před spuštěním replaye. */
+  tradeTargets?: readonly ReplayTradeGoTo[];
+  onTradeTarget?: (id: string) => void;
+  /** Session / Silver Bullet / cena: jen když replay běží. */
+  standardTargets?: boolean;
+}> = ({ settings, onSettingsChange, onGoTo, disabled, isDark, cursorTime, timeZone, timeZoneLabel, buttonClassName, tradeTargets = [], onTradeTarget, standardTargets = true }) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -111,7 +118,25 @@ export const ReplayGoToMenu: React.FC<{
       </button>
 
       {open && (
-        <div className={`absolute bottom-10 left-0 z-[700] w-[230px] overflow-hidden rounded-lg border py-1 shadow-2xl ${menuSurface}`}>
+        <div data-chart-overlay-menu className={`absolute bottom-10 left-0 z-[700] w-[230px] overflow-hidden rounded-lg border py-1 shadow-2xl ${menuSurface}`}>
+          {tradeTargets.length > 0 && onTradeTarget && (
+            <>
+              <div className="px-3 pb-1 pt-1.5 text-[9px] font-black uppercase tracking-[0.13em] text-slate-500">Obchod</div>
+              {tradeTargets.map(target => (
+                <button
+                  key={target.id}
+                  type="button"
+                  onClick={() => { setOpen(false); onTradeTarget(target.id); }}
+                  className={`w-full h-8 px-3 flex items-center justify-between gap-3 text-left text-[11px] font-bold ${rowHover}`}
+                >
+                  <span>{target.label}</span>
+                  <span className="text-[10px] font-medium tabular-nums text-slate-500">{target.hint}</span>
+                </button>
+              ))}
+              {standardTargets && <div className={`my-1 border-t ${isDark ? 'border-white/10' : 'border-slate-200'}`} />}
+            </>
+          )}
+          {standardTargets && <>
           {favorites.length === 0 && (
             <p className="px-3 py-3 text-[10px] font-medium text-slate-500">
               Žádný oblíbený cíl. Přidej si ho hvězdičkou v nastavení.
@@ -140,6 +165,7 @@ export const ReplayGoToMenu: React.FC<{
           >
             Vlastní nastavení
           </button>
+          </>}
         </div>
       )}
 
@@ -234,6 +260,7 @@ const ReplayGoToSettingsDialog: React.FC<{
 
   return createPortal(
     <div
+      data-chart-overlay-menu
       className="fixed inset-0 z-[900] flex items-center justify-center bg-black/50 p-4"
       onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}
     >

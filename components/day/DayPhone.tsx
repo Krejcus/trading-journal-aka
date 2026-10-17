@@ -14,6 +14,9 @@ import { CloseSide, SummaryBar, closeRequirements, closeSessionStatus } from './
 import { focusRange, sessionBands } from './dayFocus';
 import type { DayPinPoint } from './DayNotesLayer';
 import type { DayController } from './useDayController';
+import DayFullscreenChart from './DayFullscreenChart';
+import type { MarketTimeframe } from '../../services/marketData';
+import { readStoredDayChartTimeframe, writeStoredDayChartTimeframe } from '../../lib/dayChartTools';
 
 const clock = (ms: number) => pragueClock(ms);
 const bottomOffset = 'calc(var(--native-shell-tab-bar-height, 0px) + 12px)';
@@ -114,6 +117,19 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
   const [saveError, setSaveError] = useState<string | null>(null);
   const [celebration, setCelebration] = useState<{ kind: 'prep' | 'close'; session: DaySession; seconds?: number } | null>(null);
   const { mode, modeSession: session } = ctl;
+  // Timeframe sdílí kompaktní i celoobrazovkový graf a přežije reload.
+  const [timeframe, setTimeframeState] = useState<MarketTimeframe>(() => readStoredDayChartTimeframe(typeof window === 'undefined' ? null : window.localStorage));
+  const setTimeframe = (next: MarketTimeframe) => { setTimeframeState(next); writeStoredDayChartTimeframe(window.localStorage, next); };
+  const [fullscreen, setFullscreen] = useState(false);
+  // Otočení na šířku otevře celou obrazovku; zpět na výšku ji nezavře
+  // (rozdělaná kresba nebo poznámka by se ztratila) — zavírá tlačítko.
+  useEffect(() => {
+    const media = window.matchMedia?.('(orientation: landscape)');
+    if (!media) return;
+    const update = () => { if (media.matches) setFullscreen(true); };
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
   const screenKey = `${ctl.day}:${mode}:${session}`;
   const screenRef = useRef(screenKey);
   screenRef.current = screenKey;
@@ -126,14 +142,21 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
     : mode === 'close' ? ctl.pinViews(note => note.session === session) : ctl.pinViews(note => ctl.scope === 'day' || note.session === ctl.scope || note.session === 'day');
   const selectedChartTrade = mode === 'day' && ctl.selectedTrade ? ctl.chart.chartTrades.find(trade => String(trade.id) === String(ctl.selectedTrade!.id)) ?? null : null;
   const pick = (point: DayPinPoint) => { const record = ctl.placing === 'voice'; ctl.setPlacing(null); ctl.setPendingPoint(point); setSheet({ kind: 'pin', point, record }); };
-  const chart = (height: number) => (
+  // Při celé obrazovce se kompaktní graf odpojí: oba grafy sdílí jeden klíč
+  // kreseb a skrytý graf by při překreslení překryvů přepsal úložiště starým
+  // stavem. Po zavření se znovu připojí a načte kresby z celé obrazovky.
+  const chart = (height: number) => fullscreen ? (
+    <div className="dj" style={{ height: height + 37, display: 'grid', placeItems: 'center', borderTop: '1px solid var(--dj-line)', borderBottom: '1px solid var(--dj-line)', fontSize: 12, color: 'var(--dj-muted)' }}>Graf je otevřený na celou obrazovku</div>
+  ) : (
     <DayCompactChart
       ctl={ctl} isDark={isDark} height={height} range={range} focusKeyPrefix={`${mode}:${session}:${ctl.scope}`}
       selectedTrade={selectedChartTrade} pins={pins} bubbles={mode === 'prep' ? 'all' : 'selected'}
       placing={ctl.placing} onPick={pick} onCancelPlacing={() => ctl.setPlacing(null)} pending={ctl.pendingPoint}
       nowTime={mode === 'prep' && ctl.isToday ? Math.floor(ctl.now / 1000) : null} bands={bands}
+      timeframe={timeframe} onTimeframe={setTimeframe} onExpand={() => setFullscreen(true)}
     />
   );
+  const toggleVoice = () => { ctl.setPendingPoint(null); ctl.setPlacing(ctl.placing === 'voice' ? null : 'voice'); };
   const closeSheet = () => { setSheet(null); ctl.setPendingPoint(null); };
 
   const save = async (kind: 'prep' | 'close') => {
@@ -257,6 +280,15 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
         <div style={{ width: '100%', maxWidth: 520, margin: '0 auto', display: 'flex', justifyContent: 'center' }}>{bottom && <div style={{ width: mode === 'day' ? undefined : '100%' }}>{bottom}</div>}</div>
       </div>
 
+      {fullscreen && (
+        <DayFullscreenChart
+          ctl={ctl} isDark={isDark} timeframe={timeframe} onTimeframe={setTimeframe} range={range} focusKeyPrefix={`${mode}:${session}:${ctl.scope}`}
+          selectedTrade={selectedChartTrade} pins={pins} bubbles={mode === 'prep' ? 'all' : 'selected'}
+          placing={ctl.placing} onPick={pick} onCancelPlacing={() => ctl.setPlacing(null)} pending={ctl.pendingPoint}
+          nowTime={mode === 'prep' && ctl.isToday ? Math.floor(ctl.now / 1000) : null} bands={bands}
+          onClose={() => setFullscreen(false)} onVoice={toggleVoice}
+        />
+      )}
       {sheet?.kind === 'pin' && <PinSheet ctl={ctl} point={sheet.point} autoRecord={sheet.record} onClose={closeSheet} />}
       {sheet?.kind === 'dictate' && <DictationDialog ctl={ctl} sheet onClose={() => setSheet(null)} />}
       {mode === 'day' && ctl.selectedTrade && <TradeSheet ctl={ctl} trade={ctl.selectedTrade} onOpenTrade={onOpenTrade} onClose={() => ctl.setSelected(null)} />}

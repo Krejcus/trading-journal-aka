@@ -8,6 +8,7 @@ import { isNativeBuild } from './utils/runtimeConfig';
 import { registerNativeOAuthCallback } from './services/nativeOAuth';
 import { registerNativeNotificationActions } from './services/nativeNotifications';
 import NativePrivacyGate from './components/NativePrivacyGate';
+const DrawingMigrationPrompt = React.lazy(() => import('./components/DrawingMigrationPrompt'));
 import { parseSnapshotRenderParams } from './lib/snapshotRender';
 import { perfMark, startJankMonitor } from './lib/perfTrace';
 perfMark('boot:js-eval');
@@ -131,6 +132,7 @@ const renderApp = () => {
           forceUpdate={forceUpdate}
         />
         <App />
+        <React.Suspense fallback={null}><DrawingMigrationPrompt /></React.Suspense>
         <NativePrivacyGate />
       </ErrorBoundary>
     </React.StrictMode>
@@ -141,6 +143,8 @@ const renderApp = () => {
 // snímky a nová zařízení. Stránka snímku ho jen čte.
 if (!snapshotRenderParams) {
   void import('./services/chartProfileSync').then(({ startChartProfileSync }) => startChartProfileSync());
+  // Kresby v grafech deníku jako jedna vrstva podle trhu a času (chart_drawings).
+  void import('./services/chartDrawingLayer').then(({ startChartDrawingLayer }) => startChartDrawingLayer());
 }
 
 // Initial render

@@ -132,6 +132,8 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     private let bridgeController = AlphaTradeBridgeViewController()
     private let shellTabBar = UITabBar()
     private var shellTabBarHeight: NSLayoutConstraint?
+    /// Web (celoobrazovkový graf) lištu schoval; layout ji nesmí zase ukázat.
+    private var tabBarHiddenByWeb = false
     private var tabSlots = AlphaTradeTabCatalog.loadSlots()
     private var activePage = "dashboard"
     private var activeTheme = "dark"
@@ -178,7 +180,7 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        shellTabBar.isHidden = false
+        shellTabBar.isHidden = tabBarHiddenByWeb
         shellTabBar.layer.zPosition = 1_000
         view.bringSubviewToFront(shellTabBar)
 #if DEBUG
@@ -254,7 +256,7 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         shellTabBar.tintColor = selectedColor
         shellTabBar.unselectedItemTintColor = normalColor
         shellTabBar.backgroundColor = .clear
-        shellTabBar.isHidden = false
+        shellTabBar.isHidden = tabBarHiddenByWeb
         shellTabBar.setNeedsDisplay()
         shellTabBar.setNeedsLayout()
     }
@@ -306,6 +308,29 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         NSLog("[AlphaTradeThemeBridge] received=%@ main=%d", theme, Thread.isMainThread)
 #endif
         applyTheme(theme)
+    }
+
+    /// Web schová lištu pro celoobrazovkový graf (a zase ji vrátí). Webview
+    /// už sahá až ke spodnímu okraji, takže stačí lištu odsunout a schovat;
+    /// výběr karty a položky zůstávají, nic se nepřestavuje.
+    func setTabBarHiddenFromWeb(_ hidden: Bool) {
+        guard tabBarHiddenByWeb != hidden else { return }
+        tabBarHiddenByWeb = hidden
+        let offset = shellTabBar.bounds.height
+        if hidden {
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut]) {
+                self.shellTabBar.transform = CGAffineTransform(translationX: 0, y: offset)
+                self.shellTabBar.alpha = 0
+            } completion: { _ in
+                self.shellTabBar.isHidden = self.tabBarHiddenByWeb
+            }
+        } else {
+            shellTabBar.isHidden = false
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut]) {
+                self.shellTabBar.transform = .identity
+                self.shellTabBar.alpha = 1
+            }
+        }
     }
 
     func completeNativeRefresh(success: Bool) {

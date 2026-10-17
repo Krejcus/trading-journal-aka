@@ -1,4 +1,4 @@
-import { chartAppearanceUserId, inheritGlobalAppearance } from './chartAppearanceScope';
+import { chartAppearanceUserId, inheritGlobalAppearance, stampChartProfileEdit } from './chartAppearanceScope';
 import { mergeIndicatorSettings, type AlphaTradeIndicatorSettings } from './chartIndicatorSettings';
 import { panelSettingsEnvelope } from './chartPanelSettings';
 
@@ -35,15 +35,25 @@ export function hasLatestIndicatorSettings(): boolean {
   try { return window.localStorage.getItem(scopedKey(LATEST_STYLE_KEY)) != null; } catch { return false; }
 }
 
-/** Snapshot pro detail: naposledy použitý styl → globální sdílený → výchozí. */
-export function detailIndicatorStyleSnapshot(): AlphaTradeIndicatorSettings {
+/**
+ * Styl indikátorů profilu deníku (všechny grafy mimo backtest): sdílená
+ * hodnota → dřívější „naposledy použitý“ styl → první panel → výchozí.
+ * Odchylky panelů z doby před profilem se čtou jen jako záloha.
+ */
+export function journalIndicatorProfile(envelopeRaw: unknown): AlphaTradeIndicatorSettings {
+  const envelope = panelSettingsEnvelope<AlphaTradeIndicatorSettings>(envelopeRaw);
+  if (envelope.shared !== undefined) return mergeIndicatorSettings(JSON.stringify(envelope.shared));
   try {
     const latest = window.localStorage.getItem(scopedKey(LATEST_STYLE_KEY));
     if (latest) return mergeIndicatorSettings(latest);
   } catch { /* bez úložiště */ }
-  const envelope = panelSettingsEnvelope<AlphaTradeIndicatorSettings>(inheritGlobalAppearance('indicatorSettings'));
-  const shared = envelope.shared ?? Object.values(envelope.panels)[0];
-  return mergeIndicatorSettings(shared ? JSON.stringify(shared) : null);
+  const first = Object.values(envelope.panels)[0];
+  return mergeIndicatorSettings(first ? JSON.stringify(first) : null);
+}
+
+/** Snapshot pro detail: profil deníku z globálního úložiště (nikdy z backtest session). */
+export function detailIndicatorStyleSnapshot(): AlphaTradeIndicatorSettings {
+  return journalIndicatorProfile(inheritGlobalAppearance('indicatorSettings'));
 }
 
 /**
@@ -77,6 +87,7 @@ export function hasSavedTradeChartIndicators(): boolean {
 export function writeTradeChartIndicators(next: TradeChartIndicators): void {
   const value = { fvg: next.fvg, levels: next.levels, structure: next.structure };
   try { window.localStorage.setItem(DETAIL_TOGGLES_KEY, JSON.stringify(value)); } catch { /* jen pro tuto relaci */ }
+  stampChartProfileEdit();
   window.dispatchEvent(new CustomEvent(TRADE_CHART_INDICATORS_EVENT, { detail: value }));
 }
 

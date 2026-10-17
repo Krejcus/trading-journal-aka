@@ -262,6 +262,108 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-17 odpoledne — Kresby a poznámky jako jedna vrstva podle trhu a času (Claude, větev, tabulka NASAZENA, appka NE)
+- Filip schválil novou tabulku **`chart_drawings`** (bez zálohy, jen přidání). Aplikováno na produkci
+  přes MCP `apply_migration` (soubor `supabase/migrations/20261017100000_chart_drawings.sql`,
+  SQL testy `tests/sql/chartDrawings.pg.mjs`); advisory bez nálezů k nové tabulce kromě očekávaných
+  „unused index“ (prázdná tabulka). Řádek = kresba: `market 'NQ'` (MNQ i NQ sdílí), `day` = pražské
+  datum prvního bodu, `carry_forward` (z `style.carryForward`), měkké mazání, trigger: starší
+  `edited_at` novější nepřepíše, úprava z budoucnosti se ořízne, `auto-*` odmítnuto.
+- Klient `services/chartDrawingLayer.ts`: cache v localStorage per uživatel, graf čte/zapisuje přes
+  CandleKit `kv` okno svých **dnů** (ne časů — replay mění data každý krok), diff po kresbách,
+  smazat smí jen kresby, které graf měl (`known`), push se zpožděním + zpětné čtení (trigger mohl
+  starší úpravu odmítnout), pull přírůstkově podle `updated_at`. Backtest dál po staru (session).
+- Zjištěno při inventuře: v localStorage jsou i **automatické vrstvy** (`auto-structure-*`,
+  `auto-risk-*`) — `engine.export()` je ukládá; převod je vynechává. Stejná kresba je ve víc
+  panelech (synchronizace kreseb) → slučuje se podle id.
+- Převod: `DrawingMigrationPrompt` jednou na zařízení (localStorage je per prohlížeč — produkce,
+  localhost a iPhone zvlášť) ukáže náhled (odkud, dny, sloučené kopie, konflikty) a převede až po
+  „Převést“; staré klíče zůstávají jako záloha. Na localhostu: 28 klíčů → 2 skutečné kresby.
+  Do potvrzení grafy ukazují jen vrstvu (staré kresby „zmizí“, dokud se nepřevedou).
+- Poznámky bez převodu a bez nové tabulky: grafy obchodu ukazují poznámky dne (jen pro čtení,
+  s fází Příprava/Živě/Retro), grafy Deníku poznámky k obchodům dne. Zapisuje se dál tam, kde dřív.
+
+### 2026-10-17 — Profil grafů pro celý deník, barvy podle motivu (Claude, větev, NEnasazeno)
+- Filip rozhodl: grafy normální appky (detail, fullscreen, přehrávání, Review, Deník dne, telefon,
+  snímky) mají **jeden profil**; backtest je úplně stranou (vlastní session nastavení). Změna
+  kdekoli = změna všude (bez přepínače „synchronizovat“), hláška „Změněno pro všechny grafy ·
+  Vrátit“. Oko v legendě schová indikátor jen v daném grafu, křížek ho odebere ze všech.
+- Příčina „graf je černý ve světlé appce“: `saveChartSettings` ukládal celý objekt včetně
+  výchozích barev tmavého motivu a cache `loadChartSettings` neznala motiv. Nově se barvy
+  závislé na motivu (`THEMED_CHART_COLOR_KEYS`) ukládají jen jako ruční odchylka do
+  `themed.{light,dark}`; starý zápis s výchozí barvou kteréhokoli motivu = „podle motivu“.
+  Grafy se po přepnutí motivu přebarví bez reloadu.
+- Mimo backtest: `saveChartSettings` vždy `allPanels`, čtení přes `readProfileSettings`
+  (shared → panel default → první panel); styl indikátorů stejně (`journalIndicatorProfile`),
+  backtest už nepíše `indicator-style-latest` (dřív jeho styl prosakoval do detailu). Panely
+  fullscreenu sledují zapnuté indikátory živě a pamatují si timeframy
+  (`alphatrade:chart-workspace-layout[:scope]:timeframes`).
+- Dialog nastavení v deníku: jedno „Uložit pro všechny grafy“, schované volby, které fungují jen
+  v backtestu (Quick Order, auto box, čáry objednávek, trojúhelníky fillů, spojnice).
+- Synchronizace `user_chart_profiles` je obousměrná (bez změny schématu, `updated_at`): push
+  místní změny do 30 s, pull po přihlášení, při návratu do appky a každé 2 min; novější vyhraje
+  (`decideChartProfileSync`), první běh nové verze převezme server. Profil nově nese i výchozí
+  styly kreslení. Stav v `alphatrade:chart-profile-sync:v2:user:<uid>`.
+- Záložka Grafy v Nastavení appky **záměrně není** (Filip: nepotřebné) — vzhled se upravuje jen
+  v grafu (pravé tlačítko → Nastavení) a platí všude.
+- Starší verze appky (produkce, iPhone bundle) `themed` neznají: barvy závislé na motivu u nich
+  padnou na výchozí podle motivu (ruční barvy pozadí uvidí jen nová verze).
+
+### 2026-10-15 dopoledne — Grafy blíž TradingView: replay panel, panely, telefon (Claude, větev, NEnasazeno)
+- Inventura grafů: tři replaye (detail `TradeReplayBar`, workspace Bar Replay, iOS lab), dva
+  kreslicí systémy (desktop toolbar vs. telefonní `dayChartTools`), dvě vrstvy poznámek. Varianta
+  `TradeMarketChart` „full“ (klasický lightweight-charts + `lightweight-charts-drawing`) nemá
+  volajícího. Srovnání proti živému TradingView přes MCP (rychlosti 10…0,1×, ⇧↓/⇧→, start
+  Bar/Date/First/Random, X, skok na realtime, ikona ⏪ v legendě).
+- Filip rozhodl: replay panel jako TV, ale **dál volně přesouvatelný** (nekotvit pod graf);
+  sjednocení replaye v detailu obchodu (+ TV zkratky) **nedělat**; telefon a spodní řádek ano.
+  REA (reverse engineering) a TradingView Advanced Charts se pro tohle nepoužijí.
+- Větev `claude/tv-replay-parity-20261015` (worktree `~/alphatrade-worktrees/tv-parity`, nad
+  `claude/day-chart-fullscreen-20261014`, protože sahá na stejné grafy dne):
+  - Bar Replay panel: menu Start (svíčka / datum v pásmu grafu / první / náhodná), vlastní menu
+    rychlosti s popisem „N kroků za 1 s“, skok na konec dat, X. Start/konec/X jen mimo backtest —
+    session hlídá zpracované obchody a data dotahuje po kouscích. Start bez kliknutí drží šířku
+    svíček (záporné `from`), dřív byla jedna svíčka přes celý graf.
+  - Panely bez tab stripu (`tabSetEnableTabStrip: false`; tabset s víc taby ze starších rozložení
+    strip dostane zpátky), „+ Graf“ přidá panel vedle aktivního (dřív schovaný tab), maximalizace
+    a zavření při najetí myší. Spodní řádek: 30m/1H/4H/Vše, „Přejít na“ datum, hodiny v pásmu
+    grafu. Delší rozsahy (5D, 1M) záměrně ne — graf obchodu má načtené jedno denní okno Databento.
+  - Telefon (`phoneLayout` jen pro `DayCompactChart`/`DayFullscreenChart`): legenda bez dlouhého
+    názvu instrumentu a oříznutá před osou, štítky úrovní/VWAP na ose prořídnuté bez překryvů
+    (`thinPriceAxisLabels`). Úzký „sloupek“ pozice uvnitř jedné svíčky je správně (min. šířka
+    = jedna svíčka už existovala).
+
+### 2026-10-15 — Dotykové kreslení podle TradingView mobilu (Claude, větev, NEnasazeno na web)
+- Podle Filipova videa z TradingView: s nástrojem v ruce je crosshair hned uprostřed, tah prstem ho
+  posouvá jako touchpad, klepnutí potvrdí bod. Nový virtuální nástroj **Šipka = Path**: klepnutí =
+  zlom, dvojklep = konec; úseky jsou kresby CandleKit se skupinou v ID (`path:<skupina>:<n>`,
+  `TrendLine` + poslední `Arrow`), barva/koš platí pro celou cestu, tah zlomu posune i sousední úsek,
+  tah úsekem celou cestu. Kompaktní graf se při celé obrazovce odpojí a po zavření načte kresby.
+- Filip potvrdil na iPhonu, že kreslení i úpravy fungují. Jiná session mezitím přeinstalovala appku
+  z `main` bez téhle větve → do větve sloučen `origin/main` (live journal), sada 5302/5302, tsc čistý,
+  appka znovu nainstalovaná. Dokud větev není na `main`, každá cizí reinstalace ji z telefonu smaže.
+
+### 2026-10-14 odpoledne — Fáze 1 celoobrazovkového grafu + dotykové kreslení (Claude, větev, NEnasazeno)
+- Větev `claude/day-chart-fullscreen-20261014` (v Documents): `DayFullscreenChart` (portál přes celý
+  displej, hlavička, sbalené indikátory, spodní pruh normální/kreslení, lišta vybrané kresby s barvami
+  long/short/neutrál a košem), `DayCompactChart` má tlačítko „zvětšit“ a řízený timeframe (sdílený,
+  `at:day-chart:timeframe`), otočení na šířku otevře celou obrazovku. Kresby `day:<den>` se scope
+  `day` (společné pro timeframy i kompaktní graf; zatím jen localStorage zařízení). iOS plugin
+  `setShellChrome({ tabBarHidden })` schová `UITabBar` (flag `tabBarHiddenByWeb`, jinak ho
+  `viewDidLayoutSubviews` vracel). `lib/dayChartTools.ts` + test (6).
+- **Zjištění z prototypu na iPhonu: prstem se nic nenakreslilo.** Řadič kreslení CandleKit
+  (`api.drawing` = `DrawingController`) poslouchá jen `mousedown/mousemove/mouseup`; iOS při
+  `touch-action: none` (nastavuje `attachChartTouchGestures`) žádné náhradní události myši
+  neposílá. Oprava `DayTouchDrawLayer`: dotyky se překládají na `onDown/onMove/onUp` řadiče
+  (souřadnice vůči `chartElement()`), takže nástroje, magnet, výběr i přesun jedou stejně jako
+  myší. UX jako TradingView mobil (Filipův popis): klepnutí = první bod, tah natáhne, puštění
+  dokončí; klepnutí bez tahu nechá kresbu otevřenou pro druhé klepnutí; bez nástroje klepnutí
+  vybere, tah přesune, jinde graf posouvá; dva prsty = pinch. `drawingHitTolerance=14` (nový prop
+  `CandleKitTradeChart`), nástroj zůstává v ruce (`installKeepDrawingBehavior`). Čeká na test prstem.
+- Mimochodem ověřeno zadání z 13. 10.: Filipova hlasová poznámka z telefonu 14:53 má v DB
+  `written_at` 12:53:14 UTC (= 14:53 Praha), `session london`, `origin chart`, `voice true`;
+  MCP `get_journal_day` hlásí `zapsáno 14:53 · fáze živě · London · ukazuje na 14:02 @ 30737`.
+
 ### 2026-10-14 — Zadání: celoobrazovkový graf dne na telefonu s kreslením (Claude + Filip)
 - Nasazeno ráno: `685e5af5` (světlý režim deníku, jeden graf, levý sloupec od 1280 px, slučování
   živých svíček) na web i do iPhonu (čistá reinstalace z `~/alphatrade-build/ios-dd`).

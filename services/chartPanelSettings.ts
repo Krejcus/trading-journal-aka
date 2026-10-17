@@ -54,6 +54,18 @@ export const readPanelSettings = <T,>(raw: unknown, panelId: string): T | undefi
   return own !== undefined ? own : envelope.shared;
 };
 
+/**
+ * Profil deníku: jedno nastavení pro všechny grafy mimo backtest. Odchylky
+ * panelů z dřívějška se čtou jen jako záloha, když sdílená hodnota chybí —
+ * první uložení je pak sloučí do `shared` (viz `writeAllPanelSettings`).
+ */
+export const readProfileSettings = <T,>(raw: unknown): T | undefined => {
+  const envelope = panelSettingsEnvelope<T>(raw);
+  if (envelope.shared !== undefined) return envelope.shared;
+  if (envelope.panels[DEFAULT_CHART_PANEL_ID] !== undefined) return envelope.panels[DEFAULT_CHART_PANEL_ID];
+  return Object.values(envelope.panels)[0];
+};
+
 export const writePanelSettings = <T,>(
   raw: unknown,
   panelId: string,

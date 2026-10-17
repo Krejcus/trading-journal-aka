@@ -27,13 +27,15 @@ import ChartNotesLayer, { type ChartNoteAddRequest } from './ChartNotesLayer';
 import ChartSnapshotButton from './ChartSnapshotButton';
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
+import { useDayNotesForWindow } from '../hooks/useDayNotesForWindow';
+import { drawingLayerDay } from '../services/chartDrawingLayer';
 import TradeReplayBar, { type TradeReplayGoTo, type TradeReplaySpeed } from './TradeReplayBar';
 import { entrySnapshotMoment, historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
 import { candleReplayPath, candleUntilFill, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
 import { JOURNAL_BUY_COLOR, JOURNAL_SELL_COLOR } from '../services/journalChartPrimitive';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { Trade } from '../types';
-import CandleKitTradeChart from './CandleKitTradeChart';
+import CandleKitTradeChart, { SHARED_INDICATOR_SETTINGS_EVENT } from './CandleKitTradeChart';
 import AlphaTradeChartWorkspace, { type WorkspaceReviewSlots } from './AlphaTradeChartWorkspace';
 import ChartTimeframePicker from './ChartTimeframePicker';
 import {
@@ -224,7 +226,19 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // po jeho vyřešení (a po změně session) se snapshot přečte znovu.
   const [indicatorStyleVersion, setIndicatorStyleVersion] = useState(0);
   useEffect(() => onChartAppearanceScopeBroadcast(() => setIndicatorStyleVersion(value => value + 1)), []);
-  // Znovu i při každém návratu na graf (styl mohl být mezitím uložen v backtestu).
+  // Profil deníku: změna stylu v jiném grafu (fullscreen, Deník dne) se hned
+  // projeví i tady.
+  useEffect(() => {
+    // Jen po uložení (nebo pokynu přečíst znovu) — náhled v dialogu ještě
+    // v úložišti není a přečtení by ho hned vrátilo zpět.
+    const reread = (event: Event) => {
+      const detail = (event as CustomEvent<{ persisted?: boolean; reload?: boolean }>).detail;
+      if (detail?.persisted || detail?.reload) setIndicatorStyleVersion(value => value + 1);
+    };
+    window.addEventListener(SHARED_INDICATOR_SETTINGS_EVENT, reread);
+    return () => window.removeEventListener(SHARED_INDICATOR_SETTINGS_EVENT, reread);
+  }, []);
+  // Znovu i při každém návratu na graf.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- verze = pokyn přečíst znovu
   const indicatorStyle = useMemo(() => detailIndicatorStyleSnapshot(), [indicatorStyleVersion, revealKey]);
   const levelsWanted = tradeIndicators.levels;
@@ -244,7 +258,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const [speed, setSpeed] = useState<TradeReplaySpeed>(1);
   const [focusRequest, setFocusRequest] = useState(0);
   const replayStart = floorMinute(Math.floor(entryMs / 1000)) - 10 * 60;
-  const replayEnd = floorMinute(Math.floor(exitMs / 1000)) + 5 * 60;
+  // Po výstupu ještě čtvrthodina — je vidět, kam trh šel dál.
+  const replayEnd = floorMinute(Math.floor(exitMs / 1000)) + 15 * 60;
   // Události v právě odkryté svíčce už proběhly — svíčka pokrývá celou minutu.
   const cutoffMs = snapshotEntry ? snapshotEntry.cutoffMs : cursor == null ? null : (cursor + REPLAY_STEP_S) * 1000 - 1;
   const replayAnimationRef = useRef<{ time: number; progress: number } | null>(null);
@@ -546,6 +561,12 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const [noteAddRequest, setNoteAddRequest] = useState<ChartNoteAddRequest | null>(null);
   const notes = useMemo(() => chartNotes ?? chartNotesOf(trade), [chartNotes, trade]);
   const noteBarTimes = useMemo(() => replayRawCandles.map(candle => candle.time), [replayRawCandles]);
+  // Poznámky dne (příprava / živě / retro) pro dny grafu — jen pro čtení.
+  const dayNotes = useDayNotesForWindow(
+    rawCandles.length ? drawingLayerDay(rawCandles[0].time) : null,
+    rawCandles.length ? drawingLayerDay(rawCandles[rawCandles.length - 1].time) : null,
+    !snapshotMode,
+  );
   replayLoopRef.current = { cursor, rawCandles, chartApi, timeframe };
   const entryFill = useMemo(() => history?.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0], [history]);
   const showEntryLevel = entryFill != null && entryFill.at <= (cutoffMs ?? Infinity);
@@ -1054,6 +1075,19 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             isDark={isDark}
             addRequest={noteAddRequest}
             onChange={next => onChartNotesChange?.(next)}
+          />
+        )}
+        {candles.length > 0 && !loading && !error && dayNotes.length > 0 && (
+          <ChartNotesLayer
+            chartApi={chartApi}
+            containerRef={chartAreaRef}
+            notes={dayNotes}
+            barTimes={noteBarTimes}
+            replayCursor={cursor}
+            editable={false}
+            isDark={isDark}
+            addRequest={null}
+            onChange={() => {}}
           />
         )}
         {candles.length > 0 && !loading && !error && !snapshotMode && (

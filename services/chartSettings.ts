@@ -19,6 +19,7 @@ import {
   type ChartDateFormat,
 } from './chartTimeAxisFormat';
 import {
+  activeChartAppearanceScope,
   CHART_APPEARANCE_STORAGE_KEYS,
   inheritGlobalAppearance,
   onChartAppearanceScopeBroadcast,
@@ -30,6 +31,7 @@ import {
 import {
   DEFAULT_CHART_PANEL_ID,
   readPanelSettings,
+  readProfileSettings,
   writeAllPanelSettings,
   writePanelSettings,
   type PanelSettingsTarget,
@@ -315,7 +317,7 @@ export const mergeChartSettings = (
     ...value,
     appearance: { ...fallback.appearance!, ...value?.appearance },
   });
-  return {
+  return withThemedColors({
     symbol: { ...defaults.symbol, ...parsed.symbol },
     statusLine: { ...defaults.statusLine, ...parsed.statusLine },
     scales: {
@@ -336,7 +338,98 @@ export const mergeChartSettings = (
       crosshair: { ...defaults.canvas.crosshair, ...parsed.canvas?.crosshair },
     },
     trading: { ...defaults.trading, ...parsed.trading },
-  };
+  }, saved, isDark);
+};
+
+/**
+ * Barvy, které závisí na motivu appky. Ve výchozím stavu je graf sleduje —
+ * světlá appka má světlé plátno, tmavá tmavé. Ručně zvolená barva se ukládá
+ * zvlášť pro světlý a tmavý motiv (`themed`), takže přepnutí motivu ji nerozbije.
+ */
+export const THEMED_CHART_COLOR_KEYS = [
+  'symbol.bodyUpColor',
+  'symbol.borderUpColor',
+  'symbol.wickUpColor',
+  'canvas.backgroundColor',
+  'canvas.backgroundGradientTop',
+  'canvas.backgroundGradientBottom',
+  'canvas.gridVertColor',
+  'canvas.gridHorzColor',
+  'canvas.crosshair.color',
+  'canvas.watermarkColor',
+  'canvas.scalesTextColor',
+] as const;
+export type ThemedChartColorKey = typeof THEMED_CHART_COLOR_KEYS[number];
+type ThemedChartColors = Partial<Record<ThemedChartColorKey, string>>;
+export interface StoredChartThemes { light?: ThemedChartColors; dark?: ThemedChartColors }
+
+const readPath = (value: unknown, path: string): unknown => path.split('.').reduce<unknown>(
+  (current, key) => current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined,
+  value,
+);
+const writePath = (target: Record<string, unknown>, path: string, next: unknown) => {
+  const keys = path.split('.');
+  let current = target;
+  keys.slice(0, -1).forEach(key => {
+    if (!current[key] || typeof current[key] !== 'object') current[key] = {};
+    current = current[key] as Record<string, unknown>;
+  });
+  const last = keys[keys.length - 1];
+  if (next === undefined) delete current[last];
+  else current[last] = next;
+};
+const themeName = (isDark: boolean): keyof StoredChartThemes => isDark ? 'dark' : 'light';
+
+/** Uložená barva bez `themed` (starší zápis) — výchozí barva kteréhokoli motivu = „podle motivu“. */
+const legacyCustomColor = (saved: unknown, key: ThemedChartColorKey): string | undefined => {
+  const value = readPath(saved, key);
+  if (typeof value !== 'string') return undefined;
+  const isDefault = value === readPath(defaultChartSettings(true), key) || value === readPath(defaultChartSettings(false), key);
+  return isDefault ? undefined : value;
+};
+
+function withThemedColors(settings: ChartSettings, saved: unknown, isDark: boolean): ChartSettings {
+  const defaults = defaultChartSettings(isDark);
+  const themes = saved && typeof saved === 'object' ? (saved as { themed?: StoredChartThemes }).themed : undefined;
+  const own = themes?.[themeName(isDark)];
+  const result = settings as unknown as Record<string, unknown>;
+  THEMED_CHART_COLOR_KEYS.forEach(key => {
+    const chosen = own?.[key] ?? (themes ? undefined : legacyCustomColor(saved, key));
+    writePath(result, key, chosen ?? readPath(defaults, key));
+  });
+  return settings;
+}
+
+/**
+ * Tvar pro uložení: barvy rovné výchozí barvě aktuálního motivu se neukládají
+ * (sledují motiv), ostatní jdou do `themed` pro aktuální motiv. Volby druhého
+ * motivu zůstanou z předchozího uložení — u staršího zápisu se z něj převezmou
+ * ručně zvolené barvy, ať se úpravou ve světlém motivu neztratí tmavé.
+ */
+export const serializeChartSettings = (
+  settings: ChartSettings,
+  isDark: boolean,
+  previous: unknown,
+): ChartSettings & { themed: StoredChartThemes } => {
+  const defaults = defaultChartSettings(isDark);
+  const stored = structuredClone(settings) as unknown as Record<string, unknown>;
+  const current: ThemedChartColors = {};
+  THEMED_CHART_COLOR_KEYS.forEach(key => {
+    const value = readPath(settings, key);
+    if (typeof value === 'string' && value !== readPath(defaults, key)) current[key] = value;
+    writePath(stored, key, undefined);
+  });
+  const previousThemes = previous && typeof previous === 'object' ? (previous as { themed?: StoredChartThemes }).themed : undefined;
+  const otherName = themeName(!isDark);
+  let other: ThemedChartColors = { ...previousThemes?.[otherName] };
+  if (!previousThemes && previous) {
+    other = {};
+    THEMED_CHART_COLOR_KEYS.forEach(key => {
+      const legacy = legacyCustomColor(previous, key);
+      if (legacy !== undefined) other[key] = legacy;
+    });
+  }
+  return { ...(stored as unknown as ChartSettings), themed: { [themeName(isDark)]: current, [otherName]: other } };
 };
 
 const LINE_STYLES: Record<ChartLineStyleName, LineStyle> = {
@@ -587,13 +680,30 @@ const persistEnvelope = (envelope: unknown) => {
   writeGlobalChartAppearance('chartSettings', envelope);
 };
 
+/**
+ * Mimo backtest platí jeden profil pro všechny grafy appky; backtest session
+ * si drží vlastní nastavení po panelech.
+ */
+const isJournalProfile = () => activeChartAppearanceScope() === null;
+const cacheKey = (panelId: string, isDark: boolean) => `${isJournalProfile() ? 'profile' : panelId}:${isDark ? 'dark' : 'light'}`;
+const storedSettingsFor = (panelId: string): unknown => (isJournalProfile()
+  ? readProfileSettings(storedEnvelope())
+  : readPanelSettings(storedEnvelope(), panelId));
+
 export const loadChartSettings = (isDark: boolean, panelId = DEFAULT_CHART_PANEL_ID): ChartSettings => {
-  const cached = cache.get(panelId);
+  const key = cacheKey(panelId, isDark);
+  const cached = cache.get(key);
   if (cached) return structuredClone(cached);
-  const settings = mergeChartSettings(readPanelSettings(storedEnvelope(), panelId) ?? null, isDark);
-  cache.set(panelId, settings);
+  const settings = mergeChartSettings(storedSettingsFor(panelId) ?? null, isDark);
+  cache.set(key, settings);
   return structuredClone(settings);
 };
+
+/** Mimo backtest se ukládá vždy do profilu (všechny grafy). */
+export const chartSettingsSaveTarget = (target: PanelSettingsTarget): PanelSettingsTarget => (
+  isJournalProfile() ? { panelId: target.panelId, allPanels: true } : target
+);
+export const isChartSettingsJournalProfile = isJournalProfile;
 
 /**
  * Rozešle nastavení, ale neuloží ho — náhled v dialogu se tak projeví hned a
@@ -611,18 +721,30 @@ export const broadcastChartSettings = (
 export const saveChartSettings = (
   settings: ChartSettings,
   source: symbol,
-  target: PanelSettingsTarget = { panelId: DEFAULT_CHART_PANEL_ID, allPanels: true },
+  requestedTarget: PanelSettingsTarget,
+  isDark: boolean,
 ): void => {
+  const target = chartSettingsSaveTarget(requestedTarget);
+  const stored = serializeChartSettings(settings, isDark, storedSettingsFor(target.panelId));
+  cache.clear();
   if (target.allPanels) {
-    cache.clear();
-    cache.set(target.panelId, structuredClone(settings));
-    persistEnvelope(writeAllPanelSettings(settings));
+    persistEnvelope(writeAllPanelSettings(stored));
   } else {
-    cache.set(target.panelId, structuredClone(settings));
-    persistEnvelope(writePanelSettings(storedEnvelope(), target.panelId, settings));
+    persistEnvelope(writePanelSettings(storedEnvelope(), target.panelId, stored));
   }
+  cache.set(cacheKey(target.panelId, isDark), structuredClone(settings));
   broadcastChartSettings(settings, source, target);
 };
+
+// Profil ze serveru (jiné zařízení) se zapsal do úložiště — přečíst znovu.
+if (typeof window !== 'undefined') {
+  window.addEventListener('alphatrade:chart-profile-applied', () => {
+    cache.clear();
+    window.dispatchEvent(new CustomEvent(CHART_SETTINGS_EVENT, {
+      detail: { source: Symbol('chart-profile-sync'), reload: true },
+    }));
+  });
+}
 
 // Otevření i zavření session mění platný zdroj nastavení. Cache musí padnout a
 // namontované panely se to dozvědí stejnou cestou jako při běžné úpravě.

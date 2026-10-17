@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Maximize2 } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Trade } from '../../types';
 import CandleKitTradeChart from '../CandleKitTradeChart';
@@ -6,6 +7,8 @@ import { QuantumSpinner } from '../QuantumLoader';
 import { aggregateCandles, MARKET_TIMEFRAME_MINUTES, type MarketTimeframe } from '../../services/marketData';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
+import ChartNotesLayer from '../ChartNotesLayer';
+import { chartNotesOfTrades } from '../../lib/chartNotes';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
 import { dayAnchorTrade, focusTarget, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
@@ -17,10 +20,15 @@ const TIMEFRAMES: MarketTimeframe[] = ['1m', '5m', '15m'];
  * z detailu) bez workspace, s vrstvou poznámek. Ťuknutí v režimu
  * umisťování vrátí čas a cenu.
  */
-export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPrefix, selectedTrade, pins, bubbles, placing, onPick, onCancelPlacing, pending, nowTime, bands, overlay }: {
+export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPrefix, selectedTrade, pins, bubbles, placing, onPick, onCancelPlacing, pending, nowTime, bands, overlay, timeframe, onTimeframe, onExpand }: {
   ctl: DayController;
   isDark: boolean;
   height: number;
+  /** Timeframe drží rodič (sdílí ho s celoobrazovkovým grafem). */
+  timeframe: MarketTimeframe;
+  onTimeframe: (timeframe: MarketTimeframe) => void;
+  /** Tlačítko „zvětšit“ (celá obrazovka na telefonu). */
+  onExpand?: () => void;
   range: { from: number; to: number };
   focusKeyPrefix: string;
   selectedTrade: Trade | null;
@@ -34,7 +42,6 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
   bands: DayBand[];
   overlay?: React.ReactNode;
 }) {
-  const [timeframe, setTimeframe] = useState<MarketTimeframe>('5m');
   const [indicators, setIndicators] = useState(readTradeChartIndicators);
   useEffect(() => onTradeChartIndicatorsChange(setIndicators), []);
   const [api, setApi] = useState<ChartViewApi | null>(null);
@@ -42,6 +49,7 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
   const raw = ctl.chart.candles;
   const candles = useMemo(() => aggregateCandles(raw, timeframe), [raw, timeframe]);
   const barTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
+  const tradeNotes = useMemo(() => chartNotesOfTrades(ctl.chart.chartTrades), [ctl.chart.chartTrades]);
 
   const target = focusTarget(range);
   const anchorRef = useRef<{ day: string; trade: Trade } | null>(null);
@@ -61,13 +69,14 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
         <span style={{ fontSize: 13, fontWeight: 800 }}>MNQ</span>
         <div role="group" aria-label="Timeframe" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 8, background: 'var(--dj-chip)' }}>
           {TIMEFRAMES.map(item => (
-            <button key={item} type="button" aria-pressed={timeframe === item} onClick={() => setTimeframe(item)} style={{ height: 24, padding: '0 7px', borderRadius: 6, border: 0, cursor: 'pointer', font: '700 11px Inter, sans-serif', background: timeframe === item ? 'var(--dj-text)' : 'transparent', color: timeframe === item ? 'var(--dj-bg)' : 'var(--dj-muted)' }}>{item}</button>
+            <button key={item} type="button" aria-pressed={timeframe === item} onClick={() => onTimeframe(item)} style={{ height: 24, padding: '0 7px', borderRadius: 6, border: 0, cursor: 'pointer', font: '700 11px Inter, sans-serif', background: timeframe === item ? 'var(--dj-text)' : 'transparent', color: timeframe === item ? 'var(--dj-bg)' : 'var(--dj-muted)' }}>{item}</button>
           ))}
         </div>
         <span style={{ flex: 1 }} />
         {(['levels', 'fvg'] as const).map(id => (
           <button key={id} type="button" aria-pressed={indicators[id]} onClick={() => toggle(id)} style={{ height: 24, padding: '0 7px', borderRadius: 6, cursor: 'pointer', font: '600 10.5px Inter, sans-serif', border: indicators[id] ? '1px solid var(--dj-line)' : '1px dashed var(--dj-line)', background: indicators[id] ? 'var(--dj-chip)' : 'transparent', color: indicators[id] ? 'var(--dj-text)' : 'var(--dj-muted)' }}>{id === 'levels' ? 'Úrovně' : 'FVG'}</button>
         ))}
+        {onExpand && <button type="button" className="dj-btn" aria-label="Graf na celou obrazovku" onClick={onExpand} style={{ width: 30, height: 24, borderRadius: 6, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)', color: 'var(--dj-text-2)', display: 'grid', placeItems: 'center', cursor: 'pointer', padding: 0 }}><Maximize2 size={13} /></button>}
       </div>
       <div ref={containerRef} style={{ position: 'relative', height }}>
         {candles.length ? (
@@ -84,12 +93,14 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
             showStructure={indicators.structure}
             isDark={isDark}
             compactMode
+            phoneLayout
             compactToolbar
             hideDrawingToolbar
             hideFocusButton
             reviewMode
             contextTrades={ctl.chart.chartTrades}
             drawingKeyId={`day:${ctl.day}`}
+            drawingScope="day"
             onChartApiReady={setApi}
             onToggleFvg={() => toggle('fvg')}
             onToggleLevels={() => toggle('levels')}
@@ -99,6 +110,20 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
           <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 16, textAlign: 'center' }}>
             {ctl.chart.loading ? <QuantumSpinner /> : <p style={{ margin: 0, fontSize: 12, color: 'var(--dj-text-2)' }}>{ctl.chart.error ?? 'Svíčky pro tenhle den zatím nejsou. Živé čtení z TradingView chybí.'}</p>}
           </div>
+        )}
+        {/* Poznámky k obchodům dne (detail obchodu, Review) — jen pro čtení. */}
+        {tradeNotes.length > 0 && (
+          <ChartNotesLayer
+            chartApi={api}
+            containerRef={containerRef}
+            notes={tradeNotes}
+            barTimes={barTimes}
+            replayCursor={null}
+            editable={false}
+            isDark={isDark}
+            addRequest={null}
+            onChange={() => {}}
+          />
         )}
         <DayNotesLayer
           chartApi={api}

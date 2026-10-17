@@ -49,6 +49,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         CAPPluginMethod(name: "setShellReviewCount", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getShellTabs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellTabs", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setShellChrome", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "reportRefreshComplete", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPushEnvironment", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "updateWidgetSnapshot", returnType: CAPPluginReturnPromise),
@@ -230,6 +231,20 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             }
             shell.applyPageFromWeb(page)
             call.resolve(["page": page])
+        }
+    }
+
+    /// Celoobrazovkový graf dne: web si schová nativní spodní lištu a po
+    /// zavření ji vrátí. Nic jiného se na shellu nemění.
+    @objc public func setShellChrome(_ call: CAPPluginCall) {
+        let tabBarHidden = call.getBool("tabBarHidden") ?? false
+        DispatchQueue.main.async { [weak self] in
+            guard let shell = self?.shellController else {
+                call.reject("Nativní shell není připravený.")
+                return
+            }
+            shell.setTabBarHiddenFromWeb(tabBarHidden)
+            call.resolve(["tabBarHidden": tabBarHidden])
         }
     }
 

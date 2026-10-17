@@ -84,6 +84,20 @@ export function reportNativeShellPage(page: string): void {
 }
 
 /**
+ * Schová (nebo vrátí) nativní spodní lištu — celoobrazovkový graf dne
+ * potřebuje celý displej. Vrací promise, aby šlo počkat na animaci; mimo
+ * shell je to no-op. Starší nativní build bez metody chybu jen zaloguje.
+ */
+export async function setNativeShellTabBarHidden(hidden: boolean): Promise<void> {
+  if (!isNativeShell()) return;
+  try {
+    await alphaTradeNativePlugin.setShellChrome({ tabBarHidden: hidden });
+  } catch (error) {
+    console.warn('[Native shell] Tab bar toggle failed:', error instanceof Error ? error.message : error);
+  }
+}
+
+/**
  * Ohlásí, jestli je otevřené hodnocení: nativní lišta pak drží výběr na
  * Hodnotit a po zavření ho vrátí na stránku. Mimo shell je to no-op.
  */
