@@ -1,5 +1,6 @@
 import { sharedRevealedCandles } from '../services/chartReplayPaint';
 import TradeProgress from './TradeProgress';
+import { chartGlassBar, chartGlassButton, chartGlassGrip } from '../services/chartGlass';
 import { historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
 import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
 import { formingReplayBar, formingReplayBase } from '../services/chartReplayForming';
@@ -149,6 +150,8 @@ import {
 } from '../services/replayGoTo';
 
 const REPLAY_TOOLBAR_POSITION_KEY = 'alphatrade.chart-replay-toolbar-position.v1';
+/** Levý panel kreslení (`left-[52px]`) — panel přehrávání ho nemá zakrývat, pokud je místo. */
+const REPLAY_TOOLBAR_MIN_LEFT = 52;
 
 /** Hláška po skoku ve stejném pásmu, jaké má časová osa grafu. */
 const goToTimeLabel = (unixSeconds: number, timeZone: string): string => {
@@ -1101,7 +1104,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       const maxLeft = Math.max(0, latestViewportRect.width - toolbar.offsetWidth);
       const maxTop = Math.max(0, latestViewportRect.height - toolbar.offsetHeight);
       finalPosition = {
-        left: Math.min(maxLeft, Math.max(0, pointerEvent.clientX - latestViewportRect.left - grabOffsetX)),
+        left: Math.min(maxLeft, Math.max(REPLAY_TOOLBAR_MIN_LEFT, pointerEvent.clientX - latestViewportRect.left - grabOffsetX)),
         top: Math.min(maxTop, Math.max(0, pointerEvent.clientY - latestViewportRect.top - grabOffsetY)),
       };
       toolbar.style.left = `${finalPosition.left}px`;
@@ -1446,7 +1449,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       const viewport = workspaceViewportRef.current;
       if (!toolbar || !viewport) return;
       const next = {
-        left: Math.min(Math.max(0, viewport.clientWidth - toolbar.offsetWidth), Math.max(0, replayToolbarPosition.left)),
+        left: Math.min(Math.max(0, viewport.clientWidth - toolbar.offsetWidth), Math.max(REPLAY_TOOLBAR_MIN_LEFT, replayToolbarPosition.left)),
         top: Math.min(Math.max(0, viewport.clientHeight - toolbar.offsetHeight), Math.max(0, replayToolbarPosition.top)),
       };
       if (next.left === replayToolbarPosition.left && next.top === replayToolbarPosition.top) return;
@@ -2509,7 +2512,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const topButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-md text-[9px] font-bold transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`;
   const topDivider = `h-6 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
   const replaySource = backtestSession?.candlesByRoot[backtestSession.executionInstrument] ?? activeControl?.rawCandles ?? [];
-  const replayDivider = `mx-0.5 h-5 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
+  const replayDivider = `mx-0.5 h-5 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-900/10'}`;
+  const replayButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-lg text-[9px] font-bold transition-colors ${chartGlassButton(isDark)}`;
   const replayAtEnd = isReplayAtLatestCandle(replaySource, replay.cursorTime)
     && (!backtestSession?.onEnsureReplayData || (backtestSession.loadedUntilMs ?? 0) >= backtestSession.endMs);
   // Poslední odhalená svíčka. Dřív se tu při každém renderu kopírovalo
@@ -2560,8 +2564,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   return (
     <React.Profiler id="chart-workspace" onRender={devWorkspaceProfilerOnRender}>
     <div className={`${embedded ? 'relative isolate h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
-      <div className={`relative z-[660] h-12 shrink-0 flex items-center gap-1 px-2 border-b ${toolbarSurface}`}>
-        <div className={`relative z-[120] flex h-full items-center gap-2 pr-1 min-w-0 ${toolbarSurface}`}>
+      <div className={`relative z-[660] h-12 shrink-0 flex items-center gap-1 border-b ${toolbarSurface}`}>
+        <div className={`relative z-[120] flex h-full items-center gap-2 pl-2 pr-1 min-w-0 ${toolbarSurface}`}>
           <img
             src="/logos/at_logo_light_clean.png"
             alt="Alpha Trade"
@@ -2729,7 +2733,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             ><ChevronRight size={15} /></button>
           )}
         </div>
-        <div className={`relative z-[120] flex h-full shrink-0 items-center gap-1 pl-1 ${toolbarSurface}`}>
+        <div className={`relative z-[120] flex h-full shrink-0 items-center gap-1 pl-1 pr-2 ${toolbarSurface}`}>
         <span className={topDivider} />
         {!embedded && <>
         <button type="button" className={`${topButton} px-2`} onClick={onClose} title="Zavřít fullscreen (Esc)"><Maximize2 size={14} className="rotate-180" /><span className="hidden sm:inline">Zpět</span></button>
@@ -2807,7 +2811,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             <div
               ref={replayToolbarRef}
               data-snapshot-hide
-              className={`absolute z-[650] flex h-10 items-center gap-0.5 rounded-lg border p-1 shadow-xl backdrop-blur-md ${isDark ? 'border-white/10 bg-[#101720]/95 text-slate-300 shadow-black/40' : 'border-slate-200 bg-white/95 text-slate-700 shadow-slate-900/15'}`}
+              className={`absolute z-[650] flex h-10 items-center gap-0.5 rounded-xl p-1 ${chartGlassBar(isDark)}`}
               style={replayToolbarPosition
                 ? { left: replayToolbarPosition.left, top: replayToolbarPosition.top }
                 : { left: '50%', bottom: tradingPanel ? 128 : 40, transform: 'translateX(-50%)' }}
@@ -2816,7 +2820,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             >
               <button
                 type="button"
-                className={`flex h-8 w-5 shrink-0 touch-none cursor-grab items-center justify-center rounded active:cursor-grabbing ${isDark ? 'text-slate-600 hover:bg-white/5 hover:text-slate-300' : 'text-slate-300 hover:bg-slate-100 hover:text-slate-500'}`}
+                className={`flex h-8 w-5 shrink-0 touch-none cursor-grab items-center justify-center rounded active:cursor-grabbing ${chartGlassGrip(isDark)}`}
                 onPointerDown={beginReplayToolbarDrag}
                 title="Přetáhnout Bar Replay panel"
                 aria-label="Přetáhnout Bar Replay panel"
@@ -2833,12 +2837,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 timeZone={chartTimeZone}
                 timeZoneLabel={chartTimeZoneLabel}
                 isDark={isDark}
-                buttonClassName={topButton}
+                buttonClassName={replayButton}
               />}
               {(backtestSession || review) && <span className={replayDivider} />}
               <button
                 type="button"
-                className={`${topButton} px-2 disabled:opacity-30`}
+                className={`${replayButton} px-2 disabled:opacity-30`}
                 disabled={!reviewReplayIdle && (replay.phase !== 'active' || replayAtEnd)}
                 onClick={() => reviewReplayIdle ? startReviewReplay('play') : setReplay(current => ({ ...current, playing: !current.playing }))}
                 title={replay.playing ? 'Pozastavit' : 'Přehrát'}
@@ -2846,7 +2850,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               >{replay.playing ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button>
               <button
                 type="button"
-                className={`${topButton} px-2 disabled:opacity-30`}
+                className={`${replayButton} px-2 disabled:opacity-30`}
                 disabled={!reviewReplayIdle && (replay.phase !== 'active' || replayAtEnd)}
                 onClick={() => reviewReplayIdle ? startReviewReplay('step') : advanceReplay()}
                 title="O jednu svíčku dopředu"
@@ -2864,7 +2868,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 cursorTime={replay.cursorTime}
                 timeZone={chartTimeZone}
                 timeZoneLabel={chartTimeZoneLabel}
-                buttonClassName={topButton}
+                buttonClassName={replayButton}
               />
               {replayDataLoading && <span role="status" className="whitespace-nowrap px-2 text-[10px] text-blue-400">Načítám data…</span>}
               <ReplayChoiceMenu
@@ -2873,7 +2877,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 heading="Rychlost replaye"
                 onChange={speed => setReplay(current => ({ ...current, speed: speed as ChartReplaySpeed }))}
                 isDark={isDark}
-                buttonClassName={topButton}
+                buttonClassName={replayButton}
                 ariaLabel="Rychlost Bar Replay"
                 title="Rychlost Bar Replay"
               />
@@ -2883,7 +2887,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 heading="Interval kroku"
                 onChange={minutes => setReplay(current => ({ ...current, stepMinutes: minutes as ChartReplayStepMinutes }))}
                 isDark={isDark}
-                buttonClassName={topButton}
+                buttonClassName={replayButton}
                 ariaLabel="Timeframe kroku Bar Replay"
                 title="Timeframe jednoho replay kroku"
               />
@@ -2894,7 +2898,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                   heading="Svíčky v přehrávání"
                   onChange={mode => setReplayCandleMode(mode, isDark)}
                   isDark={isDark}
-                  buttonClassName={topButton}
+                  buttonClassName={replayButton}
                   ariaLabel="Svíčky v přehrávání"
                   title="Svíčky v přehrávání — plynule, nebo celé"
                 />
@@ -2904,7 +2908,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                   <span className={replayDivider} />
                   <button
                     type="button"
-                    className={`${topButton} px-2 disabled:opacity-30`}
+                    className={`${replayButton} px-2 disabled:opacity-30`}
                     disabled={replay.phase !== 'active' || replayAtEnd}
                     onClick={jumpReplayToEnd}
                     title="Skočit na konec dat"
@@ -2912,7 +2916,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                   ><SkipForward size={15} /></button>
                   <button
                     type="button"
-                    className={`${topButton} px-2 disabled:opacity-30`}
+                    className={`${replayButton} px-2 disabled:opacity-30`}
                     disabled={replay.phase === 'off'}
                     onClick={exitReplay}
                     title="Ukončit Bar Replay"

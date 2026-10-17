@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { chartGlassMenu, chartGlassRow } from '../services/chartGlass';
 import { CalendarClock, ChevronRight, DollarSign, RotateCcw, Star, X } from 'lucide-react';
 import {
   defaultReplayGoToSettings,
@@ -97,10 +98,8 @@ export const ReplayGoToMenu: React.FC<{
     ? ` ${Math.min(lastUsedIndex, favorites.length)}/${favorites.length}`
     : '';
 
-  const menuSurface = isDark
-    ? 'bg-[#1e222d] border-white/10 text-slate-200'
-    : 'bg-white border-slate-200 text-slate-800';
-  const rowHover = isDark ? 'hover:bg-white/5' : 'hover:bg-slate-50';
+  const menuSurface = chartGlassMenu(isDark);
+  const rowHover = chartGlassRow(isDark);
 
   return (
     <div ref={rootRef} className="relative flex items-center shrink-0">
@@ -118,7 +117,7 @@ export const ReplayGoToMenu: React.FC<{
       </button>
 
       {open && (
-        <div data-chart-overlay-menu className={`absolute bottom-10 left-0 z-[700] w-[230px] overflow-hidden rounded-lg border py-1 shadow-2xl ${menuSurface}`}>
+        <div data-chart-overlay-menu className={`absolute bottom-10 left-0 z-[700] w-[230px] overflow-hidden rounded-xl py-1 ${menuSurface}`}>
           {tradeTargets.length > 0 && onTradeTarget && (
             <>
               <div className="px-3 pb-1 pt-1.5 text-[9px] font-black uppercase tracking-[0.13em] text-slate-500">Obchod</div>

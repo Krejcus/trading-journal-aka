@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, GripVertical, Pause, Play, StepForward } from 'lucide-react';
 import type { ChartReplayCandleMode } from '../services/chartSettings';
 import { REPLAY_CANDLE_MODE_OPTIONS } from '../services/chartReplayCandleMode';
+import { chartGlassBar } from '../services/chartGlass';
 
 export type TradeReplaySpeed = 0.5 | 1 | 2 | 4;
 export interface TradeReplayGoTo { id: string; label: string; hint: string }
@@ -81,9 +82,7 @@ export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, on
   return (
     <div ref={barRef}
       data-snapshot-hide
-      className={`absolute bottom-3 left-1/2 z-30 flex h-10 -translate-x-1/2 items-center gap-0.5 rounded-xl border p-1 backdrop-blur-xl backdrop-saturate-[1.8] ${isDark
-        ? 'border-white/[0.12] bg-[#101720]/45 text-slate-300 shadow-[0_22px_40px_-14px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.08)]'
-        : 'border-white/85 bg-white/50 text-slate-700 shadow-[0_22px_40px_-18px_rgba(15,23,42,0.4),0_0_0_1px_rgba(15,23,42,0.06),inset_0_1px_0_rgba(255,255,255,0.95)]'}`}
+      className={`absolute bottom-3 left-1/2 z-30 flex h-10 -translate-x-1/2 items-center gap-0.5 rounded-xl p-1 ${chartGlassBar(isDark)}`}
       // Tailwind v4 centruje vlastností `translate` — posun musí jít do ní, ne do `transform`.
       style={offset.x || offset.y ? { translate: `calc(-50% + ${offset.x}px) ${offset.y}px` } : undefined}
       role="toolbar"

@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CalendarDays, Check, ChevronDown, ChevronUp, Flag, MousePointerClick, Shuffle } from 'lucide-react';
 import type { ReplayStartPreset } from '../services/chartReplay';
 import { wallClockToUnix, zonedClockParts } from '../services/replayGoTo';
+import { chartGlassMenu, chartGlassRow, chartGlassSelected } from '../services/chartGlass';
 
 /**
  * Rozbalovací menu Bar Replay panelu ve stylu TradingView: výběr startu
@@ -10,10 +11,9 @@ import { wallClockToUnix, zonedClockParts } from '../services/replayGoTo';
  * jen tehdy, když se nad panel vejde — u panelu nahoře padá dolů.
  */
 
-const menuSurface = (isDark: boolean) => isDark
-  ? 'bg-[#1e222d] border-white/10 text-slate-200'
-  : 'bg-white border-slate-200 text-slate-800';
-const rowHover = (isDark: boolean) => isDark ? 'hover:bg-white/5' : 'hover:bg-slate-50';
+// Menu jsou skleněná jako panel přehrávání, nad kterým se otevírají.
+const menuSurface = chartGlassMenu;
+const rowHover = chartGlassRow;
 
 /** Zavření kliknutím mimo a Esc; vrací, jestli se menu vejde nad tlačítko. */
 const useReplayMenu = (open: boolean, setOpen: (open: boolean) => void) => {
@@ -86,7 +86,7 @@ export const ReplayChoiceMenu = <T extends string | number>({
     <div ref={rootRef} className="relative flex shrink-0 items-center">
       <button
         type="button"
-        className={`${buttonClassName} px-2 ${open ? (isDark ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-950') : ''}`}
+        className={`${buttonClassName} px-2 ${open ? chartGlassSelected(isDark) : ''}`}
         onClick={() => setOpen(!open)}
         aria-label={ariaLabel}
         aria-haspopup="menu"
@@ -101,7 +101,7 @@ export const ReplayChoiceMenu = <T extends string | number>({
           data-chart-overlay-menu
           role="menu"
           aria-label={heading}
-          className={`absolute ${menuPosition(openUp)} left-1/2 z-[700] w-[200px] -translate-x-1/2 overflow-hidden rounded-lg border py-1 shadow-2xl ${menuSurface(isDark)}`}
+          className={`absolute ${menuPosition(openUp)} left-1/2 z-[700] w-[200px] -translate-x-1/2 overflow-hidden rounded-xl py-1 ${menuSurface(isDark)}`}
         >
           <div className="px-3 pb-1 pt-1.5 text-[9px] font-black uppercase tracking-[0.13em] text-slate-500">{heading}</div>
           {options.map(option => {
@@ -113,7 +113,7 @@ export const ReplayChoiceMenu = <T extends string | number>({
                 role="menuitemradio"
                 aria-checked={selected}
                 onClick={() => { onChange(option.value); setOpen(false); }}
-                className={`flex h-8 w-full items-center gap-2 px-3 text-left text-[11px] font-bold ${selected ? (isDark ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-950') : rowHover(isDark)}`}
+                className={`flex h-8 w-full items-center gap-2 px-3 text-left text-[11px] font-bold ${selected ? chartGlassSelected(isDark) : rowHover(isDark)}`}
               >
                 <span className="w-3 shrink-0">{selected && <Check size={12} />}</span>
                 <span className="tabular-nums">{option.label}</span>
@@ -184,7 +184,7 @@ export const ReplayStartMenu: React.FC<{
     <div ref={rootRef} className="relative flex shrink-0 items-center">
       <button
         type="button"
-        className={`${buttonClassName} gap-1 px-2 ${selecting || open ? (isDark ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-950') : ''}`}
+        className={`${buttonClassName} gap-1 px-2 ${selecting || open ? chartGlassSelected(isDark) : ''}`}
         onClick={() => (open ? close() : setOpen(true))}
         aria-label="Vybrat start replaye"
         aria-haspopup="menu"
@@ -201,7 +201,7 @@ export const ReplayStartMenu: React.FC<{
           data-chart-overlay-menu
           role="menu"
           aria-label="Start replaye"
-          className={`absolute ${menuPosition(openUp)} left-0 z-[700] w-[240px] overflow-hidden rounded-lg border py-1 shadow-2xl ${menuSurface(isDark)}`}
+          className={`absolute ${menuPosition(openUp)} left-0 z-[700] w-[240px] overflow-hidden rounded-xl py-1 ${menuSurface(isDark)}`}
         >
           <button type="button" role="menuitem" className={row} onClick={() => { close(); onSelectBar(); }}>
             <MousePointerClick size={14} /> Vybrat svíčku v grafu
