@@ -69,6 +69,14 @@ import {
 import { thinPriceAxisLabels } from '../services/chartPriceAxisLabels';
 import { announceChartProfileChange, dismissChartProfileToast } from '../services/chartProfileToast';
 import {
+  drawingLayerDay,
+  drawingLayerKV,
+  drawingLayerReady,
+  subscribeDrawingLayer,
+  windowDrawings,
+} from '../services/chartDrawingLayer';
+import { normalizeDrawingForLayer, type StoredDrawingLike } from '../services/chartAnnotationMigration';
+import {
   calculateMarketStructure,
   findEntryEdgeFairValueGap,
   findEntryFairValueGap,
@@ -3089,10 +3097,43 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // připojí znovu). Review ukládá kresby pod klíčem týdne — přepnutí obchodu
   // proto graf znovu nestaví.
   const drawingStorageId = drawingKeyId ?? String(trade.id);
-  const drawingOptions = useMemo(() => ({
-    storageKey: `alphatrade:candlekit:${drawingStorageId}:${drawingScope || timeframe}`,
-    ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
-  }), [drawingHitTolerance, drawingStorageId, drawingScope, timeframe]);
+  // Deník (mimo backtest): kresby jsou jedna vrstva podle trhu a času —
+  // graf čte a zapisuje okno svých dnů (services/chartDrawingLayer.ts).
+  const [drawingLayerVersion, setDrawingLayerVersion] = useState(0);
+  const layerEnabled = !String(drawingScope ?? '').startsWith('backtest:')
+    && activeChartAppearanceScope() === null
+    && drawingLayerReady();
+  const layerFromDay = rawCandles.length ? drawingLayerDay(rawCandles[0].time) : null;
+  const layerToDay = rawCandles.length ? drawingLayerDay(rawCandles[rawCandles.length - 1].time) : null;
+  const layerWindow = layerEnabled && layerFromDay && layerToDay ? { fromDay: layerFromDay, toDay: layerToDay } : null;
+  useEffect(() => subscribeDrawingLayer(() => setDrawingLayerVersion(value => value + 1)), []);
+  const drawingOptions = useMemo(() => (layerWindow
+    ? {
+      storageKey: `layer:${layerWindow.fromDay}:${layerWindow.toDay}`,
+      kv: drawingLayerKV(layerWindow.fromDay, layerWindow.toDay),
+      ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
+    }
+    : {
+      storageKey: `alphatrade:candlekit:${drawingStorageId}:${drawingScope || timeframe}`,
+      ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
+    }
+  // Klíč okna (dny), ne objekt — jinak by každý render postavil nový ovladač.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [drawingHitTolerance, drawingStorageId, drawingScope, timeframe, layerWindow?.fromDay, layerWindow?.toDay]);
+  // Změna vrstvy z jiného grafu nebo zařízení → přenést do tohoto grafu.
+  useEffect(() => {
+    if (!layerWindow) return;
+    const engine = apiRef.current?.drawing?.engine;
+    if (!engine) return;
+    const target = windowDrawings(layerWindow.fromDay, layerWindow.toDay);
+    const current = engine.getDrawings();
+    const manual = current.filter(drawing => !drawing.id.startsWith('auto-'));
+    const signature = (items: readonly unknown[]) => JSON.stringify(items.map(item => normalizeDrawingForLayer(item as StoredDrawingLike)));
+    if (signature(manual) === signature(target)) return;
+    const autos = current.filter(drawing => drawing.id.startsWith('auto-'));
+    engine.import(JSON.stringify([...autos, ...target]));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawingLayerVersion, layerWindow?.fromDay, layerWindow?.toDay]);
 
   // Obchod uprostřed a celý vidět; okraje rostou s délkou obchodu (minimum
   // pokryje i 10 min před vstupem, odkud startuje přehrávání). Během
