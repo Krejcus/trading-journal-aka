@@ -71,7 +71,9 @@ export default function DrawingMigrationPrompt() {
   const migrate = () => {
     // Odhlášení nebo jiný účet mezitím — nic nepřevádět.
     if (drawingLayerUserId() !== preview.owner) { setPreview(null); return; }
-    const imported = importDrawingsIntoLayer(data.drawings.map(item => item.drawing));
+    // Náhled znovu až teď — kresba nakreslená mezitím (ještě po staru) nesmí chybět.
+    const fresh = readPreview();
+    const imported = importDrawingsIntoLayer(fresh.drawings.map(item => item.drawing));
     activateDrawingLayer();
     setPreview(null);
     announceChartProfileChange(`Převedeno ${imported} kreseb — teď jsou ve všech grafech a na všech zařízeních`);
