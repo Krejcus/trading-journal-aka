@@ -100,6 +100,12 @@ export function formatCopierCommandError(
     const multiple = names.length > 1;
     return `${namedAccounts} ${multiple ? 'nejsou' : 'není'} ve Mac workeru. V editoru skupiny povol Macu načítat tvoje propfirmy; worker ${multiple ? 'je' : 'ho'} pak načte sám, jakmile bude kopírka vypnutá a bez otevřených pozic.`;
   }
+  if (/invalid-relay-command-payload/.test(message)) {
+    return 'Vzdálené spojení příkaz odmítlo kvůli neplatnému tvaru; k Macu nic neodešlo. Obnov stránku a zkus to znovu, případně akci proveď na Macu.';
+  }
+  if (/unsupported-remote-copy-command/.test(message)) {
+    return 'Tuhle akci nejde poslat přes vzdálené spojení (iPhone / web mimo Mac). Proveď ji v appce na Macu, kde běží worker.';
+  }
   if (/^[a-z][a-z0-9-]*(?::[a-z0-9-]+)*$/i.test(message)) {
     return 'Mac worker změnu odmítl. Otevři Události, zkontroluj konkrétní blokaci a změnu zopakuj až po jejím vyřešení.';
   }

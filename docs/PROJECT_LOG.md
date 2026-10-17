@@ -523,6 +523,20 @@ Ověřeno: cílené testy 55/55, tsc čistý (mimo staré chyby `extension/`);
 celá sada a build neproběhly. Nasazení: nejdřív server, pak worker.
 TradingView musí mít graf MNQ/NQ na 1 min. Hook zatím nikde v UI.
 
+### 2026-10-17 — „Označit za vyřešené“ z iPhonu/webu nic neodeslalo (Claude)
+
+16.–17. 10. tlačítko u visící odmítnuté objednávky (liquidation only) přes relay
+končilo `unsupported-remote-copy-command` už na enqueue (žádný řádek v
+`tradovate_copier_commands`, žádný log workeru) a appka kebab kód přeložila na
+„Mac worker změnu odmítl…“. Visící položka blokovala i smazání skupiny; vyřešeno
+ručně loopbackem. Oprava (jen web/relay): `resolve-stuck-operation` v
+`remoteCopyCommands` s přesným tvarem (neprázdná skupina, kind z výčtu, key ≤
+400, reason 5–500 bez řídicích znaků, nic navíc) na enqueue i claim; vlastní
+hlášky pro `unsupported-remote-copy-command` a `invalid-relay-command-payload`.
+První pokus (UI obejít párování skupiny) oponent zamítl — míjel příčinu.
+copier-design-critic: OK S VÝHRADAMI. Otevřené (worker): waive vypne kopírku
+dřív, než ověří, že položka visí; worker u waive nekontroluje skupinu.
+
 ### 2026-10-17 — Přeměna čekající kopie vstupu na OSO (Claude, přání Filipa)
 
 Navazuje na variantu B níže. Follower, jehož Limit kopie vstupu po okamžitém

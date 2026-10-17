@@ -246,10 +246,16 @@ const validatedDayLockReason = (value: unknown): string => {
 // stays deliberately rejected on this remote path.
 // `delete-group` (11. 10. 2026) nic neposílá brokerovi: worker skupinu smaže
 // jen za DISARMED a po stejných kontrolách jako přepnutí skupiny.
+// `resolve-stuck-operation` (17. 10. 2026): operátorem potvrzené označení
+// visící operace (INV-OUTBOX-02) nic neposílá brokerovi — worker položku
+// durable označí, kopírku vypne a vynutí novou kontrolu pozic. Z iPhonu / webu
+// přes relay dřív končilo `unsupported-remote-copy-command`, takže visící
+// odmítnutý příkaz blokoval i smazání skupiny bez cesty, jak ho odblokovat.
 const remoteCopyCommands = new Set([
   'update-group', 'set-group-enabled', 'set-replication', 'set-follower-enabled', 'set-multiplier',
-  'flatten-account', 'flatten-follower-trade', 'flatten-group', 'delete-group',
+  'flatten-account', 'flatten-follower-trade', 'flatten-group', 'delete-group', 'resolve-stuck-operation',
 ]);
+const STUCK_OPERATION_KINDS = new Set(['place', 'bracket', 'oso', 'cancel-or-modify']);
 
 // Stejný formát vynucuje controller (operationToken); validace už na ingressu
 // brání tomu, aby vadný Flatten doputoval k workerovi — ten před validací
@@ -276,6 +282,18 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
   };
   if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
     throw new Error('unsupported-remote-copy-command');
+  }
+  if (command.type === 'resolve-stuck-operation') {
+    const resolve = value as { groupId?: unknown; kind?: unknown; key?: unknown; reason?: unknown };
+    if (
+      typeof resolve.groupId !== 'string' || resolve.groupId.trim() === '' || resolve.groupId.length > 200
+      || typeof resolve.kind !== 'string' || !STUCK_OPERATION_KINDS.has(resolve.kind)
+      // key ≤ 400: důvod z UI („Ručně potvrzeno v LIVE UI (kind key)“) se pak vejde do 500.
+      || typeof resolve.key !== 'string' || resolve.key.trim() === '' || resolve.key.length > 400
+      || typeof resolve.reason !== 'string' || resolve.reason.trim().length < 5 || resolve.reason.length > 500
+      || /[\u0000-\u001f\u007f]/.test(resolve.reason)
+      || Object.keys(resolve).some(key => !['type', 'groupId', 'kind', 'key', 'reason'].includes(key))
+    ) throw new Error('invalid-relay-command-payload');
   }
   if (command.type === 'delete-group' && (
     typeof command.groupId !== 'string' || command.groupId.trim() === '' || command.groupId.length > 200

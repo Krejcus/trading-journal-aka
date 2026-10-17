@@ -499,6 +499,49 @@ describe('Tradovate copier command relay', () => {
     expect(claimed?.command).toEqual({ type: 'copy-command', command: { type: 'delete-group', groupId: 'group-1' } });
   });
 
+  it('relay pustí označení visící operace (17. 10. 2026) jen s přesným tvarem', async () => {
+    const resolve = {
+      type: 'resolve-stuck-operation', groupId: 'group-1', kind: 'place',
+      key: 'cp:group-1:order:1:submitted', reason: 'Ručně potvrzeno v LIVE UI',
+    };
+    const accepted = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(accepted), userId, connectionId,
+      command: { type: 'copy-command', command: resolve } as unknown as LocalCopierAgentCommand,
+      idempotencyKey: 'key-resolve-stuck',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(accepted.mock.calls[0][0]).toMatchObject({ command_type: 'copy-command', payload: { command: resolve } });
+    for (const bad of [
+      { kind: 'market' }, { kind: 1 }, { key: '' }, { key: 7 }, { reason: 'ok' }, { reason: 42 },
+      { groupId: 3 }, { groupId: '' }, { force: true }, { key: 'x'.repeat(401) }, { reason: '    x   ' },
+      { reason: 'Ručně\u0000 potvrzeno' },
+    ]) {
+      const upsert = vi.fn();
+      await expect(enqueueTradovateCopierCommand({
+        db: enqueueDb(upsert), userId, connectionId,
+        command: { type: 'copy-command', command: { ...resolve, ...bad } } as unknown as LocalCopierAgentCommand,
+      })).rejects.toThrow('invalid-relay-command-payload');
+      expect(upsert).not.toHaveBeenCalled();
+    }
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'resolve-command-id', command_type: 'copy-command', payload: { command: resolve },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'copy-command', command: resolve });
+    // Ručně vložený řádek s vadným tvarem neprojde ani na claim straně.
+    await expect(claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'resolve-bad-id', command_type: 'copy-command', payload: { command: { ...resolve, kind: 'market' } },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    })).rejects.toThrow('invalid-relay-command-payload');
+  });
+
   it('relay odmítne neplatný follower toggle ještě před enqueue', async () => {
     const upsert = vi.fn();
     await expect(enqueueTradovateCopierCommand({

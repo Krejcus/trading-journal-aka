@@ -501,6 +501,12 @@ existující ochranu.
   momentálně nezobrazuje.
 - Bezpečné změny vs. nebezpečné: Bezpečné je autoritativní recovery nebo
   explicitní auditovaný waiver. Nebezpečné je automatické TTL smazání.
+- Waiver z UI (`resolve-stuck-operation`, dvojí potvrzení v LIVE) jde od
+  17. 10. 2026 i přes relay (iPhone / web mimo Mac): relay pustí jen přesný
+  tvar (kind z výčtu, key, reason ≥ 5 znaků, nic navíc) na enqueue i claim
+  straně; worker položku durable označí, kopírku vypne a vynutí novou kontrolu
+  pozic. Dřív relay příkaz odmítl a visící odmítnutá objednávka blokovala
+  i smazání skupiny bez cesty z telefonu.
 
 ### INV-OUTBOX-03: OCO/OSO je atomický celek; částečný venue tvar se automaticky nedostavuje
 

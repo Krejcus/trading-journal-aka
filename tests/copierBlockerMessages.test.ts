@@ -74,4 +74,13 @@ describe('group change rejection messages', () => {
     expect(message).not.toContain('reinstall');
     expect(message).not.toContain('67409592');
   });
+
+  it('odmítnutí vzdáleným spojením neříká, že změnu odmítl Mac (17. 10.)', () => {
+    const unsupported = formatCopierCommandError(new Error('unsupported-remote-copy-command'));
+    expect(unsupported).toContain('vzdálené spojení');
+    expect(unsupported).not.toContain('Mac worker změnu odmítl');
+    const invalid = formatCopierCommandError(new Error('invalid-relay-command-payload'));
+    expect(invalid).toContain('k Macu nic neodešlo');
+    expect(invalid).not.toContain('Mac worker změnu odmítl');
+  });
 });
