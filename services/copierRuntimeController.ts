@@ -13408,6 +13408,113 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     else invalidateReconciliation();
   };
 
+  /**
+   * Leaderův pár SL+TP po vyplnění vstupu (bracket strategie, ne OSO) smí
+   * followerovi jako OCO jen s kladným důkazem jeho pozice (16. 10. 2026:
+   * TP Limit otevřel flat followery s nevyplněnou kopií vstupu do shortu).
+   * `proven` = pozice z cache sedí bez nezpracovaného eventu, nebo ji přesně
+   * doplní potvrzená Market kopie aktuální epochy. Ostatní followeři jdou
+   * přes `guardBracketPairFollowers`.
+   */
+  const bracketFollowerPositionProven = (accountId: number, symbol: string, expected: number): boolean => {
+    if (expected === 0) return false;
+    const followerNet = positionsByAccount.get(accountId)?.get(symbol) ?? 0;
+    const backlog = pendingTradeIngressByKey.get(`${accountId}:symbol:${symbol}`) ?? 0;
+    if (followerNet === expected && backlog === 0) return true;
+    const pending = currentRuntimePendingNet(accountId, symbol, followerNet, expected, '');
+    return !pending.invalidEvidence
+      && pending.marketPendingOrderIds.length > 0
+      && pending.filledLeaderWorkingOrderIds.length === 0
+      && followerNet + pending.net === expected;
+  };
+
+  /**
+   * Pár se posoudí celý jako ne-Market redukce (TP Limit) stávajícím S1b —
+   * bez výjimky ochranného Stopu za vstupem (V12), protože pár TP obsahuje.
+   * Čekající kopie vstupu se zruší a follower obchod vynechá (varianta 1:
+   * čeká jen do výstupu leadera). Ostatním se pozice ověří čtením u brokera;
+   * jiná pozice = žádné OCO a kontrola velikosti, nečitelný účet = unsafe.
+   */
+  const guardBracketPairFollowers = async (
+    legEvent: LeaderEvent,
+    pair: LeaderBracketPair,
+    accountIds: readonly number[],
+  ): Promise<{ ineligibleAccounts: Map<number, string>; unsafeAccounts: number[] }> => {
+    const ineligibleAccounts = new Map<number, string>();
+    const unsafeAccounts: number[] = [];
+    const preNet = leaderPreFillNetByEventId.get(legEvent.id) ?? leaderPositions.get(pair.symbol) ?? 0;
+    const followers = group.followers.filter(follower => accountIds.includes(follower.accountId));
+    if (preNet === 0) {
+      for (const follower of followers) unsafeAccounts.push(follower.accountId);
+      return { ineligibleAccounts, unsafeAccounts };
+    }
+    const pairEvent: LeaderEvent = {
+      ...legEvent,
+      id: `${legEvent.id}:bracket-pair`,
+      orderId: pair.targetOrderId,
+      side: pair.side,
+      orderType: 'Limit',
+      quantity: pair.quantity,
+      limitPrice: pair.targetPrice,
+      stopPrice: undefined,
+    };
+    cacheExposureClassification(pairEvent.id, false, preNet, reducingQuantityAgainst(preNet, pair.side, pair.quantity));
+    // S1b jen pro followery se skutečnou čekající kopií (kandidátem). Ostatní
+    // rozhodne čtení u brokera: divergence odvozená jen z cache (zpožděný
+    // position event) nesmí skupinu vypnout.
+    const s1bFollowers = followers.filter(follower => s1bReadCandidates(pairEvent, follower).candidates.length > 0);
+    if (s1bFollowers.length > 0) {
+      const s1b = await cutAwareDispatchFor(pairEvent, false, { ...group, followers: s1bFollowers });
+      for (const accountId of s1b.unsafeDivergenceAccounts) unsafeAccounts.push(accountId);
+      for (const follower of s1bFollowers) {
+        const reason = s1b.ineligibleAccounts.get(follower.accountId);
+        if (reason) ineligibleAccounts.set(follower.accountId, reason);
+      }
+    }
+    conditionalMirrorSourcesByLeaderEvent.delete(pairEvent.id);
+    await Promise.all(followers.map(async follower => {
+      if (ineligibleAccounts.has(follower.accountId) || unsafeAccounts.includes(follower.accountId)) return;
+      const expected = Math.trunc(preNet * follower.multiplier);
+      if (bracketFollowerPositionProven(follower.accountId, pair.symbol, expected)) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const [positions, orders] = await Promise.race([
+          Promise.all([
+            broker.listPositions(follower.accountId),
+            broker.listOrders(follower.accountId, { fresh: true }),
+          ]),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('bracket position read deadline 1500 ms')), 1_500);
+          }),
+        ]);
+        const net = positions.find(position => position.symbol === pair.symbol)?.netQuantity ?? 0;
+        // Úplné čerstvé čtení příkazů účtu (běží v eventTail, nic se mezitím
+        // nezpracovalo): kopie, o které stream ještě neví, tím bude vidět i pro
+        // úklid čekajících kopií po vypnutí (V2).
+        rememberLiveOrderSnapshot(follower.accountId, orders);
+        if (net === expected) return;
+        // Bez ochrany smí zůstat jen prokazatelně flat follower bez příkazů
+        // a bez čekající kopie (ruční zavření). Kopie, o které stream ještě
+        // neví, by se jinak vyplnila bez SL/TP → nejasný stav = unsafe.
+        const openOrders = orders.some(order => order.symbol === pair.symbol && isOpenOrderStatus(order.status));
+        const pendingCopy = [...currentRuntimePendingExposure.values()].some(pending => (
+          pending.accountId === follower.accountId && pending.symbol === pair.symbol
+        ));
+        if (net === 0 && !openOrders && !pendingCopy) {
+          ineligibleAccounts.set(follower.accountId, `bracket-follower-position-unproven:${net}/${expected}`);
+          scheduleFollowerMagnitudeCheck(follower.accountId, pair.symbol);
+          return;
+        }
+        unsafeAccounts.push(follower.accountId);
+      } catch {
+        unsafeAccounts.push(follower.accountId);
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
+    return { ineligibleAccounts, unsafeAccounts };
+  };
+
   const handleBrokerEvent = async (
     event: BrokerEvent,
     admissionGeneration: number,
@@ -14473,7 +14580,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (timer) clearTimeout(timer);
       pendingBracketTimers.delete(bracketEntryOrderId);
       options.onBracketPair?.(bracketPair);
-      const result = await processor.processBracket({
+      const baseBracketIneligible = (): Map<number, string> => {
+        const ineligible = new Map(currentBracketIneligibleAccounts(bracketPair.entryOrderId));
+        for (const accountId of syncPausedAccountIds(leaderEvent.symbol)) {
+          ineligible.set(accountId, 'account-sync-paused');
+        }
+        return ineligible;
+      };
+      const dispatchBracketPair = (ineligibleAccounts: ReadonlyMap<number, string>) => processor.processBracket({
         pair: bracketPair,
         event: leaderEvent,
         group,
@@ -14483,13 +14597,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
           stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
           nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
-          ineligibleAccounts: (() => {
-            const ineligible = new Map(currentBracketIneligibleAccounts(bracketPair.entryOrderId));
-            for (const accountId of syncPausedAccountIds(leaderEvent.symbol)) {
-              ineligible.set(accountId, 'account-sync-paused');
-            }
-            return ineligible;
-          })(),
+          ineligibleAccounts,
         },
         broker: dispatchBroker(admissionGeneration, leaderEvent),
         clock,
@@ -14497,14 +14605,68 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         metrics,
         maxConcurrentDispatches: options.maxConcurrentDispatches,
       });
+      // 16. 10. 2026: OCO jen followerům s kladným důkazem pozice. Prokázaní
+      // dostanou ochranu hned; ostatní až po S1b / čtení u brokera, aby jejich
+      // ověření nezdrželo ochranu followerům v pozici.
+      const bracketPreNet = leaderPreFillNetByEventId.get(leaderEvent.id) ?? leaderPositions.get(bracketPair.symbol) ?? 0;
+      const firstIneligible = baseBracketIneligible();
+      const verifyLater: number[] = [];
+      if (gate.armed && !gate.shadowMode) {
+        for (const follower of group.followers) {
+          if (follower.enabled === false || follower.mode !== 'on-submit' || firstIneligible.has(follower.accountId)) continue;
+          const expected = Math.trunc(bracketPreNet * follower.multiplier);
+          if (bracketFollowerPositionProven(follower.accountId, bracketPair.symbol, expected)) continue;
+          verifyLater.push(follower.accountId);
+          firstIneligible.set(follower.accountId, 'bracket-follower-position-pending-verification');
+        }
+      }
+      const result = await dispatchBracketPair(firstIneligible);
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
       await failClosedOnCriticalAudit(result.audit);
+      const bracketAudit = [...result.audit];
+      if (verifyLater.length > 0 && gate.armed && !result.audit.some(isCriticalAuditEntry)) {
+        const guard = await guardBracketPairFollowers(leaderEvent, bracketPair, verifyLater);
+        const verified = verifyLater.filter(accountId => (
+          !guard.ineligibleAccounts.has(accountId) && !guard.unsafeAccounts.includes(accountId)
+        ));
+        if (verified.length > 0 && gate.armed) {
+          const secondIneligible = baseBracketIneligible();
+          for (const follower of group.followers) {
+            if (!verified.includes(follower.accountId)) {
+              secondIneligible.set(follower.accountId, guard.ineligibleAccounts.get(follower.accountId)
+                ?? 'bracket-follower-not-in-verification-batch');
+            }
+          }
+          const verifiedResult = await dispatchBracketPair(secondIneligible);
+          runtime = verifiedResult.runtime;
+          if (verifiedResult.audit.length > 0) options.onAudit?.(verifiedResult.audit);
+          await failClosedOnCriticalAudit(verifiedResult.audit);
+          bracketAudit.push(...verifiedResult.audit);
+        }
+        if (guard.unsafeAccounts.length > 0) {
+          gate = {
+            ...gate,
+            divergentAccounts: new Set([...gate.divergentAccounts, ...guard.unsafeAccounts]),
+          };
+          options.onAudit?.([{
+            at: now,
+            leaderEventId: leaderEvent.id,
+            kind: 'blocked',
+            reason: `bracket-follower-position-unverified:${guard.unsafeAccounts.join(',')}:${bracketPair.symbol}`,
+          }]);
+          // Stejně jako S1b divergence bez auto-close: jeden nejasný účet nesmí
+          // zavřít kopie chráněným followerům. Čekající kopie zruší V2 po vypnutí.
+          failClosed(new Error(
+            `Copier fail-closed: ochranu SL/TP nelze followerovi bezpečně přiřadit — pozice účtu ${guard.unsafeAccounts.join(', ')} na ${bracketPair.symbol} není ověřená`,
+          ), { autoClose: false });
+        }
+      }
       // Reporting attribution depends only on deterministic recognition of
       // the leader's protective pair, never on follower dispatch success.
       await rememberProtectiveLeg(bracketPair.stopOrderId, bracketPair.targetOrderId, now);
-      if (!result.audit.some(isCriticalAuditEntry)) {
-        if (auditCleanDispatch(result.audit, 'dispatched')) {
+      if (!bracketAudit.some(isCriticalAuditEntry)) {
+        if (auditCleanDispatch(bracketAudit, 'dispatched')) {
           const stopPotential = levelPnl(bracketPair.symbol, bracketPair.stopPrice);
           const targetPotential = levelPnl(bracketPair.symbol, bracketPair.targetPrice);
           pushCopyEvent('bracket-placed', bracketPair.symbol,

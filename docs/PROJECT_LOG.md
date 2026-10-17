@@ -379,6 +379,32 @@ Ověřeno: cílené testy 55/55, tsc čistý (mimo staré chyby `extension/`);
 celá sada a build neproběhly. Nasazení: nejdřív server, pak worker.
 TradingView musí mít graf MNQ/NQ na 1 min. Hook zatím nikde v UI.
 
+### 2026-10-17 — TP leadera otevřel flat followery do shortu (Claude, varianta B Filipa)
+
+Větev `claude/copier-protect-unfilled-follower-20261016`. 16. 10. 18:08 leaderův
+Buy Limit 4 (69662763) se vyplnil okamžitě, kopie followerů (69662738, 69662805)
+zůstaly v knize nevyplněné. SL+TP leadera vznikly až po vyplnění (bracket
+strategie, `parentId` null, ne OSO) → `processBracket` poslal followerům OCO na
+plné množství; v 18:15 TP Sell Limit leadera zavřel leadera (+$654) a na flat
+followerech otevřel short 4 (zavřeno Flattenem, ~+$14/účet). Pravidlo z 12. 10.
+(TP čekajícímu followerovi nezrcadlit) pokrylo jen samostatné nohy, ne pár.
+
+- Oprava (jen controller, `guardBracketPairFollowers`): OCO z páru jen s kladným
+  důkazem pozice (cache bez backlogu / potvrzená Market kopie) — hned; ostatní
+  přes S1b nad celým párem (jako TP Limit) → čekající kopie se zruší a follower
+  obchod vynechá; jinak čtení pozice + čerstvých příkazů: shoda = OCO, prokazatelně
+  flat bez příkazů = bez OCO + kontrola velikosti, jinak fail-closed bez auto-close.
+- Filip zvolil B (vynechání) na víkend; přeměna čekající kopie na OSO (follower
+  čeká dál, ochrana neaktivní u brokera) je další projekt — první návrhy A i
+  „convert“ oponent zablokoval / vrátil (11 vad).
+- copier-design-critic: 4 kola; finální „OK S VÝHRADAMI“ (P1 kopie bez stream
+  eventu, P2 falešná divergence z cache, P3 auto-close — opraveno).
+- Testy: `tests/copierBracketAwaitingEntryFill.test.ts` (8; bez opravy padají
+  3/4 původních), plná sada 5311 zelená, tsc čistý. INV-DIVERGENCE-01 doplněn.
+- Zbývá: testy DISARM/kill během ověření, unknown druhého OCO, multiplier/3
+  followeři, restart uprostřed; přeměna na OSO; samostatné incidenty na účtu
+  vyřazeném ze skupiny (16. 10. 18:17, ruční obchod na 69662763).
+
 ### 2026-10-15 — Kopírka nešla zapnout po incidentu + reconnectu (Claude)
 
 Větev `claude/copier-incident-recovery-deadlock-20261015`. 14. 10. 19:27 Mac na

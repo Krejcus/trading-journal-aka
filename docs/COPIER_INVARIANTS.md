@@ -580,7 +580,32 @@ existující ochranu.
   a v LIVE řádku jako „Čeká na vstup“ (V6). Hlídají testy:
   `tests/copierAwaitingCopiedEntry.test.ts`,
   `tests/copierAwaitingEntryBracketStop.test.ts`,
-  `tests/liveCopyAwaitingEntryRender.test.ts`. Známé limity: částečně vyplněná
+  `tests/liveCopyAwaitingEntryRender.test.ts`,
+  `tests/copierBracketAwaitingEntryFill.test.ts`.
+  **Pár SL+TP vzniklý až po vyplnění leadera (bracket strategie, 16. 10. 2026):**
+  dřív šel přes `processBracket` jako OCO na plné množství všem followerům
+  s kopií vstupu — i čekajícím; TP Limit pak flat followery otevřel do shortu.
+  Teď OCO dostane jen follower s kladným důkazem pozice
+  (`bracketFollowerPositionProven`: cache = trunc(preNet × mult) bez
+  nezpracovaného eventu, nebo přesně doplněná potvrzenou Market kopií aktuální
+  epochy) — hned. Ostatní jdou přes `guardBracketPairFollowers`: pár se posoudí
+  celý jako ne-Market redukce (TP Limit, bez výjimky ochranného Stopu) stávajícím
+  S1b (`cutAwareDispatchFor`) — čekající kopie se zruší a follower obchod vynechá
+  stejně jako u samostatného TP; jinak čtení pozice u brokera (1,5 s): shoda =
+  OCO; ochranu bez incidentu vynechá jen follower prokazatelně flat bez
+  otevřených příkazů a bez čekající kopie (ruční zavření → kontrola velikosti);
+  cokoli jiného (kopie, o které stream ještě neví, částečná pozice, nečitelný
+  účet) = fail-closed **bez auto-close** (jako S1b divergence: jeden nejasný
+  účet nezavře kopie chráněným followerům) po rozeslání ostatním. Čerstvý
+  výpis příkazů se zapíše do `liveOrdersByAccount`, aby čekající kopii po
+  vypnutí zrušil V2. S1b běží jen pro followery se skutečným kandidátem —
+  divergence jen z cache (zpožděný position event) skupinu nevypne. Přeměna
+  čekající kopie na OSO (follower by čekal dál) je plánovaný další krok
+  (Filip 17. 10.). Známé limity: DISARM mezi okamžitým OCO a ověřením ostatních
+  ověření přeskočí (follower se zastaralou cache zůstane bez OCO; kopírka je
+  vypnutá, DISARM nic nezavírá — INV-BRAKE-01); ověření drží frontu eventů až
+  ~10 s (prokázaní followeři jsou chránění hned, brzdy obcházejí FIFO);
+  `rememberLiveOrderSnapshot` z REST čtení bez observation fence. Známé limity: částečně vyplněná
   čekající kopie u ne-Market redukce dál končí incidentem (V12/Z10); po
   reconnectu je pending expozice prázdná a čekající follower vede k incidentu
   (kopii pak zruší V2 při obnově); reverzní Limit/Stop leadera při čekajícím
