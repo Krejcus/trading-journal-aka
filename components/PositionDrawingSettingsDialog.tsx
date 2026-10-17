@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { chartGlassBar, chartGlassButton, chartGlassMenu, chartGlassRow, chartGlassSelected } from '../services/chartGlass';
 import type { DrawingEngine, DrawingStyle } from '@getcandlekit/charts';
 import { ChevronDown, GripVertical, ListChecks, Settings, Trash2, X, Zap } from 'lucide-react';
 import TradingViewColorPicker, { colorWithAlpha, splitColorAlpha } from './TradingViewColorPicker';
@@ -38,9 +39,11 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
   onQuickOrder?: () => void;
   quickOrderDisabled?: boolean;
   quickOrderTitle?: string;
+  isDark?: boolean;
 }> = ({
-  engine, drawing, onOpenSettings, onQuickOrder, quickOrderDisabled = false, quickOrderTitle,
+  engine, drawing, onOpenSettings, onQuickOrder, quickOrderDisabled = false, quickOrderTitle, isDark = false,
 }) => {
+  const glassButton = `flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${chartGlassButton(isDark)}`;
   const [labelsOpen, setLabelsOpen] = useState(false);
   const labelsRef = useRef<HTMLDivElement>(null);
   const settings = normalizePositionSettings(drawing.style.position);
@@ -72,7 +75,7 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
     role="toolbar"
     aria-label={`${drawing.tool === 'LongPosition' ? 'Long' : 'Short'} position tools`}
     data-chart-overlay-menu
-    className="absolute left-1/2 top-1 z-[121] flex -translate-x-1/2 items-center gap-0.5 rounded-md border border-[#d1d4dc] bg-white p-0.5 shadow-md"
+    className={`absolute left-1/2 top-1 z-[121] flex -translate-x-1/2 items-center gap-0.5 rounded-xl p-1 ${chartGlassBar(isDark)}`}
     onPointerDown={event => event.stopPropagation()}
   >
     <IndicatorTemplateMenu
@@ -88,14 +91,14 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
     <div ref={labelsRef} className="relative">
       <button
         type="button"
-        className={`flex h-7 items-center gap-0.5 rounded px-1.5 hover:bg-[#f0f3fa] ${labelsOpen ? 'bg-[#f0f3fa]' : ''}`}
+        className={`flex h-7 items-center gap-0.5 rounded-lg px-1.5 transition-colors ${labelsOpen ? chartGlassSelected(isDark) : chartGlassButton(isDark)}`}
         onClick={() => setLabelsOpen(open => !open)}
         aria-label="Position label fields"
         aria-haspopup="menu"
         aria-expanded={labelsOpen}
       ><ListChecks size={14} strokeWidth={1.35} /><ChevronDown size={10} strokeWidth={1.5} /></button>
-      {labelsOpen && <div role="menu" className="absolute left-1/2 top-[calc(100%+6px)] z-[160] grid w-44 -translate-x-1/2 gap-0.5 rounded-md border border-[#d1d4dc] bg-white p-1.5 text-[12px] text-slate-800 shadow-lg">
-        {labelOptions.map(([key, label]) => <label key={key} role="menuitemcheckbox" aria-checked={Boolean(settings[key])} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-[#f0f3fa]">
+      {labelsOpen && <div role="menu" className={`absolute left-1/2 top-[calc(100%+6px)] z-[160] grid w-44 -translate-x-1/2 gap-0.5 rounded-xl p-1.5 text-[12px] ${chartGlassMenu(isDark)}`}>
+        {labelOptions.map(([key, label]) => <label key={key} role="menuitemcheckbox" aria-checked={Boolean(settings[key])} className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 ${chartGlassRow(isDark)}`}>
           <input type="checkbox" checked={Boolean(settings[key])} onChange={event => setPosition({ [key]: event.target.checked } as Partial<PositionDrawingSettings>)} className="h-3.5 w-3.5 accent-[#2962ff]" />
           <span>{label}</span>
         </label>)}
@@ -103,14 +106,14 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
     </div>
     {onQuickOrder && <button
       type="button"
-      className="flex h-7 w-7 items-center justify-center rounded text-amber-500 hover:bg-amber-50 hover:text-amber-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+      className="flex h-7 w-7 items-center justify-center rounded-lg text-amber-500 hover:bg-amber-500/10 hover:text-amber-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
       onClick={onQuickOrder}
       disabled={quickOrderDisabled}
       aria-label="Quick Order z position boxu"
       title={quickOrderTitle ?? 'Quick Order — okamžitě vytvořit objednávku z position boxu'}
     ><Zap size={14} strokeWidth={1.5} fill="currentColor" /></button>}
-    <button type="button" className="flex h-7 w-7 items-center justify-center rounded hover:bg-[#f0f3fa]" onClick={onOpenSettings} aria-label="Position settings"><Settings size={14} strokeWidth={1.35} /></button>
-    <button type="button" className="flex h-7 w-7 items-center justify-center rounded hover:bg-[#f0f3fa]" onClick={() => engine.remove(drawing.id)} aria-label="Delete position"><Trash2 size={14} strokeWidth={1.35} /></button>
+    <button type="button" className={glassButton} onClick={onOpenSettings} aria-label="Position settings"><Settings size={14} strokeWidth={1.35} /></button>
+    <button type="button" className={glassButton} onClick={() => engine.remove(drawing.id)} aria-label="Delete position"><Trash2 size={14} strokeWidth={1.35} /></button>
   </div>;
 };
 

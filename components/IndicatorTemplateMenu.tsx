@@ -133,7 +133,7 @@ const IndicatorTemplateMenu: React.FC<{
       aria-expanded={open}
       onClick={() => { setOpen(current => !current); setNaming(false); if (!open) void syncChartTemplates(); }}
       title={activeTemplateName ?? undefined}
-      className={`flex items-center justify-between rounded-md border font-medium ${compact ? 'h-7 min-w-[76px] max-w-[126px] gap-1 px-2 text-[11px]' : 'h-9 min-w-[108px] max-w-[190px] gap-3 px-3 text-[13px]'} ${open ? 'border-[#2962ff]' : 'border-slate-300 hover:bg-slate-50'}`}
+      className={`flex items-center justify-between rounded-md border font-medium ${compact ? 'h-7 min-w-[76px] max-w-[126px] gap-1 px-2 text-[11px]' : 'h-9 min-w-[108px] max-w-[190px] gap-3 px-3 text-[13px]'} ${open ? 'border-[#2962ff]' : 'border-slate-300 hover:bg-slate-50 hover:text-slate-900'}`}
     >
       <span className="min-w-0 truncate">{buttonLabel}</span>
       <span className="shrink-0">{open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
@@ -141,7 +141,7 @@ const IndicatorTemplateMenu: React.FC<{
     {open && <div role="menu" aria-label={menuLabel} className={`absolute left-0 z-30 w-[210px] overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-xl ${placement === 'bottom' ? (compact ? 'top-8' : 'top-11') : (compact ? 'bottom-8' : 'bottom-11')}`}>
       {naming ? <form onSubmit={event => { event.preventDefault(); save(); }} className="space-y-2 p-3">
         <label className="block text-[11px] font-medium text-slate-500">Název šablony</label>
-        <input ref={inputRef} value={name} onChange={event => setName(event.target.value)} maxLength={60} placeholder={namePlaceholder} className="h-9 w-full rounded-md border border-slate-300 px-2 text-[13px] outline-none focus:border-[#2962ff]" />
+        <input ref={inputRef} value={name} onChange={event => setName(event.target.value)} maxLength={60} placeholder={namePlaceholder} className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-[13px] text-slate-900 outline-none focus:border-[#2962ff]" />
         <div className="flex justify-end gap-2">
           <button type="button" onClick={() => { setNaming(false); setName(''); }} className="h-8 rounded px-2 text-xs text-slate-600 hover:bg-slate-100">Cancel</button>
           <button type="submit" disabled={!name.trim()} className="flex h-8 items-center gap-1 rounded bg-[#2962ff] px-2.5 text-xs font-semibold text-white disabled:opacity-40"><Save size={13} /> Save</button>

@@ -1,5 +1,6 @@
 import { sharedRevealedCandles } from '../services/chartReplayPaint';
 import TradeProgress from './TradeProgress';
+import ChartWorkspaceMenu from './ChartWorkspaceMenu';
 import { chartGlassBar, chartGlassButton, chartGlassGrip } from '../services/chartGlass';
 import { historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
 import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
@@ -30,9 +31,7 @@ import { Actions as FlexLayoutActions, DockLocation as FlexLayoutDockLocation, t
 import {
   ChevronLeft,
   ChevronRight,
-  Download,
   GripVertical,
-  LayoutGrid,
   Loader2,
   LocateFixed,
   Maximize2,
@@ -42,12 +41,9 @@ import {
   Plus,
   Redo2,
   Rewind,
-  RotateCcw,
-  Save,
   SkipForward,
   StepForward,
   Undo2,
-  Upload,
   X,
 } from 'lucide-react';
 import { Trade } from '../types';
@@ -2673,8 +2669,6 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             flashTarget={() => workspaceShellRef.current}
           />
         )}
-        <button type="button" className={topButton} onClick={resetWorkspace} title="Obnovit výchozí rozložení"><RotateCcw size={14} /> <span className="hidden lg:inline">Reset</span></button>
-        <button type="button" className={topButton} onClick={saveWorkspace} title="Uložit rozložení"><Save size={14} /> <span className="hidden lg:inline">Uložit</span></button>
         <div className="relative">
           <button
             type="button"
@@ -2685,7 +2679,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             aria-expanded={layoutPickerOpen}
           >
             <CurrentChartLayoutGlyph id={layoutId} />
-            <span className="hidden lg:inline">Layout</span>
+            <span className="hidden 2xl:inline">Layout</span>
           </button>
           {layoutPickerOpen && (
             <ChartLayoutPicker
@@ -2698,11 +2692,16 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             />
           )}
         </div>
-        <button type="button" className={topButton} onClick={loadWorkspace} title="Načíst uložené rozložení"><LayoutGrid size={14} /> <span className="hidden xl:inline">Načíst</span></button>
-        <span className={`${topDivider} hidden md:block`} />
-        <button type="button" className={`${topButton} hidden md:inline-flex`} onClick={exportWorkspace} title="Exportovat workspace"><Download size={14} /></button>
-        <button type="button" className={`${topButton} hidden md:inline-flex`} onClick={() => fileInputRef.current?.click()} title="Importovat workspace"><Upload size={14} /></button>
-        <button type="button" className={`${topButton} hidden md:inline-flex`} onClick={recoverWorkspace} title="Vrátit workspace před posledním načtením nebo importem"><RotateCcw size={13} /><span className="hidden 2xl:inline">Předchozí workspace</span></button>
+        <ChartWorkspaceMenu
+          isDark={isDark}
+          buttonClassName={topButton}
+          onSave={saveWorkspace}
+          onLoad={loadWorkspace}
+          onReset={resetWorkspace}
+          onExport={exportWorkspace}
+          onImport={() => fileInputRef.current?.click()}
+          onRecover={recoverWorkspace}
+        />
         <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={importWorkspace} />
         <span className={topDivider} />
         <button
@@ -2761,6 +2760,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           {selectedFib && <FibDrawingFloatingToolbar
             engine={selectedFib.engine}
             drawing={selectedFib.drawing}
+            isDark={isDark}
             onOpenSettings={() => setFibSettingsOpen(true)}
           />}
           {selectedPosition && <PositionDrawingFloatingToolbar
@@ -2768,6 +2768,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             drawing={selectedPosition.drawing}
             onClose={() => setPositionSettingsOpen(false)}
             onOpenSettings={() => setPositionSettingsOpen(true)}
+            isDark={isDark}
             onQuickOrder={chartTradingSettings.quickOrderButton && backtestSession?.onQuickOrder ? submitSelectedPositionQuickOrder : undefined}
             quickOrderDisabled={Boolean(quickOrderDisabledReason)}
             quickOrderTitle={quickOrderDisabledReason ?? 'Quick Order — ihned zadat Market / Limit / Stop z position boxu'}

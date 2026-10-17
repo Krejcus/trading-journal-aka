@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { chartGlassBar, chartGlassButton } from '../services/chartGlass';
 import { DEFAULT_STYLE, type Drawing, type DrawingEngine } from '@getcandlekit/charts';
 import { GripVertical, Settings, Trash2 } from 'lucide-react';
 import { drawingToolSupportsFill } from '../services/chartDrawingStyle';
@@ -81,11 +82,10 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
   const fillColor = splitColorAlpha(drawing.style.fill ?? DEFAULT_FILL);
   const lineStyle = drawing.style.lineStyle ?? (drawing.style.dashed ? 'dashed' : 'solid');
   const templateStyle = normalizeDrawingStyle(drawing.style, DEFAULT_STYLE);
-  const controlClass = `flex h-7 min-w-7 items-center justify-center rounded px-1 transition-colors ${
-    isDark ? 'text-[#d1d4dc] hover:bg-white/10' : 'text-[#131722] hover:bg-[#f0f3fa]'
-  }`;
-  const selectClass = `h-7 rounded border px-1 text-[11px] outline-none ${
-    isDark ? 'border-white/15 bg-[#1e222d] text-[#d1d4dc]' : 'border-[#d1d4dc] bg-white text-[#131722]'
+  // Sklo jako panel přehrávání a oblíbené nástroje (services/chartGlass.ts).
+  const controlClass = `flex h-7 min-w-7 items-center justify-center rounded-lg px-1 transition-colors ${chartGlassButton(isDark)}`;
+  const selectClass = `h-7 rounded-lg border px-1 text-[11px] outline-none ${
+    isDark ? 'border-white/10 bg-[#1e222d] text-slate-200' : 'border-white/80 bg-white/60 text-slate-800'
   }`;
 
   return (
@@ -94,9 +94,9 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
       role="toolbar"
       aria-label="Nástroje kresby"
       data-chart-overlay-menu
-      className={`absolute z-[121] flex items-center gap-0.5 rounded-md border p-0.5 shadow-md ${
+      className={`absolute z-[121] flex items-center gap-0.5 rounded-xl p-1 ${
         position ? '' : 'left-1/2 top-1 -translate-x-1/2'
-      } ${isDark ? 'border-white/15 bg-[var(--bg-card)]' : 'border-[#d1d4dc] bg-[var(--bg-card)]'}`}
+      } ${chartGlassBar(isDark)}`}
       style={position ?? undefined}
       onPointerDown={event => event.stopPropagation()}
       onDoubleClick={event => event.stopPropagation()}
@@ -106,7 +106,7 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
         aria-label="Přesunout nástroje kresby"
         title="Přesunout"
         onPointerDown={startDrag}
-        className={`${controlClass} w-5 min-w-5 cursor-move touch-none ${isDark ? 'text-[#787b86]' : 'text-[#9598a1]'}`}
+        className={`${controlClass} w-5 min-w-5 cursor-move touch-none ${isDark ? 'text-slate-600' : 'text-slate-400'}`}
       >
         <GripVertical size={13} strokeWidth={1.4} />
       </button>

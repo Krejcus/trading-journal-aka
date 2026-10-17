@@ -5197,6 +5197,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       {!hideDrawingToolbar && selectedFib && <FibDrawingFloatingToolbar
         engine={selectedFib.engine}
         drawing={selectedFib.drawing}
+        isDark={isDark}
         onOpenSettings={() => setFibSettingsOpen(true)}
       />}
       {!hideDrawingToolbar && selectedDrawing && <GenericDrawingFloatingToolbar

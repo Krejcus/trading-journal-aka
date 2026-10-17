@@ -50,7 +50,7 @@ export default function ChartSnapshotButton({ className, capture, onSave, flashT
       aria-live="polite"
     >
       <Icon size={13} className={state?.status === 'busy' ? 'animate-spin' : ''} />
-      <span className={compactLabel ? 'hidden lg:inline' : 'hidden sm:inline'}>{label}</span>
+      <span className={compactLabel ? (state ? 'inline' : 'hidden 2xl:inline') : 'hidden sm:inline'}>{label}</span>
     </button>
   );
 }

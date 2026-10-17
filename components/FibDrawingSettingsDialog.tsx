@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { chartGlassBar, chartGlassButton, chartGlassMenu, chartGlassRow } from '../services/chartGlass';
 import type { DrawingEngine } from '@getcandlekit/charts';
 import { ArrowDownToLine, ArrowUpToLine, Copy, Eye, EyeOff, GripVertical, Lock, MoreHorizontal, RotateCcw, Settings, Trash2, Unlock, X } from 'lucide-react';
 import TradingViewColorPicker from './TradingViewColorPicker';
@@ -289,7 +290,8 @@ export const FibDrawingFloatingToolbar: React.FC<{
   engine: DrawingEngine;
   drawing: FibDrawing;
   onOpenSettings: () => void;
-}> = ({ engine, drawing, onOpenSettings }) => {
+  isDark?: boolean;
+}> = ({ engine, drawing, onOpenSettings, isDark = false }) => {
   const settings = getFibSettings(drawing);
   const update = (next: FibRetracementSettings) => updateFibDrawing(engine, drawing.id, next, true);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -351,7 +353,8 @@ export const FibDrawingFloatingToolbar: React.FC<{
     copy.points = copy.points.map(point => ({ ...point, time: point.time + 60 }));
     engine.commit(copy);
   };
-  const toolbarButton = 'flex h-7 min-w-7 items-center justify-center rounded px-1 text-slate-700 hover:bg-slate-100';
+  const toolbarButton = `flex h-7 min-w-7 items-center justify-center rounded-lg px-1 transition-colors ${chartGlassButton(isDark)}`;
+  const menuRow = `flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] ${chartGlassRow(isDark)}`;
   const moveLayer = (direction: 'front' | 'back') => {
     const drawings = [...engine.getDrawings()];
     const index = drawings.findIndex(item => item.id === drawing.id);
@@ -363,8 +366,8 @@ export const FibDrawingFloatingToolbar: React.FC<{
     engine.select(drawing.id);
     setMoreOpen(false);
   };
-  return <div ref={toolbarRef} className={`absolute z-[120] flex items-center gap-0 rounded-md border border-slate-300 bg-white p-0.5 shadow-md ${toolbarPosition ? '' : 'left-1/2 top-1 -translate-x-1/2'}`} style={toolbarPosition ?? undefined} role="toolbar" aria-label="Nástroje Fibonacci">
-    <button type="button" aria-label="Přesunout nástroje Fibonacci" title="Přesunout" onPointerDown={startToolbarDrag} className="flex h-7 w-5 shrink-0 cursor-move touch-none items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"><GripVertical size={13} strokeWidth={1.5} /></button>
+  return <div ref={toolbarRef} className={`absolute z-[120] flex items-center gap-0 rounded-xl p-1 ${chartGlassBar(isDark)} ${toolbarPosition ? '' : 'left-1/2 top-1 -translate-x-1/2'}`} style={toolbarPosition ?? undefined} role="toolbar" aria-label="Nástroje Fibonacci" data-chart-overlay-menu>
+    <button type="button" aria-label="Přesunout nástroje Fibonacci" title="Přesunout" onPointerDown={startToolbarDrag} className={`flex h-7 w-5 shrink-0 cursor-move touch-none items-center justify-center rounded-lg ${isDark ? 'text-slate-600 hover:bg-white/5 hover:text-slate-300' : 'text-slate-400 hover:bg-white/60 hover:text-slate-700'}`}><GripVertical size={13} strokeWidth={1.5} /></button>
     <IndicatorTemplateMenu compact placement="bottom" indicator="drawing:fib-retracement" value={settings} defaultValue={DEFAULT_FIB_SETTINGS} onApply={value => update(normalizeFibSettings(value as FibRetracementSettings))} />
     <TradingViewColorPicker compact value={settings.oneColor ? settings.oneColorValue : settings.levels.find(level => level.visible)?.color ?? '#2962ff'} opacity={settings.oneColor ? settings.oneColorOpacity : 100} onChange={(color, opacity) => update({ ...settings, oneColor: true, oneColorValue: color, oneColorOpacity: opacity })} label="Barva Fibonacci" />
     <Select className="h-7 px-1 text-[11px]" aria-label="Tloušťka Fibonacci čar" value={settings.levelLineWidth} onChange={event => update({ ...settings, levelLineWidth: Number(event.target.value) })}>{[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}px</option>)}</Select>
@@ -376,12 +379,12 @@ export const FibDrawingFloatingToolbar: React.FC<{
     <button type="button" className={toolbarButton} onClick={() => engine.remove(drawing.id)} title="Remove"><Trash2 size={14} /></button>
     <div className="relative">
       <button type="button" className={toolbarButton} title="More" aria-expanded={moreOpen} onClick={() => setMoreOpen(open => !open)}><MoreHorizontal size={14} /></button>
-      {moreOpen && <div role="menu" className="absolute right-0 top-8 w-48 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-xl">
-        <button type="button" role="menuitem" onClick={() => { update({ ...settings, hidden: !settings.hidden }); setMoreOpen(false); }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100">{settings.hidden ? <Eye size={15} /> : <EyeOff size={15} />} {settings.hidden ? 'Show' : 'Hide'}</button>
-        <button type="button" role="menuitem" onClick={() => { duplicate(); setMoreOpen(false); }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100"><Copy size={15} /> Duplicate</button>
-        <button type="button" role="menuitem" onClick={() => moveLayer('front')} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100"><ArrowUpToLine size={15} /> Bring to front</button>
-        <button type="button" role="menuitem" onClick={() => moveLayer('back')} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100"><ArrowDownToLine size={15} /> Send to back</button>
-        <button type="button" role="menuitem" onClick={() => { update(DEFAULT_FIB_SETTINGS); setMoreOpen(false); }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100"><RotateCcw size={15} /> Apply defaults</button>
+      {moreOpen && <div role="menu" className={`absolute right-0 top-9 w-48 overflow-hidden rounded-xl py-1 ${chartGlassMenu(isDark)}`}>
+        <button type="button" role="menuitem" onClick={() => { update({ ...settings, hidden: !settings.hidden }); setMoreOpen(false); }} className={menuRow}>{settings.hidden ? <Eye size={15} /> : <EyeOff size={15} />} {settings.hidden ? 'Show' : 'Hide'}</button>
+        <button type="button" role="menuitem" onClick={() => { duplicate(); setMoreOpen(false); }} className={menuRow}><Copy size={15} /> Duplicate</button>
+        <button type="button" role="menuitem" onClick={() => moveLayer('front')} className={menuRow}><ArrowUpToLine size={15} /> Bring to front</button>
+        <button type="button" role="menuitem" onClick={() => moveLayer('back')} className={menuRow}><ArrowDownToLine size={15} /> Send to back</button>
+        <button type="button" role="menuitem" onClick={() => { update(DEFAULT_FIB_SETTINGS); setMoreOpen(false); }} className={menuRow}><RotateCcw size={15} /> Apply defaults</button>
       </div>}
     </div>
   </div>;
