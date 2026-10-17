@@ -12,6 +12,7 @@ import {
   defaultChartSettings,
   lockedPriceRange,
   mergeChartSettings,
+  serializeChartSettings,
 } from '../services/chartSettings';
 
 const settings = () => defaultChartSettings(true);
@@ -224,5 +225,59 @@ describe('odpočet do uzavření svíčky', () => {
 
   it('záporný čas neteče do minusu', () => {
     expect(barCloseCountdown(-30)).toBe('0:00');
+  });
+});
+
+describe('barvy podle motivu appky', () => {
+  it('starší natvrdo uložené tmavé pozadí se ve světlém motivu chová jako „podle motivu“', () => {
+    const frozenDark = JSON.parse(JSON.stringify(defaultChartSettings(true)));
+    frozenDark.symbol.precision = 2;
+    const light = mergeChartSettings(frozenDark, false);
+    expect(light.canvas.backgroundColor).toBe('#ffffff');
+    expect(light.canvas.scalesTextColor).toBe(defaultChartSettings(false).canvas.scalesTextColor);
+    expect(light.symbol.bodyUpColor).toBe(defaultChartSettings(false).symbol.bodyUpColor);
+    // Ostatní volby zůstanou.
+    expect(light.symbol.precision).toBe(2);
+    expect(mergeChartSettings(frozenDark, true).canvas.backgroundColor).toBe('#090d12');
+  });
+
+  it('starší ručně zvolená barva platí v obou motivech', () => {
+    const custom = JSON.parse(JSON.stringify(defaultChartSettings(true)));
+    custom.canvas.backgroundColor = '#123456';
+    expect(mergeChartSettings(custom, false).canvas.backgroundColor).toBe('#123456');
+    expect(mergeChartSettings(custom, true).canvas.backgroundColor).toBe('#123456');
+  });
+
+  it('uložení drží ručně zvolenou barvu jen pro motiv, ve kterém vznikla', () => {
+    const edited = defaultChartSettings(true);
+    edited.canvas.backgroundColor = '#101010';
+    edited.canvas.gridLines = 'both';
+    const stored = JSON.parse(JSON.stringify(serializeChartSettings(edited, true, null)));
+    expect(stored.canvas.backgroundColor).toBeUndefined();
+    expect(stored.themed.dark).toEqual({ 'canvas.backgroundColor': '#101010' });
+    expect(mergeChartSettings(stored, true).canvas.backgroundColor).toBe('#101010');
+    expect(mergeChartSettings(stored, false).canvas.backgroundColor).toBe('#ffffff');
+    expect(mergeChartSettings(stored, false).canvas.gridLines).toBe('both');
+  });
+
+  it('úprava ve světlém motivu nesmaže ručně zvolené barvy tmavého', () => {
+    const dark = defaultChartSettings(true);
+    dark.canvas.backgroundColor = '#101010';
+    const first = JSON.parse(JSON.stringify(serializeChartSettings(dark, true, null)));
+    const light = mergeChartSettings(first, false);
+    light.canvas.backgroundColor = '#fafafa';
+    const second = JSON.parse(JSON.stringify(serializeChartSettings(light, false, first)));
+    expect(mergeChartSettings(second, true).canvas.backgroundColor).toBe('#101010');
+    expect(mergeChartSettings(second, false).canvas.backgroundColor).toBe('#fafafa');
+  });
+
+  it('převod staršího zápisu zachová jeho ruční barvu i pro druhý motiv', () => {
+    const legacy = JSON.parse(JSON.stringify(defaultChartSettings(true)));
+    legacy.canvas.backgroundColor = '#222222';
+    const edited = mergeChartSettings(legacy, false);
+    edited.canvas.gridLines = 'both';
+    const stored = JSON.parse(JSON.stringify(serializeChartSettings(edited, false, legacy)));
+    expect(mergeChartSettings(stored, true).canvas.backgroundColor).toBe('#222222');
+    expect(mergeChartSettings(stored, false).canvas.backgroundColor).toBe('#222222');
   });
 });

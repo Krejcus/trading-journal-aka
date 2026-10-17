@@ -447,6 +447,22 @@ const buildWorkspaceLayout = (
   });
 };
 
+/**
+ * Timeframy panelů fullscreenu (profil deníku) — při dalším otevření je
+ * rozložení stejné, jak sis ho nechal. Instrument se bere vždy z obchodu.
+ */
+const panelTimeframesKey = (layoutKey: string) => `${layoutKey}:timeframes`;
+const MARKET_TIMEFRAMES: readonly MarketTimeframe[] = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+const loadPanelTimeframes = (layoutKey: string): MarketTimeframe[] => {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(panelTimeframesKey(layoutKey)) ?? 'null') as unknown;
+    return Array.isArray(parsed) ? parsed.filter((value): value is MarketTimeframe => MARKET_TIMEFRAMES.includes(value as MarketTimeframe)) : [];
+  } catch { return []; }
+};
+const savePanelTimeframes = (layoutKey: string, timeframes: MarketTimeframe[]) => {
+  try { window.localStorage.setItem(panelTimeframesKey(layoutKey), JSON.stringify(timeframes)); } catch { /* private storage */ }
+};
+
 const loadLayoutId = (storageKey: string, fallback: ChartWorkspaceLayoutId): ChartWorkspaceLayoutId => {
   try {
     const value = window.localStorage.getItem(storageKey) as ChartWorkspaceLayoutId | null;
@@ -1423,7 +1439,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setActivePanelId(id);
   }, [activePanelId]);
   const initialLayout = useMemo(
-    () => buildWorkspaceLayout(initialRoot, initialLayoutIdRef.current, undefined, indicatorDefaults),
+    () => buildWorkspaceLayout(
+      initialRoot,
+      initialLayoutIdRef.current,
+      backtestSession ? undefined : loadPanelTimeframes(layoutStorageKey).map(timeframe => panelConfig(initialRoot, timeframe, indicatorDefaults)),
+      indicatorDefaults,
+    ),
     // Indikátory jen při otevření — další přepnutí mění panely, ne rozložení.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [initialRoot],
@@ -1452,6 +1473,17 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     restoredSessionLayoutRef.current = true;
   }, [backtestSession, workspace]);
 
+  // Profil deníku: všechny panely mají stejné indikátory. Zapnutí/vypnutí
+  // v jiném grafu (detail, Deník dne, jiný panel) se propíše hned, ne až při
+  // dalším otevření.
+  useEffect(() => {
+    if (backtestSession || !tradeIndicators) return;
+    panelControlsRef.current.forEach(control => {
+      const { showFvg, showLevels, showStructure } = control.config;
+      if (showFvg === tradeIndicators.fvg && showLevels === tradeIndicators.levels && showStructure === tradeIndicators.structure) return;
+      control.updateConfig({ showFvg: tradeIndicators.fvg, showLevels: tradeIndicators.levels, showStructure: tradeIndicators.structure });
+    });
+  }, [backtestSession, panelControls, tradeIndicators]);
   const getLiveModel = useCallback(() => (workspace as unknown as { driver?: { getModel?: () => FlexLayoutModel | null } })
     .driver?.getModel?.() ?? null, [workspace]);
   const [paneLayout, setPaneLayout] = useState<{ count: number; maximizedPanelId: string | null }>({ count: 1, maximizedPanelId: null });
@@ -1482,8 +1514,14 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       let count = 0;
       let maximizedPanelId: string | null = null;
       const updates: { id: string; enableTabStrip: boolean }[] = [];
+      const timeframes: MarketTimeframe[] = [];
       model.visitNodes(node => {
-        if (node.getType() === 'tab') count += 1;
+        if (node.getType() === 'tab') {
+          count += 1;
+          const instance = (node as FlexLayoutNode & { getConfig?: () => { config?: Partial<WorkspacePanelConfig> } | undefined }).getConfig?.();
+          const timeframe = instance?.config?.timeframe;
+          if (timeframe && MARKET_TIMEFRAMES.includes(timeframe)) timeframes.push(timeframe);
+        }
         if (node.getType() !== 'tabset') return;
         const tabset = node as FlexLayoutNode & { isMaximized?: () => boolean; isEnableTabStrip?: () => boolean; getSelectedNode?: () => FlexLayoutNode | undefined };
         const wantsStrip = node.getChildren().length > 1;
@@ -1491,6 +1529,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         if (tabset.isMaximized?.()) maximizedPanelId = tabset.getSelectedNode?.()?.getId() ?? null;
       });
       updates.forEach(update => model.doAction(FlexLayoutActions.updateNodeAttributes(update.id, { enableTabStrip: update.enableTabStrip })));
+      if (!backtestSession && timeframes.length === count && count > 0) savePanelTimeframes(layoutStorageKey, timeframes);
       setPaneLayout(current => current.count === count && current.maximizedPanelId === maximizedPanelId
         ? current
         : { count, maximizedPanelId });
@@ -1508,7 +1547,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       if (frame !== null) window.cancelAnimationFrame(frame);
       if (retry !== null) window.clearTimeout(retry);
     };
-  }, [getLiveModel, workspace, workspaceMountVersion]);
+  }, [backtestSession, getLiveModel, layoutStorageKey, workspace, workspaceMountVersion]);
   const findTabset = useCallback((model: FlexLayoutModel, panelId: string) => {
     let tabsetId: string | null = null;
     model.visitNodes(node => {

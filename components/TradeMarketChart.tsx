@@ -33,7 +33,7 @@ import { candleReplayPath, candleUntilFill, partialReplayCandle, type PathPoint 
 import { JOURNAL_BUY_COLOR, JOURNAL_SELL_COLOR } from '../services/journalChartPrimitive';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { Trade } from '../types';
-import CandleKitTradeChart from './CandleKitTradeChart';
+import CandleKitTradeChart, { SHARED_INDICATOR_SETTINGS_EVENT } from './CandleKitTradeChart';
 import AlphaTradeChartWorkspace, { type WorkspaceReviewSlots } from './AlphaTradeChartWorkspace';
 import ChartTimeframePicker from './ChartTimeframePicker';
 import {
@@ -224,7 +224,14 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // po jeho vyřešení (a po změně session) se snapshot přečte znovu.
   const [indicatorStyleVersion, setIndicatorStyleVersion] = useState(0);
   useEffect(() => onChartAppearanceScopeBroadcast(() => setIndicatorStyleVersion(value => value + 1)), []);
-  // Znovu i při každém návratu na graf (styl mohl být mezitím uložen v backtestu).
+  // Profil deníku: změna stylu v jiném grafu (fullscreen, Deník dne) se hned
+  // projeví i tady.
+  useEffect(() => {
+    const reread = () => setIndicatorStyleVersion(value => value + 1);
+    window.addEventListener(SHARED_INDICATOR_SETTINGS_EVENT, reread);
+    return () => window.removeEventListener(SHARED_INDICATOR_SETTINGS_EVENT, reread);
+  }, []);
+  // Znovu i při každém návratu na graf.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- verze = pokyn přečíst znovu
   const indicatorStyle = useMemo(() => detailIndicatorStyleSnapshot(), [indicatorStyleVersion, revealKey]);
   const levelsWanted = tradeIndicators.levels;

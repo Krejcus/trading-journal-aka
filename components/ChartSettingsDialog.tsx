@@ -211,6 +211,12 @@ export interface ChartSettingsDialogProps {
   onCancel: () => void;
   /** `allPanels` odlišuje „Ok" (jen upravovaný graf) od „Na všechny grafy". */
   onApply: (settings: ChartSettings, allPanels: boolean) => void;
+  /**
+   * Profil deníku (mimo backtest): změna platí pro všechny grafy appky, takže
+   * je jen jedno tlačítko „Uložit“ a volby, které fungují jen v backtestu
+   * (Quick Order, automatický box, čáry objednávek, trojúhelníky fillů), se schovají.
+   */
+  journalProfile?: boolean;
 }
 
 export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
@@ -219,6 +225,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
   onPreview,
   onCancel,
   onApply,
+  journalProfile = false,
 }) => {
   const [tab, setTab] = useState<TabId>('symbol');
   const [draft, setDraft] = useState(settings);
@@ -504,7 +511,17 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
               </>
             )}
 
-            {tab === 'trading' && (
+            {tab === 'trading' && journalProfile && (
+              <Section title="Obchod na grafu">
+                <Check
+                  checked={trading.orderPriceLabels}
+                  onChange={orderPriceLabels => update('trading', { orderPriceLabels })}
+                  label="Zobrazit ceny obchodů na cenové ose"
+                />
+              </Section>
+            )}
+
+            {tab === 'trading' && !journalProfile && (
               <>
                 <Section title="Rychlé objednávky">
                   <Check
@@ -688,13 +705,24 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
           />
           <div className="flex flex-wrap justify-end gap-3">
             <button type="button" onClick={onCancel} className="h-8 rounded-md border border-slate-300 px-5 text-[13px] font-medium hover:bg-slate-50">Zrušit</button>
-            <button
-              type="button"
-              onClick={() => onApply(draft, true)}
-              title="Přepíše nastavení ve všech grafech workspace"
-              className="h-8 rounded-md border border-slate-300 px-4 text-[13px] font-medium hover:bg-slate-50"
-            >Na všechny grafy</button>
-            <button type="button" onClick={() => onApply(draft, false)} className="h-8 rounded-md bg-[#2962ff] px-6 text-[13px] font-semibold text-white hover:bg-[#1e53e5]">Ok</button>
+            {journalProfile ? (
+              <button
+                type="button"
+                onClick={() => onApply(draft, true)}
+                title="Nastavení platí pro všechny grafy appky (mimo backtest)"
+                className="h-8 rounded-md bg-[#2962ff] px-6 text-[13px] font-semibold text-white hover:bg-[#1e53e5]"
+              >Uložit pro všechny grafy</button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onApply(draft, true)}
+                  title="Přepíše nastavení ve všech grafech workspace"
+                  className="h-8 rounded-md border border-slate-300 px-4 text-[13px] font-medium hover:bg-slate-50"
+                >Na všechny grafy</button>
+                <button type="button" onClick={() => onApply(draft, false)} className="h-8 rounded-md bg-[#2962ff] px-6 text-[13px] font-semibold text-white hover:bg-[#1e53e5]">Ok</button>
+              </>
+            )}
           </div>
         </footer>
       </section>
