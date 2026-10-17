@@ -19,6 +19,8 @@ const hide = () => {
   element = null;
 };
 
+export const dismissChartProfileToast = (): void => hide();
+
 export const announceChartProfileChange = (message: string, undo?: () => void): void => {
   if (typeof document === 'undefined') return;
   hide();

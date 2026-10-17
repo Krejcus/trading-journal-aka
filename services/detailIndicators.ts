@@ -1,4 +1,4 @@
-import { chartAppearanceUserId, inheritGlobalAppearance } from './chartAppearanceScope';
+import { chartAppearanceUserId, inheritGlobalAppearance, stampChartProfileEdit } from './chartAppearanceScope';
 import { mergeIndicatorSettings, type AlphaTradeIndicatorSettings } from './chartIndicatorSettings';
 import { panelSettingsEnvelope } from './chartPanelSettings';
 
@@ -87,6 +87,7 @@ export function hasSavedTradeChartIndicators(): boolean {
 export function writeTradeChartIndicators(next: TradeChartIndicators): void {
   const value = { fvg: next.fvg, levels: next.levels, structure: next.structure };
   try { window.localStorage.setItem(DETAIL_TOGGLES_KEY, JSON.stringify(value)); } catch { /* jen pro tuto relaci */ }
+  stampChartProfileEdit();
   window.dispatchEvent(new CustomEvent(TRADE_CHART_INDICATORS_EVENT, { detail: value }));
 }
 

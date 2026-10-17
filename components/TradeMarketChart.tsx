@@ -227,7 +227,12 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // Profil deníku: změna stylu v jiném grafu (fullscreen, Deník dne) se hned
   // projeví i tady.
   useEffect(() => {
-    const reread = () => setIndicatorStyleVersion(value => value + 1);
+    // Jen po uložení (nebo pokynu přečíst znovu) — náhled v dialogu ještě
+    // v úložišti není a přečtení by ho hned vrátilo zpět.
+    const reread = (event: Event) => {
+      const detail = (event as CustomEvent<{ persisted?: boolean; reload?: boolean }>).detail;
+      if (detail?.persisted || detail?.reload) setIndicatorStyleVersion(value => value + 1);
+    };
     window.addEventListener(SHARED_INDICATOR_SETTINGS_EVENT, reread);
     return () => window.removeEventListener(SHARED_INDICATOR_SETTINGS_EVENT, reread);
   }, []);

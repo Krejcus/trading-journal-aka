@@ -372,7 +372,8 @@ interface WorkspacePaneActions {
 
 interface WorkspacePanelControl {
   config: WorkspacePanelConfig;
-  updateConfig: (next: Partial<WorkspacePanelConfig>) => void;
+  /** `fromProfile`: změna přišla z profilu — nepropisovat ji zpátky. */
+  updateConfig: (next: Partial<WorkspacePanelConfig>, options?: { fromProfile?: boolean }) => void;
   indicatorController: IndicatorController;
   activeLibraryIndicators: string[];
   focusTrade: () => void;
@@ -608,10 +609,10 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   );
   const focusTrade = useCallback(() => setFocusRequest(value => value + 1), []);
   const handleChartApiReady = useCallback((api: ChartViewApi | null) => setChartApi(api), []);
-  const updatePanelConfig = useCallback((next: Partial<WorkspacePanelConfig>) => {
+  const updatePanelConfig = useCallback((next: Partial<WorkspacePanelConfig>, options?: { fromProfile?: boolean }) => {
     if (next.root !== undefined || next.timeframe !== undefined) setChartApi(null);
     updateConfig(next);
-    if (context.onTradeIndicatorsChange && (next.showFvg !== undefined || next.showLevels !== undefined || next.showStructure !== undefined)) {
+    if (!options?.fromProfile && context.onTradeIndicatorsChange && (next.showFvg !== undefined || next.showLevels !== undefined || next.showStructure !== undefined)) {
       context.onTradeIndicatorsChange({
         fvg: next.showFvg ?? config.showFvg,
         levels: next.showLevels ?? config.showLevels,
@@ -1481,7 +1482,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     panelControlsRef.current.forEach(control => {
       const { showFvg, showLevels, showStructure } = control.config;
       if (showFvg === tradeIndicators.fvg && showLevels === tradeIndicators.levels && showStructure === tradeIndicators.structure) return;
-      control.updateConfig({ showFvg: tradeIndicators.fvg, showLevels: tradeIndicators.levels, showStructure: tradeIndicators.structure });
+      control.updateConfig(
+        { showFvg: tradeIndicators.fvg, showLevels: tradeIndicators.levels, showStructure: tradeIndicators.structure },
+        { fromProfile: true },
+      );
     });
   }, [backtestSession, panelControls, tradeIndicators]);
   const getLiveModel = useCallback(() => (workspace as unknown as { driver?: { getModel?: () => FlexLayoutModel | null } })

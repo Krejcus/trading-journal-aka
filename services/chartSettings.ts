@@ -721,8 +721,8 @@ export const broadcastChartSettings = (
 export const saveChartSettings = (
   settings: ChartSettings,
   source: symbol,
-  requestedTarget: PanelSettingsTarget = { panelId: DEFAULT_CHART_PANEL_ID, allPanels: true },
-  isDark = true,
+  requestedTarget: PanelSettingsTarget,
+  isDark: boolean,
 ): void => {
   const target = chartSettingsSaveTarget(requestedTarget);
   const stored = serializeChartSettings(settings, isDark, storedSettingsFor(target.panelId));
@@ -735,6 +735,16 @@ export const saveChartSettings = (
   cache.set(cacheKey(target.panelId, isDark), structuredClone(settings));
   broadcastChartSettings(settings, source, target);
 };
+
+// Profil ze serveru (jiné zařízení) se zapsal do úložiště — přečíst znovu.
+if (typeof window !== 'undefined') {
+  window.addEventListener('alphatrade:chart-profile-applied', () => {
+    cache.clear();
+    window.dispatchEvent(new CustomEvent(CHART_SETTINGS_EVENT, {
+      detail: { source: Symbol('chart-profile-sync'), reload: true },
+    }));
+  });
+}
 
 // Otevření i zavření session mění platný zdroj nastavení. Cache musí padnout a
 // namontované panely se to dozvědí stejnou cestou jako při běžné úpravě.

@@ -69,7 +69,25 @@ export const writeGlobalChartAppearance = (slot: ChartAppearanceSlot, value: unk
   globalMemory = { ...globalMemory, [slot]: clone(value) };
   const key = appearanceUserId === null ? CHART_APPEARANCE_STORAGE_KEYS[slot] : chartAppearanceUserStorageKey(slot, appearanceUserId);
   try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* private storage retains this owner's memory */ }
+  stampChartProfileEdit();
   return true;
+};
+
+/**
+ * Čas poslední úpravy profilu grafů na tomto zařízení. Synchronizace podle něj
+ * pozná, která změna je novější — čas úpravy, ne čas, kdy se stihla nahrát.
+ */
+const editedAtKey = () => `alphatrade:chart-profile-edited-at${appearanceUserId ? `:user:${appearanceUserId}` : ''}`;
+export const stampChartProfileEdit = (at: number = Date.now()): void => {
+  if (appearanceUserId === undefined) return;
+  try { window.localStorage.setItem(editedAtKey(), String(at)); } catch { /* jen čas */ }
+};
+export const chartProfileEditedAt = (): number | null => {
+  if (appearanceUserId === undefined) return null;
+  try {
+    const value = Number(window.localStorage.getItem(editedAtKey()));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch { return null; }
 };
 
 let scopeId: string | null = null;

@@ -67,7 +67,7 @@ import {
   type NasdaqFuturesRoot,
 } from '../services/chartInstrumentLegend';
 import { thinPriceAxisLabels } from '../services/chartPriceAxisLabels';
-import { announceChartProfileChange } from '../services/chartProfileToast';
+import { announceChartProfileChange, dismissChartProfileToast } from '../services/chartProfileToast';
 import {
   calculateMarketStructure,
   findEntryEdgeFairValueGap,
@@ -482,7 +482,7 @@ const ChartIndicatorLegend: React.FC<{
         const id = item.customId;
         // Zpět přímo do profilu (ne přes `toggle` — ten má v closure starý stav).
         announceChartProfileChange(`${item.title} odebrán ze všech grafů`, () => {
-          writeTradeChartIndicators({ ...readTradeChartIndicators(), [id]: true });
+          if (activeChartAppearanceScope() === null) writeTradeChartIndicators({ ...readTradeChartIndicators(), [id]: true });
         });
       }
     } else if (controller && item.libraryName) {
@@ -1734,7 +1734,18 @@ const persistTradeChartIndicatorSettings = (settings: AlphaTradeIndicatorSetting
 // namontované grafy se to dozvědí stejnou cestou jako při běžné úpravě.
 onChartAppearanceScopeReset(() => {
   sharedIndicatorSettingsCache.clear();
+  // „Vrátit“ z deníku po přepnutí do backtestu (nebo zpět) už neplatí.
+  dismissChartProfileToast();
 });
+// Profil ze serveru (jiné zařízení) — styl indikátorů si grafy přečtou znovu.
+if (typeof window !== 'undefined') {
+  window.addEventListener('alphatrade:chart-profile-applied', () => {
+    sharedIndicatorSettingsCache.clear();
+    window.dispatchEvent(new CustomEvent(SHARED_INDICATOR_SETTINGS_EVENT, {
+      detail: { source: Symbol('chart-profile-sync'), reload: true },
+    }));
+  });
+}
 onChartAppearanceScopeBroadcast(() => {
   // Každý panel si po přepnutí session načte vlastní hodnotu sám; událost je
   // jen pokyn „přečti si to znovu".
@@ -1910,12 +1921,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const updateIndicatorSettings = useCallback((
     next: AlphaTradeIndicatorSettings,
     allPanels = false,
+    persisted = false,
   ) => {
     const target: PanelSettingsTarget = { panelId: settingsPanelId, allPanels: allPanels || isIndicatorJournalProfile() };
     sharedIndicatorSettingsCache.set(indicatorCacheKey(settingsPanelId), next);
     setIndicatorSettings(next);
     window.dispatchEvent(new CustomEvent(SHARED_INDICATOR_SETTINGS_EVENT, {
-      detail: { settings: next, source: settingsSyncSourceRef.current, target },
+      detail: { settings: next, source: settingsSyncSourceRef.current, target, persisted },
     }));
   }, [settingsPanelId]);
   useEffect(() => {
@@ -5286,7 +5298,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             updateChartSettings(next, true, allPanels);
             setChartSettingsOpen(false);
             if (previous && isChartSettingsJournalProfile()) {
-              announceChartProfileChange('Nastavení grafu změněno pro všechny grafy', () => updateChartSettings(previous, true, true));
+              announceChartProfileChange('Nastavení grafu změněno pro všechny grafy', () => {
+                if (isChartSettingsJournalProfile()) updateChartSettings(previous, true, true);
+              });
             }
           }}
         />,
@@ -5319,13 +5333,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
                   legacySettingsStorageKey,
                 );
               }
-              updateIndicatorSettings(value, allPanels);
+              updateIndicatorSettings(value, allPanels, true);
             };
             save(next);
             settingsBackupRef.current = null;
             setSettingsDialogIndicator(null);
             if (previous && isIndicatorJournalProfile()) {
-              announceChartProfileChange('Styl indikátoru změněn ve všech grafech', () => save(previous));
+              announceChartProfileChange('Styl indikátoru změněn ve všech grafech', () => {
+                // Mezitím otevřený backtest: návrat deníku do session nepatří.
+                if (isIndicatorJournalProfile()) save(previous);
+              });
             }
           }}
         />,

@@ -262,6 +262,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-17 — Profil grafů pro celý deník, barvy podle motivu (Claude, větev, NEnasazeno)
+- Filip rozhodl: grafy normální appky (detail, fullscreen, přehrávání, Review, Deník dne, telefon,
+  snímky) mají **jeden profil**; backtest je úplně stranou (vlastní session nastavení). Změna
+  kdekoli = změna všude (bez přepínače „synchronizovat“), hláška „Změněno pro všechny grafy ·
+  Vrátit“. Oko v legendě schová indikátor jen v daném grafu, křížek ho odebere ze všech.
+- Příčina „graf je černý ve světlé appce“: `saveChartSettings` ukládal celý objekt včetně
+  výchozích barev tmavého motivu a cache `loadChartSettings` neznala motiv. Nově se barvy
+  závislé na motivu (`THEMED_CHART_COLOR_KEYS`) ukládají jen jako ruční odchylka do
+  `themed.{light,dark}`; starý zápis s výchozí barvou kteréhokoli motivu = „podle motivu“.
+  Grafy se po přepnutí motivu přebarví bez reloadu.
+- Mimo backtest: `saveChartSettings` vždy `allPanels`, čtení přes `readProfileSettings`
+  (shared → panel default → první panel); styl indikátorů stejně (`journalIndicatorProfile`),
+  backtest už nepíše `indicator-style-latest` (dřív jeho styl prosakoval do detailu). Panely
+  fullscreenu sledují zapnuté indikátory živě a pamatují si timeframy
+  (`alphatrade:chart-workspace-layout[:scope]:timeframes`).
+- Dialog nastavení v deníku: jedno „Uložit pro všechny grafy“, schované volby, které fungují jen
+  v backtestu (Quick Order, auto box, čáry objednávek, trojúhelníky fillů, spojnice).
+- Synchronizace `user_chart_profiles` je obousměrná (bez změny schématu, `updated_at`): push
+  místní změny do 30 s, pull po přihlášení, při návratu do appky a každé 2 min; novější vyhraje
+  (`decideChartProfileSync`), první běh nové verze převezme server. Profil nově nese i výchozí
+  styly kreslení. Stav v `alphatrade:chart-profile-sync:v2:user:<uid>`.
+- Záložka Grafy v Nastavení appky **záměrně není** (Filip: nepotřebné) — vzhled se upravuje jen
+  v grafu (pravé tlačítko → Nastavení) a platí všude.
+- Starší verze appky (produkce, iPhone bundle) `themed` neznají: barvy závislé na motivu u nich
+  padnou na výchozí podle motivu (ruční barvy pozadí uvidí jen nová verze).
+
 ### 2026-10-15 dopoledne — Grafy blíž TradingView: replay panel, panely, telefon (Claude, větev, NEnasazeno)
 - Inventura grafů: tři replaye (detail `TradeReplayBar`, workspace Bar Replay, iOS lab), dva
   kreslicí systémy (desktop toolbar vs. telefonní `dayChartTools`), dvě vrstvy poznámek. Varianta
