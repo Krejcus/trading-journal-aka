@@ -262,6 +262,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-17 dopoledne — NASAZENO: grafy, profil grafů, vrstva kreseb a poznámek (Claude)
+- Na Filipovo „nasaď“ sloučeno `claude/tv-replay-parity-20261015` (obsahuje
+  `claude/day-chart-fullscreen-20261014`) do `main` jako `91441160` přes čistý release worktree
+  `~/alphatrade-worktrees/release-tv-parity`. Brána: 5372 testů, tsc, build zelené. Vercel produkce
+  READY (`dpl_DxzXgwukWofHjNh3yuHMJzXLRtvz`, bundle `index-B-dPN-ga.js`).
+- **iPhone appka se tím neaktualizovala** (Capacitor bunduje `dist-native`) — telefonní graf dne,
+  dotykové kreslení a vrstva kreseb na iPhonu až po iOS buildu z `main`.
+- Převod kreseb potvrzuje Filip sám na každém zařízení (dialog po prvním načtení). Do potvrzení
+  grafy na daném zařízení jedou po staru z localStorage.
+
 ### 2026-10-17 odpoledne — Kresby a poznámky jako jedna vrstva podle trhu a času (Claude, větev, tabulka NASAZENA, appka NE)
 - Filip schválil novou tabulku **`chart_drawings`** (bez zálohy, jen přidání). Aplikováno na produkci
   přes MCP `apply_migration` (soubor `supabase/migrations/20261017100000_chart_drawings.sql`,
