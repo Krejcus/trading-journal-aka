@@ -195,12 +195,24 @@ export interface ChartTradingSettings {
   executionMarkerSize: ChartExecutionMarkerSize;
 }
 
+/**
+ * Jak se svíčka objevuje při přehrávání (detail obchodu i Bar Replay):
+ * - `smooth` — plynule po odhadnuté cestě open → high/low → close (plnění
+ *   obchodu v ní padnou na svůj čas a cenu; pořadí high/low jinde je odhad),
+ * - `whole` — celá svíčka naskočí najednou (jen to, co data opravdu říkají).
+ */
+export type ChartReplayCandleMode = 'smooth' | 'whole';
+export interface ChartReplaySettings {
+  candleMode: ChartReplayCandleMode;
+}
+
 export interface ChartSettings {
   symbol: ChartSymbolSettings;
   statusLine: ChartStatusLineSettings;
   scales: ChartScalesSettings;
   canvas: ChartCanvasSettings;
   trading: ChartTradingSettings;
+  replay: ChartReplaySettings;
 }
 
 /** Světlé i tmavé téma sdílí jeden model; barvy plátna se liší jen ve výchozích hodnotách. */
@@ -296,6 +308,9 @@ export const defaultChartSettings = (isDark: boolean): ChartSettings => ({
     executionMarkers: true,
     executionMarkerSize: 'medium',
   },
+  replay: {
+    candleMode: 'smooth',
+  },
 });
 
 /**
@@ -338,6 +353,9 @@ export const mergeChartSettings = (
       crosshair: { ...defaults.canvas.crosshair, ...parsed.canvas?.crosshair },
     },
     trading: { ...defaults.trading, ...parsed.trading },
+    replay: {
+      candleMode: parsed.replay?.candleMode === 'whole' ? 'whole' : defaults.replay.candleMode,
+    },
   }, saved, isDark);
 };
 

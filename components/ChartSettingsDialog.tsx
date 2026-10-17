@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CandlestickChart, LayoutGrid, Rows3, Ruler, X, Zap } from 'lucide-react';
+import { CandlestickChart, LayoutGrid, PlayCircle, Rows3, Ruler, X, Zap } from 'lucide-react';
 import TradingViewColorPicker from './TradingViewColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 import {
@@ -21,7 +21,7 @@ import {
 } from '../services/chartSettings';
 import { CHART_DATE_FORMATS, formatChartDate, type ChartDateFormat, zonedTimeParts } from '../services/chartTimeAxisFormat';
 
-type TabId = 'symbol' | 'statusLine' | 'scales' | 'trading' | 'canvas';
+type TabId = 'symbol' | 'statusLine' | 'scales' | 'trading' | 'replay' | 'canvas';
 
 /** Jmenný prostor v úložišti šablon, aby se nemíchaly s šablonami indikátorů. */
 const CHART_SETTINGS_TEMPLATE_NAMESPACE = 'chart-settings';
@@ -31,6 +31,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'statusLine', label: 'Stavový řádek', icon: <Rows3 size={15} strokeWidth={1.6} /> },
   { id: 'scales', label: 'Osy a čáry', icon: <Ruler size={15} strokeWidth={1.6} /> },
   { id: 'trading', label: 'Obchodování', icon: <Zap size={15} strokeWidth={1.6} /> },
+  { id: 'replay', label: 'Přehrávání', icon: <PlayCircle size={15} strokeWidth={1.6} /> },
   { id: 'canvas', label: 'Plátno', icon: <LayoutGrid size={15} strokeWidth={1.6} /> },
 ];
 
@@ -509,6 +510,27 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                   />
                 </Section>
               </>
+            )}
+
+            {tab === 'replay' && (
+              <Section title="Svíčky v přehrávání">
+                <Row label="Jak se svíčka objevuje">
+                  <Select
+                    value={draft.replay.candleMode}
+                    width="w-[200px]"
+                    options={[
+                      { value: 'smooth', label: 'Plynule (open → high/low → close)' },
+                      { value: 'whole', label: 'Celá svíčka najednou' },
+                    ]}
+                    onChange={candleMode => update('replay', { candleMode: candleMode as 'smooth' | 'whole' })}
+                  />
+                </Row>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                  Plynule: svíčka se během kroku postupně tvoří; ve svíčce s plněním projde cena přesně časem a cenou
+                  fillu, jinde je pořadí high/low jen odhad (1m data ho neznají). Celá svíčka: naskočí najednou — jen to,
+                  co data opravdu říkají. Platí pro detail obchodu i Bar Replay; krok 5m a víc a rychlost nad 5× jsou vždy po celých svíčkách.
+                </p>
+              </Section>
             )}
 
             {tab === 'trading' && journalProfile && (

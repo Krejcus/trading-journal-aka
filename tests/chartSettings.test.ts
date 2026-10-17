@@ -281,3 +281,12 @@ describe('barvy podle motivu appky', () => {
     expect(mergeChartSettings(stored, false).canvas.backgroundColor).toBe('#222222');
   });
 });
+
+describe('svíčky v přehrávání', () => {
+  it('výchozí je plynule; uložená volba „celá svíčka“ přežije; nesmysl padne na výchozí', () => {
+    expect(defaultChartSettings(true).replay.candleMode).toBe('smooth');
+    expect(mergeChartSettings({ replay: { candleMode: 'whole' } }, false).replay.candleMode).toBe('whole');
+    expect(mergeChartSettings({ replay: { candleMode: 'nonsense' } }, false).replay.candleMode).toBe('smooth');
+    expect(mergeChartSettings({ symbol: { precision: 2 } }, false).replay.candleMode).toBe('smooth');
+  });
+});

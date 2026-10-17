@@ -28,6 +28,7 @@ import ChartSnapshotButton from './ChartSnapshotButton';
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
 import { useDayNotesForWindow } from '../hooks/useDayNotesForWindow';
+import { setReplayCandleMode, useReplayCandleMode } from '../services/chartReplayCandleMode';
 import { drawingLayerDay } from '../services/chartDrawingLayer';
 import TradeReplayBar, { type TradeReplayGoTo, type TradeReplaySpeed } from './TradeReplayBar';
 import { entrySnapshotMoment, historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
@@ -292,9 +293,9 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         frame = window.requestAnimationFrame(tick);
         return;
       }
-      // Animuje se jen 1m graf; na vyšším timeframu (a s omezeným pohybem)
-      // svíčka naskočí celá jako dřív.
-      if (!reducedMotion && frameTf === '1m' && api) {
+      // Animuje se jen 1m graf a jen v plynulém režimu (nastavení grafu →
+      // Přehrávání); jinak svíčka naskočí celá.
+      if (!reducedMotion && frameTf === '1m' && api && candleModeRef.current === 'smooth') {
         if (!path || path.time !== next) {
           const candle = candlesNow.find(item => item.time === next) ?? null;
           const fills = candle && history ? history.fills.filter(fill => fill.at >= next * 1000 && fill.at < next * 1000 + 60_000) : [];
@@ -322,6 +323,9 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
   }, [playing, speed, replayStart, replayEnd, history]);
+  const candleMode = useReplayCandleMode(isDark);
+  const candleModeRef = useRef(candleMode);
+  candleModeRef.current = candleMode;
   useEffect(() => { if (playing && cursor != null && cursor >= replayEnd) setPlaying(false); }, [cursor, playing, replayEnd]);
   const replayAtEnd = cursor != null && cursor >= replayEnd;
 
@@ -1113,6 +1117,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             onStep={stepReplay}
             onSpeed={setSpeed}
             onGoTo={goTo}
+            candleMode={candleMode}
+            onCandleMode={mode => setReplayCandleMode(mode, isDark)}
           />
         )}
       </div>

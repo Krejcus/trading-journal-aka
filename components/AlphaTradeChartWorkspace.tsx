@@ -122,6 +122,7 @@ import {
 } from '../services/chartReplay';
 import ReplayGoToMenu from './ReplayGoToMenu';
 import { ReplayChoiceMenu, ReplayStartMenu } from './ReplayToolbarMenus';
+import { REPLAY_CANDLE_MODE_OPTIONS, setReplayCandleMode, useReplayCandleMode } from '../services/chartReplayCandleMode';
 import ChartWorkspaceStatusRow, { type ChartWorkspaceRange } from './ChartWorkspaceStatusRow';
 import { logicalRangeCenteredOn, logicalRangeForLastSeconds } from '../services/chartWorkspaceRange';
 import { tradeChartTiming } from '../services/tradeChartData';
@@ -998,6 +999,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     const timer = window.setTimeout(() => setQuickOrderFeedback(null), 3_200);
     return () => window.clearTimeout(timer);
   }, [quickOrderFeedback]);
+  // Svíčky v přehrávání plynule, nebo celé — profil grafů (nastavení → Přehrávání).
+  const replayCandleMode = useReplayCandleMode(isDark);
   const replayRef = useRef(replay);
   const replayInteractionPaused = Boolean(backtestSession?.pauseReplayForDialog || reviewTradeId);
   const replayInteractionPausedRef = useRef(replayInteractionPaused);
@@ -1363,6 +1366,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   useEffect(() => {
     if (backtestSession || replay.phase !== 'active' || !replay.playing || replayDataLoading) return;
     if ((replay.stepMinutes ?? 1) !== 1) return;
+    // Nastavení grafu → Přehrávání: celá svíčka naskočí najednou.
+    if (replayCandleMode !== 'smooth') return;
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     const delay = chartReplayDelayMs(replay.speed);
     if (delay < 150) return;
@@ -1431,7 +1436,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     };
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, [backtestSession, replay.phase, replay.playing, replay.speed, replay.stepMinutes, replayDataLoading, trade.executionHistory]);
+  }, [backtestSession, replay.phase, replay.playing, replay.speed, replay.stepMinutes, replayCandleMode, replayDataLoading, trade.executionHistory]);
   useEffect(() => {
     if (!replayToolbarPosition) return;
     const clampToolbarPosition = () => {
@@ -2726,6 +2731,18 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 ariaLabel="Timeframe kroku Bar Replay"
                 title="Timeframe jednoho replay kroku"
               />
+              {!backtestSession && (
+                <ReplayChoiceMenu
+                  value={replayCandleMode}
+                  options={REPLAY_CANDLE_MODE_OPTIONS}
+                  heading="Svíčky v přehrávání"
+                  onChange={mode => setReplayCandleMode(mode, isDark)}
+                  isDark={isDark}
+                  buttonClassName={topButton}
+                  ariaLabel="Svíčky v přehrávání"
+                  title="Svíčky v přehrávání — plynule, nebo celé"
+                />
+              )}
               {!backtestSession && (
                 <>
                   <span className={replayDivider} />

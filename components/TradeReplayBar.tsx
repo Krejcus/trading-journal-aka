@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, GripVertical, Pause, Play, StepForward } from 'lucide-react';
+import type { ChartReplayCandleMode } from '../services/chartSettings';
+import { REPLAY_CANDLE_MODE_OPTIONS } from '../services/chartReplayCandleMode';
 
 export type TradeReplaySpeed = 0.5 | 1 | 2 | 4;
 export interface TradeReplayGoTo { id: string; label: string; hint: string }
@@ -12,7 +14,7 @@ const speedLabel = (speed: TradeReplaySpeed) => `${String(speed).replace('.', ',
  * a backtestu (AlphaTradeChartWorkspace) — jen Go To skáče na události obchodu
  * a krok je vždy jedna svíčka, protože graf v detailu má jeden timeframe.
  */
-export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, onPlayPause, onStep, onSpeed, onGoTo }: {
+export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, onPlayPause, onStep, onSpeed, onGoTo, candleMode, onCandleMode }: {
   isDark: boolean;
   playing: boolean;
   atEnd: boolean;
@@ -21,10 +23,13 @@ export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, on
   onPlayPause: () => void;
   onStep: () => void;
   onSpeed: (speed: TradeReplaySpeed) => void;
+  /** Svíčky plynule, nebo celé (nastavení grafu → Přehrávání); přepnutí platí pro všechny grafy. */
+  candleMode?: ChartReplayCandleMode;
+  onCandleMode?: (mode: ChartReplayCandleMode) => void;
   onGoTo: (id: string) => void;
 }) {
   // Otevřené je vždy nejvýš jedno menu; klik mimo lištu ho zavře.
-  const [menu, setMenu] = useState<'goto' | 'speed' | null>(null);
+  const [menu, setMenu] = useState<'goto' | 'speed' | 'mode' | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!menu) return;
@@ -34,7 +39,7 @@ export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, on
     window.addEventListener('keydown', escape);
     return () => { window.removeEventListener('mousedown', close); window.removeEventListener('keydown', escape); };
   }, [menu]);
-  const toggle = (id: 'goto' | 'speed') => setMenu(current => current === id ? null : id);
+  const toggle = (id: 'goto' | 'speed' | 'mode') => setMenu(current => current === id ? null : id);
 
   // Lištu jde chytit za úchyt a přesunout (myš i prst); drží se uvnitř grafu.
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -129,6 +134,29 @@ export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, on
           </div>
         )}
       </span>
+      {candleMode && onCandleMode && (
+        <span className="relative">
+          <button type="button" className={`${topButton} gap-1 px-2 text-[10px]`} onClick={() => toggle('mode')}
+            aria-expanded={menu === 'mode'} aria-label="Svíčky v přehrávání" title="Svíčky v přehrávání — plynule, nebo celé">
+            <span className="whitespace-nowrap">{candleMode === 'smooth' ? 'Plynule' : 'Celé'}</span>
+            <ChevronDown size={13} className={`transition-transform duration-200 ${menu === 'mode' ? 'rotate-180' : ''}`} />
+          </button>
+          {menu === 'mode' && (
+            <div className={`${menuPanel} right-0 w-[220px]`} role="menu" aria-label="Svíčky v přehrávání">
+              {REPLAY_CANDLE_MODE_OPTIONS.map(option => (
+                <button key={option.value} type="button" role="menuitemradio" aria-checked={option.value === candleMode}
+                  onClick={() => { setMenu(null); onCandleMode(option.value); }} className={menuItem}>
+                  <span>{option.label}</span>
+                  <span className="flex items-center gap-1.5 text-[10px] font-medium text-slate-500">
+                    {option.description}
+                    {option.value === candleMode && <Check size={13} strokeWidth={3} className="text-emerald-500" />}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </span>
+      )}
     </div>
   );
 }
