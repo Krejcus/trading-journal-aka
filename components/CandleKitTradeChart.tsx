@@ -629,7 +629,7 @@ export const WorkspaceIndicatorMenu: React.FC<{
         ƒ Indikátory <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div ref={popupRef} className={`absolute ${inline ? 'left-0 top-8' : 'right-0 top-9'} w-[290px] max-h-[420px] overflow-hidden rounded-xl border shadow-2xl ${isDark ? 'bg-[#111821] border-white/10' : 'bg-white border-slate-200'}`}>
+        <div ref={popupRef} data-toolbar-popup className={`absolute ${inline ? 'left-0 top-8' : 'right-0 top-9'} w-[290px] max-h-[420px] overflow-hidden rounded-xl border shadow-2xl ${isDark ? 'bg-[#111821] border-white/10' : 'bg-white border-slate-200'}`}>
           <div className={`grid grid-cols-2 p-1 border-b ${isDark ? 'border-white/10' : 'border-slate-100'}`}>
             <button type="button" onClick={() => setTab('custom')} className={`h-8 rounded-lg text-[9px] font-black uppercase tracking-wider ${tab === 'custom' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Vlastní</button>
             <button type="button" onClick={() => setTab('library')} className={`h-8 rounded-lg text-[9px] font-black uppercase tracking-wider ${tab === 'library' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Knihovna</button>

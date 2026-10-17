@@ -111,7 +111,7 @@ export const ChartTimeframePicker: React.FC<{
         <ChevronDown size={13} />
       </button>
       {open && (
-        <div ref={popupRef} className={`absolute top-9 left-0 w-[260px] max-h-[430px] overflow-y-auto rounded-lg border py-1 shadow-2xl ${isDark ? 'bg-[#1e222d] border-white/10 text-slate-200' : 'bg-white border-slate-200 text-slate-800'}`}>
+        <div ref={popupRef} data-toolbar-popup className={`absolute top-9 left-0 w-[260px] max-h-[430px] overflow-y-auto rounded-lg border py-1 shadow-2xl ${isDark ? 'bg-[#1e222d] border-white/10 text-slate-200' : 'bg-white border-slate-200 text-slate-800'}`}>
           <div className="px-3 py-2 text-[9px] font-black uppercase tracking-[0.16em] text-slate-500">Timeframe</div>
           {groups.map(group => (
             <div key={group}>

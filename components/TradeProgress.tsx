@@ -164,7 +164,7 @@ export default function TradeProgress({ events, cursorMs, isDark, orderDetails =
 
       {/* Celý seznam — pod tlačítkem, směrem doprava; řádky jsou jednořádkové. */}
       {open && (
-        <div style={{ left: (buttonRef.current?.offsetLeft ?? 0) + listShift, width: LIST_WIDTH }}
+        <div data-toolbar-popup style={{ left: (buttonRef.current?.offsetLeft ?? 0) + listShift, width: LIST_WIDTH }}
           className={`trade-progress-list absolute top-[calc(100%+6px)] z-50 max-h-[380px] overflow-y-auto rounded-xl border ${surface}`}>
           <div className={`sticky top-0 z-10 flex items-center justify-between border-b px-3 py-1.5 backdrop-blur-xl ${isDark ? 'border-white/10 bg-[#0c1222]/80' : 'border-slate-900/[0.06] bg-white/80'}`}>
             <b className={`text-[12px] ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>Průběh</b>

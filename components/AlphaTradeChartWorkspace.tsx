@@ -2399,6 +2399,11 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const toolbarRowRef = useRef<HTMLDivElement>(null);
   const [toolbarOffset, setToolbarOffset] = useState(0);
   const [toolbarMaxOffset, setToolbarMaxOffset] = useState(0);
+  const [toolbarDragging, setToolbarDragging] = useState(false);
+  const toolbarOffsetRef = useRef(0);
+  toolbarOffsetRef.current = toolbarOffset;
+  const toolbarDragCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => toolbarDragCleanupRef.current?.(), []);
   const toolbarDragRef = useRef<{ startX: number; startOffset: number; moved: boolean } | null>(null);
   const toolbarDraggedRef = useRef(false);
   /** Kolik lišta přesahuje — měřeno vždy čerstvě, ResizeObserver může být o krok pozadu. */
@@ -2434,25 +2439,33 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     const viewport = toolbarViewportRef.current;
     if (!viewport) return;
     const onWheel = (event: WheelEvent) => {
-      if (toolbarOverflow() <= 0) return;
-      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-      if (!delta) return;
+      const max = toolbarOverflow();
+      if (max <= 0) return;
+      const raw = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      const delta = event.deltaMode === 1 ? raw * 16 : raw;
+      const current = toolbarOffsetRef.current;
+      // Na dorazu nic nebrzdit — stránka (např. Den) se pak normálně posouvá.
+      if (!delta || (delta < 0 && current <= 0) || (delta > 0 && current >= max)) return;
       event.preventDefault();
-      moveToolbar(current => current + delta);
+      moveToolbar(value => value + delta);
     };
     viewport.addEventListener('wheel', onWheel, { passive: false });
     return () => viewport.removeEventListener('wheel', onWheel);
   }, [moveToolbar, toolbarOverflow]);
   /** Tah myší nebo prstem; klik na tlačítko po tahu se nepočítá. */
   const beginToolbarDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || toolbarOverflow() <= 0) return;
     toolbarDraggedRef.current = false;
-    toolbarDragRef.current = { startX: event.clientX, startOffset: toolbarOffset, moved: false };
+    if (event.button !== 0 || toolbarOverflow() <= 0) return;
+    // Uvnitř otevřeného popupu (timeframe, indikátory, layout, průběh) se netáhne.
+    if ((event.target as Element | null)?.closest?.('[data-toolbar-popup],[role="dialog"]')) return;
+    toolbarDragCleanupRef.current?.();
+    toolbarDragRef.current = { startX: event.clientX, startOffset: toolbarOffsetRef.current, moved: false };
     const move = (moveEvent: PointerEvent) => {
       const drag = toolbarDragRef.current;
       if (!drag) return;
       const dx = moveEvent.clientX - drag.startX;
       if (!drag.moved && Math.abs(dx) < 6) return;
+      if (!drag.moved) setToolbarDragging(true);
       drag.moved = true;
       toolbarDraggedRef.current = true;
       const target = drag.startOffset - dx;
@@ -2460,14 +2473,32 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     };
     const end = () => {
       toolbarDragRef.current = null;
+      toolbarDragCleanupRef.current = null;
+      setToolbarDragging(false);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', end);
       window.removeEventListener('pointercancel', end);
+      // Klik po tahu přijde hned po pointerup; pozdější klik (i klávesnicí) už platí.
+      window.setTimeout(() => { toolbarDraggedRef.current = false; }, 0);
     };
+    toolbarDragCleanupRef.current = end;
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', end);
     window.addEventListener('pointercancel', end);
-  }, [moveToolbar, toolbarOffset, toolbarOverflow]);
+  }, [moveToolbar, toolbarOverflow]);
+  /** Tab na tlačítko schované za okrajem lištu posune, aby bylo vidět. */
+  const revealFocusedToolbarItem = useCallback((event: React.FocusEvent) => {
+    const viewport = toolbarViewportRef.current;
+    const target = event.target as HTMLElement;
+    // Jen fokus z klávesnice — posun pod myší mezi mousedown a mouseup by klik ztratil.
+    if (!viewport || !target.matches?.(':focus-visible') || target.closest('[data-toolbar-popup],[role="dialog"]')) return;
+    viewport.scrollLeft = 0;
+    const view = viewport.getBoundingClientRect();
+    const rect = target.getBoundingClientRect();
+    const edge = 28;
+    if (rect.left < view.left + edge) moveToolbar(current => current - (view.left + edge - rect.left));
+    else if (rect.right > view.right - edge) moveToolbar(current => current + (rect.right - (view.right - edge)));
+  }, [moveToolbar]);
   const suppressToolbarClickAfterDrag = useCallback((event: React.MouseEvent) => {
     if (!toolbarDraggedRef.current) return;
     toolbarDraggedRef.current = false;
@@ -2528,7 +2559,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   positionQuickOrderRef.current = submitSelectedPositionQuickOrder;
   return (
     <React.Profiler id="chart-workspace" onRender={devWorkspaceProfilerOnRender}>
-    <div className={`${embedded ? 'relative h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
+    <div className={`${embedded ? 'relative isolate h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
       <div className={`relative z-[660] h-12 shrink-0 flex items-center gap-1 px-2 border-b ${toolbarSurface}`}>
         <div className={`relative z-[120] flex h-full items-center gap-2 pr-1 min-w-0 ${toolbarSurface}`}>
           <img
@@ -2546,6 +2577,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           className="relative flex h-full min-w-0 flex-1 items-center touch-pan-y"
           onPointerDown={beginToolbarDrag}
           onClickCapture={suppressToolbarClickAfterDrag}
+          onFocusCapture={revealFocusedToolbarItem}
         >
           {toolbarOffset > 0 && (
             <button
@@ -2558,7 +2590,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           )}
           <div
             ref={toolbarRowRef}
-            className="flex h-full w-max shrink-0 items-center gap-1 transition-transform duration-150 ease-out"
+            className={`flex h-full w-max shrink-0 items-center gap-1 ${toolbarDragging ? '' : 'transition-transform duration-150 ease-out'}`}
             style={{ transform: `translateX(${-toolbarOffset}px)` }}
           >
         <select
@@ -2667,8 +2699,6 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         <button type="button" className={`${topButton} hidden md:inline-flex`} onClick={exportWorkspace} title="Exportovat workspace"><Download size={14} /></button>
         <button type="button" className={`${topButton} hidden md:inline-flex`} onClick={() => fileInputRef.current?.click()} title="Importovat workspace"><Upload size={14} /></button>
         <button type="button" className={`${topButton} hidden md:inline-flex`} onClick={recoverWorkspace} title="Vrátit workspace před posledním načtením nebo importem"><RotateCcw size={13} /><span className="hidden 2xl:inline">Předchozí workspace</span></button>
-        {workspaceLibraryMode && <ChartWorkspaceLibraryDialog mode={workspaceLibraryMode} isDark={isDark} onClose={() => setWorkspaceLibraryMode(null)} onSave={saveNamedWorkspace} onLoad={template => previewWorkspace(template.document)} onLoadCheckpoint={() => void loadWorkspaceCheckpoint()} />}
-        {workspacePreview && <WorkspaceImportPreview input={workspacePreview.input} error={workspacePreview.error} isDark={isDark} busy={workspaceApplying} onCancel={() => setWorkspacePreview(null)} onApply={() => void applyWorkspacePreview()} />}
         <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={importWorkspace} />
         <span className={topDivider} />
         <button
@@ -2707,6 +2737,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         </>}
         </div>
       </div>
+      {/* Dialogy mimo posuvnou lištu: transform by z ní udělal containing block
+          pro `fixed` a dialog by se zmáčkl do 48 px pruhu. Nad lištou (z-660). */}
+      {(workspaceLibraryMode || workspacePreview) && <div className="relative z-[700]">
+        {workspaceLibraryMode && <ChartWorkspaceLibraryDialog mode={workspaceLibraryMode} isDark={isDark} onClose={() => setWorkspaceLibraryMode(null)} onSave={saveNamedWorkspace} onLoad={template => previewWorkspace(template.document)} onLoadCheckpoint={() => void loadWorkspaceCheckpoint()} />}
+        {workspacePreview && <WorkspaceImportPreview input={workspacePreview.input} error={workspacePreview.error} isDark={isDark} busy={workspaceApplying} onCancel={() => setWorkspacePreview(null)} onApply={() => void applyWorkspacePreview()} />}
+      </div>}
       {review && <div ref={reviewHeaderRef} className="shrink-0" />}
       <div className="flex flex-1 min-h-0">
       {review && <div ref={reviewLeftRef} className="shrink-0 flex min-h-0" />}
