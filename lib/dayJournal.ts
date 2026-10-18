@@ -307,6 +307,20 @@ export function pragueClock(ms: number): string {
 }
 
 /** Pražský „nástěnný“ čas dne → epoch ms (správně přes změnu času). */
+/**
+ * Obchodní den pro graf: o víkendu poslední pátek (trh je zavřený, sobota
+ * ani neděle nemají seanci). Svátky se neřeší — graf je jen zobrazení.
+ */
+export function chartMarketDay(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  let date = new Date(Date.UTC(y, m - 1, d));
+  while (date.getUTCDay() === 0 || date.getUTCDay() === 6) date = new Date(date.getTime() - 86_400_000);
+  return date.toISOString().slice(0, 10);
+}
+
+/** Účet kotvy grafu dne — falešný „obchod“ bez plnění, jen určuje první záběr. */
+export const DAY_ANCHOR_ACCOUNT_ID = 'day-journal';
+
 export function pragueWallTime(day: string, clock: string): number {
   const [hour, minute] = clock.split(':').map(Number);
   const [y, m, d] = day.split('-').map(Number);

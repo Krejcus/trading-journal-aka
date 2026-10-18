@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   carryForward, closeTargetSession, closeUpsert, prepTargetSession, groupDayJournalRows, newDayNoteId, notePhase, noteUpsert, parseDayJournalRows,
-  pragueClock, pragueDayKey, pragueWallTime, prepReady, prepUpsert, sessionAt, sessionWindows, type DayJournalRow,
-} from '../lib/dayJournal';
+  pragueClock, pragueDayKey, pragueWallTime, prepReady, prepUpsert, sessionAt, sessionWindows, type DayJournalRow, chartMarketDay } from '../lib/dayJournal';
 
 vi.mock('../services/supabase', () => ({ supabase: {} }));
 import { deleteDayNote, loadDayJournal, saveDayNote, saveDayPrep } from '../services/dayJournalService';
@@ -154,5 +153,18 @@ describe('dayJournalService', () => {
     expect(calls.filter(call => call.method === 'eq').map(call => call.args)).toEqual([['user_id', 'user-1'], ['day', DAY]]);
     await deleteDayNote(DAY, NOTE_ID, client);
     expect(calls.filter(call => call.method === 'eq').slice(-1)[0].args).toEqual(['entry_key', `note:${NOTE_ID}`]);
+  });
+});
+
+describe('chartMarketDay — graf dne o víkendu', () => {
+  it('sobota a neděle ukazují pátek, pracovní den sám sebe', () => {
+    expect(chartMarketDay('2026-10-17')).toBe('2026-10-16'); // sobota
+    expect(chartMarketDay('2026-10-18')).toBe('2026-10-16'); // neděle
+    expect(chartMarketDay('2026-10-19')).toBe('2026-10-19'); // pondělí
+    expect(chartMarketDay('2026-10-16')).toBe('2026-10-16'); // pátek
+  });
+
+  it('přes přelom měsíce', () => {
+    expect(chartMarketDay('2026-11-01')).toBe('2026-10-30'); // neděle → pátek
   });
 });

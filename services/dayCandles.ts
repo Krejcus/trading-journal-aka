@@ -1,4 +1,4 @@
-import { pragueWallTime } from '../lib/dayJournal';
+import { chartMarketDay, pragueWallTime } from '../lib/dayJournal';
 import {
   loadMarketCandles,
   loadTradeMarketCandles,
@@ -41,8 +41,10 @@ export interface DayCandleWindow {
 }
 
 export function dayCandleWindow(day: string, now = Date.now()): DayCandleWindow {
-  const dayStart = pragueWallTime(day, '00:00');
-  const dayEnd = pragueWallTime(nextDay(day), '00:00');
+  // O víkendu je trh zavřený — graf dne ukazuje poslední obchodní den (pátek).
+  const marketDay = chartMarketDay(day);
+  const dayStart = pragueWallTime(marketDay, '00:00');
+  const dayEnd = pragueWallTime(nextDay(marketDay), '00:00');
   const start = marketDataWindowForEntry(dayStart + 12 * 60 * MINUTE_MS).start;
   const cap = Math.floor((now - HISTORICAL_LAG_MS) / CAP_STEP_MS) * CAP_STEP_MS;
   const end = Math.min(dayEnd, cap);

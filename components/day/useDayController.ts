@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SessionConfig, Trade } from '../../types';
 import {
-  DAY_SESSIONS, DAY_SESSION_LABEL, closeTargetSession, editedAt, notePhase, pragueClock, pragueDayKey, prepReady, prepTargetSession, sessionWindows,
+  DAY_SESSIONS, DAY_SESSION_LABEL, chartMarketDay, closeTargetSession, editedAt, notePhase, pragueClock, pragueDayKey, prepReady, prepTargetSession, sessionWindows,
   type DayBias, type DayExecution, type DayNote, type DayScope, type DaySession, type DayVerdict,
 } from '../../lib/dayJournal';
 import { dayChecklist, dayFeed, dayStats, tradesForDay, tradesInScope, type DayViewScope } from '../../lib/dayJournalView';
@@ -49,6 +49,10 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
   useEffect(() => { if (initialDate) setDay(initialDate); }, [initialDate]);
   const isToday = day === today;
   const windows = useMemo(() => sessionWindows(day, sessions), [day, sessions]);
+  // Graf o víkendu ukazuje seance posledního obchodního dne (pátek).
+  const marketDay = chartMarketDay(day);
+  const chartWindows = useMemo(() => marketDay === day ? windows : sessionWindows(marketDay, sessions), [day, marketDay, sessions, windows]);
+  const weekendMarketDay = marketDay === day ? null : marketDay;
 
   const { journal, status: journalStatus, error: journalError, failed, pending, addNote, updateNote, retryNote, removeNote, savePrep: persistPrep, saveClose: persistClose, reload } = useDayJournal(day);
   const dayTrades = useMemo(() => tradesForDay(trades, day), [trades, day]);
@@ -223,7 +227,7 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
   const selectedNote = selected?.kind === 'note' ? journal.notes.find(note => note.id === selected.id) ?? null : null;
 
   return {
-    now, today, day, setDay, shiftDay, isToday, windows,
+    now, today, day, setDay, shiftDay, isToday, windows, chartWindows, marketDay, weekendMarketDay,
     journal, journalStatus, journalError, failedNotes: failed, pendingNotes: pending, retryNote, updateNote, removeNote, reload,
     dayTrades, scopedTrades, stats, sessionStats, feed, checklist, chart,
     mode, modeSession, setModeSession, openPrep, openClose, backToDay,

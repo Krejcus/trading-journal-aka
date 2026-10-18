@@ -178,7 +178,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
             <ChevronDown size={12} style={{ transform: indicatorsOpen ? 'rotate(180deg)' : undefined, transition: 'transform .2s' }} /> {indicatorCount}
           </button>
           <span style={{ flex: 1 }} />
-          {!narrow && <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} />}
+          {!narrow && <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} />}
           <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={18} /></button>
         </header>
       )}

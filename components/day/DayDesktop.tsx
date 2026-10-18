@@ -134,7 +134,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
   useEffect(() => { setPopover(null); setSaveError(null); setCelebration(null); }, [mode, session, ctl.day]);
 
   // ── Záběr grafu ───────────────────────────────────────────────────────
-  const range = focusRange({ mode, session, scope: ctl.scope, windows: ctl.windows, now: ctl.now, isToday: ctl.isToday });
+  const range = focusRange({ mode, session, scope: ctl.scope, windows: ctl.chartWindows, now: ctl.now, isToday: ctl.isToday });
   const target = focusTarget(range);
   // Kotva se drží celý den (první záběr); další přesuny jdou událostí.
   const anchorRef = useRef<{ day: string; trade: Trade } | null>(null);
@@ -175,12 +175,12 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
     return ctl.pinViews(note => ctl.scope === 'day' || note.session === ctl.scope || note.session === 'day');
   }, [ctl, mode, session]);
   const previousNy = useMemo(() => {
-    const [y, m, d] = ctl.day.split('-').map(Number);
+    const [y, m, d] = ctl.marketDay.split('-').map(Number);
     let date = new Date(Date.UTC(y, m - 1, d - 1));
     while (date.getUTCDay() === 0 || date.getUTCDay() === 6) date = new Date(date.getTime() - 86_400_000);
     return sessionWindows(date.toISOString().slice(0, 10)).ny;
-  }, [ctl.day]);
-  const bands = useMemo(() => sessionBands(ctl.windows, mode, previousNy), [ctl.windows, mode, previousNy]);
+  }, [ctl.marketDay]);
+  const bands = useMemo(() => sessionBands(ctl.chartWindows, mode, previousNy), [ctl.chartWindows, mode, previousNy]);
 
   const store = useMemo(() => createStore<OverlayState | null>(null), []);
   const pick = useCallback((point: DayPinPoint) => {

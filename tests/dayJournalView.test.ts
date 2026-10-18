@@ -99,6 +99,15 @@ describe('day candles', () => {
     expect(old.historicalEnd!.getTime()).toBe(old.dayEnd);
   });
 
+  it('on a weekend the window is the last trading day (Friday), without live reading', () => {
+    const sunday = dayCandleWindow('2026-10-18', at('09:00', '2026-10-18'));
+    const friday = dayCandleWindow('2026-10-16', at('09:00', '2026-10-18'));
+    expect(sunday.dayStart).toBe(pragueWallTime('2026-10-16', '00:00'));
+    expect(sunday.dayEnd).toBe(pragueWallTime('2026-10-17', '00:00'));
+    expect(sunday.start.getTime()).toBe(friday.start.getTime());
+    expect(sunday.needsLive).toBe(false);
+  });
+
   it('cuts everything after the end of the day and stitches live candles only after history', () => {
     const window = dayCandleWindow(DAY, at('14:00'));
     const sec = (clock: string, day = DAY) => Math.floor(at(clock, day) / 1000);

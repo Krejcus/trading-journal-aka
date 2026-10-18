@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { REVIEW_FOCUS_EVENT } from '../CandleKitTradeChart';
 import type { Trade } from '../../types';
-import type { SessionWindows } from '../../lib/dayJournal';
+import { DAY_ANCHOR_ACCOUNT_ID, type SessionWindows } from '../../lib/dayJournal';
 import type { DayViewScope } from '../../lib/dayJournalView';
 import type { DayMode } from './useDayController';
 import type { DaySession } from '../../lib/dayJournal';
@@ -46,7 +46,7 @@ export function focusTarget(range: { from: number; to: number }) {
 export function dayAnchorTrade(day: string, target: { entryMs: number; exitMs: number }): Trade {
   return {
     id: `day:${day}`,
-    accountId: 'day-journal',
+    accountId: DAY_ANCHOR_ACCOUNT_ID,
     instrument: 'MNQ',
     symbol: 'MNQ',
     signal: '',

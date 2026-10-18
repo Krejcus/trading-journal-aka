@@ -135,8 +135,8 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
   screenRef.current = screenKey;
   useEffect(() => { setSheet(null); setSaveError(null); setCelebration(null); }, [mode, session, ctl.day]);
 
-  const range = focusRange({ mode, session, scope: ctl.scope, windows: ctl.windows, now: ctl.now, isToday: ctl.isToday });
-  const bands = useMemo(() => sessionBands(ctl.windows, mode, null), [ctl.windows, mode]);
+  const range = focusRange({ mode, session, scope: ctl.scope, windows: ctl.chartWindows, now: ctl.now, isToday: ctl.isToday });
+  const bands = useMemo(() => sessionBands(ctl.chartWindows, mode, null), [ctl.chartWindows, mode]);
   const pins = mode === 'prep'
     ? ctl.pinViews(note => note.origin === 'prep' && note.session === session, note => note.origin === 'prep' && note.session !== session)
     : mode === 'close' ? ctl.pinViews(note => note.session === session) : ctl.pinViews(note => ctl.scope === 'day' || note.session === ctl.scope || note.session === 'day');
@@ -222,7 +222,7 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
           <button type="button" aria-label="Předchozí den" onClick={() => ctl.shiftDay(-1)} style={roundNav}><ChevronLeft size={16} /></button>
           <div style={{ flex: 1, textAlign: 'center' }}>
             <p style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>{dayTitle(ctl.day)}</p>
-            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}><LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} /></div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}><LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} /></div>
           </div>
           <button type="button" aria-label="Další den" disabled={ctl.isToday} onClick={() => ctl.shiftDay(1)} style={{ ...roundNav, opacity: ctl.isToday ? 0.3 : 1 }}><ChevronRight size={16} /></button>
           <button type="button" aria-label="Sdílet den" onClick={() => { void exportDay(ctl).catch(() => {}); }} style={roundNav}><Share size={15} /></button>

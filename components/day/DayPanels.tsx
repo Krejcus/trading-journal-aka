@@ -31,7 +31,16 @@ const planLabel = (choice: PlanChoice) => PLAN_OPTIONS.find(option => option.id 
 const label11: React.CSSProperties = { margin: 0, fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' };
 const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 12.5, fontWeight: 700 };
 
-export function LiveChip({ status, capturedAt }: { status: DayController['chart']['liveStatus']; capturedAt: number | null }) {
+export function LiveChip({ status, capturedAt, weekendMarketDay }: { status: DayController['chart']['liveStatus']; capturedAt: number | null; weekendMarketDay?: string | null }) {
+  // O víkendu je trh zavřený — „TradingView stojí“ by jen strašilo.
+  if (weekendMarketDay) {
+    return (
+      <span title="Trh je o víkendu zavřený; graf ukazuje poslední obchodní den." style={{ height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: 'var(--dj-muted)', background: 'var(--dj-chip)' }}>
+        <span style={{ width: 6, height: 6, borderRadius: 9, background: '#94a3b8' }} />
+        Víkend · graf ukazuje {dayTitle(weekendMarketDay).toLowerCase()}
+      </span>
+    );
+  }
   if (!status) return null;
   const live = status === 'live';
   const text = status === 'live' ? `Živě z TradingView${capturedAt ? ` · ${clock(capturedAt)}` : ''}`
@@ -113,7 +122,7 @@ export function DayHeaderBar({ ctl, onDictate, onOpenLegacy }: { ctl: DayControl
       <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--dj-muted)' }}>Deník</span>
       <ChevronRight size={12} color="#475569" />
       <DayNav ctl={ctl} />
-      <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} />
+      <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} />
       {ctl.journalStatus === 'error' && <span role="alert" style={{ fontSize: 11.5, color: 'var(--dj-rose)' }}>Deník se nenačetl · <button type="button" onClick={ctl.reload} style={{ border: 0, background: 'none', color: 'var(--dj-rose-text)', textDecoration: 'underline', cursor: 'pointer', padding: 0, font: 'inherit' }}>zkusit znovu</button></span>}
       <span style={{ flex: '1 1 20px' }} />
       <ScopeSwitch ctl={ctl} />
@@ -583,10 +592,11 @@ export function SessionCards({ ctl }: { ctl: DayController }) {
         const active = ctl.scope === session;
         const color = SESSION_STYLE[session].color;
         const status = close ? { text: 'Uzavřeno', style: { color: 'var(--dj-blue)', background: 'rgba(59,130,246,0.14)' } }
+          : ctl.weekendMarketDay ? { text: 'Víkend', style: { color: 'var(--dj-muted)', background: 'var(--dj-chip)' } }
           : stage === 'upcoming' ? { text: prep ? 'Připraveno' : 'Čeká na přípravu', style: { color: 'var(--dj-indigo-text)', background: 'rgba(99,102,241,0.14)' } }
             : stage === 'running' ? { text: 'Běží', style: { color: 'var(--dj-green-text)', background: 'rgba(16,185,129,0.14)' } }
               : { text: 'Neuzavřeno', style: { color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.14)' } };
-        const quote = close?.summary ? `„${close.summary}“` : stage === 'upcoming' ? (prep ? prepSummary(prep, 0) : 'Připrav bias a scénář před otevřením.') : 'Chybí uzavření · cca 90 s';
+        const quote = close?.summary ? `„${close.summary}“` : ctl.weekendMarketDay ? 'O víkendu se neobchoduje.' : stage === 'upcoming' ? (prep ? prepSummary(prep, 0) : 'Připrav bias a scénář před otevřením.') : 'Chybí uzavření · cca 90 s';
         return (
           <div key={session} style={{ display: 'flex', borderRadius: 12, background: 'var(--dj-card-soft)', border: `1px solid ${active ? color : 'var(--dj-line)'}`, boxShadow: active ? `0 0 0 1px ${color}` : undefined, overflow: 'hidden' }}>
             <button type="button" className="dj-btn" onClick={() => ctl.setScope(active ? 'day' : session)} style={{ flex: 1, minWidth: 0, textAlign: 'left', cursor: 'pointer', padding: '10px 14px', border: 0, background: 'transparent', color: 'inherit', fontFamily: 'inherit' }}>

@@ -58,7 +58,7 @@ export function PrepHeaderBar({ ctl, session, onSwitch }: { ctl: DayController; 
       <BiasPicker value={draft.bias} onChange={bias => ctl.updatePrepDraft(session, { bias })} />
       <span style={{ fontSize: 11.5, color: 'var(--dj-muted)', maxWidth: 170 }}>{draft.bias ? 'Klikni jinam a změníš ho.' : 'Jedním klikem. Bez biasu se plán neuloží.'}</span>
       <span style={{ flex: 1 }} />
-      <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} />
+      <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} />
       <PrepTimer openedAt={draft.openedAt} />
     </header>
   );

@@ -54,6 +54,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { Trade } from '../types';
+import { DAY_ANCHOR_ACCOUNT_ID } from '../lib/dayJournal';
 import ChartIndicatorSettingsDialog, {
   DEFAULT_INDICATOR_SETTINGS,
   indicatorVisibleOnTimeframe,
@@ -3653,7 +3654,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const entryTime = nearestCandleTime(visibleCandles, asUnix(trade.entryTime || trade.entryDate, entryMs));
     const exitTime = nearestCandleTime(visibleCandles, asUnix(trade.timestamp || trade.exitDate, exitMs));
     const isLong = String(trade.direction).toLowerCase() === 'long';
-    createSeriesMarkers(series, replayActive || trade.executionHistory ? [] : [
+    // Kotva grafu dne není obchod — žádné ENTRY/EXIT značky.
+    createSeriesMarkers(series, replayActive || trade.executionHistory || trade.accountId === DAY_ANCHOR_ACCOUNT_ID ? [] : [
       {
         time: entryTime,
         position: isLong ? 'belowBar' as const : 'aboveBar' as const,
