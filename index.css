@@ -1565,12 +1565,13 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 .alphatrade-chart-drawing-bar.is-docked {
   /* Návrh „Aurora sklo“: plovoucí skleněný sloupec 44 px v 52px okraji
      workspace. Výplň je vlastní, aby fungoval i bez backdrop-filter. */
-  top: 6px;
-  bottom: 6px;
-  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  left: 8px;
   width: 44px;
   gap: 2px;
   padding: 5px 0;
+  pointer-events: auto;
   color: #334155;
   background: rgba(255, 255, 255, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.9);
@@ -1652,20 +1653,82 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
   background: currentColor;
 }
 
-/* Rozbalovací skupina: malý roh vpravo dole, šipka až při najetí. */
-.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool-group::after {
-  content: '';
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-bottom: 4px solid currentColor;
-  opacity: 0.4;
-  pointer-events: none;
+/* Rozbalovací skupina: šipka na boku až při najetí. */
+
+/* Sbalení lišty — malá šipka vpravo dole; sbalená lišta je jen ouško. */
+.alphatrade-chart-rail-collapse {
+  align-self: flex-end;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 2px 3px 0 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  opacity: 0.5;
+  cursor: pointer;
+  transition: opacity 150ms ease, background-color 150ms ease;
 }
 
+.alphatrade-chart-rail-collapse:hover,
+.alphatrade-chart-rail-collapse:focus-visible {
+  outline: none;
+  opacity: 1;
+  background: rgba(15, 23, 42, 0.07);
+}
+
+.alphatrade-chart-drawing-bar.is-dark .alphatrade-chart-rail-collapse:hover,
+.alphatrade-chart-drawing-bar.is-dark .alphatrade-chart-rail-collapse:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.alphatrade-chart-rail-expand {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 18px;
+  height: 44px;
+  margin-top: -22px;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-left: 0;
+  border-radius: 0 12px 12px 0;
+  box-shadow: 0 12px 24px -14px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(15, 23, 42, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
+  cursor: pointer;
+}
+
+.alphatrade-chart-rail-expand:hover {
+  color: #2962ff;
+}
+
+.alphatrade-chart-rail-expand.is-dark {
+  color: #cbd5e1;
+  background: rgba(16, 23, 32, 0.55);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 12px 24px -12px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.alphatrade-chart-rail-expand.is-dark:hover {
+  color: #8aa2ff;
+}
+
+/* Panel u levého okraje: legenda, logo a odznaky začínají za plovoucí lištou. */
+.alphatrade-workspace-panel[data-left-edge] {
+  --chart-left-inset: var(--drawing-rail-inset, 8px);
+}
+
+.alphatrade-workspace-panel[data-left-edge] #tv-attr-logo {
+  left: calc(var(--chart-left-inset, 8px) + 2px) !important;
+}
 .alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool-group-trigger {
   right: -5px;
   width: 11px;

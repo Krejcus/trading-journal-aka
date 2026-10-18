@@ -36,6 +36,8 @@ import {
   ChartNoAxesCombined,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Eraser,
   Eye,
   EyeOff,
@@ -506,7 +508,7 @@ const ChartIndicatorLegend: React.FC<{
   };
 
   return (
-    <div ref={containerRef} data-snapshot-hide className={`absolute top-11 z-30 text-[9px] ${offsetForToolbar ? 'left-14' : 'left-2'}`}>
+    <div ref={containerRef} data-snapshot-hide style={offsetForToolbar ? undefined : { left: 'var(--chart-left-inset, 8px)' }} className={`absolute top-11 z-30 text-[9px] ${offsetForToolbar ? 'left-14' : ''}`}>
       <button
         type="button"
         onClick={() => { setOpen(value => !value); setSettingsFor(null); }}
@@ -883,14 +885,14 @@ const DateRangeToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
   <path d="M4.5 7v10M19.5 7v10M7 12h10M9.5 9.5 7 12l2.5 2.5M14.5 9.5 17 12l-2.5 2.5" />
 </ToolSvg>;
 const LongPositionToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <rect x="4.5" y="4.5" width="15" height="7.5" rx="1.8" />
-  <rect x="4.5" y="12" width="15" height="7.5" rx="1.8" opacity=".45" />
-  <path d="m9 9.5 3-3 3 3" />
+  <path d="M5.7 5.5H21M3 18.5h18" />
+  <circle cx="4.25" cy="5.5" r="1.45" />
+  <path d="M10 9v5h4" />
 </ToolSvg>;
 const ShortPositionToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <rect x="4.5" y="4.5" width="15" height="7.5" rx="1.8" opacity=".45" />
-  <rect x="4.5" y="12" width="15" height="7.5" rx="1.8" />
-  <path d="m9 14.5 3 3 3-3" />
+  <path d="M5.7 5.5H21M3 18.5h18" />
+  <circle cx="4.25" cy="5.5" r="1.45" />
+  <path d="M14 9h-4v2.5h4V14h-4" />
 </ToolSvg>;
 const FibToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
   <path d="M4 5.5h16M4 10h16M4 14.5h16M4 19h16" opacity=".55" />
@@ -994,6 +996,9 @@ export const AlphaTradeDrawingToolbar: React.FC<{
   indicatorCount?: number;
   onRemoveIndicators?: () => void;
   docked?: boolean;
+  /** Sbalená lišta: jen ouško u okraje, plovoucí oblíbené zůstávají. */
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
 }> = ({
   isDark,
   drawingEngine,
@@ -1001,6 +1006,8 @@ export const AlphaTradeDrawingToolbar: React.FC<{
   indicatorCount = 0,
   onRemoveIndicators,
   docked = false,
+  collapsed = false,
+  onCollapsedChange,
 }) => {
   const api = useChartApiOptional();
   const engine = drawingEngine ?? api?.drawing?.engine ?? null;
@@ -1324,6 +1331,52 @@ export const AlphaTradeDrawingToolbar: React.FC<{
   };
   const buttonClass = (active = false) => `alphatrade-chart-tool ${active ? 'is-active' : ''} ${isDark ? 'is-dark' : ''}`;
 
+  const favoritesPortal = docked && favoritesVisible && favoriteTools.length > 0 && createPortal(
+        <div
+          ref={favoritesToolbarRef}
+          className={`alphatrade-chart-favorites-toolbar ${isDark ? 'is-dark' : ''}`}
+          style={{ left: favoritesPosition.left, top: favoritesPosition.top }}
+          role="toolbar"
+          aria-label="Oblíbené kreslicí nástroje"
+        >
+          <button
+            type="button"
+            className="alphatrade-chart-favorites-grip"
+            onPointerDown={startFavoritesDrag}
+            title="Přesunout panel"
+            aria-label="Přesunout panel oblíbených nástrojů"
+          ><GripVertical size={14} /></button>
+          {favoriteTools.map(toolId => {
+            const tool = ALPHATRADE_DRAWING_TOOL_MAP.get(toolId);
+            if (!tool) return null;
+            const FavoriteIcon = tool.icon;
+            return <button
+              key={toolId}
+              type="button"
+              className={activeTool === toolId ? 'is-active' : ''}
+              onClick={() => selectTool(toolId)}
+              title={tool.title}
+              aria-label={`Oblíbený nástroj: ${tool.title}`}
+              aria-pressed={activeTool === toolId}
+            ><FavoriteIcon size={20} /></button>;
+          })}
+        </div>,
+        document.body,
+      );
+
+  if (docked && collapsed && onCollapsedChange) return (
+    <>
+      <button
+        type="button"
+        className={`alphatrade-chart-rail-expand ${isDark ? 'is-dark' : ''}`}
+        onClick={() => onCollapsedChange(false)}
+        title="Zobrazit lištu kreslení"
+        aria-label="Zobrazit lištu kreslení"
+      ><ChevronRight size={14} strokeWidth={2} /></button>
+      {favoritesPortal}
+    </>
+  );
+
   return (
     <aside className={`alphatrade-chart-drawing-bar ${docked ? 'is-docked' : ''} ${isDark ? 'is-dark' : ''}`} aria-label="Kreslicí nástroje">
       <button
@@ -1583,38 +1636,16 @@ export const AlphaTradeDrawingToolbar: React.FC<{
         aria-pressed={favoritesVisible && favoriteTools.length > 0}
         disabled={!favoriteTools.length}
       ><Star size={19} strokeWidth={1.5} fill={favoritesVisible && favoriteTools.length ? 'currentColor' : 'none'} /></button>
-      {docked && favoritesVisible && favoriteTools.length > 0 && createPortal(
-        <div
-          ref={favoritesToolbarRef}
-          className={`alphatrade-chart-favorites-toolbar ${isDark ? 'is-dark' : ''}`}
-          style={{ left: favoritesPosition.left, top: favoritesPosition.top }}
-          role="toolbar"
-          aria-label="Oblíbené kreslicí nástroje"
-        >
-          <button
-            type="button"
-            className="alphatrade-chart-favorites-grip"
-            onPointerDown={startFavoritesDrag}
-            title="Přesunout panel"
-            aria-label="Přesunout panel oblíbených nástrojů"
-          ><GripVertical size={14} /></button>
-          {favoriteTools.map(toolId => {
-            const tool = ALPHATRADE_DRAWING_TOOL_MAP.get(toolId);
-            if (!tool) return null;
-            const FavoriteIcon = tool.icon;
-            return <button
-              key={toolId}
-              type="button"
-              className={activeTool === toolId ? 'is-active' : ''}
-              onClick={() => selectTool(toolId)}
-              title={tool.title}
-              aria-label={`Oblíbený nástroj: ${tool.title}`}
-              aria-pressed={activeTool === toolId}
-            ><FavoriteIcon size={20} /></button>;
-          })}
-        </div>,
-        document.body,
+      {onCollapsedChange && (
+        <button
+          type="button"
+          className="alphatrade-chart-rail-collapse"
+          onClick={() => onCollapsedChange(true)}
+          title="Sbalit lištu kreslení (zůstanou oblíbené)"
+          aria-label="Sbalit lištu kreslení"
+        ><ChevronLeft size={12} strokeWidth={2} /></button>
       )}
+      {favoritesPortal}
     </aside>
   );
 };
@@ -5185,7 +5216,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         isDark={isDark}
         onOpenSettings={() => setDrawingSettingsOpen(true)}
       />}
-      <div className={`pointer-events-none absolute left-2 top-1.5 z-20 ${phoneLayout ? 'max-w-[calc(100%-96px)]' : 'max-w-[calc(100%-72px)]'} whitespace-nowrap text-[10px] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+      <div style={{ left: 'var(--chart-left-inset, 8px)', maxWidth: `calc(100% - ${phoneLayout ? 88 : 64}px - var(--chart-left-inset, 8px))` }} className={`pointer-events-none absolute top-1.5 z-20 whitespace-nowrap text-[10px] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
         <div className="flex h-4 min-w-0 items-center gap-1.5" aria-label="Instrument a timeframe grafu">
           {chartSettings.statusLine.symbolTitle && (
             <>

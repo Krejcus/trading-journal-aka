@@ -146,8 +146,10 @@ import {
 } from '../services/replayGoTo';
 
 const REPLAY_TOOLBAR_POSITION_KEY = 'alphatrade.chart-replay-toolbar-position.v1';
-/** Levý panel kreslení (`left-[52px]`) — panel přehrávání ho nemá zakrývat, pokud je místo. */
-const REPLAY_TOOLBAR_MIN_LEFT = 52;
+/** Plovoucí lišta kreslení (8 px okraj + 44 px + 8 px) — panel přehrávání ji
+ *  nemá zakrývat a legenda levého panelu začíná až za ní. */
+const REPLAY_TOOLBAR_MIN_LEFT = 60;
+const DRAWING_RAIL_COLLAPSED_KEY = 'alphatrade:chart-drawing-rail-collapsed';
 
 /** Hláška po skoku ve stejném pásmu, jaké má časová osa grafu. */
 const goToTimeLabel = (unixSeconds: number, timeZone: string): string => {
@@ -769,6 +771,27 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     [context.trade, replayCutoffMs],
   );
   const chartAreaRef = useRef<HTMLDivElement>(null);
+  // Panel u levého okraje workspace má nad sebou plovoucí lištu kreslení —
+  // legenda a logo se odsadí (CSS --chart-left-inset přes data-left-edge).
+  const paneRef = useRef<HTMLDivElement>(null);
+  const [atLeftEdge, setAtLeftEdge] = useState(false);
+  useLayoutEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) return;
+    const measure = () => {
+      const shell = pane.closest('.alphatrade-candlekit-workspace');
+      if (!shell) return;
+      setAtLeftEdge(pane.getBoundingClientRect().left - shell.getBoundingClientRect().left < 4);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
   const [noteAddRequest, setNoteAddRequest] = useState<ChartNoteAddRequest | null>(null);
   const noteBarTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
   const dayNotes = useDayNotesForWindow(
@@ -779,7 +802,9 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
 
   return (
     <div
+      ref={paneRef}
       className={`group/pane absolute inset-0 flex flex-col alphatrade-workspace-panel ${isActive ? 'is-active' : ''} ${context.isDark ? 'is-dark bg-[#090d12]' : 'bg-white'}`}
+      data-left-edge={atLeftEdge || undefined}
       onPointerDownCapture={() => context.activatePanel(instance.id)}
       data-panel-id={instance.id}
       data-active-panel={isActive || undefined}
@@ -928,12 +953,12 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
           </>
         )}
         {sessionHistoryLoading ? (
-          <div className="pointer-events-none absolute left-3 top-3 z-[650] flex items-center gap-1.5 rounded-md border border-slate-700/60 bg-slate-950/80 px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-slate-300">
+          <div style={{ left: 'calc(var(--chart-left-inset, 8px) + 4px)' }} className="pointer-events-none absolute top-3 z-[650] flex items-center gap-1.5 rounded-md border border-slate-700/60 bg-slate-950/80 px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-slate-300">
             <Loader2 size={11} className="animate-spin" /> Načítám starší historii
           </div>
         ) : null}
         {historyError ? (
-          <div className="pointer-events-none absolute bottom-3 left-3 z-[650] max-w-[360px] rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-[9px] font-semibold text-amber-100">
+          <div style={{ left: 'calc(var(--chart-left-inset, 8px) + 4px)' }} className="pointer-events-none absolute bottom-3 z-[650] max-w-[360px] rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-[9px] font-semibold text-amber-100">
             Starší historie není dostupná: {historyError}
           </div>
         ) : null}
@@ -2393,6 +2418,14 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     () => !backtestSession && !review ? tradeTimelineEvents(trade.executionHistory) : [],
     [backtestSession, review, trade.executionHistory],
   );
+  // Sbalená lišta kreslení — jen ouško u okraje, oblíbené zůstávají.
+  const [drawingRailCollapsed, setDrawingRailCollapsed] = useState(() => {
+    try { return window.localStorage.getItem(DRAWING_RAIL_COLLAPSED_KEY) === '1'; } catch { return false; }
+  });
+  const setDrawingRailCollapsedPersisted = useCallback((next: boolean) => {
+    setDrawingRailCollapsed(next);
+    try { window.localStorage.setItem(DRAWING_RAIL_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* jen pohodlí */ }
+  }, []);
   // ── Horní lišta posuvná do stran ────────────────────────────────────────
   const toolbarViewportRef = useRef<HTMLDivElement>(null);
   const toolbarRowRef = useRef<HTMLDivElement>(null);
@@ -2749,7 +2782,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       <div className="flex flex-1 min-h-0">
       {review && <div ref={reviewLeftRef} className="shrink-0 flex min-h-0" />}
       <WorkspaceDataContext.Provider value={context}>
-        <div ref={workspaceViewportRef} className={`relative flex-1 min-w-0 min-h-0 ${isDark ? 'bg-[#070a0f]' : 'bg-[#eef1f5]'}`}>
+        <div ref={workspaceViewportRef} className={`relative flex-1 min-w-0 min-h-0 ${isDark ? 'bg-[#070a0f]' : 'bg-white'}`}>
           {quickOrderFeedback && <div
             role="status"
             className={`pointer-events-none absolute left-1/2 top-11 z-[700] -translate-x-1/2 rounded-md border px-3 py-2 text-[11px] font-bold shadow-lg ${quickOrderFeedback.ok
@@ -2778,21 +2811,29 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             isDark={isDark}
             onOpenSettings={() => setDrawingSettingsOpen(true)}
           />}
-          <AlphaTradeDrawingToolbar
-            isDark={isDark}
-            drawingEngine={activeControl?.drawingEngine ?? null}
-            drawingEngines={drawingEngines}
-            indicatorCount={activeIndicatorCount}
-            onRemoveIndicators={removeActiveIndicators}
-            docked
-          />
+          {/* Lišta kreslení plave nad grafem jako přehrávání a oblíbené — graf
+              jde až k levému okraji a prosvítá pod sklem. Nad odznaky panelu
+              (z-650), pod horní lištou a jejími popupy (z-660). */}
+          <div className={`pointer-events-none absolute left-0 top-0 z-[655] w-[60px] ${tradingPanel ? 'bottom-[116px]' : 'bottom-7'}`}>
+            <AlphaTradeDrawingToolbar
+              isDark={isDark}
+              drawingEngine={activeControl?.drawingEngine ?? null}
+              drawingEngines={drawingEngines}
+              indicatorCount={activeIndicatorCount}
+              onRemoveIndicators={removeActiveIndicators}
+              docked
+              collapsed={drawingRailCollapsed}
+              onCollapsedChange={setDrawingRailCollapsedPersisted}
+            />
+          </div>
           <div
             ref={workspaceShellRef}
-            className={`alphatrade-candlekit-workspace absolute top-0 left-[52px] right-0 ${tradingPanel ? 'bottom-[116px]' : 'bottom-7'} ${isDark ? 'is-dark' : ''}`}
+            className={`alphatrade-candlekit-workspace absolute top-0 left-0 right-0 ${tradingPanel ? 'bottom-[116px]' : 'bottom-7'} ${isDark ? 'is-dark' : ''}`}
+            style={{ '--drawing-rail-inset': drawingRailCollapsed ? '8px' : `${REPLAY_TOOLBAR_MIN_LEFT}px` } as React.CSSProperties}
           >
             <FlexLayoutAdapter key={workspaceMountVersion} workspace={workspace} hideToolbar />
           </div>
-          <div className={`absolute left-[52px] right-0 z-40 ${tradingPanel ? 'bottom-[88px]' : 'bottom-0'}`}>
+          <div className={`absolute left-0 right-0 z-40 ${tradingPanel ? 'bottom-[88px]' : 'bottom-0'}`}>
             <ChartWorkspaceStatusRow
               onRange={showActiveRange}
               onGoToTime={goToActiveTime}
@@ -2803,7 +2844,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             />
           </div>
           {tradingPanel && (
-            <div className={`absolute bottom-0 left-[52px] right-0 z-40 h-[88px] border-t ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
+            <div className={`absolute bottom-0 left-0 right-0 z-40 h-[88px] border-t ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
               {tradingPanel}
             </div>
           )}
