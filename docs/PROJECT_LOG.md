@@ -290,9 +290,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověřeno navíc dotykem v simulátoru: pinch dvěma prsty zoomuje a stránka stojí; pinch při rozdělané
   cestě nic nenakreslí; plynulý tah posouvá crosshair; hodnocení obchodu se uloží (klepnuto na stávající
   hodnotu, data beze změny).
-- **Neověřeno v simulátoru (ráno na telefonu):** diktování a haptika, otočení na šířku (simctl rotaci neumí, dvoupanel ověřen vynuceně na výšku), menší iPhone
-  (17e simulátor nepřihlášený), Live Activity, uložení přípravy/uzavření a hodnocení obchodu
-  (vizuálně ano, zápis ne — nešly by vrátit).
+- **Uložení přípravy a uzavření ověřeno zápisem:** pátek 16. 10. (neměl žádný řádek) → příprava
+  London (bias + scénář) a uzavření London (shrnutí + exekuce) se uložily do `day_journal_entries`
+  se správným `entry_key`/`written_at`, oslavné obrazovky OK; oba testovací řádky smazány podle id,
+  pátek zase 0 řádků. Opraven přetékající čip „✓ Příprava LDN“ (užší padding, ellipsis, širší čip).
+- **Neověřeno v simulátoru (ráno na telefonu):** diktování a haptika, otočení na šířku (simctl
+  rotaci neumí, dvoupanel ověřen vynuceně na výšku), menší iPhone (17e simulátor nepřihlášený),
+  Live Activity.
 
 ### 2026-10-18 — Deník: poznámka Hlava, víkendový režim, přehled Hlava (Claude)
 - **Hlava** = osobní poznámka (celý život: rodina, jídlo, pohyb, spánek, vztahy, práce, trading

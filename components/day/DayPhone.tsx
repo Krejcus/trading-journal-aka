@@ -321,7 +321,7 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
                   const upcoming = ctl.isToday && sessionStage(item, ctl.windows, ctl.now) === 'upcoming';
                   return (
                     <div key={item} style={{ flex: 1, display: 'flex', gap: 6 }}>
-                      <button type="button" className="dj-btn" onClick={() => ctl.openPrep(item)} style={{ ...phoneChip, color: prep ? 'var(--dj-indigo-text)' : 'var(--dj-text-2)', borderColor: prep ? 'rgba(99,102,241,0.4)' : 'var(--dj-line)' }}>{prep ? '✓ ' : ''}Příprava {item === 'ny' ? 'NY' : 'LDN'}</button>
+                      <button type="button" className="dj-btn" onClick={() => ctl.openPrep(item)} style={{ ...phoneChip, flex: 1.35, color: prep ? 'var(--dj-indigo-text)' : 'var(--dj-text-2)', borderColor: prep ? 'rgba(99,102,241,0.4)' : 'var(--dj-line)' }}>{prep ? '✓ ' : ''}Příprava {item === 'ny' ? 'NY' : 'LDN'}</button>
                       <button type="button" className="dj-btn" disabled={upcoming} onClick={() => ctl.openClose(item)} style={{ ...phoneChip, color: close ? 'var(--dj-blue)' : 'var(--dj-text-2)', borderColor: close ? 'rgba(59,130,246,0.4)' : 'var(--dj-line)', opacity: upcoming ? 0.4 : 1 }}>{close ? '✓ ' : ''}Uzavřít</button>
                     </div>
                   );
@@ -401,4 +401,4 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
 }
 
 const roundNav: React.CSSProperties = { width: 36, height: 36, borderRadius: 99, border: 0, background: 'var(--dj-chip)', color: 'var(--dj-text-2)', display: 'grid', placeItems: 'center', cursor: 'pointer' };
-const phoneChip: React.CSSProperties = { flex: 1, height: 34, borderRadius: 10, border: '1px solid', background: 'var(--dj-chip)', font: '700 11.5px Inter, sans-serif', cursor: 'pointer', whiteSpace: 'nowrap' };
+const phoneChip: React.CSSProperties = { flex: 1, minWidth: 0, height: 34, padding: '0 4px', borderRadius: 10, border: '1px solid', background: 'var(--dj-chip)', font: '700 11.5px Inter, sans-serif', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
