@@ -18110,6 +18110,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     async waiveStuckOperation({ kind, key, reason }) {
       const explanation = reason.trim();
       if (explanation.length < 5) throw new Error('Ruční resolution vyžaduje konkrétní důvod');
+      // 18. 10. 2026: zastaralé označení (např. z iPhonu přes relay, mezitím
+      // vyřešené na Macu a kopírka znovu zapnutá) nesmí vypnout běžící
+      // kopírku — nejdřív ověřit, že položka opravdu visí. Kontrola uvnitř
+      // mutate níže zůstává jako pojistka proti souběhu.
+      const live = currentRuntime();
+      const stillStuck = kind === 'place'
+        ? (() => { const entry = live.outbox.get(key); return entry != null && stuckEntries([entry]).length > 0; })()
+        : kind === 'bracket'
+          ? (() => { const entry = live.bracketOutbox.get(key); return entry != null && stuckBracketEntries([entry]).length > 0; })()
+          : kind === 'oso'
+            ? (() => { const entry = live.osoOutbox.get(key); return entry != null && stuckOsoEntries([entry]).length > 0; })()
+            // Cancel/modify: `planned` vrstva visí jen se začatým sourozencem
+            // stejné leader události → posuzovat nad celým outboxem jako status.
+            : stuckCancelEntries(live.cancelOutbox.values()).some(entry => entry.key === key);
+      if (!stillStuck) {
+        throw new Error('Operace už nečeká na ruční vyřešení (mezitím vyřešená nebo neznámá); kopírka zůstává beze změny');
+      }
       declineTransportResume('ruční vyřešení nejasného příkazu');
       gate = { ...gate, armed: false };
       invalidateReconciliation();
@@ -18140,7 +18157,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           state = applyResolved(state, [entry.key], entry.leaderSequence);
         } else {
           const entry = cancelOutbox.get(key);
-          if (!entry || !stuckCancelEntries([entry]).length) {
+          if (!entry || !stuckCancelEntries(current.cancelOutbox.values()).some(item => item.key === key)) {
             throw new Error('Cancel/modify outbox položka není stuck');
           }
           cancelOutbox.set(key, waiveCancelEntry(entry, explanation, clock()));

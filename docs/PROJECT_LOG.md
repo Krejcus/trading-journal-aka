@@ -262,6 +262,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-18 — Worker: ruční „Označit za vyřešené“ už nevypne běžící kopírku (Claude)
+
+- `waiveStuckOperation` nejdřív ověří, že položka opravdu visí, a teprve pak
+  DISARM + nová reconciliation. Zastaralé označení (např. z iPhonu přes relay,
+  mezitím vyřešené a kopírka znovu ARMED) skončí chybou a stav nemění.
+- Cancel/modify: `planned` vrstva se začatým sourozencem se posuzuje nad celým
+  outboxem (stejně jako výpis `stuckOperations`) — dřív ji UI ukázalo, ale waive
+  ji vždy odmítl (kritik, starší vada).
+- Agent: `copy-command` `resolve-stuck-operation` jen pro skupinu, kterou worker
+  řídí (jako Flatten / delete-group). Lokální CLI cesta beze změny.
+- Invarianty: INV-OUTBOX-02, INV-DEFAULT-03, INV-RECON-02, INV-RELAY-02.
+  copier-design-critic: SCHVÁLENO. Plná sada 5388 zelená. Worker nasazen (víkend).
+
 ### 2026-10-17 — iPhone appka z `main` s novými grafy (Claude)
 - Čistý worktree `~/alphatrade-worktrees/ios-20261017` nad `origin/main` `c7eb5cda` (obsahuje
   `469d172c`), symlink `.env.local`, `npm ci`, `ios:sync` se `set -o pipefail`: `✓ built`,

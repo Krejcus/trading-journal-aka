@@ -2554,6 +2554,52 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('zastaralý waive (operace už nečeká) nechá ARMED kopírku beze změny', async () => {
+    const broker = createMockBroker();
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    expect(controller.status().armed).toBe(true);
+
+    for (const kind of ['place', 'cancel-or-modify', 'bracket', 'oso'] as const) {
+      await expect(controller.waiveStuckOperation({
+        kind, key: `${kind}:neexistuje`, reason: 'dvojklik / zastaralé UI',
+      })).rejects.toThrow('nečeká na ruční vyřešení');
+    }
+    expect(controller.status()).toMatchObject({ armed: true, reconciliationRequired: false });
+    controller.stop();
+  });
+
+  it('waive planned vrstvy se začatým sourozencem projde stejně, jak ji ukazuje status', async () => {
+    const broker = createMockBroker();
+    const store = createMemoryCopierStore();
+    const parent = { ...createModifyEntry(
+      'cm:g1:parent:200', 'staged-event', 12, 200, 'follower-parent',
+      { quantity: 1, orderType: 'Limit', limitPrice: 30_100 }, 10,
+    ), status: 'confirmed' as const };
+    const planned = createModifyEntry(
+      'cm:g1:leg:200', 'staged-event', 12, 200, 'follower-leg',
+      { quantity: 1, orderType: 'Stop', stopPrice: 29_900 }, 10,
+    );
+    await store.commit({ ...emptySnapshot(), lastSequence: 11, cancelOutbox: [parent, planned] }, 0);
+    const controller = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    expect(controller.status().stuckOperations.map(item => item.key)).toContain(planned.key);
+    await controller.waiveStuckOperation({
+      kind: 'cancel-or-modify', key: planned.key, reason: 'broker ověřen ručně, vrstva neexistuje',
+    });
+    expect(controller.status().stuckOperations).toEqual([]);
+    expect((await store.load()).cancelOutbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: planned.key, status: 'waived' }),
+    ]));
+    controller.stop();
+  });
+
   it('status bezpečně vypíše stuck modify a ruční resolution jej durable uzavře bez broker příkazu', async () => {
     const broker = createMockBroker();
     const modifySpy = vi.spyOn(broker, 'modifyOrder');
