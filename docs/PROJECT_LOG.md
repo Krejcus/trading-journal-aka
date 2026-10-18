@@ -287,8 +287,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   (kopírka/LIVE, časově citlivé pod zátěží simulátoru; samostatně i v celé sadě znovu zelené).
   Dál jen přes skript s exit kódem vitestu; stejný test `copierV12SixthIteration` E1 padá pod
   zátěží opakovaně — kandidát na stabilizaci.
-- **Neověřeno v simulátoru (ráno na telefonu):** diktování a haptika, skutečný dotyk prstem (pinch,
-  tahy), otočení na šířku (simctl rotaci neumí, dvoupanel ověřen vynuceně na výšku), menší iPhone
+- Ověřeno navíc dotykem v simulátoru: pinch dvěma prsty zoomuje a stránka stojí; pinch při rozdělané
+  cestě nic nenakreslí; plynulý tah posouvá crosshair; hodnocení obchodu se uloží (klepnuto na stávající
+  hodnotu, data beze změny).
+- **Neověřeno v simulátoru (ráno na telefonu):** diktování a haptika, otočení na šířku (simctl rotaci neumí, dvoupanel ověřen vynuceně na výšku), menší iPhone
   (17e simulátor nepřihlášený), Live Activity, uložení přípravy/uzavření a hodnocení obchodu
   (vizuálně ano, zápis ne — nešly by vrátit).
 
