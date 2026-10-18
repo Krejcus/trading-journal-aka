@@ -11,6 +11,7 @@ import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChart
 import { tradeChartTiming } from '../../services/tradeChartData';
 import { getDrawingMagnetSettings, setDrawingMagnetSettings, subscribeDrawingMagnetSettings } from '../../services/chartDrawingMagnet';
 import { setNativeShellTabBarHidden } from '../../utils/nativeShell';
+import { installChartWorkspaceSync } from '../../services/chartWorkspaceSync';
 import {
   DAY_CHART_TIMEFRAMES, DAY_DRAW_COLORS, DAY_DRAW_TOOLS, DAY_PATH_TOOL, dayDrawColorOf, dayDrawStyle,
   pathGroupOf, pathSegmentIds, type DayDrawColorId,
@@ -92,6 +93,28 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
     return () => observer.disconnect();
   }, []);
 
+  // Na šířku dva grafy vedle sebe (schválený návrh): vlevo zvolený rámec,
+  // vpravo o stupeň vyšší. Kreslí se a vybírá v tom, na který jsi naposled klepl.
+  const [landscape, setLandscape] = useState(() => typeof window !== 'undefined' && window.matchMedia?.('(orientation: landscape) and (min-width: 560px)').matches === true);
+  useEffect(() => {
+    const media = window.matchMedia?.('(orientation: landscape) and (min-width: 560px)');
+    if (!media) return;
+    const update = () => setLandscape(media.matches);
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+  const [activePane, setActivePane] = useState<0 | 1>(0);
+  const [secondApi, setSecondApi] = useState<ChartViewApi | null>(null);
+  const secondContainerRef = useRef<HTMLDivElement>(null);
+  // Druhý graf: o stupeň vyšší rámec (15m → 5m, ať nejsou dva stejné).
+  const secondTimeframe: MarketTimeframe = timeframe === '15m' ? '5m' : timeframe === '5m' ? '15m' : '5m';
+  // Po otočení zpět zůstane aktivní graf, na který ses díval.
+  useEffect(() => {
+    if (landscape || activePane === 0) return;
+    setActivePane(0);
+    onTimeframe(secondTimeframe);
+  }, [activePane, landscape, onTimeframe, secondTimeframe]);
+
   // Nativní lišta pryč po dobu celé obrazovky; stránka pod vrstvou neroluje.
   useEffect(() => {
     void setNativeShellTabBarHidden(true);
@@ -112,6 +135,16 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
   const raw = ctl.chart.candles;
   const candles = useMemo(() => aggregateCandles(raw, timeframe), [raw, timeframe]);
   const barTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
+  const secondCandles = useMemo(() => (landscape ? aggregateCandles(raw, secondTimeframe) : []), [landscape, raw, secondTimeframe]);
+  const secondBarTimes = useMemo(() => secondCandles.map(candle => candle.time), [secondCandles]);
+  // Kurzor a čas mezi oběma grafy (jako workspace na Macu).
+  useEffect(() => {
+    if (!landscape || !api || !secondApi) return;
+    return installChartWorkspaceSync(
+      [['a', { chartApi: api, candles }], ['b', { chartApi: secondApi, candles: secondCandles }]],
+      { crosshair: true, time: true, dateRange: false },
+    );
+  }, [api, candles, landscape, secondApi, secondCandles]);
   const tradeNotes = useMemo(() => chartNotesOfTrades(ctl.chart.chartTrades), [ctl.chart.chartTrades]);
   const target = focusTarget(range);
   const anchorRef = useRef<{ day: string; trade: Trade } | null>(null);
@@ -124,7 +157,8 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
   useReviewFocus(focusKey, { entryMs: detail.entryMs, exitMs: detail.exitMs, id: detail.id }, Boolean(api), `${ctl.day}:${timeframe}:full`);
 
   // ── Kreslení: stav motoru (aktivní nástroj, výběr, počet kreseb) ──────
-  const engine: DrawingEngine | null = api?.drawing?.engine ?? null;
+  const activeApi = landscape && activePane === 1 ? secondApi : api;
+  const engine: DrawingEngine | null = activeApi?.drawing?.engine ?? null;
   useEffect(() => {
     if (!engine) return;
     const known = new Set(engine.getDrawings().map(item => item.id));
@@ -252,7 +286,8 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
         </div>
       )}
 
-      <div ref={containerRef} style={{ position: 'relative', flex: 1, minHeight: 0, background: isDark ? '#05080f' : '#fff' }}>
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', background: isDark ? '#05080f' : '#fff' }}>
+      <div ref={containerRef} onPointerDownCapture={() => { if (landscape && activePane !== 0) { engine?.stopTool(); setPathActive(false); setActivePane(0); } }} style={{ position: 'relative', flex: 1, minWidth: 0, boxShadow: landscape && activePane === 0 ? 'inset 0 0 0 1.5px rgba(99,102,241,0.55)' : undefined }}>
         {candles.length ? (
           <CandleKitTradeChart
             key={`${ctl.day}:${timeframe}:full`}
@@ -309,7 +344,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
           selectedId={ctl.selected?.kind === 'note' ? ctl.selected.id : null}
           onSelect={id => ctl.setSelected(id ? { kind: 'note', id } : null)}
           bubbles={bubbles}
-          placing={placing}
+          placing={!landscape || activePane === 0 ? placing : null}
           placingHint="Ťukni, kam to patří"
           onPick={onPick}
           onCancelPlacing={onCancelPlacing}
@@ -319,7 +354,61 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
           ticks={ctl.mindTicks}
         />
         {/* Dotyky na kresby: výběr, přesun, úprava bodů vždy; s nástrojem v ruce crosshair. */}
-        <DayTouchDrawLayer chartApi={api} containerRef={containerRef} enabled={!placing && !textEdit} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={toolDone} />
+        <DayTouchDrawLayer chartApi={api} containerRef={containerRef} enabled={!placing && !textEdit && (!landscape || activePane === 0)} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={toolDone} />
+      </div>
+      {landscape && (
+        <div ref={secondContainerRef} onPointerDownCapture={() => { if (activePane !== 1) { engine?.stopTool(); setPathActive(false); setActivePane(1); } }} style={{ position: 'relative', flex: 1, minWidth: 0, borderLeft: '1px solid var(--dj-line)', boxShadow: activePane === 1 ? 'inset 0 0 0 1.5px rgba(99,102,241,0.55)' : undefined }}>
+          {secondCandles.length > 0 && (
+            <CandleKitTradeChart
+              key={`${ctl.day}:${secondTimeframe}:full2`}
+              trade={chartTrade}
+              candles={secondCandles}
+              rawCandles={raw}
+              timeframe={secondTimeframe}
+              entryMs={timing.entryMs}
+              exitMs={timing.exitMs}
+              showFvg={indicators.fvg}
+              showLevels={indicators.levels}
+              showStructure={indicators.structure}
+              isDark={isDark}
+              compactMode
+              phoneLayout
+              compactToolbar
+              hideDrawingToolbar
+              hideFocusButton
+              reviewMode
+              contextTrades={ctl.chart.chartTrades}
+              drawingKeyId={`day:${ctl.day}`}
+              drawingScope="day"
+              drawingHitTolerance={14}
+              onChartApiReady={setSecondApi}
+              onToggleFvg={() => toggleIndicator('fvg')}
+              onToggleLevels={() => toggleIndicator('levels')}
+              onToggleStructure={() => toggleIndicator('structure')}
+            />
+          )}
+          <DayNotesLayer
+            chartApi={secondApi}
+            containerRef={secondContainerRef}
+            barTimes={secondBarTimes}
+            intervalSeconds={MARKET_TIMEFRAME_MINUTES[secondTimeframe] * 60}
+            pins={pins}
+            selectedId={ctl.selected?.kind === 'note' ? ctl.selected.id : null}
+            onSelect={id => ctl.setSelected(id ? { kind: 'note', id } : null)}
+            bubbles={bubbles}
+            placing={activePane === 1 ? placing : null}
+            placingHint="Ťukni, kam to patří"
+            onPick={onPick}
+            onCancelPlacing={onCancelPlacing}
+            pending={pending}
+            nowTime={nowTime}
+            bands={bands}
+            ticks={ctl.mindTicks}
+          />
+          <DayTouchDrawLayer chartApi={secondApi} containerRef={secondContainerRef} enabled={!placing && !textEdit && activePane === 1} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={toolDone} />
+          <span style={{ position: 'absolute', left: 8, top: 34, zIndex: 20, padding: '2px 7px', borderRadius: 6, fontSize: 11, fontWeight: 800, color: 'var(--dj-text-2)', background: 'var(--dj-chip)', pointerEvents: 'none' }}>{secondTimeframe}</span>
+        </div>
+      )}
 
         {/* Nástroj v ruce: co se kreslí, jak to skončí, zrušit. */}
         {drawingNow && (
@@ -350,7 +439,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
         )}
         {/* Plovoucí tužka a zpět (vpravo dole nad grafem, mimo cenovou osu). */}
         {!chromeHidden && !toolsOpen && !textEdit && (
-          <div style={{ position: 'absolute', right: 74, bottom: 34, zIndex: 24, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
+          <div style={{ position: 'absolute', right: 74, bottom: landscape ? 14 : 34, zIndex: 24, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
             {createdCount > 0 && !drawingNow && (
               <button type="button" className="dj-btn" aria-label="Vrátit poslední kresbu" onClick={undo} style={{ ...floatButton, width: 40, height: 40 }}><RotateCcw size={16} /></button>
             )}
