@@ -288,8 +288,12 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
   );
 
   const holdText = selected ? formatHoldDuration(tradeTimeMs(selected), selected.timestamp || Date.parse(selected.date)) ?? '—' : '—';
+  // Aurora: stejný sloupec napojený ke grafu, jen užší a s mléčným sklem.
+  const glassLine = isDark ? 'border-white/10' : 'border-slate-900/10';
   const side = (
-    <aside className={`w-[252px] shrink-0 border-l flex flex-col min-h-0 ${line} bg-[var(--bg-card)]`}>
+    <aside className={`w-[228px] shrink-0 border-l flex flex-col min-h-0 backdrop-blur-xl backdrop-saturate-[1.8] ${glassLine} ${isDark
+      ? 'bg-[#101720]/70 shadow-[inset_1px_0_0_rgba(255,255,255,0.05)]'
+      : 'bg-white/65 shadow-[inset_1px_0_0_rgba(255,255,255,0.9)]'}`}>
       {selected && draft ? (
         <>
           {/* Děti se nesmí smrsknout (sloupec se posouvá, ne zmenšuje). */}
@@ -308,10 +312,10 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
             <p className="text-[10.5px] tabular-nums text-slate-500 truncate">
               {fmtPrice(selected.entryPrice)} → <b className={isDark ? 'font-semibold text-slate-300' : 'font-semibold text-slate-700'}>{fmtPrice(selected.exitPrice)}</b> · {selected.positionSize || 1} {selected.instrument || ''}
             </p>
-            <div className={`flex overflow-hidden rounded-lg border ${line}`} role="radiogroup" aria-label="Dle plánu">
+            <div className={`flex overflow-hidden rounded-lg border ${glassLine} ${isDark ? 'bg-white/[0.03]' : 'bg-white/45'}`} role="radiogroup" aria-label="Dle plánu">
               {([['yes', 'Ano', 'bg-emerald-500/15 text-emerald-500'], ['partial', 'Částečně', 'bg-amber-500/15 text-amber-500'], ['no', 'Ne', 'bg-rose-500/15 text-rose-500']] as Array<[PlanChoice, string, string]>).map(([value, text, active], index) => (
                 <button key={value} type="button" role="radio" aria-checked={draft.plan === value} onClick={() => setDraft(current => current && { ...current, plan: value })}
-                  className={`flex-1 py-1.5 text-[11px] font-bold transition-colors duration-150 ${index ? `border-l ${line}` : ''} ${draft.plan === value ? active : 'text-slate-500'}`}>{text}</button>
+                  className={`flex-1 py-1.5 text-[11px] font-bold transition-colors duration-150 ${index ? `border-l ${glassLine}` : ''} ${draft.plan === value ? active : 'text-slate-500'}`}>{text}</button>
               ))}
             </div>
             <ReviewSection id="htf" title="Setup · HTF" open={openSections.has('htf')} onToggle={toggleSection} options={prefs.htf} value={draft.htf}
@@ -324,13 +328,13 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
               onChange={mistakes => setDraft(current => current && { ...current, mistakes })} isDark={isDark} bad />
             <textarea value={draft.notes} onChange={event => setDraft(current => current && { ...current, notes: event.target.value })}
               placeholder="Poznámka — co příště jinak…" rows={2}
-              className={`w-full resize-y rounded-lg border px-2.5 py-1.5 text-[11.5px] outline-none transition-colors focus:border-amber-500 ${line} ${isDark ? 'bg-[var(--bg-page)] text-slate-200' : 'bg-[var(--bg-page)] text-slate-800'}`} />
+              className={`w-full resize-y rounded-lg border px-2.5 py-1.5 text-[11.5px] outline-none transition-colors focus:border-amber-500 ${glassLine} ${isDark ? 'bg-white/5 text-slate-200' : 'bg-white/60 text-slate-800'}`} />
             {candlesReady && !selectedHasChart && <p className="text-[10.5px] font-semibold text-amber-600">Graf tohoto obchodu bude k dispozici zhruba 24 h po obchodu — v grafu zůstává předchozí.</p>}
             {saveError && <p className="text-[11px] font-semibold text-rose-500" role="alert">{saveError}</p>}
           </div>
-          <div className={`shrink-0 border-t px-3 py-2.5 ${line}`}>
+          <div className={`shrink-0 border-t px-3 py-2.5 ${glassLine}`}>
             <div className="flex gap-2">
-              <button type="button" onClick={() => move(1)} className={`h-9 flex-1 rounded-lg border text-[11.5px] font-bold transition-colors ${line} ${isDark ? 'text-slate-400 hover:bg-white/5' : 'text-slate-500 hover:bg-slate-50'}`}>Přeskočit →</button>
+              <button type="button" onClick={() => move(1)} className={`h-9 flex-1 rounded-lg border text-[11.5px] font-bold transition-colors ${glassLine} ${isDark ? 'text-slate-400 hover:bg-white/5' : 'bg-white/45 text-slate-500 hover:bg-white/80'}`}>Přeskočit →</button>
               <button type="button" onClick={() => { void markDone(); }} disabled={saving}
                 className="h-9 flex-[1.5] inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500 text-[11.5px] font-bold text-emerald-950 transition-colors hover:bg-emerald-400 disabled:opacity-60">
                 {saving ? <Loader2 size={13} className="animate-spin" /> : null}{selected.needsReview ? 'Hotovo → další' : 'Uložit → další'}
@@ -434,9 +438,9 @@ function ReviewSection({ id, title, open, onToggle, options, value, onChange, is
   const toggle = (option: string) => onChange(value.includes(option) ? value.filter(item => item !== option) : [...value, option]);
   const tile = (option: string, on: boolean) => `rounded-full border px-2 py-[3px] text-[10.5px] font-semibold transition-[color,background-color,border-color,transform] duration-150 active:scale-95 ${on
     ? bad ? 'border-rose-500 bg-rose-500/15 text-rose-500' : 'border-amber-500 bg-amber-500/15 text-amber-600'
-    : isDark ? 'border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20' : 'border-slate-200 text-slate-500 hover:text-slate-800 hover:border-slate-300'}`;
+    : isDark ? 'border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20' : 'border-slate-900/10 bg-white/50 text-slate-500 hover:text-slate-800 hover:border-slate-900/20'}`;
   return (
-    <div className={`rounded-lg border transition-colors ${open ? (isDark ? 'border-white/15' : 'border-slate-300') : isDark ? 'border-white/10' : 'border-slate-200'}`}>
+    <div className={`rounded-lg border transition-colors ${isDark ? 'bg-white/[0.03]' : 'bg-white/45'} ${open ? (isDark ? 'border-white/15' : 'border-slate-900/15') : isDark ? 'border-white/10' : 'border-slate-900/10'}`}>
       <button type="button" onClick={() => onToggle(id)} aria-expanded={open}
         className={`flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[10.5px] font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
         <span>{title}</span>
