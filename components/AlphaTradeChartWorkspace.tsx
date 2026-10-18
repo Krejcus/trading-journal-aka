@@ -2735,8 +2735,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         <div className={`relative z-[120] flex h-full shrink-0 items-center gap-1 pl-1 pr-2 ${toolbarSurface}`}>
         <span className={topDivider} />
         {!embedded && <>
-        <button type="button" className={`${topButton} px-2`} onClick={onClose} title="Zavřít fullscreen (Esc)"><Maximize2 size={14} className="rotate-180" /><span className="hidden sm:inline">Zpět</span></button>
-        <button type="button" onClick={onClose} className={`w-8 h-8 inline-flex items-center justify-center rounded-md ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950'}`} aria-label="Zavřít fullscreen workspace"><X size={16} /></button>
+        <button type="button" onClick={onClose} className={`w-8 h-8 inline-flex items-center justify-center rounded-md ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950'}`} title="Zavřít fullscreen (Esc)" aria-label="Zavřít fullscreen workspace"><X size={16} /></button>
         </>}
         </div>
       </div>
