@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, ExternalLink, History, Mic, PenLine, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Download, ExternalLink, History, Mic, PenLine, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import type { Trade } from '../../types';
 import {
   DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, DAY_SESSIONS, DAY_VERDICT_LABEL, editedAt, pragueClock,
@@ -14,6 +14,7 @@ import { PHASE_STYLE, SESSION_STYLE, MicButton, Waveform, money, priceText, rTex
 import type { DayController } from './useDayController';
 
 const DATE_LABEL = new Intl.DateTimeFormat('cs-CZ', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'UTC' });
+const SHORT_DAY = new Intl.DateTimeFormat('cs-CZ', { weekday: 'short', day: 'numeric', month: 'numeric', timeZone: 'UTC' });
 export const dayTitle = (day: string) => {
   const text = DATE_LABEL.format(new Date(`${day}T12:00:00Z`));
   return text.charAt(0).toUpperCase() + text.slice(1);
@@ -31,24 +32,25 @@ const planLabel = (choice: PlanChoice) => PLAN_OPTIONS.find(option => option.id 
 const label11: React.CSSProperties = { margin: 0, fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' };
 const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 12.5, fontWeight: 700 };
 
-export function LiveChip({ status, capturedAt, weekendMarketDay }: { status: DayController['chart']['liveStatus']; capturedAt: number | null; weekendMarketDay?: string | null }) {
+export function LiveChip({ status, capturedAt, weekendMarketDay, compact = false }: { status: DayController['chart']['liveStatus']; capturedAt: number | null; weekendMarketDay?: string | null; compact?: boolean }) {
   // O víkendu je trh zavřený — „TradingView stojí“ by jen strašilo.
   if (weekendMarketDay) {
+    const full = `Víkend · graf ukazuje ${dayTitle(weekendMarketDay).toLowerCase()}`;
     return (
-      <span title="Trh je o víkendu zavřený; graf ukazuje poslední obchodní den." style={{ height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: 'var(--dj-muted)', background: 'var(--dj-chip)' }}>
+      <span title={`${full}. Trh je o víkendu zavřený.`} style={{ height: 24, flex: 'none', padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: 'var(--dj-muted)', background: 'var(--dj-chip)' }}>
         <span style={{ width: 6, height: 6, borderRadius: 9, background: '#94a3b8' }} />
-        Víkend · graf ukazuje {dayTitle(weekendMarketDay).toLowerCase()}
+        {compact ? `Víkend · ${SHORT_DAY.format(new Date(`${weekendMarketDay}T12:00:00Z`))}` : full}
       </span>
     );
   }
   if (!status) return null;
   const live = status === 'live';
-  const text = status === 'live' ? `Živě z TradingView${capturedAt ? ` · ${clock(capturedAt)}` : ''}`
-    : status === 'loading' ? 'Načítám živé svíčky…'
-      : status === 'stale' ? `TradingView stojí${capturedAt ? ` od ${clock(capturedAt)}` : ''}`
-        : 'Živé svíčky nejsou — spusť worker s TradingView';
+  const text = status === 'live' ? `${compact ? 'Živě' : 'Živě z TradingView'}${capturedAt ? ` · ${clock(capturedAt)}` : ''}`
+    : status === 'loading' ? (compact ? 'Načítám…' : 'Načítám živé svíčky…')
+      : status === 'stale' ? `${compact ? 'TV stojí' : 'TradingView stojí'}${capturedAt ? ` od ${clock(capturedAt)}` : ''}`
+        : compact ? 'Bez živých svíček' : 'Živé svíčky nejsou — spusť worker s TradingView';
   return (
-    <span title="Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z grafu TradingView (jen zobrazení)." style={{ height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: live ? 'var(--dj-green-text)' : 'var(--dj-amber-text)', background: live ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)' }}>
+    <span title="Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z grafu TradingView (jen zobrazení)." style={{ flex: 'none', height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: live ? 'var(--dj-green-text)' : 'var(--dj-amber-text)', background: live ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)' }}>
       <span style={{ width: 6, height: 6, borderRadius: 9, background: live ? '#10b981' : '#f59e0b', animation: live ? 'dj-blink 2s ease-in-out infinite' : undefined }} />
       {text}
     </span>
@@ -99,14 +101,14 @@ export function primaryAction(ctl: DayController): { kind: 'prep' | 'close'; ses
   return null;
 }
 
-export function ScopeSwitch({ ctl, fill = false }: { ctl: DayController; fill?: boolean }) {
+export function ScopeSwitch({ ctl, fill = false, compact = false }: { ctl: DayController; fill?: boolean; compact?: boolean }) {
   const scopes: { id: DayController['scope']; label: string }[] = [{ id: 'day', label: 'Celý den' }, { id: 'london', label: 'London' }, { id: 'ny', label: 'New York' }];
   return (
-    <div role="group" aria-label="Rozsah grafu" style={{ display: fill ? 'grid' : 'inline-flex', gridTemplateColumns: fill ? 'repeat(3, minmax(0, 1fr))' : undefined, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)', borderRadius: 11, padding: 3, gap: 2 }}>
+    <div role="group" aria-label="Rozsah grafu" style={{ flex: 'none', display: fill ? 'grid' : 'inline-flex', gridTemplateColumns: fill ? 'repeat(3, minmax(0, 1fr))' : undefined, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)', borderRadius: 11, padding: 3, gap: 2 }}>
       {scopes.map(scope => {
         const on = ctl.scope === scope.id;
         return (
-          <button key={scope.id} type="button" className="dj-btn" aria-pressed={on} onClick={() => ctl.setScope(scope.id)} style={{ height: 34, padding: '0 12px', borderRadius: 8, border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, font: '600 12.5px Inter, sans-serif', background: on ? 'var(--dj-seg-on)' : 'transparent', color: on ? 'var(--dj-seg-on-ink)' : 'var(--dj-text-2)' }}>
+          <button key={scope.id} type="button" className="dj-btn" aria-pressed={on} onClick={() => ctl.setScope(scope.id)} style={{ height: compact ? 28 : 34, padding: compact ? '0 9px' : '0 12px', whiteSpace: 'nowrap', borderRadius: 8, border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, font: '600 12.5px Inter, sans-serif', background: on ? 'var(--dj-seg-on)' : 'transparent', color: on ? 'var(--dj-seg-on-ink)' : 'var(--dj-text-2)' }}>
             <span style={{ width: 7, height: 7, borderRadius: 9, background: SESSION_STYLE[scope.id].color }} />{scope.label}
           </button>
         );
@@ -115,30 +117,48 @@ export function ScopeSwitch({ ctl, fill = false }: { ctl: DayController; fill?: 
   );
 }
 
-export function DayHeaderBar({ ctl, onDictate, onOpenLegacy }: { ctl: DayController; onDictate: () => void; onOpenLegacy?: () => void }) {
+export function DayHeaderBar({ ctl, onDictate, onOpenLegacy, onAddNote }: { ctl: DayController; onDictate: () => void; onOpenLegacy?: () => void; onAddNote?: () => void }) {
   const action = primaryAction(ctl);
+  const placing = ctl.placing === 'note';
+  // Jeden řádek bez zalamování: na užší šířce jen ikony a kratší popisky.
+  const headerRef = useRef<HTMLElement>(null);
+  const [tight, setTight] = useState(false);
+  useLayoutEffect(() => {
+    const element = headerRef.current;
+    if (!element) return;
+    const measure = () => setTight(element.clientWidth < 1180);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const actionLabel = action && tight ? action.label.replace('New York', 'NY') : action?.label;
+  const iconButton: React.CSSProperties = { height: 34, width: 34, flex: 'none', borderRadius: 10, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--dj-muted)', border: '1px solid var(--dj-line)', background: 'transparent' };
   return (
-    <header className="dj" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px', padding: '10px 16px', borderBottom: '1px solid var(--dj-line)', background: 'radial-gradient(40% 180% at 0% 0%, rgba(16,185,129,0.10), transparent 70%), var(--dj-card)' }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--dj-muted)' }}>Deník</span>
-      <ChevronRight size={12} color="#475569" />
+    <header ref={headerRef} className="dj" style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: 8, padding: '8px 14px', overflowX: 'auto', scrollbarWidth: 'none', whiteSpace: 'nowrap', borderBottom: '1px solid var(--dj-line)', background: 'radial-gradient(40% 180% at 0% 0%, rgba(16,185,129,0.10), transparent 70%), var(--dj-card)' }}>
       <DayNav ctl={ctl} />
-      <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} />
+      <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} compact />
       {ctl.journalStatus === 'error' && <span role="alert" style={{ fontSize: 11.5, color: 'var(--dj-rose)' }}>Deník se nenačetl · <button type="button" onClick={ctl.reload} style={{ border: 0, background: 'none', color: 'var(--dj-rose-text)', textDecoration: 'underline', cursor: 'pointer', padding: 0, font: 'inherit' }}>zkusit znovu</button></span>}
-      <span style={{ flex: '1 1 20px' }} />
-      <ScopeSwitch ctl={ctl} />
-      <button type="button" className="dj-btn" onClick={onDictate} style={{ height: 40, padding: '0 14px 0 12px', borderRadius: 10, border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, color: '#fff', font: '700 13px Inter, sans-serif', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.28), 0 6px 14px -6px rgba(79,70,229,0.65)' }}>
-        <Mic size={16} /> Diktovat
-      </button>
+      <ScopeSwitch ctl={ctl} compact />
+      <span style={{ flex: '1 1 8px' }} />
+      {onAddNote && (
+        <button type="button" className="dj-btn" onClick={onAddNote} aria-pressed={placing} aria-label="Poznámka do grafu" title="Poznámka do grafu — klikni pak do grafu na čas a cenu" style={{ height: 34, flex: 'none', padding: tight && !placing ? '0 10px' : '0 12px', borderRadius: 10, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, font: '700 12.5px Inter, sans-serif', ...(placing ? { color: '#1c1203', background: '#fbbf24', border: '1px solid #fbbf24' } : { color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.35)' }) }}>
+          <Plus size={14} />{placing ? 'Klikni do grafu…' : tight ? null : 'Poznámka'}
+        </button>
+      )}
+      <button type="button" className="dj-btn" onClick={() => { void exportDay(ctl).catch(() => {}); }} title="Exportovat den (Markdown — pro jiné AI nebo archiv)" aria-label="Exportovat den" style={iconButton}><Download size={15} /></button>
+      {onOpenLegacy && <button type="button" className="dj-btn" onClick={onOpenLegacy} title="Původní deník dne (starší přípravy a hodnocení)" style={iconButton} aria-label="Původní deník dne"><History size={15} /></button>}
       {action && (
-        <button type="button" className="dj-btn" onClick={() => (action.kind === 'prep' ? ctl.openPrep(action.session) : ctl.openClose(action.session))} style={{ height: 40, padding: '0 14px', borderRadius: 10, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', font: '700 13px Inter, sans-serif', ...(action.kind === 'prep'
+        <button type="button" className="dj-btn" onClick={() => (action.kind === 'prep' ? ctl.openPrep(action.session) : ctl.openClose(action.session))} style={{ height: 34, flex: 'none', padding: '0 12px', borderRadius: 10, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', font: '700 12.5px Inter, sans-serif', ...(action.kind === 'prep'
           ? { color: 'var(--dj-indigo-text)', border: '1px solid rgba(99,102,241,0.45)', background: 'rgba(99,102,241,0.12)' }
           : { color: 'var(--dj-amber-text)', border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.10)' }) }}>
           <span style={{ width: 7, height: 7, borderRadius: 9, background: action.kind === 'prep' ? '#818cf8' : '#f59e0b', animation: 'dj-blink 1.6s ease-in-out infinite' }} />
-          {action.label}
+          {actionLabel}
         </button>
       )}
-      <button type="button" className="dj-btn" onClick={() => { void exportDay(ctl).catch(() => {}); }} title="Exportovat den (Markdown — pro jiné AI nebo archiv)" aria-label="Exportovat den" style={{ height: 40, width: 40, borderRadius: 10, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--dj-muted)', border: '1px solid var(--dj-line)', background: 'transparent' }}><Download size={16} /></button>
-      {onOpenLegacy && <button type="button" className="dj-btn" onClick={onOpenLegacy} title="Původní deník dne (starší přípravy a hodnocení)" style={{ height: 40, width: 40, borderRadius: 10, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--dj-muted)', border: '1px solid var(--dj-line)', background: 'transparent' }} aria-label="Původní deník dne"><History size={16} /></button>}
+      <button type="button" className="dj-btn" onClick={onDictate} aria-label="Diktovat" title="Diktovat poznámku" style={{ height: 34, flex: 'none', padding: tight ? '0 10px' : '0 13px 0 11px', borderRadius: 10, border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, color: '#fff', font: '700 12.5px Inter, sans-serif', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.28), 0 6px 14px -6px rgba(79,70,229,0.65)' }}>
+        <Mic size={15} />{tight ? null : ' Diktovat'}
+      </button>
     </header>
   );
 }
@@ -212,23 +232,6 @@ export function JournalChecklist({ ctl, onOpenCoach }: { ctl: DayController; onO
   );
 }
 
-export function DayRules({ ctl }: { ctl: DayController }) {
-  const rows = DAY_SESSIONS.flatMap(session => (ctl.journal.preps[session]?.rules ?? []).map(rule => ({ session, rule })));
-  return (
-    <section className="dj-card" style={{ padding: 14 }}>
-      <p style={{ ...sectionTitle, marginBottom: 6 }}>Neobchoduju, pokud…</p>
-      {rows.length === 0 && <p style={{ margin: 0, fontSize: 12, color: 'var(--dj-muted)' }}>Pravidla si vybereš v přípravě session.</p>}
-      {rows.map(row => (
-        <div key={`${row.session}:${row.rule}`} style={{ display: 'flex', gap: 9, alignItems: 'center', padding: '7px 0', borderTop: '1px solid var(--dj-line-soft)' }}>
-          <span style={{ width: 8, height: 8, borderRadius: 9, background: SESSION_STYLE[row.session].color, flex: 'none' }} />
-          <span style={{ flex: 1, fontSize: 12.5 }}>{row.rule}</span>
-          <span style={{ fontSize: 11, color: 'var(--dj-muted)' }}>{SESSION_STYLE[row.session].name}</span>
-        </div>
-      ))}
-    </section>
-  );
-}
-
 export function StreakStrip({ streak }: { streak: readonly { day: string; state: 'full' | 'part' | 'none' | 'open'; title: string }[] }) {
   return (
     <section className="dj-card" style={{ padding: 14 }}>
@@ -246,17 +249,6 @@ export function StreakStrip({ streak }: { streak: readonly { day: string; state:
 export const streakStyle = (state: 'full' | 'part' | 'none' | 'open'): React.CSSProperties =>
   state === 'full' ? { background: '#10b981' } : state === 'part' ? { background: 'rgba(16,185,129,0.35)' }
     : state === 'open' ? { background: 'rgba(245,158,11,0.18)', border: '1.5px dashed rgba(245,158,11,0.8)' } : { background: 'var(--dj-line-soft)' };
-
-export function DayLeftColumn({ ctl, streak, onOpenCoach }: { ctl: DayController; streak: Parameters<typeof StreakStrip>[0]['streak']; onOpenCoach?: () => void }) {
-  return (
-    <aside className="dj dj-scroll" style={{ width: 280, flex: 'none', display: 'flex', flexDirection: 'column', gap: 12, padding: 12, overflowY: 'auto', borderRight: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
-      <ResultCard ctl={ctl} />
-      <JournalChecklist ctl={ctl} onOpenCoach={onOpenCoach} />
-      <DayRules ctl={ctl} />
-      <StreakStrip streak={streak} />
-    </aside>
-  );
-}
 
 // ── Časová osa ─────────────────────────────────────────────────────────
 
@@ -529,11 +521,13 @@ function PlanTab({ ctl }: { ctl: DayController }) {
   );
 }
 
-export function DaySidePanel({ ctl, onOpenTrade, onAddNote, width = 380, compactSummary = false, onOpenCoach }: {
+export function DaySidePanel({ ctl, onOpenTrade, onAddNote, width = 380, compactSummary = false, onOpenCoach, inDrawer = false }: {
   ctl: DayController;
   onOpenTrade?: (trade: Trade) => void;
   onAddNote: () => void;
   width?: number;
+  /** Uvnitř plovoucího panelu nad grafem (deník B+): bez vlastního rámu a pozadí. */
+  inDrawer?: boolean;
   /** Užší obrazovka bez levého sloupce: výsledek a žurnál nahoře v panelu. */
   compactSummary?: boolean;
   streak?: Parameters<typeof StreakStrip>[0]['streak'];
@@ -549,7 +543,9 @@ export function DaySidePanel({ ctl, onOpenTrade, onAddNote, width = 380, compact
     { id: 'plan' as const, label: 'Plán', badge: biasLabel ? DAY_BIAS_LABEL[biasLabel] : '—', warn: false },
   ];
   return (
-    <aside className="dj dj-scroll" style={{ width, flex: 'none', display: 'flex', flexDirection: 'column', gap: 12, padding: 12, overflowY: 'auto', borderLeft: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
+    <aside className="dj dj-scroll" style={inDrawer
+      ? { height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 10, padding: 10, overflowY: 'auto' }
+      : { width, flex: 'none', display: 'flex', flexDirection: 'column', gap: 12, padding: 12, overflowY: 'auto', borderLeft: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
       {compactSummary && <ResultCard ctl={ctl} compact />}
       {compactSummary && <JournalChecklist ctl={ctl} onOpenCoach={onOpenCoach} />}
       {ctl.mode === 'day' && ctl.pendingPoint && (
@@ -581,46 +577,178 @@ export function DaySidePanel({ ctl, onOpenTrade, onAddNote, width = 380, compact
   );
 }
 
-export function SessionCards({ ctl }: { ctl: DayController }) {
+
+// ── Deník B+: spodní pás a panel na vyžádání ───────────────────────────
+
+/** Stav seance pro kartu (sdílený pásem i staršími kartami). */
+function sessionCardState(ctl: DayController, session: DaySession) {
+  const close = ctl.journal.closes[session];
+  const prep = ctl.journal.preps[session];
+  const stage = sessionStage(session, ctl.windows, ctl.isToday ? ctl.now : Infinity);
+  const status = close ? { text: 'Uzavřeno', style: { color: 'var(--dj-blue)', background: 'rgba(59,130,246,0.14)' } }
+    : ctl.weekendMarketDay ? { text: 'Víkend', style: { color: 'var(--dj-muted)', background: 'var(--dj-chip)' } }
+    : stage === 'upcoming' ? { text: prep ? 'Připraveno' : 'Čeká na přípravu', style: { color: 'var(--dj-indigo-text)', background: 'rgba(99,102,241,0.14)' } }
+      : stage === 'running' ? { text: 'Běží', style: { color: 'var(--dj-green-text)', background: 'rgba(16,185,129,0.14)' } }
+        : { text: 'Neuzavřeno', style: { color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.14)' } };
+  return { close, prep, stage, status };
+}
+
+const stripLabel: React.CSSProperties = { margin: 0, minWidth: 0, fontSize: 9.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+
+function StripSession({ ctl, session }: { ctl: DayController; session: DaySession }) {
+  const stats = ctl.sessionStats[session];
+  const { close, prep, stage, status } = sessionCardState(ctl, session);
+  const active = ctl.scope === session;
+  const color = SESSION_STYLE[session].color;
   return (
-    <div className="dj" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, padding: '10px 12px', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
-      {DAY_SESSIONS.map(session => {
-        const stats = ctl.sessionStats[session];
-        const close = ctl.journal.closes[session];
-        const prep = ctl.journal.preps[session];
-        const stage = sessionStage(session, ctl.windows, ctl.isToday ? ctl.now : Infinity);
-        const active = ctl.scope === session;
-        const color = SESSION_STYLE[session].color;
-        const status = close ? { text: 'Uzavřeno', style: { color: 'var(--dj-blue)', background: 'rgba(59,130,246,0.14)' } }
-          : ctl.weekendMarketDay ? { text: 'Víkend', style: { color: 'var(--dj-muted)', background: 'var(--dj-chip)' } }
-          : stage === 'upcoming' ? { text: prep ? 'Připraveno' : 'Čeká na přípravu', style: { color: 'var(--dj-indigo-text)', background: 'rgba(99,102,241,0.14)' } }
-            : stage === 'running' ? { text: 'Běží', style: { color: 'var(--dj-green-text)', background: 'rgba(16,185,129,0.14)' } }
-              : { text: 'Neuzavřeno', style: { color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.14)' } };
-        const quote = close?.summary ? `„${close.summary}“` : ctl.weekendMarketDay ? 'O víkendu se neobchoduje.' : stage === 'upcoming' ? (prep ? prepSummary(prep, 0) : 'Připrav bias a scénář před otevřením.') : 'Chybí uzavření · cca 90 s';
-        return (
-          <div key={session} style={{ display: 'flex', borderRadius: 12, background: 'var(--dj-card-soft)', border: `1px solid ${active ? color : 'var(--dj-line)'}`, boxShadow: active ? `0 0 0 1px ${color}` : undefined, overflow: 'hidden' }}>
-            <button type="button" className="dj-btn" onClick={() => ctl.setScope(active ? 'day' : session)} style={{ flex: 1, minWidth: 0, textAlign: 'left', cursor: 'pointer', padding: '10px 14px', border: 0, background: 'transparent', color: 'inherit', fontFamily: 'inherit' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 9, background: color }} />
-                <span style={{ fontSize: 13, fontWeight: 700 }}>{SESSION_STYLE[session].name}</span>
-                <span style={{ fontSize: 11.5, color: 'var(--dj-muted)' }}>{clock(ctl.windows[session].start)}–{clock(ctl.windows[session].end)}</span>
-                <span style={{ flex: 1 }} />
-                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 7px', borderRadius: 6, ...status.style }}>{status.text}</span>
-              </span>
-              <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 6 }}>
-                <span style={{ fontSize: 20, fontWeight: 300, letterSpacing: '-0.03em', color: tone(stats.pnl) }}>{money(stats.pnl)}</span>
-                <span style={{ fontSize: 12, color: 'var(--dj-text-2)' }}>{stats.count} {stats.count === 1 ? 'obchod' : stats.count > 1 && stats.count < 5 ? 'obchody' : 'obchodů'} · {rText(stats.rSum)}</span>
-              </span>
-              <span style={{ display: 'block', marginTop: 4, fontSize: 11.5, color: 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{quote}</span>
-            </button>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 10, borderLeft: '1px solid var(--dj-line)', justifyContent: 'center' }}>
-              <button type="button" className="dj-btn" onClick={() => ctl.openPrep(session)} style={{ ...miniAction, color: 'var(--dj-indigo-text)', borderColor: 'rgba(99,102,241,0.4)' }}>{prep ? 'Příprava' : 'Připravit'}</button>
-              <button type="button" className="dj-btn" disabled={stage === 'upcoming'} onClick={() => ctl.openClose(session)} style={{ ...miniAction, color: close ? 'var(--dj-blue)' : 'var(--dj-amber-text)', borderColor: close ? 'rgba(59,130,246,0.4)' : 'rgba(245,158,11,0.4)', opacity: stage === 'upcoming' ? 0.4 : 1, cursor: stage === 'upcoming' ? 'default' : 'pointer' }}>{close ? 'Uzavření' : 'Uzavřít'}</button>
-            </div>
-          </div>
-        );
-      })}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, padding: '8px 10px', borderRadius: 12, background: 'var(--dj-card-soft)', border: `1px solid ${active ? color : 'var(--dj-line)'}`, boxShadow: active ? `0 0 0 1px ${color}` : undefined }}>
+      <button type="button" className="dj-btn" onClick={() => ctl.setScope(active ? 'day' : session)} title={active ? 'Zpět na celý den' : `Graf jen ${SESSION_STYLE[session].name}`} style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: 'inherit', fontFamily: 'inherit' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <span style={{ width: 7, height: 7, borderRadius: 9, background: color, flex: 'none' }} />
+          <span style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{SESSION_STYLE[session].name}</span>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 6, whiteSpace: 'nowrap', ...status.style }}>{status.text}</span>
+        </span>
+        <span style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginTop: 3, minWidth: 0 }}>
+          <span style={{ fontSize: 16, fontWeight: 300, letterSpacing: '-0.02em', color: tone(stats.pnl), whiteSpace: 'nowrap' }}>{money(stats.pnl)}</span>
+          <span style={{ fontSize: 11, color: 'var(--dj-text-2)', whiteSpace: 'nowrap' }}>{stats.count} {stats.count === 1 ? 'obchod' : stats.count > 1 && stats.count < 5 ? 'obchody' : 'obchodů'}</span>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: 10, color: 'var(--dj-muted)', whiteSpace: 'nowrap' }}>{clock(ctl.windows[session].start)}–{clock(ctl.windows[session].end)}</span>
+        </span>
+      </button>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button type="button" className="dj-btn" onClick={() => ctl.openPrep(session)} style={{ ...stripAction, color: 'var(--dj-indigo-text)', borderColor: 'rgba(99,102,241,0.4)' }}>{prep ? 'Příprava' : 'Připravit'}</button>
+        <button type="button" className="dj-btn" disabled={stage === 'upcoming'} onClick={() => ctl.openClose(session)} style={{ ...stripAction, color: close ? 'var(--dj-blue)' : 'var(--dj-amber-text)', borderColor: close ? 'rgba(59,130,246,0.4)' : 'rgba(245,158,11,0.4)', opacity: stage === 'upcoming' ? 0.4 : 1, cursor: stage === 'upcoming' ? 'default' : 'pointer' }}>{close ? 'Uzavření' : 'Uzavřít'}</button>
+      </div>
     </div>
   );
 }
-const miniAction: React.CSSProperties = { height: 30, padding: '0 10px', borderRadius: 8, border: '1px solid', background: 'transparent', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5, font: '700 11.5px Inter, sans-serif', whiteSpace: 'nowrap' };
+const stripAction: React.CSSProperties = { flex: 1, height: 26, padding: '0 8px', borderRadius: 7, border: '1px solid', background: 'transparent', cursor: 'pointer', font: '700 11px Inter, sans-serif', whiteSpace: 'nowrap' };
+
+function QuickNote({ ctl }: { ctl: DayController }) {
+  const [draft, setDraft] = useState('');
+  const [voice, setVoice] = useState(false);
+  // Diktování je sdílené — tenhle mikrofon ukazuje jen svoje nahrávání.
+  const [owned, setOwned] = useState(false);
+  const { dictation } = ctl;
+  const phase = owned ? dictation.phase : 'idle';
+  const status = owned ? recordingStatus(dictation.phase, dictation.seconds, dictation.error) : null;
+  const save = () => {
+    if (!draft.trim()) return;
+    ctl.createNote(draft, null, voice);
+    setDraft(''); setVoice(false);
+  };
+  const dictate = async () => {
+    if (dictation.phase === 'recording' || dictation.phase === 'transcribing') return;
+    setOwned(true);
+    const text = await dictation.start();
+    setOwned(false);
+    if (text) { setDraft(current => (current.trim() ? `${current.trim()} ${text}` : text)); setVoice(true); }
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <input className="dj-input" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); save(); } }}
+        placeholder={status?.text ?? 'Napiš poznámku k teď… ↵'} aria-label="Rychlá poznámka" style={{ flex: 1, minWidth: 0, height: 30, padding: '0 9px', fontSize: 12 }} />
+      <MicButton phase={phase} onStart={() => void dictate()} onStop={() => void dictation.stop()} size={30} />
+    </div>
+  );
+}
+
+/**
+ * Spodní pás deníku (varianta B+): výsledek, žurnál dne, obě seance
+ * a poznámky s rychlým zápisem. Graf nad ním má celou šířku.
+ */
+export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed }: {
+  ctl: DayController;
+  streak: Parameters<typeof StreakStrip>[0]['streak'];
+  onOpenCoach?: () => void;
+  onOpenFeed: () => void;
+}) {
+  const { stats } = ctl;
+  const scopeName = ctl.scope === 'day' ? 'celý den' : SESSION_STYLE[ctl.scope].name;
+  const done = ctl.checklist.filter(item => item.done).length;
+  const total = ctl.checklist.length;
+  const unrated = ctl.dayTrades.filter(trade => !planChoiceOf(trade)).length;
+  // Stejné poznámky jako časová osa (bez bodů z přípravy, v aktuálním rozsahu) —
+  // klik tak vždy vede na kartu s úpravou a mazáním.
+  const notes = ctl.feed.flatMap(item => (item.kind === 'note' ? [item.note] : []))
+    .sort((a, b) => Date.parse(b.writtenAt) - Date.parse(a.writtenAt));
+  return (
+    <section className="dj dj-scroll" style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, .8fr) minmax(190px, 1.1fr) minmax(180px, .95fr) minmax(180px, .95fr) minmax(230px, 1.5fr)', gap: 12, padding: '10px 12px', overflowX: 'auto', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+        <p style={stripLabel}>Čistý výsledek · {scopeName}</p>
+        <p style={{ margin: 0, fontSize: 24, fontWeight: 300, letterSpacing: '-0.03em', lineHeight: 1.1, whiteSpace: 'nowrap', color: tone(stats.pnl) }}>{money(stats.pnl)}</p>
+        <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-text-2)', whiteSpace: 'nowrap' }}>{stats.count ? `${rText(stats.rSum)} · ${stats.wins}W / ${stats.losses}L` : 'Zatím bez obchodů'}</p>
+        {unrated > 0 && <button type="button" className="dj-btn" onClick={onOpenFeed} style={{ alignSelf: 'flex-start', marginTop: 2, height: 22, padding: '0 7px', borderRadius: 6, border: 0, cursor: 'pointer', font: '700 10.5px Inter, sans-serif', color: '#1c1203', background: '#f59e0b' }}>{unrated} k ohodnocení ›</button>}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <p style={stripLabel}>Žurnál dne</p>
+          <span style={{ fontSize: 11, fontWeight: 700, color: done === total ? 'var(--dj-green)' : 'var(--dj-amber)' }}>{done}/{total}</span>
+          <span style={{ flex: 1 }} />
+          {onOpenCoach && <button type="button" className="dj-btn" onClick={onOpenCoach} style={{ border: 0, background: 'none', padding: 0, cursor: 'pointer', font: '700 10.5px Inter, sans-serif', color: 'var(--dj-indigo-text)' }}>Coach ›</button>}
+        </div>
+        {ctl.checklist.map(item => {
+          const action = item.action;
+          const clickable = !item.done && action && action.kind !== 'rate';
+          return (
+            <button key={item.id} type="button" disabled={!clickable} onClick={() => { if (action?.kind === 'prep') ctl.openPrep(action.session); else if (action?.kind === 'close') ctl.openClose(action.session); }} style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', padding: '1px 0', border: 0, background: 'transparent', cursor: clickable ? 'pointer' : 'default', textAlign: 'left', fontFamily: 'inherit', color: 'inherit' }}>
+              {item.done
+                ? <span style={{ width: 13, height: 13, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(16,185,129,0.16)', color: 'var(--dj-green)', flex: 'none', fontSize: 8.5, fontWeight: 900 }}>✓</span>
+                : <span style={{ width: 13, height: 13, borderRadius: 9, border: '1.5px dashed rgba(245,158,11,0.7)', flex: 'none', boxSizing: 'border-box' }} />}
+              <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: item.done ? 'var(--dj-text-2)' : 'var(--dj-amber-text)' }}>{item.label}</span>
+              <span style={{ fontSize: 10, color: 'var(--dj-muted)', whiteSpace: 'nowrap' }}>{item.meta}</span>
+            </button>
+          );
+        })}
+        {streak.length > 0 && (
+          <div title="Uzavřené dny — plný čtverec = obě přípravy a uzavřená každá obchodovaná session" style={{ display: 'grid', gridTemplateColumns: `repeat(${streak.length}, minmax(0, 1fr))`, gap: 3, marginTop: 2 }}>
+            {streak.map(item => <span key={item.day} title={`${dayTitle(item.day)} · ${item.title}`} style={{ height: 6, borderRadius: 3, boxSizing: 'border-box', ...streakStyle(item.state) }} />)}
+          </div>
+        )}
+      </div>
+      {DAY_SESSIONS.map(session => <StripSession key={session} ctl={ctl} session={session} />)}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <p style={stripLabel}>Poznámky · {notes.length}</p>
+          <span style={{ flex: 1 }} />
+          <button type="button" className="dj-btn" onClick={onOpenFeed} style={{ border: 0, background: 'none', padding: 0, cursor: 'pointer', font: '700 10.5px Inter, sans-serif', color: 'var(--dj-indigo-text)' }}>Časová osa ›</button>
+        </div>
+        {notes.slice(0, 2).map(note => (
+          <button key={note.id} type="button" className="dj-btn" onClick={() => ctl.setSelected({ kind: 'note', id: note.id })} style={{ display: 'flex', gap: 6, alignItems: 'baseline', width: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', color: 'inherit' }}>
+            <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--dj-muted)', flex: 'none' }}>{clock(Date.parse(note.writtenAt))}</span>
+            <span style={{ fontSize: 11.5, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{note.text}</span>
+          </button>
+        ))}
+        {!notes.length && <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-muted)' }}>Zatím nic. Napiš, co vidíš, nebo diktuj.</p>}
+        <div style={{ marginTop: 'auto' }}><QuickNote ctl={ctl} /></div>
+      </div>
+    </section>
+  );
+}
+
+/** Skleněný panel nad grafem vpravo — vyjede na vyžádání, graf pod ním zůstává. */
+export function DayDrawer({ title, onClose, children, escapeEnabled = true }: { title: string; onClose: () => void; children: React.ReactNode; escapeEnabled?: boolean }) {
+  useEffect(() => {
+    // Esc patří nejdřív diktování, umisťování bodu a rozepsané poznámce.
+    if (!escapeEnabled) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [escapeEnabled, onClose]);
+  return (
+    <aside className="dj dj-drawer" role="dialog" aria-label={title} style={{ position: 'absolute', top: 8, right: 8, bottom: 8, width: 360, maxWidth: 'calc(100% - 16px)', display: 'flex', flexDirection: 'column', overflow: 'hidden', pointerEvents: 'auto', borderRadius: 16, border: '1px solid var(--dj-line)', background: 'color-mix(in srgb, var(--dj-card) 94%, transparent)', WebkitBackdropFilter: 'blur(24px) saturate(1.6)', backdropFilter: 'blur(24px) saturate(1.6)', boxShadow: '0 24px 50px -24px rgba(15,23,42,0.45), inset 0 1px 0 rgba(255,255,255,0.12)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px 6px 14px', flex: 'none' }}>
+        <p style={{ margin: 0, fontSize: 12.5, fontWeight: 700 }}>{title}</p>
+        <span style={{ flex: 1 }} />
+        <button type="button" className="dj-btn" onClick={onClose} aria-label="Zavřít panel" title="Zavřít (Esc)" style={{ height: 28, width: 28, display: 'grid', placeItems: 'center', borderRadius: 8, border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--dj-muted)' }}><X size={15} /></button>
+      </div>
+      <div style={{ flex: 1, minHeight: 0 }}>{children}</div>
+    </aside>
+  );
+}

@@ -159,12 +159,49 @@ export function SummaryBar({ ctl, session, compact = false }: { ctl: DayControll
   );
 }
 
-export function CloseBottom({ ctl, session, saving, error, onClose }: { ctl: DayController; session: DaySession; saving: boolean; error: string | null; onClose: () => void }) {
+export function CloseBottom({ ctl, session, saving, error, onClose, onOpenDetail, detailOpen = false }: {
+  ctl: DayController; session: DaySession; saving: boolean; error: string | null; onClose: () => void;
+  /** Deník B+: výsledek a „Plán vs. realita“ v pásu vlevo, detail v panelu nad grafem. */
+  onOpenDetail?: () => void;
+  detailOpen?: boolean;
+}) {
   const draft = ctl.closeDraft(session);
   const req = closeRequirements(ctl, session);
   const saved = ctl.journal.closes[session];
+  const stats = ctl.sessionStats[session];
+  const pins = prepPins(ctl, session);
+  const judged = pins.filter(pin => draft.verdicts[pin.id]).length;
+  const unrated = tradesInScope(ctl.dayTrades, session, ctl.windows).filter(trade => !planChoiceOf(trade)).length;
+  const summary = onOpenDetail ? (
+    <div style={{ width: 210, flex: 'none', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+      <p style={{ margin: 0, fontSize: 9.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dj-muted)' }}>Výsledek · {SESSION_STYLE[session].name}</p>
+      <p style={{ margin: 0, fontSize: 24, fontWeight: 300, letterSpacing: '-0.03em', lineHeight: 1.1, color: tone(stats.pnl) }}>{money(stats.pnl)}</p>
+      <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-text-2)' }}>{stats.count ? `${stats.count} ${stats.count === 1 ? 'obchod' : stats.count < 5 ? 'obchody' : 'obchodů'} · ${rText(stats.rSum)}${unrated ? ` · ${unrated} k ohodnocení` : ''}` : 'Bez obchodů — i to je výsledek.'}</p>
+      <button type="button" className="dj-btn" onClick={onOpenDetail} aria-pressed={detailOpen} style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '6px 9px', borderRadius: 9, cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', font: '600 11px Inter, sans-serif', color: 'var(--dj-indigo-strong)', background: detailOpen ? 'rgba(99,102,241,0.18)' : 'var(--dj-indigo-bg-soft)', border: '1px solid rgba(129,140,248,0.35)' }}>
+        <span>Plán vs. realita · {pins.length ? `${judged}/${pins.length} bodů` : 'bez bodů'}</span><span>{detailOpen ? '‹' : '›'}</span>
+      </button>
+    </div>
+  ) : null;
+  // Deník B+: jedna řada — výsledek, shrnutí, exekuce + uzavření; graf nad ní má celou výšku.
+  if (summary) return (
+    <section className="dj" style={{ display: 'flex', alignItems: 'stretch', gap: 14, padding: '10px 12px', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
+      {summary}
+      <div style={{ flex: 1, minWidth: 0 }}><SummaryBar ctl={ctl} session={session} /></div>
+      <div style={{ width: 312, flex: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span title="Jak jsi dodržel plán, ne kolik jsi vydělal." style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dj-muted)' }}>Exekuce</span>
+          <span style={{ flex: 1 }} />
+          <RequirementChips items={req.items} />
+        </div>
+        <ExecutionPicker value={draft.execution} onChange={execution => ctl.updateCloseDraft(session, { execution })} fill height={34} />
+        <BigSaveButton width="100%" height={44} accent={session === 'ny' ? 'orange' : 'indigo'} ready={req.ready} saving={saving} error={error}
+          label={`Chybí ${req.missing.join(' a ')}`} readyLabel={saved && !draft.touched ? `${SESSION_STYLE[session].name} je uzavřený · znovu` : `Uzavřít ${SESSION_STYLE[session].name}`} savingLabel="Uzavírám…" onClick={onClose} />
+      </div>
+    </section>
+  );
   return (
-    <section className="dj" style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12, borderTop: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
+    <section className="dj" style={{ display: 'flex', gap: 14, padding: 12, borderTop: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <SummaryBar ctl={ctl} session={session} />
       <footer style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 14 }}>
         <span style={{ fontSize: 12.5, fontWeight: 700 }}>Exekuce</span>
@@ -175,6 +212,7 @@ export function CloseBottom({ ctl, session, saving, error, onClose }: { ctl: Day
         <BigSaveButton width={300} height={56} accent={session === 'ny' ? 'orange' : 'indigo'} ready={req.ready} saving={saving} error={error}
           label={`Chybí ${req.missing.join(' a ')}`} readyLabel={saved && !draft.touched ? `${SESSION_STYLE[session].name} je uzavřený · znovu` : `Uzavřít ${SESSION_STYLE[session].name}`} savingLabel="Uzavírám…" onClick={onClose} />
       </footer>
+      </div>
     </section>
   );
 }

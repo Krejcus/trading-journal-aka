@@ -332,7 +332,13 @@ export interface WorkspacePanelOverlay {
   timeframe: MarketTimeframe;
   isActive: boolean;
 }
-export interface ReviewSlotElements { header: HTMLElement; side: HTMLElement; bottom: HTMLElement; /** Panel vlevo od grafu (hodnocení obchodu). */ left: HTMLElement }
+export interface ReviewSlotElements {
+  header: HTMLElement; side: HTMLElement; bottom: HTMLElement;
+  /** Panel vlevo od grafu (hodnocení obchodu). */
+  left: HTMLElement;
+  /** Plovoucí vrstva nad plochou grafu (panely na vyžádání, graf pod nimi má celou šířku). */
+  overlay: HTMLElement;
+}
 
 interface WorkspacePanelConfig extends Record<string, unknown> {
   root: MarketRoot;
@@ -1770,11 +1776,13 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const reviewSideRef = useRef<HTMLDivElement>(null);
   const reviewBottomRef = useRef<HTMLDivElement>(null);
   const reviewLeftRef = useRef<HTMLDivElement>(null);
+  const reviewOverlayRef = useRef<HTMLDivElement>(null);
   const onReviewSlotsReady = review?.onSlotsReady;
   useLayoutEffect(() => {
     if (!onReviewSlotsReady) return;
     const header = reviewHeaderRef.current, side = reviewSideRef.current, bottom = reviewBottomRef.current, left = reviewLeftRef.current;
-    if (header && side && bottom && left) onReviewSlotsReady({ header, side, bottom, left });
+    const overlay = reviewOverlayRef.current;
+    if (header && side && bottom && left && overlay) onReviewSlotsReady({ header, side, bottom, left, overlay });
     return () => onReviewSlotsReady(null);
   }, [onReviewSlotsReady]);
   const onReviewReplayCursor = review?.onReplayCursor;
@@ -2854,6 +2862,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               onCollapsedChange={setDrawingRailCollapsedPersisted}
             />
           </div>
+          {review && (
+            <div
+              ref={reviewOverlayRef}
+              className={`pointer-events-none absolute left-0 right-0 top-0 z-[656] ${tradingPanel ? 'bottom-[116px]' : 'bottom-7'}`}
+            />
+          )}
           <div
             ref={workspaceShellRef}
             className={`alphatrade-candlekit-workspace absolute top-0 left-0 right-0 ${tradingPanel ? 'bottom-[116px]' : 'bottom-7'} ${isDark ? 'is-dark' : ''}`}

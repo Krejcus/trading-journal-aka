@@ -1079,9 +1079,12 @@ export const AlphaTradeDrawingToolbar: React.FC<{
       top: Math.round(Math.min(maxTop, Math.max(minTop, position.top))),
     };
   }, [favoritesArea, favoritesHost]);
+  // Kontejner se dohledá po každém vykreslení: lišta (a s ní railRef) může
+  // vzniknout až později, třeba v deníku, kde engine kreslení není hned.
   useLayoutEffect(() => {
-    setFavoritesHost(docked ? (railRef.current?.parentElement?.parentElement ?? null) : null);
-  }, [docked]);
+    const next = docked ? (railRef.current?.parentElement?.parentElement ?? null) : null;
+    setFavoritesHost(current => (current === next ? current : next));
+  });
   useLayoutEffect(() => {
     if (!docked || !favoritesVisible || !favoritesHost) return;
     const apply = () => setFavoritesPosition(current => {

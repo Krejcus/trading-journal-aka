@@ -10,7 +10,7 @@ import { tradeChartTiming } from '../../services/tradeChartData';
 import { DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, carryForward, sessionWindows, type DaySession } from '../../lib/dayJournal';
 import { sessionStage, type StreakDay } from '../../lib/dayJournalView';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
-import { DayHeaderBar, DayLeftColumn, DaySidePanel, SessionCards, streakStyle } from './DayPanels';
+import { DayBottomStrip, DayDrawer, DayHeaderBar, DaySidePanel, streakStyle } from './DayPanels';
 import { PinPopover, PrepBottom, PrepHeaderBar, prepPins } from './PrepPanels';
 import { CloseBottom, CloseHeaderBar, CloseSide } from './ClosePanels';
 import DictationDialog from './DictationDialog';
@@ -115,23 +115,25 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
   const screenKey = `${ctl.day}:${mode}:${session}`;
   const screenRef = useRef(screenKey);
   screenRef.current = screenKey;
-  // Šířka obrazovky dne: levý sloupec jen na širokém displeji, jinak se
-  // výsledek a žurnál přesunou do pravého panelu (graf má přednost).
+  // Deník B+: graf přes celou šířku, přehled a zápis v pásu dole. Časová osa,
+  // obchod a plán (dřív pevný boční panel) vyjedou jen na vyžádání jako
+  // skleněný panel nad grafem; v uzavření stejně tak „Plán vs. realita“.
   const rootRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(1600);
-  useLayoutEffect(() => {
-    const element = rootRef.current;
-    if (!element) return;
-    const observer = new ResizeObserver(([entry]) => setWidth(Math.round(entry.contentRect.width)));
-    observer.observe(element);
-    setWidth(element.getBoundingClientRect().width);
-    return () => observer.disconnect();
-  }, []);
-  // 13" MacBook má po odečtení postranní lišty ~1360 px: levý sloupec se
-  // musí vejít i tam, jinak se všechno tlačí do pravého panelu.
-  const wide = width >= 1280;
-  const sideWidth = wide ? 340 : width >= 1180 ? 360 : 330;
-  useEffect(() => { setPopover(null); setSaveError(null); setCelebration(null); }, [mode, session, ctl.day]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [closeDetailOpen, setCloseDetailOpen] = useState(false);
+  useEffect(() => { setPopover(null); setSaveError(null); setCelebration(null); setDrawerOpen(false); setCloseDetailOpen(false); }, [mode, session, ctl.day]);
+  // Výběr (obchod, poznámka) nebo bod pro novou poznámku panel otevře a ten
+  // pak drží, dokud ho uživatel nezavře (smazání, přepnutí rozsahu ho nezavřou).
+  useEffect(() => {
+    if (mode === 'day' && (ctl.selected != null || ctl.pendingPoint != null)) setDrawerOpen(true);
+  }, [ctl.pendingPoint, ctl.selected, mode]);
+  const dayDrawerVisible = mode === 'day' && (drawerOpen || ctl.pendingPoint != null || ctl.selected != null);
+  const closeDayDrawer = useCallback(() => {
+    setDrawerOpen(false);
+    ctl.setSelected(null);
+    ctl.setPendingPoint(null);
+  }, [ctl]);
+  const addNote = useCallback(() => { ctl.setPendingPoint(null); ctl.setPlacing(ctl.placing === 'note' ? null : 'note'); }, [ctl]);
 
   // ── Záběr grafu ───────────────────────────────────────────────────────
   const range = focusRange({ mode, session, scope: ctl.scope, windows: ctl.chartWindows, now: ctl.now, isToday: ctl.isToday });
@@ -273,17 +275,26 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
         </div>
       )}
 
-      {slots && mode === 'day' && createPortal(<DayHeaderBar ctl={ctl} onDictate={() => setDictating(true)} onOpenLegacy={onOpenLegacy} />, slots.header)}
-      {slots && mode === 'day' && wide && createPortal(<DayLeftColumn ctl={ctl} streak={streak} onOpenCoach={onOpenCoach} />, slots.left)}
-      {slots && mode === 'day' && createPortal(<DaySidePanel ctl={ctl} width={sideWidth} compactSummary={!wide} streak={streak} onOpenCoach={onOpenCoach} onOpenTrade={onOpenTrade} onAddNote={() => { ctl.setPendingPoint(null); ctl.setPlacing(ctl.placing === 'note' ? null : 'note'); }} />, slots.side)}
-      {slots && mode === 'day' && createPortal(<SessionCards ctl={ctl} />, slots.bottom)}
+      {slots && mode === 'day' && createPortal(<DayHeaderBar ctl={ctl} onDictate={() => setDictating(true)} onOpenLegacy={onOpenLegacy} onAddNote={addNote} />, slots.header)}
+      {slots && mode === 'day' && createPortal(<DayBottomStrip ctl={ctl} streak={streak} onOpenCoach={onOpenCoach} onOpenFeed={() => setDrawerOpen(true)} />, slots.bottom)}
+      {slots && dayDrawerVisible && createPortal(
+        <DayDrawer title={ctl.pendingPoint ? 'Nová poznámka' : ctl.selectedTrade ? 'Obchod' : 'Deník dne'} onClose={closeDayDrawer} escapeEnabled={!dictating && !ctl.placing && ctl.pendingPoint == null}>
+          <DaySidePanel ctl={ctl} inDrawer streak={streak} onOpenCoach={onOpenCoach} onOpenTrade={onOpenTrade} onAddNote={addNote} />
+        </DayDrawer>,
+        slots.overlay,
+      )}
 
       {slots && mode === 'prep' && createPortal(<PrepHeaderBar ctl={ctl} session={session} onSwitch={switchSession} />, slots.header)}
       {slots && mode === 'prep' && createPortal(<PrepBottom ctl={ctl} session={session} saving={saving} error={saveError} onSave={() => void onSavePrep()} onVoice={startVoicePin} />, slots.bottom)}
 
       {slots && mode === 'close' && createPortal(<CloseHeaderBar ctl={ctl} session={session} onSwitch={switchSession} />, slots.header)}
-      {slots && mode === 'close' && createPortal(<CloseSide ctl={ctl} session={session} width={width >= 1280 ? 352 : 310} />, slots.side)}
-      {slots && mode === 'close' && createPortal(<CloseBottom ctl={ctl} session={session} saving={saving} error={saveError} onClose={() => void onSaveClose()} />, slots.bottom)}
+      {slots && mode === 'close' && closeDetailOpen && createPortal(
+        <DayDrawer title={`Plán vs. realita · ${SESSION_STYLE[session].name}`} onClose={() => setCloseDetailOpen(false)} escapeEnabled={!dictating && !ctl.placing}>
+          <div className="dj-scroll" style={{ height: '100%', overflowY: 'auto' }}><CloseSide ctl={ctl} session={session} /></div>
+        </DayDrawer>,
+        slots.overlay,
+      )}
+      {slots && mode === 'close' && createPortal(<CloseBottom ctl={ctl} session={session} saving={saving} error={saveError} onClose={() => void onSaveClose()} onOpenDetail={() => setCloseDetailOpen(open => !open)} detailOpen={closeDetailOpen} />, slots.bottom)}
 
       {dictating && <DictationDialog ctl={ctl} onClose={() => setDictating(false)} />}
 

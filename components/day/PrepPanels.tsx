@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowLeft, Mic, PenLine, Plus, X } from 'lucide-react';
 import { DAY_RULE_PRESETS, pragueClock, prepReady, type DayNote, type DaySession } from '../../lib/dayJournal';
 import { sessionStage } from '../../lib/dayJournalView';
@@ -47,18 +47,30 @@ export function PrepTimer({ openedAt }: { openedAt: number }) {
 export function PrepHeaderBar({ ctl, session, onSwitch }: { ctl: DayController; session: DaySession; onSwitch: (session: DaySession) => void }) {
   const draft = ctl.prepDraft(session);
   const before = sessionStage(session, ctl.windows, ctl.now) === 'upcoming' ? `před ${SESSION_STYLE[session].name} ${clock(ctl.windows[session].start)}` : `${SESSION_STYLE[session].name} od ${clock(ctl.windows[session].start)}`;
+  // Na užší šířce se štítek stavu dat schová, ať se řádek vejde.
+  const headerRef = useRef<HTMLElement>(null);
+  const [tight, setTight] = useState(false);
+  useLayoutEffect(() => {
+    const element = headerRef.current;
+    if (!element) return;
+    const measure = () => setTight(element.clientWidth < 1260);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   return (
-    <header className="dj" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 14px', padding: '10px 16px', borderBottom: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
-      <button type="button" className="dj-btn" onClick={ctl.backToDay} aria-label="Zpět na den" style={{ height: 36, width: 36, borderRadius: 10, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--dj-text-2)', border: '1px solid var(--dj-line)', background: 'transparent' }}><ArrowLeft size={16} /></button>
-      <div style={{ minWidth: 0 }}>
-        <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' }}>{dayTitle(ctl.day)} · {before}</p>
-        <h1 style={{ margin: '1px 0 0', fontSize: 19, fontWeight: 800, letterSpacing: '-0.02em' }}>Příprava {SESSION_STYLE[session].name}</h1>
+    // Deník B+: jeden řádek (nápověda k biasu je v tooltipu).
+    <header ref={headerRef} className="dj" style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: 12, padding: '8px 14px', overflowX: 'auto', scrollbarWidth: 'none', whiteSpace: 'nowrap', borderBottom: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
+      <button type="button" className="dj-btn" onClick={ctl.backToDay} aria-label="Zpět na den" style={{ height: 34, width: 34, flex: 'none', borderRadius: 10, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--dj-text-2)', border: '1px solid var(--dj-line)', background: 'transparent' }}><ArrowLeft size={16} /></button>
+      <div style={{ minWidth: 0, flex: 'none' }}>
+        <p style={{ margin: 0, fontSize: 10.5, fontWeight: 600, color: 'var(--dj-muted)' }}>{dayTitle(ctl.day)} · {before}</p>
+        <h1 style={{ margin: 0, fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em' }}>Příprava {SESSION_STYLE[session].name}</h1>
       </div>
-      <SessionSwitch value={session} onChange={onSwitch} status={prepSessionStatus(ctl, session)} />
-      <BiasPicker value={draft.bias} onChange={bias => ctl.updatePrepDraft(session, { bias })} />
-      <span style={{ fontSize: 11.5, color: 'var(--dj-muted)', maxWidth: 170 }}>{draft.bias ? 'Klikni jinam a změníš ho.' : 'Jedním klikem. Bez biasu se plán neuloží.'}</span>
+      <div style={{ flex: 'none' }}><SessionSwitch value={session} onChange={onSwitch} status={prepSessionStatus(ctl, session)} /></div>
       <span style={{ flex: 1 }} />
-      <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} />
+      <span title={draft.bias ? 'Klikni jinam a změníš ho.' : 'Jedním klikem. Bez biasu se plán neuloží.'} style={{ flex: 'none' }}><BiasPicker value={draft.bias} onChange={bias => ctl.updatePrepDraft(session, { bias })} /></span>
+      {!tight && <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} compact />}
       <PrepTimer openedAt={draft.openedAt} />
     </header>
   );
@@ -243,22 +255,21 @@ export function PrepBottom({ ctl, session, saving, error, onSave, onVoice }: { c
   const saved = ctl.journal.preps[session];
   const draft = ctl.prepDraft(session);
   return (
-    <section className="dj" style={{ display: 'flex', gap: 12, height: 244, padding: 12, borderTop: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
-      <div className="dj-card" style={{ flex: 1, minWidth: 0, padding: '12px 14px', display: 'flex', gap: 14 }}>
-        <ScenarioField ctl={ctl} session={session} />
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <PinModeButtons ctl={ctl} onVoice={onVoice} />
-          <PinList ctl={ctl} session={session} />
-        </div>
+    // Deník B+: jeden plochý pás bez vnořených karet — scénář, body v grafu,
+    // pravidla a uložení vedle sebe; graf nad ním má víc výšky.
+    <section className="dj" style={{ display: 'flex', gap: 16, height: 196, padding: '10px 14px', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
+      <ScenarioField ctl={ctl} session={session} />
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <PinList ctl={ctl} session={session} />
+        <PinModeButtons ctl={ctl} onVoice={onVoice} />
       </div>
-      <div className="dj-card" style={{ flex: '0 0 clamp(300px, 34%, 380px)', minWidth: 0, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 9 }}>
-        <div>
-          <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700 }}>Neobchoduju, pokud…</p>
-          <RuleChips ctl={ctl} session={session} />
-        </div>
+      <div style={{ flex: '0 0 clamp(220px, 22%, 300px)', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700 }}>Neobchoduju, pokud…</p>
+        <div className="dj-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}><RuleChips ctl={ctl} session={session} /></div>
+      </div>
+      <div style={{ flex: '0 0 230px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8, justifyContent: 'flex-end' }}>
         <RequirementChips items={req.items} />
-        <span style={{ flex: 1 }} />
-        <BigSaveButton ready={req.ready} saving={saving} label={missingLabel(req.missing)} readyLabel={saved && !draft.touched ? 'Plán je uložený · uložit znovu' : 'Uložit plán'} onClick={onSave} error={error} />
+        <BigSaveButton height={46} ready={req.ready} saving={saving} label={missingLabel(req.missing)} readyLabel={saved && !draft.touched ? 'Plán je uložený · znovu' : 'Uložit plán'} onClick={onSave} error={error} />
       </div>
     </section>
   );
