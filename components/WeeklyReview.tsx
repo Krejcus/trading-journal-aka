@@ -163,18 +163,43 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
   // se překreslí v transition — po kouscích, bez zastavení animace.
   const [, startSelecting] = useTransition();
   const chartSwitchTimerRef = useRef<number | undefined>(undefined);
-  const select = useCallback((trade: Trade | undefined) => {
+  const select = useCallback((trade: Trade | undefined, options?: { focus?: boolean }) => {
     if (!trade) return;
     // Graf zná obchody pod id zdroje (sloučený obchod → jeho zdroj), ne pod id ze seznamu.
     const chartTarget = chartTradeOfRef.current(trade);
     const timing = tradeChartTiming(chartTarget);
-    window.dispatchEvent(new CustomEvent(REVIEW_FOCUS_EVENT, { detail: { entryMs: timing.entryMs, exitMs: timing.exitMs, id: String(chartTarget.id) } }));
+    // Automatický výběr z replaye graf nenatáčí — pohled drží přehrávání.
+    if (options?.focus !== false) {
+      window.dispatchEvent(new CustomEvent(REVIEW_FOCUS_EVENT, { detail: { entryMs: timing.entryMs, exitMs: timing.exitMs, id: String(chartTarget.id) } }));
+    }
     const id = String(trade.id);
     setSelectedId(id); setSaveError(null);
     window.clearTimeout(chartSwitchTimerRef.current);
     chartSwitchTimerRef.current = window.setTimeout(() => startSelecting(() => setChartSelectedId(id)), CHART_SWITCH_DELAY_MS);
   }, []);
   useEffect(() => () => window.clearTimeout(chartSwitchTimerRef.current), []);
+  // Replay: když kurzor dopředu překročí vstup dalšího obchodu, panel i pás
+  // se na něj přepnou. Ruční výběr platí, dokud se nedojde k dalšímu vstupu;
+  // skok zpět nic nepřepíná.
+  const weekTradesRef = useRef(weekTrades);
+  weekTradesRef.current = weekTrades;
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const replayCursorRef = useRef<number | null>(null);
+  const handleReplayCursor = useCallback((cursorTime: number | null) => {
+    const previous = replayCursorRef.current;
+    replayCursorRef.current = cursorTime;
+    if (cursorTime === null || previous === null || cursorTime <= previous) return;
+    // Kurzor zahrnuje celou svou minutu (stejně jako ořez obchodů v grafu).
+    const fromMs = (previous + 60) * 1_000;
+    const toMs = (cursorTime + 60) * 1_000;
+    const crossed = weekTradesRef.current.filter(trade => {
+      const at = tradeTimeMs(trade);
+      return at >= fromMs && at < toMs;
+    });
+    const next = crossed.reduce<Trade | undefined>((latest, trade) => !latest || tradeTimeMs(trade) >= tradeTimeMs(latest) ? trade : latest, undefined);
+    if (next && String(next.id) !== selectedIdRef.current) select(next, { focus: false });
+  }, [select]);
   const move = useCallback((delta: number) => {
     if (!weekTrades.length) return;
     select(weekTrades[(selectedIndex + delta + weekTrades.length) % weekTrades.length]);
@@ -355,8 +380,8 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
   const stableClose = useCallback(() => onCloseRef.current(), []);
   const [slots, setSlots] = useState<ReviewSlotElements | null>(null);
   const drawingKey = `review-${weekStart}`;
-  const review = useMemo(() => chartData ? { onSlotsReady: setSlots, onClose: stableClose, trades: contextTrades, drawingKey, data: chartData } : null,
-    [chartData, contextTrades, drawingKey, stableClose]);
+  const review = useMemo(() => chartData ? { onSlotsReady: setSlots, onClose: stableClose, trades: contextTrades, drawingKey, data: chartData, onReplayCursor: handleReplayCursor } : null,
+    [chartData, contextTrades, drawingKey, handleReplayCursor, stableClose]);
   const onSaveChartNotesRef = useRef(onSaveChartNotes);
   onSaveChartNotesRef.current = onSaveChartNotes;
   const onAttachScreenshotRef = useRef(onAttachScreenshot);

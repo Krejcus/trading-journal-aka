@@ -303,6 +303,11 @@ export interface WorkspaceReviewSlots {
   onSlotsReady: (slots: ReviewSlotElements | null) => void;
   /** Obchody týdne s historií plnění — v grafu vedle vybraného. */
   trades: readonly Trade[];
+  /**
+   * Pozice kurzoru replaye (unix s), null mimo replay — review podle ní
+   * přepne výběr na obchod, ke kterému přehrávání právě došlo.
+   */
+  onReplayCursor?: (cursorTime: number | null) => void;
   /** Kresby v review patří týdnu (klíč úložiště). */
   drawingKey: string;
   /**
@@ -1772,6 +1777,11 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     if (header && side && bottom && left) onReviewSlotsReady({ header, side, bottom, left });
     return () => onReviewSlotsReady(null);
   }, [onReviewSlotsReady]);
+  const onReviewReplayCursor = review?.onReplayCursor;
+  const reviewCursorTime = replay.phase === 'active' ? replay.cursorTime : null;
+  useEffect(() => {
+    onReviewReplayCursor?.(reviewCursorTime);
+  }, [onReviewReplayCursor, reviewCursorTime]);
   const context = useMemo<WorkspaceDataContextValue>(() => ({
     trade,
     entryMs,
