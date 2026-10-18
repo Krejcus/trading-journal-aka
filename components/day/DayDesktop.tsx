@@ -10,7 +10,7 @@ import { tradeChartTiming } from '../../services/tradeChartData';
 import { DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, carryForward, sessionWindows, type DaySession } from '../../lib/dayJournal';
 import { sessionStage, type StreakDay } from '../../lib/dayJournalView';
 import DayNotesLayer, { type DayAxisTick, type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
-import { DayBottomStrip, DayDrawer, DayHeaderBar, DaySidePanel, streakStyle } from './DayPanels';
+import { DayBottomStrip, DayDrawer, DayHeaderBar, DaySidePanel, DayWeekendStrip, streakStyle } from './DayPanels';
 import { PinPopover, PrepBottom, PrepHeaderBar, prepPins } from './PrepPanels';
 import { CloseBottom, CloseHeaderBar, CloseSide } from './ClosePanels';
 import DictationDialog from './DictationDialog';
@@ -94,7 +94,7 @@ type Celebration =
   | { kind: 'prep'; session: DaySession; fresh: boolean; seconds: number | null }
   | { kind: 'close'; session: DaySession; fresh: boolean };
 
-export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, height }: {
+export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, onOpenMind, height }: {
   ctl: DayController;
   isDark: boolean;
   streak: StreakDay[];
@@ -103,6 +103,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
   onOpenWeek?: () => void;
   onOpenArchive?: () => void;
   onOpenCoach?: () => void;
+  onOpenMind?: () => void;
   height: string;
 }) {
   const [slots, setSlots] = useState<ReviewSlotElements | null>(null);
@@ -299,8 +300,10 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
         </div>
       )}
 
-      {slots && mode === 'day' && createPortal(<DayHeaderBar ctl={ctl} onDictate={() => setDictating(true)} onOpenLegacy={onOpenLegacy} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onAddNote={addNote} />, slots.header)}
-      {slots && mode === 'day' && createPortal(<DayBottomStrip ctl={ctl} streak={streak} onOpenCoach={onOpenCoach} onOpenFeed={() => setDrawerOpen(true)} />, slots.bottom)}
+      {slots && mode === 'day' && createPortal(<DayHeaderBar ctl={ctl} onDictate={() => setDictating(true)} onOpenLegacy={onOpenLegacy} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onOpenMind={onOpenMind} onAddNote={addNote} />, slots.header)}
+      {slots && mode === 'day' && createPortal(ctl.weekend
+        ? <DayWeekendStrip ctl={ctl} onOpenWeek={onOpenWeek} onOpenMind={onOpenMind} />
+        : <DayBottomStrip ctl={ctl} streak={streak} onOpenCoach={onOpenCoach} onOpenFeed={() => setDrawerOpen(true)} onOpenMind={onOpenMind} />, slots.bottom)}
       {slots && dayDrawerVisible && createPortal(
         <DayDrawer title={ctl.pendingPoint ? 'Nová poznámka' : ctl.selectedTrade ? 'Obchod' : 'Deník dne'} onClose={closeDayDrawer} escapeEnabled={!dictating && !ctl.placing && ctl.pendingPoint == null}>
           <DaySidePanel ctl={ctl} inDrawer streak={streak} onOpenCoach={onOpenCoach} onOpenTrade={onOpenTrade} onAddNote={addNote} />

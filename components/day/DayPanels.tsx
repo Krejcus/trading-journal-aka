@@ -12,7 +12,7 @@ import { tradeRMultiple } from '../../utils/tradeRisk';
 import { dayJournalMarkdown } from '../../lib/dayJournalExport';
 import { isNativeBuild } from '../../utils/runtimeConfig';
 import { MIND_STYLE, PHASE_STYLE, SESSION_STYLE, MicButton, NoteKindToggle, SpringSegmented, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
-import { MIND_AREAS, MIND_AREA_ICON, MIND_AREA_LABEL, isMindArea, mergeMindAreas } from '../../lib/dayMind';
+import { MIND_AREAS, MIND_AREA_ICON, MIND_AREA_LABEL, isMindArea } from '../../lib/dayMind';
 import type { DayController } from './useDayController';
 
 const DATE_LABEL = new Intl.DateTimeFormat('cs-CZ', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'UTC' });
@@ -90,6 +90,8 @@ export async function exportDay(ctl: DayController) {
 
 /** Hlavní výzva dne: chybějící příprava nadcházející session, jinak uzavření. */
 export function primaryAction(ctl: DayController): { kind: 'prep' | 'close'; session: DaySession; label: string } | null {
+  // Víkend: trh je zavřený — žádná příprava ani uzavření seancí.
+  if (ctl.weekend) return null;
   if (!ctl.isToday) {
     const open = DAY_SESSIONS.find(session => !ctl.journal.closes[session] && ctl.sessionStats[session].count > 0);
     return open ? { kind: 'close', session: open, label: `Uzavřít ${SESSION_STYLE[open].name}` } : null;
@@ -136,7 +138,7 @@ export function ScopeSwitch({ ctl, fill = false, compact = false }: { ctl: DayCo
 }
 
 /** Menu ⋯ v hlavičce deníku: Týden, archiv, původní deník dne a export (portál — hlavička se posouvá do stran). */
-function DayMoreMenu({ ctl, onOpenWeek, onOpenArchive, onOpenLegacy }: { ctl: DayController; onOpenWeek?: () => void; onOpenArchive?: () => void; onOpenLegacy?: () => void }) {
+function DayMoreMenu({ ctl, onOpenWeek, onOpenArchive, onOpenLegacy, onOpenMind }: { ctl: DayController; onOpenWeek?: () => void; onOpenArchive?: () => void; onOpenLegacy?: () => void; onOpenMind?: () => void }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -156,6 +158,7 @@ function DayMoreMenu({ ctl, onOpenWeek, onOpenArchive, onOpenLegacy }: { ctl: Da
     return () => { window.removeEventListener('pointerdown', close, true); window.removeEventListener('keydown', onKey); };
   }, [open]);
   const items = [
+    onOpenMind && { label: 'Hlava', icon: Brain, run: onOpenMind },
     onOpenWeek && { label: 'Týden', icon: Calendar, run: onOpenWeek },
     onOpenArchive && { label: 'Archiv deníku', icon: Archive, run: onOpenArchive },
     onOpenLegacy && { label: 'Původní deník dne', icon: History, run: onOpenLegacy },
@@ -163,7 +166,7 @@ function DayMoreMenu({ ctl, onOpenWeek, onOpenArchive, onOpenLegacy }: { ctl: Da
   ].filter(Boolean) as { label: string; icon: typeof Calendar; run: () => void }[];
   return (
     <>
-      <button ref={buttonRef} type="button" className="dj-btn" onClick={() => setOpen(current => !current)} aria-haspopup="menu" aria-expanded={open} aria-label="Další" title="Týden, archiv, export" style={{ height: 34, width: 34, flex: 'none', borderRadius: 10, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--dj-muted)', border: '1px solid var(--dj-line)', background: open ? 'var(--dj-chip)' : 'transparent' }}><MoreHorizontal size={16} /></button>
+      <button ref={buttonRef} type="button" className="dj-btn" onClick={() => setOpen(current => !current)} aria-haspopup="menu" aria-expanded={open} aria-label="Další" title="Hlava, týden, archiv, export" style={{ height: 34, width: 34, flex: 'none', borderRadius: 10, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--dj-muted)', border: '1px solid var(--dj-line)', background: open ? 'var(--dj-chip)' : 'transparent' }}><MoreHorizontal size={16} /></button>
       {open && createPortal(
         <div ref={menuRef} className="dj" role="menu" style={{ position: 'fixed', top: position.top, right: position.right, zIndex: 10050, width: 210, padding: 5, borderRadius: 12, border: '1px solid var(--dj-line)', background: 'var(--dj-card)', boxShadow: '0 18px 36px -18px rgba(15,23,42,0.45)', animation: 'dj-rise .18s ease both' }}>
           {items.map(item => (
@@ -178,7 +181,7 @@ function DayMoreMenu({ ctl, onOpenWeek, onOpenArchive, onOpenLegacy }: { ctl: Da
   );
 }
 
-export function DayHeaderBar({ ctl, onDictate, onOpenLegacy, onOpenWeek, onOpenArchive, onAddNote }: { ctl: DayController; onDictate: () => void; onOpenLegacy?: () => void; onOpenWeek?: () => void; onOpenArchive?: () => void; onAddNote?: () => void }) {
+export function DayHeaderBar({ ctl, onDictate, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenMind, onAddNote }: { ctl: DayController; onDictate: () => void; onOpenLegacy?: () => void; onOpenWeek?: () => void; onOpenArchive?: () => void; onOpenMind?: () => void; onAddNote?: () => void }) {
   const action = primaryAction(ctl);
   const placing = ctl.placing === 'note';
   // Jeden řádek bez zalamování: na užší šířce jen ikony a kratší popisky.
@@ -199,14 +202,14 @@ export function DayHeaderBar({ ctl, onDictate, onOpenLegacy, onOpenWeek, onOpenA
       <DayNav ctl={ctl} />
       <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} compact />
       {ctl.journalStatus === 'error' && <span role="alert" style={{ fontSize: 11.5, color: 'var(--dj-rose)' }}>Deník se nenačetl · <button type="button" onClick={ctl.reload} style={{ border: 0, background: 'none', color: 'var(--dj-rose-text)', textDecoration: 'underline', cursor: 'pointer', padding: 0, font: 'inherit' }}>zkusit znovu</button></span>}
-      <ScopeSwitch ctl={ctl} compact />
+      {!ctl.weekend && <ScopeSwitch ctl={ctl} compact />}
       <span style={{ flex: '1 1 8px' }} />
       {onAddNote && (
         <button type="button" className="dj-btn" onClick={onAddNote} aria-pressed={placing} aria-label="Poznámka do grafu" title="Poznámka do grafu — klikni pak do grafu na čas a cenu" style={{ height: 34, flex: 'none', padding: tight && !placing ? '0 10px' : '0 12px', borderRadius: 10, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, font: '700 12.5px Inter, sans-serif', ...(placing ? { color: '#1c1203', background: '#fbbf24', border: '1px solid #fbbf24' } : { color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.35)' }) }}>
           <Plus size={14} />{placing ? 'Klikni do grafu…' : tight ? null : 'Poznámka'}
         </button>
       )}
-      <DayMoreMenu ctl={ctl} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onOpenLegacy={onOpenLegacy} />
+      <DayMoreMenu ctl={ctl} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onOpenLegacy={onOpenLegacy} onOpenMind={onOpenMind} />
       {action && (
         <button type="button" className="dj-btn" onClick={() => (action.kind === 'prep' ? ctl.openPrep(action.session) : ctl.openClose(action.session))} style={{ height: 34, flex: 'none', padding: '0 12px', borderRadius: 10, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', font: '700 12.5px Inter, sans-serif', ...(action.kind === 'prep'
           ? { color: 'var(--dj-indigo-text)', border: '1px solid rgba(99,102,241,0.45)', background: 'rgba(99,102,241,0.12)' }
@@ -382,9 +385,7 @@ function NoteCard({ ctl, note, phase }: { ctl: DayController; note: DayNote; pha
             <button type="button" className="dj-btn" onClick={() => setEditing(null)} style={smallGhost}>Zrušit</button>
             <button type="button" className="dj-btn" onClick={async () => {
               const text = editing.trim(); if (!text) return;
-              // Hlava: rozpoznané oblasti se přepočítají, ručně zapnuté zůstanou.
-              const manual = mind ? (note.areas ?? []).filter(area => !mergeMindAreas(note.text).includes(area as never)) : [];
-              try { await ctl.editNoteText(note, text, manual); setEditing(null); setError(null); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Nepodařilo se uložit.'); }
+              try { await ctl.editNoteText(note, text); setEditing(null); setError(null); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Nepodařilo se uložit.'); }
             }} style={smallSolid}>Uložit</button>
           </div>
         </div>
@@ -768,8 +769,9 @@ function QuickNote({ ctl, showKind = true }: { ctl: DayController; showKind?: bo
  * Spodní pás deníku (varianta B+): výsledek, žurnál dne, obě seance
  * a poznámky s rychlým zápisem. Graf nad ním má celou šířku.
  */
-export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed }: {
+export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed, onOpenMind }: {
   ctl: DayController;
+  onOpenMind?: () => void;
   streak: Parameters<typeof StreakStrip>[0]['streak'];
   onOpenCoach?: () => void;
   onOpenFeed: () => void;
@@ -783,7 +785,7 @@ export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed }: {
   // klik tak vždy vede na kartu s úpravou a mazáním.
   const notes = ctl.feed.flatMap(item => (item.kind === 'note' ? [item.note] : []))
     .sort((a, b) => Date.parse(b.writtenAt) - Date.parse(a.writtenAt));
-  const mindCount = notes.filter(note => note.origin === 'mind').length;
+  const mindCount = ctl.journal.notes.filter(note => note.origin === 'mind').length;
   return (
     <section className="dj dj-scroll" style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, .8fr) minmax(190px, 1.1fr) minmax(180px, .95fr) minmax(180px, .95fr) minmax(230px, 1.5fr)', gap: 12, padding: '10px 12px', overflowX: 'auto', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
@@ -821,7 +823,8 @@ export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed }: {
       {DAY_SESSIONS.map(session => <StripSession key={session} ctl={ctl} session={session} />)}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <p style={stripLabel}>Poznámky · {notes.length}{mindCount > 0 && <span style={{ color: 'var(--dj-mind-text)' }}> · Hlava {mindCount}</span>}</p>
+          <p style={stripLabel}>Poznámky · {notes.length}</p>
+          {onOpenMind && <button type="button" className="dj-btn" onClick={onOpenMind} title="Přehled Hlava" style={{ border: 0, background: 'none', padding: 0, cursor: 'pointer', font: '800 9.5px Inter, sans-serif', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dj-mind-text)', whiteSpace: 'nowrap' }}>· Hlava {mindCount}</button>}
           <span style={{ flex: 1 }} />
           <button type="button" className="dj-btn" onClick={onOpenFeed} style={{ border: 0, background: 'none', padding: 0, cursor: 'pointer', font: '700 10.5px Inter, sans-serif', color: 'var(--dj-indigo-text)' }}>Časová osa ›</button>
         </div>
@@ -832,6 +835,70 @@ export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed }: {
           </button>
         ))}
         {!notes.length && <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-muted)' }}>Zatím nic. Napiš, co vidíš, nebo diktuj.</p>}
+        <div style={{ marginTop: 'auto' }}><QuickNote ctl={ctl} /></div>
+      </div>
+    </section>
+  );
+}
+
+const WEEKDAY_SHORT = new Intl.DateTimeFormat('cs-CZ', { weekday: 'short', timeZone: 'UTC' });
+const dayMonth = (day: string) => { const [, m, d] = day.split('-').map(Number); return `${d}. ${m}.`; };
+
+function WeekPlanInput({ ctl }: { ctl: DayController }) {
+  const [draft, setDraft] = useState('');
+  const save = () => { if (ctl.createWeekPlan(draft)) setDraft(''); };
+  return (
+    <input className="dj-input" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); save(); } }}
+      placeholder="Na co si dát pozor… ↵" aria-label="Plán na týden" style={{ width: '100%', boxSizing: 'border-box', height: 30, padding: '0 9px', fontSize: 12 }} />
+  );
+}
+
+/**
+ * Spodní pás o víkendu: ohlédnutí za týdnem, plán na další týden a Hlava.
+ * Žádná příprava ani uzavření seancí — trh je zavřený, graf ukazuje pátek.
+ */
+export function DayWeekendStrip({ ctl, onOpenWeek, onOpenMind }: { ctl: DayController; onOpenWeek?: () => void; onOpenMind?: () => void }) {
+  const { weekStats: stats, week } = ctl;
+  const reviewed = ctl.weekTrades.filter(trade => planChoiceOf(trade)).length;
+  const total = ctl.weekTrades.length;
+  const winRate = stats.winRate == null ? null : Math.round(stats.winRate * 100);
+  const ownIds = new Set(ctl.journal.notes.map(note => note.id));
+  return (
+    <section className="dj dj-scroll" style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 1fr) minmax(190px, 1.15fr) minmax(220px, 1.3fr) minmax(260px, 2fr)', gap: 12, padding: '10px 12px', overflowX: 'auto', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+        <p style={stripLabel}>Týden {dayMonth(week.monday)}–{dayMonth(week.friday)}</p>
+        <p style={{ margin: 0, fontSize: 24, fontWeight: 300, letterSpacing: '-0.03em', lineHeight: 1.1, whiteSpace: 'nowrap', color: tone(stats.pnl) }}>{money(stats.pnl)}</p>
+        <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-text-2)', whiteSpace: 'nowrap' }}>{stats.count ? `${stats.count} ${stats.count === 1 ? 'obchod' : stats.count < 5 ? 'obchody' : 'obchodů'}${winRate != null ? ` · win rate ${winRate} %` : ''}` : 'Týden bez obchodů'}</p>
+        {stats.count > 0 && <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-muted)', whiteSpace: 'nowrap' }}>{stats.rSum != null ? `${rText(stats.rSum)} · ` : ''}{stats.wins}W / {stats.losses}L</p>}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, padding: '8px 10px', borderRadius: 12, background: 'var(--dj-card-soft)', border: '1px solid var(--dj-line)' }}>
+        <p style={stripLabel}>Projít týden</p>
+        <p style={{ margin: 0, fontSize: 11.5, color: 'var(--dj-text-2)' }}>{total ? <><b style={{ color: reviewed === total ? 'var(--dj-green)' : 'var(--dj-amber-text)' }}>{reviewed}/{total}</b> ohodnoceno</> : 'Žádné obchody k projití'}</p>
+        {onOpenWeek && <button type="button" className="dj-btn" onClick={onOpenWeek} style={{ marginTop: 'auto', alignSelf: 'flex-start', height: 28, padding: '0 11px', borderRadius: 8, border: 0, cursor: 'pointer', font: '700 11.5px Inter, sans-serif', color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' }}>Otevřít review týdne ›</button>}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0, padding: '8px 10px', borderRadius: 12, background: 'var(--dj-card-soft)', border: '1px solid var(--dj-line)' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+          <p style={stripLabel}>Plán na týden</p>
+          <span style={{ fontSize: 10, color: 'var(--dj-muted)', whiteSpace: 'nowrap' }}>ukáže se v pondělní přípravě</span>
+        </div>
+        {ctl.weekPlans.slice(-2).map(note => (
+          <button key={note.id} type="button" className="dj-btn" disabled={!ownIds.has(note.id)} onClick={() => ctl.setSelected({ kind: 'note', id: note.id })} title={note.text} style={{ display: 'block', width: '100%', padding: 0, border: 0, background: 'transparent', cursor: ownIds.has(note.id) ? 'pointer' : 'default', textAlign: 'left', fontFamily: 'inherit', color: 'var(--dj-indigo-text)', fontSize: 11.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>→ {note.text}</button>
+        ))}
+        <div style={{ marginTop: 'auto' }}><WeekPlanInput ctl={ctl} /></div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <p style={{ ...stripLabel, color: 'var(--dj-mind-text)' }}>Hlava · tento týden {ctl.weekMindNotes.length}</p>
+          <span style={{ flex: 1 }} />
+          {onOpenMind && <button type="button" className="dj-btn" onClick={onOpenMind} style={{ border: 0, background: 'none', padding: 0, cursor: 'pointer', font: '700 10.5px Inter, sans-serif', color: 'var(--dj-mind-text)' }}>Přehled ›</button>}
+        </div>
+        {ctl.weekMindNotes.slice(0, 2).map(({ day, note }) => (
+          <button key={note.id} type="button" className="dj-btn" disabled={!ownIds.has(note.id)} onClick={() => ctl.setSelected({ kind: 'note', id: note.id })} title={note.text} style={{ display: 'flex', gap: 6, alignItems: 'baseline', width: '100%', padding: 0, border: 0, background: 'transparent', cursor: ownIds.has(note.id) ? 'pointer' : 'default', textAlign: 'left', fontFamily: 'inherit', color: 'inherit' }}>
+            <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--dj-muted)', flex: 'none' }}>{WEEKDAY_SHORT.format(new Date(`${day}T12:00:00Z`))}</span>
+            <span style={{ fontSize: 11.5, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--dj-mind-text)' }}>● {note.text}</span>
+          </button>
+        ))}
+        {!ctl.weekMindNotes.length && <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-muted)' }}>Co tě drží i mimo trading — rodina, jídlo, pohyb, spánek…</p>}
         <div style={{ marginTop: 'auto' }}><QuickNote ctl={ctl} /></div>
       </div>
     </section>

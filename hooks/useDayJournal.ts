@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { emptyDayJournal, isDayKey, newDayNoteId, noteUpsert, type DayClose, type DayJournal, type DayNote, type DayPrep } from '../lib/dayJournal';
+import { emptyDayJournal, isDayKey, newDayNoteId, noteEntryKey, noteUpsert, type DayClose, type DayJournal, type DayNote, type DayPrep } from '../lib/dayJournal';
 import { deleteDayNote, loadDayJournal, loadDayJournalRange, saveDayClose, saveDayNote, saveDayPrep } from '../services/dayJournalService';
 
 /**
@@ -177,7 +177,8 @@ export function useDayJournal(day: string) {
     // Případné rozběhlé uložení musí doběhnout dřív než smazání.
     await (chains.current.get(id) ?? Promise.resolve()).catch(() => {});
     try {
-      await deleteDayNote(target, id);
+      const known = removed ?? queued;
+      await deleteDayNote(target, id, undefined, known ? noteEntryKey(known) : undefined);
       dropPending(target, id);
     } catch (reason) {
       // Vrátit jen tuhle poznámku (ostatní mezitím přidané zůstanou).

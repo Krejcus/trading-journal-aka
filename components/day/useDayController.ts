@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SessionConfig, Trade } from '../../types';
 import {
-  DAY_SESSIONS, DAY_SESSION_LABEL, chartMarketDay, closeTargetSession, editedAt, notePhase, pragueClock, pragueDayKey, prepReady, prepTargetSession, sessionWindows,
-  type DayBias, type DayExecution, type DayNote, type DayScope, type DaySession, type DayVerdict,
+  DAY_SESSIONS, DAY_SESSION_LABEL, chartMarketDay, closeTargetSession, isWeekendDay, tradingWeekOf, weekendBeforeMonday, editedAt, notePhase, pragueClock, pragueDayKey, prepReady, prepTargetSession, sessionWindows,
+  type DayBias, type DayExecution, type DayJournal, type DayNote, type DayScope, type DaySession, type DayVerdict,
 } from '../../lib/dayJournal';
+import { loadDayJournalRange } from '../../services/dayJournalService';
 import { dayChecklist, dayFeed, dayStats, tradesForDay, tradesInScope, type DayViewScope } from '../../lib/dayJournalView';
 import { planPatch, type PlanChoice } from '../../lib/weeklyReview';
-import { mergeMindAreas } from '../../lib/dayMind';
+import { detectMindAreas, mergeMindAreas } from '../../lib/dayMind';
 import { useDayJournal, type NoteInput } from '../../hooks/useDayJournal';
 import { useDayChartData } from '../../hooks/useDayChartData';
 import { useDictation } from '../../hooks/useDictation';
@@ -62,6 +63,27 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
   const chartWindows = useMemo(() => marketDay === day ? windows : sessionWindows(marketDay, sessions), [day, marketDay, sessions, windows]);
   const weekendMarketDay = marketDay === day ? null : marketDay;
 
+  // Víkend: přehled uplynulého týdne, plán na další týden a Hlava za týden.
+  const weekend = isWeekendDay(day);
+  const week = useMemo(() => tradingWeekOf(day), [day]);
+  const weekTrades = useMemo(() => (weekend ? week.days.flatMap(item => tradesForDay(trades, item)) : []), [trades, week, weekend]);
+  const weekStats = useMemo(() => dayStats(weekTrades), [weekTrades]);
+  // Ostatní dny týdne (aktuální den je živě v `journal`); v pondělí víkend před ním (plán na týden).
+  const [otherJournals, setOtherJournals] = useState<DayJournal[]>([]);
+  const contextRange = useMemo((): [string, string] | null => {
+    if (weekend) return [week.monday, week.weekend[1]];
+    return weekendBeforeMonday(day);
+  }, [day, week, weekend]);
+  useEffect(() => {
+    setOtherJournals([]);
+    if (!contextRange) return;
+    let cancelled = false;
+    loadDayJournalRange(contextRange[0], contextRange[1])
+      .then(journals => { if (!cancelled) setOtherJournals(journals.filter(item => item.day !== day)); })
+      .catch(() => { /* bez kontextu týdne — den funguje dál */ });
+    return () => { cancelled = true; };
+  }, [contextRange, day]);
+
   const { journal, status: journalStatus, error: journalError, failed, pending, addNote, updateNote, retryNote, removeNote, savePrep: persistPrep, saveClose: persistClose, reload } = useDayJournal(day);
   const dayTrades = useMemo(() => tradesForDay(trades, day), [trades, day]);
   const chart = useDayChartData(day, dayTrades, allTrades, now);
@@ -83,7 +105,7 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
 
   // Přepnutí dne: výběr, umisťování i režim se zahodí.
   useEffect(() => {
-    setSelected(null); setPlacing(null); setPendingPoint(null); setMode('day'); setScopeState('day');
+    setSelected(null); setPlacing(null); setPendingPoint(null); setMode('day'); setScopeState('day'); setNoteFilter('all');
     cancelDictation();
   }, [day, cancelDictation]);
 
@@ -213,9 +235,13 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
   }, [addNote, mode, noteKind, pinSessionFor]);
 
   /** Úprava textu: u Hlavy se přepočítají rozpoznané oblasti, ručně přidané zůstanou. */
-  const editNoteText = useCallback((note: DayNote, text: string, manualAreas: readonly string[] = []) => updateNote(note.id, note.origin === 'mind'
-    ? { text, areas: mergeMindAreas(text, manualAreas) }
-    : { text }), [updateNote]);
+  const editNoteText = useCallback((note: DayNote, text: string) => {
+    if (note.origin !== 'mind') return updateNote(note.id, { text });
+    // Ručně vypnutá oblast se nevrátí: přibude jen to, co nový text přidal oproti starému.
+    const before = new Set<string>(detectMindAreas(note.text));
+    const added = detectMindAreas(text).filter(area => !before.has(area));
+    return updateNote(note.id, { text, areas: mergeMindAreas('', [...(note.areas ?? []), ...added]) });
+  }, [updateNote]);
 
   /** Víkend: plán na další týden (ukáže se v pondělní přípravě). */
   const createWeekPlan = useCallback((text: string) => {
@@ -243,7 +269,8 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
   const checklist = useMemo(() => dayChecklist(journal, dayTrades, windows, now), [dayTrades, journal, now, windows]);
 
   const pinViews = useCallback((filter: (note: DayNote) => boolean, ghost?: (note: DayNote) => boolean): DayPinView[] => journal.notes
-    .filter(note => note.time != null && note.price != null && (note.origin !== 'mind' || noteMatches(note)) && (note.origin === 'mind' || noteFilter !== 'mind'))
+    // Filtr Trh / Hlava platí jen v pohledu dne — příprava a uzavření ukazují své body vždy.
+    .filter(note => note.time != null && note.price != null && (mode !== 'day' || noteMatches(note)))
     .filter(note => filter(note) || Boolean(ghost?.(note)))
     .map(note => {
       const phase = notePhase(note, windows);
@@ -261,7 +288,16 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
         ghost: !filter(note) && Boolean(ghost?.(note)),
         status: failed.has(note.id) ? 'failed' as const : pending.has(note.id) ? 'pending' as const : undefined,
       };
-    }), [failed, journal.notes, noteFilter, noteMatches, pending, windows]);
+    }), [failed, journal.notes, mode, noteMatches, pending, windows]);
+
+  /** Hlava za týden (víkend): od nejnovější. */
+  const weekMindNotes = useMemo(() => (weekend ? [...otherJournals.filter(item => item.day !== day).flatMap(item => item.notes.map(note => ({ day: item.day, note }))), ...journal.notes.map(note => ({ day, note }))] : [])
+    .filter(item => item.note.origin === 'mind')
+    .sort((a, b) => Date.parse(b.note.writtenAt) - Date.parse(a.note.writtenAt)), [day, journal.notes, otherJournals, weekend]);
+  /** Plán na týden: o víkendu z tohoto víkendu, v pondělí z víkendu před ním. */
+  const weekPlans = useMemo(() => [...otherJournals.filter(item => item.day !== day).flatMap(item => item.notes), ...(weekend ? journal.notes : [])]
+    .filter(note => note.origin === 'week')
+    .sort((a, b) => Date.parse(a.writtenAt) - Date.parse(b.writtenAt)), [day, journal.notes, otherJournals, weekend]);
 
   const selectedTrade = selected?.kind === 'trade' ? dayTrades.find(trade => String(trade.id) === selected.id) ?? null : null;
   const selectedNote = selected?.kind === 'note' ? journal.notes.find(note => note.id === selected.id) ?? null : null;
@@ -275,6 +311,7 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
     placing, setPlacing, pendingPoint, setPendingPoint,
     dictation, createNote, createWeekPlan, editNoteText, rateTrade,
     noteKind, setNoteKind, noteFilter, setNoteFilter, mindTicks,
+    weekend, week, weekTrades, weekStats, weekMindNotes, weekPlans,
     prepDraft, updatePrepDraft, savePrep, closeDraft, updateCloseDraft, saveClose,
     pinViews,
   };

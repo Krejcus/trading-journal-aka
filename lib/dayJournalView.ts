@@ -95,7 +95,8 @@ const SESSION_NAME: Record<DaySession, string> = { london: 'London', ny: 'New Yo
 export function notesForTrade(notes: readonly DayNote[], trade: Trade): DayNote[] {
   const from = Math.floor(tradeTimeMs(trade) / 1000) - 120;
   const to = Math.floor(exitMs(trade) / 1000) + 600;
-  return notes.filter(note => note.time != null && note.time >= from && note.time <= to);
+  // Hlava (osobní) není poznámka k obchodu — nepočítá se ani do „poznámka u ztráty“.
+  return notes.filter(note => note.origin !== 'mind' && note.time != null && note.time >= from && note.time <= to);
 }
 
 export function dayChecklist(journal: DayJournal, trades: readonly Trade[], windows: SessionWindows, now: number): ChecklistItem[] {
@@ -149,7 +150,9 @@ export function dayFeed(journal: DayJournal, trades: readonly Trade[], windows: 
   }
   for (const note of journal.notes) {
     // Poznámky z přípravy jsou součástí karty přípravy, ne samostatné řádky.
-    if (note.origin === 'prep' || !inScope(note.session === 'day' && note.time != null ? sessionAt(note.time * 1000, windows) : note.session)) continue;
+    // Hlava a plán na týden patří ke dni — vidět jsou v každém rozsahu.
+    const dayWide = note.origin === 'mind' || note.origin === 'week';
+    if (note.origin === 'prep' || (!dayWide && !inScope(note.session === 'day' && note.time != null ? sessionAt(note.time * 1000, windows) : note.session))) continue;
     items.push({ kind: 'note', key: `note:${note.id}`, at: Date.parse(note.writtenAt), note, phase: notePhase(note, windows) });
   }
   for (const trade of trades) {
@@ -188,7 +191,7 @@ export function streakState(journal: DayJournal | undefined, tradeSessions: Read
   const tradedClosed = DAY_SESSIONS.filter(session => tradeSessions.has(session)).every(session => journal?.closes[session]);
   if (preps === DAY_SESSIONS.length && closes > 0 && tradedClosed) return 'full';
   if (isToday) return 'open';
-  return preps + closes + (journal?.notes.length ?? 0) > 0 ? 'part' : 'none';
+  return preps + closes + (journal?.notes.filter(note => note.origin !== 'mind').length ?? 0) > 0 ? 'part' : 'none';
 }
 
 const STREAK_TITLE: Record<StreakState, string> = { full: 'Kompletní den', part: 'Částečně', none: 'Bez žurnálu', open: 'Dnes · rozpracováno' };

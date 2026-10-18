@@ -4698,6 +4698,7 @@ const App: React.FC = () => {
                       onOpenWeek={() => setJournalActiveTab('weekly')}
                       onOpenArchive={() => setJournalActiveTab('archives')}
                       onOpenCoach={() => setActivePage('ai')}
+                      onAskCoach={prompt => { setAiActiveConvId(undefined); setAiInitialPrompt(prompt); setActivePage('ai'); }}
                       immersive={journalImmersive}
                     />
                   )}

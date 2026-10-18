@@ -4,7 +4,7 @@ import {
   pragueClock, pragueDayKey, pragueWallTime, prepReady, prepUpsert, sessionAt, sessionWindows, type DayJournalRow, chartMarketDay } from '../lib/dayJournal';
 
 vi.mock('../services/supabase', () => ({ supabase: {} }));
-import { deleteDayNote, loadDayJournal, saveDayNote, saveDayPrep } from '../services/dayJournalService';
+import { deleteDayNote, loadDayJournal, loadDayJournalRange, saveDayNote, saveDayPrep } from '../services/dayJournalService';
 
 const DAY = '2026-10-13';
 const NOTE_ID = '3f2a8c1e-4b5d-4e6f-8a7b-9c0d1e2f3a4b';
@@ -98,6 +98,21 @@ describe('upsert rows', () => {
     expect(() => noteUpsert(DAY, { ...note, id: 'x' }, now)).toThrow('day-journal-invalid-note');
   });
 
+  it('stores Hlava and week plans under their own key prefix (old clients read only note:*)', () => {
+    const base = { id: NOTE_ID, session: 'day' as const, text: 'x', time: null, price: null, voice: false };
+    expect(noteUpsert(DAY, { ...base, origin: 'mind' }, now).entry_key).toBe(`mind:${NOTE_ID}`);
+    expect(noteUpsert(DAY, { ...base, origin: 'week' }, now).entry_key).toBe(`week:${NOTE_ID}`);
+    expect(noteUpsert(DAY, { ...base, origin: 'feed' }, now).entry_key).toBe(`note:${NOTE_ID}`);
+    // mind:* je Hlava i s chybějícím origin; starší Hlava pod note:* si klíč drží.
+    const mindRow = parseDayJournalRows(DAY, [row({ kind: 'note', session: 'day', entry_key: `mind:${NOTE_ID}`, data: { text: 'Doma', origin: 'chart' } })]).notes[0];
+    expect(mindRow).toMatchObject({ origin: 'mind', areas: [] });
+    expect(mindRow).not.toHaveProperty('entryKey');
+    const legacy = parseDayJournalRows(DAY, [row({ kind: 'note', session: 'day', entry_key: `note:${NOTE_ID}`, data: { text: 'test', origin: 'mind' } })]).notes[0];
+    expect(legacy).toMatchObject({ origin: 'mind', entryKey: `note:${NOTE_ID}` });
+    expect(noteUpsert(DAY, legacy, now).entry_key).toBe(`note:${NOTE_ID}`);
+    expect(parseDayJournalRows(DAY, [row({ kind: 'note', session: 'day', entry_key: `other:${NOTE_ID}`, data: { text: 'x' } })]).notes).toEqual([]);
+  });
+
   it('keeps Hlava notes with cleaned areas and drops areas on other kinds', () => {
     const mind = { id: NOTE_ID, session: 'day' as const, text: 'Doma napětí', time: null, price: null, voice: false, origin: 'mind' as const, areas: ['rodina', 'rodina', 'Bad!', 'spanek'] };
     const upsert = noteUpsert(DAY, mind, now);
@@ -132,7 +147,7 @@ describe('dayJournalService', () => {
   function fakeClient(result: { data?: unknown; error?: { message: string } | null } = {}) {
     const calls: { method: string; args: unknown[] }[] = [];
     const builder: Record<string, unknown> = {};
-    for (const method of ['select', 'eq', 'gte', 'lte', 'order', 'limit', 'upsert', 'delete', 'single']) {
+    for (const method of ['select', 'eq', 'gte', 'lte', 'order', 'limit', 'range', 'upsert', 'delete', 'single']) {
       builder[method] = (...args: unknown[]) => { calls.push({ method, args }); return builder; };
     }
     builder.then = (resolve: (value: unknown) => void) => resolve({ data: result.data ?? null, error: result.error ?? null });
@@ -153,6 +168,21 @@ describe('dayJournalService', () => {
     expect(upsertCall.args[1]).toEqual({ onConflict: 'user_id,day,entry_key' });
   });
 
+  it('loads a long range page by page so the newest days are never cut off', async () => {
+    const calls: unknown[][] = [];
+    const pageRows = (count: number, day: string) => Array.from({ length: count }, () => row({ day, data: { bias: 'long' } }));
+    const pages = [pageRows(1000, '2026-10-01'), pageRows(3, '2026-10-13')];
+    const builder: Record<string, unknown> = {};
+    let current = 0;
+    for (const method of ['select', 'eq', 'gte', 'lte', 'order']) builder[method] = () => builder;
+    builder.range = (...args: unknown[]) => { calls.push(args); current = calls.length - 1; return builder; };
+    builder.then = (resolve: (value: unknown) => void) => resolve({ data: pages[current] ?? [], error: null });
+    const client = { auth: { getSession: async () => ({ data: { session: { user: { id: 'user-1' } } } }) }, from: () => builder };
+    const journals = await loadDayJournalRange('2026-10-01', '2026-10-13', client as never);
+    expect(calls).toEqual([[0, 999], [1000, 1999]]);
+    expect(journals.map(journal => journal.day)).toEqual(['2026-10-01', '2026-10-13']);
+  });
+
   it('propagates a save error so the UI keeps the draft', async () => {
     const { client } = fakeClient({ error: { message: 'offline' } });
     await expect(saveDayPrep(DAY, { session: 'london', bias: 'long', scenario: 'x', rules: [], durationSec: null }, client)).rejects.toThrow('offline');
@@ -165,6 +195,9 @@ describe('dayJournalService', () => {
     expect(calls.filter(call => call.method === 'eq').map(call => call.args)).toEqual([['user_id', 'user-1'], ['day', DAY]]);
     await deleteDayNote(DAY, NOTE_ID, client);
     expect(calls.filter(call => call.method === 'eq').slice(-1)[0].args).toEqual(['entry_key', `note:${NOTE_ID}`]);
+    await deleteDayNote(DAY, NOTE_ID, client, `mind:${NOTE_ID}`);
+    expect(calls.filter(call => call.method === 'eq').slice(-1)[0].args).toEqual(['entry_key', `mind:${NOTE_ID}`]);
+    await expect(deleteDayNote(DAY, NOTE_ID, client, 'mind:other')).rejects.toThrow('day-journal-invalid-note');
   });
 });
 
@@ -178,5 +211,21 @@ describe('chartMarketDay — graf dne o víkendu', () => {
 
   it('přes přelom měsíce', () => {
     expect(chartMarketDay('2026-11-01')).toBe('2026-10-30'); // neděle → pátek
+  });
+});
+
+describe('víkend a obchodní týden', async () => {
+  const { isWeekendDay, tradingWeekOf, weekendBeforeMonday } = await import('../lib/dayJournal');
+  it('o víkendu bere uplynulý týden, v týdnu ten běžící', () => {
+    expect(isWeekendDay('2026-10-18')).toBe(true);
+    expect(isWeekendDay('2026-10-16')).toBe(false);
+    expect(tradingWeekOf('2026-10-18')).toEqual({ monday: '2026-10-12', friday: '2026-10-16', days: ['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16'], weekend: ['2026-10-17', '2026-10-18'] });
+    expect(tradingWeekOf('2026-10-17').monday).toBe('2026-10-12');
+    expect(tradingWeekOf('2026-10-14').monday).toBe('2026-10-12');
+    expect(tradingWeekOf('2026-11-01').monday).toBe('2026-10-26');
+  });
+  it('plán na týden hledá v pondělí v sobotě a neděli před ním', () => {
+    expect(weekendBeforeMonday('2026-10-19')).toEqual(['2026-10-17', '2026-10-18']);
+    expect(weekendBeforeMonday('2026-10-20')).toBeNull();
   });
 });

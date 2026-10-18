@@ -5,6 +5,7 @@ import { dayStreak, tradingDaysBack } from '../../lib/dayJournalView';
 import { useDayJournalRange } from '../../hooks/useDayJournal';
 import DayDesktop from './DayDesktop';
 import DayPhone from './DayPhone';
+import DayMindOverview from './DayMindOverview';
 import { useDayController } from './useDayController';
 import './dayJournal.css';
 
@@ -26,7 +27,7 @@ function useIsPhone() {
  * zápisu; příprava a uzavření každé session; diktování čistým přepisem.
  * Nic odsud nezamyká ani neautorizuje copier.
  */
-export default function DayJournalView({ trades, allTrades, sessions, isDark, initialDate, onUpdateTrade, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, immersive = false }: {
+export default function DayJournalView({ trades, allTrades, sessions, isDark, initialDate, onUpdateTrade, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, onAskCoach, immersive = false }: {
   trades: readonly Trade[];
   allTrades: readonly Trade[];
   sessions: readonly SessionConfig[];
@@ -38,6 +39,8 @@ export default function DayJournalView({ trades, allTrades, sessions, isDark, in
   onOpenWeek?: () => void;
   onOpenArchive?: () => void;
   onOpenCoach?: () => void;
+  /** Otevře coache s připravenou otázkou (přehled Hlava). */
+  onAskCoach?: (prompt: string) => void;
   /** Bez horní lišty appky — deník zabere celou výšku. */
   immersive?: boolean;
 }) {
@@ -54,8 +57,22 @@ export default function DayJournalView({ trades, allTrades, sessions, isDark, in
     return dayStreak(days, merged, trades, day => sessionWindows(day, sessions), ctl.today);
   }, [ctl.day, ctl.journal, ctl.today, days, journals, sessions, trades]);
 
+  const [mindOpen, setMindOpen] = useState(false);
+  const mind = mindOpen && (
+    <DayMindOverview
+      today={ctl.today}
+      trades={trades}
+      liveJournal={ctl.journalStatus === 'ready' ? ctl.journal : null}
+      onClose={() => setMindOpen(false)}
+      onOpenDay={day => { ctl.setDay(day); setMindOpen(false); }}
+      onAskCoach={onAskCoach ? prompt => { setMindOpen(false); onAskCoach(prompt); } : undefined}
+    />
+  );
+
   if (phone) return <DayPhone ctl={ctl} isDark={isDark} streak={streak} onOpenTrade={onOpenTrade} />;
   return (
+    <>
+    {mind}
     <DayDesktop
       ctl={ctl}
       isDark={isDark}
@@ -65,7 +82,9 @@ export default function DayJournalView({ trades, allTrades, sessions, isDark, in
       onOpenWeek={onOpenWeek}
       onOpenArchive={onOpenArchive}
       onOpenCoach={onOpenCoach}
+      onOpenMind={() => setMindOpen(true)}
       height={immersive ? 'calc(100dvh - 48px)' : 'calc(100dvh - 128px)'}
     />
+    </>
   );
 }

@@ -262,6 +262,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-18 — Deník: poznámka Hlava, víkendový režim, přehled Hlava (Claude)
+- **Hlava** = osobní poznámka (celý život: rodina, jídlo, pohyb, spánek, vztahy, práce, trading
+  hlava). Uživatel výslovně nechtěl stupnice nálady/spánku („už jsem jednou měl a nepoužíval“) —
+  jen volný text/hlas, oblasti rozpozná místní klasifikátor `lib/dayMind.ts` (kmeny slov, žádné
+  posílání ven), uživatel je u zápisu opraví. Přepínač Trh | Hlava v rychlém zápisu, bublině
+  v grafu, diktování i na telefonu; Hlava bez bodu = fialová značka na časové ose.
+- **Soukromí (rozhodnutí):** Hlava nikdy do exportu dne, grafu obchodu ani snímků (filtry jsou
+  výčet povolených `isMarketNote`, ne zákaz). Coach ji vidí označenou „osobní“ — výchozí ZAPNUTO,
+  protože uživatel chce, aby AI hledala souvislosti; vypínač v přehledu Hlava (localStorage, MCP se
+  jím neřídí, ale řádky označuje `hlava_osobni`).
+- **Klíč řádku `mind:<uuid>` / `week:<uuid>`** místo `note:` — starý iPhone build čte jen `note:*`,
+  takže Hlavu neuvidí, nepošle do sdílení a při úpravě ji nepřepíše na obyčejnou poznámku
+  (review to našlo jako blocker). Vyžaduje migraci `20261018200000_day_journal_mind_keys.sql`
+  (jen rozšíření CHECK na tvar klíče, ověřeno v PGlite). **Pořadí nasazení: migrace → appka.**
+  Bez migrace se Hlava neuloží (CHECK) a zůstane ve frontě k opakování.
+- **Víkend:** žádná příprava/uzavření seancí; pás = výsledek týdne, review týdne, „Plán na týden“
+  (ukáže se v pondělní přípravě), Hlava za týden. Graf dál ukazuje pátek.
+- **Přehled Hlava** (⋯ → Hlava, „Hlava N“ v pásu): zápisy 7/30/vše s obchody do 2 h po zápisu
+  a souvislosti po oblastech (mimo plán ve dnech se zápisem vs. bez) — jen počty z dat, malé
+  vzorky označené. `loadDayJournalRange` nově stránkuje (dřív `limit 2000` mohl tiše uříznout
+  nejnovější dny).
+- Telefon zatím bez víkendového pásu a přehledu (PC napřed, jak uživatel chtěl). MCP edge funkce
+  potřebuje samostatný deploy.
+
 ### 2026-10-17 — iPhone appka z `main` s novými grafy (Claude)
 - Čistý worktree `~/alphatrade-worktrees/ios-20261017` nad `origin/main` `c7eb5cda` (obsahuje
   `469d172c`), symlink `.env.local`, `npm ci`, `ios:sync` se `set -o pipefail`: `✓ built`,

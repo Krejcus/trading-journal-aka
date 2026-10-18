@@ -1,7 +1,7 @@
 import type { Trade } from '../types';
 import { tradeRMultiple } from '../utils/tradeRisk';
 import {
-  DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, DAY_PHASE_LABEL, DAY_SESSIONS, DAY_SESSION_LABEL, DAY_VERDICT_LABEL, editedAt, notePhase, pragueClock, pragueDayKey,
+  DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, DAY_PHASE_LABEL, DAY_SESSIONS, DAY_SESSION_LABEL, DAY_VERDICT_LABEL, editedAt, isMarketNote, notePhase, pragueClock, pragueDayKey,
   type DayJournal, type DayNote, type SessionWindows,
 } from './dayJournal';
 import { MIND_AREA_LABEL, isMindArea } from './dayMind';
@@ -60,6 +60,7 @@ export function dayJournalCoachText(journals: readonly DayJournal[], windowsOf: 
         dayLines.push(`   · HLAVA (osobní) zapsáno ${writtenLabel(note.writtenAt, journal.day)}${areas.length ? ` [${areas.join(', ')}]` : ''}${anchor}: ${trim(note.text, maxText)}`);
         continue;
       }
+      if (!isMarketNote(note)) continue;
       if (note.origin === 'week') {
         dayLines.push(`   · plán na další týden (zapsáno ${writtenLabel(note.writtenAt, journal.day)}): ${trim(note.text, maxText)}`);
         continue;
@@ -109,7 +110,7 @@ export function dayJournalMarkdown(journal: DayJournal, trades: readonly Trade[]
     }
   }
   // Hlava je osobní — do exportu ani sdílení nikdy nejde.
-  const notes = journal.notes.filter(note => note.origin !== 'mind');
+  const notes = journal.notes.filter(isMarketNote);
   if (notes.length) {
     out.push('## Poznámky', '', '| Zapsáno | Fáze | Session | Ukazuje na | Text |', '|---|---|---|---|---|');
     for (const note of notes) {

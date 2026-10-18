@@ -195,6 +195,11 @@ export function ScenarioField({ ctl, session, rows }: { ctl: DayController; sess
           <Mic size={12} /> {recording ? 'Nahrávám… stop' : busy ? 'Přepisuji…' : 'Nadiktovat'}
         </button>
       </div>
+      {!ctl.weekend && ctl.weekPlans.length > 0 && (
+        <p title={ctl.weekPlans.map(note => note.text).join('\n')} style={{ margin: '0 0 6px', padding: '5px 9px', borderRadius: 8, fontSize: 11.5, lineHeight: 1.4, color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)', border: '1px solid rgba(99,102,241,0.3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <b>Plán na týden:</b> {ctl.weekPlans.map(note => note.text).join(' · ')}
+        </p>
+      )}
       <textarea id={`prep-scenario-${session}`} className="dj-input" rows={rows} value={draft.scenario} onChange={event => ctl.updatePrepDraft(session, { scenario: event.target.value })} placeholder="Co musí trh udělat, abys vstoupil? Kde je cíl, kde se mýlíš?" style={{ flex: rows ? undefined : 1, minHeight: 0, fontSize: 13 }} />
       {fieldRecording && dictation.phase === 'error' && <p role="alert" style={{ margin: '4px 0 0', fontSize: 11.5, color: 'var(--dj-rose)' }}>{dictation.error}</p>}
     </div>

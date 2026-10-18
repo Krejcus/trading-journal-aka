@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ChartNote } from '../lib/chartNotes';
 import { DEFAULT_NOTE_OFFSET } from '../lib/chartNotes';
-import { notePhase, sessionWindows, type DayJournal, type DayNotePhase } from '../lib/dayJournal';
+import { isMarketNote, notePhase, sessionWindows, type DayJournal, type DayNotePhase } from '../lib/dayJournal';
 import { loadDayJournalRange } from '../services/dayJournalService';
 
 /**
@@ -20,7 +20,7 @@ export const dayNotesAsChartNotes = (journals: readonly DayJournal[]): ChartNote
   const windows = sessionWindows(journal.day);
   return journal.notes
     // Hlava (osobní) do grafu obchodu nejde — ten se snímkuje a sdílí.
-    .filter(note => note.origin !== 'mind' && note.time !== null && note.price !== null && note.text.trim())
+    .filter(note => isMarketNote(note) && note.time !== null && note.price !== null && note.text.trim())
     .map(note => ({
       id: `day-note-${note.id}`,
       time: Math.floor(note.time! / 60) * 60,

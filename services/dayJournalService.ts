@@ -13,7 +13,10 @@ import { supabase } from './supabase';
 
 const TABLE = 'day_journal_entries';
 const COLUMNS = 'day,session,kind,entry_key,data,written_at,updated_at';
-const RANGE_LIMIT = 2_000;
+// Stránkování: PostgREST vrací max. ~1000 řádků na dotaz; delší rozsah se
+// skládá po stránkách, aby nejnovější dny nikdy nevypadly.
+const RANGE_PAGE = 1_000;
+const RANGE_MAX_PAGES = 20;
 
 type Client = typeof supabase;
 
@@ -47,11 +50,18 @@ export async function loadDayJournal(day: string, client: Client = supabase): Pr
 export async function loadDayJournalRange(from: string, to: string, client: Client = supabase): Promise<DayJournal[]> {
   if (!isDayKey(from) || !isDayKey(to) || from > to) throw new Error('day-journal-invalid-range');
   const userId = await ownerId(client);
-  const { data, error } = await client.from(TABLE).select(COLUMNS)
-    .eq('user_id', userId).gte('day', from).lte('day', to)
-    .order('day', { ascending: true }).limit(RANGE_LIMIT);
-  if (error) throw new Error(error.message || 'day-journal-load-failed');
-  return groupDayJournalRows((data ?? []) as DayJournalRow[]);
+  const rows: DayJournalRow[] = [];
+  for (let page = 0; page < RANGE_MAX_PAGES; page += 1) {
+    const { data, error } = await client.from(TABLE).select(COLUMNS)
+      .eq('user_id', userId).gte('day', from).lte('day', to)
+      .order('day', { ascending: true }).order('entry_key', { ascending: true })
+      .range(page * RANGE_PAGE, (page + 1) * RANGE_PAGE - 1);
+    if (error) throw new Error(error.message || 'day-journal-load-failed');
+    const batch = (data ?? []) as DayJournalRow[];
+    rows.push(...batch);
+    if (batch.length < RANGE_PAGE) return groupDayJournalRows(rows);
+  }
+  throw new Error('day-journal-range-too-large');
 }
 
 export async function saveDayPrep(day: string, prep: Omit<DayPrep, 'writtenAt' | 'savedAt'>, client: Client = supabase, now = new Date()): Promise<DayPrep> {
@@ -70,7 +80,7 @@ export async function saveDayClose(day: string, close: Omit<DayClose, 'writtenAt
 
 export async function saveDayNote(
   day: string,
-  note: Pick<DayNote, 'id' | 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin' | 'areas'> & { writtenAt?: string },
+  note: Pick<DayNote, 'id' | 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin' | 'areas' | 'entryKey'> & { writtenAt?: string },
   client: Client = supabase,
   now = new Date(),
 ): Promise<DayNote> {
@@ -80,9 +90,11 @@ export async function saveDayNote(
   return parsed;
 }
 
-export async function deleteDayNote(day: string, id: string, client: Client = supabase): Promise<void> {
+/** `entryKey` = klíč řádku (Hlava a plán na týden mají vlastní předponu). */
+export async function deleteDayNote(day: string, id: string, client: Client = supabase, entryKey = `note:${id}`): Promise<void> {
   if (!isDayKey(day)) throw new Error('day-journal-invalid-day');
+  if (!entryKey.endsWith(`:${id}`)) throw new Error('day-journal-invalid-note');
   const userId = await ownerId(client);
-  const { error } = await client.from(TABLE).delete().eq('user_id', userId).eq('day', day).eq('entry_key', `note:${id}`);
+  const { error } = await client.from(TABLE).delete().eq('user_id', userId).eq('day', day).eq('entry_key', entryKey);
   if (error) throw new Error(error.message || 'day-journal-delete-failed');
 }

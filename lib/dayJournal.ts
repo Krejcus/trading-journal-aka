@@ -66,6 +66,8 @@ export interface DayNote {
   origin: DayNoteOrigin;
   /** Oblasti života poznámky Hlava (rozpozná appka, uživatel může upravit). */
   areas?: string[];
+  /** Klíč řádku v DB, pokud se liší od výchozího (starší Hlava pod note:*). */
+  entryKey?: string;
   writtenAt: string;
   updatedAt: string;
 }
@@ -105,6 +107,22 @@ const isVerdict = (value: unknown): value is DayVerdict => value === 'ok' || val
 const isOrigin = (value: unknown): value is DayNoteOrigin => value === 'prep' || value === 'chart' || value === 'feed' || value === 'mind' || value === 'week';
 /** Osobní poznámka Hlava — nesmí do exportu ani sdílení. */
 export const isMindNote = (note: Pick<DayNote, 'origin'>) => note.origin === 'mind';
+/**
+ * Obchodní poznámky, které smí do exportu, grafu obchodu a kouče bez
+ * dalšího souhlasu. Výčet povolených (ne zakázaných): neznámý druh neprojde.
+ */
+const MARKET_ORIGINS: readonly DayNoteOrigin[] = ['prep', 'chart', 'feed', 'week'];
+export const isMarketNote = (note: Pick<DayNote, 'origin'>) => MARKET_ORIGINS.includes(note.origin);
+const NOTE_KEY_RE = /^(note|mind|week):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+/**
+ * Klíč řádku poznámky. Hlava a plán na týden mají vlastní předponu — starší
+ * klienti čtou jen note:* a tyhle řádky tak neuvidí ani nepřepíšou.
+ */
+export function noteEntryKey(note: Pick<DayNote, 'id' | 'origin' | 'entryKey'>): string {
+  const kept = note.entryKey ? NOTE_KEY_RE.exec(note.entryKey) : null;
+  if (kept && kept[2] === note.id) return note.entryKey!;
+  return `${note.origin === 'mind' ? 'mind' : note.origin === 'week' ? 'week' : 'note'}:${note.id}`;
+}
 export const DAY_AREA_MAX = 8;
 const AREA_RE = /^[a-z][a-z0-9-]{0,23}$/;
 export function cleanAreas(value: unknown): string[] {
@@ -184,9 +202,13 @@ export function parseDayJournalRow(row: DayJournalRow): { kind: 'prep'; value: D
     };
   }
   if (row.kind === 'note' && isScope(row.session)) {
-    const id = row.entry_key.startsWith('note:') ? row.entry_key.slice(5) : '';
+    const key = NOTE_KEY_RE.exec(row.entry_key);
+    const id = key?.[2] ?? '';
     const body = text(data.text, DAY_TEXT_MAX).trim();
-    if (!UUID_RE.test(id) || !body) return null;
+    if (!key || !UUID_RE.test(id) || !body) return null;
+    // Předpona klíče má přednost: mind:* je vždy Hlava, i kdyby data tvrdila jinak.
+    const origin: DayNoteOrigin = key[1] === 'mind' ? 'mind' : key[1] === 'week' ? 'week' : isOrigin(data.origin) ? data.origin : 'chart';
+    const defaultKey = `${origin === 'mind' ? 'mind' : origin === 'week' ? 'week' : 'note'}:${id}`;
     const time = finiteOrNull(data.time);
     const price = finiteOrNull(data.price);
     return {
@@ -198,8 +220,9 @@ export function parseDayJournalRow(row: DayJournalRow): { kind: 'prep'; value: D
         time: time != null && time > 0 ? Math.floor(time) : null,
         price: price != null && price > 0 ? price : null,
         voice: data.voice === true,
-        origin: isOrigin(data.origin) ? data.origin : 'chart',
-        ...(data.origin === 'mind' ? { areas: cleanAreas(data.areas) } : {}),
+        origin,
+        ...(origin === 'mind' ? { areas: cleanAreas(data.areas) } : {}),
+        ...(row.entry_key !== defaultKey ? { entryKey: row.entry_key } : {}),
         writtenAt,
         updatedAt,
       },
@@ -274,11 +297,11 @@ export function closeUpsert(day: string, close: Omit<DayClose, 'writtenAt' | 'cl
   };
 }
 
-export function noteUpsert(day: string, note: Pick<DayNote, 'id' | 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin' | 'areas'> & { writtenAt?: string }, now: Date): DayJournalUpsert {
+export function noteUpsert(day: string, note: Pick<DayNote, 'id' | 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin' | 'areas' | 'entryKey'> & { writtenAt?: string }, now: Date): DayJournalUpsert {
   const body = text(note.text, DAY_TEXT_MAX).trim();
   if (!isDayKey(day) || !isScope(note.session) || !UUID_RE.test(note.id) || !body) throw new Error('day-journal-invalid-note');
   return {
-    day, session: note.session, kind: 'note', entry_key: `note:${note.id}`,
+    day, session: note.session, kind: 'note', entry_key: noteEntryKey(note),
     // Upsert existující poznámky čas zápisu nezmění (DB trigger), nová dostane teď.
     written_at: iso(note.writtenAt, now.toISOString()),
     data: {
@@ -338,6 +361,31 @@ export function chartMarketDay(day: string): string {
   let date = new Date(Date.UTC(y, m - 1, d));
   while (date.getUTCDay() === 0 || date.getUTCDay() === 6) date = new Date(date.getTime() - 86_400_000);
   return date.toISOString().slice(0, 10);
+}
+
+const shiftDayKey = (day: string, delta: number) => {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+};
+const weekdayOf = (day: string) => new Date(`${day}T12:00:00Z`).getUTCDay();
+
+/** Je den sobota nebo neděle (trh zavřený)? */
+export const isWeekendDay = (day: string) => { const weekday = weekdayOf(day); return weekday === 0 || weekday === 6; };
+
+/**
+ * Obchodní týden dne (po–pá). O víkendu uplynulý týden, v pondělí až pátek
+ * ten běžící. `weekend` = sobota a neděle za ním.
+ */
+export function tradingWeekOf(day: string): { monday: string; friday: string; days: string[]; weekend: [string, string] } {
+  const weekday = weekdayOf(day);
+  const monday = shiftDayKey(day, weekday === 0 ? -6 : 1 - weekday);
+  const days = [0, 1, 2, 3, 4].map(offset => shiftDayKey(monday, offset));
+  return { monday, friday: days[4], days, weekend: [shiftDayKey(monday, 5), shiftDayKey(monday, 6)] };
+}
+
+/** Víkend před pondělím (kde leží „Plán na týden“); pro jiný den `null`. */
+export function weekendBeforeMonday(day: string): [string, string] | null {
+  return weekdayOf(day) === 1 ? [shiftDayKey(day, -2), shiftDayKey(day, -1)] : null;
 }
 
 /** Účet kotvy grafu dne — falešný „obchod“ bez plnění, jen určuje první záběr. */

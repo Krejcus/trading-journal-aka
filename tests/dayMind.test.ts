@@ -12,6 +12,12 @@ describe('detectMindAreas', () => {
   it('nechytá běžná slova se stejným začátkem', () => {
     expect(detectMindAreas('Mám to jistě během dne, tato věc')).toEqual([]);
     expect(detectMindAreas('Synchronizace brát')).toEqual([]);
+    // Slova z trhu, ne ze života.
+    expect(detectMindAreas('Špatný den, špatná nálada')).toEqual([]);
+    expect(detectMindAreas('Spatřil jsem pivot, hladina 24500, kdo je vinovat')).toEqual([]);
+    expect(detectMindAreas('Silný pohyb ceny')).toEqual([]);
+    expect(detectMindAreas('Nevyspal jsem se, spal jsem 4 hodiny')).toEqual(['spanek']);
+    expect(detectMindAreas('Mám hlad, dám si kávu')).toEqual(['jidlo']);
   });
 
   it('prázdný nebo neznámý text nemá oblast', () => {

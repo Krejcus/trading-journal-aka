@@ -85,6 +85,9 @@ export function notePhase(day: string, session: string, writtenAt: string, clock
   return written <= end ? 'živě' : 'dopsáno zpětně';
 }
 
+/** Hlava = osobní poznámka (klíč mind:* nebo starší note:* s origin 'mind'). */
+const isMind = (row: DayJournalMcpRow) => row.entry_key.startsWith('mind:') || row.data?.origin === 'mind';
+
 /** Strukturovaný deník jednoho dne (get_journal_day). `null` = nic zapsáno. */
 export function dayJournalForMcp(rows: readonly DayJournalMcpRow[], day: string, clocks: SessionClocks = DEFAULT_WINDOWS) {
   const own = rows.filter(row => row.day === day && row.data && typeof row.data === 'object');
@@ -128,9 +131,9 @@ export function dayJournalForMcp(rows: readonly DayJournalMcpRow[], day: string,
         session: SESSION[row.session] ?? row.session,
         z_pripravy: row.data!.origin === 'prep' || undefined,
         // Hlava = osobní poznámka (život, rodina, hlava) — ne obchodní; nikam dál nesdílet.
-        hlava_osobni: row.data!.origin === 'mind' || undefined,
-        oblasti: row.data!.origin === 'mind' && Array.isArray(row.data!.areas) ? (row.data!.areas as unknown[]).map(area => str(area, 24)).filter(Boolean) : undefined,
-        plan_na_tyden: row.data!.origin === 'week' || undefined,
+        hlava_osobni: isMind(row) || undefined,
+        oblasti: isMind(row) && Array.isArray(row.data!.areas) ? (row.data!.areas as unknown[]).map(area => str(area, 24)).filter(Boolean) : undefined,
+        plan_na_tyden: (!isMind(row) && (row.entry_key.startsWith('week:') || row.data!.origin === 'week')) || undefined,
         ukazuje_na: time != null ? `${clock(time * 1000)}${price != null ? ` @ ${price}` : ''}` : null,
         hlasem: row.data!.voice === true || undefined,
         text: str(row.data!.text),
