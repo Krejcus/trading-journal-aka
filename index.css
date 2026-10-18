@@ -1721,15 +1721,11 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 .alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool.alphatrade-chart-tool-favorites-toggle.is-active,
 .alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool.alphatrade-chart-tool-favorites-toggle.is-active:hover {
   color: #f59e0b;
-  background: #fffaf0;
-  box-shadow: 0 1px 2px rgba(180, 83, 9, 0.12), 0 0 0 1px rgba(245, 158, 11, 0.22), 0 6px 14px -8px rgba(245, 158, 11, 0.55);
 }
 
 .alphatrade-chart-drawing-bar.is-docked.is-dark .alphatrade-chart-tool.alphatrade-chart-tool-favorites-toggle.is-active,
 .alphatrade-chart-drawing-bar.is-docked.is-dark .alphatrade-chart-tool.alphatrade-chart-tool-favorites-toggle.is-active:hover {
   color: #fbbf24;
-  background: rgba(251, 191, 36, 0.12);
-  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.22);
 }
 
 /* Panel u levého okraje: legenda, logo a odznaky začínají za plovoucí lištou. */
@@ -1756,6 +1752,51 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 .alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-remove-menu-trigger {
   top: 10px;
   right: -5px;
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-magnet-control {
+  width: 34px;
+  height: 34px;
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-magnet-menu-trigger {
+  right: -5px;
+  width: 11px;
+  height: 34px;
+  border-radius: 0 8px 8px 0;
+}
+
+/* Šipky menu ukazují doprava (kam menu vyjede); otevřené se otočí zpět. */
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool-group-trigger svg,
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-magnet-menu-trigger svg {
+  transform: rotate(-90deg);
+  transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool-group-trigger[aria-expanded='true'] svg,
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-magnet-menu-trigger[aria-expanded='true'] svg {
+  transform: rotate(90deg);
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-remove-menu-trigger {
+  transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 150ms ease, background-color 150ms ease;
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-remove-menu-trigger[aria-expanded='true'] {
+  transform: rotate(90deg);
+}
+
+/* Menu nástrojů, magnetu a mazání vyjíždějí od lišty. */
+.alphatrade-chart-tool-menu,
+.alphatrade-chart-magnet-menu,
+.alphatrade-chart-remove-menu {
+  transform-origin: left center;
+  animation: alphatrade-flyout-in 200ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@keyframes alphatrade-flyout-in {
+  from { opacity: 0; transform: translateX(-8px) scale(0.97); }
+  to { opacity: 1; transform: none; }
 }
 
 .alphatrade-workspace-panel::after {
@@ -1936,8 +1977,14 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 .alphatrade-chart-tool-favorite:hover,
 .alphatrade-chart-tool-favorite:focus-visible,
 .alphatrade-chart-tool-favorite.is-favorite {
-  color: #2962ff;
+  color: #f59e0b;
   outline: none;
+}
+
+.alphatrade-chart-tool-menu.is-dark .alphatrade-chart-tool-favorite:hover,
+.alphatrade-chart-tool-menu.is-dark .alphatrade-chart-tool-favorite:focus-visible,
+.alphatrade-chart-tool-menu.is-dark .alphatrade-chart-tool-favorite.is-favorite {
+  color: #fbbf24;
 }
 
 .alphatrade-chart-tool-menu kbd {
