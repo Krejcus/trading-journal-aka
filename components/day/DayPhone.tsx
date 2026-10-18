@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, Mic, Share } from 'lucide-react';
+import { ArrowLeft, Brain, ChevronLeft, ChevronRight, Mic, PenLine } from 'lucide-react';
 import type { Trade } from '../../types';
 import { DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, carryForward, pragueClock, type DaySession } from '../../lib/dayJournal';
 import { sessionStage, type StreakDay } from '../../lib/dayJournalView';
-import { tradeTimeMs } from '../../lib/weeklyReview';
+import { planChoiceOf, tradeTimeMs } from '../../lib/weeklyReview';
 import { tradeRMultiple } from '../../utils/tradeRisk';
 import DayCompactChart from './DayCompactChart';
 import DictationDialog from './DictationDialog';
 import { BiasPicker, BigSaveButton, ExecutionPicker, MicButton, NoteKindToggle, SESSION_STYLE, SaveCelebration, SessionSwitch, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
-import { FeedList, ScopeSwitch, TradeRating, dayTitle, exportDay, primaryAction, streakStyle, LiveChip } from './DayPanels';
+import { DayMoreMenu, FeedList, NoteFilterSwitch, ScopeSwitch, TradeRating, WeekPlanInput, dayTitle, primaryAction, streakStyle, LiveChip } from './DayPanels';
 import { PinList, PrepTimer, RuleChips, ScenarioField, missingLabel, prepPins, prepRequirements, prepSessionStatus } from './PrepPanels';
 import { CloseSide, SummaryBar, closeRequirements, closeSessionStatus } from './ClosePanels';
 import { focusRange, sessionBands } from './dayFocus';
@@ -53,7 +53,7 @@ function PinSheet({ ctl, point, autoRecord, onClose }: { ctl: DayController; poi
   const busy = dictation.phase === 'recording' || dictation.phase === 'transcribing';
   const save = () => { if (!draft.trim()) return; ctl.createNote(draft, point, voice, ctl.mode === 'day' ? ctl.noteKind : 'market'); onClose(); };
   return (
-    <Sheet label="Poznámka do grafu" dismissable={!draft.trim() && dictation.phase !== 'recording' && dictation.phase !== 'transcribing'} onClose={() => { dictation.cancel(); onClose(); }}>
+    <Sheet label={point ? "Poznámka do grafu" : "Poznámka"} dismissable={!draft.trim() && dictation.phase !== 'recording' && dictation.phase !== 'transcribing'} onClose={() => { dictation.cancel(); onClose(); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span className="dj-mono" style={{ fontSize: 11, fontWeight: 700, color: 'var(--dj-indigo)' }}>{point ? `${clock(point.time * 1000)} · ${priceText(point.price)}` : 'do časové osy'}</span>
         {ctl.mode === 'day' && <NoteKindToggle value={ctl.noteKind} onChange={ctl.setNoteKind} size="md" />}
@@ -112,7 +112,34 @@ function PhoneHeader({ title, subtitle, onBack, right }: { title: string; subtit
   );
 }
 
-export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: DayController; isDark: boolean; streak: StreakDay[]; onOpenTrade?: (trade: Trade) => void }) {
+const WEEKDAY_SHORT = new Intl.DateTimeFormat('cs-CZ', { weekday: 'short', timeZone: 'UTC' });
+const dayMonth = (day: string) => { const [, m, d] = day.split('-').map(Number); return `${d}. ${m}.`; };
+const tradesWord = (count: number) => (count === 1 ? 'obchod' : count > 1 && count < 5 ? 'obchody' : 'obchodů');
+
+/** Karta na telefonu: jednotný rámeček sekcí pod grafem. */
+function PhoneCard({ title, aside, tone: cardTone, children }: { title: string; aside?: React.ReactNode; tone?: 'mind'; children: React.ReactNode }) {
+  return (
+    <section style={{ borderRadius: 16, border: `1px solid ${cardTone === 'mind' ? 'rgba(168,85,247,0.32)' : 'var(--dj-line)'}`, background: cardTone === 'mind' ? 'var(--dj-mind-bg)' : 'var(--dj-card-soft)', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 20 }}>
+        <p style={{ margin: 0, fontSize: 13, fontWeight: 800, color: cardTone === 'mind' ? 'var(--dj-mind-text)' : 'var(--dj-text)' }}>{title}</p>
+        <span style={{ flex: 1 }} />
+        {aside}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek, onOpenArchive, onOpenLegacy, onOpenMind }: {
+  ctl: DayController;
+  isDark: boolean;
+  streak: StreakDay[];
+  onOpenTrade?: (trade: Trade) => void;
+  onOpenWeek?: () => void;
+  onOpenArchive?: () => void;
+  onOpenLegacy?: () => void;
+  onOpenMind?: () => void;
+}) {
   const [sheet, setSheet] = useState<{ kind: 'pin'; point: DayPinPoint | null; record: boolean } | { kind: 'dictate' } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -214,26 +241,34 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
     );
     bottom = <BigSaveButton ready={req.ready} saving={saving} error={saveError} accent={session === 'ny' ? 'orange' : 'indigo'} label={`Chybí ${req.missing.join(' a ')}`} readyLabel={`Uzavřít ${SESSION_STYLE[session].name}`} savingLabel="Uzavírám…" onClick={() => void save('close')} />;
   } else {
-    const action = primaryAction(ctl);
+    const action = ctl.weekend ? null : primaryAction(ctl);
     const done = ctl.checklist.filter(item => item.done).length;
-    const glow = ctl.stats.pnl > 0 ? 'rgba(16,185,129,0.22)' : ctl.stats.pnl < 0 ? 'rgba(244,63,94,0.22)' : 'transparent';
+    const headline = ctl.weekend ? ctl.weekStats : ctl.stats;
+    const glow = headline.pnl > 0 ? 'rgba(16,185,129,0.22)' : headline.pnl < 0 ? 'rgba(244,63,94,0.22)' : 'transparent';
+    const reviewed = ctl.weekTrades.filter(trade => planChoiceOf(trade)).length;
+    const ownIds = new Set(ctl.journal.notes.map(note => note.id));
+    const winRate = headline.winRate == null ? null : Math.round(headline.winRate * 100);
     content = (
       <>
         <div style={{ padding: '0 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
           <button type="button" aria-label="Předchozí den" onClick={() => ctl.shiftDay(-1)} style={roundNav}><ChevronLeft size={16} /></button>
-          <div style={{ flex: 1, textAlign: 'center' }}>
+          <div style={{ flex: 1, minWidth: 0, textAlign: 'center' }}>
             <p style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>{dayTitle(ctl.day)}</p>
             <div style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}><LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} /></div>
           </div>
           <button type="button" aria-label="Další den" disabled={ctl.isToday} onClick={() => ctl.shiftDay(1)} style={{ ...roundNav, opacity: ctl.isToday ? 0.3 : 1 }}><ChevronRight size={16} /></button>
-          <button type="button" aria-label="Sdílet den" onClick={() => { void exportDay(ctl).catch(() => {}); }} style={roundNav}><Share size={15} /></button>
+          <DayMoreMenu ctl={ctl} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onOpenLegacy={onOpenLegacy} onOpenMind={onOpenMind} />
         </div>
         <div style={{ padding: '16px 16px 0', background: `radial-gradient(80% 70% at 10% 0%, ${glow}, transparent 70%)` }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
-            <div style={{ flex: 1 }}>
-              <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' }}>{ctl.scope === 'day' ? 'Celý den' : SESSION_STYLE[ctl.scope].name}</p>
-              <p style={{ margin: '4px 0 0', fontSize: 38, fontWeight: 300, letterSpacing: '-0.04em', lineHeight: 1, color: tone(ctl.stats.pnl) }}>{money(ctl.stats.pnl)}</p>
-              <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--dj-text-2)' }}>{ctl.stats.count ? `${ctl.stats.count} obchodů · ${rText(ctl.stats.rSum)}` : 'Zatím bez obchodů'}</p>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' }}>{ctl.weekend ? `Týden ${dayMonth(ctl.week.monday)}–${dayMonth(ctl.week.friday)}` : ctl.scope === 'day' ? 'Celý den' : SESSION_STYLE[ctl.scope].name}</p>
+              <p style={{ margin: '4px 0 0', fontSize: 38, fontWeight: 300, letterSpacing: '-0.04em', lineHeight: 1, color: tone(headline.pnl) }}>{money(headline.pnl)}</p>
+              <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--dj-text-2)' }}>
+                {headline.count
+                  ? `${headline.count} ${tradesWord(headline.count)}${headline.rSum != null ? ` · ${rText(headline.rSum)}` : ''}${winRate != null ? ` · ${winRate} % win` : ''}`
+                  : ctl.weekend ? 'Týden bez obchodů' : 'Zatím bez obchodů'}
+              </p>
             </div>
             {action && (
               <button type="button" className="dj-btn" onClick={() => (action.kind === 'prep' ? ctl.openPrep(action.session) : ctl.openClose(action.session))} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '8px 10px', borderRadius: 12, cursor: 'pointer', ...(action.kind === 'prep' ? { border: '1px solid rgba(99,102,241,0.45)', background: 'rgba(99,102,241,0.12)' } : { border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.1)' }) }}>
@@ -243,39 +278,72 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade }: { ctl: Da
             )}
           </div>
         </div>
-        <div style={{ margin: '14px 16px 0' }}><ScopeSwitch ctl={ctl} fill /></div>
-        <div style={{ marginTop: 12 }}>{chart(250)}</div>
-        <div style={{ padding: '14px 16px 0' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, streak.length)}, minmax(0, 1fr))`, gap: 4, marginBottom: 12 }}>
-            {streak.map(item => <span key={item.day} title={item.title} style={{ height: 10, borderRadius: 4, boxSizing: 'border-box', ...streakStyle(item.state) }} />)}
+        {!ctl.weekend && <div style={{ margin: '14px 16px 0' }}><ScopeSwitch ctl={ctl} fill /></div>}
+        <div style={{ marginTop: 12 }}>{chart(ctl.weekend ? 230 : 250)}</div>
+        <div style={{ padding: '14px 16px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {ctl.weekend ? (
+            <>
+              <PhoneCard title="Projít týden" aside={<span style={{ fontSize: 12, color: 'var(--dj-text-2)' }}>{ctl.weekTrades.length ? <><b style={{ color: reviewed === ctl.weekTrades.length ? 'var(--dj-green)' : 'var(--dj-amber-text)' }}>{reviewed}/{ctl.weekTrades.length}</b> ohodnoceno</> : 'bez obchodů'}</span>}>
+                {onOpenWeek && <button type="button" className="dj-btn" onClick={onOpenWeek} style={{ height: 42, borderRadius: 12, border: 0, cursor: 'pointer', font: '800 13.5px Inter, sans-serif', color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' }}>Otevřít review týdne</button>}
+              </PhoneCard>
+              <PhoneCard title="Plán na týden" aside={<span style={{ fontSize: 11, color: 'var(--dj-muted)' }}>ukáže se v pondělí v přípravě</span>}>
+                {ctl.weekPlans.map(note => (
+                  <button key={note.id} type="button" className="dj-btn" disabled={!ownIds.has(note.id)} onClick={() => ctl.setSelected({ kind: 'note', id: note.id })} style={{ display: 'block', width: '100%', padding: '8px 10px', borderRadius: 10, border: '1px solid rgba(99,102,241,0.25)', background: 'var(--dj-indigo-bg-soft)', cursor: ownIds.has(note.id) ? 'pointer' : 'default', textAlign: 'left', fontFamily: 'inherit', color: 'var(--dj-indigo-text)', fontSize: 13.5 }}>→ {note.text}</button>
+                ))}
+                <WeekPlanInput ctl={ctl} />
+              </PhoneCard>
+              <PhoneCard tone="mind" title={`Hlava · tento týden ${ctl.weekMindNotes.length}`} aside={onOpenMind && <button type="button" className="dj-btn" onClick={onOpenMind} style={{ border: 0, background: 'none', padding: 0, cursor: 'pointer', font: '700 12px Inter, sans-serif', color: 'var(--dj-mind-text)' }}>Přehled ›</button>}>
+                {ctl.weekMindNotes.slice(0, 5).map(({ day: noteDay, note }) => (
+                  <div key={note.id} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                    <span className="dj-mono" style={{ fontSize: 11, fontWeight: 700, color: 'var(--dj-muted)', flex: 'none', width: 22 }}>{WEEKDAY_SHORT.format(new Date(`${noteDay}T12:00:00Z`))}</span>
+                    <span style={{ fontSize: 13, minWidth: 0, color: 'var(--dj-mind-text)' }}>{note.text}</span>
+                  </div>
+                ))}
+                {!ctl.weekMindNotes.length && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--dj-muted)' }}>Co tě drží i mimo trading — rodina, jídlo, pohyb, spánek…</p>}
+              </PhoneCard>
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, streak.length)}, minmax(0, 1fr))`, gap: 4 }}>
+                {streak.map(item => <span key={item.day} title={item.title} style={{ height: 10, borderRadius: 4, boxSizing: 'border-box', ...streakStyle(item.state) }} />)}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(['london', 'ny'] as const).map(item => {
+                  const prep = ctl.journal.preps[item];
+                  const close = ctl.journal.closes[item];
+                  const upcoming = ctl.isToday && sessionStage(item, ctl.windows, ctl.now) === 'upcoming';
+                  return (
+                    <div key={item} style={{ flex: 1, display: 'flex', gap: 6 }}>
+                      <button type="button" className="dj-btn" onClick={() => ctl.openPrep(item)} style={{ ...phoneChip, color: prep ? 'var(--dj-indigo-text)' : 'var(--dj-text-2)', borderColor: prep ? 'rgba(99,102,241,0.4)' : 'var(--dj-line)' }}>{prep ? '✓ ' : ''}Příprava {item === 'ny' ? 'NY' : 'LDN'}</button>
+                      <button type="button" className="dj-btn" disabled={upcoming} onClick={() => ctl.openClose(item)} style={{ ...phoneChip, color: close ? 'var(--dj-blue)' : 'var(--dj-text-2)', borderColor: close ? 'rgba(59,130,246,0.4)' : 'var(--dj-line)', opacity: upcoming ? 0.4 : 1 }}>{close ? '✓ ' : ''}Uzavřít</button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+            <p style={{ margin: 0, fontSize: 13, fontWeight: 800 }}>Časová osa</p>
+            <span style={{ flex: 1 }} />
+            <div style={{ width: 170 }}><NoteFilterSwitch ctl={ctl} /></div>
           </div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-            {(['london', 'ny'] as const).map(item => {
-              const prep = ctl.journal.preps[item];
-              const close = ctl.journal.closes[item];
-              return (
-                <div key={item} style={{ flex: 1, display: 'flex', gap: 6 }}>
-                  <button type="button" className="dj-btn" onClick={() => ctl.openPrep(item)} style={{ ...phoneChip, color: prep ? 'var(--dj-indigo-text)' : 'var(--dj-text-2)', borderColor: prep ? 'rgba(99,102,241,0.4)' : 'var(--dj-line)' }}>{prep ? '✓ ' : ''}Příprava {item === 'ny' ? 'NY' : 'LDN'}</button>
-                  <button type="button" className="dj-btn" disabled={ctl.isToday && sessionStage(item, ctl.windows, ctl.now) === 'upcoming'} onClick={() => ctl.openClose(item)} style={{ ...phoneChip, color: close ? 'var(--dj-blue)' : 'var(--dj-text-2)', borderColor: close ? 'rgba(59,130,246,0.4)' : 'var(--dj-line)', opacity: ctl.isToday && sessionStage(item, ctl.windows, ctl.now) === 'upcoming' ? 0.4 : 1 }}>{close ? '✓ ' : ''}Uzavřít</button>
-                </div>
-              );
-            })}
-          </div>
-          <p style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>Časová osa</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}><FeedList ctl={ctl} items={ctl.feed} /></div>
         </div>
       </>
     );
     bottom = (
-      <button type="button" className="dj-btn" onClick={() => setSheet({ kind: 'dictate' })} aria-label="Nadiktovat poznámku" style={{ margin: '0 auto', height: 56, padding: '0 22px 0 18px', borderRadius: 99, border: 0, display: 'flex', alignItems: 'center', gap: 10, color: '#fff', font: '800 14px Inter, sans-serif', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.28), 0 12px 30px -8px rgba(79,70,229,0.8)' }}>
-        <Mic size={20} /> Poznámka hlasem
-      </button>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button type="button" className="dj-btn" onClick={() => setSheet({ kind: 'pin', point: null, record: false })} aria-label="Napsat poznámku" style={{ height: 56, width: 56, borderRadius: 99, display: 'grid', placeItems: 'center', cursor: 'pointer', color: ctl.noteKind === 'mind' ? 'var(--dj-mind-text)' : 'var(--dj-text)', background: 'var(--dj-card)', border: '1px solid var(--dj-line)', boxShadow: '0 12px 30px -10px rgba(0,0,0,0.5)' }}>{ctl.noteKind === 'mind' ? <Brain size={20} /> : <PenLine size={20} />}</button>
+        <button type="button" className="dj-btn" onClick={() => setSheet({ kind: 'dictate' })} aria-label="Nadiktovat poznámku" style={{ height: 56, padding: '0 22px 0 18px', borderRadius: 99, border: 0, display: 'flex', alignItems: 'center', gap: 10, color: '#fff', font: '800 14px Inter, sans-serif', background: ctl.noteKind === 'mind' ? 'linear-gradient(180deg,#a855f7,#7e22ce)' : 'linear-gradient(180deg,#6366f1,#4f46e5)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.28), 0 12px 30px -8px rgba(79,70,229,0.8)' }}>
+          <Mic size={20} /> {ctl.noteKind === 'mind' ? 'Hlava hlasem' : 'Poznámka hlasem'}
+        </button>
+      </div>
     );
   }
 
   const celebrationOrigin = { left: '50%', top: 'calc(100% - 60px)' };
   return (
-    <div className="dj" style={{ position: 'relative', margin: '0 -16px', paddingBottom: 110 }}>
+    <div className="dj" style={{ position: 'relative', margin: '0 -16px', paddingBottom: 'calc(var(--native-shell-tab-bar-height, 0px) + 120px)' }}>
       <div style={{ paddingTop: 4 }}>{content}</div>
       <div style={{ position: 'fixed', left: 0, right: 0, bottom: bottomOffset, zIndex: 40, padding: '20px 16px 0', background: 'linear-gradient(180deg, transparent, var(--dj-bg) 40%)', display: 'flex' }}>
         <div style={{ width: '100%', maxWidth: 520, margin: '0 auto', display: 'flex', justifyContent: 'center' }}>{bottom && <div style={{ width: mode === 'day' ? undefined : '100%' }}>{bottom}</div>}</div>

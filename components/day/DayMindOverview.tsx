@@ -154,10 +154,39 @@ export default function DayMindOverview({ today, trades, liveJournal, onClose, o
   };
 
   const loading = journals == null && !error;
+  // Telefon: přes celou obrazovku, jeden sloupec, souvislosti pod zápisy.
+  const phone = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 1023px)').matches === true;
+  const rangeSwitch = (
+    <div role="radiogroup" aria-label="Období" style={{ display: 'flex', gap: 2, padding: 2, borderRadius: 9, border: '1px solid var(--dj-line)', flex: 'none' }}>
+      {RANGES.map(item => (
+        <button key={item.id} type="button" role="radio" aria-checked={range === item.id} className="dj-btn" onClick={() => setRange(item.id)} style={{ height: phone ? 32 : 28, padding: '0 11px', borderRadius: 7, border: 0, cursor: 'pointer', font: '700 11.5px Inter, sans-serif', whiteSpace: 'nowrap', color: range === item.id ? 'var(--dj-mind-text)' : 'var(--dj-muted)', background: range === item.id ? 'var(--dj-mind-bg)' : 'transparent' }}>{item.label}</button>
+      ))}
+    </div>
+  );
+  const search = (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 6, height: phone ? 36 : 32, padding: '0 10px', borderRadius: 9, border: '1px solid var(--dj-line)', background: 'var(--dj-input)', width: phone ? undefined : 220, flex: phone ? 1 : undefined, minWidth: 0 }}>
+      <Search size={13} color="var(--dj-muted)" />
+      <input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape' && query) { event.preventDefault(); event.nativeEvent.stopImmediatePropagation(); setQuery(''); } }} placeholder="Hledat v zápisech…" aria-label="Hledat v zápisech" style={{ flex: 1, minWidth: 0, border: 0, outline: 0, background: 'transparent', color: 'var(--dj-text)', font: `500 ${phone ? 16 : 12}px Inter, sans-serif` }} />
+    </label>
+  );
+  const closeButton = <button type="button" className="dj-btn" onClick={onClose} aria-label="Zavřít" title="Zavřít (Esc)" style={{ width: phone ? 38 : 32, height: phone ? 38 : 32, flex: 'none', borderRadius: 9, border: '1px solid var(--dj-line)', background: 'transparent', cursor: 'pointer', display: 'grid', placeItems: 'center', color: 'var(--dj-muted)' }}><X size={phone ? 18 : 15} /></button>;
   return createPortal(
     <div className="dj" role="dialog" aria-label="Hlava — přehled" onClick={event => { if (event.target === event.currentTarget) onClose(); }}
-      style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 24, background: 'rgba(2,6,23,0.55)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', animation: 'dj-fade .2s ease both' }}>
-      <section style={{ width: 'min(1180px, 100%)', height: 'min(820px, 100%)', display: 'grid', gridTemplateRows: 'auto auto 1fr', overflow: 'hidden', borderRadius: 18, border: '1px solid var(--dj-line)', background: 'var(--dj-bg)', boxShadow: '0 40px 100px -30px rgba(0,0,0,0.75)', animation: 'dj-rise .28s cubic-bezier(.2,.9,.25,1) both' }}>
+      style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: phone ? 'stretch' : 'center', padding: phone ? 0 : 24, background: phone ? 'var(--dj-bg)' : 'rgba(2,6,23,0.55)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', animation: 'dj-fade .2s ease both' }}>
+      <section style={{ width: phone ? '100%' : 'min(1180px, 100%)', height: phone ? '100%' : 'min(820px, 100%)', display: 'grid', gridTemplateRows: 'auto auto 1fr', overflow: 'hidden', borderRadius: phone ? 0 : 18, border: phone ? 0 : '1px solid var(--dj-line)', background: 'var(--dj-bg)', boxShadow: phone ? undefined : '0 40px 100px -30px rgba(0,0,0,0.75)', animation: 'dj-rise .28s cubic-bezier(.2,.9,.25,1) both' }}>
+        {phone ? (
+          <header style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 'calc(env(safe-area-inset-top, 0px) + 10px) 16px 12px', borderBottom: '1px solid var(--dj-line)', background: 'radial-gradient(60% 200% at 0% 0%, rgba(168,85,247,0.16), transparent 70%), var(--dj-card)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', background: 'var(--dj-mind)', flex: 'none' }}><Brain size={18} color="#fff" /></span>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <p style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Hlava</p>
+                <p style={{ margin: 0, fontSize: 11.5, color: 'var(--dj-muted)' }}>Každý zápis s tím, co se ten den dělo v obchodování.</p>
+              </div>
+              {closeButton}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{rangeSwitch}{search}</div>
+          </header>
+        ) : (
         <header style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--dj-line)', background: 'radial-gradient(40% 200% at 0% 0%, rgba(168,85,247,0.16), transparent 70%), var(--dj-card)' }}>
           <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--dj-mind)', flex: 'none' }}><Brain size={16} color="#fff" /></span>
           <div style={{ minWidth: 0 }}>
@@ -165,31 +194,27 @@ export default function DayMindOverview({ today, trades, liveJournal, onClose, o
             <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-muted)' }}>Celý život, ne jen trading — každý zápis s tím, co se ten den dělo v obchodování.</p>
           </div>
           <span style={{ flex: 1 }} />
-          <div role="radiogroup" aria-label="Období" style={{ display: 'flex', gap: 2, padding: 2, borderRadius: 9, border: '1px solid var(--dj-line)' }}>
-            {RANGES.map(item => (
-              <button key={item.id} type="button" role="radio" aria-checked={range === item.id} className="dj-btn" onClick={() => setRange(item.id)} style={{ height: 28, padding: '0 11px', borderRadius: 7, border: 0, cursor: 'pointer', font: '700 11.5px Inter, sans-serif', color: range === item.id ? 'var(--dj-mind-text)' : 'var(--dj-muted)', background: range === item.id ? 'var(--dj-mind-bg)' : 'transparent' }}>{item.label}</button>
-            ))}
-          </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, height: 32, padding: '0 10px', borderRadius: 9, border: '1px solid var(--dj-line)', background: 'var(--dj-input)', width: 220 }}>
-            <Search size={13} color="var(--dj-muted)" />
-            <input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape' && query) { event.preventDefault(); event.nativeEvent.stopImmediatePropagation(); setQuery(''); } }} placeholder="Hledat v zápisech…" aria-label="Hledat v zápisech" style={{ flex: 1, minWidth: 0, border: 0, outline: 0, background: 'transparent', color: 'var(--dj-text)', font: '500 12px Inter, sans-serif' }} />
-          </label>
-          <button type="button" className="dj-btn" onClick={onClose} aria-label="Zavřít" title="Zavřít (Esc)" style={{ width: 32, height: 32, borderRadius: 9, border: '1px solid var(--dj-line)', background: 'transparent', cursor: 'pointer', display: 'grid', placeItems: 'center', color: 'var(--dj-muted)' }}><X size={15} /></button>
+          {rangeSwitch}
+          {search}
+          {closeButton}
         </header>
+        )}
 
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: '10px 16px', borderBottom: '1px solid var(--dj-line)' }}>
+        <div className="dj-scroll" style={{ display: 'flex', gap: 5, flexWrap: phone ? 'nowrap' : 'wrap', overflowX: phone ? 'auto' : undefined, padding: '10px 16px', borderBottom: '1px solid var(--dj-line)' }}>
           {[{ id: 'all' as const, label: 'Vše', count: entries.length }, ...MIND_AREAS.filter(item => counts[item]).map(item => ({ id: item, label: `${MIND_AREA_ICON[item]} ${MIND_AREA_LABEL[item].toLowerCase()}`, count: counts[item]! }))].map(item => {
             const on = area === item.id;
             return (
-              <button key={item.id} type="button" className="dj-btn" aria-pressed={on} onClick={() => setArea(item.id)} style={{ height: 28, padding: '0 10px', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, font: '700 11.5px Inter, sans-serif', color: on ? 'var(--dj-mind-text)' : 'var(--dj-text-2)', background: on ? 'var(--dj-mind-bg)' : 'transparent', border: `1px solid ${on ? 'rgba(168,85,247,0.4)' : 'var(--dj-line)'}` }}>
+              <button key={item.id} type="button" className="dj-btn" aria-pressed={on} onClick={() => setArea(item.id)} style={{ height: phone ? 32 : 28, flex: 'none', whiteSpace: 'nowrap', padding: '0 10px', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, font: '700 11.5px Inter, sans-serif', color: on ? 'var(--dj-mind-text)' : 'var(--dj-text-2)', background: on ? 'var(--dj-mind-bg)' : 'transparent', border: `1px solid ${on ? 'rgba(168,85,247,0.4)' : 'var(--dj-line)'}` }}>
                 {item.label}<span style={{ fontSize: 10.5, color: 'var(--dj-muted)' }}>{item.count}</span>
               </button>
             );
           })}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 340px', minHeight: 0 }}>
-          <div className="dj-scroll" style={{ overflowY: 'auto', padding: '12px 16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div className={phone ? 'dj-scroll' : undefined} style={phone
+          ? { minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', paddingBottom: 'calc(var(--native-shell-tab-bar-height, 0px) + 24px)' }
+          : { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 340px', minHeight: 0 }}>
+          <div className="dj-scroll" style={{ overflowY: phone ? 'visible' : 'auto', padding: '12px 16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             {loading && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--dj-muted)' }}>Načítám…</p>}
             {error && <p role="alert" style={{ margin: 0, fontSize: 12.5, color: 'var(--dj-rose)' }}>{error}</p>}
             {!loading && !error && !groups.length && (
@@ -214,7 +239,7 @@ export default function DayMindOverview({ today, trades, liveJournal, onClose, o
             })}
           </div>
 
-          <aside className="dj-scroll" style={{ overflowY: 'auto', borderLeft: '1px solid var(--dj-line)', padding: 14, display: 'flex', flexDirection: 'column', gap: 12, background: 'var(--dj-card)' }}>
+          <aside className="dj-scroll" style={{ overflowY: phone ? 'visible' : 'auto', borderLeft: phone ? 0 : '1px solid var(--dj-line)', borderTop: phone ? '1px solid var(--dj-line)' : 0, padding: phone ? 16 : 14, display: 'flex', flexDirection: 'column', gap: 12, background: 'var(--dj-card)' }}>
             <section>
               <p style={asideTitle}>Souvislosti · mimo plán</p>
               {insights.areas.length === 0 && <p style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--dj-muted)' }}>Až přibudou zápisy s oblastmi, uvidíš tu, jak se ti obchoduje ve dnech, kdy řešíš rodinu, jídlo, pohyb…</p>}

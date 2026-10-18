@@ -69,7 +69,12 @@ export default function DayJournalView({ trades, allTrades, sessions, isDark, in
     />
   );
 
-  if (phone) return <DayPhone ctl={ctl} isDark={isDark} streak={streak} onOpenTrade={onOpenTrade} />;
+  if (phone) return (
+    <>
+      {mind}
+      <DayPhone ctl={ctl} isDark={isDark} streak={streak} onOpenTrade={onOpenTrade} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onOpenLegacy={onOpenLegacy} onOpenMind={() => setMindOpen(true)} />
+    </>
+  );
   return (
     <>
     {mind}

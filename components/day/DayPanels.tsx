@@ -138,7 +138,7 @@ export function ScopeSwitch({ ctl, fill = false, compact = false }: { ctl: DayCo
 }
 
 /** Menu ⋯ v hlavičce deníku: Týden, archiv, původní deník dne a export (portál — hlavička se posouvá do stran). */
-function DayMoreMenu({ ctl, onOpenWeek, onOpenArchive, onOpenLegacy, onOpenMind }: { ctl: DayController; onOpenWeek?: () => void; onOpenArchive?: () => void; onOpenLegacy?: () => void; onOpenMind?: () => void }) {
+export function DayMoreMenu({ ctl, onOpenWeek, onOpenArchive, onOpenLegacy, onOpenMind }: { ctl: DayController; onOpenWeek?: () => void; onOpenArchive?: () => void; onOpenLegacy?: () => void; onOpenMind?: () => void }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -481,7 +481,7 @@ export function FeedList({ ctl, items }: { ctl: DayController; items: readonly F
 // ── Pravý panel ────────────────────────────────────────────────────────
 
 /** Filtr časové osy: Vše · Trh · Hlava (platí i pro body v grafu). */
-function NoteFilterSwitch({ ctl }: { ctl: DayController }) {
+export function NoteFilterSwitch({ ctl }: { ctl: DayController }) {
   const options = [{ id: 'all' as const, label: 'Vše' }, { id: 'market' as const, label: 'Trh' }, { id: 'mind' as const, label: 'Hlava' }];
   return (
     <div role="radiogroup" aria-label="Filtr poznámek" style={{ display: 'flex', gap: 2, padding: 2, borderRadius: 9, border: '1px solid var(--dj-line)', flex: 'none' }}>
@@ -734,7 +734,7 @@ function StripSession({ ctl, session }: { ctl: DayController; session: DaySessio
 }
 const stripAction: React.CSSProperties = { flex: 1, height: 26, padding: '0 8px', borderRadius: 7, border: '1px solid', background: 'transparent', cursor: 'pointer', font: '700 11px Inter, sans-serif', whiteSpace: 'nowrap' };
 
-function QuickNote({ ctl, showKind = true }: { ctl: DayController; showKind?: boolean }) {
+export function QuickNote({ ctl, showKind = true }: { ctl: DayController; showKind?: boolean }) {
   const [draft, setDraft] = useState('');
   const [voice, setVoice] = useState(false);
   // Diktování je sdílené — tenhle mikrofon ukazuje jen svoje nahrávání.
@@ -844,7 +844,7 @@ export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed, onOpenMin
 const WEEKDAY_SHORT = new Intl.DateTimeFormat('cs-CZ', { weekday: 'short', timeZone: 'UTC' });
 const dayMonth = (day: string) => { const [, m, d] = day.split('-').map(Number); return `${d}. ${m}.`; };
 
-function WeekPlanInput({ ctl }: { ctl: DayController }) {
+export function WeekPlanInput({ ctl }: { ctl: DayController }) {
   const [draft, setDraft] = useState('');
   const save = () => { if (ctl.createWeekPlan(draft)) setDraft(''); };
   return (
