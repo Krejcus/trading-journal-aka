@@ -316,7 +316,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
       <div ref={containerRef} onPointerDownCapture={() => { if (landscape && activePane !== 0) { engine?.stopTool(); setPathActive(false); setActivePane(0); } }} style={{ position: 'relative', flex: 1, minWidth: 0, boxShadow: landscape && activePane === 0 ? 'inset 0 0 0 1.5px rgba(99,102,241,0.55)' : undefined }}>
         {candles.length ? (
           <CandleKitTradeChart
-            key={`${ctl.day}:${timeframe}:full`}
+            key={`${ctl.day}:${timeframe}:full${replayOn ? ':replay' : ''}`}
             trade={chartTrade}
             candles={candles}
             rawCandles={raw}
@@ -388,7 +388,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
         <div ref={secondContainerRef} onPointerDownCapture={() => { if (activePane !== 1) { engine?.stopTool(); setPathActive(false); setActivePane(1); } }} style={{ position: 'relative', flex: 1, minWidth: 0, borderLeft: '1px solid var(--dj-line)', boxShadow: activePane === 1 ? 'inset 0 0 0 1.5px rgba(99,102,241,0.55)' : undefined }}>
           {secondCandles.length > 0 && (
             <CandleKitTradeChart
-              key={`${ctl.day}:${secondTimeframe}:full2`}
+              key={`${ctl.day}:${secondTimeframe}:full2${replayOn ? ':replay' : ''}`}
               trade={chartTrade}
               candles={secondCandles}
               rawCandles={raw}

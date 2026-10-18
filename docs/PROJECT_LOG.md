@@ -262,6 +262,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-18 noc — Deník dne na telefonu doladěný (Claude, větev, NEnasazeno)
+- Větev `claude/day-ios-20261018` (worktree `~/alphatrade-worktrees/day-ios-20261018`, nad `origin/main`
+  `76a02406`), ověřováno v iOS Simulatoru iPhone 17 Pro (přihlášený Filipův účet, zápisy s jeho
+  souhlasem; testovací kresby a poznámky smazány). Nic na `main`, žádný deploy, fyzický iPhone ne.
+- **Den na telefonu:** menu ⋯ (Hlava, Týden, Archiv, Původní deník, Export), filtr časové osy
+  Vše/Trh/Hlava, plovoucí tlačítka Napsat + Hlasem podle druhu poznámky (fialová pro Hlavu), list
+  poznámky rovnou otevře klávesnici, bez bodu v grafu „Uložit“. **Víkend:** výsledek týdne, Projít
+  týden, Plán na týden, Hlava za týden, bez seancí a ScopeSwitch. **Přehled Hlava** přes celou
+  obrazovku v jednom sloupci. Konec stránky nad nativní lištou, nový režim/den začíná nahoře. Karty
+  obchodů bez prázdného „— R“ (plán v řádku), prázdné R skryté všude. Příprava umí i psát do grafu.
+  Karty Hlavy a fází mají ve světlém režimu pevný podklad. Malý graf bez řádku OHLC (prop
+  `hideOhlcLegend` v `CandleKitTradeChart`).
+- **Graf na celou obrazovku (schválený návrh `phone-chart-fullscreen-design`):** časové rámce jako
+  čipy; plovoucí tužka → spodní list (oblíbené Šipka/Zóna/Úroveň/Trend, všech 19 nástrojů
+  z `ALPHATRADE_DRAWING_TOOLS`, barva nových kreseb, magnet, zámek, smazat vše); kreslí se crosshairem
+  jako touchpad, hotové kresby jde vždy vybrat, přesunout, přebarvit, tloušťka, smazat; Text má
+  vlastní pole. Zpět bere jen kresby z tohoto otevření (ne starší z Macu). Cesta končí i klepnutím
+  bez posunu. **Přehrávání** dole přes celou šířku, jen ikony, rychlost 1/3/10/30× ve spodním listu
+  (`lib/dayReplay.ts` + test); po ukončení se graf vrátí na den. **Na šířku dva grafy** vedle sebe
+  (rámec + vyšší), sdílený kurzor (`installChartWorkspaceSync`), kreslí se v naposled klepnutém.
+  Na úzkém displeji rozsah dne jako jeden čip.
+- Pozor: brána `vitest | grep | head && …` propustila commit `658ce678` se 3 padajícími testy
+  (kopírka/LIVE, časově citlivé pod zátěží simulátoru; samostatně i v celé sadě znovu zelené).
+  Dál jen přes skript s exit kódem vitestu; stejný test `copierV12SixthIteration` E1 padá pod
+  zátěží opakovaně — kandidát na stabilizaci.
+- **Neověřeno v simulátoru (ráno na telefonu):** diktování a haptika, skutečný dotyk prstem (pinch,
+  tahy), otočení na šířku (simctl rotaci neumí, dvoupanel ověřen vynuceně na výšku), menší iPhone
+  (17e simulátor nepřihlášený), Live Activity, uložení přípravy/uzavření a hodnocení obchodu
+  (vizuálně ano, zápis ne — nešly by vrátit).
+
 ### 2026-10-18 — Deník: poznámka Hlava, víkendový režim, přehled Hlava (Claude)
 - **Hlava** = osobní poznámka (celý život: rodina, jídlo, pohyb, spánek, vztahy, práce, trading
   hlava). Uživatel výslovně nechtěl stupnice nálady/spánku („už jsem jednou měl a nepoužíval“) —
