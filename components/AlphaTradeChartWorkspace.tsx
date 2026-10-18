@@ -34,8 +34,6 @@ import {
   GripVertical,
   Loader2,
   LocateFixed,
-  Maximize2,
-  Minimize2,
   Pause,
   Play,
   Plus,
@@ -812,30 +810,16 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       data-panel-timeframe={config.timeframe}
     >
       <div ref={chartAreaRef} className="relative flex-1 min-h-0">
-        {(context.paneActions.panelCount > 1 || context.paneActions.maximizedPanelId === instance.id) && (
-          // Místo tab stripu: ovládání panelu se ukáže až po najetí myší, jako
-          // v TradingView. Vlevo od cenové osy, aby nepřekrylo legendu.
-          <div
+        {context.paneActions.maximizedPanelId === instance.id && (
+          // Maximalizace jde přes ⌥↩ (Alt+Enter); nápověda je vidět jen
+          // v maximalizovaném grafu a klikem rozložení taky vrátí.
+          <button
+            type="button"
             data-snapshot-hide
-            className={`absolute right-[76px] top-1 z-[640] flex items-center gap-0.5 rounded-md border p-0.5 opacity-0 transition-opacity group-hover/pane:opacity-100 focus-within:opacity-100 ${context.isDark ? 'border-white/10 bg-[#101720]/90 text-slate-400' : 'border-slate-200 bg-white/90 text-slate-500'}`}
-          >
-            <button
-              type="button"
-              className={`grid h-6 w-6 place-items-center rounded ${context.isDark ? 'hover:bg-white/10 hover:text-white' : 'hover:bg-slate-100 hover:text-slate-900'}`}
-              onClick={() => context.paneActions.toggleMaximize(instance.id)}
-              title={context.paneActions.maximizedPanelId === instance.id ? 'Obnovit rozložení' : 'Maximalizovat graf'}
-              aria-label={context.paneActions.maximizedPanelId === instance.id ? 'Obnovit rozložení' : 'Maximalizovat graf'}
-            >{context.paneActions.maximizedPanelId === instance.id ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
-            {context.paneActions.panelCount > 1 && (
-              <button
-                type="button"
-                className={`grid h-6 w-6 place-items-center rounded ${context.isDark ? 'hover:bg-white/10 hover:text-white' : 'hover:bg-slate-100 hover:text-slate-900'}`}
-                onClick={() => context.paneActions.close(instance.id)}
-                title="Zavřít graf"
-                aria-label="Zavřít graf"
-              ><X size={12} /></button>
-            )}
-          </div>
+            onClick={() => context.paneActions.toggleMaximize(instance.id)}
+            className={`absolute right-[76px] top-1.5 z-[640] flex h-7 items-center gap-1.5 rounded-lg px-2 text-[10px] font-bold ${chartGlassBar(context.isDark)} ${chartGlassButton(context.isDark)}`}
+            title="Vrátit rozložení (⌥↩ / Alt+Enter)"
+          ><kbd className="font-sans text-[10px]">⌥↩</kbd> Zpět na rozložení</button>
         )}
         {!loading && !error && candles.length > 0 && (
           <>
@@ -2009,6 +1993,21 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [workspaceHistory]);
 
+  // ⌥↩ (Alt+Enter) maximalizuje aktivní graf a zase vrátí rozložení —
+  // náhrada za tlačítka v rohu každého grafu.
+  useEffect(() => {
+    const handleMaximizeKey = (event: KeyboardEvent) => {
+      if (!event.altKey || event.metaKey || event.ctrlKey || event.key !== 'Enter') return;
+      const target = event.target;
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (paneActions.panelCount <= 1 && !paneActions.maximizedPanelId) return;
+      event.preventDefault();
+      paneActions.toggleMaximize(paneActions.maximizedPanelId ?? activePanelId);
+    };
+    window.addEventListener('keydown', handleMaximizeKey);
+    return () => window.removeEventListener('keydown', handleMaximizeKey);
+  }, [activePanelId, paneActions]);
+
   // Mezerník přehrává, šipka doprava krokuje o svíčku. Obojí jen v běžícím
   // replay a mimo formulářová pole — jinak by mezerník nešel napsat do poznámky
   // a šipka by neposunula kurzor v ceně objednávky.
@@ -2707,7 +2706,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             type="button"
             className={`${topButton} ${layoutPickerOpen ? (isDark ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-950') : ''}`}
             onClick={() => setLayoutPickerOpen(open => !open)}
-            title="Nastavení layoutu grafů"
+            title="Nastavení layoutu grafů · ⌥↩ (Alt+Enter) maximalizuje aktivní graf"
             aria-label="Nastavení layoutu grafů"
             aria-expanded={layoutPickerOpen}
           >
