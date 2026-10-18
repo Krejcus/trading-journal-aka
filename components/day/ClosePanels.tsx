@@ -67,7 +67,7 @@ export function CloseSide({ ctl, session, width }: { ctl: DayController; session
       <section className="dj-card" style={{ padding: 14, background: `radial-gradient(90% 70% at 8% 0%, ${glow}, transparent 72%), var(--dj-card)` }}>
         <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' }}>Čistý výsledek · {SESSION_STYLE[session].name}</p>
         <p style={{ margin: '6px 0 0', fontSize: 36, fontWeight: 300, letterSpacing: '-0.04em', lineHeight: 1, color: tone(stats.pnl), transition: 'color .3s ease' }}>{money(stats.pnl)}</p>
-        <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--dj-text-2)' }}>{stats.count ? `${stats.count} ${stats.count === 1 ? 'obchod' : stats.count < 5 ? 'obchody' : 'obchodů'} · ${rText(stats.rSum)} · ${stats.wins}W / ${stats.losses}L` : 'Bez obchodů — i to je výsledek.'}</p>
+        <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--dj-text-2)' }}>{stats.count ? `${stats.count} ${stats.count === 1 ? 'obchod' : stats.count < 5 ? 'obchody' : 'obchodů'}${stats.rSum != null ? ` · ${rText(stats.rSum)}` : ''} · ${stats.wins}W / ${stats.losses}L` : 'Bez obchodů — i to je výsledek.'}</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 12 }}>
           {trades.map((trade, i) => {
             const plan = planChoiceOf(trade);
@@ -81,7 +81,7 @@ export function CloseSide({ ctl, session, width }: { ctl: DayController; session
                   ? <span style={{ height: 19, padding: '0 6px', display: 'inline-flex', alignItems: 'center', borderRadius: 5, fontSize: 10.5, fontWeight: 700, ...option.style }}>{option.label}</span>
                   : <button type="button" className="dj-btn" onClick={() => ctl.setSelected({ kind: 'trade', id: String(trade.id) })} style={{ height: 19, padding: '0 6px', borderRadius: 5, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', color: '#1c1203', background: '#f59e0b', border: 0 }}>ohodnotit</button>}
                 <span style={{ flex: 1 }} />
-                <span className="dj-mono" style={{ fontSize: 11, fontWeight: 600, color: r == null ? 'var(--dj-muted)' : tone(r) }}>{rText(r)}</span>
+                {r != null && <span className="dj-mono" style={{ fontSize: 11, fontWeight: 600, color: tone(r) }}>{rText(r)}</span>}
                 <span style={{ fontSize: 12, fontWeight: 600, color: tone(trade.pnl), width: 62, textAlign: 'right' }}>{money(trade.pnl)}</span>
               </div>
             );
@@ -148,9 +148,10 @@ export function SummaryBar({ ctl, session, compact = false }: { ctl: DayControll
       <div style={{ alignSelf: 'center' }}><MicButton phase={dictation.phase} onStart={() => void record()} onStop={() => void dictation.stop()} size={compact ? 46 : 52} label="Nadiktovat shrnutí" /></div>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 18 }}>
-          <label htmlFor={`close-summary-${session}`} style={{ fontSize: 13, fontWeight: 700 }}>Shrnutí session</label>
+          <label htmlFor={`close-summary-${session}`} style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', flex: 'none' }}>Shrnutí session</label>
           {recording && <Waveform levels={dictation.levels} height={16} />}
-          <span style={{ fontSize: 11.5, color: status?.color ?? 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{status?.text ?? 'Čistý přepis, žádné úpravy. Co šlo, co ne, co příště.'}</span>
+          {/* Telefon: nápověda jen při nahrávání/chybě, jinak by lámala nadpis. */}
+          {(!compact || status) && <span style={{ fontSize: 11.5, minWidth: 0, color: status?.color ?? 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{status?.text ?? 'Čistý přepis, žádné úpravy. Co šlo, co ne, co příště.'}</span>}
         </div>
         <textarea id={`close-summary-${session}`} className="dj-input" rows={compact ? 4 : 2} value={draft.summary} onChange={event => ctl.updateCloseDraft(session, { summary: event.target.value })} placeholder="Co šlo, co ne, co příště. Svými slovy." />
       </div>
@@ -175,7 +176,7 @@ export function CloseBottom({ ctl, session, saving, error, onClose, onOpenDetail
     <div style={{ width: 210, flex: 'none', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
       <p style={{ margin: 0, fontSize: 9.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dj-muted)' }}>Výsledek · {SESSION_STYLE[session].name}</p>
       <p style={{ margin: 0, fontSize: 24, fontWeight: 300, letterSpacing: '-0.03em', lineHeight: 1.1, color: tone(stats.pnl) }}>{money(stats.pnl)}</p>
-      <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-text-2)' }}>{stats.count ? `${stats.count} ${stats.count === 1 ? 'obchod' : stats.count < 5 ? 'obchody' : 'obchodů'} · ${rText(stats.rSum)}${unrated ? ` · ${unrated} k ohodnocení` : ''}` : 'Bez obchodů — i to je výsledek.'}</p>
+      <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-text-2)' }}>{stats.count ? `${stats.count} ${stats.count === 1 ? 'obchod' : stats.count < 5 ? 'obchody' : 'obchodů'}${stats.rSum != null ? ` · ${rText(stats.rSum)}` : ''}${unrated ? ` · ${unrated} k ohodnocení` : ''}` : 'Bez obchodů — i to je výsledek.'}</p>
       <button type="button" className="dj-btn" onClick={onOpenDetail} aria-pressed={detailOpen} style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '6px 9px', borderRadius: 9, cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', font: '600 11px Inter, sans-serif', color: 'var(--dj-indigo-strong)', background: detailOpen ? 'rgba(99,102,241,0.18)' : 'var(--dj-indigo-bg-soft)', border: '1px solid rgba(129,140,248,0.35)' }}>
         <span>Plán vs. realita · {pins.length ? `${judged}/${pins.length} bodů` : 'bez bodů'}</span><span>{detailOpen ? '‹' : '›'}</span>
       </button>

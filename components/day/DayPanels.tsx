@@ -243,7 +243,7 @@ export function ResultCard({ ctl, compact = false }: { ctl: DayController; compa
     <section className="dj-card" style={{ padding: compact ? '14px 14px 12px' : '18px 16px 14px', background: `radial-gradient(95% 60% at 8% 0%, ${glow}, transparent 72%), radial-gradient(70% 50% at 100% 30%, rgba(6,182,212,0.10), transparent 72%), var(--dj-card-soft)` }}>
       <p style={label11}>Čistý výsledek · {scopeName}</p>
       <p style={{ margin: '8px 0 0', fontSize: compact ? 34 : 40, fontWeight: 300, letterSpacing: '-0.04em', lineHeight: 1, whiteSpace: 'nowrap', color: tone(stats.pnl), textShadow: `0 0 34px ${glow}` }}>{money(stats.pnl)}</p>
-      <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--dj-text-2)' }}>{stats.count ? `${rText(stats.rSum)} · ${stats.wins}W / ${stats.losses}L` : 'Zatím bez obchodů'}</p>
+      <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--dj-text-2)' }}>{stats.count ? `${stats.rSum != null ? `${rText(stats.rSum)} · ` : ''}${stats.wins}W / ${stats.losses}L` : 'Zatím bez obchodů'}</p>
       {!compact && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, marginTop: 14 }}>
           {tiles.map(tile => (
@@ -361,7 +361,7 @@ function NoteCard({ ctl, note, phase }: { ctl: DayController; note: DayNote; pha
   useEffect(() => { if (!selected) setEditing(null); }, [selected]);
   const failed = ctl.failedNotes.has(note.id);
   return (
-    <div className="dj-feed" style={{ borderRadius: 11, padding: '10px 12px', border: `1px solid ${selected ? style.color : style.soft}`, background: style.bg }}>
+    <div className="dj-feed" style={{ borderRadius: 11, padding: '10px 12px', border: `1px solid ${selected ? style.color : style.soft}`, background: `linear-gradient(${style.bg}, ${style.bg}), var(--dj-card)` }}>
       <button type="button" onClick={() => ctl.setSelected(selected ? null : { kind: 'note', id: note.id })} style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: 'inherit', fontFamily: 'inherit' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 700, color: style.color }}>{clock(Date.parse(note.writtenAt))}</span>
@@ -423,14 +423,17 @@ function TradeCard({ ctl, item }: { ctl: DayController; item: Extract<FeedItem, 
           <span style={{ flex: 1 }} />
           <span style={{ fontSize: 13, fontWeight: 600, color: tone(trade.pnl) }}>{money(trade.pnl)}</span>
         </span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-          <span className="dj-mono" style={{ fontSize: 11, fontWeight: 600, color: r == null ? 'var(--dj-muted)' : tone(r) }}>{rText(r)}</span>
-          {trade.signal && <span style={{ fontSize: 11, color: 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{trade.signal}</span>}
-        </span>
+        {/* R a signál jen když jsou — prázdné „— R“ jen zabíralo řádek. */}
+        {(r != null || trade.signal || item.plan) && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, minWidth: 0 }}>
+            {item.plan && <span style={{ height: 21, padding: '0 7px', display: 'inline-flex', alignItems: 'center', borderRadius: 6, fontSize: 10.5, fontWeight: 700, flex: 'none', ...planLabel(item.plan).style }}>{planLabel(item.plan).label}</span>}
+            {r != null && <span className="dj-mono" style={{ fontSize: 11, fontWeight: 600, color: tone(r), flex: 'none' }}>{rText(r)}</span>}
+            {trade.signal && <span style={{ fontSize: 11, color: 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{trade.signal}</span>}
+          </span>
+        )}
       </button>
       {item.plan ? (
-        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
-          <span style={{ height: 21, padding: '0 7px', display: 'inline-flex', alignItems: 'center', borderRadius: 6, fontSize: 10.5, fontWeight: 700, ...planLabel(item.plan).style }}>{planLabel(item.plan).label}</span>
+        note && <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
           {note && <span style={{ fontSize: 12, color: 'var(--dj-text-2)', flexBasis: '100%', marginTop: 3 }}>„{note.text}“ <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--dj-amber)', whiteSpace: 'nowrap' }}>zapsáno {clock(Date.parse(note.writtenAt))}</span></span>}
         </span>
       ) : (
@@ -791,7 +794,7 @@ export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed, onOpenMin
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
         <p style={stripLabel}>Čistý výsledek · {scopeName}</p>
         <p style={{ margin: 0, fontSize: 24, fontWeight: 300, letterSpacing: '-0.03em', lineHeight: 1.1, whiteSpace: 'nowrap', color: tone(stats.pnl) }}>{money(stats.pnl)}</p>
-        <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-text-2)', whiteSpace: 'nowrap' }}>{stats.count ? `${rText(stats.rSum)} · ${stats.wins}W / ${stats.losses}L` : 'Zatím bez obchodů'}</p>
+        <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-text-2)', whiteSpace: 'nowrap' }}>{stats.count ? `${stats.rSum != null ? `${rText(stats.rSum)} · ` : ''}${stats.wins}W / ${stats.losses}L` : 'Zatím bez obchodů'}</p>
         {unrated > 0 && <button type="button" className="dj-btn" onClick={onOpenFeed} style={{ alignSelf: 'flex-start', marginTop: 2, height: 22, padding: '0 7px', borderRadius: 6, border: 0, cursor: 'pointer', font: '700 10.5px Inter, sans-serif', color: '#1c1203', background: '#f59e0b' }}>{unrated} k ohodnocení ›</button>}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
