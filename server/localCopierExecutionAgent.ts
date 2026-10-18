@@ -846,6 +846,11 @@ export async function startLocalCopierExecutionAgent(
       case 'resolve-stuck-operation':
         // Durable waive: nic neposílá brokerovi, odzbrojí a vynutí novou
         // reconciliation. Stejná cesta jako mac-install resolve-stuck.
+        // 18. 10. 2026: z appky / relay jen pro skupinu, kterou worker řídí
+        // (jako ostatní příkazy skupiny); lokální CLI cesta skupinu nenese.
+        if (command.groupId !== group.id) {
+          throw new Error('Vyřešení operace míří na jinou skupinu, než jakou má lokální execution agent');
+        }
         await options.controller.waiveStuckOperation({
           kind: command.kind,
           key: command.key,

@@ -1397,6 +1397,24 @@ describe('local copier execution agent', () => {
     });
   });
 
+  it('resolve-stuck-operation z LIVE UI pro cizí skupinu se odmítne bez waive', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'resolve-stuck-operation',
+        groupId: 'jina-skupina',
+        kind: 'oso',
+        key: 'oso:test:625378680572:62364057',
+        reason: 'Ručně potvrzeno v LIVE UI',
+      },
+    });
+    expect(response.status).not.toBe(200);
+    expect(runtime.waiveStuckOperation).not.toHaveBeenCalled();
+  });
+
   it('keeps SHADOW disarmed when reconciliation finds divergence or working orders', async () => {
     const runtime = controller();
     vi.mocked(runtime.reconcile).mockResolvedValueOnce({ divergentAccounts: [], workingOrderAccounts: [22] });
