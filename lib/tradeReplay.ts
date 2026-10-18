@@ -244,6 +244,30 @@ export function historyAt(history: TradeExecutionHistory, at: number): TradeExec
   };
 }
 
+/**
+ * Klíč, který se změní, jen když se obchod v přehrávání viditelně změní:
+ * přibude plnění, změna SL/TP nebo vstupní příkaz — a během „živé“ části
+ * obchodu (od prvního příkazu/plnění do uzavření) i každou minutu kurzoru,
+ * aby čáry SL/TP a čekající příkazy rostly s přehráváním. Vrstvy ostatních
+ * obchodů se tak nepřestavují při každém kroku replaye.
+ */
+export function replayRevealKey(history: TradeExecutionHistory, at: number): string {
+  const starts = [
+    ...history.fills.map(fill => fill.at),
+    ...(history.entryOrders ?? []).map(order => order.placedAt),
+  ];
+  if (!starts.length) return 'none';
+  const start = Math.min(...starts);
+  if (at < start) return 'future';
+  const lastFillAt = Math.max(...history.fills.map(fill => fill.at), -Infinity);
+  const end = history.position?.closedAt ?? (Number.isFinite(lastFillAt) ? lastFillAt : start);
+  const fills = history.fills.filter(fill => fill.at <= at).length;
+  const protection = history.protection.filter(event => event.at <= at).length;
+  const orders = (history.entryOrders ?? []).filter(order => order.placedAt <= at).length;
+  const live = at <= end ? `:${Math.floor(at / 60_000)}` : '';
+  return `${fills}.${protection}.${orders}${live}`;
+}
+
 /** Starší historie nemá údaj o pozici — čáry SL/TP by pak neměly kde skončit. */
 function openWithoutPosition(history: TradeExecutionHistory, fills: TradeExecutionHistory['fills'], at: number): TradeExecutionHistory['position'] {
   const lastExitAt = Math.max(...history.fills.filter(fill => fill.role === 'exit').map(fill => fill.at));

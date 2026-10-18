@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventsDoneAt, historyAt, initialRiskPoints, protectionValueAt, tradeFillGroups, tradeTimelineEvents } from '../lib/tradeReplay';
+import { eventsDoneAt, historyAt, initialRiskPoints, protectionValueAt, replayRevealKey, tradeFillGroups, tradeTimelineEvents } from '../lib/tradeReplay';
 import { journalProtectionSegments } from '../lib/journalProtectionSegments';
 import type { TradeExecutionHistory } from '../lib/tradeExecutionHistory';
 
@@ -152,5 +152,24 @@ describe('hodnota SL/TP v místě kurzoru', () => {
     const value = protectionValueAt(longHistory, 95, t('10:02:00'), 20)!;
     expect(value.averageEntry).toBe(105);
     expect(value.usd).toBe(-10 * 20 * 2);
+  });
+});
+
+describe('replayRevealKey — kdy přestavět vrstvu obchodu v replayi', () => {
+  it('před prvním plněním je obchod „budoucí“ a klíč se nemění', () => {
+    expect(replayRevealKey(history, t('07:00:00'))).toBe('future');
+    expect(replayRevealKey(history, t('07:10:00'))).toBe('future');
+  });
+
+  it('během otevřené pozice se mění každou minutu kurzoru (čáry SL/TP rostou)', () => {
+    const a = replayRevealKey(history, t('07:40:00'));
+    const b = replayRevealKey(history, t('07:41:00'));
+    expect(a).not.toBe(b);
+    expect(replayRevealKey(history, t('07:40:10'))).toBe(a);
+  });
+
+  it('po uzavření se už nemění — minulý obchod se nepřestavuje', () => {
+    expect(replayRevealKey(history, t('09:00:00'))).toBe(replayRevealKey(history, t('12:00:00')));
+    expect(replayRevealKey(history, t('09:00:00'))).toBe(`4.${history.protection.length}.0`);
   });
 });

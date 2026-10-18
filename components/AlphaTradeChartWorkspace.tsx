@@ -2,7 +2,7 @@ import { sharedRevealedCandles } from '../services/chartReplayPaint';
 import TradeProgress from './TradeProgress';
 import ChartWorkspaceMenu from './ChartWorkspaceMenu';
 import { chartGlassBar, chartGlassButton, chartGlassGrip } from '../services/chartGlass';
-import { historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
+import { historyAt, replayRevealKey, tradeTimelineEvents } from '../lib/tradeReplay';
 import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
 import { formingReplayBar, formingReplayBase } from '../services/chartReplayForming';
 import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWorkspaceLibraryDialog';
@@ -755,10 +755,10 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   }, [activeLibraryIndicators, applyIndicatorState, chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.registerPanel, focusTrade, getCandles, getIndicatorState, indicatorController, instance.id, rawCandles, updatePanelConfig]);
 
   const isActive = context.activePanelId === instance.id;
-  // Fullscreen obchodu: v replayi se obchod kreslí jen do kurzoru, stejně jako
-  // v přehrávači detailu (vstup, SL/TP a plnění přibývají, jak čas běží).
-  // Backtest a hodnocení kreslí obchody vlastními vrstvami.
-  const journalReplay = !context.backtestSession && !context.review;
+  // Fullscreen obchodu i review týdne: v replayi se obchody kreslí jen do
+  // kurzoru, stejně jako v přehrávači detailu (vstup, SL/TP a plnění přibývají,
+  // jak čas běží). Backtest kreslí obchody vlastními vrstvami.
+  const journalReplay = !context.backtestSession;
   const replayCutoffMs = journalReplay && context.replay.phase === 'active' && context.replay.cursorTime !== null
     ? (context.replay.cursorTime + 60) * 1_000 - 1
     : null;
@@ -768,6 +768,24 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       : context.trade,
     [context.trade, replayCutoffMs],
   );
+  // Review: ostatní obchody týdne v replayi — minulé celé, rozběhnutý do
+  // kurzoru, budoucí ještě nejsou. Nový seznam (a přestavba jejich vrstev)
+  // jen když se některý viditelně změní, ne při každém kroku.
+  const reviewTrades = context.review?.trades;
+  const replayCutoffRef = useRef(replayCutoffMs);
+  replayCutoffRef.current = replayCutoffMs;
+  const reviewRevealKey = useMemo(() => replayCutoffMs === null || !reviewTrades ? null
+    : reviewTrades.map(other => other.executionHistory ? replayRevealKey(other.executionHistory, replayCutoffMs) : '-').join('|'),
+  [replayCutoffMs, reviewTrades]);
+  const reviewTradesAtCursor = useMemo(() => {
+    const cutoff = replayCutoffRef.current;
+    if (reviewRevealKey === null || cutoff === null || !reviewTrades) return reviewTrades;
+    return reviewTrades.flatMap(other => {
+      if (!other.executionHistory) return [other];
+      const history = historyAt(other.executionHistory, cutoff);
+      return history.fills.length || history.entryOrders?.length ? [{ ...other, executionHistory: history }] : [];
+    });
+  }, [reviewRevealKey, reviewTrades]);
   const chartAreaRef = useRef<HTMLDivElement>(null);
   // Panel u levého okraje workspace má nad sebou plovoucí lištu kreslení —
   // legenda a logo se odsadí (CSS --chart-left-inset přes data-left-edge).
@@ -879,7 +897,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             onToggleStructure={() => updatePanelConfig({ showStructure: !config.showStructure })}
             onAddChartNote={context.onChartNotesChange ? (clientX, clientY) => setNoteAddRequest({ clientX, clientY, nonce: Date.now() }) : undefined}
             reviewMode={Boolean(context.review)}
-            contextTrades={context.review?.trades}
+            contextTrades={reviewTradesAtCursor}
             drawingKeyId={context.review?.drawingKey}
           />
           {context.review?.renderPanelOverlay?.({

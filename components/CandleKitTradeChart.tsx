@@ -4458,7 +4458,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   reviewSelectedIdRef.current = String(trade.id);
   useLayoutEffect(() => {
     const api = apiRef.current;
-    if (!api || !reviewMode || replayActive || !contextTrades?.length) return;
+    // V replayi je kreslí taky — workspace je posílá už oříznuté ke kurzoru.
+    if (!api || !reviewMode || (replayActive && !journalHistoryInReplay) || !contextTrades?.length) return;
     const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
     const coverage = { candles: rawCandles, intervalSeconds: 60 };
     const layersById = contextLayersRef.current;
@@ -4488,7 +4489,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       layersById.clear();
       try { layers.forEach(layer => series.detachPrimitive(layer)); } catch { /* Chart already disposed. */ }
     };
-  }, [chartApiEpoch, contextTrades, rawCandles, replayActive, reviewMode, showManagedPositionBoxes, timeframe, visibleCandles, arrowStacks]);
+  }, [chartApiEpoch, contextTrades, rawCandles, replayActive, journalHistoryInReplay, reviewMode, showManagedPositionBoxes, timeframe, visibleCandles, arrowStacks]);
 
   useLayoutEffect(() => {
     const engine = apiRef.current?.drawing?.engine;
