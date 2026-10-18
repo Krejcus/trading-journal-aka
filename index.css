@@ -2000,8 +2000,9 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 /* Skleněná jako panel přehrávání (services/chartGlass.ts) — výplň je vlastní,
    aby panel vypadal dobře i v Chrome bez backdrop-filter. */
 .alphatrade-chart-favorites-toolbar {
-  position: fixed;
-  z-index: 10010;
+  /* Uvnitř plochy grafu (portál do workspace), ne přes celou stránku. */
+  position: absolute;
+  z-index: 657;
   height: 32px;
   display: inline-flex;
   align-items: center;

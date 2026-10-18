@@ -1053,6 +1053,47 @@ export const AlphaTradeDrawingToolbar: React.FC<{
   const favoritesPositionRef = useRef(favoritesPosition);
   toolSelectionsRef.current = toolSelections;
   favoritesPositionRef.current = favoritesPosition;
+  // Lišta oblíbených žije uvnitř plochy grafu (posouvá se s ní, třeba v review
+  // na scrollující stránce) a nikdy ji neopustí. Uložená je pozice, kterou si
+  // člověk přetáhl; zobrazená je ta, která se do aktuálního grafu vejde.
+  const railRef = useRef<HTMLElement>(null);
+  const [favoritesHost, setFavoritesHost] = useState<HTMLElement | null>(null);
+  const favoritesDesiredRef = useRef(favoritesPosition);
+  const favoritesArea = useCallback(() => favoritesHost
+    ?.querySelector<HTMLElement>(':scope > .alphatrade-candlekit-workspace') ?? favoritesHost, [favoritesHost]);
+  const clampFavoritesPosition = useCallback((position: { left: number; top: number }) => {
+    const host = favoritesHost;
+    const area = favoritesArea();
+    if (!host || !area) return position;
+    const hostRect = host.getBoundingClientRect();
+    const areaRect = area.getBoundingClientRect();
+    const width = favoritesToolbarRef.current?.offsetWidth ?? 260;
+    const height = favoritesToolbarRef.current?.offsetHeight ?? 32;
+    const minLeft = areaRect.left - hostRect.left + 4;
+    const minTop = areaRect.top - hostRect.top + 4;
+    const maxLeft = Math.max(minLeft, areaRect.right - hostRect.left - width - 4);
+    const maxTop = Math.max(minTop, areaRect.bottom - hostRect.top - height - 4);
+    return {
+      left: Math.round(Math.min(maxLeft, Math.max(minLeft, position.left))),
+      top: Math.round(Math.min(maxTop, Math.max(minTop, position.top))),
+    };
+  }, [favoritesArea, favoritesHost]);
+  useLayoutEffect(() => {
+    setFavoritesHost(docked ? (railRef.current?.parentElement?.parentElement ?? null) : null);
+  }, [docked]);
+  useLayoutEffect(() => {
+    if (!docked || !favoritesVisible || !favoritesHost) return;
+    const apply = () => setFavoritesPosition(current => {
+      const next = clampFavoritesPosition(favoritesDesiredRef.current);
+      return next.left === current.left && next.top === current.top ? current : next;
+    });
+    apply();
+    const observer = new ResizeObserver(apply);
+    const area = favoritesArea();
+    if (area) observer.observe(area);
+    if (favoritesToolbarRef.current) observer.observe(favoritesToolbarRef.current);
+    return () => observer.disconnect();
+  }, [clampFavoritesPosition, docked, favoriteTools.length, favoritesArea, favoritesHost, favoritesVisible]);
   keepDrawingRef.current = keepDrawing;
   const workspaceEngines = useMemo(
     () => [...new Set((drawingEngines?.length ? drawingEngines : engine ? [engine] : []))],
@@ -1315,23 +1356,23 @@ export const AlphaTradeDrawingToolbar: React.FC<{
     }));
   };
   const startFavoritesDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.button !== 0 || !favoritesToolbarRef.current) return;
+    const host = favoritesHost;
+    if (event.button !== 0 || !favoritesToolbarRef.current || !host) return;
     event.preventDefault();
     event.stopPropagation();
     const rect = favoritesToolbarRef.current.getBoundingClientRect();
     const offsetX = event.clientX - rect.left;
     const offsetY = event.clientY - rect.top;
     const move = (moveEvent: PointerEvent) => {
-      const width = favoritesToolbarRef.current?.offsetWidth ?? rect.width;
-      const height = favoritesToolbarRef.current?.offsetHeight ?? rect.height;
-      setFavoritesPosition({
-        left: Math.max(4, Math.min(window.innerWidth - width - 4, moveEvent.clientX - offsetX)),
-        top: Math.max(4, Math.min(window.innerHeight - height - 4, moveEvent.clientY - offsetY)),
-      });
+      const hostRect = host.getBoundingClientRect();
+      const desired = { left: moveEvent.clientX - offsetX - hostRect.left, top: moveEvent.clientY - offsetY - hostRect.top };
+      favoritesDesiredRef.current = desired;
+      setFavoritesPosition(clampFavoritesPosition(desired));
     };
     const stop = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', stop);
+      favoritesDesiredRef.current = favoritesPositionRef.current;
       try { window.localStorage.setItem(DRAWING_TOOL_FAVORITES_POSITION_STORAGE_KEY, JSON.stringify(favoritesPositionRef.current)); } catch { /* private storage */ }
     };
     window.addEventListener('pointermove', move);
@@ -1354,7 +1395,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
   };
   const buttonClass = (active = false) => `alphatrade-chart-tool ${active ? 'is-active' : ''} ${isDark ? 'is-dark' : ''}`;
 
-  const favoritesPortal = docked && favoritesVisible && favoriteTools.length > 0 && createPortal(
+  const favoritesPortal = docked && favoritesHost && favoritesVisible && favoriteTools.length > 0 && createPortal(
         <div
           ref={favoritesToolbarRef}
           className={`alphatrade-chart-favorites-toolbar ${isDark ? 'is-dark' : ''} ${favoritesLeaving ? 'is-leaving' : ''}`}
@@ -1384,12 +1425,13 @@ export const AlphaTradeDrawingToolbar: React.FC<{
             ><FavoriteIcon size={18} /></button>;
           })}
         </div>,
-        document.body,
+        favoritesHost,
       );
 
   return (
     <>
     <aside
+      ref={railRef}
       className={`alphatrade-chart-drawing-bar ${docked ? 'is-docked' : ''} ${docked && collapsed ? 'is-collapsed' : ''} ${isDark ? 'is-dark' : ''}`}
       aria-label="Kreslicí nástroje"
       inert={docked && collapsed}
