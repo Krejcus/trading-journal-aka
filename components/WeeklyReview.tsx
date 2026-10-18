@@ -235,22 +235,23 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
   const muted = isDark ? 'text-slate-500' : 'text-slate-500';
   const label = 'text-[11px] font-semibold text-slate-500';
 
+  // Jeden nízký řádek (bez zalamování) — místo patří grafu.
   const header = (
-    <div className={`shrink-0 flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2 border-b ${line} bg-[var(--bg-card)]`}>
-      <div className="flex items-center gap-1.5">
+    <div className={`shrink-0 flex items-center gap-x-4 overflow-x-auto px-3 py-1 border-b ${line} bg-[var(--bg-card)] whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}>
+      <div className="flex shrink-0 items-center gap-1">
         <button type="button" onClick={() => changeWeek(-1)} disabled={weekIndex <= 0} aria-label="Předchozí týden"
-          className={`h-7 w-7 grid place-items-center rounded-md border disabled:opacity-30 ${line}`}><ChevronLeft size={14} /></button>
-        <span className="min-w-[150px] text-center text-[13px] font-black">{weekLabel(weekStart)}</span>
+          className={`h-6 w-6 grid place-items-center rounded-md border disabled:opacity-30 ${line}`}><ChevronLeft size={13} /></button>
+        <span className="min-w-[118px] text-center text-[12px] font-black">{weekLabel(weekStart)}</span>
         <button type="button" onClick={() => changeWeek(1)} disabled={weekIndex < 0 || weekIndex >= weeks.length - 1} aria-label="Další týden"
-          className={`h-7 w-7 grid place-items-center rounded-md border disabled:opacity-30 ${line}`}><ChevronRight size={14} /></button>
+          className={`h-6 w-6 grid place-items-center rounded-md border disabled:opacity-30 ${line}`}><ChevronRight size={13} /></button>
       </div>
-      <div className={`flex items-center overflow-hidden rounded-lg border ${line}`} role="group" aria-label="Přepínání obchodů">
+      <div className={`flex shrink-0 items-center overflow-hidden rounded-md border ${line}`} role="group" aria-label="Přepínání obchodů">
         <button type="button" onClick={() => move(-1)} disabled={weekTrades.length < 2} title="Předchozí obchod (←)" aria-label="Předchozí obchod"
-          className={`h-8 w-9 grid place-items-center transition-colors disabled:opacity-30 ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`}><ChevronLeft size={16} /></button>
-        <span className={`h-8 min-w-[108px] px-2 grid place-items-center border-x text-[11.5px] font-bold tabular-nums ${line}`}>
+          className={`h-6 w-7 grid place-items-center transition-colors disabled:opacity-30 ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`}><ChevronLeft size={14} /></button>
+        <span className={`h-6 min-w-[92px] px-2 grid place-items-center border-x text-[11px] font-bold tabular-nums ${line}`}>
           Obchod {selectedIndex + 1} / {weekTrades.length}</span>
         <button type="button" onClick={() => move(1)} disabled={weekTrades.length < 2} title="Další obchod (→)" aria-label="Další obchod"
-          className={`h-8 w-9 grid place-items-center transition-colors disabled:opacity-30 ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`}><ChevronRight size={16} /></button>
+          className={`h-6 w-7 grid place-items-center transition-colors disabled:opacity-30 ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`}><ChevronRight size={14} /></button>
       </div>
       {([
         ['Týden', <span className={tone(stats.pnl)}>{money(stats.pnl)}</span>],
@@ -259,11 +260,11 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
         ['Nejlepší', <span className="text-emerald-500">{money(stats.best)}</span>],
         ['Nejhorší', <span className="text-rose-500">{money(stats.worst)}</span>],
       ] as Array<[string, React.ReactNode]>).map(([name, value]) => (
-        <div key={name}><p className={label}>{name}</p><p className="text-[13.5px] font-bold tabular-nums">{value}</p></div>
+        <p key={name} className="shrink-0 text-[10.5px] font-semibold text-slate-500">{name} <b className={`ml-0.5 text-[12px] font-bold tabular-nums ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{value}</b></p>
       ))}
-      <div className="ml-auto flex items-center gap-2.5 text-[11px] text-slate-500">
+      <div className="ml-auto flex shrink-0 items-center gap-2 text-[10.5px] text-slate-500">
         Zkontrolováno {stats.reviewed}/{stats.count}
-        <span className={`h-1.5 w-32 overflow-hidden rounded-full ${isDark ? 'bg-white/10' : 'bg-slate-200'}`}>
+        <span className={`h-1.5 w-24 overflow-hidden rounded-full ${isDark ? 'bg-white/10' : 'bg-slate-200'}`}>
           <span className="block h-full rounded-full bg-emerald-500 transition-[width] duration-300" style={{ width: `${stats.count ? stats.reviewed / stats.count * 100 : 0}%` }} />
         </span>
       </div>
@@ -271,11 +272,12 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
   );
 
   const bottom = (
-    <div className={`shrink-0 flex gap-4 overflow-x-auto border-t px-3 py-2.5 ${line} bg-[var(--bg-card)]`}>
-      {days.map(day => (
-        <div key={day.key} className="shrink-0">
-          <p className={`${label} mb-1.5 ml-0.5`}>{day.label}<span className={`ml-1.5 normal-case tracking-normal font-bold ${tone(day.pnl)}`}>{money(day.pnl)}</span></p>
-          <div className="flex gap-1.5">
+    <div className={`shrink-0 flex overflow-x-auto border-t px-3 py-1.5 ${line} bg-[var(--bg-card)]`}>
+      {days.map((day, index) => (
+        // Dny oddělené svislou čarou; popisek dne malý nad kartami.
+        <div key={day.key} className={`shrink-0 ${index ? `ml-3 border-l pl-3 ${line}` : ''}`}>
+          <p className="mb-1 ml-0.5 whitespace-nowrap text-[10px] font-semibold text-slate-500">{day.label}<span className={`ml-1.5 font-bold tabular-nums ${tone(day.pnl)}`}>{money(day.pnl)}</span></p>
+          <div className="flex gap-1">
             {day.trades.map(trade => (
               <ReviewCard key={String(trade.id)} trade={trade} on={trade === selected} isDark={isDark} onSelect={select} />
             ))}
@@ -474,12 +476,15 @@ const ReviewCard = React.memo(function ReviewCard({ trade, on, isDark, onSelect 
   const line = isDark ? 'border-white/10' : 'border-slate-200';
   return (
     <button type="button" onClick={() => onSelect(trade)} data-review-card={String(trade.id)}
-      className={`relative w-[96px] rounded-lg border px-2 py-1.5 text-left transition-[border-color,box-shadow,transform] hover:-translate-y-px ${on ? 'border-amber-500 shadow-[0_0_0_1px_#f59e0b]' : line} bg-[var(--bg-page)]`}>
-      {!trade.needsReview && <span className="absolute right-1.5 top-1.5 grid h-3 w-3 place-items-center rounded-full bg-emerald-500 text-white"><Check size={8} strokeWidth={4} /></span>}
-      <span className="block text-[9.5px] tabular-nums text-slate-500">{clock(tradeTimeMs(trade))}</span>
-      <span className={`block text-[13px] font-extrabold tabular-nums ${pnl > 0 ? 'text-emerald-500' : pnl < 0 ? 'text-rose-500' : isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+      className={`relative w-[84px] rounded-md border px-1.5 py-1 text-left transition-[border-color,box-shadow,transform] hover:-translate-y-px ${on ? 'border-amber-500 shadow-[0_0_0_1px_#f59e0b]' : line} bg-[var(--bg-page)]`}>
+      {!trade.needsReview && <span className="absolute right-1 top-1 grid h-2.5 w-2.5 place-items-center rounded-full bg-emerald-500 text-white"><Check size={7} strokeWidth={4} /></span>}
+      {/* Dva řádky: čas + směr, pod tím výsledek. */}
+      <span className="flex items-center gap-1 text-[9px] leading-tight tabular-nums text-slate-500">
+        {clock(tradeTimeMs(trade))}
+        <span className={`text-[8px] font-black tracking-wider ${long ? 'text-emerald-500' : 'text-rose-500'}`}>{long ? 'LONG' : 'SHORT'}</span>
+      </span>
+      <span className={`block text-[12px] font-extrabold leading-tight tabular-nums ${pnl > 0 ? 'text-emerald-500' : pnl < 0 ? 'text-rose-500' : isDark ? 'text-slate-300' : 'text-slate-600'}`}>
         {`${pnl >= 0 ? '+' : '−'}$${Math.abs(pnl).toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</span>
-      <span className={`block text-[9px] font-black tracking-wider ${long ? 'text-emerald-500' : 'text-rose-500'}`}>{long ? 'LONG' : 'SHORT'}</span>
     </button>
   );
 });
