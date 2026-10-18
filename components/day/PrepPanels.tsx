@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowLeft, Mic, PenLine, Plus, X } from 'lucide-react';
 import { DAY_RULE_PRESETS, pragueClock, prepReady, type DayNote, type DaySession } from '../../lib/dayJournal';
 import { sessionStage } from '../../lib/dayJournalView';
-import { BiasPicker, BigSaveButton, MicButton, SESSION_STYLE, SessionSwitch, Waveform, priceText, recordingStatus } from './DayPrimitives';
+import { BiasPicker, BigSaveButton, MicButton, SESSION_STYLE, Waveform, priceText, recordingStatus } from './DayPrimitives';
 import { dayTitle, LiveChip } from './DayPanels';
 import type { DayController } from './useDayController';
 import type { DayPinPoint } from './DayNotesLayer';
@@ -67,7 +67,6 @@ export function PrepHeaderBar({ ctl, session, onSwitch }: { ctl: DayController; 
         <p style={{ margin: 0, fontSize: 10.5, fontWeight: 600, color: 'var(--dj-muted)' }}>{dayTitle(ctl.day)} · {before}</p>
         <h1 style={{ margin: 0, fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em' }}>Příprava {SESSION_STYLE[session].name}</h1>
       </div>
-      <div style={{ flex: 'none' }}><SessionSwitch value={session} onChange={onSwitch} status={prepSessionStatus(ctl, session)} /></div>
       <span style={{ flex: 1 }} />
       <span title={draft.bias ? 'Klikni jinam a změníš ho.' : 'Jedním klikem. Bez biasu se plán neuloží.'} style={{ flex: 'none' }}><BiasPicker value={draft.bias} onChange={bias => ctl.updatePrepDraft(session, { bias })} /></span>
       {!tight && <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} compact />}

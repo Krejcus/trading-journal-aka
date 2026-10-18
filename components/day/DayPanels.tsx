@@ -11,7 +11,7 @@ import { planChoiceOf, tradeTimeMs, type PlanChoice } from '../../lib/weeklyRevi
 import { tradeRMultiple } from '../../utils/tradeRisk';
 import { dayJournalMarkdown } from '../../lib/dayJournalExport';
 import { isNativeBuild } from '../../utils/runtimeConfig';
-import { PHASE_STYLE, SESSION_STYLE, MicButton, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
+import { PHASE_STYLE, SESSION_STYLE, MicButton, SpringSegmented, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
 import type { DayController } from './useDayController';
 
 const DATE_LABEL = new Intl.DateTimeFormat('cs-CZ', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'UTC' });
@@ -103,17 +103,33 @@ export function primaryAction(ctl: DayController): { kind: 'prep' | 'close'; ses
 }
 
 export function ScopeSwitch({ ctl, fill = false, compact = false }: { ctl: DayController; fill?: boolean; compact?: boolean }) {
-  const scopes: { id: DayController['scope']; label: string }[] = [{ id: 'day', label: 'Celý den' }, { id: 'london', label: 'London' }, { id: 'ny', label: 'New York' }];
+  // Stejná klouzavá „pilulka“ v barvě seance jako přepínač v přípravě.
+  const scopes: DayController['scope'][] = ['day', 'london', 'ny'];
   return (
-    <div role="group" aria-label="Rozsah grafu" style={{ flex: 'none', display: fill ? 'grid' : 'inline-flex', gridTemplateColumns: fill ? 'repeat(3, minmax(0, 1fr))' : undefined, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)', borderRadius: 11, padding: 3, gap: 2 }}>
-      {scopes.map(scope => {
-        const on = ctl.scope === scope.id;
-        return (
-          <button key={scope.id} type="button" className="dj-btn" aria-pressed={on} onClick={() => ctl.setScope(scope.id)} style={{ height: compact ? 28 : 34, padding: compact ? '0 9px' : '0 12px', whiteSpace: 'nowrap', borderRadius: 8, border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, font: '600 12.5px Inter, sans-serif', background: on ? 'var(--dj-seg-on)' : 'transparent', color: on ? 'var(--dj-seg-on-ink)' : 'var(--dj-text-2)' }}>
-            <span style={{ width: 7, height: 7, borderRadius: 9, background: SESSION_STYLE[scope.id].color }} />{scope.label}
-          </button>
-        );
-      })}
+    <div style={{ flex: 'none', minWidth: 0 }}>
+      <SpringSegmented
+        label="Rozsah grafu"
+        options={scopes.map(id => ({ id }))}
+        value={ctl.scope}
+        onChange={ctl.setScope}
+        itemWidth={compact ? 92 : 104}
+        fill={fill}
+        height={compact ? 28 : 34}
+        gap={3}
+        indicatorStyle={id => {
+          const tint = SESSION_STYLE[id].tint;
+          return id === 'day'
+            ? { background: 'var(--dj-seg-on)', boxShadow: '0 6px 18px -10px rgba(15,23,42,0.6)' }
+            : { background: `linear-gradient(135deg, ${tint}0.32), ${tint}0.14))`, boxShadow: `0 6px 22px -8px ${tint}0.7), inset 0 0 0 1px ${tint}0.55)` };
+        }}
+        rippleColor={id => `${SESSION_STYLE[id].tint}0.45)`}
+        renderItem={(id, on, fx) => (
+          <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', whiteSpace: 'nowrap', font: `${on ? 700 : 600} ${compact ? 12 : 12.5}px Inter, sans-serif`, color: on ? (id === 'day' ? 'var(--dj-seg-on-ink)' : 'var(--dj-text)') : 'var(--dj-text-2)' }}>
+            <span style={{ width: 7, height: 7, borderRadius: 9, background: SESSION_STYLE[id].color, flex: 'none', animation: fx ? 'dj-pop2 .45s cubic-bezier(.34,1.56,.64,1) both' : undefined }} />
+            {id === 'day' ? 'Celý den' : SESSION_STYLE[id].name}
+          </span>
+        )}
+      />
     </div>
   );
 }

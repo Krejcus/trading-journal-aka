@@ -5,7 +5,7 @@ import { DAY_BIAS_LABEL, pragueClock, type DaySession, type DayVerdict } from '.
 import { sessionStage, tradesInScope } from '../../lib/dayJournalView';
 import { planChoiceOf, tradeTimeMs } from '../../lib/weeklyReview';
 import { tradeRMultiple } from '../../utils/tradeRisk';
-import { BigSaveButton, ExecutionPicker, MicButton, SESSION_STYLE, SessionSwitch, SpringSegmented, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
+import { BigSaveButton, ExecutionPicker, MicButton, SESSION_STYLE, SpringSegmented, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
 import { PLAN_OPTIONS, dayTitle } from './DayPanels';
 import { prepPins, RequirementChips } from './PrepPanels';
 import type { DayController } from './useDayController';
@@ -38,7 +38,6 @@ export function CloseHeaderBar({ ctl, session, onSwitch }: { ctl: DayController;
         <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' }}>{dayTitle(ctl.day)} · {clock(ctl.windows[session].start)}–{clock(ctl.windows[session].end)}</p>
         <h1 style={{ margin: '1px 0 0', fontSize: 19, fontWeight: 800, letterSpacing: '-0.02em' }}>Uzavření {SESSION_STYLE[session].name}</h1>
       </div>
-      <SessionSwitch value={session} onChange={onSwitch} status={closeSessionStatus(ctl)} />
       {prep?.bias && <span style={{ fontSize: 12, color: 'var(--dj-text-2)' }}>Plán: <b style={{ color: prep.bias === 'long' ? 'var(--dj-green)' : prep.bias === 'short' ? 'var(--dj-rose)' : 'var(--dj-text)' }}>{DAY_BIAS_LABEL[prep.bias]}</b> · zapsáno {clock(Date.parse(prep.writtenAt))}</span>}
       {!prep && <span style={{ fontSize: 12, color: 'var(--dj-amber)' }}>K téhle session chybí příprava.</span>}
     </header>
