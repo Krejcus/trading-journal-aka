@@ -26,7 +26,7 @@ function useIsPhone() {
  * zápisu; příprava a uzavření každé session; diktování čistým přepisem.
  * Nic odsud nezamyká ani neautorizuje copier.
  */
-export default function DayJournalView({ trades, allTrades, sessions, isDark, initialDate, onUpdateTrade, onOpenTrade, onOpenLegacy, onOpenCoach }: {
+export default function DayJournalView({ trades, allTrades, sessions, isDark, initialDate, onUpdateTrade, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, immersive = false }: {
   trades: readonly Trade[];
   allTrades: readonly Trade[];
   sessions: readonly SessionConfig[];
@@ -35,7 +35,11 @@ export default function DayJournalView({ trades, allTrades, sessions, isDark, in
   onUpdateTrade: (id: string | number, updates: Partial<Trade>) => unknown;
   onOpenTrade?: (trade: Trade) => void;
   onOpenLegacy?: () => void;
+  onOpenWeek?: () => void;
+  onOpenArchive?: () => void;
   onOpenCoach?: () => void;
+  /** Bez horní lišty appky — deník zabere celou výšku. */
+  immersive?: boolean;
 }) {
   const ctl = useDayController({ trades, allTrades, sessions, initialDate, onUpdateTrade });
   const phone = useIsPhone();
@@ -58,8 +62,10 @@ export default function DayJournalView({ trades, allTrades, sessions, isDark, in
       streak={streak}
       onOpenTrade={onOpenTrade}
       onOpenLegacy={onOpenLegacy}
+      onOpenWeek={onOpenWeek}
+      onOpenArchive={onOpenArchive}
       onOpenCoach={onOpenCoach}
-      height="calc(100dvh - 128px)"
+      height={immersive ? 'calc(100dvh - 48px)' : 'calc(100dvh - 128px)'}
     />
   );
 }

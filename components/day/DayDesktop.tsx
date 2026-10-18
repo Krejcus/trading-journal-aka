@@ -91,12 +91,14 @@ type Celebration =
   | { kind: 'prep'; session: DaySession; fresh: boolean; seconds: number | null }
   | { kind: 'close'; session: DaySession; fresh: boolean };
 
-export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLegacy, onOpenCoach, height }: {
+export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, height }: {
   ctl: DayController;
   isDark: boolean;
   streak: StreakDay[];
   onOpenTrade?: (trade: Trade) => void;
   onOpenLegacy?: () => void;
+  onOpenWeek?: () => void;
+  onOpenArchive?: () => void;
   onOpenCoach?: () => void;
   height: string;
 }) {
@@ -244,7 +246,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
   const ready = candles.length > 0;
 
   return (
-    <div ref={rootRef} className="dj" style={{ position: 'relative', height, minHeight: 640, borderRadius: 16, overflow: 'hidden', border: '1px solid var(--dj-line)', background: 'var(--dj-bg)' }}>
+    <div ref={rootRef} className="dj" style={{ position: 'relative', height, minHeight: 640, borderRadius: 16, overflow: 'hidden', border: '1px solid var(--dj-line)', background: 'var(--dj-bg)', animation: 'dj-enter .5s cubic-bezier(.22,.61,.36,1) both', transition: 'height .5s cubic-bezier(.22,.61,.36,1)' }}>
       {ready ? (
         <AlphaTradeChartWorkspace
           key={ctl.day}
@@ -275,7 +277,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
         </div>
       )}
 
-      {slots && mode === 'day' && createPortal(<DayHeaderBar ctl={ctl} onDictate={() => setDictating(true)} onOpenLegacy={onOpenLegacy} onAddNote={addNote} />, slots.header)}
+      {slots && mode === 'day' && createPortal(<DayHeaderBar ctl={ctl} onDictate={() => setDictating(true)} onOpenLegacy={onOpenLegacy} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onAddNote={addNote} />, slots.header)}
       {slots && mode === 'day' && createPortal(<DayBottomStrip ctl={ctl} streak={streak} onOpenCoach={onOpenCoach} onOpenFeed={() => setDrawerOpen(true)} />, slots.bottom)}
       {slots && dayDrawerVisible && createPortal(
         <DayDrawer title={ctl.pendingPoint ? 'Nová poznámka' : ctl.selectedTrade ? 'Obchod' : 'Deník dne'} onClose={closeDayDrawer} escapeEnabled={!dictating && !ctl.placing && ctl.pendingPoint == null}>

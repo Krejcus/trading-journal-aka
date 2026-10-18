@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, ExternalLink, History, Mic, PenLine, Plus, RotateCcw, Trash2, X } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Download, ExternalLink, History, Mic, MoreHorizontal, PenLine, Plus, RotateCcw, Trash2, X, Archive } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import type { Trade } from '../../types';
 import {
   DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, DAY_SESSIONS, DAY_VERDICT_LABEL, editedAt, pragueClock,
@@ -117,7 +118,50 @@ export function ScopeSwitch({ ctl, fill = false, compact = false }: { ctl: DayCo
   );
 }
 
-export function DayHeaderBar({ ctl, onDictate, onOpenLegacy, onAddNote }: { ctl: DayController; onDictate: () => void; onOpenLegacy?: () => void; onAddNote?: () => void }) {
+/** Menu ⋯ v hlavičce deníku: Týden, archiv, původní deník dne a export (portál — hlavička se posouvá do stran). */
+function DayMoreMenu({ ctl, onOpenWeek, onOpenArchive, onOpenLegacy }: { ctl: DayController; onOpenWeek?: () => void; onOpenArchive?: () => void; onOpenLegacy?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ top: 0, right: 0 });
+  useEffect(() => {
+    if (!open) return;
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (rect) setPosition({ top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right) });
+    const close = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!menuRef.current?.contains(target) && !buttonRef.current?.contains(target)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    window.addEventListener('pointerdown', close, true);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', () => setOpen(false), { once: true });
+    return () => { window.removeEventListener('pointerdown', close, true); window.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const items = [
+    onOpenWeek && { label: 'Týden', icon: Calendar, run: onOpenWeek },
+    onOpenArchive && { label: 'Archiv deníku', icon: Archive, run: onOpenArchive },
+    onOpenLegacy && { label: 'Původní deník dne', icon: History, run: onOpenLegacy },
+    { label: 'Exportovat den', icon: Download, run: () => { void exportDay(ctl).catch(() => {}); } },
+  ].filter(Boolean) as { label: string; icon: typeof Calendar; run: () => void }[];
+  return (
+    <>
+      <button ref={buttonRef} type="button" className="dj-btn" onClick={() => setOpen(current => !current)} aria-haspopup="menu" aria-expanded={open} aria-label="Další" title="Týden, archiv, export" style={{ height: 34, width: 34, flex: 'none', borderRadius: 10, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--dj-muted)', border: '1px solid var(--dj-line)', background: open ? 'var(--dj-chip)' : 'transparent' }}><MoreHorizontal size={16} /></button>
+      {open && createPortal(
+        <div ref={menuRef} className="dj" role="menu" style={{ position: 'fixed', top: position.top, right: position.right, zIndex: 10050, width: 210, padding: 5, borderRadius: 12, border: '1px solid var(--dj-line)', background: 'var(--dj-card)', boxShadow: '0 18px 36px -18px rgba(15,23,42,0.45)', animation: 'dj-rise .18s ease both' }}>
+          {items.map(item => (
+            <button key={item.label} type="button" role="menuitem" className="dj-btn" onClick={() => { setOpen(false); item.run(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', height: 34, padding: '0 10px', borderRadius: 8, border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--dj-text)', font: '600 12.5px Inter, sans-serif', textAlign: 'left' }}>
+              <item.icon size={14} color="var(--dj-muted)" />{item.label}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+export function DayHeaderBar({ ctl, onDictate, onOpenLegacy, onOpenWeek, onOpenArchive, onAddNote }: { ctl: DayController; onDictate: () => void; onOpenLegacy?: () => void; onOpenWeek?: () => void; onOpenArchive?: () => void; onAddNote?: () => void }) {
   const action = primaryAction(ctl);
   const placing = ctl.placing === 'note';
   // Jeden řádek bez zalamování: na užší šířce jen ikony a kratší popisky.
@@ -133,7 +177,6 @@ export function DayHeaderBar({ ctl, onDictate, onOpenLegacy, onAddNote }: { ctl:
     return () => observer.disconnect();
   }, []);
   const actionLabel = action && tight ? action.label.replace('New York', 'NY') : action?.label;
-  const iconButton: React.CSSProperties = { height: 34, width: 34, flex: 'none', borderRadius: 10, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--dj-muted)', border: '1px solid var(--dj-line)', background: 'transparent' };
   return (
     <header ref={headerRef} className="dj" style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: 8, padding: '8px 14px', overflowX: 'auto', scrollbarWidth: 'none', whiteSpace: 'nowrap', borderBottom: '1px solid var(--dj-line)', background: 'radial-gradient(40% 180% at 0% 0%, rgba(16,185,129,0.10), transparent 70%), var(--dj-card)' }}>
       <DayNav ctl={ctl} />
@@ -146,8 +189,7 @@ export function DayHeaderBar({ ctl, onDictate, onOpenLegacy, onAddNote }: { ctl:
           <Plus size={14} />{placing ? 'Klikni do grafu…' : tight ? null : 'Poznámka'}
         </button>
       )}
-      <button type="button" className="dj-btn" onClick={() => { void exportDay(ctl).catch(() => {}); }} title="Exportovat den (Markdown — pro jiné AI nebo archiv)" aria-label="Exportovat den" style={iconButton}><Download size={15} /></button>
-      {onOpenLegacy && <button type="button" className="dj-btn" onClick={onOpenLegacy} title="Původní deník dne (starší přípravy a hodnocení)" style={iconButton} aria-label="Původní deník dne"><History size={15} /></button>}
+      <DayMoreMenu ctl={ctl} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onOpenLegacy={onOpenLegacy} />
       {action && (
         <button type="button" className="dj-btn" onClick={() => (action.kind === 'prep' ? ctl.openPrep(action.session) : ctl.openClose(action.session))} style={{ height: 34, flex: 'none', padding: '0 12px', borderRadius: 10, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', font: '700 12.5px Inter, sans-serif', ...(action.kind === 'prep'
           ? { color: 'var(--dj-indigo-text)', border: '1px solid rgba(99,102,241,0.45)', background: 'rgba(99,102,241,0.12)' }

@@ -57,6 +57,24 @@ let loadedDashboard: DashboardModule | null = null;
 /** Jak často se otevřená appka ptá na nový stav deníku. Se živým deníkem
  * (kontrolní body, 14. 10.) čte import jen okno od bodu, takže stačí levně. */
 const JOURNAL_SYNC_INTERVAL_MS = 20_000;
+/**
+ * Deník dne: příprava i uzavření platí pro všechny účty, horní lišta s filtry
+ * je na něm schovaná — vlastní, plně otevřené filtry (všechny účty i dny),
+ * stejně jako výchozí stav Historie (bez ušlých obchodů).
+ */
+const JOURNAL_DAY_FILTERS: TradeFilters = {
+  days: ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'],
+  hours: Array.from({ length: 24 }, (_, i) => i),
+  accounts: [],
+  directions: ['Long', 'Short'],
+  outcomes: ['Win', 'Loss', 'BE'],
+  period: 'all',
+  signals: [],
+  executionStatuses: ['Valid', 'Invalid'],
+  htfConfluences: [],
+  ltfConfluences: [],
+  mistakes: [],
+};
 const loadDashboard = () => import('./components/Dashboard').then(module => {
   loadedDashboard = module;
   return module;
@@ -3281,6 +3299,8 @@ const App: React.FC = () => {
   const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
   // Původní deník dne (starší přípravy a hodnocení) — nový pohled dne je výchozí.
   const [legacyDailyJournal, setLegacyDailyJournal] = useState(false);
+  // Deník dne bez horní lišty (záložky a filtry na něm nic nedělají).
+  const journalImmersive = activePage === 'journal' && dashboardMode !== 'backtesting' && journalActiveTab === 'daily' && !legacyDailyJournal;
   const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTab>('trading');
   const [businessActiveTab, setBusinessActiveTab] = useState<'financials' | 'goals'>('financials');
   const [historyLayoutMode, setHistoryLayoutMode] = useState<'grid' | 'table'>('grid');
@@ -3377,6 +3397,10 @@ const App: React.FC = () => {
   ), [trades, accounts, archivedAccounts, filters, dashboardMode]);
   const filteredDisplayTrades = useMemo(() => viewMode === 'combined'
     ? aggregateHistoryTrades(baseFilteredTrades) : baseFilteredTrades, [baseFilteredTrades, viewMode]);
+  // Deník dne: všechny účty sloučeně, nezávisle na (schovaných) filtrech.
+  const journalDayTrades = useMemo(() => aggregateHistoryTrades(filterHistoryTrades(
+    trades, accounts, archivedAccounts, JOURNAL_DAY_FILTERS, 'combined',
+  )), [trades, accounts, archivedAccounts]);
   const historyWarmupTrades = useMemo(() => filteredDisplayTrades.slice(0, 20), [filteredDisplayTrades]);
   const historyWarmupKey = useMemo(() => historyWarmupTrades.map(trade => [
     String(trade.id),
@@ -4141,7 +4165,8 @@ const App: React.FC = () => {
             <feDisplacementMap in="SourceGraphic" in2="map" scale={20} xChannelSelector="R" yChannelSelector="G" />
           </filter>
         </svg>
-        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all rounded-lg floating-glass-header header-clear ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${isNetworkSpectating ? 'hidden' : ''}`}>
+        {/* Deník dne na desktopu: lišta odjede nahoru, deník zabere uvolněné místo. */}
+        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all duration-500 ease-out rounded-lg floating-glass-header header-clear ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${journalImmersive ? 'lg:-translate-y-[160%] lg:opacity-0 lg:pointer-events-none' : ''} ${isNetworkSpectating ? 'hidden' : ''}`}>
           {/* Vizuál headeru dělá CSS: gradient tint + border + stín + lupa přes backdrop-filter:url(#liquid-glass). */}
           <div className="flex items-center gap-3 relative z-10">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
@@ -4439,7 +4464,7 @@ const App: React.FC = () => {
             onRefresh={handleRefreshData}
             disabled={inNativeShell || !session || loading}
           >
-            <div className={`flex-1 overflow-x-hidden px-4 lg:px-8 pb-12 pt-[80px] lg:pt-[96px] ${inNativeShell ? `native-page-scroll-content ${activePage === 'accounts' || activePage === 'live' ? 'native-page-scroll-content-extra' : ''}` : ''}`}>
+            <div className={`flex-1 overflow-x-hidden px-4 lg:px-8 pb-12 pt-[80px] ${journalImmersive ? 'lg:pt-6 lg:pb-6' : 'lg:pt-[96px]'} transition-[padding] duration-500 ease-out ${inNativeShell ? `native-page-scroll-content ${activePage === 'accounts' || activePage === 'live' ? 'native-page-scroll-content-extra' : ''}` : ''}`}>
               {syncError && (
                 <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
                   <AlertTriangle size={16} />
@@ -4662,7 +4687,7 @@ const App: React.FC = () => {
 
                   {activePage === 'journal' && dashboardMode !== 'backtesting' && journalActiveTab === 'daily' && !legacyDailyJournal && (
                     <DayJournalView
-                      trades={filteredDisplayTrades}
+                      trades={journalDayTrades}
                       allTrades={trades}
                       sessions={activeSessions}
                       isDark={theme !== 'light'}
@@ -4670,7 +4695,10 @@ const App: React.FC = () => {
                       onUpdateTrade={handleUpdateTrade}
                       onOpenTrade={trade => setAiChatTrade(trade)}
                       onOpenLegacy={() => setLegacyDailyJournal(true)}
+                      onOpenWeek={() => setJournalActiveTab('weekly')}
+                      onOpenArchive={() => setJournalActiveTab('archives')}
                       onOpenCoach={() => setActivePage('ai')}
+                      immersive={journalImmersive}
                     />
                   )}
 
