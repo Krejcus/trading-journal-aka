@@ -30,7 +30,7 @@ interface OverlayState {
   onSelect: (id: string | null) => void;
   onPick: (point: DayPinPoint) => void;
   onCancelPlacing: () => void;
-  fx: { key: number; session: DaySession; sub: string } | null;
+  fx: { key: number; session: DaySession | 'day'; sub: string } | null;
 }
 
 /** Malý externí store: vrstva poznámek se překreslí bez překreslení workspace. */
@@ -73,13 +73,13 @@ function PanelOverlay({ panel, store }: { panel: WorkspacePanelOverlay; store: O
 }
 
 /** Přepnutí London ↔ NY: záblesk přes graf a jmenovka session. */
-function SessionSwitchFx({ session, sub }: { session: DaySession; sub: string }) {
+function SessionSwitchFx({ session, sub }: { session: DaySession | 'day'; sub: string }) {
   const tint = SESSION_STYLE[session].tint;
   return (
     <div aria-hidden="true" style={{ position: 'absolute', inset: 0, zIndex: 30, pointerEvents: 'none', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(2,6,23,0.35)', animation: 'dj-dim .8s ease both' }} />
       <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: '45%', background: `linear-gradient(90deg,transparent,${tint}0.28),transparent)`, animation: 'dj-wipe .8s cubic-bezier(.4,0,.2,1) both' }} />
-      <div className="dj" style={{ position: 'absolute', left: '50%', top: '46%', padding: '12px 22px', borderRadius: 14, textAlign: 'center', animation: 'dj-badge .95s cubic-bezier(.2,.9,.3,1) both', color: session === 'ny' ? '#ffedd5' : 'var(--dj-blue-text)', background: session === 'ny' ? 'rgba(67,20,7,0.85)' : 'rgba(23,37,84,0.85)', border: `1px solid ${tint}0.6)`, boxShadow: `0 20px 50px -12px ${tint}0.55)` }}>
+      <div className="dj" style={{ position: 'absolute', left: '50%', top: '46%', padding: '12px 22px', borderRadius: 14, textAlign: 'center', animation: 'dj-badge .95s cubic-bezier(.2,.9,.3,1) both', color: session === 'ny' ? '#ffedd5' : session === 'day' ? '#e2e8f0' : 'var(--dj-blue-text)', background: session === 'ny' ? 'rgba(67,20,7,0.85)' : session === 'day' ? 'rgba(15,23,42,0.85)' : 'rgba(23,37,84,0.85)', border: `1px solid ${tint}0.6)`, boxShadow: `0 20px 50px -12px ${tint}0.55)` }}>
         <span style={{ display: 'block', fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em' }}>{SESSION_STYLE[session].name}</span>
         <span className="dj-mono" style={{ display: 'block', marginTop: 2, fontSize: 11.5, fontWeight: 600, opacity: 0.8 }}>{sub}</span>
       </div>
@@ -166,6 +166,24 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
       : `${money(ctl.sessionStats[next].pnl)} · ${ctl.sessionStats[next].count} obchodů`;
     setFx({ key: Date.now(), session: next, sub });
   }, [ctl, mode, session]);
+  // Deník: přepnutí Celý den / London / New York dostane stejný záblesk
+  // s nápisem přes graf jako přepnutí seance v přípravě.
+  const previousScopeRef = useRef(ctl.scope);
+  useEffect(() => {
+    const previous = previousScopeRef.current;
+    previousScopeRef.current = ctl.scope;
+    if (mode !== 'day' || previous === ctl.scope) return;
+    const target = ctl.scope;
+    const stats = target === 'day'
+      ? { pnl: ctl.sessionStats.london.pnl + ctl.sessionStats.ny.pnl, count: ctl.dayTrades.length }
+      : ctl.sessionStats[target];
+    const count = `${stats.count} ${stats.count === 1 ? 'obchod' : stats.count > 1 && stats.count < 5 ? 'obchody' : 'obchodů'}`;
+    const clockText = (ms: number) => new Intl.DateTimeFormat('cs-CZ', { timeZone: 'Europe/Prague', hour: '2-digit', minute: '2-digit' }).format(ms);
+    const sub = target === 'day'
+      ? `${money(stats.pnl)} · ${count}`
+      : `${clockText(ctl.windows[target].start)}–${clockText(ctl.windows[target].end)} · ${money(stats.pnl)} · ${count}`;
+    setFx({ key: Date.now(), session: target, sub });
+  }, [ctl.dayTrades.length, ctl.scope, ctl.sessionStats, ctl.windows, mode]);
   useEffect(() => {
     if (!fx) return;
     const timer = window.setTimeout(() => setFx(null), 1000);
