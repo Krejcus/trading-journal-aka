@@ -3713,7 +3713,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       );
       drawingMagnetResolverRef.current = resolveMagnetPoint;
       drawingMagnetCleanupRef.current = installDrawingMagnet(engine, resolveMagnetPoint);
-      if (replayActive) {
+      // Průběh Long/Short boxu jako v TradingView: po zasažení entry čárkovaná
+      // čára k aktuální ceně a box se vyplňuje — v přehrávání i na běžném
+      // grafu (bez přehrávání jsou „viditelné“ všechny svíčky).
+      {
         const positionProgressRenderer: IPrimitivePaneRenderer = {
           draw: target => {
             target.useMediaCoordinateSpace(({ context }) => {

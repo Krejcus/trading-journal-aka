@@ -34,7 +34,7 @@ const firstIndexAtOrAfter = (candles: MarketCandle[], time: number): number => {
 };
 
 /**
- * Derives the replay-only visual progress of a Long/Short Position drawing.
+ * Derives the visual progress (replay or plain chart) of a Long/Short Position drawing.
  * Nothing is persisted back into the drawing: its planned width and anchors
  * therefore remain fully editable while the replay advances.
  */
