@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Drawing, DrawingToolId } from '@getcandlekit/charts';
-import { ChevronDown, Lock, Magnet, Maximize2, Mic, Minimize2, PenLine, RotateCcw, StickyNote, Trash2, Type, Unlock, X } from 'lucide-react';
+import { ChevronDown, Lock, Magnet, Maximize2, Mic, Minimize2, Pause, PenLine, Play, RotateCcw, SkipBack, SkipForward, StepBack, StepForward, StickyNote, Trash2, Type, Unlock, X } from 'lucide-react';
 import type { Trade } from '../../types';
 import CandleKitTradeChart, { ALPHATRADE_DRAWING_TOOLS } from '../CandleKitTradeChart';
 import { QuantumSpinner } from '../QuantumLoader';
@@ -12,6 +12,7 @@ import { tradeChartTiming } from '../../services/tradeChartData';
 import { getDrawingMagnetSettings, setDrawingMagnetSettings, subscribeDrawingMagnetSettings } from '../../services/chartDrawingMagnet';
 import { setNativeShellTabBarHidden } from '../../utils/nativeShell';
 import { installChartWorkspaceSync } from '../../services/chartWorkspaceSync';
+import { DAY_REPLAY_SPEEDS, candlesUntil, dayReplayRange, dayReplayTickMs, stepDayReplay, type DayReplaySpeed } from '../../lib/dayReplay';
 import {
   DAY_CHART_TIMEFRAMES, DAY_DRAW_COLORS, DAY_DRAW_TOOLS, DAY_PATH_TOOL, dayDrawColorOf, dayDrawStyle,
   pathGroupOf, pathSegmentIds, type DayDrawColorId,
@@ -31,6 +32,7 @@ const shortDay = (day: string) => SHORT_DAY.format(new Date(`${day}T12:00:00Z`))
 const TOOL_BY_ID = new Map(ALPHATRADE_DRAWING_TOOLS.map(tool => [tool.id, tool]));
 const toolTitle = (tool: string | null) => (tool === DAY_PATH_TOOL ? 'Šipka' : tool ? DAY_DRAW_TOOLS.find(item => item.id === tool)?.label ?? TOOL_BY_ID.get(tool)?.title ?? tool : '');
 const WIDTHS = [1, 2, 3] as const;
+const SCOPE_LABEL: Record<'day' | 'london' | 'ny', string> = { day: 'Celý den', london: 'London', ny: 'New York' };
 
 /**
  * Graf dne přes celou obrazovku telefonu (docs/DAY_CHART_PHONE_FULLSCREEN.md,
@@ -132,7 +134,31 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
   }, [onClose, textEdit]);
 
   // ── Svíčky a záběr (stejné jako kompaktní graf) ───────────────────────
-  const raw = ctl.chart.candles;
+  const fullRaw = ctl.chart.candles;
+  // ── Přehrávání (lišta dole, schválený návrh): kurzor nad 1m svíčkami dne ──
+  const [replayOn, setReplayOn] = useState(false);
+  const [replayCursor, setReplayCursor] = useState<number | null>(null);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<DayReplaySpeed>(3);
+  const [speedSheet, setSpeedSheet] = useState(false);
+  const replayRange = useMemo(() => dayReplayRange(fullRaw.map(candle => candle.time), Math.floor(range.from / 1000)), [fullRaw, range.from]);
+  const startReplay = () => {
+    if (!replayRange) return;
+    setReplayOn(true); setReplayCursor(replayRange.start); setReplayPlaying(false);
+  };
+  const stopReplay = () => { setReplayOn(false); setReplayCursor(null); setReplayPlaying(false); setSpeedSheet(false); };
+  useEffect(() => {
+    if (!replayPlaying || !replayRange) return;
+    const timer = window.setInterval(() => {
+      setReplayCursor(current => {
+        const next = stepDayReplay(current ?? replayRange.start, 1, replayRange);
+        if (next >= replayRange.end) setReplayPlaying(false);
+        return next;
+      });
+    }, dayReplayTickMs(replaySpeed));
+    return () => window.clearInterval(timer);
+  }, [replayPlaying, replayRange, replaySpeed]);
+  const raw = useMemo(() => (replayOn ? candlesUntil(fullRaw, replayCursor) : fullRaw), [fullRaw, replayCursor, replayOn]);
   const candles = useMemo(() => aggregateCandles(raw, timeframe), [raw, timeframe]);
   const barTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
   const secondCandles = useMemo(() => (landscape ? aggregateCandles(raw, secondTimeframe) : []), [landscape, raw, secondTimeframe]);
@@ -311,6 +337,8 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
             drawingKeyId={`day:${ctl.day}`}
             drawingScope="day"
             drawingHitTolerance={14}
+            replayActive={replayOn}
+            replayCursorTime={replayOn ? replayCursor : null}
             onChartApiReady={setApi}
             onToggleFvg={() => toggleIndicator('fvg')}
             onToggleLevels={() => toggleIndicator('levels')}
@@ -381,6 +409,8 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
               drawingKeyId={`day:${ctl.day}`}
               drawingScope="day"
               drawingHitTolerance={14}
+              replayActive={replayOn}
+              replayCursorTime={replayOn ? replayCursor : null}
               onChartApiReady={setSecondApi}
               onToggleFvg={() => toggleIndicator('fvg')}
               onToggleLevels={() => toggleIndicator('levels')}
@@ -451,12 +481,44 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
         )}
       </div>
 
-      {!chromeHidden && (
+      {!chromeHidden && replayOn && replayRange && (
+        <div role="toolbar" aria-label="Přehrávání" style={{ ...bar, gap: 2, justifyContent: 'space-between' }}>
+          <button type="button" className="dj-btn" aria-label="Na začátek" onClick={() => { setReplayPlaying(false); setReplayCursor(replayRange.start); }} style={iconButton}><SkipBack size={18} /></button>
+          <button type="button" className="dj-btn" aria-label="O svíčku zpět" onClick={() => { setReplayPlaying(false); setReplayCursor(current => stepDayReplay(current ?? replayRange.start, -1, replayRange)); }} style={iconButton}><StepBack size={18} /></button>
+          <button type="button" className="dj-btn" aria-label={replayPlaying ? 'Pauza' : 'Přehrát'} onClick={() => { if (!replayPlaying && (replayCursor ?? 0) >= replayRange.end) setReplayCursor(replayRange.start); setReplayPlaying(playing => !playing); }} style={{ ...iconButton, width: 48, height: 44, borderRadius: 14, color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' }}>{replayPlaying ? <Pause size={20} /> : <Play size={20} />}</button>
+          <button type="button" className="dj-btn" aria-label="O svíčku vpřed" onClick={() => { setReplayPlaying(false); setReplayCursor(current => stepDayReplay(current ?? replayRange.start, 1, replayRange)); }} style={iconButton}><StepForward size={18} /></button>
+          <button type="button" className="dj-btn" aria-label="Na konec" onClick={() => { setReplayPlaying(false); setReplayCursor(replayRange.end); }} style={iconButton}><SkipForward size={18} /></button>
+          <button type="button" className="dj-btn" aria-label={`Rychlost ${replaySpeed}×`} onClick={() => setSpeedSheet(true)} style={{ ...chip, minWidth: 44, justifyContent: 'center', fontWeight: 800 }}>{replaySpeed}×</button>
+          <span className="dj-mono" style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--dj-text-2)', minWidth: 38, textAlign: 'center' }}>{replayCursor != null ? new Intl.DateTimeFormat('cs-CZ', { timeZone: 'Europe/Prague', hour: '2-digit', minute: '2-digit' }).format(replayCursor * 1000) : ''}</span>
+          <button type="button" className="dj-btn" aria-label="Ukončit přehrávání" onClick={stopReplay} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={17} /></button>
+        </div>
+      )}
+      {speedSheet && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
+          <div onClick={() => setSpeedSheet(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)' }} />
+          <section aria-label="Rychlost přehrávání" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .24s ease both' }}>
+            <p style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 800 }}>Rychlost přehrávání</p>
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${DAY_REPLAY_SPEEDS.length}, minmax(0, 1fr))`, gap: 8 }}>
+              {DAY_REPLAY_SPEEDS.map(item => (
+                <button key={item} type="button" className="dj-btn" aria-pressed={replaySpeed === item} onClick={() => { setReplaySpeed(item); setSpeedSheet(false); }} style={{ height: 48, borderRadius: 12, cursor: 'pointer', font: '800 15px Inter, sans-serif', border: '1px solid var(--dj-line)', background: replaySpeed === item ? 'var(--dj-seg-on)' : 'var(--dj-chip)', color: replaySpeed === item ? 'var(--dj-seg-on-ink)' : 'var(--dj-text)' }}>{item}×</button>
+              ))}
+            </div>
+            <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--dj-muted)' }}>1× = minuta trhu za 0,6 s. Svíčky přibývají po minutě od začátku zvolené seance.</p>
+          </section>
+        </div>
+      )}
+      {!chromeHidden && !replayOn && (
         <div style={bar}>
-          <div style={{ flex: narrow ? 1 : 'none', minWidth: 0 }}><ScopeSwitch ctl={ctl} fill={narrow} /></div>
-          {!narrow && <span style={{ flex: 1 }} />}
+          {narrow ? (
+            // Úzký displej: rozsah jako jeden čip (Den → LDN → NY), ať se pruh vejde.
+            <button type="button" className="dj-btn" aria-label={`Rozsah: ${SCOPE_LABEL[ctl.scope]}, další`} onClick={() => ctl.setScope(ctl.scope === 'day' ? 'london' : ctl.scope === 'london' ? 'ny' : 'day')} style={{ ...chip, height: 36, padding: '0 12px', gap: 7, fontWeight: 800 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 9, background: ctl.scope === 'london' ? '#3b82f6' : ctl.scope === 'ny' ? '#f97316' : '#94a3b8' }} />{SCOPE_LABEL[ctl.scope]}
+            </button>
+          ) : <ScopeSwitch ctl={ctl} />}
+          <span style={{ flex: 1 }} />
           <button type="button" className="dj-btn" aria-label="Poznámka do grafu" aria-pressed={placing === 'note'} onClick={() => { cancelTool(); ctl.setPendingPoint(null); ctl.setPlacing(placing === 'note' ? null : 'note'); }} style={{ ...iconButton, ...(placing === 'note' ? { color: '#1c1203', background: '#fbbf24' } : {}) }}><StickyNote size={18} /></button>
           <button type="button" className="dj-btn" aria-label="Poznámka hlasem" aria-pressed={placing === 'voice'} onClick={() => { cancelTool(); onVoice(); }} style={{ ...iconButton, ...(placing === 'voice' ? { color: '#fff', background: '#f43f5e' } : {}) }}><Mic size={18} /></button>
+          <button type="button" className="dj-btn" aria-label="Přehrávání" disabled={!replayRange} onClick={() => { cancelTool(); startReplay(); }} style={{ ...iconButton, opacity: replayRange ? 1 : 0.35 }}><Play size={18} /></button>
           <button type="button" className="dj-btn" aria-label="Skrýt ovládání" onClick={() => setChromeHidden(true)} style={iconButton}><Maximize2 size={17} /></button>
         </div>
       )}
