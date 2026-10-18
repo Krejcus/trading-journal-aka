@@ -1563,18 +1563,124 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 }
 
 .alphatrade-chart-drawing-bar.is-docked {
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 52px;
-  padding-top: 6px;
-  padding-bottom: 6px;
-  border-top: 0;
-  border-bottom: 0;
-  border-left: 0;
-  border-radius: 0;
-  box-shadow: none;
-  backdrop-filter: none;
+  /* Návrh „Aurora sklo“: plovoucí skleněný sloupec 44 px v 52px okraji
+     workspace. Výplň je vlastní, aby fungoval i bez backdrop-filter. */
+  top: 6px;
+  bottom: 6px;
+  left: 4px;
+  width: 44px;
+  gap: 2px;
+  padding: 5px 0;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 16px;
+  box-shadow: 0 18px 36px -20px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(15, 23, 42, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
+}
+
+.alphatrade-chart-drawing-bar.is-docked.is-dark {
+  color: #cbd5e1;
+  background: rgba(16, 23, 32, 0.55);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 18px 36px -16px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool,
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool-group,
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-remove-control {
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool {
+  border-radius: 10px;
+  transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool:hover,
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool:focus-visible {
+  color: #0f172a;
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.alphatrade-chart-drawing-bar.is-docked.is-dark .alphatrade-chart-tool:hover,
+.alphatrade-chart-drawing-bar.is-docked.is-dark .alphatrade-chart-tool:focus-visible {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* Aktivní nástroj = bílá „pilulka“ s modrou ikonou. */
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool.is-active,
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool.is-active:hover {
+  color: #2962ff;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.05);
+}
+
+.alphatrade-chart-drawing-bar.is-docked.is-dark .alphatrade-chart-tool.is-active,
+.alphatrade-chart-drawing-bar.is-docked.is-dark .alphatrade-chart-tool.is-active:hover {
+  color: #8aa2ff;
+  background: rgba(255, 255, 255, 0.13);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* Zapnutý přepínač (magnet) = modrá ikona s tečkou, ne plný čtverec. */
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool.is-magnet-active,
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool.is-magnet-active:hover {
+  color: #2962ff;
+  background: rgba(41, 98, 255, 0.1);
+}
+
+.alphatrade-chart-drawing-bar.is-docked.is-dark .alphatrade-chart-tool.is-magnet-active,
+.alphatrade-chart-drawing-bar.is-docked.is-dark .alphatrade-chart-tool.is-magnet-active:hover {
+  color: #8aa2ff;
+  background: rgba(138, 162, 255, 0.14);
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool.is-magnet-active::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Rozbalovací skupina: malý roh vpravo dole, šipka až při najetí. */
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool-group::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-bottom: 4px solid currentColor;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool-group-trigger {
+  right: -5px;
+  width: 11px;
+  height: 34px;
+  border-radius: 0 8px 8px 0;
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-tool-divider {
+  width: 18px;
+  margin: 6px 0;
+}
+
+.alphatrade-chart-drawing-bar.is-docked .alphatrade-chart-remove-menu-trigger {
+  top: 10px;
+  right: -5px;
 }
 
 .alphatrade-workspace-panel::after {

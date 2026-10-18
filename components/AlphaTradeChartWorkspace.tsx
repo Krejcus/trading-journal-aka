@@ -2749,7 +2749,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       <div className="flex flex-1 min-h-0">
       {review && <div ref={reviewLeftRef} className="shrink-0 flex min-h-0" />}
       <WorkspaceDataContext.Provider value={context}>
-        <div ref={workspaceViewportRef} className={`relative flex-1 min-w-0 min-h-0 ${isDark ? 'bg-[#070a0f]' : 'bg-white'}`}>
+        <div ref={workspaceViewportRef} className={`relative flex-1 min-w-0 min-h-0 ${isDark ? 'bg-[#070a0f]' : 'bg-[#eef1f5]'}`}>
           {quickOrderFeedback && <div
             role="status"
             className={`pointer-events-none absolute left-1/2 top-11 z-[700] -translate-x-1/2 rounded-md border px-3 py-2 text-[11px] font-bold shadow-lg ${quickOrderFeedback.ok

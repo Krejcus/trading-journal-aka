@@ -815,7 +815,9 @@ interface ToolIconProps {
   strokeWidth?: number;
 }
 
-const ToolSvg: React.FC<ToolIconProps & { children: React.ReactNode }> = ({ size = 24, className, strokeWidth = 0.95, children }) => (
+// Sada ikon lišty kreslení (návrh „Aurora sklo“): tah 1,5 px, zaoblené konce,
+// body kreslení jako kroužky — jednotné napříč lištou, menu i oblíbenými.
+const ToolSvg: React.FC<ToolIconProps & { children: React.ReactNode }> = ({ size = 20, className, strokeWidth = 1.5, children }) => (
   <svg
     width={size}
     height={size}
@@ -833,108 +835,85 @@ const ToolSvg: React.FC<ToolIconProps & { children: React.ReactNode }> = ({ size
 );
 
 const CursorToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M12 2.5v6.25M12 15.25v6.25M2.5 12h6.25M15.25 12h6.25" />
+  <path d="M12 3.5V9M12 15v5.5M3.5 12H9M15 12h5.5" /><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
 </ToolSvg>;
 const TrendLineToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M5.5 18.5l13-13" /><circle cx="5" cy="19" r="1.9" /><circle cx="19" cy="5" r="1.9" />
+  <path d="M6.5 17.5 17.5 6.5" /><circle cx="5.2" cy="18.8" r="1.8" /><circle cx="18.8" cy="5.2" r="1.8" />
 </ToolSvg>;
 const RayToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M5.5 18.5 12 12 21 3" /><circle cx="5" cy="19" r="1.9" /><circle cx="12" cy="12" r="1.9" />
+  <path d="M6.5 17.5 10.7 13.3M13.3 10.7 20.5 3.5" /><circle cx="5.2" cy="18.8" r="1.8" /><circle cx="12" cy="12" r="1.8" />
 </ToolSvg>;
 const ExtendedLineToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M2.5 21.5 21.5 2.5" /><circle cx="8" cy="16" r="1.75" /><circle cx="16" cy="8" r="1.75" />
+  <path d="M3 21 7.7 16.3M10.3 13.7 13.7 10.3M16.3 7.7 21 3" /><circle cx="9" cy="15" r="1.8" /><circle cx="15" cy="9" r="1.8" />
 </ToolSvg>;
 const HorizontalLineToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M3 12h18" /><circle cx="12" cy="12" r="1.9" />
+  <path d="M3.5 12h6.7M13.8 12h6.7" /><circle cx="12" cy="12" r="1.8" />
 </ToolSvg>;
 const HorizontalRayToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M5 12h16" /><circle cx="5" cy="12" r="1.9" />
+  <path d="M7 12h13.5" /><circle cx="5.2" cy="12" r="1.8" />
 </ToolSvg>;
 const VerticalLineToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M12 3v18" /><circle cx="12" cy="12" r="1.9" />
+  <path d="M12 3.5v6.7M12 13.8v6.7" /><circle cx="12" cy="12" r="1.8" />
 </ToolSvg>;
 const CrossLineToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M3 12h18M12 3v18" /><circle cx="12" cy="12" r="1.9" />
+  <path d="M3.5 12h6.7M13.8 12h6.7M12 3.5v6.7M12 13.8v6.7" /><circle cx="12" cy="12" r="1.8" />
 </ToolSvg>;
 const ArrowToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M5 19L19 5M13 5h6v6" />
+  <path d="M6 18 17.5 6.5M10 6h8v8" />
 </ToolSvg>;
 const TextToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M5 5h14M12 5v14M8.5 19h7" />
+  <path d="M6 6.5h12M12 6.5V19M9.5 19h5" />
 </ToolSvg>;
 const RectangleToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <rect x="4" y="5" width="16" height="14" rx=".7" />
+  <rect x="4" y="6.5" width="16" height="11" rx="2.5" />
 </ToolSvg>;
 const CircleToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <ellipse cx="12" cy="12" rx="8" ry="8.5" />
+  <ellipse cx="12" cy="12" rx="8" ry="7" />
 </ToolSvg>;
 const TriangleToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M12 4L21 20H3L12 4z" />
+  <path d="M12 5.2 20 18.5H4L12 5.2Z" />
 </ToolSvg>;
 const ParallelChannelToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M3 16 17 4M7 20 21 8" /><circle cx="3" cy="16" r="1.45" /><circle cx="17" cy="4" r="1.45" /><circle cx="7" cy="20" r="1.45" /><circle cx="21" cy="8" r="1.45" />
+  <path d="M4 15.5 15.5 4M8.5 20 20 8.5" /><path d="M6.25 17.75 17.75 6.25" opacity=".45" strokeDasharray="1.5 2.5" />
 </ToolSvg>;
 const PriceRangeToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M4 7h16M4 17h16M12 7v10M9.5 9.5L12 7l2.5 2.5M9.5 14.5L12 17l2.5-2.5" />
+  <path d="M7 4.5h10M7 19.5h10M12 7v10M9.5 9.5 12 7l2.5 2.5M9.5 14.5 12 17l2.5-2.5" />
 </ToolSvg>;
 const DateRangeToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M4 12h16M7 9l-3 3 3 3M17 9l3 3-3 3" />
+  <path d="M4.5 7v10M19.5 7v10M7 12h10M9.5 9.5 7 12l2.5 2.5M14.5 9.5 17 12l-2.5 2.5" />
 </ToolSvg>;
 const LongPositionToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M5.7 5.5H21M3 18.5h18" />
-  <circle cx="4.25" cy="5.5" r="1.45" />
-  <path d="M10 9v5h4" />
+  <rect x="4.5" y="4.5" width="15" height="7.5" rx="1.8" />
+  <rect x="4.5" y="12" width="15" height="7.5" rx="1.8" opacity=".45" />
+  <path d="m9 9.5 3-3 3 3" />
 </ToolSvg>;
 const ShortPositionToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M5.7 5.5H21M3 18.5h18" />
-  <circle cx="4.25" cy="5.5" r="1.45" />
-  <path d="M14 9h-4v2.5h4V14h-4" />
+  <rect x="4.5" y="4.5" width="15" height="7.5" rx="1.8" opacity=".45" />
+  <rect x="4.5" y="12" width="15" height="7.5" rx="1.8" />
+  <path d="m9 14.5 3 3 3-3" />
 </ToolSvg>;
 const FibToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M3 5h18M6 9h15M3 13h15M6 17h15" /><circle cx="4" cy="9" r="1.45" /><circle cx="20" cy="13" r="1.45" />
+  <path d="M4 5.5h16M4 10h16M4 14.5h16M4 19h16" opacity=".55" />
+  <path d="M5 18.5 19 6" /><circle cx="5" cy="18.5" r="1.3" fill="currentColor" stroke="none" /><circle cx="19" cy="6" r="1.3" fill="currentColor" stroke="none" />
 </ToolSvg>;
 const FibExtensionToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
-  <path d="M3 5h14M7 9h14M3 13h18M7 17h14" />
-  <path d="m4 19 5-5 5 3 6-12" />
-  <circle cx="4" cy="19" r="1.35" /><circle cx="9" cy="14" r="1.35" /><circle cx="14" cy="17" r="1.35" />
+  <path d="M4 5.5h16M4 12h16M4 18.5h16" opacity=".55" />
+  <path d="m4.5 18 5-6 4 3 6-10" />
+  <circle cx="4.5" cy="18" r="1.3" fill="currentColor" stroke="none" /><circle cx="9.5" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="13.5" cy="15" r="1.3" fill="currentColor" stroke="none" />
 </ToolSvg>;
-const MagnetToolIcon: React.FC<ToolIconProps & { strong?: boolean }> = ({ strong = false, size = 24, className }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    className={className}
-    aria-hidden="true"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.35"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path
-      d="M5.5 18.5V11a6.5 6.5 0 0 1 13 0v7.5h-4V11a2.5 2.5 0 0 0-5 0v7.5h-4Z"
-    />
-    <path d="M5.5 15.25h4M14.5 15.25h4" />
-    {strong && <path d="M7.5 20v2M5.75 21.5 7.5 23l1.75-1.5M16.5 20v2m-1.75-.5L16.5 23l1.75-1.5" />}
-  </svg>
+const MagnetToolIcon: React.FC<ToolIconProps & { strong?: boolean }> = ({ strong = false, size = 20, className }) => (
+  <ToolSvg size={size} className={className}>
+    <path d="M6.5 5h3.2v6.5a2.3 2.3 0 0 0 4.6 0V5h3.2v6.5a5.5 5.5 0 0 1-11 0V5Z" />
+    <path d="M6.5 8.5h3.2M14.3 8.5h3.2" />
+    {strong && <path d="M8.1 1.6v1.5M15.9 1.6v1.5" />}
+  </ToolSvg>
 );
-const KeepDrawingToolIcon: React.FC<ToolIconProps> = ({ size = 24, className }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    className={className}
-    aria-hidden="true"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.25"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="m5 16.5-.8 3.3 3.3-.8L18 8.5 15.5 6 5 16.5Z" />
-    <path d="m13.9 7.6 2.5 2.5M7.4 15.9l1.2 1.2" />
-    <path d="M13 17.5v-1.2a2.4 2.4 0 0 1 4.8 0v1.2M12 17.5h6.8v4H12z" />
-  </svg>
+const KeepDrawingToolIcon: React.FC<ToolIconProps> = ({ size = 20, className }) => (
+  <ToolSvg size={size} className={className}>
+    <path d="m4.6 15.4-.7 3.2 3.2-.7L16 9l-2.5-2.5-8.9 8.9Z" />
+    <path d="m12.2 7.8 2.5 2.5" />
+    <path d="M14.2 17.4v-.9a1.9 1.9 0 0 1 3.8 0v.9M13.4 17.4h5.4v3.6h-5.4z" />
+  </ToolSvg>
 );
 
 const ALPHATRADE_DRAWING_TOOLS: AlphaTradeDrawingTool[] = [
@@ -1355,7 +1334,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
         aria-label="Kurzor / výběr"
         aria-pressed={activeTool === null}
       >
-        <CursorToolIcon size={25} />
+        <CursorToolIcon size={20} />
       </button>
       {CHART_DRAWING_TOOL_GROUPS.map(group => {
         const selectedTool = ALPHATRADE_DRAWING_TOOL_MAP.get(
@@ -1377,7 +1356,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
               aria-keyshortcuts={selectedTool.shortcut}
               aria-pressed={activeTool === selectedTool.id}
             >
-              <Icon size={25} />
+              <Icon size={20} />
             </button>
             {hasMenu && <button
               type="button"
@@ -1428,7 +1407,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
                 className={selected ? 'is-selected' : ''}
                 onClick={() => selectToolFromGroup(toolId)}
               >
-                <MenuIcon size={23} />
+                <MenuIcon size={20} />
                 <span>{tool.title}</span>
                 {tool.shortcut && <kbd>{tool.shortcut.replace('Alt', '⌥')}</kbd>}
               </button>
@@ -1454,7 +1433,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
           aria-label={magnet.mode === 'off' ? 'Zapnout magnet' : 'Vypnout magnet'}
           aria-pressed={magnet.mode !== 'off'}
         >
-          <MagnetToolIcon size={25} strong={magnet.mode === 'strong'} />
+          <MagnetToolIcon size={20} strong={magnet.mode === 'strong'} />
         </button>
         <button
           type="button"
@@ -1494,7 +1473,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
               role="menuitemradio"
               aria-checked={magnet.lastEnabledMode === mode}
             >
-              <MagnetToolIcon size={23} strong={mode === 'strong'} />
+              <MagnetToolIcon size={20} strong={mode === 'strong'} />
               <span>{mode === 'weak' ? 'Slabý magnet' : 'Silný magnet'}</span>
             </button>
           ))}
@@ -1520,7 +1499,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
         aria-label={keepDrawing ? 'Vypnout opakované kreslení' : 'Zapnout opakované kreslení'}
         aria-pressed={keepDrawing}
       >
-        <KeepDrawingToolIcon size={24} />
+        <KeepDrawingToolIcon size={20} />
       </button>
       <button
         type="button"
@@ -1530,10 +1509,10 @@ export const AlphaTradeDrawingToolbar: React.FC<{
         aria-label={locked ? 'Odemknout ruční kresby' : 'Zamknout ruční kresby'}
         aria-pressed={locked}
       >
-        {locked ? <Lock size={22} strokeWidth={1.05} /> : <Unlock size={22} strokeWidth={1.05} />}
+        {locked ? <Lock size={19} strokeWidth={1.5} /> : <Unlock size={19} strokeWidth={1.5} />}
       </button>
       <button type="button" className={buttonClass()} onClick={() => engine.removeSelected()} title="Smazat vybranou kresbu" aria-label="Smazat vybranou kresbu" disabled={!hasSelection || locked}>
-        <Eraser size={22} strokeWidth={1.05} />
+        <Eraser size={19} strokeWidth={1.5} />
       </button>
       <div ref={removeControlRef} className="alphatrade-chart-remove-control">
         <button
@@ -1546,7 +1525,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
           aria-expanded={removeMenuOpen}
           disabled={drawingCount === 0 && indicatorCount === 0}
         >
-          <Trash2 size={22} strokeWidth={1.05} />
+          <Trash2 size={19} strokeWidth={1.5} />
         </button>
         <button
           type="button"
@@ -1603,7 +1582,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
         aria-label={favoriteTools.length ? `${favoritesVisible ? 'Skrýt' : 'Zobrazit'} panel oblíbených kreslicích nástrojů` : 'Panel oblíbených kreslicích nástrojů je prázdný'}
         aria-pressed={favoritesVisible && favoriteTools.length > 0}
         disabled={!favoriteTools.length}
-      ><Star size={23} strokeWidth={1.15} fill={favoritesVisible && favoriteTools.length ? 'currentColor' : 'none'} /></button>
+      ><Star size={19} strokeWidth={1.5} fill={favoritesVisible && favoriteTools.length ? 'currentColor' : 'none'} /></button>
       {docked && favoritesVisible && favoriteTools.length > 0 && createPortal(
         <div
           ref={favoritesToolbarRef}
@@ -1631,7 +1610,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
               title={tool.title}
               aria-label={`Oblíbený nástroj: ${tool.title}`}
               aria-pressed={activeTool === toolId}
-            ><FavoriteIcon size={22} /></button>;
+            ><FavoriteIcon size={20} /></button>;
           })}
         </div>,
         document.body,
