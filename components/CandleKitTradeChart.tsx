@@ -37,7 +37,6 @@ import {
   Check,
   ChevronDown,
   ChevronLeft,
-  ChevronRight,
   Eraser,
   Eye,
   EyeOff,
@@ -508,7 +507,7 @@ const ChartIndicatorLegend: React.FC<{
   };
 
   return (
-    <div ref={containerRef} data-snapshot-hide style={offsetForToolbar ? undefined : { left: 'var(--chart-left-inset, 8px)' }} className={`absolute top-11 z-30 text-[9px] ${offsetForToolbar ? 'left-14' : ''}`}>
+    <div ref={containerRef} data-snapshot-hide style={offsetForToolbar ? undefined : { left: 'var(--chart-left-inset, 8px)', transition: 'left 260ms cubic-bezier(.22,.61,.36,1)' }} className={`absolute top-11 z-30 text-[9px] ${offsetForToolbar ? 'left-14' : ''}`}>
       <button
         type="button"
         onClick={() => { setOpen(value => !value); setSettingsFor(null); }}
@@ -1024,12 +1023,22 @@ export const AlphaTradeDrawingToolbar: React.FC<{
   const [favoriteTools, setFavoriteTools] = useState(loadDrawingToolFavorites);
   const [favoritesVisible, setFavoritesVisible] = useState(loadDrawingFavoritesVisible);
   const [favoritesPosition, setFavoritesPosition] = useState(loadDrawingFavoritesPosition);
+  const [favoritesLeaving, setFavoritesLeaving] = useState(false);
+  const favoritesLeaveTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(favoritesLeaveTimerRef.current), []);
   const [keepDrawing, setKeepDrawing] = useState(loadKeepDrawing);
   const [toolGroupMenu, setToolGroupMenu] = useState<{
     id: ChartDrawingToolGroupId;
     left: number;
     top: number;
   } | null>(null);
+  // Sbalená lišta nenechá viset svá menu.
+  useEffect(() => {
+    if (!collapsed) return;
+    setToolGroupMenu(null);
+    setMagnetMenuOpen(false);
+    setRemoveMenuOpen(false);
+  }, [collapsed]);
   const magnetControlRef = useRef<HTMLDivElement>(null);
   const magnetMenuRef = useRef<HTMLDivElement>(null);
   const removeControlRef = useRef<HTMLDivElement>(null);
@@ -1276,11 +1285,20 @@ export const AlphaTradeDrawingToolbar: React.FC<{
   };
   const toggleFavoritesToolbar = () => {
     if (!favoriteTools.length) return;
-    setFavoritesVisible(current => {
-      const next = !current;
-      try { window.localStorage.setItem(DRAWING_TOOL_FAVORITES_VISIBLE_STORAGE_KEY, String(next)); } catch { /* private storage */ }
-      return next;
-    });
+    const next = !favoritesVisible;
+    try { window.localStorage.setItem(DRAWING_TOOL_FAVORITES_VISIBLE_STORAGE_KEY, String(next)); } catch { /* private storage */ }
+    window.clearTimeout(favoritesLeaveTimerRef.current);
+    if (next) {
+      setFavoritesLeaving(false);
+      setFavoritesVisible(true);
+      return;
+    }
+    // Panel nejdřív odjede (animace v CSS), pak se odmontuje.
+    setFavoritesLeaving(true);
+    favoritesLeaveTimerRef.current = window.setTimeout(() => {
+      setFavoritesLeaving(false);
+      setFavoritesVisible(false);
+    }, 170);
   };
   const toggleKeepDrawing = () => {
     const next = !keepDrawingRef.current;
@@ -1334,7 +1352,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
   const favoritesPortal = docked && favoritesVisible && favoriteTools.length > 0 && createPortal(
         <div
           ref={favoritesToolbarRef}
-          className={`alphatrade-chart-favorites-toolbar ${isDark ? 'is-dark' : ''}`}
+          className={`alphatrade-chart-favorites-toolbar ${isDark ? 'is-dark' : ''} ${favoritesLeaving ? 'is-leaving' : ''}`}
           style={{ left: favoritesPosition.left, top: favoritesPosition.top }}
           role="toolbar"
           aria-label="Oblíbené kreslicí nástroje"
@@ -1345,7 +1363,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
             onPointerDown={startFavoritesDrag}
             title="Přesunout panel"
             aria-label="Přesunout panel oblíbených nástrojů"
-          ><GripVertical size={14} /></button>
+          ><GripVertical size={12} /></button>
           {favoriteTools.map(toolId => {
             const tool = ALPHATRADE_DRAWING_TOOL_MAP.get(toolId);
             if (!tool) return null;
@@ -1358,27 +1376,19 @@ export const AlphaTradeDrawingToolbar: React.FC<{
               title={tool.title}
               aria-label={`Oblíbený nástroj: ${tool.title}`}
               aria-pressed={activeTool === toolId}
-            ><FavoriteIcon size={20} /></button>;
+            ><FavoriteIcon size={18} /></button>;
           })}
         </div>,
         document.body,
       );
 
-  if (docked && collapsed && onCollapsedChange) return (
-    <>
-      <button
-        type="button"
-        className={`alphatrade-chart-rail-expand ${isDark ? 'is-dark' : ''}`}
-        onClick={() => onCollapsedChange(false)}
-        title="Zobrazit lištu kreslení"
-        aria-label="Zobrazit lištu kreslení"
-      ><ChevronRight size={14} strokeWidth={2} /></button>
-      {favoritesPortal}
-    </>
-  );
-
   return (
-    <aside className={`alphatrade-chart-drawing-bar ${docked ? 'is-docked' : ''} ${isDark ? 'is-dark' : ''}`} aria-label="Kreslicí nástroje">
+    <>
+    <aside
+      className={`alphatrade-chart-drawing-bar ${docked ? 'is-docked' : ''} ${docked && collapsed ? 'is-collapsed' : ''} ${isDark ? 'is-dark' : ''}`}
+      aria-label="Kreslicí nástroje"
+      inert={docked && collapsed}
+    >
       <button
         type="button"
         className={buttonClass(activeTool === null)}
@@ -1636,17 +1646,21 @@ export const AlphaTradeDrawingToolbar: React.FC<{
         aria-pressed={favoritesVisible && favoriteTools.length > 0}
         disabled={!favoriteTools.length}
       ><Star size={19} strokeWidth={1.5} fill={favoritesVisible && favoriteTools.length ? 'currentColor' : 'none'} /></button>
-      {onCollapsedChange && (
-        <button
-          type="button"
-          className="alphatrade-chart-rail-collapse"
-          onClick={() => onCollapsedChange(true)}
-          title="Sbalit lištu kreslení (zůstanou oblíbené)"
-          aria-label="Sbalit lištu kreslení"
-        ><ChevronLeft size={12} strokeWidth={2} /></button>
-      )}
-      {favoritesPortal}
     </aside>
+    {/* Buňka na pravém boku lišty: sbalí ji (lišta odjede, buňka sjede k okraji)
+        a zase rozbalí; plovoucí oblíbené zůstávají. */}
+    {docked && onCollapsedChange && (
+      <button
+        type="button"
+        className={`alphatrade-chart-rail-toggle ${collapsed ? 'is-collapsed' : ''} ${isDark ? 'is-dark' : ''}`}
+        onClick={() => onCollapsedChange(!collapsed)}
+        title={collapsed ? 'Zobrazit lištu kreslení' : 'Sbalit lištu kreslení (zůstanou oblíbené)'}
+        aria-label={collapsed ? 'Zobrazit lištu kreslení' : 'Sbalit lištu kreslení'}
+        aria-expanded={!collapsed}
+      ><ChevronLeft size={13} strokeWidth={2} /></button>
+    )}
+    {favoritesPortal}
+    </>
   );
 };
 
@@ -5216,7 +5230,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         isDark={isDark}
         onOpenSettings={() => setDrawingSettingsOpen(true)}
       />}
-      <div style={{ left: 'var(--chart-left-inset, 8px)', maxWidth: `calc(100% - ${phoneLayout ? 88 : 64}px - var(--chart-left-inset, 8px))` }} className={`pointer-events-none absolute top-1.5 z-20 whitespace-nowrap text-[10px] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+      <div style={{ left: 'var(--chart-left-inset, 8px)', maxWidth: `calc(100% - ${phoneLayout ? 88 : 64}px - var(--chart-left-inset, 8px))`, transition: 'left 260ms cubic-bezier(.22,.61,.36,1)' }} className={`pointer-events-none absolute top-1.5 z-20 whitespace-nowrap text-[10px] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
         <div className="flex h-4 min-w-0 items-center gap-1.5" aria-label="Instrument a timeframe grafu">
           {chartSettings.statusLine.symbolTitle && (
             <>
