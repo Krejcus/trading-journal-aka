@@ -4955,3 +4955,79 @@ html:not(.light-theme) .dbe-ph-sheet { background: rgba(13, 18, 36, 0.98); }
 .dbe-lib { transition: opacity 0.25s, translate 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
 /* `animation: none` — vstupní animace s `both` by jinak držela plnou viditelnost. */
 .dbe-lib-dragging { animation: none; opacity: 0.28; translate: 0 40%; pointer-events: none; }
+
+/* Menu nástrojů, magnetu a mazání ve stylu lišty: stejné sklo a zaoblení. */
+.alphatrade-chart-tool-menu,
+.alphatrade-chart-magnet-menu,
+.alphatrade-chart-remove-menu {
+  color: #1e293b;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 14px;
+  box-shadow: 0 18px 36px -20px rgba(15, 23, 42, 0.4), 0 0 0 1px rgba(15, 23, 42, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
+}
+
+.alphatrade-chart-tool-menu.is-dark,
+.alphatrade-chart-magnet-menu.is-dark,
+.alphatrade-chart-remove-menu.is-dark {
+  color: #e2e8f0;
+  background: rgba(16, 23, 32, 0.78);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 18px 36px -16px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.alphatrade-chart-tool-menu-row,
+.alphatrade-chart-remove-menu > button,
+.alphatrade-chart-magnet-menu > button {
+  border-radius: 9px;
+}
+
+.alphatrade-chart-magnet-menu > button:hover,
+.alphatrade-chart-magnet-menu > button:focus-visible,
+.alphatrade-chart-magnet-menu > button.is-selected {
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.05);
+}
+
+.alphatrade-chart-magnet-menu.is-dark > button:hover,
+.alphatrade-chart-magnet-menu.is-dark > button:focus-visible,
+.alphatrade-chart-magnet-menu.is-dark > button.is-selected {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+.alphatrade-chart-tool-menu-row:hover,
+.alphatrade-chart-tool-menu-row:focus-within,
+.alphatrade-chart-tool-menu-row:has(> button:first-child.is-selected),
+.alphatrade-chart-remove-menu > button:hover,
+.alphatrade-chart-remove-menu > button:focus-visible {
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.05);
+}
+
+.alphatrade-chart-tool-menu-row:has(> button:first-child.is-selected) > button:first-child {
+  color: #2962ff;
+}
+
+.alphatrade-chart-tool-menu.is-dark .alphatrade-chart-tool-menu-row:hover,
+.alphatrade-chart-tool-menu.is-dark .alphatrade-chart-tool-menu-row:focus-within,
+.alphatrade-chart-tool-menu.is-dark .alphatrade-chart-tool-menu-row:has(> button:first-child.is-selected),
+.alphatrade-chart-remove-menu.is-dark > button:hover,
+.alphatrade-chart-remove-menu.is-dark > button:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+.alphatrade-chart-tool-menu.is-dark .alphatrade-chart-tool-menu-row:has(> button:first-child.is-selected) > button:first-child {
+  color: #8aa2ff;
+}
+
+.alphatrade-chart-magnet-menu > button.is-selected {
+  color: #2962ff;
+}
+
+.alphatrade-chart-magnet-menu.is-dark > button.is-selected {
+  color: #8aa2ff;
+}

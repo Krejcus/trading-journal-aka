@@ -1166,7 +1166,12 @@ export const AlphaTradeDrawingToolbar: React.FC<{
       toolGroupMenuRef.current?.querySelector<HTMLButtonElement>('button[role="menuitemradio"]')?.focus();
     });
     const close = (event: PointerEvent) => {
-      if (!toolGroupMenuRef.current?.contains(event.target as Node)) setToolGroupMenu(null);
+      const target = event.target as Element | null;
+      if (toolGroupMenuRef.current?.contains(target as Node)) return;
+      // Šipka otevřené skupiny menu zavře sama svým klikem (jinak by ho
+      // pointerdown zavřel a klik hned znovu otevřel).
+      if (target?.closest?.('.alphatrade-chart-tool-group-trigger[aria-expanded="true"]')) return;
+      setToolGroupMenu(null);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
