@@ -4,6 +4,7 @@ import type { DrawingEngine, DrawingStyle } from '@getcandlekit/charts';
 import { ChevronDown, GripVertical, ListChecks, Settings, Trash2, X, Zap } from 'lucide-react';
 import TradingViewColorPicker, { colorWithAlpha, splitColorAlpha } from './TradingViewColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
+import { useFloatingToolbarDrag } from '../hooks/useFloatingToolbarDrag';
 import {
   calculatePositionMetrics,
   normalizePositionSettings,
@@ -44,6 +45,7 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
   engine, drawing, onOpenSettings, onQuickOrder, quickOrderDisabled = false, quickOrderTitle, isDark = false,
 }) => {
   const glassButton = `flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${chartGlassButton(isDark)}`;
+  const { toolbarRef, position: toolbarPosition, startDrag } = useFloatingToolbarDrag<HTMLDivElement>();
   const [labelsOpen, setLabelsOpen] = useState(false);
   const labelsRef = useRef<HTMLDivElement>(null);
   const settings = normalizePositionSettings(drawing.style.position);
@@ -75,9 +77,18 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
     role="toolbar"
     aria-label={`${drawing.tool === 'LongPosition' ? 'Long' : 'Short'} position tools`}
     data-chart-overlay-menu
-    className={`absolute left-1/2 top-1 z-[121] flex -translate-x-1/2 items-center gap-0.5 rounded-xl p-1 ${chartGlassBar(isDark)}`}
+    ref={toolbarRef}
+    className={`absolute z-[121] flex items-center gap-0.5 rounded-xl p-1 ${toolbarPosition ? '' : 'left-1/2 top-1 -translate-x-1/2'} ${chartGlassBar(isDark)}`}
+    style={toolbarPosition ?? undefined}
     onPointerDown={event => event.stopPropagation()}
   >
+    <button
+      type="button"
+      aria-label="Přesunout nástroje pozice"
+      title="Přesunout"
+      onPointerDown={startDrag}
+      className={`flex h-7 w-5 min-w-5 cursor-move touch-none items-center justify-center rounded-lg ${isDark ? 'text-slate-600 hover:bg-white/5 hover:text-slate-300' : 'text-slate-400 hover:bg-white/60 hover:text-slate-700'}`}
+    ><GripVertical size={13} strokeWidth={1.5} /></button>
     <IndicatorTemplateMenu
       compact
       placement="bottom"
