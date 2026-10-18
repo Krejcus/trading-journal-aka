@@ -2594,7 +2594,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     <div className={`${embedded ? 'relative isolate h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
       {/* Review: řádek týdne a statistik nahoře, lišta grafu přímo nad grafem. */}
       {review && <div ref={reviewHeaderRef} className="shrink-0" />}
-      <div className={`relative z-[660] h-12 shrink-0 flex items-center gap-1 border-b ${toolbarSurface}`}>
+      <div className={`relative z-[660] h-10 shrink-0 flex items-center gap-1 border-b ${toolbarSurface}`}>
         <div className={`relative z-[120] flex h-full items-center gap-2 pl-2 pr-1 min-w-0 ${toolbarSurface}`}>
           <img
             src="/logos/at_logo_light_clean.png"
