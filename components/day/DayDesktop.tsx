@@ -67,7 +67,8 @@ function PanelOverlay({ panel, store }: { panel: WorkspacePanelOverlay; store: O
         nowTime={state.nowTime}
         bands={state.bands}
       />
-      {state.fx && panel.isActive && <SessionSwitchFx key={state.fx.key} session={state.fx.session} sub={state.fx.sub} />}
+      {/* Záblesk přepnutí seance/rozsahu ve všech grafech rozložení. */}
+      {state.fx && <SessionSwitchFx key={state.fx.key} session={state.fx.session} sub={state.fx.sub} />}
     </>
   );
 }
