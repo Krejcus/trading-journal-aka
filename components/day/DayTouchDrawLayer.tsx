@@ -119,6 +119,8 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     let pathLast: DrawingPoint | null = null;
     let pathIndex = 0;
     let lastTap: { at: number; x: number; y: number } | null = null;
+    /** Crosshair se od posledního bodu cesty pohnul (klepnutí bez posunu = konec, jako TV). */
+    let cursorMovedSincePoint = false;
 
     const offset = (touch: Touch) => {
       const rect = element.getBoundingClientRect();
@@ -294,6 +296,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
         syncPathDrag();
       } else if (cursor && touchLast) {
         cursor = clamp({ x: cursor.x + point.x - touchLast.x, y: cursor.y + point.y - touchLast.y });
+        cursorMovedSincePoint = true;
         followCursor();
       }
       touchLast = point;
@@ -315,9 +318,13 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       captured = false;
       if (moved) return; // tah jen posunul kurzor
       const now = Date.now();
-      const doubleTap = pathActive && lastTap && now - lastTap.at < DOUBLE_TAP_MS && touchLast && Math.hypot(touchLast.x - lastTap.x, touchLast.y - lastTap.y) < DOUBLE_TAP_PX;
+      const doubleTap = pathActive && (
+        (lastTap && now - lastTap.at < DOUBLE_TAP_MS && touchLast && Math.hypot(touchLast.x - lastTap.x, touchLast.y - lastTap.y) < DOUBLE_TAP_PX)
+        // Druhé klepnutí na stejný bod (crosshair se nepohnul) ukončí cestu i při pomalém dvojkliku.
+        || (pathIndex > 0 && !cursorMovedSincePoint));
       if (doubleTap) { endPath(); return; }
       placeAtCursor();
+      cursorMovedSincePoint = false;
       if (touchLast) lastTap = { at: now, x: touchLast.x, y: touchLast.y };
     };
 

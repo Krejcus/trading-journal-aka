@@ -239,6 +239,8 @@ interface CandleKitTradeChartProps {
   indicatorController?: IndicatorController | null;
   focusRequest?: number;
   hideFocusButton?: boolean;
+  /** Bez řádku OHLC v legendě (malý graf deníku na telefonu). */
+  hideOhlcLegend?: boolean;
   compactMode?: boolean;
   hideDrawingToolbar?: boolean;
   keyboardShortcutsActive?: boolean;
@@ -803,7 +805,7 @@ const initialCandleWindow = (
   };
 };
 
-interface AlphaTradeDrawingTool {
+export interface AlphaTradeDrawingTool {
   id: DrawingToolId;
   title: string;
   icon: React.ComponentType<ToolIconProps>;
@@ -918,7 +920,7 @@ const KeepDrawingToolIcon: React.FC<ToolIconProps> = ({ size = 20, className }) 
   </ToolSvg>
 );
 
-const ALPHATRADE_DRAWING_TOOLS: AlphaTradeDrawingTool[] = [
+export const ALPHATRADE_DRAWING_TOOLS: AlphaTradeDrawingTool[] = [
   { id: 'TrendLine', title: 'Trendová čára', icon: TrendLineToolIcon, shortcut: 'Alt+T' },
   { id: 'Ray', title: 'Paprsek', icon: RayToolIcon },
   { id: 'ExtendedLine', title: 'Prodloužená čára', icon: ExtendedLineToolIcon },
@@ -1889,6 +1891,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   indicatorSettingsOverride,
   onIndicatorSettingsSaved,
   phoneLayout = false,
+  hideOhlcLegend = false,
   replaySelecting = false,
   replaySelectionMinimumTime = null,
   replaySelectionCandles = [],
@@ -5311,7 +5314,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             ><Rewind size={9} fill="currentColor" /></span>
           )}
         </div>
-        <div className={`flex h-4 items-center gap-2 font-medium ${phoneLayout ? 'overflow-hidden' : ''} ${isDark ? 'text-slate-300' : 'text-slate-600'}`} aria-label="OHLC označené svíčky">
+        {/* Malý graf na telefonu (deník dne, ~250 px): řádek OHLC by se tloukl se štítky úrovní. */}
+        <div hidden={hideOhlcLegend} className={`flex h-4 items-center gap-2 font-medium ${phoneLayout ? 'overflow-hidden' : ''} ${isDark ? 'text-slate-300' : 'text-slate-600'}`} aria-label="OHLC označené svíčky">
           <span ref={ohlcValuesRef} hidden={!chartSettings.statusLine.chartValues} />
           <span ref={ohlcChangeRef} hidden={!chartSettings.statusLine.barChangeValues} />
           {chartSettings.statusLine.volume && <span ref={volumeValueRef} />}

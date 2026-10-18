@@ -94,6 +94,7 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
             isDark={isDark}
             compactMode
             phoneLayout
+            hideOhlcLegend
             compactToolbar
             hideDrawingToolbar
             hideFocusButton
