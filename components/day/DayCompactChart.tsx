@@ -141,6 +141,7 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
           pending={pending}
           nowTime={nowTime}
           bands={bands}
+          ticks={ctl.mindTicks}
         />
         {overlay}
       </div>

@@ -19,6 +19,7 @@ describe('poznámky dne v grafu obchodu', () => {
       note({ id: 'n2', time: null, price: null }),
       note({ id: 'n3', writtenAt: '2026-10-15T10:00:00Z' }),
       note({ id: 'n4', text: '   ' }),
+      note({ id: 'n5', origin: 'mind', session: 'day', text: 'Doma napětí' }),
     ])]);
     expect(notes.map(item => item.id)).toEqual(['day-note-n1', 'day-note-n3']);
     expect(notes[0].time % 60).toBe(0);

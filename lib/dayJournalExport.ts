@@ -2,8 +2,9 @@ import type { Trade } from '../types';
 import { tradeRMultiple } from '../utils/tradeRisk';
 import {
   DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, DAY_PHASE_LABEL, DAY_SESSIONS, DAY_SESSION_LABEL, DAY_VERDICT_LABEL, editedAt, notePhase, pragueClock, pragueDayKey,
-  type DayJournal, type SessionWindows,
+  type DayJournal, type DayNote, type SessionWindows,
 } from './dayJournal';
+import { MIND_AREA_LABEL, isMindArea } from './dayMind';
 import { planChoiceOf, tradeTimeMs } from './weeklyReview';
 
 /**
@@ -23,9 +24,13 @@ const edited = (writtenAt: string, updatedAt: string, day: string) => {
 };
 const trim = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const PLAN_LABEL = { yes: 'podle plánu', partial: 'částečně', no: 'mimo plán' } as const;
+const mindAreas = (note: DayNote) => (note.areas ?? []).filter(isMindArea).map(area => MIND_AREA_LABEL[area].toLowerCase());
 
-/** Kompaktní řádky pro systémový prompt kouče (víc dnů). */
-export function dayJournalCoachText(journals: readonly DayJournal[], windowsOf: (day: string) => SessionWindows, maxText = 300): string {
+/**
+ * Kompaktní řádky pro systémový prompt kouče (víc dnů). Poznámky Hlava
+ * (osobní) jen s `includeMind`, vždy označené jako osobní a s oblastmi.
+ */
+export function dayJournalCoachText(journals: readonly DayJournal[], windowsOf: (day: string) => SessionWindows, maxText = 300, { includeMind = false }: { includeMind?: boolean } = {}): string {
   const lines: string[] = [];
   for (const journal of [...journals].sort((a, b) => a.day.localeCompare(b.day))) {
     const windows = windowsOf(journal.day);
@@ -48,8 +53,18 @@ export function dayJournalCoachText(journals: readonly DayJournal[], windowsOf: 
       }
     }
     for (const note of journal.notes) {
-      const phase = DAY_PHASE_LABEL[notePhase(note, windows)];
       const anchor = note.time != null ? ` → ${pragueClock(note.time * 1000)}${note.price != null ? ` @ ${note.price}` : ''}` : '';
+      if (note.origin === 'mind') {
+        if (!includeMind) continue;
+        const areas = mindAreas(note);
+        dayLines.push(`   · HLAVA (osobní) zapsáno ${writtenLabel(note.writtenAt, journal.day)}${areas.length ? ` [${areas.join(', ')}]` : ''}${anchor}: ${trim(note.text, maxText)}`);
+        continue;
+      }
+      if (note.origin === 'week') {
+        dayLines.push(`   · plán na další týden (zapsáno ${writtenLabel(note.writtenAt, journal.day)}): ${trim(note.text, maxText)}`);
+        continue;
+      }
+      const phase = DAY_PHASE_LABEL[notePhase(note, windows)];
       dayLines.push(`   · pozn. zapsáno ${writtenLabel(note.writtenAt, journal.day)} [${phase}${note.voice ? ', hlasem' : ''}${note.origin === 'prep' ? ', z přípravy' : ''}${edited(note.writtenAt, note.updatedAt, journal.day)}]${anchor}: ${trim(note.text, maxText)}`);
     }
     if (dayLines.length) lines.push(`${journal.day}:`, ...dayLines);
@@ -93,11 +108,13 @@ export function dayJournalMarkdown(journal: DayJournal, trades: readonly Trade[]
       out.push('');
     }
   }
-  if (journal.notes.length) {
+  // Hlava je osobní — do exportu ani sdílení nikdy nejde.
+  const notes = journal.notes.filter(note => note.origin !== 'mind');
+  if (notes.length) {
     out.push('## Poznámky', '', '| Zapsáno | Fáze | Session | Ukazuje na | Text |', '|---|---|---|---|---|');
-    for (const note of journal.notes) {
+    for (const note of notes) {
       const anchor = note.time != null ? `${pragueClock(note.time * 1000)}${note.price != null ? ` @ ${note.price}` : ''}` : '—';
-      out.push(`| ${writtenLabel(note.writtenAt, journal.day)}${edited(note.writtenAt, note.updatedAt, journal.day).replace(',', ' ·')} | ${DAY_PHASE_LABEL[notePhase(note, windows)]}${note.voice ? ' (hlasem)' : ''} | ${DAY_SESSION_LABEL[note.session]} | ${anchor} | ${note.text.replace(/\|/g, '/').replace(/\n/g, ' ')} |`);
+      out.push(`| ${writtenLabel(note.writtenAt, journal.day)}${edited(note.writtenAt, note.updatedAt, journal.day).replace(',', ' ·')} | ${note.origin === 'week' ? 'plán na týden' : DAY_PHASE_LABEL[notePhase(note, windows)]}${note.voice ? ' (hlasem)' : ''} | ${DAY_SESSION_LABEL[note.session]} | ${anchor} | ${note.text.replace(/\|/g, '/').replace(/\n/g, ' ')} |`);
     }
     out.push('');
   }

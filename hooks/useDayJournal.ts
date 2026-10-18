@@ -13,7 +13,7 @@ import { deleteDayNote, loadDayJournal, loadDayJournalRange, saveDayClose, saveD
  * Klíče začínají `alphatrade_`, takže je odhlášení smaže (utils/appStorage).
  */
 
-export type NoteInput = Pick<DayNote, 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin'>;
+export type NoteInput = Pick<DayNote, 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin' | 'areas'>;
 
 const PENDING_PREFIX = 'alphatrade_day_journal_pending_';
 const pendingKey = (day: string) => `${PENDING_PREFIX}${day}`;
@@ -154,7 +154,7 @@ export function useDayJournal(day: string) {
     return note;
   }, [syncNote]);
 
-  const updateNote = useCallback(async (id: string, patch: Partial<Pick<DayNote, 'text' | 'time' | 'price'>>) => {
+  const updateNote = useCallback(async (id: string, patch: Partial<Pick<DayNote, 'text' | 'time' | 'price' | 'areas'>>) => {
     const target = dayRef.current;
     const original = journalRef.current.notes.find(note => note.id === id);
     if (!original) return;

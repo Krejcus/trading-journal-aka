@@ -19,7 +19,8 @@ const FRESH_MS = 60_000;
 export const dayNotesAsChartNotes = (journals: readonly DayJournal[]): ChartNote[] => journals.flatMap(journal => {
   const windows = sessionWindows(journal.day);
   return journal.notes
-    .filter(note => note.time !== null && note.price !== null && note.text.trim())
+    // Hlava (osobní) do grafu obchodu nejde — ten se snímkuje a sdílí.
+    .filter(note => note.origin !== 'mind' && note.time !== null && note.price !== null && note.text.trim())
     .map(note => ({
       id: `day-note-${note.id}`,
       time: Math.floor(note.time! / 60) * 60,

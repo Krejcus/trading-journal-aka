@@ -21,6 +21,9 @@
   --dj-amber: #fbbf24;
   --dj-amber-text: #fde68a;
   --dj-amber-bg-soft: rgba(120, 53, 15, 0.18);
+  --dj-mind: #a855f7;
+  --dj-mind-text: #e9d5ff;
+  --dj-mind-bg: rgba(88, 28, 135, 0.28);
   --dj-green: #34d399;
   --dj-green-text: #6ee7b7;
   --dj-rose: #fb7185;
@@ -48,6 +51,9 @@
   --dj-amber: #b45309;
   --dj-amber-text: #92400e;
   --dj-amber-bg-soft: rgba(245, 158, 11, 0.1);
+  --dj-mind: #a855f7;
+  --dj-mind-text: #7e22ce;
+  --dj-mind-bg: rgba(168, 85, 247, 0.1);
   --dj-green: #059669;
   --dj-green-text: #047857;
   --dj-rose: #e11d48;
@@ -103,6 +109,8 @@
 
 .dj-pin { transition: transform .15s ease; }
 .dj-pin:hover { transform: translate(-50%, -50%) scale(1.25) !important; }
+.dj-tick { transition: transform .15s ease; }
+.dj-tick:hover { transform: translate(-50%, -50%) rotate(45deg) scale(1.35) !important; }
 
 @keyframes dj-enter { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
 @keyframes dj-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }

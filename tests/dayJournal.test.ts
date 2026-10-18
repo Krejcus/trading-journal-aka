@@ -98,6 +98,18 @@ describe('upsert rows', () => {
     expect(() => noteUpsert(DAY, { ...note, id: 'x' }, now)).toThrow('day-journal-invalid-note');
   });
 
+  it('keeps Hlava notes with cleaned areas and drops areas on other kinds', () => {
+    const mind = { id: NOTE_ID, session: 'day' as const, text: 'Doma napětí', time: null, price: null, voice: false, origin: 'mind' as const, areas: ['rodina', 'rodina', 'Bad!', 'spanek'] };
+    const upsert = noteUpsert(DAY, mind, now);
+    expect(upsert.data).toMatchObject({ origin: 'mind', areas: ['rodina', 'spanek'] });
+    expect(noteUpsert(DAY, { ...mind, origin: 'feed' }, now).data).not.toHaveProperty('areas');
+    const parsed = parseDayJournalRows(DAY, [row({ kind: 'note', session: 'day', entry_key: `note:${NOTE_ID}`, data: upsert.data })]).notes[0];
+    expect(parsed).toMatchObject({ origin: 'mind', areas: ['rodina', 'spanek'] });
+    const week = parseDayJournalRows(DAY, [row({ kind: 'note', session: 'day', entry_key: `note:${NOTE_ID}`, data: { text: 'Plán', origin: 'week', areas: ['x'] } })]).notes[0];
+    expect(week).toMatchObject({ origin: 'week' });
+    expect(week).not.toHaveProperty('areas');
+  });
+
   it('generates RFC 4122 v4 ids', () => {
     expect(newDayNoteId()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });

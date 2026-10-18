@@ -13,8 +13,12 @@ export type DayBias = 'long' | 'neutral' | 'short';
 export type DayExecution = 'plan' | 'partial' | 'off';
 export type DayVerdict = 'ok' | 'bad' | 'na';
 export type DayNotePhase = 'prep' | 'live' | 'later';
-/** Kde poznámka vznikla: v přípravě, v grafu dne, nebo jako řádek feedu bez kotvy. */
-export type DayNoteOrigin = 'prep' | 'chart' | 'feed';
+/**
+ * Kde poznámka vznikla: v přípravě, v grafu dne, jako řádek feedu bez kotvy,
+ * „Hlava“ (osobní — život, hlava, rodina; nikdy do exportu) nebo víkendový
+ * plán na další týden.
+ */
+export type DayNoteOrigin = 'prep' | 'chart' | 'feed' | 'mind' | 'week';
 
 export const DAY_SESSIONS: readonly DaySession[] = ['london', 'ny'];
 export const DAY_TIME_ZONE = 'Europe/Prague';
@@ -60,6 +64,8 @@ export interface DayNote {
   price: number | null;
   voice: boolean;
   origin: DayNoteOrigin;
+  /** Oblasti života poznámky Hlava (rozpozná appka, uživatel může upravit). */
+  areas?: string[];
   writtenAt: string;
   updatedAt: string;
 }
@@ -96,7 +102,21 @@ const isScope = (value: unknown): value is DayScope => isDaySession(value) || va
 const isBias = (value: unknown): value is DayBias => value === 'long' || value === 'neutral' || value === 'short';
 const isExecution = (value: unknown): value is DayExecution => value === 'plan' || value === 'partial' || value === 'off';
 const isVerdict = (value: unknown): value is DayVerdict => value === 'ok' || value === 'bad' || value === 'na';
-const isOrigin = (value: unknown): value is DayNoteOrigin => value === 'prep' || value === 'chart' || value === 'feed';
+const isOrigin = (value: unknown): value is DayNoteOrigin => value === 'prep' || value === 'chart' || value === 'feed' || value === 'mind' || value === 'week';
+/** Osobní poznámka Hlava — nesmí do exportu ani sdílení. */
+export const isMindNote = (note: Pick<DayNote, 'origin'>) => note.origin === 'mind';
+export const DAY_AREA_MAX = 8;
+const AREA_RE = /^[a-z][a-z0-9-]{0,23}$/;
+export function cleanAreas(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !AREA_RE.test(item) || out.includes(item)) continue;
+    out.push(item);
+    if (out.length >= DAY_AREA_MAX) break;
+  }
+  return out;
+}
 
 const text = (value: unknown, max: number) => (typeof value === 'string' ? value : '').slice(0, max);
 const iso = (value: unknown, fallback: string) => {
@@ -179,6 +199,7 @@ export function parseDayJournalRow(row: DayJournalRow): { kind: 'prep'; value: D
         price: price != null && price > 0 ? price : null,
         voice: data.voice === true,
         origin: isOrigin(data.origin) ? data.origin : 'chart',
+        ...(data.origin === 'mind' ? { areas: cleanAreas(data.areas) } : {}),
         writtenAt,
         updatedAt,
       },
@@ -253,7 +274,7 @@ export function closeUpsert(day: string, close: Omit<DayClose, 'writtenAt' | 'cl
   };
 }
 
-export function noteUpsert(day: string, note: Pick<DayNote, 'id' | 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin'> & { writtenAt?: string }, now: Date): DayJournalUpsert {
+export function noteUpsert(day: string, note: Pick<DayNote, 'id' | 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin' | 'areas'> & { writtenAt?: string }, now: Date): DayJournalUpsert {
   const body = text(note.text, DAY_TEXT_MAX).trim();
   if (!isDayKey(day) || !isScope(note.session) || !UUID_RE.test(note.id) || !body) throw new Error('day-journal-invalid-note');
   return {
@@ -266,6 +287,7 @@ export function noteUpsert(day: string, note: Pick<DayNote, 'id' | 'session' | '
       price: note.price != null && Number.isFinite(note.price) && note.price > 0 ? note.price : null,
       voice: note.voice === true,
       origin: isOrigin(note.origin) ? note.origin : 'chart',
+      ...(note.origin === 'mind' ? { areas: cleanAreas(note.areas) } : {}),
     },
   };
 }

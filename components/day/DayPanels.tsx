@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, Download, ExternalLink, History, Mic, MoreHorizontal, PenLine, Plus, RotateCcw, Trash2, X, Archive } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Download, ExternalLink, History, Mic, MoreHorizontal, PenLine, Plus, RotateCcw, Trash2, X, Archive, Brain } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import type { Trade } from '../../types';
 import {
@@ -11,7 +11,8 @@ import { planChoiceOf, tradeTimeMs, type PlanChoice } from '../../lib/weeklyRevi
 import { tradeRMultiple } from '../../utils/tradeRisk';
 import { dayJournalMarkdown } from '../../lib/dayJournalExport';
 import { isNativeBuild } from '../../utils/runtimeConfig';
-import { PHASE_STYLE, SESSION_STYLE, MicButton, SpringSegmented, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
+import { MIND_STYLE, PHASE_STYLE, SESSION_STYLE, MicButton, NoteKindToggle, SpringSegmented, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
+import { MIND_AREAS, MIND_AREA_ICON, MIND_AREA_LABEL, isMindArea, mergeMindAreas } from '../../lib/dayMind';
 import type { DayController } from './useDayController';
 
 const DATE_LABEL = new Intl.DateTimeFormat('cs-CZ', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'UTC' });
@@ -323,8 +324,34 @@ export function TradeRating({ trade, onRate, size = 'md' }: { trade: Trade; onRa
   );
 }
 
+/** Oblasti Hlavy jako štítky; u vybrané poznámky jdou zapnout a vypnout. */
+function MindAreaChips({ ctl, note, editable }: { ctl: DayController; note: DayNote; editable: boolean }) {
+  const areas = (note.areas ?? []).filter(isMindArea);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = (area: (typeof MIND_AREAS)[number]) => {
+    const next = areas.includes(area) ? areas.filter(item => item !== area) : MIND_AREAS.filter(item => item === area || areas.includes(item));
+    ctl.updateNote(note.id, { areas: next }).then(() => setError(null), reason => setError(reason instanceof Error ? reason.message : 'Nepodařilo se uložit.'));
+  };
+  const shown = editable ? MIND_AREAS : areas;
+  if (!shown.length) return null;
+  return (
+    <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+      {shown.map(area => {
+        const on = areas.includes(area);
+        const chip: React.CSSProperties = { height: 20, padding: '0 7px', display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 6, fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap', fontFamily: 'inherit',
+          color: on ? 'var(--dj-mind-text)' : 'var(--dj-muted)', background: on ? 'var(--dj-mind-bg)' : 'transparent', border: `1px ${on ? 'solid' : 'dashed'} ${on ? 'rgba(168,85,247,0.35)' : 'var(--dj-line)'}` };
+        return editable
+          ? <button key={area} type="button" className="dj-btn" aria-pressed={on} onClick={() => toggle(area)} style={{ ...chip, cursor: 'pointer' }}>{MIND_AREA_ICON[area]} {MIND_AREA_LABEL[area]}</button>
+          : <span key={area} style={chip}>{MIND_AREA_ICON[area]} {MIND_AREA_LABEL[area]}</span>;
+      })}
+      {error && <span role="alert" style={{ flexBasis: '100%', fontSize: 11, color: 'var(--dj-rose)' }}>{error}</span>}
+    </span>
+  );
+}
+
 function NoteCard({ ctl, note, phase }: { ctl: DayController; note: DayNote; phase: keyof typeof PHASE_STYLE }) {
-  const style = PHASE_STYLE[phase];
+  const mind = note.origin === 'mind';
+  const style = mind ? MIND_STYLE : note.origin === 'week' ? { ...PHASE_STYLE.prep, label: 'plán na týden' } : PHASE_STYLE[phase];
   const selected = ctl.selected?.kind === 'note' && ctl.selected.id === note.id;
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -335,7 +362,7 @@ function NoteCard({ ctl, note, phase }: { ctl: DayController; note: DayNote; pha
       <button type="button" onClick={() => ctl.setSelected(selected ? null : { kind: 'note', id: note.id })} style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: 'inherit', fontFamily: 'inherit' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 700, color: style.color }}>{clock(Date.parse(note.writtenAt))}</span>
-          <span style={{ width: 18, height: 18, borderRadius: 9, background: style.color, display: 'grid', placeItems: 'center', flex: 'none' }}>{note.voice ? <Mic size={10} strokeWidth={3} color="#1c1203" /> : <PenLine size={10} strokeWidth={3} color="#1c1203" />}</span>
+          <span style={{ width: 18, height: 18, borderRadius: 9, background: style.color, display: 'grid', placeItems: 'center', flex: 'none' }}>{mind ? <Brain size={10} strokeWidth={2.6} color="#ffffff" /> : note.voice ? <Mic size={10} strokeWidth={3} color="#1c1203" /> : <PenLine size={10} strokeWidth={3} color="#1c1203" />}</span>
           <span style={{ height: 19, padding: '0 6px', display: 'inline-flex', alignItems: 'center', borderRadius: 5, fontSize: 10.5, fontWeight: 700, color: style.color, background: style.soft }}>{style.label}</span>
           <span style={{ fontSize: 11, color: 'var(--dj-muted)' }}>{note.voice ? 'hlasem' : 'psáno'}</span>
           {editedAt(note.writtenAt, note.updatedAt) && <span style={{ fontSize: 10.5, color: 'var(--dj-muted)' }}>· upraveno {clock(Date.parse(editedAt(note.writtenAt, note.updatedAt)!))}</span>}
@@ -344,6 +371,7 @@ function NoteCard({ ctl, note, phase }: { ctl: DayController; note: DayNote; pha
         {note.time != null && note.price != null && <span className="dj-mono" style={{ display: 'block', marginTop: 4, fontSize: 10.5, color: 'var(--dj-muted)' }}>→ ukazuje na {clock(note.time * 1000)} · {priceText(note.price)}</span>}
         {editing == null && <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, whiteSpace: 'pre-wrap' }}>{note.text}</span>}
       </button>
+      {mind && editing == null && <MindAreaChips ctl={ctl} note={note} editable={selected} />}
       {failed && (
         <button type="button" onClick={() => ctl.retryNote(note.id)} style={{ marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5, border: 0, background: 'none', padding: 0, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: 'var(--dj-rose)', fontFamily: 'inherit' }}><RotateCcw size={12} />Neuloženo — zkusit znovu</button>
       )}
@@ -354,7 +382,9 @@ function NoteCard({ ctl, note, phase }: { ctl: DayController; note: DayNote; pha
             <button type="button" className="dj-btn" onClick={() => setEditing(null)} style={smallGhost}>Zrušit</button>
             <button type="button" className="dj-btn" onClick={async () => {
               const text = editing.trim(); if (!text) return;
-              try { await ctl.updateNote(note.id, { text }); setEditing(null); setError(null); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Nepodařilo se uložit.'); }
+              // Hlava: rozpoznané oblasti se přepočítají, ručně zapnuté zůstanou.
+              const manual = mind ? (note.areas ?? []).filter(area => !mergeMindAreas(note.text).includes(area as never)) : [];
+              try { await ctl.editNoteText(note, text, manual); setEditing(null); setError(null); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Nepodařilo se uložit.'); }
             }} style={smallSolid}>Uložit</button>
           </div>
         </div>
@@ -449,6 +479,22 @@ export function FeedList({ ctl, items }: { ctl: DayController; items: readonly F
 
 // ── Pravý panel ────────────────────────────────────────────────────────
 
+/** Filtr časové osy: Vše · Trh · Hlava (platí i pro body v grafu). */
+function NoteFilterSwitch({ ctl }: { ctl: DayController }) {
+  const options = [{ id: 'all' as const, label: 'Vše' }, { id: 'market' as const, label: 'Trh' }, { id: 'mind' as const, label: 'Hlava' }];
+  return (
+    <div role="radiogroup" aria-label="Filtr poznámek" style={{ display: 'flex', gap: 2, padding: 2, borderRadius: 9, border: '1px solid var(--dj-line)', flex: 'none' }}>
+      {options.map(option => {
+        const on = ctl.noteFilter === option.id;
+        return (
+          <button key={option.id} type="button" role="radio" aria-checked={on} className="dj-btn" onClick={() => ctl.setNoteFilter(option.id)} style={{ flex: 1, height: 24, borderRadius: 7, border: 0, cursor: 'pointer', font: '700 11px Inter, sans-serif',
+            color: on ? (option.id === 'mind' ? 'var(--dj-mind-text)' : 'var(--dj-text)') : 'var(--dj-muted)', background: on ? (option.id === 'mind' ? 'var(--dj-mind-bg)' : 'var(--dj-tab-on)') : 'transparent' }}>{option.label}</button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function NoteComposer({ ctl, point, onDone }: { ctl: DayController; point: { time: number; price: number } | null; onDone: () => void }) {
   const [draft, setDraft] = useState('');
   const [voice, setVoice] = useState(false);
@@ -458,21 +504,24 @@ export function NoteComposer({ ctl, point, onDone }: { ctl: DayController; point
     const text = await dictation.start();
     if (text) { setDraft(current => (current.trim() ? `${current.trim()} ${text}` : text)); setVoice(true); }
   };
+  const canMind = ctl.mode === 'day';
+  const mind = canMind && ctl.noteKind === 'mind';
   const save = () => {
     if (!draft.trim()) return;
-    ctl.createNote(draft, point, voice);
+    ctl.createNote(draft, point, voice, mind ? 'mind' : 'market');
     onDone();
   };
   return (
-    <section className="dj" style={{ borderRadius: 14, border: '1px solid rgba(251,191,36,0.45)', background: 'linear-gradient(180deg, var(--dj-amber-bg-soft), var(--dj-card))', padding: 14, animation: 'dj-rise .25s ease both' }}>
+    <section className="dj" style={{ borderRadius: 14, border: `1px solid ${mind ? 'rgba(168,85,247,0.45)' : 'rgba(251,191,36,0.45)'}`, background: `linear-gradient(180deg, ${mind ? 'var(--dj-mind-bg)' : 'var(--dj-amber-bg-soft)'}, var(--dj-card))`, padding: 14, animation: 'dj-rise .25s ease both', transition: 'border-color .2s ease' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 9, background: '#f59e0b' }} />
-        <p style={sectionTitle}>Nová poznámka</p>
+        <span style={{ width: 8, height: 8, borderRadius: 9, background: mind ? 'var(--dj-mind)' : '#f59e0b' }} />
+        <p style={sectionTitle}>{mind ? 'Hlava' : 'Nová poznámka'}</p>
+        {canMind && <NoteKindToggle value={mind ? 'mind' : 'market'} onChange={ctl.setNoteKind} />}
         {point && <span className="dj-mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--dj-amber)' }}>{clock(point.time * 1000)} · {priceText(point.price)}</span>}
         <span style={{ flex: 1 }} />
         <span className="dj-mono" style={{ fontSize: 10.5, color: 'var(--dj-muted)' }}>zapíše se {clock(ctl.now)}</span>
       </div>
-      <textarea className="dj-input" autoFocus rows={3} value={draft} onChange={event => setDraft(event.target.value)} placeholder="Co vidíš, co cítíš, co uděláš…" aria-label="Text poznámky" style={{ marginTop: 10 }}
+      <textarea className="dj-input" autoFocus rows={3} value={draft} onChange={event => setDraft(event.target.value)} placeholder={mind ? 'Co se ti honí hlavou — trading, doma, jídlo, pohyb…' : 'Co vidíš, co cítíš, co uděláš…'} aria-label="Text poznámky" style={{ marginTop: 10 }}
         onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) save(); if (event.key === 'Escape' && !draft.trim()) onDone(); }} />
       {status && <p style={{ margin: '6px 0 0', fontSize: 11.5, color: status.color }}>{status.text}</p>}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
@@ -480,7 +529,7 @@ export function NoteComposer({ ctl, point, onDone }: { ctl: DayController; point
         <MicButton phase={dictation.phase} onStart={() => void dictate()} onStop={() => void dictation.stop()} size={36} />
         <span style={{ flex: 1 }} />
         <button type="button" className="dj-btn" onClick={() => { dictation.cancel(); onDone(); }} style={{ ...smallGhost, height: 36 }}>Zrušit</button>
-        <button type="button" className="dj-btn" onClick={save} disabled={!draft.trim()} style={{ height: 36, padding: '0 14px', borderRadius: 9, cursor: draft.trim() ? 'pointer' : 'not-allowed', font: '700 12px Inter, sans-serif', color: '#1c1203', background: '#f59e0b', border: 0, opacity: draft.trim() ? 1 : 0.5 }}>Uložit</button>
+        <button type="button" className="dj-btn" onClick={save} disabled={!draft.trim()} style={{ height: 36, padding: '0 14px', borderRadius: 9, cursor: draft.trim() ? 'pointer' : 'not-allowed', font: '700 12px Inter, sans-serif', color: mind ? '#ffffff' : '#1c1203', background: mind ? 'var(--dj-mind)' : '#f59e0b', border: 0, opacity: draft.trim() ? 1 : 0.5 }}>Uložit</button>
       </div>
     </section>
   );
@@ -624,6 +673,7 @@ export function DaySidePanel({ ctl, onOpenTrade, onAddNote, width = 380, compact
               <button type="button" className="dj-btn" onClick={onAddNote} aria-pressed={ctl.placing === 'note'} style={{ height: 34, borderRadius: 9, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, font: '700 12px Inter, sans-serif', flex: 'none', ...(ctl.placing === 'note' ? { color: '#1c1203', background: '#fbbf24', border: '1px solid #fbbf24' } : { color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.35)' }) }}>
                 <Plus size={14} />{ctl.placing === 'note' ? 'Klikni do grafu…' : 'Poznámka do grafu'}
               </button>
+              <NoteFilterSwitch ctl={ctl} />
               <FeedList ctl={ctl} items={ctl.feed} />
             </div>
           )}
@@ -683,7 +733,7 @@ function StripSession({ ctl, session }: { ctl: DayController; session: DaySessio
 }
 const stripAction: React.CSSProperties = { flex: 1, height: 26, padding: '0 8px', borderRadius: 7, border: '1px solid', background: 'transparent', cursor: 'pointer', font: '700 11px Inter, sans-serif', whiteSpace: 'nowrap' };
 
-function QuickNote({ ctl }: { ctl: DayController }) {
+function QuickNote({ ctl, showKind = true }: { ctl: DayController; showKind?: boolean }) {
   const [draft, setDraft] = useState('');
   const [voice, setVoice] = useState(false);
   // Diktování je sdílené — tenhle mikrofon ukazuje jen svoje nahrávání.
@@ -691,9 +741,10 @@ function QuickNote({ ctl }: { ctl: DayController }) {
   const { dictation } = ctl;
   const phase = owned ? dictation.phase : 'idle';
   const status = owned ? recordingStatus(dictation.phase, dictation.seconds, dictation.error) : null;
+  const mind = ctl.noteKind === 'mind';
   const save = () => {
     if (!draft.trim()) return;
-    ctl.createNote(draft, null, voice);
+    ctl.createNote(draft, null, voice, ctl.noteKind);
     setDraft(''); setVoice(false);
   };
   const dictate = async () => {
@@ -705,8 +756,9 @@ function QuickNote({ ctl }: { ctl: DayController }) {
   };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      {showKind && <NoteKindToggle value={ctl.noteKind} onChange={ctl.setNoteKind} />}
       <input className="dj-input" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); save(); } }}
-        placeholder={status?.text ?? 'Napiš poznámku k teď… ↵'} aria-label="Rychlá poznámka" style={{ flex: 1, minWidth: 0, height: 30, padding: '0 9px', fontSize: 12 }} />
+        placeholder={status?.text ?? (mind ? 'Co se ti honí hlavou… ↵' : 'Napiš poznámku k teď… ↵')} aria-label={mind ? 'Rychlá poznámka Hlava' : 'Rychlá poznámka'} style={{ flex: 1, minWidth: 0, height: 30, padding: '0 9px', fontSize: 12, ...(mind ? { borderColor: 'rgba(168,85,247,0.45)' } : {}) }} />
       <MicButton phase={phase} onStart={() => void dictate()} onStop={() => void dictation.stop()} size={30} />
     </div>
   );
@@ -731,6 +783,7 @@ export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed }: {
   // klik tak vždy vede na kartu s úpravou a mazáním.
   const notes = ctl.feed.flatMap(item => (item.kind === 'note' ? [item.note] : []))
     .sort((a, b) => Date.parse(b.writtenAt) - Date.parse(a.writtenAt));
+  const mindCount = notes.filter(note => note.origin === 'mind').length;
   return (
     <section className="dj dj-scroll" style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, .8fr) minmax(190px, 1.1fr) minmax(180px, .95fr) minmax(180px, .95fr) minmax(230px, 1.5fr)', gap: 12, padding: '10px 12px', overflowX: 'auto', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
@@ -768,14 +821,14 @@ export function DayBottomStrip({ ctl, streak, onOpenCoach, onOpenFeed }: {
       {DAY_SESSIONS.map(session => <StripSession key={session} ctl={ctl} session={session} />)}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <p style={stripLabel}>Poznámky · {notes.length}</p>
+          <p style={stripLabel}>Poznámky · {notes.length}{mindCount > 0 && <span style={{ color: 'var(--dj-mind-text)' }}> · Hlava {mindCount}</span>}</p>
           <span style={{ flex: 1 }} />
           <button type="button" className="dj-btn" onClick={onOpenFeed} style={{ border: 0, background: 'none', padding: 0, cursor: 'pointer', font: '700 10.5px Inter, sans-serif', color: 'var(--dj-indigo-text)' }}>Časová osa ›</button>
         </div>
         {notes.slice(0, 2).map(note => (
           <button key={note.id} type="button" className="dj-btn" onClick={() => ctl.setSelected({ kind: 'note', id: note.id })} style={{ display: 'flex', gap: 6, alignItems: 'baseline', width: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', color: 'inherit' }}>
             <span className="dj-mono" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--dj-muted)', flex: 'none' }}>{clock(Date.parse(note.writtenAt))}</span>
-            <span style={{ fontSize: 11.5, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{note.text}</span>
+            <span style={{ fontSize: 11.5, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', ...(note.origin === 'mind' ? { color: 'var(--dj-mind-text)' } : {}) }}>{note.origin === 'mind' ? '● ' : ''}{note.text}</span>
           </button>
         ))}
         {!notes.length && <p style={{ margin: 0, fontSize: 11, color: 'var(--dj-muted)' }}>Zatím nic. Napiš, co vidíš, nebo diktuj.</p>}

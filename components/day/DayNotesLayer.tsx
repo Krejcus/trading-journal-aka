@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { ISeriesPrimitive, Time, UTCTimestamp } from 'lightweight-charts';
-import { Mic, PenLine } from 'lucide-react';
+import { Brain, Mic, PenLine } from 'lucide-react';
 import { containingBarTime } from '../ChartNotesLayer';
 import { pragueClock, type DayNotePhase } from '../../lib/dayJournal';
-import { PHASE_STYLE, priceText } from './DayPrimitives';
+import { MIND_STYLE, PHASE_STYLE, priceText } from './DayPrimitives';
 
 /**
  * Poznámky deníku dne nad grafem: bod v čase a ceně obarvený fází zápisu
@@ -31,7 +31,12 @@ export interface DayPinView {
   ghost?: boolean;
   /** Ještě neuložená / chyba uložení. */
   status?: 'pending' | 'failed';
+  /** Poznámka Hlava (osobní) — fialová. */
+  mind?: boolean;
 }
+
+/** Hlava bez bodu v grafu: značka na časové ose v čase zápisu (unix s). */
+export interface DayAxisTick { id: string; time: number; text: string }
 
 export interface DayPinPoint { time: number; price: number }
 
@@ -56,7 +61,7 @@ interface Geometry {
   offsetX: number; offsetY: number; paneWidth: number; paneHeight: number; box: DOMRect;
 }
 
-export default function DayNotesLayer({ chartApi, containerRef, barTimes, intervalSeconds, pins, selectedId, onSelect, bubbles, placing, placingHint, onPick, onCancelPlacing, pending, pendingContent, nowTime, bands = [] }: {
+export default function DayNotesLayer({ chartApi, containerRef, barTimes, intervalSeconds, pins, selectedId, onSelect, bubbles, placing, placingHint, onPick, onCancelPlacing, pending, pendingContent, nowTime, bands = [], ticks = [] }: {
   chartApi: ChartViewApi | null;
   containerRef: React.RefObject<HTMLDivElement | null>;
   barTimes: readonly number[];
@@ -76,6 +81,7 @@ export default function DayNotesLayer({ chartApi, containerRef, barTimes, interv
   /** Svislá čára „teď“ (unix s) — příprava. */
   nowTime?: number | null;
   bands?: readonly DayBand[];
+  ticks?: readonly DayAxisTick[];
 }) {
   const layerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -91,6 +97,8 @@ export default function DayNotesLayer({ chartApi, containerRef, barTimes, interv
   nowRef.current = nowTime ?? null;
   const bandsRef = useRef(bands);
   bandsRef.current = bands;
+  const ticksRef = useRef(ticks);
+  ticksRef.current = ticks;
   const [hover, setHover] = useState<{ x: number; y: number; time: number; price: number } | null>(null);
 
   const geometry = useCallback((): Geometry | null => {
@@ -176,8 +184,12 @@ export default function DayNotesLayer({ chartApi, containerRef, barTimes, interv
       if (geo && x != null && y != null && pin.rayFrom != null) {
         const from = xOf(geo, pin.rayFrom);
         const left = Math.max(geo.offsetX, Math.min(x, from ?? geo.offsetX));
-        if (x - left > 4) lines.push(`<line x1="${left}" y1="${y}" x2="${x}" y2="${y}" stroke="${PHASE_STYLE[pin.phase].line}" stroke-dasharray="4 4" />`);
+        if (x - left > 4) lines.push(`<line x1="${left}" y1="${y}" x2="${x}" y2="${y}" stroke="${(pin.mind ? MIND_STYLE : PHASE_STYLE[pin.phase]).line}" stroke-dasharray="4 4" />`);
       }
+    }
+    for (const tick of ticksRef.current) {
+      const x = geo ? xOf(geo, tick.time) : null;
+      place(`[data-day-tick="${tick.id}"]`, x, geo ? geo.offsetY + geo.paneHeight - 7 : null);
     }
     const pendingPoint = pendingRef.current;
     if (pendingPoint) {
@@ -262,8 +274,24 @@ export default function DayNotesLayer({ chartApi, containerRef, barTimes, interv
         </div>
       )}
 
+      {ticks.map(tick => (
+        <button
+          key={tick.id}
+          type="button"
+          data-day-tick={tick.id}
+          className="dj-tick"
+          aria-label={`Hlava ${timeLabel(tick.time)}`}
+          title={`Hlava ${timeLabel(tick.time)} — ${tick.text}`}
+          onClick={event => { event.stopPropagation(); onSelect(tick.id === selectedId ? null : tick.id); }}
+          style={{
+            position: 'absolute', visibility: 'hidden', transform: 'translate(-50%,-50%) rotate(45deg)', width: tick.id === selectedId ? 12 : 9, height: tick.id === selectedId ? 12 : 9,
+            padding: 0, borderRadius: 2, background: 'var(--dj-mind)', border: `1.5px solid ${tick.id === selectedId ? '#ffffff' : 'rgba(10,15,29,0.85)'}`,
+            pointerEvents: placing ? 'none' : 'auto', cursor: 'pointer', zIndex: 6,
+          }}
+        />
+      ))}
       {pins.map(pin => {
-        const style = PHASE_STYLE[pin.phase];
+        const style = pin.mind ? MIND_STYLE : PHASE_STYLE[pin.phase];
         const selected = pin.id === selectedId;
         const showBubble = !pin.ghost && (bubbles === 'all' || selected);
         const size = selected ? 22 : 18;
@@ -285,7 +313,7 @@ export default function DayNotesLayer({ chartApi, containerRef, barTimes, interv
                 opacity: pin.status === 'pending' ? 0.8 : 1,
               }}
             >
-              {!pin.ghost && (pin.voice ? <Mic size={10} strokeWidth={3} color="#1c1203" /> : <PenLine size={10} strokeWidth={3} color="#1c1203" />)}
+              {!pin.ghost && (pin.mind ? <Brain size={10} strokeWidth={2.6} color="#ffffff" /> : pin.voice ? <Mic size={10} strokeWidth={3} color="#1c1203" /> : <PenLine size={10} strokeWidth={3} color="#1c1203" />)}
             </button>
             {showBubble && (
               <div data-day-bubble={pin.id} style={{ position: 'absolute', visibility: 'hidden', zIndex: selected ? 9 : 5, width: 'max-content', maxWidth: 230, padding: '7px 9px', borderRadius: 8, border: `1px solid ${style.line}`, background: 'rgba(14,16,30,0.95)', color: style.bubble.text, fontSize: 11.5, lineHeight: 1.4, boxShadow: '0 12px 28px -10px rgba(0,0,0,0.8)', pointerEvents: 'none', transform: 'translate(14px, -50%)', animation: 'dj-fade .2s ease both' }}>

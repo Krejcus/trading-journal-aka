@@ -7,7 +7,7 @@ import { tradeTimeMs } from '../../lib/weeklyReview';
 import { tradeRMultiple } from '../../utils/tradeRisk';
 import DayCompactChart from './DayCompactChart';
 import DictationDialog from './DictationDialog';
-import { BiasPicker, BigSaveButton, ExecutionPicker, MicButton, SESSION_STYLE, SaveCelebration, SessionSwitch, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
+import { BiasPicker, BigSaveButton, ExecutionPicker, MicButton, NoteKindToggle, SESSION_STYLE, SaveCelebration, SessionSwitch, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
 import { FeedList, ScopeSwitch, TradeRating, dayTitle, exportDay, primaryAction, streakStyle, LiveChip } from './DayPanels';
 import { PinList, PrepTimer, RuleChips, ScenarioField, missingLabel, prepPins, prepRequirements, prepSessionStatus } from './PrepPanels';
 import { CloseSide, SummaryBar, closeRequirements, closeSessionStatus } from './ClosePanels';
@@ -51,11 +51,12 @@ function PinSheet({ ctl, point, autoRecord, onClose }: { ctl: DayController; poi
   }, []);
   const status = recordingStatus(dictation.phase, dictation.seconds, dictation.error);
   const busy = dictation.phase === 'recording' || dictation.phase === 'transcribing';
-  const save = () => { if (!draft.trim()) return; ctl.createNote(draft, point, voice); onClose(); };
+  const save = () => { if (!draft.trim()) return; ctl.createNote(draft, point, voice, ctl.mode === 'day' ? ctl.noteKind : 'market'); onClose(); };
   return (
     <Sheet label="Poznámka do grafu" dismissable={!draft.trim() && dictation.phase !== 'recording' && dictation.phase !== 'transcribing'} onClose={() => { dictation.cancel(); onClose(); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span className="dj-mono" style={{ fontSize: 11, fontWeight: 700, color: 'var(--dj-indigo)' }}>{point ? `${clock(point.time * 1000)} · ${priceText(point.price)}` : 'do časové osy'}</span>
+        {ctl.mode === 'day' && <NoteKindToggle value={ctl.noteKind} onChange={ctl.setNoteKind} size="md" />}
         <span style={{ flex: 1 }} />
         <span className="dj-mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' }}>zapíše se {clock(ctl.now)}</span>
       </div>

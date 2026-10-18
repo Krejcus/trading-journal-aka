@@ -38,6 +38,19 @@ describe('MCP deník dne', () => {
     expect(dayJournalForMcp(rows, '2026-10-12')).toBeNull();
   });
 
+  it('labels Hlava as a personal note with areas and keeps the week plan apart', () => {
+    const extra: DayJournalMcpRow[] = [
+      ...rows,
+      { day: DAY, session: 'day', kind: 'note', entry_key: 'note:31111111-2222-4333-8444-555555555555', written_at: '2026-10-13T13:58:00Z', data: { text: 'Doma napětí.', origin: 'mind', areas: ['rodina'] } },
+      { day: DAY, session: 'day', kind: 'note', entry_key: 'note:41111111-2222-4333-8444-555555555555', written_at: '2026-10-13T14:00:00Z', data: { text: 'Jen NY.', origin: 'week' } },
+    ];
+    const view = dayJournalForMcp(extra, DAY)!;
+    expect(view.poznamky.find(note => note.text === 'Doma napětí.')).toMatchObject({ hlava_osobni: true, oblasti: ['rodina'] });
+    const lines = dayJournalLines(extra, DAY);
+    expect(lines).toContain('   · HLAVA (osobní) zapsáno 15:58 [rodina]: Doma napětí.');
+    expect(lines).toContain('   · plán na další týden (zapsáno 16:00): Jen NY.');
+  });
+
   it('renders compact load_journal lines only for the window', () => {
     const lines = dayJournalLines(rows, DAY);
     expect(lines[0]).toBe(`${DAY}:`);

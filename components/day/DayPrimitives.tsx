@@ -16,6 +16,9 @@ export const PHASE_STYLE: Record<DayNotePhase, { color: string; label: string; s
   later: { color: 'var(--dj-phase-later)', label: 'dopsáno zpětně', soft: 'rgba(148,163,184,0.14)', line: 'rgba(148,163,184,0.5)', text: 'var(--dj-text)', bg: 'var(--dj-slate-bg)', bubble: { accent: '#94a3b8', text: '#e2e8f0' } },
 };
 
+/** Poznámka Hlava (osobní): fialová, bez ohledu na fázi zápisu. */
+export const MIND_STYLE = { color: 'var(--dj-mind)', label: 'hlava', soft: 'rgba(168,85,247,0.14)', line: 'rgba(192,132,252,0.55)', text: 'var(--dj-mind-text)', bg: 'var(--dj-mind-bg)', bubble: { accent: '#c084fc', text: '#f3e8ff' } } as const;
+
 export const SESSION_STYLE: Record<DaySession | 'day', { color: string; name: string; tint: string }> = {
   london: { color: '#3b82f6', name: 'London', tint: 'rgba(59,130,246,' },
   ny: { color: '#f97316', name: 'New York', tint: 'rgba(249,115,22,' },
@@ -334,3 +337,25 @@ export const recordingStatus = (phase: DictationPhase, seconds: number, error: s
     : phase === 'transcribing' ? { text: 'Přepisuji…', color: 'var(--dj-indigo)' }
       : phase === 'error' ? { text: error ?? 'Diktování se nepodařilo.', color: 'var(--dj-rose)' }
         : null;
+
+/** Přepínač druhu nové poznámky: Trh (obchodní) | Hlava (osobní). */
+export function NoteKindToggle({ value, onChange, size = 'sm' }: { value: 'market' | 'mind'; onChange: (next: 'market' | 'mind') => void; size?: 'sm' | 'md' }) {
+  const height = size === 'md' ? 28 : 24;
+  const item = (id: 'market' | 'mind', label: string) => {
+    const on = value === id;
+    return (
+      <button key={id} type="button" role="radio" aria-checked={on} className="dj-btn" onClick={() => onChange(id)} style={{
+        height: height - 4, padding: '0 8px', borderRadius: 6, border: 0, cursor: 'pointer', font: `700 ${size === 'md' ? 11.5 : 10.5}px Inter, sans-serif`, whiteSpace: 'nowrap',
+        color: on ? (id === 'mind' ? 'var(--dj-mind-text)' : 'var(--dj-amber-text)') : 'var(--dj-muted)',
+        background: on ? (id === 'mind' ? 'var(--dj-mind-bg)' : 'rgba(245,158,11,0.14)') : 'transparent',
+        boxShadow: on ? `0 0 0 1px ${id === 'mind' ? 'rgba(168,85,247,0.4)' : 'rgba(245,158,11,0.4)'}` : undefined,
+        transition: 'background .18s ease, color .18s ease, box-shadow .18s ease',
+      }}>{label}</button>
+    );
+  };
+  return (
+    <span role="radiogroup" aria-label="Druh poznámky" style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: 2, height, boxSizing: 'border-box', borderRadius: 8, border: '1px solid var(--dj-line)', flex: 'none' }}>
+      {item('market', 'Trh')}{item('mind', 'Hlava')}
+    </span>
+  );
+}

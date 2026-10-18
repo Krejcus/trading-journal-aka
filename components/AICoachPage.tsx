@@ -3,6 +3,7 @@ import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, ChevronDown, Send, Loade
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation, SessionConfig, RuleCompletion, SessionAnalysis, LabExperiment } from '../types';
 import { loadDayJournalRange } from '../services/dayJournalService';
 import { dayJournalCoachText } from '../lib/dayJournalExport';
+import { readMindCoachEnabled } from '../lib/dayMind';
 import { pragueDayKey, sessionWindows } from '../lib/dayJournal';
 import { streamAIResponse, buildTraderContext, parseAllRefs, prewarmCoachMemory, invalidateMemoryCache, type AIMessage } from '../services/aiService';
 import { storageService } from '../services/storageService';
@@ -876,7 +877,7 @@ const AICoachPage: React.FC<Props> = ({
         loadDayJournalRange(from, today),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3_000)),
       ]);
-      const text = dayJournalCoachText(journals, day => sessionWindows(day, sessions || []));
+      const text = dayJournalCoachText(journals, day => sessionWindows(day, sessions || []), 300, { includeMind: readMindCoachEnabled() });
       // Strop pro prompt: nejnovější dny mají přednost (detail si kouč dotáhne nástrojem).
       return text.length > 8_000 ? `…(starší dny zkráceny)\n${text.slice(text.length - 8_000)}` : text;
     } catch {

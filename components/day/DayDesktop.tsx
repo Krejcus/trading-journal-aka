@@ -9,7 +9,7 @@ import { MARKET_TIMEFRAME_MINUTES } from '../../services/marketData';
 import { tradeChartTiming } from '../../services/tradeChartData';
 import { DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, carryForward, sessionWindows, type DaySession } from '../../lib/dayJournal';
 import { sessionStage, type StreakDay } from '../../lib/dayJournalView';
-import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
+import DayNotesLayer, { type DayAxisTick, type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
 import { DayBottomStrip, DayDrawer, DayHeaderBar, DaySidePanel, streakStyle } from './DayPanels';
 import { PinPopover, PrepBottom, PrepHeaderBar, prepPins } from './PrepPanels';
 import { CloseBottom, CloseHeaderBar, CloseSide } from './ClosePanels';
@@ -27,6 +27,7 @@ interface OverlayState {
   pendingContent: React.ReactNode;
   nowTime: number | null;
   bands: DayBand[];
+  ticks: DayAxisTick[];
   onSelect: (id: string | null) => void;
   onPick: (point: DayPinPoint) => void;
   onCancelPlacing: () => void;
@@ -66,6 +67,7 @@ function PanelOverlay({ panel, store }: { panel: WorkspacePanelOverlay; store: O
         pendingContent={panel.isActive ? state.pendingContent : null}
         nowTime={state.nowTime}
         bands={state.bands}
+        ticks={state.ticks}
       />
       {/* Záblesk přepnutí seance/rozsahu ve všech grafech rozložení. */}
       {state.fx && <SessionSwitchFx key={state.fx.key} session={state.fx.session} sub={state.fx.sub} />}
@@ -223,6 +225,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
       pendingContent: popover && mode !== 'day' ? <PinPopover key={`${popover.point.time}:${popover.point.price}`} ctl={ctl} point={popover.point} autoRecord={popover.record} onClose={closePopover} /> : null,
       nowTime: mode === 'prep' && ctl.isToday ? Math.floor(ctl.now / 1000) : null,
       bands,
+      ticks: ctl.mindTicks,
       onSelect: id => ctl.setSelected(id ? { kind: 'note', id } : null),
       onPick: pick,
       onCancelPlacing: () => ctl.setPlacing(null),

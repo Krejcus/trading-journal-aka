@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { pragueClock } from '../../lib/dayJournal';
 import { formatDictationClock } from '../../hooks/useDictation';
-import { Waveform } from './DayPrimitives';
+import { NoteKindToggle, Waveform } from './DayPrimitives';
 import type { DayController } from './useDayController';
 
 /**
@@ -31,13 +31,16 @@ export default function DictationDialog({ ctl, onClose, sheet = false }: { ctl: 
     return () => window.removeEventListener('keydown', onKey);
   });
 
+  // Na konci si vybereš Trh nebo Hlava; Hlava se nepřipíchne k ceně (tečka na časové ose).
+  const canMind = ctl.mode === 'day';
+  const mind = canMind && ctl.noteKind === 'mind';
   const last = ctl.chart.candles[ctl.chart.candles.length - 1];
-  const anchor = ctl.isToday && last && Date.now() / 1000 - last.time < 15 * 60
+  const anchor = !mind && ctl.isToday && last && Date.now() / 1000 - last.time < 15 * 60
     ? { time: Math.floor(startedAt / 60_000) * 60, price: last.close } : null;
-  const where = anchor ? `připíchnu k ${pragueClock(anchor.time * 1000)}` : 'do časové osy dne';
+  const where = mind ? 'Hlava · do časové osy dne' : anchor ? `připíchnu k ${pragueClock(anchor.time * 1000)}` : 'do časové osy dne';
   const save = () => {
     if (!text?.trim()) return;
-    ctl.createNote(text, anchor, true);
+    ctl.createNote(text, anchor, true, mind ? 'mind' : 'market');
     onClose();
   };
   const phase = text != null ? 'done' : dictation.phase === 'transcribing' ? 'proc' : dictation.phase === 'error' ? 'error' : 'rec';
@@ -83,9 +86,10 @@ export default function DictationDialog({ ctl, onClose, sheet = false }: { ctl: 
         <div style={{ paddingTop: 12 }}>
           <textarea className="dj-input" autoFocus rows={4} value={text ?? ''} onChange={event => setText(event.target.value)} aria-label="Přepis diktování" style={{ fontSize: 13.5 }}
             onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) save(); }} />
+          {canMind && <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}><span style={{ fontSize: 12, color: 'var(--dj-muted)' }}>Uložit jako</span><NoteKindToggle value={mind ? 'mind' : 'market'} onChange={ctl.setNoteKind} size="md" /></div>}
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button type="button" className="dj-btn" onClick={cancel} style={ghost}>Zahodit</button>
-            <button type="button" className="dj-btn" onClick={save} disabled={!text?.trim()} style={primary}>{anchor ? 'Uložit do grafu' : 'Uložit do časové osy'}</button>
+            <button type="button" className="dj-btn" onClick={save} disabled={!text?.trim()} style={mind ? { ...primary, background: 'linear-gradient(180deg,#a855f7,#9333ea)' } : primary}>{mind ? 'Uložit do Hlavy' : anchor ? 'Uložit do grafu' : 'Uložit do časové osy'}</button>
           </div>
         </div>
       )}

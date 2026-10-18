@@ -127,6 +127,10 @@ export function dayJournalForMcp(rows: readonly DayJournalMcpRow[], day: string,
         faze: notePhase(day, row.session, row.written_at, clocks),
         session: SESSION[row.session] ?? row.session,
         z_pripravy: row.data!.origin === 'prep' || undefined,
+        // Hlava = osobní poznámka (život, rodina, hlava) — ne obchodní; nikam dál nesdílet.
+        hlava_osobni: row.data!.origin === 'mind' || undefined,
+        oblasti: row.data!.origin === 'mind' && Array.isArray(row.data!.areas) ? (row.data!.areas as unknown[]).map(area => str(area, 24)).filter(Boolean) : undefined,
+        plan_na_tyden: row.data!.origin === 'week' || undefined,
         ukazuje_na: time != null ? `${clock(time * 1000)}${price != null ? ` @ ${price}` : ''}` : null,
         hlasem: row.data!.voice === true || undefined,
         text: str(row.data!.text),
@@ -152,6 +156,14 @@ export function dayJournalLines(rows: readonly DayJournalMcpRow[], sinceDay: str
       lines.push(`   · ${session.session}: ${prep} | ${close}`);
     }
     for (const note of view.poznamky) {
+      if (note.hlava_osobni) {
+        lines.push(`   · HLAVA (osobní) zapsáno ${note.zapsano}${note.zapsano_den ? ` (${note.zapsano_den})` : ''}${note.oblasti?.length ? ` [${note.oblasti.join(', ')}]` : ''}${note.ukazuje_na ? ` → ${note.ukazuje_na}` : ''}: ${note.text.slice(0, maxNoteChars)}`);
+        continue;
+      }
+      if (note.plan_na_tyden) {
+        lines.push(`   · plán na další týden (zapsáno ${note.zapsano}): ${note.text.slice(0, maxNoteChars)}`);
+        continue;
+      }
       lines.push(`   · pozn. zapsáno ${note.zapsano}${note.zapsano_den ? ` (${note.zapsano_den})` : ''} [${note.faze}${note.hlasem ? ', hlasem' : ''}${note.upraveno ? `, upraveno ${note.upraveno}` : ''}]${note.ukazuje_na ? ` → ${note.ukazuje_na}` : ''}: ${note.text.slice(0, maxNoteChars)}`);
     }
   }

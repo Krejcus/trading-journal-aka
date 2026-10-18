@@ -70,7 +70,7 @@ export async function saveDayClose(day: string, close: Omit<DayClose, 'writtenAt
 
 export async function saveDayNote(
   day: string,
-  note: Pick<DayNote, 'id' | 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin'> & { writtenAt?: string },
+  note: Pick<DayNote, 'id' | 'session' | 'text' | 'time' | 'price' | 'voice' | 'origin' | 'areas'> & { writtenAt?: string },
   client: Client = supabase,
   now = new Date(),
 ): Promise<DayNote> {

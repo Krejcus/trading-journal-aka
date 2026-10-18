@@ -160,6 +160,14 @@ describe('day journal export', async () => {
     expect(md).toContain('| 07:53 | příprava (hlasem) | London | 10:00 @ 31388 | Long z FVG / po displacementu |');
     expect(md).toContain('> Ráno čisté. Po TP odejít.');
   });
+
+  it('keeps Hlava out of the export and shows it to the coach only when allowed, labelled personal', () => {
+    const MIND = '6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+    const withMind: DayJournal = { ...journal, notes: [...journal.notes, { id: MIND, session: 'day', text: 'Doma napětí, špatně spím', time: null, price: null, voice: false, origin: 'mind', areas: ['rodina', 'spanek'], writtenAt: new Date(at('15:58')).toISOString(), updatedAt: new Date(at('15:58')).toISOString() }] };
+    expect(dayJournalMarkdown(withMind, [], windows)).not.toContain('Doma napětí');
+    expect(dayJournalCoachText([withMind], () => windows)).not.toContain('Doma napětí');
+    expect(dayJournalCoachText([withMind], () => windows, 300, { includeMind: true })).toContain('HLAVA (osobní) zapsáno 15:58 [rodina, spánek]: Doma napětí, špatně spím');
+  });
 });
 
 describe('sameCandleSeries', async () => {

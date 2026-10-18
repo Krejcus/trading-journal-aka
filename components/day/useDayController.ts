@@ -6,13 +6,21 @@ import {
 } from '../../lib/dayJournal';
 import { dayChecklist, dayFeed, dayStats, tradesForDay, tradesInScope, type DayViewScope } from '../../lib/dayJournalView';
 import { planPatch, type PlanChoice } from '../../lib/weeklyReview';
+import { mergeMindAreas } from '../../lib/dayMind';
 import { useDayJournal, type NoteInput } from '../../hooks/useDayJournal';
 import { useDayChartData } from '../../hooks/useDayChartData';
 import { useDictation } from '../../hooks/useDictation';
-import type { DayPinPoint, DayPinView } from './DayNotesLayer';
+import type { DayAxisTick, DayPinPoint, DayPinView } from './DayNotesLayer';
 
 export type DayMode = 'day' | 'prep' | 'close';
 export type DaySelection = { kind: 'note' | 'trade'; id: string } | null;
+/** Druh nové poznámky: trh (obchodní) nebo Hlava (osobní). */
+export type DayNoteKind = 'market' | 'mind';
+/** Filtr poznámek v časové ose a grafu. */
+export type DayNoteFilter = 'all' | 'market' | 'mind';
+
+const NOTE_KIND_KEY = 'alphatrade_day_note_kind';
+const readNoteKind = (): DayNoteKind => { try { return window.localStorage.getItem(NOTE_KIND_KEY) === 'mind' ? 'mind' : 'market'; } catch { return 'market'; } };
 
 export interface PrepDraft { bias: DayBias | null; scenario: string; rules: string[]; openedAt: number; touched: boolean }
 export interface CloseDraft { summary: string; execution: DayExecution | null; verdicts: Record<string, DayVerdict>; touched: boolean }
@@ -64,6 +72,12 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
   const [selected, setSelected] = useState<DaySelection>(null);
   const [placing, setPlacing] = useState<'note' | 'voice' | null>(null);
   const [pendingPoint, setPendingPoint] = useState<DayPinPoint | null>(null);
+  const [noteKind, setNoteKindState] = useState<DayNoteKind>(readNoteKind);
+  const setNoteKind = useCallback((next: DayNoteKind) => {
+    setNoteKindState(next);
+    try { window.localStorage.setItem(NOTE_KIND_KEY, next); } catch { /* jen bez paměti volby */ }
+  }, []);
+  const [noteFilter, setNoteFilter] = useState<DayNoteFilter>('all');
   const dictation = useDictation();
   const cancelDictation = dictation.cancel;
 
@@ -186,15 +200,31 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
     return 'day';
   }, [mode, modeSession, scope, windows]);
 
-  const createNote = useCallback((text: string, point: DayPinPoint | null, voice: boolean) => {
+  const createNote = useCallback((text: string, point: DayPinPoint | null, voice: boolean, kindOverride?: DayNoteKind) => {
+    const body = text.trim();
+    // Příprava a uzavření píšou jen poznámky k trhu (body plánu).
+    const kind = kindOverride ?? (mode === 'day' ? noteKind : 'market');
+    if (!body) return null;
+    // Hlava patří ke dni, ne k session; oblasti pozná appka z textu.
+    const input: NoteInput = kind === 'mind'
+      ? { session: 'day', text: body, time: point?.time ?? null, price: point?.price ?? null, voice, origin: 'mind', areas: mergeMindAreas(body) }
+      : { session: pinSessionFor(point), text: body, time: point?.time ?? null, price: point?.price ?? null, voice, origin: mode === 'prep' ? 'prep' : point ? 'chart' : 'feed' };
+    return addNote(input);
+  }, [addNote, mode, noteKind, pinSessionFor]);
+
+  /** Úprava textu: u Hlavy se přepočítají rozpoznané oblasti, ručně přidané zůstanou. */
+  const editNoteText = useCallback((note: DayNote, text: string, manualAreas: readonly string[] = []) => updateNote(note.id, note.origin === 'mind'
+    ? { text, areas: mergeMindAreas(text, manualAreas) }
+    : { text }), [updateNote]);
+
+  /** Víkend: plán na další týden (ukáže se v pondělní přípravě). */
+  const createWeekPlan = useCallback((text: string) => {
     const body = text.trim();
     if (!body) return null;
-    const input: NoteInput = {
-      session: pinSessionFor(point), text: body, time: point?.time ?? null, price: point?.price ?? null, voice,
-      origin: mode === 'prep' ? 'prep' : point ? 'chart' : 'feed',
-    };
-    return addNote(input);
-  }, [addNote, mode, pinSessionFor]);
+    return addNote({ session: 'day', text: body, time: null, price: null, voice: false, origin: 'week' });
+  }, [addNote]);
+
+  const noteMatches = useCallback((note: DayNote) => noteFilter === 'all' || (noteFilter === 'mind') === (note.origin === 'mind'), [noteFilter]);
 
   const rateTrade = useCallback(async (trade: Trade, choice: PlanChoice) => {
     await onUpdateTrade(trade.id, planPatch(choice));
@@ -204,16 +234,26 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
   const scopedTrades = useMemo(() => tradesInScope(dayTrades, scope, windows), [dayTrades, scope, windows]);
   const stats = useMemo(() => dayStats(scopedTrades), [scopedTrades]);
   const sessionStats = useMemo(() => Object.fromEntries(DAY_SESSIONS.map(session => [session, dayStats(tradesInScope(dayTrades, session, windows))])) as Record<DaySession, ReturnType<typeof dayStats>>, [dayTrades, windows]);
-  const feed = useMemo(() => dayFeed(journal, dayTrades, windows, scope), [dayTrades, journal, scope, windows]);
+  const feed = useMemo(() => dayFeed(journal, dayTrades, windows, scope)
+    .filter(item => item.kind === 'note' ? noteMatches(item.note) : noteFilter !== 'mind'), [dayTrades, journal, noteFilter, noteMatches, scope, windows]);
+  const mindTicks = useMemo((): DayAxisTick[] => (mode !== 'day' ? [] : journal.notes
+    .filter(note => note.origin === 'mind' && note.time == null && noteMatches(note))
+    .map(note => ({ id: note.id, time: Math.floor(Date.parse(note.writtenAt) / 1000), text: note.text }))
+    .filter(tick => Number.isFinite(tick.time))), [journal.notes, mode, noteMatches]);
   const checklist = useMemo(() => dayChecklist(journal, dayTrades, windows, now), [dayTrades, journal, now, windows]);
 
   const pinViews = useCallback((filter: (note: DayNote) => boolean, ghost?: (note: DayNote) => boolean): DayPinView[] => journal.notes
-    .filter(note => note.time != null && note.price != null)
+    .filter(note => note.time != null && note.price != null && (note.origin !== 'mind' || noteMatches(note)) && (note.origin === 'mind' || noteFilter !== 'mind'))
     .filter(note => filter(note) || Boolean(ghost?.(note)))
     .map(note => {
       const phase = notePhase(note, windows);
       const written = pragueClock(Date.parse(note.writtenAt));
       const sessionName = note.session === 'day' ? '' : ` ${DAY_SESSION_LABEL[note.session]}`;
+      if (note.origin === 'mind') return {
+        id: note.id, time: note.time!, price: note.price!, phase, voice: note.voice, text: note.text, mind: true,
+        meta: `zapsáno ${written} · hlava`, rayFrom: null, ghost: false,
+        status: failed.has(note.id) ? 'failed' as const : pending.has(note.id) ? 'pending' as const : undefined,
+      };
       return {
         id: note.id, time: note.time!, price: note.price!, phase, voice: note.voice, text: note.text,
         meta: `zapsáno ${written} · ${phase === 'prep' ? `příprava${sessionName}` : phase === 'live' ? 'živě' : 'dopsáno zpětně'}${(() => { const at = editedAt(note.writtenAt, note.updatedAt); return at ? ` · upraveno ${pragueClock(Date.parse(at))}` : ''; })()}`,
@@ -221,7 +261,7 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
         ghost: !filter(note) && Boolean(ghost?.(note)),
         status: failed.has(note.id) ? 'failed' as const : pending.has(note.id) ? 'pending' as const : undefined,
       };
-    }), [failed, journal.notes, pending, windows]);
+    }), [failed, journal.notes, noteFilter, noteMatches, pending, windows]);
 
   const selectedTrade = selected?.kind === 'trade' ? dayTrades.find(trade => String(trade.id) === selected.id) ?? null : null;
   const selectedNote = selected?.kind === 'note' ? journal.notes.find(note => note.id === selected.id) ?? null : null;
@@ -233,7 +273,8 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
     mode, modeSession, setModeSession, openPrep, openClose, backToDay,
     scope, setScope, selected, setSelected, selectedTrade, selectedNote,
     placing, setPlacing, pendingPoint, setPendingPoint,
-    dictation, createNote, rateTrade,
+    dictation, createNote, createWeekPlan, editNoteText, rateTrade,
+    noteKind, setNoteKind, noteFilter, setNoteFilter, mindTicks,
     prepDraft, updatePrepDraft, savePrep, closeDraft, updateCloseDraft, saveClose,
     pinViews,
   };

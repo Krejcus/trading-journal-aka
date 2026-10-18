@@ -254,6 +254,7 @@ export default function DayFullscreenChart({ ctl, isDark, timeframe, onTimeframe
           pending={pending}
           nowTime={nowTime}
           bands={bands}
+          ticks={ctl.mindTicks}
         />
         <DayTouchDrawLayer chartApi={api} containerRef={containerRef} enabled={drawing && !placing} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={endPath} />
         {/* Lišta vybrané kresby: barva, koš (jako plovoucí lišta v TradingView, jen nahoře uprostřed). */}
