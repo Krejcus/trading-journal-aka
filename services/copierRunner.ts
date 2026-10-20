@@ -133,11 +133,11 @@ const readStandaloneStopPositions = async (
   throw lastError;
 };
 
-const standaloneProtectiveRole = (
+const standaloneProtectiveEpoch = (
   event: LeaderEvent,
   state: CopierState,
   group: CopyGroupConfig,
-): FollowerOrderLink['protectiveRole'] => {
+): { role: NonNullable<FollowerOrderLink['protectiveRole']>; epochId: string } | undefined => {
   if (event.kind !== 'submitted'
     || (event.orderType !== 'Stop' && event.orderType !== 'StopLimit')) return undefined;
   const epoch = state.safety.leaderExposureEpochs?.find(candidate => (
@@ -150,7 +150,7 @@ const standaloneProtectiveRole = (
   if (!epoch) return undefined;
   const reduces = epoch.lastLeaderNet > 0 ? event.side === 'Sell' : event.side === 'Buy';
   return reduces && event.quantity <= Math.abs(epoch.lastLeaderNet)
-    ? 'standalone-stop'
+    ? { role: 'standalone-stop', epochId: epoch.id }
     : undefined;
 };
 
@@ -1433,7 +1433,8 @@ export async function processLeaderEvent(
   let shadowLinks = new Map(runtime.shadowLinks ?? []);
   let state = runtime.state;
   let revision = runtime.revision;
-  const protectiveRole = standaloneProtectiveRole(event, state, group);
+  const standaloneProtective = standaloneProtectiveEpoch(event, state, group);
+  const protectiveRole = standaloneProtective?.role;
 
   const verdict = classifySequence(event.sequence, state.lastSequence);
   const deferredReplay = options.deferredReplay === true && verdict === 'out-of-order';
@@ -2088,7 +2089,13 @@ export async function processLeaderEvent(
           event.id,
           event.sequence,
         );
-      if (protectiveRole && entry.protectiveRole == null) entry = { ...entry, protectiveRole };
+      if (standaloneProtective && entry.protectiveRole == null) {
+        entry = {
+          ...entry,
+          protectiveRole: standaloneProtective.role,
+          protectiveEpochId: standaloneProtective.epochId,
+        };
+      }
       const action = nextAction(entry);
 
       if (action.type === 'skip') {

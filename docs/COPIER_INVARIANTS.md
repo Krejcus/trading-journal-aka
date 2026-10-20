@@ -529,16 +529,23 @@ existující ochranu.
 - Proč: Bez spolehlivé kauzality nelze poznat, zda rozdíl pochází z ručního
   obchodu, chybějícího eventu nebo neznámého fillu.
 - Vynucuje: `services/copierRiskGate.ts:haltReason` a
-  `services/copierRuntimeController.ts:performReconciliation`. V16 dovoluje
+  `services/copierRuntimeController.ts:performReconciliation` (výjimka
+  ochranného fillu: `protectiveLegOwner` / `prepareProtectiveIsolation`). V16 dovoluje
   místo haltu izolovat konkrétního ineligible followera jen s episode-bound
   důkazem přes `authoritativelyIsolateFollowerForEpisode` /
   `episodeIsolationFromSnapshot`: přesná lineage, flat/no-working a žádný
   nejasný zbytek. Incident 6. 10. má obdobně úzkou all-or-nothing izolaci
-  followera, jehož protective order se vyplnil během modify.
+  followera, jehož protective order se vyplnil během modify. Od 19. 10. platí
+  i pro samostatný Stop přidaný po vstupu, ale jen když kopie při odeslání
+  durable uložila `protectiveEpochId` a ta je pořád otevřená epocha; legacy
+  položka bez epochy nebo stop z jiné epizody zůstává fail-closed. Epocha je
+  jen štítek — bezpečnost dál nesou autoritativní fill přesně na potvrzenou
+  kopii, flat/no-working celého účtu a nezměněný leader.
 - Hlídá test: `tests/copierRiskGate.test.ts`,
   `tests/copierRuntimeController.test.ts`,
   `tests/copierV16EpisodeIsolation.test.ts`,
-  `tests/copierProtectiveFilledDuringModify.test.ts`.
+  `tests/copierProtectiveFilledDuringModify.test.ts`,
+  `tests/copierStandaloneStopFilledDuringModify.test.ts`.
 - Nikdy: Neopravovat rozdíl Market příkazem ani „Auto-Syncem“.
 - Bezpečné změny vs. nebezpečné: Bezpečné je disarmovat, ukázat účty a po
   ručním zásahu autoritativně zkontrolovat flat, případně použít výše uvedenou
@@ -1283,6 +1290,11 @@ Agent-oponent má před schválením změny výslovně odpovědět na každou ot
   dovolena jen s přesnou lineage, flat/no-working a all-or-nothing důkazem.
   Viz PROJECT_LOG „Ranní incidenty a nasazení“ a
   `tests/copierProtectiveFilledDuringModify.test.ts`.
+- **19. 10. — totéž u samostatného Stopu.** Leader přidal Stop 40 s po vstupu
+  a posunul ho; stopy followerů se vyplnily dřív, než modify odešel
+  (`neverSent`). Výjimka 6. 10. hledala vlastníka nohy jen v OSO/bracket
+  outboxu, celá skupina se vypnula. Oprava: `protectiveEpochId` na place
+  položce. `tests/copierStandaloneStopFilledDuringModify.test.ts`.
 - **UI flicker po návratu na LIVE.** Uložené ON/OFF a status mají zabránit
   vizuálnímu probliknutí, ale jsou výhradně presentation cache. Viz PROJECT_LOG
   „LIVE kopírka: načítání bez problikávání“ a `lib/copierPowerDisplay.ts`.
@@ -1347,6 +1359,11 @@ Agent-oponent má před schválením změny výslovně odpovědět na každou ot
     pozice a její budoucí zapojení by porušilo zákaz Auto-Sync. Doporučení je
     export i testy odstranit, případně jej přesunout mimo execution kód tak,
     aby jej nešlo omylem připojit bez nového explicitního safety rozhodnutí.
+15. **SLABINA — commit izolace po ochranném fillu bez fence (od 6. 10.).**
+    `commitProtectiveIsolation` po posledním `await` v prepare už nekontroluje
+    `stopped`, safety generation ani `gate.armed`; DISARM/kill zařazený mezi
+    prepare a `processor.mutate` přesto zapíše pauzu a waiver. Dopad je malý
+    (stav je autoritativně flat), ale fence by měl odpovídat ostatním cestám.
 
 ## Minimální předávací důkazy po změně
 

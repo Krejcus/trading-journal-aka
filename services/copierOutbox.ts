@@ -77,6 +77,12 @@ export interface OutboxEntry {
   tracksFillTarget?: boolean;
   /** Durable provenance pro obnovení follower linku po lookupu, bez resend. */
   protectiveRole?: 'standalone-stop';
+  /**
+   * 19. 10. 2026: leader exposure epocha, do které samostatný stop při
+   * odeslání patřil. Jen s ní smí vyplnění stopu během posunu vyřadit
+   * followera z epizody; legacy položky bez ní zůstávají fail-closed.
+   */
+  protectiveEpochId?: string;
   status: PlaceOutboxStatus;
   /** Počet pokusů o odeslání. Chrání před nekonečnou smyčkou. */
   attempts: number;

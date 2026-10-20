@@ -262,6 +262,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-20 — Kopírka: samostatný Stop vyplněný během posunu už nevypne skupinu (Claude)
+
+- Incident 19. 10. 16:26: leader short 10 MNQ (Market), Stop přidal až o 40 s
+  později a dvakrát ho posunul. Při druhém posunu se stopy obou followerů
+  vyplnily na předchozí ceně dřív, než modify odešel (`neverSent`); leader
+  zůstal v obchodě. Followeři byli risk-redukčně flat, ale výjimka 6. 10.
+  (`protectiveFilledDuringModify`) hledala vlastníka nohy jen v OSO/bracket
+  outboxu → fail-closed celé skupiny.
+- Oprava: place položka samostatného stopu si při odeslání durable uloží
+  `protectiveEpochId`; `protectiveLegOwner` ji přiřadí jen k té samé otevřené
+  epoše. Důkazy beze změny (fill přesně na potvrzenou kopii, flat/no-working
+  celého účtu, nezměněný leader, all-or-nothing). Legacy položky bez epochy
+  zůstávají fail-closed.
+- 16:32 téhož dne: followeři 70423233/70423265 zlikvidovala propka (breach)
+  1,9 s před exitem leadera → správný fail-closed, nic k opravě.
+- copier-design-critic: návrh SCHVÁLENO s podmínkou (testy + docs, splněno).
+  Pozor: Mac byl při práci silně přetížený (booted iOS simulátor od 18. 10.,
+  load ~60, volná paměť ~70 MB) — zpomaluje i worker.
+
 ### 2026-10-18 — Deník: poznámka Hlava, víkendový režim, přehled Hlava (Claude)
 - **Hlava** = osobní poznámka (celý život: rodina, jídlo, pohyb, spánek, vztahy, práce, trading
   hlava). Uživatel výslovně nechtěl stupnice nálady/spánku („už jsem jednou měl a nepoužíval“) —
