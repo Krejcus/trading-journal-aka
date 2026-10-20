@@ -52,6 +52,21 @@ describe('createSupabaseCopierStore', () => {
     await expect(store.load()).rejects.toThrow('Invalid copier snapshot');
   });
 
+  it('samostatný stop: epocha se načte jako řetězec, jiný typ snapshot odmítne', async () => {
+    const entry = {
+      key: 'cp:g:stop:200', tag: 'cpabc', leaderOrderId: 'stop',
+      request: { tag: 'cpabc', accountId: 200, symbol: 'MNQZ6', side: 'Buy', quantity: 10, orderType: 'Stop', stopPrice: 29_851.5 },
+      status: 'acknowledged', attempts: 1, brokerOrderId: 'f-stop', updatedAt: 1,
+      protectiveRole: 'standalone-stop',
+    };
+    const load = (protectiveEpochId: unknown) => createSupabaseCopierStore(fakeClient({
+      row: { revision: 4, snapshot: { ...emptySnapshot(), outbox: [{ ...entry, protectiveEpochId }] } },
+    }), crypto.randomUUID(), () => 1).load();
+    expect((await load('epoch-1')).outbox[0]).toMatchObject({ protectiveEpochId: 'epoch-1' });
+    await expect(load(5)).rejects.toThrow('Invalid copier snapshot');
+    await expect(load({ id: 'x' })).rejects.toThrow('Invalid copier snapshot');
+  });
+
   it('failne zavřeně i při hluboce poškozeném outboxu nebo duplicitních klíčích', async () => {
     const malformed = {
       ...emptySnapshot(),

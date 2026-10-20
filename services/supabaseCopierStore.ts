@@ -63,6 +63,7 @@ function validOutbox(value: unknown): boolean {
     && (value.leaderEventId == null || string(value.leaderEventId))
     && (value.leaderSequence == null || (integer(value.leaderSequence) && Number(value.leaderSequence) >= 0))
     && (value.protectiveRole == null || value.protectiveRole === 'standalone-stop')
+    && (value.protectiveEpochId == null || string(value.protectiveEpochId))
     && validRequest(value.request) && placeOutboxStatuses.has(String(value.status))
     && integer(value.attempts) && Number(value.attempts) >= 0
     && optionalString(value.brokerOrderId) && optionalString(value.reason)

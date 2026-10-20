@@ -5185,8 +5185,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   /**
    * Ochranná noha kopírky z nativního OSO nebo bracketu: symbol a leader
-   * entry order, ke kterému patří. Samostatné stopy se nepřiřazují (bez
-   * vazby na vstup nejde doložit epochu) — zůstávají fail-closed.
+   * entry order, ke kterému patří. Samostatný stop (19. 10. 2026) jen když
+   * si při odeslání durable uložil epochu a ta je pořád ta otevřená; legacy
+   * stop bez epochy nebo stop z jiné epizody zůstává fail-closed.
    */
   const protectiveLegOwner = (
     accountId: number,
@@ -5198,6 +5199,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (entry.firstBrokerOrderId === brokerOrderId || entry.secondBrokerOrderId === brokerOrderId) {
         return { symbol: entry.request.symbol, leaderEntryOrderId: entry.leaderEntryOrderId };
       }
+    }
+    for (const entry of live.outbox.values()) {
+      if (entry.request.accountId !== accountId || entry.brokerOrderId !== brokerOrderId) continue;
+      if (!isStandaloneProtective(entry) || !entry.protectiveEpochId) return null;
+      const epoch = leaderExposureEpoch(entry.request.symbol);
+      if (
+        !epoch
+        || epoch.phase !== 'open'
+        || epoch.id !== entry.protectiveEpochId
+        || epoch.leaderEntryOrderIds.length === 0
+      ) return null;
+      return { symbol: entry.request.symbol, leaderEntryOrderId: epoch.leaderEntryOrderIds[0] };
     }
     return null;
   };
