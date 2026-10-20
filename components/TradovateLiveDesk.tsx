@@ -80,6 +80,7 @@ import {
   createCopyTradeAccountLabelResolver,
   formatKnownCopyTradeAccountIds,
 } from '../lib/copyTradeAccountLabels';
+import { tradeCardFeeRates } from '../lib/liveTradeCard';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
 import {
   devLiveCopyFixtureDailyStats,
@@ -634,6 +635,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     : null;
   const copyTradeOrders = useMemo(
     () => liveData ? tradovateCopyTradeOrders(liveData) : [],
+    [liveData],
+  );
+  // Skutečné poplatky z fillů pro kartu obchodu (jen zobrazení).
+  const tradeFeeRates = useMemo(
+    () => liveData ? tradeCardFeeRates(liveData.accounts) : new Map<string, number>(),
     [liveData],
   );
   const effectiveAccountEligibility = useMemo(
@@ -1383,6 +1389,7 @@ acceptAgentStatus((await executeAgent({
               snapshot={displaySnapshot ?? copyTradeSnapshot}
               accountProfiles={live.profiles}
               orders={copyTradeOrders}
+              tradeFeeRates={tradeFeeRates}
               onRefreshOrders={async () => { await live.refreshData(); }}
               onAccount={account => setSelectedAccountId(account.id)}
               apiTelemetry={live.apiTelemetry}
