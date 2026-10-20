@@ -218,6 +218,8 @@ export interface ChartSettingsDialogProps {
    * (Quick Order, automatický box, čáry objednávek, trojúhelníky fillů), se schovají.
    */
   journalProfile?: boolean;
+  /** Telefon: list přes celou obrazovku místo plovoucího okna. */
+  fullScreen?: boolean;
 }
 
 export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
@@ -227,6 +229,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
   onCancel,
   onApply,
   journalProfile = false,
+  fullScreen = false,
 }) => {
   const [tab, setTab] = useState<TabId>('symbol');
   const [draft, setDraft] = useState(settings);
@@ -259,7 +262,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[10030] flex items-center justify-center p-4"
+      className={fullScreen ? 'fixed inset-0 z-[10030] flex bg-white' : 'fixed inset-0 z-[10030] flex items-center justify-center p-4'}
       role="presentation"
       onMouseDown={event => { if (event.target === event.currentTarget) onCancel(); }}
     >
@@ -268,8 +271,10 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
         aria-modal="true"
         aria-label="Nastavení grafu"
         data-chart-settings-dialog="chart"
-        className="flex h-[560px] max-h-[88vh] w-[544px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-950 shadow-2xl"
-        style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)` }}
+        className={fullScreen
+          ? 'flex h-full w-full flex-col overflow-hidden bg-white text-slate-950 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]'
+          : 'flex h-[560px] max-h-[88vh] w-[544px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-950 shadow-2xl'}
+        style={fullScreen ? undefined : { transform: `translate3d(${position.x}px, ${position.y}px, 0)` }}
         onWheelCapture={event => event.stopPropagation()}
         onPointerDown={event => event.stopPropagation()}
         onContextMenu={event => event.preventDefault()}

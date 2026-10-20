@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Brain, ChevronLeft, ChevronRight, Mic, PenLine } from 'lucide-react';
+import { ArrowLeft, Brain, Check, ChevronLeft, ChevronRight, Mic, PenLine } from 'lucide-react';
 import type { Trade } from '../../types';
 import { DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, carryForward, pragueClock, type DaySession } from '../../lib/dayJournal';
 import { sessionStage, type StreakDay } from '../../lib/dayJournalView';
@@ -8,8 +8,8 @@ import { tradeRMultiple } from '../../utils/tradeRisk';
 import DayCompactChart from './DayCompactChart';
 import DictationDialog from './DictationDialog';
 import { BiasPicker, BigSaveButton, ExecutionPicker, MicButton, NoteKindToggle, SESSION_STYLE, SaveCelebration, SessionSwitch, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
-import { DayMoreMenu, FeedList, NoteFilterSwitch, ScopeSwitch, TradeRating, WeekPlanInput, dayTitle, primaryAction, streakStyle, LiveChip } from './DayPanels';
-import { PinList, PrepTimer, RuleChips, ScenarioField, missingLabel, prepPins, prepRequirements, prepSessionStatus } from './PrepPanels';
+import { DayMoreMenu, FeedList, NoteFilterSwitch, ScopeSwitch, SessionSwitchFx, TradeRating, WeekPlanInput, dayTitle, primaryAction, scopeSwitchFxSub, sessionSwitchFxSub, streakStyle, LiveChip } from './DayPanels';
+import { PinList, PrepTimer, RuleChips, ScenarioField, missingLabel, prepPins, prepRequirements } from './PrepPanels';
 import { CloseSide, SummaryBar, closeRequirements, closeSessionStatus } from './ClosePanels';
 import { focusRange, sessionBands } from './dayFocus';
 import type { DayPinPoint } from './DayNotesLayer';
@@ -17,6 +17,7 @@ import type { DayController } from './useDayController';
 import DayFullscreenChart from './DayFullscreenChart';
 import type { MarketTimeframe } from '../../services/marketData';
 import { readStoredDayChartTimeframe, writeStoredDayChartTimeframe } from '../../lib/dayChartTools';
+import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 
 const clock = (ms: number) => pragueClock(ms);
 const bottomOffset = 'calc(var(--native-shell-tab-bar-height, 0px) + 12px)';
@@ -34,7 +35,20 @@ function Sheet({ children, onClose, label, dismissable = true }: { children: Rea
 }
 
 /** Poznámka do grafu na telefonu: nahrávání → přepis → Připíchnout. */
-function PinSheet({ ctl, point, autoRecord, onClose }: { ctl: DayController; point: DayPinPoint | null; autoRecord: boolean; onClose: () => void }) {
+/** Potvrzení po uložení poznámky: fajfka s textem nad spodní lištou + jemná vibrace. */
+type SavedNote = { key: number; kind: 'market' | 'mind'; pinned: boolean };
+function NoteSavedToast({ saved }: { saved: SavedNote }) {
+  const mind = saved.kind === 'mind';
+  const text = mind ? 'Uloženo do Hlavy' : saved.pinned ? 'Připíchnuto do grafu' : 'Uloženo do časové osy';
+  return (
+    <div role="status" aria-live="polite" className="dj" style={{ position: 'fixed', left: '50%', bottom: 'calc(var(--native-shell-tab-bar-height, 0px) + 96px)', zIndex: 910, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 18px 10px 10px', borderRadius: 999, background: 'var(--dj-card)', border: `1px solid ${mind ? 'rgba(168,85,247,0.45)' : 'rgba(16,185,129,0.45)'}`, boxShadow: `0 16px 40px -14px ${mind ? 'rgba(147,51,234,0.55)' : 'rgba(16,185,129,0.5)'}`, animation: 'dj-saved 1.7s cubic-bezier(.2,.9,.3,1) both', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+      <span style={{ width: 30, height: 30, borderRadius: 99, display: 'grid', placeItems: 'center', background: mind ? 'linear-gradient(180deg,#a855f7,#9333ea)' : 'linear-gradient(180deg,#34d399,#10b981)', color: '#fff', animation: 'dj-check .45s .08s cubic-bezier(.34,1.56,.64,1) both' }}><Check size={18} strokeWidth={3} /></span>
+      <span style={{ font: '700 14px Inter, sans-serif', color: 'var(--dj-text)' }}>{text}</span>
+    </div>
+  );
+}
+
+function PinSheet({ ctl, point, autoRecord, onClose, onSaved }: { ctl: DayController; point: DayPinPoint | null; autoRecord: boolean; onClose: () => void; onSaved: (saved: Omit<SavedNote, 'key'>) => void }) {
   const { dictation } = ctl;
   const [draft, setDraft] = useState('');
   const [voice, setVoice] = useState(autoRecord);
@@ -51,7 +65,7 @@ function PinSheet({ ctl, point, autoRecord, onClose }: { ctl: DayController; poi
   }, []);
   const status = recordingStatus(dictation.phase, dictation.seconds, dictation.error);
   const busy = dictation.phase === 'recording' || dictation.phase === 'transcribing';
-  const save = () => { if (!draft.trim()) return; ctl.createNote(draft, point, voice, ctl.mode === 'day' ? ctl.noteKind : 'market'); onClose(); };
+  const save = () => { if (!draft.trim()) return; const kind = ctl.mode === 'day' ? ctl.noteKind : 'market'; ctl.createNote(draft, point, voice, kind); onSaved({ kind: kind === 'mind' ? 'mind' : 'market', pinned: Boolean(point) && kind !== 'mind' }); onClose(); };
   return (
     <Sheet label={point ? "Poznámka do grafu" : "Poznámka"} dismissable={!draft.trim() && dictation.phase !== 'recording' && dictation.phase !== 'transcribing'} onClose={() => { dictation.cancel(); onClose(); }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -166,6 +180,33 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => { rootRef.current?.scrollIntoView({ block: 'start' }); }, [mode, ctl.day]);
 
+  // Záblesk s nápisem přes graf při přepnutí rozsahu (deník) nebo seance
+  // (příprava/uzavření) — stejný jako na PC. Jen po klepnutí na přepínač;
+  // návrat rozsahu na „Celý den“ při změně dne ho nespouští.
+  const [savedNote, setSavedNote] = useState<SavedNote | null>(null);
+  const noteSaved = (saved: Omit<SavedNote, 'key'>) => { setSavedNote({ ...saved, key: Date.now() }); playNativeHapticIfAvailable('success'); };
+  useEffect(() => {
+    if (!savedNote) return;
+    const timer = window.setTimeout(() => setSavedNote(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [savedNote]);
+  const [fx, setFx] = useState<{ key: number; session: DaySession | 'day'; sub: string } | null>(null);
+  const pickScope = (next: DayController['scope']) => {
+    if (next === ctl.scope) return;
+    ctl.setScope(next);
+    setFx({ key: Date.now(), session: next, sub: scopeSwitchFxSub(ctl, next) });
+  };
+  const pickSession = (next: DaySession) => {
+    if (next === session || mode === 'day') return;
+    ctl.setModeSession(next);
+    setFx({ key: Date.now(), session: next, sub: sessionSwitchFxSub(ctl, mode, next) });
+  };
+  useEffect(() => {
+    if (!fx) return;
+    const timer = window.setTimeout(() => setFx(null), 1000);
+    return () => window.clearTimeout(timer);
+  }, [fx]);
+
   const range = focusRange({ mode, session, scope: ctl.scope, windows: ctl.chartWindows, now: ctl.now, isToday: ctl.isToday });
   const bands = useMemo(() => sessionBands(ctl.chartWindows, mode, null), [ctl.chartWindows, mode]);
   const pins = mode === 'prep'
@@ -179,6 +220,7 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
   const chart = (height: number) => fullscreen ? (
     <div className="dj" style={{ height: height + 37, display: 'grid', placeItems: 'center', borderTop: '1px solid var(--dj-line)', borderBottom: '1px solid var(--dj-line)', fontSize: 12, color: 'var(--dj-muted)' }}>Graf je otevřený na celou obrazovku</div>
   ) : (
+    <div style={{ position: 'relative' }}>
     <DayCompactChart
       ctl={ctl} isDark={isDark} height={height} range={range} focusKeyPrefix={`${mode}:${session}:${ctl.scope}`}
       selectedTrade={selectedChartTrade} pins={pins} bubbles={mode === 'prep' ? 'all' : 'selected'}
@@ -186,6 +228,8 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
       nowTime={mode === 'prep' && ctl.isToday ? Math.floor(ctl.now / 1000) : null} bands={bands}
       timeframe={timeframe} onTimeframe={setTimeframe} onExpand={() => setFullscreen(true)}
     />
+    {fx && <SessionSwitchFx key={fx.key} session={fx.session} sub={fx.sub} />}
+    </div>
   );
   const toggleVoice = () => { ctl.setPendingPoint(null); ctl.setPlacing(ctl.placing === 'voice' ? null : 'voice'); };
   const closeSheet = () => { setSheet(null); ctl.setPendingPoint(null); };
@@ -212,7 +256,6 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
     content = (
       <>
         <PhoneHeader onBack={ctl.backToDay} title="Příprava" subtitle={`${dayTitle(ctl.day)} · ${before}`} right={<PrepTimer openedAt={draft.openedAt} />} />
-        <div style={{ margin: '14px 16px 0' }}><SessionSwitch fill value={session} onChange={ctl.setModeSession} status={prepSessionStatus(ctl, session)} /></div>
         <div style={{ margin: '10px 16px 0' }}><BiasPicker fill height={52} value={draft.bias} onChange={bias => ctl.updatePrepDraft(session, { bias })} /></div>
         <div style={{ marginTop: 12 }}>{chart(300)}</div>
         <div style={{ padding: '10px 16px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -237,7 +280,7 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
     content = (
       <>
         <PhoneHeader onBack={ctl.backToDay} title="Uzavření" subtitle={`${dayTitle(ctl.day)} · ${clock(ctl.windows[session].start)}–${clock(ctl.windows[session].end)}`} />
-        <div style={{ margin: '14px 16px 0' }}><SessionSwitch fill value={session} onChange={ctl.setModeSession} status={closeSessionStatus(ctl)} /></div>
+        <div style={{ margin: '14px 16px 0' }}><SessionSwitch fill value={session} onChange={pickSession} status={closeSessionStatus(ctl)} /></div>
         <div style={{ marginTop: 12 }}>{chart(220)}</div>
         <div style={{ display: 'flex', flexDirection: 'column', padding: '0 4px' }}><CloseSide ctl={ctl} session={session} /></div>
         <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -285,7 +328,7 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
             )}
           </div>
         </div>
-        {!ctl.weekend && <div style={{ margin: '14px 16px 0' }}><ScopeSwitch ctl={ctl} fill /></div>}
+        {!ctl.weekend && <div style={{ margin: '14px 16px 0' }}><ScopeSwitch ctl={ctl} fill onPick={pickScope} /></div>}
         <div style={{ marginTop: 12 }}>{chart(ctl.weekend ? 230 : 250)}</div>
         <div style={{ padding: '14px 16px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {ctl.weekend ? (
@@ -365,8 +408,9 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
           onClose={() => setFullscreen(false)} onVoice={toggleVoice}
         />
       )}
-      {sheet?.kind === 'pin' && <PinSheet ctl={ctl} point={sheet.point} autoRecord={sheet.record} onClose={closeSheet} />}
-      {sheet?.kind === 'dictate' && <DictationDialog ctl={ctl} sheet onClose={() => setSheet(null)} />}
+      {sheet?.kind === 'pin' && <PinSheet ctl={ctl} point={sheet.point} autoRecord={sheet.record} onClose={closeSheet} onSaved={noteSaved} />}
+      {sheet?.kind === 'dictate' && <DictationDialog ctl={ctl} sheet onClose={() => setSheet(null)} onSaved={noteSaved} />}
+      {savedNote && <NoteSavedToast key={savedNote.key} saved={savedNote} />}
       {ctl.selectedTrade && !fullscreen && <TradeSheet ctl={ctl} trade={ctl.selectedTrade} onOpenTrade={onOpenTrade} onClose={() => ctl.setSelected(null)} />}
 
       {celebration && (

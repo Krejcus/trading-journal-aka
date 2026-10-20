@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { DEFAULT_STYLE, type Drawing, type DrawingEngine, type DrawingStyle } from '@getcandlekit/charts';
 import { GripVertical, X } from 'lucide-react';
+import { drawingDialogLayerClass, drawingDialogSectionClass } from '../lib/drawingDialogLayout';
 import { drawingToolSupportsFill } from '../services/chartDrawingStyle';
 import {
   normalizeDrawingStyle,
@@ -63,12 +64,15 @@ interface GenericDrawingSettingsDialogProps {
   engine: DrawingEngine;
   drawing: Drawing;
   onClose: () => void;
+  /** Telefon: list přes celou obrazovku místo plovoucího okna. */
+  fullScreen?: boolean;
 }
 
 const GenericDrawingSettingsDialog: React.FC<GenericDrawingSettingsDialogProps> = ({
   engine,
   drawing,
   onClose,
+  fullScreen = false,
 }) => {
   const originalStyleRef = useRef(clone(drawing.style));
   const originalPointsRef = useRef(clone(drawing.points));
@@ -150,12 +154,12 @@ const GenericDrawingSettingsDialog: React.FC<GenericDrawingSettingsDialogProps> 
     className={`relative h-11 px-1 text-[13px] font-semibold ${tab === id ? 'text-slate-950 after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:rounded-full after:bg-[#2962ff]' : 'text-slate-600'}`}
   >{label}</button>;
 
-  return <div className="pointer-events-none fixed inset-0 z-[650]" data-chart-settings-dialog="true">
+  return <div className={drawingDialogLayerClass(fullScreen)} data-chart-settings-dialog="true">
     <section
       role="dialog"
       aria-label={`${toolTitle(drawing.tool)} settings`}
-      className="pointer-events-auto absolute flex max-h-[min(620px,calc(100vh-24px))] w-[420px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-950 shadow-2xl"
-      style={position}
+      className={drawingDialogSectionClass(fullScreen, "pointer-events-auto absolute flex max-h-[min(620px,calc(100vh-24px))] w-[420px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-950 shadow-2xl")}
+      style={fullScreen ? undefined : position}
       onPointerDown={event => event.stopPropagation()}
       onWheelCapture={event => event.stopPropagation()}
     >

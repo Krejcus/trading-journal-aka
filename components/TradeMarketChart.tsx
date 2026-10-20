@@ -38,6 +38,9 @@ import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { Trade } from '../types';
 import CandleKitTradeChart, { SHARED_INDICATOR_SETTINGS_EVENT } from './CandleKitTradeChart';
 import AlphaTradeChartWorkspace, { type WorkspaceReviewSlots } from './AlphaTradeChartWorkspace';
+// Telefon: graf na celou obrazovku jako v deníku dne (dotykové kreslení, lišta, přehrávání).
+const PhoneChartFullscreen = React.lazy(() => import('./day/DayFullscreenChart'));
+const PHONE_CHART_MEDIA = '(max-width: 1023px)';
 import ChartTimeframePicker from './ChartTimeframePicker';
 import {
   aggregateCandles,
@@ -195,6 +198,14 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const [showStructure, setShowStructure] = useState(false);
   const [chartEngine, setChartEngine] = useState<'candlekit' | 'classic'>('candlekit');
   const [isFullscreenState, setIsFullscreen] = useState(false);
+  const [isPhone, setIsPhone] = useState(() => typeof window !== 'undefined' && window.matchMedia?.(PHONE_CHART_MEDIA).matches === true);
+  useEffect(() => {
+    const media = window.matchMedia?.(PHONE_CHART_MEDIA);
+    if (!media) return;
+    const update = () => setIsPhone(media.matches);
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
   // Review týdne je vždy ve fullscreenu.
   const isFullscreen = isFullscreenState || Boolean(review);
   const reviewCloseRef = useRef(review?.onClose);
@@ -1238,6 +1249,41 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
       <TradeExecutionTimeline history={trade.executionHistory} isDark={isDark} candleCoverage={!loading && !error ? { candles: rawCandles, intervalSeconds: 60 } : undefined} />
     </div>
   );
+
+  // Telefon: telefonní graf na celou obrazovku (review týdne do něj vloží své panely).
+  if (isFullscreen && isPhone) {
+    const windowMs = 30 * 60_000;
+    return (
+      <>
+        {!review && (detail ? detailContent : chartContent)}
+        <React.Suspense fallback={null}>
+          <PhoneChartFullscreen
+            source={{
+              key: `trade:${trade.id}`,
+              candles: rawCandles,
+              loading,
+              error: error?.message ?? null,
+              trades: review ? [...review.trades] : [trade],
+              anchor: trade,
+              drawingKeyId: review ? review.drawingKey : `trade:${trade.id}`,
+              drawingScope: review ? 'review' : 'trade',
+              chartNotes: notes,
+              onChartNotesChange,
+              onSlotsReady: review?.onSlotsReady,
+              onReplayCursor: review?.onReplayCursor,
+            }}
+            isDark={isDark}
+            timeframe={timeframe}
+            onTimeframe={setTimeframe}
+            range={{ from: entryMs - windowMs, to: exitMs + windowMs }}
+            focusKeyPrefix={`trade:${trade.id}`}
+            selectedTrade={null}
+            onClose={() => (review ? review.onClose() : setIsFullscreen(false))}
+          />
+        </React.Suspense>
+      </>
+    );
+  }
 
   return isFullscreen
     ? createPortal(

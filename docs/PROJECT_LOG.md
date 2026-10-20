@@ -294,6 +294,41 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   London (bias + scénář) a uzavření London (shrnutí + exekuce) se uložily do `day_journal_entries`
   se správným `entry_key`/`written_at`, oslavné obrazovky OK; oba testovací řádky smazány podle id,
   pátek zase 0 řádků. Opraven přetékající čip „✓ Příprava LDN“ (užší padding, ellipsis, širší čip).
+- **19. 10. ráno (Filipova zpětná vazba ze simulátoru):** barevná pilulka přepínačů na telefonu
+  (bias, exekuce, Celý den/London/NY) ujížděla mimo položku — `translateX` v % se počítá ze šířky
+  indikátoru, ne kontejneru; v režimu `fill` teď `calc(i * (100% + gap))`. Záblesk s názvem seance
+  přes graf je i na telefonu (`SessionSwitchFx` + podtitulky přesunuty do `DayPanels`), spouští se
+  jen klepnutím na přepínač (ne při návratu rozsahu po změně dne). Na Filipův pokyn nainstalováno
+  do jeho iPhonu z větve (čistá reinstalace); `main` beze změny.
+- **19.–20. 10. podle Filipova videa z TradingView (telefon):** potvrzení po uložení poznámky
+  (bublina + haptika `success`); příprava bez přepínače London/NY (seance z hlavičky). Graf na celou
+  obrazovku bez horní lišty — jedna spodní posuvná lišta jako TV: kolečko timeframe (tah nahoru/dolů),
+  indikátory, tužka, zpět, magnet, zámek, **rozvržení** (1 / 2 / podle otočení; na výšku pod sebou,
+  na šířku vedle sebe; `lib/dayChartTools.ts` `readDayChartLayout`), **roztažení označeného okna**,
+  rozsah, poznámka, mikrofon, přehrávání, zavřít vždy vpravo. Oblíbené nástroje (hvězdičky,
+  `at:day-chart:draw-favorites`) a vodorovná plovoucí lišta s úchytem (přepínač „Zobrazit oblíbené
+  na grafu“). **Nastavení kresby jako na PC:** ⚙ v liště vybrané kresby otevře stejné dialogy
+  (`GenericDrawingSettingsDialog`, `FibDrawingSettingsDialog`, `PositionDrawingSettingsDialog`) s
+  novým propem `fullScreen` (PC beze změny) — záložky, barvy s průhledností, souřadnice, šablony
+  synchronizované s účtem; u cesty se vzhled přenese na všechny úseky. Fixed range volume profile
+  záměrně ne (Filip: nástroje nechat). Testovací kresby/poznámky v simulátoru smazány.
+- **20. 10. — telefonní graf všude (Filip testuje na iPhonu, simulátor zakázán — Mac ho nezvládá):**
+  `DayFullscreenChart` je obecný telefonní graf (`source: PhoneChartSource` místo `ctl`; deníkové věci —
+  poznámky, Den/LDN/NY, mikrofon — jen s `ctl`). `TradeMarketChart` na telefonu (`max-width: 1023px`)
+  otevírá ve fullscreenu tenhle graf místo PC workspace: detail obchodu, Hodnotit i review týdne (review
+  dostane místa pro své panely přes `onSlotsReady`; hodnocení ve výsuvném listu „Hodnotit“). Backtest
+  záměrně ne (Filip ho na telefonu nepoužívá). Graf: spodní posuvná lišta (kolečko TF vlevo pevně —
+  buben s setrvačností, haptikou, dwell 240 ms před živým přepnutím; Den/LDN/NY se zábleskem; tužka;
+  Zpět/Vpřed přes `ChartWorkspaceHistory` z PC; ⋯ = Rozvržení, Indikátory (složka), Nastavení grafu,
+  Přehrávání, Magnet slabý/silný, Zámek). Rozvržení = 19 šablon z PC + synchronizace (interval, kurzor,
+  čas, rozsah), každé okno vlastní TF, roztažení okna. Kresby: PC plovoucí lišty (Generic/Fib/Position)
+  s dotykovým zvětšením, ⚙ i dvojklep otevře PC dialogy s `fullScreen` (šablony). Indikátory: legenda
+  na dotyk (klepnutí → 👁 ⚙ 🗑), PC dialog nastavení `fullScreen`. Přehrávání jako PC: nůžky (prst
+  táhne jen nůžky, osy volné), rychlosti `CHART_REPLAY_SPEEDS`, interval 1m–1h, Plynule/Celá svíčka
+  (`partialReplayCandle` + `formingReplayBar`), obchody jen do kurzoru (`historyAt`), animace střihu.
+  Sdílené dopady i mimo telefon: nápis Londýna ve světlém režimu (`SessionSwitchFx`), nůžky v CandleKit
+  nezakrývají osy, PC dialogy mají volitelný `fullScreen` (PC beze změny). Všechno jen ve větvi,
+  necommitnuté; nasazení až na „nasaď“.
 - **Neověřeno v simulátoru (ráno na telefonu):** diktování a haptika, otočení na šířku (simctl
   rotaci neumí, dvoupanel ověřen vynuceně na výšku), menší iPhone (17e simulátor nepřihlášený),
   Live Activity.

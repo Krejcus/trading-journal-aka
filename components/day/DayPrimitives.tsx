@@ -82,7 +82,8 @@ export function SpringSegmented<T extends string>({ options, value, onChange, it
   }, [fx]);
   const n = options.length;
   const width = fill ? `calc((100% - ${gap * 2 + gap * (n - 1)}px) / ${n})` : `${itemWidth}px`;
-  const offset = (i: number) => fill ? `calc(${i} * (100% - ${gap * 2 + gap * (n - 1)}px) / ${n} + ${i * gap}px)` : `${i * ((itemWidth ?? 0) + gap)}px`;
+  // translateX v % se počítá ze šířky indikátoru (= jedné položky), ne z kontejneru.
+  const offset = (i: number) => fill ? `calc(${i} * (100% + ${gap}px))` : `${i * ((itemWidth ?? 0) + gap)}px`;
   const center = (i: number) => fill ? `calc(${gap}px + ${i} * (100% - ${gap * 2 + gap * (n - 1)}px) / ${n} + ${i * gap}px + (100% - ${gap * 2 + gap * (n - 1)}px) / ${n * 2})` : `${gap + i * ((itemWidth ?? 0) + gap) + (itemWidth ?? 0) / 2}px`;
   return (
     <div role="group" aria-label={label} style={{ position: 'relative', display: 'grid', gridTemplateColumns: `repeat(${n}, ${fill ? 'minmax(0, 1fr)' : `${itemWidth}px`})`, gap, padding: gap, borderRadius: 13, border: '1px solid var(--dj-line)', background: 'var(--dj-seg)', overflow: 'hidden' }}>

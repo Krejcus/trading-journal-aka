@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { chartGlassBar, chartGlassButton, chartGlassMenu, chartGlassRow, chartGlassSelected } from '../services/chartGlass';
 import type { DrawingEngine, DrawingStyle } from '@getcandlekit/charts';
 import { ChevronDown, GripVertical, ListChecks, Settings, Trash2, X, Zap } from 'lucide-react';
+import { drawingDialogLayerClass, drawingDialogSectionClass } from '../lib/drawingDialogLayout';
 import TradingViewColorPicker, { colorWithAlpha, splitColorAlpha } from './TradingViewColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 import { useFloatingToolbarDrag } from '../hooks/useFloatingToolbarDrag';
@@ -128,7 +129,7 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
   </div>;
 };
 
-const PositionDrawingSettingsDialog: React.FC<Props> = ({ engine, drawing, onClose }) => {
+const PositionDrawingSettingsDialog: React.FC<Props & { fullScreen?: boolean }> = ({ engine, drawing, onClose, fullScreen = false }) => {
   const originalStyle = useRef(clone(drawing.style));
   const originalPoints = useRef(clone(drawing.points));
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
@@ -186,8 +187,8 @@ const PositionDrawingSettingsDialog: React.FC<Props> = ({ engine, drawing, onClo
   const field = (label: string, node: React.ReactNode) => <div className="grid grid-cols-[1fr_190px] items-center gap-4"><span className="text-[13px] text-slate-800">{label}</span>{node}</div>;
   const checkbox = (label: string, key: keyof PositionDrawingSettings) => <label className="flex items-center gap-3 text-[13px] text-slate-800"><input type="checkbox" checked={Boolean(settings[key])} onChange={event => setStyle({ [key]: event.target.checked } as Partial<PositionDrawingSettings>)} className="h-4 w-4 accent-[#2962ff]" />{label}</label>;
 
-  return <div className="pointer-events-none fixed inset-0 z-[650]" data-chart-settings-dialog="true">
-    <section role="dialog" aria-label={`${drawing.tool === 'LongPosition' ? 'Long' : 'Short'} position settings`} className="pointer-events-auto absolute flex max-h-[min(680px,calc(100vh-24px))] w-[500px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-950 shadow-2xl" style={position} onPointerDown={event => event.stopPropagation()} onWheelCapture={event => event.stopPropagation()}>
+  return <div className={drawingDialogLayerClass(fullScreen)} data-chart-settings-dialog="true">
+    <section role="dialog" aria-label={`${drawing.tool === 'LongPosition' ? 'Long' : 'Short'} position settings`} className={drawingDialogSectionClass(fullScreen, "pointer-events-auto absolute flex max-h-[min(680px,calc(100vh-24px))] w-[500px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-950 shadow-2xl")} style={fullScreen ? undefined : position} onPointerDown={event => event.stopPropagation()} onWheelCapture={event => event.stopPropagation()}>
       <header className="flex h-14 shrink-0 cursor-move items-center gap-2 px-4" onPointerDown={event => {
         if ((event.target as Element).closest('button,input,select')) return;
         drag.current = { x: event.clientX, y: event.clientY, ...position };

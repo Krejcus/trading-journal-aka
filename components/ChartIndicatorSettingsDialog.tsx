@@ -99,7 +99,9 @@ export const ChartIndicatorSettingsDialog: React.FC<{
   onApply: (settings: AlphaTradeIndicatorSettings, allPanels: boolean) => void;
   /** Jediný graf (detail obchodu) — bez „Na všechny grafy". */
   singleChart?: boolean;
-}> = ({ indicator, settings, onPreview, onCancel, onApply, singleChart = false }) => {
+  /** Telefon: list přes celou obrazovku místo plovoucího okna. */
+  fullScreen?: boolean;
+}> = ({ indicator, settings, onPreview, onCancel, onApply, singleChart = false, fullScreen = false }) => {
   const [tab, setTab] = useState<TabId>('inputs');
   const [draft, setDraft] = useState(settings);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -119,14 +121,16 @@ export const ChartIndicatorSettingsDialog: React.FC<{
   const styleFlags = current as { paneLabels: boolean; statusInputs: boolean };
 
   return (
-    <div className="fixed inset-0 z-[500] flex items-center justify-center bg-transparent p-4" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onCancel(); }}>
+    <div className={fullScreen ? 'fixed inset-0 z-[1000] flex bg-white' : 'fixed inset-0 z-[500] flex items-center justify-center bg-transparent p-4'} role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onCancel(); }}>
       <section
         role="dialog"
         aria-modal="true"
         aria-label={titles[indicator]}
         data-chart-settings-dialog="true"
-        className={`flex max-h-[86vh] ${indicator === 'levels' ? 'w-[560px]' : 'w-[440px]'} max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-950 shadow-2xl`}
-        style={{ transform: `translate3d(${position.x}px, ${position.y}px, 0)` }}
+        className={fullScreen
+          ? 'flex h-full w-full flex-col overflow-hidden bg-white text-slate-950 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]'
+          : `flex max-h-[86vh] ${indicator === 'levels' ? 'w-[560px]' : 'w-[440px]'} max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-950 shadow-2xl`}
+        style={fullScreen ? undefined : { transform: `translate3d(${position.x}px, ${position.y}px, 0)` }}
         onWheelCapture={event => event.stopPropagation()}
       >
         <header

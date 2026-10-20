@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Drawing, DrawingPoint, DrawingStyle } from '@getcandlekit/charts';
 import { priceText } from './DayPrimitives';
@@ -42,6 +42,7 @@ interface EngineLike {
   getDefaultStyle: () => DrawingStyle;
   select: (id: string | null) => void;
   newDrawingId: () => string;
+  getSelectedId?: () => string | null;
 }
 
 interface ControllerLike {
@@ -75,7 +76,7 @@ const fakeEvent = (offsetX: number, offsetY: number): FakeMouseEvent => {
   return event;
 };
 
-export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pathActive = false, pathStyle, onPathEnd }: {
+export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pathActive = false, pathStyle, onPathEnd, onDrawingDoubleTap }: {
   chartApi: ChartViewApi | null;
   containerRef: React.RefObject<HTMLDivElement | null>;
   /** Jen v režimu kreslení; mimo něj se dotyky grafu nedotýkají. */
@@ -86,7 +87,12 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
   pathStyle?: { color: string; width: number };
   /** Dvojklep ukončil cestu — rodič vypne chip. */
   onPathEnd?: () => void;
+  /** Dvojklep na hotovou kresbu (jako dvojklik na PC) — otevře nastavení. */
+  onDrawingDoubleTap?: (id: string) => void;
 }) {
+  // Ref: změna callbacku nesmí přeinstalovat dotykové posluchače (rozdělaná kresba).
+  const doubleTapRef = useRef(onDrawingDoubleTap);
+  doubleTapRef.current = onDrawingDoubleTap;
   const [crosshair, setCrosshair] = useState<{ x: number; y: number; price: string | null } | null>(null);
 
   useEffect(() => {
@@ -208,6 +214,9 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     // Řadič táhne jen zasažený úsek; tady se dorovnají sousední úseky
     // (zlom = společný bod) nebo, při tahu celým úsekem, celá cesta.
     let pathDrag: { id: string; group: string; index: number; kind: string; anchorIndex: number; before: DrawingPoint[] } | null = null;
+    /** Kresba pod prstem a poslední klepnutí na kresbu (dvojklep = nastavení). */
+    let dragHitId: string | null = null;
+    let lastDrawingTap: { id: string; at: number } | null = null;
     const segmentIndex = (id: string) => Number(id.split(':')[2]);
     const startDrag = (point: { x: number; y: number }, event: TouchEvent) => {
       const hit = typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
@@ -215,6 +224,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       controller.onDown(down);
       captured = down.handled; dragging = captured;
       pathDrag = null;
+      dragHitId = captured ? hit?.id ?? engine.getSelectedId?.() ?? null : null;
       const group = pathGroupOf(hit?.id);
       const drawing = hit && group ? engine.getById(hit.id) : undefined;
       if (captured && hit && group && drawing) {
@@ -313,6 +323,13 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
         // Myš by hover zrušila odjetím; prst neodjíždí, úchyty by zůstaly svítit.
         controller.onLeave?.();
         dragging = false; captured = false; pathDrag = null;
+        if (!moved && dragHitId) {
+          const now = Date.now();
+          if (lastDrawingTap && lastDrawingTap.id === dragHitId && now - lastDrawingTap.at < DOUBLE_TAP_MS * 1.3) {
+            lastDrawingTap = null;
+            doubleTapRef.current?.(dragHitId);
+          } else lastDrawingTap = { id: dragHitId, at: now };
+        } else lastDrawingTap = null;
         return;
       }
       captured = false;

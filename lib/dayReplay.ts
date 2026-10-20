@@ -47,3 +47,35 @@ export function candlesUntil<T extends { time: number }>(candles: readonly T[], 
   }
   return candles.slice(0, last + 1);
 }
+
+// ── Bar Replay na telefonu (stejné stupně jako PC: services/chartReplay) ──
+export const DAY_REPLAY_STEP_CHOICES = [1, 5, 15, 30, 60] as const;
+export type DayReplayStep = (typeof DAY_REPLAY_STEP_CHOICES)[number];
+
+/** Krok zpět o interval: poslední svíčka nejpozději `step` minut před kurzorem (ne před začátkem). */
+export function retreatDayReplay<T extends { time: number }>(candles: readonly T[], cursor: number, stepMinutes: number, start: number): number {
+  const target = cursor - Math.max(1, stepMinutes) * 60;
+  let low = 0;
+  let high = candles.length - 1;
+  let found = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (candles[middle].time <= target) { found = middle; low = middle + 1; } else high = middle - 1;
+  }
+  const time = found >= 0 ? candles[found].time : start;
+  return Math.max(start, time);
+}
+
+/** Uložené volby přehrávání (rychlost, interval kroku). */
+export const DAY_REPLAY_PREFS_KEY = 'at:day-chart:replay';
+export function readDayReplayPrefs(storage: Pick<Storage, 'getItem'> | null | undefined, speeds: readonly number[]): { speed: number; step: DayReplayStep } {
+  try {
+    const parsed = JSON.parse(storage?.getItem(DAY_REPLAY_PREFS_KEY) ?? 'null') as { speed?: unknown; step?: unknown } | null;
+    const speed = typeof parsed?.speed === 'number' && speeds.includes(parsed.speed) ? parsed.speed : 1;
+    const step = (DAY_REPLAY_STEP_CHOICES as readonly unknown[]).includes(parsed?.step) ? parsed!.step as DayReplayStep : 1;
+    return { speed, step };
+  } catch { return { speed: 1, step: 1 }; }
+}
+export function writeDayReplayPrefs(storage: Pick<Storage, 'setItem'> | null | undefined, prefs: { speed: number; step: DayReplayStep }): void {
+  try { storage?.setItem(DAY_REPLAY_PREFS_KEY, JSON.stringify(prefs)); } catch { /* jen pohodlí */ }
+}

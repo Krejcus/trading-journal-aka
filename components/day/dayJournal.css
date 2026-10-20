@@ -137,8 +137,61 @@
 @keyframes dj-arrow-up { 0% { transform: translateY(0); } 40% { transform: translateY(-4px); } 100% { transform: translateY(0); } }
 @keyframes dj-arrow-down { 0% { transform: translateY(0); } 40% { transform: translateY(4px); } 100% { transform: translateY(0); } }
 @keyframes dj-sheet { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes dj-saved { 0% { opacity: 0; transform: translate(-50%, 12px) scale(.92); } 14% { opacity: 1; transform: translate(-50%, 0) scale(1); } 82% { opacity: 1; transform: translate(-50%, 0) scale(1); } 100% { opacity: 0; transform: translate(-50%, -6px) scale(.98); } }
 @keyframes dj-fade { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
   .dj *, .dj *::before, .dj *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
 }
+
+/* Plovoucí lišty kresby z PC na telefonu (graf dne na celou obrazovku): stejné
+   ovládání, jen tlačítka velká pro prst. */
+[data-touch-toolbar] [role="toolbar"] { padding: 4px; gap: 2px; }
+[data-touch-toolbar] [role="toolbar"] > button,
+[data-touch-toolbar] [role="toolbar"] > div > button,
+[data-touch-toolbar] [role="toolbar"] > select,
+[data-touch-toolbar] [role="toolbar"] > div > select { height: 40px; min-width: 40px; font-size: 13px; }
+[data-touch-toolbar] [role="toolbar"] > button[aria-label^="Přesunout"] { min-width: 26px; width: 26px; }
+[data-touch-toolbar] [role="toolbar"] > button svg,
+[data-touch-toolbar] [role="toolbar"] > div > button svg { width: 19px; height: 19px; }
+[data-touch-toolbar] [role="menu"] button,
+[data-touch-toolbar] [role="menu"] label { min-height: 40px; }
+
+/* Velké kolečko timeframe (graf dne na celou obrazovku) — podle TradingView:
+   mléčné sklo bez rámečku, text vlevo, řádky na válci (poloha/velikost v JS).
+   Vlastní výplň je nutná (Chrome nekreslí backdrop-filter). */
+.dj-wheel-card {
+  --dj-wheel-on: #131722; --dj-wheel-off: #9598a1;
+  position: fixed; left: 50%; top: 50%; z-index: 1200; width: 176px; height: 176px;
+  transform: translate(-50%, -50%); border-radius: 16px; pointer-events: none; overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 45%),
+    color-mix(in srgb, #ffffff 78%, transparent);
+  box-shadow: 0 18px 50px -16px rgba(15, 23, 42, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4);
+  animation: dj-wheel-in .26s cubic-bezier(.2,.9,.3,1.15) both;
+}
+.dj-wheel-card.is-closing { animation: dj-wheel-out .2s cubic-bezier(.4,0,1,1) both; }
+@keyframes dj-wheel-in { from { opacity: 0; transform: translate(-50%, -50%) scale(.86); filter: blur(6px); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); filter: none; } }
+@keyframes dj-wheel-out { from { opacity: 1; transform: translate(-50%, -50%) scale(1); } to { opacity: 0; transform: translate(-50%, -50%) scale(.92); filter: blur(4px); } }
+.dj-wheel-item {
+  position: absolute; left: 50%; top: 50%; height: 34px; margin-top: -17px;
+  display: flex; align-items: center; white-space: nowrap; transform-origin: center center;
+  font: 400 28px/1 Inter, -apple-system, sans-serif; letter-spacing: -0.01em; will-change: transform;
+}
+html:not(.light-theme) .dj-wheel-card {
+  --dj-wheel-on: #e7e9ee; --dj-wheel-off: #787b86;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0) 45%),
+    color-mix(in srgb, #121827 82%, transparent);
+  box-shadow: 0 18px 50px -16px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+
+/* Střih nůžkami v přehrávání (graf dne na telefonu). */
+@keyframes dj-cut-away { 0% { opacity: 1; transform: translateX(0); } 100% { opacity: 0; transform: translateX(45%); } }
+@keyframes dj-fade-out { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }
+
+/* Review týdne na telefonu: panel hodnocení (PC sloupec 228 px) ve výsuvném listu přes celou šířku. */
+[data-phone-review-slot="side"] > aside { width: 100% !important; flex: 1; min-height: 0; border-left: 0 !important; box-shadow: none !important; }
+[data-phone-review-slot="bottom"] > div { border-top-width: 1px; }

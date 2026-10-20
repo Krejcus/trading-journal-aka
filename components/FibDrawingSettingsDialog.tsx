@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { chartGlassBar, chartGlassButton, chartGlassMenu, chartGlassRow } from '../services/chartGlass';
 import type { DrawingEngine } from '@getcandlekit/charts';
 import { ArrowDownToLine, ArrowUpToLine, Copy, Eye, EyeOff, GripVertical, Lock, MoreHorizontal, RotateCcw, Settings, Trash2, Unlock, X } from 'lucide-react';
+import { drawingDialogLayerClass, drawingDialogSectionClass } from '../lib/drawingDialogLayout';
 import TradingViewColorPicker from './TradingViewColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 import {
@@ -93,9 +94,11 @@ interface FibDrawingSettingsDialogProps {
   engine: DrawingEngine;
   drawing: FibDrawing;
   onClose: () => void;
+  /** Telefon: list přes celou obrazovku místo plovoucího okna. */
+  fullScreen?: boolean;
 }
 
-export const FibDrawingSettingsDialog: React.FC<FibDrawingSettingsDialogProps> = ({ engine, drawing, onClose }) => {
+export const FibDrawingSettingsDialog: React.FC<FibDrawingSettingsDialogProps> = ({ engine, drawing, onClose, fullScreen = false }) => {
   const originalSettingsRef = useRef(getFibSettings(drawing));
   const originalPointsRef = useRef(clone(drawing.points));
   const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
@@ -173,12 +176,12 @@ export const FibDrawingSettingsDialog: React.FC<FibDrawingSettingsDialogProps> =
     className={`relative h-12 px-1 text-[14px] font-semibold ${tab === id ? 'text-slate-950 after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:rounded-full after:bg-[#2962ff]' : 'text-slate-600'}`}
   >{label}</button>;
 
-  return <div className="pointer-events-none fixed inset-0 z-[650]" data-chart-settings-dialog="true">
+  return <div className={drawingDialogLayerClass(fullScreen)} data-chart-settings-dialog="true">
     <section
       role="dialog"
       aria-label="Fibonacci retracement"
-      className="pointer-events-auto absolute flex max-h-[min(760px,calc(100vh-24px))] w-[440px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-950 shadow-2xl"
-      style={position}
+      className={drawingDialogSectionClass(fullScreen, "pointer-events-auto absolute flex max-h-[min(760px,calc(100vh-24px))] w-[440px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-lg border border-slate-300 bg-white text-slate-950 shadow-2xl")}
+      style={fullScreen ? undefined : position}
       onPointerDown={event => event.stopPropagation()}
       onWheelCapture={event => event.stopPropagation()}
     >

@@ -10,7 +10,7 @@ import type { DayController } from './useDayController';
  * přepis (jde opravit) a uloží ho jako poznámku. Dnes se připíchne k teď
  * a poslední ceně, jindy jde do časové osy bez kotvy.
  */
-export default function DictationDialog({ ctl, onClose, sheet = false }: { ctl: DayController; onClose: () => void; sheet?: boolean }) {
+export default function DictationDialog({ ctl, onClose, onSaved, sheet = false }: { ctl: DayController; onClose: () => void; onSaved?: (saved: { kind: 'market' | 'mind'; pinned: boolean }) => void; sheet?: boolean }) {
   const { dictation } = ctl;
   const [text, setText] = useState<string | null>(null);
   const [startedAt] = useState(() => Date.now());
@@ -41,6 +41,7 @@ export default function DictationDialog({ ctl, onClose, sheet = false }: { ctl: 
   const save = () => {
     if (!text?.trim()) return;
     ctl.createNote(text, anchor, true, mind ? 'mind' : 'market');
+    onSaved?.({ kind: mind ? 'mind' : 'market', pinned: Boolean(anchor) });
     onClose();
   };
   const phase = text != null ? 'done' : dictation.phase === 'transcribing' ? 'proc' : dictation.phase === 'error' ? 'error' : 'rec';

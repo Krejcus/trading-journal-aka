@@ -241,6 +241,9 @@ interface CandleKitTradeChartProps {
   hideFocusButton?: boolean;
   /** Bez řádku OHLC v legendě (malý graf deníku na telefonu). */
   hideOhlcLegend?: boolean;
+  /** Otevření nastavení zvenku (menu ⋯ grafu dne na telefonu): každé nové číslo = otevřít. */
+  chartSettingsRequest?: number;
+  indicatorSettingsRequest?: { id: 'fvg' | 'levels' | 'structure'; n: number } | null;
   compactMode?: boolean;
   hideDrawingToolbar?: boolean;
   keyboardShortcutsActive?: boolean;
@@ -387,6 +390,9 @@ const ChartIndicatorLegend: React.FC<{
   statusLine: ChartStatusLineSettings;
   paneButtons: ChartButtonVisibility;
   getChartApi: () => ChartViewApi | null;
+  /** Telefon: seznam rozbalený, klepnutí na řádek ho označí a ukáže akce (jako TradingView). */
+  touch?: boolean;
+  defaultOpen?: boolean;
 }> = ({
   isDark,
   timeframe,
@@ -406,9 +412,12 @@ const ChartIndicatorLegend: React.FC<{
   statusLine,
   paneButtons,
   getChartApi,
+  touch = false,
+  defaultOpen = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+  const [touchSelected, setTouchSelected] = useState<string | null>(null);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [hiddenLibrary, setHiddenLibrary] = useState<Map<string, Record<string, unknown>>>(new Map());
 
@@ -416,13 +425,14 @@ const ChartIndicatorLegend: React.FC<{
     if (!open) return;
     const handlePointerDown = (event: PointerEvent) => {
       if (!containerRef.current?.contains(event.target as Node)) {
+        if (touch) { setTouchSelected(null); setSettingsFor(null); return; }
         setOpen(false);
         setSettingsFor(null);
       }
     };
     window.addEventListener('pointerdown', handlePointerDown);
     return () => window.removeEventListener('pointerdown', handlePointerDown);
-  }, [open]);
+  }, [open, touch]);
 
   const customItems: ChartIndicatorLegendItem[] = [
     ...(showStructure ? [{ id: 'custom:structure', title: 'AlphaTrade BOS/CHoCH (CZ)', customId: 'structure' as const }] : []),
@@ -522,7 +532,7 @@ const ChartIndicatorLegend: React.FC<{
         <span className="font-semibold tabular-nums">{items.length}</span>
       </button>
       {open && (
-        <div className="mt-1 min-w-[280px] max-w-[380px] space-y-0.5">
+        <div className={touch ? 'mt-0.5 min-w-[200px] max-w-[300px] space-y-0' : 'mt-1 min-w-[280px] max-w-[380px] space-y-0.5'}>
           {items.length === 0 && (
             <div className={`rounded px-2 py-1.5 ${isDark ? 'bg-[#111821]/90 text-slate-500' : 'bg-white/90 text-slate-500'}`}>Žádné aktivní indikátory</div>
           )}
@@ -530,13 +540,15 @@ const ChartIndicatorLegend: React.FC<{
             const hidden = isHidden(item);
             return (
               <div key={item.id} className="group relative">
-                <div className={`flex h-7 items-center rounded px-2 pr-1 ${hidden ? 'opacity-55' : ''} ${statusLine.indicatorBackground ? `shadow-sm ${isDark ? 'bg-[#111821]/92' : 'bg-white/95'}` : ''} ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                <div
+                  onClick={touch ? () => setTouchSelected(current => (current === item.id ? null : item.id)) : undefined}
+                  className={`flex ${touch ? 'h-[22px] cursor-pointer text-[10.5px]' : 'h-7'} items-center rounded px-1.5 pr-0.5 ${touch && touchSelected === item.id ? 'ring-1 ring-[#2962ff]' : ''} ${hidden ? 'opacity-55' : ''} ${statusLine.indicatorBackground ? `shadow-sm ${isDark ? 'bg-[#111821]/92' : 'bg-white/95'}` : ''} ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
                   <span className="min-w-0 flex-1 truncate font-medium">
                     {statusLine.indicatorTitles && item.title}
                     {statusLine.indicatorInputs && <span className="ml-1 font-normal opacity-70">{inputsLabel(item)}</span>}
                     {statusLine.indicatorValues && <span className="ml-1.5 font-semibold tabular-nums">{valuesLabel(item)}</span>}
                   </span>
-                  <div className={`ml-2 flex items-center gap-0.5 transition-opacity ${paneButtons === 'always'
+                  <div onClick={event => event.stopPropagation()} className={`ml-2 flex items-center gap-0.5 transition-opacity ${touch ? (touchSelected === item.id ? 'opacity-100 [&_button]:px-1.5 [&_button]:py-0.5 [&_svg]:h-[14px] [&_svg]:w-[14px]' : 'pointer-events-none hidden') : paneButtons === 'always'
                     ? 'opacity-100'
                     : paneButtons === 'never'
                       ? 'pointer-events-none hidden'
@@ -1892,6 +1904,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   onIndicatorSettingsSaved,
   phoneLayout = false,
   hideOhlcLegend = false,
+  chartSettingsRequest = 0,
+  indicatorSettingsRequest = null,
   replaySelecting = false,
   replaySelectionMinimumTime = null,
   replaySelectionCandles = [],
@@ -2055,6 +2069,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     clientY: number;
   } | null>(null);
   const settingsBackupRef = useRef<AlphaTradeIndicatorSettings | null>(null);
+  useEffect(() => {
+    if (!indicatorSettingsRequest) return;
+    settingsBackupRef.current = structuredClone(indicatorSettings);
+    setSettingsDialogIndicator(indicatorSettingsRequest.id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- jen nový požadavek
+  }, [indicatorSettingsRequest]);
 
   // --- Nastavení grafu (pravé tlačítko → Nastavení) ---------------------------
   const chartSettingsSourceRef = useRef(Symbol('chart-settings'));
@@ -2062,6 +2082,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const chartSettingsRef = useRef(chartSettings);
   chartSettingsRef.current = chartSettings;
   const [chartSettingsOpen, setChartSettingsOpen] = useState(false);
+  useEffect(() => {
+    if (!chartSettingsRequest) return;
+    chartSettingsBackupRef.current = structuredClone(chartSettingsRef.current);
+    setChartSettingsOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- jen nový požadavek
+  }, [chartSettingsRequest]);
   const chartSettingsBackupRef = useRef<ChartSettings | null>(null);
   const [priceScaleMode, setPriceScaleMode] = useState<ChartPriceScaleModeName>('normal');
   const [priceScaleAuto, setPriceScaleAuto] = useState(true);
@@ -2427,10 +2453,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const deltaX = event.clientX - drag.lastX;
       if (Math.abs(event.clientX - drag.startX) > 3) drag.moved = true;
       drag.lastX = event.clientX;
-      if (drag.moved) panReplaySelection(deltaX);
+      // Prst (telefon) táhne jen nůžky, graf stojí; myš dál posouvá graf jako dřív.
+      if (drag.moved && event.pointerType !== 'touch') panReplaySelection(deltaX);
     }
     updateReplaySelectionPreview(event);
-    if (drag?.moved) scheduleReplaySelectionRefresh();
+    if (drag?.moved && event.pointerType !== 'touch') scheduleReplaySelectionRefresh();
   }, [panReplaySelection, scheduleReplaySelectionRefresh, updateReplaySelectionPreview]);
   const finishReplaySelectionDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = replaySelectionDragRef.current;
@@ -2473,6 +2500,17 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
     scheduleReplaySelectionRefresh();
   }, [candles.length, scheduleReplaySelectionRefresh]);
+  // Nůžky zabírají jen plochu se svíčkami: osy (cena vpravo, čas dole) zůstanou
+  // volné pro posun a natažení grafu jako mimo výběr.
+  const [replaySelectionInsets, setReplaySelectionInsets] = useState<{ right: number; bottom: number }>({ right: 0, bottom: 0 });
+  useLayoutEffect(() => {
+    if (!replaySelecting) return;
+    try {
+      const chart = apiRef.current?.controller.getChart();
+      if (!chart) return;
+      setReplaySelectionInsets({ right: Math.max(0, chart.priceScale('right').width()), bottom: Math.max(0, chart.timeScale().height()) });
+    } catch { /* graf se právě přestavuje */ }
+  }, [replaySelecting, chartApiEpoch]);
   const handleReplaySelectionPointerLeave = useCallback(() => {
     if (!replaySelectionDragRef.current) replaySelectionPointerRef.current = null;
     setReplaySelectionPreview(current => current ? { ...current, y: null } : null);
@@ -5218,7 +5256,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       })()}
       {replaySelecting && (
         <div
-          className="absolute inset-0 z-[70] cursor-crosshair"
+          className="absolute left-0 top-0 z-[70] cursor-crosshair touch-none"
+          style={{ right: replaySelectionInsets.right, bottom: replaySelectionInsets.bottom }}
           onPointerDown={handleReplaySelectionPointerDown}
           onPointerMove={handleReplaySelectionPointerMove}
           onPointerUp={finishReplaySelectionDrag}
@@ -5415,6 +5454,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         statusLine={chartSettings.statusLine}
         paneButtons={chartSettings.canvas.paneButtons}
         getChartApi={() => apiRef.current}
+        touch={phoneLayout}
         activeLibraryIndicators={activeLibraryIndicators}
         onEditCustom={id => {
           settingsBackupRef.current = structuredClone(indicatorSettings);
@@ -5433,6 +5473,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       </button>}
       {chartSettingsOpen && createPortal(
         <ChartSettingsDialog
+          fullScreen={phoneLayout}
           settings={chartSettings}
           isDark={isDark}
           journalProfile={isChartSettingsJournalProfile()}
@@ -5459,6 +5500,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       {settingsDialogIndicator && createPortal(
         <ChartIndicatorSettingsDialog
           indicator={settingsDialogIndicator}
+          fullScreen={phoneLayout}
           settings={indicatorSettings}
           // Profil deníku: uložení platí vždy pro všechny grafy, volba „všechny grafy“ tu nemá smysl.
           singleChart={indicatorSettingsOverride != null || isIndicatorJournalProfile()}

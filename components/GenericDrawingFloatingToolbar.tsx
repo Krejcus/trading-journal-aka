@@ -15,6 +15,8 @@ interface GenericDrawingFloatingToolbarProps {
   drawing: Drawing;
   isDark?: boolean;
   onOpenSettings?: () => void;
+  /** Vlastní mazání (deník na telefonu: cesta = víc úseků najednou). */
+  onRemove?: () => void;
 }
 
 const DEFAULT_FILL = '#2962ff1f';
@@ -24,6 +26,7 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
   drawing,
   isDark = false,
   onOpenSettings,
+  onRemove,
 }) => {
   const toolbarRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
@@ -182,7 +185,7 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
         className={controlClass}
         aria-label="Smazat kresbu"
         title="Smazat"
-        onClick={() => engine.remove(drawing.id)}
+        onClick={() => (onRemove ? onRemove() : engine.remove(drawing.id))}
       >
         <Trash2 size={14} strokeWidth={1.35} />
       </button>
