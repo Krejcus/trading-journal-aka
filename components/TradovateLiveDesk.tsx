@@ -81,6 +81,14 @@ import {
   formatKnownCopyTradeAccountIds,
 } from '../lib/copyTradeAccountLabels';
 import { tradeCardFeeRates } from '../lib/liveTradeCard';
+import {
+  buildDevTradeMock,
+  DEV_TRADE_MOCK_GROUP_ID,
+  devLiveTradeMockEnabled,
+  devTradeMockFeeRates,
+  devTradeMockGroup,
+  type DevTradeMockScenario,
+} from '../lib/devLiveTradeMock';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
 import {
   devLiveCopyFixtureDailyStats,
@@ -205,6 +213,46 @@ const DevLiveCopyFixtureOverview = () => {
       accountSyncPauses={devLiveCopyFixtureSyncPauses}
       commandAdapter={commandAdapter}
     />
+  );
+};
+
+/**
+ * Dev háček (?page=live&live-mock=trade): ukázkový obchod se čtyřmi DEMO
+ * účty, ať jde karta obchodu vidět bez pozice. Cena se sama hýbe, stav
+ * přepneš nahoře. Prod build větev neobsahuje; nic se neodesílá.
+ */
+const DevLiveTradeMockOverview = () => {
+  const [scenario, setScenario] = useState<DevTradeMockScenario>('position');
+  const [price, setPrice] = useState(21_494.5);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setPrice(current => Math.round((current + (Math.floor(Math.random() * 5) - 2) * 0.25) * 4) / 4);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, []);
+  const { snapshot, orders } = useMemo(() => buildDevTradeMock(scenario, price), [scenario, price]);
+  return (
+    <>
+      <label className="flex items-center gap-2 text-xs font-bold">
+        Ukázat
+        <select value={scenario} onChange={event => setScenario(event.target.value as DevTradeMockScenario)} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] p-2">
+          <option value="position">Pozice</option>
+          <option value="be">SL posunutý do plusu</option>
+          <option value="nosl">Follower bez SL</option>
+          <option value="pending">Čekající limit</option>
+        </select>
+      </label>
+      <LiveCopyTradeOverview
+        snapshot={snapshot}
+        orders={orders}
+        tradeFeeRates={devTradeMockFeeRates}
+        runtimeGroup={devTradeMockGroup}
+        executionGroupId={DEV_TRADE_MOCK_GROUP_ID}
+        runtimeAvailable
+        copierArmed
+        copierStatusPending={false}
+      />
+    </>
   );
 };
 
@@ -1216,6 +1264,16 @@ acceptAgentStatus((await executeAgent({
 
   // Dev háček (at:dev:live-copy-fixture): ukázková skupina bez Tradovate dat,
   // jen pro ladění vizuálu LIVE přehledu. Prod build větev neobsahuje.
+  if (devLiveTradeMockEnabled()) {
+    return (
+      <div className="mx-auto max-w-[1500px] space-y-4">
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-600">
+          DEV ukázkový obchod — vymyšlená data, nic se neodesílá. Vypneš adresou ?live-mock=off.
+        </div>
+        <DevLiveTradeMockOverview />
+      </div>
+    );
+  }
   if (devLiveCopyFixtureEnabled()) {
     return (
       <div className="mx-auto max-w-[1500px] space-y-4">
