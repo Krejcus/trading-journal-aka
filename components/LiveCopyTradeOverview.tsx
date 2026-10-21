@@ -226,6 +226,13 @@ const withTradeLevelColumns = (columns: ColumnDef[]): ColumnDef[] => {
   return [...columns.slice(0, index), ...TRADE_LEVEL_COLUMNS, ...columns.slice(index)];
 };
 const EMPTY_FEE_RATES: ReadonlyMap<string, number> = new Map();
+/**
+ * Otevřený P&L skupiny po poplatcích, když jde o jeden obchod se známými
+ * poplatky u všech účtů — stejné číslo jako karta obchodu. Jinak null a
+ * zobrazí se hrubý součet z brokera.
+ */
+const tradeCardNetOpenPnl = (card: TradeCardModel | null | undefined): number | null =>
+  card?.kind === 'position' && card.feesIncluded ? card.openPnl : null;
 
 const ACCOUNT_COLUMN_KEYS = ACCOUNT_COLUMNS.map(column => column.key);
 const GROUP_COLUMN_KEYS = GROUP_COLUMN_OPTIONS.map(column => column.key);
@@ -2137,9 +2144,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       tradesToday: dailyStats?.tradesToday ?? null,
       maxTradesPerDay: runtimeGroup?.safety?.dailyMaxTrades ?? null,
       marketPrices,
+      feeRates: tradeFeeRates,
     });
   }, [islandGroup, accountsById, runtimeAvailable, copierStatusPending, copierArmed, copierKillSwitch,
-      orders, runtimeStatus, dailyPnlPending, dailyStats, runtimeGroup, marketPrices]);
+      orders, runtimeStatus, dailyPnlPending, dailyStats, runtimeGroup, marketPrices, tradeFeeRates]);
 
 
   return (
@@ -2372,6 +2380,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                       <AwaitingCopiedEntryContext.Provider value={armed ? awaitingEntriesByAccount : EMPTY_AWAITING_ENTRIES}>
                       <GroupRow
                         group={group} rows={rows} armed={armed}
+                        tradeCard={tradeCard}
                         dailyPnlPending={dailyPnlPending}
                         eligibility={group.followers
                           .filter(follower => follower.mode !== 'off')
@@ -3234,7 +3243,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   );
 };
 
-const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsByAccount, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, powerDisplayKey = '', open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, onDelete, groupColumns }: {
+const GroupRow = ({ group, rows, tradeCard = null, armed, dailyPnlPending, eligibility, tradeCutsByAccount, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, powerDisplayKey = '', open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, onDelete, groupColumns }: {
   group: CopyGroupConfig; rows: Row[]; armed: boolean; open: boolean; onToggle: () => void;
   dailyPnlPending: boolean;
   eligibility: (CopierAccountEligibility | undefined)[];
@@ -3256,10 +3265,12 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
   tightenOnly: boolean;
   onApplyTemplate: (template: CopyGroupTemplate) => void;
   groupColumns: Array<{ key: GroupColumnKey; label: string }>;
+  tradeCard?: TradeCardModel | null;
 }) => {
   const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
-  const unreal = rows.reduce((s, r) => s + (r.account?.unrealizedPnl || 0), 0);
+  const netOpen = tradeCardNetOpenPnl(tradeCard);
+  const unreal = netOpen ?? rows.reduce((s, r) => s + (r.account?.unrealizedPnl || 0), 0);
   const unrealSource = rows.some(row => row.account?.unrealizedPnlSource === 'stale')
     ? 'stale'
     : rows.some(row => row.account?.unrealizedPnlSource === 'estimated') ? 'estimated' : 'broker';
@@ -3325,7 +3336,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
     followers: <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{group.followers.length}</td>,
     capital: <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]"><BalanceValue display={capital} /></td>,
     daily: <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${daily == null ? 'text-[var(--text-secondary)]' : pnlClass(daily)}`}>{daily == null ? '—' : money.format(daily)}</td>,
-    unreal: <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>,
+    unreal: <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={netOpen != null ? 'Po poplatcích za vstup i výstup, stejně jako karta obchodu.' : unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>,
   };
   return (
     <tr
@@ -4006,7 +4017,8 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
   const eligibilityUndecided = useEligibilityUndecided();
   const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
-  const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
+  const netOpen = tradeCardNetOpenPnl(tradeCard);
+  const unreal = netOpen ?? rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
   // Ruční vyřazení do konce obchodu i pauza „mimo synchron“ = follower
   // v tomto obchodu nekopíruje.
   const syncPauses = React.useContext(AccountSyncPauseContext);
@@ -4158,7 +4170,7 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
         />
         <CompactStat
           label="Otevřený"
-          value={unrealStale
+          value={unrealStale && netOpen == null
             ? <span className="inline-flex items-center gap-1" title="Některý účet čeká na nový snapshot; součet obsahuje poslední známé údaje.">
                 {moneyWhole.format(unreal)}<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" />
               </span>

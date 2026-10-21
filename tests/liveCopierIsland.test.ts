@@ -178,8 +178,8 @@ describe('buildLiveCopierIsland', () => {
         positions: [{ accountId: 1, symbol: 'MNQZ6', netPosition: 3, netPrice: 29_500, realizedPnl: 0, unrealizedPnl: 0, updatedAt: null }],
       })],
       orders: [
-        order({ id: 2, action: 'Sell', orderType: 'Stop', price: null, stopPrice: 29_480 }),
-        order({ id: 3, action: 'Sell', orderType: 'Limit', price: 29_560 }),
+        order({ id: 2, action: 'Sell', orderType: 'Stop', price: null, stopPrice: 29_480, quantity: 3 }),
+        order({ id: 3, action: 'Sell', orderType: 'Limit', price: 29_560, quantity: 3 }),
       ],
     }));
     expect(model.phase).toBe('position');
@@ -187,6 +187,38 @@ describe('buildLiveCopierIsland', () => {
     expect(model.fields.find(f => f.label === 'SL')?.value).toContain('120');
     // 60 bodů · 2 · 3 = 360 USD
     expect(model.fields.find(f => f.label === 'TP')?.value).toContain('360');
+  });
+
+  it('SL/TP počítá celou skupinu a odečte poplatky', () => {
+    const position = (id: number, netPrice: number) => ({ accountId: id, symbol: 'MNQZ6', netPosition: 2, netPrice, realizedPnl: 0, unrealizedPnl: 0, updatedAt: null });
+    const model = buildLiveCopierIsland(input({
+      armed: true, now: NOW,
+      accounts: [
+        account(1, { unrealizedPnlSource: 'broker', positions: [position(1, 29_500)] }),
+        account(2, { unrealizedPnlSource: 'broker', positions: [position(2, 29_500.25)] }),
+      ],
+      orders: [1, 2].flatMap(accountId => [
+        order({ id: accountId * 10, accountId, action: 'Sell', orderType: 'Stop', price: null, stopPrice: 29_480, quantity: 2 }),
+        order({ id: accountId * 10 + 1, accountId, action: 'Sell', orderType: 'Limit', price: 29_560, quantity: 2 }),
+      ]),
+      feeRates: new Map([['1|MNQ', 0.5], ['2|MNQ', 0.5]]),
+    }));
+    // Leader −80, follower −81, poplatky 2 × 2 × 0,50 na účet → −165 US$.
+    expect(model.fields.find(f => f.label === 'SL')?.value).toContain('165');
+  });
+
+  it('čekající limit ukáže SL/TP ze Suspended bracketu', () => {
+    const model = buildLiveCopierIsland(input({
+      armed: true, now: NOW,
+      orders: [
+        order({ id: 1, action: 'Buy', orderType: 'Limit', price: 29_500, quantity: 2 }),
+        order({ id: 2, action: 'Sell', orderType: 'Stop', price: null, stopPrice: 29_480, quantity: 2, status: 'Suspended', working: false }),
+        order({ id: 3, action: 'Sell', orderType: 'Limit', price: 29_540, quantity: 2, status: 'Suspended', working: false }),
+      ],
+    }));
+    expect(model.phase).toBe('limit');
+    expect(model.fields.find(f => f.label === 'SL')?.value).toContain('80');
+    expect(model.fields.find(f => f.label === 'TP')?.value).toContain('160');
   });
 
   it('ochranné nohy se berou jen z opačné strany než pozice', () => {

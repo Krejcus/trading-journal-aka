@@ -1,6 +1,8 @@
 import type { LiveAccount, LiveOrder } from '../services/tradecopiaLiveService';
-import { pointValueUsd } from '../services/futuresContractSpecs';
 import { pickCopierMarketPrice } from './copierMarketPrice';
+import { buildTradeCard, type TradeCardLevel } from './liveTradeCard';
+
+const EMPTY_FEE_RATES: ReadonlyMap<string, number> = new Map();
 
 /**
  * Model plovoucího stavového ostrova LIVE.
@@ -61,6 +63,8 @@ export interface LiveCopierIslandInput {
   maxTradesPerDay?: number | null;
   /** `marketPrices` z workeru (TradingView). Jen pro zobrazení, nikdy do rozhodování. */
   marketPrices?: readonly unknown[];
+  /** Poplatek za kontrakt a stranu (`feeRateKey`) z fillů; bez něj se SL/TP počítá hrubě. */
+  feeRates?: ReadonlyMap<string, number>;
   /** Vstřikovatelné kvůli testům. */
   now?: number;
 }
@@ -70,46 +74,33 @@ export interface LiveCopierIslandInput {
 const money = new Intl.NumberFormat('cs-CZ', {
   style: 'currency', currency: 'USD', maximumFractionDigits: 2, signDisplay: 'exceptZero',
 });
-/** Riziko a cíl se uvádějí jako velikost, ne jako pohyb — bez znaménka. */
-const amount = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const plain = new Intl.NumberFormat('cs-CZ', { maximumFractionDigits: 0 });
 
 /** Rozdíl cen v bodech; víc než dvě desetinná místa jsou tu šum. */
 const points = new Intl.NumberFormat('cs-CZ', { maximumFractionDigits: 2 });
 
 /**
- * Ochranné příkazy leadera k otevřené pozici: opačná akce než pozice,
- * stop = SL, limit = TP. Bere jen `working`, aby vyplněné nohy nestrašily.
+ * SL/TP celé skupiny ze stejného výpočtu jako karta obchodu: každý účet
+ * s vlastním vstupem, vlastními příkazy a poplatky; čekající vstup bere
+ * i Suspended bracket. Neúplné krytí ukáže počet účtů, ne částku.
  */
-const protectiveLegs = (orders: LiveOrder[], accountId: number | null, long: boolean) => {
-  const wanted = long ? /sell/i : /buy/i;
-  const legs = orders.filter(order => order.working
-    && order.accountId === accountId
-    && wanted.test(order.action));
-  return {
-    stop: legs.find(order => /stop/i.test(order.orderType) && order.stopPrice != null)?.stopPrice ?? null,
-    target: legs.find(order => /limit/i.test(order.orderType) && order.price != null)?.price ?? null,
-  };
+const levelField = (label: 'SL' | 'TP', level: TradeCardLevel, covered: number, total: number,
+  tone: LiveIslandField['tone']): LiveIslandField | null => {
+  if (level.usd != null) {
+    return {
+      label,
+      value: level.points != null ? `${money.format(level.usd)} · ${points.format(level.points)} b` : money.format(level.usd),
+      tone,
+    };
+  }
+  if (covered > 0 && covered < total) return { label, value: `kryje ${covered}/${total} účtů`, tone: 'warn' };
+  return null;
 };
 
-/** Riziko/cíl v dolarech. Bez známé hodnoty bodu se ukáže jen vzdálenost. */
-const legField = (label: string, entry: number | null, level: number | null,
-  symbol: string, qty: number, tone: LiveIslandField['tone']): LiveIslandField | null => {
-  if (level == null) return null;
-  if (entry == null || !Number.isFinite(entry)) {
-    return { label, value: points.format(level), tone };
-  }
-  const distance = Math.abs(entry - level);
-  const value = pointValueUsd(symbol);
-  const usd = value != null && qty > 0 ? distance * value * qty : null;
-  return {
-    label,
-    value: usd != null
-      ? `${amount.format(usd)} · ${points.format(distance)} b`
-      : `${points.format(level)} · ${points.format(distance)} b`,
-    tone,
-  };
-};
+const tradeCardFor = (accounts: LiveAccount[], orders: LiveOrder[], leaderAccountId: number | null,
+  feeRates: ReadonlyMap<string, number>, now: number) => buildTradeCard(
+  accounts.map(account => ({ account, accountId: account.id, name: account.name, isLeader: account.id === leaderAccountId })),
+  orders, feeRates, now);
 
 const pnlTone = (value: number): LiveIslandField['tone'] =>
   value > 0 ? 'pnl-positive' : value < 0 ? 'pnl-negative' : undefined;
@@ -140,7 +131,7 @@ export function buildLiveCopierIsland(input: LiveCopierIslandInput): LiveCopierI
   const {
     statusKnown, armed, killSwitch, groupName, accounts, configuredAccountCount,
     orders, leaderAccountId, divergentAccounts, armExpiresAt = 0, groupDailyPnl,
-    tradesToday, maxTradesPerDay, marketPrices = [], now = Date.now(),
+    tradesToday, maxTradesPerDay, marketPrices = [], feeRates = EMPTY_FEE_RATES, now = Date.now(),
   } = input;
 
   const label = groupName?.trim() || 'Skupina';
@@ -211,19 +202,25 @@ export function buildLiveCopierIsland(input: LiveCopierIslandInput): LiveCopierI
   if (open.length > 0) {
     const symbol = leaderPosition?.symbol ?? open[0]?.positions.find(p => p.netPosition !== 0)?.symbol ?? '';
     const side = leaderPosition ? (leaderPosition.netPosition > 0 ? 'Long' : 'Short') : '';
-    const size = Math.abs(leaderPosition?.netPosition ?? 0);
+    const card = tradeCardFor(accounts, orders, leaderAccountId, feeRates, now);
+    // Kontrakty celé skupiny, stejně jako karta obchodu; bez karty (rozjetý
+    // směr) zůstane velikost leadera.
+    const size = card?.kind === 'position' ? card.quantity : Math.abs(leaderPosition?.netPosition ?? 0);
     // Otevřený P&L jen z potvrzených zdrojů; jediný stale účet stačí k vynechání.
     const confirmed = open.every(account => account.unrealizedPnlSource === 'broker');
-    const unrealized = open.reduce((sum, account) => sum + (account.unrealizedPnl ?? 0), 0);
+    // Po poplatcích, když je karta zná u všech účtů — jinak hrubý součet z brokera.
+    const netOpen = card?.kind === 'position' && card.feesIncluded ? card.openPnl : null;
+    const unrealized = netOpen ?? open.reduce((sum, account) => sum + (account.unrealizedPnl ?? 0), 0);
     const fields: LiveIslandField[] = [...core];
-    // SL/TP leadera přepočtené na dolary: „−$340“ řekne víc než „12,5 b“,
+    // SL/TP celé skupiny v dolarech: „−$340“ řekne víc než „12,5 b“,
     // protože body si musíš sám vynásobit počtem kontraktů.
-    const entry = leaderPosition?.netPrice ?? null;
-    const legs = protectiveLegs(orders, leaderAccountId, (leaderPosition?.netPosition ?? 0) > 0);
-    const sl = legField('SL', entry, legs.stop, symbol, size, 'danger');
-    const tp = legField('TP', entry, legs.target, symbol, size, 'pnl-positive');
-    if (sl) fields.push(sl);
-    if (tp) fields.push(tp);
+    if (card?.kind === 'position') {
+      const total = card.accounts.length;
+      const sl = levelField('SL', card.stop, card.stopCovered, total, card.stop.usd != null && card.stop.usd >= 0 ? 'pnl-positive' : 'danger');
+      const tp = levelField('TP', card.target, card.targetCovered, total, 'pnl-positive');
+      if (sl) fields.push(sl);
+      if (tp) fields.push(tp);
+    }
     const reserve = tightestReserve(accounts);
     if (reserve) fields.push(reserve);
     const positionExpiry = armLeftMs <= 30 * 60_000 ? armExpiryField() : null;
@@ -260,11 +257,14 @@ export function buildLiveCopierIsland(input: LiveCopierIslandInput): LiveCopierI
     if (distance != null) {
       fields.push({ label: 'Do fillu', value: `${points.format(distance)} b`, tone: 'warn' });
     }
-    const legs = protectiveLegs(orders, leaderLimit.accountId, long);
-    const sl = legField('SL', leaderLimit.price, legs.stop, leaderLimit.symbol, leaderLimit.quantity, 'danger');
-    const tp = legField('TP', leaderLimit.price, legs.target, leaderLimit.symbol, leaderLimit.quantity, 'pnl-positive');
-    if (sl) fields.push(sl);
-    if (tp) fields.push(tp);
+    const card = tradeCardFor(accounts, orders, leaderAccountId, feeRates, now);
+    if (card?.kind === 'pending') {
+      const total = card.accounts.length;
+      const sl = levelField('SL', card.stop, card.stopCovered, total, 'danger');
+      const tp = levelField('TP', card.target, card.targetCovered, total, 'pnl-positive');
+      if (sl) fields.push(sl);
+      if (tp) fields.push(tp);
+    }
     const limitExpiry = armLeftMs <= 30 * 60_000 ? armExpiryField() : null;
     if (limitExpiry) fields.push(limitExpiry);
     return {
