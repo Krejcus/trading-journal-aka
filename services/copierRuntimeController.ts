@@ -676,7 +676,11 @@ export interface CopierRuntimeController {
     inactiveAccountIds?: readonly number[];
   }): Promise<void>;
   /** Čistý synchronní preflight změny konfigurace; nikdy nemění gate ani routing. */
-  preflightGroupChange(group: CopyGroupConfig, options?: { allowGroupChange?: boolean }): void;
+  preflightGroupChange(group: CopyGroupConfig, options?: {
+    allowGroupChange?: boolean;
+    /** Účty staré skupiny, které oprava po startu vyřazuje (retireMissingOldGroup). */
+    retireMissingAccountIds?: readonly number[];
+  }): void;
   /** Synchronní změna follower/risk konfigurace při nezměněném leaderovi. */
   updateGroup(group: CopyGroupConfig): void;
   /** Metadata a pravidla bez změny execution topologie/expozice; zachová ARM. */
@@ -9405,6 +9409,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
 
+  /**
+   * 21. 10. 2026: jediná definice „vyřazení odpovídá režimu opravy po startu“
+   * pro preflight i activateGroup — rozjetí obou podmínek způsobilo deadlock.
+   */
+  const matchesStartupRepairRetirement = (retiredAccountIds: readonly number[] | undefined): boolean => {
+    if (!retiredAccountIds || !startupGroupRepair || startupGroupRepair.groupId !== group.id) return false;
+    const retired = new Set(retiredAccountIds);
+    return retired.size === retiredAccountIds.length
+      && startupGroupRepair.unavailableAccountIds.length === retired.size
+      && startupGroupRepair.unavailableAccountIds.every(accountId => retired.has(accountId));
+  };
+
   const readOnlyRecoveryBlocker = (): string | null => {
     if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
       return 'nevyřešený durable outbox';
@@ -16460,9 +16476,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // přesně ty účty, které worker při startu v OAuth neviděl. Ostatní účty
       // staré skupiny dál procházejí autoritativní flat/no-working kontrolou.
       const partialRepairRetirement = retirement != null
-        && startupGroupRepair?.groupId === group.id
-        && startupGroupRepair.unavailableAccountIds.length === retiredAccountIds.size
-        && startupGroupRepair.unavailableAccountIds.every(accountId => retiredAccountIds.has(accountId));
+        && matchesStartupRepairRetirement(retirement.accountIds);
       if (retirement && startupGroupRepair?.groupId === group.id && !partialRepairRetirement) {
         throw new Error('V režimu opravy lze vyřadit jen účty nedostupné při startu; runtime zůstává vypnutý');
       }
@@ -17751,8 +17765,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // reconciliation (po změně skupiny, po DISARM) za DISARMED ne: ARM cesta
       // ho provede sama až po změně. Jinak ARM z UI, který posílá i konfiguraci
       // skupiny, spadne dřív, než se k reconciliation dostane (29. 9. 2026).
-      if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
+      // 21. 10. 2026: v režimu opravy po startu dlužná recovery nikdy neuspěje
+      // (nedostupný účet nemá route) a zůstane čekat; oprava UI by tak byla
+      // navždy zablokovaná. activateGroup ji pro stejné vyřazení nahrazuje
+      // (E2) vlastním autoritativním čtením a pak vynutí novou reconciliation.
+      // Běžící recovery (recoveryInFlight) a požadavky na kontrolu dál blokují.
+      const retiringIds = new Set(preflightOptions.retireMissingAccountIds ?? []);
+      const startupRepairChange = preflightOptions.allowGroupChange === true
+        && !gate.armed
+        && nextGroup.id === group.id
+        && matchesStartupRepairRetirement(preflightOptions.retireMissingAccountIds)
+        && ![nextGroup.leaderAccountId, ...nextGroup.followers.map(follower => follower.accountId)]
+          .some(accountId => retiringIds.has(accountId));
+      if (recoveryInFlight
+        || ((pendingConnectionRecovery || pendingReadOnlyConnectionRecovery) && !startupRepairChange)
         || reconciliationRequestsPending > 0 || (gate.armed && source.needsReconciliation())) {
+        if (startupGroupRepair && recoveryInFlight) {
+          throw new Error('Změnu konfigurace blokuje probíhající connection recovery/reconciliation; zkus to za pár sekund znovu');
+        }
+        if (startupGroupRepair?.groupId === group.id && nextGroup.id !== group.id) {
+          // Výjimka platí jen pro opravu stávající skupiny (review 21. 10.).
+          throw new Error(
+            `Kopírka je v režimu opravy: nejdřív ulož opravenou stávající skupinu bez nedostupných účtů `
+            + `(${startupGroupRepair.unavailableAccountIds.join(', ')}), teprve pak přepni na jinou skupinu`,
+          );
+        }
         throw new Error('Změnu konfigurace blokuje probíhající connection recovery/reconciliation');
       }
       if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {

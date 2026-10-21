@@ -594,7 +594,15 @@ export async function startLocalCopierExecutionAgent(
         throw new Error(`Pravidla jdou dnes jen zpřísnit: ${weaker.join(', ')} (reset po konci session)`);
       }
     }
-    options.controller.preflightGroupChange(next, { allowGroupChange: mode === 'activate' });
+    // 21. 10. 2026: preflight musí znát vyřazované účty režimu opravy, jinak
+    // dlužná (nikdy neúspěšná) recovery zablokuje opravu skupiny natrvalo.
+    const groupChangePreflight = {
+      allowGroupChange: mode === 'activate',
+      ...(reconfigurationRequest.retireMissingOldGroup
+        ? { retireMissingAccountIds: reconfigurationRequest.retireMissingOldGroup.accountIds }
+        : {}),
+    };
+    options.controller.preflightGroupChange(next, groupChangePreflight);
     // E1 (review 30. 9.): částečná oprava ponechává část starých účtů;
     // účet nesmí být současně required (nová skupina) i optional (stará).
     const routingRequest = retiredBefore
@@ -613,7 +621,7 @@ export async function startLocalCopierExecutionAgent(
       await previewAccounts(routingRequest);
       // Broker event mohl doběhnout během OAuth discovery; před DISARM proto
       // ještě jednou ověř čistě lokální streamové blockery.
-      options.controller.preflightGroupChange(next, { allowGroupChange: mode === 'activate' });
+      options.controller.preflightGroupChange(next, groupChangePreflight);
     }
 
     // Čistá metadata/pravidla bez změny execution konfigurace nemají důvod

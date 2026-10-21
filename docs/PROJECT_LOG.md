@@ -262,6 +262,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-21 — Kopírka: oprava skupiny po startu už nečeká na nemožnou kontrolu (Claude)
+
+- Incident: leader 69662763 skupiny „Origoš“ zmizel z OAuth (propka účet
+  zavřela, přibyly 70762985/70771429). Worker naběhl v režimu opravy, ale
+  uložení opravené skupiny z LIVE odmítal („blokuje probíhající connection
+  recovery/reconciliation“) — dlužná kontrola po startu nemohla uspět.
+- Rychlé řešení (Filip výslovně souhlasil): bootout → záloha → ruční přepis
+  durable skupiny (leader 70423188, followeři 70423233/70423265) → bootstrap.
+- Kódová oprava: `preflightGroupChange` dostává vyřazované účty z agenta a pro
+  přesnou opravu po startu dlužnou recovery promíjí (sdílená podmínka
+  s `activateGroup`). copier-design-critic: návrh OPRAVIT → zapracováno.
+- Násobek u účtu jde měnit jen u vypnuté kopírky (záměrný zámek v editoru).
+
 ### 2026-10-20 — Kopírka: samostatný Stop vyplněný během posunu už nevypne skupinu (Claude)
 
 - Incident 19. 10. 16:26: leader short 10 MNQ (Market), Stop přidal až o 40 s
