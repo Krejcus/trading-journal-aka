@@ -548,6 +548,15 @@ export async function startLocalCopierExecutionAgent(
     if (multiplierChanged && options.controller.status().armed) {
       throw new Error('Násobek jde měnit jen při vypnuté kopírce. Vypni kopírku a změň ho znovu.');
     }
+    // 21. 10. 2026 (Filip): za vypnuté kopírky jen když je skupina flat a bez
+    // čekajících příkazů — se srozumitelným důvodem. Je to rychlá kontrola
+    // nad cache; autoritativní čtení u brokera dělá až reconfigureGroup.
+    if (multiplierChanged && options.controller.status().groupFlat !== true) {
+      throw new Error('Násobek jde měnit jen když jsou všechny účty skupiny flat (bez otevřené pozice). Zavři pozice a změň ho znovu.');
+    }
+    if (multiplierChanged && options.controller.status().workingOrderAccounts.length > 0) {
+      throw new Error('Násobek jde měnit jen když skupina nemá žádný čekající příkaz. Zruš příkazy a změň ho znovu.');
+    }
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
     const topologyChanged = !sameAccountTopology(previous, next);
     const weaker = [...new Set([

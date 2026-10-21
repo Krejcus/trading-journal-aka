@@ -1211,7 +1211,24 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const tightenOnly = sessionArmedAt > 0;
   // Filip 1. 10.: násobek jde za vypnuté kopírky měnit libovolně, za zapnuté
   // vůbec (ani snížit). Ostatní denní pravidla dál jen zpřísnit.
-  const multiplierLockedFor = (groupId: string) => copierArmed && groupId === executionGroupId;
+  // 21. 10.: navíc jen když je skupina flat a vždy s viditelným důvodem.
+  const multiplierLockReasonFor = (groupId: string): string | null => {
+    if (groupId !== executionGroupId) return null;
+    if (copierArmed) return 'Kopírka je zapnutá — násobek změníš po jejím vypnutí.';
+    if (!runtimeAvailable || copierStatusPending || !runtimeStatus) {
+      return 'Stav kopírky se ještě ověřuje — násobek změníš, až se načte stav Mac workeru.';
+    }
+    if (!runtimeStatus.connected) {
+      return 'Mac worker teď nemá spojení s Tradovate — násobek změníš, až se spojení obnoví.';
+    }
+    if (runtimeStatus.groupFlat !== true) {
+      return 'Některý účet skupiny má otevřenou pozici — násobek změníš, až budou všechny účty flat.';
+    }
+    if (runtimeStatus.workingOrderAccounts.length > 0) {
+      return 'Některý účet skupiny má čekající příkaz — násobek změníš, až nebudou žádné otevřené příkazy.';
+    }
+    return null;
+  };
   const renderAccountMessage = (message: string, accountIds: Iterable<number> = knownAccountIds) =>
     formatKnownCopyTradeAccountIds(message, accountIds, accountId => accountLabel(accountId));
   const connectionByFirm = useMemo(
@@ -2516,7 +2533,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           group={editorGroup}
           isNew={!groups.some(group => group.id === editorGroup.id)}
           tightenOnly={tightenOnly}
-          multiplierLocked={multiplierLockedFor(editorGroup.id)}
+          multiplierLockReason={multiplierLockReasonFor(editorGroup.id)}
           armedWarning={copierArmed && editorGroup.id === executionGroupId}
           accounts={snapshot.accounts}
           workerAccountRoutes={workerAccountRoutes}
@@ -5828,14 +5845,15 @@ export const WorkerDiscoveryNotice = ({ discovery, missingAccounts, onGrant }: {
   );
 };
 
-export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked = false, armedWarning = false, accounts, workerAccountRoutes, workerDiscovery = null, onGrantWorkerOwnerScope, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLockReason = null, armedWarning = false, accounts, workerAccountRoutes, workerDiscovery = null, onGrantWorkerOwnerScope, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
   /** Upravovaná skupina právě kopíruje: uložení ji vypne (worker odzbrojí před změnou). */
   armedWarning?: boolean;
   group: CopyGroupConfig;
   isNew: boolean;
   tightenOnly: boolean;
   /** Zapnutá skupina: násobek nejde měnit vůbec (1. 10.). */
-  multiplierLocked?: boolean;
+  /** Proč teď násobek nejde měnit (zapnutá kopírka, otevřená pozice…); null = jde. */
+  multiplierLockReason?: string | null;
   accounts: LiveAccount[];
   workerAccountRoutes?: CopierWorkerAccountRoutes;
   workerDiscovery?: CopierConnectionDiscoveryStatus | null;
@@ -6338,12 +6356,15 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
               <div className="mt-1.5">
                 <NumberStepper
                   size="lg" ariaLabel={`Násobek ${detailAccount?.name ?? detailFollower.accountId}`}
-                  title={multiplierLocked ? 'Násobek změníš po vypnutí kopírky' : undefined}
-                  disabled={multiplierLocked}
+                  title={detailBaseline ? multiplierLockReason ?? undefined : undefined}
+                  disabled={multiplierLockReason != null && detailBaseline != null}
                   value={detailFollower.multiplier} step={0.25} min={0.25}
                   onChange={next => patchFollower(detailFollower.accountId, { multiplier: next ?? 0.25 })}
                 />
               </div>
+              {multiplierLockReason && detailBaseline ? (
+                <p className="mt-1.5 text-[11px] font-semibold leading-relaxed text-amber-500">{multiplierLockReason}</p>
+              ) : null}
               <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">Kolik kontraktů dostane účet na jeden kontrakt leadera.</p>
 
               <div className={`${sectionLabel} mt-5`}>Max kontraktů na symbol</div>
@@ -6508,6 +6529,12 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
 
             {unavailableFollowersBlock}
 
+            {multiplierLockReason && baselineFollowers.size > 0 ? (
+              <p className="mb-2 rounded-md border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 text-[11px] font-semibold text-amber-500">
+                Násobek teď nejde měnit: {multiplierLockReason}
+              </p>
+            ) : null}
+
             <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)]">
               <div className="grid min-w-[416px] grid-cols-[minmax(0,1fr)_132px_74px_74px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[11px] font-semibold text-[var(--text-secondary)]">
                 <span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span>
@@ -6546,10 +6573,10 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
                     </span>
                     <span className="flex justify-end">
                       <NumberStepper
-                        ariaLabel={`Násobek ${account.name}`} disabled={!follower}
-                        title={tightenOnly && baselineFollower ? 'dnes jen zpřísnit' : undefined}
+                        ariaLabel={`Násobek ${account.name}`}
+                        disabled={!follower || (multiplierLockReason != null && baselineFollower != null)}
+                        title={multiplierLockReason && baselineFollower ? multiplierLockReason : undefined}
                         value={follower?.multiplier ?? 1} step={0.25} min={0.25}
-                        max={tightenOnly && baselineFollower ? baselineFollower.multiplier : undefined}
                         suffix="×"
                         onChange={next => patchFollower(account.id, { multiplier: next ?? 0.25 })}
                       />

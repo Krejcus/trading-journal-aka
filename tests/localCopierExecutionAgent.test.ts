@@ -955,6 +955,48 @@ describe('local copier execution agent', () => {
     expect(running.status().group.followers[0].multiplier).toBe(1);
   });
 
+  it('za vypnuté kopírky s otevřenou pozicí násobek odmítne a řekne proč (21. 10.)', async () => {
+    const runtime = controller({ sessionArmedAt: 1_788_595_200_000, groupFlat: false });
+    const onGroupChanged = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, onGroupChanged });
+
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: { type: 'set-multiplier', groupId: 'runtime-test', accountId: 22, multiplier: 2 },
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining('jen když jsou všechny účty skupiny flat'),
+    });
+    expect(onGroupChanged).not.toHaveBeenCalled();
+    expect(runtime.updateGroup).not.toHaveBeenCalled();
+    expect(running.status().group.followers[0].multiplier).toBe(1);
+  });
+
+  it('za vypnuté kopírky s čekajícím příkazem násobek odmítne a řekne proč (21. 10.)', async () => {
+    const runtime = controller({ groupFlat: true, workingOrderAccounts: [22] });
+    const onGroupChanged = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, onGroupChanged });
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: { type: 'set-multiplier', groupId: 'runtime-test', accountId: 22, multiplier: 2 },
+    });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('čekající příkaz') });
+    expect(onGroupChanged).not.toHaveBeenCalled();
+  });
+
+  it('neznámý stav flat (starý status) násobek odmítne (21. 10.)', async () => {
+    const runtime = controller({ groupFlat: undefined });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: { type: 'set-multiplier', groupId: 'runtime-test', accountId: 22, multiplier: 2 },
+    });
+    expect(response.status).toBe(409);
+  });
+
   it('za vypnuté kopírky po prvním ARM dne dovolí násobek i zvýšit (1. 10.)', async () => {
     const runtime = controller({ sessionArmedAt: 1_788_595_200_000 });
     running = await startLocalCopierExecutionAgent({

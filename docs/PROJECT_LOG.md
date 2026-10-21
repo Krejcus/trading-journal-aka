@@ -262,6 +262,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-21 — Násobek followera jde zvýšit u vypnuté a flat kopírky (Claude)
+
+- Filip nemohl zvýšit násobek ani u vypnuté kopírky: tabulka editoru skupiny
+  ho po prvním ARM dne potichu omezovala režimem „dnes jen zpřísnit“, i když
+  worker (rozhodnutí 1. 10.) zvýšení za DISARMED dovoluje.
+- Nově: násobek existujícího followera jde měnit, když je kopírka vypnutá,
+  worker připojený, skupina flat a bez čekajících příkazů. Jinak je pole
+  zamčené a editor napíše konkrétní důvod. Worker stejné podmínky vynucuje se
+  srozumitelnou hláškou; autoritativní kontrola u brokera zůstává v
+  reconfigureGroup. copier-design-critic: SCHVÁLENO s výhradami (zapracováno V1).
 ### 2026-10-21 — Kopírka: oprava skupiny po startu už nečeká na nemožnou kontrolu (Claude)
 
 - Incident: leader 69662763 skupiny „Origoš“ zmizel z OAuth (propka účet
