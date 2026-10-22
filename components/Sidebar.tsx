@@ -21,8 +21,6 @@ import {
     Layers,
     Microscope,
     RadioTower,
-    PanelLeftClose,
-    PanelLeftOpen,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User } from '../types';
@@ -89,7 +87,9 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     // Core logic: Sidebar is expanded if either pinned (!isCollapsed) OR hovered (but NOT if we just clicked an item)
     // Professional behavior: Click -> Collapse immediately -> Re-expand on fresh hover
-    const isExpanded = !isCollapsed || (isHovered && !isClicked) || isOpen;
+    // Nad jazýčkem schovat/připnout se sidebar nerozbaluje (jinak by jazýček uskočil kurzoru).
+    const [tabHover, setTabHover] = useState(false);
+    const isExpanded = !isCollapsed || (isHovered && !isClicked && !tabHover) || isOpen;
 
     // Režim bez sidebaru: najetí k levému okraji ho vysune přes obsah, odjetí schová.
     // Krátké zpoždění, ať menu nevyskakuje při pouhém přejetí myší přes okraj.
@@ -189,8 +189,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                     width: showExpanded ? 240 : 88,
                     x: isOpen ? 0 : (window.innerWidth < 1024 ? -240 : offscreen ? -260 : 0),
                     opacity: offscreen ? 0 : 1,
+                    scale: offscreen ? 0.94 : 1,
                 }}
-                transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                // Vysunutí: pružina s lehkým dojezdem; schování: krátké a čisté.
+                transition={hidden
+                    ? (offscreen
+                        ? { x: { duration: 0.22, ease: [0.4, 0, 1, 1] }, opacity: { duration: 0.18 }, scale: { duration: 0.22 }, width: { duration: 0.2 } }
+                        : { x: { type: 'spring', stiffness: 420, damping: 32, mass: 0.9 }, scale: { type: 'spring', stiffness: 380, damping: 26 }, opacity: { duration: 0.16 }, width: { type: 'spring', stiffness: 420, damping: 36 } })
+                    : { type: "spring", stiffness: 300, damping: 30 }}
+                style={{ transformOrigin: 'left center' }}
                 className={`${sidebarBaseClasses} ${hidden && peek ? 'sidebar-peek' : ''}`}
                 inert={offscreen}
                 onMouseEnter={() => { setIsHovered(true); if (hidden) schedulePeek(true, 0); }}
@@ -201,7 +208,25 @@ const Sidebar: React.FC<SidebarProps> = ({
                 }}
             >
                 {/* Plovoucí glass panel — čistá navigace (logo je v headeru) */}
-                <div className="floating-glass-header rounded-lg flex flex-col max-h-full min-h-0 overflow-hidden relative">
+                <div className="relative flex flex-col max-h-full min-h-0">
+                {/* Jazýček na okraji (jako u lišty kreslení v grafu): schovat / připnout menu, po chvíli ukáže ⌘B. */}
+                {onToggleHidden && (
+                    <button
+                        type="button"
+                        onClick={() => { setIsClicked(true); onToggleHidden(); }}
+                        aria-label={hidden ? 'Připnout menu (⌘B)' : 'Schovat menu (⌘B)'}
+                        className={`sidebar-edge-tab hidden lg:grid ${isDark ? 'is-dark' : ''}`}
+                        onPointerEnter={() => setTabHover(true)}
+                        onPointerLeave={() => setTabHover(false)}
+                    >
+                        {hidden ? <ChevronRight size={13} strokeWidth={2} /> : <ChevronLeft size={13} strokeWidth={2} />}
+                        <span className="sidebar-edge-tip" aria-hidden="true">
+                            {hidden ? 'Připnout menu' : 'Schovat menu'}<kbd>⌘B</kbd>
+                        </span>
+                    </button>
+                )}
+                <div className="sidebar-glass floating-glass-header rounded-lg flex flex-col max-h-full min-h-0 overflow-hidden relative">
+                    {hidden && <span className="sidebar-sheen" aria-hidden="true" />}
 
                     {/* Mobilní zavírací tlačítko */}
                     <button onClick={() => setIsOpen(false)} className="lg:hidden absolute top-3 right-3 z-20 p-2 hover:bg-white/10 rounded-lg text-slate-400"><X size={18} /></button>
@@ -346,27 +371,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                     )}
                 </nav>
 
-                {/* Schovat / připnout menu (⌘B) — jen v rozbaleném stavu, ať nezabírá místo. */}
-                {onToggleHidden && (
-                    <div className="hidden lg:block px-2 pb-2 relative z-10">
-                        <button
-                            type="button"
-                            onClick={() => { setIsClicked(true); onToggleHidden(); }}
-                            title={hidden ? 'Připnout menu (⌘B)' : 'Schovat menu — appka na celou šířku (⌘B)'}
-                            aria-label={hidden ? 'Připnout menu' : 'Schovat menu'}
-                            className={`flex items-center gap-3 rounded-lg text-[11px] font-semibold transition-all duration-300 h-9 theme-text-secondary ${isDark ? 'hover:bg-white/[0.06] hover:text-white' : 'hover:bg-slate-900/[0.05] hover:text-slate-950'} ${!showExpanded ? 'justify-center w-10 mx-auto' : 'w-[calc(100%_-_1rem)] px-6 mx-2'}`}
-                        >
-                            {hidden ? <PanelLeftOpen size={16} className="shrink-0" /> : <PanelLeftClose size={16} className="shrink-0" />}
-                            {showExpanded && (
-                                <span className="flex flex-1 items-center justify-between gap-2 whitespace-nowrap">
-                                    {hidden ? 'Připnout menu' : 'Schovat menu'}
-                                    <kbd className={`rounded border px-1.5 py-px font-mono text-[10px] font-semibold ${isDark ? 'border-white/15 text-white/55' : 'border-slate-300 text-slate-500'}`}>⌘B</kbd>
-                                </span>
-                            )}
-                        </button>
-                    </div>
-                )}
-
                 {/* User Profile - Fixed at the Bottom - CLICKABLE */}
                 <div className={`px-2 py-4 border-t transition-colors relative z-10 ${isDark ? 'border-white/5' : 'border-slate-200/50'}`}>
                     <div
@@ -407,6 +411,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                 </div>
                 {/* /Sjednocený plovoucí glass obdélník */}
+                </div>
                 </div>
             </motion.aside>
             {/* SVG Filters for Liquid Glass Refraction Effect */}
