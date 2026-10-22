@@ -441,15 +441,15 @@ describe('GroupDetail Positions integrace', () => {
   });
   it('hlavička i buňky skupiny jdou ve stejném pořadí a nic z nich nechybí', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, { snapshot }));
-    const headers = ['Skupina', 'Stav', 'Leader', 'Firma', 'Followeři', 'Kapitál', 'Denní P&amp;L', 'Otevřený P&amp;L'];
+    const headers = ['Skupina', 'Stav', 'Leader', 'Firma', 'Followeři', 'Kapitál', 'Denní P&amp;L', 'Otevřený P&amp;L', 'SL', 'TP'];
     const positions = headers.map(label => markup.indexOf(`>${label}</th>`));
     expect(positions.every(index => index > 0)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
 
-    // Řádek skupiny: šipka + název + 7 volitelných sloupců + akce.
+    // Řádek skupiny: šipka + název + 9 volitelných sloupců + akce.
     const groupRow = tableRows(markup).find(row => row.includes('Hlavni'));
     expect(groupRow).toBeDefined();
-    expect(tableCells(groupRow!)).toHaveLength(10);
+    expect(tableCells(groupRow!)).toHaveLength(12);
   });
   it('přepínač Účty/Příkazy stojí pod obsahem, ne nad hlavičkou tabulky', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, { snapshot }));
