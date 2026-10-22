@@ -102,6 +102,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     useEffect(() => { if (!hidden) { window.clearTimeout(peekTimer.current); setPeek(false); } }, [hidden]);
     useEffect(() => () => window.clearTimeout(peekTimer.current), []);
     const offscreen = hidden && !peek && !isOpen;
+    // Vysunuté menu je hned celé rozbalené (s popisky), ne jen ikony.
+    const showExpanded = isExpanded || (hidden && peek);
 
     const mainItems = [
         { id: 'dashboard', label: t('dashboard', lang), icon: LayoutDashboard },
@@ -176,15 +178,15 @@ const Sidebar: React.FC<SidebarProps> = ({
             {hidden && (
                 <div
                     aria-hidden="true"
-                    className="sidebar-reveal-edge hidden lg:block fixed left-0 top-0 bottom-0 w-2.5 z-[61]"
-                    onMouseEnter={() => schedulePeek(true, 110)}
+                    className="sidebar-reveal-edge hidden lg:block fixed left-0 top-0 bottom-0 w-6 z-[61]"
+                    onMouseEnter={() => schedulePeek(true, 80)}
                     onMouseLeave={() => { if (!peek) schedulePeek(false, 0); }}
                 />
             )}
             <motion.aside
                 initial={false}
                 animate={{
-                    width: isExpanded ? 240 : 88,
+                    width: showExpanded ? 240 : 88,
                     x: isOpen ? 0 : (window.innerWidth < 1024 ? -240 : offscreen ? -260 : 0),
                     opacity: offscreen ? 0 : 1,
                 }}
@@ -211,21 +213,21 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 setIsClicked(true);
                                 onReview();
                             }}
-                            title={!isExpanded ? (reviewCount ? `Hodnotit (${reviewCount})` : 'Hodnotit') : ''}
+                            title={!showExpanded ? (reviewCount ? `Hodnotit (${reviewCount})` : 'Hodnotit') : ''}
                             className={`flex items-center justify-center gap-3 transition-all duration-300 border liquid-glass-lens hover:scale-[0.98] active:scale-95 group h-10 relative z-10
                 ${isDark
                                 ? 'bg-transparent border-emerald-500/25 text-emerald-400 shadow-[inset_0_1.5px_1.5px_rgba(0,0,0,0.05),inset_0_-1.5px_1.5px_rgba(255,255,255,0.2),0_3px_1.5px_-1.5px_rgba(16,185,129,0.15),0_0_1px_2px_inset_rgba(255,255,255,0.1)] hover:border-emerald-500/55 hover:text-emerald-300'
                                 : 'bg-transparent border-emerald-500/40 text-emerald-700 shadow-[inset_0_1.5px_1.5px_rgba(0,0,0,0.03),inset_0_-1.5px_1.5px_rgba(255,255,255,0.6),0_3px_1.5px_-1.5px_rgba(16,185,129,0.08),0_0_1px_2px_inset_rgba(255,255,255,0.15)] hover:border-emerald-500/70 hover:text-emerald-800'
                             }
-                ${!isExpanded ? 'w-10 rounded-lg mx-auto' : 'w-full rounded-lg px-6'}
+                ${!showExpanded ? 'w-10 rounded-lg mx-auto' : 'w-full rounded-lg px-6'}
               `}
                         >
                             <span className="relative">
                                 <ClipboardCheck size={18} strokeWidth={2.4} className="group-hover:scale-110 transition-transform duration-300" />
-                                {reviewCount > 0 && !isExpanded && <span className="absolute -top-2 -right-2.5 min-w-[15px] h-[15px] px-1 rounded-full bg-emerald-500 text-white text-[8.5px] font-black flex items-center justify-center tabular-nums">{reviewCount}</span>}
+                                {reviewCount > 0 && !showExpanded && <span className="absolute -top-2 -right-2.5 min-w-[15px] h-[15px] px-1 rounded-full bg-emerald-500 text-white text-[8.5px] font-black flex items-center justify-center tabular-nums">{reviewCount}</span>}
                             </span>
                             <AnimatePresence>
-                                {isExpanded && (
+                                {showExpanded && (
                                     <motion.span
                                         initial={{ opacity: 0, x: -10 }}
                                         animate={{ opacity: 1, x: 0 }}
@@ -256,8 +258,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                                     onPointerEnter={item.id === 'live' && !locked && !isActive && onLiveIntent ? () => onLiveIntent() : undefined}
                                     onFocus={item.id === 'live' && !locked && !isActive && onLiveIntent ? () => onLiveIntent() : undefined}
                                     onPointerDown={item.id === 'live' && !locked && !isActive && onLiveIntent ? () => onLiveIntent() : undefined}
-                                    className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto rounded-lg' : 'w-[calc(100%_-_1rem)] px-6 mx-2 rounded-lg'} ${locked ? 'opacity-40 hover:opacity-60' : ''}`}
-                                    title={!isExpanded ? item.label + (locked ? ' (uzamčeno)' : '') : ''}
+                                    className={`${navItemClass(isActive)} ${!showExpanded ? 'justify-center w-10 mx-auto rounded-lg' : 'w-[calc(100%_-_1rem)] px-6 mx-2 rounded-lg'} ${locked ? 'opacity-40 hover:opacity-60' : ''}`}
+                                    title={!showExpanded ? item.label + (locked ? ' (uzamčeno)' : '') : ''}
                                 >
                                     <span className="relative shrink-0 flex">
                                         <Icon size={16} className={`shrink-0 ${isActive ? (isDark ? 'text-white' : 'text-[var(--text-primary)]') : 'text-current'}`} />
@@ -266,7 +268,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         )}
                                     </span>
                                     <AnimatePresence>
-                                        {isExpanded && (
+                                        {showExpanded && (
                                             <motion.span
                                                 initial={{ opacity: 0, x: -10 }}
                                                 animate={{ opacity: 1, x: 0 }}
@@ -277,10 +279,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                                             </motion.span>
                                         )}
                                     </AnimatePresence>
-                                    {locked && isExpanded && (
+                                    {locked && showExpanded && (
                                         <Lock size={11} className="absolute right-4 text-amber-400/70" />
                                     )}
-                                    {locked && !isExpanded && (
+                                    {locked && !showExpanded && (
                                         <Lock size={9} className="absolute -top-0.5 -right-0.5 text-amber-400/70 bg-[var(--bg-page)] rounded-full p-0.5" />
                                     )}
 
@@ -302,12 +304,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         onClick={onToggleBacktest}
                                         onMouseEnter={() => setWorldHover(true)}
                                         onMouseLeave={() => setWorldHover(false)}
-                                        className={`flex items-center gap-3 rounded-lg text-[11px] font-semibold transition-all duration-300 h-10 border ${!isExpanded ? 'justify-center w-10 mx-auto' : 'w-[calc(100%_-_1rem)] px-6 mx-2'} ${
+                                        className={`flex items-center gap-3 rounded-lg text-[11px] font-semibold transition-all duration-300 h-10 border ${!showExpanded ? 'justify-center w-10 mx-auto' : 'w-[calc(100%_-_1rem)] px-6 mx-2'} ${
                                             showBacktest
                                                 ? 'bg-violet-500/10 border-violet-500/40 text-violet-500 hover:bg-violet-500/20'
                                                 : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/20'
                                         }`}
-                                        title={!isExpanded ? (isBacktest ? 'Přepnout na Live' : 'Přepnout na Backtest') : ''}
+                                        title={!showExpanded ? (isBacktest ? 'Přepnout na Live' : 'Přepnout na Backtest') : ''}
                                     >
                                         {/* Ikona — crossfade mezi stavy (box 16px, stack absolute) */}
                                         <span className="shrink-0 relative w-4 h-4 flex items-center justify-center">
@@ -315,7 +317,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                             <Radio size={16} className={`absolute transition-opacity duration-300 ${showBacktest ? 'opacity-0' : 'opacity-100'}`} />
                                         </span>
                                         <AnimatePresence>
-                                            {isExpanded && (
+                                            {showExpanded && (
                                                 <motion.span
                                                     initial={{ opacity: 0, x: -10 }}
                                                     animate={{ opacity: 1, x: 0 }}
@@ -352,10 +354,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                             onClick={() => { setIsClicked(true); onToggleHidden(); }}
                             title={hidden ? 'Připnout menu (⌘B)' : 'Schovat menu — appka na celou šířku (⌘B)'}
                             aria-label={hidden ? 'Připnout menu' : 'Schovat menu'}
-                            className={`flex items-center gap-3 rounded-lg text-[11px] font-semibold transition-all duration-300 h-9 theme-text-secondary ${isDark ? 'hover:bg-white/[0.06] hover:text-white' : 'hover:bg-slate-900/[0.05] hover:text-slate-950'} ${!isExpanded ? 'justify-center w-10 mx-auto' : 'w-[calc(100%_-_1rem)] px-6 mx-2'}`}
+                            className={`flex items-center gap-3 rounded-lg text-[11px] font-semibold transition-all duration-300 h-9 theme-text-secondary ${isDark ? 'hover:bg-white/[0.06] hover:text-white' : 'hover:bg-slate-900/[0.05] hover:text-slate-950'} ${!showExpanded ? 'justify-center w-10 mx-auto' : 'w-[calc(100%_-_1rem)] px-6 mx-2'}`}
                         >
                             {hidden ? <PanelLeftOpen size={16} className="shrink-0" /> : <PanelLeftClose size={16} className="shrink-0" />}
-                            {isExpanded && (
+                            {showExpanded && (
                                 <span className="flex flex-1 items-center justify-between gap-2 whitespace-nowrap">
                                     {hidden ? 'Připnout menu' : 'Schovat menu'}
                                     <kbd className={`rounded border px-1.5 py-px font-mono text-[10px] font-semibold ${isDark ? 'border-white/15 text-white/55' : 'border-slate-300 text-slate-500'}`}>⌘B</kbd>
@@ -372,10 +374,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                         className={`
               flex items-center transition-all relative overflow-hidden group cursor-pointer liquid-glass-lens hover:scale-[0.98] active:scale-95 
               ${isDark ? 'glass-lens-dark' : 'glass-lens-light'} 
-              ${!isExpanded ? 'w-12 h-12 rounded-lg justify-center mx-auto' : 'h-14 rounded-lg justify-between px-4 gap-3'}
+              ${!showExpanded ? 'w-12 h-12 rounded-lg justify-center mx-auto' : 'h-14 rounded-lg justify-between px-4 gap-3'}
             `}
                     >
-                        <div className={`flex items-center min-w-0 relative z-10 ${!isExpanded ? 'justify-center' : 'gap-4 w-full'}`}>
+                        <div className={`flex items-center min-w-0 relative z-10 ${!showExpanded ? 'justify-center' : 'gap-4 w-full'}`}>
                             <div className="w-10 h-10 rounded-full border border-white/20 overflow-hidden flex-shrink-0 shadow-[0_4px_12px_rgba(0,0,0,0.3)]">
                                 {user.avatar ? (
                                     <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
@@ -386,7 +388,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 )}
                             </div>
                             <AnimatePresence>
-                                {isExpanded && (
+                                {showExpanded && (
                                     <motion.div
                                         initial={{ opacity: 0, width: 0 }}
                                         animate={{ opacity: 1, width: 'auto' }}
