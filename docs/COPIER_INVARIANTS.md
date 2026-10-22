@@ -1295,6 +1295,16 @@ Agent-oponent má před schválením změny výslovně odpovědět na každou ot
   (`neverSent`). Výjimka 6. 10. hledala vlastníka nohy jen v OSO/bracket
   outboxu, celá skupina se vypnula. Oprava: `protectiveEpochId` na place
   položce. `tests/copierStandaloneStopFilledDuringModify.test.ts`.
+- **21. 10. — deadlock režimu opravy po startu.** Leader uložené skupiny
+  zmizel z OAuth; automatická kontrola po startu nemohla uspět a zůstala
+  dlužná (`pendingReadOnlyConnectionRecovery`), `preflightGroupChange` pak
+  odmítl i opravu skupiny z UI. Výjimka E2 (30. 9.) byla jen v
+  `activateGroup`, z UI nedosažitelná. Teď obě místa používají jedinou
+  podmínku `matchesStartupRepairRetirement` (přesně nedostupné účty) a
+  preflight dlužnou recovery pro takovou opravu promíjí; běžící recovery dál
+  blokuje, aktivace vynutí novou reconciliation. Aktivace přitom maže i
+  nedurable `lastError` (starší chování, durable incident přežije).
+  `tests/copierStartupRepairDeadlock.test.ts`.
 - **UI flicker po návratu na LIVE.** Uložené ON/OFF a status mají zabránit
   vizuálnímu probliknutí, ale jsou výhradně presentation cache. Viz PROJECT_LOG
   „LIVE kopírka: načítání bez problikávání“ a `lib/copierPowerDisplay.ts`.

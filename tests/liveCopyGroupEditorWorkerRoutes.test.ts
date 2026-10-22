@@ -76,3 +76,28 @@ describe('GroupEditorDialog worker routes', () => {
     expect(markup).not.toContain('Není ve Mac workeru');
   });
 });
+
+describe('GroupEditorDialog násobek (21. 10. 2026)', () => {
+  const increaseButton = (markup: string) => markup.match(/<button[^>]*aria-label="Zvýšit Násobek Vybraný follower"[^>]*>/)?.[0] ?? '';
+
+  it('za vypnuté a flat kopírky jde násobek zvýšit i v režimu „dnes jen zpřísnit“', async () => {
+    const { GroupEditorDialog } = await import('../components/LiveCopyTradeOverview');
+    const markup = renderToStaticMarkup(React.createElement(GroupEditorDialog, {
+      ...props, tightenOnly: true, multiplierLockReason: null,
+    }));
+    expect(increaseButton(markup)).not.toBe('');
+    expect(increaseButton(markup)).not.toMatch(/ disabled=""/);
+    expect(markup).not.toContain('Násobek teď nejde měnit');
+  });
+
+  it('když násobek nejde měnit, editor napíše proč a pole zamkne', async () => {
+    const { GroupEditorDialog } = await import('../components/LiveCopyTradeOverview');
+    const reason = 'Některý účet skupiny má otevřenou pozici — násobek změníš, až budou všechny účty flat.';
+    const markup = renderToStaticMarkup(React.createElement(GroupEditorDialog, {
+      ...props, tightenOnly: true, multiplierLockReason: reason,
+    }));
+    expect(markup).toContain('Násobek teď nejde měnit');
+    expect(markup).toContain(reason);
+    expect(increaseButton(markup)).toMatch(/ disabled=""/);
+  });
+});

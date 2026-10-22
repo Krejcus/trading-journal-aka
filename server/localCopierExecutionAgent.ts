@@ -548,6 +548,15 @@ export async function startLocalCopierExecutionAgent(
     if (multiplierChanged && options.controller.status().armed) {
       throw new Error('Násobek jde měnit jen při vypnuté kopírce. Vypni kopírku a změň ho znovu.');
     }
+    // 21. 10. 2026 (Filip): za vypnuté kopírky jen když je skupina flat a bez
+    // čekajících příkazů — se srozumitelným důvodem. Je to rychlá kontrola
+    // nad cache; autoritativní čtení u brokera dělá až reconfigureGroup.
+    if (multiplierChanged && options.controller.status().groupFlat !== true) {
+      throw new Error('Násobek jde měnit jen když jsou všechny účty skupiny flat (bez otevřené pozice). Zavři pozice a změň ho znovu.');
+    }
+    if (multiplierChanged && options.controller.status().workingOrderAccounts.length > 0) {
+      throw new Error('Násobek jde měnit jen když skupina nemá žádný čekající příkaz. Zruš příkazy a změň ho znovu.');
+    }
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
     const topologyChanged = !sameAccountTopology(previous, next);
     const weaker = [...new Set([
@@ -594,7 +603,15 @@ export async function startLocalCopierExecutionAgent(
         throw new Error(`Pravidla jdou dnes jen zpřísnit: ${weaker.join(', ')} (reset po konci session)`);
       }
     }
-    options.controller.preflightGroupChange(next, { allowGroupChange: mode === 'activate' });
+    // 21. 10. 2026: preflight musí znát vyřazované účty režimu opravy, jinak
+    // dlužná (nikdy neúspěšná) recovery zablokuje opravu skupiny natrvalo.
+    const groupChangePreflight = {
+      allowGroupChange: mode === 'activate',
+      ...(reconfigurationRequest.retireMissingOldGroup
+        ? { retireMissingAccountIds: reconfigurationRequest.retireMissingOldGroup.accountIds }
+        : {}),
+    };
+    options.controller.preflightGroupChange(next, groupChangePreflight);
     // E1 (review 30. 9.): částečná oprava ponechává část starých účtů;
     // účet nesmí být současně required (nová skupina) i optional (stará).
     const routingRequest = retiredBefore
@@ -613,7 +630,7 @@ export async function startLocalCopierExecutionAgent(
       await previewAccounts(routingRequest);
       // Broker event mohl doběhnout během OAuth discovery; před DISARM proto
       // ještě jednou ověř čistě lokální streamové blockery.
-      options.controller.preflightGroupChange(next, { allowGroupChange: mode === 'activate' });
+      options.controller.preflightGroupChange(next, groupChangePreflight);
     }
 
     // Čistá metadata/pravidla bez změny execution konfigurace nemají důvod

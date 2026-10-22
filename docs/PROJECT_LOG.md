@@ -262,6 +262,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-21 — Násobek followera jde zvýšit u vypnuté a flat kopírky (Claude)
+
+- Filip nemohl zvýšit násobek ani u vypnuté kopírky: tabulka editoru skupiny
+  ho po prvním ARM dne potichu omezovala režimem „dnes jen zpřísnit“, i když
+  worker (rozhodnutí 1. 10.) zvýšení za DISARMED dovoluje.
+- Nově: násobek existujícího followera jde měnit, když je kopírka vypnutá,
+  worker připojený, skupina flat a bez čekajících příkazů. Jinak je pole
+  zamčené a editor napíše konkrétní důvod. Worker stejné podmínky vynucuje se
+  srozumitelnou hláškou; autoritativní kontrola u brokera zůstává v
+  reconfigureGroup. copier-design-critic: SCHVÁLENO s výhradami (zapracováno V1).
+### 2026-10-21 — Kopírka: oprava skupiny po startu už nečeká na nemožnou kontrolu (Claude)
+
+- Incident: leader 69662763 skupiny „Origoš“ zmizel z OAuth (propka účet
+  zavřela, přibyly 70762985/70771429). Worker naběhl v režimu opravy, ale
+  uložení opravené skupiny z LIVE odmítal („blokuje probíhající connection
+  recovery/reconciliation“) — dlužná kontrola po startu nemohla uspět.
+- Rychlé řešení (Filip výslovně souhlasil): bootout → záloha → ruční přepis
+  durable skupiny (leader 70423188, followeři 70423233/70423265) → bootstrap.
+- Kódová oprava: `preflightGroupChange` dostává vyřazované účty z agenta a pro
+  přesnou opravu po startu dlužnou recovery promíjí (sdílená podmínka
+  s `activateGroup`). copier-design-critic: návrh OPRAVIT → zapracováno.
+- Násobek u účtu jde měnit jen u vypnuté kopírky (záměrný zámek v editoru).
+
 ### 2026-10-20 — Kopírka: samostatný Stop vyplněný během posunu už nevypne skupinu (Claude)
 
 - Incident 19. 10. 16:26: leader short 10 MNQ (Market), Stop přidal až o 40 s
