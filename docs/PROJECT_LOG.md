@@ -262,6 +262,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-22 — LIVE: SL/TP po účtech po poplatcích v řádcích, ostrov na stejném výpočtu (Claude)
+- **Proč:** SL/TP v dolarech „nesedělo“ s Tradovate. Ostrov počítal jen kontrakty
+  leadera, jeho vstup a hrubě bez poplatků; u čekajícího limitu SL/TP vůbec
+  neukazoval (bral jen `Working`, bracket je do fillu `Suspended`).
+- **Výpočet** `lib/liveTradeCard.ts` (`buildTradeCard`): každý účet s vlastním
+  vstupem, vlastními SL/TP příkazy a skutečným poplatkem za kontrakt a stranu
+  z jeho posledních fillů (`tradeCardFeeRates`, broker posílá fee u fillu).
+  Poplatky buď u všech účtů, nebo u žádného (nemíchat čisté a hrubé). Neúplné
+  krytí nedá částku, jen „x/y“; neověřené čtení dá null (INV-UI-01/03).
+  Otevřená pozice uznává jen `Working` ochranu, čekající vstup i `Suspended`.
+- **UI (Filip výslovně: do stávajících řádků, žádné nové tabulky):** sloupce SL
+  a TP v tabulce účtů i v řádku skupiny (skrývají se v Nastavení tabulky →
+  Sloupce); na telefonu karta se stupnicí nad účty a „SL … · TP …“ v řádku
+  účtu v trhu. Otevřený P&L skupiny i účtů, ostrov a karta jsou po poplatcích,
+  když je sazba známá. Pruh s rozbalovací tabulkou a volba „Obchod“ byly
+  v prvním návrhu a Filip je odmítl — nevracet.
+- **Dev:** `?page=live&live-mock=trade` ukáže DEMO obchod (jen dev build,
+  `?live-mock=off` vypne).
+- Jen zobrazení, žádný příkaz; jádro kopírky beze změny. iPhone dostane změnu
+  až s novým nativním buildem (`dist-native`).
+
 ### 2026-10-21 — Násobek followera jde zvýšit u vypnuté a flat kopírky (Claude)
 
 - Filip nemohl zvýšit násobek ani u vypnuté kopírky: tabulka editoru skupiny
