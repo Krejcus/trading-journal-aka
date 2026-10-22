@@ -262,6 +262,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-22 — Deník: restart TradingView od čipu „TV stojí“ (Claude)
+- Příčina „TV stojí / nenačítá svíčky“ 22. 10.: TradingView spuštěné bez CDP (běžné spuštění z Docku ve 20:43) → worker
+  nečte 1m svíčky; dnešek jde jen z tohoto čtení (Databento ~24 h zpoždění).
+- Restart na dálku už existoval: relay i prod DB povolují `snapshot-test` + `repairCamera` (úspěch přes relay 13. 10.),
+  tlačítko „Obnovit TradingView snímky“ v LIVE. Nově totéž od čipu v deníku (lokálně přímo na worker, jinak relay);
+  výsledek se ověřuje ze `snapshotHealth`, s CDP už připraveným se nerestartuje. Žádná změna relay/workeru.
+- copier-design-critic: OK s výhradami (pravdivý výsledek, strukturované blokery, varování o neuložených změnách) — opraveno.
+
 ### 2026-10-22 — Ruční obchod na leaderovi s vypnutou kopírkou už nezakládá incident (Claude)
 
 - Filip ráno obchodoval na leaderovi s vypnutou kopírkou; při exitu vznikl
