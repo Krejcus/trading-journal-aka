@@ -262,6 +262,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-22 — Ruční obchod na leaderovi s vypnutou kopírkou už nezakládá incident (Claude)
+
+- Filip ráno obchodoval na leaderovi s vypnutou kopírkou; při exitu vznikl
+  incident „nevysvětlená divergence“ (follower flat) a Zapnout chtělo potvrzení.
+- Za DISARMED je divergence před exitem leadera jen audit a nová Kontrola
+  pozic (stejný vzor jako DISARMED kontrola velikosti pozice). Za ARMED beze
+  změny. ARM dál vyžaduje autoritativně flat skupinu.
+- Incident zůstává, když byla kopírka při příchodu eventu zapnutá
+  (`lastDisarm.at >= receivedAt`), když v nedokončené epoše vlastnila kopii
+  followera, nebo když drží kopie přes výpadek; čekající auto-resume se
+  odmítne (INV-RECON-04). copier-design-critic: 2 kola, kód schválen.
+
 ### 2026-10-22 — Kopírka: potvrzení incidentu počká na nezapsané incidenty (Claude)
 
 - Navazuje na 28720e52 (výhrada 4 kritika): potvrzení incidentu nejdřív počká
