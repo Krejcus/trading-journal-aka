@@ -4765,6 +4765,43 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   /**
+   * 22. 10. 2026 (Filip): divergence před exitem leadera za VYPNUTÉ kopírky
+   * (čistě ruční obchod na leaderovi) není incident — stejně jako DISARMED
+   * kontrola velikosti pozice: audit + nová Kontrola pozic před dalším ARM.
+   * Incident zůstává, když kopírka byla při příchodu eventu zapnutá (OFF
+   * přišel až během čtení), když v této epizodě vlastnila kopii followera,
+   * nebo když drží kopie přes výpadek (INV-RECON-04).
+   */
+  const divergenceBeforeLeaderExit = (
+    symbol: string,
+    receivedAt: number,
+    accounts: readonly number[],
+    message: string,
+  ) => {
+    const disarmedDuringEvent = lastDisarm != null && lastDisarm.at >= receivedAt;
+    const epoch = leaderExposureEpoch(symbol);
+    const ownedCopy = epoch != null && unfinishedLeaderFlatPhase(epoch.phase)
+      && epoch.followers.some(follower => (
+        accounts.includes(follower.accountId) && follower.copyLineage === 'confirmed'
+      ));
+    const heldThroughOutage = transportResume?.state === 'waiting' && transportResume.heldOpen;
+    if (gate.armed || disarmedDuringEvent || ownedCopy || heldThroughOutage) {
+      failClosed(new Error(message), { autoClose: false });
+      return;
+    }
+    if (transportResume?.state === 'waiting') {
+      declineTransportResume('kopie skončily jinak než obchod leadera — zapni ručně');
+    }
+    invalidateReconciliation();
+    options.onAudit?.([{
+      at: clock(),
+      leaderEventId: `disarmed-exit-divergence:${accounts.join(',')}:${clock()}`,
+      kind: 'blocked',
+      reason: `${message}; DISARMED audit nezměnil poslední příčinu vypnutí`,
+    }]);
+  };
+
+  /**
    * Naplánuje risk-redukující zavření kopií na konec event fronty. Jednorázové
    * per epizoda: selhání zavření volá failClosed už odzbrojené (wasLiveArmed
    * = false), takže se smyčka nikdy neroztočí.
@@ -10198,9 +10235,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       const adjustedDispatch = await cutAwareDispatchFor(pending, increasesExposure);
       if (adjustedDispatch.unsafeDivergenceAccounts.length > 0) {
-        failClosed(new Error(
+        divergenceBeforeLeaderExit(
+          pending.symbol,
+          pending.receivedAt,
+          adjustedDispatch.unsafeDivergenceAccounts,
           `Copier fail-closed: nevysvětlená divergence účtů ${adjustedDispatch.unsafeDivergenceAccounts.join(', ')} před leader exitem ${pending.symbol}`,
-        ), { autoClose: false });
+        );
         settleOsoFlush(entryOrderId);
         return;
       }
@@ -15137,9 +15177,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         pendingOsoEvents.delete(leaderEvent.orderId);
         pendingOsoGenerations.delete(leaderEvent.orderId);
         const accounts = adjustedDispatch.unsafeDivergenceAccounts.join(', ');
-        failClosed(new Error(
+        divergenceBeforeLeaderExit(
+          leaderEvent.symbol,
+          leaderEvent.receivedAt,
+          adjustedDispatch.unsafeDivergenceAccounts,
           `Copier fail-closed: nevysvětlená divergence účtů ${accounts} před OSO leader exitem ${leaderEvent.symbol}`,
-        ), { autoClose: false });
+        );
         return;
       }
       const exitOnlyAccounts = new Set(adjustedDispatch.exitOnlyAccounts);
@@ -15245,9 +15288,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         : null;
       if (adjustedEntryDispatch?.unsafeDivergenceAccounts.length) {
         const accounts = adjustedEntryDispatch.unsafeDivergenceAccounts.join(', ');
-        failClosed(new Error(
+        divergenceBeforeLeaderExit(
+          pair.symbol,
+          (pendingEntry ?? leaderEvent).receivedAt,
+          adjustedEntryDispatch.unsafeDivergenceAccounts,
           `Copier fail-closed: nevysvětlená divergence účtů ${accounts} před OSO leader exitem ${pair.symbol}`,
-        ), { autoClose: false });
+        );
         return;
       }
       const exitOnlyAccounts = new Set(adjustedEntryDispatch?.exitOnlyAccounts ?? []);
@@ -15557,9 +15603,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           kind: 'blocked',
           reason: `unexplained-position-divergence:${unsafeAccounts.join(',')}:${leaderEvent.symbol}`,
         }]);
-        failClosed(new Error(
+        divergenceBeforeLeaderExit(
+          leaderEvent.symbol,
+          leaderEvent.receivedAt,
+          unsafeAccounts,
           `Copier fail-closed: nevysvětlená divergence účtů ${unsafeAccounts.join(', ')} před leader exitem ${leaderEvent.symbol}`,
-        ), { autoClose: false });
+        );
       }
       conditionalMirrorSourcesByLeaderEvent.delete(leaderEvent.id);
       return;
@@ -15584,9 +15633,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         kind: 'blocked',
         reason: `unexplained-position-divergence:${accounts}:${leaderEvent.symbol}`,
       }]);
-      failClosed(new Error(
+      divergenceBeforeLeaderExit(
+        leaderEvent.symbol,
+        leaderEvent.receivedAt,
+        cutAwareDispatch.unsafeDivergenceAccounts,
         `Copier fail-closed: nevysvětlená divergence účtů ${accounts} před leader exitem ${leaderEvent.symbol}`,
-      ), { autoClose: false });
+      );
       return;
     }
     const result = await processor.process({

@@ -1314,6 +1314,13 @@ Agent-oponent má před schválením změny výslovně odpovědět na každou ot
   `persistSafetyUpdate`); při nesouladu paměť→durable potvrzení nic nesmaže,
   srovná paměť na uložený incident a vyžádá nové výslovné potvrzení
   (INV-DEFAULT-03 beze změny). `tests/copierIncidentLostUpdate.test.ts`.
+- **22. 10. — ruční obchod leadera za vypnuté kopírky.** Divergence před
+  exitem leadera (follower flat, protože se nic nekopírovalo) zakládala
+  durable incident a další Zapnout vyžadovalo potvrzení. Za DISARMED je teď
+  stejně jako u kontroly velikosti pozice jen audit + `invalidateReconciliation`
+  (`divergenceBeforeLeaderExit`); ARM dál vyžaduje autoritativně flat skupinu
+  (INV-ARM-01), za ARMED/SHADOW zůstává fail-closed incident.
+  `tests/copierDisarmedManualLeaderTrade.test.ts`.
 - **UI flicker po návratu na LIVE.** Uložené ON/OFF a status mají zabránit
   vizuálnímu probliknutí, ale jsou výhradně presentation cache. Viz PROJECT_LOG
   „LIVE kopírka: načítání bez problikávání“ a `lib/copierPowerDisplay.ts`.
