@@ -7,7 +7,7 @@ import { LiveDayTrigger, LiveDayCardDialog } from './LiveDayCard';
 import { buildLiveDaySummary, liveDayReadAnswered } from '../lib/liveDaySummary';
 import { buildLiveCopierIsland } from '../lib/liveCopierIsland';
 import { buildTradeCard, type TradeCardAccount, type TradeCardModel } from '../lib/liveTradeCard';
-import { LiveTradeCompactCard, LiveTradeStrip, TradeLevelCell } from './LiveTradeCard';
+import { GroupTradeLevelCell, LiveTradeCompactCard, TradeLevelCell, TradeLevelInline } from './LiveTradeCard';
 import { copierArmRejection, isArmPositionRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { formatReadAge, isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
@@ -179,11 +179,12 @@ interface ColumnDef {
   widthPx: number;
 }
 
-type GroupColumnKey = 'status' | 'leader' | 'firm' | 'followers' | 'capital' | 'daily' | 'unreal';
+type GroupColumnKey = 'status' | 'leader' | 'firm' | 'followers' | 'capital' | 'daily' | 'unreal' | 'sl' | 'tp';
 type OrderColumnKey = 'account' | 'broker' | 'symbol' | 'action' | 'type' | 'qty' | 'limit' | 'stop' | 'status' | 'timestamp' | 'orderId';
 const GROUP_COLUMN_OPTIONS: Array<{ key: GroupColumnKey; label: string }> = [
   { key: 'status', label: 'Stav' }, { key: 'leader', label: 'Leader' }, { key: 'firm', label: 'Firma' },
   { key: 'followers', label: 'Followeři' }, { key: 'capital', label: 'Kapitál' }, { key: 'daily', label: 'Denní P&L' }, { key: 'unreal', label: 'Otevřený P&L' },
+  { key: 'sl', label: 'SL' }, { key: 'tp', label: 'TP' },
 ];
 const ORDER_COLUMN_OPTIONS: Array<{ key: OrderColumnKey; label: string }> = [
   { key: 'account', label: 'Účet' }, { key: 'broker', label: 'Broker' }, { key: 'symbol', label: 'Symbol' }, { key: 'action', label: 'Směr' },
@@ -192,7 +193,7 @@ const ORDER_COLUMN_OPTIONS: Array<{ key: OrderColumnKey; label: string }> = [
 ];
 /** Sloupce zarovnané doprava — čísla se čtou od desetinné tečky. */
 const ORDER_COLUMNS_RIGHT = new Set<OrderColumnKey>(['qty', 'limit', 'stop', 'orderId']);
-const GROUP_COLUMNS_RIGHT = new Set<GroupColumnKey>(['followers', 'capital', 'daily', 'unreal']);
+const GROUP_COLUMNS_RIGHT = new Set<GroupColumnKey>(['followers', 'capital', 'daily', 'unreal', 'sl', 'tp']);
 
 const ACCOUNT_COLUMNS: ColumnDef[] = [
   // Stav nemá vlastní sloupec: 95 % času by nesl „Aktivní“, což už signalizuje
@@ -206,25 +207,15 @@ const ACCOUNT_COLUMNS: ColumnDef[] = [
   { key: 'daily', label: 'Denní P&L', align: 'right', widthPx: 96 },
   { key: 'dllRemaining', label: 'DLL zbývá', align: 'right', widthPx: 96 },
   { key: 'unreal', label: 'Otevřený P&L', align: 'right', widthPx: 104 },
+  // SL/TP účtu v dolarech po poplatcích a v bodech od jeho vstupu.
+  { key: 'sl', label: 'SL', align: 'right', widthPx: 96 },
+  { key: 'tp', label: 'TP', align: 'right', widthPx: 96 },
   { key: 'distDd', label: 'Rezerva DD', align: 'right', widthPx: 76 },
   { key: 'execLimit', label: 'Exec/Limit', align: 'right', widthPx: 88 },
   { key: 'qtyMult', label: 'Násobek', align: 'right', widthPx: 96 },
   { key: 'actions', label: 'Akce', align: 'right', widthPx: 92 },
 ];
 
-/**
- * SL/TP po účtech jako sloupce — jen když si je zvolíš místo rozbalení pruhu
- * obchodu. Nejsou v seznamu skrývaných sloupců; řídí je jedna volba.
- */
-const TRADE_LEVEL_COLUMNS: ColumnDef[] = [
-  { key: 'sl', label: 'SL', align: 'right', widthPx: 96 },
-  { key: 'tp', label: 'TP', align: 'right', widthPx: 96 },
-];
-const withTradeLevelColumns = (columns: ColumnDef[]): ColumnDef[] => {
-  const at = columns.findIndex(column => column.key === 'unreal');
-  const index = at >= 0 ? at + 1 : Math.max(0, columns.length - 1);
-  return [...columns.slice(0, index), ...TRADE_LEVEL_COLUMNS, ...columns.slice(index)];
-};
 const EMPTY_FEE_RATES: ReadonlyMap<string, number> = new Map();
 /**
  * Otevřený P&L skupiny po poplatcích, když jde o jeden obchod se známými
@@ -426,12 +417,11 @@ function loadColumnOrder(): ColumnOrderState {
   };
 }
 
-function loadViewSettings(): { redaction: RedactionSettings; confirmRearmAfterFlatten: boolean; tradeLevelsInTable: boolean } {
+function loadViewSettings(): { redaction: RedactionSettings; confirmRearmAfterFlatten: boolean } {
   try {
     const parsed = JSON.parse(localStorage.getItem(VIEW_SETTINGS_STORAGE_KEY) ?? '{}') as Partial<{
       redaction: Partial<RedactionSettings>;
       confirmRearmAfterFlatten: boolean;
-      tradeLevelsInTable: boolean;
     }>;
     return {
       redaction: {
@@ -439,10 +429,9 @@ function loadViewSettings(): { redaction: RedactionSettings; confirmRearmAfterFl
         visibleEnd: Number.isFinite(parsed.redaction?.visibleEnd) ? Math.max(0, Number(parsed.redaction?.visibleEnd)) : DEFAULT_REDACTION.visibleEnd,
       },
       confirmRearmAfterFlatten: typeof parsed.confirmRearmAfterFlatten === 'boolean' ? parsed.confirmRearmAfterFlatten : true,
-      tradeLevelsInTable: parsed.tradeLevelsInTable === true,
     };
   } catch {
-    return { redaction: DEFAULT_REDACTION, confirmRearmAfterFlatten: true, tradeLevelsInTable: false };
+    return { redaction: DEFAULT_REDACTION, confirmRearmAfterFlatten: true };
   }
 }
 
@@ -967,7 +956,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [redactNames, setRedactNames] = useState(false);
   const [redaction, setRedaction] = useState<RedactionSettings>(initialViewSettings.redaction);
   const [confirmRearmAfterFlatten, setConfirmRearmAfterFlatten] = useState(initialViewSettings.confirmRearmAfterFlatten);
-  const [tradeLevelsInTable, setTradeLevelsInTable] = useState(initialViewSettings.tradeLevelsInTable);
   const [templates, setTemplates] = useState<CopyGroupTemplate[]>(loadTemplates);
   const [busyCommand, setBusyCommandState] = useState<string | null>(null);
   // Živá hodnota pro async smyčky (opakování přepnutí followera): stav
@@ -1031,9 +1019,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       localStorage.setItem(GROUP_COLUMNS_STORAGE_KEY, JSON.stringify([...hiddenGroupColumns]));
       localStorage.setItem(ORDER_COLUMNS_STORAGE_KEY, JSON.stringify([...hiddenOrderColumns]));
       localStorage.setItem(COLUMN_ORDER_STORAGE_KEY, JSON.stringify(columnOrder));
-      localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ redaction, confirmRearmAfterFlatten, tradeLevelsInTable }));
+      localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ redaction, confirmRearmAfterFlatten }));
     } catch { /* private mode */ }
-  }, [columnOrder, confirmRearmAfterFlatten, hiddenGroupColumns, hiddenOrderColumns, redaction, tradeLevelsInTable]);
+  }, [columnOrder, confirmRearmAfterFlatten, hiddenGroupColumns, hiddenOrderColumns, redaction]);
 
   useEffect(() => {
     void refreshGroupLibrary(!copyGroupLibraryLoadedUsers.has(userId));
@@ -2460,17 +2448,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0"><CopierArmProgressPanel /></td></tr>
                       ) : null}
                       {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{transportResumeSupported && transportResume ? <CopierAutoResumePanel resume={transportResume} onCancel={cancelAutoResume} /> : null}{maintenancePanel}<AccountSyncPauseBanner rows={rows} eligibilityByAccount={eligibilityByAccount} tradeCutsByAccount={tradeCutsByAccount} redactNames={redactNames} redaction={redaction} />{cooldownPanel}</td></tr> : null}
-                      {tradeCard ? (
-                        <tr>
-                          <td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="px-3 pb-2 pt-1.5">
-                            <LiveTradeStrip
-                              model={tradeCard}
-                              expandable={!tradeLevelsInTable}
-                              label={account => redactAccountName(account.name, redactNames, redaction)}
-                            />
-                          </td>
-                        </tr>
-                      ) : null}
                       <tr
                         aria-hidden={!expanded.has(group.id)}
                       >
@@ -2479,8 +2456,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                             <div className="min-h-0 overflow-hidden"><GroupDetail
                               rows={rows} tab={tab} isLive={isLive} onAccount={onAccount}
                               dailyPnlPending={dailyPnlPending}
-                              columns={tradeLevelsInTable && tradeCard?.kind === 'position' ? withTradeLevelColumns(visibleColumns) : visibleColumns}
-                              tradeCard={tradeLevelsInTable ? tradeCard : null}
+                              columns={visibleColumns}
+                              tradeCard={tradeCard}
                               orders={orders}
                               eligibilityByAccount={eligibilityByAccount}
                               tradeCutsByAccount={tradeCutsByAccount}
@@ -2796,8 +2773,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           columnOrder={columnOrder}
           redaction={redaction}
           confirmRearmAfterFlatten={confirmRearmAfterFlatten}
-          tradeLevelsInTable={tradeLevelsInTable}
-          onTradeLevelsInTable={setTradeLevelsInTable}
           onMoveColumn={(table, from, to) => setColumnOrder(current => {
             const moved = moveColumn(current[table] as string[], from, to);
             return table === 'accounts'
@@ -2816,7 +2791,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             setColumnOrder({ accounts: [...ACCOUNT_COLUMN_KEYS], groups: [...GROUP_COLUMN_KEYS], orders: [...ORDER_COLUMN_KEYS] });
             setRedaction(DEFAULT_REDACTION);
             setConfirmRearmAfterFlatten(true);
-            setTradeLevelsInTable(false);
           }}
           onClose={() => setTableSettingsOpen(false)}
         />
@@ -3336,6 +3310,8 @@ const GroupRow = ({ group, rows, tradeCard = null, armed, dailyPnlPending, eligi
     followers: <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{group.followers.length}</td>,
     capital: <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]"><BalanceValue display={capital} /></td>,
     daily: <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${daily == null ? 'text-[var(--text-secondary)]' : pnlClass(daily)}`}>{daily == null ? '—' : money.format(daily)}</td>,
+    sl: <td className="px-3 py-1.5 text-right"><GroupTradeLevelCell model={tradeCard} level="stop" /></td>,
+    tp: <td className="px-3 py-1.5 text-right"><GroupTradeLevelCell model={tradeCard} level="target" /></td>,
     unreal: <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={netOpen != null ? 'Po poplatcích za vstup i výstup, stejně jako karta obchodu.' : unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>,
   };
   return (
@@ -3698,8 +3674,10 @@ export const participationBlockerHint = (blockers: string[]): string | null => {
 
 type CompactSwitchNote = { tone: 'lock' | 'reject'; lines: string[]; hint: string | null };
 
-const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, participation, showSwitchSlot = false, onFollowerEnabled, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, style }: {
+const CompactAccountRow = ({ row, tradeAccount, variant, live, eligibility, tradeCut, participation, showSwitchSlot = false, onFollowerEnabled, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, style }: {
   row: Row;
+  /** SL/TP účtu v aktuálním obchodu skupiny (řádek v trhu). */
+  tradeAccount?: TradeCardAccount;
   /** Jen zpoždění náběhu při rozbalení seznamu. */
   style?: React.CSSProperties;
   /** `market` = sloupce Pozice a Otevřený, `flat` = jen Dnes. */
@@ -3906,6 +3884,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
               staleLabel={readStaleLabel}
             />
           ) : null}
+          {variant === 'market' && tradeAccount ? <TradeLevelInline account={tradeAccount} /> : null}
           {flatReadWarning}
           {attention ? (
             tradeCut ? <TradeCutPill cut={tradeCut} /> : syncPause ? <SyncPausePill /> : <AccountEligibilityPill
@@ -4179,7 +4158,7 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
         />
       </div>
 
-      {tradeCard ? <LiveTradeCompactCard model={tradeCard} label={account => redactAccountName(account.name, redactNames, redaction)} /> : null}
+      {tradeCard ? <LiveTradeCompactCard model={tradeCard} /> : null}
 
       {disarmPanel}
       {cooldownPanel}
@@ -4197,6 +4176,7 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
                 <CompactAccountRow
                   key={`${row.name}-${index}`}
                   row={row}
+                  tradeAccount={row.accountId != null ? tradeCard?.accounts.find(account => account.accountId === row.accountId) : undefined}
                   variant={variant}
                   live={isLive(row.account)}
                   eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
@@ -5177,7 +5157,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, tradeCard =
   onTab: (t: 'accounts' | 'orders') => void;
   onAccount?: (a: LiveAccount) => void;
   columns: ColumnDef[];
-  /** Jen ve volbě „SL/TP ve sloupcích“ — zdroj buněk SL a TP. */
+  /** Aktuální obchod skupiny — zdroj buněk SL a TP v řádcích účtů. */
   tradeCard?: TradeCardModel | null;
   orders: LiveOrder[];
   eligibilityByAccount: Map<number, CopierAccountEligibility>;
@@ -6657,23 +6637,20 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
   );
 };
 
-type SettingsSection = 'accounts' | 'groups' | 'orders' | 'trade' | 'privacy' | 'safety';
+type SettingsSection = 'accounts' | 'groups' | 'orders' | 'privacy' | 'safety';
 
 const REDACTION_SAMPLE = 'APEX-184920';
 
-export const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenOrderColumns, columnOrder, redaction, confirmRearmAfterFlatten, tradeLevelsInTable = false, onMoveColumn, onRedaction, onConfirmRearmAfterFlatten, onTradeLevelsInTable, onToggleColumn, onToggleGroupColumn, onToggleOrderColumn, onReset, onClose }: {
+export const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenOrderColumns, columnOrder, redaction, confirmRearmAfterFlatten, onMoveColumn, onRedaction, onConfirmRearmAfterFlatten, onToggleColumn, onToggleGroupColumn, onToggleOrderColumn, onReset, onClose }: {
   hiddenColumns: Set<AccountColumnKey>;
   hiddenGroupColumns: Set<GroupColumnKey>;
   hiddenOrderColumns: Set<OrderColumnKey>;
   columnOrder: ColumnOrderState;
   redaction: RedactionSettings;
   confirmRearmAfterFlatten: boolean;
-  /** SL/TP po účtech ve sloupcích tabulky místo rozbalení pruhu obchodu. */
-  tradeLevelsInTable?: boolean;
   onMoveColumn: (table: keyof ColumnOrderState, from: number, to: number) => void;
   onRedaction: (value: RedactionSettings) => void;
   onConfirmRearmAfterFlatten: (value: boolean) => void;
-  onTradeLevelsInTable?: (value: boolean) => void;
   onToggleColumn: (key: AccountColumnKey) => void;
   onToggleGroupColumn: (key: GroupColumnKey) => void;
   onToggleOrderColumn: (key: OrderColumnKey) => void;
@@ -6734,7 +6711,7 @@ export const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenO
     </button>
   );
 
-  const table = section === 'privacy' || section === 'safety' || section === 'trade' ? null : tables[section];
+  const table = section === 'privacy' || section === 'safety' ? null : tables[section];
   const redacted = redactAccountName(REDACTION_SAMPLE, true, redaction);
 
   return createPortal(
@@ -6758,7 +6735,6 @@ export const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenO
               `${tables[key].items.filter(item => item.visible).length}/${tables[key].items.length}`,
             ))}
             <div className="px-2.5 pb-1 pt-3 text-[11px] font-semibold text-[var(--text-muted)]">Ostatní</div>
-            {onTradeLevelsInTable ? railButton('trade', 'Obchod') : null}
             {railButton('privacy', 'Soukromí')}
             {railButton('safety', 'Bezpečnost')}
           </nav>
@@ -6779,22 +6755,6 @@ export const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenO
                   />
                 </div>
               </>
-            ) : section === 'trade' ? (
-              <div className="space-y-3 p-1.5" role="radiogroup" aria-label="SL/TP po účtech">
-                <p className="px-0.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">Pruh nad skupinou ukazuje SL a TP celé skupiny vždy. Tady volíš, kde uvidíš SL a TP jednotlivých účtů.</p>
-                {([
-                  [false, 'Po kliknutí na pruh obchodu', 'Pruh se rozbalí do tabulky po účtech: vstup, P&L, SL, TP a poplatky.'],
-                  [true, 'Ve sloupcích tabulky účtů', 'SL a TP každého účtu jsou rovnou v tabulce vedle otevřeného P&L. Pruh se nerozbaluje.'],
-                ] as const).map(([value, title, detail]) => (
-                  <label key={String(value)} className="flex items-start gap-2.5 rounded-lg border border-[var(--border-subtle)] p-3">
-                    <input type="radio" name="trade-levels" checked={tradeLevelsInTable === value} onChange={() => onTradeLevelsInTable?.(value)} className="mt-0.5 accent-indigo-600" />
-                    <span>
-                      <span className="block text-xs font-black text-[var(--text-primary)]">{title}</span>
-                      <span className="mt-1 block text-[11px] leading-relaxed text-[var(--text-secondary)]">{detail}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
             ) : section === 'privacy' ? (
               <div className="space-y-3 p-1.5">
                 <div className="rounded-lg border border-[var(--border-subtle)] p-3">

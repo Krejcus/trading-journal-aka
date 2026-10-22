@@ -1,19 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
 import type { TradeCardAccount, TradeCardLevel, TradeCardModel } from '../lib/liveTradeCard';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 
 /**
- * Karta aktuálního obchodu skupiny (jen zobrazení, SL/TP se posouvají
- * v Tradovate). Počítač: pruh nad účty, kliknutím rozpad po účtech.
- * Telefon: karta se stupnicí, klepnutím SL/TP po účtech.
+ * SL/TP aktuálního obchodu skupiny (jen zobrazení, posouvají se v Tradovate).
+ * Počítač: sloupce SL a TP v řádku skupiny i v řádcích účtů.
+ * Telefon: karta se stupnicí nad účty a SL/TP v řádcích účtů v trhu.
  */
 
 const wholeUsd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const centsUsd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pointsFmt = new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 const priceFmt = new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const ratioFmt = new Intl.NumberFormat('cs-CZ', { maximumFractionDigits: 1 });
 
 const signedUsd = (value: number | null) => value == null
   ? '—'
@@ -24,16 +22,6 @@ const signedPoints = (value: number | null) => value == null
 const tone = (value: number | null) => value == null || value === 0
   ? 'text-[var(--text-primary)]'
   : value > 0 ? 'text-emerald-500' : 'text-rose-500';
-
-/** Riziko : cíl. SL v plusu = bez rizika. */
-export const tradeCardRatio = (model: TradeCardModel): string | null => {
-  const risk = model.stop.usd;
-  const reward = model.target.usd;
-  if (risk == null || reward == null) return null;
-  if (risk >= 0) return 'bez rizika';
-  if (reward <= 0) return null;
-  return `1 : ${ratioFmt.format(reward / -risk)}`;
-};
 
 const sideLabel = (model: TradeCardModel) => {
   if (model.kind === 'position') return model.direction > 0 ? 'LONG' : 'SHORT';
@@ -86,14 +74,6 @@ const feeNote = (model: TradeCardModel) => model.feesIncluded
 
 const levelValue = (level: TradeCardLevel, verified: boolean) => !verified ? '?' : signedUsd(level.usd);
 
-const KV = ({ label, value, sub, valueClass, flash }: { label: string; value: string; sub?: string | null; valueClass?: string; flash?: boolean }) => (
-  <span className={`flex shrink-0 flex-col gap-0.5 rounded px-1 transition-colors duration-700 ${flash ? 'bg-amber-500/25' : 'bg-transparent'}`}>
-    <span className="text-[9.5px] font-black uppercase tracking-[0.08em] text-[var(--text-muted)]">{label}</span>
-    <span className={`text-[15px] font-black tabular-nums leading-tight ${valueClass ?? 'text-[var(--text-primary)]'}`}>{value}</span>
-    {sub ? <span className="text-[10.5px] font-semibold tabular-nums text-[var(--text-muted)]">{sub}</span> : null}
-  </span>
-);
-
 const accountCell = (level: TradeCardLevel, account: TradeCardAccount) => {
   if (!account.ordersVerified) return <span className="text-[var(--text-muted)]">?</span>;
   if (level.coverage === 0) return <span className="text-[var(--text-muted)]">—</span>;
@@ -104,116 +84,63 @@ const accountCell = (level: TradeCardLevel, account: TradeCardAccount) => {
   </>;
 };
 
-/** Buňka SL/TP v tabulce účtů (volba „SL/TP ve sloupcích“). */
-export const TradeLevelCell = ({ account, level }: { account: TradeCardAccount; level: 'stop' | 'target' }) => (
-  <span className="inline-flex flex-col items-end text-xs font-bold tabular-nums">{accountCell(account[level], account)}</span>
-);
+const accountLevelKey = (account: TradeCardAccount, level: 'stop' | 'target') =>
+  `${account[level].price ?? '-'}:${account[level].coverage}`;
 
-/** Tabulka po účtech — rozbalení pruhu na počítači. */
-const AccountBreakdown = ({ model, label }: { model: TradeCardModel; label: (account: TradeCardAccount) => string }) => {
-  const leaderEntry = model.accounts.find(account => account.isLeader)?.entry ?? null;
+/** Buňka SL/TP v řádku účtu; po posunu v Tradovate krátce blikne. */
+export const TradeLevelCell = ({ account, level }: { account: TradeCardAccount; level: 'stop' | 'target' }) => {
+  const flash = useChangeFlash(accountLevelKey(account, level));
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-[12px]">
-        <thead>
-          <tr className="text-[10px] font-black uppercase tracking-[0.07em] text-[var(--text-muted)]">
-            <th className="px-3.5 py-2 text-left">Účet</th>
-            <th className="px-3.5 py-2 text-right">Vstup</th>
-            {model.kind === 'position' ? <th className="px-3.5 py-2 text-right">P&amp;L</th> : null}
-            <th className="px-3.5 py-2 text-right">SL</th>
-            <th className="px-3.5 py-2 text-right">TP</th>
-            <th className="px-3.5 py-2 text-right">Poplatky</th>
-          </tr>
-        </thead>
-        <tbody>
-          {model.accounts.map(account => {
-            const slip = !account.isLeader && account.entry != null && leaderEntry != null
-              ? (account.entry - leaderEntry) * model.direction * -1
-              : null;
-            return (
-              <tr key={account.accountId} className="border-t border-[var(--border-subtle)] align-top font-bold tabular-nums">
-                <td className="px-3.5 py-2 text-left">
-                  <span className="flex items-center gap-1.5 whitespace-nowrap font-black">
-                    {account.isLeader ? <span className="rounded bg-indigo-500/15 px-1 py-px text-[9px] font-black text-indigo-500">L</span> : null}
-                    {label(account)}
-                  </span>
-                </td>
-                <td className="whitespace-nowrap px-3.5 py-2 text-right">
-                  {account.entry == null ? '—' : priceFmt.format(account.entry)}
-                  <span className="block text-[10.5px] font-semibold text-[var(--text-muted)]">
-                    {account.quantity} ks{slip != null && slip !== 0 ? ` · skluz ${signedPoints(slip)}` : ''}
-                  </span>
-                </td>
-                {model.kind === 'position' ? <td className={`whitespace-nowrap px-3.5 py-2 text-right ${tone(account.openPnl)}`}>{signedUsd(account.openPnl)}</td> : null}
-                <td className="whitespace-nowrap px-3.5 py-2 text-right">{accountCell(account.stop, account)}</td>
-                <td className="whitespace-nowrap px-3.5 py-2 text-right">{accountCell(account.target, account)}</td>
-                <td className="whitespace-nowrap px-3.5 py-2 text-right text-[var(--text-muted)]">{account.fees == null ? '—' : centsUsd.format(account.fees)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <p className="border-t border-[var(--border-subtle)] px-3.5 py-2 text-[10.5px] font-semibold text-[var(--text-muted)]">{feeNote(model)}</p>
-    </div>
+    <span className={`inline-flex flex-col items-end rounded px-1 text-xs font-bold tabular-nums transition-colors duration-700 ${flash ? 'bg-amber-500/25' : 'bg-transparent'}`}>
+      {accountCell(account[level], account)}
+    </span>
   );
 };
 
-const STRIP_OPEN_KEY = 'alphatrade_live_trade_strip_open';
-const loadStripOpen = () => {
-  try { return localStorage.getItem(STRIP_OPEN_KEY) === '1'; } catch { return false; }
+/**
+ * Součet SL/TP celé skupiny v řádku skupiny. Neúplné krytí ukáže počet
+ * krytých účtů místo částky; čekající vstup dostane poznámku.
+ */
+export const GroupTradeLevelCell = ({ model, level }: { model: TradeCardModel | null; level: 'stop' | 'target' }) => {
+  const flash = useChangeFlash(model ? levelKey(model, level) : null);
+  if (!model) return <span className="text-xs text-[var(--text-secondary)]">—</span>;
+  const value = model[level];
+  const covered = level === 'stop' ? model.stopCovered : model.targetCovered;
+  const total = model.accounts.length;
+  const body = !model.verified
+    ? <span className="text-[var(--text-muted)]" title="Příkazy nejsou čerstvě ověřené">?</span>
+    : value.usd != null
+      ? <>
+          <span className={tone(value.usd)}>{signedUsd(value.usd)}</span>
+          <span className="block text-[10px] font-semibold text-[var(--text-muted)]">
+            {model.kind === 'pending' ? 'čeká na fill' : signedPoints(value.points) ?? 'víc úrovní'}
+          </span>
+        </>
+      : covered > 0
+        ? <span className="text-amber-600" title="Ne všechny účty mají úroveň přes celou pozici">{covered}/{total} účtů</span>
+        : <span className={level === 'stop' && model.kind === 'position' ? 'text-rose-500' : 'text-[var(--text-muted)]'}>{level === 'stop' && model.kind === 'position' ? 'bez SL' : '—'}</span>;
+  return (
+    <span
+      className={`inline-flex flex-col items-end rounded px-1 text-xs font-bold tabular-nums transition-colors duration-700 ${flash ? 'bg-amber-500/25' : 'bg-transparent'}`}
+      title={model.verified && value.usd != null ? feeNote(model) : undefined}
+    >{body}</span>
+  );
 };
 
-/** Počítač: pruh skupiny nad tabulkou účtů; s `expandable` se rozbalí po účtech. */
-export const LiveTradeStrip = ({ model, expandable, label }: {
-  model: TradeCardModel;
-  expandable: boolean;
-  label: (account: TradeCardAccount) => string;
-}) => {
-  const [open, setOpen] = useState(loadStripOpen);
-  const stopFlash = useChangeFlash(levelKey(model, 'stop'));
-  const targetFlash = useChangeFlash(levelKey(model, 'target'));
-  const ratio = tradeCardRatio(model);
-  const expanded = expandable && open;
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    try { localStorage.setItem(STRIP_OPEN_KEY, next ? '1' : '0'); } catch { /* jen pohodlí */ }
+/** SL/TP v druhém řádku účtu v trhu na telefonu. */
+export const TradeLevelInline = ({ account }: { account: TradeCardAccount }) => {
+  const part = (name: string, level: TradeCardLevel) => {
+    if (!account.ordersVerified) return <span className="text-[var(--text-muted)]">{name} ?</span>;
+    if (level.coverage === 0) return <span className="text-[var(--text-muted)]">{name} —</span>;
+    if (!level.exact) return <span className="text-amber-600">{name} {level.coverage}/{account.quantity}</span>;
+    return <span className={tone(level.usd)}>{name} {signedUsd(level.usd)}</span>;
   };
-  const content = <>
-    <span className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-      <SideBadge model={model} />
-      <b className="text-sm font-black">{futuresSymbolRoot(model.symbol)}</b>
-      <span className="text-xs font-bold tabular-nums text-[var(--text-secondary)]">{model.quantity} ks{model.kind === 'pending' && model.entry != null ? ` @ ${priceFmt.format(model.entry)}` : ''}</span>
-    </span>
-    <span className="h-8 w-px shrink-0 bg-[var(--border-subtle)]" />
-    {model.kind === 'position'
-      ? <KV label="P&L" value={signedUsd(model.openPnl)} valueClass={tone(model.openPnl)} />
-      : <KV label="Stav" value="čeká na fill" valueClass="text-[var(--text-secondary)]" />}
-    <KV label="SL" value={levelValue(model.stop, model.verified)} valueClass={tone(model.stop.usd)} sub={signedPoints(model.stop.points)} flash={stopFlash} />
-    <KV label="TP" value={levelValue(model.target, model.verified)} valueClass={tone(model.target.usd)} sub={signedPoints(model.target.points)} flash={targetFlash} />
-    {ratio ? <KV label="R:R" value={ratio} /> : null}
-    <span className="ml-auto flex shrink-0 items-center gap-2">
-      <CoverageChip model={model} />
-      {expandable ? <ChevronDown aria-hidden="true" size={16} className={`text-[var(--text-secondary)] transition-transform ${expanded ? 'rotate-180' : ''}`} /> : null}
-    </span>
-  </>;
   return (
-    <section className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)]" aria-label="Aktuální obchod skupiny">
-      {expandable ? (
-        <button type="button" onClick={toggle} aria-expanded={expanded} className="flex w-full items-center gap-4 overflow-x-auto px-3.5 py-2.5 text-left">
-          {content}
-        </button>
-      ) : (
-        <div className="flex w-full items-center gap-4 overflow-x-auto px-3.5 py-2.5">{content}</div>
-      )}
-      {expandable ? (
-        <div className={`grid transition-[grid-template-rows] duration-300 ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
-          <div className="min-h-0 overflow-hidden">
-            <div className="border-t border-[var(--border-subtle)]"><AccountBreakdown model={model} label={label} /></div>
-          </div>
-        </div>
-      ) : null}
-    </section>
+    <span className="inline-flex items-center gap-1.5 text-[11px] font-black tabular-nums">
+      {part('SL', account.stop)}
+      <span className="text-[var(--text-muted)]">·</span>
+      {part('TP', account.target)}
+    </span>
   );
 };
 
@@ -252,12 +179,8 @@ const Ladder = ({ model }: { model: TradeCardModel }) => {
   );
 };
 
-/** Telefon: karta se stupnicí, klepnutím SL/TP po účtech. */
-export const LiveTradeCompactCard = ({ model, label }: {
-  model: TradeCardModel;
-  label: (account: TradeCardAccount) => string;
-}) => {
-  const [open, setOpen] = useState(false);
+/** Telefon: karta se stupnicí nad účty; SL/TP po účtech jsou v jejich řádcích. */
+export const LiveTradeCompactCard = ({ model }: { model: TradeCardModel }) => {
   const stopFlash = useChangeFlash(levelKey(model, 'stop'));
   const targetFlash = useChangeFlash(levelKey(model, 'target'));
   const avgPoints = model.mark != null && model.entry != null ? (model.mark - model.entry) * model.direction : null;
@@ -269,59 +192,28 @@ export const LiveTradeCompactCard = ({ model, label }: {
     </span>
   );
   return (
-    <section className="border-b border-[var(--border-subtle)]" aria-label="Aktuální obchod skupiny">
-      <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} className="block w-full px-3 pb-2.5 pt-3 text-left">
-        <span className="flex items-center gap-2">
-          <SideBadge model={model} />
-          <b className="text-[14px] font-black">{futuresSymbolRoot(model.symbol)} · {model.quantity} ks</b>
-          <span className="ml-auto"><CoverageChip model={model} /></span>
-        </span>
-        {model.kind === 'position' ? (
-          <span className="mt-1.5 flex items-baseline gap-2">
-            <b className={`text-[28px] font-black tabular-nums tracking-tight ${tone(model.openPnl)}`}>{signedUsd(model.openPnl)}</b>
-            {avgPoints != null ? <span className="text-xs font-bold tabular-nums text-[var(--text-secondary)]">{signedPoints(avgPoints)}</span> : null}
-          </span>
-        ) : (
-          <span className="mt-1.5 block text-[13px] font-bold tabular-nums text-[var(--text-secondary)]">
-            Čeká na fill{model.entry != null ? ` @ ${priceFmt.format(model.entry)}` : ''}
-          </span>
-        )}
-        <Ladder model={model} />
-        <span className="mt-2 grid grid-cols-2 gap-2">
-          {levelBox('SL', model.stop, stopFlash)}
-          {levelBox('TP', model.target, targetFlash)}
-        </span>
-        <span className="mt-2 flex items-center justify-center gap-1 text-[11px] font-bold text-[var(--text-muted)]">
-          {open ? 'Skrýt účty' : 'SL/TP po účtech'}
-          <ChevronDown aria-hidden="true" size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-        </span>
-      </button>
-      <div className={`grid transition-[grid-template-rows] duration-300 ${open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
-        <div className="min-h-0 overflow-hidden">
-          <div className="px-3 pb-3">
-            <div className="grid grid-cols-[minmax(0,1fr)_56px_66px_66px] gap-1.5 border-t border-[var(--border-subtle)] pb-1.5 pt-2 text-[9.5px] font-black uppercase tracking-[0.07em] text-[var(--text-muted)]">
-              <span>Účet</span>
-              <span className="text-right">{model.kind === 'position' ? 'P&L' : 'Vstup'}</span>
-              <span className="text-right">SL</span>
-              <span className="text-right">TP</span>
-            </div>
-            {model.accounts.map(account => (
-              <div key={account.accountId} className="grid grid-cols-[minmax(0,1fr)_56px_66px_66px] items-start gap-1.5 border-t border-[var(--border-subtle)] py-2 text-[12px] font-black tabular-nums">
-                <span className="min-w-0 truncate">
-                  {label(account)}{account.isLeader ? <span className="ml-1 text-[var(--text-muted)]">L</span> : null}
-                  <span className="block text-[10px] font-semibold text-[var(--text-muted)]">{account.entry == null ? '—' : priceFmt.format(account.entry)}</span>
-                </span>
-                <span className={`text-right ${model.kind === 'position' ? tone(account.openPnl) : 'text-[var(--text-secondary)]'}`}>
-                  {model.kind === 'position' ? signedUsd(account.openPnl) : `${account.quantity} ks`}
-                </span>
-                <span className="text-right">{accountCell(account.stop, account)}</span>
-                <span className="text-right">{accountCell(account.target, account)}</span>
-              </div>
-            ))}
-            <p className="border-t border-[var(--border-subtle)] pt-2 text-[10.5px] font-semibold leading-snug text-[var(--text-muted)]">{feeNote(model)}</p>
-          </div>
-        </div>
+    <section className="border-b border-[var(--border-subtle)] px-3 pb-2.5 pt-3" aria-label="Aktuální obchod skupiny">
+      <div className="flex items-center gap-2">
+        <SideBadge model={model} />
+        <b className="text-[14px] font-black">{futuresSymbolRoot(model.symbol)} · {model.quantity} ks</b>
+        <span className="ml-auto"><CoverageChip model={model} /></span>
       </div>
+      {model.kind === 'position' ? (
+        <div className="mt-1.5 flex items-baseline gap-2">
+          <b className={`text-[28px] font-black tabular-nums tracking-tight ${tone(model.openPnl)}`}>{signedUsd(model.openPnl)}</b>
+          {avgPoints != null ? <span className="text-xs font-bold tabular-nums text-[var(--text-secondary)]">{signedPoints(avgPoints)}</span> : null}
+        </div>
+      ) : (
+        <div className="mt-1.5 text-[13px] font-bold tabular-nums text-[var(--text-secondary)]">
+          Čeká na fill{model.entry != null ? ` @ ${priceFmt.format(model.entry)}` : ''}
+        </div>
+      )}
+      <Ladder model={model} />
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        {levelBox('SL', model.stop, stopFlash)}
+        {levelBox('TP', model.target, targetFlash)}
+      </div>
+      <p className="mt-2 text-[10.5px] font-semibold leading-snug text-[var(--text-muted)]">{feeNote(model)}</p>
     </section>
   );
 };
