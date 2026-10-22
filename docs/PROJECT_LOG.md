@@ -262,6 +262,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-22 — Kopírka: potvrzení incidentu počká na nezapsané incidenty (Claude)
+
+- Navazuje na 28720e52 (výhrada 4 kritika): potvrzení incidentu nejdřív počká
+  na frontu zápisů incidentů (`disarmPersistenceTail`); uložený incident, o
+  kterém paměť neví, už běžná kontrola pozic nesmaže — srovná paměť a vyžádá
+  výslovné potvrzení (dřív tiché smazání bez potvrzení, INV-DEFAULT-03).
+- copier-design-critic: SCHVÁLENO. Test pojistky bez opravy padá; souběh
+  samotný se deterministicky navodit nepodařilo (regresní test ponechán).
+  P4 v copierBracketAwaitingEntryFill je nestabilní i na čistém main.
+
 ### 2026-10-22 — Kopírka: incident se už neztratí a Zapnout ho vždy jde potvrdit (Claude)
 
 - 22. 10. ráno nešlo zapnout: v paměti workeru incident B (21. 10. 22:47),

@@ -17589,6 +17589,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Čistá Kontrola pozic = čerstvý autoritativní snapshot všech účtů.
       if (result.authoritativelyClean) await releaseAccountSyncPausesSafely(accountSyncPauseReleasableFromCache);
       if (result.authoritativelyClean && mayClear && currentManualRecovery === incidentToClear) {
+        // 22. 10. 2026: zápis incidentu z failClosed může ještě čekat ve
+        // frontě (pomalý disk). Potvrzení by jinak „smazalo“ prázdné místo a
+        // incident by se zapsal až po něm — bez potvrzení v paměti.
+        await disarmPersistenceTail;
+      }
+      if (result.authoritativelyClean && mayClear && currentManualRecovery === incidentToClear) {
         const acknowledgedAt = clock();
         let durablyCleared = false;
         let durableMismatch: unknown = null;
@@ -17597,8 +17603,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           durablyCleared = false;
           durableMismatch = null;
           // Jen ten incident, který uživatel potvrdil — novější zůstává.
-          if (incidentToClear && current.manualRecoveryRequired != null
-            && durableIncidentId(current.manualRecoveryRequired) !== incidentToClear.id) {
+          // Uložený incident, o kterém paměť neví, se bez potvrzení nemaže.
+          if (current.manualRecoveryRequired != null
+            && (!incidentToClear || durableIncidentId(current.manualRecoveryRequired) !== incidentToClear.id)) {
             durableMismatch = current.manualRecoveryRequired;
             return current;
           }

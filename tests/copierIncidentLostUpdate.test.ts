@@ -124,4 +124,69 @@ describe('incident se nesmí ztratit pozdějším zápisem bezpečnostního stav
     expect(runtime.status().manualRecovery).toBeNull();
     expect((await store.load()).safety?.manualRecoveryRequired).toBeUndefined();
   });
+
+  it('potvrzení během ještě nezapsaného incidentu nic neztratí ani nenechá bez potvrzení', async () => {
+    let now = Date.now();
+    const holdable = holdableStore();
+    const broker = createMockBroker({ clock: () => now, behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [] });
+    runtime = await bootstrapCopierRuntime({ broker, store: holdable.store, group: group(), clock: () => now });
+    broker.setConnected(true);
+    await runtime.waitForIdle();
+    await runtime.reconcile();
+    runtime.arm({ shadowMode: false });
+
+    // Incident za ARM: nejdřív zápis historie vypnutí, za ním incident — oba visí.
+    holdable.hold();
+    now += 1_000;
+    runtime.reportHostSleep({ unresponsiveSince: now - 1_000, detectedAt: now, sleepDurationMs: 1_000 });
+    const incident = runtime.status().manualRecovery!;
+    const ack = runtime.reconcile({ acknowledgedIncidentId: incident.id }).then(
+      value => ({ value }),
+      error => ({ error: error as Error }),
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    holdable.release();
+    const outcome = await ack;
+    await runtime.waitForIdle();
+
+    const durable = (await holdable.store.load()).safety?.manualRecoveryRequired as { id?: string } | undefined;
+    const memory = runtime.status().manualRecovery;
+    // Nikdy: uložený incident, o kterém paměť neví (smazal by ho další reconcile bez potvrzení).
+    expect(durable != null && memory == null).toBe(false);
+    if ('value' in outcome && outcome.value.authoritativelyClean) {
+      expect(memory).toBeNull();
+      expect(durable).toBeUndefined();
+    } else {
+      expect(memory?.id).toBe(durable?.id);
+    }
+  });
+
+  it('běžná kontrola pozic nesmaže uložený incident, o kterém paměť neví', async () => {
+    const now = Date.now();
+    const inner = createMemoryCopierStore();
+    const broker = createMockBroker({ clock: () => now, behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [] });
+    runtime = await bootstrapCopierRuntime({ broker, store: inner, group: group(), clock: () => now, onError: () => undefined });
+    broker.setConnected(true);
+    await runtime.waitForIdle();
+    expect(runtime.status().manualRecovery).toBeNull();
+
+    // Durable incident mimo paměť (ztracený/zpožděný zápis, ruční zásah).
+    const snapshot = await inner.load();
+    const marker = { at: now - 5_000, reason: 'Copier fail-closed: test', id: 'durable-only' };
+    await inner.commit({ ...snapshot, safety: { ...snapshot.safety!, manualRecoveryRequired: marker } }, snapshot.revision);
+
+    let mismatch: Error | null = null;
+    for (let attempt = 0; attempt < 3 && !mismatch; attempt += 1) {
+      try {
+        await runtime.reconcile();
+      } catch (reason) {
+        if ((reason as Error).message.includes('liší od zobrazeného')) mismatch = reason as Error;
+      }
+    }
+    expect(mismatch).not.toBeNull();
+    expect((await inner.load()).safety?.manualRecoveryRequired).toMatchObject({ id: 'durable-only' });
+    expect(runtime.status().manualRecovery?.id).toBe('durable-only');
+    expect(runtime.status().lastError).toBe('Copier fail-closed: test');
+  });
 });
+
