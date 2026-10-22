@@ -224,6 +224,10 @@ const EMPTY_FEE_RATES: ReadonlyMap<string, number> = new Map();
  */
 const tradeCardNetOpenPnl = (card: TradeCardModel | null | undefined): number | null =>
   card?.kind === 'position' && card.feesIncluded ? card.openPnl : null;
+/** Totéž pro jeden účet: po poplatcích jen se známým poplatkem, jinak null. */
+const tradeAccountNetOpenPnl = (account: TradeCardAccount | undefined): number | null =>
+  account?.fees != null ? account.openPnl : null;
+const NET_OPEN_TITLE = 'Po poplatcích za vstup i výstup, stejně jako SL a TP.';
 
 const ACCOUNT_COLUMN_KEYS = ACCOUNT_COLUMNS.map(column => column.key);
 const GROUP_COLUMN_KEYS = GROUP_COLUMN_OPTIONS.map(column => column.key);
@@ -3701,6 +3705,7 @@ const CompactAccountRow = ({ row, tradeAccount, variant, live, eligibility, trad
   redaction: RedactionSettings;
 }) => {
   const a = row.account;
+  const netOpen = tradeAccountNetOpenPnl(tradeAccount);
   const accountId = row.accountId;
   const dismissedRejections = useDismissedRejections();
   const compactFlat = live && a != null && a.positions.every(position => position.netPosition === 0);
@@ -3832,15 +3837,15 @@ const CompactAccountRow = ({ row, tradeAccount, variant, live, eligibility, trad
           </span>
         </span>
         <span className={`compact-row-dim truncate text-right text-[12px] font-bold tabular-nums ${variant === 'market'
-          ? (a ? pnlClass(a.unrealizedPnl) : 'text-[var(--text-secondary)]')
+          ? (a ? pnlClass(netOpen ?? a.unrealizedPnl) : 'text-[var(--text-secondary)]')
           : (daily != null && !dailyDisplay.stale ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
           {variant === 'market'
             ? (a ? (
               <span
                 className="inline-flex items-center justify-end gap-1"
-                title={unrealStale ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : undefined}
+                title={unrealStale ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : netOpen != null ? NET_OPEN_TITLE : undefined}
               >
-                {money.format(a.unrealizedPnl)}
+                {money.format(netOpen ?? a.unrealizedPnl)}
                 {unrealStale ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
               </span>
             ) : '—')
@@ -5394,6 +5399,7 @@ const AccountRow = ({ row, live, onAccount, columns, tradeAccount, orders, eligi
   redaction: RedactionSettings;
 }) => {
   const a = row.account;
+  const netOpen = tradeAccountNetOpenPnl(tradeAccount);
   const accountId = row.accountId;
   const dismissedRejections = useDismissedRejections();
   // Ručně vypnutý follower: řádek zešedne (bez štítku — stav říká přepínač).
@@ -5531,12 +5537,12 @@ const AccountRow = ({ row, live, onAccount, columns, tradeAccount, orders, eligi
         return risk.dll;
       case 'unreal':
         return a ? <span
-          className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(a.unrealizedPnl)}`}
-          title={a.unrealizedPnlSource === 'estimated'
+          className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(netOpen ?? a.unrealizedPnl)}`}
+          title={netOpen != null ? NET_OPEN_TITLE : a.unrealizedPnlSource === 'estimated'
             ? 'Live odhad podle skutečné vstupní ceny účtu a posledního broker snapshotu.'
             : a.unrealizedPnlSource === 'stale' ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : 'Potvrzeno broker snapshotem.'}
         >
-          {money.format(a.unrealizedPnl)}
+          {money.format(netOpen ?? a.unrealizedPnl)}
           {a.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
         </span> : <span className="text-xs text-[var(--text-secondary)]">—</span>;
       case 'distDd':
