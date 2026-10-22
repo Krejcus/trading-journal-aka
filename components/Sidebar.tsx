@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
     LayoutDashboard,
     History,
@@ -21,6 +21,8 @@ import {
     Layers,
     Microscope,
     RadioTower,
+    PanelLeftClose,
+    PanelLeftOpen,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User } from '../types';
@@ -34,6 +36,10 @@ interface SidebarProps {
     setIsOpen: (isOpen: boolean) => void;
     isCollapsed: boolean;
     setIsCollapsed: (isCollapsed: boolean) => void;
+    /** Desktop režim bez sidebaru: menu je mimo obrazovku a vyjede u levého okraje. */
+    hidden?: boolean;
+    /** Přepne režim bez sidebaru (⌘B). */
+    onToggleHidden?: () => void;
     theme: 'dark' | 'light' | 'oled';
     /** Otevře hodnocení obchodů z Tradovate (fronta „k revizi“). */
     onReview: () => void;
@@ -60,6 +66,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     setIsOpen,
     isCollapsed,
     setIsCollapsed,
+    hidden = false,
+    onToggleHidden,
     theme,
     onReview,
     reviewCount = 0,
@@ -82,6 +90,18 @@ const Sidebar: React.FC<SidebarProps> = ({
     // Core logic: Sidebar is expanded if either pinned (!isCollapsed) OR hovered (but NOT if we just clicked an item)
     // Professional behavior: Click -> Collapse immediately -> Re-expand on fresh hover
     const isExpanded = !isCollapsed || (isHovered && !isClicked) || isOpen;
+
+    // Režim bez sidebaru: najetí k levému okraji ho vysune přes obsah, odjetí schová.
+    // Krátké zpoždění, ať menu nevyskakuje při pouhém přejetí myší přes okraj.
+    const [peek, setPeek] = useState(false);
+    const peekTimer = useRef<number | undefined>(undefined);
+    const schedulePeek = (next: boolean, delay: number) => {
+        window.clearTimeout(peekTimer.current);
+        peekTimer.current = window.setTimeout(() => setPeek(next), delay);
+    };
+    useEffect(() => { if (!hidden) { window.clearTimeout(peekTimer.current); setPeek(false); } }, [hidden]);
+    useEffect(() => () => window.clearTimeout(peekTimer.current), []);
+    const offscreen = hidden && !peek && !isOpen;
 
     const mainItems = [
         { id: 'dashboard', label: t('dashboard', lang), icon: LayoutDashboard },
@@ -137,6 +157,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         }
         // Force collapse on click for "pro" feel
         setIsClicked(true);
+        if (hidden) schedulePeek(false, 0);
 
         if (onNavigate) {
             onNavigate(pageId);
@@ -151,18 +172,30 @@ const Sidebar: React.FC<SidebarProps> = ({
             {/* Mobile Overlay */}
             {isOpen && <div className="fixed inset-0 z-[50] bg-black/60 backdrop-blur-md lg:hidden" onClick={() => setIsOpen(false)} />}
 
+            {/* Režim bez sidebaru: neviditelný proužek u levého okraje, najetí menu vysune. */}
+            {hidden && (
+                <div
+                    aria-hidden="true"
+                    className="sidebar-reveal-edge hidden lg:block fixed left-0 top-0 bottom-0 w-2.5 z-[61]"
+                    onMouseEnter={() => schedulePeek(true, 110)}
+                    onMouseLeave={() => { if (!peek) schedulePeek(false, 0); }}
+                />
+            )}
             <motion.aside
                 initial={false}
                 animate={{
                     width: isExpanded ? 240 : 88,
-                    x: isOpen ? 0 : (window.innerWidth < 1024 ? -240 : 0)
+                    x: isOpen ? 0 : (window.innerWidth < 1024 ? -240 : offscreen ? -260 : 0),
+                    opacity: offscreen ? 0 : 1,
                 }}
                 transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                className={sidebarBaseClasses}
-                onMouseEnter={() => setIsHovered(true)}
+                className={`${sidebarBaseClasses} ${hidden && peek ? 'sidebar-peek' : ''}`}
+                inert={offscreen}
+                onMouseEnter={() => { setIsHovered(true); if (hidden) schedulePeek(true, 0); }}
                 onMouseLeave={() => {
                     setIsHovered(false);
                     setIsClicked(false); // Reset click state on leave so it can re-expand on next hover
+                    if (hidden) schedulePeek(false, 260);
                 }}
             >
                 {/* Plovoucí glass panel — čistá navigace (logo je v headeru) */}
@@ -310,6 +343,27 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </>
                     )}
                 </nav>
+
+                {/* Schovat / připnout menu (⌘B) — jen v rozbaleném stavu, ať nezabírá místo. */}
+                {onToggleHidden && (
+                    <div className="hidden lg:block px-2 pb-2 relative z-10">
+                        <button
+                            type="button"
+                            onClick={() => { setIsClicked(true); onToggleHidden(); }}
+                            title={hidden ? 'Připnout menu (⌘B)' : 'Schovat menu — appka na celou šířku (⌘B)'}
+                            aria-label={hidden ? 'Připnout menu' : 'Schovat menu'}
+                            className={`flex items-center gap-3 rounded-lg text-[11px] font-semibold transition-all duration-300 h-9 theme-text-secondary ${isDark ? 'hover:bg-white/[0.06] hover:text-white' : 'hover:bg-slate-900/[0.05] hover:text-slate-950'} ${!isExpanded ? 'justify-center w-10 mx-auto' : 'w-[calc(100%_-_1rem)] px-6 mx-2'}`}
+                        >
+                            {hidden ? <PanelLeftOpen size={16} className="shrink-0" /> : <PanelLeftClose size={16} className="shrink-0" />}
+                            {isExpanded && (
+                                <span className="flex flex-1 items-center justify-between gap-2 whitespace-nowrap">
+                                    {hidden ? 'Připnout menu' : 'Schovat menu'}
+                                    <kbd className={`rounded border px-1.5 py-px font-mono text-[10px] font-semibold ${isDark ? 'border-white/15 text-white/55' : 'border-slate-300 text-slate-500'}`}>⌘B</kbd>
+                                </span>
+                            )}
+                        </button>
+                    </div>
+                )}
 
                 {/* User Profile - Fixed at the Bottom - CLICKABLE */}
                 <div className={`px-2 py-4 border-t transition-colors relative z-10 ${isDark ? 'border-white/5' : 'border-slate-200/50'}`}>

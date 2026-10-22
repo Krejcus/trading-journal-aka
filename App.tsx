@@ -34,6 +34,7 @@ import { createBacktestTradeHydrator } from './services/backtestTradeHydration';
 import { lookupBacktestTradeIdentities } from './services/backtestTradeIdentityLookup';
 import { getBacktestRunOwnerId } from './services/backtestRunService';
 import { safeSetItem } from './utils/safeStorage';
+import { isSidebarToggleShortcut, readSidebarHidden, writeSidebarHidden } from './lib/sidebarMode';
 import { businessDataFingerprint, mergePayoutImages, stripPayoutImagesForCache } from './utils/businessPayoutSync';
 import { clearAppStorage } from './utils/appStorage';
 import { reconcileDashboardRows } from './utils/dashboardRefresh';
@@ -1621,6 +1622,21 @@ const App: React.FC = () => {
     }
   };
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+  // Desktop: režim bez sidebaru (⌘B / Ctrl+B) — appka má celou šířku, menu vyjede u levého okraje.
+  const [sidebarHidden, setSidebarHidden] = useState(readSidebarHidden);
+  const toggleSidebarHidden = useCallback(() => {
+    setSidebarHidden(current => { writeSidebarHidden(!current); return !current; });
+  }, []);
+  useEffect(() => {
+    if (inNativeShell) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!isSidebarToggleShortcut(event)) return;
+      event.preventDefault();
+      toggleSidebarHidden();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [inNativeShell, toggleSidebarHidden]);
   useEffect(() => {
     if (inNativeShell) reportNativeShellReview(review != null);
   }, [inNativeShell, review]);
@@ -4112,6 +4128,8 @@ const App: React.FC = () => {
           setIsOpen={setIsSidebarOpen}
           isCollapsed={isSidebarCollapsed}
           setIsCollapsed={setIsSidebarCollapsed}
+          hidden={sidebarHidden}
+          onToggleHidden={toggleSidebarHidden}
           theme={theme}
           onReview={() => openReview()}
           reviewCount={reviewQueue.length}
@@ -4153,7 +4171,7 @@ const App: React.FC = () => {
         onClose={() => setLockedFeatureModal(null)}
       />
 
-      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[88px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} ${inNativeShell ? 'pb-0' : 'pb-[72px]'} lg:pb-0`}>
+      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${sidebarHidden ? 'lg:pl-0' : isSidebarCollapsed ? 'lg:pl-[88px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} ${inNativeShell ? 'pb-0' : 'pb-[72px]'} lg:pb-0`}>
         {/* SVG displacement filter pro liquid-glass edge refrakci (Stage 2).
             Nízká baseFrequency = velké hladké blobу (jemné lámání), ne wavy koupelnové sklo.
             scale řídí sílu ohybu — laditelné. Použito přes backdrop-filter: url(#liquid-glass). */}
@@ -4166,7 +4184,7 @@ const App: React.FC = () => {
           </filter>
         </svg>
         {/* Deník dne na desktopu: lišta odjede nahoru, deník zabere uvolněné místo. */}
-        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all duration-500 ease-out rounded-lg floating-glass-header header-clear ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${journalImmersive ? 'lg:-translate-y-[160%] lg:opacity-0 lg:pointer-events-none' : ''} ${isNetworkSpectating ? 'hidden' : ''}`}>
+        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all duration-500 ease-out rounded-lg floating-glass-header header-clear ${sidebarHidden ? 'lg:left-6' : isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${journalImmersive ? 'lg:-translate-y-[160%] lg:opacity-0 lg:pointer-events-none' : ''} ${isNetworkSpectating ? 'hidden' : ''}`}>
           {/* Vizuál headeru dělá CSS: gradient tint + border + stín + lupa přes backdrop-filter:url(#liquid-glass). */}
           <div className="flex items-center gap-3 relative z-10">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>

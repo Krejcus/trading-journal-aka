@@ -2043,7 +2043,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const gridCols = (GRID_COLS as Record<string, number>)[currentBreakpoint] ?? GRID_COLS.lg;
-  const colWidth = (containerWidth - 12 * (gridCols + 1)) / gridCols;
+  // Mezera 12 px jen mezi sloupci — mřížka nemá boční odsazení (containerPadding [0, 12]).
+  const colWidth = (containerWidth - 12 * (gridCols - 1)) / gridCols;
   const spanPx = (units: number, unit: number) => units * unit + Math.max(0, units - 1) * 12;
 
   // Náhled taženého widgetu jede za kurzorem (střed widgetu pod kurzorem)
@@ -2292,7 +2293,8 @@ const Dashboard: React.FC<DashboardProps> = ({
           )}
         </div>
 
-        <div ref={containerRef} className={`w-full p-2 md:px-6 rounded-[32px] ${isEditing ? 'pt-6' : ''}`}>
+        {/* Desktop bez vlastního bočního odsazení: widgety lícují s ostatními stránkami (i v režimu bez sidebaru). */}
+        <div ref={containerRef} className={`w-full p-2 md:px-0 rounded-[32px] ${isEditing ? 'pt-6' : ''}`}>
           {isEditing && !editableBreakpoint && !isMobile ? (
             <p className="dbe-note">
               Na téhle šířce okna se rozložení skládá automaticky z toho širokého — malé widgety po třech, velké přes celou šířku.
@@ -2392,6 +2394,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               cols={GRID_COLS}
               rowHeight={GRID_ROW_HEIGHT}
               margin={[12, 12] as [number, number]}
+              containerPadding={[0, 12] as [number, number]}
               compactor={editCompactor}
               dragConfig={{ enabled: canEditGrid, cancel: '.dbe-no-drag' }}
               resizeConfig={{ enabled: canEditGrid, handles: ['se'] }}

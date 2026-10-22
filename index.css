@@ -5032,3 +5032,20 @@ html:not(.light-theme) .dbe-ph-sheet { background: rgba(13, 18, 36, 0.98); }
 .alphatrade-chart-magnet-menu.is-dark > button.is-selected {
   color: #8aa2ff;
 }
+
+/* Režim bez sidebaru (⌘B): proužek u levého okraje a vysunuté menu přes obsah. */
+.sidebar-reveal-edge::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  width: 4px;
+  height: 56px;
+  margin-top: -28px;
+  border-radius: 4px;
+  background: var(--text-muted, #94a3b8);
+  opacity: 0;
+  transition: opacity .2s ease, height .2s ease, margin-top .2s ease;
+}
+.sidebar-reveal-edge:hover::after { opacity: .55; height: 72px; margin-top: -36px; }
+.sidebar-peek > .floating-glass-header { box-shadow: 0 24px 60px -18px rgba(2, 6, 23, 0.55); }
