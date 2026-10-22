@@ -5091,28 +5091,29 @@ html:not(.light-theme) .dbe-ph-sheet { background: rgba(13, 18, 36, 0.98); }
 /* Jazýček schovat / připnout menu na pravém okraji sidebaru (vzor: lišta kreslení v grafu). */
 .sidebar-edge-tab {
   position: absolute;
-  right: -15px;
-  bottom: 92px;
+  right: -11px;
+  bottom: 69px;
   z-index: 2;
-  width: 15px;
-  height: 38px;
+  width: 22px;
+  height: 22px;
   place-items: center;
   padding: 0;
   color: #64748b;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  border-left: 0;
-  border-radius: 0 10px 10px 0;
-  box-shadow: 6px 10px 20px -14px rgba(15, 23, 42, 0.4), 1px 0 0 rgba(15, 23, 42, 0.07);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px -4px rgba(15, 23, 42, 0.35);
   cursor: pointer;
-  opacity: .7;
-  transition: color 150ms ease, opacity 150ms ease;
+  opacity: .85;
+  transition: color 150ms ease, opacity 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
+.sidebar-edge-tab:hover,
+.sidebar-edge-tab:focus-visible { transform: scale(1.12); }
 .sidebar-edge-tab.is-dark {
   color: #94a3b8;
-  background: rgba(16, 23, 32, 0.9);
-  border-color: rgba(255, 255, 255, 0.08);
-  box-shadow: 6px 10px 22px -14px rgba(0, 0, 0, 0.7), 1px 0 0 rgba(255, 255, 255, 0.04);
+  background: #141c28;
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.7);
 }
 .sidebar-edge-tab:hover,
 .sidebar-edge-tab:focus-visible { outline: none; opacity: 1; color: #6366f1; }
@@ -5120,7 +5121,7 @@ html:not(.light-theme) .dbe-ph-sheet { background: rgba(13, 18, 36, 0.98); }
 .sidebar-edge-tab.is-dark:focus-visible { color: #a5b4fc; }
 .sidebar-edge-tip {
   position: absolute;
-  left: calc(100% + 8px);
+  left: calc(100% + 10px);
   top: 50%;
   display: inline-flex;
   align-items: center;

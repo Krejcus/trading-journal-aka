@@ -209,17 +209,18 @@ const Sidebar: React.FC<SidebarProps> = ({
             >
                 {/* Plovoucí glass panel — čistá navigace (logo je v headeru) */}
                 <div className="relative flex flex-col max-h-full min-h-0">
-                {/* Jazýček na okraji (jako u lišty kreslení v grafu): schovat / připnout menu, po chvíli ukáže ⌘B. */}
+                {/* Kolečko na okraji sidebaru: schovat / připnout menu, po chvíli ukáže ⌘B. */}
                 {onToggleHidden && (
                     <button
                         type="button"
                         onClick={() => { setIsClicked(true); onToggleHidden(); }}
                         aria-label={hidden ? 'Připnout menu (⌘B)' : 'Schovat menu (⌘B)'}
                         className={`sidebar-edge-tab hidden lg:grid ${isDark ? 'is-dark' : ''}`}
-                        onPointerEnter={() => setTabHover(true)}
+                        // Jen brání rozbalení; už rozbalený sidebar nechá být, ať kolečko neuteče kurzoru.
+                        onPointerEnter={() => setTabHover(!isExpanded)}
                         onPointerLeave={() => setTabHover(false)}
                     >
-                        {hidden ? <ChevronRight size={13} strokeWidth={2} /> : <ChevronLeft size={13} strokeWidth={2} />}
+                        {hidden ? <ChevronRight size={12} strokeWidth={2.4} /> : <ChevronLeft size={12} strokeWidth={2.4} />}
                         <span className="sidebar-edge-tip" aria-hidden="true">
                             {hidden ? 'Připnout menu' : 'Schovat menu'}<kbd>⌘B</kbd>
                         </span>
