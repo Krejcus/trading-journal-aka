@@ -129,6 +129,8 @@ describe('known rejection versus unknown outcome', () => {
   it('recognizes local prechecks, relay and worker risk rejection', () => {
     expect(copierArmRejection(new CopierArmBlockedError('Chybí připojení'))).toBe('Chybí připojení');
     expect(copierArmRejection(new Error('tighten-only'))).toContain('odmítnuto');
+    expect(copierArmRejection(new Error('Uložený incident se liší od zobrazeného; zkontroluj ho a potvrď znovu.')))
+      .toContain('dej znovu Zapnout a potvrď ho');
     expect(copierArmRejection(new Error('Pravidla jdou dnes jen zpřísnit: safety.entryCooldownMinutes (reset po konci session)'))).toContain('pauza mezi obchody');
   });
   it.each([

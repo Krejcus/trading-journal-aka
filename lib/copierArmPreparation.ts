@@ -162,6 +162,9 @@ export function copierArmRejection(reason: unknown): string | null {
   if (message === 'Incident se mezitím změnil; potvrď ho znovu.') {
     return 'Mezitím vznikl nový incident. Dej znovu Zapnout a potvrď ho.';
   }
+  if (message === 'Uložený incident se liší od zobrazeného; zkontroluj ho a potvrď znovu.') {
+    return 'Uložený incident je jiný než zobrazený. Nic se nezapnulo ani nesmazalo — dej znovu Zapnout a potvrď ho.';
+  }
   if (message === 'tighten-only') {
     return 'Zapnutí bylo odmítnuto, protože požadovaná pravidla jsou mírnější než dnešní potvrzené nastavení. Obnov stav a zkontroluj Risk.';
   }

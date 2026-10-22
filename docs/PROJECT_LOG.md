@@ -262,6 +262,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-22 — Kopírka: incident se už neztratí a Zapnout ho vždy jde potvrdit (Claude)
+
+- 22. 10. ráno nešlo zapnout: v paměti workeru incident B (21. 10. 22:47),
+  v durable stavu starší A (22:41). Appka potvrdila B, durable vyžadoval A →
+  tiché nepotvrzení a „Po incidentu je potřeba ruční Kontrola pozic“ dokola.
+- Příčina: `persistSafety` zapisoval celou kopii stavu načtenou při volání;
+  zápis epochy leadera (leader-flat guard 3 s po incidentu) ve frontě za
+  `failClosed` vrátil A. Oprava: patch nad aktuálním stavem; samooprava při
+  nesouladu (paměť se srovná na durable, nové výslovné potvrzení).
+- Okamžité řešení: reinstall workeru z 93e36110 (načetl A z durable stavu),
+  zároveň nasazeny opravy z 21. 10. (režim opravy, násobek).
+
 ### 2026-10-21 — Násobek followera jde zvýšit u vypnuté a flat kopírky (Claude)
 
 - Filip nemohl zvýšit násobek ani u vypnuté kopírky: tabulka editoru skupiny
