@@ -157,7 +157,8 @@ existující ochranu.
   změny konfigurace by ON jinak odmítly dřív, než dojde na potvrzení
   (produkční deadlock). Incident tak zmizí i když ON pak skončí na validaci
   konfigurace — byl potvrzen a čistě zkontrolován.
-- Hlídá test: `tests/copierWorkerArmPreparation.test.ts` kryje restart,
+- Hlídá test: `tests/copierIncidentLostUpdate.test.ts` (durable incident se neztratí, nesoulad se srovná) a
+  `tests/copierWorkerArmPreparation.test.ts` kryje restart,
   preparation a reconnect; `tests/copierIncidentReconnectArm.test.ts` incident
   + reconnect + ON se skupinou (i po restartu, nepřečtený follower, zastaralé
   potvrzení) a past bez incidentu (nečistá/5× selhaná read-only kontrola po
@@ -1305,6 +1306,14 @@ Agent-oponent má před schválením změny výslovně odpovědět na každou ot
   blokuje, aktivace vynutí novou reconciliation. Aktivace přitom maže i
   nedurable `lastError` (starší chování, durable incident přežije).
   `tests/copierStartupRepairDeadlock.test.ts`.
+- **21.–22. 10. — ztracený durable incident.** `persistSafety` ukládal celou
+  kopii bezpečnostního stavu načtenou při volání; zápis epochy leadera ve
+  frontě za `failClosed` vrátil starší incident. UI pak potvrzovalo jiný
+  incident, než byl uložený, a Zapnout selhávalo dokola. `persistSafety` je
+  teď patch nad stavem v okamžiku zápisu (celou náhradu dělá jen
+  `persistSafetyUpdate`); při nesouladu paměť→durable potvrzení nic nesmaže,
+  srovná paměť na uložený incident a vyžádá nové výslovné potvrzení
+  (INV-DEFAULT-03 beze změny). `tests/copierIncidentLostUpdate.test.ts`.
 - **UI flicker po návratu na LIVE.** Uložené ON/OFF a status mají zabránit
   vizuálnímu probliknutí, ale jsou výhradně presentation cache. Viz PROJECT_LOG
   „LIVE kopírka: načítání bez problikávání“ a `lib/copierPowerDisplay.ts`.

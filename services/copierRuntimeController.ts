@@ -1499,7 +1499,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const closedTrade = stats?.recentClosedTrades?.find(trade => trade.id === candidate.tradeId);
     if (stats && closedTrade?.exitReason === 'manual') {
       await persistSafety({
-        ...currentRuntime().state.safety,
         dailyStats: {
           ...stats,
           openLots: stats.openLots.map(lot => ({ ...lot })),
@@ -3209,9 +3208,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return { ...current, state, revision: committed.revision };
     });
   };
-  const persistSafety = async (safety: CopierRuntime['state']['safety']) => (
-    persistSafetyUpdate(() => safety)
-  );
+  /**
+   * 22. 10. 2026: zapisuje jen předaná pole nad stavem platným v okamžiku
+   * zápisu. Dřív se ukládala celá kopie načtená při volání; zápis ve frontě
+   * za `failClosed` pak vrátil starší durable incident (21. 10.) a Zapnout ho
+   * nikdy nemohlo potvrdit. Celou náhradu stavu dělá jen persistSafetyUpdate.
+   */
+  type SafetyState = CopierRuntime['state']['safety'];
+  const persistSafety = async (
+    patch: Partial<SafetyState> | ((current: SafetyState) => Partial<SafetyState>),
+  ) => persistSafetyUpdate(current => ({
+    ...current,
+    ...(typeof patch === 'function' ? patch(current) : patch),
+  }));
 
   const serializedFollowerCuts = (): NonNullable<CopierRuntime['state']['safety']['followerCuts']> =>
     Object.fromEntries([...followerCuts].map(([accountId, cut]) => [String(accountId), { ...cut }]));
@@ -3486,16 +3495,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   const persistLeaderExposureEpoch = async (epoch: LeaderFlatEpoch) => {
-    const safety = currentRuntime().state.safety;
-    const others = (safety.leaderExposureEpochs ?? []).filter(item => !(
-      item.groupId === epoch.groupId
-      && item.leaderAccountId === epoch.leaderAccountId
-      && item.symbol === epoch.symbol
-    ));
-    await persistSafety({
-      ...safety,
-      leaderExposureEpochs: [...others, epoch].slice(-20),
-    });
+    await persistSafety(current => ({
+      leaderExposureEpochs: [
+        ...(current.leaderExposureEpochs ?? []).filter(item => !(
+          item.groupId === epoch.groupId
+          && item.leaderAccountId === epoch.leaderAccountId
+          && item.symbol === epoch.symbol
+        )),
+        epoch,
+      ].slice(-20),
+    }));
   };
 
   const copiedEntryLineage = (
@@ -4137,14 +4146,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const cooldownMinutes = group.safety?.entryCooldownMinutes ?? 0;
     if (!cooldownPending || cooldownMinutes <= 0 || !groupIsFlat()) return;
     cooldownPending = false;
-    const safety = {
-      ...currentRuntime().state.safety,
-      entryCooldownUntil: Math.max(
-        currentRuntime().state.safety.entryCooldownUntil,
-        now + cooldownMinutes * 60_000,
-      ),
-    };
-    await persistSafety(safety);
+    await persistSafety(current => ({
+      entryCooldownUntil: Math.max(current.entryCooldownUntil, now + cooldownMinutes * 60_000),
+    }));
     gate = { ...gate, armed: false };
     options.onAudit?.([{
       at: now,
@@ -4234,23 +4238,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       untrackedTradeSymbols.clear();
       leaderFillAheadOfPosition.clear();
     }
-    const normalizedSafety = newSession ? resetDayLockForNewSession(safety) : safety;
-    await persistSafety({
-      ...normalizedSafety,
-      dayLockTrigger: normalizedSafety.dayLockTrigger ?? null,
-      dayLockAt: normalizedSafety.dayLockAt ?? null,
-      dayLockSnoozedRules: [...(normalizedSafety.dayLockSnoozedRules ?? [])],
-      dayUnlock: normalizedSafety.dayUnlock ? { ...normalizedSafety.dayUnlock } : null,
-      pauseUntil: normalizedSafety.pauseUntil ?? 0,
-      pauseRule: normalizedSafety.pauseRule ?? null,
-      pauseAt: normalizedSafety.pauseAt ?? 0,
-      sessionArmedAt,
-      followerCuts: serializedFollowerCuts(),
-      followerCutExecutionProvenanceV1: serializedFollowerCutExecutionProvenance(),
-      followerRiskLedgerV1: serializedFollowerRiskLedger(stats.sessionEndAt),
-      accountRisk: serializedAccountRisk(),
-      dailyStats: stats,
-    } as CopierSafetyWithInternalRiskState);
+    await persistSafetyUpdate(current => {
+      const normalizedSafety = newSession ? resetDayLockForNewSession(current) : current;
+      return {
+        ...normalizedSafety,
+        dayLockTrigger: normalizedSafety.dayLockTrigger ?? null,
+        dayLockAt: normalizedSafety.dayLockAt ?? null,
+        dayLockSnoozedRules: [...(normalizedSafety.dayLockSnoozedRules ?? [])],
+        dayUnlock: normalizedSafety.dayUnlock ? { ...normalizedSafety.dayUnlock } : null,
+        pauseUntil: normalizedSafety.pauseUntil ?? 0,
+        pauseRule: normalizedSafety.pauseRule ?? null,
+        pauseAt: normalizedSafety.pauseAt ?? 0,
+        sessionArmedAt,
+        followerCuts: serializedFollowerCuts(),
+        followerCutExecutionProvenanceV1: serializedFollowerCutExecutionProvenance(),
+        followerRiskLedgerV1: serializedFollowerRiskLedger(stats.sessionEndAt),
+        accountRisk: serializedAccountRisk(),
+        dailyStats: stats,
+      } as CopierSafetyWithInternalRiskState;
+    });
     return stats;
   };
 
@@ -4322,12 +4328,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if ((beforeEvaluation.pauseUntil ?? 0) > 0 && (beforeEvaluation.pauseUntil ?? 0) <= at) {
       const endedRule = beforeEvaluation.pauseRule;
       const endedAt = beforeEvaluation.pauseUntil ?? at;
-      await persistSafety({
-        ...beforeEvaluation,
-        pauseUntil: 0,
-        pauseRule: null,
-        pauseAt: 0,
-      });
+      await persistSafety({ pauseUntil: 0, pauseRule: null, pauseAt: 0 });
       options.onAudit?.([{
         at,
         leaderEventId: `rule-pause-end:${endedRule ?? 'unknown'}:${endedAt}`,
@@ -4376,7 +4377,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (currentSafety.dayLockUntil > at || dayLockPending) {
       if (addedWarnings.length > 0) {
         stats.warnedRules = warnings;
-        await persistSafety({ ...currentSafety, dailyStats: stats });
+        await persistSafety({ dailyStats: stats });
         options.onAudit?.(addedWarnings.map(warningAudit));
       }
       return;
@@ -4451,7 +4452,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (lockCandidate) {
       if (addedWarnings.length > 0) {
         stats.warnedRules = warnings;
-        await persistSafety({ ...currentRuntime().state.safety, dailyStats: stats });
+        await persistSafety({ dailyStats: stats });
         options.onAudit?.(addedWarnings.map(warningAudit));
       }
       dayLockPending = { trigger: lockCandidate.rule, reason: lockCandidate.reason };
@@ -4475,7 +4476,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (pauseCandidates.length === 0) {
       if (addedWarnings.length > 0) {
         stats.warnedRules = warnings;
-        await persistSafety({ ...currentRuntime().state.safety, dailyStats: stats });
+        await persistSafety({ dailyStats: stats });
         options.onAudit?.(addedWarnings.map(warningAudit));
       }
       return;
@@ -4496,15 +4497,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const existingUntil = currentRuntime().state.safety.pauseUntil ?? 0;
     const until = Math.max(existingUntil, longestNewUntil);
     const extendedByNewRule = longestNewUntil >= existingUntil;
-    await persistSafety({
-      ...currentRuntime().state.safety,
+    await persistSafety(current => ({
       pauseUntil: until,
       pauseRule: extendedByNewRule
         ? longestCandidate.rule
-        : currentRuntime().state.safety.pauseRule ?? longestCandidate.rule,
-      pauseAt: extendedByNewRule ? at : currentRuntime().state.safety.pauseAt ?? at,
+        : current.pauseRule ?? longestCandidate.rule,
+      pauseAt: extendedByNewRule ? at : current.pauseAt ?? at,
       dailyStats: stats,
-    });
+    }));
     for (const candidate of pauseCandidates) {
       appliedRuleActionSignatures.set(candidate.actionKey, candidate.actionSignature);
     }
@@ -4635,7 +4635,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
 
-    await persistSafety({ ...currentRuntime().state.safety, dailyStats: stats });
+    await persistSafety({ dailyStats: stats });
     leaderFillAheadOfPosition.add(fill.symbol);
     await evaluateDailyRules(at);
   };
@@ -17582,6 +17582,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('Incident se mezitím změnil; potvrď ho znovu.');
       }
       const incidentToClear = currentManualRecovery;
+      let incidentMismatchError: Error | null = null;
       const mayClear = reconciliationOptions.internal !== true
         && (incidentToClear == null || incidentToClear.id === expectedIncidentId);
       const result = await performReconciliation({ ...reconciliationOptions, clearLastError: mayClear });
@@ -17590,12 +17591,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (result.authoritativelyClean && mayClear && currentManualRecovery === incidentToClear) {
         const acknowledgedAt = clock();
         let durablyCleared = false;
+        let durableMismatch: unknown = null;
         await persistSafetyUpdate(current => {
-          // Updater se může při CAS opakovat: výsledek platí z posledního běhu.
+          // Výsledek platí z posledního (jediného) běhu updateru.
           durablyCleared = false;
+          durableMismatch = null;
           // Jen ten incident, který uživatel potvrdil — novější zůstává.
           if (incidentToClear && current.manualRecoveryRequired != null
             && durableIncidentId(current.manualRecoveryRequired) !== incidentToClear.id) {
+            durableMismatch = current.manualRecoveryRequired;
             return current;
           }
           const { manualRecoveryRequired: _cleared, ...rest } = current;
@@ -17604,6 +17608,34 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ? { ...rest, lastIncidentAcknowledgement: { ...incidentToClear, acknowledgedAt, via: 'arm' as const } }
             : rest;
         });
+        // 22. 10. 2026: uložený incident je jiný než ten, který UI ukázalo
+        // (dřívější ztracený zápis). Nic se nemaže; paměť se srovná na durable
+        // incident, aby ho další Zapnout mohlo výslovně potvrdit — jinak by
+        // potvrzení selhávalo pořád dokola.
+        if (!durablyCleared && durableMismatch != null && currentManualRecovery === incidentToClear) {
+          const marker = durableMismatch as { at?: unknown; reason?: unknown };
+          const restored = {
+            at: typeof marker.at === 'number' && Number.isFinite(marker.at) && marker.at > 0 ? marker.at : clock(),
+            reason: typeof marker.reason === 'string' && marker.reason.trim().length > 0
+              ? marker.reason.trim()
+              : 'Durable příznak ruční obnovy je neplatný; ověř účty a potvrď incident při zapnutí',
+            id: durableIncidentId(durableMismatch),
+          };
+          options.onAudit?.([{
+            at: clock(),
+            leaderEventId: `incident-durable-mismatch:${incidentToClear?.id ?? 'none'}->${restored.id}`,
+            kind: 'blocked',
+            reason: `Uložený incident (${restored.id}) se liší od zobrazeného (${incidentToClear?.id ?? 'žádný'}); nic se nesmazalo, je potřeba potvrdit uložený`,
+          }]);
+          currentManualRecovery = restored;
+          armPreparationIncidentRequiresRecovery = true;
+          // Stejně jako obnova při startu: incident je zase vidět jako chyba.
+          lastErrorTransportOnly = false;
+          lastError = new Error(restored.reason);
+          // Výjimka až na konci: ostatní kroky čisté kontroly (risk, flat
+          // úklid, recovery) na incidentu nezávisí a mají proběhnout.
+          incidentMismatchError = new Error('Uložený incident se liší od zobrazeného; zkontroluj ho a potvrď znovu.');
+        }
         // Paměť se srovná jen s tím, co je opravdu durable (fail-closed).
         if (durablyCleared && currentManualRecovery === incidentToClear) {
           armPreparationIncidentRequiresRecovery = false;
@@ -17630,8 +17662,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         pendingReadOnlyConnectionRecovery = false;
         const safety = currentRuntime().state.safety;
         if (safety.managementOnly) {
-          const { managementOnly: _finished, ...rest } = safety;
-          await persistSafety(rest);
+          await persistSafetyUpdate(current => {
+            const { managementOnly: _finished, ...rest } = current;
+            return rest;
+          });
           options.onAudit?.([{
             at: clock(),
             leaderEventId: 'management-only-cleared',
@@ -17654,6 +17688,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         scheduleConnectionRecovery();
       }
       scheduleStrandedCopiedEntryCancel('Kontrola pozic');
+      if (incidentMismatchError) throw incidentMismatchError;
       return {
         divergentAccounts: result.divergentAccounts,
         workingOrderAccounts: result.workingOrderAccounts,
