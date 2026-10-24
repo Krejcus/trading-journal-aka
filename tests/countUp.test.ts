@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatLike, splitNumeric } from '../lib/countUp';
+import { formatLike, nearStart, splitNumeric } from '../lib/countUp';
 
 const roundTrip = (text: string) => { const parts = splitNumeric(text)!; return formatLike(parts.value, parts); };
 
@@ -19,5 +19,13 @@ describe('countUp', () => {
   it('bez čísla se neanimuje', () => {
     expect(splitNumeric('∞')).toBeNull();
     expect(splitNumeric('—')).toBeNull();
+  });
+
+  it('dopočítává jen poslední číslice', () => {
+    expect(nearStart(splitNumeric('+$4 268')!)).toBe(4168);
+    expect(nearStart(splitNumeric('43.6%')!)).toBeCloseTo(42.6);
+    expect(nearStart(splitNumeric('1.16')!)).toBeCloseTo(1.06);
+    expect(nearStart(splitNumeric('$54,766')!)).toBe(53766);
+    expect(nearStart(splitNumeric('7')!)).toBe(0);
   });
 });

@@ -64,3 +64,16 @@ export const easeOutCubic = (t: number) => 1 - (1 - Math.min(1, Math.max(0, t)))
 
 /** Rychlý rozjezd a dlouhé měkké doběhnutí (číslo „dosedne“). */
 export const easeOutExpo = (t: number) => { const x = Math.min(1, Math.max(0, t)); return x >= 1 ? 1 : 1 - 2 ** (-10 * x); };
+
+/**
+ * Výchozí hodnota pro „dopočítání posledních číslic“: liší se od cíle jen
+ * v posledních 2–3 číslicích (4 268 → 4 168, 43.6 → 42.6, 1.16 → 1.06).
+ */
+export function nearStart(parts: NumericParts): number {
+  const scale = 10 ** parts.decimals;
+  const units = Math.round(Math.abs(parts.value) * scale);
+  if (units < 10) return 0;
+  const digits = String(units).length;
+  const step = 10 ** Math.max(1, digits - 2);
+  return Math.max(0, units - step) / scale;
+}

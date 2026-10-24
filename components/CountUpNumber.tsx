@@ -1,16 +1,16 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
-import { easeOutExpo, formatLike, sameShape, splitNumeric, type NumericParts } from '../lib/countUp';
+import { easeOutExpo, formatLike, nearStart, sameShape, splitNumeric, type NumericParts } from '../lib/countUp';
 import { whenFramesSettle } from '../lib/settledFrame';
 
 const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
 
 /**
- * Číslo, které při zobrazení „dopočítá“ od nuly a při změně plynule navazuje
+ * Číslo, které při zobrazení dopočítá poslední číslice a při změně plynule navazuje
  * z předchozí hodnoty. První náběh čeká, až se stránka uklidní (jinak by
  * během načítání dashboardu trhal), a všechna čísla se rozjedou společně.
  * Snímky jdou přímo do textu (bez re-renderu Reactu).
  */
-export default function CountUpNumber({ text, duration = 1400, className }: { text: string; duration?: number; className?: string }) {
+export default function CountUpNumber({ text, duration = 950, className }: { text: string; duration?: number; className?: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const shownRef = useRef<{ parts: NumericParts; value: number } | null>(null);
   const startedRef = useRef(false);
@@ -56,13 +56,14 @@ export default function CountUpNumber({ text, duration = 1400, className }: { te
       else { element.textContent = text; shownRef.current = { parts: target, value: target.value }; }
       return;
     }
-    // První náběh: ukázat nulu ve správném formátu a počkat na klidnou stránku.
-    element.textContent = formatLike(0, target);
-    shownRef.current = { parts: target, value: 0 };
+    // První náběh: dopočítají se jen poslední číslice (4 168 → 4 268), až na klidné stránce.
+    const from = nearStart(target);
+    element.textContent = formatLike(from, target);
+    shownRef.current = { parts: target, value: from };
     void whenFramesSettle().then(() => {
       if (runRef.current !== run) return;
       startedRef.current = true;
-      animate(0, duration);
+      animate(from, duration);
     });
   }, [duration, text]);
 
@@ -72,30 +73,62 @@ export default function CountUpNumber({ text, duration = 1400, className }: { te
   return <span ref={ref} className={className} aria-label={text} />;
 }
 
+let sweepRegistered: boolean | null = null;
+/** Animovatelný úhel pro masku (CSS @property); bez podpory → jen prolnutí. */
+function registerSweep(): boolean {
+  if (sweepRegistered != null) return sweepRegistered;
+  try {
+    (CSS as unknown as { registerProperty(definition: object): void }).registerProperty({ name: '--kpi-sweep', syntax: '<angle>', inherits: false, initialValue: '360deg' });
+    sweepRegistered = true;
+  } catch (error) {
+    // Už registrováno (HMR) je v pořádku.
+    sweepRegistered = error instanceof DOMException && error.name === 'InvalidModificationError';
+  }
+  return sweepRegistered;
+}
+
 /**
- * Náběh grafu KPI (otočení + zvětšení + zprůhlednění), spuštěný až na
- * uklidněné stránce přes Web Animations API — transform/opacity běží na
- * compositoru, takže jde plynule. Do té doby je graf skrytý.
+ * Náběh grafu KPI jako skutečné vykreslení oblouku: maska z conic-gradientu
+ * odkrývá stávající graf zleva doprava (půlkruh) nebo dokola (kroužek).
+ * Graf, tooltipy i zvýraznění zůstávají. Spouští se až na uklidněné stránce;
+ * když snímky neběží, graf se ukáže celý.
  */
 export function KpiChartEntrance({ variant, className, children }: { variant: 'gauge' | 'donut'; className?: string; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element || reducedMotion() || typeof element.animate !== 'function') return;
+    const sweep = registerSweep();
     let cancelled = false;
-    element.style.opacity = '0';
+    if (sweep) {
+      const mask = variant === 'gauge'
+        ? 'conic-gradient(from 270deg at 50% 100%, #000 calc(var(--kpi-sweep) - 6deg), transparent var(--kpi-sweep))'
+        : 'conic-gradient(from 0deg at 50% 50%, #000 calc(var(--kpi-sweep) - 8deg), transparent var(--kpi-sweep))';
+      element.style.setProperty('--kpi-sweep', '0deg');
+      element.style.webkitMaskImage = mask;
+      element.style.maskImage = mask;
+    } else {
+      element.style.opacity = '0';
+    }
+    const reset = () => {
+      element.style.removeProperty('--kpi-sweep');
+      element.style.webkitMaskImage = '';
+      element.style.maskImage = '';
+      element.style.opacity = '';
+    };
     void whenFramesSettle().then(() => {
       if (cancelled) return;
-      const keyframes = variant === 'gauge'
-        ? [{ opacity: 0, transform: 'rotate(-40deg) scale(.82)' }, { opacity: 1, transform: 'none' }]
-        : [{ opacity: 0, transform: 'rotate(-160deg) scale(.7)' }, { opacity: 1, transform: 'none' }];
-      element.style.opacity = '';
-      const duration = variant === 'gauge' ? 1100 : 1250;
-      const animation = element.animate(keyframes, { duration, easing: 'cubic-bezier(.16, 1, .3, 1)', fill: 'backwards' });
-      // Animace stojí (přiškrcený panel) → zrušit, ať graf nezůstane neviditelný.
-      window.setTimeout(() => { if (animation.playState !== 'finished') animation.cancel(); }, duration + 500);
+      const duration = variant === 'gauge' ? 1000 : 1200;
+      const animation = sweep
+        // +6/8° navíc, ať měkká hrana masky na konci zmizí.
+        ? element.animate([{ '--kpi-sweep': '0deg' }, { '--kpi-sweep': variant === 'gauge' ? '186deg' : '368deg' }] as Keyframe[], { duration, easing: 'cubic-bezier(.33, 1, .68, 1)', fill: 'forwards' })
+        : element.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 400, fill: 'forwards' });
+      const done = () => { if (!cancelled) { animation.cancel(); reset(); } };
+      animation.finished.then(done, () => {});
+      // Animace stojí (přiškrcený panel) → ukázat graf celý.
+      window.setTimeout(() => { if (animation.playState !== 'finished') done(); }, duration + 500);
     });
-    return () => { cancelled = true; element.style.opacity = ''; };
+    return () => { cancelled = true; reset(); };
   }, [variant]);
-  return <div ref={ref} className={className} style={{ transformOrigin: variant === 'gauge' ? '50% 100%' : '50% 50%' }}>{children}</div>;
+  return <div ref={ref} className={className}>{children}</div>;
 }
