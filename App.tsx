@@ -4093,8 +4093,11 @@ const App: React.FC = () => {
   // Data jiného uživatele než aktuální session se nikdy nevykreslí (pojistka
   // k beginUserSwitch pro jakýkoli zbývající mezisnímek přepnutí A→B).
   const renderedUserMismatch = Boolean(session && currentUser.id !== DEFAULT_USER.id && currentUser.id !== session.user.id);
+  // Pozadí Aurory jako jedna vrstva pro načítání i appku: obě větve vrací fragment
+  // s pozadím na stejném místě, takže se při přechodu nepřekreslí (žádné černé probliknutí).
+  const auroraBackground = theme !== 'oled' && session ? <AppBackground settings={appearance} dark={theme !== 'light'} /> : null;
   if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb) || renderedUserMismatch) {
-    return <QuantumLoader theme={theme} />;
+    return <>{auroraBackground}<QuantumLoader theme={theme} transparent={Boolean(auroraBackground)} /></>;
   }
   if (session) perfMarkOnce('boot:splash-end');
 
@@ -4103,6 +4106,8 @@ const App: React.FC = () => {
   }
 
   return (
+    <>
+    {auroraBackground}
     <div
       className="h-screen font-sans flex overflow-hidden transition-colors duration-300 bg-[var(--bg-page)] text-[var(--text-primary)]"
       style={inNativeShell ? { paddingTop: 'env(safe-area-inset-top)' } : undefined}
@@ -4110,9 +4115,9 @@ const App: React.FC = () => {
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
     >
-      {theme !== 'oled' && <AppBackground settings={appearance} dark={theme !== 'light'} />}
       {!bootTransitionDone && (
         <BootTransition
+          transparent={Boolean(auroraBackground)}
           allowFlight={!inNativeShell && typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1024px)').matches === true}
           onDone={() => setBootTransitionDone(true)}
         />
@@ -5109,6 +5114,7 @@ const App: React.FC = () => {
         })()}
       </AnimatePresence>
     </div >
+    </>
   );
 };
 

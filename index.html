@@ -35,6 +35,22 @@
           theme = prefs.theme;
         }
 
+        // Aurora už od prvního vykreslení (přibližně podle posledních barev), ne černá.
+        if (theme !== 'oled') {
+          try {
+            var boot = JSON.parse(localStorage.getItem('alphatrade_aurora_boot') || 'null');
+            if (boot && boot.colors && boot.colors.length >= 3) {
+              var a = boot.dark ? [0.42, 0.28, 0.32] : [0.5, 0.38, 0.42];
+              var spot = function (c, x, y, alpha) { return 'radial-gradient(circle at ' + x + ' ' + y + ', rgba(' + c + ',' + alpha + ') 0, rgba(' + c + ',0) 45vmax)'; };
+              document.documentElement.style.setProperty('--boot-aurora', [
+                spot(boot.colors[0], '20%', '22%', a[0]),
+                spot(boot.colors[2], '82%', '32%', a[1]),
+                spot(boot.colors[1], '55%', '90%', a[2]),
+              ].join(','));
+              document.documentElement.classList.add('aurora-boot');
+            }
+          } catch (e) { }
+        }
         if (theme === 'light') {
           document.documentElement.classList.add('light-theme');
           document.documentElement.classList.remove('oled-theme');
@@ -64,6 +80,9 @@
       background-color: var(--bg-page);
       transition: background-color 0.3s ease;
     }
+    /* Přibližná Aurora do načtení appky (pak ji nahradí skutečné pozadí). */
+    html.aurora-boot body { background: var(--boot-aurora), #05070f; }
+    html.aurora-boot.light-theme body { background: var(--boot-aurora), #eceff7; }
 
     /* Pulsating Neon Glows */
     @keyframes pulse-green {

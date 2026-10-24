@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { paletteColors, type AppearanceSettings } from '../lib/appearance';
 
 const rgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(',');
+
+/** Barvy pro přibližnou Auroru v index.html, než se načte JavaScript (žádné černé probliknutí). */
+export const AURORA_BOOT_KEY = 'alphatrade_aurora_boot';
 
 /** Deterministický šum — prach v Hlubinách je pokaždé na stejném místě. */
 const seeded = (seed: number) => () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -46,7 +49,14 @@ export default function AppBackground({ settings, dark }: { settings: Appearance
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const colors = useMemo(() => paletteColors(settings, dark), [settings, dark]);
 
+  // Přibližná Aurora z index.html končí, jakmile je tu skutečná; barvy si zapamatovat na příští start.
+  useLayoutEffect(() => { document.documentElement.classList.remove('aurora-boot'); }, []);
   useEffect(() => {
+    try { localStorage.setItem(AURORA_BOOT_KEY, JSON.stringify({ colors: colors.slice(0, 3).map(rgb), dark })); } catch { /* jen bez náhledu při startu */ }
+  }, [colors, dark]);
+
+  // Layout efekt: plátno se vykreslí před prvním snímkem (jinak by jeden snímek bylo prázdné).
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (settings.background !== 'depths' || !canvas) return;
     drawDepths(canvas, colors, dark);
