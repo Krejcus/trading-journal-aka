@@ -5149,3 +5149,6 @@ html:not(.light-theme) .dbe-ph-sheet { background: rgba(13, 18, 36, 0.98); }
 .sidebar-edge-tab:hover .sidebar-edge-tip,
 .sidebar-edge-tab:focus-visible .sidebar-edge-tip { opacity: 1; transform: translate(0, -50%); transition-delay: 550ms; }
 
+
+/* Dashboard: první okamžik po otevření bez přechodů widgetů (žádné „roztažení“). */
+.dbe-grid-settling > .react-grid-item { transition: none !important; }

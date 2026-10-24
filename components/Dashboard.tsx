@@ -1798,7 +1798,16 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
   // react-grid-layout: width measurement
-  const { width: containerWidth, containerRef, mounted: widthMounted } = useContainerWidth({ initialWidth: 1280 });
+  // Mřížka se vykreslí až se skutečnou šířkou — jinak se widgety při otevření
+  // dashboardu animovaně zúžily z odhadu 1280 px na skutečnou šířku.
+  const { width: containerWidth, containerRef, mounted: widthMounted } = useContainerWidth({ initialWidth: 1280, measureBeforeMount: true });
+  // Krátce po otevření bez přechodů (dorovnání šířky, posuvník) — animace jen při úpravách.
+  const [gridSettled, setGridSettled] = useState(false);
+  useEffect(() => {
+    if (!widthMounted) return;
+    const timer = window.setTimeout(() => setGridSettled(true), 700);
+    return () => window.clearTimeout(timer);
+  }, [widthMounted]);
 
   // react-grid-layout: convert DashboardLayouts to per-breakpoint Layout objects
   const rglLayouts = useMemo(() => {
@@ -2392,7 +2401,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           {/* Desktop: react-grid-layout */}
           {(!isMobile || isEditing) && widthMounted && (
             <ResponsiveGridLayout
-              className={`layout dbe-grid ${isEditing ? 'editing' : ''} ${canEditGrid ? 'dbe-editing' : ''}`}
+              className={`layout dbe-grid ${gridSettled ? '' : 'dbe-grid-settling'} ${isEditing ? 'editing' : ''} ${canEditGrid ? 'dbe-editing' : ''}`}
               width={containerWidth}
               layouts={rglLayouts}
               breakpoints={GRID_BREAKPOINTS}
