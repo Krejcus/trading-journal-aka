@@ -35,6 +35,22 @@
           theme = prefs.theme;
         }
 
+        // Aurora už od prvního vykreslení (přibližně podle posledních barev), ne černá.
+        if (theme !== 'oled') {
+          try {
+            var boot = JSON.parse(localStorage.getItem('alphatrade_aurora_boot') || 'null');
+            // spots = „r,g,b,alfa“ přesně jako skutečné pozadí (síla, sytost) — viz AppBackground.bootSpots.
+            if (boot && boot.spots && boot.spots.length >= 3) {
+              var spot = function (c, x, y) { var rgb = c.split(',').slice(0, 3).join(','); return 'radial-gradient(circle at ' + x + ' ' + y + ', rgba(' + c + ') 0, rgba(' + rgb + ',0) 45vmax)'; };
+              document.documentElement.style.setProperty('--boot-aurora', [
+                spot(boot.spots[0], '20%', '22%'),
+                spot(boot.spots[1], '82%', '32%'),
+                spot(boot.spots[2], '55%', '90%'),
+              ].join(','));
+              document.documentElement.classList.add('aurora-boot');
+            }
+          } catch (e) { }
+        }
         if (theme === 'light') {
           document.documentElement.classList.add('light-theme');
           document.documentElement.classList.remove('oled-theme');
@@ -64,6 +80,10 @@
       background-color: var(--bg-page);
       transition: background-color 0.3s ease;
     }
+    /* Přibližná Aurora do načtení appky (pak ji nahradí skutečné pozadí). */
+    /* Stejný tón jako stránka v Auroře (--bg-page: 38 % / 45 %), ať start nezáří víc než appka. */
+    html.aurora-boot body { background: linear-gradient(rgba(2, 6, 23, .38), rgba(2, 6, 23, .38)), var(--boot-aurora), #05070f; }
+    html.aurora-boot.light-theme body { background: linear-gradient(rgba(248, 250, 252, .45), rgba(248, 250, 252, .45)), var(--boot-aurora), #eceff7; }
 
     /* Pulsating Neon Glows */
     @keyframes pulse-green {

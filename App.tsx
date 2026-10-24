@@ -187,6 +187,7 @@ import {
   FileText
 } from 'lucide-react';
 import AppBackground from './components/AppBackground';
+import BootTransition from './components/BootTransition';
 import { APPEARANCE_CACHE_KEY, normalizeAppearance, readCachedAppearance, type AppearanceSettings } from './lib/appearance';
 
 import { isSupabaseConfigured, supabase } from './services/supabase';
@@ -436,6 +437,17 @@ const sanitizeLayouts = (raw: Record<string, DashboardWidgetConfig[]>, defaultLg
   return result;
 };
 
+const DASHBOARD_MODES: readonly DashboardMode[] = ['funded', 'challenge', 'combined', 'archive', 'backtesting'];
+/** Místně uložený režim dashboardu (jen platná hodnota). */
+function readLocalDashboardMode(): DashboardMode | null {
+  try {
+    const saved = localStorage.getItem('alphatrade_dash_mode');
+    return saved && (DASHBOARD_MODES as readonly string[]).includes(saved) ? saved as DashboardMode : null;
+  } catch {
+    return null;
+  }
+}
+
 // --- Per-mód layouty (funded/challenge/combined zvlášť; archive sdílí combined) ---
 const EMPTY_LAYOUTS: DashboardLayouts = {};
 const liveLayoutKey = (m: DashboardMode): string =>
@@ -529,6 +541,8 @@ const App: React.FC = () => {
     if (signedOut) window.location.reload();
   }, []);
   const [loading, setLoading] = useState(true);
+  // Přechod z načítání do appky jen jednou za dokument (logo přeletí do lišty).
+  const [bootTransitionDone, setBootTransitionDone] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
   const [isInitialLoadDone, setIsInitialLoadDone] = useState(false);
   // Když má zařízení živý push odběr, alerty posílá cron (api/cron/send-alerts).
@@ -964,11 +978,7 @@ const App: React.FC = () => {
   // Layout zvlášť pro každý live mód (funded/challenge/combined). Init `{}` ne default — viz pozn. níže.
   const [liveLayoutsByMode, setLiveLayoutsByMode] = useState<Record<string, DashboardLayouts>>({});
   const [backtestDashboardLayouts, setBacktestDashboardLayouts] = useState<DashboardLayouts>(DEFAULT_BACKTEST_LAYOUTS);
-  const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => {
-    // Try to load from local storage first for immediate persistence
-    const saved = localStorage.getItem('alphatrade_dash_mode');
-    return (saved as DashboardMode) || 'combined';
-  });
+  const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => readLocalDashboardMode() ?? 'combined');
 
   useEffect(() => {
     safeSetItem('alphatrade_dash_mode', dashboardMode);
@@ -2029,7 +2039,11 @@ const App: React.FC = () => {
     // Theme is NOT applied here — it has its own persistence via localStorage
     // to prevent cross-tab sync or focus sync from reverting user's theme choice.
     // Theme is applied only on initial load (useState initializer).
-    if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
+    // Režim (Funded / Challenge / Vše) je volba tohoto zařízení jako téma: uložená
+    // místní volba má přednost. Hodnota z DB se použije jen bez ní (nové zařízení,
+    // po odhlášení) — jinak starší DB hodnota (neuložená změna při výpadku DB,
+    // jiné zařízení) po reloadu přepnula filtr zpátky na „Vše“.
+    if (prefs.dashboardMode && !readLocalDashboardMode()) setDashboardMode(prefs.dashboardMode);
     // Vzhled se na rozdíl od tématu synchronizuje mezi zařízeními (uživatel to tak chce).
     if (prefs.appearance) setAppearance(normalizeAppearance(prefs.appearance));
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
@@ -4082,8 +4096,11 @@ const App: React.FC = () => {
   // Data jiného uživatele než aktuální session se nikdy nevykreslí (pojistka
   // k beginUserSwitch pro jakýkoli zbývající mezisnímek přepnutí A→B).
   const renderedUserMismatch = Boolean(session && currentUser.id !== DEFAULT_USER.id && currentUser.id !== session.user.id);
+  // Pozadí Aurory jako jedna vrstva pro načítání i appku: obě větve vrací fragment
+  // s pozadím na stejném místě, takže se při přechodu nepřekreslí (žádné černé probliknutí).
+  const auroraBackground = theme !== 'oled' ? <AppBackground settings={appearance} dark={theme !== 'light'} /> : null;
   if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb) || renderedUserMismatch) {
-    return <QuantumLoader theme={theme} />;
+    return <>{auroraBackground}<QuantumLoader theme={theme} /></>;
   }
   if (session) perfMarkOnce('boot:splash-end');
 
@@ -4092,6 +4109,8 @@ const App: React.FC = () => {
   }
 
   return (
+    <>
+    {auroraBackground}
     <div
       className="h-screen font-sans flex overflow-hidden transition-colors duration-300 bg-[var(--bg-page)] text-[var(--text-primary)]"
       style={inNativeShell ? { paddingTop: 'env(safe-area-inset-top)' } : undefined}
@@ -4099,7 +4118,12 @@ const App: React.FC = () => {
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
     >
-      {theme !== 'oled' && <AppBackground settings={appearance} dark={theme !== 'light'} />}
+      {!bootTransitionDone && (
+        <BootTransition
+          allowFlight={!inNativeShell && typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1024px)').matches === true}
+          onDone={() => setBootTransitionDone(true)}
+        />
+      )}
 
       {worldShift.active && <WorldShiftOverlay to={worldShift.to} />}
 
@@ -4127,7 +4151,7 @@ const App: React.FC = () => {
       )}
 
       {/* Sidebar — pouze desktop */}
-      <div className="hidden lg:block">
+      <div className="hidden lg:block" data-boot="sidebar">
         <Sidebar
           activePage={activePage}
           setActivePage={setActivePage}
@@ -4191,12 +4215,13 @@ const App: React.FC = () => {
           </filter>
         </svg>
         {/* Deník dne na desktopu: lišta odjede nahoru, deník zabere uvolněné místo. */}
-        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all duration-500 ease-out rounded-lg floating-glass-header header-clear ${sidebarHidden ? 'lg:left-6' : isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${journalImmersive ? 'lg:-translate-y-[160%] lg:opacity-0 lg:pointer-events-none' : ''} ${isNetworkSpectating ? 'hidden' : ''}`}>
+        <header data-boot="header" className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all duration-500 ease-out rounded-lg floating-glass-header header-clear ${sidebarHidden ? 'lg:left-6' : isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${journalImmersive ? 'lg:-translate-y-[160%] lg:opacity-0 lg:pointer-events-none' : ''} ${isNetworkSpectating ? 'hidden' : ''}`}>
           {/* Vizuál headeru dělá CSS: gradient tint + border + stín + lupa přes backdrop-filter:url(#liquid-glass). */}
           <div className="flex items-center gap-3 relative z-10">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <div className="flex items-center gap-2.5 pr-1">
               <img
+                data-boot-logo-target
                 src="/logos/at_logo_light_clean.png"
                 alt="Alpha Trade"
                 className={`h-8 w-8 object-contain shrink-0 ${theme !== 'light' ? 'drop-shadow-[0_0_12px_rgba(34,211,238,0.35)]' : ''}`}
@@ -4484,7 +4509,7 @@ const App: React.FC = () => {
           </div>
         )}
 
-        <div ref={pageScrollRef} className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''}`}>
+        <div ref={pageScrollRef} data-boot="content" className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''}`}>
           <PullToRefresh
             onRefresh={handleRefreshData}
             disabled={inNativeShell || !session || loading}
@@ -5076,6 +5101,7 @@ const App: React.FC = () => {
         })()}
       </AnimatePresence>
     </div >
+    </>
   );
 };
 
