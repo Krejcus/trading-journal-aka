@@ -262,6 +262,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-24 — Účty × Byznys bez duplicit peněz, historie účtů (Claude)
+- Rozhodnutí: peníze (nákupy, výplaty) žijí jen v Byznysu; Účty ukazují
+  životní cyklus. Cena účtu se nezadává — `lib/accountPurchases.ts` páruje účet
+  s nákupem v `business_expenses` podle firmy, počtu z popisku („5× Lucid 50k“)
+  a data (−4…+8 dní jisté, jinak nejbližší starší do 75 dní jako „potvrdit“).
+  Párování je jen pro zobrazení, nic nezapisuje. Nový účet s cenou založí jen
+  výdaj v Byznysu (`challengeCost` 0).
+- Ruční funded z prošlé challenge se s nákupem nepáruje; účty od brokera vždy
+  (Lucid LFE/LFF jsou evaluace — u Lucid v DB opravena fáze na Challenge,
+  záloha před zápisem).
+- Účty: záložky Aktivní / Historie (stránkování po 15, filtry firma/výsledek,
+  klik = detail účtu na místě). Byznys: tabulka Prop firmy (koupeno, živé,
+  spálené, prošlé, životnost, návratnost). Dashboard nově najde i archivovaný
+  účet (dřív tiše spadl na jiný účet → „obchody nesedí“).
+- Zbývá: 19 párování „potvrdit“ nemá potvrzovací UI; testovací „zkouzka“ se
+  ukazuje jako firma.
+
 ### 2026-10-24 — Účty: hromadný úklid, review záložky Účty (Claude)
 - Filip: platí jen 5 připojených Lucid účtů (LFE05066846490037–41), vše ostatní
   je spálené. Zapsáno přímo v produkční DB jednou transakcí, záloha všech 95
