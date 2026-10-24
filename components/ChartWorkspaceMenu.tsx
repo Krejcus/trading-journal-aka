@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, Download, FolderOpen, History, RotateCcw, Save, Upload } from 'lucide-react';
+import { ChevronDown, Download, FolderOpen, History, Paintbrush, RotateCcw, Save, Upload } from 'lucide-react';
 import { useKeepInViewport } from '../hooks/useKeepInViewport';
 
 /**
  * Menu „Workspace“ v horní liště fullscreen grafu — jako u TradingView je
  * správa rozložení v jednom menu místo šesti tlačítek, aby se lišta vešla.
  */
-export default function ChartWorkspaceMenu({ isDark, buttonClassName, onSave, onLoad, onReset, onExport, onImport, onRecover }: {
+export default function ChartWorkspaceMenu({ isDark, buttonClassName, onSave, onLoad, onReset, onExport, onImport, onRecover, onAdoptJournalStyle }: {
   isDark: boolean;
   buttonClassName: string;
   onSave: () => void;
@@ -15,6 +15,8 @@ export default function ChartWorkspaceMenu({ isDark, buttonClassName, onSave, on
   onExport: () => void;
   onImport: () => void;
   onRecover: () => void;
+  /** Jen backtest session: zkopírovat vzhled grafů z hlavní appky. */
+  onAdoptJournalStyle?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -78,6 +80,14 @@ export default function ChartWorkspaceMenu({ isDark, buttonClassName, onSave, on
           <button type="button" role="menuitem" className={item} onClick={run(onRecover)} title="Vrátit workspace před posledním načtením nebo importem">
             <History size={14} /> Předchozí workspace
           </button>
+          {onAdoptJournalStyle && (
+            <>
+              <div className={divider} />
+              <button type="button" role="menuitem" className={item} onClick={run(onAdoptJournalStyle)} title="Zkopíruje do session vzhled grafu, indikátorů a kreseb z hlavní appky. Rozložení, kresby ani obchody se nemění.">
+                <Paintbrush size={14} /> Převzít styl z hlavní appky
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -1130,7 +1130,10 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
   useEffect(() => { setPositionStop(position?.stopLoss?.toString() ?? ''); }, [position?.positionId, position?.stopLoss]);
   useEffect(() => { setPositionTarget(position?.takeProfit?.toString() ?? ''); }, [position?.positionId, position?.takeProfit]);
   const pending = runtime.orders.filter(order => order.status === 'pending');
-  const field = `h-7 rounded border px-2 text-[10px] outline-none ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)] text-white' : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-900'}`;
+  const field = `h-7 rounded-md border px-2 text-[11px] tabular-nums outline-none transition-colors focus:border-blue-500/70 ${isDark
+    ? 'border-white/10 bg-white/[0.04] text-white placeholder:text-slate-500 hover:border-white/20'
+    : 'border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400 hover:border-slate-300'}`;
+  const divider = `h-6 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
   const num = (value: string) => value.trim() && Number.isFinite(Number(value)) ? Number(value) : undefined;
   const submit = (side: 'buy' | 'sell') => {
     const orderPrice = num(price);
@@ -1145,35 +1148,82 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
     setOrderError(null);
     onOrder({ side, type, quantity, price: orderPrice, stopLoss: num(stopLoss), takeProfit: num(takeProfit) }, candle);
   };
+  const money = (value: number, signed = false) => `${signed && value >= 0.005 ? '+' : value <= -0.005 ? '−' : ''}$${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const priceText = (value: number | undefined) => value === undefined ? '—' : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pnlTone = (value: number) => value > 0 ? 'text-emerald-500' : value < 0 ? 'text-rose-500' : '';
+  const stat = (label: string, value: string, tone = '') => (
+    <div className="flex shrink-0 flex-col justify-center leading-none">
+      <span className="text-[8.5px] font-bold uppercase tracking-[0.08em] text-slate-500">{label}</span>
+      <b className={`mt-[3px] font-mono text-[11.5px] font-semibold tabular-nums ${tone}`}>{value}</b>
+    </div>
+  );
+  const typeLabels: Record<BacktestOrderType, string> = { market: 'Mkt', limit: 'Lmt', stop: 'Stp' };
   return (
-    <div className="flex h-full items-center gap-3 overflow-x-auto px-3 text-[10px]">
-      <div className="min-w-[245px]">
-        <div className="mb-1 flex gap-1">
-          <select value={type} onChange={event => setType(event.target.value as BacktestOrderType)} className={`${field} w-20`}><option value="market">Market</option><option value="limit">Limit</option><option value="stop">Stop</option></select>
-          <input type="number" min={1} value={quantity} onChange={event => onQuantityChange(Math.max(1, Number(event.target.value)))} className={`${field} w-14`} title="Počet kontraktů — použije se i pro objednávku z pravého kliku do grafu" />
-          {type !== 'market' && <input type="number" step="0.25" value={price} onChange={event => setPrice(event.target.value)} placeholder="Cena" className={`${field} w-20`} />}
-          <input type="number" step="0.25" value={stopLoss} onChange={event => setStopLoss(event.target.value)} placeholder="SL" className={`${field} w-16`} />
-          <input type="number" step="0.25" value={takeProfit} onChange={event => setTakeProfit(event.target.value)} placeholder="TP" className={`${field} w-16`} />
-        </div>
-        <div className="flex gap-1"><button onClick={() => submit('buy')} disabled={!candle} className="h-7 flex-1 rounded bg-emerald-600 font-black text-white disabled:opacity-40">BUY</button><button onClick={() => submit('sell')} disabled={!candle} className="h-7 flex-1 rounded bg-rose-600 font-black text-white disabled:opacity-40">SELL</button></div>
-        {orderError && <div className="mt-1 text-[9px] font-bold text-rose-500">{orderError}</div>}
+    // Jeden řádek (44 px) — víc místa pro graf. Pořadí: zadání příkazu → účet → pozice → čekající příkazy.
+    <div className="relative flex h-full items-center gap-3 px-3 text-[11px]">
+      {orderError && <span role="alert" className="pointer-events-none absolute bottom-full left-3 mb-1.5 rounded-md bg-rose-600 px-2 py-1 text-[10.5px] font-bold text-white shadow-lg">{orderError}</span>}
+      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:thin]">
+      <div className={`flex shrink-0 items-center rounded-md p-0.5 ${isDark ? 'bg-white/[0.05]' : 'bg-slate-100'}`} role="radiogroup" aria-label="Typ objednávky">
+        {(['market', 'limit', 'stop'] as const).map(option => (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={type === option}
+            onClick={() => setType(option)}
+            title={option === 'market' ? 'Market' : option === 'limit' ? 'Limit' : 'Stop'}
+            className={`h-6 rounded px-2 text-[10.5px] font-bold transition-colors ${type === option
+              ? isDark ? 'bg-white/15 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-500 hover:text-slate-300'}`}
+          >{typeLabels[option]}</button>
+        ))}
       </div>
-      <div className={`h-12 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
-      <div className="grid min-w-[280px] grid-cols-4 gap-x-4 gap-y-1 font-mono">
-        <span className="text-slate-500">Balance</span><b>${runtime.balance.toFixed(2)}</b><span className="text-slate-500">Equity</span><b>${runtime.equity.toFixed(2)}</b>
-        <span className="text-slate-500">Realized</span><b className={runtime.realizedPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}>{runtime.realizedPnl >= 0 ? '+' : ''}${runtime.realizedPnl.toFixed(2)}</b><span className="text-slate-500">Open</span><b>{runtime.unrealizedPnl >= 0 ? '+' : ''}${runtime.unrealizedPnl.toFixed(2)}</b>
+      <div className="flex shrink-0 items-center gap-1">
+        <input type="number" min={1} value={quantity} onChange={event => onQuantityChange(Math.max(1, Number(event.target.value)))} className={`${field} w-12 text-center`} title="Počet kontraktů — použije se i pro objednávku z pravého kliku do grafu" aria-label="Počet kontraktů" />
+        {type !== 'market' && <input type="number" step="0.25" value={price} onChange={event => setPrice(event.target.value)} placeholder="Cena" aria-label="Cena objednávky" className={`${field} w-[84px]`} />}
+        <input type="number" step="0.25" value={stopLoss} onChange={event => setStopLoss(event.target.value)} placeholder="SL" aria-label="Stop loss" className={`${field} w-[76px]`} />
+        <input type="number" step="0.25" value={takeProfit} onChange={event => setTakeProfit(event.target.value)} placeholder="TP" aria-label="Take profit" className={`${field} w-[76px]`} />
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        <button type="button" onClick={() => submit('buy')} disabled={!candle} className="h-7 min-w-[68px] rounded-md bg-gradient-to-b from-emerald-500 to-emerald-600 px-3 text-[11px] font-black tracking-wide text-white shadow-[0_1px_0_rgba(255,255,255,.18)_inset] transition hover:brightness-110 active:brightness-95 disabled:opacity-40">BUY</button>
+        <button type="button" onClick={() => submit('sell')} disabled={!candle} className="h-7 min-w-[68px] rounded-md bg-gradient-to-b from-rose-500 to-rose-600 px-3 text-[11px] font-black tracking-wide text-white shadow-[0_1px_0_rgba(255,255,255,.18)_inset] transition hover:brightness-110 active:brightness-95 disabled:opacity-40">SELL</button>
+      </div>
+      <div className={divider} />
+      <div className="flex shrink-0 items-center gap-4">
+        {stat('Balance', money(runtime.balance))}
+        {stat('Equity', money(runtime.equity))}
+        {stat('Realized', money(runtime.realizedPnl, true), pnlTone(runtime.realizedPnl))}
+        {stat('Open', money(runtime.unrealizedPnl, true), pnlTone(runtime.unrealizedPnl))}
       </div>
       {position && <>
-        <div className={`h-12 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
-        <div className="min-w-[260px]"><div className="mb-1 font-black"><span className={position.side === 'long' ? 'text-emerald-500' : 'text-rose-500'}>{position.side.toUpperCase()} {position.quantity}×</span> @ {position.averagePrice.toFixed(2)}</div><div className="flex gap-1"><input className={`${field} w-16`} value={positionStop} onChange={event => setPositionStop(event.target.value)} placeholder="SL" onBlur={event => onChangeBracket(num(event.target.value), position.takeProfit)} /><input className={`${field} w-16`} value={positionTarget} onChange={event => setPositionTarget(event.target.value)} placeholder="TP" onBlur={event => onChangeBracket(position.stopLoss, num(event.target.value))} />{position.quantity > 1 && <button onClick={() => onClosePosition(Math.floor(position.quantity / 2), candle)} className={`${field} font-bold`}>½ ven</button>}<button onClick={() => onClosePosition(position.quantity, candle)} className="h-7 rounded bg-slate-700 px-2 font-black text-white">Zavřít</button></div></div>
+        <div className={divider} />
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-black ${position.side === 'long' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{position.side === 'long' ? 'LONG' : 'SHORT'} {position.quantity}×</span>
+          <span className="font-mono tabular-nums text-slate-400">@ {priceText(position.averagePrice)}</span>
+          <input className={`${field} w-[76px]`} value={positionStop} onChange={event => setPositionStop(event.target.value)} placeholder="SL" aria-label="Stop loss pozice" onBlur={event => onChangeBracket(num(event.target.value), position.takeProfit)} />
+          <input className={`${field} w-[76px]`} value={positionTarget} onChange={event => setPositionTarget(event.target.value)} placeholder="TP" aria-label="Take profit pozice" onBlur={event => onChangeBracket(position.stopLoss, num(event.target.value))} />
+          {position.quantity > 1 && <button type="button" onClick={() => onClosePosition(Math.floor(position.quantity / 2), candle)} className={`${field} font-bold`} title="Zavřít polovinu pozice">½</button>}
+          <button type="button" onClick={() => onClosePosition(position.quantity, candle)} className={`h-7 rounded-md px-2.5 text-[10.5px] font-black transition-colors ${isDark ? 'bg-white/10 text-white hover:bg-white/15' : 'bg-slate-800 text-white hover:bg-slate-700'}`}>Zavřít</button>
+        </div>
       </>}
       {pending.length > 0 && <>
-        <div className={`h-12 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
-        <div className="min-w-[190px] space-y-1">{pending.slice(0, 3).map(order => <div key={order.id} className="flex items-center gap-2"><span className="font-bold">{order.side.toUpperCase()} {order.quantity} {order.type} @{order.limitPrice ?? order.stopPrice}</span><button onClick={() => onCancel(order.id, candle)} className="text-rose-500">×</button></div>)}</div>
+        <div className={divider} />
+        <div className="flex shrink-0 items-center gap-1">
+          {pending.slice(0, 3).map(order => (
+            <span key={order.id} className={`inline-flex h-6 items-center gap-1 rounded-md border pl-2 pr-1 text-[10px] font-bold ${isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-200 bg-slate-50'}`}>
+              <span className={order.side === 'buy' ? 'text-emerald-500' : 'text-rose-500'}>{order.side === 'buy' ? 'B' : 'S'} {order.quantity}</span>
+              <span className="text-slate-500">{typeLabels[order.type]}</span>
+              <span className="font-mono tabular-nums">{priceText(order.limitPrice ?? order.stopPrice)}</span>
+              <button type="button" onClick={() => onCancel(order.id, candle)} className="ml-0.5 rounded px-1 text-slate-500 hover:bg-rose-500/15 hover:text-rose-500" aria-label="Zrušit objednávku" title="Zrušit objednávku">×</button>
+            </span>
+          ))}
+          {pending.length > 3 && <span className="text-[10px] font-bold text-slate-500">+{pending.length - 3}</span>}
+        </div>
       </>}
-      <div className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap text-slate-500">
-        <button type="button" onClick={onOpenSessionInfo} className="rounded px-2 py-1 hover:bg-slate-500/10 hover:text-blue-500">Stav session</button>
-        <span>{candle ? `${run.executionSymbol} ${candle.close.toFixed(2)}` : 'Bez ceny'}</span>
+      </div>
+      <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+        <span className="font-mono text-[11px] tabular-nums text-slate-400">{candle ? <><span className="font-sans font-bold text-slate-500">{run.executionSymbol}</span> {priceText(candle.close)}</> : 'Bez ceny'}</span>
+        <button type="button" onClick={onOpenSessionInfo} className="h-7 rounded-md px-2 text-[10.5px] font-bold text-slate-500 transition-colors hover:bg-slate-500/10 hover:text-blue-500">Stav session</button>
       </div>
     </div>
   );

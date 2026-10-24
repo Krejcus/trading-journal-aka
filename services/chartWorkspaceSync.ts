@@ -1,6 +1,6 @@
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { IChartApi, Time, UTCTimestamp } from 'lightweight-charts';
-import type { MarketCandle } from './marketData';
+import { MARKET_TIMEFRAME_MINUTES, type MarketCandle, type MarketTimeframe } from './marketData';
 import { roundNqMnqPriceToTick } from './chartPriceTick';
 
 export interface ChartWorkspaceSyncSettings {
@@ -16,6 +16,8 @@ export interface WorkspaceChartSyncControl {
   chartApi: ChartViewApi | null;
   candles?: MarketCandle[];
   getCandles?: () => MarketCandle[];
+  /** Timeframe panelu — mřížka osy budoucnosti za poslední svíčkou. */
+  config?: { timeframe?: MarketTimeframe };
 }
 
 const currentCandles = (control: WorkspaceChartSyncControl): MarketCandle[] =>
@@ -76,6 +78,33 @@ export const syncedCrosshairCandle = (params: {
   return withinView && withinData ? candle : null;
 };
 
+/**
+ * Čas, na který se má kurzor přenést do druhého panelu. Uvnitř dat je to
+ * svíčka (viz `syncedCrosshairCandle`). Za poslední svíčkou (budoucnost,
+ * v replayi i neodkrytá část) má každý panel osu budoucnosti po krocích
+ * svého timeframe — čas se zarovná na začátek baru téhle mřížky, do kterého
+ * padne, ať kurzor na ostatních panelech nezmizí.
+ */
+export const syncedCrosshairTime = (params: {
+  candles: MarketCandle[];
+  time: number;
+  visibleRange: { from: number; to: number } | null;
+  intervalSeconds?: number;
+}): number | null => {
+  const { candles, time, visibleRange, intervalSeconds } = params;
+  const candle = syncedCrosshairCandle(params);
+  if (candle) return candle.time;
+  const last = candles.at(-1);
+  if (!last || !visibleRange || !Number.isFinite(time) || !intervalSeconds || intervalSeconds <= 0) return null;
+  if (time <= last.time || time < visibleRange.from || time > visibleRange.to) return null;
+  return last.time + Math.floor((time - last.time) / intervalSeconds) * intervalSeconds;
+};
+
+const intervalSecondsOf = (control: WorkspaceChartSyncControl): number | undefined => {
+  const minutes = control.config?.timeframe ? MARKET_TIMEFRAME_MINUTES[control.config.timeframe] : undefined;
+  return minutes ? minutes * 60 : undefined;
+};
+
 export const installChartWorkspaceSync = (
   sourceControls: Iterable<[string, WorkspaceChartSyncControl]>,
   settings: Pick<ChartWorkspaceSyncSettings, 'crosshair' | 'time' | 'dateRange'>,
@@ -102,25 +131,31 @@ export const installChartWorkspaceSync = (
             targetChart.clearCrosshairPosition();
             return;
           }
-          const candle = syncedCrosshairCandle({
+          const targetTime = syncedCrosshairTime({
             candles: currentCandles(target),
             time: Number(param.time),
             visibleRange: visibleTimeRange(targetChart),
+            intervalSeconds: intervalSecondsOf(target),
           });
           // Panel odscrollovaný jinam nemá co ukazovat. Bez tohohle se mu
           // kurzor přilepil na kraj grafu a zůstal tam, dokud uživatel nehýbal
           // myší přímo nad ním.
-          if (!candle) {
+          if (targetTime === null) {
             targetChart.clearCrosshairPosition();
             return;
           }
           const cursorPrice = sourceApi.controller.getSeries().coordinateToPrice(param.point.y);
           if (cursorPrice === null || !Number.isFinite(cursorPrice)) return;
-          targetChart.setCrosshairPosition(
-            roundNqMnqPriceToTick(cursorPrice),
-            candle.time as UTCTimestamp,
-            target.chartApi.controller.getSeries(),
-          );
+          try {
+            targetChart.setCrosshairPosition(
+              roundNqMnqPriceToTick(cursorPrice),
+              targetTime as UTCTimestamp,
+              target.chartApi.controller.getSeries(),
+            );
+          } catch {
+            // Čas za koncem osy budoucnosti cílového panelu — kurzor tam nemá kde stát.
+            targetChart.clearCrosshairPosition();
+          }
         });
         queueMicrotask(() => { crosshairSyncing = false; });
       };

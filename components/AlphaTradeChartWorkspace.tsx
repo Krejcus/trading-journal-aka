@@ -5,6 +5,9 @@ import { chartGlassBar, chartGlassButton, chartGlassGrip } from '../services/cha
 import { historyAt, replayRevealKey, tradeTimelineEvents } from '../lib/tradeReplay';
 import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
 import { formingReplayBar, formingReplayBase } from '../services/chartReplayForming';
+import { adoptJournalAppearance } from '../services/backtestAppearanceAdopt';
+import { crossfadeChart } from '../lib/chartCrossfade';
+import { announceChartProfileChange } from '../services/chartProfileToast';
 import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWorkspaceLibraryDialog';
 import { saveWorkspaceTemplate } from '../services/chartWorkspaceLibrary';
 import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
@@ -627,6 +630,10 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   const focusTrade = useCallback(() => setFocusRequest(value => value + 1), []);
   const handleChartApiReady = useCallback((api: ChartViewApi | null) => setChartApi(api), []);
   const updatePanelConfig = useCallback((next: Partial<WorkspacePanelConfig>, options?: { fromProfile?: boolean }) => {
+    // Nový timeframe / trh graf přestaví — místo probliknutí se starý prolne do nového.
+    if ((next.timeframe !== undefined && next.timeframe !== config.timeframe) || (next.root !== undefined && next.root !== config.root)) {
+      crossfadeChart(chartAreaRef.current, chartApi, { holdMs: 140 });
+    }
     if (next.root !== undefined || next.timeframe !== undefined) setChartApi(null);
     updateConfig(next);
     if (!options?.fromProfile && context.onTradeIndicatorsChange && (next.showFvg !== undefined || next.showLevels !== undefined || next.showStructure !== undefined)) {
@@ -636,7 +643,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
         structure: next.showStructure ?? config.showStructure,
       });
     }
-  }, [config.showFvg, config.showLevels, config.showStructure, context.onTradeIndicatorsChange, updateConfig]);
+  }, [chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.onTradeIndicatorsChange, updateConfig]);
   const getIndicatorState = useCallback((): WorkspaceIndicatorState => ({
     custom: {
       fvg: config.showFvg,
@@ -838,7 +845,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       data-panel-root={config.root}
       data-panel-timeframe={config.timeframe}
     >
-      <div ref={chartAreaRef} className="relative flex-1 min-h-0">
+      <div ref={chartAreaRef} data-chart-area className="relative flex-1 min-h-0">
         {context.paneActions.maximizedPanelId === instance.id && (
           // Maximalizace jde přes ⌥↩ (Alt+Enter); nápověda je vidět jen
           // v maximalizovaném grafu a klikem rozložení taky vrátí.
@@ -1286,6 +1293,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         setStatus(`Go To: ${REPLAY_GO_TO_FAILURE_MESSAGES[result.reason]}`);
         return;
       }
+      if (!replayInteractionPausedRef.current && replayRef.current.phase === 'active' && replayRef.current.cursorTime === current.cursorTime) {
+        // Skok záběru se prolne (posun ve směru skoku) místo probliknutí.
+        const forward = (result.value.cursorTime ?? 0) >= (current.cursorTime ?? 0);
+        panelControlsRef.current.forEach((control, panelId) => crossfadeChart(
+          workspaceShellRef.current?.querySelector<HTMLElement>(`[data-panel-id="${panelId}"] [data-chart-area]`) ?? null,
+          control.chartApi,
+          { slideX: forward ? -36 : 36, holdMs: 60 },
+        ));
+      }
       setReplay(value => !replayInteractionPausedRef.current && value.phase === 'active' && value.cursorTime === current.cursorTime
         ? { ...value, cursorTime: result.value.cursorTime, playing: false }
         : value);
@@ -1476,6 +1492,84 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
   }, [backtestSession, replay.phase, replay.playing, replay.speed, replay.stepMinutes, replayCandleMode, replayDataLoading, trade.executionHistory]);
+  /**
+   * Plynulé přehrávání v backtestu: svíčka se kreslí až PO zpracování. Kurzor
+   * (a s ním engine: plnění, SL/TP, příkazy) je už za ní a graf ji jen dokreslí
+   * po cestě z candleReplayPath. Obrazovka tak nikdy neukáže víc, než engine
+   * zná — příkaz zadaný během animace jde až od další svíčky, nahlédnout do
+   * budoucnosti nejde. Po pauze nebo dalším kroku se svíčka dokreslí celá.
+   */
+  const backtestCandleSettleRef = useRef<(() => void) | null>(null);
+  const backtestReplayCursor = backtestSession && replay.phase === 'active' && replay.playing && !replayDataLoading
+    && (replay.stepMinutes ?? 1) === 1 && replayCandleMode === 'smooth' ? replay.cursorTime : null;
+  useEffect(() => {
+    if (backtestReplayCursor === null) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const delay = chartReplayDelayMs(replayRef.current.speed);
+    if (delay < 150) return;
+    const cursor = backtestReplayCursor;
+    // Svíčka dorazí kousek před dalším krokem, ať na konci chvíli stojí celá.
+    const duration = delay * 0.85;
+    const startedAt = performance.now();
+    const tick025 = (price: number) => Math.round(price * 4) / 4;
+    const targets = new Map<string, { candle: MarketCandle; points: PathPoint[]; base: MarketCandle | null; timeframe: MarketTimeframe }>();
+    panelControlsRef.current.forEach((control, panelId) => {
+      const candle = control.rawCandles.find(item => item.time === cursor);
+      if (!candle) return;
+      const timeframe = control.config.timeframe;
+      targets.set(panelId, {
+        candle,
+        points: candleReplayPath(candle),
+        base: timeframe === '1m' ? null : formingReplayBase(control.rawCandles, cursor - 60, timeframe),
+        timeframe,
+      });
+    });
+    if (!targets.size) return;
+    const draw = (progress: number) => {
+      targets.forEach((target, panelId) => {
+        const control = panelControlsRef.current.get(panelId);
+        const api = control?.chartApi;
+        // Panel mezitím přepnul timeframe: bar by patřil jiné mřížce.
+        if (!api || control.config.timeframe !== target.timeframe) return;
+        const raw = partialReplayCandle(target.candle, target.points, progress);
+        const partial = progress >= 1 ? raw : { ...raw, high: tick025(raw.high), low: tick025(raw.low), close: tick025(raw.close) };
+        const bar = target.timeframe === '1m' ? partial : formingReplayBar(target.base, partial, target.timeframe);
+        try {
+          const controller = api.controller;
+          // Jen přepis baru, který už graf z kroku má — nic se nepřidává.
+          if (controller.getBars().at(-1)?.ts !== bar.time * 1_000) return;
+          controller.updateBar({ ts: bar.time * 1_000, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume });
+        } catch { /* panel se právě přestavuje */ }
+      });
+    };
+    // První snímek hned, ať se plná svíčka z kroku vůbec neukáže.
+    draw(0);
+    let frame = 0;
+    let settled = false;
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      draw(progress);
+      if (progress < 1) frame = window.requestAnimationFrame(tick);
+      else settled = true;
+    };
+    frame = window.requestAnimationFrame(tick);
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      window.cancelAnimationFrame(frame);
+      // Kurzor se mezitím posunul (další krok, Go To, konec dat): poslední bar
+      // už zapsal panel z nových dat — starý cíl by ho přepsal (na vyšším
+      // timeframe jde o tentýž bar).
+      if (replayRef.current.cursorTime === cursor) draw(1);
+    };
+    // Klik kamkoli do workspace (BUY/SELL, příkaz z grafu, SL/TP) svíčku
+    // dokreslí hned — příkaz se pak plní proti tomu, co je vidět.
+    backtestCandleSettleRef.current = settle;
+    return () => {
+      if (backtestCandleSettleRef.current === settle) backtestCandleSettleRef.current = null;
+      settle();
+    };
+  }, [backtestReplayCursor]);
   useEffect(() => {
     if (!replayToolbarPosition) return;
     const clampToolbarPosition = () => {
@@ -2288,6 +2382,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     finally { setWorkspaceApplying(false); }
   }, [applyWorkspaceInput, workspaceApplying, workspacePreview]);
 
+  const adoptJournalStyle = useCallback(() => {
+    const undo = adoptJournalAppearance();
+    if (!undo) { setStatus('Styl jde převzít jen v otevřené backtest session.'); return; }
+    void persistWorkspaceStatus('Styl grafů převzatý z hlavní appky');
+    announceChartProfileChange('Styl převzatý z hlavní appky', () => {
+      undo();
+      void persistWorkspaceStatus('Původní styl session vrácen');
+    });
+  }, [persistWorkspaceStatus]);
   const recoverWorkspace = useCallback(() => {
     try {
       const saved = window.localStorage.getItem(`${chartWorkspaceDocumentStorageKey(chartAppearanceUserId(), backtestSessionRef.current?.id)}:recovery`);
@@ -2627,7 +2730,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   positionQuickOrderRef.current = submitSelectedPositionQuickOrder;
   return (
     <React.Profiler id="chart-workspace" onRender={devWorkspaceProfilerOnRender}>
-    <div className={`${embedded ? 'relative isolate h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
+    <div onPointerDownCapture={() => backtestCandleSettleRef.current?.()} className={`${embedded ? 'relative isolate h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
       {/* Review: řádek týdne a statistik nahoře, lišta grafu přímo nad grafem. */}
       {review && <div ref={reviewHeaderRef} className="shrink-0" />}
       <div className={`relative z-[660] h-10 shrink-0 flex items-center gap-1 border-b ${toolbarSurface}`}>
@@ -2771,6 +2874,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           onExport={exportWorkspace}
           onImport={() => fileInputRef.current?.click()}
           onRecover={recoverWorkspace}
+          onAdoptJournalStyle={backtestSession ? adoptJournalStyle : undefined}
         />
         <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={importWorkspace} />
         <span className={topDivider} />
@@ -2850,7 +2954,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           {/* Lišta kreslení plave nad grafem jako přehrávání a oblíbené — graf
               jde až k levému okraji a prosvítá pod sklem. Nad odznaky panelu
               (z-650), pod horní lištou a jejími popupy (z-660). */}
-          <div className={`pointer-events-none absolute left-0 top-0 z-[655] w-[60px] ${tradingPanel ? 'bottom-[116px]' : 'bottom-7'}`}>
+          <div className={`pointer-events-none absolute left-0 top-0 z-[655] w-[60px] ${tradingPanel ? 'bottom-[72px]' : 'bottom-7'}`}>
             <AlphaTradeDrawingToolbar
               isDark={isDark}
               drawingEngine={activeControl?.drawingEngine ?? null}
@@ -2865,17 +2969,17 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           {review && (
             <div
               ref={reviewOverlayRef}
-              className={`pointer-events-none absolute left-0 right-0 top-0 z-[656] ${tradingPanel ? 'bottom-[116px]' : 'bottom-7'}`}
+              className={`pointer-events-none absolute left-0 right-0 top-0 z-[656] ${tradingPanel ? 'bottom-[72px]' : 'bottom-7'}`}
             />
           )}
           <div
             ref={workspaceShellRef}
-            className={`alphatrade-candlekit-workspace absolute top-0 left-0 right-0 ${tradingPanel ? 'bottom-[116px]' : 'bottom-7'} ${isDark ? 'is-dark' : ''}`}
+            className={`alphatrade-candlekit-workspace absolute top-0 left-0 right-0 ${tradingPanel ? 'bottom-[72px]' : 'bottom-7'} ${isDark ? 'is-dark' : ''}`}
             style={{ '--drawing-rail-inset': drawingRailCollapsed ? '8px' : `${REPLAY_TOOLBAR_MIN_LEFT}px` } as React.CSSProperties}
           >
             <FlexLayoutAdapter key={workspaceMountVersion} workspace={workspace} hideToolbar />
           </div>
-          <div className={`absolute left-0 right-0 z-40 ${tradingPanel ? 'bottom-[88px]' : 'bottom-0'}`}>
+          <div className={`absolute left-0 right-0 z-40 ${tradingPanel ? 'bottom-[44px]' : 'bottom-0'}`}>
             <ChartWorkspaceStatusRow
               onRange={showActiveRange}
               onGoToTime={goToActiveTime}
@@ -2886,7 +2990,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             />
           </div>
           {tradingPanel && (
-            <div className={`absolute bottom-0 left-0 right-0 z-40 h-[88px] border-t ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
+            <div className={`absolute bottom-0 left-0 right-0 z-40 h-[44px] border-t ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
               {tradingPanel}
             </div>
           )}
@@ -2897,7 +3001,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               className={`absolute z-[650] flex h-10 items-center gap-0.5 rounded-xl p-1 ${chartGlassBar(isDark)}`}
               style={replayToolbarPosition
                 ? { left: replayToolbarPosition.left, top: replayToolbarPosition.top }
-                : { left: '50%', bottom: tradingPanel ? 128 : 40, transform: 'translateX(-50%)' }}
+                : { left: '50%', bottom: tradingPanel ? 84 : 40, transform: 'translateX(-50%)' }}
               role="toolbar"
               aria-label="Bar Replay ovládání"
             >
@@ -2974,7 +3078,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 ariaLabel="Timeframe kroku Bar Replay"
                 title="Timeframe jednoho replay kroku"
               />
-              {!backtestSession && (
+              {(
                 <ReplayChoiceMenu
                   value={replayCandleMode}
                   options={REPLAY_CANDLE_MODE_OPTIONS}

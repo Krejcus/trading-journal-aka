@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
-import { installChartWorkspaceSync, syncedCrosshairCandle } from '../services/chartWorkspaceSync';
+import { installChartWorkspaceSync, syncedCrosshairCandle, syncedCrosshairTime } from '../services/chartWorkspaceSync';
 
 const candle = (time: number, close: number) => ({
   time,
@@ -147,5 +147,27 @@ describe('cíl synchronizovaného kurzoru', () => {
 
   it('nevrací nic, když graf zatím nemá viditelný rozsah', () => {
     expect(syncedCrosshairCandle({ candles, time: 160, visibleRange: null })).toBeNull();
+  });
+});
+
+describe('kurzor v budoucnosti za poslední svíčkou', () => {
+  const candles = [candle(0, 10), candle(300, 11), candle(600, 12)];
+  const view = { from: 0, to: 3_000 };
+
+  it('uvnitř dat drží svíčku jako dosud', () => {
+    expect(syncedCrosshairTime({ candles, time: 290, visibleRange: view, intervalSeconds: 300 })).toBe(300);
+  });
+
+  it('za poslední svíčkou se zarovná na bar mřížky cílového timeframe', () => {
+    // 1m kurzor v 14. minutě za koncem 5m panelu → bar 600 + 2 × 300.
+    expect(syncedCrosshairTime({ candles, time: 600 + 14 * 60, visibleRange: view, intervalSeconds: 300 })).toBe(1_200);
+    // Ještě uvnitř posledního 5m baru.
+    expect(syncedCrosshairTime({ candles, time: 600 + 4 * 60, visibleRange: view, intervalSeconds: 300 })).toBe(600);
+  });
+
+  it('bez timeframe, mimo výřez nebo před daty nic nevrací', () => {
+    expect(syncedCrosshairTime({ candles, time: 1_500, visibleRange: view })).toBeNull();
+    expect(syncedCrosshairTime({ candles, time: 1_500, visibleRange: { from: 0, to: 900 }, intervalSeconds: 300 })).toBeNull();
+    expect(syncedCrosshairTime({ candles, time: -60, visibleRange: { from: -600, to: 900 }, intervalSeconds: 300 })).toBeNull();
   });
 });
