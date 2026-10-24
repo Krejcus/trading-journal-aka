@@ -4094,7 +4094,7 @@ const App: React.FC = () => {
   // k beginUserSwitch pro jakýkoli zbývající mezisnímek přepnutí A→B).
   const renderedUserMismatch = Boolean(session && currentUser.id !== DEFAULT_USER.id && currentUser.id !== session.user.id);
   if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb) || renderedUserMismatch) {
-    return <QuantumLoader theme={theme} text={session ? initStatus : undefined} />;
+    return <QuantumLoader theme={theme} />;
   }
   if (session) perfMarkOnce('boot:splash-end');
 
