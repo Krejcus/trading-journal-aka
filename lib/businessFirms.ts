@@ -10,7 +10,7 @@ import { FIRM_LOGOS, firmLabel, firmOf } from '../utils/accountFirm';
 
 export const OTHER_FIRM = 'OSTATNÍ';
 
-const FIRM_PATTERNS: ReadonlyArray<{ key: string; label: string; re: RegExp }> = [
+export const FIRM_PATTERNS: ReadonlyArray<{ key: string; label: string; re: RegExp }> = [
   { key: 'FUNDEDNEXT', label: 'FundedNext', re: /funded\s*next|^\s*fnf/i },
   { key: 'MYFUNDEDFUTURES', label: 'MyFundedFutures', re: /my\s*funded\s*futures|\bmffu?\b/i },
   { key: 'TRADEIFY', label: 'Tradeify', re: /tradeify|^\s*tdfy/i },
@@ -19,6 +19,34 @@ const FIRM_PATTERNS: ReadonlyArray<{ key: string; label: string; re: RegExp }> =
   { key: 'TOPSTEP', label: 'Topstep', re: /top\s*step/i },
   { key: 'ALPHAFUTURES', label: 'Alpha Futures', re: /alpha(\s*futures)?/i },
 ];
+
+export interface PurchasePart {
+  firmKey: string;
+  count: number;
+}
+
+/**
+ * „5× Lucid 50k“ → [{LUCID, 5}], „2x Lucid + 5x Apex“ → [{LUCID, 2}, {APEX, 5}],
+ * „Lucid 50k“ → [{LUCID, 1}]. Počet se hledá u názvu firmy (před i za ním).
+ */
+export function purchaseParts(label: string): PurchasePart[] {
+  const text = label || '';
+  const found = FIRM_PATTERNS.flatMap(firm => {
+    const match = firm.re.exec(text);
+    return match ? [{ key: firm.key, start: match.index, end: match.index + match[0].length }] : [];
+  }).sort((a, b) => a.start - b.start);
+  if (found.length === 0) return [];
+  const parts = found.map(({ key, start, end }) => {
+    const before = text.slice(0, start).match(/(\d+)\s*\.?\s*[x×]\s*(?:\d+k\s*)?$/i);
+    const after = text.slice(end).match(/^\s*(?:\d+k\s*)?[x×]?\s*(\d+)\s*[x×]/i) ?? text.slice(end).match(/^\s*[x×]\s*(\d+)/i);
+    return { firmKey: key, count: before ? Number(before[1]) : after ? Number(after[1]) : 0 };
+  });
+  if (parts.length === 1 && parts[0].count === 0) {
+    const any = text.match(/(\d+)\s*\.?\s*[x×]/i) ?? text.match(/[x×]\s*(\d+)/i);
+    parts[0].count = any ? Number(any[1]) : 1;
+  }
+  return parts.map(part => ({ ...part, count: Math.max(1, part.count || 1) }));
+}
 
 /** Firmy zmíněné v textu (v pořadí výskytu v registru), bez duplicit. */
 export function firmsInText(text: string, extraKeys: readonly string[] = []): string[] {
@@ -89,7 +117,17 @@ export function firmSummaries(
   };
   expenses.forEach(expense => {
     const keys = expenseFirmKeys(expense, extra);
-    keys.forEach(key => { const r = row(key); r.cost += (Number(expense.amount) || 0) / keys.length; r.purchases += 1; });
+    // Nákup přes víc firem („2x Lucid + 5x Apex“) se dělí podle počtu účtů, ne napůl.
+    const parts = purchaseParts(expense.label || '').filter(part => keys.includes(part.firmKey));
+    const total = parts.reduce((sum, part) => sum + part.count, 0);
+    keys.forEach(key => {
+      const r = row(key);
+      const share = parts.length === keys.length && total > 0
+        ? (parts.find(part => part.firmKey === key)?.count ?? 0) / total
+        : 1 / keys.length;
+      r.cost += (Number(expense.amount) || 0) * share;
+      r.purchases += 1;
+    });
   });
   payouts.filter(isReceived).forEach(payout => {
     const r = row(accountFirmKey(accounts.find(account => account.id === payout.accountId)));

@@ -102,7 +102,6 @@ const HistoryPanelModal = React.lazy(() => import('./components/HistoryPanelModa
 const Settings = React.lazy(() => import('./components/Settings'));
 import type { SettingsTab } from './components/Settings';
 const AccountsManager = React.lazy(() => import('./components/AccountsManager'));
-const Graveyard = React.lazy(() => import('./components/Graveyard'));
 import WorldShiftOverlay, { WORLD_SHIFT_TIMING } from './components/WorldShiftOverlay';
 const DailyJournal = React.lazy(() => import('./components/DailyJournal'));
 const DayJournalView = React.lazy(() => import('./components/day/DayJournalView'));
@@ -4764,6 +4763,8 @@ const App: React.FC = () => {
                     <>
                       <AccountsManager
                         accounts={accounts.filter(a => !isBacktestAccount(a))}
+                        historyAccounts={archivedAccounts.filter(a => !isBacktestAccount(a))}
+                        expenses={businessExpenses}
                         activeAccountId={activeAccountId}
                         setActiveAccountId={setActiveAccountId}
                         // Merge zpět Backtest účty, ať je AccountsManager nesmaže.
@@ -4791,24 +4792,7 @@ const App: React.FC = () => {
                         }}
 
                       />
-                      {/* Hřbitov spálených účtů — všechny Failed účty z aktivního i archivovaného pole. */}
-                      {(() => {
-                        const failedAccounts = [...accounts, ...archivedAccounts]
-                          .filter((a, i, arr) => a.result === 'Failed' && arr.findIndex(x => x.id === a.id) === i);
-                        if (failedAccounts.length === 0) return null;
-                        return (
-                          <div className="mt-8">
-                            <React.Suspense fallback={<div className="h-32" />}>
-                              <Graveyard
-                                accounts={failedAccounts}
-                                allAccounts={[...accounts, ...archivedAccounts]}
-                                trades={trades}
-                                theme={theme}
-                              />
-                            </React.Suspense>
-                          </div>
-                        );
-                      })()}
+                      {/* Hřbitov je v záložce Historie a kreslí se až po otevření. */}
                     </>
                   )}
 

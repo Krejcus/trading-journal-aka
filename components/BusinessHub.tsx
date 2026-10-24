@@ -27,6 +27,7 @@ import {
     accountCountInLabel, accountFirmKey, expenseFirmKeys, expenseMonth, firmDisplayName, firmSummaries, monthlyCashflow,
     type FirmSummary,
 } from '../lib/businessFirms';
+import { accountLifecycles, firmLifecycleStats } from '../lib/accountPurchases';
 
 interface BusinessHubProps {
     theme: 'dark' | 'light' | 'oled';
@@ -108,6 +109,9 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     const months = useMemo(() => monthlyCashflow(expenses, payouts), [expenses, payouts]);
     const costMonths = useMemo(() => new Set(expenses.map(e => expenseMonth(e.date)).filter(Boolean)).size, [expenses]);
     const firms = useMemo(() => firmSummaries(expenses, payouts, accounts), [expenses, payouts, accounts]);
+    // Počty a životnost účtů po firmách: koupeno z nákupů, zbytek z účtů (vč. archivu).
+    const lifecycles = useMemo(() => accountLifecycles(accounts, trades, payouts), [accounts, trades, payouts]);
+    const firmLife = useMemo(() => firmLifecycleStats(expenses, lifecycles.values()), [expenses, lifecycles]);
     const maxMonthBar = Math.max(1, ...months.map(m => Math.max(m.paid, m.cost)));
 
     // Výplaty od nejnovější; detail listuje po tomhle pořadí.
@@ -277,38 +281,61 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                 </section>
             )}
 
-            <div className="grid gap-3 lg:grid-cols-2">
-                <section className="theme-card min-w-0 overflow-hidden rounded-lg">
-                    <header className={sectionHead}>
-                        <h2 className="text-[13.5px] font-bold text-[var(--text-primary)]">Prop firmy</h2>
-                        <span className="text-xs text-[var(--text-muted)]">klikni pro detail</span>
-                    </header>
-                    {firms.length === 0 ? <p className="px-4 py-6 text-center text-xs text-[var(--text-secondary)]">Zatím žádné náklady ani výplaty.</p> : (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-[12.5px] [&_tbody_tr:last-child_td]:border-b-0">
-                                <thead><tr>
-                                    <th className={th}>Firma</th>
-                                    <th className={`${th} text-right`}>Náklady</th>
-                                    <th className={`${th} text-right`}>Výplaty</th>
-                                    <th className={`${th} text-right`}>Čistě</th>
-                                    <th className={`${th} w-8`}><span className="sr-only">Detail</span></th>
-                                </tr></thead>
-                                <tbody>
-                                    {firms.map(f => (
+            <section className="theme-card min-w-0 overflow-hidden rounded-lg">
+                <header className={sectionHead}>
+                    <h2 className="text-[13.5px] font-bold text-[var(--text-primary)]">Prop firmy</h2>
+                    <span className="text-xs text-[var(--text-muted)]">peníze z nákladů a výplat, počty a životnost z účtů · klikni pro detail</span>
+                </header>
+                {firms.length === 0 ? <p className="px-4 py-6 text-center text-xs text-[var(--text-secondary)]">Zatím žádné náklady ani výplaty.</p> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-[12.5px] [&_tbody_tr:last-child_td]:border-b-0">
+                            <thead><tr>
+                                <th className={th}>Firma</th>
+                                <th className={`${th} text-right`} title="Účty z nákupů v nákladech">Koupeno</th>
+                                <th className={`${th} text-right`}>Náklady</th>
+                                <th className={`${th} text-right`}>Ø za účet</th>
+                                <th className={`${th} text-right`}>Živé</th>
+                                <th className={`${th} text-right`}>Spálené</th>
+                                <th className={`${th} text-right`}>Prošlé</th>
+                                <th className={`${th} text-right`} title="Od prvního obchodu do konce účtu, jen ukončené účty">Ø životnost</th>
+                                <th className={`${th} text-right`}>Výplaty</th>
+                                <th className={`${th} text-right`}>Čistě</th>
+                                <th className={`${th} text-right`} title="Výplaty ÷ náklady">Návratnost</th>
+                                <th className={`${th} text-right`} title="Náklady ÷ počet výplat">Cena 1 výplaty</th>
+                                <th className={`${th} w-8`}><span className="sr-only">Detail</span></th>
+                            </tr></thead>
+                            <tbody>
+                                {firms.map(f => {
+                                    const life = firmLife.get(f.key);
+                                    const muted = <span className="text-[var(--text-muted)]">—</span>;
+                                    return (
                                         <tr key={f.key} onClick={() => setFirmDetail(f.key)} className="cursor-pointer hover:bg-[var(--bg-page)]/60">
-                                            <td className={td}><span className="inline-flex items-center gap-2 font-semibold text-[var(--text-primary)]"><FirmMark firm={f.key} size={20} />{firmDisplayName(f.key)}</span></td>
+                                            <td className={td}>
+                                                <span className="inline-flex items-center gap-2 font-semibold text-[var(--text-primary)]"><FirmMark firm={f.key} size={20} />{firmDisplayName(f.key)}</span>
+                                                {life?.bought && !life.inApp ? <span className="block pl-7 text-[10.5px] text-[var(--text-muted)]">účty před napojením Tradovate</span> : null}
+                                            </td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{life?.bought || muted}</td>
                                             <td className={`${td} text-right font-mono text-xs tabular-nums`}>{formatValue(f.cost)}</td>
-                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{f.paid ? formatValue(f.paid) : <span className="text-[var(--text-muted)]">—</span>}</td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{life?.bought ? formatValue(f.cost / life.bought) : muted}</td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums ${life?.alive ? 'font-bold text-emerald-500' : ''}`}>{life?.alive || muted}</td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{life?.burned || muted}</td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{life?.passed || muted}</td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{life?.avgLifeDays != null ? `${life.avgLifeDays} ${plural(life.avgLifeDays, 'den', 'dny', 'dní')}` : muted}</td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{f.paid ? formatValue(f.paid) : muted}</td>
                                             <td className={`${td} text-right font-mono text-xs font-bold tabular-nums ${f.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{signed(f.net)}</td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{f.cost > 0 ? `${(f.paid / f.cost).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })}×` : muted}</td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{f.payouts > 0 ? formatValue(f.cost / f.payouts) : <span className="text-[var(--text-muted)]">bez výplaty</span>}</td>
                                             <td className={`${td} text-[var(--text-muted)]`}><ChevronRight size={14} /></td>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
-                </section>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </section>
 
+            <div className="grid gap-3">
                 <section className="theme-card min-w-0 overflow-hidden rounded-lg">
                     <header className={sectionHead}>
                         <h2 className="text-[13.5px] font-bold text-[var(--text-primary)]">Výplaty</h2>
@@ -322,7 +349,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                         {sortedPayouts.length === 0 ? (
                             <p className="px-4 py-6 text-center text-xs text-[var(--text-secondary)]">Zatím žádná výplata.</p>
                         ) : payoutView === 'gallery' ? (
-                            <div className="grid grid-cols-2 gap-2 p-3.5 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3">{sortedPayouts.map(p => payoutTile(p))}</div>
+                            <div className="grid grid-cols-2 gap-2 p-3.5 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">{sortedPayouts.map(p => payoutTile(p))}</div>
                         ) : (
                             <table className="w-full text-[12.5px] [&_tbody_tr:last-child_td]:border-b-0">
                                 <thead className="sticky top-0 z-[1] bg-[var(--bg-card)]"><tr>

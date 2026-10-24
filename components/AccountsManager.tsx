@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Account, Trade, BusinessPayout, User, DailyReview } from '../types';
+import { Account, Trade, BusinessPayout, BusinessExpense, User, DailyReview } from '../types';
 import {
   Activity,
   Plus,
@@ -42,6 +42,8 @@ import { buildAccountCockpitModel, sortAccountsRiskFirst, summarizeAccountCockpi
 import { funeralAccountScope, planMultiAccountFuneral } from '../lib/accountFuneralPlan';
 import FirmPayoutRulesDialog from './FirmPayoutRulesDialog';
 import TradovateAccountOnboarding from './TradovateAccountOnboarding';
+import AccountHistory from './AccountHistory';
+import { accountLifecycles, pairAccountsWithPurchases } from '../lib/accountPurchases';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -62,6 +64,10 @@ interface AccountsManagerProps {
   tradovateProfiles?: TradovateAccountProfile[];
   tradovateConnectionData?: Record<string, TradovatePreflightResult>;
   onTradovateProfilesChanged?: (profiles: TradovateAccountProfile[]) => void;
+  /** Všechny účty včetně archivovaných — pro Historii (App předává `accounts` bez archivu). */
+  historyAccounts?: Account[];
+  /** Náklady z Byznysu; cena účtu se z nich dopočítá, nezadává se. */
+  expenses?: BusinessExpense[];
 }
 
 const formatOAuthLastSeen = (value: string | null | undefined) => {
@@ -202,6 +208,8 @@ const FirmSelect: React.FC<{
 };
 
 const AccountsManager: React.FC<AccountsManagerProps> = ({
+  historyAccounts,
+  expenses = [],
   accounts,
   activeAccountId,
   setActiveAccountId,
@@ -344,10 +352,21 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     };
   }, [accounts, trades, payouts, financialAdjustments]);
 
+  // Historie: všechny účty i z archivu; nákupy se párují s náklady v Byznysu.
+  const allAccounts = useMemo(() => {
+    const byId = new Map<string, Account>();
+    for (const account of [...(historyAccounts ?? []), ...accounts]) byId.set(account.id, account);
+    return [...byId.values()];
+  }, [accounts, historyAccounts]);
+  const historyCount = useMemo(() => [...accountLifecycles(allAccounts, [], []).values()]
+    .filter(life => life.outcome !== 'alive' && life.outcome !== 'hidden').length, [allAccounts]);
+  const purchaseByAccount = useMemo(() => pairAccountsWithPurchases(allAccounts, expenses).byAccount, [allAccounts, expenses]);
+  const [graveyardOpen, setGraveyardOpen] = useState(false);
+
   // Spálené účty (result Failed) — zobrazí se v Hřbitově, ne v běžném gridu
   const failedAccounts = useMemo(
-    () => accounts.filter(a => a.status === 'Inactive' && a.result === 'Failed'),
-    [accounts]
+    () => allAccounts.filter(a => a.status === 'Inactive' && a.result === 'Failed'),
+    [allAccounts]
   );
 
   // P&L per účet předpočítaný jednou (firm agregace by jinak filtrovala trades v cyklu)
@@ -472,7 +491,8 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       id: crypto.randomUUID(),
       name: newAccount.name!,
       initialBalance: Number(newAccount.initialBalance),
-      challengeCost: Number(newAccount.challengeCost) || 0,
+      // Cena patří do nákladů v Byznysu (níže), u účtu se neukládá.
+      challengeCost: 0,
       totalWithdrawals: 0,
       totalGrossWithdrawals: 0,
       profitSplit: Number(newAccount.profitSplit) || 90,
@@ -489,12 +509,15 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     };
     onUpdate([...accounts, account]);
 
-    if (account.challengeCost > 0 && onAddExpense) {
+    const purchaseCost = Number(newAccount.challengeCost) || 0;
+    if (purchaseCost > 0 && onAddExpense) {
+      // „1× Firma …“: párování nákupů pak účet pozná podle firmy a počtu.
+      const firmName = newAccount.firmOverride ? `${newAccount.firmOverride} ` : '';
       onAddExpense({
         id: `exp_${Date.now()}`,
         date: new Date().toISOString().split('T')[0],
-        label: `Nákup účtu: ${account.name}`,
-        amount: account.challengeCost,
+        label: `1× ${firmName}${account.name}`,
+        amount: purchaseCost,
         category: 'Challenges'
       });
     }
@@ -901,7 +924,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       <div className="flex justify-between items-center">
         <div className="flex gap-2">
           <button onClick={() => setShowInactive(false)} className={`px-5 py-2 rounded-xl text-[11px] font-semibold transition-all ${!showInactive ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Aktivní ({portfolioStats.activeCount})</button>
-          <button onClick={() => setShowInactive(true)} className={`px-5 py-2 rounded-xl text-[11px] font-semibold transition-all ${showInactive ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Archiv ({portfolioStats.inactiveCount})</button>
+          <button onClick={() => setShowInactive(true)} className={`px-5 py-2 rounded-xl text-[11px] font-semibold transition-all ${showInactive ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Historie ({historyCount})</button>
         </div>
         {!isAdding && !showInactive && <button onClick={() => setIsAdding(true)} className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-semibold text-[11px] shadow-lg shadow-blue-600/20 active:scale-95 transition-all"><Plus size={16} /> Vložit Kapitál</button>}
       </div>
@@ -940,7 +963,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                   <FirmSelect value={newAccount.firmOverride} onChange={v => setNewAccount({ ...newAccount, firmOverride: v })} isDark={theme !== 'light'} placeholder="Vyber firmu" />
                 </div>
                 <div className="space-y-1.5"><label className="text-[11px] font-semibold text-slate-500">Fáze</label><select value={newAccount.phase} onChange={e => setNewAccount({ ...newAccount, phase: e.target.value as any })} className={inputClass}><option value="Challenge">Challenge</option><option value="Funded">Funded</option></select></div>
-                <div className="space-y-1.5"><label className="text-[11px] font-semibold text-rose-500">Cena Pořízení ($)</label><input type="number" value={newAccount.challengeCost} onChange={e => setNewAccount({ ...newAccount, challengeCost: Number(e.target.value) })} className={`${inputClass} border-rose-500/20`} /></div>
+                <div className="space-y-1.5"><label className="text-[11px] font-semibold text-rose-500" title="Zapíše se jako náklad v Byznysu, u účtu se neukládá">Nákup ($) → náklad v Byznysu</label><input type="number" value={newAccount.challengeCost} onChange={e => setNewAccount({ ...newAccount, challengeCost: Number(e.target.value) })} className={`${inputClass} border-rose-500/20`} /></div>
                 <div className="space-y-1.5"><label className="text-[11px] font-semibold text-emerald-500">Profit Split (%)</label><input type="number" value={newAccount.profitSplit} onChange={e => setNewAccount({ ...newAccount, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
                 <div className="space-y-1.5"><label className="text-[11px] font-semibold text-blue-500">Profit Cíl (%)</label><input type="number" value={newAccount.profitTarget} onChange={e => setNewAccount({ ...newAccount, profitTarget: Number(e.target.value) })} className={inputClass} placeholder="napr. 6" /></div>
               </>
@@ -950,12 +973,37 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         </div>
       )}
 
-      {showInactive && failedAccounts.length > 0 && (
-        <Graveyard accounts={failedAccounts} allAccounts={accounts} trades={trades} theme={theme} />
+      {showInactive && (
+        <>
+          <AccountHistory
+            accounts={allAccounts}
+            trades={trades}
+            payouts={payouts}
+            expenses={expenses}
+            onOpenAccount={onOpenInDashboard}
+          />
+          {failedAccounts.length > 0 && (
+            <section className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)]">
+              <button
+                type="button"
+                onClick={() => setGraveyardOpen(open => !open)}
+                aria-expanded={graveyardOpen}
+                className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-bold text-[var(--text-primary)]"
+              >
+                <Skull size={15} className="text-rose-500" />
+                Hřbitov a lekce
+                <span className="text-xs font-semibold text-[var(--text-muted)]">{failedAccounts.length} pohřbených · příčiny, lekce, porovnání</span>
+                <ChevronDown size={15} className={`ml-auto text-[var(--text-muted)] transition-transform ${graveyardOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {/* Kreslí se až po otevření: desítky náhrobků s grafy by jinak zdržely celou záložku. */}
+              {graveyardOpen && <div className="border-t border-[var(--border-subtle)] p-4"><Graveyard accounts={failedAccounts} allAccounts={allAccounts} trades={trades} theme={theme} /></div>}
+            </section>
+          )}
+        </>
       )}
 
-      {/* Sekce po firmách: hlavička s agregáty + byznys řádkem, pod ní karty účtů */}
-      <div className="space-y-5">
+      {/* Sekce po firmách: hlavička s agregáty, pod ní karty účtů (jen Aktivní) */}
+      {!showInactive && <div className="space-y-5">
         {firmGroups.map(g => {
           const collapsed = collapsedFirms.has(g.firm);
           const canBuryFirm = !showInactive && g.visible.some(a => a.type !== 'Backtest');
@@ -1009,18 +1057,6 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                     )}
                   </div>
                 </div>
-                {/* Byznys řádek — lifetime přes všechny účty firmy (i pohřbené) */}
-                <div className="mt-2 pl-8 flex items-center gap-x-4 gap-y-1 flex-wrap text-[11px] font-semibold text-slate-500">
-                  <span>Koupeno <span className="text-slate-300">{g.bought} účtů</span></span>
-                  <span className="opacity-30">·</span>
-                  <span>Zaplaceno <span className="text-rose-500 font-mono">−${g.paid.toLocaleString()}</span></span>
-                  <span className="opacity-30">·</span>
-                  <span>Payouty <span className="text-emerald-500 font-mono">+${g.received.toLocaleString()}</span>{g.pending > 0 && <span className="text-amber-500 font-mono"> (+${g.pending.toLocaleString()} čeká)</span>}</span>
-                  <span className="opacity-30">·</span>
-                  <span className={`px-2 py-0.5 rounded-md border font-mono ${g.net >= 0 ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400' : 'bg-rose-500/10 border-rose-500/25 text-rose-400'}`}>
-                    Čistě {g.net >= 0 ? '+' : '−'}${Math.abs(g.net).toLocaleString()}
-                  </span>
-                </div>
               </button>
               {!collapsed && (
                 <div className="px-5 pb-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
@@ -1030,7 +1066,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             </section>
           );
         })}
-      </div>
+      </div>}
 
       <PayoutModal isOpen={!!payoutTargetAccountId} onClose={() => setPayoutTargetAccountId(null)} onSave={handleSavePayout} accounts={accounts} initialAccountId={payoutTargetAccountId || undefined} theme={theme} user={user} />
 
@@ -1067,7 +1103,16 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             <div className="grid grid-cols-2 gap-6 mb-8">
               <div className="space-y-2"><label className="text-[11px] font-semibold text-slate-500">Název účtu</label><input type="text" value={editFormData.name || ''} onChange={e => setEditFormData({ ...editFormData, name: e.target.value })} className={inputClass} /></div>
               <div className="space-y-2"><label className="text-[11px] font-semibold text-slate-500">Počáteční Balance</label><input type="number" value={editFormData.initialBalance || ''} onChange={e => setEditFormData({ ...editFormData, initialBalance: Number(e.target.value) })} className={inputClass} /></div>
-              <div className="space-y-2"><label className="text-[11px] font-semibold text-slate-500">Cena Pořízení</label><input type="number" value={editFormData.challengeCost || 0} onChange={e => setEditFormData({ ...editFormData, challengeCost: Number(e.target.value) })} className={inputClass} /></div>
+              <div className="space-y-2">
+                <label className="text-[11px] font-semibold text-slate-500">Nákup</label>
+                {/* Cena se nezadává u účtu: bere se z nákladů v Byznysu, ať nejsou dva zdroje. */}
+                {(() => {
+                  const purchase = editingAccount ? purchaseByAccount.get(editingAccount.id) : undefined;
+                  return <p className="flex min-h-[42px] items-center rounded-xl border border-[var(--border-subtle)] px-3 text-xs text-[var(--text-secondary)]">
+                    {purchase ? `$${purchase.price.toLocaleString('en-US')} · ${purchase.label} (${new Date(`${purchase.date}T12:00:00`).toLocaleDateString('cs-CZ')})${purchase.sure ? '' : ' · návrh'}` : 'Z nákladů v Byznysu (nespárováno)'}
+                  </p>;
+                })()}
+              </div>
               <div className="space-y-2"><label className="text-[11px] font-semibold text-slate-500">Profit Split (%)</label><input type="number" value={editFormData.profitSplit || 90} onChange={e => setEditFormData({ ...editFormData, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
               <div className="space-y-2"><label className="text-[11px] font-semibold text-blue-500">Profit Cíl (%)</label><input type="number" value={editFormData.profitTarget ?? 10} onChange={e => setEditFormData({ ...editFormData, profitTarget: Number(e.target.value) })} className={inputClass} /></div>
               <div className="space-y-2">
