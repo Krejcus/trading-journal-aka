@@ -3271,18 +3271,22 @@ const App: React.FC = () => {
     // jinak by individual mód mohl vybrat účet mimo aktuální mód (challenge/funded/...).
     const scopeIds = filters.accounts.length > 0 ? new Set(filters.accounts) : null;
     const inScope = (a: Account) => !scopeIds || scopeIds.has(a.id);
+    // Archivované účty (isArchived) v `accounts` nejsou; bez nich by účet otevřený
+    // z Historie spadl na fallback a dashboard ukázal obchody jiného účtu.
+    const known = new Set(accounts.map(a => a.id));
+    const pool = [...accounts, ...contextAccounts.filter(a => !known.has(a.id))];
 
     // 1. Globálně zvolený aktivní účet, pokud je platný a ve scope
     if (activeAccountId) {
-      const a = accounts.find(x => x.id === activeAccountId);
+      const a = pool.find(x => x.id === activeAccountId);
       if (a && inScope(a)) return a;
     }
 
     // 2. První účet ve scope, který má obchody (vlastní nebo na svých kopiích)
-    const scopeAccounts = accounts.filter(inScope);
+    const scopeAccounts = pool.filter(inScope);
     const hasTrades = (a: Account) =>
       trades.some(t => t.accountId === a.id) ||
-      accounts.some(c => c.parentAccountId === a.id && trades.some(t => t.accountId === c.id));
+      pool.some(c => c.parentAccountId === a.id && trades.some(t => t.accountId === c.id));
     const withTrades = scopeAccounts.find(hasTrades);
     if (withTrades) return withTrades;
 

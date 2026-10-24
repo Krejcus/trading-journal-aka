@@ -149,7 +149,7 @@ export default function AccountHistory({ accounts, trades, payouts, expenses, on
           Zobrazit dalších {Math.min(PAGE, rows.length - shown)} · zbývá {rows.length - shown}
         </button>
       ) : null}
-      <p className="border-t border-[var(--border-subtle)] px-3 py-2 text-[10.5px] text-[var(--text-muted)]">Nákup a výplaty jsou z Byznysu, tady jen ke čtení. Kliknutím otevřeš účet v dashboardu.</p>
+      <p className="border-t border-[var(--border-subtle)] px-3 py-2 text-[10.5px] text-[var(--text-muted)]">Nákup a výplaty jsou z Byznysu, tady jen ke čtení. Kliknutím otevřeš detail účtu s jeho obchody.</p>
     </section>
   );
 }

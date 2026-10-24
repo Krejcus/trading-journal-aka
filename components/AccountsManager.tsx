@@ -980,7 +980,11 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             trades={trades}
             payouts={payouts}
             expenses={expenses}
-            onOpenAccount={onOpenInDashboard}
+            onOpenAccount={accountId => {
+              // Detail zůstane v Účtech (obchody, equity, statistiky); dashboard až tlačítkem v něm.
+              const account = allAccounts.find(candidate => candidate.id === accountId);
+              if (account) setArchivedDetail(account);
+            }}
           />
           {failedAccounts.length > 0 && (
             <section className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)]">
@@ -1268,7 +1272,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           account={archivedDetail}
           stats={computeStats(archivedDetail, trades)}
           trades={trades.filter(t => t.accountId === archivedDetail.id)}
-          successorName={archivedDetail.successorOfAccountId ? accounts.find(account => account.id === archivedDetail.successorOfAccountId)?.name : undefined}
+          successorName={archivedDetail.successorOfAccountId ? allAccounts.find(account => account.id === archivedDetail.successorOfAccountId)?.name : undefined}
           isDark={theme !== 'light'}
           onClose={() => setArchivedDetail(null)}
           onOpenInDashboard={onOpenInDashboard ? (id) => { setArchivedDetail(null); onOpenInDashboard(id); } : undefined}
