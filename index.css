@@ -5148,3 +5148,19 @@ html:not(.light-theme) .dbe-ph-sheet { background: rgba(13, 18, 36, 0.98); }
 /* Popisek se zkratkou až po chvilce najetí. */
 .sidebar-edge-tab:hover .sidebar-edge-tip,
 .sidebar-edge-tab:focus-visible .sidebar-edge-tip { opacity: 1; transform: translate(0, -50%); transition-delay: 550ms; }
+
+/* KPI grafy na dashboardu: náběh jen přes transform/opacity (běží na compositoru,
+   neseká ani při zatíženém načítání dashboardu); Recharts animace je vypnutá. */
+@keyframes kpi-gauge-in {
+  from { opacity: 0; transform: rotate(-38deg) scale(.86); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes kpi-donut-in {
+  from { opacity: 0; transform: rotate(-150deg) scale(.72); }
+  to { opacity: 1; transform: none; }
+}
+.kpi-gauge-in { transform-origin: 50% 100%; animation: kpi-gauge-in .95s cubic-bezier(.2, .9, .25, 1) both; }
+.kpi-donut-in { transform-origin: 50% 50%; animation: kpi-donut-in 1.05s cubic-bezier(.2, .9, .25, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .kpi-gauge-in, .kpi-donut-in { animation: none; }
+}
