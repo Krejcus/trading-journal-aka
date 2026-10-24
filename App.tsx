@@ -35,6 +35,7 @@ import { lookupBacktestTradeIdentities } from './services/backtestTradeIdentityL
 import { getBacktestRunOwnerId } from './services/backtestRunService';
 import { safeSetItem } from './utils/safeStorage';
 import { isSidebarToggleShortcut, readSidebarHidden, writeSidebarHidden } from './lib/sidebarMode';
+import { readRestoredNavigation, saveNavigation } from './lib/navigationRestore';
 import { businessDataFingerprint, mergePayoutImages, stripPayoutImagesForCache } from './utils/businessPayoutSync';
 import { clearAppStorage } from './utils/appStorage';
 import { reconcileDashboardRows } from './utils/dashboardRefresh';
@@ -1247,7 +1248,9 @@ const App: React.FC = () => {
   const [pendingDeepLink, setPendingDeepLink] = useState<AppDeepLinkIntent | null>(() => (
     appDeepLinkIntentFromSearch(window.location.search)
   ));
-  const [activePage, setActivePage] = useState<string>(() => pendingDeepLink?.page ?? 'dashboard');
+  // Po reloadu (nová verze PWA, nenačtený chunk) zůstane otevřená stránka.
+  const [restoredNavigation] = useState(readRestoredNavigation);
+  const [activePage, setActivePage] = useState<string>(() => pendingDeepLink?.page ?? restoredNavigation?.page ?? 'dashboard');
   // Každé přepnutí stránky začíná nahoře. Obsah všech stránek sdílí jeden
   // posuvný kontejner, takže bez resetu nová stránka zdědila pozici staré
   // (sjel jsi dolů na Dashboardu → Historie se otevřela dole).
@@ -3312,7 +3315,8 @@ const App: React.FC = () => {
 
   const [quickNote, setQuickNote] = useState('');
 
-  const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
+  const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>(() => restoredNavigation?.journalTab ?? 'daily');
+  useEffect(() => { saveNavigation({ page: activePage, journalTab: journalActiveTab }); }, [activePage, journalActiveTab]);
   // Původní deník dne (starší přípravy a hodnocení) — nový pohled dne je výchozí.
   const [legacyDailyJournal, setLegacyDailyJournal] = useState(false);
   // Deník dne bez horní lišty (záložky a filtry na něm nic nedělají).

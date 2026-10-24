@@ -11,6 +11,7 @@ import NativePrivacyGate from './components/NativePrivacyGate';
 const DrawingMigrationPrompt = React.lazy(() => import('./components/DrawingMigrationPrompt'));
 import { parseSnapshotRenderParams } from './lib/snapshotRender';
 import { perfMark, startJankMonitor } from './lib/perfTrace';
+import { shouldReloadForStaleChunk } from './lib/navigationRestore';
 perfMark('boot:js-eval');
 startJankMonitor();
 
@@ -53,6 +54,14 @@ if ((navigator as any).userAgentData?.brands?.some((b: any) => /Chromium/i.test(
   document.documentElement.classList.add('backdrop-svg-ok');
 }
 
+// Po deployi chybí staré lazy chunky (Vercel servíruje jen nový build): jeden
+// reload načte novou verzi a otevřená stránka zůstane (sessionStorage).
+window.addEventListener('vite:preloadError', (event) => {
+  if (!shouldReloadForStaleChunk(Date.now())) return;
+  event.preventDefault();
+  window.location.reload();
+});
+
 // State for update banner
 let showUpdateBanner = false;
 let updateSWCallback: ((reloadPage?: boolean) => Promise<void>) | null = null;
@@ -78,6 +87,14 @@ if (snapshotRenderParams) {
       console.log('[PWA] Service Worker registered:', swUrl);
       if (registration) {
         registration.update();
+        // Po návratu k panelu (po delší době) hned zkontrolovat novou verzi —
+        // případný reload proběhne hned, ne až po pár kliknutích. Otevřená
+        // stránka reload přežije (lib/navigationRestore).
+        let hiddenAt = 0;
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+          if (hiddenAt && Date.now() - hiddenAt > 5 * 60_000) void registration.update().catch(() => {});
+        });
       }
     }
   });
