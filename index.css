@@ -5152,3 +5152,7 @@ html:not(.light-theme) .dbe-ph-sheet { background: rgba(13, 18, 36, 0.98); }
 
 /* Dashboard: první okamžik po otevření bez přechodů widgetů (žádné „roztažení“). */
 .dbe-grid-settling > .react-grid-item { transition: none !important; }
+
+/* Start appky: prvky čekají na svůj náběh skryté (jen průhledností, bez posunu —
+   BootTransition tak změří přesný cíl loga v liště). */
+html.boot-pre [data-boot] { opacity: 0; }

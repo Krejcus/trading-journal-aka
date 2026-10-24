@@ -34,21 +34,18 @@ export const QuantumSpinner: React.FC<{ size?: number; className?: string }> = (
     );
 };
 
-const QuantumLoader: React.FC<QuantumLoaderProps> = ({ theme = 'dark' }) => {
-    const isLight = theme === 'light';
-
-    return (
-        <div className={`min-h-screen w-screen ${isLight ? 'bg-white' : 'bg-black'} flex items-center justify-center font-sans`}>
-            <div className="relative w-32 h-32 animate-pulse">
-                <img
-                    src="/logos/at_logo_light_clean.png"
-                    alt="Loading..."
-                    className="w-full h-full object-contain animate-spin"
-                    style={{ animationDuration: '2s' }}
-                />
-            </div>
-        </div>
-    );
-};
+/**
+ * Načítání při startu appky: točící se logo na pozadí aktuálního režimu
+ * (světlý / tmavý / OLED podle `--bg-page`, které nastaví už index.html).
+ * Logo běží na hodinách dokumentu (QuantumSpinner), takže přechod do appky
+ * (BootTransition) navazuje ve stejné fázi otáčení.
+ */
+const QuantumLoader: React.FC<QuantumLoaderProps> = ({ text }) => (
+    <div className="relative min-h-screen w-screen flex items-center justify-center font-sans" style={{ background: 'var(--bg-page)' }}>
+        <QuantumSpinner size={128} />
+        {/* Text pod logem absolutně — logo zůstane přesně uprostřed jako v přechodu do appky. */}
+        {text && <p className="absolute left-0 right-0 text-center text-[12px] font-semibold tracking-wide" style={{ top: 'calc(50% + 86px)', color: 'var(--text-muted)' }}>{text}</p>}
+    </div>
+);
 
 export default QuantumLoader;
