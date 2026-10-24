@@ -61,3 +61,6 @@ export const sameShape = (a: NumericParts, b: NumericParts) =>
 
 /** Rychlý start, měkké doběhnutí. */
 export const easeOutCubic = (t: number) => 1 - (1 - Math.min(1, Math.max(0, t))) ** 3;
+
+/** Rychlý rozjezd a dlouhé měkké doběhnutí (číslo „dosedne“). */
+export const easeOutExpo = (t: number) => { const x = Math.min(1, Math.max(0, t)); return x >= 1 ? 1 : 1 - 2 ** (-10 * x); };

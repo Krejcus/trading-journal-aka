@@ -1,7 +1,7 @@
 import { withoutRetiredWidgets } from '../lib/retiredDashboardWidgets';
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import CountUpNumber from './CountUpNumber';
+import CountUpNumber, { KpiChartEntrance } from './CountUpNumber';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, DashboardLayouts, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout, EquityPoint } from '../types';
 import { formatPnL, formatTradePnL, formatCurrency } from '../utils/formatPnL';
@@ -1034,7 +1034,7 @@ const ProKpiCard: React.FC<{
           <span className="text-2xl font-bold tracking-tight tabular-nums leading-none mb-1">
             <CountUpNumber text={displayValue} />
           </span>
-          <div className="kpi-gauge-in h-16 w-full max-w-[140px] min-w-[1px] min-h-[1px] relative">
+          <KpiChartEntrance variant="gauge" className="h-16 w-full max-w-[140px] min-w-[1px] min-h-[1px] relative">
             <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <PieChart {...({ overflow: 'visible' } as any)}>
                 <defs>
@@ -1065,7 +1065,7 @@ const ProKpiCard: React.FC<{
                 </Pie>
               </PieChart>
             </ResponsiveContainer>
-          </div>
+          </KpiChartEntrance>
           <div className="flex gap-3 mt-1.5">
             {data.wins !== undefined && (
               <SmartTooltip text={`Vítězné ${unit.toLowerCase()}`} subtext={`${data.wins} ${unit}`} color={COLORS.profit} theme={theme}>
@@ -1106,7 +1106,7 @@ const ProKpiCard: React.FC<{
       return (
         <div className="flex flex-col items-center">
           <div className="h-16 w-16 lg:h-20 lg:w-20 min-w-[1px] min-h-[1px] cursor-pointer relative">
-            <div className="kpi-donut-in absolute inset-0">
+            <KpiChartEntrance variant="donut" className="absolute inset-0">
             <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <PieChart {...({ overflow: 'visible' } as any)}>
                 <defs>
@@ -1135,7 +1135,7 @@ const ProKpiCard: React.FC<{
                 </Pie>
               </PieChart>
             </ResponsiveContainer>
-            </div>
+            </KpiChartEntrance>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <span className="text-[13px] font-bold tracking-tight tabular-nums text-[var(--text-primary)]"><CountUpNumber text={displayValue} /></span>
             </div>
