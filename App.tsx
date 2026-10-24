@@ -437,6 +437,17 @@ const sanitizeLayouts = (raw: Record<string, DashboardWidgetConfig[]>, defaultLg
   return result;
 };
 
+const DASHBOARD_MODES: readonly DashboardMode[] = ['funded', 'challenge', 'combined', 'archive', 'backtesting'];
+/** Místně uložený režim dashboardu (jen platná hodnota). */
+function readLocalDashboardMode(): DashboardMode | null {
+  try {
+    const saved = localStorage.getItem('alphatrade_dash_mode');
+    return saved && (DASHBOARD_MODES as readonly string[]).includes(saved) ? saved as DashboardMode : null;
+  } catch {
+    return null;
+  }
+}
+
 // --- Per-mód layouty (funded/challenge/combined zvlášť; archive sdílí combined) ---
 const EMPTY_LAYOUTS: DashboardLayouts = {};
 const liveLayoutKey = (m: DashboardMode): string =>
@@ -965,11 +976,7 @@ const App: React.FC = () => {
   // Layout zvlášť pro každý live mód (funded/challenge/combined). Init `{}` ne default — viz pozn. níže.
   const [liveLayoutsByMode, setLiveLayoutsByMode] = useState<Record<string, DashboardLayouts>>({});
   const [backtestDashboardLayouts, setBacktestDashboardLayouts] = useState<DashboardLayouts>(DEFAULT_BACKTEST_LAYOUTS);
-  const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => {
-    // Try to load from local storage first for immediate persistence
-    const saved = localStorage.getItem('alphatrade_dash_mode');
-    return (saved as DashboardMode) || 'combined';
-  });
+  const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => readLocalDashboardMode() ?? 'combined');
 
   useEffect(() => {
     safeSetItem('alphatrade_dash_mode', dashboardMode);
@@ -2030,7 +2037,11 @@ const App: React.FC = () => {
     // Theme is NOT applied here — it has its own persistence via localStorage
     // to prevent cross-tab sync or focus sync from reverting user's theme choice.
     // Theme is applied only on initial load (useState initializer).
-    if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
+    // Režim (Funded / Challenge / Vše) je volba tohoto zařízení jako téma: uložená
+    // místní volba má přednost. Hodnota z DB se použije jen bez ní (nové zařízení,
+    // po odhlášení) — jinak starší DB hodnota (neuložená změna při výpadku DB,
+    // jiné zařízení) po reloadu přepnula filtr zpátky na „Vše“.
+    if (prefs.dashboardMode && !readLocalDashboardMode()) setDashboardMode(prefs.dashboardMode);
     // Vzhled se na rozdíl od tématu synchronizuje mezi zařízeními (uživatel to tak chce).
     if (prefs.appearance) setAppearance(normalizeAppearance(prefs.appearance));
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
