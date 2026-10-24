@@ -262,6 +262,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-24 — Účty: hromadný úklid, review záložky Účty (Claude)
+- Filip: platí jen 5 připojených Lucid účtů (LFE05066846490037–41), vše ostatní
+  je spálené. Zapsáno přímo v produkční DB jednou transakcí, záloha všech 95
+  dotčených řádků (`id, status, meta`) v `~/alphatrade-build/accounts-backup-20261024.json`.
+- 72 účtů → hřbitov (`result Failed`, `isArchived`, `failureGroupId
+  cleanup-2026-10-24`, `failureDate` = poslední obchod/zůstatek); 13 challenge
+  s koncem ≥ +3 000 USD → `Passed`; 10 testovacích/prázdných („Hlavní účet“,
+  Master/Slave, snjkl, 233) jen skryto (`isArchived`, bez výsledku). Nic smazáno.
+- Review (návrh, nestaví se zatím): broker profil hlásí `active` i u spálených
+  účtů a nic neaplikuje breach automaticky; ceny účtů jen ručně (70/88 bez
+  ceny), `challengeCost` vs `business_expenses` dva zdroje; Archiv po reloadu
+  nevidí `isArchived` účty (App předává jen nearchivované); snímky zůstatků
+  omezené 5 000 řádky (~11 dní z 35). Náhled nové záložky (živé účty, byznys po
+  firmách, historie) v `mockups/accounts-redesign.html` — čeká na Filipa.
+
 ### 2026-10-22 — Deník: restart TradingView od čipu „TV stojí“ (Claude)
 - Příčina „TV stojí / nenačítá svíčky“ 22. 10.: TradingView spuštěné bez CDP (běžné spuštění z Docku ve 20:43) → worker
   nečte 1m svíčky; dnešek jde jen z tohoto čtení (Databento ~24 h zpoždění).
