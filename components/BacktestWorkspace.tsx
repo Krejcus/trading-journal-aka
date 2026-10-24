@@ -1158,12 +1158,22 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
     </div>
   );
   const typeLabels: Record<BacktestOrderType, string> = { market: 'Mkt', limit: 'Lmt', stop: 'Stp' };
+  // Zadání příkazu: pole se štítkem uvnitř jednoho rámečku (jako ticket v platformě).
+  const group = `flex h-7 items-center overflow-hidden rounded-md border transition-colors focus-within:border-blue-500/70 ${isDark
+    ? 'border-white/10 bg-white/[0.04] hover:border-white/20'
+    : 'border-slate-200 bg-slate-50 hover:border-slate-300'}`;
+  const bare = `h-full bg-transparent px-1.5 text-[11px] tabular-nums outline-none ${isDark ? 'text-white placeholder:text-slate-600' : 'text-slate-900 placeholder:text-slate-400'}`;
+  const prefix = `flex h-full items-center pl-2 pr-0.5 text-[9.5px] font-black tracking-wide`;
+  const stepButton = `flex h-full w-6 items-center justify-center text-[13px] font-bold transition-colors disabled:opacity-30 ${isDark ? 'text-slate-400 hover:bg-white/[0.07] hover:text-white' : 'text-slate-500 hover:bg-slate-200 hover:text-slate-900'}`;
+  const sideButton = 'flex h-7 min-w-[92px] items-center justify-center gap-1.5 rounded-md px-2.5 text-[11px] font-black uppercase tracking-wide text-white transition hover:brightness-110 active:translate-y-px active:brightness-95 disabled:opacity-40';
+  // Market se plní za poslední cenu; limit/stop za zadanou.
+  const ticketPrice = type === 'market' ? priceText(candle?.close) : num(price) !== undefined ? priceText(num(price)) : '—';
   return (
     // Jeden řádek (44 px) — víc místa pro graf. Pořadí: zadání příkazu → účet → pozice → čekající příkazy.
     <div className="relative flex h-full items-center gap-3 px-3 text-[11px]">
       {orderError && <span role="alert" className="pointer-events-none absolute bottom-full left-3 mb-1.5 rounded-md bg-rose-600 px-2 py-1 text-[10.5px] font-bold text-white shadow-lg">{orderError}</span>}
       <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:thin]">
-      <div className={`flex shrink-0 items-center rounded-md p-0.5 ${isDark ? 'bg-white/[0.05]' : 'bg-slate-100'}`} role="radiogroup" aria-label="Typ objednávky">
+      <div className={`flex shrink-0 items-center rounded-lg p-0.5 ${isDark ? 'bg-white/[0.05] ring-1 ring-inset ring-white/[0.06]' : 'bg-slate-100 ring-1 ring-inset ring-slate-200'}`} role="radiogroup" aria-label="Typ objednávky">
         {(['market', 'limit', 'stop'] as const).map(option => (
           <button
             key={option}
@@ -1172,21 +1182,44 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
             aria-checked={type === option}
             onClick={() => setType(option)}
             title={option === 'market' ? 'Market' : option === 'limit' ? 'Limit' : 'Stop'}
-            className={`h-6 rounded px-2 text-[10.5px] font-bold transition-colors ${type === option
-              ? isDark ? 'bg-white/15 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-500 hover:text-slate-300'}`}
+            className={`h-6 rounded-md px-2.5 text-[10.5px] font-bold transition-colors ${type === option
+              ? isDark ? 'bg-white/[0.14] text-white shadow-[0_1px_2px_rgba(0,0,0,.35)]' : 'bg-white text-slate-900 shadow-sm'
+              : isDark ? 'text-slate-500 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
           >{typeLabels[option]}</button>
         ))}
       </div>
+      {/* Počet kontraktů: − / číslo / + v jednom poli. */}
+      <div className={`${group} shrink-0`} title="Počet kontraktů — použije se i pro objednávku z pravého kliku do grafu">
+        <button type="button" onClick={() => onQuantityChange(Math.max(1, quantity - 1))} disabled={quantity <= 1} className={stepButton} aria-label="Ubrat kontrakt">−</button>
+        <input type="number" min={1} value={quantity} onChange={event => onQuantityChange(Math.max(1, Number(event.target.value) || 1))} className={`${bare} w-8 text-center font-bold [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`} aria-label="Počet kontraktů" />
+        <button type="button" onClick={() => onQuantityChange(quantity + 1)} className={stepButton} aria-label="Přidat kontrakt">+</button>
+      </div>
+      {type !== 'market' && (
+        <label className={`${group} shrink-0`}>
+          <span className={`${prefix} text-blue-400`}>@</span>
+          <input type="number" step="0.25" value={price} onChange={event => setPrice(event.target.value)} placeholder={type === 'limit' ? 'Limit' : 'Stop'} aria-label="Cena objednávky" className={`${bare} w-[76px]`} />
+        </label>
+      )}
+      {/* Bracket: SL a TP jako jedna skupina s barevným štítkem. */}
       <div className="flex shrink-0 items-center gap-1">
-        <input type="number" min={1} value={quantity} onChange={event => onQuantityChange(Math.max(1, Number(event.target.value)))} className={`${field} w-12 text-center`} title="Počet kontraktů — použije se i pro objednávku z pravého kliku do grafu" aria-label="Počet kontraktů" />
-        {type !== 'market' && <input type="number" step="0.25" value={price} onChange={event => setPrice(event.target.value)} placeholder="Cena" aria-label="Cena objednávky" className={`${field} w-[84px]`} />}
-        <input type="number" step="0.25" value={stopLoss} onChange={event => setStopLoss(event.target.value)} placeholder="SL" aria-label="Stop loss" className={`${field} w-[76px]`} />
-        <input type="number" step="0.25" value={takeProfit} onChange={event => setTakeProfit(event.target.value)} placeholder="TP" aria-label="Take profit" className={`${field} w-[76px]`} />
+        <label className={group}>
+          <span className={`${prefix} text-rose-400`}>SL</span>
+          <input type="number" step="0.25" value={stopLoss} onChange={event => setStopLoss(event.target.value)} placeholder="—" aria-label="Stop loss" className={`${bare} w-[72px]`} />
+        </label>
+        <label className={group}>
+          <span className={`${prefix} text-emerald-400`}>TP</span>
+          <input type="number" step="0.25" value={takeProfit} onChange={event => setTakeProfit(event.target.value)} placeholder="—" aria-label="Take profit" className={`${bare} w-[72px]`} />
+        </label>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <button type="button" onClick={() => submit('buy')} disabled={!candle} className="h-7 min-w-[68px] rounded-md bg-gradient-to-b from-emerald-500 to-emerald-600 px-3 text-[11px] font-black tracking-wide text-white shadow-[0_1px_0_rgba(255,255,255,.18)_inset] transition hover:brightness-110 active:brightness-95 disabled:opacity-40">BUY</button>
-        <button type="button" onClick={() => submit('sell')} disabled={!candle} className="h-7 min-w-[68px] rounded-md bg-gradient-to-b from-rose-500 to-rose-600 px-3 text-[11px] font-black tracking-wide text-white shadow-[0_1px_0_rgba(255,255,255,.18)_inset] transition hover:brightness-110 active:brightness-95 disabled:opacity-40">SELL</button>
+        <button type="button" onClick={() => submit('buy')} disabled={!candle} className={`${sideButton} bg-gradient-to-b from-emerald-500 to-emerald-600 shadow-[0_1px_0_rgba(255,255,255,.2)_inset,0_6px_16px_-8px_rgba(16,185,129,.8)]`}>
+          <span>Buy</span>
+          <span className="font-mono text-[10px] font-semibold opacity-80">{ticketPrice}</span>
+        </button>
+        <button type="button" onClick={() => submit('sell')} disabled={!candle} className={`${sideButton} bg-gradient-to-b from-rose-500 to-rose-600 shadow-[0_1px_0_rgba(255,255,255,.2)_inset,0_6px_16px_-8px_rgba(244,63,94,.8)]`}>
+          <span>Sell</span>
+          <span className="font-mono text-[10px] font-semibold opacity-80">{ticketPrice}</span>
+        </button>
       </div>
       <div className={divider} />
       <div className="flex shrink-0 items-center gap-4">

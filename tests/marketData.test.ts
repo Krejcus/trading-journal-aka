@@ -377,4 +377,16 @@ describe('marketData', () => {
     expect(updateMarketStructureAccumulator(state, source.slice(0, 7)).events)
       .toEqual(calculateMarketStructure(source.slice(0, 7)));
   });
+
+  it('does not append to a forming higher-timeframe bar that changed meanwhile', () => {
+    // Rozpracovaný bar 600 (high 12,5) dělá z baru 300 pivot; dokončený (high 16) už ne.
+    const source = [
+      candle(0, 10, 12, 9, 11), candle(300, 11, 13, 10, 12), candle(600, 12, 16, 11, 15),
+      candle(900, 15, 17, 14, 14.5),
+    ];
+    // Rozpracovaný poslední bar (zatím bez průrazu), pak týž bar dokončený + nový bar v jednom kroku.
+    const forming = [...source.slice(0, 2), candle(600, 12, 12.5, 11, 12)];
+    const state = updateMarketStructureAccumulator(null, forming);
+    expect(updateMarketStructureAccumulator(state, source).events).toEqual(calculateMarketStructure(source));
+  });
 });

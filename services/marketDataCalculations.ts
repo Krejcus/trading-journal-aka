@@ -880,7 +880,10 @@ export function updateMarketStructureAccumulator(
   const canAppend = previous
     && previous.firstTime === firstTime
     && candles.length > previous.candleCount
-    && previous.lastTime === candles[previous.candleCount - 1]?.time;
+    && previous.lastTime === candles[previous.candleCount - 1]?.time
+    // Vyšší timeframe: dřív poslední (rozpracovaný) bar se mezitím mohl
+    // změnit — pak se navazovat nesmí, jinak by struktura stála na staré svíčce.
+    && previous.lastSignature === candleSignature(candles[previous.candleCount - 1]);
   if (previous
     && previous.firstTime === firstTime
     && previous.candleCount === candles.length

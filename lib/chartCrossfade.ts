@@ -43,8 +43,10 @@ export function crossfadeChart(area: HTMLElement | null, api: ChartViewApi | nul
     position: 'absolute',
     left: `${chartRect.left - areaRect.left}px`,
     top: `${chartRect.top - areaRect.top}px`,
+    // Šířka grafu, výška podle poměru stran snímku — roztažení na rozměr
+    // prvku (jiný poměr) graf na okamžik zdeformovalo / zmenšilo.
     width: `${chartRect.width}px`,
-    height: `${chartRect.height}px`,
+    height: `${shot.width > 0 ? chartRect.width * (shot.height / shot.width) : chartRect.height}px`,
     pointerEvents: 'none',
     zIndex: '30',
   } satisfies Partial<CSSStyleDeclaration>);
@@ -54,8 +56,8 @@ export function crossfadeChart(area: HTMLElement | null, api: ChartViewApi | nul
   const slideX = options.slideX ?? 0;
   const hold = Math.min(MAX_HOLD_MS, Math.max(0, options.holdMs ?? 90));
   const fade = shot.animate([
-    { opacity: 1, transform: 'translateX(0) scale(1)' },
-    { opacity: 0, transform: `translateX(${slideX}px) scale(${slideX ? 1 : 1.012})` },
+    { opacity: 1, transform: 'translateX(0)' },
+    { opacity: 0, transform: `translateX(${slideX}px)` },
   ], { duration: FADE_MS, delay: hold, easing: 'cubic-bezier(.22, .61, .36, 1)', fill: 'forwards' });
   fade.finished.then(remove, remove);
   // Pojistka pro schovanou záložku (animace bez snímků neskončí).

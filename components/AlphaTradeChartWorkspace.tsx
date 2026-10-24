@@ -381,6 +381,7 @@ interface WorkspaceDataContextValue {
   paneActions: WorkspacePaneActions;
   /** Poznámky dne do grafu (fullscreen obchodu, Review). Deník dne je kreslí vlastní vrstvou. */
   showDayNotes: boolean;
+  enableIndicatorOnAllPanels: (indicator: 'fvg' | 'levels' | 'structure') => void;
 }
 
 interface WorkspacePaneActions {
@@ -913,6 +914,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             onToggleFvg={() => updatePanelConfig({ showFvg: !config.showFvg })}
             onToggleLevels={() => updatePanelConfig({ showLevels: !config.showLevels })}
             onToggleStructure={() => updatePanelConfig({ showStructure: !config.showStructure })}
+            onIndicatorAppliedToAllPanels={context.enableIndicatorOnAllPanels}
             onAddChartNote={context.onChartNotesChange ? (clientX, clientY) => setNoteAddRequest({ clientX, clientY, nonce: Date.now() }) : undefined}
             reviewMode={Boolean(context.review)}
             contextTrades={reviewTradesAtCursor}
@@ -1884,6 +1886,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   useEffect(() => {
     onReviewReplayCursor?.(reviewCursorTime);
   }, [onReviewReplayCursor, reviewCursorTime]);
+  const enableIndicatorOnAllPanels = useCallback((indicator: 'fvg' | 'levels' | 'structure') => {
+    const key = indicator === 'fvg' ? 'showFvg' : indicator === 'levels' ? 'showLevels' : 'showStructure';
+    panelControlsRef.current.forEach(control => {
+      if (control.config[key] !== true) control.updateConfig({ [key]: true });
+    });
+  }, []);
   const context = useMemo<WorkspaceDataContextValue>(() => ({
     trade,
     entryMs,
@@ -1913,7 +1921,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     onChartNotesChange: backtestSession ? undefined : onChartNotesChange,
     paneActions,
     showDayNotes: !backtestSession && layoutScope !== 'day',
-  }), [layoutScope, paneActions, reviewTrades, reviewDrawingKey, reviewPanelOverlay, reviewCandlesForRoot, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+    enableIndicatorOnAllPanels,
+  }), [enableIndicatorOnAllPanels, layoutScope, paneActions, reviewTrades, reviewDrawingKey, reviewPanelOverlay, reviewCandlesForRoot, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const reviewTrade = reviewTradeId
     ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)

@@ -297,6 +297,8 @@ interface CandleKitTradeChartProps {
    * globálně (jako fullscreen obchodu), nikdy do otevřené backtest session.
    */
   onIndicatorSettingsSaved?: () => void;
+  /** „Na všechny grafy“ v nastavení indikátoru: zapnout ho i v ostatních panelech workspace. */
+  onIndicatorAppliedToAllPanels?: (indicator: 'fvg' | 'levels' | 'structure') => void;
   /**
    * Úzký graf na telefonu (deník dne): legenda jen se symbolem a timeframem
    * a štítky úrovní na cenové ose bez překryvů, jako TradingView mobile.
@@ -631,7 +633,7 @@ export const WorkspaceIndicatorMenu: React.FC<{
   const customRows = [
     { label: 'Fair Value Gaps', detail: 'FVG', active: custom.showFvg, onClick: custom.onToggleFvg },
     { label: 'AlphaTrade levely', detail: 'PDH, PDL, PWH, PWL…', active: custom.showLevels, onClick: custom.onToggleLevels },
-    { label: 'Market Structure', detail: timeframe === '1m' ? 'CHoCH / BOS' : 'CHoCH / BOS · pouze 1m', active: custom.showStructure, onClick: custom.onToggleStructure },
+    { label: 'Market Structure', detail: 'CHoCH / BOS', active: custom.showStructure, onClick: custom.onToggleStructure },
   ];
 
   return (
@@ -1902,6 +1904,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   hideTradeResult = false,
   indicatorSettingsOverride,
   onIndicatorSettingsSaved,
+  onIndicatorAppliedToAllPanels,
   phoneLayout = false,
   hideOhlcLegend = false,
   chartSettingsRequest = 0,
@@ -2811,7 +2814,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   }, [candles, entryMs, renderedCandleWindow.end, renderedCandleWindow.start, replayActive, visibleFvg]);
   const marketStructureAccumulatorRef = useRef<MarketStructureAccumulator | null>(null);
   const structureEvents = useMemo(() => {
-    if (!visibleStructure || timeframe !== '1m') {
+    if (!visibleStructure) {
       marketStructureAccumulatorRef.current = null;
       return [];
     }
@@ -2822,7 +2825,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     marketStructureAccumulatorRef.current = next;
     return next.events
       .filter(event => event.breakTime >= firstRenderedTime);
-  }, [candles, renderedCandleWindow.end, renderedCandleWindow.start, timeframe, visibleCandles, visibleStructure]);
+  }, [candles, renderedCandleWindow.end, renderedCandleWindow.start, visibleCandles, visibleStructure]);
   const entryStructureEvents = useMemo(() => {
     if (!showEntryStructure) return [];
     const from = Math.floor(entryMs / 1000) - 200 * 60;
@@ -5528,6 +5531,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
               updateIndicatorSettings(value, allPanels, true);
             };
             save(next);
+            // Styl nestačí: panel, kde indikátor vypnutý, by změnu vůbec neukázal.
+            if (allPanels && settingsDialogIndicator) onIndicatorAppliedToAllPanels?.(settingsDialogIndicator);
             settingsBackupRef.current = null;
             setSettingsDialogIndicator(null);
             if (previous && isIndicatorJournalProfile()) {
