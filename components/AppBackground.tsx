@@ -6,6 +6,27 @@ const rgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16
 /** Barvy pro přibližnou Auroru v index.html, než se načte JavaScript (žádné černé probliknutí). */
 export const AURORA_BOOT_KEY = 'alphatrade_aurora_boot';
 
+/**
+ * Tři světla přesně jako skutečné pozadí: barvy a síla z Hlubin (drawDepths)
+ * vynásobené průhledností a sytostí vrstvy `.aurora-bg` podle síly (CSS:
+ * opacity 0.3 + 0.7·s, saturate 0.12 + 0.88·s) — start pak nezáří víc.
+ */
+export function bootSpots(colors: string[], dark: boolean, strength: number): string[] {
+  const s = Math.min(1, Math.max(0, strength / 100));
+  const layer = 0.3 + 0.7 * s;
+  const saturation = 0.12 + 0.88 * s;
+  const alphas = dark ? [0.55, 0.35, 0.4] : [0.6, 0.45, 0.5];
+  const order = [0, 2, 1];
+  return order.map((index, slot) => {
+    const hex = colors[index] ?? colors[0];
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    // Desaturace jako CSS saturate(): míchání se šedou stejného jasu.
+    const gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const mix = (channel: number) => Math.round(gray + (channel - gray) * saturation);
+    return `${mix(r)},${mix(g)},${mix(b)},${(alphas[slot] * layer).toFixed(3)}`;
+  });
+}
+
 /** Deterministický šum — prach v Hlubinách je pokaždé na stejném místě. */
 const seeded = (seed: number) => () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
@@ -52,8 +73,8 @@ export default function AppBackground({ settings, dark }: { settings: Appearance
   // Přibližná Aurora z index.html končí, jakmile je tu skutečná; barvy si zapamatovat na příští start.
   useLayoutEffect(() => { document.documentElement.classList.remove('aurora-boot'); }, []);
   useEffect(() => {
-    try { localStorage.setItem(AURORA_BOOT_KEY, JSON.stringify({ colors: colors.slice(0, 3).map(rgb), dark })); } catch { /* jen bez náhledu při startu */ }
-  }, [colors, dark]);
+    try { localStorage.setItem(AURORA_BOOT_KEY, JSON.stringify({ spots: bootSpots(colors, dark, settings.strength) })); } catch { /* jen bez náhledu při startu */ }
+  }, [colors, dark, settings.strength]);
 
   // Layout efekt: plátno se vykreslí před prvním snímkem (jinak by jeden snímek bylo prázdné).
   useLayoutEffect(() => {

@@ -25,7 +25,7 @@ function visibleTarget(selector: string): HTMLElement | null {
   return rect.width > 0 && rect.bottom > 0 && rect.top < window.innerHeight ? element : null;
 }
 
-export default function BootTransition({ allowFlight, transparent = false, onDone }: { allowFlight: boolean; transparent?: boolean; onDone: () => void }) {
+export default function BootTransition({ allowFlight, onDone }: { allowFlight: boolean; onDone: () => void }) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const pulseRef = useRef<HTMLDivElement>(null);
   const logoRef = useRef<HTMLImageElement>(null);
@@ -161,8 +161,10 @@ export default function BootTransition({ allowFlight, transparent = false, onDon
     };
   }, [allowFlight]);
 
+  // Překryv je průhledný: leží v obalu appky, který už má tón stránky (dvojitý tón
+  // by Auroru při přechodu ztmavil); prvky appky do náběhu skrývá boot-pre.
   return (
-    <div ref={overlayRef} aria-hidden="true" className="fixed inset-0 z-[10000] flex items-center justify-center pointer-events-none" style={{ background: transparent ? 'transparent' : 'var(--bg-page)' }}>
+    <div ref={overlayRef} aria-hidden="true" className="fixed inset-0 z-[10000] flex items-center justify-center pointer-events-none" style={{ background: 'transparent' }}>
       <div ref={pulseRef} style={{ width: 128, height: 128 }}>
         <img ref={logoRef} src="/logos/at_logo_light_clean.png" alt="" className="w-full h-full object-contain" />
       </div>

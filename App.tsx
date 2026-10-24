@@ -4095,9 +4095,9 @@ const App: React.FC = () => {
   const renderedUserMismatch = Boolean(session && currentUser.id !== DEFAULT_USER.id && currentUser.id !== session.user.id);
   // Pozadí Aurory jako jedna vrstva pro načítání i appku: obě větve vrací fragment
   // s pozadím na stejném místě, takže se při přechodu nepřekreslí (žádné černé probliknutí).
-  const auroraBackground = theme !== 'oled' && session ? <AppBackground settings={appearance} dark={theme !== 'light'} /> : null;
+  const auroraBackground = theme !== 'oled' ? <AppBackground settings={appearance} dark={theme !== 'light'} /> : null;
   if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb) || renderedUserMismatch) {
-    return <>{auroraBackground}<QuantumLoader theme={theme} transparent={Boolean(auroraBackground)} /></>;
+    return <>{auroraBackground}<QuantumLoader theme={theme} /></>;
   }
   if (session) perfMarkOnce('boot:splash-end');
 
@@ -4117,7 +4117,6 @@ const App: React.FC = () => {
     >
       {!bootTransitionDone && (
         <BootTransition
-          transparent={Boolean(auroraBackground)}
           allowFlight={!inNativeShell && typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1024px)').matches === true}
           onDone={() => setBootTransitionDone(true)}
         />

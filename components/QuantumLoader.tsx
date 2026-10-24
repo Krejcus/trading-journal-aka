@@ -3,8 +3,6 @@ import React from 'react';
 interface QuantumLoaderProps {
     text?: string;
     theme?: 'dark' | 'light' | 'oled';
-    /** Pod načítáním je pozadí Aurory — bez vlastní výplně. */
-    transparent?: boolean;
 }
 
 /**
@@ -42,8 +40,8 @@ export const QuantumSpinner: React.FC<{ size?: number; className?: string }> = (
  * Logo běží na hodinách dokumentu (QuantumSpinner), takže přechod do appky
  * (BootTransition) navazuje ve stejné fázi otáčení.
  */
-const QuantumLoader: React.FC<QuantumLoaderProps> = ({ text, transparent = false }) => (
-    <div className="relative min-h-screen w-screen flex items-center justify-center font-sans" style={{ background: transparent ? 'transparent' : 'var(--bg-page)' }}>
+const QuantumLoader: React.FC<QuantumLoaderProps> = ({ text }) => (
+    <div className="relative min-h-screen w-screen flex items-center justify-center font-sans" style={{ background: 'var(--bg-page)' }}>
         <QuantumSpinner size={128} />
         {/* Text pod logem absolutně — logo zůstane přesně uprostřed jako v přechodu do appky. */}
         {text && <p className="absolute left-0 right-0 text-center text-[12px] font-semibold tracking-wide" style={{ top: 'calc(50% + 86px)', color: 'var(--text-muted)' }}>{text}</p>}
