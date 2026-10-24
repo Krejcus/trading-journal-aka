@@ -40,9 +40,13 @@ const dayOf = (value: string | number): number => {
   return Math.floor(time / DAY_MS);
 };
 
-/** Funded účet z prošlé challenge se nekupuje (Lucid LFF…, funded klon po passu). */
-export const isFundedFromChallenge = (account: Pick<Account, 'name' | 'phase'>): boolean =>
-  /^LFF/i.test(account.name) || (account.phase === 'Funded' && !/^(LFE|FNFT|F?TDFY)/i.test(account.name));
+/**
+ * Funded účet z prošlé challenge se nekupuje — vzniká ručně jako klon po passu.
+ * Účty od brokera (Tradovate) se vždy kupují: u Lucid jsou to evaluace
+ * (LFE i LFF), i kdyby měly v appce omylem fázi Funded.
+ */
+export const isFundedFromChallenge = (account: Pick<Account, 'phase' | 'oauth'>): boolean =>
+  account.phase === 'Funded' && !account.oauth;
 
 export function pairAccountsWithPurchases(accounts: readonly Account[], expenses: readonly BusinessExpense[]): PurchasePairing {
   const slots = expenses.filter(isAccountPurchase).flatMap(expense => {

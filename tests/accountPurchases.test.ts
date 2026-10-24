@@ -60,12 +60,21 @@ describe('párování nákupů s účty', () => {
     expect(byAccount.get('late')).toMatchObject({ expenseId: 'old', sure: false });
   });
 
-  it('funded účet z prošlé challenge se s nákupem nepáruje', () => {
+  it('ruční funded účet z prošlé challenge se s nákupem nepáruje', () => {
     const { byAccount } = pairAccountsWithPurchases(
-      [account('LFF05066846490012', { phase: 'Funded' })],
-      [expense('x', '2026-10-22', '1x lucid', 90)],
+      [account('Tradeify 1', { phase: 'Funded', firmOverride: 'Tradeify' })],
+      [expense('x', '2026-10-22', '1x tradeify', 90)],
     );
     expect(byAccount.size).toBe(0);
+  });
+
+  it('účet od brokera se páruje i s fází Funded (Lucid jsou evaluace)', () => {
+    const oauth = { provider: 'tradovate', environment: 'demo', externalAccountId: '1', connectionId: 'c' } as Account['oauth'];
+    const { byAccount } = pairAccountsWithPurchases(
+      [account('LFF05066846490012', { phase: 'Funded', oauth })],
+      [expense('x', '2026-10-22', '1x lucid', 90)],
+    );
+    expect(byAccount.get('LFF05066846490012')).toMatchObject({ price: 90 });
   });
 });
 
