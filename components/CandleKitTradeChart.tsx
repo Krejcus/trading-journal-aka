@@ -3811,8 +3811,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         const positionProgressRenderer: IPrimitivePaneRenderer = {
           draw: target => {
             target.useMediaCoordinateSpace(({ context }) => {
-              const replayCandles = visibleCandlesRef.current;
+              let replayCandles = visibleCandlesRef.current;
               if (!replayCandles.length || !showManagedPositionBoxesRef.current) return;
+              // Plynulé přehrávání kreslí poslední svíčku postupně přímo do
+              // grafu — průběh (čárkovaná čára, výplň) jede s ní, ne s už
+              // celou svíčkou z dat.
+              const last = replayCandles[replayCandles.length - 1];
+              const drawn = api.controller.getBars().at(-1);
+              if (drawn && drawn.ts === last.time * 1_000 && (drawn.close !== last.close || drawn.high !== last.high || drawn.low !== last.low)) {
+                replayCandles = [...replayCandles.slice(0, -1), { ...last, open: drawn.open, high: drawn.high, low: drawn.low, close: drawn.close }];
+              }
               context.save();
               engine.getDrawings().filter(isPositionDrawing).forEach(drawing => {
                 const progress = calculatePositionProgress(drawing, replayCandles);
