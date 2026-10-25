@@ -20,4 +20,14 @@ describe('cold dashboard cache refresh', () => {
     expect(reconcileDashboardRows(old, [{ ...old[0] }])).toBe(old);
     expect(reconcileDashboardRows(old, [{ id: 'a', notes: 'server' }], true)).toBe(old);
   });
+  it('shodné objekty (delta sync beze změny) vrátí původní pole bez serializace', () => {
+    const rows = [{ id: 'a' }, { id: 'b' }];
+    const stringify = JSON.stringify;
+    let calls = 0;
+    JSON.stringify = ((...args: Parameters<typeof stringify>) => { calls += 1; return stringify(...args); }) as typeof JSON.stringify;
+    try {
+      expect(reconcileDashboardRows(rows, [...rows])).toBe(rows);
+    } finally { JSON.stringify = stringify; }
+    expect(calls).toBe(0);
+  });
 });

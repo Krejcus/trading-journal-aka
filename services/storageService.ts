@@ -246,8 +246,12 @@ let cachedDashboardPrefetch: { userId: string; at: number; promise: Promise<Cach
 async function readCachedDashboardData(userId: string): Promise<CachedDashboardData | null> {
   try {
     // Základ delta syncu je čerstvější než starý klíč (ten píší jen úplná čtení).
-    const syncBase = isValidTradeSyncMeta(await get(syncMetaKey(userId)).catch(() => null), userId)
-      ? await get(syncTradesKey(userId)).catch(() => undefined) : undefined;
+    // Přečtený základ rovnou dostane i sync — na iPhonu je druhé čtení 7 MB z IndexedDB znát.
+    const syncMeta = await get(syncMetaKey(userId)).catch(() => null);
+    const syncBase = isValidTradeSyncMeta(syncMeta, userId) ? await get(syncTradesKey(userId)).catch(() => undefined) : undefined;
+    if (Array.isArray(syncBase) && isValidTradeSyncMeta(syncMeta, userId)) {
+      tradeSyncBaseMemo = { owner: userId, cursor: syncMeta.cursor, trades: syncBase as Trade[] };
+    }
     const [trades, preps, reviews, user, weeklyFocus] = await Promise.all([
       Array.isArray(syncBase) ? syncBase : get(`alphatrade_trades_${userId}`),
       get(`alphatrade_daily_preps_${userId}`),
