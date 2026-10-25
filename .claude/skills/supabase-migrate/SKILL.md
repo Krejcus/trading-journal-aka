@@ -9,6 +9,14 @@ Projekt ID: `kopinlpdvjfgmvxydohk`. Argument = popis změny schématu.
 
 ## Kroky
 
+0. **Záloha dotčených dat** (podrobně `BACKUP_RESTORE.md` → „Před každou migrací“). Mění-li migrace data
+   (`UPDATE`/`DELETE`/změna typu/`DROP`), nejdřív samostatně zkopíruj tabulku a ověř počet řádků:
+   ```sql
+   create table migration_backups.<tabulka>_pre_<popis>_<YYYYMMDD> as table public.<tabulka>;
+   ```
+   Velké journal tabulky (`tradovate_journal_evidence`, `…_input_retained`, `…_input_entities`) do DB
+   nekopíruj — místo toho ať Filip těsně před migrací pustí `./scripts/backup-supabase.sh`.
+
 1. **Aplikuj migraci** přes `apply_migration` (NE `execute_sql` pro DDL), `name` v snake_case.
 
 2. **Při RLS policies POVINNĚ použij `(select auth.uid())`**, ne holé `auth.uid()` — jinak se vyhodnocuje per-row (5–10× pomalejší). Vzor:

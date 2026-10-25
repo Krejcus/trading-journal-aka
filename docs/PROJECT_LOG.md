@@ -259,8 +259,74 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       baseline množiny účtů proti pozdějšímu odebrání/přidání. Vyžaduje
       samostatné produktové rozhodnutí; současná flat-only execution brána
       zůstává fail-closed.
+- [ ] **První plná záloha Supabase + zkušební obnova** — skripty jsou hotové
+      (zápis 25. 10. „Záloha Supabase“), čeká na Filipa: Postgres.app
+      a heslo DB v Keychainu. Pak `./scripts/backup-supabase.sh` mimo obchodní
+      dobu a `./scripts/restore-test-supabase.sh`, výsledek do
+      `BACKUP_RESTORE.md` → „Záznam ověření“.
+- [ ] **Relay se zablokuje na checkpointu s neznámým `delivery_id`** —
+      copier-core, zatím jen obejito v runbooku obnovy (zápis 25. 10.
+      „Záloha Supabase“). Oprava v kódu + test → INV + `copier-design-critic`.
 
 ## Deník
+
+### 2026-10-25 — Záloha Supabase: skript, zrcadlo Storage, postup obnovy (Claude)
+
+- **Merge** `fix/review-conflicts-no-retry` → main `6232ce21` (konflikt jen
+  v tomto logu, oba zápisy zachované); plná sada 5516 testů + `tsc` zelené,
+  nasazeno (Vercel READY). Main tím odpovídá produkční migraci `20261025130801`.
+- **Odpovědi Filipa na otevřené otázky z cloudové předávky** (znění otázek
+  v logu nebylo, zapisuji odpovědi a výklad): (1) offline úpravy prakticky
+  nepoužívá (max. 1× za celou dobu) → sync přes verze: offline stačí čtení
+  z cache, zápisy offline jen jako dnešní outboxy, žádná složitá konfliktní
+  logika; (2) „ano, ať je to detailní“; (3) „můžeš ihned, kdyby něco, dám
+  vědět“; (4) další uživatelé zatím nejsou → multi-user (sdílení, soukromí,
+  škálování na ~100 uživatelů) teď neřešit, Filip se ozve před pouštěním
+  mezi lidi.
+- **Denní zálohy Supabase** (`npx supabase backups list`): 7, poslední
+  24. 10. 22:15Z, `pitr_enabled: false`, fyzické → nejdou stáhnout, obnova
+  jen celé DB přes Dashboard.
+- **Nové**: `scripts/backup-supabase.sh` (+ `scripts/backup/lib.sh`,
+  `scripts/backup/storage-sync.mjs`), `scripts/restore-test-supabase.sh`,
+  sekce „Záloha Supabase“ v `BACKUP_RESTORE.md` (vrstvy záloh, nastavení,
+  scénáře obnovy A/B/C, kopírka při obnově, záloha před migrací), krok 0
+  ve skillu `supabase-migrate`.
+- **Rozhodnutí a proč**: `pg_dump -Fc` celé DB přes session pooler (obnova
+  i po tabulkách); heslo jen v Keychainu (`alphatrade-supabase-db`) → dočasný
+  pgpass; ověření = dekomprese celého archivu s přesnými počty řádků + žádná
+  tabulka nesmí chybět; Storage (262 MB, v pg_dump není) do sdíleného
+  přírůstkového zrcadla s MD5 proti eTagu, ze zrcadla se nemaže; Po–Pá
+  8:00–22:30 Praha jen s `--force` (zátěž DB, přes kterou jede relay);
+  min. 10 GB volna (disk sdílí worker); zkušební obnova do dočasného clusteru
+  s vlastním superuserem `atrestore` (`roles.sql` ze Supabase obsahuje
+  `postgres NOSUPERUSER`), bez dat evidence (~4 GB, ověřena čtením archivu),
+  `--full` volitelně; rotace 5 záloh, nikdy nesmaže poslední zálohu s PASS
+  obnovou.
+- **Ověřeno**: zrcadlo Storage naostro (1 603 souborů / 262 MB, MD5 všech,
+  druhý běh 0 stažení za 3 s, poškozený soubor stejné velikosti se stáhl
+  znovu); chybové cesty skriptů; syntaxe pro /bin/bash 3.2. **Neověřeno**:
+  pg_dump a obnova — na Macu nejsou PostgreSQL nástroje (bez brew/dockeru;
+  npm `@embedded-postgres` nemá pg_dump/psql). Viz otevřená otázka.
+- **Review**: `code-reviewer` bez blockeru, opraveno vše podstatné (`--keep 00`
+  mazal všechny zálohy, prázdný seznam řádků vypínal kontrolu, velký
+  `.partial` po pádu, logy obnovy při FAIL, MD5 i u stažených souborů,
+  precedence podmínek). `copier-design-critic` na sekci „Kopírka a obnova
+  databáze“: OPRAVIT PŘED COMMITEM → přepsáno podle nálezů ověřených v kódu
+  (třídy tabulek, export před obnovou, brána prázdné relay fronty, kontrola
+  checkpointu, pořadí zařízení → OAuth → fronta → notifikace → konfigurace,
+  rozšířený seznam INV). Druhý průchod: zbýval glob checkpointu v kroku 2
+  (aktivní soubor na tomto Macu je `<klíč>.relay-<deviceId>.json`, ne
+  `*.relay-delivery.json`) → opraveno; po opravě verdikt OK.
+- **Nález v jádru kopírky (neopraveno)**: checkpoint relaye ve fázi
+  `executing`/`completed` s `delivery_id`, které DB nezná (jen po obnově DB
+  nebo ručním zásahu), relay zablokuje: `claim_tradovate_copier_command_v2`
+  přiřadí další `pending` příkaz k neznámé delivery a
+  `server/recoverableCopierDelivery.ts` pak donekonečna hlásí
+  `relay-delivery-command-mismatch` — ten příkaz (i DISARM z telefonu)
+  zůstane `claimed`, heartbeat přitom běží a UI ukazuje zdravý worker.
+  Runbook to obchází krokem 2 (obnovovat jen s checkpointy `polling`/`null`).
+- **Další krok plánu**: (3) fáze 0 měření; rychlé opravy z review jsou dál
+  nezávislé.
 
 ### 2026-10-25 — Review Supabase/Vercel a plán synchronizace přes verze (Claude, předávka)
 
