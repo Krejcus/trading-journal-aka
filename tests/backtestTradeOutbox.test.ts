@@ -11,7 +11,7 @@ vi.mock('idb-keyval', () => ({
 vi.mock('../services/storageService', () => ({ getUserId: async () => h.userId }));
 
 import {
-  BacktestTradeOutboxError, enqueueBacktestTrade, flushBacktestTradeOutbox,
+  BacktestTradeOutboxError, discardBacktestTrades, enqueueBacktestTrade, flushBacktestTradeOutbox,
   getPendingBacktestTrades, reconcileBacktestClosedTrades,
   resolveBacktestClosedTradeDurability, getPendingBacktestTradeCount, BacktestTradeIdentityError,
   type BacktestTradeOutboxStorage,
@@ -140,6 +140,15 @@ describe('durable closed-trade outbox', () => {
     await Promise.all([enqueueBacktestTrade(item), enqueueBacktestTrade({ ...item, notes: 'stale overwrite' })]);
     item.notes = 'later mutation';
     expect(await getPendingBacktestTrades()).toEqual([{ ...item, notes: 'generated' }]);
+  });
+
+  it('návrat replaye vyřadí smazané obchody z fronty a ostatní nechá', async () => {
+    const kept = trade();
+    const removed = trade();
+    await enqueueBacktestTrade(kept);
+    await enqueueBacktestTrade(removed);
+    expect(await discardBacktestTrades([String(removed.id)])).toBe(1);
+    expect((await getPendingBacktestTrades()).map(item => item.id)).toEqual([kept.id]);
   });
 
   it('does not acknowledge a local storage failure or accept unstable IDs', async () => {

@@ -103,3 +103,16 @@ export async function flushBacktestAnalytics(storage: Pick<BacktestTradeReviewSt
   inFlight.set(owner, promise);
   return promise;
 }
+
+/** Dopočet analýz pro obchody smazané návratem replaye — jinak by frontu zablokoval. */
+export async function discardBacktestAnalytics(tradeIds: readonly string[], expectedOwner: string): Promise<void> {
+  const owner = await requireOwner(expectedOwner);
+  await inFlight.get(owner)?.catch(() => undefined);
+  const ids = new Set(tradeIds.map(String));
+  await update<State>(keyOf(owner), previous => {
+    const next = { ...previous };
+    ids.forEach(id => { delete next[id]; });
+    return next;
+  });
+  await requireOwner(owner);
+}

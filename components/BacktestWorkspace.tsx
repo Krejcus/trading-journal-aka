@@ -23,6 +23,7 @@ import {
   updatePositionBracket,
 } from '../services/backtestEngine';
 import { createBacktestCandleStore } from '../services/backtestCandleStore';
+import { applyBacktestRewind, planBacktestRewind, type BacktestRewindPlan } from '../services/backtestRewind';
 import { createBacktestAnalyticsWorkerClient } from '../services/backtestAnalyticsWorkerClient';
 import { createBacktestClosedTradeEmitter } from '../services/backtestClosedTradeEmission';
 import type { BacktestClosedTradeIdentity } from '../services/backtestTradeOutbox';
@@ -109,6 +110,8 @@ interface Props {
   journalTrades?: Trade[];
   tagSuggestions?: BacktestTagSuggestions;
   onTradeReviewSave?: (tradeId: string, updates: Partial<Trade>, snapshotDataUrl?: string, expected?: Partial<Trade>) => Promise<void>;
+  /** Návrat replaye smazal tyto obchody — pryč z deníku i z front. */
+  onTradesDiscarded?: (tradeIds: string[]) => Promise<void>;
 }
 
 const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRun) => void }> = ({
@@ -124,6 +127,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   journalTrades = [],
   tagSuggestions,
   onTradeReviewSave,
+  onTradesDiscarded,
 }) => {
   const [appearanceSession] = useState(() => createChartAppearanceSession(
     `backtest:${initialRun.id}`, initialRun.workspaceState?.appearance, inheritGlobalAppearance,
@@ -976,6 +980,38 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   }, [candleStore]);
 
 
+  // Nůžky před vzatým obchodem: dotaz, co se smaže, a po potvrzení návrat.
+  const [rewindRequest, setRewindRequest] = useState<{ plan: BacktestRewindPlan; resolve: (confirmed: boolean) => void } | null>(null);
+  const applyRewind = useCallback((plan: BacktestRewindPlan) => {
+    updateRun(current => ({
+      ...current,
+      cursorAt: plan.targetTime * 1_000,
+      runtimeState: applyBacktestRewind(current.runtimeState, plan, current.initialCapital),
+      updatedAt: Date.now(),
+    }));
+    lastProcessedCursorRef.current = plan.targetTime;
+    setTicketDraft(null);
+    const removedIds = plan.removedTrades.map(trade => trade.id);
+    if (removedIds.length && onTradesDiscarded) {
+      void onTradesDiscarded(removedIds).catch(reason => {
+        setError(reason instanceof Error ? `Smazané obchody se nepodařilo odebrat z deníku: ${reason.message}` : 'Smazané obchody se nepodařilo odebrat z deníku.');
+      });
+    }
+    void flush({ cloud: true });
+  }, [flush, onTradesDiscarded, updateRun]);
+  const requestRewind = useCallback((targetTime: number) => new Promise<boolean>(resolve => {
+    const plan = planBacktestRewind(runRef.current.runtimeState, targetTime);
+    if (plan.empty) {
+      applyRewind(plan);
+      resolve(true);
+      return;
+    }
+    setRewindRequest(current => {
+      current?.resolve(false);
+      return { plan, resolve };
+    });
+  }), [applyRewind]);
+
   const bridge = useMemo<BacktestChartSessionBridge>(() => ({
     id: run.id,
     startMs: run.startAt,
@@ -998,7 +1034,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     onWorkspaceChange: handleWorkspaceChange,
     registerWorkspaceCheckpoint,
     maxRevealedTime: run.runtimeState.maxRevealedTime,
-    pauseReplayForDialog: evidenceOpen || sessionInfoOpen,
+    pauseReplayForDialog: evidenceOpen || sessionInfoOpen || rewindRequest !== null,
     onSaveWorkspace: async () => ({ localSaved: await flush({ cloud: true }), cloudSaved: !cloudDirtyRef.current && !conflictRef.current }),
     onQuickOrder: ({ drawing, candle, instrument }) => executeQuickOrder(drawing, candle, instrument),
     chartOrderQuantity: orderQuantity,
@@ -1019,6 +1055,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     onOrderLineChange: changeOrderLine,
     onOrderLineCancel: cancelOrderLine,
     onOrderLineAddBracket: addPositionBracketLine,
+    onRequestRewind: onTradesDiscarded ? requestRewind : undefined,
     renderTradingPanel: ({ candle }) => (
       <BacktestTradingPanel
         run={runRef.current}
@@ -1039,7 +1076,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         }}
       />
     ),
-  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, registerWorkspaceCheckpoint, changeTicketType, submitTicket, ticketDraft, ticketType, evidenceOpen, sessionInfoOpen, updateRun, run.config.instruments, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
+  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, registerWorkspaceCheckpoint, changeTicketType, submitTicket, ticketDraft, ticketType, onTradesDiscarded, requestRewind, evidenceOpen, sessionInfoOpen, rewindRequest, updateRun, run.config.instruments, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
 
   const syntheticTrade = useMemo<Trade>(() => ({
     id: `backtest-${run.id}`,
@@ -1161,6 +1198,46 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         </div>
       )}
       {evidenceOpen && <BacktestEvidenceDialog load={loadEvidence} isDark={isDark} onClose={() => setEvidenceOpen(false)} />}
+      {rewindRequest && (() => {
+        const { plan, resolve } = rewindRequest;
+        const close = (confirmed: boolean) => {
+          setRewindRequest(null);
+          if (confirmed) applyRewind(plan);
+          resolve(confirmed);
+        };
+        const time = (seconds: number) => new Date(seconds * 1_000).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', timeZone: run.config.timezone || 'Europe/Prague' });
+        const day = (seconds: number) => new Date(seconds * 1_000).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', timeZone: run.config.timezone || 'Europe/Prague' });
+        const total = plan.removedTrades.reduce((sum, trade) => sum + trade.pnl, 0);
+        const money = (value: number) => `${value >= 0 ? '+' : '−'}$${Math.abs(value).toFixed(2)}`;
+        return (
+          <div className="fixed inset-0 z-[950] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) close(false); }}>
+            <section role="alertdialog" aria-modal="true" aria-labelledby="backtest-rewind-title" className={`w-full max-w-md overflow-hidden rounded-xl border shadow-2xl ${isDark ? 'border-white/10 bg-[#10161f] text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+              <div className="px-5 pt-5">
+                <h2 id="backtest-rewind-title" className="text-base font-black">Vrátit replay na {day(plan.targetTime)} {time(plan.targetTime)}?</h2>
+                <p className="mt-1.5 text-[12.5px] text-slate-500">Po tomhle čase už byl vzatý obchod. Je to backtest — obchody, které by v novém čase ještě neproběhly, se smažou ze session i z deníku.</p>
+              </div>
+              <div className="mx-5 mt-4 max-h-56 overflow-y-auto rounded-lg border border-[var(--border-subtle)]">
+                {plan.removedTrades.map(trade => (
+                  <div key={trade.id} className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2 text-[12px] last:border-b-0">
+                    <span className={`rounded px-1.5 py-0.5 text-[10.5px] font-black ${trade.direction === 'Long' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{trade.direction}</span>
+                    <span className="font-mono tabular-nums text-slate-400">{time(trade.entryTime)} → {time(trade.exitTime)}</span>
+                    <span className={`ml-auto font-mono font-semibold tabular-nums ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{money(trade.pnl)}</span>
+                  </div>
+                ))}
+                {plan.removedPositions.length > 0 && <div className="px-3 py-2 text-[12px] font-semibold text-amber-500">+ otevřená pozice se zavře bez obchodu</div>}
+                {plan.removedOrderIds.length > 0 && plan.removedTrades.length === 0 && plan.removedPositions.length === 0 && <div className="px-3 py-2 text-[12px] text-slate-500">Zruší se {plan.removedOrderIds.length} příkaz(y) zadané po tomto čase.</div>}
+              </div>
+              {plan.removedTrades.length > 0 && <p className="mx-5 mt-2 text-right text-[11.5px] text-slate-500">Celkem {money(total)} · zůstatek se přepočítá</p>}
+              <div className="mt-4 flex justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-3">
+                <button type="button" autoFocus onClick={() => close(false)} className={`h-9 rounded-lg px-4 text-xs font-black ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`}>Zrušit</button>
+                <button type="button" onClick={() => close(true)} className="h-9 rounded-lg bg-rose-600 px-4 text-xs font-black text-white hover:bg-rose-500">
+                  {plan.removedTrades.length ? `Vrátit a smazat ${plan.removedTrades.length} ${plan.removedTrades.length === 1 ? 'obchod' : plan.removedTrades.length < 5 ? 'obchody' : 'obchodů'}` : 'Vrátit replay'}
+                </button>
+              </div>
+            </section>
+          </div>
+        );
+      })()}
       {error && initialCandles.length > 0 && (
         <div className="native-fixed-above-tab-bar fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 backdrop-blur">
           <span className="text-xs font-bold text-rose-500">{error}</span>

@@ -301,3 +301,24 @@ export const flushBacktestTradeOutbox = async (storage: BacktestTradeOutboxStora
   inFlight.set(userId, promise);
   return promise;
 };
+
+/**
+ * Obchody smazané návratem replaye (nůžky před obchodem) se už neodešlou.
+ * Vrací, kolik obchodů ve frontě zbylo. Probíhající odesílání nechá doběhnout,
+ * ať po smazání v deníku nic nevzkřísí.
+ */
+export const discardBacktestTrades = async (tradeIds: readonly string[], expectedUserId?: string): Promise<number> => {
+  const userId = await requireOwner(expectedUserId);
+  await inFlight.get(userId)?.catch(() => undefined);
+  const ids = new Set(tradeIds.map(String));
+  let pendingCount = 0;
+  await update<OutboxState>(keyOf(userId), previous => {
+    const state = readState(previous);
+    const pending = { ...state.pending };
+    ids.forEach(id => { delete pending[id]; });
+    pendingCount = Object.keys(pending).length;
+    return { ...state, pending };
+  });
+  await requireOwner(userId);
+  return pendingCount;
+};

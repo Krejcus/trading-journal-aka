@@ -5,7 +5,7 @@ import { filterHistoryTrades } from './lib/historyTradeFilter';
 import { journalSourceConnections } from './services/journalSourceStatus';
 import { aggregateHistoryTrades, tradeDetailMembers } from './lib/tradeHistoryPresentation';
 import { combinedTradeChanges } from './services/combinedTradePatch';
-import { enqueueBacktestAnalytics, flushBacktestAnalytics } from './services/backtestAnalyticsOutbox';
+import { discardBacktestAnalytics, enqueueBacktestAnalytics, flushBacktestAnalytics } from './services/backtestAnalyticsOutbox';
 import type { BacktestAnalyticsRefreshCandidate } from './services/backtestAnalyticsRefresh';
 import { buildBacktestTradeRecalculationUpdates } from './services/backtestTradeRecalculation';
 import { changedTradeFields, rollbackTradePatch } from './services/tradePatch';
@@ -27,7 +27,7 @@ import { preloadDecodedImage } from './services/imageDecodeCache';
 import { warmTradeHistory } from './services/tradeHistoryWarmup';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
 import {
-  BacktestTradeOutboxError, enqueueBacktestTrade, flushBacktestTradeOutbox, getPendingBacktestTrades,
+  BacktestTradeOutboxError, discardBacktestTrades, enqueueBacktestTrade, flushBacktestTradeOutbox, getPendingBacktestTrades,
   resolveBacktestClosedTradeDurability, type BacktestClosedTradeIdentity,
 } from './services/backtestTradeOutbox';
 import { createBacktestTradeHydrator } from './services/backtestTradeHydration';
@@ -1801,6 +1801,20 @@ const App: React.FC = () => {
       void flushBacktestJournal();
     }
   }, [activeBacktestRun, captureSessionRequest, flushBacktestJournal]);
+
+  /** Návrat replaye smazal obchody: pryč z fronty, z dopočtu analýz, z deníku i z obrazovky. */
+  const handleBacktestTradesDiscarded = useCallback(async (tradeIds: string[]): Promise<void> => {
+    const owner = backtestJournalOwnerRef.current;
+    if (!owner) throw new Error('Pro smazání backtest obchodů se přihlas.');
+    if (!tradeIds.length) return;
+    const pending = await discardBacktestTrades(tradeIds, owner);
+    await discardBacktestAnalytics(tradeIds, owner);
+    if (backtestJournalOwnerRef.current !== owner) return;
+    setJournalSyncState(current => current.pending === pending ? current : ({ ...current, pending }));
+    const ids = new Set(tradeIds);
+    setTrades(previous => previous.filter(trade => !ids.has(String(trade.id))));
+    for (const id of tradeIds) await storageService.deleteTrade(id);
+  }, []);
 
   const [analyticsSyncState, setAnalyticsSyncState] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
   const flushAnalytics = useCallback(async () => {
@@ -4146,6 +4160,7 @@ const App: React.FC = () => {
             tagSuggestions={backtestTagSuggestions}
             journalSyncState={journalSyncState}
             onTradeReviewSave={handleBacktestTradeReviewSave}
+            onTradesDiscarded={handleBacktestTradesDiscarded}
           />
         </React.Suspense>
       )}

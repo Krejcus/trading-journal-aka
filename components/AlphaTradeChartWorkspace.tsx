@@ -204,6 +204,11 @@ export interface BacktestChartSessionBridge {
   onEnsureReplayData?: (endMs: number) => Promise<MarketCandle[]>;
   /** A run with an execution ledger cannot rewind its account state. Seconds. */
   minimumReplayCursorTime?: number;
+  /**
+   * Nůžky před už vzatým obchodem: session se zeptá, zda obchody po novém
+   * začátku smazat (true = smazáno a kurzor je tam). Bez něj návrat nejde.
+   */
+  onRequestRewind?: (targetTime: number) => Promise<boolean>;
   replayHasExecutionHistory?: boolean;
   historyCandlesByRoot?: Partial<Record<MarketRoot, Partial<Record<MarketDataSchema, MarketCandle[]>>>>;
   historyLoadingKeys?: Partial<Record<string, boolean>>;
@@ -1211,24 +1216,39 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       session?.minimumReplayCursorTime ?? (session ? session.startMs / 1_000 : -Infinity),
       session?.replayHasExecutionHistory ? replayRef.current.cursorTime ?? -Infinity : -Infinity,
     );
+    const start = () => {
+      replayDataRequestsRef.current.cancel();
+      setReplayDataLoading(false);
+      const cursorTime = requestedTime;
+      setReplaySelectionTime(null);
+      setReplay(current => ({
+        ...current,
+        phase: 'active',
+        cursorTime,
+        startTime: cursorTime,
+        playing: false,
+      }));
+      setStatus('Bar Replay spuštěn');
+    };
     if (requestedTime < minimum) {
+      const sessionStart = session ? session.startMs / 1_000 : -Infinity;
+      if (session?.onRequestRewind && requestedTime >= sessionStart) {
+        // Před vzatým obchodem: session se zeptá, co se smaže, a po potvrzení začne odtud.
+        void session.onRequestRewind(requestedTime).then(confirmed => {
+          if (confirmed) { start(); return; }
+          // Zrušeno: výběr skončí, kurzor zůstává, kde byl.
+          setReplaySelectionTime(null);
+          setReplay(current => current.phase === 'selecting' ? { ...current, phase: 'active', playing: false } : current);
+          setStatus('Návrat replaye zrušen');
+        });
+        return;
+      }
       const message = 'Replay nelze vrátit před zpracované obchody. Pro nový průchod vytvoř kopii session.';
       setStatus(message);
       setQuickOrderFeedback({ ok: false, message });
       return;
     }
-    replayDataRequestsRef.current.cancel();
-    setReplayDataLoading(false);
-    const cursorTime = requestedTime;
-    setReplaySelectionTime(null);
-    setReplay(current => ({
-      ...current,
-      phase: 'active',
-      cursorTime,
-      startTime: cursorTime,
-      playing: false,
-    }));
-    setStatus('Bar Replay spuštěn');
+    start();
   }, []);
   const advanceReplayBy = useCallback((steps: number) => {
     const current = replayRef.current;
@@ -1790,6 +1810,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   // v dané oblasti nic neustřihnou, místo tichého odmítnutí.
   const replaySelectionMinimumTime = useMemo(() => {
     if (!backtestSession) return null;
+    // S nůžkami před obchod (smazání po potvrzení) je hranicí jen začátek session.
+    if (backtestSession.onRequestRewind) return backtestSession.startMs / 1_000;
     return Math.max(
       backtestSession.minimumReplayCursorTime ?? backtestSession.startMs / 1_000,
       backtestSession.replayHasExecutionHistory ? replay.cursorTime ?? -Infinity : -Infinity,
