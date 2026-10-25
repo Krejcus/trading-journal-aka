@@ -402,8 +402,10 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
         initial={{ opacity: 0, scale: 0.97, y: 16 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ type: 'spring', stiffness: 380, damping: 32, mass: 0.8 }}
+        // Šířka roste s obrazovkou, ale jen tak, aby se snímek (16:9) i popis
+        // vešly na výšku a karta nescrollovala.
         style={glassVars}
-        className={`td-modal relative flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[14px] border ${isDark ? 'text-slate-100' : 'text-slate-900'}`}
+        className={`td-modal relative flex max-h-[94vh] w-full max-w-[min(1700px,94vw,calc((94vh_-_360px)*3.05))] flex-col overflow-hidden rounded-[14px] border ${isDark ? 'text-slate-100' : 'text-slate-900'}`}
       >
         <header className={`td-head-glow flex items-center gap-3 border-b px-5 py-3.5 ${line}`}>
           <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${isLong ? (isDark ? 'bg-emerald-400/10 text-emerald-300' : 'bg-emerald-50 text-emerald-600') : (isDark ? 'bg-rose-400/10 text-rose-300' : 'bg-rose-50 text-rose-600')}`}>
