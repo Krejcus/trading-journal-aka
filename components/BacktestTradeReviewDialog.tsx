@@ -1,6 +1,6 @@
-import TradeNoteHistoryEditor from './TradeNoteHistoryEditor';
 import { buildTradeNoteHistoryPatch, createTradeNoteDrafts, type TradeNoteCaptureContext, type TradeNoteHistoryPatch } from '../services/tradeNoteHistory';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { motion } from 'framer-motion';
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -130,73 +130,46 @@ const ConfluenceCapsuleEditor: React.FC<{
 const finitePrice = (value: number | undefined): value is number => typeof value === 'number' && Number.isFinite(value);
 
 /**
- * Obchod jako pravítko: SL – vstup – TP na jedné cenové ose (riziko červeně,
- * cíl zeleně), značka výstupu a pod tím výsledek v R s pruhy MFE / MAE.
+ * Čísla obchodu v jednom řádku: ceny (vstup, výstup, SL, TP) a výsledek
+ * (R, MFE, MAE). Výsledek září barvou obchodu, MFE/MAE mají krátký pruh.
  */
-const TradeRuler: React.FC<{ trade: Trade; isDark: boolean }> = ({ trade, isDark }) => {
-  const { entryPrice: entry, exitPrice: exit, stopLoss: stop, takeProfit: target } = trade;
+const TradeStats: React.FC<{ trade: Trade; isDark: boolean }> = ({ trade, isDark }) => {
   const r = trade.riskAmount ? trade.pnl / trade.riskAmount : null;
-  const prices = [entry, exit, stop, target].filter(finitePrice);
-  const line = isDark ? 'border-white/10' : 'border-slate-200';
   const win = trade.pnl >= 0;
-  const low = Math.min(...prices);
-  const high = Math.max(...prices);
-  const position = (value: number) => (high > low ? 6 + ((value - low) / (high - low)) * 88 : 50);
-  const label = (value: number, text: string, tone: string, row: 'above' | 'below') => {
-    const at = position(value);
-    const align = at < 14 ? 'translate-x-0' : at > 86 ? '-translate-x-full' : '-translate-x-1/2';
-    return (
-      <div className={`absolute ${row === 'above' ? 'top-2' : 'top-[60px]'} ${align} whitespace-nowrap ${at < 14 ? 'text-left' : at > 86 ? 'text-right' : 'text-center'}`} style={{ left: `calc(${at}% )` }}>
-        <div className={`text-[9.5px] font-extrabold uppercase tracking-[0.08em] ${tone}`}>{text}</div>
-        <div className="font-mono text-[12px] font-semibold leading-tight tabular-nums">{value.toFixed(2)}</div>
-      </div>
-    );
-  };
-  const scale = Math.max(1, Math.abs(r ?? 0), trade.mfeR ?? 0, trade.maeR ?? 0);
   const bound = trade.excursionAmbiguous ? '≥' : '';
-  const bar = (value: number | undefined, color: string) => (
-    <div className={`mt-1.5 h-1.5 overflow-hidden rounded-full ${isDark ? 'bg-white/[0.06]' : 'bg-slate-100'}`}>
-      <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.min(100, ((value ?? 0) / scale) * 100)}%` }} />
+  const price = (value: number | undefined) => (finitePrice(value) ? value.toFixed(2) : '—');
+  const scale = Math.max(1, Math.abs(r ?? 0), trade.mfeR ?? 0, trade.maeR ?? 0);
+  const divider = isDark ? 'border-white/[0.06]' : 'border-slate-900/[0.06]';
+  const cell = (label: string, value: string, dot?: string, valueTone = '') => (
+    <div className={`min-w-0 border-r px-3 py-2.5 last:border-r-0 ${divider}`}>
+      <div className="flex items-center gap-1.5 text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">
+        {dot ? <span className={`h-1.5 w-1.5 rounded-full ${dot}`} /> : null}{label}
+      </div>
+      <div className={`mt-1 font-mono text-[13px] font-semibold tabular-nums ${valueTone}`}>{value}</div>
+    </div>
+  );
+  const excursion = (label: string, value: number | undefined, tone: string, fill: string) => (
+    <div className={`min-w-0 border-r px-3 py-2.5 last:border-r-0 ${divider}`} title={trade.excursionAmbiguous ? 'Prokazatelná dolní mez — pořadí cen uvnitř svíčky není známé' : undefined}>
+      <div className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">{label}</div>
+      <div className={`mt-1 font-mono text-[13px] font-semibold leading-tight tabular-nums ${tone}`}>{value != null ? `${bound}${value.toFixed(2)}R` : '—'}</div>
+      <div className={`mt-1.5 h-1 overflow-hidden rounded-full ${isDark ? 'bg-white/[0.07]' : 'bg-slate-900/[0.06]'}`}>
+        <div className={`h-full rounded-full ${fill}`} style={{ width: `${Math.min(100, ((value ?? 0) / scale) * 100)}%` }} />
+      </div>
     </div>
   );
   return (
-    <div className={`overflow-hidden rounded-lg border ${line}`} data-backtest-trade-ruler>
-      {finitePrice(entry) && prices.length >= 2 ? (
-        <div className="relative mx-4 h-[96px]">
-          {finitePrice(exit) && label(exit, 'Exit', win ? 'text-emerald-500' : 'text-rose-500', 'above')}
-          <div className={`absolute inset-x-0 top-[44px] h-2 rounded-full ${isDark ? 'bg-white/[0.06]' : 'bg-slate-100'}`}>
-            {finitePrice(stop) && (
-              <div className="absolute inset-y-0 rounded-full bg-gradient-to-r from-rose-500/80 to-rose-500/40"
-                style={{ left: `${Math.min(position(stop), position(entry))}%`, width: `${Math.abs(position(entry) - position(stop))}%` }} />
-            )}
-            {finitePrice(target) && (
-              <div className="absolute inset-y-0 rounded-full bg-gradient-to-r from-emerald-500/40 to-emerald-500/80"
-                style={{ left: `${Math.min(position(target), position(entry))}%`, width: `${Math.abs(position(target) - position(entry))}%` }} />
-            )}
-            <div className={`absolute top-1/2 h-4 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full ${isDark ? 'bg-white' : 'bg-slate-800'}`} style={{ left: `${position(entry)}%` }} />
-            {finitePrice(exit) && (
-              <div className={`absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 ${isDark ? 'border-[#10161f]' : 'border-white'} ${win ? 'bg-emerald-500' : 'bg-rose-500'} shadow`} style={{ left: `${position(exit)}%` }} />
-            )}
-          </div>
-          {finitePrice(stop) && label(stop, 'SL', 'text-rose-500', 'below')}
-          {label(entry, 'Entry', 'text-slate-500', 'below')}
-          {finitePrice(target) && label(target, 'TP', 'text-emerald-500', 'below')}
-        </div>
-      ) : null}
-      <div className={`grid grid-cols-3 border-t ${line}`}>
-        <div className={`border-r px-3 py-2.5 ${line}`}>
-          <div className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">Výsledek</div>
-          <div className={`font-mono text-[17px] font-black tabular-nums ${win ? 'text-emerald-500' : 'text-rose-500'}`}>{r == null ? '—' : `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`}</div>
-        </div>
-        <div className={`border-r px-3 py-2.5 ${line}`} title={trade.excursionAmbiguous ? 'Prokazatelná dolní mez — pořadí cen uvnitř svíčky není známé' : 'Největší pohyb ve prospěch obchodu'}>
-          <div className="flex items-baseline justify-between"><span className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">MFE</span><span className="font-mono text-[12.5px] font-semibold tabular-nums text-emerald-500">{trade.mfeR != null ? `${bound}${trade.mfeR.toFixed(2)}R` : '—'}</span></div>
-          {bar(trade.mfeR, 'bg-emerald-500')}
-        </div>
-        <div className="px-3 py-2.5" title={trade.excursionAmbiguous ? 'Prokazatelná dolní mez — pořadí cen uvnitř svíčky není známé' : 'Největší pohyb proti obchodu'}>
-          <div className="flex items-baseline justify-between"><span className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">MAE</span><span className="font-mono text-[12.5px] font-semibold tabular-nums text-rose-500">{trade.maeR != null ? `${bound}${trade.maeR.toFixed(2)}R` : '—'}</span></div>
-          {bar(trade.maeR, 'bg-rose-500')}
-        </div>
+    // Jedna buňka: ceny vlevo, výsledek (R, MFE, MAE) vpravo.
+    <div className="td-card grid grid-cols-4 overflow-hidden rounded-xl border sm:grid-cols-[repeat(4,1fr)_0.85fr_1fr_1fr]" data-backtest-trade-stats>
+      {cell('Entry', price(trade.entryPrice), isDark ? 'bg-slate-300' : 'bg-slate-600')}
+      {cell('Exit', price(trade.exitPrice), win ? 'bg-emerald-500' : 'bg-rose-500', win ? 'text-emerald-500' : 'text-rose-500')}
+      {cell('SL', price(trade.stopLoss), 'bg-rose-500')}
+      {cell('TP', price(trade.takeProfit), 'bg-emerald-500')}
+      <div className={`border-r px-3 py-2.5 ${divider}`} style={{ background: `color-mix(in srgb, var(--td-res) 10%, transparent)` }}>
+        <div className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">R</div>
+        <div className={`td-pnl-glow mt-0.5 font-mono text-[16px] font-black leading-tight tabular-nums ${win ? 'text-emerald-500' : 'text-rose-500'}`}>{r == null ? '—' : `${r >= 0 ? '+' : ''}${r.toFixed(2)}`}</div>
       </div>
+      {excursion('MFE', trade.mfeR, 'text-emerald-500', 'bg-emerald-500')}
+      {excursion('MAE', trade.maeR, 'text-rose-500', 'bg-rose-500')}
     </div>
   );
 };
@@ -388,24 +361,51 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
   };
   const resultR = displayTrade.riskAmount ? displayTrade.pnl / displayTrade.riskAmount : null;
 
-  const panel = isDark
-    ? 'border-white/10 bg-[#10161f] text-slate-100 shadow-black/60'
-    : 'border-slate-200 bg-white text-slate-900 shadow-slate-900/20';
+  // Sklo Aurora jako detail reálného obchodu (třídy td-* v index.css): záře
+  // podle výsledku, síla podle velikosti R.
+  const win = trade.pnl >= 0;
+  const glassVars = {
+    '--td-res': win ? (isDark ? '#34d399' : '#059669') : '#f43f5e',
+    '--td-res2': win ? '#06b6d4' : '#fb923c',
+    '--td-glow': Math.min(1, 0.45 + Math.abs(resultR ?? 0.3) / 3).toFixed(2),
+    '--td-glass': isDark ? 'rgba(15,23,42,0.42)' : 'rgba(255,255,255,0.55)',
+    '--td-glass-line': isDark ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.8)',
+    '--td-glass-edge': isDark ? 'rgba(0,0,0,0.3)' : 'rgba(15,23,42,0.07)',
+    '--td-glass-hi': isDark ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.95)',
+    '--td-modal-shadow': isDark ? '0 50px 120px -30px rgba(0,0,0,0.95)' : '0 50px 100px -40px rgba(15,23,42,0.55)',
+  } as React.CSSProperties;
   const field = isDark
     ? 'border-white/10 bg-white/[0.04] text-slate-100 placeholder:text-slate-600'
     : 'border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400';
-  const line = isDark ? 'border-white/10' : 'border-slate-200';
+  const line = isDark ? 'border-white/[0.06]' : 'border-slate-900/[0.06]';
   const sectionTitle = 'flex items-center gap-2 text-[12px] font-bold';
   const chip = (on: boolean) => `inline-flex h-7 items-center rounded-full border px-3 text-[11.5px] font-semibold transition-colors ${on
     ? isDark ? 'border-amber-400/45 bg-amber-400/15 text-amber-300' : 'border-amber-300 bg-amber-50 text-amber-700'
     : isDark ? 'border-white/15 text-slate-300 hover:border-white/30' : 'border-slate-300 text-slate-600 hover:border-slate-400'}`;
 
   return (
-    <div className="fixed inset-0 z-[900] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]" role="presentation" onMouseDown={event => {
+    <div className="fixed inset-0 z-[900] flex items-center justify-center p-4" role="presentation" onMouseDown={event => {
       if (!saving && event.target === event.currentTarget) onClose();
     }}>
-      <section data-backtest-trade-review role="dialog" aria-modal="true" aria-labelledby="backtest-trade-review-title" className={`flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border shadow-2xl ${panel}`}>
-        <header className={`flex items-center gap-3 border-b px-5 py-3.5 ${line}`}>
+      <motion.div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[color-mix(in_srgb,var(--bg-page)_55%,transparent)] backdrop-blur-xl"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.22, ease: 'easeOut' }}
+      />
+      <motion.section
+        data-backtest-trade-review
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="backtest-trade-review-title"
+        initial={{ opacity: 0, scale: 0.97, y: 16 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ type: 'spring', stiffness: 380, damping: 32, mass: 0.8 }}
+        style={glassVars}
+        className={`td-modal relative flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[14px] border ${isDark ? 'text-slate-100' : 'text-slate-900'}`}
+      >
+        <header className={`td-head-glow flex items-center gap-3 border-b px-5 py-3.5 ${line}`}>
           <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${isLong ? (isDark ? 'bg-emerald-400/10 text-emerald-300' : 'bg-emerald-50 text-emerald-600') : (isDark ? 'bg-rose-400/10 text-rose-300' : 'bg-rose-50 text-rose-600')}`}>
             {isLong ? <ArrowUpRight size={19} /> : <ArrowDownRight size={19} />}
           </div>
@@ -418,14 +418,14 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
           </div>
           <div className="text-right">
             <p className="text-[11px] font-semibold text-slate-500">Výsledek</p>
-            <p className={`font-mono text-lg font-black tabular-nums ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{trade.pnl >= 0 ? '+' : '−'}${Math.abs(trade.pnl).toFixed(2)}{resultR != null ? ` · ${resultR.toFixed(2)}R` : ''}</p>
+            <p className={`td-pnl-glow font-mono text-lg font-black tabular-nums ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{trade.pnl >= 0 ? '+' : '−'}${Math.abs(trade.pnl).toFixed(2)}{resultR != null ? ` · ${resultR.toFixed(2)}R` : ''}</p>
           </div>
           <button type="button" disabled={saving} onClick={onClose} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`} aria-label="Zavřít review"><X size={17} /></button>
         </header>
 
         <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[1.4fr_1fr]">
           {/* Vlevo: snímek celého obchodu, čísla, detail z indikátoru. */}
-          <div className={`space-y-3 p-4 lg:border-r ${line}`}>
+          <div className={`td-side space-y-3 p-4 lg:border-r ${line}`}>
             <div className={`relative overflow-hidden rounded-lg border ${line} bg-[#0b0f15]`}>
               {snapshotPreview ? (
                 <button type="button" onClick={() => setSnapshotZoomOpen(true)} className="group block w-full cursor-zoom-in" aria-label="Zvětšit náhled snapshotu">
@@ -443,11 +443,11 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
                 {capturing ? <Loader2 size={12} className="animate-spin" /> : <Camera size={12} />} Přefotit obchod
               </button>
             </div>
-            <TradeRuler trade={displayTrade} isDark={isDark} />
+            <TradeStats trade={displayTrade} isDark={isDark} />
             {displayTrade.outcomeAmbiguous && <p className="text-[11px] text-amber-500">Pořadí vstupu a zásahů SL/TP není z OHLC jisté. Engine použil konzervativní výsledek.</p>}
             <section>
               <label htmlFor="backtest-review-notes" className={sectionTitle}><FileText size={14} className="text-slate-400" /> Popis obchodu</label>
-              <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={6} placeholder="Co jsem viděl, proč jsem vstoupil, jak jsem obchod vedl, co bych příště změnil…" className={`mt-2 w-full resize-y rounded-lg border px-3 py-2.5 text-sm leading-relaxed outline-none focus:border-blue-500 ${field}`} />
+              <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={3} placeholder="Co jsem viděl, proč jsem vstoupil, jak jsem obchod vedl, co bych příště změnil…" className={`mt-2 w-full resize-y rounded-lg border px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-blue-500 ${field}`} />
             </section>
           </div>
 
@@ -498,23 +498,15 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
               <div className="mt-1"><ConfluenceCapsuleEditor disabled={saving || recalculating} value={joinTags(customTags)} onChange={value => setTags(joinTags([...tagList.filter(tag => disciplineSet.has(tag)), ...splitTags(value)]))} isDark={isDark} addLabel="Vlastní tag" suggestions={(tagSuggestions?.tags ?? []).filter(tag => !disciplineSet.has(tag))} /></div>
             </section>
 
-            <details className="px-4 py-3">
-              <summary className="cursor-pointer list-none text-[12px] font-bold text-slate-500 hover:text-slate-300">Poznámky po fázích · před / během / po</summary>
-              <div className="mt-3">
-                <TradeNoteHistoryEditor baseHistory={originalTrade.noteHistory} legacyNotes={originalTrade.notes}
-                  captureContext={noteContext} drafts={noteDrafts} disabled={saving} isDark={isDark}
-                  onChange={next => { setNoteDrafts(next); noteOperationRef.current = undefined; }} />
-              </div>
-            </details>
           </div>
         </div>
 
         <footer className={`flex items-center gap-3 border-t px-5 py-3 ${line}`}>
           {error ? <p role="alert" className="mr-auto text-xs font-bold text-rose-500">{error}</p> : <p className="mr-auto text-[10.5px] font-semibold text-slate-500">{snapshot ? 'Snímek se pořídil automaticky · uloží se s review' : 'Snímek se uloží s review'}</p>}
           <button type="button" disabled={saving} onClick={onClose} className={`h-9 rounded-lg px-4 text-xs font-black ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`}>Zrušit</button>
-          <button type="button" onClick={() => void save()} disabled={saving || capturing || recalculating} className="flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-4 text-xs font-black text-white hover:bg-blue-500 disabled:opacity-50">{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Uložit review</button>
+          <button type="button" onClick={() => void save()} disabled={saving || capturing || recalculating} className="td-primary flex h-9 items-center gap-2 rounded-lg px-4 text-xs font-black text-white transition hover:brightness-110 disabled:opacity-50">{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Uložit review</button>
         </footer>
-      </section>
+      </motion.section>
       {snapshotZoomOpen && snapshotPreview ? (
         <div
           data-backtest-snapshot-lightbox

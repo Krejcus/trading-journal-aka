@@ -78,7 +78,7 @@ describe('BacktestTradeReviewDialog render', () => {
     }));
 
     expect(markup).toContain('Entry Confluence');
-    expect(markup).toContain('data-backtest-trade-ruler');
+    expect(markup).toContain('data-backtest-trade-stats');
     expect(markup).toContain('Popis obchodu');
     expect(markup).not.toContain('Detail z indikátoru');
     expect(markup).toContain('HTF Confluence');
