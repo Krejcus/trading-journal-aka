@@ -215,6 +215,7 @@ import {
   retainReplayChartDataSeed,
   replayLogicalRangeAfterPrepend,
   replayViewportAfterBarsUpdate,
+  replayViewportAfterStepBack,
 } from '../services/chartReplay';
 
 interface CandleKitTradeChartProps {
@@ -3055,6 +3056,28 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       controller.setData(visibleCandles.map(candleKitBar));
 
       if (backwardJump) {
+        // Krok zpět (šipka doleva, pár svíček): graf se posune o svíčku zpět
+        // stejně jako krokem dopředu, cena zůstává. Nový start replaye dál
+        // ukotvuje pohled níž.
+        const removedBars = controllerBarCountBeforeUpdate - visibleCandles.length;
+        if (!replayStartTransitionRef.current && removedBars > 0 && removedBars <= 30 && actualViewportBeforeUpdate) {
+          chart.timeScale().setVisibleLogicalRange(replayViewportAfterStepBack(
+            actualViewportBeforeUpdate,
+            controllerBarCountBeforeUpdate,
+            visibleCandles.length,
+          ));
+          if (priceRangeBeforeUpdate) {
+            const stepPriceScale = chart.priceScale('right');
+            stepPriceScale.setAutoScale(false);
+            stepPriceScale.setVisibleRange(priceRangeBeforeUpdate);
+          }
+          pendingVisibleRangeRef.current = null;
+          expandingWindowRef.current = false;
+          replayViewportTargetRef.current = null;
+          replayPriceRangeTargetRef.current = null;
+          chartRootRef.current?.setAttribute('data-replay-update-mode', 'step-back');
+          return;
+        }
         // Po výběru nového startu doplují VŠECHNY panely na kurzor ukotvený
         // vpravo — stejný cílový pohled jako „Reset chart view" (autoscale
         // ceny + výchozí šířka), stejnou animací jako střih na kliknutém

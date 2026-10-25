@@ -110,6 +110,19 @@ export const advanceReplayTime = (
  * actually available source candles. This keeps 5m/15m replay deterministic
  * across CME maintenance windows and other data gaps.
  */
+/** Kurzor o `steps` kroků zpět (poslední svíčka nejméně o interval dřív); `null` = dál to nejde. */
+export const rewindReplayTimeByInterval = (
+  candles: MarketCandle[],
+  cursorTime: number | null,
+  stepMinutes: ChartReplayStepMinutes,
+  steps = 1,
+): number | null => {
+  if (candles.length === 0 || cursorTime === null) return null;
+  const intervalSeconds = Math.max(1, Math.floor(stepMinutes)) * 60 * Math.max(1, Math.floor(steps));
+  const index = upperBound(candles, cursorTime - intervalSeconds) - 1;
+  return index >= 0 ? candles[index].time : null;
+};
+
 export const advanceReplayTimeByInterval = (
   candles: MarketCandle[],
   cursorTime: number | null,
@@ -148,10 +161,10 @@ export const futureAxisTimes = (
   return Array.from({ length: total }, (_, index) => start + (index + 1) * Math.floor(intervalSeconds));
 };
 
-export type ChartReplayShortcut = 'toggle-play' | 'step-forward';
+export type ChartReplayShortcut = 'toggle-play' | 'step-forward' | 'step-back';
 
 /**
- * Klávesa pro ovládání Bar Replay: mezerník přehrává, šipka doprava krokuje.
+ * Klávesa pro ovládání Bar Replay: mezerník přehrává, šipky krokují dopředu a zpět.
  *
  * Modifikátory se ignorují záměrně — Cmd/Ctrl/Alt kombinace patří jiným
  * zkratkám (undo, reset pohledu) a replay by jim je přebíral.
@@ -163,6 +176,7 @@ export const chartReplayShortcut = (
   if (event.code === 'Space') return event.repeat ? null : 'toggle-play';
   // Podržená šipka krokuje dál, na rozdíl od přepínání přehrávání.
   if (event.code === 'ArrowRight') return 'step-forward';
+  if (event.code === 'ArrowLeft') return 'step-back';
   return null;
 };
 
@@ -243,6 +257,26 @@ export const replayViewportAfterBarsUpdate = (
     from: visibleRange.from + appendedBarCount,
     to: visibleRange.to + appendedBarCount,
   };
+};
+
+/**
+ * Krok zpět zrcadlově ke kroku dopředu: graf, který sledoval poslední svíčku,
+ * se posune o odebrané bary doleva (odstup od pravého okraje zůstane);
+ * odscrollovaný do historie zůstává na místě.
+ */
+export const replayViewportAfterStepBack = (
+  visibleRange: ReplayLogicalRange,
+  previousBarCount: number,
+  nextBarCount: number,
+): ReplayLogicalRange => {
+  const removedBarCount = Math.max(0, previousBarCount - nextBarCount);
+  const previousNewestIndex = previousBarCount - 1;
+  const boundaryTolerance = 0.01;
+  const wasFollowingNewestBar = previousBarCount > 0
+    && previousNewestIndex >= visibleRange.from - boundaryTolerance
+    && previousNewestIndex <= visibleRange.to + boundaryTolerance;
+  if (!wasFollowingNewestBar || removedBarCount === 0) return { ...visibleRange };
+  return { from: visibleRange.from - removedBarCount, to: visibleRange.to - removedBarCount };
 };
 
 /**

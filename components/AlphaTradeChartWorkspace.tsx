@@ -105,6 +105,7 @@ import type { BacktestManagedPositionBox } from '../services/backtestManagedPosi
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import {
   advanceReplayTimeByInterval,
+  rewindReplayTimeByInterval,
   chartReplayDelayMs,
   chartReplayShortcut,
   CHART_REPLAY_STEP_MINUTES,
@@ -124,7 +125,7 @@ import {
 } from '../services/chartReplay';
 import ReplayGoToMenu from './ReplayGoToMenu';
 import { ReplayChoiceMenu, ReplayStartMenu } from './ReplayToolbarMenus';
-import { REPLAY_CANDLE_MODE_OPTIONS, setReplayCandleMode, useReplayCandleMode } from '../services/chartReplayCandleMode';
+import { useReplayCandleMode } from '../services/chartReplayCandleMode';
 import ChartWorkspaceStatusRow, { type ChartWorkspaceRange } from './ChartWorkspaceStatusRow';
 import { logicalRangeCenteredOn, logicalRangeForLastSeconds } from '../services/chartWorkspaceRange';
 import { tradeChartTiming } from '../services/tradeChartData';
@@ -1293,9 +1294,42 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     );
   }, [activePanelId]);
   const advanceReplay = useCallback(() => advanceReplayBy(1), [advanceReplayBy]);
+  /**
+   * Krok zpět (šipka doleva). V backtestu jde přes stejný návrat jako nůžky:
+   * bez dotčených obchodů jen posune kurzor, jinak se zeptá, co se smaže.
+   */
+  const rewindReplayBy = useCallback((steps: number) => {
+    const current = replayRef.current;
+    if (replayInteractionPausedRef.current || current.phase !== 'active' || replayDataRequestsRef.current.pending) return;
+    const session = backtestSessionRef.current;
+    const source = session?.candlesByRoot[session.executionInstrument]
+      ?? panelControlsRef.current.get(activePanelId)?.rawCandles
+      ?? [];
+    let target = rewindReplayTimeByInterval(source, current.cursorTime, current.stepMinutes ?? 1, steps);
+    if (target === null) return;
+    if (session) {
+      const sessionStart = session.startMs / 1_000;
+      if (target < sessionStart) {
+        if ((current.cursorTime ?? sessionStart) <= sessionStart) return;
+        target = sessionStart;
+      }
+    }
+    const cursorTime = target;
+    const apply = () => setReplay(value => value.phase === 'active' && value.cursorTime === current.cursorTime
+      ? { ...value, cursorTime, playing: false }
+      : value);
+    if (session?.onRequestRewind) {
+      void session.onRequestRewind(cursorTime).then(confirmed => { if (confirmed) apply(); });
+      return;
+    }
+    if (session) return;
+    apply();
+  }, [activePanelId]);
   /** Koalescence držené šipky: kroky se sbírají a aplikují jednou za snímek. */
   const pendingStepsRef = useRef(0);
   const stepFrameRef = useRef<number | null>(null);
+  const pendingBackStepsRef = useRef(0);
+  const backStepFrameRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (!replayInteractionPaused) return;
     replayDataRequestsRef.current.cancel();
@@ -2216,6 +2250,18 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       if (!shortcut) return;
       // Mezerník jinak odscrolluje stránku, šipka posune časovou osu grafu.
       event.preventDefault();
+      if (shortcut === 'step-back') {
+        pendingBackStepsRef.current += 1;
+        if (backStepFrameRef.current === null) {
+          backStepFrameRef.current = window.requestAnimationFrame(() => {
+            backStepFrameRef.current = null;
+            const steps = pendingBackStepsRef.current;
+            pendingBackStepsRef.current = 0;
+            if (steps > 0) rewindReplayBy(steps);
+          });
+        }
+        return;
+      }
       if (shortcut === 'step-forward') {
         // Držená šipka opakuje keydown až 30× za sekundu — víc, než stihne
         // jeden render cyklus. Kroky se proto sbírají a aplikují jednou za
@@ -2245,7 +2291,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         pendingStepsRef.current = 0;
       }
     };
-  }, [advanceReplayBy, replay.phase]);
+  }, [advanceReplayBy, replay.phase, rewindReplayBy]);
 
   const updateSyncSetting = useCallback((key: keyof ChartWorkspaceSyncSettings, value: boolean) => {
     setSyncSettings(current => {
@@ -3141,18 +3187,6 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 ariaLabel="Timeframe kroku Bar Replay"
                 title="Timeframe jednoho replay kroku"
               />
-              {(
-                <ReplayChoiceMenu
-                  value={replayCandleMode}
-                  options={REPLAY_CANDLE_MODE_OPTIONS}
-                  heading="Svíčky v přehrávání"
-                  onChange={mode => setReplayCandleMode(mode, isDark)}
-                  isDark={isDark}
-                  buttonClassName={replayButton}
-                  ariaLabel="Svíčky v přehrávání"
-                  title="Svíčky v přehrávání — plynule, nebo celé"
-                />
-              )}
               {!backtestSession && (
                 <>
                   <span className={replayDivider} />

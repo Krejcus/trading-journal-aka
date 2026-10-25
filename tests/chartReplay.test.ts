@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateCandles, type MarketCandle } from '../services/marketData';
 import {
+  rewindReplayTimeByInterval,
+  replayViewportAfterStepBack,
   advanceReplayTime,
   advanceReplayTimeByInterval,
   chartReplayDelayMs,
@@ -185,9 +187,27 @@ describe('chartReplayShortcut — klávesy pro Bar Replay', () => {
     expect(key({ code: 'ArrowRight', altKey: true })).toBeNull();
   });
 
+  it('šipka doleva krokuje zpět, i podržená', () => {
+    expect(key({ code: 'ArrowLeft' })).toBe('step-back');
+    expect(key({ code: 'ArrowLeft', repeat: true })).toBe('step-back');
+    expect(key({ code: 'ArrowLeft', altKey: true })).toBeNull();
+  });
+
   it('ostatní klávesy ignoruje', () => {
-    expect(key({ code: 'ArrowLeft' })).toBeNull();
     expect(key({ code: 'KeyR' })).toBeNull();
+  });
+});
+
+describe('rewindReplayTimeByInterval — krok zpět', () => {
+  const minutes = [0, 60, 120, 180, 300].map(time => ({ time, open: 1, high: 1, low: 1, close: 1, volume: 0 }));
+  it('vrátí předchozí svíčku o interval dřív, i přes mezeru v datech', () => {
+    expect(rewindReplayTimeByInterval(minutes, 180, 1)).toBe(120);
+    expect(rewindReplayTimeByInterval(minutes, 300, 1)).toBe(180);
+    expect(rewindReplayTimeByInterval(minutes, 300, 1, 3)).toBe(120);
+  });
+  it('na začátku dat dál nejde', () => {
+    expect(rewindReplayTimeByInterval(minutes, 0, 1)).toBeNull();
+    expect(rewindReplayTimeByInterval(minutes, null, 1)).toBeNull();
   });
 });
 
@@ -253,5 +273,14 @@ describe('Bar Replay — start a popisky jako v TradingView', () => {
     const candles = series(5);
     expect(replayLatestTime(candles)).toBe(candles[4].time);
     expect(replayLatestTime([])).toBeNull();
+  });
+});
+
+describe('replayViewportAfterStepBack — krok zpět posune graf', () => {
+  it('sledující graf se posune o odebrané bary doleva', () => {
+    expect(replayViewportAfterStepBack({ from: 50, to: 106 }, 100, 99)).toEqual({ from: 49, to: 105 });
+  });
+  it('odscrollovaný do historie zůstane', () => {
+    expect(replayViewportAfterStepBack({ from: 10, to: 60 }, 100, 99)).toEqual({ from: 10, to: 60 });
   });
 });

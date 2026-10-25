@@ -997,7 +997,8 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         setError(reason instanceof Error ? `Smazané obchody se nepodařilo odebrat z deníku: ${reason.message}` : 'Smazané obchody se nepodařilo odebrat z deníku.');
       });
     }
-    void flush({ cloud: true });
+    // Smazané obchody hned do cloudu; obyčejný krok zpět stačí uložit lokálně.
+    void flush(removedIds.length || plan.removedPositions.length || plan.removedOrderIds.length ? { cloud: true } : undefined);
   }, [flush, onTradesDiscarded, updateRun]);
   const requestRewind = useCallback((targetTime: number) => new Promise<boolean>(resolve => {
     const plan = planBacktestRewind(runRef.current.runtimeState, targetTime);
