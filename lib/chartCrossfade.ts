@@ -36,22 +36,26 @@ export function crossfadeChart(area: HTMLElement | null, api: ChartViewApi | nul
   const areaRect = area.getBoundingClientRect();
   if (chartRect.width <= 0 || chartRect.height <= 0) return;
   area.querySelectorAll('[data-chart-crossfade]').forEach(node => node.remove());
-  shot.setAttribute('data-chart-crossfade', '');
-  shot.setAttribute('data-snapshot-hide', '');
-  shot.setAttribute('aria-hidden', 'true');
+  // Ořezový rámeček přes celý panel: snímek (ani jeho posun při Go To) nesmí
+  // přetéct — přetečení dalo panelu na okamžik posuvníky a graf se o jejich
+  // šířku zmenšil.
+  const frame = document.createElement('div');
+  frame.setAttribute('data-chart-crossfade', '');
+  frame.setAttribute('data-snapshot-hide', '');
+  frame.setAttribute('aria-hidden', 'true');
+  Object.assign(frame.style, { position: 'absolute', inset: '0', overflow: 'hidden', pointerEvents: 'none', zIndex: '30' } satisfies Partial<CSSStyleDeclaration>);
+  const dpr = window.devicePixelRatio || 1;
   Object.assign(shot.style, {
     position: 'absolute',
     left: `${chartRect.left - areaRect.left}px`,
     top: `${chartRect.top - areaRect.top}px`,
-    // Šířka grafu, výška podle poměru stran snímku — roztažení na rozměr
-    // prvku (jiný poměr) graf na okamžik zdeformovalo / zmenšilo.
-    width: `${chartRect.width}px`,
-    height: `${shot.width > 0 ? chartRect.width * (shot.height / shot.width) : chartRect.height}px`,
-    pointerEvents: 'none',
-    zIndex: '30',
+    // Snímek je v pixelech zařízení — 1:1, bez přeškálování.
+    width: `${shot.width / dpr}px`,
+    height: `${shot.height / dpr}px`,
   } satisfies Partial<CSSStyleDeclaration>);
-  area.appendChild(shot);
-  const remove = () => shot.remove();
+  frame.appendChild(shot);
+  area.appendChild(frame);
+  const remove = () => frame.remove();
   if (typeof shot.animate !== 'function') { window.setTimeout(remove, 120); return; }
   const slideX = options.slideX ?? 0;
   const hold = Math.min(MAX_HOLD_MS, Math.max(0, options.holdMs ?? 90));
