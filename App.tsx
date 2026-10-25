@@ -58,7 +58,11 @@ type DashboardModule = typeof import('./components/Dashboard');
 let loadedDashboard: DashboardModule | null = null;
 /** Jak často se otevřená appka ptá na nový stav deníku. Se živým deníkem
  * (kontrolní body, 14. 10.) čte import jen okno od bodu, takže stačí levně. */
-const JOURNAL_SYNC_INTERVAL_MS = 20_000;
+// Cron importuje každou minutu a nové obchody přijdou přes záznam změn;
+// klient serveru jen připomene zpracování (dřív 20 s = 3 importy každou třetinu minuty).
+const JOURNAL_SYNC_INTERVAL_MS = 60_000;
+const ANALYTICS_FLUSH_MS = 5_000;
+const ANALYTICS_FLUSH_MAX_MS = 300_000;
 /**
  * Deník dne: příprava i uzavření platí pro všechny účty, horní lišta s filtry
  * je na něm schovaná — vlastní, plně otevřené filtry (všechny účty i dny),
@@ -1817,12 +1821,12 @@ const App: React.FC = () => {
   }, []);
 
   const [analyticsSyncState, setAnalyticsSyncState] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
-  const flushAnalytics = useCallback(async () => {
+  const flushAnalytics = useCallback(async (): Promise<boolean> => {
     const owner = backtestJournalOwnerRef.current;
-    if (!owner) return;
+    if (!owner) return true;
     try {
       const result = await flushBacktestAnalytics(storageService);
-      if (backtestJournalOwnerRef.current !== owner || await getUserId() !== owner) return;
+      if (backtestJournalOwnerRef.current !== owner || await getUserId() !== owner) return true;
       setAnalyticsSyncState(previous => previous.pending === result.pendingCount && previous.error === result.error ? previous : { pending: result.pendingCount, error: result.error });
       if (result.confirmed.length) setTrades(previous => {
         if (backtestJournalOwnerRef.current !== owner) return previous;
@@ -1833,20 +1837,38 @@ const App: React.FC = () => {
           return { ...trade, ...buildBacktestTradeRecalculationUpdates(trade, item.recalculated), backtestAnalyticsRefresh: item.stamp };
         });
       });
+      return result.error === null;
     } catch (reason) {
       if (backtestJournalOwnerRef.current === owner) setAnalyticsSyncState(previous => ({ ...previous,
         error: reason instanceof Error ? reason.message : 'Dopočet analýz čeká na uložení.' }));
+      return false;
     }
   }, []);
   useEffect(() => {
     if (!isInitialLoadDone || !loadedUserId || loadedUserId !== session?.user?.id) {
       setAnalyticsSyncState(previous => !previous.pending && previous.error === null ? previous : { pending: 0, error: null }); return;
     }
-    void flushAnalytics();
-    const timer = window.setInterval(() => void flushAnalytics(), 5_000);
-    const retry = () => void flushAnalytics();
+    // Prázdná fronta je jen čtení IndexedDB; selhání (offline, konflikt) se
+    // opakuje s rostoucím odstupem, ne dvěma RPC každých 5 s navždy. Skrytá
+    // záložka nic neposílá — dožene to po návratu.
+    let disposed = false;
+    let timer: number | undefined;
+    let delay = ANALYTICS_FLUSH_MS;
+    const run = async () => {
+      if (disposed) return;
+      if (document.visibilityState === 'visible') {
+        delay = await flushAnalytics() ? ANALYTICS_FLUSH_MS : Math.min(delay * 2, ANALYTICS_FLUSH_MAX_MS);
+      }
+      if (!disposed) timer = window.setTimeout(() => void run(), delay);
+    };
+    void run();
+    const retry = () => { if (document.visibilityState !== 'visible') return; delay = ANALYTICS_FLUSH_MS; window.clearTimeout(timer); void run(); };
     window.addEventListener('online', retry);
-    return () => { window.clearInterval(timer); window.removeEventListener('online', retry); };
+    document.addEventListener('visibilitychange', retry);
+    return () => {
+      disposed = true; window.clearTimeout(timer);
+      window.removeEventListener('online', retry); document.removeEventListener('visibilitychange', retry);
+    };
   }, [flushAnalytics, isInitialLoadDone, loadedUserId, session?.user?.id]);
   const handleBacktestAnalyticsRefresh = useCallback(async (candidates: BacktestAnalyticsRefreshCandidate[]) => {
     const owner = backtestJournalOwnerRef.current;

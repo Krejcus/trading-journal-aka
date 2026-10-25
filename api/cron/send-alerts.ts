@@ -18,6 +18,7 @@ import {
 } from '../../server/nativeLiveActivityUpdater.js';
 import { startNativeLiveActivities } from '../../server/nativeLiveActivityStarter.js';
 import {
+    MAX_NOTIFY_AGE_MS,
     planBrokerAccountLockNotifications,
     planClosedTradePnlNotifications,
     type NativeClosedTradeAlertRow,
@@ -500,11 +501,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 supabase
                     .from('copier_alert_state')
                     .select('device_id, user_id, incident_key, active, detail, updated_at, notification_version'),
+                // Okno podle času, ne globální limit 500 řádků (ten by u více dat
+                // vytlačil čerstvé obchody jiných uživatelů). Okno je delší než
+                // MAX_NOTIFY_AGE_MS, aby oznámené ID zůstala v markeru, dokud stárnou.
                 supabase
                     .from('tradovate_copier_trades')
                     .select('user_id,device_id,trade_id,symbol,side,quantity,realized_pnl_usd,follower_count,closed_at,created_at')
+                    .gte('closed_at', new Date(now.getTime() - MAX_NOTIFY_AGE_MS - 5 * 60_000).toISOString())
                     .order('closed_at', { ascending: false })
-                    .limit(500),
+                    .limit(5_000),
             ]);
             if (runtimesResult.error) throw new Error(runtimesResult.error.message);
             if (alertStatesResult.error) throw new Error(alertStatesResult.error.message);
