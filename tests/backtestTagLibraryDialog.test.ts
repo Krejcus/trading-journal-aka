@@ -247,6 +247,8 @@ describe('tag dialog atomic commit boundary', () => {
   it('preserves a real transport rollback classification and canonical deep-cloned retry fingerprints', async () => {
     const persistence = createBacktestTagLibraryPersistence({ getOwnerId: async () => ownerId, getAuthVersion: () => 0, rpc: async () => ({ data: null, error: { code: '40001', message: 'conflict' } }) });
     await expect(persistence.commit(makePlan())).rejects.toMatchObject({ code: '40001', definitelyNotApplied: true });
+    const noRetry = createBacktestTagLibraryPersistence({ getOwnerId: async () => ownerId, getAuthVersion: () => 0, rpc: async () => ({ data: null, error: { code: '55000', message: 'conflict' } }) });
+    await expect(noRetry.commit(makePlan())).rejects.toMatchObject({ code: '55000', definitelyNotApplied: true });
     const plan = makePlan(), same = Object.fromEntries(Object.entries(plan).reverse()) as typeof plan;
     const before = await captureBacktestTagCommitAttempt(plan), reordered = await captureBacktestTagCommitAttempt(same);
     expect(before.hash).toHaveLength(64); expect(reordered.hash).toBe(before.hash);

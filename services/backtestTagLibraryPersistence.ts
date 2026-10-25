@@ -26,13 +26,13 @@ export class BacktestTagPersistenceError extends Error {
   readonly definitelyNotApplied: boolean;
   constructor(message: string, code?: string) {
     super(message); this.name = 'BacktestTagPersistenceError'; this.code = code;
-    this.definitelyNotApplied = ['40001', '42501', '22023', '23514', 'PGRST202', '42883'].includes(String(code));
+    this.definitelyNotApplied = ['40001', '55000', '42501', '22023', '23514', 'PGRST202', '42883'].includes(String(code));
   }
 }
 const throwRpc = (error: NonNullable<RpcResult['error']>): never => {
   const reject = (message: string): never => { throw new BacktestTagPersistenceError(message, error.code); };
   if (['PGRST202', '42883'].includes(String(error.code))) return reject(BACKTEST_TAG_LIBRARY_UNAVAILABLE);
-  if (String(error.code) === '40001') return reject('Katalog nebo tagy vybraného obchodu se od náhledu změnily. Nic z této změny se neuložilo; načti data a porovnej nový náhled.');
+  if (['40001', '55000'].includes(String(error.code))) return reject('Katalog nebo tagy vybraného obchodu se od náhledu změnily. Nic z této změny se neuložilo; načti data a porovnej nový náhled.');
   return reject(error.message || 'Databáze nepotvrdila změnu tagů. Zachovej náhled pro opakování stejné operace.');
 };
 const validateUpdates = (updates: unknown) => {

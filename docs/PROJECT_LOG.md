@@ -262,6 +262,37 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-25 — Supabase CPU > 80 %: retry bouře 40001 v backtest review (Claude)
+
+- **Příznak**: e-mail Supabase „CPU > 80 %“. Postgres od 08:55Z logoval
+  ~100/s `Review field changed concurrently: needsReview` (1,4 mil. řádků za
+  4 h), přitom edge logy měly jediný požadavek (504 v 09:00Z). Dvě PostgREST
+  session v `pg_stat_activity` restartovaly stejnou transakci dokola;
+  rollbacky celkem 10,2 mil. proti 0,7 mil. commitům.
+- **Příčina**: stejná past jako 17. 9. (`20260917154500`). CAS konflikt
+  v `patch_backtest_trade_review_private_v1` se hlásil SQLSTATE 40001 a HTTP
+  vrstva 40001 opakuje se stejným zastaralým `p_expected` — donekonečna.
+  Zápis ze 17. 9. tyhle funkce vědomě nechal („jednorázová volání“); to
+  neplatí, stačí jedno volání.
+- **Oprava**: migrace `20261025130801_review_conflicts_no_retry` (aplikována
+  přes MCP `apply_migration`) přepíše z živých definic všechny tři zbylé
+  funkce s 40001 (`patch_backtest_trade_review_private_v1`,
+  `commit_backtest_tag_library_v1`, `confirm_connection_trade_notes_v1`) na
+  55000; jinak beze změny, vlastník/granty zachované, v `public` už žádné
+  40001. Rollback = stejný blok s prohozenými kódy. Klient mapuje 40001
+  i 55000 stejně (tag library: `definitelyNotApplied` platí pro oba).
+  Jedna zaseklá session ukončena `pg_terminate_backend`, druhá skončila sama
+  po migraci; rollbacky pak +0 za 3 min, 0 aktivních PostgREST session.
+- **Pravidlo**: 40001 jen pro skutečné serializační konflikty, kde opakování
+  může uspět. Business konflikt (zastaralý snapshot/verze) = 55000.
+- **Velikost DB** (5,3 GB z 8 GB Pro): 4,1 GB je `tradovate_journal_evidence`,
+  většina z backfillu 16. 9. (1,15 mil. `command`). Nepoužitý
+  `tradovate_journal_evidence_entity_idx` (432 MB) je kandidát na drop —
+  nerealizováno, čeká na rozhodnutí.
+- Ověření: 5 cílených souborů / 79 testů, `npm run typecheck` (jen starší
+  chyby v `extension/` bez jeho závislostí), eslint změněných souborů,
+  Supabase advisory — nic nového z této migrace. Web zatím nenasazen.
+
 ### 2026-10-25 — Backtest: replay, review karta pro AI, nůžky mažou obchody (Claude)
 
 - **Plynulé svíčky v backtestu se kreslí až PO zpracování svíčky enginem**
