@@ -23,7 +23,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { calculateStats } from './services/analysis';
 import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, type LeakFinding } from './services/labAnalytics';
 import { tradeNeedsEnrichment } from './services/tradovateImport';
-import { storageService, getUserId } from './services/storageService';
+import { storageService, getUserId, subscribeTradeSync } from './services/storageService';
 import { preloadDecodedImage } from './services/imageDecodeCache';
 import { warmTradeHistory } from './services/tradeHistoryWarmup';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
@@ -877,7 +877,8 @@ const App: React.FC = () => {
     if (!isCurrentSession()) return;
     // Živý deník (14. 10. 2026): server zpracuje nové obchody sám; klient se
     // jen levně ptá, zda je nový stav (bez změny = jedno RPC).
-    if (!force && Date.now() - copierJournalLastSyncRef.current < JOURNAL_SYNC_INTERVAL_MS) return;
+    // Odstup se měří od konce běhu: s tolerancí, jinak by každý druhý tik interval vypadl.
+    if (!force && Date.now() - copierJournalLastSyncRef.current < JOURNAL_SYNC_INTERVAL_MS - 15_000) return;
     copierJournalSyncBusyRef.current = true;
     const abort = new AbortController();
     copierImportAbortRef.current = abort;
@@ -1854,17 +1855,22 @@ const App: React.FC = () => {
     // opakuje s rostoucím odstupem, ne dvěma RPC každých 5 s navždy. Skrytá
     // záložka nic neposílá — dožene to po návratu.
     let disposed = false;
+    let running = false;
     let timer: number | undefined;
     let delay = ANALYTICS_FLUSH_MS;
     const run = async () => {
-      if (disposed) return;
-      if (document.visibilityState === 'visible') {
-        delay = await flushAnalytics() ? ANALYTICS_FLUSH_MS : Math.min(delay * 2, ANALYTICS_FLUSH_MAX_MS);
-      }
-      if (!disposed) timer = window.setTimeout(() => void run(), delay);
+      if (disposed || running) return;
+      running = true;
+      try {
+        if (document.visibilityState === 'visible') {
+          delay = await flushAnalytics() ? ANALYTICS_FLUSH_MS : Math.min(delay * 2, ANALYTICS_FLUSH_MAX_MS);
+        }
+      } finally { running = false; }
+      if (!disposed) { window.clearTimeout(timer); timer = window.setTimeout(() => void run(), delay); }
     };
     void run();
-    const retry = () => { if (document.visibilityState !== 'visible') return; delay = ANALYTICS_FLUSH_MS; window.clearTimeout(timer); void run(); };
+    // Jediný řetěz: návrat do záložky / online jen zkrátí čekání, nezakládá druhý.
+    const retry = () => { if (document.visibilityState !== 'visible' || running) return; delay = ANALYTICS_FLUSH_MS; window.clearTimeout(timer); void run(); };
     window.addEventListener('online', retry);
     document.addEventListener('visibilitychange', retry);
     return () => {
@@ -2421,31 +2427,35 @@ const App: React.FC = () => {
   // Realtime channel ref for cleanup
   const realtimeChannelRef = useRef<any>(null);
 
-  // REALTIME: záznam změn (sync_changes) místo celých řádků trades. Každá událost
-  // = sloučený delta sync (jen změněná ID, stejné mapování jako úplné čtení).
-  // Odložené až po prvním načtení, ať WebSocket nebrzdí start.
+  // Výsledky delta syncu (z kteréhokoli čtení: Realtime, journal sync, obnova)
+  // do stavu: mění se jen ID, která se opravdu změnila.
+  useEffect(() => {
+    if (!session) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
+    return subscribeTradeSync(session.user.id, result => {
+      if (!isCurrentSession()) return;
+      const added = mergeSyncedTrades(copierRowsRef.current, result).added[0];
+      setTrades(current => isCurrentSession() ? mergeSyncedTrades(current, result).trades : current);
+      if (added) {
+        // Nový ruční obchod z jiného zařízení: toast a čerstvé zůstatky účtů.
+        setTradeToast({ id: Date.now(), instrument: added.instrument || '?', pnl: Number(added.pnl) || 0, accountId: String(added.accountId || '') });
+        storageService.getAccounts().then(freshAccounts => {
+          if (isCurrentSession() && freshAccounts.length > 0) setAccounts(freshAccounts);
+        }).catch(() => {});
+      }
+    });
+  }, [session, captureSessionRequest]);
+
+  // REALTIME: záznam změn (sync_changes) místo celých řádků trades. Událost jen
+  // spustí sloučený delta sync; výsledek aplikuje odběratel výše. Odložené až
+  // po prvním načtení, ať WebSocket nebrzdí start.
   useEffect(() => {
     if (!session || !isInitialLoadDone) return;
     const isCurrentSession = captureSessionRequest(session.user.id);
-    const deltaReader = coalescedJournalRead({ delayMs: 400, read: async isLatest => {
+    const deltaReader = coalescedJournalRead({ delayMs: 400, read: async () => {
       if (!isCurrentSession()) return;
-      const before = copierRowsRef.current;
-      try {
-        const result = await storageService.syncTrades();
-        if (!result || !isCurrentSession() || !isLatest()) return;
-        setTrades(current => isCurrentSession() && isLatest() ? mergeSyncedTrades(current, before, result).trades : current);
-        // Updater běží až při renderu — nové obchody pro toast se počítají ze snímku stavu.
-        const added = mergeSyncedTrades([...before], before, result).added[0];
-        if (added) {
-          // Nový ruční obchod z jiného zařízení: toast a čerstvé zůstatky účtů.
-          setTradeToast({ id: Date.now(), instrument: added.instrument || '?', pnl: Number(added.pnl) || 0, accountId: String(added.accountId || '') });
-          storageService.getAccounts().then(freshAccounts => {
-            if (isCurrentSession() && freshAccounts.length > 0) setAccounts(freshAccounts);
-          }).catch(() => {});
-        }
-      } catch {
-        if (isCurrentSession() && isLatest()) setCopierImportError(true);
-      }
+      try { await storageService.syncTrades(); }
+      catch (error) { console.warn('[Realtime] Trade delta sync failed:', error); }
     } });
 
     const realtimeTimer = setTimeout(() => {
@@ -2459,6 +2469,8 @@ const App: React.FC = () => {
           filter: `user_id=eq.${session.user.id}`,
         }, () => { if (isCurrentSession()) deltaReader.request(); })
         .subscribe((status) => {
+          // Po (znovu)připojení dohnat změny z mezery bez spojení.
+          if (status === 'SUBSCRIBED' && isCurrentSession()) deltaReader.request();
           if (status === 'CHANNEL_ERROR') {
             console.warn('[Realtime] WebSocket connection failed. Falling back to REST API only.');
           }
@@ -4205,7 +4217,7 @@ const App: React.FC = () => {
               {activePage === 'ai' && 'AI Coach'}
             </h2>
             {dataRefreshSlow && (
-              <span role="status" className={`hidden sm:inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${theme !== 'light' ? 'bg-white/5 text-slate-300' : 'bg-slate-200/60 text-slate-500'}`}>
+              <span role="status" className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${theme !== 'light' ? 'bg-white/5 text-slate-300' : 'bg-slate-200/60 text-slate-500'}`}>
                 <RefreshCw size={11} className="animate-spin" /> Aktualizuji…
               </span>
             )}

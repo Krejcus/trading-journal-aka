@@ -10,7 +10,7 @@ import { supabase } from './supabase';
 import { isDataUrl, removePayoutProofs, signPayoutProofs, uploadPayoutProof } from './payoutProofStorage';
 import { dashboardTables, loadDashboardFallback, type DashboardRawRow } from './dashboardFallback';
 import { tradeAnalyticsById, type TradeAnalytics } from '../lib/tradeAnalyticsMerge';
-import { get, set } from 'idb-keyval';
+import { del, get, set } from 'idb-keyval';
 import { maybeDetectEpisodes } from './coachMemoryService';
 import { resizeImageDataUrl, dataUrlSizeKB } from './imageResize';
 import { stripAndUploadBase64Images, hasBase64Images } from './stripBase64';
@@ -509,12 +509,14 @@ async function fetchTradeSyncChanges(cursor: string | null, epoch: number | null
     if (['PGRST202', '42883'].includes(String(error.code))) return null;
     throw new Error(`trade-sync-unavailable:${error.code || 'request-error'}`);
   }
-  const value = data as { reset?: unknown; cursor?: unknown; epoch?: unknown; trade_ids?: unknown } | null;
+  const value = data as { reset?: unknown; cursor?: unknown; epoch?: unknown; trade_ids?: unknown; episode_ids?: unknown } | null;
   if (!value || typeof value.reset !== 'boolean' || typeof value.cursor !== 'string' || !/^[0-9]{1,19}$/.test(value.cursor)
     || !Number.isSafeInteger(value.epoch)) throw new Error('trade-sync-invalid');
   const ids = value.reset ? [] : value.trade_ids;
-  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) throw new Error('trade-sync-invalid');
-  return { reset: value.reset, cursor: value.cursor, epoch: value.epoch as number, tradeIds: ids as string[] };
+  const episodes = value.reset ? [] : (value.episode_ids ?? []);
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')
+    || !Array.isArray(episodes) || episodes.some(id => typeof id !== 'string')) throw new Error('trade-sync-invalid');
+  return { reset: value.reset, cursor: value.cursor, epoch: value.epoch as number, tradeIds: ids as string[], episodeIds: episodes as string[] };
 }
 
 /** Dočíst konkrétní obchody stejným mapováním a hydratací jako úplné čtení. */
@@ -536,28 +538,67 @@ async function readTradesByIds(owner: string, ids: string[], stillOwner: () => P
   return trades;
 }
 
+/** Základ v paměti: delta ho nemusí pokaždé číst z IndexedDB (5–10 MB klon). */
+let tradeSyncBaseMemo: { owner: string; cursor: string; trades: Trade[] } | null = null;
+
 function performTradeSync(owner: string, forceFull: boolean): Promise<TradeSyncResult> {
   const version = authStateVersion;
   const stillOwner = async () => version === authStateVersion && await getUserId() === owner;
+  let loadedMeta: TradeSyncMeta | null = null;
   return syncOwnerTrades({
     ownerId: owner,
     stillOwner,
     fetchChanges: fetchTradeSyncChanges,
     readFull: () => storageService.getTradesFull(owner),
     readByIds: ids => readTradesByIds(owner, ids, stillOwner),
-    loadMeta: async () => (await get(syncMetaKey(owner))) as TradeSyncMeta | null,
+    loadMeta: async () => (loadedMeta = (await get(syncMetaKey(owner))) as TradeSyncMeta | null),
     loadTrades: async () => {
+      const memo = tradeSyncBaseMemo;
+      if (memo && memo.owner === owner && loadedMeta && memo.cursor === loadedMeta.cursor) return memo.trades;
       const trades = await get(syncTradesKey(owner));
       return Array.isArray(trades) ? trades as Trade[] : null;
     },
     // Obchody dřív než kurzor: po pádu mezi zápisy se změny dočtou znovu, neztratí se.
     save: async (meta: TradeSyncMeta, trades?: Trade[]) => {
       if (!await stillOwner()) return;
+      const memoTrades = trades ?? (tradeSyncBaseMemo?.owner === owner ? tradeSyncBaseMemo.trades : null);
       if (trades) await set(syncTradesKey(owner), trades);
       await set(syncMetaKey(owner), meta);
+      tradeSyncBaseMemo = memoTrades ? { owner, cursor: meta.cursor, trades: memoTrades } : null;
     },
+    clear: async () => { tradeSyncBaseMemo = null; await del(syncMetaKey(owner)); },
+    normalize: trades => visibleJournalTrades(trades),
     now: () => Date.now(),
   }, { forceFull });
+}
+
+/**
+ * Každý výsledek syncu (i z getTrades() journal syncu nebo obnovy) dostane stav
+ * appky — jinak by delta „spotřebovaná“ jiným čtením v UI chyběla až do reloadu.
+ * Bez odběratele se změny sčítají a doručí se při přihlášení odběratele.
+ */
+type TradeSyncListener = (result: { trades: Trade[]; changedIds: string[] }) => void;
+let tradeSyncListener: { owner: string; listener: TradeSyncListener } | null = null;
+let undeliveredTradeSync: { owner: string; trades: Trade[]; ids: Set<string> } | null = null;
+function emitTradeSync(owner: string, result: TradeSyncResult) {
+  if (!result.changedIds?.length) return;
+  const ids = undeliveredTradeSync?.owner === owner ? undeliveredTradeSync.ids : new Set<string>();
+  result.changedIds.forEach(id => ids.add(id));
+  undeliveredTradeSync = { owner, trades: result.trades, ids };
+  deliverTradeSync();
+}
+function deliverTradeSync() {
+  const pending = undeliveredTradeSync;
+  const target = tradeSyncListener;
+  if (!pending || !target || target.owner !== pending.owner) return;
+  undeliveredTradeSync = null;
+  target.listener({ trades: pending.trades, changedIds: [...pending.ids] });
+}
+export function subscribeTradeSync(owner: string, listener: TradeSyncListener): () => void {
+  const entry = { owner, listener };
+  tradeSyncListener = entry;
+  deliverTradeSync();
+  return () => { if (tradeSyncListener === entry) tradeSyncListener = null; };
 }
 
 /** Souběžná čtení se slučují: nejvýš jeden běh a jeden čekající za ním. */
@@ -570,6 +611,7 @@ function runTradeSync(owner: string, forceFull = false): Promise<TradeSyncResult
     tradeSyncChain = { owner, running, queued: null };
     running.then(result => {
       perfDuration(result.changedIds === null ? 'sync:full' : 'sync:delta', performance.now() - startedAt);
+      emitTradeSync(owner, result);
       if (result.refreshDue) scheduleFullTradeRefresh(owner);
     }, () => undefined).finally(() => {
       if (tradeSyncChain?.running === running && !tradeSyncChain.queued) tradeSyncChain = null;

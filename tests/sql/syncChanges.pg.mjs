@@ -28,10 +28,11 @@ await db.exec(`
   create table public.trades (id uuid primary key, user_id uuid not null, account_id uuid, pnl numeric, data jsonb, journal_projection_status text);
   create table public.tradovate_journal_positions (user_id uuid not null, position_id text not null, trade_id uuid, journal_account_id uuid,
     status text, facts jsonb, history jsonb, revision int8 not null default 1, primary key (user_id, position_id));
-  create table public.trade_private_notes (trade_id uuid primary key, user_id uuid not null, notes jsonb);
-  create table public.backtest_trade_note_histories (trade_id uuid primary key, user_id uuid not null, history jsonb);
-  create table public.copier_trade_snapshots (id uuid primary key default gen_random_uuid(), user_id uuid not null, episode_id uuid not null, kind text);
-  create table public.tradovate_copier_trades (id uuid primary key default gen_random_uuid(), user_id uuid not null, episode_id uuid, trade_id text);
+  create table public.trade_private_notes (trade_id uuid primary key, user_id uuid not null, notes jsonb, legacy_fragments jsonb, updated_at timestamptz default now());
+  create table public.backtest_trade_note_histories (trade_id uuid primary key, user_id uuid not null, history jsonb, updated_at timestamptz default now());
+  create table public.copier_trade_snapshots (id uuid primary key default gen_random_uuid(), user_id uuid not null, episode_id uuid not null, kind text, at timestamptz, storage_path text);
+  create table public.tradovate_copier_trades (id uuid primary key default gen_random_uuid(), user_id uuid not null, connection_id uuid, episode_id uuid, trade_id text,
+    symbol text, side text, opened_at timestamptz, closed_at timestamptz, leader_entry_order_ids text[], follower_count int default 0, updated_at timestamptz default now());
   create table public.snapshot_links (user_id uuid, trade_id uuid, episode_id uuid);
   create view public.journal_trade_snapshots with (security_invoker = true) as select user_id, trade_id, episode_id from public.snapshot_links;
   grant select on public.journal_trade_snapshots, public.snapshot_links to authenticated;
@@ -47,7 +48,8 @@ const as = async (uid, sql, params = []) => {
   await db.exec(`set test.uid = '${uid}'; set role authenticated;`);
   try { return await db.query(sql, params); } finally { await db.exec('reset role;'); }
 };
-const changes = async (uid, cursor, epoch = 1) => (await as(uid, 'select public.sync_trade_changes_v1($1, $2) as r', [cursor, epoch])).rows[0].r;
+const EPOCH = (await db.query('select epoch from public.sync_meta')).rows[0].epoch;
+const changes = async (uid, cursor, epoch = EPOCH) => (await as(uid, 'select public.sync_trade_changes_v1($1, $2) as r', [cursor, epoch])).rows[0].r;
 const logged = async () => (await db.query('select user_id, entity, entity_id from public.sync_changes order by id')).rows;
 const clear = () => db.exec('delete from public.sync_changes');
 
@@ -86,6 +88,17 @@ test('snapshot a záznam kopírky logují epizodu; RPC ji přeloží na propojen
   const delta = await changes(A, start.cursor);
   assert.equal(delta.reset, false);
   assert.deepEqual(delta.trade_ids, [T2]);
+  assert.deepEqual(delta.episode_ids, [E1]);
+});
+
+test('heartbeat workeru (jen updated_at, follower_count) ani přepis poznámky stejným obsahem nic nelogují', async () => {
+  await db.exec(`insert into public.trade_private_notes values ('${T1}', '${A}', '{"n":1}') on conflict (trade_id) do update set notes = '{"n":1}'`);
+  await clear();
+  await db.exec(`update public.tradovate_copier_trades set updated_at = now() + interval '1 second', follower_count = follower_count + 1`);
+  await db.exec(`update public.trade_private_notes set notes = '{"n":1}' where trade_id = '${T1}'`);
+  assert.equal((await logged()).length, 0);
+  await db.exec(`update public.tradovate_copier_trades set closed_at = now() where trade_id = 'f1'`);
+  assert.deepEqual((await logged()).map(row => `${row.entity}:${row.entity_id}`), [`episode:${E1}`]);
 });
 
 test('kurzor: jen změny vlastníka od kurzoru; cizí uživatel je nevidí', async () => {
@@ -103,7 +116,7 @@ test('kurzor: jen změny vlastníka od kurzoru; cizí uživatel je nevidí', asy
 
 test('reset: jiná epocha, vadný kurzor, kurzor z budoucnosti (obnova DB) a za horizontem úklidu', async () => {
   const start = await changes(A, null);
-  assert.equal((await changes(A, start.cursor, 2)).reset, true);
+  assert.equal((await changes(A, start.cursor, EPOCH + 1)).reset, true);
   assert.equal((await changes(A, 'nope')).reset, true);
   assert.equal((await changes(A, '999999999999')).reset, true);
   await db.exec(`insert into public.trade_private_notes values ('${T2}', '${A}', '{}') on conflict (trade_id) do update set notes = '{"x":1}'`);

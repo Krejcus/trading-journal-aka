@@ -6,31 +6,31 @@ const manual = (id: string, pnl: number, timestamp = 1, notes?: string) => ({ id
 const journal = (id: string, pnl: number, timestamp = 1, notes?: string) => ({ id, pnl, timestamp, notes, copierTradeId: `journal:${id}` } as unknown as Trade);
 
 describe('mergeSyncedTrades', () => {
-  it('ruční obchody mění jen podle dočtených ID: nahradit, smazat, přidat', () => {
+  it('mění jen dočtená ID: nahradit, smazat, přidat', () => {
     const current = [manual('m1', 1, 3), manual('m2', 2, 2), manual('m3', 3, 1)];
     const server = [manual('m1', 10, 3), manual('m3', 3, 1), manual('m4', 4, 4)];
-    const { trades, added } = mergeSyncedTrades(current, current, { trades: server, changedIds: ['m1', 'm2', 'm4'] });
+    const { trades, added } = mergeSyncedTrades(current, { trades: server, changedIds: ['m1', 'm2', 'm4'] });
     expect(trades.map(t => [t.id, t.pnl])).toEqual([['m4', 4], ['m1', 10], ['m3', 3]]);
     expect(added.map(t => t.id)).toEqual(['m4']);
   });
 
-  it('nedočtený ruční obchod se nemění ani při rozdílu oproti serveru', () => {
-    const current = [manual('m1', 1, 1, 'rozepsáno')];
-    const { trades } = mergeSyncedTrades(current, current, { trades: [manual('m1', 1, 1, 'staré')], changedIds: [] });
-    expect(trades[0].notes).toBe('rozepsáno');
+  it('nezměněný obchod zůstane i s rozepsanou lokální úpravou', () => {
+    const current = [manual('m1', 1, 2, 'rozepsáno'), journal('j1', 5, 1, 'rozepsané review')];
+    const server = [manual('m1', 1, 2, 'staré'), journal('j1', 7, 1, 'staré')];
+    const { trades } = mergeSyncedTrades(current, { trades: server, changedIds: ['m1'] });
+    expect(trades.find(t => t.id === 'j1')?.notes).toBe('rozepsané review');
+    expect(trades.find(t => t.id === 'm1')?.notes).toBe('staré');
   });
 
-  it('journal řádek dostane nová fakta, ale lokálně rozepsané review zůstane', () => {
-    const before = [journal('j1', 5, 1, 'původní')];
-    const current = [journal('j1', 5, 1, 'rozepsané review')];
-    const { trades, added } = mergeSyncedTrades(current, before, { trades: [journal('j1', 7, 1, 'původní')], changedIds: ['j1'] });
-    expect(trades[0]).toMatchObject({ pnl: 7, notes: 'rozepsané review' });
+  it('bez změn vrátí stejnou referenci (žádné překreslení)', () => {
+    const current = [manual('m1', 1)];
+    expect(mergeSyncedTrades(current, { trades: [], changedIds: [] }).trades).toBe(current);
+    expect(mergeSyncedTrades(current, { trades: [], changedIds: null }).trades).toBe(current);
+  });
+
+  it('nový journal obchod přibude, ale toast „nový obchod“ hlásí jen ruční', () => {
+    const { trades, added } = mergeSyncedTrades([], { trades: [journal('j2', 3, 5)], changedIds: ['j2'] });
+    expect(trades.map(t => t.id)).toEqual(['j2']);
     expect(added).toEqual([]);
-  });
-
-  it('úplné čtení (changedIds = null) ruční obchody nepřepíše, journal řádky ano', () => {
-    const current = [manual('m1', 1, 2), journal('j1', 5, 1)];
-    const { trades } = mergeSyncedTrades(current, current, { trades: [manual('m1', 99, 2), journal('j1', 8, 1)], changedIds: null });
-    expect(trades.map(t => [t.id, t.pnl])).toEqual([['m1', 1], ['j1', 8]]);
   });
 });

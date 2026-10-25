@@ -1,33 +1,29 @@
 import type { Trade } from '../types';
 import { isEvidenceJournalTrade } from '../lib/journalTradeFacts';
-import { mergeImportedJournalTrades } from './journalImportSync';
-import type { TradeSyncResult } from './tradeSyncEngine';
 
 /**
- * Výsledek delta syncu do stavu appky:
- * - journal řádky stejně jako po importu (jen fakta a členství, rozepsané
- *   review zůstane — `mergeImportedJournalTrades`),
- * - ostatní obchody jen podle ID, která se v deltě dočetla: nahradit verzí ze
- *   serveru, smazané odebrat, nové přidat. Úplné čtení (changedIds = null)
- *   ručně zadané obchody nepřepisuje, stejně jako dřív čtení deníku.
+ * Výsledek delta syncu do stavu appky: mění se jen ID, která se opravdu
+ * změnila (verze ze serveru; smazané/skryté zmizí; nové přibudou). Ostatní
+ * obchody zůstávají beze změny — i s případnou rozepsanou lokální úpravou.
  * Vrací i nově přidané ruční obchody (toast „nový obchod z jiného zařízení“).
  */
 export function mergeSyncedTrades(
-  current: Trade[], before: readonly Trade[], result: Pick<TradeSyncResult, 'trades' | 'changedIds'>,
+  current: Trade[], result: { trades: readonly Trade[]; changedIds: readonly string[] | null },
 ): { trades: Trade[]; added: Trade[] } {
-  let next = mergeImportedJournalTrades(current, before, result.trades);
-  if (!result.changedIds?.length) return { trades: next, added: [] };
+  if (!result.changedIds?.length) return { trades: current, added: [] };
   const changed = new Set(result.changedIds.map(String));
   const server = new Map(result.trades.map(trade => [String(trade.id), trade]));
-  next = next.flatMap(trade => {
+  const next = current.flatMap(trade => {
     const id = String(trade.id);
-    if (!changed.has(id) || isEvidenceJournalTrade(trade)) return [trade];
+    if (!changed.has(id)) return [trade];
     const fresh = server.get(id);
-    if (!fresh) return [];
-    return [isEvidenceJournalTrade(fresh) ? trade : fresh];
+    return fresh ? [fresh] : [];
   });
   const present = new Set(next.map(trade => String(trade.id)));
   const added = [...changed].filter(id => !present.has(id)).map(id => server.get(id))
-    .filter((trade): trade is Trade => Boolean(trade) && !isEvidenceJournalTrade(trade!));
-  return { trades: [...next, ...added].sort((a, b) => b.timestamp - a.timestamp), added };
+    .filter((trade): trade is Trade => Boolean(trade));
+  return {
+    trades: [...next, ...added].sort((a, b) => b.timestamp - a.timestamp),
+    added: added.filter(trade => !isEvidenceJournalTrade(trade)),
+  };
 }

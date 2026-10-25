@@ -39,7 +39,7 @@ describe('syncOwnerTrades', () => {
     expect(result.changedIds).toEqual([]);
     expect(result.trades.map(t => t.id)).toEqual([id(3), id(2), id(1)]);
     expect(d.readFull).not.toHaveBeenCalled();
-    expect(saved).toEqual([{ meta: meta({ cursor: '120' }), trades: undefined }]);
+    expect(saved).toEqual([{ meta: meta({ cursor: '120', retryIds: [] }), trades: undefined }]);
   });
 
   it('se změnami dočte jen změněná ID a uloží nový základ i kurzor', async () => {
@@ -63,7 +63,8 @@ describe('syncOwnerTrades', () => {
     });
     const result = await syncOwnerTrades(d);
     expect(order).toEqual(['cursor', 'full']);
-    expect(result.changedIds).toBeNull();
+    // S předchozím základem appka dostane přesný rozdíl.
+    expect([...(result.changedIds ?? [])].sort()).toEqual([id(1), id(2), id(3), id(7)].sort());
     expect(saved[0].meta).toMatchObject({ cursor: '130', epoch: 2, bootstrappedAt: 2_000 });
   });
 
@@ -77,7 +78,7 @@ describe('syncOwnerTrades', () => {
     expect((await syncOwnerTrades(old.d)).refreshDue).toBe(true);
     expect(old.d.readFull).not.toHaveBeenCalled();
     const forced = deps();
-    expect((await syncOwnerTrades(forced.d, { forceFull: true })).changedIds).toBeNull();
+    expect((await syncOwnerTrades(forced.d, { forceFull: true })).changedIds).toEqual([]);
     expect(forced.d.readFull).toHaveBeenCalledTimes(1);
     const noTrades = deps({ loadTrades: async () => null });
     await syncOwnerTrades(noTrades.d);
@@ -89,10 +90,13 @@ describe('syncOwnerTrades', () => {
     await syncOwnerTrades(failingChanges.d);
     expect(failingChanges.d.readFull).toHaveBeenCalledTimes(1);
     const failingRead = deps({ fetchChanges: vi.fn(async () => changes({ tradeIds: [id(2)] })), readByIds: vi.fn().mockRejectedValue(new Error('journal-facts-incomplete')) });
-    expect((await syncOwnerTrades(failingRead.d)).changedIds).toBeNull();
-    const oldDb = deps({ fetchChanges: vi.fn(async () => null) });
+    expect((await syncOwnerTrades(failingRead.d)).changedIds).toEqual([]);
+    expect(failingRead.d.readFull).toHaveBeenCalledTimes(1);
+    const clear = vi.fn(async () => undefined);
+    const oldDb = deps({ fetchChanges: vi.fn(async () => null), clear });
     const result = await syncOwnerTrades(oldDb.d);
-    expect(result.changedIds).toBeNull();
+    expect(result.changedIds).toEqual([]);
+    expect(clear).toHaveBeenCalled();
     expect(oldDb.saved).toEqual([]);
   });
 
@@ -112,5 +116,54 @@ describe('syncOwnerTrades', () => {
     });
     await expect(syncOwnerTrades(d)).rejects.toThrow('trade-list-session-changed');
     expect(saved).toEqual([]);
+  });
+});
+
+describe('syncOwnerTrades — bez zbytečné práce a s opravami', () => {
+  it('hlášené ID beze změny obsahu: nezapisuje obchody a vrátí stejnou referenci', async () => {
+    const base = [trade(3), trade(2), trade(1)];
+    const { d, saved } = deps({
+      loadTrades: async () => base,
+      fetchChanges: vi.fn(async () => changes({ tradeIds: [id(2)] })),
+      readByIds: vi.fn(async () => [trade(2)]),
+    });
+    const result = await syncOwnerTrades(d);
+    expect(result.trades).toBe(base);
+    expect(result.changedIds).toEqual([]);
+    expect(saved).toEqual([{ meta: meta({ cursor: '120', retryIds: [] }), trades: undefined }]);
+  });
+
+  it('obchod s chybou snímků se uloží k opakování a přidá do další delty', async () => {
+    const broken = { ...trade(2, 9), copierSnapshotLoadError: true } as unknown as Trade;
+    const first = deps({ fetchChanges: vi.fn(async () => changes({ tradeIds: [id(2)] })), readByIds: vi.fn(async () => [broken]) });
+    await syncOwnerTrades(first.d);
+    expect(first.saved[0].meta.retryIds).toEqual([id(2)]);
+    const second = deps({ loadMeta: async () => meta({ retryIds: [id(2)] }), readByIds: vi.fn(async () => [trade(2, 9)]) });
+    await syncOwnerTrades(second.d);
+    expect(second.d.readByIds).toHaveBeenCalledWith([id(2)]);
+    expect(second.saved[0].meta.retryIds).toEqual([]);
+  });
+
+  it('změněná epizoda dočte i obchody, které ji v základu měly (vazba mohla zmizet)', async () => {
+    const linked = { ...trade(1), copierEpisodeId: 'ep-1' } as unknown as Trade;
+    const { d } = deps({
+      loadTrades: async () => [trade(3), trade(2), linked],
+      fetchChanges: vi.fn(async () => changes({ episodeIds: ['ep-1'] })),
+      readByIds: vi.fn(async () => [trade(1)]),
+    });
+    const result = await syncOwnerTrades(d);
+    expect(d.readByIds).toHaveBeenCalledWith([id(1)]);
+    expect(result.changedIds).toEqual([id(1)]);
+  });
+
+  it('normalizace celého seznamu (skrytí nahrazeného) se počítá do změn', async () => {
+    const { d } = deps({
+      fetchChanges: vi.fn(async () => changes({ tradeIds: [id(2)] })),
+      readByIds: vi.fn(async () => [trade(2, 50)]),
+      normalize: trades => trades.filter(t => t.id !== id(1)),
+    });
+    const result = await syncOwnerTrades(d);
+    expect([...(result.changedIds ?? [])].sort()).toEqual([id(1), id(2)].sort());
+    expect(result.trades.map(t => t.id)).toEqual([id(3), id(2)]);
   });
 });

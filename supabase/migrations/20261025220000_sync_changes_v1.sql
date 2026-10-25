@@ -4,6 +4,9 @@
 -- sync_log_change/sync_trade_changes_v1/get_dashboard_meta_v1/sync_prune_v1,
 -- drop table sync_changes, sync_meta.
 
+-- Triggery na horkých tabulkách berou zámek; při frontě raději selhat a zopakovat.
+set lock_timeout = '5s';
+
 create table public.sync_changes (
   id bigserial primary key,
   user_id uuid not null,
@@ -28,7 +31,8 @@ create table public.sync_meta (
   horizon_xid xid8 not null default '0'::xid8,
   updated_at timestamptz not null default now()
 );
-insert into public.sync_meta (id) values (1);
+-- Epocha z času: opakovaná aplikace po rollbacku nedá klientům starou epochu.
+insert into public.sync_meta (id, epoch) values (1, extract(epoch from now())::int);
 alter table public.sync_meta enable row level security;
 create policy sync_meta_read on public.sync_meta for select to authenticated using (true);
 revoke all on public.sync_meta from public, anon, authenticated;
@@ -87,28 +91,41 @@ create trigger sync_log_change_update after update on public.tradovate_journal_p
 create trigger sync_log_change_write after insert or delete on public.trade_private_notes
   for each row execute function public.sync_log_change();
 create trigger sync_log_change_update after update on public.trade_private_notes
-  for each row when (old.* is distinct from new.*) execute function public.sync_log_change();
+  for each row when ((old.user_id, old.trade_id, old.notes, old.legacy_fragments)
+    is distinct from (new.user_id, new.trade_id, new.notes, new.legacy_fragments))
+  execute function public.sync_log_change();
 
 create trigger sync_log_change_write after insert or delete on public.backtest_trade_note_histories
   for each row execute function public.sync_log_change();
 create trigger sync_log_change_update after update on public.backtest_trade_note_histories
-  for each row when (old.* is distinct from new.*) execute function public.sync_log_change();
+  for each row when ((old.user_id, old.trade_id, old.history) is distinct from (new.user_id, new.trade_id, new.history))
+  execute function public.sync_log_change();
 
 create trigger sync_log_change_write after insert or delete on public.copier_trade_snapshots
   for each row execute function public.sync_log_change();
 create trigger sync_log_change_update after update on public.copier_trade_snapshots
-  for each row when (old.* is distinct from new.*) execute function public.sync_log_change();
+  for each row when ((old.user_id, old.episode_id, old.kind, old.at, old.storage_path)
+    is distinct from (new.user_id, new.episode_id, new.kind, new.at, new.storage_path))
+  execute function public.sync_log_change();
 
 create trigger sync_log_change_write after insert or delete on public.tradovate_copier_trades
   for each row execute function public.sync_log_change();
+-- Worker přepisuje ledger s novým updated_at každou sekundu (background-v2):
+-- hlásí se jen sloupce, ze kterých view journal_trade_snapshots skládá vazbu.
 create trigger sync_log_change_update after update on public.tradovate_copier_trades
-  for each row when (old.* is distinct from new.*) execute function public.sync_log_change();
+  for each row when ((old.user_id, old.connection_id, old.trade_id, old.episode_id, old.symbol, old.side,
+    old.opened_at, old.closed_at, old.leader_entry_order_ids)
+    is distinct from (new.user_id, new.connection_id, new.trade_id, new.episode_id, new.symbol, new.side,
+    new.opened_at, new.closed_at, new.leader_entry_order_ids))
+  execute function public.sync_log_change();
 
 -- Změněné obchody od kurzoru. Kurzor = xmin aktuálního snapshotu: změny
 -- transakcí pod ním jsou všechny vidět; běžící transakce nad ním přijdou
 -- v dalším volání (řádky ≥ xmin se mohou vrátit dvakrát — čtení je idempotentní).
 create function public.sync_trade_changes_v1(p_cursor text default null, p_epoch int default null)
-returns jsonb language plpgsql stable security invoker set search_path = '' as $$
+returns jsonb language plpgsql stable security invoker set search_path = ''
+-- Obecný plán nezná selektivitu kurzoru (výpadek deníku 14. 10.).
+set plan_cache_mode = force_custom_plan as $$
 declare
   v_uid uuid := auth.uid();
   v_snap pg_snapshot := pg_current_snapshot();
@@ -142,8 +159,11 @@ begin
      where j.user_id = v_uid and j.episode_id = any(v_episodes);
     v_trades := array(select distinct x from unnest(coalesce(v_trades, '{}') || coalesce(v_linked, '{}')) x);
   end if;
+  -- episode_ids zvlášť: když změna vazbu zruší, view obchod už nevrátí — klient
+  -- dočte i obchody, které epizodu měly naposledy.
   return jsonb_build_object('reset', false, 'cursor', v_next::text, 'epoch', v_epoch,
-    'trade_ids', to_jsonb(coalesce(v_trades, '{}'::text[])));
+    'trade_ids', to_jsonb(coalesce(v_trades, '{}'::text[])),
+    'episode_ids', to_jsonb(coalesce(v_episodes, '{}'::uuid[])));
 end; $$;
 revoke all on function public.sync_trade_changes_v1(text, int) from public, anon;
 grant execute on function public.sync_trade_changes_v1(text, int) to authenticated;
@@ -190,4 +210,5 @@ end; $$;
 revoke all on function public.sync_prune_v1(interval, int) from public, anon, authenticated;
 grant execute on function public.sync_prune_v1(interval, int) to service_role;
 
-alter publication supabase_realtime add table public.sync_changes;
+-- Bez sloupce xid8 (Realtime ho nemusí umět dekódovat; klient z události nic nečte).
+alter publication supabase_realtime add table public.sync_changes (id, user_id, entity, entity_id, created_at);
