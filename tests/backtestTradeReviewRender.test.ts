@@ -78,21 +78,12 @@ describe('BacktestTradeReviewDialog render', () => {
     }));
 
     expect(markup).toContain('Entry Confluence');
+    expect(markup).toContain('data-backtest-trade-ruler');
+    expect(markup).toContain('Popis obchodu');
+    expect(markup).not.toContain('Detail z indikátoru');
     expect(markup).toContain('HTF Confluence');
     expect(markup).toContain('Přidat Entry Confluence');
     expect(markup).toContain('Přidat HTF Confluence');
-    expect(markup).toContain('data-backtest-entry-audit');
-    expect(markup).toContain('1m FVG · proximální hrana');
-    expect(markup).toContain('FVG · 21995.00');
-    expect(markup).toContain('Skutečný cíl PDH');
-    expect(markup).toContain('Pravidlo nejbližšího levelu: PDH');
-    expect(markup).toContain('extrém 21990.00');
-    expect(markup).toContain('Level vydržel do potvrzení struktury');
-    expect(markup).toContain('vstup na proximální hraně 1m FVG');
-    expect(markup).toContain('CHoCH #1');
-    expect(markup).toContain('FVG 2/3 v impulsu');
-    expect(markup).toContain('Odraz');
-    expect(markup).toContain('Levely');
     expect(markup).toContain('Entry');
     expect(markup).toContain('SL');
     expect(markup).toContain('MSS');
@@ -107,38 +98,5 @@ describe('BacktestTradeReviewDialog render', () => {
     expect(markup).toContain('data-backtest-discipline');
     expect(markup).toContain('Pozdní vstup');
     expect(markup).not.toContain('Mimo plán');
-  });
-
-  it('neprezentuje vzdálený level jako potvrzený cíl', () => {
-    const invalidTrade: Trade = {
-      ...reviewedTrade,
-      targetType: 'other',
-      targetLevel: undefined,
-      entryContext: {
-        ...(reviewedTrade.entryContext as object),
-        placement: {
-          ...(reviewedTrade.entryContext as any).placement,
-          targetPolicy: {
-            expected: 'nearest_level', nearestLevel: 'WO', nearestPrice: 22028,
-            actualPrice: 22012, distanceTicks: 64, valid: false,
-          },
-          targetMatch: {
-            matched: false, level: null, type: 'other', levelPrice: 22028,
-            actualPrice: 22012, offsetTicks: -64, toleranceTicks: 12,
-          },
-        },
-      },
-    };
-    const markup = renderToStaticMarkup(React.createElement(BacktestTradeReviewDialog, {
-      trade: invalidTrade,
-      isDark: false,
-      onClose: vi.fn(),
-      onCaptureSnapshot: () => 'data:image/png;base64,new',
-      onSave: vi.fn(async () => undefined),
-    }));
-
-    expect(markup).toContain('Bez potvrzené shody');
-    expect(markup).toContain('Pravidlo nejbližšího levelu: WO');
-    expect(markup).not.toContain('Nejbližší WO</div>');
   });
 });

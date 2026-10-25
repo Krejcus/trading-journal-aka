@@ -1962,10 +1962,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const captureTradeSnapshot = useCallback(async (snapshotTrade: Trade) => {
     const root = snapshotTrade.instrument ?? snapshotTrade.symbol;
     const minutes = (control: { config: WorkspacePanelConfig }) => MARKET_TIMEFRAME_MINUTES[control.config.timeframe] ?? Infinity;
-    const candidates = [...panelControlsRef.current.values()]
+    const pick = () => [...panelControlsRef.current.values()]
       .filter(control => control.chartApi && (!root || control.config.root === root))
-      .sort((left, right) => minutes(left) - minutes(right));
-    const control = candidates[0];
+      .sort((left, right) => minutes(left) - minutes(right))[0];
+    // Panel se mohl teprve připojovat (otevření hned po startu session) — chvíli počkat.
+    let control = pick();
+    for (let attempt = 0; !control?.chartApi && attempt < 10; attempt += 1) {
+      await new Promise(resolve => window.setTimeout(resolve, 200));
+      control = pick();
+    }
     if (!control?.chartApi) throw new Error('Graf trhu obchodu není otevřený — snímek nejde pořídit.');
     const exitTime = Number.isFinite(snapshotTrade.timestamp) ? snapshotTrade.timestamp : Date.parse(snapshotTrade.date);
     return captureTradeChartSnapshot(control.chartApi, {

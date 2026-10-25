@@ -46,19 +46,6 @@ const splitTags = (value: string) => normalizeTradeTags(value.split(','));
 
 const joinTags = (values?: string[]) => (values ?? []).join(', ');
 
-const formatAuditPrice = (value: unknown) => (
-  typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '—'
-);
-
-type EntryAuditTone = 'pass' | 'fail' | 'info' | 'missing';
-
-interface EntryAuditItem {
-  label: string;
-  value: string;
-  detail: string;
-  tone: EntryAuditTone;
-}
-
 const getConfluenceTone = (tag: string, isDark: boolean) => {
   const normalized = tag.toLowerCase();
   if (/stop|sl\b|invalid|mimo/.test(normalized)) return isDark ? 'border-rose-400/25 bg-rose-400/10 text-rose-300' : 'border-rose-200 bg-rose-50 text-rose-700';
@@ -136,6 +123,80 @@ const ConfluenceCapsuleEditor: React.FC<{
       ) : (
         <button disabled={disabled} type="button" onClick={() => { cancelled.current = false; setAdding(true); }} className={`inline-flex h-7 items-center gap-1 rounded-lg border border-dashed px-2 text-[11px] font-semibold ${isDark ? 'border-white/15 text-slate-400 hover:border-white/30' : 'border-slate-300 text-slate-500 hover:border-slate-400'}`}><Plus size={11} /> {addLabel}</button>
       )}
+    </div>
+  );
+};
+
+const finitePrice = (value: number | undefined): value is number => typeof value === 'number' && Number.isFinite(value);
+
+/**
+ * Obchod jako pravítko: SL – vstup – TP na jedné cenové ose (riziko červeně,
+ * cíl zeleně), značka výstupu a pod tím výsledek v R s pruhy MFE / MAE.
+ */
+const TradeRuler: React.FC<{ trade: Trade; isDark: boolean }> = ({ trade, isDark }) => {
+  const { entryPrice: entry, exitPrice: exit, stopLoss: stop, takeProfit: target } = trade;
+  const r = trade.riskAmount ? trade.pnl / trade.riskAmount : null;
+  const prices = [entry, exit, stop, target].filter(finitePrice);
+  const line = isDark ? 'border-white/10' : 'border-slate-200';
+  const win = trade.pnl >= 0;
+  const low = Math.min(...prices);
+  const high = Math.max(...prices);
+  const position = (value: number) => (high > low ? 6 + ((value - low) / (high - low)) * 88 : 50);
+  const label = (value: number, text: string, tone: string, row: 'above' | 'below') => {
+    const at = position(value);
+    const align = at < 14 ? 'translate-x-0' : at > 86 ? '-translate-x-full' : '-translate-x-1/2';
+    return (
+      <div className={`absolute ${row === 'above' ? 'top-2' : 'top-[60px]'} ${align} whitespace-nowrap ${at < 14 ? 'text-left' : at > 86 ? 'text-right' : 'text-center'}`} style={{ left: `calc(${at}% )` }}>
+        <div className={`text-[9.5px] font-extrabold uppercase tracking-[0.08em] ${tone}`}>{text}</div>
+        <div className="font-mono text-[12px] font-semibold leading-tight tabular-nums">{value.toFixed(2)}</div>
+      </div>
+    );
+  };
+  const scale = Math.max(1, Math.abs(r ?? 0), trade.mfeR ?? 0, trade.maeR ?? 0);
+  const bound = trade.excursionAmbiguous ? '≥' : '';
+  const bar = (value: number | undefined, color: string) => (
+    <div className={`mt-1.5 h-1.5 overflow-hidden rounded-full ${isDark ? 'bg-white/[0.06]' : 'bg-slate-100'}`}>
+      <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.min(100, ((value ?? 0) / scale) * 100)}%` }} />
+    </div>
+  );
+  return (
+    <div className={`overflow-hidden rounded-lg border ${line}`} data-backtest-trade-ruler>
+      {finitePrice(entry) && prices.length >= 2 ? (
+        <div className="relative mx-4 h-[96px]">
+          {finitePrice(exit) && label(exit, 'Exit', win ? 'text-emerald-500' : 'text-rose-500', 'above')}
+          <div className={`absolute inset-x-0 top-[44px] h-2 rounded-full ${isDark ? 'bg-white/[0.06]' : 'bg-slate-100'}`}>
+            {finitePrice(stop) && (
+              <div className="absolute inset-y-0 rounded-full bg-gradient-to-r from-rose-500/80 to-rose-500/40"
+                style={{ left: `${Math.min(position(stop), position(entry))}%`, width: `${Math.abs(position(entry) - position(stop))}%` }} />
+            )}
+            {finitePrice(target) && (
+              <div className="absolute inset-y-0 rounded-full bg-gradient-to-r from-emerald-500/40 to-emerald-500/80"
+                style={{ left: `${Math.min(position(target), position(entry))}%`, width: `${Math.abs(position(target) - position(entry))}%` }} />
+            )}
+            <div className={`absolute top-1/2 h-4 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full ${isDark ? 'bg-white' : 'bg-slate-800'}`} style={{ left: `${position(entry)}%` }} />
+            {finitePrice(exit) && (
+              <div className={`absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 ${isDark ? 'border-[#10161f]' : 'border-white'} ${win ? 'bg-emerald-500' : 'bg-rose-500'} shadow`} style={{ left: `${position(exit)}%` }} />
+            )}
+          </div>
+          {finitePrice(stop) && label(stop, 'SL', 'text-rose-500', 'below')}
+          {label(entry, 'Entry', 'text-slate-500', 'below')}
+          {finitePrice(target) && label(target, 'TP', 'text-emerald-500', 'below')}
+        </div>
+      ) : null}
+      <div className={`grid grid-cols-3 border-t ${line}`}>
+        <div className={`border-r px-3 py-2.5 ${line}`}>
+          <div className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">Výsledek</div>
+          <div className={`font-mono text-[17px] font-black tabular-nums ${win ? 'text-emerald-500' : 'text-rose-500'}`}>{r == null ? '—' : `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`}</div>
+        </div>
+        <div className={`border-r px-3 py-2.5 ${line}`} title={trade.excursionAmbiguous ? 'Prokazatelná dolní mez — pořadí cen uvnitř svíčky není známé' : 'Největší pohyb ve prospěch obchodu'}>
+          <div className="flex items-baseline justify-between"><span className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">MFE</span><span className="font-mono text-[12.5px] font-semibold tabular-nums text-emerald-500">{trade.mfeR != null ? `${bound}${trade.mfeR.toFixed(2)}R` : '—'}</span></div>
+          {bar(trade.mfeR, 'bg-emerald-500')}
+        </div>
+        <div className="px-3 py-2.5" title={trade.excursionAmbiguous ? 'Prokazatelná dolní mez — pořadí cen uvnitř svíčky není známé' : 'Největší pohyb proti obchodu'}>
+          <div className="flex items-baseline justify-between"><span className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">MAE</span><span className="font-mono text-[12.5px] font-semibold tabular-nums text-rose-500">{trade.maeR != null ? `${bound}${trade.maeR.toFixed(2)}R` : '—'}</span></div>
+          {bar(trade.maeR, 'bg-rose-500')}
+        </div>
+      </div>
     </div>
   );
 };
@@ -226,15 +287,6 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
   const displayTrade = useMemo(() => ({ ...trade, ...recalculatedUpdates }), [recalculatedUpdates, trade]);
   const selectedProvenance = () => reconcileBacktestConfluenceProvenance(displayTrade, { htf: splitTags(htfConfluence), ltf: splitTags(ltfConfluence) }, manualTags.current);
   const autoTags = selectedProvenance();
-  const collectedValues = useMemo(() => [
-    displayTrade.session ? { label: 'Session', value: displayTrade.session } : null,
-    displayTrade.riskAmount != null ? { label: 'Riziko', value: `$${displayTrade.riskAmount.toFixed(2)}` } : null,
-    displayTrade.riskAmount ? { label: 'Výsledek v R', value: `${(displayTrade.pnl / displayTrade.riskAmount).toFixed(2)}R` } : null,
-    displayTrade.mfeR != null ? { label: 'MFE', value: `${displayTrade.excursionAmbiguous ? '≥ ' : ''}${displayTrade.mfeR.toFixed(2)}R` } : null,
-    displayTrade.maeR != null ? { label: 'MAE', value: `${displayTrade.excursionAmbiguous ? '≥ ' : ''}${displayTrade.maeR.toFixed(2)}R` } : null,
-    displayTrade.management ? { label: 'Management', value: displayTrade.management } : null,
-    displayTrade.targetLevel ? { label: 'Target', value: displayTrade.targetLevel } : null,
-  ].filter((item): item is { label: string; value: string } => Boolean(item)), [displayTrade]);
   const savedSnapshot = trade.screenshots?.at(-1) ?? trade.screenshot;
   const snapshotPreview = snapshot ?? savedSnapshot;
   const isLong = trade.direction.toLowerCase() === 'long';
@@ -245,133 +297,6 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(trade.timestamp ?? trade.date));
-  const executionValues = [
-    { label: 'Entry', value: displayTrade.entryPrice?.toFixed(2) ?? '—' },
-    { label: 'Exit', value: displayTrade.exitPrice?.toFixed(2) ?? '—' },
-    { label: 'SL', value: displayTrade.stopLoss?.toFixed(2) ?? '—' },
-    { label: 'TP', value: displayTrade.takeProfit?.toFixed(2) ?? '—' },
-  ];
-  const levelTags = useMemo(() => {
-    const context = displayTrade.entryContext as any;
-    const entryMap = displayTrade.entryMap as any;
-    return [...new Set([
-      ...(Array.isArray(entryMap?.odrazLevels) ? entryMap.odrazLevels : []),
-      ...(Array.isArray(entryMap?.entryLevels) ? entryMap.entryLevels : []),
-      ...(Array.isArray(context?.sweptLevels) ? context.sweptLevels.map((level: string) => `${level} sweep`) : []),
-      context?.nearestUntappedAbove ? `${context.nearestUntappedAbove} nad vstupem` : null,
-      context?.nearestUntappedBelow ? `${context.nearestUntappedBelow} pod vstupem` : null,
-      displayTrade.targetLevel ? `TP ${displayTrade.targetLevel}` : null,
-    ].filter((tag): tag is string => Boolean(tag)))];
-  }, [displayTrade.entryContext, displayTrade.entryMap, displayTrade.targetLevel]);
-  const entryAudit = useMemo<EntryAuditItem[]>(() => {
-    const entryMap = displayTrade.entryMap as any;
-    const context = displayTrade.entryContext as any;
-    const placement = context?.placement as any;
-    const odrazLabels = Array.isArray(entryMap?.odrazLevels) ? entryMap.odrazLevels : [];
-    const reaction = entryMap?.reaction;
-    const reactionStatus = reaction?.status as 'confirmed' | 'rejected' | 'unmatched' | 'unavailable' | undefined;
-    const reactionValue = reactionStatus === 'confirmed'
-      ? odrazLabels.join(' + ') || reaction?.level || 'Potvrzený level'
-      : reactionStatus === 'rejected'
-        ? `Odmítnuto · ${reaction?.level ?? 'kandidát'}`
-        : reactionStatus === 'unmatched'
-          ? 'Bez potvrzeného levelu'
-          : entryMap?.odrazPrice != null ? 'Chráněný extrém bez auditu' : 'Nenalezen';
-    const reactionDetail = reactionStatus
-      ? `${reaction.reason === 'confirmed-hold' ? 'Level vydržel do potvrzení struktury' : reaction.reason === 'failed-reclaim' ? 'Close prošel levelem před potvrzením struktury' : reaction.reason === 'no-level-at-origin' ? 'V okamžiku otočky u extrému žádný level neležel' : 'Struktura neurčila původ pohybu'} · extrém ${formatAuditPrice(reaction.extremePrice ?? entryMap?.odrazPrice)}${reaction.levelPrice != null ? ` · level ${formatAuditPrice(reaction.levelPrice)}` : ''}`
-      : `Chráněný extrém ${formatAuditPrice(entryMap?.odrazPrice)}${entryMap?.odrazLevelPrice != null ? ` · level ${formatAuditPrice(entryMap.odrazLevelPrice)}` : ''}`;
-
-    const fvgHasAudit = entryMap?.entryFvgValid !== undefined;
-    const fvgValid = entryMap?.entryFvgValid === true && entryMap?.entryFvgTimeframe === '1m';
-    const fvgSpan = entryMap?.entryFvgSpan;
-    const fvgRange = fvgSpan
-      ? `${formatAuditPrice(fvgSpan.bottom)}–${formatAuditPrice(fvgSpan.top)}`
-      : 'rozsah —';
-    const fvgDistance = entryMap?.entryFvgDistanceTicks != null
-      ? `${Number(entryMap.entryFvgDistanceTicks).toFixed(1)} ticku od hrany`
-      : 'vzdálenost —';
-    const entryModel = entryMap?.entryModel === 'fvg_edge'
-      ? 'vstup na proximální hraně 1m FVG'
-      : entryMap?.entryFvg
-        ? 'FVG nalezeno, rodičovský impuls nepotvrzen'
-        : 'FVG k entry nenalezeno';
-    const parentStructure = entryMap?.entryFvgParentType
-      ? `${entryMap.entryFvgParentType} #${entryMap.entryFvgParentOrder || '—'}`
-      : 'rodičovský CHoCH/BoS —';
-    const fvgPosition = entryMap?.entryFvgCountInImpulse
-      ? `FVG ${entryMap.entryFvgIndexInImpulse}/${entryMap.entryFvgCountInImpulse} v impulsu`
-      : 'pořadí FVG —';
-
-    const slType = placement?.slPlacement ?? displayTrade.slPlacement;
-    const slCandidate = slType && placement?.slCandidates?.[slType];
-    const candidateSummary = placement?.slCandidates
-      ? (['ote', 'swing', 'fvg'] as const)
-        .map(key => `${key.toUpperCase()} ${formatAuditPrice(placement.slCandidates[key]?.price)}`)
-        .join(' · ')
-      : 'Přepočítej pro ceny OTE / swing / FVG';
-    const slKnown = Boolean(slType);
-    const slValid = slType === 'ote' || slType === 'swing' || slType === 'fvg';
-    const slDistance = slCandidate?.distanceTicks != null
-      ? ` · odchylka ${Number(slCandidate.distanceTicks).toFixed(1)} ticku`
-      : '';
-
-    const policy = placement?.targetPolicy;
-    const targetMatch = placement?.targetMatch;
-    const targetKnown = Boolean(policy || targetMatch || displayTrade.targetType || displayTrade.targetLevel);
-    const targetValid = policy?.valid === true;
-    const targetValue = policy?.expected === 'session_close' || displayTrade.targetType === 'session_close'
-      ? 'EOD / konec session'
-      : targetMatch?.matched
-        ? targetMatch.type === 'deviation'
-          ? `Deviace ${targetMatch.level}`
-          : `Level ${targetMatch.level}`
-        : policy?.valid === false
-          ? 'Bez potvrzené shody'
-          : policy?.nearestLevel
-            ? `Nejbližší ${policy.nearestLevel}`
-        : displayTrade.targetLevel
-          ? `Level ${displayTrade.targetLevel}`
-          : displayTrade.targetType ?? 'Přepočítat';
-    const matchDetail = targetMatch?.matched
-      ? `Skutečný cíl ${targetMatch.level} ${formatAuditPrice(targetMatch.levelPrice)} · TP ${formatAuditPrice(targetMatch.actualPrice)}${targetMatch.offsetTicks != null ? ` · odchylka ${Number(targetMatch.offsetTicks).toFixed(1)} ticku` : ''}`
-      : null;
-    const policyDetail = policy?.expected === 'session_close'
-      ? 'Bez pevného TP · engine vynutí session close'
-      : policy
-        ? `Pravidlo nejbližšího levelu: ${policy.nearestLevel ?? '—'} ${formatAuditPrice(policy.nearestPrice)} · ${policy.valid ? 'splněno' : 'nesplněno'}${policy.distanceTicks != null ? ` · ${Number(policy.distanceTicks).toFixed(1)} ticku` : ''}`
-        : 'Přepočítej pro nejbližší netknutý level a odchylku';
-    const targetDetail = [matchDetail, policyDetail].filter(Boolean).join(' · ');
-
-    return [
-      {
-        label: 'Odraz',
-        value: reactionValue,
-        detail: reactionDetail,
-        tone: reactionStatus === 'confirmed' ? 'pass' : reactionStatus === 'rejected' ? 'fail' : 'missing',
-      },
-      {
-        label: 'Entry',
-        value: !fvgHasAudit ? 'Starší data · přepočítat' : fvgValid ? '1m FVG · proximální hrana' : '1m FVG nepotvrzeno',
-        detail: `${entryModel} · ${parentStructure} · ${fvgPosition} · ${fvgRange} · ${fvgDistance}`,
-        tone: !fvgHasAudit ? 'missing' : fvgValid ? 'pass' : 'fail',
-      },
-      {
-        label: 'Stop loss',
-        value: slKnown ? `${slValid ? slType.toUpperCase() : 'Mimo OTE / swing / FVG'} · ${formatAuditPrice(displayTrade.stopLoss)}` : 'Starší data · přepočítat',
-        detail: slCandidate?.price != null
-          ? `Reference ${formatAuditPrice(slCandidate.price)}${slDistance}`
-          : candidateSummary,
-        tone: !slKnown ? 'missing' : slValid ? 'pass' : 'fail',
-      },
-      {
-        label: 'Cíl',
-        value: targetValue,
-        detail: targetDetail,
-        tone: !targetKnown ? 'missing' : targetValid || policy?.expected === 'session_close' ? 'pass' : policy?.valid === false ? 'fail' : 'info',
-      },
-    ];
-  }, [displayTrade]);
-
   const recalculate = async () => {
     if (!onRecalculate) return;
     setRecalculating(true);
@@ -462,12 +387,6 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
     setTags(joinTags(tagList.includes(tag) ? tagList.filter(item => item !== tag) : [...tagList, tag]));
   };
   const resultR = displayTrade.riskAmount ? displayTrade.pnl / displayTrade.riskAmount : null;
-  const stripValues = [
-    ...executionValues,
-    { label: 'R', value: resultR == null ? '—' : resultR.toFixed(2) },
-    { label: 'MFE', value: displayTrade.mfeR != null ? `${displayTrade.excursionAmbiguous ? '≥' : ''}${displayTrade.mfeR.toFixed(2)}R` : '—' },
-    { label: 'MAE', value: displayTrade.maeR != null ? `${displayTrade.excursionAmbiguous ? '≥' : ''}${displayTrade.maeR.toFixed(2)}R` : '—' },
-  ];
 
   const panel = isDark
     ? 'border-white/10 bg-[#10161f] text-slate-100 shadow-black/60'
@@ -524,55 +443,12 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
                 {capturing ? <Loader2 size={12} className="animate-spin" /> : <Camera size={12} />} Přefotit obchod
               </button>
             </div>
-            <dl className={`grid grid-cols-4 overflow-hidden rounded-lg border sm:grid-cols-7 ${line}`}>
-              {stripValues.map(item => (
-                <div key={item.label} className={`border-r px-3 py-2 last:border-r-0 ${line}`}>
-                  <dt className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">{item.label}</dt>
-                  <dd className="mt-0.5 font-mono text-[12.5px] font-semibold tabular-nums">{item.value}</dd>
-                </div>
-              ))}
-            </dl>
-            {displayTrade.excursionAmbiguous && <p className="text-[11px] text-amber-500">MFE/MAE jsou prokazatelné dolní meze; pořadí cen uvnitř svíčky není známé.</p>}
+            <TradeRuler trade={displayTrade} isDark={isDark} />
             {displayTrade.outcomeAmbiguous && <p className="text-[11px] text-amber-500">Pořadí vstupu a zásahů SL/TP není z OHLC jisté. Engine použil konzervativní výsledek.</p>}
-            <details className={`group rounded-lg border ${line}`}>
-              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[12px] font-bold"><Target size={14} className="text-blue-500" /> Detail z indikátoru <span className="ml-auto text-[10.5px] font-semibold text-slate-500 group-open:hidden">odraz · entry · SL · cíl</span></summary>
-              <div className={`border-t p-3 ${line}`}>
-                <div className="grid gap-2 sm:grid-cols-2" data-backtest-entry-audit>
-                  {entryAudit.map(item => {
-                    const tone = item.tone === 'pass'
-                      ? isDark ? 'border-emerald-400/20 bg-emerald-400/[0.06]' : 'border-emerald-200 bg-emerald-50/70'
-                      : item.tone === 'fail'
-                        ? isDark ? 'border-rose-400/20 bg-rose-400/[0.06]' : 'border-rose-200 bg-rose-50/70'
-                        : item.tone === 'info'
-                          ? isDark ? 'border-sky-400/20 bg-sky-400/[0.05]' : 'border-sky-200 bg-sky-50/70'
-                          : isDark ? 'border-white/10 bg-white/[0.025]' : 'border-slate-200 bg-slate-50';
-                    const dot = item.tone === 'pass' ? 'bg-emerald-500'
-                      : item.tone === 'fail' ? 'bg-rose-500'
-                        : item.tone === 'info' ? 'bg-sky-500' : 'bg-slate-400';
-                    return (
-                      <div key={item.label} className={`min-w-0 rounded-md border px-2.5 py-2 ${tone}`}>
-                        <div className="flex items-center gap-1.5">
-                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-                          <p className="text-[11px] font-semibold text-slate-500">{item.label}</p>
-                        </div>
-                        <p className="mt-1 truncate text-[11px] font-semibold" title={item.value}>{item.value}</p>
-                        <p className="mt-0.5 truncate text-[9.5px] font-semibold text-slate-500" title={item.detail}>{item.detail}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-                {collectedValues.length ? (
-                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">
-                    {collectedValues.map(item => (
-                      <div key={item.label} className="min-w-0">
-                        <dt className="text-[10.5px] font-semibold text-slate-500">{item.label}</dt>
-                        <dd className="truncate text-[11.5px] font-bold tabular-nums">{item.value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                ) : null}
-              </div>
-            </details>
+            <section>
+              <label htmlFor="backtest-review-notes" className={sectionTitle}><FileText size={14} className="text-slate-400" /> Popis obchodu</label>
+              <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={6} placeholder="Co jsem viděl, proč jsem vstoupil, jak jsem obchod vedl, co bych příště změnil…" className={`mt-2 w-full resize-y rounded-lg border px-3 py-2.5 text-sm leading-relaxed outline-none focus:border-blue-500 ${field}`} />
+            </section>
           </div>
 
           {/* Vpravo: jen to, co má smysl psát. */}
@@ -591,14 +467,6 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
               <ConfluenceCapsuleEditor disabled={saving || recalculating} value={ltfConfluence} onChange={setLtfConfluence} isDark={isDark} addLabel="Přidat Entry Confluence" suggestions={tagSuggestions?.ltf} autoTags={autoTags.ltf} onManualAdd={added => { manualTags.current.ltf.push(...added); }} />
               <p className="mt-3 text-[10.5px] font-bold uppercase tracking-[0.06em] text-slate-500">HTF Confluence</p>
               <ConfluenceCapsuleEditor disabled={saving || recalculating} value={htfConfluence} onChange={setHtfConfluence} isDark={isDark} addLabel="Přidat HTF Confluence" suggestions={tagSuggestions?.htf} autoTags={autoTags.htf} onManualAdd={added => { manualTags.current.htf.push(...added); }} />
-              {levelTags.length ? (
-                <>
-                  <p className="mt-3 flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-slate-500"><Waves size={12} className="text-amber-500" /> Levely</p>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {levelTags.map(tag => <span key={tag} className={`rounded-lg border px-2 py-1 text-[11px] font-semibold ${isDark ? 'border-amber-400/20 bg-amber-400/10 text-amber-400' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>{tag}</span>)}
-                  </div>
-                </>
-              ) : null}
               {recalculationChanges ? (
                 <div className={`mt-3 border-t pt-3 ${line}`} data-backtest-recalculation-preview>
                   {recalculationChanges.length ? (
@@ -628,11 +496,6 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
                 ))}
               </div>
               <div className="mt-1"><ConfluenceCapsuleEditor disabled={saving || recalculating} value={joinTags(customTags)} onChange={value => setTags(joinTags([...tagList.filter(tag => disciplineSet.has(tag)), ...splitTags(value)]))} isDark={isDark} addLabel="Vlastní tag" suggestions={(tagSuggestions?.tags ?? []).filter(tag => !disciplineSet.has(tag))} /></div>
-            </section>
-
-            <section className={`border-b px-4 py-3.5 ${line}`}>
-              <label htmlFor="backtest-review-notes" className={sectionTitle}><FileText size={14} className="text-slate-400" /> Proč jsem vstoupil / co příště</label>
-              <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={5} placeholder="Co jsem viděl, proč jsem vstoupil, co bych příště změnil…" className={`mt-2.5 w-full resize-y rounded-lg border px-3 py-2.5 text-sm outline-none focus:border-blue-500 ${field}`} />
             </section>
 
             <details className="px-4 py-3">
