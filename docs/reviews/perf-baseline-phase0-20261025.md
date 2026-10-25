@@ -4,7 +4,8 @@ Výchozí stav **před** synchronizací přes verze a před rychlými opravami
 z `docs/reviews/supabase-vercel-usage-20261025.md`. Každá další změna se má
 porovnat se stejným postupem (sekce „Jak měřit znovu“).
 
-Stav: **web hotový, iPhone čeká na společné měření** (postup na konci).
+Stav: **web a start appky na iPhonu hotové**; Safari Timeline (plynulost na
+iPhonu) a backtest replay čekají na společné měření (postup na konci).
 
 ## Prostředí
 
@@ -138,9 +139,38 @@ ptá každých ~1,6 s, i když se nekreslí.
    `requestIdleCallback` volno, `longtask` a požadavky za minutu.
 4. Po měření měřicí klíče z `localStorage` smazat.
 
-## iPhone (připraveno, čeká na Filipa)
+## iPhone — start appky (25. 10. 20:23–20:26)
 
-1. **Start appky** (nainstalovaná verze, nic se nepřeinstaluje):
+iPhone 13 Pro Max, nainstalovaná appka (Debug build nativního obalu, web
+z `main` ze 17. 10.), teplá cache, Wi-Fi. `./scripts/ios/perf-measure.sh
+--installed baseline-20261025 3`: 1 zahřívací + 3× Dashboard + 3× LIVE.
+Syslog z telefonu u části procesů ztratil první řádky (i značku `origin`),
+proto vestavěný report sloučil běhy do dvou — rozebráno po procesech (PID);
+počty požadavků jsou proto spodní odhad.
+
+| Co | 3 běhy | Medián |
+|---|---|---|
+| Dashboard z cache (`boot:dashboard-paint`) | 0,47 s (jediný čistý vzorek; zahřívací 0,96 s) | 0,47 s |
+| dashboard RPC (fetch) | 2,00 / 1,94 / 1,80 s | **1,94 s** |
+| journal fakta (od `dash:rpc-done`) | 3,45 / 3,67 / 3,39 s | **3,45 s** |
+| poznámky | 1,81 / 1,84 / 1,75 s | 1,81 s |
+| čerstvá data dashboardu (`boot:refresh-done`) | 8,31 / 8,23 / 8,05 s | **8,23 s** |
+| LIVE odhalení (`live:reveal`) | 1,88 / 1,69 / 1,77 s | 1,77 s |
+| LIVE první stav kopírky | 3,41 / 2,59 / 2,85 s | **2,85 s** |
+| relay kopírky (fetch) | med 0,79 / 0,77 / 0,82 s | ~0,79 s (server ~0,64 s: auth 150 + resolve 332 + runtime 155 ms) |
+| zamrznutí hlavního vlákna > 100 ms (prvních 25 s) | 1–3× na spuštění, max 105–183 ms, celkem 105–339 ms | — |
+| plné čtení obchodů při každém startu | ≥ 46 dávek snapshotů, ≥ 19–23 stránek `trades` | — |
+
+Srovnání s 12. 10. (PROJECT_LOG; tehdy po přeinstalaci bez cache): stav
+kopírky při studeném startu 3,2–7,4 s → teď 2,6–3,4 s; dashboard tehdy
+vykreslen až za 13,3 s s 28 zamrznutími (průměr 287 ms) → teď z cache
+za 0,47 s a 1–3 krátká zamrznutí. Čerstvá data dashboardu jsou na iPhonu
+o ~2,3 s pomalejší než na Macu (8,2 vs 5,9 s), hlavně journal fakta
+(3,45 vs 2,90 s) a RPC (1,94 vs 1,54 s).
+
+## iPhone — zbývá se Filipem
+
+1. **Start appky** — hotovo výše. Opakování (nainstalovaná verze, nic se nepřeinstaluje):
    `./scripts/ios/perf-measure.sh --installed baseline-20261025 3` — telefon
    odemčený na stole; skript appku 7× spustí (1 zahřívací + 3× Dashboard +
    3× LIVE) a uloží značky AT-PERF včetně zamrznutí hlavního vlákna

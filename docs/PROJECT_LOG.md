@@ -288,8 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   kreslení.
 - **Nástroj**: `scripts/ios/perf-measure.sh --installed <štítek>` měří verzi
   v telefonu bez přeinstalace.
-- **Zbývá**: iPhone se Filipem (start appky, Safari Timeline, backtest replay),
-  pak návrhový dokument fází 0–2.
+- **iPhone 13 Pro Max** (nainstalovaná appka, teplá cache, 3+3 spuštění):
+  dashboard z cache 0,47 s, čerstvá data 8,2 s (RPC 1,94 + journal fakta 3,45
+  + poznámky 1,81 s), LIVE první stav kopírky 2,85 s (12. 10. 3,2–7,4 s),
+  zamrznutí > 100 ms jen 1–3× na start. Syslog ztrácí první řádky procesů →
+  `perf-report.mjs` slučuje běhy; rozebráno po PID (viz dokument).
+- **Zbývá**: Safari Timeline na iPhonu a backtest replay se Filipem, pak
+  návrhový dokument fází 0–2.
 
 ### 2026-10-25 — Záloha Supabase: skript, zrcadlo Storage, postup obnovy (Claude)
 
