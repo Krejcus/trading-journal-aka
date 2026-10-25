@@ -143,6 +143,44 @@ Disk na Macu: lokální JSONL evidence se nikdy nerotuje
 - Mrtvý kód: `services/copierJournalSync.ts`, `services/journalAccountReadModel.ts`
   (+ jediný konzument GET feedu evidence od kurzoru 0).
 
+## Detail: kde appka čeká a o kolik se to dá zkrátit
+
+Měřeno 25. 10.: `response.origin_time` v Supabase edge logu (24 h), dashboard RPC
+spuštěné read-only pod vlastníkem, počty dávek z kódu (souběžnost dávek 4,
+`lib/orderedBatchReads.ts`). Dřívější měření z iPhonu: PROJECT_LOG 12. 10.
+
+Základ: stejný triviální dotaz trvá z Prahy (prohlížeč) ~55 ms, z Vercelu
+`iad1` ~120 ms. Data: 4 774 obchodů, z toho 1 152 journal, 205 backtest.
+
+**Dashboard — čerstvá data po zobrazení cache (~4 s p50, ~6 s p95), ~200× denně**
+
+| Krok | Čas | Oprava | Úspora |
+|---|---|---|---|
+| `get_dashboard_data_light_v1` (6,4 MB) | 1,41 s p50 / 2,58 s p95 (DB 1,13 s, z toho 0,52 s merge poznámek přes `trade_id::text`) | join přes `trades`, ne text | −0,4 s |
+| Journal: positions 12 dávek (89 ms) + snapshots view 12 dávek (262 ms) + 2× heads | ~1,2 s (p95 ~2 s) | snapshots líně v detailu / tabulka místo view | −0,7 s (p95 −1,4 s) |
+| Poznámky: `get_trade_note_projection_v1` 48 dávek | ~0,7 s | RPC už poznámky obsahuje → vynechat | −0,7 s |
+| `backtest_trade_note_histories` 48 dávek | ~0,65 s | jen pro 205 backtest obchodů (1 vlna) | −0,6 s |
+| **Celkem** | **~4 s** | rychlé opravy | **→ ~1,5 s** |
+| Delta (`p_since`, jen změny) | | architektura | **→ ~0,3 s** |
+
+**Historie — plné `getTrades()` (~5,3 s p50)**: 21 stránek po 250 za sebou
+(keyset, 131 ms p50 / 337 ms p95) ≈ 2,8 s + stejná hydratace ≈ 2,5 s. Spouští ji
+každá Realtime změna deníku a návrat do záložky. Oprava: aktualizovat jen
+změněný obchod (ID je v Realtime eventu) → ~0,1–0,3 s.
+
+**LIVE / kopírka přes Vercel** (iPhone 12. 10.: stav kopírky při studeném startu
+3,2–7,4 s): status relay = 4 DB dotazy za sebou (auth, resolve, runtimes,
+runtime) × ~120 ms + Praha↔iad1 ~110 ms ≈ 0,6 s na obnovu, každé 2 s. V `arn1`
+odhad ~0,1 s. Příkaz (ARM/Flatten/brzda) projde Vercelem 3–4× (UI zápis, claim
+workeru, report, potvrzení v UI) ≈ 12 DB dotazů → odhad −1 až −1,5 s na příkaz.
+Region jde nastavit po funkcích (`functions[...].regions` ve `vercel.json`);
+`live-pnl` a OAuth volají Tradovate v USA → nechat v `iad1`, dokud se nezměří.
+Relay = copier-core transport → INV review + `copier-design-critic`.
+
+Ověření před/po: web `localStorage['at:dev:perf']='1'` + `window.__atPerf`
+(`dash:rpc-done`, `dash:journal-facts-done`, `dash:notes-done`), `Server-Timing`
+na relay, iPhone `scripts/ios/perf-measure.sh`.
+
 ## Doporučené pořadí
 
 1. **Rychlé a bezpečné** (1 větev, bez copier-core): falešný `needsReview`
