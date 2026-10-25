@@ -151,7 +151,7 @@ describe('CandleKit drawing hover editing', () => {
     expect(setHovered).toHaveBeenLastCalledWith(null, null);
   });
 
-  it('subtly enlarges only the hovered anchor circle', () => {
+  it('enlarges only the hovered anchor circle (TradingView-like handles)', () => {
     const engine = new DrawingEngine();
     engine.commit(trendLine('manual-line'));
     engine.select(null);
@@ -175,7 +175,7 @@ describe('CandleKit drawing hover editing', () => {
       fill() {},
       arc(x: number, y: number, radius: number) { arcs.push({ x, y, radius }); },
     };
-    primitive.paneViews()[0].renderer().draw({
+    ({ draw: (target: unknown) => primitive.paneViews().forEach((view: { renderer: () => { draw: (t: never) => void } }) => view.renderer().draw(target as never)) }).draw({
       useBitmapCoordinateSpace(callback: (scope: unknown) => void) {
         callback({
           context,
@@ -187,8 +187,8 @@ describe('CandleKit drawing hover editing', () => {
     });
 
     expect(arcs).toEqual([
-      { x: 10, y: 20, radius: 3.5 },
-      { x: 30, y: 40, radius: 4.5 },
+      { x: 10, y: 20, radius: 4 },
+      { x: 30, y: 40, radius: 5.5 },
     ]);
     expect(context).toMatchObject({ lineWidth: 1.5 });
   });

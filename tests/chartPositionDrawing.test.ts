@@ -165,7 +165,7 @@ describe('TradingView-like Long/Short position drawings', () => {
       strokeStyle: '', fillStyle: '', lineWidth: 1, lineCap: 'butt', font: '', textAlign: 'left', textBaseline: 'alphabetic',
     };
 
-    primitive.paneViews()[0].renderer().draw({
+    ({ draw: (target: unknown) => primitive.paneViews().forEach((view: { renderer: () => { draw: (t: never) => void } }) => view.renderer().draw(target as never)) }).draw({
       useBitmapCoordinateSpace: (draw: (scope: unknown) => void) => draw({
         context, bitmapSize: { width: 800, height: 600 }, horizontalPixelRatio: 1, verticalPixelRatio: 1,
       }),
@@ -201,7 +201,7 @@ describe('TradingView-like Long/Short position drawings', () => {
       strokeStyle: '', fillStyle: '', lineWidth: 1, lineCap: 'butt', font: '', textAlign: 'left', textBaseline: 'alphabetic',
     };
 
-    primitive.paneViews()[0].renderer().draw({
+    ({ draw: (target: unknown) => primitive.paneViews().forEach((view: { renderer: () => { draw: (t: never) => void } }) => view.renderer().draw(target as never)) }).draw({
       useBitmapCoordinateSpace: (draw: (scope: unknown) => void) => draw({
         context, bitmapSize: { width: 800, height: 600 }, horizontalPixelRatio: 1, verticalPixelRatio: 1,
       }),
@@ -253,7 +253,7 @@ describe('TradingView-like Long/Short position drawings', () => {
       strokeStyle: '', fillStyle: '', lineWidth: 1, lineCap: 'butt', font: '', textAlign: 'left', textBaseline: 'alphabetic',
     };
 
-    primitive.paneViews()[0].renderer().draw({
+    ({ draw: (target: unknown) => primitive.paneViews().forEach((view: { renderer: () => { draw: (t: never) => void } }) => view.renderer().draw(target as never)) }).draw({
       useBitmapCoordinateSpace: (draw: (scope: unknown) => void) => draw({
         context, bitmapSize: { width: 800, height: 600 }, horizontalPixelRatio: 1, verticalPixelRatio: 1,
       }),
@@ -321,7 +321,7 @@ describe('TradingView-like Long/Short position drawings', () => {
       strokeStyle: '', fillStyle: '', lineWidth: 1, lineCap: 'butt', font: '', textAlign: 'left', textBaseline: 'alphabetic',
     };
 
-    primitive.paneViews()[0].renderer().draw({
+    ({ draw: (target: unknown) => primitive.paneViews().forEach((view: { renderer: () => { draw: (t: never) => void } }) => view.renderer().draw(target as never)) }).draw({
       useBitmapCoordinateSpace: (draw: (scope: unknown) => void) => draw({
         context, bitmapSize: { width: 800, height: 3_000 }, horizontalPixelRatio: 1, verticalPixelRatio: 1,
       }),

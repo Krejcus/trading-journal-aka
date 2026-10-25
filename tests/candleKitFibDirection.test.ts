@@ -63,7 +63,7 @@ const renderLevelY = (firstY: number, secondY: number, reverse = false) => {
     },
   };
 
-  primitive.paneViews()[0].renderer().draw(target);
+  ({ draw: (target: unknown) => primitive.paneViews().forEach((view: { renderer: () => { draw: (t: never) => void } }) => view.renderer().draw(target as never)) }).draw(target);
   return horizontalLines[0];
 };
 

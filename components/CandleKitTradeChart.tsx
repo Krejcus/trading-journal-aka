@@ -3858,7 +3858,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // čára k aktuální ceně a box se vyplňuje — v přehrávání i na běžném
       // grafu (bez přehrávání jsou „viditelné“ všechny svíčky).
       {
-        const positionProgressRenderer: IPrimitivePaneRenderer = {
+        // Výplň průběhu pod svíčkami (jako box), čárkovaná čára nad nimi.
+        const positionProgressRenderer = (layer: 'bottom' | 'top'): IPrimitivePaneRenderer => ({
           draw: target => {
             target.useMediaCoordinateSpace(({ context }) => {
               let replayCandles = visibleCandlesRef.current;
@@ -3884,14 +3885,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
                 const progressColor = progress.profitable
                   ? settings?.targetColor ?? '#26a69a80'
                   : settings?.stopColor ?? '#ef535080';
-                context.fillStyle = colorWithOpacity(progressColor, 0.34);
-                context.fillRect(
-                  Math.min(startX, currentX),
-                  Math.min(entryY, currentY),
-                  Math.max(1, Math.abs(currentX - startX)),
-                  Math.max(1, Math.abs(currentY - entryY)),
-                );
-                if (chartSettingsRef.current.trading.tradeLines) {
+                if (layer === 'bottom') {
+                  context.fillStyle = colorWithOpacity(progressColor, 0.34);
+                  context.fillRect(
+                    Math.min(startX, currentX),
+                    Math.min(entryY, currentY),
+                    Math.max(1, Math.abs(currentX - startX)),
+                    Math.max(1, Math.abs(currentY - entryY)),
+                  );
+                }
+                if (layer === 'top' && chartSettingsRef.current.trading.tradeLines) {
                   context.beginPath();
                   context.moveTo(startX, entryY);
                   context.lineTo(currentX, currentY);
@@ -3904,11 +3907,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
               context.restore();
             });
           },
-        };
+        });
+        const progressBottom = positionProgressRenderer('bottom');
+        const progressTop = positionProgressRenderer('top');
         const positionProgressPrimitive: ISeriesPrimitive<Time> = {
           attached: ({ requestUpdate }) => { positionProgressPrimitiveRequestUpdateRef.current = requestUpdate; },
           detached: () => { positionProgressPrimitiveRequestUpdateRef.current = null; },
-          paneViews: () => [{ zOrder: () => 'top', renderer: () => positionProgressRenderer }],
+          paneViews: () => [
+            { zOrder: () => 'bottom', renderer: () => progressBottom },
+            { zOrder: () => 'top', renderer: () => progressTop },
+          ],
         };
         series.attachPrimitive(positionProgressPrimitive);
         overlayArtifactsRef.current.primitives.push(positionProgressPrimitive);

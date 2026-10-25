@@ -15,4 +15,13 @@ describe('CandleKit position box hit test', () => {
       expect(source).toContain('Math.abs(p.y - a.y) <= t && p.x >= Math.min(a.x, b.x) - t && p.x <= Math.max(a.x, b.x) + t');
     }
   });
+
+  it('výplň position boxu kreslí pod svíčkami a úchyty jako v TradingView', () => {
+    for (const source of withPosition) {
+      expect(source).toContain('this.bottomView = new PaneView(this, "bottom")');
+      expect(source).toContain('return [this.bottomView, this.view];');
+      expect(source).toContain('if (this.layer === "bottom") {');
+      expect(source).toContain('const base = s.selected ? 5 : 4;');
+    }
+  });
 });

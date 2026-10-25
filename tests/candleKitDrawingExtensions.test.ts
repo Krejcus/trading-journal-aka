@@ -10,7 +10,7 @@ const rendererFor = (engine: DrawingEngine) => {
     requestUpdate: vi.fn(),
   } as never);
   primitive.updateAllViews();
-  return primitive.paneViews()[0].renderer();
+  return ({ draw: (target: unknown) => primitive.paneViews().forEach((view: { renderer: () => { draw: (t: never) => void } }) => view.renderer().draw(target as never)) });
 };
 
 const bitmapTarget = (context: Record<string, unknown>) => ({
