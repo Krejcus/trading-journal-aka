@@ -71,7 +71,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         results.push({ connectionId: scope.connectionId, state: `failed:${code}` });
       }
     }
-    return res.status(200).json({ ms: Date.now() - started, results });
+    // Záznam změn pro delta sync drží 3 dny; úklid jednou za ~hodinu (minuta 7).
+    let pruned: number | null = null;
+    if (new Date().getUTCMinutes() === 7) {
+      const { data: removed, error: pruneError } = await db.rpc('sync_prune_v1');
+      if (pruneError) console.warn('[cron/journal-import] sync prune failed', pruneError.code ?? 'unknown');
+      else pruned = Number(removed ?? 0);
+    }
+    return res.status(200).json({ ms: Date.now() - started, results, pruned });
   } catch (reason) {
     console.warn('[cron/journal-import] run failed', reason instanceof Error ? reason.message : String(reason));
     return res.status(500).json({ error: 'journal-cron-failed' });

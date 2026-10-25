@@ -5156,3 +5156,13 @@ html:not(.light-theme) .dbe-ph-sheet { background: rgba(13, 18, 36, 0.98); }
 /* Start appky: prvky čekají na svůj náběh skryté (jen průhledností, bez posunu —
    BootTransition tak změří přesný cíl loga v liště). */
 html.boot-pre [data-boot] { opacity: 0; }
+
+/* Telefon a tablet: backdrop-filter na WebKitu při scrollu přepočítává rozostření
+   každý snímek. Sklo má vždy vlastní výplň (čitelnost nestojí na blur), takže na
+   dotykových zařízeních blur vypnout — vzhled zůstane, plynulost se zlepší. */
+@media (pointer: coarse) {
+  *, *::before, *::after {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}
