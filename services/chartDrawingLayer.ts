@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { normalizeDrawingForLayer, type StoredDrawingLike } from './chartAnnotationMigration';
 import { wallClockToUnix } from './replayGoTo';
+import { stableStringify } from '../lib/stableJson';
 
 /**
  * Kresby v grafech deníku jako jedna vrstva podle trhu a času (tabulka
@@ -120,7 +121,9 @@ const rowInBounds = (row: ChartDrawingRow, bounds: DrawingWindowBounds): boolean
 };
 export const rowInWindow = (row: ChartDrawingRow, fromDay: string, toDay: string): boolean => rowInBounds(row, drawingWindowBounds(fromDay, toDay));
 
-const drawingSignature = (drawing: StoredDrawingLike) => JSON.stringify(normalizeDrawingForLayer(drawing));
+// Pořadí klíčů nehraje roli: jsonb vrací styl jinak seřazený, než ho graf exportuje
+// (u ShortPosition to dřív znamenalo nekonečný upsert každých ~1,7 s).
+const drawingSignature = (drawing: StoredDrawingLike) => stableStringify(normalizeDrawingForLayer(drawing));
 
 /**
  * Rozdíl mezi tím, co graf v okně ukazuje, a vrstvou: nové a změněné kresby,

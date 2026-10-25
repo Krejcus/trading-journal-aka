@@ -10,7 +10,7 @@ import { supabase } from './supabase';
 import { isDataUrl, removePayoutProofs, signPayoutProofs, uploadPayoutProof } from './payoutProofStorage';
 import { dashboardTables, loadDashboardFallback, type DashboardRawRow } from './dashboardFallback';
 import { tradeAnalyticsById, type TradeAnalytics } from '../lib/tradeAnalyticsMerge';
-import { get, set } from 'idb-keyval';
+import { del, get, set } from 'idb-keyval';
 import { maybeDetectEpisodes } from './coachMemoryService';
 import { resizeImageDataUrl, dataUrlSizeKB } from './imageResize';
 import { stripAndUploadBase64Images, hasBase64Images } from './stripBase64';
@@ -27,7 +27,8 @@ import { journalReviewPatch } from '../lib/journalReviewPatch';
 import { readJournalInbox, readJournalRetainedReview, type JournalInboxKind } from './journalReviewInbox';
 import { readJournalSourceStatus } from './journalSourceStatus';
 import { loadTradovateJournalSourceStatus } from './tradovateOAuthConnection';
-import { perfMark } from '../lib/perfTrace';
+import { perfDuration, perfMark } from '../lib/perfTrace';
+import { isValidTradeSyncMeta, syncOwnerTrades, type TradeSyncChanges, type TradeSyncMeta, type TradeSyncResult } from './tradeSyncEngine';
 
 const embedTrade = (trade: Trade) => void import('./embeddingService').then(module => module.embedTrade(trade));
 // All ordinary trade saves remove both private ledgers. Each has a dedicated
@@ -244,8 +245,11 @@ let cachedDashboardPrefetch: { userId: string; at: number; promise: Promise<Cach
  */
 async function readCachedDashboardData(userId: string): Promise<CachedDashboardData | null> {
   try {
+    // Základ delta syncu je čerstvější než starý klíč (ten píší jen úplná čtení).
+    const syncBase = isValidTradeSyncMeta(await get(syncMetaKey(userId)).catch(() => null), userId)
+      ? await get(syncTradesKey(userId)).catch(() => undefined) : undefined;
     const [trades, preps, reviews, user, weeklyFocus] = await Promise.all([
-      get(`alphatrade_trades_${userId}`),
+      Array.isArray(syncBase) ? syncBase : get(`alphatrade_trades_${userId}`),
       get(`alphatrade_daily_preps_${userId}`),
       get(`alphatrade_daily_reviews_${userId}`),
       get(`alphatrade_user_profile_${userId}`),
@@ -285,6 +289,404 @@ async function readCachedDashboardData(userId: string): Promise<CachedDashboardD
   }
 }
 
+/** Sloupce seznamu obchodů — sdílí úplné čtení i dočtení změněných ID (delta sync). */
+const TRADE_LIST_FIELDS = `
+        id,
+        user_id,
+        account_id,
+        instrument,
+        pnl,
+        direction,
+        date,
+        timestamp,
+        drawings,
+        is_public,
+        created_at,
+        setup:data->>setup,
+        mistake:data->>mistake,
+        notes:data->>notes,
+        tags:data->tags,
+        runUp:data->>runUp,
+        drawdown:data->>drawdown,
+        riskAmount:data->>riskAmount,
+        targetAmount:data->>targetAmount,
+        entryPrice:data->>entryPrice,
+        exitPrice:data->>exitPrice,
+        stopLoss:data->>stopLoss,
+        takeProfit:data->>takeProfit,
+        quantity:data->>quantity,
+        signal:data->>signal,
+        session:data->>session,
+        confidence:data->>confidence,
+        rr:data->>rr,
+        duration:data->>duration,
+        isValid:data->>isValid,
+        groupId:data->>groupId,
+        phase:data->>phase,
+        htfConfluence:data->htfConfluence,
+        ltfConfluence:data->ltfConfluence,
+        autoConfluence:data->autoConfluence,
+        mistakes:data->mistakes,
+        emotions:data->emotions,
+        planAdherence:data->>planAdherence,
+        executionStatus:data->>executionStatus,
+        needsReview:data->>needsReview,
+        plannedStopLoss:data->>plannedStopLoss,
+        plannedTakeProfit:data->>plannedTakeProfit,
+        invalidReasons:data->invalidReasons,
+        invalidNote:data->>invalidNote,
+        exitReason:data->>exitReason,
+        copierTradeId:data->>copierTradeId,
+        journalSupersededBy:data->>journalSupersededBy,
+        copierEpisodeId:data->>copierEpisodeId,
+        copierSnapshots:data->copierSnapshots,
+        pnlEstimated:data->>pnlEstimated,
+        setupType:data->>setupType,
+        miniViewRange:data->>miniViewRange,
+        miniViewLayout:data->>miniViewLayout,
+        miniViewSecondaryRange:data->>miniViewSecondaryRange,
+        miniViewSecondaryTimeframe:data->>miniViewSecondaryTimeframe,
+        durationMinutes:data->>durationMinutes,
+        positionSize:data->>positionSize,
+        isMaster:data->>isMaster,
+        masterTradeId:data->>masterTradeId,
+        entryTime:data->>entryTime,
+        entryDate:data->>entryDate,
+        exitDate:data->>exitDate,
+        isBE:data->>isBE,
+        screenshot:data->>screenshot,
+        screenshots:data->screenshots,
+        aiSuggestions:data->aiSuggestions,
+        visionAnalysis:data->visionAnalysis,
+        source:data->>source,
+        backtestRunId:data->>backtestRunId,
+        tsOrderIds:data->tsOrderIds,
+        mfeR:data->>mfeR,
+        maeR:data->>maeR,
+        mfePoints:data->>mfePoints,
+        maePoints:data->>maePoints,
+        excursionAvailable:data->>excursionAvailable,
+        excursionComplete:data->>excursionComplete,
+        executionPath:data->executionPath,
+        executionPathComplete:data->>executionPathComplete,
+        outcomeAmbiguous:data->>outcomeAmbiguous,
+        excursionAmbiguous:data->>excursionAmbiguous,
+        slPlacement:data->>slPlacement,
+        targetType:data->>targetType,
+        targetLevel:data->>targetLevel,
+        management:data->>management,
+        sessionBias:data->>sessionBias,
+        sessionPreNotes:data->>sessionPreNotes,
+        sessionPostNotes:data->>sessionPostNotes,
+        biasAligned:data->>biasAligned,
+        schemaVersion:data->>schemaVersion,
+        counterfactual:data->counterfactual,
+        excursion:data->excursion,
+        entryMap:data->entryMap,
+        entryContext:data->entryContext
+`;
+
+/** Řádek seznamu obchodů → Trade; stejné mapování pro úplné čtení i deltu. */
+const mapTradeListRow = (t: any): Trade => ({
+  id: t.id,
+  userId: t.user_id,
+  accountId: t.account_id,
+  instrument: t.instrument,
+  pnl: t.pnl,
+  direction: t.direction,
+  date: t.date,
+  timestamp: t.timestamp,
+  drawings: t.drawings || [],
+  isPublic: t.is_public,
+  createdAt: t.created_at,
+
+  // Mapped JSON fields
+  setup: t.setup,
+  mistake: t.mistake,
+  notes: t.notes,
+  tags: t.tags,
+  runUp: t.runUp ? Number(t.runUp) : undefined,
+  drawdown: t.drawdown ? Number(t.drawdown) : undefined,
+  riskAmount: t.riskAmount ? Number(t.riskAmount) : undefined,
+  targetAmount: t.targetAmount ? Number(t.targetAmount) : undefined,
+  entryPrice: t.entryPrice ? Number(t.entryPrice) : undefined,
+  exitPrice: t.exitPrice ? Number(t.exitPrice) : undefined,
+  stopLoss: t.stopLoss ? Number(t.stopLoss) : undefined,
+  takeProfit: t.takeProfit ? Number(t.takeProfit) : undefined,
+  quantity: t.quantity ? Number(t.quantity) : undefined,
+  signal: t.signal,
+  session: t.session,
+  backtestRunId: t.backtestRunId || undefined,
+  confidence: t.confidence ? Number(t.confidence) : undefined,
+  rr: t.rr ? Number(t.rr) : undefined,
+  duration: t.duration,
+  durationMinutes: t.durationMinutes ? Number(t.durationMinutes) : 0,
+  isValid: parseOptionalTradeValidity(t.isValid),
+  groupId: t.groupId,
+  phase: t.phase,
+  htfConfluence: t.htfConfluence,
+  ltfConfluence: t.ltfConfluence,
+  autoConfluence: t.autoConfluence,
+  mistakes: t.mistakes,
+  emotions: t.emotions,
+  planAdherence: t.planAdherence,
+  executionStatus: t.executionStatus,
+  needsReview: t.needsReview === 'true' || t.needsReview === true,
+  plannedStopLoss: t.plannedStopLoss != null && Number.isFinite(Number(t.plannedStopLoss)) ? Number(t.plannedStopLoss) : undefined,
+  plannedTakeProfit: t.plannedTakeProfit != null && Number.isFinite(Number(t.plannedTakeProfit)) ? Number(t.plannedTakeProfit) : undefined,
+  invalidReasons: Array.isArray(t.invalidReasons) ? t.invalidReasons : undefined,
+  invalidNote: typeof t.invalidNote === 'string' ? t.invalidNote : undefined,
+  exitReason: t.exitReason || undefined,
+  copierTradeId: t.copierTradeId || undefined,
+  journalSupersededBy: t.journalSupersededBy || undefined,
+  copierEpisodeId: t.copierEpisodeId || undefined,
+  copierSnapshots: Array.isArray(t.copierSnapshots) ? t.copierSnapshots : undefined,
+  pnlEstimated: t.pnlEstimated === 'true' || t.pnlEstimated === true,
+  setupType: t.setupType,
+  // Include screenshot URLs (small strings, not base64 blobs — safe to include always)
+  screenshot: t.screenshot && !String(t.screenshot).startsWith('data:') ? t.screenshot : undefined,
+  screenshots: t.screenshots?.filter((s: string) => s && !String(s).startsWith('data:')) || undefined,
+  aiSuggestions: t.aiSuggestions || undefined,
+  visionAnalysis: t.visionAnalysis || undefined,
+  miniViewRange: t.miniViewRange,
+  miniViewLayout: t.miniViewLayout,
+  miniViewSecondaryRange: t.miniViewSecondaryRange,
+  miniViewSecondaryTimeframe: t.miniViewSecondaryTimeframe,
+  positionSize: t.positionSize ? Number(t.positionSize) : undefined,
+  isMaster: t.isMaster === 'true' || t.isMaster === true,
+  masterTradeId: t.masterTradeId || undefined,
+  entryTime: t.entryTime ? Number(t.entryTime) : undefined,
+  // entryDate chybělo v SELECTu → BacktestSessions export měl prázdné entryDate (fallback z date).
+  entryDate: t.entryDate || undefined,
+  exitDate: t.exitDate || undefined,
+  // isBE chybělo v getTrades (getDashboardData ho mapoval) → BE s poplatky se v
+  // historii/Labu/coach tools počítalo jako Loss. Jednotné čtení s dashboardem.
+  isBE: t.isBE === true || t.isBE === 'true' || undefined,
+  // Provenance pro import dedup (Tradesyncer) — musí přežít load, jinak by re-import duplikoval.
+  source: t.source || undefined,
+  tsOrderIds: t.tsOrderIds || undefined,
+
+  // ── AlphaBridge rich intel — číselná pole přes `!= null` (0R je validní hodnota, ne "chybí") ──
+  mfeR: t.mfeR != null ? Number(t.mfeR) : undefined,
+  maeR: t.maeR != null ? Number(t.maeR) : undefined,
+  mfePoints: t.mfePoints != null ? Number(t.mfePoints) : undefined,
+  maePoints: t.maePoints != null ? Number(t.maePoints) : undefined,
+  excursionAvailable: t.excursionAvailable === 'true' || t.excursionAvailable === true,
+  excursionComplete: t.excursionComplete == null ? undefined : (t.excursionComplete === 'true' || t.excursionComplete === true),
+  executionPath: t.executionPath || undefined,
+  executionPathComplete: t.executionPathComplete == null ? undefined : (t.executionPathComplete === 'true' || t.executionPathComplete === true),
+  outcomeAmbiguous: t.outcomeAmbiguous === 'true' || t.outcomeAmbiguous === true,
+  excursionAmbiguous: t.excursionAmbiguous === 'true' || t.excursionAmbiguous === true,
+  slPlacement: t.slPlacement || undefined,
+  targetType: t.targetType || undefined,
+  targetLevel: t.targetLevel || undefined,
+  management: t.management || undefined,
+  sessionBias: t.sessionBias || undefined,
+  sessionPreNotes: t.sessionPreNotes || undefined,
+  sessionPostNotes: t.sessionPostNotes || undefined,
+  biasAligned: t.biasAligned == null ? undefined : (t.biasAligned === 'true' || t.biasAligned === true),
+  schemaVersion: t.schemaVersion != null ? Number(t.schemaVersion) : undefined,
+  counterfactual: t.counterfactual || undefined,
+  excursion: t.excursion || undefined,
+  entryMap: t.entryMap || undefined,
+  entryContext: t.entryContext || undefined,
+
+  // We don't carry the full blob anymore to save memory
+  data: {}
+}) as Trade;
+
+
+// ── Delta sync obchodů (docs/reviews/sync-phases-1-2-design-20261025.md) ───────
+// Základ zapisuje jen engine; ostatní cesty dál píšou do alphatrade_trades_*.
+const syncMetaKey = (userId: string) => `alphatrade_sync_trades_meta_v1_${userId}`;
+const syncTradesKey = (userId: string) => `alphatrade_sync_trades_v1_${userId}`;
+
+async function fetchTradeSyncChanges(cursor: string | null, epoch: number | null): Promise<TradeSyncChanges | null> {
+  const { data, error } = await supabase.rpc('sync_trade_changes_v1', { p_cursor: cursor, p_epoch: epoch })
+    .abortSignal(AbortSignal.timeout(20_000));
+  if (error) {
+    // Starší DB bez funkce: engine se vypne a čte se jako dřív.
+    if (['PGRST202', '42883'].includes(String(error.code))) return null;
+    throw new Error(`trade-sync-unavailable:${error.code || 'request-error'}`);
+  }
+  const value = data as { reset?: unknown; cursor?: unknown; epoch?: unknown; trade_ids?: unknown; episode_ids?: unknown } | null;
+  if (!value || typeof value.reset !== 'boolean' || typeof value.cursor !== 'string' || !/^[0-9]{1,19}$/.test(value.cursor)
+    || !Number.isSafeInteger(value.epoch)) throw new Error('trade-sync-invalid');
+  const ids = value.reset ? [] : value.trade_ids;
+  const episodes = value.reset ? [] : (value.episode_ids ?? []);
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')
+    || !Array.isArray(episodes) || episodes.some(id => typeof id !== 'string')) throw new Error('trade-sync-invalid');
+  return { reset: value.reset, cursor: value.cursor, epoch: value.epoch as number, tradeIds: ids as string[], episodeIds: episodes as string[] };
+}
+
+/** Dočíst konkrétní obchody stejným mapováním a hydratací jako úplné čtení. */
+async function readTradesByIds(owner: string, ids: string[], stillOwner: () => Promise<boolean>): Promise<Trade[]> {
+  const startedAt = performance.now();
+  const rows: any[] = [];
+  for (let index = 0; index < ids.length; index += 100) {
+    if (!await stillOwner()) throw new Error('trade-list-session-changed');
+    const { data, error } = await supabase.from('trades').select(TRADE_LIST_FIELDS)
+      .eq('user_id', owner).in('id', ids.slice(index, index + 100)).abortSignal(AbortSignal.timeout(20_000));
+    if (error || !Array.isArray(data)) throw new Error('trade-list-unavailable');
+    rows.push(...data);
+  }
+  let trades = rows.map(mapTradeListRow);
+  trades = await hydratePrivateJournalFacts(trades, owner);
+  trades = await hydratePrivateTradeNotes(trades, owner);
+  if (!await stillOwner()) throw new Error('trade-list-session-changed');
+  perfDuration('sync:read-ids', performance.now() - startedAt);
+  return trades;
+}
+
+/** Základ v paměti: delta ho nemusí pokaždé číst z IndexedDB (5–10 MB klon). */
+let tradeSyncBaseMemo: { owner: string; cursor: string; trades: Trade[] } | null = null;
+
+function performTradeSync(owner: string, forceFull: boolean): Promise<TradeSyncResult> {
+  const version = authStateVersion;
+  const stillOwner = async () => version === authStateVersion && await getUserId() === owner;
+  let loadedMeta: TradeSyncMeta | null = null;
+  return syncOwnerTrades({
+    ownerId: owner,
+    stillOwner,
+    fetchChanges: fetchTradeSyncChanges,
+    readFull: () => storageService.getTradesFull(owner),
+    readByIds: ids => readTradesByIds(owner, ids, stillOwner),
+    loadMeta: async () => (loadedMeta = (await get(syncMetaKey(owner))) as TradeSyncMeta | null),
+    loadTrades: async () => {
+      const memo = tradeSyncBaseMemo;
+      if (memo && memo.owner === owner && loadedMeta && memo.cursor === loadedMeta.cursor) return memo.trades;
+      const trades = await get(syncTradesKey(owner));
+      return Array.isArray(trades) ? trades as Trade[] : null;
+    },
+    // Obchody dřív než kurzor: po pádu mezi zápisy se změny dočtou znovu, neztratí se.
+    save: async (meta: TradeSyncMeta, trades?: Trade[]) => {
+      if (!await stillOwner()) return;
+      const memoTrades = trades ?? (tradeSyncBaseMemo?.owner === owner ? tradeSyncBaseMemo.trades : null);
+      if (trades) await set(syncTradesKey(owner), trades);
+      await set(syncMetaKey(owner), meta);
+      tradeSyncBaseMemo = memoTrades ? { owner, cursor: meta.cursor, trades: memoTrades } : null;
+    },
+    clear: async () => { tradeSyncBaseMemo = null; await del(syncMetaKey(owner)); },
+    normalize: trades => visibleJournalTrades(trades),
+    now: () => Date.now(),
+  }, { forceFull });
+}
+
+/**
+ * Každý výsledek syncu (i z getTrades() journal syncu nebo obnovy) dostane stav
+ * appky — jinak by delta „spotřebovaná“ jiným čtením v UI chyběla až do reloadu.
+ * Bez odběratele se změny sčítají a doručí se při přihlášení odběratele.
+ */
+type TradeSyncListener = (result: { trades: Trade[]; changedIds: string[] }) => void;
+let tradeSyncListener: { owner: string; listener: TradeSyncListener } | null = null;
+let undeliveredTradeSync: { owner: string; trades: Trade[]; ids: Set<string> } | null = null;
+function emitTradeSync(owner: string, result: TradeSyncResult) {
+  if (!result.changedIds?.length) return;
+  const ids = undeliveredTradeSync?.owner === owner ? undeliveredTradeSync.ids : new Set<string>();
+  result.changedIds.forEach(id => ids.add(id));
+  undeliveredTradeSync = { owner, trades: result.trades, ids };
+  deliverTradeSync();
+}
+function deliverTradeSync() {
+  const pending = undeliveredTradeSync;
+  const target = tradeSyncListener;
+  if (!pending || !target || target.owner !== pending.owner) return;
+  undeliveredTradeSync = null;
+  target.listener({ trades: pending.trades, changedIds: [...pending.ids] });
+}
+export function subscribeTradeSync(owner: string, listener: TradeSyncListener): () => void {
+  const entry = { owner, listener };
+  tradeSyncListener = entry;
+  deliverTradeSync();
+  return () => { if (tradeSyncListener === entry) tradeSyncListener = null; };
+}
+
+/** Souběžná čtení se slučují: nejvýš jeden běh a jeden čekající za ním. */
+let tradeSyncChain: { owner: string; running: Promise<TradeSyncResult>; queued: Promise<TradeSyncResult> | null } | null = null;
+const fullRefreshScheduled = new Set<string>();
+function runTradeSync(owner: string, forceFull = false): Promise<TradeSyncResult> {
+  const start = () => {
+    const startedAt = performance.now();
+    const running = performTradeSync(owner, forceFull);
+    tradeSyncChain = { owner, running, queued: null };
+    running.then(result => {
+      perfDuration(result.changedIds === null ? 'sync:full' : 'sync:delta', performance.now() - startedAt);
+      emitTradeSync(owner, result);
+      if (result.refreshDue) scheduleFullTradeRefresh(owner);
+    }, () => undefined).finally(() => {
+      if (tradeSyncChain?.running === running && !tradeSyncChain.queued) tradeSyncChain = null;
+    });
+    return running;
+  };
+  const chain = tradeSyncChain;
+  if (chain && chain.owner === owner) return chain.queued ??= chain.running.catch(() => undefined).then(start);
+  return start();
+}
+/** Základ starší 24 h se ověří úplným čtením na pozadí, ne na startu. */
+function scheduleFullTradeRefresh(owner: string) {
+  if (fullRefreshScheduled.has(owner)) return;
+  fullRefreshScheduled.add(owner);
+  setTimeout(() => { void runTradeSync(owner, true).catch(() => undefined).finally(() => fullRefreshScheduled.delete(owner)); }, 45_000);
+}
+
+/** Část dashboardu bez obchodů — stejné mapování pro plné RPC i get_dashboard_meta_v1. */
+function mapDashboardMeta(raw: any) {
+  const allAccounts = (raw.accounts || []).map((a: any) => ({
+    ...a.meta, id: a.id, name: a.name, initialBalance: a.initial_balance,
+    currency: a.currency, type: a.type, status: a.status, createdAt: a.created_at,
+    isArchived: a.meta?.isArchived, archivedAt: a.meta?.archivedAt,
+    result: a.meta?.result, phase: a.meta?.phase
+  }));
+  const accounts = allAccounts.filter((a: any) => !a.isArchived) as Account[];
+  const preps = (raw.daily_preps || []).map((d: any) => ({ ...d.data, id: d.id, date: d.date })) as DailyPrep[];
+  const reviews = (raw.daily_reviews || []).map((d: any) => ({ ...d.data, id: d.id, date: d.date })) as DailyReview[];
+  const user = raw.user ? {
+    id: raw.user.id, email: raw.user.email || '',
+    name: raw.user.full_name || '', avatar: raw.user.avatar_url,
+    role: (raw.user.role as any) || 'friend',
+    ...(raw.user.avatar_deferred ? { avatarDeferred: true } : {}),
+  } as User : null;
+  const preferences = (raw.preferences || null) as UserPreferences | null;
+  const weeklyFocus = (raw.weekly_focus || []).map((d: any) => {
+    const goals = (d.goals || []).map((g: any, i: number) =>
+      typeof g === 'string' ? { id: `g_${i}`, text: g, emoji: storageService.predictEmoji(g) } : g
+    );
+    return { id: d.id, weekISO: d.week_iso, goals };
+  }) as WeeklyFocus[];
+  return { accounts, preps, reviews, user, preferences, weeklyFocus };
+}
+
+/**
+ * Rychlá cesta startu: lehké RPC bez obchodů + delta obchodů. Jen když už je
+ * základ syncu; cokoli jiného (první spuštění, starší DB, chyba) = dnešní cesta.
+ */
+async function readDashboardFast(signal?: AbortSignal) {
+  const owner = await getUserId();
+  if (!owner || !isValidTradeSyncMeta(await get(syncMetaKey(owner)).catch(() => null), owner)) return null;
+  const [metaResult, sync] = await Promise.all([
+    supabase.rpc('get_dashboard_meta_v1').abortSignal(signal ?? AbortSignal.timeout(DASHBOARD_RPC_TIMEOUT_MS)),
+    runTradeSync(owner),
+  ]);
+  perfMark('dash:fast-done');
+  if (metaResult.error || !metaResult.data || signal?.aborted) return null;
+  const meta = mapDashboardMeta(metaResult.data);
+  if (meta.user?.id !== owner || await getUserId() !== owner) return null;
+  try {
+    await Promise.all([
+      set(`alphatrade_daily_preps_${owner}`, meta.preps),
+      set(`alphatrade_daily_reviews_${owner}`, meta.reviews),
+      set(`alphatrade_user_profile_${owner}`, meta.user),
+      set(`alphatrade_weekly_focus_${owner}`, meta.weeklyFocus),
+    ]);
+    safeSetItem(`alphatrade_cache_timestamp_${owner}`, String(Date.now()));
+  } catch (cacheError) {
+    console.warn('[Cache] Dashboard metadata could not be persisted:', cacheError);
+  }
+  safeSetItem(`alphatrade_accounts_${owner}`, meta.accounts);
+  if (meta.preferences) safeSetItem(`alphatrade_preferences_${owner}`, meta.preferences);
+  return { trades: sync.trades, ...meta };
+}
+
 export const storageService = {
 
   // Single RPC call to load all dashboard data at once (replaces 7 parallel HTTP requests)
@@ -293,6 +695,13 @@ export const storageService = {
     reviews: DailyReview[]; preferences: UserPreferences | null;
     user: User | null; weeklyFocus: WeeklyFocus[];
   }> {
+    if (!preferPaged) {
+      const fast = await readDashboardFast(signal).catch(() => null);
+      if (fast) {
+        console.info('[Dashboard] Fast refresh (metadata + trade delta) finished');
+        return fast;
+      }
+    }
     // Light read: per-trade analytics blobs are deferred (getTradeAnalytics);
     // the full call took 6 s / 12.7 MB and a phone could not finish it.
     const result = preferPaged ? null : await supabase.rpc('get_dashboard_data_light_v1')
@@ -412,32 +821,7 @@ export const storageService = {
       };
     }) as Trade[];
 
-    const allAccounts = (raw.accounts || []).map((a: any) => ({
-      ...a.meta, id: a.id, name: a.name, initialBalance: a.initial_balance,
-      currency: a.currency, type: a.type, status: a.status, createdAt: a.created_at,
-      isArchived: a.meta?.isArchived, archivedAt: a.meta?.archivedAt,
-      result: a.meta?.result, phase: a.meta?.phase
-    }));
-    const accounts = allAccounts.filter((a: any) => !a.isArchived) as Account[];
-
-    const preps = (raw.daily_preps || []).map((d: any) => ({ ...d.data, id: d.id, date: d.date })) as DailyPrep[];
-    const reviews = (raw.daily_reviews || []).map((d: any) => ({ ...d.data, id: d.id, date: d.date })) as DailyReview[];
-
-    const user = raw.user ? {
-      id: raw.user.id, email: raw.user.email || '',
-      name: raw.user.full_name || '', avatar: raw.user.avatar_url,
-      role: (raw.user.role as any) || 'friend',
-      ...(raw.user.avatar_deferred ? { avatarDeferred: true } : {}),
-    } as User : null;
-
-    const preferences = raw.preferences || null;
-
-    const weeklyFocus = (raw.weekly_focus || []).map((d: any) => {
-      const goals = (d.goals || []).map((g: any, i: number) =>
-        typeof g === 'string' ? { id: `g_${i}`, text: g, emoji: storageService.predictEmoji(g) } : g
-      );
-      return { id: d.id, weekISO: d.week_iso, goals };
-    }) as WeeklyFocus[];
+    const { accounts, preps, reviews, user, preferences, weeklyFocus } = mapDashboardMeta(raw);
 
     // Store one complete envelope as the reliable last-known dashboard. The
     // individual keys stay in place because save methods update them between
@@ -621,12 +1005,25 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return [];
 
-    const localKey = `alphatrade_trades_${userId}`;
-    const cached = await get(localKey);
+    const base = isValidTradeSyncMeta(await get(syncMetaKey(userId)).catch(() => null), userId) ? await get(syncTradesKey(userId)) : null;
+    const cached = Array.isArray(base) ? base : await get(`alphatrade_trades_${userId}`);
     return visibleJournalTrades(cached || []);
   },
 
+  /** Obchody vlastníka přes delta sync; cizí uživatel (sdílení) úplným čtením. */
   async getTrades(targetUserId?: string): Promise<Trade[]> {
+    const owner = await getUserId();
+    if (owner && (!targetUserId || targetUserId === owner)) return (await runTradeSync(owner)).trades;
+    return storageService.getTradesFull(targetUserId);
+  },
+
+  /** Delta sync vlastníka i s ID, která se dočetla (null = úplné čtení). */
+  async syncTrades(): Promise<TradeSyncResult | null> {
+    const owner = await getUserId();
+    return owner ? runTradeSync(owner) : null;
+  },
+
+  async getTradesFull(targetUserId?: string): Promise<Trade[]> {
     // Kořenové stránky hlídá otisk projekce; zápis živého deníku během čtení
     // (otevřená pozice ~každou minutu) = zopakovat celé čtení.
     for (let attempt = 1; ; attempt++) {
@@ -655,103 +1052,8 @@ export const storageService = {
     // We explicitly select the fields we need.
     if (!await stillCurrent()) throw new Error('trade-list-session-changed');
     const generation=ownerId===userId ? await journalProjectionFingerprint(supabase,userId) : null;
-    const fields=`
-        id,
-        user_id,
-        account_id,
-        instrument,
-        pnl,
-        direction,
-        date,
-        timestamp,
-        drawings,
-        is_public,
-        created_at,
-        setup:data->>setup,
-        mistake:data->>mistake,
-        notes:data->>notes,
-        tags:data->tags,
-        runUp:data->>runUp,
-        drawdown:data->>drawdown,
-        riskAmount:data->>riskAmount,
-        targetAmount:data->>targetAmount,
-        entryPrice:data->>entryPrice,
-        exitPrice:data->>exitPrice,
-        stopLoss:data->>stopLoss,
-        takeProfit:data->>takeProfit,
-        quantity:data->>quantity,
-        signal:data->>signal,
-        session:data->>session,
-        confidence:data->>confidence,
-        rr:data->>rr,
-        duration:data->>duration,
-        isValid:data->>isValid,
-        groupId:data->>groupId,
-        phase:data->>phase,
-        htfConfluence:data->htfConfluence,
-        ltfConfluence:data->ltfConfluence,
-        autoConfluence:data->autoConfluence,
-        mistakes:data->mistakes,
-        emotions:data->emotions,
-        planAdherence:data->>planAdherence,
-        executionStatus:data->>executionStatus,
-        needsReview:data->>needsReview,
-        plannedStopLoss:data->>plannedStopLoss,
-        plannedTakeProfit:data->>plannedTakeProfit,
-        invalidReasons:data->invalidReasons,
-        invalidNote:data->>invalidNote,
-        exitReason:data->>exitReason,
-        copierTradeId:data->>copierTradeId,
-        journalSupersededBy:data->>journalSupersededBy,
-        copierEpisodeId:data->>copierEpisodeId,
-        copierSnapshots:data->copierSnapshots,
-        pnlEstimated:data->>pnlEstimated,
-        setupType:data->>setupType,
-        miniViewRange:data->>miniViewRange,
-        miniViewLayout:data->>miniViewLayout,
-        miniViewSecondaryRange:data->>miniViewSecondaryRange,
-        miniViewSecondaryTimeframe:data->>miniViewSecondaryTimeframe,
-        durationMinutes:data->>durationMinutes,
-        positionSize:data->>positionSize,
-        isMaster:data->>isMaster,
-        masterTradeId:data->>masterTradeId,
-        entryTime:data->>entryTime,
-        entryDate:data->>entryDate,
-        exitDate:data->>exitDate,
-        isBE:data->>isBE,
-        screenshot:data->>screenshot,
-        screenshots:data->screenshots,
-        aiSuggestions:data->aiSuggestions,
-        visionAnalysis:data->visionAnalysis,
-        source:data->>source,
-        backtestRunId:data->>backtestRunId,
-        tsOrderIds:data->tsOrderIds,
-        mfeR:data->>mfeR,
-        maeR:data->>maeR,
-        mfePoints:data->>mfePoints,
-        maePoints:data->>maePoints,
-        excursionAvailable:data->>excursionAvailable,
-        excursionComplete:data->>excursionComplete,
-        executionPath:data->executionPath,
-        executionPathComplete:data->>executionPathComplete,
-        outcomeAmbiguous:data->>outcomeAmbiguous,
-        excursionAmbiguous:data->>excursionAmbiguous,
-        slPlacement:data->>slPlacement,
-        targetType:data->>targetType,
-        targetLevel:data->>targetLevel,
-        management:data->>management,
-        sessionBias:data->>sessionBias,
-        sessionPreNotes:data->>sessionPreNotes,
-        sessionPostNotes:data->>sessionPostNotes,
-        biasAligned:data->>biasAligned,
-        schemaVersion:data->>schemaVersion,
-        counterfactual:data->counterfactual,
-        excursion:data->excursion,
-        entryMap:data->entryMap,
-        entryContext:data->entryContext
-      `;
     const rawData=await readTradeListPages<any>(userId,async(after,limit)=>{
-      let query=supabase.from('trades').select(fields).eq('user_id',userId).order('id',{ ascending:true }).limit(limit)
+      let query=supabase.from('trades').select(TRADE_LIST_FIELDS).eq('user_id',userId).order('id',{ ascending:true }).limit(limit)
         .abortSignal(AbortSignal.timeout(20_000));
       if (after!==null) query=query.gt('id',after);
       const { data,error }=await query;
@@ -760,113 +1062,7 @@ export const storageService = {
     },stillCurrent);
     rawData.sort((a,b)=>Number(b.timestamp)-Number(a.timestamp));
 
-    let trades = rawData.map((t: any) => ({
-      id: t.id,
-      userId: t.user_id,
-      accountId: t.account_id,
-      instrument: t.instrument,
-      pnl: t.pnl,
-      direction: t.direction,
-      date: t.date,
-      timestamp: t.timestamp,
-      drawings: t.drawings || [],
-      isPublic: t.is_public,
-      createdAt: t.created_at,
-
-      // Mapped JSON fields
-      setup: t.setup,
-      mistake: t.mistake,
-      notes: t.notes,
-      tags: t.tags,
-      runUp: t.runUp ? Number(t.runUp) : undefined,
-      drawdown: t.drawdown ? Number(t.drawdown) : undefined,
-      riskAmount: t.riskAmount ? Number(t.riskAmount) : undefined,
-      targetAmount: t.targetAmount ? Number(t.targetAmount) : undefined,
-      entryPrice: t.entryPrice ? Number(t.entryPrice) : undefined,
-      exitPrice: t.exitPrice ? Number(t.exitPrice) : undefined,
-      stopLoss: t.stopLoss ? Number(t.stopLoss) : undefined,
-      takeProfit: t.takeProfit ? Number(t.takeProfit) : undefined,
-      quantity: t.quantity ? Number(t.quantity) : undefined,
-      signal: t.signal,
-      session: t.session,
-      backtestRunId: t.backtestRunId || undefined,
-      confidence: t.confidence ? Number(t.confidence) : undefined,
-      rr: t.rr ? Number(t.rr) : undefined,
-      duration: t.duration,
-      durationMinutes: t.durationMinutes ? Number(t.durationMinutes) : 0,
-      isValid: parseOptionalTradeValidity(t.isValid),
-      groupId: t.groupId,
-      phase: t.phase,
-      htfConfluence: t.htfConfluence,
-      ltfConfluence: t.ltfConfluence,
-      autoConfluence: t.autoConfluence,
-      mistakes: t.mistakes,
-      emotions: t.emotions,
-      planAdherence: t.planAdherence,
-      executionStatus: t.executionStatus,
-      needsReview: t.needsReview === 'true' || t.needsReview === true,
-      plannedStopLoss: t.plannedStopLoss != null && Number.isFinite(Number(t.plannedStopLoss)) ? Number(t.plannedStopLoss) : undefined,
-      plannedTakeProfit: t.plannedTakeProfit != null && Number.isFinite(Number(t.plannedTakeProfit)) ? Number(t.plannedTakeProfit) : undefined,
-      invalidReasons: Array.isArray(t.invalidReasons) ? t.invalidReasons : undefined,
-      invalidNote: typeof t.invalidNote === 'string' ? t.invalidNote : undefined,
-      exitReason: t.exitReason || undefined,
-      copierTradeId: t.copierTradeId || undefined,
-      journalSupersededBy: t.journalSupersededBy || undefined,
-      copierEpisodeId: t.copierEpisodeId || undefined,
-      copierSnapshots: Array.isArray(t.copierSnapshots) ? t.copierSnapshots : undefined,
-      pnlEstimated: t.pnlEstimated === 'true' || t.pnlEstimated === true,
-      setupType: t.setupType,
-      // Include screenshot URLs (small strings, not base64 blobs — safe to include always)
-      screenshot: t.screenshot && !String(t.screenshot).startsWith('data:') ? t.screenshot : undefined,
-      screenshots: t.screenshots?.filter((s: string) => s && !String(s).startsWith('data:')) || undefined,
-      aiSuggestions: t.aiSuggestions || undefined,
-      visionAnalysis: t.visionAnalysis || undefined,
-      miniViewRange: t.miniViewRange,
-      miniViewLayout: t.miniViewLayout,
-      miniViewSecondaryRange: t.miniViewSecondaryRange,
-      miniViewSecondaryTimeframe: t.miniViewSecondaryTimeframe,
-      positionSize: t.positionSize ? Number(t.positionSize) : undefined,
-      isMaster: t.isMaster === 'true' || t.isMaster === true,
-      masterTradeId: t.masterTradeId || undefined,
-      entryTime: t.entryTime ? Number(t.entryTime) : undefined,
-      // entryDate chybělo v SELECTu → BacktestSessions export měl prázdné entryDate (fallback z date).
-      entryDate: t.entryDate || undefined,
-      exitDate: t.exitDate || undefined,
-      // isBE chybělo v getTrades (getDashboardData ho mapoval) → BE s poplatky se v
-      // historii/Labu/coach tools počítalo jako Loss. Jednotné čtení s dashboardem.
-      isBE: t.isBE === true || t.isBE === 'true' || undefined,
-      // Provenance pro import dedup (Tradesyncer) — musí přežít load, jinak by re-import duplikoval.
-      source: t.source || undefined,
-      tsOrderIds: t.tsOrderIds || undefined,
-
-      // ── AlphaBridge rich intel — číselná pole přes `!= null` (0R je validní hodnota, ne "chybí") ──
-      mfeR: t.mfeR != null ? Number(t.mfeR) : undefined,
-      maeR: t.maeR != null ? Number(t.maeR) : undefined,
-      mfePoints: t.mfePoints != null ? Number(t.mfePoints) : undefined,
-      maePoints: t.maePoints != null ? Number(t.maePoints) : undefined,
-      excursionAvailable: t.excursionAvailable === 'true' || t.excursionAvailable === true,
-      excursionComplete: t.excursionComplete == null ? undefined : (t.excursionComplete === 'true' || t.excursionComplete === true),
-      executionPath: t.executionPath || undefined,
-      executionPathComplete: t.executionPathComplete == null ? undefined : (t.executionPathComplete === 'true' || t.executionPathComplete === true),
-      outcomeAmbiguous: t.outcomeAmbiguous === 'true' || t.outcomeAmbiguous === true,
-      excursionAmbiguous: t.excursionAmbiguous === 'true' || t.excursionAmbiguous === true,
-      slPlacement: t.slPlacement || undefined,
-      targetType: t.targetType || undefined,
-      targetLevel: t.targetLevel || undefined,
-      management: t.management || undefined,
-      sessionBias: t.sessionBias || undefined,
-      sessionPreNotes: t.sessionPreNotes || undefined,
-      sessionPostNotes: t.sessionPostNotes || undefined,
-      biasAligned: t.biasAligned == null ? undefined : (t.biasAligned === 'true' || t.biasAligned === true),
-      schemaVersion: t.schemaVersion != null ? Number(t.schemaVersion) : undefined,
-      counterfactual: t.counterfactual || undefined,
-      excursion: t.excursion || undefined,
-      entryMap: t.entryMap || undefined,
-      entryContext: t.entryContext || undefined,
-
-      // We don't carry the full blob anymore to save memory
-      data: {}
-    })) as Trade[];
+    let trades = rawData.map(mapTradeListRow);
 
     trades = await hydratePrivateJournalFacts(trades, userId);
     trades = await hydratePrivateTradeNotes(trades, userId);

@@ -125,6 +125,24 @@ describe('vrstva kreseb — čisté funkce', () => {
     expect(deletions[0]).toMatchObject({ deletedAt: 100, dirty: true });
   });
 
+  it('kresba ze serveru s jinak seřazenými klíči (jsonb) není změna — žádný nekonečný upsert', async () => {
+    const { diffWindowExport, fromServerRow, rowForDrawing } = await import('../services/chartDrawingLayer');
+    const exported = {
+      id: 'dw_pos', tool: 'ShortPosition', points: [{ time: T, price: 30_080 }, { time: T + 360, price: 30_076 }, { time: T + 360, price: 30_089 }],
+      style: { color: '#f23645', width: 1, dashed: false, lineStyle: 'solid', fill: null, fib: { levels: [0, 1], show: true }, position: { qty: 1, risk: 'fixed' } },
+    };
+    const sent = rowForDrawing(exported, 1);
+    // jsonb řadí klíče objektu podle délky a pak abecedy — tak se kresba vrátí ze serveru.
+    const server = fromServerRow({
+      id: 'dw_pos', day: sent.day, start_time: new Date(sent.startTime * 1_000).toISOString(), end_time: new Date(sent.endTime * 1_000).toISOString(),
+      carry_forward: false, edited_at: new Date(1).toISOString(), deleted_at: null, updated_at: new Date(2).toISOString(),
+      drawing: { id: 'dw_pos', tool: 'ShortPosition', style: { fib: { show: true, levels: [0, 1] }, fill: null, color: '#f23645', width: 1, dashed: false, position: { qty: 1, risk: 'fixed' }, lineStyle: 'solid' }, points: exported.points },
+    })!;
+    const { upserts, deletions } = diffWindowExport([server], [exported], 100, new Set(['dw_pos']));
+    expect(upserts).toEqual([]);
+    expect(deletions).toEqual([]);
+  });
+
   it('zastaralý graf nevzkřísí kresbu smazanou po svém načtení; dřív smazanou (Zpět) ano', async () => {
     const { diffWindowExport, rowForDrawing } = await import('../services/chartDrawingLayer');
     const deletedLater = { ...rowForDrawing(line('dw_x'), 1), deletedAt: 500 };

@@ -86,6 +86,15 @@ const flushOwner = async (storage: Pick<BacktestTradeReviewStorage, 'prepareBack
       });
       if (!superseded) result.confirmed.push(entry.candidate);
     } catch (reason) {
+      // Smazaný obchod (P0002) už nikdy neprojde — dřív blokoval frontu a každých
+      // 5 s posílal dvě RPC navždy. Položku zahodit a pokračovat dalšími.
+      if (reason instanceof Error && reason.message.includes('Backtest trade not found')) {
+        await update<State>(keyOf(owner), previous => {
+          if (previous?.[entry.candidate.tradeId]?.token !== entry.token) return previous ?? {};
+          const next = { ...previous }; delete next[entry.candidate.tradeId]; return next;
+        });
+        continue;
+      }
       result.error = `Dopočet analýz čeká na uložení. ${reason instanceof Error ? reason.message : String(reason)}`;
       // Offline/missing migration should not generate one failing request per trade.
       break;

@@ -83,3 +83,15 @@ describe('progressive analytics durable queue', () => {
     await expect(enqueueBacktestAnalytics([{ ...candidate(), runId: 'wrong' }], 'alice')).rejects.toThrow('identita');
   });
 });
+
+describe('smazaný obchod ve frontě analýz', () => {
+  it('položku obchodu, který už neexistuje (P0002), zahodí a pokračuje dalšími', async () => {
+    const api = storage();
+    api.prepareBacktestTradeReview.mockRejectedValueOnce(new Error('Backtest trade not found'));
+    await enqueueBacktestAnalytics([candidate()], 'alice');
+    const result = await flushBacktestAnalytics(api);
+    expect(result.error).toBeNull();
+    expect(result.pendingCount).toBe(0);
+    expect(api.updateBacktestTradeReview).not.toHaveBeenCalled();
+  });
+});

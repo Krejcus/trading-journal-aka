@@ -6,6 +6,7 @@ import { journalSourceConnections } from './services/journalSourceStatus';
 import { aggregateHistoryTrades, tradeDetailMembers } from './lib/tradeHistoryPresentation';
 import { combinedTradeChanges } from './services/combinedTradePatch';
 import { discardBacktestAnalytics, enqueueBacktestAnalytics, flushBacktestAnalytics } from './services/backtestAnalyticsOutbox';
+import { mergeSyncedTrades } from './services/tradeSyncMerge';
 import type { BacktestAnalyticsRefreshCandidate } from './services/backtestAnalyticsRefresh';
 import { buildBacktestTradeRecalculationUpdates } from './services/backtestTradeRecalculation';
 import { changedTradeFields, rollbackTradePatch } from './services/tradePatch';
@@ -22,7 +23,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { calculateStats } from './services/analysis';
 import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, type LeakFinding } from './services/labAnalytics';
 import { tradeNeedsEnrichment } from './services/tradovateImport';
-import { storageService, getUserId } from './services/storageService';
+import { storageService, getUserId, subscribeTradeSync } from './services/storageService';
 import { preloadDecodedImage } from './services/imageDecodeCache';
 import { warmTradeHistory } from './services/tradeHistoryWarmup';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
@@ -58,7 +59,11 @@ type DashboardModule = typeof import('./components/Dashboard');
 let loadedDashboard: DashboardModule | null = null;
 /** Jak často se otevřená appka ptá na nový stav deníku. Se živým deníkem
  * (kontrolní body, 14. 10.) čte import jen okno od bodu, takže stačí levně. */
-const JOURNAL_SYNC_INTERVAL_MS = 20_000;
+// Cron importuje každou minutu a nové obchody přijdou přes záznam změn;
+// klient serveru jen připomene zpracování (dřív 20 s = 3 importy každou třetinu minuty).
+const JOURNAL_SYNC_INTERVAL_MS = 60_000;
+const ANALYTICS_FLUSH_MS = 5_000;
+const ANALYTICS_FLUSH_MAX_MS = 300_000;
 /**
  * Deník dne: příprava i uzavření platí pro všechny účty, horní lišta s filtry
  * je na něm schovaná — vlastní, plně otevřené filtry (všechny účty i dny),
@@ -554,6 +559,7 @@ const App: React.FC = () => {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [offlineSnapshotAt, setOfflineSnapshotAt] = useState<number | null>(null);
   const [cloudRefreshing, setCloudRefreshing] = useState(false);
+  const [dataRefreshSlow, setDataRefreshSlow] = useState(false);
   const [cloudRefreshError, setCloudRefreshError] = useState<string | null>(null);
   const retryCloudRef = useRef<() => void>(() => {});
   const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine !== false);
@@ -871,7 +877,8 @@ const App: React.FC = () => {
     if (!isCurrentSession()) return;
     // Živý deník (14. 10. 2026): server zpracuje nové obchody sám; klient se
     // jen levně ptá, zda je nový stav (bez změny = jedno RPC).
-    if (!force && Date.now() - copierJournalLastSyncRef.current < JOURNAL_SYNC_INTERVAL_MS) return;
+    // Odstup se měří od konce běhu: s tolerancí, jinak by každý druhý tik interval vypadl.
+    if (!force && Date.now() - copierJournalLastSyncRef.current < JOURNAL_SYNC_INTERVAL_MS - 15_000) return;
     copierJournalSyncBusyRef.current = true;
     const abort = new AbortController();
     copierImportAbortRef.current = abort;
@@ -1817,12 +1824,12 @@ const App: React.FC = () => {
   }, []);
 
   const [analyticsSyncState, setAnalyticsSyncState] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
-  const flushAnalytics = useCallback(async () => {
+  const flushAnalytics = useCallback(async (): Promise<boolean> => {
     const owner = backtestJournalOwnerRef.current;
-    if (!owner) return;
+    if (!owner) return true;
     try {
       const result = await flushBacktestAnalytics(storageService);
-      if (backtestJournalOwnerRef.current !== owner || await getUserId() !== owner) return;
+      if (backtestJournalOwnerRef.current !== owner || await getUserId() !== owner) return true;
       setAnalyticsSyncState(previous => previous.pending === result.pendingCount && previous.error === result.error ? previous : { pending: result.pendingCount, error: result.error });
       if (result.confirmed.length) setTrades(previous => {
         if (backtestJournalOwnerRef.current !== owner) return previous;
@@ -1833,20 +1840,43 @@ const App: React.FC = () => {
           return { ...trade, ...buildBacktestTradeRecalculationUpdates(trade, item.recalculated), backtestAnalyticsRefresh: item.stamp };
         });
       });
+      return result.error === null;
     } catch (reason) {
       if (backtestJournalOwnerRef.current === owner) setAnalyticsSyncState(previous => ({ ...previous,
         error: reason instanceof Error ? reason.message : 'Dopočet analýz čeká na uložení.' }));
+      return false;
     }
   }, []);
   useEffect(() => {
     if (!isInitialLoadDone || !loadedUserId || loadedUserId !== session?.user?.id) {
       setAnalyticsSyncState(previous => !previous.pending && previous.error === null ? previous : { pending: 0, error: null }); return;
     }
-    void flushAnalytics();
-    const timer = window.setInterval(() => void flushAnalytics(), 5_000);
-    const retry = () => void flushAnalytics();
+    // Prázdná fronta je jen čtení IndexedDB; selhání (offline, konflikt) se
+    // opakuje s rostoucím odstupem, ne dvěma RPC každých 5 s navždy. Skrytá
+    // záložka nic neposílá — dožene to po návratu.
+    let disposed = false;
+    let running = false;
+    let timer: number | undefined;
+    let delay = ANALYTICS_FLUSH_MS;
+    const run = async () => {
+      if (disposed || running) return;
+      running = true;
+      try {
+        if (document.visibilityState === 'visible') {
+          delay = await flushAnalytics() ? ANALYTICS_FLUSH_MS : Math.min(delay * 2, ANALYTICS_FLUSH_MAX_MS);
+        }
+      } finally { running = false; }
+      if (!disposed) { window.clearTimeout(timer); timer = window.setTimeout(() => void run(), delay); }
+    };
+    void run();
+    // Jediný řetěz: návrat do záložky / online jen zkrátí čekání, nezakládá druhý.
+    const retry = () => { if (document.visibilityState !== 'visible' || running) return; delay = ANALYTICS_FLUSH_MS; window.clearTimeout(timer); void run(); };
     window.addEventListener('online', retry);
-    return () => { window.clearInterval(timer); window.removeEventListener('online', retry); };
+    document.addEventListener('visibilitychange', retry);
+    return () => {
+      disposed = true; window.clearTimeout(timer);
+      window.removeEventListener('online', retry); document.removeEventListener('visibilitychange', retry);
+    };
   }, [flushAnalytics, isInitialLoadDone, loadedUserId, session?.user?.id]);
   const handleBacktestAnalyticsRefresh = useCallback(async (candidates: BacktestAnalyticsRefreshCandidate[]) => {
     const owner = backtestJournalOwnerRef.current;
@@ -2232,6 +2262,9 @@ const App: React.FC = () => {
 
         // Refresh complete contents, including edits that preserve row identity.
         perfMark('boot:refresh-start');
+        // Brána zobrazení: cache se ukáže hned; trvá-li ověření čerstvých dat
+        // déle než 1,5 s, hlavička nenápadně ukáže „Aktualizuji…“ (kratší nic neblikne).
+        const slowRefreshTimer = window.setTimeout(() => { if (isCurrentSession()) setDataRefreshSlow(true); }, 1_500);
         afterLivePriority().then(() => {
           perfMark('boot:refresh-request');
           return storageService.getDashboardData();
@@ -2262,6 +2295,9 @@ const App: React.FC = () => {
           console.warn('[Load] Background refresh failed:', err);
           setOfflineSnapshotAt(cached.cachedAt || -1);
           isSyncedWithDbRef.current = true; // Fallback
+        }).finally(() => {
+          window.clearTimeout(slowRefreshTimer);
+          setDataRefreshSlow(false);
         });
         return;
       }
@@ -2391,135 +2427,60 @@ const App: React.FC = () => {
   // Realtime channel ref for cleanup
   const realtimeChannelRef = useRef<any>(null);
 
-  // START REALTIME SYNC - Delayed until after initial load to prevent WebSocket blocking REST API
+  // Výsledky delta syncu (z kteréhokoli čtení: Realtime, journal sync, obnova)
+  // do stavu: mění se jen ID, která se opravdu změnila.
+  useEffect(() => {
+    if (!session) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
+    return subscribeTradeSync(session.user.id, result => {
+      if (!isCurrentSession()) return;
+      const added = mergeSyncedTrades(copierRowsRef.current, result).added[0];
+      setTrades(current => isCurrentSession() ? mergeSyncedTrades(current, result).trades : current);
+      if (added) {
+        // Nový ruční obchod z jiného zařízení: toast a čerstvé zůstatky účtů.
+        setTradeToast({ id: Date.now(), instrument: added.instrument || '?', pnl: Number(added.pnl) || 0, accountId: String(added.accountId || '') });
+        storageService.getAccounts().then(freshAccounts => {
+          if (isCurrentSession() && freshAccounts.length > 0) setAccounts(freshAccounts);
+        }).catch(() => {});
+      }
+    });
+  }, [session, captureSessionRequest]);
+
+  // REALTIME: záznam změn (sync_changes) místo celých řádků trades. Událost jen
+  // spustí sloučený delta sync; výsledek aplikuje odběratel výše. Odložené až
+  // po prvním načtení, ať WebSocket nebrzdí start.
   useEffect(() => {
     if (!session || !isInitialLoadDone) return;
     const isCurrentSession = captureSessionRequest(session.user.id);
-    const journalReader = coalescedJournalRead({ read: async isLatest => {
+    const deltaReader = coalescedJournalRead({ delayMs: 400, read: async () => {
       if (!isCurrentSession()) return;
-      const before = copierRowsRef.current;
-      try {
-        const incoming = await storageService.getTrades();
-        if (!isCurrentSession() || !isLatest()) return;
-        setTrades(current => isCurrentSession() && isLatest()
-          ? mergeImportedJournalTrades(current, before, incoming) : current);
-      } catch {
-        if (isCurrentSession() && isLatest()) setCopierImportError(true);
-      }
+      try { await storageService.syncTrades(); }
+      catch (error) { console.warn('[Realtime] Trade delta sync failed:', error); }
     } });
-    const scheduleJournalRead = () => {
-      journalVerifiedReadsRef.current = new Map();
-      journalReader.request();
-    };
 
-    // Delay Realtime subscription to avoid WebSocket connection attempts blocking initial REST calls
     const realtimeTimer = setTimeout(() => {
       if (!isCurrentSession()) return;
-
-      const tradesChannel = supabase
-        .channel('public:trades')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'trades',
-            filter: `user_id=eq.${session.user.id}`
-          },
-          async (payload) => {
-            if (!isCurrentSession()) return;
-            const rawJournal = payload.eventType === 'DELETE' ? payload.old : payload.new;
-            const currentJournal = copierRowsRef.current.find(trade => String(trade.id) === String(rawJournal?.id));
-            const journalData = rawJournal && 'data' in rawJournal ? rawJournal.data as Partial<Trade> : undefined;
-            if (journalData?.source === 'copier' || (journalData && (isEvidenceJournalTrade(journalData as Trade) || isRetiredJournalTrade(journalData as Trade)))
-              || currentJournal?.source === 'copier' || (currentJournal && isEvidenceJournalTrade(currentJournal))) {
-              // Raw realtime rows do not contain the private current facts.
-              // Coalesce a whole import into one verified owner read; never
-              // flash an old P&L or legacy estimate through the generic parser.
-              scheduleJournalRead();
-              return;
-            }
-
-            // Helper: parse raw DB row into Trade (same mapping as getTradeById)
-            const parseRealtimeTrade = (raw: any): Trade => ({
-              ...(raw.data || {}),
-              id: raw.id,
-              accountId: raw.account_id,
-              instrument: raw.instrument,
-              pnl: raw.pnl,
-              direction: raw.direction,
-              date: raw.date,
-              timestamp: raw.timestamp,
-              drawings: raw.drawings || raw.data?.drawings || [],
-              isPublic: raw.is_public,
-              createdAt: raw.created_at,
-            });
-
-            if (payload.eventType === 'INSERT') {
-              const fullTrade = parseRealtimeTrade(payload.new);
-              let isNew = false;
-              setTrades(prev => {
-                if (!isCurrentSession()) return prev;
-                if (prev.some(t => t.id === fullTrade.id)) return prev;
-                isNew = true;
-                return [fullTrade, ...prev].sort((a, b) => b.timestamp - a.timestamp);
-              });
-              // Toast jen pro fakt NOVÝ obchod (ne pro to, co appka vložila sama optimisticky).
-              if (isNew) setTradeToast({ id: Date.now(), instrument: fullTrade.instrument || '?', pnl: Number(fullTrade.pnl) || 0, accountId: String(fullTrade.accountId || '') });
-
-              // Refresh accounts so balance/stats stay current after new trade
-              storageService.getAccounts().then(freshAccounts => {
-                if (isCurrentSession() && freshAccounts.length > 0) setAccounts(freshAccounts);
-              }).catch(() => {});
-
-              try {
-                const { addTradeToCache } = await import('./services/cacheHelper');
-                if (!isCurrentSession()) return;
-                await addTradeToCache(fullTrade, session.user.id, isCurrentSession);
-              } catch (err) {
-                console.error('[Realtime] Failed to update cache:', err);
-              }
-            } else if (payload.eventType === 'UPDATE') {
-              // Payload může být ČÁSTEČNÝ podle REPLICA IDENTITY (DEFAULT vs FULL).
-              // Pokud chybí klíčová pole (account_id nebo data blob), MERGE-uj přes existující
-              // optimistic verzi místo přepisu — jinak rozbijeme trade a filtry ho vyhodí.
-              const raw: any = payload.new;
-              const hasFullPayload = raw && raw.account_id && raw.data && typeof raw.data === 'object';
-              if (hasFullPayload) {
-                const fullTrade = parseRealtimeTrade(raw);
-                setTrades(prev => !isCurrentSession() ? prev : prev.map(t => t.id === fullTrade.id ? fullTrade : t));
-              } else {
-                // Částečný payload — mergni jen pole co dorazila do existujícího trade
-                setTrades(prev => !isCurrentSession() ? prev : prev.map(t => {
-                  if (t.id !== raw?.id) return t;
-                  const partial: any = {};
-                  if (raw.account_id) partial.accountId = raw.account_id;
-                  if (raw.instrument != null) partial.instrument = raw.instrument;
-                  if (raw.pnl != null) partial.pnl = raw.pnl;
-                  if (raw.direction != null) partial.direction = raw.direction;
-                  if (raw.date != null) partial.date = raw.date;
-                  if (raw.timestamp != null) partial.timestamp = raw.timestamp;
-                  if (raw.data && typeof raw.data === 'object') Object.assign(partial, raw.data);
-                  return { ...t, ...partial };
-                }));
-              }
-            } else if (payload.eventType === 'DELETE') {
-              setTrades(prev => !isCurrentSession() ? prev : prev.filter(t => t.id !== payload.old.id));
-            }
-          }
-        )
+      const syncChannel = supabase
+        .channel(`sync-changes:${session.user.id}`)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'sync_changes',
+          filter: `user_id=eq.${session.user.id}`,
+        }, () => { if (isCurrentSession()) deltaReader.request(); })
         .subscribe((status) => {
+          // Po (znovu)připojení dohnat změny z mezery bez spojení.
+          if (status === 'SUBSCRIBED' && isCurrentSession()) deltaReader.request();
           if (status === 'CHANNEL_ERROR') {
             console.warn('[Realtime] WebSocket connection failed. Falling back to REST API only.');
           }
         });
-
-      realtimeChannelRef.current = tradesChannel;
-    }, 1000); // 1 second delay after initial load
+      realtimeChannelRef.current = syncChannel;
+    }, 1000);
 
     return () => {
       clearTimeout(realtimeTimer);
-      journalReader.dispose();
+      deltaReader.dispose();
       if (realtimeChannelRef.current) {
         supabase.removeChannel(realtimeChannelRef.current);
         realtimeChannelRef.current = null;
@@ -4255,6 +4216,11 @@ const App: React.FC = () => {
               {activePage === 'business' && 'Byznys'}
               {activePage === 'ai' && 'AI Coach'}
             </h2>
+            {dataRefreshSlow && (
+              <span role="status" className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${theme !== 'light' ? 'bg-white/5 text-slate-300' : 'bg-slate-200/60 text-slate-500'}`}>
+                <RefreshCw size={11} className="animate-spin" /> Aktualizuji…
+              </span>
+            )}
           </div>
 
           {activePage === 'journal' && (

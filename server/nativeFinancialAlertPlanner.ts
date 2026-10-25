@@ -56,7 +56,7 @@ const BOOTSTRAP_RECENT_MS = 90_000;
  * 500 řádků; po překročení 40 obchodů vypadly starší z okna a cron je posílal
  * znovu každou minutu (36 alertů/min, celou noc).
  */
-const MAX_NOTIFY_AGE_MS = 30 * 60_000;
+export const MAX_NOTIFY_AGE_MS = 30 * 60_000;
 
 const signedUsd = (value: number): string =>
   `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}`;

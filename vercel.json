@@ -40,6 +40,17 @@
             "destination": "/api/live-day-share/:token"
         }
     ],
+    "headers": [
+        {
+            "source": "/assets/(.*)",
+            "headers": [
+                {
+                    "key": "Cache-Control",
+                    "value": "public, max-age=31536000, immutable"
+                }
+            ]
+        }
+    ],
     "functions": {
         "api/cron/journal-import.ts": {
             "maxDuration": 300

@@ -35,7 +35,7 @@ export default function NativePrivacyGate() {
     return <div aria-hidden="true" className="fixed inset-0 z-[10000] bg-[var(--aurora-base,#020617)]" />;
   }
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="privacy-title" className="fixed inset-0 z-[10000] grid place-items-center bg-slate-950/95 px-6 text-center backdrop-blur-3xl">
+    <div role="dialog" aria-modal="true" aria-labelledby="privacy-title" className="fixed inset-0 z-[10000] grid place-items-center bg-slate-950 px-6 text-center">
       <div className="max-w-sm">
         <div className="mx-auto mb-5 grid h-20 w-20 place-items-center rounded-[28px] border border-blue-400/30 bg-blue-500/15 text-blue-400">
           <LockKeyhole size={36} />
