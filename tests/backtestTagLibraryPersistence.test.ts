@@ -73,7 +73,7 @@ describe('owner-scoped tag library transport', () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
-  it.each(['PGRST202', '42883', '40001', '42501'])('surfaces %s without fallback or a partial series of trade writes', async code => {
+  it.each(['PGRST202', '42883', '40001', '55000', '42501'])('surfaces %s without fallback or a partial series of trade writes', async code => {
     rpc.mockResolvedValue({ data: null, error: { code, message: 'Denied' } });
     await expect(persistence().commit(plan())).rejects.toThrow();
     expect(rpc).toHaveBeenCalledTimes(1);

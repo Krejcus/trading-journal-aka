@@ -262,6 +262,72 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-25 — Review Supabase/Vercel a plán synchronizace přes verze (Claude, předávka)
+
+- **Review**: `docs/reviews/supabase-vercel-usage-20261025.md` — měřená čísla
+  (kde appka čeká, DB čas, region iad1 vs eu-north-1, místo v DB, škálování),
+  detail zpomalení a nezávislé prověření návrhu (11 nutných oprav, sekce
+  „Prověření návrhu…“). Nic z review zatím není implementováno.
+- **Rozhodnutí (Filip)**: vlastní synchronizace přes verze nad Postgresem, ne
+  placený sync nástroj (PowerSync/Electric/Zero zváženy — důvody v konverzaci:
+  složený obchod z 5 zdrojů se stejně musí předpočítat, zápisy zůstávají naše,
+  dvojí pravidla soukromí, replikační slot plní WAL). Sync za rozhraním
+  „sync adapter“, aby šel později vyměnit.
+- **Rozsah**: data deníku pro celou appku (dashboard, historie, poznámky,
+  review, účty, backtest obchody), LIVE stav kopírky přes region u DB + push
+  (copier-core → INV + `copier-design-critic`), pravidla zobrazení bez
+  probliknutí (brána: aktuální / „aktualizuji“ ztlumeně / offline se štítkem),
+  plynulost a zátěž zařízení (časovače na grafech: checkpoint 1,2 s, plán
+  analytiky 2 s, 1s/250ms překreslování; 202× backdrop blur → lehčí varianta
+  na telefonu). **Mimo rozsah**: otevřené P&L ze streamu ceny, svíčky dneška
+  (oboje později, popsáno v konverzaci a review).
+- **Garance**: appka nikdy neukáže stará čísla jako aktuální; pojistky =
+  úplný feed (registr tabulek + CI test), `sync_epoch`, verze řádku, brána,
+  e2e test „stará cache + pomalá síť“, denní checksum s auto-resync.
+- **Další kroky v pořadí**: (1) sloučit tuto větev `fix/review-conflicts-no-retry`
+  do main — obsahuje migraci `20261025130801`, která UŽ JE na produkci;
+  (2) záloha: ověřit denní zálohy Supabase, skript `scripts/backup-supabase.sh`
+  (pg_dump -Fc, role+schéma zvlášť, SHA-256, `~/Documents/AlphaTrade-backups/`,
+  heslo jen lokálně), zkušební obnova do lokálního Postgresu, git bundle,
+  zapsat do `BACKUP_RESTORE.md`; před každou migrací kopie dotčených tabulek do
+  `migration_backups`; (3) fáze 0 měření (rychlost + Safari Timeline: tasky
+  > 50 ms, fps na grafu/backtestu/LIVE/dashboardu); (4) návrhový dokument fází
+  0–2 k připomínkování. Rychlé opravy (falešný konflikt `needsReview` — 204/205
+  backtest obchodů pole nemá, backoff/pauza backtest outboxu, journal sync
+  60 s, throttle `last_used_at`, cache `tv_alert_webhooks`, globální
+  `.limit(500)` v `send-alerts`) jsou nezávislé a můžou jít kdykoli.
+- Tato session běžela v cloudu; pokračuje se v lokální session.
+
+### 2026-10-25 — Supabase CPU > 80 %: retry bouře 40001 v backtest review (Claude)
+
+- **Příznak**: e-mail Supabase „CPU > 80 %“. Postgres od 08:55Z logoval
+  ~100/s `Review field changed concurrently: needsReview` (1,4 mil. řádků za
+  4 h), přitom edge logy měly jediný požadavek (504 v 09:00Z). Dvě PostgREST
+  session v `pg_stat_activity` restartovaly stejnou transakci dokola;
+  rollbacky celkem 10,2 mil. proti 0,7 mil. commitům.
+- **Příčina**: stejná past jako 17. 9. (`20260917154500`). CAS konflikt
+  v `patch_backtest_trade_review_private_v1` se hlásil SQLSTATE 40001 a HTTP
+  vrstva 40001 opakuje se stejným zastaralým `p_expected` — donekonečna.
+  Zápis ze 17. 9. tyhle funkce vědomě nechal („jednorázová volání“); to
+  neplatí, stačí jedno volání.
+- **Oprava**: migrace `20261025130801_review_conflicts_no_retry` (aplikována
+  přes MCP `apply_migration`) přepíše z živých definic všechny tři zbylé
+  funkce s 40001 (`patch_backtest_trade_review_private_v1`,
+  `commit_backtest_tag_library_v1`, `confirm_connection_trade_notes_v1`) na
+  55000; jinak beze změny, vlastník/granty zachované, v `public` už žádné
+  40001. Rollback = stejný blok s prohozenými kódy. Klient mapuje 40001
+  i 55000 stejně (tag library: `definitelyNotApplied` platí pro oba).
+  Jedna zaseklá session ukončena `pg_terminate_backend`, druhá skončila sama
+  po migraci; rollbacky pak +0 za 3 min, 0 aktivních PostgREST session.
+- **Pravidlo**: 40001 jen pro skutečné serializační konflikty, kde opakování
+  může uspět. Business konflikt (zastaralý snapshot/verze) = 55000.
+- **Velikost DB** (5,3 GB z 8 GB Pro): 4,1 GB je `tradovate_journal_evidence`,
+  většina z backfillu 16. 9. (1,15 mil. `command`). Nepoužitý
+  `tradovate_journal_evidence_entity_idx` (432 MB) je kandidát na drop —
+  nerealizováno, čeká na rozhodnutí.
+- Ověření: 5 cílených souborů / 79 testů, `npm run typecheck` (jen starší
+  chyby v `extension/` bez jeho závislostí), eslint změněných souborů,
+  Supabase advisory — nic nového z této migrace. Web zatím nenasazen.
 ### 2026-10-25 — Backtest: ukládání review, snímek, tenké štítky čar (Claude)
 
 - **Uložení review se už nezasekne**: každý krok má 30s timeout s českou

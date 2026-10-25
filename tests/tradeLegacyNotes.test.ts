@@ -71,6 +71,7 @@ describe('receiver note sharing confirmation', () => {
     await expect(confirmConnectionTradeNotes({ rpc }, 'c', {})).rejects.toThrow('není aktivovaná');
     expect(rpc).toHaveBeenCalledTimes(1);
     await expect(confirmConnectionTradeNotes({ rpc: async () => ({ error: { code: '40001' } }) }, 'c', {})).rejects.toThrow('jiné okno');
+    await expect(confirmConnectionTradeNotes({ rpc: async () => ({ error: { code: '55000' } }) }, 'c', {})).rejects.toThrow('jiné okno');
     await expect(readConnectionTradeNoteConsent({ rpc }, 'c')).rejects.toThrow('není aktivovaná');
   });
   it('recursive note stripping preserves the separate owner history for its own hydration layer', () => {

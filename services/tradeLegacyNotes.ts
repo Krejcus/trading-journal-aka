@@ -84,6 +84,6 @@ export const readConnectionTradeNoteConsent = async (client: RpcClient, connecti
 };
 export const confirmConnectionTradeNotes = async (client: RpcClient, connectionId: string, permissions: Record<string, unknown>, accept = false): Promise<ConnectionTradeNoteConsent> => {
   const { data, error } = await client.rpc(CONFIRM_CONNECTION_NOTES_RPC, { p_connection_id: connectionId, p_expected_permissions: permissions, p_accept: accept });
-  if (error) throw new Error(missing(error) ? NOTE_SHARING_NOT_READY : error.code === '40001' ? 'Nastavení mezitím změnilo jiné okno. Zavřete dialog, obnovte spojení a rozsah znovu zkontrolujte.' : 'Sdílení poznámek nebylo potvrzeno. Obnovte data a zkuste to znovu.');
+  if (error) throw new Error(missing(error) ? NOTE_SHARING_NOT_READY : ['40001', '55000'].includes(String(error.code)) ? 'Nastavení mezitím změnilo jiné okno. Zavřete dialog, obnovte spojení a rozsah znovu zkontrolujte.' : 'Sdílení poznámek nebylo potvrzeno. Obnovte data a zkuste to znovu.');
   return consentResult(data);
 };

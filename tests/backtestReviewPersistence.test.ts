@@ -13,8 +13,8 @@ describe('backtest atomic review transport', () => {
     await expect(requestBacktestReviewPatch({ rpc }, 'trade-1', snapshot, {})).rejects.toThrow('není aktivované');
     expect(rpc).toHaveBeenCalledTimes(1);
   });
-  it('surfaces an edited-field conflict without retrying', async () => {
-    const rpc = vi.fn(async () => ({ data: null, error: { code: '40001' } }));
+  it.each(['40001', '55000'])('surfaces an edited-field conflict (%s) without retrying', async code => {
+    const rpc = vi.fn(async () => ({ data: null, error: { code } }));
     await expect(requestBacktestReviewPatch({ rpc }, 'trade-1', snapshot, { notes: 'new' })).rejects.toThrow('jiné okno');
     expect(rpc).toHaveBeenCalledTimes(1);
   });

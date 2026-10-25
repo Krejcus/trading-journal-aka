@@ -53,7 +53,8 @@ export const requestBacktestReviewPatch = async (
       if (privateHistory) throw new Error(PRIVATE_TRADE_NOTES_UNAVAILABLE);
       throw new Error('Bezpečné ukládání backtest review zatím není aktivované v databázi. Rozpracované změny zůstaly zachované.');
     }
-    if (String(error.code) === '40001') {
+    // 55000 since 20261025130801; 40001 made PostgREST retry the stale CAS forever.
+    if (['40001', '55000'].includes(String(error.code))) {
       throw new Error('Stejné pole obchodu mezitím změnilo jiné okno nebo zařízení. Obnovte obchod a změny porovnejte.');
     }
     throw new Error(error.message || 'Backtest review se nepodařilo uložit.');
