@@ -23,6 +23,16 @@ export const mergeTradeSnapshotUrls = (
   };
 };
 
+/** Jeden krok ukládání nesmí viset donekonečna (server bez odpovědi = tlačítko točí navždy). */
+export const BACKTEST_REVIEW_STEP_TIMEOUT_MS = 30_000;
+const withTimeout = <T,>(promise: Promise<T>, message: string, ms = BACKTEST_REVIEW_STEP_TIMEOUT_MS): Promise<T> => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error(message)), ms);
+  promise.then(value => { clearTimeout(timer); resolve(value); }, reason => { clearTimeout(timer); reject(reason); });
+});
+
+// Opakované uložení po chybě použije už nahraný snímek — žádná kopie obrázku navíc.
+const uploadedSnapshots = new Map<string, string>();
+
 /** Persist review fields, uploading a pending local snapshot only on Save. */
 export const persistBacktestTradeReview = async (
   storage: BacktestTradeReviewStorage,
@@ -30,11 +40,23 @@ export const persistBacktestTradeReview = async (
   updates: Partial<Trade>,
   snapshotDataUrl?: string,
   expected?: Partial<Trade>,
+  timeoutMs = BACKTEST_REVIEW_STEP_TIMEOUT_MS,
 ): Promise<Partial<Trade>> => {
   // A failed/missing database prerequisite stops before upload or any write.
-  const snapshot = await storage.prepareBacktestTradeReview(tradeId, updates);
-  const uploadedUrl = snapshotDataUrl
-    ? await storage.uploadScreenshot(snapshotDataUrl, tradeId, snapshot.ownerId)
-    : undefined;
-  return storage.updateBacktestTradeReview(tradeId, updates, snapshot, uploadedUrl, expected);
+  const snapshot = await withTimeout(storage.prepareBacktestTradeReview(tradeId, updates),
+    'Server neodpověděl při načtení obchodu. Review zůstalo otevřené — zkus uložit znovu.', timeoutMs);
+  let uploadedUrl: string | undefined;
+  if (snapshotDataUrl) {
+    const key = `${tradeId}:${snapshotDataUrl.length}:${snapshotDataUrl.slice(-64)}`;
+    uploadedUrl = uploadedSnapshots.get(key);
+    if (!uploadedUrl) {
+      uploadedUrl = await withTimeout(storage.uploadScreenshot(snapshotDataUrl, tradeId, snapshot.ownerId),
+        'Nahrání snímku trvá příliš dlouho. Review zůstalo otevřené — zkus uložit znovu.', timeoutMs);
+      uploadedSnapshots.set(key, uploadedUrl);
+    }
+  }
+  const committed = await withTimeout(storage.updateBacktestTradeReview(tradeId, updates, snapshot, uploadedUrl, expected),
+    'Server neodpověděl při ukládání review. Zkus uložit znovu — snímek se znovu nenahraje.', timeoutMs);
+  uploadedSnapshots.forEach((_, key) => { if (key.startsWith(`${tradeId}:`)) uploadedSnapshots.delete(key); });
+  return committed;
 };

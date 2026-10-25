@@ -51,4 +51,18 @@ describe('persistBacktestTradeReview', () => {
     vi.mocked(api.updateBacktestTradeReview).mockRejectedValue(new Error('conflict'));
     await expect(persistBacktestTradeReview(api, 'trade-1', { notes: 'draft' })).rejects.toThrow('conflict');
   });
+
+  it('neodpovídající server ukončí ukládání chybou, ne věčným točením', async () => {
+    const api = storage();
+    vi.mocked(api.updateBacktestTradeReview).mockImplementation(() => new Promise(() => {}));
+    await expect(persistBacktestTradeReview(api, 'trade-slow', { notes: 'x' }, undefined, undefined, 20)).rejects.toThrow('Server neodpověděl');
+  });
+  it('opakované uložení po chybě snímek znovu nenahraje', async () => {
+    const api = storage();
+    vi.mocked(api.updateBacktestTradeReview).mockRejectedValueOnce(new Error('výpadek'));
+    await expect(persistBacktestTradeReview(api, 'trade-retry', { notes: 'x' }, 'data:image/jpeg;base64,abc')).rejects.toThrow('výpadek');
+    await persistBacktestTradeReview(api, 'trade-retry', { notes: 'x' }, 'data:image/jpeg;base64,abc');
+    expect(api.uploadScreenshot).toHaveBeenCalledTimes(1);
+    expect(api.updateBacktestTradeReview).toHaveBeenLastCalledWith('trade-retry', { notes: 'x' }, snapshot, 'https://cdn/new.jpg', undefined);
+  });
 });

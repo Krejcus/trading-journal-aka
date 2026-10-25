@@ -29,11 +29,21 @@ const CHART_WIDTH = 1600;
 const CHART_HEIGHT = 854;
 const HEADER_HEIGHT = 46;
 
-/** Logický výřez: obchod uprostřed, rezerva aspoň 45 barů nebo dvojnásobek délky obchodu. */
-export const centeredTradeRange = (entryIndex: number, exitIndex: number) => {
+/** Rozestup svíček na snímku (px) — stejně velké svíčky u krátkého i delšího obchodu. */
+export const SNAPSHOT_BAR_SPACING = 14;
+/** Nejmenší rezerva před vstupem a po výstupu (bary), když je obchod dlouhý. */
+const MIN_SNAPSHOT_MARGIN = 10;
+
+/**
+ * Logický výřez jako v TradingView: pevný rozestup svíček (z šířky grafu
+ * vyjde počet barů na snímku) a obchod přesně uprostřed. Oddálí se jen
+ * obchod, který by se s rezervou do pevného výřezu nevešel.
+ */
+export const centeredTradeRange = (entryIndex: number, exitIndex: number, plotWidth = CHART_WIDTH - 80) => {
   const span = Math.max(0, exitIndex - entryIndex);
-  const pad = Math.max(45, span * 2);
-  return { from: entryIndex - pad, to: exitIndex + pad };
+  const bars = Math.max(Math.round(plotWidth / SNAPSHOT_BAR_SPACING), span + 2 * MIN_SNAPSHOT_MARGIN);
+  const middle = (entryIndex + exitIndex) / 2;
+  return { from: middle - bars / 2, to: middle + bars / 2 };
 };
 
 /** Index posledního baru, který začal nejpozději v daném čase (ms). */
