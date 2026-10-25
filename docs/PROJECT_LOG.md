@@ -293,8 +293,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   + poznámky 1,81 s), LIVE první stav kopírky 2,85 s (12. 10. 3,2–7,4 s),
   zamrznutí > 100 ms jen 1–3× na start. Syslog ztrácí první řádky procesů →
   `perf-report.mjs` slučuje běhy; rozebráno po PID (viz dokument).
-- **Zbývá**: Safari Timeline na iPhonu a backtest replay se Filipem, pak
-  návrhový dokument fází 0–2.
+- **Fáze 0 uzavřena**: Safari Timeline ani backtest replay se neměří — Filip:
+  „stačí web a appka“. Další krok plánu: návrhový dokument fází 0–2
+  k připomínkování.
 
 ### 2026-10-25 — Záloha Supabase: skript, zrcadlo Storage, postup obnovy (Claude)
 

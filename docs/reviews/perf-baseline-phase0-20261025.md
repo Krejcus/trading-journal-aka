@@ -4,8 +4,10 @@ Výchozí stav **před** synchronizací přes verze a před rychlými opravami
 z `docs/reviews/supabase-vercel-usage-20261025.md`. Každá další změna se má
 porovnat se stejným postupem (sekce „Jak měřit znovu“).
 
-Stav: **web a start appky na iPhonu hotové**; Safari Timeline (plynulost na
-iPhonu) a backtest replay čekají na společné měření (postup na konci).
+Stav: **hotovo** — web a start appky na iPhonu. Safari Timeline (plynulost
+na iPhonu) a backtest replay se neměří: Filip 25. 10. rozhodl, že pro
+výchozí stav stačí web a appka. Postup pro Timeline zůstává na konci pro
+případné pozdější měření.
 
 ## Prostředí
 
@@ -168,7 +170,7 @@ za 0,47 s a 1–3 krátká zamrznutí. Čerstvá data dashboardu jsou na iPhonu
 o ~2,3 s pomalejší než na Macu (8,2 vs 5,9 s), hlavně journal fakta
 (3,45 vs 2,90 s) a RPC (1,94 vs 1,54 s).
 
-## iPhone — zbývá se Filipem
+## iPhone — volitelné další měření (zatím se nedělá)
 
 1. **Start appky** — hotovo výše. Opakování (nainstalovaná verze, nic se nepřeinstaluje):
    `./scripts/ios/perf-measure.sh --installed baseline-20261025 3` — telefon
