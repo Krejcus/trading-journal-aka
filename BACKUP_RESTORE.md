@@ -195,7 +195,8 @@ Co skript dělá (na produkci ani na Supabase nesahá):
 1. ověří SHA-256 všech souborů zálohy;
 2. založí dočasný PostgreSQL ve `~/Documents/AlphaTrade-backups/supabase/.restore-test/`
    (jen unix socket v `/tmp`, žádný TCP port, vlastní superuser `atrestore`);
-3. nahraje `roles.sql` (chyba „role already exists“ je očekávaná);
+3. nahraje `roles.sql` (členství udělená `GRANTED BY supabase_admin` udělí
+   lokální superuser — `supabase_admin` tu nemá ADMIN OPTION);
 4. obnoví `db.dump` přes `pg_restore -j 4` bez rozšíření, která lokálně nejsou
    (typicky `supabase_vault`), a bez schématu `vault`;
 5. porovná počet řádků každé tabulky s archivem (musí sedět přesně) a počet
@@ -416,4 +417,5 @@ s nimi obnova smí:
 |---|---|---|
 | 2026-10-25 | denní zálohy Supabase (`supabase backups list`) | 7 dní, poslední 24. 10. 22:15 UTC, PITR vypnutý |
 | 2026-10-25 | zrcadlo Storage (`scripts/backup/storage-sync.mjs`) | 1 603 souborů / 262 MB, MD5 sedí u všech; druhý běh 0 stažení za 3 s |
-| — | první plná záloha + zkušební obnova | čeká na Postgres.app a heslo v Keychainu |
+| 2026-10-25 | první plná záloha `20261025T180530Z` (Postgres.app 18.6) | 214 s, dump 332 MB, celkem 395 MB; 134 tabulek / 4 486 575 řádků v archivu; Storage beze změny |
+| 2026-10-25 | zkušební obnova téže zálohy | **PASS**: 0 chyb `pg_restore`, 0 chyb `roles.sql`, 132 tabulek / 1 275 154 řádků přesně, `tradovate_journal_evidence` 3 211 421 řádků jen z archivu, RLS 147/147, `auth.users` 5; obnova 5 s |

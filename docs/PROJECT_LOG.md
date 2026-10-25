@@ -259,11 +259,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       baseline množiny účtů proti pozdějšímu odebrání/přidání. Vyžaduje
       samostatné produktové rozhodnutí; současná flat-only execution brána
       zůstává fail-closed.
-- [ ] **První plná záloha Supabase + zkušební obnova** — skripty jsou hotové
-      (zápis 25. 10. „Záloha Supabase“), čeká na Filipa: Postgres.app
-      a heslo DB v Keychainu. Pak `./scripts/backup-supabase.sh` mimo obchodní
-      dobu a `./scripts/restore-test-supabase.sh`, výsledek do
-      `BACKUP_RESTORE.md` → „Záznam ověření“.
+- [x] **První plná záloha Supabase + zkušební obnova** — hotovo 25. 10.
+      večer, PASS (zápis 25. 10. „Záloha Supabase“, `BACKUP_RESTORE.md` →
+      „Záznam ověření“). Další zkušební obnova jednou měsíčně a po velké
+      změně schématu.
 - [ ] **Relay se zablokuje na checkpointu s neznámým `delivery_id`** —
       copier-core, zatím jen obejito v runbooku obnovy (zápis 25. 10.
       „Záloha Supabase“). Oprava v kódu + test → INV + `copier-design-critic`.
@@ -304,9 +303,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   obnovou.
 - **Ověřeno**: zrcadlo Storage naostro (1 603 souborů / 262 MB, MD5 všech,
   druhý běh 0 stažení za 3 s, poškozený soubor stejné velikosti se stáhl
-  znovu); chybové cesty skriptů; syntaxe pro /bin/bash 3.2. **Neověřeno**:
-  pg_dump a obnova — na Macu nejsou PostgreSQL nástroje (bez brew/dockeru;
-  npm `@embedded-postgres` nemá pg_dump/psql). Viz otevřená otázka.
+  znovu); chybové cesty skriptů; syntaxe pro /bin/bash 3.2. Večer po
+  instalaci Postgres.app (18.6) a uložení hesla do Keychainu: **první plná
+  záloha** `20261025T180530Z` za 214 s (dump 332 MB, 134 tabulek, 4,49 mil.
+  řádků, žádná chyba oprávnění u spravovaných schémat Supabase) a
+  **zkušební obnova PASS** — 0 chyb, 132 tabulek / 1,28 mil. řádků přesně,
+  evidence 3,21 mil. řádků ověřena čtením archivu, RLS 147/147. První běh
+  měl 19 chyb `GRANT … GRANTED BY supabase_admin` v `roles.sql` (lokálně
+  chybí ADMIN OPTION) → obnova je teď uděluje vlastním superuserem.
 - **Review**: `code-reviewer` bez blockeru, opraveno vše podstatné (`--keep 00`
   mazal všechny zálohy, prázdný seznam řádků vypínal kontrolu, velký
   `.partial` po pádu, logy obnovy při FAIL, MD5 i u stažených souborů,

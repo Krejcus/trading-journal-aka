@@ -91,7 +91,10 @@ psql_local() { "$PG/psql" -X -q -v ON_ERROR_STOP=1 "$@"; }
 psql_local -d postgres -c 'create database alphatrade_restore'
 
 log "Role z roles.sql…"
-"$PG/psql" -X -q -d postgres -f "$SRC/roles.sql" > "$W/roles.log" 2>&1 || true
+# GRANT … GRANTED BY supabase_admin lokálně neprojde (supabase_admin tu nemá ADMIN OPTION),
+# členství proto udělí náš superuser; jinak se roles.sql nahraje beze změny.
+sed -E 's/ GRANTED BY "?supabase_admin"?;$/;/' "$SRC/roles.sql" > "$W/roles.sql"
+"$PG/psql" -X -q -d postgres -f "$W/roles.sql" > "$W/roles.log" 2>&1 || true
 ROLE_ERRORS="$(grep -c 'ERROR' "$W/roles.log" || true)"
 
 # --- Výběr objektů k obnově ---------------------------------------------------
@@ -156,7 +159,8 @@ REPORT="$SRC/restore-test-$STAMP.txt"
   echo "záloha: $SRC ($(sed -n 's/^created_utc=//p' "$SRC/manifest.txt"))"
   echo "nástroje: $("$PG/pg_restore" --version)"
   echo "tabulky: $OK_TABLES souhlasí ($ROWS řádků), $BAD_TABLES nesouhlasí, $SKIPPED_TABLES jen z archivu"
-  echo "chyby pg_restore: $RESTORE_ERRORS; chyby roles.sql: $ROLE_ERRORS (očekávané: existující role)"
+  echo "chyby pg_restore: $RESTORE_ERRORS; chyby roles.sql: $ROLE_ERRORS"
+  [ "$ROLE_ERRORS" = 0 ] || sed -E -n 's/^.*ERROR: +/  roles.sql: /p' "$W/roles.log" | sort | uniq -c | head -10
   echo "RLS politiky: $DB_POLICIES v DB / $TOC_POLICIES v archivu; auth.users: $AUTH_USERS"
   echo "vynecháno: rozšíření${MISSING_EXT:- žádné}; schémata $DROP_SCHEMAS; data ${SKIP_DATA:-nic}"
   echo
