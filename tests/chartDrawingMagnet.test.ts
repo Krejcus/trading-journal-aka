@@ -264,4 +264,28 @@ describe('drawing magnet', () => {
     ]);
     restore();
   });
+
+  it('úchyt na vstupu position boxu chytá magnet (cena i čas svíčky)', () => {
+    const resolver = vi.fn(() => ({ time: 180, price: 102.5 }));
+    const setPoints = vi.fn();
+    const previous = [
+      { time: 120, price: 101 },
+      { time: 600, price: 110 },
+      { time: 600, price: 90 },
+    ];
+    const engine = {
+      beginDraft: vi.fn(),
+      updateDraftEnd: vi.fn(),
+      appendDraftPoint: vi.fn(),
+      commit: vi.fn(),
+      getDraft: vi.fn(() => null),
+      getById: vi.fn(() => ({ tool: 'LongPosition', points: previous })),
+      setPoints,
+    };
+    const restore = installDrawingMagnet(engine, resolver);
+    engine.setPoints('position-box', [{ time: 175, price: 102.3 }, previous[1], previous[2]], { time: 175, price: 102.3 });
+    expect(resolver).toHaveBeenCalledWith({ time: 175, price: 102.3 });
+    expect(setPoints).toHaveBeenCalledWith('position-box', [{ time: 180, price: 102.5 }, previous[1], previous[2]]);
+    restore();
+  });
 });

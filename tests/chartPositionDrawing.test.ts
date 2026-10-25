@@ -373,7 +373,31 @@ describe('TradingView-like Long/Short position drawings', () => {
     ]);
   });
 
-  it('places the width handle on the right and TP/SL handles on the left edge', () => {
+  it('úchyt na vstupu posune vstupní cenu i začátek boxu, TP/SL a pravý okraj drží', () => {
+    const engine = new DrawingEngine();
+    engine.commit(position());
+    const controller = new DrawingController({ engine }) as unknown as {
+      drag: { id: string; kind: 'anchor'; anchorIndex: number; last: { time: number; price: number } };
+      unproject: () => { time: number; price: number };
+      setCursor: () => void;
+      onMove: (event: { offsetX: number; offsetY: number }) => void;
+    };
+    controller.setCursor = () => {};
+    controller.drag = { id: 'position', kind: 'anchor', anchorIndex: 3, last: { time: 100, price: 28_000 } };
+    controller.unproject = () => ({ time: 140, price: 28_010 });
+    controller.onMove({ offsetX: 0, offsetY: 0 });
+    expect(engine.getById('position')?.points).toEqual([
+      { time: 140, price: 28_010 },
+      { time: 200, price: 28_050 },
+      { time: 200, price: 27_975 },
+    ]);
+    // Za pravý okraj začátek nepřejede.
+    controller.unproject = () => ({ time: 260, price: 28_005 });
+    controller.onMove({ offsetX: 0, offsetY: 0 });
+    expect(engine.getById('position')?.points[0]).toEqual({ time: 140, price: 28_005 });
+  });
+
+  it('places the width handle on the right, TP/SL handles and the entry handle on the left edge', () => {
     const engine = new DrawingEngine();
     engine.commit(position());
     const primitive = new DrawingPrimitive(engine) as any;
@@ -389,6 +413,8 @@ describe('TradingView-like Long/Short position drawings', () => {
       { x: 200, y: 28_000 },
       { x: 100, y: 28_050 },
       { x: 100, y: 27_975 },
+      // Úchyt přímo na vstupu (cena i začátek boxu).
+      { x: 100, y: 28_000 },
     ]);
   });
 
