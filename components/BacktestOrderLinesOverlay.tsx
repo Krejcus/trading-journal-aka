@@ -38,6 +38,8 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
     anchorLineId: string;
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>;
     top: number;
+    /** Cena taženého nového SL/TP (u tažení existující čáry ji nese dragOverride). */
+    price?: number;
   } | null>(null);
   // Tažení čáry žije jen v overlays — commit do enginu (a render celého
   // workspace) proběhne jednou při puštění. Změna stavu enginu na každý pixel
@@ -119,7 +121,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
       if (previewKind && top !== null) {
         const anchor = linesRef.current.find(item =>
           item.ownerId === line.ownerId && item.ownerType === line.ownerType && item.kind === 'entry');
-        if (anchor) setBracketDragPreview({ anchorLineId: anchor.id, kind: previewKind, top });
+        if (anchor) setBracketDragPreview({ anchorLineId: anchor.id, kind: previewKind, top, price: dragging.bracketKind ? snapped : undefined });
       }
       if (!dragging.bracketKind && top !== null) {
         setDragOverride({ lineId: line.id, top: Math.round(top * 2) / 2, price: snapped });
@@ -168,6 +170,26 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
           }}
         />
       )}
+      {bracketDragPreview?.price !== undefined && (() => {
+        // Nový SL/TP tažený z tlačítka: čára i popisek s P&L jedou s myší.
+        const anchor = lines.find(item => item.id === bracketDragPreview.anchorLineId);
+        const color = bracketDragPreview.kind === 'stopLoss' ? '#ef4444' : '#0f9f8f';
+        const label = anchor?.bracketLabelAt?.(bracketDragPreview.kind, bracketDragPreview.price)
+          ?? `${bracketDragPreview.kind === 'stopLoss' ? 'SL' : 'TP'}  ${bracketDragPreview.price.toFixed(2)}`;
+        return (
+          <div className="pointer-events-none absolute left-0 h-0" style={{ right: priceScaleWidth, top: bracketDragPreview.top }} data-backtest-bracket-ghost>
+            <div className="absolute inset-x-0 top-0 border-t border-dashed" style={{ borderColor: color }} />
+            <div className="absolute right-1 top-0 flex h-[22px] -translate-y-1/2 items-center rounded-[3px] border bg-white px-2 text-[9px] font-black shadow-sm" style={{ borderColor: color, color }}>
+              <span className="whitespace-nowrap">{label}</span>
+            </div>
+            {showPriceLabels && (
+              <div className="absolute top-0 flex h-[20px] -translate-y-1/2 items-center justify-center px-1 text-[9px] font-black text-white" style={{ left: '100%', width: priceScaleWidth, backgroundColor: color }}>
+                {bracketDragPreview.price.toFixed(2)}
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {lines.map(line => {
         const dragged = dragOverride?.lineId === line.id;
         const top = dragged ? dragOverride.top : coordinates[line.id];
@@ -235,7 +257,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                   color: filledLabel ? '#ffffff' : line.color,
                 }}
               >
-                <span className="whitespace-nowrap px-2">{line.label}</span>
+                <span className="whitespace-nowrap px-2">{dragged && line.labelAt ? line.labelAt(shownPrice) : line.label}</span>
                 {line.cancellable && (
                   <button
                     type="button"

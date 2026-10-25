@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { pendingOrderChartLines, positionChartLines, projectedBacktestPnl } from '../services/backtestOrderLines';
+import { pendingOrderChartLines, positionChartLines, projectedBacktestPnl, ticketDraftChartLines, ticketDraftOrder, ticketDraftSide, ticketDraftWithBracket } from '../services/backtestOrderLines';
 import { createBacktestOrder } from '../services/backtestEngine';
 
 describe('backtest chart order lines', () => {
@@ -79,8 +79,8 @@ describe('backtest chart order lines', () => {
     const lines = pendingOrderChartLines(order);
     expect(lines.map(line => line.kind)).toEqual(['entry', 'stopLoss', 'takeProfit']);
     expect(lines[0]).toMatchObject({ draggable: true, cancellable: true, color: '#2563eb' });
-    expect(lines[1].label).toBe('SL  −$20.00');
-    expect(lines[2].label).toBe('TP  +$40.00');
+    expect(lines[1].label).toBe('SL  −$20.00 · 5.00 b');
+    expect(lines[2].label).toBe('TP  +$40.00 · 10.00 b');
     expect(lines[1].price).toBe(95);
     expect(lines[2].price).toBe(110);
   });
@@ -195,5 +195,42 @@ describe('backtest chart order lines', () => {
     expect(positionChartLines(position, 95)[0].color).toBe('#059669');
     expect(positionChartLines(position, 105)[0].color).toBe('#ef4444');
     expect(positionChartLines(position, 100)[0].color).toBe('#2563eb');
+  });
+});
+
+describe('návrh limit/stop příkazu z lišty', () => {
+  const market = 100;
+
+  it('odvodí stranu z polohy čáry vůči trhu', () => {
+    expect(ticketDraftSide({ type: 'limit', price: 95 }, market)).toBe('buy');
+    expect(ticketDraftSide({ type: 'limit', price: 105 }, market)).toBe('sell');
+    expect(ticketDraftSide({ type: 'stop', price: 105 }, market)).toBe('buy');
+    expect(ticketDraftSide({ type: 'stop', price: 95 }, market)).toBe('sell');
+  });
+
+  it('tažený SL/TP zůstane, kam ho uživatel pustil (žádný skok k vstupu)', () => {
+    const draft = { type: 'limit' as const, price: 95 };
+    expect(ticketDraftWithBracket(draft, 'stopLoss', market, 82.6).stopLoss).toBe(82.5);
+    expect(ticketDraftWithBracket(draft, 'takeProfit', market, 120).takeProfit).toBe(120);
+    // Bez tažení: 20 bodů, nebo zrcadlo protějšku.
+    expect(ticketDraftWithBracket(draft, 'stopLoss', market).stopLoss).toBe(75);
+    expect(ticketDraftWithBracket({ ...draft, takeProfit: 105 }, 'stopLoss', market).stopLoss).toBe(85);
+    // Na špatné straně vstupu se přitáhne o tick za vstup.
+    expect(ticketDraftWithBracket(draft, 'stopLoss', market, 99).stopLoss).toBe(94.75);
+  });
+
+  it('kreslí fialovou návrhovou čáru s nabídkou SL/TP a živým popiskem', () => {
+    const lines = ticketDraftChartLines({ type: 'limit', price: 95, stopLoss: 90 }, 'MNQ', 2, market);
+    expect(lines.map(line => line.kind)).toEqual(['entry', 'stopLoss']);
+    expect(lines[0].label).toBe('BUY 2 LIMIT  95.00 · návrh');
+    expect(lines[0].addableBrackets).toEqual(['takeProfit']);
+    expect(lines[1].labelAt?.(85)).toBe('SL  −$40.00 · 10.00 b');
+    expect(lines[0].bracketLabelAt?.('takeProfit', 105)).toBe('TP  +$40.00 · 10.00 b');
+  });
+
+  it('opačné tlačítko zrcadlí brackety kolem vstupu', () => {
+    const draft = { type: 'limit' as const, price: 95, stopLoss: 90, takeProfit: 105 };
+    expect(ticketDraftOrder(draft, 'buy', market)).toEqual({ side: 'buy', type: 'limit', price: 95, stopLoss: 90, takeProfit: 105 });
+    expect(ticketDraftOrder(draft, 'sell', market)).toEqual({ side: 'sell', type: 'limit', price: 95, stopLoss: 100, takeProfit: 85 });
   });
 });

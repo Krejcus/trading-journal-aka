@@ -55,6 +55,11 @@ import type { PositionDrawing } from '../services/chartPositionDrawing';
 import {
   pendingOrderChartLines,
   positionChartLines,
+  TICKET_DRAFT_ID,
+  ticketDraftChartLines,
+  ticketDraftOrder,
+  ticketDraftWithBracket,
+  type BacktestTicketDraft,
   type BacktestChartOrderLine,
   type BacktestChartOrderLineKind,
 } from '../services/backtestOrderLines';
@@ -607,6 +612,23 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     updateRun(current => ({ ...current, workspaceState, updatedAt: Date.now() }));
   }, [updateRun]);
 
+  // Množství drží workspace, ne jen obchodní panel: objednávka z pravého kliku
+  // do grafu musí použít přesně to číslo, které uživatel vidí vedle typu.
+  const [orderQuantity, setOrderQuantity] = useState(run.config.defaultQuantity || 1);
+  // Obchodní lišta: typ příkazu a návrh limit/stop čáry v grafu (jen v paměti,
+  // do enginu jde až po Buy/Sell — viz ticketDraftChartLines).
+  const [ticketType, setTicketType] = useState<BacktestOrderType>('market');
+  const [ticketDraft, setTicketDraft] = useState<BacktestTicketDraft | null>(null);
+  const ticketDraftRef = useRef(ticketDraft);
+  ticketDraftRef.current = ticketDraft;
+  /** Poslední odkrytá cena exekučního trhu (pro stranu návrhu). */
+  const executionPrice = useCallback((): number | undefined => {
+    const current = runRef.current;
+    const cursor = current.runtimeState.replay.cursorTime;
+    if (cursor === null) return undefined;
+    return [...(candlesByRoot[current.executionSymbol] ?? [])].reverse().find(candle => candle.time <= cursor)?.close;
+  }, [candlesByRoot]);
+
   const executeOrder = useCallback((input: {
     side: 'buy' | 'sell'; type: BacktestOrderType; quantity: number; price?: number; stopLoss?: number; takeProfit?: number; reduceOnly?: boolean;
   }, candle: MarketCandle | null, sourceDrawing?: PositionDrawing) => {
@@ -668,6 +690,21 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   }, [updateRun]);
 
   const changeOrderLine = useCallback((line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number) => {
+    if (line.ownerId === TICKET_DRAFT_ID) {
+      // Posun vstupu návrhu bere SL/TP s sebou (drží jejich vzdálenost).
+      setTicketDraft(draft => {
+        if (!draft) return draft;
+        if (kind !== 'entry') return ticketDraftWithBracket(draft, kind, executionPrice(), price);
+        const delta = price - draft.price;
+        return {
+          ...draft,
+          price,
+          stopLoss: draft.stopLoss === undefined ? undefined : draft.stopLoss + delta,
+          takeProfit: draft.takeProfit === undefined ? undefined : draft.takeProfit + delta,
+        };
+      });
+      return;
+    }
     updateRun(current => {
       if (line.ownerType === 'order') {
         return {
@@ -698,9 +735,19 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         updatedAt: Date.now(),
       };
     });
-  }, [updateRun]);
+  }, [executionPrice, updateRun]);
 
   const cancelOrderLine = useCallback((line: BacktestChartOrderLine) => {
+    if (line.ownerId === TICKET_DRAFT_ID) {
+      if (line.kind === 'entry') {
+        setTicketDraft(null);
+        setTicketType('market');
+      } else {
+        const field = line.kind;
+        setTicketDraft(draft => draft && { ...draft, [field]: undefined });
+      }
+      return;
+    }
     if (line.ownerType === 'position') {
       const current = runRef.current;
       const position = current.runtimeState.positions.find(item => item.instrument === line.ownerId);
@@ -761,6 +808,10 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
     draggedPrice?: number,
   ) => {
+    if (line.ownerId === TICKET_DRAFT_ID) {
+      setTicketDraft(draft => draft && ticketDraftWithBracket(draft, kind, executionPrice(), draggedPrice));
+      return;
+    }
     updateRun(current => {
       // Čekající objednávka: bracket se počítá od její vstupní ceny, ne od
       // pozice — ta ještě neexistuje.
@@ -833,7 +884,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         updatedAt: Date.now(),
       };
     });
-  }, [updateRun]);
+  }, [executionPrice, updateRun]);
 
   const orderLines = useMemo(() => {
     const runtime = run.runtimeState;
@@ -853,8 +904,32 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
           });
           return positionChartLines(position, currentPrice, enteredByMarketOrder);
         }),
+      ...(ticketDraft ? ticketDraftChartLines(ticketDraft, run.executionSymbol, orderQuantity, currentPrice) : []),
     ];
-  }, [candlesByRoot, run.executionSymbol, run.runtimeState]);
+  }, [candlesByRoot, orderQuantity, run.executionSymbol, run.runtimeState, ticketDraft]);
+
+  /** Typ v liště: limit/stop založí návrh čáry na poslední ceně, market ho zahodí. */
+  const changeTicketType = useCallback((type: BacktestOrderType, candle: MarketCandle | null) => {
+    setTicketType(type);
+    if (type === 'market') { setTicketDraft(null); return; }
+    setTicketDraft(draft => {
+      if (draft) return { ...draft, type };
+      const base = candle?.close ?? executionPrice();
+      return Number.isFinite(base) ? { type, price: Math.round(Number(base) * 4) / 4 } : null;
+    });
+  }, [executionPrice]);
+
+  const submitTicket = useCallback((side: 'buy' | 'sell', candle: MarketCandle | null) => {
+    if (ticketType === 'market') return executeOrder({ side, type: 'market', quantity: orderQuantity }, candle);
+    const draft = ticketDraftRef.current;
+    if (!draft) return null;
+    const order = executeOrder({ ...ticketDraftOrder(draft, side, executionPrice()), quantity: orderQuantity }, candle);
+    if (order) {
+      setTicketDraft(null);
+      setTicketType('market');
+    }
+    return order;
+  }, [executeOrder, executionPrice, orderQuantity, ticketType]);
 
   const executeQuickOrder = useCallback((drawing: PositionDrawing, candle: MarketCandle | null, instrument: MarketRoot) => {
     if (instrument !== runRef.current.executionSymbol) {
@@ -900,9 +975,6 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     return buildBacktestStoreEvidence({ snapshot: candleStore.getSnapshot(), run: current, replayHorizonTime: current.runtimeState.replay.cursorTime });
   }, [candleStore]);
 
-  // Množství drží workspace, ne jen obchodní panel: objednávka z pravého kliku
-  // do grafu musí použít přesně to číslo, které uživatel vidí vedle typu.
-  const [orderQuantity, setOrderQuantity] = useState(run.config.defaultQuantity || 1);
 
   const bridge = useMemo<BacktestChartSessionBridge>(() => ({
     id: run.id,
@@ -954,7 +1026,10 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         isDark={isDark}
         quantity={orderQuantity}
         onQuantityChange={setOrderQuantity}
-        onOrder={executeOrder}
+        type={ticketType}
+        draftPrice={ticketDraft?.price}
+        onTypeChange={changeTicketType}
+        onSubmit={submitTicket}
         onCancel={cancelOrder}
         onClosePosition={closePosition}
         onChangeBracket={changeBracket}
@@ -964,7 +1039,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         }}
       />
     ),
-  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, registerWorkspaceCheckpoint, evidenceOpen, sessionInfoOpen, updateRun, run.config.instruments, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
+  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, registerWorkspaceCheckpoint, changeTicketType, submitTicket, ticketDraft, ticketType, evidenceOpen, sessionInfoOpen, updateRun, run.config.instruments, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
 
   const syntheticTrade = useMemo<Trade>(() => ({
     id: `backtest-${run.id}`,
@@ -1110,43 +1185,37 @@ interface TradingPanelProps {
   isDark: boolean;
   quantity: number;
   onQuantityChange: (quantity: number) => void;
-  onOrder: (input: { side: 'buy' | 'sell'; type: BacktestOrderType; quantity: number; price?: number; stopLoss?: number; takeProfit?: number; reduceOnly?: boolean }, candle: MarketCandle | null) => void;
+  type: BacktestOrderType;
+  /** Cena návrhu limit/stop čáry v grafu. */
+  draftPrice?: number;
+  onTypeChange: (type: BacktestOrderType, candle: MarketCandle | null) => void;
+  onSubmit: (side: 'buy' | 'sell', candle: MarketCandle | null) => unknown;
   onCancel: (id: string, candle: MarketCandle | null) => void;
   onClosePosition: (quantity: number, candle: MarketCandle | null) => void;
   onChangeBracket: (stopLoss?: number, takeProfit?: number) => void;
   onOpenSessionInfo: () => void;
 }
 
-const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark, quantity, onQuantityChange, onOrder, onCancel, onClosePosition, onChangeBracket, onOpenSessionInfo }) => {
-  const [type, setType] = useState<BacktestOrderType>('market');
-  const [price, setPrice] = useState('');
-  const [stopLoss, setStopLoss] = useState('');
-  const [takeProfit, setTakeProfit] = useState('');
+const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark, quantity, onQuantityChange, type, draftPrice, onTypeChange, onSubmit, onCancel, onClosePosition, onOpenSessionInfo }) => {
   const [orderError, setOrderError] = useState<string | null>(null);
   const runtime = run.runtimeState;
   const position = runtime.positions.find(item => item.instrument === run.executionSymbol);
-  const [positionStop, setPositionStop] = useState('');
-  const [positionTarget, setPositionTarget] = useState('');
-  useEffect(() => { setPositionStop(position?.stopLoss?.toString() ?? ''); }, [position?.positionId, position?.stopLoss]);
-  useEffect(() => { setPositionTarget(position?.takeProfit?.toString() ?? ''); }, [position?.positionId, position?.takeProfit]);
   const pending = runtime.orders.filter(order => order.status === 'pending');
   const field = `h-7 rounded-md border px-2 text-[11px] tabular-nums outline-none transition-colors focus:border-blue-500/70 ${isDark
     ? 'border-white/10 bg-white/[0.04] text-white placeholder:text-slate-500 hover:border-white/20'
     : 'border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400 hover:border-slate-300'}`;
   const divider = `h-6 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
-  const num = (value: string) => value.trim() && Number.isFinite(Number(value)) ? Number(value) : undefined;
   const submit = (side: 'buy' | 'sell') => {
-    const orderPrice = num(price);
     if (!Number.isFinite(quantity) || quantity < 1) {
       setOrderError('Zadej platný počet kontraktů.');
       return;
     }
-    if (type !== 'market' && (!Number.isFinite(orderPrice) || Number(orderPrice) <= 0)) {
-      setOrderError(`${type === 'limit' ? 'Limitní' : 'Stop'} objednávka potřebuje cenu.`);
+    if (type !== 'market' && draftPrice === undefined) {
+      setOrderError('Nejdřív umísti čáru příkazu v grafu.');
       return;
     }
     setOrderError(null);
-    onOrder({ side, type, quantity, price: orderPrice, stopLoss: num(stopLoss), takeProfit: num(takeProfit) }, candle);
+    onSubmit(side, candle);
   };
   const money = (value: number, signed = false) => `${signed && value >= 0.005 ? '+' : value <= -0.005 ? '−' : ''}$${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const priceText = (value: number | undefined) => value === undefined ? '—' : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1163,11 +1232,10 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
     ? 'border-white/10 bg-white/[0.04] hover:border-white/20'
     : 'border-slate-200 bg-slate-50 hover:border-slate-300'}`;
   const bare = `h-full bg-transparent px-1.5 text-[11px] tabular-nums outline-none ${isDark ? 'text-white placeholder:text-slate-600' : 'text-slate-900 placeholder:text-slate-400'}`;
-  const prefix = `flex h-full items-center pl-2 pr-0.5 text-[9.5px] font-black tracking-wide`;
   const stepButton = `flex h-full w-6 items-center justify-center text-[13px] font-bold transition-colors disabled:opacity-30 ${isDark ? 'text-slate-400 hover:bg-white/[0.07] hover:text-white' : 'text-slate-500 hover:bg-slate-200 hover:text-slate-900'}`;
   const sideButton = 'flex h-7 min-w-[92px] items-center justify-center gap-1.5 rounded-md px-2.5 text-[11px] font-black uppercase tracking-wide text-white transition hover:brightness-110 active:translate-y-px active:brightness-95 disabled:opacity-40';
   // Market se plní za poslední cenu; limit/stop za zadanou.
-  const ticketPrice = type === 'market' ? priceText(candle?.close) : num(price) !== undefined ? priceText(num(price)) : '—';
+  const ticketPrice = type === 'market' ? priceText(candle?.close) : priceText(draftPrice);
   return (
     // Jeden řádek (44 px) — víc místa pro graf. Pořadí: zadání příkazu → účet → pozice → čekající příkazy.
     <div className="relative flex h-full items-center gap-3 px-3 text-[11px]">
@@ -1180,7 +1248,7 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
             type="button"
             role="radio"
             aria-checked={type === option}
-            onClick={() => setType(option)}
+            onClick={() => { setOrderError(null); onTypeChange(option, candle); }}
             title={option === 'market' ? 'Market' : option === 'limit' ? 'Limit' : 'Stop'}
             className={`h-6 rounded-md px-2.5 text-[10.5px] font-bold transition-colors ${type === option
               ? isDark ? 'bg-white/[0.14] text-white shadow-[0_1px_2px_rgba(0,0,0,.35)]' : 'bg-white text-slate-900 shadow-sm'
@@ -1195,22 +1263,10 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
         <button type="button" onClick={() => onQuantityChange(quantity + 1)} className={stepButton} aria-label="Přidat kontrakt">+</button>
       </div>
       {type !== 'market' && (
-        <label className={`${group} shrink-0`}>
-          <span className={`${prefix} text-blue-400`}>@</span>
-          <input type="number" step="0.25" value={price} onChange={event => setPrice(event.target.value)} placeholder={type === 'limit' ? 'Limit' : 'Stop'} aria-label="Cena objednávky" className={`${bare} w-[76px]`} />
-        </label>
+        <span className="shrink-0 text-[10px] font-semibold text-violet-400" title="Návrh příkazu je fialová čára v grafu — posuň ji na cenu, SL/TP přidáš tlačítky na ní">
+          Posuň čáru v grafu{draftPrice !== undefined ? ` · ${priceText(draftPrice)}` : ''}
+        </span>
       )}
-      {/* Bracket: SL a TP jako jedna skupina s barevným štítkem. */}
-      <div className="flex shrink-0 items-center gap-1">
-        <label className={group}>
-          <span className={`${prefix} text-rose-400`}>SL</span>
-          <input type="number" step="0.25" value={stopLoss} onChange={event => setStopLoss(event.target.value)} placeholder="—" aria-label="Stop loss" className={`${bare} w-[72px]`} />
-        </label>
-        <label className={group}>
-          <span className={`${prefix} text-emerald-400`}>TP</span>
-          <input type="number" step="0.25" value={takeProfit} onChange={event => setTakeProfit(event.target.value)} placeholder="—" aria-label="Take profit" className={`${bare} w-[72px]`} />
-        </label>
-      </div>
       <div className="flex shrink-0 items-center gap-1">
         <button type="button" onClick={() => submit('buy')} disabled={!candle} className={`${sideButton} bg-gradient-to-b from-emerald-500 to-emerald-600 shadow-[0_1px_0_rgba(255,255,255,.2)_inset,0_6px_16px_-8px_rgba(16,185,129,.8)]`}>
           <span>Buy</span>
@@ -1233,8 +1289,6 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
         <div className="flex shrink-0 items-center gap-1.5">
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-black ${position.side === 'long' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{position.side === 'long' ? 'LONG' : 'SHORT'} {position.quantity}×</span>
           <span className="font-mono tabular-nums text-slate-400">@ {priceText(position.averagePrice)}</span>
-          <input className={`${field} w-[76px]`} value={positionStop} onChange={event => setPositionStop(event.target.value)} placeholder="SL" aria-label="Stop loss pozice" onBlur={event => onChangeBracket(num(event.target.value), position.takeProfit)} />
-          <input className={`${field} w-[76px]`} value={positionTarget} onChange={event => setPositionTarget(event.target.value)} placeholder="TP" aria-label="Take profit pozice" onBlur={event => onChangeBracket(position.stopLoss, num(event.target.value))} />
           {position.quantity > 1 && <button type="button" onClick={() => onClosePosition(Math.floor(position.quantity / 2), candle)} className={`${field} font-bold`} title="Zavřít polovinu pozice">½</button>}
           <button type="button" onClick={() => onClosePosition(position.quantity, candle)} className={`h-7 rounded-md px-2.5 text-[10.5px] font-black transition-colors ${isDark ? 'bg-white/10 text-white hover:bg-white/15' : 'bg-slate-800 text-white hover:bg-slate-700'}`}>Zavřít</button>
         </div>
