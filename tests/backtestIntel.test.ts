@@ -349,7 +349,7 @@ describe('backtestClosedTradeToTrade — parita s AlphaBridge', () => {
 
   it('doplní pole, která AlphaBridge plní u každého obchodu', () => {
     const trade = map();
-    expect(trade.schemaVersion).toBe(8);
+    expect(trade.schemaVersion).toBe(9);
     expect(trade.source).toBe('backtest-replay');
     expect(trade.outcomeAmbiguous).toBe(false);
     // 1970-01-01 01:16 UTC → Praha je UTC+1 v zimě.

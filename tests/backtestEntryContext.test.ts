@@ -376,6 +376,30 @@ describe('confluence', () => {
     expect(ltf.some(tag => tag.includes('VWAP'))).toBe(true);
     expect(htf.some(tag => tag.includes('Day Open'))).toBe(true);
   });
+
+  it('struktura podle indikátoru: 1m do LTF, 5m a 15m do HTF', () => {
+    // Rostoucí pila: vyšší vrcholy prorážejí předchozí pivoty na 1m i 5m.
+    const trending: MarketCandle[] = [];
+    for (let minute = 0; minute < 2_040; minute += 1) {
+      const base = 100 + minute * 0.01 + Math.sin(minute / 9) * 3;
+      const next = 100 + (minute + 1) * 0.01 + Math.sin((minute + 1) / 9) * 3;
+      // Drobný posun podle minuty, ať sousední svíčky nemají na vrcholu shodné high.
+      const jitter = (minute % 5) * 0.013;
+      trending.push(bar(DAY_START + minute * MINUTE, base, Math.max(base, next) + 0.2 + jitter, Math.min(base, next) - 0.2 - jitter, next));
+    }
+    const context = source(trending).entryContext(trade());
+    const { htf, ltf } = source(trending).confluence(trade());
+    const tag = (label: string, read: { type: string; dir: string } | null | undefined) => (
+      read ? `${label} ${read.type} ${read.dir === 'bull' ? 'bullish' : 'bearish'}` : null
+    );
+    expect(context.ctx?.s1).toBeTruthy();
+    expect(context.ctx?.s5).toBeTruthy();
+    expect(ltf).toContain(tag('1m', context.ctx?.s1));
+    expect(htf).toContain(tag('5m', context.ctx?.s5));
+    if (context.ctx?.s15) expect(htf).toContain(tag('15m', context.ctx.s15));
+    expect(htf.some(item => item.startsWith('1m '))).toBe(false);
+    expect(ltf.some(item => item.startsWith('5m ') || item.startsWith('15m '))).toBe(false);
+  });
 });
 
 describe('entryContext — plný sběr levelů', () => {

@@ -30,6 +30,14 @@ const HTF_SECONDS: Record<HtfTimeframeLabel, number> = {
 };
 
 export type HtfTimeframeLabel = '15' | '60';
+/** Rámce, na kterých se čte struktura (CHoCH/BoS) — 1m a 5m navíc k HTF. */
+export type StructureTimeframeLabel = '1' | '5' | HtfTimeframeLabel;
+const STRUCTURE_SECONDS: Record<StructureTimeframeLabel, number> = {
+  '1': 60,
+  '5': 5 * 60,
+  '15': 15 * 60,
+  '60': 60 * 60,
+};
 
 export interface HtfStructureRead {
   dir: 'bull' | 'bear';
@@ -156,7 +164,7 @@ export interface HtfContextInput {
 }
 
 export interface HtfContextSource {
-  structure(entryTime: number, timeframe: HtfTimeframeLabel): HtfStructureRead | null;
+  structure(entryTime: number, timeframe: StructureTimeframeLabel): HtfStructureRead | null;
   fvg(entryTime: number, entryPrice: number): HtfFvgRead;
   /** Měsíční magnety z hodinové historie: PMH, PML a MO. */
   monthlyLevels(entryTime: number): MonthlyMagnet[];
@@ -188,6 +196,9 @@ export interface MonthlyMagnet {
 export const createHtfContextSource = (input: HtfContextInput): HtfContextSource => {
   const candles15 = input.candles.length >= 15 ? aggregateCandles([...input.candles], '15m') : [];
   const candles60 = input.hourly ?? [];
+  let candles5: MarketCandle[] | null = null;
+  let structure1: MarketStructureEvent[] | null = null;
+  let structure5: MarketStructureEvent[] | null = null;
   let structure15: MarketStructureEvent[] | null = null;
   let structure60: MarketStructureEvent[] | null = null;
   // Kontext se pro jeden obchod čte víckrát (mapa vstupu, konfluence, deník) a
@@ -196,7 +207,17 @@ export const createHtfContextSource = (input: HtfContextInput): HtfContextSource
   const structureCache = new Map<string, HtfStructureRead | null>();
   const fvgCache = new Map<string, HtfFvgRead>();
 
-  const eventsFor = (timeframe: HtfTimeframeLabel): MarketStructureEvent[] => {
+  const eventsFor = (timeframe: StructureTimeframeLabel): MarketStructureEvent[] => {
+    // Stejný výpočet CHoCH/BoS jako indikátor v grafu, jen na daném rámci.
+    if (timeframe === '1') {
+      structure1 ??= input.candles.length >= 3 ? calculateMarketStructure([...input.candles]) : [];
+      return structure1;
+    }
+    if (timeframe === '5') {
+      candles5 ??= input.candles.length >= 5 ? aggregateCandles([...input.candles], '5m') : [];
+      structure5 ??= candles5.length >= 3 ? calculateMarketStructure([...candles5]) : [];
+      return structure5;
+    }
     if (timeframe === '15') {
       structure15 ??= candles15.length >= 3 ? calculateMarketStructure([...candles15]) : [];
       return structure15;
@@ -209,7 +230,7 @@ export const createHtfContextSource = (input: HtfContextInput): HtfContextSource
     structure: (entryTime, timeframe) => {
       const key = `${timeframe}:${entryTime}`;
       if (structureCache.has(key)) return structureCache.get(key) ?? null;
-      const read = htfStructureAt(eventsFor(timeframe), entryTime, HTF_SECONDS[timeframe]);
+      const read = htfStructureAt(eventsFor(timeframe), entryTime, STRUCTURE_SECONDS[timeframe]);
       structureCache.set(key, read);
       return read;
     },

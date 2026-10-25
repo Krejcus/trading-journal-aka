@@ -86,6 +86,9 @@ export interface BacktestDayContext {
   ibWidthAtr: number | null;
   atr: number | null;
   dAtr: number | null;
+  /** Poslední zlom struktury na 1m a 5m před vstupem (chybí u starších záznamů). */
+  s1?: HtfStructureRead | null;
+  s5?: HtfStructureRead | null;
   /** Poslední zlom struktury na 15m před vstupem. */
   s15: HtfStructureRead | null;
   /** Totéž na hodinovém rámci. */
@@ -680,6 +683,8 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
         ibWidthAtr: round2(snapshot.dayContext.ibWidthAtr),
         atr: round2(snapshot.dayContext.atr),
         dAtr: round2(snapshot.dayContext.dailyAtr),
+        s1: htf.structure(trade.entryTime, '1'),
+        s5: htf.structure(trade.entryTime, '5'),
         s15: htf.structure(trade.entryTime, '15'),
         s60: htf.structure(trade.entryTime, '60'),
       },
@@ -892,9 +897,14 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
     if (htf.structureType && htf.structureDirection) {
       htfTags.push(`1h ${htf.structureType} ${htf.structureDirection === 'bullish' ? 'bullish' : 'bearish'}`);
     }
-    if (context.ctx?.s15) {
-      htfTags.push(`15m ${context.ctx.s15.type} ${context.ctx.s15.dir === 'bull' ? 'bullish' : 'bearish'}`);
-    }
+    // Struktura podle indikátoru (CHoCH/BoS): 5m a 15m patří do HTF, 1m do LTF.
+    const structureTag = (label: string, read: HtfStructureRead | null | undefined) => (
+      read ? `${label} ${read.type} ${read.dir === 'bull' ? 'bullish' : 'bearish'}` : null
+    );
+    const s5Tag = structureTag('5m', context.ctx?.s5);
+    if (s5Tag) htfTags.push(s5Tag);
+    const s15Tag = structureTag('15m', context.ctx?.s15);
+    if (s15Tag) htfTags.push(s15Tag);
     htf.htfLevels.forEach(label => htfTags.push(`u ${label}`));
     if (context.htfFvg?.inside15) htfTags.push('v 15m FVG');
     if (context.htfFvg?.inside60) htfTags.push('v 1h FVG');
@@ -902,7 +912,9 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
     if (context.aboveWO !== null) htfTags.push(context.aboveWO ? 'nad Week Open' : 'pod Week Open');
 
     const ltfTags: string[] = [];
-    if (map.structureType) {
+    const s1Tag = structureTag('1m', context.ctx?.s1);
+    if (s1Tag) ltfTags.push(s1Tag);
+    else if (map.structureType) {
       ltfTags.push(map.structureBarsAgo === null
         ? `1m ${map.structureType}`
         : `1m ${map.structureType} (${barsAgoLabel(map.structureBarsAgo)})`);

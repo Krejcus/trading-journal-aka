@@ -956,7 +956,7 @@ export interface BacktestTradeMappingOptions extends BacktestIntelOptions {
 }
 
 /** Verze data blobu; drží krok s AlphaBridge, ať AI ví, co kde čekat. */
-export const BACKTEST_TRADE_SCHEMA_VERSION = 8;
+export const BACKTEST_TRADE_SCHEMA_VERSION = 9;
 
 /** HH:MM v zóně session — AlphaBridge i importy tohle pole plní. */
 const clockTime = (unixSeconds: number, timeZone: string): string => {
