@@ -179,6 +179,8 @@ export interface ChartCanvasSettings {
   marginRight: number;
 }
 
+export type ChartOrderLineLabels = 'points-pnl' | 'pnl';
+
 export interface ChartTradingSettings {
   /** Zobrazit blesk, který z vybraného position boxu okamžitě odešle objednávku. */
   quickOrderButton: boolean;
@@ -188,6 +190,8 @@ export interface ChartTradingSettings {
   orderPriceLabels: boolean;
   /** Čekající objednávky, otevřená pozice a její SL/TP čáry. */
   orderLines: boolean;
+  /** Co ukazují štítky SL/TP čar: body od vstupu a P&L, nebo jen P&L. */
+  orderLineLabels: ChartOrderLineLabels;
   /** Spojnice mezi vstupem a výstupem uzavřeného obchodu. */
   tradeLines: boolean;
   /** Trojúhelníkové markery jednotlivých fillů. */
@@ -304,6 +308,7 @@ export const defaultChartSettings = (isDark: boolean): ChartSettings => ({
     positionBoxes: true,
     orderPriceLabels: true,
     orderLines: true,
+    orderLineLabels: 'points-pnl',
     tradeLines: true,
     executionMarkers: true,
     executionMarkerSize: 'medium',

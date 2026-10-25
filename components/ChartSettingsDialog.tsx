@@ -8,6 +8,7 @@ import {
   mergeChartSettings,
   type ChartButtonVisibility,
   type ChartExecutionMarkerSize,
+  type ChartOrderLineLabels,
   type ChartGridLines,
   type ChartLineAppearance,
   type ChartLineStyleName,
@@ -577,6 +578,19 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                     onChange={orderLines => update('trading', { orderLines })}
                     label="Zobrazit čáry objednávek, pozice, SL a TP"
                   />
+                  {trading.orderLines && (
+                    <Row label="Štítky SL / TP">
+                      <Select
+                        value={trading.orderLineLabels}
+                        width="w-[136px]"
+                        options={[
+                          { value: 'points-pnl', label: 'Body + P&L' },
+                          { value: 'pnl', label: 'Jen P&L' },
+                        ]}
+                        onChange={orderLineLabels => update('trading', { orderLineLabels: orderLineLabels as ChartOrderLineLabels })}
+                      />
+                    </Row>
+                  )}
                 </Section>
 
                 <Section title="Provedené obchody">

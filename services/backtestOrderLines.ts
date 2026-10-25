@@ -38,6 +38,30 @@ export const bracketLineLabel = (
   entryPrice: number,
   value: number,
 ) => `${kind === 'stopLoss' ? 'SL' : 'TP'}  ${money(projectedBacktestPnl(instrument, side, quantity, entryPrice, value))} · ${points(entryPrice, value)}`;
+export interface BacktestOrderLineLabelParts {
+  /** „SL“, „SHORT 7“, „BUY 1 LIMIT“. */
+  key: string;
+  price?: string;
+  points?: string;
+  pnl?: string;
+  note?: string;
+}
+
+/** Rozpad popisku na části štítku: typ, cena, body, P&L a poznámka („návrh“). */
+export const orderLineLabelParts = (label: string): BacktestOrderLineLabelParts => {
+  const [key = '', ...rest] = label.trim().split(/\s{2,}/);
+  const parts: BacktestOrderLineLabelParts = { key };
+  rest.flatMap(segment => segment.split(' · ')).forEach(piece => {
+    const value = piece.trim();
+    if (!value) return;
+    if (value.startsWith('P&L ')) parts.pnl = value.slice(4);
+    else if (/^[+−-]\$/.test(value)) parts.pnl = value;
+    else if (/ b$/.test(value)) parts.points = value;
+    else if (/^-?\d/.test(value)) parts.price = value;
+    else parts.note = value;
+  });
+  return parts;
+};
 const PENDING_COLOR = '#2563eb';
 const PROFIT_COLOR = '#059669';
 const LOSS_COLOR = '#ef4444';

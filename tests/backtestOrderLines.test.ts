@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { pendingOrderChartLines, positionChartLines, projectedBacktestPnl, ticketDraftChartLines, ticketDraftOrder, ticketDraftSide, ticketDraftWithBracket } from '../services/backtestOrderLines';
+import { orderLineLabelParts, pendingOrderChartLines, positionChartLines, projectedBacktestPnl, ticketDraftChartLines, ticketDraftOrder, ticketDraftSide, ticketDraftWithBracket } from '../services/backtestOrderLines';
 import { createBacktestOrder } from '../services/backtestEngine';
 
 describe('backtest chart order lines', () => {
@@ -15,11 +15,11 @@ describe('backtest chart order lines', () => {
   it('renders colored SL/TP handles before the position label and drags them with live prices', () => {
     const source = readFileSync('components/BacktestOrderLinesOverlay.tsx', 'utf8');
 
-    expect(source.indexOf('line.addableBrackets?.map')).toBeLessThan(source.indexOf('line.label}</span>'));
-    expect(source).toContain("kind === 'stopLoss' ? 'border-rose-600 bg-rose-500");
-    expect(source).toContain("'border-emerald-700 bg-emerald-600");
-    expect(source).toContain('items-center gap-[3px]');
-    expect(source).toContain('items-center overflow-hidden rounded-[3px] border shadow-sm');
+    expect(source.indexOf('line.addableBrackets?.map')).toBeLessThan(source.indexOf('<OrderLineBadge\n                label={dragged'));
+    // Tenký štítek Aurora: 19 px, sklo s vlastní výplní, SL/TP jako čárkované „+ SL“ / „+ TP“.
+    expect(source).toContain('flex h-[19px] items-center gap-[7px]');
+    expect(source).toContain("{kind === 'stopLoss' ? '+ SL' : '+ TP'}");
+    expect(source).toContain("const showPoints = kind === 'entry' || labelMode === 'points-pnl'");
     // Tažení commitne do enginu až při puštění (jinak se celý workspace
     // překresloval na každý pixel); během tahu žije cena jen v overlay.
     expect(source).toContain('onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice)');
@@ -232,5 +232,13 @@ describe('návrh limit/stop příkazu z lišty', () => {
     const draft = { type: 'limit' as const, price: 95, stopLoss: 90, takeProfit: 105 };
     expect(ticketDraftOrder(draft, 'buy', market)).toEqual({ side: 'buy', type: 'limit', price: 95, stopLoss: 90, takeProfit: 105 });
     expect(ticketDraftOrder(draft, 'sell', market)).toEqual({ side: 'sell', type: 'limit', price: 95, stopLoss: 100, takeProfit: 85 });
+  });
+});
+
+describe('orderLineLabelParts', () => {
+  it('splits bracket, position and draft labels into badge parts', () => {
+    expect(orderLineLabelParts('SL  −$45.00 · 22.50 b')).toEqual({ key: 'SL', pnl: '−$45.00', points: '22.50 b' });
+    expect(orderLineLabelParts('SHORT 7  29867.75  P&L +$35.00')).toEqual({ key: 'SHORT 7', price: '29867.75', pnl: '+$35.00' });
+    expect(orderLineLabelParts('BUY 1 LIMIT  29850.00 · návrh')).toEqual({ key: 'BUY 1 LIMIT', price: '29850.00', note: 'návrh' });
   });
 });

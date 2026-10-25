@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Štítky čar — finál</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #f4f6fb; --card: #ffffff; --text: #0f172a; --muted: #64748b; --line: rgba(15,23,42,.08); --chart: #ffffff; --grid: rgba(15,23,42,.04); --candle-up: #c7ced8; --candle-dn: #2b59d6; }
+  :root[data-theme="dark"] { --bg: #070a0f; --card: #10161f; --text: #e8edf5; --muted: #8391a7; --line: rgba(255,255,255,.08); --chart: #0b0f15; --grid: rgba(255,255,255,.03); --candle-up: #c7ced8; --candle-dn: #2563eb; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 Inter, system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px; padding: 12px 22px; background: color-mix(in srgb, var(--bg) 88%, transparent); border-bottom: 1px solid var(--line); backdrop-filter: blur(8px); }
+  header h1 { margin: 0; font-size: 15px; font-weight: 800; }
+  header p { margin: 0; color: var(--muted); font-size: 12px; }
+  .toggle { margin-left: auto; display: flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; }
+  .toggle button { border: 0; background: transparent; color: var(--muted); font: 700 12px Inter; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  .toggle button.on { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+  main { max-width: 1180px; margin: 0 auto; padding: 22px; display: grid; gap: 22px; }
+  .variant h2 { margin: 0 0 2px; font-size: 16px; font-weight: 900; }
+  .variant > p { margin: 0 0 10px; color: var(--muted); }
+  .chart { position: relative; height: 230px; background: var(--chart); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 100% 46px, 60px 100%; }
+  .axis { position: absolute; top: 0; bottom: 0; right: 0; width: 86px; border-left: 1px solid var(--line); }
+  .candles { position: absolute; inset: 0 86px 0 0; }
+  .row { position: absolute; left: 0; right: 0; height: 0; }
+  .row .dash { position: absolute; left: 0; right: 86px; top: 0; border-top: 1px dashed var(--c); opacity: .85; }
+  .row .price { position: absolute; right: 0; width: 86px; top: -10px; height: 20px; display: grid; place-items: center; font: 700 10.5px 'JetBrains Mono', monospace; color: #fff; background: var(--c); }
+  .row .badge-wrap { position: absolute; right: 94px; top: 0; transform: translateY(-50%); display: flex; align-items: center; gap: 4px; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .x { display: inline-grid; place-items: center; cursor: pointer; }
+
+  /* ── A · Aurora sklo ─────────────────────────────── */
+  .a { display: inline-flex; align-items: center; height: 26px; border-radius: 999px; padding: 0 4px 0 10px; gap: 8px; font-size: 11px; font-weight: 800;
+    background: color-mix(in srgb, var(--card) 82%, transparent); border: 1px solid color-mix(in srgb, var(--c) 35%, transparent);
+    box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--c) 70%, transparent), inset 0 1px 0 rgba(255,255,255,.6); backdrop-filter: blur(10px) saturate(160%); color: var(--text); }
+  .a .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 22%, transparent); }
+  .a .k { color: var(--c); letter-spacing: .04em; }
+  .a .v { font-family: 'JetBrains Mono'; font-weight: 700; }
+  .a .pnl { font-family: 'JetBrains Mono'; font-weight: 700; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--c) 14%, transparent); color: var(--c); }
+  .a .x { width: 18px; height: 18px; border-radius: 50%; color: var(--muted); font-size: 12px; }
+  .a .x:hover { background: color-mix(in srgb, var(--c) 18%, transparent); color: var(--c); }
+
+  /* ── B · Dělená kapsle ───────────────────────────── */
+  .b { display: inline-flex; align-items: stretch; height: 24px; border-radius: 7px; overflow: hidden; font-size: 11px; font-weight: 800; box-shadow: 0 4px 14px -6px rgba(15,23,42,.35); }
+  .b .k { display: flex; align-items: center; gap: 5px; padding: 0 9px; color: #fff; background: linear-gradient(180deg, color-mix(in srgb, var(--c) 92%, #fff), var(--c)); }
+  .b .v { display: flex; align-items: center; gap: 8px; padding: 0 9px; background: var(--card); color: var(--text); border: 1px solid color-mix(in srgb, var(--c) 30%, transparent); border-left: 0; font-family: 'JetBrains Mono'; font-weight: 700; }
+  .b .v .pnl { color: var(--c); }
+  .b .x { width: 24px; background: var(--card); color: var(--muted); border: 1px solid color-mix(in srgb, var(--c) 30%, transparent); border-left: 1px solid var(--line); font-size: 12px; }
+  .b .x:hover { color: #fff; background: var(--c); }
+
+  /* ── C · Minimal štítek se šipkou k ose (TV) ─────── */
+  .c { position: relative; display: inline-flex; align-items: center; height: 22px; padding: 0 6px 0 9px; gap: 7px; border-radius: 5px 0 0 5px; font-size: 10.5px; font-weight: 800;
+    background: color-mix(in srgb, var(--c) 10%, var(--card)); color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 45%, transparent); border-right: 0; }
+  .c::after { content: ''; position: absolute; right: -9px; top: -1px; border-left: 9px solid color-mix(in srgb, var(--c) 45%, transparent); border-top: 11px solid transparent; border-bottom: 11px solid transparent; }
+  .c .v { font-family: 'JetBrains Mono'; color: var(--text); font-weight: 700; }
+  .c .x { width: 16px; height: 16px; border-radius: 4px; font-size: 11px; color: var(--muted); }
+  .c .x:hover { color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); }
+
+  /* ── D · Plný gradient se září ───────────────────── */
+  .d { display: inline-flex; align-items: center; height: 26px; padding: 0 4px 0 11px; gap: 9px; border-radius: 9px; color: #fff; font-size: 11px; font-weight: 800;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--c) 78%, #fff 22%), var(--c) 55%, color-mix(in srgb, var(--c) 80%, #000 20%));
+    box-shadow: 0 8px 22px -8px var(--c), inset 0 1px 0 rgba(255,255,255,.35); }
+  .d .v { font-family: 'JetBrains Mono'; font-weight: 700; opacity: .92; }
+  .d .pnl { font-family: 'JetBrains Mono'; font-weight: 800; padding: 2px 7px; border-radius: 6px; background: rgba(255,255,255,.2); }
+  .d .x { width: 20px; height: 20px; border-radius: 6px; font-size: 12px; background: rgba(0,0,0,.12); }
+  .d .x:hover { background: rgba(0,0,0,.25); }
+
+  /* ── E · Dva řádky, kompaktní karta ──────────────── */
+  .e { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 5px 0 4px; border-radius: 10px; background: var(--card); border: 1px solid var(--line);
+    box-shadow: 0 8px 20px -10px rgba(15,23,42,.35); font-size: 11px; }
+  .e .ico { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-size: 9.5px; font-weight: 900; background: var(--c); }
+  .e .lines { display: grid; line-height: 1.1; }
+  .e .lines small { font-size: 8.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .e .lines b { font-family: 'JetBrains Mono'; font-size: 11.5px; font-weight: 700; color: var(--c); }
+  .e .x { width: 20px; height: 20px; border-radius: 6px; color: var(--muted); font-size: 12px; }
+  .e .x:hover { background: color-mix(in srgb, var(--c) 14%, transparent); color: var(--c); }
+
+
+  /* ── Finální: tenká varianta 1 ───────────── */
+  .g1 { display: inline-flex; align-items: center; height: 19px; border-radius: 4px; padding: 0 2px 0 7px; gap: 7px; font-size: 10.5px; font-weight: 500;
+    background: color-mix(in srgb, var(--card) 84%, transparent); border: 1px solid color-mix(in srgb, var(--c) 38%, transparent);
+    box-shadow: 0 4px 12px -8px color-mix(in srgb, var(--c) 75%, transparent), inset 0 1px 0 rgba(255,255,255,.5); backdrop-filter: blur(10px) saturate(160%); color: var(--text); }
+  .g1 .k { color: var(--c); font-weight: 600; letter-spacing: .02em; }
+  .g1 .v, .g1 .pnl { font-family: 'JetBrains Mono'; font-weight: 500; }
+  .g1 .v { color: var(--muted); }
+  .g1 .pnl { color: var(--c); font-weight: 600; }
+  .g1 .x { width: 15px; height: 15px; border-radius: 3px; color: var(--muted); font-size: 9px; display: inline-flex; align-items: center; justify-content: center; }
+  .g1 .x:hover { background: color-mix(in srgb, var(--c) 14%, transparent); color: var(--c); }
+  .old { display: inline-flex; align-items: center; height: 24px; border-radius: 5px; padding: 0 3px 0 9px; gap: 9px; font-size: 11px; font-weight: 700;
+    background: color-mix(in srgb, var(--card) 80%, transparent); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); color: var(--text); }
+  .old .k { color: var(--c); font-weight: 800; } .old .v, .old .pnl { font-family: 'JetBrains Mono'; font-weight: 600; } .old .pnl { color: var(--c); }
+  .old .x { width: 18px; color: var(--muted); font-size: 11px; text-align: center; }
+  .settings { max-width: 460px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 12px 14px; margin-bottom: 14px; }
+  .settings h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .setrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+  .setrow small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg button { border: 0; background: transparent; color: var(--muted); font: 600 12px Inter, system-ui; padding: 4px 10px; border-radius: 5px; cursor: pointer; }
+  .seg button.on { background: color-mix(in srgb, #2563eb 14%, transparent); color: #2563eb; }
+  .compare { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 10px; }
+
+  /* přidat SL/TP tlačítka */
+  .add { display: inline-flex; gap: 3px; }
+  .add span { height: 20px; padding: 0 7px; border-radius: 6px; display: inline-flex; align-items: center; font-size: 9.5px; font-weight: 900; color: #fff; cursor: ns-resize; }
+  .add .sl { background: #ef4444; } .add .tp { background: #10b981; }
+  .add.ghost span { background: transparent; border: 1px dashed currentColor; }
+  .add.ghost .sl { color: #ef4444; } .add.ghost .tp { color: #10b981; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Štítky čar — tenká varianta 1</h1><p>Výška 19 px (místo 24), tenčí písmo u SHORT/SL/TP i čísel. Přepínač v nastavení obchodu mění štítky naživo.</p></div>
+  <div class="toggle" id="theme"><button data-t="light" class="on">Světlý</button><button data-t="dark">Tmavý</button></div>
+</header>
+<main id="main"></main>
+<script>
+const LINES = [
+  { kind: 'sl', c: '#ef4444', y: 46, key: 'SL', price: '29888.75', value: '−$294.00', pts: '21.00 b' },
+  { kind: 'entry', c: '#059669', y: 112, key: 'SHORT 7', price: '29867.75', value: '29 867.75', pnl: '+$35.00' },
+  { kind: 'tp', c: '#10b981', y: 186, key: 'TP', price: '29782.50', value: '+$1 193.50', pts: '85.25 b' },
+];
+let mode = 'both';
+const candlesSvg = () => {
+  let s = '<svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 900 230">';
+  let p = 150; let seed = 3; const r = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  for (let i = 0; i < 90; i++) { const o = p; p += (r() - 0.48) * 14 - (i > 60 ? 1.4 : 0); const c = p; const h = Math.min(o, c) - r() * 8; const l = Math.max(o, c) + r() * 8; const up = c < o; const x = 8 + i * 9.6;
+    s += `<line x1="${x}" x2="${x}" y1="${h}" y2="${l}" stroke="${up ? 'var(--candle-up)' : 'var(--candle-dn)'}"/><rect x="${x - 3}" y="${Math.min(o, c)}" width="6" height="${Math.max(1, Math.abs(c - o))}" fill="${up ? 'var(--candle-up)' : 'var(--candle-dn)'}"/>`; }
+  return s + '</svg>';
+};
+const badge = (v, l) => {
+  const pnl = l.kind === 'entry' ? l.pnl : l.value;
+  const main = l.kind === 'entry' ? l.value : (mode === 'both' || v === 'old' ? l.pts : '');
+  return `<span class="${v}"><span class="k">${l.key}</span>${main ? `<span class="v">${main}</span>` : ''}<span class="pnl">${pnl}</span><span class="x">✕</span></span>`;
+};
+const main = document.getElementById('main');
+const render = () => {
+  main.innerHTML = `
+  <div class="settings"><h3>Nastavení · Obchodování</h3>
+    <div class="setrow"><div>Štítky SL / TP<small>Co ukazovat na čarách stop lossu a take profitu</small></div>
+      <div class="seg" id="mode"><button data-m="both" class="${mode === 'both' ? 'on' : ''}">Body + P&L</button><button data-m="pnl" class="${mode === 'pnl' ? 'on' : ''}">Jen P&L</button></div></div>
+  </div>
+  <section class="variant">
+    <div class="chart"><div class="candles">${candlesSvg()}</div><div class="axis"></div>
+      ${LINES.map(l => `<div class="row" style="top:${l.y}px;--c:${l.c}"><div class="dash"></div><div class="badge-wrap">${badge('g1', l)}</div><div class="price">${l.price}</div></div>`).join('')}
+    </div>
+    <div class="note">Bez SL/TP: <span style="display:inline-flex;vertical-align:middle;gap:6px;align-items:center;--c:#059669">${badge('g1', LINES[1])}<span class="add ghost"><span class="sl">+ SL</span><span class="tp">+ TP</span></span></span></div>
+    <div class="compare">Srovnání — dřív: <span style="--c:#ef4444">${badge('old', LINES[0])}</span> teď: <span style="--c:#ef4444">${badge('g1', LINES[0])}</span></div>
+  </section>`;
+  document.getElementById('mode').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { mode = b.dataset.m; render(); } });
+};
+render();
+document.getElementById('theme').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  document.querySelectorAll('#theme button').forEach(x => x.classList.toggle('on', x === b));
+  document.documentElement.dataset.theme = b.dataset.t;
+});
+</script>
+</body>
+</html>

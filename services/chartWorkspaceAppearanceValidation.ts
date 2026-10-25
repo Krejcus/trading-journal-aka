@@ -52,6 +52,7 @@ chartRules.canvas.navigationButtons = buttons; chartRules.canvas.paneButtons = b
 chartRules.canvas.gridVertStyle = lines; chartRules.canvas.gridHorzStyle = lines;
 for (const key of ['sessionBreak', 'crosshair']) (chartRules.canvas[key] as Record<string, unknown>).style = lines;
 chartRules.trading.executionMarkerSize = { enum: ['small', 'medium', 'large'] };
+chartRules.trading.orderLineLabels = { enum: ['points-pnl', 'pnl'] };
 // Data-only contracts mirror the supported indicator / fib / position setting
 // interfaces without importing their dialogs, template transport or chart runtime.
 const rules = {

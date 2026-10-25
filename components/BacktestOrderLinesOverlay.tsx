@@ -1,11 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
-import type { BacktestChartOrderLine, BacktestChartOrderLineKind } from '../services/backtestOrderLines';
+import { orderLineLabelParts, type BacktestChartOrderLine, type BacktestChartOrderLineKind } from '../services/backtestOrderLines';
+import type { ChartOrderLineLabels } from '../services/chartSettings';
 
 interface Props {
   api: ChartViewApi;
   lines: BacktestChartOrderLine[];
   showPriceLabels?: boolean;
+  /** Štítky SL/TP: body od vstupu + P&L, nebo jen P&L. */
+  labelMode?: ChartOrderLineLabels;
+  isDark?: boolean;
   onChange: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number) => void;
   onCancel: (line: BacktestChartOrderLine) => void;
   onAddBracket?: (
@@ -20,7 +24,43 @@ const sameCoordinates = (left: Record<string, number>, right: Record<string, num
   return leftKeys.length === Object.keys(right).length && leftKeys.every(key => left[key] === right[key]);
 };
 
-const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, onChange, onCancel, onAddBracket }) => {
+/**
+ * Tenký štítek Aurora: mléčné sklo s vlastní výplní (Chrome nemusí kreslit
+ * backdrop blur), obrys a typ v barvě čáry, čísla neutrální, P&L barevně.
+ */
+const OrderLineBadge: React.FC<{
+  label: string;
+  kind: BacktestChartOrderLineKind;
+  color: string;
+  isDark: boolean;
+  labelMode: ChartOrderLineLabels;
+  children?: React.ReactNode;
+}> = ({ label, kind, color, isDark, labelMode, children }) => {
+  const parts = orderLineLabelParts(label);
+  const muted = isDark ? '#8391a7' : '#64748b';
+  const showPoints = kind === 'entry' || labelMode === 'points-pnl';
+  return (
+    <div
+      className="flex h-[19px] items-center gap-[7px] whitespace-nowrap rounded-[4px] border pl-[7px] pr-[2px] text-[10.5px] font-medium backdrop-blur-md backdrop-saturate-150"
+      style={{
+        borderColor: `${color}61`,
+        backgroundColor: isDark ? 'rgba(13, 18, 26, 0.86)' : 'rgba(255, 255, 255, 0.9)',
+        boxShadow: `0 4px 12px -8px ${color}bf, inset 0 1px 0 rgba(255, 255, 255, ${isDark ? 0.06 : 0.5})`,
+        color: isDark ? '#e2e8f0' : '#0f172a',
+      }}
+      data-order-line-badge
+    >
+      <span className="font-semibold tracking-[0.02em]" style={{ color }}>{parts.key}</span>
+      {parts.price && <span className="font-mono" style={{ color: muted }}>{parts.price}</span>}
+      {showPoints && parts.points && <span className="font-mono" style={{ color: muted }}>{parts.points}</span>}
+      {parts.pnl && <span className="font-mono font-semibold" style={{ color }}>{parts.pnl}</span>}
+      {parts.note && <span style={{ color: muted }}>{parts.note}</span>}
+      {children ?? <span className="w-[3px]" />}
+    </div>
+  );
+};
+
+const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAddBracket }) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const linesRef = useRef(lines);
   const lineElementsRef = useRef(new Map<string, HTMLDivElement>());
@@ -179,8 +219,8 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
         return (
           <div className="pointer-events-none absolute left-0 h-0" style={{ right: priceScaleWidth, top: bracketDragPreview.top }} data-backtest-bracket-ghost>
             <div className="absolute inset-x-0 top-0 border-t border-dashed" style={{ borderColor: color }} />
-            <div className="absolute right-1 top-0 flex h-[22px] -translate-y-1/2 items-center rounded-[3px] border bg-white px-2 text-[9px] font-black shadow-sm" style={{ borderColor: color, color }}>
-              <span className="whitespace-nowrap">{label}</span>
+            <div className="absolute right-1 top-0 -translate-y-1/2">
+              <OrderLineBadge label={label} kind={bracketDragPreview.kind} color={color} isDark={isDark} labelMode={labelMode} />
             </div>
             {showPriceLabels && (
               <div className="absolute top-0 flex h-[20px] -translate-y-1/2 items-center justify-center px-1 text-[9px] font-black text-white" style={{ left: '100%', width: priceScaleWidth, backgroundColor: color }}>
@@ -195,7 +235,6 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
         const top = dragged ? dragOverride.top : coordinates[line.id];
         const shownPrice = dragged ? dragOverride.price : line.price;
         if (!Number.isFinite(top)) return null;
-        const filledLabel = line.filledLabel === true;
         return (
           <div
             key={line.id}
@@ -211,7 +250,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
               role={line.draggable ? 'button' : undefined}
               aria-label={line.draggable ? `Posunout ${line.label} ${line.price.toFixed(2)}` : undefined}
               tabIndex={line.draggable ? 0 : undefined}
-              className={`pointer-events-auto absolute right-1 top-0 flex h-[22px] -translate-y-1/2 items-center gap-[3px] text-[9px] font-black ${line.draggable ? 'cursor-ns-resize' : 'cursor-default'}`}
+              className={`pointer-events-auto absolute right-1 top-0 flex h-[19px] -translate-y-1/2 items-center gap-[4px] ${line.draggable ? 'cursor-ns-resize' : 'cursor-default'}`}
               onPointerDown={event => {
                 if (!line.draggable || (event.target as HTMLElement).closest('[data-order-line-control]')) return;
                 event.preventDefault();
@@ -229,7 +268,12 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                   key={kind}
                   type="button"
                   data-order-line-control
-                  className={`flex h-full min-w-7 cursor-ns-resize items-center justify-center rounded-[3px] border px-1.5 text-[9px] font-black text-white shadow-sm ${kind === 'stopLoss' ? 'border-rose-600 bg-rose-500 hover:bg-rose-600' : 'border-emerald-700 bg-emerald-600 hover:bg-emerald-700'}`}
+                  className={`flex h-full cursor-ns-resize items-center justify-center whitespace-nowrap rounded-[4px] border border-dashed px-[6px] text-[9.5px] font-semibold ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-900/5'}`}
+                  style={{
+                    color: kind === 'stopLoss' ? '#ef4444' : '#0f9f8f',
+                    borderColor: kind === 'stopLoss' ? '#ef4444' : '#0f9f8f',
+                    backgroundColor: isDark ? 'rgba(13, 18, 26, 0.86)' : 'rgba(255, 255, 255, 0.9)',
+                  }}
                   onPointerDown={event => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -247,23 +291,20 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                   }}
                   aria-label={kind === 'stopLoss' ? 'Nastavit nebo posunout stop loss' : 'Nastavit nebo posunout take profit'}
                   title={kind === 'stopLoss' ? 'Táhni pro nastavení SL' : 'Táhni pro nastavení TP'}
-                >{kind === 'stopLoss' ? 'SL' : 'TP'}</button>
+                >{kind === 'stopLoss' ? '+ SL' : '+ TP'}</button>
               ))}
-              <div
-                className={`flex h-full items-center overflow-hidden rounded-[3px] border shadow-sm ${filledLabel ? 'text-white' : 'bg-white'}`}
-                style={{
-                  borderColor: line.color,
-                  backgroundColor: filledLabel ? line.color : undefined,
-                  color: filledLabel ? '#ffffff' : line.color,
-                }}
+              <OrderLineBadge
+                label={dragged && line.labelAt ? line.labelAt(shownPrice) : line.label}
+                kind={line.kind}
+                color={line.color}
+                isDark={isDark}
+                labelMode={labelMode}
               >
-                <span className="whitespace-nowrap px-2">{dragged && line.labelAt ? line.labelAt(shownPrice) : line.label}</span>
                 {line.cancellable && (
                   <button
                     type="button"
                     data-order-line-control
-                    className={`flex h-full w-6 items-center justify-center border-l text-sm leading-none ${filledLabel ? 'hover:bg-black/10' : 'hover:bg-slate-100'}`}
-                    style={{ borderColor: filledLabel ? 'rgba(255,255,255,0.45)' : line.color }}
+                    className={`flex h-[15px] w-[15px] items-center justify-center rounded-[3px] text-[11px] leading-none ${isDark ? 'text-slate-400 hover:bg-white/10' : 'text-slate-500 hover:bg-slate-900/[0.06]'}`}
                     onPointerDown={event => event.stopPropagation()}
                     onClick={event => { event.stopPropagation(); onCancel(line); }}
                     aria-label={line.cancelAction === 'close-position'
@@ -273,7 +314,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                         : 'Zrušit čekající příkaz'}
                   >×</button>
                 )}
-              </div>
+              </OrderLineBadge>
             </div>
             {showPriceLabels && line.kind !== 'entry' && (
               <div
