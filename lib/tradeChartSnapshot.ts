@@ -29,21 +29,33 @@ const CHART_WIDTH = 1600;
 const CHART_HEIGHT = 854;
 const HEADER_HEIGHT = 46;
 
-/** Rozestup svíček na snímku (px) — stejně velké svíčky u krátkého i delšího obchodu. */
-export const SNAPSHOT_BAR_SPACING = 14;
+/** Počet svíček na snímku — stejně velké svíčky u krátkého i delšího obchodu. */
+export const SNAPSHOT_BARS = 100;
 /** Nejmenší rezerva před vstupem a po výstupu (bary), když je obchod dlouhý. */
 const MIN_SNAPSHOT_MARGIN = 10;
 
 /**
- * Logický výřez jako v TradingView: pevný rozestup svíček (z šířky grafu
- * vyjde počet barů na snímku) a obchod přesně uprostřed. Oddálí se jen
- * obchod, který by se s rezervou do pevného výřezu nevešel.
+ * Logický výřez jako v TradingView: pevně ~100 svíček (stejný rozestup)
+ * a obchod přesně uprostřed. Oddálí se jen obchod, který by se s rezervou
+ * do pevného výřezu nevešel.
  */
-export const centeredTradeRange = (entryIndex: number, exitIndex: number, plotWidth = CHART_WIDTH - 80) => {
+export const centeredTradeRange = (entryIndex: number, exitIndex: number) => {
   const span = Math.max(0, exitIndex - entryIndex);
-  const bars = Math.max(Math.round(plotWidth / SNAPSHOT_BAR_SPACING), span + 2 * MIN_SNAPSHOT_MARGIN);
+  const bars = Math.max(SNAPSHOT_BARS, span + 2 * MIN_SNAPSHOT_MARGIN);
   const middle = (entryIndex + exitIndex) / 2;
   return { from: middle - bars / 2, to: middle + bars / 2 };
+};
+
+/** Cenový rozsah snímku: svíčky ve výřezu, vstup, výstup a vždy i SL a TP. */
+export const snapshotPriceRange = (
+  view: ReadonlyArray<{ high: number; low: number }>,
+  trade: Pick<TradeSnapshotInput, 'entryPrice' | 'exitPrice' | 'stopLoss' | 'takeProfit'>,
+) => {
+  const prices = [
+    ...view.flatMap(bar => [bar.high, bar.low]),
+    trade.entryPrice, trade.exitPrice, trade.stopLoss, trade.takeProfit,
+  ].filter(finite);
+  return { high: Math.max(...prices), low: Math.min(...prices) };
 };
 
 /** Index posledního baru, který začal nejpozději v daném čase (ms). */
@@ -108,14 +120,10 @@ async function captureNow(api: ChartViewApi, trade: TradeSnapshotInput, isDark: 
     chart.applyOptions({ autoSize: false });
     chart.resize(CHART_WIDTH, CHART_HEIGHT, true);
     timeScale.setVisibleLogicalRange(range);
-    const view = bars.slice(Math.max(0, range.from), Math.min(bars.length, range.to + 1));
-    const prices = [
-      ...view.flatMap(bar => [bar.high, bar.low]),
-      trade.entryPrice, trade.exitPrice, trade.stopLoss, trade.takeProfit,
-    ].filter(finite);
-    const high = Math.max(...prices);
-    const low = Math.min(...prices);
-    const margin = Math.max((high - low) * 0.08, 1);
+    const view = bars.slice(Math.max(0, Math.floor(range.from)), Math.min(bars.length, Math.ceil(range.to) + 1));
+    const { high, low } = snapshotPriceRange(view, trade);
+    // Malý okraj: svíčky vyplní skoro celou výšku snímku.
+    const margin = Math.max((high - low) * 0.03, 0.5);
     priceScale.setAutoScale(false);
     priceScale.setVisibleRange({ from: low - margin, to: high + margin });
     for (let frame = 0; frame < 4; frame += 1) await nextFrame();
