@@ -181,6 +181,49 @@ Ověření před/po: web `localStorage['at:dev:perf']='1'` + `window.__atPerf`
 (`dash:rpc-done`, `dash:journal-facts-done`, `dash:notes-done`), `Server-Timing`
 na relay, iPhone `scripts/ios/perf-measure.sh`.
 
+## Prověření návrhu synchronizace přes verze (25. 10.)
+
+Návrh: záznam změn `sync_changes` plněný triggery, kurzor = `xid8` watermark
+`pg_snapshot_xmin(pg_current_snapshot())` z jednoho snapshotu, pull vrací aktuální
+složený stav (ne rozdíly), bootstrap dvoufázově (xmin → stránky → delta), klient
+čte jen z IndexedDB store, Realtime jen „poke“, brána zobrazení.
+
+Potvrzeno v DB: `pg_current_snapshot`/`pg_current_xact_id` STABLE,
+`pg_snapshot_xmin` IMMUTABLE, `realtime.send` existuje, `pg_cron`/`pg_repack`
+dostupné. Složení všech 4 774 obchodů v jednom příkazu 0,5 s (jen bootstrap).
+
+Nezávislá kontrola proti kódu — **správné**: watermark pod READ COMMITTED
+v jednom STABLE příkazu, dvoufázový bootstrap, posílání stavu místo rozdílů,
+žádný zámek na uživatele, 55000, žádná cesta mimo triggery, owner-only v1.
+
+**Nutné opravy návrhu** (ověřeno ⓥ):
+1. ⓥ Import přepisuje pozice i beze změny (5 358 UPDATE / 31 h na 1 310 řádků)
+   → triggery jen při skutečné změně (`WHEN old.* IS DISTINCT FROM new.*`),
+   logovat OLD i NEW `trade_id`.
+2. ⓥ `realtime.send` má BEGIN…EXCEPTION → per-row = subtransakce → jedno
+   oznámení na transakci (deferred constraint trigger + `set_config` guard).
+3. Neúplný feed: snapshoty kopírky (`copier_trade_snapshots`,
+   `tradovate_copier_trades`, okenní funkce ve view), `profiles`,
+   `weekly_focus`, payouts, Lab analytika pro všechny obchody, změna výpočtu
+   / restore DB → registr tabulek + CI test triggerů, `sync_epoch`,
+   `projection_version`, `horizon_xid` po úklidu.
+4. Skryté/nahrazené journal obchody jsou UPDATE, ne DELETE → pull vrací pro
+   každé změněné ID aktuální stav s příznaky nebo tombstone, `op` ignorovat;
+   viditelnost počítat nad celým store.
+5. Pořadí: aplikovat řádek jen s vyšší verzí; odpověď zápisu skládat stejnou
+   funkcí po `UPDATE … RETURNING`; xid nikdy jako verze řádku.
+6. Ponechat CAS po polích (+ vrátit `row_version`, `request_id` pro opakování);
+   přímé zápisy (`updateTrade`, `saveTrades`, extension) s `.eq('row_version')`.
+7. Všechny funkce volané z pullu STABLE (dnešní dashboard helpery jsou
+   VOLATILE); limit velikosti pullu (`has_more`), alarm na staré `backend_xmin`.
+8. Soukromí: pull INVOKER s explicitním filtrem vlastníka, `sync_changes`
+   owner-only SELECT, Realtime kanál `sync:<uid>` s RLS, IndexedDB per uživatel
+   a smazat při odhlášení.
+9. ~30 `setTrades` cest a postgres_changes handler obchází store → vše přes
+   store, neodeslané změny (outboxy, dirty flagy) jako vrstva nad serverem.
+10. Shadow porovnání v normalizované formě, checksum přes (id, row_version).
+11. Brána „aktuální“ musí zahrnout i zpoždění projekce deníku (heads).
+
 ## Doporučené pořadí
 
 1. **Rychlé a bezpečné** (1 větev, bez copier-core): falešný `needsReview`
