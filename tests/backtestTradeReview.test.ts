@@ -37,3 +37,13 @@ describe('buildBacktestTradeReviewUpdates', () => {
     });
   });
 });
+
+describe('withReviewedFlag', () => {
+  it('odškrtne „čeká na review“ jen u obchodu, který tam opravdu byl', async () => {
+    const { withReviewedFlag } = await import('../services/backtestTradeReview');
+    expect(withReviewedFlag({ notes: 'x' }, { needsReview: true })).toEqual({ notes: 'x', needsReview: false });
+    // Pole chybí (204/205 backtest obchodů) nebo je false: neposílat — CAS by hlásil falešný konflikt.
+    expect(withReviewedFlag({ notes: 'x' }, { needsReview: false })).toEqual({ notes: 'x' });
+    expect(withReviewedFlag({ notes: 'x' }, {})).toEqual({ notes: 'x' });
+  });
+});

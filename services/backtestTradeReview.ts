@@ -23,6 +23,16 @@ export const mergeTradeSnapshotUrls = (
   };
 };
 
+/**
+ * Uložené review obchod odškrtne z „čeká na review“ — ale jen když tam opravdu
+ * byl. Většina backtest obchodů pole `needsReview` vůbec nemá a klient z něj
+ * dělá `false`; poslat ho by CAS na serveru porovnal `false` s prázdnou
+ * hodnotou a hlásil falešný souběžný konflikt (retry bouře 25. 10. 2026).
+ */
+export const withReviewedFlag = (patch: Partial<Trade>, baseline: { needsReview?: boolean }): Partial<Trade> => (
+  baseline.needsReview === true ? { ...patch, needsReview: false } : patch
+);
+
 /** Jeden krok ukládání nesmí viset donekonečna (server bez odpovědi = tlačítko točí navždy). */
 export const BACKTEST_REVIEW_STEP_TIMEOUT_MS = 30_000;
 const withTimeout = <T,>(promise: Promise<T>, message: string, ms = BACKTEST_REVIEW_STEP_TIMEOUT_MS): Promise<T> => new Promise((resolve, reject) => {

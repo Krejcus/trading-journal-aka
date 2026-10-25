@@ -21,6 +21,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { changedTradeFields } from '../services/tradePatch';
+import { withReviewedFlag } from '../services/backtestTradeReview';
 import type { Trade } from '../types';
 import {
   buildBacktestTradeRecalculationUpdates,
@@ -338,7 +339,7 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
           ltfConfluence,
         }),
       });
-      await onSave({ ...patch, needsReview: false }, snapshot, baseline);
+      await onSave(withReviewedFlag(patch, baseline), snapshot, baseline);
       onClose();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Review obchodu se nepodařilo uložit.');
