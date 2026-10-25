@@ -269,6 +269,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-25 večer — Fáze 0: výchozí měření webu (Claude)
+
+- **Dokument**: `docs/reviews/perf-baseline-phase0-20261025.md` (prostředí,
+  tabulky, postup „Jak měřit znovu“, připravený postup pro iPhone). Měřeno jen
+  čtením na produkčním webu (main `6b978510`) ve vestavěném prohlížeči.
+- **Čísla**: dashboard z cache 0,39 s, čerstvá data 5,9 s (RPC 1,54 s +
+  journal fakta 2,90 s + poznámky 1,31 s), síť utichne až za 15,4 s
+  (228 požadavků). LIVE: stav kopírky 1,6 s; relay 44×/min po 0,76 s, z toho
+  ~0,63 s server (auth 156 + resolve 314 + runtime 157 ms). V klidu LIVE
+  67 požadavků/min, deník dne 45/min. Na Macu 60 fps a hlavní vlákno ~91–93 %
+  volné → problém je čekání na síť, ne CPU.
+- **Nový nález**: každé otevření appky spustí journal sync, který při „first
+  visit“ (`journalVerifiedReadsRef` jen v RAM, `services/journalImportSync.ts`)
+  vždy načte všechny obchody → druhé plné čtení vedle dashboard RPC
+  (23 stránek `trades`, 50 dávek snapshotů, 26 pozic, 48+48 dávek poznámek,
+  ~11–15 s sítě). Deník dne se ptá na `chart_drawings` každých ~1,6 s i bez
+  kreslení.
+- **Nástroj**: `scripts/ios/perf-measure.sh --installed <štítek>` měří verzi
+  v telefonu bez přeinstalace.
+- **Zbývá**: iPhone se Filipem (start appky, Safari Timeline, backtest replay),
+  pak návrhový dokument fází 0–2.
+
 ### 2026-10-25 — Záloha Supabase: skript, zrcadlo Storage, postup obnovy (Claude)
 
 - **Merge** `fix/review-conflicts-no-retry` → main `6232ce21` (konflikt jen
