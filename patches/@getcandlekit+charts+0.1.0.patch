@@ -1,5 +1,5 @@
 diff --git a/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs b/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
-index 773eea4..a9c080c 100644
+index 773eea4..33d1995 100644
 --- a/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
 +++ b/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
 @@ -800,8 +800,11 @@ var TOOL_POINTS = {
@@ -1090,7 +1090,7 @@ index 773eea4..a9c080c 100644
          return !!b && (distToRectEdges(p, a, b) <= t || pointInRect(p, a, b));
 +      case "LongPosition":
 +      case "ShortPosition":
-+        return !!b && !!c && (pointInRect(p, a, b) || pointInRect(p, a, c) || Math.abs(p.y - a.y) <= t);
++        return !!b && !!c && (pointInRect(p, a, b) || pointInRect(p, a, c) || (Math.abs(p.y - a.y) <= t && p.x >= Math.min(a.x, b.x) - t && p.x <= Math.max(a.x, b.x) + t));
        case "DateRange":
          return !!b && (Math.abs(p.x - a.x) <= t || Math.abs(p.x - b.x) <= t);
        case "Circle":
@@ -1126,7 +1126,7 @@ index 773eea4..a9c080c 100644
          return !!b && !!c && FIB_EXT_LEVELS.some((lvl) => Math.abs(p.y - (c.y + (b.y - a.y) * lvl)) <= t);
        default:
 diff --git a/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js b/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
-index e58972e..b793d2a 100644
+index e58972e..3bab73f 100644
 --- a/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
 +++ b/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
 @@ -799,8 +799,11 @@ var TOOL_POINTS = {
@@ -2217,7 +2217,7 @@ index e58972e..b793d2a 100644
          return !!b && (distToRectEdges(p, a, b) <= t || pointInRect(p, a, b));
 +      case "LongPosition":
 +      case "ShortPosition":
-+        return !!b && !!c && (pointInRect(p, a, b) || pointInRect(p, a, c) || Math.abs(p.y - a.y) <= t);
++        return !!b && !!c && (pointInRect(p, a, b) || pointInRect(p, a, c) || (Math.abs(p.y - a.y) <= t && p.x >= Math.min(a.x, b.x) - t && p.x <= Math.max(a.x, b.x) + t));
        case "DateRange":
          return !!b && (Math.abs(p.x - a.x) <= t || Math.abs(p.x - b.x) <= t);
        case "Circle":

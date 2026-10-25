@@ -7,6 +7,7 @@ import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/ca
 import { formingReplayBar, formingReplayBase } from '../services/chartReplayForming';
 import { adoptJournalAppearance } from '../services/backtestAppearanceAdopt';
 import { crossfadeChart } from '../lib/chartCrossfade';
+import { captureTradeChartSnapshot } from '../lib/tradeChartSnapshot';
 import { announceChartProfileChange } from '../services/chartProfileToast';
 import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWorkspaceLibraryDialog';
 import { saveWorkspaceTemplate } from '../services/chartWorkspaceLibrary';
@@ -50,6 +51,7 @@ import {
 import { Trade } from '../types';
 import {
   aggregateCandles,
+  MARKET_TIMEFRAME_MINUTES,
   loadTradeMarketCandles,
   marketDataSchemaForTimeframe,
   marketDataWindowForEntry,
@@ -1934,6 +1936,29 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     }
     return captureChartWorkspaceSnapshotDataUrl(workspaceElement, isDark);
   }, [isDark]);
+  /** Automatický snímek celého obchodu z 1m grafu jeho trhu (fullscreen, vycentrovaný). */
+  const captureTradeSnapshot = useCallback(async (snapshotTrade: Trade) => {
+    const root = snapshotTrade.instrument ?? snapshotTrade.symbol;
+    const minutes = (control: { config: WorkspacePanelConfig }) => MARKET_TIMEFRAME_MINUTES[control.config.timeframe] ?? Infinity;
+    const candidates = [...panelControlsRef.current.values()]
+      .filter(control => control.chartApi && (!root || control.config.root === root))
+      .sort((left, right) => minutes(left) - minutes(right));
+    const control = candidates[0];
+    if (!control?.chartApi) throw new Error('Graf trhu obchodu není otevřený — snímek nejde pořídit.');
+    const exitTime = Number.isFinite(snapshotTrade.timestamp) ? snapshotTrade.timestamp : Date.parse(snapshotTrade.date);
+    return captureTradeChartSnapshot(control.chartApi, {
+      instrument: root ?? '',
+      direction: snapshotTrade.direction,
+      entryTime: snapshotTrade.entryTime ?? exitTime,
+      exitTime,
+      entryPrice: snapshotTrade.entryPrice,
+      exitPrice: snapshotTrade.exitPrice,
+      stopLoss: snapshotTrade.stopLoss,
+      takeProfit: snapshotTrade.takeProfit,
+      pnl: snapshotTrade.pnl,
+      riskAmount: snapshotTrade.riskAmount,
+    }, isDark);
+  }, [isDark]);
   const activeIndicatorCount = activeControl ? countChartIndicators(
     [
       activeControl.config.showFvg,
@@ -1954,9 +1979,11 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   // Dev diagnostika: přístup k enginům a panelům z konzole pro měření
   // sync a pointer cesty.
   if (import.meta.env.DEV) {
-    const dev = window as unknown as { __atDrawingEngines?: unknown; __atPanels?: unknown };
+    const dev = window as unknown as { __atDrawingEngines?: unknown; __atPanels?: unknown; __atOpenTradeReview?: unknown; __atBacktestTrades?: unknown };
     dev.__atDrawingEngines = drawingEngines;
     dev.__atPanels = [...panelControls.values()];
+    dev.__atOpenTradeReview = openBacktestTradeReview;
+    dev.__atBacktestTrades = backtestSession?.closedTrades?.map(closed => ({ id: closed.id, entry: closed.entryTime, exit: closed.exitTime }));
   }
   const [workspaceHistoryState, setWorkspaceHistoryState] = useState<ChartWorkspaceHistoryState>({ canUndo: false, canRedo: false });
   const [selectedFib, setSelectedFib] = useState<{ engine: CandleKitDrawingEngine; drawing: FibDrawing } | null>(null);
@@ -3134,7 +3161,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               tagSuggestions={backtestSession?.tagSuggestions}
               isDark={isDark}
               onClose={() => setReviewTradeId(null)}
-              onCaptureSnapshot={captureVisibleCharts}
+              onCaptureSnapshot={() => captureTradeSnapshot(reviewTrade)}
               onRecalculate={backtestSession.onTradeRecalculate
                 ? () => backtestSession.onTradeRecalculate!(String(reviewTrade.id))
                 : undefined}

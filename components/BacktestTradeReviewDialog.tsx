@@ -140,20 +140,27 @@ const ConfluenceCapsuleEditor: React.FC<{
   );
 };
 
+/** Rychlé čipy disciplíny — ukládají se mezi tagy obchodu. */
+export const BACKTEST_DISCIPLINE_TAGS = ['Čistá exekuce', 'Pozdní vstup', 'FOMO', 'Posunutý SL', 'Brzký exit', 'Revenge'] as const;
+
+/**
+ * Backtest: obchod je vždy validní — co validní není, se smaže. Typ setupu
+ * karta už neupravuje, takže se posílá jen tehdy, když ho volající zadá.
+ */
 export const buildBacktestTradeReviewUpdates = ({
   notes,
   tags,
   htfConfluence,
   ltfConfluence,
-  isValid,
+  isValid = true,
   setupType,
 }: {
   notes: string;
   tags?: string;
   htfConfluence: string;
   ltfConfluence: string;
-  isValid: boolean;
-  setupType: NonNullable<Trade['setupType']>;
+  isValid?: boolean;
+  setupType?: NonNullable<Trade['setupType']>;
 }): Partial<Trade> => ({
   notes: notes.trim(),
   ...(tags !== undefined ? { tags: splitTags(tags) } : {}),
@@ -162,7 +169,7 @@ export const buildBacktestTradeReviewUpdates = ({
   isValid,
   executionStatus: isValid ? 'Valid' : 'Invalid',
   planAdherence: isValid ? 'Yes' : 'No',
-  setupType,
+  ...(setupType !== undefined ? { setupType } : {}),
 });
 
 const BacktestTradeReviewContent: React.FC<Props> = ({
@@ -192,8 +199,6 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
   const manualTags = useRef<{ htf: string[]; ltf: string[] }>({ htf: [], ltf: [] });
   const [htfConfluence, setHtfConfluence] = useState(joinTags(trade.htfConfluence));
   const [ltfConfluence, setLtfConfluence] = useState(joinTags(trade.ltfConfluence));
-  const [isValid, setIsValid] = useState(trade.isValid !== false && trade.executionStatus !== 'Invalid');
-  const [setupType, setSetupType] = useState<NonNullable<Trade['setupType']>>(trade.setupType ?? 'unclear');
   const [snapshot, setSnapshot] = useState<string>();
   const [snapshotZoomOpen, setSnapshotZoomOpen] = useState(false);
   const [capturing, setCapturing] = useState(false);
@@ -421,7 +426,7 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
         ...baseline,
         ...buildBacktestTradeReviewUpdates({ notes: baseline.notes ?? '', tags: joinTags(baseline.tags),
           htfConfluence: joinTags(baseline.htfConfluence), ltfConfluence: joinTags(baseline.ltfConfluence),
-          isValid: baseline.isValid !== false && baseline.executionStatus !== 'Invalid', setupType: baseline.setupType ?? 'unclear' }),
+          isValid: baseline.isValid !== false && baseline.executionStatus !== 'Invalid' }),
         autoConfluence: baseline.autoConfluence ?? { htf: [], ltf: [] },
       };
       const patch = changedTradeFields(normalizedBaseline, {
@@ -433,8 +438,6 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
           tags,
           htfConfluence,
           ltfConfluence,
-          isValid,
-          setupType,
         }),
       });
       await onSave({ ...patch, needsReview: false }, snapshot, baseline);
@@ -446,151 +449,95 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
     }
   };
 
+  // Automatický snímek celého obchodu hned po otevření (uloží se s review).
+  useEffect(() => {
+    if (!savedSnapshot) void captureSnapshot();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- jen při otevření karty
+  }, []);
+
+  const disciplineSet = new Set<string>(BACKTEST_DISCIPLINE_TAGS);
+  const tagList = splitTags(tags);
+  const customTags = tagList.filter(tag => !disciplineSet.has(tag));
+  const toggleDiscipline = (tag: string) => {
+    setTags(joinTags(tagList.includes(tag) ? tagList.filter(item => item !== tag) : [...tagList, tag]));
+  };
+  const resultR = displayTrade.riskAmount ? displayTrade.pnl / displayTrade.riskAmount : null;
+  const stripValues = [
+    ...executionValues,
+    { label: 'R', value: resultR == null ? '—' : resultR.toFixed(2) },
+    { label: 'MFE', value: displayTrade.mfeR != null ? `${displayTrade.excursionAmbiguous ? '≥' : ''}${displayTrade.mfeR.toFixed(2)}R` : '—' },
+    { label: 'MAE', value: displayTrade.maeR != null ? `${displayTrade.excursionAmbiguous ? '≥' : ''}${displayTrade.maeR.toFixed(2)}R` : '—' },
+  ];
+
   const panel = isDark
     ? 'border-white/10 bg-[#10161f] text-slate-100 shadow-black/60'
     : 'border-slate-200 bg-white text-slate-900 shadow-slate-900/20';
   const field = isDark
     ? 'border-white/10 bg-white/[0.04] text-slate-100 placeholder:text-slate-600'
     : 'border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400';
+  const line = isDark ? 'border-white/10' : 'border-slate-200';
+  const sectionTitle = 'flex items-center gap-2 text-[12px] font-bold';
+  const chip = (on: boolean) => `inline-flex h-7 items-center rounded-full border px-3 text-[11.5px] font-semibold transition-colors ${on
+    ? isDark ? 'border-amber-400/45 bg-amber-400/15 text-amber-300' : 'border-amber-300 bg-amber-50 text-amber-700'
+    : isDark ? 'border-white/15 text-slate-300 hover:border-white/30' : 'border-slate-300 text-slate-600 hover:border-slate-400'}`;
 
   return (
     <div className="fixed inset-0 z-[900] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]" role="presentation" onMouseDown={event => {
       if (!saving && event.target === event.currentTarget) onClose();
     }}>
-      <section data-backtest-trade-review role="dialog" aria-modal="true" aria-labelledby="backtest-trade-review-title" className={`flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border shadow-2xl ${panel}`}>
-        <header className={`border-b px-5 py-4 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
-          <div className="flex items-start gap-4">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded ${isLong ? (isDark ? 'bg-emerald-400/10 text-emerald-300' : 'bg-emerald-50 text-emerald-600') : (isDark ? 'bg-rose-400/10 text-rose-300' : 'bg-rose-50 text-rose-600')}`}>
-              {isLong ? <ArrowUpRight size={21} /> : <ArrowDownRight size={21} />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 id="backtest-trade-review-title" className="text-xl font-black tracking-tight">{trade.instrument ?? trade.symbol}</h2>
-                <span className={`rounded border px-2 py-1 text-[11px] font-semibold ${isLong ? (isDark ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700') : (isDark ? 'border-rose-400/25 bg-rose-400/10 text-rose-300' : 'border-rose-200 bg-rose-50 text-rose-700')}`}>{trade.direction}</span>
-                <span className={`rounded border px-2 py-1 text-[11px] font-semibold ${isValid ? (isDark ? 'border-emerald-400/25 text-emerald-300' : 'border-emerald-200 text-emerald-700') : (isDark ? 'border-rose-400/25 text-rose-300' : 'border-rose-200 text-rose-700')}`}>{isValid ? 'Validní' : 'Mimo plán'}</span>
-              </div>
-              <p className="mt-1 text-[11px] font-bold text-slate-500">{tradeDate} · {trade.session ?? 'Bez session'}{trade.signal ? ` · ${trade.signal}` : ''}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-[11px] font-semibold text-slate-500">Výsledek</p>
-              <p className={`mt-0.5 text-xl font-black tabular-nums ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{trade.pnl >= 0 ? '+' : '−'}${Math.abs(trade.pnl).toFixed(2)}</p>
-            </div>
-            <button type="button" disabled={saving} onClick={onClose} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`} aria-label="Zavřít review"><X size={17} /></button>
+      <section data-backtest-trade-review role="dialog" aria-modal="true" aria-labelledby="backtest-trade-review-title" className={`flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border shadow-2xl ${panel}`}>
+        <header className={`flex items-center gap-3 border-b px-5 py-3.5 ${line}`}>
+          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${isLong ? (isDark ? 'bg-emerald-400/10 text-emerald-300' : 'bg-emerald-50 text-emerald-600') : (isDark ? 'bg-rose-400/10 text-rose-300' : 'bg-rose-50 text-rose-600')}`}>
+            {isLong ? <ArrowUpRight size={19} /> : <ArrowDownRight size={19} />}
           </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 id="backtest-trade-review-title" className="text-lg font-black tracking-tight">{trade.instrument ?? trade.symbol}</h2>
+              <span className={`rounded-md px-2 py-0.5 text-[11px] font-bold ${isLong ? (isDark ? 'bg-emerald-400/15 text-emerald-300' : 'bg-emerald-50 text-emerald-700') : (isDark ? 'bg-rose-400/15 text-rose-300' : 'bg-rose-50 text-rose-700')}`}>{trade.direction}</span>
+              <span className="text-[12px] font-semibold text-slate-500">{tradeDate} · {trade.session ?? 'Bez session'}{trade.signal ? ` · ${trade.signal}` : ''}</span>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-[11px] font-semibold text-slate-500">Výsledek</p>
+            <p className={`font-mono text-lg font-black tabular-nums ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{trade.pnl >= 0 ? '+' : '−'}${Math.abs(trade.pnl).toFixed(2)}{resultR != null ? ` · ${resultR.toFixed(2)}R` : ''}</p>
+          </div>
+          <button type="button" disabled={saving} onClick={onClose} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`} aria-label="Zavřít review"><X size={17} /></button>
         </header>
 
-        <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[0.88fr_1.12fr]">
-          <div className="space-y-4">
-            <section className={`overflow-hidden rounded border ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-              <div className={`flex items-center gap-2 border-b px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
-                <Target size={14} className="text-blue-500" />
-                <h3 className="text-[11px] font-semibold">Exekuce obchodu</h3>
-              </div>
-              <dl className={`grid grid-cols-2 gap-px ${isDark ? 'bg-white/10' : 'bg-slate-200'}`}>
-                {executionValues.map(item => (
-                  <div key={item.label} className={`px-3 py-2.5 bg-[var(--bg-card)]`}>
-                    <dt className="text-[11px] font-semibold text-slate-500">{item.label}</dt>
-                    <dd className="mt-1 text-sm font-black tabular-nums">{item.value}</dd>
-                  </div>
-                ))}
-              </dl>
-              {displayTrade.excursionAmbiguous && <p className="mb-2 text-xs text-amber-500">MFE/MAE jsou prokazatelné dolní meze; pořadí cen uvnitř svíčky není známé.</p>}
-              {displayTrade.outcomeAmbiguous && <p className="mb-2 text-xs text-amber-500">Pořadí vstupu a zásahů SL/TP není z OHLC jisté. Engine použil konzervativní výsledek.</p>}
-              {collectedValues.length ? (
-                <dl className={`grid grid-cols-2 gap-px border-t ${isDark ? 'border-white/10 bg-white/10' : 'border-slate-200 bg-slate-200'}`}>
-                  {collectedValues.map(item => (
-                    <div key={item.label} className={`min-w-0 px-3 py-2 ${isDark ? 'bg-[var(--bg-card)]' : 'bg-[var(--bg-page)]'}`}>
-                      <dt className="text-[11px] font-semibold text-slate-500">{item.label}</dt>
-                      <dd className="mt-0.5 truncate text-[11px] font-bold tabular-nums">{item.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : null}
-            </section>
-
-            <section className={`rounded border p-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}>
-              <div className="mb-2 flex items-center gap-2"><Check size={14} className="text-emerald-500" /><h3 className="text-[11px] font-semibold">Vyhodnocení plánu</h3></div>
-              <div className="grid grid-cols-2 gap-2">
-                <button type="button" disabled={saving} onClick={() => setIsValid(true)} className={`h-10 rounded border text-[11px] font-semibold ${isValid ? 'border-emerald-500 bg-emerald-500 text-white' : field}`}>Validní / podle plánu</button>
-                <button type="button" disabled={saving} onClick={() => setIsValid(false)} className={`h-10 rounded border text-[11px] font-semibold ${!isValid ? 'border-rose-500 bg-rose-500 text-white' : field}`}>Nevalidní / mimo plán</button>
-              </div>
-              <div className={`my-3 border-t ${isDark ? 'border-white/10' : 'border-slate-200'}`} />
-              <div className="mb-2 flex items-center gap-2"><Waves size={14} className="text-blue-500" /><h3 className="text-[11px] font-semibold">Typ setupu — ručně</h3></div>
-              <p className="mb-2 text-[9px] font-semibold text-slate-500">Tvoje interpretace setupu. Přepočet ji nikdy nepřepíše.</p>
-              <div className="grid grid-cols-3 gap-2" data-backtest-setup-type>
-                {([
-                  ['reaction', 'Odraz'],
-                  ['break', 'Průraz'],
-                  ['unclear', 'Nejasné'],
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    disabled={saving}
-                    onClick={() => setSetupType(value)}
-                    aria-pressed={setupType === value}
-                    className={`h-9 rounded border text-[11px] font-semibold ${setupType === value ? 'border-blue-600 bg-blue-600 text-white' : field}`}
-                  >{label}</button>
-                ))}
-              </div>
-            </section>
-
-            <section className={`rounded border p-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}>
-              <div className="flex items-center gap-2"><Tags size={14} className="text-violet-500" /><h3 className="text-[11px] font-semibold">Vlastní tagy</h3></div>
-              <p className="mt-1 text-[10px] text-slate-500">Setup, chyba nebo vlastní téma. Uložené tagy se nabídnou i u dalších obchodů.</p>
-              <ConfluenceCapsuleEditor disabled={saving || recalculating} value={tags} onChange={setTags} isDark={isDark} addLabel="Přidat vlastní tag" suggestions={tagSuggestions?.tags} />
-            </section>
-
-            <section className={`rounded border p-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}>
-              <div className="mb-2 flex items-center gap-2"><FileText size={14} className="text-slate-400" /><label htmlFor="backtest-review-notes" className="text-[11px] font-semibold">Poznámka k obchodu</label></div>
-              <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={5} placeholder="Co jsem viděl, proč jsem vstoupil, co bych příště změnil…" className={`w-full resize-y rounded border px-3 py-2.5 text-sm outline-none focus:border-blue-500 ${field}`} />
-            </section>
-            <section className={`rounded border p-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}>
-              <TradeNoteHistoryEditor baseHistory={originalTrade.noteHistory} legacyNotes={originalTrade.notes}
-                captureContext={noteContext} drafts={noteDrafts} disabled={saving} isDark={isDark}
-                onChange={next => { setNoteDrafts(next); noteOperationRef.current = undefined; }} />
-            </section>
-          </div>
-
-          <div className="space-y-4">
-            {onRecalculate ? (
-              <section className={`rounded border p-3 ${isDark ? 'border-blue-400/20 bg-blue-400/[0.04]' : 'border-blue-200 bg-blue-50/50'}`}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2"><RefreshCw size={14} className="text-blue-500" /><h3 className="text-[11px] font-semibold">Data z indikátoru</h3></div>
-                    <p className="mt-1 text-[10px] font-semibold text-slate-500">Znovu načte strukturu, FVG, levely a metriky ze stejných replay dat.</p>
-                  </div>
-                  <button type="button" onClick={() => void recalculate()} disabled={saving || recalculating} className="flex h-9 shrink-0 items-center gap-2 rounded border border-blue-500 px-3 text-[11px] font-semibold text-blue-500 hover:bg-blue-500 hover:text-white disabled:opacity-50">
-                    {recalculating ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-                    Přepočítat
-                  </button>
+        <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[1.4fr_1fr]">
+          {/* Vlevo: snímek celého obchodu, čísla, detail z indikátoru. */}
+          <div className={`space-y-3 p-4 lg:border-r ${line}`}>
+            <div className={`relative overflow-hidden rounded-lg border ${line} bg-[#0b0f15]`}>
+              {snapshotPreview ? (
+                <button type="button" onClick={() => setSnapshotZoomOpen(true)} className="group block w-full cursor-zoom-in" aria-label="Zvětšit náhled snapshotu">
+                  <img src={snapshotPreview} alt={snapshot ? 'Automatický snímek celého obchodu' : 'Uložený snapshot obchodu'} className="block aspect-[1600/900] w-full object-contain" />
+                  <span className="pointer-events-none absolute left-2 top-2 rounded-md bg-slate-950/75 px-2 py-1 text-[10.5px] font-bold text-white">{snapshot ? 'Auto snímek · celý obchod' : 'Uložený snapshot'}</span>
+                  <span className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded-md bg-slate-950/75 px-2 py-1 text-[10.5px] font-bold text-white opacity-0 transition-opacity group-hover:opacity-100"><Maximize2 size={12} /> Zvětšit</span>
+                </button>
+              ) : (
+                <div className="flex aspect-[1600/900] flex-col items-center justify-center gap-2 text-slate-500">
+                  {capturing ? <Loader2 size={22} className="animate-spin text-blue-500" /> : <ImageIcon size={22} />}
+                  <p className="text-center text-[11.5px] font-semibold">{capturing ? 'Fotím celý obchod…' : 'Snímek obchodu se nepodařilo pořídit.'}</p>
                 </div>
-                {recalculationChanges ? (
-                  <div className={`mt-3 border-t pt-3 ${isDark ? 'border-white/10' : 'border-blue-200'}`} data-backtest-recalculation-preview>
-                    {recalculationChanges.length ? (
-                      <>
-                        <p className="mb-2 text-[11px] font-semibold text-blue-500">Náhled změn · zatím neuloženo</p>
-                        <div className="max-h-40 space-y-1.5 overflow-y-auto pr-1">
-                          {recalculationChanges.map(change => (
-                            <div key={change.label} className={`grid grid-cols-[6rem_1fr_auto_1fr] items-center gap-2 rounded px-2 py-1.5 text-[9px] ${isDark ? 'bg-[var(--bg-page)]' : 'bg-[var(--bg-card)]'}`}>
-                              <span className="font-semibold text-slate-500">{change.label}</span>
-                              <span className="min-w-0 truncate text-slate-400 line-through" title={change.before}>{change.before}</span>
-                              <span className="text-blue-500">→</span>
-                              <span className="min-w-0 truncate font-bold" title={change.after}>{change.after}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    ) : <p className="text-[10px] font-bold text-emerald-500">Uložená data už odpovídají aktuálnímu indikátoru.</p>}
-                  </div>
-                ) : null}
-              </section>
-            ) : null}
-            <section className={`rounded border ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-              <div className={`border-b px-3 py-3 ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-                <div className="flex items-center gap-2"><Zap size={14} className="text-violet-500" /><h3 className="text-[11px] font-semibold">Entry Confluence</h3></div>
-                <ConfluenceCapsuleEditor disabled={saving || recalculating} value={ltfConfluence} onChange={setLtfConfluence} isDark={isDark} addLabel="Přidat Entry Confluence" suggestions={tagSuggestions?.ltf} autoTags={autoTags.ltf} onManualAdd={added => { manualTags.current.ltf.push(...added); }} />
-                <div className="mt-3 grid gap-2 sm:grid-cols-2" data-backtest-entry-audit>
+              )}
+              <button type="button" onClick={() => void captureSnapshot()} disabled={saving || capturing} className="absolute right-2 top-2 flex h-7 items-center gap-1.5 rounded-md bg-slate-950/75 px-2 text-[10.5px] font-bold text-white hover:bg-slate-900 disabled:opacity-60" title="Vyfotí obchod znovu z aktuálního grafu (i s tím, co cena udělala po výstupu)">
+                {capturing ? <Loader2 size={12} className="animate-spin" /> : <Camera size={12} />} Přefotit obchod
+              </button>
+            </div>
+            <dl className={`grid grid-cols-4 overflow-hidden rounded-lg border sm:grid-cols-7 ${line}`}>
+              {stripValues.map(item => (
+                <div key={item.label} className={`border-r px-3 py-2 last:border-r-0 ${line}`}>
+                  <dt className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-slate-500">{item.label}</dt>
+                  <dd className="mt-0.5 font-mono text-[12.5px] font-semibold tabular-nums">{item.value}</dd>
+                </div>
+              ))}
+            </dl>
+            {displayTrade.excursionAmbiguous && <p className="text-[11px] text-amber-500">MFE/MAE jsou prokazatelné dolní meze; pořadí cen uvnitř svíčky není známé.</p>}
+            {displayTrade.outcomeAmbiguous && <p className="text-[11px] text-amber-500">Pořadí vstupu a zásahů SL/TP není z OHLC jisté. Engine použil konzervativní výsledek.</p>}
+            <details className={`group rounded-lg border ${line}`}>
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[12px] font-bold"><Target size={14} className="text-blue-500" /> Detail z indikátoru <span className="ml-auto text-[10.5px] font-semibold text-slate-500 group-open:hidden">odraz · entry · SL · cíl</span></summary>
+              <div className={`border-t p-3 ${line}`}>
+                <div className="grid gap-2 sm:grid-cols-2" data-backtest-entry-audit>
                   {entryAudit.map(item => {
                     const tone = item.tone === 'pass'
                       ? isDark ? 'border-emerald-400/20 bg-emerald-400/[0.06]' : 'border-emerald-200 bg-emerald-50/70'
@@ -603,58 +550,106 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
                       : item.tone === 'fail' ? 'bg-rose-500'
                         : item.tone === 'info' ? 'bg-sky-500' : 'bg-slate-400';
                     return (
-                      <div key={item.label} className={`min-w-0 rounded border px-2.5 py-2 ${tone}`}>
+                      <div key={item.label} className={`min-w-0 rounded-md border px-2.5 py-2 ${tone}`}>
                         <div className="flex items-center gap-1.5">
                           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
                           <p className="text-[11px] font-semibold text-slate-500">{item.label}</p>
                         </div>
                         <p className="mt-1 truncate text-[11px] font-semibold" title={item.value}>{item.value}</p>
-                        <p className="mt-0.5 truncate text-[9px] font-semibold text-slate-500" title={item.detail}>{item.detail}</p>
+                        <p className="mt-0.5 truncate text-[9.5px] font-semibold text-slate-500" title={item.detail}>{item.detail}</p>
                       </div>
                     );
                   })}
                 </div>
+                {collectedValues.length ? (
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">
+                    {collectedValues.map(item => (
+                      <div key={item.label} className="min-w-0">
+                        <dt className="text-[10.5px] font-semibold text-slate-500">{item.label}</dt>
+                        <dd className="truncate text-[11.5px] font-bold tabular-nums">{item.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
               </div>
-              <div className={`px-3 py-3 ${levelTags.length ? (isDark ? 'border-b border-white/10' : 'border-b border-slate-200') : ''}`}>
-                <div className="flex items-center gap-2"><Layers3 size={14} className="text-sky-500" /><h3 className="text-[11px] font-semibold">HTF Confluence</h3></div>
-                <ConfluenceCapsuleEditor disabled={saving || recalculating} value={htfConfluence} onChange={setHtfConfluence} isDark={isDark} addLabel="Přidat HTF Confluence" suggestions={tagSuggestions?.htf} autoTags={autoTags.htf} onManualAdd={added => { manualTags.current.htf.push(...added); }} />
+            </details>
+          </div>
+
+          {/* Vpravo: jen to, co má smysl psát. */}
+          <div className="min-w-0">
+            <section className={`border-b px-4 py-3.5 ${line}`}>
+              <div className="flex items-center gap-2">
+                <h3 className={sectionTitle}><Zap size={14} className="text-violet-500" /> Confluence</h3>
+                {onRecalculate ? (
+                  <button type="button" onClick={() => void recalculate()} disabled={saving || recalculating} className="ml-auto flex h-7 items-center gap-1.5 rounded-md border border-blue-500/60 px-2 text-[10.5px] font-bold text-blue-500 hover:bg-blue-500 hover:text-white disabled:opacity-50" title="Znovu načte strukturu, FVG, levely a metriky ze stejných replay dat">
+                    {recalculating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Přepočítat
+                  </button>
+                ) : null}
               </div>
+              <p className="mt-1 text-[10.5px] text-slate-500">Auto z indikátoru — co nesedí, odeber křížkem.</p>
+              <p className="mt-3 text-[10.5px] font-bold uppercase tracking-[0.06em] text-slate-500">Entry Confluence</p>
+              <ConfluenceCapsuleEditor disabled={saving || recalculating} value={ltfConfluence} onChange={setLtfConfluence} isDark={isDark} addLabel="Přidat Entry Confluence" suggestions={tagSuggestions?.ltf} autoTags={autoTags.ltf} onManualAdd={added => { manualTags.current.ltf.push(...added); }} />
+              <p className="mt-3 text-[10.5px] font-bold uppercase tracking-[0.06em] text-slate-500">HTF Confluence</p>
+              <ConfluenceCapsuleEditor disabled={saving || recalculating} value={htfConfluence} onChange={setHtfConfluence} isDark={isDark} addLabel="Přidat HTF Confluence" suggestions={tagSuggestions?.htf} autoTags={autoTags.htf} onManualAdd={added => { manualTags.current.htf.push(...added); }} />
               {levelTags.length ? (
-                <div className="px-3 py-3">
-                  <div className="flex items-center gap-2"><Waves size={14} className="text-amber-500" /><h3 className="text-[11px] font-semibold">Levely</h3></div>
+                <>
+                  <p className="mt-3 flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-slate-500"><Waves size={12} className="text-amber-500" /> Levely</p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {levelTags.map(tag => <span key={tag} className={`rounded-lg border px-2 py-1 text-[11px] font-semibold ${isDark ? 'border-amber-400/20 bg-amber-400/10 text-amber-400' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>{tag}</span>)}
                   </div>
+                </>
+              ) : null}
+              {recalculationChanges ? (
+                <div className={`mt-3 border-t pt-3 ${line}`} data-backtest-recalculation-preview>
+                  {recalculationChanges.length ? (
+                    <>
+                      <p className="mb-2 text-[11px] font-semibold text-blue-500">Náhled změn · zatím neuloženo</p>
+                      <div className="max-h-40 space-y-1.5 overflow-y-auto pr-1">
+                        {recalculationChanges.map(change => (
+                          <div key={change.label} className={`grid grid-cols-[6rem_1fr_auto_1fr] items-center gap-2 rounded px-2 py-1.5 text-[9px] ${isDark ? 'bg-[var(--bg-page)]' : 'bg-[var(--bg-card)]'}`}>
+                            <span className="font-semibold text-slate-500">{change.label}</span>
+                            <span className="min-w-0 truncate text-slate-400 line-through" title={change.before}>{change.before}</span>
+                            <span className="text-blue-500">→</span>
+                            <span className="min-w-0 truncate font-bold" title={change.after}>{change.after}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : <p className="text-[10px] font-bold text-emerald-500">Uložená data už odpovídají aktuálnímu indikátoru.</p>}
                 </div>
               ) : null}
             </section>
 
-            <section className={`overflow-hidden rounded border ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-              <div className={`flex items-center gap-2 border-b px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}><Camera size={14} className="text-blue-500" /><h3 className="text-[11px] font-semibold">Snapshot grafů</h3></div>
-              {snapshotPreview ? (
-                <div className="relative bg-slate-950">
-                  <button type="button" onClick={() => setSnapshotZoomOpen(true)} className="group block w-full cursor-zoom-in" aria-label="Zvětšit náhled snapshotu">
-                    <img src={snapshotPreview} alt={snapshot ? 'Nový snapshot všech otevřených grafů' : 'Uložený snapshot obchodu'} className="aspect-video w-full object-contain" />
-                    <span className="pointer-events-none absolute left-2 top-2 rounded bg-slate-950/75 px-2 py-1 text-[11px] font-semibold text-white">{snapshot ? 'Nový náhled · všechny grafy' : 'Uložený snapshot'}</span>
-                    <span className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded bg-slate-950/75 px-2 py-1 text-[11px] font-semibold text-white opacity-80 transition-opacity group-hover:opacity-100"><Maximize2 size={12} /> Zvětšit</span>
-                  </button>
-                  {snapshot ? <button type="button" disabled={saving} onClick={() => { setSnapshot(undefined); setSnapshotZoomOpen(false); }} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded bg-slate-950/75 text-white" aria-label="Zahodit nový snapshot"><X size={14} /></button> : null}
-                </div>
-              ) : (
-                <div className={`flex aspect-video flex-col items-center justify-center gap-2 bg-[var(--bg-page)]`}>
-                  <ImageIcon size={24} className="text-slate-400" />
-                  <p className="text-center text-[11px] font-semibold text-slate-500">Vyfotí se celý viditelný layout se všemi grafy.<br />Nahraje se až při uložení review.</p>
-                </div>
-              )}
-              <button type="button" onClick={() => void captureSnapshot()} disabled={saving || capturing} className={`flex h-10 w-full items-center justify-center gap-2 border-t text-xs font-black disabled:cursor-wait disabled:opacity-60 ${isDark ? 'border-white/10 hover:bg-white/[0.05]' : 'border-slate-200 hover:bg-slate-50'}`}>{capturing ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}{capturing ? 'Pořizuji všechny grafy…' : snapshotPreview ? 'Vyfotit nový snapshot všech grafů' : 'Snapshot všech grafů'}</button>
+            <section className={`border-b px-4 py-3.5 ${line}`}>
+              <h3 className={sectionTitle}><Check size={14} className="text-emerald-500" /> Disciplína</h3>
+              <div className="mt-2.5 flex flex-wrap gap-1.5" data-backtest-discipline>
+                {BACKTEST_DISCIPLINE_TAGS.map(tag => (
+                  <button key={tag} type="button" disabled={saving} aria-pressed={tagList.includes(tag)} onClick={() => toggleDiscipline(tag)} className={chip(tagList.includes(tag))}>{tag}</button>
+                ))}
+              </div>
+              <div className="mt-1"><ConfluenceCapsuleEditor disabled={saving || recalculating} value={joinTags(customTags)} onChange={value => setTags(joinTags([...tagList.filter(tag => disciplineSet.has(tag)), ...splitTags(value)]))} isDark={isDark} addLabel="Vlastní tag" suggestions={(tagSuggestions?.tags ?? []).filter(tag => !disciplineSet.has(tag))} /></div>
             </section>
+
+            <section className={`border-b px-4 py-3.5 ${line}`}>
+              <label htmlFor="backtest-review-notes" className={sectionTitle}><FileText size={14} className="text-slate-400" /> Proč jsem vstoupil / co příště</label>
+              <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={5} placeholder="Co jsem viděl, proč jsem vstoupil, co bych příště změnil…" className={`mt-2.5 w-full resize-y rounded-lg border px-3 py-2.5 text-sm outline-none focus:border-blue-500 ${field}`} />
+            </section>
+
+            <details className="px-4 py-3">
+              <summary className="cursor-pointer list-none text-[12px] font-bold text-slate-500 hover:text-slate-300">Poznámky po fázích · před / během / po</summary>
+              <div className="mt-3">
+                <TradeNoteHistoryEditor baseHistory={originalTrade.noteHistory} legacyNotes={originalTrade.notes}
+                  captureContext={noteContext} drafts={noteDrafts} disabled={saving} isDark={isDark}
+                  onChange={next => { setNoteDrafts(next); noteOperationRef.current = undefined; }} />
+              </div>
+            </details>
           </div>
         </div>
 
-        <footer className={`flex items-center gap-3 border-t px-5 py-3 ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-          {error ? <p role="alert" className="mr-auto text-xs font-bold text-rose-500">{error}</p> : <p className="mr-auto text-[10px] font-semibold text-slate-500">Manuální režim · žádný automatický snapshot</p>}
-          <button type="button" disabled={saving} onClick={onClose} className={`h-9 rounded-md px-4 text-xs font-black ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`}>Zrušit</button>
-          <button type="button" onClick={() => void save()} disabled={saving || capturing || recalculating} className="flex h-9 items-center gap-2 rounded-md bg-blue-600 px-4 text-xs font-black text-white hover:bg-blue-500 disabled:opacity-50">{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Uložit review</button>
+        <footer className={`flex items-center gap-3 border-t px-5 py-3 ${line}`}>
+          {error ? <p role="alert" className="mr-auto text-xs font-bold text-rose-500">{error}</p> : <p className="mr-auto text-[10.5px] font-semibold text-slate-500">{snapshot ? 'Snímek se pořídil automaticky · uloží se s review' : 'Snímek se uloží s review'}</p>}
+          <button type="button" disabled={saving} onClick={onClose} className={`h-9 rounded-lg px-4 text-xs font-black ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`}>Zrušit</button>
+          <button type="button" onClick={() => void save()} disabled={saving || capturing || recalculating} className="flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-4 text-xs font-black text-white hover:bg-blue-500 disabled:opacity-50">{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Uložit review</button>
         </footer>
       </section>
       {snapshotZoomOpen && snapshotPreview ? (

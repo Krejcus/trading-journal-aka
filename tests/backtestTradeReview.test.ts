@@ -20,6 +20,12 @@ describe('buildBacktestTradeReviewUpdates', () => {
     });
   });
 
+  it('backtest je bez volby vždy validní a typ setupu nepřepisuje', () => {
+    const updates = buildBacktestTradeReviewUpdates({ notes: '', htfConfluence: '', ltfConfluence: '' });
+    expect(updates).toMatchObject({ isValid: true, executionStatus: 'Valid', planAdherence: 'Yes' });
+    expect(updates).not.toHaveProperty('setupType');
+  });
+
   it('keeps every invalidity field consistent', () => {
     expect(buildBacktestTradeReviewUpdates({
       notes: '', htfConfluence: '', ltfConfluence: '', isValid: false, setupType: 'unclear',

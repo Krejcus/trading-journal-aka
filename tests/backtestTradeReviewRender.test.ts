@@ -77,7 +77,6 @@ describe('BacktestTradeReviewDialog render', () => {
       onSave: vi.fn(async () => undefined),
     }));
 
-    expect(markup).toContain('Exekuce obchodu');
     expect(markup).toContain('Entry Confluence');
     expect(markup).toContain('HTF Confluence');
     expect(markup).toContain('Přidat Entry Confluence');
@@ -92,10 +91,7 @@ describe('BacktestTradeReviewDialog render', () => {
     expect(markup).toContain('vstup na proximální hraně 1m FVG');
     expect(markup).toContain('CHoCH #1');
     expect(markup).toContain('FVG 2/3 v impulsu');
-    expect(markup).toContain('Typ setupu — ručně');
     expect(markup).toContain('Odraz');
-    expect(markup).toContain('Průraz');
-    expect(markup).toContain('Nejasné');
     expect(markup).toContain('Levely');
     expect(markup).toContain('Entry');
     expect(markup).toContain('SL');
@@ -107,7 +103,10 @@ describe('BacktestTradeReviewDialog render', () => {
     expect(markup).toContain('Uložený snapshot');
     expect(markup).toContain('https://example.test/snapshot.jpg');
     expect(markup).toContain('Zvětšit náhled snapshotu');
-    expect(markup).toContain('Vyfotit nový snapshot všech grafů');
+    expect(markup).toContain('Přefotit obchod');
+    expect(markup).toContain('data-backtest-discipline');
+    expect(markup).toContain('Pozdní vstup');
+    expect(markup).not.toContain('Mimo plán');
   });
 
   it('neprezentuje vzdálený level jako potvrzený cíl', () => {
