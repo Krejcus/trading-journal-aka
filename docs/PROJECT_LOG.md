@@ -262,6 +262,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-25 — Backtest: ukládání review, snímek, tenké štítky čar (Claude)
+
+- **Uložení review se už nezasekne**: každý krok má 30s timeout s českou
+  hláškou; opakování použije už nahraný snímek (dřív se nahrál dvakrát a DB
+  zápis visel bez timeoutu).
+- **Snímek obchodu**: pevně 100 svíček (stejný rozestup u krátkého i delšího
+  obchodu), obchod uprostřed, cena těsně kolem svíček — SL a TP vždy v rozsahu.
+- **Štítky čar příkazů = tenká Aurora** (19 px, sklo s vlastní výplní, obrys
+  a typ v barvě čáry, čísla neutrální, P&L barevně; „+ SL / + TP“ čárkovaně).
+  Text se skládá z `orderLineLabelParts(label)` — popisky v
+  `backtestOrderLines.ts` zůstávají řetězce. Nové nastavení
+  `trading.orderLineLabels` (`points-pnl` | `pnl`) v Obchodování.
+- vitest omezen na 4 workery (8GB Mac swapoval a časové testy padaly).
+
 ### 2026-10-25 — Backtest: replay, review karta pro AI, nůžky mažou obchody (Claude)
 
 - **Plynulé svíčky v backtestu se kreslí až PO zpracování svíčky enginem**
