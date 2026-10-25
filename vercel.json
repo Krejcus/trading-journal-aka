@@ -46,6 +46,36 @@
         },
         "api/tradovate/oauth/journal-import.ts": {
             "maxDuration": 300
+        },
+        "api/tradovate/oauth/copier-relay.ts": {
+            "regions": [
+                "arn1"
+            ]
+        },
+        "api/tradovate/oauth/copier-device.ts": {
+            "regions": [
+                "arn1"
+            ]
+        },
+        "api/tradovate/oauth/copier-journal.ts": {
+            "regions": [
+                "arn1"
+            ]
+        },
+        "api/tradovate/oauth/status.ts": {
+            "regions": [
+                "arn1"
+            ]
+        },
+        "api/tradovate/oauth/journal-sources.ts": {
+            "regions": [
+                "arn1"
+            ]
+        },
+        "api/tradovate/account-profiles.ts": {
+            "regions": [
+                "arn1"
+            ]
         }
     }
 }
