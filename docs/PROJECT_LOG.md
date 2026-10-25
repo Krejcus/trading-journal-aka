@@ -262,6 +262,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-25 — Backtest: replay, review karta pro AI, nůžky mažou obchody (Claude)
+
+- **Plynulé svíčky v backtestu se kreslí až PO zpracování svíčky enginem**
+  (kurzor je už za ní) — obrazovka nikdy neukáže víc, než engine zná, takže
+  animace nejde zneužít k nahlížení dopředu. Klik do workspace svíčku dokreslí.
+  Šipka doleva = krok zpět (v backtestu přes stejnou cestu jako nůžky).
+- **Nůžky před vzatým obchodem už neodmítají**: dialog vypíše obchody, které by
+  v novém čase ještě neproběhly, a po potvrzení je smaže ze session (plnění,
+  příkazy, otevřená pozice, přepočet zůstatku), z front (`discardBacktestTrades`,
+  `discardBacktestAnalytics` — jinak by fronta vzkřísila řádek / zablokovala se)
+  i z deníku. `maxRevealedTime` zůstává — co uživatel viděl, viděl.
+- **Review karta (varianta B, sklo Aurora)**: auto snímek celého obchodu z 1m
+  grafu (1600×900, obchod vycentrovaný, stejná rezerva před i po — při review
+  hned po obchodu je rezerva prázdná, později ji vyplní vývoj po výstupu),
+  konfluence HTF/LTF, čipy disciplíny, popis. Backtest obchody jsou vždy
+  validní (co není, se smaže); typ setupu karta nepřepisuje.
+- **Struktura podle indikátoru i na 1m a 5m**: 1m CHoCH/BoS → LTF, 5m a 15m → HTF
+  konfluence. `BACKTEST_TRADE_SCHEMA_VERSION` 9 → starší obchody se po otevření
+  session přepočítají samy.
+- **Limit/Stop z lišty = návrhová čára v grafu** (jen v paměti, do enginu až
+  Buy/Sell), SL/TP se při tažení přepočítávají živě.
+- **CandleKit záplata** (`patches/@getcandlekit+charts`): úchyty jako v TV,
+  úchyt na vstupu position boxu, výplň boxu pod svíčkami, vstupní čára reaguje
+  jen v šířce boxu. Po změně záplaty je nutné smazat `node_modules/.vite/deps`.
+- **Otevřené pro AI (rozbor v konverzaci)**: MCP nemá svíčky ani historii
+  příkazů, `get_trade` ořezává na 30k znaků, Laboratoř aplikuje živý prep bias
+  na backtest. Další projekt: lokální automatický backtest nad Databento daty
+  s Claude Code (bez API).
+
 ### 2026-10-24 — Účty × Byznys bez duplicit peněz, historie účtů (Claude)
 - Rozhodnutí: peníze (nákupy, výplaty) žijí jen v Byznysu; Účty ukazují
   životní cyklus. Cena účtu se nezadává — `lib/accountPurchases.ts` páruje účet
