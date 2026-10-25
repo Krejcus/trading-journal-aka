@@ -3238,6 +3238,33 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
     chartRootRef.current?.setAttribute('data-replay-update-mode', 'incremental');
   }, [animateReplayViewportTo, centeredTradeView, compactMode, replayActive, replayCursorTime, timeframe, visibleCandles]);
+  // Krok nebo přehrávání posune svíčky pod stojící myší, ale knihovna kreslí
+  // crosshair jen po pohybu myši — zůstal by viset na staré svíčce. Po každé
+  // aktualizaci se proto přepočítá na místo, kde myš právě je.
+  const pointerClientRef = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!replayActive) return;
+    const frame = window.requestAnimationFrame(() => {
+      const pointer = pointerClientRef.current;
+      const api = apiRef.current;
+      if (!pointer || !api) return;
+      try {
+        const chart = api.controller.getChart();
+        const series = api.controller.getSeries();
+        const rect = chart.chartElement().getBoundingClientRect();
+        const x = pointer.x - rect.left;
+        const y = pointer.y - rect.top;
+        const paneWidth = rect.width - chart.priceScale('right').width();
+        const paneHeight = rect.height - chart.timeScale().height();
+        if (x < 0 || y < 0 || x > paneWidth || y > paneHeight) return;
+        const time = chart.timeScale().coordinateToTime(x);
+        const price = series.coordinateToPrice(y);
+        if (time === null || price === null) return;
+        chart.setCrosshairPosition(price, time, series);
+      } catch { /* graf se právě přestavuje */ }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [replayActive, replayCursorTime, visibleCandles]);
   // Nový objekt = nový DrawingController a nové API grafu (všechny vrstvy se
   // připojí znovu). Review ukládá kresby pod klíčem týdne — přepnutí obchodu
   // proto graf znovu nestaví.
@@ -5112,8 +5139,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         }
       }}
       onPointerMoveCapture={handleManagedPositionPointerMove}
-      onPointerMove={handlePricePointerMove}
+      onPointerMove={event => {
+        pointerClientRef.current = { x: event.clientX, y: event.clientY };
+        handlePricePointerMove(event);
+      }}
       onPointerLeave={() => {
+        pointerClientRef.current = null;
         setManagedPositionHover(null);
         setPricePointer(null);
       }}
