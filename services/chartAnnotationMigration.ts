@@ -7,6 +7,7 @@
  * stranou a stejná kresba uložená ve víc panelech (synchronizace kreseb mezi
  * panely) se počítá jednou.
  */
+import { stableStringify } from '../lib/stableJson';
 
 export type DrawingSourceKind =
   | 'trade-detail'
@@ -108,7 +109,7 @@ export interface DrawingMigrationPreview {
   conflicts: number;
 }
 
-const signature = (drawing: StoredDrawingLike) => JSON.stringify(normalizeDrawingForLayer(drawing));
+const signature = (drawing: StoredDrawingLike) => stableStringify(normalizeDrawingForLayer(drawing));
 
 /**
  * Při konfliktu (stejné ID, jiný obsah) vyhraje kopie z obrazovky, kde se
