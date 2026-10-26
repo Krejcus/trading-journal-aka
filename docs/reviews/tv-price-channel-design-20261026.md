@@ -7,6 +7,15 @@ jinou automatiku.** Stav: **návrh v2** — kritik: v1 „OPRAVIT PŘED
 IMPLEMENTACÍ“, v2 **„OK S VÝHRADAMI“** (výhrady A–G zapracované, bod 7).
 Neimplementováno.
 
+## 0. Stav implementace (26. 10.)
+
+- Krok 1 (relay, téma a klíč) — hotovo `7a492f03`, kritik OK.
+- Krok 2 (vlákno ve workeru, výchozí vypnuto) — hotovo, kritik OK S
+  VÝHRADAMI (zapracováno). Zkouška naostro: 2,3 zprávy/s, podpisy 28/28,
+  worker → klient p50 32 ms, po odhlášení presence 0 zpráv.
+- Nenasazeno: tajemství ve Vercelu + web, worker reinstall `--tv-stream on`.
+- Další: krok 3 (klientský store + diagnostika), 4 (P&L), 5 (svíčka).
+
 ## 1. Co dnes existuje (ověřeno v kódu)
 
 - **Čtení TV ve workeru**: `startTradingViewMarketPriceFeed` (1 s, nové CDP

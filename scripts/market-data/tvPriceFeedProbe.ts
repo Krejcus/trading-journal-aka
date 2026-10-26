@@ -2,6 +2,14 @@ import { writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { TV_BARS_EXPRESSION } from '../../lib/tradingViewBars';
 import { evaluateTradingViewChartTargets } from '../../services/tradingViewMarketPrice';
+import {
+  listTradingViewChartTargets,
+  TradingViewCdpSession,
+  TV_CDP_ORIGIN,
+  TV_CHART_META_EXPRESSION,
+  TV_FAST_PRICE_EXPRESSION,
+  type TvChartTarget,
+} from '../../services/tradingViewCdpSession';
 
 /**
  * Měřicí sonda rychlého kanálu ceny z TradingView Desktop (krok 1 předávky
@@ -17,74 +25,11 @@ import { evaluateTradingViewChartTargets } from '../../services/tradingViewMarke
  *   npx tsx scripts/market-data/tvPriceFeedProbe.ts [--duration 60] [--interval 100] [--cold 20] [--json report.json]
  */
 
-const CDP_ORIGIN = 'http://127.0.0.1:9222';
 const READ_TIMEOUT_MS = 1_000;
-const MAX_CHART_TARGETS = 4;
 /** Intervaly, které návrh kanálu A zvažuje (250–500 ms) + dnešní 1 s. */
 const SIMULATED_INTERVALS_MS = [250, 500, 1_000] as const;
 
-/** Lehký výraz rychlého kanálu: poslední svíčka + kotace každého grafu v okně. */
-export const TV_FAST_PRICE_EXPRESSION = `(() => {
-  const started = performance.now();
-  try {
-    const collection = window.TradingViewApi && window.TradingViewApi._chartWidgetCollection;
-    if (!collection) return null;
-    const charts = collection.getAll().map(widget => {
-      try {
-        const series = widget.model().mainSeries();
-        const bars = series.bars();
-        const bar = bars.valueAt(bars.lastIndex());
-        let quote = null;
-        try { quote = series.quotes(); } catch (e) { quote = null; }
-        const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
-        return {
-          symbol: series.symbol(),
-          interval: String(series.interval()),
-          bar: bar ? [bar[0], bar[1], bar[2], bar[3], bar[4], bar[5] || 0] : null,
-          last: quote ? number(quote.last_price) : null,
-          lastTime: quote ? number(quote.lp_time) : null,
-          bid: quote ? number(quote.bid) : null,
-          ask: quote ? number(quote.ask) : null,
-          mode: quote && typeof quote.update_mode === 'string' ? quote.update_mode : null,
-        };
-      } catch (e) { return null; }
-    });
-    return { now: Date.now(), evalMs: performance.now() - started, charts };
-  } catch (e) { return null; }
-})()`;
-
-/** Statická metadata grafu (čte se jednou): kontrakt, multiplikátor, režim dat. */
-export const TV_CHART_META_EXPRESSION = `(() => {
-  try {
-    const collection = window.TradingViewApi && window.TradingViewApi._chartWidgetCollection;
-    if (!collection) return [];
-    const text = value => typeof value === 'string' ? value : null;
-    const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
-    return collection.getAll().map(widget => {
-      try {
-        const series = widget.model().mainSeries();
-        let info = null;
-        try { info = series.symbolInfo(); } catch (e) { info = null; }
-        let quote = null;
-        try { quote = series.quotes(); } catch (e) { quote = null; }
-        return {
-          symbol: series.symbol(),
-          interval: String(series.interval()),
-          fullName: info ? text(info.full_name) : null,
-          frontContract: info ? text(info.front_contract) : null,
-          pointValue: info ? number(info.pointvalue) : null,
-          minMov: info ? number(info.minmov) : null,
-          priceScale: info ? number(info.pricescale) : null,
-          typespecs: info && Array.isArray(info.typespecs) ? info.typespecs.map(String) : [],
-          alternatives: info && Array.isArray(info.alternatives) ? info.alternatives.map(String) : [],
-          updateMode: quote ? text(quote.update_mode) : null,
-          currentSession: quote ? text(quote.current_session) : null,
-          frontContractSwitchTime: quote ? number(quote['front-contract-switch-time']) : null,
-        };
-      } catch (e) { return null; }
-    }).filter(Boolean);
-  } catch (e) { return []; }
-})()`;
+export { TV_CHART_META_EXPRESSION, TV_FAST_PRICE_EXPRESSION };
 
 export interface FastChart {
   symbol: string;
@@ -323,72 +268,6 @@ export function tradovateContractSymbol(frontContract: string | null): string | 
   return match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
 }
 
-interface CdpTarget {
-  type?: string;
-  url?: string;
-  webSocketDebuggerUrl?: string;
-}
-
-interface Pending {
-  resolve: (reply: { value: unknown; bytes: number }) => void;
-  reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-/** Trvalé CDP spojení na jeden chart target; posílá jen `Runtime.evaluate`. */
-class CdpSession {
-  private nextId = 0;
-  private readonly pending = new Map<number, Pending>();
-
-  private constructor(private readonly socket: WebSocket) {
-    socket.addEventListener('message', event => {
-      const raw = String(event.data ?? '');
-      let message: { id?: number; result?: { result?: { value?: unknown }; exceptionDetails?: unknown }; error?: unknown };
-      try { message = JSON.parse(raw); } catch { return; }
-      const entry = typeof message.id === 'number' ? this.pending.get(message.id) : undefined;
-      if (!entry || typeof message.id !== 'number') return;
-      this.pending.delete(message.id);
-      clearTimeout(entry.timer);
-      if (message.error || message.result?.exceptionDetails) entry.reject(new Error('cdp-evaluate-failed'));
-      else entry.resolve({ value: message.result?.result?.value ?? null, bytes: raw.length });
-    });
-    const failAll = (error: Error) => {
-      for (const entry of this.pending.values()) {
-        clearTimeout(entry.timer);
-        entry.reject(error);
-      }
-      this.pending.clear();
-    };
-    socket.addEventListener('close', () => failAll(new Error('cdp-closed')));
-    socket.addEventListener('error', () => failAll(new Error('cdp-error')));
-  }
-
-  static open(url: string, timeoutMs: number): Promise<CdpSession> {
-    return new Promise((resolve, reject) => {
-      const socket = new WebSocket(url);
-      const timer = setTimeout(() => { socket.close(); reject(new Error('cdp-open-timeout')); }, timeoutMs);
-      socket.addEventListener('open', () => { clearTimeout(timer); resolve(new CdpSession(socket)); }, { once: true });
-      socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('cdp-open-failed')); }, { once: true });
-    });
-  }
-
-  evaluate(expression: string, timeoutMs: number): Promise<{ value: unknown; bytes: number }> {
-    const id = ++this.nextId;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error('cdp-evaluate-timeout'));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      this.socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true } }));
-    });
-  }
-
-  close(): void {
-    try { this.socket.close(); } catch { /* best effort */ }
-  }
-}
-
 interface FastSample {
   target: number;
   at: number;
@@ -421,18 +300,6 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const isFastChart = (value: unknown): value is FastChart =>
   !!value && typeof value === 'object' && typeof (value as FastChart).symbol === 'string';
 
-async function listChartTargets(): Promise<CdpTarget[]> {
-  const response = await fetch(`${CDP_ORIGIN}/json/list`, { signal: AbortSignal.timeout(2_000) });
-  if (!response.ok) throw new Error(`cdp-list-http-${response.status}`);
-  const payload = await response.json() as unknown;
-  return (Array.isArray(payload) ? payload as CdpTarget[] : [])
-    .filter(target => target.type === 'page'
-      && typeof target.url === 'string'
-      && target.url.includes('tradingview.com/chart')
-      && typeof target.webSocketDebuggerUrl === 'string')
-    .slice(0, MAX_CHART_TARGETS);
-}
-
 /** Studené čtení přesně jako dnešní worker: /json/list + nové spojení na každý target. */
 async function measureColdReads(count: number, expression: string): Promise<{ latency: LatencySummary; failures: number }> {
   const durations: number[] = [];
@@ -447,23 +314,23 @@ async function measureColdReads(count: number, expression: string): Promise<{ la
   return { latency: summarizeLatency(durations), failures };
 }
 
-const describeTarget = (target: CdpTarget) => {
+const describeTarget = (target: TvChartTarget) => {
   const match = /\/chart\/([^/?#]+)/.exec(target.url ?? '');
   return match ? `chart/${match[1]}` : 'chart';
 };
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  let targets: CdpTarget[];
+  let targets: TvChartTarget[];
   try {
-    targets = await listChartTargets();
+    targets = await listTradingViewChartTargets();
   } catch {
-    throw new Error(`TradingView CDP na ${CDP_ORIGIN} neodpovídá — běží TradingView Desktop s --remote-debugging-port=9222?`);
+    throw new Error(`TradingView CDP na ${TV_CDP_ORIGIN} neodpovídá — běží TradingView Desktop s --remote-debugging-port=9222?`);
   }
   if (targets.length === 0) throw new Error('CDP běží, ale žádný otevřený graf tradingview.com/chart');
   console.log(`TV price probe: targets=${targets.map(describeTarget).join(', ')} duration=${options.durationMs / 1_000}s interval=${options.intervalMs}ms cold=${options.coldReads}`);
 
-  const sessions = await Promise.all(targets.map(target => CdpSession.open(target.webSocketDebuggerUrl!, 2_000)));
+  const sessions = await Promise.all(targets.map(target => TradingViewCdpSession.open(target.webSocketDebuggerUrl!, 2_000)));
   let stopped = false;
   process.once('SIGINT', () => { stopped = true; });
   try {

@@ -7,6 +7,9 @@ import { createTradovateAccountDisplayFeed } from '../../server/tradovateAccount
 import { readTradovateAccountDisplay } from '../../server/tradovateAccountDisplayRead';
 import { access, appendFile, chmod, copyFile, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
@@ -114,6 +117,7 @@ const leaseRetry = (connectionId: string): RetryTransientOptions => ({
 });
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
+import { createTvPriceStreamSupervisor, tvPriceStreamConfigFromRealtime, type TvPriceStreamSupervisor } from '../../server/tvPriceStreamSupervisor';
 import { scheduleTradingViewBarsCapture, startTradingViewLiveBars, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
 import { tvSymbolRoot } from '../../lib/tradingViewBars';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
@@ -934,6 +938,30 @@ async function runLocalAgent(
     ? startTradingViewMarketPriceFeed({ intervalMs: 1_000 })
     : null;
   if (marketPriceFeed) console.log(`${new Date().toISOString()} MARKET PRICE čtení ceny z grafů TradingView zapnuto (1 s, jen zobrazení).`);
+  // Kanál ceny z TradingView pro realtime P&L na obrazovce
+  // (docs/reviews/tv-price-channel-design-20261026.md). Vlastní vlákno
+  // a vlastní bundle: pád ani zaseknutí nesmí sáhnout na kopírku
+  // (INV-WORKER-04). Výchozí VYPNUTO; server ho vypne i vynecháním klíče.
+  const tvPriceStreamBundle = fileURLToPath(new URL('./tv-price-stream.mjs', import.meta.url));
+  const tvPriceStream: TvPriceStreamSupervisor | null = snapshotsEnabled
+    && process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() === 'on'
+    && existsSync(tvPriceStreamBundle)
+    ? createTvPriceStreamSupervisor({
+      createWorker: () => {
+        // Výstup vlákna se nepřeposílá do logu workeru (šel by přes event loop
+        // hlavního vlákna); stav hlásí jen omezená diagnostika.
+        const thread = new Worker(tvPriceStreamBundle, {
+          stdout: true, stderr: true,
+          resourceLimits: { maxOldGenerationSizeMb: 96, maxYoungGenerationSizeMb: 16 },
+        });
+        thread.stdout.resume();
+        thread.stderr.resume();
+        return thread;
+      },
+      log: line => console.log(`${new Date().toISOString()} ${line}`),
+    })
+    : null;
+  if (tvPriceStream) console.log(`${new Date().toISOString()} TV STREAM kanál ceny z TradingView povolen (vlastní vlákno, jen zobrazení).`);
   const persistResolvedChart = (resolved: TradingViewDedicatedChartRef) => {
     dedicatedChartRef = { ...dedicatedChartRef, ...resolved };
     snapshotHealth = {
@@ -1105,6 +1133,7 @@ async function runLocalAgent(
     // Do not delay broker shutdown for an image request; the disk spool survives restart.
     void snapshotDelivery?.close().catch(() => {});
     marketPriceFeed?.stop();
+    tvPriceStream?.stop();
     contexts.forEach(item => item.displayFeed?.close());
     const cancelShutdownWatchdog = startAgentShutdownWatchdog({
       timeoutMs: 20_000,
@@ -1801,6 +1830,10 @@ async function runLocalAgent(
             }
           };
         },
+        // Jen předání konfigurace kanálu ceny vláknu — relay na nic nečeká.
+        onRealtimeConfig: realtime => tvPriceStream?.update(tvPriceStreamConfigFromRealtime(realtime, {
+          targetId: dedicatedChartRef.targetId, chartId: dedicatedChartRef.chartId,
+        })),
         onSnapshotRequests: requests => {
           console.log(`${new Date().toISOString()} SNAPSHOT požadavky: ${requests.map(r => `${r.id.slice(0, 8)}/${r.symbol}`).join(', ')}`);
           if (!snapshotsEnabled || !relay) return;

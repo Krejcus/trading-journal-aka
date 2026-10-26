@@ -1,0 +1,178 @@
+import type { TvPriceEnvelope, TvPricePayload } from '../lib/tvPriceMessage';
+
+/**
+ * Jádro kanálu ceny z TradingView (běží ve vlákně workeru, INV-WORKER-04).
+ * Čte poslední svíčku a kotaci vybraného panelu a posílá podepsané zprávy
+ * jen když se dívá klient (presence `pnl`/`chart`) a kanál je připojený.
+ * Jen zobrazení — nic odsud nevstupuje do kopírky ani do rozhodování
+ * (pravidlo v `lib/tradingViewBars.ts`, INV-UI-04).
+ *
+ * Všechny vstupy a výstupy jsou injektované, aby šlo chování ověřit bez
+ * TV a bez sítě. Nikdy nevyhodí: chyba čtení, podpisu i odeslání = skip.
+ */
+
+export const TV_STREAM_FAST_MS = 250;
+export const TV_STREAM_IDLE_CHECK_MS = 1_000;
+/** I beze změny ceny aspoň 1 zpráva/s — ticho až ~3 s nesmí vypadat jako výpadek. */
+export const TV_STREAM_HEARTBEAT_MS = 1_000;
+export const TV_STREAM_MAX_PER_SECOND = 5;
+/** Po chybě čtení se chvíli nečte (CDP mohlo spadnout; vlákno obnoví spojení). */
+export const TV_STREAM_ERROR_BACKOFF_MS = 1_000;
+
+/**
+ * Smí vlákno odeslat zprávu do kanálu? Shodné s `_canPush` realtime-js:
+ * bez připojeného socketu a joinutého kanálu by `send()` tiše přešel na REST
+ * POST (+ varování za každou zprávu).
+ */
+export const realtimeChannelCanPush = (connected: boolean, state: string | undefined): boolean =>
+  connected && state === 'joined';
+
+export interface TvStreamReading {
+  chart: string;
+  interval: string;
+  pane: number;
+  /** [čas otevření s, open, high, low, close] */
+  bar: [number, number, number, number, number] | null;
+  last: number | null;
+  bid: number | null;
+  ask: number | null;
+  mode: string | null;
+}
+
+export interface TvStreamMeta {
+  front: string | null;
+  switchAt: number | null;
+}
+
+export interface TvPriceStreamDeps {
+  /** Jedno read-only čtení vybraného panelu; `null` = panel teď není k dispozici. */
+  read: () => Promise<TvStreamReading | null>;
+  meta: () => TvStreamMeta;
+  /** Presence: některý viditelný klient zobrazuje P&L nebo živý graf. */
+  demand: () => boolean;
+  /** Kanál je `joined` a po (re)joinu přišel presence `sync`. */
+  ready: () => boolean;
+  sign: (payload: TvPricePayload) => Promise<TvPriceEnvelope | null>;
+  /** Odeslání podepsané zprávy; `false` = neodesláno. Nesmí čekat na REST fallback. */
+  publish: (envelope: TvPriceEnvelope) => Promise<boolean>;
+  runId: string;
+  now?: () => number;
+  setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
+  clearTimeoutImpl?: (timer: unknown) => void;
+}
+
+export interface TvPriceStreamStats {
+  state: 'idle' | 'streaming' | 'stopped';
+  reads: number;
+  sends: number;
+  skippedRateCap: number;
+  errors: number;
+  lastSendAt: number | null;
+}
+
+export interface TvPriceStream {
+  start(): void;
+  stop(): void;
+  stats(): TvPriceStreamStats;
+}
+
+const signature = (reading: TvStreamReading) =>
+  `${reading.chart}|${reading.interval}|${reading.pane}|${reading.bar?.join(',') ?? '-'}|${reading.last}|${reading.bid}|${reading.ask}|${reading.mode}`;
+
+export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
+  const now = deps.now ?? Date.now;
+  const schedule = deps.setTimeoutImpl ?? ((callback: () => void, ms: number) => {
+    const timer = setTimeout(callback, ms);
+    (timer as { unref?: () => void }).unref?.();
+    return timer;
+  });
+  const cancel = deps.clearTimeoutImpl ?? (timer => clearTimeout(timer as ReturnType<typeof setTimeout>));
+  const stats: TvPriceStreamStats = { state: 'idle', reads: 0, sends: 0, skippedRateCap: 0, errors: 0, lastSendAt: null };
+  let timer: unknown = null;
+  let stopped = true;
+  let inFlight = false;
+  let seq = 0;
+  let lastSignature: string | null = null;
+  const sendTimes: number[] = [];
+
+  const next = (ms: number) => {
+    if (stopped) return;
+    timer = schedule(() => { timer = null; void tick(); }, ms);
+  };
+
+  const withinRateCap = (at: number) => {
+    while (sendTimes.length && at - sendTimes[0] >= 1_000) sendTimes.shift();
+    return sendTimes.length < TV_STREAM_MAX_PER_SECOND;
+  };
+
+  const tick = async () => {
+    if (stopped) return;
+    let ready = false;
+    let wanted = false;
+    try {
+      ready = deps.ready();
+      wanted = deps.demand();
+    } catch {
+      stats.errors += 1;
+    }
+    if (!ready || !wanted) {
+      stats.state = 'idle';
+      // Po návratu poslechu se pošle hned i neměnná cena (klient potřebuje první zprávu).
+      lastSignature = null;
+      next(TV_STREAM_IDLE_CHECK_MS);
+      return;
+    }
+    stats.state = 'streaming';
+    if (inFlight) { next(TV_STREAM_FAST_MS); return; }
+    inFlight = true;
+    const startedAt = now();
+    let delay = TV_STREAM_FAST_MS;
+    try {
+      const reading = await deps.read();
+      stats.reads += 1;
+      if (stopped || !reading) return;
+      const at = now();
+      const current = signature(reading);
+      const heartbeatDue = stats.lastSendAt === null || at - stats.lastSendAt >= TV_STREAM_HEARTBEAT_MS;
+      if (current === lastSignature && !heartbeatDue) return;
+      if (!withinRateCap(at)) { stats.skippedRateCap += 1; return; }
+      const meta = deps.meta();
+      const payload: TvPricePayload = {
+        v: 1, seq, runId: deps.runId, chart: reading.chart, interval: reading.interval, pane: reading.pane,
+        front: meta.front, switchAt: meta.switchAt, mode: reading.mode, bar: reading.bar,
+        last: reading.last, bid: reading.bid, ask: reading.ask, at: Math.round(at),
+      };
+      const envelope = await deps.sign(payload);
+      if (stopped || !envelope || !deps.ready()) return;
+      if (await deps.publish(envelope)) {
+        seq += 1;
+        sendTimes.push(at);
+        stats.sends += 1;
+        stats.lastSendAt = at;
+        lastSignature = current;
+      }
+    } catch {
+      stats.errors += 1;
+      delay = TV_STREAM_ERROR_BACKOFF_MS;
+    } finally {
+      inFlight = false;
+      next(Math.max(0, delay - (now() - startedAt)));
+    }
+  };
+
+  return {
+    start() {
+      if (!stopped) return;
+      stopped = false;
+      stats.state = 'idle';
+      next(0);
+    },
+    stop() {
+      stopped = true;
+      stats.state = 'stopped';
+      if (timer !== null) cancel(timer);
+      timer = null;
+    },
+    stats: () => ({ ...stats }),
+  };
+}

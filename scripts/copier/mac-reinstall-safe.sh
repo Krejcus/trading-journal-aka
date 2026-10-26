@@ -126,7 +126,14 @@ DEV_ORIGIN_ARGS=()
 if [[ "${COPIER_ALLOW_FULL_DEV_ORIGINS:-1}" != "0" ]]; then
   DEV_ORIGIN_ARGS+=(--allow-full-dev-origins)
 fi
-npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group "${DEV_ORIGIN_ARGS[@]}" "${ALLOW_DOWNGRADE_ARGS[@]}"
+# Kanál ceny z TV (jen zobrazení): reinstall zachová nainstalovaný stav;
+# přepsat jde COPIER_TV_STREAM=on|off scripts/copier/mac-reinstall-safe.sh
+TV_STREAM_ARGS=()
+INSTALLED_TV_STREAM="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_TV_STREAM' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_TV_STREAM:-$INSTALLED_TV_STREAM}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--tv-stream on)
+fi
+npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group "${DEV_ORIGIN_ARGS[@]}" "${ALLOW_DOWNGRADE_ARGS[@]}" "${TV_STREAM_ARGS[@]}"
 
 BUNDLE="$HOME/Library/Application Support/AlphaTrade/copier/copier-agent.mjs"
 echo "bundle sha256: $(shasum -a 256 "$BUNDLE" | cut -c1-16)…  commit: ${COMMIT}"

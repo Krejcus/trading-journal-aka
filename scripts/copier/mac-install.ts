@@ -389,7 +389,22 @@ async function install(): Promise<void> {
 
   const esbuild = resolve(projectRoot, 'node_modules/.bin/esbuild');
   const pilotSource = resolve(projectRoot, 'scripts/copier/pilot.ts');
-  await Promise.all([access(esbuild), access(pilotSource)]);
+  // Kanál ceny z TradingView: samostatný vstup a samostatný bundle vedle
+  // workeru (INV-WORKER-04). Vlákno nikdy nespouští bundle workeru — chybná
+  // ochrana by v procesu nastartovala druhý runtime kopírky. Staví se PRVNÍ:
+  // jeho selhání pak nenechá na disku nový runtime z napůl hotové instalace.
+  const tvPriceStreamSource = resolve(projectRoot, 'scripts/copier/tvPriceStreamThread.ts');
+  const tvPriceStreamPath = resolve(pilotRoot, 'tv-price-stream.mjs');
+  await Promise.all([access(esbuild), access(pilotSource), access(tvPriceStreamSource)]);
+  await execFileAsync(esbuild, [
+    tvPriceStreamSource,
+    '--bundle',
+    '--platform=node',
+    '--format=esm',
+    '--target=node20',
+    `--outfile=${tvPriceStreamPath}`,
+  ]);
+  await chmod(tvPriceStreamPath, 0o700);
   await execFileAsync(esbuild, [
     pilotSource,
     '--bundle',
@@ -404,6 +419,8 @@ async function install(): Promise<void> {
   const stdout = resolve(pilotRoot, 'mac-agent.stdout.log');
   const stderr = resolve(pilotRoot, 'mac-agent.stderr.log');
   const allowFullDevelopmentOrigins = flags.get('allow-full-dev-origins') === 'true';
+  // Kanál ceny z TV je výchozí vypnutý; zapnutí musí přežít reinstall (`--tv-stream on`).
+  const tvStreamEnabled = flags.get('tv-stream')?.trim().toLowerCase() === 'on';
   const programArguments = [
     '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
@@ -435,6 +452,7 @@ async function install(): Promise<void> {
     ${allowFullDevelopmentOrigins
     ? '<key>ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS</key><string>1</string>'
     : ''}
+    ${tvStreamEnabled ? '<key>ALPHATRADE_TV_STREAM</key><string>on</string>' : ''}
   </dict>
 </dict></plist>
 `;

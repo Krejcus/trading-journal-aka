@@ -283,6 +283,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-26 odpoledne — Kanál ceny z TV: krok 1 (relay) a 2 (vlákno ve workeru) hotové, NEnasazeno (Claude)
+
+- **Krok 1** (`7a492f03`): relay odvozuje z `TV_PRICE_CHANNEL_SECRET` téma
+  a podpisový klíč per zařízení (`server/tvPriceChannel.ts`), workeru v
+  `realtime` konfiguraci, klientovi vedle statusu jen při živém heartbeatu
+  (revokované zařízení kanál ztratí do 10 s). Bez tajemství pole chybí —
+  poll i brzdy fungují dál. Podepsaná zpráva `lib/tvPriceMessage.ts`
+  (HMAC nad surovým JSON, WebCrypto, přísná validace).
+- **Krok 2**: vlákno `scripts/copier/tvPriceStreamThread.ts` (samostatný
+  bundle `tv-price-stream.mjs`, allowlist importů v testu), jádro
+  `services/tradingViewPriceStream.ts`, hlídač
+  `server/tvPriceStreamSupervisor.ts` (restart s prodlevou, jistič 3 pády
+  / 10 min, liveness, pády po probuzení se nepočítají), relay hook
+  `onRealtimeConfig` (synchronní, bez čekání). Ve workeru **výchozí
+  vypnuto**: zapne `install --tv-stream on` (bezpečný reinstall stav
+  zachová); server ho vypne vynecháním klíče.
+- **Zkouška naostro** (kopírka DISARMED, dočasné téma, skutečný Supabase
+  Realtime): 28 zpráv / 12 s, 28/28 platných podpisů, `seq` monotónní,
+  worker → klient p50 32 ms; po odhlášení presence 0 zpráv.
+- **Kritik**: krok 1 OPRAVIT PŘED COMMITEM → opraveno → OK; krok 2 OK S
+  VÝHRADAMI → zapracováno (pořadí buildu, try/catch v posluchačích,
+  výstup vlákna zahazován, testy CDP a brány odesílání).
+- **Zbývá**: nasazení (tajemství ve Vercelu + web; worker reinstall ve
+  flat stavu), krok 3 klientský store + diagnostika, krok 4 P&L v listových
+  komponentách, krok 5 živá svíčka.
+
 ### 2026-10-26 odpoledne — Krok 2: návrh kanálu ceny z TV a realtime P&L (Claude, jen návrh)
 
 - **Návrh** `docs/reviews/tv-price-channel-design-20261026.md` (v2).

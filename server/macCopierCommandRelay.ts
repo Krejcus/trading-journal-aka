@@ -89,6 +89,12 @@ export function startMacCopierCommandRelay(options: {
   ) => () => Promise<void> | void;
   /** Fire-and-forget handoff; the relay poll never awaits chart capture. */
   onSnapshotRequests?: (requests: readonly MacTvAlertSnapshotRequest[]) => void;
+  /**
+   * Realtime konfigurace z poll odpovědi pro zobrazovací doplňky (kanál ceny
+   * z TV). Synchronní předání bez čekání; výjimka posluchače se spolkne —
+   * poll smyčka a brzdy na nic z toho nečekají (INV-RELAY-04).
+   */
+  onRealtimeConfig?: (realtime: unknown) => void;
 }): MacCopierCommandRelay {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const pollMs = Math.max(500, options.pollMs ?? 750);
@@ -126,6 +132,14 @@ export function startMacCopierCommandRelay(options: {
     unsubscribeKick = null;
     kickTopic = null;
     if (unsubscribe) await unsubscribe();
+  };
+
+  const notifyRealtimeConfig = (realtime: unknown) => {
+    try {
+      options.onRealtimeConfig?.(realtime);
+    } catch {
+      // Zobrazovací doplněk nesmí ovlivnit doručení příkazu.
+    }
   };
 
   const maybeSubscribeKick = async (realtime: unknown) => {
@@ -273,6 +287,7 @@ export function startMacCopierCommandRelay(options: {
             deliveryBusy = false;
           }
           if (response.command == null) idleProofSince = pollStartedAt;
+          notifyRealtimeConfig(response.realtime);
           await maybeSubscribeKick(response.realtime);
           failures = 0;
           if (response.command == null) lastEmptyPollStartedAt = pollStartedAt;
@@ -288,6 +303,7 @@ export function startMacCopierCommandRelay(options: {
           // ACK covers only the heartbeat just sent. A newer event may have
           // arrived while its HTTP response was pending and needs another poll.
           acknowledgedCopyEventsRevision = sentCopyEventsRevision;
+          notifyRealtimeConfig(response.realtime);
           await maybeSubscribeKick(response.realtime);
           if (Array.isArray(response.snapshotRequests) && options.onSnapshotRequests) {
             const requests = response.snapshotRequests.flatMap(value => {
