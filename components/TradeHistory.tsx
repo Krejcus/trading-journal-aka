@@ -14,7 +14,7 @@ import { thumbMedium, thumbLarge, fullSize } from '../services/imageUrlService';
 import { getCachedCopierThumbs, hasCurrentCopierThumb, invalidateCopierThumb, prefetchCopierThumbUrls } from '../services/copierSnapshotThumbs';
 import {
   Trash2, TrendingUp, TrendingDown, X, Edit3, Calendar,
-  Tag, DollarSign, FileText, Image as ImageIcon,
+  Tag, DollarSign, FileText,
   ChevronRight, ChevronLeft, Wallet, Target, AlertTriangle, AlertCircle, Brain,
   ShieldCheck, ShieldAlert, BarChart3, Activity, Zap, Monitor,
   Maximize2, ArrowRight, Gauge, Hash, Ruler, Percent,
@@ -28,6 +28,8 @@ import TradeDetailModal from './TradeDetailModal';
 const WeeklyReview = React.lazy(() => import('./WeeklyReview'));
 import type { ChartNote } from '../lib/chartNotes';
 import { HistoryScreenshotSlot, clipboardImage, pasteTargetsEditable, shotTargetIds, type ScreenshotAttachStatus } from './HistoryScreenshotSlot';
+import { HistoryShotImage } from './HistoryShotImage';
+import { createCoalescedBuffer } from '../lib/coalescedBuffer';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 
@@ -297,14 +299,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // Tracks IDs we've already attempted to fetch (even if no screenshot was found)
   // This prevents re-fetching "no screenshot" trades every time the cache updates
   const fetchedIdsRef = useRef<Set<string>>(new Set());
-  // Init z globálního setu — při návratu na tab nejsou cached images "znova loading"
-  const [loadedImages, setLoadedImages] = useState<Set<string>>(
-    () => new Set(storageService.getLoadedImageIds())
-  );
   const [errorImages, setErrorImages] = useState<Set<string>>(new Set());
   // Náhledy z copier snapshotů (podepsané URL) pro obchody bez ručního screenshotu.
   // Init z module-level cache, ať se při návratu na záložku nepodepisuje znovu.
   const [copierThumbs, setCopierThumbs] = useState<Map<string, string>>(() => getCachedCopierThumbs(user.id));
+  // Jediné nové podepsání po chybě náhledu (prošlá URL); viz efekt níže.
+  const [copierThumbRetry, setCopierThumbRetry] = useState(0);
   const copierThumbRetriedRef = useRef<Set<string>>(new Set());
   const detailPrefetchRef = useRef<Map<string, Promise<PreparedJournalTradeDetail | null>>>(new Map());
   const preparedJournalDetailRef = useRef<Map<string, PreparedJournalTradeDetail>>(new Map());
@@ -333,15 +333,6 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     });
   }, []);
 
-  const handleImageLoad = (id: string) => {
-    storageService.markImageLoaded(id); // persistent přes mount/unmount
-    setLoadedImages(prev => {
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  };
-
   const handleImageError = (id: string) => {
     setErrorImages(prev => {
       const next = new Set(prev);
@@ -355,6 +346,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       if (copierThumbRetriedRef.current.has(id)) return;
       copierThumbRetriedRef.current.add(id);
       setErrorImages(prev => { const next = new Set(prev); next.delete(id); return next; });
+      setCopierThumbRetry(value => value + 1);
       return;
     }
     // Retry: fetch fresh screenshot from DB — may have been a transient error or expired URL
@@ -734,11 +726,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // Reset visible count when trades change (e.g., filter applied, sort changed)
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-    // NOTE: Do NOT reset loadedImages here. When background refresh fires with a different
-    // fingerprint, setLoadedImages(new Set()) clears already-loaded IDs. But since the img
-    // elements keep the same src (same base64 data), React won't remount them and onLoad
-    // won't re-fire — leaving images permanently stuck at opacity-0 behind the skeleton.
-    // New trade IDs not yet in loadedImages naturally show the skeleton until onLoad fires.
+    // „Načteno“ se tu nenuluje: drží ho náhledy samy (HistoryShotImage) a globální set
+    // ve storageService. Img se stejným src se nepřemontuje a onLoad znovu nevystřelí —
+    // po resetu by obrázek zůstal navždy pod skeletonem s opacity-0.
     setErrorImages(new Set());
     // Reset fetched tracking so new trade set gets fresh screenshots
     fetchedIdsRef.current = new Set();
@@ -836,7 +826,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   }, [visibleTrades, loadScreenshots]);
 
   // Copier snapshoty jsou v privátním bucketu — pro právě vykreslenou dávku je
-  // podepíšeme jedním požadavkem; každý kus se pak zobrazí vlastním onLoad.
+  // podepíšeme po pěticích; každý kus se pak zobrazí vlastním onLoad. Hotové
+  // URL se do stavu slučují (první pětice hned, další nejvýš po 400 ms): každá
+  // změna mapy přerenderuje celou Historii a efekt se dřív navíc po každé
+  // pětici restartoval (~34 plných renderů při 170 kartách).
   useEffect(() => {
     const candidates = visibleTrades.filter(t =>
       (t.copierSnapshots?.length ?? 0) > 0 &&
@@ -846,34 +839,34 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     );
     if (candidates.length === 0) return;
     let cancelled = false;
+    // Podepsané URL drží cache modulu, takže je další běh přeskočí — do stavu
+    // se proto dostanou vždy, i když se tenhle běh mezitím zrušil.
+    const thumbs = createCoalescedBuffer<[string, string]>(found => setCopierThumbs(prev => {
+      const next = new Map(prev);
+      found.forEach(([id, url]) => next.set(id, url));
+      return next;
+    }));
     const run = async () => {
       for (let i = 0; i < candidates.length; i += SCREENSHOT_BATCH) {
         const batch = candidates.slice(i, i + SCREENSHOT_BATCH);
         const signed = await prefetchCopierThumbUrls(user.id, batch.map(t => ({
           tradeId: String(t.id), snapshots: t.copierSnapshots,
         })), snaps => storageService.createCopierSnapshotSignedUrls(snaps));
-        if (cancelled) return;
         const found = [...signed];
+        thumbs.add(found);
+        if (cancelled) return thumbs.flush();
         if (found.length === 0) continue;
-        // Připoj URL hned: každý <img> pak zmizí ze skeletonu vlastním onLoad,
-        // místo aby celá pětice čekala na nejpomalejší dekódování.
-        setCopierThumbs(prev => {
-          const next = new Map(prev);
-          found.forEach(([id, url]) => next.set(id, url));
-          return next;
-        });
-        const decoded = await Promise.all(found.map(async ([id, url]) => {
-          try { await preloadDecodedImage(url); return id; } catch { return null; }
+        // Dekódování předem; „načteno“ si pak každý náhled označí sám.
+        await Promise.all(found.map(async ([id, url]) => {
+          try { await preloadDecodedImage(url); storageService.markImageLoaded(id); } catch { /* rozhodne onLoad/onError náhledu */ }
         }));
-        if (cancelled) return;
-        const readyIds = decoded.filter((id): id is string => id !== null);
-        readyIds.forEach(id => storageService.markImageLoaded(id));
-        if (readyIds.length > 0) setLoadedImages(previous => new Set([...previous, ...readyIds]));
+        if (cancelled) return thumbs.flush();
       }
+      thumbs.flush();
     };
     void run();
-    return () => { cancelled = true; };
-  }, [visibleTrades, screenshotCache, copierThumbs, user.id]);
+    return () => { cancelled = true; thumbs.flush(); };
+  }, [visibleTrades, screenshotCache, user.id, copierThumbRetry]);
 
   // PREFETCH ALL screenshoty jedním query při mountu — eliminate flash při scroll/lazy load.
   // Po dokončení má každý visible trade screenshot okamžitě z cache, žádný per-batch query.
@@ -1251,7 +1244,6 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
             const tradeScreenshot = getScreenshot(trade);
             const tradeScreenshots = getScreenshots(trade);
-            const isImageLoaded = loadedImages.has(String(trade.id));
             const needsEnrich = enrichIds.has(String(trade.id));
 
             const tradeAccount = accounts.find(a => a.id === trade.accountId);
@@ -1445,23 +1437,13 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         if (allImgs.length > 0) setZoomImage({ images: allImgs, index: startIndex });
                       }}
                     >
-                      {!isImageLoaded && !errorImages.has(String(trade.id)) && (
-                        <div className={`absolute inset-0 animate-pulse bg-slate-800/20 backdrop-blur-sm flex items-center justify-center z-10`}>
-                          <ImageIcon size={24} className="text-slate-700/50" />
-                        </div>
-                      )}
-                      {errorImages.has(String(trade.id)) && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-slate-900/60 z-10">
-                          <ImageIcon size={20} className="text-slate-600" />
-                        </div>
-                      )}
-
-                      <img
+                      <HistoryShotImage
+                        id={String(trade.id)}
                         src={thumbLarge(tradeScreenshot)}
-                        onLoad={() => handleImageLoad(String(trade.id))}
-                        onError={() => handleImageError(String(trade.id))}
-                        loading="lazy"
-                        className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%] opacity-100' : isImageLoaded ? 'opacity-100' : 'opacity-0'} transition-transform duration-300 group-hover/img:scale-105`}
+                        failed={errorImages.has(String(trade.id))}
+                        copierThumb={isCopierThumb(trade)}
+                        variant="card"
+                        onError={handleImageError}
                       />
 
                       <div className={`absolute inset-0 bg-gradient-to-r ${theme !== 'light' ? 'from-[var(--bg-card)] via-transparent' : 'from-white via-transparent'} to-transparent md:block hidden z-20`}></div>
@@ -1563,24 +1545,14 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       <td className="px-6 py-3">
                         <div className="w-12 h-12 rounded-lg border border-white/10 overflow-hidden bg-white/5 flex items-center justify-center relative">
                           {tableScreenshot ? (
-                            <>
-                              {!loadedImages.has(String(trade.id)) && !errorImages.has(String(trade.id)) && (
-                                <div className="absolute inset-0 animate-pulse bg-slate-800/20 flex items-center justify-center z-10">
-                                  <ImageIcon size={14} className="text-slate-700/50" />
-                                </div>
-                              )}
-                              {errorImages.has(String(trade.id)) ? (
-                                <ImageIcon size={14} className="text-slate-600" />
-                              ) : (
-                                <img
-                                  src={thumbMedium(tableScreenshot)}
-                                  onLoad={() => handleImageLoad(String(trade.id))}
-                                  onError={() => handleImageError(String(trade.id))}
-                                  loading="lazy"
-                                  className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%] opacity-60 scale-100' : loadedImages.has(String(trade.id)) ? 'opacity-60 scale-100' : 'opacity-0 scale-90'} group-hover:opacity-100 transition-transform duration-300`}
-                                />
-                              )}
-                            </>
+                            <HistoryShotImage
+                              id={String(trade.id)}
+                              src={thumbMedium(tableScreenshot)}
+                              failed={errorImages.has(String(trade.id))}
+                              copierThumb={isCopierThumb(trade)}
+                              variant="row"
+                              onError={handleImageError}
+                            />
                           ) : (
                             <Cpu size={16} className="text-slate-600" />
                           )}
