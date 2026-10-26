@@ -28,8 +28,8 @@ import {
 } from 'lucide-react';
 import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
-import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
-import type { TradovateConnectionUsageRow } from '../lib/tradovateConnectionUsageRows';
+import { buildTradovateConnectionUsageRows, type TradovateConnectionUsageInput, type TradovateConnectionUsageRow } from '../lib/tradovateConnectionUsageRows';
+import { useTradovateApiTelemetry } from './useTradovateApiTelemetry';
 import type { CopierAccountEligibility, CopierControllerStatus, CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import {
@@ -472,9 +472,10 @@ interface Props {
   runtimeStatus?: CopierControllerStatus | null;
   runtimeAvailable?: boolean;
   riskConfigSupported?: boolean;
-  apiTelemetry?: TradovateApiTelemetrySnapshot;
-  /** Čerpání limitu Tradovate a stav session workeru po připojení; jen zobrazení. */
-  connectionUsage?: TradovateConnectionUsageRow[];
+  /** Tradovate připojení a čerpání limitu workerem pro panel API; jen zobrazení.
+   *  Telemetrii webu si panel odebírá sám, jen když je rozbalený. */
+  apiConnections?: TradovateConnectionUsageInput['connections'];
+  workerConnectionUsage?: TradovateConnectionUsageInput['workerUsage'];
   /** Atomicky vybere čistou skupinu, provede reconciliation a ARM LIVE. */
   onSwitchAndArm?: (group: CopyGroupConfig) => Promise<void> | void;
   onArmLive?: () => Promise<void> | void;
@@ -833,8 +834,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   runtimeStatus = null,
   runtimeAvailable = false,
   riskConfigSupported = false,
-  apiTelemetry,
-  connectionUsage = [],
+  apiConnections = EMPTY_API_CONNECTIONS,
+  workerConnectionUsage,
   onSwitchAndArm,
   onArmLive,
   onDisarm,
@@ -2551,8 +2552,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           dataActive={anyLive}
           apiReady={runtimeAvailable}
           onHelp={() => setHelpOpen(true)}
-          telemetry={apiTelemetry}
-          connectionUsage={connectionUsage}
+          connections={apiConnections}
+          workerUsage={workerConnectionUsage}
         />
       ) : null}
 
@@ -2846,17 +2847,7 @@ const describeFailureCauses = (causes: Record<string, number>): string =>
     .map(([cause, count]) => `${FAILURE_CAUSE_LABEL[cause] ?? cause} ${count}`)
     .join(' · ') || '—';
 
-const EMPTY_USAGE_WINDOW = { requests: 0, failures: 0, rateLimited: 0, failureCauses: { network: 0, auth: 0, http4xx: 0, http5xx: 0 } };
-const EMPTY_API_TELEMETRY: TradovateApiTelemetrySnapshot = {
-  minute: { ...EMPTY_USAGE_WINDOW, failureCauses: { ...EMPTY_USAGE_WINDOW.failureCauses } },
-  hour: { ...EMPTY_USAGE_WINDOW, failureCauses: { ...EMPTY_USAGE_WINDOW.failureCauses } },
-  day: { ...EMPTY_USAGE_WINDOW, failureCauses: { ...EMPTY_USAGE_WINDOW.failureCauses } },
-  inFlight: 0,
-  lastStatus: null,
-  lastUpdatedAt: null,
-  rateLimitedUntil: null,
-  brokerCalls: {},
-};
+const EMPTY_API_CONNECTIONS: TradovateConnectionUsageInput['connections'] = [];
 
 const usageTone = (level: TradovateConnectionUsageRow['level']) => level === 'over' ? 'text-rose-500' : level === 'warn' ? 'text-amber-500' : 'text-emerald-500';
 const formatRemaining = (ms: number) => ms >= 60_000 ? `${Math.ceil(ms / 60_000)} min` : `${Math.ceil(ms / 1_000)} s`;
@@ -2878,13 +2869,14 @@ export const describeConnectionSession = (row: TradovateConnectionUsageRow): { t
   return { text: `bez streamu (${session.phase}${timeouts})${closeText}`, tone: 'text-amber-500' };
 };
 
-const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry = EMPTY_API_TELEMETRY, connectionUsage = [] }: { open: boolean; onToggle: () => void; dataActive: boolean; apiReady: boolean; onHelp: () => void; telemetry?: TradovateApiTelemetrySnapshot; connectionUsage?: TradovateConnectionUsageRow[] }) => {
-  const rows = [
-    { label: 'Za minutu', usage: telemetry.minute },
-    { label: 'Za hodinu', usage: telemetry.hour },
-    { label: 'Za 24 hodin', usage: telemetry.day },
-  ];
-  return (
+type LivePnlPanelData = {
+  dataActive: boolean;
+  apiReady: boolean;
+  connections: TradovateConnectionUsageInput['connections'];
+  workerUsage?: TradovateConnectionUsageInput['workerUsage'];
+};
+
+const LivePnlPanel = ({ open, onToggle, onHelp, ...data }: LivePnlPanelData & { open: boolean; onToggle: () => void; onHelp: () => void }) => (
   <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
     <header className="flex items-center justify-between px-5 lg:px-6 py-4">
       <h3 className="font-black text-[var(--text-primary)]">Diagnostika dat a API</h3>
@@ -2898,7 +2890,25 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
       </div>
     </header>
 
-    {open && (
+    {/* Telemetrii odebírá jen rozbalený panel — sbalený se požadavky nepřekresluje. */}
+    {open && <LivePnlPanelBody {...data} />}
+  </section>
+);
+
+export const LivePnlPanelBody = ({ dataActive, apiReady, connections, workerUsage }: LivePnlPanelData) => {
+  const telemetry = useTradovateApiTelemetry();
+  const connectionUsage = useMemo(() => buildTradovateConnectionUsageRows({
+    connections,
+    brokerCalls: telemetry.brokerCalls,
+    workerUsage,
+    now: Date.now(),
+  }), [connections, telemetry, workerUsage]);
+  const rows = [
+    { label: 'Za minutu', usage: telemetry.minute },
+    { label: 'Za hodinu', usage: telemetry.hour },
+    { label: 'Za 24 hodin', usage: telemetry.day },
+  ];
+  return (
       <div className="grid lg:grid-cols-[minmax(0,240px)_1fr] gap-6 px-5 lg:px-6 pb-6">
         <div className="lg:border-r lg:border-[var(--border-subtle)] lg:pr-6">
           <div className="flex items-center gap-2.5 mb-1.5">
@@ -2964,8 +2974,6 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
           </p>
         </div>
       </div>
-    )}
-  </section>
   );
 };
 

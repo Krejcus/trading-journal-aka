@@ -74,7 +74,6 @@ import {
   tradovateCopyTradeSnapshot,
 } from '../lib/tradovateCopyTradeBridge';
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
-import { buildTradovateConnectionUsageRows } from '../lib/tradovateConnectionUsageRows';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import {
   createCopyTradeAccountLabelResolver,
@@ -571,14 +570,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   ), [agentStatus, agentStatusFresh, agentTransport, live.connectionData]);
   // Pozice a aktivní příkazy účtů kopírky přednostně z heartbeatu workeru
   // (stream Tradovate, každou sekundu); REST přes Vercel zůstává zálohou.
-  // Skutečné čerpání limitu Tradovate na login: server (tato aplikace) +
-  // worker. Jen zobrazení; heartbeat starší než pár sekund je stejně jen orientační.
-  const connectionUsageRows = useMemo(() => buildTradovateConnectionUsageRows({
-    connections: live.status?.connections ?? [],
-    brokerCalls: live.apiTelemetry.brokerCalls,
-    workerUsage: agentStatus?.connectionUsage,
-    now: Date.now(),
-  }), [live.status?.connections, live.apiTelemetry, agentStatus?.connectionUsage]);
   const liveData = useMemo(
     () => overlayWorkerExposure(live.data, agentStatus, agentStatusObservedAt),
     [live.data, agentStatus, agentStatusObservedAt],
@@ -1450,8 +1441,10 @@ acceptAgentStatus((await executeAgent({
               tradeFeeRates={tradeFeeRates}
               onRefreshOrders={async () => { await live.refreshData(); }}
               onAccount={account => setSelectedAccountId(account.id)}
-              apiTelemetry={live.apiTelemetry}
-              connectionUsage={connectionUsageRows}
+              // Čerpání limitu Tradovate na login (server + worker) si panel API
+              // počítá sám z vlastní telemetrie; jen zobrazení.
+              apiConnections={live.status?.connections}
+              workerConnectionUsage={agentStatus?.connectionUsage}
               commandAdapter={commandAdapter}
               runtimeStatus={agentStatus?.controller ?? null}
               runtimeAvailable={runtimeAvailable}

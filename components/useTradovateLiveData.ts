@@ -2,7 +2,7 @@ import { perfMark } from '../lib/perfTrace';
 import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { createTradovateIntentPrefetch } from '../lib/tradovateIntentPrefetch';
 import { consumeTradovateReads } from '../lib/tradovateReadCoordinator';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
 import type { TradovateAccountProfile, TradovateAccountProfilesResult } from '../lib/tradovateAccountProfileTypes';
 import type { Account } from '../types';
@@ -41,12 +41,7 @@ import {
   writeTradovateConnectionHint,
   writeTradovateConnectionShell,
 } from '../lib/tradovateLiveConnectionCache';
-import {
-  getTradovateApiTelemetrySnapshot,
-  refreshTradovateApiTelemetry,
-  subscribeTradovateApiTelemetry,
-  recordTradovateBrokerCalls,
-} from '../lib/tradovateApiTelemetry';
+import { recordTradovateBrokerCalls } from '../lib/tradovateApiTelemetry';
 import { planTradovateJournalAccountLinks } from '../lib/tradovateJournalAccountRegistry';
 import {
   buildMissingTradovateOnboardingProfileInputs,
@@ -190,17 +185,6 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   accounts: readonly Account[] | null;
   onAccountsChanged: (accounts: Account[]) => void;
 }, enabled = true) {
-  const apiTelemetry = useSyncExternalStore(
-    subscribeTradovateApiTelemetry,
-    getTradovateApiTelemetrySnapshot,
-    getTradovateApiTelemetrySnapshot,
-  );
-  useEffect(() => {
-    if (!userId || !enabled) return;
-    refreshTradovateApiTelemetry();
-    const timer = window.setInterval(refreshTradovateApiTelemetry, 30_000);
-    return () => window.clearInterval(timer);
-  }, [enabled, userId]);
   const persisted = useMemo(
     () => readTradovateConnectionShell(userId, typeof window === 'undefined' ? undefined : window.sessionStorage),
     [userId],
@@ -1104,7 +1088,6 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     profilesLoaded,
     historySnapshots,
     historyError,
-    apiTelemetry,
     dataEnrichmentPending,
     dataEnrichmentByConnection,
     busy,
