@@ -62,6 +62,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   byla 1. 9. po samostatném souhlasu aktivována v produkci a nainstalována jako
   build 3. Scope zůstává pevně `copier.status.read`; companion nesmí získat
   broker write, execution příkazy ani řízení workeru.
+- **Data TradingView jen pro obrazovku** (Filip 26. 10. 2026) — svíčky
+  a P&L zobrazené člověku smí stát na ceně z TradingView; risk brány, day
+  lock, limity ztráty, kopírka ani jiná automatika nikdy (licence TV je pro
+  zobrazení). Rizikové rozhodování dál jen z brokera.
 
 ## Otevřené otázky
 
@@ -278,6 +282,41 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       „Záloha Supabase“). Oprava v kódu + test → INV + `copier-design-critic`.
 
 ## Deník
+
+### 2026-10-26 ráno — Svíčky/realtime P&L: krok 1 změřen, bod D ověřen (Claude)
+
+- **Předávka** `docs/reviews/candles-realtime-pnl-20261026.md` sloučena do
+  main (`1b5be1e3`); výsledky doplněny v bodech 6–8. Práce ve větvi
+  `claude/chart-smoothness-20261026` (worktree
+  `~/alphatrade-worktrees/chart-smoothness` — v Documents souběžně pracuje
+  jiná session).
+- **Rozhodnutí Filipa**: TV cena smí počítat P&L zobrazené na obrazovce,
+  nikdy risk/day lock/limity/kopírku (zapsáno v Klíčových rozhodnutích
+  a v hlavičce `lib/tradingViewBars.ts`); v TV má realtime CME data.
+- **Krok 1** — `scripts/market-data/tvPriceFeedProbe.ts` (jen čtení přes
+  CDP, testy): TV jede realtime (`quotes().update_mode = streaming`,
+  svíčka = aktuální minuta), `MNQ1!` = `MNQZ2026` (Tradovate `MNQZ6`),
+  přepnutí TV na další kontrakt 14. 12. 22:00 UTC. Trvalé CDP čtení p50
+  1,3 ms; cena v noci 1,5×/s, ticho až ~3 s; po 250 ms ~1,5 zprávy/s se
+  zpožděním ~120 ms. `lp_time` je jen minuta. Ve špičce USA změřit znovu.
+- **Bod D** — většina bodů předávky je podle měření levná nebo už vyřešená
+  (checkpoint backtestu 0,04–0,3 ms, analytika ořezaná, struktura
+  přírůstková, blur na telefonu vypnutý, graf při zoomu/posunu 60 fps).
+  Skutečné náklady: **LIVE** 4,3 commitu/s a ~95 ms renderu za sekundu
+  (dev) — sekundový tik `freshnessNow` + kaskády po pollu relaye; nejde
+  jen zředit, protože `LiveCopyTradeOverview` čte `Date.now()` v renderu
+  (blokace ON při zámku dne) → samostatný krok s `copier-design-critic`.
+  **Historie**: každý `onLoad` a každá pětice náhledů kopírky
+  přerenderovaly všechny karty → opraveno (`HistoryShotImage` s vlastním
+  stavem, slučování náhledů přes `lib/coalescedBuffer.ts`); 15 s scrollu
+  5,6 → 3,5 s renderu (dev). `code-reviewer`: bez blockerů („Ship“);
+  starý efekt navíc mohl ztratit už podepsané URL při zrušení běhu a při
+  opakované chybě náhledu se točit — obojí zavřeno. Další krok: memoizace
+  karet (nejdřív `handleImageError` přes `useCallback` + ref).
+- **Měření**: skrytý panel prohlížeče škrtí rAF i časovače → měřit jen při
+  viditelném panelu. JS Self-Profiling API jde zapnout dočasnou hlavičkou
+  `Document-Policy: js-profiling` ve `vite.config.ts` (jen worktree,
+  nikdy necommitovat).
 
 ### 2026-10-26 ráno — Noční záloha Supabase přes launchd (Claude)
 
