@@ -2,8 +2,10 @@
  * Předběžné 1m svíčky z TradingView Desktop pro hodnocení dnešních obchodů.
  * Databento historical je zpřístupní až ~24 h po trhu; do té doby graf
  * hodnocení kreslí svíčky, které worker přečetl z grafu TradingView po
- * uzavření obchodu. Jen pro zobrazení — nikdy nevstupují do copieru ani do
- * výpočtů P&L (non-display licence dat TradingView).
+ * uzavření obchodu. Jen pro zobrazení člověku na obrazovce (svíčky a P&L
+ * zobrazené na obrazovce — rozhodnutí Filipa 26. 10. 2026); nikdy risk
+ * brány, day lock, limity ztráty, kopírka ani jiná automatika (licence dat
+ * TradingView je jen pro zobrazení).
  *
  * Svíčka = [čas otevření v s (UTC), open, high, low, close, volume].
  */
