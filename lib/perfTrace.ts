@@ -43,6 +43,29 @@ const record = (entry: PerfEntry) => {
     send('origin:utc-ms-of-day', Math.round(performance.timeOrigin % 86_400_000));
   }
   send(entry.kind === 'dur' ? `${entry.name}:dur` : entry.name, entry.ms);
+  schedulePersist();
+};
+
+/**
+ * Nativní appka si značky posledních startů drží i v localStorage
+ * (`at:perf:runs`, nejvýš 12 běhů): měření jde stáhnout z kontejneru appky
+ * bezdrátově přes `devicectl device copy from`, bez kabelu pro syslog.
+ */
+export const PERF_RUNS_KEY = 'at:perf:runs';
+const MAX_PERSISTED_RUNS = 12;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+const schedulePersist = () => {
+  if (!isNativeBuild || typeof localStorage === 'undefined' || persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    try {
+      const origin = Math.round(performance.timeOrigin);
+      const previous = JSON.parse(localStorage.getItem(PERF_RUNS_KEY) ?? '[]') as Array<{ origin: number }>;
+      const runs = [...(Array.isArray(previous) ? previous : []).filter(run => run?.origin !== origin),
+        { origin, entries: window.__atPerf ?? [] }].slice(-MAX_PERSISTED_RUNS);
+      localStorage.setItem(PERF_RUNS_KEY, JSON.stringify(runs));
+    } catch { /* plné nebo blokované úložiště: měření jen do syslogu */ }
+  }, 1_500);
 };
 
 export const perfSlug = (value: string): string => value.toLowerCase()

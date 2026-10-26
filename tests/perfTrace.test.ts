@@ -33,4 +33,19 @@ describe('perfTrace (měření na iPhonu)', () => {
       { name: 'srv:copier-relay:resolve:dur', ms: 80 },
     ]);
   });
+  it('nativní appka uloží značky běhu do localStorage (stažení bez kabelu)', async () => {
+    vi.useFakeTimers();
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value); } });
+    try {
+      const { perfMark, PERF_RUNS_KEY } = await import('../lib/perfTrace');
+      perfMark('boot:dashboard-paint');
+      perfMark('boot:refresh-done');
+      vi.advanceTimersByTime(1_600);
+      const runs = JSON.parse(store.get(PERF_RUNS_KEY) ?? '[]');
+      expect(runs).toHaveLength(1);
+      expect(runs[0].entries.map((entry: { name: string }) => entry.name)).toEqual(expect.arrayContaining(['boot:dashboard-paint', 'boot:refresh-done']));
+    } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
+  });
 });
+
