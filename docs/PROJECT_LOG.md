@@ -263,11 +263,61 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       večer, PASS (zápis 25. 10. „Záloha Supabase“, `BACKUP_RESTORE.md` →
       „Záznam ověření“). Další zkušební obnova jednou měsíčně a po velké
       změně schématu.
+- [ ] **Závěrečné měření iPhonu po delta syncu** — web je změřený
+      (`docs/reviews/perf-final-phase12-20261026.md`), telefon byl nedostupný.
+      Nový iOS build je v `~/alphatrade-build/ios-dd/…/App.app`; měřit
+      `scripts/ios/perf-measure.sh` až po několika zahřívacích spuštěních.
+- [ ] **Delta sync — další kroky**: lehčí tvar základu (dnes ~7 MB s kreslením
+      a analytikou), `journal-import` do `arn1` po sledování zátěže DB, kontrola
+      `pg_stat_statements` po odebrání `trades` z Realtime.
 - [ ] **Relay se zablokuje na checkpointu s neznámým `delivery_id`** —
       copier-core, zatím jen obejito v runbooku obnovy (zápis 25. 10.
       „Záloha Supabase“). Oprava v kódu + test → INV + `copier-design-critic`.
 
 ## Deník
+
+### 2026-10-25/26 noc — Fáze 1–2: delta sync obchodů, relay u DB, opravy (Claude, NASAZENO)
+
+- **Návrh**: `docs/reviews/sync-phases-1-2-design-20261025.md`; **výsledky**:
+  `docs/reviews/perf-final-phase12-20261026.md`. Souhlas Filipa s produkčními
+  kroky („Ano, vše“) — klasifikátor auto režimu bez něj push/migraci blokoval.
+- **Web po změně** (medián, produkce): dashboard čerstvá data 5,9 → **0,58 s**,
+  síť utichne 15,4 → 2,4 s, požadavků při startu 228 → 32; historie 6,6 →
+  0,39 s; LIVE první stav kopírky 1,6 → **0,38 s**, relay 0,76 → 0,19 s
+  (server 627 → ~100 ms); deník dne v klidu 45 → 0 požadavků/min. Stará
+  a nová cesta dávají na dashboardu stejná čísla (ověřeno).
+- **Relay v `arn1`** (`5cc29867`, samostatný commit): copier-relay,
+  copier-device, copier-journal, status, journal-sources, account-profiles.
+  `pilot-lease` a `send-alerts` volají Tradovate → zůstávají v `iad1`;
+  `journal-import` zatím taky (zátěž DB). Test `tests/vercelFunctionRegions.test.ts`
+  hlídá, že žádná další `arn1` funkce tranzitivně nevolá Tradovate
+  (copier-relay na allowlistu kvůli Live Activity tiku jen v pruhu background).
+  `copier-design-critic`: OPRAVIT PŘED COMMITEM → vyřešeno; nasazeno v neděli
+  21:40 za DISARMED + flat, worker bez chyb. Zbývá Filipův ruční test DISARM
+  z telefonu za vypnuté kopírky (agenti ho dělat nesmí).
+- **Delta sync** (`eb38c899`, `57f9f951`): migrace `20261025220000` —
+  `sync_changes` + triggery na všech zdrojích složeného obchodu (holá změna
+  revize projekce a heartbeat ledgeru se nelogují), `sync_trade_changes_v1`
+  (kurzor = xmin snapshotu, reset při epoše/horizontu/obnově DB, epizoda →
+  obchod), `get_dashboard_meta_v1`, `sync_prune_v1` (cron, 3 dny). Klient:
+  `services/tradeSyncEngine.ts` pod `storageService.getTrades()` (základ
+  v IndexedDB + paměti, dočtení jen změněných ID stejnou hydratací, každá
+  chyba = úplné čtení, starý základ ověřen na pozadí); výsledky všech čtení
+  jdou jednomu odběrateli v App (nic se „nespotřebuje“ mimo UI); Realtime
+  odebírá `sync_changes` a dohání po reconnectu. `trades` z Realtime
+  publikace odebrány (`20261025230000`). Po obnově DB zvednout
+  `sync_meta.epoch` (doplněno do `BACKUP_RESTORE.md`).
+- **Opravy fáze 1**: nekonečný upsert kreseb (`ShortPosition` — pořadí klíčů
+  jsonb, každých 1,7 s), falešný konflikt `needsReview` (spoušť retry bouře
+  25. 10.), backtest outbox (P0002, backoff, pauza), journal sync 60 s,
+  `send-alerts` časové okno místo `limit(500)`, `immutable` assety, blur
+  vypnutý na dotykových zařízeních (zámek Face ID má plné pozadí).
+- **Review**: `code-reviewer` 2 blockery (bouře záznamů z heartbeatu
+  ledgeru; delta spotřebovaná mimo UI) + 8 should-fix → opraveno před
+  nasazením; testy 5545 zelené, PGlite SQL 8/8.
+- **iPhone**: build z `57f9f951` hotový, závěrečné měření čeká na telefon
+  (první pokus neplatný — ztráta spojení `devicectl`, studený WebKit po
+  reinstalaci). Telefon teď běží na buildu z `eb38c899`.
 
 ### 2026-10-25 večer — Fáze 0: výchozí měření webu (Claude)
 

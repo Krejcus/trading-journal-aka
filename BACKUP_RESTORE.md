@@ -246,6 +246,9 @@ v konzistentním stavu; projekt je během obnovy nedostupný a ztratí se vše o
 `created_utc` v `manifest.txt`) — doplnit postupem A. Před obnovou projít
 „Kopírka a obnova databáze“ kroky 0–2, po obnově kroky 3–8 v tomto pořadí,
 dřív než se cokoli připojí (projekt je online hned po obnově).
+Hned po obnově taky zvednout epochu delta syncu, ať si všechny appky
+přečtou obchody znovu celé (jejich kurzor může ukazovat za obnovený stav):
+`update public.sync_meta set epoch = epoch + 1, updated_at = now() where id = 1;`
 
 **C. Projekt ztracený nebo smazaný** — nový projekt v `eu-north-1`
 s Postgres ≥ `server_major` z `manifest.txt`. Postup vychází z dokumentace
@@ -272,10 +275,12 @@ ověřit a doplnit sem. Vždy s „Kopírka a obnova databáze“.
 5. Storage: z archivu jen řádky `storage.buckets`, soubory nahrát ze
    `storage-mirror/<bucket>` přes `npx supabase storage cp -r … ss:///<bucket> --linked`
    (řádky `storage.objects` založí upload).
-6. Mimo DB: `supabase link`, Auth nastavení, deploy Edge funkcí (`mcp-server`
+6. Epocha delta syncu: `update public.sync_meta set epoch = epoch + 1 where id = 1;`
+   (appky pak obchody přečtou celé, starý kurzor neplatí).
+7. Mimo DB: `supabase link`, Auth nastavení, deploy Edge funkcí (`mcp-server`
    s `--no-verify-jwt`), function secrets, Vercel env (`VITE_SUPABASE_URL`,
    klíče), nový build iOS appky a extensionu.
-7. Všichni se přihlásí znovu (nový JWT secret); Tradovate připojit znovu.
+8. Všichni se přihlásí znovu (nový JWT secret); Tradovate připojit znovu.
 
 ### Kopírka a obnova databáze
 
