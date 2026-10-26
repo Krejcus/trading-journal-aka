@@ -263,10 +263,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       večer, PASS (zápis 25. 10. „Záloha Supabase“, `BACKUP_RESTORE.md` →
       „Záznam ověření“). Další zkušební obnova jednou měsíčně a po velké
       změně schématu.
-- [ ] **Závěrečné měření iPhonu po delta syncu** — web je změřený
-      (`docs/reviews/perf-final-phase12-20261026.md`), telefon byl nedostupný.
-      Nový iOS build je v `~/alphatrade-build/ios-dd/…/App.app`; měřit
-      `scripts/ios/perf-measure.sh` až po několika zahřívacích spuštěních.
+- [x] **Závěrečné měření iPhonu po delta syncu** — hotovo 26. 10. ráno
+      (A/B bez kabelu, `docs/reviews/perf-final-phase12-20261026.md`):
+      dashboard 9,5 → 1,2 s, zaseknutí zhruba poloviční.
 - [ ] **Delta sync — další kroky**: lehčí tvar základu (dnes ~7 MB s kreslením
       a analytikou), `journal-import` do `arn1` po sledování zátěže DB, kontrola
       `pg_stat_statements` po odebrání `trades` z Realtime.
@@ -315,9 +314,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Review**: `code-reviewer` 2 blockery (bouře záznamů z heartbeatu
   ledgeru; delta spotřebovaná mimo UI) + 8 should-fix → opraveno před
   nasazením; testy 5545 zelené, PGlite SQL 8/8.
-- **iPhone**: build z `57f9f951` hotový, závěrečné měření čeká na telefon
-  (první pokus neplatný — ztráta spojení `devicectl`, studený WebKit po
-  reinstalaci). Telefon teď běží na buildu z `eb38c899`.
+- **iPhone** (26. 10. ráno, A/B na stejném telefonu bez kabelu — značky
+  z localStorage appky přes `devicectl copy from`, `c08a42c6`): dashboard
+  čerstvá data 9,5 → **1,2 s**, z cache 1,30 → 0,64 s, zaseknutí na start
+  16–18× (4–13 s) → 10–16× (1,8–3,3 s), první stav kopírky 2,05 → 1,85 s.
+  Telefon běží na finálním buildu z `c08a42c6`. Syslog (`perf-measure.sh`)
+  potřebuje USB kabel; bez něj `scripts/ios/perf-report-by-pid.mjs` nepomůže.
 
 ### 2026-10-25 večer — Fáze 0: výchozí měření webu (Claude)
 

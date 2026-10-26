@@ -64,19 +64,45 @@ ověřeno vynuceným během staré cesty 26. 10. 00:05. Realtime ověřen
 koncem na konec: vložený řádek do `sync_changes` spustil v otevřené appce
 deltu a dočtení obchodu.
 
-## iPhone
+## iPhone (26. 10. 06:26–06:50)
 
-Čeká na Filipa (telefon byl při měření nedostupný). Postup:
-`./scripts/ios/perf-measure.sh <App.app> final-<datum> 3` s několika
-zahřívacími spuštěními navíc — čistá instalace maže cache WebKitu i základ
-syncu, první start pak dělá úplné čtení (na iPhonu 22,9 s) a první běhy
-jsou studené. Pokus 25. 10. 22:01 byl neplatný: `devicectl` ztratil spojení
-(`NWError 60`) a zachytil jen 5 z 7 spuštění.
+iPhone 13 Pro Max, Debug build, Wi-Fi. Syslog jde jen přes USB kabel, takže
+appka si značky ukládá do localStorage (`at:perf:runs`, `c08a42c6`) a ty se
+stáhly z kontejneru appky bezdrátově (`devicectl device copy from`). Každý
+build: čistá instalace, 1 + 3 zahřívací starty (úplné čtení základu na
+iPhonu 22,9 s jednorázově), pak 3× Dashboard + 3× LIVE.
+
+Poctivé A/B ve stejný den na stejném telefonu — **A** = `main` těsně před
+změnami (`1115d799`, jen s ukládáním značek), **B** = finální build:
+
+| Co | A: před změnami | B: po změnách |
+|---|---|---|
+| **Dashboard — čerstvá data** | **9,5 s** (9,4–11,0) | **1,2 s** (1,05–1,49) |
+| Dashboard z cache | 1,30 s | 0,64 s |
+| Zaseknutí > 100 ms na start (dashboard) | 16–18×, celkem 4,1–13,0 s | 10–16×, celkem 1,8–3,3 s |
+| LIVE — první stav kopírky | 2,05 s | 1,85 s |
+| LIVE — odhalení stránky | 2,28 s | 2,45 s |
+| relay kopírky | 0,23 s | 0,25 s |
+
+Relay vychází stejně, protože přesun do `arn1` je na serveru a platil pro
+oba buildy (výchozí měření ze 17. 10., ještě `iad1`: 0,79 s). Proti
+výchozímu stavu z fáze 0 (build ze 17. 10.): dashboard 8,2 → 1,2 s, první
+stav kopírky 2,85 → 1,85 s. Zaseknutí při startu je víc než u buildu ze
+17. 10. (1–3×), ale to je od jiných změn appky za poslední týden — build A
+bez delta syncu jich má ještě víc; delta sync je snížil zhruba na polovinu.
+Zbytek je vykreslování dashboardu po startu (kandidát na další krok).
+
+Při prvním bezdrátovém měření se v DB objevily zápisy šesti backtest
+obchodů (05:28–05:31 UTC); během měření A ani při dalších startech se
+neopakovaly — nejde o smyčku nového kódu (pravděpodobně souběžná práce
+v appce).
 
 ## Vědomě neudělané / další krok
 
 - Tvar základu je „těžký“ (`getTrades` mapování vč. kreseb a analytiky,
-  ~7 MB); lehčí základ by zrychlil hlavně telefon — změnit až po měření iPhonu.
+  ~7 MB); lehčí základ by zrychlil hlavně telefon.
+- Zaseknutí při startu na iPhonu (10–16× po >100 ms) — vykreslení dashboardu
+  (Monte Carlo, grafy) po načtení; samostatný krok.
 - `row_version` a CAS na řádku pro zápisy (review opravy 5–6) — mimo fázi 2.
 - Přesun `journal-import` do `arn1` až po sledování zátěže DB (oponentura).
 - Zátěž DB po odebrání `trades` z Realtime ověřit za pár dní v
