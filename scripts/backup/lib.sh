@@ -1,7 +1,8 @@
 # Společné funkce pro scripts/backup-supabase.sh a scripts/restore-test-supabase.sh.
 # Psáno pro /bin/bash 3.2 (macOS bez Homebrew): žádná asociativní pole ani mapfile.
 
-BACKUP_ROOT="${BACKUP_ROOT:-$HOME/Documents/AlphaTrade-backups/supabase}"
+# Mimo ~/Documents: noční úloha z launchd tam nesmí číst (macOS TCC).
+BACKUP_ROOT="${BACKUP_ROOT:-$HOME/AlphaTrade-backups/supabase}"
 MIN_FREE_GB="${BACKUP_MIN_FREE_GB:-10}"
 KEYCHAIN_SERVICE="${BACKUP_KEYCHAIN_SERVICE:-alphatrade-supabase-db}"
 
@@ -74,6 +75,12 @@ EOF
 }
 
 free_gb() { df -Pk "$1" | awk 'NR==2 { printf "%d", $4 / 1048576 }'; }
+
+# Obchodní doba Po–Pá 8:00–22:30 pražského času: pg_dump by zatížil DB, přes kterou jede kopírka.
+trading_time() {
+  local minute=$((10#$(TZ=Europe/Prague date +%H) * 60 + 10#$(TZ=Europe/Prague date +%M)))
+  [ "$(TZ=Europe/Prague date +%u)" -le 5 ] && [ "$minute" -ge 480 ] && [ "$minute" -lt 1350 ]
+}
 
 # Nejnovější kompletní záloha (adresáře YYYYMMDDTHHMMSSZ, rozpracované mají .partial).
 latest_backup() { ls -d "$BACKUP_ROOT"/[0-9]*T[0-9]*Z 2>/dev/null | sort | tail -1 || true; }

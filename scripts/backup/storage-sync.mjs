@@ -6,6 +6,8 @@
 //
 // - stahuje jen objekty, které v zrcadle chybí, mají jinou velikost nebo jiné MD5 než eTag;
 // - ověřuje velikost a MD5 proti eTagu (u multipart uploadu jen velikost);
+// - objekt přepsaný po výpisu (worker průběžně přepisuje copier-snapshots/…/tv-live) uloží
+//   v novější verzi, jen když obsah souhlasí s ETagem vlastní odpovědi; není to chyba;
 // - ze zrcadla nikdy nemaže (smazaný objekt v Storage zůstane zálohovaný);
 // - klíč service_role si bere z Supabase CLI do paměti, nikam ho nezapisuje.
 import { createHash } from 'node:crypto';
@@ -62,15 +64,22 @@ const download = async (headers, object, target) => {
       const response = await fetch(url, { headers, signal: AbortSignal.timeout(120_000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = Buffer.from(await response.arrayBuffer());
-      if (object.size != null && body.length !== object.size) throw new Error(`velikost ${body.length} ≠ ${object.size}`);
+      const bodyMd5 = createHash('md5').update(body).digest('hex');
       const etag = md5Etag(object);
-      if (etag && createHash('md5').update(body).digest('hex') !== etag) {
-        throw new Error('MD5 nesouhlasí s eTagem');
+      const sizeOk = object.size == null || body.length === object.size;
+      let changed = false;
+      if (!sizeOk || (etag && bodyMd5 !== etag)) {
+        // Výpis je z doby před pg_dump. Komprimovaná odpověď nese slabý ETag W/"<md5>".
+        const responseEtag = md5Etag({ etag: String(response.headers.get('etag') ?? '').replace(/^W\//, '') });
+        if (!responseEtag || responseEtag !== bodyMd5 || responseEtag === etag) {
+          throw new Error(sizeOk ? 'MD5 nesouhlasí s eTagem' : `velikost ${body.length} ≠ ${object.size}`);
+        }
+        changed = true;
       }
       await mkdir(dirname(target), { recursive: true, mode: 0o700 });
       await writeFile(`${target}.partial`, body, { mode: 0o600 });
       await rename(`${target}.partial`, target);
-      return;
+      return { changed, size: body.length };
     } catch (error) {
       await rm(`${target}.partial`, { force: true });
       if (attempt >= 3) throw error;
@@ -83,6 +92,7 @@ const objects = JSON.parse(await readFile(args.objects, 'utf8'));
 const headers = readKey();
 const rows = [];
 const failures = [];
+const changedDuringBackup = [];
 let downloaded = 0;
 let queue = 0;
 const worker = async () => {
@@ -92,12 +102,15 @@ const worker = async () => {
       const target = targetPath(object.bucket, object.name);
       const have = await sizeOf(target);
       let hashes = have >= 0 && (object.size == null || have === object.size) ? await fileHashes(target) : null;
+      let size = object.size;
       if (!hashes || (md5Etag(object) && hashes.md5 !== md5Etag(object))) {
-        await download(headers, object, target);
+        const result = await download(headers, object, target);
         downloaded += 1;
+        size = result.size;
+        if (result.changed) changedDuringBackup.push(`${object.bucket}/${object.name}`);
         hashes = await fileHashes(target);
       }
-      rows.push([object.bucket, object.name, object.size, hashes.sha256]);
+      rows.push([object.bucket, object.name, size, hashes.sha256]);
     } catch (error) {
       failures.push(`${object.bucket}/${object.name}: ${error.message}`);
     }
@@ -109,7 +122,10 @@ rows.sort((a, b) => `${a[0]}/${a[1]}`.localeCompare(`${b[0]}/${b[1]}`));
 const tsvField = value => String(value).replace(/[\t\n\\]/g, c => ({ '\t': '\\t', '\n': '\\n', '\\': '\\\\' })[c]);
 await writeFile(args.out, ['bucket\tname\tsize\tsha256', ...rows.map(row => row.map(tsvField).join('\t'))].join('\n') + '\n', { mode: 0o600 });
 const bytes = rows.reduce((sum, row) => sum + Number(row[2] ?? 0), 0);
-console.log(`Storage: ${rows.length}/${objects.length} objektů v zrcadle (${(bytes / 1048576).toFixed(0)} MB), staženo nově ${downloaded}, chyb ${failures.length}`);
+// stdout je jediný řádek do manifestu zálohy, podrobnosti jdou na stderr (backup.log).
+for (const name of changedDuringBackup.slice(0, 20)) console.error(`  změněno během zálohy, uložena novější verze: ${name}`);
+console.log(`Storage: ${rows.length}/${objects.length} objektů v zrcadle (${(bytes / 1048576).toFixed(0)} MB), staženo nově ${downloaded}`
+  + `${changedDuringBackup.length ? ` (z toho ${changedDuringBackup.length} změněno během zálohy)` : ''}, chyb ${failures.length}`);
 if (failures.length) {
   for (const failure of failures.slice(0, 20)) console.error(`  ${failure}`);
   process.exit(1);

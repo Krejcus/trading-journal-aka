@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Logická záloha produkční Supabase do ~/Documents/AlphaTrade-backups/supabase/<UTC čas>/.
+# Logická záloha produkční Supabase do ~/AlphaTrade-backups/supabase/<UTC čas>/.
+# Každou noc ji spouští launchd (scripts/backup/install-nightly.sh).
 #
 #   ./scripts/backup-supabase.sh            plná záloha (DB + soubory ze Storage + git bundle)
 #   ./scripts/backup-supabase.sh --check    jen ověří nástroje, heslo, spojení a místo na disku
@@ -82,9 +83,8 @@ FREE_GB="$(free_gb "$BACKUP_ROOT")"
 log "Server PostgreSQL $SERVER_MAJOR ($PGHOST), nástroje $PG_MAJOR z $PG"
 log "Volné místo ${FREE_GB} GB, záloha odhadem ${NEED_GB} GB, minimum po záloze ${MIN_FREE_GB} GB"
 [ $((FREE_GB - NEED_GB)) -ge "$MIN_FREE_GB" ] || die "Málo místa na disku (worker kopírky zapisuje na stejný disk). Uvolni místo nebo sniž --keep."
-MINUTE_OF_DAY=$((10#$(TZ=Europe/Prague date +%H) * 60 + 10#$(TZ=Europe/Prague date +%M)))
 TRADING_TIME=0
-[ "$(TZ=Europe/Prague date +%u)" -le 5 ] && [ "$MINUTE_OF_DAY" -ge 480 ] && [ "$MINUTE_OF_DAY" -lt 1350 ] && TRADING_TIME=1
+trading_time && TRADING_TIME=1
 if [ "$CHECK" = 1 ]; then
   [ "$TRADING_TIME" = 0 ] || log "Pozor: teď je obchodní doba — ostrá záloha bude chtít --force."
   log "Kontrola OK — záloha by šla spustit."; exit 0
@@ -175,7 +175,9 @@ if [ "$STORAGE" = 1 ]; then
 fi
 
 # --- Git ----------------------------------------------------------------------
-REPO_HEAD="$(git -C "$REPO" rev-parse HEAD) ($(git -C "$REPO" rev-parse --abbrev-ref HEAD))"
+# Noční kopie skriptů (install-nightly.sh) není git repo: commit, ze kterého je nainstalovaná.
+REPO_HEAD="$(git -C "$REPO" rev-parse HEAD 2>/dev/null) ($(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null))" \
+  || REPO_HEAD="noční kopie skriptů z $(cat "$REPO/installed-from.txt" 2>/dev/null || echo '?')"
 if [ "$GIT" = 1 ]; then
   log "Git bundle všech větví…"
   git -C "$REPO" bundle create "$WORK/alphatrade-git.bundle" --all 2> "$TMP/git.log" || { cat "$TMP/git.log" >&2; die "git bundle selhal"; }

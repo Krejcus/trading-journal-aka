@@ -266,6 +266,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - [x] **Závěrečné měření iPhonu po delta syncu** — hotovo 26. 10. ráno
       (A/B bez kabelu, `docs/reviews/perf-final-phase12-20261026.md`):
       dashboard 9,5 → 1,2 s, zaseknutí zhruba poloviční.
+- [ ] **Místo na disku pro noční zálohu** — od 26. 10. běží noční záloha
+      Supabase (launchd, 3:30), ale při volnu pod 11 GB odmítne začít (pojistka
+      kvůli workeru). Uvolnit místo (staré worktree 15 GB, DerivedData ~1 GB),
+      pak zkontrolovat `~/AlphaTrade-backups/supabase/nightly-runs.log`.
 - [ ] **Delta sync — další kroky**: lehčí tvar základu (dnes ~7 MB s kreslením
       a analytikou), `journal-import` do `arn1` po sledování zátěže DB, kontrola
       `pg_stat_statements` po odebrání `trades` z Realtime.
@@ -274,6 +278,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       „Záloha Supabase“). Oprava v kódu + test → INV + `copier-design-critic`.
 
 ## Deník
+
+### 2026-10-26 ráno — Noční záloha Supabase přes launchd (Claude)
+
+- Úloha `com.alphatrade.supabase-backup`, denně 3:30; instalace
+  `scripts/backup/install-nightly.sh`, obal `scripts/backup/nightly.sh`,
+  postup v `BACKUP_RESTORE.md` → „Noční záloha (launchd)“.
+- **Proč kopie skriptů a přesun záloh**: launchd úloha nesmí číst
+  `~/Documents` (TCC „Operation not permitted“ — ověřeno zkušební úlohou;
+  Keychain funguje). Skripty a údaje o připojení se proto kopírují do
+  `~/Library/Application Support/AlphaTrade/supabase-backup/` a zálohy se
+  přesunuly do `~/AlphaTrade-backups/supabase` (stará cesta je odkaz). Full
+  Disk Access pro `/bin/bash` záměrně ne — byl by pro všechny skripty.
+  **Po změně skriptů zálohy znovu spustit instalaci.**
+- Noční běh `--no-git --keep 3` (+ poslední PASS obnova); v obchodní době
+  se přeskočí; selhání = upozornění v Centru oznámení, přehled běhů
+  `nightly-runs.log`. Disk je na hraně (volno 11,9 GB, záloha chce po sobě
+  ≥ 10 GB) — první, co noční záloha nahlásí, bude nejspíš málo místa.
+- Zkušební běhy přes launchd 26. 10. ráno: (1) PARTIAL — `tv-live/NQ.json`
+  se přepsal mezi výpisem objektů a stažením; `storage-sync.mjs` teď
+  přepsaný objekt přijme, když obsah souhlasí s ETagem vlastní odpovědi
+  (u brotli slabý `W/"md5"`), jinak dál chyba. (2) **OK** za 537 s (pg_dump
+  183 s, kontrola archivu 338 s při nízké prioritě), 1607/1607 souborů.
+- **Po testech volno 10,2 GB → noční běh odmítne začít, dokud se neuvolní
+  místo** (chce ≥ 11 GB před zálohou). Největší položka: `~/alphatrade-worktrees`
+  15 GB (staré worktree se `node_modules`).
 
 ### 2026-10-25/26 noc — Fáze 1–2: delta sync obchodů, relay u DB, opravy (Claude, NASAZENO)
 

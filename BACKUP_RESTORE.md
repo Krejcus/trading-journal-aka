@@ -92,7 +92,7 @@ s Filipem.
 | Vrstva | Co obsahuje | Kde a jak dlouho | Jak obnovit |
 |---|---|---|---|
 | Denní zálohy Supabase (plán Pro) | fyzická kopie celé DB | u Supabase, 7 dní; PITR vypnutý → ztráta až ~24 h | Dashboard → Database → Backups; jen celá DB, přepíše vše novější; nejde stáhnout |
-| Naše logická záloha | celá DB (`pg_dump -Fc`), role, schéma, soubory ze Storage, git bundle | `~/Documents/AlphaTrade-backups/supabase/<UTC čas>/`, posledních 5; soubory Storage ve sdíleném `storage-mirror/` | po tabulkách i celá, viz scénáře níže |
+| Naše logická záloha | celá DB (`pg_dump -Fc`), role, schéma, soubory ze Storage, git bundle (jen ruční běh) | `~/AlphaTrade-backups/supabase/<UTC čas>/` (stará cesta `~/Documents/AlphaTrade-backups/supabase` je odkaz sem); každou noc ve 3:30, drží poslední 3 + poslední zkušebně obnovenou; soubory Storage ve sdíleném `storage-mirror/` | po tabulkách i celá, viz scénáře níže |
 | Kód | všechny commitnuté větve | GitHub + `alphatrade-git.bundle` v každé záloze | `git clone alphatrade-git.bundle` |
 
 Ověřeno 25. 10. 2026: Supabase má 7 denních záloh (poslední 24. 10. 22:15 UTC),
@@ -156,6 +156,42 @@ denní zálohy); pro případ ztráty obojího občas zkopírovat poslední zál
 - Návratový kód: 0 = vše v pořádku; 1 = záloha selhala; 2 = databáze
   zálohovaná, ale soubory ze Storage ne celé.
 
+### Noční záloha (launchd, od 26. 10. 2026)
+
+Úloha `com.alphatrade.supabase-backup` spouští zálohu každý den ve 3:30
+místního času (Mac je v noci vzhůru kvůli workeru kopírky, `caffeinate`).
+
+```bash
+./scripts/backup/install-nightly.sh              # instalace, nebo aktualizace po změně skriptů zálohy
+./scripts/backup/install-nightly.sh --run-now    # navíc hned jeden běh přes launchd (mimo obchodní dobu)
+./scripts/backup/install-nightly.sh --uninstall  # odebrat (zálohy zůstanou)
+```
+
+- **Proč kopie skriptů**: launchd úloha nesmí číst `~/Documents` (macOS TCC,
+  „Operation not permitted“, ověřeno 26. 10.). Instalace proto kopíruje
+  `backup-supabase.sh`, `scripts/backup/*` a z `supabase/.temp` project ref
+  a host poolera (bez hesla) do
+  `~/Library/Application Support/AlphaTrade/supabase-backup/`. Heslo zůstává
+  v Keychainu. Proto jsou i zálohy mimo `~/Documents`. **Po každé změně
+  skriptů zálohy spusť instalaci znovu**, jinak noc poběží se starou kopií
+  (`installed-from.txt` říká, ze kterého commitu je).
+- Noční běh = `backup-supabase.sh --no-git --keep 3`: bez git bundle (repo je
+  v `~/Documents` a na GitHubu), drží poslední 3 noční zálohy a navíc
+  poslední zálohu se zkušební obnovou PASS. Ruční běh dál drží 5 a dělá bundle.
+- Když se Mac probudí až v obchodní době, běh se přeskočí; upozornění přijde,
+  jen když je poslední kompletní záloha starší než 2 dny.
+- Selhání (kód 1) nebo neúplné soubory ze Storage (kód 2) = upozornění
+  „AlphaTrade záloha“ v Centru oznámení. Nejčastější důvod je málo místa:
+  záloha nezačne, když by zbylo méně než 10 GB (26. 10. bylo volno 11,9 GB,
+  takže na hraně).
+- Kde se dívat: `~/AlphaTrade-backups/supabase/nightly-runs.log` (řádek na
+  běh: čas UTC, OK / PARTIAL / FAIL / SKIP, záloha nebo důvod),
+  `nightly.log` (celý výpis, posledních 5000 řádků) a
+  `launchctl print gui/$(id -u)/com.alphatrade.supabase-backup` (poslední
+  návratový kód).
+- Zkušební obnova se sama nespouští — jednou měsíčně ručně
+  `./scripts/restore-test-supabase.sh` (bere poslední zálohu).
+
 Obsah jedné zálohy:
 
 | Soubor | Co to je |
@@ -176,12 +212,15 @@ seznam souborů Storage musí odpovídat `storage.objects` v archivu; soubory ze
 Storage se stahují jen chybějící nebo změněné (velikost, MD5 z eTagu) a po
 stažení se ověří; ze zrcadla se nikdy nemaže, takže smazaný soubor ve Storage
 zůstane zálohovaný (přepsaný soubor se stejným jménem ale zůstane jen
-v nejnovější verzi).
+v nejnovější verzi). Soubor přepsaný mezi výpisem a stažením (worker průběžně
+přepisuje `copier-snapshots/…/tv-live/*.json`) se uloží v novější verzi,
+pokud obsah souhlasí s ETagem odpovědi; v logu je „změněno během zálohy“
+a není to chyba.
 
 **Citlivost**: záloha obsahuje e-maily a hashe hesel z `auth.users`, Tradovate
 tokeny, poznámky a výplatní doklady. Adresáře mají práva jen pro vlastníka
-(700/600). Nikam je nenahrávat a nesdílet. iCloud „Plocha a Dokumenty“ je
-k 25. 10. vypnutý; kdyby se zapnul, přesunout `BACKUP_ROOT` mimo `~/Documents`.
+(700/600). Nikam je nenahrávat a nesdílet. Od 26. 10. leží mimo `~/Documents`,
+takže je nezachytí ani případně zapnutý iCloud „Plocha a Dokumenty“.
 
 ### Zkušební obnova
 
@@ -193,7 +232,7 @@ k 25. 10. vypnutý; kdyby se zapnul, přesunout `BACKUP_ROOT` mimo `~/Documents`
 Co skript dělá (na produkci ani na Supabase nesahá):
 
 1. ověří SHA-256 všech souborů zálohy;
-2. založí dočasný PostgreSQL ve `~/Documents/AlphaTrade-backups/supabase/.restore-test/`
+2. založí dočasný PostgreSQL ve `~/AlphaTrade-backups/supabase/.restore-test/`
    (jen unix socket v `/tmp`, žádný TCP port, vlastní superuser `atrestore`);
 3. nahraje `roles.sql` (členství udělená `GRANTED BY supabase_admin` udělí
    lokální superuser — `supabase_admin` tu nemá ADMIN OPTION);
