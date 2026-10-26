@@ -285,6 +285,22 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-26 13:07 — NASAZENO: kanál ceny z TV (kroky 1–5) + plynulost grafů (Claude, Filip „nasaď“)
+
+- Web: `main` = `26d2a643` (merge větve `claude/chart-smoothness-20261026`;
+  celá sada 613 souborů zelená, tsc, build). Vercel Production má nové
+  tajemství `TV_PRICE_CHANNEL_SECRET` (nastaveno přes stdin, nikde nevypsáno).
+- Worker: `mac-reinstall-safe.sh` s `COPIER_TV_STREAM=on` z worktree @ 26d2a643
+  (DISARMED, flat, reconciled; durable skupina adoptována), read-only reconcile
+  čistý. Plist nese `ALPHATRADE_TV_STREAM=on`, vedle workeru bundle
+  `tv-price-stream.mjs`. Log: „TV STREAM kanál ceny z TradingView povolen“,
+  pak `stav=streaming errors=0`.
+- Ověřeno naostro (náhled na produkční relay): store `live`, 636/636 podpisů,
+  2,8 zprávy/s, zpoždění 33 ms; poslední svíčka grafu dne se hýbe.
+- iPhone appka (Capacitor bundle) změnu dostane až novým buildem.
+- Vypnutí bez restartu: smazat `TV_PRICE_CHANNEL_SECRET` ve Vercelu (+ redeploy);
+  nebo `COPIER_TV_STREAM=off` při dalším reinstallu.
+
 ### 2026-10-26 odpoledne — Kanál ceny z TV: krok 5 (živá poslední svíčka v grafu dne), NEnasazeno (Claude)
 
 - Graf dne (počítač, telefon kompaktní i celá obrazovka) překresluje
