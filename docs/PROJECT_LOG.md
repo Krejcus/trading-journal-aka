@@ -292,8 +292,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   hlídá, že žádná další `arn1` funkce tranzitivně nevolá Tradovate
   (copier-relay na allowlistu kvůli Live Activity tiku jen v pruhu background).
   `copier-design-critic`: OPRAVIT PŘED COMMITEM → vyřešeno; nasazeno v neděli
-  21:40 za DISARMED + flat, worker bez chyb. Zbývá Filipův ruční test DISARM
-  z telefonu za vypnuté kopírky (agenti ho dělat nesmí).
+  21:40 za DISARMED + flat, worker bez chyb. Cesta příkazu přes `arn1`
+  ověřena čtením DB: `snapshot-test` 26. 10. 05:35 UTC — převzetí 0,38 s,
+  hotovo 0,65 s (před přesunem převzetí 0,56–1,98 s, hotovo 1,2–4,2 s).
+  DISARM jde stejnou frontou, ale jako potvrzení brzdy zbývá Filipův ruční
+  test DISARM z telefonu za vypnuté kopírky (agenti ho dělat nesmí).
 - **Delta sync** (`eb38c899`, `57f9f951`): migrace `20261025220000` —
   `sync_changes` + triggery na všech zdrojích složeného obchodu (holá změna
   revize projekce a heartbeat ledgeru se nelogují), `sync_trade_changes_v1`

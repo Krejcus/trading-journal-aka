@@ -45,6 +45,13 @@ udělalo úplné čtení 14,2 s na pozadí — od dalšího startu už jen delta
 | dotazů za minutu na LIVE | 44 | 54 (smyčka čeká až po odpovědi, rychlejší odpověď = častější) |
 | čas serveru za minutu (dotazy × doba) | ~33 s | ~11 s |
 
+Doručení příkazu kopírce přes `arn1`, ověřeno jen čtením
+`tradovate_copier_commands`: jediný příkaz od přesunu (`snapshot-test`
+26. 10. 05:35 UTC) worker převzal za 0,38 s a dokončil za 0,65 s. Před
+přesunem bylo převzetí 0,56–1,98 s a dokončení 1,2–4,2 s (8 posledních
+úspěšných příkazů 21.–23. 10.). DISARM jde stejnou frontou; ruční zkouška
+brzdy z telefonu (dělá jen Filip) zůstává jako potvrzení.
+
 ## Web — klid
 
 | Stránka | Požadavků/min před | po | Hlavní vlákno volné před → po |
