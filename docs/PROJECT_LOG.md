@@ -270,10 +270,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - [x] **Závěrečné měření iPhonu po delta syncu** — hotovo 26. 10. ráno
       (A/B bez kabelu, `docs/reviews/perf-final-phase12-20261026.md`):
       dashboard 9,5 → 1,2 s, zaseknutí zhruba poloviční.
-- [ ] **Místo na disku pro noční zálohu** — od 26. 10. běží noční záloha
-      Supabase (launchd, 3:30), ale při volnu pod 11 GB odmítne začít (pojistka
-      kvůli workeru). Uvolnit místo (staré worktree 15 GB, DerivedData ~1 GB),
-      pak zkontrolovat `~/AlphaTrade-backups/supabase/nightly-runs.log`.
+- [x] **Místo na disku pro noční zálohu** — 26. 10. smazáno 23 čistých
+      a do main sloučených worktree (větve zůstaly), volno 10,2 → 23,2 GB.
+      Ponechané: `aurora` (míří na něj `alphatrade-aurora` v launch.json),
+      `release-tv-parity` a `trade-card` (necommitnuté mockupy),
+      `notify-20261020` (2 commity jen lokálně, nejsou v main — notifikace
+      „five channels“ a Aurora Live Activity).
 - [ ] **Delta sync — další kroky**: lehčí tvar základu (dnes ~7 MB s kreslením
       a analytikou), `journal-import` do `arn1` po sledování zátěže DB, kontrola
       `pg_stat_statements` po odebrání `trades` z Realtime.
@@ -465,8 +467,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   (u brotli slabý `W/"md5"`), jinak dál chyba. (2) **OK** za 537 s (pg_dump
   183 s, kontrola archivu 338 s při nízké prioritě), 1607/1607 souborů.
 - **Po testech volno 10,2 GB → noční běh odmítne začít, dokud se neuvolní
-  místo** (chce ≥ 11 GB před zálohou). Největší položka: `~/alphatrade-worktrees`
-  15 GB (staré worktree se `node_modules`).
+  místo** (chce ≥ 11 GB před zálohou). Vyřešeno týž den úklidem 23 starých
+  worktree (`~/alphatrade-worktrees`, 12,6 GB) → volno 23,2 GB, `--check` OK.
 
 ### 2026-10-25/26 noc — Fáze 1–2: delta sync obchodů, relay u DB, opravy (Claude, NASAZENO)
 
