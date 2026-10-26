@@ -85,7 +85,12 @@ describe('co překreslit v grafu (jen zobrazení, data grafu se nemění)', () =
 const fakeChart = (bars: Bar[]) => {
   let data = bars.map(bar => ({ ...bar }));
   const calls = { update: 0, setData: 0 };
+  let logical = { from: 0, to: 10 };
   const controller = {
+    getChart: () => ({ timeScale: () => ({
+      getVisibleLogicalRange: () => logical,
+      setVisibleLogicalRange: (range: { from: number; to: number }) => { logical = range; },
+    }) }),
     getBars: () => data,
     updateBar: (bar: Bar) => {
       calls.update += 1;
@@ -94,7 +99,7 @@ const fakeChart = (bars: Bar[]) => {
     },
     setData: (next: readonly Bar[]) => { calls.setData += 1; data = next.map(bar => ({ ...bar })); },
   };
-  return { api: { controller } as never, calls, bars: () => data };
+  return { api: { controller } as never, calls, bars: () => data, logical: () => logical, setLogical: (range: { from: number; to: number }) => { logical = range; } };
 };
 
 describe('napojení živé svíčky na graf', () => {
@@ -115,10 +120,13 @@ describe('napojení živé svíčky na graf', () => {
     current = { ...current, high: 29195, close: 29194 };
     applyLiveCandle(source, target, drawn);
     expect(chart.calls.update).toBe(2);
+    chart.setLogical({ from: -40, to: 1.5 });
     current = null;
     applyLiveCandle(source, target, drawn);
     expect(chart.bars()).toEqual(original);
     expect(drawn.size).toBe(0);
+    // Návrat dat záběr nepohne.
+    expect(chart.logical()).toEqual({ from: -40, to: 1.5 });
   });
 
   it('přepsaný bar se po výpadku vrátí na svou původní hodnotu', () => {

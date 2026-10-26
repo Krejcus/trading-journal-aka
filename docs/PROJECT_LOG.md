@@ -285,6 +285,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-26 — Graf dne: záběr se už nevrací, čára aktuální ceny s živou svíčkou (Claude)
+
+- **Reset záběru**: klíč zaměření grafu dne obsahoval minuty výchozího úseku,
+  který se u dneška posouvá s časem (`focusRange`: teď + 45 min) → každou
+  minutu `REVIEW_FOCUS_EVENT` a animovaný návrat na výchozí záběr. Klíč je teď
+  jen režim/část dne/výběr obchodu (`reviewFocusKey`, počítač i telefon).
+- **Posun o bar při obnově dat**: knihovna při `setData` drží odsazení od
+  posledního baru; `CandleKitTradeChart` teď mimo přehrávání a dotažení
+  historie zleva drží stejné logické indexy (stejné svíčky na stejném místě),
+  stejně návrat po výpadku živé svíčky.
+- **Čára aktuální ceny** (Nastavení → Popisky a čáry ceny → „Aktuální cena“,
+  dřív „Symbol“): čára, rozsah přes celý graf / od svíčky doprava, barva,
+  1–4 px, styl — existovalo; zkrácená čára teď bere bar, který graf opravdu
+  ukazuje (živou svíčku), ne poslední svíčku dat.
+- Ověřeno v náhledu: posunutý záběr beze změny přes dvě nové minuty a obnovu
+  dat; celá sada 614 souborů zelená. Nenasazeno.
+
 ### 2026-10-26 13:07 — NASAZENO: kanál ceny z TV (kroky 1–5) + plynulost grafů (Claude, Filip „nasaď“)
 
 - Web: `main` = `26d2a643` (merge větve `claude/chart-smoothness-20261026`;

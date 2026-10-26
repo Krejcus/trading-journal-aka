@@ -241,6 +241,16 @@ describe('shortenedPriceLines — výběr zkrácených čar', () => {
     ]);
   });
 
+  it('čára aktuální ceny jde s barem, který graf opravdu ukazuje (živá svíčka)', () => {
+    const symbolLabel = { value: true, line: true, lineExtent: 'fromPoint', appearance: { color: '#2962ff', width: 1, style: 'dashed' } };
+    const live = { time: midnightPrague + 2 * hour, price: 131.25 };
+    expect(shortenedPriceLines({ scales: scales({ symbolLabel }), candles: series, lastBar: live, timeZone: 'Europe/Prague', visibleRange: null }))
+      .toEqual([{ time: live.time, price: 131.25, color: '#2962ff', width: 1, style: 'dashed' }]);
+    // Starší bar (graf ještě nemá nová data) se nepoužije.
+    expect(shortenedPriceLines({ scales: scales({ symbolLabel }), candles: series, lastBar: { time: midnightPrague - hour, price: 1 }, timeZone: 'Europe/Prague', visibleRange: null })[0])
+      .toMatchObject({ time: midnightPrague + hour, price: 120 });
+  });
+
   it('chybějící lineExtent znamená celý graf, ne zkrácenou čáru', () => {
     const lines = shortenedPriceLines({
       scales: scales({ previousDayClose: { value: true, line: true } }),

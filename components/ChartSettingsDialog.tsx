@@ -194,7 +194,7 @@ const PriceLabelRow: React.FC<{
               aria-label={`Rozsah čáry — ${label}`}
               title="Kam až čára sahá"
             >
-              <option value="full">Celý graf</option>
+              <option value="full">Přes celý graf</option>
               <option value="fromPoint">Od svíčky doprava</option>
             </select>
           )}
@@ -439,7 +439,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                   <Check checked={scales.plusButton} onChange={plusButton => update('scales', { plusButton })} label="Tlačítko plus" />
                   <Check checked={scales.countdownToBarClose} onChange={countdownToBarClose => update('scales', { countdownToBarClose })} label="Odpočet do uzavření svíčky" />
                   <PriceLabelRow
-                    label="Symbol"
+                    label="Aktuální cena"
                     value={scales.symbolLabel}
                     onChange={symbolLabel => update('scales', { symbolLabel })}
                   >

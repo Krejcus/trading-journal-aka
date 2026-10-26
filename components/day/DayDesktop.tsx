@@ -15,7 +15,7 @@ import { PinPopover, PrepBottom, PrepHeaderBar, prepPins } from './PrepPanels';
 import { CloseBottom, CloseHeaderBar, CloseSide } from './ClosePanels';
 import DictationDialog from './DictationDialog';
 import { SESSION_STYLE, SaveCelebration, money } from './DayPrimitives';
-import { dayAnchorTrade, focusRange, focusTarget, sessionBands, useReviewFocus } from './dayFocus';
+import { dayAnchorTrade, focusRange, focusTarget, reviewFocusKey, sessionBands, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
 
 interface OverlayState {
@@ -140,7 +140,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
   const chartTrade = selectedChartTrade ?? anchor;
   const contextTrades = ctl.chart.chartTrades;
   const tradeNotes = useMemo(() => chartNotesOfTrades(contextTrades), [contextTrades]);
-  const focusKey = selectedChartTrade ? `trade:${selectedChartTrade.id}` : `${mode}:${session}:${ctl.scope}:${Math.round(target.entryMs / 60_000)}:${Math.round(target.exitMs / 60_000)}`;
+  const focusKey = reviewFocusKey(`${mode}:${session}:${ctl.scope}`, selectedChartTrade?.id);
   const focusDetail = selectedChartTrade
     ? { ...tradeChartTiming(selectedChartTrade), id: String(selectedChartTrade.id) }
     : { entryMs: target.entryMs, exitMs: target.exitMs, id: String(anchor.id) };

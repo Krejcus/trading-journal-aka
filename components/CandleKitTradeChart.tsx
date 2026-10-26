@@ -2996,6 +2996,40 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     ? lastFullBarsRef.current.bars : null;
   const chartBars = replayActive ? frozenFullBars ?? replayDataSeedRef.current?.bars ?? [] : nonReplayBars;
 
+  // Obnova dat (nová svíčka ze souboru, živý graf dne) nesmí posunout záběr.
+  // ChartView dosadí data `setData` ve svém efektu a knihovna při tom drží
+  // odsazení od POSLEDNÍHO baru — když na konci bar přibude nebo ubude, celý
+  // záběr poskočí. Stejné logické indexy = stejné svíčky na stejném místě.
+  // Výjimkou je dotažená historie zleva (posun indexů řeší `pendingVisibleRangeRef`)
+  // a přehrávání (má vlastní správu záběru).
+  const dataViewportRef = useRef<{ controller: ChartViewApi['controller']; from: number; to: number; firstTs: number } | null>(null);
+  useLayoutEffect(() => {
+    dataViewportRef.current = null;
+    const controller = apiRef.current?.controller;
+    if (replayActive || !controller) return;
+    try {
+      const range = controller.getChart().timeScale().getVisibleLogicalRange();
+      const firstTs = controller.getBars()[0]?.ts;
+      if (range && firstTs !== undefined) dataViewportRef.current = { controller, from: range.from, to: range.to, firstTs };
+    } catch {
+      // Graf právě zaniká.
+    }
+  }, [chartBars, replayActive]);
+  useEffect(() => {
+    const saved = dataViewportRef.current;
+    dataViewportRef.current = null;
+    if (!saved || replayActive || apiRef.current?.controller !== saved.controller) return;
+    try {
+      if (saved.controller.getBars()[0]?.ts !== saved.firstTs) return;
+      const timeScale = saved.controller.getChart().timeScale();
+      const range = timeScale.getVisibleLogicalRange();
+      if (range && range.from === saved.from && range.to === saved.to) return;
+      timeScale.setVisibleLogicalRange({ from: saved.from, to: saved.to });
+    } catch {
+      // Graf právě zaniká.
+    }
+  }, [chartBars, replayActive]);
+
   useLayoutEffect(() => {
     if (!replayActive || visibleCandles.length === 0) return;
     const controller = apiRef.current?.controller;
@@ -4926,11 +4960,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         target.useMediaCoordinateSpace(({ context, mediaSize }) => {
           const { scales, symbol } = chartSettingsRef.current;
           const range = chart.timeScale().getVisibleRange();
+          // Poslední bar, který graf opravdu ukazuje (i živá svíčka přes
+          // `updateBar`, kterou React data neznají) — čára ceny jde s ní.
+          const shownLast = api.controller.getBars().at(-1);
           const lines = shortenedPriceLines({
             scales,
             // Odhalené svíčky, ne celá historie: v replay režimu série o
             // budoucích svíčkách neví a kotva by neměla souřadnici.
             candles: visibleCandlesRef.current,
+            lastBar: shownLast ? { time: Math.floor(shownLast.ts / 1_000), price: shownLast.close } : null,
             timeZone: symbol.timeZone,
             visibleRange: range ? { from: Number(range.from), to: Number(range.to) } : null,
           });

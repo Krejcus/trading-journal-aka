@@ -36,7 +36,11 @@ export function revertLiveCandle(controller: ChartController, drawn: LiveCandleD
     const bars = controller.getBars()
       .filter(bar => !drawn.appended.has(bar.ts))
       .map(bar => drawn.originals.get(bar.ts) ?? bar);
+    // Záběr nechat přesně, jak je — knihovna by při setData držela pravý okraj.
+    const timeScale = controller.getChart().timeScale();
+    const range = timeScale.getVisibleLogicalRange();
     controller.setData(bars);
+    if (range) timeScale.setVisibleLogicalRange({ from: range.from, to: range.to });
   } catch {
     // Graf už neexistuje.
   }

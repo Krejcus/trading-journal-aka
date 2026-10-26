@@ -113,10 +113,16 @@ export const shortenedPriceLines = (params: {
     highAndLow: ChartPriceLabelSettings;
   };
   candles: readonly MarketCandle[];
+  /**
+   * Poslední bar, který graf skutečně ukazuje (živá svíčka přes `updateBar`
+   * v datech `candles` není). Když je novější nebo stejný jako poslední
+   * svíčka dat, čára aktuální ceny se kreslí od něj a s jeho cenou.
+   */
+  lastBar?: { time: number; price: number } | null;
   timeZone: string;
   visibleRange: { from: number; to: number } | null;
 }): ShortenedPriceLine[] => {
-  const { scales, candles, timeZone, visibleRange } = params;
+  const { scales, candles, lastBar, timeZone, visibleRange } = params;
   const result: ShortenedPriceLine[] = [];
   const wantsShort = (settings: ChartPriceLabelSettings) =>
     settings.line && (settings.lineExtent ?? 'full') === 'fromPoint';
@@ -134,7 +140,8 @@ export const shortenedPriceLines = (params: {
 
   if (wantsShort(scales.symbolLabel)) {
     const last = candles.at(-1);
-    push(scales.symbolLabel, last ? { price: last.close, time: last.time } : null);
+    const shown = lastBar && Number.isFinite(lastBar.price) && (!last || lastBar.time >= last.time) ? lastBar : null;
+    push(scales.symbolLabel, shown ?? (last ? { price: last.close, time: last.time } : null));
   }
   if (wantsShort(scales.previousDayClose)) {
     push(scales.previousDayClose, previousDayCloseAnchor(candles, timeZone));

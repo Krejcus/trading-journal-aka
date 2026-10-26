@@ -40,7 +40,7 @@ import ChartNotesLayer from '../ChartNotesLayer';
 import { chartNotesOfTrades, type ChartNote } from '../../lib/chartNotes';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
 import DayTouchDrawLayer from './DayTouchDrawLayer';
-import { dayAnchorTrade, focusTarget, useReviewFocus } from './dayFocus';
+import { dayAnchorTrade, focusTarget, reviewFocusKey, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../../hooks/useLiveCandleBinding';
 
@@ -434,7 +434,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   // eslint-disable-next-line react-hooks/exhaustive-deps -- panely čte z aktuálního renderu
   }, [replayOn, replayPlaying, replayStep, replayCandleMode, replaySpeed, fullRaw, paneCount, api, extraApis, paneTfKey, timeframe]);
   const timing = selectedTrade ? tradeChartTiming(selectedTrade) : { entryMs: anchor.entryTime!, exitMs: anchor.timestamp };
-  const focusKey = selectedTrade ? `trade:${selectedTrade.id}` : `${focusKeyPrefix}:${Math.round(target.entryMs / 60_000)}:${Math.round(target.exitMs / 60_000)}`;
+  const focusKey = reviewFocusKey(focusKeyPrefix, selectedTrade?.id);
   const detail = selectedTrade ? { ...tradeChartTiming(selectedTrade), id: String(selectedTrade.id) } : { entryMs: target.entryMs, exitMs: target.exitMs, id: String(anchor.id) };
   useReviewFocus(focusKey, { entryMs: detail.entryMs, exitMs: detail.exitMs, id: detail.id }, Boolean(api), `${src.key}:${timeframe}:full`);
 
