@@ -49,8 +49,18 @@ Doručení příkazu kopírce přes `arn1`, ověřeno jen čtením
 `tradovate_copier_commands`: jediný příkaz od přesunu (`snapshot-test`
 26. 10. 05:35 UTC) worker převzal za 0,38 s a dokončil za 0,65 s. Před
 přesunem bylo převzetí 0,56–1,98 s a dokončení 1,2–4,2 s (8 posledních
-úspěšných příkazů 21.–23. 10.). DISARM jde stejnou frontou; ruční zkouška
-brzdy z telefonu (dělá jen Filip) zůstává jako potvrzení.
+úspěšných příkazů 21.–23. 10.).
+
+Ruční zkouška brzdy z telefonu (Filip, 26. 10. 05:48 UTC, kopírka bez
+pozic):
+
+| Příkaz | Převzetí | Hotovo | Před přesunem (převzetí / hotovo) |
+|---|---|---|---|
+| ARM | 0,52 s | 2,04 s | 1,1–2,0 s / 2,0–4,2 s |
+| **DISARM** | **0,29 s** | **0,51 s** | 0,56–1,03 s / 1,17–1,80 s |
+
+Po zkoušce: DISARMED, `lastError` prázdný, žádná divergence, outbox bez
+zaseknutí.
 
 ## Web — klid
 
