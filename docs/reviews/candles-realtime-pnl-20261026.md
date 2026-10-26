@@ -245,3 +245,56 @@ Další kroky D: (1) LIVE refaktor výše; (2) memoizace karet historie;
 (3) zbytečné rendery `App` při minutové synchronizaci beze změny (změřit
 v produkčním buildu); (4) změřit LIVE a historii na iPhonu (Web Inspector
 nebo perf značky appky).
+
+## 9. Podklady pro krok 2 (26. 10.)
+
+- **Dnešní cesta ceny už existuje, ale je pomalá**: worker čte TV každou 1 s
+  (`startTradingViewMarketPriceFeed`), cenu vkládá do statusu
+  (`marketPrices`), heartbeat jde na relay po ~2 s
+  (`server/macCopierCommandRelay.ts:publishStatus`) a LIVE poll po ~2,3 s →
+  stáří ceny na displeji 0–5 s, průměr ~2,5 s. Pro P&L to nic nezlepší proti
+  dnešním 3s krokům brokera → kanál A je nutný.
+- **Kvóty Supabase Realtime** (dokumentace 10/2026): Pro = 5 mil. zpráv/měs.,
+  pak $2,50 / mil.; broadcast = 1 odeslaná + 1 za každého příjemce (telefon +
+  desktop = 3 na tik). Při 2–4 ticích/s jen s otevřenou pozicí nebo grafem
+  (~2–3 h denně) ≈ 1–2 mil./měs. → v kvótě; mimo to posílat ~1/s nebo nic.
+- **Odeslání**: REST `POST /realtime/v1/api/broadcast` (`apikey` + pro
+  privátní kanál JWT uživatele a RLS `INSERT/SELECT` na `realtime.messages`
+  podle `realtime.topic()`), nebo `realtime.send()` z DB/Edge Function.
+  Worker dnes zná jen device token pro Vercel API → rozhodnout:
+  (a) relay vydá krátkodobý JWT (závisí na typu podpisových klíčů projektu —
+  ověřit, zda jde mintovat; produkční čtení konfigurace vyžaduje souhlas),
+  (b) Edge Function s device autentizací volá broadcast REST se secret
+  klíčem (invokace za tik: Pro 2 mil./měs. v ceně),
+  (c) vlastní auth uživatel pro zařízení s RLS jen na `tv:<owner>` (zásah do
+  párování → `copier-design-critic`).
+- **Lokální zkratka pro desktop**: prohlížeč na stejném Macu může číst cenu
+  přímo z lokálního agenta (127.0.0.1:3211) bez cloudu; telefon ale potřebuje
+  cloudový kanál.
+
+## 10. Načítání svíček vs TradingView (C5, 26. 10.)
+
+Filip: „načtou se na nějakou dobu a pak se dostahují další; proti TV
+(denní data na roky) nesrovnatelné“. Zjištění:
+
+- Graf dne i detail obchodu berou **14 dní 1m svíček**
+  (`marketDataWindowForEntry`, `dayCandleWindow`); detail nejdřív jen seanci
+  a 14 dní dotáhne při posunu doleva (`onNeedOlderHistory` → `fullHistory`).
+  Graf dne dál než 14 dní nejde.
+- **Vyšší timeframy se skládají z 1m** (`aggregateCandles(raw, timeframe)` v
+  `components/day/DayFullscreenChart.tsx`) → D má nejvýš ~15 svíček, 4h ~60.
+- Rychlost čtení není problém: s teplou cache se graf dne vykreslí z
+  IndexedDB bez jediného síťového požadavku. Pomalé je jen první otevření
+  nového dne (sklad → Databento, p95 13 s) a dnešek přes `market-candles`
+  (p50 6,4 s, řeší C1).
+- Sklad svíček **už umí `ohlcv-1h`** (`market-candle-store`, kusy po 300
+  dnech) a klient má denní kbelíky i pro 1h — jen to grafy nepoužívají.
+
+Návrh (středně velký, bez změny serveru):
+1. TF ≥ 1h → načíst **1h řadu za ~1 rok** jedním dotazem skladu (cache po
+   dnech v IndexedDB jako dnes), 4h/D skládat z 1h; posledních pár hodin
+   doplnit z 1m/TV jako dnes. → 1h/4h/D s rokem historie.
+2. 1m při posunu doleva dotahovat po 14denních kusech i v grafu dne.
+3. D na roky (5+ let) → `ohlcv-1d` ve skladu = změna Edge Function (nasazení
+   na produkci) — až později, pokud bude potřeba.
+4. Backtest vynechat (tiery nesmí odhalit budoucnost za kurzorem replaye).

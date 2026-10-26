@@ -283,6 +283,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-26 dopoledne — LIVE: telemetrie API už nepřekresluje appku (fáze 1a, Claude)
+
+- **Návrh** `docs/reviews/live-rerender-design-20261026.md`. Měření (dev,
+  dočasný Profiler + diff stavů): LIVE 4,7 commitu/s, ~99 ms renderu/s, 88 %
+  v `LiveCopyTradeOverview`. Hlavní spouštěč nebyl čas, ale telemetrie
+  Tradovate API: `useTradovateLiveData` (v `App`) ji odebíral přes
+  `useSyncExternalStore`, takže začátek i konec každého požadavku synchronně
+  překreslil celou appku (dlouhé snímky „Response.json.then“ i mimo LIVE).
+- **Fáze 1a**: telemetrii odebírá jen rozbalený panel API
+  (`components/useTradovateApiTelemetry.ts`, `LivePnlPanelBody`), řádky čerpání
+  limitu se počítají tam; hook dat ji nevrací. Výsledek (dev): 2,8 commitu/s,
+  ~62 ms/s, dlouhé snímky 41/30 s → 4/41 s, žádný po `Response.json`.
+  Telefon panel API nemá → telemetrie tam nepřekresluje nic.
+- **`copier-design-critic`** na návrh: 1a OK s výhradami (splněno: SSR
+  snapshot, řádky jen rozbalené, pojistné testy `tests/liveRerenderGuards.test.ts`);
+  **1b (display cache v jednom commitu) odloženo** — display cache není jen
+  zobrazení: přes odvozené `dll-locked` vstupuje do exkluzí followerů v ARM
+  payloadu (INV-ELIG-02/RISK-01/ARM-01) a dnešní efekt slučuje znovu i při
+  změně membership. Bezpečná podoba (reducer + testy ekvivalence exkluzí) je
+  v návrhu bod 8. Sekundový tik `freshnessNow` beze změny (fáze 2 jen náčrt).
+- **Svíčky (C5)** — zjištění v předávce bod 10: grafy berou 14 dní 1m a vyšší
+  TF skládají z nich (D ~15 svíček); sklad umí `ohlcv-1h` → rok historie pro
+  1h/4h/D bez změny serveru. Filip: „necháme na potom“.
+
 ### 2026-10-26 ráno — Svíčky/realtime P&L: krok 1 změřen, bod D ověřen (Claude)
 
 - **Předávka** `docs/reviews/candles-realtime-pnl-20261026.md` sloučena do
