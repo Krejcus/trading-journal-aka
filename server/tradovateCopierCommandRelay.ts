@@ -1049,15 +1049,16 @@ export async function heartbeatTradovateCopierDevice(options: {
 
 export async function readTradovateCopierDeviceRuntime(options: { db: SupabaseClient; userId: string; connectionId: string }) {
   const { data, error } = await options.db.from('tradovate_copier_device_runtime')
-    .select('status,last_seen_at').eq('user_id', options.userId).eq('connection_id', options.connectionId)
-    .order('last_seen_at', { ascending: false }).limit(1).maybeSingle<{ status: LocalCopierAgentStatus; last_seen_at: string }>();
+    .select('device_id,status,last_seen_at').eq('user_id', options.userId).eq('connection_id', options.connectionId)
+    .order('last_seen_at', { ascending: false }).limit(1).maybeSingle<{ device_id: string; status: LocalCopierAgentStatus; last_seen_at: string }>();
   if (error) throw new Error(`copier-relay-runtime-status-failed: ${error.message}`);
   if (!data) return null;
   const parsedLastSeenAt = Date.parse(data.last_seen_at);
   const ageMs = Number.isFinite(parsedLastSeenAt)
     ? Math.max(0, Date.now() - parsedLastSeenAt)
     : 10_000;
-  return { status: data.status, lastSeenAt: data.last_seen_at, ageMs, connected: ageMs < 10_000 };
+  // `deviceId` jen pro serverové odvození kanálu ceny; handler ho klientovi nevrací.
+  return { deviceId: data.device_id, status: data.status, lastSeenAt: data.last_seen_at, ageMs, connected: ageMs < 10_000 };
 }
 
 /** Jak čerstvý musí být stav workeru, aby jeho ARM blokoval odpojení propfirmy. */

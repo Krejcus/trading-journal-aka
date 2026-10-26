@@ -31,6 +31,13 @@ import {
 } from '../../../server/snapshotImagePush.js';
 import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '../../../server/tvAlertNotifications.js';
 import { validateTvBarsCapture } from '../../../lib/tradingViewBars.js';
+import { tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
+
+/** Téma a klíč kanálu ceny pro worker; bez tajemství pole chybí (nikdy 502). */
+const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string } => {
+  const grant = tvPriceChannelGrant(deviceId);
+  return grant ? { priceTopic: grant.topic, priceKey: grant.key } : {};
+};
 
 const snapshotRateLimiter = new CopierSnapshotRateLimiter();
 // Živé svíčky mají vlastní limit, aby 1×/min čtení nikdy neubralo kapacitu
@@ -66,6 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const command = await claimTradovateCopierCommandV2({ db, deviceId: device.id, deliveryId });
         return res.status(200).json({ protocol: 2, command, serverNow: new Date().toISOString(), realtime: {
           url: config.supabaseUrl, anonKey: config.supabaseAnonKey, topic: `copier-kick-${device.id}`,
+          ...tvPriceRealtimeFields(device.id),
         } });
       }
       if (action === 'complete-v2' || action === 'heartbeat-v2' || action === 'background-v2') {
@@ -290,6 +298,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             url: config.supabaseUrl,
             anonKey: config.supabaseAnonKey,
             topic: `copier-kick-${device.id}`,
+            ...tvPriceRealtimeFields(device.id),
           },
         });
       }
@@ -361,7 +370,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const runtime = await readTradovateCopierDeviceRuntime({ db, userId, connectionId });
       timing.mark('runtime');
-      return timed(200, runtime);
+      if (!runtime) return timed(200, runtime);
+      // Kanál ceny z TV patří VEDLE statusu, ne do něj — status se ukládá
+      // (obnovený stav LIVE) a téma ani klíč se ukládat nemají.
+      const { deviceId, ...visible } = runtime;
+      // Jen živé zařízení: heartbeat mladší 10 s vyžaduje platnou autentizaci
+      // zařízení, takže revokovaný Mac kanál (deterministický klíč) do 10 s ztratí.
+      const priceChannel = runtime.connected === true ? tvPriceChannelGrant(deviceId) : null;
+      return timed(200, priceChannel ? { ...visible, priceChannel } : visible);
     }
     if (req.method === 'POST') {
       if (req.body?.command?.type === 'snapshot-test' && req.body?.command?.repairCamera !== true) {

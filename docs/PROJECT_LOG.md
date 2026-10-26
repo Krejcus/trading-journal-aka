@@ -300,9 +300,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   jistič, serverový vypínač; podpis zpráv (klíč per zařízení, bez epoch);
   klíč vedle statusu, ne v něm; jen paměť; nová pravidla INV-UI-04,
   INV-WORKER-04, INV-RELAY-04 (zapsat s implementací).
-- **Čeká na Filipa**: souhlas s přenosem TV ceny přes Realtime na vlastní
-  zařízení (licence), nové tajemství ve Vercelu (produkční krok), vlákno vs
-  samostatný proces.
+- **Rozhodnutí Filipa**: přenos TV ceny přes Realtime ano (jen jeho
+  zařízení, jen zobrazení); nové tajemství ve Vercelu nastaví Claude při
+  nasazení kroku 1; čtení ceny jako vlákno ve workeru.
 
 ### 2026-10-26 dopoledne — LIVE: telemetrie API už nepřekresluje appku (fáze 1a, Claude)
 

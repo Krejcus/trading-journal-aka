@@ -244,7 +244,13 @@ Testy:
   kanálu; source guard: store importuje jen listová komponenta a graf,
   sdílené karty ne.
 
-## 6. Rozhodnutí pro Filipa
+## 6. Rozhodnutí Filipa (26. 10. odpoledne)
+
+**Rozhodnuto**: (1) přenos ceny TV přes Realtime **ano, jen na Filipova
+zařízení**, jen zobrazení; (2) nové tajemství ve Vercelu **nastaví Claude**
+při nasazení kroku 1; (3) **vlákno ve workeru** (`worker_threads`).
+
+Původní otázky:
 
 1. **Licence/přenos**: cena TV by šla přes Supabase Realtime na tvoje
    zařízení (telefon). Dnes už TV data Mac opouštějí (`tv-live` do Storage,
