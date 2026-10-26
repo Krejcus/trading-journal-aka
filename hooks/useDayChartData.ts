@@ -7,10 +7,13 @@ import type { MarketCandle } from '../services/marketData';
 import { storageService } from '../services/storageService';
 import { tradeChartTiming } from '../services/tradeChartData';
 import { useLiveCandles } from './useLiveCandles';
+import { useTvLiveCandleFeed } from './useTvLiveCandleFeed';
 
 /**
  * Data grafu dne: obchody dne s historií plnění (šipky, SL/TP) a svíčky
  * — historie Databento + živé čtení TradingView pro posledních 25 h.
+ * `liveFeed`: rozpracovaná poslední svíčka z kanálu ceny (jen překreslení
+ * v grafu, do `candles` se nikdy nepřidává).
  */
 export function useDayChartData(day: string, dayTrades: readonly Trade[], allTrades: readonly Trade[], now: number) {
   // Detaily (historie plnění) jedním dotazem; sloučené karty berou svůj zdroj.
@@ -69,6 +72,8 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
     [candleWindow, live, sameDay],
   );
   const loading = !sameDay || (candleWindow.needsLive && liveStatus === 'loading');
+  // Jen dokud den běží (včerejšek v živém okně ani sobota už živou svíčku nemají).
+  const liveFeed = useTvLiveCandleFeed(candleWindow.needsLive && now < candleWindow.dayEnd, candleWindow.dayEnd);
   return {
     candles,
     chartTrades,
@@ -77,5 +82,6 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
     error: sameDay?.error ?? null,
     liveStatus: candleWindow.needsLive ? liveStatus : null,
     liveCapturedAt: live?.capturedAt ?? null,
+    liveFeed,
   };
 }

@@ -1,6 +1,7 @@
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 import type { TradeCardModel } from './liveTradeCard';
 import { tradovateContractRoot, tradovateValuePerPoint } from './tradovateLivePnl';
+import type { TvPricePayload } from './tvPriceMessage';
 import type { TvPriceFeedView, TvPriceSample } from './tvPriceStore';
 
 /**
@@ -73,6 +74,19 @@ export const TV_PNL_MOVE_POINTS_PER_SECOND = 6;
 /** Kořeny se stejnou cenou (mikro a plný kontrakt jednoho indexu). */
 const PRICE_FAMILY: Record<string, string> = { NQ: 'NQ', MNQ: 'NQ' };
 const MONTH = '[FGHJKMNQUVXZ]';
+
+/** Rodina ceny kořene (`MNQ`/`NQ` → `NQ`); jiné kořeny nepodporujeme. */
+export const tvPriceFamily = (root: string | null | undefined): string | null => (root ? PRICE_FAMILY[root.toUpperCase()] ?? null : null);
+
+/**
+ * Svíčka zprávy je z aktuální minuty (předchozí jen prvních
+ * `TV_PNL_PREVIOUS_BAR_GRACE_MS` nové minuty, než přijde první obchod).
+ */
+export const tvBarIsCurrent = (latest: Pick<TvPricePayload, 'at' | 'bar'>): boolean => {
+  const minuteStart = Math.floor(latest.at / 60_000) * 60;
+  const previousBarAllowed = latest.at - minuteStart * 1_000 <= TV_PNL_PREVIOUS_BAR_GRACE_MS;
+  return latest.bar != null && latest.bar[0] >= minuteStart - (previousBarAllowed ? 60 : 0);
+};
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
@@ -155,12 +169,8 @@ export function tvLivePnlDelta(legs: readonly TvLivePnlLeg[] | null | undefined,
   const latest = feed.latest;
   if (!feed.fresh || !latest) return { live: false, reason: 'tv-stale' };
   if (latest.interval !== '1' || latest.mode !== 'streaming' || latest.last == null) return { live: false, reason: 'tv-mode' };
-  const minuteStart = Math.floor(latest.at / 60_000) * 60;
-  // Aktuální svíčka (předchozí jen v prvních sekundách nové minuty před prvním obchodem).
-  const previousBarAllowed = latest.at - minuteStart * 1_000 <= TV_PNL_PREVIOUS_BAR_GRACE_MS;
-  if (!latest.bar || latest.bar[0] < minuteStart - (previousBarAllowed ? 60 : 0)) return { live: false, reason: 'tv-bar-old' };
-  const chartRoot = tvChartRoot(latest.chart);
-  const chartFamily = chartRoot ? PRICE_FAMILY[chartRoot] : undefined;
+  if (!tvBarIsCurrent(latest)) return { live: false, reason: 'tv-bar-old' };
+  const chartFamily = tvPriceFamily(tvChartRoot(latest.chart));
   if (!chartFamily) return { live: false, reason: 'unsupported-root' };
   let deltaUsd = 0;
   for (const leg of legs) {

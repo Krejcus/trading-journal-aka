@@ -283,6 +283,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-26 odpoledne — Kanál ceny z TV: krok 5 (živá poslední svíčka v grafu dne), NEnasazeno (Claude)
+
+- Graf dne (počítač, telefon kompaktní i celá obrazovka) překresluje
+  rozpracovanou minutu přímo z 1m baru TradingView (OHLC včetně knotů) přes
+  `updateBar` — jen zobrazení; do `candles` dne, cache, hodnocení, Lab ani
+  storage nic nejde (dokončené minuty dál `tv-live`, druhý den Databento).
+- Grafy dostávají neutrální `LiveCandleFeed` (`lib/liveCandleFeed.ts`,
+  `hooks/useLiveCandleBinding.ts`); zdroj z TV zapíná jen
+  `hooks/useTvLiveCandleFeed.ts` v datech grafu dne. Presence `chart`
+  a obnova grantu mimo LIVE (GET relaye jen kvůli kanálu, status se
+  nepřijímá) běží jen po dobu odběru napojeným grafem a jen dokud den běží.
+- Pojistky: svíčka cenou nenavazující na data grafu (> 0,2 %, jiný kontrakt)
+  se nekreslí; mezera max. timeframe + 3 min; když cena zmizí, graf se vrátí
+  přesně na svá data; beze změny se nepřekresluje. Vypnuto v přehrávání,
+  v backtestu, bez svíček a u minulého dne.
+- Ověření: náhled (graf dne na počítači: připsání minuty, přepis, po 2 s
+  návrat na data; telefon 5m bar), celá sada 613 souborů zelená, tsc čistý.
+- Kritik: OK S VÝHRADAMI → zapracováno (zájem jen s napojeným grafem,
+  kontrola ceny, návrat dat, deduplikace, robustnější grant, přísnější
+  hlídací testy, kvóta v §4 návrhu).
+- Zbývá: nasazení všech kroků najednou (tajemství ve Vercelu + web; worker
+  reinstall `--tv-stream on` ve flat/DISARMED stavu), měření kvóty a ms
+  renderu (bod 6).
+
 ### 2026-10-26 dopoledne — Kanál ceny z TV: krok 3 (klient) a 4 (živé P&L) hotové, NEnasazeno (Claude)
 
 - **Krok 3**: `lib/tvPriceStore.ts` (jen paměť; přehrání `seq`/`runId`/`at`,

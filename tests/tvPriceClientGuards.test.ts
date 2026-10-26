@@ -40,11 +40,16 @@ const resolveImport = (from: string, specifier: string): string | null => {
   return candidate ? relative(root, candidate) : null;
 };
 
-const importsOf = (file: string): string[] =>
-  [...readFileSync(join(root, file), 'utf8').matchAll(IMPORT)].flatMap(match => {
+// `import type` / `export type` se za běhu smaže — do grafu modulů nepatří.
+// Ukotveno na tvar jednoho příkazu, aby nepřeskočilo runtime import za ním.
+const TYPE_ONLY = /^\s*(?:import|export)\s+type\s+(?:\{[^}]*\}|\*(?:\s+as\s+\w+)?|\w+)\s+from\s+['"][^'"]+['"]/gm;
+const importsOf = (file: string, runtimeOnly = false): string[] => {
+  const text = readFileSync(join(root, file), 'utf8');
+  return [...(runtimeOnly ? text.replace(TYPE_ONLY, '') : text).matchAll(IMPORT)].flatMap(match => {
     const target = resolveImport(file, match[1]);
     return target ? [target] : [];
   });
+};
 
 const allSources = [...SOURCE_DIRS.flatMap(listSources), ...['App.tsx', 'index.tsx'].filter(file => existsSync(join(root, file)))];
 const importersOf = (target: string) => allSources.filter(file => importsOf(file).includes(target)).sort();
@@ -54,7 +59,8 @@ const graph = (entry: string): Set<string> => {
   const visit = (file: string) => {
     if (seen.has(file)) return;
     seen.add(file);
-    for (const next of importsOf(file)) visit(next);
+    // Tranzitivně jen importy, které existují i za běhu.
+    for (const next of importsOf(file, true)) visit(next);
   };
   visit(entry);
   return seen;
@@ -63,6 +69,8 @@ const graph = (entry: string): Set<string> => {
 const TV_CLIENT_MODULES = [
   'services/tvPriceChannel.ts',
   'services/tvPriceGrant.ts',
+  'lib/tvLiveCandle.ts',
+  'hooks/useTvLiveCandleFeed.ts',
   'lib/tvPriceChannelClient.ts',
   'lib/tvPriceStore.ts',
   'lib/tvLivePnl.ts',
@@ -71,20 +79,23 @@ const TV_CLIENT_MODULES = [
 
 describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
   it('singleton kanálu smí importovat jen listová komponenta; LIVE desk jen úzké rozhraní grantu', () => {
-    expect(importersOf('services/tvPriceChannel.ts')).toEqual(['components/LiveOpenPnlValue.tsx', 'services/tvPriceGrant.ts']);
-    expect(importersOf('services/tvPriceGrant.ts')).toEqual(['components/TradovateLiveDesk.tsx']);
+    expect(importersOf('services/tvPriceChannel.ts')).toEqual(['components/LiveOpenPnlValue.tsx', 'hooks/useTvLiveCandleFeed.ts', 'services/tvPriceGrant.ts']);
+    expect(importersOf('services/tvPriceGrant.ts')).toEqual(['components/TradovateLiveDesk.tsx', 'hooks/useTvLiveCandleFeed.ts']);
+    // Živou svíčku grafu dne zapíná jen data grafu dne; graf sám dostane neutrální rozhraní.
+    expect(importersOf('hooks/useTvLiveCandleFeed.ts')).toEqual(['hooks/useDayChartData.ts']);
+    expect(importersOf('lib/tvLiveCandle.ts')).toEqual(['hooks/useTvLiveCandleFeed.ts']);
     const desk = readFileSync(join(root, 'components/TradovateLiveDesk.tsx'), 'utf8');
     expect(desk).not.toMatch(/tvPriceStore|addPnlInterest|LiveOpenPnlValue|tvLivePnl/);
     expect(importersOf('lib/tvPriceChannelClient.ts')).toEqual(['services/tvPriceChannel.ts']);
     expect(importersOf('lib/tvPriceStore.ts')).toEqual([
-      'components/LiveOpenPnlValue.tsx', 'lib/tvLivePnl.ts', 'lib/tvPriceChannelClient.ts', 'services/tvPriceChannel.ts',
+      'components/LiveOpenPnlValue.tsx', 'lib/tvLiveCandle.ts', 'lib/tvLivePnl.ts', 'lib/tvPriceChannelClient.ts', 'services/tvPriceChannel.ts',
     ]);
   });
 
   it('hodnotu s pohybem z TV vykreslují jen listové komponenty v LIVE', () => {
     expect(importersOf('components/LiveOpenPnlValue.tsx')).toEqual(['components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx']);
     expect(importersOf('lib/tvLivePnl.ts')).toEqual([
-      'components/LiveCopyTradeOverview.tsx', 'components/LiveOpenPnlValue.tsx', 'components/LiveTradeCard.tsx',
+      'components/LiveCopyTradeOverview.tsx', 'components/LiveOpenPnlValue.tsx', 'components/LiveTradeCard.tsx', 'lib/tvLiveCandle.ts',
     ]);
   });
 
@@ -113,6 +124,14 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       'components/SharedTradeView.tsx',
       'components/TradeShareCard.tsx',
       'components/TradeShareModal.tsx',
+      // Grafy a svíčky dostávají živou svíčku jen přes neutrální rozhraní.
+      'components/AlphaTradeChartWorkspace.tsx',
+      'components/CandleKitTradeChart.tsx',
+      'lib/liveCandleFeed.ts',
+      'hooks/useLiveCandleBinding.ts',
+      'services/liveCandles.ts',
+      'services/dayCandles.ts',
+      'services/provisionalCandles.ts',
     ];
     for (const entry of guarded) {
       expect(existsSync(join(root, entry)), entry).toBe(true);
@@ -154,6 +173,45 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
     for (const { file, block } of blocks) {
       expect(block, file).not.toMatch(/\bset[A-Z]\w*\(|\bon[A-Z]\w*\(|Ref\.current|dispatch|dll|Dll|DLL|risk|limit|Limit|drawdown|cushion|eligib|write|persist|storage/);
     }
+  });
+
+  it('každá vynechaná shoda „import type“ je jediný příkaz', () => {
+    for (const file of allSources) {
+      for (const match of readFileSync(join(root, file), 'utf8').matchAll(TYPE_ONLY)) {
+        expect(match[0].match(/\b(?:import|export)\b/g)?.length ?? 0, `${file}: ${match[0]}`).toBe(1);
+      }
+    }
+  });
+
+  it('živá svíčka z kanálu jde jen do překreslení grafu, nikdy do dat grafu dne', () => {
+    const uses = allSources.flatMap(file => readFileSync(join(root, file), 'utf8').split('\n')
+      .filter(line => line.includes('liveFeed')).map(line => ({ file, line: line.trim() })));
+    expect(uses.length).toBeGreaterThanOrEqual(5);
+    for (const { file, line } of uses) {
+      const allowed = file === 'hooks/useDayChartData.ts'
+        ? /useTvLiveCandleFeed\(|^liveFeed,$|liveFeed`: rozpracovaná/
+        : /liveCandles=\{ctl\.chart\.liveFeed\}|useLiveCandleBinding\(/;
+      expect(line, file).toMatch(allowed);
+    }
+    // Neutrální rozhraní grafu používají jen grafy dne a jejich napojení.
+    expect(importersOf('lib/liveCandleFeed.ts')).toEqual([
+      'components/AlphaTradeChartWorkspace.tsx', 'hooks/useLiveCandleBinding.ts', 'hooks/useTvLiveCandleFeed.ts',
+    ]);
+    expect(importersOf('hooks/useLiveCandleBinding.ts')).toEqual([
+      'components/AlphaTradeChartWorkspace.tsx', 'components/day/DayCompactChart.tsx', 'components/day/DayFullscreenChart.tsx',
+    ]);
+    const workspace = readFileSync(join(root, 'components/AlphaTradeChartWorkspace.tsx'), 'utf8').split('\n')
+      .filter(line => /\bliveCandles\b/.test(line)).map(line => line.trim());
+    expect(workspace).toEqual([
+      'liveCandles?: LiveCandleFeed | null;',
+      'liveCandles = null,',
+      "useLiveCandleBinding(!backtestSession && replay.phase !== 'active' ? liveCandles : null, liveCandleTargets);",
+    ]);
+    // Svíčku ze zdroje čte jen napojení na graf.
+    const readers = allSources.filter(file => /\b(?:feed|liveFeed|liveCandles)\.current\(/.test(readFileSync(join(root, file), 'utf8')));
+    expect(readers).toEqual(['hooks/useLiveCandleBinding.ts']);
+    const dayData = readFileSync(join(root, 'hooks/useDayChartData.ts'), 'utf8');
+    expect(dayData).toMatch(/composeDayCandles\(candleWindow, sameDay\?\.candles \?\? \[\], live\?\.response\.candles \?\? null\)/);
   });
 
   it('výjimka posluchače popředí nezastaví ostatní (obnova pollu LIVE)', () => {

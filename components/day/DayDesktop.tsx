@@ -261,6 +261,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
           // Poznámky k obchodům dne — jen pro čtení (píšou se v detailu obchodu).
           chartNotes={tradeNotes}
           review={review}
+          liveCandles={ctl.chart.liveFeed}
           onClose={ctl.backToDay}
         />
       ) : (

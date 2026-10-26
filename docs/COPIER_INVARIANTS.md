@@ -1227,12 +1227,18 @@ existující ochranu.
   z TV existuje (v renderu; render-prop smí hodnotu jen formátovat). Grant
   (téma + klíč) jde z relaye vedle statusu, nikdy v něm
   (`api/tradovate/oauth/copier-relay.ts`); LIVE desk vidí jen úzké rozhraní
-  `services/tvPriceGrant.ts` (žádný store ani hodnota).
+  `services/tvPriceGrant.ts` (žádný store ani hodnota). Živá svíčka grafu
+  dne: `lib/tvLiveCandle.ts` + `hooks/useTvLiveCandleFeed.ts` (jen v datech
+  grafu dne); grafy dostávají jen neutrální `LiveCandleFeed`
+  (`lib/liveCandleFeed.ts`, `hooks/useLiveCandleBinding.ts`) a svíčku jen
+  překreslí (`updateBar`) — do dat grafu, cache dne ani storage nejde.
 - Hlídá test: `tests/tvPriceClientGuards.test.ts` (kdo smí moduly
   importovat vč. aliasu `@/`, rozhodovací/ukládací/sdílené cesty kanál
   nevidí ani tranzitivně, žádné storage, grant jen do kanálu, render-prop
   jen formátuje — 5 bloků bez `set*`/`on*`/ref/limitů, ekvivalence
-  způsobilosti a souhrnu dne), `tests/tvLivePnl.test.ts`, `tests/tvPriceStore.test.ts`,
+  způsobilosti a souhrnu dne; živá svíčka jen do překreslení grafu),
+  `tests/tvLivePnl.test.ts`, `tests/tvLiveCandle.test.ts`,
+  `tests/tvPriceGrantRefresh.test.ts`, `tests/tvPriceStore.test.ts`,
   `tests/tvPriceChannelClient.test.ts`, `tests/copierRelayPriceChannel.test.ts`.
 - Nikdy: Zapsat cenu nebo P&L z TV do `unrealizedPnl`/`openPnL`, marks
   (`livePnlMarksRef`), způsobilosti a exkluzí, DLL a „zbývá do limitu“,

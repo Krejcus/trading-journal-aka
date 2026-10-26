@@ -12,6 +12,7 @@ import { chartNotesOfTrades } from '../../lib/chartNotes';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
 import { dayAnchorTrade, focusTarget, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
+import { useLiveCandleBinding } from '../../hooks/useLiveCandleBinding';
 
 const TIMEFRAMES: MarketTimeframe[] = ['1m', '5m', '15m'];
 
@@ -50,6 +51,8 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
   const candles = useMemo(() => aggregateCandles(raw, timeframe), [raw, timeframe]);
   const barTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
   const tradeNotes = useMemo(() => chartNotesOfTrades(ctl.chart.chartTrades), [ctl.chart.chartTrades]);
+  // Živá poslední svíčka z kanálu ceny (jen překreslení v grafu).
+  useLiveCandleBinding(ctl.chart.liveFeed, [{ api, root: 'MNQ', timeframe, rawCandles: raw }]);
 
   const target = focusTarget(range);
   const anchorRef = useRef<{ day: string; trade: Trade } | null>(null);

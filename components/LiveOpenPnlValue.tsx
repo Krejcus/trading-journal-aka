@@ -55,7 +55,7 @@ const REASON_LABEL: Record<string, string> = {
   'signed-out': 'nepřihlášeno',
   'no-webcrypto': 'prohlížeč neumí ověřit podpis',
   background: 'aplikace na pozadí',
-  'no-open-position': 'bez otevřené pozice',
+  'not-watching': 'nic živého na obrazovce (bez pozice a bez živého grafu)',
   'channel-error': 'kanál se nepodařilo otevřít',
   'grant-changed': 'nové zařízení nebo klíč',
   subscribing: 'přihlašuje se ke kanálu',

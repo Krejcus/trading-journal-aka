@@ -70,7 +70,11 @@ export interface TvPriceChannelClient {
   clear(): void;
   /** Připojená listová komponenta s otevřenou pozicí. Vrací odhlášení. */
   addPnlInterest(): () => void;
+  /** Připojený graf dne s živou svíčkou (presence `chart`). Vrací odhlášení. */
+  addChartInterest(): () => void;
 }
+
+type PresenceMeta = { pnl: boolean; chart: boolean };
 
 /** Bez grantu (worker nepřipojený) se kanál drží ještě takhle dlouho. */
 export const TV_GRANT_GRACE_MS = 30_000;
@@ -90,17 +94,19 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
   const { store } = deps;
   let userId: string | null = null;
   let grant: TvPriceGrant | null = null;
-  let interest = 0;
+  const interest = { pnl: 0, chart: 0 };
   let foreground = deps.isForeground();
   let channel: TvPriceChannelHandle | null = null;
   let generation = 0;
   let joined = false;
-  let tracked = false;
+  /** Co server o tomto klientovi ví (`null` = nic ohlášeno). */
+  let trackedMeta: PresenceMeta | null = null;
   // Fronta ověřování patří jednomu kanálu; nový kanál začíná s prázdnou.
   let queue = { pending: 0, chain: Promise.resolve() as Promise<void> };
   let graceTimer: unknown = null;
   let untrackTimer: unknown = null;
   let closeTimer: unknown = null;
+  let metaTimer: unknown = null;
   let unsubscribeForeground: (() => void) | null = null;
 
   const safe = (action: () => unknown) => {
@@ -113,17 +119,22 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
   };
   const clearTimer = (timer: unknown) => { if (timer !== null) cancel(timer); };
 
-  const wanted = () => grant !== null && interest > 0 && foreground && deps.hasWebCrypto();
+  const watching = () => interest.pnl + interest.chart > 0;
+  const wanted = () => grant !== null && watching() && foreground && deps.hasWebCrypto();
+  const idleReason = () => (watching() ? 'background' : 'not-watching');
+  const desiredMeta = (): PresenceMeta => ({ pnl: interest.pnl > 0, chart: interest.chart > 0 });
 
   const closeChannel = (reason: string) => {
     clearTimer(untrackTimer);
     clearTimer(closeTimer);
+    clearTimer(metaTimer);
     untrackTimer = null;
     closeTimer = null;
+    metaTimer = null;
     const current = channel;
     channel = null;
     joined = false;
-    tracked = false;
+    trackedMeta = null;
     // Ověření rozpracovaná pro starý kanál se po dokončení zahodí.
     generation += 1;
     queue = { pending: 0, chain: Promise.resolve() };
@@ -131,16 +142,33 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
     store.setLink('off', reason);
   };
 
-  const track = () => {
-    if (!channel || !joined || tracked || !wanted()) return;
-    tracked = true;
+  const track = (applyDrop = false) => {
+    if (!channel || !joined || !wanted()) return;
+    const meta = desiredMeta();
+    if (trackedMeta && trackedMeta.pnl === meta.pnl && trackedMeta.chart === meta.chart) return;
+    // Přibývající zájem se ohlásí hned; ubývající až po prodlevě (remount řádků, přepnutí grafu).
+    const onlyDrops = trackedMeta !== null && (meta.pnl ? trackedMeta.pnl : true) && (meta.chart ? trackedMeta.chart : true);
+    if (onlyDrops && !applyDrop) {
+      if (metaTimer === null) {
+        metaTimer = schedule(() => {
+          metaTimer = null;
+          track(true);
+        }, TV_UNTRACK_DELAY_MS);
+      }
+      return;
+    }
+    clearTimer(metaTimer);
+    metaTimer = null;
+    trackedMeta = meta;
     const current = channel;
-    safe(() => current.track({ pnl: true, chart: false }));
+    safe(() => current.track(meta));
   };
 
   const untrack = () => {
-    if (!channel || !tracked) return;
-    tracked = false;
+    clearTimer(metaTimer);
+    metaTimer = null;
+    if (!channel || !trackedMeta) return;
+    trackedMeta = null;
     const current = channel;
     safe(() => current.untrack());
   };
@@ -178,13 +206,13 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
     if (status === 'SUBSCRIBED') {
       joined = true;
       // Po (re)joinu server presence nezná — ohlásit znovu.
-      tracked = false;
+      trackedMeta = null;
       store.setLink('joined');
       track();
       return;
     }
     joined = false;
-    tracked = false;
+    trackedMeta = null;
     store.setLink('connecting', status.toLowerCase());
   };
 
@@ -223,7 +251,7 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
       return;
     }
     if (!channel) {
-      store.setLink('off', interest > 0 ? 'background' : 'no-open-position');
+      store.setLink('off', idleReason());
       return;
     }
     // Pozadí: odhlásit hned — iOS JS uspí dřív, než by prodleva doběhla.
@@ -232,7 +260,7 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
       untrackTimer = null;
       untrack();
     }
-    if (tracked && untrackTimer === null) {
+    if (trackedMeta && untrackTimer === null) {
       untrackTimer = schedule(() => {
         untrackTimer = null;
         if (!wanted()) untrack();
@@ -241,7 +269,7 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
     if (closeTimer === null) {
       closeTimer = schedule(() => {
         closeTimer = null;
-        if (!wanted()) closeChannel(interest > 0 ? 'background' : 'no-open-position');
+        if (!wanted()) closeChannel(idleReason());
       }, TV_CLOSE_DELAY_MS);
     }
   };
@@ -319,25 +347,28 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
         // best effort
       }
     },
-    addPnlInterest() {
-      interest += 1;
+    addPnlInterest: () => addInterest('pnl'),
+    addChartInterest: () => addInterest('chart'),
+  };
+
+  function addInterest(kind: keyof PresenceMeta): () => void {
+    interest[kind] += 1;
+    try {
+      ensureForegroundListener();
+      reconcile();
+    } catch {
+      // best effort
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      interest[kind] = Math.max(0, interest[kind] - 1);
       try {
-        ensureForegroundListener();
         reconcile();
       } catch {
         // best effort
       }
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        interest = Math.max(0, interest - 1);
-        try {
-          reconcile();
-        } catch {
-          // best effort
-        }
-      };
-    },
-  };
+    };
+  }
 }

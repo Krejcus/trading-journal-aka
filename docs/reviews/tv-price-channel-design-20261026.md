@@ -22,8 +22,21 @@ Neimplementováno.
   bez mezer, zpoždění 37 ms, výpočet na skutečné ceně MNQ = očekávaný pohyb,
   po odhlášení presence 0 zpráv. Náhled: řádky, skupina i karta se hýbou,
   po 2 s bez ceny návrat na kotvu.
+- Krok 5 (živá poslední svíčka v grafu dne) — hotovo. Bar bere přímo
+  z 1m baru TradingView (OHLC včetně knotů), jen `updateBar` v grafu —
+  do `candles` dne, cache, hodnocení ani storage nic nejde. Graf dne
+  (počítač, telefon kompaktní i celá obrazovka) dostává neutrální
+  `LiveCandleFeed` (`lib/liveCandleFeed.ts`); zdroj z TV zapíná jen
+  `hooks/useTvLiveCandleFeed.ts` v datech grafu dne. Presence `chart`
+  a obnova grantu mimo LIVE (GET relaye jen kvůli kanálu, 1×/min) běží jen
+  po dobu odběru feedu napojeným grafem a jen dokud den běží — ne
+  v přehrávání, v backtestu, bez svíček ani u minulého dne. Svíčka cenou
+  nenavazující na data grafu (> 0,2 %, jiný kontrakt) se nekreslí; když cena
+  zmizí, graf se vrátí přesně na svá data. Kritik: OK S VÝHRADAMI →
+  zapracováno. Náhled: nová minuta se připíše, další zpráva ji přepíše;
+  `rawCandles` beze změny; telefon 5m bar se protáhne.
 - Nenasazeno: tajemství ve Vercelu + web, worker reinstall `--tv-stream on`.
-- Další: krok 5 (živá svíčka v grafu dne), měření (bod 6).
+- Další: měření (bod 6).
 
 ## 1. Co dnes existuje (ověřeno v kódu)
 
@@ -235,6 +248,11 @@ Nová (doplnit do `COPIER_INVARIANTS.md` s implementací):
   stávající provoz → blízko kvóty; proto heartbeat 1/s jen při `pnl`/`chart`
   a rate cap. Přesná pravidla počítání presence NEOVĚŘENO — změřit v kroku 1
   postupu (Dashboard → Realtime messages).
+- **Graf dne (krok 5)**: presence `chart` drží stream i bez otevřené
+  pozice, dokud je dnešní graf na obrazovce (popředí). Graf otevřený 8 h
+  denně na dvou zařízeních může kvótu přesáhnout — změřit v bodě 6
+  a případně pro „jen graf“ zpomalit kadenci workeru na 1 s (`demand` dnes
+  `pnl` a `chart` nerozlišuje).
 
 ## 5. Postup (za vypínačem, výchozí off)
 

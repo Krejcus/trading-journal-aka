@@ -42,6 +42,7 @@ import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from '
 import DayTouchDrawLayer from './DayTouchDrawLayer';
 import { dayAnchorTrade, focusTarget, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
+import { useLiveCandleBinding, type LiveCandleTarget } from '../../hooks/useLiveCandleBinding';
 
 type DrawingEngine = NonNullable<ChartViewApi['drawing']>['engine'];
 type MarketCandleLike = { time: number; open: number; high: number; low: number; close: number; volume: number };
@@ -339,6 +340,11 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   );
   const paneCandles = (index: number) => (index === 0 ? candles : extraCandles[index - 1] ?? []);
   const extraBarTimes = useMemo(() => extraCandles.map(list => list.map(candle => candle.time)), [extraCandles]);
+  // Živá poslední svíčka jen v deníku dne a mimo přehrávání (jen překreslení v grafu).
+  const liveCandleTargets: LiveCandleTarget[] = Array.from({ length: paneCount }, (_, index) => ({
+    api: paneApi(index), root: 'MNQ', timeframe: paneTimeframe(index), rawCandles: raw,
+  }));
+  useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets);
   // Kurzor / čas / rozsah mezi okny podle „Synchronizace“ (jako workspace na Macu).
   useEffect(() => {
     if (!split || (!sync.crosshair && !sync.time && !sync.dateRange)) return;

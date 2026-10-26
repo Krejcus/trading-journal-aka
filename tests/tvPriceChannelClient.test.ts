@@ -88,6 +88,42 @@ describe('klient kanálu ceny z TV (krok 3)', () => {
     release();
   });
 
+  it('graf dne hlásí presence chart; přibývající zájem hned, ubývající po prodlevě', () => {
+    const t = setup();
+    t.client.offerGrant('u1', grant(), true);
+    const releaseChart = t.client.addChartInterest();
+    t.channels[0].status('SUBSCRIBED');
+    expect(t.channels[0].tracks).toEqual([{ pnl: false, chart: true }]);
+    const releasePnl = t.client.addPnlInterest();
+    expect(t.channels[0].tracks.at(-1)).toEqual({ pnl: true, chart: true });
+    releasePnl();
+    expect(t.channels[0].tracks).toHaveLength(2);
+    vi.advanceTimersByTime(TV_UNTRACK_DELAY_MS);
+    expect(t.channels[0].tracks.at(-1)).toEqual({ pnl: false, chart: true });
+    releaseChart();
+    vi.advanceTimersByTime(TV_UNTRACK_DELAY_MS);
+    expect(t.channels[0].untracks).toBe(1);
+    vi.advanceTimersByTime(TV_CLOSE_DELAY_MS);
+    expect(t.store.diagnostics()).toMatchObject({ state: 'off', reason: 'not-watching' });
+  });
+
+  it('rejoin ohlásí celý zájem a návrat zájmu během prodlevy nic nepošle', () => {
+    const t = setup();
+    t.client.offerGrant('u1', grant(), true);
+    t.client.addChartInterest();
+    const releasePnl = t.client.addPnlInterest();
+    t.channels[0].status('SUBSCRIBED');
+    expect(t.channels[0].tracks).toEqual([{ pnl: true, chart: true }]);
+    releasePnl();
+    const again = t.client.addPnlInterest();
+    vi.advanceTimersByTime(TV_UNTRACK_DELAY_MS);
+    expect(t.channels[0].tracks).toHaveLength(1);
+    t.channels[0].status('CHANNEL_ERROR');
+    t.channels[0].status('SUBSCRIBED');
+    expect(t.channels[0].tracks.at(-1)).toEqual({ pnl: true, chart: true });
+    again();
+  });
+
   it('po rejoinu kanálu presence ohlásí znovu (server ji po výpadku nezná)', () => {
     const t = setup();
     t.client.offerGrant('u1', grant(), true);

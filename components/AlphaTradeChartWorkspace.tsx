@@ -139,6 +139,8 @@ import {
 } from '../services/chartSettings';
 import { CHART_APPEARANCE_SLOTS, chartAppearanceSnapshot, chartAppearanceUserId, inheritGlobalAppearance, replaceChartAppearance, type ChartAppearanceState } from '../services/chartAppearanceScope';
 import { panelSettingsTargetMatches, type PanelSettingsTarget } from '../services/chartPanelSettings';
+import type { LiveCandleFeed } from '../lib/liveCandleFeed';
+import { useLiveCandleBinding, type LiveCandleTarget } from '../hooks/useLiveCandleBinding';
 import { installDevDragProfiler, recordDragProfilerCommit } from '../services/devDragProfiler';
 import {
   DEFAULT_REPLAY_GO_TO_TIME_ZONE,
@@ -298,6 +300,11 @@ interface AlphaTradeChartWorkspaceProps {
    * vyplní rodiče a nemá tlačítka zavřít.
    */
   embedded?: boolean;
+  /**
+   * Graf dne: rozpracovaná poslední svíčka (jen překreslení v grafu, data
+   * panelů ani nic uloženého se nemění; v přehrávání a backtestu vypnuto).
+   */
+  liveCandles?: LiveCandleFeed | null;
   /**
    * Vlastní paměť rozložení (deník dne si pamatuje své panely zvlášť,
    * nezdědí dva grafy z detailu obchodu) a výchozí rozložení pro ni.
@@ -1025,6 +1032,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   embedded = false,
   layoutScope,
   defaultLayoutId = '2h',
+  liveCandles = null,
 }) => {
   const layoutStorageKey = layoutScope ? `${WORKSPACE_LAYOUT_STORAGE_KEY}:${layoutScope}` : WORKSPACE_LAYOUT_STORAGE_KEY;
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1119,6 +1127,11 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   }));
   const panelControlsRef = useRef<Map<string, WorkspacePanelControl>>(new Map());
   const [panelControls, setPanelControls] = useState<Map<string, WorkspacePanelControl>>(panelControlsRef.current);
+  // Živá svíčka grafu dne: všechny panely, jen mimo přehrávání a backtest.
+  const liveCandleTargets = useMemo<LiveCandleTarget[]>(() => [...panelControls.values()].map(control => ({
+    api: control.chartApi, root: control.config.root, timeframe: control.config.timeframe, rawCandles: control.rawCandles,
+  })), [panelControls]);
+  useLiveCandleBinding(!backtestSession && replay.phase !== 'active' ? liveCandles : null, liveCandleTargets);
   const [workspaceHistory] = useState(() => new ChartWorkspaceHistory());
   const restoredSessionLayoutRef = useRef(false);
   const pendingSessionPanelsRef = useRef<WorkspaceSnapshot>({ ...backtestSession?.workspaceState?.panels });
