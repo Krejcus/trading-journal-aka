@@ -29,7 +29,14 @@ function emitIfChanged(): void {
   const foreground = isAppForeground();
   if (foreground === lastForeground) return;
   lastForeground = foreground;
-  for (const listener of [...listeners]) listener(foreground);
+  for (const listener of [...listeners]) {
+    try {
+      listener(foreground);
+    } catch (error) {
+      // Výjimka jednoho posluchače nesmí zastavit obnovu pollu LIVE (INV-UI-02).
+      console.error('[app-foreground] posluchač selhal', error);
+    }
+  }
 }
 
 function install(): void {

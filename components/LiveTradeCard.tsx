@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { TradeCardAccount, TradeCardLevel, TradeCardModel } from '../lib/liveTradeCard';
-import { futuresSymbolRoot } from '../services/futuresContractSpecs';
+import { tradeCardTvLegs } from '../lib/tvLivePnl';
+import { futuresSymbolRoot, pointValueUsd } from '../services/futuresContractSpecs';
+import { LiveOpenPnlValue, LiveTvMark, TV_LIVE_PNL_TITLE } from './LiveOpenPnlValue';
 
 /**
  * SL/TP aktuálního obchodu skupiny (jen zobrazení, posouvají se v Tradovate).
@@ -198,7 +200,24 @@ export const LiveTradeCompactCard = ({ model }: { model: TradeCardModel }) => {
         <b className="text-[14px] font-black">{futuresSymbolRoot(model.symbol)} · {model.quantity} ks</b>
         <span className="ml-auto"><CoverageChip model={model} /></span>
       </div>
-      {model.kind === 'position' ? (
+      {model.kind === 'position' && model.openPnl != null ? (
+        // Hlavní číslo karty se hýbe s cenou z TV (jen zobrazení); stupnice a SL/TP zůstávají z kotvy.
+        <LiveOpenPnlValue anchor={model.openPnl} legs={tradeCardTvLegs(model)}>
+          {(value, live) => {
+            const pointValue = pointValueUsd(model.symbol);
+            const points = avgPoints != null && pointValue != null && model.quantity > 0
+              ? avgPoints + (value - model.openPnl!) / (model.quantity * pointValue)
+              : avgPoints;
+            return (
+              <div className="mt-1.5 flex items-baseline gap-2" title={live ? TV_LIVE_PNL_TITLE : undefined}>
+                <b className={`text-[28px] font-black tabular-nums tracking-tight ${tone(value)}`}>{signedUsd(value)}</b>
+                {points != null ? <span className="text-xs font-bold tabular-nums text-[var(--text-secondary)]">{signedPoints(points)}</span> : null}
+                {live ? <span className="ml-auto inline-flex items-center gap-1 self-center text-[10px] font-black uppercase tracking-[0.08em] text-indigo-500"><LiveTvMark />živě · TV</span> : null}
+              </div>
+            );
+          }}
+        </LiveOpenPnlValue>
+      ) : model.kind === 'position' ? (
         <div className="mt-1.5 flex items-baseline gap-2">
           <b className={`text-[28px] font-black tabular-nums tracking-tight ${tone(model.openPnl)}`}>{signedUsd(model.openPnl)}</b>
           {avgPoints != null ? <span className="text-xs font-bold tabular-nums text-[var(--text-secondary)]">{signedPoints(avgPoints)}</span> : null}

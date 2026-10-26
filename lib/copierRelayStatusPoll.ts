@@ -4,6 +4,8 @@ export interface CopierRelayStatusEnvelope<T> {
   connected: boolean;
   /** Stáří spočítané serverem vůči stejným hodinám jako lastSeenAt. */
   ageMs?: number;
+  /** Kanál ceny z TV vedle statusu (jen zobrazení); ověřuje `isTvPriceGrant`. */
+  priceChannel?: unknown;
 }
 
 /** Převod serverového stáří na lokální monotónní bod přijetí bez porovnání

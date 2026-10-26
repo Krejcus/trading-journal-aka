@@ -1,0 +1,108 @@
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import { tvLivePnlDelta, type TvLivePnlLeg } from '../lib/tvLivePnl';
+import type { TvPriceDiagnostics } from '../lib/tvPriceStore';
+import { tvPriceChannel, tvPriceStore } from '../services/tvPriceChannel';
+
+/**
+ * Listová komponenta otevřeného P&L (krok 4 návrhu
+ * `docs/reviews/tv-price-channel-design-20261026.md`). Kotva je hodnota
+ * z read modelu (broker / odhad z marku brokera); pohyb ceny z TradingView
+ * se k ní přičte jen tady, v renderu, a jen když projdou kontroly
+ * `lib/tvLivePnl.ts`. **INV-UI-04**: hodnota s pohybem z TV nikam neodchází
+ * — ani do read modelu, marks, způsobilosti, limitů, ARM, příkazů, widgetu,
+ * sdílených karet, žurnálu, ani do storage. Store čtou jen tyto komponenty,
+ * takže změna ceny 4×/s překreslí jen je, ne velký strom LIVE.
+ */
+
+const NO_DELTA = Number.NaN;
+
+export const TV_LIVE_PNL_TITLE = 'Živě: poslední kotva brokera + pohyb ceny z TradingView. Jen zobrazení.';
+
+/** Viditelný štítek „živě z TradingView“ u hodnoty (i na telefonu, kde není title). */
+export const LiveTvMark = () => (
+  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" role="img" aria-label="Živě z TradingView" title={TV_LIVE_PNL_TITLE} />
+);
+
+export function LiveOpenPnlValue({ anchor, legs, children }: {
+  /** Zobrazená hodnota z read modelu (bez TV). */
+  anchor: number;
+  /** Pozice, kterých se hodnota týká; `null` = jen kotva (a worker nestreamuje). */
+  legs: readonly TvLivePnlLeg[] | null;
+  children: (value: number, live: boolean) => React.ReactNode;
+}) {
+  const interested = legs != null && legs.length > 0;
+  // Presence „dívám se na P&L“ jen s otevřenou pozicí; skrytí appky řeší kanál.
+  useEffect(() => (interested ? tvPriceChannel.addPnlInterest() : undefined), [interested]);
+  // Primitivní výběr: změna storu bez změny pohybu komponentu nepřekreslí.
+  const delta = useSyncExternalStore(tvPriceStore.subscribe, () => {
+    const result = tvLivePnlDelta(legs, tvPriceStore.view());
+    return result.live ? result.deltaUsd : NO_DELTA;
+  }, () => NO_DELTA);
+  const live = Number.isFinite(delta) && Number.isFinite(anchor);
+  return <>{children(live ? anchor + delta : anchor, live)}</>;
+}
+
+const STATE_LABEL: Record<TvPriceDiagnostics['state'], string> = {
+  off: 'vypnuto',
+  connecting: 'připojuje se',
+  waiting: 'připojeno, čeká na cenu',
+  live: 'živě',
+  stale: 'stojí',
+};
+
+const REASON_LABEL: Record<string, string> = {
+  'no-grant': 'worker kanál nenabízí (nepřipojený, nebo vypnuto na serveru)',
+  'signed-out': 'nepřihlášeno',
+  'no-webcrypto': 'prohlížeč neumí ověřit podpis',
+  background: 'aplikace na pozadí',
+  'no-open-position': 'bez otevřené pozice',
+  'channel-error': 'kanál se nepodařilo otevřít',
+  'grant-changed': 'nové zařízení nebo klíč',
+  subscribing: 'přihlašuje se ke kanálu',
+  channel_error: 'chyba kanálu, zkouší znovu',
+  timed_out: 'kanál neodpověděl, zkouší znovu',
+  closed: 'kanál zavřen, zkouší znovu',
+  'no-message': 'worker zatím nic neposlal',
+  'tv-stale': 'cena nepřišla déle než 2 s',
+  interval: 'zdrojový panel TV není 1m',
+  mode: 'TV neposílá realtime data',
+  'no-price': 'TV nehlásí poslední cenu',
+};
+
+const stateTone = (state: TvPriceDiagnostics['state']) => state === 'live'
+  ? 'text-emerald-500' : state === 'stale' ? 'text-amber-500' : 'text-[var(--text-muted)]';
+
+/** Diagnostika kanálu ceny z TV (krok 3). Odebírá store jen v rozbaleném panelu. */
+export function TvPriceDiagnosticsRow() {
+  const diagnostics = useSyncExternalStore(tvPriceStore.subscribe, tvPriceStore.diagnostics, tvPriceStore.diagnostics);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const age = diagnostics.lastReceivedAt != null ? Math.max(0, now - diagnostics.lastReceivedAt) : null;
+  const reason = diagnostics.reason ? REASON_LABEL[diagnostics.reason] ?? diagnostics.reason : null;
+  return (
+    <div className="mt-4 rounded-md border border-[var(--border-subtle)] px-3 py-2" data-testid="tv-price-diagnostics">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-xs font-black text-[var(--text-primary)]">Cena z TradingView (jen zobrazení)</span>
+        <span className={`text-xs font-bold ${stateTone(diagnostics.state)}`}>
+          {STATE_LABEL[diagnostics.state]}{reason ? ` · ${reason}` : ''}
+        </span>
+      </div>
+      <div className="mt-1 text-[10px] tabular-nums text-[var(--text-muted)]">
+        {diagnostics.perSecond} zpráv/s
+        {age != null ? ` · poslední před ${(age / 1_000).toFixed(1)} s` : ''}
+        {diagnostics.lagMs != null ? ` · zpoždění ${diagnostics.lagMs} ms` : ''}
+        {diagnostics.seq != null ? ` · seq ${diagnostics.seq}` : ''}
+        {diagnostics.chart ? ` · ${diagnostics.chart}${diagnostics.interval ? ` ${diagnostics.interval}m` : ''}` : ''}
+        {diagnostics.front ? ` · ${diagnostics.front}` : ''}
+        {diagnostics.mode ? ` · ${diagnostics.mode}` : ''}
+      </div>
+      <div className="mt-0.5 text-[10px] tabular-nums text-[var(--text-muted)]">
+        podpis platný {diagnostics.verified} · neplatný {diagnostics.rejected} · přehrání {diagnostics.replayed}
+        {' · '}mezery {diagnostics.gaps} · nový běh {diagnostics.runChanges} · zahozeno {diagnostics.dropped}
+      </div>
+    </div>
+  );
+}

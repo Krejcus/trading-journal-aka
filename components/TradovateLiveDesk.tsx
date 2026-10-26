@@ -7,6 +7,7 @@ import { CopierRelayInFlight, runCopierRelayStatusRound } from '../lib/copierRel
 import { readCopyGroupCache } from '../services/copyGroupLibrary';
 import { LIVE_COLD_REVEAL_CAP_MS, liveColdReadsPending } from '../lib/liveColdReveal';
 import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
+import { clearTvPriceChannel, offerTvPriceGrant } from '../services/tvPriceGrant';
 import { clearCopierAgentStatusStore, copierRelayFeedSourcesFor, readCopierAgentStatusSnapshot, writeCopierAgentStatusSnapshot } from '../lib/copierAgentStatusStore';
 import { shouldProbeLocalCopierAgent } from '../lib/localCopierProbePolicy';
 import LiveMobileAccountDetail from './LiveMobileAccountDetail';
@@ -1101,6 +1102,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
             setRelayConnectionId(firstConnected.connectionId);
             relayConnectionIdRef.current = firstConnected.connectionId;
             lastAgentRouteRef.current = { transport: 'relay', relayConnectionId: firstConnected.connectionId };
+            // Kanál ceny z TV (jen zobrazení) jen z odpovědi přijaté jako status,
+            // až po route pro brzdy.
+            offerTvPriceGrant(userId, firstConnected.remote.priceChannel ?? null, firstConnected.remote.connected);
           }
         },
         // Pomalejší spojení dočítají jen zobrazovací feedy.
@@ -1129,6 +1133,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           setAgentTransport('relay');
           setRelayConnectionId(retained.connectionId);
           relayConnectionIdRef.current = retained.connectionId;
+          offerTvPriceGrant(userId, retained.remote.priceChannel ?? null, false);
         }
       }
       markAgentStatusStale();
@@ -1160,6 +1165,37 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       window.removeEventListener('focus', poller.resume);
     };
   }, [acceptAgentStatus, agentClient, connectedConnectionIds, markAgentStatusStale, userId]);
+
+  // Kanál ceny z TV při lokálním spojení s workerem: grant (jen ten, status se
+  // nepřijímá ani neukládá) z GET relaye zvlášť, protože lokální status ho
+  // záměrně nenese. Nejvýš jednou za minutu a po návratu do popředí.
+  useEffect(() => {
+    const connectionId = relayConnectionId ?? connectedConnectionIds[0];
+    if (agentTransport !== 'local' || !connectionId) return;
+    let stopped = false;
+    let inFlight = false;
+    const loadGrant = async () => {
+      if (stopped || inFlight || !isAppForeground()) return;
+      inFlight = true;
+      try {
+        const remote = await loadTradovateCopierRelayStatus(connectionId);
+        if (!stopped) offerTvPriceGrant(userId, remote?.priceChannel ?? null, remote?.connected === true);
+      } catch {
+        // Jen zobrazení; další pokus za minutu.
+      } finally {
+        inFlight = false;
+      }
+    };
+    void loadGrant();
+    const timer = window.setInterval(() => { void loadGrant(); }, 60_000);
+    const unsubscribeForeground = subscribeAppForeground(foreground => { if (foreground) void loadGrant(); });
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      unsubscribeForeground();
+    };
+  }, [agentTransport, connectedConnectionIds, relayConnectionId, userId]);
+  useEffect(() => () => clearTvPriceChannel(), [userId]);
 
   useEffect(() => {
     const prefix = '#copier-pair=';

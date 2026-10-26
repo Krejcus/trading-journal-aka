@@ -44,6 +44,8 @@ export interface TradeCardAccount {
   entry: number | null;
   /** Otevřený P&L po poplatcích; null u neověřeného nebo starého čtení. */
   openPnl: number | null;
+  /** Čas kotvy otevřeného P&L (broker / odhad z marku); jen pro živé zobrazení. */
+  openPnlAsOf: string | null;
   /** Poplatky za vstup i výstup celé pozice; null když je broker neposlal. */
   fees: number | null;
   stop: TradeCardLevel;
@@ -211,6 +213,7 @@ export function buildTradeCard(rows: readonly TradeCardRowInput[], orders: reado
         quantity,
         entry,
         openPnl: gross == null ? null : gross - (fees ?? 0),
+        openPnlAsOf: gross == null ? null : row.account.unrealizedPnlUpdatedAt ?? null,
         fees,
         stop: ordersVerified ? levelFrom(legs, true, entry, direction, quantity, value, fees) : unverifiedLevel,
         target: ordersVerified ? levelFrom(legs, false, entry, direction, quantity, value, fees) : unverifiedLevel,
@@ -254,6 +257,7 @@ export function buildTradeCard(rows: readonly TradeCardRowInput[], orders: reado
       quantity,
       entry: finite(price) ? price : null,
       openPnl: null,
+      openPnlAsOf: null,
       fees,
       stop: ordersVerified ? levelFrom(legs, true, finite(price) ? price : null, direction, quantity, value, fees) : unverifiedLevel,
       target: ordersVerified ? levelFrom(legs, false, finite(price) ? price : null, direction, quantity, value, fees) : unverifiedLevel,

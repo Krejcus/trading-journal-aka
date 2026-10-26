@@ -333,6 +333,8 @@ export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
   lastSeenAt: string;
   connected: boolean;
   ageMs?: number;
+  /** Téma a klíč kanálu ceny z TV vedle statusu; nikdy neukládat (INV-UI-04). */
+  priceChannel?: unknown;
 } | null> {
   return authenticatedRequest(`/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}`);
 }

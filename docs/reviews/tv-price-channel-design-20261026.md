@@ -13,8 +13,17 @@ Neimplementováno.
 - Krok 2 (vlákno ve workeru, výchozí vypnuto) — hotovo, kritik OK S
   VÝHRADAMI (zapracováno). Zkouška naostro: 2,3 zprávy/s, podpisy 28/28,
   worker → klient p50 32 ms, po odhlášení presence 0 zpráv.
+- Krok 3 (klientský store + diagnostika) a krok 4 (živé P&L v listových
+  komponentách) — hotovo. Odchylka od B: „jeden obchod skupiny“ (karta
+  obchodu, buňka Otevřený P&L skupiny a souhrn skupiny na telefonu) se hýbe
+  také — není to součet s limity a nohy musí projít všechny kontroly, jinak
+  jen kotva. Ostrov, souhrn dne, DLL a jiné součty zůstávají z kotvy.
+  Zkouška naostro (vlákno → Realtime → klientská knihovna): 19/19 podpisů,
+  bez mezer, zpoždění 37 ms, výpočet na skutečné ceně MNQ = očekávaný pohyb,
+  po odhlášení presence 0 zpráv. Náhled: řádky, skupina i karta se hýbou,
+  po 2 s bez ceny návrat na kotvu.
 - Nenasazeno: tajemství ve Vercelu + web, worker reinstall `--tv-stream on`.
-- Další: krok 3 (klientský store + diagnostika), 4 (P&L), 5 (svíčka).
+- Další: krok 5 (živá svíčka v grafu dne), měření (bod 6).
 
 ## 1. Co dnes existuje (ověřeno v kódu)
 
@@ -164,6 +173,18 @@ spouštěném hlavním vláknem workeru:
   karty (`LiveDayCard` vč. `captureMode`, `TradeShareCard`,
   `SharedLiveDayView`), žurnál, IndexedDB/Storage.
 - Štítek „živě (TradingView)“ vs „broker“; součty v první verzi jen z kotvy.
+- **Implementace 26. 10. (odchylky, kritik OK S VÝHRADAMI):** (a) „jeden
+  obchod skupiny“ (karta obchodu, Otevřený P&L skupiny, souhrn skupiny na
+  telefonu) se hýbe také — není to součet s limitem, nohy jsou vše nebo nic;
+  ostrov, souhrn dne, DLL a jiné součty zůstávají z kotvy. (b) Místo
+  branded typu render-prop listové komponenty + zdrojový test, že se hodnota
+  v něm jen formátuje (žádné `set*`/`on*`/ref/limity), a desk vidí jen úzké
+  rozhraní grantu (`services/tvPriceGrant.ts`). (c) Výchozí cena pohybu = cena
+  TV v okně kotvy nejbližší marku brokera (čas kotvy je jen odhad). (d) Při
+  lokálním spojení s workerem bere klient grant z GET relaye čteného jen
+  kvůli grantu (status se nepřijímá), nejvýš 1× za minutu a po návratu do
+  popředí. (e) Štítek: indigová tečka u hodnoty, na kartě „živě · TV“.
+  Detail účtu na telefonu a značka na stupnici karty zůstávají z kotvy.
 
 ### C. Svíčky
 

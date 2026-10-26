@@ -749,6 +749,25 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je ukázat platnost fronty do
   `expiresAt`. Nebezpečné je po UI timeoutu brzdu automaticky zopakovat.
 
+### INV-RELAY-04: Realtime kanály jsou jen optimalizace a zobrazení; nenesou příkazy ani rozhodovací stav (26. 10. 2026)
+
+- Proč: Kick i kanál ceny jsou veřejné kanály s anon klíčem — kdo zná téma,
+  může poslouchat i posílat. Poll relaye (~750 ms) zůstává jedinou cestou
+  příkazů.
+- Vynucuje: `server/tvPriceChannel.ts` (téma a klíč odvozené ze zařízení,
+  nikdy nevyhodí; chyba = pole se vynechá, žádné 502 na cestě brzd),
+  `server/macCopierCommandRelay.ts` (konfigurace kanálu se předá bez
+  čekání), `lib/tvPriceChannelClient.ts` (podpis, přehrání, strop fronty
+  ověřování).
+- Hlídá test: `tests/copierRelayPriceChannel.test.ts`,
+  `tests/tvPriceStreamWiring.test.ts`, `tests/tvPriceChannelClient.test.ts`.
+- Nikdy: Poslat přes Realtime příkaz, ARM/DISARM, risk ani stav, podle
+  kterého se rozhoduje; logovat téma nebo klíč; čekat v poll smyčce na
+  přihlášení ke kanálu.
+- Bezpečné změny vs. nebezpečné: Bezpečné je kanál vypnout (pole chybí)
+  — kopírka jede dál přes poll. Nebezpečné je z přítomnosti zpráv
+  odvozovat čerstvost workeru (INV-FRESH-03).
+
 ### Způsobilost účtů
 
 ### INV-ELIG-01: Stav účtu je `active`, `dll-locked`, `breached` nebo `unverifiable`; neověřitelný účet je fail-closed
@@ -1027,6 +1046,28 @@ existující ochranu.
   kontrolovat serverově. Nebezpečné je povolit ARM při více čerstvých
   execution zařízeních bez lease/fence.
 
+### INV-WORKER-04: Neexekuční moduly workeru běží v oddělené doméně selhání; jejich chyba ani zaseknutí nesmí ukončit proces ani zdržet relay poll a brzdy (26. 10. 2026)
+
+- Proč: Pád procesu workeru = launchd restart = DISARMED (INV-DEFAULT-01).
+  Doplněk jen pro zobrazení (kanál ceny z TradingView) nesmí kopírku vypnout
+  ani zpomalit doručení DISARM/kill.
+- Vynucuje: `scripts/copier/tvPriceStreamThread.ts` (samostatný bundle
+  `tv-price-stream.mjs` v `node:worker_threads`, nic z kopírky neimportuje),
+  `server/tvPriceStreamSupervisor.ts` (restart s prodlevou, jistič 3 pády
+  / 10 min, liveness, pády po probuzení se nepočítají, posluchači v
+  try/catch), `server/macCopierCommandRelay.ts:notifyRealtimeConfig`
+  (synchronně, bez čekání, před kickem), `scripts/copier/pilot.ts` (výchozí
+  vypnuto, `ALPHATRADE_TV_STREAM=on` + existující bundle).
+- Hlídá test: `tests/tvPriceStreamSupervisor.test.ts`,
+  `tests/tvPriceStreamWiring.test.ts` (allowlist importů vlákna, pořadí
+  buildu, relay hook), `tests/tradingViewPriceStream.test.ts`.
+- Nikdy: Spouštět bundle workeru jako vlákno, přidávat globální
+  `process.on('unhandledRejection')` kvůli doplňku, čekat v poll smyčce na
+  přihlášení k Realtime, spouštět/ukončovat TradingView z vlákna.
+- Bezpečné změny vs. nebezpečné: Bezpečné je vypnout stream serverem
+  (vynechat `priceTopic`/`priceKey` v odpovědi pollu) bez restartu workeru.
+  Nebezpečné je přesunout čtení TV do hlavního event loopu workeru.
+
 ### Tradovate specifika
 
 ### INV-TRAD-01: Initial sync je baseline, nikoli sada nových obchodů; skutečný reconnect vyžaduje route-scoped resync a zůstává DISARMED
@@ -1148,7 +1189,9 @@ existující ochranu.
   zda je runtime dostupný.
 - Vynucuje: `components/TradovateLiveDesk.tsx:executeSafetyCommand`,
   `lib/copierSafetyControls.ts:selectCopierSafetyRoute` a
-  `copierAgentCommandAllowedWhileRestored`.
+  `copierAgentCommandAllowedWhileRestored`; `lib/appForeground.ts` volá
+  posluchače popředí izolovaně (výjimka jednoho, např. kanálu ceny z TV,
+  nezastaví obnovu pollu LIVE — `tests/tvPriceClientGuards.test.ts`).
 - Hlídá test: `tests/copierSafetyControls.test.ts`,
   `tests/liveCopyDisarmPanelRender.test.ts`, `tests/liveCopyAdversarialUiReview.test.ts`.
 - Nikdy: Neschovávat OFF kvůli stale pollu a naopak nepouštět ARM/config přes
@@ -1169,6 +1212,37 @@ existující ochranu.
   potvrzený risk/eligibility/flat stav.
 - Bezpečné změny vs. nebezpečné: Bezpečné je ukázat timestamp a stale badge.
   Nebezpečné je z retained hodnoty odvozovat povolení tlačítka ON.
+
+### INV-UI-04: Data z TradingView jsou jen pro zobrazení; nikdy nevstupují do read modelu, rozhodování ani úložišť (26. 10. 2026)
+
+- Proč: Filip 26. 10. povolil cenu z TV pro P&L zobrazené na obrazovce, nikdy
+  pro risk, day lock, limity ani kopírku. Veřejný Realtime kanál je
+  podvrhnutelný, proto se zprávy podepisují.
+- Vynucuje: `lib/tvPriceMessage.ts` (HMAC nad surovým řetězcem, přísný
+  tvar), `lib/tvPriceStore.ts` (jen paměť, ochrana proti přehrání
+  `seq`/`runId`/`at`), `lib/tvPriceChannelClient.ts` (postupné ověření,
+  změna tématu = reset, serverový vypínač), `lib/tvLivePnl.ts` (kotva
+  brokera + pohyb, kontroly 1–5), listová komponenta
+  `components/LiveOpenPnlValue.tsx` — jediné místo, kde hodnota s pohybem
+  z TV existuje (v renderu; render-prop smí hodnotu jen formátovat). Grant
+  (téma + klíč) jde z relaye vedle statusu, nikdy v něm
+  (`api/tradovate/oauth/copier-relay.ts`); LIVE desk vidí jen úzké rozhraní
+  `services/tvPriceGrant.ts` (žádný store ani hodnota).
+- Hlídá test: `tests/tvPriceClientGuards.test.ts` (kdo smí moduly
+  importovat vč. aliasu `@/`, rozhodovací/ukládací/sdílené cesty kanál
+  nevidí ani tranzitivně, žádné storage, grant jen do kanálu, render-prop
+  jen formátuje — 5 bloků bez `set*`/`on*`/ref/limitů, ekvivalence
+  způsobilosti a souhrnu dne), `tests/tvLivePnl.test.ts`, `tests/tvPriceStore.test.ts`,
+  `tests/tvPriceChannelClient.test.ts`, `tests/copierRelayPriceChannel.test.ts`.
+- Nikdy: Zapsat cenu nebo P&L z TV do `unrealizedPnl`/`openPnL`, marks
+  (`livePnlMarksRef`), způsobilosti a exkluzí, DLL a „zbývá do limitu“,
+  ostrova, ARM payloadu a příkazů, worker statusu, Live Activity/push/widgetu,
+  `displayCache`/`writeTradovateDisplaySession`, sdílených karet, žurnálu ani
+  storage. Neověřenou zprávu nikdy nezobrazit.
+- Bezpečné změny vs. nebezpečné: Bezpečné je přidat další listové zobrazení
+  přes `LiveOpenPnlValue` (jeden obchod skupiny, řádek účtu). Nebezpečné je
+  vrátit číslo s pohybem z TV z komponenty ven nebo z něj počítat součet
+  s limity.
 
 ### Vzdálený watchdog
 

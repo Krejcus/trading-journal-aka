@@ -283,6 +283,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-26 dopoledne — Kanál ceny z TV: krok 3 (klient) a 4 (živé P&L) hotové, NEnasazeno (Claude)
+
+- **Krok 3**: `lib/tvPriceStore.ts` (jen paměť; přehrání `seq`/`runId`/`at`,
+  okno hodin 60 s, čerstvost 2 s vlastním časovačem), `lib/tvPriceChannelClient.ts`
+  + `services/tvPriceChannel.ts` (grant jen z přijaté odpovědi relaye, při
+  lokálním spojení z GET relaye jen kvůli grantu; presence `{pnl:true}` jen
+  s otevřenou pozicí na obrazovce a v popředí, pozadí = odhlášení hned;
+  postupné ověření podpisu s timeoutem, fronta per kanál; serverový
+  vypínač). Diagnostika v panelu „Diagnostika dat a API“.
+- **Krok 4**: `lib/tvLivePnl.ts` (kotva brokera + pohyb od ceny TV z okna
+  kotvy nejbližší marku brokera; kontroly 1–5, jen NQ/MNQ), listová
+  `components/LiveOpenPnlValue.tsx` (jediné místo s hodnotou s pohybem,
+  štítek „živě · TV“). Hýbe se: řádek účtu (počítač i telefon) a „jeden
+  obchod skupiny“ (karta obchodu, Otevřený P&L skupiny); ostrov, souhrn dne,
+  DLL a jiné součty zůstávají z kotvy. LIVE desk vidí jen `services/tvPriceGrant.ts`.
+- **INV**: doplněny INV-UI-04, INV-WORKER-04, INV-RELAY-04 do `COPIER_INVARIANTS.md`.
+- **Ověření**: zkouška naostro (vlákno → Realtime → klientská knihovna →
+  výpočet): 19/19 podpisů, bez mezer, zpoždění 37 ms, výpočet na skutečné
+  ceně MNQ = očekávaný pohyb, po odhlášení presence 0 zpráv. Náhled (ukázkový
+  obchod, počítač i telefon): řádky +6 USD, skupina a karta +24 USD, po 2 s
+  bez ceny návrat na kotvu. Celá sada před opravami z kritiky zelená (611
+  souborů); po opravách TV + související testy 105/105. **Celou sadu po
+  posledních úpravách (hlídací test, dokumentace) nešlo pustit — kopírka je
+  ARMED; doběhne před pushem.**
+- **Kritik**: OK S VÝHRADAMI → zapracováno (štítek na telefonu, úzké rozhraní
+  grantu pro desk, izolace posluchačů popředí, výchozí cena podle marku,
+  timeout ověření); kontrola delty OK S VÝHRADAMI → hlídací test a INV doplněny.
+- **Zbývá**: nasazení (tajemství ve Vercelu + web; worker reinstall
+  `--tv-stream on` ve flat/DISARMED stavu), krok 5 živá svíčka.
+
 ### 2026-10-26 odpoledne — Kanál ceny z TV: krok 1 (relay) a 2 (vlákno ve workeru) hotové, NEnasazeno (Claude)
 
 - **Krok 1** (`7a492f03`): relay odvozuje z `TV_PRICE_CHANNEL_SECRET` téma

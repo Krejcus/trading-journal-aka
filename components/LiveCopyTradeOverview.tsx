@@ -8,6 +8,8 @@ import { buildLiveDaySummary, liveDayReadAnswered } from '../lib/liveDaySummary'
 import { buildLiveCopierIsland } from '../lib/liveCopierIsland';
 import { buildTradeCard, type TradeCardAccount, type TradeCardModel } from '../lib/liveTradeCard';
 import { GroupTradeLevelCell, LiveTradeCompactCard, TradeLevelCell, TradeLevelInline } from './LiveTradeCard';
+import { LiveOpenPnlValue, LiveTvMark, TV_LIVE_PNL_TITLE, TvPriceDiagnosticsRow } from './LiveOpenPnlValue';
+import { liveAccountTvLegs, tradeCardTvLegs } from '../lib/tvLivePnl';
 import { copierArmRejection, isArmPositionRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { formatReadAge, isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
@@ -2968,6 +2970,7 @@ export const LivePnlPanelBody = ({ dataActive, apiReady, connections, workerUsag
               </div>
             </div>
           ) : null}
+          <TvPriceDiagnosticsRow />
           <p className="mt-3 text-[10px] leading-relaxed text-[var(--text-muted)]">
             Jde o přesný počet požadavků z této otevřené aplikace na AlphaTrade Tradovate proxy. Tradovate neposkytuje autoritativní procento vyčerpaného limitu; odpovědi 429 evidujeme zvlášť.
             {telemetry.inFlight > 0 ? ` Právě probíhá: ${telemetry.inFlight}.` : ''}
@@ -3341,7 +3344,10 @@ const GroupRow = ({ group, rows, tradeCard = null, armed, dailyPnlPending, eligi
     daily: <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${daily == null ? 'text-[var(--text-secondary)]' : pnlClass(daily)}`}>{daily == null ? '—' : money.format(daily)}</td>,
     sl: <td className="px-3 py-1.5 text-right"><GroupTradeLevelCell model={tradeCard} level="stop" /></td>,
     tp: <td className="px-3 py-1.5 text-right"><GroupTradeLevelCell model={tradeCard} level="target" /></td>,
-    unreal: <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={netOpen != null ? 'Po poplatcích za vstup i výstup, stejně jako karta obchodu.' : unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>,
+    // Jeden obchod skupiny (karta obchodu) se hýbe s cenou z TV; jiné součty jen z kotvy.
+    unreal: <LiveOpenPnlValue anchor={unreal} legs={tradeCardTvLegs(tradeCard)}>
+      {(value, live) => <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(value)}`} title={unrealSource === 'stale' && netOpen == null ? 'Některý účet čeká na nový snapshot.' : live ? `${TV_LIVE_PNL_TITLE}${netOpen != null ? ' Po poplatcích za vstup i výstup.' : ''}` : netOpen != null ? 'Po poplatcích za vstup i výstup, stejně jako karta obchodu.' : unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(value)}{live ? <LiveTvMark /> : null}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
+    </LiveOpenPnlValue>,
   };
   return (
     <tr
@@ -3861,23 +3867,32 @@ const CompactAccountRow = ({ row, tradeAccount, variant, live, eligibility, trad
             ) : null}
           </span>
         </span>
-        <span className={`compact-row-dim truncate text-right text-[12px] font-bold tabular-nums ${variant === 'market'
-          ? (a ? pnlClass(netOpen ?? a.unrealizedPnl) : 'text-[var(--text-secondary)]')
-          : (daily != null && !dailyDisplay.stale ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
-          {variant === 'market'
-            ? (a ? (
-              <span
-                className="inline-flex items-center justify-end gap-1"
-                title={unrealStale ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : netOpen != null ? NET_OPEN_TITLE : undefined}
-              >
-                {money.format(netOpen ?? a.unrealizedPnl)}
-                {unrealStale ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
+        {variant === 'market' && a ? (
+          <LiveOpenPnlValue anchor={netOpen ?? a.unrealizedPnl} legs={liveAccountTvLegs(a, positionsVerified)}>
+            {(value, live) => (
+              <span className={`compact-row-dim truncate text-right text-[12px] font-bold tabular-nums ${pnlClass(value)}`}>
+                <span
+                  className="inline-flex items-center justify-end gap-1"
+                  title={unrealStale ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : live ? `${TV_LIVE_PNL_TITLE}${netOpen != null ? ' ' + NET_OPEN_TITLE : ''}` : netOpen != null ? NET_OPEN_TITLE : undefined}
+                >
+                  {money.format(value)}
+                  {live ? <LiveTvMark /> : null}
+                  {unrealStale ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
+                </span>
               </span>
-            ) : '—')
-            : daily != null ? <DailyPnlValue display={dailyDisplay} />
-              : quiet ? <span title="Broker dnes u tohoto účtu nehlásí uzavřený obchod">{money.format(0)}</span>
-                : '—'}
-        </span>
+            )}
+          </LiveOpenPnlValue>
+        ) : (
+          <span className={`compact-row-dim truncate text-right text-[12px] font-bold tabular-nums ${variant === 'market'
+            ? 'text-[var(--text-secondary)]'
+            : (daily != null && !dailyDisplay.stale ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
+            {variant === 'market'
+              ? '—'
+              : daily != null ? <DailyPnlValue display={dailyDisplay} />
+                : quiet ? <span title="Broker dnes u tohoto účtu nehlásí uzavřený obchod">{money.format(0)}</span>
+                  : '—'}
+          </span>
+        )}
       </div>
       {switchInSlot ? (
         <div className="compact-switch-note" data-open={switchNoteOpen} aria-live="polite">
@@ -4177,15 +4192,20 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
           value={daily == null ? '—' : moneyWhole.format(daily)}
           className={daily == null ? 'text-[var(--text-secondary)]' : pnlClass(daily)}
         />
-        <CompactStat
-          label="Otevřený"
-          value={unrealStale && netOpen == null
-            ? <span className="inline-flex items-center gap-1" title="Některý účet čeká na nový snapshot; součet obsahuje poslední známé údaje.">
-                {moneyWhole.format(unreal)}<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" />
-              </span>
-            : moneyWhole.format(unreal)}
-          className={pnlClass(unreal)}
-        />
+        <LiveOpenPnlValue anchor={unreal} legs={tradeCardTvLegs(tradeCard)}>
+          {(value, live) => (
+            <CompactStat
+              label="Otevřený"
+              value={unrealStale && netOpen == null
+                ? <span className="inline-flex items-center gap-1" title="Některý účet čeká na nový snapshot; součet obsahuje poslední známé údaje.">
+                    {moneyWhole.format(value)}<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" />
+                  </span>
+                : live ? <span className="inline-flex items-center gap-1">{moneyWhole.format(value)}<LiveTvMark /></span>
+                  : moneyWhole.format(value)}
+              className={pnlClass(value)}
+            />
+          )}
+        </LiveOpenPnlValue>
       </div>
 
       {tradeCard ? <LiveTradeCompactCard model={tradeCard} /> : null}
@@ -5561,15 +5581,18 @@ const AccountRow = ({ row, live, onAccount, columns, tradeAccount, orders, eligi
         </span>;
         return risk.dll;
       case 'unreal':
-        return a ? <span
-          className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(netOpen ?? a.unrealizedPnl)}`}
-          title={netOpen != null ? NET_OPEN_TITLE : a.unrealizedPnlSource === 'estimated'
-            ? 'Live odhad podle skutečné vstupní ceny účtu a posledního broker snapshotu.'
-            : a.unrealizedPnlSource === 'stale' ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : 'Potvrzeno broker snapshotem.'}
-        >
-          {money.format(netOpen ?? a.unrealizedPnl)}
-          {a.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
-        </span> : <span className="text-xs text-[var(--text-secondary)]">—</span>;
+        return a ? <LiveOpenPnlValue anchor={netOpen ?? a.unrealizedPnl} legs={liveAccountTvLegs(a, isLiveAccountReadVerified(a, 'positions'))}>
+          {(value, live) => <span
+            className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(value)}`}
+            title={live ? `${TV_LIVE_PNL_TITLE}${netOpen != null ? ' ' + NET_OPEN_TITLE : ''}` : netOpen != null ? NET_OPEN_TITLE : a.unrealizedPnlSource === 'estimated'
+              ? 'Live odhad podle skutečné vstupní ceny účtu a posledního broker snapshotu.'
+              : a.unrealizedPnlSource === 'stale' ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : 'Potvrzeno broker snapshotem.'}
+          >
+            {money.format(value)}
+            {live ? <LiveTvMark /> : null}
+            {a.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
+          </span>}
+        </LiveOpenPnlValue> : <span className="text-xs text-[var(--text-secondary)]">—</span>;
       case 'distDd':
         return drawdownValue();
       case 'execLimit':
