@@ -283,6 +283,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-26 odpoledne — Krok 2: návrh kanálu ceny z TV a realtime P&L (Claude, jen návrh)
+
+- **Návrh** `docs/reviews/tv-price-channel-design-20261026.md` (v2).
+  Klíčová zjištění: worker už má Supabase klienta s anon klíčem a odebírá
+  veřejný kanál `copier-kick-<deviceId>` od relaye → cena může jít stejnou
+  cestou bez nové autentizace a bez Vercel/Edge invokace za zprávu; LIVE už
+  umí „mark“ z brokerovy kotvy (`lib/tradovateLivePnl.ts`) → realtime P&L =
+  posun marku o pohyb TV mezi kotvami (3 s).
+- **`copier-design-critic`**: v1 OPRAVIT PŘED IMPLEMENTACÍ (worker nemá
+  handler pádů → zobrazovací modul by mohl shodit kopírku do DISARMED/crash
+  loopu; relay výjimka z HMAC by zablokovala brzdy; veřejný kanál bez
+  podpisu; únik TV hodnot přes `unrealizedPnl` do způsobilosti/exkluzí,
+  DLL, widgetu, sdílení; presence ≠ dívá se). v2 OK S VÝHRADAMI → doplněno:
+  `worker_threads` se samostatným vstupem a guardem importů, supervisor,
+  jistič, serverový vypínač; podpis zpráv (klíč per zařízení, bez epoch);
+  klíč vedle statusu, ne v něm; jen paměť; nová pravidla INV-UI-04,
+  INV-WORKER-04, INV-RELAY-04 (zapsat s implementací).
+- **Čeká na Filipa**: souhlas s přenosem TV ceny přes Realtime na vlastní
+  zařízení (licence), nové tajemství ve Vercelu (produkční krok), vlákno vs
+  samostatný proces.
+
 ### 2026-10-26 dopoledne — LIVE: telemetrie API už nepřekresluje appku (fáze 1a, Claude)
 
 - **Návrh** `docs/reviews/live-rerender-design-20261026.md`. Měření (dev,

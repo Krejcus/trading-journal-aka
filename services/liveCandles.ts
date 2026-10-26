@@ -7,8 +7,9 @@ import { supabase } from './supabase';
  * Živé 1m svíčky pro přípravu a pohled dne. Worker je 1×/min čte z grafu
  * TradingView (read-only CDP) a přepisuje jeden soubor v soukromém bucketu.
  * Databento historical má ~24 h zpoždění, takže dnešní noc a včerejší NY
- * jsou dostupné jen odsud. Jen zobrazení — nikdy do copieru ani do P&L
- * (non-display licence dat TradingView).
+ * jsou dostupné jen odsud. Jen zobrazení člověku na obrazovce — nikdy risk
+ * brány, day lock, limity, kopírka ani jiná automatika (licence dat
+ * TradingView je jen pro zobrazení; pravidlo v `lib/tradingViewBars.ts`).
  */
 
 const BUCKET = 'copier-snapshots';
