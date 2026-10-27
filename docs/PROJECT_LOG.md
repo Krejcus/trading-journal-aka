@@ -293,7 +293,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   konečný zůstatek (…037 51 143 → 51 274,5), tím se potvrdilo i EOD chování.
   …041: 655 (zůstatek 48 655, floor 48 000), DLL omezené rezervou. Celá sada
   611/613 zelená; 2 soubory jen timeout při vytíženém Macu, samostatně 31/31
-  a stejně rychlé jako na main. Telefon dostane změnu až novým buildem.
+  a stejně rychlé jako na main.
+- **iPhone 27. 10. 7:28**: čistá reinstalace z `main` @ `68631175` (`ios:sync` +
+  `xcodebuild` + devicectl); obsahuje i kanál ceny z TV (kroky 3–5). Přihlášení
+  přežilo, LIVE ukazuje DLL/DD z opravy; iOS se znovu ptal na oznámení.
 
 - **Rezerva DD 2 000 místo ~2 120**: `accountRiskPeak` (EOD trailing) bral do
   high-watermarku i `daily[].endingBalance` dnešní, ještě neuzavřené session
