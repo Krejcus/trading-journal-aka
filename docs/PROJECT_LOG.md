@@ -285,6 +285,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-27 07:45 — NASAZENO: grafy, backtest, Historie (Claude, Filip „nasaď všechny čtyři commity“)
+
+- Web: `main` = `aa668141` (merge `origin/main` s LIVE DD opravou ff3f8e24 +
+  docs do větve `claude/chart-smoothness-20261026`; konflikt jen v tomto logu).
+  Obsah: `35c174ca` záběr grafu dne + čára ceny, `0dff3a2b` HTF historie
+  v backtestu (1h po měsících), `424cf2d6` karta session + animace +
+  vycentrované grafy, `9b69c452` náhledy v Historii, „Mimo plán“, náběh stránek.
+- Pojistka: první běh sady spadl na časově citlivém `copierAwaitingEntryBracketStop`
+  (pod zátěží; samostatně 5/5 zelený, commity kopírku nemění) → druhý běh celé
+  sady 617 souborů zelený, tsc čistý, build OK, teprve pak push.
+- Jen frontend (Vercel); worker, relay ani Supabase funkce beze změny.
+- Neopraveno: `backtest_fills` CHECK bez `session-close` (čeká na souhlas
+  s migrací); náhledy kopírky jsou plné PNG (zmenšení přes transformace = cena).
+
 ### 2026-10-27 ráno — Historie: náhledy hned s kartami, „Mimo plán“ do tlačítka, náběh stránek (Claude)
 
 - **Náhledy**: karta dřív ukázala „Bez screenshotu“, než se náhled z kopírky
