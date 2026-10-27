@@ -285,6 +285,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-27 ráno — Backtest: karta session v Auroře, animace otevření/zavření, vycentrované grafy (Claude)
+
+- **Karta session** (`BacktestSessionsManager`): `.theme-card` sklo, hlavička
+  s oddělovačem, statistiky v řádku s tenkými děliči (místo tmavých
+  dlaždic), průběh s kurzorem session (v časové zóně session), tlačítka ve
+  stylu appky; najetí kartu zvedne. Na telefonu menší písmo statistik (P&L se
+  neořezává). Formulář nové session taky `.theme-card`.
+- **Animace** (`components/BacktestRunTransition.tsx`, App): z karty se
+  rozvine plocha grafu (`transform` + `opacity`, kompozitor) a graf se prolne;
+  zavření ji složí zpět do karty a karta krátce zasvítí (`[data-landed]`).
+  `clip-path` verze se při připojování workspace sekala (snímky až 301 ms) →
+  přepsáno, teď ~17 ms (max 42). Obal má pozici/z-index jen během animace.
+  Během zavírání se další session neotevře.
+- Seznam sessions po zavření grafu už neukazuje „Načítám sessions…“ (karty
+  zůstanou, obnoví se data) — dřív zmizela karta, kam se graf skládá.
+- **Vycentrované grafy**: po otevření session se každý panel jednou srovná
+  jako „Reset chart view“ (ověřeno: rozsahy shodné s ručním resetem).
+- Pozor: lokální kopie session v prohlížeči náhledu (5273) přepsala layout
+  „testovka – kopie“ na 1m + 1h (stav z testu 26. 10.); vráceno na 1m + 5m,
+  pozastaveno, kurzor beze změny. Nenasazeno.
+
 ### 2026-10-26 večer — Backtest: starší HTF historie (1h/4h/1D) se konečně načítá (Claude)
 
 - **Příčina** (změřeno na produkci): Databento vrací `ohlcv-1h` pro

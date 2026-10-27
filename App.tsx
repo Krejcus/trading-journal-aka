@@ -153,6 +153,7 @@ import type { TradovateLiveTab } from './lib/tradovateLiveTab';
 import FilterDropdown from './components/FilterDropdown';
 import Auth from './components/Auth';
 import QuantumLoader, { QuantumSpinner } from './components/QuantumLoader';
+import { BacktestRunTransition, type TransitionRect } from './components/BacktestRunTransition';
 import { PullToRefresh } from './components/PullToRefresh';
 import ConfirmationModal from './components/ConfirmationModal';
 import TradeDetailModal from './components/TradeDetailModal';
@@ -1028,6 +1029,15 @@ const App: React.FC = () => {
   // Samostatná sada sessionů pro backtest svět. Prázdné = použij živé `sessions` (fallback).
   const [backtestSessions, setBacktestSessions] = useState<SessionConfig[]>([]);
   const [activeBacktestRun, setActiveBacktestRun] = useState<BacktestRun | null>(null);
+  // Karta, ze které se session otevřela, a zavírání (graf se složí zpět do karty).
+  const [backtestOrigin, setBacktestOrigin] = useState<TransitionRect | null>(null);
+  const [closingBacktestRun, setClosingBacktestRun] = useState(false);
+  const openBacktestRun = useCallback((run: BacktestRun, origin?: TransitionRect | null) => {
+    // Během zavírání je seznam vidět, ale druhou session přes ni neotvírat.
+    if (closingBacktestRun) return;
+    setBacktestOrigin(origin ?? null);
+    setActiveBacktestRun(run);
+  }, [closingBacktestRun]);
   // Sady se přepínají automaticky podle světa (live vs backtest). Backtest s prázdnou sadou
   // spadne zpět na live sessiony → žádná migrace, nic se nerozbije.
   const activeSessions = useMemo(
@@ -1668,7 +1678,10 @@ const App: React.FC = () => {
 
   const [journalSyncState, setJournalSyncState] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
   useEffect(() => {
-    if (activeBacktestRun && getBacktestRunOwnerId(activeBacktestRun) !== session?.user?.id) setActiveBacktestRun(null);
+    if (activeBacktestRun && getBacktestRunOwnerId(activeBacktestRun) !== session?.user?.id) {
+      setActiveBacktestRun(null);
+      setClosingBacktestRun(false);
+    }
   }, [activeBacktestRun, session?.user?.id]);
   const backtestJournalOwnerRef = useRef<string | null>(null);
   backtestJournalOwnerRef.current = loadedUserId === session?.user?.id ? loadedUserId : null;
@@ -4103,27 +4116,41 @@ const App: React.FC = () => {
       {worldShift.active && <WorldShiftOverlay to={worldShift.to} />}
 
       {activeBacktestRun && (
-        <React.Suspense fallback={<QuantumLoader theme={theme} />}>
-          <BacktestWorkspace
-            run={activeBacktestRun}
-            isDark={theme !== 'light'}
-            onClose={(savedRun) => {
-              setActiveBacktestRun(null);
-              setActivePage('accounts');
-              setActiveAccountId(savedRun.accountId);
-              window.dispatchEvent(new CustomEvent('alphatrade:backtest-run-saved', { detail: savedRun.id }));
-            }}
-            onTradeClosed={handleBacktestTradeClosed}
-            onResolveClosedTrades={handleResolveBacktestClosedTrades}
-            onTradeAnalyticsRefresh={handleBacktestAnalyticsRefresh}
-            analyticsSyncState={analyticsSyncState}
-            journalTrades={trades}
-            tagSuggestions={backtestTagSuggestions}
-            journalSyncState={journalSyncState}
-            onTradeReviewSave={handleBacktestTradeReviewSave}
-            onTradesDiscarded={handleBacktestTradesDiscarded}
-          />
-        </React.Suspense>
+        <BacktestRunTransition
+          key={activeBacktestRun.id}
+          runId={activeBacktestRun.id}
+          origin={backtestOrigin}
+          closing={closingBacktestRun}
+          isDark={theme !== 'light'}
+          onClosed={() => {
+            setActiveBacktestRun(null);
+            setClosingBacktestRun(false);
+            setBacktestOrigin(null);
+          }}
+        >
+          <React.Suspense fallback={<QuantumLoader theme={theme} />}>
+            <BacktestWorkspace
+              run={activeBacktestRun}
+              isDark={theme !== 'light'}
+              onClose={(savedRun) => {
+                // Session je uložená; graf se ještě složí do karty a pak zmizí.
+                setActivePage('accounts');
+                setActiveAccountId(savedRun.accountId);
+                window.dispatchEvent(new CustomEvent('alphatrade:backtest-run-saved', { detail: savedRun.id }));
+                setClosingBacktestRun(true);
+              }}
+              onTradeClosed={handleBacktestTradeClosed}
+              onResolveClosedTrades={handleResolveBacktestClosedTrades}
+              onTradeAnalyticsRefresh={handleBacktestAnalyticsRefresh}
+              analyticsSyncState={analyticsSyncState}
+              journalTrades={trades}
+              tagSuggestions={backtestTagSuggestions}
+              journalSyncState={journalSyncState}
+              onTradeReviewSave={handleBacktestTradeReviewSave}
+              onTradesDiscarded={handleBacktestTradesDiscarded}
+            />
+          </React.Suspense>
+        </BacktestRunTransition>
       )}
 
       {/* Sidebar — pouze desktop */}
@@ -4765,7 +4792,7 @@ const App: React.FC = () => {
                       // Merge zpět live účty, ať je BacktestSessionsManager nesmaže.
                       onUpdate={(next) => updateAccountsLocally([...accounts.filter(a => !isBacktestAccount(a)), ...next])}
                       onDelete={handleDeleteAccount}
-                      onOpenRun={setActiveBacktestRun}
+                      onOpenRun={openBacktestRun}
                     />
                   )}
 

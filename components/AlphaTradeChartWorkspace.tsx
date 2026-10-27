@@ -95,7 +95,7 @@ import GenericDrawingFloatingToolbar from './GenericDrawingFloatingToolbar';
 import GenericDrawingSettingsDialog from './GenericDrawingSettingsDialog';
 import PositionDrawingSettingsDialog, { PositionDrawingFloatingToolbar } from './PositionDrawingSettingsDialog';
 import { isPositionDrawing, type PositionDrawing } from '../services/chartPositionDrawing';
-import { countChartIndicators } from '../services/chartContextMenu';
+import { countChartIndicators, resetChartView } from '../services/chartContextMenu';
 import BacktestOrderLinesOverlay from './BacktestOrderLinesOverlay';
 import BacktestTradeExecutionsOverlay from './BacktestTradeExecutionsOverlay';
 import BacktestTradeReviewDialog from './BacktestTradeReviewDialog';
@@ -771,6 +771,25 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   const candlesRef = useRef(candles);
   candlesRef.current = candles;
   const getCandles = useCallback(() => candlesRef.current, []);
+
+  // Backtest: po otevření session se každý graf jednou vycentruje stejně jako
+  // „Reset chart view“ (kurzor u pravého okraje, výchozí šířka, autoscale).
+  // Až po usazení grafu — výchozí záběr nastavuje graf v `onReady` přes
+  // setTimeout(0). Další přestavby grafu (jiný timeframe) už záběr nemění.
+  const openViewResetRef = useRef(false);
+  const hasCandles = candles.length > 0;
+  const inBacktest = Boolean(backtestSession);
+  useEffect(() => {
+    if (!inBacktest || openViewResetRef.current || !chartApi || !hasCandles) return;
+    let frame = 0;
+    const timer = window.setTimeout(() => {
+      frame = window.requestAnimationFrame(() => {
+        openViewResetRef.current = true;
+        try { resetChartView(chartApi); } catch { /* graf mezitím zanikl */ }
+      });
+    }, 0);
+    return () => { window.clearTimeout(timer); window.cancelAnimationFrame(frame); };
+  }, [inBacktest, chartApi, hasCandles]);
 
   useEffect(() => {
     context.registerPanel(instance.id, {

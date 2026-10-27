@@ -17,7 +17,28 @@ import {
   saveBacktestRun,
 } from '../services/backtestRunService';
 import type { BacktestRun } from '../services/backtestTypes';
+import type { TransitionRect } from './BacktestRunTransition';
 import type { ChartWorkspaceLayoutId } from '../services/chartWorkspaceLayouts';
+
+const iconBtn = 'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-input)] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-active)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40';
+
+const sessionStatus = (run: BacktestRun): { label: string; tone: string } => {
+  if (run.status === 'completed') return { label: 'Dokončeno', tone: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-500' };
+  if (run.cursorAt) return { label: 'Pozastaveno', tone: 'border-amber-500/25 bg-amber-500/10 text-amber-500' };
+  return { label: 'Nová', tone: 'border-violet-500/25 bg-violet-500/10 text-violet-400' };
+};
+
+const dateLabel = (ms: number) => new Date(ms).toLocaleDateString('cs-CZ');
+
+/** Kde se v session skončilo — v časové zóně session. */
+const cursorLabel = (run: BacktestRun) => {
+  if (run.cursorAt === null) return '';
+  try {
+    return new Intl.DateTimeFormat('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: run.config.timezone }).format(run.cursorAt);
+  } catch {
+    return new Date(run.cursorAt).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+};
 
 interface Props {
   theme: 'dark' | 'light' | 'oled';
@@ -25,7 +46,8 @@ interface Props {
   trades: Trade[];
   onUpdate: (accounts: Account[]) => void;
   onDelete?: (id: string) => void;
-  onOpenRun: (run: BacktestRun) => void;
+  /** `origin` = karta, ze které se graf rozvine (BacktestRunTransition). */
+  onOpenRun: (run: BacktestRun, origin?: TransitionRect | null) => void;
 }
 
 const downloadJSON = (filename: string, data: any) => {
@@ -72,8 +94,9 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // „Načítám…“ jen při prvním načtení (výchozí stav). Obnova po zavření grafu
+  // nechá karty stát — graf se do své karty skládá a seznam neproblikne.
   const loadRuns = useCallback(async () => {
-    setLoadingRuns(true);
     try {
       const [nextRuns, copies] = await Promise.all([listBacktestRuns(), listBacktestRunConflictCopies()]);
       setRuns(nextRuns); setConflictCopies(copies); setError(null);
@@ -116,7 +139,6 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
   }, [trades]);
 
   const inputCls = `w-full rounded-lg px-3 py-2.5 text-sm outline-none border transition-all ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`;
-  const cardCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm';
 
   const [exporting, setExporting] = useState(false);
   const exportSessions = async (sess: Account[], single?: boolean) => {
@@ -276,7 +298,7 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
       </div>
 
       {/* Nová obnovitelná session */}
-      {showCreateForm && <div className={`p-4 rounded-lg border mb-6 animate-in fade-in slide-in-from-top-2 duration-200 ${cardCls}`}>
+      {showCreateForm && <div className="theme-card p-4 rounded-lg mb-6 animate-in fade-in slide-in-from-top-2 duration-200">
         <p className={`text-[11px] font-semibold mb-3 ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>Nová session</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
@@ -360,47 +382,63 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
             const st = statsByAcc.get(String(run.accountId)) || { count: run.runtimeState.closedTrades.length, pnl: run.runtimeState.realizedPnl };
             const pnlPos = run.runtimeState.realizedPnl >= 0;
             const pct = progress(run);
+            const status = sessionStatus(run);
             return (
-              <div key={run.id} className={`flex min-h-[250px] flex-col p-4 rounded-lg border ${cardCls}`}>
-                <div className="flex items-start gap-3">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${isDark ? 'bg-violet-500/15 text-violet-400' : 'bg-violet-100 text-violet-600'}`}>
+              <article key={run.id} data-backtest-run-card={run.id} aria-label={`Session ${run.name}`}
+                className="bt-session-card theme-card group flex min-h-[232px] flex-col overflow-hidden rounded-lg">
+                <header className="flex items-start gap-3 border-b border-[var(--border-subtle)] px-4 py-3">
+                  <div className="bt-session-card__icon flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-violet-400">
                     <FlaskConical size={16} />
                   </div>
-                  <div className="flex-1 min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-black truncate">{run.name}</p>
-                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${run.status === 'completed' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>{run.status === 'completed' ? 'Dokončeno' : run.cursorAt ? 'Pozastaveno' : 'Nová'}</span>
+                      <h3 className="truncate text-[13.5px] font-bold text-[var(--text-primary)]">{run.name}</h3>
+                      <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${status.tone}`}>
+                        <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />{status.label}
+                      </span>
                     </div>
-                    <p className="mt-0.5 text-[10px] font-bold text-slate-500">${run.initialCapital.toLocaleString('en-US')} · {run.config.instruments.join(' + ')}</p>
+                    <p className="mt-0.5 truncate text-[11.5px] text-[var(--text-secondary)]">${run.initialCapital.toLocaleString('en-US')} · {run.config.instruments.join(' + ')}</p>
+                  </div>
+                </header>
+
+                <dl className="grid grid-cols-3 divide-x divide-[var(--border-subtle)] border-b border-[var(--border-subtle)]">
+                  <div className="min-w-0 px-3 py-3 sm:px-4">
+                    <dt className="text-[11px] font-medium text-[var(--text-secondary)]">P&amp;L</dt>
+                    <dd className={`mt-1 truncate font-mono text-[13px] font-semibold tabular-nums sm:text-[15px] ${pnlPos ? 'text-emerald-500' : 'text-rose-500'}`}>{pnlPos ? '+' : ''}${run.runtimeState.realizedPnl.toFixed(2)}</dd>
+                  </div>
+                  <div className="min-w-0 px-3 py-3 sm:px-4">
+                    <dt className="text-[11px] font-medium text-[var(--text-secondary)]">Obchody</dt>
+                    <dd className="mt-1 text-[13px] font-semibold tabular-nums text-[var(--text-primary)] sm:text-[15px]">{st.count}</dd>
+                  </div>
+                  <div className="min-w-0 px-3 py-3 sm:px-4">
+                    <dt className="text-[11px] font-medium text-[var(--text-secondary)]">Splněno</dt>
+                    <dd className="mt-1 text-[13px] font-semibold tabular-nums text-[var(--text-primary)] sm:text-[15px]">{pct.toLocaleString('cs-CZ', { maximumFractionDigits: 1 })} %</dd>
+                  </div>
+                </dl>
+
+                <div className="px-4 pt-3.5">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-[var(--border-subtle)]" role="progressbar" aria-label="Průběh session" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
+                    <div className="bt-session-card__progress h-full rounded-full" style={{ width: `${Math.max(pct, run.cursorAt ? 1.5 : 0)}%` }} />
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] tabular-nums text-[var(--text-secondary)]">
+                    <span>{dateLabel(run.startAt)}</span>
+                    {run.cursorAt !== null && <span className="truncate font-medium text-[var(--text-primary)]">Kurzor {cursorLabel(run)}</span>}
+                    <span>{dateLabel(run.endAt)}</span>
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-3 gap-2">
-                  <div className={`rounded-lg border px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
-                    <p className="text-[11px] font-semibold text-slate-500">P&amp;L</p>
-                    <p className={`mt-1 truncate font-mono text-sm font-bold ${pnlPos ? 'text-emerald-500' : 'text-rose-500'}`}>{pnlPos ? '+' : ''}${run.runtimeState.realizedPnl.toFixed(2)}</p>
-                  </div>
-                  <div className={`rounded-lg border px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
-                    <p className="text-[11px] font-semibold text-slate-500">Obchody</p>
-                    <p className="mt-1 text-sm font-black">{st.count}</p>
-                  </div>
-                  <div className={`rounded-lg border px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
-                    <p className="text-[11px] font-semibold text-slate-500">Splněno</p>
-                    <p className="mt-1 text-sm font-black">{pct.toFixed(1)} %</p>
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <div className={`h-1.5 overflow-hidden rounded-full bg-[var(--bg-page)]`}><div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${pct}%` }} /></div>
-                  <div className="mt-1.5 flex justify-between text-[9px] font-bold text-slate-500"><span>{new Date(run.startAt).toLocaleDateString('cs-CZ')}</span><span>{new Date(run.endAt).toLocaleDateString('cs-CZ')}</span></div>
-                </div>
-
-                <div className="mt-auto flex items-center gap-2 pt-4">
-                  <button onClick={() => onOpenRun(run)} className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-3 text-[10px] font-black text-white hover:bg-violet-500"><Play size={13} fill="currentColor" />{run.cursorAt ? 'Pokračovat' : 'Spustit'}</button>
-                  <button onClick={() => void duplicateRun(run)} disabled={creating} className={`flex h-9 w-9 items-center justify-center rounded-lg border ${isDark ? 'border-white/5 text-slate-400 hover:bg-white/5' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`} title="Duplikovat session"><Copy size={15} /></button>
-                  <button onClick={() => void changeStatus(run, run.status === 'completed' ? 'archived' : 'completed')} className={`flex h-9 w-9 items-center justify-center rounded-lg border ${isDark ? 'border-white/5 text-slate-400 hover:bg-white/5' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`} title={run.status === 'completed' ? 'Archivovat' : 'Dokončit'}>{run.status === 'completed' ? <Archive size={15} /> : <CheckCircle2 size={15} />}</button>
-                </div>
-              </div>
+                <footer className="mt-auto flex items-center gap-2 px-4 pb-4 pt-4">
+                  <button
+                    onClick={event => {
+                      const card = event.currentTarget.closest<HTMLElement>('[data-backtest-run-card]');
+                      onOpenRun(run, card?.getBoundingClientRect() ?? null);
+                    }}
+                    className="bt-session-card__open inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-semibold text-white transition-[transform,filter] active:scale-[0.98]"
+                  ><Play size={13} fill="currentColor" />{run.cursorAt ? 'Pokračovat' : 'Spustit'}</button>
+                  <button onClick={() => void duplicateRun(run)} disabled={creating} className={iconBtn} title="Duplikovat session" aria-label="Duplikovat session"><Copy size={15} /></button>
+                  <button onClick={() => void changeStatus(run, run.status === 'completed' ? 'archived' : 'completed')} className={iconBtn} title={run.status === 'completed' ? 'Archivovat' : 'Dokončit'} aria-label={run.status === 'completed' ? 'Archivovat' : 'Dokončit'}>{run.status === 'completed' ? <Archive size={15} /> : <CheckCircle2 size={15} />}</button>
+                </footer>
+              </article>
             );
           })}
         </div>

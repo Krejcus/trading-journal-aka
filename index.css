@@ -5166,3 +5166,54 @@ html.boot-pre [data-boot] { opacity: 0; }
     backdrop-filter: none !important;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Backtest: karta session (BacktestSessionsManager)
+
+   Skleněná karta appky (.theme-card dává výplň, okraj a v Auroře lesk
+   nahoře). Při najetí se karta zvedne a okraj se rozsvítí do fialova
+   (barva backtest světa). Po zavření grafu se do karty „vrátí“ — krátce
+   se rozsvítí ([data-landed], nastavuje BacktestRunTransition).
+   ───────────────────────────────────────────────────────────────────────── */
+.bt-session-card {
+  position: relative;
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1), border-color 0.22s ease, box-shadow 0.22s ease;
+}
+.bt-session-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(139, 92, 246, 0.35);
+  box-shadow: var(--shadow-card), 0 18px 40px -22px rgba(124, 58, 237, 0.55);
+}
+.bt-session-card__icon {
+  background: linear-gradient(160deg, rgba(139, 92, 246, 0.24), rgba(99, 102, 241, 0.1));
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.light-theme .bt-session-card__icon { color: #7c3aed; box-shadow: inset 0 0 0 1px rgba(124, 58, 237, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.7); }
+.bt-session-card__progress {
+  background: linear-gradient(90deg, #8b5cf6, #6366f1);
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.55);
+  transition: width 0.5s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.bt-session-card__open {
+  background: linear-gradient(180deg, #8b5cf6 0%, #7c3aed 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 6px 16px -8px rgba(124, 58, 237, 0.8);
+}
+.bt-session-card__open:hover { filter: brightness(1.08); }
+.bt-session-card[data-landed] { animation: bt-card-land 0.9s ease-out; }
+@keyframes bt-card-land {
+  0% { border-color: rgba(167, 139, 250, 0.85); box-shadow: var(--shadow-card), 0 0 0 3px rgba(139, 92, 246, 0.35), 0 18px 46px -18px rgba(124, 58, 237, 0.7); }
+  100% { box-shadow: var(--shadow-card), 0 0 0 0 rgba(139, 92, 246, 0), 0 0 0 0 rgba(124, 58, 237, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bt-session-card, .bt-session-card__progress { transition: none; }
+  .bt-session-card:hover { transform: none; }
+  .bt-session-card[data-landed] { animation: none; }
+}
+/* Plocha grafu, která se rozvine z karty (BacktestRunTransition). Zaoblení,
+   skleněná hrana a stín jen během animace — pak je to obyčejný podklad. */
+.bt-run-surface--moving {
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 30px 80px -24px rgba(2, 6, 23, 0.7);
+  will-change: transform, opacity;
+}
+.light-theme .bt-run-surface--moving { box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08), 0 30px 80px -24px rgba(30, 41, 80, 0.35); }
