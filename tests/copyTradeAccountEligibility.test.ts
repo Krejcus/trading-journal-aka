@@ -144,3 +144,19 @@ describe('copy trade account eligibility read-model', () => {
     expect(stricter[0]).toMatchObject({ accountId: 16, state: 'breached' });
   });
 });
+
+describe('ručení workeru za zobrazení', () => {
+  it('nikdy nezmění inferovanou způsobilost', () => {
+    const now = Date.parse('2026-08-26T12:00:00.000Z');
+    const base = [
+      account({ id: 1, cushion: -5 }),
+      account({ id: 2, realizedPnl: -1_100, dailyPnlUpdatedAt: '2026-08-26T11:50:00.000Z', cashAvailability: 'available' }),
+      account({ id: 3 }),
+    ];
+    const vouch = { dailyRealizedPnL: { value: -1_100, confirmedAt: '2026-08-26T11:50:00.000Z', vouchedAt: '2026-08-26T11:59:58.000Z' },
+      totalCashValue: { value: 50_000, confirmedAt: '2026-08-26T11:50:00.000Z', vouchedAt: '2026-08-26T11:59:58.000Z' } };
+    const profiles = [profile(2, 1_000)];
+    expect(inferredCopyTradeAccountEligibility(base.map(item => ({ ...item, displayVouch: vouch })), profiles, now))
+      .toEqual(inferredCopyTradeAccountEligibility(base, profiles, now));
+  });
+});

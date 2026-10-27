@@ -7,6 +7,8 @@ export interface LiveBalanceDisplay {
   value: number | null;
   stale: boolean;
   confirmedAt: string | null;
+  /** Worker ke stejné částce hlásí „beze změny“ (stream připojený); jen zobrazení. */
+  vouchedAt?: string;
 }
 
 export type LiveRiskDisplayState = 'ready' | 'loading' | 'unavailable' | 'unknown-limit' | 'no-limit';
@@ -33,12 +35,48 @@ export interface LiveDailyLossDisplay extends LiveBalanceDisplay {
   cappedByDrawdown?: boolean;
 }
 
+/**
+ * Čas, ke kterému worker ručí za STEJNOU částku pole (stream účtu připojený,
+ * od potvrzení žádná změna), nebo null. Denní P&L jen v aktuální broker
+ * session — po uzávěrce se nuluje i bez události. Jen zobrazení (INV-UI-03):
+ * nikdy neověřuje pozice, příkazy ani risk.
+ */
+export function liveDisplayVouchedAt(account: LiveAccount, field: 'dailyRealizedPnL' | 'totalCashValue', value: number | null, now = Date.now()): string | null {
+  const vouch = account.displayVouch?.[field];
+  if (!vouch || value == null || !Number.isFinite(value) || Math.abs(vouch.value - value) >= 0.005) return null;
+  const at = Date.parse(vouch.vouchedAt);
+  if (!Number.isFinite(at) || at > now + 1_000 || now - at > LIVE_READ_MAX_AGE_MS) return null;
+  if (field === 'dailyRealizedPnL' && (!sameTradovateSession(Date.parse(vouch.confirmedAt), now) || !sameTradovateSession(at, now))) return null;
+  return vouch.vouchedAt;
+}
+
+const vouched = (display: LiveBalanceDisplay, account: LiveAccount, field: 'dailyRealizedPnL' | 'totalCashValue', now: number): LiveBalanceDisplay => {
+  if (!display.stale) return display;
+  const vouchedAt = liveDisplayVouchedAt(account, field, display.value, now);
+  return vouchedAt ? { ...display, stale: false, vouchedAt } : display;
+};
+
+/**
+ * Čerstvost Rezervy DD (equity = hotovost + otevřený P&L). Bez čerstvého čtení
+ * hotovosti ji ručení workeru ověří jen spolu s čerstvým otevřeným P&L —
+ * stejně jako DLL; jinak by stará equity v pozici svítila jako ověřená.
+ */
+export function liveCushionEvidence(account: LiveAccount, now = Date.now()): { verified: boolean; confirmedAt: string | null } {
+  const cashVerified = isLiveAccountReadVerified(account, 'cash', now);
+  const unrealizedKnown = account.unrealizedPnlSource !== 'stale';
+  const vouchedAt = cashVerified ? null : liveDisplayVouchedAt(account, 'totalCashValue', account.balance, now);
+  if (!vouchedAt) return { verified: cashVerified && unrealizedKnown, confirmedAt: account.cashUpdatedAt ?? null };
+  const confirmedAt = oldestConfirmedInput([vouchedAt, account.unrealizedPnlUpdatedAt], now);
+  if (!confirmedAt) return { verified: false, confirmedAt: account.cashUpdatedAt ?? null };
+  return { verified: unrealizedKnown && now - Date.parse(confirmedAt) <= LIVE_READ_MAX_AGE_MS, confirmedAt };
+}
+
 /** Presentation only: retained cash is not fresh risk/execution evidence. */
 export function liveBalanceDisplay(account: LiveAccount | null | undefined, now = Date.now()): LiveBalanceDisplay {
   const missing: LiveBalanceDisplay = { value: null, stale: false, confirmedAt: null };
   if (!account || account.cashAvailability === 'denied') return missing;
   const confirmed = confirmedField(account, 'totalCashValue', now);
-  if (confirmed) return confirmed;
+  if (confirmed) return vouched(confirmed, account, 'totalCashValue', now);
   if (!Number.isFinite(account.balance)) return missing;
   // Legacy shadow snapshots have no per-source freshness contract.
   if (account.cashAvailability == null) return { value: account.balance, stale: false, confirmedAt: null };
@@ -46,7 +84,7 @@ export function liveBalanceDisplay(account: LiveAccount | null | undefined, now 
   // Failed reads can contain a numeric zero fallback. Only a retained evidence
   // timestamp proves a balance was actually loaded before that failure.
   if (!Number.isFinite(at) || at > now + 1_000) return missing;
-  return { value: account.balance, stale: !isLiveAccountReadVerified(account, 'cash', now), confirmedAt: account.cashUpdatedAt! };
+  return vouched({ value: account.balance, stale: !isLiveAccountReadVerified(account, 'cash', now), confirmedAt: account.cashUpdatedAt! }, account, 'totalCashValue', now);
 }
 
 export function liveCapitalDisplay(accounts: Array<LiveAccount | null | undefined>, now = Date.now()): LiveBalanceDisplay {
@@ -72,7 +110,7 @@ export function liveDailyPnlDisplay(account: LiveAccount | null | undefined, now
   const missing = { value: null, stale: false, confirmedAt: null };
   if (!account) return missing;
   const confirmed = confirmedField(account, 'dailyRealizedPnL', now);
-  if (confirmed) return confirmed;
+  if (confirmed) return vouched(confirmed, account, 'dailyRealizedPnL', now);
   if (account.cashAvailability === 'denied') return missing;
   pending ||= account.dailyPnlPending === true;
   if (!Number.isFinite(account.realizedPnl) || account.dailyPnlAvailable === false || (pending && account.dailyPnlAvailable !== true)) return missing;
@@ -80,7 +118,7 @@ export function liveDailyPnlDisplay(account: LiveAccount | null | undefined, now
   if (account.dailyPnlTradeDate && account.dailyPnlTradeDate !== tradovateDisplayTradeDate(now)) return missing;
   const at = Date.parse(account.dailyPnlUpdatedAt ?? account.cashUpdatedAt ?? '');
   if (!Number.isFinite(at) || at > now + 1_000 || !sameTradovateSession(at, now)) return missing;
-  return { value: account.realizedPnl, stale: now - at > LIVE_READ_MAX_AGE_MS, confirmedAt: account.dailyPnlUpdatedAt ?? account.cashUpdatedAt! };
+  return vouched({ value: account.realizedPnl, stale: now - at > LIVE_READ_MAX_AGE_MS, confirmedAt: account.dailyPnlUpdatedAt ?? account.cashUpdatedAt! }, account, 'dailyRealizedPnL', now);
 }
 
 const oldestConfirmedInput = (values: Array<string | null | undefined>, now: number): string | null => {
@@ -130,7 +168,7 @@ export function liveDailyLossRemainingDisplay(
     return { value: null, stale: false, confirmedAt: null, state: 'unavailable', reason: 'Otevřený P&L není dostupný.' };
   }
   const confirmedAt = oldestConfirmedInput([
-    realized.confirmedAt,
+    realized.vouchedAt ?? realized.confirmedAt,
     account.unrealizedPnlUpdatedAt,
     ...(account.dailyLossLimitSource === 'profile' ? [] : [account.dailyLossLimitUpdatedAt]),
   ], now);
@@ -149,10 +187,11 @@ export function liveDailyLossRemainingDisplay(
   // potvrzeného drawdownu (vypnutý, nebo se ještě načítá) se nic neomezuje.
   const cushion = account.riskDisplayDrawdownDisabled || account.riskDisplayPending ? null : account.cushion;
   if (cushion != null && Number.isFinite(cushion) && cushion < remaining) {
-    const cappedAt = oldestConfirmedInput([confirmedAt, account.cashUpdatedAt], now) ?? confirmedAt;
+    const cashVouchedAt = isLiveAccountReadVerified(account, 'cash', now) ? null : liveDisplayVouchedAt(account, 'totalCashValue', account.balance, now);
+    const cappedAt = oldestConfirmedInput([confirmedAt, cashVouchedAt ?? account.cashUpdatedAt], now) ?? confirmedAt;
     return {
       value: cushion,
-      stale: stale || !isLiveAccountReadVerified(account, 'cash', now),
+      stale: stale || !(isLiveAccountReadVerified(account, 'cash', now) || cashVouchedAt),
       confirmedAt: cappedAt,
       state: 'ready',
       reason: null,

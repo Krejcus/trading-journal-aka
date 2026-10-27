@@ -13,7 +13,7 @@ import { liveAccountTvLegs, tradeCardTvLegs } from '../lib/tvLivePnl';
 import { copierArmRejection, isArmPositionRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { formatReadAge, isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
-import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
+import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveCushionEvidence, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { useCopierPowerDisplay } from '../hooks/useCopierPowerDisplay';
 import { copierPowerDisplayKey } from '../lib/copierPowerDisplay';
@@ -3467,7 +3467,8 @@ const eligibilityNeedsAttention = (eligibility: CopierAccountEligibility | undef
  */
 const accountRiskValues = (a: LiveAccount | undefined, accountId: number | null, dailyPnlPending: boolean, sizeClass?: string) => {
   const cushion = a?.cushion ?? null;
-  const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
+  // Hotovost + otevřený P&L; za stejnou hotovost smí ručit i worker (jen zobrazení).
+  const cushionEvidence = a ? liveCushionEvidence(a) : { verified: false, confirmedAt: null };
   const dllDisplay = liveDailyLossRemainingDisplay(a, Date.now(), dailyPnlPending);
   // Legacy účty bez OAuth read-state: stejné pravidlo jako liveDailyLossRemainingDisplay —
   // DLL zbývá nikdy nepřesáhne rezervu DD.
@@ -3480,8 +3481,8 @@ const accountRiskValues = (a: LiveAccount | undefined, accountId: number | null,
     && (a.dailyLossLimit == null || a.dailyLossLimit === 0);
   const drawdown = <LiveRiskValue identity={`${riskKey}:dd`} label="Rezerva DD" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
     enabled={!!a && a.cashAvailability !== 'denied' && !a.riskDisplayDrawdownDisabled}
-    value={dailyPnlPending || a?.riskDisplayPending ? null : cushion} confirmedAt={a?.cashUpdatedAt ?? null}
-    verified={cashKnown && a?.unrealizedPnlSource !== 'stale'}
+    value={dailyPnlPending || a?.riskDisplayPending ? null : cushion} confirmedAt={cushionEvidence.confirmedAt}
+    verified={cushionEvidence.verified}
     state={a?.riskDisplayDrawdownDisabled ? 'no-limit' : a?.dailyPnlPending ? 'loading' : a?.riskDisplayPending ? 'unavailable' : 'ready'}
     reason={a?.riskDisplayUnavailableReason} color={cushionClass} sizeClass={sizeClass} />;
   const dll = <LiveRiskValue identity={`${riskKey}:dll`} label="DLL zbývá" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
