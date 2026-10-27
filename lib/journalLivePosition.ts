@@ -69,10 +69,15 @@ export interface JournalLiveView {
   readAgeMs: number | null;
   /** Pohled hlásí rozjetí (dobíhá i potvrzené); hook drží, od kdy (`divergenceSince`). */
   divergenceCandidate: boolean;
+  /** Skupina s vypnutou kopírkou (podle čerstvého workeru): bez poplachu o rozjetí. */
+  copierOff: boolean;
+  /** Souhrn jen jednoho účtu skupiny (jediný s expozicí při vypnuté kopírce). */
+  scopeLabel: string | null;
 }
 
 export const EMPTY_JOURNAL_LIVE_VIEW: JournalLiveView = {
-  model: null, options: [], target: 'group', verified: false, issue: null, readAgeMs: null, divergenceCandidate: false,
+  model: null, options: [], target: 'group', verified: false, issue: null, readAgeMs: null,
+  divergenceCandidate: false, copierOff: false, scopeLabel: null,
 };
 
 const groupRows = (group: CopyGroupConfig, byId: ReadonlyMap<number, LiveAccount>): TradeCardRowInput[] => {
@@ -98,6 +103,8 @@ export function buildJournalLiveView(input: {
   workerMismatches?: WorkerMismatches | null;
   /** Od kdy pohled hlásí rozjetí (`divergenceCandidate`), podle skutečného času. */
   divergenceSince?: number | null;
+  /** Kopírka zapnutá podle čerstvého workeru; null/chybí = neznámo. */
+  copierArmed?: boolean | null;
   now?: number;
 }): JournalLiveView {
   const now = input.now ?? Date.now();
@@ -116,8 +123,23 @@ export function buildJournalLiveView(input: {
   const viewMembers = single ? [single] : members;
   const ages = viewMembers.map(row => liveAccountReadAgeMs(row.account, 'positions', now));
   const readAgeMs = ages.some(age => age == null) ? null : Math.max(0, ...(ages as number[]));
-  const result = (model: TradeCardModel | null, issue: JournalLiveIssue | null): JournalLiveView =>
-    ({ model: issue ? null : model, options, target, verified: issue == null, issue, readAgeMs, divergenceCandidate: false });
+  const copierOff = !single && input.copierArmed === false;
+  const result = (model: TradeCardModel | null, issue: JournalLiveIssue | null, scopeLabel: string | null = null): JournalLiveView => ({
+    model: issue ? null : model, options, target, verified: issue == null, issue, readAgeMs,
+    divergenceCandidate: false, copierOff, scopeLabel: issue ? null : scopeLabel,
+  });
+  // Otevřené P&L jen čerstvé a ke známému vstupu: kusy může mít worker už
+  // nové (přikoupení, otočení), P&L je z REST a v penalizaci by stálo minuty.
+  const finalize = (model: TradeCardModel, scopeLabel: string | null = null): JournalLiveView => {
+    if (model.kind === 'position' && model.openPnl != null) {
+      const fresh = model.entry != null && model.accounts.every(account => {
+        const at = account.openPnlAsOf ? Date.parse(account.openPnlAsOf) : Number.NaN;
+        return Number.isFinite(at) && now - at <= JOURNAL_PNL_MAX_AGE_MS;
+      });
+      if (!fresh) return result({ ...model, openPnl: null, mark: null }, null, scopeLabel);
+    }
+    return result(model, null, scopeLabel);
+  };
   // Rozjetí musí trvat celé okno (výstup, vstup on-submit, otočení i zrušení
   // se ke followerům kopírují se zpožděním). Jeden společný začátek pro
   // všechny cesty, ať se okna navzájem nenulují.
@@ -133,6 +155,32 @@ export function buildJournalLiveView(input: {
   if (!single && members.length !== rows.length) return result(null, 'missing-account');
   // Neověřené pozice: žádný model, aby se nikde nekreslila stará poloha.
   if (!viewMembers.every(row => isLiveAccountReadVerified(row.account, 'positions', now))) return result(null, 'stale');
+  // Čistě vypnutá kopírka: followeři kopírovat nemají, rozdíl proti leaderovi
+  // není porucha. Ukázat, co účty skutečně drží nebo mají v příkazech; jediný
+  // takový účet = jeho vlastní pohled. Souhrn jen když obsáhne každý účet
+  // s expozicí — jinak (jiný směr či kontrakt, zbylý příkaz jinde) výběr účtu.
+  if (copierOff) {
+    const exposed = members.filter(row => holds(row)
+      || input.orders.some(order => order.working && order.accountId === row.accountId));
+    if (exposed.length === 0) return result(null, null);
+    const only = exposed.length === 1 ? exposed[0] : null;
+    const offRows = exposed.some(row => row.isLeader) ? exposed : exposed.map((row, index) => ({ ...row, isLeader: index === 0 }));
+    const offModel = buildTradeCard(only ? [{ ...only, isLeader: true }] : offRows, input.orders, input.feeRates, now);
+    if (offModel?.kind === 'pending' && !offModel.verified) return result(null, 'orders-stale');
+    const missing = exposed.filter(row => !offModel?.accounts.some(account => account.accountId === row.accountId));
+    if (!offModel || missing.length > 0) {
+      // Expozice jen z neověřeného čtení příkazů není jistá.
+      return result(null, missing.every(row => !holds(row) && !isLiveAccountReadVerified(row.account, 'orders', now)) ? 'orders-stale' : 'divergent');
+    }
+    // Souhrn tvrdí „všechno, co skupina má“ — jen s ověřenými příkazy všech členů.
+    if (!members.every(row => isLiveAccountReadVerified(row.account, 'orders', now))) return result(null, 'orders-stale');
+    if (offModel.accounts.length === 1) return finalize(offModel, offModel.accounts[0].name);
+    // Čekající vstupy víc účtů bez kopírky nemají společnou cenu ani typ —
+    // průměr by kreslil vstup tam, kde žádný příkaz neleží.
+    if (offModel.kind === 'pending') return result(null, 'divergent');
+    // Bez kopírky účty nejsou synchronní: SL/TP čárou jen když je společná všem.
+    return finalize({ ...offModel, ladder: { stop: offModel.stop.price, target: offModel.target.price } });
+  }
   const model = buildTradeCard(viewRows, input.orders, input.feeRates, now);
   // Čekající vstup existuje jen v příkazech — z neověřeného čtení se nekreslí.
   if (model?.kind === 'pending' && !model.verified) return result(null, 'orders-stale');
@@ -154,16 +202,42 @@ export function buildJournalLiveView(input: {
     if (!input.orders.some(order => order.working && order.accountId != null && ids.has(order.accountId))) return result(null, null);
     return viewMembers.every(row => isLiveAccountReadVerified(row.account, 'orders', now)) ? settle() : result(null, 'orders-stale');
   }
-  // Otevřené P&L jen čerstvé a ke známému vstupu: kusy může mít worker už
-  // nové (přikoupení, otočení), P&L je z REST a v penalizaci by stálo minuty.
-  if (model?.kind === 'position' && model.openPnl != null) {
-    const fresh = model.entry != null && model.accounts.every(account => {
-      const at = account.openPnlAsOf ? Date.parse(account.openPnlAsOf) : Number.NaN;
-      return Number.isFinite(at) && now - at <= JOURNAL_PNL_MAX_AGE_MS;
-    });
-    if (!fresh) return result({ ...model, openPnl: null, mark: null }, null);
-  }
-  return result(model, null);
+  return finalize(model);
+}
+
+/**
+ * Zapnutost kopírky pro pohled deníku z čerstvého heartbeatu: `true` = zapnutá,
+ * `false` = výslovně ručně vypnutá a v klidu, `null` = neznámo nebo vypnutá
+ * čímkoli jiným — fail-closed (rozjetí) i výpadek spojení vypínají kopírku
+ * ve stejné revizi, takže tam poplachy o rozjetí platí dál. Seznam povolených
+ * (ruční vypnutí), ne zakázaných: nový důvod vypnutí poplachy neztiší.
+ * Záznam vypnutí se obnovuje z historie, proto musí být z tohoto běhu
+ * workeru (`startedAt`) a s kopiemi flat — jinak může být ze včerejška.
+ * Známé omezení: vypnutí bez nového záznamu po pozdějším zapnutí (cooldown,
+ * day lock, změna skupiny…) by starý ruční záznam z téhož běhu nepřebilo.
+ */
+export function journalCopierArmed(controller: {
+  armed: boolean;
+  killSwitch?: boolean;
+  connected?: boolean;
+  lastError?: string | null;
+  manualRecovery?: unknown;
+  transportResume?: { phase: string } | null;
+  lastDisarm?: { trigger: string; at: number; copiesOutcome?: string } | null;
+} | null | undefined, startedAt?: string | null): boolean | null {
+  if (!controller) return null;
+  if (controller.armed) return true;
+  const resuming = controller.transportResume?.phase === 'waiting' || controller.transportResume?.phase === 'ready';
+  const runStart = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const disarm = controller.lastDisarm;
+  return disarm?.trigger === 'manual'
+    && disarm.copiesOutcome === 'flat'
+    && Number.isFinite(runStart) && Number.isFinite(disarm.at) && disarm.at >= runStart
+    && controller.connected !== false
+    && !resuming
+    && controller.lastError == null
+    && controller.manualRecovery == null
+    && !controller.killSwitch ? false : null;
 }
 
 export interface WorkerFollowerVerdict {

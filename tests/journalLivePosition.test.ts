@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildJournalLiveView, confirmWorkerMismatches, journalLivePriceLines, livePositionMatchesRoot, LIVE_STOP_COLOR, LIVE_TARGET_COLOR,
-  JOURNAL_DIVERGENCE_CONFIRM_MS, JOURNAL_PNL_MAX_AGE_MS, WORKER_MISMATCH_CONFIRM_MS,
+  JOURNAL_DIVERGENCE_CONFIRM_MS, JOURNAL_PNL_MAX_AGE_MS, WORKER_MISMATCH_CONFIRM_MS, journalCopierArmed,
 } from '../lib/journalLivePosition';
 import { tradovatePositionPollDelay, tradovatePositionPollFirstDelay } from '../components/useTradovateLiveData';
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
@@ -147,6 +147,104 @@ describe('živá pozice v grafu deníku', () => {
     expect(buildJournalLiveView(input).model?.quantity).toBe(2);
     expect(buildJournalLiveView({ ...input, workerMismatches: { pending: new Set([2]), confirmed: new Set(), ok: new Set() } }).model?.quantity).toBe(2);
     expect(buildJournalLiveView({ ...input, workerMismatches: { pending: new Set(), confirmed: new Set([2]), ok: new Set() } })).toMatchObject({ issue: 'divergent', model: null });
+  });
+
+  it('vypnutá kopírka: rozdíl proti leaderovi není poplach — ukáže se, co účty drží', () => {
+    // Cvičný obchod 27. 10.: jen leader 1 MNQ, followeři 0, kopírka DISARMED.
+    const leaderOnly = { accounts: [account(1, 1, 21480, 20), account(2, 0, 0, 0)], orders: bracket(1, 21470, 21500, 1), feeRates: new Map(), group, target: 'group' as const, now };
+    expect(buildJournalLiveView({ ...leaderOnly, copierArmed: false, workerMismatches: { pending: new Set(), confirmed: new Set([2]), ok: new Set() } }))
+      .toMatchObject({ issue: null, copierOff: true, scopeLabel: 'ACC1', divergenceCandidate: false, model: { kind: 'position', quantity: 1, ladder: { stop: 21470, target: 21500 } } });
+    // Zapnutá kopírka se stejnými daty = potvrzené rozjetí.
+    expect(buildJournalLiveView({ ...leaderOnly, copierArmed: true, workerMismatches: { pending: new Set(), confirmed: new Set([2]), ok: new Set() } }).issue).toBe('divergent');
+    // Jen follower s čekajícím limitem: jeho vlastní pohled.
+    const followerPending = buildJournalLiveView({
+      accounts: [account(1, 0, 0, 0), account(2, 0, 0, 0)],
+      orders: [order(2, { action: 'Buy', orderType: 'Limit', price: 21460, quantity: 1 })],
+      feeRates: new Map(), group, target: 'group', now, copierArmed: false,
+    });
+    expect(followerPending).toMatchObject({ issue: null, copierOff: true, scopeLabel: 'ACC2', model: { kind: 'pending', entry: 21460 } });
+    // Oba drží stejný směr: souhrn obou, bez jména účtu.
+    expect(buildJournalLiveView({ accounts: [account(1, 1, 21480, 20), account(2, 2, 21482, 30)], orders: [], feeRates: new Map(), group, target: 'group', now, copierArmed: false }))
+      .toMatchObject({ issue: null, scopeLabel: null, model: { quantity: 3 } });
+    // Bez kopírky různé SL u účtů: čára SL jen když je společná, TP společné zůstane.
+    const mixed = buildJournalLiveView({
+      accounts: [account(1, 1, 21480, 20), account(2, 1, 21482, 30)],
+      orders: [...bracket(1, 21470, 21500, 1), ...bracket(2, 21465, 21500, 1)],
+      feeRates: new Map(), group, target: 'group', now, copierArmed: false,
+    });
+    expect(mixed.model?.ladder).toEqual({ stop: null, target: 21500 });
+    expect(journalLivePriceLines(mixed.model).map(line => line.id)).toEqual(['entry', 'target']);
+    // Různé směry: souhrn nejde, hned (bez okna dobíhání) výzva k výběru účtu.
+    expect(buildJournalLiveView({ accounts: [account(1, 1, 21480, 20), account(2, -1, 21482, -30)], orders: [], feeRates: new Map(), group, target: 'group', now, copierArmed: false }))
+      .toMatchObject({ issue: 'divergent', copierOff: true, divergenceCandidate: false, model: null });
+    // Nic otevřeného: nic.
+    expect(buildJournalLiveView({ accounts: [account(1, 0, 0, 0), account(2, 0, 0, 0)], orders: [], feeRates: new Map(), group, target: 'group', now, copierArmed: false }))
+      .toMatchObject({ issue: null, model: null, verified: true });
+    // Neověřené pozice platí i při vypnuté kopírce.
+    const stale = new Date(now - 90_000).toISOString();
+    expect(buildJournalLiveView({ ...leaderOnly, accounts: [account(1, 1, 21480, 20, { positionsUpdatedAt: stale }), account(2, 0, 0, 0)], copierArmed: false }).issue).toBe('stale');
+    // Neznámý stav kopírky (bez čerstvého workeru) = dosavadní okno dobíhání.
+    expect(buildJournalLiveView({ ...leaderOnly, accounts: [account(1, 0, 0, 0), account(2, 1, 21481, 18)], copierArmed: null }).issue).toBe('settling');
+  });
+
+  it('vypnutí kopírky incidentem (rozjetí, ruční obnova, kill switch) poplachy neztiší', () => {
+    const startedAt = new Date(now - 3 * 3_600_000).toISOString();
+    const disarm = { trigger: 'manual', at: now - 3_600_000, copiesOutcome: 'flat' };
+    const manual = { armed: false, connected: true, lastError: null, manualRecovery: null, killSwitch: false, transportResume: null, lastDisarm: disarm };
+    const armedOf = (controller: Parameters<typeof journalCopierArmed>[0]) => journalCopierArmed(controller, startedAt);
+    expect(armedOf({ ...manual, armed: true, lastError: 'x' })).toBe(true);
+    // Stav ze dne cvičného obchodu: ruční vypnutí v tomto běhu, flat, spojení běží.
+    expect(armedOf(manual)).toBe(false);
+    // Záznam ze včerejška (před startem workeru) nebo vypnutí s otevřenými kopiemi = poplachy.
+    expect(armedOf({ ...manual, lastDisarm: { ...disarm, at: Date.parse(startedAt) - 1 } })).toBeNull();
+    expect(journalCopierArmed(manual, null)).toBeNull();
+    expect(armedOf({ ...manual, lastDisarm: { ...disarm, copiesOutcome: 'left-open-protected' } })).toBeNull();
+    expect(armedOf({ ...manual, lastError: 'Copier fail-closed: nevysvětlená divergence' })).toBeNull();
+    expect(armedOf({ ...manual, manualRecovery: { id: 'r', at: now, reason: 'x' } })).toBeNull();
+    expect(armedOf({ ...manual, killSwitch: true })).toBeNull();
+    // Výpadek spojení: vypnutí bez chyby, čeká na automatické obnovení.
+    expect(armedOf({ ...manual, lastDisarm: { ...disarm, trigger: 'transport' } })).toBeNull();
+    expect(armedOf({ ...manual, connected: false })).toBeNull();
+    expect(armedOf({ ...manual, transportResume: { phase: 'waiting' } })).toBeNull();
+    expect(armedOf({ ...manual, transportResume: { phase: 'ready' } })).toBeNull();
+    // Jiný nebo neznámý důvod vypnutí (i budoucí) = poplachy platí.
+    expect(armedOf({ ...manual, lastDisarm: { ...disarm, trigger: 'fail-closed' } })).toBeNull();
+    expect(armedOf({ ...manual, lastDisarm: null })).toBeNull();
+    expect(armedOf(null)).toBeNull();
+    // Osiřelá pozice followera po incidentu: copierArmed null → dosavadní okno a poplach.
+    const orphan = { accounts: [account(1, 0, 0, 0), account(2, 1, 21481, 18)], orders: [], feeRates: new Map(), group, target: 'group' as const, now };
+    const incident = armedOf({ ...manual, lastError: 'Copier fail-closed', manualRecovery: { id: 'r', at: now, reason: 'x' }, lastDisarm: { ...disarm, trigger: 'fail-closed' } });
+    expect(buildJournalLiveView({ ...orphan, copierArmed: incident, divergenceSince: now - JOURNAL_DIVERGENCE_CONFIRM_MS }).issue).toBe('divergent');
+  });
+
+  it('vypnutá kopírka: souhrn jen když obsáhne každý účet s expozicí', () => {
+    // Leader drží, follower má zbylý pracovní Sell Stop → ne souhrn jen leadera.
+    const leftover = buildJournalLiveView({
+      accounts: [account(1, 1, 21480, 20), account(2, 0, 0, 0)],
+      orders: [order(2, { orderType: 'Stop', stopPrice: 21450, quantity: 1 })],
+      feeRates: new Map(), group, target: 'group', now, copierArmed: false,
+    });
+    expect(leftover).toMatchObject({ issue: 'divergent', model: null, copierOff: true });
+    // Totéž z neověřeného čtení příkazů followera → neověřené příkazy.
+    const staleOrders = new Date(now - 90_000).toISOString();
+    expect(buildJournalLiveView({
+      accounts: [account(1, 1, 21480, 20), account(2, 0, 0, 0, { ordersUpdatedAt: staleOrders })],
+      orders: [order(2, { orderType: 'Stop', stopPrice: 21450, quantity: 1 })],
+      feeRates: new Map(), group, target: 'group', now, copierArmed: false,
+    }).issue).toBe('orders-stale');
+    // Dva účty se stejnou stranou, ale jinou limitní cenou → žádný průměrný vstup.
+    expect(buildJournalLiveView({
+      accounts: [account(1, 0, 0, 0), account(2, 0, 0, 0)],
+      orders: [order(1, { action: 'Buy', orderType: 'Limit', price: 21460, quantity: 1 }), order(2, { action: 'Buy', orderType: 'Limit', price: 21440, quantity: 1 })],
+      feeRates: new Map(), group, target: 'group', now, copierArmed: false,
+    })).toMatchObject({ issue: 'divergent', model: null });
+    // Leader flat, dva followeři s opačnými limity → výběr účtu, žádný účet nezmizí.
+    const threeGroup: CopyGroupConfig = { ...group, followers: [...group.followers, { ...group.followers[0], accountId: 3 }] };
+    expect(buildJournalLiveView({
+      accounts: [account(1, 0, 0, 0), account(2, 0, 0, 0), account(3, 0, 0, 0)],
+      orders: [order(2, { action: 'Buy', orderType: 'Limit', price: 21460, quantity: 1 }), order(3, { action: 'Sell', orderType: 'Limit', price: 21520, quantity: 1 })],
+      feeRates: new Map(), group: threeGroup, target: 'group', now, copierArmed: false,
+    }).issue).toBe('divergent');
   });
 
   it('rozdíl kusů followera se potvrdí až po chvíli, „liší se od leadera“ hned; OK ho smaže', () => {

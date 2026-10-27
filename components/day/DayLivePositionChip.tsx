@@ -61,6 +61,7 @@ export default function DayLivePositionChip({ store, compact = false }: { store:
       </span>
       <span className="tabular-nums text-[var(--text-secondary)]">
         {model.symbol}{model.entry != null ? ` @ ${priceFmt.format(model.entry)}` : ''}
+        {view.scopeLabel ? ` · ${view.scopeLabel}` : ''}
       </span>
       {model.kind === 'position' ? (
         model.openPnl != null ? (
@@ -76,6 +77,7 @@ export default function DayLivePositionChip({ store, compact = false }: { store:
         <span className="text-[var(--text-muted)]">čeká na fill</span>
       )}
       {!model.verified && <span className="text-[var(--text-muted)]">SL/TP neověřeno</span>}
+      {view.copierOff && <span className="text-[var(--text-muted)]">kopírka vypnutá</span>}
       {(stopPoints != null || targetPoints != null) && (
         <span className="tabular-nums">
           {stopPoints != null && <span className="text-rose-400">SL {signedPoints(stopPoints)}</span>}
@@ -95,7 +97,7 @@ function issueLabel(view: JournalLiveView): string | null {
     case 'missing-account': return 'Pozice neověřené · účet skupiny chybí v datech';
     case 'orders-stale': return 'Příkazy neověřené';
     case 'settling': return 'Kopie dobíhá…';
-    case 'divergent': return 'Účty skupiny se liší · viz LIVE';
+    case 'divergent': return view.copierOff ? 'Kopírka vypnutá · účty se liší, vyber účet' : 'Účty skupiny se liší · viz LIVE';
     default: return null;
   }
 }

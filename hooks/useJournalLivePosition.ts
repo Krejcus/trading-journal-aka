@@ -7,7 +7,7 @@ import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tra
 import { tradeCardFeeRates } from '../lib/liveTradeCard';
 import { readCopyGroupCache } from '../services/copyGroupLibrary';
 import {
-  buildJournalLiveView, confirmWorkerMismatches, EMPTY_JOURNAL_LIVE_VIEW,
+  buildJournalLiveView, confirmWorkerMismatches, EMPTY_JOURNAL_LIVE_VIEW, journalCopierArmed,
   type JournalLiveInterest, type JournalLiveTarget, type JournalLiveView, type WorkerMismatches,
 } from '../lib/journalLivePosition';
 import { subscribeAppForeground } from '../lib/appForeground';
@@ -84,6 +84,9 @@ export function useJournalLivePosition(source: JournalLiveSource | null | undefi
   // Rozjetí followerů jen z heartbeatu, který ještě platí (stejně jako pozice).
   const workerFresh = worker.observedAt != null && now - worker.observedAt <= WORKER_EXPOSURE_MAX_AGE_MS;
   const followerVerdicts = workerFresh ? worker.status?.controller?.exposure?.followers ?? null : null;
+  // Zapnutost kopírky jen z čerstvého heartbeatu; jinak, nebo po incidentu,
+  // neznámo (platí poplachy o rozjetí).
+  const copierArmed = workerFresh ? journalCopierArmed(worker.status?.controller, worker.status?.startedAt) : null;
   // Od kdy worker hlásí rozdíl kusů. Krátký výpadek heartbeatu paměť nemaže
   // (potvrzené rozjetí se po návratu znovu nečeká), delší ano. Čas podle
   // skutečných hodin — stavové `now` zaostává a okno by zkracovalo.
@@ -107,13 +110,13 @@ export function useJournalLivePosition(source: JournalLiveSource | null | undefi
       return EMPTY_JOURNAL_LIVE_VIEW;
     }
     const built = buildJournalLiveView({
-      accounts, orders, feeRates, group, target, workerMismatches, divergenceSince: divergenceSinceRef.current, now,
+      accounts, orders, feeRates, group, target, workerMismatches, divergenceSince: divergenceSinceRef.current, copierArmed, now,
     });
     // Začátek okna podle skutečného času, ne podle hodin pohledu (ty jdou
     // bez workeru jen po 5 s) — okno se tak nikdy nezkrátí.
     divergenceSinceRef.current = built.divergenceCandidate ? divergenceSinceRef.current ?? Date.now() : null;
     return built;
-  }, [active, accounts, orders, feeRates, group, target, workerMismatches, now]);
+  }, [active, accounts, orders, feeRates, group, target, workerMismatches, copierArmed, now]);
   // Otevřená pozice skupiny = častější čtení z brokera (kotva P&L); jinak jen
   // udržovací. Pozice z workeru se tu pozná dřív, než ji vidí REST. Neúplný
   // nebo rozjetý pohled s pozicí taky — ať se co nejdřív ověří.

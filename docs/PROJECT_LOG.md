@@ -285,6 +285,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-27 11:20 — Deník: živá pozice při vypnuté kopírce bez falešného poplachu (Claude)
+
+- Filip zkusil cvičný obchod na účtu LFE…0038 (v kopírce leader skupiny
+  „Ahojda“) s vypnutou kopírkou: fill 1 MNQ, followeři 0 (worker `blocked
+  … disarmed`), zavřeno za 40 s, vše flat, bez `lastError`. V deníku se
+  pozice ukázala a po ~5 s zmizela: pohled skupiny ji vyhodnotil jako
+  potvrzené rozjetí („drží 0, očekáváno 1“) a schoval čáry.
+- Oprava (jen zobrazení): při výslovně ručně vypnuté kopírce v klidu
+  (čerstvý heartbeat, `lastDisarm.trigger === 'manual'`, spojení běží, bez
+  čekání na obnovení, `lastError`, ruční obnovy a kill switche) není rozdíl
+  proti leaderovi porucha — skupina ukáže, co účty drží (jediný účet = jeho
+  pohled se jménem), štítek „kopírka vypnutá“; souhrn jen když obsáhne každý
+  účet s expozicí, jinak „Kopírka vypnutá · účty se liší, vyber účet“.
+  Jakékoli jiné vypnutí a neznámý stav = dosavadní okno dobíhání a poplachy
+  (oponent 2× OPRAVIT PŘED COMMITEM — fail-closed i výpadek spojení vypínají
+  kopírku ve stejné revizi jako rozjetí; proto seznam povolených důvodů).
+  Souhrn víc účtů bez kopírky kreslí SL/TP jen společné.
+- Vedlejší nález: snímky grafu z TV u toho obchodu selhaly
+  (`snapshot-tv-capture-normalize-failed`, vstup i výstup; poslední úspěch
+  26. 10. 16:51Z) — řeší samostatná session.
+
 ### 2026-10-27 10:51 — NASAZENO: živá pozice v deníku + otevření jako „Reset chart view“ (Claude, Filip „můžeš nasadit“)
 
 - Web: `main` = `a78e6bbb` (fast-forward z `ccb7572f`): `171014b7` deník dneška

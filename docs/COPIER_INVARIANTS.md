@@ -1245,7 +1245,21 @@ existující ochranu.
   leadera“ hned, „drží X, očekáváno Y“ po 5 s) se ukáže hned. Souhrn při
   flat leaderovi jen když má každý držící follower OK verdikt čerstvého
   workeru (kopírka ho vědomě neřídí); ne-OK verdikt (neověřená pozice,
-  denní limit, zlikvidovaný účet…) nic nepotlačí. Verdikty „aktivní příkazy mimo
+  denní limit, zlikvidovaný účet…) nic nepotlačí. Výslovně ručně vypnutá
+  kopírka v klidu (`journalCopierArmed`: čerstvý heartbeat, `armed === false`,
+  `lastDisarm.trigger === 'manual'` s kopiemi flat a z tohoto běhu workeru
+  (`lastDisarm.at >= startedAt`), spojení běží, žádné čekání na
+  automatické obnovení, bez `lastError`, ruční obnovy a kill switche) poplach
+  o rozjetí vypne: followeři kopírovat nemají, takže pohled skupiny ukáže, co
+  účty skutečně drží (jediný účet = jeho pohled se jménem), se štítkem
+  „kopírka vypnutá“ — jen když souhrn obsáhne každý účet s expozicí a příkazy
+  všech členů jsou ověřené (jinak „vyber účet“ / „Příkazy neověřené“); SL/TP
+  souhrnu víc účtů jen společné, čekající vstupy víc účtů se nesčítají („vyber
+  účet“). Jakékoli jiné vypnutí (fail-closed při rozjetí, výpadek spojení,
+  restart workeru, budoucí důvody) a neznámý stav = poplachy jako výš (seznam
+  povolených, ne zakázaných). Známé omezení: vypnutí bez nového záznamu po
+  pozdějším zapnutí v témže běhu (cooldown, day lock, změna skupiny…) starý
+  ruční záznam nepřebije; úplné řešení = čas posledního zapnutí od workeru. Verdikty „aktivní příkazy mimo
   kopii“, „účet zlikvidován“, „denní limit“ mají ve workeru přednost před
   porovnáním kusů — rozdíl u takového followera deník nepozná (LIVE ano). Otevřené P&L starší
   než 15 s nebo bez známého vstupu se neukáže („P&L —“). Čtení z brokera pro
