@@ -285,6 +285,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-27 ráno — Historie: náhledy hned s kartami, „Mimo plán“ do tlačítka, náběh stránek (Claude)
+
+- **Náhledy**: karta dřív ukázala „Bez screenshotu“, než se náhled z kopírky
+  podepsal (po pěticích, s dekódováním celých PNG mezi nimi), a zahřátí při
+  startu dekódovalo jen 4 náhledy (a ne ty, které Historie ukáže — neplatné
+  obchody jsou mimo karty). Teď: zahřátí podepíše celou první stránku (20,
+  jeden Storage požadavek), dekóduje první obrazovku (8, kopírka i ruční
+  snímek v náhledové velikosti `thumbLarge`, live i backtest) a míří na
+  `historyCardOrder` (bez neplatných, řazení jako Historie). Historie podepíše
+  viditelné jedním požadavkem; čekající náhled = kostra (`HistoryShotSkeleton`),
+  obrázek se prolne. Změřeno první otevření po startu: dřív `BBBB` („Bez
+  screenshotu“) a hotovo za 915 ms, teď bez něj, náhledy s kartami.
+  Náhledy z kopírky jsou plné PNG (2 730 px) — zmenšení přes transformace
+  Supabase u podepsaných URL by pomohlo víc, ale stojí peníze (navrženo).
+- **„Neplatné / mimo plán“**: místo sedmi velkých karet nahoře tlačítko
+  „Mimo plán (45)“ vedle „Nezkontrolované“ (součet P&L v titulku); rozbalí
+  kompaktní panel — dny jako řádky, obchody pod nimi.
+- **Náběh stránek** (`lib/pageEnter.ts`): bloky stránky (karty, sekce,
+  widgety na obrazovce) vyjedou jako dashboard po startu (stejná křivka,
+  45 ms rozestup). Při přechodu stránky z `useLayoutEffect` + MutationObserver
+  (bez probliknutí, i pro líně načtené stránky); start appky na jiné stránce
+  než dashboard naběhne stejně (BootTransition). LIVE vynechán (stav kopírky
+  hned). Nenasazeno.
+
 ### 2026-10-27 ráno — Backtest: karta session v Auroře, animace otevření/zavření, vycentrované grafy (Claude)
 
 - **Karta session** (`BacktestSessionsManager`): `.theme-card` sklo, hlavička

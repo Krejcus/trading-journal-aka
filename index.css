@@ -5217,3 +5217,19 @@ html.boot-pre [data-boot] { opacity: 0; }
   will-change: transform, opacity;
 }
 .light-theme .bt-run-surface--moving { box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08), 0 30px 80px -24px rgba(30, 41, 80, 0.35); }
+
+/* Kostra náhledu screenshotu v Historii (HistoryShotSkeleton): klidný
+   přeliv místo blikajícího pulzu — náhled pak přes ni jen prolne. */
+.history-shot-skeleton {
+  background: linear-gradient(110deg, rgba(148, 163, 184, 0.06) 30%, rgba(148, 163, 184, 0.14) 50%, rgba(148, 163, 184, 0.06) 70%);
+  background-size: 220% 100%;
+  animation: history-shot-shimmer 1.6s ease-in-out infinite;
+}
+.light-theme .history-shot-skeleton {
+  background: linear-gradient(110deg, rgba(15, 23, 42, 0.04) 30%, rgba(15, 23, 42, 0.09) 50%, rgba(15, 23, 42, 0.04) 70%);
+  background-size: 220% 100%;
+}
+@keyframes history-shot-shimmer { from { background-position: 100% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { .history-shot-skeleton { animation: none; } }
+/* Schovaná kostra (náhled načtený) už nemá co animovat. */
+.history-shot-skeleton.opacity-0 { animation: none; }

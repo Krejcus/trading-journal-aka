@@ -39,8 +39,8 @@ describe('trade history warmup', () => {
     expect(advanceTradeHistoryIndex(19, 1, 20)).toBeNull();
   });
 
-  it('warms only a bounded first screen and batches its signed thumbnails', async () => {
-    const trades = Array.from({ length: 20 }, (_, index) => journalTrade(index + 1));
+  it('signs the whole first page in one request but decodes only the first screen', async () => {
+    const trades = Array.from({ length: 24 }, (_, index) => journalTrade(index + 1));
     const signSnapshots = vi.fn(async (snapshots: NonNullable<Trade['copierSnapshots']>) => snapshots.map(snapshot => ({
       ...snapshot, url: `signed:${snapshot.path}`,
     })));
@@ -52,11 +52,11 @@ describe('trade history warmup', () => {
       signSnapshots, decodeImage, markImageLoaded, loadJournalDetails,
     });
 
-    expect(result).toEqual({ thumbCandidates: 4, decodedThumbs: 4, detailSelections: 12 });
+    expect(result).toEqual({ thumbCandidates: 20, decodedThumbs: 8, detailSelections: 12 });
     expect(signSnapshots).toHaveBeenCalledTimes(1);
-    expect(signSnapshots.mock.calls[0][0]).toHaveLength(4);
-    expect(decodeImage).toHaveBeenCalledTimes(4);
-    expect(markImageLoaded).toHaveBeenCalledTimes(4);
+    expect(signSnapshots.mock.calls[0][0]).toHaveLength(20);
+    expect(decodeImage).toHaveBeenCalledTimes(8);
+    expect(markImageLoaded).toHaveBeenCalledTimes(8);
     expect(loadJournalDetails).toHaveBeenCalledTimes(12);
   });
 
@@ -81,7 +81,22 @@ describe('trade history warmup', () => {
     expect(loadJournalDetails).not.toHaveBeenCalled();
   });
 
-  it('does not warm manual screenshots and does not mark a decoded image after cancellation', async () => {
+  it('warms a manual screenshot at the card size (not the original)', async () => {
+    const manual = { ...journalTrade(2), screenshot: 'https://x.supabase.co/storage/v1/object/public/shots/a.jpg' };
+    const decodeImage = vi.fn(async (_url: string) => undefined);
+    const markImageLoaded = vi.fn();
+    const result = await warmTradeHistory([manual], 'owner-a', {
+      signSnapshots: async snapshots => snapshots.map(snapshot => ({ ...snapshot, url: `signed:${snapshot.path}` })),
+      decodeImage,
+      markImageLoaded,
+      loadJournalDetails: async () => [],
+    });
+    expect(result.thumbCandidates).toBe(0);
+    expect(decodeImage.mock.calls[0][0]).toBe('https://x.supabase.co/storage/v1/render/image/public/shots/a.jpg?width=1000&height=750&resize=contain&quality=88');
+    expect(markImageLoaded).toHaveBeenCalledWith(manual.id);
+  });
+
+  it('signs copier thumbnails only for trades without a manual screenshot and does not mark a decoded image after cancellation', async () => {
     const controller = new AbortController();
     const automatic = journalTrade(1);
     const manual = { ...journalTrade(2), screenshot: 'manual.jpg' };

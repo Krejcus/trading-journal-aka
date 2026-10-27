@@ -28,8 +28,8 @@ import TradeDetailModal from './TradeDetailModal';
 const WeeklyReview = React.lazy(() => import('./WeeklyReview'));
 import type { ChartNote } from '../lib/chartNotes';
 import { HistoryScreenshotSlot, clipboardImage, pasteTargetsEditable, shotTargetIds, type ScreenshotAttachStatus } from './HistoryScreenshotSlot';
-import { HistoryShotImage } from './HistoryShotImage';
-import { createCoalescedBuffer } from '../lib/coalescedBuffer';
+import { HistoryShotImage, HistoryShotSkeleton } from './HistoryShotImage';
+import { historyEntryMs } from '../lib/historyCardOrder';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 
@@ -51,14 +51,8 @@ const tradeSig = (t: any): string => {
   return JSON.stringify(rest) + '#' + shotKey;
 };
 
-// Entry čas obchodu (epoch ms) s fallbackem — historie se řadí podle OTEVŘENÍ pozice, ne exitu.
-// entryTime (epoch) → entryDate (ISO) → timestamp (exit epoch) → date (exit ISO).
-const entryMs = (t: any): number => {
-  if (typeof t?.entryTime === 'number' && t.entryTime > 0) return t.entryTime;
-  if (t?.entryDate) { const p = Date.parse(t.entryDate); if (!isNaN(p)) return p; }
-  if (typeof t?.timestamp === 'number' && t.timestamp > 0) return t.timestamp;
-  const d = Date.parse(t?.date); return isNaN(d) ? 0 : d;
-};
+// Historie se řadí podle OTEVŘENÍ pozice (lib/historyCardOrder — totéž řazení zahřívá App).
+const entryMs = historyEntryMs;
 
 // Jednotný badge „k doplnění" pro importované obchody bez screenshotu/konfluence.
 // `card` = plovoucí pilulka v rohu karty, `inline` = malý štítek vedle instrumentu v tabulce.
@@ -180,6 +174,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const [zoomImage, setZoomImage] = useState<{ images: string[]; index: number } | null>(null);
   // Rozbalené dny v sekci „Neplatné / mimo plán" (klíč = ISO datum).
   const [openInvalidDays, setOpenInvalidDays] = useState<Set<string>>(new Set());
+  // Sekce je sbalená do tlačítka „Mimo plán“ vedle „Nezkontrolované“ — karty
+  // dnů nahoře dřív zabíraly celou první obrazovku Historie.
+  const [showInvalid, setShowInvalid] = useState(false);
 
   // --- ENRICHMENT (doplnění importovaných obchodů) ---
   const [enrichFilter, setEnrichFilter] = useState(false); // filtr „K doplnění"
@@ -303,6 +300,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // Náhledy z copier snapshotů (podepsané URL) pro obchody bez ručního screenshotu.
   // Init z module-level cache, ať se při návratu na záložku nepodepisuje znovu.
   const [copierThumbs, setCopierThumbs] = useState<Map<string, string>>(() => getCachedCopierThumbs(user.id));
+  // Obchody se snímkem z kopírky, pro které náhled podepsat nešlo.
+  const [copierThumbMissing, setCopierThumbMissing] = useState<Set<string>>(() => new Set());
   // Jediné nové podepsání po chybě náhledu (prošlá URL); viz efekt níže.
   const [copierThumbRetry, setCopierThumbRetry] = useState(0);
   const copierThumbRetriedRef = useRef<Set<string>>(new Set());
@@ -315,6 +314,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
   useEffect(() => {
     setCopierThumbs(getCachedCopierThumbs(user.id));
+    setCopierThumbMissing(new Set());
     copierThumbRetriedRef.current.clear();
     detailPrefetchRef.current.clear();
     preparedJournalDetailRef.current.clear();
@@ -825,11 +825,11 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     return () => clearTimeout(retryTimer);
   }, [visibleTrades, loadScreenshots]);
 
-  // Copier snapshoty jsou v privátním bucketu — pro právě vykreslenou dávku je
-  // podepíšeme po pěticích; každý kus se pak zobrazí vlastním onLoad. Hotové
-  // URL se do stavu slučují (první pětice hned, další nejvýš po 400 ms): každá
-  // změna mapy přerenderuje celou Historii a efekt se dřív navíc po každé
-  // pětici restartoval (~34 plných renderů při 170 kartách).
+  // Copier snapshoty jsou v privátním bucketu. Všechny vykreslené karty se
+  // podepíšou jedním Storage požadavkem a do stavu jdou jednou změnou (každá
+  // změna mapy přerenderuje celou Historii). Obrázky si pak stáhne každá karta
+  // souběžně sama (`HistoryShotImage`). Dřív se podepisovalo a dekódovalo po
+  // pěticích za sebou a karty mezitím ukazovaly „Bez screenshotu“.
   useEffect(() => {
     const candidates = visibleTrades.filter(t =>
       (t.copierSnapshots?.length ?? 0) > 0 &&
@@ -839,33 +839,32 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     );
     if (candidates.length === 0) return;
     let cancelled = false;
-    // Podepsané URL drží cache modulu, takže je další běh přeskočí — do stavu
-    // se proto dostanou vždy, i když se tenhle běh mezitím zrušil.
-    const thumbs = createCoalescedBuffer<[string, string]>(found => setCopierThumbs(prev => {
-      const next = new Map(prev);
-      found.forEach(([id, url]) => next.set(id, url));
-      return next;
-    }));
-    const run = async () => {
-      for (let i = 0; i < candidates.length; i += SCREENSHOT_BATCH) {
-        const batch = candidates.slice(i, i + SCREENSHOT_BATCH);
-        const signed = await prefetchCopierThumbUrls(user.id, batch.map(t => ({
+    void (async () => {
+      let signed: Map<string, string>;
+      try {
+        signed = await prefetchCopierThumbUrls(user.id, candidates.map(t => ({
           tradeId: String(t.id), snapshots: t.copierSnapshots,
         })), snaps => storageService.createCopierSnapshotSignedUrls(snaps));
-        const found = [...signed];
-        thumbs.add(found);
-        if (cancelled) return thumbs.flush();
-        if (found.length === 0) continue;
-        // Dekódování předem; „načteno“ si pak každý náhled označí sám.
-        await Promise.all(found.map(async ([id, url]) => {
-          try { await preloadDecodedImage(url); storageService.markImageLoaded(id); } catch { /* rozhodne onLoad/onError náhledu */ }
-        }));
-        if (cancelled) return thumbs.flush();
+      } catch {
+        signed = new Map();
       }
-      thumbs.flush();
-    };
-    void run();
-    return () => { cancelled = true; thumbs.flush(); };
+      // Podepsané URL drží cache modulu, takže je další běh přeskočí — do stavu
+      // se proto dostanou vždy, i když se tenhle běh mezitím zrušil.
+      if (signed.size > 0) setCopierThumbs(prev => {
+        const next = new Map(prev);
+        signed.forEach((url, id) => next.set(id, url));
+        return next;
+      });
+      if (cancelled) return;
+      // Bez náhledu (snímek chybí nebo podpis selhal) → karta ukáže „Bez screenshotu“.
+      const missing = candidates.map(t => String(t.id)).filter(id => !signed.has(id));
+      if (missing.length > 0) setCopierThumbMissing(prev => {
+        const next = new Set(prev);
+        missing.forEach(id => next.add(id));
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
   }, [visibleTrades, screenshotCache, user.id, copierThumbRetry]);
 
   // PREFETCH ALL screenshoty jedním query při mountu — eliminate flash při scroll/lazy load.
@@ -911,6 +910,13 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     const id = String(trade.id);
     return !screenshotCache.get(id)?.screenshot && !trade.screenshot && copierThumbs.has(id);
   };
+
+  // Snímek z kopírky, jehož náhled se ještě podepisuje: karta ukáže kostru
+  // obrázku, ne „Bez screenshotu“, které by za chvíli vystřídal obrázek.
+  const isThumbPending = (trade: Trade): boolean =>
+    (trade.copierSnapshots?.length ?? 0) > 0
+    && !getScreenshot(trade)
+    && !copierThumbMissing.has(String(trade.id));
 
   const getScreenshots = (trade: Trade): string[] | undefined => {
     const cached = screenshotCache.get(String(trade.id))?.screenshots;
@@ -960,6 +966,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     if (n.has(key)) n.delete(key); else n.add(key);
     return n;
   });
+  const invalidCount = invalidDays.reduce((count, day) => count + day.items.length, 0);
+  const invalidPnl = invalidDays.reduce((sum, day) => sum + day.pnl, 0);
+  const usd = (value: number) => `${value >= 0 ? '+' : '−'}$${Math.abs(Math.round(value)).toLocaleString('en-US')}`;
+  const pnlTone = (value: number) => Math.abs(value) <= 0.01 ? 'text-amber-500' : value > 0 ? 'text-emerald-500' : 'text-rose-500';
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20 pt-4">
@@ -1009,6 +1019,17 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             title="Zobrazit jen automatické drafty z kopírky"
           >
             <Inbox size={14} /> Nezkontrolované ({copierReviewCount})
+          </button>
+        )}
+
+        {!isMultiSelectMode && invalidCount > 0 && (
+          <button
+            onClick={() => setShowInvalid(value => !value)}
+            aria-expanded={showInvalid}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-bold transition-all active:scale-95 ${showInvalid ? 'bg-amber-500 text-slate-950' : 'border border-amber-500/30 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20'}`}
+            title={`Neplatné obchody a obchody mimo plán: ${invalidCount}, celkem ${usd(invalidPnl)}`}
+          >
+            <AlertTriangle size={14} /> Mimo plán ({invalidCount})
           </button>
         )}
 
@@ -1148,72 +1169,72 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
         )}
       </div>
 
-      {/* Neplatné / mimo plán — 1 karta = 1 session píčovin (agregát po dni, jen PnL).
-          NAD gridem: dole byla s infinite scrollem nedosažitelná (nové karty ji odsouvaly)
-          a obchod označený jako nevalidní tak „beze stopy zmizel". */}
-      {invalidDays.length > 0 && (
-        <div className="mb-6 space-y-3">
-          {invalidDays.map(day => {
-            const open = openInvalidDays.has(day.key);
-            const dayWin = day.pnl > 0.01;
-            const dayBE = Math.abs(day.pnl) <= 0.01;
-            const pnlColor = dayBE ? 'text-amber-500' : (dayWin ? 'text-emerald-500' : 'text-rose-500');
-            return (
-              <div key={day.key} className={`rounded-lg border overflow-hidden ${theme !== 'light' ? 'bg-amber-500/[0.04] border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}>
-                {/* Hlavička dne — klik = rozbalit */}
-                <button
-                  onClick={() => toggleInvalidDay(day.key)}
-                  className="w-full flex items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-amber-500/[0.06]"
-                >
-                  <ChevronRight size={16} className={`text-amber-500 transition-transform duration-200 shrink-0 ${open ? 'rotate-90' : ''}`} />
-                  <AlertTriangle size={15} className="text-amber-500 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className={`text-sm font-black ${theme !== 'light' ? 'text-slate-100' : 'text-slate-800'}`}>
-                      Neplatné / mimo plán
-                    </div>
-                    <div className="text-[11px] font-bold text-amber-600/80">
-                      {day.label} · {day.items.length} {day.items.length === 1 ? 'obchod' : day.items.length < 5 ? 'obchody' : 'obchodů'}
-                    </div>
-                  </div>
-                  <div className={`text-lg font-black font-mono ${pnlColor} shrink-0`}>
-                    {day.pnl >= 0 ? '+' : '−'}${Math.abs(Math.round(day.pnl)).toLocaleString('en-US')}
-                  </div>
-                </button>
+      {/* Neplatné / mimo plán — po dnech (agregát, jen PnL). NAD gridem: dole
+          byla s infinite scrollem nedosažitelná (nové karty ji odsouvaly) a obchod
+          označený jako nevalidní tak „beze stopy zmizel". Sbalená do tlačítka
+          „Mimo plán“ v liště; rozbalená = jeden kompaktní panel, dny jako řádky. */}
+      {showInvalid && invalidDays.length > 0 && (
+        <section
+          aria-label="Neplatné / mimo plán"
+          className={`mb-6 overflow-hidden rounded-lg border animate-in fade-in slide-in-from-top-2 duration-200 ${theme !== 'light' ? 'bg-amber-500/[0.04] border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}
+        >
+          <header className={`flex items-center gap-2.5 border-b px-4 py-2.5 ${theme !== 'light' ? 'border-amber-500/15' : 'border-amber-200'}`}>
+            <AlertTriangle size={14} className="shrink-0 text-amber-500" />
+            <h2 className={`text-[13px] font-bold ${theme !== 'light' ? 'text-slate-100' : 'text-slate-800'}`}>Neplatné / mimo plán</h2>
+            <span className="text-[11.5px] font-semibold text-amber-600/80">
+              {invalidCount} {invalidCount === 1 ? 'obchod' : invalidCount < 5 ? 'obchody' : 'obchodů'} · {invalidDays.length} {invalidDays.length === 1 ? 'den' : invalidDays.length < 5 ? 'dny' : 'dnů'}
+            </span>
+            <span className={`ml-auto font-mono text-[13px] font-bold ${pnlTone(invalidPnl)}`}>{usd(invalidPnl)}</span>
+          </header>
+          <div className={theme !== 'light' ? 'divide-y divide-amber-500/10' : 'divide-y divide-amber-200/70'}>
+            {invalidDays.map(day => {
+              const open = openInvalidDays.has(day.key);
+              return (
+                <div key={day.key}>
+                  {/* Řádek dne — klik = rozbalit obchody */}
+                  <button
+                    onClick={() => toggleInvalidDay(day.key)}
+                    aria-expanded={open}
+                    className="flex w-full items-center gap-2.5 px-4 py-2 text-left transition-colors hover:bg-amber-500/[0.06]"
+                  >
+                    <ChevronRight size={14} className={`shrink-0 text-amber-500 transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+                    <span className={`text-[12.5px] font-semibold ${theme !== 'light' ? 'text-slate-200' : 'text-slate-700'}`}>{day.label}</span>
+                    <span className="text-[11.5px] text-slate-500">
+                      {day.items.length} {day.items.length === 1 ? 'obchod' : day.items.length < 5 ? 'obchody' : 'obchodů'}
+                    </span>
+                    <span className={`ml-auto shrink-0 font-mono text-[13px] font-bold ${pnlTone(day.pnl)}`}>{usd(day.pnl)}</span>
+                  </button>
 
-                {/* Slim řádky — rozbalené */}
-                {open && (
-                  <div className={`border-t ${theme !== 'light' ? 'border-amber-500/15 divide-y divide-white/5' : 'border-amber-200 divide-y divide-slate-100'}`}>
-                    {day.items.map(t => {
-                      const win = t.pnl > 0.01;
-                      const be = Math.abs(t.pnl) <= 0.01;
-                      const c = be ? 'text-amber-500' : (win ? 'text-emerald-500' : 'text-rose-500');
-                      const isLong = String(t.direction || '').toLowerCase() === 'long';
-                      const dt = new Date(t.timestamp || Date.parse(t.date));
-                      const hhmm = isNaN(dt.getTime()) ? '' : dt.toTimeString().slice(0, 5);
-                      return (
-                        <div
-                          key={t.id}
-                          onClick={() => !isMultiSelectMode && setSelectedTrade(t)}
-                          className="flex items-center gap-3 px-5 py-2.5 text-[13px] cursor-pointer hover:bg-white/[0.03] transition-colors"
-                        >
-                          <span className="font-mono text-slate-500 w-[42px] shrink-0">{hhmm}</span>
-                          <span className={`font-bold ${theme !== 'light' ? 'text-slate-200' : 'text-slate-700'}`}>{t.instrument}</span>
-                          <span className={`text-[11px] font-semibold ${isLong ? 'text-emerald-500' : 'text-rose-500'} shrink-0`}>
-                            {isLong ? '▲' : '▼'} {t.direction}
-                          </span>
-                          <span className="flex-1 min-w-0 truncate text-slate-500">{getAccountName(t.accountId)}</span>
-                          <span className={`font-mono font-bold ${c} shrink-0`}>
-                            {t.pnl >= 0 ? '+' : '−'}${Math.abs(Math.round(t.pnl)).toLocaleString('en-US')}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                  {/* Slim řádky obchodů — rozbalené */}
+                  {open && (
+                    <div className={`border-t ${theme !== 'light' ? 'border-amber-500/10 divide-y divide-white/5 bg-black/10' : 'border-amber-200 divide-y divide-slate-100 bg-white/40'}`}>
+                      {day.items.map(t => {
+                        const isLong = String(t.direction || '').toLowerCase() === 'long';
+                        const dt = new Date(t.timestamp || Date.parse(t.date));
+                        const hhmm = isNaN(dt.getTime()) ? '' : dt.toTimeString().slice(0, 5);
+                        return (
+                          <div
+                            key={t.id}
+                            onClick={() => !isMultiSelectMode && setSelectedTrade(t)}
+                            className="flex cursor-pointer items-center gap-3 py-2 pl-10 pr-4 text-[12.5px] transition-colors hover:bg-white/[0.03]"
+                          >
+                            <span className="w-[42px] shrink-0 font-mono text-slate-500">{hhmm}</span>
+                            <span className={`font-bold ${theme !== 'light' ? 'text-slate-200' : 'text-slate-700'}`}>{t.instrument}</span>
+                            <span className={`shrink-0 text-[11px] font-semibold ${isLong ? 'text-emerald-500' : 'text-rose-500'}`}>
+                              {isLong ? '▲' : '▼'} {t.direction}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-slate-500">{getAccountName(t.accountId)}</span>
+                            <span className={`shrink-0 font-mono font-bold ${pnlTone(t.pnl)}`}>{usd(t.pnl)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       {viewMode === 'grid' ? (
@@ -1456,6 +1477,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         </div>
                       )}
                     </div>
+                  ) : isThumbPending(trade) ? (
+                    <div className="w-full h-full relative"><HistoryShotSkeleton variant="card" /></div>
                   ) : (
                     <HistoryScreenshotSlot
                       light={theme === 'light'}
@@ -1553,6 +1576,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                               variant="row"
                               onError={handleImageError}
                             />
+                          ) : isThumbPending(trade) ? (
+                            <HistoryShotSkeleton variant="row" />
                           ) : (
                             <Cpu size={16} className="text-slate-600" />
                           )}

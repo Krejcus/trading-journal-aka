@@ -24,29 +24,32 @@ describe('HistoryShotImage — náhled s vlastním stavem načtení', () => {
 
   it('shows the skeleton and a hidden image until the screenshot loads', () => {
     const html = render();
-    expect(html).toContain('animate-pulse');
+    expect(html).toMatch(/class="history-shot-skeleton[^"]*opacity-100/);
     expect(html).toMatch(/<img[^>]*class="[^"]*opacity-0/);
   });
 
   it('an image already loaded elsewhere (remount, other view) skips the skeleton', () => {
     loadedIds.add('t1');
     const html = render();
-    expect(html).not.toContain('animate-pulse');
+    // Kostra zůstává jen schovaná (prolnutí), obrázek je vidět hned.
+    expect(html).toMatch(/class="history-shot-skeleton[^"]*opacity-0/);
     expect(html).toMatch(/<img[^>]*class="[^"]*opacity-100/);
     expect(render({ variant: 'row' })).toMatch(/<img[^>]*class="[^"]*opacity-60 scale-100/);
   });
 
-  it('a copier thumbnail is visible right away (no fade-in)', () => {
+  it('a copier thumbnail keeps its crop and, once warmed (decoded at start), is visible right away', () => {
+    expect(render({ copierThumb: true })).toMatch(/<img[^>]*class="[^"]*object-\[80%_50%\] opacity-0/);
+    loadedIds.add('t1');
     expect(render({ copierThumb: true })).toMatch(/<img[^>]*class="[^"]*object-\[80%_50%\] opacity-100/);
   });
 
   it('a failed card keeps the image under the error overlay; a failed row shows only the icon', () => {
     const card = render({ failed: true });
     expect(card).toContain('bg-slate-900/60');
-    expect(card).not.toContain('animate-pulse');
+    expect(card).not.toContain('history-shot-skeleton');
     expect(card).toContain('<img');
     const row = render({ failed: true, variant: 'row' });
     expect(row).not.toContain('<img');
-    expect(row).not.toContain('animate-pulse');
+    expect(row).not.toContain('history-shot-skeleton');
   });
 });

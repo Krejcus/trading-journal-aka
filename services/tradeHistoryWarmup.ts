@@ -2,10 +2,15 @@ import type { Trade } from '../types';
 import { journalReviewOnly } from '../lib/journalReviewPatch';
 import { explicitTradeMaster, isCombinedTrade } from '../lib/tradeHistoryPresentation';
 import { pickCopierThumbSnapshot, prefetchCopierThumbUrls, type CopierThumbCandidate } from './copierSnapshotThumbs';
+import { thumbLarge } from './imageUrlService';
 
-// Verify a full rapid-navigation runway in one database snapshot, but download
-// only four hero/detail images up front so large TradingView PNGs do not compete.
-const MAX_THUMBS = 4;
+// Verify a full rapid-navigation runway in one database snapshot. Thumbnail
+// URLs are signed for the whole first History page in one Storage request, so
+// every card knows it has a picture (no "Bez screenshotu" flash); only the
+// first screen of card images is downloaded and decoded up front, so large
+// TradingView PNGs do not compete with the rest of the app start.
+const MAX_THUMB_SIGN = 20;
+const MAX_THUMBS = 8;
 const MAX_DETAIL_SELECTIONS = 12;
 const MAX_DETAIL_ROWS = 96;
 const MAX_DETAIL_MEDIA = 4;
@@ -135,18 +140,21 @@ export async function warmJournalTradeDetail(
 }
 
 /** Bounded warmup for the first History interaction. It never downloads every
- * screenshot: only recent copier thumbnails and a few verified journal details. */
+ * screenshot: only the first screen of card images (copier and manual, at the
+ * card's size) and a few verified journal details. */
 export async function warmTradeHistory(
   trades: readonly Trade[],
   scope: string,
   deps: WarmupDependencies,
 ): Promise<TradeHistoryWarmupResult> {
   const current = () => !deps.signal?.aborted && (deps.isCurrent?.() ?? true);
+  // Stejně jako karta Historie (`getScreenshot`): ruční snímek = `screenshot`.
+  const manualShot = (trade: Trade) => trade.screenshot || undefined;
   const thumbCandidates: CopierThumbCandidate[] = trades
-    .filter(trade => (trade.copierSnapshots?.length ?? 0) > 0
-      && !trade.screenshot && !(trade.screenshots?.length))
-    .slice(0, MAX_THUMBS)
+    .slice(0, MAX_THUMB_SIGN)
+    .filter(trade => (trade.copierSnapshots?.length ?? 0) > 0 && !manualShot(trade))
     .map(trade => ({ tradeId: String(trade.id), snapshots: trade.copierSnapshots }));
+  const firstScreen = trades.slice(0, MAX_THUMBS);
   const selections = journalSelections(trades);
   const primarySnapshots = [...new Map(selections.slice(0, MAX_DETAIL_MEDIA).flatMap(({ trade }) => {
     const primary = trade.copierSnapshots?.[0];
@@ -155,13 +163,23 @@ export async function warmTradeHistory(
   })).values()];
   let decodedThumbs = 0;
 
+  const decodeCardImage = async (tradeId: string, url: string) => {
+    await deps.decodeImage(url);
+    if (!current()) return;
+    deps.markImageLoaded(tradeId);
+    decodedThumbs += 1;
+  };
+  // Ruční screenshot karta ukazuje v náhledové velikosti (`thumbLarge`) —
+  // zahřát přesně tu adresu, originál by kartě nepomohl.
+  const warmManual = Promise.allSettled(firstScreen.flatMap(trade => {
+    const shot = manualShot(trade);
+    return shot ? [decodeCardImage(String(trade.id), thumbLarge(shot))] : [];
+  }));
+  const firstScreenIds = new Set(firstScreen.map(trade => String(trade.id)));
   const warmThumbs = prefetchCopierThumbUrls(scope, thumbCandidates, deps.signSnapshots)
-    .then(urls => Promise.allSettled([...urls].map(async ([tradeId, url]) => {
-      await deps.decodeImage(url);
-      if (!current()) return;
-      deps.markImageLoaded(tradeId);
-      decodedThumbs += 1;
-    })));
+    .then(urls => Promise.allSettled([...urls]
+      .filter(([tradeId]) => firstScreenIds.has(tradeId))
+      .map(([tradeId, url]) => decodeCardImage(tradeId, url))));
   // The card prefers EXIT, while the detail opens on the first (normally ENTRY)
   // snapshot. Warm that second bounded set only after thumbnails have priority.
   const warmPrimaryMedia = warmThumbs.then(async () => {
@@ -174,6 +192,6 @@ export async function warmTradeHistory(
     ? deps.loadJournalDetailSelections(selections.map(({ ids }) => ids), deps.signal)
     : Promise.allSettled(selections.map(({ ids }) => deps.loadJournalDetails(ids, deps.signal)));
 
-  await Promise.allSettled([warmPrimaryMedia, warmDetails]);
+  await Promise.allSettled([warmManual, warmPrimaryMedia, warmDetails]);
   return { thumbCandidates: thumbCandidates.length, decodedThumbs, detailSelections: selections.length };
 }

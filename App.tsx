@@ -26,6 +26,7 @@ import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId, subscribeTradeSync } from './services/storageService';
 import { preloadDecodedImage } from './services/imageDecodeCache';
 import { warmTradeHistory } from './services/tradeHistoryWarmup';
+import { historyCardOrder } from './lib/historyCardOrder';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
 import {
   BacktestTradeOutboxError, discardBacktestTrades, enqueueBacktestTrade, flushBacktestTradeOutbox, getPendingBacktestTrades,
@@ -194,6 +195,7 @@ import {
 } from 'lucide-react';
 import AppBackground from './components/AppBackground';
 import BootTransition from './components/BootTransition';
+import { animatePageEnter } from './lib/pageEnter';
 import { APPEARANCE_CACHE_KEY, normalizeAppearance, readCachedAppearance, type AppearanceSettings } from './lib/appearance';
 
 import { isSupabaseConfigured, supabase } from './services/supabase';
@@ -1292,6 +1294,21 @@ const App: React.FC = () => {
     // Vlastní posuvník má i obsah uvnitř PullToRefresh.
     outer.querySelectorAll<HTMLElement>('[data-page-scroll]').forEach(node => { node.scrollTop = 0; });
   }, [activePage]);
+
+  // Náběh stránky jako na dashboardu po startu (lib/pageEnter): bloky nové
+  // stránky postupně vyjedou. Start appky obstará BootTransition, takže první
+  // stránka po něm se přeskočí. LIVE ne — stav kopírky a pozice musí být vidět
+  // hned, ne až po náběhu.
+  const pageEnterKeyRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!bootTransitionDone) return;
+    const key = `${activePage}:${dashboardMode}`;
+    const previous = pageEnterKeyRef.current;
+    pageEnterKeyRef.current = key;
+    if (previous === null || previous === key || activePage === 'live' || activePage === 'ai') return;
+    const root = pageScrollRef.current;
+    return root ? animatePageEnter(root) : undefined;
+  }, [activePage, bootTransitionDone, dashboardMode]);
   const [requestedLiveTab, setRequestedLiveTab] = useState<TradovateLiveTab | null>(null);
   const [macCompanionPairingIntent, setMacCompanionPairingIntent] = useState(() => {
     const requestedByUrl = isMacCompanionPairingSearch(window.location.search);
@@ -3426,7 +3443,8 @@ const App: React.FC = () => {
   const journalDayTrades = useMemo(() => aggregateHistoryTrades(filterHistoryTrades(
     trades, accounts, archivedAccounts, JOURNAL_DAY_FILTERS, 'combined',
   )), [trades, accounts, archivedAccounts]);
-  const historyWarmupTrades = useMemo(() => filteredDisplayTrades.slice(0, 20), [filteredDisplayTrades]);
+  // Stejné karty a pořadí, jaké Historie ukáže nahoře (neplatné jsou v „Mimo plán“).
+  const historyWarmupTrades = useMemo(() => historyCardOrder(filteredDisplayTrades).slice(0, 20), [filteredDisplayTrades]);
   const historyWarmupKey = useMemo(() => historyWarmupTrades.map(trade => [
     String(trade.id),
     trade.combinedTradeIds?.map(String).join(',') ?? '',
@@ -3440,7 +3458,8 @@ const App: React.FC = () => {
   // Stabilní klíč zabrání rušení rozběhnutého warmupu při běžném refreshi stejných dat.
   useEffect(() => {
     const ownerId = session?.user?.id;
-    if (!ownerId || dashboardMode === 'backtesting' || !historyWarmupKey) return;
+    // Live i backtest: první obrazovka Historie má mít náhledy hned s kartami.
+    if (!ownerId || !historyWarmupKey) return;
     const controller = new AbortController();
     const recentTrades = historyWarmupTradesRef.current;
     void warmTradeHistory(recentTrades, ownerId, {
