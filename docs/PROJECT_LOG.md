@@ -285,6 +285,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-27 odpoledne — IBKR: sonda jen pro čtení připravená, čeká na Gateway (Claude, větev, NEnasazeno)
+
+- Filip má účet IBKR (IBKR Ireland), vklad 20 000 Kč, objednané „CME
+  Real-Time (NP,L1)“. Zbývá ověřit aktivní předplatné a nainstalovat
+  IB Gateway (Read-Only API, port 4001, jen localhost).
+- Větev `claude/ibkr-probe-20261027` (worktree `~/alphatrade-worktrees/ibkr-probe`):
+  `scripts/market-data/ibkrTickProbe.ts` + `tests/ibkrTickProbe.test.ts`,
+  devDependency `@stoqey/ib` 1.6.13 (MIT). Zdroj knihovny prošel před
+  instalací: bez instalačních skriptů, procesů, sítě mimo socket a zápisů.
+  `dotenv` se načte jen tehdy, když chybí volby; sonda je předává všechny.
+- Jen čtení ve třech vrstvách: Read-Only API v Gateway, `createReadOnlyIbClient`
+  (zmrazený objekt jen s čtecími voláními, posluchače uvnitř), test hlídá
+  zakázaná volání (příkazy, účty, pozice, exekuce, `managedAccounts`),
+  importy jen `node:*` + `@stoqey/ib`, host jen 127.0.0.1, porty 4001/4002/7496/7497.
+  Čísla účtů se z hlášek mažou. Nic z kopírky, workeru ani appky.
+- Měří: tok obchodů (za s, za 100 ms, mezery, dávky), zpoždění (IBKR dává čas
+  obchodu jen v sekundách → jen „prokazatelně > 1 s“), objem obchodů vs.
+  přírůstek denního objemu IBKR, minuty z ticků vs. konečné 1m svíčky IBKR
+  (OHLC, objem i počet obchodů), od kdy IBKR dá dnešní 1m svíčky, a hlášky
+  Gateway (1100/1101/1102, 10197 souběžné přihlášení). `--raw-ticks` uloží
+  obchody pro porovnání s Databentem (další krok, až budou data).
+- Limit IBKR 15 s na nový tick-by-tick odběr stejného instrumentu je
+  zabudovaný (`nextTradesRequestAt`): po 1101 nebo reconnectu znovu odebírat
+  nejdřív za 15 s. Platí i pro budoucí vlákno ve workeru.
+- Ověření (kopírka DISARMED, ověřeno v řetězu): 620 souborů / 5764 testů
+  zelených, `tsc` čistý, sonda i ve `--strict`. Bez Gateway sonda po 11 s
+  skončí hláškou a kódem 1.
+- Past worktree: `npm install` nahradil odkaz na sdílené `node_modules`
+  vlastní kopií (400 MB) a s `--ignore-scripts` neproběhl `patch-package` →
+  40 padajících testů grafů. Po `npx patch-package` vše zelené. Do worktree
+  navíc odkaz na `extension/node_modules`, jinak `tsc` hlásí 40 chyb v `extension/`.
+
 ### 2026-10-27 odpoledne — IBKR: předávka sloučena, rešerše zdrojů dat CME (Claude, jen dokumenty)
 
 - `claude/ibkr-handoff-20261027` sloučena do lokálního `main` fast-forwardem
