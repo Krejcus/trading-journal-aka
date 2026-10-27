@@ -293,6 +293,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Brána: kopírka DISARMED (ověřeno v řetězu před každým krokem) → tsc čistý,
   619 souborů / 5751 testů zelených, build OK, teprve pak push.
 - Jen frontend (Vercel); worker, relay ani Supabase funkce beze změny.
+- iPhone (10:57): `npm run ios:sync` + `xcodebuild` z Documents na `11721ac0`
+  (bundle ověřen: Supabase konfigurace i nový kód deníku), čistá instalace
+  přes `devicectl`; appka naběhla přihlášená na deníku, iOS znovu žádá
+  povolení oznámení.
 - Další na řadě: VWAP odchylky vs. TradingView (worker skládá dnešní svíčky
   místo přepisu ~327 svíčkami TV — změna workeru, reinstall jen po „nasaď“).
 
