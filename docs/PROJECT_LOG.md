@@ -285,6 +285,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-26 večer — Backtest: starší HTF historie (1h/4h/1D) se konečně načítá (Claude)
+
+- **Příčina** (změřeno na produkci): Databento vrací `ohlcv-1h` pro
+  kontinuální `MNQ.v.0` pomalu (31 dní 9,9 s, 92 dní 30,7 s). Klient žádal
+  1h po 300 dnech (~100 s), `market-candle-store` volá `market-candles`
+  s `AbortSignal.timeout(65 s)` → `store-unavailable`, období `failed`,
+  další dotazy jen `202 store-pending` → po minutě chyba. Ve skladu nebylo do
+  26. 10. jediné 1h období; HTF historie v backtestu se tak nikdy nenačetla.
+- **Oprava** `services/marketData.ts`: 1h se stahuje po kalendářních měsících
+  UTC (`splitCandleFetchRange`, hranice = období skladu), souběžně. Ověřeno
+  na skutečné session: rok 1h z naplněného skladu za 2,0 s (13× 200), další
+  nenaplněný rok ~20–35 s (Databento 10–19 s/měsíc; jednou přechodné
+  „Function failed to start“ → klient sám zopakoval). Pak už ze skladu.
+- **Graf** (`lib/olderHistoryGate.ts`): po doběhnutí dotazu (i chybou) smí
+  další gesto žádat znovu — dřív dotaz, který nezměnil první svíčku, historii
+  zablokoval až do přestavění grafu; gesto (klik/kolečko) samo spustí
+  kontrolu levého okraje. Sklad backtestu se po prázdném okně kontextu
+  (před začátkem dat) dál zpět neptá.
+- Pozor při ověřování: `computer left_click_drag` v náhledu graf neposouvá
+  (bez mezilehlých pohybů) — skutečné tažení simulovat JS `pointer/mouse`
+  událostmi. Session „testovka – kopie“ vrácena na 1m + 5m, pozastavená.
+- Vedlejší nález (neopraveno, čeká na souhlas s migrací): `backtest_fills`
+  CHECK `reason` nezná `session-close` → upsert ledgeru 400 a další plnění
+  se do tabulky nesynchronizují (v „testovka – kopie“ 2 z 15); snímek běhu
+  v `backtest_runs` je celý, tabulku nikdo nečte. Nenasazeno.
+- `reviewFocusKey` v samostatném modulu: test ho dřív bral přes `dayFocus.ts`
+  s importem celého grafu → časovač `chartAppearanceScope` sahal po `window`
+  v Node a vitest hlásil neošetřenou chybu. Celá sada 616 souborů zelená
+  (soubory s časovými limity přes noční spánek Macu znovu 15/15), tsc čistý.
+
 ### 2026-10-26 — Graf dne: záběr se už nevrací, čára aktuální ceny s živou svíčkou (Claude)
 
 - **Reset záběru**: klíč zaměření grafu dne obsahoval minuty výchozího úseku,

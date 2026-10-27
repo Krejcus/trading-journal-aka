@@ -152,6 +152,32 @@ describe('denní kbelíky svíček', () => {
     expect(invoke).toHaveBeenCalledTimes(2);
   });
 
+  it('rok 1h historie se stahuje po kalendářních měsících souběžně (300 dní najednou sklad utnul)', async () => {
+    const HOUR_MS = 3_600_000;
+    invoke.mockImplementation(async (_name: string, options: { body: { start: string; end: string } }) => {
+      const candles: Array<Record<string, number>> = [];
+      for (let t = Date.parse(options.body.start); t < Date.parse(options.body.end); t += HOUR_MS) {
+        candles.push({ time: t / 1000, open: 100, high: 101, low: 99, close: 100, volume: 10 });
+      }
+      return { data: { candles, estimatedCostUsd: 0.005 }, error: null };
+    });
+    const start = Date.UTC(2025, 2, 9, 22);
+    const end = Date.UTC(2026, 2, 9, 22);
+    const response = await loadMarketCandles({ symbol: 'MNQ.v.0', schema: 'ohlcv-1h', start: new Date(start), end: new Date(end) });
+    const windows = invoke.mock.calls.map(([, options]) => [Date.parse(options.body.start), Date.parse(options.body.end)] as const);
+    // Celé dny 9. 3. 2025 – 10. 3. 2026 → 13 oken, hranice na začátcích měsíců.
+    expect(windows).toHaveLength(13);
+    expect(windows[0]).toEqual([Date.UTC(2025, 2, 9), Date.UTC(2025, 3, 1)]);
+    expect(windows[1]).toEqual([Date.UTC(2025, 3, 1), Date.UTC(2025, 4, 1)]);
+    expect(windows.at(-1)).toEqual([Date.UTC(2026, 2, 1), Date.UTC(2026, 2, 10)]);
+    windows.forEach(([from, to], index) => {
+      expect(to - from).toBeLessThanOrEqual(31 * DAY_MS);
+      if (index > 0) expect(from).toBe(windows[index - 1][1]);
+    });
+    expect(invoke.mock.calls.every(([, options]) => options.body.schema === 'ohlcv-1h')).toBe(true);
+    expect(response.candles).toHaveLength((end - start) / HOUR_MS);
+  });
+
   it('neuzavřený den se necachuje, uzavřené kolem něj ano', async () => {
     const now = Date.now();
     const todayStart = Math.floor(now / DAY_MS) * DAY_MS;

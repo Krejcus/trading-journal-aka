@@ -209,6 +209,7 @@ import {
   resetChartView,
 } from '../services/chartContextMenu';
 import { sameCandleSeries } from '../lib/candleSeries';
+import { armOlderHistory, createOlderHistoryGate, markOlderHistoryRequested, olderHistoryDue, settleOlderHistory } from '../lib/olderHistoryGate';
 import {
   futureAxisTimes,
   nearestReplayCandleTime,
@@ -1927,8 +1928,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 }) => {
   const apiRef = useRef<ChartViewApi | null>(null);
   const chartRootRef = useRef<HTMLDivElement>(null);
-  const olderHistoryUserArmedRef = useRef(false);
-  const olderHistoryRequestedBeforeRef = useRef<number | null>(null);
+  const olderHistoryGateRef = useRef(createOlderHistoryGate());
+  const olderHistoryCheckFrameRef = useRef<number | null>(null);
+  const olderHistoryWasLoadingRef = useRef(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const rangeSubscriptionRef = useRef<{ chart: IChartApi; handler: () => void } | null>(null);
   const crosshairSubscriptionRef = useRef<{
@@ -2627,6 +2629,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   }, [candles.length, compactMode, initialWindow, replayActive, reviewMode, timeframe]);
 
   useEffect(() => () => {
+    if (olderHistoryCheckFrameRef.current !== null) window.cancelAnimationFrame(olderHistoryCheckFrameRef.current);
     unsubscribeVisibleRangeSafely(rangeSubscriptionRef.current);
     unsubscribeCrosshairSafely(crosshairSubscriptionRef.current);
     protectedDrawingsUnsubscribeRef.current?.();
@@ -4222,12 +4225,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const atLeftEdge = logicalRange.from < 160;
       const nearLeftEdge = atLeftEdge && currentWindow.start > 0;
       const nearRightEdge = logicalRange.to > currentVisibleCount - 80 && currentWindow.end < currentCandles.length;
-      const needsExternalHistory = olderHistoryUserArmedRef.current
-        && atLeftEdge
-        && currentWindow.start === 0
-        && Boolean(onNeedOlderHistory)
-        && !olderHistoryLoading
-        && currentCandles[0]?.time !== olderHistoryRequestedBeforeRef.current;
+      const needsExternalHistory = olderHistoryDue(olderHistoryGateRef.current, {
+        fromLogical: logicalRange.from,
+        windowStart: currentWindow.start,
+        hasLoader: Boolean(onNeedOlderHistory),
+        loading: olderHistoryLoading,
+        firstTime: currentCandles[0]?.time,
+      });
       if (!nearLeftEdge && !nearRightEdge && !needsExternalHistory) return;
       if (!replayActive) {
         const visibleRange = chart.timeScale().getVisibleRange();
@@ -4242,8 +4246,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         }));
       }
       if (needsExternalHistory && currentCandles[0]) {
-        olderHistoryUserArmedRef.current = false;
-        olderHistoryRequestedBeforeRef.current = currentCandles[0].time;
+        markOlderHistoryRequested(olderHistoryGateRef.current, currentCandles[0].time);
         onNeedOlderHistory?.(currentCandles[0].time);
         window.setTimeout(() => { expandingWindowRef.current = false; }, 250);
       }
@@ -5163,6 +5166,29 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     } catch { /* graf mezitím zanikl */ }
   }, [chartApiEpoch, chartSettings.scales.placement, priceScaleAuto, priceScaleMode]);
 
+  // Starší historie: gesto uživatele (posun, kolečko, klik) samo spustí
+  // kontrolu levého okraje — i když se záběr nepohne (klik do grafu u okraje,
+  // kolečko na krajním přiblížení), kdy by posluchač rozsahu mlčel. Po
+  // doběhnutí dotazu (i chybou) smí další gesto žádat znovu.
+  const armOlderHistoryFromGesture = useCallback(() => {
+    armOlderHistory(olderHistoryGateRef.current, candlesRef.current[0]?.time);
+    if (olderHistoryCheckFrameRef.current !== null) return;
+    olderHistoryCheckFrameRef.current = window.requestAnimationFrame(() => {
+      olderHistoryCheckFrameRef.current = null;
+      try {
+        rangeSubscriptionRef.current?.handler();
+      } catch { /* graf mezitím zanikl */ }
+    });
+  }, []);
+  useEffect(() => {
+    if (olderHistoryLoading) {
+      olderHistoryWasLoadingRef.current = true;
+      return;
+    }
+    if (!olderHistoryWasLoadingRef.current) return;
+    olderHistoryWasLoadingRef.current = false;
+    settleOlderHistory(olderHistoryGateRef.current);
+  }, [olderHistoryLoading]);
 
   return (
     <div
@@ -5178,12 +5204,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       data-replay-fvg-count={replayActive ? renderedFvgs.regular.length : undefined}
       data-replay-structure-count={replayActive ? structureOverlayEvents.length : undefined}
       data-trade-box-locked="true"
-      onPointerDownCapture={() => {
-        olderHistoryUserArmedRef.current = true;
-        if (olderHistoryRequestedBeforeRef.current !== candlesRef.current[0]?.time) {
-          olderHistoryRequestedBeforeRef.current = null;
-        }
-      }}
+      onPointerDownCapture={armOlderHistoryFromGesture}
       onPointerMoveCapture={handleManagedPositionPointerMove}
       onPointerMove={event => {
         pointerClientRef.current = { x: event.clientX, y: event.clientY };
@@ -5195,11 +5216,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         setPricePointer(null);
       }}
       onContextMenu={openContextMenu}
-      onWheelCapture={event => {
-        olderHistoryUserArmedRef.current = true;
-        if (olderHistoryRequestedBeforeRef.current !== candlesRef.current[0]?.time) {
-          olderHistoryRequestedBeforeRef.current = null;
-        }
+      onWheelCapture={() => {
+        armOlderHistoryFromGesture();
         setManagedPositionHover(null);
       }}
       onDoubleClickCapture={event => {

@@ -40,6 +40,8 @@ export function createBacktestCandleStore(
   let forwardChain = Promise.resolve();
   const sessionLoadedFrom: Partial<Record<BacktestInstrument, number>> = {};
   const historyLoadedFrom = new Map<string, number>();
+  // Prázdné okno kontextu = před začátkem dat trhu; dál zpět se už neptat.
+  const historyExhausted = new Set<string>();
   const olderRequests = new Map<string, Promise<void>>();
   const bounded = (candles: MarketCandle[], start: number, end: number) => candles.filter(c => c.time * 1000 >= start && c.time * 1000 < end);
 
@@ -99,6 +101,7 @@ export function createBacktestCandleStore(
 
   async function loadOlder(root: BacktestInstrument, schema: MarketDataSchema, beforeMs: number) {
     const key = `${root}:${schema}`;
+    if (historyExhausted.has(key)) return;
     const pending = olderRequests.get(key);
     if (pending) return pending;
     const job = (async () => {
@@ -115,6 +118,7 @@ export function createBacktestCandleStore(
         snapshot = { ...snapshot, candles: { ...snapshot.candles, [root]: merge(snapshot.candles[root], bounded(incoming.candles, range.startMs, range.endMs)) } };
         sessionLoadedFrom[root] = Math.min(sessionLoadedFrom[root] ?? range.startMs, range.startMs);
       } else {
+        if (incoming.candles.length === 0) historyExhausted.add(key);
         const safe = completedHistoricalCandles({ candles: incoming.candles, schema, endMs: range.endMs, replayStartMs: run.startAt });
         snapshot = { ...snapshot, history: { ...snapshot.history, [root]: { ...snapshot.history[root], [schema]: merge(snapshot.history[root]?.[schema], safe) } } };
       }

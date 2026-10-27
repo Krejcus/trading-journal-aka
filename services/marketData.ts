@@ -30,8 +30,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Margin od „teď": den se cachuje, až když je bezpečně uzavřený u poskytovatele. */
 const HISTORICAL_DELAY_MS = 24 * 60 * 60 * 1000;
 const DAY_COMPLETE_MARGIN_MS = HISTORICAL_DELAY_MS + 60 * 60 * 1000;
-/** Limity Databento oken na jeden request: ~16 dní pro 1m, ~370 dní pro 1h. */
-const FETCH_CHUNK_DAYS: Record<MarketDataSchema, number> = { 'ohlcv-1m': 14, 'ohlcv-1h': 300 };
+/** 1m po 14 dnech (limit Databento okna ~16 dní); 1h po měsících, viz `splitAtUtcMonths`. */
+const FETCH_CHUNK_DAYS = 14;
 
 interface StoredDayBucket {
   expiresAt: number;
@@ -68,6 +68,32 @@ const splitRange = (range: { startMs: number; endMs: number }, chunkMs: number):
   }
   return chunks;
 };
+
+/**
+ * 1h po kalendářních měsících UTC — stejné hranice jako období skladu
+ * svíček, takže každý request zabere jedno období a souběžné requesty si
+ * nečekají na cizí stahování. Databento vrací 1h pro kontinuální symbol
+ * pomalu (~1 s na 3 dny, změřeno 26. 10. 2026): dřívějších 300 dní trvalo
+ * ~100 s, sklad stahování po 65 s utnul a starší HTF historie se nikdy
+ * nenačetla. Měsíc trvá ~10 s a měsíce běží souběžně.
+ */
+const splitAtUtcMonths = (range: { startMs: number; endMs: number }): Array<{ startMs: number; endMs: number }> => {
+  const chunks: Array<{ startMs: number; endMs: number }> = [];
+  for (let start = range.startMs; start < range.endMs;) {
+    const date = new Date(start);
+    const nextMonth = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
+    const end = Math.min(range.endMs, nextMonth);
+    chunks.push({ startMs: start, endMs: end });
+    start = end;
+  }
+  return chunks;
+};
+
+export const splitCandleFetchRange = (
+  schema: MarketDataSchema,
+  range: { startMs: number; endMs: number },
+): Array<{ startMs: number; endMs: number }> =>
+  schema === 'ohlcv-1h' ? splitAtUtcMonths(range) : splitRange(range, FETCH_CHUNK_DAYS * DAY_MS);
 
 export class MarketDataError extends Error {
   constructor(message: string, public readonly code = 'market-data-error') {
@@ -254,7 +280,7 @@ export async function loadMarketCandles(params: {
     const missing = days.filter(day => !buckets.has(day));
     if (missing.length) {
       const chunks = contiguousRanges(missing)
-        .flatMap(range => splitRange(range, FETCH_CHUNK_DAYS[schema] * DAY_MS));
+        .flatMap(range => splitCandleFetchRange(schema, range));
       const results = await Promise.all(chunks.map(chunk =>
         fetchCandleRange(params.symbol, schema, chunk.startMs, chunk.endMs)));
       const now = Date.now();

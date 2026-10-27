@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { reviewFocusKey } from '../components/day/dayFocus';
+import { reviewFocusKey } from '../components/day/reviewFocusKey';
 
 describe('záběr grafu dne se mění jen akcí uživatele', () => {
   it('klíč přesunu záběru nezávisí na čase, jen na režimu a výběru obchodu', () => {

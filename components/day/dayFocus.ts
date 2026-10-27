@@ -70,14 +70,8 @@ export function sessionBands(windows: SessionWindows, mode: DayMode, previousNy?
   return bands;
 }
 
-/**
- * Klíč přesunu záběru: mění se jen akcí uživatele (režim, část dne, výběr
- * obchodu), nikdy během času. U dneška se výchozí úsek posouvá s `now`
- * (`focusRange`) — kdyby byl v klíči, graf by se každou minutu vrátil na
- * výchozí záběr a zahodil uživatelův posun nebo zoom.
- */
-export const reviewFocusKey = (prefix: string, selectedTradeId?: string | number | null): string =>
-  (selectedTradeId != null ? `trade:${selectedTradeId}` : prefix);
+// Bez importu grafu (testy v Node) — viz reviewFocusKey.ts.
+export { reviewFocusKey } from './reviewFocusKey';
 
 /**
  * Přesun záběru review grafu při změně režimu / rozsahu / výběru (událost

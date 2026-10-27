@@ -91,6 +91,25 @@ describe('backtest candle coverage store', () => {
     expect(store.getSnapshot().history.MNQ!['ohlcv-1h']!.map(c => c.time)).toEqual([-HOUR / 1000]);
   });
 
+  it('stops asking further back once a context window is empty (before the market data begins)', async () => {
+    const load = vi.fn(async (p: Params) => {
+      if (p.schema === 'ohlcv-1h' && p.start.getTime() < -365 * DAY) throw new MarketDataError('Žádná data', 'no-data');
+      return response(p, p.schema === 'ohlcv-1h' ? [candle(p.start.getTime())] : undefined);
+    });
+    const store = createBacktestCandleStore(run(), load);
+    await store.loadInitial();
+    await store.loadOlder('MNQ', 'ohlcv-1h', 0);
+    await store.loadOlder('MNQ', 'ohlcv-1h', -365 * DAY);
+    const calls = load.mock.calls.length;
+    await store.loadOlder('MNQ', 'ohlcv-1h', -730 * DAY);
+    await store.loadOlder('MNQ', 'ohlcv-1h', -730 * DAY);
+    expect(load.mock.calls.length).toBe(calls);
+    expect(store.getSnapshot().history.MNQ!['ohlcv-1h']).toHaveLength(1);
+    // Jiný trh se tím nezastaví.
+    await store.loadOlder('NQ', 'ohlcv-1h', 0);
+    expect(load.mock.calls.length).toBe(calls + 1);
+  });
+
   it('retains a late historical prepend when a forward load completes concurrently', async () => {
     const older = deferred<MarketCandleResponse>();
     let oldParams!: Params;
