@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import DayLivePositionChip from './DayLivePositionChip';
+import type { JournalLivePositionStore } from '../../lib/journalLivePositionStore';
+import type { LivePriceLinesFeed } from '../../lib/livePriceLinesFeed';
 import { createPortal } from 'react-dom';
 import type { Trade } from '../../types';
 import AlphaTradeChartWorkspace, { type ReviewSlotElements, type WorkspacePanelOverlay } from '../AlphaTradeChartWorkspace';
@@ -46,11 +49,13 @@ function createStore<T>(initial: T) {
 }
 type OverlayStore = ReturnType<typeof createStore<OverlayState | null>>;
 
-function PanelOverlay({ panel, store }: { panel: WorkspacePanelOverlay; store: OverlayStore }) {
+function PanelOverlay({ panel, store, liveStore }: { panel: WorkspacePanelOverlay; store: OverlayStore; liveStore?: JournalLivePositionStore }) {
   const state = useSyncExternalStore(store.subscribe, store.get, store.get);
   if (!state) return null;
   return (
     <>
+      {/* Živá pozice jen v aktivním panelu (čáry kreslí graf ve všech MNQ/NQ). */}
+      {liveStore && panel.isActive && <DayLivePositionChip store={liveStore} />}
       <DayNotesLayer
         chartApi={panel.chartApi}
         containerRef={panel.containerRef}
@@ -80,8 +85,11 @@ type Celebration =
   | { kind: 'prep'; session: DaySession; fresh: boolean; seconds: number | null }
   | { kind: 'close'; session: DaySession; fresh: boolean };
 
-export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, onOpenMind, height }: {
+export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, onOpenMind, height, liveStore, positionLines }: {
   ctl: DayController;
+  /** Živá pozice z kopírky (deník dneška; jen zobrazení). */
+  liveStore?: JournalLivePositionStore;
+  positionLines?: LivePriceLinesFeed;
   isDark: boolean;
   streak: StreakDay[];
   onOpenTrade?: (trade: Trade) => void;
@@ -207,7 +215,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
       fx,
     });
   });
-  const renderPanelOverlay = useCallback((panel: WorkspacePanelOverlay) => <PanelOverlay panel={panel} store={store} />, [store]);
+  const renderPanelOverlay = useCallback((panel: WorkspacePanelOverlay) => <PanelOverlay panel={panel} store={store} liveStore={liveStore} />, [liveStore, store]);
   // MNQ i NQ: stejná cena, stejné svíčky dne (bez dalšího, případně placeného dotazu).
   const dayCandles = ctl.chart.candles;
   const candlesForRoot = useCallback(() => dayCandles, [dayCandles]);
@@ -263,6 +271,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
           review={review}
           liveCandles={ctl.chart.liveFeed}
           resetViewOnOpen={ctl.isToday && !selectedChartTrade}
+          livePriceLines={positionLines ?? null}
           onClose={ctl.backToDay}
         />
       ) : (

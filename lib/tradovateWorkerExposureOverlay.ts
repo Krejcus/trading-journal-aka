@@ -9,6 +9,13 @@ import { tradovateAccountReadState } from './tradovateLiveReadState';
 
 /** Heartbeat starší než tohle už není živý obraz brokera; web se vrátí k REST čtení. */
 export const WORKER_EXPOSURE_MAX_AGE_MS = 8_000;
+/** Text workeru (`services/copierRuntimeController.ts`) pro followera bez ověřené pozice. */
+export const WORKER_POSITION_UNKNOWN_DETAIL = 'pozice neověřena';
+/** Texty workeru, které vznikají jen z porovnání skutečně držené pozice followera. */
+export const WORKER_POSITION_DIVERGENT_DETAIL = 'pozice se liší od leadera';
+export const WORKER_POSITION_MISMATCH_DETAIL = /: drží -?\d+, očekáváno -?\d+$/;
+/** Ručně vypnutý režim followera: worker ho hlásí OK bez čtení pozice. */
+const WORKER_FOLLOWER_OFF_DETAIL = 'vypnutý follower';
 
 type WorkerExposure = NonNullable<NonNullable<LocalCopierAgentStatus['controller']['exposure']>>;
 
@@ -55,9 +62,21 @@ export function overlayWorkerExposure<T extends TradovateAccountDataResult>(
   for (const order of exposure.orders ?? []) {
     ordersByAccount.set(order.accountId, [...(ordersByAccount.get(order.accountId) ?? []), order]);
   }
+  // Followera překrýt jen tehdy, když worker jeho pozici prokazatelně zná
+  // (OK verdikt po porovnání, rozdíl kusů proti leaderovi, nebo záznam
+  // pozice). Jinak (neověřená pozice, zlikvidovaný účet, denní limit,
+  // aktivní příkazy mimo kopii, vypnutý režim, rozjetí čekající na reconcile)
+  // by bez pozic v heartbeatu vypadal jako ověřeně flat — nechá se mu REST
+  // čtení s jeho vlastní čerstvostí.
+  const leaderId = typeof status.group?.leaderAccountId === 'number' ? status.group.leaderAccountId : null;
+  const knownFollowers = new Set((exposure.followers ?? [])
+    .filter(follower => (follower.ok && follower.detail !== WORKER_FOLLOWER_OFF_DETAIL)
+      || (follower.detail != null && WORKER_POSITION_MISMATCH_DETAIL.test(follower.detail)))
+    .map(follower => follower.accountId));
+  const positionKnown = (accountId: number) => accountId === leaderId || knownFollowers.has(accountId) || positionsByAccount.has(accountId);
   let changed = false;
   const accounts = data.accounts.map((account): TradovateAccountDataAccount => {
-    if (!members.has(account.id)) return account;
+    if (!members.has(account.id) || !positionKnown(account.id)) return account;
     changed = true;
     const previousBySymbol = new Map(account.positions.flatMap(position => (position.symbol ? [[position.symbol, position] as const] : [])));
     const positions: TradovateAccountPosition[] = (positionsByAccount.get(account.id) ?? []).map(position => {
@@ -74,8 +93,9 @@ export function overlayWorkerExposure<T extends TradovateAccountDataResult>(
         sold: previous?.sold ?? null,
         soldValue: previous?.soldValue ?? null,
         previousPosition: previous?.previousPosition ?? null,
-        // Průměrná cena z REST platí jen pro tutéž pozici; jinak není známa.
-        averagePrice: previous && previous.netPosition === position.netQuantity ? previous.averagePrice : previous?.averagePrice ?? null,
+        // Průměrná cena z REST platí jen pro tutéž pozici; jinak (otočení,
+        // přikoupení, částečné zavření) není známa, dokud ji nepotvrdí REST.
+        averagePrice: previous && previous.netPosition === position.netQuantity ? previous.averagePrice : null,
         previousPrice: previous?.previousPrice ?? null,
       };
     });

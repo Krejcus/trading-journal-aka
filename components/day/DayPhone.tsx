@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { JournalLivePositionStore } from '../../lib/journalLivePositionStore';
+import type { LivePriceLinesFeed } from '../../lib/livePriceLinesFeed';
 import { ArrowLeft, Brain, Check, ChevronLeft, ChevronRight, Mic, PenLine } from 'lucide-react';
 import type { Trade } from '../../types';
 import { DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, carryForward, pragueClock, type DaySession } from '../../lib/dayJournal';
@@ -144,8 +146,11 @@ function PhoneCard({ title, aside, tone: cardTone, children }: { title: string; 
   );
 }
 
-export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek, onOpenArchive, onOpenLegacy, onOpenMind }: {
+export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek, onOpenArchive, onOpenLegacy, onOpenMind, liveStore, positionLines }: {
   ctl: DayController;
+  /** Živá pozice z kopírky (deník dneška; jen zobrazení). */
+  liveStore?: JournalLivePositionStore;
+  positionLines?: LivePriceLinesFeed;
   isDark: boolean;
   streak: StreakDay[];
   onOpenTrade?: (trade: Trade) => void;
@@ -223,6 +228,7 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
     <div style={{ position: 'relative' }}>
     <DayCompactChart
       ctl={ctl} isDark={isDark} height={height} range={range} focusKeyPrefix={`${mode}:${session}:${ctl.scope}`}
+      liveStore={liveStore} positionLines={positionLines}
       selectedTrade={selectedChartTrade} pins={pins} bubbles={mode === 'prep' ? 'all' : 'selected'}
       placing={ctl.placing} onPick={pick} onCancelPlacing={() => ctl.setPlacing(null)} pending={ctl.pendingPoint}
       nowTime={mode === 'prep' && ctl.isToday ? Math.floor(ctl.now / 1000) : null} bands={bands}

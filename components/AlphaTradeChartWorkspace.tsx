@@ -142,6 +142,8 @@ import { CHART_APPEARANCE_SLOTS, chartAppearanceSnapshot, chartAppearanceUserId,
 import { panelSettingsTargetMatches, type PanelSettingsTarget } from '../services/chartPanelSettings';
 import type { LiveCandleFeed } from '../lib/liveCandleFeed';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../hooks/useLiveCandleBinding';
+import { useLivePriceLinesBinding } from '../hooks/useLivePriceLinesBinding';
+import type { LivePriceLinesFeed } from '../lib/livePriceLinesFeed';
 import { installDevDragProfiler, recordDragProfilerCommit } from '../services/devDragProfiler';
 import {
   DEFAULT_REPLAY_GO_TO_TIME_ZONE,
@@ -308,6 +310,8 @@ interface AlphaTradeChartWorkspaceProps {
   liveCandles?: LiveCandleFeed | null;
   /** Po otevření každý graf jednou srovnat jako „Reset chart view“ (deník dneška; backtest vždy). */
   resetViewOnOpen?: boolean;
+  /** Deník dneška: čáry živé pozice z kopírky (jen zobrazení; v přehrávání vypnuto). */
+  livePriceLines?: LivePriceLinesFeed | null;
   /**
    * Vlastní paměť rozložení (deník dne si pamatuje své panely zvlášť,
    * nezdědí dva grafy z detailu obchodu) a výchozí rozložení pro ni.
@@ -1041,6 +1045,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   defaultLayoutId = '2h',
   liveCandles = null,
   resetViewOnOpen = false,
+  livePriceLines = null,
 }) => {
   const layoutStorageKey = layoutScope ? `${WORKSPACE_LAYOUT_STORAGE_KEY}:${layoutScope}` : WORKSPACE_LAYOUT_STORAGE_KEY;
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1140,6 +1145,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     api: control.chartApi, root: control.config.root, timeframe: control.config.timeframe, rawCandles: control.rawCandles,
   })), [panelControls]);
   useLiveCandleBinding(!backtestSession && replay.phase !== 'active' ? liveCandles : null, liveCandleTargets);
+  // Živá pozice z kopírky (deník dneška): čáry vstupu, SL/TP a čekajícího vstupu.
+  useLivePriceLinesBinding(!backtestSession && replay.phase !== 'active' ? livePriceLines : null, liveCandleTargets);
   const [workspaceHistory] = useState(() => new ChartWorkspaceHistory());
   const restoredSessionLayoutRef = useRef(false);
   const pendingSessionPanelsRef = useRef<WorkspaceSnapshot>({ ...backtestSession?.workspaceState?.panels });

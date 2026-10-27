@@ -48,6 +48,7 @@ import {
   isTradovateAccountOnboardingAvailable,
 } from '../lib/tradovateAccountOnboarding';
 import { storageService } from '../services/storageService';
+import type { JournalLiveInterest } from '../lib/journalLivePosition';
 import {
   consumeTradovatePreflights,
   startTradovatePreflights,
@@ -121,6 +122,34 @@ const IDLE_POSITION_INTERVAL_MS = 15_000;
  * pozadí, aby po návratu nebyly starší než ověřovací okno (45 s) a LIVE
  * neukazovalo „Pozice neověřeny“. ~4 požadavky za minutu na dvě připojení. */
 const BACKGROUND_POSITION_INTERVAL_MS = 30_000;
+/** Deník dneška s otevřenou pozicí: plný tick po 6 s (≤ 4 volání na
+ * připojení, ~40/min na token, pod LIVE ~50/min), ať kotva P&L nepřeleze
+ * 10 s pro pohyb z TV. Pozice a příkazy dodá heartbeat workera; bez pozice
+ * zůstává 30 s jako pozadí. Plné čtení (risk, historie) jen jednou bez dat
+ * a po uzavření pozice (zůstatky), stejně jako na pozadí. */
+const JOURNAL_POSITION_INTERVAL_MS = 6_000;
+
+/** Tempo udržovacího čtení pozic a P&L po dokončeném ticku (ms). */
+export const tradovatePositionPollDelay = (enabled: boolean, journalFocus: JournalLiveInterest, hasOpenPosition: boolean): number => (
+  enabled
+    ? (hasOpenPosition ? FAST_PNL_INTERVAL_MS : IDLE_POSITION_INTERVAL_MS)
+    : journalFocus === 'position' ? JOURNAL_POSITION_INTERVAL_MS : BACKGROUND_POSITION_INTERVAL_MS
+);
+
+/** První tick po (re)startu čtení: LIVE s daty hned, bez dat čeká na
+ * bootstrap; deník dneška hned (kotva P&L), ale ne dřív než 6 s od
+ * posledního čtení (bootstrap, kolísání zájmu při fillu); jinak pozadí až
+ * po intervalu. */
+export const tradovatePositionPollFirstDelay = (
+  enabled: boolean,
+  journalFocus: JournalLiveInterest,
+  hasData: boolean,
+  sinceLastReadMs = Number.POSITIVE_INFINITY,
+): number => (
+  enabled ? (hasData ? 0 : 1_000)
+    : journalFocus !== 'off' ? Math.max(0, JOURNAL_POSITION_INTERVAL_MS - Math.max(0, sinceLastReadMs))
+      : BACKGROUND_POSITION_INTERVAL_MS
+);
 // At 20 accounts the full preflight is expensive (risk, history, fees, etc.).
 // Ten minutes keeps it useful for reconciliation without consuming the budget
 // reserved for the 2-second position/P&L read model.
@@ -184,7 +213,7 @@ const datasetRateLimitMs = (dataset: TradovatePreflightResult): number | null =>
 export function useTradovateLiveData(userId: string, journalOptions?: {
   accounts: readonly Account[] | null;
   onAccountsChanged: (accounts: Account[]) => void;
-}, enabled = true) {
+}, enabled = true, journalFocus: JournalLiveInterest = 'off') {
   const persisted = useMemo(
     () => readTradovateConnectionShell(userId, typeof window === 'undefined' ? undefined : window.sessionStorage),
     [userId],
@@ -824,6 +853,20 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     }
   }, [enabled, refreshStatus, userId]);
 
+  // Deník dneška bez dat (LIVE ještě neotevřený): jednou načíst jako při
+  // otevření LIVE, pak už jen udržovací ticky níž. Nepovedený pokus (429,
+  // výpadek) se zopakuje nejdřív po délce penalizace, při dalším zájmu deníku.
+  const journalBootstrapRef = useRef<{ userId: string; at: number; done: boolean } | null>(null);
+  useEffect(() => {
+    if (enabled || journalFocus === 'off' || !userId) return;
+    if (Object.keys(connectionDataRef.current).length > 0) return;
+    const last = journalBootstrapRef.current;
+    if (last?.userId === userId && (last.done || Date.now() - last.at < RATE_LIMIT_FALLBACK_MS)) return;
+    const attempt = { userId, at: Date.now(), done: false };
+    journalBootstrapRef.current = attempt;
+    void refreshStatus().then(() => { attempt.done = Object.keys(connectionDataRef.current).length > 0; });
+  }, [enabled, journalFocus, refreshStatus, userId]);
+
   useEffect(() => {
     if (!enabled) return;
     const ids = status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [];
@@ -879,6 +922,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     };
   }, [enabled, refreshData]);
 
+  // Mimo LIVE se udržovací čtení spustí, až data dorazí (bootstrap deníku
+  // nastaví status dřív než data); na LIVE je hodnota stále true.
+  const pollDataReady = enabled || Object.keys(connectionData).length > 0;
   useEffect(() => {
     // Mimo LIVE jen udržovací čtení pozic, a to až když už data existují.
     const background = !enabled;
@@ -888,7 +934,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     let cancelled = false;
     const pollUserId = activeUserIdRef.current;
     let timer: number | null = null;
-    const idleDelay = background ? BACKGROUND_POSITION_INTERVAL_MS : IDLE_POSITION_INTERVAL_MS;
+    const idleDelay = tradovatePositionPollDelay(enabled, journalFocus, false);
     // Každý odchod do pozadí zneplatní rozpracované čtení: tick zahájený před
     // uspáním se po návratu nepoužije, místo něj se hned čte znovu.
     let foregroundGeneration = 0;
@@ -928,6 +974,19 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           || Date.now() - livePnlLastFullTickAtRef.current >= ACTIVE_PNL_INTERVAL_MS;
         let rateLimitResults: PromiseSettledResult<unknown>[];
         let rateLimitIds: string[];
+        // 429 je fakt o tokenu, ne o generaci čtení: zapsat i z ticku, jehož
+        // data se zahodí (restart efektu, odchod do pozadí), ať další tick
+        // nejde do běžící penalizace (INV-TRAD-04).
+        const recordRateLimits = (ids: readonly string[], results: readonly PromiseSettledResult<unknown>[]) => {
+          results.forEach((result, index) => {
+            if (result.status !== 'rejected' || !(result.reason instanceof TradovateRequestError) || result.reason.status !== 429) return;
+            const id = ids[index];
+            rateLimitUntilByConnectionRef.current[id] = Math.max(
+              rateLimitUntilByConnectionRef.current[id] ?? 0,
+              Date.now() + tradovateClientBackoffMs(result.reason.retryAfterMs),
+            );
+          });
+        };
         const readWithHealth = async <T,>(connectionId: string, read: () => Promise<T>): Promise<T> => {
           const requestedAt = Date.now();
           try {
@@ -948,12 +1007,15 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
             available,
             connectionId => readWithHealth(connectionId, () => runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0)),
             (connectionId, tick) => {
-              if (!readIsCurrent()) return;
               recordTradovateBrokerCalls(connectionId, tick.brokerCalls);
               // Partial success must still honor the broker's rate-limit signal.
               if (tick.anchorErrorStatus === 429) {
-                rateLimitUntilByConnectionRef.current[connectionId] = Date.now() + RATE_LIMIT_FALLBACK_MS;
+                rateLimitUntilByConnectionRef.current[connectionId] = Math.max(
+                  rateLimitUntilByConnectionRef.current[connectionId] ?? 0,
+                  Date.now() + RATE_LIMIT_FALLBACK_MS,
+                );
               }
+              if (!readIsCurrent()) return;
               const current = connectionDataRef.current;
               const dataset = current[connectionId];
               if (!dataset) return;
@@ -967,6 +1029,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               setConnectionData(next);
             },
           );
+          recordRateLimits(rateLimitIds, rateLimitResults);
           if (!readIsCurrent()) return;
           livePnlLastFullTickAtRef.current = Date.now();
           if (becameFlat.length > 0) await refreshData(becameFlat, true, 'merge');
@@ -987,8 +1050,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               return readWithHealth(connectionId, () => runTradovateLivePnlAnchor(connectionId, candidate.accountId, candidate.contractId));
             },
             (connectionId, tick) => {
-              if (!readIsCurrent()) return;
               recordTradovateBrokerCalls(connectionId, tick.brokerCalls);
+              if (!readIsCurrent()) return;
               const current = connectionDataRef.current;
               const dataset = current[connectionId];
               if (!dataset) return;
@@ -1002,16 +1065,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               setConnectionData(next);
             },
           );
+          recordRateLimits(rateLimitIds, rateLimitResults);
         }
-        if (!readIsCurrent()) return;
-        rateLimitResults.forEach((result, index) => {
-          if (result.status !== 'rejected' || !(result.reason instanceof TradovateRequestError) || result.reason.status !== 429) return;
-          const id = rateLimitIds[index];
-          rateLimitUntilByConnectionRef.current[id] = Math.max(
-            rateLimitUntilByConnectionRef.current[id] ?? 0,
-            Date.now() + tradovateClientBackoffMs(result.reason.retryAfterMs),
-          );
-        });
       } finally {
         livePnlBusyRef.current = false;
         if (rereadAfterBusy && !cancelled) {
@@ -1025,7 +1080,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       if (!readIsCurrent()) return;
       const hasOpenPosition = Object.values(connectionDataRef.current)
         .some(dataset => dataset.accounts.some(account => account.netPositionCount > 0));
-      schedule(background ? idleDelay : hasOpenPosition ? FAST_PNL_INTERVAL_MS : IDLE_POSITION_INTERVAL_MS);
+      schedule(tradovatePositionPollDelay(enabled, journalFocus, hasOpenPosition));
     };
 
     // Návrat do popředí (telefon po spánku, přepnutí záložky) čte hned,
@@ -1047,13 +1102,16 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     // Návrat na LIVE s daty z dřívějška: první tick hned, ať zastaralé
     // čtení pozic nahradí čerstvé co nejdřív. Bez dat počká na bootstrap.
     // Na pozadí první čtení až po intervalu — data jsou z odchodu z LIVE čerstvá.
-    schedule(background ? idleDelay : Object.keys(connectionDataRef.current).length > 0 ? 0 : 1_000);
+    // Deník dneška (příchod, fill, uzavření) čte hned: kotva P&L a stav účtu.
+    const lastReadAt = Math.max(livePnlLastFullTickAtRef.current,
+      ...Object.values(connectionDataRef.current).map(dataset => Date.parse(dataset.capturedAt) || 0));
+    schedule(tradovatePositionPollFirstDelay(enabled, journalFocus, Object.keys(connectionDataRef.current).length > 0, Date.now() - lastReadAt));
     return () => {
       cancelled = true;
       unsubscribeForeground();
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [enabled, refreshData, status?.connections]);
+  }, [enabled, journalFocus, pollDataReady, refreshData, status?.connections]);
 
   useEffect(() => {
     if (!enabled) return;

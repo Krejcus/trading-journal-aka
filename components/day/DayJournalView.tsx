@@ -1,4 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import DayLivePositionRunner from './DayLivePositionRunner';
+import { createJournalLivePositionStore } from '../../lib/journalLivePositionStore';
+import { createLivePriceLinesFeed } from '../../lib/livePriceLinesFeed';
+import type { JournalLiveSource } from '../../hooks/useJournalLivePosition';
 import type { SessionConfig, Trade } from '../../types';
 import { sessionWindows } from '../../lib/dayJournal';
 import { dayStreak, tradingDaysBack } from '../../lib/dayJournalView';
@@ -27,7 +31,7 @@ function useIsPhone() {
  * zápisu; příprava a uzavření každé session; diktování čistým přepisem.
  * Nic odsud nezamyká ani neautorizuje copier.
  */
-export default function DayJournalView({ trades, allTrades, sessions, isDark, initialDate, onUpdateTrade, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, onAskCoach, immersive = false }: {
+export default function DayJournalView({ trades, allTrades, sessions, isDark, initialDate, onUpdateTrade, onOpenTrade, onOpenLegacy, onOpenWeek, onOpenArchive, onOpenCoach, onAskCoach, immersive = false, liveSource }: {
   trades: readonly Trade[];
   allTrades: readonly Trade[];
   sessions: readonly SessionConfig[];
@@ -43,9 +47,20 @@ export default function DayJournalView({ trades, allTrades, sessions, isDark, in
   onAskCoach?: (prompt: string) => void;
   /** Bez horní lišty appky — deník zabere celou výšku. */
   immersive?: boolean;
+  /** Data kopírky pro živou pozici v grafu dneška (jen zobrazení). */
+  liveSource?: JournalLiveSource | null;
 }) {
   const ctl = useDayController({ trades, allTrades, sessions, initialDate, onUpdateTrade });
   const phone = useIsPhone();
+  // Živá pozice: jeden běžec čtení pro celý deník, štítek a čáry jen zobrazují.
+  const [liveStore] = useState(createJournalLivePositionStore);
+  const [positionLines] = useState(createLivePriceLinesFeed);
+  const liveRunner = <DayLivePositionRunner source={liveSource} enabled={ctl.isToday} store={liveStore} feed={positionLines} />;
+  // Dev diagnostika: co deník právě čte o živé pozici (jen čtení z konzole).
+  if (import.meta.env.DEV) {
+    const dev = window as unknown as { __atJournalLive?: unknown };
+    dev.__atJournalLive = { store: liveStore, lines: positionLines, source: liveSource };
+  }
 
   // Řada posledních obchodních dnů; zvolený den bere živý stav deníku.
   const days = useMemo(() => tradingDaysBack(ctl.today, 10), [ctl.today]);
@@ -72,14 +87,18 @@ export default function DayJournalView({ trades, allTrades, sessions, isDark, in
   if (phone) return (
     <>
       {mind}
-      <DayPhone ctl={ctl} isDark={isDark} streak={streak} onOpenTrade={onOpenTrade} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onOpenLegacy={onOpenLegacy} onOpenMind={() => setMindOpen(true)} />
+      {liveRunner}
+      <DayPhone ctl={ctl} isDark={isDark} streak={streak} onOpenTrade={onOpenTrade} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onOpenLegacy={onOpenLegacy} onOpenMind={() => setMindOpen(true)} liveStore={liveStore} positionLines={positionLines} />
     </>
   );
   return (
     <>
     {mind}
+    {liveRunner}
     <DayDesktop
       ctl={ctl}
+      liveStore={liveStore}
+      positionLines={positionLines}
       isDark={isDark}
       streak={streak}
       onOpenTrade={onOpenTrade}

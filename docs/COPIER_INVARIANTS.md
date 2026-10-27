@@ -1219,6 +1219,47 @@ existující ochranu.
   při výpadku streamu, backoffu, chybějícím feedu nebo jiné částce se ruší hned.
   Nikdy nemění `isLiveAccountReadVerified`, hodnoty (`.value`) ani nevstupuje do
   příkazů, ARM, reconcile a způsobilosti (`tests/copyTradeAccountEligibility.test.ts`).
+- Živá pozice v grafu deníku (27. 10. 2026): vlastní čtečka stavu workeru
+  (`lib/displayWorkerStatusReader.ts`, `hooks/useDisplayWorkerStatus.ts`) —
+  jen GET relaye po 2 s v popředí, čerstvost jako INV-FRESH-03 (< 15 s,
+  připojený runtime), revize nikdy zpět, čtení zahájené před odchodem do
+  pozadí se zahodí. Nemá fenci ani ACK, a proto nesmí ovládat kopírku ani
+  povolit příkaz (INV-UI-02); používá ji jen `useJournalLivePosition`.
+  Pozice z workeru se přes `overlayWorkerExposure` přijmou nejvýš 8 s staré
+  a u followera jen tehdy, když ji worker prokazatelně zná (OK verdikt po
+  porovnání, „drží X, očekáváno Y“ nebo záznam pozice) — zlikvidovaný účet,
+  denní limit, příkazy mimo kopii, vypnutý režim, rozjetí čekající na
+  reconcile nebo „pozice neověřena“ zůstanou na REST. Platí i pro LIVE,
+  stejně jako `averagePrice: null` po změně velikosti pozice (vstup, body
+  SL/TP a TV P&L do dalšího plného REST ticku chybí) — obojí jen přísněji.
+  Test hlídá, že každý OK verdikt ve workeru před kontrolou `held` je jeden
+  ze tří známých.
+  Neověřené čtení pozic (> 45 s), chybějící účet skupiny, neověřené příkazy
+  čekajícího vstupu nebo rozjetá skupina = štítek to řekne a čáry se
+  nekreslí — žádná poslední známá poloha (INV-UI-01). Rozjetí (jiný směr,
+  leader flat a follower drží, osiřelý příkaz) se hlásí až po 10 s trvání
+  (déle než cyklus čtení deníku 6 s; začátek podle skutečného času, jeden
+  pro všechny cesty), do té doby neutrální „Kopie dobíhá…“ (výstup, vstup
+  on-submit i otočení se kopírují se zpožděním — falešný poplach by sváděl
+  k ručnímu zásahu). Rozjetí potvrzené workerem („pozice se liší od
+  leadera“ hned, „drží X, očekáváno Y“ po 5 s) se ukáže hned. Souhrn při
+  flat leaderovi jen když má každý držící follower OK verdikt čerstvého
+  workeru (kopírka ho vědomě neřídí); ne-OK verdikt (neověřená pozice,
+  denní limit, zlikvidovaný účet…) nic nepotlačí. Verdikty „aktivní příkazy mimo
+  kopii“, „účet zlikvidován“, „denní limit“ mají ve workeru přednost před
+  porovnáním kusů — rozdíl u takového followera deník nepozná (LIVE ano). Otevřené P&L starší
+  než 15 s nebo bez známého vstupu se neukáže („P&L —“). Čtení z brokera pro
+  deník má úsporné tempo (`useTradovateLiveData` `journalFocus`: plný tick
+  6 s s pozicí, jinak 30 s, restart čtení nejdřív 6 s od posledního čtení;
+  plné čtení jednou bez dat — nepovedené znovu
+  nejdřív po 5 min — a po uzavření pozice kvůli zůstatkům jako na pozadí).
+  429 se zapíše i z ticku, jehož data se zahodí (INV-TRAD-04). Bootstrap
+  může jako otevření LIVE nabídnout nastavení profilů účtů; kopírku ani
+  příkazy neovládá. Známé omezení: zavření a nový vstup stejné velikosti
+  během jednoho cyklu REST nechá čáru vstupu na staré ceně do dalšího ticku.
+  Hlídá `tests/displayWorkerStatusReader.test.ts`,
+  `tests/journalLivePosition.test.ts`, `tests/tradovateWorkerExposureOverlay.test.ts`,
+  `tests/tvPriceClientGuards.test.ts` (jen čtení, žádný příkaz ani úložiště).
 
 ### INV-UI-04: Data z TradingView jsou jen pro zobrazení; nikdy nevstupují do read modelu, rozhodování ani úložišť (26. 10. 2026)
 
@@ -1239,10 +1280,14 @@ existující ochranu.
   grafu dne); grafy dostávají jen neutrální `LiveCandleFeed`
   (`lib/liveCandleFeed.ts`, `hooks/useLiveCandleBinding.ts`) a svíčku jen
   překreslí (`updateBar`) — do dat grafu, cache dne ani storage nejde.
+  Štítek živé pozice v grafu deníku (`components/day/DayLivePositionChip.tsx`,
+  27. 10. 2026) používá stejnou listovou komponentu se stejným pravidlem;
+  čáry pozice v grafu (vstup, SL/TP) jsou jen z read modelu brokera/workeru,
+  nikdy z ceny TV.
 - Hlídá test: `tests/tvPriceClientGuards.test.ts` (kdo smí moduly
   importovat vč. aliasu `@/`, rozhodovací/ukládací/sdílené cesty kanál
   nevidí ani tranzitivně, žádné storage, grant jen do kanálu, render-prop
-  jen formátuje — 5 bloků bez `set*`/`on*`/ref/limitů, ekvivalence
+  jen formátuje — 6 bloků bez `set*`/`on*`/ref/limitů, ekvivalence
   způsobilosti a souhrnu dne; živá svíčka jen do překreslení grafu),
   `tests/tvLivePnl.test.ts`, `tests/tvLiveCandle.test.ts`,
   `tests/tvPriceGrantRefresh.test.ts`, `tests/tvPriceStore.test.ts`,

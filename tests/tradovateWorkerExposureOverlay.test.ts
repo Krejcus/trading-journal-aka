@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 import type { TradovateAccountDataAccount, TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
-import { overlayWorkerExposure, WORKER_EXPOSURE_MAX_AGE_MS } from '../lib/tradovateWorkerExposureOverlay';
+import {
+  WORKER_POSITION_DIVERGENT_DETAIL, WORKER_POSITION_MISMATCH_DETAIL, WORKER_POSITION_UNKNOWN_DETAIL, overlayWorkerExposure, WORKER_EXPOSURE_MAX_AGE_MS,
+} from '../lib/tradovateWorkerExposureOverlay';
 
 const NOW = Date.UTC(2026, 8, 18, 9, 0, 0);
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -91,5 +95,86 @@ describe('worker exposure overlay', () => {
     const leader = out.accounts.find(a => a.id === 100)!;
     expect(leader.positions).toEqual([]);
     expect(leader.readState).toMatchObject({ positions: { availability: 'empty', count: 0 }, positionsAsOf: iso(NOW - 1_000) });
+  });
+
+  it('otočení nebo změna velikosti pozice nenese starou průměrnou cenu (čára vstupu by stála jinde)', () => {
+    const flipped = overlayWorkerExposure(data(), status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: 7 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: 7 }],
+    }), NOW - 1_000, NOW)!;
+    expect(flipped.accounts.find(item => item.id === 100)!.positions[0]).toMatchObject({ netPosition: 7, averagePrice: null });
+    const added = overlayWorkerExposure(data(), status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -9 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: -7 }],
+    }), NOW - 1_000, NOW)!;
+    expect(added.accounts.find(item => item.id === 100)!.positions[0]).toMatchObject({ netPosition: -9, averagePrice: null });
+  });
+
+  it('follower, jehož pozici worker nezná, není ověřeně flat — zůstane mu REST čtení', () => {
+    const rest = data();
+    const result = overlayWorkerExposure(rest, status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7 }],
+      followers: [{ accountId: 200, ok: false, detail: WORKER_POSITION_UNKNOWN_DETAIL }],
+    }), NOW - 1_000, NOW)!;
+    expect(result.accounts.find(item => item.id === 200)).toBe(rest.accounts.find(item => item.id === 200));
+  });
+
+  it('follower bez prokazatelně známé pozice (zlikvidovaný, denní limit, příkazy mimo kopii, vypnutý režim) zůstane na REST', () => {
+    for (const verdict of [
+      { ok: false, detail: 'účet zlikvidován propkou' },
+      { ok: false, detail: 'denní limit účtu' },
+      { ok: false, detail: 'aktivní příkazy mimo kopii' },
+      { ok: false, detail: 'vypnutý follower není flat' },
+      { ok: true, detail: 'vypnutý follower' },
+      // Rozjetí čekající na reconcile vzniká před čtením pozice followera.
+      { ok: false, detail: WORKER_POSITION_DIVERGENT_DETAIL },
+    ]) {
+      const rest = data();
+      const result = overlayWorkerExposure(rest, status({}, {
+        positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7 }],
+        followers: [{ accountId: 200, ...verdict }],
+      }), NOW - 1_000, NOW)!;
+      expect(result.accounts.find(item => item.id === 200), verdict.detail).toBe(rest.accounts.find(item => item.id === 200));
+    }
+    // Starší worker bez verdiktů followerů: bez záznamu pozice taky REST.
+    const rest = data();
+    const legacy = overlayWorkerExposure(rest, status({}, { positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7 }], followers: undefined }), NOW - 1_000, NOW)!;
+    expect(legacy.accounts.find(item => item.id === 200)).toBe(rest.accounts.find(item => item.id === 200));
+  });
+
+  it('follower se známou pozicí (OK po porovnání, rozdíl kusů) se překryje — i flat', () => {
+    for (const verdict of [
+      { ok: true, detail: null },
+      { ok: true, detail: 'ručně zavřen — čeká na další obchod' },
+      { ok: false, detail: 'MNQZ6: drží 0, očekáváno -7' },
+    ]) {
+      const result = overlayWorkerExposure(data(), status({}, {
+        positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7 }],
+        followers: [{ accountId: 200, ...verdict }],
+      }), NOW - 1_000, NOW)!;
+      const follower = result.accounts.find(item => item.id === 200)!;
+      expect(follower.positions, String(verdict.detail)).toEqual([]);
+      expect(follower.readState.positionsAsOf).toBe(iso(NOW - 1_000));
+    }
+  });
+
+  it('každý OK verdikt followera ve workeru před kontrolou pozice je jeden ze známých (jinak by znamenal „ověřeně flat“)', () => {
+    const worker = readFileSync(join(__dirname, '..', 'services/copierRuntimeController.ts'), 'utf8');
+    const start = worker.indexOf('const followers = group.followers.map(follower => {');
+    const heldCheck = worker.indexOf("if (!held) return { accountId: id, ok: false, detail: 'pozice neověřena' };", start);
+    expect(start).toBeGreaterThan(0);
+    expect(heldCheck).toBeGreaterThan(start);
+    const beforeHeld = worker.slice(start, heldCheck);
+    const okDetails = [...beforeHeld.matchAll(/ok: true, detail: '([^']*)'/g)].map(match => match[1]).sort();
+    // „vyřazen“ a „ručně vypnutý“ vyžadují held != null; „vypnutý follower“ (režim off) overlay vynechá.
+    expect(okDetails).toEqual(['ručně vypnutý follower', 'vypnutý follower', 'vyřazen — vlastní pozice, kopírka ji neřídí'].sort());
+    expect(beforeHeld.match(/ok: true\b/g)).toHaveLength(3);
+  });
+
+  it('texty verdiktů followera jsou přesně ty, které posílá worker', () => {
+    const worker = readFileSync(join(__dirname, '..', 'services/copierRuntimeController.ts'), 'utf8');
+    expect(worker).toContain(`detail: '${WORKER_POSITION_UNKNOWN_DETAIL}'`);
+    expect(worker).toContain(`detail: '${WORKER_POSITION_DIVERGENT_DETAIL}'`);
+    expect(worker).toContain("detail: 'vypnutý follower' }");
+    expect(worker).toContain('detail: `${symbol}: drží ${actual}, očekáváno ${expected}`');
+    expect(WORKER_POSITION_MISMATCH_DETAIL.test('MNQZ6: drží -2, očekáváno 0')).toBe(true);
   });
 });

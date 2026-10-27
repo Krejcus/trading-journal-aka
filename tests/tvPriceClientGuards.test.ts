@@ -92,10 +92,13 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
     ]);
   });
 
-  it('hodnotu s pohybem z TV vykreslují jen listové komponenty v LIVE', () => {
-    expect(importersOf('components/LiveOpenPnlValue.tsx')).toEqual(['components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx']);
+  it('hodnotu s pohybem z TV vykreslují jen listové komponenty v LIVE a štítek živé pozice v deníku', () => {
+    expect(importersOf('components/LiveOpenPnlValue.tsx')).toEqual([
+      'components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx', 'components/day/DayLivePositionChip.tsx',
+    ]);
     expect(importersOf('lib/tvLivePnl.ts')).toEqual([
-      'components/LiveCopyTradeOverview.tsx', 'components/LiveOpenPnlValue.tsx', 'components/LiveTradeCard.tsx', 'lib/tvLiveCandle.ts',
+      'components/LiveCopyTradeOverview.tsx', 'components/LiveOpenPnlValue.tsx', 'components/LiveTradeCard.tsx',
+      'components/day/DayLivePositionChip.tsx', 'lib/tvLiveCandle.ts',
     ]);
   });
 
@@ -132,6 +135,16 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       'services/liveCandles.ts',
       'services/dayCandles.ts',
       'services/provisionalCandles.ts',
+      // Živá pozice v deníku: čáry a data jdou jen z read modelu, cenu z TV vidí jen štítek.
+      'lib/journalLivePosition.ts',
+      'lib/journalLivePositionStore.ts',
+      'lib/livePriceLinesFeed.ts',
+      'lib/displayWorkerStatusReader.ts',
+      'lib/tradovateWorkerExposureOverlay.ts',
+      'hooks/useLivePriceLinesBinding.ts',
+      'hooks/useJournalLivePosition.ts',
+      'hooks/useDisplayWorkerStatus.ts',
+      'components/day/DayLivePositionRunner.tsx',
     ];
     for (const entry of guarded) {
       expect(existsSync(join(root, entry)), entry).toBe(true);
@@ -155,7 +168,7 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
   });
 
   it('hodnota s pohybem z TV se v render-propu jen formátuje (žádné předání ven, žádné limity)', () => {
-    const files = ['components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx'];
+    const files = ['components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx', 'components/day/DayLivePositionChip.tsx'];
     const blocks = files.flatMap(file => {
       const text = readFileSync(join(root, file), 'utf8');
       // Každý výskyt musí být celý blok s inline funkcí uvnitř — žádné `children=`
@@ -165,13 +178,13 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       expect(text, file).not.toMatch(/<LiveOpenPnlValue\b[^>]*children\s*=/);
       return [...text.matchAll(/<LiveOpenPnlValue\b[\s\S]*?<\/LiveOpenPnlValue>/g)].map(match => ({ file, block: match[0] }));
     });
-    // Řádek účtu (počítač, telefon), řádek skupiny, souhrn skupiny na telefonu, karta obchodu.
+    // Řádek účtu (počítač, telefon), řádek skupiny, souhrn skupiny na telefonu, karta obchodu, štítek pozice v deníku.
     expect(blocks.map(item => item.file)).toEqual([
       'components/LiveCopyTradeOverview.tsx', 'components/LiveCopyTradeOverview.tsx', 'components/LiveCopyTradeOverview.tsx',
-      'components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx',
+      'components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx', 'components/day/DayLivePositionChip.tsx',
     ]);
     for (const { file, block } of blocks) {
-      expect(block, file).not.toMatch(/\bset[A-Z]\w*\(|\bon[A-Z]\w*\(|Ref\.current|dispatch|dll|Dll|DLL|risk|limit|Limit|drawdown|cushion|eligib|write|persist|storage/);
+      expect(block, file).not.toMatch(/\bset[A-Z]\w*\(|\bon[A-Z]\w*\(|Ref\.current|\.current\(|publish|window\.|dispatch|dll|Dll|DLL|risk|limit|Limit|drawdown|cushion|eligib|write|persist|storage/);
     }
   });
 
@@ -252,5 +265,28 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       anchor: 40, legs, children: (value: number, live: boolean) => `${value}|${live}`,
     }));
     expect(markup).toBe('40|false');
+  });
+});
+
+describe('stav workeru pro deník — jen čtení (INV-UI-02)', () => {
+  it('čtečku stavu workeru používá jen deník a nevede k žádnému příkazu ani zápisu', () => {
+    // Za běhu (typy `JournalLiveSource` smí znát App i deník).
+    const runtimeImportersOf = (target: string) => allSources.filter(file => importsOf(file, true).includes(target)).sort();
+    expect(runtimeImportersOf('lib/displayWorkerStatusReader.ts')).toEqual(['hooks/useDisplayWorkerStatus.ts']);
+    expect(runtimeImportersOf('hooks/useDisplayWorkerStatus.ts')).toEqual(['hooks/useJournalLivePosition.ts']);
+    expect(runtimeImportersOf('hooks/useJournalLivePosition.ts')).toEqual(['components/day/DayLivePositionRunner.tsx']);
+    const display = [
+      'lib/displayWorkerStatusReader.ts', 'hooks/useDisplayWorkerStatus.ts', 'hooks/useJournalLivePosition.ts',
+      'lib/journalLivePosition.ts', 'lib/tradovateWorkerExposureOverlay.ts', 'components/day/DayLivePositionRunner.tsx',
+      'components/day/DayLivePositionChip.tsx',
+    ];
+    for (const file of display) {
+      expect(readFileSync(join(root, file), 'utf8'), file)
+        .not.toMatch(/executeTradovateCopierRelayCommand|LocalCopierAgentCommand|writeCopierAgentStatusSnapshot|copierAgentStatusStore|localStorage|sessionStorage|method:\s*['"]POST/);
+    }
+    // Z OAuth služby jen čtení relaye (GET), nic víc.
+    const hook = readFileSync(join(root, 'hooks/useDisplayWorkerStatus.ts'), 'utf8');
+    expect(hook.match(/from '\.\.\/services\/tradovateOAuthConnection'/g)).toHaveLength(1);
+    expect(hook).toContain("import { loadTradovateCopierRelayStatus } from '../services/tradovateOAuthConnection';");
   });
 });

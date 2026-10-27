@@ -1,4 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import DayLivePositionChip from './DayLivePositionChip';
+import { useLivePriceLinesBinding } from '../../hooks/useLivePriceLinesBinding';
+import type { JournalLivePositionStore } from '../../lib/journalLivePositionStore';
+import type { LivePriceLinesFeed } from '../../lib/livePriceLinesFeed';
 import { Maximize2 } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Trade } from '../../types';
@@ -22,8 +26,11 @@ const TIMEFRAMES: MarketTimeframe[] = ['1m', '5m', '15m'];
  * z detailu) bez workspace, s vrstvou poznámek. Ťuknutí v režimu
  * umisťování vrátí čas a cenu.
  */
-export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPrefix, selectedTrade, pins, bubbles, placing, onPick, onCancelPlacing, pending, nowTime, bands, overlay, timeframe, onTimeframe, onExpand }: {
+export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPrefix, selectedTrade, pins, bubbles, placing, onPick, onCancelPlacing, pending, nowTime, bands, overlay, timeframe, onTimeframe, onExpand, liveStore, positionLines }: {
   ctl: DayController;
+  /** Živá pozice z kopírky (deník dneška; jen zobrazení). */
+  liveStore?: JournalLivePositionStore;
+  positionLines?: LivePriceLinesFeed;
   isDark: boolean;
   height: number;
   /** Timeframe drží rodič (sdílí ho s celoobrazovkovým grafem). */
@@ -56,6 +63,7 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
   useLiveCandleBinding(ctl.chart.liveFeed, [{ api, root: 'MNQ', timeframe, rawCandles: raw }]);
   // Deník dneška se otevírá jako „Reset chart view“ (poslední svíčka vpravo).
   useResetViewOnOpen(api, ctl.isToday && !selectedTrade, raw.length > 0);
+  useLivePriceLinesBinding(positionLines ?? null, [{ api, root: 'MNQ' }]);
 
   const target = focusTarget(range);
   const anchorRef = useRef<{ day: string; trade: Trade } | null>(null);
@@ -151,6 +159,7 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
           ticks={ctl.mindTicks}
         />
         {overlay}
+        {liveStore && <DayLivePositionChip store={liveStore} compact />}
       </div>
     </div>
   );

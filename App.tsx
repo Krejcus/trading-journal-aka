@@ -27,6 +27,8 @@ import { storageService, getUserId, subscribeTradeSync } from './services/storag
 import { preloadDecodedImage } from './services/imageDecodeCache';
 import { warmTradeHistory } from './services/tradeHistoryWarmup';
 import { historyCardOrder } from './lib/historyCardOrder';
+import type { JournalLiveSource } from './hooks/useJournalLivePosition';
+import type { JournalLiveInterest } from './lib/journalLivePosition';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
 import {
   BacktestTradeOutboxError, discardBacktestTrades, enqueueBacktestTrade, flushBacktestTradeOutbox, getPendingBacktestTrades,
@@ -1328,6 +1330,9 @@ const App: React.FC = () => {
     if (!tradovateLiveDataRef.current) holdForLive();
     return () => releaseLivePriority();
   }, [activePage]);
+  // Deník dneška s živou pozicí: vlastní úsporné tempo čtení z brokera
+  // (ne plný režim LIVE), jen když se dívá; pozice dodá heartbeat workera.
+  const [journalLiveInterest, setJournalLiveInterest] = useState<JournalLiveInterest>('off');
   const tradovateLiveEnabled = activePage === 'live'
     || (activePage === 'accounts' && dashboardMode !== 'backtesting');
   const tradovateLive = useTradovateLiveData(
@@ -1337,7 +1342,16 @@ const App: React.FC = () => {
       onAccountsChanged: setAccounts,
     },
     tradovateLiveEnabled,
+    activePage === 'journal' && dashboardMode !== 'backtesting' ? journalLiveInterest : 'off',
   );
+  const journalLiveUserId = isUserFromDb && currentUser.id !== 'default_user' ? currentUser.id : '';
+  const journalLiveSource = useMemo<JournalLiveSource | null>(() => (journalLiveUserId ? {
+    userId: journalLiveUserId,
+    data: tradovateLive.data,
+    profiles: tradovateLive.profiles,
+    connectionIds: tradovateLive.status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [],
+    setInterest: setJournalLiveInterest,
+  } : null), [journalLiveUserId, tradovateLive.data, tradovateLive.profiles, tradovateLive.status]);
   tradovateLiveDataRef.current = tradovateLive.data;
   const hasJournalConnection = accounts.some(account => account.oauth?.provider === 'tradovate') || Boolean(tradovateLive.status?.connections.length);
   useEffect(() => {
@@ -4777,6 +4791,7 @@ const App: React.FC = () => {
                       onOpenCoach={() => setActivePage('ai')}
                       onAskCoach={prompt => { setAiActiveConvId(undefined); setAiInitialPrompt(prompt); setActivePage('ai'); }}
                       immersive={journalImmersive}
+                      liveSource={journalLiveSource}
                     />
                   )}
 

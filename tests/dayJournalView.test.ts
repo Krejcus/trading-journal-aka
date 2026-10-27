@@ -180,4 +180,11 @@ describe('sameCandleSeries', async () => {
     expect(sameCandleSeries(base, [c(600, 31_000)])).toBe(false);
     expect(sameCandleSeries([], base)).toBe(false);
   });
+
+  it('starší historie dotažená zepředu je pořád stejná série (záběr nesmí skočit na kotvu dne)', () => {
+    const base = [c(600, 31_000), c(660, 31_002)];
+    expect(sameCandleSeries(base, [c(480, 30_990), c(540, 30_995), ...base, c(720, 31_004)])).toBe(true);
+    // Jiný kontrakt na stejném čase pořád nová série.
+    expect(sameCandleSeries(base, [c(480, 31_290), c(600, 31_310), c(660, 31_312)])).toBe(false);
+  });
 });

@@ -285,6 +285,42 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-27 dopoledne — Deník: živá pozice v grafu dneška, jen zobrazení (Claude)
+
+- Filip: v deníku vidět otevřený obchod / čekající limit živě jako v LIVE
+  (vstup, SL/TP, P&L), výchozí celá skupina s přepnutím na účet. Zatím jen
+  zobrazení. Stejný výpočet jako karta obchodu v LIVE (`buildTradeCard`):
+  skupina = vážený vstup a SL/TP leadera, účet = jeho vlastní.
+- Data: pozice a příkazy z heartbeatu workera (vlastní čtečka relaye po 2 s,
+  jen GET, `lib/displayWorkerStatusReader.ts`) přes `overlayWorkerExposure`
+  (≤ 8 s), P&L kotva z REST + pohyb z TV jen ve štítku (`LiveOpenPnlValue`).
+  Čáry v grafu = cenové čáry svíčkové řady, jen z read modelu.
+- Proč ne plný LIVE režim: zátěž Tradovate tokenu (incident 18. 9.). Deník má
+  vlastní tempo (`journalFocus`): s pozicí plný tick po 6 s (~40 volání/min
+  na token, LIVE ~50), jinak 30 s; plné čtení (risk, historie) jen jednou,
+  když data ještě nejsou, a po uzavření pozice jako na pozadí.
+- Fail-closed zobrazení: neověřené pozice (> 45 s), chybějící účet skupiny
+  (druhé OAuth připojení), neověřené příkazy čekajícího vstupu nebo rozjetá
+  skupina (i leader flat + follower drží) → štítek řekne důvod („viz LIVE“)
+  a čáry se nekreslí. P&L starší než 15 s se neukáže.
+- Zpřísněno i pro LIVE: overlay workeru překryje followera jen s prokazatelně
+  známou pozicí (zlikvidovaný / denní limit / vypnutý režim zůstane na REST);
+  429 z ticku se zapíše i při restartu čtení.
+- Rozjetí skupiny se hlásí až po 10 s (do té doby „Kopie dobíhá…“): výstup
+  i vstup on-submit se ke followerům kopírují se zpožděním a falešný poplach
+  „účty se liší“ by sváděl k ručnímu zásahu u brokera.
+- Oponent (copier-design-critic): 1. kolo OPRAVIT PŘED COMMITEM (P1–P8,
+  I1/I2), 2. kolo (F1–F12), 3. kolo (N1 falešné rozjetí při výstupu, N2–N6),
+  4. kolo (R4-1 ne-OK verdikt workeru nesmí potlačit osiřelou pozici, R4-2/3
+  okno) → opraveno / zdokumentováno; poznámka v INV-UI-03, strážní testy v
+  `tests/tvPriceClientGuards.test.ts` a `tests/tradovateWorkerExposureOverlay.test.ts`.
+- Pozor: 27. 10. v 9:21 jsem pustil celou sadu testů, když byla kopírka ARMED
+  (kontrola stav jen vypsala, nezastavila). Worker zůstal zdravý (bez
+  `lastError`, rozjetí i chyb v logu); poučení = gate přes `&&`/exit.
+- Další: VWAP odchylky vs. TradingView — worker přepisuje dnešní soubor
+  tv-live jen ~327 načtenými svíčkami TV; oprava = skládat dnešní svíčky
+  (změna workeru → reinstall jen po „nasaď“).
+
 ### 2026-10-27 07:45 — NASAZENO: grafy, backtest, Historie (Claude, Filip „nasaď všechny čtyři commity“)
 
 - Web: `main` = `aa668141` (merge `origin/main` s LIVE DD opravou ff3f8e24 +
