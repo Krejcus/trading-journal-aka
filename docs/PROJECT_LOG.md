@@ -285,6 +285,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-27 odpoledne — IBKR: předávka sloučena, rešerše zdrojů dat CME (Claude, jen dokumenty)
+
+- `claude/ibkr-handoff-20261027` sloučena do lokálního `main` fast-forwardem
+  (`9f1c6b8a`, jen `docs/reviews/ibkr-live-data-handoff-20261027.md`).
+  Účet IBKR zatím není, nic se nestaví.
+- Rešerše `docs/reviews/market-data-sources-research-20261027.md`: levněji
+  než burzovní poplatek CME (1,55 USD/měs. neprofesionál L1, 2027: 1,60)
+  to legálně nejde, IBKR zůstává nejlevnější oficiální osobní zdroj. Riziko:
+  úplnost `AllLast` u futures je na fórech sporná → sonda IBKR musí ticky
+  porovnat s Databentem, nejen s TV a Tradovate.
+- Pro vizi obchodování z appky a komerčního produktu je klíčové, odkud budou
+  data pro další uživatele: distribuce přes nás = licence CME (výtah ceníku:
+  29 280 USD ročně za burzu, NEOVĚŘENO), proto směr „data přes obchodní
+  připojení uživatele“ (Rithmic conformance nebo partnerství s Tradovate). Nic
+  z toho se nestaví; dotaz pro Codex/ChatGPT je v §4 dokumentu.
+- tick-stream.xyz (29 USD realtime CME) neuvádí firmu ani licenci → nepoužívat.
+
 ### 2026-10-27 10:51 — NASAZENO: živá pozice v deníku + otevření jako „Reset chart view“ (Claude, Filip „můžeš nasadit“)
 
 - Web: `main` = `a78e6bbb` (fast-forward z `ccb7572f`): `171014b7` deník dneška
