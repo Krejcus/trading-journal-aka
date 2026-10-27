@@ -15,7 +15,7 @@ import { useLiveLayout } from '../hooks/useLiveLayout';
 import { readTradovateDisplaySession, writeTradovateDisplaySession } from '../lib/tradovateDisplaySessionCache';
 import { liveBalanceDisplay, liveDailyPnlDisplay } from '../lib/liveBalanceDisplay';
 import { useTradovateDisplayFallback } from './useTradovateDisplayFallback';
-import { mergeTradovateAccountDisplay, type AccountDisplayCache } from '../lib/tradovateAccountDisplayMerge';
+import { mergeTradovateAccountDisplay, nextTradovateDisplayVouches, type AccountDisplayCache, type AccountDisplayVouch } from '../lib/tradovateAccountDisplayMerge';
 import type { TradovateAccountDisplayFeedState } from '../lib/tradovateAccountDisplayTypes';
 import { tradovateAccountReadState, hasCompleteTradovateRead } from '../lib/tradovateLiveReadState';
 import { LIVE_READ_MAX_AGE_MS, LIVE_READ_STALE_MS, formatReadAge } from '../lib/liveReadFreshness';
@@ -168,6 +168,7 @@ const COPY_GROUP_CONFIG_COMMANDS = new Set<LiveCopyTradingCommand['type']>([
   'set-multiplier',
 ]);
 const COPIER_SAFETY_COMMAND_TIMEOUT_MS = 10_000;
+const EMPTY_DISPLAY_VOUCHES: Record<string, AccountDisplayVouch> = {};
 
 /**
  * Dev fixture LIVE přehledu s falešným execution adaptérem: přepínač followera
@@ -606,6 +607,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       previous.userId === owner ? previous.values : {}, feeds, displayMembership,
     ) })),
   });
+  // Za nezměněné částky ručí worker k času svého posledního přijatého statusu
+  // (ne obnoveného z minula — ten po 45 s přestane platit). Pravidla dobíhání
+  // a rušení: `nextTradovateDisplayVouches`. Jen zobrazení.
+  const [displayVouchState, setDisplayVouchState] = useState<{ userId: string; values: Record<string, AccountDisplayVouch> }>({ userId, values: {} });
+  useEffect(() => {
+    if (displayFeedReceipt?.userId !== userId || agentStatusObservedAt == null) return;
+    const vouchedAt = Math.min(displayFeedReceipt.receivedAt, agentStatusObservedAt);
+    setDisplayVouchState(previous => ({ userId, values: nextTradovateDisplayVouches(
+      previous.userId === userId ? previous.values : {}, displayFeedReceipt.feeds, displayMembership, vouchedAt,
+    ) }));
+  }, [displayFeedReceipt, displayMembership, agentStatusObservedAt, userId]);
+  const displayVouches = displayVouchState.userId === userId ? displayVouchState.values : EMPTY_DISPLAY_VOUCHES;
   const displaySnapshot = useMemo(() => {
     if (!copyTradeSnapshot) return null;
     return { ...copyTradeSnapshot, accounts: copyTradeSnapshot.accounts.map(account => {
@@ -614,9 +627,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       const values = owner && displayCache.userId === userId
         ? displayCache.values[`${owner[1].environment}:${owner[0]}:${account.id}`]
           ?? restoredDisplay[`${owner[1].environment}:${owner[0]}:${account.id}`] : undefined;
+      const vouch = owner ? displayVouches[`${owner[1].environment}:${owner[0]}:${account.id}`] : undefined;
       return {
         ...account,
         ...(values ? { displayValues: values } : {}),
+        ...(vouch ? { displayVouch: vouch } : {}),
         dailyPnlPending: owner ? live.dataEnrichmentByConnection[owner[0]]?.pending !== false : true,
         dailyPnlUnavailableReason: owner
           ? live.dataEnrichmentByConnection[owner[0]]?.error ?? undefined
@@ -625,7 +640,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         riskDisplayConfigKey: `${owner ? owner[1].environment + ':' + owner[0] : 'unavailable'}:${account.riskDisplayConfigKey}`,
       };
     }) };
-  }, [copyTradeSnapshot, displayMembership, displayCache, live.dataEnrichmentByConnection, userId, restoredDisplay]);
+  }, [copyTradeSnapshot, displayMembership, displayCache, displayVouches, live.dataEnrichmentByConnection, userId, restoredDisplay]);
   useEffect(() => {
     // Wait for every connected account list before replacing the persisted view.
     // A partial bootstrap must not erase amounts for connections still loading.

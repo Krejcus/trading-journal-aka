@@ -6,6 +6,7 @@ import type {
 import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
 import { isTradovateWorkingStatus } from './tradovateOrderReadModel';
 import { fundedTradovateTrailingDrawdownLimit } from './tradovatePropPlanCatalog';
+import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
 
 export interface TradovateLiveTotals {
   balance: number;
@@ -114,6 +115,7 @@ const highestFinite = (values: Array<number | null | undefined>): number | null 
 export const accountRiskPeak = (
   account: TradovateAccountDataAccount,
   profile?: TradovateAccountProfile,
+  now = Date.now(),
 ): number | null => {
   const accountSize = profile?.accountSize ?? null;
   const brokerTrailingAmount = account.risk.trailingMaxDrawdown;
@@ -135,11 +137,16 @@ export const accountRiskPeak = (
     // Tradovate defines maxNetLiq as the account high-watermark. In EOD mode
     // the broker itself advances it only at the session close, so it is more
     // authoritative than rebuilding the watermark from an occasionally
-    // incomplete cash log.
+    // incomplete cash log. The running session is not an end of day yet:
+    // its "ending balance" is today's live cash and must not lift the floor —
+    // but only next to the broker watermark. Without it the conservative
+    // (higher) peak stays: the cushion feeds the inferred `breached` guard.
+    const brokerWatermark = account.risk.maxNetLiq != null && Number.isFinite(account.risk.maxNetLiq) && account.risk.maxNetLiq > 0;
+    const openSession = tradovateDisplayTradeDate(now);
     return highestFinite([
       accountSize,
       account.risk.maxNetLiq,
-      ...account.daily.map(day => day.endingBalance),
+      ...account.daily.filter(day => !brokerWatermark || day.tradeDate < openSession).map(day => day.endingBalance),
     ]);
   }
 
@@ -156,6 +163,7 @@ export const accountRiskPeak = (
 export const accountRiskFloor = (
   account: TradovateAccountDataAccount,
   profile?: TradovateAccountProfile,
+  now = Date.now(),
 ): number | null => {
   if (profile?.drawdownType === 'none') return null;
   // Brokerův auto-liq level je skutečný aktuální floor a má přednost před
@@ -173,7 +181,7 @@ export const accountRiskFloor = (
     : null;
   const maxLoss = brokerMaxLoss ?? profile?.maxLoss ?? null;
   if (maxLoss == null) return null;
-  const peak = accountRiskPeak(account, profile);
+  const peak = accountRiskPeak(account, profile, now);
   if (peak == null) return null;
 
   const reconstructedFloor = peak - maxLoss;
@@ -195,8 +203,9 @@ export const accountRiskFloor = (
 export const accountRiskCushion = (
   account: TradovateAccountDataAccount,
   profile?: TradovateAccountProfile,
+  now = Date.now(),
 ): number | null => {
-  const floor = accountRiskFloor(account, profile);
+  const floor = accountRiskFloor(account, profile, now);
   const equity = account.balance.netLiq ?? account.balance.totalCashValue;
   return floor == null || equity == null ? null : equity - floor;
 };

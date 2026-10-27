@@ -377,6 +377,55 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověřeno v náhledu: posunutý záběr beze změny přes dvě nové minuty a obnovu
   dat; celá sada 614 souborů zelená. Nenasazeno.
 
+### 2026-10-26 večer — LIVE: rezerva DD u EOD účtů a šedé denní P&L (Claude)
+
+- **NASAZENO 27. 10. ráno** (`ff3f8e24`, Filip „nasaď“; Vercel READY). Ověřeno
+  na produkci: nová session, všech 5 účtů zelených i 99 s po čtení. Rezerva
+  dnes 2 000 je správně — broker při uzávěrce 26. 10. posunul `maxNetLiq` na
+  konečný zůstatek (…037 51 143 → 51 274,5), tím se potvrdilo i EOD chování.
+  …041: 655 (zůstatek 48 655, floor 48 000), DLL omezené rezervou. Celá sada
+  611/613 zelená; 2 soubory jen timeout při vytíženém Macu, samostatně 31/31
+  a stejně rychlé jako na main.
+- **iPhone 27. 10. 7:28**: čistá reinstalace z `main` @ `68631175` (`ios:sync` +
+  `xcodebuild` + devicectl); obsahuje i kanál ceny z TV (kroky 3–5). Přihlášení
+  přežilo, LIVE ukazuje DLL/DD z opravy; iOS se znovu ptal na oznámení.
+
+- **Rezerva DD 2 000 místo ~2 120**: `accountRiskPeak` (EOD trailing) bral do
+  high-watermarku i `daily[].endingBalance` dnešní, ještě neuzavřené session
+  — to je běžící zůstatek. Po ziskovém obchodu (26. 10. +1 064 na účet) byl
+  nad `maxNetLiq` brokera, floor = zůstatek − 2 000 → rezerva přesně 2 000
+  na všech pěti Lucid účtech. Teď se dnešní session do EOD maxima nepočítá
+  (hranice 17:00 Chicago, `tradovateDisplayTradeDate`); po uzávěrce ano.
+  Ověřeno na produkčních datech: …038 2 119,5, …037/…039 2 131,5, …040 2 122,5.
+- **Šedé denní P&L / zůstatek / DLL / rezerva**: worker čte účet jen po
+  události brokera + audit à 10 min, UI značí hodnotu „poslední známá“ po
+  45 s → ve flat stavu šedé skoro pořád (stav od 28. 9., ne regrese dneška).
+  Filip zvolil „zelená, dokud worker běží“: `vouchedTradovateAccountDisplay`
+  (stream připojený, bez chyby, bez čekajícího čtení, snímek ≤ 11 min) →
+  `LiveAccount.displayVouch`; `liveDisplayVouchedAt` uzná jen STEJNOU částku,
+  ručení ≤ 45 s a u denního P&L aktuální session. Čekající čtení (i audit)
+  ručení jen neprodlouží — bez toho čísla při auditu na 2–5 s blikla.
+  Jen zobrazení: `isLiveAccountReadVerified` a vše pro příkazy/ARM/způsobilost
+  beze změny; způsobilost čte jen `.value`.
+- Kritik (OPRAVIT PŘED COMMITEM → zapracováno): EOD vyřazení dneška jen vedle
+  `maxNetLiq` (bez něj starý konzervativní vrchol — cushion krmí inferované
+  `breached`); Rezervu DD ručení ověří jen s čerstvým otevřeným P&L
+  (`liveCushionEvidence`); duplicitní kopie feedu z relaye = průnik zdraví;
+  ručení se ruší hned při výpadku streamu, backoffu, chybějícím feedu nebo jiné
+  částce (`nextTradovateDisplayVouches`).
+- Kritik, delta: OK S VÝHRADAMI. Známé limity (ne teď): feed workeru během
+  běžícího čtení účet nehlásí jako `pending` (typicky < 1 s, nejvýš ~10 s =
+  timeout čtení; změna workeru); zastaralá kopie feedu z visícího čtení relaye
+  může až ~20 s ručit za spojení, které čerstvá kopie už nemá (úplná oprava =
+  `observedAt` po zdrojích v `CopierRelayFeedSources`); chybí test zapojení
+  `min(receivedAt, observedAt)` v `TradovateLiveDesk`. Poznámka k ručení
+  doplněna do INV-UI-03.
+- Ověřeno v náhledu na produkčních datech (worktree, port 5275): rezervy
+  2 120 / 2 132 / 2 123 / 2 132, denní P&L, DLL i rezerva zelené > 100 s po
+  čtení a přes audit workeru bez bliknutí; ztráta na …041 se propsala hned.
+- Denní P&L samo počítalo správně (…037: +1 064 − 297 − 9 − 87 − 264 − 195 = +212
+  = broker).
+
 ### 2026-10-26 13:07 — NASAZENO: kanál ceny z TV (kroky 1–5) + plynulost grafů (Claude, Filip „nasaď“)
 
 - Web: `main` = `26d2a643` (merge větve `claude/chart-smoothness-20261026`;

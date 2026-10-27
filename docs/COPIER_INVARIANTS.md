@@ -1212,6 +1212,13 @@ existující ochranu.
   potvrzený risk/eligibility/flat stav.
 - Bezpečné změny vs. nebezpečné: Bezpečné je ukázat timestamp a stale badge.
   Nebezpečné je z retained hodnoty odvozovat povolení tlačítka ON.
+- Ručení workeru (26. 10. 2026): `LiveAccount.displayVouch`
+  (`lib/tradovateAccountDisplayMerge.ts:nextTradovateDisplayVouches`,
+  `lib/liveBalanceDisplay.ts:liveDisplayVouchedAt`, `liveCushionEvidence`) smí
+  jen přebarvit STEJNOU částku jako ověřenou, nejvýš 45 s od statusu workeru;
+  při výpadku streamu, backoffu, chybějícím feedu nebo jiné částce se ruší hned.
+  Nikdy nemění `isLiveAccountReadVerified`, hodnoty (`.value`) ani nevstupuje do
+  příkazů, ARM, reconcile a způsobilosti (`tests/copyTradeAccountEligibility.test.ts`).
 
 ### INV-UI-04: Data z TradingView jsou jen pro zobrazení; nikdy nevstupují do read modelu, rozhodování ani úložišť (26. 10. 2026)
 

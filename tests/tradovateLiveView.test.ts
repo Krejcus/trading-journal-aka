@@ -135,6 +135,73 @@ describe('tradovate LIVE view model', () => {
     expect(accountRiskCushion(value, profile)).toBe(550);
   });
 
+  it('neuzavřený den nezvedá EOD high-watermark (rezerva DD 26. 10.)', () => {
+    // LFE…038 po ziskovém obchodu: dnešní běžící zůstatek je nad maximem
+    // uzavřených dnů. Floor se posune až uzávěrkou session (17:00 Chicago).
+    const value = account();
+    value.balance.autoLiqLevel = 0;
+    value.balance.totalCashValue = 51_147;
+    value.balance.netLiq = 51_147;
+    value.daily = [{ tradeDate: '2026-10-26', endingBalance: 51_147 }] as never;
+    value.risk.maxNetLiq = 51_027.5;
+    value.risk.trailingMaxDrawdown = 2_000;
+    value.risk.trailingMaxDrawdownLimit = 50_100;
+    value.risk.trailingMaxDrawdownMode = 'EOD';
+    const duringSession = Date.parse('2026-10-26T17:14:00Z');
+    expect(accountRiskPeak(value, undefined, duringSession)).toBe(51_027.5);
+    expect(accountRiskFloor(value, undefined, duringSession)).toBe(49_027.5);
+    expect(accountRiskCushion(value, undefined, duringSession)).toBe(2_119.5);
+    const afterClose = Date.parse('2026-10-26T23:00:00Z');
+    expect(accountRiskPeak(value, undefined, afterClose)).toBe(51_147);
+    expect(accountRiskCushion(value, undefined, afterClose)).toBe(2_000);
+  });
+
+  describe('EOD high-watermark a otevřená session', () => {
+    const eod = () => {
+      const value = account();
+      value.balance.autoLiqLevel = 0;
+      value.balance.totalCashValue = 51_147;
+      value.balance.netLiq = 51_147;
+      value.risk.maxNetLiq = 51_027.5;
+      value.risk.trailingMaxDrawdown = 2_000;
+      value.risk.trailingMaxDrawdownLimit = 50_100;
+      value.risk.trailingMaxDrawdownMode = 'EOD';
+      return value;
+    };
+    it('bez maxNetLiq brokera zůstává konzervativní vrchol včetně dneška', () => {
+      const value = eod();
+      value.risk.maxNetLiq = null;
+      value.balance.totalCashValue = 52_500;
+      value.balance.netLiq = 50_000;
+      value.daily = [{ tradeDate: '2026-10-26', endingBalance: 52_500 }] as never;
+      const at = Date.parse('2026-10-26T17:14:00Z');
+      expect(accountRiskPeak(value, undefined, at)).toBe(52_500);
+      expect(accountRiskCushion(value, undefined, at)).toBe(-100);
+    });
+    it('uzavřený den nad maxNetLiq se počítá, otevřený ne', () => {
+      const value = eod();
+      value.daily = [
+        { tradeDate: '2026-10-26', endingBalance: 51_300 },
+        { tradeDate: '2026-10-23', endingBalance: 51_100 },
+      ] as never;
+      expect(accountRiskPeak(value, undefined, Date.parse('2026-10-26T17:14:00Z'))).toBe(51_100);
+    });
+    it('hranice session je 17:00 Chicago (CDT) a neděle večer už patří pondělí', () => {
+      const value = eod();
+      value.daily = [{ tradeDate: '2026-10-26', endingBalance: 51_300 }] as never;
+      expect(accountRiskPeak(value, undefined, Date.parse('2026-10-26T21:59:59Z'))).toBe(51_027.5);
+      expect(accountRiskPeak(value, undefined, Date.parse('2026-10-26T22:00:01Z'))).toBe(51_300);
+      expect(accountRiskPeak(value, undefined, Date.parse('2026-10-25T23:00:00Z'))).toBe(51_027.5);
+    });
+    it('průraz prokázaný maxNetLiq dál dává zápornou rezervu', () => {
+      const value = eod();
+      value.balance.totalCashValue = 48_900;
+      value.balance.netLiq = 48_900;
+      value.daily = [{ tradeDate: '2026-10-26', endingBalance: 48_900 }] as never;
+      expect(accountRiskCushion(value, undefined, Date.parse('2026-10-26T17:14:00Z'))).toBe(-127.5);
+    });
+  });
+
   it('prefers the broker EOD high-watermark and trailing amount over reconstructed values', () => {
     const value = account();
     value.daily = [{ tradeDate: '2026-08-14', endingBalance: 50_350 }] as never;

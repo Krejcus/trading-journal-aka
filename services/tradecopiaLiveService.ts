@@ -1,4 +1,4 @@
-import type { AccountDisplayValues } from '../lib/tradovateAccountDisplayMerge';
+import type { AccountDisplayValues, AccountDisplayVouch } from '../lib/tradovateAccountDisplayMerge';
 import { supabase } from './supabase';
 import {
   ensureAccountMapRows,
@@ -45,6 +45,8 @@ export interface LivePosition {
 export interface LiveAccount {
   /** Presentation only; never consumed as risk/execution evidence. */
   displayValues?: AccountDisplayValues;
+  /** Presentation only: částky, za které worker právě ručí (stream bez změny). */
+  displayVouch?: AccountDisplayVouch;
   /** Stable explicit profile settings for presentation invalidation only. */
   riskDisplayConfigKey?: string;
   riskDisplayStorageScope?: string;

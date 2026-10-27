@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveDayReadAnswered, liveGroupDailyPnlDisplay } from '../lib/liveBalanceDisplay';
+import { liveBalanceDisplay, liveCapitalDisplay, liveCushionEvidence, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveDayReadAnswered, liveGroupDailyPnlDisplay } from '../lib/liveBalanceDisplay';
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
 import { BalanceValue, DailyPnlValue } from '../components/LiveCopyTradeOverview';
 import { MobileMetric } from '../components/LiveMobileAccountDetail';
@@ -232,5 +232,70 @@ describe('confirmed daily display', () => {
     [{ dailyLossLimit: null, riskDisplayDailyLossDisabled: true }, 'no-limit'],
   ] as const)('rozliší DLL stav %s', (patch, state) => {
     expect(liveDailyLossRemainingDisplay(account(patch as Partial<LiveAccount>), now).state).toBe(state);
+  });
+});
+
+describe('částka, za kterou ručí worker (stream beze změny)', () => {
+  const iso = (offset: number) => new Date(now + offset).toISOString();
+  // Denní report přečtený před 10 minutami (např. při otevření LIVE), od té doby bez obchodu.
+  const idle = (patch: Partial<LiveAccount> = {}) => account({
+    balance: 51_147,
+    cashUpdatedAt: iso(-600_000),
+    realizedPnl: 200,
+    dailyPnlAvailable: true,
+    dailyPnlTradeDate: '2026-09-10',
+    dailyPnlUpdatedAt: iso(-600_000),
+    dailyLossLimit: 1_200,
+    dailyLossLimitUpdatedAt: iso(-3_000),
+    unrealizedPnl: 0,
+    unrealizedPnlSource: 'estimated',
+    unrealizedPnlUpdatedAt: iso(-3_000),
+    displayVouch: {
+      dailyRealizedPnL: { value: 200, confirmedAt: iso(-900_000 + 360_000), vouchedAt: iso(-2_000) },
+      totalCashValue: { value: 51_147, confirmedAt: iso(-900_000 + 360_000), vouchedAt: iso(-2_000) },
+    },
+    ...patch,
+  });
+
+  it('stejná částka s čerstvým statusem workeru je ověřená, čas posledního čtení zůstává', () => {
+    const a = idle();
+    expect(liveDailyPnlDisplay(a, now)).toMatchObject({ value: 200, stale: false, confirmedAt: a.dailyPnlUpdatedAt, vouchedAt: iso(-2_000) });
+    expect(liveBalanceDisplay(a, now)).toMatchObject({ value: 51_147, stale: false, confirmedAt: a.cashUpdatedAt });
+    expect(liveDailyLossRemainingDisplay(a, now)).toMatchObject({ value: 1_400, stale: false, state: 'ready' });
+    expect(renderToStaticMarkup(React.createElement(DailyPnlValue, { display: liveDailyPnlDisplay(a, now) })))
+      .toContain('data-daily-pnl-state="confirmed"');
+    // Čerstvost čtení pro risk/execution se nemění.
+    expect(isLiveAccountReadVerified(a, 'cash', now)).toBe(false);
+  });
+
+  it('Rezerva DD: ručení za hotovost ověří jen s čerstvým otevřeným P&L', () => {
+    expect(liveCushionEvidence(idle(), now)).toEqual({ verified: true, confirmedAt: iso(-3_000) });
+    // V pozici: hotovost beze změny, ale tick otevřeného P&L minutu stojí.
+    const frozen = idle({ unrealizedPnl: -400, unrealizedPnlUpdatedAt: iso(-60_000) });
+    expect(liveCushionEvidence(frozen, now)).toMatchObject({ verified: false });
+    expect(liveCushionEvidence(idle({ unrealizedPnlSource: 'stale' }), now).verified).toBe(false);
+    expect(liveCushionEvidence(idle({ displayVouch: undefined }), now)).toEqual({ verified: false, confirmedAt: iso(-600_000) });
+  });
+
+  it('DLL omezené rezervou DD má s ručením stejnou čerstvost jako rezerva', () => {
+    const capped = idle({ cushion: 900 });
+    expect(liveDailyLossRemainingDisplay(capped, now)).toMatchObject({ value: 900, cappedByDrawdown: true, stale: false, confirmedAt: iso(-3_000) });
+  });
+
+  it('jiná částka, starý status workeru nebo minulá session nic neověří', () => {
+    const differs = idle({ realizedPnl: 212, balance: 51_159 });
+    expect(liveDailyPnlDisplay(differs, now).stale).toBe(true);
+    expect(liveBalanceDisplay(differs, now).stale).toBe(true);
+    const old = idle({ displayVouch: {
+      dailyRealizedPnL: { value: 200, confirmedAt: iso(-600_000), vouchedAt: iso(-46_000) },
+      totalCashValue: { value: 51_147, confirmedAt: iso(-600_000), vouchedAt: iso(-46_000) },
+    } });
+    expect(liveDailyPnlDisplay(old, now).stale).toBe(true);
+    expect(liveBalanceDisplay(old, now).stale).toBe(true);
+    expect(liveDailyLossRemainingDisplay(old, now).stale).toBe(true);
+    const future = idle({ displayVouch: { dailyRealizedPnL: { value: 200, confirmedAt: iso(-600_000), vouchedAt: iso(60_000) } } });
+    expect(liveDailyPnlDisplay(future, now).stale).toBe(true);
+    const previousSession = idle({ displayVouch: { dailyRealizedPnL: { value: 200, confirmedAt: iso(-86_400_000), vouchedAt: iso(-2_000) } } });
+    expect(liveDailyPnlDisplay(previousSession, now).stale).toBe(true);
   });
 });
