@@ -287,6 +287,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ### 2026-10-26 večer — LIVE: rezerva DD u EOD účtů a šedé denní P&L (Claude)
 
+- **NASAZENO 27. 10. ráno** (`ff3f8e24`, Filip „nasaď“; Vercel READY). Ověřeno
+  na produkci: nová session, všech 5 účtů zelených i 99 s po čtení. Rezerva
+  dnes 2 000 je správně — broker při uzávěrce 26. 10. posunul `maxNetLiq` na
+  konečný zůstatek (…037 51 143 → 51 274,5), tím se potvrdilo i EOD chování.
+  …041: 655 (zůstatek 48 655, floor 48 000), DLL omezené rezervou. Celá sada
+  611/613 zelená; 2 soubory jen timeout při vytíženém Macu, samostatně 31/31
+  a stejně rychlé jako na main. Telefon dostane změnu až novým buildem.
+
 - **Rezerva DD 2 000 místo ~2 120**: `accountRiskPeak` (EOD trailing) bral do
   high-watermarku i `daily[].endingBalance` dnešní, ještě neuzavřené session
   — to je běžící zůstatek. Po ziskovém obchodu (26. 10. +1 064 na účet) byl
