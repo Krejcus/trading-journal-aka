@@ -18,4 +18,11 @@ describe('záběr grafu dne se mění jen akcí uživatele', () => {
       expect(line, file).not.toMatch(/entryMs|exitMs|now/);
     }
   });
+
+  it('deník dneška se otevírá jako „Reset chart view“ (počítač i telefon), vybraný obchod ne', () => {
+    const desktop = readFileSync(join(__dirname, '..', 'components/day/DayDesktop.tsx'), 'utf8');
+    expect(desktop).toMatch(/resetViewOnOpen=\{ctl\.isToday && !selectedChartTrade\}/);
+    const compact = readFileSync(join(__dirname, '..', 'components/day/DayCompactChart.tsx'), 'utf8');
+    expect(compact).toMatch(/useResetViewOnOpen\(api, ctl\.isToday && !selectedTrade,/);
+  });
 });

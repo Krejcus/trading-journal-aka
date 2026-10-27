@@ -95,7 +95,8 @@ import GenericDrawingFloatingToolbar from './GenericDrawingFloatingToolbar';
 import GenericDrawingSettingsDialog from './GenericDrawingSettingsDialog';
 import PositionDrawingSettingsDialog, { PositionDrawingFloatingToolbar } from './PositionDrawingSettingsDialog';
 import { isPositionDrawing, type PositionDrawing } from '../services/chartPositionDrawing';
-import { countChartIndicators, resetChartView } from '../services/chartContextMenu';
+import { countChartIndicators } from '../services/chartContextMenu';
+import { useResetViewOnOpen } from '../hooks/useResetViewOnOpen';
 import BacktestOrderLinesOverlay from './BacktestOrderLinesOverlay';
 import BacktestTradeExecutionsOverlay from './BacktestTradeExecutionsOverlay';
 import BacktestTradeReviewDialog from './BacktestTradeReviewDialog';
@@ -305,6 +306,8 @@ interface AlphaTradeChartWorkspaceProps {
    * panelů ani nic uloženého se nemění; v přehrávání a backtestu vypnuto).
    */
   liveCandles?: LiveCandleFeed | null;
+  /** Po otevření každý graf jednou srovnat jako „Reset chart view“ (deník dneška; backtest vždy). */
+  resetViewOnOpen?: boolean;
   /**
    * Vlastní paměť rozložení (deník dne si pamatuje své panely zvlášť,
    * nezdědí dva grafy z detailu obchodu) a výchozí rozložení pro ni.
@@ -374,6 +377,7 @@ interface WorkspaceDataContextValue {
   initialRoot: MarketRoot;
   initialCandles: MarketCandle[];
   backtestSession?: BacktestChartSessionBridge;
+  resetViewOnOpen: boolean;
   activePanelId: string;
   replay: ChartReplayState;
   replaySelectionTime: number | null;
@@ -772,24 +776,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   candlesRef.current = candles;
   const getCandles = useCallback(() => candlesRef.current, []);
 
-  // Backtest: po otevření session se každý graf jednou vycentruje stejně jako
-  // „Reset chart view“ (kurzor u pravého okraje, výchozí šířka, autoscale).
-  // Až po usazení grafu — výchozí záběr nastavuje graf v `onReady` přes
-  // setTimeout(0). Další přestavby grafu (jiný timeframe) už záběr nemění.
-  const openViewResetRef = useRef(false);
-  const hasCandles = candles.length > 0;
-  const inBacktest = Boolean(backtestSession);
-  useEffect(() => {
-    if (!inBacktest || openViewResetRef.current || !chartApi || !hasCandles) return;
-    let frame = 0;
-    const timer = window.setTimeout(() => {
-      frame = window.requestAnimationFrame(() => {
-        openViewResetRef.current = true;
-        try { resetChartView(chartApi); } catch { /* graf mezitím zanikl */ }
-      });
-    }, 0);
-    return () => { window.clearTimeout(timer); window.cancelAnimationFrame(frame); };
-  }, [inBacktest, chartApi, hasCandles]);
+  // Backtest a deník dneška: po otevření každý graf jednou jako „Reset chart view“.
+  useResetViewOnOpen(chartApi, Boolean(backtestSession) || context.resetViewOnOpen, candles.length > 0);
 
   useEffect(() => {
     context.registerPanel(instance.id, {
@@ -1052,6 +1040,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   layoutScope,
   defaultLayoutId = '2h',
   liveCandles = null,
+  resetViewOnOpen = false,
 }) => {
   const layoutStorageKey = layoutScope ? `${WORKSPACE_LAYOUT_STORAGE_KEY}:${layoutScope}` : WORKSPACE_LAYOUT_STORAGE_KEY;
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1991,6 +1980,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     initialRoot,
     initialCandles,
     backtestSession,
+    resetViewOnOpen,
     isDark,
     activePanelId,
     replay,
@@ -2014,7 +2004,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     paneActions,
     showDayNotes: !backtestSession && layoutScope !== 'day',
     enableIndicatorOnAllPanels,
-  }), [enableIndicatorOnAllPanels, layoutScope, paneActions, reviewTrades, reviewDrawingKey, reviewPanelOverlay, reviewCandlesForRoot, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+  }), [enableIndicatorOnAllPanels, layoutScope, paneActions, reviewTrades, reviewDrawingKey, reviewPanelOverlay, reviewCandlesForRoot, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, resetViewOnOpen, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const reviewTrade = reviewTradeId
     ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)

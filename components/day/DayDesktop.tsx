@@ -262,6 +262,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
           chartNotes={tradeNotes}
           review={review}
           liveCandles={ctl.chart.liveFeed}
+          resetViewOnOpen={ctl.isToday && !selectedChartTrade}
           onClose={ctl.backToDay}
         />
       ) : (

@@ -11,6 +11,7 @@ import ChartNotesLayer from '../ChartNotesLayer';
 import { chartNotesOfTrades } from '../../lib/chartNotes';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
 import { dayAnchorTrade, focusTarget, reviewFocusKey, useReviewFocus } from './dayFocus';
+import { useResetViewOnOpen } from '../../hooks/useResetViewOnOpen';
 import type { DayController } from './useDayController';
 import { useLiveCandleBinding } from '../../hooks/useLiveCandleBinding';
 
@@ -53,6 +54,8 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
   const tradeNotes = useMemo(() => chartNotesOfTrades(ctl.chart.chartTrades), [ctl.chart.chartTrades]);
   // Živá poslední svíčka z kanálu ceny (jen překreslení v grafu).
   useLiveCandleBinding(ctl.chart.liveFeed, [{ api, root: 'MNQ', timeframe, rawCandles: raw }]);
+  // Deník dneška se otevírá jako „Reset chart view“ (poslední svíčka vpravo).
+  useResetViewOnOpen(api, ctl.isToday && !selectedTrade, raw.length > 0);
 
   const target = focusTarget(range);
   const anchorRef = useRef<{ day: string; trade: Trade } | null>(null);
