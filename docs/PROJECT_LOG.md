@@ -285,6 +285,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-27 10:51 — NASAZENO: živá pozice v deníku + otevření jako „Reset chart view“ (Claude, Filip „můžeš nasadit“)
+
+- Web: `main` = `a78e6bbb` (fast-forward z `ccb7572f`): `171014b7` deník dneška
+  se otevře vycentrovaný jako „Reset chart view“, `a78e6bbb` živá pozice
+  v grafu deníku (zápis níž).
+- Brána: kopírka DISARMED (ověřeno v řetězu před každým krokem) → tsc čistý,
+  619 souborů / 5751 testů zelených, build OK, teprve pak push.
+- Jen frontend (Vercel); worker, relay ani Supabase funkce beze změny.
+- Další na řadě: VWAP odchylky vs. TradingView (worker skládá dnešní svíčky
+  místo přepisu ~327 svíčkami TV — změna workeru, reinstall jen po „nasaď“).
+
 ### 2026-10-27 dopoledne — Deník: živá pozice v grafu dneška, jen zobrazení (Claude)
 
 - Filip: v deníku vidět otevřený obchod / čekající limit živě jako v LIVE
