@@ -50,6 +50,12 @@ export interface TvPriceChannelClientDeps {
     onMessage(envelope: unknown): void;
     onStatus(status: TvPriceChannelStatus): void;
   }): TvPriceChannelHandle;
+  /**
+   * Kanál se stejným tématem se ještě zavírá. supabase-js pro stejné téma
+   * vrátí starou (odcházející) instanci a její `subscribe()` nic neudělá —
+   * klient by zůstal navždy „připojuje“. Nový kanál se proto otevře až potom.
+   */
+  topicBusy?(topic: string): boolean;
   verify(envelope: unknown, key: string): Promise<TvPricePayload | null>;
   /** Cesta ceny k ověřené zprávě (jen přehrání v grafu); chybí = bez cesty. */
   verifyTrail?(envelope: unknown, key: string, payload: TvPricePayload): Promise<number[] | null>;
@@ -88,6 +94,8 @@ export const TV_CLOSE_DELAY_MS = 60_000;
 export const TV_VERIFY_QUEUE_MAX = 16;
 /** Ověření, které nedoběhne, se po této době bere jako neplatné. */
 export const TV_VERIFY_TIMEOUT_MS = 2_000;
+/** Jak často se zkusí otevřít kanál, dokud se starý se stejným tématem zavírá. */
+export const TV_REOPEN_RETRY_MS = 250;
 
 export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPriceChannelClient {
   const now = deps.now ?? Date.now;
@@ -109,6 +117,7 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
   let untrackTimer: unknown = null;
   let closeTimer: unknown = null;
   let metaTimer: unknown = null;
+  let reopenTimer: unknown = null;
   let unsubscribeForeground: (() => void) | null = null;
 
   const safe = (action: () => unknown) => {
@@ -233,6 +242,18 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
 
   const open = () => {
     if (channel || !grant) return;
+    let busy = false;
+    try { busy = deps.topicBusy?.(grant.topic) === true; } catch { busy = false; }
+    if (busy) {
+      store.setLink('connecting', 'closing-previous');
+      if (reopenTimer === null) {
+        reopenTimer = schedule(() => {
+          reopenTimer = null;
+          try { reconcile(); } catch { /* zobrazovací kanál nikdy nevyhodí */ }
+        }, TV_REOPEN_RETRY_MS);
+      }
+      return;
+    }
     generation += 1;
     const owner = generation;
     store.setLink('connecting', 'subscribing');

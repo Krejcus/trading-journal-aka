@@ -7,6 +7,7 @@ import {
   TV_UNTRACK_DELAY_MS,
   TV_VERIFY_QUEUE_MAX,
   TV_VERIFY_TIMEOUT_MS,
+  TV_REOPEN_RETRY_MS,
   type TvPriceChannelStatus,
 } from '../lib/tvPriceChannelClient';
 import { signTvPricePayload, signTvPriceTrail, verifyTvPriceEnvelope, verifyTvPriceTrail, type TvPricePayload } from '../lib/tvPriceMessage';
@@ -33,6 +34,7 @@ const setup = (options: {
   webCrypto?: boolean;
   verify?: (envelope: unknown, key: string) => Promise<TvPricePayload | null>;
   verifyTrail?: (envelope: unknown, key: string, payload: TvPricePayload) => Promise<number[] | null>;
+  topicBusy?: (topic: string) => boolean;
 } = {}) => {
   const channels: FakeChannel[] = [];
   let foreground = true;
@@ -55,6 +57,7 @@ const setup = (options: {
     },
     verify,
     verifyTrail: options.verifyTrail,
+    topicBusy: options.topicBusy,
     hasWebCrypto: () => options.webCrypto ?? true,
     isForeground: () => foreground,
     subscribeForeground: listener => {
@@ -204,6 +207,22 @@ describe('klient kanálu ceny z TV (krok 3)', () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(t.verify).toHaveBeenCalledTimes(3);
     expect(t.store.diagnostics()).toMatchObject({ verified: 3, replayed: 0, gaps: 0, seq: 2 });
+  });
+
+  it('stejné téma se ještě zavírá: nový kanál až po jeho zavření (jinak by zůstal „připojuje“)', async () => {
+    let busy = true;
+    const t = setup({ topicBusy: () => busy });
+    t.client.offerGrant('u1', grant(), true);
+    t.client.addChartInterest();
+    expect(t.channels).toHaveLength(0);
+    expect(t.store.diagnostics()).toMatchObject({ state: 'connecting', reason: 'closing-previous' });
+    await vi.advanceTimersByTimeAsync(TV_REOPEN_RETRY_MS * 3);
+    expect(t.channels).toHaveLength(0);
+    busy = false;
+    await vi.advanceTimersByTimeAsync(TV_REOPEN_RETRY_MS);
+    expect(t.channels).toHaveLength(1);
+    t.channels[0].status('SUBSCRIBED');
+    expect(t.store.diagnostics().state).not.toBe('connecting');
   });
 
   it('zaseknuté ověření cesty zprávu přijme bez cesty a frontu nezablokuje', async () => {

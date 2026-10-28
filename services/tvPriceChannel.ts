@@ -36,6 +36,7 @@ export const tvPriceChannel = createTvPriceChannelClient({
       close: () => supabase.removeChannel(channel),
     };
   },
+  topicBusy: topic => supabase.getChannels().some(channel => channel.topic === `realtime:${topic}`),
   verify: verifyTvPriceEnvelope,
   verifyTrail: verifyTvPriceTrail,
   hasWebCrypto: () => typeof globalThis.crypto?.subtle?.verify === 'function',
