@@ -14,7 +14,7 @@ import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 import type { FibDrawing } from '../../services/chartFibDrawing';
 import { QuantumSpinner } from '../QuantumLoader';
 import { aggregateCandles, timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../../services/marketData';
-import { useHtfHistory } from '../../hooks/useHtfHistory';
+import { useHtfHistory, useResetViewOnHtfHistory } from '../../hooks/useHtfHistory';
 import { withHtfHistory } from '../../services/htfHistory';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
@@ -339,7 +339,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     () => [timeframe, ...paneTimeframes.slice(0, Math.max(0, paneCount - 1))],
     [paneCount, paneTimeframes, timeframe],
   );
-  const htfHistory = useHtfHistory('MNQ', shownTimeframes, raw[0]?.time);
+  const htf = useHtfHistory('MNQ', shownTimeframes, raw[0]?.time);
+  const htfHistory = htf.candles;
   const candles = useMemo(() => aggregateCandles(withHtfHistory(raw, htfHistory, timeframe), timeframe), [htfHistory, raw, timeframe]);
   const barTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
   const extraCandles = useMemo(
@@ -362,6 +363,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     api: paneApi(index), root: 'MNQ', timeframe: paneTimeframe(index), rawCandles: paneLiveRaw[index] ?? raw,
   }));
   useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets);
+  useResetViewOnHtfHistory(paneApi(0), htf, timeframe);
   // Kurzor / čas / rozsah mezi okny podle „Synchronizace“ (jako workspace na Macu).
   useEffect(() => {
     if (!split || (!sync.crosshair && !sync.time && !sync.dateRange)) return;

@@ -49,7 +49,7 @@ import {
   X,
 } from 'lucide-react';
 import { Trade } from '../types';
-import { useHtfHistory } from '../hooks/useHtfHistory';
+import { useHtfHistory, useResetViewOnHtfHistory } from '../hooks/useHtfHistory';
 import { withHtfHistory } from '../services/htfHistory';
 import {
   aggregateCandles,
@@ -759,7 +759,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   );
   const replayAnalysisAccumulatorRef = useRef<ReplayAnalysisAccumulator | null>(null);
   // Deník: na timeframu z hodin (1h+, D, W, M) hodinová historie Databento před 1m daty grafu.
-  const htfHistory = useHtfHistory(config.root, backtestSession ? [] : [config.timeframe], rawCandles[0]?.time);
+  const htf = useHtfHistory(config.root, backtestSession ? [] : [config.timeframe], rawCandles[0]?.time);
+  const htfHistory = htf.candles;
   const liveRawCandles = useMemo(
     () => (backtestSession ? rawCandles : withHtfHistory(rawCandles, htfHistory, config.timeframe)),
     [backtestSession, config.timeframe, htfHistory, rawCandles],
@@ -779,6 +780,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     replayAnalysisAccumulatorRef.current = next;
     return next.candles;
   }, [backtestSession?.startMs, config.timeframe, htfHistory, rawCandles, replayRawCandles, replayRevealedCount, sessionHistoryCandles]);
+  useResetViewOnHtfHistory(backtestSession ? null : chartApi, htf, config.timeframe);
   const requestOlderHistory = useCallback((oldestTime: number) => {
     if (!requestSessionHistory) return;
     setHistoryError(null);
