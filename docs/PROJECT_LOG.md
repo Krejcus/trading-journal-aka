@@ -293,6 +293,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   obchodů vs. denní objem IBKR 1,005, dnešní 1m svíčky IBKR od 18:00 ET,
   bez výpadku. Ticky ale chodí v dávkách ~každých 0,6 s (p50 626 ms,
   dávka p50 5 obchodů); hodiny Macu ±16 ms. Čerstvost ~0,3–1,5 s.
+- Souběžně IBKR vs. TV (CDP `last`, čtení po 50 ms), 15 min, 9:40–9:55:
+  IBKR ukáže stejnou cenu dřív v 80 % případů, medián o 351 ms
+  (p10 −184, p90 +884 ms); nejlepší posun řad TV za IBKR ~600 ms.
+  IBKR 3 159 změn ceny, TV jen 789 (TV kotaci slučuje ~1×/s). IBKR
+  úplné: objem 0,998, 14/14 minut OHLC shodných s 1m svíčkami IBKR.
+  Pozn.: první pokus v 9:24 skončil „0 kandidátů kontraktu“ (Gateway se
+  spojovala s farmou definic) → zdroj ve vlákně proto zkouší znovu za 30 s.
 - Fáze 2 (jen zobrazení, INV-UI-04/INV-WORKER-04/INV-RELAY-04/INV-FRESH-03):
   - `services/ibkrMarketData.ts`: jediný `IBApi` (zmrazené čtecí rozhraní,
     přesunuto ze sondy, + bid/ask); `services/ibkrPriceSource.ts`: spojení,
