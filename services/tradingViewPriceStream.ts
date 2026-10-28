@@ -18,6 +18,14 @@ export const TV_STREAM_HEARTBEAT_MS = 1_000;
 export const TV_STREAM_MAX_PER_SECOND = 5;
 /** Po chybě čtení se chvíli nečte (CDP mohlo spadnout; vlákno obnoví spojení). */
 export const TV_STREAM_ERROR_BACKOFF_MS = 1_000;
+/**
+ * Okamžité posílání (`nudge`): IBKR posílá obchody v dávkách ~2×/s, dávka
+ * trvá typicky 8 ms (p90 20 ms, měření 28. 10.). Čeká se 25 ms, aby šla celá
+ * dávka jednou zprávou. Rozestup zpráv = strop rozložený rovnoměrně: při
+ * souvislém proudu obchodů zprávy jdou po 200 ms, ne 5 naráz a pak ticho.
+ */
+export const TV_STREAM_NUDGE_COALESCE_MS = 25;
+export const TV_STREAM_MIN_GAP_MS = 1_000 / TV_STREAM_MAX_PER_SECOND;
 
 /**
  * Smí vlákno odeslat zprávu do kanálu? Shodné s `_canPush` realtime-js:
@@ -73,11 +81,22 @@ export interface TvPriceStreamStats {
 export interface TvPriceStream {
   start(): void;
   stop(): void;
+  /**
+   * Zdroj má nová data (dávka obchodů IBKR): přečíst a poslat hned, ne až
+   * v dalším kole po 250 ms. Strop zpráv i podpis platí stejně; mimo
+   * streamování nic nedělá. Nikdy nevyhodí.
+   */
+  nudge(): void;
   stats(): TvPriceStreamStats;
 }
 
+/**
+ * Co je „změna“, kvůli které se posílá hned. Bid/ask se posílají v každé
+ * zprávě, ale samy zprávu nevyvolají: appka je nezobrazuje a jejich změny
+ * (u IBKR ~4×/s) by ubraly ze stropu zpráv obchodům.
+ */
 const signature = (reading: TvStreamReading) =>
-  `${reading.chart}|${reading.interval}|${reading.pane}|${reading.bar?.join(',') ?? '-'}|${reading.last}|${reading.bid}|${reading.ask}|${reading.mode}`;
+  `${reading.chart}|${reading.interval}|${reading.pane}|${reading.bar?.join(',') ?? '-'}|${reading.last}|${reading.mode}`;
 
 export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
   const now = deps.now ?? Date.now;
@@ -89,16 +108,28 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
   const cancel = deps.clearTimeoutImpl ?? (timer => clearTimeout(timer as ReturnType<typeof setTimeout>));
   const stats: TvPriceStreamStats = { state: 'idle', reads: 0, sends: 0, skippedRateCap: 0, errors: 0, lastSendAt: null };
   let timer: unknown = null;
+  let timerDue = 0;
   let stopped = true;
   let inFlight = false;
+  /** `nudge` během čtení: po něm se čte znovu hned (s ohledem na rozestup). */
+  let nudged = false;
+  /** Po chybě čtení/odeslání `nudge` nečte dřív než po prodlevě (žádná smyčka pokusů). */
+  let backoffUntil = 0;
   let seq = 0;
   let lastSignature: string | null = null;
   const sendTimes: number[] = [];
 
   const next = (ms: number) => {
     if (stopped) return;
+    timerDue = now() + ms;
     timer = schedule(() => { timer = null; void tick(); }, ms);
   };
+
+  /** Prodleva čtení po `nudge`: doběhnutí dávky a rozestup od poslední zprávy. */
+  const nudgeDelay = () => Math.max(
+    TV_STREAM_NUDGE_COALESCE_MS,
+    stats.lastSendAt === null ? 0 : TV_STREAM_MIN_GAP_MS - (now() - stats.lastSendAt),
+  );
 
   const withinRateCap = (at: number) => {
     while (sendTimes.length && at - sendTimes[0] >= 1_000) sendTimes.shift();
@@ -154,9 +185,14 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
     } catch {
       stats.errors += 1;
       delay = TV_STREAM_ERROR_BACKOFF_MS;
+      backoffUntil = now() + TV_STREAM_ERROR_BACKOFF_MS;
     } finally {
       inFlight = false;
-      next(Math.max(0, delay - (now() - startedAt)));
+      let wait = Math.max(0, delay - (now() - startedAt));
+      // Po chybě čtení platí prodleva i pro `nudge` (CDP/zdroj se zotavuje).
+      if (nudged && delay !== TV_STREAM_ERROR_BACKOFF_MS) wait = Math.min(wait, nudgeDelay());
+      nudged = false;
+      next(wait);
     }
   };
 
@@ -172,6 +208,21 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
       stats.state = 'stopped';
       if (timer !== null) cancel(timer);
       timer = null;
+    },
+    nudge() {
+      try {
+        if (stopped || stats.state !== 'streaming' || now() < backoffUntil) return;
+        // Jeden řetěz časovačů: během čtení se jen poznamená, pak se čte znovu.
+        if (inFlight) { nudged = true; return; }
+        const wait = nudgeDelay();
+        // Čtení naplánované dřív (dávka už čeká nebo běžné kolo) přečte i tahle data.
+        if (timer !== null && timerDue <= now() + wait) return;
+        if (timer !== null) cancel(timer);
+        timer = null;
+        next(wait);
+      } catch {
+        stats.errors += 1;
+      }
     },
     stats: () => ({ ...stats }),
   };

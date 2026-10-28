@@ -119,6 +119,8 @@ export interface IbkrPriceSourceDeps {
   port?: number;
   clientId?: number;
   createClient?: (handlers: ReadOnlyIbHandlers) => ReadOnlyIbClient;
+  /** Po každém přijatém obchodu (vlákno podle toho pošle cenu hned, ne až v dalším kole). */
+  onTrade?: () => void;
   now?: () => number;
   setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
   clearTimeoutImpl?: (timer: unknown) => void;
@@ -458,6 +460,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
         bar.low = Math.min(bar.low, trade.price);
         bar.close = trade.price;
       }
+      try { deps.onTrade?.(); } catch { /* zdroj nikdy nevyhodí */ }
     },
     onBar: (reqId, bar) => {
       if (barsActive && (reqId === barsReqId || reqId === repairReqId)) storeBar(bar);

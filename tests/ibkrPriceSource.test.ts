@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ContractDetails } from '@stoqey/ib';
 import type { ReadOnlyIbClient, ReadOnlyIbHandlers } from '../services/ibkrMarketData';
 import { isTvPricePayload, type TvPricePayload } from '../lib/tvPriceMessage';
@@ -16,12 +16,13 @@ import {
 
 const T0 = Date.UTC(2026, 9, 28, 13, 30, 20);
 
-function harness() {
+function harness(onTrade?: () => void) {
   let clock = T0;
   const timers: { at: number; callback: () => void; id: number }[] = [];
   let nextId = 1;
   const clients: { handlers: ReadOnlyIbHandlers; calls: string[]; contractReqIds: number[]; barRequests: { reqId: number; duration: string; keep: boolean }[]; cancelledBars: number[] }[] = [];
   const source = createIbkrPriceSource({
+    onTrade,
     now: () => clock,
     setTimeoutImpl: (callback, ms) => { const id = nextId++; timers.push({ at: clock + ms, callback, id }); return id; },
     clearTimeoutImpl: id => { const index = timers.findIndex(timer => timer.id === id); if (index >= 0) timers.splice(index, 1); },
@@ -138,6 +139,19 @@ describe('zdroj ceny z IBKR', () => {
     expect(h.source.reading()).not.toBeNull();
     h.advance(IBKR_STALE_MS + 1);
     expect(h.source.reading()).toBeNull();
+  });
+
+  it('každý přijatý obchod ohlásí vláknu (okamžité posílání); chyba hlášení zdroj neshodí', () => {
+    const onTrade = vi.fn(() => { throw new Error('boom'); });
+    const h = harness(onTrade);
+    h.goLive();
+    h.fullMinute(100);
+    h.trade(100.25);
+    expect(onTrade).toHaveBeenCalledTimes(2);
+    expect(h.source.reading()?.last).toBe(100.25);
+    h.current().handlers.onTick?.(99, { time: Math.floor(h.now() / 1_000), price: 1, size: 1, receivedAt: h.now(), pastLimit: false, unreported: false });
+    expect(onTrade).toHaveBeenCalledTimes(2);
+    h.source.stop();
   });
 
   it('překřížený bid/ask se nepošle', () => {

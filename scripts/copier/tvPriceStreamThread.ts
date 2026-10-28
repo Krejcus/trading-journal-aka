@@ -275,7 +275,8 @@ const apply = async (next: StreamConfig) => {
   if (priceSource === 'ibkr' && !ibkr) {
     // Selhání IBKR nesmí zastavit čtení z TV v tomtéž vlákně.
     try {
-      const created = createIbkrPriceSource();
+      // Dávka obchodů = poslat hned; jen když je IBKR aktivní zdroj (na TV by to jen přidalo čtení CDP).
+      const created = createIbkrPriceSource({ onTrade: () => { if (sourceSwitch.active === 'ibkr') stream?.nudge(); } });
       created.start();
       ibkr = created;
     } catch {

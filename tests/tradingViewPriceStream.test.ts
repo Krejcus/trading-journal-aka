@@ -139,6 +139,133 @@ describe('jádro kanálu ceny z TV (vlákno workeru)', () => {
     t.stream.stop();
   });
 
+  it('nudge (dávka obchodů IBKR) pošle novou cenu za 25 ms, ne až v dalším kole po 250 ms', async () => {
+    const t = setup();
+    t.stream.start();
+    await vi.advanceTimersByTimeAsync(205);
+    expect(t.published).toHaveLength(1);
+    t.setReading(reading(29_147));
+    for (let index = 0; index < 50; index += 1) t.stream.nudge();
+    await vi.advanceTimersByTimeAsync(24);
+    expect(t.published).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(t.published).toHaveLength(2);
+    expect(t.published[1]).toMatchObject({ seq: 1, last: 29_147 });
+    // Celá dávka = jedno čtení; běžné kolo pak běží dál po 250 ms od něj.
+    const reads = (t.deps.read as ReturnType<typeof vi.fn>).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(200);
+    expect((t.deps.read as ReturnType<typeof vi.fn>).mock.calls.length).toBe(reads);
+    t.stream.stop();
+  });
+
+  it('nudge drží rozestup 200 ms od poslední zprávy', async () => {
+    const t = setup();
+    t.stream.start();
+    await vi.advanceTimersByTimeAsync(10);
+    t.setReading(reading(29_147));
+    t.stream.nudge();
+    await vi.advanceTimersByTimeAsync(180);
+    expect(t.published).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(t.published).toHaveLength(2);
+    t.stream.stop();
+  });
+
+  it('souvislý proud obchodů: zprávy rovnoměrně po 200 ms, strop se nezasekne', async () => {
+    let close = 29_000;
+    const t = setup({ read: vi.fn(async () => reading(close)) });
+    t.stream.start();
+    for (let ms = 0; ms < 3_000; ms += 7) {
+      close += 0.25;
+      t.stream.nudge();
+      await vi.advanceTimersByTimeAsync(7);
+    }
+    const times = t.published.map(item => item.at);
+    const gaps = times.slice(1).map((value, index) => value - times[index]);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(200);
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(260);
+    expect(t.stream.stats().skippedRateCap).toBe(0);
+    t.stream.stop();
+  });
+
+  it('po chybě odeslání nudge neobejde prodlevu 1 s', async () => {
+    const publish = vi.fn(async () => { throw new Error('socket'); });
+    const t = setup({ publish });
+    t.stream.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(publish).toHaveBeenCalledTimes(1);
+    for (let ms = 0; ms < 900; ms += 50) {
+      t.stream.nudge();
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    expect(publish).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(publish).toHaveBeenCalledTimes(2);
+    t.stream.stop();
+  });
+
+  it('stop zruší čtení naplánované přes nudge', async () => {
+    const t = setup();
+    t.stream.start();
+    await vi.advanceTimersByTimeAsync(300);
+    const reads = (t.deps.read as ReturnType<typeof vi.fn>).mock.calls.length;
+    t.stream.nudge();
+    t.stream.stop();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect((t.deps.read as ReturnType<typeof vi.fn>).mock.calls.length).toBe(reads);
+  });
+
+  it('nudge během čtení: po něm se čte znovu hned, jen jeden řetěz čtení', async () => {
+    let release: (() => void) | null = null;
+    let close = 29_145;
+    const read = vi.fn(() => new Promise<TvStreamReading | null>(resolve => { release = () => resolve(reading(close)); }));
+    const t = setup({ read });
+    t.stream.start();
+    await vi.advanceTimersByTimeAsync(1);
+    close = 29_146;
+    t.stream.nudge();
+    t.stream.nudge();
+    release!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.published).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(190);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(read).toHaveBeenCalledTimes(2);
+    close = 29_147;
+    release!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.published.map(item => item.last)).toEqual([29_146, 29_147]);
+    t.stream.stop();
+  });
+
+  it('nudge bez poslechu klienta ani po stop nic nečte', async () => {
+    const t = setup();
+    t.setDemand(false);
+    t.stream.start();
+    await vi.advanceTimersByTimeAsync(10);
+    t.stream.nudge();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(t.deps.read).not.toHaveBeenCalled();
+    t.stream.stop();
+    t.stream.nudge();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(t.deps.read).not.toHaveBeenCalled();
+  });
+
+  it('změna jen bid/ask zprávu nevyvolá (jede s další změnou nebo heartbeatem)', async () => {
+    const t = setup();
+    t.stream.start();
+    await vi.advanceTimersByTimeAsync(10);
+    t.setReading(reading(29_145, { bid: 29_144, ask: 29_145.25 }));
+    await vi.advanceTimersByTimeAsync(800);
+    expect(t.published).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(t.published).toHaveLength(2);
+    expect(t.published[1]).toMatchObject({ bid: 29_144, ask: 29_145.25 });
+    t.stream.stop();
+  });
+
   it('stop zastaví čtení i odesílání', async () => {
     const t = setup();
     t.stream.start();
