@@ -285,6 +285,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 20:30 — NASAZENO: FVG bez problikávání + prodloužení FVG doprava (Claude, Filip „nasaď jen FVG“)
+
+- Filip: nasadit jen FVG, nepřepsat mezitím nasazené zrychlení živých dat.
+  Commit `4135e7f2` přenesen rebasem na `41dfcd12` → `bc21380d` (jediný
+  konflikt: oba zápisy v deníku, ponechány oba). Zrychlení dat, oprava
+  svíčky a vlastní timeframy zůstaly beze změny.
+- Úprava kvůli vlastním timeframům: `carryFinishedLiveBars` a sjednocení
+  s barem dat v `useLiveCandleBinding` berou délku z `timeframeMinutes`
+  (`MARKET_TIMEFRAME_MINUTES` už zná jen pevné timeframy); neplatný
+  timeframe = žádný přenos, `1m` = délka 1 minuta, ne řetězec `'1m'`.
+- Brána (DISARMED): tsc, 5845 testů, build. Push ff na main, iPhone build
+  z Documents.
+
 ### 2026-10-28 20:05 — NASAZENO: okamžité posílání ceny, oprava svíčky, vlastní timeframy (Claude, Filip „nasaď“)
 
 - Push na main `0448e0d2` (ff, Vercel READY). Brána: 5838 testů, tsc, build.
