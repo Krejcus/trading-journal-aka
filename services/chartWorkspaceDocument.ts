@@ -3,6 +3,7 @@ import type { ChartAppearanceState } from './chartAppearanceScope';
 import type { WorkspaceSnapshot } from './chartWorkspaceHistory';
 import { CHART_WORKSPACE_LAYOUTS, type ChartWorkspaceLayoutId } from './chartWorkspaceLayouts';
 import type { ChartWorkspaceSyncSettings } from './chartWorkspaceSync';
+import { isMarketTimeframe } from './marketDataCalculations';
 
 export interface CompleteChartWorkspaceState {
   layout: unknown;
@@ -42,7 +43,7 @@ export const validateChartWorkspaceLayout = (value: unknown, options: ChartWorks
       if (instance.id !== node.id || instance.kind !== 'alphatrade-chart' || !record(instance.config)) return fail();
       if (instance.title !== undefined && typeof instance.title !== 'string') return fail();
       const config = instance.config;
-      if (!['MNQ', 'NQ'].includes(String(config.root)) || !['1m', '5m', '15m', '30m', '1h', '4h', '1d'].includes(String(config.timeframe))) return fail();
+      if (!['MNQ', 'NQ'].includes(String(config.root)) || !isMarketTimeframe(config.timeframe)) return fail();
       if (options.allowedRoots && !options.allowedRoots.includes(String(config.root))) throw new Error(`Instrument ${config.root} není v této session povolen. Současné rozložení zůstalo zachováno.`);
       if (!['showFvg', 'showLevels', 'showStructure'].every(key => config[key] === undefined || typeof config[key] === 'boolean')) return fail();
       ids.add(node.id);

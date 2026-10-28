@@ -8,7 +8,7 @@ import AlphaTradeChartWorkspace, { type ReviewSlotElements, type WorkspacePanelO
 import { QuantumSpinner } from '../QuantumLoader';
 import { chartNotesOfTrades } from '../../lib/chartNotes';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
-import { MARKET_TIMEFRAME_MINUTES } from '../../services/marketData';
+import { timeframeMinutes } from '../../services/marketData';
 import { tradeChartTiming } from '../../services/tradeChartData';
 import { DAY_BIAS_LABEL, DAY_EXECUTION_LABEL, carryForward, sessionWindows, type DaySession } from '../../lib/dayJournal';
 import { sessionStage, type StreakDay } from '../../lib/dayJournalView';
@@ -60,7 +60,7 @@ function PanelOverlay({ panel, store, liveStore }: { panel: WorkspacePanelOverla
         chartApi={panel.chartApi}
         containerRef={panel.containerRef}
         barTimes={panel.barTimes}
-        intervalSeconds={MARKET_TIMEFRAME_MINUTES[panel.timeframe] * 60}
+        intervalSeconds={timeframeMinutes(panel.timeframe) * 60}
         pins={state.pins}
         selectedId={state.selectedId}
         onSelect={state.onSelect}

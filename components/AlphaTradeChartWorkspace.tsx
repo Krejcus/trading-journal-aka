@@ -51,7 +51,8 @@ import {
 import { Trade } from '../types';
 import {
   aggregateCandles,
-  MARKET_TIMEFRAME_MINUTES,
+  isMarketTimeframe,
+  timeframeMinutes,
   loadTradeMarketCandles,
   marketDataSchemaForTimeframe,
   marketDataWindowForEntry,
@@ -497,11 +498,10 @@ const buildWorkspaceLayout = (
  * rozložení stejné, jak sis ho nechal. Instrument se bere vždy z obchodu.
  */
 const panelTimeframesKey = (layoutKey: string) => `${layoutKey}:timeframes`;
-const MARKET_TIMEFRAMES: readonly MarketTimeframe[] = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
 const loadPanelTimeframes = (layoutKey: string): MarketTimeframe[] => {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(panelTimeframesKey(layoutKey)) ?? 'null') as unknown;
-    return Array.isArray(parsed) ? parsed.filter((value): value is MarketTimeframe => MARKET_TIMEFRAMES.includes(value as MarketTimeframe)) : [];
+    return Array.isArray(parsed) ? parsed.filter(isMarketTimeframe) : [];
   } catch { return []; }
 };
 const savePanelTimeframes = (layoutKey: string, timeframes: MarketTimeframe[]) => {
@@ -1772,7 +1772,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           count += 1;
           const instance = (node as FlexLayoutNode & { getConfig?: () => { config?: Partial<WorkspacePanelConfig> } | undefined }).getConfig?.();
           const timeframe = instance?.config?.timeframe;
-          if (timeframe && MARKET_TIMEFRAMES.includes(timeframe)) timeframes.push(timeframe);
+          if (timeframe && isMarketTimeframe(timeframe)) timeframes.push(timeframe);
         }
         if (node.getType() !== 'tabset') return;
         const tabset = node as FlexLayoutNode & { isMaximized?: () => boolean; isEnableTabStrip?: () => boolean; getSelectedNode?: () => FlexLayoutNode | undefined };
@@ -2026,7 +2026,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   /** Automatický snímek celého obchodu z 1m grafu jeho trhu (fullscreen, vycentrovaný). */
   const captureTradeSnapshot = useCallback(async (snapshotTrade: Trade) => {
     const root = snapshotTrade.instrument ?? snapshotTrade.symbol;
-    const minutes = (control: { config: WorkspacePanelConfig }) => MARKET_TIMEFRAME_MINUTES[control.config.timeframe] ?? Infinity;
+    const minutes = (control: { config: WorkspacePanelConfig }) => timeframeMinutes(control.config.timeframe) ?? Infinity;
     const pick = () => [...panelControlsRef.current.values()]
       .filter(control => control.chartApi && (!root || control.config.root === root))
       .sort((left, right) => minutes(left) - minutes(right))[0];

@@ -13,7 +13,7 @@ import { isPositionDrawing } from '../../services/chartPositionDrawing';
 import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 import type { FibDrawing } from '../../services/chartFibDrawing';
 import { QuantumSpinner } from '../QuantumLoader';
-import { aggregateCandles, MARKET_TIMEFRAME_MINUTES, type MarketCandle, type MarketTimeframe } from '../../services/marketData';
+import { aggregateCandles, timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../../services/marketData';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
 import { getDrawingMagnetSettings, setDrawingMagnetSettings, subscribeDrawingMagnetSettings } from '../../services/chartDrawingMagnet';
@@ -646,7 +646,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
                 chartApi={paneApi(index)}
                 containerRef={ref}
                 barTimes={times}
-                intervalSeconds={MARKET_TIMEFRAME_MINUTES[paneTf] * 60}
+                intervalSeconds={timeframeMinutes(paneTf) * 60}
                 pins={pins}
                 selectedId={ctl.selected?.kind === 'note' ? ctl.selected.id : null}
                 onSelect={id => ctl.setSelected(id ? { kind: 'note', id } : null)}

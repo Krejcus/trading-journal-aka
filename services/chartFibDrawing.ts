@@ -1,5 +1,5 @@
 import type { Drawing, DrawingEngine, DrawingStyle } from '@getcandlekit/charts';
-import type { MarketTimeframe } from './marketData';
+import { timeframeMinutes as marketTimeframeMinutes, type MarketTimeframe } from './marketData';
 import { rememberDrawingStyleDefault } from './chartDrawingStyleDefaults';
 
 export type FibLineStyle = 'solid' | 'dashed' | 'dotted';
@@ -189,11 +189,10 @@ export const getFibSettings = (drawing?: Drawing | null): FibRetracementSettings
   normalizeFibSettings((drawing as FibDrawing | null)?.style?.fib)
 );
 
+/** Minuty timeframe pro viditelnost fib úrovní (vlastní, týden i měsíc); neznámý = 1. */
 export const timeframeMinutes = (timeframe: MarketTimeframe): number => {
-  if (timeframe.endsWith('m')) return Number.parseInt(timeframe, 10);
-  if (timeframe.endsWith('h')) return Number.parseInt(timeframe, 10) * 60;
-  if (timeframe.endsWith('d')) return Number.parseInt(timeframe, 10) * 1440;
-  return 1;
+  const minutes = marketTimeframeMinutes(timeframe);
+  return Number.isFinite(minutes) ? minutes : 1;
 };
 
 export const fibVisibleAtMinutes = (settings: FibRetracementSettings, minutes: number): boolean => {

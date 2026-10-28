@@ -86,10 +86,11 @@ import {
   findEntryFairValueGap,
   findEntryStructureEvent,
   findFairValueGaps,
-  MARKET_TIMEFRAME_MINUTES,
+  nearestBuiltinTimeframe,
   updateFairValueGapAccumulator,
   fairValueGapsWithFormingBar,
   updateMarketStructureAccumulator,
+  type BuiltinMarketTimeframe,
   type FairValueGap,
   type FairValueGapAccumulator,
   type MarketCandle,
@@ -683,7 +684,7 @@ export const WorkspaceIndicatorMenu: React.FC<{
   );
 };
 
-const CONTEXT_BARS: Record<MarketTimeframe, { before: number; after: number }> = {
+const CONTEXT_BARS: Record<BuiltinMarketTimeframe, { before: number; after: number }> = {
   '1m': { before: 45, after: 45 },
   '5m': { before: 48, after: 24 },
   '15m': { before: 32, after: 16 },
@@ -705,7 +706,7 @@ const EMPTY_LIQUIDITY_LEVELS: LiquidityLevelsResult = {
   dayContext: EMPTY_LIQUIDITY_DAY_CONTEXT,
 };
 
-const INITIAL_WINDOW_BARS: Record<MarketTimeframe, { before: number; after: number; chunk: number }> = {
+const INITIAL_WINDOW_BARS: Record<BuiltinMarketTimeframe, { before: number; after: number; chunk: number }> = {
   '1m': { before: 1_200, after: 600, chunk: 1_500 },
   '5m': { before: 700, after: 350, chunk: 900 },
   '15m': { before: 450, after: 220, chunk: 600 },
@@ -715,7 +716,7 @@ const INITIAL_WINDOW_BARS: Record<MarketTimeframe, { before: number; after: numb
   '1d': { before: 30, after: 8, chunk: 30 },
 };
 
-const COMPACT_WINDOW_BARS: Record<MarketTimeframe, { before: number; after: number; chunk: number }> = {
+const COMPACT_WINDOW_BARS: Record<BuiltinMarketTimeframe, { before: number; after: number; chunk: number }> = {
   '1m': { before: 320, after: 180, chunk: 750 },
   '5m': { before: 240, after: 120, chunk: 500 },
   '15m': { before: 180, after: 90, chunk: 360 },
@@ -725,7 +726,7 @@ const COMPACT_WINDOW_BARS: Record<MarketTimeframe, { before: number; after: numb
   '1d': { before: 20, after: 6, chunk: 20 },
 };
 
-const LEVEL_CONTEXT_BARS: Record<MarketTimeframe, number> = {
+const LEVEL_CONTEXT_BARS: Record<BuiltinMarketTimeframe, number> = {
   '1m': 12_000,
   '5m': 3_000,
   '15m': 1_200,
@@ -814,7 +815,7 @@ const initialCandleWindow = (
   compactMode: boolean,
 ): CandleWindow => {
   if (candles.length === 0) return { start: 0, end: 0 };
-  const sizing = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[timeframe];
+  const sizing = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[nearestBuiltinTimeframe(timeframe)];
   const entryIndex = nearestCandleIndex(candles, asUnix(trade.entryTime || trade.entryDate, entryMs));
   const exitIndex = nearestCandleIndex(candles, asUnix(trade.timestamp || trade.exitDate, exitMs));
   return {
@@ -2790,7 +2791,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       if (!visibleLevels) return EMPTY_LIQUIDITY_LEVELS;
       const source = candlesRef.current;
       const end = renderedCandleWindowRef.current.end;
-      const start = Math.max(0, end - LEVEL_CONTEXT_BARS[timeframe]);
+      const start = Math.max(0, end - LEVEL_CONTEXT_BARS[nearestBuiltinTimeframe(timeframe)]);
       return calculateLiquidityLevels(candleWindowSlice(source, { start, end }), indicatorSettings.levels);
     },
     // Mimo replay řídí přepočet přímo identita candles (jako dřív); za
@@ -3445,7 +3446,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   }, [rawCandles, trade]);
   const centeredTradeRange = useCallback((override?: { entryMs: number; exitMs: number }): { from: number; to: number } | null => {
     if (visibleCandles.length === 0) return null;
-    const intervalSeconds = MARKET_TIMEFRAME_MINUTES[timeframe] * 60;
+    const intervalSeconds = timeframeMinutes(timeframe) * 60;
     const newest = visibleCandles.length - 1;
     const lastTime = Number(visibleCandles[newest].time);
     const logicalAt = (unix: number) => unix > lastTime ? newest + (unix - lastTime) / intervalSeconds : nearestCandleIndex(visibleCandles, unix);
@@ -3478,7 +3479,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const chart = api.controller.getChart();
       // Při přehrávání v detailu drží osa rozsah celého obchodu — nepřepočítávat.
       if (!(centeredTradeView && replayActive)) chart.priceScale('right').setAutoScale(true);
-      const context = CONTEXT_BARS[timeframe];
+      const context = CONTEXT_BARS[nearestBuiltinTimeframe(timeframe)];
       const entryIndex = nearestCandleIndex(visibleCandles, asUnix(trade.entryTime || trade.entryDate, entryMs));
       const exitIndex = nearestCandleIndex(visibleCandles, asUnix(trade.timestamp || trade.exitDate, exitMs));
       if (centeredTradeView || reviewMode) {
@@ -4038,7 +4039,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const target = Number(trade.takeProfit);
       const riskEnd = nearestCandleTime(visibleCandles, Math.max(
         Number(exitTime),
-        Number(entryTime) + Math.max(10, MARKET_TIMEFRAME_MINUTES[timeframe]) * 60,
+        Number(entryTime) + Math.max(10, timeframeMinutes(timeframe)) * 60,
       ));
       if (!replayActive && !trade.executionHistory && Number.isFinite(entry) && entry > 0 && Number.isFinite(stop) && stop > 0) {
         commitOnce({
@@ -4310,7 +4311,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       }
       expandingWindowRef.current = true;
       if (!replayActive) {
-        const chunk = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[timeframe].chunk;
+        const chunk = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[nearestBuiltinTimeframe(timeframe)].chunk;
         setCandleWindow(current => ({
           start: nearLeftEdge ? Math.max(0, current.start - chunk) : current.start,
           end: nearRightEdge ? Math.min(currentCandles.length, current.end + chunk) : current.end,
@@ -4513,7 +4514,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     };
   }, [chartApiEpoch]);
   useEffect(() => {
-    reviewPointRef.current?.setCandles(visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60);
+    reviewPointRef.current?.setCandles(visibleCandles, timeframeMinutes(timeframe) * 60);
   }, [visibleCandles, timeframe, chartApiEpoch, reviewMode]);
   const startReviewFocus = useCallback((target: { entryMs: number; exitMs: number; id?: string }) => {
     const api = apiRef.current;
@@ -4644,9 +4645,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // Barvy boxu jsou sdílené s nástrojem Long/Short Position z backtestu.
       getDrawingStyleDefault(trade.direction === 'Short' ? 'ShortPosition' : 'LongPosition', DEFAULT_STYLE),
       // Detail má na ose jen vstup a výstup (TradeMarketChart) — box bez štítků.
-      visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60, chartSettings.trading.orderPriceLabels && !centeredTradeView, coverage) : null;
+      visibleCandles, timeframeMinutes(timeframe) * 60, chartSettings.trading.orderPriceLabels && !centeredTradeView, coverage) : null;
     const primitive = createJournalChartPrimitive(trade.executionHistory, visibleCandles,
-      MARKET_TIMEFRAME_MINUTES[timeframe] * 60, api.controller.getChart(), series, coverage,
+      timeframeMinutes(timeframe) * 60, api.controller.getChart(), series, coverage,
       { direction: trade.direction, autoscaleLevels: centeredTradeView, highlightMs, highlightContinues, arrowStacks: stackOptionOf(trade), hideResultLabel: hideTradeResult,
         // Obchod bez position boxu (jen SL, jen TP, SL až po vstupu, bez obou)
         // dostane výsledkový box a štítek, co při vstupu chybělo.
@@ -4659,7 +4660,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       ? autoPinnedRef.current === id ? 'static' as const : 'animate' as const : undefined;
     if (autoPin) autoPinnedRef.current = id;
     const entryOrders = trade.executionHistory.entryOrders?.length
-      ? createEntryOrdersPrimitive(trade.executionHistory.entryOrders, visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
+      ? createEntryOrdersPrimitive(trade.executionHistory.entryOrders, visibleCandles, timeframeMinutes(timeframe) * 60,
         api.controller.getChart(), series, coverage, { isDark, pointValue: tradedRoot === 'NQ' ? 20 : 2, autoPin }) : null;
     if (position) series.attachPrimitive(position);
     series.attachPrimitive(primitive);
@@ -4694,10 +4695,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // Position box (bez štítků na ose; vybraný kreslí hlavní vrstva).
       const box = showManagedPositionBoxes ? createJournalPositionPrimitive(other,
         getDrawingStyleDefault(other.direction === 'Short' ? 'ShortPosition' : 'LongPosition', DEFAULT_STYLE),
-        visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60, false, coverage) : null;
+        visibleCandles, timeframeMinutes(timeframe) * 60, false, coverage) : null;
       if (box) boxes.push({ ...box, paneViews: () => hidden() ? [] : box.paneViews?.() ?? [], priceAxisViews: () => [] } as ISeriesPrimitive<Time>);
       const root = resolveNasdaqFuturesRoot(undefined, other.symbol || other.instrument);
-      const layer = createJournalChartPrimitive(other.executionHistory!, visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
+      const layer = createJournalChartPrimitive(other.executionHistory!, visibleCandles, timeframeMinutes(timeframe) * 60,
         api.controller.getChart(), series, coverage,
         { direction: other.direction, muted: true, pointValue: root === 'NQ' ? 20 : 2, instrument: root, isHidden: hidden,
           // Bez position boxu výsledkový box, stejně jako u vybraného obchodu.
@@ -4722,8 +4723,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const desired = replayActive && latestTime !== null
       ? managedPositionBoxes.map(box => managedPositionDrawing(
           box,
-          Number(latestTime) + MARKET_TIMEFRAME_MINUTES[timeframe] * 60 * 5,
-          MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
+          Number(latestTime) + timeframeMinutes(timeframe) * 60 * 5,
+          timeframeMinutes(timeframe) * 60,
           chartSettings.trading.orderPriceLabels,
         ))
       : [];
@@ -4988,7 +4989,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     if (!series) return;
     const times = futureAxisTimes(
       futureAxisLastTime,
-      MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
+      timeframeMinutes(timeframe) * 60,
       FUTURE_AXIS_BARS,
     );
     try {
@@ -5117,7 +5118,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     if (!api || !chartSettings.scales.countdownToBarClose) return;
     const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
     const primitive = createBarCountdownPrimitive({
-      timeframeMinutes: () => MARKET_TIMEFRAME_MINUTES[countdownClockRef.current.timeframe],
+      timeframeMinutes: () => timeframeMinutes(countdownClockRef.current.timeframe),
       // V přehrávání je „teď" kurzor přehrávání, ne hodiny na zdi.
       nowSeconds: () => {
         const clock = countdownClockRef.current;

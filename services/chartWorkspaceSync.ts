@@ -1,6 +1,6 @@
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { IChartApi, Time, UTCTimestamp } from 'lightweight-charts';
-import { MARKET_TIMEFRAME_MINUTES, type MarketCandle, type MarketTimeframe } from './marketData';
+import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from './marketData';
 import { roundNqMnqPriceToTick } from './chartPriceTick';
 
 export interface ChartWorkspaceSyncSettings {
@@ -101,7 +101,7 @@ export const syncedCrosshairTime = (params: {
 };
 
 const intervalSecondsOf = (control: WorkspaceChartSyncControl): number | undefined => {
-  const minutes = control.config?.timeframe ? MARKET_TIMEFRAME_MINUTES[control.config.timeframe] : undefined;
+  const minutes = control.config?.timeframe ? timeframeMinutes(control.config.timeframe) : undefined;
   return minutes ? minutes * 60 : undefined;
 };
 

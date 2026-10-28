@@ -1,5 +1,5 @@
 import { formingReplayBar, formingReplayBase } from '../services/chartReplayForming';
-import { MARKET_TIMEFRAME_MINUTES, type MarketCandle, type MarketTimeframe } from '../services/marketData';
+import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../services/marketData';
 
 /**
  * Zdroj rozpracované (živé) 1m svíčky pro grafy — jen zobrazení. Graf o
@@ -49,7 +49,7 @@ export function planLiveCandleUpdate(input: {
 }): MarketCandle | null {
   const { lastBar, live, timeframe, rawCandles } = input;
   if (!lastBar || !Number.isFinite(lastBar.ts)) return null;
-  const minutes = MARKET_TIMEFRAME_MINUTES[timeframe];
+  const minutes = timeframeMinutes(timeframe);
   if (!Number.isFinite(minutes) || minutes < 1) return null;
   const lastTime = Math.floor(lastBar.ts / 1_000);
   const reference = previousClose(rawCandles, live.time) ?? lastBar.close ?? null;

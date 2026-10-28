@@ -1,5 +1,11 @@
 /** Pure market calculations shared by charts and analytics workers. No transport, auth or storage. */
-export type MarketTimeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d';
+/** Pevné timeframy (tabulky kontextu a okna grafu jsou laděné na ně). */
+export type BuiltinMarketTimeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d';
+/**
+ * Timeframe grafu: pevný, vlastní počet minut (`7m`) nebo hodin (`2h`),
+ * týden (`W`) a měsíc (`M`). Vlastní se skládá z 1m (nebo 1h) stejně jako pevný.
+ */
+export type MarketTimeframe = BuiltinMarketTimeframe | `${number}m` | `${number}h` | 'W' | 'M';
 export type MarketDataSchema = 'ohlcv-1m' | 'ohlcv-1h';
 
 export interface MarketCandle {
@@ -144,7 +150,7 @@ export function findEntryStructureEvent(
   return eligible.find(event => event.type === desiredType) ?? eligible[0] ?? null;
 }
 
-export const MARKET_TIMEFRAME_MINUTES: Record<MarketTimeframe, number> = {
+export const MARKET_TIMEFRAME_MINUTES: Record<BuiltinMarketTimeframe, number> = {
   '1m': 1,
   '5m': 5,
   '15m': 15,
@@ -154,8 +160,53 @@ export const MARKET_TIMEFRAME_MINUTES: Record<MarketTimeframe, number> = {
   '1d': 1_440,
 };
 
-export const marketDataSchemaForTimeframe = (timeframe: MarketTimeframe): MarketDataSchema =>
-  MARKET_TIMEFRAME_MINUTES[timeframe] >= 60 ? 'ohlcv-1h' : 'ohlcv-1m';
+/** Vlastní minuty 1–720 (12 h), hodiny 1–23; svíčky se počítají od otevření CME session. */
+export const CUSTOM_TIMEFRAME_LIMITS = { m: { min: 1, max: 720 }, h: { min: 1, max: 23 } } as const;
+const WEEK_MINUTES = 7 * 1_440;
+/** Měsíc jen pro rozestupy a mezery (svíčky se skládají podle kalendáře). */
+const MONTH_MINUTES = 30 * 1_440;
+
+/** `'7m'` / `'2h'` / `'W'` / `'M'` / pevný → platný timeframe, jinak `null`. */
+export function parseMarketTimeframe(value: unknown): { unit: 'm' | 'h' | 'd' | 'W' | 'M'; count: number } | null {
+  if (value === 'W' || value === 'M') return { unit: value, count: 1 };
+  if (value === '1d') return { unit: 'd', count: 1 };
+  if (typeof value !== 'string') return null;
+  const match = /^([1-9]\d{0,3})(m|h)$/.exec(value);
+  if (!match) return null;
+  const count = Number(match[1]);
+  const unit = match[2] as 'm' | 'h';
+  const limits = CUSTOM_TIMEFRAME_LIMITS[unit];
+  return count >= limits.min && count <= limits.max ? { unit, count } : null;
+}
+
+export const isMarketTimeframe = (value: unknown): value is MarketTimeframe => parseMarketTimeframe(value) !== null;
+
+/** Délka timeframe v minutách (týden 7 dní, měsíc ~30 dní); neplatný = NaN. */
+export function timeframeMinutes(timeframe: MarketTimeframe): number {
+  const parsed = parseMarketTimeframe(timeframe);
+  if (!parsed) return Number.NaN;
+  if (parsed.unit === 'm') return parsed.count;
+  if (parsed.unit === 'h') return parsed.count * 60;
+  if (parsed.unit === 'd') return 1_440;
+  return parsed.unit === 'W' ? WEEK_MINUTES : MONTH_MINUTES;
+}
+
+const BUILTIN_TIMEFRAMES = Object.keys(MARKET_TIMEFRAME_MINUTES) as BuiltinMarketTimeframe[];
+
+/** Nejbližší pevný timeframe (pro tabulky kontextu a velikosti okna grafu). */
+export function nearestBuiltinTimeframe(timeframe: MarketTimeframe): BuiltinMarketTimeframe {
+  if ((BUILTIN_TIMEFRAMES as string[]).includes(timeframe)) return timeframe as BuiltinMarketTimeframe;
+  const minutes = timeframeMinutes(timeframe);
+  if (!Number.isFinite(minutes)) return '1m';
+  return BUILTIN_TIMEFRAMES.reduce((best, candidate) =>
+    Math.abs(Math.log(MARKET_TIMEFRAME_MINUTES[candidate] / minutes)) < Math.abs(Math.log(MARKET_TIMEFRAME_MINUTES[best] / minutes)) ? candidate : best);
+}
+
+/** 1h zdroj jen když se z hodin dá timeframe přesně složit (ne 90m). */
+export const marketDataSchemaForTimeframe = (timeframe: MarketTimeframe): MarketDataSchema => {
+  const minutes = timeframeMinutes(timeframe);
+  return minutes >= 60 && minutes % 60 === 0 ? 'ohlcv-1h' : 'ohlcv-1m';
+};
 
 export function completedHistoricalCandles(params: {
   candles: MarketCandle[];
@@ -177,7 +228,8 @@ export function completedHistoricalCandles(params: {
 export function composeReplayTimeframeCandles(params: {
   historicalHourly: MarketCandle[];
   revealedMinute: MarketCandle[];
-  timeframe: Extract<MarketTimeframe, '1h' | '4h' | '1d'>;
+  /** Hodinové a vyšší (skládá se z hotových 1h svíček a odkrytých 1m). */
+  timeframe: MarketTimeframe;
   replayStartSeconds: number;
 }): MarketCandle[] {
   const completedHistoricalHours = params.historicalHourly.filter(
@@ -229,12 +281,12 @@ const appendAggregatedCandle = (
   candle: MarketCandle,
   timeframe: MarketTimeframe,
 ) => {
-  const minutes = MARKET_TIMEFRAME_MINUTES[timeframe];
+  const minutes = timeframeMinutes(timeframe);
   if (minutes === 1) {
     target.push({ ...candle });
     return;
   }
-  const time = cmeBucketStart(candle.time, minutes);
+  const time = timeframeBucketStart(candle.time, timeframe);
   const current = target[target.length - 1];
   if (!current || current.time !== time) {
     target.push({ ...candle, time });
@@ -468,12 +520,13 @@ export function priceDistanceFromCandle(candles: readonly MarketCandle[], atMs: 
 }
 
 export function aggregateCandles(candles: MarketCandle[], timeframe: MarketTimeframe): MarketCandle[] {
-  const minutes = MARKET_TIMEFRAME_MINUTES[timeframe];
+  const minutes = timeframeMinutes(timeframe);
   if (minutes === 1) return candles.slice();
+  if (!Number.isFinite(minutes)) return [];
   const result: MarketCandle[] = [];
 
   for (const candle of candles) {
-    const time = cmeBucketStart(candle.time, minutes);
+    const time = timeframeBucketStart(candle.time, timeframe);
     const current = result[result.length - 1];
     if (!current || current.time !== time) {
       result.push({ ...candle, time });
@@ -492,6 +545,23 @@ const nyParts = new Intl.DateTimeFormat('en-US', {
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
   hourCycle: 'h23',
 });
+
+/**
+ * Začátek svíčky timeframe pro čas v sekundách. Minuty, hodiny a den od otevření
+ * CME session (18:00 New York); týden a měsíc podle obchodního dne (session od
+ * neděle 18:00 patří k pondělí) — čas svíčky je pevný bod týdne/měsíce (UTC
+ * půlnoc pondělí / 1. dne − 6 h), stejný pro všechny jeho svíčky.
+ */
+export function timeframeBucketStart(unixSeconds: number, timeframe: MarketTimeframe): number {
+  const parsed = parseMarketTimeframe(timeframe);
+  if (!parsed) return unixSeconds;
+  if (parsed.unit === 'W' || parsed.unit === 'M') {
+    const day = tradingDayKey(unixSeconds);
+    const anchor = parsed.unit === 'W' ? weekKey(day) : `${day.slice(0, 7)}-01`;
+    return Date.parse(`${anchor}T00:00:00Z`) / 1_000 - 6 * 60 * 60;
+  }
+  return cmeBucketStart(unixSeconds, timeframeMinutes(timeframe));
+}
 
 /** Align intraday and daily bars to the CME equity-index session opening at 18:00 New York. */
 function cmeBucketStart(unixSeconds: number, minutes: number): number {

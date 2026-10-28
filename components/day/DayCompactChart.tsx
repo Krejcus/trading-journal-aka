@@ -8,7 +8,7 @@ import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Trade } from '../../types';
 import CandleKitTradeChart from '../CandleKitTradeChart';
 import { QuantumSpinner } from '../QuantumLoader';
-import { aggregateCandles, MARKET_TIMEFRAME_MINUTES, type MarketTimeframe } from '../../services/marketData';
+import { aggregateCandles, timeframeMinutes, type MarketTimeframe } from '../../services/marketData';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
 import ChartNotesLayer from '../ChartNotesLayer';
@@ -144,7 +144,7 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
           chartApi={api}
           containerRef={containerRef}
           barTimes={barTimes}
-          intervalSeconds={MARKET_TIMEFRAME_MINUTES[timeframe] * 60}
+          intervalSeconds={timeframeMinutes(timeframe) * 60}
           pins={pins}
           selectedId={ctl.selected?.kind === 'note' ? ctl.selected.id : null}
           onSelect={id => ctl.setSelected(id ? { kind: 'note', id } : null)}

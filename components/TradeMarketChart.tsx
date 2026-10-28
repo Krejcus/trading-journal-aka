@@ -49,9 +49,11 @@ import {
   findEntryFairValueGap,
   findEntryStructureEvent,
   findFairValueGaps,
-  MARKET_TIMEFRAME_MINUTES,
+  nearestBuiltinTimeframe,
+  timeframeMinutes,
   MarketDataError,
   resolveMarketSymbol,
+  type BuiltinMarketTimeframe,
   type MarketCandle,
   type MarketCandleResponse,
   type MarketTimeframe,
@@ -111,7 +113,7 @@ const REPLAY_TICK_MS = 500;
 const floorMinute = (unix: number) => Math.floor(unix / 60) * 60;
 const clockAt = (unix: number) => new Intl.DateTimeFormat('cs-CZ', { timeZone: 'Europe/Prague', hour: 'numeric', minute: '2-digit' }).format(unix * 1000);
 
-const TRADE_CONTEXT_BARS: Record<MarketTimeframe, { before: number; after: number }> = {
+const TRADE_CONTEXT_BARS: Record<BuiltinMarketTimeframe, { before: number; after: number }> = {
   '1m': { before: 45, after: 45 },
   '5m': { before: 48, after: 24 },
   '15m': { before: 32, after: 16 },
@@ -169,7 +171,7 @@ const focusChartOnTrade = (
   exitUnix: number,
 ) => {
   if (!chart || candles.length === 0) return;
-  const context = TRADE_CONTEXT_BARS[timeframe];
+  const context = TRADE_CONTEXT_BARS[nearestBuiltinTimeframe(timeframe)];
   const entryIndex = nearestCandleIndex(candles, entryUnix);
   const exitIndex = nearestCandleIndex(candles, exitUnix);
   chart.timeScale().setVisibleLogicalRange({
@@ -766,7 +768,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     const target = Number(trade.takeProfit);
     const riskEnd = nearestCandleTime(candles, Math.max(
       exitTime as number,
-      entryTime as number + Math.max(10, MARKET_TIMEFRAME_MINUTES[timeframe]) * 60,
+      entryTime as number + Math.max(10, timeframeMinutes(timeframe)) * 60,
     ));
     if (Number.isFinite(entry) && entry > 0 && Number.isFinite(stop) && stop > 0) {
       attachDrawing(new Rectangle(

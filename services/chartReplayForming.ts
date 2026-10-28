@@ -1,4 +1,4 @@
-import { aggregateCandles, MARKET_TIMEFRAME_MINUTES, type MarketCandle, type MarketTimeframe } from './marketData';
+import { aggregateCandles, timeframeMinutes, type MarketCandle, type MarketTimeframe } from './marketData';
 
 /**
  * Rozpracovaná svíčka plynulého Bar Replaye na libovolném timeframu.
@@ -16,7 +16,7 @@ export const formingReplayBase = (
   cursorTime: number,
   timeframe: MarketTimeframe,
 ): MarketCandle | null => {
-  const minutes = MARKET_TIMEFRAME_MINUTES[timeframe];
+  const minutes = timeframeMinutes(timeframe);
   if (!Number.isFinite(minutes) || minutes <= 1) return null;
   // Celý interval aktuálního baru se vejde do posledních `minutes` 1m svíček.
   const tail: MarketCandle[] = [];
