@@ -49,6 +49,8 @@ import {
   X,
 } from 'lucide-react';
 import { Trade } from '../types';
+import { useHtfHistory } from '../hooks/useHtfHistory';
+import { withHtfHistory } from '../services/htfHistory';
 import {
   aggregateCandles,
   isMarketTimeframe,
@@ -425,6 +427,8 @@ interface WorkspacePanelControl {
   drawingEngine: CandleKitDrawingEngine | null;
   chartApi: ChartViewApi | null;
   rawCandles: MarketCandle[];
+  /** 1m data i s hodinovou historií vyššího timeframu — pro rozpracovaný bar živé svíčky (M začal před 1m daty). */
+  liveRawCandles: MarketCandle[];
   getCandles: () => MarketCandle[];
   getIndicatorState: () => WorkspaceIndicatorState;
   applyIndicatorState: (state: WorkspaceIndicatorState) => void;
@@ -754,10 +758,16 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     [rawCandles, replayRevealedCount],
   );
   const replayAnalysisAccumulatorRef = useRef<ReplayAnalysisAccumulator | null>(null);
+  // Deník: na timeframu z hodin (1h+, D, W, M) hodinová historie Databento před 1m daty grafu.
+  const htfHistory = useHtfHistory(config.root, backtestSession ? [] : [config.timeframe], rawCandles[0]?.time);
+  const liveRawCandles = useMemo(
+    () => (backtestSession ? rawCandles : withHtfHistory(rawCandles, htfHistory, config.timeframe)),
+    [backtestSession, config.timeframe, htfHistory, rawCandles],
+  );
   const candles = useMemo(() => {
     if (!backtestSession) {
       replayAnalysisAccumulatorRef.current = null;
-      return aggregateCandles(replayRawCandles, config.timeframe);
+      return aggregateCandles(withHtfHistory(replayRawCandles, htfHistory, config.timeframe), config.timeframe);
     }
     const next = updateReplayAnalysisAccumulator(replayAnalysisAccumulatorRef.current, {
       historicalMinute: sessionHistoryCandles,
@@ -768,7 +778,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     });
     replayAnalysisAccumulatorRef.current = next;
     return next.candles;
-  }, [backtestSession?.startMs, config.timeframe, rawCandles, replayRawCandles, replayRevealedCount, sessionHistoryCandles]);
+  }, [backtestSession?.startMs, config.timeframe, htfHistory, rawCandles, replayRawCandles, replayRevealedCount, sessionHistoryCandles]);
   const requestOlderHistory = useCallback((oldestTime: number) => {
     if (!requestSessionHistory) return;
     setHistoryError(null);
@@ -793,11 +803,12 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       drawingEngine: chartApi?.drawing?.engine ?? null,
       chartApi,
       rawCandles,
+      liveRawCandles,
       getCandles,
       getIndicatorState,
       applyIndicatorState,
     });
-  }, [activeLibraryIndicators, applyIndicatorState, chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.registerPanel, focusTrade, getCandles, getIndicatorState, indicatorController, instance.id, rawCandles, updatePanelConfig]);
+  }, [activeLibraryIndicators, applyIndicatorState, chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.registerPanel, focusTrade, getCandles, getIndicatorState, indicatorController, instance.id, liveRawCandles, rawCandles, updatePanelConfig]);
 
   const isActive = context.activePanelId === instance.id;
   // Fullscreen obchodu i review týdne: v replayi se obchody kreslí jen do
@@ -1142,7 +1153,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const [panelControls, setPanelControls] = useState<Map<string, WorkspacePanelControl>>(panelControlsRef.current);
   // Živá svíčka grafu dne: všechny panely, jen mimo přehrávání a backtest.
   const liveCandleTargets = useMemo<LiveCandleTarget[]>(() => [...panelControls.values()].map(control => ({
-    api: control.chartApi, root: control.config.root, timeframe: control.config.timeframe, rawCandles: control.rawCandles,
+    api: control.chartApi, root: control.config.root, timeframe: control.config.timeframe, rawCandles: control.liveRawCandles,
   })), [panelControls]);
   useLiveCandleBinding(!backtestSession && replay.phase !== 'active' ? liveCandles : null, liveCandleTargets);
   // Živá pozice z kopírky (deník dneška): čáry vstupu, SL/TP a čekajícího vstupu.

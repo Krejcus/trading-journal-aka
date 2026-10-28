@@ -14,6 +14,8 @@ import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 import type { FibDrawing } from '../../services/chartFibDrawing';
 import { QuantumSpinner } from '../QuantumLoader';
 import { aggregateCandles, timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../../services/marketData';
+import { useHtfHistory } from '../../hooks/useHtfHistory';
+import { withHtfHistory } from '../../services/htfHistory';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
 import { getDrawingMagnetSettings, setDrawingMagnetSettings, subscribeDrawingMagnetSettings } from '../../services/chartDrawingMagnet';
@@ -332,17 +334,32 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const onReplayCursor = source?.onReplayCursor;
   useEffect(() => { onReplayCursor?.(replayOn ? replayCursor : null); }, [onReplayCursor, replayCursor, replayOn]);
   const raw = useMemo(() => (replayOn ? candlesUntil(fullRaw, replayCursor) : fullRaw), [fullRaw, replayCursor, replayOn]);
-  const candles = useMemo(() => aggregateCandles(raw, timeframe), [raw, timeframe]);
+  // Na timeframu z hodin (1h+, D, W, M) hodinová historie Databento před 14 dny 1m dat (jeden dotaz pro všechny panely).
+  const shownTimeframes = useMemo(
+    () => [timeframe, ...paneTimeframes.slice(0, Math.max(0, paneCount - 1))],
+    [paneCount, paneTimeframes, timeframe],
+  );
+  const htfHistory = useHtfHistory('MNQ', shownTimeframes, raw[0]?.time);
+  const candles = useMemo(() => aggregateCandles(withHtfHistory(raw, htfHistory, timeframe), timeframe), [htfHistory, raw, timeframe]);
   const barTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
   const extraCandles = useMemo(
-    () => [1, 2, 3].map(index => (index < paneCount ? aggregateCandles(raw, paneTimeframes[index - 1] ?? '5m') : [])),
-    [paneCount, raw, paneTimeframes],
+    () => [1, 2, 3].map(index => {
+      if (index >= paneCount) return [];
+      const paneTf = paneTimeframes[index - 1] ?? '5m';
+      return aggregateCandles(withHtfHistory(raw, htfHistory, paneTf), paneTf);
+    }),
+    [htfHistory, paneCount, raw, paneTimeframes],
   );
   const paneCandles = (index: number) => (index === 0 ? candles : extraCandles[index - 1] ?? []);
   const extraBarTimes = useMemo(() => extraCandles.map(list => list.map(candle => candle.time)), [extraCandles]);
   // Živá poslední svíčka jen v deníku dne a mimo přehrávání (jen překreslení v grafu).
+  // Stabilní pole na panel (nové pole při každém renderu by vazbu živé svíčky zbytečně přepočítávalo).
+  const paneLiveRaw = useMemo(
+    () => shownTimeframes.map(paneTf => withHtfHistory(raw, htfHistory, paneTf)),
+    [htfHistory, raw, shownTimeframes],
+  );
   const liveCandleTargets: LiveCandleTarget[] = Array.from({ length: paneCount }, (_, index) => ({
-    api: paneApi(index), root: 'MNQ', timeframe: paneTimeframe(index), rawCandles: raw,
+    api: paneApi(index), root: 'MNQ', timeframe: paneTimeframe(index), rawCandles: paneLiveRaw[index] ?? raw,
   }));
   useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets);
   // Kurzor / čas / rozsah mezi okny podle „Synchronizace“ (jako workspace na Macu).
