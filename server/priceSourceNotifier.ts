@@ -66,6 +66,9 @@ export function createPriceSourceNotifier(deps: {
   let down: PriceSourceAlert | null = null;
   let downNotified = false;
   let lastDownNotifiedAt = -Infinity;
+  /** Pád vlákna se oznamuje jen jednou za den (pražský den) — smyčka pádů jinak cinká každou hodinu. */
+  let crashNotifiedDay: string | null = null;
+  const pragueDay = (at: number) => new Intl.DateTimeFormat('en-CA', { timeZone: PRICE_SOURCE_NOTIFY_TIME_ZONE }).format(new Date(at));
   /** Výpadek odškrtnutý bez oznámení (cukání) — jeho návrat se taky neoznamuje. */
   let silent = false;
   const send = (alert: PriceSourceAlert) => {
@@ -76,7 +79,9 @@ export function createPriceSourceNotifier(deps: {
     if (down && !downNotified && priceSourceNotifyWindowOpen(now())) {
       downNotified = true;
       // Cukání: výpadek brzy po minulém oznámeném jen tiše odškrtnout (a jeho návrat taky).
-      if (now() - lastDownNotifiedAt < PRICE_SOURCE_FLAP_MS) { silent = true; return; }
+      const crashAgain = down.ibkr === 'crash' && crashNotifiedDay === pragueDay(now());
+      if (crashAgain || now() - lastDownNotifiedAt < PRICE_SOURCE_FLAP_MS) { silent = true; return; }
+      if (down.ibkr === 'crash') crashNotifiedDay = pragueDay(now());
       silent = false;
       lastDownNotifiedAt = now();
       send(down);

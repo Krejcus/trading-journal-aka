@@ -304,6 +304,9 @@ setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
 // proto se ohlásí — jen stav a krátký kód, nikdy text chyb Gateway (může nést účet).
 let ibkrAlert = initialIbkrAlertState();
 let ibkrAlertChecking = false;
+/** Čtení TV kvůli hlášení nejvýš 1× za minutu (při zavřeném trhu by jinak běželo každých 5 s). */
+const IBKR_ALERT_TV_CHECK_MS = 60_000;
+let ibkrAlertTvCheckedAt = -Infinity;
 setInterval(() => {
   if (priceSource !== 'ibkr' || !config || ibkrAlertChecking) {
     if (priceSource !== 'ibkr' || !config) ibkrAlert = initialIbkrAlertState();
@@ -318,7 +321,8 @@ setInterval(() => {
       const connectionProblem = ibkrConnectionProblem(stats?.state ?? 'off', stats?.lastCode ?? null);
       // IBKR mlčí bez problému spojení: výpadek jen když TV živou cenu má (jinak je trh zavřený).
       let tvLive: boolean | null = null;
-      if (ibkrAlertNeedsTvCheck(ibkrAlert, available, connectionProblem, at)) {
+      if (ibkrAlertNeedsTvCheck(ibkrAlert, available, connectionProblem, at) && at - ibkrAlertTvCheckedAt >= IBKR_ALERT_TV_CHECK_MS) {
+        ibkrAlertTvCheckedAt = at;
         const tv = await readTv().catch(() => null);
         const minute = Math.floor(Date.now() / 60_000) * 60;
         tvLive = !!tv && tv.mode === 'streaming' && tv.last !== null && !!tv.bar && tv.bar[0] >= minute - 60;

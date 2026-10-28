@@ -81,4 +81,14 @@ describe('oznámení výpadku IBKR na Macu', () => {
     t.notifier.onAlert({ state: 'up', ibkr: null, code: null });
     expect(t.notify).not.toHaveBeenCalled();
   });
+
+  it('smyčka pádů vlákna: pád se oznámí jen jednou za den', () => {
+    const t = setup(prague(9));
+    for (let hour = 0; hour < 6; hour += 1) {
+      t.setClock(prague(9) + hour * 70 * 60_000);
+      t.notifier.onAlert({ state: 'down', ibkr: 'crash', code: null });
+      t.notifier.onAlert({ state: 'up', ibkr: null, code: null });
+    }
+    expect(t.notify).toHaveBeenCalledTimes(2);
+  });
 });

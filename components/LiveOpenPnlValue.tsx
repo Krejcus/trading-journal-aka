@@ -42,7 +42,7 @@ const useLivePriceFallback = () => useSyncExternalStore(
   () => false,
 );
 
-export const LIVE_PRICE_FALLBACK_TITLE = 'IBKR je nedostupné (IB Gateway neběží, odhlásila se nebo jsi přihlášený v IBKR jinde) — živá cena jde ze zálohy TradingView.';
+export const LIVE_PRICE_FALLBACK_TITLE = 'Živá cena teď nejde z IBKR, ale ze zálohy TradingView. Při otevřeném trhu to znamená výpadek IB Gateway (neběží, odhlásila se, nebo jsi přihlášený v IBKR jinde) — worker pak pošle oznámení na Macu.';
 
 /** Viditelný štítek živé ceny u hodnoty (i na telefonu, kde není title). */
 export const LiveTvMark = () => {

@@ -168,6 +168,7 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
     queue = { pending: 0, chain: Promise.resolve() };
     clearTimer(watchdogTimer);
     watchdogTimer = null;
+    reopenWaits = 0;
     if (current) safe(() => current.close());
     store.setLink('off', reason);
   };
