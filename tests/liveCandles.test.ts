@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { tvLiveBarsStoragePath, type TvBar, type TvBarsCapture } from '../lib/tradingViewBars';
 import { startTradingViewLiveBars, TV_LIVE_BARS_PHASE_MS } from '../services/tradingViewBars';
-import { LIVE_CANDLES_POLL_PHASE_MS, nextLiveCandlesPollDelay } from '../hooks/useLiveCandles';
+import { LIVE_CANDLES_CATCH_UP_MS, LIVE_CANDLES_POLL_PHASE_MS, liveCandlesCatchUpDelay, nextLiveCandlesPollDelay } from '../hooks/useLiveCandles';
 
 vi.mock('../services/supabase', () => ({ supabase: {} }));
 import { LIVE_CANDLES_STALE_MS, parseLiveCandlesFile, stitchLiveCandles } from '../services/liveCandles';
@@ -213,5 +213,15 @@ describe('zarovnání na minutu (předposlední svíčka grafu dne, 28. 10. 2026
     // Těsně před 20. s nečekat 1 s, ale celou další minutu.
     expect(nextLiveCandlesPollDelay(minuteStart + 18_000, 60_000)).toBe(62_000);
     expect(nextLiveCandlesPollDelay(minuteStart + 18_000, 30_000)).toBe(30_000);
+  });
+
+  it('načtení mimo fázi v :00–:12 se dožene hned po uploadu (předposlední svíčka nečeká do :20)', () => {
+    const minuteStart = Date.UTC(2026, 9, 28, 13, 41, 0);
+    expect(LIVE_CANDLES_CATCH_UP_MS).toBeGreaterThan(TV_LIVE_BARS_PHASE_MS);
+    expect(LIVE_CANDLES_CATCH_UP_MS).toBeLessThan(LIVE_CANDLES_POLL_PHASE_MS);
+    expect(liveCandlesCatchUpDelay(minuteStart + 3_000)).toBe(9_000);
+    expect(liveCandlesCatchUpDelay(minuteStart + 11_999)).toBe(1);
+    expect(liveCandlesCatchUpDelay(minuteStart + 12_000)).toBeNull();
+    expect(liveCandlesCatchUpDelay(minuteStart + 45_000)).toBeNull();
   });
 });

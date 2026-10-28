@@ -8,6 +8,18 @@ export const LIVE_CANDLES_POLL_MS = 60_000;
  * v náhodnou chvíli by předposlední svíčku přepsalo stavem z poloviny minuty.
  */
 export const LIVE_CANDLES_POLL_PHASE_MS = 20_000;
+/**
+ * Načtení mimo fázi (otevření, návrat do appky) v :00–:12 vidí soubor z minulé
+ * minuty, kde je předchozí svíčka ještě rozpracovaná. Hned po nahrání nového
+ * souboru (:10 + rezerva) se proto načte ještě jednou — ne až ve :20.
+ */
+export const LIVE_CANDLES_CATCH_UP_MS = 12_000;
+
+/** Prodleva do doháněcího načtení po načtení mimo fázi; `null` = není potřeba. */
+export function liveCandlesCatchUpDelay(nowMs: number): number | null {
+  const second = nowMs % 60_000;
+  return second < LIVE_CANDLES_CATCH_UP_MS ? LIVE_CANDLES_CATCH_UP_MS - second : null;
+}
 
 /** Prodleva do dalšího načtení: při minutovém intervalu zarovnaná na `LIVE_CANDLES_POLL_PHASE_MS`. */
 export function nextLiveCandlesPollDelay(nowMs: number, pollMs: number): number {
@@ -35,6 +47,7 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
     if (!enabled || !symbol) { setLive(null); setStatus('unavailable'); return; }
     const current = ++generation.current;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let catchUpTimer: ReturnType<typeof setTimeout> | null = null;
     let inFlight = false;
     // Jiný symbol: data předchozího instrumentu se nesmí ukázat ani chvíli.
     setLive(null);
@@ -56,13 +69,22 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
     const schedule = () => {
       timer = setTimeout(async () => { await refresh(); if (generation.current === current) schedule(); }, nextLiveCandlesPollDelay(Date.now(), pollMs));
     };
-    const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
-    void refresh();
+    // Načtení mimo fázi (otevření, návrat do appky): v :00–:12 ještě jedno hned po nahrání souboru.
+    const refreshOffPhase = () => {
+      void refresh();
+      const delay = liveCandlesCatchUpDelay(Date.now());
+      if (delay === null || pollMs !== 60_000) return;
+      if (catchUpTimer) clearTimeout(catchUpTimer);
+      catchUpTimer = setTimeout(() => { catchUpTimer = null; if (generation.current === current) void refresh(); }, delay);
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshOffPhase(); };
+    refreshOffPhase();
     schedule();
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       generation.current += 1;
       if (timer) clearTimeout(timer);
+      if (catchUpTimer) clearTimeout(catchUpTimer);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [enabled, symbol, pollMs]);
