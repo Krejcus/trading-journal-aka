@@ -285,7 +285,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-28 dopoledne — IBKR: Gateway běží, sonda prošla, zdroj ceny ve vlákně workeru (Claude, větev, NEnasazeno)
+### 2026-10-28 10:50 — NASAZENO: cena z IBKR ve workeru (Claude, Filip „nasaď ihned“)
+
+- Push na main `4c866695` (Vercel: štítek „živě · IBKR“). Brána: tsc čistý,
+  testy zelené kromě časového limitu `liveCopyCompactRender` při zátěži Macu
+  (load 11); samostatně 4× z 5 zelený, s IBKR nesouvisí.
+- Před reinstallem: Filip „Zkontrolovat“ (vyčistilo divergenci 70909167
+  a `Tradovate WebSocket transport error`), pak DISARM.
+- `COPIER_PRICE_SOURCE=ibkr scripts/copier/mac-reinstall-safe.sh` z worktree
+  `~/alphatrade-worktrees/ibkr-probe` @ 4c866695 (bundle 409f482d…,
+  `--adopt-durable-group`), read-only reconcile čistý, DISARMED, plist
+  `ALPHATRADE_PRICE_SOURCE=ibkr`. Worker drží spojení na Gateway
+  127.0.0.1:4001 (clientId 92).
+- Documents: ff na main + `npm install` (`@stoqey/ib`, patch-package OK).
+- Gateway musí běžet a být přihlášený; jinak vlákno jede z TV. Přihlášení
+  do IBKR jinde (mobil/web) Gateway odpojí → 60 s pauza, mezitím TV.
+
+### 2026-10-28 dopoledne — IBKR: Gateway běží, sonda prošla, zdroj ceny ve vlákně workeru (Claude, nasazeno 10:50)
 
 - IB Gateway 10.51 (Stable) na Macu: Read-Only API, port 4001, jen
   localhost, Trusted IP 127.0.0.1 (ověřeno v nastavení).
