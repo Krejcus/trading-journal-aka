@@ -16,12 +16,29 @@ import { tvPriceChannel, tvPriceStore } from '../services/tvPriceChannel';
 
 const NO_DELTA = Number.NaN;
 
-export const TV_LIVE_PNL_TITLE = 'Živě: poslední kotva brokera + pohyb ceny z TradingView. Jen zobrazení.';
+export const TV_LIVE_PNL_TITLE = 'Živě: poslední kotva brokera + pohyb živé ceny (IBKR, záloha TradingView). Jen zobrazení.';
 
-/** Viditelný štítek „živě z TradingView“ u hodnoty (i na telefonu, kde není title). */
-export const LiveTvMark = () => (
-  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" role="img" aria-label="Živě z TradingView" title={TV_LIVE_PNL_TITLE} />
+/** Zdroj živé ceny podle symbolu zprávy: vlákno workeru posílá `IBKR:…`, nebo symbol grafu TV. */
+export const livePriceSourceName = (chart: string | null | undefined): 'IBKR' | 'TV' =>
+  chart?.startsWith('IBKR:') ? 'IBKR' : 'TV';
+
+const useLivePriceSource = () => useSyncExternalStore(
+  tvPriceStore.subscribe,
+  () => livePriceSourceName(tvPriceStore.view().latest?.chart),
+  () => 'TV' as const,
 );
+
+/** Viditelný štítek živé ceny u hodnoty (i na telefonu, kde není title). */
+export const LiveTvMark = () => {
+  const source = useLivePriceSource();
+  return (
+    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" role="img"
+      aria-label={source === 'IBKR' ? 'Živě z IBKR' : 'Živě z TradingView'} title={TV_LIVE_PNL_TITLE} />
+  );
+};
+
+/** Text „živě · IBKR“ / „živě · TV“ podle zdroje poslední zprávy. */
+export const LivePriceSourceTag = () => <>živě · {useLivePriceSource()}</>;
 
 export function LiveOpenPnlValue({ anchor, legs, children }: {
   /** Zobrazená hodnota z read modelu (bez TV). */
@@ -85,7 +102,7 @@ export function TvPriceDiagnosticsRow() {
   return (
     <div className="mt-4 rounded-md border border-[var(--border-subtle)] px-3 py-2" data-testid="tv-price-diagnostics">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="text-xs font-black text-[var(--text-primary)]">Cena z TradingView (jen zobrazení)</span>
+        <span className="text-xs font-black text-[var(--text-primary)]">Živá cena z {livePriceSourceName(diagnostics.chart) === 'IBKR' ? 'IBKR' : 'TradingView'} (jen zobrazení)</span>
         <span className={`text-xs font-bold ${stateTone(diagnostics.state)}`}>
           {STATE_LABEL[diagnostics.state]}{reason ? ` · ${reason}` : ''}
         </span>

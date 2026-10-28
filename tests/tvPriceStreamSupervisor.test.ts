@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTvPriceStreamSupervisor, type TvPriceStreamConfig } from '../server/tvPriceStreamSupervisor';
+import { createTvPriceStreamSupervisor, IBKR_CRASH_FALLBACK_MS, type TvPriceSourceName, type TvPriceStreamConfig } from '../server/tvPriceStreamSupervisor';
 
 class FakeWorker extends EventEmitter {
   messages: unknown[] = [];
@@ -152,5 +152,44 @@ describe('hlídač vlákna kanálu ceny (hlavní vlákno workeru)', () => {
     expect(t.workers[0].terminated).toBe(1);
     t.supervisor.update({ ...ON, topic: 'tv-price-other' });
     expect(t.workers).toHaveLength(1);
+  });
+
+  it('zdroj IBKR: po pádu vlákna jede 30 min jen TradingView, pak zase IBKR', async () => {
+    const sources: TvPriceSourceName[] = [];
+    const workers: FakeWorker[] = [];
+    const log = vi.fn();
+    const supervisor = createTvPriceStreamSupervisor({
+      priceSource: 'ibkr',
+      createWorker: source => { sources.push(source); const worker = new FakeWorker(); workers.push(worker); return worker; },
+      log,
+    });
+    supervisor.update(ON);
+    expect(sources).toEqual(['ibkr']);
+    workers[0].emit('error', new Error('ib boom'));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sources).toEqual(['ibkr', 'tv']);
+    expect(log.mock.calls.map(call => String(call[0])).join('\n')).toContain('30 min jen TradingView');
+    // Zdravé vlákno s TV se po pauze samo vymění za IBKR; do jističe se to nepočítá.
+    for (let elapsed = 0; elapsed < IBKR_CRASH_FALLBACK_MS - 10_000; elapsed += 10_000) {
+      workers[1].emit('message', { type: 'alive' });
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(sources).toEqual(['ibkr', 'tv']);
+    workers[1].emit('message', { type: 'alive' });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(sources).toEqual(['ibkr', 'tv', 'ibkr']);
+    expect(workers[1].terminated).toBe(1);
+    expect(supervisor.status()).toMatchObject({ running: true, crashes: 1, tripped: false });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(sources).toHaveLength(3);
+    supervisor.stop();
+  });
+
+  it('výchozí zdroj je TV', () => {
+    const sources: TvPriceSourceName[] = [];
+    const supervisor = createTvPriceStreamSupervisor({ createWorker: source => { sources.push(source); return new FakeWorker(); } });
+    supervisor.update(ON);
+    expect(sources).toEqual(['tv']);
+    supervisor.stop();
   });
 });

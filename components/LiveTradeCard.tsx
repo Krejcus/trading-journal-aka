@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { TradeCardAccount, TradeCardLevel, TradeCardModel } from '../lib/liveTradeCard';
 import { tradeCardTvLegs } from '../lib/tvLivePnl';
 import { futuresSymbolRoot, pointValueUsd } from '../services/futuresContractSpecs';
-import { LiveOpenPnlValue, LiveTvMark, TV_LIVE_PNL_TITLE } from './LiveOpenPnlValue';
+import { LiveOpenPnlValue, LivePriceSourceTag, LiveTvMark, TV_LIVE_PNL_TITLE } from './LiveOpenPnlValue';
 
 /**
  * SL/TP aktuálního obchodu skupiny (jen zobrazení, posouvají se v Tradovate).
@@ -212,7 +212,7 @@ export const LiveTradeCompactCard = ({ model }: { model: TradeCardModel }) => {
               <div className="mt-1.5 flex items-baseline gap-2" title={live ? TV_LIVE_PNL_TITLE : undefined}>
                 <b className={`text-[28px] font-black tabular-nums tracking-tight ${tone(value)}`}>{signedUsd(value)}</b>
                 {points != null ? <span className="text-xs font-bold tabular-nums text-[var(--text-secondary)]">{signedPoints(points)}</span> : null}
-                {live ? <span className="ml-auto inline-flex items-center gap-1 self-center text-[10px] font-black uppercase tracking-[0.08em] text-indigo-500"><LiveTvMark />živě · TV</span> : null}
+                {live ? <span className="ml-auto inline-flex items-center gap-1 self-center text-[10px] font-black uppercase tracking-[0.08em] text-indigo-500"><LiveTvMark /><LivePriceSourceTag /></span> : null}
               </div>
             );
           }}

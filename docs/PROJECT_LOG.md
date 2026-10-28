@@ -285,6 +285,119 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 10:50 — NASAZENO: cena z IBKR ve workeru (Claude, Filip „nasaď ihned“)
+
+- Push na main `4c866695` (Vercel: štítek „živě · IBKR“). Brána: tsc čistý,
+  testy zelené kromě časového limitu `liveCopyCompactRender` při zátěži Macu
+  (load 11); samostatně 4× z 5 zelený, s IBKR nesouvisí.
+- Před reinstallem: Filip „Zkontrolovat“ (vyčistilo divergenci 70909167
+  a `Tradovate WebSocket transport error`), pak DISARM.
+- `COPIER_PRICE_SOURCE=ibkr scripts/copier/mac-reinstall-safe.sh` z worktree
+  `~/alphatrade-worktrees/ibkr-probe` @ 4c866695 (bundle 409f482d…,
+  `--adopt-durable-group`), read-only reconcile čistý, DISARMED, plist
+  `ALPHATRADE_PRICE_SOURCE=ibkr`. Worker drží spojení na Gateway
+  127.0.0.1:4001 (clientId 92).
+- Documents: ff na main + `npm install` (`@stoqey/ib`, patch-package OK).
+- Gateway musí běžet a být přihlášený; jinak vlákno jede z TV. Přihlášení
+  do IBKR jinde (mobil/web) Gateway odpojí → 60 s pauza, mezitím TV.
+
+### 2026-10-28 dopoledne — IBKR: Gateway běží, sonda prošla, zdroj ceny ve vlákně workeru (Claude, nasazeno 10:50)
+
+- IB Gateway 10.51 (Stable) na Macu: Read-Only API, port 4001, jen
+  localhost, Trusted IP 127.0.0.1 (ověřeno v nastavení).
+- Sonda 2 min (9:12): živá data (`marketDataType=1`), 10 obchodů/s, objem
+  obchodů vs. denní objem IBKR 1,005, dnešní 1m svíčky IBKR od 18:00 ET,
+  bez výpadku. Ticky ale chodí v dávkách ~každých 0,6 s (p50 626 ms,
+  dávka p50 5 obchodů); hodiny Macu ±16 ms. Čerstvost ~0,3–1,5 s.
+- Souběžně IBKR vs. TV (CDP `last`, čtení po 50 ms), 15 min, 9:40–9:55:
+  IBKR ukáže stejnou cenu dřív v 80 % případů, medián o 351 ms
+  (p10 −184, p90 +884 ms); nejlepší posun řad TV za IBKR ~600 ms.
+  IBKR 3 159 změn ceny, TV jen 789 (TV kotaci slučuje ~1×/s). IBKR
+  úplné: objem 0,998, 14/14 minut OHLC shodných s 1m svíčkami IBKR.
+  Pozn.: první pokus v 9:24 skončil „0 kandidátů kontraktu“ (Gateway se
+  spojovala s farmou definic) → zdroj ve vlákně proto zkouší znovu za 30 s.
+- Fáze 2 (jen zobrazení, INV-UI-04/INV-WORKER-04/INV-RELAY-04/INV-FRESH-03):
+  - `services/ibkrMarketData.ts`: jediný `IBApi` (zmrazené čtecí rozhraní,
+    přesunuto ze sondy, + bid/ask); `services/ibkrPriceSource.ts`: spojení,
+    přední kontrakt (jeden časovač kontroly, rostoucí reqId), AllLast,
+    čtení až s celou 1m svíčkou, 1100/1101/2103/2110 = bez čtení, 10197 =
+    pauza 60 s, stale 15 s, jen porty 4001/4002, `nextPriceSource`
+    (na IBKR po 5 s dostupnosti, zpět na TV po 3 s bez čtení).
+  - Vlákno `tv-price-stream.mjs` čte IBKR při `workerData.priceSource='ibkr'`,
+    jinak/záloha TV; přepnutí zdroje = nový `runId`. Formát zprávy beze
+    změny (`chart: 'IBKR:MNQZ2026'`, `front: 'MNQZ2026'`); klient mění jen
+    štítek („živě · IBKR“, `LivePriceSourceTag`).
+  - Hlídač: pád vlákna se zdrojem IBKR → 30 min jen TV (záloha nepadá do
+    jističe s IBKR). Pilot `ALPHATRADE_PRICE_SOURCE=ibkr`, instalátor
+    `--price-source ibkr` (jen s `--tv-stream on`), reinstall zachová.
+  - PAST: `@stoqey/ib` je CommonJS → v ESM bundlu vlákna `Dynamic require of
+    "fs"` a vlákno by při startu spadlo (i se zdrojem TV, jistič by vypnul
+    kanál). Bundle vlákna má proto hlavičku `TV_PRICE_STREAM_BANNER`
+    (`createRequire`, `__dirname`); test staví bundle jako instalátor a pouští
+    ho jako Worker v obou režimech.
+- Kritik `copier-design-critic` nad návrhem: OPRAVIT PŘED COMMITEM (9 nálezů,
+  zapracováno); nad diffem: OK S VÝHRADAMI — zapracováno 1–5 (návrat na IBKR
+  po pauze recyklací vlákna, 1101 čeká na nový odběr i přes 2103/2104,
+  teardown ruší odložené časovače, bundle test vytvoří klienta IBKR,
+  selhání IBKR nezastaví TV ve vlákně).
+- Follow-up (neblokuje): 2103/2104 jsou per farma (filtrovat `usfuture`);
+  store nepřerušuje řadu při změně `chart`/`front` v jednom `runId` a
+  `lib/tvLiveCandle.ts` nekontroluje `front` (týden rollu, jen zobrazení).
+- Ověření (DISARMED v řetězu): 5787 testů zelených, `tsc` čistý; zdroj
+  v ESM bundlu 40 s proti živé Gateway OK.
+- Nasazení: reinstall workeru jen DISARMED/flat/reconciled a po Filipově
+  „nasaď“ (`COPIER_PRICE_SOURCE=ibkr scripts/copier/mac-reinstall-safe.sh`);
+  Gateway musí běžet, jinak vlákno jede z TV.
+
+### 2026-10-27 odpoledne — IBKR: sonda jen pro čtení připravená, čeká na Gateway (Claude, větev, NEnasazeno)
+
+- Filip má účet IBKR (IBKR Ireland), vklad 20 000 Kč, objednané „CME
+  Real-Time (NP,L1)“. Zbývá ověřit aktivní předplatné a nainstalovat
+  IB Gateway (Read-Only API, port 4001, jen localhost).
+- Větev `claude/ibkr-probe-20261027` (worktree `~/alphatrade-worktrees/ibkr-probe`):
+  `scripts/market-data/ibkrTickProbe.ts` + `tests/ibkrTickProbe.test.ts`,
+  devDependency `@stoqey/ib` 1.6.13 (MIT). Zdroj knihovny prošel před
+  instalací: bez instalačních skriptů, procesů, sítě mimo socket a zápisů.
+  `dotenv` se načte jen tehdy, když chybí volby; sonda je předává všechny.
+- Jen čtení ve třech vrstvách: Read-Only API v Gateway, `createReadOnlyIbClient`
+  (zmrazený objekt jen s čtecími voláními, posluchače uvnitř), test hlídá
+  zakázaná volání (příkazy, účty, pozice, exekuce, `managedAccounts`),
+  importy jen `node:*` + `@stoqey/ib`, host jen 127.0.0.1, porty 4001/4002/7496/7497.
+  Čísla účtů se z hlášek mažou. Nic z kopírky, workeru ani appky.
+- Měří: tok obchodů (za s, za 100 ms, mezery, dávky), zpoždění (IBKR dává čas
+  obchodu jen v sekundách → jen „prokazatelně > 1 s“), objem obchodů vs.
+  přírůstek denního objemu IBKR, minuty z ticků vs. konečné 1m svíčky IBKR
+  (OHLC, objem i počet obchodů), od kdy IBKR dá dnešní 1m svíčky, a hlášky
+  Gateway (1100/1101/1102, 10197 souběžné přihlášení). `--raw-ticks` uloží
+  obchody pro porovnání s Databentem (další krok, až budou data).
+- Limit IBKR 15 s na nový tick-by-tick odběr stejného instrumentu je
+  zabudovaný (`nextTradesRequestAt`): po 1101 nebo reconnectu znovu odebírat
+  nejdřív za 15 s. Platí i pro budoucí vlákno ve workeru.
+- Ověření (kopírka DISARMED, ověřeno v řetězu): 620 souborů / 5764 testů
+  zelených, `tsc` čistý, sonda i ve `--strict`. Bez Gateway sonda po 11 s
+  skončí hláškou a kódem 1.
+- Past worktree: `npm install` nahradil odkaz na sdílené `node_modules`
+  vlastní kopií (400 MB) a s `--ignore-scripts` neproběhl `patch-package` →
+  40 padajících testů grafů. Po `npx patch-package` vše zelené. Do worktree
+  navíc odkaz na `extension/node_modules`, jinak `tsc` hlásí 40 chyb v `extension/`.
+
+### 2026-10-27 odpoledne — IBKR: předávka sloučena, rešerše zdrojů dat CME (Claude, jen dokumenty)
+
+- `claude/ibkr-handoff-20261027` sloučena do lokálního `main` fast-forwardem
+  (`9f1c6b8a`, jen `docs/reviews/ibkr-live-data-handoff-20261027.md`).
+  Účet IBKR zatím není, nic se nestaví.
+- Rešerše `docs/reviews/market-data-sources-research-20261027.md`: levněji
+  než burzovní poplatek CME (1,55 USD/měs. neprofesionál L1, 2027: 1,60)
+  to legálně nejde, IBKR zůstává nejlevnější oficiální osobní zdroj. Riziko:
+  úplnost `AllLast` u futures je na fórech sporná → sonda IBKR musí ticky
+  porovnat s Databentem, nejen s TV a Tradovate.
+- Pro vizi obchodování z appky a komerčního produktu je klíčové, odkud budou
+  data pro další uživatele: distribuce přes nás = licence CME (výtah ceníku:
+  29 280 USD ročně za burzu, NEOVĚŘENO), proto směr „data přes obchodní
+  připojení uživatele“ (Rithmic conformance nebo partnerství s Tradovate). Nic
+  z toho se nestaví; dotaz pro Codex/ChatGPT je v §4 dokumentu.
+- tick-stream.xyz (29 USD realtime CME) neuvádí firmu ani licenci → nepoužívat.
+
 ### 2026-10-28 dopoledne — Graf: odpočet jako jeden obdélník se štítkem ceny, volby v rohu; FVG živě (Claude)
 
 - Odpočet „Pod cenou“: box se stejnou geometrií jako štítek poslední ceny

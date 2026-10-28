@@ -133,6 +133,12 @@ INSTALLED_TV_STREAM="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:A
 if [[ "${COPIER_TV_STREAM:-$INSTALLED_TV_STREAM}" == "on" ]]; then
   TV_STREAM_ARGS+=(--tv-stream on)
 fi
+# Zdroj ceny (ibkr = IB Gateway se zálohou TV): reinstall zachová nainstalovaný;
+# přepsat jde COPIER_PRICE_SOURCE=ibkr|tv scripts/copier/mac-reinstall-safe.sh
+INSTALLED_PRICE_SOURCE="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_PRICE_SOURCE' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_PRICE_SOURCE:-$INSTALLED_PRICE_SOURCE}" == "ibkr" ]]; then
+  TV_STREAM_ARGS+=(--price-source ibkr)
+fi
 npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group "${DEV_ORIGIN_ARGS[@]}" "${ALLOW_DOWNGRADE_ARGS[@]}" "${TV_STREAM_ARGS[@]}"
 
 BUNDLE="$HOME/Library/Application Support/AlphaTrade/copier/copier-agent.mjs"

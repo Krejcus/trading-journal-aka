@@ -943,14 +943,18 @@ async function runLocalAgent(
   // a vlastní bundle: pád ani zaseknutí nesmí sáhnout na kopírku
   // (INV-WORKER-04). Výchozí VYPNUTO; server ho vypne i vynecháním klíče.
   const tvPriceStreamBundle = fileURLToPath(new URL('./tv-price-stream.mjs', import.meta.url));
+  // Zdroj ceny vlákna: `ibkr` = IB Gateway na 127.0.0.1 (jen čtení), TV jako záloha. Výchozí TV.
+  const tvPriceSource = process.env.ALPHATRADE_PRICE_SOURCE?.trim().toLowerCase() === 'ibkr' ? 'ibkr' : 'tv';
   const tvPriceStream: TvPriceStreamSupervisor | null = snapshotsEnabled
     && process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() === 'on'
     && existsSync(tvPriceStreamBundle)
     ? createTvPriceStreamSupervisor({
-      createWorker: () => {
+      priceSource: tvPriceSource,
+      createWorker: priceSource => {
         // Výstup vlákna se nepřeposílá do logu workeru (šel by přes event loop
         // hlavního vlákna); stav hlásí jen omezená diagnostika.
         const thread = new Worker(tvPriceStreamBundle, {
+          workerData: { priceSource },
           stdout: true, stderr: true,
           resourceLimits: { maxOldGenerationSizeMb: 96, maxYoungGenerationSizeMb: 16 },
         });
@@ -961,7 +965,7 @@ async function runLocalAgent(
       log: line => console.log(`${new Date().toISOString()} ${line}`),
     })
     : null;
-  if (tvPriceStream) console.log(`${new Date().toISOString()} TV STREAM kanál ceny z TradingView povolen (vlastní vlákno, jen zobrazení).`);
+  if (tvPriceStream) console.log(`${new Date().toISOString()} TV STREAM kanál ceny povolen (vlastní vlákno, jen zobrazení, zdroj ${tvPriceSource === 'ibkr' ? 'IBKR, záloha TradingView' : 'TradingView'}).`);
   const persistResolvedChart = (resolved: TradingViewDedicatedChartRef) => {
     dedicatedChartRef = { ...dedicatedChartRef, ...resolved };
     snapshotHealth = {
