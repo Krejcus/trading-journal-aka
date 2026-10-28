@@ -285,7 +285,22 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-28 21:50 — Přehrání ticků z dávky v živé svíčce (Claude, NENASAZENO)
+### 2026-10-28 21:55 — NASAZENO: přehrání ticků z dávky (Claude, Filip „nasaď“)
+
+- Rebase na `71cec472` (konflikt jen v deníku, oba zápisy ponechány) →
+  `9bb9bedb`. Brána (DISARMED): tsc, 184 testů kanálu ceny, build; push ff
+  na main, Vercel READY.
+- `COPIER_PRICE_SOURCE=ibkr scripts/copier/mac-reinstall-safe.sh` z worktree
+  @ 9bb9bedb (DISARMED, flat, bez divergence; hlavní bundle beze změny
+  5c883387…, vlákno `tv-price-stream.mjs` nové). Read-only reconcile čistý.
+- Ověřeno v appce (localhost:3000): 43 ze 45 zpráv za 30 s s ověřenou cestou
+  (2–39 cen), 0 odmítnutých, zdroj `IBKR:MNQZ2026`.
+- Past při měření v náhledu: po změně souboru servíruje Vite modul jako
+  `…/tvPriceChannel.ts?t=…` — `import('/services/tvPriceChannel.ts')` pak vrátí
+  JINOU instanci (stav `no-grant`). Správnou URL najdeš v importu
+  `tvPriceGrant.ts?t=…`.
+
+### 2026-10-28 21:50 — Přehrání ticků z dávky v živé svíčce (Claude, nasazeno 21:55, 9bb9bedb)
 
 - Proč: Filip chtěl v grafu vidět všechny ticky jako v Tradovate. IBKR dává
   každý obchod, worker ale posílal jen poslední cenu dávky (~2×/s).
