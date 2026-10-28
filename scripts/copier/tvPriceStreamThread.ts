@@ -46,6 +46,9 @@ const META_REFRESH_MS = 60_000;
 const IBKR_BARS_POST_MS = 30_000;
 const IBKR_BARS_POST_PHASE_MS = 7_000;
 const READ_TIMEOUT_MS = 1_000;
+/** IBKR bez platné ceny déle než tohle = hlášení hlavnímu vláknu (oznámení na Macu); návrat = hlášení „zpět“. */
+const IBKR_ALERT_AFTER_MS = 60_000;
+const IBKR_ALERT_CHECK_MS = 5_000;
 
 const port = parentPort;
 if (!port) throw new Error('tv-price-stream-thread-only');
@@ -297,6 +300,32 @@ port.on('message', message => {
 });
 
 setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
+// Výpadek IBKR (Gateway neběží, přihlášení jinde, ztráta spojení): cena tiše jede ze zálohy TV,
+// proto se ohlásí — jen stav a krátký kód, nikdy text chyb Gateway (může nést účet).
+let ibkrDownSince: number | null = null;
+let ibkrAlerted = false;
+setInterval(() => {
+  if (priceSource !== 'ibkr' || !config) {
+    ibkrDownSince = null;
+    ibkrAlerted = false;
+    return;
+  }
+  const at = Date.now();
+  if (ibkr?.reading()) {
+    ibkrDownSince = null;
+    if (ibkrAlerted) {
+      ibkrAlerted = false;
+      port.postMessage({ type: 'price-source', state: 'up' });
+    }
+    return;
+  }
+  ibkrDownSince ??= at;
+  if (!ibkrAlerted && at - ibkrDownSince >= IBKR_ALERT_AFTER_MS) {
+    ibkrAlerted = true;
+    const stats = ibkr?.stats();
+    port.postMessage({ type: 'price-source', state: 'down', ibkr: stats?.state ?? 'off', code: stats?.lastCode ?? null });
+  }
+}, IBKR_ALERT_CHECK_MS);
 // Svíčky dne z IBKR pro graf dne a hodnocení (fáze 4): jen hotová čísla, buffer se
 // předá bez kopírování; hlavní vlákno je jen ověří a nechá v paměti pro upload.
 const postBars = () => {

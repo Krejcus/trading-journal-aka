@@ -2,6 +2,7 @@ import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { tvLivePnlDelta, type TvLivePnlLeg } from '../lib/tvLivePnl';
 import type { TvPriceDiagnostics } from '../lib/tvPriceStore';
 import { tvPriceChannel, tvPriceStore } from '../services/tvPriceChannel';
+import { observeLivePriceSource } from '../lib/livePriceSourceFallback';
 
 /**
  * Listová komponenta otevřeného P&L (krok 4 návrhu
@@ -28,17 +29,34 @@ const useLivePriceSource = () => useSyncExternalStore(
   () => 'TV' as const,
 );
 
+/** Cena jde ze zálohy TradingView, přestože appka předtím viděla IBKR (Gateway nedostupná). */
+const useLivePriceFallback = () => useSyncExternalStore(
+  tvPriceStore.subscribe,
+  () => observeLivePriceSource(tvPriceStore.view().latest?.chart),
+  () => false,
+);
+
+export const LIVE_PRICE_FALLBACK_TITLE = 'IBKR je nedostupné (IB Gateway neběží, odhlásila se nebo jsi přihlášený v IBKR jinde) — živá cena jde ze zálohy TradingView.';
+
 /** Viditelný štítek živé ceny u hodnoty (i na telefonu, kde není title). */
 export const LiveTvMark = () => {
   const source = useLivePriceSource();
+  const fallback = useLivePriceFallback();
   return (
-    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" role="img"
-      aria-label={source === 'IBKR' ? 'Živě z IBKR' : 'Živě z TradingView'} title={TV_LIVE_PNL_TITLE} />
+    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${fallback ? 'bg-amber-500' : 'bg-indigo-500'}`} role="img"
+      aria-label={fallback ? 'Živě ze zálohy TradingView, IBKR nedostupné' : source === 'IBKR' ? 'Živě z IBKR' : 'Živě z TradingView'}
+      title={fallback ? LIVE_PRICE_FALLBACK_TITLE : TV_LIVE_PNL_TITLE} />
   );
 };
 
-/** Text „živě · IBKR“ / „živě · TV“ podle zdroje poslední zprávy. */
-export const LivePriceSourceTag = () => <>živě · {useLivePriceSource()}</>;
+/** Text „živě · IBKR“ / „živě · TV“ podle zdroje poslední zprávy; při záloze žlutě „TV (záloha)“. */
+export const LivePriceSourceTag = () => {
+  const source = useLivePriceSource();
+  const fallback = useLivePriceFallback();
+  return fallback
+    ? <span className="text-amber-600 dark:text-amber-400" title={LIVE_PRICE_FALLBACK_TITLE}>živě · TV (záloha)</span>
+    : <>živě · {source}</>;
+};
 
 export function LiveOpenPnlValue({ anchor, legs, children }: {
   /** Zobrazená hodnota z read modelu (bez TV). */

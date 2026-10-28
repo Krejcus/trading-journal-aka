@@ -85,6 +85,13 @@ const sameConfig = (left: TvPriceStreamConfig | null, right: TvPriceStreamConfig
 
 export type TvPriceSourceName = 'tv' | 'ibkr';
 
+/** Výpadek nebo návrat zdroje IBKR: `ibkr` = stav zdroje (`crash` = pád vlákna), `code` = kód Gateway. */
+export interface PriceSourceAlert {
+  state: 'down' | 'up';
+  ibkr: string | null;
+  code: number | null;
+}
+
 /** Po pádu vlákna se zdrojem IBKR jede vlákno tak dlouho jen s TV (záloha nesmí padat s IBKR). */
 export const IBKR_CRASH_FALLBACK_MS = 30 * 60_000;
 
@@ -94,6 +101,8 @@ export function createTvPriceStreamSupervisor(options: {
   /** Požadovaný zdroj; výchozí `tv`. */
   priceSource?: TvPriceSourceName;
   log?: (line: string) => void;
+  /** Výpadek / návrat IBKR (jen stav a krátké kódy) — oznámení na Macu. Nikdy nesmí vyhodit ven. */
+  onPriceSourceAlert?: (alert: PriceSourceAlert) => void;
   now?: () => number;
   setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
   clearTimeoutImpl?: (timer: unknown) => void;
@@ -102,6 +111,7 @@ export function createTvPriceStreamSupervisor(options: {
 }): TvPriceStreamSupervisor {
   const now = options.now ?? Date.now;
   const log = (line: string) => { try { options.log?.(line); } catch { /* log nesmí shodit worker */ } };
+  const alert = (value: PriceSourceAlert) => { try { options.onPriceSourceAlert?.(value); } catch { /* oznámení nesmí shodit worker */ } };
   const unrefd = <T>(timer: T): T => { (timer as { unref?: () => void }).unref?.(); return timer; };
   const setTimer = options.setTimeoutImpl ?? ((callback, ms) => unrefd(setTimeout(callback, ms)));
   const clearTimer = options.clearTimeoutImpl ?? (timer => clearTimeout(timer as ReturnType<typeof setTimeout>));
@@ -164,6 +174,7 @@ export function createTvPriceStreamSupervisor(options: {
       // Pád s IBKR (i po probuzení): další vlákna jen s TV, ať záloha nepadá s IBKR do jističe.
       ibkrPausedUntil = at + IBKR_CRASH_FALLBACK_MS;
       log('TV STREAM vlákno se zdrojem IBKR skončilo — 30 min jen TradingView');
+      alert({ state: 'down', ibkr: 'crash', code: null });
     }
     if (at - lastWake < WAKE_GRACE_MS) {
       log(`TV STREAM vlákno skončilo po probuzení (${reason}) — do jističe se nepočítá`);
@@ -216,6 +227,17 @@ export function createTvPriceStreamSupervisor(options: {
         acceptBars(created, message as Record<string, unknown>);
         return;
       }
+      if (type === 'price-source') {
+        const row = message as { state?: unknown; ibkr?: unknown; code?: unknown };
+        if (row.state !== 'down' && row.state !== 'up') return;
+        const ibkr = typeof row.ibkr === 'string' ? row.ibkr.replace(/[^a-z-]/gi, '').slice(0, 16) || null : null;
+        const code = Number.isSafeInteger(row.code) ? row.code as number : null;
+        log(row.state === 'down'
+          ? `TV STREAM IBKR nedostupné (ibkr=${ibkr ?? '-'} kód=${code ?? '-'}) — cena ze zálohy TradingView`
+          : 'TV STREAM IBKR zpět — cena znovu z IBKR');
+        alert({ state: row.state, ibkr, code });
+        return;
+      }
       if (type === 'diag' && now() - lastDiagLog >= DIAG_LOG_INTERVAL_MS) {
         lastDiagLog = now();
         const diag = message as {
@@ -257,6 +279,7 @@ export function createTvPriceStreamSupervisor(options: {
         worker = null;
         terminate(current);
         log('TV STREAM pauza IBKR skončila — vlákno znovu se zdrojem IBKR');
+        alert({ state: 'up', ibkr: 'crash', code: null });
         ensure();
       }
     } catch { /* hlídač nesmí shodit worker */ }

@@ -185,6 +185,27 @@ describe('hlídač vlákna kanálu ceny (hlavní vlákno workeru)', () => {
     supervisor.stop();
   });
 
+  it('výpadek a návrat IBKR z vlákna jde do oznámení jen jako stav a krátké kódy; pád vlákna s IBKR taky', async () => {
+    const alerts: unknown[] = [];
+    const workers: FakeWorker[] = [];
+    const log = vi.fn();
+    const supervisor = createTvPriceStreamSupervisor({
+      priceSource: 'ibkr',
+      createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
+      log,
+      onPriceSourceAlert: alert => { alerts.push(alert); throw new Error('oznámení selhalo'); },
+    });
+    supervisor.update(ON);
+    expect(() => workers[0].emit('message', { type: 'price-source', state: 'down', ibkr: 'connecting<script>', code: 10197, text: 'účet U123' })).not.toThrow();
+    workers[0].emit('message', { type: 'price-source', state: 'maybe' });
+    workers[0].emit('message', { type: 'price-source', state: 'up' });
+    expect(alerts).toEqual([{ state: 'down', ibkr: 'connectingscript', code: 10197 }, { state: 'up', ibkr: null, code: null }]);
+    expect(log.mock.calls.map(call => String(call[0])).join('\n')).not.toContain('U123');
+    workers[0].emit('error', new Error('ib boom'));
+    expect(alerts.at(-1)).toEqual({ state: 'down', ibkr: 'crash', code: null });
+    supervisor.stop();
+  });
+
   it('výchozí zdroj je TV', () => {
     const sources: TvPriceSourceName[] = [];
     const supervisor = createTvPriceStreamSupervisor({ createWorker: source => { sources.push(source); return new FakeWorker(); } });

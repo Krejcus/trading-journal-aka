@@ -10,6 +10,7 @@ import { dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
+import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
@@ -118,6 +119,7 @@ const leaseRetry = (connectionId: string): RetryTransientOptions => ({
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
 import { createTvPriceStreamSupervisor, tvPriceStreamConfigFromRealtime, type TvPriceStreamSupervisor } from '../../server/tvPriceStreamSupervisor';
+import { createPriceSourceNotifier } from '../../server/priceSourceNotifier';
 import { readTradingViewBars, scheduleTradingViewBarsCapture, startTradingViewLiveBars, TV_LIVE_BARS_PHASE_MS, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
 import { barsContractConflicts, barsContractMatchesSymbol, tvSymbolRoot } from '../../lib/tradingViewBars';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
@@ -945,6 +947,18 @@ async function runLocalAgent(
   const tvPriceStreamBundle = fileURLToPath(new URL('./tv-price-stream.mjs', import.meta.url));
   // Zdroj ceny vlákna: `ibkr` = IB Gateway na 127.0.0.1 (jen čtení), TV jako záloha. Výchozí TV.
   const tvPriceSource = process.env.ALPHATRADE_PRICE_SOURCE?.trim().toLowerCase() === 'ibkr' ? 'ibkr' : 'tv';
+  // Výpadek IBKR = oznámení na Macu (jen přes den v pracovní dny). Text jde jako argument
+  // osascriptu, ne do skriptu — žádné skládání AppleScriptu z dat. Asynchronně, bez čekání.
+  const priceSourceNotifier = tvPriceSource === 'ibkr'
+    ? createPriceSourceNotifier({
+      notify: (title, body) => {
+        execFile('/usr/bin/osascript', [
+          '-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv) sound name "Glass"', '-e', 'end run',
+          title, body,
+        ], { timeout: 5_000 }, () => { /* best effort */ });
+      },
+    })
+    : null;
   const tvPriceStream: TvPriceStreamSupervisor | null = snapshotsEnabled
     && process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() === 'on'
     && existsSync(tvPriceStreamBundle)
@@ -963,6 +977,7 @@ async function runLocalAgent(
         return thread;
       },
       log: line => console.log(`${new Date().toISOString()} ${line}`),
+      onPriceSourceAlert: alert => priceSourceNotifier?.onAlert(alert),
     })
     : null;
   if (tvPriceStream) console.log(`${new Date().toISOString()} TV STREAM kanál ceny povolen (vlastní vlákno, jen zobrazení, zdroj ${tvPriceSource === 'ibkr' ? 'IBKR, záloha TradingView' : 'TradingView'}).`);
