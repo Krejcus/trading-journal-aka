@@ -285,6 +285,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 23:00 — Dávka: kanál ceny, hlídání IB Gateway, historie vyšších TF (Claude, NENASAZENO)
+
+- Kanál ceny „visel v connecting“ (73a67bb0, 1c1a4929): supabase-js vrací pro
+  stejné téma odcházející kanál a `subscribe()` na něm nic neudělá; po odpojení
+  socketu (`disconnecting`) se join nikdy neodešle. Oprava: otevřít až po
+  uvolnění tématu (i `isDisconnecting()`), vynucené uvolnění po 10 s, hlídač
+  15 s bez `SUBSCRIBED` → zavřít a za 2 s otevřít znovu.
+- Hlídání IBKR (5c6f1679, 1c1a4929, poslední commit): stavový automat
+  `services/ibkrAlertState.ts` ve vlákně ceny — `up` při prvním platném čtení,
+  `down` po 60 s jen při problému spojení s Gateway nebo když IBKR mlčí a TV
+  má živou cenu (zavřený trh / svátek nic). Hlídač → `server/priceSourceNotifier.ts`
+  → oznámení na Macu (osascript, text v argv) jen Po–Pá 8–22 h Praha; opakovaný
+  výpadek do hodiny ani pád vlákna podruhé za den se neoznamuje. V appce štítek
+  ceny žlutě „živě · TV (záloha)“, když po IBKR přijde cena z TV.
+  NEOVĚŘENO: zda LaunchAgent smí zobrazit oznámení (oprávnění macOS).
+- Historie vyšších TF (90b79a61, 88fb9f7a, 2283481e): grafy deníku (workspace,
+  kompaktní, fullscreen) na timeframu z hodin přidají hodinové svíčky Databento
+  před 14 dní 1m dat (hodinové 120 d, D/W 2 roky, M 3 roky; 2 roky ≈ 0,002 USD,
+  cache po dnech). Agregace historie jednou (memo), hranice bucketu sloučená;
+  jiný kontrakt (skok > 0,2 %) = bez historie; záběr se srovná po příchodu
+  historie / přepnutí TF (ne v přehrávání, ne s vybraným obchodem); přehrávání
+  W/M počítá s historií.
+- Svíčka dne (d9566832): otevření v :00–:14 = doháněcí načtení ve 14. s.
+- Review: copier-design-critic 2 kola (OPRAVIT → OK s výhradami → doladěno),
+  code-reviewer 1 kolo (7 nálezů opraveno). 5886 testů zelených, tsc čistý.
+- Nasazení: push main + reinstall workeru (DISARMED, flat, reconciled); pak
+  iPhone build z Documents (.env.local).
+
 ### 2026-10-28 21:55 — NASAZENO: přehrání ticků z dávky (Claude, Filip „nasaď“)
 
 - Rebase na `71cec472` (konflikt jen v deníku, oba zápisy ponechány) →
