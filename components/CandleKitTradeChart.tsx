@@ -88,7 +88,7 @@ import {
   findFairValueGaps,
   nearestBuiltinTimeframe,
   updateFairValueGapAccumulator,
-  fairValueGapsWithFormingBar,
+  fairValueGapsWithFormingBars,
   updateMarketStructureAccumulator,
   type BuiltinMarketTimeframe,
   type FairValueGap,
@@ -1765,6 +1765,27 @@ const colorWithOpacity = (hex: string, opacity: number): string => {
 const releaseAppearanceAuth = bindChartAppearanceAuth(supabase.auth);
 if (import.meta.hot) import.meta.hot.dispose(releaseAppearanceAuth);
 export const SHARED_INDICATOR_SETTINGS_EVENT = 'alphatrade:chart-indicators-change';
+
+/**
+ * Konec řady grafu od posledního baru dat: přepsaný poslední bar a připsané
+ * živé bary, které data ještě neznají. Jen pro kreslení FVG.
+ */
+const chartTailAfterData = (
+  bars: readonly { ts: number; open: number; high: number; low: number; close: number }[],
+  last: MarketCandle | undefined,
+): MarketCandle[] => {
+  const tail: MarketCandle[] = [];
+  if (!last) return tail;
+  for (let index = bars.length - 1; index >= 0; index -= 1) {
+    const bar = bars[index];
+    const time = Math.floor(bar.ts / 1_000);
+    if (time < last.time) break;
+    if (time === last.time && bar.open === last.open && bar.high === last.high && bar.low === last.low && bar.close === last.close) break;
+    tail.unshift({ time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: 0 });
+    if (time === last.time) break;
+  }
+  return tail;
+};
 const sharedIndicatorSettingsCache = new Map<string, AlphaTradeIndicatorSettings>();
 
 /** Uložená obálka — buď z backtest session, nebo z globálního localStorage. */
@@ -2568,6 +2589,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     bearOpacity: indicatorSettings.fvg.bearOpacity ?? indicatorSettings.fvg.fillOpacity,
     mitigatedTransparency: indicatorSettings.fvg.mitigatedTransparency,
     maxCount: indicatorSettings.fvg.maxCount,
+    extendRight: indicatorSettings.fvg.extendRight,
+    extendBars: indicatorSettings.fvg.extendBars,
     labelText: indicatorSettings.fvg.labelText,
     labelSize: indicatorSettings.fvg.labelSize,
     labelColor: indicatorSettings.fvg.labelColor,
@@ -2804,8 +2827,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const fvgAccumulatorRef = useRef<FairValueGapAccumulator | null>(null);
   // Vstup posledního výpočtu FVG (dokončená data) — k němu se kreslí tvořící se bar.
   const fvgInputRef = useRef<MarketCandle[]>([]);
-  // Rozpracovaný bar grafu (živá svíčka, přehrávaná svíčka), jen pro kreslení FVG.
-  const fvgFormingBarRef = useRef<MarketCandle | null>(null);
+  // Konec řady grafu za daty (živá svíčka, přehrávaná svíčka), jen pro kreslení FVG.
+  const fvgFormingBarsRef = useRef<MarketCandle[]>([]);
   const fvgs = useMemo(() => {
     if (!visibleFvg) {
       fvgAccumulatorRef.current = null;
@@ -2894,7 +2917,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       desiredType,
     );
   }, [entryStructureEvents, entryMs, trade]);
-  const deriveRenderedFvgs = (gaps: FairValueGap[], forming: MarketCandle | null) => {
+  const deriveRenderedFvgs = (gaps: FairValueGap[], forming: readonly MarketCandle[]) => {
     const firstRenderedTime = visibleCandles[0]?.time ?? Number.NEGATIVE_INFINITY;
     const activeFvgLimit = Math.max(1, Math.min(30, Number(indicatorSettings.fvg.maxCount) || 1));
     const lastCandleTime = candles.at(-1)?.time;
@@ -2911,10 +2934,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         : []),
       ...(showEntryFvg && displayedEntryFvg ? [{ gap: displayedEntryFvg, isEntry: true }] : []),
     ];
+    const formingTimes = lastCandleTime === undefined ? [] : forming.map(bar => bar.time).filter(time => time > lastCandleTime);
     const rendered = drawn.map(item => {
-      // FVG z tvořícího se baru (za daty grafu): prostřední svíčka je poslední v datech.
-      if (forming && lastCandleTime !== undefined && item.gap.startTime > lastCandleTime) {
-        return { ...item, formingTime: lastCandleTime };
+      // FVG z baru za daty grafu: prostřední svíčka je bar před ním (poslední
+      // v datech, nebo předchozí připsaný).
+      if (lastCandleTime !== undefined && item.gap.startTime > lastCandleTime) {
+        const index = formingTimes.indexOf(item.gap.startTime);
+        return { ...item, formingTime: index > 0 ? formingTimes[index - 1] : lastCandleTime };
       }
       const confirmationIndex = nearestCandleIndex(candles, item.gap.startTime);
       return {
@@ -2929,16 +2955,23 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   };
   const deriveRenderedFvgsRef = useRef(deriveRenderedFvgs);
   deriveRenderedFvgsRef.current = deriveRenderedFvgs;
-  const renderedFvgs = useMemo(
-    () => deriveRenderedFvgs(
-      fairValueGapsWithFormingBar(fvgAccumulatorRef.current, fvgInputRef.current, fvgFormingBarRef.current),
-      fvgFormingBarRef.current,
-    ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [candles, displayedEntryFvg, fvgs, indicatorSettings.fvg.maxCount, showEntryFvg, visibleCandles, visibleFvg],
-  );
+  const renderedFvgs = useMemo(() => {
+    // Konec řady čte přímo z grafu (vůči novým datům) — uložený patří k
+    // předchozím datům a před `setData` by kreslení ukázalo jiný stav.
+    const forming = visibleFvg ? chartTailAfterData(apiRef.current?.controller.getBars() ?? [], fvgInputRef.current.at(-1)) : [];
+    fvgFormingBarsRef.current = forming;
+    return deriveRenderedFvgs(fairValueGapsWithFormingBars(fvgAccumulatorRef.current, fvgInputRef.current, forming), forming);
+  },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [candles, displayedEntryFvg, fvgs, indicatorSettings.fvg.maxCount, showEntryFvg, visibleCandles, visibleFvg]);
+  // Do kreslení jen při novém výpočtu: jiný render (rodič, hodiny) nesmí
+  // přepsat novější stav z posluchače řady starým (problikávání).
   const renderedFvgsRef = useRef(renderedFvgs);
-  renderedFvgsRef.current = renderedFvgs;
+  const renderedFvgsMemoRef = useRef(renderedFvgs);
+  if (renderedFvgsMemoRef.current !== renderedFvgs) {
+    renderedFvgsMemoRef.current = renderedFvgs;
+    renderedFvgsRef.current = renderedFvgs;
+  }
 
   // FVG živě jako v TradingView: tvořící se bar grafu (živá svíčka přes
   // `updateBar`, přehrávaná svíčka) se bere do výpočtu hned, ne až po
@@ -2946,28 +2979,27 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   useEffect(() => {
     const api = apiRef.current;
     if (!api || !visibleFvg) {
-      fvgFormingBarRef.current = null;
+      fvgFormingBarsRef.current = [];
       return;
     }
-    const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
+    const controller = api.controller;
+    const series = controller.getSeries() as ISeriesApi<'Candlestick'>;
     const onDataChanged = () => {
-      const bar = series.dataByIndex(Number.MAX_SAFE_INTEGER, MismatchDirection.NearestLeft);
       const input = fvgInputRef.current;
-      const last = input.at(-1);
-      let forming: MarketCandle | null = null;
-      if (bar && 'close' in bar && last) {
-        const time = Number(bar.time);
-        const changed = time > last.time
-          || (time === last.time && (bar.open !== last.open || bar.high !== last.high || bar.low !== last.low || bar.close !== last.close));
-        if (changed) forming = { time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: 0 };
-      }
-      const previous = fvgFormingBarRef.current;
-      const same = previous === forming || (previous && forming && previous.time === forming.time
-        && previous.open === forming.open && previous.high === forming.high && previous.low === forming.low && previous.close === forming.close);
+      // Celý konec řady od posledního baru dat, ne jen poslední bar: na
+      // přelomu minuty graf drží dokončenou živou svíčku, kterou data ještě
+      // neznají — bez ní by zaplnění z ní do obnovy dat zmizelo a zase se
+      // vrátilo (problikávání).
+      const forming = chartTailAfterData(controller.getBars(), input.at(-1));
+      const previous = fvgFormingBarsRef.current;
+      const same = previous.length === forming.length && previous.every((bar, index) => {
+        const next = forming[index];
+        return bar.time === next.time && bar.open === next.open && bar.high === next.high && bar.low === next.low && bar.close === next.close;
+      });
       if (same) return;
-      fvgFormingBarRef.current = forming;
+      fvgFormingBarsRef.current = forming;
       renderedFvgsRef.current = deriveRenderedFvgsRef.current(
-        fairValueGapsWithFormingBar(fvgAccumulatorRef.current, input, forming),
+        fairValueGapsWithFormingBars(fvgAccumulatorRef.current, input, forming),
         forming,
       );
       fvgPrimitiveRequestUpdateRef.current?.();
@@ -2976,7 +3008,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     onDataChanged();
     return () => {
       try { series.unsubscribeDataChanged(onDataChanged); } catch { /* graf už zmizel */ }
-      fvgFormingBarRef.current = null;
+      fvgFormingBarsRef.current = [];
     };
   }, [chartApiEpoch, visibleFvg]);
   const structureOverlayEvents = useMemo(() => {
@@ -4078,18 +4110,24 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
               // zaplnění jím se kreslí na něm, ne na pravém okraji.
               const lastVisibleTime = Math.max(
                 currentVisibleCandles[currentVisibleCandles.length - 1]?.time ?? Number.POSITIVE_INFINITY,
-                fvgFormingBarRef.current?.time ?? Number.NEGATIVE_INFINITY,
+                fvgFormingBarsRef.current.at(-1)?.time ?? Number.NEGATIVE_INFINITY,
               );
+              // Aktivní FVG doprava: až k cenové ose, nebo N svíček za
+              // poslední svíčku (jako Pine `bar_index + 20`).
+              let projectedRightX = mediaSize.width;
+              if (fvgStyle.extendRight === 'bars' && Number.isFinite(lastVisibleTime)) {
+                const lastX = chart.timeScale().timeToCoordinate(lastVisibleTime as UTCTimestamp);
+                const bars = Math.max(1, Math.min(500, Math.round(Number(fvgStyle.extendBars) || 1)));
+                if (lastX !== null) projectedRightX = lastX + bars * chart.timeScale().options().barSpacing;
+              }
               const xForTime = (time: number, projectAtRightEdge = false) => {
-                if (time <= firstVisibleTime) return 0;
                 // An active FVG is projected into the empty space on the
-                // right, just like Pine's `bar_index + 20`. A gap mitigated by
-                // the currently revealed replay candle must instead end on
-                // that candle immediately. Treating equality as the right
-                // edge delayed the visual mitigation until the next candle.
-                if (time > lastVisibleTime || (projectAtRightEdge && time >= lastVisibleTime)) {
-                  return mediaSize.width;
-                }
+                // right — always, even when its data end a bar before the
+                // chart (entry FVG from the data vs. a live candle appended
+                // by `updateBar`). A gap mitigated by the currently revealed
+                // replay candle must instead end on that candle immediately.
+                if (projectAtRightEdge || time > lastVisibleTime) return projectedRightX;
+                if (time <= firstVisibleTime) return 0;
                 if (!xCoordinates.has(time)) {
                   xCoordinates.set(time, chart.timeScale().timeToCoordinate(time as UTCTimestamp));
                 }
@@ -4175,7 +4213,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
                 });
 
                 if (fvgStyle.labelText && !gap.mitigated) {
-                  const endX = xForTime(gap.endTime);
+                  const endX = fvgStyle.extendRight === 'bars' ? projectedRightX : xForTime(gap.endTime);
                   const topY = yForPrice(stageTop);
                   const bottomY = yForPrice(stageBottom);
                   if (endX !== null && topY !== null && bottomY !== null) {

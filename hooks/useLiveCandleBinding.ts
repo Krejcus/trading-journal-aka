@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react';
 import type { Bar } from '@getcandlekit/charts';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
-import { planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
-import type { MarketCandle, MarketTimeframe } from '../services/marketData';
+import { LIVE_CANDLE_MAX_GAP_SEC, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
+import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../services/marketData';
 
 /**
  * Napojí živou svíčku na grafy: při každé změně zdroje (nejvýš 1× za snímek)
@@ -28,7 +28,11 @@ export interface LiveCandleDrawn {
   appended: Set<number>;
   originals: Map<number, Bar>;
   last: string | null;
+  /** Naposled nakreslené živé bary podle času — pro přenos přes výměnu dat. */
+  bars: Map<number, Bar>;
 }
+
+const emptyDrawn = (): LiveCandleDrawn => ({ appended: new Set(), originals: new Map(), last: null, bars: new Map() });
 
 /** Vrátí graf na jeho data (odebere připsané bary, obnoví přepsané). */
 export function revertLiveCandle(controller: ChartController, drawn: LiveCandleDrawn): void {
@@ -65,20 +69,129 @@ export function applyLiveCandle(feed: LiveCandleFeed, target: LiveCandleTarget, 
     if (!bar || !lastBar) return;
     // Beze změny baru nic nepřekreslovat (emit storu jen s čítači, heartbeat).
     const signature = `${bar.time}:${bar.open}:${bar.high}:${bar.low}:${bar.close}:${bar.volume}`;
-    const state = drawn ?? { appended: new Set<number>(), originals: new Map<number, Bar>(), last: null };
+    const state = drawn ?? emptyDrawn();
     if (state.last === signature) return;
     const ts = bar.time * 1_000;
+    let written: Bar = { ts, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume };
     if (lastBar.ts === ts) {
-      if (!state.originals.has(ts) && !state.appended.has(ts)) state.originals.set(ts, { ...lastBar });
+      if (!state.originals.has(ts) && !state.appended.has(ts)) {
+        state.originals.set(ts, { ...lastBar });
+        // Vyšší timeframe: bar dat už obsahuje dokončené minuty, které
+        // `rawCandles` cíle ještě nemusí znát (cíle jdou ve workspace o
+        // commit později) — rozsah z dat se nesmí ztratit.
+        if (timeframeMinutes(target.timeframe) !== 1) {
+          written = { ...written, open: lastBar.open, high: Math.max(written.high, lastBar.high), low: Math.min(written.low, lastBar.low) };
+        }
+      }
     } else {
       state.appended.add(ts);
     }
-    controller.updateBar({ ts, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume });
+    controller.updateBar(written);
+    state.bars.set(ts, written);
     state.last = signature;
     drawnByController.set(controller, state);
   } catch {
     // Graf se právě přestavuje (jiný timeframe, nová data).
   }
+}
+
+/**
+ * Nová data ještě nemají dokončené živé bary: na přelomu minuty server minutu
+ * dodá až za desítky sekund a jeho poslední bar bývá nedokončený (naměřeno
+ * 28. 10.: minuta 12:18 v datech s low o 5,75 bodu výš než skutečné, opravená
+ * až další obnovou). Živé bary od posledního baru dat dál se proto vrátí —
+ * jinak by v grafu chyběla svíčka nebo se zkrátil knot a FVG z nich
+ * přeskakovalo. Poslední bar dat přebije živý jen na 1m (vyšší timeframe
+ * skládá bar z minut dat). Jen navazující bary a jen při živé ceně; záznam
+ * je vrací na data při výpadku ceny, data vyhrají, jakmile mají novější bar
+ * (INV-UI-01).
+ */
+function carryFinishedLiveBars(
+  feed: LiveCandleFeed,
+  target: LiveCandleTarget,
+  controller: ChartController,
+  previous: LiveCandleDrawn,
+  drawnByController: Map<ChartController, LiveCandleDrawn>,
+): void {
+  try {
+    if (!feed.current(target.root)) return;
+    const dataLast = controller.getBars().at(-1);
+    if (!dataLast) return;
+    const minutes = timeframeMinutes(target.timeframe);
+    if (!Number.isFinite(minutes)) return;
+    const replaceLast = minutes === 1;
+    const carried = [...previous.bars.values()]
+      .filter(bar => bar.ts > dataLast.ts || (replaceLast && bar.ts === dataLast.ts))
+      .sort((a, b) => a.ts - b.ts);
+    if (!carried.length) return;
+    const maxStep = (minutes * 60 + LIVE_CANDLE_MAX_GAP_SEC) * 1_000;
+    const state = emptyDrawn();
+    let lastTs = dataLast.ts;
+    for (const bar of carried) {
+      if (bar.ts === dataLast.ts) {
+        const written = { ...bar, volume: dataLast.volume ?? bar.volume };
+        state.originals.set(bar.ts, { ...dataLast });
+        controller.updateBar(written);
+        state.bars.set(bar.ts, written);
+        continue;
+      }
+      if (bar.ts - lastTs > maxStep) break;
+      controller.updateBar(bar);
+      state.appended.add(bar.ts);
+      state.bars.set(bar.ts, bar);
+      lastTs = bar.ts;
+    }
+    if (state.bars.size) drawnByController.set(controller, state);
+  } catch {
+    // Graf se právě přestavuje.
+  }
+}
+
+/**
+ * Graf nastavil data znovu (obnova dat, `setData`) a živou svíčku tím zahodil:
+ * záznam změn pro něj neplatí. Svíčka se vrátí hned v témže kroku — počkat na
+ * další snímek znamenalo, že graf aspoň na snímek ukázal data bez ní a svíčka
+ * i FVG z ní problikly. `active` je vypnuté, když se grafy vrací na data
+ * (vypnutý feed) — návrat dat svíčku zpátky kreslit nesmí.
+ */
+export function bindLiveCandleDataResets(
+  feed: LiveCandleFeed,
+  targets: () => readonly LiveCandleTarget[],
+  drawnByController: Map<ChartController, LiveCandleDrawn>,
+  active: () => boolean,
+): () => void {
+  const offs = targets().map(target => {
+    const controller = target.api?.controller;
+    if (!controller) return () => undefined;
+    return controller.bus.on('data', () => {
+      const previous = drawnByController.get(controller);
+      drawnByController.delete(controller);
+      if (!active()) return;
+      const current = targets().find(item => item.api?.controller === controller) ?? target;
+      if (previous) carryFinishedLiveBars(feed, current, controller, previous, drawnByController);
+      applyLiveCandle(feed, current, drawnByController);
+    });
+  });
+  return () => offs.forEach(off => off());
+}
+
+/**
+ * Nové cíle (jiná data, jiný graf): přepočítat živou svíčku s nimi. Záznam
+ * změn grafů, které zůstaly, platí dál — jejich data mění jen `setData`
+ * (viz `bindLiveCandleDataResets`). Smazat ho by po výpadku ceny nechalo
+ * živou svíčku nakreslenou jako skutečnou (INV-UI-01). Graf, který z cílů
+ * vypadl, se vrátí na svá data (zrušený graf návrat tiše přeskočí).
+ */
+export function refreshLiveCandleTargets(targets: readonly LiveCandleTarget[], drawnByController: Map<ChartController, LiveCandleDrawn>): void {
+  const controllers = new Set(targets.map(target => target.api?.controller).filter(Boolean));
+  drawnByController.forEach((drawn, controller) => {
+    if (controllers.has(controller)) {
+      drawn.last = null;
+      return;
+    }
+    drawnByController.delete(controller);
+    revertLiveCandle(controller, drawn);
+  });
 }
 
 // Identita grafu a jeho dat: nová data (i se stejnou délkou) graf nastaví znovu.
@@ -99,8 +212,10 @@ export function useLiveCandleBinding(feed: LiveCandleFeed | null, targets: reado
   targetsRef.current = targets;
   const scheduleRef = useRef<() => void>(() => undefined);
   const drawnRef = useRef(new Map<ChartController, LiveCandleDrawn>());
+  const activeFeedRef = useRef<LiveCandleFeed | null>(null);
   useEffect(() => {
     if (!feed) return;
+    activeFeedRef.current = feed;
     let frame = 0;
     const apply = () => {
       frame = 0;
@@ -113,6 +228,7 @@ export function useLiveCandleBinding(feed: LiveCandleFeed | null, targets: reado
     const unsubscribe = feed.subscribe(schedule);
     schedule();
     return () => {
+      activeFeedRef.current = null;
       unsubscribe();
       if (frame) window.cancelAnimationFrame(frame);
       scheduleRef.current = () => undefined;
@@ -121,11 +237,18 @@ export function useLiveCandleBinding(feed: LiveCandleFeed | null, targets: reado
       drawnRef.current.clear();
     };
   }, [feed]);
-  // Nový graf nebo nová data (graf je nastavil znovu, živou svíčku tím zahodil):
-  // záznam změn neplatí — vrátit živou svíčku hned, ne až s další cenou.
+  // Nový graf nebo nová data: překreslit živou svíčku hned, ne až s další cenou.
   const key = targets.map(target => `${objectId(target.api)}:${target.root}:${target.timeframe}:${objectId(target.rawCandles)}`).join('|');
   useEffect(() => {
-    drawnRef.current.clear();
+    refreshLiveCandleTargets(targetsRef.current, drawnRef.current);
     scheduleRef.current();
   }, [feed, key]);
+  // Odběr jen podle grafů, ne podle dat: React ruší efekty celého stromu dřív,
+  // než graf (potomek) nastaví nová data — odběr navázaný na data by u
+  // `setData` ve stejném commitu chyběl.
+  const chartsKey = targets.map(target => objectId(target.api?.controller ?? null)).join('|');
+  useEffect(() => {
+    if (!feed) return undefined;
+    return bindLiveCandleDataResets(feed, () => targetsRef.current, drawnRef.current, () => activeFeedRef.current === feed);
+  }, [feed, chartsKey]);
 }

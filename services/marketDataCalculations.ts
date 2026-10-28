@@ -802,23 +802,38 @@ export function updateFairValueGapAccumulator(
  * FVG s rozpracovanou (živou nebo přehrávanou) svíčkou na konci, jako
  * TradingView, který indikátor přepočítává s každým tickem: zaplnění se
  * projeví hned, jak se ho cena dotkne, a nové FVG vzniká a zmenšuje se už
- * během tvořící se svíčky. `base` je akumulátor nad `input` (dokončená data);
- * přepočítá se jen poslední bar (`tailCheckpoint`) nebo se jeden připíše.
+ * během tvořící se svíčky. `base` je akumulátor nad `input` (dokončená data),
+ * `tail` konec řady grafu od posledního baru dat: přepsaný poslední bar
+ * a/nebo připsané bary (na přelomu minuty graf drží dokončenou živou svíčku,
+ * kterou data ještě neznají). Přepočítá se jen od posledního baru dat.
  * Jen pro kreslení — nikdy do dat, hodnocení ani úložiště.
  */
-export function fairValueGapsWithFormingBar(
+export function fairValueGapsWithFormingBars(
   base: FairValueGapAccumulator | null,
   input: MarketCandle[],
-  forming: MarketCandle | null,
+  tail: readonly MarketCandle[],
 ): FairValueGap[] {
   if (!base) return [];
   const last = input.at(-1);
-  if (!forming || !last || forming.time < last.time) return base.gaps;
-  if (forming.time === last.time) {
-    if (forming.open === last.open && forming.high === last.high && forming.low === last.low && forming.close === last.close) return base.gaps;
-    return updateFairValueGapAccumulator(base, [...input.slice(0, -1), { ...forming, volume: last.volume }]).gaps;
-  }
-  return updateFairValueGapAccumulator(base, [...input, forming]).gaps;
+  if (!last) return base.gaps;
+  const bars = tail.filter(bar => bar.time >= last.time);
+  const replaced = bars[0]?.time === last.time ? bars.shift()! : null;
+  const replacesLast = replaced !== null
+    && (replaced.open !== last.open || replaced.high !== last.high || replaced.low !== last.low || replaced.close !== last.close);
+  if (!replacesLast) return bars.length ? updateFairValueGapAccumulator(base, [...input, ...bars]).gaps : base.gaps;
+  const candles = [...input.slice(0, -1), { ...replaced, volume: last.volume }, ...bars];
+  const checkpoint = base.tailCheckpoint;
+  if (!checkpoint || checkpoint.candleCount !== input.length - 1) return updateFairValueGapAccumulator(null, candles).gaps;
+  // Stav před posledním barem dat platí dál (předchozí bary se nemění).
+  const beforeLast = input[input.length - 2];
+  return updateFairValueGapAccumulator({
+    firstTime: base.firstTime,
+    lastTime: beforeLast?.time ?? null,
+    lastSignature: candleSignature(beforeLast),
+    candleCount: checkpoint.candleCount,
+    gaps: checkpoint.gaps,
+    active: checkpoint.active,
+  }, candles).gaps;
 }
 
 /**

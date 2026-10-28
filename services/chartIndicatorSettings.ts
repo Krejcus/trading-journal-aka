@@ -22,6 +22,9 @@ export interface FvgIndicatorSettings {
   fillOpacity: number;
   mitigatedTransparency: number;
   maxCount: number;
+  /** Aktivní FVG doprava: až k cenové ose, nebo `extendBars` svíček za poslední svíčku. */
+  extendRight: 'edge' | 'bars';
+  extendBars: number;
   labelText: string;
   labelSize: 'tiny' | 'small' | 'medium';
   labelColor: string;
@@ -141,6 +144,8 @@ export const DEFAULT_INDICATOR_SETTINGS: AlphaTradeIndicatorSettings = {
     fillOpacity: 30,
     mitigatedTransparency: 93,
     maxCount: 14,
+    extendRight: 'edge',
+    extendBars: 20,
     labelText: '',
     labelSize: 'small',
     labelColor: '#ffffff',

@@ -355,6 +355,61 @@ workeru dopočítaná ze vzorkování 250 ms a změřeného průchodu Supabase R
 - Tradovate se změřit nedá: OAuth token nemá API market data (viz 2026-08 zápis).
 Data: scratchpad session e9252a27 `open1028/` (analyze.py, ibkr.json, tv.json, rt.json).
 
+### 2026-10-28 13:00 — FVG už neproblikávají; volba prodloužení FVG doprava (Claude, nenasazeno)
+
+Filip: „FVG občas probliknou“ + volba, jestli FVG táhnout až doprava, nebo
+useknout. Příčiny problikávání (všechny jen kreslení):
+
+1. **Přelom minuty**: živé FVG bralo jen poslední bar řady. Graf ale drží
+   i dokončenou živou svíčku minulé minuty, kterou data ještě neznají — data
+   měla její starší stav, takže zaplnění z ní zmizelo a po obnově dat se
+   vrátilo. Teď se bere celý konec řady od posledního baru dat
+   (`controller.getBars()`, `fairValueGapsWithFormingBars`); přepočet jde od
+   `tailCheckpoint`, ne od nuly.
+2. **Obnova dat**: `setData` grafu živou svíčku zahodí a vazba ji vracela až
+   dalším snímkem (rAF; ve workspace dokonce až po dalším commitu, cíle jdou
+   přes stav) — aspoň na snímek graf ukázal data bez ní (svíčka i FVG
+   problikly). `bindLiveCandleDataResets` poslouchá sběrnici `data` kontroleru
+   a svíčku vrátí synchronně. Odběr je klíčovaný jen grafy, ne daty: React
+   ruší efekty celého stromu dřív, než potomek nastaví data.
+3. **FVG vstupu** (z 1m dat) se při připsané živé minutě useklo o bar před
+   pravým okrajem. Aktivní FVG se teď promítá doprava vždy.
+4. **Nedokončená data ze serveru** (naměřeno v náhledu s logem `setData`):
+   data dne se obnovují ~1× za 30–120 s a jejich poslední bar bývá
+   nedokončený — ve 12:19:18 UTC přišla minuta 12:18 s low 29935,5 místo
+   29929,75 (opraveno až obnovou ve 12:19:49), ve 12:10:02 data končila
+   12:08 a minuta 12:09 v grafu ~30 s úplně chyběla. Vazba vracela jen
+   aktuální živou svíčku. Teď `carryFinishedLiveBars` vrátí i dokončené živé
+   bary od posledního baru dat (na 1m přebije i ten nedokončený), data
+   vyhrají, jakmile mají novější bar.
+5. **Starý výpočet z renderu**: `renderedFvgsRef` se přepisoval při každém
+   renderu (i rodiče) memoizovaným výsledkem se starým koncem řady — stav
+   z posluchače řady se tak střídal se zastaralým. Teď se ref přepíše jen
+   novým výpočtem a ten konec řady čte přímo z grafu.
+
+Měření v náhledu 5273 (sloupec pixelů u pravého okraje, přechodná změna =
+A→B→A do 6 snímků, log `setData`/`updateBar`): před opravou bodů 4–5 pás
+FVG zmizelý na 1 snímek ve chvíli výměny dat; po opravě 4 min, 13 914
+snímků (~60 fps), 0 probliknutí, 4 výměny dat s nedokončenou poslední
+minutou (12:25 v datech L 29943, živě 29927,75) — graf vždy podržel
+dokončenou živou svíčku a pozdější data se s ní shodla. Celá sada 5805
+testů zelená, tsc čisté. Volba „O počet svíček“ vizuálně neověřena: graf
+dne má poslední svíčku u cenové osy a neodroluje. Revize (code-reviewer): bez blokerů; přijato
+klíčování odběru kontrolerem a sjednocení rozsahu baru dat na vyšším TF.
+Zjištění mimo tuto změnu: živá svíčka (TV) a data (IBKR) se u téže minuty
+liší i po dokončení (12:17: data poprvé H 29934,75, živě 29939; pozdější
+data 29939) — první dodání minuty je nedokončené.
+
+Vedlejší oprava (INV-UI-01): efekt nových cílů dřív mazal záznam změn všech
+grafů; když graf data nevyměnil, zapsal se pak živý bar jako „původní“ a po
+výpadku ceny zůstal nakreslený. Teď záznam zůstává (`refreshLiveCandleTargets`),
+zahazuje ho jen skutečná výměna dat.
+
+Prodloužení: aktivní FVG se v appce od srpna (spuštění grafové plochy)
+kreslí až k cenové ose; „useknuté“ jsou v TradingView (Pine `bar_index + 20`).
+Nová volba v nastavení FVG „Prodloužení doprava“: Až k cenové ose (výchozí,
+beze změny) / O počet svíček (výchozí 20 jako Pine), `extendRight`/`extendBars`.
+
 ### 2026-10-28 11:30 — NASAZENO: deník při vypnuté kopírce, odpočet, živé FVG (Claude, Filip „nasaď“)
 
 - Web: `main` = `bff2e7c8` (merge `origin/main` s IBKR commity do větve

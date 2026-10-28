@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Bar } from '@getcandlekit/charts';
-import { applyLiveCandle, type LiveCandleDrawn } from '../hooks/useLiveCandleBinding';
+import { applyLiveCandle, bindLiveCandleDataResets, refreshLiveCandleTargets, type LiveCandleDrawn } from '../hooks/useLiveCandleBinding';
 import { LIVE_CANDLE_MAX_GAP_SEC, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
 import { tvLiveCandle } from '../lib/tvLiveCandle';
 import type { TvPricePayload } from '../lib/tvPriceMessage';
@@ -86,7 +86,13 @@ const fakeChart = (bars: Bar[]) => {
   let data = bars.map(bar => ({ ...bar }));
   const calls = { update: 0, setData: 0 };
   let logical = { from: 0, to: 10 };
+  const dataListeners = new Set<() => void>();
   const controller = {
+    // Jako CandleKit: `setData` ohlásí výměnu dat synchronně na sběrnici.
+    bus: { on: (event: string, fn: () => void) => {
+      if (event === 'data') dataListeners.add(fn);
+      return () => { dataListeners.delete(fn); };
+    } },
     getChart: () => ({ timeScale: () => ({
       getVisibleLogicalRange: () => logical,
       setVisibleLogicalRange: (range: { from: number; to: number }) => { logical = range; },
@@ -97,7 +103,11 @@ const fakeChart = (bars: Bar[]) => {
       if (data.at(-1)?.ts === bar.ts) data = [...data.slice(0, -1), bar];
       else data = [...data, bar];
     },
-    setData: (next: readonly Bar[]) => { calls.setData += 1; data = next.map(bar => ({ ...bar })); },
+    setData: (next: readonly Bar[]) => {
+      calls.setData += 1;
+      data = next.map(bar => ({ ...bar }));
+      [...dataListeners].forEach(fn => fn());
+    },
   };
   return { api: { controller } as never, calls, bars: () => data, logical: () => logical, setLogical: (range: { from: number; to: number }) => { logical = range; } };
 };
@@ -139,5 +149,125 @@ describe('napojení živé svíčky na graf', () => {
     current = null;
     applyLiveCandle(source, target, drawn);
     expect(chart.bars()).toEqual(original);
+  });
+
+  it('obnova dat grafu svíčku vrátí hned v témže kroku a záznam změn je vůči novým datům', () => {
+    const chart = fakeChart(original);
+    const drawn = new Map() as Map<never, LiveCandleDrawn>;
+    const target = { api: chart.api, root: 'MNQ', timeframe: '1m' as const, rawCandles };
+    let active = true;
+    const off = bindLiveCandleDataResets(source, () => [target], drawn, () => active);
+    current = { time: MINUTE, open: 29181, high: 29190, low: 29179, close: 29188, volume: 0 };
+    applyLiveCandle(source, target, drawn);
+    // Data dorazila i s touto minutou (ještě starší stav svíčky).
+    const refreshed: Bar[] = [...original, { ts: MINUTE * 1_000, open: 29181, high: 29186, low: 29180, close: 29185, volume: 40 }];
+    (chart.api as { controller: { setData: (bars: Bar[]) => void } }).controller.setData(refreshed);
+    // Bez čekání na další snímek: živá svíčka je zpět, objem z dat.
+    expect(chart.bars().at(-1)).toMatchObject({ ts: MINUTE * 1_000, high: 29190, close: 29188, volume: 40 });
+    // Výpadek ceny vrátí přesně nová data (bar minuty z dat zůstane, nesmaže se).
+    current = null;
+    applyLiveCandle(source, target, drawn);
+    expect(chart.bars()).toEqual(refreshed);
+    // Při návratu na data (vypnutý feed) se svíčka zpátky nekreslí.
+    current = { time: MINUTE, open: 29181, high: 29199, low: 29179, close: 29198, volume: 0 };
+    applyLiveCandle(source, target, drawn);
+    active = false;
+    (chart.api as { controller: { setData: (bars: Bar[]) => void } }).controller.setData(refreshed);
+    expect(chart.bars()).toEqual(refreshed);
+    expect(drawn.size).toBe(0);
+    off();
+  });
+
+  it('nové cíle se stejným grafem záznam změn nemažou (výpadek ceny pak vrátí data)', () => {
+    const chart = fakeChart(original);
+    const drawn = new Map() as Map<never, LiveCandleDrawn>;
+    const target = { api: chart.api, root: 'MNQ', timeframe: '1m' as const, rawCandles };
+    current = { time: MINUTE - 60, open: 29180, high: 29199, low: 29170, close: 29197, volume: 0 };
+    applyLiveCandle(source, target, drawn);
+    // Druhý graf se živou svíčkou, který pak z cílů vypadne.
+    const dropped = fakeChart(original);
+    applyLiveCandle(source, { ...target, api: dropped.api }, drawn);
+    expect(dropped.bars()).not.toEqual(original);
+    refreshLiveCandleTargets([{ ...target, rawCandles: [...rawCandles] }], drawn);
+    // Vypadlý graf je zpět na datech a bez záznamu; záznam zbylého grafu platí, jen se překreslí.
+    expect(dropped.bars()).toEqual(original);
+    expect(drawn.size).toBe(1);
+    expect([...drawn.values()][0].last).toBeNull();
+    applyLiveCandle(source, target, drawn);
+    current = null;
+    applyLiveCandle(source, target, drawn);
+    expect(chart.bars()).toEqual(original);
+  });
+
+  it('přelom minuty: data bez právě dokončené minuty ji z grafu nevyhodí', () => {
+    const chart = fakeChart(original);
+    const drawn = new Map() as Map<never, LiveCandleDrawn>;
+    const target = { api: chart.api, root: 'MNQ', timeframe: '1m' as const, rawCandles };
+    const off = bindLiveCandleDataResets(source, () => [target], drawn, () => true);
+    // Živě dokončená minuta MINUTE a rozpracovaná další.
+    current = { time: MINUTE, open: 29181, high: 29190, low: 29179, close: 29188, volume: 0 };
+    applyLiveCandle(source, target, drawn);
+    current = { time: MINUTE + 60, open: 29188, high: 29189, low: 29185, close: 29186, volume: 0 };
+    applyLiveCandle(source, target, drawn);
+    // Obnova dat ještě bez minuty MINUTE (server ji dodá až za chvíli).
+    (chart.api as { controller: { setData: (bars: Bar[]) => void } }).controller.setData(original);
+    expect(chart.bars().map(bar => [bar.ts / 1_000, bar.close])).toEqual([
+      [MINUTE - 120, 29170], [MINUTE - 60, 29180], [MINUTE, 29188], [MINUTE + 60, 29186],
+    ]);
+    // Výpadek ceny odebere obě živé minuty — zpět přesně data.
+    current = null;
+    applyLiveCandle(source, target, drawn);
+    expect(chart.bars()).toEqual(original);
+    // Bez živé ceny se po výměně dat nic nepřenáší.
+    (chart.api as { controller: { setData: (bars: Bar[]) => void } }).controller.setData(original);
+    expect(chart.bars()).toEqual(original);
+    off();
+  });
+
+  it('nedokončený poslední bar dat nepřebije dokončenou živou minutu; novější data už ano', () => {
+    const chart = fakeChart(original);
+    const drawn = new Map() as Map<never, LiveCandleDrawn>;
+    const target = { api: chart.api, root: 'MNQ', timeframe: '1m' as const, rawCandles };
+    const off = bindLiveCandleDataResets(source, () => [target], drawn, () => true);
+    current = { time: MINUTE, open: 29181, high: 29190, low: 29170, close: 29188, volume: 0 };
+    applyLiveCandle(source, target, drawn);
+    current = { time: MINUTE + 60, open: 29188, high: 29189, low: 29185, close: 29186, volume: 0 };
+    applyLiveCandle(source, target, drawn);
+    // Server dodal minutu MINUTE ještě nedokončenou (low jen 29178).
+    const partial: Bar[] = [...original, { ts: MINUTE * 1_000, open: 29181, high: 29190, low: 29178, close: 29183, volume: 90 }];
+    const setData = (bars: Bar[]) => (chart.api as { controller: { setData: (bars: Bar[]) => void } }).controller.setData(bars);
+    setData(partial);
+    expect(chart.bars().at(-2)).toEqual({ ts: MINUTE * 1_000, open: 29181, high: 29190, low: 29170, close: 29188, volume: 90 });
+    expect(chart.bars().at(-1)).toMatchObject({ ts: (MINUTE + 60) * 1_000, close: 29186 });
+    // Výpadek ceny vrátí přesně data (i přepsaný poslední bar dat).
+    current = null;
+    applyLiveCandle(source, target, drawn);
+    expect(chart.bars()).toEqual(partial);
+    // Data s novější minutou: minuta MINUTE je z dat, nic se nepřenáší ani nepřepisuje.
+    current = { time: MINUTE + 60, open: 29188, high: 29189, low: 29185, close: 29186, volume: 0 };
+    applyLiveCandle(source, target, drawn);
+    const later: Bar[] = [...original, { ts: MINUTE * 1_000, open: 29181, high: 29191, low: 29169, close: 29187, volume: 120 },
+      { ts: (MINUTE + 60) * 1_000, open: 29188, high: 29189, low: 29185, close: 29186, volume: 30 }];
+    setData(later);
+    expect(chart.bars().slice(0, -1)).toEqual(later.slice(0, -1));
+    current = null;
+    applyLiveCandle(source, target, drawn);
+    expect(chart.bars()).toEqual(later);
+    off();
+  });
+
+  it('5m: rozsah baru z dat se neztratí, když cíl ještě nezná poslední minutu', () => {
+    // Data už mají 5m bar 15:00 s dokončenou minutou 15:00 (high 29200);
+    // `rawCandles` cíle ji ještě nemají (workspace je posílá o commit později).
+    const dataBars: Bar[] = [...original, { ts: MINUTE * 1_000, open: 29179, high: 29200, low: 29176, close: 29186, volume: 50 }];
+    const chart = fakeChart(dataBars);
+    const drawn = new Map() as Map<never, LiveCandleDrawn>;
+    const target = { api: chart.api, root: 'MNQ', timeframe: '5m' as const, rawCandles };
+    current = { time: MINUTE + 60, open: 29186, high: 29190, low: 29183, close: 29189, volume: 0 };
+    applyLiveCandle(source, target, drawn);
+    expect(chart.bars().at(-1)).toMatchObject({ ts: MINUTE * 1_000, open: 29179, high: 29200, low: 29176, close: 29189 });
+    current = null;
+    applyLiveCandle(source, target, drawn);
+    expect(chart.bars()).toEqual(dataBars);
   });
 });

@@ -68,6 +68,13 @@ const rules = {
     "fillOpacity": "number",
     "mitigatedTransparency": "number",
     "maxCount": "number",
+    "extendRight": {
+      "enum": [
+        "edge",
+        "bars"
+      ]
+    },
+    "extendBars": "number",
     "labelText": "string",
     "labelSize": {
       "enum": [

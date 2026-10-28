@@ -1304,10 +1304,23 @@ existující ochranu.
   (`lib/liveCandleFeed.ts`, `hooks/useLiveCandleBinding.ts`) a svíčku jen
   překreslí (`updateBar`) — do dat grafu, cache dne ani storage nejde.
   Od 28. 10. 2026 se tvořící se bar řady (živá svíčka, přehrávaná svíčka)
-  bere i do kreslení FVG (`fairValueGapsWithFormingBar`, posluchač
+  bere i do kreslení FVG (`fairValueGapsWithFormingBars`, posluchač
   `subscribeDataChanged` v `CandleKitTradeChart`): zaplnění a tvořící se FVG
-  hned, jako TV. Jen vrstva kreslení FVG — `fvgs` pro magnet kreslení, FVG
-  vstupu, hodnocení ani úložiště ho nevidí.
+  hned, jako TV. Bere se celý konec řady grafu od posledního baru dat
+  (`controller.getBars()`), ne jen poslední bar — na přelomu minuty drží graf
+  dokončenou živou svíčku, kterou data ještě neznají. Jen vrstva kreslení
+  FVG — `fvgs` pro magnet kreslení, FVG vstupu, hodnocení ani úložiště ho
+  nevidí. Výměnu dat grafu (`setData`, sběrnice `data`) hlídá
+  `bindLiveCandleDataResets`: záznam změn grafu zahodí a živou svíčku vrátí
+  v témže kroku; při vypnutém feedu (návrat na data) ji nekreslí. Dokončené
+  živé bary od posledního baru dat dál vrátí taky (`carryFinishedLiveBars`):
+  server dodává minutu se zpožděním a jeho poslední bar bývá nedokončený,
+  takže na 1m živá dokončená minuta přebije poslední bar dat — data vyhrají,
+  jakmile mají novější bar; výpadek ceny vrací přesně data (přepsaný bar je
+  v `originals`, připsané v `appended`). Nové cíle záznam změn nemažou
+  (`refreshLiveCandleTargets`) — smazání by po výpadku ceny nechalo živou
+  svíčku nakreslenou jako skutečnou; graf, který z cílů vypadl, se vrátí na
+  data.
   Štítek živé pozice v grafu deníku (`components/day/DayLivePositionChip.tsx`,
   27. 10. 2026) používá stejnou listovou komponentu se stejným pravidlem;
   čáry pozice v grafu (vstup, SL/TP) jsou jen z read modelu brokera/workeru,
