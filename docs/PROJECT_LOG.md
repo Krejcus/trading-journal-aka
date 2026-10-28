@@ -285,6 +285,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 17:57–18:08 — Měření 4 zdrojů: IBKR, TV, appka, Tradovate (Claude, jen čtení)
+Filip přihlásil appku (localhost:3000) a Tradovate web ve vestavěném prohlížeči.
+Tradovate: zprávy `md` zachycené z jejich webu (JSON.parse, bez kliknutí), appka:
+`tvPriceStore` přes dynamický import a `addChartInterest()`. Klidnější trh
+(IBKR 13,8 změn ceny/s), okno 9,8 min, všechno na hodinách Macu.
+- Zpoždění proti Tradovate webu (zarovnání cen, rozlišení 50 ms): IBKR +250 ms,
+  appka +450 ms, TV +850 ms. Appka za IBKR +150 ms (vzorek workeru 250 ms).
+- Tradovate posílá poslední obchod v mediánu po 107 ms, ze serveru do prohlížeče ~44 ms.
+- Appka: z workeru do appky změřeno p50 37 ms, p90 62 ms; zprávy po 250 ms.
+- Objem za minutu Tradovate = IBKR (8/8 minut, poměr 1,000).
+- Knoty živé svíčky v appce sedí na IBKR minutu 8/8. Bar jde z IBKR, ne ze vzorků:
+  samotné vzorky by minuly high/low o 2–5 ticků. Kontrola knotů je tím uzavřená.
+- Okamžité posílání při příchodu dávky IBKR by stáhlo appku k ~+300 ms za
+  Tradovate. Strop IBKR (~250 ms za Tradovate) softwarem nepřekonáme.
+
 ### 2026-10-28 14:50–15:15 — Měření IBKR vs. TV během NY openu (Claude, jen čtení)
 Souběžně 25 min: sonda IBKR (clientId 91, AllLast) a TV CDP po 50 ms; cesta
 workeru dopočítaná ze vzorkování 250 ms a změřeného průchodu Supabase Realtime
