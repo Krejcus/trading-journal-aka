@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { htfHistoryDays, htfHistoryDaysFor, htfHistoryRange, withHtfHistory } from '../services/htfHistory';
+import { aggregateWithHtfHistory, htfHistoryBefore, htfHistoryDays, htfHistoryDaysFor, htfHistoryRange, withHtfHistory } from '../services/htfHistory';
 import { aggregateCandles, type MarketCandle } from '../services/marketDataCalculations';
 
 const candle = (time: number, close: number): MarketCandle => ({ time, open: close, high: close + 1, low: close - 1, close, volume: 1 });
@@ -28,9 +28,9 @@ describe('hodinová historie pro vyšší timeframy grafu deníku', () => {
 
   it('hodiny jen před 1m daty, žádná minuta dvakrát; pod hodinu beze změny', () => {
     const first = Date.UTC(2026, 9, 13, 22, 0) / 1_000;
-    const hourly = [candle(first - 7_200, 100), candle(first - 3_600, 101), candle(first, 999)];
-    const raw = [candle(first, 102), candle(first + 60, 103)];
-    expect(withHtfHistory(raw, hourly, '1d').map(item => item.close)).toEqual([100, 101, 102, 103]);
+    const hourly = [candle(first - 7_200, 29_000), candle(first - 3_600, 29_001), candle(first, 29_999)];
+    const raw = [candle(first, 29_002), candle(first + 60, 29_003)];
+    expect(withHtfHistory(raw, hourly, '1d').map(item => item.close)).toEqual([29_000, 29_001, 29_002, 29_003]);
     expect(withHtfHistory(raw, hourly, '15m')).toBe(raw);
     expect(withHtfHistory(raw, [], 'W')).toBe(raw);
   });
@@ -38,8 +38,27 @@ describe('hodinová historie pro vyšší timeframy grafu deníku', () => {
   it('měsíční svíčka z hodin a minut dohromady: open z historie, close z dneška', () => {
     const october = Date.UTC(2026, 9, 2, 14, 0) / 1_000;
     const recent = Date.UTC(2026, 9, 27, 14, 0) / 1_000;
-    const bars = aggregateCandles(withHtfHistory([candle(recent, 120)], [candle(october, 90)], 'M'), 'M');
+    const bars = aggregateCandles(withHtfHistory([candle(recent, 29_020)], [candle(october, 29_000)], 'M'), 'M');
     expect(bars).toHaveLength(1);
-    expect(bars[0]).toMatchObject({ open: 90, close: 120, high: 121, low: 89 });
+    expect(bars[0]).toMatchObject({ open: 29_000, close: 29_020, high: 29_021, low: 28_999 });
+  });
+
+  it('agregace po částech = agregace celé řady (hranice týdne/měsíce se sloučí)', () => {
+    const start = Date.UTC(2026, 8, 1, 0, 0) / 1_000;
+    const hourly = Array.from({ length: 24 * 40 }, (_, index) => candle(start + index * 3_600, 29_000 + (index % 17)));
+    const first = start + 24 * 40 * 3_600;
+    const raw = Array.from({ length: 600 }, (_, index) => candle(first + index * 60, 29_010 + (index % 7)));
+    for (const tf of ['1d', 'W', 'M', '4h'] as const) {
+      expect(aggregateWithHtfHistory(raw, hourly, tf), tf).toEqual(aggregateCandles(withHtfHistory(raw, hourly, tf), tf));
+    }
+    // Memo: stejná historie a stejný začátek dat = stejné pole (přehrávání nepřepočítává).
+    expect(htfHistoryBefore(raw, hourly)).toBe(htfHistoryBefore(raw.slice(0, 10), hourly));
+  });
+
+  it('jiný kontrakt (skok mezi historií a 1m daty) = historie se nepřidá', () => {
+    const first = Date.UTC(2026, 9, 13, 22, 0) / 1_000;
+    const hourly = [candle(first - 3_600, 29_000)];
+    expect(withHtfHistory([candle(first, 29_010)], hourly, '1d')).toHaveLength(2);
+    expect(withHtfHistory([candle(first, 29_200)], hourly, '1d')).toHaveLength(1);
   });
 });

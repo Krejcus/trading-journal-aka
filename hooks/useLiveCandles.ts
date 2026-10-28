@@ -9,11 +9,11 @@ export const LIVE_CANDLES_POLL_MS = 60_000;
  */
 export const LIVE_CANDLES_POLL_PHASE_MS = 20_000;
 /**
- * Načtení mimo fázi (otevření, návrat do appky) v :00–:12 vidí soubor z minulé
+ * Načtení mimo fázi (otevření, návrat do appky) v :00–:14 vidí soubor z minulé
  * minuty, kde je předchozí svíčka ještě rozpracovaná. Hned po nahrání nového
- * souboru (:10 + rezerva) se proto načte ještě jednou — ne až ve :20.
+ * souboru (:10 + rezerva na hodiny zařízení) se proto načte ještě jednou — ne až ve :20.
  */
-export const LIVE_CANDLES_CATCH_UP_MS = 12_000;
+export const LIVE_CANDLES_CATCH_UP_MS = 14_000;
 
 /** Prodleva do doháněcího načtení po načtení mimo fázi; `null` = není potřeba. */
 export function liveCandlesCatchUpDelay(nowMs: number): number | null {

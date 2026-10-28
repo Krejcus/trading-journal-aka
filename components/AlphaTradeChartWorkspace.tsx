@@ -50,7 +50,7 @@ import {
 } from 'lucide-react';
 import { Trade } from '../types';
 import { useHtfHistory, useResetViewOnHtfHistory } from '../hooks/useHtfHistory';
-import { withHtfHistory } from '../services/htfHistory';
+import { aggregateWithHtfHistory, withHtfHistory } from '../services/htfHistory';
 import {
   aggregateCandles,
   isMarketTimeframe,
@@ -768,7 +768,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   const candles = useMemo(() => {
     if (!backtestSession) {
       replayAnalysisAccumulatorRef.current = null;
-      return aggregateCandles(withHtfHistory(replayRawCandles, htfHistory, config.timeframe), config.timeframe);
+      return aggregateWithHtfHistory(replayRawCandles, htfHistory, config.timeframe);
     }
     const next = updateReplayAnalysisAccumulator(replayAnalysisAccumulatorRef.current, {
       historicalMinute: sessionHistoryCandles,
@@ -780,7 +780,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     replayAnalysisAccumulatorRef.current = next;
     return next.candles;
   }, [backtestSession?.startMs, config.timeframe, htfHistory, rawCandles, replayRawCandles, replayRevealedCount, sessionHistoryCandles]);
-  useResetViewOnHtfHistory(backtestSession ? null : chartApi, htf, config.timeframe);
+  useResetViewOnHtfHistory(backtestSession ? null : chartApi, htf, config.timeframe, context.replay.phase !== 'active');
   const requestOlderHistory = useCallback((oldestTime: number) => {
     if (!requestSessionHistory) return;
     setHistoryError(null);
@@ -1565,7 +1565,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         if (timeframe !== '1m') {
           let cached = bases.get(panelId);
           if (!cached || cached.cursor !== cursor) {
-            cached = { cursor, base: formingReplayBase(control.rawCandles, cursor, timeframe) };
+            // Rozpracovaný bar vyššího timeframu i s hodinovou historií (měsíc začal před 1m daty).
+            cached = { cursor, base: formingReplayBase(control.liveRawCandles, cursor, timeframe) };
             bases.set(panelId, cached);
           }
           bar = formingReplayBar(cached.base, partial, timeframe);
@@ -1621,7 +1622,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       targets.set(panelId, {
         candle,
         points: candleReplayPath(candle),
-        base: timeframe === '1m' ? null : formingReplayBase(control.rawCandles, cursor - 60, timeframe),
+        base: timeframe === '1m' ? null : formingReplayBase(control.liveRawCandles, cursor - 60, timeframe),
         timeframe,
       });
     });

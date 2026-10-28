@@ -10,7 +10,7 @@ import CandleKitTradeChart from '../CandleKitTradeChart';
 import { QuantumSpinner } from '../QuantumLoader';
 import { aggregateCandles, timeframeMinutes, type MarketTimeframe } from '../../services/marketData';
 import { useHtfHistory, useResetViewOnHtfHistory } from '../../hooks/useHtfHistory';
-import { withHtfHistory } from '../../services/htfHistory';
+import { aggregateWithHtfHistory, withHtfHistory } from '../../services/htfHistory';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
 import ChartNotesLayer from '../ChartNotesLayer';
@@ -62,12 +62,12 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
   const htf = useHtfHistory('MNQ', [timeframe], raw[0]?.time);
   const htfHistory = htf.candles;
   const withHistory = useMemo(() => withHtfHistory(raw, htfHistory, timeframe), [htfHistory, raw, timeframe]);
-  const candles = useMemo(() => aggregateCandles(withHistory, timeframe), [withHistory, timeframe]);
+  const candles = useMemo(() => aggregateWithHtfHistory(raw, htfHistory, timeframe), [htfHistory, raw, timeframe]);
   const barTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
   const tradeNotes = useMemo(() => chartNotesOfTrades(ctl.chart.chartTrades), [ctl.chart.chartTrades]);
   // Živá poslední svíčka z kanálu ceny (jen překreslení v grafu).
   useLiveCandleBinding(ctl.chart.liveFeed, [{ api, root: 'MNQ', timeframe, rawCandles: withHistory }]);
-  useResetViewOnHtfHistory(api, htf, timeframe);
+  useResetViewOnHtfHistory(api, htf, timeframe, !selectedTrade);
   // Deník dneška se otevírá jako „Reset chart view“ (poslední svíčka vpravo).
   useResetViewOnOpen(api, ctl.isToday && !selectedTrade, raw.length > 0);
   useLivePriceLinesBinding(positionLines ?? null, [{ api, root: 'MNQ' }]);
