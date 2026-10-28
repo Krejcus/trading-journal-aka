@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { parentPort } from 'node:worker_threads';
+import { parentPort, workerData } from 'node:worker_threads';
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
 import { signTvPricePayload, TV_PRICE_EVENT, type TvPriceEnvelope } from '../../lib/tvPriceMessage';
 import {
@@ -8,6 +8,7 @@ import {
   TV_CHART_META_EXPRESSION,
   TV_FAST_PRICE_EXPRESSION,
 } from '../../services/tradingViewCdpSession';
+import { createIbkrPriceSource, initialPriceSourceSwitch, nextPriceSource, type IbkrPriceSource } from '../../services/ibkrPriceSource';
 import { createTvPriceStream, realtimeChannelCanPush, type TvPriceStream, type TvStreamMeta, type TvStreamReading } from '../../services/tradingViewPriceStream';
 
 /**
@@ -18,6 +19,11 @@ import { createTvPriceStream, realtimeChannelCanPush, type TvPriceStream, type T
  *
  * Chyba tady ukončí jen tohle vlákno; hlídač (`server/tvPriceStreamSupervisor.ts`)
  * ho restartuje s prodlevou nebo vypne jističem. TV se odsud nikdy nespouští.
+ *
+ * Zdroj ceny (`workerData.priceSource`, výchozí `tv`): při `ibkr` se čte IB
+ * Gateway na 127.0.0.1 (`services/ibkrPriceSource.ts`, jen čtení) a TV je
+ * záloha. Přepnutí zdroje = nový běh (`runId`), aby klient nikdy nesložil
+ * jednu řadu vzorků ze dvou zdrojů.
  */
 
 interface StreamConfig {
@@ -41,7 +47,7 @@ const READ_TIMEOUT_MS = 1_000;
 const port = parentPort;
 if (!port) throw new Error('tv-price-stream-thread-only');
 
-const runId = randomUUID();
+const priceSource: 'tv' | 'ibkr' = (workerData as { priceSource?: unknown } | null)?.priceSource === 'ibkr' ? 'ibkr' : 'tv';
 let config: StreamConfig | null = null;
 let stream: TvPriceStream | null = null;
 let client: SupabaseClient | null = null;
@@ -56,6 +62,9 @@ let metaAt = 0;
 let discovering = false;
 let discoveryFailures = 0;
 let nextDiscoveryAt = 0;
+let ibkr: IbkrPriceSource | null = null;
+let sourceSwitch = initialPriceSourceSwitch();
+let ibkrMeta: TvStreamMeta = { front: null, switchAt: null };
 
 const finite = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const text = (value: unknown, max = 64): string | null => typeof value === 'string' && value.length > 0 ? value.slice(0, max) : null;
@@ -113,7 +122,7 @@ const refreshMeta = async (current: TradingViewCdpSession, index: number) => {
   } catch { /* metadata počkají na další pokus */ }
 };
 
-const read = async (): Promise<TvStreamReading | null> => {
+const readTv = async (): Promise<TvStreamReading | null> => {
   const cfg = config;
   if (!cfg) return null;
   const current = session;
@@ -140,6 +149,29 @@ const read = async (): Promise<TvStreamReading | null> => {
     bid: finite(chart.bid),
     ask: finite(chart.ask),
     mode: text(chart.mode, 32),
+  };
+};
+
+/**
+ * IBKR, když je k dispozici, jinak TV. Přepnutí zdroje zastaví tenhle stream
+ * a založí nový s novým `runId`; do té doby se nic neposílá.
+ */
+const read = async (): Promise<TvStreamReading | null> => {
+  const source = ibkr;
+  if (!source) return readTv();
+  const reading = source.reading();
+  const next = nextPriceSource(sourceSwitch, reading !== null, Date.now());
+  sourceSwitch = next.state;
+  if (next.changed) {
+    restartStream();
+    return null;
+  }
+  if (sourceSwitch.active === 'tv') return readTv();
+  if (!reading) return null;
+  ibkrMeta = { front: reading.front, switchAt: null };
+  return {
+    chart: reading.chart, interval: '1', pane: 0, bar: reading.bar,
+    last: reading.last, bid: reading.bid, ask: reading.ask, mode: reading.mode,
   };
 };
 
@@ -194,9 +226,30 @@ const openChannel = (cfg: Required<Pick<StreamConfig, 'url' | 'anonKey' | 'topic
 const stopAll = async () => {
   stream?.stop();
   stream = null;
+  ibkr?.stop();
+  ibkr = null;
+  sourceSwitch = initialPriceSourceSwitch();
   closeSession();
   await closeChannel();
 };
+
+const createStream = () => createTvPriceStream({
+  read,
+  meta: () => (sourceSwitch.active === 'ibkr' ? ibkrMeta : meta),
+  demand: () => demand,
+  ready: () => joined && synced,
+  // Klíč se čte z aktuální konfigurace — změna tajemství na serveru přijde bez restartu.
+  sign: payload => config?.key ? signTvPricePayload(payload, config.key) : Promise.resolve(null),
+  publish,
+  // Nový běh při každém (re)startu streamu: přepnutí zdroje = nová řada u klienta.
+  runId: randomUUID(),
+});
+
+function restartStream() {
+  stream?.stop();
+  stream = createStream();
+  stream.start();
+}
 
 const apply = async (next: StreamConfig) => {
   const previous = config;
@@ -216,19 +269,17 @@ const apply = async (next: StreamConfig) => {
     closeSession();
     nextDiscoveryAt = 0;
   }
-  if (!stream) {
-    stream = createTvPriceStream({
-      read,
-      meta: () => meta,
-      demand: () => demand,
-      ready: () => joined && synced,
-      // Klíč se čte z aktuální konfigurace — změna tajemství na serveru přijde bez restartu.
-      sign: payload => config?.key ? signTvPricePayload(payload, config.key) : Promise.resolve(null),
-      publish,
-      runId,
-    });
-    stream.start();
+  if (priceSource === 'ibkr' && !ibkr) {
+    // Selhání IBKR nesmí zastavit čtení z TV v tomtéž vlákně.
+    try {
+      const created = createIbkrPriceSource();
+      created.start();
+      ibkr = created;
+    } catch {
+      ibkr = null;
+    }
   }
+  if (!stream) restartStream();
 };
 
 // Konfigurace se aplikují postupně — překryté přepojení kanálu by nechalo dva klienty.
@@ -242,5 +293,10 @@ setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
 setInterval(() => {
   const stats = stream?.stats();
   // Jen čísla a stav; téma, klíč ani obsah zpráv nikdy.
-  port.postMessage({ type: 'diag', state: stats?.state ?? 'off', reads: stats?.reads ?? 0, sends: stats?.sends ?? 0, errors: stats?.errors ?? 0 });
+  const ib = ibkr?.stats();
+  port.postMessage({
+    type: 'diag', state: stats?.state ?? 'off', reads: stats?.reads ?? 0, sends: stats?.sends ?? 0, errors: stats?.errors ?? 0,
+    // Zdroj a stav IBKR jen jako krátké kódy (nikdy text chyb Gateway).
+    source: sourceSwitch.active, ibkr: ib?.state ?? null, ibkrCode: ib?.lastCode ?? null, ibkrTrades: ib?.trades ?? 0,
+  });
 }, 60_000);

@@ -68,8 +68,16 @@ const sameConfig = (left: TvPriceStreamConfig | null, right: TvPriceStreamConfig
   && left.topic === right.topic && left.key === right.key
   && left.excludeTargetId === right.excludeTargetId && left.excludeChartId === right.excludeChartId;
 
+export type TvPriceSourceName = 'tv' | 'ibkr';
+
+/** Po pádu vlákna se zdrojem IBKR jede vlákno tak dlouho jen s TV (záloha nesmí padat s IBKR). */
+export const IBKR_CRASH_FALLBACK_MS = 30 * 60_000;
+
 export function createTvPriceStreamSupervisor(options: {
-  createWorker: () => TvStreamWorkerLike;
+  /** Vlákno s daným zdrojem ceny (`workerData.priceSource`). */
+  createWorker: (priceSource: TvPriceSourceName) => TvStreamWorkerLike;
+  /** Požadovaný zdroj; výchozí `tv`. */
+  priceSource?: TvPriceSourceName;
   log?: (line: string) => void;
   now?: () => number;
   setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
@@ -107,8 +115,17 @@ export function createTvPriceStreamSupervisor(options: {
     } catch { /* už ukončené */ }
   };
 
+  const preferredSource: TvPriceSourceName = options.priceSource === 'ibkr' ? 'ibkr' : 'tv';
+  let workerSource: TvPriceSourceName | null = null;
+  let ibkrPausedUntil = -Infinity;
+
   const recordCrash = (reason: string) => {
     const at = now();
+    if (workerSource === 'ibkr') {
+      // Pád s IBKR (i po probuzení): další vlákna jen s TV, ať záloha nepadá s IBKR do jističe.
+      ibkrPausedUntil = at + IBKR_CRASH_FALLBACK_MS;
+      log('TV STREAM vlákno se zdrojem IBKR skončilo — 30 min jen TradingView');
+    }
     if (at - lastWake < WAKE_GRACE_MS) {
       log(`TV STREAM vlákno skončilo po probuzení (${reason}) — do jističe se nepočítá`);
     } else {
@@ -130,8 +147,10 @@ export function createTvPriceStreamSupervisor(options: {
   const ensure = () => {
     if (stopped || tripped || !config?.enabled || worker) return;
     let created: TvStreamWorkerLike;
+    const source: TvPriceSourceName = preferredSource === 'ibkr' && now() >= ibkrPausedUntil ? 'ibkr' : 'tv';
+    workerSource = source;
     try {
-      created = options.createWorker();
+      created = options.createWorker(source);
     } catch (error) {
       recordCrash(error instanceof Error ? error.name : 'create-failed');
       return;
@@ -156,9 +175,14 @@ export function createTvPriceStreamSupervisor(options: {
       }
       if (type === 'diag' && now() - lastDiagLog >= DIAG_LOG_INTERVAL_MS) {
         lastDiagLog = now();
-        const diag = message as { state?: unknown; reads?: unknown; sends?: unknown; errors?: unknown };
-        // Jen čísla a stav — žádné téma, klíč ani obsah zpráv.
-        log(`TV STREAM stav=${String(diag.state).slice(0, 16)} reads=${Number(diag.reads) || 0} sends=${Number(diag.sends) || 0} errors=${Number(diag.errors) || 0}`);
+        const diag = message as {
+          state?: unknown; reads?: unknown; sends?: unknown; errors?: unknown;
+          source?: unknown; ibkr?: unknown; ibkrCode?: unknown; ibkrTrades?: unknown;
+        };
+        const code = (value: unknown) => String(value ?? '-').replace(/[^a-z0-9-]/gi, '').slice(0, 16) || '-';
+        // Jen čísla a krátké kódy — žádné téma, klíč, obsah zpráv ani text chyb Gateway.
+        const ibkr = diag.source === undefined ? '' : ` zdroj=${code(diag.source)} ibkr=${code(diag.ibkr)} kód=${code(diag.ibkrCode)} obchody=${Number(diag.ibkrTrades) || 0}`;
+        log(`TV STREAM stav=${String(diag.state).slice(0, 16)} reads=${Number(diag.reads) || 0} sends=${Number(diag.sends) || 0} errors=${Number(diag.errors) || 0}${ibkr}`);
       }
     } catch { /* výjimka v posluchači na hlavním vlákně by shodila proces kopírky */ } });
     created.on('error', error => { try { end(error instanceof Error ? error.name : 'error'); } catch { /* viz výše */ } });
@@ -184,6 +208,13 @@ export function createTvPriceStreamSupervisor(options: {
         worker = null;
         terminate(stuck);
         recordCrash('no-alive');
+      } else if (worker && preferredSource === 'ibkr' && workerSource === 'tv' && at >= ibkrPausedUntil && !stopped && !tripped) {
+        // Pauza IBKR po pádu skončila: zdravé vlákno s TV záměrně vyměnit (do jističe se nepočítá).
+        const current = worker;
+        worker = null;
+        terminate(current);
+        log('TV STREAM pauza IBKR skončila — vlákno znovu se zdrojem IBKR');
+        ensure();
       }
     } catch { /* hlídač nesmí shodit worker */ }
   }, LIVENESS_CHECK_MS);

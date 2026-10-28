@@ -2,16 +2,12 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   aggregateTicksToMinutes,
-  assertGatewayEndpoint,
   buildVerdict,
   compareMinuteBars,
-  createReadOnlyIbClient,
-  IB_GATEWAY_HOST,
   nextTradesRequestAt,
   parseProbeArgs,
   percentile,
   pickFrontContract,
-  redactAccountIds,
   summarizeLag,
   summarizeTickFlow,
   TICK_BY_TICK_REQUEST_GAP_MS,
@@ -42,69 +38,16 @@ const bar = (time: number, open: number, high: number, low: number, close: numbe
 });
 
 describe('IBKR tick probe — jen čtení', () => {
-  it('nevolá nic, co by poslalo příkaz nebo četlo účet', () => {
-    const forbidden = [
-      'placeOrder',
-      'cancelOrder',
-      'reqGlobalCancel',
-      'exerciseOptions',
-      'reqOpenOrders',
-      'reqAllOpenOrders',
-      'reqAutoOpenOrders',
-      'reqAccountUpdates',
-      'reqAccountSummary',
-      'reqAccountUpdatesMulti',
-      'reqPositions',
-      'reqPositionsMulti',
-      'reqExecutions',
-      'reqPnL',
-      'reqManagedAccts',
-      'managedAccounts',
-      'replaceFA',
-      'requestFA',
-      'reqIds',
-    ];
-    for (const name of forbidden) expect(PROBE_SOURCE, name).not.toContain(name);
-  });
-
-  it('importuje jen node:*, @stoqey/ib a nic z kopírky ani workeru', () => {
+  it('importuje jen node:*, @stoqey/ib a sdílený čtecí modul IBKR — nic z kopírky ani workeru', () => {
     const imports = [...PROBE_SOURCE.matchAll(/from\s+'([^']+)'/g)].map(match => match[1]);
     expect(imports.length).toBeGreaterThan(0);
-    for (const source of imports) expect(source === '@stoqey/ib' || source.startsWith('node:'), source).toBe(true);
+    for (const source of imports) {
+      expect(source === '@stoqey/ib' || source === '../../services/ibkrMarketData' || source.startsWith('node:'), source).toBe(true);
+    }
     expect(PROBE_SOURCE).not.toMatch(/\bimport\(/);
     expect(PROBE_SOURCE).not.toContain('process.env');
-  });
-
-  it('IBApi vzniká jen v jednom místě a jen na 127.0.0.1', () => {
-    expect(PROBE_SOURCE.match(/new IBApi\(/g)).toHaveLength(1);
-    expect(IB_GATEWAY_HOST).toBe('127.0.0.1');
-    expect(() => assertGatewayEndpoint('192.168.1.10', 4001)).toThrow();
-    expect(() => assertGatewayEndpoint(IB_GATEWAY_HOST, 8080)).toThrow();
-    expect(() => assertGatewayEndpoint(IB_GATEWAY_HOST, 4001)).not.toThrow();
+    expect(PROBE_SOURCE).not.toMatch(/new IBApi\(/);
     expect(() => parseProbeArgs(['--port', '5432'])).toThrow();
-  });
-
-  it('klient nabízí jen čtecí volání a nepouští ven IBApi ani posluchače', () => {
-    const client = createReadOnlyIbClient({ port: 4001, clientId: 91 }, {});
-    expect(Object.keys(client).sort()).toEqual([
-      'cancelTrades',
-      'cancelVolume',
-      'connect',
-      'disconnect',
-      'isConnected',
-      'requestContractDetails',
-      'requestMinuteBars',
-      'requestRealtimeData',
-      'subscribeTrades',
-      'subscribeVolume',
-    ]);
-    expect(Object.isFrozen(client)).toBe(true);
-    expect(client.isConnected()).toBe(false);
-  });
-
-  it('z hlášek maže čísla účtů', () => {
-    expect(redactAccountIds('Account U1234567 and DU7654321 ok')).toBe('Account [account] and [account] ok');
-    expect(redactAccountIds('MNQZ6 conId 730283085')).toBe('MNQZ6 conId 730283085');
   });
 
   it('stejný instrument znovu nejdřív za 15 s', () => {

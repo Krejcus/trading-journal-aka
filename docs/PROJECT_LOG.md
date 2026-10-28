@@ -285,6 +285,47 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 dopoledne — IBKR: Gateway běží, sonda prošla, zdroj ceny ve vlákně workeru (Claude, větev, NEnasazeno)
+
+- IB Gateway 10.51 (Stable) na Macu: Read-Only API, port 4001, jen
+  localhost, Trusted IP 127.0.0.1 (ověřeno v nastavení).
+- Sonda 2 min (9:12): živá data (`marketDataType=1`), 10 obchodů/s, objem
+  obchodů vs. denní objem IBKR 1,005, dnešní 1m svíčky IBKR od 18:00 ET,
+  bez výpadku. Ticky ale chodí v dávkách ~každých 0,6 s (p50 626 ms,
+  dávka p50 5 obchodů); hodiny Macu ±16 ms. Čerstvost ~0,3–1,5 s.
+- Fáze 2 (jen zobrazení, INV-UI-04/INV-WORKER-04/INV-RELAY-04/INV-FRESH-03):
+  - `services/ibkrMarketData.ts`: jediný `IBApi` (zmrazené čtecí rozhraní,
+    přesunuto ze sondy, + bid/ask); `services/ibkrPriceSource.ts`: spojení,
+    přední kontrakt (jeden časovač kontroly, rostoucí reqId), AllLast,
+    čtení až s celou 1m svíčkou, 1100/1101/2103/2110 = bez čtení, 10197 =
+    pauza 60 s, stale 15 s, jen porty 4001/4002, `nextPriceSource`
+    (na IBKR po 5 s dostupnosti, zpět na TV po 3 s bez čtení).
+  - Vlákno `tv-price-stream.mjs` čte IBKR při `workerData.priceSource='ibkr'`,
+    jinak/záloha TV; přepnutí zdroje = nový `runId`. Formát zprávy beze
+    změny (`chart: 'IBKR:MNQZ2026'`, `front: 'MNQZ2026'`); klient mění jen
+    štítek („živě · IBKR“, `LivePriceSourceTag`).
+  - Hlídač: pád vlákna se zdrojem IBKR → 30 min jen TV (záloha nepadá do
+    jističe s IBKR). Pilot `ALPHATRADE_PRICE_SOURCE=ibkr`, instalátor
+    `--price-source ibkr` (jen s `--tv-stream on`), reinstall zachová.
+  - PAST: `@stoqey/ib` je CommonJS → v ESM bundlu vlákna `Dynamic require of
+    "fs"` a vlákno by při startu spadlo (i se zdrojem TV, jistič by vypnul
+    kanál). Bundle vlákna má proto hlavičku `TV_PRICE_STREAM_BANNER`
+    (`createRequire`, `__dirname`); test staví bundle jako instalátor a pouští
+    ho jako Worker v obou režimech.
+- Kritik `copier-design-critic` nad návrhem: OPRAVIT PŘED COMMITEM (9 nálezů,
+  zapracováno); nad diffem: OK S VÝHRADAMI — zapracováno 1–5 (návrat na IBKR
+  po pauze recyklací vlákna, 1101 čeká na nový odběr i přes 2103/2104,
+  teardown ruší odložené časovače, bundle test vytvoří klienta IBKR,
+  selhání IBKR nezastaví TV ve vlákně).
+- Follow-up (neblokuje): 2103/2104 jsou per farma (filtrovat `usfuture`);
+  store nepřerušuje řadu při změně `chart`/`front` v jednom `runId` a
+  `lib/tvLiveCandle.ts` nekontroluje `front` (týden rollu, jen zobrazení).
+- Ověření (DISARMED v řetězu): 5787 testů zelených, `tsc` čistý; zdroj
+  v ESM bundlu 40 s proti živé Gateway OK.
+- Nasazení: reinstall workeru jen DISARMED/flat/reconciled a po Filipově
+  „nasaď“ (`COPIER_PRICE_SOURCE=ibkr scripts/copier/mac-reinstall-safe.sh`);
+  Gateway musí běžet, jinak vlákno jede z TV.
+
 ### 2026-10-27 odpoledne — IBKR: sonda jen pro čtení připravená, čeká na Gateway (Claude, větev, NEnasazeno)
 
 - Filip má účet IBKR (IBKR Ireland), vklad 20 000 Kč, objednané „CME

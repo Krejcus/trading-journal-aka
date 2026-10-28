@@ -26,6 +26,13 @@ import {
   type MacCopierInstallManifest,
 } from '../../server/macCopierInstallManifest';
 
+
+/** Hlavička bundle vlákna ceny: `require`/`__dirname` pro CommonJS knihovny v ESM. */
+const TV_PRICE_STREAM_BANNER = "import { createRequire as __atCreateRequire } from 'node:module'; "
+  + "import { fileURLToPath as __atFileURLToPath } from 'node:url'; import { dirname as __atDirname } from 'node:path'; "
+  + 'const require = __atCreateRequire(import.meta.url); const __filename = __atFileURLToPath(import.meta.url); '
+  + 'const __dirname = __atDirname(__filename);';
+
 const execFileAsync = promisify(execFile);
 const LABEL = 'com.alphatrade.copier';
 const projectRoot = resolve(new URL('../..', import.meta.url).pathname);
@@ -402,6 +409,8 @@ async function install(): Promise<void> {
     '--platform=node',
     '--format=esm',
     '--target=node20',
+    // `@stoqey/ib` (zdroj ceny IBKR) je CommonJS: v ESM bundlu potřebuje `require`.
+    `--banner:js=${TV_PRICE_STREAM_BANNER}`,
     `--outfile=${tvPriceStreamPath}`,
   ]);
   await chmod(tvPriceStreamPath, 0o700);
@@ -421,6 +430,8 @@ async function install(): Promise<void> {
   const allowFullDevelopmentOrigins = flags.get('allow-full-dev-origins') === 'true';
   // Kanál ceny z TV je výchozí vypnutý; zapnutí musí přežít reinstall (`--tv-stream on`).
   const tvStreamEnabled = flags.get('tv-stream')?.trim().toLowerCase() === 'on';
+  // Zdroj ceny vlákna: IBKR (IB Gateway, záloha TV) jen výslovně (`--price-source ibkr`).
+  const priceSourceIbkr = tvStreamEnabled && flags.get('price-source')?.trim().toLowerCase() === 'ibkr';
   const programArguments = [
     '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
@@ -453,6 +464,7 @@ async function install(): Promise<void> {
     ? '<key>ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS</key><string>1</string>'
     : ''}
     ${tvStreamEnabled ? '<key>ALPHATRADE_TV_STREAM</key><string>on</string>' : ''}
+    ${priceSourceIbkr ? '<key>ALPHATRADE_PRICE_SOURCE</key><string>ibkr</string>' : ''}
   </dict>
 </dict></plist>
 `;

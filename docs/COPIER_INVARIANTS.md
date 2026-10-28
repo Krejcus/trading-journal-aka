@@ -1057,7 +1057,10 @@ existující ochranu.
   / 10 min, liveness, pády po probuzení se nepočítají, posluchači v
   try/catch), `server/macCopierCommandRelay.ts:notifyRealtimeConfig`
   (synchronně, bez čekání, před kickem), `scripts/copier/pilot.ts` (výchozí
-  vypnuto, `ALPHATRADE_TV_STREAM=on` + existující bundle).
+  vypnuto, `ALPHATRADE_TV_STREAM=on` + existující bundle). Zdroj IBKR
+  (`ALPHATRADE_PRICE_SOURCE=ibkr`, 28. 10. 2026) běží ve stejném vlákně
+  (`services/ibkrPriceSource.ts`, záloha TV, přepnutí zdroje = nový `runId`);
+  bundle vlákna má hlavičku s `require` pro CommonJS knihovnu `@stoqey/ib`.
 - Hlídá test: `tests/tvPriceStreamSupervisor.test.ts`,
   `tests/tvPriceStreamWiring.test.ts` (allowlist importů vlákna, pořadí
   buildu, relay hook), `tests/tradingViewPriceStream.test.ts`.
@@ -1301,6 +1304,12 @@ existující ochranu.
   přes `LiveOpenPnlValue` (jeden obchod skupiny, řádek účtu). Nebezpečné je
   vrátit číslo s pohybem z TV z komponenty ven nebo z něj počítat součet
   s limity.
+- IBKR (28. 10. 2026): cena z IB Gateway (`services/ibkrPriceSource.ts`)
+  jde stejnou zprávou a stejnou cestou jako cena z TV (symbol `IBKR:…`),
+  platí pro ni celé toto pravidlo. Klient podle symbolu mění jen štítek
+  („živě · IBKR“). Spojení na Gateway je jen čtecí: jediný `IBApi` je ve
+  `services/ibkrMarketData.ts` za zmrazeným úzkým rozhraním, jen 127.0.0.1
+  (hlídá `tests/ibkrMarketData.test.ts`), Gateway má navíc „Read-Only API“.
 
 ### Vzdálený watchdog
 

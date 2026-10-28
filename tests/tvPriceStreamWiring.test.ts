@@ -1,5 +1,8 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { describe, expect, it, vi } from 'vitest';
 import { startMacCopierCommandRelay } from '../server/macCopierCommandRelay';
 import { tvPriceStreamConfigFromRealtime } from '../server/tvPriceStreamSupervisor';
@@ -30,9 +33,81 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     expect([...importGraph('scripts/copier/tvPriceStreamThread.ts')].sort()).toEqual([
       'lib/tvPriceMessage.ts',
       'scripts/copier/tvPriceStreamThread.ts',
+      'services/ibkrMarketData.ts',
+      'services/ibkrPriceSource.ts',
       'services/tradingViewCdpSession.ts',
       'services/tradingViewPriceStream.ts',
     ]);
+  });
+
+  it('vlákno: knihovny jen ze svého allowlistu a žádné volání, které by poslalo příkaz nebo četlo účet IBKR', () => {
+    const files = [...importGraph('scripts/copier/tvPriceStreamThread.ts')];
+    const bare = new Set(files.flatMap(file => [...source(file).matchAll(/\bfrom\s+['"]([^.'"][^'"]*)['"]/g)].map(match => match[1])));
+    for (const name of bare) {
+      expect(name.startsWith('node:') || ['@supabase/supabase-js', '@stoqey/ib'].includes(name), name).toBe(true);
+    }
+    const forbidden = /\b(placeOrder|cancelOrder|reqGlobalCancel|reqOpenOrders|reqAllOpenOrders|reqAccountUpdates|reqAccountSummary|reqPositions|reqExecutions|reqPnL|reqManagedAccts|managedAccounts|reqIds)\b/;
+    for (const file of files) expect(source(file), file).not.toMatch(forbidden);
+  });
+
+  it('bundle vlákna postavený jako v instalátoru naběhne jako Worker se zdrojem tv i ibkr', async () => {
+    const installer = source('scripts/copier/mac-install.ts');
+    const bannerSource = /const TV_PRICE_STREAM_BANNER = ([\s\S]*?);\n/.exec(installer)?.[1];
+    expect(bannerSource).toBeTruthy();
+    // Řetězcové literály spojené `+` — vyhodnotit bez eval: vzít obsah uvozovek.
+    const banner = [...bannerSource!.matchAll(/(["'])((?:(?!\1).)*)\1/g)].map(match => match[2]).join('');
+    expect(banner).toContain('const require = __atCreateRequire(import.meta.url);');
+    const dir = mkdtempSync(join(tmpdir(), 'tv-price-stream-'));
+    try {
+      const outfile = join(dir, 'tv-price-stream.mjs');
+      execFileSync(join(root, 'node_modules/.bin/esbuild'), [
+        join(root, 'scripts/copier/tvPriceStreamThread.ts'),
+        '--bundle', '--platform=node', '--format=esm', '--target=node20', `--banner:js=${banner}`, `--outfile=${outfile}`, '--log-level=error',
+      ]);
+      for (const priceSource of ['tv', 'ibkr']) {
+        const thread = new Worker(outfile, {
+          workerData: { priceSource }, stdout: true, stderr: true,
+          resourceLimits: { maxOldGenerationSizeMb: 96, maxYoungGenerationSizeMb: 16 },
+        });
+        thread.stdout.resume();
+        thread.stderr.resume();
+        const outcome = await new Promise<string>(resolveOutcome => {
+          const timer = setTimeout(() => resolveOutcome('timeout'), 8_000);
+          thread.on('message', message => { if ((message as { type?: unknown })?.type === 'alive') { clearTimeout(timer); resolveOutcome('alive'); } });
+          thread.on('error', error => { clearTimeout(timer); resolveOutcome(`error: ${error.message}`); });
+          thread.on('exit', code => { clearTimeout(timer); resolveOutcome(`exit ${code}`); });
+        });
+        await thread.terminate();
+        expect(outcome, priceSource).toBe('alive');
+      }
+      // Stejně postavený bundle vytvoří klienta IBKR (`new IBApi` v ESM), bez připojení.
+      const probeEntry = join(dir, 'ibkr-client-entry.ts');
+      writeFileSync(probeEntry, `import { createReadOnlyIbClient } from ${JSON.stringify(join(root, 'services/ibkrMarketData.ts'))};\n`
+        + 'const client = createReadOnlyIbClient({ port: 4002, clientId: 99 }, {});\n'
+        + 'console.log(JSON.stringify({ connected: client.isConnected(), keys: Object.keys(client).length }));\n');
+      const probeOut = join(dir, 'ibkr-client.mjs');
+      execFileSync(join(root, 'node_modules/.bin/esbuild'), [
+        probeEntry, '--bundle', '--platform=node', '--format=esm', '--target=node20', `--banner:js=${banner}`, `--outfile=${probeOut}`, '--log-level=error',
+      ]);
+      expect(JSON.parse(execFileSync(process.execPath, [probeOut], { encoding: 'utf8' }).trim())).toEqual({ connected: false, keys: 10 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('zdroj IBKR jen výslovně: pilot předá workerData, instalátor i reinstall ho zachovají', () => {
+    const pilot = source('scripts/copier/pilot.ts');
+    expect(pilot).toContain("process.env.ALPHATRADE_PRICE_SOURCE?.trim().toLowerCase() === 'ibkr' ? 'ibkr' : 'tv'");
+    expect(pilot).toContain('priceSource: tvPriceSource,');
+    expect(pilot).toContain('workerData: { priceSource },');
+    const thread = source('scripts/copier/tvPriceStreamThread.ts');
+    expect(thread).toContain("(workerData as { priceSource?: unknown } | null)?.priceSource === 'ibkr' ? 'ibkr' : 'tv'");
+    const installer = source('scripts/copier/mac-install.ts');
+    expect(installer).toContain("tvStreamEnabled && flags.get('price-source')?.trim().toLowerCase() === 'ibkr'");
+    expect(installer).toContain('<key>ALPHATRADE_PRICE_SOURCE</key><string>ibkr</string>');
+    const reinstall = source('scripts/copier/mac-reinstall-safe.sh');
+    expect(reinstall).toContain('Print :EnvironmentVariables:ALPHATRADE_PRICE_SOURCE');
+    expect(reinstall).toContain('TV_STREAM_ARGS+=(--price-source ibkr)');
   });
 
   it('vlákno ani jádro streamu TV nikdy nespouští ani neukončují', () => {
@@ -49,6 +124,11 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     const workerBuild = installer.indexOf('`--outfile=${runtimePath}`');
     expect(threadBuild).toBeGreaterThan(0);
     expect(threadBuild).toBeLessThan(workerBuild);
+    // CommonJS knihovna IBKR v ESM bundlu vlákna: bez `require` by vlákno při startu spadlo.
+    expect(installer).toContain('`--banner:js=${TV_PRICE_STREAM_BANNER}`');
+    expect(installer).toContain("const require = __atCreateRequire(import.meta.url);");
+    expect(installer.indexOf('--banner:js=')).toBeLessThan(threadBuild);
+    expect(installer.lastIndexOf('--banner:js=')).toBeLessThan(threadBuild);
   });
 
   it('zapnutí přežije reinstall: přepínač instalátoru a zachování v bezpečném reinstallu', () => {

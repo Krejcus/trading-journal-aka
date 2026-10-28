@@ -1,18 +1,39 @@
 import { writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { type Contract, type ContractDetails, ErrorCode, MarketDataType, SecType } from '@stoqey/ib';
 import {
-  BarSizeSetting,
-  type Contract,
-  type ContractDetails,
-  ErrorCode,
-  EventName,
-  IBApi,
-  MarketDataType,
-  SecType,
-  TickByTickDataType,
-  WhatToShow,
-} from '@stoqey/ib';
+  assertGatewayEndpoint,
+  createReadOnlyIbClient,
+  IB_GATEWAY_HOST,
+  IB_ALLOWED_PORTS,
+  nextTradesRequestAt,
+  pickFrontContract,
+  redactAccountIds,
+  toFrontCandidate,
+  type FrontContractCandidate,
+  type IbMinuteBar,
+  type IbTrade,
+} from '../../services/ibkrMarketData';
+
+export {
+  assertGatewayEndpoint,
+  createReadOnlyIbClient,
+  IB_ALLOWED_PORTS,
+  IB_GATEWAY_HOST,
+  nextTradesRequestAt,
+  parseIbDate,
+  pickFrontContract,
+  redactAccountIds,
+  TICK_BY_TICK_REQUEST_GAP_MS,
+  toFrontCandidate,
+  type FrontContractCandidate,
+  type ReadOnlyIbClient,
+  type ReadOnlyIbHandlers,
+} from '../../services/ibkrMarketData';
+
+export type ProbeTick = IbTrade;
+export type ProbeBar = IbMinuteBar;
 
 /**
  * Měřicí sonda živých dat z Interactive Brokers (fáze 1 předávky
@@ -21,7 +42,8 @@ import {
  * - připojuje se výhradně na IB Gateway na 127.0.0.1 (Gateway má mít zapnuté
  *   „Read-Only API“, takže ani spojení samo příkaz neprovede);
  * - z knihovny pouští jen čtecí volání přes `createReadOnlyIbClient` — žádné
- *   příkazy, účty, pozice ani exekuce (hlídá `tests/ibkrTickProbe.test.ts`);
+ *   příkazy, účty, pozice ani exekuce (`services/ibkrMarketData.ts`, hlídá
+ *   `tests/ibkrMarketData.test.ts`);
  * - nic z kopírky ani workeru neimportuje a nic neposílá ven;
  * - čísla účtů, která Gateway pošle po připojení, neposlouchá, a z textů chyb
  *   je vymaže.
@@ -35,150 +57,12 @@ import {
  *     [--symbol MNQ] [--local-symbol MNQZ6] [--roll-days 8] [--json report.json] [--raw-ticks ticks.ndjson]
  */
 
-export const IB_GATEWAY_HOST = '127.0.0.1';
-/** 4001/4002 = IB Gateway live/paper, 7496/7497 = TWS live/paper. */
-export const IB_ALLOWED_PORTS = [4001, 4002, 7496, 7497] as const;
-/** IBKR: stejný instrument jde přes tick-by-tick požádat nejvýš jednou za 15 s. */
-export const TICK_BY_TICK_REQUEST_GAP_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 const CONTRACT_TIMEOUT_MS = 10_000;
 const HISTORY_TIMEOUT_MS = 20_000;
 const RECONNECT_DELAY_MS = 20_000;
 const PROGRESS_EVERY_MS = 30_000;
-const VOLUME_TICK_TYPE = 8;
 const SECONDS_PER_MINUTE = 60;
-
-// ---------------------------------------------------------------------------
-// Jen čtení: jediná cesta ke knihovně
-// ---------------------------------------------------------------------------
-
-export interface ProbeTick {
-  /** Čas obchodu od IBKR, epoch sekundy (IBKR dává jen celé sekundy). */
-  time: number;
-  price: number;
-  size: number;
-  /** Epoch ms, kdy sonda obchod dostala. */
-  receivedAt: number;
-  pastLimit: boolean;
-  unreported: boolean;
-}
-
-export interface ProbeBar {
-  /** Začátek minuty, epoch sekundy. */
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  count: number | null;
-}
-
-export interface ReadOnlyIbHandlers {
-  onConnected?: () => void;
-  onDisconnected?: () => void;
-  onError?: (code: number, reqId: number, message: string) => void;
-  onInfo?: (code: number, message: string) => void;
-  onMarketDataType?: (reqId: number, type: number) => void;
-  onContractDetails?: (reqId: number, details: ContractDetails) => void;
-  onContractDetailsEnd?: (reqId: number) => void;
-  onTick?: (reqId: number, tick: ProbeTick) => void;
-  onVolume?: (reqId: number, volume: number, receivedAt: number) => void;
-  onBar?: (reqId: number, bar: ProbeBar) => void;
-  onBarsEnd?: (reqId: number) => void;
-}
-
-/** Úzké rozhraní nad `IBApi`: nic, co by umělo poslat příkaz nebo číst účet. */
-export interface ReadOnlyIbClient {
-  connect(): void;
-  disconnect(): void;
-  isConnected(): boolean;
-  requestRealtimeData(): void;
-  requestContractDetails(reqId: number, contract: Contract): void;
-  subscribeTrades(reqId: number, contract: Contract): void;
-  cancelTrades(reqId: number): void;
-  subscribeVolume(reqId: number, contract: Contract): void;
-  cancelVolume(reqId: number): void;
-  requestMinuteBars(reqId: number, contract: Contract, durationStr: string): void;
-}
-
-const ACCOUNT_ID_PATTERN = /\b(?:DU|DF|U|F|I)\d{5,9}\b/g;
-
-/** Z textu (hlášky Gateway) vymaže čísla účtů IBKR. */
-export const redactAccountIds = (text: string): string => text.replace(ACCOUNT_ID_PATTERN, '[account]');
-
-export function assertGatewayEndpoint(host: string, port: number): void {
-  if (host !== IB_GATEWAY_HOST) throw new Error(`sonda se smí připojit jen na ${IB_GATEWAY_HOST}`);
-  if (!(IB_ALLOWED_PORTS as readonly number[]).includes(port)) {
-    throw new Error(`port ${port} není port IB Gateway/TWS (${IB_ALLOWED_PORTS.join(', ')})`);
-  }
-}
-
-export function createReadOnlyIbClient(
-  options: { port: number; clientId: number },
-  handlers: ReadOnlyIbHandlers,
-): ReadOnlyIbClient {
-  assertGatewayEndpoint(IB_GATEWAY_HOST, options.port);
-  // Všechny volby předané výslovně → knihovna nesáhne na vlastní konfiguraci
-  // (ta by jinak načetla `.env` z aktuální složky).
-  const api = new IBApi({ host: IB_GATEWAY_HOST, port: options.port, clientId: options.clientId, maxReqPerSec: 40 });
-
-  api.on(EventName.connected, () => handlers.onConnected?.());
-  api.on(EventName.disconnected, () => handlers.onDisconnected?.());
-  api.on(EventName.error, (error, code, reqId) => {
-    handlers.onError?.(Number(code), reqId, redactAccountIds(error?.message ?? ''));
-  });
-  api.on(EventName.info, (message, code) => handlers.onInfo?.(Number(code), redactAccountIds(String(message ?? ''))));
-  api.on(EventName.marketDataType, (reqId, type) => handlers.onMarketDataType?.(reqId, type));
-  api.on(EventName.contractDetails, (reqId, details) => handlers.onContractDetails?.(reqId, details));
-  api.on(EventName.contractDetailsEnd, reqId => handlers.onContractDetailsEnd?.(reqId));
-  api.on(EventName.tickByTickAllLast, (reqId, _tickType, time, price, size, attribs) => {
-    handlers.onTick?.(reqId, {
-      time: Number(time),
-      price,
-      size: Number(size),
-      receivedAt: Date.now(),
-      pastLimit: !!attribs?.pastLimit,
-      unreported: !!attribs?.unreported,
-    });
-  });
-  api.on(EventName.tickSize, (reqId, field, value) => {
-    if (field === VOLUME_TICK_TYPE && value != null && Number.isFinite(Number(value))) {
-      handlers.onVolume?.(reqId, Number(value), Date.now());
-    }
-  });
-  api.on(EventName.historicalData, (reqId, time, open, high, low, close, volume, count) => {
-    if (String(time).startsWith('finished')) {
-      handlers.onBarsEnd?.(reqId);
-      return;
-    }
-    handlers.onBar?.(reqId, {
-      time: Number(time),
-      open,
-      high,
-      low,
-      close,
-      volume: Number(volume),
-      count: count == null ? null : Number(count),
-    });
-  });
-
-  return Object.freeze({
-    connect: () => void api.connect(),
-    disconnect: () => void api.disconnect(),
-    isConnected: () => api.isConnected,
-    requestRealtimeData: () => void api.reqMarketDataType(MarketDataType.REALTIME),
-    requestContractDetails: (reqId: number, contract: Contract) => void api.reqContractDetails(reqId, contract),
-    subscribeTrades: (reqId: number, contract: Contract) =>
-      void api.reqTickByTickData(reqId, contract, TickByTickDataType.AllLast, 0, false),
-    cancelTrades: (reqId: number) => void api.cancelTickByTickData(reqId),
-    subscribeVolume: (reqId: number, contract: Contract) => void api.reqMktData(reqId, contract, '', false, false),
-    cancelVolume: (reqId: number) => void api.cancelMktData(reqId),
-    // formatDate 2 = epoch sekundy; useRTH 0 = celá session (ne jen 15:30–22:00).
-    requestMinuteBars: (reqId: number, contract: Contract, durationStr: string) =>
-      void api.reqHistoricalData(reqId, contract, '', durationStr, BarSizeSetting.MINUTES_ONE, WhatToShow.TRADES, 0, 2, false),
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Výpočty (čisté funkce)
@@ -195,54 +79,6 @@ export function percentile(values: readonly number[], p: number): number | null 
 const round = (value: number | null, digits = 2): number | null =>
   value == null ? null : Math.round(value * 10 ** digits) / 10 ** digits;
 
-/** „20261218“ nebo „20261218 08:30 US/Central“ → epoch ms (půlnoc UTC). */
-export function parseIbDate(value: string | undefined): number | null {
-  const match = /^(\d{4})(\d{2})(\d{2})/.exec(value ?? '');
-  if (!match) return null;
-  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-}
-
-export interface FrontContractCandidate {
-  conId: number;
-  localSymbol: string;
-  lastTradeDate: string;
-  multiplier: number | null;
-}
-
-export const toFrontCandidate = (details: ContractDetails): FrontContractCandidate | null => {
-  const contract = details.contract;
-  const lastTradeDate = details.realExpirationDate ?? contract?.lastTradeDateOrContractMonth;
-  if (!contract?.conId || !contract.localSymbol || !lastTradeDate) return null;
-  return {
-    conId: contract.conId,
-    localSymbol: contract.localSymbol,
-    lastTradeDate,
-    multiplier: contract.multiplier == null ? null : Number(contract.multiplier),
-  };
-};
-
-/**
- * Přední kontrakt: nejbližší expirace, která je víc než `rollDays` dní daleko
- * (indexové futures se rolují ~8 dní před expirací). `localSymbol` přebíjí.
- */
-export function pickFrontContract(
-  candidates: readonly FrontContractCandidate[],
-  nowMs: number,
-  rollDays: number,
-  localSymbol?: string | null,
-): FrontContractCandidate | null {
-  if (localSymbol) return candidates.find(candidate => candidate.localSymbol === localSymbol) ?? null;
-  const dated = candidates
-    .map(candidate => ({ candidate, expiry: parseIbDate(candidate.lastTradeDate) }))
-    .filter((entry): entry is { candidate: FrontContractCandidate; expiry: number } => entry.expiry != null && entry.expiry >= nowMs)
-    .sort((a, b) => a.expiry - b.expiry);
-  const pastRoll = dated.find(entry => entry.expiry - nowMs > rollDays * 86_400_000);
-  return (pastRoll ?? dated[0])?.candidate ?? null;
-}
-
-/** Další tick-by-tick žádost o stejný instrument smí odejít nejdřív za 15 s. */
-export const nextTradesRequestAt = (lastRequestAt: number | null): number =>
-  lastRequestAt == null ? 0 : lastRequestAt + TICK_BY_TICK_REQUEST_GAP_MS;
 
 export interface TickFlowSummary {
   ticks: number;
