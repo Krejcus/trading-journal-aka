@@ -285,6 +285,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 19:40 — Okamžité posílání ceny z IBKR ve workeru (Claude, NENASAZENO, 7bb8e5d6)
+
+- Proč: měření 4 zdrojů ukázalo, že appka je ~150 ms za samotným IBKR jen
+  kvůli čtení po 250 ms. Odhad po změně: ~300 ms za Tradovate (dřív ~450).
+- Jak: `ibkrPriceSource` po každém obchodu volá `onTrade` → vlákno
+  `stream.nudge()` (jen při aktivním zdroji IBKR). Čte se za 25 ms (dávka
+  IBKR p50 8 ms, p90 20 ms) a rozestup zpráv je 200 ms (= strop 5/s rozložený
+  rovnoměrně). Běžné kolo po 250 ms zůstává jako záloha a pro TV.
+- Bid/ask už samy zprávu nevyvolají (appka je nezobrazuje, ubíraly by stropu);
+  v každé zprávě jdou dál.
+- copier-design-critic: první kolo „OPRAVIT PŘED COMMITEM“ (nudge obcházel
+  1s prodlevu po chybě → až ~36 pokusů/s; rozestup 100 ms se strop 5/s dával
+  nárazy a ticho) → opraveno (`backoffUntil`, rozestup 200 ms) → „OK“.
+  INV-WORKER-04 a INV-UI-04 platí; proti živé Gateway neověřeno.
+- Nasazení spolu s opravou svíčky a vlastními timeframy (d8778d5c, aa54134f):
+  push main a pak reinstall workeru. Po nasazení změřit znovu proti Tradovate.
+
 ### 2026-10-28 17:57–18:08 — Měření 4 zdrojů: IBKR, TV, appka, Tradovate (Claude, jen čtení)
 Filip přihlásil appku (localhost:3000) a Tradovate web ve vestavěném prohlížeči.
 Tradovate: zprávy `md` zachycené z jejich webu (JSON.parse, bez kliknutí), appka:
