@@ -1061,6 +1061,12 @@ existující ochranu.
   (`ALPHATRADE_PRICE_SOURCE=ibkr`, 28. 10. 2026) běží ve stejném vlákně
   (`services/ibkrPriceSource.ts`, záloha TV, přepnutí zdroje = nový `runId`);
   bundle vlákna má hlavičku s `require` pro CommonJS knihovnu `@stoqey/ib`.
+  Fáze 4 (28. 10. 2026): vlákno posílá hlídači i svíčky dne (`bars`,
+  Float64Array předaný bez kopírování, max 1 700 × 6, max 1×/10 s); hlídač
+  ověří typ a délku v O(1), pak `sanitizeTvBars`, a drží je jen v paměti pro
+  `latestBars` (≤ 90 s, jen živé vlákno a zapnutý kanál). Čte je jen
+  `pilot.ts` pro graf dne a hodnocení (hlídá `tests/tvPriceStreamWiring.test.ts`);
+  podle nich se nic nespouští.
 - Hlídá test: `tests/tvPriceStreamSupervisor.test.ts`,
   `tests/tvPriceStreamWiring.test.ts` (allowlist importů vlákna, pořadí
   buildu, relay hook), `tests/tradingViewPriceStream.test.ts`.
@@ -1329,6 +1335,18 @@ existující ochranu.
   („živě · IBKR“). Spojení na Gateway je jen čtecí: jediný `IBApi` je ve
   `services/ibkrMarketData.ts` za zmrazeným úzkým rozhraním, jen 127.0.0.1
   (hlídá `tests/ibkrMarketData.test.ts`), Gateway má navíc „Read-Only API“.
+- Výjimka pro úložiště (Filip 28. 10. 2026 pro TV i IBKR): předběžné 1m svíčky
+  smí worker přes relay uložit do soukromého bucketu `copier-snapshots`, a to
+  jen `<user>/tv-live/<rodina>.json` (graf dne a přípravy) a `<user>/tv-bars/…`
+  (graf hodnocení obchodu, mazané po 3 dnech; obojí nahradí Databento). Nic
+  jiného: nikdy risk, day lock, limity, kopírka, způsobilost ani read model.
+  Soubor dne nese `source` a `contract`; server (`mergeLiveBarsFile`) nikdy
+  nesmíchá dva kontrakty a TV nepřepíše minuty z IBKR. Svíčky k hodnocení
+  z IBKR jen pro kontrakt obchodu (`barsContractMatchesSymbol`). Zapisuje jen
+  `server/copierSnapshotStore.ts`, čtou jen `services/liveCandles.ts`,
+  `services/provisionalCandles.ts` a jejich zobrazovací konzumenti (hlídá
+  `tests/liveBarsMerge.test.ts`). Pro produkt pro další uživatele neplatí
+  (licence dat pro distribuci).
 
 ### Vzdálený watchdog
 

@@ -302,6 +302,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `6d7e0a57`) — změna workeru, reinstall jen ve flat/DISARMED stavu na
   výslovný pokyn.
 
+### 2026-10-28 poledne — Fáze 4: dnešní 1m svíčky z IBKR (Claude, větev, NEnasazeno)
+
+- Filip schválil ukládání svíček z IBKR do úložiště appky stejně jako z TV
+  (jen graf dne a hodnocení) → výjimka zapsaná do INV-UI-04.
+- Server (`lib/tradingViewBars.ts`, `server/copierSnapshotStore.ts`): soubor
+  `tv-live` nese `source` + `contract`; `mergeLiveBarsFile` nikdy nesmíchá dva
+  kontrakty a TV nepřepíše minuty z IBKR; TV čtení vrací `front_contract`.
+  Hodnocení obchodu (`provisionalCandles`, pilot) zahodí čtení jiného kontraktu
+  (`barsContractConflicts`).
+- Worker: zdroj IBKR drží '2 D' 1m svíček s `keepUpToDate`, opravný dotaz
+  '1800 S' po 5 min, mrtvý odběr → nový, 2105/2106, pacing 15 s, ořez 27 h /
+  1 700; vlákno posílá `bars` (Float64Array transfer) po 30 s, hlídač ověří
+  a drží v paměti (`latestBars` ≤ 90 s), pilot čte IBKR, jinak TV.
+- Klient: štítek dne „Živě z IBKR · čas“ / „IBKR stojí“.
+- Živá Gateway: 1 560 svíček za 27 h, poslední minuta se průběžně aktualizuje.
+- Kritik: návrh OPRAVIT PŘED COMMITEM (7 nálezů, zapracováno), diff OK
+  S VÝHRADAMI (opraveno: opravný dotaz přes roll, informativní kódy,
+  kontrakt u TV k hodnocení, ořez historie, štítek stale). 5819 testů, tsc čistý.
+- Nasazení: NEJDŘÍV server (push main), pak reinstall workeru (DISARMED,
+  flat, reconciled, po „nasaď“). Opačné pořadí by `contract` zahodilo.
+
 ### 2026-10-28 10:50 — NASAZENO: cena z IBKR ve workeru (Claude, Filip „nasaď ihned“)
 
 - Push na main `4c866695` (Vercel: štítek „živě · IBKR“). Brána: tsc čistý,

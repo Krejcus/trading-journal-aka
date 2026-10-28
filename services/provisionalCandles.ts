@@ -1,5 +1,6 @@
 import type { Trade } from '../types';
 import {
+  barsContractConflicts,
   mergeTvBarCaptures,
   parseTvBarsFileName,
   tvBarsFolder,
@@ -65,7 +66,10 @@ async function load(trade: Trade, { entryMs, exitMs }: ProvisionalTiming): Promi
     const { data, error } = await supabase.storage.from(BUCKET).download(file.path);
     if (error || !data) return null;
     try {
-      const body = JSON.parse(await data.text()) as { at?: unknown; bars?: unknown; source?: unknown };
+      const body = JSON.parse(await data.text()) as { at?: unknown; bars?: unknown; source?: unknown; contract?: unknown };
+      // Čtení jiného kontraktu než obchodu (týden rollu) do grafu hodnocení nepatří.
+      const symbol = trade.symbol || trade.instrument || '';
+      if (barsContractConflicts(typeof body.contract === 'string' ? body.contract : null, symbol)) return null;
       return Array.isArray(body.bars) ? { at: file.at, bars: body.bars as TvBar[], source: String(body.source ?? '') } : null;
     } catch { return null; }
   }))).filter((capture): capture is { at: number; bars: TvBar[]; source: string } => capture != null);

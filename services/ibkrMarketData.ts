@@ -70,6 +70,8 @@ export interface ReadOnlyIbHandlers {
   onQuote?: (reqId: number, side: 'bid' | 'ask', price: number) => void;
   onBar?: (reqId: number, bar: IbMinuteBar) => void;
   onBarsEnd?: (reqId: number) => void;
+  /** Průběžná aktualizace poslední svíčky odběru s `keepUpToDate`. */
+  onBarUpdate?: (reqId: number, bar: IbMinuteBar) => void;
 }
 
 /** Úzké rozhraní nad `IBApi`: nic, co by umělo poslat příkaz nebo číst účet. */
@@ -83,7 +85,8 @@ export interface ReadOnlyIbClient {
   cancelTrades(reqId: number): void;
   subscribeVolume(reqId: number, contract: Contract): void;
   cancelVolume(reqId: number): void;
-  requestMinuteBars(reqId: number, contract: Contract, durationStr: string): void;
+  requestMinuteBars(reqId: number, contract: Contract, durationStr: string, keepUpToDate?: boolean): void;
+  cancelMinuteBars(reqId: number): void;
 }
 
 const ACCOUNT_ID_PATTERN = /\b(?:DU|DF|U|F|I)\d{5,9}\b/g;
@@ -131,6 +134,17 @@ export function createReadOnlyIbClient(
       handlers.onVolume?.(reqId, Number(value), Date.now());
     }
   });
+  api.on(EventName.historicalDataUpdate, (reqId, time, open, high, low, close, volume, count) => {
+    handlers.onBarUpdate?.(reqId, {
+      time: Number(time),
+      open,
+      high,
+      low,
+      close,
+      volume: Number(volume),
+      count: count == null ? null : Number(count),
+    });
+  });
   api.on(EventName.tickPrice, (reqId, field, value) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) return;
     if (field === BID_TICK_TYPE) handlers.onQuote?.(reqId, 'bid', value);
@@ -165,8 +179,9 @@ export function createReadOnlyIbClient(
     subscribeVolume: (reqId: number, contract: Contract) => void api.reqMktData(reqId, contract, '', false, false),
     cancelVolume: (reqId: number) => void api.cancelMktData(reqId),
     // formatDate 2 = epoch sekundy; useRTH 0 = celá session (ne jen 15:30–22:00).
-    requestMinuteBars: (reqId: number, contract: Contract, durationStr: string) =>
-      void api.reqHistoricalData(reqId, contract, '', durationStr, BarSizeSetting.MINUTES_ONE, WhatToShow.TRADES, 0, 2, false),
+    requestMinuteBars: (reqId: number, contract: Contract, durationStr: string, keepUpToDate = false) =>
+      void api.reqHistoricalData(reqId, contract, '', durationStr, BarSizeSetting.MINUTES_ONE, WhatToShow.TRADES, 0, 2, keepUpToDate),
+    cancelMinuteBars: (reqId: number) => void api.cancelHistoricalData(reqId),
   });
 }
 

@@ -42,6 +42,8 @@ type FastChart = {
 type MetaChart = { interval?: unknown; frontContract?: unknown; frontContractSwitchTime?: unknown } | null;
 
 const META_REFRESH_MS = 60_000;
+/** Jak často vlákno posílá svíčky dne z IBKR hlavnímu vláknu (hlídač drží max 1×/10 s). */
+const IBKR_BARS_POST_MS = 30_000;
 const READ_TIMEOUT_MS = 1_000;
 
 const port = parentPort;
@@ -290,6 +292,13 @@ port.on('message', message => {
 });
 
 setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
+// Svíčky dne z IBKR pro graf dne a hodnocení (fáze 4): jen hotová čísla, buffer se
+// předá bez kopírování; hlavní vlákno je jen ověří a nechá v paměti pro upload.
+setInterval(() => {
+  const bars = ibkr?.minuteBars() ?? null;
+  if (!bars) return;
+  port.postMessage({ type: 'bars', root: bars.root, source: bars.source, contract: bars.contract, at: bars.at, bars: bars.bars }, [bars.bars.buffer]);
+}, IBKR_BARS_POST_MS);
 setInterval(() => {
   const stats = stream?.stats();
   // Jen čísla a stav; téma, klíč ani obsah zpráv nikdy.

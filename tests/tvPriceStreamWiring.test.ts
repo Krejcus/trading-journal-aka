@@ -89,11 +89,25 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
       execFileSync(join(root, 'node_modules/.bin/esbuild'), [
         probeEntry, '--bundle', '--platform=node', '--format=esm', '--target=node20', `--banner:js=${banner}`, `--outfile=${probeOut}`, '--log-level=error',
       ]);
-      expect(JSON.parse(execFileSync(process.execPath, [probeOut], { encoding: 'utf8' }).trim())).toEqual({ connected: false, keys: 10 });
+      expect(JSON.parse(execFileSync(process.execPath, [probeOut], { encoding: 'utf8' }).trim())).toEqual({ connected: false, keys: 11 });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it('svíčky dne z IBKR: vlákno je předá bez kopírování, čte je jen graf dne a hodnocení v pilotu', () => {
+    const thread = source('scripts/copier/tvPriceStreamThread.ts');
+    expect(thread).toContain("port.postMessage({ type: 'bars', root: bars.root, source: bars.source, contract: bars.contract, at: bars.at, bars: bars.bars }, [bars.bars.buffer]);");
+    const pilot = source('scripts/copier/pilot.ts');
+    expect(pilot.match(/latestBars\(/g)).toHaveLength(2);
+    expect(pilot).toContain('read: async root => tvPriceStream?.latestBars(root) ?? readTradingViewBars(root),');
+    expect(pilot).toContain('if (ibkr && barsContractMatchesSymbol(ibkr.contract, symbol)) return ibkr;');
+    expect(pilot).toContain('return tv && !barsContractConflicts(tv.contract, symbol) ? tv : null;');
+    // Mimo pilot (a hlídač, který ho poskytuje) nikdo svíčky z vlákna nečte.
+    const users = execFileSync('git', ['grep', '-l', 'latestBars('], { cwd: root, encoding: 'utf8' })
+      .trim().split('\n').filter(file => !file.startsWith('tests/'));
+    expect(users.sort()).toEqual(['scripts/copier/pilot.ts', 'server/tvPriceStreamSupervisor.ts']);
+  }, 30_000);
 
   it('zdroj IBKR jen výslovně: pilot předá workerData, instalátor i reinstall ho zachovají', () => {
     const pilot = source('scripts/copier/pilot.ts');

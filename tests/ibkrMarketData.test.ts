@@ -63,6 +63,7 @@ describe('IBKR — jen čtení', () => {
   it('klient nabízí jen čtecí volání a nepouští ven IBApi ani posluchače', () => {
     const client = createReadOnlyIbClient({ port: 4001, clientId: 91 }, {});
     expect(Object.keys(client).sort()).toEqual([
+      'cancelMinuteBars',
       'cancelTrades',
       'cancelVolume',
       'connect',

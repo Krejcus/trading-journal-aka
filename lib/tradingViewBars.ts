@@ -17,9 +17,42 @@ export interface TvBarsCapture {
   root: string;
   /** Epoch ms čtení (hodiny workeru). */
   at: number;
-  /** Symbol grafu, ze kterého svíčky pochází (`CME_MINI:MNQ1!`). */
+  /** Symbol grafu, ze kterého svíčky pochází (`CME_MINI:MNQ1!`, `IBKR:MNQZ2026`). */
   source: string;
+  /**
+   * Konkrétní kontrakt svíček (`MNQZ2026`): u IBKR přední kontrakt odběru,
+   * u TV `front_contract` kontinuálního grafu; `null` = neznámý.
+   */
+  contract?: string | null;
   bars: TvBar[];
+}
+
+const CONTRACT_PATTERN = /^[A-Z0-9]{1,6}[FGHJKMNQUVXZ]\d{4}$/;
+/** `MNQZ2026` (formát TV i kanálu ceny); cokoli jiného = `null`. */
+export const normalizeBarsContract = (value: unknown): string | null =>
+  typeof value === 'string' && CONTRACT_PATTERN.test(value.trim().toUpperCase()) ? value.trim().toUpperCase() : null;
+
+/** Svíčky z IB Gateway (ne z grafu TradingView). */
+export const isIbkrBarsSource = (source: string | null | undefined): boolean => !!source && source.startsWith('IBKR:');
+
+/**
+ * Svíčky prokazatelně jiného kontraktu než obchodu: kontrakt svíček je znám,
+ * symbol obchodu má měsíc a rok (`MNQZ6`) a neshodují se. Neznámé = nekonflikt.
+ */
+export function barsContractConflicts(contract: string | null | undefined, symbol: string): boolean {
+  if (!normalizeBarsContract(contract)) return false;
+  if (!new RegExp(`^[A-Z0-9]+?[${MONTH_CODES}]\\d{1,2}$`).test(symbol.trim().toUpperCase())) return false;
+  return !barsContractMatchesSymbol(contract, symbol);
+}
+
+/** `MNQZ2026` × `MNQZ6`/`MNQZ26`/`NQZ6` — stejný měsíc a rok expirace ve stejné cenové rodině. */
+export function barsContractMatchesSymbol(contract: string | null | undefined, symbol: string): boolean {
+  const normalized = normalizeBarsContract(contract);
+  const front = normalized ? new RegExp(`^([A-Z0-9]+?)([${MONTH_CODES}])(\\d{4})$`).exec(normalized) : null;
+  const traded = new RegExp(`^([A-Z0-9]+?)([${MONTH_CODES}])(\\d{1,2})$`).exec(symbol.trim().toUpperCase());
+  if (!front || !traded) return false;
+  if (tvPriceFamily(front[1]) !== tvPriceFamily(traded[1]) || front[2] !== traded[2]) return false;
+  return front[3].endsWith(traded[3]);
 }
 
 // Živé svíčky dne musí sahat až za hranici Databenta (~24 h) — 27 h s rezervou
@@ -63,7 +96,9 @@ export const TV_BARS_EXPRESSION = `(() => {
           const bar = bars.valueAt(i);
           if (bar) out.push([bar[0], bar[1], bar[2], bar[3], bar[4], bar[5] || 0]);
         }
-        return { symbol: series.symbol(), bars: out.slice(-${TV_BARS_MAX}) };
+        let contract = null;
+        try { const info = series.symbolInfo(); contract = info && typeof info.front_contract === 'string' ? info.front_contract : null; } catch (e) { contract = null; }
+        return { symbol: series.symbol(), contract, bars: out.slice(-${TV_BARS_MAX}) };
       } catch (e) { return null; }
     }).filter(Boolean);
   } catch (e) { return []; }
@@ -91,22 +126,22 @@ export function sanitizeTvBars(raw: unknown, atMs: number): TvBar[] {
 }
 
 /** Vybere graf se shodným kořenem (nebo cenovou rodinou) a nejvíc svíčkami. */
-export function pickTvBars(readings: unknown, tradeRoot: string, atMs: number): { source: string; bars: TvBar[] } | null {
+export function pickTvBars(readings: unknown, tradeRoot: string, atMs: number): { source: string; contract: string | null; bars: TvBar[] } | null {
   if (!Array.isArray(readings)) return null;
   const family = tvPriceFamily(tradeRoot);
-  let best: { source: string; bars: TvBar[]; exact: boolean } | null = null;
+  let best: { source: string; contract: string | null; bars: TvBar[]; exact: boolean } | null = null;
   for (const reading of readings) {
-    const row = reading as { symbol?: unknown; bars?: unknown } | null;
+    const row = reading as { symbol?: unknown; contract?: unknown; bars?: unknown } | null;
     const root = tvSymbolRoot(row?.symbol);
     if (!root || tvPriceFamily(root) !== family) continue;
     const bars = sanitizeTvBars(row?.bars, atMs);
     if (!bars.length) continue;
     const exact = root === tradeRoot;
     if (!best || (exact && !best.exact) || (exact === best.exact && bars.length > best.bars.length)) {
-      best = { source: String(row?.symbol), bars, exact };
+      best = { source: String(row?.symbol), contract: normalizeBarsContract(row?.contract), bars, exact };
     }
   }
-  return best ? { source: best.source, bars: best.bars } : null;
+  return best ? { source: best.source, contract: best.contract, bars: best.bars } : null;
 }
 
 /** Validace na serveru: worker je autentizovaný, přesto nevěříme obsahu. */
@@ -120,7 +155,7 @@ export function validateTvBarsCapture(value: unknown, now = Date.now()): TvBarsC
   if (!Array.isArray(body?.bars) || body.bars.length > TV_BARS_MAX) throw new Error('tv-bars-invalid-bars');
   const bars = sanitizeTvBars(body.bars, at);
   if (!bars.length) throw new Error('tv-bars-empty');
-  return { root, at: Math.floor(at), source, bars };
+  return { root, at: Math.floor(at), source, contract: normalizeBarsContract(body?.contract), bars };
 }
 
 const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
@@ -154,4 +189,32 @@ export function mergeTvBarCaptures(captures: readonly Pick<TvBarsCapture, 'at' |
     for (const bar of capture.bars) byTime.set(bar[0], bar);
   }
   return [...byTime.values()].sort((a, b) => a[0] - b[0]);
+}
+
+/**
+ * Sloučení souboru živých svíček dne (`tv-live`) s novým čtením. Pravidla,
+ * aby se v jedné řadě nikdy nemíchaly dva kontrakty ani přepisovaly
+ * svíčky z IBKR svíčkami z grafu TV:
+ * - jiný kontrakt (roll) nebo neznámý kontrakt při změně zdroje = nové čtení
+ *   soubor nahradí (vědomě: při výpadku IBKR a TV bez kontraktu zmizí noc,
+ *   po návratu IBKR se doplní — raději kratší řada než dva kontrakty);
+ * - TV do souboru z IBKR (stejný kontrakt) jen doplní minuty, které chybí;
+ * - jinak pozdější čtení vyhrává (dnešní chování TV↔TV, IBKR↔IBKR i IBKR po TV).
+ */
+export function mergeLiveBarsFile(
+  previous: Pick<TvBarsCapture, 'at' | 'bars' | 'source' | 'contract'> | null,
+  next: Pick<TvBarsCapture, 'at' | 'bars' | 'source' | 'contract'>,
+): TvBar[] {
+  if (!previous) return next.bars.slice(-TV_BARS_MAX);
+  const previousIbkr = isIbkrBarsSource(previous.source);
+  const nextIbkr = isIbkrBarsSource(next.source);
+  const previousContract = normalizeBarsContract(previous.contract);
+  const nextContract = normalizeBarsContract(next.contract);
+  if (previousContract && nextContract && previousContract !== nextContract) return next.bars.slice(-TV_BARS_MAX);
+  if (previousIbkr !== nextIbkr && (!previousContract || !nextContract)) return next.bars.slice(-TV_BARS_MAX);
+  if (previousIbkr && !nextIbkr) {
+    const known = new Set(previous.bars.map(bar => bar[0]));
+    return [...previous.bars, ...next.bars.filter(bar => !known.has(bar[0]))].sort((a, b) => a[0] - b[0]).slice(-TV_BARS_MAX);
+  }
+  return mergeTvBarCaptures([previous, next]).slice(-TV_BARS_MAX);
 }

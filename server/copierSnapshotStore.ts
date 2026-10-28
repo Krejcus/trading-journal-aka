@@ -1,4 +1,4 @@
-import { TV_BARS_MAX, mergeTvBarCaptures, sanitizeTvBars, tvBarsStoragePath, tvLiveBarsStoragePath, type TvBarsCapture } from '../lib/tradingViewBars.js';
+import { mergeLiveBarsFile, normalizeBarsContract, sanitizeTvBars, tvBarsStoragePath, tvLiveBarsStoragePath, type TvBarsCapture } from '../lib/tradingViewBars.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const COPIER_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
@@ -193,8 +193,10 @@ export async function storeTvLiveBars(options: {
   const storagePath = tvLiveBarsStoragePath(options.userId, options.capture.root);
   const bucket = options.db.storage.from('copier-snapshots');
   const previous = await readPreviousTvLiveBars(bucket, storagePath, options.capture.at);
-  const bars = previous ? mergeTvBarCaptures([previous, options.capture]).slice(-TV_BARS_MAX) : options.capture.bars;
-  const body = JSON.stringify({ v: 1, ...options.capture, bars });
+  // Kontrakt a zdroj rozhodují, zda se slučuje (`mergeLiveBarsFile`): dva kontrakty ani
+  // přepis svíček z IBKR grafem TV se v jedné řadě nikdy nesejdou.
+  const bars = mergeLiveBarsFile(previous, options.capture);
+  const body = JSON.stringify({ v: 1, ...options.capture, contract: options.capture.contract ?? null, bars });
   const { error } = await bucket
     .upload(storagePath, Buffer.from(body), { contentType: 'application/json', upsert: true, cacheControl: '0' });
   if (error) throw new Error(`tv-live-bars-upload-failed: ${error.message}`);
@@ -206,16 +208,17 @@ async function readPreviousTvLiveBars(
   bucket: ReturnType<SupabaseClient['storage']['from']>,
   storagePath: string,
   nowMs: number,
-): Promise<Pick<TvBarsCapture, 'at' | 'bars'> | null> {
+): Promise<Pick<TvBarsCapture, 'at' | 'bars' | 'source' | 'contract'> | null> {
   try {
     const { data } = await bucket.download(storagePath);
     if (!data) return null;
-    const body = JSON.parse(await data.text()) as { at?: unknown; bars?: unknown } | null;
+    const body = JSON.parse(await data.text()) as { at?: unknown; bars?: unknown; source?: unknown; contract?: unknown } | null;
     const at = Number(body?.at);
     if (!Number.isFinite(at)) return null;
     // Stáří se měří od nového čtení: svíčky za hranicí okna odpadnou při sloučení.
     const bars = sanitizeTvBars(body?.bars, nowMs);
-    return bars.length ? { at, bars } : null;
+    const source = typeof body?.source === 'string' ? body.source.slice(0, 64) : '';
+    return bars.length ? { at, bars, source, contract: normalizeBarsContract(body?.contract) } : null;
   } catch {
     return null;
   }

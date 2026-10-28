@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTvPriceStreamSupervisor, IBKR_CRASH_FALLBACK_MS, type TvPriceSourceName, type TvPriceStreamConfig } from '../server/tvPriceStreamSupervisor';
+import { createTvPriceStreamSupervisor, IBKR_BARS_FRESH_MS, IBKR_CRASH_FALLBACK_MS, type TvPriceSourceName, type TvPriceStreamConfig } from '../server/tvPriceStreamSupervisor';
 
 class FakeWorker extends EventEmitter {
   messages: unknown[] = [];
@@ -191,5 +191,70 @@ describe('hlídač vlákna kanálu ceny (hlavní vlákno workeru)', () => {
     supervisor.update(ON);
     expect(sources).toEqual(['tv']);
     supervisor.stop();
+  });
+
+  describe('svíčky dne z IBKR (zpráva bars)', () => {
+    const barsMessage = (at: number, count = 3, patch: Record<string, unknown> = {}) => {
+      const first = Math.floor(at / 60_000) * 60 - (count - 1) * 60;
+      const flat = new Float64Array(count * 6);
+      for (let i = 0; i < count; i += 1) flat.set([first + i * 60, 100 + i, 101 + i, 99 + i, 100 + i, 5], i * 6);
+      return { type: 'bars', root: 'MNQ', source: 'IBKR:MNQZ2026', contract: 'MNQZ2026', at, bars: flat, ...patch };
+    };
+
+    it('ověří a drží poslední čtení; NQ dostane svíčky rodiny; po 90 s null', () => {
+      const t = setup();
+      t.supervisor.update(ON);
+      t.workers[0].emit('message', barsMessage(Date.now()));
+      const capture = t.supervisor.latestBars('NQ');
+      expect(capture).toMatchObject({ root: 'NQ', source: 'IBKR:MNQZ2026', contract: 'MNQZ2026' });
+      expect(capture!.bars).toHaveLength(3);
+      expect(t.supervisor.latestBars('ES')).toBeNull();
+      vi.advanceTimersByTime(IBKR_BARS_FRESH_MS + 1);
+      t.workers[0].emit('message', { type: 'alive' });
+      expect(t.supervisor.latestBars('MNQ')).toBeNull();
+      t.supervisor.stop();
+    });
+
+    it('vadná, přerostlá nebo cizí zpráva se zahodí bez výjimky; víc než 1×/10 s se nebere', () => {
+      const t = setup();
+      t.supervisor.update(ON);
+      const at = Date.now();
+      for (const bad of [
+        barsMessage(at, 3, { bars: [1, 2, 3, 4, 5, 6] }),
+        barsMessage(at, 3, { bars: new Float64Array(7) }),
+        barsMessage(at, 1_701),
+        barsMessage(at, 3, { source: 'CME_MINI:MNQ1!' }),
+        barsMessage(at, 3, { contract: 'MNQZ6' }),
+        barsMessage(at, 3, { root: 'IBKR:MNQ' }),
+        barsMessage(at - 5 * 60_000),
+        { type: 'bars' },
+      ]) {
+        expect(() => t.workers[0].emit('message', bad)).not.toThrow();
+        expect(t.supervisor.latestBars('MNQ')).toBeNull();
+      }
+      t.workers[0].emit('message', barsMessage(at, 2));
+      t.workers[0].emit('message', barsMessage(at, 3));
+      expect(t.supervisor.latestBars('MNQ')!.bars).toHaveLength(2);
+      vi.advanceTimersByTime(10_000);
+      t.workers[0].emit('message', barsMessage(Date.now(), 3));
+      expect(t.supervisor.latestBars('MNQ')!.bars).toHaveLength(3);
+      t.supervisor.stop();
+    });
+
+    it('po pádu vlákna, vypnutí kanálu i stopu vrací null', async () => {
+      const t = setup();
+      t.supervisor.update(ON);
+      t.workers[0].emit('message', barsMessage(Date.now()));
+      t.workers[0].emit('error', new Error('boom'));
+      expect(t.supervisor.latestBars('MNQ')).toBeNull();
+      await vi.advanceTimersByTimeAsync(2_000);
+      vi.advanceTimersByTime(10_000);
+      t.workers[1].emit('message', barsMessage(Date.now()));
+      expect(t.supervisor.latestBars('MNQ')).not.toBeNull();
+      t.supervisor.update({ enabled: false });
+      expect(t.supervisor.latestBars('MNQ')).toBeNull();
+      t.supervisor.stop();
+      expect(t.supervisor.latestBars('MNQ')).toBeNull();
+    });
   });
 });

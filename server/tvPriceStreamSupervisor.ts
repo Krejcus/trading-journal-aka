@@ -8,9 +8,18 @@
  * - pád = restart s prodlevou; 3 pády za 10 min = jistič vypne stream do
  *   restartu workeru (nikdy nerestartuje worker sám),
  * - pády a ticho do 60 s po probuzení Macu se do jističe nepočítají,
- * - zprávy z vlákna jsou jen `alive` a omezená diagnostika; podle nich se nic
- *   nespouští a téma ani klíč se nikdy nelogují.
+ * - zprávy z vlákna jsou jen `alive`, omezená diagnostika a svíčky dne z IBKR
+ *   (`bars`, jen čísla, ověřené a omezené velikostí i četností); podle nich se
+ *   nic nespouští, svíčky jen čeká čtení grafu dne (`latestBars`) a téma ani klíč
+ *   se nikdy nelogují.
  */
+
+import { normalizeBarsContract, sanitizeTvBars, tvPriceFamily, tvSymbolRoot, TV_BARS_MAX, type TvBar, type TvBarsCapture } from '../lib/tradingViewBars';
+
+/** Svíčky z vlákna starší než tohle se pro graf dne nepoužijí (vlákno posílá po 30 s). */
+export const IBKR_BARS_FRESH_MS = 90_000;
+/** Zprávy `bars` častější než tohle se zahodí. */
+const BARS_MIN_INTERVAL_MS = 10_000;
 
 export interface TvPriceStreamConfig {
   enabled: boolean;
@@ -34,6 +43,12 @@ export interface TvPriceStreamSupervisor {
   update(config: TvPriceStreamConfig): void;
   stop(): void;
   status(): { running: boolean; tripped: boolean; crashes: number };
+  /**
+   * Poslední svíčky dne z IBKR pro cenovou rodinu kořene (jen zobrazení: graf dne
+   * a hodnocení). `null`, když vlákno neběží, kanál je vypnutý nebo čtení je starší
+   * než 90 s. Synchronní, nikdy nevyhodí.
+   */
+  latestBars(root: string): TvBarsCapture | null;
 }
 
 /**
@@ -117,6 +132,30 @@ export function createTvPriceStreamSupervisor(options: {
 
   const preferredSource: TvPriceSourceName = options.priceSource === 'ibkr' ? 'ibkr' : 'tv';
   let workerSource: TvPriceSourceName | null = null;
+  let latest: { worker: TvStreamWorkerLike; receivedAt: number; capture: TvBarsCapture } | null = null;
+  let lastBarsAt = -Infinity;
+
+  /** Ověří zprávu `bars` z vlákna: typ a délka v O(1) dřív než cokoli dalšího. */
+  const acceptBars = (from: TvStreamWorkerLike, message: Record<string, unknown>) => {
+    const at = now();
+    if (at - lastBarsAt < BARS_MIN_INTERVAL_MS) return;
+    const flat = message.bars;
+    if (!(flat instanceof Float64Array) || flat.length === 0 || flat.length % 6 !== 0 || flat.length > TV_BARS_MAX * 6) return;
+    const root = tvSymbolRoot(message.root);
+    const source = typeof message.source === 'string' && message.source.startsWith('IBKR:') ? message.source.slice(0, 32) : null;
+    const contract = normalizeBarsContract(message.contract);
+    const capturedAt = Number(message.at);
+    if (!root || root !== message.root || !source || !contract || !Number.isFinite(capturedAt) || Math.abs(capturedAt - at) > 60_000) return;
+    const rows: TvBar[] = [];
+    for (let index = 0; index < flat.length; index += 6) {
+      rows.push([flat[index], flat[index + 1], flat[index + 2], flat[index + 3], flat[index + 4], flat[index + 5]]);
+    }
+    const bars = sanitizeTvBars(rows, capturedAt);
+    if (!bars.length) return;
+    lastBarsAt = at;
+    latest = { worker: from, receivedAt: at, capture: { root, at: Math.floor(capturedAt), source, contract, bars } };
+  };
+
   let ibkrPausedUntil = -Infinity;
 
   const recordCrash = (reason: string) => {
@@ -171,6 +210,10 @@ export function createTvPriceStreamSupervisor(options: {
       if (type === 'alive') {
         lastAlive = now();
         consecutiveRestarts = 0;
+        return;
+      }
+      if (type === 'bars') {
+        acceptBars(created, message as Record<string, unknown>);
         return;
       }
       if (type === 'diag' && now() - lastDiagLog >= DIAG_LOG_INTERVAL_MS) {
@@ -248,5 +291,17 @@ export function createTvPriceStreamSupervisor(options: {
       } catch { /* best effort */ }
     },
     status: () => ({ running: worker !== null, tripped, crashes: crashes.length }),
+    latestBars(root) {
+      try {
+        const current = latest;
+        const wanted = tvSymbolRoot(root);
+        if (!current || !wanted || stopped || tripped || !config?.enabled || worker === null || current.worker !== worker) return null;
+        if (now() - current.receivedAt > IBKR_BARS_FRESH_MS) return null;
+        if (tvPriceFamily(wanted) !== tvPriceFamily(current.capture.root)) return null;
+        return { ...current.capture, root: wanted, bars: current.capture.bars.slice() };
+      } catch {
+        return null;
+      }
+    },
   };
 }

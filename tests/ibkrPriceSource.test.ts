@@ -20,13 +20,13 @@ function harness() {
   let clock = T0;
   const timers: { at: number; callback: () => void; id: number }[] = [];
   let nextId = 1;
-  const clients: { handlers: ReadOnlyIbHandlers; calls: string[]; contractReqIds: number[] }[] = [];
+  const clients: { handlers: ReadOnlyIbHandlers; calls: string[]; contractReqIds: number[]; barRequests: { reqId: number; duration: string; keep: boolean }[]; cancelledBars: number[] }[] = [];
   const source = createIbkrPriceSource({
     now: () => clock,
     setTimeoutImpl: (callback, ms) => { const id = nextId++; timers.push({ at: clock + ms, callback, id }); return id; },
     clearTimeoutImpl: id => { const index = timers.findIndex(timer => timer.id === id); if (index >= 0) timers.splice(index, 1); },
     createClient: handlers => {
-      const entry = { handlers, calls: [] as string[], contractReqIds: [] as number[] };
+      const entry = { handlers, calls: [] as string[], contractReqIds: [] as number[], barRequests: [] as { reqId: number; duration: string; keep: boolean }[], cancelledBars: [] as number[] };
       clients.push(entry);
       const record = (name: string) => () => { entry.calls.push(name); };
       const client: ReadOnlyIbClient = {
@@ -39,7 +39,8 @@ function harness() {
         cancelTrades: record('cancelTrades'),
         subscribeVolume: record('subscribeVolume'),
         cancelVolume: record('cancelVolume'),
-        requestMinuteBars: record('requestMinuteBars'),
+        requestMinuteBars: (reqId, _contract, duration, keep = false) => { entry.calls.push('requestMinuteBars'); entry.barRequests.push({ reqId, duration, keep }); },
+        cancelMinuteBars: reqId => { entry.calls.push('cancelMinuteBars'); entry.cancelledBars.push(reqId); },
       };
       return client;
     },
@@ -95,7 +96,8 @@ describe('zdroj ceny z IBKR', () => {
   it('po připojení odebírá obchody předního kontraktu a vrací čtení ve formátu kanálu', () => {
     const h = harness();
     h.goLive();
-    expect(h.current().calls).toEqual(['connect', 'requestRealtimeData', 'requestContractDetails', 'subscribeTrades', 'subscribeVolume']);
+    expect(h.current().calls).toEqual(['connect', 'requestRealtimeData', 'requestContractDetails', 'subscribeTrades', 'subscribeVolume', 'requestMinuteBars']);
+    expect(h.current().barRequests).toEqual([{ reqId: expect.any(Number), duration: '2 D', keep: true }]);
     expect(h.source.reading()).toBeNull();
     h.fullMinute(29950.25);
     h.current().handlers.onQuote?.(3, 'bid', 29950);
@@ -323,5 +325,148 @@ describe('celá cesta: čtení IBKR → zpráva kanálu → živé P&L a svíčk
     const leg = { symbol: 'MNQZ6', netPosition: 2, averagePrice: 21000, grossPnl: 40, anchorAt: at };
     expect(tvLivePnlDelta([leg], feed)).toEqual({ live: true, deltaUsd: 12 });
     expect(tvLiveCandle(feed, 'MNQ', at + 86_400_000)).toMatchObject({ open: 21010, close: 21010 });
+  });
+});
+
+describe('svíčky dne z IBKR (fáze 4)', () => {
+  const ib = (time: number, close: number, volume = 5) => ({ time, open: close, high: close + 0.5, low: close - 0.5, close, volume, count: 1 });
+  const flat = (bars: Float64Array) => Array.from({ length: bars.length / 6 }, (_, index) => Array.from(bars.slice(index * 6, index * 6 + 6)));
+
+  it('až po úplné úvodní dávce; průběžná aktualizace přepíše poslední minutu', () => {
+    const h = harness();
+    h.goLive();
+    const { reqId } = h.current().barRequests[0];
+    const m = Math.floor(h.now() / 60_000) * 60;
+    h.current().handlers.onBar?.(reqId, ib(m - 120, 100));
+    h.current().handlers.onBar?.(reqId, ib(m - 60, 101));
+    expect(h.source.minuteBars()).toBeNull();
+    h.current().handlers.onBarsEnd?.(reqId);
+    h.current().handlers.onBarUpdate?.(reqId, ib(m, 102));
+    h.current().handlers.onBarUpdate?.(reqId, ib(m, 103, 9));
+    const bars = h.source.minuteBars()!;
+    expect(bars).toMatchObject({ root: 'MNQ', source: 'IBKR:MNQZ2026', contract: 'MNQZ2026' });
+    expect(flat(bars.bars)).toEqual([[m - 120, 100, 100.5, 99.5, 100, 5], [m - 60, 101, 101.5, 100.5, 101, 5], [m, 103, 103.5, 102.5, 103, 9]]);
+  });
+
+  it('svíčky starší než 27 h odpadnou; odpovědi starých žádostí se zahodí', () => {
+    const h = harness();
+    h.goLive();
+    const { reqId } = h.current().barRequests[0];
+    const m = Math.floor(h.now() / 60_000) * 60;
+    h.current().handlers.onBar?.(reqId, ib(m - 28 * 3600, 90));
+    h.current().handlers.onBar?.(reqId, ib(m - 60, 101));
+    h.current().handlers.onBar?.(reqId - 1, ib(m - 120, 1));
+    h.current().handlers.onBarsEnd?.(reqId);
+    expect(flat(h.source.minuteBars()!.bars).map(row => row[0])).toEqual([m - 60]);
+  });
+
+  it('opravný dotaz po 5 min (30 min bez keepUpToDate) zacelí díru', () => {
+    const h = harness();
+    h.goLive();
+    const { reqId } = h.current().barRequests[0];
+    h.current().handlers.onBarsEnd?.(reqId);
+    h.current().handlers.onBarUpdate?.(reqId, ib(Math.floor(h.now() / 60_000) * 60, 100));
+    h.advance(5 * 60_000);
+    const repair = h.current().barRequests[1];
+    expect(repair).toMatchObject({ duration: '1800 S', keep: false });
+    const hole = Math.floor(h.now() / 60_000) * 60 - 120;
+    h.current().handlers.onBar?.(repair.reqId, ib(hole, 105));
+    expect(flat(h.source.minuteBars()!.bars).some(row => row[0] === hole && row[4] === 105)).toBe(true);
+  });
+
+  it('mrtvý odběr (obchody chodí, svíčky 3 min ne) = zrušit a založit nový', () => {
+    const h = harness();
+    h.goLive();
+    const first = h.current().barRequests[0].reqId;
+    h.current().handlers.onBarsEnd?.(first);
+    for (let i = 0; i < 5; i += 1) { h.advance(60_000); h.trade(100); }
+    expect(h.current().cancelledBars).toContain(first);
+    const second = h.current().barRequests.find(request => request.keep && request.reqId !== first);
+    expect(second).toBeDefined();
+    expect(h.source.minuteBars()).toBeNull();
+  });
+
+  it('2105 = svíčky se neposílají; 2106 po výpadku = nový odběr; chyba odběru = znovu za 60 s', () => {
+    const h = harness();
+    h.goLive();
+    const first = h.current().barRequests[0].reqId;
+    h.current().handlers.onBar?.(first, ib(Math.floor(h.now() / 60_000) * 60 - 60, 100));
+    h.current().handlers.onBarsEnd?.(first);
+    expect(h.source.minuteBars()).not.toBeNull();
+    h.current().handlers.onInfo?.(2105, 'HMDS broken');
+    expect(h.source.minuteBars()).toBeNull();
+    h.advance(15_000);
+    h.current().handlers.onInfo?.(2106, 'HMDS OK');
+    expect(h.current().barRequests.filter(request => request.keep)).toHaveLength(2);
+    const second = h.current().barRequests.at(-1)!.reqId;
+    h.current().handlers.onError?.(162, second, 'historical data error');
+    expect(h.source.minuteBars()).toBeNull();
+    h.advance(59_000);
+    expect(h.current().barRequests.filter(request => request.keep)).toHaveLength(2);
+    h.advance(1_000);
+    expect(h.current().barRequests.filter(request => request.keep)).toHaveLength(3);
+  });
+
+  it('2106 po běžném připojení nový odběr nezakládá; výpadek spojení svíčky zahodí', () => {
+    const h = harness();
+    h.goLive();
+    h.current().handlers.onInfo?.(2106, 'HMDS OK');
+    expect(h.current().barRequests).toHaveLength(1);
+    const { reqId } = h.current().barRequests[0];
+    h.current().handlers.onBar?.(reqId, ib(Math.floor(h.now() / 60_000) * 60 - 60, 100));
+    h.current().handlers.onBarsEnd?.(reqId);
+    h.current().handlers.onError?.(1100, -1, 'lost');
+    expect(h.source.minuteBars()).toBeNull();
+    h.current().handlers.onDisconnected?.();
+    expect(h.source.minuteBars()).toBeNull();
+  });
+
+  it('roll: nový přední kontrakt = nový odběr svíček, staré svíčky se neposílají', () => {
+    const h = harness();
+    h.goLive();
+    const first = h.current().barRequests[0].reqId;
+    h.current().handlers.onBar?.(first, ib(Math.floor(h.now() / 60_000) * 60 - 60, 100));
+    h.current().handlers.onBarsEnd?.(first);
+    h.advance(60 * 60_000);
+    const reqId = h.current().contractReqIds.at(-1)!;
+    h.current().handlers.onContractDetails?.(reqId, { contract: { conId: 2, localSymbol: 'MNQH7', lastTradeDateOrContractMonth: '20270319' } } as unknown as ContractDetails);
+    h.current().handlers.onContractDetailsEnd?.(reqId);
+    expect(h.current().cancelledBars).toContain(first);
+    expect(h.source.minuteBars()).toBeNull();
+  });
+
+  it('opravný dotaz v letu přes roll: odpověď starého kontraktu se do nové řady nedostane', () => {
+    const h = harness();
+    h.goLive();
+    const first = h.current().barRequests[0].reqId;
+    h.current().handlers.onBarsEnd?.(first);
+    h.current().handlers.onBarUpdate?.(first, ib(Math.floor(h.now() / 60_000) * 60, 100));
+    h.advance(5 * 60_000);
+    const repair = h.current().barRequests.find(request => request.duration === '1800 S')!;
+    // Roll: další kontrola kontraktu najde jen H7.
+    h.advance(55 * 60_000);
+    const reqId = h.current().contractReqIds.at(-1)!;
+    h.current().handlers.onContractDetails?.(reqId, { contract: { conId: 2, localSymbol: 'MNQH7', lastTradeDateOrContractMonth: '20270319' } } as unknown as ContractDetails);
+    h.current().handlers.onContractDetailsEnd?.(reqId);
+    h.advance(15_000);
+    const fresh = h.current().barRequests.filter(request => request.keep).at(-1)!.reqId;
+    const m = Math.floor(h.now() / 60_000) * 60;
+    h.current().handlers.onBar?.(fresh, ib(m - 60, 400));
+    h.current().handlers.onBarsEnd?.(fresh);
+    h.current().handlers.onBar?.(repair.reqId, ib(m - 120, 100));
+    const bars = h.source.minuteBars()!;
+    expect(bars.contract).toBe('MNQH2027');
+    expect(flat(bars.bars).map(row => row[4])).toEqual([400]);
+  });
+
+  it('informativní kód k odběru svíček ho neukončí', () => {
+    const h = harness();
+    h.goLive();
+    const { reqId } = h.current().barRequests[0];
+    h.current().handlers.onBar?.(reqId, ib(Math.floor(h.now() / 60_000) * 60 - 60, 100));
+    h.current().handlers.onBarsEnd?.(reqId);
+    h.current().handlers.onError?.(2174, reqId, 'warning');
+    expect(h.current().cancelledBars).toEqual([]);
+    expect(h.source.minuteBars()).not.toBeNull();
   });
 });

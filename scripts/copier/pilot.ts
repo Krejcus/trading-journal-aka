@@ -118,8 +118,8 @@ const leaseRetry = (connectionId: string): RetryTransientOptions => ({
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
 import { createTvPriceStreamSupervisor, tvPriceStreamConfigFromRealtime, type TvPriceStreamSupervisor } from '../../server/tvPriceStreamSupervisor';
-import { scheduleTradingViewBarsCapture, startTradingViewLiveBars, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
-import { tvSymbolRoot } from '../../lib/tradingViewBars';
+import { readTradingViewBars, scheduleTradingViewBarsCapture, startTradingViewLiveBars, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
+import { barsContractConflicts, barsContractMatchesSymbol, tvSymbolRoot } from '../../lib/tradingViewBars';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
 import { loadMacCopierInstallManifestBestEffort } from '../../server/macCopierInstallManifest';
@@ -1084,6 +1084,14 @@ async function runLocalAgent(
     tvBarsSchedules.set(key, scheduleTradingViewBarsCapture({
       symbol,
       exitAt,
+      // Svíčky z IBKR jen pro kontrakt obchodu (v týdnu rollu drží IBKR už další); jinak TV.
+      read: async root => {
+        const ibkr = tvPriceStream?.latestBars(root) ?? null;
+        if (ibkr && barsContractMatchesSymbol(ibkr.contract, symbol)) return ibkr;
+        const tv = await readTradingViewBars(root);
+        // Graf TV jiného kontraktu (týden rollu) se k obchodu neukládá; neznámý kontrakt = dnešní chování.
+        return tv && !barsContractConflicts(tv.contract, symbol) ? tv : null;
+      },
       upload: async capture => {
         if (!relay) throw new Error('relay-unavailable');
         await relay.uploadBars(capture);
@@ -1099,6 +1107,9 @@ async function runLocalAgent(
     ? startTradingViewLiveBars({
       roots: (process.env.ALPHATRADE_TV_LIVE_ROOTS?.trim() || 'MNQ').split(',').map(root => root.trim()).filter(Boolean),
       ready: () => relay?.uploadLiveBars != null,
+      // Svíčky dne z IBKR (vlákno ceny, jen zobrazení), jinak z grafu TV. Server
+      // podle zdroje a kontraktu soubor dne nesmíchá (`mergeLiveBarsFile`).
+      read: async root => tvPriceStream?.latestBars(root) ?? readTradingViewBars(root),
       upload: async capture => {
         if (!relay?.uploadLiveBars) throw new Error('relay-unavailable');
         await relay.uploadLiveBars(capture);

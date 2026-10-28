@@ -310,7 +310,7 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
           <button type="button" aria-label="Předchozí den" onClick={() => ctl.shiftDay(-1)} style={roundNav}><ChevronLeft size={16} /></button>
           <div style={{ flex: 1, minWidth: 0, textAlign: 'center' }}>
             <p style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>{dayTitle(ctl.day)}</p>
-            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}><LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} weekendMarketDay={ctl.weekendMarketDay} restartable /></div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}><LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} source={ctl.chart.liveSource} weekendMarketDay={ctl.weekendMarketDay} restartable /></div>
           </div>
           <button type="button" aria-label="Další den" disabled={ctl.isToday} onClick={() => ctl.shiftDay(1)} style={{ ...roundNav, opacity: ctl.isToday ? 0.3 : 1 }}><ChevronRight size={16} /></button>
           <DayMoreMenu ctl={ctl} onOpenWeek={onOpenWeek} onOpenArchive={onOpenArchive} onOpenLegacy={onOpenLegacy} onOpenMind={onOpenMind} />

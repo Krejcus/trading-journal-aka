@@ -53,6 +53,24 @@ const DATA_FARM_OK = 2104;
 const SUBSCRIPTION_ERRORS = new Set([200, 322, 354, 10089, 10090, 10167, 10168, 10186, 10189, 10190]);
 /** Chyba hodinové kontroly kontraktu: zkusit znovu za chvíli, běžící odběr nechat. */
 const CONTRACT_RETRY_MS = 5 * 60_000;
+/** Odběr 1m svíček: žádosti mají vlastní rostoucí reqId (odpovědi starších se zahodí). */
+const BARS_REQ_BASE = 10_000_000;
+const REPAIR_REQ_BASE = 20_000_000;
+/** Nový odběr svíček nejdřív za tolik po minulém (pacing historických dat IBKR). */
+const BARS_REQUEST_GAP_MS = 15_000;
+/** Opravný dotaz na posledních 30 min: zacelí díry a odhalí mrtvý `keepUpToDate`. */
+const BARS_REPAIR_EVERY_MS = 5 * 60_000;
+/** Obchody chodí, ale odběr svíček mlčí déle než tohle = mrtvý odběr → nový. */
+const BARS_SILENT_MS = 3 * 60_000;
+const BARS_ERROR_RETRY_MS = 60_000;
+/** Okno a strop svíček dne — musí odpovídat `lib/tradingViewBars.ts` (`TV_BARS_MAX`, 27 h). */
+export const IBKR_BARS_MAX = 1_700;
+export const IBKR_BARS_MAX_AGE_S = 27 * 60 * 60;
+/** Gateway ztratila / obnovila spojení na farmu historických dat (HMDS). */
+const HMDS_BROKEN = 2105;
+const HMDS_OK = 2106;
+/** Chyby, které odběr svíček ukončí (ostatní kódy k němu jsou jen informace). */
+const BARS_FATAL_ERRORS = new Set([162, 200, 321, 322, 354, 366, 10089, 10090, 10167, 10168, 10186, 10189, 10190]);
 const CONTRACT_EMPTY_RETRY_MS = 30_000;
 
 export interface IbkrReading {
@@ -68,6 +86,17 @@ export interface IbkrReading {
   mode: 'streaming';
 }
 
+/** Svíčky dne pro hlavní vlákno: `bars` = [t, o, h, l, c, v] za sebou (Float64Array, přenositelné). */
+export interface IbkrMinuteBars {
+  root: string;
+  /** `IBKR:MNQZ2026` */
+  source: string;
+  /** `MNQZ2026` */
+  contract: string;
+  at: number;
+  bars: Float64Array;
+}
+
 export interface IbkrPriceSourceStats {
   state: 'stopped' | 'connecting' | 'subscribing' | 'live' | 'paused';
   trades: number;
@@ -80,6 +109,8 @@ export interface IbkrPriceSource {
   start(): void;
   stop(): void;
   reading(): IbkrReading | null;
+  /** Úplné 1m svíčky dne předního kontraktu, nebo `null` (neúplné, výpadek, jiný kontrakt). */
+  minuteBars(): IbkrMinuteBars | null;
   stats(): IbkrPriceSourceStats;
 }
 
@@ -140,6 +171,17 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
   let failures = 0;
   let contractReqId = CONTRACT_REQ_BASE;
   let rollTimer: unknown = null;
+  const history = new Map<number, [number, number, number, number, number, number]>();
+  let barsReqId = BARS_REQ_BASE;
+  let repairReqId = REPAIR_REQ_BASE;
+  let barsActive = false;
+  let barsComplete = false;
+  let barsConId: number | null = null;
+  let barsLastUpdateAt = 0;
+  let lastBarsRequestAt: number | null = null;
+  let hmdsBroken = false;
+  let barsTimer: unknown = null;
+  let repairTimer: unknown = null;
   const timers = new Set<unknown>();
 
   const later = (ms: number, callback: () => void) => {
@@ -166,6 +208,69 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
 
   const contract = (candidate: FrontContractCandidate) => ({ conId: candidate.conId, exchange: 'CME' });
 
+  const replaceTimer = (current: unknown, ms: number, callback: () => void): unknown => {
+    if (current !== null) { cancel(current); timers.delete(current); }
+    const timer = schedule(() => {
+      timers.delete(timer);
+      if (!running) return;
+      try { callback(); } catch { /* zdroj nikdy nevyhodí */ }
+    }, ms);
+    timers.add(timer);
+    return timer;
+  };
+
+  const forgetBars = () => {
+    if (barsActive && client) { try { client.cancelMinuteBars(barsReqId); } catch { /* best effort */ } }
+    // Opravný dotaz v letu patří starému odběru (třeba kontraktu před rollem): jeho odpověď zahodit.
+    repairReqId += 1;
+    barsActive = false;
+    barsComplete = false;
+    barsConId = null;
+    history.clear();
+  };
+
+  /** Nový odběr 1m svíček ('2 D' + keepUpToDate) předního kontraktu; nejdřív 15 s po minulém. */
+  function startBars() {
+    if (!running || !client || !connected || !front) return;
+    const wait = (lastBarsRequestAt ?? -Infinity) + BARS_REQUEST_GAP_MS - now();
+    if (wait > 0) { barsTimer = replaceTimer(barsTimer, wait, startBars); return; }
+    forgetBars();
+    const target = front;
+    barsReqId += 1;
+    barsActive = true;
+    barsConId = target.conId;
+    lastBarsRequestAt = now();
+    barsLastUpdateAt = now();
+    client.requestMinuteBars(barsReqId, contract(target), '2 D', true);
+    repairTimer = replaceTimer(repairTimer, BARS_REPAIR_EVERY_MS, repairBars);
+  }
+
+  /** Opravný dotaz na posledních 30 min; mrtvý odběr (obchody chodí, svíčky ne) = nový odběr. */
+  function repairBars() {
+    repairTimer = replaceTimer(repairTimer, BARS_REPAIR_EVERY_MS, repairBars);
+    if (!running || !client || !connected || !barsActive || barsConId === null) return;
+    const tradesFlowing = last !== null && now() - last.receivedAt <= 90_000;
+    if (tradesFlowing && now() - barsLastUpdateAt > BARS_SILENT_MS) { startBars(); return; }
+    if (!barsComplete) return;
+    repairReqId += 1;
+    // Na kontrakt aktivního odběru, ne na právě vybraný přední (roll mezi tím).
+    client.requestMinuteBars(repairReqId, { conId: barsConId, exchange: 'CME' }, '1800 S', false);
+  }
+
+  const storeBar = (bar: { time: number; open: number; high: number; low: number; close: number; volume: number }) => {
+    const { time, open, high, low, close } = bar;
+    if (![time, open, high, low, close].every(Number.isFinite) || time % 60 !== 0 || !(low > 0) || high < low) return;
+    history.set(time, [time, open, high, low, close, Number.isFinite(bar.volume) && bar.volume >= 0 ? bar.volume : 0]);
+    // Ořez rovnou při ukládání: mapa nesmí růst s délkou spojení.
+    if (history.size > IBKR_BARS_MAX + 120) {
+      const oldest = Math.floor(now() / 1_000) - IBKR_BARS_MAX_AGE_S;
+      const times = [...history.keys()].sort((a, b) => a - b);
+      for (const [index, minute] of times.entries()) {
+        if (minute < oldest || index < times.length - IBKR_BARS_MAX) history.delete(minute);
+      }
+    }
+  };
+
   const unsubscribe = () => {
     if (subscribed && client) {
       try { client.cancelTrades(REQ.trades); } catch { /* best effort */ }
@@ -190,6 +295,8 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     stats.state = 'subscribing';
     client.subscribeTrades(REQ.trades, contract(target));
     client.subscribeVolume(REQ.quote, contract(target));
+    // Svíčky dne patří ke stejnému kontraktu a po výpadku (1101) se stahují znovu.
+    startBars();
   };
 
   const clearRollTimer = () => {
@@ -224,6 +331,13 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     // Odložené akce (odběr po 15 s, obnova po chybě, kontrola kontraktu) patří starému spojení.
     clearTimers();
     rollTimer = null;
+    barsTimer = null;
+    repairTimer = null;
+    barsActive = false;
+    barsComplete = false;
+    barsConId = null;
+    hmdsBroken = false;
+    history.clear();
     const current = client;
     client = null;
     connected = false;
@@ -266,6 +380,24 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
       lost = false;
       return;
     }
+    if (code === HMDS_BROKEN) {
+      stats.lastCode = code;
+      hmdsBroken = true;
+      return;
+    }
+    if (code === HMDS_OK) {
+      // 2106 chodí i po každém připojení; nový odběr jen po skutečném výpadku.
+      if (hmdsBroken) { hmdsBroken = false; startBars(); }
+      return;
+    }
+    if (reqId === barsReqId && reqId > BARS_REQ_BASE) {
+      stats.lastCode = code;
+      if (!BARS_FATAL_ERRORS.has(code)) return;
+      forgetBars();
+      barsTimer = replaceTimer(barsTimer, BARS_ERROR_RETRY_MS, startBars);
+      return;
+    }
+    if (reqId === repairReqId && reqId > REPAIR_REQ_BASE) return;
     if (reqId === contractReqId && reqId >= CONTRACT_REQ_BASE) {
       stats.lastCode = code;
       scheduleContracts(CONTRACT_RETRY_MS);
@@ -327,6 +459,19 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
         bar.close = trade.price;
       }
     },
+    onBar: (reqId, bar) => {
+      if (barsActive && (reqId === barsReqId || reqId === repairReqId)) storeBar(bar);
+    },
+    onBarsEnd: reqId => {
+      if (reqId !== barsReqId || !barsActive) return;
+      barsComplete = true;
+      barsLastUpdateAt = now();
+    },
+    onBarUpdate: (reqId, bar) => {
+      if (reqId !== barsReqId || !barsActive) return;
+      storeBar(bar);
+      barsLastUpdateAt = now();
+    },
     onQuote: (reqId, side, price) => {
       if (reqId !== REQ.quote || !subscribed) return;
       const value = price > 0 ? price : null;
@@ -352,6 +497,9 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
       onContractDetailsEnd: current(handlers.onContractDetailsEnd),
       onTick: current(handlers.onTick),
       onQuote: current(handlers.onQuote),
+      onBar: current(handlers.onBar),
+      onBarsEnd: current(handlers.onBarsEnd),
+      onBarUpdate: current(handlers.onBarUpdate),
     };
     try {
       created = createClient(bound);
@@ -398,6 +546,21 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
           ask: quoteValid ? ask : null,
           mode: 'streaming',
         };
+      } catch {
+        return null;
+      }
+    },
+    minuteBars() {
+      try {
+        if (!running || !connected || lost || awaitingResubscribe || hmdsBroken || !barsComplete || !frontTv) return null;
+        if (barsConId === null || barsConId !== front?.conId) return null;
+        const at = now();
+        const oldest = Math.floor(at / 1_000) - IBKR_BARS_MAX_AGE_S;
+        const rows = [...history.values()].filter(row => row[0] >= oldest).sort((a, b) => a[0] - b[0]).slice(-IBKR_BARS_MAX);
+        if (!rows.length) return null;
+        const bars = new Float64Array(rows.length * 6);
+        rows.forEach((row, index) => bars.set(row, index * 6));
+        return { root: symbol, source: `IBKR:${frontTv}`, contract: frontTv, at, bars };
       } catch {
         return null;
       }
