@@ -302,6 +302,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `6d7e0a57`) — změna workeru, reinstall jen ve flat/DISARMED stavu na
   výslovný pokyn.
 
+### 2026-10-28 odpoledne — Oprava předposlední svíčky v deníku + vlastní timeframy (Claude, větev, NEnasazeno)
+
+- Bug (Filip): v grafu dne je předposlední svíčka vždy jiná, opraví se až po
+  další. Příčina: worker posílal `tv-live` v náhodné sekundě s rozpracovanou
+  minutou a klient soubor 1×/min načítal v náhodné fázi → přepsal předposlední
+  svíčku stavem z poloviny minuty (živá vazba přepisuje jen poslední bar).
+  Oprava `d8778d5c`: upload v 10. s minuty (řetěz setTimeout, přežije spánek),
+  vlákno posílá svíčky IBKR v 7./37. s, pilot bere jen IBKR čtení z aktuální
+  minuty, klient načítá v 20. s. Živě ověřeno: předchozí minuta z IBKR je
+  v 7. s konečná (4/4). Kritik: OPRAVIT PŘED COMMITEM (drift setInterval,
+  staré čtení) → opraveno. Zbývá: načtení při mountu/návratu do appky mezi
+  :00–:12 může na ≤20 s ukázat rozpracovanou předposlední svíčku.
+- Vlastní timeframy `aa54134f`: `MarketTimeframe` + `${n}m` (1–720), `${n}h`
+  (1–23), `W`, `M`; `timeframeMinutes`, `timeframeBucketStart` (týden/měsíc
+  podle obchodního dne CME), `nearestBuiltinTimeframe` pro tabulky grafu;
+  výběr timeframu má sekci „Vlastní“ (přidat, hvězdička, smazat), W a M v „Dny“.
+  Ověřeno v náhledu (samostatná stránka s výběrem, smazaná). W/M zatím jen
+  z ~15 dní 1m dat (hlubší historie = fáze 5).
+- 5828+ testů, tsc čistý. Nasazení: push main (klient) + reinstall workeru
+  (DISARMED, flat, reconciled, po „nasaď“).
+
 ### 2026-10-28 12:18 — NASAZENO: fáze 4, svíčky dne z IBKR (Claude, Filip „nasaď fázi 4 teď“)
 
 - Push main `18262017` → Vercel READY (alphatrade-mentor-15 i oauth-data-probe)
