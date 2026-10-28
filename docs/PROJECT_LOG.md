@@ -302,7 +302,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `6d7e0a57`) — změna workeru, reinstall jen ve flat/DISARMED stavu na
   výslovný pokyn.
 
-### 2026-10-28 poledne — Fáze 4: dnešní 1m svíčky z IBKR (Claude, větev, NEnasazeno)
+### 2026-10-28 12:18 — NASAZENO: fáze 4, svíčky dne z IBKR (Claude, Filip „nasaď fázi 4 teď“)
+
+- Push main `18262017` → Vercel READY (alphatrade-mentor-15 i oauth-data-probe)
+  PŘED workerem. Reinstall z worktree @ 18262017 (bundle 1144717b…),
+  DISARMED, read-only reconcile čistý.
+- Log workeru 11:18:41Z: `TV LIVE uploading root=MNQ bars=1560 source=IBKR:MNQZ2026`.
+  Předchozí běh (zdroj ceny IBKR) hlásil `zdroj=ibkr ibkr=live obchody=33623`.
+
+### 2026-10-28 poledne — Fáze 4: dnešní 1m svíčky z IBKR (Claude, nasazeno 12:18)
 
 - Filip schválil ukládání svíček z IBKR do úložiště appky stejně jako z TV
   (jen graf dne a hodnocení) → výjimka zapsaná do INV-UI-04.
