@@ -438,6 +438,18 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                   <Check checked={scales.noOverlappingLabels} onChange={noOverlappingLabels => update('scales', { noOverlappingLabels })} label="Nepřekrývat popisky" />
                   <Check checked={scales.plusButton} onChange={plusButton => update('scales', { plusButton })} label="Tlačítko plus" />
                   <Check checked={scales.countdownToBarClose} onChange={countdownToBarClose => update('scales', { countdownToBarClose })} label="Odpočet do uzavření svíčky" />
+                  {scales.countdownToBarClose && (
+                    <Row label="Umístění odpočtu">
+                      <Select
+                        value={scales.countdownPlacement}
+                        options={[
+                          { value: 'price' as const, label: 'Pod cenou' },
+                          { value: 'corner' as const, label: 'V grafu vpravo dole' },
+                        ]}
+                        onChange={countdownPlacement => update('scales', { countdownPlacement })}
+                      />
+                    </Row>
+                  )}
                   <PriceLabelRow
                     label="Aktuální cena"
                     value={scales.symbolLabel}

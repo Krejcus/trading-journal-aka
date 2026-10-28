@@ -38,6 +38,7 @@ const buttons = { enum: ['hover', 'always', 'never'] };
 const lines = { enum: ['solid', 'dotted', 'dashed', 'large-dashed', 'sparse-dotted'] };
 chartRules.scales.scaleModeButtons = buttons;
 chartRules.scales.placement = { enum: ['left', 'right', 'auto'] };
+chartRules.scales.countdownPlacement = { enum: ['price', 'corner'] };
 chartRules.scales.symbolLastValueMode = { enum: ['priceAndPercentage', 'valueAccordingToScale'] };
 chartRules.scales.dateFormat = { enum: [...CHART_DATE_FORMATS] };
 for (const key of ['symbolLabel', 'previousDayClose', 'highAndLow']) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barCountdownOffset, barCountdownText, barCountdownTextColor, BAR_COUNTDOWN_GRACE_SECONDS } from '../services/barCountdownPrimitive';
+import { barCountdownAxisBox, barCountdownText, barCountdownTextColor, BAR_COUNTDOWN_GRACE_SECONDS } from '../services/barCountdownPrimitive';
 
 describe('odpočet do uzavření svíčky na cenové ose', () => {
   const barTime = 1_793_000_000; // začátek svíčky (s)
@@ -17,12 +17,12 @@ describe('odpočet do uzavření svíčky na cenové ose', () => {
     expect(barCountdownText({ barTime: Number.NaN, timeframeMinutes: 1, nowSeconds: barTime })).toBeNull();
   });
 
-  it('štítek sedí těsně pod štítkem ceny (výšky štítků lightweight-charts)', () => {
-    // 12 px písmo: štítek ceny 17 px, štítek pluginu 21 px → středy 19 px od sebe.
-    expect(barCountdownOffset(12, true)).toBe(19);
-    expect(barCountdownOffset(11, true)).toBe(17);
-    // Bez štítku ceny přímo na ceně.
-    expect(barCountdownOffset(12, false)).toBe(0);
+  it('box navazuje na spodní hranu štítku ceny ve stejné výšce (lightweight-charts: 17/12 písma)', () => {
+    // 12 px písmo: štítek ceny 17 px se středem na ceně → box od +8,5 px, výška 17.
+    expect(barCountdownAxisBox(100, 12, true)).toEqual({ top: 109, height: 17 });
+    expect(barCountdownAxisBox(100, 11, true)).toEqual({ top: 108, height: 16 });
+    // Bez štítku ceny box sedí přímo na cenové čáře.
+    expect(barCountdownAxisBox(100, 12, false)).toEqual({ top: 92, height: 17 });
   });
 
   it('text čitelný na barvě štítku', () => {

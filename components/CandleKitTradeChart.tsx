@@ -5037,8 +5037,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
   // Odpočet do uzavření svíčky (jako TV): štítek na cenové ose pod cenou.
   // Obnovuje se sám v knihovně grafu, React kvůli němu nepřekresluje.
-  const countdownClockRef = useRef({ timeframe, replayActive, replayCursorTime });
-  countdownClockRef.current = { timeframe, replayActive, replayCursorTime };
+  const countdownClockRef = useRef({ timeframe, replayActive, replayCursorTime, placement: chartSettings.scales.countdownPlacement });
+  countdownClockRef.current = { timeframe, replayActive, replayCursorTime, placement: chartSettings.scales.countdownPlacement };
   useEffect(() => {
     const api = apiRef.current;
     if (!api || !chartSettings.scales.countdownToBarClose) return;
@@ -5050,6 +5050,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         const clock = countdownClockRef.current;
         return clock.replayActive && clock.replayCursorTime != null ? Number(clock.replayCursorTime) : Date.now() / 1_000;
       },
+      placement: () => countdownClockRef.current.placement,
     });
     series.attachPrimitive(primitive);
     return () => {

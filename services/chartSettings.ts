@@ -143,6 +143,8 @@ export interface ChartScalesSettings {
   noOverlappingLabels: boolean;
   plusButton: boolean;
   countdownToBarClose: boolean;
+  /** Kde je odpočet: pod cenou na cenové ose (jako TV), nebo vpravo dole v grafu. */
+  countdownPlacement: 'price' | 'corner';
   symbolLabel: ChartPriceLabelSettings;
   symbolLastValueMode: ChartLastValueMode;
   previousDayClose: ChartPriceLabelSettings;
@@ -254,6 +256,7 @@ export const defaultChartSettings = (isDark: boolean): ChartSettings => ({
     noOverlappingLabels: true,
     plusButton: false,
     countdownToBarClose: false,
+    countdownPlacement: 'price',
     symbolLabel: {
       value: true,
       line: false,
