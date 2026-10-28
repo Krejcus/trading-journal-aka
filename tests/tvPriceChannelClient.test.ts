@@ -9,7 +9,7 @@ import {
   TV_VERIFY_TIMEOUT_MS,
   type TvPriceChannelStatus,
 } from '../lib/tvPriceChannelClient';
-import { signTvPricePayload, verifyTvPriceEnvelope, type TvPricePayload } from '../lib/tvPriceMessage';
+import { signTvPricePayload, signTvPriceTrail, verifyTvPriceEnvelope, verifyTvPriceTrail, type TvPricePayload } from '../lib/tvPriceMessage';
 import { createTvPriceStore } from '../lib/tvPriceStore';
 
 const T0 = Date.UTC(2026, 9, 26, 15, 0, 10);
@@ -29,7 +29,11 @@ interface FakeChannel {
   closed: number;
 }
 
-const setup = (options: { webCrypto?: boolean; verify?: (envelope: unknown, key: string) => Promise<TvPricePayload | null> } = {}) => {
+const setup = (options: {
+  webCrypto?: boolean;
+  verify?: (envelope: unknown, key: string) => Promise<TvPricePayload | null>;
+  verifyTrail?: (envelope: unknown, key: string, payload: TvPricePayload) => Promise<number[] | null>;
+} = {}) => {
   const channels: FakeChannel[] = [];
   let foreground = true;
   const foregroundListeners = new Set<(value: boolean) => void>();
@@ -50,6 +54,7 @@ const setup = (options: { webCrypto?: boolean; verify?: (envelope: unknown, key:
       };
     },
     verify,
+    verifyTrail: options.verifyTrail,
     hasWebCrypto: () => options.webCrypto ?? true,
     isForeground: () => foreground,
     subscribeForeground: listener => {
@@ -199,6 +204,39 @@ describe('klient kanálu ceny z TV (krok 3)', () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(t.verify).toHaveBeenCalledTimes(3);
     expect(t.store.diagnostics()).toMatchObject({ verified: 3, replayed: 0, gaps: 0, seq: 2 });
+  });
+
+  it('zaseknuté ověření cesty zprávu přijme bez cesty a frontu nezablokuje', async () => {
+    const t = setup({ verifyTrail: () => new Promise<number[] | null>(() => {}) });
+    t.client.offerGrant('u1', grant(), true);
+    t.client.addPnlInterest();
+    t.channels[0].status('SUBSCRIBED');
+    for (const seq of [0, 1, 2]) t.channels[0].message({ payload: payload(seq) });
+    await vi.advanceTimersByTimeAsync(TV_VERIFY_TIMEOUT_MS * 3 + 100);
+    expect(t.store.diagnostics()).toMatchObject({ verified: 3, dropped: 0, seq: 2 });
+    expect(t.store.view().trail).toBeNull();
+  });
+
+  it('cesta ceny: platná jde do storu k zprávě; pozměněná zprávu neshodí, jen se zahodí', async () => {
+    vi.useRealTimers();
+    const t = setup({ verify: verifyTvPriceEnvelope, verifyTrail: verifyTvPriceTrail });
+    const access = grant();
+    t.client.offerGrant('u1', access, true);
+    t.client.addPnlInterest();
+    t.channels[0].status('SUBSCRIBED');
+    const first = payload(0, 21010, { bar: [Math.floor(T0 / 60_000) * 60, 21009, 21011, 21008, 21010] });
+    const signed = (await signTvPricePayload(first, access.key))!;
+    const trail = (await signTvPriceTrail({ v: 1, runId: 'run-a', seq: 0, minute: first.bar![0], path: [21009.5, 21011, 21010] }, first, access.key))!;
+    t.channels[0].message({ ...signed, ...trail });
+    for (let index = 0; index < 50 && t.store.diagnostics().verified < 1; index += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(t.store.view().trail).toEqual([21009.5, 21011, 21010]);
+    const second = payload(1, 21010, { bar: first.bar, at: T0 + 250 });
+    const signedSecond = (await signTvPricePayload(second, access.key))!;
+    const trailSecond = (await signTvPriceTrail({ v: 1, runId: 'run-a', seq: 1, minute: first.bar![0], path: [21011, 21010] }, second, access.key))!;
+    t.channels[0].message({ ...signedSecond, ...trailSecond, t: trailSecond.t.replace('21011', '21008') });
+    for (let index = 0; index < 50 && t.store.diagnostics().verified < 2; index += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(t.store.diagnostics()).toMatchObject({ verified: 2, rejected: 0, seq: 1 });
+    expect(t.store.view().trail).toBeNull();
   });
 
   it('skutečný podpis: platná zpráva projde, pozměněná nebo cizím klíčem podepsaná se zahodí', async () => {

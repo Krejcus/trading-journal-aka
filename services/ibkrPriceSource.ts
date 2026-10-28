@@ -97,6 +97,15 @@ export interface IbkrMinuteBars {
   bars: Float64Array;
 }
 
+export interface IbkrTrail {
+  /** Začátek minuty v s (stejný jako `bar[0]` čtení). */
+  minute: number;
+  prices: number[];
+}
+
+/** Strop bufferu cesty mezi dvěma čteními (čte se po ~25–250 ms). */
+const TRAIL_BUFFER_MAX = 256;
+
 export interface IbkrPriceSourceStats {
   state: 'stopped' | 'connecting' | 'subscribing' | 'live' | 'paused';
   trades: number;
@@ -111,6 +120,11 @@ export interface IbkrPriceSource {
   reading(): IbkrReading | null;
   /** Úplné 1m svíčky dne předního kontraktu, nebo `null` (neúplné, výpadek, jiný kontrakt). */
   minuteBars(): IbkrMinuteBars | null;
+  /**
+   * Ceny obchodů rozpracované minuty od minulého volání (sousední shodné
+   * sloučené) a vyprázdní je. Jen pro přehrání v grafu (INV-UI-04).
+   */
+  takeTrail(): IbkrTrail | null;
   stats(): IbkrPriceSourceStats;
 }
 
@@ -170,6 +184,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
   let bar: MinuteBar | null = null;
   let bid: number | null = null;
   let ask: number | null = null;
+  let trail: IbkrTrail | null = null;
   let failures = 0;
   let contractReqId = CONTRACT_REQ_BASE;
   let rollTimer: unknown = null;
@@ -204,6 +219,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     marketDataType = null;
     last = null;
     bar = null;
+    trail = null;
     bid = null;
     ask = null;
   };
@@ -460,6 +476,12 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
         bar.low = Math.min(bar.low, trade.price);
         bar.close = trade.price;
       }
+      // Cesta jen rozpracované minuty: nová minuta začíná prázdná, opožděný obchod do ní nepatří.
+      if (minute === bar.minute) {
+        if (!trail || trail.minute !== minute) trail = { minute, prices: [] };
+        if (trail.prices[trail.prices.length - 1] !== trade.price) trail.prices.push(trade.price);
+        if (trail.prices.length > TRAIL_BUFFER_MAX) trail.prices.splice(0, trail.prices.length - TRAIL_BUFFER_MAX);
+      }
       try { deps.onTrade?.(); } catch { /* zdroj nikdy nevyhodí */ }
     },
     onBar: (reqId, bar) => {
@@ -567,6 +589,11 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
       } catch {
         return null;
       }
+    },
+    takeTrail() {
+      const taken = trail;
+      trail = null;
+      return taken && taken.prices.length ? taken : null;
     },
     stats: () => ({ ...stats }),
   };

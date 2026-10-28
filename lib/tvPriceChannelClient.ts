@@ -51,6 +51,8 @@ export interface TvPriceChannelClientDeps {
     onStatus(status: TvPriceChannelStatus): void;
   }): TvPriceChannelHandle;
   verify(envelope: unknown, key: string): Promise<TvPricePayload | null>;
+  /** Cesta ceny k ověřené zprávě (jen přehrání v grafu); chybí = bez cesty. */
+  verifyTrail?(envelope: unknown, key: string, payload: TvPricePayload): Promise<number[] | null>;
   hasWebCrypto(): boolean;
   isForeground(): boolean;
   subscribeForeground(listener: (foreground: boolean) => void): () => void;
@@ -186,14 +188,27 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
     current.pending += 1;
     current.chain = current.chain.then(async () => {
       let timer: unknown = null;
+      const startedAt = now();
       try {
         const payload = await Promise.race([
           deps.verify(envelope, key).catch(() => null),
           new Promise<null>(resolve => { timer = schedule(() => resolve(null), TV_VERIFY_TIMEOUT_MS); }),
         ]);
         if (owner !== generation) return;
-        if (!payload) store.noteRejected();
-        else store.accept(payload, receivedAt);
+        if (!payload) { store.noteRejected(); return; }
+        // Neplatná nebo zaseknutá cesta zprávu neshodí (a frontu nezablokuje) — graf jen skočí rovnou na poslední cenu.
+        // Jeden společný limit pro zprávu i cestu: zpráva nesmí kvůli cestě čekat déle než dřív.
+        clearTimer(timer);
+        timer = null;
+        const remaining = TV_VERIFY_TIMEOUT_MS - (now() - startedAt);
+        const trail = deps.verifyTrail && remaining > 0
+          ? await Promise.race([
+            deps.verifyTrail(envelope, key, payload).catch(() => null),
+            new Promise<null>(resolve => { timer = schedule(() => resolve(null), remaining); }),
+          ])
+          : null;
+        if (owner !== generation) return;
+        store.accept(payload, receivedAt, trail);
       } finally {
         clearTimer(timer);
         current.pending -= 1;

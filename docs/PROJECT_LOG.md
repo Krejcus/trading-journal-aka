@@ -285,6 +285,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 21:50 — Přehrání ticků z dávky v živé svíčce (Claude, NENASAZENO)
+
+- Proč: Filip chtěl v grafu vidět všechny ticky jako v Tradovate. IBKR dává
+  každý obchod, worker ale posílal jen poslední cenu dávky (~2×/s).
+  Náhled bez/s na nahraných datech: `mockups/tick-replay-preview.html`.
+- Jak: zpráva nese volitelnou cestu ceny (`TvPriceTrail`, skutečně
+  zobchodované ceny rozpracované minuty od minulé zprávy, max 64) v polích
+  obálky `t`/`ts`, zvlášť podepsanou (`"trail\n"+t`), mimo `p`. Starší appka
+  (iPhone bundle) ověřuje jen `p`/`sig` a cestu ignoruje. Graf jí svíčku
+  přehraje za 100 ms a skončí přesně na baru zprávy; P&L skáče hned.
+  Volba grafu „Přehrávat ticky z dávky v živé svíčce“ (`scales.liveTickReplay`,
+  výchozí zapnuto). INV-UI-04 a INV-WORKER-04 doplněny.
+- copier-design-critic: 1. kolo „OPRAVIT PŘED COMMITEM“ (ověření cesty bez
+  časového limitu mohlo zastavit celý kanál ceny; mezistav svíčky na přelomu
+  minuty; guard obejitý přejmenováním) → opraveno → 2. kolo „OK S VÝHRADAMI“
+  (shluk 3 zpráv, okno po doběhnutí, zastaralý kanál, dvojitý limit) → opraveno.
+- Ověření: tsc, testy kanálu ceny zelené; celá sada padala jen na časových
+  limitech kopírky při loadu 20–48 (samostatně 104/104 zelené). End-to-end
+  přehrání neověřeno — vyžaduje nasazení webu i workeru.
 ### 2026-10-28 20:30 — NASAZENO: FVG bez problikávání + prodloužení FVG doprava (Claude, Filip „nasaď jen FVG“)
 
 - Filip: nasadit jen FVG, nepřepsat mezitím nasazené zrychlení živých dat.

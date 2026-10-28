@@ -13,7 +13,7 @@ const latest = (patch: Partial<TvPricePayload> = {}): TvPricePayload => ({
   mode: 'streaming', bar: [MINUTE, 29180, 29192.5, 29178.25, 29188.5], last: 29188.5, bid: 29188.25, ask: 29188.5,
   at: (MINUTE + 25) * 1_000, ...patch,
 });
-const feed = (patch: Partial<TvPricePayload> = {}, fresh = true): TvPriceFeedView => ({ fresh, latest: latest(patch), samples: [] });
+const feed = (patch: Partial<TvPricePayload> = {}, fresh = true): TvPriceFeedView => ({ fresh, latest: latest(patch), samples: [], trail: null });
 const DAY_END = (MINUTE + 9 * 3_600) * 1_000;
 const candle = (time: number, close: number, volume = 100): MarketCandle => ({ time, open: close, high: close + 1, low: close - 1, close, volume });
 

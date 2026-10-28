@@ -1,4 +1,4 @@
-import type { TvPriceEnvelope, TvPricePayload } from '../lib/tvPriceMessage';
+import { TV_PRICE_TRAIL_MAX, type TvPriceEnvelope, type TvPricePayload, type TvPriceTrail } from '../lib/tvPriceMessage';
 
 /**
  * Jádro kanálu ceny z TradingView (běží ve vlákně workeru, INV-WORKER-04).
@@ -45,6 +45,8 @@ export interface TvStreamReading {
   bid: number | null;
   ask: number | null;
   mode: string | null;
+  /** Nové ceny obchodů rozpracované minuty od minulého čtení (jen IBKR). */
+  trail?: { minute: number; prices: number[] } | null;
 }
 
 export interface TvStreamMeta {
@@ -61,6 +63,8 @@ export interface TvPriceStreamDeps {
   /** Kanál je `joined` a po (re)joinu přišel presence `sync`. */
   ready: () => boolean;
   sign: (payload: TvPricePayload) => Promise<TvPriceEnvelope | null>;
+  /** Podpis cesty ceny k podepsané zprávě; `null` = zpráva jde bez cesty. */
+  signTrail?: (trail: TvPriceTrail, payload: TvPricePayload) => Promise<{ t: string; ts: string } | null>;
   /** Odeslání podepsané zprávy; `false` = neodesláno. Nesmí čekat na REST fallback. */
   publish: (envelope: TvPriceEnvelope) => Promise<boolean>;
   runId: string;
@@ -115,6 +119,35 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
   let nudged = false;
   /** Po chybě čtení/odeslání `nudge` nečte dřív než po prodlevě (žádná smyčka pokusů). */
   let backoffUntil = 0;
+  /** Ceny obchodů od minulé odeslané zprávy (rozpracovaná minuta) — cesta pro přehrání v grafu. */
+  let pendingTrail: { minute: number; prices: number[] } | null = null;
+  /** Po nečinnosti zahodit cestu prvního čtení (nashromážděná ve zdroji, nikdo ji neviděl). */
+  let dropNextTrail = false;
+
+  const collectTrail = (reading: TvStreamReading) => {
+    const minute = reading.bar?.[0];
+    if (minute === undefined || (pendingTrail && pendingTrail.minute !== minute)) pendingTrail = null;
+    const fresh = reading.trail;
+    if (dropNextTrail) { dropNextTrail = false; return; }
+    if (minute === undefined || !fresh || fresh.minute !== minute) return;
+    pendingTrail ??= { minute, prices: [] };
+    for (const price of fresh.prices) {
+      if (pendingTrail.prices[pendingTrail.prices.length - 1] !== price) pendingTrail.prices.push(price);
+    }
+    if (pendingTrail.prices.length > TV_PRICE_TRAIL_MAX) pendingTrail.prices.splice(0, pendingTrail.prices.length - TV_PRICE_TRAIL_MAX);
+  };
+
+  /** Cesta k odesílané zprávě: jen s víc než jednou cenou a končící její poslední cenou. */
+  const trailFor = async (payload: TvPricePayload): Promise<{ t: string; ts: string } | null> => {
+    const trail = pendingTrail;
+    if (!deps.signTrail || !trail || trail.prices.length < 2 || !payload.bar || trail.minute !== payload.bar[0]) return null;
+    if (trail.prices[trail.prices.length - 1] !== payload.last) return null;
+    try {
+      return await deps.signTrail({ v: 1, runId: payload.runId, seq: payload.seq, minute: trail.minute, path: trail.prices.slice() }, payload);
+    } catch {
+      return null;
+    }
+  };
   let seq = 0;
   let lastSignature: string | null = null;
   const sendTimes: number[] = [];
@@ -150,6 +183,8 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
       stats.state = 'idle';
       // Po návratu poslechu se pošle hned i neměnná cena (klient potřebuje první zprávu).
       lastSignature = null;
+      pendingTrail = null;
+      dropNextTrail = true;
       next(TV_STREAM_IDLE_CHECK_MS);
       return;
     }
@@ -162,6 +197,7 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
       const reading = await deps.read();
       stats.reads += 1;
       if (stopped || !reading) return;
+      collectTrail(reading);
       const at = now();
       const current = signature(reading);
       const heartbeatDue = stats.lastSendAt === null || at - stats.lastSendAt >= TV_STREAM_HEARTBEAT_MS;
@@ -173,9 +209,13 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
         front: meta.front, switchAt: meta.switchAt, mode: reading.mode, bar: reading.bar,
         last: reading.last, bid: reading.bid, ask: reading.ask, at: Math.round(at),
       };
-      const envelope = await deps.sign(payload);
-      if (stopped || !envelope || !deps.ready()) return;
+      const signed = await deps.sign(payload);
+      if (stopped || !signed) return;
+      const trailPart = await trailFor(payload);
+      if (stopped || !deps.ready()) return;
+      const envelope: TvPriceEnvelope = trailPart ? { ...signed, ...trailPart } : signed;
       if (await deps.publish(envelope)) {
+        pendingTrail = null;
         seq += 1;
         sendTimes.push(at);
         stats.sends += 1;

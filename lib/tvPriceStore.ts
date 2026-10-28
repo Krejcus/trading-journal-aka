@@ -36,6 +36,8 @@ export interface TvPriceFeedView {
   latest: TvPricePayload | null;
   /** Souvislá řada: stejný `runId`, bez mezery v `seq`, jen 1m `streaming`, vzestupně podle `at`. */
   samples: readonly TvPriceSample[];
+  /** Ověřená cesta ceny k `latest` (skutečné ceny z dávky, končí `latest.last`) — jen přehrání v grafu. */
+  trail: readonly number[] | null;
 }
 
 export type TvPriceLinkState = 'off' | 'connecting' | 'joined';
@@ -76,7 +78,7 @@ export interface TvPriceStore {
   noteReceived(): void;
   noteRejected(): void;
   noteDropped(): void;
-  accept(payload: TvPricePayload, receivedAt: number): TvPriceAcceptResult;
+  accept(payload: TvPricePayload, receivedAt: number, trail?: readonly number[] | null): TvPriceAcceptResult;
   /** Změna tématu/klíče nebo odhlášení: zapomene běh, vzorky i čítače. */
   reset(reason?: string | null): void;
 }
@@ -100,6 +102,7 @@ export function createTvPriceStore(deps: TvPriceStoreDeps = {}): TvPriceStore {
   let linkReason: string | null = 'no-grant';
   let fresh = false;
   let latest: TvPricePayload | null = null;
+  let latestTrail: readonly number[] | null = null;
   let lastReceivedAt: number | null = null;
   let samples: readonly TvPriceSample[] = EMPTY_SAMPLES;
   let counters = emptyCounters();
@@ -131,6 +134,7 @@ export function createTvPriceStore(deps: TvPriceStoreDeps = {}): TvPriceStore {
     clearStaleTimer();
     fresh = false;
     latest = null;
+    latestTrail = null;
     lastReceivedAt = null;
     samples = EMPTY_SAMPLES;
     acceptedAt = [];
@@ -159,7 +163,7 @@ export function createTvPriceStore(deps: TvPriceStoreDeps = {}): TvPriceStore {
       return () => { listeners.delete(listener); };
     },
     view() {
-      viewCache ??= { fresh, latest, samples };
+      viewCache ??= { fresh, latest, samples, trail: latestTrail };
       return viewCache;
     },
     diagnostics() {
@@ -207,7 +211,7 @@ export function createTvPriceStore(deps: TvPriceStoreDeps = {}): TvPriceStore {
       counters.dropped += 1;
       diagnosticsCache = null;
     },
-    accept(payload, receivedAt) {
+    accept(payload, receivedAt, trail = null) {
       if (Math.abs(payload.at - receivedAt) > TV_PRICE_CLOCK_WINDOW_MS) {
         counters.replayed += 1;
         emit(false);
@@ -247,6 +251,7 @@ export function createTvPriceStore(deps: TvPriceStoreDeps = {}): TvPriceStore {
         samples = EMPTY_SAMPLES;
       }
       latest = payload;
+      latestTrail = trail && trail.length >= 2 ? Object.freeze(trail.slice()) : null;
       lastReceivedAt = receivedAt;
       counters.verified += 1;
       acceptedAt.push(receivedAt);

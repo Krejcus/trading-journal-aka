@@ -43,7 +43,37 @@ export interface TvPricePayload {
 export interface TvPriceEnvelope {
   p: string;
   sig: string;
+  /**
+   * Volitelná cesta ceny z dávky obchodů (`TvPriceTrail`) s vlastním podpisem
+   * `ts`. Starší klienti ověřují jen `p`/`sig` a tahle pole ignorují — proto
+   * není součástí `p` (přísný tvar by u nich zprávu zahodil).
+   */
+  t?: string;
+  ts?: string;
 }
+
+/** Nejvýš tolik cen v cestě; delší dávka se ořízne zepředu (konec = poslední cena). */
+export const TV_PRICE_TRAIL_MAX = 64;
+export const TV_PRICE_TRAIL_MAX_CHARS = 1_536;
+
+/**
+ * Skutečně zobchodované ceny rozpracované minuty od minulé zprávy, ve
+ * skutečném pořadí (sousední shodné sloučené). Jen pro přehrání v grafu —
+ * nikdy P&L, risk ani úložiště (INV-UI-04). Váže se na zprávu `runId`+`seq`
+ * a minutu jejího baru; končí její poslední cenou.
+ */
+export interface TvPriceTrail {
+  v: 1;
+  runId: string;
+  seq: number;
+  /** Čas otevření minuty (`bar[0]`). */
+  minute: number;
+  path: number[];
+}
+
+const TRAIL_KEYS = ['v', 'runId', 'seq', 'minute', 'path'];
+/** Oddělení domén podpisu: podpis cesty nikdy neplatí pro zprávu `p` a naopak. */
+const TRAIL_SIGNATURE_PREFIX = 'trail\n';
 
 const PAYLOAD_KEYS = ['v', 'seq', 'runId', 'chart', 'interval', 'pane', 'front', 'switchAt', 'mode', 'bar', 'last', 'bid', 'ask', 'at'];
 
@@ -72,6 +102,21 @@ export function isTvPricePayload(value: unknown): value is TvPricePayload {
     && price(row.last) && price(row.bid) && price(row.ask)
     && (row.bid === null || row.ask === null || (row.bid as number) <= (row.ask as number))
     && Number.isSafeInteger(row.at) && (row.at as number) > 0;
+}
+
+/** Tvar cesty a její vazba na ověřenou zprávu: stejný běh, `seq`, minuta, konec = `last`, vše uvnitř svíčky. */
+export function isTvPriceTrailFor(value: unknown, payload: TvPricePayload): value is TvPriceTrail {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const keys = Object.keys(row);
+  if (keys.length !== TRAIL_KEYS.length || !keys.every(key => TRAIL_KEYS.includes(key))) return false;
+  const bar = payload.bar;
+  const path = row.path;
+  if (row.v !== 1 || row.runId !== payload.runId || row.seq !== payload.seq || !bar || row.minute !== bar[0]) return false;
+  if (!Array.isArray(path) || path.length < 2 || path.length > TV_PRICE_TRAIL_MAX) return false;
+  const [, , high, low, close] = bar;
+  return path.every(item => finite(item) && item >= low && item <= high)
+    && path[path.length - 1] === close && payload.last === close;
 }
 
 const subtle = (): SubtleCrypto | null => {
@@ -130,6 +175,45 @@ export async function signTvPricePayload(payload: TvPricePayload, key: string): 
     const api = subtle();
     if (!cryptoKey || !api) return null;
     return { p, sig: encodeBase64Url(await api.sign('HMAC', cryptoKey, encoder.encode(p))) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Podepíše cestu ceny (worker) stejným klíčem jako zprávu. `null` = cestu
+ * neposílat (zpráva jde i bez ní); nikdy nevyhodí.
+ */
+export async function signTvPriceTrail(trail: TvPriceTrail, payload: TvPricePayload, key: string): Promise<{ t: string; ts: string } | null> {
+  try {
+    if (!isTvPriceTrailFor(trail, payload)) return null;
+    const t = JSON.stringify(trail);
+    if (t.length > TV_PRICE_TRAIL_MAX_CHARS) return null;
+    const cryptoKey = await importKey(key);
+    const api = subtle();
+    if (!cryptoKey || !api) return null;
+    return { t, ts: encodeBase64Url(await api.sign('HMAC', cryptoKey, encoder.encode(TRAIL_SIGNATURE_PREFIX + t))) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cesta ceny k už ověřené zprávě (klient): podpis `t`, pak tvar a vazba na
+ * `payload`. Cokoli neplatného = `null` — zpráva sama platí dál, graf jen
+ * skočí rovnou na poslední cenu.
+ */
+export async function verifyTvPriceTrail(envelope: unknown, key: string, payload: TvPricePayload): Promise<number[] | null> {
+  try {
+    const row = envelope as Partial<TvPriceEnvelope> | null;
+    if (!row || typeof row.t !== 'string' || typeof row.ts !== 'string' || row.t.length > TV_PRICE_TRAIL_MAX_CHARS) return null;
+    const signature = decodeBase64Url(row.ts);
+    const cryptoKey = await importKey(key);
+    const api = subtle();
+    if (!signature || !cryptoKey || !api) return null;
+    if (!await api.verify('HMAC', cryptoKey, signature, encoder.encode(TRAIL_SIGNATURE_PREFIX + row.t))) return null;
+    const trail = JSON.parse(row.t) as unknown;
+    return isTvPriceTrailFor(trail, payload) ? trail.path.slice() : null;
   } catch {
     return null;
   }

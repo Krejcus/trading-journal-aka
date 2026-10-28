@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { parentPort, workerData } from 'node:worker_threads';
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
-import { signTvPricePayload, TV_PRICE_EVENT, type TvPriceEnvelope } from '../../lib/tvPriceMessage';
+import { signTvPricePayload, signTvPriceTrail, TV_PRICE_EVENT, type TvPriceEnvelope } from '../../lib/tvPriceMessage';
 import {
   listTradingViewChartTargets,
   TradingViewCdpSession,
@@ -175,6 +175,8 @@ const read = async (): Promise<TvStreamReading | null> => {
   return {
     chart: reading.chart, interval: '1', pane: 0, bar: reading.bar,
     last: reading.last, bid: reading.bid, ask: reading.ask, mode: reading.mode,
+    // Cesta ceny pro přehrání v grafu; čte se ve stejném synchronním kroku jako čtení.
+    trail: source.takeTrail(),
   };
 };
 
@@ -243,6 +245,7 @@ const createStream = () => createTvPriceStream({
   ready: () => joined && synced,
   // Klíč se čte z aktuální konfigurace — změna tajemství na serveru přijde bez restartu.
   sign: payload => config?.key ? signTvPricePayload(payload, config.key) : Promise.resolve(null),
+  signTrail: (trail, payload) => config?.key ? signTvPriceTrail(trail, payload, config.key) : Promise.resolve(null),
   publish,
   // Nový běh při každém (re)startu streamu: přepnutí zdroje = nová řada u klienta.
   runId: randomUUID(),

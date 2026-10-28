@@ -1066,7 +1066,11 @@ existující ochranu.
   ověří typ a délku v O(1), pak `sanitizeTvBars`, a drží je jen v paměti pro
   `latestBars` (≤ 90 s, jen živé vlákno a zapnutý kanál). Čte je jen
   `pilot.ts` pro graf dne a hodnocení (hlídá `tests/tvPriceStreamWiring.test.ts`);
-  podle nich se nic nespouští.
+  podle nich se nic nespouští. Okamžité posílání (28. 10. 2026): obchod
+  z IBKR (`onTrade`) jen naplánuje čtení (`stream.nudge()`, 25 ms spojení
+  dávky, rozestup 200 ms, po chybě prodleva 1 s); cesta ceny pro přehrání
+  v grafu (`takeTrail`, strop 256 ve zdroji, 64 ve streamu, maže se při
+  změně minuty, po odeslání a po nečinnosti) je jen v paměti vlákna.
 - Hlídá test: `tests/tvPriceStreamSupervisor.test.ts`,
   `tests/tvPriceStreamWiring.test.ts` (allowlist importů vlákna, pořadí
   buildu, relay hook), `tests/tradingViewPriceStream.test.ts`.
@@ -1325,7 +1329,21 @@ existující ochranu.
   27. 10. 2026) používá stejnou listovou komponentu se stejným pravidlem;
   čáry pozice v grafu (vstup, SL/TP) jsou jen z read modelu brokera/workeru,
   nikdy z ceny TV.
-- Hlídá test: `tests/tvPriceClientGuards.test.ts` (kdo smí moduly
+  Přehrání ticků z dávky (28. 10. 2026): zpráva smí nést cestu ceny
+  (`TvPriceTrail`, skutečně zobchodované ceny rozpracované minuty od minulé
+  zprávy, max 64) v polích obálky `t`/`ts` — zvlášť podepsané (HMAC nad
+  `"trail\n" + t`, stejný klíč), mimo `p`, aby starší klienti s přísným tvarem
+  `p` zprávu přijali beze změny. Cesta se ověřuje až po `p`, se stejným
+  časovým limitem (`lib/tvPriceChannelClient.ts`; neplatná nebo zaseknutá =
+  zpráva bez cesty, fronta se nezablokuje) a je vázaná na `runId`, `seq`,
+  minutu baru, konec = `last` = close, vše uvnitř high/low baru
+  (`isTvPriceTrailFor`). Čte ji jen `lib/tvLiveCandleReplay.ts`: živá svíčka
+  jimi projde za 100 ms a skončí přesně na baru zprávy; na přelomu minuty
+  během přehrání se stará minuta nejdřív dokreslí celá. P&L, `samples` ani
+  nic jiného cestu nečte. Volba grafu `scales.liveTickReplay` (výchozí
+  zapnuto).
+- Hlídá test: `tests/tvPriceTrail.test.ts` (podpis, vazba, kompatibilita,
+  sběr ve workeru, přehrání), `tests/tvPriceClientGuards.test.ts` (kdo smí moduly
   importovat vč. aliasu `@/`, rozhodovací/ukládací/sdílené cesty kanál
   nevidí ani tranzitivně, žádné storage, grant jen do kanálu, render-prop
   jen formátuje — 6 bloků bez `set*`/`on*`/ref/limitů, ekvivalence

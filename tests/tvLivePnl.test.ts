@@ -28,7 +28,7 @@ const SAMPLES: TvPriceSample[] = [
   { at: T0 + 3_000, price: 21013 },
 ];
 const feed = (patch: Partial<TvPricePayload> = {}, samples = SAMPLES, fresh = true): TvPriceFeedView => ({
-  fresh, latest: latest(samples[samples.length - 1].at, samples[samples.length - 1].price, patch), samples,
+  fresh, latest: latest(samples[samples.length - 1].at, samples[samples.length - 1].price, patch), samples, trail: null,
 });
 const leg = (patch: Partial<TvLivePnlLeg> = {}): TvLivePnlLeg => ({
   symbol: 'MNQZ6', netPosition: 2, averagePrice: 21000, grossPnl: 40, anchorAt: T0, ...patch,

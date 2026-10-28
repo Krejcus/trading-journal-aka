@@ -155,6 +155,8 @@ export interface ChartScalesSettings {
   noOverlappingLabels: boolean;
   plusButton: boolean;
   countdownToBarClose: boolean;
+  /** Živá svíčka projde skutečnými cenami dávky IBKR (jen zobrazení, P&L skáče hned). */
+  liveTickReplay: boolean;
   /** Kde je odpočet: pod cenou na cenové ose (jako TV), nebo v rohu grafu. */
   countdownPlacement: 'price' | 'corner';
   countdownBox: ChartCountdownBoxSettings;
@@ -269,6 +271,7 @@ export const defaultChartSettings = (isDark: boolean): ChartSettings => ({
     noOverlappingLabels: true,
     plusButton: false,
     countdownToBarClose: false,
+    liveTickReplay: true,
     countdownPlacement: 'price',
     countdownBox: {
       corner: 'bottom-right',

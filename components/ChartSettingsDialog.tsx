@@ -507,6 +507,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                       </Row>
                     </>
                   )}
+                  <Check checked={scales.liveTickReplay} onChange={liveTickReplay => update('scales', { liveTickReplay })} label="Přehrávat ticky z dávky v živé svíčce" />
                   <PriceLabelRow
                     label="Aktuální cena"
                     value={scales.symbolLabel}

@@ -1,6 +1,6 @@
 import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
 import { createTvPriceChannelClient, type TvPriceChannelStatus } from '../lib/tvPriceChannelClient';
-import { TV_PRICE_EVENT, verifyTvPriceEnvelope } from '../lib/tvPriceMessage';
+import { TV_PRICE_EVENT, verifyTvPriceEnvelope, verifyTvPriceTrail } from '../lib/tvPriceMessage';
 import { createTvPriceStore } from '../lib/tvPriceStore';
 import { supabase } from './supabase';
 
@@ -37,6 +37,7 @@ export const tvPriceChannel = createTvPriceChannelClient({
     };
   },
   verify: verifyTvPriceEnvelope,
+  verifyTrail: verifyTvPriceTrail,
   hasWebCrypto: () => typeof globalThis.crypto?.subtle?.verify === 'function',
   isForeground: isAppForeground,
   subscribeForeground: subscribeAppForeground,

@@ -335,6 +335,7 @@ describe('celá cesta: čtení IBKR → zpráva kanálu → živé P&L a svíčk
       fresh: true,
       latest: { ...payload, last: 21013 },
       samples: [{ at: at - 500, price: 21010 }, { at: at + 3_000, price: 21013 }],
+      trail: null,
     };
     const leg = { symbol: 'MNQZ6', netPosition: 2, averagePrice: 21000, grossPnl: 40, anchorAt: at };
     expect(tvLivePnlDelta([leg], feed)).toEqual({ live: true, deltaUsd: 12 });
