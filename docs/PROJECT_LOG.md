@@ -285,6 +285,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 11:30 — NASAZENO: deník při vypnuté kopírce, odpočet, živé FVG (Claude, Filip „nasaď“)
+
+- Web: `main` = `bff2e7c8` (merge `origin/main` s IBKR commity do větve
+  `claude/chart-smoothness-20261026`; konflikt jen v tomto logu). Obsah:
+  `590853bd` deník bez falešného poplachu při ručně vypnuté kopírce,
+  `426bf15a`/`a419eebf`/`159ed2b5` odpočet do uzavření svíčky (jeden obdélník
+  se štítkem ceny, volby v rohu grafu) a živé FVG.
+- Brána: kopírka DISARMED (v řetězu před každým krokem; incident z 27. 10.
+  17:35 Filip vyřešil v LIVE předem) → tsc čistý, 625 souborů / 5798 testů
+  zelených, build OK, teprve pak push.
+- iPhone: build z Documents na `bff2e7c8` (bundle ověřen: Supabase + nový
+  kód), čistá instalace přes `devicectl`; spuštění neprošlo jen kvůli
+  zamčenému telefonu.
+- Nenasazeno: oprava snímků grafu z TV (větev `claude/great-jackson-8213f2`,
+  `6d7e0a57`) — změna workeru, reinstall jen ve flat/DISARMED stavu na
+  výslovný pokyn.
+
 ### 2026-10-28 10:50 — NASAZENO: cena z IBKR ve workeru (Claude, Filip „nasaď ihned“)
 
 - Push na main `4c866695` (Vercel: štítek „živě · IBKR“). Brána: tsc čistý,
