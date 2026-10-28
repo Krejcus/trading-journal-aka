@@ -23,6 +23,7 @@ import {
   createSeriesMarkers,
   createTextWatermark,
   LineSeries,
+  MismatchDirection,
   type ISeriesApi,
   type IChartApi,
   type IPrimitivePaneRenderer,
@@ -87,7 +88,9 @@ import {
   findFairValueGaps,
   MARKET_TIMEFRAME_MINUTES,
   updateFairValueGapAccumulator,
+  fairValueGapsWithFormingBar,
   updateMarketStructureAccumulator,
+  type FairValueGap,
   type FairValueGapAccumulator,
   type MarketCandle,
   type MarketStructureEvent,
@@ -2798,9 +2801,14 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const liquidityLevelsRef = useRef(liquidityLevels);
   liquidityLevelsRef.current = liquidityLevels;
   const fvgAccumulatorRef = useRef<FairValueGapAccumulator | null>(null);
+  // Vstup posledního výpočtu FVG (dokončená data) — k němu se kreslí tvořící se bar.
+  const fvgInputRef = useRef<MarketCandle[]>([]);
+  // Rozpracovaný bar grafu (živá svíčka, přehrávaná svíčka), jen pro kreslení FVG.
+  const fvgFormingBarRef = useRef<MarketCandle | null>(null);
   const fvgs = useMemo(() => {
     if (!visibleFvg) {
       fvgAccumulatorRef.current = null;
+      fvgInputRef.current = [];
       return [];
     }
     if (replayActive) {
@@ -2808,11 +2816,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const input = candleWindowSlice(candles, { start: replayContextStart, end: renderedCandleWindow.end });
       const next = updateFairValueGapAccumulator(fvgAccumulatorRef.current, input);
       fvgAccumulatorRef.current = next;
+      fvgInputRef.current = input;
       return next.gaps;
     }
-    fvgAccumulatorRef.current = null;
     const from = Math.floor(entryMs / 1000) - 8 * 3600;
-    return findFairValueGaps(candles.filter(candle => candle.time >= from));
+    const input = candles.filter(candle => candle.time >= from);
+    // Akumulátor (ne jen seznam) — živá svíčka pak přepočítá jen poslední bar.
+    const next = updateFairValueGapAccumulator(null, input);
+    fvgAccumulatorRef.current = next;
+    fvgInputRef.current = input;
+    return next.gaps;
   }, [candles, entryMs, renderedCandleWindow.end, renderedCandleWindow.start, replayActive, visibleFvg]);
   const marketStructureAccumulatorRef = useRef<MarketStructureAccumulator | null>(null);
   const structureEvents = useMemo(() => {
@@ -2880,12 +2893,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       desiredType,
     );
   }, [entryStructureEvents, entryMs, trade]);
-  const renderedFvgs = useMemo(() => {
+  const deriveRenderedFvgs = (gaps: FairValueGap[], forming: MarketCandle | null) => {
     const firstRenderedTime = visibleCandles[0]?.time ?? Number.NEGATIVE_INFINITY;
     const activeFvgLimit = Math.max(1, Math.min(30, Number(indicatorSettings.fvg.maxCount) || 1));
+    const lastCandleTime = candles.at(-1)?.time;
     const drawn = [
       ...(visibleFvg
-        ? fvgs
+        ? gaps
           // The primitive already displays at most twice the configured
           // active count. Trim before deriving forming times so a replay step
           // does not remap thousands of historical, off-screen gaps.
@@ -2897,6 +2911,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       ...(showEntryFvg && displayedEntryFvg ? [{ gap: displayedEntryFvg, isEntry: true }] : []),
     ];
     const rendered = drawn.map(item => {
+      // FVG z tvořícího se baru (za daty grafu): prostřední svíčka je poslední v datech.
+      if (forming && lastCandleTime !== undefined && item.gap.startTime > lastCandleTime) {
+        return { ...item, formingTime: lastCandleTime };
+      }
       const confirmationIndex = nearestCandleIndex(candles, item.gap.startTime);
       return {
         ...item,
@@ -2907,9 +2925,59 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       regular: rendered.filter(item => !item.isEntry),
       entry: rendered.filter(item => item.isEntry),
     };
-  }, [candles, displayedEntryFvg, fvgs, indicatorSettings.fvg.maxCount, showEntryFvg, visibleCandles, visibleFvg]);
+  };
+  const deriveRenderedFvgsRef = useRef(deriveRenderedFvgs);
+  deriveRenderedFvgsRef.current = deriveRenderedFvgs;
+  const renderedFvgs = useMemo(
+    () => deriveRenderedFvgs(
+      fairValueGapsWithFormingBar(fvgAccumulatorRef.current, fvgInputRef.current, fvgFormingBarRef.current),
+      fvgFormingBarRef.current,
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [candles, displayedEntryFvg, fvgs, indicatorSettings.fvg.maxCount, showEntryFvg, visibleCandles, visibleFvg],
+  );
   const renderedFvgsRef = useRef(renderedFvgs);
   renderedFvgsRef.current = renderedFvgs;
+
+  // FVG živě jako v TradingView: tvořící se bar grafu (živá svíčka přes
+  // `updateBar`, přehrávaná svíčka) se bere do výpočtu hned, ne až po
+  // uzavření. Jen kreslení — data grafu, magnet ani nic uloženého ho nevidí.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api || !visibleFvg) {
+      fvgFormingBarRef.current = null;
+      return;
+    }
+    const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
+    const onDataChanged = () => {
+      const bar = series.dataByIndex(Number.MAX_SAFE_INTEGER, MismatchDirection.NearestLeft);
+      const input = fvgInputRef.current;
+      const last = input.at(-1);
+      let forming: MarketCandle | null = null;
+      if (bar && 'close' in bar && last) {
+        const time = Number(bar.time);
+        const changed = time > last.time
+          || (time === last.time && (bar.open !== last.open || bar.high !== last.high || bar.low !== last.low || bar.close !== last.close));
+        if (changed) forming = { time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: 0 };
+      }
+      const previous = fvgFormingBarRef.current;
+      const same = previous === forming || (previous && forming && previous.time === forming.time
+        && previous.open === forming.open && previous.high === forming.high && previous.low === forming.low && previous.close === forming.close);
+      if (same) return;
+      fvgFormingBarRef.current = forming;
+      renderedFvgsRef.current = deriveRenderedFvgsRef.current(
+        fairValueGapsWithFormingBar(fvgAccumulatorRef.current, input, forming),
+        forming,
+      );
+      fvgPrimitiveRequestUpdateRef.current?.();
+    };
+    series.subscribeDataChanged(onDataChanged);
+    onDataChanged();
+    return () => {
+      try { series.unsubscribeDataChanged(onDataChanged); } catch { /* graf už zmizel */ }
+      fvgFormingBarRef.current = null;
+    };
+  }, [chartApiEpoch, visibleFvg]);
   const structureOverlayEvents = useMemo(() => {
     const style = indicatorSettings.structure;
     const shown = (event: MarketStructureEvent) => (event.type === 'BOS' && style.showBos) || (event.type === 'CHoCH' && style.showChoch);
@@ -4005,7 +4073,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
               // candles that existed when replay started.
               const currentVisibleCandles = visibleCandlesRef.current;
               const firstVisibleTime = currentVisibleCandles[0]?.time ?? Number.NEGATIVE_INFINITY;
-              const lastVisibleTime = currentVisibleCandles[currentVisibleCandles.length - 1]?.time ?? Number.POSITIVE_INFINITY;
+              // Tvořící se bar za daty grafu (živá svíčka) je v grafu taky —
+              // zaplnění jím se kreslí na něm, ne na pravém okraji.
+              const lastVisibleTime = Math.max(
+                currentVisibleCandles[currentVisibleCandles.length - 1]?.time ?? Number.POSITIVE_INFINITY,
+                fvgFormingBarRef.current?.time ?? Number.NEGATIVE_INFINITY,
+              );
               const xForTime = (time: number, projectAtRightEdge = false) => {
                 if (time <= firstVisibleTime) return 0;
                 // An active FVG is projected into the empty space on the
@@ -5037,8 +5110,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
   // Odpočet do uzavření svíčky (jako TV): štítek na cenové ose pod cenou.
   // Obnovuje se sám v knihovně grafu, React kvůli němu nepřekresluje.
-  const countdownClockRef = useRef({ timeframe, replayActive, replayCursorTime, placement: chartSettings.scales.countdownPlacement });
-  countdownClockRef.current = { timeframe, replayActive, replayCursorTime, placement: chartSettings.scales.countdownPlacement };
+  const countdownClockRef = useRef({ timeframe, replayActive, replayCursorTime, placement: chartSettings.scales.countdownPlacement, box: chartSettings.scales.countdownBox });
+  countdownClockRef.current = { timeframe, replayActive, replayCursorTime, placement: chartSettings.scales.countdownPlacement, box: chartSettings.scales.countdownBox };
   useEffect(() => {
     const api = apiRef.current;
     if (!api || !chartSettings.scales.countdownToBarClose) return;
@@ -5051,6 +5124,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         return clock.replayActive && clock.replayCursorTime != null ? Number(clock.replayCursorTime) : Date.now() / 1_000;
       },
       placement: () => countdownClockRef.current.placement,
+      box: () => countdownClockRef.current.box,
     });
     series.attachPrimitive(primitive);
     return () => {

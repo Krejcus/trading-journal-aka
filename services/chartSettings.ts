@@ -135,6 +135,18 @@ export interface ChartPriceLabelSettings {
   appearance?: ChartLineAppearance;
 }
 
+/** Vzhled odpočtu v rohu grafu. */
+export interface ChartCountdownBoxSettings {
+  corner: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+  fontSize: number;
+  bold: boolean;
+  /** Barva číslic. */
+  color: string;
+  /** Vyplněný obdélník, nebo jen číslice. */
+  background: 'filled' | 'none';
+  backgroundColor: string;
+}
+
 export interface ChartScalesSettings {
   scaleModeButtons: ChartButtonVisibility;
   lockPriceToBarRatio: boolean;
@@ -143,8 +155,9 @@ export interface ChartScalesSettings {
   noOverlappingLabels: boolean;
   plusButton: boolean;
   countdownToBarClose: boolean;
-  /** Kde je odpočet: pod cenou na cenové ose (jako TV), nebo vpravo dole v grafu. */
+  /** Kde je odpočet: pod cenou na cenové ose (jako TV), nebo v rohu grafu. */
   countdownPlacement: 'price' | 'corner';
+  countdownBox: ChartCountdownBoxSettings;
   symbolLabel: ChartPriceLabelSettings;
   symbolLastValueMode: ChartLastValueMode;
   previousDayClose: ChartPriceLabelSettings;
@@ -257,6 +270,14 @@ export const defaultChartSettings = (isDark: boolean): ChartSettings => ({
     plusButton: false,
     countdownToBarClose: false,
     countdownPlacement: 'price',
+    countdownBox: {
+      corner: 'bottom-right',
+      fontSize: 13,
+      bold: true,
+      color: '#ffffff',
+      background: 'filled',
+      backgroundColor: '#2962ff',
+    },
     symbolLabel: {
       value: true,
       line: false,
@@ -349,6 +370,7 @@ export const mergeChartSettings = (
       symbolLabel: mergeLabel(defaults.scales.symbolLabel, parsed.scales?.symbolLabel),
       previousDayClose: mergeLabel(defaults.scales.previousDayClose, parsed.scales?.previousDayClose),
       highAndLow: mergeLabel(defaults.scales.highAndLow, parsed.scales?.highAndLow),
+      countdownBox: { ...defaults.scales.countdownBox, ...parsed.scales?.countdownBox },
       indicatorsAndFinancials: {
         ...defaults.scales.indicatorsAndFinancials,
         ...parsed.scales?.indicatorsAndFinancials,

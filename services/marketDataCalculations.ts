@@ -729,6 +729,29 @@ export function updateFairValueGapAccumulator(
 }
 
 /**
+ * FVG s rozpracovanou (živou nebo přehrávanou) svíčkou na konci, jako
+ * TradingView, který indikátor přepočítává s každým tickem: zaplnění se
+ * projeví hned, jak se ho cena dotkne, a nové FVG vzniká a zmenšuje se už
+ * během tvořící se svíčky. `base` je akumulátor nad `input` (dokončená data);
+ * přepočítá se jen poslední bar (`tailCheckpoint`) nebo se jeden připíše.
+ * Jen pro kreslení — nikdy do dat, hodnocení ani úložiště.
+ */
+export function fairValueGapsWithFormingBar(
+  base: FairValueGapAccumulator | null,
+  input: MarketCandle[],
+  forming: MarketCandle | null,
+): FairValueGap[] {
+  if (!base) return [];
+  const last = input.at(-1);
+  if (!forming || !last || forming.time < last.time) return base.gaps;
+  if (forming.time === last.time) {
+    if (forming.open === last.open && forming.high === last.high && forming.low === last.low && forming.close === last.close) return base.gaps;
+    return updateFairValueGapAccumulator(base, [...input.slice(0, -1), { ...forming, volume: last.volume }]).gaps;
+  }
+  return updateFairValueGapAccumulator(base, [...input, forming]).gaps;
+}
+
+/**
  * Historical equivalent of tradingview/alphatrade-bos-choch-cz.pine defaults:
  * pivot 1/1, close confirmation, first break against/without trend = CHoCH,
  * subsequent break in the same direction = BOS.

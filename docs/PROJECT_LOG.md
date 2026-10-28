@@ -285,6 +285,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 dopoledne — Graf: odpočet jako jeden obdélník se štítkem ceny, volby v rohu; FVG živě (Claude)
+
+- Odpočet „Pod cenou“: box se stejnou geometrií jako štítek poslední ceny
+  v lightweight-charts (šířka rámeček + 2× okraj + text + tick, výška 17/12
+  písma, zaokrouhlení na pixely displeje, zaoblení jen vnějších rohů), horní
+  okraj překryje zaoblený roh štítku ceny → jeden obdélník; stejné písmo.
+  Filip: předchozí verze byla „tlustší“ (plná šířka osy) a „ne v obdélníku“.
+- „V rohu grafu“: obdélník, volby roh (4), velikost a tučnost číslic, barva
+  číslic, pozadí vyplněné / jen číslice + barva výplně
+  (`scales.countdownBox`).
+- FVG živě: tvořící se bar řady (živá svíčka z kanálu TV, přehrávaná svíčka)
+  se bere do výpočtu jen pro kreslení — zaplnění hned při dotyku, nové FVG
+  už během svíčky a dynamicky se zmenšuje (`fairValueGapsWithFormingBar`,
+  akumulátor přepočítá jen poslední bar). Poznámka pod INV-UI-04.
+
 ### 2026-10-28 ráno — Graf: odpočet do uzavření svíčky u cenové úrovně jako v TV (Claude)
 
 - Volba „Odpočet do uzavření svíčky“ (Nastavení grafu → Stupnice) existovala,

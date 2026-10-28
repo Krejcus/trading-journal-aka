@@ -444,11 +444,68 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                         value={scales.countdownPlacement}
                         options={[
                           { value: 'price' as const, label: 'Pod cenou' },
-                          { value: 'corner' as const, label: 'V grafu vpravo dole' },
+                          { value: 'corner' as const, label: 'V rohu grafu' },
                         ]}
                         onChange={countdownPlacement => update('scales', { countdownPlacement })}
                       />
                     </Row>
+                  )}
+                  {scales.countdownToBarClose && scales.countdownPlacement === 'corner' && (
+                    <>
+                      <Row label="Roh">
+                        <Select
+                          value={scales.countdownBox.corner}
+                          options={[
+                            { value: 'bottom-right' as const, label: 'Vpravo dole' },
+                            { value: 'bottom-left' as const, label: 'Vlevo dole' },
+                            { value: 'top-right' as const, label: 'Vpravo nahoře' },
+                            { value: 'top-left' as const, label: 'Vlevo nahoře' },
+                          ]}
+                          onChange={corner => update('scales', { countdownBox: { ...scales.countdownBox, corner } })}
+                        />
+                      </Row>
+                      <Row label="Číslice">
+                        <NumberInput
+                          value={scales.countdownBox.fontSize}
+                          min={8}
+                          max={40}
+                          suffix="px"
+                          onChange={fontSize => update('scales', { countdownBox: { ...scales.countdownBox, fontSize: Math.max(8, Math.min(40, fontSize || 13)) } })}
+                        />
+                        <Select
+                          value={scales.countdownBox.bold ? 'bold' : 'normal'}
+                          width="w-[110px]"
+                          options={[
+                            { value: 'normal' as const, label: 'Normální' },
+                            { value: 'bold' as const, label: 'Tučné' },
+                          ]}
+                          onChange={weight => update('scales', { countdownBox: { ...scales.countdownBox, bold: weight === 'bold' } })}
+                        />
+                        <TradingViewColorPicker
+                          label="Barva číslic"
+                          value={scales.countdownBox.color}
+                          onChange={color => update('scales', { countdownBox: { ...scales.countdownBox, color } })}
+                        />
+                      </Row>
+                      <Row label="Pozadí">
+                        <Select
+                          value={scales.countdownBox.background}
+                          width="w-[150px]"
+                          options={[
+                            { value: 'filled' as const, label: 'Vyplněný obdélník' },
+                            { value: 'none' as const, label: 'Jen číslice' },
+                          ]}
+                          onChange={background => update('scales', { countdownBox: { ...scales.countdownBox, background } })}
+                        />
+                        {scales.countdownBox.background === 'filled' && (
+                          <TradingViewColorPicker
+                            label="Barva výplně"
+                            value={scales.countdownBox.backgroundColor}
+                            onChange={backgroundColor => update('scales', { countdownBox: { ...scales.countdownBox, backgroundColor } })}
+                          />
+                        )}
+                      </Row>
+                    </>
                   )}
                   <PriceLabelRow
                     label="Aktuální cena"

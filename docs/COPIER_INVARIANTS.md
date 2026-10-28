@@ -1294,6 +1294,11 @@ existující ochranu.
   grafu dne); grafy dostávají jen neutrální `LiveCandleFeed`
   (`lib/liveCandleFeed.ts`, `hooks/useLiveCandleBinding.ts`) a svíčku jen
   překreslí (`updateBar`) — do dat grafu, cache dne ani storage nejde.
+  Od 28. 10. 2026 se tvořící se bar řady (živá svíčka, přehrávaná svíčka)
+  bere i do kreslení FVG (`fairValueGapsWithFormingBar`, posluchač
+  `subscribeDataChanged` v `CandleKitTradeChart`): zaplnění a tvořící se FVG
+  hned, jako TV. Jen vrstva kreslení FVG — `fvgs` pro magnet kreslení, FVG
+  vstupu, hodnocení ani úložiště ho nevidí.
   Štítek živé pozice v grafu deníku (`components/day/DayLivePositionChip.tsx`,
   27. 10. 2026) používá stejnou listovou komponentu se stejným pravidlem;
   čáry pozice v grafu (vstup, SL/TP) jsou jen z read modelu brokera/workeru,
