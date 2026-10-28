@@ -171,7 +171,6 @@ import { chartAxisTickLabel, chartCrosshairTimeLabel } from '../services/chartTi
 import ChartSettingsDialog from './ChartSettingsDialog';
 import {
   CHART_SETTINGS_EVENT,
-  barCloseCountdown,
   broadcastChartSettings,
   candleColorOverrides,
   chartCanvasOptions,
@@ -187,10 +186,10 @@ import {
   type ChartSettings,
   type ChartStatusLineSettings,
 } from '../services/chartSettings';
+import { createBarCountdownPrimitive } from '../services/barCountdownPrimitive';
 import {
   canvasLineDash,
   previousDayClosePrice,
-  secondsToBarClose,
   updateSessionBreakAccumulator,
   type SessionBreakAccumulator,
   shortenedPriceLines,
@@ -2103,7 +2102,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const highLineRef = useRef<ManagedPriceLine | null>(null);
   const lowLineRef = useRef<ManagedPriceLine | null>(null);
   const watermarkRef = useRef<{ detach: () => void } | null>(null);
-  const [barCountdown, setBarCountdown] = useState<string | null>(null);
   const [sessionBreakOffsets, setSessionBreakOffsets] = useState<number[]>([]);
   const [pricePointer, setPricePointer] = useState<{ y: number; price: number } | null>(null);
 
@@ -5037,31 +5035,28 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     };
   }, [chartApiEpoch, chartSettings.canvas, instrumentLegend.name, instrumentLegend.timeframe, resolvedInstrumentRoot]);
 
-  // Odpočet do uzavření svíčky běží jen když ho uživatel zapne — jinak by
-  // sekundový interval budil překreslení úplně zbytečně.
+  // Odpočet do uzavření svíčky (jako TV): štítek na cenové ose pod cenou.
+  // Obnovuje se sám v knihovně grafu, React kvůli němu nepřekresluje.
+  const countdownClockRef = useRef({ timeframe, replayActive, replayCursorTime });
+  countdownClockRef.current = { timeframe, replayActive, replayCursorTime };
   useEffect(() => {
-    if (!chartSettings.scales.countdownToBarClose) {
-      setBarCountdown(null);
-      return;
-    }
-    const tick = () => {
-      const last = candlesRef.current.at(-1);
-      if (!last) return setBarCountdown(null);
-      // V replayi je „teď" kurzor přehrávání, ne hodiny na zdi.
-      const nowSeconds = replayActive
-        ? Number(replayCursorTime ?? last.time)
-        : Date.now() / 1_000;
-      setBarCountdown(barCloseCountdown(secondsToBarClose({
-        barTime: last.time,
-        timeframeMinutes: MARKET_TIMEFRAME_MINUTES[timeframe],
-        nowSeconds,
-      })));
+    const api = apiRef.current;
+    if (!api || !chartSettings.scales.countdownToBarClose) return;
+    const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
+    const primitive = createBarCountdownPrimitive({
+      timeframeMinutes: () => MARKET_TIMEFRAME_MINUTES[countdownClockRef.current.timeframe],
+      // V přehrávání je „teď" kurzor přehrávání, ne hodiny na zdi.
+      nowSeconds: () => {
+        const clock = countdownClockRef.current;
+        return clock.replayActive && clock.replayCursorTime != null ? Number(clock.replayCursorTime) : Date.now() / 1_000;
+      },
+    });
+    series.attachPrimitive(primitive);
+    return () => {
+      primitive.dispose();
+      try { series.detachPrimitive(primitive); } catch { /* graf už zmizel */ }
     };
-    tick();
-    if (replayActive) return;
-    const timer = window.setInterval(tick, 1_000);
-    return () => window.clearInterval(timer);
-  }, [chartSettings.scales.countdownToBarClose, replayActive, replayCursorTime, timeframe, visibleCandles]);
+  }, [chartApiEpoch, chartSettings.scales.countdownToBarClose]);
 
   // Předěly seancí i zamčený poměr ceny ke svíčce reagují na posun grafu,
   // takže se přepočítávají při každé změně výřezu.
@@ -5502,15 +5497,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           }}
         />
       ))}
-      {barCountdown && (
-        <span
-          data-bar-countdown={barCountdown}
-          className="pointer-events-none absolute right-1 z-[60] rounded-sm bg-[#2962ff] px-1.5 py-0.5 text-[10px] font-semibold text-white"
-          style={{ bottom: 26 }}
-        >
-          {barCountdown}
-        </span>
-      )}
       {chartSettings.scales.scaleModeButtons !== 'never' && (
         <div
           data-price-scale-modes

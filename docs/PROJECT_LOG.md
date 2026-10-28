@@ -285,6 +285,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 ráno — Graf: odpočet do uzavření svíčky u cenové úrovně jako v TV (Claude)
+
+- Volba „Odpočet do uzavření svíčky“ (Nastavení grafu → Stupnice) existovala,
+  ale kreslila modrý štítek pevně v pravém dolním rohu a každou sekundu
+  překreslovala celou komponentu grafu (React state + interval).
+- Nově `services/barCountdownPrimitive.ts`: štítek na cenové ose těsně pod
+  štítkem aktuální ceny (výšky štítků lightweight-charts: cena 17/12, plugin
+  21/12 velikosti písma), barva jako štítek ceny (`priceLineColor`, jinak
+  barva svíčky), posouvá se s cenou včetně živé svíčky (`dataByIndex`),
+  obnova přes `requestUpdate` bez Reactu. V přehrávání čas kurzoru. Po
+  uzavření svíčky 5 s „0:00“, pak zmizí (trh zavřený, stará data).
+- Ověřeno na dočasné stránce se stejnou knihovnou (náhled appky byl
+  odhlášený, nastavení grafu se synchronizuje přes server — neměněno).
+
 ### 2026-10-27 11:20 — Deník: živá pozice při vypnuté kopírce bez falešného poplachu (Claude)
 
 - Filip zkusil cvičný obchod na účtu LFE…0038 (v kopírce leader skupiny
