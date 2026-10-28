@@ -33,6 +33,7 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     expect([...importGraph('scripts/copier/tvPriceStreamThread.ts')].sort()).toEqual([
       'lib/tvPriceMessage.ts',
       'scripts/copier/tvPriceStreamThread.ts',
+      'services/ibkrAlertState.ts',
       'services/ibkrMarketData.ts',
       'services/ibkrPriceSource.ts',
       'services/tradingViewCdpSession.ts',

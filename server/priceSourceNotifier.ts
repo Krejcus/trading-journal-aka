@@ -14,6 +14,11 @@ export const PRICE_SOURCE_NOTIFY_TIME_ZONE = 'Europe/Prague';
 export const PRICE_SOURCE_NOTIFY_FROM_HOUR = 8;
 export const PRICE_SOURCE_NOTIFY_TO_HOUR = 22;
 const CHECK_MS = 60_000;
+/**
+ * Opakovaný výpadek do hodiny od posledního oznámeného (pád vlákna dokola, cukání
+ * Gateway) se už neoznamuje — ani jeho návrat. Stačí vědět jednou.
+ */
+export const PRICE_SOURCE_FLAP_MS = 60 * 60_000;
 
 const COMPETING_SESSION = 10197;
 const CONNECTIVITY_LOST = new Set([1100, 2110]);
@@ -34,14 +39,15 @@ export function priceSourceNotifyWindowOpen(at: number): boolean {
 /** Text oznámení podle stavu a kódu Gateway (nikdy text chyb Gateway). */
 export function priceSourceAlertText(alert: PriceSourceAlert): { title: string; body: string } {
   if (alert.state === 'up') return { title: 'IBKR zpět', body: 'Živá cena znovu jde z IBKR.' };
+  // Pořadí: aktuální stav spojení má přednost před (možná starším) kódem.
   const reason = alert.ibkr === 'crash' ? 'vlákno ceny s IBKR spadlo, 30 min jen TradingView'
     : alert.code === COMPETING_SESSION ? 'IBKR je přihlášené jinde (mobil nebo web) — Gateway odpojena'
-      : alert.code !== null && CONNECTIVITY_LOST.has(alert.code) ? 'IB Gateway ztratila spojení s IBKR'
-        : alert.code === DATA_FARM_BROKEN ? 'výpadek datové farmy IBKR'
-          : alert.code === CONNECTIVITY_RESTORED_DATA_LOST ? 'spojení obnoveno, čeká se na nový odběr dat'
-            : alert.ibkr === 'connecting' || alert.ibkr === 'off' ? 'IB Gateway neběží nebo není přihlášená'
+      : alert.ibkr === 'connecting' || alert.ibkr === 'off' || alert.ibkr === 'stopped' ? 'IB Gateway neběží nebo není přihlášená'
+        : alert.code !== null && CONNECTIVITY_LOST.has(alert.code) ? 'IB Gateway ztratila spojení s IBKR'
+          : alert.code === DATA_FARM_BROKEN ? 'výpadek datové farmy IBKR'
+            : alert.code === CONNECTIVITY_RESTORED_DATA_LOST ? 'spojení obnoveno, čeká se na nový odběr dat'
               : alert.ibkr === 'paused' ? `IBKR odmítlo odběr dat${alert.code !== null ? ` (kód ${alert.code})` : ''}`
-                : 'IBKR neposílá obchody';
+                : 'IBKR neposílá obchody, TradingView ano';
   return { title: 'IBKR nedostupné — cena z TradingView', body: `Důvod: ${reason}.` };
 }
 
@@ -59,6 +65,9 @@ export function createPriceSourceNotifier(deps: {
   const now = deps.now ?? Date.now;
   let down: PriceSourceAlert | null = null;
   let downNotified = false;
+  let lastDownNotifiedAt = -Infinity;
+  /** Výpadek odškrtnutý bez oznámení (cukání) — jeho návrat se taky neoznamuje. */
+  let silent = false;
   const send = (alert: PriceSourceAlert) => {
     const { title, body } = priceSourceAlertText(alert);
     try { deps.notify(title, body); } catch { /* oznámení je best effort */ }
@@ -66,6 +75,10 @@ export function createPriceSourceNotifier(deps: {
   const check = () => {
     if (down && !downNotified && priceSourceNotifyWindowOpen(now())) {
       downNotified = true;
+      // Cukání: výpadek brzy po minulém oznámeném jen tiše odškrtnout (a jeho návrat taky).
+      if (now() - lastDownNotifiedAt < PRICE_SOURCE_FLAP_MS) { silent = true; return; }
+      silent = false;
+      lastDownNotifiedAt = now();
       send(down);
     }
   };
@@ -85,9 +98,10 @@ export function createPriceSourceNotifier(deps: {
           check();
           return;
         }
-        const wasNotified = downNotified;
+        const wasNotified = downNotified && !silent;
         down = null;
         downNotified = false;
+        silent = false;
         if (wasNotified && priceSourceNotifyWindowOpen(now())) send(alert);
       } catch {
         // nikdy nevyhodí

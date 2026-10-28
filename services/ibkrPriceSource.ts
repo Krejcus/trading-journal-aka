@@ -396,6 +396,8 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     }
     if (code === CONNECTIVITY_RESTORED || code === DATA_FARM_OK) {
       lost = false;
+      // Kód výpadku po obnově neplatí (jinak by hlášení dalšího výpadku uvedlo starý důvod).
+      if (stats.lastCode === CONNECTIVITY_LOST || stats.lastCode === SERVER_LINK_BROKEN || stats.lastCode === DATA_FARM_BROKEN) stats.lastCode = null;
       return;
     }
     if (code === HMDS_BROKEN) {

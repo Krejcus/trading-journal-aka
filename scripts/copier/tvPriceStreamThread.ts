@@ -9,6 +9,7 @@ import {
   TV_FAST_PRICE_EXPRESSION,
 } from '../../services/tradingViewCdpSession';
 import { createIbkrPriceSource, initialPriceSourceSwitch, nextPriceSource, type IbkrPriceSource } from '../../services/ibkrPriceSource';
+import { ibkrAlertNeedsTvCheck, ibkrConnectionProblem, initialIbkrAlertState, nextIbkrAlert } from '../../services/ibkrAlertState';
 import { createTvPriceStream, realtimeChannelCanPush, type TvPriceStream, type TvStreamMeta, type TvStreamReading } from '../../services/tradingViewPriceStream';
 
 /**
@@ -46,8 +47,7 @@ const META_REFRESH_MS = 60_000;
 const IBKR_BARS_POST_MS = 30_000;
 const IBKR_BARS_POST_PHASE_MS = 7_000;
 const READ_TIMEOUT_MS = 1_000;
-/** IBKR bez platné ceny déle než tohle = hlášení hlavnímu vláknu (oznámení na Macu); návrat = hlášení „zpět“. */
-const IBKR_ALERT_AFTER_MS = 60_000;
+/** Jak často vlákno vyhodnotí výpadek / návrat IBKR (`services/ibkrAlertState.ts`). */
 const IBKR_ALERT_CHECK_MS = 5_000;
 
 const port = parentPort;
@@ -302,29 +302,37 @@ port.on('message', message => {
 setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
 // Výpadek IBKR (Gateway neběží, přihlášení jinde, ztráta spojení): cena tiše jede ze zálohy TV,
 // proto se ohlásí — jen stav a krátký kód, nikdy text chyb Gateway (může nést účet).
-let ibkrDownSince: number | null = null;
-let ibkrAlerted = false;
+let ibkrAlert = initialIbkrAlertState();
+let ibkrAlertChecking = false;
 setInterval(() => {
-  if (priceSource !== 'ibkr' || !config) {
-    ibkrDownSince = null;
-    ibkrAlerted = false;
+  if (priceSource !== 'ibkr' || !config || ibkrAlertChecking) {
+    if (priceSource !== 'ibkr' || !config) ibkrAlert = initialIbkrAlertState();
     return;
   }
-  const at = Date.now();
-  if (ibkr?.reading()) {
-    ibkrDownSince = null;
-    if (ibkrAlerted) {
-      ibkrAlerted = false;
-      port.postMessage({ type: 'price-source', state: 'up' });
+  ibkrAlertChecking = true;
+  void (async () => {
+    try {
+      const at = Date.now();
+      const available = ibkr?.reading() != null;
+      const stats = ibkr?.stats();
+      const connectionProblem = ibkrConnectionProblem(stats?.state ?? 'off', stats?.lastCode ?? null);
+      // IBKR mlčí bez problému spojení: výpadek jen když TV živou cenu má (jinak je trh zavřený).
+      let tvLive: boolean | null = null;
+      if (ibkrAlertNeedsTvCheck(ibkrAlert, available, connectionProblem, at)) {
+        const tv = await readTv().catch(() => null);
+        const minute = Math.floor(Date.now() / 60_000) * 60;
+        tvLive = !!tv && tv.mode === 'streaming' && tv.last !== null && !!tv.bar && tv.bar[0] >= minute - 60;
+      }
+      const next = nextIbkrAlert(ibkrAlert, { available, connectionProblem, tvLive, at });
+      ibkrAlert = next.state;
+      if (next.emit === 'up') port.postMessage({ type: 'price-source', state: 'up' });
+      if (next.emit === 'down') port.postMessage({ type: 'price-source', state: 'down', ibkr: stats?.state ?? 'off', code: stats?.lastCode ?? null });
+    } catch {
+      // hlášení je best effort
+    } finally {
+      ibkrAlertChecking = false;
     }
-    return;
-  }
-  ibkrDownSince ??= at;
-  if (!ibkrAlerted && at - ibkrDownSince >= IBKR_ALERT_AFTER_MS) {
-    ibkrAlerted = true;
-    const stats = ibkr?.stats();
-    port.postMessage({ type: 'price-source', state: 'down', ibkr: stats?.state ?? 'off', code: stats?.lastCode ?? null });
-  }
+  })();
 }, IBKR_ALERT_CHECK_MS);
 // Svíčky dne z IBKR pro graf dne a hodnocení (fáze 4): jen hotová čísla, buffer se
 // předá bez kopírování; hlavní vlákno je jen ověří a nechá v paměti pro upload.

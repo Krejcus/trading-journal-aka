@@ -14,7 +14,6 @@ import { isNativeBuild } from '../../utils/runtimeConfig';
 import { MIND_STYLE, PHASE_STYLE, SESSION_STYLE, MicButton, NoteKindToggle, SpringSegmented, Waveform, money, priceText, rText, recordingStatus, tone } from './DayPrimitives';
 import { MIND_AREAS, MIND_AREA_ICON, MIND_AREA_LABEL, isMindArea } from '../../lib/dayMind';
 import type { DayController } from './useDayController';
-import { observeLivePriceSource } from '../../lib/livePriceSourceFallback';
 
 const DATE_LABEL = new Intl.DateTimeFormat('cs-CZ', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'UTC' });
 const SHORT_DAY = new Intl.DateTimeFormat('cs-CZ', { weekday: 'short', day: 'numeric', month: 'numeric', timeZone: 'UTC' });
@@ -90,17 +89,14 @@ export function LiveChip({ status, capturedAt, source = null, weekendMarketDay, 
     );
   }
   if (!status) return null;
+  const live = status === 'live';
   const ibkr = !!source && source.startsWith('IBKR:');
-  // Svíčky z TradingView, přestože appka předtím viděla IBKR = záloha (Gateway nedostupná) — žlutě.
-  const fallback = status === 'live' && observeLivePriceSource(source);
-  const live = status === 'live' && !fallback;
-  const text = fallback ? `${compact ? 'Záloha TV' : 'IBKR nedostupné · záloha TradingView'}${capturedAt ? ` · ${clock(capturedAt)}` : ''}`
-    : status === 'live' ? `${compact ? (ibkr ? 'Živě · IBKR' : 'Živě') : ibkr ? 'Živě z IBKR' : 'Živě z TradingView'}${capturedAt ? ` · ${clock(capturedAt)}` : ''}`
+  const text = status === 'live' ? `${compact ? (ibkr ? 'Živě · IBKR' : 'Živě') : ibkr ? 'Živě z IBKR' : 'Živě z TradingView'}${capturedAt ? ` · ${clock(capturedAt)}` : ''}`
     : status === 'loading' ? (compact ? 'Načítám…' : 'Načítám živé svíčky…')
       : status === 'stale' ? `${ibkr ? (compact ? 'IBKR stojí' : 'Svíčky z IBKR stojí') : compact ? 'TV stojí' : 'TradingView stojí'}${capturedAt ? ` od ${clock(capturedAt)}` : ''}`
         : compact ? 'Bez živých svíček' : 'Živé svíčky nejsou — spusť worker s TradingView';
   return (
-    <span title={fallback ? 'IBKR je nedostupné (IB Gateway neběží, odhlásila se nebo jsi přihlášený v IBKR jinde) — svíčky jdou ze zálohy TradingView.' : ibkr ? 'Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z IBKR (jen zobrazení).' : 'Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z grafu TradingView (jen zobrazení).'} style={{ flex: 'none', height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: live ? 'var(--dj-green-text)' : 'var(--dj-amber-text)', background: live ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)' }}>
+    <span title={ibkr ? 'Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z IBKR (jen zobrazení).' : 'Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z grafu TradingView (jen zobrazení).'} style={{ flex: 'none', height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: live ? 'var(--dj-green-text)' : 'var(--dj-amber-text)', background: live ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)' }}>
       <span style={{ width: 6, height: 6, borderRadius: 9, background: live ? '#10b981' : '#f59e0b', animation: live ? 'dj-blink 2s ease-in-out infinite' : undefined }} />
       {text}
       {restartable && (status === 'stale' || status === 'unavailable') && <TvRestartControl compact={compact} />}

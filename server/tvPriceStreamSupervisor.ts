@@ -278,8 +278,8 @@ export function createTvPriceStreamSupervisor(options: {
         const current = worker;
         worker = null;
         terminate(current);
+        // „Zpět“ ohlásí až nové vlákno po prvním platném čtení z IBKR (start je na TV).
         log('TV STREAM pauza IBKR skončila — vlákno znovu se zdrojem IBKR');
-        alert({ state: 'up', ibkr: 'crash', code: null });
         ensure();
       }
     } catch { /* hlídač nesmí shodit worker */ }

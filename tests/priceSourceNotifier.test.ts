@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createPriceSourceNotifier, priceSourceAlertText, priceSourceNotifyWindowOpen } from '../server/priceSourceNotifier';
+import { createPriceSourceNotifier, PRICE_SOURCE_FLAP_MS, priceSourceAlertText, priceSourceNotifyWindowOpen } from '../server/priceSourceNotifier';
 
 // 28. 10. 2026 je středa; Praha je od 25. 10. v SEČ (UTC+1).
 const prague = (hour: number, day = 28) => Date.UTC(2026, 9, day, hour - 1, 30);
@@ -32,6 +32,8 @@ describe('oznámení výpadku IBKR na Macu', () => {
     expect(priceSourceAlertText({ state: 'down', ibkr: 'live', code: 1100 }).body).toContain('ztratila spojení');
     expect(priceSourceAlertText({ state: 'down', ibkr: 'crash', code: null }).body).toContain('spadlo');
     expect(priceSourceAlertText({ state: 'down', ibkr: 'live', code: null }).body).toContain('neposílá obchody');
+    // Aktuální stav spojení přebije starší kód.
+    expect(priceSourceAlertText({ state: 'down', ibkr: 'connecting', code: 2103 }).body).toContain('neběží');
     expect(priceSourceAlertText({ state: 'up', ibkr: null, code: null }).title).toBe('IBKR zpět');
   });
 
@@ -58,5 +60,25 @@ describe('oznámení výpadku IBKR na Macu', () => {
     night.notifier.onAlert({ state: 'up', ibkr: null, code: null });
     night.setClock(prague(9, 29));
     expect(night.notify).not.toHaveBeenCalled();
+  });
+
+  it('cukání (pád vlákna dokola): další výpadek do hodiny ani jeho návrat se neoznamuje', () => {
+    const t = setup(prague(10));
+    t.notifier.onAlert({ state: 'down', ibkr: 'crash', code: null });
+    t.notifier.onAlert({ state: 'up', ibkr: null, code: null });
+    expect(t.notify).toHaveBeenCalledTimes(2);
+    t.setClock(prague(10) + 30 * 60_000);
+    t.notifier.onAlert({ state: 'down', ibkr: 'crash', code: null });
+    t.notifier.onAlert({ state: 'up', ibkr: null, code: null });
+    expect(t.notify).toHaveBeenCalledTimes(2);
+    t.setClock(prague(10) + PRICE_SOURCE_FLAP_MS + 60_000);
+    t.notifier.onAlert({ state: 'down', ibkr: 'connecting', code: null });
+    expect(t.notify).toHaveBeenCalledTimes(3);
+  });
+
+  it('„zpět“ bez ohlášeného výpadku (start vlákna) nic neoznamuje', () => {
+    const t = setup(prague(10));
+    t.notifier.onAlert({ state: 'up', ibkr: null, code: null });
+    expect(t.notify).not.toHaveBeenCalled();
   });
 });

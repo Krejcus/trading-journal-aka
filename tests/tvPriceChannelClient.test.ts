@@ -8,6 +8,9 @@ import {
   TV_VERIFY_QUEUE_MAX,
   TV_VERIFY_TIMEOUT_MS,
   TV_REOPEN_RETRY_MS,
+  TV_REOPEN_MAX_WAIT_MS,
+  TV_SUBSCRIBE_WATCHDOG_MS,
+  TV_WATCHDOG_REOPEN_DELAY_MS,
   type TvPriceChannelStatus,
 } from '../lib/tvPriceChannelClient';
 import { signTvPricePayload, signTvPriceTrail, verifyTvPriceEnvelope, verifyTvPriceTrail, type TvPricePayload } from '../lib/tvPriceMessage';
@@ -35,6 +38,7 @@ const setup = (options: {
   verify?: (envelope: unknown, key: string) => Promise<TvPricePayload | null>;
   verifyTrail?: (envelope: unknown, key: string, payload: TvPricePayload) => Promise<number[] | null>;
   topicBusy?: (topic: string) => boolean;
+  releaseTopic?: (topic: string) => void;
 } = {}) => {
   const channels: FakeChannel[] = [];
   let foreground = true;
@@ -58,6 +62,7 @@ const setup = (options: {
     verify,
     verifyTrail: options.verifyTrail,
     topicBusy: options.topicBusy,
+    releaseTopic: options.releaseTopic,
     hasWebCrypto: () => options.webCrypto ?? true,
     isForeground: () => foreground,
     subscribeForeground: listener => {
@@ -225,6 +230,36 @@ describe('klient kanálu ceny z TV (krok 3)', () => {
     expect(t.store.diagnostics().state).not.toBe('connecting');
   });
 
+  it('téma obsazené navždy (chyba odchodu): po mezi se vynuceně uvolní a kanál otevře', async () => {
+    let busy = true;
+    const releaseTopic = vi.fn(() => { busy = false; });
+    const t = setup({ topicBusy: () => busy, releaseTopic });
+    t.client.offerGrant('u1', grant(), true);
+    t.client.addChartInterest();
+    await vi.advanceTimersByTimeAsync(TV_REOPEN_MAX_WAIT_MS - TV_REOPEN_RETRY_MS);
+    expect(releaseTopic).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(TV_REOPEN_RETRY_MS * 2);
+    expect(releaseTopic).toHaveBeenCalledTimes(1);
+    expect(t.channels).toHaveLength(1);
+  });
+
+  it('hlídač: kanál bez SUBSCRIBED (socket se nevrátil) se zavře a po prodlevě otevře znovu', async () => {
+    const t = setup();
+    t.client.offerGrant('u1', grant(), true);
+    t.client.addChartInterest();
+    expect(t.channels).toHaveLength(1);
+    t.channels[0].status('TIMED_OUT');
+    await vi.advanceTimersByTimeAsync(TV_SUBSCRIBE_WATCHDOG_MS);
+    expect(t.channels[0].closed).toBe(1);
+    expect(t.store.diagnostics()).toMatchObject({ state: 'connecting', reason: 'subscribe-timeout' });
+    await vi.advanceTimersByTimeAsync(TV_WATCHDOG_REOPEN_DELAY_MS);
+    expect(t.channels).toHaveLength(2);
+    t.channels[1].status('SUBSCRIBED');
+    await vi.advanceTimersByTimeAsync(TV_SUBSCRIBE_WATCHDOG_MS * 2);
+    expect(t.channels).toHaveLength(2);
+    expect(t.channels[1].closed).toBe(0);
+  });
+
   it('zaseknuté ověření cesty zprávu přijme bez cesty a frontu nezablokuje', async () => {
     const t = setup({ verifyTrail: () => new Promise<number[] | null>(() => {}) });
     t.client.offerGrant('u1', grant(), true);
@@ -321,6 +356,7 @@ describe('klient kanálu ceny z TV (krok 3)', () => {
     const t = setup();
     t.client.offerGrant('u1', grant(), true);
     t.client.addPnlInterest();
+    t.channels[0].status('SUBSCRIBED');
     t.client.offerGrant('u1', null, false);
     vi.advanceTimersByTime(TV_GRANT_GRACE_MS - 1);
     expect(t.channels[0].closed).toBe(0);

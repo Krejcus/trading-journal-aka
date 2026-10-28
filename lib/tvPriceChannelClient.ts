@@ -56,6 +56,8 @@ export interface TvPriceChannelClientDeps {
    * klient by zůstal navždy „připojuje“. Nový kanál se proto otevře až potom.
    */
   topicBusy?(topic: string): boolean;
+  /** Vynuceně odebrat kanál tématu, který se sám neodebral (chyba odchodu). Best effort. */
+  releaseTopic?(topic: string): void;
   verify(envelope: unknown, key: string): Promise<TvPricePayload | null>;
   /** Cesta ceny k ověřené zprávě (jen přehrání v grafu); chybí = bez cesty. */
   verifyTrail?(envelope: unknown, key: string, payload: TvPricePayload): Promise<number[] | null>;
@@ -96,6 +98,16 @@ export const TV_VERIFY_QUEUE_MAX = 16;
 export const TV_VERIFY_TIMEOUT_MS = 2_000;
 /** Jak často se zkusí otevřít kanál, dokud se starý se stejným tématem zavírá. */
 export const TV_REOPEN_RETRY_MS = 250;
+/** Starý kanál se nezavřel ani po této době → odebrat vynuceně (jinak by se čekalo navždy). */
+export const TV_REOPEN_MAX_WAIT_MS = 10_000;
+/**
+ * Kanál, který se do této doby nepřipojí (nebo po chybě nevrátí), se zavře a otevře
+ * znovu. realtime-js po odpojení socketu v okně `disconnecting` nový join nikdy
+ * neodešle — bez hlídače by klient zůstal „připojuje“ napořád.
+ */
+export const TV_SUBSCRIBE_WATCHDOG_MS = 15_000;
+/** Prodleva před novým otevřením po zásahu hlídače. */
+export const TV_WATCHDOG_REOPEN_DELAY_MS = 2_000;
 
 export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPriceChannelClient {
   const now = deps.now ?? Date.now;
@@ -118,6 +130,11 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
   let closeTimer: unknown = null;
   let metaTimer: unknown = null;
   let reopenTimer: unknown = null;
+  /** Kolikrát se čekalo na zavření starého kanálu se stejným tématem. */
+  let reopenWaits = 0;
+  let watchdogTimer: unknown = null;
+  /** Hlídač zavřel kanál: znovu otevřít až po prodlevě. */
+  let watchdogHold = false;
   let unsubscribeForeground: (() => void) | null = null;
 
   const safe = (action: () => unknown) => {
@@ -149,8 +166,27 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
     // Ověření rozpracovaná pro starý kanál se po dokončení zahodí.
     generation += 1;
     queue = { pending: 0, chain: Promise.resolve() };
+    clearTimer(watchdogTimer);
+    watchdogTimer = null;
     if (current) safe(() => current.close());
     store.setLink('off', reason);
+  };
+
+  /** Hlídač připojení: bez `SUBSCRIBED` do `TV_SUBSCRIBE_WATCHDOG_MS` zavřít a po prodlevě otevřít znovu. */
+  const armWatchdog = () => {
+    if (watchdogTimer !== null) return;
+    const owner = generation;
+    watchdogTimer = schedule(() => {
+      watchdogTimer = null;
+      if (owner !== generation || joined || !channel) return;
+      closeChannel('subscribe-timeout');
+      watchdogHold = true;
+      store.setLink('connecting', 'subscribe-timeout');
+      schedule(() => {
+        watchdogHold = false;
+        try { reconcile(); } catch { /* zobrazovací kanál nikdy nevyhodí */ }
+      }, TV_WATCHDOG_REOPEN_DELAY_MS);
+    }, TV_SUBSCRIBE_WATCHDOG_MS);
   };
 
   const track = (applyDrop = false) => {
@@ -228,6 +264,8 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
   const onStatus = (owner: number, status: TvPriceChannelStatus) => {
     if (owner !== generation) return;
     if (status === 'SUBSCRIBED') {
+      clearTimer(watchdogTimer);
+      watchdogTimer = null;
       joined = true;
       // Po (re)joinu server presence nezná — ohlásit znovu.
       trackedMeta = null;
@@ -238,13 +276,25 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
     joined = false;
     trackedMeta = null;
     store.setLink('connecting', status.toLowerCase());
+    // Chyba nebo vypršení: realtime-js zkouší sám, ale po odpojení socketu se nemusí vrátit nikdy.
+    armWatchdog();
   };
 
   const open = () => {
     if (channel || !grant) return;
+    if (watchdogHold) {
+      store.setLink('connecting', 'subscribe-timeout');
+      return;
+    }
     let busy = false;
     try { busy = deps.topicBusy?.(grant.topic) === true; } catch { busy = false; }
+    if (busy && reopenWaits * TV_REOPEN_RETRY_MS >= TV_REOPEN_MAX_WAIT_MS) {
+      // Starý kanál se sám neodebral: vynuceně pryč, pak otevřít.
+      safe(() => deps.releaseTopic?.(grant!.topic));
+      try { busy = deps.topicBusy?.(grant.topic) === true; } catch { busy = false; }
+    }
     if (busy) {
+      reopenWaits += 1;
       store.setLink('connecting', 'closing-previous');
       if (reopenTimer === null) {
         reopenTimer = schedule(() => {
@@ -254,6 +304,7 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
       }
       return;
     }
+    reopenWaits = 0;
     generation += 1;
     const owner = generation;
     store.setLink('connecting', 'subscribing');
@@ -262,6 +313,7 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
         onMessage: envelope => onMessage(owner, envelope),
         onStatus: status => onStatus(owner, status),
       });
+      armWatchdog();
     } catch {
       channel = null;
       store.setLink('off', 'channel-error');

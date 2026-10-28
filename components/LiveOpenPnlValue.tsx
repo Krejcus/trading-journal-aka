@@ -2,7 +2,7 @@ import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { tvLivePnlDelta, type TvLivePnlLeg } from '../lib/tvLivePnl';
 import type { TvPriceDiagnostics } from '../lib/tvPriceStore';
 import { tvPriceChannel, tvPriceStore } from '../services/tvPriceChannel';
-import { observeLivePriceSource } from '../lib/livePriceSourceFallback';
+import { isLivePriceFallback, noteLivePriceSource } from '../lib/livePriceSourceFallback';
 
 /**
  * Listová komponenta otevřeného P&L (krok 4 návrhu
@@ -29,10 +29,16 @@ const useLivePriceSource = () => useSyncExternalStore(
   () => 'TV' as const,
 );
 
+// Zdroj každé přijaté zprávy se zapíše z odběru storu (ne z renderu) — štítek pak jen čte.
+tvPriceStore.subscribe(() => {
+  const latest = tvPriceStore.view().latest;
+  if (latest) noteLivePriceSource(latest.chart, latest.at);
+});
+
 /** Cena jde ze zálohy TradingView, přestože appka předtím viděla IBKR (Gateway nedostupná). */
 const useLivePriceFallback = () => useSyncExternalStore(
   tvPriceStore.subscribe,
-  () => observeLivePriceSource(tvPriceStore.view().latest?.chart),
+  () => isLivePriceFallback(tvPriceStore.view().latest?.chart),
   () => false,
 );
 
