@@ -118,7 +118,7 @@ const leaseRetry = (connectionId: string): RetryTransientOptions => ({
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
 import { createTvPriceStreamSupervisor, tvPriceStreamConfigFromRealtime, type TvPriceStreamSupervisor } from '../../server/tvPriceStreamSupervisor';
-import { readTradingViewBars, scheduleTradingViewBarsCapture, startTradingViewLiveBars, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
+import { readTradingViewBars, scheduleTradingViewBarsCapture, startTradingViewLiveBars, TV_LIVE_BARS_PHASE_MS, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
 import { barsContractConflicts, barsContractMatchesSymbol, tvSymbolRoot } from '../../lib/tradingViewBars';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
@@ -1109,7 +1109,14 @@ async function runLocalAgent(
       ready: () => relay?.uploadLiveBars != null,
       // Svíčky dne z IBKR (vlákno ceny, jen zobrazení), jinak z grafu TV. Server
       // podle zdroje a kontraktu soubor dne nesmíchá (`mergeLiveBarsFile`).
-      read: async root => tvPriceStream?.latestBars(root) ?? readTradingViewBars(root),
+      read: async root => {
+        // Jen čtení z IBKR z aktuální minuty (zarovnané v 7. s) — starší nese předchozí
+        // minutu rozpracovanou; pak raději graf TV.
+        const ibkr = tvPriceStream?.latestBars(root) ?? null;
+        return ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000 ? ibkr : readTradingViewBars(root);
+      },
+      // Až po uzavření minuty: soubor nese hotovou předchozí svíčku.
+      phaseMs: TV_LIVE_BARS_PHASE_MS,
       upload: async capture => {
         if (!relay?.uploadLiveBars) throw new Error('relay-unavailable');
         await relay.uploadLiveBars(capture);

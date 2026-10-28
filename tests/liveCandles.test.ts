@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { tvLiveBarsStoragePath, type TvBar, type TvBarsCapture } from '../lib/tradingViewBars';
-import { startTradingViewLiveBars } from '../services/tradingViewBars';
+import { startTradingViewLiveBars, TV_LIVE_BARS_PHASE_MS } from '../services/tradingViewBars';
+import { LIVE_CANDLES_POLL_PHASE_MS, nextLiveCandlesPollDelay } from '../hooks/useLiveCandles';
 
 vi.mock('../services/supabase', () => ({ supabase: {} }));
 import { LIVE_CANDLES_STALE_MS, parseLiveCandlesFile, stitchLiveCandles } from '../services/liveCandles';
@@ -154,5 +155,63 @@ describe('stitchLiveCandles', () => {
     const live = [candle(60, 9), candle(120, 9), candle(180, 3), candle(240, 4)];
     expect(stitchLiveCandles(historical, live).map(item => item.close)).toEqual([1, 2, 3, 4]);
     expect(stitchLiveCandles([], live)).toHaveLength(4);
+  });
+});
+
+describe('zarovnání na minutu (předposlední svíčka grafu dne, 28. 10. 2026)', () => {
+  it('worker čte hned a pak vždy v 10. sekundě minuty, interval až po zarovnání', async () => {
+    const minuteStart = Date.UTC(2026, 9, 28, 13, 41, 0);
+    let timeoutDelay = -1;
+    let timeoutFn: (() => void) | null = null;
+    const clock = manualInterval();
+    const read = vi.fn(async () => null);
+    startTradingViewLiveBars({
+      roots: ['MNQ'], read, upload: vi.fn(), ...clock,
+      phaseMs: TV_LIVE_BARS_PHASE_MS,
+      now: () => minuteStart + 41_000,
+      setTimeoutImpl: ((fn: () => void, ms: number) => { timeoutFn = fn; timeoutDelay = ms; return { unref() {} }; }) as unknown as typeof setTimeout,
+    });
+    await flush();
+    expect(read).toHaveBeenCalledOnce();
+    expect(timeoutDelay).toBe(29_000);
+    clock.tick();
+    await flush();
+    expect(read).toHaveBeenCalledOnce();
+    timeoutFn!();
+    await flush();
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('po uspání Macu (skok hodin) se další běh vrátí na 10. sekundu minuty', async () => {
+    const minuteStart = Date.UTC(2026, 9, 28, 13, 41, 0);
+    let clockNow = minuteStart + 10_000;
+    const delays: number[] = [];
+    let pending: (() => void) | null = null;
+    startTradingViewLiveBars({
+      roots: ['MNQ'], read: vi.fn(async () => null), upload: vi.fn(),
+      phaseMs: TV_LIVE_BARS_PHASE_MS,
+      now: () => clockNow,
+      setTimeoutImpl: ((fn: () => void, ms: number) => { pending = fn; delays.push(ms); return { unref() {} }; }) as unknown as typeof setTimeout,
+    });
+    expect(delays.at(-1)).toBe(60_000);
+    // Mac spal: časovač vystřelí o 25 s později (v 35. s další minuty).
+    clockNow = minuteStart + 60_000 + 35_000;
+    pending!();
+    await flush();
+    expect(delays.at(-1)).toBe(35_000);
+    // Časovač vystřelí o chlup dřív: druhý běh hned za sebou se neplánuje.
+    clockNow = minuteStart + 120_000 + 9_999;
+    pending!();
+    expect(delays.at(-1)).toBe(60_001);
+  });
+
+  it('appka načítá soubor ve 20. sekundě minuty (po uploadu v 10. s)', () => {
+    const minuteStart = Date.UTC(2026, 9, 28, 13, 41, 0);
+    expect(LIVE_CANDLES_POLL_PHASE_MS).toBeGreaterThan(TV_LIVE_BARS_PHASE_MS);
+    expect(nextLiveCandlesPollDelay(minuteStart + 41_000, 60_000)).toBe(39_000);
+    expect(nextLiveCandlesPollDelay(minuteStart + 5_000, 60_000)).toBe(15_000);
+    // Těsně před 20. s nečekat 1 s, ale celou další minutu.
+    expect(nextLiveCandlesPollDelay(minuteStart + 18_000, 60_000)).toBe(62_000);
+    expect(nextLiveCandlesPollDelay(minuteStart + 18_000, 30_000)).toBe(30_000);
   });
 });

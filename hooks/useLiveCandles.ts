@@ -2,6 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { LIVE_CANDLES_STALE_MS, loadLiveCandles, type LiveCandles } from '../services/liveCandles';
 
 export const LIVE_CANDLES_POLL_MS = 60_000;
+/**
+ * Sekunda minuty, kdy se soubor načítá: worker ho posílá 10 s po začátku minuty
+ * (`TV_LIVE_BARS_PHASE_MS`), takže nese uzavřenou předchozí svíčku. Načtení
+ * v náhodnou chvíli by předposlední svíčku přepsalo stavem z poloviny minuty.
+ */
+export const LIVE_CANDLES_POLL_PHASE_MS = 20_000;
+
+/** Prodleva do dalšího načtení: při minutovém intervalu zarovnaná na `LIVE_CANDLES_POLL_PHASE_MS`. */
+export function nextLiveCandlesPollDelay(nowMs: number, pollMs: number): number {
+  if (pollMs !== 60_000) return pollMs;
+  const delay = (60_000 + LIVE_CANDLES_POLL_PHASE_MS - (nowMs % 60_000)) % 60_000;
+  return delay < 5_000 ? delay + 60_000 : delay;
+}
 
 export type LiveCandlesStatus = 'loading' | 'live' | 'stale' | 'unavailable';
 
@@ -41,7 +54,7 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
       }
     };
     const schedule = () => {
-      timer = setTimeout(async () => { await refresh(); if (generation.current === current) schedule(); }, pollMs);
+      timer = setTimeout(async () => { await refresh(); if (generation.current === current) schedule(); }, nextLiveCandlesPollDelay(Date.now(), pollMs));
     };
     const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
     void refresh();

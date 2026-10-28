@@ -65,6 +65,12 @@ export const TV_LIVE_BARS_INTERVAL_MS = 60_000;
  * aby klient poznal, že worker běží (klient hlásí „stojí“ po 5 min).
  */
 export const TV_LIVE_BARS_KEEPALIVE_MS = 2 * 60_000;
+/**
+ * Sekunda minuty, ve které worker posílá svíčky dne (pilot). Soubor tak vždy
+ * nese UZAVŘENOU předchozí minutu — jinak by klient při obnově dat přepsal
+ * předposlední svíčku stavem z poloviny minuty (graf dne, 28. 10. 2026).
+ */
+export const TV_LIVE_BARS_PHASE_MS = 10_000;
 /** Víc cenových rodin worker nečte — limit serveru je 4 zápisy/min. */
 export const TV_LIVE_BARS_MAX_ROOTS = 2;
 
@@ -87,9 +93,13 @@ export function startTradingViewLiveBars(options: {
   read?: (root: string) => Promise<TvBarsCapture | null>;
   log?: (message: string) => void;
   intervalMs?: number;
+  /** Čtení zarovnat na tuto ms po začátku minuty (`undefined` = hned a pak po intervalu). */
+  phaseMs?: number;
   now?: () => number;
   setIntervalImpl?: typeof setInterval;
   clearIntervalImpl?: typeof clearInterval;
+  setTimeoutImpl?: typeof setTimeout;
+  clearTimeoutImpl?: typeof clearTimeout;
 }): TradingViewLiveBarsFeed {
   // MNQ a NQ sdílí na serveru jeden soubor — čte se jen první kořen z rodiny.
   const byFamily = new Map<string, string>();
@@ -140,13 +150,31 @@ export function startTradingViewLiveBars(options: {
       inFlight = false;
     }
   };
-  const timer = (options.setIntervalImpl ?? setInterval)(() => { void tick(); }, intervalMs);
-  (timer as { unref?: () => void }).unref?.();
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let alignTimer: ReturnType<typeof setTimeout> | null = null;
+  if (options.phaseMs === undefined) {
+    timer = (options.setIntervalImpl ?? setInterval)(() => { void tick(); }, intervalMs);
+    (timer as { unref?: () => void }).unref?.();
+  } else {
+    // Řetěz časovačů: každá příští prodleva se počítá znovu z hodin, aby se fáze
+    // nerozjela zpožďováním ani po uspání Macu (setInterval by ji ztratil).
+    const phase = Math.min(59_000, Math.max(0, options.phaseMs));
+    const scheduleNext = () => {
+      if (stopped) return;
+      const raw = (60_000 + phase - (now() % 60_000)) % 60_000;
+      // Časovač, který vystřelí o chlup dřív, nesmí naplánovat druhý běh hned za sebou.
+      const delay = raw < 1_000 ? raw + 60_000 : raw;
+      alignTimer = (options.setTimeoutImpl ?? setTimeout)(() => { alignTimer = null; void tick(); scheduleNext(); }, delay);
+      (alignTimer as { unref?: () => void }).unref?.();
+    };
+    scheduleNext();
+  }
   void tick();
   return {
     stop: () => {
       stopped = true;
-      (options.clearIntervalImpl ?? clearInterval)(timer);
+      if (alignTimer !== null) (options.clearTimeoutImpl ?? clearTimeout)(alignTimer);
+      if (timer !== null) (options.clearIntervalImpl ?? clearInterval)(timer);
     },
   };
 }

@@ -44,6 +44,7 @@ type MetaChart = { interval?: unknown; frontContract?: unknown; frontContractSwi
 const META_REFRESH_MS = 60_000;
 /** Jak často vlákno posílá svíčky dne z IBKR hlavnímu vláknu (hlídač drží max 1×/10 s). */
 const IBKR_BARS_POST_MS = 30_000;
+const IBKR_BARS_POST_PHASE_MS = 7_000;
 const READ_TIMEOUT_MS = 1_000;
 
 const port = parentPort;
@@ -294,11 +295,20 @@ port.on('message', message => {
 setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
 // Svíčky dne z IBKR pro graf dne a hodnocení (fáze 4): jen hotová čísla, buffer se
 // předá bez kopírování; hlavní vlákno je jen ověří a nechá v paměti pro upload.
-setInterval(() => {
+const postBars = () => {
   const bars = ibkr?.minuteBars() ?? null;
   if (!bars) return;
   port.postMessage({ type: 'bars', root: bars.root, source: bars.source, contract: bars.contract, at: bars.at, bars: bars.bars }, [bars.bars.buffer]);
-}, IBKR_BARS_POST_MS);
+};
+// Zarovnáno na 7. a 37. sekundu: upload svíček dne v 10. sekundě (pilot) tak nese
+// uzavřenou předchozí minutu, ne stav z její poloviny.
+// Řetěz časovačů: prodleva se pokaždé počítá z hodin, aby fázi nerozhodilo
+// zpožďování ani uspání Macu (setInterval by ji postupně ztratil).
+const schedulePostBars = () => {
+  const raw = (IBKR_BARS_POST_MS + IBKR_BARS_POST_PHASE_MS - (Date.now() % IBKR_BARS_POST_MS)) % IBKR_BARS_POST_MS;
+  setTimeout(() => { postBars(); schedulePostBars(); }, raw < 1_000 ? raw + IBKR_BARS_POST_MS : raw);
+};
+schedulePostBars();
 setInterval(() => {
   const stats = stream?.stats();
   // Jen čísla a stav; téma, klíč ani obsah zpráv nikdy.

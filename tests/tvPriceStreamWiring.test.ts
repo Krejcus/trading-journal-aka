@@ -98,9 +98,13 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
   it('svíčky dne z IBKR: vlákno je předá bez kopírování, čte je jen graf dne a hodnocení v pilotu', () => {
     const thread = source('scripts/copier/tvPriceStreamThread.ts');
     expect(thread).toContain("port.postMessage({ type: 'bars', root: bars.root, source: bars.source, contract: bars.contract, at: bars.at, bars: bars.bars }, [bars.bars.buffer]);");
+    expect(thread).toContain('const IBKR_BARS_POST_PHASE_MS = 7_000;');
+    expect(thread).toContain('schedulePostBars();');
+    expect(thread).not.toMatch(/setInterval\(postBars/);
+    expect(source('scripts/copier/pilot.ts')).toContain('phaseMs: TV_LIVE_BARS_PHASE_MS,');
     const pilot = source('scripts/copier/pilot.ts');
     expect(pilot.match(/latestBars\(/g)).toHaveLength(2);
-    expect(pilot).toContain('read: async root => tvPriceStream?.latestBars(root) ?? readTradingViewBars(root),');
+    expect(pilot).toContain('return ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000 ? ibkr : readTradingViewBars(root);');
     expect(pilot).toContain('if (ibkr && barsContractMatchesSymbol(ibkr.contract, symbol)) return ibkr;');
     expect(pilot).toContain('return tv && !barsContractConflicts(tv.contract, symbol) ? tv : null;');
     // Mimo pilot (a hlídač, který ho poskytuje) nikdo svíčky z vlákna nečte.
