@@ -285,6 +285,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-28 14:50–15:15 — Měření IBKR vs. TV během NY openu (Claude, jen čtení)
+Souběžně 25 min: sonda IBKR (clientId 91, AllLast) a TV CDP po 50 ms; cesta
+workeru dopočítaná ze vzorkování 250 ms a změřeného průchodu Supabase Realtime
+(testovací téma Mac → Supabase → Mac: p50 34 ms, p99 51 ms, 400/400 zpráv).
+- Trh: 102 567 obchodů / 204 797 kontraktů za 25 min, medián 57 obchodů/s, max 546/s.
+  IBKR: objem = denní objem IBKR (204 797 / 204 802), 24/24 minut = 1m svíčky IBKR,
+  žádný výpadek spojení.
+- IBKR posílá obchody v dávkách po ~0,5 s (mezera p50 515 ms, ~30 obchodů v dávce).
+  V klidném ránu byly dávky po ~0,7 s.
+- TV ukazuje ~1,1 změny ceny za sekundu (IBKR 42/s). Při zarovnání cen je TV za IBKR
+  o ~750 ms (ráno ~300 ms). Ve stejném okamžiku se TV liší v průměru o 4,9 ticku,
+  v nejrychlejších 10 % sekund o 9 ticků (p95 22, max 43).
+- Appka přes worker (IBKR, vzorek 250 ms + Realtime) je před TV Desktopem o ~550–600 ms.
+  Worker přidá p50 155 ms. Vzorek 100 ms (fáze 3) by přidal jen ~50 ms → u ceny
+  nemá smysl. Fáze 3 má smysl jen kvůli sekundovým a tickovým grafům.
+- Finální 1m svíčky TV vs. IBKR: 14/23 minut OHLC shodně, jinak open/close o 1–4
+  ticky a objem ±0,3 % (přiřazení obchodů na hraně minuty). Kdo má pravdu, rozhodne
+  až Databento (CME). Svíčky skládané ze živého čtení TV měly close mimo o až
+  10 ticků a objem −1 % → potvrzuje, že předposlední svíčka z TV byla vadná.
+- Tradovate se změřit nedá: OAuth token nemá API market data (viz 2026-08 zápis).
+Data: scratchpad session e9252a27 `open1028/` (analyze.py, ibkr.json, tv.json, rt.json).
+
 ### 2026-10-28 11:30 — NASAZENO: deník při vypnuté kopírce, odpočet, živé FVG (Claude, Filip „nasaď“)
 
 - Web: `main` = `bff2e7c8` (merge `origin/main` s IBKR commity do větve
