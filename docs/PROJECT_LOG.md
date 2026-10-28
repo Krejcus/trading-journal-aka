@@ -285,7 +285,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-28 19:40 — Okamžité posílání ceny z IBKR ve workeru (Claude, NENASAZENO, 7bb8e5d6)
+### 2026-10-28 20:05 — NASAZENO: okamžité posílání ceny, oprava svíčky, vlastní timeframy (Claude, Filip „nasaď“)
+
+- Push na main `0448e0d2` (ff, Vercel READY). Brána: 5838 testů, tsc, build.
+- Před reinstallem: kontrola pozic hlásila 3 účty s rozdílem a nedokončený
+  flat sweep (chybějící stav 2 ochranných noh) → Filip „Zkontrolovat“ → čisto.
+- `COPIER_PRICE_SOURCE=ibkr scripts/copier/mac-reinstall-safe.sh` z worktree
+  `~/alphatrade-worktrees/ibkr-probe` @ 0448e0d2 (bundle 5c883387…,
+  `--adopt-durable-group`). Po restartu DISARMED, connected, bez divergence;
+  read-only reconcile čistý (`missingAccounts` 1 = samostatný reconcile
+  nevidí druhé OAuth připojení; worker `oauthPreflight.missingAccounts` prázdné).
+- Ověřeno v appce (localhost:3000): zdroj `IBKR:MNQZ2026`, 181 zpráv za 90 s
+  (~2/s), `seq` souvislé, worker→appka p50 37 ms. Zpoždění proti Tradovate
+  po změně ještě NEZMĚŘENO (odhad ~300 ms).
+- Past: otevřená appka po restartu workeru zůstala v `connecting` až do
+  znovunačtení stránky (pravděpodobně starý grant kanálu).
+
+### 2026-10-28 19:40 — Okamžité posílání ceny z IBKR ve workeru (Claude, nasazeno 20:05, 7bb8e5d6)
 
 - Proč: měření 4 zdrojů ukázalo, že appka je ~150 ms za samotným IBKR jen
   kvůli čtení po 250 ms. Odhad po změně: ~300 ms za Tradovate (dřív ~450).
