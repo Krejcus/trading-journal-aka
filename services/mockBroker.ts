@@ -69,6 +69,8 @@ export interface MockBrokerOptions {
   accountRiskSnapshots?: readonly BrokerAccountRiskSnapshot[];
   /** Zapne stavovou broker-native likvidaci; default drží legacy fallback testy. */
   nativeLiquidate?: boolean;
+  /** Prefix broker orderId; jiný prefix simuluje novou broker instanci po restartu. */
+  orderIdPrefix?: string;
 }
 
 export class MockBrokerTimeoutError extends Error {
@@ -97,6 +99,8 @@ export interface MockBroker extends BrokerPort {
   }[];
   orders(): readonly BrokerOrder[];
   cancelRequestCount(brokerOrderId: string): number;
+  /** Testovací helper: order existující u brokera s pevným ID (např. z předchozí session). */
+  seedOrder(order: BrokerOrder): void;
 }
 
 export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
@@ -169,7 +173,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
     orderSequence += 1;
     const order: BrokerOrder = {
       tag: request.tag,
-      brokerOrderId: `mo-${orderSequence}`,
+      brokerOrderId: `${options.orderIdPrefix ?? 'mo'}-${orderSequence}`,
       accountId: request.accountId,
       symbol: request.symbol,
       side: request.side,
@@ -467,6 +471,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
     placedOsoRequests: () => placedOso,
     modifyRequests: () => modified,
     orders: () => [...ordersById.values()],
+    seedOrder: order => { ordersById.set(order.brokerOrderId, { ...order }); },
     cancelRequestCount: brokerOrderId => cancelAttempts.get(brokerOrderId) ?? 0,
   };
 }

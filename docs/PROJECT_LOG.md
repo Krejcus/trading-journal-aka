@@ -285,6 +285,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-29 — Kopírka se po exitech sama vypínala: staré samostatné SL (Claude, Filip „oprav to a pak nasaď vše“)
+
+- Příznak: ~12× za den (od 28. 10. 18:01 UTC) fail-closed `Flat sweep
+  nedokončen … stav ochranné nohy … chybí v autoritativních zdrojích`, vždy
+  tytéž 3 nohy na followera. Všechny kopie skončily flat, nic nevisí.
+- Příčina: samostatné SL (Market vstup + zvlášť Stop) z 26. a 28. 10. se
+  u brokera vyplnily, ale zůstávají v durable outboxu/links. Paměť
+  „noha už vyřízená“ je jen v procesu; po restartu ji nic neobnoví, protože
+  reconciliation uzavírala jen OSO/bracket nohy a `/order/list` vrací jen
+  aktuální session. „Zapnout“ proto prošlo čistě a další exit spadl znovu.
+- Oprava (`runReconciliation`): kandidáti zachycení před čtením u brokera;
+  terminální stav ve snapshotu uzavře vždy, nepřítomnost jen nohu s ACK
+  aspoň 5 min před začátek aktuální session. Noha z aktuální session, která
+  v seznamu chybí, zůstává fail-closed. Žádný nový zápis k brokerovi, nic
+  se z durable stavu nemaže. Pravidlo zapsané u INV-RECON-03.
+- Nalezeno při review a opraveno: sweep bral samostatné SL z links bez
+  filtru symbolu — flat MNQ by zrušil pracující SL otevřené NQ pozice.
+- Oponent (copier-design-critic): návrh „opravit před commitem“ (kandidáti
+  před čtením, jen předchozí session, `followerFillRole` neměnit), hotový
+  diff „OK“. Zapracována i jeho doporučení: rezerva kolem 17:00 CT a test
+  automatické obnovy po restartu bez veřejné `reconcile()`.
+- Testy: `tests/copierStaleStandaloneStopSweep.test.ts` (6). Bez opravy
+  padá test incidentu přesně produkční hláškou a test symbolu (NQ stop
+  zrušen); bez rezervy padá test hranice session.
+- Zbývá: follower mimo snapshot reconciliation (`breached`/`dll-locked` bez
+  epizody) staré nohy neuzavře; link bez známého symbolu zůstává kandidátem
+  (dnes 0 takových). Neověřeno: zda Tradovate `/order/item` vrací ordery
+  z minulé session (alternativní pozitivní důkaz).
+
 ### 2026-10-29 11:17 — NASAZENO: watchdog relaye + napojení dat LIVE → Graf (Claude, Filip „nasaď watchdog relaye i napojení dat LIVE grafu“)
 
 - Obě větve spojeny nad main 03a236d5 (watchdog cherry-pick 22b6eebf na

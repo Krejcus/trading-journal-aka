@@ -2312,6 +2312,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Horní mez skutečně pracovních noh v jedné okamžité sweep dávce. */
   const SWEEP_MAX_LEGS_PER_CALL = 6;
   const STREAM_SWEEP_READ_TIMEOUT_MS = 250;
+  /** Nepřítomnost SL v /order/list uzavře jen nohu ACK aspoň 5 min před začátkem session. */
+  const STANDALONE_ABSENCE_SESSION_MARGIN_MS = 5 * 60_000;
   /** TooLate cancel: krátké čtení streamu, než order u brokera doběhne. */
   const TOO_LATE_STREAM_SETTLE_DELAYS_MS = [250, 500, 750] as const;
   /** Rezerva rozpočtu sweepu na závěrečnou postkontrolu (orders + pozice). */
@@ -2535,8 +2537,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           && isStandaloneProtective(entry)
         ))
         .map(entry => entry.brokerOrderId),
+      // Link symbol nenese. Bez filtru by flat MNQ zrušil pracující SL
+      // otevřené NQ pozice téhož followera. Symbol se bere z outbox položky,
+      // jinak z živého orderu; neznámý symbol zůstává kandidátem (dřívější
+      // chování), aby pracující noha nad flat followerem neosiřela.
       ...[...runtime.state.links.values()].flat()
         .filter(link => link.accountId === accountId && isStandaloneProtective(link))
+        .filter(link => {
+          const linkSymbol = [...runtime.outbox.values()]
+            .find(entry => entry.brokerOrderId === link.brokerOrderId)?.request.symbol
+            ?? liveOrdersByAccount.get(accountId)?.get(link.brokerOrderId)?.symbol;
+          return linkSymbol == null || linkSymbol === symbol;
+        })
         .map(link => link.brokerOrderId),
     ].filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId));
 
@@ -15791,6 +15803,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         accountId,
         tradeObservationVersionByAccount.get(accountId) ?? 0,
       ]));
+      // Samostatné SL followerů zachycené PŘED čtením u brokera. Dispatch nebo
+      // ACK během čtení se do důkazu nesmí dostat: jeho order snapshot ještě
+      // nemusí obsahovat a nepřítomnost by ho trvale vyřadila ze sweepu.
+      // Nepřítomnost v /order/list smí uzavřít jen nohu potvrzenou v dřívější
+      // Tradovate session (seznam vrací jen aktuální session); noha z aktuální
+      // session v seznamu být musí, jinak zůstává fail-closed. Rezerva kolem
+      // 17:00 CT kryje rozjeté hodiny Macu proti brokerovi.
+      const reconciliationStartedAt = clock();
+      const standaloneLegsAtStart = [...currentRuntime().outbox.values()]
+        .filter(entry => (
+          entry.status === 'acknowledged'
+          && Boolean(entry.brokerOrderId)
+          && isStandaloneProtective(entry)
+          && entry.updatedAt < reconciliationStartedAt
+        ))
+        .map(entry => ({
+          accountId: entry.request.accountId,
+          brokerOrderId: entry.brokerOrderId!,
+          ackedInPriorSession: !sameTradovateSession(
+            entry.updatedAt + STANDALONE_ABSENCE_SESSION_MARGIN_MS,
+            reconciliationStartedAt,
+          ),
+        }));
       const eligibilityNow = clock();
       const followerIds = new Set(group.followers.map(item => item.accountId));
       const lineageParticipantIds = new Set(
@@ -16305,6 +16340,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
                 ...(status == null ? {} : { status }),
               });
             }
+          }
+        }
+        for (const leg of standaloneLegsAtStart) {
+          if (leg.accountId !== follower.accountId) continue;
+          const status = snapshotStatusById.get(leg.brokerOrderId);
+          if (status != null) {
+            // Přítomný terminální stav je pozitivní důkaz bez ohledu na session.
+            if (!isOpenOrderStatus(status)) {
+              reconciliationResolvedLegs.push({ accountId: follower.accountId, brokerOrderId: leg.brokerOrderId, status });
+            }
+          } else if (leg.ackedInPriorSession) {
+            reconciliationResolvedLegs.push({ accountId: follower.accountId, brokerOrderId: leg.brokerOrderId });
           }
         }
         if (workingIds.size === 0) continue;

@@ -466,9 +466,14 @@ existující ochranu.
 - Vynucuje: `services/copierRuntimeController.ts:performReconciliation`,
   `runReconciliation`, `ReconciliationStaleSnapshotError`.
 - Hlídá test: `tests/copierRuntimeController.test.ts`,
-  `tests/copierRouteGapV6.test.ts`.
+  `tests/copierRouteGapV6.test.ts`, `tests/copierStaleStandaloneStopSweep.test.ts`.
 - Nikdy: Necommitovat pomalý snapshot po mezilehlém fillu, reconnectu,
   config změně nebo DISARMu.
+- Důkaz ukončených ochranných nohou (29. 10. 2026): terminální stav přítomný
+  v čerstvém snapshotu platí vždy. Nepřítomnost v `/order/list` uzavře
+  samostatný SL jen tehdy, když byl kandidát zachycen před čtením a jeho ACK
+  padl aspoň 5 min před začátek aktuální Tradovate session (seznam vrací jen
+  aktuální session). Chybějící noha z aktuální session zůstává fail-closed.
 - Bezpečné změny vs. nebezpečné: Bezpečné jsou bounded read-only retry po
   stale výsledku. Nebezpečný je retry broker write nebo odstranění generation
   revalidace kvůli latenci.
@@ -1618,6 +1623,16 @@ Agent-oponent má před schválením změny výslovně odpovědět na každou ot
   (`divergenceBeforeLeaderExit`); ARM dál vyžaduje autoritativně flat skupinu
   (INV-ARM-01), za ARMED/SHADOW zůstává fail-closed incident.
   `tests/copierDisarmedManualLeaderTrade.test.ts`.
+- **28.–29. 10. — kopírka se po každém exitu sama vypínala.** Samostatné SL
+  followerů vyplněné 26. a 28. 10. zůstaly v durable outboxu a links; po
+  restartu je sweep paměť prázdná a `/order/list` je už nevrací, takže každý
+  flat sweep skončil „stav ochranné nohy … chybí v autoritativních zdrojích“
+  (~12× za den). Reconciliation uzavírala jen OSO/bracket nohy. Teď uzavře
+  i samostatné SL podle pravidla u INV-RECON-03. Současně opraveno: sweep bral
+  samostatné SL z links bez symbolu, takže flat MNQ by zrušil pracující SL
+  otevřené NQ pozice. `tests/copierStaleStandaloneStopSweep.test.ts`.
+  Zbývá: follower mimo snapshot reconciliation (`breached`/`dll-locked` bez
+  epizody) staré nohy neuzavře a po přechodu do flat dál fail-closed.
 - **UI flicker po návratu na LIVE.** Uložené ON/OFF a status mají zabránit
   vizuálnímu probliknutí, ale jsou výhradně presentation cache. Viz PROJECT_LOG
   „LIVE kopírka: načítání bez problikávání“ a `lib/copierPowerDisplay.ts`.
