@@ -320,6 +320,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Neověřeno“ + „Vypnout kopírku“ (neklikáno). Celá sada po DISARM
   (10:22): 5966 zelených, build OK. iPhone appka z ranní instalace
   ověřena nepřímo: session z iPhonu obnovena 08:54 UTC (po instalaci).
+  Otevřená pozice skupiny celou cestou (účty → pohled → model → vykreslený
+  panel a čip) ověřena testem `tests/liveChartPositionRender.test.ts`
+  (Long 3, P&L z brokera, SL/TP, BE/Zavřít vypnuté) — živý obchod ne.
 
 ### 2026-10-29 08:30 — NASAZENO: LIVE → Graf, živý graf s panelem objednávky, jen UI (Claude, Filip „nasaď na live“)
 
