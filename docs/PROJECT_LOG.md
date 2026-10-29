@@ -304,6 +304,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   ale blokuje ARM a další vstup (rozuzlení ručně, kind `manual-entry`).
 - Skript `record-leader-oso.ts --scenario fill` (+ `--non-group-account`
   pro Tradeify): marketable Limit, záznam nohou po fillu, liquidate, ověření flat.
+- Diff prošel dalšími třemi koly oponentury (OPRAVIT PŘED COMMITEM → opraveno):
+  fence fronty proti řídicím eventům před startem (M1), ochranné kroky
+  nezávislé na commitu výsledku (M2), zrušení vlastního vstupu po brzdě
+  mezi ACK a eventy / po pozdním ACK (M3) i když kopie páru neodešla
+  (waived/rejected). Nevyřešený ruční vstup je v LIVE panelu stuck operací
+  (relay i iPhone); chyby odeslání v UI nikdy „neodesláno“ bez důkazu.
+- Známé limity: leader jen na Lucid (fixture); bez push notifikace
+  o ručním vstupu; kopie odmítnutá followerům za ARMED → vlastní vstup se
+  zruší (leader nezůstane sám), incident.
 - Neověřeno: nic naostro. Chybí záznam fillu (spouští Filip) a jeho replay;
   bez něj první skutečné odeslání jen se vzdáleným Limitem (nevyplní se).
 
