@@ -315,7 +315,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   (1440 px): kopírka vypnutá → bez Vypnout, čip a přehled účtů se skutečnými
   účty, dnes/Do limitu shodné s Live Dashboardem, výběr účtu. Pozice se
   skutečným obchodem a Vypnout za ARMED v náhledu neověřeny (žádný obchod,
-  kopírka vypnutá; tlačítka zápisu se v náhledu neklikají).
+  kopírka vypnutá; tlačítka zápisu se v náhledu neklikají). Za ARMED
+  (Filip zapnul kopírku) náhled bez čerstvého stavu ukázal „Kopírka
+  Neověřeno“ + „Vypnout kopírku“ (neklikáno). Celá sada po DISARM
+  (10:22): 5966 zelených, build OK. iPhone appka z ranní instalace
+  ověřena nepřímo: session z iPhonu obnovena 08:54 UTC (po instalaci).
 
 ### 2026-10-29 08:30 — NASAZENO: LIVE → Graf, živý graf s panelem objednávky, jen UI (Claude, Filip „nasaď na live“)
 
