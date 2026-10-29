@@ -213,3 +213,69 @@ brzda a OFF→ON mezi enqueue a provedením; `set-multiplier` mezi náhledem
 a provedením; souběžný příkaz z Tradovate UI; reconnect route; TTL ve FIFO;
 dvě zařízení / jiný payload se stejným klíčem; validace payloadu; dvojklik;
 regrese kopírování OSO z Tradovate UI.
+
+## 8. Fáze 1a — náhled „would place“ (návrh, 29. 10. 2026)
+
+Cíl: celá cesta lístek → relay → worker → brány naostro, ale **bez zápisu
+k brokerovi**. Worker vrátí, co by poslal (leader + kopie followerů) a proč by
+odmítl. Odeslat zůstává vypnuté.
+
+**Protokol (bez migrace):** nový člen `LiveCopyTradingCommand`
+`{ type: 'preview-leader-entry', groupId, operationId, leaderAccountId,
+symbol, side: 'Buy'|'Sell', quantity, orderType: 'Limit'|'Stop', price,
+stopLoss, takeProfit, intent: { armedAt, groupConfigHash,
+followerQuantities: [{accountId, quantity}] } }` uvnitř `copy-command`
+(DB constraint se nemění). Relay: přidat do `remoteCopyCommands`, striktní
+whitelist klíčů ve `validatedRemoteCopyCommand` (enqueue i claim), ceny
+konečné kladné na tick 0,25, qty celé 1–50, symbol `^(MNQ|NQ)[FGHJKMNQUVXZ]\d$`,
+TTL standard 30 s. Výsledek nový člen `LiveCopyTradingCommandResult`
+`{ type: 'leader-entry-preview', operationId, checkedAt, wouldPlace,
+blockers: [{code, text}], notes: [{code, text}] }`.
+
+**Agent:** nový case v `executeCopyCommand`; agent navíc přidá brzdový
+blocker, když `createdAt ≤ lastBrakeCreatedAt + skew` (copy-command dnes
+context nedostává → předat). Sériově přes FIFO jako ostatní ne-brzdy.
+
+**Controller `previewLeaderEntry(input)`** — jen čtení, nikdy `dispatchBroker`
+ani žádná zápisová metoda brokera (test spy). Jediné IO je čerstvé
+`broker.listAccountCapabilities([leader])` (read-only, `canTrade`). Brány
+(každá s kódem a textem, náhled vrátí VŠECHNY, ne jen první):
+1. `haltReason` jako dispatch (gate + `sequenceBroken || needsReconciliation`,
+   `stuckOutbox || hasDispatchBlockingStuckOutbox`), `shadowMode`,
+   `reconciliationRequired`, `manualRecovery`/incident;
+2. managementOnly, `dayLockPending`, `dayLockUntil > now`, pauza, obchodní
+   okno ≠ inside; rezerva: do konce okna, do konce session 17:00 CT a do
+   `armExpiresAt` aspoň 5 min;
+3. klid skupiny: `maintenanceRestartBlocker()` == null, `allGroupAccountsFlat()`,
+   `liveOrdersByAccount` prázdné u leadera i followerů, žádný aktivní cut,
+   `transportResume`;
+4. leader: `currentIneligibleAccounts` bez leadera, čerstvé `canTrade`;
+   `accountRisk` leadera čerstvý (< 90 s, stejná session) a ztráta při SL ≤
+   zbývající denní limit (`dailyLossAutoLiq + realized + open`, jinak
+   `propLimitUsd`); jinak blocker;
+5. followeři (zapojení, ne vyřazení): režim `on-submit` (jinak blocker
+   `oso-on-fill-not-supported`), `followerQuantity` ≥ 1 (jinak blocker),
+   `maxContracts` nejhorší případ z `positionsByAccount`+`liveOrdersByAccount`
+   stejným vzorcem jako `exposureCappedBroker` (jinak blocker), riziko vs.
+   jejich denní limit jako u leadera; nezpůsobilý/cut follower = poznámka
+   „nedostane“ (stejně jako kopírka);
+6. strop ručního vstupu `group.safety.manualEntryMaxContracts` (nové
+   tighten-only pole; chybí = blocker „strop není nastaven“), qty ≤ strop;
+7. SL i TP povinné, na správné straně vstupu; symbol = aktuální front
+   (`quarterlyContractsAround`), jinak blocker;
+8. záměr: `armedAt` = `gate.armedAt`, otisk konfigurace skupiny = aktuální,
+   `followerQuantities` = přepočet; jinak blocker „nastavení se změnilo“.
+`maxLeaderOrders` produkce nenastavuje → jen pokud je nastaven.
+
+**UI:** v panelu tlačítko „Zkontrolovat u workeru (nic se neodešle)“ — jen
+Limit/Stop se SL+TP a čerstvý stav; desk pošle přes `executeAgent`
+(copy-command, fresh gate); panel ukáže „Worker by poslal: …“, kontrakty
+followerů a seznam blockerů. Odeslat dál vypnuté.
+
+**INV:** INV-DEFAULT-01/02, INV-ARM-01, INV-BRAKE-01/02/04, INV-RISK-01..04,
+INV-RELAY-01/02/03, INV-FRESH-01..03, INV-ELIG-01, INV-PART-01..03,
+INV-DIVERGENCE-01, INV-MODE-01, INV-TRAD-03/06, INV-UI-01..04,
+INV-WORKER-04; návrh INV-MANUAL-01 (náhled nikdy nezapisuje — vynuceno
+typem: metoda nemá přístup k `dispatchBroker`).
+**Nasazení:** server (relay validace) + worker (agent, controller) → push
+a reinstall workeru jen po „nasaď“ (obchodní den), DISARMED/flat.
