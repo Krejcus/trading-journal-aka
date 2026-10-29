@@ -62,9 +62,12 @@ describe('LIVE → Graf: DISARM je vždy dosažitelný (INV-UI-02)', () => {
 
   it('načítání i pád grafu mají cestu na přehled a pád se nezopakuje po reloadu', () => {
     const slot = source('components/LiveTradingScreenSlot.tsx');
-    expect(slot).toMatch(/<ErrorBoundary name="LiveTradingScreen" onError=\{rememberLiveChartCrash\} fallback=\{<FallbackLayer [^>]*failed onNavigate=\{props\.onNavigate\} \/>\}>/);
-    expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer [^>]*failed=\{false\} onNavigate=\{props\.onNavigate\} \/>\}>/);
+    expect(slot).toMatch(/<ErrorBoundary name="LiveTradingScreen" onError=\{rememberLiveChartCrash\} fallback=\{<FallbackLayer [^>]*failed leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
+    expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer [^>]*failed=\{false\} leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
     expect(slot).toMatch(/onClick=\{\(\) => onNavigate\('overview'\)\}/);
+    // Odchodová animace nesmí držet kliky: přehled je pod vrstvou dostupný hned.
+    expect(source('index.css')).toMatch(/\.live-chart-leave \{ animation: live-chart-fold [^}]*pointer-events: none; \}/);
+    expect(source('components/LiveTradingScreen.tsx')).toMatch(/\$\{leaving \? 'live-chart-leave' : 'live-chart-enter'\}/);
     expect(source('components/TradovateLiveDesk.tsx')).toMatch(/chartAvailable: liveChartAvailableNow\(\) && !liveChartCrashedThisSession\(\)/);
     expect(source('components/ErrorBoundary.tsx')).toMatch(/this\.props\.onError\?\.\(error\);/);
   });

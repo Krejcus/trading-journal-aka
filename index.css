@@ -5233,3 +5233,63 @@ html.boot-pre [data-boot] { opacity: 0; }
 @media (prefers-reduced-motion: reduce) { .history-shot-skeleton { animation: none; } }
 /* Schovaná kostra (náhled načtený) už nemá co animovat. */
 .history-shot-skeleton.opacity-0 { animation: none; }
+
+/* LIVE → Graf: příchod a odchod (LiveTradingScreen, LiveTradingScreenSlot).
+   Graf se rozvine ze skleněného rámu, přes něj přejde aurorová záře, lišta
+   a panel objednávky dojedou se zpožděním. Odchod rám stáhne a zprůhlední;
+   během odchodu vrstva nebere kliky, přehled pod ní je dostupný hned. */
+@keyframes live-chart-unfold {
+  from { opacity: 0; clip-path: inset(2.5% 3.5% 2.5% 3.5% round 18px); transform: scale(0.992); }
+  60% { opacity: 1; }
+  to { opacity: 1; clip-path: inset(0 0 0 0 round 0); transform: none; }
+}
+@keyframes live-chart-fold {
+  from { opacity: 1; clip-path: inset(0 0 0 0 round 0); transform: none; }
+  to { opacity: 0; clip-path: inset(2% 3% 2% 3% round 16px); transform: scale(0.994); }
+}
+@keyframes live-chart-aurora-sweep {
+  0% { opacity: 0; transform: translateY(-14%); }
+  35% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(6%); }
+}
+@keyframes live-chart-header-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes live-chart-ticket-in {
+  from { opacity: 0; transform: translateX(26px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes live-chart-ticket-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateX(20px); }
+}
+@keyframes live-tab-arrive {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+.live-chart-enter { animation: live-chart-unfold 520ms cubic-bezier(.22, .61, .36, 1) both; }
+.live-chart-enter .live-chart-header { animation: live-chart-header-in 420ms 90ms cubic-bezier(.22, .61, .36, 1) both; }
+.live-chart-enter .live-chart-ticket { animation: live-chart-ticket-in 520ms 140ms cubic-bezier(.22, .61, .36, 1) both; }
+.live-chart-leave { animation: live-chart-fold 280ms cubic-bezier(.4, 0, .2, 1) both; pointer-events: none; }
+.live-chart-leave .live-chart-ticket { animation: live-chart-ticket-out 220ms cubic-bezier(.4, 0, 1, 1) both; }
+.live-chart-aurora {
+  position: absolute; inset: 0; z-index: 900; pointer-events: none;
+  background:
+    radial-gradient(55% 42% at 50% 0%, rgba(99, 102, 241, 0.30), transparent 72%),
+    radial-gradient(38% 34% at 82% 12%, rgba(20, 184, 166, 0.20), transparent 70%),
+    radial-gradient(34% 30% at 14% 18%, rgba(56, 189, 248, 0.16), transparent 70%);
+  animation: live-chart-aurora-sweep 900ms cubic-bezier(.22, .61, .36, 1) both;
+}
+.light-theme .live-chart-aurora {
+  background:
+    radial-gradient(55% 42% at 50% 0%, rgba(99, 102, 241, 0.18), transparent 72%),
+    radial-gradient(38% 34% at 82% 12%, rgba(20, 184, 166, 0.12), transparent 70%),
+    radial-gradient(34% 30% at 14% 18%, rgba(56, 189, 248, 0.10), transparent 70%);
+}
+.live-tab-arrive { animation: live-tab-arrive 380ms cubic-bezier(.22, .61, .36, 1) backwards; }
+@media (prefers-reduced-motion: reduce) {
+  .live-chart-enter, .live-chart-enter .live-chart-header, .live-chart-enter .live-chart-ticket,
+  .live-chart-leave, .live-chart-leave .live-chart-ticket, .live-tab-arrive { animation: none; }
+  .live-chart-aurora { display: none; }
+}

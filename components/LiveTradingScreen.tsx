@@ -77,6 +77,8 @@ interface Props {
   /** Záložky jsou dočasně zamčené (desk čeká na potvrzení změny konfigurace); přehled zůstává dostupný. */
   navigationBlocked?: boolean;
   copier: LiveTradingCopierState;
+  /** Dohrává se odchod z grafu (animace, vrstva už nebere kliky). */
+  leaving?: boolean;
 }
 
 function useMinuteNow() {
@@ -88,7 +90,7 @@ function useMinuteNow() {
   return now;
 }
 
-const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigationBlocked = false, copier }) => {
+const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigationBlocked = false, copier, leaving = false }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
   const chart = useDayChartData(day, NO_TRADES, NO_TRADES, now);
@@ -219,8 +221,10 @@ const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigati
     : `border-transparent ${isDark ? 'text-slate-400 hover:text-slate-100' : 'text-slate-500 hover:text-slate-900'}`);
 
   const screen = (
-    <div className={`fixed inset-0 z-[300] flex flex-col ${surface} ${isDark ? 'dark' : ''}`} role="dialog" aria-label="LIVE graf">
-      <header className={`flex h-11 shrink-0 items-center gap-1 border-b px-2 ${bar}`}>
+    <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} role="dialog" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
+      {/* Aurorová záře při příchodu — jednou, pak je průhledná a nebere kliky. */}
+      <div className="live-chart-aurora" aria-hidden="true" />
+      <header className={`live-chart-header flex h-11 shrink-0 items-center gap-1 border-b px-2 ${bar}`}>
         <span className="px-2 text-[11px] font-black tracking-[0.14em] text-indigo-500">LIVE</span>
         <nav className="flex h-full min-w-0 items-stretch gap-0.5 overflow-x-auto no-scrollbar" aria-label="LIVE navigace">
           {tabs.map(item => {
@@ -309,7 +313,7 @@ const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigati
             </div>
           )}
         </div>
-        {ticketOpen && <aside className="w-[304px] shrink-0 p-2 pl-0">
+        {ticketOpen && <aside className="live-chart-ticket w-[304px] shrink-0 p-2 pl-0">
           <LiveOrderTicket
             isDark={isDark}
             instrument={INSTRUMENT}

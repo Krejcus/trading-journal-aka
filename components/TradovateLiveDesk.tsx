@@ -397,6 +397,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // grafu nevstupuje — vrstva grafu by dialogy i přehled s vypnutím zakryla.
   const armFlowActiveRef = useRef(false);
   const [armFlowActive, setArmFlowActive] = useState(false);
+  const [arrivingFromChart, setArrivingFromChart] = useState(false);
+  useEffect(() => {
+    if (!arrivingFromChart) return undefined;
+    const timer = window.setTimeout(() => setArrivingFromChart(false), 420);
+    return () => window.clearTimeout(timer);
+  }, [arrivingFromChart]);
   const navigateToTab = useCallback((nextTab: TradovateLiveTab) => {
     // Z grafu na přehled se jde vždy: DISARM a kill musí být dosažitelné
     // i při čekající změně konfigurace (INV-UI-02).
@@ -404,6 +410,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       configMutationPending: configMutationPending || copyGroupStatusPollFence.inFlight,
       armFlowActive: armFlowActiveRef.current,
     })) return;
+    // Z grafu na jinou záložku: obsah záložky dojede zespodu, graf se složí.
+    if (tab === 'chart' && nextTab !== 'chart') setArrivingFromChart(true);
     setTab(nextTab);
     const href = tradovateLiveTabHref(window.location.href, nextTab);
     const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -1377,9 +1385,10 @@ acceptAgentStatus((await executeAgent({
   const requiresConnection = tab !== 'connections' && live.status != null && !live.status.connected;
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-4">
-      {tab === 'chart' && chartAvailable ? (
+    <div className={`mx-auto max-w-[1500px] space-y-4 ${arrivingFromChart ? 'live-tab-arrive' : ''}`}>
+      {chartAvailable ? (
         <LiveTradingScreenSlot
+          open={tab === 'chart'}
           isDark={theme !== 'light'}
           tabs={tabs}
           onNavigate={navigateToTab}
