@@ -291,8 +291,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   2a i pro obchody z TradingView / Tradovate UI, ale jen ty, které kopírka zkopírovala
   jako nativní OSO / OCO bracket (id leadera z durable outboxů). Bílá listina, pokrytí
   followerů, cena z lotu dne, čistý tvar i u followerů (oponentura 2b).
-- Neověřeno: celá sada a oponent na diff; naostro nic. Riziko k testu: TradingView
-  může po posunu z appky vrátit svou cenu nohy.
+- Oponent na diff: OPRAVIT (test bílé listiny, INV) → doplněno (4a335588).
+- Ověřeno za DISARMED (22:21): tsc, cílené 349/349 ×3, celá sada 6125 + 1 todo;
+  jediný pád `copierV12SixthIteration` E1 (limit 5 ms pod zátěží), samostatně 4/4
+  zelený s 2b i bez ní. Build v posledním běhu nedoběhl (skript skončil na suite).
+- Neověřeno naostro. Riziko k testu: TradingView může po posunu z appky vrátit svou cenu nohy.
 
 ### 2026-10-29 — Obchodování z grafu, fáze 2a: správa vlastního vstupu + push notifikace (Claude, nasazeno 22:00 @ 6d7df3c8)
 
