@@ -279,3 +279,44 @@ INV-WORKER-04; návrh INV-MANUAL-01 (náhled nikdy nezapisuje — vynuceno
 typem: metoda nemá přístup k `dispatchBroker`).
 **Nasazení:** server (relay validace) + worker (agent, controller) → push
 a reinstall workeru jen po „nasaď“ (obchodní den), DISARMED/flat.
+
+### 8.1 Revize po oponentuře (29. 10. 2026, verdikt OPRAVIT PŘED IMPLEMENTACÍ)
+
+- **Bez REST:** náhled nečte brokera (sériová linka relaye by zdržela vzdálené
+  DISARM/kill a 429 by zapnulo hodinový jistič pro všechno). `canTrade`
+  leadera v náhledu = poznámka „neověřeno, ověří odeslání“. Relay pustí
+  nejvýš jeden čekající náhled na zařízení a nejvýš jeden za 3 s.
+- **Čistý modul:** controller jen synchronně sebere zmrazené vstupy
+  (`collectManualEntryPreviewInputs`), vyhodnocení je čistá funkce
+  `services/manualEntryPreview.ts` bez importu brokera; žádný await na
+  `eventTail`, žádný audit/persist/lastError, chyba náhledu nejde do failClosed.
+- **Riziko:** zbývá = MIN ze známých: DLL + min(0, realized + open);
+  equity − minNetLiq; u followera i `effectiveDailyLossCutUsd` − ztráta.
+  Nic neznámé = blocker. Riziko = |vstup − SL| × qty × pointValue (podle
+  kořene symbolu) + poplatky + skluz 2 ticky; pro rezervu DD konzervativně
+  |TP − SL| (trailing intradenně neověřen). Snapshot < 90 s, stejná session
+  a novější než poslední fill skupiny, jinak blocker. Vlastní
+  `dailyLossLimitUsd` = poznámka.
+- **Chybějící data = blocker** (účet bez záznamu pozic/příkazů není flat).
+- **Doplněné brány:** `group.enabled`; per-request `evaluateRiskGate` nad
+  stejnými třemi requesty jako `processOsoPair`; recovery/startup repair;
+  `unconfirmedFlatLots`; cooldown; `positionCheckComplete`;
+  `divergentAccounts`; pauza vs. `now`; prahy pravidel dne čistě ze stavu
+  dne; rozpracovaný cut = blocker, hotový = poznámka; `transportResume`
+  jen waiting/ready; sync pauza = poznámka „nedostane“; žádný follower by
+  nedostal kopii = blocker `no-follower-would-copy`; `maxContracts` z cache
+  + poznámka o fallbacku při rozpadu OSO korelace.
+- **Strop ručního vstupu:** žádné nové pole; konstanta workeru 1 kontrakt
+  (qty > 1 = blocker) do doby, než bude UI a perzistence.
+- **Starý worker:** `executeCopyCommand` `default: throw unsupported`; UI bez
+  výsledku typu `leader-entry-preview` = „worker náhled neumí“.
+- **Symbol:** povolit oba kandidáty kolem rollu s poznámkou; měsíce jen
+  `[HMUZ]`.
+- **UI:** samostatná čtecí cesta bez mutation ACK fence; „Náhled (nic
+  neodesláno) · ověřeno před X s“, po 15 s / změně ARM / DISARM zešedne;
+  nikdy „připraveno“, Odeslat dál vypnuté; `operationId` s prefixem
+  `preview:`; poznámka „marketabilita limitu neověřena“.
+- **Otisk skupiny** jen z polí statusu workeru: id, enabled, leader,
+  followeři (accountId, mode, enabled, multiplier, maxContracts).
+- Dotčená INV navíc: INV-BRAKE-03, INV-TRAD-04, INV-WORKER-04, INV-RISK-04,
+  INV-RECON-04, INV-ARM-01, INV-PART-02/03, INV-OUTBOX-02, INV-TRAD-02.
