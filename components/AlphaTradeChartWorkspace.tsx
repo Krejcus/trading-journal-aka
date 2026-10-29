@@ -1956,7 +1956,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     selectReplayStart(reviewReplayStart);
     if (action === 'play') setReplay(current => current.phase === 'active' ? { ...current, playing: true } : current);
   }, [reviewReplayStart, selectReplayStart]);
-  const reviewReplayIdle = reviewReplayStart != null && replay.phase === 'off';
+  // LIVE → Graf: přehrávání v živém obchodování nepatří (Filip 29. 10.).
+  const liveTradingChart = !backtestSession && Boolean(liveOrderEntry);
+  const reviewReplayIdle = !liveTradingChart && reviewReplayStart != null && replay.phase === 'off';
   /** Obchod, ke kterému Go To nabízí skoky — v hodnocení první z fronty. */
   const replayTradeSource = backtestSession ? null : reviewTrades?.[0] ?? (review ? null : trade);
   const replayTradeEvents = useMemo(
@@ -3003,14 +3005,14 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             onToggleStructure: () => activeControl.updateConfig({ showStructure: !activeControl.config.showStructure }),
           }}
         />}
-        <button
+        {!liveTradingChart && <button
           type="button"
           className={`${topButton} px-2 ${replay.phase !== 'off' ? (isDark ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-950') : ''}`}
           onClick={beginReplaySelection}
           title={replay.phase === 'selecting' ? 'Zrušit výběr Bar Replay' : 'Bar Replay'}
           aria-label="Bar Replay"
           aria-pressed={replay.phase !== 'off'}
-        ><Rewind size={15} fill={replay.phase !== 'off' ? 'currentColor' : 'none'} /></button>
+        ><Rewind size={15} fill={replay.phase !== 'off' ? 'currentColor' : 'none'} /></button>}
         <button
           type="button"
           className={topButton}

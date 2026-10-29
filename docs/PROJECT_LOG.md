@@ -310,7 +310,8 @@ další záložky LIVE“; „čistě UI, napojení dat v jiné session“.
   načtení grafu je v obálce `LiveTradingScreenSlot` s vlastní Suspense
   a ErrorBoundary — načítání i pád mají tlačítko na přehled, pád si session
   zapamatuje (`at:live-chart-crashed`) a další otevření LIVE jde na přehled.
-  Obálka je `memo`, sekundový tik desku graf nepřekresluje.
+  Obálka je `memo`, sekundový tik desku graf nepřekresluje. Bar Replay
+  (tlačítko i panel) je v živém grafu skrytý — v live obchodování nepatří.
 - **Panel (varianta A z `mockups/chart-order-entry.html`):** strana s bid/ask
   (orientačně z poslední ceny grafu, ne kotace brokera), Market/Limit/Stop,
   cena, Kontrakty / Riziko $, závorky v bodech/tickách/$/ceně, souhrn
