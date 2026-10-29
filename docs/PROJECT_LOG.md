@@ -285,6 +285,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-29 20:31 — NASAZENO + SPOLEČNÝ TEST: fáze 1b, odeslání vstupu z grafu (Claude + Filip „Nasaď a test“)
+
+- Nasazeno 19:41 UTC: web 40fe2ef8 (pak 6275d941: potvrzení dvojklikem v
+  tlačítku, prohlížeč potichu blokoval `window.confirm`), worker reinstall
+  z worktree chart-entry-1b (brána prošla), reconcile čistý, capability
+  `manual-entry-v1`.
+- Test naostro (leader Lucid 70423233, 3 followeři, 1 MNQ):
+  - A 18:53 vzdálený Limit → ACK 0,27 s → nativní OSO všem 3 followerům do 1 s;
+    zrušení v TradingView → zrušeno všech 9 kopií, bez chyby.
+  - B 18:56 brzda z telefonu 12 s po odeslání (kopie už venku) → OFF nechal
+    příkazy; zrušení leadera za DISARMED zrušilo vstupy followerů (nohy zrušil
+    Tradovate). Relay: odeslání 458 ms fronta + 357 ms, OFF 518 + 41 ms.
+    Okno „brzda do 1 s“ naostro neproběhlo (kryjí testy).
+  - Záznam fillu 19:00 (`--scenario fill`): vstup → SL → TP dorazí PŘED
+    fillem; fixture `tests/fixtures/tradovate-leader-oso-api-fill.json`,
+    replay obecný i jako vlastní vstup zelený.
+  - C 19:27 dvojklik → jediné odeslání, jedna kopie na followera.
+  - D 19:30 vyplněný vstup → kopie u všech 3 → zavření leadera → kopírka
+    zrušila nohy a zkopírovala market exit → 19:31:06 všichni autoritativně flat.
+  - Po celou dobu žádný lastError ani incident.
+- Zbývá: push notifikace o ručním vstupu; leader jen Lucid; brzda do 1 s
+  po odeslání naostro neověřena. Tento zápis + replay test fillu (b59ea6e3)
+  jsou jen ve větvi, na main nepushnuté.
+
 ### 2026-10-29 — Obchodování z grafu, fáze 1b: skutečné odeslání vstupu na leadera (Claude, NENASAZENO)
 
 - Větev `claude/chart-entry-1b-20261029` (worktree `~/alphatrade-worktrees/chart-entry-1b`).
