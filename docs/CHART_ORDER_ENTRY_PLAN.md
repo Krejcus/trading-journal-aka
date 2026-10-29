@@ -63,6 +63,11 @@ neposlala followerům vstup bez ochrany (P2).
   - Worker za DISARMED: vstup `blocked reason=disarmed`, nohy `skipped
     reason=mode-mismatch`, žádný incident ani `lastError`, WS workeru bez
     výpadku; read-only reconcile hned čistý.
+  - Replay test `tests/copierLeaderApiOsoReplay.test.ts` (záznam přehraný
+    do controlleru s mock brokerem): za DISARMED nic nezkopíruje, žádný
+    incident, ARM po reconcile projde; za ARMED followerovi jedno nativní
+    OSO se stejnými cenami (TP spárované oknem) a zrušení vstupu leadera
+    zruší všechny tři příkazy followera, bez incidentu.
   - Zbývá: Tradeify připojení, fill (nohy Suspended → Working), částečný
     fill, surová REST odpověď.
 - **Fáze 1a — „would place“.** Celá cesta (lístek → relay → worker →
