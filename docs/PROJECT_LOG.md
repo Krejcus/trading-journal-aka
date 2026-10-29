@@ -460,7 +460,7 @@ další záložky LIVE“; „čistě UI, napojení dat v jiné session“.
 ### 2026-10-29 — Obchodování z grafu, fáze 1a: náhled u workeru bez zápisu (Claude, NENASAZENO)
 
 - Větev `claude/chart-entry-1a-20261029` (worktree
-  `~/alphatrade-worktrees/chart-entry-1a`), poslední commit b1f0811a.
+  `~/alphatrade-worktrees/chart-entry-1a`), poslední kód aefeece5.
 - Cesta lístek → relay (`preview-leader-entry`, TTL 15 s, 1 náhled/zařízení,
   min. 3 s, jinak 409 `copier-relay-preview-busy`) → agent → controller
   `previewLeaderEntry` → čistý `services/manualEntryPreview.ts`. Žádný REST,
@@ -473,9 +473,10 @@ další záložky LIVE“; „čistě UI, napojení dat v jiné session“.
   Odeslat zůstává vypnuté.
 - `copier-design-critic`: návrh OPRAVIT PŘED IMPLEMENTACÍ → rev 1; diff
   OPRAVIT PŘED COMMITEM → opraveno v b1f0811a.
-- Sada po opravách: tsc OK, 6052/6054; jediný pád V12 E1 (aserce startu
-  fan-outu < 5 ms při load ~16, diff controlleru čistě aditivní) — ověřit
-  samostatně za DISARMED.
+- Sada po opravách (aefeece5, DISARMED, load ~3): tsc OK, cílené testy
+  3× 134/134 včetně V12 E1, celá sada 6053/6054 (1 todo), build OK. Dřívější
+  pád V12 E1 byl časový při load ~16. Druhé kolo critic: OK.
+- Neověřeno: žádný broker ani conformance test, náhled naostro (po nasazení).
 - Nasazení: push (relay + web) + reinstall workeru za DISARMED/flat
   + reconcile, až po „nasaď“.
 
