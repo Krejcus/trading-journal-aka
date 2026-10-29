@@ -185,3 +185,25 @@ export function buildLiveStatusStrip(input: LiveStatusStripInput): LiveStatusStr
 
   return { chips, repairSnapshots, notice };
 }
+
+/**
+ * Co má hlavička LIVE → Graf hlásit odkazem „Zkontroluj Live Dashboard“:
+ * problémy, které přehled ukazuje, ale chip Kopírka je neodliší (zapnutá
+ * kopírka s rozjetím, incidentem, zaseknutou operací…). Jen zobrazení.
+ */
+export function liveAttentionReasons(model: LiveStatusStripModel, status: CopierControllerStatus | null, available: boolean): string[] {
+  const reasons: string[] = [];
+  const chip = (id: LiveStatusChip['id']) => model.chips.find(item => item.id === id);
+  if (chip('broker')?.tone === 'warn') reasons.push('broker odpojený');
+  if (chip('journal')?.tone === 'danger') reasons.push('mezera v záznamu pozic');
+  const current = available ? status : null;
+  if (current) {
+    if (current.manualRecovery) reasons.push('incident — Kontrola pozic');
+    // Starší worker některá pole neposílá — chybějící = nic nehlásit, ne spadnout.
+    if ((current.divergentAccounts?.length ?? 0) > 0) reasons.push('rozjeté účty');
+    if (current.stuckOutbox || (current.stuckOperations?.length ?? 0) > 0) reasons.push('zaseknutá operace');
+    if ((current.unverifiableFollowerOwnership?.length ?? 0) > 0) reasons.push('neověřené kopie');
+    if ((current.accountSyncPauses?.length ?? 0) > 0) reasons.push('pozastavené účty');
+  }
+  return reasons;
+}

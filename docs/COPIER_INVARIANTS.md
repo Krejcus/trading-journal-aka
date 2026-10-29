@@ -1391,6 +1391,16 @@ existující ochranu.
   `services/provisionalCandles.ts` a jejich zobrazovací konzumenti (hlídá
   `tests/liveBarsMerge.test.ts`). Pro produkt pro další uživatele neplatí
   (licence dat pro distribuci).
+- LIVE → Graf (29. 10. 2026, jen UI): `components/LiveTradingScreen.tsx`
+  předává živou svíčku z kanálu jen grafu (`liveCandles={chart.liveFeed}`,
+  výjimka v `tests/tvPriceClientGuards.test.ts`); panel objednávky ji nečte.
+  Jeho orientační bid/ask je close poslední svíčky dat grafu (původ TV/IBKR)
+  se štítkem zdroje a stáří, zašedlý, když data nejsou živá. Typ příkazu,
+  počet kontraktů podle rizika i cena Market v panelu jsou proto jen ODHAD:
+  krok odeslání (jádro kopírky) je musí přepočítat z kotace brokera nebo
+  z výslovné volby uživatele, nikdy z této ceny. Hlídání denního limitu
+  v panelu jen u Limit/Stop (vstup zadal uživatel), nikdy u Market
+  (`lib/liveOrderTicket.ts:ticketProblems`, `tests/liveOrderTicket.test.ts`).
 
 ### Vzdálený watchdog
 

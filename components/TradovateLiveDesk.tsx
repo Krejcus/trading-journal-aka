@@ -29,6 +29,7 @@ import {
 import {
   Activity,
   AlertTriangle,
+  CandlestickChart,
   ChevronRight,
   Camera,
   Clock3,
@@ -109,7 +110,8 @@ import type { TradovateLiveData } from './useTradovateLiveData';
 import type { TradovateConnectionSummary } from '../lib/tradovateLiveConnectionCache';
 import { tradovateAccountProfileNeedsPlan } from '../lib/tradovateAccountOnboarding';
 import {
-  tradovateLiveTabFromSearch,
+  initialLiveTab,
+  liveTabNavigationAllowed,
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
@@ -123,6 +125,15 @@ import {
 import { buildCopierWorkerAccountRoutes } from '../lib/copierWorkerAccountRoutes';
 import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
 import { isNativeBuild } from '../utils/runtimeConfig';
+import { isNativeShell } from '../utils/nativeShell';
+// Živý graf s panelem objednávky; těžký workspace se načte líně uvnitř obálky.
+import LiveTradingScreenSlot, { liveChartCrashedThisSession } from './LiveTradingScreenSlot';
+
+/** Desktop mimo nativní aplikaci (stejná hranice jako `useCompactViewport`). */
+const liveChartAvailableNow = () => typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && !window.matchMedia('(max-width: 1023px)').matches
+  && !isNativeShell();
 import { snapshotArmOffer } from '../services/copierSnapshotArmOffer';
 import { copierAgentCommandAllowedWhileRestored, copierCommandAllowedWithoutFreshStatus, selectCopierSafetyRoute } from '../lib/copierSafetyControls';
 import {
@@ -304,6 +315,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   journalStatus,
   userId,
   cardOwner,
+  theme,
   live,
   onCopierJournalRefresh,
   requestedTab = null,
@@ -311,12 +323,20 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   macCompanionPairingIntent = false,
   onMacCompanionPairingIntentHandled,
 }) => {
-  const [tab, setTab] = useState<TradovateLiveTab>(() => (
-    requestedTab ?? tradovateLiveTabFromSearch(
-      typeof window === 'undefined' ? '' : window.location.search,
-    )
-  ));
-  const { compact: mobileLayout } = useLiveLayout();
+  // Desktop: klik na LIVE otevře rovnou živý graf přes celou obrazovku
+  // (Filip 29. 10.); deep link s konkrétní záložkou má přednost. Telefon
+  // a nativní aplikace zůstávají na přehledu.
+  const [tab, setTab] = useState<TradovateLiveTab>(() => initialLiveTab({
+    requestedTab,
+    search: typeof window === 'undefined' ? '' : window.location.search,
+    // Po pádu grafu v této session LIVE otevře přehled (žádné kolo pádů).
+    chartAvailable: liveChartAvailableNow() && !liveChartCrashedThisSession(),
+  }));
+  const { compact: mobileLayout, narrow } = useLiveLayout();
+  const chartAvailable = !narrow && !isNativeShell();
+  useEffect(() => {
+    if (tab === 'chart' && !chartAvailable) setTab('overview');
+  }, [chartAvailable, tab]);
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   // Skupiny hned z lokální cache (stejný zdroj, ze kterého startuje přehled).
@@ -373,13 +393,22 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   }, []);
   const configMutationPendingRef = useRef(false);
   const [configMutationPending, setConfigMutationPending] = useState(false);
+  // Během zapínání kopírky (potvrzovací dialogy, obnova TradingView) se do
+  // grafu nevstupuje — vrstva grafu by dialogy i přehled s vypnutím zakryla.
+  const armFlowActiveRef = useRef(false);
+  const [armFlowActive, setArmFlowActive] = useState(false);
   const navigateToTab = useCallback((nextTab: TradovateLiveTab) => {
-    if (configMutationPending || copyGroupStatusPollFence.inFlight) return;
+    // Z grafu na přehled se jde vždy: DISARM a kill musí být dosažitelné
+    // i při čekající změně konfigurace (INV-UI-02).
+    if (!liveTabNavigationAllowed(tab, nextTab, {
+      configMutationPending: configMutationPending || copyGroupStatusPollFence.inFlight,
+      armFlowActive: armFlowActiveRef.current,
+    })) return;
     setTab(nextTab);
     const href = tradovateLiveTabHref(window.location.href, nextTab);
     const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     if (href !== current) window.history.replaceState(null, '', href);
-  }, [configMutationPending]);
+  }, [configMutationPending, tab]);
   // Dev háček (konvence at:dev:*): `localStorage['at:dev:copier-ui-demo']='1'`
   // podstrčí běžící cooldown a dvě stuck operace, aby šly stavové UI prvky
   // vidět bez čekání na reálnou situaci. Jen v dev buildu, prod ho neobsahuje.
@@ -505,10 +534,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
 
   useEffect(() => {
     if (!requestedTab) return;
-    if (configMutationPending || copyGroupStatusPollFence.inFlight) return;
+    // Deep link na graf během zapínání kopírky se zahodí (vrstva by zakryla
+    // potvrzovací dialogy); jinak stejná brána jako kliknutí na záložku.
+    if (requestedTab === 'chart' && armFlowActiveRef.current) { onRequestedTabHandled?.(); return; }
+    if (!liveTabNavigationAllowed(tab, requestedTab, {
+      configMutationPending: configMutationPending || copyGroupStatusPollFence.inFlight,
+      armFlowActive: armFlowActiveRef.current,
+    })) return;
     setTab(requestedTab);
     onRequestedTabHandled?.();
-  }, [configMutationPending, onRequestedTabHandled, requestedTab]);
+  }, [configMutationPending, onRequestedTabHandled, requestedTab, tab]);
 
   useEffect(() => {
     if (!macCompanionPairingIntent) return;
@@ -863,7 +898,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     return false;
   }, [acceptAgentStatus, agentClient, agentTransport, relayConnectionId]);
-  const armLiveGroup = useCallback(async (targetGroup: CopyGroupConfig) => {
+  const armLiveGroupFlow = useCallback(async (targetGroup: CopyGroupConfig) => {
     setArmRulesNotice(null);
     const prepare = () => {
       const current = armStatusRef.current;
@@ -992,6 +1027,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       await armNow();
     }
   }, [acceptAgentStatus, acceptConfigAck, accountEligibilityExclusions, agentStatus?.snapshotHealth, confirmAction, effectiveAccountEligibility, executeAgent, live.connectionData, runConfigMutation, waitForSnapshotReady]);
+  const armLiveGroup = useCallback(async (targetGroup: CopyGroupConfig) => {
+    armFlowActiveRef.current = true;
+    setArmFlowActive(true);
+    try {
+      return await armLiveGroupFlow(targetGroup);
+    } finally {
+      armFlowActiveRef.current = false;
+      setArmFlowActive(false);
+    }
+  }, [armLiveGroupFlow]);
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;
     return {
@@ -1268,6 +1313,7 @@ acceptAgentStatus((await executeAgent({
   }, [acceptAgentStatus, confirmAction, executeAgent]);
 
   const tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }> = [
+    ...(chartAvailable ? [{ id: 'chart' as const, label: 'Graf', icon: CandlestickChart }] : []),
     { id: 'connections', label: 'Připojení', icon: Link2 },
     { id: 'overview', label: 'Live Dashboard', icon: Gauge },
     { id: 'risk', label: 'Risk', icon: Shield },
@@ -1332,11 +1378,29 @@ acceptAgentStatus((await executeAgent({
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-4">
+      {tab === 'chart' && chartAvailable ? (
+        <LiveTradingScreenSlot
+          isDark={theme !== 'light'}
+          tabs={tabs}
+          onNavigate={navigateToTab}
+          navigationBlocked={configMutationPending || copyGroupStatusPollFence.inFlight}
+          // Stejný vstup jako LiveStatusStrip — jen zobrazení (INV-UI-01/03).
+          copier={{
+            status: agentStatus?.controller ?? null,
+            available: runtimeAvailable,
+            pending: !agentStatusResolved,
+            transport: agentTransport,
+            journalHealth: agentStatus?.journalHealth,
+            reconnectRequired: (live.status?.connections ?? []).filter(connection => live.connectionHealth[connection.id]?.state === 'reconnect-required').length,
+          }}
+        />
+      ) : null}
       <nav className="flex items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] no-scrollbar" aria-label="LIVE navigace">
         {tabs.map(item => {
           const Icon = item.icon;
           const blockedByConfigMutation = (configMutationPending || copyGroupStatusPollFence.inFlight) && item.id !== tab;
-          return <button key={item.id} type="button" disabled={blockedByConfigMutation} title={blockedByConfigMutation ? 'Čekám na potvrzení změny konfigurace workerem' : undefined} onClick={() => navigateToTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
+          const blockedByArm = item.id === 'chart' && armFlowActive;
+          return <button key={item.id} type="button" disabled={blockedByConfigMutation || blockedByArm} title={blockedByArm ? 'Během zapínání kopírky se graf neotevírá' : blockedByConfigMutation ? 'Čekám na potvrzení změny konfigurace workerem' : undefined} onClick={() => navigateToTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
         })}
       </nav>
 

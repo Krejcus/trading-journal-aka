@@ -4,6 +4,8 @@ interface Props {
     children: ReactNode;
     fallback?: ReactNode;
     name?: string;
+    /** Volitelně: zapamatovat si pád (LIVE → Graf ho nesmí opakovat po reloadu). */
+    onError?: (error: Error) => void;
 }
 
 interface State {
@@ -23,6 +25,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
     public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
         console.error(`Uncaught error in ${this.props.name || 'component'}:`, error, errorInfo);
+        this.props.onError?.(error);
     }
 
     public render() {

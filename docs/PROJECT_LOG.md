@@ -287,6 +287,74 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-29 07:00 — LIVE → Graf: živý graf s panelem objednávky, jen UI (Claude, nenasazeno)
+
+Větev `claude/live-chart-ui-20261029` (worktree `~/alphatrade-worktrees/live-chart`).
+Filip: „klik na LIVE otevře rovnou graf ve fullscreenu, nahoře přepnu na
+další záložky LIVE“; „čistě UI, napojení dat v jiné session“.
+
+- **Kde:** nová záložka LIVE `chart` („Graf“) — na desktopu (≥ 1024 px, mimo
+  nativní shell) výchozí po kliku na LIVE; deep link s `?tab=` má přednost.
+  `components/LiveTradingScreen.tsx` = portál `fixed inset-0 z-[300]`:
+  hlavička se záložkami LIVE + čip skupiny, graf dne MNQ
+  (`useDayChartData` bez obchodů, vložený `AlphaTradeChartWorkspace`),
+  vpravo `components/LiveOrderTicket.tsx`. Desk pod vrstvou zůstává
+  připojený (polling stavu běží). **Hlavička ukazuje skutečný stav kopírky**
+  (`buildLiveStatusStrip` se stejným vstupem jako stavová lišta: Kopírka,
+  Worker při problému, „Incident kopírky →“, Tradovate k novému přihlášení),
+  klik vede na přehled. Z grafu na přehled se jde vždy, i při čekající
+  změně konfigurace; do grafu se nevstupuje během toku zapnutí
+  (`liveTabNavigationAllowed`, INV-UI-02; deep link stejnou branou, tlačítko
+  Graf je během zapínání vypnuté). „Zkontroluj Live Dashboard →“ při
+  problémech, které chip Kopírka neodliší (`liveAttentionReasons`). Lazy
+  načtení grafu je v obálce `LiveTradingScreenSlot` s vlastní Suspense
+  a ErrorBoundary — načítání i pád mají tlačítko na přehled, pád si session
+  zapamatuje (`at:live-chart-crashed`) a další otevření LIVE jde na přehled.
+  Obálka je `memo`, sekundový tik desku graf nepřekresluje.
+- **Panel (varianta A z `mockups/chart-order-entry.html`):** strana s bid/ask
+  (orientačně z poslední ceny grafu, ne kotace brokera), Market/Limit/Stop,
+  cena, Kontrakty / Riziko $, závorky v bodech/tickách/$/ceně, souhrn
+  Na účet / Skupina ×N / Po účtech, hlášky (denní limit cílového účtu),
+  výběr **Obchodovat na** (skupina / jeden účet). **Odeslat je vypnuté.**
+  Orientační bid/ask = close poslední svíčky dat grafu se štítkem zdroje
+  a stáří (feed z kanálu čte jen graf); limit dne jen u Limit/Stop; typ,
+  kontrakty a cena Market jsou odhad, který odesílání přepočítá z kotace
+  brokera (dopsáno do INV-UI-04). Návrh se sám nezakládá, SL/TP mají „návrh“.
+- **Pravidla výběru účtu** (`lib/liveTradeTarget.ts`): follower ve skupině
+  a leader samostatně jen při vypnuté kopírce (ruční pozice za ARMED =
+  rozjetí → halt-group, INV-DIVERGENCE-01); vyřazený follower (INV-PART-03)
+  a účet mimo skupinu kdykoli. Zapnutí kopírky vrátí výběr na skupinu;
+  neověřený stav kopírky se bere jako zapnutý.
+- **⚡ z position boxu** jen vyplní panel (typ podle strany trhu jako
+  backtestový Quick Order, kontrakty z rizika boxu); **box v grafu zůstává**.
+  Pravý klik do grafu („Koupit 1 MNQ @ … limit“) taky jen plní panel.
+  Čáry návrhu = overlay čar backtestu (táhnout vstup/SL/TP, ✕, + SL/TP).
+  `AlphaTradeChartWorkspace` má nový volitelný most `liveOrderEntry`;
+  s `backtestSession` se ignoruje, backtest beze změny.
+- **Ukázková data jen v dev buildu:** účty a dnešní výsledky v čipu,
+  přehledu účtů, „Po účtech“ a výběru účtu jsou `SAMPLE_LIVE_TRADE_GROUP`
+  (`import.meta.env.DEV`) se štítkem „ukázka“; stav kopírky v nich je
+  skutečný, pozice „—“ (nikdy „flat“). V produkci čip, výběr účtu ani
+  Po účtech bez napojení nejsou. Přehled účtů nic neovládá (odkaz na
+  Live Dashboard).
+- Oponentura `copier-design-critic`: 1. kolo OPRAVIT PŘED COMMITEM
+  (skrytý stav kopírky + ukázkové ARMED, zamčená cesta na DISARM během
+  ARM, cena TV/IBKR v limitu, automatický návrh se SL čárou) → opraveno;
+  2. kolo OPRAVIT (pád grafu = kolo pádů bez cesty k DISARM, načítací
+  vrstva bez cesty ven) → opraveno,
+  testy `tests/liveTradingScreenGuards.test.ts`.
+- **Další session (napojení):** skupina/účty/denní P&L/vyřazení/ARMED ze
+  stavu workeru (`useDisplayWorkerStatus`, `controller.excludedForeignFollowers`,
+  `accountRisk`), skutečné pozice do přehledu a panelu (stav Pozice s BE /
+  Zavřít), živé čáry pozice, DISARM v přehledu přes safety cestu desku.
+  Povolení obchodu na jednom účtu brát z ČERSTVÉHO stavu (`armStatusRef.fresh`),
+  ne z display grace (dnes `armed` jen z `available`, INV-UI-01). Výchozí ceny
+  Limit/Stop (±10 b od ceny z grafu) jsou zadání uživatele, ne kotace.
+  Odesílání příkazů = jádro kopírky: návrh přes INV-* a copier-design-critic.
+- Ověřeno v náhledu (5273, 1440 px): graf, záložky, ⚡ → Limit + riziko $300
+  → 6 kontraktů, výběr T3 (štítek na čáře, „jen T3“), přehled skupiny,
+  Po účtech, přepnutí na Live Dashboard a zpět. Testovací box smazán.
+
 ### 2026-10-29 — Relay se nezasekne na osiřelé delivery (Claude, nasazeno 29. 10. 06:09 @ 8b27d3e7)
 
 - **Nasazení (Filip „nasaď opravu relaye“)**: push 8b27d3e7 na main (tsc čisté,

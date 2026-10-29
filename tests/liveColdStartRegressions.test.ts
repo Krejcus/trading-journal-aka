@@ -25,6 +25,13 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
     }
   });
 
+  it('LIVE → Graf se načítá líně jen za vlastní hranicí Suspense, ne v desku', () => {
+    const slot = source('components/LiveTradingScreenSlot.tsx');
+    expect(slot).toMatch(/React\.lazy\(\(\) => import\('\.\/LiveTradingScreen'\)\)/);
+    expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer[^>]*\/>\}>\s*<LiveTradingScreen \{\.\.\.props\} \/>\s*<\/Suspense>/);
+    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/import LiveTradingScreenSlot, \{ liveChartCrashedThisSession \} from '\.\/LiveTradingScreenSlot';/);
+  });
+
   it('přednačtený LIVE desk se vykreslí bez Suspense a volba typu se během připojení nemění', () => {
     const app = source('App.tsx');
     expect(app).toMatch(/let loadedLiveDesk: LiveDeskModule \| null = null;/);

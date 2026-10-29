@@ -205,9 +205,13 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       .filter(line => line.includes('liveFeed')).map(line => ({ file, line: line.trim() })));
     expect(uses.length).toBeGreaterThanOrEqual(5);
     for (const { file, line } of uses) {
+      // LIVE → Graf (components/LiveTradingScreen.tsx) předává feed jen grafu,
+      // stejně jako graf dne; panel objednávky ho nečte.
       const allowed = file === 'hooks/useDayChartData.ts'
         ? /useTvLiveCandleFeed\(|^liveFeed,$|liveFeed`: rozpracovaná/
-        : /liveCandles=\{ctl\.chart\.liveFeed\}|useLiveCandleBinding\(/;
+        : file === 'components/LiveTradingScreen.tsx'
+          ? /^liveCandles=\{chart\.liveFeed\}$/
+          : /liveCandles=\{ctl\.chart\.liveFeed\}|useLiveCandleBinding\(/;
       expect(line, file).toMatch(allowed);
     }
     // Neutrální rozhraní grafu používají jen grafy dne a jejich napojení.
