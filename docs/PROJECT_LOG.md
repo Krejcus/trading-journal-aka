@@ -297,6 +297,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Bez workeru a bez migrace.
 - iPhone appka z ranní instalace ověřena přímo (11:03 screenshot: Deník,
   „Živě z IBKR“, dnešní obchody).
+- Test v provozu (Filip, 12:20 Praha): ARM z Live Dashboardu → v grafu
+  „Vypnout kopírku“ → relay `disarm` ve frontě 580 ms, ACK 549 ms, kopírka
+  vypnutá (lastDisarm manual), skupina flat, bez lastError. Filip: „hotovo
+  funguje“.
 
 ### 2026-10-29 — LIVE → Graf: napojení dat, jen zobrazení (Claude, nasazeno 29. 10. 11:17 @ 22b6eebf)
 
