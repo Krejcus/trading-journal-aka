@@ -3627,6 +3627,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const manualOrderActionJobs = new Set<Promise<void>>();
   /** Průměrná cena fillů vlastních vstupů (z fill eventů brokera, nikdy TV/IBKR). */
   const ownEntryFillPrices = new Map<string, { quantity: number; avg: number }>();
+  const ownEntryFillIds = new Set<string>();
   const persistManualOrderAction = (
     operationId: string,
     update: (current: CopierManualOrderActionRecord | undefined) => CopierManualOrderActionRecord,
@@ -3895,9 +3896,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             if (live) void resolveManualOrderActionFromStream(live).catch(error => failClosed(errorOf(error), { autoClose: false }));
           };
           settleLate();
-          void write.then(() => persistManualOrderAction(command.operationId, current => (current?.status === 'unknown'
-            ? { ...current, status: 'acknowledged', reason: 'potvrzeno po timeoutu', updatedAt: clock() }
-            : current!)), () => undefined).catch(error => failClosed(errorOf(error), { autoClose: false }));
+          void write.then(() => {
+            // Bez záznamu (vypadl z ořezu) nic nezapisovat.
+            if (!manualOrderActionRecords().some(record => record.operationId === command.operationId && record.status === 'unknown')) return undefined;
+            return persistManualOrderAction(command.operationId, current => (current?.status === 'unknown'
+              ? { ...current, status: 'acknowledged', reason: 'potvrzeno po timeoutu', updatedAt: clock() }
+              : current!));
+          }, () => undefined).catch(error => failClosed(errorOf(error), { autoClose: false }));
           return result;
         }
         return finish('acknowledged');
@@ -15516,7 +15521,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (event.type === 'order' && event.order.accountId === group.leaderAccountId) {
       await resolveManualOrderActionFromStream(event.order);
     }
-    if (event.type === 'fill' && event.fill.accountId === group.leaderAccountId && ownManualEntryOrderIds.has(event.fill.brokerOrderId)) {
+    if (event.type === 'fill' && event.fill.accountId === group.leaderAccountId && ownManualEntryOrderIds.has(event.fill.brokerOrderId)
+      && !ownEntryFillIds.has(event.fill.fillId)) {
+      ownEntryFillIds.add(event.fill.fillId);
       const previous = ownEntryFillPrices.get(event.fill.brokerOrderId) ?? { quantity: 0, avg: 0 };
       const quantity = previous.quantity + event.fill.quantity;
       ownEntryFillPrices.set(event.fill.brokerOrderId, {
