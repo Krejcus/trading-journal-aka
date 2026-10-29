@@ -457,6 +457,29 @@ další záložky LIVE“; „čistě UI, napojení dat v jiné session“.
 - Follow-up (vyžaduje migraci): `relay_polled_at` + aktuální `delivery_id`
   při poll-v2 → přesné rozlišení blokujícího a osiřelého `claimed`.
 
+### 2026-10-29 — Obchodování z grafu: návrh vnitřní vrstvy a fáze 0 (Claude, NENASAZENO)
+
+- Větev `claude/chart-order-entry-20261029` (worktree
+  `~/alphatrade-worktrees/chart-order-entry`). UI lístku ladí Filip podle
+  `mockups/chart-order-entry.html`; tady jen datová vrstva, zápis a pravidla.
+- Návrh `docs/CHART_ORDER_ENTRY_PLAN.md`: příkaz z grafu = OSO na LEADERU
+  přes relay → worker, followerům ho rozkopíruje stávající kopírka; vlastní
+  `manualEntryOutbox` (neblokuje replikaci), durable `operationId`, vazba na
+  ARM session a konfiguraci skupiny, brány denních pravidel a strop qty
+  leadera. `copier-design-critic`: OPRAVIT PŘED IMPLEMENTACÍ → revize 1.
+- Rozhodnutí Filipa: fáze 0 na leaderovi (Limit daleko od trhu, hned
+  zrušit), automatický cancel vlastního neúplného OSO ano, fáze 1 jen ARMED.
+- Fáze 0: `scripts/copier/record-leader-oso.ts` (critic 3 kola → OK
+  s výhradami) spustil Filip 06:27Z: OSO Buy 1 MNQZ6 29050/SL 29000/TP 30300,
+  ACK ~140 ms, zrušení vstupu zrušilo i nohy, leader ověřeně čistý, reconcile
+  čistý, worker bez výpadku. Zjištění: SL noha s `parentId`, TP bez něj
+  (jen `ocoId`), vstup před nohami, všechny entity nesou náš tag
+  v `correlationClOrdId`. Fixture `tests/fixtures/tradovate-leader-oso-api-cancel.json`
+  (anonymizovaný, ověřen bez identifikátorů).
+- Replay `tests/copierLeaderApiOsoReplay.test.ts`: za DISARMED nic, za ARMED
+  jedno nativní OSO followerovi a zrušení vstupu zruší kopii.
+- Další: fáze 1a („would place“ bez zápisu); zbývá záznam Tradeify a fill.
+
 ### 2026-10-29 — Relay se nezasekne na osiřelé delivery (Claude, nasazeno 29. 10. 06:09 @ 8b27d3e7)
 
 - **Nasazení (Filip „nasaď opravu relaye“)**: push 8b27d3e7 na main (tsc čisté,
