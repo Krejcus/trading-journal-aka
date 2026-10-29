@@ -121,6 +121,8 @@ const PreviewSection: React.FC<{
 }> = ({ isDark, muted, field, previewDraft, resetKey, blockedReason, onPreview, onPlace }) => {
   const [state, setState] = useState<{ key: string; receivedAt?: number; result?: LeaderEntryPreviewResult; error?: string; operationId?: string } | null>(null);
   const [placing, setPlacing] = useState(false);
+  /** Dvoukrokové potvrzení v tlačítku (window.confirm prohlížeč umí potichu zablokovat). */
+  const [confirmUntil, setConfirmUntil] = useState(0);
   const placingRef = useRef(false);
   const [placed, setPlaced] = useState<{ key: string; result?: LeaderEntryPlaceResult; error?: string; unknown?: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -161,12 +163,16 @@ const PreviewSection: React.FC<{
   const stale = result ? now - receivedAt > PREVIEW_FRESH_MS : false;
   const canSend = Boolean(onPlace && result?.wouldPlace && result.blockers.length === 0 && !stale && !blockedReason && previewDraft && shown?.operationId);
   const shownPlaced = placed && placed.key === key ? placed : null;
+  const confirming = confirmUntil > now;
   const send = async () => {
     if (!canSend || !previewDraft || !onPlace || placingRef.current || !result?.wouldPlace) return;
-    const leader = result.wouldPlace.leader;
-    const followers = result.wouldPlace.followers.map(follower => `${follower.accountId}: ${follower.quantity} ks`).join(', ');
-    // Jediný risk-zvyšující příkaz z appky — vždy výslovné potvrzení.
-    if (!window.confirm(`Odeslat na leadera ${leader.side === 'Buy' ? 'BUY' : 'SELL'} ${leader.orderType === 'Limit' ? 'LMT' : 'STP'} ${leader.quantity} ${result.symbol} @ ${formatPrice(leader.price)}, SL ${formatPrice(leader.stopLoss)}, TP ${formatPrice(leader.takeProfit)}?\nKopie: ${followers}`)) return;
+    // Jediný risk-zvyšující příkaz z appky — vždy výslovné potvrzení druhým kliknutím do 5 s.
+    if (!confirming) {
+      setConfirmUntil(Date.now() + 5_000);
+      setNow(Date.now());
+      return;
+    }
+    setConfirmUntil(0);
     placingRef.current = true;
     setPlacing(true);
     try {
@@ -226,7 +232,14 @@ const PreviewSection: React.FC<{
       onClick={() => void send()}
       title={canSend ? 'Pošle OSO na leadera; followerům ho rozkopíruje kopírka.' : 'Odeslat jde jen do 15 s po náhledu bez blokací.'}
       className="h-8 rounded-[9px] bg-blue-600 text-[11px] font-extrabold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
-    >{placing ? 'Odesílám…' : `Odeslat ${result.wouldPlace.leader.quantity} kontrakt na leadera`}</button>}
+    >{placing ? 'Odesílám…' : confirming
+      ? `Opravdu odeslat ${result.wouldPlace.leader.side === 'Buy' ? 'BUY' : 'SELL'} ${result.wouldPlace.leader.quantity} @ ${formatPrice(result.wouldPlace.leader.price)}? Klikni znovu`
+      : `Odeslat ${result.wouldPlace.leader.quantity} kontrakt na leadera`}</button>}
+    {onPlace && result?.wouldPlace && !canSend && !shownPlaced && <div className={`text-[10px] ${muted}`}>
+      {stale ? 'Náhled zastaral (víc než 15 s) — zkontroluj znovu, pak hned Odeslat.'
+        : result.blockers.length > 0 ? 'Odeslat nejde: náhled má blokace.'
+          : blockedReason ?? 'Odeslat teď nejde — zkontroluj znovu.'}
+    </div>}
     {shownPlaced?.error && <div className="rounded-[7px] bg-rose-500/10 px-2 py-1.5 text-[10.5px] font-bold text-rose-500">Neodesláno: {shownPlaced.error}</div>}
     {shownPlaced?.unknown && <div className="rounded-[7px] bg-amber-500/10 px-2 py-1.5 text-[10.5px] font-bold text-amber-600">{shownPlaced.unknown}</div>}
     {shownPlaced?.result && (() => {
