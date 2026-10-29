@@ -955,7 +955,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const chartPositionSide = chartData.position?.summary?.side ?? null;
   const ownManualEntry = useMemo(() => {
     const trades = (agentStatus?.controller.manageableLeaderTrades ?? []).filter(trade => (
-      (chartPositionSymbol == null || trade.symbol === chartPositionSymbol)
+      chartPositionSymbol != null && trade.symbol === chartPositionSymbol
       && chartPositionSide === (trade.side === 'Buy' ? 'long' : 'short')
     ));
     return trades.length === 1 ? trades[0] : null;

@@ -1382,7 +1382,17 @@ existující ochranu.
   blokuje automatické pokračování a další změnu téhož vstupu; vyřeší ho jen
   stream (cena dosedla / příkaz skončil) nebo auditovaný waiver.
   `cancel-entry` jen nevyplněný vstup a žádný follower s pozicí; smí i za DISARMED.
-- **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
+- **Fáze 2b — obchody, které kopírka sleduje (29. 10. 2026):** `manage-leader-order`
+  s `leaderEntryOrderId` místo `entryOperationId` (právě jedno). Id vstupu, SL a TP
+  leadera z durable `osoOutbox` + `bracketOutbox` (hledá se v obou), jen bílá listina:
+  všechny položky pro vstup `acknowledged`, shodná id nohou a symbol
+  (`resolveManagedTrade`). `cancel-entry` navíc vyžaduje pokrytí: každý zapojený
+  follower má vazbu na vstup leadera (runnerův predikát nad entry sadou). Čistý tvar
+  platí i pro nohy followerů (bez fillu, qty = |pozice followera|; i pro 2a). Riziko
+  posunu SL od nejhorší ceny vstupu včetně durable `openLots.avgPrice`; Market/Stop
+  vstup bez známého fillu = blocked. `manageableLeaderTrades` ve statusu je jen výběr
+  pro UI. Hlídá test: `tests/manualOrderManageTracked.test.ts`.
+- - **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
   časovač ani fill před nohami ho neflushnou, čeká se nejvýš 5 s, pak
   failClosed + cílené zrušení. Cílené zrušení (`cancelOwnManualEntry`) jen
   id z vlastního záznamu na leaderu, raw broker mimo frontu, jeden pokus

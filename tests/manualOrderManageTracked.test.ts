@@ -107,4 +107,33 @@ describe('fáze 2b: správa obchodu, který kopírka sleduje', () => {
     await ctx.controller.waitForIdle();
     expect(ctx.broker.orders().find(order => order.accountId === FOLLOWER && order.side === 'Buy')?.status).toBe('canceled');
   });
+
+  it.each([
+    ['unknown', 'tracked-unconfirmed', false],
+    ['planned', 'tracked-unconfirmed', false],
+    ['acknowledged', 'tracked-inconsistent', true],
+  ] as const)('bílá listina z uloženého stavu: druhá kopie %s → %s, bez volání brokera', async (secondStatus, code, mismatchLegs) => {
+    const store = createMemoryCopierStore();
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const seedGroup: CopyGroupConfig = { ...group(), followers: [...group().followers, { accountId: 201, mode: 'on-submit', multiplier: 1 }] };
+    const first = await bootstrapCopierRuntime({ broker, store, group: seedGroup, clock: () => START });
+    first.stop();
+    const snapshot = await store.load();
+    const item = (accountId: number, status: string, stop: string) => ({
+      key: `seed-${accountId}`, tag: `t${accountId}`, leaderEntryOrderId: 'seed-e', leaderStopOrderId: stop, leaderTargetOrderId: 'seed-t',
+      leaderEventId: 'seed-event', leaderSequence: 1, status, attempts: 1, updatedAt: START,
+      request: { tag: `t${accountId}`, accountId, symbol: SYMBOL, side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 29_500,
+        first: { side: 'Sell', orderType: 'Stop', stopPrice: 29_480 }, second: { side: 'Sell', orderType: 'Limit', limitPrice: 29_560 } },
+    });
+    await store.commit({ ...snapshot, osoOutbox: [item(FOLLOWER, 'acknowledged', 'seed-s'), item(201, secondStatus, mismatchLegs ? 'other-s' : 'seed-s')] as never }, snapshot.revision);
+    const controller = await bootstrapCopierRuntime({ broker, store, group: seedGroup, clock: () => START + 1_000 });
+    active = controller;
+    const result = await controller.manageLeaderOrder(validateLeaderOrderManage(buildLeaderOrderManageCommand({
+      groupId: group().id, operationId: `manage:seed${secondStatus}x`, leaderAccountId: LEADER, leaderEntryOrderId: 'seed-e', symbol: SYMBOL,
+      action: 'cancel-entry', expect: { price: 29_500, quantity: 1 },
+    })), { deadlineAt: START + 15_000 });
+    expect(result.blockers.map(issue => issue.code)).toContain(code);
+    expect(broker.cancelRequestCount('seed-e')).toBe(0);
+  });
 });
+
