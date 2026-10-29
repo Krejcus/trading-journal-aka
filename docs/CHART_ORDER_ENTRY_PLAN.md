@@ -36,7 +36,14 @@ neposlala followerům vstup bez ochrany (P2).
   zadat `placeOso` (Limit, Stop) přes API a zaznamenat surový WS
   (pořadí, `parentId`, statusy, časy) zvlášť pro Lucid i Tradeify
   připojení. Záznam = fixture pro testy controlleru. Bez něj se nic
-  dalšího nestaví.
+  dalšího nestaví. Nástroj: `scripts/copier/record-leader-oso.ts` (jen MNQ,
+  Limit ≥ 1,5 % od trhu, TP na vzdálené straně, úklid neruší ochranu po
+  fillu, záznam anonymizovaný mimo repo). První běh pokryje jen Lucid
+  leadera a cestu zadání → zrušení; zbývá Tradeify, fill scénáře (nohy po
+  fillu, částečný fill) a surová REST odpověď `placeoso` — fáze 0 se
+  neprohlašuje za úplnou. Prvním krokem kódu je replay test controlleru
+  z fixture (nativní API OSO za DISARMED → žádný zápis followerům, žádný
+  `lastError`/`manualRecovery`, ARM až po reconcile).
 - **Fáze 1a — „would place“.** Celá cesta (lístek → relay → worker →
   brány) bez zápisu k brokerovi; worker vrátí, co by poslal a proč by
   odmítl. Ověří brány, náhled qty a latenci naostro bez rizika.
@@ -132,7 +139,7 @@ payloadHash }`
   `acknowledged` se commitne v serializované lince controlleru dřív, než se
   zpracují eventy téhož OSO.
 - Odpověď s `orderId` bez id obou nohou = `abandoned` + incident + přesně
-  cílený cancel vlastního vstupu (ROZHODNUTÍ FILIPA — viz otázky).
+  cílený cancel vlastního vstupu (schváleno Filipem 29. 10.).
 - Restart v `sending`: nalezeno → adoptovat, nenalezeno → `unknown`.
   Rozuzlení `unknown`/`abandoned` = nový `kind` ve
   `STUCK_OPERATION_KINDS` + `waiveStuckOperation` (auditovaný waiver).
@@ -143,19 +150,21 @@ payloadHash }`
 
 Controller pozná vlastní ruční OSO (tag `me`/id z ACK). Pro něj nikdy
 nepošle followerům samostatný vstup: chybí-li po okně nohy, fail-closed +
-přesný cancel vlastního vstupu leadera (ROZHODNUTÍ FILIPA). Testy podle
+přesný cancel vlastního vstupu leadera (schváleno Filipem 29. 10.). Testy podle
 fixture z fáze 0: nohy před parentem (s `parentId` i bez), fill před
 nohami, TP po > 1500 ms, částečný fill.
 
-## 5. Otázky pro Filipa
+## 5. Rozhodnutí Filipa (29. 10. 2026)
 
-1. **Fáze 0 — kde.** Záznam vyžaduje skutečný (byť testovací) příkaz přes
-   API. Na jakém účtu: samostatný Tradovate sim / demo účet mimo prop
-   firmy, nebo leader s limitem daleko od trhu a okamžitým zrušením?
-2. **Automatický cancel vlastního vstupu** leadera, když broker vrátí
-   neúplné OSO nebo nohy nedorazí (jinak leader zůstane s čekajícím
-   vstupem bez ochrany a skupina ve fail-closed). Ano/ne?
-3. **Jen za ARMED** ve fázi 1 (doporučeno) — souhlas?
+1. **Fáze 0 na leaderovi**: OSO Limit daleko od trhu s okamžitým zrušením
+   (ne samostatný sim účet). Příkaz zadává Filip sám spuštěním nahrávacího
+   skriptu (`scripts/copier/record-leader-oso.ts`); skript běží jen při
+   DISARMED kopírce — leaderův příkaz za DISARMED kopírka nereplikuje, jen
+   zneplatní reconciliation → po záznamu read-only `reconcile` před ARM.
+2. **Automatický cancel vlastního vstupu**: ANO — při neúplném OSO od
+   brokera nebo když nohy nedorazí, worker přesně cíleně zruší vlastní
+   vstup leadera (incident zůstane).
+3. **Fáze 1 jen za ARMED** (ne shadow, vazba na `armedAt`).
 
 ## 6. Dotčená pravidla INV
 
