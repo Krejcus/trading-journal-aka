@@ -285,7 +285,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-29 — LIVE → Graf: napojení dat, jen zobrazení (Claude, NENASAZENO)
+### 2026-10-29 11:17 — NASAZENO: watchdog relaye + napojení dat LIVE → Graf (Claude, Filip „nasaď watchdog relaye i napojení dat LIVE grafu“)
+
+- Obě větve spojeny nad main 03a236d5 (watchdog cherry-pick 22b6eebf na
+  `claude/live-chart-data-20261029`). tsc čisté, celá sada 6001/6002 —
+  jediný pád `tests/tradovatePilotLease.test.ts` pod loadem 13, samostatně
+  3/3 zelený, změny se lease nedotýkají. Build a push čekaly na DISARM
+  (Filip mezitím obchodoval; push pod běžícím LIVE webem jsme nedělali),
+  pak build OK a push 11:17. Vercel READY; cron `send-alerts` na novém
+  nasazení „0 copier alerts“, bez chyb (jen staré varování `url.parse()`).
+  Bez workeru a bez migrace.
+- iPhone appka z ranní instalace ověřena přímo (11:03 screenshot: Deník,
+  „Živě z IBKR“, dnešní obchody).
+
+### 2026-10-29 — LIVE → Graf: napojení dat, jen zobrazení (Claude, nasazeno 29. 10. 11:17 @ 22b6eebf)
 
 - Větev `claude/live-chart-data-20261029` (worktree
   `~/alphatrade-worktrees/live-chart-data`), navazuje na předávku „08:30 —
@@ -397,7 +410,7 @@ další záložky LIVE“; „čistě UI, napojení dat v jiné session“.
   → 6 kontraktů, výběr T3 (štítek na čáře, „jen T3“), přehled skupiny,
   Po účtech, přepnutí na Live Dashboard a zpět. Testovací box smazán.
 
-### 2026-10-29 — Výstraha na zaseknutou relay frontu (Claude, NENASAZENO)
+### 2026-10-29 — Výstraha na zaseknutou relay frontu (Claude, nasazeno 29. 10. 11:17 @ 22b6eebf)
 
 - Větev `claude/relay-stuck-watchdog-20261029` (worktree
   `~/alphatrade-worktrees/relay-stuck-watchdog`), postavená NAD
