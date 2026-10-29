@@ -183,6 +183,13 @@ export function copierArmRejection(reason: unknown): string | null {
     || message === 'command-expired-or-predates-worker-session') {
     return 'Zapnutí nestihlo proběhnout včas — nic se nezapnulo. Obnov stav a potom ARM zopakuj.';
   }
+  if (message === 'command-rejected-relay-delivery-recovered') {
+    return 'Zapnutí bylo odmítnuto při obnově fronty příkazů. Zkontroluj stav kopírky a potom ARM zopakuj.';
+  }
+  if (message === 'command-outcome-unknown-already-started-this-session'
+    || message === 'command-outcome-unknown-worker-session-changed') {
+    return 'Výsledek zapnutí není jistý — příkaz mohl už proběhnout (worker se restartoval nebo se obnovila fronta). Zkontroluj stav kopírky, než ARM zopakuješ.';
+  }
   if (message === 'superseded-by-brake'
     || /ARM odmítnut: během přípravy přišl[ao].*(?:DISARM|kill switch|denní lock|bezpečnostní brzda)/i.test(message)) {
     return 'Zapnutí zrušila novější brzda (DISARM, kill switch nebo denní zámek) — nic se nezapnulo.';

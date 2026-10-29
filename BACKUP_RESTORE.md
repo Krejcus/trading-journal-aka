@@ -373,12 +373,15 @@ s nimi obnova smí:
    ```
    Každý musí být `null` nebo mít `"phase":"polling"`. Pokud některý má
    `executing` nebo `completed`, **NEOBNOVOVAT**: worker spustit (krok 8),
-   počkat na `RELAY ACK` v logu a zopakovat kroky 1–2. Proč: checkpoint
-   s `delivery_id`, které obnovená DB nezná, relay zablokuje —
-   `claim_tradovate_copier_command_v2` přiřadí další příkaz k neznámé
-   delivery a worker ho donekonečna odmítá jako `relay-delivery-command-mismatch`.
-   Prvním takovým příkazem by byl třeba DISARM z telefonu a zůstal by navždy
-   `claimed` (INV-BRAKE-03, INV-UI-02).
+   počkat na `RELAY ACK` v logu a zopakovat kroky 1–2. Proč: výsledek
+   příkazu z takového checkpointu obnovená DB nezná a ztratí se z historie.
+   Relay se na něm od 29. 10. 2026 už nezasekne (osiřelou delivery zaloguje
+   jako `RELAY DELIVERY ORPHANED`, brzdu svázanou s ní provede a ostatní
+   příkazy odmítne `command-rejected-relay-delivery-recovered`), ale čistá
+   obnova je pořád jen s checkpointy `polling`/`null`. Zastavení workeru
+   zůstává povinné: obnova pod běžícím workerem vrací už provedené příkazy
+   do fronty (ve stejné session je worker znovu neprovede — výsledek
+   `command-outcome-unknown-already-started-this-session`).
 3. **Hned po obnově, jako první: zařízení.** Revokace z exportu znovu
    použít. Zařízení s jiným `secret_hash`, `public_key` nebo `scope` než
    v exportu vrátit na exportované hodnoty — jinak se Mac spárovaný po T0

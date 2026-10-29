@@ -279,11 +279,41 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - [ ] **Delta sync — další kroky**: lehčí tvar základu (dnes ~7 MB s kreslením
       a analytikou), `journal-import` do `arn1` po sledování zátěže DB, kontrola
       `pg_stat_statements` po odebrání `trades` z Realtime.
-- [ ] **Relay se zablokuje na checkpointu s neznámým `delivery_id`** —
-      copier-core, zatím jen obejito v runbooku obnovy (zápis 25. 10.
-      „Záloha Supabase“). Oprava v kódu + test → INV + `copier-design-critic`.
+- [ ] **Watchdog na dlouho `claimed` relay příkaz** — heartbeat workeru běží
+      nezávisle na smyčce delivery, takže věčně padající poll/ACK (např. 409
+      při novějším `startedAt`, 400/413) je pro UI neviditelný. Serverová
+      výstraha: příkaz `claimed` > 60 s (brzda > 30 s). Navazuje na opravu
+      osiřelé delivery 29. 10. (copier-core → INV + `copier-design-critic`).
 
 ## Deník
+
+### 2026-10-29 — Relay se nezasekne na osiřelé delivery (Claude, NENASAZENO)
+
+- Větev `claude/relay-unknown-delivery-20261029` (worktree
+  `~/alphatrade-worktrees/relay-delivery`). Oprava otevřené položky z 25. 10.:
+  checkpoint `executing`/`completed`, jehož `delivery_id` DB nezná, už relay
+  nezablokuje (`server/recoverableCopierDelivery.ts`).
+  - DB delivery nezná a fronta je prázdná → `RELAY DELIVERY ORPHANED` v logu,
+    checkpoint zahozen.
+  - DB svázala delivery s jiným příkazem → čerstvý checkpoint jen v paměti;
+    brzda se provede, ostatní `command-rejected-relay-delivery-recovered`.
+  - Řádek s naší delivery zase `pending` → zalogovat, vzít pod novou delivery.
+  - Paměť id zahájených příkazů session (200): ne-brzdu vydanou znovu (vrácení
+    DB, ruční zásah) neprovede → `command-outcome-unknown-already-started-this-session`.
+  - UI texty v `lib/copierArmPreparation.ts`; INV-RELAY-02 a BACKUP_RESTORE.md
+    (zastavení workeru před obnovou dál povinné).
+- Vědomě mimo: ACK trvale 409 při novějším `startedAt` (INV-WORKER-02/03) a
+  viditelnost zaseknuté smyčky v UI → nová otevřená položka „Watchdog na dlouho
+  `claimed` relay příkaz“.
+- `copier-design-critic`: návrh OPRAVIT PŘED IMPLEMENTACÍ (množina zahájených
+  místo osiřelých, pravdivé texty, čerstvý checkpoint, stav `pending`) →
+  zapracováno; diff OPRAVIT PŘED COMMITEM (čerstvý checkpoint se nesmí zapsat
+  samostatně — chyba disku by ne-brzdu provedla; text UI „mohl proběhnout“) →
+  opraveno přesně podle nálezu.
+- Testy: `tests/recoverableCopierDeliveryOrphan.test.ts` (fake fronta se
+  sémantikou claim/complete v2, 18 scénářů vč. chyb disku, restartu a 409);
+  bez opravy 13/14 původních scénářů červených. Nasazení = jen worker (a UI
+  text) → v obchodní den až po „nasaď“.
 
 ### 2026-10-29 05:25 — Nasazena dávka kanál ceny / IB Gateway / HTF historie (Claude)
 

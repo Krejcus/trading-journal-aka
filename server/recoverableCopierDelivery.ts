@@ -7,6 +7,8 @@ import { tradovateSessionEndAt } from '../services/copierArmSession.js';
 type Request = (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
 export const COPIER_COMMAND_ACK_RESERVE_MS = 10_000;
 export const COPIER_RELAY_CLOCK_SKEW_RESERVE_MS = 2_000;
+/** Kolik id příkazů zahájených v této session si relay pamatuje (pojistka proti druhé execution). */
+export const COPIER_RELAY_STARTED_MEMORY = 200;
 /** Serial, durable transport recovery. Only HTTP delivery/ACK is retried;
  * once execution starts a trading or configuration command can NEVER be
  * executed by this relay again. Idempotent brakes (DISARM, kill switch, day
@@ -22,6 +24,24 @@ export function recoverableCopierDelivery(options: {
   const startedAt = now();
   let loaded = false;
   let checkpoint: RelayDelivery | null = null;
+  /** Příkazy, jejichž execution tato session zahájila (zápis `executing`) nebo
+   * jejichž výsledek se ztratil s osiřelou delivery. Ne-brzda z této množiny se
+   * už nikdy neprovede — ani když ji DB (obnovená, ručně upravená) vydá znovu. */
+  const started = new Set<string>();
+  const rememberStarted = (id: string) => {
+    started.delete(id);
+    started.add(id);
+    if (started.size > COPIER_RELAY_STARTED_MEMORY) started.delete(started.values().next().value!);
+  };
+  /** Checkpoint s delivery, kterou DB nezná nebo svázala s jiným příkazem
+   * (obnova DB, ruční zásah). Jeho výsledek už nejde ACKnout — zůstane jen
+   * tady v logu; relay pokračuje dál místo věčné chyby (29. 10. 2026). */
+  const orphan = (current: RelayDelivery, reason: string, boundCommandId?: string) => {
+    if (current.commandId) rememberStarted(current.commandId);
+    console.error(`${new Date().toISOString()} RELAY DELIVERY ORPHANED reason=${reason} deliveryId=${current.deliveryId}`
+      + ` phase=${current.phase} commandId=${current.commandId ?? '-'}${boundCommandId ? ` boundCommandId=${boundCommandId}` : ''}`
+      + ` result=${JSON.stringify(current.result ?? null).slice(0, 300)} error=${(current.error ?? '-').slice(0, 200)}`);
+  };
   const persist = async (next: RelayDelivery | null) => {
     // Update memory first, even if fsync fails after execution. A later attempt
     // must persist this same state before sending any request or doing work.
@@ -40,10 +60,29 @@ export function recoverableCopierDelivery(options: {
     if (response.protocol !== 2) throw new Error('relay-delivery-protocol-unavailable');
     const remote = response.command as { id: string; command: LocalCopierAgentCommand; createdAt: string; expiresAt: string; status: string } | null;
     if (!remote) {
-      if (current.phase !== 'polling') throw new Error('relay-delivery-command-missing');
+      // DB delivery nezná a nic k ní nepřiřadila — checkpoint je osiřelý.
+      if (current.phase !== 'polling') orphan(current, 'unknown-to-server');
       await persist(null); return response;
     }
-    if (current.commandId && current.commandId !== remote.id) throw new Error('relay-delivery-command-mismatch');
+    // Řádek s naší delivery zase `pending` (ruční zásah): mohl už běžet, takže
+    // se zapamatuje jako zahájený a vezme se znovu pod novou delivery.
+    if (remote.status === 'pending') {
+      orphan(current, 'bound-command-pending', remote.id);
+      rememberStarted(remote.id);
+      await persist(null); return response;
+    }
+    // DB svázala naši delivery s jiným příkazem, než nese checkpoint: vazba na
+    // checkpoint se ztratila. Vázaný příkaz se zpracuje jako nový claim zotavení
+    // nad čerstvým checkpointem — nikdy s výsledkem ani session původního.
+    let recovered = false;
+    if (current.commandId && current.commandId !== remote.id) {
+      orphan(current, 'delivery-bound-to-other-command', remote.id);
+      // Čerstvý checkpoint jen v paměti: další zápis (executing / completed) přijde
+      // dřív než jakýkoli request či execution. Kdyby se zapsal sám a pak selhal
+      // zápis výsledku, další krok by neshodu už neviděl a ne-brzdu by provedl.
+      current = { version: 1, session, deliveryId: current.deliveryId, phase: 'polling' };
+      recovered = true;
+    }
     if (remote.status === 'succeeded' || remote.status === 'rejected' || remote.status === 'expired') {
       await persist(null); return response;
     }
@@ -61,6 +100,16 @@ export function recoverableCopierDelivery(options: {
     } else if ((current.session !== session || current.phase === 'executing') && !idempotentBrake) {
       await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
         error: 'command-outcome-unknown-worker-session-changed' });
+    } else if (!idempotentBrake && started.has(remote.id)) {
+      // Tato session už jeho execution zahájila (nebo ztratila výsledek s osiřelou
+      // delivery) — DB ho vydala znovu. Neopakovat; výsledek neznámý.
+      await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
+        error: 'command-outcome-unknown-already-started-this-session' });
+    } else if (!idempotentBrake && recovered) {
+      // Zotavení z anomálie fronty: obchodní a konfigurační příkazy se nespouštějí,
+      // brzdy (jen zpřísňují) ano. Netvrdí „neprovedeno“ — pravdu ukáže status.
+      await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
+        error: 'command-rejected-relay-delivery-recovered' });
     } else if (current.phase === 'polling' || idempotentBrake) {
       const serverNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
       const localMidpoint = pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2);
@@ -90,6 +139,7 @@ export function recoverableCopierDelivery(options: {
           error: 'command-expired-or-predates-worker-session' });
       } else {
         console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} id=${remote.id} queueMs=${Math.max(0, now() - created)}`);
+        rememberStarted(remote.id);
         await persist({ ...current, phase: 'executing', commandId: remote.id });
         const executionStarted = performance.now();
         let result: unknown = null;

@@ -734,6 +734,19 @@ existující ochranu.
   `executing`.
 - Bezpečné změny vs. nebezpečné: Bezpečné je znovu poslat completion ACK.
   Nebezpečné je interpretovat chybějící ACK jako „neprovedeno“.
+- Osiřelá delivery (29. 10. 2026): checkpoint `executing`/`completed`, jehož
+  `delivery_id` DB nezná (obnova DB, ruční zásah), relay nezasekne. Neznámá
+  delivery bez fronty → checkpoint se zaloguje (`RELAY DELIVERY ORPHANED`)
+  a zahodí. DB svázala delivery s jiným příkazem → ten se zpracuje nad
+  čerstvým checkpointem (nikdy s výsledkem/session původního): brzda se
+  provede, ostatní se odmítnou `command-rejected-relay-delivery-recovered`
+  (netvrdí „neprovedeno“). Řádek s naší delivery zase `pending` → zaloguje
+  se a vezme pod novou delivery. Relay si pamatuje id zahájených příkazů této
+  session (`COPIER_RELAY_STARTED_MEMORY`); ne-brzdu z nich DB vydanou znovu
+  neprovede (`command-outcome-unknown-already-started-this-session`). Po
+  restartu stejnou roli hraje `created < startedAt`. Vědomě nepokryto: ACK
+  trvale 409, když DB zná novější `startedAt` (INV-WORKER-02/03). Test:
+  `tests/recoverableCopierDeliveryOrphan.test.ts`.
 
 ### INV-RELAY-03: Novější brzda superseduje starší ARM a durable čekající brzda není selhání
 
