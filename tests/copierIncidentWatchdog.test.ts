@@ -903,3 +903,55 @@ describe('zaseknutá fronta relaye (29. 10. 2026)', () => {
     expect(Object.keys(relay([command({ command_type: 'disarm' })])).sort()).toEqual(['notifications', 'upserts']);
   });
 });
+
+describe('fáze 1b: push o výsledku ručního vstupu', () => {
+  const entry = (patch: Record<string, unknown> = {}) => ({
+    operationId: 'entry:abc', status: 'acknowledged', createdAt: NOW - 5_000, updatedAt: NOW - 4_000,
+    symbol: 'MNQZ6', side: 'Buy', quantity: 1, ...patch,
+  });
+  const withEntries = (entries: unknown[]) => runtime({ status: { armed: true, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null, manualEntries: entries } });
+  const manual = (result: ReturnType<typeof evaluate>) => result.notifications.filter(item => item.incidentKey.startsWith('manual-entry:'));
+
+  it('přijatý, odmítnutý, neznámý i bez ochrany → jedna zpráva s klíčem operace', () => {
+    for (const [status, title] of [['acknowledged', 'přijat'], ['rejected', 'odmítnut'], ['unknown', 'neznámý'], ['abandoned', 'bez ochrany']] as const) {
+      const result = evaluate([withEntries([entry({ status })])]);
+      expect(manual(result)).toEqual([expect.objectContaining({ incidentKey: 'manual-entry:entry:abc', title: expect.stringContaining(title) })]);
+      expect(result.upserts).toContainEqual(expect.objectContaining({ incidentKey: 'manual-entry:entry:abc', detail: status, active: false }));
+    }
+  });
+
+  it('stejný stav se nehlásí podruhé; změna stavu ano; sending a waived nikdy', () => {
+    const seen: CopierAlertStateRow = { ...state('manual-entry:entry:abc', false), detail: 'unknown' } as CopierAlertStateRow;
+    expect(manual(evaluate([withEntries([entry({ status: 'unknown' })])], [seen]))).toEqual([]);
+    expect(manual(evaluate([withEntries([entry({ status: 'acknowledged' })])], [seen]))).toHaveLength(1);
+    expect(manual(evaluate([withEntries([entry({ status: 'sending' }), entry({ operationId: 'entry:w', status: 'waived' })])]))).toEqual([]);
+  });
+
+  it('starý záznam (po nasazení) se nehlásí; offline worker nehlásí nic', () => {
+    expect(manual(evaluate([withEntries([entry({ updatedAt: NOW - 11 * 60_000 })])]))).toEqual([]);
+    expect(manual(evaluate([{ ...withEntries([entry()]), last_seen_at: iso(DEFAULT_STALE_AFTER_MS + 1_000) }]))).toEqual([]);
+  });
+});
+
+describe('fáze 1b: push o zrušení vlastního vstupu', () => {
+  const entry = (patch: Record<string, unknown> = {}) => ({
+    operationId: 'entry:c1', status: 'acknowledged', createdAt: NOW - 5_000, updatedAt: NOW - 4_000,
+    symbol: 'MNQZ6', side: 'Buy', quantity: 1, ...patch,
+  });
+  const run = (entries: unknown[]) => evaluate([runtime({ status: { armed: true, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null, manualEntries: entries } })])
+    .notifications.filter(item => item.incidentKey.startsWith('manual-entry:'));
+
+  it('úspěch je informace, problém je výstraha', () => {
+    expect(run([entry()])[0]).toMatchObject({ kind: 'resolved', title: 'Ruční vstup přijat' });
+    expect(run([entry({ status: 'unknown' })])[0]).toMatchObject({ kind: 'opened' });
+  });
+
+  it('rozběhnuté zrušení se nehlásí; selhání nikdy netvrdí „zrušeno“', () => {
+    expect(run([entry({ cancel: 'sending' })])).toEqual([]);
+    expect(run([entry({ cancel: 'sent' })])[0]).toMatchObject({ title: 'Ruční vstup zrušen' });
+    const failed = run([entry({ cancel: 'failed' })])[0];
+    expect(failed.title).toContain('selhalo');
+    expect(failed.body).toContain('SELHALO');
+    expect(run([entry({ status: 'abandoned', cancel: 'failed' })])[0].body).toContain('SELHALO');
+  });
+});

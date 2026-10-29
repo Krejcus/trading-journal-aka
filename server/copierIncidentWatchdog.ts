@@ -626,6 +626,42 @@ const relayStuckOutcome = (
     : { alarm: false, title: 'Copier: relay fronta průchozí', body: 'Zaseknuté příkazy worker dokončil.' };
 };
 
+const MANUAL_ENTRY_NOTIFY_WINDOW_MS = 10 * 60_000;
+
+/** Výsledky ručních vstupů ze statusu workeru, o kterých má přijít push (čistá funkce). */
+export function manualEntryNotifications(
+  entries: unknown,
+  now: number,
+): Array<{ key: string; detail: string; title: string; body: string; problem: boolean }> {
+  if (!Array.isArray(entries)) return [];
+  const out: Array<{ key: string; detail: string; title: string; body: string; problem: boolean }> = [];
+  for (const raw of entries.slice(-10)) {
+    const entry = (raw ?? {}) as Record<string, unknown>;
+    const operationId = asText(entry.operationId);
+    const status = asText(entry.status);
+    const updatedAt = typeof entry.updatedAt === 'number' ? entry.updatedAt : NaN;
+    if (!operationId || !status || !Number.isFinite(updatedAt) || now - updatedAt > MANUAL_ENTRY_NOTIFY_WINDOW_MS) continue;
+    const what = `${entry.side === 'Sell' ? 'SELL' : 'BUY'} ${typeof entry.quantity === 'number' ? entry.quantity : '?'} ${asText(entry.symbol) ?? ''}`.trim();
+    const reason = asText(entry.reason);
+    // Rozběhnuté zrušení (`sending`) se nehlásí — až jeho výsledek (sent/failed).
+    const cancel = asText(entry.cancel);
+    if (cancel === 'sending') continue;
+    const cancelText = cancel === 'failed'
+      ? ' Zrušení vstupu na leaderovi SELHALO — zkontroluj leadera v Tradovate.'
+      : cancel === 'sent' ? ' Vstup na leaderovi je zrušený.' : '';
+    const message = status === 'acknowledged'
+      ? (cancel ? { title: cancel === 'failed' ? 'Ruční vstup: zrušení selhalo' : 'Ruční vstup zrušen', body: `${what}: followeři vstup nedostali.${cancelText}`, problem: true }
+        : { title: 'Ruční vstup přijat', body: `${what} je u brokera; kopie followerům řídí kopírka.`, problem: false })
+      : status === 'rejected' ? { title: 'Ruční vstup odmítnut', body: `${what}: ${reason ?? 'broker vstup odmítl'}.`, problem: true }
+        : status === 'unknown' ? { title: 'Ruční vstup: výsledek neznámý', body: `${what}: zkontroluj leadera v Tradovate a v LIVE ho vyřeš.${cancelText}`, problem: true }
+          : status === 'abandoned' ? { title: 'Ruční vstup bez ochrany', body: `${what}: broker vrátil vstup bez SL/TP, kopírka je vypnutá.${cancelText || ' Vstup se ruší.'}`, problem: true }
+            : null;
+    if (!message) continue;
+    out.push({ key: `manual-entry:${operationId}`, detail: `${status}${cancel ? `:${cancel}` : ''}`, ...message });
+  }
+  return out;
+}
+
 export function evaluateCopierIncidents(options: {
   runtimes: readonly CopierRuntimeRow[];
   alertStates: readonly CopierAlertStateRow[];
@@ -953,6 +989,17 @@ export function evaluateCopierIncidents(options: {
         });
         upserts.push({ userId, deviceId, incidentKey: AUTO_RESUME_MARKER_KEY, active: false, detail, notified: true });
       }
+    }
+
+    // --- Ruční vstupy z grafu (fáze 1b): jednorázová zpráva o výsledku ---
+    // Klíč na operaci, detail = stav; jen záznamy změněné za posledních
+    // 10 min (žádný replay starých vstupů po nasazení). Jen výstraha (INV-WATCH-01).
+    for (const notification of manualEntryNotifications(status.manualEntries, options.now)) {
+      const state = activeState(userId, deviceId, notification.key);
+      if (state?.detail === notification.detail) continue;
+      // Úspěch je jen informace (bez odznaku a riziková kategorie), problém je `opened`.
+      notifications.push({ userId, deviceId, incidentKey: notification.key, kind: notification.problem ? 'opened' : 'resolved', title: notification.title, body: notification.body });
+      upserts.push({ userId, deviceId, incidentKey: notification.key, active: false, detail: notification.detail, notified: true });
     }
 
     // --- Hrany DISARMED <-> ARMED (jednorázově, bez replaye při bootstrapu)
