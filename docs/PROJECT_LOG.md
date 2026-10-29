@@ -285,7 +285,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-28 23:00 — Dávka: kanál ceny, hlídání IB Gateway, historie vyšších TF (Claude, NENASAZENO)
+### 2026-10-29 05:25 — Nasazena dávka kanál ceny / IB Gateway / HTF historie (Claude)
+
+- Push 95fecd5e na main (tsc čisté, 5887 testů zelených, `vite build`), Vercel
+  `alphatrade-mentor-15` READY. Documents srovnány fast-forwardem; starší
+  rozpracované kopie těchže souborů jsou ve stashi
+  `documents-preview-copies-20261029` (smazat po kontrole), `.claude/launch.json`
+  nedotčen.
+- Worker: reinstall `COPIER_PRICE_SOURCE=ibkr scripts/copier/mac-reinstall-safe.sh`
+  z worktree @ 95fecd5e v DISARMED, flat, bez divergence; read-only reconcile
+  `authoritativelyClean: true`, `reconciliationRequired` False, bez `lastError`.
+  Vlákno ceny: IBKR naběhlo do 40 s (první „IBKR zpět“ v logu = první platné
+  čtení, oznámení se neposílá), dnešní 1m svíčky z IBKR nahrány.
+- Ověřeno na :3000 (stejný commit): štítek „Živě · IBKR“, denní timeframe má
+  hodinovou historii od července a záběr se po příchodu srovná. Pozor: dev
+  server po ff Documents servíroval staré HMR moduly (prázdný graf) — po změně
+  souborů obnovit stránku celou.
+- iPhone: `npm run ios:sync` + `xcodebuild` z Documents, čistá reinstalace
+  přes devicectl, spuštěno. Balíček obsahuje nový hlídač kanálu i štítek
+  zálohy; screenshot z telefonu nešel (pymobiledevice3 „Device is not connected“).
+- Neověřeno: zda launchd agent smí zobrazit macOS oznámení (při prvním výpadku
+  IBKR se podívat; případně Nastavení → Oznámení → Script Editor / osascript).
+
+### 2026-10-28 23:00 — Dávka: kanál ceny, hlídání IB Gateway, historie vyšších TF (Claude, nasazeno 29. 10. 95fecd5e)
 
 - Kanál ceny „visel v connecting“ (73a67bb0, 1c1a4929): supabase-js vrací pro
   stejné téma odcházející kanál a `subscribe()` na něm nic neudělá; po odpojení
