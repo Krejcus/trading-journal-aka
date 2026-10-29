@@ -287,7 +287,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-29 07:00 — LIVE → Graf: živý graf s panelem objednávky, jen UI (Claude, nenasazeno)
+### 2026-10-29 08:30 — NASAZENO: LIVE → Graf, živý graf s panelem objednávky, jen UI (Claude, Filip „nasaď na live“)
 
 Větev `claude/live-chart-ui-20261029` (worktree `~/alphatrade-worktrees/live-chart`).
 Filip: „klik na LIVE otevře rovnou graf ve fullscreenu, nahoře přepnu na
@@ -312,6 +312,12 @@ další záložky LIVE“; „čistě UI, napojení dat v jiné session“.
   zapamatuje (`at:live-chart-crashed`) a další otevření LIVE jde na přehled.
   Obálka je `memo`, sekundový tik desku graf nepřekresluje. Bar Replay
   (tlačítko i panel) je v živém grafu skrytý — v live obchodování nepatří.
+  Příchod na graf = animace „rozvinutí“ s aurorovou září, odchod = „složení“
+  (280 ms, vrstva už nebere kliky) a obsah cílové záložky dojede zespodu;
+  `prefers-reduced-motion` bez animace (`index.css`, `.live-chart-*`).
+- **V produkci (bez napojení):** graf, záložky, skutečný stav kopírky,
+  panel s vypnutým Odeslat; čip skupiny, výběr účtu a Po účtech nejsou
+  (ukázka jen v dev). iPhone beze změny (graf jen desktop).
 - **Panel (varianta A z `mockups/chart-order-entry.html`):** strana s bid/ask
   (orientačně z poslední ceny grafu, ne kotace brokera), Market/Limit/Stop,
   cena, Kontrakty / Riziko $, závorky v bodech/tickách/$/ceně, souhrn
