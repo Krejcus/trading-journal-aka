@@ -5,7 +5,9 @@ export function manualEntryDisplayStuckOperations(
   status: Pick<CopierControllerStatus, 'manualEntries'> | null | undefined,
 ): CopierDisplayStuckOperation[] {
   return (status?.manualEntries ?? [])
-    .filter(entry => entry.status === 'unknown' || entry.status === 'abandoned')
+    // `sending` déle než minutu = neuložený neznámý výsledek (odeslání trvá max. pár sekund).
+    .filter(entry => entry.status === 'unknown' || entry.status === 'abandoned'
+      || (entry.status === 'sending' && Date.now() - entry.updatedAt > 60_000))
     .map(entry => ({
       kind: 'manual-entry' as const,
       key: entry.operationId,

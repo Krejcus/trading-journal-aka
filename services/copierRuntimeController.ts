@@ -3293,6 +3293,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (entryId) ownManualEntryOrderIds.set(entryId, record.operationId);
   }
   const manualEntryCancelRequested = new Set<string>();
+  /** Právě běží `executeManualEntry` — `sending` je pak skutečně rozpracovaný, ne zaseknutý. */
+  let manualEntryExecuting = false;
   /** Rozběhnutá cílená zrušení — blokují obměnu spojení a `waitForIdle`. */
   const manualEntryCancelJobs = new Set<Promise<void>>();
   const manualEntryLegWaitStartedAt = new Map<string, number>();
@@ -15696,6 +15698,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (osoObservation.kind === 'pair') {
       const pair = osoObservation.pair;
+      // Vlastní ruční vstup (P7): když po zpracování páru followeři nemají
+      // žádnou kopii (brzda / zneplatněná generace / blokace), vstup na
+      // leaderovi nesmí zůstat sám. Kontrola až po dokončení této události.
+      const ownPairOperationId = ownManualEntryOrderIds.get(pair.entryOrderId);
+      if (ownPairOperationId) {
+        eventTail = eventTail.then(() => {
+          const copied = [...currentRuntime().osoOutbox.values()]
+            .some(entry => entry.leaderEntryOrderId === pair.entryOrderId);
+          if (!copied) cancelOwnManualEntry(ownPairOperationId, 'followeři vstup nedostali (kopírka vypnutá nebo kopie zablokovaná)');
+        }).catch(reason => failClosed(errorOf(reason), { autoClose: false }));
+      }
       const pendingEntry = pendingOsoEvents.get(pair.entryOrderId);
       const entryAdmissionGeneration = pendingOsoGenerations.get(pair.entryOrderId) ?? admissionGeneration;
       pendingOsoGenerations.delete(pair.entryOrderId);
@@ -17955,7 +17968,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const job = eventTail.then(async () => {
         if (abandonedStart || stopped) return null;
         started = true;
-        return executeManualEntry(command, deadlineAt, () => this.previewLeaderEntry(leaderEntryPlaceAsPreview(command)), queuedFence);
+        manualEntryExecuting = true;
+        try {
+          return await executeManualEntry(command, deadlineAt, () => this.previewLeaderEntry(leaderEntryPlaceAsPreview(command)), queuedFence);
+        } finally {
+          manualEntryExecuting = false;
+        }
       });
       eventTail = job.then(() => undefined).catch(reason => failClosed(errorOf(reason), { autoClose: false }));
       let startTimer: ReturnType<typeof setTimeout> | undefined;
@@ -17979,7 +17997,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const explanation = reason.trim();
       if (explanation.length < 5) throw new Error('Ruční resolution vyžaduje konkrétní důvod');
       const record = manualEntryRecords().find(item => item.operationId === operationId);
-      if (!record || !UNRESOLVED_MANUAL_ENTRY.has(record.status) || record.status === 'sending') {
+      // `sending` bez běžícího odeslání = neuložený neznámý výsledek; smí se vyřešit.
+      if (!record || !UNRESOLVED_MANUAL_ENTRY.has(record.status) || (record.status === 'sending' && manualEntryExecuting)) {
         throw new Error('Ruční vstup už nečeká na vyřešení (mezitím vyřešený nebo neznámý); kopírka zůstává beze změny');
       }
       // Stejně jako waiveStuckOperation: nic se neposílá, kopírka se vypne a vynutí kontrolu pozic.

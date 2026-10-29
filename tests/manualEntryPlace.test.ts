@@ -401,6 +401,37 @@ describe('fáze 1b: oprava po oponentuře diffu (M1–M3)', () => {
     expect((await ctx.store.load()).safety?.manualEntries?.[0]).toMatchObject({ status: 'unknown', lateResult: { entryBrokerOrderId: 'late-e' } });
   });
 
+  it('brzda mezi zpracováním vstupu a nohou: followeři nic → vlastní vstup se zruší', async () => {
+    let brokerRef!: MockBroker;
+    let emitLegs!: () => void;
+    const ctx = await setup({
+      patchBroker: broker => {
+        brokerRef = broker;
+        const real = broker.placeOso!.bind(broker);
+        broker.placeOso = async (request: BrokerOsoRequest) => {
+          if (request.accountId !== LEADER) return real(request);
+          const base = { tag: request.tag, accountId: LEADER, symbol: request.symbol, quantity: 1, filledQuantity: 0, status: 'working' as const, sourceVersion: '1', updatedAt: Date.now() };
+          brokerRef.emitEvent({ type: 'order', order: { ...base, brokerOrderId: 'pp-e', side: request.side, orderType: 'Limit', limitPrice: request.limitPrice } });
+          emitLegs = () => {
+            brokerRef.emitEvent({ type: 'order', order: { ...base, brokerOrderId: 'pp-s', side: 'Sell', orderType: 'Stop', stopPrice: request.first.stopPrice, parentOrderId: 'pp-e', ocoId: 'pp-t' } });
+            brokerRef.emitEvent({ type: 'order', order: { ...base, brokerOrderId: 'pp-t', side: 'Sell', orderType: 'Limit', limitPrice: request.second.limitPrice, parentOrderId: 'pp-e', ocoId: 'pp-s' } });
+          };
+          return { entryBrokerOrderId: 'pp-e', firstBrokerOrderId: 'pp-s', secondBrokerOrderId: 'pp-t', accepted: true, definitive: true };
+        };
+      },
+    });
+    expect((await ctx.place(ctx.command())).status).toBe('acknowledged');
+    await sleep(10); // vstup zpracován za ARMED (čeká v OSO okně), nohy ještě ne
+    ctx.controller.disarm('manual');
+    emitLegs();
+    await sleep(50);
+    ctx.clock.now += 2_000;
+    await sleep(100);
+    await ctx.controller.waitForIdle();
+    expect(followerOso(ctx.broker)).toEqual([]);
+    expect(ctx.broker.cancelRequestCount('pp-e')).toBe(1);
+  });
+
   it('nevyřešený ruční vstup se v LIVE ukáže jako položka k ručnímu vyřešení', async () => {
     const { manualEntryDisplayStuckOperations } = await import('../lib/manualEntryDisplay');
     expect(manualEntryDisplayStuckOperations({ manualEntries: [
