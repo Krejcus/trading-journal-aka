@@ -305,7 +305,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   s vypnutým followerem; Stop vstup se skluzem; pozdní výsledek) → opraveno → OK.
 - Tradeify leader: kód omezení nemá; před prvním vstupem s leaderem na Tradeify
   nahrát fixture (`--non-group-account`, scénáře fill a cancel) a přehrát.
-- Neověřeno: testy fáze 2a čekají na DISARM; naostro nic.
+- Ověřeno za DISARMED (21:53): tsc, cílené 343/343 ×3, celá sada 6120 + 1 todo, build.
+- Neověřeno naostro: posun SL/TP z appky a zrcadlení followerům, zrušení vstupu z appky.
 
 ### 2026-10-29 20:31 — NASAZENO + SPOLEČNÝ TEST: fáze 1b, odeslání vstupu z grafu (Claude + Filip „Nasaď a test“)
 
