@@ -44,6 +44,27 @@ neposlala followerům vstup bez ochrany (P2).
   neprohlašuje za úplnou. Prvním krokem kódu je replay test controlleru
   z fixture (nativní API OSO za DISARMED → žádný zápis followerům, žádný
   `lastError`/`manualRecovery`, ARM až po reconcile).
+- **Fáze 0 — první záznam (29. 10. 2026, Lucid leader, zadání → zrušení,
+  fixture `tests/fixtures/tradovate-leader-oso-api-cancel.json`):**
+  - ACK `placeoso` za ~140 ms s id všech tří příkazů.
+  - Pořadí WS: vstup `order Created` (PendingNew) → SL noha `order Created`
+    **s `parentId`** → vstup `Updated` s `linkedId` = SL → TP noha
+    `order Created` **bez `parentId`**, jen `ocoId` = SL → SL `Updated`
+    s `ocoId` = TP → obě nohy `Suspended` (command `OnHold`) → vstup
+    `Working`. Vstup tedy přišel před nohami; normalizované eventy nohou
+    ~95 ms po vstupu.
+  - Korelátor: SL se spáruje přesně přes `parentOrderId`, TP jen
+    odvozeně oknem (stejný účet/symbol/qty, opačná strana) — při dvou
+    souběžných vstupech by TP byl `ambiguous`. Vlastní OSO jde poznat i bez
+    `parentId`: každá entita nese `correlationClOrdId` = náš tag
+    (`…`, `…s`, `…t`).
+  - Zrušení vstupu: Tradovate sám zruší obě nohy (vlastní Cancel commandy),
+    vše `Canceled` do ~25 ms.
+  - Worker za DISARMED: vstup `blocked reason=disarmed`, nohy `skipped
+    reason=mode-mismatch`, žádný incident ani `lastError`, WS workeru bez
+    výpadku; read-only reconcile hned čistý.
+  - Zbývá: Tradeify připojení, fill (nohy Suspended → Working), částečný
+    fill, surová REST odpověď.
 - **Fáze 1a — „would place“.** Celá cesta (lístek → relay → worker →
   brány) bez zápisu k brokerovi; worker vrátí, co by poslal a proč by
   odmítl. Ověří brány, náhled qty a latenci naostro bez rizika.

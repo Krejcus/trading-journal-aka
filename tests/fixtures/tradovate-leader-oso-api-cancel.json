@@ -1,0 +1,1297 @@
+{
+  "version": 2,
+  "recordedAt": "2026-10-29T06:27:33.871Z",
+  "symbol": "MNQZ6",
+  "side": "Buy",
+  "prices": {
+    "entry": 29050,
+    "stopLoss": 29000,
+    "takeProfit": 30300,
+    "market": 29660
+  },
+  "outcome": {
+    "kind": "clean"
+  },
+  "steps": [
+    {
+      "t": 1313,
+      "step": "placeOso"
+    },
+    {
+      "t": 1455,
+      "step": "placeOso ack",
+      "detail": {
+        "entryBrokerOrderId": "707501071913",
+        "firstBrokerOrderId": "707501071914",
+        "secondBrokerOrderId": "707501071915",
+        "accepted": true,
+        "definitive": true
+      }
+    },
+    {
+      "t": 1693,
+      "step": "tvar po ack",
+      "detail": {
+        "orders": [
+          {
+            "id": "707501071913",
+            "status": "working",
+            "filledQuantity": 0,
+            "side": "Buy"
+          },
+          {
+            "id": "707501071914",
+            "status": "pending",
+            "filledQuantity": 0,
+            "side": "Sell",
+            "parentOrderId": "707501071913"
+          },
+          {
+            "id": "707501071915",
+            "status": "pending",
+            "filledQuantity": 0,
+            "side": "Sell"
+          }
+        ],
+        "netPosition": 0
+      }
+    },
+    {
+      "t": 5898,
+      "step": "stav leadera",
+      "detail": {
+        "orders": [
+          {
+            "id": "707501071913",
+            "status": "working",
+            "filledQuantity": 0,
+            "side": "Buy"
+          },
+          {
+            "id": "707501071914",
+            "status": "pending",
+            "filledQuantity": 0,
+            "side": "Sell",
+            "parentOrderId": "707501071913"
+          },
+          {
+            "id": "707501071915",
+            "status": "pending",
+            "filledQuantity": 0,
+            "side": "Sell"
+          }
+        ],
+        "netPosition": 0
+      }
+    },
+    {
+      "t": 5899,
+      "step": "cancel",
+      "detail": "707501071913"
+    },
+    {
+      "t": 7750,
+      "step": "stav leadera",
+      "detail": {
+        "orders": [
+          {
+            "id": "707501071913",
+            "status": "canceled",
+            "filledQuantity": 0,
+            "side": "Buy"
+          },
+          {
+            "id": "707501071914",
+            "status": "canceled",
+            "filledQuantity": 0,
+            "side": "Sell",
+            "parentOrderId": "707501071913"
+          },
+          {
+            "id": "707501071915",
+            "status": "canceled",
+            "filledQuantity": 0,
+            "side": "Sell"
+          }
+        ],
+        "netPosition": 0
+      }
+    }
+  ],
+  "events": [
+    {
+      "t": 1591,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071913:PendingNew"
+        },
+        "receivedAt": 1793255255328
+      }
+    },
+    {
+      "t": 1591,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071913:PendingNew"
+        },
+        "receivedAt": 1793255255330
+      }
+    },
+    {
+      "t": 1684,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071914",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Stop",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "stopPrice": 29000,
+          "parentOrderId": "707501071913",
+          "ocoId": "707501071915",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071914:Suspended"
+        },
+        "receivedAt": 1793255255330
+      }
+    },
+    {
+      "t": 1685,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071914",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Stop",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "stopPrice": 29000,
+          "parentOrderId": "707501071913",
+          "ocoId": "707501071915",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071914:Suspended"
+        },
+        "receivedAt": 1793255255331
+      }
+    },
+    {
+      "t": 1686,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "linkedOrderId": "707501071914",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071913:PendingNew"
+        },
+        "receivedAt": 1793255255331
+      }
+    },
+    {
+      "t": 1686,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071915",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 30300,
+          "ocoId": "707501071914",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071915:PendingNew"
+        },
+        "receivedAt": 1793255255332
+      }
+    },
+    {
+      "t": 1686,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071915",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 30300,
+          "ocoId": "707501071914",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071915:PendingNew"
+        },
+        "receivedAt": 1793255255332
+      }
+    },
+    {
+      "t": 1686,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071914",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Stop",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "stopPrice": 29000,
+          "parentOrderId": "707501071913",
+          "ocoId": "707501071915",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071914:PendingNew"
+        },
+        "receivedAt": 1793255255332
+      }
+    },
+    {
+      "t": 1686,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "linkedOrderId": "707501071914",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071913:PendingNew"
+        },
+        "receivedAt": 1793255255333
+      }
+    },
+    {
+      "t": 1686,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071914",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Stop",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "stopPrice": 29000,
+          "parentOrderId": "707501071913",
+          "ocoId": "707501071915",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071914:PendingNew"
+        },
+        "receivedAt": 1793255255333
+      }
+    },
+    {
+      "t": 1687,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071914",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Stop",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "stopPrice": 29000,
+          "parentOrderId": "707501071913",
+          "ocoId": "707501071915",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071914:Suspended"
+        },
+        "receivedAt": 1793255255333
+      }
+    },
+    {
+      "t": 1687,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071915",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 30300,
+          "ocoId": "707501071914",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071915:PendingNew"
+        },
+        "receivedAt": 1793255255333
+      }
+    },
+    {
+      "t": 1687,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071915",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 30300,
+          "ocoId": "707501071914",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071915:Suspended"
+        },
+        "receivedAt": 1793255255333
+      }
+    },
+    {
+      "t": 1687,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "linkedOrderId": "707501071914",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071913:PendingNew"
+        },
+        "receivedAt": 1793255255335
+      }
+    },
+    {
+      "t": 1687,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "linkedOrderId": "707501071914",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071913:PendingNew"
+        },
+        "receivedAt": 1793255255336
+      }
+    },
+    {
+      "t": 1687,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "linkedOrderId": "707501071914",
+          "status": "working",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071913:Working"
+        },
+        "receivedAt": 1793255255336
+      }
+    },
+    {
+      "t": 1687,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "linkedOrderId": "707501071914",
+          "status": "working",
+          "updatedAt": 1793255255324,
+          "sourceVersion": "707501071913:Working"
+        },
+        "receivedAt": 1793255255336
+      }
+    },
+    {
+      "t": 6060,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "linkedOrderId": "707501071914",
+          "status": "working",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071913:Working"
+        },
+        "receivedAt": 1793255259931
+      }
+    },
+    {
+      "t": 6060,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "linkedOrderId": "707501071914",
+          "status": "canceled",
+          "updatedAt": 1793255259902,
+          "sourceVersion": "707501071913:Canceled"
+        },
+        "receivedAt": 1793255259931
+      }
+    },
+    {
+      "t": 6060,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071913",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Buy",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 29050,
+          "linkedOrderId": "707501071914",
+          "status": "canceled",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071913:Canceled"
+        },
+        "receivedAt": 1793255259931
+      }
+    },
+    {
+      "t": 6060,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071914",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Stop",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "stopPrice": 29000,
+          "parentOrderId": "707501071913",
+          "ocoId": "707501071915",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071914:Suspended"
+        },
+        "receivedAt": 1793255259931
+      }
+    },
+    {
+      "t": 6060,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071914",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Stop",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "stopPrice": 29000,
+          "parentOrderId": "707501071913",
+          "ocoId": "707501071915",
+          "status": "canceled",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071914:Canceled"
+        },
+        "receivedAt": 1793255259931
+      }
+    },
+    {
+      "t": 6060,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071915",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 30300,
+          "ocoId": "707501071914",
+          "status": "pending",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071915:Suspended"
+        },
+        "receivedAt": 1793255259931
+      }
+    },
+    {
+      "t": 6060,
+      "event": {
+        "type": "order",
+        "order": {
+          "brokerOrderId": "707501071915",
+          "accountId": 1001,
+          "symbol": "MNQZ6",
+          "side": "Sell",
+          "orderType": "Limit",
+          "quantity": 1,
+          "filledQuantity": 0,
+          "limitPrice": 30300,
+          "ocoId": "707501071914",
+          "status": "canceled",
+          "updatedAt": 1793255255318,
+          "sourceVersion": "707501071915:Canceled"
+        },
+        "receivedAt": 1793255259931
+      }
+    }
+  ],
+  "frames": [
+    {
+      "t": 1457,
+      "entityType": "order",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071913,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Buy",
+        "ordStatus": "PendingNew",
+        "archived": false,
+        "external": false,
+        "admin": false
+      }
+    },
+    {
+      "t": 1459,
+      "entityType": "command",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071913,
+        "orderId": 707501071913,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "Pending",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 1459,
+      "entityType": "orderVersion",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071913,
+        "orderId": 707501071913,
+        "orderQty": 1,
+        "orderType": "Limit",
+        "price": 29050
+      }
+    },
+    {
+      "t": 1459,
+      "entityType": "order",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071914,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Sell",
+        "ordStatus": "PendingNew",
+        "parentId": 707501071913,
+        "archived": false,
+        "external": false,
+        "admin": false
+      }
+    },
+    {
+      "t": 1460,
+      "entityType": "command",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071914,
+        "orderId": 707501071914,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "Pending",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 1460,
+      "entityType": "orderVersion",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071914,
+        "orderId": 707501071914,
+        "orderQty": 1,
+        "orderType": "Stop",
+        "stopPrice": 29000
+      }
+    },
+    {
+      "t": 1460,
+      "entityType": "order",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071913,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Buy",
+        "ordStatus": "PendingNew",
+        "linkedId": 707501071914,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 1461,
+      "entityType": "order",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071915,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Sell",
+        "ordStatus": "PendingNew",
+        "ocoId": 707501071914,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 1461,
+      "entityType": "command",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071915,
+        "orderId": 707501071915,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "Pending",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 1461,
+      "entityType": "orderVersion",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071915,
+        "orderId": 707501071915,
+        "orderQty": 1,
+        "orderType": "Limit",
+        "price": 30300
+      }
+    },
+    {
+      "t": 1461,
+      "entityType": "order",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071914,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Sell",
+        "ordStatus": "PendingNew",
+        "ocoId": 707501071915,
+        "parentId": 707501071913,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 1462,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071916,
+        "commandId": 707501071913,
+        "timestamp": "2026-10-29T06:27:35.322Z",
+        "commandStatus": "RiskPassed",
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 1462,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071913,
+        "orderId": 707501071913,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "RiskPassed",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 1462,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071917,
+        "commandId": 707501071914,
+        "timestamp": "2026-10-29T06:27:35.322Z",
+        "commandStatus": "OnHold",
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 1462,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071914,
+        "orderId": 707501071914,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "OnHold",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 1462,
+      "entityType": "order",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071914,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Sell",
+        "ordStatus": "Suspended",
+        "ocoId": 707501071915,
+        "parentId": 707501071913,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 1462,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071918,
+        "commandId": 707501071915,
+        "timestamp": "2026-10-29T06:27:35.322Z",
+        "commandStatus": "OnHold",
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 1462,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071915,
+        "orderId": 707501071915,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "OnHold",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 1462,
+      "entityType": "order",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071915,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Sell",
+        "ordStatus": "Suspended",
+        "ocoId": 707501071914,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 1464,
+      "entityType": "order",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071913,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Buy",
+        "ordStatus": "PendingNew",
+        "executionProviderId": 14,
+        "linkedId": 707501071914,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 1465,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071919,
+        "commandId": 707501071913,
+        "timestamp": "2026-10-29T06:27:35.324Z",
+        "commandStatus": "AtExecution",
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 1465,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071913,
+        "orderId": 707501071913,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "AtExecution",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 1465,
+      "entityType": "order",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071913,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Buy",
+        "ordStatus": "Working",
+        "executionProviderId": 14,
+        "linkedId": 707501071914,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 1465,
+      "entityType": "executionReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071919,
+        "commandId": 707501071913,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.324Z",
+        "orderId": 707501071913,
+        "execType": "New",
+        "ordStatus": "Working",
+        "action": "Buy",
+        "externalClOrdId": "0.2977092114616432",
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 6038,
+      "entityType": "command",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071920,
+        "orderId": 707501071913,
+        "timestamp": "2026-10-29T06:27:39.901Z",
+        "commandType": "Cancel",
+        "commandStatus": "Pending",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071921,
+        "commandId": 707501071920,
+        "timestamp": "2026-10-29T06:27:39.903Z",
+        "commandStatus": "AtExecution",
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071920,
+        "orderId": 707501071913,
+        "timestamp": "2026-10-29T06:27:39.901Z",
+        "commandType": "Cancel",
+        "commandStatus": "AtExecution",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071922,
+        "commandId": 707501071913,
+        "timestamp": "2026-10-29T06:27:39.903Z",
+        "commandStatus": "ExecutionStopped",
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071913,
+        "orderId": 707501071913,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "ExecutionStopped",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "executionReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071921,
+        "commandId": 707501071920,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:39.902Z",
+        "orderId": 707501071913,
+        "execType": "Canceled",
+        "ordStatus": "Canceled",
+        "action": "Buy",
+        "externalClOrdId": "0.2977092114616432",
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "order",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071913,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Buy",
+        "ordStatus": "Canceled",
+        "executionProviderId": 14,
+        "linkedId": 707501071914,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071923,
+        "orderId": 707501071915,
+        "timestamp": "2026-10-29T06:27:39.903Z",
+        "commandType": "Cancel",
+        "commandStatus": "Pending",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071924,
+        "orderId": 707501071914,
+        "timestamp": "2026-10-29T06:27:39.903Z",
+        "commandType": "Cancel",
+        "commandStatus": "Pending",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071924,
+        "orderId": 707501071914,
+        "timestamp": "2026-10-29T06:27:39.903Z",
+        "commandType": "Cancel",
+        "commandStatus": "Pending",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071925,
+        "commandId": 707501071924,
+        "timestamp": "2026-10-29T06:27:39.904Z",
+        "commandStatus": "AtExecution",
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071924,
+        "orderId": 707501071914,
+        "timestamp": "2026-10-29T06:27:39.903Z",
+        "commandType": "Cancel",
+        "commandStatus": "AtExecution",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071926,
+        "commandId": 707501071914,
+        "timestamp": "2026-10-29T06:27:39.904Z",
+        "commandStatus": "ExecutionStopped",
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071914,
+        "orderId": 707501071914,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "ExecutionStopped",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "order",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071914,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Sell",
+        "ordStatus": "Canceled",
+        "ocoId": 707501071915,
+        "parentId": 707501071913,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71s"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071923,
+        "orderId": 707501071915,
+        "timestamp": "2026-10-29T06:27:39.903Z",
+        "commandType": "Cancel",
+        "commandStatus": "Pending",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071927,
+        "commandId": 707501071923,
+        "timestamp": "2026-10-29T06:27:39.904Z",
+        "commandStatus": "AtExecution",
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071923,
+        "orderId": 707501071915,
+        "timestamp": "2026-10-29T06:27:39.903Z",
+        "commandType": "Cancel",
+        "commandStatus": "AtExecution",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "commandReport",
+      "eventType": "Created",
+      "entity": {
+        "id": 707501071928,
+        "commandId": 707501071915,
+        "timestamp": "2026-10-29T06:27:39.904Z",
+        "commandStatus": "ExecutionStopped",
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "command",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071915,
+        "orderId": 707501071915,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "commandType": "New",
+        "commandStatus": "ExecutionStopped",
+        "isAutomated": true,
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    },
+    {
+      "t": 6060,
+      "entityType": "order",
+      "eventType": "Updated",
+      "entity": {
+        "id": 707501071915,
+        "accountId": 1001,
+        "contractId": 4470324,
+        "timestamp": "2026-10-29T06:27:35.318Z",
+        "action": "Sell",
+        "ordStatus": "Canceled",
+        "ocoId": 707501071914,
+        "archived": false,
+        "external": false,
+        "admin": false,
+        "correlationClOrdId": "recc3510d8e47034370bd71t"
+      }
+    }
+  ]
+}
