@@ -498,3 +498,67 @@ jen z IBKR zastaví náhled i odeslání), skript záznamu fillu.
       výstup TP/SL nebo Flatten běžnou cestou;
    e) po každém kroku read-only reconcile čistý.
 
+
+## 10. Fáze 2 — správa otevřeného obchodu z grafu + notifikace (návrh, 29. 10. 2026)
+
+Cíl: z panelu u otevřené pozice / čekajícího vstupu leadera posunout SL nebo
+TP (včetně SL na BE), zrušit čekající vstup (celé OSO) a zavřít pozici ZA
+zapnuté kopírky tak, aby kopírka followerům provedla totéž běžnou cestou
+(posun nohou = stávající zrcadlení modify, zrušení = lifecycle cancel, exit
+= kopie leaderova market exitu — vše ověřeno naostro 29. 10., kroky A–D).
+Funguje pro jakýkoli obchod leadera (z grafu, TradingView i Tradovate UI).
+
+**Protokol:** jeden nový copy-command `manage-leader-order` { groupId,
+operationId (`manage:`), leaderAccountId, symbol, action: `move-stop` |
+`move-target` | `cancel-entry` | `close-position`, expect: { price, quantity }
+(co uživatel viděl), newPrice (jen move-*), payloadHash }. Relay: whitelist,
+validace na enqueue i claim, idempotence `operationId` per uživatel, TTL 15 s,
+nejvýš jeden čekající na zařízení. Brzda čekající `move-*` zneplatní; `cancel-entry`
+a `close-position` jsou risk-redukční a brzda je neruší.
+
+**Worker najde příkaz sám** (UI id příkazů nezná) z živých příkazů a pozice
+leadera na symbolu:
+- `move-stop` / `move-target`: pozice ≠ 0, právě jeden pracující Stop
+  (resp. Limit) na výstupní straně; víc / žádný = blocked `ambiguous`.
+  `expect.price`/`quantity` musí sedět s aktuálním příkazem, jinak blocked
+  `order-changed`. Nová cena na tick; SL musí zůstat na ochranné straně
+  vstupu nebo BE (long: SL ≤ … ověří broker vůči trhu; worker kontroluje
+  jen, že SL < TP u longu a SL > TP u shortu).
+- `cancel-entry`: pozice = 0, právě jeden pracující vstup bez `parentOrderId`
+  (nohy OSO se ruší s ním); jinak blocked.
+- `close-position`: pozice ≠ 0 → `liquidatePosition` leadera (Tradovate zruší
+  i nohy). Kopírka zkopíruje exit; nohy followerů zruší lifecycle.
+
+**Brány:** běží ve frontě controlleru (jako ruční vstup) s fence fronty;
+`move-*` jen ARMED (jinak by followeři neměli stejnou ochranu) a ne kill;
+`close-position` jen ARMED a bez haltu (za DISARMED nabídne UI stávající
+Flatten); `cancel-entry` i za DISARMED (lifecycle cancel followerů funguje
+i vypnutě, ověřeno). Žádný ruční vstup v `sending`, žádná rozpracovaná
+OSO korelace na symbolu.
+
+**Zápis:** durable záznam `safety.manualOrderActions` (sending → acknowledged
+| rejected | unknown | not-sent), jeden pokus, timeout 5 s, žádný retry.
+`unknown` neblokuje ARM ani kopírku: skutečný stav příkazu leadera přijde
+streamem a kopírka ho zrcadlí (odchylka od INV-OUTBOX-02 — záznam slouží jen
+idempotenci a zobrazení); blokuje jen další správu téhož symbolu do 60 s.
+`move-*` přes `dispatchBroker` (fence, halt); `cancel-entry` a `close-position`
+raw (risk-redukční).
+
+**UI (minimální, vzhled ladí Filip):** v lístku u pozice tlačítka „SL na BE“,
+„Zavřít pozici (kopírka zavře kopie)“, pole pro nový SL / TP s odesláním;
+u čekajícího vstupu „Zrušit vstup“. Vše dvoukrokové potvrzení, výsledek jako
+u ručního vstupu.
+
+**Notifikace:** watchdog (`evaluateCopierIncidents`, cron) z
+`status.manualEntries` pošle push při změně stavu ručního vstupu na
+`acknowledged` / `rejected` / `unknown` / `abandoned` (klíč
+`manual-entry:<operationId>`, detail = stav; jen záznamy změněné za
+posledních 10 min — žádný replay po nasazení). Čistě výstraha (INV-WATCH-01).
+
+**Tradeify leader:** kód nemá omezení na Lucid; před prvním vstupem s leaderem
+na Tradeify nahrát fixture (`record-leader-oso.ts --non-group-account`, oba
+scénáře) a přehrát.
+
+**INV:** INV-MANUAL-01 (rozšířit o správu), INV-BRAKE-01/02/03, INV-OUTBOX-01/02,
+INV-RELAY-01/03, INV-FRESH-01, INV-MODE-02 (liquidate potvrzuje stav),
+INV-DIVERGENCE-01, INV-WATCH-01, INV-UI-01..04.
