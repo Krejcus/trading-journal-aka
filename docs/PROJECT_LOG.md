@@ -313,6 +313,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Známé limity: leader jen na Lucid (fixture); bez push notifikace
   o ručním vstupu; kopie odmítnutá followerům za ARMED → vlastní vstup se
   zruší (leader nezůstane sám), incident.
+- Ověřeno za DISARMED (19:31–19:35): tsc, cílené 249/249 ×3, celá sada
+  6101 + 1 todo, build. Kontrolní běhy bez opravy: test souběhu OSO okna padá.
 - Neověřeno: nic naostro. Chybí záznam fillu (spouští Filip) a jeho replay;
   bez něj první skutečné odeslání jen se vzdáleným Limitem (nevyplní se).
 
