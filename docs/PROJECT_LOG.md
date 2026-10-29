@@ -287,7 +287,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-29 — Relay se nezasekne na osiřelé delivery (Claude, NENASAZENO)
+### 2026-10-29 — Relay se nezasekne na osiřelé delivery (Claude, nasazeno 29. 10. 06:09 @ 8b27d3e7)
+
+- **Nasazení (Filip „nasaď opravu relaye“)**: push 8b27d3e7 na main (tsc čisté,
+  celá sada 5905 zelená, relay testy 93/93), Vercel READY; worker reinstall
+  z worktree v DISARMED, flat, bez divergence; read-only reconcile
+  `authoritativelyClean: true`; aktivní checkpoint relaye po restartu
+  `polling`, v logu žádná chyba relaye.
 
 - Větev `claude/relay-unknown-delivery-20261029` (worktree
   `~/alphatrade-worktrees/relay-delivery`). Oprava otevřené položky z 25. 10.:
