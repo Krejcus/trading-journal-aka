@@ -648,3 +648,13 @@ má kopírka v durable `osoOutbox` / `bracketOutbox` (`leaderEntryOrderId`,
   nohou (id + symbol + strana), jen pro výběr v UI; worker vše ověří znovu.
 - **UI:** u pozice v grafu nabídne správu, když na symbolu existuje právě
   jeden spravovatelný obchod (vlastní nebo sledovaný).
+
+**Revize po oponentuře 2b (OPRAVIT PŘED IMPLEMENTACÍ → zapracováno):** bílá listina
+(všechny položky OSO i bracket outboxu pro vstup `acknowledged`, hledá se v obou),
+pokrytí followerů u `cancel-entry` (runnerův predikát nad vazbami vstupu), cena
+vstupu z durable lotu dne (`openLots.avgPrice` + `entryOrderIds`), Market/Stop
+vstup bez fillu = blocked, čistý tvar i u nohou followerů (bez fillu, qty =
+pozice followera). Status `manageableLeaderTrades` jen pro výběr v UI.
+Před prvním naostro: posun u bracketu z TradingView a po 20 s ověřit, že
+TradingView cenu nepřepsal (NEOVĚŘENO).
+

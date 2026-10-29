@@ -285,6 +285,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-29 — Obchodování z grafu, fáze 2b: správa obchodů, které kopírka sleduje (Claude, NENASAZENO)
+
+- Větev `claude/chart-entry-2b-20261029` (navazuje na nasazenou 2a). Stejné akce jako
+  2a i pro obchody z TradingView / Tradovate UI, ale jen ty, které kopírka zkopírovala
+  jako nativní OSO / OCO bracket (id leadera z durable outboxů). Bílá listina, pokrytí
+  followerů, cena z lotu dne, čistý tvar i u followerů (oponentura 2b).
+- Neověřeno: celá sada a oponent na diff; naostro nic. Riziko k testu: TradingView
+  může po posunu z appky vrátit svou cenu nohy.
+
 ### 2026-10-29 — Obchodování z grafu, fáze 2a: správa vlastního vstupu + push notifikace (Claude, nasazeno 22:00 @ 6d7df3c8)
 
 - Větev `claude/chart-entry-2-20261029` (worktree `~/alphatrade-worktrees/chart-entry-2`). Filip: „ano pokračuj s tím komplet“.

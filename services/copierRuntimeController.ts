@@ -195,6 +195,18 @@ export interface CopierStuckOperation {
 }
 
 export interface CopierControllerStatus {
+  /**
+   * Obchody leadera, které teď jde z grafu spravovat (fáze 2a/2b): vlastní
+   * vstup nebo kopírkou sledované OSO/bracket s živými nohami. Jen pro výběr
+   * v UI — worker při změně vše ověří znovu u brokera.
+   */
+  manageableLeaderTrades?: Array<{
+    source: 'own' | 'tracked';
+    entryOperationId?: string;
+    leaderEntryOrderId: string;
+    symbol: string;
+    side: 'Buy' | 'Sell';
+  }>;
   /** Poslední změny ručních vstupů z grafu (fáze 2a) — jen zobrazení. */
   manualOrderActions?: Array<{
     operationId: string;
@@ -3678,6 +3690,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         reasons.push(`Noha followera ${link.accountId} není živá.`);
       }
     }
+    for (const link of links) {
+      // Čistý tvar i u followera (oponentura 2b, past 27. 8.): noha bez fillu, qty = pozice followera.
+      const order = liveOrdersByAccount.get(link.accountId)?.get(link.brokerOrderId);
+      const net = positionsByAccount.get(link.accountId)?.get(symbol);
+      if (order && (order.filledQuantity !== 0 || net == null || Math.abs(net) !== order.quantity)) {
+        reasons.push(`Noha followera ${link.accountId} nemá čistý tvar (částečné vyplnění nebo jiný počet).`);
+      }
+    }
     const linkedIds = new Set(links.map(link => link.brokerOrderId));
     if ([...currentRuntime().cancelOutbox.values()].some(entry => (
       linkedIds.has(entry.brokerOrderId) && (entry.status === 'planned' || entry.status === 'sending' || entry.status === 'unknown')
@@ -3716,6 +3736,44 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }));
   };
   /**
+   * Id spravovaného obchodu: vlastní ruční vstup (2a, durable záznam) nebo
+   * obchod leadera, který kopírka zkopírovala jako OSO / bracket (2b, durable
+   * outboxy). U 2b jen bílá listina: všechny položky obou outboxů pro vstup
+   * `acknowledged` a shodné id nohou (oponentura 2b).
+   */
+  const resolveManagedTrade = (command: LeaderOrderManageCommand):
+    | { key: string; entryId: string; stopId: string; targetId: string; symbol: string; intentPrice: number | null }
+    | { code: string; text: string } => {
+    if (command.entryOperationId) {
+      const entry = manualEntryRecords().find(record => record.operationId === command.entryOperationId);
+      if (!entry || entry.status !== 'acknowledged' || !entry.entryBrokerOrderId || !entry.stopBrokerOrderId || !entry.targetBrokerOrderId
+        || entry.request.accountId !== group.leaderAccountId) {
+        return { code: 'not-own-entry', text: 'Spravovat jde jen vlastní přijatý ruční vstup z grafu.' };
+      }
+      return { key: entry.operationId, entryId: entry.entryBrokerOrderId, stopId: entry.stopBrokerOrderId, targetId: entry.targetBrokerOrderId,
+        symbol: entry.request.symbol, intentPrice: entry.request.price };
+    }
+    const leaderEntryId = command.leaderEntryOrderId!;
+    const runtimeNow = currentRuntime();
+    const items = [
+      ...[...runtimeNow.osoOutbox.values()].filter(item => item.leaderEntryOrderId === leaderEntryId)
+        .map(item => ({ status: item.status, stop: item.leaderStopOrderId, target: item.leaderTargetOrderId, symbol: item.request.symbol,
+          price: item.request.limitPrice ?? item.request.stopPrice ?? null })),
+      ...[...runtimeNow.bracketOutbox.values()].filter(item => item.leaderEntryOrderId === leaderEntryId)
+        .map(item => ({ status: item.status, stop: item.leaderStopOrderId, target: item.leaderTargetOrderId, symbol: item.request.symbol, price: null as number | null })),
+    ];
+    if (items.length === 0) return { code: 'not-tracked', text: 'Tento obchod kopírka nesleduje jako OSO / bracket — spravovat ho z appky nejde.' };
+    if (items.some(item => item.status !== 'acknowledged')) {
+      return { code: 'tracked-unconfirmed', text: 'Kopie obchodu u některého followera není potvrzená — spravovat z appky teď nejde.' };
+    }
+    const [first] = items;
+    if (items.some(item => item.stop !== first.stop || item.target !== first.target || item.symbol !== first.symbol) || !first.stop || !first.target) {
+      return { code: 'tracked-inconsistent', text: 'Záznamy kopií obchodu se neshodují — spravovat z appky nejde.' };
+    }
+    const intent = items.find(item => item.price != null)?.price ?? null;
+    return { key: `leader:${leaderEntryId}`, entryId: leaderEntryId, stopId: first.stop, targetId: first.target, symbol: first.symbol, intentPrice: intent };
+  };
+  /**
    * Ve frontě controlleru: autoritativní čtení příkazů leadera, čistý tvar,
    * brány, durable `sending`. Vrátí zápis, který proběhne MIMO frontu (P7).
    */
@@ -3733,15 +3791,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (clock() + MANUAL_ENTRY_DEADLINE_RESERVE_MS >= deadlineAt) return manageBlocked(command, 'expired', 'Platnost příkazu vypršela — nic se neodeslalo.');
     if (manualEntryQueueFence() !== queuedFence) return manageBlocked(command, 'state-changed', 'Mezitím přišla změna spojení nebo účtů — zkus to znovu.');
-    const entry = manualEntryRecords().find(record => record.operationId === command.entryOperationId);
-    if (!entry || entry.status !== 'acknowledged' || !entry.entryBrokerOrderId || !entry.stopBrokerOrderId || !entry.targetBrokerOrderId) {
-      return manageBlocked(command, 'not-own-entry', 'Spravovat jde jen vlastní přijatý ruční vstup z grafu.');
+    const managed = resolveManagedTrade(command);
+    if ('code' in managed) return manageBlocked(command, managed.code, managed.text);
+    if (group.leaderAccountId == null || command.leaderAccountId !== group.leaderAccountId
+      || group.id !== command.groupId || managed.symbol !== command.symbol) {
+      return manageBlocked(command, 'not-leader', 'Obchod nepatří leaderovi této skupiny.');
     }
-    if (group.leaderAccountId == null || entry.request.accountId !== group.leaderAccountId || command.leaderAccountId !== group.leaderAccountId
-      || group.id !== command.groupId || entry.request.symbol !== command.symbol) {
-      return manageBlocked(command, 'not-leader', 'Vstup nepatří leaderovi této skupiny.');
-    }
-    if (unresolvedManualOrderAction(entry.operationId)) return manageBlocked(command, 'manage-unresolved', 'Předchozí změna tohoto vstupu má neznámý výsledek.');
+    if (unresolvedManualOrderAction(managed.key)) return manageBlocked(command, 'manage-unresolved', 'Předchozí změna tohoto obchodu má neznámý výsledek.');
     if (unresolvedManualEntry()) return manageBlocked(command, 'manual-entry-unresolved', 'Ruční vstup má neznámý výsledek — nejdřív ho vyřeš.');
     const leader = group.leaderAccountId;
     if ((pendingTradeIngressByAccount.get(leader) ?? 0) > 0) return manageBlocked(command, 'busy', 'Kopírka ještě zpracovává události leadera — zkus to znovu.');
@@ -3753,28 +3809,34 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (manualEntryQueueFence() !== queuedFence) return manageBlocked(command, 'state-changed', 'Během čtení přišla změna — zkus to znovu.');
     const byId = new Map(orders.map(order => [order.brokerOrderId, order]));
-    const entryOrder = byId.get(entry.entryBrokerOrderId);
-    const stopOrder = byId.get(entry.stopBrokerOrderId);
-    const targetOrder = byId.get(entry.targetBrokerOrderId);
-    const long = entry.request.side === 'Buy';
-    const symbol = entry.request.symbol;
+    const entryOrder = byId.get(managed.entryId);
+    const stopOrder = byId.get(managed.stopId);
+    const targetOrder = byId.get(managed.targetId);
+    if (!entryOrder) return manageBlocked(command, 'shape', 'Vstup leadera v aktuální session u brokera není.');
+    const long = entryOrder.side === 'Buy';
+    const symbol = managed.symbol;
+    const currentEntryPrice = entryOrder.limitPrice ?? entryOrder.stopPrice ?? null;
     if (command.action === 'cancel-entry') {
       if (!entryOrder || !isOpenOrderStatus(entryOrder.status) || entryOrder.filledQuantity !== 0) {
         return manageBlocked(command, 'entry-not-pending', 'Vstup už nečeká (vyplněný nebo ukončený) — zrušit jde jen čekající vstup.');
       }
       const followerWithPosition = group.followers.find(follower => (positionsByAccount.get(follower.accountId)?.get(symbol) ?? 0) !== 0);
       if (followerWithPosition) return manageBlocked(command, 'follower-has-position', `Follower ${followerWithPosition.accountId} už má na symbolu pozici — vstup zruš v Tradovate a pozice zkontroluj.`);
-      if (command.expect.price !== entry.request.price || command.expect.quantity !== entryOrder.quantity) {
+      // Pokrytí (oponentura 2b): každý zapojený follower má na vstup leadera vazbu,
+      // jinak by se jeho kopie vstupu nezrušila.
+      const uncovered = runnerUnmappedReplaceAccounts(managed.entryId, currentRuntime().state, group, currentEntryIneligibleAccounts()).missingAccounts;
+      if (uncovered.length > 0) return manageBlocked(command, 'coverage', `Followeři ${uncovered.join(', ')} nemají kopii vstupu navázanou — zruš v Tradovate.`);
+      if (currentEntryPrice == null || command.expect.price !== currentEntryPrice || command.expect.quantity !== entryOrder.quantity) {
         return manageBlocked(command, 'order-changed', 'Vstup se od zobrazení změnil — obnov panel.');
       }
     } else {
       const target = command.action === 'move-stop' ? stopOrder : targetOrder;
       const other = command.action === 'move-stop' ? targetOrder : stopOrder;
       const net = positionsByAccount.get(leader)?.get(symbol) ?? null;
-      const quantity = entryOrder?.quantity ?? 0;
+      const quantity = entryOrder.quantity;
       // Čistý tvar (P1): vstup plně vyplněný, obě nohy pracují bez fillu se
       // stejným qty jako pozice, žádný jiný pracující příkaz na symbolu.
-      if (!entryOrder || entryOrder.status !== 'filled' || entryOrder.filledQuantity !== quantity
+      if (entryOrder.status !== 'filled' || entryOrder.filledQuantity !== quantity
         || !target || !other || target.status !== 'working' || other.status !== 'working'
         || target.filledQuantity !== 0 || other.filledQuantity !== 0
         || target.quantity !== quantity || other.quantity !== quantity
@@ -3805,11 +3867,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ];
         // Nejhorší z: cena záměru, aktuální cena vstupu u brokera, průměr fillů
         // z brokera. Stop vstup bez známého fillu = neověřené (skluz).
-        const fillAvg = ownEntryFillPrices.get(entry.entryBrokerOrderId)?.avg ?? null;
-        if (entryOrder.orderType === 'Stop' && fillAvg == null) {
-          return manageBlocked(command, 'risk-unverified', 'Cena vyplnění stop vstupu není známá — posun SL teď nejde.');
+        // Průměr fillů: durable lot dne (filly od brokera, přežije restart), jinak paměť.
+        const lot = (currentDailyStats(clock()).openLots ?? []).find(item => item.symbol === symbol && (item.entryOrderIds ?? []).includes(managed.entryId));
+        const fillAvg = lot?.avgPrice ?? ownEntryFillPrices.get(managed.entryId)?.avg ?? null;
+        if (entryOrder.orderType !== 'Limit' && fillAvg == null) {
+          return manageBlocked(command, 'risk-unverified', 'Cena vyplnění vstupu (Market/Stop) není známá — posun SL teď nejde.');
         }
-        const entryCandidates = [entry.request.price, entryOrder.limitPrice, entryOrder.stopPrice, fillAvg]
+        const entryCandidates = [managed.intentPrice, entryOrder.limitPrice, entryOrder.stopPrice, fillAvg]
           .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
         const riskEntry = entryCandidates.reduce((worst, value) => (Math.abs(value - next) > Math.abs(worst - next) ? value : worst), entryCandidates[0]);
         for (const account of accountsToCheck) {
@@ -3833,15 +3897,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const reach = manageReachBlockers(target.brokerOrderId, symbol, quantity);
       if (reach.length > 0) return manageResult(command, 'blocked', { blockers: reach.map(text => ({ code: 'reach', text })) });
     }
-    const targetOrderId = command.action === 'cancel-entry' ? entry.entryBrokerOrderId
-      : command.action === 'move-stop' ? entry.stopBrokerOrderId : entry.targetBrokerOrderId;
+    const targetOrderId = command.action === 'cancel-entry' ? managed.entryId
+      : command.action === 'move-stop' ? managed.stopId : managed.targetId;
     const targetLive = byId.get(targetOrderId)!;
     const createdAt = clock();
-    const fromPrice = command.action === 'cancel-entry' ? entry.request.price
+    const fromPrice = command.action === 'cancel-entry' ? currentEntryPrice
       : command.action === 'move-stop' ? (targetLive.stopPrice ?? null) : (targetLive.limitPrice ?? null);
     // INV-OUTBOX-01: záznam je durable dřív, než cokoli odejde k brokerovi.
     await persistManualOrderAction(command.operationId, () => ({
-      operationId: command.operationId, payloadHash: command.payloadHash, entryOperationId: entry.operationId,
+      operationId: command.operationId, payloadHash: command.payloadHash, entryOperationId: managed.key,
       action: command.action, status: 'sending', targetBrokerOrderId: targetOrderId, fromPrice,
       toPrice: command.newPrice ?? null, quantity: targetLive.quantity, createdAt, updatedAt: createdAt,
     }));
@@ -19395,6 +19459,28 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ? 0
         : sessionArmedAt;
       return {
+        manageableLeaderTrades: (() => {
+          if (group.leaderAccountId == null) return [];
+          const leaderOrders = liveOrdersByAccount.get(group.leaderAccountId);
+          const live = (id: string) => leaderOrders?.get(id)?.status === 'working';
+          const out: NonNullable<CopierControllerStatus['manageableLeaderTrades']> = [];
+          const seen = new Set<string>();
+          for (const record of manualEntryRecords()) {
+            if (record.status !== 'acknowledged' || !record.entryBrokerOrderId || !record.stopBrokerOrderId || !record.targetBrokerOrderId) continue;
+            if (!(live(record.stopBrokerOrderId) || live(record.targetBrokerOrderId) || leaderOrders?.has(record.entryBrokerOrderId))) continue;
+            seen.add(record.entryBrokerOrderId);
+            out.push({ source: 'own', entryOperationId: record.operationId, leaderEntryOrderId: record.entryBrokerOrderId, symbol: record.request.symbol, side: record.request.side });
+          }
+          for (const item of [...current.osoOutbox.values(), ...current.bracketOutbox.values()]) {
+            if (seen.has(item.leaderEntryOrderId) || item.status !== 'acknowledged') continue;
+            if (!(live(item.leaderStopOrderId) || live(item.leaderTargetOrderId) || leaderOrders?.has(item.leaderEntryOrderId))) continue;
+            seen.add(item.leaderEntryOrderId);
+            // OCO bracket nemá stranu vstupu — je opačná ke straně nohou.
+            const side: 'Buy' | 'Sell' = 'side' in item.request ? (item.request as BrokerOsoRequest).side : (item.request.first.side === 'Buy' ? 'Sell' : 'Buy');
+            out.push({ source: 'tracked', leaderEntryOrderId: item.leaderEntryOrderId, symbol: item.request.symbol, side });
+          }
+          return out.slice(-10);
+        })(),
         manualOrderActions: manualOrderActionRecords().slice(-10).map(record => ({
           operationId: record.operationId, entryOperationId: record.entryOperationId, action: record.action,
           status: record.status, createdAt: record.createdAt, updatedAt: record.updatedAt,

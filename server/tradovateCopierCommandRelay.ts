@@ -729,7 +729,7 @@ export async function enqueueTradovateCopierCommand(options: {
       return { id: existing.id, status: existing.status, expiresAt: existing.expiresAt, deviceId: device.id };
     }
     const manageEntry = manageEntryOperationId(options.command);
-    if (manageEntry) await assertManageAdmissible({ db: options.db, userId: options.userId, entryOperationId: manageEntry, now });
+    if (manageEntry) await assertManageAdmissible({ db: options.db, userId: options.userId, trade: manageEntry, now });
     else await assertEntryAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, now });
   }
 
@@ -1040,21 +1040,25 @@ const leaderEntryPlaceOperationId = (command: LocalCopierAgentCommand): string |
   return (inner?.type === 'place-leader-entry' || inner?.type === 'manage-leader-order') && typeof inner.operationId === 'string'
     ? inner.operationId : null;
 };
-const manageEntryOperationId = (command: LocalCopierAgentCommand): string | null => {
-  const inner = (command as { command?: { type?: unknown; entryOperationId?: unknown } }).command;
-  return inner?.type === 'manage-leader-order' && typeof inner.entryOperationId === 'string' ? inner.entryOperationId : null;
+/** Spravovaný obchod: vlastní vstup (`entryOperationId`) nebo sledovaný obchod (`leaderEntryOrderId`). */
+const manageEntryOperationId = (command: LocalCopierAgentCommand): Record<string, string> | null => {
+  const inner = (command as { command?: { type?: unknown; entryOperationId?: unknown; leaderEntryOrderId?: unknown } }).command;
+  if (inner?.type !== 'manage-leader-order') return null;
+  if (typeof inner.entryOperationId === 'string') return { entryOperationId: inner.entryOperationId };
+  if (typeof inner.leaderEntryOrderId === 'string') return { leaderEntryOrderId: inner.leaderEntryOrderId };
+  return null;
 };
 
 /** Správa vstupu: jeden rozpracovaný na uživatele a vstup, 2 s rozestup, denní strop. */
 async function assertManageAdmissible(options: {
-  db: SupabaseClient; userId: string; entryOperationId: string; now: number;
+  db: SupabaseClient; userId: string; trade: Record<string, string>; now: number;
 }): Promise<void> {
   const nowIso = new Date(options.now).toISOString();
   const { data: busy, error: busyError } = await options.db.from('tradovate_copier_commands')
     .select('id')
     .eq('user_id', options.userId)
     .eq('command_type', 'copy-command')
-    .contains('payload', { command: { type: 'manage-leader-order', entryOperationId: options.entryOperationId } })
+    .contains('payload', { command: { type: 'manage-leader-order', ...options.trade } })
     .or(`created_at.gt.${new Date(options.now - MANAGE_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
     .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
     .limit(1)

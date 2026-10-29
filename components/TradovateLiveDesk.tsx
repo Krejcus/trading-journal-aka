@@ -878,33 +878,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     return result;
   }, []);
-  // Fáze 2a: správa vlastního ručního vstupu (poslední přijatý). Jen přes
-  // relay; ceny „co jsem viděl“ jsou ze živé pozice, worker je ověří u brokera.
-  const ownManualEntry = useMemo(() => {
-    const entries = agentStatus?.controller.manualEntries ?? [];
-    return [...entries].reverse().find(entry => entry.status === 'acknowledged') ?? null;
-  }, [agentStatus?.controller.manualEntries]);
-  const ownManualEntryRef = useRef(ownManualEntry);
-  ownManualEntryRef.current = ownManualEntry;
-  const manageLeaderEntry = useCallback(async (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number): Promise<LeaderOrderManageResult> => {
-    const current = armStatusRef.current;
-    const executionGroup = copierWorkerExecutionGroup(current.status);
-    const entry = ownManualEntryRef.current;
-    if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !entry) {
-      throw new Error('Stav kopírky není čerstvě ověřený nebo chybí vlastní vstup — nic se neodeslalo.');
-    }
-    const route = previewRouteRef.current;
-    if (!route.relayConnectionId) throw new Error('Změna jde jen přes relay — chybí připojení k workeru.');
-    const command = buildLeaderOrderManageCommand({
-      groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
-      leaderAccountId: executionGroup.leaderAccountId, entryOperationId: entry.operationId, symbol: entry.symbol,
-      action, expect: { price: expectPrice, quantity: entry.quantity }, ...(newPrice != null ? { newPrice } : {}),
-    });
-    const response = await executeTradovateCopierRelayCommand(route.relayConnectionId, { type: 'copy-command', command });
-    const result = (response as { result?: unknown }).result as LeaderOrderManageResult | undefined;
-    if (!result || result.type !== 'leader-order-managed') throw new Error('Výsledek změny chybí — zkontroluj leadera v Tradovate.');
-    return result;
-  }, []);
   const executeSafetyCommand = useCallback(async (command:
     | { type: 'disarm' }
     | { type: 'kill-switch' }
@@ -975,6 +948,43 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     target: chartTarget,
     now: freshnessNow,
   });
+  // Fáze 2a: správa vlastního ručního vstupu (poslední přijatý). Jen přes
+  // relay; ceny „co jsem viděl“ jsou ze živé pozice, worker je ověří u brokera.
+  // Fáze 2a/2b: spravovatelný obchod = právě jeden na symbolu a straně pozice v grafu.
+  const chartPositionSymbol = chartData.position?.symbol ?? null;
+  const chartPositionSide = chartData.position?.summary?.side ?? null;
+  const ownManualEntry = useMemo(() => {
+    const trades = (agentStatus?.controller.manageableLeaderTrades ?? []).filter(trade => (
+      (chartPositionSymbol == null || trade.symbol === chartPositionSymbol)
+      && chartPositionSide === (trade.side === 'Buy' ? 'long' : 'short')
+    ));
+    return trades.length === 1 ? trades[0] : null;
+  }, [agentStatus?.controller.manageableLeaderTrades, chartPositionSymbol, chartPositionSide]);
+  const ownManualEntryRef = useRef(ownManualEntry);
+  ownManualEntryRef.current = ownManualEntry;
+  const manageLeaderEntry = useCallback(async (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number): Promise<LeaderOrderManageResult> => {
+    const current = armStatusRef.current;
+    const executionGroup = copierWorkerExecutionGroup(current.status);
+    const entry = ownManualEntryRef.current;
+    const quantity = chartData.position?.summary?.quantity ?? null;
+    if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !entry || quantity == null) {
+      throw new Error('Stav kopírky není čerstvě ověřený nebo chybí spravovatelný obchod — nic se neodeslalo.');
+    }
+    const route = previewRouteRef.current;
+    if (!route.relayConnectionId) throw new Error('Změna jde jen přes relay — chybí připojení k workeru.');
+    const command = buildLeaderOrderManageCommand({
+      groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
+      leaderAccountId: executionGroup.leaderAccountId,
+      ...(entry.source === 'own' && entry.entryOperationId ? { entryOperationId: entry.entryOperationId } : { leaderEntryOrderId: entry.leaderEntryOrderId }),
+      symbol: entry.symbol,
+      action, expect: { price: expectPrice, quantity }, ...(newPrice != null ? { newPrice } : {}),
+    });
+    const response = await executeTradovateCopierRelayCommand(route.relayConnectionId, { type: 'copy-command', command });
+    const result = (response as { result?: unknown }).result as LeaderOrderManageResult | undefined;
+    if (!result || result.type !== 'leader-order-managed') throw new Error('Výsledek změny chybí — zkontroluj leadera v Tradovate.');
+    return result;
+  }, [chartData.position?.summary?.quantity]);
+
   // Vypnutí z grafu: stejná safety cesta jako přehled (INV-UI-02). Stabilní
   // funkce přes ref — graf nesmí držet starou trasu ani starý fence.
   const safetyCommandRef = useRef(executeSafetyCommand);
@@ -1556,9 +1566,7 @@ acceptAgentStatus((await executeAgent({
           onTargetChange={setChartTarget}
           onPreviewEntry={previewLeaderEntry}
           {...(supportsCopierManualEntry(agentStatus) ? { onPlaceEntry: placeLeaderEntry } : {})}
-          {...(supportsCopierManualOrderManage(agentStatus) && ownManualEntry
-            && chartData.position?.summary?.side === (ownManualEntry.side === 'Buy' ? 'long' : 'short')
-            ? { onManageEntry: manageLeaderEntry } : {})}
+          {...(supportsCopierManualOrderManage(agentStatus) && ownManualEntry ? { onManageEntry: manageLeaderEntry } : {})}
         />
       ) : null}
       {chartSafetyNotice && <div role="status" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${chartSafetyNotice.tone === 'error' ? 'border-rose-500/50 bg-rose-500/10 text-rose-500' : 'border-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>

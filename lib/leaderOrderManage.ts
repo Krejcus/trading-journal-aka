@@ -15,8 +15,10 @@ export interface LeaderOrderManageCommand {
   groupId: string;
   operationId: string;
   leaderAccountId: number;
-  /** Vlastní ruční vstup (`entry:…`), jehož příkaz se spravuje. */
-  entryOperationId: string;
+  /** Vlastní ruční vstup (`entry:…`, fáze 2a) — nebo… */
+  entryOperationId?: string;
+  /** …vstup leadera, který kopírka sleduje jako OSO / bracket (fáze 2b). Právě jedno z obou. */
+  leaderEntryOrderId?: string;
   symbol: string;
   action: LeaderOrderManageAction;
   /** Co uživatel viděl: cena dotčeného příkazu (u cancel-entry cena vstupu) a počet kontraktů. */
@@ -43,7 +45,8 @@ const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
 const OPERATION_ID_PATTERN = /^manage:[a-zA-Z0-9_-]{8,100}$/;
 const ENTRY_OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
 const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry'];
-const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'symbol', 'action', 'expect', 'newPrice', 'payloadHash'];
+const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'payloadHash'];
+const LEADER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 1e-9;
 const price = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
 
@@ -70,7 +73,11 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
   if (typeof command.groupId !== 'string' || command.groupId.trim() === '' || command.groupId.length > 200) fail();
   if (typeof command.operationId !== 'string' || !OPERATION_ID_PATTERN.test(command.operationId)) fail();
   if (typeof command.leaderAccountId !== 'number' || !Number.isSafeInteger(command.leaderAccountId) || command.leaderAccountId <= 0) fail();
-  if (typeof command.entryOperationId !== 'string' || !ENTRY_OPERATION_ID_PATTERN.test(command.entryOperationId)) fail();
+  const own = command.entryOperationId !== undefined;
+  const tracked = command.leaderEntryOrderId !== undefined;
+  if (own === tracked) fail();
+  if (own && (typeof command.entryOperationId !== 'string' || !ENTRY_OPERATION_ID_PATTERN.test(command.entryOperationId))) fail();
+  if (tracked && (typeof command.leaderEntryOrderId !== 'string' || !LEADER_ORDER_ID_PATTERN.test(command.leaderEntryOrderId))) fail();
   if (typeof command.symbol !== 'string' || !SYMBOL_PATTERN.test(command.symbol)) fail();
   if (!ACTIONS.includes(command.action as LeaderOrderManageAction)) fail();
   const expect = command.expect as Record<string, unknown> | null;
@@ -93,4 +100,9 @@ export function buildLeaderOrderManageCommand(fields: Omit<LeaderOrderManageComm
 export function isLeaderOrderManageCommand(command: unknown): boolean {
   const outer = command as { type?: unknown; command?: { type?: unknown } } | null;
   return outer?.type === 'copy-command' && outer.command?.type === 'manage-leader-order';
+}
+
+/** Klíč spravovaného obchodu: vlastní vstup `entry:…`, sledovaný obchod `leader:<id>`. */
+export function leaderOrderManageKey(command: Pick<LeaderOrderManageCommand, 'entryOperationId' | 'leaderEntryOrderId'>): string {
+  return command.entryOperationId ?? `leader:${command.leaderEntryOrderId}`;
 }
