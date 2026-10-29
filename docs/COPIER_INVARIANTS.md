@@ -1433,11 +1433,29 @@ existující ochranu.
 - Vynucuje: `server/copierIncidentWatchdog.ts:evaluateCopierIncidents` a
   `planCopyEventNotifications` vracejí popis akcí, samy nezapisují brokerovi;
   `DEFAULT_STALE_AFTER_MS` je 90 s.
-- Hlídá test: `tests/copierIncidentWatchdog.test.ts`.
+- Hlídá test: `tests/copierIncidentWatchdog.test.ts`,
+  `tests/copierRelayStuckCron.test.ts`.
 - Nikdy: Nepřidávat do watchdogu ARM, auto-reconcile nebo broker Flatten.
 - Bezpečné změny vs. nebezpečné: Bezpečná je notifikace opened/resolved s
   dedupe. Nebezpečné je z nepřítomnosti heartbeat odvodit flat nebo poslat
   obchodní příkaz.
+- Zaseknutá relay fronta (29. 10. 2026, `relay-stuck`): cron jen ČTE
+  `tradovate_copier_commands` (`api/cron/send-alerts.ts:readCopierRelayQueue`)
+  pro zařízení s heartbeatem ≤ 30 s. Výstraha: `claimed` brzda > 30 s,
+  arm-live/shadow/snapshot-test > 60 s, Flatten/skupina/eligibility > 5 min;
+  `pending` brzda > 30 s, jiné > 60 s až po 120 s od startu workeru. Claimed
+  jen v2 a z posledních 24 h (pending bez okna). Brzda čekající za běžícím
+  (ještě ne zaseknutým) příkazem nevyzývá k ručnímu zavírání — relay je
+  sekvenční a ruční exit by kolidoval s Flattenem; v `detail` je jako `w:`
+  a jakmile před ní nic legitimně neběží, eskaluje jednou na poplach (`b:`).
+  Ohlášená brzda `expired`/`rejected` nebo osiřelá převzatá (> 24 h) =
+  okamžitý poplach jednou per příkaz
+  (`relay-brake-failed:<id>`), nikdy „průchozí“. Výstraha se uzavírá až bez
+  otevřených řádků starších než 30 s a se známým koncem ohlášených id;
+  nejistý `copy-command` = poplach. Chyba čtení, výjimka nebo plný limit =
+  beze změny. Fronta se nikdy neexpiruje, neopakuje ani nemění a
+  `lastError` se nedotýká. PostgREST `.or(...)` filtru je ověřen jen
+  mockem (NEOVĚŘENO proti serveru).
 
 ## 3. Kontrolní seznam před změnou jádra
 

@@ -5,11 +5,21 @@ import {
   planCopyEventNotifications,
   DEFAULT_STALE_AFTER_MS,
   evaluateCopierIncidents,
+  RELAY_STUCK_BRAKE_AFTER_MS,
+  RELAY_STUCK_CLAIMED_WINDOW_MS,
+  RELAY_STUCK_COMMAND_AFTER_MS,
+  RELAY_STUCK_HEARTBEAT_FRESH_MS,
+  RELAY_STUCK_LONG_COMMAND_AFTER_MS,
+  RELAY_STUCK_PENDING_BOOT_GRACE_MS,
+  reportedRelayCommandIds,
   type CopierAlertStateRow,
+  type CopierRelayCommandRow,
   type CopierRuntimeRow,
 } from '../server/copierIncidentWatchdog';
+import { incidentDeliveryKey, type VersionedAlertState } from '../server/notificationDelivery';
 
 const NOW = Date.parse('2026-08-18T15:00:00Z');
+const NOW_ISO = new Date(NOW).toISOString();
 const iso = (msAgo: number) => new Date(NOW - msAgo).toISOString();
 
 const runtime = (partial: Partial<CopierRuntimeRow> = {}): CopierRuntimeRow => ({
@@ -622,5 +632,274 @@ describe('automatické pokračování po výpadku (10. 10. 2026)', () => {
     }));
     expect(evaluate([withResume('declined', [])]).notifications.filter(item => item.incidentKey === 'auto-resume')).toHaveLength(0);
     expect(evaluate([withResume('waiting')]).notifications.filter(item => item.incidentKey === 'auto-resume')).toHaveLength(0);
+  });
+});
+
+describe('zaseknutá fronta relaye (29. 10. 2026)', () => {
+  const ID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const command = (partial: Partial<CopierRelayCommandRow> = {}): CopierRelayCommandRow => ({
+    id: ID(1), device_id: 'dev-1', user_id: 'user-1', command_type: 'arm-live',
+    status: 'claimed', created_at: iso(70_000), claimed_at: iso(65_000), error: null, ...partial,
+  });
+  const relay = (
+    open: CopierRelayCommandRow[] | undefined,
+    alertStates: CopierAlertStateRow[] = [],
+    runtimes: CopierRuntimeRow[] = [runtime()],
+    reported: CopierRelayCommandRow[] = [],
+  ) => evaluateCopierIncidents({ runtimes, alertStates, now: NOW,
+    relayQueue: open ? { open, reported, readAt: NOW } : undefined });
+  const relayNotes = (result: ReturnType<typeof relay>) => result.notifications.filter(item => item.incidentKey === 'relay-stuck');
+  const relayUpserts = (result: ReturnType<typeof relay>) => result.upserts.filter(item => item.incidentKey === 'relay-stuck');
+  const stuckState = (detail: string): CopierAlertStateRow => ({ ...state('relay-stuck'), detail });
+  const done = (partial: Partial<CopierRelayCommandRow> = {}) => command({ status: 'succeeded', ...partial });
+
+  it('claimed příkaz po limitu otevře výstrahu jednou, stejná sada dál mlčí', () => {
+    const opened = relay([command()]);
+    expect(relayNotes(opened)).toEqual([expect.objectContaining({ kind: 'opened', title: 'Copier: relay příkaz visí' })]);
+    expect(relayNotes(opened)[0].body).toBe('Worker převzal příkaz arm-live před 65 s a výsledek nepotvrdil. Pokud ho stále provádí, další příkazy včetně OFF čekají za ním.');
+    expect(relayUpserts(opened)).toEqual([expect.objectContaining({ active: true, detail: `c:${ID(1)}`, notified: true })]);
+    const again = relay([command()], [stuckState(`c:${ID(1)}`)]);
+    expect(relayNotes(again)).toHaveLength(0);
+    expect(relayUpserts(again)).toHaveLength(0);
+  });
+
+  it('limity: brzda 30 s, arm-live 60 s, dlouhé příkazy (Flatten, skupina) 5 min', () => {
+    expect(relayNotes(relay([command({ claimed_at: iso(RELAY_STUCK_COMMAND_AFTER_MS) })]))).toHaveLength(0);
+    expect(relayNotes(relay([command({ claimed_at: iso(RELAY_STUCK_COMMAND_AFTER_MS + 1) })]))).toHaveLength(1);
+    expect(relayNotes(relay([command({ command_type: 'snapshot-test', claimed_at: iso(RELAY_STUCK_COMMAND_AFTER_MS + 1) })]))).toHaveLength(1);
+    expect(relayNotes(relay([command({ command_type: 'disarm', claimed_at: iso(RELAY_STUCK_BRAKE_AFTER_MS) })]))).toHaveLength(0);
+    for (const type of ['disarm', 'kill-switch', 'lock-until-session-end']) {
+      const result = relay([command({ command_type: type, claimed_at: iso(RELAY_STUCK_BRAKE_AFTER_MS + 1) })]);
+      expect(relayNotes(result)).toEqual([expect.objectContaining({ title: 'Copier: BRZDA NEPOTVRZENA' })]);
+    }
+    for (const type of ['copy-command', 'activate-group', 'verify-account-eligibility']) {
+      expect(relayNotes(relay([command({ command_type: type, claimed_at: iso(RELAY_STUCK_LONG_COMMAND_AFTER_MS) })]))).toHaveLength(0);
+      expect(relayNotes(relay([command({ command_type: type, claimed_at: iso(RELAY_STUCK_LONG_COMMAND_AFTER_MS + 1) })]))).toHaveLength(1);
+    }
+  });
+
+  it('DISARM za legitimně běžícím Flattenem nevyzývá k ručnímu zavírání', () => {
+    const result = relay([
+      command({ command_type: 'copy-command', created_at: iso(125_000), claimed_at: iso(120_000) }),
+      command({ id: ID(2), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(40_000) }),
+    ]);
+    const [note] = relayNotes(result);
+    expect(note.title).toBe('Copier: brzda čeká ve frontě');
+    expect(note.body).toBe('DISARM čeká 40 s za běžícím příkazem copy-command (převzat před 120 s). Worker by ji měl provést, až ten příkaz doběhne; ruční zásah v Tradovate teď může s ním kolidovat. Pokud se zasekne, přijde poplach.');
+    expect(note.body).not.toContain('zavři pozice');
+    expect(relayUpserts(result)[0].detail).toBe(`w:${ID(2)}`);
+  });
+
+  it('měkce ohlášená brzda eskaluje právě jednou, když se příkaz před ní zasekne', () => {
+    const disarm = (msAgo: number) => command({ id: ID(2), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(msAgo) });
+    const flatten = (claimedAgo: number) => command({ command_type: 'copy-command', created_at: iso(claimedAgo + 5_000), claimed_at: iso(claimedAgo) });
+    // Flatten pořád běží (pod 5 min) → ticho.
+    const stillRunning = relay([flatten(200_000), disarm(100_000)], [stuckState(`w:${ID(2)}`)]);
+    expect(relayNotes(stillRunning)).toHaveLength(0);
+    expect(relayUpserts(stillRunning)).toHaveLength(0);
+    // Flatten překročil limit → jeden poplach s nouzovou radou, `w` → `b`.
+    const escalated = relay([flatten(RELAY_STUCK_LONG_COMMAND_AFTER_MS + 1), disarm(250_000)], [stuckState(`w:${ID(2)}`)]);
+    expect(relayNotes(escalated)).toEqual([expect.objectContaining({ kind: 'opened', title: 'Copier: BRZDA NEPOTVRZENA' })]);
+    expect(relayNotes(escalated)[0].body).toContain('v nouzi zavři pozice');
+    const detail = relayUpserts(escalated)[0].detail!;
+    expect(detail).toBe(`b:${ID(2)},c:${ID(1)}`);
+    const nextTick = relay([flatten(RELAY_STUCK_LONG_COMMAND_AFTER_MS + 60_001), disarm(310_000)], [stuckState(detail)]);
+    expect(relayNotes(nextTick)).toHaveLength(0);
+  });
+
+  it('pending brzda starší než 24 h nespamuje: dva ticky = žádný další push', () => {
+    const oldBrake = command({ id: ID(2), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(RELAY_STUCK_CLAIMED_WINDOW_MS + 60_000) });
+    for (let tick = 0; tick < 2; tick += 1) {
+      const result = relay([oldBrake], [stuckState(`b:${ID(2)}`)], [runtime()], [oldBrake]);
+      expect(result.notifications).toHaveLength(0);
+      expect(relayUpserts(result)).toHaveLength(0);
+    }
+  });
+
+  it('DISARM, který nic nebrzdí, je poplach s nouzovou radou', () => {
+    const result = relay([command({ id: ID(2), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(40_000) })]);
+    expect(relayNotes(result)[0]).toMatchObject({ title: 'Copier: BRZDA NEPOTVRZENA',
+      body: 'DISARM čeká ve frontě 40 s a worker si ji nevyzvedl, přestože žije. Brzda možná neproběhla — ověř stav v Tradovate a v nouzi zavři pozice tam.' });
+    // Za zaseknutým (ne běžícím) příkazem platí totéž.
+    const behindStuck = relay([command({ command_type: 'copy-command', claimed_at: iso(RELAY_STUCK_LONG_COMMAND_AFTER_MS + 1) }),
+      command({ id: ID(2), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(40_000) })]);
+    expect(relayNotes(behindStuck)[0].title).toBe('Copier: BRZDA NEPOTVRZENA');
+  });
+
+  it('první brzda eskaluje, další kliky OFF a nové ne-brzdy už jen tiše doplní detail', () => {
+    const escalated = relay(
+      [command(), command({ id: ID(2), command_type: 'kill-switch', status: 'pending', claimed_at: null, created_at: iso(31_000) })],
+      [stuckState(`c:${ID(1)}`)],
+    );
+    expect(relayNotes(escalated)).toEqual([expect.objectContaining({ kind: 'opened', title: 'Copier: BRZDA NEPOTVRZENA' })]);
+    expect(relayUpserts(escalated)).toEqual([expect.objectContaining({ detail: `b:${ID(2)},c:${ID(1)}`, notified: true })]);
+    const moreClicks = relay(
+      [command(), command({ id: ID(2), command_type: 'kill-switch', status: 'pending', claimed_at: null, created_at: iso(91_000) }),
+        command({ id: ID(3), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(35_000) })],
+      [stuckState(`b:${ID(2)},c:${ID(1)}`)],
+    );
+    expect(relayNotes(moreClicks)).toHaveLength(0);
+    // Další brzda za už poplachově ohlášenou se drží jako `w`: kdyby první
+    // prošla a tahle dál visela, znovu eskaluje.
+    expect(relayUpserts(moreClicks)).toEqual([expect.objectContaining({ detail: `b:${ID(2)},w:${ID(3)},c:${ID(1)}`, notified: false })]);
+  });
+
+  it('víc než 20 zaseknutých: nová brzda přesto eskaluje a strop ji neodřízne', () => {
+    const many = Array.from({ length: 25 }, (_, index) => command({ id: ID(index + 10), created_at: iso(200_000 - index) }));
+    const reported = `${many.slice(0, 20).map(item => `c:${item.id}`).join(',')}`;
+    const result = relay([...many, command({ id: ID(99), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(31_000) })],
+      [stuckState(reported)]);
+    expect(relayNotes(result)).toEqual([expect.objectContaining({ title: 'Copier: BRZDA NEPOTVRZENA' })]);
+    const detail = relayUpserts(result)[0].detail!.split(',');
+    expect(detail).toHaveLength(20);
+    expect(detail[0]).toBe(`b:${ID(99)}`);
+    const again = relay([...many, command({ id: ID(99), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(91_000) })],
+      [stuckState(relayUpserts(result)[0].detail!)]);
+    expect(relayNotes(again)).toHaveLength(0);
+    expect(relayUpserts(again)).toHaveLength(0);
+  });
+
+  it('uzavření až se známým koncem: dokončené příkazy = fronta průchozí', () => {
+    const result = relay([], [stuckState(`c:${ID(1)}`)], [runtime()], [done()]);
+    expect(relayNotes(result)).toEqual([expect.objectContaining({
+      kind: 'resolved', title: 'Copier: relay fronta průchozí', body: 'Zaseknuté příkazy worker dokončil.',
+    })]);
+    expect(relayUpserts(result)).toEqual([expect.objectContaining({ active: false, detail: null })]);
+  });
+
+  it('brzda, která vypršela nebo byla odmítnuta, je hned poplach (jednou per id), ne „průchozí“', () => {
+    for (const ended of [
+      done({ id: ID(2), command_type: 'disarm', status: 'expired', error: 'command-expired' }),
+      done({ id: ID(2), command_type: 'disarm', status: 'rejected', error: 'command-expired-or-predates-worker-session' }),
+    ]) {
+      const result = relay([], [stuckState(`b:${ID(2)},c:${ID(1)}`)], [runtime()], [ended, done()]);
+      expect(result.notifications).toEqual([expect.objectContaining({ incidentKey: `relay-brake-failed:${ID(2)}`, kind: 'opened',
+        title: 'Copier: BRZDA NEPROVEDENA',
+        body: `DISARM skončila bez potvrzeného provedení (${ended.error}). Kopírka může být stále zapnutá — zkontroluj LIVE a pozice v Tradovate.` })]);
+      // „Fronta průchozí“ by poplach přebil — výstraha se zavře tiše.
+      expect(relayUpserts(result)).toEqual([expect.objectContaining({ active: false, detail: null, notified: true })]);
+    }
+  });
+
+  it('selhaná brzda se ohlásí hned, i když jiný řádek frontu dál drží', () => {
+    const other = command({ command_type: 'copy-command', claimed_at: iso(100_000) });
+    const failed = done({ id: ID(2), command_type: 'kill-switch', status: 'expired', error: 'command-expired' });
+    const result = relay([other], [stuckState(`b:${ID(2)},c:${ID(1)}`)], [runtime()], [failed, other]);
+    expect(result.notifications.map(item => item.incidentKey)).toEqual([`relay-brake-failed:${ID(2)}`]);
+    expect(relayUpserts(result)).toEqual([expect.objectContaining({ active: true, detail: `c:${ID(1)}` })]);
+    // Další tick už brzdu nezná → žádný druhý poplach.
+    expect(relay([other], [stuckState(`c:${ID(1)}`)], [runtime()], [other]).notifications).toHaveLength(0);
+  });
+
+  it('osiřelá převzatá brzda > 24 h je poplach, ne tiché uzavření', () => {
+    const orphanBrake = command({ id: ID(2), command_type: 'disarm', created_at: iso(RELAY_STUCK_CLAIMED_WINDOW_MS + 10_000), claimed_at: iso(RELAY_STUCK_CLAIMED_WINDOW_MS + 1) });
+    const result = relay([], [stuckState(`b:${ID(2)}`)], [runtime()], [orphanBrake]);
+    expect(result.notifications).toEqual([expect.objectContaining({ incidentKey: `relay-brake-failed:${ID(2)}`, title: 'Copier: BRZDA BEZ VÝSLEDKU' })]);
+    expect(relayUpserts(result)).toEqual([expect.objectContaining({ active: false })]);
+  });
+
+  it('úspěšná ohlášená brzda se vyřadí a další zaseknutá brzda znovu eskaluje', () => {
+    const result = relay(
+      [command(), command({ id: ID(3), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(35_000) })],
+      [stuckState(`b:${ID(2)},c:${ID(1)}`)], [runtime()],
+      [done({ id: ID(2), command_type: 'disarm' }), command()],
+    );
+    expect(relayNotes(result)).toEqual([expect.objectContaining({ kind: 'opened', title: 'Copier: BRZDA NEPOTVRZENA' })]);
+    expect(relayUpserts(result)).toEqual([expect.objectContaining({ detail: `b:${ID(3)},c:${ID(1)}` })]);
+  });
+
+  it('poplachová brzda prošla, ale tiše přidaná `w` brzda dál visí → nový poplach', () => {
+    const stuckBrake = command({ id: ID(3), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(95_000) });
+    const result = relay([stuckBrake], [stuckState(`b:${ID(2)},w:${ID(3)}`)], [runtime()],
+      [done({ id: ID(2), command_type: 'disarm' }), stuckBrake]);
+    expect(relayNotes(result)).toEqual([expect.objectContaining({ title: 'Copier: BRZDA NEPOTVRZENA' })]);
+    expect(relayUpserts(result)[0].detail).toBe(`b:${ID(3)}`);
+  });
+
+  it('nejistý copy-command (Flatten) při uzavření je poplach s badge, ne „průchozí“', () => {
+    const result = relay([], [stuckState(`c:${ID(1)}`)], [runtime()],
+      [done({ command_type: 'copy-command', status: 'rejected', error: 'command-outcome-unknown-after-restart' })]);
+    expect(relayNotes(result)).toEqual([expect.objectContaining({ kind: 'opened', title: 'Copier: výsledek příkazu nejistý',
+      body: 'Ve frontě už nic nevisí, ale copy-command skončil bez potvrzeného výsledku (command-outcome-unknown-after-restart). Ověř pozice v LIVE.' })]);
+    expect(relayUpserts(result)).toEqual([expect.objectContaining({ active: false })]);
+  });
+
+  it('restart workeru: pending brzda v boot grace výstrahu neuzavře', () => {
+    const restarted = runtime({ started_at: iso(10_000) });
+    const pendingBrake = command({ id: ID(2), command_type: 'disarm', status: 'pending', claimed_at: null, created_at: iso(90_000) });
+    const result = relay([pendingBrake], [stuckState(`b:${ID(2)}`)], [restarted], [pendingBrake]);
+    expect(relayNotes(result)).toHaveLength(0);
+    expect(relayUpserts(result)).toHaveLength(0);
+    // Po boot grace se znovu počítá jako zaseknutá, bez nové zprávy.
+    const later = relay([pendingBrake], [stuckState(`b:${ID(2)}`)], [runtime({ started_at: iso(RELAY_STUCK_PENDING_BOOT_GRACE_MS + 1) })]);
+    expect(relayNotes(later)).toHaveLength(0);
+  });
+
+  it('pending se do konce boot grace nehlásí, potom ano', () => {
+    const old = command({ command_type: 'arm-live', status: 'pending', claimed_at: null, created_at: iso(10 * 60_000) });
+    expect(relayNotes(relay([old], [], [runtime({ started_at: iso(RELAY_STUCK_PENDING_BOOT_GRACE_MS) })]))).toHaveLength(0);
+    const result = relay([old], [], [runtime({ started_at: iso(RELAY_STUCK_PENDING_BOOT_GRACE_MS + 1) })]);
+    expect(relayNotes(result)[0].body).toBe('Příkaz arm-live čeká ve frontě 600 s a worker si ho nevyzvedl, přestože žije. OFF může čekat také.');
+  });
+
+  it('neznámý konec ohlášeného příkazu (chybí řádek, ještě otevřený) výstrahu neuzavře', () => {
+    expect(relayNotes(relay([], [stuckState(`c:${ID(1)}`)], [runtime()], []))).toHaveLength(0);
+    // Opačné pořadí čtení: v open už není, ale lookup ho vidí claimed v okně.
+    expect(relayNotes(relay([], [stuckState(`c:${ID(1)}`)], [runtime()], [command()]))).toHaveLength(0);
+  });
+
+  it('osiřelý claimed starší než 24 h se uzavře poctivě, ne jako „průchozí“', () => {
+    const orphan = command({ created_at: iso(RELAY_STUCK_CLAIMED_WINDOW_MS + 10_000), claimed_at: iso(RELAY_STUCK_CLAIMED_WINDOW_MS + 1) });
+    const result = relay([], [stuckState(`c:${ID(1)}`)], [runtime()], [orphan]);
+    expect(relayNotes(result)).toEqual([expect.objectContaining({ kind: 'resolved', title: 'Copier: relay výstraha uzavřena bez výsledku' })]);
+  });
+
+  it('jiný otevřený řádek starší než 30 s (ještě pod limitem) uzavření odloží', () => {
+    const running = command({ id: ID(5), command_type: 'copy-command', claimed_at: iso(45_000) });
+    expect(relayNotes(relay([running], [stuckState(`c:${ID(1)}`)], [runtime()], [done()]))).toHaveLength(0);
+  });
+
+  it('nepřečtená fronta (undefined) neotevírá ani neuzavírá', () => {
+    const result = relay(undefined, [stuckState(`c:${ID(1)}`)]);
+    expect(relayNotes(result)).toHaveLength(0);
+    expect(relayUpserts(result)).toHaveLength(0);
+  });
+
+  it('heartbeat kolem 30 s: na hraně se vyhodnocuje, nad ní výstraha zůstane; offline řeší worker-offline', () => {
+    expect(relayNotes(relay([command()], [], [runtime({ last_seen_at: iso(RELAY_STUCK_HEARTBEAT_FRESH_MS) })]))).toHaveLength(1);
+    const aging = runtime({ last_seen_at: iso(RELAY_STUCK_HEARTBEAT_FRESH_MS + 1) });
+    expect(relayNotes(relay([command()], [], [aging]))).toHaveLength(0);
+    expect(relayNotes(relay([], [stuckState(`c:${ID(1)}`)], [aging], [done()]))).toHaveLength(0);
+    const offline = relay([command()], [stuckState(`c:${ID(1)}`)], [runtime({ last_seen_at: iso(DEFAULT_STALE_AFTER_MS + 1) })]);
+    expect(offline.notifications.map(item => item.incidentKey)).toEqual(['worker-offline']);
+    expect(relayUpserts(offline)).toHaveLength(0);
+  });
+
+  it('claimed bez času převzetí je zaseknutý (jen výstraha, hlasitě)', () => {
+    expect(relayNotes(relay([command({ claimed_at: null })]))[0].body).toContain('před neznámo jak dlouho');
+  });
+
+  it('příkaz jiného zařízení nebo uživatele se nepočítá', () => {
+    expect(relayNotes(relay([command({ device_id: 'dev-2' }), command({ id: ID(3), user_id: 'user-2' })]))).toHaveLength(0);
+  });
+
+  it('ohlášená id pro cron: jen z aktivních výstrah a jen platná', () => {
+    expect(reportedRelayCommandIds([
+      stuckState(`b:${ID(2)},c:${ID(1)},c:nonsense,x:${ID(4)}`),
+      { ...stuckState(`c:${ID(3)}`), active: false },
+    ])).toEqual([ID(2), ID(1)]);
+  });
+
+  it('dedupe: uzavírací poplach má jiný doručovací klíč než otevření a brzda má klíč s id', () => {
+    const opened = incidentDeliveryKey({ deviceId: 'dev-1', key: 'relay-stuck', kind: 'opened' }, undefined);
+    const closingAlarm = incidentDeliveryKey({ deviceId: 'dev-1', key: 'relay-stuck', kind: 'opened' },
+      { ...stuckState(`c:${ID(1)}`), updated_at: NOW_ISO, notification_version: 'v-2' } as VersionedAlertState);
+    expect(closingAlarm).not.toBe(opened);
+    expect(incidentDeliveryKey({ deviceId: 'dev-1', key: `relay-brake-failed:${ID(2)}`, kind: 'opened' }, undefined))
+      .not.toBe(incidentDeliveryKey({ deviceId: 'dev-1', key: `relay-brake-failed:${ID(3)}`, kind: 'opened' }, undefined));
+  });
+
+  it('nic neřídí execution: výstup jsou jen notifikace a markery', () => {
+    expect(Object.keys(relay([command({ command_type: 'disarm' })])).sort()).toEqual(['notifications', 'upserts']);
   });
 });

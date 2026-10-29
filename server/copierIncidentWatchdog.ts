@@ -26,6 +26,31 @@ export interface CopierRuntimeRow {
   started_at: string;
 }
 
+/** Řádek relay fronty (`tradovate_copier_commands`), jen pro čtení. */
+export interface CopierRelayCommandRow {
+  id: string;
+  device_id: string;
+  user_id: string;
+  command_type: string;
+  status: string;
+  created_at: string;
+  claimed_at: string | null;
+  error?: string | null;
+}
+
+/** Přečtená relay fronta pro zaseknuté příkazy. */
+export interface CopierRelayQueueSnapshot {
+  /**
+   * `pending` a `claimed` starší než 30 s pro zařízení s čerstvým heartbeatem;
+   * `claimed` jen v2 (s `delivery_id`) převzaté za posledních 24 h.
+   */
+  open: readonly CopierRelayCommandRow[];
+  /** Řádky id z aktivních výstrah `relay-stuck`, v libovolném stavu. */
+  reported: readonly CopierRelayCommandRow[];
+  /** Kdy začalo čtení fronty — stáří příkazů se měří k tomuto času. */
+  readAt: number;
+}
+
 export interface CopierAlertStateRow {
   device_id: string;
   user_id: string;
@@ -67,6 +92,31 @@ export const DEFAULT_STALE_AFTER_MS = 90_000;
 
 /** Po startu workera chvíli nehlásíme "broker odpojen" — sync teprve běží. */
 const BOOT_GRACE_MS = 120_000;
+
+/**
+ * Zaseknutá fronta relaye (29. 10. 2026). Heartbeat workeru běží nezávisle
+ * na delivery smyčce, takže věčně padající poll/ACK (409 po restartu, 400,
+ * 413, osiřelá delivery) LIVE nevidí. Hlídáme ji jen u workeru s čerstvým
+ * heartbeatem — výpadek celého workeru je `worker-offline`.
+ */
+export const RELAY_STUCK_HEARTBEAT_FRESH_MS = 30_000;
+export const RELAY_STUCK_BRAKE_AFTER_MS = 30_000;
+export const RELAY_STUCK_COMMAND_AFTER_MS = 60_000;
+/** Flatten skupiny trval 17. 9. 265 s; legitimně dlouhé příkazy mají vlastní limit. */
+export const RELAY_STUCK_LONG_COMMAND_AFTER_MS = 300_000;
+/** Relay startuje až po setupu workeru, `started_at` předbíhá první poll. */
+export const RELAY_STUCK_PENDING_BOOT_GRACE_MS = 120_000;
+/** Starší `claimed` (osiřelé delivery) se nehlídají; ohlášený se uzavře poctivě. */
+export const RELAY_STUCK_CLAIMED_WINDOW_MS = 24 * 60 * 60_000;
+const RELAY_STUCK_KEY = 'relay-stuck';
+const RELAY_STUCK_DETAIL_MAX_IDS = 20;
+const RELAY_BRAKE_TYPES = new Set(['disarm', 'kill-switch', 'lock-until-session-end']);
+const RELAY_LONG_COMMAND_TYPES = new Set(['copy-command', 'activate-group', 'verify-account-eligibility']);
+const RELAY_BRAKE_LABEL: Record<string, string> = {
+  disarm: 'DISARM', 'kill-switch': 'Kill switch', 'lock-until-session-end': 'Zámek dne',
+};
+const RELAY_OPEN_STATUSES = new Set(['pending', 'claimed']);
+const RELAY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Interní marker pro detekci hrany armed -> disarmed; nikdy nenotifikuje. */
 const ARMED_MARKER_KEY = 'state:armed';
@@ -423,11 +473,169 @@ const INCIDENTS: IncidentSpec[] = [
   },
 ];
 
+const isRelayBrake = (command: Pick<CopierRelayCommandRow, 'command_type'>) => RELAY_BRAKE_TYPES.has(command.command_type);
+
+/** Stáří zaseknutého příkazu; null = (zatím) nezaseknutý. */
+const relayCommandStuckAge = (
+  command: CopierRelayCommandRow,
+  workerStartedAt: number,
+  readAt: number,
+): number | null => {
+  if (command.status === 'claimed') {
+    const claimedAt = Date.parse(command.claimed_at ?? '');
+    // Claimed bez času převzetí nemá vzniknout; jde jen o výstrahu, proto hlasitě.
+    if (!Number.isFinite(claimedAt)) return Number.POSITIVE_INFINITY;
+    const limit = isRelayBrake(command)
+      ? RELAY_STUCK_BRAKE_AFTER_MS
+      : RELAY_LONG_COMMAND_TYPES.has(command.command_type) ? RELAY_STUCK_LONG_COMMAND_AFTER_MS : RELAY_STUCK_COMMAND_AFTER_MS;
+    return readAt - claimedAt > limit ? readAt - claimedAt : null;
+  }
+  if (command.status !== 'pending') return null;
+  // Čerstvě nastartovaný worker ještě nemusel stihnout první poll.
+  if (!Number.isFinite(workerStartedAt) || readAt - workerStartedAt <= RELAY_STUCK_PENDING_BOOT_GRACE_MS) return null;
+  const createdAt = Date.parse(command.created_at);
+  if (!Number.isFinite(createdAt)) return Number.POSITIVE_INFINITY;
+  const limit = isRelayBrake(command) ? RELAY_STUCK_BRAKE_AFTER_MS : RELAY_STUCK_COMMAND_AFTER_MS;
+  return readAt - createdAt > limit ? readAt - createdAt : null;
+};
+
+/** `b` = brzda ohlášená poplachem, `w` = brzda ohlášená jako čekající za během, `c` = ostatní. */
+interface RelayStuckEntry { id: string; kind: 'b' | 'w' | 'c' }
+const isBrakeEntry = (entry: RelayStuckEntry) => entry.kind !== 'c';
+
+/** `detail` = `b:<id>` / `w:<id>` (brzdy) / `c:<id>`, brzdy první. */
+const parseRelayStuckDetail = (detail: string | null | undefined): RelayStuckEntry[] =>
+  (detail ?? '').split(',').flatMap(item => {
+    const [kind, id] = item.split(':');
+    return (kind === 'b' || kind === 'w' || kind === 'c') && id && RELAY_ID.test(id) ? [{ id, kind }] : [];
+  });
+
+const formatRelayStuckDetail = (entries: readonly RelayStuckEntry[]): string =>
+  entries.map(entry => `${entry.kind}:${entry.id}`).join(',');
+
+/** Ohlášená id z aktivních výstrah — cron podle nich čte koncový stav. */
+export function reportedRelayCommandIds(alertStates: readonly CopierAlertStateRow[]): string[] {
+  return [...new Set(alertStates
+    .filter(row => row.incident_key === RELAY_STUCK_KEY && row.active)
+    .flatMap(row => parseRelayStuckDetail(row.detail).map(entry => entry.id)))];
+}
+
+const relaySeconds = (age: number) => Number.isFinite(age) ? `${Math.round(age / 1_000)} s` : 'neznámo jak dlouho';
+
+const relayStuckNotification = (
+  stuck: ReadonlyArray<{ command: CopierRelayCommandRow; age: number }>,
+  rows: readonly CopierRelayCommandRow[],
+  readAt: number,
+) => {
+  const brake = stuck.find(item => isRelayBrake(item.command));
+  if (brake) {
+    const label = RELAY_BRAKE_LABEL[brake.command.command_type] ?? brake.command.command_type;
+    if (brake.command.status === 'claimed') {
+      return {
+        hardBrake: true,
+        title: 'Copier: BRZDA NEPOTVRZENA',
+        body: `${label}: worker brzdu převzal před ${relaySeconds(brake.age)} a nepotvrdil ji, přestože žije. Brzda možná neproběhla — ověř stav v Tradovate a v nouzi zavři pozice tam.`,
+      };
+    }
+    // Relay je sekvenční: brzda za legitimně běžícím příkazem (Flatten až
+    // 5 min) čeká. Výzva k ručnímu zavírání by tu mohla zdvojit exit.
+    const running = rows.find(row => row.status === 'claimed' && !isRelayBrake(row)
+      && !stuck.some(item => item.command.id === row.id));
+    if (running) {
+      const runningSince = Date.parse(running.claimed_at ?? '');
+      return {
+        hardBrake: false,
+        title: 'Copier: brzda čeká ve frontě',
+        body: `${label} čeká ${relaySeconds(brake.age)} za běžícím příkazem ${running.command_type} (převzat před ${relaySeconds(readAt - runningSince)}). Worker by ji měl provést, až ten příkaz doběhne; ruční zásah v Tradovate teď může s ním kolidovat. Pokud se zasekne, přijde poplach.`,
+      };
+    }
+    return {
+      hardBrake: true,
+      title: 'Copier: BRZDA NEPOTVRZENA',
+      body: `${label} čeká ve frontě ${relaySeconds(brake.age)} a worker si ji nevyzvedl, přestože žije. Brzda možná neproběhla — ověř stav v Tradovate a v nouzi zavři pozice tam.`,
+    };
+  }
+  const oldest = stuck.reduce((left, right) => right.age > left.age ? right : left);
+  const type = oldest.command.command_type;
+  return {
+    hardBrake: false,
+    title: 'Copier: relay příkaz visí',
+    body: oldest.command.status === 'claimed'
+      ? `Worker převzal příkaz ${type} před ${relaySeconds(oldest.age)} a výsledek nepotvrdil. Pokud ho stále provádí, další příkazy včetně OFF čekají za ním.`
+      : `Příkaz ${type} čeká ve frontě ${relaySeconds(oldest.age)} a worker si ho nevyzvedl, přestože žije. OFF může čekat také.`,
+  };
+};
+
+/** Převzatý řádek mimo hlídané 24h okno (osiřelá delivery). */
+const relayRowAbandoned = (row: CopierRelayCommandRow, readAt: number): boolean => {
+  // Jen claimed: pending se čte bez okna a hlídá dál jako zaseknutý.
+  if (row.status !== 'claimed') return false;
+  const since = Date.parse(row.claimed_at ?? row.created_at);
+  return Number.isFinite(since) && readAt - since > RELAY_STUCK_CLAIMED_WINDOW_MS;
+};
+
+/**
+ * Konec ohlášené brzdy hned, ne až po vyprázdnění fronty: selhaná nebo
+ * osiřelá brzda je poplach (kopírka mohla zůstat zapnutá), nikdy
+ * „fronta průchozí“. null = brzda ještě neskončila nebo nevíme.
+ */
+const relayBrakeEnd = (
+  row: CopierRelayCommandRow | undefined,
+  readAt: number,
+): { failed: false } | { failed: true; title: string; body: string } | null => {
+  if (!row) return null;
+  const label = RELAY_BRAKE_LABEL[row.command_type] ?? row.command_type;
+  if (relayRowAbandoned(row, readAt)) {
+    return { failed: true, title: 'Copier: BRZDA BEZ VÝSLEDKU',
+      body: `${label} visí přes 24 h bez potvrzení a přestala se hlídat. Kopírka může být stále zapnutá — zkontroluj LIVE a pozice v Tradovate.` };
+  }
+  if (RELAY_OPEN_STATUSES.has(row.status)) return null;
+  if (row.status === 'succeeded') return { failed: false };
+  return { failed: true, title: 'Copier: BRZDA NEPROVEDENA',
+    body: `${label} skončila bez potvrzeného provedení (${asText(row.error) ?? row.status}). Kopírka může být stále zapnutá — zkontroluj LIVE a pozice v Tradovate.` };
+};
+
+/**
+ * Uzavření jen se známým koncem všech zbylých ohlášených příkazů; null =
+ * nevíme, výstraha zůstane. Nejistý obchodní příkaz (Flatten) je poplach.
+ */
+const relayStuckOutcome = (
+  entries: readonly RelayStuckEntry[],
+  reported: readonly CopierRelayCommandRow[],
+  readAt: number,
+): { title: string; body: string; alarm: boolean } | null => {
+  let abandoned = false;
+  let uncertain: CopierRelayCommandRow | null = null;
+  for (const entry of entries) {
+    const row = reported.find(item => item.id === entry.id);
+    if (!row) return null;
+    if (relayRowAbandoned(row, readAt)) abandoned = true;
+    else if (RELAY_OPEN_STATUSES.has(row.status)) return null;
+    else if (row.status !== 'succeeded' && (!uncertain || row.command_type === 'copy-command')) uncertain = row;
+  }
+  if (uncertain?.command_type === 'copy-command') {
+    return { alarm: true, title: 'Copier: výsledek příkazu nejistý',
+      body: `Ve frontě už nic nevisí, ale copy-command skončil bez potvrzeného výsledku (${asText(uncertain.error) ?? uncertain.status}). Ověř pozice v LIVE.` };
+  }
+  if (abandoned) {
+    return { alarm: false, title: 'Copier: relay výstraha uzavřena bez výsledku',
+      body: 'Příkaz visí přes 24 h bez potvrzení a přestal se hlídat. Zkontroluj frontu ručně.' };
+  }
+  return uncertain
+    ? { alarm: false, title: 'Copier: relay fronta průchozí', body: 'Ve frontě už nic nevisí. Některé zaseknuté příkazy vypršely nebo skončily chybou — výsledek ověř v LIVE.' }
+    : { alarm: false, title: 'Copier: relay fronta průchozí', body: 'Zaseknuté příkazy worker dokončil.' };
+};
+
 export function evaluateCopierIncidents(options: {
   runtimes: readonly CopierRuntimeRow[];
   alertStates: readonly CopierAlertStateRow[];
   now: number;
   staleAfterMs?: number;
+  /**
+   * Relay fronta. `undefined` = nepřečtena nebo neúplná: `relay-stuck` se
+   * pak neotevírá ani neuzavírá (neznámé není zdravé).
+   */
+  relayQueue?: CopierRelayQueueSnapshot;
 }): WatchdogEvaluation {
   const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
   const notifications: IncidentNotification[] = [];
@@ -481,6 +689,81 @@ export function evaluateCopierIncidents(options: {
         'Copier: worker zpět online',
         'Mac worker se znovu ozývá. Před ARM proběhne reconciliation.',
       );
+    }
+
+    // --- Zaseknutá fronta relaye: heartbeat žije, příkaz ne --------------
+    // Jen výstraha (INV-WATCH-01): fronta se nečte zpět do execution,
+    // nic se neexpiruje ani neopakuje. Mezi 30 a 90 s stáří heartbeatu
+    // nevíme dost — výstraha zůstane, jak je.
+    const relayQueue = options.relayQueue;
+    if (relayQueue && relayQueue.readAt - lastSeen <= RELAY_STUCK_HEARTBEAT_FRESH_MS) {
+      const workerStartedAt = Date.parse(runtime.started_at);
+      const rows = relayQueue.open.filter(command => command.device_id === deviceId && command.user_id === userId);
+      const stuck = rows
+        .map(command => ({ command, age: relayCommandStuckAge(command, workerStartedAt, relayQueue.readAt) }))
+        .filter((item): item is { command: CopierRelayCommandRow; age: number } => item.age != null);
+      const state = activeState(userId, deviceId, RELAY_STUCK_KEY);
+      const reportedAll = state?.active ? parseRelayStuckDetail(state.detail) : [];
+      // Skončené ohlášené brzdy: selhaná/osiřelá = okamžitý poplach (klíč s id
+      // příkazu, takže právě jednou), úspěšná se tiše vyřadí — další
+      // zaseknutá brzda pak znovu eskaluje.
+      const endedBrakes = new Set<string>();
+      let brakeAlarm = false;
+      for (const entry of reportedAll.filter(isBrakeEntry)) {
+        const end = relayBrakeEnd(relayQueue.reported.find(row => row.id === entry.id), relayQueue.readAt);
+        if (!end) continue;
+        endedBrakes.add(entry.id);
+        if (end.failed) {
+          brakeAlarm = true;
+          notifications.push({ userId, deviceId, incidentKey: `relay-brake-failed:${entry.id}`, kind: 'opened', title: end.title, body: end.body });
+        }
+      }
+      const reported = reportedAll.filter(entry => !endedBrakes.has(entry.id));
+      const prunedDetail = formatRelayStuckDetail(reported);
+      if (stuck.length > 0) {
+        // Ohlášená id zůstávají do uzavření (jejich konec určí text), nová se
+        // přidají; brzdy první, aby je strop nikdy neodřízl.
+        const content = relayStuckNotification(stuck, rows, relayQueue.readAt);
+        const stuckBrake = stuck.some(item => isRelayBrake(item.command));
+        // Push při vzniku; u brzdy, když žádná ohlášená brzda nevisí, nebo
+        // když dřív měkce ohlášená (`w`) přestala mít před sebou běžící
+        // příkaz. Další kliky OFF už ne.
+        const escalate = !state?.active || (stuckBrake && !reported.some(entry => entry.kind === 'b')
+          && (!reported.some(entry => entry.kind === 'w') || content.hardBrake));
+        const brakeKind: 'b' | 'w' = escalate ? (content.hardBrake ? 'b' : 'w') : 'w';
+        // Ukončené brzdy se nevracejí (jinak by se poplach opakoval každý
+        // tick); po poplachu se měkké `w` povýší na `b`.
+        const fresh = [...stuck]
+          .sort((left, right) => left.command.created_at.localeCompare(right.command.created_at))
+          .map(item => ({ id: item.command.id, kind: isRelayBrake(item.command) ? brakeKind : 'c' as const }))
+          .filter(entry => RELAY_ID.test(entry.id) && !endedBrakes.has(entry.id) && !reported.some(known => known.id === entry.id));
+        const merged = [...reported, ...fresh]
+          .map(entry => escalate && content.hardBrake && entry.kind === 'w' ? { ...entry, kind: 'b' as const } : entry);
+        const detail = formatRelayStuckDetail([
+          ...merged.filter(isBrakeEntry), ...merged.filter(entry => !isBrakeEntry(entry)),
+        ].slice(0, RELAY_STUCK_DETAIL_MAX_IDS));
+        if (escalate) {
+          open(RELAY_STUCK_KEY, detail, content.title, content.body);
+        } else if (state?.detail !== detail) {
+          upserts.push({ userId, deviceId, incidentKey: RELAY_STUCK_KEY, active: true, detail, notified: brakeAlarm });
+        }
+      } else if (state?.active) {
+        // Uzavírá se, až ve frontě nevisí nic staršího než 30 s (ani pending
+        // v boot grace po restartu) a konec ohlášených příkazů je známý.
+        const outcome = rows.length === 0 ? relayStuckOutcome(reported, relayQueue.reported, relayQueue.readAt) : null;
+        if (outcome && brakeAlarm && !outcome.alarm) {
+          // Poplach o brzdě už odešel; „fronta průchozí“ by ho přebil.
+          upserts.push({ userId, deviceId, incidentKey: RELAY_STUCK_KEY, active: false, detail: null, notified: true });
+        } else if (outcome?.alarm) {
+          // Výstraha končí, ale zpráva je poplach (badge), ne „vyřešeno“.
+          notifications.push({ userId, deviceId, incidentKey: RELAY_STUCK_KEY, kind: 'opened', title: outcome.title, body: outcome.body });
+          upserts.push({ userId, deviceId, incidentKey: RELAY_STUCK_KEY, active: false, detail: null, notified: true });
+        } else if (outcome) {
+          resolve(RELAY_STUCK_KEY, outcome.title, outcome.body);
+        } else if (state.detail !== prunedDetail) {
+          upserts.push({ userId, deviceId, incidentKey: RELAY_STUCK_KEY, active: true, detail: prunedDetail, notified: brakeAlarm });
+        }
+      }
     }
 
     // --- Stavové incidenty na živém heartbeatu ---------------------------

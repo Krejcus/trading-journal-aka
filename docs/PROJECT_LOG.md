@@ -279,11 +279,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - [ ] **Delta sync — další kroky**: lehčí tvar základu (dnes ~7 MB s kreslením
       a analytikou), `journal-import` do `arn1` po sledování zátěže DB, kontrola
       `pg_stat_statements` po odebrání `trades` z Realtime.
-- [ ] **Watchdog na dlouho `claimed` relay příkaz** — heartbeat workeru běží
-      nezávisle na smyčce delivery, takže věčně padající poll/ACK (např. 409
-      při novějším `startedAt`, 400/413) je pro UI neviditelný. Serverová
-      výstraha: příkaz `claimed` > 60 s (brzda > 30 s). Navazuje na opravu
-      osiřelé delivery 29. 10. (copier-core → INV + `copier-design-critic`).
+- [x] ~~**Watchdog na dlouho `claimed` relay příkaz**~~ — napsáno 29. 10.
+      (větev `claude/relay-stuck-watchdog-20261029`, NENASAZENO), viz zápis
+      „Výstraha na zaseknutou relay frontu“.
 
 ## Deník
 
@@ -398,6 +396,49 @@ další záložky LIVE“; „čistě UI, napojení dat v jiné session“.
 - Ověřeno v náhledu (5273, 1440 px): graf, záložky, ⚡ → Limit + riziko $300
   → 6 kontraktů, výběr T3 (štítek na čáře, „jen T3“), přehled skupiny,
   Po účtech, přepnutí na Live Dashboard a zpět. Testovací box smazán.
+
+### 2026-10-29 — Výstraha na zaseknutou relay frontu (Claude, NENASAZENO)
+
+- Větev `claude/relay-stuck-watchdog-20261029` (worktree
+  `~/alphatrade-worktrees/relay-stuck-watchdog`), postavená NAD
+  `claude/relay-unknown-delivery-20261029` — nasazovat spolu nebo po ní.
+  Uzavírá otevřenou položku „Watchdog na dlouho `claimed` relay příkaz“.
+- Proč: heartbeat workeru běží nezávisle na delivery smyčce, takže věčně
+  padající poll/ACK (409 po restartu, 400, 413, osiřelá delivery) LIVE
+  nevidí a příkazy včetně OFF tiše visí.
+- Co: minutový cron (`api/cron/send-alerts.ts:readCopierRelayQueue`) jen
+  ČTE `tradovate_copier_commands` pro zařízení s heartbeatem ≤ 30 s;
+  `server/copierIncidentWatchdog.ts` vyhodnotí výstrahu `relay-stuck`
+  (dedupe přes `copier_alert_state`, push jen při vzniku a při první
+  brzdě). Limity: brzda 30 s; arm-live/shadow/snapshot-test 60 s;
+  Flatten/skupina/eligibility 5 min; `pending` až po 120 s od startu
+  workeru. Claimed jen v2 z posledních 24 h.
+- Pravdivost (hlavní práce po review): brzda za běžícím Flattenem nevyzývá
+  k ručnímu zavírání (relay je sekvenční → dvojí exit), ale jakmile se
+  příkaz před ní zasekne, jednou eskaluje na poplach; selhaná/osiřelá
+  ohlášená brzda = okamžitý poplach `relay-brake-failed:<id>`, nikdy
+  „fronta průchozí“; uzavření jen se známým koncem ohlášených id a bez
+  otevřených řádků (restart workeru neuzavře); chyba čtení, výjimka nebo
+  plný limit 500 = beze změny; nejistý copy-command = poplach.
+- `copier-design-critic` (4 kola): návrh OPRAVIT PŘED IMPLEMENTACÍ
+  (falešné „vyřešeno“ po restartu a oříznutí, expirovaná brzda schovaná za
+  „průchozí“, legacy řádky, texty) → přepracováno; diff 2× OPRAVIT PŘED
+  COMMITEM (rada „zavři pozice“ při běžícím Flattenu, spam u pending brzdy
+  > 24 h, ticho po měkkém oznámení) → opraveno; 4. kolo OK.
+- INV-WATCH-01 doplněn. Fronta se nikdy neexpiruje/neopakuje, `lastError`
+  ani controller se nemění, LIVE UI beze změny (případný follow-up).
+- Ověřeno 29. 10. (hlavní session): PostgREST filtr `.or(...)` s časovým
+  razítkem projde parserem produkčního PostgRESTu (anon klíč skončí až na
+  právech tabulky 42501; kontrolní chybný filtr vrací PGRST100). Read-only
+  SQL ekvivalent v produkci: 0 řádků — jediné 2 `claimed` jsou v1 (arm-live
+  a disarm z 13. 9.) na neživém zařízení, takže nasazení neotevře falešnou
+  výstrahu. Oprava relaye, na které větev stojí, je nasazená (8b27d3e7).
+- Testy: `tests/copierIncidentWatchdog.test.ts` (blok „zaseknutá fronta
+  relaye“, deterministický čas), `tests/copierRelayStuckCron.test.ts`.
+- Nasazení = jen Vercel (cron), bez migrace a bez reinstallu workeru;
+  push na main jen po „nasaď“.
+- Follow-up (vyžaduje migraci): `relay_polled_at` + aktuální `delivery_id`
+  při poll-v2 → přesné rozlišení blokujícího a osiřelého `claimed`.
 
 ### 2026-10-29 — Relay se nezasekne na osiřelé delivery (Claude, nasazeno 29. 10. 06:09 @ 8b27d3e7)
 

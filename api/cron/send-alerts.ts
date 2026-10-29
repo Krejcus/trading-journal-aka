@@ -1,10 +1,17 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash, randomUUID } from 'node:crypto';
 import webpush from 'web-push';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
     evaluateCopierIncidents,
     planCopyEventNotifications,
+    RELAY_STUCK_BRAKE_AFTER_MS,
+    RELAY_STUCK_CLAIMED_WINDOW_MS,
+    RELAY_STUCK_HEARTBEAT_FRESH_MS,
+    reportedRelayCommandIds,
+    type CopierAlertStateRow,
+    type CopierRelayCommandRow,
+    type CopierRelayQueueSnapshot,
     type CopierRuntimeRow,
 } from '../../server/copierIncidentWatchdog.js';
 import {
@@ -516,6 +523,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (closedTradesResult.error) throw new Error(closedTradesResult.error.message);
             const runtimes = (runtimesResult.data ?? []) as NativeLiveActivityRuntimeRow[];
             const alertStates = (alertStatesResult.data ?? []) as VersionedAlertState[];
+            // Zaseknutá fronta relaye: jen čtení nevyřízených příkazů živých
+            // workerů a koncového stavu už ohlášených. Hned po heartbeatu, ne
+            // až po pomalém broker snapshotu — jinak by heartbeat vždy vyšel
+            // starý. Chyba nebo plný limit = undefined: výstraha se nemění.
+            const relayQueue = await readCopierRelayQueue(supabase, runtimes, alertStates).catch((error: unknown) => {
+                console.error('[Cron] Copier relay queue read threw:', error);
+                return undefined;
+            });
             const tradovateConfig = readTradovateServerConfig();
             const brokerSnapshot = createNativeBrokerSnapshotLoader({
                 db: supabase,
@@ -535,6 +550,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 runtimes: runtimes as CopierRuntimeRow[],
                 alertStates,
                 now: now.getTime(),
+                relayQueue,
             });
 
             const enqueueForUser = async (userId: string, eventKey: string, payload: NotificationPayload) => {
@@ -685,6 +701,59 @@ type PushResult = {
     statusCode?: number;
     error?: string;
 };
+
+const RELAY_QUEUE_READ_LIMIT = 500;
+const RELAY_COMMAND_COLUMNS = 'id,device_id,user_id,command_type,status,created_at,claimed_at,error';
+
+/**
+ * Čtení relay fronty pro výstrahu `relay-stuck` (server/copierIncidentWatchdog.ts).
+ * Jen SELECT — fronta se tady nikdy neexpiruje, neopakuje ani nemění.
+ * Čas čtení se bere až teď, ne na začátku cronu, aby stáří nebylo podhodnocené.
+ */
+async function readCopierRelayQueue(
+    db: SupabaseClient,
+    runtimes: ReadonlyArray<{ device_id: string; last_seen_at: string }>,
+    alertStates: readonly CopierAlertStateRow[],
+): Promise<CopierRelayQueueSnapshot | undefined> {
+    const readAt = Date.now();
+    const liveDeviceIds = runtimes
+        .filter(runtime => readAt - Date.parse(runtime.last_seen_at) <= RELAY_STUCK_HEARTBEAT_FRESH_MS)
+        .map(runtime => runtime.device_id);
+    if (liveDeviceIds.length === 0) return { open: [], reported: [], readAt };
+    // Claimed jen v2 (v1 už nikdo nedokončí) a z posledních 24 h (osiřelé
+    // delivery nesmí výstrahu držet věčně); pending expiruje claim sám.
+    const claimedSince = new Date(readAt - RELAY_STUCK_CLAIMED_WINDOW_MS).toISOString();
+    const openResult = await db
+        .from('tradovate_copier_commands')
+        .select(RELAY_COMMAND_COLUMNS)
+        .in('device_id', liveDeviceIds)
+        .in('status', ['pending', 'claimed'])
+        .lt('created_at', new Date(readAt - RELAY_STUCK_BRAKE_AFTER_MS).toISOString())
+        .or(`status.eq.pending,and(delivery_id.not.is.null,claimed_at.gte.${claimedSince})`)
+        .order('created_at', { ascending: true })
+        .limit(RELAY_QUEUE_READ_LIMIT);
+    if (openResult.error) {
+        console.error('[Cron] Copier relay queue read failed:', openResult.error.message);
+        return undefined;
+    }
+    const open = (openResult.data ?? []) as CopierRelayCommandRow[];
+    // Oříznutý výsledek by jinému zařízení ukázal prázdnou frontu = falešné „vyřešeno“.
+    if (open.length >= RELAY_QUEUE_READ_LIMIT) {
+        console.error('[Cron] Copier relay queue read hit the row limit; relay-stuck left unchanged');
+        return undefined;
+    }
+    const reportedIds = reportedRelayCommandIds(alertStates);
+    if (reportedIds.length === 0) return { open, reported: [], readAt };
+    const reportedResult = await db
+        .from('tradovate_copier_commands')
+        .select(RELAY_COMMAND_COLUMNS)
+        .in('id', reportedIds);
+    if (reportedResult.error) {
+        console.error('[Cron] Copier relay reported-command read failed:', reportedResult.error.message);
+        return undefined;
+    }
+    return { open, reported: (reportedResult.data ?? []) as CopierRelayCommandRow[], readAt };
+}
 
 async function sendPush(sub: any, title: string, body: string, alertType: string): Promise<PushResult> {
     const payload = JSON.stringify({ title, body, url: '/', tag: `alpha-${alertType}` });
