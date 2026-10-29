@@ -320,3 +320,17 @@ a reinstall workeru jen po „nasaď“ (obchodní den), DISARMED/flat.
   followeři (accountId, mode, enabled, multiplier, maxContracts).
 - Dotčená INV navíc: INV-BRAKE-03, INV-TRAD-04, INV-WORKER-04, INV-RISK-04,
   INV-RECON-04, INV-ARM-01, INV-PART-02/03, INV-OUTBOX-02, INV-TRAD-02.
+
+### 8.2 Stav implementace (29. 10. 2026)
+
+Hotovo ve větvi `claude/chart-entry-1a-20261029`; diff oponentura OPRAVIT
+PŘED COMMITEM → opraveno: behaviorální test controlleru (ARMED, mock broker:
+nula volání brokera/commitů/auditů), testy agenta (neznámý příkaz, brzda po
+zadání), kontrakt ze zdroje ceny grafu (`previewSymbolFromChartSource`,
+kontinuální řada = náhled nejde), `copier-relay-preview-busy` = 409,
+INV-MANUAL-01. Výhrady opravené: cut followera = přísnější z nastaveného
+a efektivního, DLL ≤ 0 = nenastaveno, konec ARM null bez TTL, texty pravidel
+dne („ruční vstup je přísnější“), stáří výsledku od přijetí a zahození při
+změně stavu kopírky. Vědomě přijato: `lastGroupFillAt` jen z uzavřených
+obchodů leadera (okno sekund, částečně kryje quiet window), konec okna jen
+jako stav za 5 min, poplatky odhadem.

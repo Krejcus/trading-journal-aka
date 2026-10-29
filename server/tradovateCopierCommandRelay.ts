@@ -1,4 +1,4 @@
-import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview';
+import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview.js';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
@@ -117,7 +117,8 @@ export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | n
   if (message === 'tighten-only') return 409;
   if (message === 'copier-relay-worker-disconnected'
     || message === 'copier-relay-runtime-not-found'
-    || message === 'copier-relay-arm-config-conflict') return 409;
+    || message === 'copier-relay-arm-config-conflict'
+    || message === 'copier-relay-preview-busy') return 409;
   if (message === 'unsupported-command'
     || message === 'unsupported-relay-command'
     || message === 'unsupported-remote-copy-command'

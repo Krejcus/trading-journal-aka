@@ -61,7 +61,7 @@ export interface ManualEntryPreviewInputs {
     id: string;
     enabled: boolean;
     leaderAccountId: number | null;
-    followers: ReadonlyArray<{ accountId: number; mode: string; multiplier: number; enabled?: boolean; maxContracts?: number | null }>;
+    followers: ReadonlyArray<{ accountId: number; mode: string; multiplier: number; enabled?: boolean; maxContracts?: number | null; dailyLossCutUsd?: number | null }>;
     safety?: { dailyLossLimitUsd?: number; dailyMaxLosingTrades?: number; dailyMaxTrades?: number } | null;
   } | null;
   /** Kontext risk gate PŘESNĚ jako dispatch (sequenceBroken a stuckOutbox už složené). */
@@ -81,7 +81,8 @@ export interface ManualEntryPreviewInputs {
   /** Stav obchodního okna za `MANUAL_ENTRY_END_RESERVE_MS` (okno nesmí během rezervy skončit). */
   tradingWindowStateAfterReserve: 'inside' | 'outside' | 'off';
   sessionEndAt: number;
-  armExpiresAt: number;
+  /** Konec zapnutí kopírky; null = není zapnutá nebo bez TTL. */
+  armExpiresAt: number | null;
   transportResumePending: boolean;
   dailyStats: { realizedPnlUsd: number; losingTrades: number; tradesToday: number };
   /** Poslední fill / uzavřený obchod skupiny; risk snapshot musí být novější. */
@@ -98,13 +99,16 @@ export interface ManualEntryPreviewInputs {
 const blocker = (code: string, text: string): LeaderEntryPreviewIssue => ({ code, text });
 
 /** Zbývá do nejbližšího limitu účtu: MIN ze všech známých, zisk rezervu nezvětšuje. */
-export function remainingLossHeadroom(risk: ManualEntryAccountRisk): { dailyUsd: number | null; drawdownUsd: number | null; cutUsd: number | null } {
+export function remainingLossHeadroom(risk: ManualEntryAccountRisk, configuredCutUsd: number | null = null): { dailyUsd: number | null; drawdownUsd: number | null; cutUsd: number | null } {
   const result = (risk.realizedPnlUsd ?? 0) + (risk.openPnlUsd ?? 0);
   const loss = Math.min(0, result);
-  const dailyUsd = risk.dailyLossAutoLiq != null ? risk.dailyLossAutoLiq + loss : null;
+  // DLL 0 / záporné = broker limit nenastavil (ne „nula zbývá“).
+  const dailyUsd = risk.dailyLossAutoLiq != null && risk.dailyLossAutoLiq > 0 ? risk.dailyLossAutoLiq + loss : null;
   const equity = risk.netLiq ?? (risk.cashBalanceUsd != null ? risk.cashBalanceUsd + (risk.openPnlUsd ?? 0) : null);
   const drawdownUsd = equity != null && risk.minNetLiq != null ? equity - risk.minNetLiq : null;
-  const cutUsd = risk.effectiveDailyLossCutUsd != null ? risk.effectiveDailyLossCutUsd + loss : null;
+  // Cut followera: přísnější z nastaveného a platného efektivního (prop rezerva).
+  const cuts = [risk.effectiveDailyLossCutUsd, configuredCutUsd].filter((value): value is number => value != null && value > 0);
+  const cutUsd = cuts.length ? Math.min(...cuts) + loss : null;
   return { dailyUsd, drawdownUsd, cutUsd };
 }
 
@@ -160,9 +164,9 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
 
   // Pravidla dne čistě ze stavu dne (bez vyhodnocování s efekty).
   const safety = group.safety ?? {};
-  if ((safety.dailyMaxTrades ?? 0) > 0 && input.dailyStats.tradesToday >= safety.dailyMaxTrades!) blockers.push(blocker('daily-max-trades', 'Dosažen počet obchodů dne.'));
-  if ((safety.dailyMaxLosingTrades ?? 0) > 0 && input.dailyStats.losingTrades >= safety.dailyMaxLosingTrades!) blockers.push(blocker('daily-max-losing', 'Dosažen počet ztrátových obchodů dne.'));
-  if ((safety.dailyLossLimitUsd ?? 0) > 0 && -input.dailyStats.realizedPnlUsd >= safety.dailyLossLimitUsd!) blockers.push(blocker('daily-loss-limit', 'Dosažena denní ztráta skupiny.'));
+  if ((safety.dailyMaxTrades ?? 0) > 0 && input.dailyStats.tradesToday >= safety.dailyMaxTrades!) blockers.push(blocker('daily-max-trades', 'Dosažen počet obchodů dne (ruční vstup je přísnější než kopírka).'));
+  if ((safety.dailyMaxLosingTrades ?? 0) > 0 && input.dailyStats.losingTrades >= safety.dailyMaxLosingTrades!) blockers.push(blocker('daily-max-losing', 'Dosažen počet ztrátových obchodů dne (ruční vstup je přísnější než kopírka).'));
+  if ((safety.dailyLossLimitUsd ?? 0) > 0 && -input.dailyStats.realizedPnlUsd >= safety.dailyLossLimitUsd!) blockers.push(blocker('daily-loss-limit', 'Dosažena denní ztráta skupiny (ruční vstup je přísnější než kopírka).'));
 
   // Příkaz samotný.
   if (command.quantity > MANUAL_ENTRY_MAX_CONTRACTS) blockers.push(blocker('manual-cap', `Ruční vstup je zatím omezený na ${MANUAL_ENTRY_MAX_CONTRACTS} kontrakt.`));
@@ -182,7 +186,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
   const swingPerContract = pointValue == null ? null
     : (Math.abs(command.takeProfit - command.stopLoss) + MANUAL_ENTRY_SLIPPAGE_TICKS * TICK) * pointValue + fee;
 
-  const checkAccount = (accountId: number, label: string, quantity: number) => {
+  const checkAccount = (accountId: number, label: string, quantity: number, configuredCutUsd: number | null = null) => {
     const account = input.accounts.get(accountId);
     if (!account || account.positions == null || account.liveOrders == null) {
       blockers.push(blocker('account-unverified', `${label}: pozice nebo příkazy nejsou ověřené.`));
@@ -198,7 +202,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
       blockers.push(blocker('risk-unverified', `${label}: denní limit není čerstvě ověřený.`));
       return;
     }
-    const headroom = remainingLossHeadroom(risk);
+    const headroom = remainingLossHeadroom(risk, configuredCutUsd);
     const known = [headroom.dailyUsd, headroom.drawdownUsd, headroom.cutUsd].filter((value): value is number => value != null);
     if (!known.length) { blockers.push(blocker('risk-unknown', `${label}: žádný limit účtu není známý.`)); return; }
     if (lossPerContract == null || swingPerContract == null) return;
@@ -234,7 +238,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
       blockers.push(blocker('max-contracts', `${label}: překročil by strop ${follower.maxContracts} kontraktů.`));
     }
     if (follower.maxContracts != null) notes.push(blocker('max-contracts-fallback', `${label}: má strop kontraktů — při rozpadu OSO korelace by obchod vynechal.`));
-    checkAccount(follower.accountId, label, quantity);
+    checkAccount(follower.accountId, label, quantity, follower.dailyLossCutUsd ?? null);
     const gateRequests: BrokerOrderRequest[] = [
       { tag: 'preview', accountId: follower.accountId, symbol: command.symbol, side: command.side, quantity, orderType: command.orderType, ...(command.orderType === 'Limit' ? { limitPrice: command.price } : { stopPrice: command.price }) },
       { tag: 'previews', accountId: follower.accountId, symbol: command.symbol, side: exit, quantity, orderType: 'Stop', stopPrice: command.stopLoss },

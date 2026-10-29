@@ -1940,3 +1940,46 @@ describe('P-A změny velikosti za otevřené pozice', () => {
     }
   });
 });
+
+describe('fáze 1a: náhled ručního vstupu v agentu', () => {
+  const previewCommand = () => ({
+    type: 'preview-leader-entry' as const, groupId: group().id, operationId: 'preview:agenttest0001', leaderAccountId: 100,
+    symbol: 'MNQZ6', side: 'Buy' as const, quantity: 1, orderType: 'Limit' as const, price: 29_500, stopLoss: 29_480, takeProfit: 29_560,
+    intent: { armedAt: 0, groupConfigHash: 'abcdefgh12345678', followerQuantities: [] },
+  });
+  const previewResult = () => ({
+    type: 'leader-entry-preview' as const, operationId: 'preview:agenttest0001', checkedAt: 1, symbol: 'MNQZ6',
+    wouldPlace: { leader: { accountId: 100, side: 'Buy' as const, quantity: 1, orderType: 'Limit' as const, price: 29_500, stopLoss: 29_480, takeProfit: 29_560 }, followers: [] },
+    blockers: [], notes: [],
+  });
+
+  it('neznámý copy-command nikdy nevrátí „ok“ bez výsledku', async () => {
+    const runtime = controller();
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      await expect(agent.execute({ type: 'copy-command', command: { type: 'future-command' } as never })).rejects.toThrow('unsupported-copy-command');
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it('náhled projde validací, vrátí výsledek controlleru a brzda po jeho zadání ho zneplatní', async () => {
+    const runtime = controller();
+    const preview = vi.fn(() => previewResult());
+    (runtime as unknown as { previewLeaderEntry: typeof preview }).previewLeaderEntry = preview;
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      const ok = await agent.execute({ type: 'copy-command', command: previewCommand() }, { createdAt: Date.now() });
+      expect(preview).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(ok)).toContain('"wouldPlace":{');
+      const requestedAt = Date.now();
+      await agent.execute({ type: 'disarm' }, { createdAt: requestedAt + 5 });
+      const late = await agent.execute({ type: 'copy-command', command: previewCommand() }, { createdAt: requestedAt });
+      expect(JSON.stringify(late)).toContain('brake-after-request');
+      expect(JSON.stringify(late)).toContain('"wouldPlace":null');
+      await expect(agent.execute({ type: 'copy-command', command: { ...previewCommand(), extra: 1 } as never })).rejects.toThrow('invalid-relay-command-payload');
+    } finally {
+      await agent.close();
+    }
+  });
+});

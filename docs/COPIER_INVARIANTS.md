@@ -1311,6 +1311,31 @@ existující ochranu.
   `tests/journalLivePosition.test.ts`, `tests/tradovateWorkerExposureOverlay.test.ts`,
   `tests/tvPriceClientGuards.test.ts` (jen čtení, žádný příkaz ani úložiště).
 
+### INV-MANUAL-01: Ruční vstup z appky jde jen přes worker na leadera; náhled (fáze 1a) nic nezapíše (29. 10. 2026)
+
+- Proč: Obchodování z grafu je první risk-zvyšující cesta z appky. Fáze 1a
+  ověřuje brány naostro bez zápisu, aby „náhled OK“ nikdy nebylo zaměněno
+  za odeslání.
+- Vynucuje: `lib/leaderEntryPreview.ts:validateLeaderEntryPreview` (stejná
+  validace na enqueue, claim i ve workeru; `operationId` jen `preview:`),
+  `server/tradovateCopierCommandRelay.ts:assertPreviewAdmissible` (nejvýš
+  jeden náhled na zařízení, 3 s rozestup, TTL 15 s — sériová linka relaye
+  nezdrží brzdy), `services/copierRuntimeController.ts:previewLeaderEntry`
+  (jen synchronní sběr zmrazených vstupů, žádné IO, audit, persist ani
+  lastError), čisté `services/manualEntryPreview.ts:evaluateManualEntryPreview`
+  (bez importu brokera; chybějící data ≠ flat; riziko = MIN ze všech limitů),
+  `server/localCopierExecutionAgent.ts` (brzda po zadání = blocker; neznámý
+  copy-command = throw), panel `components/LiveOrderTicket.tsx:PreviewSection`
+  (stáří od přijetí, po 15 s zastaralé, nikdy „připraveno“, Odeslat vypnuté).
+- Hlídá test: `tests/manualEntryPreview.test.ts`,
+  `tests/manualEntryPreviewController.test.ts` (ARMED controller s mock
+  brokerem: nula volání brokera, commitů a auditů), `tests/localCopierExecutionAgent.test.ts`.
+- Nikdy: Náhled nesmí autorizovat odeslání ani se stát jeho deduplikačním
+  záznamem; odeslání (fáze 1b) vše přepočítá z čerstvého stavu a kotace
+  brokera. Kontrakt jen ze zdroje ceny grafu, nikdy odhadem v týdnu rollu.
+- Bezpečné vs. nebezpečné: Bezpečné je přidat blocker. Nebezpečné je náhledu
+  dát přístup k brokerovi, REST čtení nebo čekání na `eventTail`.
+
 ### INV-UI-04: Data z TradingView jsou jen pro zobrazení; nikdy nevstupují do read modelu, rozhodování ani úložišť (26. 10. 2026)
 
 - Proč: Filip 26. 10. povolil cenu z TV pro P&L zobrazené na obrazovce, nikdy

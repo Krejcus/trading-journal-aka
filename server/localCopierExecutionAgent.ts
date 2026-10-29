@@ -1,4 +1,4 @@
-import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview';
+import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview.js';
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';

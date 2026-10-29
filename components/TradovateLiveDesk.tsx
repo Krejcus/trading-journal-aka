@@ -1,5 +1,4 @@
 import { buildLeaderEntryPreviewCommand, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
-import { quarterlyContractsAround } from '../services/marketDataCalculations';
 import { perfMark, perfMarkOnce } from '../lib/perfTrace';
 import { releaseLivePriority } from '../lib/livePriority';
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
@@ -831,13 +830,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (!current.fresh || !status || !executionGroup || executionGroup.leaderAccountId == null) {
       throw new Error('Stav kopírky není čerstvě ověřený — náhled teď nejde.');
     }
-    const now = Date.now();
     const command = buildLeaderEntryPreviewCommand(draft, {
       group: executionGroup,
       armedAt: status.controller.armedAt ?? 0,
       excludedFollowers: new Set(status.controller.excludedForeignFollowers ?? []),
       participation: status.controller.followerParticipation ?? [],
-      symbol: quarterlyContractsAround('MNQ', now)[0],
       operationId: `preview:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
     });
     const route = previewRouteRef.current;

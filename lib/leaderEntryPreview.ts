@@ -1,4 +1,4 @@
-import { stableHash64 } from '../services/copierKeys';
+import { stableHash64 } from '../services/copierKeys.js';
 
 /**
  * Fáze 1a obchodování z grafu (docs/CHART_ORDER_ENTRY_PLAN.md §8): NÁHLED
@@ -117,6 +117,8 @@ export function copyGroupConfigHash(group: PreviewGroupShape): string {
 
 /** Co pošle panel objednávky (zbytek doplní desk ze stavu workeru). */
 export interface LiveEntryPreviewDraft {
+  /** Kontrakt, ze kterého jsou ceny v grafu (`MNQZ6`) — v týdnu rollu nikdy odhadem. */
+  symbol: string;
   side: 'Buy' | 'Sell';
   quantity: number;
   orderType: 'Limit' | 'Stop';
@@ -135,7 +137,6 @@ export function buildLeaderEntryPreviewCommand(draft: LiveEntryPreviewDraft, con
   armedAt: number;
   excludedFollowers: ReadonlySet<number>;
   participation: ReadonlyArray<{ accountId: number; effectiveEnabled: boolean }>;
-  symbol: string;
   operationId: string;
 }): LeaderEntryPreviewCommand {
   const active = new Map(context.participation.map(entry => [entry.accountId, entry.effectiveEnabled]));
@@ -148,8 +149,16 @@ export function buildLeaderEntryPreviewCommand(draft: LiveEntryPreviewDraft, con
     groupId: context.group.id,
     operationId: context.operationId,
     leaderAccountId: context.group.leaderAccountId,
-    symbol: context.symbol,
     ...draft,
     intent: { armedAt: context.armedAt, groupConfigHash: copyGroupConfigHash(context.group), followerQuantities },
   };
+}
+
+/**
+ * Kontrakt podle zdroje ceny grafu (`IBKR:MNQZ2026`, `MNQZ6`); kontinuální
+ * řada (`MNQ1!`) nebo neznámý tvar = null — náhled pak nejde poslat.
+ */
+export function previewSymbolFromChartSource(source: string | null | undefined): string | null {
+  const match = /(?:^|[:\s])(MNQ|NQ)([HMUZ])(?:20)?(\d{1,2})$/.exec((source ?? '').trim().toUpperCase());
+  return match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
 }

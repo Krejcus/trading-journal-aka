@@ -5,7 +5,7 @@ import {
   type ManualEntryAccountInputs, type ManualEntryPreviewInputs,
 } from '../services/manualEntryPreview';
 import {
-  buildLeaderEntryPreviewCommand, copyGroupConfigHash, validateLeaderEntryPreview, type LeaderEntryPreviewCommand,
+  buildLeaderEntryPreviewCommand, copyGroupConfigHash, previewSymbolFromChartSource, validateLeaderEntryPreview, type LeaderEntryPreviewCommand,
 } from '../lib/leaderEntryPreview';
 import { createRiskGateContext } from '../services/copierRiskGate';
 
@@ -52,7 +52,7 @@ const inputs = (patch: Partial<ManualEntryPreviewInputs> = {}): ManualEntryPrevi
   tradingWindowState: 'inside',
   tradingWindowStateAfterReserve: 'inside',
   sessionEndAt: NOW + 6 * 3_600_000,
-  armExpiresAt: NOW + 3 * 3_600_000,
+  armExpiresAt: NOW + 3 * 3_600_000 as number | null,
   transportResumePending: false,
   dailyStats: { realizedPnlUsd: 0, losingTrades: 0, tradesToday: 0 },
   lastGroupFillAt: null,
@@ -128,8 +128,14 @@ describe('fáze 1a: náhled ručního vstupu (čisté vyhodnocení)', () => {
   });
 
   it('riziko: MIN ze všech limitů, zisk rezervu nezvětší, neznámé = blocker', () => {
-    // DLL 1200, ale do MLL floor jen 300 $ → rozpětí TP–SL (80 b × 2 $ + skluz + poplatek) neprojde.
-    expect(codes({ accounts: new Map([[1, flat({ risk: risk({ netLiq: 49_300 }) })], [2, flat()], [3, flat()]]) })).toContain('risk-drawdown');
+    // DLL 1200, ale do MLL floor jen 100 $ → rozpětí TP–SL (80 b × 2 $ + skluz + poplatek ≈ 162 $) neprojde.
+    expect(codes({ accounts: new Map([[1, flat({ risk: risk({ netLiq: 49_100 }) })], [2, flat()], [3, flat()]]) })).toContain('risk-drawdown');
+    expect(codes({ accounts: new Map([[1, flat({ risk: risk({ netLiq: 49_300 }) })], [2, flat()], [3, flat()]]) })).not.toContain('risk-drawdown');
+    // DLL 0 = broker limit nenastavil, ne „nic nezbývá“.
+    expect(remainingLossHeadroom(risk({ dailyLossAutoLiq: 0 })).dailyUsd).toBeNull();
+    // Cut followera: přísnější z nastaveného a efektivního.
+    expect(remainingLossHeadroom(risk({ effectiveDailyLossCutUsd: null }), 400).cutUsd).toBe(400);
+    expect(remainingLossHeadroom(risk({ effectiveDailyLossCutUsd: 300, realizedPnlUsd: -100 }), 400).cutUsd).toBe(200);
     expect(remainingLossHeadroom(risk({ realizedPnlUsd: 500 })).dailyUsd).toBe(1_200);
     expect(remainingLossHeadroom(risk({ realizedPnlUsd: -1_150 })).dailyUsd).toBe(50);
     expect(codes({ accounts: new Map([[1, flat({ risk: risk({ realizedPnlUsd: -1_180 }) })], [2, flat()], [3, flat()]]) })).toContain('risk-daily');
@@ -154,6 +160,13 @@ describe('fáze 1a: náhled ručního vstupu (čisté vyhodnocení)', () => {
 });
 
 describe('fáze 1a: protokol náhledu', () => {
+  it('kontrakt ze zdroje ceny grafu; kontinuální řada = neznámý', () => {
+    expect(previewSymbolFromChartSource('IBKR:MNQZ2026')).toBe('MNQZ6');
+    expect(previewSymbolFromChartSource('MNQH7')).toBe('MNQH7');
+    expect(previewSymbolFromChartSource('CME_MINI:MNQ1!')).toBeNull();
+    expect(previewSymbolFromChartSource(null)).toBeNull();
+  });
+
   it('validace: whitelist klíčů, typy, tick, symbol jen [HMUZ], prefix preview:', () => {
     expect(validateLeaderEntryPreview(command())).toBeTruthy();
     const bad = (patch: Record<string, unknown>) => () => validateLeaderEntryPreview({ ...command(), ...patch });
@@ -170,10 +183,10 @@ describe('fáze 1a: protokol náhledu', () => {
 
   it('panel sestaví záměr stejně jako kopírka (vyřazený, vypnutý, on-fill bez kopie)', () => {
     const built = buildLeaderEntryPreviewCommand(
-      { side: 'Buy', quantity: 1, orderType: 'Limit', price: 29_500, stopLoss: 29_480, takeProfit: 29_560 },
+      { symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 29_500, stopLoss: 29_480, takeProfit: 29_560 },
       {
         group: { ...group, followers: [...group.followers, { accountId: 4, mode: 'on-fill', multiplier: 1 }, { accountId: 5, mode: 'on-submit', multiplier: 1 }] },
-        armedAt: 7, excludedFollowers: new Set([5]), participation: [], symbol: 'MNQZ6', operationId: 'preview:abcdefgh1234',
+        armedAt: 7, excludedFollowers: new Set([5]), participation: [], operationId: 'preview:abcdefgh1234',
       },
     );
     expect(built.intent.followerQuantities).toEqual([{ accountId: 2, quantity: 1 }, { accountId: 3, quantity: 2 }]);

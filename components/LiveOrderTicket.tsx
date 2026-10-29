@@ -20,7 +20,7 @@ import {
   type TicketSide,
 } from '../lib/liveOrderTicket';
 import type { LiveChartPosition, LiveChartPositionSummary } from '../lib/liveChartPosition';
-import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
+import { previewSymbolFromChartSource, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import {
   GROUP_TARGET,
   allTradeAccounts,
@@ -111,14 +111,16 @@ const PREVIEW_FRESH_MS = 15_000;
 const PreviewSection: React.FC<{
   isDark: boolean; muted: string; field: string;
   previewDraft: LiveEntryPreviewDraft | null;
+  /** Změna stavu kopírky (zapnutí / vypnutí) výsledek zahodí. */
+  resetKey: string;
   blockedReason: string | null;
   onPreview: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
-}> = ({ isDark, muted, field, previewDraft, blockedReason, onPreview }) => {
-  const [state, setState] = useState<{ key: string; result?: LeaderEntryPreviewResult; error?: string } | null>(null);
+}> = ({ isDark, muted, field, previewDraft, resetKey, blockedReason, onPreview }) => {
+  const [state, setState] = useState<{ key: string; receivedAt?: number; result?: LeaderEntryPreviewResult; error?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [now, setNow] = useState(() => Date.now());
-  const key = previewDraft ? JSON.stringify(previewDraft) : '';
+  const key = previewDraft ? `${resetKey}|${JSON.stringify(previewDraft)}` : '';
   useEffect(() => {
     if (!state?.result) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
@@ -130,18 +132,22 @@ const PreviewSection: React.FC<{
     busyRef.current = true;
     setBusy(true);
     try {
-      setState({ key, result: await onPreview(previewDraft) });
+      const result = await onPreview(previewDraft);
+      // Stáří od přijetí v tomto prohlížeči — hodiny telefonu a Macu se můžou lišit.
+      setState({ key, result, receivedAt: Date.now() });
       setNow(Date.now());
     } catch (reason) {
-      setState({ key, error: reason instanceof Error ? reason.message : 'Náhled se nepodařil.' });
+      const message = reason instanceof Error ? reason.message : 'Náhled se nepodařil.';
+      setState({ key, error: /preview-busy/.test(message) ? 'Náhled už běží, zkus to za 3 s.' : message });
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
   };
   const result = shown?.result;
-  const age = result ? Math.max(0, Math.round((now - result.checkedAt) / 1000)) : 0;
-  const stale = result ? now - result.checkedAt > PREVIEW_FRESH_MS : false;
+  const receivedAt = shown?.receivedAt ?? now;
+  const age = result ? Math.max(0, Math.round((now - receivedAt) / 1000)) : 0;
+  const stale = result ? now - receivedAt > PREVIEW_FRESH_MS : false;
   const order = (entry: { side: string; quantity: number; orderType: string; price: number; stopLoss: number; takeProfit: number }) =>
     `${entry.side === 'Buy' ? 'BUY' : 'SELL'} ${entry.orderType === 'Limit' ? 'LMT' : 'STP'} ${entry.quantity} @ ${formatPrice(entry.price)} · SL ${formatPrice(entry.stopLoss)} · TP ${formatPrice(entry.takeProfit)}`;
   return <div className="grid gap-1.5">
@@ -153,6 +159,7 @@ const PreviewSection: React.FC<{
       className={`h-8 rounded-[9px] border text-[11px] font-extrabold disabled:cursor-not-allowed disabled:opacity-50 ${isDark ? 'border-white/15 hover:bg-white/[0.06]' : 'border-slate-900/15 hover:bg-white/70'}`}
     >{busy ? 'Ověřuji u workeru…' : 'Zkontrolovat u workeru (nic se neodešle)'}</button>
     {blockedReason && <div className={`text-[10px] ${muted}`}>{blockedReason}</div>}
+    {previewDraft && <div className={`text-[10px] ${muted}`}>Kontrakt podle grafu: <b>{previewDraft.symbol}</b></div>}
     {shown?.error && <div className="rounded-[7px] bg-rose-500/10 px-2 py-1.5 text-[10.5px] font-bold text-rose-500">Náhled: {shown.error}</div>}
     {result && <div className={`grid gap-1 rounded-[9px] border p-2 text-[10.5px] ${field} ${stale ? 'opacity-50' : ''}`}>
       <div className={`flex justify-between text-[9.5px] font-black uppercase tracking-[0.06em] ${muted}`}>
@@ -262,10 +269,13 @@ const LiveOrderTicket: React.FC<Props> = ({
   const problems = draft && quote ? ticketProblems(draft, instrument, quote, limits) : [];
   const groupMultiplier = group ? targetMultiplier(group, target) : 1;
   // Fáze 1a: co by panel poslal workeru k náhledu (jen Limit/Stop se SL i TP, skupina).
-  const previewDraft: LiveEntryPreviewDraft | null = draft && m && draft.type !== 'market' && draft.stopLoss != null && draft.takeProfit != null && m.quantity >= 1
-    ? { side: draft.side === 'buy' ? 'Buy' : 'Sell', quantity: m.quantity, orderType: draft.type === 'limit' ? 'Limit' : 'Stop', price: draft.price, stopLoss: draft.stopLoss, takeProfit: draft.takeProfit }
+  // Kontrakt bere náhled ze zdroje ceny grafu — v týdnu rollu nikdy odhadem.
+  const previewSymbol = previewSymbolFromChartSource(quoteInfo.source);
+  const previewDraft: LiveEntryPreviewDraft | null = previewSymbol && draft && m && draft.type !== 'market' && draft.stopLoss != null && draft.takeProfit != null && m.quantity >= 1
+    ? { symbol: previewSymbol, side: draft.side === 'buy' ? 'Buy' : 'Sell', quantity: m.quantity, orderType: draft.type === 'limit' ? 'Limit' : 'Stop', price: draft.price, stopLoss: draft.stopLoss, takeProfit: draft.takeProfit }
     : null;
   const previewBlockedReason = !draft ? null
+    : !previewSymbol ? 'Kontrakt grafu není známý (kontinuální řada) — náhled teď nejde.'
     : draft.type === 'market' ? 'Náhled jen pro Limit / Stop (Market zatím ne).'
       : draft.stopLoss == null || draft.takeProfit == null ? 'Náhled potřebuje SL i TP.'
         : single ? 'Náhled zatím jen pro skupinu (vstup na leadera).'
@@ -551,6 +561,7 @@ const LiveOrderTicket: React.FC<Props> = ({
         muted={tone.muted}
         field={tone.field}
         previewDraft={previewDraft}
+        resetKey={String(group?.armed)}
         blockedReason={previewBlockedReason}
         onPreview={onPreviewEntry}
       />}

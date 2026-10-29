@@ -17439,7 +17439,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         tradingWindowState: windowEnabled ? tradingWindowStateAt(tradingWindow, now) : 'off',
         tradingWindowStateAfterReserve: windowEnabled ? tradingWindowStateAt(tradingWindow, now + MANUAL_ENTRY_END_RESERVE_MS) : 'off',
         sessionEndAt: now + msUntilTradovateSessionEnd(now),
-        armExpiresAt: gate.armed ? gate.armedAt + gate.armTtlMs : 0,
+        armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : null,
         transportResumePending: transportResume != null && transportResume.state === 'waiting',
         dailyStats: { realizedPnlUsd: stats.realizedPnlUsd, losingTrades: stats.losingTrades, tradesToday: stats.tradesToday ?? 0 },
         lastGroupFillAt: closedAt.length ? Math.max(...closedAt) : null,

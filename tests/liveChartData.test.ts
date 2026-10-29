@@ -189,7 +189,7 @@ describe('LIVE → Graf: vypnutí a strážní pravidla', () => {
 
   it('BE a Zavřít pozici v panelu nic neodesílají', () => {
     const ticket = readFileSync('components/LiveOrderTicket.tsx', 'utf8');
-    const card = ticket.slice(ticket.indexOf('const PositionCard'), ticket.indexOf('interface Props {'));
+    const card = ticket.slice(ticket.indexOf('const PositionCard'), ticket.indexOf('/** Jak dlouho výsledek náhledu platí'));
     expect(card).toMatch(/disabled\n/);
     expect(card).not.toMatch(/onClick/);
   });
