@@ -57,7 +57,7 @@ async function setup(options: { followerDll?: number; store?: CopierStore; group
   const status = controller.status();
   const preview = buildLeaderEntryPreviewCommand(
     { symbol: SYMBOL, side: 'Buy', quantity: 1, orderType: 'Limit', price: ENTRY, stopLoss: SL, takeProfit: TP },
-    { group: { ...group(), leaderAccountId: LEADER }, armedAt: status.armedAt ?? 0, excludedFollowers: new Set(), participation: [], operationId: 'preview:managetest01' },
+    { group: { ...config, leaderAccountId: LEADER }, armedAt: status.armedAt ?? 0, excludedFollowers: new Set(), participation: [], operationId: 'preview:managetest01' },
   );
   const placed = await controller.placeLeaderEntry(buildLeaderEntryPlaceCommand(preview, 'entry:managetest01'), { deadlineAt: clock.now + 15_000 });
   expect(placed.status).toBe('acknowledged');
@@ -204,7 +204,8 @@ describe('fáze 2a: správa vlastního ručního vstupu', () => {
     const withDisabled: CopyGroupConfig = { ...group(), followers: [...group().followers, { accountId: 201, mode: 'on-submit', multiplier: 1, enabled: false }] };
     const ctx = await setup({ groupConfig: withDisabled });
     await fillEntries(ctx);
-    expect((await manage(ctx, 'move-stop', SL, 29_470, 'manage:disabled01')).status).toBe('acknowledged');
+    const disabledResult = await manage(ctx, 'move-stop', SL, 29_470, 'manage:disabled01');
+    expect(disabledResult.status).toBe('acknowledged');
   });
 
   it('visící posun: neznámý výsledek, vyřešení kopírku nevypne a Flatten All zavře i leadera', async () => {
@@ -223,9 +224,9 @@ describe('fáze 2a: správa vlastního ručního vstupu', () => {
     expect(result.status).toBe('unknown');
     await ctx.controller.waiveManualEntry({ operationId: 'manage:hanging01', reason: 'ověřeno v Tradovate' });
     expect(ctx.controller.status().armed).toBe(true);
-    await ctx.controller.flattenGroup('flatten:managetest01');
-    await sleep(30);
-    await ctx.controller.waitForIdle().catch(() => undefined);
+    // Mock market nikdy nevyplní, Flatten pak čeká na potvrzení — stačí, že leader dostal exit.
+    void ctx.controller.flattenGroup('flatten:managetest01').catch(() => undefined);
+    await sleep(500);
     const leaderTargeted = ctx.broker.liquidateRequests().some(request => request.accountId === LEADER)
       || ctx.broker.placedRequests().some(request => request.accountId === LEADER && request.orderType === 'Market');
     expect(leaderTargeted).toBe(true);

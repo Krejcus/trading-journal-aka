@@ -254,8 +254,10 @@ describe('Tradovate copier command relay', () => {
       command: { type: 'disarm' },
       now: Date.parse('2026-08-21T12:00:00.000Z'),
     });
-    // ARM/SHADOW + čekající ruční vstupy (fáze 1b) — dva nezávislé updaty.
-    expect(updates).toHaveLength(2);
+    // ARM/SHADOW + čekající ruční vstupy (1b) + posuny SL/TP (2a, zrušení vstupu brzda neruší).
+    expect(updates).toHaveLength(4);
+    expect(updates.slice(2).map(update => update.calls.find(([method]) => method === 'contains')?.[1][1]))
+      .toEqual([{ command: { type: 'manage-leader-order', action: 'move-stop' } }, { command: { type: 'manage-leader-order', action: 'move-target' } }]);
     expect(updates[0].value).toEqual(expect.objectContaining({
       status: 'expired', error: 'superseded-by-brake',
     }));
