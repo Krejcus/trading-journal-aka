@@ -622,3 +622,29 @@ hlásí pravdivě. Výsledky správy: push jen při `rejected`/`unknown`.
 
 **UI (P12):** `acknowledged` = „leader posunut, kopie posune kopírka“;
 u `cancel-entry` neslibovat zrušení u followera, který má fill.
+
+### 10.2 Fáze 2b — správa obchodů leadera, které kopírka sleduje (návrh, 29. 10. 2026)
+
+Cíl: stejné akce jako 2a (posun SL/TP dál od trhu, zrušení čekajícího vstupu)
+i pro obchody zadané v TradingView / Tradovate UI — ale jen ty, které kopírka
+sama zkopírovala jako nativní OSO nebo OCO bracket. Id vstupu, SL a TP leadera
+má kopírka v durable `osoOutbox` / `bracketOutbox` (`leaderEntryOrderId`,
+`leaderStopOrderId`, `leaderTargetOrderId`) — žádné hledání podle role (P1 z 10.1).
+
+- **Příkaz:** `manage-leader-order` nese buď `entryOperationId` (vlastní vstup,
+  2a), nebo `leaderEntryOrderId` (sledovaný obchod); právě jedno.
+- **Rozlišení id:** sledovaný obchod = existuje položka OSO/bracket outboxu
+  s tímto `leaderEntryOrderId`, všechny položky (followeři) se shodují na
+  `leaderStopOrderId` i `leaderTargetOrderId` a žádná není `waived`/`rejected`
+  /`abandoned`; jinak blocked. Cena záměru = cena vstupu z požadavku kopie.
+  Obchody se samostatným SL bez páru (standalone stop) a ruční obchody bez
+  kopie spravovat nejde.
+- **Vše ostatní beze změny z 2a:** autoritativní `listOrders`, čistý tvar,
+  jen dál od trhu, přepočet rizika od nejhorší ceny (průměr fillů leadera
+  z fill eventů i pro sledované vstupy; Stop vstup bez fillu = blocked),
+  brána dosahu, durable záznam (klíč `leader:<id>`), zápis mimo frontu,
+  `unknown` jen ze streamu, waiver bez vypnutí.
+- **Status:** `manageableLeaderTrades` — sledované obchody leadera s živou
+  nohou (id + symbol + strana), jen pro výběr v UI; worker vše ověří znovu.
+- **UI:** u pozice v grafu nabídne správu, když na symbolu existuje právě
+  jeden spravovatelný obchod (vlastní nebo sledovaný).
