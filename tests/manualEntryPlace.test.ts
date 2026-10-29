@@ -123,9 +123,14 @@ describe('fáze 1b: odeslání ručního vstupu na leadera', () => {
   it('další vstup hned po přijatém: brána klidu skupiny ho zastaví (id z ACK jsou pracovní příkazy)', async () => {
     const ctx = await setup();
     expect((await ctx.place(ctx.command())).status).toBe('acknowledged');
+    // Hned: eventy prvního OSO a kopie followera ještě běží → fence fronty.
     const second = await ctx.place(ctx.command({ operationId: 'entry:manualtest02' }));
     expect(second.status).toBe('blocked');
-    expect(second.blockers.map(issue => issue.code)).toContain('account-not-flat');
+    await ctx.controller.waitForIdle();
+    // Po zpracování: příkazy leadera a followera jsou živé → brána klidu skupiny.
+    const third = await ctx.place(ctx.command({ operationId: 'entry:manualtest03' }));
+    expect(third.status).toBe('blocked');
+    expect(third.blockers.map(issue => issue.code)).toContain('account-not-flat');
     expect(leaderOso(ctx.broker)).toHaveLength(1);
   });
 
