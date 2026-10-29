@@ -345,3 +345,86 @@ Do fáze 1b přenést:
 - test souladu náhledu s kopírováním: náhled OK na fixture fáze 0 → kopírka
   zkopíruje stejné `followerQuantities`;
 - test relay `assertPreviewAdmissible` proti falešné DB (dnes jen grep).
+
+## 9. Fáze 1b — skutečné odeslání vstupu (návrh, 29. 10. 2026)
+
+Cíl: z lístku poslat na LEADERA nativní OSO (Limit/Stop + SL + TP, 1 kontrakt),
+které kopírka rozkopíruje followerům stávající cestou (OSO pár → nativní OSO
+followera, ověřeno replay testem fáze 0). Prop účty běží na Tradovate „demo“
+infrastruktuře, takže 1b a 1c splývají; strop zůstává `MANUAL_ENTRY_MAX_CONTRACTS = 1`.
+
+**Protokol (bez migrace):** `place-leader-entry` = stejná pole jako náhled +
+`payloadHash` (stableHash64 kanonického JSON všech polí kromě hashe),
+`operationId` s prefixem `entry:` (náhled `preview:` se nikdy nesmí odeslat).
+Relay: v `remoteCopyCommands`, striktní validace na enqueue i claim,
+`idempotencyKey = operationId` (stejný klíč + jiný `payloadHash` = 409
+`copier-relay-entry-conflict`), TTL 15 s, nejvýš jeden čekající/claimed vstup na
+zařízení, min. 3 s odstup, denní strop 30 vstupů na uživatele; brzda
+(`disarm`/`kill`/`lock`) čekající vstupy zneplatní stejně jako ARM
+(`expirePendingArmsSupersededByBrake` rozšířit). Výsledek
+`{ type: 'leader-entry-placed', operationId, status: 'blocked' | 'rejected' |
+'acknowledged' | 'unknown' | 'abandoned', blockers, entryBrokerOrderId?,
+stopBrokerOrderId?, targetBrokerOrderId?, reason? }`.
+
+**Agent:** case `place-leader-entry`: brzda po `createdAt` = blocked (jako
+náhled); jinak `controller.placeLeaderEntry(command, { expiresAt })`.
+Starý worker: `unsupported-copy-command` → UI „worker odeslání neumí“.
+
+**Controller `placeLeaderEntry` (jediná nová risk-zvyšující cesta, INV-MANUAL-01):**
+1. Durable dedup: záznam se stejným `operationId` = vrátit jeho stav, nikdy
+   znovu neposílat (ani po restartu). Jiný `payloadHash` = blocked.
+2. Celé vyhodnocení i zápis běží v `eventTail` (sériová linka controlleru):
+   události od brokera, které dorazí během POSTu, se zpracují až po commitu
+   výsledku → kopírka vlastní OSO pozná podle ID deterministicky.
+3. Uvnitř linky znovu `previewLeaderEntry` (stejné brány jako náhled, čerstvý
+   stav) + navíc: `now + 2 s < expiresAt`, žádný ruční vstup v
+   `sending`/`unknown`/`abandoned`, `gate.armed && !shadowMode`.
+   Jakýkoli blocker = `blocked`, nic se nezapíše.
+4. Durable záznam `manualEntries[]` v `safety` (CAS `persistSafety`) se stavem
+   `sending`, tagem (`me` + 14 znaků), požadavkem a `payloadHash` PŘED POSTem
+   (INV-OUTBOX-01). Po commitu znovu deadline a fence.
+5. Zápis `dispatchBroker(generation).placeOso(...)` (fence safety generation,
+   halt, shadow; zvyšuje `dispatchObservationVersion`). Jeden pokus, žádný retry.
+6. Výsledek (commit do stejného záznamu):
+   - ACK se všemi třemi id → `acknowledged` (id si controller drží i v paměti
+     jako „vlastní ruční OSO“, po restartu z durable);
+   - ACK s id vstupu bez id obou nohou → `abandoned` + incident (failClosed bez
+     auto-close) + přesně cílený cancel vlastního vstupu leadera (jeden pokus,
+     stav cancelu v záznamu; Tradovate se zrušením vstupu ruší i nohy);
+   - definitivní odmítnutí bez jakéhokoli id → `rejected`;
+   - timeout/chyba/nedefinitivní → `unknown` (bez retry). Kopírka zůstává
+     ARMED (leaderovy eventy dál zrcadlí), ale `unknown` blokuje další ruční
+     vstup a ARM (nový `kind: 'manual-entry'` ve stuck operacích, rozuzlení
+     jen auditovaným waiverem `resolve-stuck-operation`).
+7. Restart se záznamem v `sending` → `unknown` (nikdy znovu neposlat).
+
+**Kopírka a vlastní OSO (P2):** ve `flushStandaloneOsoEntry` (vstup bez nohou
+po korelačním okně) a v `oso-lone-leg`: je-li vstup vlastní ruční OSO
+(`acknowledged` id), NIKDY se nekopíruje jako samostatný vstup → failClosed +
+přesný cancel vlastního vstupu leadera. Totéž bez cancelu, je-li nějaký ruční
+vstup `unknown` (nevíme, čí vstup to je). OSO pár se kopíruje beze změny.
+
+**UI:** v lístku po čerstvém náhledu bez blockerů (< 15 s, stejný otisk
+návrhu) tlačítko „Odeslat 1 kontrakt“ s potvrzením; stav „odesílá se“ →
+„přijato brokerem“ / „odmítnuto“ / „výsledek neznámý — zkontroluj Tradovate“
+(nikdy „neprovedeno“ bez důkazu). Zastaralá kotace grafu (`stale`) zastaví
+náhled i odeslání; kontrakt jen ze zdroje `IBKR:` (ne z TradingView, INV-UI-04).
+
+**Testy:** controller s mock brokerem — ARMED odeslání → follower OSO stejné
+ceny/qty (soulad s náhledem na fixture fáze 0); dedup operationId (i po
+restartu); `sending` při restartu = `unknown`; timeout = `unknown`, žádný retry;
+ACK bez nohou = `abandoned` + incident + jeden cancel; odmítnutí = `rejected`
+bez incidentu; vstup bez nohou po okně = žádná kopie + cancel; brzda mezi
+zařazením a provedením; DISARMED/shadow = blocked bez zápisu; změna násobku
+mezi náhledem a odesláním = blocked. Relay: validace, idempotence/konflikt,
+TTL, zneplatnění brzdou, denní strop, `assertPreviewAdmissible` s falešnou DB.
+
+**Fáze 0 doplnit (spouští Filip):** `record-leader-oso.ts --scenario fill`:
+marketable Limit 1 MNQ se SL/TP, záznam přechodu nohou Suspended → Working,
+pak `liquidateposition` leadera (zruší nohy) a ověření flat; `--connection`
+pro Tradeify. Jen za DISARMED kopírky; po záznamu read-only reconcile.
+
+**INV:** INV-MANUAL-01 (rozšířit o zápis), INV-OUTBOX-01/02, INV-RELAY-01/02/03,
+INV-BRAKE-01/02/03, INV-ARM-01/04, INV-DEFAULT-01/02/03, INV-FRESH-01/02/03,
+INV-RISK-01..04, INV-TRAD-02/03/04/06, INV-OUTBOX-03, INV-DIVERGENCE-01,
+INV-RECON-02, INV-UI-01..04, INV-WORKER-04, INV-ELIG-01, INV-PART-01..03.
