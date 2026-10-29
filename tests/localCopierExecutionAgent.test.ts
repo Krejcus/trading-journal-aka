@@ -1,3 +1,4 @@
+import { buildLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { request as httpRequest } from 'node:http';
 import {
@@ -1978,6 +1979,42 @@ describe('fáze 1a: náhled ručního vstupu v agentu', () => {
       expect(JSON.stringify(late)).toContain('brake-after-request');
       expect(JSON.stringify(late)).toContain('"wouldPlace":null');
       await expect(agent.execute({ type: 'copy-command', command: { ...previewCommand(), extra: 1 } as never })).rejects.toThrow('invalid-relay-command-payload');
+    } finally {
+      await agent.close();
+    }
+  });
+});
+
+describe('fáze 1b: odeslání ručního vstupu v agentu', () => {
+  const placeCommand = () => buildLeaderEntryPlaceCommand({
+    type: 'preview-leader-entry', groupId: group().id, operationId: 'preview:agenttest0002', leaderAccountId: 100,
+    symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 29_500, stopLoss: 29_480, takeProfit: 29_560,
+    intent: { armedAt: 0, groupConfigHash: 'abcdefgh12345678', followerQuantities: [] },
+  }, 'entry:agenttest0002');
+
+  it('jen přes relay s platností; loopback odmítne, bez platnosti blocked, brzda po zadání blocked', async () => {
+    const runtime = controller();
+    const place = vi.fn(async () => ({ type: 'leader-entry-placed' as const, operationId: 'entry:agenttest0002', status: 'acknowledged' as const, checkedAt: 1, blockers: [] }));
+    (runtime as unknown as { placeLeaderEntry: typeof place }).placeLeaderEntry = place;
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      expect(agent.status().capabilities).toContain('manual-entry-v1');
+      await expect(agent.execute({ type: 'copy-command', command: placeCommand() }, { source: 'loopback', createdAt: Date.now(), deadlineAt: Date.now() + 15_000 }))
+        .rejects.toThrow('manual-entry-relay-only');
+      const noDeadline = await agent.execute({ type: 'copy-command', command: placeCommand() }, { source: 'relay', createdAt: Date.now() });
+      expect(JSON.stringify(noDeadline)).toContain('no-deadline');
+      expect(place).not.toHaveBeenCalled();
+      const ok = await agent.execute({ type: 'copy-command', command: placeCommand() }, { source: 'relay', createdAt: Date.now(), deadlineAt: Date.now() + 15_000 });
+      expect(JSON.stringify(ok)).toContain('"status":"acknowledged"');
+      expect(place).toHaveBeenCalledTimes(1);
+      const requestedAt = Date.now();
+      await agent.execute({ type: 'disarm' }, { createdAt: requestedAt + 5 });
+      const late = await agent.execute({ type: 'copy-command', command: placeCommand() }, { source: 'relay', createdAt: requestedAt, deadlineAt: requestedAt + 15_000 });
+      expect(JSON.stringify(late)).toContain('brake-after-request');
+      expect(place).toHaveBeenCalledTimes(1);
+      // Změněný obsah se starým otiskem neprojde validací.
+      await expect(agent.execute({ type: 'copy-command', command: { ...placeCommand(), price: 29_400 } }, { source: 'relay', createdAt: Date.now(), deadlineAt: Date.now() + 15_000 }))
+        .rejects.toThrow('invalid-relay-command-payload');
     } finally {
       await agent.close();
     }

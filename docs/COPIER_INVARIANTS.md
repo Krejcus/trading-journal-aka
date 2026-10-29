@@ -303,6 +303,10 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je použít poslední ověřenou route a
   výsledek dál sledovat. Nebezpečné je odstranit tlačítko při unknown statusu.
 
+- Ruční vstup z grafu (29. 10. 2026): vzdálená brzda čeká v sériové lince
+  relaye za právě vykonávaným vstupem nejvýš ~7 s (start ve frontě ≤ 2 s +
+  POST ≤ 5 s); lokální brzdy v controlleru blokování neovlivní.
+
 ### INV-BRAKE-04: Day lock čeká na flat a ručně se neodemyká; relay příkaz jej fixuje na konec session
 
 - Proč: Zamknutí uprostřed obchodu nesmí opustit kopie; ruční odemknutí by
@@ -1340,6 +1344,37 @@ existující ochranu.
   brokera. Kontrakt jen ze zdroje ceny grafu, nikdy odhadem v týdnu rollu.
 - Bezpečné vs. nebezpečné: Bezpečné je přidat blocker. Nebezpečné je náhledu
   dát přístup k brokerovi, REST čtení nebo čekání na `eventTail`.
+- **Fáze 1b — odeslání (29. 10. 2026):** jediný risk-zvyšující příkaz appky
+  `place-leader-entry` (`lib/leaderEntryPlace.ts`: prefix `entry:`, otisk
+  payloadu). Jen přes relay (loopback = `manual-entry-relay-only`), s
+  platností 15 s (`deadlineAt` bez ACK rezervy; chybí = blocked), jeden
+  na zařízení, 3 s rozestup, 30 za 24 h, idempotence `operationId` per
+  uživatel, brzda čekající vstup zneplatní. Controller
+  (`placeLeaderEntry`/`executeManualEntry`): běží ve frontě controlleru
+  s ohraničeným startem (2 s), znovu projde VŠEMI branami náhledu, vyžaduje
+  ARMED (ne shadow) a žádný nevyřešený ruční vstup; durable záznam
+  `safety.manualEntries` ve stavu `sending` PŘED zápisem; fence z čítačů
+  příchodu eventů (trade verze účtů, `configurationControlVersion`,
+  `connectionSyncGeneration`, safety generation) těsně před zápisem —
+  neshoda = `not-sent`; jeden POST přes `dispatchBroker` s timeoutem 5 s,
+  nikdy retry. Výsledek: všechna tři id = `acknowledged` (id se zapíšou do
+  živých příkazů leadera → další vstup blokuje brána klidu); id vstupu bez
+  nohou = `abandoned` + incident bez auto-close + cílené zrušení vstupu;
+  definitivní odmítnutí bez id = `rejected`; jinak `unknown`. ACK za
+  DISARMED (brzda během POSTu) = vlastní vstup se hned zruší. Restart
+  v `sending` = `unknown`.
+- **Vědomá odchylka od INV-DEFAULT-02:** `unknown` nechá kopírku ARMED
+  (leaderovy eventy dál zrcadlí; vstup bez nohou se během `unknown` nikdy
+  nekopíruje). `unknown`/`abandoned` blokuje jen ARM a další ruční vstup —
+  ne dispatch, Flatten, brzdy ani obnovu spojení; rozuzlení jen auditovaným
+  `resolve-stuck-operation` s `kind: 'manual-entry'` (vypne, vynutí kontrolu pozic).
+- **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
+  časovač ani fill před nohami ho neflushnou, čeká se nejvýš 5 s, pak
+  failClosed + cílené zrušení. Cílené zrušení (`cancelOwnManualEntry`) jen
+  id z vlastního záznamu na leaderu, raw broker mimo frontu, jeden pokus
+  s durable stavem, smí i za DISARMED/kill, vyplněný vstup se neruší.
+- Hlídá test (1b): `tests/manualEntryPlace.test.ts`, `tests/leaderEntryPlace.test.ts`,
+  `tests/localCopierExecutionAgent.test.ts`, `tests/tradovateCopierCommandRelay.test.ts`.
 
 ### INV-UI-04: Data z TradingView jsou jen pro zobrazení; nikdy nevstupují do read modelu, rozhodování ani úložišť (26. 10. 2026)
 
@@ -1633,6 +1668,12 @@ Agent-oponent má před schválením změny výslovně odpovědět na každou ot
   otevřené NQ pozice. `tests/copierStaleStandaloneStopSweep.test.ts`.
   Zbývá: follower mimo snapshot reconciliation (`breached`/`dll-locked` bez
   epizody) staré nohy neuzavře a po přechodu do flat dál fail-closed.
+- **29. 10. — OSO okno a zdržená fronta (oponentura 1b).** Časovač
+  samostatného vstupu počítal okno od příchodu eventu; když fronta
+  controlleru stála > 1,5 s (pomalý commit, POST), vystřelil mezi vstupem
+  a nohami → `oso-lone-leg`, nebo kopie vstupu bez ochrany. Teď se flush
+  odloží, dokud čekají nezpracované eventy leadera (po 50 ms, nejvýš 5 s).
+  `tests/manualEntryPlace.test.ts` (fixture fáze 0 + zpoždění 2 s).
 - **UI flicker po návratu na LIVE.** Uložené ON/OFF a status mají zabránit
   vizuálnímu probliknutí, ale jsou výhradně presentation cache. Viz PROJECT_LOG
   „LIVE kopírka: načítání bez problikávání“ a `lib/copierPowerDisplay.ts`.

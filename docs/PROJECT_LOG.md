@@ -285,6 +285,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-29 — Obchodování z grafu, fáze 1b: skutečné odeslání vstupu na leadera (Claude, NENASAZENO)
+
+- Větev `claude/chart-entry-1b-20261029` (worktree `~/alphatrade-worktrees/chart-entry-1b`).
+  Filip: „udělej to komplet a pak vše najednou otestujeme“.
+- Co umí: v LIVE → Graf po čerstvém náhledu bez blokací tlačítko „Odeslat
+  1 kontrakt na leadera“ (potvrzení) → relay `place-leader-entry` → worker
+  → nativní OSO (Limit/Stop + SL + TP) na leadera → kopírka ho rozkopíruje
+  followerům stávající cestou. Strop 1 kontrakt, jen ARMED, jen přes relay.
+- Návrh prošel oponenturou (`copier-design-critic`: OPRAVIT PŘED
+  IMPLEMENTACÍ → zapracováno, plán §9.1). Hlavní nálezy: časovač OSO okna
+  při zdržené frontě (reprodukováno sondou, opraveno obecně i pro TV/
+  Tradovate UI OSO), brzdy z telefonu za POSTem (timeout 5 s), TTL do
+  workeru, dvojí vstup (id z ACK do živých příkazů), fence z čítačů
+  příchodu, cílené zrušení vlastního vstupu, vedlejší účinky stuck operací.
+- Rozhodnuto bez Filipa (bezpečná varianta, změnitelné): ACK přišlý za
+  DISARMED → vlastní vstup se hned zruší; `unknown` nechá kopírku ARMED,
+  ale blokuje ARM a další vstup (rozuzlení ručně, kind `manual-entry`).
+- Skript `record-leader-oso.ts --scenario fill` (+ `--non-group-account`
+  pro Tradeify): marketable Limit, záznam nohou po fillu, liquidate, ověření flat.
+- Neověřeno: nic naostro. Chybí záznam fillu (spouští Filip) a jeho replay;
+  bez něj první skutečné odeslání jen se vzdáleným Limitem (nevyplní se).
+
 ### 2026-10-29 17:39 — NASAZENO: fáze 1a (náhled z grafu) + oprava samovolného vypínání kopírky (Claude, Filip „oprav to a pak nasaď vše“)
 
 - Web: push b0799704 na main, Vercel READY (alphatrade-mentor-15). Bez migrace.

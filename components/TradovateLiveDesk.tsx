@@ -1,4 +1,5 @@
 import { buildLeaderEntryPreviewCommand, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
+import { buildLeaderEntryPlaceCommand, type LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import { perfMark, perfMarkOnce } from '../lib/perfTrace';
 import { releaseLivePriority } from '../lib/livePriority';
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
@@ -121,7 +122,7 @@ import {
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
-import { copierWorkerExecutionGroup, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
 import {
@@ -847,6 +848,34 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (!result || result.type !== 'leader-entry-preview') throw new Error('Worker náhled neumí (starší verze) — nic se neodeslalo.');
     return result;
   }, []);
+  // Fáze 1b: SKUTEČNÉ odeslání ručního vstupu na leadera. Jen přes relay
+  // (idempotence, platnost 15 s, brzda, denní strop); worker loopback odmítne.
+  // Záměr (zapnutí kopírky, otisk skupiny) z čerstvého stavu — worker ho
+  // znovu ověří. Výsledek „neznámý“ nikdy neukazujeme jako „neodesláno“.
+  const placeLeaderEntry = useCallback(async (draft: LiveEntryPreviewDraft, operationId: string): Promise<LeaderEntryPlaceResult> => {
+    const current = armStatusRef.current;
+    const status = current.status;
+    const executionGroup = copierWorkerExecutionGroup(status);
+    if (!current.fresh || !status || !executionGroup || executionGroup.leaderAccountId == null) {
+      throw new Error('Stav kopírky není čerstvě ověřený — nic se neodeslalo.');
+    }
+    const preview = buildLeaderEntryPreviewCommand(draft, {
+      group: executionGroup,
+      armedAt: status.controller.armedAt ?? 0,
+      excludedFollowers: new Set(status.controller.excludedForeignFollowers ?? []),
+      participation: status.controller.followerParticipation ?? [],
+      operationId: `preview:${operationId.slice('entry:'.length)}`,
+    });
+    const command = buildLeaderEntryPlaceCommand(preview, operationId);
+    const route = previewRouteRef.current;
+    if (!route.relayConnectionId) throw new Error('Odeslání jde jen přes relay — chybí připojení k workeru.');
+    const response = await executeTradovateCopierRelayCommand(route.relayConnectionId, { type: 'copy-command', command });
+    const result = (response as { result?: unknown }).result as LeaderEntryPlaceResult | undefined;
+    if (!result || result.type !== 'leader-entry-placed') {
+      throw new Error('Výsledek odeslání chybí — zkontroluj leadera v Tradovate, než to zkusíš znovu.');
+    }
+    return result;
+  }, []);
   const executeSafetyCommand = useCallback(async (command:
     | { type: 'disarm' }
     | { type: 'kill-switch' }
@@ -1497,6 +1526,7 @@ acceptAgentStatus((await executeAgent({
           onDisarm={disarmFromChart}
           onTargetChange={setChartTarget}
           onPreviewEntry={previewLeaderEntry}
+          {...(supportsCopierManualEntry(agentStatus) ? { onPlaceEntry: placeLeaderEntry } : {})}
         />
       ) : null}
       {chartSafetyNotice && <div role="status" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${chartSafetyNotice.tone === 'error' ? 'border-rose-500/50 bg-rose-500/10 text-rose-500' : 'border-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>

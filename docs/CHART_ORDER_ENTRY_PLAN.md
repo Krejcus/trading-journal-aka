@@ -471,3 +471,30 @@ INV-RECON-02, INV-UI-01..04, INV-WORKER-04, INV-ELIG-01, INV-PART-01..03.
   kopírka dál zrcadlí leadera, vlastní vstup bez nohou se nikdy nekopíruje).
 - **Před prvním skutečným odesláním:** nahraný `--scenario fill` a jeho
   replay s asynchronním store (kopie, fill i nohy bez incidentu).
+
+### 9.2 Stav implementace (29. 10. 2026)
+
+Hotovo ve větvi `claude/chart-entry-1b-20261029`: relay (validace, idempotence,
+TTL, brzda, rate limit, denní strop), agent (jen relay, platnost povinná,
+capability `manual-entry-v1`), controller (`placeLeaderEntry`, durable
+`safety.manualEntries`, fence, timeout, mapování výsledku, cílené zrušení,
+waiver `manual-entry`, restart `sending` → `unknown`), pravidla OSO (odklad
+časovače při čekajících eventech leadera, vlastní vstup nikdy bez nohou),
+UI (Odeslat po čerstvém náhledu, stavy výsledku, zastaralá kotace a kontrakt
+jen z IBKR zastaví náhled i odeslání), skript záznamu fillu.
+
+**Společný test s Filipem (pořadí):**
+1. `record-leader-oso.ts --scenario fill` na leaderu (Lucid) za DISARMED, pak
+   reconcile; podle možnosti i Tradeify (`--non-group-account`). Replay záznamu
+   do controlleru (Claude) před krokem 3d.
+2. Nasazení (web + worker reinstall z čistého stavu).
+3. 1 MNQ za ARMED:
+   a) vzdálený Limit → Odeslat → follower dostane OSO stejných cen/qty →
+      zrušit v Tradovate UI → vše zrušeno, bez `lastError`;
+   b) DISARM z telefonu hned po Odeslat → změřit `RELAY EXECUTED durationMs`
+      brzdy, ověřit zrušení vlastního vstupu a text UI;
+   c) dvojklik / druhé zařízení → jen jeden vstup;
+   d) až po replay fillu: vstup u trhu, vyplní se → followeři se SL/TP →
+      výstup TP/SL nebo Flatten běžnou cestou;
+   e) po každém kroku read-only reconcile čistý.
+

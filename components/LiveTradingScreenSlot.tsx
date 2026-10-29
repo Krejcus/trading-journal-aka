@@ -8,6 +8,7 @@ import type { LiveTradeGroup, LiveTradeTarget } from '../lib/liveTradeTarget';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
 import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
+import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 
 /**
  * Obálka LIVE → Graf pro desk. Graf s workspace je těžký, a tak se načítá
@@ -55,6 +56,7 @@ interface Props {
   onDisarm?: () => Promise<{ tone: 'info' | 'error'; text: string }>;
   onTargetChange?: (target: LiveTradeTarget) => void;
   onPreviewEntry?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
+  onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -119,4 +121,5 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && left.disarm?.label === right.disarm?.label && left.disarm?.unverified === right.disarm?.unverified
   && left.onDisarm === right.onDisarm && left.onTargetChange === right.onTargetChange
   && left.onPreviewEntry === right.onPreviewEntry
+  && left.onPlaceEntry === right.onPlaceEntry
 ));

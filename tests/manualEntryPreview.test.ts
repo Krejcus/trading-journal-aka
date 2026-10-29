@@ -164,6 +164,8 @@ describe('fáze 1a: protokol náhledu', () => {
     expect(previewSymbolFromChartSource('IBKR:MNQZ2026')).toBe('MNQZ6');
     expect(previewSymbolFromChartSource('MNQH7')).toBe('MNQH7');
     expect(previewSymbolFromChartSource('CME_MINI:MNQ1!')).toBeNull();
+    // Fáze 1b: kontrakt jen z IBKR, nikdy z TradingView (INV-UI-04).
+    expect(previewSymbolFromChartSource('CME_MINI:MNQZ2026')).toBeNull();
     expect(previewSymbolFromChartSource(null)).toBeNull();
   });
 

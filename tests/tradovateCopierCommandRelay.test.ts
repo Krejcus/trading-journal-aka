@@ -2,6 +2,7 @@ import { DEFAULT_COPY_GROUP_SAFETY, sanitizeCopyGroups } from '../services/liveC
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 import type { LocalCopierAgentCommand, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import { buildLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace';
 import {
   claimTradovateCopierCommand,
   copierRelayValidationErrorStatus,
@@ -1215,5 +1216,68 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
     });
 
     expect(upsert).toHaveBeenCalledOnce();
+  });
+});
+
+describe('fáze 1b: relay ručního vstupu', () => {
+  const NOW = Date.parse('2026-10-29T15:00:00.000Z');
+  const entry = (price = 29_500) => ({
+    type: 'copy-command' as const,
+    command: buildLeaderEntryPlaceCommand({
+      type: 'preview-leader-entry', groupId: 'group-1', operationId: 'preview:relaytest0001', leaderAccountId: 100,
+      symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price, stopLoss: 29_480, takeProfit: 29_560,
+      intent: { armedAt: 1, groupConfigHash: 'abcdefgh12345678', followerQuantities: [] },
+    }, 'entry:relaytest0001'),
+  });
+  const isIdLookup = (calls: Array<[string, unknown[]]>) => calls.some(([method, args]) => method === 'eq' && args[0] === 'idempotency_key');
+  const isBusyLookup = (calls: Array<[string, unknown[]]>) => calls.some(([method]) => method === 'or');
+
+  it('nový vstup: klíč idempotence = operationId, platnost 15 s', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, null, () => null), userId, connectionId,
+      command: entry() as unknown as LocalCopierAgentCommand, now: NOW,
+    });
+    expect(upsert).toHaveBeenCalledOnce();
+    expect(upsert.mock.calls[0][0]).toMatchObject({
+      idempotency_key: 'entry:relaytest0001', expires_at: '2026-10-29T15:00:15.000Z',
+    });
+  });
+
+  it('stejné operationId: stejný obsah vrátí existující řádek, jiný obsah = konflikt; obojí bez nového řádku', async () => {
+    const upsert = vi.fn();
+    const stored = entry();
+    const existing = { id: 'old', status: 'completed', expires_at: '2026-10-29T15:00:15.000Z', payload: { command: stored.command } };
+    const same = await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, null, calls => (isIdLookup(calls) ? existing : null)), userId, connectionId,
+      command: stored as unknown as LocalCopierAgentCommand, now: NOW,
+    });
+    expect(same).toMatchObject({ id: 'old', status: 'completed' });
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, null, calls => (isIdLookup(calls) ? existing : null)), userId, connectionId,
+      command: entry(29_499) as unknown as LocalCopierAgentCommand, now: NOW,
+    })).rejects.toThrow('copier-relay-entry-conflict');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('jiný vstup ve frontě nebo do 3 s = entry-busy; hledá se per uživatel', async () => {
+    const upsert = vi.fn();
+    const lookups: Array<Array<[string, unknown[]]>> = [];
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, null, calls => (isBusyLookup(calls) ? { id: 'busy', status: 'pending', expires_at: 'x' } : null),
+        calls => { lookups.push([...calls]); }),
+      userId, connectionId, command: entry() as unknown as LocalCopierAgentCommand, now: NOW,
+    })).rejects.toThrow('copier-relay-entry-busy');
+    expect(upsert).not.toHaveBeenCalled();
+    const idLookup = lookups.find(isIdLookup)!;
+    expect(idLookup.some(([method, args]) => method === 'eq' && args[0] === 'device_id')).toBe(false);
+  });
+
+  it('ruční vstup projde validací jen s platným otiskem', async () => {
+    const tampered = { ...entry(), command: { ...entry().command, price: 29_400 } };
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn(), null, () => null), userId, connectionId,
+      command: tampered as unknown as LocalCopierAgentCommand, now: NOW,
+    })).rejects.toThrow('invalid-relay-command-payload');
   });
 });

@@ -21,6 +21,7 @@ import {
 } from '../lib/liveOrderTicket';
 import type { LiveChartPosition, LiveChartPositionSummary } from '../lib/liveChartPosition';
 import { previewSymbolFromChartSource, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
+import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import {
   GROUP_TARGET,
   allTradeAccounts,
@@ -115,8 +116,13 @@ const PreviewSection: React.FC<{
   resetKey: string;
   blockedReason: string | null;
   onPreview: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
-}> = ({ isDark, muted, field, previewDraft, resetKey, blockedReason, onPreview }) => {
-  const [state, setState] = useState<{ key: string; receivedAt?: number; result?: LeaderEntryPreviewResult; error?: string } | null>(null);
+  /** Fáze 1b: odeslání po čerstvém náhledu bez blockerů; chybí = worker odeslání neumí. */
+  onPlace?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
+}> = ({ isDark, muted, field, previewDraft, resetKey, blockedReason, onPreview, onPlace }) => {
+  const [state, setState] = useState<{ key: string; receivedAt?: number; result?: LeaderEntryPreviewResult; error?: string; operationId?: string } | null>(null);
+  const [placing, setPlacing] = useState(false);
+  const placingRef = useRef(false);
+  const [placed, setPlaced] = useState<{ key: string; result?: LeaderEntryPlaceResult; error?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [now, setNow] = useState(() => Date.now());
@@ -137,7 +143,9 @@ const PreviewSection: React.FC<{
     try {
       const result = await onPreview(previewDraft);
       // Stáří od přijetí v tomto prohlížeči — hodiny telefonu a Macu se můžou lišit.
-      setState({ key, result, receivedAt: Date.now() });
+      // Jedno id odeslání na jeden náhled: dvojklik / opakování = tentýž vstup (relay dedup).
+      setState({ key, result, receivedAt: Date.now(), operationId: `entry:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}` });
+      setPlaced(null);
       setNow(Date.now());
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : 'Náhled se nepodařil.';
@@ -151,6 +159,35 @@ const PreviewSection: React.FC<{
   const receivedAt = shown?.receivedAt ?? now;
   const age = result ? Math.max(0, Math.round((now - receivedAt) / 1000)) : 0;
   const stale = result ? now - receivedAt > PREVIEW_FRESH_MS : false;
+  const canSend = Boolean(onPlace && result?.wouldPlace && result.blockers.length === 0 && !stale && !blockedReason && previewDraft && shown?.operationId);
+  const shownPlaced = placed && placed.key === key ? placed : null;
+  const send = async () => {
+    if (!canSend || !previewDraft || !onPlace || placingRef.current || !result?.wouldPlace) return;
+    const leader = result.wouldPlace.leader;
+    const followers = result.wouldPlace.followers.map(follower => `${follower.accountId}: ${follower.quantity} ks`).join(', ');
+    // Jediný risk-zvyšující příkaz z appky — vždy výslovné potvrzení.
+    if (!window.confirm(`Odeslat na leadera ${leader.side === 'Buy' ? 'BUY' : 'SELL'} ${leader.orderType === 'Limit' ? 'LMT' : 'STP'} ${leader.quantity} ${result.symbol} @ ${formatPrice(leader.price)}, SL ${formatPrice(leader.stopLoss)}, TP ${formatPrice(leader.takeProfit)}?\nKopie: ${followers}`)) return;
+    placingRef.current = true;
+    setPlacing(true);
+    try {
+      setPlaced({ key, result: await onPlace(previewDraft, shown!.operationId!) });
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.';
+      setPlaced({ key, error: /entry-busy/.test(message) ? 'Jiný ruční vstup se právě zpracovává.' : /entry-daily-cap/.test(message) ? 'Dosažen denní strop ručních vstupů.' : message });
+    } finally {
+      placingRef.current = false;
+      setPlacing(false);
+    }
+  };
+  const placedText = (entry: LeaderEntryPlaceResult): { tone: 'ok' | 'bad' | 'warn'; text: string } => {
+    switch (entry.status) {
+      case 'acknowledged': return { tone: 'ok', text: `Přijato brokerem (vstup ${entry.entryBrokerOrderId}). Kopie followerům řídí kopírka.` };
+      case 'rejected': return { tone: 'bad', text: `Broker odmítl: ${entry.reason ?? 'bez důvodu'}` };
+      case 'blocked': return { tone: 'bad', text: `Neodesláno: ${entry.blockers.map(issue => issue.text).join(' ')}` };
+      case 'abandoned': return { tone: 'bad', text: entry.reason ?? 'Broker vrátil vstup bez ochrany — vstup se ruší, kopírka je vypnutá.' };
+      default: return { tone: 'warn', text: entry.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.' };
+    }
+  };
   const order = (entry: { side: string; quantity: number; orderType: string; price: number; stopLoss: number; takeProfit: number }) =>
     `${entry.side === 'Buy' ? 'BUY' : 'SELL'} ${entry.orderType === 'Limit' ? 'LMT' : 'STP'} ${entry.quantity} @ ${formatPrice(entry.price)} · SL ${formatPrice(entry.stopLoss)} · TP ${formatPrice(entry.takeProfit)}`;
   return <div className="grid gap-1.5">
@@ -176,6 +213,18 @@ const PreviewSection: React.FC<{
       {result.blockers.map(issue => <div key={issue.code + issue.text} className="text-rose-500">• {issue.text}</div>)}
       {result.notes.map(issue => <div key={issue.code + issue.text} className={muted}>· {issue.text}</div>)}
     </div>}
+    {onPlace && result?.wouldPlace && <button
+      type="button"
+      disabled={!canSend || placing || shownPlaced?.result != null}
+      onClick={() => void send()}
+      title={canSend ? 'Pošle OSO na leadera; followerům ho rozkopíruje kopírka.' : 'Odeslat jde jen do 15 s po náhledu bez blokací.'}
+      className="h-8 rounded-[9px] bg-blue-600 text-[11px] font-extrabold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+    >{placing ? 'Odesílám…' : `Odeslat ${result.wouldPlace.leader.quantity} kontrakt na leadera`}</button>}
+    {shownPlaced?.error && <div className="rounded-[7px] bg-rose-500/10 px-2 py-1.5 text-[10.5px] font-bold text-rose-500">Odeslání: {shownPlaced.error}</div>}
+    {shownPlaced?.result && (() => {
+      const view = placedText(shownPlaced.result);
+      return <div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${view.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : view.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{view.text}</div>;
+    })()}
   </div>;
 };
 
@@ -201,6 +250,8 @@ interface Props {
   position?: LiveChartPosition | null;
   /** Fáze 1a: náhled u workeru — worker vyhodnotí brány, nic neodešle. */
   onPreviewEntry?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
+  /** Fáze 1b: odeslání ručního vstupu na leadera (jen worker s `manual-entry-v1`). */
+  onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
   onNewDraft: (side: TicketSide) => void;
   onClose: () => void;
 }
@@ -236,7 +287,7 @@ const NumberField: React.FC<{
 
 const LiveOrderTicket: React.FC<Props> = ({
   isDark, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
-  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onNewDraft, onClose,
+  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onNewDraft, onClose,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -278,7 +329,8 @@ const LiveOrderTicket: React.FC<Props> = ({
     ? { symbol: previewSymbol, side: draft.side === 'buy' ? 'Buy' : 'Sell', quantity: m.quantity, orderType: draft.type === 'limit' ? 'Limit' : 'Stop', price: draft.price, stopLoss: draft.stopLoss, takeProfit: draft.takeProfit }
     : null;
   const previewBlockedReason = !draft ? null
-    : !previewSymbol ? 'Kontrakt grafu není známý (kontinuální řada) — náhled teď nejde.'
+    : !previewSymbol ? 'Kontrakt grafu není známý (kontinuální řada nebo cena z TradingView) — náhled teď nejde.'
+    : quoteInfo.stale ? 'Cena grafu je zastaralá — náhled ani odeslání teď nejde.'
     : draft.type === 'market' ? 'Náhled jen pro Limit / Stop (Market zatím ne).'
       : draft.stopLoss == null || draft.takeProfit == null ? 'Náhled potřebuje SL i TP.'
         : single ? 'Náhled zatím jen pro skupinu (vstup na leadera).'
@@ -567,6 +619,7 @@ const LiveOrderTicket: React.FC<Props> = ({
         resetKey={String(group?.armed)}
         blockedReason={previewBlockedReason}
         onPreview={onPreviewEntry}
+        {...(onPlaceEntry ? { onPlace: onPlaceEntry } : {})}
       />}
       {problems.length > 0 && <div className="grid gap-1">
         {problems.map(problem => <div key={problem.text} className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${problem.level === 'error' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{problem.text}</div>)}

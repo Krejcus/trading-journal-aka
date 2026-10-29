@@ -159,6 +159,11 @@ export function buildLeaderEntryPreviewCommand(draft: LiveEntryPreviewDraft, con
  * řada (`MNQ1!`) nebo neznámý tvar = null — náhled pak nejde poslat.
  */
 export function previewSymbolFromChartSource(source: string | null | undefined): string | null {
+  // Fáze 1b (INV-UI-04): konkrétní kontrakt smí přijít jen ze zdroje IBKR
+  // (nebo holý kód kontraktu); identifikátor z TradingView do příkazu nepatří.
+  const trimmed = (source ?? '').trim().toUpperCase();
+  const prefix = trimmed.includes(':') ? trimmed.slice(0, trimmed.indexOf(':')) : null;
+  if (prefix != null && prefix !== 'IBKR') return null;
   const match = /(?:^|[:\s])(MNQ|NQ)([HMUZ])(?:20)?(\d{1,2})$/.exec((source ?? '').trim().toUpperCase());
   return match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
 }
