@@ -1,3 +1,4 @@
+import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview';
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -747,7 +748,10 @@ export async function startLocalCopierExecutionAgent(
       workingOrderAccounts: [],
     };
   };
-  const executeCopyCommand = async (command: LiveCopyTradingCommand): Promise<LiveCopyTradingCommandResult> => {
+  const executeCopyCommand = async (
+    command: LiveCopyTradingCommand,
+    context: LocalCopierAgentExecutionContext = {},
+  ): Promise<LiveCopyTradingCommandResult> => {
     // Smazaná skupina se už neupravuje ani nezavírá; zbývá jen aktivace jiné.
     if (command.type !== 'delete-group' && groupRetired()) throw new Error(RETIRED_GROUP_COMMAND_ERROR);
     switch (command.type) {
@@ -876,6 +880,21 @@ export async function startLocalCopierExecutionAgent(
         return { type: 'configuration', group };
       case 'cancel-order':
         throw new Error('Ruční cancel z UI zatím není napojen na durable runtime');
+      case 'preview-leader-entry': {
+        // Fáze 1a: jen náhled — controller sebere stav bez IO a vyhodnotí
+        // čistou funkcí; k brokerovi nic nejde. Brzda zadaná po náhledu ho
+        // zneplatní stejně jako ARM.
+        const preview = options.controller.previewLeaderEntry(validateLeaderEntryPreview(command));
+        if (context.createdAt != null && context.createdAt <= lastBrakeCreatedAt + Math.max(0, context.clockSkewReserveMs ?? 0)) {
+          return { ...preview, wouldPlace: null, blockers: [...preview.blockers, { code: 'brake-after-request', text: 'Po zadání náhledu přišlo vypnutí kopírky nebo zámek.' }] };
+        }
+        return preview;
+      }
+      default: {
+        // Neznámý příkaz od novější appky nikdy nesmí vrátit „ok“ bez výsledku.
+        const unknown: never = command;
+        throw new Error(`unsupported-copy-command:${(unknown as { type?: string }).type ?? '?'}`);
+      }
     }
   };
 
@@ -947,7 +966,7 @@ export async function startLocalCopierExecutionAgent(
   ): Promise<unknown> => {
     switch (command.type) {
       case 'copy-command':
-        return executeCopyCommand(command.command);
+        return executeCopyCommand(command.command, context);
       case 'activate-group': {
         const next: CopyGroupConfig = {
           ...(command.group.id === group.id && !groupRetired()

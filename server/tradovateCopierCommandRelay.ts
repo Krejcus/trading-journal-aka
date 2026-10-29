@@ -1,3 +1,4 @@
+import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
@@ -102,6 +103,9 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
 
 const BRAKE_COMMAND_TYPES = ['disarm', 'kill-switch', 'lock-until-session-end'] as const;
 const BRAKE_COMMAND_TTL_MS = 10 * 60_000;
+/** Náhled vstupu platí jen chvíli; starý náhled je k ničemu. */
+const PREVIEW_COMMAND_TTL_MS = 15_000;
+const PREVIEW_MIN_INTERVAL_MS = 3_000;
 const STANDARD_COMMAND_TTL_MS = 30_000;
 const WORKER_CONNECTED_MAX_AGE_MS = 10_000;
 
@@ -254,6 +258,8 @@ const validatedDayLockReason = (value: unknown): string => {
 const remoteCopyCommands = new Set([
   'update-group', 'set-group-enabled', 'set-replication', 'set-follower-enabled', 'set-multiplier',
   'flatten-account', 'flatten-follower-trade', 'flatten-group', 'delete-group', 'resolve-stuck-operation',
+  // Fáze 1a obchodování z grafu: jen náhled, worker nic nezapíše.
+  'preview-leader-entry',
 ]);
 const STUCK_OPERATION_KINDS = new Set(['place', 'bracket', 'oso', 'cancel-or-modify']);
 
@@ -283,6 +289,7 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
   if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
     throw new Error('unsupported-remote-copy-command');
   }
+  if (command.type === 'preview-leader-entry') return validateLeaderEntryPreview(value) as unknown as Record<string, unknown>;
   if (command.type === 'resolve-stuck-operation') {
     const resolve = value as { groupId?: unknown; kind?: unknown; key?: unknown; reason?: unknown };
     if (
@@ -688,6 +695,8 @@ export async function enqueueTradovateCopierCommand(options: {
   });
   if (inFlight) return { ...inFlight, deviceId: device.id };
 
+  await assertPreviewAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, command: options.command, now });
+
   const inFlightArm = await findInFlightArm({
     db: options.db, userId: options.userId, deviceId: device.id,
     command: options.command, payload, now,
@@ -697,7 +706,7 @@ export async function enqueueTradovateCopierCommand(options: {
   const createdAt = new Date(now).toISOString();
   const expiresAt = new Date(now + (isTradovateCopierBrakeCommand(options.command)
     ? BRAKE_COMMAND_TTL_MS
-    : STANDARD_COMMAND_TTL_MS)).toISOString();
+    : isLeaderEntryPreview(options.command) ? PREVIEW_COMMAND_TTL_MS : STANDARD_COMMAND_TTL_MS)).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands').upsert({
     user_id: options.userId,
     device_id: device.id,
@@ -916,6 +925,34 @@ export async function admitCopierAutoResume(options: {
 }
 
 const IN_FLIGHT_FLATTEN_WINDOW_MS = 5 * 60_000;
+
+const isLeaderEntryPreview = (command: LocalCopierAgentCommand) => (
+  command.type === 'copy-command' && (command as { command?: { type?: unknown } }).command?.type === 'preview-leader-entry'
+);
+
+/**
+ * Náhled vstupu jde sériovou linkou relaye jako ostatní příkazy — aby
+ * nezdržoval brzdy ani Flatten, smí čekat nejvýš jeden na zařízení a nový
+ * nejdřív 3 s po předchozím (INV-BRAKE-03). Jinak `copier-relay-preview-busy`.
+ */
+async function assertPreviewAdmissible(options: {
+  db: SupabaseClient; userId: string; deviceId: string; command: LocalCopierAgentCommand; now: number;
+}): Promise<void> {
+  if (!isLeaderEntryPreview(options.command)) return;
+  const nowIso = new Date(options.now).toISOString();
+  const { data, error } = await options.db.from('tradovate_copier_commands')
+    .select('id')
+    .eq('user_id', options.userId)
+    .eq('device_id', options.deviceId)
+    .eq('command_type', 'copy-command')
+    .contains('payload', { command: { type: 'preview-leader-entry' } })
+    .or(`created_at.gt.${new Date(options.now - PREVIEW_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
+    .gte('created_at', new Date(options.now - PREVIEW_COMMAND_TTL_MS).toISOString())
+    .limit(1)
+    .maybeSingle<{ id: string }>();
+  if (error) throw new Error(`copier-relay-preview-lookup-failed: ${error.message}`);
+  if (data) throw new Error('copier-relay-preview-busy');
+}
 
 /** Čekající (neexpirovaný) nebo právě vykonávaný Flatten stejného cíle, k němuž se nový požadavek přichytí. */
 async function findInFlightFlatten(options: {

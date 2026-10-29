@@ -11,6 +11,9 @@ import {
   type BrokerAccountRiskSnapshot,
 } from './brokerPort';
 import { msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
+import { evaluateManualEntryPreview, MANUAL_ENTRY_END_RESERVE_MS, type ManualEntryAccountInputs } from './manualEntryPreview';
+import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
+import { quarterlyContractsAround } from './marketDataCalculations';
 import { pointValueUsd } from './futuresContractSpecs';
 import {
   createCopierState,
@@ -726,6 +729,8 @@ export interface CopierRuntimeController {
    * nebo cokoli z `connectionRenewalBlocker`. `null` = klid.
    */
   maintenanceRestartBlocker(): string | null;
+  /** Fáze 1a obchodování z grafu: náhled ručního vstupu na leadera — bez IO, nic neodešle. */
+  previewLeaderEntry(command: LeaderEntryPreviewCommand): LeaderEntryPreviewResult;
   status(): CopierControllerStatus;
   waitForIdle(): Promise<void>;
   stop(): void;
@@ -17355,6 +17360,94 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (connectionRenewalClock() < leaderEventQuietUntil) return 'leader event quiet window';
       return null;
+    },
+    /**
+     * Fáze 1a obchodování z grafu: NÁHLED ručního vstupu na leadera. Jen
+     * synchronně sebere zmrazené vstupy (žádné IO, audit, persist ani
+     * lastError) a vyhodnotí je čistou funkcí `evaluateManualEntryPreview`.
+     * Nikdy nevolá `dispatchBroker` ani žádnou metodu brokera.
+     */
+    previewLeaderEntry(command: LeaderEntryPreviewCommand): LeaderEntryPreviewResult {
+      const now = clock();
+      const safety = currentRuntime().state.safety;
+      const stats = currentDailyStats(now);
+      const stateBlockers: Array<{ code: string; text: string }> = [];
+      const recovery = processor.recoveryStatus();
+      if (recovery.state !== 'ready') stateBlockers.push({ code: 'processor-recovery', text: `Worker dokončuje obnovu stavu (${recovery.reason}).` });
+      if (retiredGroup) stateBlockers.push({ code: 'group-retired', text: 'Skupina byla smazána.' });
+      if (startupGroupRepair) stateBlockers.push({ code: 'group-repair', text: 'Uložená skupina má nedostupné účty.' });
+      if (startupMissingLeaderRoute) stateBlockers.push({ code: 'leader-route', text: 'Leader nemá OAuth route.' });
+      if (safety.manualRecoveryRequired || armPreparationBlocker()?.blockedBy === 'incident') stateBlockers.push({ code: 'incident', text: 'Kopírka čeká na potvrzení incidentu.' });
+      if (gate.divergentAccounts.size > 0) stateBlockers.push({ code: 'divergence', text: 'Pozice skupiny se rozcházejí.' });
+      if (workingOrderAccounts.size > 0) stateBlockers.push({ code: 'working-orders', text: 'Poslední kontrola pozic našla pracovní příkazy.' });
+      const quiet = this.maintenanceRestartBlocker();
+      if (quiet) stateBlockers.push({ code: 'group-busy', text: `Kopírka ještě něco dokončuje (${quiet}).` });
+      const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
+      const windowEnabled = tradingWindow.enabled;
+      const accounts = new Map<number, ManualEntryAccountInputs>();
+      const accountIds = group.leaderAccountId == null ? [] : [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)];
+      for (const accountId of accountIds) {
+        const positions = positionsByAccount.get(accountId);
+        const orders = liveOrdersByAccount.get(accountId);
+        const cut = activeFollowerCut(accountId, now);
+        const risk = accountRisk.get(accountId);
+        accounts.set(accountId, {
+          positions: positions ? [...positions].map(([symbol, net]) => ({ symbol, net })) : null,
+          liveOrders: orders ? [...orders.values()].map(order => ({
+            symbol: order.symbol, side: order.side, remaining: Math.max(0, order.quantity - order.filledQuantity),
+          })) : null,
+          cut: !cut ? 'none' : cut.closed === null ? 'in-progress' : 'done',
+          syncPaused: activeAccountSyncPause(accountId, command.symbol) != null,
+          risk: risk ? {
+            verifiedAt: risk.verifiedAt,
+            sameSession: sameTradovateSession(risk.verifiedAt, now),
+            error: risk.error ?? null,
+            realizedPnlUsd: risk.realizedPnlUsd,
+            openPnlUsd: risk.openPnlUsd ?? null,
+            netLiq: risk.netLiq,
+            cashBalanceUsd: risk.cashBalanceUsd ?? null,
+            minNetLiq: risk.minNetLiq,
+            dailyLossAutoLiq: risk.dailyLossAutoLiq,
+            effectiveDailyLossCutUsd: risk.effectiveDailyLossCutUsd ?? null,
+          } : null,
+        });
+      }
+      const closedAt = (stats.recentClosedTrades ?? []).map(trade => trade.closedAt);
+      const [front, next] = quarterlyContractsAround(command.symbol.startsWith('NQ') ? 'NQ' : 'MNQ', now);
+      const rollSoon = quarterlyContractsAround(command.symbol.startsWith('NQ') ? 'NQ' : 'MNQ', now + 10 * 86_400_000)[0] !== front;
+      return evaluateManualEntryPreview({
+        now,
+        command,
+        group: retiredGroup ? null : group,
+        riskGate: {
+          ...gate,
+          now,
+          sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
+          stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+          ineligibleAccounts: currentEntryIneligibleAccounts(now),
+        },
+        stateBlockers,
+        reconciliationRequired: source.needsReconciliation(),
+        positionCheckComplete,
+        managementOnly: safety.managementOnly != null,
+        dayLockPending: dayLockPending != null,
+        dayLockUntil: safety.dayLockUntil,
+        pauseUntil: safety.pauseUntil ?? 0,
+        pauseActive: safety.pauseRule != null,
+        entryCooldownUntil: safety.entryCooldownUntil,
+        unconfirmedFlatLots: stats.unconfirmedFlatLots?.length ?? 0,
+        tradingWindowState: windowEnabled ? tradingWindowStateAt(tradingWindow, now) : 'off',
+        tradingWindowStateAfterReserve: windowEnabled ? tradingWindowStateAt(tradingWindow, now + MANUAL_ENTRY_END_RESERVE_MS) : 'off',
+        sessionEndAt: now + msUntilTradovateSessionEnd(now),
+        armExpiresAt: gate.armed ? gate.armedAt + gate.armTtlMs : 0,
+        transportResumePending: transportResume != null && transportResume.state === 'waiting',
+        dailyStats: { realizedPnlUsd: stats.realizedPnlUsd, losingTrades: stats.losingTrades, tradesToday: stats.tradesToday ?? 0 },
+        lastGroupFillAt: closedAt.length ? Math.max(...closedAt) : null,
+        accounts,
+        entryIneligible: currentEntryIneligibleAccounts(now),
+        excludedFollowers: excludedForeignFollowerIds(),
+        frontSymbols: rollSoon ? [front, next] : [front],
+      });
     },
     prepareArm,
     startArmPreparation() {

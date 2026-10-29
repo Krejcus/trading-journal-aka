@@ -33,6 +33,7 @@ import { readTradeChartIndicators, writeTradeChartIndicators } from '../services
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
 import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
+import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import { buildLiveStatusStrip, liveAttentionReasons, type LiveStatusStripInput, type LiveStatusTone } from '../services/liveStatusStrip';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 
@@ -97,6 +98,7 @@ interface Props {
   disarm?: LiveChartDisarm | null;
   onDisarm?: () => Promise<{ tone: 'info' | 'error'; text: string }>;
   onTargetChange?: (target: LiveTradeTarget) => void;
+  onPreviewEntry?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
 }
 
 function useMinuteNow() {
@@ -110,7 +112,7 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, tabs, onNavigate, navigationBlocked = false, copier, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -399,6 +401,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             onTarget={setPickedTarget}
             quoteInfo={quoteInfo}
             position={position}
+            onPreviewEntry={onPreviewEntry}
             onNewDraft={side => { if (quote) { setDraft(newTicketDraft(side, 'limit', side === 'buy' ? quote.ask - 10 : quote.bid + 10, INSTRUMENT, quote)); setFromBox(false); } }}
             onClose={() => setTicketOpen(false)}
           />

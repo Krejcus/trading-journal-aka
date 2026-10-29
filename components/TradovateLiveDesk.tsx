@@ -1,3 +1,5 @@
+import { buildLeaderEntryPreviewCommand, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
+import { quarterlyContractsAround } from '../services/marketDataCalculations';
 import { perfMark, perfMarkOnce } from '../lib/perfTrace';
 import { releaseLivePriority } from '../lib/livePriority';
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
@@ -817,6 +819,37 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     return result;
   }, [acceptAgentStatus, agentClient, agentTransport, relayConnectionId]);
+  // Fáze 1a obchodování z grafu: NÁHLED vstupu u workeru — čtecí cesta bez
+  // mutation ACK fence (výsledek nemění stav LIVE), jen z čerstvého stavu.
+  // Worker nic nezapíše; starší worker bez výsledku náhledu = chyba, nikdy OK.
+  const previewRouteRef = useRef({ agentTransport, relayConnectionId, agentClient });
+  previewRouteRef.current = { agentTransport, relayConnectionId, agentClient };
+  const previewLeaderEntry = useCallback(async (draft: LiveEntryPreviewDraft): Promise<LeaderEntryPreviewResult> => {
+    const current = armStatusRef.current;
+    const status = current.status;
+    const executionGroup = copierWorkerExecutionGroup(status);
+    if (!current.fresh || !status || !executionGroup || executionGroup.leaderAccountId == null) {
+      throw new Error('Stav kopírky není čerstvě ověřený — náhled teď nejde.');
+    }
+    const now = Date.now();
+    const command = buildLeaderEntryPreviewCommand(draft, {
+      group: executionGroup,
+      armedAt: status.controller.armedAt ?? 0,
+      excludedFollowers: new Set(status.controller.excludedForeignFollowers ?? []),
+      participation: status.controller.followerParticipation ?? [],
+      symbol: quarterlyContractsAround('MNQ', now)[0],
+      operationId: `preview:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
+    });
+    const route = previewRouteRef.current;
+    const wrapped = { type: 'copy-command' as const, command };
+    const response = route.agentTransport === 'local'
+      ? await route.agentClient.execute(wrapped)
+      : route.relayConnectionId ? await executeTradovateCopierRelayCommand(route.relayConnectionId, wrapped) : null;
+    if (!response) throw new Error('Chybí cesta k Mac workeru.');
+    const result = (response as { result?: unknown }).result as LeaderEntryPreviewResult | undefined;
+    if (!result || result.type !== 'leader-entry-preview') throw new Error('Worker náhled neumí (starší verze) — nic se neodeslalo.');
+    return result;
+  }, []);
   const executeSafetyCommand = useCallback(async (command:
     | { type: 'disarm' }
     | { type: 'kill-switch' }
@@ -1466,6 +1499,7 @@ acceptAgentStatus((await executeAgent({
           disarm={chartData.disarm}
           onDisarm={disarmFromChart}
           onTargetChange={setChartTarget}
+          onPreviewEntry={previewLeaderEntry}
         />
       ) : null}
       {chartSafetyNotice && <div role="status" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${chartSafetyNotice.tone === 'error' ? 'border-rose-500/50 bg-rose-500/10 text-rose-500' : 'border-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>
