@@ -285,7 +285,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-29 — Obchodování z grafu, fáze 2a: správa vlastního vstupu + push notifikace (Claude, NENASAZENO)
+### 2026-10-29 — Obchodování z grafu, fáze 2a: správa vlastního vstupu + push notifikace (Claude, nasazeno 22:00 @ 6d7df3c8)
 
 - Větev `claude/chart-entry-2-20261029` (worktree `~/alphatrade-worktrees/chart-entry-2`). Filip: „ano pokračuj s tím komplet“.
 - Push notifikace (watchdog, cron): výsledek ručního vstupu (přijat = informace
@@ -306,7 +306,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Tradeify leader: kód omezení nemá; před prvním vstupem s leaderem na Tradeify
   nahrát fixture (`--non-group-account`, scénáře fill a cancel) a přehrát.
 - Ověřeno za DISARMED (21:53): tsc, cílené 343/343 ×3, celá sada 6120 + 1 todo, build.
-- Neověřeno naostro: posun SL/TP z appky a zrcadlení followerům, zrušení vstupu z appky.
+- Nasazeno 29. 10. ~22:00 (Filip „Nasaď, test zítra“): push 6d7df3c8 na main, Vercel
+  READY, worker reinstall z worktree chart-entry-2 (brána prošla), reconcile čistý,
+  capability `manual-order-manage-v1`.
+- Neověřeno naostro (test 30. 10.): vzdálený vstup z grafu → zrušit z appky;
+  vyplněný vstup → posun SL dál (zrcadlí se `sl-moved` u všech followerů) → posun
+  TP dál → zavření Flattenem / v TV; po každém kroku read-only reconcile.
 
 ### 2026-10-29 20:31 — NASAZENO + SPOLEČNÝ TEST: fáze 1b, odeslání vstupu z grafu (Claude + Filip „Nasaď a test“)
 
