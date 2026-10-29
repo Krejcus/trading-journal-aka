@@ -562,3 +562,63 @@ scénáře) a přehrát.
 **INV:** INV-MANUAL-01 (rozšířit o správu), INV-BRAKE-01/02/03, INV-OUTBOX-01/02,
 INV-RELAY-01/03, INV-FRESH-01, INV-MODE-02 (liquidate potvrzuje stav),
 INV-DIVERGENCE-01, INV-WATCH-01, INV-UI-01..04.
+
+### 10.1 Revize po oponentuře (29. 10. 2026, verdikt OPRAVIT PŘED IMPLEMENTACÍ) — fáze 2a
+
+**Rozsah zúžen na vlastní ruční vstupy z grafu** (id vstupu, SL a TP zná worker
+z ACK v `safety.manualEntries`; žádné hledání podle role, P1). Správa cizích
+obchodů (TradingView / Tradovate UI) = fáze 2b, později. **`close-position`
+vypuštěno** (P5): zavření dál přes Flatten skupiny nebo v TradingView.
+
+**Příkaz:** `manage-leader-order` { groupId, operationId (`manage:`),
+entryOperationId (`entry:…` vlastního vstupu), action: `move-stop` |
+`move-target` | `cancel-entry`, expect: { price, quantity } (cena dotčeného
+příkazu na tick), newPrice (move-*), payloadHash }. Jen přes relay; brzda po
+zadání zneplatní `move-*`, ne `cancel-entry`. Relay: jeden rozpracovaný na
+uživatele + vstup, rozestup 2 s, 100 / 24 h (P8). UI posílá jen tlačítkem.
+
+**Výběr a tvar (P1):** cíl = id ze záznamu vstupu. Ve frontě controlleru
+autoritativní `listOrders(leader, fresh)` + pozice z cache (bez syntetických
+ACK řádků). Povolen jen čistý tvar:
+- `move-*`: vstup plně vyplněný, SL i TP `working` s `filledQuantity 0`,
+  qty SL = TP = vstup = |pozice leadera na symbolu|, žádný jiný pracující
+  příkaz leadera na symbolu, `pendingTradeIngressByAccount(leader) = 0`,
+  `expect` = aktuální cena a qty, `newPrice ≠` aktuální. Modify nese qty
+  z čerstvého čtení.
+- `cancel-entry`: vstup `working`/`pending` s `filledQuantity 0`; žádný
+  follower nemá na symbolu pozici (jinak blocked „použij Flatten“).
+
+**Dosah k followerům (P2):** `move-*` jen ARMED, ne kill/shadow, a: každý
+zapojený on-submit follower má link na cílovou nohu a jeho noha je živá;
+žádný cancel/modify outbox followera ve stavu planned/sending/unknown;
+`hasDispatchBlockingStuckOutbox()` a `sequenceBroken || needsReconciliation`
+čisté; bez divergence, čekající kopie, běžícího cutu.
+
+**Riziko (P3):** posun SL dál od vstupu přepočítá ztrátu při SL (|vstup − SL|
+× qty × pointValue + poplatky + skluz) proti čerstvým limitům leadera
+i followerů (`remainingLossHeadroom`, < 90 s). Utažení a BE bez přepočtu.
+
+**Strana trhu (P4):** referenční cena jen z dat brokera: cena vyplnění
+vlastního vstupu (z fill eventu) + `openPnlUsd` čerstvého risk snapshotu
+leadera (jediná pozice na účtu) → implikovaná cena. SL musí zůstat aspoň
+8 ticků na ochranné straně, TP aspoň 8 ticků na ziskové straně. Bez
+implikované ceny = blocked. BE se zaokrouhluje na tick ve směru ochrany.
+Před prvním naostro: fixture „modify SL přes trh“ (skript, za DISARMED).
+
+**Fronta (P7):** ve frontě jen vyhodnocení + durable `sending` + fence;
+zápis mimo frontu se synchronní kontrolou fence těsně před voláním
+(`move-*` přes `dispatchBroker`, `cancel-entry` raw). Výsledek: potvrzeno
+streamem → `acknowledged`; `CopierDispatchRevokedError` → `not-sent`;
+odmítnutí → `rejected`; jinak `unknown`.
+
+**`unknown` (P6):** neblokuje ruční ARM (flat-first), ale blokuje
+automatické pokračování po výpadku (`evaluateTransportResume`) a další správu
+téhož vstupu, dokud stream neukáže změnu cílového příkazu (žádné TTL).
+Restart v `sending` → `unknown`; dedup `operationId` i v controlleru.
+
+**Notifikace (P11):** úspěch ručního vstupu jako informace bez odznaku,
+problémy jako výstraha; rozběhnuté zrušení se nehlásí; selhání zrušení se
+hlásí pravdivě. Výsledky správy: push jen při `rejected`/`unknown`.
+
+**UI (P12):** `acknowledged` = „leader posunut, kopie posune kopírka“;
+u `cancel-entry` neslibovat zrušení u followera, který má fill.
