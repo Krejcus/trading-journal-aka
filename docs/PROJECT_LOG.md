@@ -285,6 +285,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-29 — Obchodování z grafu, fáze 2a: správa vlastního vstupu + push notifikace (Claude, NENASAZENO)
+
+- Větev `claude/chart-entry-2-20261029` (worktree `~/alphatrade-worktrees/chart-entry-2`). Filip: „ano pokračuj s tím komplet“.
+- Push notifikace (watchdog, cron): výsledek ručního vstupu (přijat = informace
+  bez odznaku; odmítnut / neznámý / bez ochrany / zrušení = výstraha, selhání
+  zrušení pravdivě) a neúspěšná změna vstupu (odmítnuto / neznámé). Jen záznamy
+  změněné za posledních 10 min (žádný replay po nasazení).
+- Fáze 2a (`manage-leader-order`): jen vlastní přijatý ruční vstup (id z durable
+  záznamu) — posun SL a TP DÁL od trhu (SL s přepočtem rizika od nejhorší ceny
+  vstupu), zrušení čekajícího vstupu (i za DISARMED). Utažení SL a BE záměrně
+  ne: worker nemá cenu trhu z brokera (`openPnlUsd` je v produkci null); nejdřív
+  záznam `record-leader-oso.ts --scenario modify-through-market`.
+  `close-position` vypuštěno (zavírání dál Flatten / TradingView).
+- Oponentura (copier-design-critic): návrh 2× OPRAVIT PŘED IMPLEMENTACÍ (role
+  podle id místo hledání, čistý tvar z čerstvého listOrders, brána dosahu se
+  stejnými predikáty jako controller i runner, riziko, strana trhu), diff
+  OPRAVIT (registrace zápisu by vyřadila leadera z Flatten All; přísná brána
+  s vypnutým followerem; Stop vstup se skluzem; pozdní výsledek) → opraveno → OK.
+- Tradeify leader: kód omezení nemá; před prvním vstupem s leaderem na Tradeify
+  nahrát fixture (`--non-group-account`, scénáře fill a cancel) a přehrát.
+- Neověřeno: testy fáze 2a čekají na DISARM; naostro nic.
+
 ### 2026-10-29 20:31 — NASAZENO + SPOLEČNÝ TEST: fáze 1b, odeslání vstupu z grafu (Claude + Filip „Nasaď a test“)
 
 - Nasazeno 19:41 UTC: web 40fe2ef8 (pak 6275d941: potvrzení dvojklikem v
