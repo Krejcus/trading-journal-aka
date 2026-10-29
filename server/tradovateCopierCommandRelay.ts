@@ -1,5 +1,6 @@
 import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview.js';
 import { validateLeaderEntryPlace } from '../lib/leaderEntryPlace.js';
+import { validateLeaderOrderManage } from '../lib/leaderOrderManage.js';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
@@ -111,6 +112,9 @@ const PREVIEW_MIN_INTERVAL_MS = 3_000;
 const ENTRY_COMMAND_TTL_MS = 15_000;
 const ENTRY_MIN_INTERVAL_MS = 3_000;
 const ENTRY_DAILY_CAP = 30;
+/** Správa vlastního vstupu (fáze 2a): rozestup 2 s na vstup, 100 za 24 h na uživatele (INV-TRAD-04). */
+const MANAGE_MIN_INTERVAL_MS = 2_000;
+const MANAGE_DAILY_CAP = 100;
 const STANDARD_COMMAND_TTL_MS = 30_000;
 const WORKER_CONNECTED_MAX_AGE_MS = 10_000;
 
@@ -272,6 +276,8 @@ const remoteCopyCommands = new Set([
   // Fáze 1b: jediný risk-zvyšující příkaz relaye — ruční OSO na leadera.
   // Worker ho pustí jen za ARMED po všech branách náhledu (INV-MANUAL-01).
   'place-leader-entry',
+  // Fáze 2a: posun SL/TP dál od trhu, zrušení čekajícího vlastního vstupu.
+  'manage-leader-order',
 ]);
 const STUCK_OPERATION_KINDS = new Set(['place', 'bracket', 'oso', 'cancel-or-modify', 'manual-entry']);
 
@@ -303,6 +309,7 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
   }
   if (command.type === 'preview-leader-entry') return validateLeaderEntryPreview(value) as unknown as Record<string, unknown>;
   if (command.type === 'place-leader-entry') return validateLeaderEntryPlace(value) as unknown as Record<string, unknown>;
+  if (command.type === 'manage-leader-order') return validateLeaderOrderManage(value) as unknown as Record<string, unknown>;
   if (command.type === 'resolve-stuck-operation') {
     const resolve = value as { groupId?: unknown; kind?: unknown; key?: unknown; reason?: unknown };
     if (
@@ -721,7 +728,9 @@ export async function enqueueTradovateCopierCommand(options: {
       }
       return { id: existing.id, status: existing.status, expiresAt: existing.expiresAt, deviceId: device.id };
     }
-    await assertEntryAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, now });
+    const manageEntry = manageEntryOperationId(options.command);
+    if (manageEntry) await assertManageAdmissible({ db: options.db, userId: options.userId, entryOperationId: manageEntry, now });
+    else await assertEntryAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, now });
   }
 
   const inFlightArm = await findInFlightArm({
@@ -836,6 +845,17 @@ const expirePendingEntriesSupersededByBrake = async (options: {
     .contains('payload', { command: { type: 'place-leader-entry' } })
     .lte('created_at', options.brakeCreatedAt);
   if (entryError) throw new Error(`copier-relay-brake-supersede-failed: ${entryError.message}`);
+  // Posun SL/TP brzda zneplatní; zrušení vstupu je risk-redukční a zůstává.
+  for (const action of ['move-stop', 'move-target']) {
+    const { error: manageError } = await options.db.from('tradovate_copier_commands')
+      .update({ status: 'expired', completed_at: options.brakeCreatedAt, error: 'superseded-by-brake' })
+      .eq('device_id', options.deviceId)
+      .eq('status', 'pending')
+      .eq('command_type', 'copy-command')
+      .contains('payload', { command: { type: 'manage-leader-order', action } })
+      .lte('created_at', options.brakeCreatedAt);
+    if (manageError) throw new Error(`copier-relay-brake-supersede-failed: ${manageError.message}`);
+  }
 };
 
 /**
@@ -1017,8 +1037,39 @@ async function assertPreviewAdmissible(options: {
 const leaderEntryPlaceOperationId = (command: LocalCopierAgentCommand): string | null => {
   if (command?.type !== 'copy-command') return null;
   const inner = (command as { command?: { type?: unknown; operationId?: unknown } }).command;
-  return inner?.type === 'place-leader-entry' && typeof inner.operationId === 'string' ? inner.operationId : null;
+  return (inner?.type === 'place-leader-entry' || inner?.type === 'manage-leader-order') && typeof inner.operationId === 'string'
+    ? inner.operationId : null;
 };
+const manageEntryOperationId = (command: LocalCopierAgentCommand): string | null => {
+  const inner = (command as { command?: { type?: unknown; entryOperationId?: unknown } }).command;
+  return inner?.type === 'manage-leader-order' && typeof inner.entryOperationId === 'string' ? inner.entryOperationId : null;
+};
+
+/** Správa vstupu: jeden rozpracovaný na uživatele a vstup, 2 s rozestup, denní strop. */
+async function assertManageAdmissible(options: {
+  db: SupabaseClient; userId: string; entryOperationId: string; now: number;
+}): Promise<void> {
+  const nowIso = new Date(options.now).toISOString();
+  const { data: busy, error: busyError } = await options.db.from('tradovate_copier_commands')
+    .select('id')
+    .eq('user_id', options.userId)
+    .eq('command_type', 'copy-command')
+    .contains('payload', { command: { type: 'manage-leader-order', entryOperationId: options.entryOperationId } })
+    .or(`created_at.gt.${new Date(options.now - MANAGE_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
+    .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
+    .limit(1)
+    .maybeSingle<{ id: string }>();
+  if (busyError) throw new Error(`copier-relay-entry-lookup-failed: ${busyError.message}`);
+  if (busy) throw new Error('copier-relay-entry-busy');
+  const { count, error: countError } = await options.db.from('tradovate_copier_commands')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', options.userId)
+    .eq('command_type', 'copy-command')
+    .contains('payload', { command: { type: 'manage-leader-order' } })
+    .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString());
+  if (countError) throw new Error(`copier-relay-entry-lookup-failed: ${countError.message}`);
+  if ((count ?? 0) >= MANAGE_DAILY_CAP) throw new Error('copier-relay-entry-daily-cap');
+}
 
 /** Per uživatel, ne per zařízení: tentýž vstup nesmí projít podruhé ani přes jiný worker. */
 async function findEntryByOperationId(options: {

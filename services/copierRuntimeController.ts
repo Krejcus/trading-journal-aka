@@ -13,8 +13,10 @@ import {
   type BrokerAccountRiskSnapshot,
 } from './brokerPort';
 import { msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
-import { evaluateManualEntryPreview, MANUAL_ENTRY_END_RESERVE_MS, type ManualEntryAccountInputs } from './manualEntryPreview';
+import { evaluateManualEntryPreview, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualStopLossUsd, remainingLossHeadroom, type ManualEntryAccountInputs } from './manualEntryPreview';
+import { runnerUnmappedReplaceAccounts } from './copierRunner';
 import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
+import type { LeaderOrderManageCommand, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import {
   leaderEntryPlaceAsPreview,
   type LeaderEntryPlaceCommand,
@@ -65,7 +67,7 @@ import {
 } from './copierOutbox';
 import { stuckBracketEntries, waiveBracketOutboxEntry } from './copierBracketOutbox';
 import { stuckOsoEntries, waiveOsoOutboxEntry, type OsoOutboxEntry } from './copierOsoOutbox';
-import { applyResolved, type CopierAccountSyncPause, type CopierManualEntryRecord, type CopierManualEntryStatus, type LeaderEvent } from './copierEngine';
+import { applyResolved, type CopierAccountSyncPause, type CopierManualEntryRecord, type CopierManualEntryStatus, type CopierManualOrderActionRecord, type LeaderEvent } from './copierEngine';
 import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels';
 import { cancelLifecycleHaltReason, createRiskGateContext, haltReason, type RiskGateContext } from './copierRiskGate';
 import {
@@ -193,6 +195,18 @@ export interface CopierStuckOperation {
 }
 
 export interface CopierControllerStatus {
+  /** Poslední změny ručních vstupů z grafu (fáze 2a) — jen zobrazení. */
+  manualOrderActions?: Array<{
+    operationId: string;
+    entryOperationId: string;
+    action: 'move-stop' | 'move-target' | 'cancel-entry';
+    status: CopierManualOrderActionRecord['status'];
+    createdAt: number;
+    updatedAt: number;
+    fromPrice: number | null;
+    toPrice: number | null;
+    reason?: string;
+  }>;
   /** Poslední ruční vstupy z grafu (fáze 1b) — jen zobrazení, autorita je durable záznam. */
   manualEntries?: Array<{
     operationId: string;
@@ -766,6 +780,8 @@ export interface CopierRuntimeController {
   placeLeaderEntry(command: LeaderEntryPlaceCommand, options: { deadlineAt: number }): Promise<LeaderEntryPlaceResult>;
   /** Ruční rozuzlení ručního vstupu s neznámým výsledkem; nic neposílá, vypne kopírku a vynutí kontrolu pozic. */
   waiveManualEntry(options: { operationId: string; reason: string }): Promise<void>;
+  /** Fáze 2a: posun SL/TP dál od trhu nebo zrušení čekajícího vlastního ručního vstupu (plán §10.1). */
+  manageLeaderOrder(command: LeaderOrderManageCommand, options: { deadlineAt: number }): Promise<LeaderOrderManageResult>;
   status(): CopierControllerStatus;
   waitForIdle(): Promise<void>;
   stop(): void;
@@ -3598,6 +3614,262 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       status === 'acknowledged' ? `ruční OSO přijato: vstup ${entryId}, SL ${stopId}, TP ${targetId}` : reason!, entryId);
     return {
       type: 'leader-entry-placed', operationId, status, checkedAt: clock(), blockers: [], ...ids, ...(resultReason ? { reason: resultReason } : {}),
+    };
+  };
+
+  // ── Fáze 2a: správa vlastního ručního vstupu z grafu (plán §10.1) ──
+  const MANUAL_ORDER_ACTION_KEEP = 50;
+  const UNRESOLVED_MANUAL_ORDER_ACTION = new Set(['sending', 'unknown']);
+  const manualOrderActionRecords = (): readonly CopierManualOrderActionRecord[] => currentRuntime().state.safety.manualOrderActions ?? [];
+  const unresolvedManualOrderAction = (entryOperationId?: string) => manualOrderActionRecords().find(record => (
+    UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status) && (entryOperationId == null || record.entryOperationId === entryOperationId)
+  )) ?? null;
+  const manualOrderActionJobs = new Set<Promise<void>>();
+  const persistManualOrderAction = (
+    operationId: string,
+    update: (current: CopierManualOrderActionRecord | undefined) => CopierManualOrderActionRecord,
+  ) => persistSafety(current => {
+    const list = current.manualOrderActions ?? [];
+    const next = update(list.find(record => record.operationId === operationId));
+    const merged = [...list.filter(record => record.operationId !== operationId), next]
+      .sort((left, right) => left.createdAt - right.createdAt);
+    let excess = merged.length - MANUAL_ORDER_ACTION_KEEP;
+    return {
+      manualOrderActions: merged.filter(record => {
+        if (excess > 0 && !UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status)) { excess -= 1; return false; }
+        return true;
+      }),
+    };
+  });
+  /**
+   * Dosah posunu k followerům (P2, oponentura 2a): stejné predikáty jako
+   * controller a runner u replace leadera + živé nohy followerů a žádný
+   * rozpracovaný cancel/modify. Synchronní, volá se ve frontě i těsně před zápisem.
+   */
+  const manageReachBlockers = (leaderOrderId: string, symbol: string, quantity: number): string[] => {
+    const reasons: string[] = [];
+    if (!gate.armed || gate.shadowMode || gate.killSwitch) reasons.push('Posun jde jen za zapnuté kopírky (ne shadow, ne kill).');
+    if (gate.sequenceBroken || source.needsReconciliation()) reasons.push('Kopírka čeká na kontrolu pozic.');
+    if (gate.stuckOutbox || hasDispatchBlockingStuckOutbox()) reasons.push('Kopírka má nevyřešený příkaz.');
+    if (gate.divergentAccounts.size > 0) reasons.push('Pozice skupiny se rozcházejí.');
+    if (awaitingCopiedEntries.size > 0) reasons.push('Některý follower ještě čeká na kopii vstupu.');
+    if (followerCutBackgroundJobs.size > 0) reasons.push('Běží vyřazení followera.');
+    const controllerCheck = controllerUnmappedReplaceFollowers(leaderOrderId, symbol, quantity).unmapped;
+    const runnerCheck = runnerUnmappedReplaceAccounts(leaderOrderId, currentRuntime().state, group, currentIneligibleAccounts()).missingAccounts;
+    const unmapped = [...new Set([...controllerCheck.map(follower => follower.accountId), ...runnerCheck])];
+    if (unmapped.length > 0) reasons.push(`Followeři ${unmapped.join(', ')} nemají kopii této nohy — posun by kopírku vypnul.`);
+    const links = currentRuntime().state.links.get(leaderOrderId) ?? [];
+    for (const link of links) {
+      if (!liveOrdersByAccount.get(link.accountId)?.has(link.brokerOrderId)) {
+        reasons.push(`Noha followera ${link.accountId} není živá.`);
+      }
+    }
+    const linkedIds = new Set(links.map(link => link.brokerOrderId));
+    if ([...currentRuntime().cancelOutbox.values()].some(entry => (
+      linkedIds.has(entry.brokerOrderId) && (entry.status === 'planned' || entry.status === 'sending' || entry.status === 'unknown')
+    ))) reasons.push('Změna nohy followera je ještě rozpracovaná.');
+    return reasons;
+  };
+  const manageResult = (
+    command: LeaderOrderManageCommand,
+    status: LeaderOrderManageResult['status'],
+    extra: Partial<LeaderOrderManageResult> = {},
+  ): LeaderOrderManageResult => ({
+    type: 'leader-order-managed', operationId: command.operationId, action: command.action, status,
+    checkedAt: clock(), blockers: [], ...extra,
+  });
+  const manageBlocked = (command: LeaderOrderManageCommand, code: string, text: string) => (
+    manageResult(command, 'blocked', { blockers: [{ code, text }] })
+  );
+  /**
+   * Změna s neznámým výsledkem se vyřeší jen pozorováním (P6, žádné TTL):
+   * příkaz leadera má novou cenu → provedeno; zrušený vstup / ukončený příkaz
+   * → vyřešeno, změna už nehraje roli.
+   */
+  const resolveManualOrderActionFromStream = async (order: BrokerOrder): Promise<void> => {
+    const action = manualOrderActionRecords().find(record => record.status === 'unknown' && record.targetBrokerOrderId === order.brokerOrderId);
+    if (!action) return;
+    const price = action.action === 'move-stop' ? order.stopPrice : order.limitPrice;
+    const landed = action.action === 'cancel-entry' ? order.status === 'canceled'
+      : isOpenOrderStatus(order.status) && price === action.toPrice;
+    const ended = !isOpenOrderStatus(order.status);
+    if (!landed && !ended) return;
+    await persistManualOrderAction(action.operationId, current => ({
+      ...(current ?? action),
+      status: landed ? 'acknowledged' : 'waived',
+      reason: landed ? 'potvrzeno streamem brokera' : `cílový příkaz skončil (${order.status})`,
+      updatedAt: clock(),
+    }));
+  };
+  /**
+   * Ve frontě controlleru: autoritativní čtení příkazů leadera, čistý tvar,
+   * brány, durable `sending`. Vrátí zápis, který proběhne MIMO frontu (P7).
+   */
+  const prepareManualOrderAction = async (
+    command: LeaderOrderManageCommand,
+    deadlineAt: number,
+    queuedFence: string,
+  ): Promise<LeaderOrderManageResult | (() => Promise<LeaderOrderManageResult>)> => {
+    const existing = manualOrderActionRecords().find(record => record.operationId === command.operationId);
+    if (existing) {
+      return existing.payloadHash !== command.payloadHash
+        ? manageBlocked(command, 'operation-conflict', 'Stejné id operace s jiným obsahem — nic se neodeslalo.')
+        : manageResult(command, existing.status === 'acknowledged' ? 'acknowledged' : existing.status === 'rejected' ? 'rejected'
+          : existing.status === 'not-sent' ? 'blocked' : 'unknown', { brokerOrderId: existing.targetBrokerOrderId, ...(existing.reason ? { reason: existing.reason } : {}) });
+    }
+    if (clock() + MANUAL_ENTRY_DEADLINE_RESERVE_MS >= deadlineAt) return manageBlocked(command, 'expired', 'Platnost příkazu vypršela — nic se neodeslalo.');
+    if (manualEntryQueueFence() !== queuedFence) return manageBlocked(command, 'state-changed', 'Mezitím přišla změna spojení nebo účtů — zkus to znovu.');
+    const entry = manualEntryRecords().find(record => record.operationId === command.entryOperationId);
+    if (!entry || entry.status !== 'acknowledged' || !entry.entryBrokerOrderId || !entry.stopBrokerOrderId || !entry.targetBrokerOrderId) {
+      return manageBlocked(command, 'not-own-entry', 'Spravovat jde jen vlastní přijatý ruční vstup z grafu.');
+    }
+    if (group.leaderAccountId == null || entry.request.accountId !== group.leaderAccountId || command.leaderAccountId !== group.leaderAccountId
+      || group.id !== command.groupId || entry.request.symbol !== command.symbol) {
+      return manageBlocked(command, 'not-leader', 'Vstup nepatří leaderovi této skupiny.');
+    }
+    if (unresolvedManualOrderAction(entry.operationId)) return manageBlocked(command, 'manage-unresolved', 'Předchozí změna tohoto vstupu má neznámý výsledek.');
+    if (unresolvedManualEntry()) return manageBlocked(command, 'manual-entry-unresolved', 'Ruční vstup má neznámý výsledek — nejdřív ho vyřeš.');
+    const leader = group.leaderAccountId;
+    if ((pendingTradeIngressByAccount.get(leader) ?? 0) > 0) return manageBlocked(command, 'busy', 'Kopírka ještě zpracovává události leadera — zkus to znovu.');
+    let orders: BrokerOrder[];
+    try {
+      orders = await broker.listOrders(leader, { fresh: true });
+    } catch (error) {
+      return manageBlocked(command, 'read-failed', `Příkazy leadera nejde přečíst (${errorOf(error).message.slice(0, 120)}).`);
+    }
+    if (manualEntryQueueFence() !== queuedFence) return manageBlocked(command, 'state-changed', 'Během čtení přišla změna — zkus to znovu.');
+    const byId = new Map(orders.map(order => [order.brokerOrderId, order]));
+    const entryOrder = byId.get(entry.entryBrokerOrderId);
+    const stopOrder = byId.get(entry.stopBrokerOrderId);
+    const targetOrder = byId.get(entry.targetBrokerOrderId);
+    const long = entry.request.side === 'Buy';
+    const symbol = entry.request.symbol;
+    if (command.action === 'cancel-entry') {
+      if (!entryOrder || !isOpenOrderStatus(entryOrder.status) || entryOrder.filledQuantity !== 0) {
+        return manageBlocked(command, 'entry-not-pending', 'Vstup už nečeká (vyplněný nebo ukončený) — zrušit jde jen čekající vstup.');
+      }
+      const followerWithPosition = group.followers.find(follower => (positionsByAccount.get(follower.accountId)?.get(symbol) ?? 0) !== 0);
+      if (followerWithPosition) return manageBlocked(command, 'follower-has-position', `Follower ${followerWithPosition.accountId} už má pozici — použij Flatten.`);
+      if (command.expect.price !== entry.request.price || command.expect.quantity !== entryOrder.quantity) {
+        return manageBlocked(command, 'order-changed', 'Vstup se od zobrazení změnil — obnov panel.');
+      }
+    } else {
+      const target = command.action === 'move-stop' ? stopOrder : targetOrder;
+      const other = command.action === 'move-stop' ? targetOrder : stopOrder;
+      const net = positionsByAccount.get(leader)?.get(symbol) ?? null;
+      const quantity = entryOrder?.quantity ?? 0;
+      // Čistý tvar (P1): vstup plně vyplněný, obě nohy pracují bez fillu se
+      // stejným qty jako pozice, žádný jiný pracující příkaz na symbolu.
+      if (!entryOrder || entryOrder.status !== 'filled' || entryOrder.filledQuantity !== quantity
+        || !target || !other || target.status !== 'working' || other.status !== 'working'
+        || target.filledQuantity !== 0 || other.filledQuantity !== 0
+        || target.quantity !== quantity || other.quantity !== quantity
+        || net == null || Math.abs(net) !== quantity || (long ? net <= 0 : net >= 0)) {
+        return manageBlocked(command, 'shape', 'Pozice nemá čistý tvar (částečné vyplnění, chybějící noha nebo jiný počet) — posun z appky teď nejde.');
+      }
+      const others = orders.filter(order => order.symbol === symbol && isOpenOrderStatus(order.status)
+        && order.brokerOrderId !== target.brokerOrderId && order.brokerOrderId !== other.brokerOrderId);
+      if (others.length > 0) return manageBlocked(command, 'other-orders', 'Leader má na symbolu i jiný pracující příkaz.');
+      const current = command.action === 'move-stop' ? target.stopPrice : target.limitPrice;
+      if (current == null || command.expect.price !== current || command.expect.quantity !== quantity) {
+        return manageBlocked(command, 'order-changed', 'Příkaz se od zobrazení změnil — obnov panel.');
+      }
+      const next = command.newPrice!;
+      if (next === current) return manageBlocked(command, 'no-change', 'Nová cena je stejná jako současná.');
+      // Strana trhu bez kotace (P4): pracující SL/TP je důkaz, kde trh není.
+      // Fáze 2a pouští jen posun DÁL od trhu; utažení/BE až po záznamu „modify přes trh“.
+      const away = command.action === 'move-stop' ? (long ? next < current : next > current) : (long ? next > current : next < current);
+      if (!away) return manageBlocked(command, 'toward-market', 'Zatím jde jen posun dál od trhu (utažení SL a BE přijdou po ověření u brokera).');
+      if (command.action === 'move-stop') {
+        // Riziko (P3): ztráta při novém SL proti čerstvým limitům leadera i followerů.
+        const now = clock();
+        const accountsToCheck = [
+          { accountId: leader, quantity, cut: null as number | null },
+          ...group.followers
+            .filter(follower => (currentRuntime().state.links.get(target.brokerOrderId) ?? []).some(link => link.accountId === follower.accountId))
+            .map(follower => ({ accountId: follower.accountId, quantity: followerQuantity(quantity, follower.multiplier), cut: follower.dailyLossCutUsd ?? null })),
+        ];
+        for (const account of accountsToCheck) {
+          const risk = accountRisk.get(account.accountId);
+          const loss = manualStopLossUsd(symbol, entry.request.price, next, account.quantity);
+          if (!risk || risk.error || !sameTradovateSession(risk.verifiedAt, now) || now - risk.verifiedAt > MANUAL_ENTRY_RISK_MAX_AGE_MS || loss == null) {
+            return manageBlocked(command, 'risk-unverified', `Účet ${account.accountId}: denní limit není čerstvě ověřený.`);
+          }
+          const headroom = remainingLossHeadroom({
+            verifiedAt: risk.verifiedAt, sameSession: true, error: null, realizedPnlUsd: risk.realizedPnlUsd,
+            openPnlUsd: risk.openPnlUsd ?? null, netLiq: risk.netLiq, cashBalanceUsd: risk.cashBalanceUsd ?? null,
+            minNetLiq: risk.minNetLiq, dailyLossAutoLiq: risk.dailyLossAutoLiq, effectiveDailyLossCutUsd: risk.effectiveDailyLossCutUsd ?? null,
+          }, account.cut);
+          const limits = [headroom.dailyUsd, headroom.cutUsd, headroom.drawdownUsd].filter((value): value is number => value != null);
+          if (limits.length === 0) return manageBlocked(command, 'risk-unknown', `Účet ${account.accountId}: žádný limit není známý.`);
+          if (limits.some(left => loss > left)) {
+            return manageBlocked(command, 'risk-limit', `Účet ${account.accountId}: ztráta při novém SL (~${Math.round(loss)} $) je víc, než zbývá do limitu.`);
+          }
+        }
+      }
+      const reach = manageReachBlockers(target.brokerOrderId, symbol, quantity);
+      if (reach.length > 0) return manageResult(command, 'blocked', { blockers: reach.map(text => ({ code: 'reach', text })) });
+    }
+    const targetOrderId = command.action === 'cancel-entry' ? entry.entryBrokerOrderId
+      : command.action === 'move-stop' ? entry.stopBrokerOrderId : entry.targetBrokerOrderId;
+    const targetLive = byId.get(targetOrderId)!;
+    const createdAt = clock();
+    const fromPrice = command.action === 'cancel-entry' ? entry.request.price
+      : command.action === 'move-stop' ? (targetLive.stopPrice ?? null) : (targetLive.limitPrice ?? null);
+    // INV-OUTBOX-01: záznam je durable dřív, než cokoli odejde k brokerovi.
+    await persistManualOrderAction(command.operationId, () => ({
+      operationId: command.operationId, payloadHash: command.payloadHash, entryOperationId: entry.operationId,
+      action: command.action, status: 'sending', targetBrokerOrderId: targetOrderId, fromPrice,
+      toPrice: command.newPrice ?? null, quantity: targetLive.quantity, createdAt, updatedAt: createdAt,
+    }));
+    const generation = safetyGeneration;
+    return async () => {
+      const finish = async (status: CopierManualOrderActionRecord['status'], reason?: string): Promise<LeaderOrderManageResult> => {
+        await persistManualOrderAction(command.operationId, current => ({ ...current!, status, ...(reason ? { reason } : {}), updatedAt: clock() }))
+          .catch(error => failClosed(new Error(`Správa vstupu: výsledek se nepodařilo uložit (${errorOf(error).message})`), { autoClose: false }));
+        manualEntryAudit(command.operationId, status === 'acknowledged' ? 'modified' : status === 'rejected' ? 'rejected' : status === 'unknown' ? 'unknown' : 'blocked',
+          `${command.action} ${targetOrderId}${command.newPrice != null ? ` → ${command.newPrice}` : ''}${reason ? `: ${reason}` : ''}`, targetOrderId);
+        return manageResult(command, status === 'acknowledged' ? 'acknowledged' : status === 'rejected' ? 'rejected' : status === 'not-sent' ? 'blocked' : 'unknown', {
+          brokerOrderId: targetOrderId,
+          ...(reason ? { reason } : {}),
+          ...(status === 'not-sent' ? { blockers: [{ code: 'not-sent', text: reason ?? 'Nic se neodeslalo.' }] } : {}),
+        });
+      };
+      // Synchronní kontrola těsně před zápisem (P7 + oponentura 2a b1): fence i celá brána dosahu.
+      if (clock() >= deadlineAt) return finish('not-sent', 'Platnost příkazu vypršela — nic se neodeslalo.');
+      if (manualEntryQueueFence() !== queuedFence || generation !== safetyGeneration) return finish('not-sent', 'Mezitím se změnil stav kopírky — nic se neodeslalo.');
+      if (command.action !== 'cancel-entry') {
+        const reach = manageReachBlockers(targetOrderId, symbol, targetLive.quantity);
+        if (reach.length > 0) return finish('not-sent', reach.join(' '));
+      }
+      let write: Promise<void>;
+      try {
+        write = command.action === 'cancel-entry'
+          ? options.broker.cancelOrder(leader, targetOrderId)
+          : dispatchBroker(generation).modifyOrder(leader, targetOrderId, {
+            quantity: targetLive.quantity,
+            orderType: targetLive.orderType,
+            ...(command.action === 'move-stop' ? { stopPrice: command.newPrice! } : { limitPrice: command.newPrice! }),
+          });
+      } catch (error) {
+        return finish(error instanceof CopierDispatchRevokedError ? 'not-sent' : 'unknown', errorOf(error).message.slice(0, 200));
+      }
+      registerInFlightBrokerWrite(leader, write);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const outcome = await Promise.race([
+          write.then(() => 'done' as const),
+          new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), MANUAL_ENTRY_POST_TIMEOUT_MS); }),
+        ]);
+        if (outcome === 'timeout') return finish('unknown', 'Broker změnu nepotvrdil včas — zkontroluj leadera v Tradovate.');
+        return finish('acknowledged');
+      } catch (error) {
+        if (error instanceof CopierDispatchRevokedError) return finish('not-sent', `Pojistka kopírky změnu zastavila (${error.message}).`);
+        const message = errorOf(error).message;
+        return finish(/reject|odmít/i.test(message) ? 'rejected' : 'unknown', message.slice(0, 200));
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     };
   };
 
@@ -10265,6 +10537,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (stopped || shutdownRequested) return decline('worker se ukončuje');
     if (gate.killSwitch) return decline('kill switch');
     if (gate.armed) return decline('kopírka už je zapnutá');
+    // P6 (oponentura 2a): změna SL/TP s neznámým výsledkem — leader může mít
+    // jinou ochranu než followeři; po výpadku se automaticky nepokračuje.
+    if (unresolvedManualOrderAction()) return decline('změna ručního vstupu má neznámý výsledek');
     if (lastDisarm && lastDisarm.at !== pending.disarmAt) return decline('kopírka se mezitím vypnula z jiného důvodu');
     if (now >= pending.armExpiresAt) return decline('vypršelo okno původního zapnutí');
     const heldWaiting = pending.heldOpen && pending.rebaselinedAt == null;
@@ -14345,6 +14620,33 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return { ineligibleAccounts, unsafeAccounts };
   };
 
+  /**
+   * Kontrola controlleru u replace leaderova příkazu: zapojení on-submit
+   * followeři bez linku a bez bezpečné výjimky = fail-closed. Sdílí ji brána
+   * ruční správy z grafu (fáze 2a).
+   */
+  const controllerUnmappedReplaceFollowers = (leaderOrderId: string, symbol: string, quantity: number) => {
+    const followerLinks = currentRuntime().state.links.get(leaderOrderId) ?? [];
+    const safelyUnmapped = new Set<number>();
+    for (const follower of group.followers) {
+      if (followerLinks.some(link => link.accountId === follower.accountId)) continue;
+      if (
+        currentIntentionalSuppression(follower.accountId, symbol) != null
+        || (
+          followerQuantity(quantity, follower.multiplier) === 0
+          && hasAuthoritativeFlatNoWorking(follower.accountId, symbol)
+        )
+      ) safelyUnmapped.add(follower.accountId);
+    }
+    const unmapped = group.followers.filter(follower => (
+      follower.enabled !== false
+      && follower.mode === 'on-submit' && !currentIneligibleAccounts().has(follower.accountId)
+      && !followerLinks.some(link => link.accountId === follower.accountId)
+      && !safelyUnmapped.has(follower.accountId)
+    ));
+    return { safelyUnmapped, unmapped };
+  };
+
   const handleBrokerEvent = async (
     event: BrokerEvent,
     admissionGeneration: number,
@@ -15173,6 +15475,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (group.leaderAccountId == null) return;
     const sequence = currentRuntime().state.lastSequence + 1;
+    if (event.type === 'order' && event.order.accountId === group.leaderAccountId) {
+      await resolveManualOrderActionFromStream(event.order);
+    }
     const leaderEvent = source.observe(event, group.leaderAccountId, sequence, eventReceivedAt);
     if (!leaderEvent) return;
     // Vlastní ruční vstup zpracovaný až za vypnuté kopírky (brzda mezi ACK
@@ -15867,25 +16172,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (await blockDuringPause(leaderEvent, true, leaderEvent, true)) return;
       if (await blockOutsideTradingWindow(leaderEvent, true)) return;
     }
-    const safelyUnmappedReplaceAccounts = new Set<number>();
+    let safelyUnmappedReplaceAccounts = new Set<number>();
     if (leaderEvent.kind === 'replaced' && leaderEvent.executionShapeChanged === true) {
-      const followerLinks = currentRuntime().state.links.get(leaderEvent.orderId) ?? [];
-      for (const follower of group.followers) {
-        if (followerLinks.some(link => link.accountId === follower.accountId)) continue;
-        if (
-          currentIntentionalSuppression(follower.accountId, leaderEvent.symbol) != null
-          || (
-            followerQuantity(leaderEvent.quantity, follower.multiplier) === 0
-            && hasAuthoritativeFlatNoWorking(follower.accountId, leaderEvent.symbol)
-          )
-        ) safelyUnmappedReplaceAccounts.add(follower.accountId);
-      }
-      const unmappedFollowers = group.followers.filter(follower => (
-        follower.enabled !== false
-        && follower.mode === 'on-submit' && !currentIneligibleAccounts().has(follower.accountId)
-        && !followerLinks.some(link => link.accountId === follower.accountId)
-        && !safelyUnmappedReplaceAccounts.has(follower.accountId)
-      ));
+      const unmapped = controllerUnmappedReplaceFollowers(leaderEvent.orderId, leaderEvent.symbol, leaderEvent.quantity);
+      safelyUnmappedReplaceAccounts = unmapped.safelyUnmapped;
+      const unmappedFollowers = unmapped.unmapped;
       if (unmappedFollowers.length > 0) {
         const error = new Error(
           `Copier fail-closed: leader replace ${leaderEvent.orderId} nemá pending korelaci ani follower link `
@@ -17556,6 +17847,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   // Restart během odesílání ručního vstupu: výsledek neznáme a nikdy se
   // nepošle znovu (INV-OUTBOX-01/02). Uložit dřív, než se zpracuje cokoli dalšího.
+  if (manualOrderActionRecords().some(record => record.status === 'sending')) {
+    await persistSafety(current => ({
+      manualOrderActions: (current.manualOrderActions ?? []).map(record => (record.status === 'sending'
+        ? { ...record, status: 'unknown' as const, reason: 'Worker se restartoval během změny — výsledek neznámý, zkontroluj leadera v Tradovate.', updatedAt: clock() }
+        : record)),
+    }));
+  }
   if (manualEntryRecords().some(record => record.status === 'sending')) {
     await persistSafety(current => ({
       manualEntries: (current.manualEntries ?? []).map(record => (record.status === 'sending'
@@ -17856,6 +18154,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     connectionRenewalBlocker() {
       if (autoCloseInFlight) return 'auto-close';
       if (manualEntryCancelJobs.size > 0) return 'manual entry cancel';
+      if (manualOrderActionJobs.size > 0) return 'manual order change';
       if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
         || reconciliationRequestsPending > 0 || armPreparationInFlight) return 'connection recovery';
       if (hasInFlightOutbox()) return 'durable outbox';
@@ -17958,6 +18257,39 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
     },
     prepareArm,
+    async manageLeaderOrder(command, { deadlineAt }) {
+      const existing = manualOrderActionRecords().find(record => record.operationId === command.operationId);
+      if (!Number.isFinite(deadlineAt) && !existing) return manageBlocked(command, 'no-deadline', 'Příkaz nemá platnost — nic se neodeslalo.');
+      let started = false;
+      let abandonedStart = false;
+      const queuedFence = manualEntryQueueFence();
+      const prepared = eventTail.then(async () => {
+        if (abandonedStart || stopped) return null;
+        started = true;
+        return prepareManualOrderAction(command, deadlineAt, queuedFence);
+      });
+      eventTail = prepared.then(() => undefined).catch(reason => failClosed(errorOf(reason), { autoClose: false }));
+      let startTimer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<'late'>(resolve => {
+        startTimer = setTimeout(() => { if (!started) { abandonedStart = true; resolve('late'); } }, MANUAL_ENTRY_START_TIMEOUT_MS);
+      });
+      let first: Awaited<typeof prepared> | 'late';
+      try {
+        first = await Promise.race([prepared, late]);
+      } finally {
+        if (startTimer) clearTimeout(startTimer);
+      }
+      if (first === 'late' || first === null) {
+        return manageBlocked(command, 'controller-busy', 'Kopírka zpracovává jiné události — nic se neodeslalo, zkus to znovu.');
+      }
+      if (typeof first !== 'function') return first;
+      // Zápis MIMO frontu controlleru (P7): replace eventy leadera se zatím zrcadlí normálně.
+      const job = first();
+      const tracked = job.then(() => undefined, () => undefined);
+      manualOrderActionJobs.add(tracked);
+      void tracked.finally(() => manualOrderActionJobs.delete(tracked));
+      return job;
+    },
     async placeLeaderEntry(command, { deadlineAt }) {
       const existing = manualEntryRecords().find(record => record.operationId === command.operationId);
       if (existing) return manualEntryResultFromRecord(existing, command);
@@ -17999,6 +18331,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     async waiveManualEntry({ operationId, reason }) {
       const explanation = reason.trim();
       if (explanation.length < 5) throw new Error('Ruční resolution vyžaduje konkrétní důvod');
+      if (operationId.startsWith('manage:')) {
+        // Správa vstupu s neznámým výsledkem: nic se neposílá; skutečný stav
+        // příkazu leadera ukáže stream / kontrola pozic.
+        const action = manualOrderActionRecords().find(item => item.operationId === operationId);
+        if (!action || !UNRESOLVED_MANUAL_ORDER_ACTION.has(action.status) || (action.status === 'sending' && manualOrderActionJobs.size > 0)) {
+          throw new Error('Změna vstupu už nečeká na vyřešení; kopírka zůstává beze změny');
+        }
+        declineTransportResume('ruční vyřešení změny ručního vstupu');
+        gate = { ...gate, armed: false };
+        invalidateReconciliation();
+        await persistManualOrderAction(operationId, current => ({
+          ...(current ?? action), status: 'waived', waiver: { at: clock(), reason: explanation.slice(0, 300) }, updatedAt: clock(),
+        }));
+        manualEntryAudit(operationId, 'recovered', `změna ručního vstupu vyřešena ručně: ${explanation.slice(0, 200)}`);
+        return;
+      }
       const record = manualEntryRecords().find(item => item.operationId === operationId);
       // `sending` bez běžícího odeslání = neuložený neznámý výsledek; smí se vyřešit.
       if (!record || !UNRESOLVED_MANUAL_ENTRY.has(record.status) || (record.status === 'sending' && manualEntryExecuting)) {
@@ -18996,6 +19344,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ? 0
         : sessionArmedAt;
       return {
+        manualOrderActions: manualOrderActionRecords().slice(-10).map(record => ({
+          operationId: record.operationId, entryOperationId: record.entryOperationId, action: record.action,
+          status: record.status, createdAt: record.createdAt, updatedAt: record.updatedAt,
+          fromPrice: record.fromPrice, toPrice: record.toPrice, ...(record.reason ? { reason: record.reason } : {}),
+        })),
         manualEntries: manualEntryRecords().slice(-10).map(record => ({
           operationId: record.operationId,
           status: record.status,
@@ -19302,6 +19655,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         await observedRiskPoll;
         const observedRouteEpochRefresh = routeEpochRefreshTail;
         await observedRouteEpochRefresh;
+        const observedManualActions = [...manualOrderActionJobs];
+        if (observedManualActions.length > 0) await Promise.all(observedManualActions);
         const observedManualCancels = [...manualEntryCancelJobs];
         if (observedManualCancels.length > 0) await Promise.all(observedManualCancels);
         const observedFollowerCuts = [...followerCutBackgroundJobs];

@@ -1,24 +1,26 @@
 import { stableHash64 } from '../services/copierKeys.js';
 
 /**
- * Fáze 2 obchodování z grafu (docs/CHART_ORDER_ENTRY_PLAN.md §10): správa
- * otevřeného obchodu leadera — posun SL/TP (i na BE), zrušení čekajícího
- * vstupu, zavření pozice za zapnuté kopírky. Worker cílový příkaz najde sám
- * podle role; UI id příkazů nezná. Kopírka followerům provede totéž běžnou
- * cestou (zrcadlení modify, lifecycle cancel, kopie exitu).
+ * Fáze 2a obchodování z grafu (docs/CHART_ORDER_ENTRY_PLAN.md §10.1): správa
+ * VLASTNÍHO ručního vstupu z grafu — posun SL/TP dál od trhu a zrušení
+ * čekajícího vstupu. Id příkazů zná worker z durable záznamu vstupu
+ * (`entryOperationId`); UI je nezná. Kopírka followerům provede totéž
+ * běžnou cestou (zrcadlení modify, lifecycle cancel).
  */
 
-export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position';
+export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry';
 
 export interface LeaderOrderManageCommand {
   type: 'manage-leader-order';
   groupId: string;
   operationId: string;
   leaderAccountId: number;
+  /** Vlastní ruční vstup (`entry:…`), jehož příkaz se spravuje. */
+  entryOperationId: string;
   symbol: string;
   action: LeaderOrderManageAction;
-  /** Co uživatel viděl: cena dotčeného příkazu (u close-position vstup pozice) a počet kontraktů. */
-  expect: { price: number | null; quantity: number };
+  /** Co uživatel viděl: cena dotčeného příkazu (u cancel-entry cena vstupu) a počet kontraktů. */
+  expect: { price: number; quantity: number };
   /** Jen `move-*`. */
   newPrice?: number;
   payloadHash: string;
@@ -39,8 +41,9 @@ export interface LeaderOrderManageResult {
 
 const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
 const OPERATION_ID_PATTERN = /^manage:[a-zA-Z0-9_-]{8,100}$/;
-const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry', 'close-position'];
-const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'symbol', 'action', 'expect', 'newPrice', 'payloadHash'];
+const ENTRY_OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
+const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry'];
+const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'symbol', 'action', 'expect', 'newPrice', 'payloadHash'];
 const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 1e-9;
 const price = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
 
@@ -67,14 +70,15 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
   if (typeof command.groupId !== 'string' || command.groupId.trim() === '' || command.groupId.length > 200) fail();
   if (typeof command.operationId !== 'string' || !OPERATION_ID_PATTERN.test(command.operationId)) fail();
   if (typeof command.leaderAccountId !== 'number' || !Number.isSafeInteger(command.leaderAccountId) || command.leaderAccountId <= 0) fail();
+  if (typeof command.entryOperationId !== 'string' || !ENTRY_OPERATION_ID_PATTERN.test(command.entryOperationId)) fail();
   if (typeof command.symbol !== 'string' || !SYMBOL_PATTERN.test(command.symbol)) fail();
   if (!ACTIONS.includes(command.action as LeaderOrderManageAction)) fail();
   const expect = command.expect as Record<string, unknown> | null;
   if (!expect || typeof expect !== 'object' || Object.keys(expect).some(key => key !== 'price' && key !== 'quantity')) fail();
-  if (expect!.price !== null && !price(expect!.price)) fail();
+  if (!price(expect!.price)) fail();
   if (typeof expect!.quantity !== 'number' || !Number.isSafeInteger(expect!.quantity) || expect!.quantity < 1 || expect!.quantity > 50) fail();
   const moves = command.action === 'move-stop' || command.action === 'move-target';
-  if (moves ? !price(command.newPrice) || expect!.price === null : command.newPrice !== undefined) fail();
+  if (moves ? !price(command.newPrice) : command.newPrice !== undefined) fail();
   if (typeof command.payloadHash !== 'string' || !/^[a-z0-9]{8,64}$/.test(command.payloadHash)) fail();
   const typed = command as unknown as LeaderOrderManageCommand;
   if (leaderOrderManagePayloadHash(typed) !== typed.payloadHash) fail();

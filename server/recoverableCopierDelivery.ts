@@ -1,4 +1,5 @@
 import { isLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace.js';
+import { isLeaderOrderManageCommand } from '../lib/leaderOrderManage.js';
 import { randomUUID } from 'node:crypto';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
 import { localCopierAgentErrorDetails, type LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol.js';
@@ -161,7 +162,7 @@ export function recoverableCopierDelivery(options: {
                 ? { deadlineAt: expires - COPIER_COMMAND_ACK_RESERVE_MS }
                 : {}),
               // Ruční vstup (fáze 1b): platnost do expiresAt bez ACK rezervy (§4).
-              ...(isLeaderEntryPlaceCommand(remote.command) ? { deadlineAt: expires } : {}),
+              ...(isLeaderEntryPlaceCommand(remote.command) || isLeaderOrderManageCommand(remote.command) ? { deadlineAt: expires } : {}),
             });
           }
           catch (error) {

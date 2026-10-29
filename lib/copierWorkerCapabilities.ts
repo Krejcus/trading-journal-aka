@@ -29,6 +29,14 @@ export const supportsCopierManualEntry = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_MANUAL_ENTRY_CAPABILITY);
 
+/** Worker umí spravovat vlastní ruční vstup z grafu (fáze 2a, 29. 10. 2026). */
+export const COPIER_MANUAL_ORDER_MANAGE_CAPABILITY = 'manual-order-manage-v1';
+
+export const supportsCopierManualOrderManage = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ORDER_MANAGE_CAPABILITY);
+
 /** Worker umí smazat svou skupinu a běžet bez skupiny (11. 10. 2026). */
 export const COPIER_GROUP_DELETE_CAPABILITY = 'group-delete-v1';
 

@@ -112,6 +112,14 @@ export function remainingLossHeadroom(risk: ManualEntryAccountRisk, configuredCu
   return { dailyUsd, drawdownUsd, cutUsd };
 }
 
+/** Ztráta při SL stejným vzorcem jako náhled (skluz + poplatky); null = neznámá hodnota bodu. */
+export function manualStopLossUsd(symbol: string, entry: number, stop: number, quantity: number): number | null {
+  const pointValue = pointValueUsd(symbol);
+  if (pointValue == null) return null;
+  const fee = FEE_PER_CONTRACT_USD[symbol.replace(/[FGHJKMNQUVXZ]\d$/, '')] ?? 5;
+  return ((Math.abs(entry - stop) + MANUAL_ENTRY_SLIPPAGE_TICKS * TICK) * pointValue + fee) * quantity;
+}
+
 /** Nejhorší otevřená expozice na symbolu po přidání příkazu — stejný vzorec jako `exposureCappedBroker`. */
 function exceedsMaxContracts(account: ManualEntryAccountInputs, symbol: string, side: 'Buy' | 'Sell', quantity: number, cap: number): boolean {
   const current = (account.positions ?? []).filter(position => position.symbol === symbol).reduce((sum, position) => sum + position.net, 0);

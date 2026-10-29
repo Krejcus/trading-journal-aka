@@ -1,5 +1,6 @@
 import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview.js';
 import { validateLeaderEntryPlace } from '../lib/leaderEntryPlace.js';
+import { validateLeaderOrderManage } from '../lib/leaderOrderManage.js';
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -21,7 +22,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -399,6 +400,7 @@ export async function startLocalCopierExecutionAgent(
     version: 1,
     capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY,
       ...(typeof options.controller.placeLeaderEntry === 'function' ? [COPIER_MANUAL_ENTRY_CAPABILITY] : []),
+      ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ORDER_MANAGE_CAPABILITY] : []),
       ...(options.autoRearmAfterTransport === true && autoResumeAdmission ? [COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY] : []),
       ...(typeof options.controller.retireGroup === 'function' && options.previewGroupAccounts
         ? [COPIER_GROUP_DELETE_CAPABILITY]
@@ -919,6 +921,23 @@ export async function startLocalCopierExecutionAgent(
         }
         if (typeof options.controller.placeLeaderEntry !== 'function') throw new Error('unsupported-copy-command:place-leader-entry');
         return options.controller.placeLeaderEntry(entry, { deadlineAt: context.deadlineAt });
+      }
+      case 'manage-leader-order': {
+        // Fáze 2a: jen přes relay (idempotence, rozestup, denní strop).
+        // Brzda po zadání zneplatní posun SL/TP; zrušení vstupu je risk-redukční.
+        const manage = validateLeaderOrderManage(command);
+        if (context.source !== 'relay') throw new Error('manual-entry-relay-only');
+        if (context.deadlineAt == null) {
+          return { type: 'leader-order-managed', operationId: manage.operationId, action: manage.action, status: 'blocked', checkedAt: Date.now(),
+            blockers: [{ code: 'no-deadline', text: 'Příkaz nemá platnost — nic se neodeslalo.' }] };
+        }
+        if (manage.action !== 'cancel-entry' && context.createdAt != null
+          && context.createdAt <= lastBrakeCreatedAt + Math.max(0, context.clockSkewReserveMs ?? 0)) {
+          return { type: 'leader-order-managed', operationId: manage.operationId, action: manage.action, status: 'blocked', checkedAt: Date.now(),
+            blockers: [{ code: 'brake-after-request', text: 'Po zadání změny přišlo vypnutí kopírky nebo zámek.' }] };
+        }
+        if (typeof options.controller.manageLeaderOrder !== 'function') throw new Error('unsupported-copy-command:manage-leader-order');
+        return options.controller.manageLeaderOrder(manage, { deadlineAt: context.deadlineAt });
       }
       default: {
         // Neznámý příkaz od novější appky nikdy nesmí vrátit „ok“ bez výsledku.

@@ -1,5 +1,6 @@
 import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceCommand, LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
+import type { LeaderOrderManageCommand, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import type { LiveSnapshot } from './tradecopiaLiveService';
 
 export type CopyReplicationMode = 'off' | 'on-submit' | 'on-fill';
@@ -252,12 +253,15 @@ export type LiveCopyTradingCommand =
   /** Fáze 1a obchodování z grafu: jen náhled, worker nic nezapíše (lib/leaderEntryPreview.ts). */
   | LeaderEntryPreviewCommand
   /** Fáze 1b: ruční OSO na leadera (lib/leaderEntryPlace.ts); jediný risk-zvyšující příkaz z appky. */
-  | LeaderEntryPlaceCommand;
+  | LeaderEntryPlaceCommand
+  /** Fáze 2a: posun SL/TP dál od trhu, zrušení čekajícího vlastního vstupu (lib/leaderOrderManage.ts). */
+  | LeaderOrderManageCommand;
 
 export type LiveCopyTradingCommandResult =
   | { type: 'configuration'; group: CopyGroupConfig }
   | LeaderEntryPreviewResult
   | LeaderEntryPlaceResult
+  | LeaderOrderManageResult
   | {
     type: 'flatten';
     operationId: string;

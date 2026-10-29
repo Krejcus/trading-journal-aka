@@ -955,3 +955,19 @@ describe('fáze 1b: push o zrušení vlastního vstupu', () => {
     expect(run([entry({ status: 'abandoned', cancel: 'failed' })])[0].body).toContain('SELHALO');
   });
 });
+
+describe('fáze 2a: push o neúspěšné změně ručního vstupu', () => {
+  const action = (patch: Record<string, unknown> = {}) => ({
+    operationId: 'manage:m1', entryOperationId: 'entry:e1', action: 'move-stop', status: 'rejected',
+    createdAt: NOW - 5_000, updatedAt: NOW - 4_000, fromPrice: 29_400, toPrice: 29_380, ...patch,
+  });
+  const run = (actions: unknown[]) => evaluate([runtime({ status: { armed: true, shadowMode: false, connected: true, killSwitch: false, stuckOutbox: false, lastError: null, manualOrderActions: actions } })])
+    .notifications.filter(item => item.incidentKey.startsWith('manual-order:'));
+
+  it('odmítnutí a neznámý výsledek se hlásí, úspěch ne', () => {
+    expect(run([action()])[0]).toMatchObject({ title: 'Posun SL odmítnut', kind: 'opened' });
+    expect(run([action({ status: 'unknown', action: 'cancel-entry' })])[0].title).toBe('Zrušení vstupu: výsledek neznámý');
+    expect(run([action({ status: 'acknowledged' })])).toEqual([]);
+    expect(run([action({ updatedAt: NOW - 11 * 60_000 })])).toEqual([]);
+  });
+});

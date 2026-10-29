@@ -1420,6 +1420,31 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
  * Followery odesílá souběžně — kdyby se posílaly za sebou, poslednímu by
  * se do latence započítalo čekání na předchozí a měření by lhalo.
  */
+/**
+ * Kteří on-submit followeři by u replace leaderova příkazu neměli kam zapsat
+ * změnu (chybí link) — runner pak celý replace zablokuje (all-or-none).
+ * Sdílí ji brána ruční správy z grafu (fáze 2a), aby posun z appky nikdy
+ * nevyvolal `leader-replace-unmapped`.
+ */
+export function runnerUnmappedReplaceAccounts(
+  leaderOrderId: string,
+  state: Pick<CopierRuntime['state'], 'links'>,
+  group: CopyGroupConfig,
+  ineligibleAccounts: ReadonlyMap<number, unknown>,
+): { expectedAccounts: number[]; missingAccounts: number[] } {
+  const linkedAccounts = new Set((state.links.get(leaderOrderId) ?? []).map(link => link.accountId));
+  const expectedAccounts = group.followers
+    .filter(follower => (
+      follower.accountId !== group.leaderAccountId
+      && follower.mode === 'on-submit'
+      && Number.isFinite(follower.multiplier)
+      && follower.multiplier > 0
+      && !ineligibleAccounts.has(follower.accountId)
+    ))
+    .map(follower => follower.accountId);
+  return { expectedAccounts, missingAccounts: expectedAccounts.filter(accountId => !linkedAccounts.has(accountId)) };
+}
+
 export async function processLeaderEvent(
   options: ProcessLeaderEventOptions,
 ): Promise<CopierRunResult> {
@@ -1477,19 +1502,9 @@ export async function processLeaderEvent(
   const modifications = planModify(event, planningState, group)
     .filter(item => !syncPausedAccounts.has(item.accountId));
   if (event.kind === 'replaced' && event.executionShapeChanged === true && group.enabled) {
-    const linkedAccounts = new Set(
-      (planningState.links.get(event.orderId) ?? []).map(link => link.accountId),
+    const { expectedAccounts, missingAccounts } = runnerUnmappedReplaceAccounts(
+      event.orderId, planningState, group, context.ineligibleAccounts,
     );
-    const expectedAccounts = group.followers
-      .filter(follower => (
-        follower.accountId !== group.leaderAccountId
-        && follower.mode === 'on-submit'
-        && Number.isFinite(follower.multiplier)
-        && follower.multiplier > 0
-        && !context.ineligibleAccounts.has(follower.accountId)
-      ))
-      .map(follower => follower.accountId);
-    const missingAccounts = expectedAccounts.filter(accountId => !linkedAccounts.has(accountId));
     if (missingAccounts.length > 0) {
       const reason = `leader-replace-unmapped: ${event.orderId}; chybí follower link pro ${missingAccounts.join(',')}`;
       for (const accountId of expectedAccounts) {

@@ -329,6 +329,8 @@ export interface CopierState {
      * `unknown` a nikdy se znovu neposílá. Nejvýš 50 posledních záznamů.
      */
     manualEntries?: CopierManualEntryRecord[];
+    /** Správa vlastních ručních vstupů z grafu (fáze 2a): posun SL/TP, zrušení vstupu. */
+    manualOrderActions?: CopierManualOrderActionRecord[];
   };
 }
 
@@ -361,6 +363,22 @@ export interface CopierManualEntryRecord {
   lateResult?: { at: number; entryBrokerOrderId?: string; accepted: boolean };
   /** Jediný pokus o cílené zrušení vlastního vstupu leadera. */
   cancel?: { status: 'sending' | 'sent' | 'failed'; at: number; reason: string; error?: string };
+  waiver?: { at: number; reason: string };
+}
+
+export interface CopierManualOrderActionRecord {
+  operationId: string;
+  payloadHash: string;
+  entryOperationId: string;
+  action: 'move-stop' | 'move-target' | 'cancel-entry';
+  status: 'sending' | 'acknowledged' | 'rejected' | 'unknown' | 'not-sent' | 'waived';
+  targetBrokerOrderId: string;
+  fromPrice: number | null;
+  toPrice: number | null;
+  quantity: number;
+  createdAt: number;
+  updatedAt: number;
+  reason?: string;
   waiver?: { at: number; reason: string };
 }
 

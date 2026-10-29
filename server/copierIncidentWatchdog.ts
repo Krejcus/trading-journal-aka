@@ -662,6 +662,31 @@ export function manualEntryNotifications(
   return out;
 }
 
+const MANAGE_ACTION_LABEL: Record<string, string> = { 'move-stop': 'Posun SL', 'move-target': 'Posun TP', 'cancel-entry': 'Zrušení vstupu' };
+
+/** Problémové výsledky správy ručního vstupu (fáze 2a): push jen při odmítnutí / neznámém výsledku. */
+export function manualOrderActionNotifications(
+  actions: unknown,
+  now: number,
+): Array<{ key: string; detail: string; title: string; body: string }> {
+  if (!Array.isArray(actions)) return [];
+  const out: Array<{ key: string; detail: string; title: string; body: string }> = [];
+  for (const raw of actions.slice(-10)) {
+    const action = (raw ?? {}) as Record<string, unknown>;
+    const operationId = asText(action.operationId);
+    const status = asText(action.status);
+    const updatedAt = typeof action.updatedAt === 'number' ? action.updatedAt : NaN;
+    if (!operationId || (status !== 'rejected' && status !== 'unknown')) continue;
+    if (!Number.isFinite(updatedAt) || now - updatedAt > MANUAL_ENTRY_NOTIFY_WINDOW_MS) continue;
+    const label = MANAGE_ACTION_LABEL[asText(action.action) ?? ''] ?? 'Změna vstupu';
+    const reason = asText(action.reason);
+    out.push(status === 'rejected'
+      ? { key: `manual-order:${operationId}`, detail: status, title: `${label} odmítnut`, body: `${reason ?? 'Broker změnu odmítl'}. Leader i followeři mají původní cenu.` }
+      : { key: `manual-order:${operationId}`, detail: status, title: `${label}: výsledek neznámý`, body: 'Zkontroluj leadera v Tradovate; kopírka se po výpadku sama nezapne, dokud se to nevyřeší.' });
+  }
+  return out;
+}
+
 export function evaluateCopierIncidents(options: {
   runtimes: readonly CopierRuntimeRow[];
   alertStates: readonly CopierAlertStateRow[];
@@ -994,6 +1019,12 @@ export function evaluateCopierIncidents(options: {
     // --- Ruční vstupy z grafu (fáze 1b): jednorázová zpráva o výsledku ---
     // Klíč na operaci, detail = stav; jen záznamy změněné za posledních
     // 10 min (žádný replay starých vstupů po nasazení). Jen výstraha (INV-WATCH-01).
+    for (const notification of manualOrderActionNotifications(status.manualOrderActions, options.now)) {
+      const state = activeState(userId, deviceId, notification.key);
+      if (state?.detail === notification.detail) continue;
+      notifications.push({ userId, deviceId, incidentKey: notification.key, kind: 'opened', title: notification.title, body: notification.body });
+      upserts.push({ userId, deviceId, incidentKey: notification.key, active: false, detail: notification.detail, notified: true });
+    }
     for (const notification of manualEntryNotifications(status.manualEntries, options.now)) {
       const state = activeState(userId, deviceId, notification.key);
       if (state?.detail === notification.detail) continue;
