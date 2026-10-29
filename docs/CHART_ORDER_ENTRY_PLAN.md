@@ -334,3 +334,14 @@ dne („ruční vstup je přísnější“), stáří výsledku od přijetí a z
 změně stavu kopírky. Vědomě přijato: `lastGroupFillAt` jen z uzavřených
 obchodů leadera (okno sekund, částečně kryje quiet window), konec okna jen
 jako stav za 5 min, poplatky odhadem.
+
+Druhé kolo oponentury (b1f0811a): **OK**, podmínka před pushem = V12 E1
+zeleně samostatně. Doplněno: ARMED test hlídá, že neproběhlo odmítnutí
+`halt`; výsledek náhledu se při změně stavu kopírky maže (ne jen skryje).
+Do fáze 1b přenést:
+- zastaralá kotace grafu (`quoteInfo.stale`) musí náhled i odeslání zastavit;
+- kontrakt brát jen ze zdroje `IBKR:` — konkrétní kontrakt z TradingView
+  (`CME_MINI:MNQZ2026`) by jinak byl identifikátor z TV v příkazu (INV-UI-04);
+- test souladu náhledu s kopírováním: náhled OK na fixture fáze 0 → kopírka
+  zkopíruje stejné `followerQuantities`;
+- test relay `assertPreviewAdmissible` proti falešné DB (dnes jen grep).

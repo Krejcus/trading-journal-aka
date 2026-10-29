@@ -52,6 +52,8 @@ describe('fáze 1a: náhled v controlleru kopírky', () => {
 
     expect(result.type).toBe('leader-entry-preview');
     expect(result.operationId).toBe('preview:controllertest01');
+    // Proběhla ARMED větev, ne odmítnutí za vypnuté kopírky.
+    expect(result.blockers.map(issue => issue.code)).not.toContain('halt');
     for (const { key, spy } of brokerSpies) expect(spy, key).not.toHaveBeenCalled();
     expect(commitSpy).not.toHaveBeenCalled();
     expect(audits.length).toBe(auditsBefore);

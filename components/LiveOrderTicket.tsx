@@ -121,6 +121,9 @@ const PreviewSection: React.FC<{
   const busyRef = useRef(false);
   const [now, setNow] = useState(() => Date.now());
   const key = previewDraft ? `${resetKey}|${JSON.stringify(previewDraft)}` : '';
+  // Výsledek zahodit, ne jen skrýt: po OFF→ON do 15 s by se jinak starý
+  // výsledek z předchozího zapnutí ukázal znovu jako čerstvý.
+  useEffect(() => { setState(null); }, [resetKey]);
   useEffect(() => {
     if (!state?.result) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);

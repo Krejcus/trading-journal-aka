@@ -82,7 +82,8 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
     error: sameDay?.error ?? null,
     liveStatus: candleWindow.needsLive ? liveStatus : null,
     liveCapturedAt: live?.capturedAt ?? null,
-    /** Odkud jsou živé svíčky dne (`IBKR:MNQZ2026`, `CME_MINI:MNQ1!`) — jen pro štítek. */
+    /** Odkud jsou živé svíčky dne (`IBKR:MNQZ2026`, `CME_MINI:MNQ1!`) — štítek
+     *  a kontrakt náhledu ručního vstupu (worker ho ověří proti front kontraktu). */
     liveSource: live?.response.sourceSymbol ?? null,
     liveFeed,
   };
