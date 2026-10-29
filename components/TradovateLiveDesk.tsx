@@ -1,6 +1,7 @@
 import { manualEntryDisplayStuckOperations } from '../lib/manualEntryDisplay';
 import { buildLeaderEntryPreviewCommand, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import { buildLeaderEntryPlaceCommand, type LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
+import { buildLeaderOrderManageCommand, type LeaderOrderManageAction, type LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import { perfMark, perfMarkOnce } from '../lib/perfTrace';
 import { releaseLivePriority } from '../lib/livePriority';
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
@@ -123,7 +124,7 @@ import {
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
-import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
 import {
@@ -877,6 +878,33 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     return result;
   }, []);
+  // Fáze 2a: správa vlastního ručního vstupu (poslední přijatý). Jen přes
+  // relay; ceny „co jsem viděl“ jsou ze živé pozice, worker je ověří u brokera.
+  const ownManualEntry = useMemo(() => {
+    const entries = agentStatus?.controller.manualEntries ?? [];
+    return [...entries].reverse().find(entry => entry.status === 'acknowledged') ?? null;
+  }, [agentStatus?.controller.manualEntries]);
+  const ownManualEntryRef = useRef(ownManualEntry);
+  ownManualEntryRef.current = ownManualEntry;
+  const manageLeaderEntry = useCallback(async (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number): Promise<LeaderOrderManageResult> => {
+    const current = armStatusRef.current;
+    const executionGroup = copierWorkerExecutionGroup(current.status);
+    const entry = ownManualEntryRef.current;
+    if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !entry) {
+      throw new Error('Stav kopírky není čerstvě ověřený nebo chybí vlastní vstup — nic se neodeslalo.');
+    }
+    const route = previewRouteRef.current;
+    if (!route.relayConnectionId) throw new Error('Změna jde jen přes relay — chybí připojení k workeru.');
+    const command = buildLeaderOrderManageCommand({
+      groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
+      leaderAccountId: executionGroup.leaderAccountId, entryOperationId: entry.operationId, symbol: entry.symbol,
+      action, expect: { price: expectPrice, quantity: entry.quantity }, ...(newPrice != null ? { newPrice } : {}),
+    });
+    const response = await executeTradovateCopierRelayCommand(route.relayConnectionId, { type: 'copy-command', command });
+    const result = (response as { result?: unknown }).result as LeaderOrderManageResult | undefined;
+    if (!result || result.type !== 'leader-order-managed') throw new Error('Výsledek změny chybí — zkontroluj leadera v Tradovate.');
+    return result;
+  }, []);
   const executeSafetyCommand = useCallback(async (command:
     | { type: 'disarm' }
     | { type: 'kill-switch' }
@@ -1528,6 +1556,7 @@ acceptAgentStatus((await executeAgent({
           onTargetChange={setChartTarget}
           onPreviewEntry={previewLeaderEntry}
           {...(supportsCopierManualEntry(agentStatus) ? { onPlaceEntry: placeLeaderEntry } : {})}
+          {...(supportsCopierManualOrderManage(agentStatus) && ownManualEntry ? { onManageEntry: manageLeaderEntry } : {})}
         />
       ) : null}
       {chartSafetyNotice && <div role="status" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${chartSafetyNotice.tone === 'error' ? 'border-rose-500/50 bg-rose-500/10 text-rose-500' : 'border-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>

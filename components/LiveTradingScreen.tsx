@@ -35,6 +35,7 @@ import type { LiveChartPosition } from '../lib/liveChartPosition';
 import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
+import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import { buildLiveStatusStrip, liveAttentionReasons, type LiveStatusStripInput, type LiveStatusTone } from '../services/liveStatusStrip';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 
@@ -101,6 +102,7 @@ interface Props {
   onTargetChange?: (target: LiveTradeTarget) => void;
   onPreviewEntry?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
   onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
+  onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
 }
 
 function useMinuteNow() {
@@ -114,7 +116,7 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, tabs, onNavigate, navigationBlocked = false, copier, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -405,6 +407,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             position={position}
             onPreviewEntry={onPreviewEntry}
             {...(onPlaceEntry ? { onPlaceEntry } : {})}
+            {...(onManageEntry ? { onManageEntry } : {})}
             onNewDraft={side => { if (quote) { setDraft(newTicketDraft(side, 'limit', side === 'buy' ? quote.ask - 10 : quote.bid + 10, INSTRUMENT, quote)); setFromBox(false); } }}
             onClose={() => setTicketOpen(false)}
           />

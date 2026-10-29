@@ -22,6 +22,7 @@ import {
 import type { LiveChartPosition, LiveChartPositionSummary } from '../lib/liveChartPosition';
 import { previewSymbolFromChartSource, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
+import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import {
   GROUP_TARGET,
   allTradeAccounts,
@@ -249,6 +250,63 @@ const PreviewSection: React.FC<{
   </div>;
 };
 
+/**
+ * Fáze 2a: správa vlastního ručního vstupu z grafu — posun SL/TP DÁL od trhu
+ * a zrušení čekajícího vstupu. Ceny jsou z živé pozice (jen zobrazení);
+ * worker je ověří proti brokerovi a kopírka posun zrcadlí followerům.
+ */
+const ManageSection: React.FC<{
+  muted: string; field: string;
+  summary: LiveChartPositionSummary;
+  onManage: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+}> = ({ muted, field, summary, onManage }) => {
+  const long = summary.side === 'long';
+  const [stop, setStop] = useState('');
+  const [target, setTarget] = useState('');
+  const [confirm, setConfirm] = useState<{ action: LeaderOrderManageAction; until: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ tone: 'ok' | 'bad' | 'warn'; text: string } | null>(null);
+  const run = async (action: LeaderOrderManageAction, expectPrice: number | null, newPrice?: number) => {
+    if (busy || expectPrice == null) return;
+    // Dvoukrokové potvrzení v tlačítku (do 5 s).
+    if (!confirm || confirm.action !== action || confirm.until < Date.now()) { setConfirm({ action, until: Date.now() + 5_000 }); return; }
+    setConfirm(null);
+    setBusy(true);
+    try {
+      const result = await onManage(action, expectPrice, newPrice);
+      setMessage(result.status === 'acknowledged'
+        ? { tone: 'ok', text: action === 'cancel-entry' ? 'Vstup leadera zrušen; kopírka zruší kopie, které se ještě nevyplnily.' : 'Leader posunut; kopie followerům posune kopírka.' }
+        : result.status === 'blocked' ? { tone: 'bad', text: `Neodesláno: ${result.blockers.map(issue => issue.text).join(' ')}` }
+          : result.status === 'rejected' ? { tone: 'bad', text: `Broker odmítl: ${result.reason ?? ''}` }
+            : { tone: 'warn', text: result.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.' });
+    } catch (reason) {
+      setMessage({ tone: 'warn', text: `Výsledek neznámý (${reason instanceof Error ? reason.message.slice(0, 120) : 'chyba'}) — zkontroluj leadera v Tradovate.` });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const label = (action: LeaderOrderManageAction, text: string) => (confirm?.action === action && confirm.until > Date.now() ? 'Opravdu? Klikni znovu' : text);
+  const parsed = (value: string) => { const number = Number(value.replace(',', '.')); return Number.isFinite(number) && number > 0 ? Math.round(number * 4) / 4 : null; };
+  const button = 'h-7 rounded-[7px] border px-2 text-[10.5px] font-extrabold disabled:cursor-not-allowed disabled:opacity-40';
+  return <div className={`grid gap-1.5 rounded-[9px] border p-2 ${field}`}>
+    <div className={`text-[9.5px] font-black uppercase tracking-[0.06em] ${muted}`}>Vlastní vstup z grafu</div>
+    {summary.kind === 'pending'
+      ? <button type="button" disabled={busy || summary.entry == null} onClick={() => void run('cancel-entry', summary.entry)} className={button}>{label('cancel-entry', 'Zrušit čekající vstup')}</button>
+      : <>
+        <div className="flex items-center gap-1.5">
+          <input value={stop} onChange={event => setStop(event.target.value)} placeholder={`SL ${long ? 'níž' : 'výš'} než ${summary.stop ?? '—'}`} className="h-7 min-w-0 flex-1 rounded-[7px] border bg-transparent px-2 text-[11px]" />
+          <button type="button" disabled={busy || summary.stop == null || parsed(stop) == null} onClick={() => void run('move-stop', summary.stop, parsed(stop) ?? undefined)} className={button}>{label('move-stop', 'Posunout SL')}</button>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <input value={target} onChange={event => setTarget(event.target.value)} placeholder={`TP ${long ? 'výš' : 'níž'} než ${summary.target ?? '—'}`} className="h-7 min-w-0 flex-1 rounded-[7px] border bg-transparent px-2 text-[11px]" />
+          <button type="button" disabled={busy || summary.target == null || parsed(target) == null} onClick={() => void run('move-target', summary.target, parsed(target) ?? undefined)} className={button}>{label('move-target', 'Posunout TP')}</button>
+        </div>
+        <div className={`text-[10px] ${muted}`}>Zatím jen dál od trhu. Utažení SL a BE přijdou po ověření u brokera.</div>
+      </>}
+    {message && <div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${message.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : message.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{message.text}</div>}
+  </div>;
+};
+
 interface Props {
   isDark: boolean;
   instrument: TicketInstrument;
@@ -273,6 +331,8 @@ interface Props {
   onPreviewEntry?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
   /** Fáze 1b: odeslání ručního vstupu na leadera (jen worker s `manual-entry-v1`). */
   onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
+  /** Fáze 2a: správa vlastního ručního vstupu na symbolu grafu (jen worker s `manual-order-manage-v1`). */
+  onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
   onNewDraft: (side: TicketSide) => void;
   onClose: () => void;
 }
@@ -308,7 +368,7 @@ const NumberField: React.FC<{
 
 const LiveOrderTicket: React.FC<Props> = ({
   isDark, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
-  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onNewDraft, onClose,
+  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, onNewDraft, onClose,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -509,6 +569,7 @@ const LiveOrderTicket: React.FC<Props> = ({
 
     <div className="-mx-2.5 flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto px-2.5 pb-0.5">
       {position?.summary && <PositionCard isDark={isDark} summary={position.summary} muted={tone.muted} ink={tone.ink} field={tone.field} />}
+      {position?.summary && onManageEntry && <ManageSection muted={tone.muted} field={tone.field} summary={position.summary} onManage={onManageEntry} />}
       {position?.issue && <div className={`rounded-[9px] border px-2.5 py-2 text-[10.5px] font-bold ${tone.field} ${tone.muted}`}>{position.issue}</div>}
       {!quote ? (
         <p className={`m-0 py-6 text-center text-[11px] ${tone.muted}`}>Čekám na cenu z grafu…</p>

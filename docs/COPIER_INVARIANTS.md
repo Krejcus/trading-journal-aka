@@ -1368,7 +1368,21 @@ existující ochranu.
   nekopíruje). `unknown`/`abandoned` blokuje jen ARM a další ruční vstup —
   ne dispatch, Flatten, brzdy ani obnovu spojení; rozuzlení jen auditovaným
   `resolve-stuck-operation` s `kind: 'manual-entry'` (vypne, vynutí kontrolu pozic).
-- **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
+- **Fáze 2a — správa vlastního vstupu (29. 10. 2026):** `manage-leader-order`
+  (`lib/leaderOrderManage.ts`) jen pro vlastní přijatý ruční vstup (id ze
+  `safety.manualEntries`), jen přes relay. Posun SL/TP jen DÁL od trhu
+  (pracující SL/TP je jediný broker důkaz strany trhu; utažení/BE až po
+  záznamu „modify přes trh“), posun SL přepočítá riziko leadera i followerů.
+  Ve frontě: autoritativní `listOrders`, čistý tvar (plný fill, obě nohy
+  working bez fillu, qty = pozice, nic jiného na symbolu), brána dosahu
+  (`manageReachBlockers`: stejné predikáty jako controller i runner u replace,
+  živé nohy followerů, žádný rozpracovaný cancel/modify, žádný halt), durable
+  `safety.manualOrderActions` `sending`; zápis mimo frontu po synchronní
+  kontrole fence a brány. `unknown` neblokuje ruční ARM (flat-first), ale
+  blokuje automatické pokračování a další změnu téhož vstupu; vyřeší ho jen
+  stream (cena dosedla / příkaz skončil) nebo auditovaný waiver.
+  `cancel-entry` jen nevyplněný vstup a žádný follower s pozicí; smí i za DISARMED.
+- - **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
   časovač ani fill před nohami ho neflushnou, čeká se nejvýš 5 s, pak
   failClosed + cílené zrušení. Cílené zrušení (`cancelOwnManualEntry`) jen
   id z vlastního záznamu na leaderu, raw broker mimo frontu, jeden pokus
