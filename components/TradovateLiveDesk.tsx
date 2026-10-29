@@ -1,3 +1,4 @@
+import { manualEntryDisplayStuckOperations } from '../lib/manualEntryDisplay';
 import { buildLeaderEntryPreviewCommand, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import { buildLeaderEntryPlaceCommand, type LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import { perfMark, perfMarkOnce } from '../lib/perfTrace';
@@ -1726,7 +1727,7 @@ acceptAgentStatus((await executeAgent({
               accountRisk={agentStatus?.controller.accountRisk ?? []}
               onOpenRisk={() => navigateToTab('risk')}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
-              stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : agentStatus?.controller.stuckOperations ?? []}
+              stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : [...(agentStatus?.controller.stuckOperations ?? []), ...manualEntryDisplayStuckOperations(agentStatus?.controller)]}
               accountEligibility={effectiveAccountEligibility}
               unverifiableFollowerOwnership={agentStatus?.controller.unverifiableFollowerOwnership ?? []}
               lastDisarm={copierUiDemo ? undefined : agentStatus?.controller.lastDisarm}

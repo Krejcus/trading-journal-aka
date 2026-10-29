@@ -122,7 +122,7 @@ const PreviewSection: React.FC<{
   const [state, setState] = useState<{ key: string; receivedAt?: number; result?: LeaderEntryPreviewResult; error?: string; operationId?: string } | null>(null);
   const [placing, setPlacing] = useState(false);
   const placingRef = useRef(false);
-  const [placed, setPlaced] = useState<{ key: string; result?: LeaderEntryPlaceResult; error?: string } | null>(null);
+  const [placed, setPlaced] = useState<{ key: string; result?: LeaderEntryPlaceResult; error?: string; unknown?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [now, setNow] = useState(() => Date.now());
@@ -173,7 +173,12 @@ const PreviewSection: React.FC<{
       setPlaced({ key, result: await onPlace(previewDraft, shown!.operationId!) });
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.';
-      setPlaced({ key, error: /entry-busy/.test(message) ? 'Jiný ruční vstup se právě zpracovává.' : /entry-daily-cap/.test(message) ? 'Dosažen denní strop ručních vstupů.' : message });
+      // Jen prokazatelně neodeslané chyby jsou „neodesláno“; vše ostatní je
+      // neznámý výsledek (relay mohl příkaz doručit) — nikdy neopakovat naslepo.
+      const notSent = /entry-busy|entry-daily-cap|entry-conflict|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|worker-disconnected/.test(message);
+      setPlaced({ key, ...(notSent
+        ? { error: /entry-busy/.test(message) ? 'Jiný ruční vstup se právě zpracovává.' : /entry-daily-cap/.test(message) ? 'Dosažen denní strop ručních vstupů.' : message }
+        : { unknown: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate, než to zkusíš znovu.` }) });
     } finally {
       placingRef.current = false;
       setPlacing(false);
@@ -181,7 +186,9 @@ const PreviewSection: React.FC<{
   };
   const placedText = (entry: LeaderEntryPlaceResult): { tone: 'ok' | 'bad' | 'warn'; text: string } => {
     switch (entry.status) {
-      case 'acknowledged': return { tone: 'ok', text: `Přijato brokerem (vstup ${entry.entryBrokerOrderId}). Kopie followerům řídí kopírka.` };
+      case 'acknowledged': return entry.reason
+        ? { tone: 'warn', text: `Přijato brokerem (vstup ${entry.entryBrokerOrderId}), ale: ${entry.reason}` }
+        : { tone: 'ok', text: `Přijato brokerem (vstup ${entry.entryBrokerOrderId}). Kopie followerům řídí kopírka.` };
       case 'rejected': return { tone: 'bad', text: `Broker odmítl: ${entry.reason ?? 'bez důvodu'}` };
       case 'blocked': return { tone: 'bad', text: `Neodesláno: ${entry.blockers.map(issue => issue.text).join(' ')}` };
       case 'abandoned': return { tone: 'bad', text: entry.reason ?? 'Broker vrátil vstup bez ochrany — vstup se ruší, kopírka je vypnutá.' };
@@ -215,12 +222,13 @@ const PreviewSection: React.FC<{
     </div>}
     {onPlace && result?.wouldPlace && <button
       type="button"
-      disabled={!canSend || placing || shownPlaced?.result != null}
+      disabled={!canSend || placing || shownPlaced?.result != null || shownPlaced?.unknown != null}
       onClick={() => void send()}
       title={canSend ? 'Pošle OSO na leadera; followerům ho rozkopíruje kopírka.' : 'Odeslat jde jen do 15 s po náhledu bez blokací.'}
       className="h-8 rounded-[9px] bg-blue-600 text-[11px] font-extrabold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
     >{placing ? 'Odesílám…' : `Odeslat ${result.wouldPlace.leader.quantity} kontrakt na leadera`}</button>}
-    {shownPlaced?.error && <div className="rounded-[7px] bg-rose-500/10 px-2 py-1.5 text-[10.5px] font-bold text-rose-500">Odeslání: {shownPlaced.error}</div>}
+    {shownPlaced?.error && <div className="rounded-[7px] bg-rose-500/10 px-2 py-1.5 text-[10.5px] font-bold text-rose-500">Neodesláno: {shownPlaced.error}</div>}
+    {shownPlaced?.unknown && <div className="rounded-[7px] bg-amber-500/10 px-2 py-1.5 text-[10.5px] font-bold text-amber-600">{shownPlaced.unknown}</div>}
     {shownPlaced?.result && (() => {
       const view = placedText(shownPlaced.result);
       return <div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${view.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : view.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{view.text}</div>;

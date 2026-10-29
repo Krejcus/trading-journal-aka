@@ -173,6 +173,13 @@ const cloneRejectedExecution = (execution: CopierRejectedExecution): CopierRejec
   ...(execution.resolution ? { resolution: { ...execution.resolution } } : {}),
 });
 
+/**
+ * Zobrazení pro LIVE: stuck operace kopírky + nevyřešené ruční vstupy z grafu
+ * (fáze 1b). Ruční vstup se řeší vlastní cestou (`waiveManualEntry`), proto
+ * `manual-entry` není `CopierStuckOperationKind`.
+ */
+export type CopierDisplayStuckOperation = Omit<CopierStuckOperation, 'kind'> & { kind: CopierStuckOperationKind | 'manual-entry' };
+
 export interface CopierStuckOperation {
   kind: CopierStuckOperationKind;
   key: string;
@@ -3286,6 +3293,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (entryId) ownManualEntryOrderIds.set(entryId, record.operationId);
   }
   const manualEntryCancelRequested = new Set<string>();
+  /** Rozběhnutá cílená zrušení — blokují obměnu spojení a `waitForIdle`. */
+  const manualEntryCancelJobs = new Set<Promise<void>>();
   const manualEntryLegWaitStartedAt = new Map<string, number>();
   const manualEntryRecords = (): readonly CopierManualEntryRecord[] => currentRuntime().state.safety.manualEntries ?? [];
   const unresolvedManualEntry = (): CopierManualEntryRecord | null => (
@@ -3328,25 +3337,35 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * a kill (risk-redukční — followeři vstup nedostanou). Vyplněný vstup se
    * neruší (zrušení by nic neudělalo a nohy jsou ochrana pozice).
    */
-  const cancelOwnManualEntry = (operationId: string, reason: string): void => {
+  const cancelOwnManualEntry = (
+    operationId: string,
+    reason: string,
+    /** Id z právě přijatého ACK, když durable záznam ještě nemá výsledek (M2). */
+    known?: { entryId: string; accountId: number },
+  ): void => {
     const record = manualEntryRecords().find(item => item.operationId === operationId);
-    const entryId = record?.entryBrokerOrderId ?? record?.lateResult?.entryBrokerOrderId;
-    if (!record || !entryId || record.cancel || manualEntryCancelRequested.has(operationId)) return;
-    const accountId = record.request.accountId;
+    const entryId = record?.entryBrokerOrderId ?? record?.lateResult?.entryBrokerOrderId ?? known?.entryId;
+    const accountId = record?.request.accountId ?? known?.accountId;
+    if (!entryId || accountId == null || record?.cancel || manualEntryCancelRequested.has(operationId)) return;
     const live = liveOrdersByAccount.get(accountId)?.get(entryId);
     if ((live?.filledQuantity ?? 0) > 0 || observedOrderStatusesByAccount.get(accountId)?.get(entryId) === 'filled') {
       manualEntryAudit(operationId, 'blocked', `vlastní vstup je už vyplněný — nechávám ochranné nohy (${reason})`, entryId);
       return;
     }
     manualEntryCancelRequested.add(operationId);
-    void (async () => {
+    const job = (async () => {
+      // Durable značka je pojistka proti druhému pokusu po restartu; její
+      // selhání cancel nezastaví (zrušení už zrušeného příkazu nic nepokazí).
+      let marked = true;
       try {
-        await persistManualEntry(operationId, current => ({
-          ...(current ?? record), cancel: { status: 'sending', at: clock(), reason }, updatedAt: clock(),
-        }));
+        if (record) {
+          await persistManualEntry(operationId, current => ({
+            ...(current ?? record), cancel: { status: 'sending', at: clock(), reason }, updatedAt: clock(),
+          }));
+        }
       } catch (error) {
-        failClosed(errorOf(error), { autoClose: false });
-        return;
+        marked = false;
+        failClosed(new Error(`Ruční vstup: stav zrušení se nepodařilo uložit (${errorOf(error).message}); ruším i tak`), { autoClose: false });
       }
       let failure: string | undefined;
       try {
@@ -3357,12 +3376,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       manualEntryAudit(operationId, failure ? 'cancel-failed' : 'canceled', failure
         ? `zrušení vlastního vstupu selhalo: ${failure} — zkontroluj leadera v Tradovate`
         : `vlastní vstup zrušen: ${reason}`, entryId);
+      if (!record && !manualEntryRecords().some(item => item.operationId === operationId)) return;
       await persistManualEntry(operationId, current => ({
-        ...(current ?? record),
+        ...(current ?? record!),
         cancel: { status: failure ? 'failed' : 'sent', at: clock(), reason, ...(failure ? { error: failure } : {}) },
         updatedAt: clock(),
-      })).catch(error => failClosed(errorOf(error), { autoClose: false }));
+      })).catch(error => {
+        if (marked) failClosed(errorOf(error), { autoClose: false });
+      });
     })();
+    manualEntryCancelJobs.add(job);
+    void job.finally(() => manualEntryCancelJobs.delete(job));
   };
   /** Čítače příchodu eventů: změna mezi vyhodnocením a zápisem = nic se neodešle (P4). */
   const manualEntryFence = () => [
@@ -3372,6 +3396,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     ...[group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
       .map(accountId => (accountId == null ? 0 : tradeObservationVersionByAccount.get(accountId) ?? 0)),
   ].join(':');
+  /** Fence fronty: čítače příchodu + `brokerObservationVersion` (každý obchodní i řídicí event, ne keepalive). */
+  const manualEntryQueueFence = () => `${manualEntryFence()}:${brokerObservationVersion}`;
   const manualEntryResultFromRecord = (
     record: CopierManualEntryRecord,
     command: LeaderEntryPlaceCommand,
@@ -3404,6 +3430,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     command: LeaderEntryPlaceCommand,
     deadlineAt: number,
     evaluate: () => LeaderEntryPreviewResult,
+    /** Fence zachycený při zařazení do fronty (M1): řídicí event mezi zařazením a startem = nic. */
+    queuedFence: string,
   ): Promise<LeaderEntryPlaceResult> => {
     const operationId = command.operationId;
     const blocked = (blockers: Array<{ code: string; text: string }>): LeaderEntryPlaceResult => ({
@@ -3421,6 +3449,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (!gate.armed || gate.shadowMode) {
       return blocked([{ code: 'not-armed', text: 'Ruční vstup jde jen za zapnuté kopírky (ne shadow).' }]);
     }
+    // Connection / error / route-gap přijatý mezi zařazením a startem čeká ve
+    // frontě ZA námi — `gate` o něm ještě neví. Čítače příchodu ano.
+    if (manualEntryQueueFence() !== queuedFence) {
+      return blocked([{ code: 'state-changed', text: 'Mezitím přišla změna spojení nebo účtů — nic se neodeslalo, zkus to znovu.' }]);
+    }
     const preview = evaluate();
     if (preview.blockers.length > 0 || !preview.wouldPlace) {
       return blocked(preview.blockers.length > 0
@@ -3428,7 +3461,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         : [{ code: 'nothing-to-place', text: 'Worker by nic neposlal.' }]);
     }
     const leader = preview.wouldPlace.leader;
-    const fence = manualEntryFence();
+    const fence = queuedFence;
     const generation = safetyGeneration;
     const tag = `me${globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`;
     const createdAt = clock();
@@ -3448,7 +3481,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (clock() + MANUAL_ENTRY_DEADLINE_RESERVE_MS >= deadlineAt) {
       return notSent('expired', 'Platnost příkazu vypršela — nic se neodeslalo.');
     }
-    if (fence !== manualEntryFence() || !gate.armed || gate.shadowMode || generation !== safetyGeneration) {
+    if (fence !== manualEntryQueueFence() || !gate.armed || gate.shadowMode || generation !== safetyGeneration) {
       return notSent('state-changed', 'Během přípravy se změnil stav kopírky nebo účtů — nic se neodeslalo.');
     }
     const fenced = dispatchBroker(generation);
@@ -3482,12 +3515,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const reason = outcome === 'timeout'
         ? `Broker neodpověděl do ${MANUAL_ENTRY_POST_TIMEOUT_MS / 1000} s — výsledek neznámý, zkontroluj leadera v Tradovate.`
         : `Odeslání skončilo chybou (${outcome.message.slice(0, 200)}) — výsledek neznámý, zkontroluj leadera v Tradovate.`;
-      await persistManualEntry(operationId, current => ({ ...current!, status: 'unknown', reason, updatedAt: clock() }));
+      await persistManualEntry(operationId, current => ({ ...current!, status: 'unknown', reason, updatedAt: clock() }))
+        .catch(error => failClosed(new Error(`Ruční vstup: neznámý výsledek se nepodařilo uložit (${errorOf(error).message})`), { autoClose: false }));
       manualEntryAudit(operationId, 'unknown', reason);
       if (outcome === 'timeout') {
-        // Pozdní výsledek se jen dopíše (audit, vlastnictví pro pravidla OSO); stav zůstává `unknown`.
+        // Pozdní výsledek se dopíše (audit, vlastnictví pro pravidla OSO); stav zůstává `unknown`.
+        // Kopírka mezitím vypnutá → vlastní vstup zrušit (followeři ho nedostanou, M3b).
         void post.then(ack => {
-          if (ack.entryBrokerOrderId) ownManualEntryOrderIds.set(ack.entryBrokerOrderId, operationId);
+          if (ack.entryBrokerOrderId) {
+            ownManualEntryOrderIds.set(ack.entryBrokerOrderId, operationId);
+            if (!gate.armed || gate.shadowMode) {
+              cancelOwnManualEntry(operationId, 'pozdní potvrzení za vypnuté kopírky', { entryId: ack.entryBrokerOrderId, accountId: request.accountId });
+            }
+          }
           return persistManualEntry(operationId, current => ({
             ...current!,
             lateResult: { at: clock(), accepted: ack.accepted, ...(ack.entryBrokerOrderId ? { entryBrokerOrderId: ack.entryBrokerOrderId } : {}) },
@@ -3532,27 +3572,30 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         });
       }
     }
+    // Ochranné kroky nezávisle na commitu (M2): vlastnictví už je v paměti.
+    let resultReason = reason;
+    if (status === 'abandoned') {
+      failClosed(new Error(`Ruční vstup ${entryId}: broker vrátil vstup bez ochranných nohou; vstup leadera se ruší`), { autoClose: false });
+      cancelOwnManualEntry(operationId, 'vstup bez ochranných nohou', { entryId: entryId!, accountId: request.accountId });
+    } else if (status === 'acknowledged' && (!gate.armed || gate.shadowMode)) {
+      // Brzda během POSTu (P7): followeři vstup nedostanou, na leaderovi nesmí zůstat.
+      resultReason = 'Kopírka se vypnula během odesílání — vlastní vstup se ruší, followeři ho nedostanou.';
+      cancelOwnManualEntry(operationId, 'kopírka se vypnula během odesílání', { entryId: entryId!, accountId: request.accountId });
+    }
     try {
       // Výsledek od brokera je pravda — commit se nikdy nefencuje.
       await persistManualEntry(operationId, current => ({
-        ...current!, status, ...ids, ...(reason ? { reason } : {}), updatedAt: clock(),
+        ...current!, status, ...ids, ...(resultReason ? { reason: resultReason } : {}), updatedAt: clock(),
       }));
     } catch (error) {
-      // Vlastnictví zůstává v paměti; bez durable výsledku dál nic nesmí běžet.
+      // Bez durable výsledku dál nic nesmí běžet; uživatel ale dostane pravdu od brokera.
       failClosed(new Error(`Ruční vstup: výsledek se nepodařilo uložit (${errorOf(error).message})`), { autoClose: false });
-      throw error;
+      resultReason = `${resultReason ? `${resultReason} ` : ''}Výsledek se nepodařilo uložit — kopírka je vypnutá, zkontroluj leadera v Tradovate.`;
     }
     manualEntryAudit(operationId, status === 'acknowledged' ? 'recovered' : status === 'rejected' ? 'rejected' : status === 'abandoned' ? 'abandoned' : 'unknown',
       status === 'acknowledged' ? `ruční OSO přijato: vstup ${entryId}, SL ${stopId}, TP ${targetId}` : reason!, entryId);
-    if (status === 'abandoned') {
-      failClosed(new Error(`Ruční vstup ${entryId}: broker vrátil vstup bez ochranných nohou; vstup leadera se ruší`), { autoClose: false });
-      cancelOwnManualEntry(operationId, 'vstup bez ochranných nohou');
-    } else if (status === 'acknowledged' && (!gate.armed || gate.shadowMode)) {
-      // Brzda během POSTu (P7): followeři vstup nedostanou, na leaderovi nesmí zůstat.
-      cancelOwnManualEntry(operationId, 'kopírka se vypnula během odesílání');
-    }
     return {
-      type: 'leader-entry-placed', operationId, status, checkedAt: clock(), blockers: [], ...ids, ...(reason ? { reason } : {}),
+      type: 'leader-entry-placed', operationId, status, checkedAt: clock(), blockers: [], ...ids, ...(resultReason ? { reason: resultReason } : {}),
     };
   };
 
@@ -15130,6 +15173,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const sequence = currentRuntime().state.lastSequence + 1;
     const leaderEvent = source.observe(event, group.leaderAccountId, sequence, eventReceivedAt);
     if (!leaderEvent) return;
+    // Vlastní ruční vstup zpracovaný až za vypnuté kopírky (brzda mezi ACK
+    // a eventy OSO, M3a): followeři ho nedostanou, na leaderovi nesmí zůstat.
+    if (leaderEvent.kind === 'submitted' && (!gate.armed || gate.shadowMode)) {
+      const ownOperationId = ownManualEntryOrderIds.get(leaderEvent.orderId);
+      if (ownOperationId) cancelOwnManualEntry(ownOperationId, 'kopírka vypnutá dřív, než se vstup zkopíroval');
+    }
     options.onLeaderEvent?.(leaderEvent);
     // Stabilní klasifikace pro všechny následující větve této události;
     // nesmí se změnit jen proto, že mezitím dorazí Position projekce.
@@ -15656,6 +15705,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const timer = pendingOsoTimers.get(pair.entryOrderId);
       if (timer) clearTimeout(timer);
       pendingOsoTimers.delete(pair.entryOrderId);
+      manualEntryLegWaitStartedAt.delete(pair.entryOrderId);
+      osoFlushTimerFirstAt.delete(pair.entryOrderId);
       pendingOsoEvents.delete(pair.entryOrderId);
       settleOsoFlush(pair.entryOrderId);
       if (entryWasBlocked) {
@@ -17788,6 +17839,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     },
     connectionRenewalBlocker() {
       if (autoCloseInFlight) return 'auto-close';
+      if (manualEntryCancelJobs.size > 0) return 'manual entry cancel';
       if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
         || reconciliationRequestsPending > 0 || armPreparationInFlight) return 'connection recovery';
       if (hasInFlightOutbox()) return 'durable outbox';
@@ -17899,10 +17951,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       let started = false;
       let abandonedStart = false;
+      const queuedFence = manualEntryQueueFence();
       const job = eventTail.then(async () => {
         if (abandonedStart || stopped) return null;
         started = true;
-        return executeManualEntry(command, deadlineAt, () => this.previewLeaderEntry(leaderEntryPlaceAsPreview(command)));
+        return executeManualEntry(command, deadlineAt, () => this.previewLeaderEntry(leaderEntryPlaceAsPreview(command)), queuedFence);
       });
       eventTail = job.then(() => undefined).catch(reason => failClosed(errorOf(reason), { autoClose: false }));
       let startTimer: ReturnType<typeof setTimeout> | undefined;
@@ -19227,6 +19280,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         await observedRiskPoll;
         const observedRouteEpochRefresh = routeEpochRefreshTail;
         await observedRouteEpochRefresh;
+        const observedManualCancels = [...manualEntryCancelJobs];
+        if (observedManualCancels.length > 0) await Promise.all(observedManualCancels);
         const observedFollowerCuts = [...followerCutBackgroundJobs];
         if (observedFollowerCuts.length > 0) {
           await Promise.all(observedFollowerCuts.map(job => job.catch(() => undefined)));

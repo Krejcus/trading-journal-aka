@@ -32,7 +32,7 @@ import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } fr
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 import { buildTradovateConnectionUsageRows, type TradovateConnectionUsageInput, type TradovateConnectionUsageRow } from '../lib/tradovateConnectionUsageRows';
 import { useTradovateApiTelemetry } from './useTradovateApiTelemetry';
-import type { CopierAccountEligibility, CopierControllerStatus, CopierStuckOperation } from '../services/copierRuntimeController';
+import type { CopierAccountEligibility, CopierControllerStatus, CopierDisplayStuckOperation as CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import {
   copyTradeAccountName,
@@ -2985,7 +2985,7 @@ export const LivePnlPanelBody = ({ dataActive, apiReady, connections, workerUsag
 // být vedle ARM tlačítka, s důvodem a cestou ven. Resolve NIKDY neposílá
 // broker příkaz; jen durable označí položku a vynutí novou reconciliation.
 const STUCK_KIND_LABEL: Record<CopierStuckOperation['kind'], string> = {
-  place: 'objednávka', bracket: 'OCO bracket', oso: 'OSO', 'cancel-or-modify': 'cancel/modify',
+  place: 'objednávka', bracket: 'OCO bracket', oso: 'OSO', 'cancel-or-modify': 'cancel/modify', 'manual-entry': 'ruční vstup z grafu',
 };
 const StuckOperationsPanel = ({ operations, busy, onResolve }: {
   operations: CopierStuckOperation[];

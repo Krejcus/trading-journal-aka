@@ -301,6 +301,115 @@ describe('fáze 1b: odeslání ručního vstupu na leadera', () => {
   });
 });
 
+describe('fáze 1b: oprava po oponentuře diffu (M1–M3)', () => {
+  it('M1: řídicí event mezi zařazením a startem → blocked, žádný POST', async () => {
+    const ctx = await setup();
+    const pending = ctx.place(ctx.command());
+    // Synchronně hned po zařazení: úloha ještě nezačala, `gate` o eventu neví.
+    ctx.broker.emitEvent({ type: 'error', error: new Error('ws transport error'), at: ctx.clock.now });
+    const result = await pending;
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(issue => issue.code)).toContain('state-changed');
+    expect(leaderOso(ctx.broker)).toEqual([]);
+  });
+
+  it('M2: selhání uložení výsledku po ACK vrátí pravdu od brokera (ne chybu) a vypne kopírku', async () => {
+    const memory = createMemoryCopierStore();
+    const store: CopierStore = {
+      ...memory,
+      commit: async (snapshot, revision) => {
+        if (snapshot.safety?.manualEntries?.some(entry => entry.status === 'acknowledged')) throw new Error('disk full');
+        return memory.commit(snapshot, revision);
+      },
+    };
+    const ctx = await setup({ store });
+    const result = await ctx.place(ctx.command());
+    expect(result.status).toBe('acknowledged');
+    expect(result.reason).toMatch(/nepodařilo uložit/);
+    expect(ctx.controller.status().armed).toBe(false);
+  });
+
+  it('M2: abandoned se zrušením i když uložení výsledku selže', async () => {
+    const memory = createMemoryCopierStore();
+    const store: CopierStore = {
+      ...memory,
+      commit: async (snapshot, revision) => {
+        if (snapshot.safety?.manualEntries?.some(entry => entry.status !== 'sending')) throw new Error('disk full');
+        return memory.commit(snapshot, revision);
+      },
+    };
+    const ctx = await setup({
+      store,
+      patchBroker: broker => {
+        const real = broker.placeOso!.bind(broker);
+        broker.placeOso = async (request: BrokerOsoRequest) => (request.accountId === LEADER
+          ? { entryBrokerOrderId: 'm2-entry', firstBrokerOrderId: '', secondBrokerOrderId: '', accepted: true, definitive: false }
+          : real(request));
+      },
+    });
+    const result = await ctx.place(ctx.command());
+    expect(result.status).toBe('abandoned');
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    expect(ctx.broker.cancelRequestCount('m2-entry')).toBe(1);
+    expect(ctx.controller.status().armed).toBe(false);
+  });
+
+  it('M3a: brzda po ACK, ale před zpracováním eventů OSO → vlastní vstup se zruší, follower nic', async () => {
+    let brokerRef!: MockBroker;
+    const ctx = await setup({
+      patchBroker: broker => {
+        brokerRef = broker;
+        const real = broker.placeOso!.bind(broker);
+        broker.placeOso = async (request: BrokerOsoRequest) => {
+          if (request.accountId !== LEADER) return real(request);
+          // Eventy OSO dorazí až ~30 ms po ACK (jako WS za REST).
+          setTimeout(() => {
+            const base = { tag: request.tag, accountId: LEADER, symbol: request.symbol, quantity: 1, filledQuantity: 0, status: 'working' as const, sourceVersion: '1', updatedAt: Date.now() };
+            brokerRef.emitEvent({ type: 'order', order: { ...base, brokerOrderId: 'm3-e', side: request.side, orderType: 'Limit', limitPrice: request.limitPrice } });
+            brokerRef.emitEvent({ type: 'order', order: { ...base, brokerOrderId: 'm3-s', side: 'Sell', orderType: 'Stop', stopPrice: request.first.stopPrice, parentOrderId: 'm3-e', ocoId: 'm3-t' } });
+            brokerRef.emitEvent({ type: 'order', order: { ...base, brokerOrderId: 'm3-t', side: 'Sell', orderType: 'Limit', limitPrice: request.second.limitPrice, parentOrderId: 'm3-e', ocoId: 'm3-s' } });
+          }, 30);
+          return { entryBrokerOrderId: 'm3-e', firstBrokerOrderId: 'm3-s', secondBrokerOrderId: 'm3-t', accepted: true, definitive: true };
+        };
+      },
+    });
+    expect((await ctx.place(ctx.command())).status).toBe('acknowledged');
+    ctx.controller.disarm('manual');
+    await sleep(120);
+    await ctx.controller.waitForIdle();
+    expect(ctx.broker.cancelRequestCount('m3-e')).toBe(1);
+    expect(followerOso(ctx.broker)).toEqual([]);
+  });
+
+  it('M3b: timeout, brzda a pozdní ACK → vlastní vstup se zruší', async () => {
+    let resolveLate!: (ack: BrokerOsoAck) => void;
+    const ctx = await setup({
+      patchBroker: broker => {
+        const real = broker.placeOso!.bind(broker);
+        broker.placeOso = async (request: BrokerOsoRequest) => (request.accountId === LEADER
+          ? new Promise<BrokerOsoAck>(resolve => { resolveLate = resolve; })
+          : real(request));
+      },
+    });
+    expect((await ctx.place(ctx.command())).status).toBe('unknown');
+    ctx.controller.disarm('manual');
+    resolveLate({ entryBrokerOrderId: 'late-e', firstBrokerOrderId: 'late-s', secondBrokerOrderId: 'late-t', accepted: true, definitive: true });
+    await sleep(50);
+    await ctx.controller.waitForIdle();
+    expect(ctx.broker.cancelRequestCount('late-e')).toBe(1);
+    expect((await ctx.store.load()).safety?.manualEntries?.[0]).toMatchObject({ status: 'unknown', lateResult: { entryBrokerOrderId: 'late-e' } });
+  });
+
+  it('nevyřešený ruční vstup se v LIVE ukáže jako položka k ručnímu vyřešení', async () => {
+    const { manualEntryDisplayStuckOperations } = await import('../lib/manualEntryDisplay');
+    expect(manualEntryDisplayStuckOperations({ manualEntries: [
+      { operationId: 'entry:a', status: 'unknown', createdAt: 1, updatedAt: 2, symbol: 'MNQZ6', side: 'Buy', quantity: 1 },
+      { operationId: 'entry:b', status: 'acknowledged', createdAt: 1, updatedAt: 2, symbol: 'MNQZ6', side: 'Buy', quantity: 1 },
+    ] })).toEqual([expect.objectContaining({ kind: 'manual-entry', key: 'entry:a', status: 'unknown' })]);
+  });
+});
+
 describe('OSO okno: zdržená fronta controlleru nesmí nohy předběhnout časovačem (oponentura 1b, P1)', () => {
   it('API OSO z fixture se zpožděním zpracování 2 s a pomalým úložištěm → nativní OSO followera, ne lone-leg', async () => {
     const recording = JSON.parse(readFileSync('tests/fixtures/tradovate-leader-oso-api-cancel.json', 'utf8'));
