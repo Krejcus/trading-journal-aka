@@ -22,7 +22,7 @@ export interface RecordLeaderOsoPlan {
    * `fill` = marketable Limit, vyplní se; zaznamená přechod nohou
    * Suspended → Working, pak leadera zavře (liquidate) a ověří flat.
    */
-  scenario: 'cancel' | 'fill';
+  scenario: 'cancel' | 'fill' | 'modify-through-market';
   /** Účet mimo skupinu workeru (např. Tradeify připojení) — nikdy follower skupiny. */
   allowNonGroupAccount: boolean;
 }
@@ -60,7 +60,9 @@ export function parseRecordLeaderOsoArgs(argv: readonly string[]): RecordLeaderO
   const holdMs = value('hold-ms') === undefined ? 4_000 : number('hold-ms');
   if (holdMs < 1_000 || holdMs > MAX_HOLD_MS) throw new Error(`--hold-ms musí být 1000–${MAX_HOLD_MS}`);
   const scenario = value('scenario') ?? 'cancel';
-  if (scenario !== 'cancel' && scenario !== 'fill') throw new Error('--scenario musí být cancel nebo fill');
+  if (scenario !== 'cancel' && scenario !== 'fill' && scenario !== 'modify-through-market') {
+    throw new Error('--scenario musí být cancel, fill nebo modify-through-market');
+  }
   return {
     accountId, symbol, side,
     entry: number('entry'), stopLoss: number('sl'), takeProfit: number('tp'),
@@ -116,7 +118,7 @@ export function recordLeaderOsoProblems(plan: RecordLeaderOsoPlan, status: unkno
   }
   const market = anchor ?? plan.marketPrice;
   const distance = market * RECORD_MIN_DISTANCE_RATIO;
-  if (plan.scenario === 'fill') {
+  if (plan.scenario === 'fill' || plan.scenario === 'modify-through-market') {
     const slip = market * RECORD_FILL_MAX_SLIP_RATIO;
     const slDistance = Math.abs(plan.entry - plan.stopLoss);
     if (plan.side === 'Buy') {
@@ -209,6 +211,16 @@ export function decideRecordCleanup(observation: CleanupObservation, placement: 
     }
   }
   return { kind: 'clean' };
+}
+
+/**
+ * Scénář `modify-through-market` (fáze 2a, P4): po fillu se SL posune o tolik
+ * bodů ZA vstup (u longu nad, u shortu pod) — tedy přes trh. Zaznamená se,
+ * jestli ho Tradovate odmítne, nebo hned spustí. Pak běžný úklid fillu.
+ */
+export const RECORD_THROUGH_MARKET_POINTS = 20;
+export function throughMarketStopPrice(plan: Pick<RecordLeaderOsoPlan, 'side' | 'entry'>): number {
+  return plan.side === 'Buy' ? plan.entry + RECORD_THROUGH_MARKET_POINTS : plan.entry - RECORD_THROUGH_MARKET_POINTS;
 }
 
 export type FillCleanupDecision =

@@ -221,3 +221,16 @@ describe('fáze 1b: fill scénář nahrávání', () => {
     expect(decideFillCleanup({ netPosition: 0, orders: [] }, { kind: 'uncertain', entrySide: 'Buy' }).kind).toBe('unverified');
   });
 });
+
+describe('fáze 2a: scénář posunu SL přes trh', () => {
+  it('SL se posune 20 b za vstup (long nad, short pod) a platí pojistky fill scénáře', async () => {
+    const { throughMarketStopPrice } = await import('../scripts/copier/recordLeaderOsoPlan');
+    expect(throughMarketStopPrice({ side: 'Buy', entry: 30_010 })).toBe(30_030);
+    expect(throughMarketStopPrice({ side: 'Sell', entry: 29_990 })).toBe(29_970);
+    const modify = plan({ scenario: 'modify-through-market', entry: 30_010, stopLoss: 29_900, takeProfit: 30_500 });
+    expect(problems(modify)).toEqual([]);
+    expect(problems({ ...modify, entry: 29_990 }).join(' ')).toContain('na trhu nebo nad ním');
+    expect(parseRecordLeaderOsoArgs(['--account', '9', '--symbol', 'MNQZ6', '--entry', '1', '--sl', '1', '--tp', '1',
+      '--market-price', '1', '--scenario', 'modify-through-market'])).toMatchObject({ scenario: 'modify-through-market' });
+  });
+});
