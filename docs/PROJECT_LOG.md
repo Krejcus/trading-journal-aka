@@ -457,6 +457,28 @@ další záložky LIVE“; „čistě UI, napojení dat v jiné session“.
 - Follow-up (vyžaduje migraci): `relay_polled_at` + aktuální `delivery_id`
   při poll-v2 → přesné rozlišení blokujícího a osiřelého `claimed`.
 
+### 2026-10-29 — Obchodování z grafu, fáze 1a: náhled u workeru bez zápisu (Claude, NENASAZENO)
+
+- Větev `claude/chart-entry-1a-20261029` (worktree
+  `~/alphatrade-worktrees/chart-entry-1a`), poslední commit b1f0811a.
+- Cesta lístek → relay (`preview-leader-entry`, TTL 15 s, 1 náhled/zařízení,
+  min. 3 s, jinak 409 `copier-relay-preview-busy`) → agent → controller
+  `previewLeaderEntry` → čistý `services/manualEntryPreview.ts`. Žádný REST,
+  žádný commit stavu, audit ani `lastError`; INV-MANUAL-01.
+- Brány: vazba na ARM session a hash konfigurace skupiny, stav kopírky,
+  denní pravidla (ruční vstup přísnější), strany SL/TP, front kontrakt
+  z cenového zdroje grafu, cesty followerů jako `processOsoPair`, rezerva
+  ztráty = MIN(denní limit, drawdown, cut) + poplatky + 2 ticky, strop 1 ks.
+- Lístek: „Zkontrolovat u workeru (nic se neodešle)“, výsledek platí 15 s,
+  Odeslat zůstává vypnuté.
+- `copier-design-critic`: návrh OPRAVIT PŘED IMPLEMENTACÍ → rev 1; diff
+  OPRAVIT PŘED COMMITEM → opraveno v b1f0811a.
+- Sada po opravách: tsc OK, 6052/6054; jediný pád V12 E1 (aserce startu
+  fan-outu < 5 ms při load ~16, diff controlleru čistě aditivní) — ověřit
+  samostatně za DISARMED.
+- Nasazení: push (relay + web) + reinstall workeru za DISARMED/flat
+  + reconcile, až po „nasaď“.
+
 ### 2026-10-29 — Obchodování z grafu: návrh vnitřní vrstvy a fáze 0 (Claude, NENASAZENO)
 
 - Větev `claude/chart-order-entry-20261029` (worktree
