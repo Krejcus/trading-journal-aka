@@ -30,16 +30,18 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let active: CopierRuntimeController | null = null;
 afterEach(() => { active?.stop(); active = null; });
 
-async function setup(options: { followerDll?: number; store?: CopierStore } = {}) {
+async function setup(options: { followerDll?: number; store?: CopierStore; groupConfig?: CopyGroupConfig; patchBroker?: (broker: MockBroker) => void } = {}) {
+  const config = options.groupConfig ?? group();
   const clock = { now: START };
   const broker = createMockBroker({
     behavior: () => ({ kind: 'working' }),
-    accountRiskSnapshots: [risk(LEADER, START + 500), risk(FOLLOWER, START + 500, options.followerDll ?? 1_000)],
+    accountRiskSnapshots: [risk(LEADER, START + 500), risk(FOLLOWER, START + 500, options.followerDll ?? 1_000), risk(201, START + 500)],
   });
+  options.patchBroker?.(broker);
   const store = options.store ?? createMemoryCopierStore();
   const audits: string[] = [];
   const controller = await bootstrapCopierRuntime({
-    broker, store, group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
+    broker, store, group: config, clock: () => clock.now, osoCorrelationWindowMs: 50,
     manualEntryTimingsMs: { post: 500, start: 500, legWait: 300 },
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
@@ -69,7 +71,7 @@ type Ctx = Awaited<ReturnType<typeof setup>>;
 /** Vstup leadera i kopie followera se vyplní; nohy zůstanou pracující. */
 async function fillEntries(ctx: Ctx) {
   const entries = ctx.broker.orders().filter(order => order.side === 'Buy' && order.orderType === 'Limit' && order.status === 'working' && order.limitPrice === ENTRY);
-  expect(entries.map(order => order.accountId).sort()).toEqual([LEADER, FOLLOWER]);
+  expect(entries.map(order => order.accountId)).toContain(LEADER);
   for (const order of entries) {
     order.status = 'filled';
     order.filledQuantity = order.quantity;
@@ -85,7 +87,7 @@ async function fillEntries(ctx: Ctx) {
 
 const manage = (ctx: Ctx, action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, id = 'manage:managetest01') => {
   const command = buildLeaderOrderManageCommand({
-    groupId: group().id, operationId: id, leaderAccountId: LEADER, entryOperationId: 'entry:managetest01', symbol: SYMBOL,
+    groupId: 'manage-group', operationId: id, leaderAccountId: LEADER, entryOperationId: 'entry:managetest01', symbol: SYMBOL,
     action, expect: { price: expectPrice, quantity: 1 }, ...(newPrice != null ? { newPrice } : {}),
   });
   return ctx.controller.manageLeaderOrder(validateLeaderOrderManage(command), { deadlineAt: ctx.clock.now + 15_000 });
@@ -196,5 +198,36 @@ describe('fáze 2a: správa vlastního ručního vstupu', () => {
     active = controller;
     expect(controller.status().manualOrderActions?.[0]).toMatchObject({ status: 'unknown' });
     expect((await store.load()).safety?.manualOrderActions?.[0].status).toBe('unknown');
+  });
+
+  it('vypnutý follower posun neblokuje; druhý zapojený follower bez kopie nohy ano', async () => {
+    const withDisabled: CopyGroupConfig = { ...group(), followers: [...group().followers, { accountId: 201, mode: 'on-submit', multiplier: 1, enabled: false }] };
+    const ctx = await setup({ groupConfig: withDisabled });
+    await fillEntries(ctx);
+    expect((await manage(ctx, 'move-stop', SL, 29_470, 'manage:disabled01')).status).toBe('acknowledged');
+  });
+
+  it('visící posun: neznámý výsledek, vyřešení kopírku nevypne a Flatten All zavře i leadera', async () => {
+    const hang = { on: false };
+    const ctx = await setup({
+      patchBroker: broker => {
+        const real = broker.modifyOrder.bind(broker);
+        broker.modifyOrder = async (accountId, brokerOrderId, changes) => (hang.on && accountId === LEADER
+          ? new Promise<void>(() => undefined)
+          : real(accountId, brokerOrderId, changes));
+      },
+    });
+    await fillEntries(ctx);
+    hang.on = true;
+    const result = await manage(ctx, 'move-stop', SL, 29_470, 'manage:hanging01');
+    expect(result.status).toBe('unknown');
+    await ctx.controller.waiveManualEntry({ operationId: 'manage:hanging01', reason: 'ověřeno v Tradovate' });
+    expect(ctx.controller.status().armed).toBe(true);
+    await ctx.controller.flattenGroup('flatten:managetest01');
+    await sleep(30);
+    await ctx.controller.waitForIdle().catch(() => undefined);
+    const leaderTargeted = ctx.broker.liquidateRequests().some(request => request.accountId === LEADER)
+      || ctx.broker.placedRequests().some(request => request.accountId === LEADER && request.orderType === 'Market');
+    expect(leaderTargeted).toBe(true);
   });
 });

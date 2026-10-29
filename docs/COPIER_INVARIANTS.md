@@ -1382,7 +1382,7 @@ existující ochranu.
   blokuje automatické pokračování a další změnu téhož vstupu; vyřeší ho jen
   stream (cena dosedla / příkaz skončil) nebo auditovaný waiver.
   `cancel-entry` jen nevyplněný vstup a žádný follower s pozicí; smí i za DISARMED.
-- - **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
+- **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
   časovač ani fill před nohami ho neflushnou, čeká se nejvýš 5 s, pak
   failClosed + cílené zrušení. Cílené zrušení (`cancelOwnManualEntry`) jen
   id z vlastního záznamu na leaderu, raw broker mimo frontu, jeden pokus

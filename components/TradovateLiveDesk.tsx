@@ -1556,7 +1556,9 @@ acceptAgentStatus((await executeAgent({
           onTargetChange={setChartTarget}
           onPreviewEntry={previewLeaderEntry}
           {...(supportsCopierManualEntry(agentStatus) ? { onPlaceEntry: placeLeaderEntry } : {})}
-          {...(supportsCopierManualOrderManage(agentStatus) && ownManualEntry ? { onManageEntry: manageLeaderEntry } : {})}
+          {...(supportsCopierManualOrderManage(agentStatus) && ownManualEntry
+            && chartData.position?.summary?.side === (ownManualEntry.side === 'Buy' ? 'long' : 'short')
+            ? { onManageEntry: manageLeaderEntry } : {})}
         />
       ) : null}
       {chartSafetyNotice && <div role="status" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${chartSafetyNotice.tone === 'error' ? 'border-rose-500/50 bg-rose-500/10 text-rose-500' : 'border-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>

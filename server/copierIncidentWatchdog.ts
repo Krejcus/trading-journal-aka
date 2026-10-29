@@ -681,7 +681,7 @@ export function manualOrderActionNotifications(
     const label = MANAGE_ACTION_LABEL[asText(action.action) ?? ''] ?? 'Změna vstupu';
     const reason = asText(action.reason);
     out.push(status === 'rejected'
-      ? { key: `manual-order:${operationId}`, detail: status, title: `${label} odmítnut`, body: `${reason ?? 'Broker změnu odmítl'}. Leader i followeři mají původní cenu.` }
+      ? { key: `manual-order:${operationId}`, detail: status, title: `${label} odmítnut`, body: `${reason ?? 'Broker změnu odmítl'}.${asText(action.action) === 'cancel-entry' ? ' Vstup dál čeká — zkontroluj ho v Tradovate.' : ' Leader i followeři mají původní cenu.'}` }
       : { key: `manual-order:${operationId}`, detail: status, title: `${label}: výsledek neznámý`, body: 'Zkontroluj leadera v Tradovate; kopírka se po výpadku sama nezapne, dokud se to nevyřeší.' });
   }
   return out;

@@ -3625,6 +3625,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status) && (entryOperationId == null || record.entryOperationId === entryOperationId)
   )) ?? null;
   const manualOrderActionJobs = new Set<Promise<void>>();
+  /** Průměrná cena fillů vlastních vstupů (z fill eventů brokera, nikdy TV/IBKR). */
+  const ownEntryFillPrices = new Map<string, { quantity: number; avg: number }>();
   const persistManualOrderAction = (
     operationId: string,
     update: (current: CopierManualOrderActionRecord | undefined) => CopierManualOrderActionRecord,
@@ -3654,8 +3656,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (gate.divergentAccounts.size > 0) reasons.push('Pozice skupiny se rozcházejí.');
     if (awaitingCopiedEntries.size > 0) reasons.push('Některý follower ještě čeká na kopii vstupu.');
     if (followerCutBackgroundJobs.size > 0) reasons.push('Běží vyřazení followera.');
-    const controllerCheck = controllerUnmappedReplaceFollowers(leaderOrderId, symbol, quantity).unmapped;
-    const runnerCheck = runnerUnmappedReplaceAccounts(leaderOrderId, currentRuntime().state, group, currentIneligibleAccounts()).missingAccounts;
+    // Přesně vstupy, které u replace ochranné nohy dostane runner:
+    // skupina s bezpečně nenamapovanými followery `off` a exit sada + sync pauzy.
+    const controllerUnmapped = controllerUnmappedReplaceFollowers(leaderOrderId, symbol, quantity);
+    const controllerCheck = controllerUnmapped.unmapped;
+    const runnerGroup: CopyGroupConfig = controllerUnmapped.safelyUnmapped.size === 0 ? group : {
+      ...group,
+      followers: group.followers.map(follower => (controllerUnmapped.safelyUnmapped.has(follower.accountId) ? { ...follower, mode: 'off' as const } : follower)),
+    };
+    const runnerIneligible = new Map(currentExitIneligibleAccounts());
+    for (const follower of group.followers) {
+      if (activeAccountSyncPause(follower.accountId, symbol)) runnerIneligible.set(follower.accountId, 'account-sync-paused');
+    }
+    const runnerCheck = runnerUnmappedReplaceAccounts(leaderOrderId, currentRuntime().state, runnerGroup, runnerIneligible).missingAccounts;
     const unmapped = [...new Set([...controllerCheck.map(follower => follower.accountId), ...runnerCheck])];
     if (unmapped.length > 0) reasons.push(`Followeři ${unmapped.join(', ')} nemají kopii této nohy — posun by kopírku vypnul.`);
     const links = currentRuntime().state.links.get(leaderOrderId) ?? [];
@@ -3749,7 +3762,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return manageBlocked(command, 'entry-not-pending', 'Vstup už nečeká (vyplněný nebo ukončený) — zrušit jde jen čekající vstup.');
       }
       const followerWithPosition = group.followers.find(follower => (positionsByAccount.get(follower.accountId)?.get(symbol) ?? 0) !== 0);
-      if (followerWithPosition) return manageBlocked(command, 'follower-has-position', `Follower ${followerWithPosition.accountId} už má pozici — použij Flatten.`);
+      if (followerWithPosition) return manageBlocked(command, 'follower-has-position', `Follower ${followerWithPosition.accountId} už má na symbolu pozici — vstup zruš v Tradovate a pozice zkontroluj.`);
       if (command.expect.price !== entry.request.price || command.expect.quantity !== entryOrder.quantity) {
         return manageBlocked(command, 'order-changed', 'Vstup se od zobrazení změnil — obnov panel.');
       }
@@ -3789,9 +3802,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             .filter(follower => (currentRuntime().state.links.get(target.brokerOrderId) ?? []).some(link => link.accountId === follower.accountId))
             .map(follower => ({ accountId: follower.accountId, quantity: followerQuantity(quantity, follower.multiplier), cut: follower.dailyLossCutUsd ?? null })),
         ];
+        // Nejhorší z: cena záměru, aktuální cena vstupu u brokera, průměr fillů
+        // z brokera. Stop vstup bez známého fillu = neověřené (skluz).
+        const fillAvg = ownEntryFillPrices.get(entry.entryBrokerOrderId)?.avg ?? null;
+        if (entryOrder.orderType === 'Stop' && fillAvg == null) {
+          return manageBlocked(command, 'risk-unverified', 'Cena vyplnění stop vstupu není známá — posun SL teď nejde.');
+        }
+        const entryCandidates = [entry.request.price, entryOrder.limitPrice, entryOrder.stopPrice, fillAvg]
+          .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+        const riskEntry = entryCandidates.reduce((worst, value) => (Math.abs(value - next) > Math.abs(worst - next) ? value : worst), entryCandidates[0]);
         for (const account of accountsToCheck) {
           const risk = accountRisk.get(account.accountId);
-          const loss = manualStopLossUsd(symbol, entry.request.price, next, account.quantity);
+          const loss = manualStopLossUsd(symbol, riskEntry, next, account.quantity);
           if (!risk || risk.error || !sameTradovateSession(risk.verifiedAt, now) || now - risk.verifiedAt > MANUAL_ENTRY_RISK_MAX_AGE_MS || loss == null) {
             return manageBlocked(command, 'risk-unverified', `Účet ${account.accountId}: denní limit není čerstvě ověřený.`);
           }
@@ -3837,7 +3859,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       };
       // Synchronní kontrola těsně před zápisem (P7 + oponentura 2a b1): fence i celá brána dosahu.
       if (clock() >= deadlineAt) return finish('not-sent', 'Platnost příkazu vypršela — nic se neodeslalo.');
-      if (manualEntryQueueFence() !== queuedFence || generation !== safetyGeneration) return finish('not-sent', 'Mezitím se změnil stav kopírky — nic se neodeslalo.');
+      // Zrušení vstupu je risk-redukční: brzda (nová generation) ho neruší.
+      if (command.action !== 'cancel-entry' && (manualEntryQueueFence() !== queuedFence || generation !== safetyGeneration)) {
+        return finish('not-sent', 'Mezitím se změnil stav kopírky — nic se neodeslalo.');
+      }
       if (command.action !== 'cancel-entry') {
         const reach = manageReachBlockers(targetOrderId, symbol, targetLive.quantity);
         if (reach.length > 0) return finish('not-sent', reach.join(' '));
@@ -3854,14 +3879,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       } catch (error) {
         return finish(error instanceof CopierDispatchRevokedError ? 'not-sent' : 'unknown', errorOf(error).message.slice(0, 200));
       }
-      registerInFlightBrokerWrite(leader, write);
+      // Záměrně NE registerInFlightBrokerWrite: chráněný účet by Flatten vyřadil
+      // z likvidace (oponentura 2a, bod 1). Souběh s likvidací je neškodný.
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const outcome = await Promise.race([
           write.then(() => 'done' as const),
           new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), MANUAL_ENTRY_POST_TIMEOUT_MS); }),
         ]);
-        if (outcome === 'timeout') return finish('unknown', 'Broker změnu nepotvrdil včas — zkontroluj leadera v Tradovate.');
+        if (outcome === 'timeout') {
+          const result = await finish('unknown', 'Broker změnu nepotvrdil včas — zkontroluj leadera v Tradovate.');
+          // Pozdní potvrzení zápisu, nebo stream, který už cenu ukázal, záznam dořeší.
+          const settleLate = () => {
+            const live = liveOrdersByAccount.get(leader)?.get(targetOrderId);
+            if (live) void resolveManualOrderActionFromStream(live).catch(error => failClosed(errorOf(error), { autoClose: false }));
+          };
+          settleLate();
+          void write.then(() => persistManualOrderAction(command.operationId, current => (current?.status === 'unknown'
+            ? { ...current, status: 'acknowledged', reason: 'potvrzeno po timeoutu', updatedAt: clock() }
+            : current!)), () => undefined).catch(error => failClosed(errorOf(error), { autoClose: false }));
+          return result;
+        }
         return finish('acknowledged');
       } catch (error) {
         if (error instanceof CopierDispatchRevokedError) return finish('not-sent', `Pojistka kopírky změnu zastavila (${error.message}).`);
@@ -15478,6 +15516,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (event.type === 'order' && event.order.accountId === group.leaderAccountId) {
       await resolveManualOrderActionFromStream(event.order);
     }
+    if (event.type === 'fill' && event.fill.accountId === group.leaderAccountId && ownManualEntryOrderIds.has(event.fill.brokerOrderId)) {
+      const previous = ownEntryFillPrices.get(event.fill.brokerOrderId) ?? { quantity: 0, avg: 0 };
+      const quantity = previous.quantity + event.fill.quantity;
+      ownEntryFillPrices.set(event.fill.brokerOrderId, {
+        quantity, avg: quantity > 0 ? (previous.avg * previous.quantity + event.fill.price * event.fill.quantity) / quantity : event.fill.price,
+      });
+    }
     const leaderEvent = source.observe(event, group.leaderAccountId, sequence, eventReceivedAt);
     if (!leaderEvent) return;
     // Vlastní ruční vstup zpracovaný až za vypnuté kopírky (brzda mezi ACK
@@ -18338,9 +18383,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (!action || !UNRESOLVED_MANUAL_ORDER_ACTION.has(action.status) || (action.status === 'sending' && manualOrderActionJobs.size > 0)) {
           throw new Error('Změna vstupu už nečeká na vyřešení; kopírka zůstává beze změny');
         }
-        declineTransportResume('ruční vyřešení změny ručního vstupu');
-        gate = { ...gate, armed: false };
-        invalidateReconciliation();
+        // Stav příkazu leadera je ze streamu známý; vypínat kopírku uprostřed
+        // obchodu by zastavilo zrcadlení dalších posunů i exitu (oponentura 2a, bod 4).
         await persistManualOrderAction(operationId, current => ({
           ...(current ?? action), status: 'waived', waiver: { at: clock(), reason: explanation.slice(0, 300) }, updatedAt: clock(),
         }));
