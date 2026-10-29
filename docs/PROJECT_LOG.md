@@ -285,6 +285,55 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-29 — LIVE → Graf: pravé tlačítko a posun za svíčkami (Claude, větev `claude/live-chart-follow-20261029`, NENASAZENO)
+
+- **Pravé tlačítko v LIVE grafu nikdy nefungovalo.** Kořen vrstvy
+  (`LiveTradingScreen`) měl `role="dialog"` a `CandleKitTradeChart` uvnitř
+  dialogu záměrně ignoruje pravý klik, zkratky kreslení, Alt+R i dvojklik na
+  poznámku. Teď `role="region"` (backtest roli nemá). Menu je stejné jako
+  v backtestu; položka ⚡ má v LIVE text „Propsat box do objednávky“
+  a Koupit/Prodat limit/stop jen vyplní panel (odeslání dál napevno vypnuté).
+- **Graf se každou minutou přestavoval.** Klíč `ChartView` obsahoval konec
+  okna svíček: nová svíčka v datech = nový graf → `focusTrade` na kotvu
+  (poslední svíčka přesně na okraji, další už za ním) a zahozený záběr
+  uživatele. Naměřeno na 5273 (main): přestavby 12:44:44, 12:45:47, 12:51:53,
+  odstup 0 → nová svíčka −1. Nový prop `liveSeries` (jen LIVE graf): okno do
+  konce dat, klíč bez konce okna; nový graf jen při rozšíření okna zleva.
+  Deník dneška má stejný mechanismus — nechán beze změny (k rozhodnutí).
+- **Posun za svíčkami** (Filip: „držet odstup 10 svíček“):
+  `lib/liveChartFollow.ts` + `useLiveCandleBinding(…, { followEdge })`.
+  Svíčky dojedou k pravému okraji, od 10 svíček graf jede s nimi (plynule
+  240 ms, myš/kolečko posun zastaví). Nehýbe se při pohledu do historie, při
+  víc než 5 nových barech naráz, při změně timeframe ani pod držící myší.
+  Pozor na lightweight-charts 5: `setVisibleLogicalRange`, `scrollToPosition`
+  i reset se jen řadí na další vykreslení (ApplyRange frontu přepíše) — posun
+  proto běží v `requestAnimationFrame` po vykreslení grafu, ne v mikrotasku.
+- Ověřeno na dočasné zkušební stránce se skutečným workspace a zrychleným
+  časem (necommitnuto, smazáno): dojíždění 14 → 10 a pak drží 10, obnova dat
+  bez cuknutí a bez přestavby grafu, pohled do historie stojí, Reset chart
+  view → 6 → s další svíčkou 10, pravé menu se otevře skutečným klikem.
+  Skrytý panel prohlížeče nespouští `requestAnimationFrame` (na zkušební
+  stránce nahrazen časovačem) — v Chromu to neplatí.
+- Revize (code-reviewer, jen čtení kódu): bez blokujících chyb, „needs
+  another pass“. Opraveno: (1) čáry BoS/CHoCH obnovovala jen minutová
+  přestavba grafu — v LIVE je teď srovnává efekt nad `structureOverlayEvents`
+  (společný `structureDrawing`); (2) strop 5 nových barů by po návratu ze
+  skryté karty sledování vypnul — teď pojistka 500, dohnání nad 12 barů
+  skokem; posun jde po přírůstcích a nová svíčka ho jen zruší (absolutní cíl
+  by po vyrovnání odsazení poskočil o bar); odstup nejvýš 40 % šířky záběru;
+  zbytky pod 0,001 baru se ignorují; graf dne nedostane posluchače ani rAF
+  navíc; položky objednávky v LIVE menu mají příponu „· návrh“; okno
+  rozšířené zleva přežije obnovu dat (jinak nový graf a skok na kotvu).
+  Nechané: kdyby pod LIVE vrstvou zůstala otevřená `TradeReview` (app úroveň,
+  z-290), dostala by teď šipky/Esc/Enter i z grafu — neověřený a
+  nepravděpodobný případ.
+- Po opravách: celá sada 6016 testů zelená (640 souborů), tsc čisté —
+  spuštěno až po DISARM (14:17). Struktura ověřena na zkušební stránce: po
+  obnově dat přibyla čára BoS/CHoCH se zlomem po otevření grafu, graf se
+  nepřestavil. Nové testy simulují odložené provádění změn záběru jako
+  lightweight-charts 5 (plynulý posun, zrušení myší, svíčka uprostřed posunu,
+  dohnání po skryté kartě).
+
 ### 2026-10-29 — Obchodování z grafu, fáze 2b: správa obchodů, které kopírka sleduje (Claude, nasazeno 22:35 @ 0e20ccf7)
 
 - Větev `claude/chart-entry-2b-20261029` (navazuje na nasazenou 2a). Stejné akce jako

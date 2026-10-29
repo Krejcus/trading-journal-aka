@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { Bar } from '@getcandlekit/charts';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { LIVE_CANDLE_MAX_GAP_SEC, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
+import { followLiveEdge, type LiveFollowMemory } from '../lib/liveChartFollow';
 import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../services/marketData';
 
 /**
@@ -152,13 +153,15 @@ function carryFinishedLiveBars(
  * záznam změn pro něj neplatí. Svíčka se vrátí hned v témže kroku — počkat na
  * další snímek znamenalo, že graf aspoň na snímek ukázal data bez ní a svíčka
  * i FVG z ní problikly. `active` je vypnuté, když se grafy vrací na data
- * (vypnutý feed) — návrat dat svíčku zpátky kreslit nesmí.
+ * (vypnutý feed) — návrat dat svíčku zpátky kreslit nesmí. `afterReset` běží
+ * po vrácení svíčky (posun záběru za novými svíčkami).
  */
 export function bindLiveCandleDataResets(
   feed: LiveCandleFeed,
   targets: () => readonly LiveCandleTarget[],
   drawnByController: Map<ChartController, LiveCandleDrawn>,
   active: () => boolean,
+  afterReset?: () => void,
 ): () => void {
   const offs = targets().map(target => {
     const controller = target.api?.controller;
@@ -170,6 +173,7 @@ export function bindLiveCandleDataResets(
       const current = targets().find(item => item.api?.controller === controller) ?? target;
       if (previous) carryFinishedLiveBars(feed, current, controller, previous, drawnByController);
       applyLiveCandle(feed, current, drawnByController);
+      afterReset?.();
     });
   });
   return () => offs.forEach(off => off());
@@ -207,19 +211,66 @@ const objectId = (value: object | null) => {
   return id;
 };
 
-export function useLiveCandleBinding(feed: LiveCandleFeed | null, targets: readonly LiveCandleTarget[]): void {
+/**
+ * `followEdge` (LIVE → Graf): záběr jede za novými svíčkami a drží odstup od
+ * pravého okraje, viz `lib/liveChartFollow`.
+ */
+export function useLiveCandleBinding(
+  feed: LiveCandleFeed | null,
+  targets: readonly LiveCandleTarget[],
+  options: { followEdge?: boolean } = {},
+): void {
   const targetsRef = useRef(targets);
   targetsRef.current = targets;
+  const followEdgeRef = useRef(Boolean(options.followEdge));
+  followEdgeRef.current = Boolean(options.followEdge);
   const scheduleRef = useRef<() => void>(() => undefined);
+  const scheduleFollowRef = useRef<() => void>(() => undefined);
   const drawnRef = useRef(new Map<ChartController, LiveCandleDrawn>());
   const activeFeedRef = useRef<LiveCandleFeed | null>(null);
+  // Graf, který uživatel právě drží myší, se pod rukou neposouvá.
+  const pressedRef = useRef<EventTarget | null>(null);
+  useEffect(() => {
+    if (!options.followEdge) return undefined;
+    const press = (event: PointerEvent) => { pressedRef.current = event.target; };
+    const release = () => { pressedRef.current = null; };
+    window.addEventListener('pointerdown', press, true);
+    window.addEventListener('pointerup', release, true);
+    window.addEventListener('pointercancel', release, true);
+    return () => {
+      pressedRef.current = null;
+      window.removeEventListener('pointerdown', press, true);
+      window.removeEventListener('pointerup', release, true);
+      window.removeEventListener('pointercancel', release, true);
+    };
+  }, [options.followEdge]);
   useEffect(() => {
     if (!feed) return;
     activeFeedRef.current = feed;
     let frame = 0;
+    let followFrame = 0;
+    let followMemory: LiveFollowMemory = new WeakMap();
+    const held = (element: HTMLElement) => {
+      const pressed = pressedRef.current;
+      return pressed instanceof Node && element.contains(pressed);
+    };
+    const follow = () => {
+      followFrame = 0;
+      if (!followEdgeRef.current || activeFeedRef.current !== feed) return;
+      for (const target of targetsRef.current) followLiveEdge(target.api, target.timeframe, followMemory, held);
+    };
+    // Až po vykreslení grafu: knihovna změny záběru (i vrácení záběru po
+    // obnově dat, `dataViewportRef` v CandleKitTradeChart) jen řadí a provede
+    // je při kreslení. Snímek grafu je zaregistrovaný dřív, takže tenhle
+    // doběhne po něm a čte záběr, který na obrazovce opravdu je.
+    const scheduleFollow = () => {
+      if (followEdgeRef.current && !followFrame) followFrame = window.requestAnimationFrame(follow);
+    };
+    scheduleFollowRef.current = scheduleFollow;
     const apply = () => {
       frame = 0;
       for (const target of targetsRef.current) applyLiveCandle(feed, target, drawnRef.current);
+      scheduleFollow();
     };
     const schedule = () => {
       if (!frame) frame = window.requestAnimationFrame(apply);
@@ -231,7 +282,10 @@ export function useLiveCandleBinding(feed: LiveCandleFeed | null, targets: reado
       activeFeedRef.current = null;
       unsubscribe();
       if (frame) window.cancelAnimationFrame(frame);
+      if (followFrame) window.cancelAnimationFrame(followFrame);
       scheduleRef.current = () => undefined;
+      scheduleFollowRef.current = () => undefined;
+      followMemory = new WeakMap();
       // Feed vypnut (přehrávání, konec dne): grafy zpět na jejich data.
       drawnRef.current.forEach((drawn, controller) => revertLiveCandle(controller, drawn));
       drawnRef.current.clear();
@@ -249,6 +303,12 @@ export function useLiveCandleBinding(feed: LiveCandleFeed | null, targets: reado
   const chartsKey = targets.map(target => objectId(target.api?.controller ?? null)).join('|');
   useEffect(() => {
     if (!feed) return undefined;
-    return bindLiveCandleDataResets(feed, () => targetsRef.current, drawnRef.current, () => activeFeedRef.current === feed);
+    return bindLiveCandleDataResets(
+      feed,
+      () => targetsRef.current,
+      drawnRef.current,
+      () => activeFeedRef.current === feed,
+      () => scheduleFollowRef.current(),
+    );
   }, [feed, chartsKey]);
 }

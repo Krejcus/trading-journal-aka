@@ -977,6 +977,9 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             showManagedPositionBoxes={context.tradingSettings.positionBoxes}
             chartOrderQuantity={context.backtestSession?.chartOrderQuantity ?? context.liveOrderEntry?.chartOrderQuantity}
             onPositionQuickOrder={context.tradingSettings.quickOrderButton ? context.onPositionQuickOrder : undefined}
+            positionQuickOrderLabel={context.liveOrderEntry ? 'Propsat box do objednávky' : undefined}
+            liveSeries={Boolean(context.liveOrderEntry)}
+            chartOrderLabelSuffix={context.liveOrderEntry ? ' · návrh' : undefined}
             onChartOrder={config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.onChartOrder
               : liveChartOrder}
@@ -1194,7 +1197,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const liveCandleTargets = useMemo<LiveCandleTarget[]>(() => [...panelControls.values()].map(control => ({
     api: control.chartApi, root: control.config.root, timeframe: control.config.timeframe, rawCandles: control.liveRawCandles,
   })), [panelControls]);
-  useLiveCandleBinding(!backtestSession && replay.phase !== 'active' ? liveCandles : null, liveCandleTargets);
+  // LIVE → Graf: záběr jede za novými svíčkami (deník dneška stojí jako dřív).
+  useLiveCandleBinding(!backtestSession && replay.phase !== 'active' ? liveCandles : null, liveCandleTargets, {
+    followEdge: !backtestSession && Boolean(liveOrderEntry),
+  });
   // Živá pozice z kopírky (deník dneška): čáry vstupu, SL/TP a čekajícího vstupu.
   useLivePriceLinesBinding(!backtestSession && replay.phase !== 'active' ? livePriceLines : null, liveCandleTargets);
   const [workspaceHistory] = useState(() => new ChartWorkspaceHistory());

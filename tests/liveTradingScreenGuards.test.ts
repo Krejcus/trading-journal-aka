@@ -15,6 +15,7 @@ const LIVE_CHART_FILES = [
   'lib/liveOrderTicket.ts',
   'lib/liveTradeTarget.ts',
   'lib/liveChartPosition.ts',
+  'lib/liveChartFollow.ts',
 ];
 
 describe('LIVE → Graf: výchozí záložka', () => {
@@ -112,6 +113,27 @@ describe('LIVE → Graf je jen UI', () => {
     for (const file of ['components/LiveOrderTicket.tsx', 'components/LiveGroupChip.tsx', 'components/TradovateLiveDesk.tsx']) {
       expect(source(file), file).not.toMatch(/SAMPLE_LIVE_TRADE_GROUP/);
     }
+  });
+
+  it('vrstva grafu není dialog — uvnitř dialogu graf ignoruje pravé tlačítko, zkratky i dvojklik', () => {
+    const screen = source('components/LiveTradingScreen.tsx');
+    expect(screen).toMatch(/role="region" aria-label="LIVE graf"/);
+    expect(screen).not.toMatch(/role="dialog" aria-label="LIVE graf"/);
+    // Pojistka grafu, kvůli které na roli záleží.
+    expect(source('components/CandleKitTradeChart.tsx')).toMatch(/target\.closest\('button, input, select, textarea, \[role="dialog"\], \[role="menu"\]'\)\) return;/);
+  });
+
+  it('posun za svíčkami jen v LIVE grafu, ne v deníku dneška ani v backtestu', () => {
+    const workspace = source('components/AlphaTradeChartWorkspace.tsx');
+    expect(workspace).toMatch(/followEdge: !backtestSession && Boolean\(liveOrderEntry\),/);
+    expect(workspace).toMatch(/positionQuickOrderLabel=\{context\.liveOrderEntry \? 'Propsat box do objednávky' : undefined\}/);
+    // Nová svíčka vpravo LIVE graf nepřestaví (jinak se každou minutu vrátil na kotvu).
+    expect(workspace).toMatch(/liveSeries=\{Boolean\(context\.liveOrderEntry\)\}/);
+    // Objednávky z pravého menu jen vyplní panel — v textu je to vidět.
+    expect(workspace).toMatch(/chartOrderLabelSuffix=\{context\.liveOrderEntry \? ' · návrh' : undefined\}/);
+    const chart = source('components/CandleKitTradeChart.tsx');
+    expect(chart).toMatch(/: liveSeries \? \{ start: candleWindow\.start, end: candles\.length \} : candleWindow,/);
+    expect(chart).toMatch(/\? `overlay-v2:\$\{trade\.id\}:\$\{timeframe\}:\$\{renderedCandleWindow\.start\}:live`/);
   });
 
   it('výpočty panelu nikdo z cest příkazů nepoužívá', () => {

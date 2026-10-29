@@ -226,7 +226,7 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
     expect(workspace).toEqual([
       'liveCandles?: LiveCandleFeed | null;',
       'liveCandles = null,',
-      "useLiveCandleBinding(!backtestSession && replay.phase !== 'active' ? liveCandles : null, liveCandleTargets);",
+      "useLiveCandleBinding(!backtestSession && replay.phase !== 'active' ? liveCandles : null, liveCandleTargets, {",
     ]);
     // Svíčku ze zdroje čte jen napojení na graf.
     const readers = allSources.filter(file => /\b(?:feed|liveFeed|liveCandles)\.current\(/.test(readFileSync(join(root, file), 'utf8')));

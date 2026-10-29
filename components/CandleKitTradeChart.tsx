@@ -324,6 +324,16 @@ interface CandleKitTradeChartProps {
   /** Rychlá objednávka z vybraného position boxu — totéž co tlačítko s bleskem. */
   onPositionQuickOrder?: () => void;
   positionQuickOrderDisabledReason?: string | null;
+  /** Text položky v pravém menu (LIVE: box jen vyplní panel objednávky). */
+  positionQuickOrderLabel?: string;
+  /**
+   * LIVE → Graf: okno svíček sahá vždy do konce dat a nová svíčka vpravo graf
+   * nepřestaví. Jinak každá minuta dat vytvořila nový graf, ten se zaměřil
+   * na kotvu (poslední svíčka na samém okraji) a uživateli zahodil záběr.
+   */
+  liveSeries?: boolean;
+  /** Přípona položek objednávky v pravém menu (LIVE: „· návrh“ — jen vyplní panel). */
+  chartOrderLabelSuffix?: string;
   onChartOrder?: (
     input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number },
     candle: MarketCandle | null,
@@ -1009,6 +1019,23 @@ const loadKeepDrawing = (): boolean => {
 };
 
 export type CandleKitDrawingEngine = NonNullable<ChartViewApi['drawing']>['engine'];
+
+/** Generovaná (needitovaná uživatelem) čára BoS/CHoCH mimo přehrávání. */
+const structureDrawing = (
+  event: MarketStructureEvent,
+  index: number,
+  style: { bullishColor: string; bearishColor: string; lineWidth: number },
+): Parameters<CandleKitDrawingEngine['commit']>[0] => ({
+  id: `auto-structure-${event.breakTime}-${index}`,
+  tool: 'TrendLine',
+  points: [{ time: event.pivotTime, price: event.price }, { time: event.breakTime, price: event.price }],
+  style: {
+    color: event.direction === 'bullish' ? style.bullishColor : style.bearishColor,
+    width: style.lineWidth,
+    dashed: false,
+    fill: null,
+  },
+});
 
 export const AlphaTradeDrawingToolbar: React.FC<{
   isDark: boolean;
@@ -1947,6 +1974,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   onChartOrder,
   onPositionQuickOrder,
   positionQuickOrderDisabledReason,
+  positionQuickOrderLabel = 'Rychlá objednávka z position boxu',
+  liveSeries = false,
+  chartOrderLabelSuffix = '',
   onNeedOlderHistory,
   olderHistoryLoading = false,
 }) => {
@@ -2645,13 +2675,20 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }));
   }, [candles, replayActive]);
 
+  const windowTimeframeRef = useRef(timeframe);
   useEffect(() => {
     // Review kreslí vždy celou sérii — okno kolem obchodu nepotřebuje.
     if (replayActive || reviewMode) return;
     if (pendingVisibleRangeRef.current) return;
     expandingWindowRef.current = false;
-    setCandleWindow(initialWindow);
-  }, [candles.length, compactMode, initialWindow, replayActive, reviewMode, timeframe]);
+    const sameTimeframe = windowTimeframeRef.current === timeframe;
+    windowTimeframeRef.current = timeframe;
+    // LIVE: okno rozšířené zleva (pohled do historie) přežije obnovu dat —
+    // jeho zúžení by změnilo klíč grafu a záběr by skočil zpět na kotvu.
+    setCandleWindow(current => liveSeries && sameTimeframe
+      ? { start: Math.min(current.start, initialWindow.start), end: initialWindow.end }
+      : initialWindow);
+  }, [candles.length, compactMode, initialWindow, liveSeries, replayActive, reviewMode, timeframe]);
 
   useEffect(() => () => {
     if (olderHistoryCheckFrameRef.current !== null) window.cancelAnimationFrame(olderHistoryCheckFrameRef.current);
@@ -2695,8 +2732,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // nového grafu u pravého okraje jinak spustil rozšíření okna a druhé
   // vytvoření grafu — obchod pak viditelně odskočil.
   const renderedCandleWindow = useMemo<CandleWindow>(
-    () => replayActive || centeredTradeView || reviewMode ? { start: 0, end: candles.length } : candleWindow,
-    [candleWindow, candles.length, centeredTradeView, replayActive, reviewMode],
+    () => replayActive || centeredTradeView || reviewMode
+      ? { start: 0, end: candles.length }
+      : liveSeries ? { start: candleWindow.start, end: candles.length } : candleWindow,
+    [candleWindow, candles.length, centeredTradeView, liveSeries, replayActive, reviewMode],
   );
   // Detail: nový graf se ukáže až s vycentrovaným záběrem.
   const [viewportSettled, setViewportSettled] = useState(!centeredTradeView);
@@ -3036,6 +3075,19 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   }, [centeredTradeView, entryStructure, exitMs, indicatorSettings.structure, replayActive, showEntryStructure, structureEvents, visibleCandles, visibleStructure]);
   const structureOverlayEventsRef = useRef(structureOverlayEvents);
   structureOverlayEventsRef.current = structureOverlayEvents;
+  // LIVE se s novou svíčkou nepřestavuje (`liveSeries`), takže čáry BoS/CHoCH
+  // z `handleReady` by zůstaly z doby otevření grafu — srovnat je tady.
+  useEffect(() => {
+    if (!liveSeries || replayActive) return;
+    const engine = apiRef.current?.drawing?.engine;
+    if (!engine) return;
+    const style = indicatorSettingsRef.current.structure;
+    const wanted = structureOverlayEvents.map(({ event }, index) => structureDrawing(event, index, style));
+    const shown = engine.getDrawings().filter(drawing => drawing.id.startsWith('auto-structure-'));
+    if (shown.length === wanted.length && wanted.every(drawing => engine.getById(drawing.id))) return;
+    shown.forEach(drawing => engine.remove(drawing.id));
+    wanted.forEach(drawing => engine.commit(drawing));
+  }, [chartApiEpoch, liveSeries, replayActive, structureOverlayEvents]);
   const drawingMagnetSourcesRef = useRef<DrawingMagnetSources>({ candles: [] });
   const magnetLevelStyle = indicatorSettings.levels;
   const magnetLastCandleTime = visibleCandles.at(-1)?.time ?? 0;
@@ -4242,17 +4294,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         overlayArtifactsRef.current.primitives.push(fvgPrimitive);
       }
       const structureStyle = indicatorSettingsRef.current.structure;
-      if (!replayActive) structureOverlayEventsRef.current.forEach(({ event }, index) => commitOnce({
-          id: `auto-structure-${event.breakTime}-${index}`,
-          tool: 'TrendLine',
-          points: [{ time: event.pivotTime, price: event.price }, { time: event.breakTime, price: event.price }],
-          style: {
-            color: event.direction === 'bullish' ? structureStyle.bullishColor : structureStyle.bearishColor,
-            width: structureStyle.lineWidth,
-            dashed: false,
-            fill: null,
-          },
-        }));
+      if (!replayActive) structureOverlayEventsRef.current.forEach(({ event }, index) => commitOnce(structureDrawing(event, index, structureStyle)));
 
       // CandleKit does not currently provide a text drawing tool. Render the
       // market-structure caption as a tiny series primitive so it remains
@@ -5353,6 +5395,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           ? `overlay-v2:${trade.id}:${timeframe}:detail`
           : replayActive
           ? `overlay-v2:${trade.id}:${timeframe}:replay`
+          // LIVE: nové svíčky vpravo jdou přes setData; nový graf jen při
+          // rozšíření okna zleva (záběr drží `pendingVisibleRangeRef`).
+          : liveSeries
+          ? `overlay-v2:${trade.id}:${timeframe}:${renderedCandleWindow.start}:live`
           : `overlay-v2:${trade.id}:${timeframe}:${renderedCandleWindow.start}:${renderedCandleWindow.end}`}
         data={chartBars}
         style={centeredTradeView ? { opacity: viewportSettled ? 1 : 0, transition: viewportSettled ? 'opacity 140ms ease-out' : 'none' } : undefined}
@@ -5842,7 +5888,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
               <span className="mr-2 flex h-6 w-6 shrink-0 items-center justify-center" aria-hidden="true">
                 <Zap size={15} strokeWidth={1.55} />
               </span>
-              Rychlá objednávka z position boxu
+              {positionQuickOrderLabel}
             </button>
             <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
           </>}
@@ -5859,7 +5905,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
                   className={`mr-2 h-6 w-1 shrink-0 rounded-full ${option.side === 'buy' ? 'bg-emerald-500' : 'bg-rose-500'}`}
                   aria-hidden="true"
                 />
-                {option.label}
+                {option.label}{chartOrderLabelSuffix}
               </button>
             ))}
             <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />

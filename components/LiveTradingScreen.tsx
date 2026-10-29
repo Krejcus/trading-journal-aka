@@ -274,7 +274,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     : `border-transparent ${isDark ? 'text-slate-400 hover:text-slate-100' : 'text-slate-500 hover:text-slate-900'}`);
 
   const screen = (
-    <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} role="dialog" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
+    <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} role="region" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
       {/* Aurorová záře při příchodu — jednou, pak je průhledná a nebere kliky. */}
       <div className="live-chart-aurora" aria-hidden="true" />
       <header className={`live-chart-header flex h-11 shrink-0 items-center gap-1 border-b px-2 ${bar}`}>
