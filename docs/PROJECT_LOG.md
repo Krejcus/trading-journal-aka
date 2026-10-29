@@ -285,6 +285,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-29 17:39 — NASAZENO: fáze 1a (náhled z grafu) + oprava samovolného vypínání kopírky (Claude, Filip „oprav to a pak nasaď vše“)
+
+- Web: push b0799704 na main, Vercel READY (alphatrade-mentor-15). Bez migrace.
+- Worker: read-only reconcile (authoritativelyClean) → `mac-reinstall-safe.sh`
+  z worktree chart-entry-1a, brána prošla napoprvé (Filip předtím v 16:29Z
+  incident potvrdil přes Zapnout a vypnul). Instalace b0799704, po restartu
+  DISARMED, connected, reconciliationRequired=false, lastError=None, bez
+  manualRecovery, flat; post-reconcile čistý (missing jen vyřazený 70909167).
+- Ověření: tsc, celá sada 6059 + 1 todo, build. `copierV12SixthIteration` E1
+  (limit < 5 ms) pod loadem občas padá — bez opravy stejně (2/5), s ní nesouvisí.
+- Neověřeno naostro: že první exit za ARMED už nezaloží incident (staré nohy
+  se zapisují v paměti po automatické obnově po startu) a náhled 1a přes relay.
+
 ### 2026-10-29 — Kopírka se po exitech sama vypínala: staré samostatné SL (Claude, Filip „oprav to a pak nasaď vše“)
 
 - Příznak: ~12× za den (od 28. 10. 18:01 UTC) fail-closed `Flat sweep
