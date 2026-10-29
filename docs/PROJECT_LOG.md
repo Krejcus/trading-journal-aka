@@ -285,7 +285,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-29 — Obchodování z grafu, fáze 2b: správa obchodů, které kopírka sleduje (Claude, NENASAZENO)
+### 2026-10-29 — Obchodování z grafu, fáze 2b: správa obchodů, které kopírka sleduje (Claude, nasazeno 22:35 @ 0e20ccf7)
 
 - Větev `claude/chart-entry-2b-20261029` (navazuje na nasazenou 2a). Stejné akce jako
   2a i pro obchody z TradingView / Tradovate UI, ale jen ty, které kopírka zkopírovala
@@ -295,7 +295,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověřeno za DISARMED (22:21): tsc, cílené 349/349 ×3, celá sada 6125 + 1 todo;
   jediný pád `copierV12SixthIteration` E1 (limit 5 ms pod zátěží), samostatně 4/4
   zelený s 2b i bez ní. Build v posledním běhu nedoběhl (skript skončil na suite).
-- Neověřeno naostro. Riziko k testu: TradingView může po posunu z appky vrátit svou cenu nohy.
+- Nasazeno 22:35 (Filip „Nasaď 2b“): push 0e20ccf7, Vercel READY, worker reinstall (brána prošla), reconcile čistý.
+- Neověřeno naostro (test 30. 10. spolu s 2a). Riziko k testu: TradingView může po posunu z appky vrátit svou cenu nohy — 20 s po posunu ověřit.
 
 ### 2026-10-29 — Obchodování z grafu, fáze 2a: správa vlastního vstupu + push notifikace (Claude, nasazeno 22:00 @ 6d7df3c8)
 
