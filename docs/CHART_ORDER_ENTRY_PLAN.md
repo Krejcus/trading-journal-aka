@@ -428,3 +428,46 @@ pro Tradeify. Jen za DISARMED kopírky; po záznamu read-only reconcile.
 INV-BRAKE-01/02/03, INV-ARM-01/04, INV-DEFAULT-01/02/03, INV-FRESH-01/02/03,
 INV-RISK-01..04, INV-TRAD-02/03/04/06, INV-OUTBOX-03, INV-DIVERGENCE-01,
 INV-RECON-02, INV-UI-01..04, INV-WORKER-04, INV-ELIG-01, INV-PART-01..03.
+
+### 9.1 Revize po oponentuře (29. 10. 2026, verdikt OPRAVIT PŘED IMPLEMENTACÍ)
+
+- **OSO okno (P1):** časovač samostatného vstupu se neodpálí, dokud ve frontě
+  čekají nezpracované eventy leadera (odložení po 50 ms, nejvýš 5 s); platí pro
+  všechna OSO (opravuje i dnešní slabinu TV/Tradovate UI). Vlastní ruční vstup
+  (id z ACK, nebo ruční vstup v `sending`/`unknown`) se NIKDY nekopíruje jako
+  samostatný: časovač ani fill před nohami ho neflushnou; čeká se na nohy
+  (od začátku zpracování nejvýš 5 s), pak failClosed (`autoClose:false`) +
+  cílený cancel vlastního nevyplněného vstupu.
+- **Blokování linky (P2):** POST má vlastní timeout 5 s → `unknown` (pozdní
+  výsledek se jen dopíše do záznamu); položka, která nezačne do 2 s od
+  přijetí, je `blocked`. Vzdálená brzda tak čeká nejvýš ~7 s; zapsáno
+  u INV-BRAKE-03, měří se ve společném testu.
+- **TTL a loopback (P3):** relay předá `expiresAt` i pro ruční vstup; bez něj
+  `blocked`. `place-leader-entry` z loopbacku se odmítá.
+- **Fence (P4):** při vyhodnocení se zachytí čítače příchodu (trade verze
+  účtů skupiny, `configurationControlVersion`, `connectionSyncGeneration`)
+  a těsně před zápisem porovnají; neshoda = terminální `not-sent`.
+- **Dvojí vstup (P5):** id z ACK se při commitu zapíšou do
+  `liveOrdersByAccount` leadera → brána klidu skupiny blokuje další vstup,
+  dokud stream příkazy neukončí. Relay hledá `operationId` per uživatel
+  a po upsertu porovná `payloadHash`.
+- **Brzda během POSTu (P7):** přijde-li ACK, když už kopírka není ARMED,
+  vlastní vstup se hned cíleně zruší (followeři ho nedostanou).
+- **Cancel (P8):** jen id z vlastního záznamu na účtu leadera, raw broker
+  mimo `eventTail`, jeden pokus s durable stavem; smí i za DISARMED/kill
+  (risk-redukční). Obě cesty (abandoned / chybějící nohy / brzda) sdílí jednu funkci.
+- **Visící ruční vstup (P9):** vlastní predikát; blokuje jen ARM a další
+  ruční vstup (ne dispatch, Flatten, brzdy, obnovu spojení). Rozuzlení
+  `resolve-stuck-operation` s `kind: 'manual-entry'`, `key = operationId`.
+- **Úložiště (P10):** `safety.manualEntries` (hluboký klon, funkční patch
+  podle `operationId`, max 50 záznamů); bootstrap `sending` → `unknown`
+  a uložit. Selhání commitu výsledku = vlastnictví zůstává v paměti + failClosed.
+  Rollback workeru pod 1b jen s prázdnými/vyřešenými záznamy.
+- **Mapování (P11):** všechna tři id → `acknowledged`; id vstupu bez nohou →
+  `abandoned`; definitivní odmítnutí bez id → `rejected`; jinak `unknown`.
+  429 na `placeoso` zapne hodinový jistič REST (vědomé riziko).
+- **INV-MANUAL-01** rozšířit: zápis jen ve frontě controlleru s ohraničeným
+  čekáním; `unknown` ponechá ARMED (výslovná odchylka od INV-DEFAULT-02:
+  kopírka dál zrcadlí leadera, vlastní vstup bez nohou se nikdy nekopíruje).
+- **Před prvním skutečným odesláním:** nahraný `--scenario fill` a jeho
+  replay s asynchronním store (kopie, fill i nohy bez incidentu).
