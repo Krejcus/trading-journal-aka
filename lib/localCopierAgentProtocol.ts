@@ -205,7 +205,7 @@ export type LocalCopierAgentCommand =
    * TradingView, když běží bez lokálního CDP.
    */
   | { type: 'snapshot-test'; requestId?: string; repairCamera?: boolean }
-  | { type: 'resolve-stuck-operation'; kind: CopierStuckOperationKind; key: string; reason: string }
+  | { type: 'resolve-stuck-operation'; kind: CopierStuckOperationKind | 'manual-entry'; key: string; reason: string }
   | { type: 'lock-until-session-end'; reason: string }
   | { type: 'unlock-day'; reason: string }
   | { type: 'device-paired'; deviceId: string };

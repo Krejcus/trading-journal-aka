@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  decideFillCleanup,
   decideRecordCleanup,
   leakedIdentifiers,
   parseRecordLeaderOsoArgs,
@@ -23,7 +24,7 @@ const status = (controller: Record<string, unknown> = {}, extra: Record<string, 
 });
 const plan = (patch: Partial<RecordLeaderOsoPlan> = {}): RecordLeaderOsoPlan => ({
   accountId: LEADER, symbol: 'MNQZ6', side: 'Buy', entry: 29_500, stopLoss: 29_450, takeProfit: 30_500,
-  marketPrice: 30_000, holdMs: 4_000, confirm: false, ...patch,
+  marketPrice: 30_000, holdMs: 4_000, confirm: false, scenario: 'cancel', allowNonGroupAccount: false, ...patch,
 });
 const problems = (p = plan(), s: unknown = status()) => recordLeaderOsoProblems(p, s, NOW);
 
@@ -156,5 +157,67 @@ describe('fáze 0: anonymizace', () => {
     const text = '{"accountId":1001,"price":29500.25,"note":"LFE0506123","id":42420001}';
     expect(leakedIdentifiers(text, [4242, 'LFE0506123', 'x@y.cz'])).toEqual(['LFE0506123']);
     expect(leakedIdentifiers('{"accountId":4242}', [4242])).toEqual(['4242']);
+  });
+});
+
+describe('fáze 1b: fill scénář nahrávání', () => {
+  const fill = (patch: Partial<RecordLeaderOsoPlan> = {}) => plan({
+    scenario: 'fill', entry: 30_010, stopLoss: 29_900, takeProfit: 30_500, ...patch,
+  });
+
+  it('marketable Buy i Sell s rozumným SL projde', () => {
+    expect(problems(fill())).toEqual([]);
+    expect(problems(fill({ side: 'Sell', entry: 29_990, stopLoss: 30_100, takeProfit: 29_500 }))).toEqual([]);
+  });
+
+  it('limit, který se nevyplní, nebo příliš drahý vstup odmítne', () => {
+    expect(problems(fill({ entry: 29_990 })).join(' ')).toContain('na trhu nebo nad ním');
+    expect(problems(fill({ entry: 30_100 })).join(' ')).toContain('na trhu nebo nad ním');
+    expect(problems(fill({ side: 'Sell', entry: 30_010, stopLoss: 30_120, takeProfit: 29_500 })).join(' ')).toContain('na trhu nebo pod ním');
+  });
+
+  it('SL příliš blízko (trefí se při držení) nebo daleko (velké riziko) odmítne', () => {
+    expect(problems(fill({ stopLoss: 29_990 })).join(' ')).toContain('SL musí být');
+    expect(problems(fill({ stopLoss: 29_500 })).join(' ')).toContain('SL musí být');
+  });
+
+  it('TP blízko trhu odmítne a DISARMED pojistky platí i tady', () => {
+    expect(problems(fill({ takeProfit: 30_100 })).join(' ')).toContain('TP');
+    expect(problems(fill(), status({ armed: true })).join(' ')).toContain('DISARMED');
+  });
+
+  it('účet mimo skupinu jen s --non-group-account a nikdy follower skupiny', () => {
+    const outsider = status({}, { group: { leaderAccountId: LEADER, followers: [{ accountId: 7 }] } });
+    expect(problems(fill({ accountId: 99 }), outsider).join(' ')).toContain('není leader');
+    expect(problems(fill({ accountId: 99, allowNonGroupAccount: true }), outsider)).toEqual([]);
+    expect(problems(fill({ accountId: 7, allowNonGroupAccount: true }), outsider).join(' ')).toContain('ve skupině');
+    expect(parseRecordLeaderOsoArgs(['--account', '9', '--symbol', 'MNQZ6', '--entry', '1', '--sl', '1', '--tp', '1',
+      '--market-price', '1', '--scenario', 'fill', '--non-group-account'])).toMatchObject({ scenario: 'fill', allowNonGroupAccount: true });
+    expect(() => parseRecordLeaderOsoArgs(['--account', '9', '--symbol', 'MNQZ6', '--entry', '1', '--sl', '1', '--tp', '1',
+      '--market-price', '1', '--scenario', 'market'])).toThrow('--scenario');
+  });
+
+  const ack: RecordPlacement = { kind: 'acknowledged', entryId: 'e', legIds: ['s', 't'] };
+  it('úklid: otevřená pozice = zavřít, nohy nad pozicí se nikdy neruší samostatně', () => {
+    expect(decideFillCleanup({ netPosition: 1, orders: [
+      { id: 'e', status: 'filled', filledQuantity: 1 }, { id: 's', status: 'working', filledQuantity: 0 },
+    ] }, ack)).toEqual({ kind: 'liquidate' });
+  });
+
+  it('úklid: flat → nevyplněný vstup zrušit, zbylé nohy zrušit, pak čisto', () => {
+    expect(decideFillCleanup({ netPosition: 0, orders: [
+      { id: 'e', status: 'working', filledQuantity: 0 }, { id: 's', status: 'pending', filledQuantity: 0, parentOrderId: 'e' },
+    ] }, ack)).toEqual({ kind: 'cancel', ids: ['e'] });
+    expect(decideFillCleanup({ netPosition: 0, orders: [
+      { id: 'e', status: 'filled', filledQuantity: 1 }, { id: 't', status: 'working', filledQuantity: 0 },
+    ] }, ack)).toEqual({ kind: 'cancel', ids: ['t'] });
+    expect(decideFillCleanup({ netPosition: 0, orders: [
+      { id: 'e', status: 'filled', filledQuantity: 1 }, { id: 's', status: 'canceled', filledQuantity: 0 },
+    ] }, ack)).toEqual({ kind: 'clean' });
+  });
+
+  it('úklid: nečitelný stav nebo nejisté zadání nikdy „čisto“', () => {
+    expect(decideFillCleanup({ netPosition: null, orders: [] }, ack).kind).toBe('unverified');
+    expect(decideFillCleanup({ netPosition: 0, orders: [] }, { kind: 'uncertain', entrySide: 'Buy' }).kind).toBe('unverified');
   });
 });

@@ -1,4 +1,5 @@
 import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview.js';
+import { validateLeaderEntryPlace } from '../lib/leaderEntryPlace.js';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
@@ -106,6 +107,10 @@ const BRAKE_COMMAND_TTL_MS = 10 * 60_000;
 /** Náhled vstupu platí jen chvíli; starý náhled je k ničemu. */
 const PREVIEW_COMMAND_TTL_MS = 15_000;
 const PREVIEW_MIN_INTERVAL_MS = 3_000;
+/** Ruční vstup z grafu (fáze 1b): krátká platnost, jeden naráz, denní strop. */
+const ENTRY_COMMAND_TTL_MS = 15_000;
+const ENTRY_MIN_INTERVAL_MS = 3_000;
+const ENTRY_DAILY_CAP = 30;
 const STANDARD_COMMAND_TTL_MS = 30_000;
 const WORKER_CONNECTED_MAX_AGE_MS = 10_000;
 
@@ -118,7 +123,10 @@ export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | n
   if (message === 'copier-relay-worker-disconnected'
     || message === 'copier-relay-runtime-not-found'
     || message === 'copier-relay-arm-config-conflict'
-    || message === 'copier-relay-preview-busy') return 409;
+    || message === 'copier-relay-preview-busy'
+    || message === 'copier-relay-entry-busy'
+    || message === 'copier-relay-entry-conflict'
+    || message === 'copier-relay-entry-daily-cap') return 409;
   if (message === 'unsupported-command'
     || message === 'unsupported-relay-command'
     || message === 'unsupported-remote-copy-command'
@@ -261,8 +269,11 @@ const remoteCopyCommands = new Set([
   'flatten-account', 'flatten-follower-trade', 'flatten-group', 'delete-group', 'resolve-stuck-operation',
   // Fáze 1a obchodování z grafu: jen náhled, worker nic nezapíše.
   'preview-leader-entry',
+  // Fáze 1b: jediný risk-zvyšující příkaz relaye — ruční OSO na leadera.
+  // Worker ho pustí jen za ARMED po všech branách náhledu (INV-MANUAL-01).
+  'place-leader-entry',
 ]);
-const STUCK_OPERATION_KINDS = new Set(['place', 'bracket', 'oso', 'cancel-or-modify']);
+const STUCK_OPERATION_KINDS = new Set(['place', 'bracket', 'oso', 'cancel-or-modify', 'manual-entry']);
 
 // Stejný formát vynucuje controller (operationToken); validace už na ingressu
 // brání tomu, aby vadný Flatten doputoval k workerovi — ten před validací
@@ -291,6 +302,7 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
     throw new Error('unsupported-remote-copy-command');
   }
   if (command.type === 'preview-leader-entry') return validateLeaderEntryPreview(value) as unknown as Record<string, unknown>;
+  if (command.type === 'place-leader-entry') return validateLeaderEntryPlace(value) as unknown as Record<string, unknown>;
   if (command.type === 'resolve-stuck-operation') {
     const resolve = value as { groupId?: unknown; kind?: unknown; key?: unknown; reason?: unknown };
     if (
@@ -661,7 +673,10 @@ export async function enqueueTradovateCopierCommand(options: {
   now?: number;
 }): Promise<{ id: string; status: string; expiresAt: string; deviceId: string }> {
   const now = options.now ?? Date.now();
-  const idempotencyKey = options.idempotencyKey?.trim() || randomUUID();
+  // Ruční vstup: klíč idempotence JE operationId (dvojklik / opakovaný POST
+  // = tentýž řádek, nikdy druhý vstup).
+  const entryOperationId = leaderEntryPlaceOperationId(options.command);
+  const idempotencyKey = entryOperationId ?? (options.idempotencyKey?.trim() || randomUUID());
   const payload = commandPayload(options.command);
   const device = await selectRelayDeviceTarget({
     db: options.db,
@@ -697,6 +712,17 @@ export async function enqueueTradovateCopierCommand(options: {
   if (inFlight) return { ...inFlight, deviceId: device.id };
 
   await assertPreviewAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, command: options.command, now });
+  if (entryOperationId) {
+    const existing = await findEntryByOperationId({ db: options.db, userId: options.userId, operationId: entryOperationId });
+    if (existing) {
+      // Stejný klíč s jiným obsahem = nikdy tiše nepřepsat ani neposlat znovu.
+      if (existing.payloadHash !== (options.command as { command?: { payloadHash?: unknown } }).command?.payloadHash) {
+        throw new Error('copier-relay-entry-conflict');
+      }
+      return { id: existing.id, status: existing.status, expiresAt: existing.expiresAt, deviceId: device.id };
+    }
+    await assertEntryAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, now });
+  }
 
   const inFlightArm = await findInFlightArm({
     db: options.db, userId: options.userId, deviceId: device.id,
@@ -707,7 +733,8 @@ export async function enqueueTradovateCopierCommand(options: {
   const createdAt = new Date(now).toISOString();
   const expiresAt = new Date(now + (isTradovateCopierBrakeCommand(options.command)
     ? BRAKE_COMMAND_TTL_MS
-    : isLeaderEntryPreview(options.command) ? PREVIEW_COMMAND_TTL_MS : STANDARD_COMMAND_TTL_MS)).toISOString();
+    : isLeaderEntryPreview(options.command) ? PREVIEW_COMMAND_TTL_MS
+      : entryOperationId ? ENTRY_COMMAND_TTL_MS : STANDARD_COMMAND_TTL_MS)).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands').upsert({
     user_id: options.userId,
     device_id: device.id,
@@ -747,17 +774,26 @@ export async function enqueueTradovateCopierCommand(options: {
         // druhá pojistka proti staršímu ARMu.
         console.error(`COPIER RELAY brake supersede failed after enqueue: ${error instanceof Error ? error.message : String(error)}`);
       }
+      try {
+        await expirePendingEntriesSupersededByBrake({ db: options.db, deviceId: device.id, brakeCreatedAt: createdAt });
+      } catch (error) {
+        console.error(`COPIER RELAY entry supersede failed after enqueue: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     return { id: data.id, status: data.status, expiresAt: data.expires_at, deviceId: device.id };
   }
   const { data: existing, error: existingError } = await options.db
     .from('tradovate_copier_commands')
-    .select('id,status,expires_at')
+    .select('id,status,expires_at,payload')
     .eq('user_id', options.userId)
     .eq('device_id', device.id)
     .eq('idempotency_key', idempotencyKey)
-    .single<{ id: string; status: string; expires_at: string }>();
+    .single<{ id: string; status: string; expires_at: string; payload?: { command?: { payloadHash?: unknown } } | null }>();
   if (existingError || !existing) throw new Error(`copier-relay-idempotency-lookup-failed: ${existingError?.message ?? 'missing'}`);
+  // Souběžný enqueue téhož vstupu s jiným obsahem: vítěz zůstává, druhý je konflikt.
+  if (entryOperationId && existing.payload?.command?.payloadHash !== (payload.command as { payloadHash?: unknown } | undefined)?.payloadHash) {
+    throw new Error('copier-relay-entry-conflict');
+  }
   return { id: existing.id, status: existing.status, expiresAt: existing.expires_at, deviceId: device.id };
 }
 
@@ -777,6 +813,29 @@ const expirePendingArmsSupersededByBrake = async (options: {
     .in('command_type', ['arm-live', 'shadow'])
     .lte('created_at', options.brakeCreatedAt);
   if (error) throw new Error(`copier-relay-brake-supersede-failed: ${error.message}`);
+};
+
+/**
+ * Čekající ruční vstup brzda zruší stejně jako ARM (INV-RELAY-03), nezávisle
+ * na výsledku ARM update; worker ho navíc odmítne podle lastBrakeCreatedAt.
+ */
+const expirePendingEntriesSupersededByBrake = async (options: {
+  db: SupabaseClient;
+  deviceId: string;
+  brakeCreatedAt: string;
+}): Promise<void> => {
+  const { error: entryError } = await options.db.from('tradovate_copier_commands')
+    .update({
+      status: 'expired',
+      completed_at: options.brakeCreatedAt,
+      error: 'superseded-by-brake',
+    })
+    .eq('device_id', options.deviceId)
+    .eq('status', 'pending')
+    .eq('command_type', 'copy-command')
+    .contains('payload', { command: { type: 'place-leader-entry' } })
+    .lte('created_at', options.brakeCreatedAt);
+  if (entryError) throw new Error(`copier-relay-brake-supersede-failed: ${entryError.message}`);
 };
 
 /**
@@ -953,6 +1012,57 @@ async function assertPreviewAdmissible(options: {
     .maybeSingle<{ id: string }>();
   if (error) throw new Error(`copier-relay-preview-lookup-failed: ${error.message}`);
   if (data) throw new Error('copier-relay-preview-busy');
+}
+
+const leaderEntryPlaceOperationId = (command: LocalCopierAgentCommand): string | null => {
+  if (command?.type !== 'copy-command') return null;
+  const inner = (command as { command?: { type?: unknown; operationId?: unknown } }).command;
+  return inner?.type === 'place-leader-entry' && typeof inner.operationId === 'string' ? inner.operationId : null;
+};
+
+/** Per uživatel, ne per zařízení: tentýž vstup nesmí projít podruhé ani přes jiný worker. */
+async function findEntryByOperationId(options: {
+  db: SupabaseClient; userId: string; operationId: string;
+}): Promise<{ id: string; status: string; expiresAt: string; payloadHash: unknown } | null> {
+  const { data, error } = await options.db.from('tradovate_copier_commands')
+    .select('id,status,expires_at,payload')
+    .eq('user_id', options.userId)
+    .eq('idempotency_key', options.operationId)
+    .limit(1)
+    .maybeSingle<{ id: string; status: string; expires_at: string; payload: { command?: { payloadHash?: unknown } } | null }>();
+  if (error) throw new Error(`copier-relay-entry-lookup-failed: ${error.message}`);
+  return data ? { id: data.id, status: data.status, expiresAt: data.expires_at, payloadHash: data.payload?.command?.payloadHash } : null;
+}
+
+/**
+ * Ruční vstup: nejvýš jeden čekající nebo vykonávaný na zařízení, nový
+ * nejdřív 3 s po předchozím a nejvýš 30 za 24 h na uživatele (P7). Jinak 409.
+ */
+async function assertEntryAdmissible(options: {
+  db: SupabaseClient; userId: string; deviceId: string; now: number;
+}): Promise<void> {
+  const nowIso = new Date(options.now).toISOString();
+  const { data: busy, error: busyError } = await options.db.from('tradovate_copier_commands')
+    .select('id')
+    .eq('user_id', options.userId)
+    .eq('device_id', options.deviceId)
+    .eq('command_type', 'copy-command')
+    .contains('payload', { command: { type: 'place-leader-entry' } })
+    .or(`created_at.gt.${new Date(options.now - ENTRY_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
+    // Visící `claimed` starší než 2 min nesmí trvale blokovat (worker už má výsledek nebo spadl).
+    .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
+    .limit(1)
+    .maybeSingle<{ id: string }>();
+  if (busyError) throw new Error(`copier-relay-entry-lookup-failed: ${busyError.message}`);
+  if (busy) throw new Error('copier-relay-entry-busy');
+  const { count, error: countError } = await options.db.from('tradovate_copier_commands')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', options.userId)
+    .eq('command_type', 'copy-command')
+    .contains('payload', { command: { type: 'place-leader-entry' } })
+    .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString());
+  if (countError) throw new Error(`copier-relay-entry-lookup-failed: ${countError.message}`);
+  if ((count ?? 0) >= ENTRY_DAILY_CAP) throw new Error('copier-relay-entry-daily-cap');
 }
 
 /** Čekající (neexpirovaný) nebo právě vykonávaný Flatten stejného cíle, k němuž se nový požadavek přichytí. */

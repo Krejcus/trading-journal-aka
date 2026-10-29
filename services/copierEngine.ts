@@ -323,7 +323,45 @@ export interface CopierState {
     accountEligibility?: CopierAccountEligibility[];
     /** Bounded durable dedupe přímé controller větve pro async/leader rejecty. */
     seenTerminalRejects?: CopierSeenTerminalReject[];
+    /**
+     * Ruční vstupy z grafu na leadera (fáze 1b, INV-MANUAL-01): vlastní durable
+     * outbox. `sending` se ukládá PŘED zápisem k brokerovi; po restartu je
+     * `unknown` a nikdy se znovu neposílá. Nejvýš 50 posledních záznamů.
+     */
+    manualEntries?: CopierManualEntryRecord[];
   };
+}
+
+export type CopierManualEntryStatus =
+  | 'sending' | 'acknowledged' | 'rejected' | 'unknown' | 'abandoned' | 'not-sent' | 'waived';
+
+export interface CopierManualEntryRecord {
+  operationId: string;
+  payloadHash: string;
+  /** clOrdId vstupu (`me…`); nohy nesou `…s`/`…t`. */
+  tag: string;
+  status: CopierManualEntryStatus;
+  createdAt: number;
+  updatedAt: number;
+  request: {
+    accountId: number;
+    symbol: string;
+    side: OrderSide;
+    quantity: number;
+    orderType: 'Limit' | 'Stop';
+    price: number;
+    stopLoss: number;
+    takeProfit: number;
+  };
+  entryBrokerOrderId?: string;
+  stopBrokerOrderId?: string;
+  targetBrokerOrderId?: string;
+  reason?: string;
+  /** Pozdní výsledek POSTu po timeoutu (jen audit; stav zůstává `unknown`). */
+  lateResult?: { at: number; entryBrokerOrderId?: string; accepted: boolean };
+  /** Jediný pokus o cílené zrušení vlastního vstupu leadera. */
+  cancel?: { status: 'sending' | 'sent' | 'failed'; at: number; reason: string; error?: string };
+  waiver?: { at: number; reason: string };
 }
 
 export interface CopierDailyLot {

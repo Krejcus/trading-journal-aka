@@ -11,6 +11,12 @@
  *   npx tsx scripts/copier/record-leader-oso.ts --account <leaderId> --symbol MNQZ6 \
  *     --side Buy --market-price 30000 --entry 29500 --sl 29450 --tp 30500 [--confirm]
  *
+ * `--scenario fill` (fáze 1b): marketable Limit (na trhu, nejvýš 0,2 % za ním),
+ * SL 0,3–1 % od vstupu, TP aspoň 1,5 % od trhu. Vstup se vyplní, záznam
+ * zachytí přechod nohou na Working, po `--hold-ms` skript leadera zavře
+ * (liquidate) a ověří flat bez příkazů. Riziko = vzdálenost SL × 2 USD.
+ * `--non-group-account`: účet mimo skupinu workeru (např. Tradeify připojení).
+ *
  * Během běhu: na nic nesahat (ARM, Tradovate), NEpřerušovat Ctrl+C.
  * Exit 0 = záznam + leader ověřeně čistý; 3 = něco se vyplnilo (ochrana
  * ponechána); 4 = stav leadera neověřen; 1 = nespuštěno.
@@ -25,6 +31,7 @@ import type { BrokerEvent } from '../../services/brokerPort';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
 import { createMacCopierDeviceTokenProvider, loadMacCopierDevice } from '../../server/macCopierDevice';
 import {
+  decideFillCleanup,
   decideRecordCleanup,
   leakedIdentifiers,
   parseRecordLeaderOsoArgs,
@@ -49,7 +56,9 @@ const refuse = (problems: string[]) => {
 };
 
 const plan = parseRecordLeaderOsoArgs(process.argv.slice(2));
-console.log(`Plán: ${plan.side} 1 ${plan.symbol} LMT ${plan.entry}, SL ${plan.stopLoss}, TP ${plan.takeProfit}; trh ${plan.marketPrice}; zrušit po ${plan.holdMs} ms`);
+console.log(plan.scenario === 'fill'
+  ? `Plán FILL: ${plan.side} 1 ${plan.symbol} LMT ${plan.entry} (vyplní se), SL ${plan.stopLoss}, TP ${plan.takeProfit}; trh ${plan.marketPrice}; zavřít po ${plan.holdMs} ms; max. ztráta při SL ≈ ${(Math.abs(plan.entry - plan.stopLoss) * 2).toFixed(0)} USD`
+  : `Plán: ${plan.side} 1 ${plan.symbol} LMT ${plan.entry}, SL ${plan.stopLoss}, TP ${plan.takeProfit}; trh ${plan.marketPrice}; zrušit po ${plan.holdMs} ms`);
 const initialStatus = await readStatus();
 const initialProblems = recordLeaderOsoProblems(plan, initialStatus, Date.now());
 if (initialProblems.length) refuse(initialProblems);
@@ -153,7 +162,7 @@ const observe = async (): Promise<CleanupObservation> => {
 let placement: RecordPlacement = { kind: 'not-sent' };
 let placeInFlight: Promise<unknown> | null = null;
 let cleanup: Promise<CleanupDecision> | null = null;
-const runCleanup = () => cleanup ??= (async () => {
+const runCleanup = () => cleanup ??= (plan.scenario === 'fill' ? runFillCleanup() : (async () => {
   // Signál během REST zadání: nejdřív počkat na jeho výsledek (Tradovate odpovídal i > 15 s).
   if (placeInFlight) {
     step('čekám na dokončení zadání');
@@ -177,13 +186,45 @@ const runCleanup = () => cleanup ??= (async () => {
     await sleep(1_500);
   }
   return decision.kind === 'cancel' ? { kind: 'unverified', reason: 'příkazy se nepodařilo zrušit' } : decision;
-})();
+})());
+
+/** Fill scénář: zavřít pozici (ochrana zůstává do zavření), pak zrušit, co zbylo. */
+async function runFillCleanup(): Promise<CleanupDecision> {
+  if (placeInFlight) {
+    step('čekám na dokončení zadání');
+    await Promise.race([placeInFlight.catch(() => undefined), sleep(50_000)]);
+  }
+  if (placement.kind === 'uncertain') await sleep(10_000);
+  let liquidated = false;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const observation = await observe();
+    for (const order of observation.orders ?? []) ownOrderIds.add(Number(order.id));
+    step('stav leadera', observation);
+    const decision = decideFillCleanup(observation, placement);
+    if (decision.kind === 'clean') return { kind: 'clean' };
+    if (decision.kind === 'liquidate' && !liquidated) {
+      // Jeden pokus; výsledek rozhodne další čtení pozice, nikdy slepé opakování.
+      liquidated = true;
+      step('liquidate');
+      await broker.liquidatePosition!({ tag: `${tag}x`, accountId: plan.accountId, symbol: plan.symbol })
+        .then(result => step('liquidate výsledek', result))
+        .catch(reason => step('liquidate selhal', message(reason)));
+    } else if (decision.kind === 'cancel') {
+      for (const id of decision.ids) {
+        step('cancel', id);
+        await broker.cancelOrder(plan.accountId, id).catch(reason => step('cancel selhal', message(reason)));
+      }
+    }
+    await sleep(1_500);
+  }
+  return { kind: 'unverified', reason: 'leader po zavření není ověřeně flat bez příkazů' };
+}
 
 const finish = async (decision: CleanupDecision) => {
   unsubscribe();
   await writeRecording(decision).catch(reason => console.error(`Záznam neuložen: ${message(reason)}`));
   if (decision.kind === 'clean') {
-    console.log('Leader ověřeně čistý. Teď: npm run copier:mac -- reconcile (read-only) — leaderův příkaz zneplatnil kontrolu pozic.');
+    console.log(`${plan.scenario === 'fill' ? 'Pozice zavřena, ' : ''}Leader ověřeně čistý. Teď: npm run copier:mac -- reconcile (read-only) — leaderův příkaz zneplatnil kontrolu pozic.`);
     process.exit(0);
   }
   console.error(`POZOR: ${decision.reason}. Zkontroluj leadera v Tradovate${decision.kind === 'filled' ? ' (SL/TP ponechány)' : ' a ruč zruš/zavři, co tam zůstalo'}.`);
@@ -193,7 +234,8 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => { step(`signál ${signal} — uklízím`); void runCleanup().then(finish); });
 }
 
-const tag = `rec${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+// Fill scénář: liquidate dostane vlastní tag (`…x`) — proto o znak kratší.
+const tag = `rec${randomUUID().replace(/-/g, '').slice(0, 19)}`;
 const exitSide = plan.side === 'Buy' ? 'Sell' : 'Buy';
 const ownOrderIds = new Set<number>();
 try {
@@ -219,6 +261,18 @@ try {
   const shape = await observe();
   step('tvar po ack', shape);
   for (const order of shape.orders ?? []) ownOrderIds.add(Number(order.id));
+  if (plan.scenario === 'fill') {
+    // Čekat na fill vstupu; nohy pak přejdou ze Suspended na Working.
+    for (let waited = 0; waited < 10_000; waited += 500) {
+      const net = await broker.listPositions(plan.accountId)
+        .then(items => items.reduce((sum, position) => sum + Math.abs(position.netQuantity), 0))
+        .catch(() => null);
+      if (net != null && net !== 0) { step('vstup vyplněn', { net }); break; }
+      await sleep(500);
+    }
+    const legs = await observe();
+    step('tvar po fillu', legs);
+  }
   await sleep(plan.holdMs);
 } catch (reason) {
   placeInFlight = null;
@@ -238,8 +292,9 @@ async function writeRecording(decision: CleanupDecision) {
     .map(item => ({ t: item.t, event: JSON.parse(JSON.stringify(item.event, (key, value) =>
       key === 'tag' ? undefined : key === 'accountId' ? (accountMap.get(Number(value)) ?? 0) : value)) }));
   const recording = {
-    version: 2,
+    version: 3,
     recordedAt: new Date(startedAt).toISOString(),
+    scenario: plan.scenario,
     symbol: plan.symbol, side: plan.side,
     prices: { entry: plan.entry, stopLoss: plan.stopLoss, takeProfit: plan.takeProfit, market: plan.marketPrice },
     outcome: decision,

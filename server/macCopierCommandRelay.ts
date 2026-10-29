@@ -1,3 +1,4 @@
+import { isLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace.js';
 import type { TvBarsCapture } from '../lib/tradingViewBars.js';
 import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery } from './recoverableCopierDelivery.js';
 import type { RelayDeliveryStore } from './copierRelayDeliveryStore.js';
@@ -345,6 +346,8 @@ export function startMacCopierCommandRelay(options: {
                   ...(remote.command.type === 'arm-live'
                     ? { deadlineAt: expiresAt - COPIER_COMMAND_ACK_RESERVE_MS }
                     : {}),
+                  // Ruční vstup (fáze 1b): platnost do expiresAt bez ACK rezervy (§4).
+                  ...(isLeaderEntryPlaceCommand(remote.command) ? { deadlineAt: expiresAt } : {}),
                 };
                 result = await options.agent.execute(remote.command, executionContext);
               } catch (error) {

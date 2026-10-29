@@ -1,4 +1,5 @@
 import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
+import type { LeaderEntryPlaceCommand, LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LiveSnapshot } from './tradecopiaLiveService';
 
 export type CopyReplicationMode = 'off' | 'on-submit' | 'on-fill';
@@ -245,15 +246,18 @@ export type LiveCopyTradingCommand =
   /** Zavře potvrzenou kopii followera a vyřadí jej jen do čistého konce aktuálního obchodu. */
   | { type: 'flatten-follower-trade'; groupId: string; accountId: number; operationId: string }
   /** Ruční uzavření stuck operace — nikdy neposílá broker příkaz. */
-  | { type: 'resolve-stuck-operation'; groupId: string; kind: 'place' | 'bracket' | 'oso' | 'cancel-or-modify'; key: string; reason: string }
+  | { type: 'resolve-stuck-operation'; groupId: string; kind: 'place' | 'bracket' | 'oso' | 'cancel-or-modify' | 'manual-entry'; key: string; reason: string }
   | { type: 'flatten-group'; groupId: string; operationId: string }
   | { type: 'cancel-order'; groupId: string; orderId: number }
   /** Fáze 1a obchodování z grafu: jen náhled, worker nic nezapíše (lib/leaderEntryPreview.ts). */
-  | LeaderEntryPreviewCommand;
+  | LeaderEntryPreviewCommand
+  /** Fáze 1b: ruční OSO na leadera (lib/leaderEntryPlace.ts); jediný risk-zvyšující příkaz z appky. */
+  | LeaderEntryPlaceCommand;
 
 export type LiveCopyTradingCommandResult =
   | { type: 'configuration'; group: CopyGroupConfig }
   | LeaderEntryPreviewResult
+  | LeaderEntryPlaceResult
   | {
     type: 'flatten';
     operationId: string;

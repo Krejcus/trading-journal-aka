@@ -17,6 +17,14 @@ export interface RecordLeaderOsoPlan {
   marketPrice: number;
   holdMs: number;
   confirm: boolean;
+  /**
+   * `cancel` = Limit daleko od trhu, zrušení bez fillu (první záznam).
+   * `fill` = marketable Limit, vyplní se; zaznamená přechod nohou
+   * Suspended → Working, pak leadera zavře (liquidate) a ověří flat.
+   */
+  scenario: 'cancel' | 'fill';
+  /** Účet mimo skupinu workeru (např. Tradeify připojení) — nikdy follower skupiny. */
+  allowNonGroupAccount: boolean;
 }
 
 /** Vstup i TP musí být aspoň tolik od trhu (podíl ceny) — žádná noha nesmí jít hned vyplnit. */
@@ -25,6 +33,11 @@ export const RECORD_MIN_DISTANCE_RATIO = 0.015;
 export const RECORD_MAX_ANCHOR_DIFF_RATIO = 0.003;
 export const RECORD_TICK_SIZE = 0.25;
 const MAX_HOLD_MS = 15_000;
+/** Fill scénář: marketable Limit nejvýš tak daleko za trhem (neplatit libovolně). */
+export const RECORD_FILL_MAX_SLIP_RATIO = 0.002;
+/** Fill scénář: SL od vstupu v rozmezí (nesmí se trefit během držení, riziko omezené). */
+export const RECORD_FILL_SL_MIN_RATIO = 0.003;
+export const RECORD_FILL_SL_MAX_RATIO = 0.01;
 
 export function parseRecordLeaderOsoArgs(argv: readonly string[]): RecordLeaderOsoPlan {
   const value = (name: string) => {
@@ -46,11 +59,15 @@ export function parseRecordLeaderOsoArgs(argv: readonly string[]): RecordLeaderO
   if (!Number.isSafeInteger(accountId) || accountId <= 0) throw new Error('--account musí být id účtu');
   const holdMs = value('hold-ms') === undefined ? 4_000 : number('hold-ms');
   if (holdMs < 1_000 || holdMs > MAX_HOLD_MS) throw new Error(`--hold-ms musí být 1000–${MAX_HOLD_MS}`);
+  const scenario = value('scenario') ?? 'cancel';
+  if (scenario !== 'cancel' && scenario !== 'fill') throw new Error('--scenario musí být cancel nebo fill');
   return {
     accountId, symbol, side,
     entry: number('entry'), stopLoss: number('sl'), takeProfit: number('tp'),
     marketPrice: number('market-price'), holdMs,
     confirm: argv.includes('--confirm'),
+    scenario,
+    allowNonGroupAccount: argv.includes('--non-group-account'),
   };
 }
 
@@ -64,8 +81,8 @@ export function recordLeaderOsoProblems(plan: RecordLeaderOsoPlan, status: unkno
   const problems: string[] = [];
   const root = (status ?? {}) as {
     controller?: Record<string, unknown>;
-    group?: { leaderAccountId?: unknown } | null;
     marketPrices?: unknown[];
+    group?: { leaderAccountId?: unknown; followers?: Array<{ accountId?: unknown }> } | null;
   };
   const controller = root.controller ?? {};
   if (controller.armed !== false) problems.push('kopírka není prokazatelně DISARMED');
@@ -82,7 +99,11 @@ export function recordLeaderOsoProblems(plan: RecordLeaderOsoPlan, status: unkno
   if (resume && (resume.phase === 'waiting' || resume.phase === 'ready')) problems.push('běží automatické pokračování po výpadku');
   if (Array.isArray(controller.divergentAccounts) && controller.divergentAccounts.length) problems.push('skupina má divergenci');
   if (Array.isArray(controller.workingOrderAccounts) && controller.workingOrderAccounts.length) problems.push('ve skupině jsou working orders');
-  if (root.group?.leaderAccountId !== plan.accountId) problems.push('účet není leader skupiny workeru');
+  const groupMembers = [root.group?.leaderAccountId, ...(root.group?.followers ?? []).map(follower => follower.accountId)];
+  if (plan.allowNonGroupAccount) {
+    // Účet mimo skupinu (jiné připojení): follower skupiny by kopírce rozbil pozice.
+    if (groupMembers.includes(plan.accountId)) problems.push('--non-group-account: účet je ve skupině workeru');
+  } else if (root.group?.leaderAccountId !== plan.accountId) problems.push('účet není leader skupiny workeru');
 
   for (const [name, price] of [['entry', plan.entry], ['sl', plan.stopLoss], ['tp', plan.takeProfit]] as const) {
     if (!(price > 0) || !onTick(price)) problems.push(`--${name} není kladná cena na tick ${RECORD_TICK_SIZE}`);
@@ -95,6 +116,23 @@ export function recordLeaderOsoProblems(plan: RecordLeaderOsoPlan, status: unkno
   }
   const market = anchor ?? plan.marketPrice;
   const distance = market * RECORD_MIN_DISTANCE_RATIO;
+  if (plan.scenario === 'fill') {
+    const slip = market * RECORD_FILL_MAX_SLIP_RATIO;
+    const slDistance = Math.abs(plan.entry - plan.stopLoss);
+    if (plan.side === 'Buy') {
+      if (!(plan.entry >= market && plan.entry <= market + slip)) problems.push(`fill: Buy limit musí být na trhu nebo nad ním, nejvýš o ${slip.toFixed(0)} b`);
+      if (!(plan.stopLoss < plan.entry)) problems.push('SL musí být pod vstupem');
+      if (!(plan.takeProfit >= market + distance)) problems.push(`TP (Sell limit) musí být aspoň ${distance.toFixed(0)} b nad trhem`);
+    } else {
+      if (!(plan.entry <= market && plan.entry >= market - slip)) problems.push(`fill: Sell limit musí být na trhu nebo pod ním, nejvýš o ${slip.toFixed(0)} b`);
+      if (!(plan.stopLoss > plan.entry)) problems.push('SL musí být nad vstupem');
+      if (!(plan.takeProfit <= market - distance)) problems.push(`TP (Buy limit) musí být aspoň ${distance.toFixed(0)} b pod trhem`);
+    }
+    if (!(slDistance >= market * RECORD_FILL_SL_MIN_RATIO && slDistance <= market * RECORD_FILL_SL_MAX_RATIO)) {
+      problems.push(`fill: SL musí být ${(market * RECORD_FILL_SL_MIN_RATIO).toFixed(0)}–${(market * RECORD_FILL_SL_MAX_RATIO).toFixed(0)} b od vstupu`);
+    }
+    return problems;
+  }
   if (plan.side === 'Buy') {
     if (!(plan.entry <= market - distance)) problems.push(`Buy limit musí být aspoň ${distance.toFixed(0)} b pod trhem`);
     if (!(plan.stopLoss < plan.entry)) problems.push('SL musí být pod vstupem');
@@ -170,6 +208,34 @@ export function decideRecordCleanup(observation: CleanupObservation, placement: 
       return { kind: 'unverified', reason: 'zadané příkazy nejsou pozorovaně zrušené' };
     }
   }
+  return { kind: 'clean' };
+}
+
+export type FillCleanupDecision =
+  | { kind: 'unverified'; reason: string }
+  /** Pozice je otevřená: zavřít ji (liquidate zruší i nohy). Nohy se nad pozicí nikdy neruší samostatně. */
+  | { kind: 'liquidate' }
+  | { kind: 'cancel'; ids: string[] }
+  | { kind: 'clean' };
+
+/**
+ * Úklid fill scénáře. Otevřená pozice = zavřít (ochrana do té doby zůstává).
+ * Flat: nevyplněný vstup zrušit; nohy rušit jen nad ověřeně flat účtem
+ * a vstupem, který už nepracuje. „Čisto“ jen po ACK s id: flat a nic otevřeného.
+ */
+export function decideFillCleanup(observation: CleanupObservation, placement: RecordPlacement): FillCleanupDecision {
+  if (observation.orders == null || observation.netPosition == null) {
+    return { kind: 'unverified', reason: 'stav leadera nejde přečíst' };
+  }
+  if (observation.netPosition !== 0) return { kind: 'liquidate' };
+  const open = observation.orders.filter(order => OPEN.has(order.status));
+  const entryId = placement.kind === 'acknowledged' ? placement.entryId : null;
+  const legIds = new Set(placement.kind === 'acknowledged' ? placement.legIds : []);
+  const openParents = open.filter(order => order.id === entryId || (!order.parentOrderId && !legIds.has(order.id)
+    && (placement.kind !== 'uncertain' || order.side === placement.entrySide)));
+  if (openParents.length) return { kind: 'cancel', ids: openParents.map(order => order.id) };
+  if (open.length) return { kind: 'cancel', ids: open.map(order => order.id) };
+  if (placement.kind === 'uncertain') return { kind: 'unverified', reason: 'výsledek zadání nejistý — zkontroluj Tradovate' };
   return { kind: 'clean' };
 }
 

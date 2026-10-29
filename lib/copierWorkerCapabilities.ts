@@ -21,6 +21,14 @@ export const supportsCopierTransportAutoResume = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY);
 
+/** Worker umí odeslat ruční vstup z grafu na leadera (fáze 1b, 29. 10. 2026). */
+export const COPIER_MANUAL_ENTRY_CAPABILITY = 'manual-entry-v1';
+
+export const supportsCopierManualEntry = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ENTRY_CAPABILITY);
+
 /** Worker umí smazat svou skupinu a běžet bez skupiny (11. 10. 2026). */
 export const COPIER_GROUP_DELETE_CAPABILITY = 'group-delete-v1';
 

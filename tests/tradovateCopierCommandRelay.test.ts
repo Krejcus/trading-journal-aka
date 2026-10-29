@@ -77,7 +77,7 @@ function enqueueDb(
         };
         const updateCalls: Array<[string, unknown[]]> = [];
         const updateQuery: Record<string, unknown> = { error: null };
-        for (const method of ['eq', 'in', 'lte']) {
+        for (const method of ['eq', 'in', 'lte', 'contains']) {
           updateQuery[method] = (...args: unknown[]) => { updateCalls.push([method, args]); return updateQuery; };
         }
         return {
@@ -253,10 +253,16 @@ describe('Tradovate copier command relay', () => {
       command: { type: 'disarm' },
       now: Date.parse('2026-08-21T12:00:00.000Z'),
     });
-    expect(updates).toHaveLength(1);
+    // ARM/SHADOW + čekající ruční vstupy (fáze 1b) — dva nezávislé updaty.
+    expect(updates).toHaveLength(2);
     expect(updates[0].value).toEqual(expect.objectContaining({
       status: 'expired', error: 'superseded-by-brake',
     }));
+    expect(updates[1].value).toEqual(expect.objectContaining({ status: 'expired', error: 'superseded-by-brake' }));
+    expect(updates[1].calls).toEqual(expect.arrayContaining([
+      ['eq', ['command_type', 'copy-command']],
+      ['contains', ['payload', { command: { type: 'place-leader-entry' } }]],
+    ]));
     expect(updates[0].calls).toEqual(expect.arrayContaining([
       ['eq', ['device_id', deviceId]],
       ['eq', ['status', 'pending']],

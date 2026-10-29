@@ -1,4 +1,5 @@
 import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview.js';
+import { validateLeaderEntryPlace } from '../lib/leaderEntryPlace.js';
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -20,7 +21,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -397,6 +398,7 @@ export async function startLocalCopierExecutionAgent(
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
     capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY,
+      ...(typeof options.controller.placeLeaderEntry === 'function' ? [COPIER_MANUAL_ENTRY_CAPABILITY] : []),
       ...(options.autoRearmAfterTransport === true && autoResumeAdmission ? [COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY] : []),
       ...(typeof options.controller.retireGroup === 'function' && options.previewGroupAccounts
         ? [COPIER_GROUP_DELETE_CAPABILITY]
@@ -872,6 +874,11 @@ export async function startLocalCopierExecutionAgent(
         if (command.groupId !== group.id) {
           throw new Error('Vyřešení operace míří na jinou skupinu, než jakou má lokální execution agent');
         }
+        if (command.kind === 'manual-entry') {
+          // Ruční vstup z grafu (fáze 1b): vlastní durable záznam, ne outbox kopírky.
+          await options.controller.waiveManualEntry({ operationId: command.key, reason: command.reason });
+          return { type: 'configuration', group };
+        }
         await options.controller.waiveStuckOperation({
           kind: command.kind,
           key: command.key,
@@ -889,6 +896,29 @@ export async function startLocalCopierExecutionAgent(
           return { ...preview, wouldPlace: null, blockers: [...preview.blockers, { code: 'brake-after-request', text: 'Po zadání náhledu přišlo vypnutí kopírky nebo zámek.' }] };
         }
         return preview;
+      }
+      case 'place-leader-entry': {
+        // Fáze 1b: jediný risk-zvyšující příkaz z appky (INV-MANUAL-01).
+        // Brzda zadaná po požadavku ho zneplatní dřív, než controller cokoli
+        // zkusí; controller pak znovu projde všemi branami náhledu.
+        const entry = validateLeaderEntryPlace(command);
+        // Jen přes relay: loopback by obešel idempotenci, rate limit, denní
+        // strop i zneplatnění brzdou na serveru (P3).
+        if (context.source !== 'relay') throw new Error('manual-entry-relay-only');
+        if (context.deadlineAt == null) {
+          return {
+            type: 'leader-entry-placed', operationId: entry.operationId, status: 'blocked', checkedAt: Date.now(),
+            blockers: [{ code: 'no-deadline', text: 'Příkaz nemá platnost — nic se neodeslalo.' }],
+          };
+        }
+        if (context.createdAt != null && context.createdAt <= lastBrakeCreatedAt + Math.max(0, context.clockSkewReserveMs ?? 0)) {
+          return {
+            type: 'leader-entry-placed', operationId: entry.operationId, status: 'blocked', checkedAt: Date.now(),
+            blockers: [{ code: 'brake-after-request', text: 'Po zadání vstupu přišlo vypnutí kopírky nebo zámek.' }],
+          };
+        }
+        if (typeof options.controller.placeLeaderEntry !== 'function') throw new Error('unsupported-copy-command:place-leader-entry');
+        return options.controller.placeLeaderEntry(entry, { deadlineAt: context.deadlineAt });
       }
       default: {
         // Neznámý příkaz od novější appky nikdy nesmí vrátit „ok“ bez výsledku.
@@ -1219,6 +1249,10 @@ export async function startLocalCopierExecutionAgent(
         options.onSnapshotTest(command.requestId, { repairCamera: command.repairCamera === true });
         return;
       case 'resolve-stuck-operation':
+        if (command.kind === 'manual-entry') {
+          await options.controller.waiveManualEntry({ operationId: command.key, reason: command.reason });
+          return;
+        }
         await options.controller.waiveStuckOperation({
           kind: command.kind,
           key: command.key,

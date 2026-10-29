@@ -136,7 +136,7 @@ async function resolveStuck(): Promise<void> {
     throw new Error('Chybí přesné potvrzení ruční resolution');
   }
   const kind = required('kind');
-  if (!['place', 'bracket', 'oso', 'cancel-or-modify'].includes(kind)) {
+  if (!['place', 'bracket', 'oso', 'cancel-or-modify', 'manual-entry'].includes(kind)) {
     throw new Error('--kind musí být place, bracket, oso nebo cancel-or-modify');
   }
   const key = required('key');
