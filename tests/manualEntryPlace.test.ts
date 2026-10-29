@@ -432,6 +432,31 @@ describe('fáze 1b: oprava po oponentuře diffu (M1–M3)', () => {
     expect(ctx.broker.cancelRequestCount('pp-e')).toBe(1);
   });
 
+  it('brzda během ukládání kopie followera: kopie zneplatněná (waived) → vlastní vstup se zruší', async () => {
+    const memory = createMemoryCopierStore();
+    const ref: { controller: CopierRuntimeController | null } = { controller: null };
+    const store: CopierStore = {
+      ...memory,
+      commit: async (snapshot, revision) => {
+        if (ref.controller && (snapshot.osoOutbox ?? []).some(entry => entry.request.accountId === FOLLOWER && entry.status === 'sending')) {
+          ref.controller.disarm('manual');
+          ref.controller = null;
+        }
+        return memory.commit(snapshot, revision);
+      },
+    };
+    const ctx = await setup({ store });
+    ref.controller = ctx.controller;
+    const result = await ctx.place(ctx.command());
+    expect(result.status).toBe('acknowledged');
+    await sleep(60);
+    ctx.clock.now += 2_000;
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    expect(followerOso(ctx.broker)).toEqual([]);
+    expect(ctx.broker.cancelRequestCount(result.entryBrokerOrderId!)).toBe(1);
+  });
+
   it('nevyřešený ruční vstup se v LIVE ukáže jako položka k ručnímu vyřešení', async () => {
     const { manualEntryDisplayStuckOperations } = await import('../lib/manualEntryDisplay');
     expect(manualEntryDisplayStuckOperations({ manualEntries: [

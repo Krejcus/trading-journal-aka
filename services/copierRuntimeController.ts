@@ -15704,8 +15704,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const ownPairOperationId = ownManualEntryOrderIds.get(pair.entryOrderId);
       if (ownPairOperationId) {
         eventTail = eventTail.then(() => {
+          // Za kopii platí jen položka, jejíž příkaz u brokera může existovat;
+          // zneplatněná (`waived`) nebo odmítnutá kopie followera nic nemá.
           const copied = [...currentRuntime().osoOutbox.values()]
-            .some(entry => entry.leaderEntryOrderId === pair.entryOrderId);
+            .some(entry => entry.leaderEntryOrderId === pair.entryOrderId
+              && entry.status !== 'waived' && entry.status !== 'rejected');
           if (!copied) cancelOwnManualEntry(ownPairOperationId, 'followeři vstup nedostali (kopírka vypnutá nebo kopie zablokovaná)');
         }).catch(reason => failClosed(errorOf(reason), { autoClose: false }));
       }
