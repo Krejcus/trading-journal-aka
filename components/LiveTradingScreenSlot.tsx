@@ -4,6 +4,9 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { QuantumSpinner } from './QuantumLoader';
 import type { LiveTradingCopierState, LiveTradingTab } from './LiveTradingScreen';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
+import type { LiveTradeGroup, LiveTradeTarget } from '../lib/liveTradeTarget';
+import type { LiveChartPosition } from '../lib/liveChartPosition';
+import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 
 /**
  * Obálka LIVE → Graf pro desk. Graf s workspace je těžký, a tak se načítá
@@ -40,6 +43,16 @@ interface Props {
   onNavigate: (tab: TradovateLiveTab) => void;
   navigationBlocked?: boolean;
   copier: LiveTradingCopierState;
+  /** Skupina a účty ze stavu workeru; null = žádná skupina (bez čipu a výběru účtu). */
+  group?: LiveTradeGroup | null;
+  /** Obsahový klíč skupiny (porovnání bez překreslování po každém tiku desku). */
+  groupKey?: string;
+  position?: LiveChartPosition | null;
+  /** Vypnutí kopírky v hlavičce; null = kopírka prokazatelně vypnutá. */
+  disarm?: LiveChartDisarm | null;
+  /** Stabilní funkce desku (safety cesta). */
+  onDisarm?: () => Promise<{ tone: 'info' | 'error'; text: string }>;
+  onTargetChange?: (target: LiveTradeTarget) => void;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -100,4 +113,7 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   left.open === right.open && left.isDark === right.isDark && left.onNavigate === right.onNavigate
   && left.navigationBlocked === right.navigationBlocked
   && sameTabs(left.tabs, right.tabs) && sameCopier(left.copier, right.copier)
+  && (left.groupKey ?? '') === (right.groupKey ?? '') && (left.position?.key ?? '') === (right.position?.key ?? '')
+  && left.disarm?.label === right.disarm?.label && left.disarm?.unverified === right.disarm?.unverified
+  && left.onDisarm === right.onDisarm && left.onTargetChange === right.onTargetChange
 ));

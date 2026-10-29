@@ -14,6 +14,7 @@ const LIVE_CHART_FILES = [
   'components/LiveGroupChip.tsx',
   'lib/liveOrderTicket.ts',
   'lib/liveTradeTarget.ts',
+  'lib/liveChartPosition.ts',
 ];
 
 describe('LIVE → Graf: výchozí záložka', () => {
@@ -102,10 +103,12 @@ describe('LIVE → Graf je jen UI', () => {
     expect(ticket).not.toMatch(/onSubmit|executeAgent|placeOrder/);
   });
 
-  it('ukázkové účty jsou jen v dev buildu', () => {
+  it('ukázkové účty jen v dev buildu s přepínačem, nikdy jako náhrada za skutečnou skupinu', () => {
     const screen = source('components/LiveTradingScreen.tsx');
-    expect(screen).toMatch(/const SAMPLE_GROUP_ENABLED = import\.meta\.env\.DEV;/);
-    expect(screen).toMatch(/SAMPLE_GROUP_ENABLED \? \{ \.\.\.SAMPLE_LIVE_TRADE_GROUP, armed \} : null/);
+    expect(screen).toMatch(/if \(!import\.meta\.env\.DEV\) return false;/);
+    expect(screen).toMatch(/getItem\('at:dev:live-chart-sample'\) === '1'/);
+    // Skutečná skupina má přednost; ukázka nemá ověřený stav kopírky.
+    expect(screen).toMatch(/workerGroup \?\? \(sample \? \{ \.\.\.SAMPLE_LIVE_TRADE_GROUP, armed: null \} : null\)/);
     for (const file of ['components/LiveOrderTicket.tsx', 'components/LiveGroupChip.tsx', 'components/TradovateLiveDesk.tsx']) {
       expect(source(file), file).not.toMatch(/SAMPLE_LIVE_TRADE_GROUP/);
     }

@@ -19,11 +19,12 @@ import {
   type TicketQuote,
   type TicketSide,
 } from '../lib/liveOrderTicket';
+import type { LiveChartPosition, LiveChartPositionSummary } from '../lib/liveChartPosition';
 import {
   GROUP_TARGET,
   allTradeAccounts,
   followerInCopy,
-  limitAccount,
+  limitAccounts,
   participatingFollowers,
   soloTradeBlockReason,
   targetAccount,
@@ -59,6 +60,45 @@ const TYPE_LABEL: Record<TicketOrderType, string> = { market: 'Market', limit: '
 const UNIT_LABEL: Record<TicketBracketUnits, string> = { pts: 'Body', ticks: 'Ticky', usd: '$', price: 'Cena' };
 const UNIT_SUFFIX: Record<TicketBracketUnits, string> = { pts: 'b', ticks: 't', usd: '$', price: '' };
 
+/**
+ * Živá pozice cíle panelu (jen zobrazení). Otevřené P&L je z brokera, ne
+ * z ceny grafu. BE a Zavřít pozici zatím nic nedělají — odesílání příkazů
+ * je samostatný krok přes jádro kopírky.
+ */
+const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummary; muted: string; ink: string; field: string }> = ({ isDark, summary, muted, ink, field }) => {
+  const long = summary.side === 'long';
+  const price = (value: number | null) => (value == null ? '—' : formatPrice(value));
+  return <div className={`grid gap-1.5 rounded-[11px] border p-2.5 ${field}`}>
+    <div className="flex items-baseline gap-2">
+      <b className={`text-[11px] font-black uppercase tracking-[0.06em] ${long ? 'text-blue-500' : 'text-rose-500'}`}>
+        {summary.kind === 'position' ? `${long ? 'Long' : 'Short'} ${summary.quantity}` : `Čeká ${long ? 'BUY' : 'SELL'} ${summary.entryType ?? ''} ${summary.quantity}`}
+      </b>
+      <span className={`font-mono text-[10.5px] ${muted}`}>@ {price(summary.entry)}</span>
+      <span className="flex-1" />
+      {summary.scopeLabel
+        ? <span className="rounded border border-violet-500/45 px-1 text-[9px] font-black text-violet-500" title="Kopírka je vypnutá — souhrn jen tohoto účtu, ne celé skupiny">{summary.scopeLabel}</span>
+        : summary.accounts > 1 && <span className={`text-[9.5px] font-bold ${muted}`}>{summary.accounts} účty</span>}
+    </div>
+    {summary.kind === 'position' && <div className="flex items-baseline gap-2">
+      <b className={`font-mono text-[22px] font-black leading-none ${summary.openPnl == null ? muted : summary.openPnl < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(summary.openPnl)}</b>
+      <span className={`text-[9.5px] font-bold ${muted}`} title="Otevřené P&L z brokera (ne z ceny grafu)">z brokera</span>
+    </div>}
+    <div className={`flex gap-3 font-mono text-[10px] ${ink}`}>
+      <span>SL {price(summary.stop)}</span><span>TP {price(summary.target)}</span>
+      <span className={`flex-1 text-right font-sans font-bold ${muted}`}>{summary.protection}</span>
+    </div>
+    {summary.kind === 'position' && <div className="grid grid-cols-2 gap-1.5">
+      {['SL na BE', 'Zavřít pozici'].map(text => <button
+        key={text}
+        type="button"
+        disabled
+        title="Zatím bez akce — odesílání příkazů přijde jako samostatný krok"
+        className={`flex h-8 items-center justify-center gap-1 rounded-lg border text-[10.5px] font-extrabold opacity-50 ${isDark ? 'border-white/10' : 'border-slate-900/10'}`}
+      ><Lock size={10} />{text}</button>)}
+    </div>}
+  </div>;
+};
+
 interface Props {
   isDark: boolean;
   instrument: TicketInstrument;
@@ -77,6 +117,8 @@ interface Props {
   onTarget: (target: LiveTradeTarget) => void;
   /** Odkud a jak stará je orientační cena (data grafu, ne kotace brokera). */
   quoteInfo: { source: string | null; capturedAt: number | null; stale: boolean };
+  /** Živá pozice cíle panelu (z brokera); null = bez dat. */
+  position?: LiveChartPosition | null;
   onNewDraft: (side: TicketSide) => void;
   onClose: () => void;
 }
@@ -112,7 +154,7 @@ const NumberField: React.FC<{
 
 const LiveOrderTicket: React.FC<Props> = ({
   isDark, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
-  group, target, onTarget, quoteInfo, onNewDraft, onClose,
+  group, target, onTarget, quoteInfo, position = null, onNewDraft, onClose,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -142,8 +184,10 @@ const LiveOrderTicket: React.FC<Props> = ({
     : 'shadow-[0_22px_40px_-18px_rgba(15,23,42,0.4),0_0_0_1px_rgba(15,23,42,0.06),inset_0_1px_0_rgba(255,255,255,0.95)]';
 
   const m = draft && quote ? ticketMetrics(draft, instrument, quote) : null;
-  const limit = group ? limitAccount(group, target) : null;
-  const problems = draft && quote ? ticketProblems(draft, instrument, quote, limit ? { limitUsd: limit.dayLimitUsd, dayPnlUsd: limit.dayPnlUsd } : null) : [];
+  const limits = group ? limitAccounts(group, target).map(({ account, multiplier }) => ({
+    name: account.name, remainingUsd: account.dayRemaining.value, stale: account.dayRemaining.stale, multiplier,
+  })) : null;
+  const problems = draft && quote ? ticketProblems(draft, instrument, quote, limits) : [];
   const groupMultiplier = group ? targetMultiplier(group, target) : 1;
   const multiplier = single || scope === 'account' ? 1 : groupMultiplier;
   const sideColor = draft?.side === 'sell' ? '#e11d48' : '#2563eb';
@@ -185,11 +229,14 @@ const LiveOrderTicket: React.FC<Props> = ({
   const sampleTag = <span className="rounded bg-amber-500/20 px-1.5 py-px text-[9px] font-black uppercase tracking-[0.06em] text-amber-600">ukázka</span>;
   const quoteAge = quoteInfo.capturedAt != null ? Math.max(0, Math.round((Date.now() - quoteInfo.capturedAt) / 1000)) : null;
 
-  const dayValue = (account: LiveTradeAccount) => (
-    <span className={`font-mono text-[9.5px] font-semibold ${account.dayPnlUsd < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(account.dayPnlUsd)}</span>
-  );
+  const dayValue = (account: LiveTradeAccount) => (account.dayPnl.value == null
+    ? <span className={`font-mono text-[9.5px] ${tone.muted}`} title="Dnešní výsledek neznámý">—</span>
+    : <span
+      className={`font-mono text-[9.5px] font-semibold ${account.dayPnl.stale ? 'opacity-55' : ''} ${account.dayPnl.value < 0 ? 'text-rose-500' : 'text-emerald-500'}`}
+      title={account.dayPnl.stale ? 'Poslední známá hodnota, ne čerstvá' : undefined}
+    >{formatUsd(account.dayPnl.value)}</span>);
   const accountTag = (account: LiveTradeAccount) => {
-    const text = account.role === 'leader' ? 'leader' : account.role === 'outside' ? 'mimo skupinu' : account.excluded ? 'vyřazen' : 've skupině';
+    const text = account.role === 'leader' ? 'leader' : account.role === 'outside' ? 'mimo skupinu' : account.excluded ? 'vyřazen' : account.inactiveReason ? 'nekopíruje' : 've skupině';
     const accent = account.role === 'outside' || account.excluded;
     return <em className={`rounded border px-1 text-[7.5px] font-black not-italic uppercase leading-[13px] tracking-[0.07em] ${accent ? 'border-violet-500/45 text-violet-500' : `${tone.line} ${tone.muted}`}`}>{text}</em>;
   };
@@ -243,14 +290,15 @@ const LiveOrderTicket: React.FC<Props> = ({
     let total = 0;
     const rows = accounts.map(account => {
       const gets = account.role === 'leader' || (group.armed !== false && followerInCopy(account));
-      const qty = m && gets ? m.quantity * account.multiplier : null;
-      const value = m?.stopLossUsd != null && gets ? m.stopLossUsd * account.multiplier : null;
+      // Kopírka bere násobek dolů (floor) — stejně jako `copierEngine.followerQuantity`.
+      const qty = m && gets ? (account.role === 'leader' ? m.quantity : Math.floor(m.quantity * account.multiplier)) : null;
+      const value = m?.stopLossUsd != null && gets && qty != null && m.quantity > 0 ? m.stopLossUsd * (qty / m.quantity) : null;
       if (value != null) total += value;
       const status = account.role === 'leader' ? 'bg-blue-500' : account.excluded || group.armed === false ? 'bg-slate-400' : 'bg-emerald-500';
       return <div key={account.id} className="grid grid-cols-[8px_minmax(0,1fr)_auto_72px] items-center gap-1.5 py-[3px] text-[10.5px]">
         <i className={`h-[7px] w-[7px] rounded-full ${status}`} />
         <span className={`truncate font-bold ${tone.muted}`}>{account.name}</span>
-        <span className={`font-mono text-[10px] ${tone.muted}`}>{account.excluded ? 'vyřazen' : qty != null ? `${qty} ks` : '—'}</span>
+        <span className={`font-mono text-[10px] ${tone.muted}`}>{account.excluded ? 'vyřazen' : account.inactiveReason ? 'nekopíruje' : qty != null ? `${qty} ks` : '—'}</span>
         <b className={`text-right font-mono text-[10.5px] ${value == null ? tone.muted : value < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(value)}</b>
       </div>;
     });
@@ -293,6 +341,8 @@ const LiveOrderTicket: React.FC<Props> = ({
     </div>
 
     <div className="-mx-2.5 flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto px-2.5 pb-0.5">
+      {position?.summary && <PositionCard isDark={isDark} summary={position.summary} muted={tone.muted} ink={tone.ink} field={tone.field} />}
+      {position?.issue && <div className={`rounded-[9px] border px-2.5 py-2 text-[10.5px] font-bold ${tone.field} ${tone.muted}`}>{position.issue}</div>}
       {!quote ? (
         <p className={`m-0 py-6 text-center text-[11px] ${tone.muted}`}>Čekám na cenu z grafu…</p>
       ) : <>

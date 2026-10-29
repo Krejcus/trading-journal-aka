@@ -1,7 +1,7 @@
 import React, { useSyncExternalStore } from 'react';
 import { LiveOpenPnlValue, LiveTvMark, TV_LIVE_PNL_TITLE } from '../LiveOpenPnlValue';
 import { tradeCardTvLegs } from '../../lib/tvLivePnl';
-import type { JournalLiveTarget, JournalLiveView } from '../../lib/journalLivePosition';
+import { journalLiveIssueLabel, type JournalLiveTarget, type JournalLiveView } from '../../lib/journalLivePosition';
 import type { JournalLivePositionStore } from '../../lib/journalLivePositionStore';
 import { formatReadAge } from '../../lib/liveReadFreshness';
 
@@ -30,7 +30,7 @@ export default function DayLivePositionChip({ store, compact = false }: { store:
   if (view.options.length === 0) return null;
   // Bez pozice a bez čekajícího vstupu není co ukázat (výběr účtu taky ne).
   if (view.verified && !model) return null;
-  const issueText = issueLabel(view);
+  const issueText = journalLiveIssueLabel(view);
 
   const shell = `pointer-events-auto absolute z-30 flex max-w-[calc(100%-24px)] flex-wrap items-center gap-x-2.5 gap-y-1 rounded-lg border border-[var(--glass-border,var(--border-subtle))] px-2.5 py-1.5 text-[12px] shadow-lg ${compact ? 'left-2 bottom-8' : 'left-3 bottom-9'}`;
   const fill: React.CSSProperties = { background: 'var(--menu-bg, var(--bg-card))' };
@@ -88,18 +88,6 @@ export default function DayLivePositionChip({ store, compact = false }: { store:
       {view.options.length > 2 && <TargetSelect view={view} store={store} />}
     </div>
   );
-}
-
-function issueLabel(view: JournalLiveView): string | null {
-  const age = view.readAgeMs != null ? ` · čtení před ${formatReadAge(view.readAgeMs)}` : '';
-  switch (view.issue) {
-    case 'stale': return `Pozice neověřené${age}`;
-    case 'missing-account': return 'Pozice neověřené · účet skupiny chybí v datech';
-    case 'orders-stale': return 'Příkazy neověřené';
-    case 'settling': return 'Kopie dobíhá…';
-    case 'divergent': return view.copierOff ? 'Kopírka vypnutá · účty se liší, vyber účet' : 'Účty skupiny se liší · viz LIVE';
-    default: return null;
-  }
 }
 
 function TargetSelect({ view, store }: { view: JournalLiveView; store: JournalLivePositionStore }) {

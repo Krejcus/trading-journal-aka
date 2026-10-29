@@ -4,6 +4,7 @@ import {
   SAMPLE_LIVE_TRADE_GROUP,
   effectiveTarget,
   limitAccount,
+  limitAccounts,
   participatingFollowers,
   soloTradeBlockReason,
   targetMultiplier,
@@ -50,6 +51,13 @@ describe('trade target picker', () => {
 
   it('checks the day limit of the picked account, the leader for the group', () => {
     expect(limitAccount(armed, GROUP_TARGET).id).toBe('lucid-50k');
-    expect(limitAccount(armed, { kind: 'account', accountId: 'tradeify-100k' }).dayLimitUsd).toBe(2000);
+    expect(limitAccount(armed, { kind: 'account', accountId: 'tradeify-100k' }).dayRemaining.value).toBe(1880);
+  });
+
+  it('group order hits the leader and, with the copier on, every copying follower with its multiplier', () => {
+    expect(limitAccounts(armed, GROUP_TARGET).map(({ account, multiplier }) => [account.id, multiplier]))
+      .toEqual([['lucid-50k', 1], ['tradeify-50k-1', 1], ['tradeify-50k-2', 1], ['tradeify-50k-4', 1]]);
+    expect(limitAccounts(disarmed, GROUP_TARGET).map(({ account }) => account.id)).toEqual(['lucid-50k']);
+    expect(limitAccounts(armed, { kind: 'account', accountId: 'tradeify-100k' }).map(({ account }) => account.id)).toEqual(['tradeify-100k']);
   });
 });

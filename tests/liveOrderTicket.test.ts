@@ -58,12 +58,26 @@ describe('live order ticket problems', () => {
   });
 
   it('never checks the day limit from the chart price of a Market draft (INV-UI-04)', () => {
-    const problems = ticketProblems(draft({ type: 'market', quantity: 30, stopLoss: 90, takeProfit: 120 }), MNQ, quote, { limitUsd: 1000, dayPnlUsd: -388 });
+    const problems = ticketProblems(draft({ type: 'market', quantity: 30, stopLoss: 90, takeProfit: 120 }), MNQ, quote, [{ name: 'Lucid', remainingUsd: 612, stale: false, multiplier: 1 }]);
     expect(problems.some(p => p.text.includes('denního limitu'))).toBe(false);
   });
 
+  it('checks every account the order would hit with its multiplier, and says when a limit is unknown', () => {
+    // 30 ks × 10 b × 2 $ = 600 $ na leadera; follower ×2 = 1200 $.
+    const texts = ticketProblems(draft({ price: 100, quantity: 30, stopLoss: 90 }), MNQ, quote, [
+      { name: 'Lucid', remainingUsd: 700, stale: false, multiplier: 1 },
+      { name: 'Tradeify', remainingUsd: 1000, stale: true, multiplier: 2 },
+      { name: 'FundedNext', remainingUsd: null, stale: false, multiplier: 1 },
+    ]).map(p => p.text);
+    expect(texts.some(text => text.startsWith('Lucid:'))).toBe(false);
+    expect(texts).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^Tradeify: ztráta při SL \(1200 \$\).*poslední známá hodnota/),
+      'Denní limit FundedNext není známý — hlídání limitu teď neběží.',
+    ]));
+  });
+
   it('warns about a marketable limit and the remaining day limit', () => {
-    const problems = ticketProblems(draft({ price: 101, quantity: 30, stopLoss: 90 }), MNQ, quote, { limitUsd: 1000, dayPnlUsd: -388 });
+    const problems = ticketProblems(draft({ price: 101, quantity: 30, stopLoss: 90 }), MNQ, quote, [{ name: 'Lucid', remainingUsd: 612, stale: false, multiplier: 1 }]);
     expect(problems.map(p => p.text)).toEqual(expect.arrayContaining([
       expect.stringContaining('vyplní se hned'),
       expect.stringContaining('denního limitu'),

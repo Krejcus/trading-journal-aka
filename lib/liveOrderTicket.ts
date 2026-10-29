@@ -131,17 +131,25 @@ export const stopIsTriggered = (draft: TicketDraft, quote: TicketQuote): boolean
   draft.type === 'stop' && (draft.side === 'buy' ? draft.price <= quote.ask : draft.price >= quote.bid)
 );
 
+/**
+ * Kolik zbývá do denního limitu účtu, který příkaz ponese (stejná částka jako
+ * „Do limitu“ na přehledu LIVE: limit + dnešní výsledek vč. otevřené ztráty,
+ * omezené rezervou DD). `remainingUsd: null` = limit neznámý.
+ */
 export interface TicketDayLimit {
-  limitUsd: number;
-  /** Dnešní výsledek cílového účtu (záporný = ztráta). */
-  dayPnlUsd: number;
+  name: string;
+  remainingUsd: number | null;
+  /** Poslední známá hodnota, ne čerstvá. */
+  stale: boolean;
+  /** Kolikrát účet nese riziko příkazu (follower × násobek). */
+  multiplier: number;
 }
 
 export const ticketProblems = (
   draft: TicketDraft,
   instrument: TicketInstrument,
   quote: TicketQuote,
-  dayLimit: TicketDayLimit | null,
+  dayLimits: readonly TicketDayLimit[] | null,
 ): TicketProblem[] => {
   const problems: TicketProblem[] = [];
   const m = ticketMetrics(draft, instrument, quote);
@@ -164,10 +172,15 @@ export const ticketProblems = (
   if (draft.stopLoss == null) problems.push({ level: 'warning', text: 'Bez stop lossu.' });
   // Jen u Limit/Stop: vstup zadal uživatel. U Market by ztráta při SL stála
   // na ceně z kanálu TV/IBKR a ta do limitů nesmí (INV-UI-04).
-  if (dayLimit && m.stopLossUsd != null && draft.type !== 'market') {
-    const left = dayLimit.limitUsd + dayLimit.dayPnlUsd;
-    if (-m.stopLossUsd > left) {
-      problems.push({ level: 'warning', text: `Ztráta při SL (${Math.round(-m.stopLossUsd)} $) je víc, než zbývá do denního limitu (${Math.round(Math.max(0, left))} $).` });
+  if (dayLimits && m.stopLossUsd != null && draft.type !== 'market') {
+    const loss = -m.stopLossUsd;
+    for (const limit of dayLimits) {
+      const risk = loss * limit.multiplier;
+      if (limit.remainingUsd == null) {
+        problems.push({ level: 'warning', text: `Denní limit ${limit.name} není známý — hlídání limitu teď neběží.` });
+      } else if (risk > limit.remainingUsd) {
+        problems.push({ level: 'warning', text: `${limit.name}: ztráta při SL (${Math.round(risk)} $) je víc, než zbývá do denního limitu (${Math.round(Math.max(0, limit.remainingUsd))} $${limit.stale ? ', poslední známá hodnota' : ''}).` });
+      }
     }
   }
   return problems;

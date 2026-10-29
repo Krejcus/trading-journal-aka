@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { PanelRightClose, PanelRightOpen, X } from 'lucide-react';
+import { PanelRightClose, PanelRightOpen, Power, X } from 'lucide-react';
 import type { Trade } from '../types';
 import AlphaTradeChartWorkspace, { type LiveOrderEntryBridge } from './AlphaTradeChartWorkspace';
 import LiveOrderTicket, { formatPrice, type TicketScope } from './LiveOrderTicket';
@@ -30,6 +30,9 @@ import {
   type LiveTradeTarget,
 } from '../lib/liveTradeTarget';
 import { readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
+import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
+import type { LiveChartPosition } from '../lib/liveChartPosition';
+import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import { buildLiveStatusStrip, liveAttentionReasons, type LiveStatusStripInput, type LiveStatusTone } from '../services/liveStatusStrip';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 
@@ -39,18 +42,28 @@ import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
  *
  * Jen UI. Svíčky jsou stejné jako v grafu dne (historie + živá svíčka).
  * Panel objednávky, ⚡ z position boxu, pravý klik do grafu a čáry návrhu
- * nic neodesílají. Skutečný je jen stav kopírky v hlavičce (stejný model
- * jako stavová lišta LIVE, jen zobrazení) — vrstva přes celou obrazovku nesmí
- * schovat, že je kopírka vypnutá, zastavená nebo v incidentu. Účty skupiny
- * jsou do napojení na worker ukázková data, a to jen v dev buildu.
+ * nic neodesílají. Stav kopírky v hlavičce je stejný model jako stavová
+ * lišta LIVE (jen zobrazení) — vrstva přes celou obrazovku nesmí schovat, že
+ * je kopírka vypnutá, zastavená nebo v incidentu. Účty skupiny, dnešní
+ * výsledky, limity a pozice dodává desk ze stejných dat jako přehled
+ * (`hooks/useLiveChartData.ts`); jediná akce je Vypnout přes safety cestu
+ * desku (INV-UI-02). Ukázková skupina jen v dev s přepínačem.
  */
 
 const ROOT = 'MNQ' as const;
 const INSTRUMENT: TicketInstrument = { symbol: 'MNQ', tickSize: 0.25, pointValue: 2 };
 const NO_TRADES: Trade[] = [];
 const MINUTE = 60_000;
-/** Ukázkové účty jen v dev buildu — do produkce se vymyšlená čísla nedostanou. */
-const SAMPLE_GROUP_ENABLED = import.meta.env.DEV;
+/**
+ * Ukázkové účty jen v dev buildu a jen s přepínačem — nikdy jako náhrada za
+ * chybějící skutečnou skupinu (dev server je přihlášený do živého účtu).
+ */
+const sampleGroupEnabled = () => {
+  if (!import.meta.env.DEV) return false;
+  try { return window.localStorage.getItem('at:dev:live-chart-sample') === '1'; } catch { return false; }
+};
+/** Stejný text jako přehled LIVE při vypnutí bez ověřeného stavu. */
+const UNVERIFIED_DISARM_TEXT = 'Aktuální stav kopírky ani pozic se teď nepodařilo ověřit. Vypnutí je bezpečné ve flat stavu; uprostřed obchodu by followeři přestali dostávat posuny SL a výstupy. Pozice nezavírá — k tomu slouží Flatten All, k úplnému zastavení brokerových akcí Kill switch.';
 const TONE: Record<LiveStatusTone, { dot: string; text: string; ring: string }> = {
   muted: { dot: 'bg-slate-400', text: 'text-slate-500', ring: 'border-slate-500/30' },
   ok: { dot: 'bg-emerald-500', text: 'text-emerald-500', ring: 'border-emerald-500/40' },
@@ -79,6 +92,11 @@ interface Props {
   copier: LiveTradingCopierState;
   /** Dohrává se odchod z grafu (animace, vrstva už nebere kliky). */
   leaving?: boolean;
+  group?: LiveTradeGroup | null;
+  position?: LiveChartPosition | null;
+  disarm?: LiveChartDisarm | null;
+  onDisarm?: () => Promise<{ tone: 'info' | 'error'; text: string }>;
+  onTargetChange?: (target: LiveTradeTarget) => void;
 }
 
 function useMinuteNow() {
@@ -90,7 +108,10 @@ function useMinuteNow() {
   return now;
 }
 
-const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigationBlocked = false, copier, leaving = false }) => {
+const LiveTradingScreen: React.FC<Props> = ({
+  isDark, tabs, onNavigate, navigationBlocked = false, copier, leaving = false,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange,
+}) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
   const chart = useDayChartData(day, NO_TRADES, NO_TRADES, now);
@@ -133,10 +154,11 @@ const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigati
   const workerChip = strip.chips.find(chip => chip.id === 'worker' && chip.tone !== 'muted') ?? null;
   // Co přehled hlásí a chip Kopírka neodliší (zapnutá s rozjetím, incidentem…).
   const attention = liveAttentionReasons(strip, copier.status, copier.available);
-  const armed = copier.available && copier.status ? copier.status.armed : null;
+  // Ukázka jen s přepínačem; stav kopírky v ní je pravidlový stav ze skutečné skupiny, jinak neověřený.
+  const [sample] = useState(sampleGroupEnabled);
   const group = useMemo<LiveTradeGroup | null>(
-    () => (SAMPLE_GROUP_ENABLED ? { ...SAMPLE_LIVE_TRADE_GROUP, armed } : null),
-    [armed],
+    () => workerGroup ?? (sample ? { ...SAMPLE_LIVE_TRADE_GROUP, armed: null } : null),
+    [sample, workerGroup],
   );
   const [ticketOpen, setTicketOpen] = useState(true);
   const [draft, setDraft] = useState<TicketDraft | null>(null);
@@ -145,6 +167,31 @@ const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigati
   const [scope, setScope] = useState<TicketScope>('account');
   const [pickedTarget, setPickedTarget] = useState<LiveTradeTarget>(GROUP_TARGET);
   const target = group ? effectiveTarget(group, pickedTarget) : GROUP_TARGET;
+  const targetKey = target.kind === 'group' ? 'group' : target.accountId;
+  // Desk počítá pozici pro cíl panelu (skupina / jeden účet).
+  useEffect(() => {
+    onTargetChange?.(targetKey === 'group' ? GROUP_TARGET : { kind: 'account', accountId: targetKey });
+  }, [onTargetChange, targetKey]);
+  // Čáry živé pozice (jen ověřený pohled; desk je dodává hotové).
+  const [positionLines] = useState(createLivePriceLinesFeed);
+  useEffect(() => {
+    positionLines.publish(position?.symbol ?? null, position?.lines ?? []);
+  }, [position, positionLines]);
+  useEffect(() => () => positionLines.publish(null, []), [positionLines]);
+  // Vypnutí kopírky (INV-UI-02): jedno odeslání naráz, neověřený stav s potvrzením.
+  const [disarmConfirm, setDisarmConfirm] = useState(false);
+  const [disarmBusy, setDisarmBusy] = useState(false);
+  const [disarmResult, setDisarmResult] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
+  // Zámek nezávislý na překreslení: dvojklik nesmí poslat dvě brzdy (každá má nový relay klíč).
+  const disarmInFlightRef = useRef(false);
+  const runDisarm = useCallback(async () => {
+    if (!onDisarm || disarmBusy || disarmInFlightRef.current) return;
+    disarmInFlightRef.current = true;
+    setDisarmConfirm(false);
+    setDisarmBusy(true);
+    setDisarmResult(null);
+    try { setDisarmResult(await onDisarm()); } finally { disarmInFlightRef.current = false; setDisarmBusy(false); }
+  }, [disarmBusy, onDisarm]);
   // Návrh se sám nezakládá: čáry SL/TP na živém grafu jen když o ně uživatel požádá.
   const [tradeIndicators] = useState(readTradeChartIndicators);
 
@@ -259,6 +306,27 @@ const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigati
         >
           <i className={`h-[7px] w-[7px] rounded-full ${TONE[copierChip.tone].dot}`} />Kopírka <b className={TONE[copierChip.tone].text}>{copierChip.value}</b>
         </button>}
+        {disarm && onDisarm && <div className="relative">
+          <button
+            type="button"
+            disabled={disarmBusy}
+            onClick={() => (disarm.unverified ? setDisarmConfirm(open => !open) : void runDisarm())}
+            title="Vypne kopírku stejnou cestou jako Live Dashboard. Pozice nezavírá; followeři přestanou dostávat posuny SL a výstupy."
+            className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-500/50 px-2.5 text-[11px] font-extrabold text-rose-500 hover:bg-rose-500/10 disabled:cursor-wait disabled:opacity-60"
+          ><Power size={12} />{disarmBusy ? 'Vypínám…' : disarm.label}</button>
+          {disarmConfirm && <div role="dialog" aria-label="Vypnout kopírku bez ověřeného stavu" className={`absolute right-0 top-[calc(100%+6px)] z-[95] grid w-[340px] gap-2 rounded-xl border p-3 text-[11.5px] leading-snug shadow-xl ${isDark ? 'border-white/10 bg-[#0d1219] text-slate-200' : 'border-slate-200 bg-white text-slate-800'}`}>
+            <b className="text-[12.5px]">Vypnout kopírku bez ověřeného stavu?</b>
+            <span>{UNVERIFIED_DISARM_TEXT}</span>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setDisarmConfirm(false)} className={`h-8 rounded-lg border px-3 font-extrabold ${isDark ? 'border-white/15' : 'border-slate-300'}`}>Zpět</button>
+              <button type="button" onClick={() => void runDisarm()} className="h-8 rounded-lg bg-rose-600 px-3 font-extrabold text-white">Přesto vypnout</button>
+            </div>
+          </div>}
+          {disarmResult && !disarmConfirm && <div role="status" className={`absolute right-0 top-[calc(100%+6px)] z-[95] w-[320px] rounded-xl border p-2.5 text-[11px] font-bold leading-snug shadow-xl ${disarmResult.tone === 'error' ? 'border-rose-500/50 bg-rose-500/10 text-rose-500' : isDark ? 'border-white/10 bg-[#0d1219] text-slate-200' : 'border-slate-200 bg-white text-slate-700'}`}>
+            {disarmResult.text}
+            <button type="button" onClick={() => setDisarmResult(null)} className="ml-2 opacity-70" aria-label="Zavřít">×</button>
+          </div>}
+        </div>}
         {group && <LiveGroupChip
           isDark={isDark}
           group={group}
@@ -300,6 +368,7 @@ const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigati
               liveCandles={chart.liveFeed}
               resetViewOnOpen
               liveOrderEntry={liveOrderEntry}
+              livePriceLines={positionLines}
               onClose={() => onNavigate('overview')}
             />
           ) : (
@@ -329,6 +398,7 @@ const LiveTradingScreen: React.FC<Props> = ({ isDark, tabs, onNavigate, navigati
             target={target}
             onTarget={setPickedTarget}
             quoteInfo={quoteInfo}
+            position={position}
             onNewDraft={side => { if (quote) { setDraft(newTicketDraft(side, 'limit', side === 'buy' ? quote.ask - 10 : quote.bid + 10, INSTRUMENT, quote)); setFromBox(false); } }}
             onClose={() => setTicketOpen(false)}
           />

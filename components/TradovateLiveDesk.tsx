@@ -78,9 +78,14 @@ import {
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import {
+  copyTradeAccountName,
   createCopyTradeAccountLabelResolver,
   formatKnownCopyTradeAccountIds,
 } from '../lib/copyTradeAccountLabels';
+import { useLiveChartData } from '../hooks/useLiveChartData';
+import { GROUP_TARGET, type LiveTradeTarget } from '../lib/liveTradeTarget';
+import { isCopierBrakeQueuedError } from '../lib/copierBrakeDelivery';
+import type { LiveAccount } from '../services/tradecopiaLiveService';
 import { tradeCardFeeRates } from '../lib/liveTradeCard';
 import {
   buildDevTradeMock,
@@ -180,6 +185,7 @@ const COPY_GROUP_CONFIG_COMMANDS = new Set<LiveCopyTradingCommand['type']>([
 ]);
 const COPIER_SAFETY_COMMAND_TIMEOUT_MS = 10_000;
 const EMPTY_DISPLAY_VOUCHES: Record<string, AccountDisplayVouch> = {};
+const EMPTY_LIVE_ACCOUNTS: LiveAccount[] = [];
 
 /**
  * Dev fixture LIVE přehledu s falešným execution adaptérem: přepínač followera
@@ -855,6 +861,58 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       if (timeout != null) window.clearTimeout(timeout);
     }
   }, [acceptAgentStatus, agentClient, agentTransport, relayConnectionId]);
+  // LIVE → Graf: data účtů a pozice ze stejných vstupů jako přehled (jen
+  // zobrazení); vybraný cíl panelu hlásí obrazovka grafu.
+  const [chartTarget, setChartTarget] = useState<LiveTradeTarget>(GROUP_TARGET);
+  const chartAccountName = useCallback((accountId: number) => copyTradeAccountName({
+    accountId,
+    accountsById: new Map(copyTradeSnapshot?.accounts.map(account => [account.id, account]) ?? []),
+    profilesById: new Map(live.profiles.flatMap(profile => {
+      const id = Number(profile.externalAccountId);
+      return Number.isSafeInteger(id) ? [[id, profile] as const] : [];
+    })),
+    sourceGroupsById: new Map(copyTradeSnapshot?.groups.map(group => [group.id, group]) ?? []),
+  }), [copyTradeSnapshot, live.profiles]);
+  const chartData = useLiveChartData({
+    enabled: chartAvailable && tab === 'chart',
+    data: live.data,
+    profiles: live.profiles,
+    agentStatus,
+    agentStatusObservedAt,
+    statusFresh: agentStatusFresh && !agentStatusRestored,
+    displayAccounts: (displaySnapshot ?? copyTradeSnapshot)?.accounts ?? EMPTY_LIVE_ACCOUNTS,
+    group: workerGroup,
+    nameOf: chartAccountName,
+    root: 'MNQ',
+    target: chartTarget,
+    now: freshnessNow,
+  });
+  // Vypnutí z grafu: stejná safety cesta jako přehled (INV-UI-02). Stabilní
+  // funkce přes ref — graf nesmí držet starou trasu ani starý fence.
+  const safetyCommandRef = useRef(executeSafetyCommand);
+  safetyCommandRef.current = executeSafetyCommand;
+  const [chartSafetyNotice, setChartSafetyNotice] = useState<{ tone: 'info' | 'error'; text: string; at: number } | null>(null);
+  // Hláška z grafu nesmí přežít změnu stavu: čerstvě zapnutá kopírka ji maže
+  // (jinak by „vypnutá“ visela i po zapnutí) a po 10 minutách zmizí sama.
+  useEffect(() => {
+    if (!chartSafetyNotice) return;
+    const armedNow = agentStatusFresh && !agentStatusRestored && agentStatus?.controller.armed === true;
+    if (armedNow || freshnessNow - chartSafetyNotice.at > 10 * 60_000) setChartSafetyNotice(null);
+  }, [agentStatus, agentStatusFresh, agentStatusRestored, chartSafetyNotice, freshnessNow]);
+  const disarmFromChart = useCallback(async (): Promise<{ tone: 'info' | 'error'; text: string }> => {
+    let result: { tone: 'info' | 'error'; text: string };
+    try {
+      await safetyCommandRef.current({ type: 'disarm' });
+      result = { tone: 'info', text: 'Kopírka je vypnutá. Pozice to nezavírá.' };
+    } catch (reason) {
+      result = isCopierBrakeQueuedError(reason)
+        ? { tone: 'info', text: reason.message }
+        : { tone: 'error', text: `Vypnutí kopírky není potvrzené: ${reason instanceof Error ? reason.message : 'neznámá chyba'} Zkontroluj stav kopírky; příkaz se automaticky neopakuje.` };
+    }
+    // I po odchodu z grafu zůstane výsledek vidět na přehledu.
+    setChartSafetyNotice({ ...result, at: Date.now() });
+    return result;
+  }, []);
   const acceptConfigAck = useCallback((status: LocalCopierAgentStatus) => {
     const commandSequence = ackSequenceByStatusRef.current.get(status);
     if (!acceptAgentStatus(status, Date.now(), true, commandSequence)) return;
@@ -1402,8 +1460,18 @@ acceptAgentStatus((await executeAgent({
             journalHealth: agentStatus?.journalHealth,
             reconnectRequired: (live.status?.connections ?? []).filter(connection => live.connectionHealth[connection.id]?.state === 'reconnect-required').length,
           }}
+          group={chartData.group}
+          groupKey={chartData.groupKey}
+          position={chartData.position}
+          disarm={chartData.disarm}
+          onDisarm={disarmFromChart}
+          onTargetChange={setChartTarget}
         />
       ) : null}
+      {chartSafetyNotice && <div role="status" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${chartSafetyNotice.tone === 'error' ? 'border-rose-500/50 bg-rose-500/10 text-rose-500' : 'border-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>
+        <span className="flex-1">Graf · {new Date(chartSafetyNotice.at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })} · {chartSafetyNotice.text}</span>
+        <button type="button" onClick={() => setChartSafetyNotice(null)} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]" aria-label="Zavřít hlášku">×</button>
+      </div>}
       <nav className="flex items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] no-scrollbar" aria-label="LIVE navigace">
         {tabs.map(item => {
           const Icon = item.icon;

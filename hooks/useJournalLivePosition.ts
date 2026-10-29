@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import { overlayWorkerExposure, WORKER_EXPOSURE_MAX_AGE_MS } from '../lib/tradovateWorkerExposureOverlay';
@@ -6,12 +6,10 @@ import { copierWorkerExecutionGroup } from '../lib/copierWorkerCapabilities';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { tradeCardFeeRates } from '../lib/liveTradeCard';
 import { readCopyGroupCache } from '../services/copyGroupLibrary';
-import {
-  buildJournalLiveView, confirmWorkerMismatches, EMPTY_JOURNAL_LIVE_VIEW, journalCopierArmed,
-  type JournalLiveInterest, type JournalLiveTarget, type JournalLiveView, type WorkerMismatches,
-} from '../lib/journalLivePosition';
+import type { JournalLiveInterest, JournalLiveTarget, JournalLiveView } from '../lib/journalLivePosition';
 import { subscribeAppForeground } from '../lib/appForeground';
 import { useDisplayWorkerStatus } from './useDisplayWorkerStatus';
+import { useLiveTradeCardView } from './useLiveTradeCardView';
 
 /**
  * Data živé pozice pro deník (jen zobrazení): čtení z brokera, které App
@@ -34,8 +32,6 @@ const NO_IDS: readonly string[] = [];
 
 /** Jak často se znovu posoudí stáří čtení, když se data nemění (worker stojí). */
 const FRESHNESS_TICK_MS = 5_000;
-/** Výpadek heartbeatu kratší než tohle nemaže paměť rozdílů kusů followerů. */
-const WORKER_MISMATCH_MEMORY_MS = 15_000;
 
 export function useJournalLivePosition(source: JournalLiveSource | null | undefined, enabled: boolean, target: JournalLiveTarget): JournalLiveView {
   const active = enabled && source != null;
@@ -81,42 +77,11 @@ export function useJournalLivePosition(source: JournalLiveSource | null | undefi
   const feeRates = useMemo(() => (liveData ? tradeCardFeeRates(liveData.accounts) : new Map<string, number>()), [liveData]);
   // Skupina, kterou worker právě kopíruje (smazaná = žádná); bez workeru uložená.
   const group = worker.status ? copierWorkerExecutionGroup(worker.status) : cachedGroup;
-  // Rozjetí followerů jen z heartbeatu, který ještě platí (stejně jako pozice).
+  // Rozjetí followerů i zapnutost kopírky jen z heartbeatu, který ještě platí (stejně jako pozice).
   const workerFresh = worker.observedAt != null && now - worker.observedAt <= WORKER_EXPOSURE_MAX_AGE_MS;
-  const followerVerdicts = workerFresh ? worker.status?.controller?.exposure?.followers ?? null : null;
-  // Zapnutost kopírky jen z čerstvého heartbeatu; jinak, nebo po incidentu,
-  // neznámo (platí poplachy o rozjetí).
-  const copierArmed = workerFresh ? journalCopierArmed(worker.status?.controller, worker.status?.startedAt) : null;
-  // Od kdy worker hlásí rozdíl kusů. Krátký výpadek heartbeatu paměť nemaže
-  // (potvrzené rozjetí se po návratu znovu nečeká), delší ano. Čas podle
-  // skutečných hodin — stavové `now` zaostává a okno by zkracovalo.
-  const mismatchMemoryRef = useRef<{ since: Map<number, number>; at: number }>({ since: new Map(), at: 0 });
-  const workerMismatches = useMemo<WorkerMismatches | null>(() => {
-    const clock = Date.now();
-    if (!followerVerdicts) {
-      if (clock - mismatchMemoryRef.current.at > WORKER_MISMATCH_MEMORY_MS) mismatchMemoryRef.current = { since: new Map(), at: 0 };
-      return null;
-    }
-    const next = confirmWorkerMismatches(followerVerdicts, mismatchMemoryRef.current.since, clock);
-    mismatchMemoryRef.current = { since: next.since, at: clock };
-    return { pending: next.pending, confirmed: next.confirmed, ok: next.ok };
-  }, [followerVerdicts, now]);
-  // Od kdy pohled hlásí rozjetí (okno dobíhání kopie, i potvrzené).
-  const divergenceSinceRef = useRef<number | null>(null);
-
-  const view = useMemo(() => {
-    if (!active) {
-      divergenceSinceRef.current = null;
-      return EMPTY_JOURNAL_LIVE_VIEW;
-    }
-    const built = buildJournalLiveView({
-      accounts, orders, feeRates, group, target, workerMismatches, divergenceSince: divergenceSinceRef.current, copierArmed, now,
-    });
-    // Začátek okna podle skutečného času, ne podle hodin pohledu (ty jdou
-    // bez workeru jen po 5 s) — okno se tak nikdy nezkrátí.
-    divergenceSinceRef.current = built.divergenceCandidate ? divergenceSinceRef.current ?? Date.now() : null;
-    return built;
-  }, [active, accounts, orders, feeRates, group, target, workerMismatches, copierArmed, now]);
+  const view = useLiveTradeCardView({
+    active, accounts, orders, feeRates, group, target, worker: workerFresh ? worker.status : null, now,
+  });
   // Otevřená pozice skupiny = častější čtení z brokera (kotva P&L); jinak jen
   // udržovací. Pozice z workeru se tu pozná dřív, než ji vidí REST. Neúplný
   // nebo rozjetý pohled s pozicí taky — ať se co nejdřív ověří.

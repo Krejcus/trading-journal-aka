@@ -10,7 +10,7 @@
 import type { LiveAccount, LiveOrder } from '../services/tradecopiaLiveService';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { buildTradeCard, type TradeCardModel, type TradeCardRowInput } from './liveTradeCard';
-import { isLiveAccountReadVerified, liveAccountReadAgeMs } from './liveReadFreshness';
+import { formatReadAge, isLiveAccountReadVerified, liveAccountReadAgeMs } from './liveReadFreshness';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 import { WORKER_POSITION_DIVERGENT_DETAIL, WORKER_POSITION_MISMATCH_DETAIL } from './tradovateWorkerExposureOverlay';
 
@@ -323,4 +323,17 @@ export function journalLivePriceLines(model: TradeCardModel | null): LivePriceLi
 export function livePositionMatchesRoot(symbol: string, root: string): boolean {
   const family = (value: string) => (value === 'MNQ' || value === 'NQ' ? 'NQ' : value === 'MES' || value === 'ES' ? 'ES' : value);
   return family(futuresSymbolRoot(symbol)) === family(root.trim().toUpperCase());
+}
+
+/** Text místo čísel, když pohled není ověřený (štítek grafu dne i LIVE → Graf). */
+export function journalLiveIssueLabel(view: Pick<JournalLiveView, 'issue' | 'readAgeMs' | 'copierOff'>): string | null {
+  const age = view.readAgeMs != null ? ` · čtení před ${formatReadAge(view.readAgeMs)}` : '';
+  switch (view.issue) {
+    case 'stale': return `Pozice neověřené${age}`;
+    case 'missing-account': return 'Pozice neověřené · účet skupiny chybí v datech';
+    case 'orders-stale': return 'Příkazy neověřené';
+    case 'settling': return 'Kopie dobíhá…';
+    case 'divergent': return view.copierOff ? 'Kopírka vypnutá · účty se liší, vyber účet' : 'Účty skupiny se liší · viz LIVE';
+    default: return null;
+  }
 }

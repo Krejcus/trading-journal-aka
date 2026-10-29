@@ -13,18 +13,43 @@
 
 export type LiveTradeAccountRole = 'leader' | 'follower' | 'outside';
 
+/**
+ * Částka pro zobrazení se stářím (stejná pravidla jako přehled LIVE,
+ * `lib/liveBalanceDisplay.ts`). `value: null` = neznámo („—“, nikdy 0).
+ */
+export interface LiveTradeMoney {
+  value: number | null;
+  /** Poslední známá hodnota, ne čerstvá — UI ji tlumí. */
+  stale: boolean;
+  /** Proč hodnota chybí nebo je omezená (např. „bez denního limitu“). */
+  note?: string | null;
+}
+
+export const UNKNOWN_MONEY: LiveTradeMoney = { value: null, stale: false };
+
 export interface LiveTradeAccount {
   id: string;
+  /** Tradovate id účtu (skutečná skupina); ukázka ho nemá. */
+  accountId?: number;
   name: string;
   /** Krátký štítek na čáru příkazu v grafu (např. „T3“). */
   short: string;
   role: LiveTradeAccountRole;
-  /** Follower vyřazený z kopírování („Zapnout bez tohoto účtu“ na LIVE). */
+  /** Follower vyřazený z kopírování („Zapnout bez tohoto účtu“ na LIVE) — jen z čerstvého stavu workeru. */
   excluded?: boolean;
+  /**
+   * Follower, který nekopíruje z jiného důvodu (ruční vypnutí, cut, DLL…).
+   * Od rozjetí ho pravidla nevyjímají — samostatně za zapnuté kopírky nejde.
+   */
+  inactiveReason?: string | null;
   /** Násobek velikosti leadera (jen follower). */
   multiplier: number;
-  dayPnlUsd: number;
-  dayLimitUsd: number;
+  /** Dnešní realizovaný výsledek. */
+  dayPnl: LiveTradeMoney;
+  /** Kolik zbývá do denního limitu (vč. otevřené ztráty, omezené rezervou DD) — jako přehled LIVE. */
+  dayRemaining: LiveTradeMoney;
+  /** Pozice pro přehled účtů („+2 @ 29 650,25“, „flat · 1 příkaz“); null = neověřeno („—“, nikdy „flat“). */
+  position?: string | null;
 }
 
 export interface LiveTradeGroup {
@@ -49,8 +74,8 @@ export const allTradeAccounts = (group: LiveTradeGroup): LiveTradeAccount[] => (
   [group.leader, ...group.followers, ...group.outside]
 );
 
-/** Follower, který se účastní kopírování (není vyřazený). */
-export const followerInCopy = (account: LiveTradeAccount) => account.role === 'follower' && !account.excluded;
+/** Follower, který se účastní kopírování (není vyřazený ani teď vypnutý — cut, DLL…). */
+export const followerInCopy = (account: LiveTradeAccount) => account.role === 'follower' && !account.excluded && !account.inactiveReason;
 
 export const participatingFollowers = (group: LiveTradeGroup) => group.followers.filter(followerInCopy);
 
@@ -59,8 +84,13 @@ export const participatingFollowers = (group: LiveTradeGroup) => group.followers
  * ukazuje v nabídce u zašedlého účtu.
  */
 export const soloTradeBlockReason = (account: LiveTradeAccount, armed: boolean | null): string | null => {
-  if (armed === false || !(account.role === 'leader' || followerInCopy(account))) return null;
+  if (armed === false) return null;
+  // Neověřený stav: i členství ve skupině může být ze starého stavu, takže ani účet „mimo skupinu“.
   if (armed == null) return 'Stav kopírky není ověřený — počítám se zapnutou (obchod by se mohl rozkopírovat nebo rozjet skupinu)';
+  if (account.role === 'outside' || (account.role === 'follower' && account.excluded)) return null;
+  if (account.role === 'follower' && account.inactiveReason) {
+    return `Follower je ve skupině, jen teď nekopíruje (${account.inactiveReason}) — ruční pozice by byla rozjetí`;
+  }
   return account.role === 'leader'
     ? 'Kopírka je zapnutá — obchod by se rozkopíroval na celou skupinu'
     : 'Kopírka je zapnutá — ruční pozice na účtu ve skupině = rozjetí a kopírka zastaví celou skupinu';
@@ -96,21 +126,34 @@ export const limitAccount = (group: LiveTradeGroup, target: LiveTradeTarget): Li
 );
 
 /**
- * Ukázková skupina pro UI, dokud panel nečte stav workeru (další session).
- * Jen v dev buildu; jména a čísla jsou vymyšlená a UI je označuje „ukázka“.
- * Stav kopírky (`armed`) sem obrazovka dosazuje skutečný ze stavu workeru.
+ * Účty, jejichž denní limit příkaz ohrozí, s násobkem rizika: vybraný účet,
+ * u skupiny leader a za zapnuté kopírky i kopírující followeři.
  */
+export const limitAccounts = (group: LiveTradeGroup, target: LiveTradeTarget): Array<{ account: LiveTradeAccount; multiplier: number }> => {
+  const single = targetAccount(group, target);
+  if (single) return [{ account: single, multiplier: 1 }];
+  const followers = group.armed === false ? [] : participatingFollowers(group);
+  return [{ account: group.leader, multiplier: 1 }, ...followers.map(account => ({ account, multiplier: account.multiplier }))];
+};
+
+/**
+ * Ukázková skupina pro vývoj UI bez workeru. Jen v dev buildu a jen se
+ * zapnutým přepínačem (`at:dev:live-chart-sample`) — nikdy jako náhrada,
+ * když skutečná skupina chybí. Jména a čísla jsou vymyšlená, UI je označuje.
+ */
+const sampleMoney = (value: number): LiveTradeMoney => ({ value, stale: false });
+const sample = (id: string, name: string, short: string, role: LiveTradeAccountRole, pnl: number, remaining: number, excluded = false): LiveTradeAccount => (
+  { id, name, short, role, multiplier: 1, dayPnl: sampleMoney(pnl), dayRemaining: sampleMoney(remaining), position: null, ...(excluded ? { excluded } : {}) }
+);
 export const SAMPLE_LIVE_TRADE_GROUP: LiveTradeGroup = {
-  leader: { id: 'lucid-50k', name: 'Lucid 50K', short: 'L50', role: 'leader', multiplier: 1, dayPnlUsd: -388, dayLimitUsd: 1000 },
+  leader: sample('lucid-50k', 'Lucid 50K', 'L50', 'leader', -388, 612),
   followers: [
-    { id: 'tradeify-50k-1', name: 'Tradeify 50K · 1', short: 'T1', role: 'follower', multiplier: 1, dayPnlUsd: -402, dayLimitUsd: 1000 },
-    { id: 'tradeify-50k-2', name: 'Tradeify 50K · 2', short: 'T2', role: 'follower', multiplier: 1, dayPnlUsd: -371, dayLimitUsd: 1000 },
-    { id: 'tradeify-50k-3', name: 'Tradeify 50K · 3', short: 'T3', role: 'follower', excluded: true, multiplier: 1, dayPnlUsd: -395, dayLimitUsd: 1000 },
-    { id: 'tradeify-50k-4', name: 'Tradeify 50K · 4', short: 'T4', role: 'follower', multiplier: 1, dayPnlUsd: -380, dayLimitUsd: 1000 },
+    sample('tradeify-50k-1', 'Tradeify 50K · 1', 'T1', 'follower', -402, 598),
+    sample('tradeify-50k-2', 'Tradeify 50K · 2', 'T2', 'follower', -371, 629),
+    sample('tradeify-50k-3', 'Tradeify 50K · 3', 'T3', 'follower', -395, 605, true),
+    sample('tradeify-50k-4', 'Tradeify 50K · 4', 'T4', 'follower', -380, 620),
   ],
-  outside: [
-    { id: 'tradeify-100k', name: 'Tradeify 100K', short: 'T100', role: 'outside', multiplier: 1, dayPnlUsd: -120, dayLimitUsd: 2000 },
-  ],
+  outside: [sample('tradeify-100k', 'Tradeify 100K', 'T100', 'outside', -120, 1880)],
   armed: null,
   sample: true,
 };

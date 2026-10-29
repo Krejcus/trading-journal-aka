@@ -1224,6 +1224,16 @@ existující ochranu.
   poslední známou route bez fresh statusu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je oddělit safety command path od
   běžných commandů. Nebezpečné je sdílet jednu obecnou `disabled={!fresh}`.
+- LIVE → Graf (29. 10. 2026): tlačítko Vypnout v hlavičce grafu nezávisle na
+  skupině, skryté jen při `lib/liveTradeGroupSource.ts:copierProvablyOff`
+  (čerstvý stav, `armed: false` a žádné čekající automatické pokračování —
+  jinak „Zrušit automatické pokračování“, INV-RECON-04). Volá
+  `TradovateLiveDesk.tsx:disarmFromChart` = stabilní funkce nad
+  `executeSafetyCommand` přes ref (vždy aktuální trasa a fence), zámek proti
+  dvojkliku přes ref, neověřený stav s potvrzením stejného textu jako přehled
+  přímo v grafu (dialog desku je pod vrstvou grafu), brzda ve frontě relaye
+  = informace, nic se neopakuje; výsledek i na přehledu s časem, po zapnutí
+  kopírky nebo 10 min zmizí (`tests/liveChartData.test.ts`).
 
 ### INV-UI-03: Retained risk, „rozhodnutí dne“ a poslední worker status jsou pouze zobrazení
 
@@ -1391,6 +1401,18 @@ existující ochranu.
   `services/provisionalCandles.ts` a jejich zobrazovací konzumenti (hlídá
   `tests/liveBarsMerge.test.ts`). Pro produkt pro další uživatele neplatí
   (licence dat pro distribuci).
+- LIVE → Graf, data (29. 10. 2026): skupina, účty, dnešní výsledek, „Do
+  limitu“ a pozice dodává desk (`hooks/useLiveChartData.ts`,
+  `lib/liveTradeGroupSource.ts`) ze stejných vstupů a funkcí jako přehled
+  (`liveDailyPnlDisplay`, `liveDailyLossRemainingDisplay` se stářím; neznámé =
+  „—“, nikdy 0 ani „flat“). Stav kopírky pro výběr účtu jen z čerstvého stavu
+  desku (`copierArmedForRules`; obnovený/starý/čekající pokračování = null =
+  zapnuto), vyřazení jen z čerstvého `excludedForeignFollowers`, ostatní
+  nekopírující followeři samostatně za ARMED nejdou. Pozice a rozjetí přes
+  `hooks/useLiveTradeCardView.ts` sdílený s deníkem (jen čerstvý heartbeat
+  ≤ 8 s, reset paměti při novém `startedAt`); pohled skupiny bez vyřazených
+  followerů, účet mimo skupinu sám za sebe, pohled tiše spadlý na skupinu se
+  neukáže. Nic z toho neautorizuje příkaz.
 - LIVE → Graf (29. 10. 2026, jen UI): `components/LiveTradingScreen.tsx`
   předává živou svíčku z kanálu jen grafu (`liveCandles={chart.liveFeed}`,
   výjimka v `tests/tvPriceClientGuards.test.ts`); panel objednávky ji nečte.

@@ -287,6 +287,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-29 — LIVE → Graf: napojení dat, jen zobrazení (Claude, NENASAZENO)
+
+- Větev `claude/live-chart-data-20261029` (worktree
+  `~/alphatrade-worktrees/live-chart-data`), navazuje na předávku „08:30 —
+  NASAZENO: LIVE → Graf“. Nic se neodesílá; Odeslat, BE a Zavřít vypnuté.
+- Skutečná skupina místo ukázky: `hooks/useLiveChartData.ts` (desk) →
+  `lib/liveTradeGroupSource.ts`; jména jako přehled, dnes/Do limitu stejnými
+  funkcemi jako přehled se stářím, pozice „+2 @ …“ / „flat · N příkazů“ /
+  „—“. Ukázka jen v dev s `at:dev:live-chart-sample=1`.
+- Pravidla „Obchodovat na“ z čerstvého stavu (`copierArmedForRules`),
+  nekopírující follower (cut/DLL/vypnutý) samostatně za ARMED ne, při
+  neověřeném stavu ani účet mimo skupinu.
+- Panel: sekce Pozice (směr, qty, vstup, otevřené P&L z brokera, SL/TP,
+  „jen T2“ při ručně vypnuté kopírce), denní limit všech zasažených účtů
+  s násobkem, neznámý limit = varování. Čáry pozice v grafu jako graf dne.
+- Vypnout v hlavičce grafu (INV-UI-02) přes `executeSafetyCommand`.
+- Stavová logika rozjetí vytažena do `hooks/useLiveTradeCardView.ts`
+  (deník i graf). Kotace brokera (bod 6 předávky) odložena ke kroku
+  odesílání (tam povinná brána).
+- `copier-design-critic`: návrh OPRAVIT PŘED IMPLEMENTACÍ (12 nálezů —
+  DISARM při auto-resume, druhý zdroj „Do limitu“, rozjetí bez paměti, účet
+  mimo skupinu, vyřazení z neověřeného stavu…) → zapracováno; diff OPRAVIT
+  PŘED COMMITEM (hláška „vypnutá“ bez konce, chybějící „jen T2“, dokumentace)
+  → opraveno + nekopírující follower mimo počty, zámek dvojkliku přes ref.
+- Ověřeno: tsc, testy (`tests/liveChartData.test.ts` + dotčené), náhled 5273
+  (1440 px): kopírka vypnutá → bez Vypnout, čip a přehled účtů se skutečnými
+  účty, dnes/Do limitu shodné s Live Dashboardem, výběr účtu. Pozice se
+  skutečným obchodem a Vypnout za ARMED v náhledu neověřeny (žádný obchod,
+  kopírka vypnutá; tlačítka zápisu se v náhledu neklikají).
+
 ### 2026-10-29 08:30 — NASAZENO: LIVE → Graf, živý graf s panelem objednávky, jen UI (Claude, Filip „nasaď na live“)
 
 Větev `claude/live-chart-ui-20261029` (worktree `~/alphatrade-worktrees/live-chart`).

@@ -6,6 +6,7 @@ import {
   targetAccount,
   type LiveTradeAccount,
   type LiveTradeGroup,
+  type LiveTradeMoney,
   type LiveTradeTarget,
 } from '../lib/liveTradeTarget';
 import type { LiveStatusTone } from '../services/liveStatusStrip';
@@ -57,21 +58,27 @@ const LiveGroupChip: React.FC<Props> = ({ isDark, group, target, copierChip, onO
     if (account.role === 'leader') return { text: 'leader', tone: muted, dot: 'bg-blue-500' };
     if (account.role === 'outside') return { text: 'mimo skupinu', tone: muted, dot: 'bg-slate-400' };
     if (account.excluded) return { text: 'vyřazen', tone: muted, dot: 'bg-slate-400' };
+    if (account.inactiveReason) return { text: 'nekopíruje', tone: 'text-amber-600', dot: 'bg-amber-500' };
     return { text: 've skupině', tone: muted, dot: 'bg-slate-400' };
   };
   const row = (account: LiveTradeAccount) => {
     const s = status(account);
-    const left = account.dayLimitUsd + account.dayPnlUsd;
+    const money = (value: LiveTradeMoney, signed: boolean) => (value.value == null
+      ? <span className={`text-right font-mono text-[10.5px] ${muted}`} title={value.note ?? 'Neznámo'}>—</span>
+      : <span
+        className={`text-right font-mono text-[10.5px] ${value.stale ? 'opacity-55' : ''} ${signed ? (value.value < 0 ? 'text-rose-500' : 'text-emerald-500') : ink}`}
+        title={[value.stale ? 'Poslední známá hodnota, ne čerstvá' : null, value.note].filter(Boolean).join(' · ') || undefined}
+      >{formatUsd(signed ? value.value : Math.max(0, value.value), signed)}</span>);
     return <div key={account.id} className={`grid grid-cols-[1.4fr_.7fr_.85fr_.85fr_minmax(78px,.9fr)] items-center gap-1.5 border-t px-2.5 py-[7px] text-[11px] ${line}`}>
       <span className={`flex min-w-0 items-center gap-1.5 truncate font-extrabold ${ink}`}>
         <i className={`h-[7px] w-[7px] shrink-0 rounded-full ${s.dot}`} />{account.name}
         {account.role === 'leader' && <em className={`text-[8.5px] font-extrabold not-italic uppercase tracking-[0.06em] ${muted}`}>leader</em>}
         {followerInCopy(account) && account.multiplier !== 1 && <em className={`text-[8.5px] font-extrabold not-italic ${muted}`}>×{account.multiplier}</em>}
       </span>
-      <span className={`font-mono text-[10.5px] ${muted}`} title="Pozice dodá až napojení na worker">—</span>
-      <span className={`text-right font-mono text-[10.5px] ${account.dayPnlUsd < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(account.dayPnlUsd)}</span>
-      <span className={`text-right font-mono text-[10.5px] ${ink}`}>{formatUsd(left, false)}</span>
-      <span className={`whitespace-nowrap text-right text-[10px] font-extrabold ${s.tone}`}>{s.text}</span>
+      <span className={`truncate font-mono text-[10.5px] ${account.position ? ink : muted}`} title={account.position ?? 'Pozice neověřené (staré nebo chybějící čtení)'}>{account.position ?? '—'}</span>
+      {money(account.dayPnl, true)}
+      {money(account.dayRemaining, false)}
+      <span className={`whitespace-nowrap text-right text-[10px] font-extrabold ${s.tone}`} title={account.inactiveReason ?? undefined}>{s.text}</span>
     </div>;
   };
 
@@ -81,7 +88,7 @@ const LiveGroupChip: React.FC<Props> = ({ isDark, group, target, copierChip, onO
       onClick={() => setOpen(value => !value)}
       aria-haspopup="dialog"
       aria-expanded={open}
-      title="Účty skupiny kopírky (ukázková data)"
+      title={group.sample ? 'Účty skupiny kopírky (ukázková data)' : 'Účty skupiny kopírky'}
       className={`flex h-[30px] items-center gap-2 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-bold ${line} ${open ? (isDark ? 'bg-white/10 text-white' : 'bg-white text-slate-950') : `${isDark ? 'text-slate-300 hover:bg-white/[0.06]' : 'text-slate-600 hover:bg-white/70'}`}`}
     >
       {group.sample && sampleTag}
@@ -96,7 +103,7 @@ const LiveGroupChip: React.FC<Props> = ({ isDark, group, target, copierChip, onO
         {copierChip && <span className={`text-[10.5px] font-extrabold ${TONE_TEXT[copierChip.tone]}`}>Kopírka: {copierChip.value}</span>}
       </div>
       {group.sample && <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[10.5px] font-bold leading-snug text-amber-600">
-        Ukázková data — jména účtů, dnešní výsledky a limity jsou vymyšlené. Skutečné účty a pozice přijdou s napojením na worker.
+        Ukázková data (vývojový přepínač) — jména účtů, dnešní výsledky a limity jsou vymyšlené.
       </div>}
       <div className={`grid overflow-hidden rounded-[10px] border ${isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-900/10 bg-white/70'}`}>
         <div className={`grid grid-cols-[1.4fr_.7fr_.85fr_.85fr_minmax(78px,.9fr)] gap-1.5 px-2.5 py-1.5 text-[9px] font-extrabold uppercase tracking-[0.08em] ${muted}`}>
