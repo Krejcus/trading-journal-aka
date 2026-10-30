@@ -59,3 +59,29 @@ export function shouldReloadForStaleChunk(now: number, storage: Pick<Storage, 'g
     return false;
   }
 }
+
+/**
+ * Chunky v `/assets/` mají `Cache-Control: immutable` (vercel.json) — i na 404.
+ * Přechodná 404 v okně přepínání nasazení tak v HTTP cache prohlížeče přežije
+ * obnovu stránky (30. 10. „Graf se nepodařilo zobrazit“ po deployi). Před
+ * obnovou proto selhané soubory stáhneme znovu s `cache: 'reload'`, což záznam
+ * v cache přepíše. Selhání = `responseStatus` ≥ 400 v Resource Timing (Chromium)
+ * nebo URL z textu chyby. Vrací počet obnovených souborů.
+ */
+export async function refreshFailedAssets(
+  entries: ReadonlyArray<{ name: string; responseStatus?: number }>,
+  errorText: string | null,
+  fetcher: (url: string, init: RequestInit) => Promise<unknown>,
+  timeoutMs = 3_000,
+): Promise<number> {
+  const urls = new Set<string>();
+  for (const entry of entries) {
+    if (entry.name.includes('/assets/') && typeof entry.responseStatus === 'number' && entry.responseStatus >= 400) urls.add(entry.name);
+  }
+  const fromError = errorText?.match(/https?:\/\/\S+\/assets\/[^\s'"]+?\.(?:js|css)/)?.[0];
+  if (fromError) urls.add(fromError);
+  if (urls.size === 0) return 0;
+  const all = Promise.allSettled([...urls].slice(0, 20).map(url => fetcher(url, { cache: 'reload' })));
+  await Promise.race([all, new Promise(resolve => setTimeout(resolve, timeoutMs))]);
+  return Math.min(urls.size, 20);
+}

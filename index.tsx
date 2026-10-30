@@ -11,7 +11,7 @@ import NativePrivacyGate from './components/NativePrivacyGate';
 const DrawingMigrationPrompt = React.lazy(() => import('./components/DrawingMigrationPrompt'));
 import { parseSnapshotRenderParams } from './lib/snapshotRender';
 import { perfMark, startJankMonitor } from './lib/perfTrace';
-import { shouldReloadForStaleChunk } from './lib/navigationRestore';
+import { refreshFailedAssets, shouldReloadForStaleChunk } from './lib/navigationRestore';
 perfMark('boot:js-eval');
 startJankMonitor();
 
@@ -59,7 +59,12 @@ if ((navigator as any).userAgentData?.brands?.some((b: any) => /Chromium/i.test(
 window.addEventListener('vite:preloadError', (event) => {
   if (!shouldReloadForStaleChunk(Date.now())) return;
   event.preventDefault();
-  window.location.reload();
+  // 404 z okna nasazení má v cache „immutable“ — bez přepsání by ji reload vrátil znovu.
+  const payload = (event as Event & { payload?: unknown }).payload;
+  const errorText = payload instanceof Error ? payload.message : null;
+  void refreshFailedAssets(performance.getEntriesByType('resource') as PerformanceResourceTiming[], errorText, (url, init) => fetch(url, init))
+    .catch(() => 0)
+    .finally(() => window.location.reload());
 });
 
 // State for update banner
