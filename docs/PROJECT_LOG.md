@@ -285,6 +285,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-30 — Obchodování z grafu, fáze 2c: utažení SL a SL na BE (Claude, nasazeno 08:23 @ 65594d9d, test naostro prošel)
+
+- **Záznam u brokera (Filip, 07:39, `--scenario modify-through-market`, za
+  DISARMED):** long 1 MNQ vyplněn 29029,25; modify SL přes trh → Tradovate
+  `rejected: InvalidPrice`, noha beze změny; skript pozici zavřel, leader
+  ověřeně čistý, read-only reconcile `authoritativelyClean`. Kvůli pojistce
+  ceny ve skriptu musel běžet TradingView s CDP (spustil Claude, `tv_launch`).
+- **Implementace 65594d9d** (plán §10.3, INV-MANUAL-01 2c): `move-stop` i k trhu
+  (jen prostý Stop, SL ostře na ochranné straně TP, bez přepočtu limitů),
+  TP k trhu dál blokovaný; úspěch jen s ohraničeným (3 s) autoritativním
+  `findOrderById`; `filled` = „SL se spustil“, zrušená noha s trvající pozicí =
+  `unknown` (nikdy úspěch); `unknown` dořeší čtení (po zápisu, po kontrole
+  pozic, po startu); brzda během zápisu přiznána ve výsledku. UI: „SL na BE
+  leadera (bez poplatků)“ z `manageableLeaderTrades.entryAvgPrice`, pojistka
+  8 ticků od ceny z P&L brokera. Oponentura 3 kola (OPRAVIT PŘED IMPLEMENTACÍ →
+  OPRAVIT PŘED COMMITEM → OK s výhradami). Ověření při DISARMED: tsc, cílené
+  2× 344/344, celá sada 6155/6155, build; po rebase na paralelní 17f9fa9c znovu
+  tsc + 91/91. Nasazení se souhlasem („Nasaď“): push, Vercel READY, reinstall
+  `mac-reinstall-safe.sh` (IBKR), reconcile čistý.
+- **Test naostro (1 MNQ, leader + 3 followeři):** short 28975,50 z appky →
+  „SL na BE“ 28984,25 → 28975,50 `acknowledged` (~0,6 s včetně ověření), kopírka
+  `sl-moved` ×3 (P&L úrovně 0), bez režimu jen správy, bez `lastError`; obchod
+  skončil na TP (+35 USD leader), followeři s ním. Předtím zrušení čekajícího
+  vstupu z appky opět OK.
+- **NEOVĚŘENO:** stop přesně na trhu / 1 tick přes, zavřený trh, odmítnutí
+  posunu u followera naostro (jen test: nativní OSO → režim jen správy).
+  Follow-upy z oponentury v plánu §10.3 (auto-resume `wait` pro čerstvé
+  `unknown`, stáří `mark` v pojistce, push při `rejected`, strukturovaný příznak
+  odmítnutí). Tradeify leader vyřazen (Filip nemá platný účet).
+
 ### 2026-10-30 — BoS/CHoCH živě a „Bez textu“ + logo TradingView pryč (Claude, nasazeno 07:52 @ 17f9fa9c)
 
 - **Nasazení (Filip „nasaď po testech“)**: přeneseno na main bbdd86e7. Celá
