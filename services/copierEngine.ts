@@ -370,8 +370,10 @@ export interface CopierManualOrderActionRecord {
   operationId: string;
   payloadHash: string;
   entryOperationId: string;
-  action: 'move-stop' | 'move-target' | 'cancel-entry';
+  action: 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position';
   status: 'sending' | 'acknowledged' | 'rejected' | 'unknown' | 'not-sent' | 'waived';
+  /** Symbol obchodu (dořešení zavření po restartu nezávisle na outboxech). Volitelné kvůli starším záznamům. */
+  symbol?: string;
   targetBrokerOrderId: string;
   fromPrice: number | null;
   toPrice: number | null;

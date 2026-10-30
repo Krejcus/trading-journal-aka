@@ -193,8 +193,13 @@ describe('fáze 1b: fill scénář nahrávání', () => {
     expect(problems(fill({ accountId: 7, allowNonGroupAccount: true }), outsider).join(' ')).toContain('ve skupině');
     expect(parseRecordLeaderOsoArgs(['--account', '9', '--symbol', 'MNQZ6', '--entry', '1', '--sl', '1', '--tp', '1',
       '--market-price', '1', '--scenario', 'fill', '--non-group-account'])).toMatchObject({ scenario: 'fill', allowNonGroupAccount: true });
+    expect(parseRecordLeaderOsoArgs(['--account', '9', '--symbol', 'MNQZ6', '--entry', '1', '--sl', '1', '--tp', '1',
+      '--market-price', '1', '--scenario', 'market'])).toMatchObject({ scenario: 'market' });
     expect(() => parseRecordLeaderOsoArgs(['--account', '9', '--symbol', 'MNQZ6', '--entry', '1', '--sl', '1', '--tp', '1',
-      '--market-price', '1', '--scenario', 'market'])).toThrow('--scenario');
+      '--market-price', '1', '--scenario', 'stop-market'])).toThrow('--scenario');
+    // Market vstup má stejné brány jako fill (vstup u trhu, SL 0,3–1 %, TP ≥ 1,5 %).
+    expect(problems(fill({ scenario: 'market' }), status())).toEqual([]);
+    expect(problems(fill({ scenario: 'market', stopLoss: 30_005 }), status()).join(' ')).toContain('SL');
   });
 
   const ack: RecordPlacement = { kind: 'acknowledged', entryId: 'e', legIds: ['s', 't'] };

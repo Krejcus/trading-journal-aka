@@ -85,3 +85,22 @@ describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)
     expect(ticket).toMatch(/worker-disconnected\|pouze read-only/);
   });
 });
+
+describe('LIVE → Graf: × u pozice a Market (30. 10.)', () => {
+  it('× u pozice jen se schopností workeru a za zapnuté kopírky; jinak pozice bez ×', () => {
+    const closable = livePositionChartLines(summary(), { ...controls, canClose: true })[0];
+    expect(closable).toMatchObject({ cancellable: true, cancelAction: 'close-position', confirmCancel: true });
+    expect(livePositionChartLines(summary(), controls)[0].cancellable).toBe(false);
+    const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
+    expect(screen).toMatch(/canClose: manageCloseSupported && copier\.available && copier\.status\?\.armed === true && copier\.status\.shadowMode !== true/);
+    expect(screen).toMatch(/runLiveManage\('close-position', summary\.stop\)/);
+  });
+
+  it('Market = marketable limit o pojistku přes trh (známá nejhorší cena pro riziko workeru)', () => {
+    const ticket = readFileSync('components/LiveOrderTicket.tsx', 'utf8');
+    expect(ticket).toMatch(/export const MARKET_GUARD_POINTS = 2;/);
+    expect(ticket).toMatch(/draft\.side === 'buy' \? quote\.ask \+ MARKET_GUARD_POINTS : quote\.bid - MARKET_GUARD_POINTS/);
+    expect(ticket).toMatch(/orderType: draft\.type === 'stop' \? 'Stop' : 'Limit', price: marketGuardPrice \?\? draft\.price/);
+    expect(ticket).not.toMatch(/Market zatím ne/);
+  });
+});

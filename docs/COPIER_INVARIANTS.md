@@ -1397,7 +1397,8 @@ existující ochranu.
   noha beze změny). Jen prostý `Stop`, SL ostře na ochranné straně čerstvého TP,
   utažení bez přepočtu limitů; `move-target` k trhu dál blokovaný. Úspěch jen
   s autoritativním `findOrderById` ohraničeným 3 s (adaptér bez syncu hlásí úspěch
-  i u odmítnutí); noha `filled` = `waived` s důvodem, zrušená noha při trvající
+  i u odmítnutí) — nebo (zrychlení 30. 10.) řádkem streamu, jehož cena se po zápisu
+  změnila na novou (ne syntetický ACK řádek); noha `filled` = `waived` s důvodem, zrušená noha při trvající
   pozici = `unknown` (nikdy úspěch); `unknown` se dořeší jen čtením (po zápisu,
   po kontrole pozic, po startu), `rejected` z čtení jen po skončeném zápisu.
   Brzda během zápisu = výsledek přizná původní SL followerů. Odmítnutý modify
@@ -1412,6 +1413,18 @@ existující ochranu.
   (`components/LiveTradeToasts.tsx`) jsou jen zobrazení `recentCopyEvents`; tečky
   nejsou důkaz kopie (zelené jen za zapnuté kopírky). Hlídá test:
   `tests/liveChartOrderLines.test.ts`, `tests/liveTradeToasts.test.ts`.
+- **Fáze 2d — zavřít obchod leadera z grafu (30. 10. 2026):** `close-position` =
+  `liquidatePosition` leadera (Tradovate zruší nohy +0,3 s, pak Market), kopírka
+  zrcadlí zrušení nohou a exit. Jen ARMED ∧ ¬shadow ∧ ¬kill, čistý tvar, „co jsem
+  viděl“ = SL leadera + |pozice|, `closeReachBlockers` (obě nohy dosažitelné,
+  follower s pozicí mimo exit sadu = blocked, ingress, běžící Flatten). Synchronně
+  před zápisem fence, generation, žádný jiný zápis na leaderovi; zápis registrovaný
+  jako rozpracovaný (Flatten leadera vynechá a ohlásí nejasný zápis — žádná druhá
+  likvidace). Výsledek jen ze stavu u brokera (ověření ≤ 3 s): flat ∧ nic nepracuje =
+  `acknowledged`; pozice bez SL/TP = incident bez auto-close (ve všech větvích i při
+  dořešení); `already-flat` / flat při dořešení = `waived` (kauzalitu netvrdit).
+  Brzda zavření zneplatní (relay supersede, agent `brake-after-request`), TTL 5 s.
+  Hlídá test: `tests/manualOrderManage.test.ts` (fáze 2d).
 - - **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
   časovač ani fill před nohami ho neflushnou, čeká se nejvýš 5 s, pak
   failClosed + cílené zrušení. Cílené zrušení (`cancelOwnManualEntry`) jen
@@ -1425,6 +1438,11 @@ existující ochranu.
 - Proč: Filip 26. 10. povolil cenu z TV pro P&L zobrazené na obrazovce, nikdy
   pro risk, day lock, limity ani kopírku. Veřejný Realtime kanál je
   podvrhnutelný, proto se zprávy podepisují.
+- **Výjimka Market (Filip 30. 10. 2026, výslovně schváleno):** Market z panelu
+  posílá Limit o `MARKET_GUARD_POINTS` (2 b) přes ask/bid grafu. Cena grafu smí
+  být JEN strop ceny příkazu uživatele (Buy se vyplní za ni nebo lépe), a jen
+  mladší než 3 s; nikdy nevstupuje do read modelu, rizika, day locku ani rozhodnutí
+  kopírky (worker počítá riziko z ceny příkazu jako z nejhoršího vstupu).
 - Vynucuje: `lib/tvPriceMessage.ts` (HMAC nad surovým řetězcem, přísný
   tvar), `lib/tvPriceStore.ts` (jen paměť, ochrana proti přehrání
   `seq`/`runId`/`at`), `lib/tvPriceChannelClient.ts` (postupné ověření,

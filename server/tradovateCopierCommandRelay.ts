@@ -110,6 +110,12 @@ const PREVIEW_COMMAND_TTL_MS = 15_000;
 const PREVIEW_MIN_INTERVAL_MS = 3_000;
 /** Ruční vstup z grafu (fáze 1b): krátká platnost, jeden naráz, denní strop. */
 const ENTRY_COMMAND_TTL_MS = 15_000;
+/** Zavření obchodu z grafu (fáze 2d): krátká platnost — po 5 s už uživatel viděl jiný trh. */
+const CLOSE_COMMAND_TTL_MS = 5_000;
+const isLeaderTradeClose = (command: unknown): boolean => {
+  const inner = (command as { type?: unknown; command?: { type?: unknown; action?: unknown } } | null);
+  return inner?.type === 'copy-command' && inner.command?.type === 'manage-leader-order' && inner.command.action === 'close-position';
+};
 const ENTRY_MIN_INTERVAL_MS = 3_000;
 const ENTRY_DAILY_CAP = 30;
 /** Správa vlastního vstupu (fáze 2a): rozestup 2 s na vstup, 100 za 24 h na uživatele (INV-TRAD-04). */
@@ -743,7 +749,8 @@ export async function enqueueTradovateCopierCommand(options: {
   const expiresAt = new Date(now + (isTradovateCopierBrakeCommand(options.command)
     ? BRAKE_COMMAND_TTL_MS
     : isLeaderEntryPreview(options.command) ? PREVIEW_COMMAND_TTL_MS
-      : entryOperationId ? ENTRY_COMMAND_TTL_MS : STANDARD_COMMAND_TTL_MS)).toISOString();
+      : isLeaderTradeClose(options.command) ? CLOSE_COMMAND_TTL_MS
+        : entryOperationId ? ENTRY_COMMAND_TTL_MS : STANDARD_COMMAND_TTL_MS)).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands').upsert({
     user_id: options.userId,
     device_id: device.id,
@@ -845,8 +852,10 @@ const expirePendingEntriesSupersededByBrake = async (options: {
     .contains('payload', { command: { type: 'place-leader-entry' } })
     .lte('created_at', options.brakeCreatedAt);
   if (entryError) throw new Error(`copier-relay-brake-supersede-failed: ${entryError.message}`);
-  // Posun SL/TP brzda zneplatní; zrušení vstupu je risk-redukční a zůstává.
-  for (const action of ['move-stop', 'move-target']) {
+  // Posun SL/TP i zavření obchodu brzda zneplatní (zavření slibuje „kopírka zavře
+  // kopie“ — za vypnuté kopírky by zůstaly otevřené; oponentura 2d P2). Zrušení
+  // čekajícího vstupu je risk-redukční a zůstává.
+  for (const action of ['move-stop', 'move-target', 'close-position']) {
     const { error: manageError } = await options.db.from('tradovate_copier_commands')
       .update({ status: 'expired', completed_at: options.brakeCreatedAt, error: 'superseded-by-brake' })
       .eq('device_id', options.deviceId)

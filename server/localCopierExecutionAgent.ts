@@ -22,7 +22,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -400,7 +400,7 @@ export async function startLocalCopierExecutionAgent(
     version: 1,
     capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY,
       ...(typeof options.controller.placeLeaderEntry === 'function' ? [COPIER_MANUAL_ENTRY_CAPABILITY] : []),
-      ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ORDER_MANAGE_CAPABILITY] : []),
+      ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY] : []),
       ...(options.autoRearmAfterTransport === true && autoResumeAdmission ? [COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY] : []),
       ...(typeof options.controller.retireGroup === 'function' && options.previewGroupAccounts
         ? [COPIER_GROUP_DELETE_CAPABILITY]

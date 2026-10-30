@@ -15,6 +15,8 @@
  * SL 0,3–1 % od vstupu, TP aspoň 1,5 % od trhu. Vstup se vyplní, záznam
  * zachytí přechod nohou na Working, po `--hold-ms` skript leadera zavře
  * (liquidate) a ověří flat bez příkazů. Riziko = vzdálenost SL × 2 USD.
+ * `--scenario market` (fáze 2e): totéž s Market vstupem (OSO s Market parentem) —
+ * zaznamená, jak Tradovate hlásí Market OSO a přechod nohou; pak liquidate.
  * `--non-group-account`: účet mimo skupinu workeru (např. Tradeify připojení).
  *
  * Během běhu: na nic nesahat (ARM, Tradovate), NEpřerušovat Ctrl+C.
@@ -58,7 +60,7 @@ const refuse = (problems: string[]) => {
 
 const plan = parseRecordLeaderOsoArgs(process.argv.slice(2));
 console.log(plan.scenario !== 'cancel'
-  ? `Plán FILL: ${plan.side} 1 ${plan.symbol} LMT ${plan.entry} (vyplní se), SL ${plan.stopLoss}, TP ${plan.takeProfit}; trh ${plan.marketPrice}; zavřít po ${plan.holdMs} ms; max. ztráta při SL ≈ ${(Math.abs(plan.entry - plan.stopLoss) * 2).toFixed(0)} USD`
+  ? `Plán ${plan.scenario === 'market' ? 'MARKET' : 'FILL'}: ${plan.side} 1 ${plan.symbol} ${plan.scenario === 'market' ? 'MKT ~' : 'LMT '}${plan.entry} (vyplní se), SL ${plan.stopLoss}, TP ${plan.takeProfit}; trh ${plan.marketPrice}; zavřít po ${plan.holdMs} ms; max. ztráta při SL ≈ ${(Math.abs(plan.entry - plan.stopLoss) * 2).toFixed(0)} USD`
   : `Plán: ${plan.side} 1 ${plan.symbol} LMT ${plan.entry}, SL ${plan.stopLoss}, TP ${plan.takeProfit}; trh ${plan.marketPrice}; zrušit po ${plan.holdMs} ms`);
 const initialStatus = await readStatus();
 const initialProblems = recordLeaderOsoProblems(plan, initialStatus, Date.now());
@@ -244,7 +246,7 @@ try {
   placement = { kind: 'uncertain', entrySide: plan.side };
   const request = broker.placeOso!({
     tag, accountId: plan.accountId, symbol: plan.symbol, side: plan.side, quantity: 1,
-    orderType: 'Limit', limitPrice: plan.entry,
+    ...(plan.scenario === 'market' ? { orderType: 'Market' as const } : { orderType: 'Limit' as const, limitPrice: plan.entry }),
     first: { side: exitSide, orderType: 'Stop', stopPrice: plan.stopLoss },
     second: { side: exitSide, orderType: 'Limit', limitPrice: plan.takeProfit },
   });

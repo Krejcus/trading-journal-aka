@@ -409,7 +409,7 @@ export async function executeTradovateCopierRelayCommand(
       timer = window.setTimeout(() => {
         options.signal?.removeEventListener('abort', onAbort);
         resolve();
-      }, 400);
+      }, 250);
       options.signal?.addEventListener('abort', onAbort, { once: true });
     });
   }

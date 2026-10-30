@@ -37,6 +37,14 @@ export const supportsCopierManualOrderManage = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_MANUAL_ORDER_MANAGE_CAPABILITY);
 
+/** Worker umí zavřít obchod leadera z grafu (fáze 2d, 30. 10. 2026). */
+export const COPIER_MANUAL_ORDER_CLOSE_CAPABILITY = 'manual-order-close-v1';
+
+export const supportsCopierManualOrderClose = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ORDER_CLOSE_CAPABILITY);
+
 /** Worker umí smazat svou skupinu a běžet bez skupiny (11. 10. 2026). */
 export const COPIER_GROUP_DELETE_CAPABILITY = 'group-delete-v1';
 

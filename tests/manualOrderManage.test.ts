@@ -33,12 +33,14 @@ afterEach(() => { active?.stop(); active = null; });
 async function setup(options: {
   followerDll?: number; store?: CopierStore; groupConfig?: CopyGroupConfig; patchBroker?: (broker: MockBroker) => void;
   modifyBehavior?: Parameters<typeof createMockBroker>[0]['modifyBehavior'];
+  nativeLiquidate?: boolean;
 } = {}) {
   const config = options.groupConfig ?? group();
   const clock = { now: START };
   const broker = createMockBroker({
     behavior: () => ({ kind: 'working' }),
     ...(options.modifyBehavior ? { modifyBehavior: options.modifyBehavior } : {}),
+    ...(options.nativeLiquidate ? { nativeLiquidate: true } : {}),
     accountRiskSnapshots: [risk(LEADER, START + 500), risk(FOLLOWER, START + 500, options.followerDll ?? 1_000), risk(201, START + 500)],
   });
   options.patchBroker?.(broker);
@@ -367,9 +369,10 @@ describe('fáze 2c: utažení SL a SL na BE', () => {
     expect(result.reason).toMatch(/už u brokera není/);
   });
 
-  it('visící ověřovací čtení nezablokuje job: po limitu unknown a dořešení později', async () => {
+  it('visící REST čtení nezablokuje job: stream potvrdí hned; bez streamu po limitu unknown', async () => {
     const hang = { on: false };
     const ctx = await setup({
+      modifyBehavior: (order, _changes, attempt) => (order?.accountId === LEADER && attempt > 1 ? 'accepted-not-applied' : 'success'),
       patchBroker: broker => {
         const real = broker.findOrderById.bind(broker);
         broker.findOrderById = async (accountId, brokerOrderId) => (hang.on && accountId === LEADER ? new Promise(() => undefined) : real(accountId, brokerOrderId));
@@ -377,14 +380,16 @@ describe('fáze 2c: utažení SL a SL na BE', () => {
     });
     await fillEntries(ctx);
     hang.on = true;
-    const started = Date.now();
-    const result = await manage(ctx, 'move-stop', SL, 29_495, 'manage:hangread1');
-    expect(result.status).toBe('unknown');
+    // Rychlá cesta (zrychlení 30. 10.): stream už ukázal novou cenu → bez REST čtení.
+    let started = Date.now();
+    expect((await manage(ctx, 'move-stop', SL, 29_495, 'manage:hangread1')).status).toBe('acknowledged');
+    expect(Date.now() - started).toBeLessThan(1_000);
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    // Broker odpoví, ale stream novou cenu nemá a REST visí → ohraničeně unknown, žádné „acknowledged“.
+    started = Date.now();
+    expect((await manage(ctx, 'move-stop', 29_495, 29_490, 'manage:hangread2')).status).toBe('unknown');
     expect(Date.now() - started).toBeLessThan(2_000);
-    hang.on = false;
-    ctx.clock.now += 1_000;
-    await sleep(200);
-    expect(ctx.controller.status().manualOrderActions?.find(item => item.operationId === 'manage:hangread1')).toMatchObject({ status: 'acknowledged' });
   });
 
   it('souběh u followera: leader posunut, broker modify followera odmítne → kopírka bez likvidace, follower drží původní SL', async () => {
@@ -401,5 +406,101 @@ describe('fáze 2c: utažení SL a SL na BE', () => {
     expect(followerOrder(ctx.broker, 'Stop')?.stopPrice).toBe(SL);
     expect(ctx.broker.liquidateRequests().filter(request => request.accountId === FOLLOWER)).toEqual([]);
     expect(ctx.broker.placedRequests().filter(request => request.accountId === FOLLOWER && request.orderType === 'Market')).toEqual([]);
+  });
+});
+
+describe('fáze 2d: zavřít obchod leadera z grafu', () => {
+  it('ARMED + čistý tvar → liquidate leadera, úspěch až podle stavu u brokera (flat, nic nepracuje)', async () => {
+    const ctx = await setup({ nativeLiquidate: true });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'close-position', SL, undefined, 'manage:close0001');
+    expect(result).toMatchObject({ status: 'acknowledged', blockers: [] });
+    expect(result.reason).toMatch(/ověřeno čtením/);
+    expect(ctx.broker.liquidateRequests()).toEqual([expect.objectContaining({ accountId: LEADER, symbol: SYMBOL })]);
+    expect(ctx.controller.status().manualOrderActions?.at(-1)).toMatchObject({ action: 'close-position', status: 'acknowledged' });
+  });
+
+  it('DISARMED, jiná cena SL nebo nevyplněný vstup → blocked, nic se nepošle', async () => {
+    const ctx = await setup({ nativeLiquidate: true });
+    expect((await manage(ctx, 'close-position', SL, undefined, 'manage:close0002')).blockers.map(issue => issue.code)).toContain('shape');
+    await fillEntries(ctx);
+    expect((await manage(ctx, 'close-position', SL - 1, undefined, 'manage:close0003')).blockers.map(issue => issue.code)).toContain('order-changed');
+    ctx.controller.disarm();
+    await ctx.controller.waitForIdle();
+    const disarmed = await manage(ctx, 'close-position', SL, undefined, 'manage:close0004');
+    expect(disarmed.status).toBe('blocked');
+    expect(disarmed.blockers.map(issue => issue.text).join(' ')).toMatch(/jen za zapnuté kopírky/);
+    expect(ctx.broker.liquidateRequests()).toEqual([]);
+  });
+
+  it('nohy zrušené a pozice trvá (Market odmítnut) → unknown + incident bez auto-close, nic znovu', async () => {
+    const ctx = await setup({
+      nativeLiquidate: true,
+      patchBroker: broker => {
+        broker.liquidatePosition = async request => {
+          for (const order of broker.orders()) {
+            if (order.accountId !== request.accountId || order.symbol !== request.symbol || order.status !== 'working') continue;
+            order.status = 'canceled';
+            broker.emitEvent({ type: 'order', order: { ...order } });
+          }
+          return { status: 'rejected', reason: 'market closed' };
+        };
+      },
+    });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'close-position', SL, undefined, 'manage:close0005');
+    expect(result.status).toBe('unknown');
+    expect(result.reason).toMatch(/bez SL\/TP/);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status().lastError).toMatch(/bez SL\/TP/);
+  });
+
+  it('nejistá odpověď → unknown; čtení po ustálení (leader flat) → vyřešeno, nikdy podle konce nohy', async () => {
+    const ctx = await setup({
+      nativeLiquidate: true,
+      patchBroker: broker => {
+        const real = broker.liquidatePosition!.bind(broker);
+        broker.liquidatePosition = async request => { await real(request); return { status: 'indeterminate', reason: 'no ack' }; };
+      },
+    });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'close-position', SL, undefined, 'manage:close0006');
+    expect(result.status).toBe('unknown');
+    ctx.clock.now += 1_000;
+    await sleep(200);
+    // Kauzalitu z flat stavu netvrdit (INV-MODE-02): vyřešeno „potvrzeno stavem“.
+    expect(ctx.controller.status().manualOrderActions?.find(item => item.operationId === 'manage:close0006')).toMatchObject({ status: 'waived', reason: expect.stringMatching(/příčina neověřena/) });
+  });
+
+  it('nejistá odpověď a nohy zrušené s trvající pozicí → incident hned (ne až čtením)', async () => {
+    const ctx = await setup({
+      nativeLiquidate: true,
+      patchBroker: broker => {
+        broker.liquidatePosition = async request => {
+          for (const order of broker.orders()) {
+            if (order.accountId !== request.accountId || order.symbol !== request.symbol || order.status !== 'working') continue;
+            order.status = 'canceled';
+            broker.emitEvent({ type: 'order', order: { ...order } });
+          }
+          return { status: 'indeterminate', reason: 'no ack' };
+        };
+      },
+    });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'close-position', SL, undefined, 'manage:close0007');
+    expect(result.status).toBe('unknown');
+    expect(result.reason).toMatch(/bez SL\/TP/);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status().lastError).toMatch(/bez SL\/TP/);
+  });
+
+  it('po dokončeném Flattenu zavření z grafu NENÍ trvale blokované „Běží Flatten“', async () => {
+    const ctx = await setup({ nativeLiquidate: true });
+    await fillEntries(ctx);
+    await ctx.controller.flattenGroup('flatten:closetest01').catch(() => undefined);
+    await ctx.controller.waitForIdle();
+    // Flatten skupinu vypnul a zavřel — znovu vstup a zavření z grafu.
+    const blocked = await manage(ctx, 'close-position', SL, undefined, 'manage:close0008');
+    expect(blocked.blockers.map(issue => issue.text).join(' ')).not.toMatch(/Běží Flatten/);
   });
 });

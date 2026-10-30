@@ -22,7 +22,7 @@ export interface RecordLeaderOsoPlan {
    * `fill` = marketable Limit, vyplní se; zaznamená přechod nohou
    * Suspended → Working, pak leadera zavře (liquidate) a ověří flat.
    */
-  scenario: 'cancel' | 'fill' | 'modify-through-market';
+  scenario: 'cancel' | 'fill' | 'modify-through-market' | 'market';
   /** Účet mimo skupinu workeru (např. Tradeify připojení) — nikdy follower skupiny. */
   allowNonGroupAccount: boolean;
 }
@@ -60,8 +60,8 @@ export function parseRecordLeaderOsoArgs(argv: readonly string[]): RecordLeaderO
   const holdMs = value('hold-ms') === undefined ? 4_000 : number('hold-ms');
   if (holdMs < 1_000 || holdMs > MAX_HOLD_MS) throw new Error(`--hold-ms musí být 1000–${MAX_HOLD_MS}`);
   const scenario = value('scenario') ?? 'cancel';
-  if (scenario !== 'cancel' && scenario !== 'fill' && scenario !== 'modify-through-market') {
-    throw new Error('--scenario musí být cancel, fill nebo modify-through-market');
+  if (scenario !== 'cancel' && scenario !== 'fill' && scenario !== 'modify-through-market' && scenario !== 'market') {
+    throw new Error('--scenario musí být cancel, fill, modify-through-market nebo market');
   }
   return {
     accountId, symbol, side,
@@ -118,7 +118,8 @@ export function recordLeaderOsoProblems(plan: RecordLeaderOsoPlan, status: unkno
   }
   const market = anchor ?? plan.marketPrice;
   const distance = market * RECORD_MIN_DISTANCE_RATIO;
-  if (plan.scenario === 'fill' || plan.scenario === 'modify-through-market') {
+  // `market` (fáze 2e): OSO s Market vstupem — `--entry` = očekávaná cena (trh), brány jako u fill.
+  if (plan.scenario === 'fill' || plan.scenario === 'modify-through-market' || plan.scenario === 'market') {
     const slip = market * RECORD_FILL_MAX_SLIP_RATIO;
     const slDistance = Math.abs(plan.entry - plan.stopLoss);
     if (plan.side === 'Buy') {

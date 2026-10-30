@@ -8,7 +8,8 @@ import { stableHash64 } from '../services/copierKeys.js';
  * běžnou cestou (zrcadlení modify, lifecycle cancel).
  */
 
-export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry';
+/** `close-position` (fáze 2d): zavřít obchod leadera (liquidate), kopírka zavře kopie. */
+export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position';
 
 export interface LeaderOrderManageCommand {
   type: 'manage-leader-order';
@@ -21,7 +22,7 @@ export interface LeaderOrderManageCommand {
   leaderEntryOrderId?: string;
   symbol: string;
   action: LeaderOrderManageAction;
-  /** Co uživatel viděl: cena dotčeného příkazu (u cancel-entry cena vstupu) a počet kontraktů. */
+  /** Co uživatel viděl: cena dotčeného příkazu (u cancel-entry cena vstupu, u close-position cena SL) a počet kontraktů. */
   expect: { price: number; quantity: number };
   /** Jen `move-*`. */
   newPrice?: number;
@@ -44,7 +45,7 @@ export interface LeaderOrderManageResult {
 const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
 const OPERATION_ID_PATTERN = /^manage:[a-zA-Z0-9_-]{8,100}$/;
 const ENTRY_OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
-const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry'];
+const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry', 'close-position'];
 const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'payloadHash'];
 const LEADER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 1e-9;

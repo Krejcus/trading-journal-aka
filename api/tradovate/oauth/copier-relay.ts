@@ -410,9 +410,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // (Nález GPT cross-review, 2026-08-21.)
       let resolution: Awaited<ReturnType<typeof readTradovateCopierCommand>> | null = null;
       try {
-        const longPollDeadline = Date.now() + 2_200;
+        // 30. 10.: 6 s místo 2,2 s — správa z grafu (posun, vstup) trvá ve workeru
+        // 1–3 s; miss znamenal klientský polling s dalšími RTT (měřeno 1,5–2,5 s celkem).
+        const longPollDeadline = Date.now() + 6_000;
         while (Date.now() < longPollDeadline) {
-          await new Promise(resolve => setTimeout(resolve, 150));
+          await new Promise(resolve => setTimeout(resolve, 100));
           const current = await readTradovateCopierCommand({ db, userId, commandId: queued.id });
           if (current.status === 'succeeded' || current.status === 'rejected' || current.status === 'expired') {
             resolution = current;

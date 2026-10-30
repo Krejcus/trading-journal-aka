@@ -117,6 +117,11 @@ const placeErrorView = (message: string): { tone: 'bad' | 'warn'; text: string }
     : { tone: 'warn', text: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate, než to zkusíš znovu.` }
 );
 
+/** Market z panelu = Limit o tolik bodů přes trh (pojistka proti skluzu, známá nejhorší cena). */
+export const MARKET_GUARD_POINTS = 2;
+/** Market jen s cenou grafu mladší než tohle (strop ceny příkazu). */
+export const MARKET_QUOTE_MAX_AGE_MS = 3_000;
+
 /** Jak dlouho výsledek náhledu platí jako „aktuální“; pak zešedne. */
 const PREVIEW_FRESH_MS = 15_000;
 
@@ -428,13 +433,21 @@ const LiveOrderTicket: React.FC<Props> = ({
   // Fáze 1a: co by panel poslal workeru k náhledu (jen Limit/Stop se SL i TP, skupina).
   // Kontrakt bere náhled ze zdroje ceny grafu — v týdnu rollu nikdy odhadem.
   const previewSymbol = previewSymbolFromChartSource(quoteInfo.source);
-  const previewDraft: LiveEntryPreviewDraft | null = previewSymbol && draft && m && draft.type !== 'market' && draft.stopLoss != null && draft.takeProfit != null && m.quantity >= 1
-    ? { symbol: previewSymbol, side: draft.side === 'buy' ? 'Buy' : 'Sell', quantity: m.quantity, orderType: draft.type === 'limit' ? 'Limit' : 'Stop', price: draft.price, stopLoss: draft.stopLoss, takeProfit: draft.takeProfit }
+  // Market = „marketable limit“ (30. 10.): Limit o MARKET_GUARD_POINTS přes trh — vyplní se hned
+  // jako Market, ale s pojistkou proti skluzu a se známou nejhorší cenou pro riziko workeru
+  // (worker trh nezná; cena z grafu je jen záměr uživatele, rozhoduje broker).
+  const marketGuardPrice = draft && quote && draft.type === 'market'
+    ? (draft.side === 'buy' ? quote.ask + MARKET_GUARD_POINTS : quote.bid - MARKET_GUARD_POINTS)
+    : null;
+  const previewDraft: LiveEntryPreviewDraft | null = previewSymbol && draft && m && draft.stopLoss != null && draft.takeProfit != null && m.quantity >= 1
+    ? { symbol: previewSymbol, side: draft.side === 'buy' ? 'Buy' : 'Sell', quantity: m.quantity,
+      orderType: draft.type === 'stop' ? 'Stop' : 'Limit', price: marketGuardPrice ?? draft.price, stopLoss: draft.stopLoss, takeProfit: draft.takeProfit }
     : null;
   const previewBlockedReason = !draft ? null
     : !previewSymbol ? 'Kontrakt grafu není známý (kontinuální řada nebo cena z TradingView) — náhled teď nejde.'
     : quoteInfo.stale ? 'Cena grafu je zastaralá — náhled ani odeslání teď nejde.'
-    : draft.type === 'market' ? 'Náhled jen pro Limit / Stop (Market zatím ne).'
+    // Market bere cenu grafu jako strop ceny příkazu — jen čerstvou (oponentura 2d/C).
+    : draft.type === 'market' && (quoteInfo.capturedAt == null || Date.now() - quoteInfo.capturedAt > MARKET_QUOTE_MAX_AGE_MS) ? 'Cena grafu je starší než 3 s — Market teď nejde (zkus Limit).'
       : draft.stopLoss == null || draft.takeProfit == null ? 'Náhled potřebuje SL i TP.'
         : single ? 'Náhled zatím jen pro skupinu (vstup na leadera).'
           : problems.some(problem => problem.level === 'error') ? 'Nejdřív oprav chyby v panelu.' : null;
@@ -443,7 +456,8 @@ const LiveOrderTicket: React.FC<Props> = ({
   const [direct, setDirect] = useState<{ key: string; view: { tone: 'ok' | 'bad' | 'warn'; text: string } } | null>(null);
   const [directBusy, setDirectBusy] = useState(false);
   const directBusyRef = useRef(false);
-  const directKey = previewDraft ? JSON.stringify(previewDraft) : '';
+  // U Marketu se cena mění s každým tickem — výsledek odeslání nesmí s tickem zmizet.
+  const directKey = previewDraft ? JSON.stringify({ ...previewDraft, price: draft?.type === 'market' ? 'market' : previewDraft.price }) : '';
   const shownDirect = direct && direct.key === directKey ? direct : null;
   const directBlocked = !onPlaceEntry ? 'Worker odeslání z grafu neumí.'
     : previewBlockedReason ?? (!previewDraft ? 'Doplň cenu, SL i TP.' : null);
@@ -765,7 +779,7 @@ const LiveOrderTicket: React.FC<Props> = ({
       >
         <span className="inline-flex items-center justify-center gap-1.5">{directBlocked != null && <Lock size={11} />}{directBusy ? 'Odesílám…' : `${draft.side === 'buy' ? 'Koupit' : 'Prodat'} ${m.quantity} ${instrument.symbol}`}</span>
         <small className="font-mono text-[10px] font-semibold opacity-85">
-          {TYPE_LABEL[draft.type]}{draft.type === 'market' ? ` · ${formatPrice(m.entry)}` : ` @ ${formatPrice(draft.price)}`}
+          {TYPE_LABEL[draft.type]}{draft.type === 'market' ? ` · ${formatPrice(m.entry)} (nejhůř ${marketGuardPrice != null ? formatPrice(marketGuardPrice) : '—'})` : ` @ ${formatPrice(draft.price)}`}
           {' · '}{single && picked ? `jen ${picked.short}` : group?.armed === false ? 'jen leader' : group ? `skupina ×${groupMultiplier}` : 'leader + kopírka'}
           {limitIsMarketable(draft, quote) ? ' · hned' : ''}
         </small>

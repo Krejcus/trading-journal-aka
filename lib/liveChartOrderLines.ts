@@ -20,6 +20,8 @@ const signedUsd = (value: number) => `${value >= 0 ? '+' : '−'}$${Math.abs(val
 export interface LivePositionLineControls {
   /** Spravovatelný obchod leadera (vlastní nebo sledovaný) v pohledu skupiny / leadera. */
   manageable: boolean;
+  /** Worker umí zavřít obchod (fáze 2d) a kopírka je čerstvě zapnutá — × u pozice. */
+  canClose?: boolean;
   /** Průměrný vstup leadera od workeru — podklad pro BE. */
   entryAvg: number | null;
   /** Odeslaný posun čekající na potvrzení: čára drží novou cenu se štítkem „odesílám“. */
@@ -78,9 +80,9 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     color: position ? (summary.openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : summary.openPnl >= 0 ? '#059669' : SL_COLOR) : (long ? LONG_COLOR : SHORT_COLOR),
     label: entryLabel,
     draggable: false,
-    // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: zavření přijde s příkazem workeru.
-    cancellable: controls.manageable && !position,
-    cancelAction: 'cancel-order',
+    // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: × = zavřít obchod (leader, kopírka zavře kopie).
+    cancellable: controls.manageable && (!position || controls.canClose === true),
+    cancelAction: position ? 'close-position' : 'cancel-order',
     confirmCancel: true,
     ...(be && position ? {
       actions: [{

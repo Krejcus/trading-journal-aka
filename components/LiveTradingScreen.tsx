@@ -107,6 +107,8 @@ interface Props {
   onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
   /** Průměrný vstup spravovaného obchodu leadera od workeru (SL na BE). */
   manageEntryAvgPrice?: number | null;
+  /** Worker umí zavřít obchod z grafu (× u pozice). */
+  manageCloseSupported?: boolean;
 }
 
 function useMinuteNow() {
@@ -120,7 +122,7 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, tabs, onNavigate, navigationBlocked = false, copier, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -203,10 +205,12 @@ const LiveTradingScreen: React.FC<Props> = ({
   }, [lineNotice]);
   const liveLines = useMemo(() => (summary ? livePositionChartLines(summary, {
     manageable: Boolean(onManageEntry),
+    // × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jinak by kopie zůstaly otevřené (Flatten na přehledu).
+    canClose: manageCloseSupported && copier.available && copier.status?.armed === true && copier.status.shadowMode !== true,
     entryAvg: manageEntryAvgPrice ?? null,
     pointValue: INSTRUMENT.pointValue,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
-  }) : []), [manageEntryAvgPrice, onManageEntry, pendingMove, summary]);
+  }) : []), [copier.available, copier.status, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, summary]);
   const runLiveManage = useCallback(async (
     action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit',
   ) => {
@@ -220,9 +224,10 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (result.status !== 'acknowledged') setPendingMove(null);
       else setPendingMove(current => (current ? { ...current, until: Date.now() + 5_000 } : current));
       setLineNotice({ at: Date.now(), ...(result.status === 'acknowledged'
-        ? (result.reason && /zastavila|spustil|vyplnil|skončil/.test(result.reason)
+        ? (result.reason && /zastavila|spustil|vyplnil|skončil|ne tímto|Flatten/.test(result.reason)
           ? { tone: 'warn' as const, text: result.reason }
-          : { tone: 'ok' as const, text: action === 'cancel-entry' ? 'Vstup zrušen; kopírka zruší kopie.' : 'Posunuto u leadera; kopírka posune kopie.' })
+          : { tone: 'ok' as const, text: action === 'cancel-entry' ? 'Vstup zrušen; kopírka zruší kopie.'
+            : action === 'close-position' ? 'Leader zavřen; kopírka zavírá kopie.' : 'Posunuto u leadera; kopírka posune kopie.' })
         : result.status === 'blocked' ? { tone: 'bad' as const, text: `Neodesláno: ${result.blockers.map(issue => issue.text).join(' ')}` }
           : result.status === 'rejected' ? { tone: 'bad' as const, text: result.reason ?? 'Broker změnu odmítl.' }
             : { tone: 'warn' as const, text: result.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.' }) });
@@ -331,6 +336,8 @@ const LiveTradingScreen: React.FC<Props> = ({
     onOrderLineCancel: line => {
       if (line.ownerId === LIVE_POSITION_OWNER) {
         if (line.kind === 'entry' && summary?.kind === 'pending') void runLiveManage('cancel-entry', summary.leader?.entry);
+        // Zavřít obchod: „co jsem viděl“ = SL leadera (+ qty leadera v desku); worker ověří tvar u brokera.
+        if (line.kind === 'entry' && summary?.kind === 'position') void runLiveManage('close-position', summary.stop);
         return;
       }
       if (line.kind === 'entry') { updateDraft(null); return; }
