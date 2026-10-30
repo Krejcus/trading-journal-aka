@@ -285,6 +285,49 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-30 — Obchodování z grafu: test fází 2a a 2b naostro + oprava „co jsem viděl“ (Claude, oprava nasazena 07:18 @ 666ed1cc)
+
+- **Nález v prvním testu (06:52).** Zrušení čekajícího vstupu z appky
+  zablokoval worker (`order-changed`). K brokerovi nic neodešlo, pojistka
+  zafungovala. Příčina: panel posílal `expect.quantity` jako součet skupiny
+  (leader + 3 followeři = 4) a u zrušení `expect.price` jako vážený průměr
+  skupiny. Worker správně porovnává s příkazem leadera (1). Stejná chyba by
+  blokovala i každý posun SL/TP ve skupině s followery. Fáze 2a/2b tedy do
+  dneška ve skupině nikdy neprošla.
+- **Oprava 666ed1cc (jen web, worker beze změny).** `LiveChartPositionSummary.leader`
+  nese `{accountId, quantity, entry}` účtu leadera. `leaderManageBasis()`
+  vrátí základ jen když `accountId` = leader skupiny workeru: `isLeader`
+  je zobrazovací příznak a pohled jednoho followera ho dá i followerovi
+  (oponentura „OPRAVIT PŘED COMMITEM“, nález 1). Správa se pak v pohledu
+  followera vůbec nenabídne. Druhé kolo copier-design-critic: OK s výhradami.
+  Ověření při DISARMED: tsc, cílené 364/364, build OK. Celá sada 6139/6141
+  při zátěži 14; 2 nesouvisející testy (sync pause render, brzdy relaye)
+  samostatně zelené 19/19. Push na main se souhlasem („Nasaď“).
+- **Test naostro po opravě (1 MNQ, leader + 3 followeři), vše prošlo:**
+  1. 07:22 vlastní Buy Limit z appky → „Zrušit čekající vstup“:
+     `cancel-entry` acknowledged, kopírka zrušila kopie u 3 followerů.
+  2. 07:24 vlastní vstup vyplněn → posun SL 28949 → 28940 (`sl-moved`
+     ×3), posun TP 29007,25 → 29010 (`tp-moved` ×3), Flatten.
+  3. 07:28 short z TradingView s bracketem (`source: tracked`) → posun SL
+     z appky 29209,75 → 29220 (`sl-moved` ×3); po 27 s SL leadera pořád
+     29220, TV nohu nevrátil. Flatten.
+  Po každém kroku: flat, žádné pracující příkazy, žádné divergence,
+  `lastError` null. Po Flattenu reconcile do 4 s čistý.
+- **Pozor na nasazení webu:** v okně přepínání Vercel krátce vrátil 404 na
+  líně načítaný chunk (`star-…js`). Prohlížeč si 404 uložil do HTTP cache
+  a „Graf se nepodařilo zobrazit“ přežil i obnovu stránky. Pomohl
+  `fetch(url, {cache: 'reload'})`. Otevřené: retry líného importu
+  s `cache: 'reload'`, případně `Cache-Control: no-store` na 404 v `/assets`.
+- **Otevřené z oponentury (fail-closed, mimo tento commit):** u
+  `cancel-entry` UI bere první pracující vstup leadera, ne sledované id;
+  worker u zrušení nekontroluje jiné příkazy na symbolu. StopLimit vstup:
+  UI posílá `stopPrice`, worker porovnává `limitPrice ?? stopPrice`
+  (falešný blok). Utažení SL/BE dál čeká na záznam u brokera
+  (`--scenario modify-through-market`, spouští Filip).
+- **Leader na Tradeify VYŘAZEN (Filip 30. 10.):** v Tradeify nemá platný
+  obchodní účet (jen zaseknutý účet ze soutěže) — fixture
+  `--non-group-account` se nedělá, dokud se neobjeví skutečný účet.
+
 ### 2026-10-29 — LIVE → Graf: pravé tlačítko a posun za svíčkami (Claude, nasazeno 30. 10. 06:11 @ e23b7c2f)
 
 - **Nasazení (Filip „nasaď“, 30. 10.)**: větev přenesena na main 286d2b7f
