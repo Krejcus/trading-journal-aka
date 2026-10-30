@@ -19,6 +19,8 @@ export interface LiveChartPositionSummary {
   entryType: string | null;
   /** Otevřené P&L z brokera (po poplatcích, když jsou známé); null = neznámo. */
   openPnl: number | null;
+  /** Cena trhu odvozená z P&L brokera (jen zobrazení a UI pojistky, nikdy autorizace); null = neznámá. */
+  mark: number | null;
   stop: number | null;
   target: number | null;
   /** „SL 3/3 · TP 3/3“ — kolik účtů v obchodu má ochranu na celou pozici. */
@@ -51,6 +53,34 @@ const leaderOf = (accounts: readonly { accountId: number; isLeader: boolean; qua
   return leader ? { accountId: leader.accountId, quantity: leader.quantity, entry: leader.entry } : null;
 };
 
+const MNQ_TICK = 0.25;
+/** Odstup SL od trhu (podle P&L brokera), pod kterým UI utažení nenabídne — kopie followerům by závodila s trhem. */
+export const TIGHTEN_MIN_TICKS = 8;
+
+/** SL na BE: průměrný vstup na tick ve směru ochrany (long dolů, short nahoru); epsilon proti součtům fillů. */
+export function breakEvenStop(side: 'long' | 'short', entryAvg: number | null | undefined, tick = MNQ_TICK): number | null {
+  if (entryAvg == null || !Number.isFinite(entryAvg) || entryAvg <= 0) return null;
+  const units = entryAvg / tick;
+  return (side === 'long' ? Math.floor(units + 1e-9) : Math.ceil(units - 1e-9)) * tick;
+}
+
+/**
+ * UI pojistka utažení SL (jen blokuje, nic neautorizuje — rozhoduje broker):
+ * posun k trhu jen s čerstvou cenou z P&L brokera a aspoň `TIGHTEN_MIN_TICKS`
+ * od ní. Posun dál od trhu pojistku nepotřebuje. Vrací důvod blokace, nebo null.
+ */
+export function tightenBlockReason(
+  side: 'long' | 'short', currentStop: number | null, nextStop: number | null, mark: number | null, tick = MNQ_TICK,
+): string | null {
+  if (currentStop == null || nextStop == null) return null;
+  const toward = side === 'long' ? nextStop > currentStop : nextStop < currentStop;
+  if (!toward) return null;
+  if (mark == null || !Number.isFinite(mark)) return 'Cena trhu od brokera není známá — utažení SL teď nejde.';
+  const gap = side === 'long' ? mark - nextStop : nextStop - mark;
+  if (gap < TIGHTEN_MIN_TICKS * tick - 1e-9) return `Nový SL je blíž než ${TIGHTEN_MIN_TICKS} ticků od trhu (nebo za ním) — kopírka by followerům posun nestihla.`;
+  return null;
+}
+
 /**
  * „Co jsem viděl“ pro správu příkazu leadera — jen když souhrn opravdu patří
  * leaderovi skupiny workeru (ne followerovi s přepsaným `isLeader`). null = nenabízet.
@@ -79,6 +109,7 @@ export function liveChartPosition(view: JournalLiveView, requested: JournalLiveT
     entry: model.entry,
     entryType: model.entryType,
     openPnl: model.kind === 'position' ? model.openPnl : null,
+    mark: model.kind === 'position' ? model.mark : null,
     stop: model.ladder.stop,
     target: model.ladder.target,
     protection: `SL ${model.stopCovered}/${accounts} · TP ${model.targetCovered}/${accounts}`,

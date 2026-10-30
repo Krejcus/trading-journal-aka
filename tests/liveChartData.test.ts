@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   buildLiveTradeGroup, copierArmedForRules, copierProvablyOff, liveAccountPositionText, liveChartDisarm, liveTradeGroupKey, shortAccountLabel,
 } from '../lib/liveTradeGroupSource';
-import { liveChartPosition } from '../lib/liveChartPosition';
+import { breakEvenStop, liveChartPosition, tightenBlockReason, TIGHTEN_MIN_TICKS } from '../lib/liveChartPosition';
 import { EMPTY_JOURNAL_LIVE_VIEW, type JournalLiveView } from '../lib/journalLivePosition';
 import { limitAccounts, participatingFollowers, soloTradeBlockReason, targetMultiplier } from '../lib/liveTradeTarget';
 import type { LiveAccount, LiveOrder } from '../services/tradecopiaLiveService';
@@ -192,5 +192,29 @@ describe('LIVE → Graf: vypnutí a strážní pravidla', () => {
     const card = ticket.slice(ticket.indexOf('const PositionCard'), ticket.indexOf('/** Jak dlouho výsledek náhledu platí'));
     expect(card).toMatch(/disabled\n/);
     expect(card).not.toMatch(/onClick/);
+  });
+});
+
+describe('LIVE → Graf: SL na BE a pojistka utažení (fáze 2c, jen UI)', () => {
+  it('BE na tick ve směru ochrany, s epsilonem proti součtům fillů', () => {
+    expect(breakEvenStop('long', 29029.3)).toBe(29029.25);
+    expect(breakEvenStop('short', 29029.3)).toBe(29029.5);
+    // 3 filly 29029.25/.25/.5 → průměr těsně pod tickem nesmí ubrat celý tick.
+    expect(breakEvenStop('long', (29029.25 + 29029.25 + 29029.75) / 3 - 1e-12)).toBe(29029.25);
+    expect(breakEvenStop('long', 29029.25 - 1e-11)).toBe(29029.25);
+    expect(breakEvenStop('short', 29029.25 + 1e-11)).toBe(29029.25);
+    expect(breakEvenStop('long', null)).toBeNull();
+  });
+
+  it('utažení jen s cenou od brokera a aspoň N ticků od trhu; posun dál od trhu bez pojistky', () => {
+    const gap = TIGHTEN_MIN_TICKS * 0.25;
+    expect(tightenBlockReason('long', 29000, 28990, null)).toBeNull();
+    expect(tightenBlockReason('long', 29000, 29010, null)).toMatch(/není známá/);
+    expect(tightenBlockReason('long', 29000, 29010, 29010 + gap)).toBeNull();
+    expect(tightenBlockReason('long', 29000, 29010, 29010 + gap - 0.25)).toMatch(/ticků/);
+    expect(tightenBlockReason('long', 29000, 29020, 29010)).toMatch(/ticků/);
+    expect(tightenBlockReason('short', 29100, 29090, 29090 - gap)).toBeNull();
+    expect(tightenBlockReason('short', 29100, 29090, 29090 - gap + 0.25)).toMatch(/ticků/);
+    expect(tightenBlockReason('short', 29100, 29110, null)).toBeNull();
   });
 });

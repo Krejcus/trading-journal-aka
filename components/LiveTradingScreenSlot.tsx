@@ -59,6 +59,7 @@ interface Props {
   onPreviewEntry?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
   onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
   onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+  manageEntryAvgPrice?: number | null;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -125,4 +126,5 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && left.onPreviewEntry === right.onPreviewEntry
   && left.onPlaceEntry === right.onPlaceEntry
   && left.onManageEntry === right.onManageEntry
+  && (left.manageEntryAvgPrice ?? null) === (right.manageEntryAvgPrice ?? null)
 ));

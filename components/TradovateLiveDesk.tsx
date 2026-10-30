@@ -1573,6 +1573,7 @@ acceptAgentStatus((await executeAgent({
           onPreviewEntry={previewLeaderEntry}
           {...(supportsCopierManualEntry(agentStatus) ? { onPlaceEntry: placeLeaderEntry } : {})}
           {...(supportsCopierManualOrderManage(agentStatus) && ownManualEntry ? { onManageEntry: manageLeaderEntry } : {})}
+          manageEntryAvgPrice={ownManualEntry?.entryAvgPrice ?? null}
         />
       ) : null}
       {chartSafetyNotice && <div role="status" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${chartSafetyNotice.tone === 'error' ? 'border-rose-500/50 bg-rose-500/10 text-rose-500' : 'border-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>

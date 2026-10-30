@@ -658,3 +658,69 @@ pozice followera). Status `manageableLeaderTrades` jen pro výběr v UI.
 Před prvním naostro: posun u bracketu z TradingView a po 20 s ověřit, že
 TradingView cenu nepřepsal (NEOVĚŘENO).
 
+
+### 10.3 Fáze 2c — utažení SL a SL na BE (30. 10. 2026, po oponentuře)
+
+**Důkaz od brokera (záznam 30. 10. 07:39, `--scenario modify-through-market`,
+soubor mimo repo `recordings/leader-oso-2026-10-30T06-39-08-448Z.json`):** long
+1 MNQ, Limit 29034,75 vyplněn **za 29029,25** (trh 29031,75); modify SL na
+29054,75 (~25,5 b nad fillem, hluboko přes trh) → `modifyOrder … rejected:
+InvalidPrice`, noha beze změny, žádný fill ani replaced event. Jediný případ:
+NEOVĚŘENO stop přesně na trhu / 1 tick přes, Tradeify připojení a zavřený trh.
+Pokud by broker stop přes trh místo odmítnutí přijal a spustil, výsledkem je
+exit leadera za trh — nechtěný, ale risk-redukční.
+
+**Worker:**
+- `move-stop` smí i k trhu (utažení, BE, SL do zisku). **Ruší P4 z §10.1**
+  (8 ticků od implikované ceny) — worker trh nezná; stop přes trh odmítne broker.
+  Kontrola: SL ostře na ochranné straně čerstvého TP (`limitPrice` z `listOrders`;
+  chybějící TP = blocked `beyond-target`). Jen prostý `Stop` (StopLimit = blocked
+  `stop-type`, modify posílá jen `stopPrice`).
+- Utažení bez přepočtu limitů; přepočet dál pro každý posun SL dál od trhu.
+- `move-target` k trhu blokovaný (Limit přes trh se vyplní, neodmítne).
+- Výsledek: definitivní odmítnutí brokerem (`… rejected: …`, ne timeout) =
+  `rejected` („cena je přes trh, SL se nezměnil“). Úspěch zápisu se potvrdí
+  autoritativním `findOrderById` (bez synchronizovaného streamu adaptér hlásí
+  úspěch i u asynchronního odmítnutí): nová cena = `acknowledged`; noha `filled`
+  (SL se spustil) = `waived` s důvodem (výsledek známý); noha zrušená/odmítnutá
+  a pozice leadera trvá = `unknown` „SL leadera už u brokera není“ (nikdy úspěch);
+  jinak `unknown`. Čtení je ohraničené 3 s (job drží frontu agenta — Flatten, ARM),
+  i po nedefinitivní výjimce adaptéru („not confirmed“ = často „přijato a vyplněno“).
+- `unknown` se dořeší čtením (jen read): 1× a 3× `settle` (10 s) po zápisu, po
+  pozdním výsledku zápisu a po každé kontrole pozic (i po startu). „Cena beze
+  změny = broker neprovedl“ (`rejected`) jen když zápis už skončil a od něj
+  uplynulo `settle`. Pozdní definitivní odmítnutí = `rejected`. Timeout
+  controlleru pro posun 8 s (adaptér čeká na potvrzení 5 s + POST).
+- Brzda během zápisu: `acknowledged` s důvodem „kopírka se mezitím zastavila —
+  followeři mají původní SL“.
+
+**Followeři (beze změny jádra, skutečné cesty):** přijatý posun leadera se
+zrcadlí jako dnes. Odmítnutý modify followera (trh mezitím přeskočil nový SL)
+→ `cancel-failed`/`unknown` v lifecycle outboxu → `failClosedOnCriticalAudit`:
+follower s nativním OSO a oběma živými nohami → **režim jen správy**
+(`enterManagementOnlyAfterProtectedTargetFailure`, bez DISARM a auto-close,
+follower drží původní širší SL); bracket / samostatný SL → `failClosed`
+s auto-close podle `armExpiryFlatten` (výchozí `followers`). Posun followera
+přijat a hned vyplněn → izolace „ochranná noha se vyplnila během modify“.
+On-submit follower nekopíruje fill leadera (`mode-mismatch`) — vystoupí vlastní
+nohou nebo ho zavře leader-flat guard. Okno souběhu ~200–400 ms; proto UI
+pojistka níže.
+
+**UI:** „SL na BE leadera X (bez poplatků)“ — X = průměr fillů leadera od workeru
+(`manageableLeaderTrades.entryAvgPrice`: durable lot dne / filly), na tick ve
+směru ochrany s epsilonem (long dolů, short nahoru). Pole SL přijme obě strany.
+Pojistka (jen blokuje, nic neautorizuje): utažení jen když je známá cena trhu
+z P&L brokera (`summary.mark`, nikdy TV/IBKR) a nový SL je od ní aspoň 8 ticků.
+Text upozorní, že při přeskočení trhu může kopírka přejít do režimu jen správy
+nebo se vypnout.
+
+**INV dotčené:** INV-MANUAL-01 (2c), INV-OUTBOX-01/02, INV-RECON-04 (`unknown`
+blokuje auto-resume → musí se dořešit), INV-DEFAULT-02, INV-MODE-01, INV-RISK-01,
+INV-BRAKE-01..03, INV-RELAY-01..03, INV-FRESH-01, INV-DIVERGENCE-01,
+INV-WATCH-01, INV-UI-01..04.
+
+**Po oponentuře diffu (follow-up, mimo tento commit):** auto-resume po výpadku
+odmítá `unknown` natrvalo — zvážit `wait` pro `unknown` mladší než 3× `settle`;
+důvod „followeři mají původní SL“ chybí u `acknowledged` dořešeného později
+čtením; UI pojistka neověřuje stáří `mark`; push při `rejected` („cena přes trh“)
+může být zbytečný šum; `definitiveBrokerRejection` stojí na textu chyby.

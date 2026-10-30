@@ -30,11 +30,15 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let active: CopierRuntimeController | null = null;
 afterEach(() => { active?.stop(); active = null; });
 
-async function setup(options: { followerDll?: number; store?: CopierStore; groupConfig?: CopyGroupConfig; patchBroker?: (broker: MockBroker) => void } = {}) {
+async function setup(options: {
+  followerDll?: number; store?: CopierStore; groupConfig?: CopyGroupConfig; patchBroker?: (broker: MockBroker) => void;
+  modifyBehavior?: Parameters<typeof createMockBroker>[0]['modifyBehavior'];
+} = {}) {
   const config = options.groupConfig ?? group();
   const clock = { now: START };
   const broker = createMockBroker({
     behavior: () => ({ kind: 'working' }),
+    ...(options.modifyBehavior ? { modifyBehavior: options.modifyBehavior } : {}),
     accountRiskSnapshots: [risk(LEADER, START + 500), risk(FOLLOWER, START + 500, options.followerDll ?? 1_000), risk(201, START + 500)],
   });
   options.patchBroker?.(broker);
@@ -42,7 +46,7 @@ async function setup(options: { followerDll?: number; store?: CopierStore; group
   const audits: string[] = [];
   const controller = await bootstrapCopierRuntime({
     broker, store, group: config, clock: () => clock.now, osoCorrelationWindowMs: 50,
-    manualEntryTimingsMs: { post: 500, start: 500, legWait: 300 },
+    manualEntryTimingsMs: { post: 500, start: 500, legWait: 300, manage: 500, settle: 50, verify: 100 },
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
   active = controller;
@@ -113,11 +117,12 @@ describe('fáze 2a: správa vlastního ručního vstupu', () => {
     expect(ctx.controller.status().manualOrderActions?.[0]).toMatchObject({ status: 'acknowledged', action: 'move-stop', toPrice: 29_470 });
   });
 
-  it('posun TP dál od trhu projde; posun k trhu (utažení SL, TP blíž) je zatím blokovaný', async () => {
+  it('posun TP dál od trhu projde; TP k trhu blokovaný (Limit přes trh by se vyplnil), SL za TP blokovaný', async () => {
     const ctx = await setup();
     await fillEntries(ctx);
-    expect((await manage(ctx, 'move-stop', SL, 29_490, 'manage:toward0001')).blockers.map(issue => issue.code)).toContain('toward-market');
     expect((await manage(ctx, 'move-target', TP, 29_550, 'manage:toward0002')).blockers.map(issue => issue.code)).toContain('toward-market');
+    expect((await manage(ctx, 'move-stop', SL, TP, 'manage:beyond0001')).blockers.map(issue => issue.code)).toContain('beyond-target');
+    expect((await manage(ctx, 'move-stop', SL, 29_600, 'manage:beyond0002')).blockers.map(issue => issue.code)).toContain('beyond-target');
     expect(leaderModifies(ctx.broker)).toEqual([]);
     const result = await manage(ctx, 'move-target', TP, 29_600, 'manage:target0001');
     expect(result.status).toBe('acknowledged');
@@ -230,5 +235,171 @@ describe('fáze 2a: správa vlastního ručního vstupu', () => {
     const leaderTargeted = ctx.broker.liquidateRequests().some(request => request.accountId === LEADER)
       || ctx.broker.placedRequests().some(request => request.accountId === LEADER && request.orderType === 'Market');
     expect(leaderTargeted).toBe(true);
+  });
+});
+
+describe('fáze 2c: utažení SL a SL na BE', () => {
+  it('utažení SL k trhu (BE) → leader i follower posunuti, bez přepočtu limitu', async () => {
+    // Follower DLL 60 $ pustí vstup (SL 20 b), posun dál od trhu ne — utažení riziko snižuje.
+    const ctx = await setup({ followerDll: 60 });
+    await fillEntries(ctx);
+    expect((await manage(ctx, 'move-stop', SL, 29_400, 'manage:awayrisk1')).blockers.map(issue => issue.code)).toContain('risk-limit');
+    const result = await manage(ctx, 'move-stop', SL, ENTRY, 'manage:tighten01');
+    expect(result).toMatchObject({ status: 'acknowledged', blockers: [] });
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    expect(leaderModifies(ctx.broker)).toEqual([expect.objectContaining({ changes: expect.objectContaining({ stopPrice: ENTRY }) })]);
+    expect(followerOrder(ctx.broker, 'Stop')?.stopPrice).toBe(ENTRY);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(ctx.controller.status().manualOrderActions?.at(-1)).toMatchObject({ status: 'acknowledged', toPrice: ENTRY });
+  });
+
+  it('broker posun přes trh odmítne (InvalidPrice) → rejected, nic se nekopíruje, kopírka běží', async () => {
+    const ctx = await setup({ modifyBehavior: order => (order?.accountId === LEADER ? 'rejected' : 'success') });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'move-stop', SL, 29_520, 'manage:through01');
+    expect(result.status).toBe('rejected');
+    expect(result.reason).toMatch(/přes trh/);
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    expect(followerModifies(ctx.broker)).toEqual([]);
+    expect(followerOrder(ctx.broker, 'Stop')?.stopPrice).toBe(SL);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(ctx.controller.status().manualOrderActions?.at(-1)).toMatchObject({ status: 'rejected' });
+  });
+
+  it('odpověď bez provedení (stream nesynchronizovaný) → nikdy acknowledged; čtení po ustálení → rejected', async () => {
+    const ctx = await setup({ modifyBehavior: order => (order?.accountId === LEADER ? 'accepted-not-applied' : 'success') });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'move-stop', SL, 29_490, 'manage:silent001');
+    expect(result.status).toBe('unknown');
+    ctx.clock.now += 1_000;
+    await sleep(200);
+    expect(ctx.controller.status().manualOrderActions?.at(-1)).toMatchObject({ operationId: 'manage:silent001', status: 'rejected' });
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('posun přijat a SL se hned spustil → vyřešeno („SL se spustil“), žádné visící unknown', async () => {
+    const ctx = await setup({
+      patchBroker: broker => {
+        const real = broker.modifyOrder.bind(broker);
+        broker.modifyOrder = async (accountId, brokerOrderId, changes) => {
+          await real(accountId, brokerOrderId, changes);
+          if (accountId !== LEADER) return;
+          const order = broker.orders().find(item => item.brokerOrderId === brokerOrderId)!;
+          order.status = 'filled';
+          order.filledQuantity = order.quantity;
+        };
+      },
+    });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'move-stop', SL, 29_495, 'manage:filled001');
+    expect(result.status).not.toBe('unknown');
+    const record = ctx.controller.status().manualOrderActions?.find(item => item.operationId === 'manage:filled001');
+    expect(record).toMatchObject({ status: 'waived' });
+    expect(record?.reason).toMatch(/SL se spustil/);
+  });
+
+  it('StopLimit SL = blocked (modify by poslal jen stopPrice)', async () => {
+    const ctx = await setup();
+    await fillEntries(ctx);
+    const stop = ctx.broker.orders().find(order => order.brokerOrderId === ctx.placed.stopBrokerOrderId)!;
+    stop.orderType = 'StopLimit';
+    stop.limitPrice = SL - 1;
+    const result = await manage(ctx, 'move-stop', SL, 29_490, 'manage:stoplmt01');
+    expect(result.blockers.map(issue => issue.code)).toContain('stop-type');
+    expect(leaderModifies(ctx.broker)).toEqual([]);
+  });
+
+  it('brzda během zápisu → leader posunut, výsledek přizná, že followeři mají původní SL', async () => {
+    const box: { ctx?: Ctx } = {};
+    const ctx = await setup({
+      patchBroker: broker => {
+        const real = broker.modifyOrder.bind(broker);
+        broker.modifyOrder = async (accountId, brokerOrderId, changes) => {
+          if (accountId === LEADER && box.ctx) box.ctx.controller.disarm();
+          return real(accountId, brokerOrderId, changes);
+        };
+      },
+    });
+    box.ctx = ctx;
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'move-stop', SL, ENTRY, 'manage:brake0001');
+    expect(result.status).toBe('acknowledged');
+    expect(result.reason).toMatch(/followeři mají původní SL/);
+  });
+
+  it('reálný adaptér: „not confirmed“ výjimka, noha už filled → ohraničené čtení, výsledek není unknown', async () => {
+    const ctx = await setup({
+      patchBroker: broker => {
+        const real = broker.modifyOrder.bind(broker);
+        broker.modifyOrder = async (accountId, brokerOrderId, changes) => {
+          await real(accountId, brokerOrderId, changes);
+          if (accountId !== LEADER) return;
+          const order = broker.orders().find(item => item.brokerOrderId === brokerOrderId)!;
+          order.status = 'filled';
+          order.filledQuantity = order.quantity;
+          throw new Error(`modifyOrder command 1 was not confirmed by the order stream`);
+        };
+      },
+    });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'move-stop', SL, 29_495, 'manage:notconf01');
+    expect(result.status).toBe('acknowledged');
+    expect(result.reason).toMatch(/SL se spustil/);
+  });
+
+  it('SL leadera zrušený, pozice trvá → nikdy úspěch: unknown s výstrahou o chybějící ochraně', async () => {
+    const ctx = await setup({
+      patchBroker: broker => {
+        const real = broker.modifyOrder.bind(broker);
+        broker.modifyOrder = async (accountId, brokerOrderId, changes) => {
+          await real(accountId, brokerOrderId, changes);
+          if (accountId !== LEADER) return;
+          const order = broker.orders().find(item => item.brokerOrderId === brokerOrderId)!;
+          order.status = 'canceled';
+        };
+      },
+    });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'move-stop', SL, 29_495, 'manage:canceled1');
+    expect(result.status).toBe('unknown');
+    expect(result.reason).toMatch(/už u brokera není/);
+  });
+
+  it('visící ověřovací čtení nezablokuje job: po limitu unknown a dořešení později', async () => {
+    const hang = { on: false };
+    const ctx = await setup({
+      patchBroker: broker => {
+        const real = broker.findOrderById.bind(broker);
+        broker.findOrderById = async (accountId, brokerOrderId) => (hang.on && accountId === LEADER ? new Promise(() => undefined) : real(accountId, brokerOrderId));
+      },
+    });
+    await fillEntries(ctx);
+    hang.on = true;
+    const started = Date.now();
+    const result = await manage(ctx, 'move-stop', SL, 29_495, 'manage:hangread1');
+    expect(result.status).toBe('unknown');
+    expect(Date.now() - started).toBeLessThan(2_000);
+    hang.on = false;
+    ctx.clock.now += 1_000;
+    await sleep(200);
+    expect(ctx.controller.status().manualOrderActions?.find(item => item.operationId === 'manage:hangread1')).toMatchObject({ status: 'acknowledged' });
+  });
+
+  it('souběh u followera: leader posunut, broker modify followera odmítne → kopírka bez likvidace, follower drží původní SL', async () => {
+    const ctx = await setup({ modifyBehavior: order => (order?.accountId === FOLLOWER ? 'rejected' : 'success') });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'move-stop', SL, 29_495, 'manage:follrej01');
+    expect(result.status).toBe('acknowledged');
+    await sleep(100);
+    await ctx.controller.waitForIdle();
+    const status = ctx.controller.status();
+    // Nativní OSO follower → režim jen správy (bez DISARM a auto-close), nové vstupy pozastavené.
+    expect(status.armed).toBe(true);
+    expect(status.managementOnly).toMatchObject({ source: 'protected-target-modify', accountIds: [FOLLOWER] });
+    expect(followerOrder(ctx.broker, 'Stop')?.stopPrice).toBe(SL);
+    expect(ctx.broker.liquidateRequests().filter(request => request.accountId === FOLLOWER)).toEqual([]);
+    expect(ctx.broker.placedRequests().filter(request => request.accountId === FOLLOWER && request.orderType === 'Market')).toEqual([]);
   });
 });

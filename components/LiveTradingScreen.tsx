@@ -103,6 +103,8 @@ interface Props {
   onPreviewEntry?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
   onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
   onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+  /** Průměrný vstup spravovaného obchodu leadera od workeru (SL na BE). */
+  manageEntryAvgPrice?: number | null;
 }
 
 function useMinuteNow() {
@@ -116,7 +118,7 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, tabs, onNavigate, navigationBlocked = false, copier, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -408,6 +410,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             onPreviewEntry={onPreviewEntry}
             {...(onPlaceEntry ? { onPlaceEntry } : {})}
             {...(onManageEntry ? { onManageEntry } : {})}
+            manageEntryAvgPrice={manageEntryAvgPrice ?? null}
             onNewDraft={side => { if (quote) { setDraft(newTicketDraft(side, 'limit', side === 'buy' ? quote.ask - 10 : quote.bid + 10, INSTRUMENT, quote)); setFromBox(false); } }}
             onClose={() => setTicketOpen(false)}
           />

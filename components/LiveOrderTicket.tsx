@@ -19,7 +19,7 @@ import {
   type TicketQuote,
   type TicketSide,
 } from '../lib/liveOrderTicket';
-import type { LiveChartPosition, LiveChartPositionSummary } from '../lib/liveChartPosition';
+import { breakEvenStop, tightenBlockReason, type LiveChartPosition, type LiveChartPositionSummary } from '../lib/liveChartPosition';
 import { previewSymbolFromChartSource, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
@@ -258,24 +258,31 @@ const PreviewSection: React.FC<{
 const ManageSection: React.FC<{
   muted: string; field: string;
   summary: LiveChartPositionSummary;
+  /** Průměrný vstup leadera od workeru (filly brokera) pro „SL na BE“; null = neznámý. */
+  entryAvg: number | null;
   onManage: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
-}> = ({ muted, field, summary, onManage }) => {
+}> = ({ muted, field, summary, entryAvg, onManage }) => {
   const long = summary.side === 'long';
   const [stop, setStop] = useState('');
   const [target, setTarget] = useState('');
-  const [confirm, setConfirm] = useState<{ action: LeaderOrderManageAction; until: number } | null>(null);
+  // Klíč potvrzení: akce, nebo „move-be“ (stejný move-stop, jiné tlačítko).
+  const [confirm, setConfirm] = useState<{ action: string; until: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'bad' | 'warn'; text: string } | null>(null);
-  const run = async (action: LeaderOrderManageAction, expectPrice: number | null, newPrice?: number) => {
+  const run = async (action: LeaderOrderManageAction, expectPrice: number | null, newPrice?: number, key: string = action) => {
     if (busy || expectPrice == null) return;
     // Dvoukrokové potvrzení v tlačítku (do 5 s).
-    if (!confirm || confirm.action !== action || confirm.until < Date.now()) { setConfirm({ action, until: Date.now() + 5_000 }); return; }
+    if (!confirm || confirm.action !== key || confirm.until < Date.now()) { setConfirm({ action: key, until: Date.now() + 5_000 }); return; }
     setConfirm(null);
     setBusy(true);
     try {
       const result = await onManage(action, expectPrice, newPrice);
       setMessage(result.status === 'acknowledged'
-        ? { tone: 'ok', text: action === 'cancel-entry' ? 'Vstup leadera zrušen; kopírka zruší kopie, které se ještě nevyplnily.' : 'Leader posunut; kopie followerům posune kopírka.' }
+        ? (result.reason && /zastavila/.test(result.reason)
+          ? { tone: 'warn', text: `Leader posunut, ale ${result.reason}.` }
+          : result.reason && /spustil|vyplnil|skončil/.test(result.reason)
+            ? { tone: 'warn', text: `${result.reason}.` }
+          : { tone: 'ok', text: action === 'cancel-entry' ? 'Vstup leadera zrušen; kopírka zruší kopie, které se ještě nevyplnily.' : 'Leader posunut; kopie followerům posune kopírka.' })
         : result.status === 'blocked' ? { tone: 'bad', text: `Neodesláno: ${result.blockers.map(issue => issue.text).join(' ')}` }
           : result.status === 'rejected' ? { tone: 'bad', text: `Broker odmítl: ${result.reason ?? ''}` }
             : { tone: 'warn', text: result.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.' });
@@ -285,23 +292,32 @@ const ManageSection: React.FC<{
       setBusy(false);
     }
   };
-  const label = (action: LeaderOrderManageAction, text: string) => (confirm?.action === action && confirm.until > Date.now() ? 'Opravdu? Klikni znovu' : text);
+  const label = (action: string, text: string) => (confirm?.action === action && confirm.until > Date.now() ? 'Opravdu? Klikni znovu' : text);
   const parsed = (value: string) => { const number = Number(value.replace(',', '.')); return Number.isFinite(number) && number > 0 ? Math.round(number * 4) / 4 : null; };
   const button = 'h-7 rounded-[7px] border px-2 text-[10.5px] font-extrabold disabled:cursor-not-allowed disabled:opacity-40';
+  const be = breakEvenStop(summary.side, entryAvg);
+  const beBlocked = be == null ? 'Průměrný vstup leadera není známý.'
+    : summary.stop != null && be === summary.stop ? 'SL už je na BE.'
+      : tightenBlockReason(summary.side, summary.stop, be, summary.mark);
+  const stopBlocked = tightenBlockReason(summary.side, summary.stop, parsed(stop), summary.mark);
   return <div className={`grid gap-1.5 rounded-[9px] border p-2 ${field}`}>
     <div className={`text-[9.5px] font-black uppercase tracking-[0.06em] ${muted}`}>Vlastní vstup z grafu</div>
     {summary.kind === 'pending'
       ? <button type="button" disabled={busy || summary.leader?.entry == null} onClick={() => void run('cancel-entry', summary.leader?.entry ?? null)} className={button}>{label('cancel-entry', 'Zrušit čekající vstup')}</button>
       : <>
         <div className="flex items-center gap-1.5">
-          <input value={stop} onChange={event => setStop(event.target.value)} placeholder={`SL ${long ? 'níž' : 'výš'} než ${summary.stop ?? '—'}`} className="h-7 min-w-0 flex-1 rounded-[7px] border bg-transparent px-2 text-[11px]" />
-          <button type="button" disabled={busy || summary.stop == null || parsed(stop) == null} onClick={() => void run('move-stop', summary.stop, parsed(stop) ?? undefined)} className={button}>{label('move-stop', 'Posunout SL')}</button>
+          <input value={stop} onChange={event => setStop(event.target.value)} placeholder={`Nový SL (teď ${summary.stop ?? '—'})`} className="h-7 min-w-0 flex-1 rounded-[7px] border bg-transparent px-2 text-[11px]" />
+          <button type="button" title={stopBlocked ?? undefined} disabled={busy || summary.stop == null || parsed(stop) == null || stopBlocked != null} onClick={() => void run('move-stop', summary.stop, parsed(stop) ?? undefined)} className={button}>{label('move-stop', 'Posunout SL')}</button>
         </div>
+        <button type="button" title={beBlocked ?? undefined} disabled={busy || summary.stop == null || beBlocked != null} onClick={() => { if (be != null) void run('move-stop', summary.stop, be, 'move-be'); }} className={button}>
+          {label('move-be', be != null ? `SL na BE leadera ${be} (bez poplatků)` : 'SL na BE')}
+        </button>
+        {stopBlocked && parsed(stop) != null && <div className={`text-[10px] ${muted}`}>{stopBlocked}</div>}
         <div className="flex items-center gap-1.5">
           <input value={target} onChange={event => setTarget(event.target.value)} placeholder={`TP ${long ? 'výš' : 'níž'} než ${summary.target ?? '—'}`} className="h-7 min-w-0 flex-1 rounded-[7px] border bg-transparent px-2 text-[11px]" />
           <button type="button" disabled={busy || summary.target == null || parsed(target) == null} onClick={() => void run('move-target', summary.target, parsed(target) ?? undefined)} className={button}>{label('move-target', 'Posunout TP')}</button>
         </div>
-        <div className={`text-[10px] ${muted}`}>Zatím jen dál od trhu. Utažení SL a BE přijdou po ověření u brokera.</div>
+        <div className={`text-[10px] ${muted}`}>SL jde i k trhu (cenu přes trh broker odmítne), TP jen dál od trhu. Když trh mezitím přeskočí nový SL, kopírka může přejít do režimu jen správy nebo se vypnout.</div>
       </>}
     {message && <div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${message.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : message.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{message.text}</div>}
   </div>;
@@ -333,6 +349,8 @@ interface Props {
   onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
   /** Fáze 2a: správa vlastního ručního vstupu na symbolu grafu (jen worker s `manual-order-manage-v1`). */
   onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+  /** Průměrný vstup spravovaného obchodu leadera od workeru (SL na BE). */
+  manageEntryAvgPrice?: number | null;
   onNewDraft: (side: TicketSide) => void;
   onClose: () => void;
 }
@@ -368,7 +386,7 @@ const NumberField: React.FC<{
 
 const LiveOrderTicket: React.FC<Props> = ({
   isDark, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
-  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, onNewDraft, onClose,
+  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, onNewDraft, onClose,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -569,7 +587,7 @@ const LiveOrderTicket: React.FC<Props> = ({
 
     <div className="-mx-2.5 flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto px-2.5 pb-0.5">
       {position?.summary && <PositionCard isDark={isDark} summary={position.summary} muted={tone.muted} ink={tone.ink} field={tone.field} />}
-      {position?.summary && onManageEntry && <ManageSection muted={tone.muted} field={tone.field} summary={position.summary} onManage={onManageEntry} />}
+      {position?.summary && onManageEntry && <ManageSection muted={tone.muted} field={tone.field} summary={position.summary} entryAvg={manageEntryAvgPrice ?? null} onManage={onManageEntry} />}
       {position?.issue && <div className={`rounded-[9px] border px-2.5 py-2 text-[10.5px] font-bold ${tone.field} ${tone.muted}`}>{position.issue}</div>}
       {!quote ? (
         <p className={`m-0 py-6 text-center text-[11px] ${tone.muted}`}>Čekám na cenu z grafu…</p>

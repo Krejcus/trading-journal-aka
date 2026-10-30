@@ -61,7 +61,11 @@ export interface MockBrokerOptions {
     order: BrokerOrder | undefined,
     changes: { quantity: number; orderType: import('./brokerPort').OrderType; limitPrice?: number; stopPrice?: number },
     attempt: number,
-  ) => 'success' | 'timeout-before-modify' | 'timeout-after-modify';
+  ) => 'success' | 'timeout-before-modify' | 'timeout-after-modify'
+    /** Tradovate commandReport odmítnutí (např. stop přes trh): nic se nezmění. */
+    | 'rejected'
+    /** Odpověď bez provedení (adaptér bez synchronizovaného streamu): nic se nezmění. */
+    | 'accepted-not-applied';
   /** Simuluje Tradovate: změna ceny OSO parentu relativně posune i child SL/TP. */
   osoChildrenFollowParentReprice?: boolean;
   accountCapabilities?: readonly BrokerAccountCapability[];
@@ -365,6 +369,8 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
       if (outcome === 'timeout-before-modify') {
         throw new MockBrokerTimeoutError('mock broker: modify timed out before reaching broker');
       }
+      if (outcome === 'rejected') throw new Error(`modifyOrder command mock-${brokerOrderId} rejected: InvalidPrice`);
+      if (outcome === 'accepted-not-applied') return;
       if (!order || !isOpenOrderStatus(order.status)) return;
       modified.push({ accountId, brokerOrderId, changes: { ...changes } });
       const oldReferencePrice = order.limitPrice ?? order.stopPrice;

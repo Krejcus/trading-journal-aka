@@ -1392,6 +1392,18 @@ existující ochranu.
   posunu SL od nejhorší ceny vstupu včetně durable `openLots.avgPrice`; Market/Stop
   vstup bez známého fillu = blocked. `manageableLeaderTrades` ve statusu je jen výběr
   pro UI. Hlídá test: `tests/manualOrderManageTracked.test.ts`.
+- **Fáze 2c — utažení SL a SL na BE (30. 10. 2026):** `move-stop` smí k trhu
+  (ruší P4 §10.1); stop přes trh odmítne broker (záznam 30. 10.: `InvalidPrice`,
+  noha beze změny). Jen prostý `Stop`, SL ostře na ochranné straně čerstvého TP,
+  utažení bez přepočtu limitů; `move-target` k trhu dál blokovaný. Úspěch jen
+  s autoritativním `findOrderById` ohraničeným 3 s (adaptér bez syncu hlásí úspěch
+  i u odmítnutí); noha `filled` = `waived` s důvodem, zrušená noha při trvající
+  pozici = `unknown` (nikdy úspěch); `unknown` se dořeší jen čtením (po zápisu,
+  po kontrole pozic, po startu), `rejected` z čtení jen po skončeném zápisu.
+  Brzda během zápisu = výsledek přizná původní SL followerů. Odmítnutý modify
+  followera jde stávající cestou (jen správa u nativního OSO, jinak fail-closed),
+  žádná nová výjimka. UI pojistka (8 ticků od ceny z P&L brokera) jen blokuje.
+  Hlídá test: `tests/manualOrderManage.test.ts` (fáze 2c), `tests/liveChartData.test.ts`.
 - - **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
   časovač ani fill před nohami ho neflushnou, čeká se nejvýš 5 s, pak
   failClosed + cílené zrušení. Cílené zrušení (`cancelOwnManualEntry`) jen
