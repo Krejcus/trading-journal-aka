@@ -83,7 +83,8 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: × = zavřít obchod (leader, kopírka zavře kopie).
     cancellable: controls.manageable && (!position || controls.canClose === true),
     cancelAction: position ? 'close-position' : 'cancel-order',
-    confirmCancel: true,
+    // Zavření pozice jedním kliknutím (Filip 30. 10.); zrušení čekajícího vstupu dál dvoukrokově.
+    confirmCancel: !position,
     ...(be && position ? {
       actions: [{
         id: 'break-even', label: 'BE', confirm: true, disabled: be.blocked != null,

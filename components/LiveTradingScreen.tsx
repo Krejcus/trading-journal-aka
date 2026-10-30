@@ -8,6 +8,7 @@ import LiveGroupChip from './LiveGroupChip';
 import LiveTradeToasts from './LiveTradeToasts';
 import { QuantumSpinner } from './QuantumLoader';
 import { useDayChartData } from '../hooks/useDayChartData';
+import { useLiveTicketQuote } from '../hooks/useLiveTicketQuote';
 import { DAY_ANCHOR_ACCOUNT_ID, chartMarketDay, pragueDayKey } from '../lib/dayJournal';
 import {
   draftFromPositionBox,
@@ -143,14 +144,15 @@ const LiveTradingScreen: React.FC<Props> = ({
     durationMinutes: 90,
   } as Trade));
 
-  // Orientační bid/ask panelu = close poslední svíčky dat grafu a o tick výš.
-  // Rozpracovanou svíčku z kanálu ceny čte jen napojení grafu (INV-UI-04,
-  // tests/tvPriceClientGuards.test.ts); skutečná kotace přijde od brokera
-  // s napojením panelu.
-  const lastPrice = chart.candles.at(-1)?.close ?? null;
+  // Orientační bid/ask panelu = živá cena z kanálu (výjimka INV-UI-04, Filip 30. 10.:
+  // jen zobrazení panelu a strop ceny příkazu uživatele), jinak close poslední svíčky.
+  // Rychlá cena = čáry návrhu a Market jdou s trhem (dřív svíčka stará i desítky sekund).
+  const candleClose = chart.candles.at(-1)?.close ?? null;
+  const tick = useLiveTicketQuote(chart.liveFeed, ROOT, candleClose);
+  const lastPrice = tick?.price ?? candleClose;
   const quoteInfo = {
     source: chart.liveSource,
-    capturedAt: chart.liveCapturedAt,
+    capturedAt: tick?.at ?? chart.liveCapturedAt,
     stale: chart.liveStatus !== 'live',
   };
   const quote = useMemo<TicketQuote | null>(() => {
@@ -260,6 +262,25 @@ const LiveTradingScreen: React.FC<Props> = ({
   }, [disarmBusy, onDisarm]);
   // Návrh se sám nezakládá: čáry SL/TP na živém grafu jen když o ně uživatel požádá.
   const [tradeIndicators] = useState(readTradeChartIndicators);
+
+  // Market: SL a TP jedou s cenou (drží nastavenou vzdálenost od vstupu).
+  const marketEntryRef = useRef<number | null>(null);
+  const marketSideRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!quote || draft?.type !== 'market') { marketEntryRef.current = null; return; }
+    const entry = draft.side === 'buy' ? quote.ask : quote.bid;
+    // Přepnutí strany (ask ↔ bid) nesmí SL/TP posunout o tick.
+    const previous = marketSideRef.current === draft.side ? marketEntryRef.current : null;
+    marketSideRef.current = draft.side;
+    marketEntryRef.current = entry;
+    if (previous == null || previous === entry) return;
+    const delta = entry - previous;
+    setDraft(current => (current && current.type === 'market' ? {
+      ...current,
+      stopLoss: current.stopLoss == null ? null : snapToTick(current.stopLoss + delta, INSTRUMENT.tickSize),
+      takeProfit: current.takeProfit == null ? null : snapToTick(current.takeProfit + delta, INSTRUMENT.tickSize),
+    } : current));
+  }, [draft?.side, draft?.type, quote]);
 
   const updateDraft = useCallback((next: TicketDraft | null) => {
     setDraft(next);

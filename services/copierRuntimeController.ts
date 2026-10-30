@@ -3816,9 +3816,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (outcome.status === 'already-flat') return finish('waived', 'pozice leadera už byla zavřená — ne tímto příkazem');
     // P3/P5: stav u brokera, ne odpověď. Zrušené nohy + trvající pozice = obchod bez ochrany.
     // Celkový rozpočet ověření (oponentura: job drží sériovou relay linku i pro brzdy).
+    // Nejdřív stream (bez REST — méně zátěže Tradovate i Macu, 30. 10.), pak nejvýš
+    // jedno autoritativní čtení; flat + nic nepracuje je pak ověřené REST snapshotem.
     const verifyDeadline = Date.now() + MANUAL_ORDER_VERIFY_TIMEOUT_MS;
+    const streamFlat = () => (positionsByAccount.get(leader)?.get(symbol) ?? null) === 0
+      && ![...(liveOrdersByAccount.get(leader)?.values() ?? [])].some(order => order.symbol === symbol && isOpenOrderStatus(order.status));
+    while (outcome.status === 'submitted' && !streamFlat() && Date.now() + 100 < verifyDeadline - 1_000) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
     let state = await readLeaderSymbolState(leader, symbol);
-    while (outcome.status === 'submitted' && state && (state.net !== 0 || state.working > 0) && Date.now() + 250 < verifyDeadline) {
+    // Přechod „nohy zrušené, Market ještě nevyplněný“ (+0,3 s) nebo REST snímek starší
+    // než stream (in-flight dedup) nesmí vyhlásit falešný incident: v rozpočtu (~4 s)
+    // čtení zopakovat; skutečná pozice bez ochrany zůstane a incident přijde.
+    while (unprotected(state) && Date.now() + 250 < verifyDeadline + 1_000) {
       await new Promise(resolve => setTimeout(resolve, 250));
       state = await readLeaderSymbolState(leader, symbol);
     }

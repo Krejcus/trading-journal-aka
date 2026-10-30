@@ -205,18 +205,18 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       .filter(line => line.includes('liveFeed')).map(line => ({ file, line: line.trim() })));
     expect(uses.length).toBeGreaterThanOrEqual(5);
     for (const { file, line } of uses) {
-      // LIVE → Graf (components/LiveTradingScreen.tsx) předává feed jen grafu,
-      // stejně jako graf dne; panel objednávky ho nečte.
+      // LIVE → Graf (components/LiveTradingScreen.tsx) předává feed grafu a — výjimka
+      // INV-UI-04 (Filip 30. 10.) — jedinému čtení ceny pro panel objednávky.
       const allowed = file === 'hooks/useDayChartData.ts'
         ? /useTvLiveCandleFeed\(|^liveFeed,$|liveFeed`: rozpracovaná/
         : file === 'components/LiveTradingScreen.tsx'
-          ? /^liveCandles=\{chart\.liveFeed\}$/
+          ? /^liveCandles=\{chart\.liveFeed\}$|^const tick = useLiveTicketQuote\(chart\.liveFeed, ROOT, candleClose\);$/
           : /liveCandles=\{ctl\.chart\.liveFeed\}|useLiveCandleBinding\(/;
       expect(line, file).toMatch(allowed);
     }
     // Neutrální rozhraní grafu používají jen grafy dne a jejich napojení.
     expect(importersOf('lib/liveCandleFeed.ts')).toEqual([
-      'components/AlphaTradeChartWorkspace.tsx', 'hooks/useLiveCandleBinding.ts', 'hooks/useTvLiveCandleFeed.ts', 'lib/tvLiveCandleReplay.ts',
+      'components/AlphaTradeChartWorkspace.tsx', 'hooks/useLiveCandleBinding.ts', 'hooks/useLiveTicketQuote.ts', 'hooks/useTvLiveCandleFeed.ts', 'lib/tvLiveCandleReplay.ts',
     ]);
     expect(importersOf('hooks/useLiveCandleBinding.ts')).toEqual([
       'components/AlphaTradeChartWorkspace.tsx', 'components/day/DayCompactChart.tsx', 'components/day/DayFullscreenChart.tsx',
@@ -231,7 +231,11 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
     // Svíčku ze zdroje čte jen napojení na graf.
     const readers = allSources.filter(file => /\b(?:feed|liveFeed|liveCandles)\.current\(/.test(readFileSync(join(root, file), 'utf8')));
     // Hook grafu dne čtení jen předává (přehrání ticků zabalené ve feedu).
-    expect(readers).toEqual(['hooks/useLiveCandleBinding.ts', 'hooks/useTvLiveCandleFeed.ts']);
+    // + cena panelu objednávky (výjimka INV-UI-04): jen `close`, jen zobrazení a strop ceny příkazu.
+    expect(readers).toEqual(['hooks/useLiveCandleBinding.ts', 'hooks/useLiveTicketQuote.ts', 'hooks/useTvLiveCandleFeed.ts']);
+    const ticketQuote = readFileSync(join(root, 'hooks/useLiveTicketQuote.ts'), 'utf8').split('\n').filter(line => /\.current\(/.test(line)).map(line => line.trim());
+    expect(ticketQuote).toEqual(['const price = feed.current(root)?.close;']);
+    expect(importersOf('hooks/useLiveTicketQuote.ts')).toEqual(['components/LiveTradingScreen.tsx']);
     const hook = readFileSync(join(root, 'hooks/useTvLiveCandleFeed.ts'), 'utf8').split('\n').filter(line => /\.current\(/.test(line)).map(line => line.trim());
     expect(hook).toEqual(['current: root => feed.current(root),']);
     const dayData = readFileSync(join(root, 'hooks/useDayChartData.ts'), 'utf8');

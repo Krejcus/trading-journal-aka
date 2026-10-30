@@ -503,4 +503,29 @@ describe('fáze 2d: zavřít obchod leadera z grafu', () => {
     const blocked = await manage(ctx, 'close-position', SL, undefined, 'manage:close0008');
     expect(blocked.blockers.map(issue => issue.text).join(' ')).not.toMatch(/Běží Flatten/);
   });
+
+  it('stream flat, ale první REST snímek ještě s pozicí (Market těsně po zrušení nohou) → žádný falešný incident', async () => {
+    let staleReads = 1;
+    const ctx = await setup({
+      nativeLiquidate: true,
+      patchBroker: broker => {
+        const realPositions = broker.listPositions.bind(broker);
+        const realLiquidate = broker.liquidatePosition!.bind(broker);
+        let liquidated = false;
+        broker.liquidatePosition = async request => { liquidated = true; return realLiquidate(request); };
+        broker.listPositions = async accountId => {
+          if (liquidated && accountId === LEADER && staleReads > 0) {
+            staleReads -= 1;
+            return [{ accountId: LEADER, symbol: SYMBOL, netQuantity: 1 }];
+          }
+          return realPositions(accountId);
+        };
+      },
+    });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'close-position', SL, undefined, 'manage:close0009');
+    expect(result.status).toBe('acknowledged');
+    expect(staleReads).toBe(0);
+    expect(ctx.controller.status().lastError).toBeNull();
+  });
 });

@@ -1420,10 +1420,13 @@ existující ochranu.
   follower s pozicí mimo exit sadu = blocked, ingress, běžící Flatten). Synchronně
   před zápisem fence, generation, žádný jiný zápis na leaderovi; zápis registrovaný
   jako rozpracovaný (Flatten leadera vynechá a ohlásí nejasný zápis — žádná druhá
-  likvidace). Výsledek jen ze stavu u brokera (ověření ≤ 3 s): flat ∧ nic nepracuje =
+  likvidace). Výsledek jen ze stavu u brokera (čekání na stream ≤ 2 s, pak REST čtení,
+  při rozporu se streamem opakované do ~4 s): flat ∧ nic nepracuje =
   `acknowledged`; pozice bez SL/TP = incident bez auto-close (ve všech větvích i při
   dořešení); `already-flat` / flat při dořešení = `waived` (kauzalitu netvrdit).
   Brzda zavření zneplatní (relay supersede, agent `brake-after-request`), TTL 5 s.
+  UI: × u pozice jedním kliknutím (Filip 30. 10.); zrušení čekajícího vstupu a BE dvoukrokově.
+  Market: SL/TP jedou s cenou (i SL z position boxu).
   Hlídá test: `tests/manualOrderManage.test.ts` (fáze 2d).
 - - **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
   časovač ani fill před nohami ho neflushnou, čeká se nejvýš 5 s, pak
@@ -1443,6 +1446,9 @@ existující ochranu.
   být JEN strop ceny příkazu uživatele (Buy se vyplní za ni nebo lépe), a jen
   mladší než 3 s; nikdy nevstupuje do read modelu, rizika, day locku ani rozhodnutí
   kopírky (worker počítá riziko z ceny příkazu jako z nejhoršího vstupu).
+  Cenu panelu objednávky (zobrazení + strop Marketu) bere `hooks/useLiveTicketQuote.ts`
+  přímo z kanálu ceny (`close` rozpracované svíčky, ≤ 10×/s) — jediný čtenář feedu
+  mimo graf; hlídá `tests/tvPriceClientGuards.test.ts`.
 - Vynucuje: `lib/tvPriceMessage.ts` (HMAC nad surovým řetězcem, přísný
   tvar), `lib/tvPriceStore.ts` (jen paměť, ochrana proti přehrání
   `seq`/`runId`/`at`), `lib/tvPriceChannelClient.ts` (postupné ověření,

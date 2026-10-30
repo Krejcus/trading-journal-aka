@@ -457,7 +457,10 @@ const LiveOrderTicket: React.FC<Props> = ({
   const [directBusy, setDirectBusy] = useState(false);
   const directBusyRef = useRef(false);
   // U Marketu se cena mění s každým tickem — výsledek odeslání nesmí s tickem zmizet.
-  const directKey = previewDraft ? JSON.stringify({ ...previewDraft, price: draft?.type === 'market' ? 'market' : previewDraft.price }) : '';
+  // U Marketu klíčuje vzdálenost SL/TP od vstupu (ceny jedou s tickem), ne absolutní ceny.
+  const directKey = previewDraft ? JSON.stringify(draft?.type === 'market'
+    ? { ...previewDraft, price: 'market', stopLoss: previewDraft.stopLoss - previewDraft.price, takeProfit: previewDraft.takeProfit - previewDraft.price }
+    : previewDraft) : '';
   const shownDirect = direct && direct.key === directKey ? direct : null;
   const directBlocked = !onPlaceEntry ? 'Worker odeslání z grafu neumí.'
     : previewBlockedReason ?? (!previewDraft ? 'Doplň cenu, SL i TP.' : null);

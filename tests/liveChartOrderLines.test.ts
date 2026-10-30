@@ -89,7 +89,8 @@ describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)
 describe('LIVE → Graf: × u pozice a Market (30. 10.)', () => {
   it('× u pozice jen se schopností workeru a za zapnuté kopírky; jinak pozice bez ×', () => {
     const closable = livePositionChartLines(summary(), { ...controls, canClose: true })[0];
-    expect(closable).toMatchObject({ cancellable: true, cancelAction: 'close-position', confirmCancel: true });
+    // Zavření jedním kliknutím (Filip 30. 10.).
+    expect(closable).toMatchObject({ cancellable: true, cancelAction: 'close-position', confirmCancel: false });
     expect(livePositionChartLines(summary(), controls)[0].cancellable).toBe(false);
     const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
     expect(screen).toMatch(/canClose: manageCloseSupported && copier\.available && copier\.status\?\.armed === true && copier\.status\.shadowMode !== true/);
