@@ -11,7 +11,9 @@ import {
   type BrokerOsoRequest,
   type BrokerPosition,
   type BrokerOrderStatusLookup,
+  type BrokerModifyConfirmation,
   type BrokerPort,
+  type BrokerStreamOrderSnapshot,
   type BrokerAccountRiskSnapshot,
 } from './brokerPort';
 import { msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
@@ -3953,6 +3955,50 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * desítky sekund a job drží frontu agenta (Flatten, ARM) — po limitu `null`.
    */
   const MANUAL_ORDER_VERIFY_TIMEOUT_MS = options.manualEntryTimingsMs?.verify ?? 3_000;
+  /** Časy správy obchodu do auditu (jen log): odkud předčtení, jak dlouho zápis, čím ověřeno. */
+  interface ManualOrderActionTiming {
+    preRead: 'stream' | 'rest';
+    preReadMs: number;
+    routeEpoch?: number;
+    writeStartedAt?: number;
+    writeMs?: number;
+    verify?: 'adapter' | 'stream' | 'rest';
+  }
+  const manualOrderTimingText = (timing: ManualOrderActionTiming, now: number) => (
+    `[čtení ${timing.preRead} ${Math.round(timing.preReadMs)} ms`
+    + `${timing.writeMs != null ? ` · zápis ${Math.round(timing.writeMs)} ms` : ''}`
+    + `${timing.verify ? ` · ověření ${timing.verify}` : ''}`
+    + `${timing.writeStartedAt != null ? ` · od zápisu ${Math.round(now - timing.writeStartedAt)} ms` : ''}]`
+  );
+  /**
+   * Snímek streamu adaptéru smí nahradit REST předčtení jen když sedí s tím, co
+   * controller už zpracoval (oponentura 30. 10.): stejné pracující příkazy na
+   * symbolu ve stejném tvaru a verzi, vstup ve stejném stavu. Jinak REST.
+   */
+  /** Route epoch leadera; undefined = broker bez routeru nebo chybějící route (snímek se pak nepoužije). */
+  const leaderRouteEpoch = (accountId: number): number | undefined => {
+    try {
+      return broker.routeEpoch?.(accountId);
+    } catch {
+      return undefined;
+    }
+  };
+  const streamSnapshotMatchesLive = (accountId: number, orders: readonly BrokerOrder[], managed: { entryId: string; symbol: string }): boolean => {
+    const live = liveOrdersByAccount.get(accountId) ?? new Map<string, BrokerOrder>();
+    const snapshotOpen = orders.filter(order => order.symbol === managed.symbol && isOpenOrderStatus(order.status));
+    const liveOpen = [...live.values()].filter(order => order.symbol === managed.symbol);
+    if (snapshotOpen.length !== liveOpen.length) return false;
+    for (const order of snapshotOpen) {
+      const seen = live.get(order.brokerOrderId);
+      if (!seen || seen.status !== order.status || seen.quantity !== order.quantity || seen.filledQuantity !== order.filledQuantity
+        || seen.orderType !== order.orderType || seen.limitPrice !== order.limitPrice || seen.stopPrice !== order.stopPrice
+        || seen.sourceVersion !== order.sourceVersion) return false;
+    }
+    const entry = orders.find(order => order.brokerOrderId === managed.entryId);
+    if (!entry) return false;
+    return isOpenOrderStatus(entry.status)
+      || observedOrderStatusesByAccount.get(accountId)?.get(entry.brokerOrderId) === entry.status;
+  };
   const boundedManagedOrderLookup = async (accountId: number, brokerOrderId: string): Promise<BrokerOrderStateLookup | null> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -4064,11 +4110,32 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const leader = group.leaderAccountId;
     if ((pendingTradeIngressByAccount.get(leader) ?? 0) > 0) return manageBlocked(command, 'busy', 'Kopírka ještě zpracovává události leadera — zkus to znovu.');
     let orders: BrokerOrder[];
-    try {
-      orders = await broker.listOrders(leader, { fresh: true });
-    } catch (error) {
-      return manageBlocked(command, 'read-failed', `Příkazy leadera nejde přečíst (${errorOf(error).message.slice(0, 120)}).`);
+    const readStartedAt = clock();
+    // Posun SL/TP (oponentura 30. 10.): synchronní snímek dohnaného streamu adaptéru
+    // místo REST order grafu celého dne. Nejistota = null → dnešní REST čtení.
+    // Zrušení vstupu a zavření obchodu zůstávají na REST.
+    const snapshotRouteEpoch = leaderRouteEpoch(leader);
+    let snapshot: BrokerStreamOrderSnapshot | null = null;
+    // Bez route epochy (broker bez routeru) by kontrola před zápisem nic nehlídala → REST.
+    if ((command.action === 'move-stop' || command.action === 'move-target') && snapshotRouteEpoch !== undefined) {
+      try {
+        snapshot = broker.streamOrderSnapshot?.(leader) ?? null;
+      } catch {
+        snapshot = null;
+      }
     }
+    const snapshotOrders = snapshot && streamSnapshotMatchesLive(leader, snapshot.orders, managed) ? snapshot.orders : null;
+    const timing: ManualOrderActionTiming = { preRead: snapshotOrders ? 'stream' : 'rest', preReadMs: 0, routeEpoch: snapshotOrders ? snapshotRouteEpoch : undefined };
+    if (snapshotOrders) {
+      orders = snapshotOrders;
+    } else {
+      try {
+        orders = await broker.listOrders(leader, { fresh: true });
+      } catch (error) {
+        return manageBlocked(command, 'read-failed', `Příkazy leadera nejde přečíst (${errorOf(error).message.slice(0, 120)}).`);
+      }
+    }
+    timing.preReadMs = clock() - readStartedAt;
     if (manualEntryQueueFence() !== queuedFence) return manageBlocked(command, 'state-changed', 'Během čtení přišla změna — zkus to znovu.');
     const byId = new Map(orders.map(order => [order.brokerOrderId, order]));
     const entryOrder = byId.get(managed.entryId);
@@ -4222,7 +4289,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         await persistManualOrderAction(command.operationId, current => ({ ...current!, status, ...(reason ? { reason } : {}), updatedAt: clock() }))
           .catch(error => failClosed(new Error(`Správa vstupu: výsledek se nepodařilo uložit (${errorOf(error).message})`), { autoClose: false }));
         manualEntryAudit(command.operationId, status === 'acknowledged' ? 'modified' : status === 'rejected' ? 'rejected' : status === 'unknown' ? 'unknown' : 'blocked',
-          `${command.action} ${targetOrderId}${command.newPrice != null ? ` → ${command.newPrice}` : ''}${reason ? `: ${reason}` : ''}`, targetOrderId);
+          `${command.action} ${targetOrderId}${command.newPrice != null ? ` → ${command.newPrice}` : ''}${reason ? `: ${reason}` : ''} ${manualOrderTimingText(timing, clock())}`, targetOrderId);
         // `waived` z čtení = cílová noha skončila (např. SL se spustil): výsledek je známý, ne neznámý.
         return manageResult(command, status === 'acknowledged' || status === 'waived' ? 'acknowledged' : status === 'rejected' ? 'rejected' : status === 'not-sent' ? 'blocked' : 'unknown', {
           brokerOrderId: targetOrderId,
@@ -4240,12 +4307,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const reach = manageReachBlockers(targetOrderId, symbol, targetLive.quantity);
         if (reach.length > 0) return finish('not-sent', reach.join(' '));
       }
+      // Předčtení ze streamu: přepnutí route leadera mezi snímkem a zápisem = nic neodejde.
+      if (timing.preRead === 'stream' && leaderRouteEpoch(leader) !== timing.routeEpoch) {
+        return finish('not-sent', 'Mezitím se změnilo spojení leadera — nic se neodeslalo.');
+      }
       if (command.action === 'close-position') return executeClose(command, finish, { leader, symbol, managed, quantity: targetLive.quantity, generation, queuedFence });
       // Cena v cache streamu před zápisem — rychlé potvrzení posunu jen když se po zápisu ZMĚNILA
       // na novou cenu (ne starý / syntetický řádek, který už novou cenu náhodou měl).
       const preWriteRow = liveOrdersByAccount.get(leader)?.get(targetOrderId);
       const preWritePrice = command.action === 'move-stop' ? preWriteRow?.stopPrice : preWriteRow?.limitPrice;
-      let write: Promise<void>;
+      let write: Promise<void | BrokerModifyConfirmation>;
+      timing.writeStartedAt = clock();
       try {
         write = command.action === 'cancel-entry'
           ? options.broker.cancelOrder(leader, targetOrderId)
@@ -4255,6 +4327,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ...(command.action === 'move-stop' ? { stopPrice: command.newPrice! } : { limitPrice: command.newPrice! }),
           });
       } catch (error) {
+        timing.writeStartedAt = undefined;
         return finish(error instanceof CopierDispatchRevokedError ? 'not-sent' : 'unknown', errorOf(error).message.slice(0, 200));
       }
       manageWritesInFlight.add(command.operationId);
@@ -4264,11 +4337,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const outcome = await Promise.race([
-          write.then(() => 'done' as const),
+          write.then(result => ({ confirmation: (result as BrokerModifyConfirmation | undefined) ?? null })),
           new Promise<'timeout'>(resolve => {
             timer = setTimeout(() => resolve('timeout'), command.action === 'cancel-entry' ? MANUAL_ENTRY_POST_TIMEOUT_MS : MANUAL_ORDER_MANAGE_TIMEOUT_MS);
           }),
         ]);
+        if (outcome !== 'timeout') timing.writeMs = clock() - (timing.writeStartedAt ?? clock());
         if (outcome === 'timeout') {
           const result = await finish('unknown', 'Broker změnu nepotvrdil včas — zkontroluj leadera v Tradovate.');
           // Pozdní potvrzení zápisu, nebo stream, který už cenu ukázal, záznam dořeší.
@@ -4289,6 +4363,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return result;
         }
         if (command.action === 'cancel-entry') return finish('acknowledged');
+        // Nejrychlejší důkaz: adaptér viděl Replaced přesně tohoto commandu a příkaz
+        // leadera otevřený v odeslaném tvaru. Jen výsledek akce — do cache controlleru
+        // ani read modelu se nezapisuje, zrcadlení followerům jde dál přes eventTail.
+        const confirmed = outcome.confirmation?.confirmedBy === 'stream-replaced' ? outcome.confirmation.order : null;
+        if (confirmed && confirmed.brokerOrderId === targetOrderId && confirmed.accountId === leader
+          && isOpenOrderStatus(confirmed.status) && confirmed.orderType === targetLive.orderType
+          && confirmed.quantity === targetLive.quantity
+          && (command.action === 'move-stop' ? confirmed.stopPrice : confirmed.limitPrice) === command.newPrice) {
+          timing.verify = 'adapter';
+          return finish('acknowledged');
+        }
         // Posun potvrdí jen autoritativní čtení (oponentura 2c, bod 2): bez synchronizovaného
         // streamu adaptér skončí úspěchem i u asynchronního odmítnutí.
         // Rychlá cesta: stream brokera už novou cenu ukázal (stejný důkaz jako dořešení ze streamu) —
@@ -4298,8 +4383,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (streamed && isOpenOrderStatus(streamed.status) && preWritePrice !== command.newPrice
           && (streamed as { sourceVersion?: string }).sourceVersion !== 'manual-entry-ack'
           && (command.action === 'move-stop' ? streamed.stopPrice : streamed.limitPrice) === command.newPrice) {
+          timing.verify = 'stream';
           return finish('acknowledged');
         }
+        timing.verify = 'rest';
         const verifiedLookup = await boundedManagedOrderLookup(leader, targetOrderId);
         const verified = verifiedLookup ? classifyManagedOrderLookup({ action: command.action, toPrice: command.newPrice ?? null, fromPrice }, verifiedLookup, false) : null;
         if (verified && verified.status !== 'rejected') return finish(verified.status, verified.status === 'acknowledged' ? undefined : verified.reason);

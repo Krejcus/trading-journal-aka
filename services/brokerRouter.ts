@@ -173,6 +173,11 @@ export function createBrokerRouter(
     listOrders: (accountId, options) => options
       ? brokerFor(accountId).listOrders(accountId, options)
       : brokerFor(accountId).listOrders(accountId),
+    // Jen vlastnická route účtu (INV-TRAD-06); bez route nebo bez metody = null → REST.
+    streamOrderSnapshot: accountId => {
+      const owner = byAccount.get(accountId);
+      return owner?.streamOrderSnapshot ? owner.streamOrderSnapshot(accountId) : null;
+    },
     findOrdersByTag: (accountId, tag) => brokerFor(accountId).findOrdersByTag(accountId, tag),
     findOrderById: (accountId, brokerOrderId) =>
       brokerFor(accountId).findOrderById(accountId, brokerOrderId),

@@ -1405,6 +1405,28 @@ existující ochranu.
   followera jde stávající cestou (jen správa u nativního OSO, jinak fail-closed),
   žádná nová výjimka. UI pojistka (8 ticků od ceny z P&L brokera) jen blokuje.
   Hlídá test: `tests/manualOrderManage.test.ts` (fáze 2c), `tests/liveChartData.test.ts`.
+- **Zrychlení posunu SL/TP (30. 10. 2026, oponentura návrhu):** jen `move-stop`
+  a `move-target` smí místo REST order grafu předčíst synchronní snímek
+  dohnaného streamu adaptéru (`BrokerPort.streamOrderSnapshot`, completeness
+  eventual). Adaptér vrací `null` bez syncu, při obměně socketu, rozpracovaném
+  rámci nebo command reportu, tichu socketu > 2 heartbeaty, běžícím REST merge
+  do map a při rate limitu/penalizaci; aktivní příkaz bez potvrzené verze nebo
+  neznámý kontrakt = `null` (nikdy vynechání). Snímek je čistý (žádný zápis do
+  `orders`, žádné buzení čekatelů). Controller ho použije jen když pracující
+  příkazy symbolu sedí s `liveOrdersByAccount` (tvar, stav, `sourceVersion`)
+  a vstup se stavem, který už zpracoval; jinak REST. Před zápisem se navíc
+  porovná `routeEpoch` leadera (změna = `not-sent`). `cancel-entry`
+  a `close-position` zůstávají na REST. Snímek nikdy pro ARM, reconcile,
+  důkaz flat/no-working ani Flatten. Třetí důkaz úspěchu posunu: potvrzení
+  adaptéru z `modifyOrder` (Replaced přesně odeslaného commandu + otevřený
+  příkaz v odeslaném tvaru), které controller přijme jen pro stejné id, účet
+  leadera, typ, qty a novou cenu; do cache controlleru ani read modelu se
+  nezapisuje. Audit nese časy (`[čtení stream|rest … · zápis … · ověření …]`).
+  Bez `routeEpoch` (broker bez routeru) se snímek nepoužije. Známá cena: token
+  nebo rate limit, který selže až u zápisu (dřív u REST předčtení jako
+  `read-failed`), skončí `unknown` místo `blocked` — fail-closed, dořeší čtení.
+  Hlídá test: `tests/manualOrderManage.test.ts` (zrychlení posunu),
+  `tests/tradovateConfirmedOrderVersions.test.ts` (snímek streamu).
 - **Graf (30. 10. 2026):** živá pozice leadera ve štítcích jako návrh
   (`lib/liveChartOrderLines.ts`). Tah SL/TP = okamžité `move-*` po puštění (mrtvá
   zóna 4 px), `expect` = cena při chycení čáry (změna během tahu = nic se nepošle);

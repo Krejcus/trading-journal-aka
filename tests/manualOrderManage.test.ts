@@ -548,3 +548,190 @@ describe('zrychlení zobrazení (30. 10.): signál změny u brokera', () => {
   });
 });
 
+
+describe('zrychlení posunu (30. 10.): snímek streamu a potvrzení adaptéru', () => {
+  /** Snímek z mock brokera = to, co controller zpracoval (dohnaný stream). Router dává route epochu. */
+  const streamSnapshot = (broker: MockBroker) => (accountId: number) => ({
+    orders: broker.orders().filter(order => order.accountId === accountId).map(order => ({ ...order })),
+    observedAt: Date.now(),
+  });
+  const withSnapshot = (broker: MockBroker, snapshot = streamSnapshot(broker)) => {
+    broker.streamOrderSnapshot = snapshot;
+    broker.routeEpoch = () => 1;
+  };
+  const countFreshReads = (broker: MockBroker, reads: { fresh: number }) => {
+    const real = broker.listOrders.bind(broker);
+    broker.listOrders = (async (accountId: number, options?: { fresh?: boolean }) => {
+      if (accountId === LEADER && options?.fresh) reads.fresh += 1;
+      return real(accountId);
+    }) as MockBroker['listOrders'];
+  };
+  const confirmingModify = (broker: MockBroker, tweak: (order: BrokerOrder) => BrokerOrder = order => order) => {
+    const real = broker.modifyOrder.bind(broker);
+    broker.modifyOrder = (async (accountId, brokerOrderId, changes) => {
+      await real(accountId, brokerOrderId, changes);
+      const order = broker.orders().find(item => item.brokerOrderId === brokerOrderId);
+      return accountId === LEADER && order ? { confirmedBy: 'stream-replaced' as const, order: tweak({ ...order }) } : undefined;
+    }) as MockBroker['modifyOrder'];
+  };
+  const auditOf = (ctx: Ctx, prefix: string) => ctx.audits.filter(entry => entry.startsWith(prefix)).at(-1) ?? '';
+
+  it.each([['move-stop', SL, 29_470], ['move-target', TP, 29_580]] as const)('%s: předčtení ze snímku (bez REST order grafu), potvrzení adaptéru bez findOrderById', async (action, from, to) => {
+    const reads = { fresh: 0, lookups: 0 };
+    const ctx = await setup({ patchBroker: broker => {
+      withSnapshot(broker);
+      countFreshReads(broker, reads);
+      confirmingModify(broker);
+      const real = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId, brokerOrderId) => { if (accountId === LEADER) reads.lookups += 1; return real(accountId, brokerOrderId); };
+    } });
+    await fillEntries(ctx);
+    reads.fresh = 0; reads.lookups = 0;
+    expect(await manage(ctx, action, from, to, `manage:fast-${action}`)).toMatchObject({ status: 'acknowledged', blockers: [] });
+    expect(reads).toEqual({ fresh: 0, lookups: 0 });
+    expect(auditOf(ctx, `modified:${action}`)).toMatch(/čtení stream .* ověření adapter/);
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    // Zrcadlení followerovi dál přes eventTail.
+    const follower = followerOrder(ctx.broker, action === 'move-stop' ? 'Stop' : 'Limit');
+    expect(action === 'move-stop' ? follower?.stopPrice : follower?.limitPrice).toBe(to);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it.each([
+    ['TP jinde než v cache controlleru', (order: BrokerOrder) => (order.orderType === 'Limit' && order.side === 'Sell' ? { ...order, limitPrice: TP + 10 } : order)],
+    ['vstup v jiném stavu, než controller viděl', (order: BrokerOrder) => (order.side === 'Buy' ? { ...order, status: 'canceled' as const } : order)],
+  ] as const)('snímek nesedí (%s) → REST předčtení', async (_name, tweak) => {
+    const reads = { fresh: 0 };
+    const ctx = await setup({ patchBroker: broker => {
+      withSnapshot(broker, accountId => {
+        const snapshot = streamSnapshot(broker)(accountId);
+        return { ...snapshot, orders: snapshot.orders.map(tweak) };
+      });
+      countFreshReads(broker, reads);
+    } });
+    await fillEntries(ctx);
+    reads.fresh = 0;
+    expect((await manage(ctx, 'move-stop', SL, 29_470, 'manage:fast0002')).status).toBe('acknowledged');
+    expect(reads.fresh).toBe(1);
+    expect(auditOf(ctx, 'modified:move-stop')).toMatch(/čtení rest/);
+  });
+
+  it.each([
+    ['null', () => null],
+    ['výjimka', () => { throw new Error('snapshot boom'); }],
+  ] as const)('snímek %s → REST předčtení, posun projde', async (_name, snapshot) => {
+    const reads = { fresh: 0 };
+    const ctx = await setup({ patchBroker: broker => {
+      withSnapshot(broker, snapshot as MockBroker['streamOrderSnapshot'] & object);
+      countFreshReads(broker, reads);
+    } });
+    await fillEntries(ctx);
+    reads.fresh = 0;
+    expect((await manage(ctx, 'move-stop', SL, 29_470, 'manage:fast0003')).status).toBe('acknowledged');
+    expect(reads.fresh).toBe(1);
+  });
+
+  it('bez route epochy (broker bez routeru) se snímek nepoužije', async () => {
+    const reads = { fresh: 0 };
+    const ctx = await setup({ patchBroker: broker => {
+      broker.streamOrderSnapshot = streamSnapshot(broker);
+      countFreshReads(broker, reads);
+    } });
+    await fillEntries(ctx);
+    reads.fresh = 0;
+    expect((await manage(ctx, 'move-stop', SL, 29_470, 'manage:fast0013')).status).toBe('acknowledged');
+    expect(reads.fresh).toBe(1);
+  });
+
+  it('zrušení vstupu i zavření obchodu jdou přes REST i s dostupným snímkem', async () => {
+    const reads = { fresh: 0 };
+    const ctx = await setup({ patchBroker: broker => { withSnapshot(broker); countFreshReads(broker, reads); } });
+    reads.fresh = 0;
+    expect((await manage(ctx, 'cancel-entry', ENTRY, undefined, 'manage:fast0004')).status).toBe('acknowledged');
+    expect(reads.fresh).toBe(1);
+
+    const closeReads = { fresh: 0 };
+    const close = await setup({ nativeLiquidate: true, patchBroker: broker => { withSnapshot(broker); countFreshReads(broker, closeReads); } });
+    await fillEntries(close);
+    closeReads.fresh = 0;
+    await manage(close, 'close-position', SL, undefined, 'manage:fast0005');
+    expect(closeReads.fresh).toBeGreaterThanOrEqual(1);
+    expect(auditOf(close, 'modified:close-position')).not.toMatch(/čtení stream/);
+  });
+
+  it.each([
+    ['jiná cena', (order: BrokerOrder) => ({ ...order, stopPrice: 29_471 })],
+    ['jiný účet', (order: BrokerOrder) => ({ ...order, accountId: FOLLOWER })],
+    ['jiný příkaz', (order: BrokerOrder) => ({ ...order, brokerOrderId: 'other-order' })],
+    ['jiné qty', (order: BrokerOrder) => ({ ...order, quantity: 2 })],
+    ['jiný typ', (order: BrokerOrder) => ({ ...order, orderType: 'StopLimit' as const })],
+    ['uzavřený příkaz', (order: BrokerOrder) => ({ ...order, status: 'filled' as const })],
+  ] as const)('potvrzení adaptéru (%s) neplatí → stará cesta ověření', async (_name, tweak) => {
+    const ctx = await setup({ patchBroker: broker => { withSnapshot(broker); confirmingModify(broker, tweak); } });
+    await fillEntries(ctx);
+    await manage(ctx, 'move-stop', SL, 29_470, 'manage:fast0006');
+    expect(auditOf(ctx, 'modified:move-stop') + auditOf(ctx, 'unknown:move-stop')).not.toMatch(/ověření adapter/);
+  });
+
+  it('přepnutí route leadera mezi snímkem a zápisem → nic neodejde (not-sent)', async () => {
+    let epoch = 1;
+    const ctx = await setup({ patchBroker: broker => {
+      withSnapshot(broker);
+      broker.routeEpoch = () => epoch;
+    } });
+    await fillEntries(ctx);
+    const before = leaderModifies(ctx.broker).length;
+    const real = ctx.broker.streamOrderSnapshot!;
+    ctx.broker.streamOrderSnapshot = accountId => { const snapshot = real(accountId); epoch += 1; return snapshot; };
+    const result = await manage(ctx, 'move-stop', SL, 29_470, 'manage:fast0007');
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(item => item.text).join(' ')).toMatch(/změnilo spojení leadera/);
+    expect(leaderModifies(ctx.broker).length).toBe(before);
+  });
+
+  it('opačné pořadí: událost leadera přijde během ukládání `sending` → nic neodejde', async () => {
+    const hold = { on: false, release: null as null | (() => void) };
+    const store = createMemoryCopierStore();
+    const realCommit = store.commit.bind(store);
+    store.commit = (async (...args: Parameters<CopierStore['commit']>) => {
+      if (hold.on) {
+        hold.on = false;
+        await new Promise<void>(resolve => { hold.release = resolve; });
+      }
+      return realCommit(...args);
+    }) as CopierStore['commit'];
+    const ctx = await setup({ store, patchBroker: broker => withSnapshot(broker) });
+    await fillEntries(ctx);
+    const before = leaderModifies(ctx.broker).length;
+    hold.on = true;
+    const pending = manage(ctx, 'move-stop', SL, 29_470, 'manage:fast0008');
+    await sleep(10);
+    // TP leadera posunutý mimo appku (TradingView) — event přijde, než se zápis odešle.
+    const tp = ctx.broker.orders().find(order => order.accountId === LEADER && order.orderType === 'Limit' && order.side === 'Sell')!;
+    ctx.broker.emitEvent({ type: 'order', order: { ...tp, limitPrice: TP + 4 } });
+    hold.release?.();
+    const result = await pending;
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(item => item.text).join(' ')).toMatch(/Mezitím se změnil stav kopírky/);
+    expect(leaderModifies(ctx.broker).length).toBe(before);
+  });
+
+  it('brzda během zápisu s potvrzením adaptéru → výsledek přizná původní SL followerů', async () => {
+    const ctx = await setup({ patchBroker: broker => {
+      withSnapshot(broker);
+      const real = broker.modifyOrder.bind(broker);
+      broker.modifyOrder = (async (accountId, brokerOrderId, changes) => {
+        await real(accountId, brokerOrderId, changes);
+        if (accountId !== LEADER) return undefined;
+        active?.disarm();
+        const order = broker.orders().find(item => item.brokerOrderId === brokerOrderId)!;
+        return { confirmedBy: 'stream-replaced' as const, order: { ...order } };
+      }) as MockBroker['modifyOrder'];
+    } });
+    await fillEntries(ctx);
+    const result = await manage(ctx, 'move-stop', SL, 29_470, 'manage:fast0009');
+    expect(result.status).toBe('acknowledged');
+    expect(result.reason ?? '').toMatch(/followeři mají původní SL/);
+  });
+});

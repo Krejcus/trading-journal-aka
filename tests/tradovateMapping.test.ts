@@ -1135,7 +1135,8 @@ describe('createTradovateBroker WebSocket', () => {
       } },
     ] })}]` });
 
-    await expect(modifying).resolves.toBeUndefined();
+    // Replaced přesně tohoto commandu + tvar → adaptér vrací potvrzení (zrychlení 30. 10.).
+    await expect(modifying).resolves.toMatchObject({ confirmedBy: 'stream-replaced', order: { brokerOrderId: '42', status: 'pending', stopPrice: 29_391 } });
     unsubscribe();
   });
 

@@ -319,6 +319,17 @@ export interface BrokerOrderStatusLookup {
   filledQuantity?: number;
 }
 
+/** Důkaz od adaptéru: Replaced report přesně odeslaného modify + otevřený příkaz v odeslaném tvaru. */
+export interface BrokerModifyConfirmation {
+  confirmedBy: 'stream-replaced';
+  order: BrokerOrder;
+}
+
+export interface BrokerStreamOrderSnapshot {
+  orders: BrokerOrder[];
+  observedAt: number;
+}
+
 export interface BrokerPort {
   /** Optional local admission assertion; throws only before a copier write is attempted. */
   assertDispatchAllowed?: (operation: 'place' | 'oco' | 'oso' | 'modify' | 'cancel') => void;
@@ -346,11 +357,16 @@ export interface BrokerPort {
   /** Nativní atomický entry + bracket. Chybějící implementace znamená fail-closed. */
   placeOso?(request: BrokerOsoRequest): Promise<BrokerOsoAck>;
   cancelOrder(accountId: number, brokerOrderId: string): Promise<void>;
+  /**
+   * Vrací potvrzení jen tehdy, když adaptér viděl Replaced execution report
+   * přesně tohoto modify commandu a otevřený příkaz v odeslaném tvaru.
+   * `void` = bez takového důkazu (např. bez syncu streamu) — volající ověřuje sám.
+   */
   modifyOrder(
     accountId: number,
     brokerOrderId: string,
     changes: { quantity: number; orderType: OrderType; limitPrice?: number; stopPrice?: number },
-  ): Promise<void>;
+  ): Promise<void | BrokerModifyConfirmation>;
   /** Autoritativní OAuth/account preflight před reconciliation a ARM. */
   listAccountCapabilities(accountIds: readonly number[]): Promise<BrokerAccountCapability[]>;
   /** Read-only broker risk data; nesmí provést žádnou změnu účtu. */
@@ -358,6 +374,14 @@ export interface BrokerPort {
   listPositions(accountId: number): Promise<BrokerPosition[]>;
   /** Autoritativní seznam objednávek účtu pro pre-arm kontrolu. */
   listOrders(accountId: number, options?: { fresh?: boolean }): Promise<BrokerOrder[]>;
+  /**
+   * Synchronní snímek příkazů účtu z paměti synchronizovaného streamu, bez IO
+   * a bez vedlejších efektů. `null`, kdykoli stream není prokazatelně dohnaný
+   * (bez syncu, obměna socketu, rozpracovaný rámec, ticho socketu, REST merge,
+   * rate limit). Completeness eventual: jen předčtení posunu SL/TP leadera
+   * (INV-MANUAL-01) — nikdy ARM, reconcile, důkaz flat/no-working ani Flatten.
+   */
+  streamOrderSnapshot?(accountId: number): BrokerStreamOrderSnapshot | null;
   /**
    * Dohledání objednávek podle tagu. Volá se po timeoutu, aby se zjistilo,
    * jestli objednávka k brokerovi přece jen dorazila.

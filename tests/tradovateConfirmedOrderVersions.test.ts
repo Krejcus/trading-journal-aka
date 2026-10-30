@@ -102,7 +102,9 @@ describe('Tradovate confirmed execution versions', () => {
 
   it('confirms a follower modify only after the exact command is accepted', async () => {
     const { wire, id } = await setup();
-    await expect(wire.broker.modifyOrder(100, String(id), { quantity: 1, orderType: 'Stop', stopPrice: 28_930.5 })).resolves.toBeUndefined();
+    // Potvrzení nese Replaced přesně tohoto commandu + příkaz v odeslaném tvaru (zrychlení 30. 10.).
+    await expect(wire.broker.modifyOrder(100, String(id), { quantity: 1, orderType: 'Stop', stopPrice: 28_930.5 })).resolves
+      .toMatchObject({ confirmedBy: 'stream-replaced', order: { brokerOrderId: String(id), accountId: 100, status: 'working', stopPrice: 28_930.5 } });
     expect(wire.requests.filter(request => request.path === '/order/modifyorder')).toHaveLength(1);
     expect(latest(wire)?.stopPrice).toBe(28_930.5);
   });
@@ -114,5 +116,87 @@ describe('Tradovate confirmed execution versions', () => {
       .rejects.toThrow(outcome === 'rejected' ? 'InvalidPrice' : 'was not confirmed');
     expect((await wire.broker.findOrderById(100, String(id))).order).toMatchObject({ status: 'working', stopPrice: 28_941.25 });
     expect(wire.requests.filter(request => request.path === '/order/modifyorder')).toHaveLength(1);
+  });
+});
+
+describe('Tradovate snímek příkazů ze streamu (zrychlení posunu 30. 10.)', () => {
+  it('dohnaný stream: příkazy jen daného účtu, beze změny stavu adaptéru a bez REST', async () => {
+    const { wire, id } = await setup();
+    const other = wire.place({ accountId: 200, action: 'Sell', orderType: 'Limit', price: 29_100 });
+    await expect.poll(() => latest(wire)?.brokerOrderId).toBe(String(other));
+    const events = wire.events.length;
+    const requests = wire.requests.length;
+    const snapshot = wire.broker.streamOrderSnapshot!(100);
+    expect(snapshot?.orders.map(order => order.brokerOrderId)).toEqual([String(id)]);
+    expect(snapshot?.orders[0]).toMatchObject({ accountId: 100, status: 'working', stopPrice: 28_941.25 });
+    expect(wire.events.length).toBe(events);
+    expect(wire.requests.length).toBe(requests);
+  });
+
+  it('rozpracovaný rámec nebo ticho socketu = null (předčtení jde přes REST)', async () => {
+    const { wire, id } = await setup();
+    expect(wire.broker.streamOrderSnapshot!(100)).not.toBeNull();
+    // Rámec přijatý, ještě nezpracovaný ve frontě adaptéru.
+    wire.props({ entityType: 'order', entity: wire.orders.get(id)! });
+    expect(wire.broker.streamOrderSnapshot!(100)).toBeNull();
+    await wire.drain();
+    expect(wire.broker.streamOrderSnapshot!(100)).not.toBeNull();
+    // Socket dlouho mlčí (zombie po spánku Macu).
+    wire.advance(5_000);
+    expect(wire.broker.streamOrderSnapshot!(100)).toBeNull();
+    wire.socket.onmessage?.({ data: 'h' });
+    await wire.drain();
+    expect(wire.broker.streamOrderSnapshot!(100)).not.toBeNull();
+  });
+
+  it('aktivní příkaz bez potvrzené verze = null, ne vynechání', async () => {
+    const { wire, id } = await setup();
+    // Replaced dorazil dřív než jeho OrderVersion: potvrzená verze je novější než známá.
+    const commandId = 60_000;
+    wire.commands.set(commandId, { id: commandId, orderId: id, commandType: 'Modify' });
+    wire.props({ entityType: 'command', entity: wire.commands.get(commandId)! },
+      { entityType: 'executionReport', entity: { ...wire.orders.get(id)!, id: 60_001, orderId: id, commandId, execType: 'Replaced' } });
+    await wire.drain();
+    expect(wire.broker.streamOrderSnapshot!(100)).toBeNull();
+  });
+
+  it('rate limit breaker (REST 429) = null', async () => {
+    const { wire } = await setup();
+    wire.setRestHook(path => (path === '/order/list' ? new Response('', { status: 429 }) : null));
+    await expect(wire.broker.listOrders(100, { fresh: true })).rejects.toThrow();
+    wire.setRestHook(null);
+    expect(wire.broker.streamOrderSnapshot!(100)).toBeNull();
+  });
+
+  it.each([
+    ['listOrders(fresh)', '/order/list', (wire: ReturnType<typeof createTradovateWireHarness>, _id: number) => wire.broker.listOrders(100, { fresh: true })],
+    ['findOrderById', '/order/item', (wire: ReturnType<typeof createTradovateWireHarness>, id: number) => wire.broker.findOrderById(100, String(id))],
+    ['findModifiedOrderById', '/order/item', (wire: ReturnType<typeof createTradovateWireHarness>, id: number) => wire.broker.findModifiedOrderById!(100, String(id), { quantity: 1, orderType: 'Stop', stopPrice: 1 }).catch(() => null)],
+  ] as const)('běžící REST merge (%s) = null, po dokončení zase snímek', async (_name, path, read) => {
+    const { wire, id } = await setup();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    wire.setRestHook(async requested => { if (requested === path) await gate; return null; });
+    const pending = read(wire, id);
+    await wire.drain();
+    expect(wire.broker.streamOrderSnapshot!(100)).toBeNull();
+    release();
+    await pending;
+    wire.setRestHook(null);
+    expect(wire.broker.streamOrderSnapshot!(100)).not.toBeNull();
+  });
+
+  it('command report před svým commandem (čeká v pendingCommandReports) = null', async () => {
+    const { wire } = await setup();
+    wire.props({ entityType: 'commandReport', entity: { id: 70_001, commandId: 70_000, commandStatus: 'AtExecution', ordStatus: 'Working' } });
+    await wire.drain();
+    expect(wire.broker.streamOrderSnapshot!(100)).toBeNull();
+  });
+
+  it('zavřený socket (bez syncu) = null', async () => {
+    const { wire } = await setup();
+    wire.socket.onclose?.({ code: 1006, reason: 'test' } as never);
+    await wire.drain();
+    expect(wire.broker.streamOrderSnapshot!(100)).toBeNull();
   });
 });

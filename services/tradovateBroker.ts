@@ -13,7 +13,9 @@ import type {
   BrokerOrder,
   BrokerOrderAck,
   BrokerOrderRequest,
+  BrokerOrderStateLookup,
   BrokerResyncSnapshot,
+  BrokerStreamOrderSnapshot,
   BrokerOcoRequest,
   BrokerOsoRequest,
   BrokerPort,
@@ -249,6 +251,9 @@ export class TradovateRateLimitError extends TradovateTransportError {
   }
 }
 
+/** Ticho socketu delší než dva heartbeaty = snímek streamu se nepoužije (zombie socket). */
+const STREAM_SNAPSHOT_MAX_SILENCE_MS = TRADOVATE_HEARTBEAT_MS * 2;
+
 const numberId = (value: string): number => {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) throw new Error(`Invalid Tradovate id: ${value}`);
@@ -409,6 +414,17 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let semanticFrameSequence = 0;
   let pendingSemanticFrames: Array<{ id: number; receivedAt: number }> = [];
   let lastSocketMessageAt = 0;
+  /** Běžící REST merge do map příkazů (order graf, cílené čtení) — snímek streamu pak není konzistentní. */
+  let orderGraphMerges = 0;
+  // Vrací původní promise (žádné mikrokroky navíc v reconnect/sync cestě);
+  // odečet je registrovaný dřív než pokračování volajícího.
+  const trackOrderMerge = <T>(run: () => Promise<T>): Promise<T> => {
+    orderGraphMerges += 1;
+    const done = () => { orderGraphMerges -= 1; };
+    const promise = run();
+    promise.then(done, done);
+    return promise;
+  };
   /** Kdy se aktuální socket otevřel (diagnostika WS CLOSE). */
   let socketOpenedAt = 0;
   let lastHeartbeatSentAt = 0;
@@ -907,12 +923,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return { filled, commandId: report.commandId };
   };
 
-  const composeOrder = async (orderId: number): Promise<BrokerOrder | null> => {
-    const raw = rawOrders.get(orderId);
-    const version = orderVersions.get(orderId);
-    if (!raw || !version) return null;
-    if ((confirmedVersionIds.get(orderId) ?? 0) > version.id) return null;
-    await hydrateContracts([raw.contractId]);
+  /** Čisté složení příkazu z map (kontrakt musí být známý); nic nezapisuje ani nebudí. */
+  const buildComposedOrder = (
+    orderId: number,
+    raw: TradovateRawOrderEntity,
+    version: TradovateOrderVersionEntity,
+  ): BrokerOrder => {
     const entity: TradovateOrderEntity = {
       ...raw,
       ordStatus: orderRejectReasons.has(orderId) ? 'Rejected' : raw.ordStatus,
@@ -939,6 +955,16 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       order.filledQuantity = partialCancel.filled;
       order.sourceVersion += `:partial-cancel:${partialCancel.commandId}:${partialCancel.filled}`;
     }
+    return order;
+  };
+
+  const composeOrder = async (orderId: number): Promise<BrokerOrder | null> => {
+    const raw = rawOrders.get(orderId);
+    const version = orderVersions.get(orderId);
+    if (!raw || !version) return null;
+    if ((confirmedVersionIds.get(orderId) ?? 0) > version.id) return null;
+    await hydrateContracts([raw.contractId]);
+    const order = buildComposedOrder(orderId, raw, version);
     orders.set(order.brokerOrderId, order);
     for (const waiter of orderWaiters.get(orderId) ?? []) waiter(order);
     return order;
@@ -1153,7 +1179,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
   };
 
-  const loadOrderGraphUncached = async (
+  const loadOrderGraphUncached = (
+    selectedOrderId?: number,
+    establishFillBaseline = false,
+  ) => trackOrderMerge(() => loadOrderGraphUncachedInner(selectedOrderId, establishFillBaseline));
+  const loadOrderGraphUncachedInner = async (
     selectedOrderId?: number,
     establishFillBaseline = false,
   ) => {
@@ -1266,7 +1296,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
    * Modify preflight potrebuje quantity/fills i potvrzenou OrderVersion, ale
    * nema duvod stahovat commandy a execution reporty vsech uctu spojeni.
    */
-  const loadTargetedOrder = async (orderId: number): Promise<TradovateRawOrderEntity | null> => {
+  const loadTargetedOrder = (orderId: number): Promise<TradovateRawOrderEntity | null> =>
+    trackOrderMerge(() => loadTargetedOrderInner(orderId));
+  const loadTargetedOrderInner = async (orderId: number): Promise<TradovateRawOrderEntity | null> => {
     const [raw, versions, dependentCommands, fills] = await Promise.all([
       request<TradovateRawOrderEntity | null>(`/order/item?id=${orderId}`, {}, true),
       request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`),
@@ -2159,6 +2191,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (rejection) throw new TradovateTransportError(`modifyOrder command ${commandId} rejected: ${rejection}`);
         throw new TradovateTransportError(`modifyOrder command ${commandId} was not confirmed by the order stream`);
       }
+      // Predikát výše = Replaced přesně tohoto commandu + otevřený příkaz v odeslaném tvaru.
+      return confirmed ? { confirmedBy: 'stream-replaced' as const, order: { ...confirmed } } : undefined;
     },
     async listAccountCapabilities(accountIds): Promise<BrokerAccountCapability[]> {
       const entities = await listAccountEntities();
@@ -2225,6 +2259,29 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         symbol: contracts.get(item.contractId) as string,
         netQuantity: item.netPos,
       }));
+    },
+    streamOrderSnapshot(accountId): BrokerStreamOrderSnapshot | null {
+      const now = clock();
+      // Jen prokazatelně dohnaný stream (oponentura 30. 10.): sync hotový, socket
+      // živý a nedávno slyšený, žádný rozpracovaný rámec ani report, žádný REST
+      // merge, žádný rate limit (jinak by zápis spadl lokálně jako falešné unknown).
+      if (!syncReady || socketState !== 'connected' || renewalInProgress || !socket || socket.readyState !== 1) return null;
+      if (pendingSemanticFrames.length > 0 || pendingCommandReports.size > 0 || orderGraphMerges > 0 || orderGraphInFlight) return null;
+      if (now - lastSocketMessageAt > STREAM_SNAPSHOT_MAX_SILENCE_MS) return null;
+      if (rateLimitedUntil > now || (penaltyUntil != null && penaltyUntil > now)) return null;
+      const snapshot: BrokerOrder[] = [];
+      for (const [orderId, raw] of rawOrders) {
+        if (raw.accountId !== accountId) continue;
+        const version = orderVersions.get(orderId);
+        // Stejné jako listOrders: terminální bez potvrzené verze vypadne, aktivní = nejistota.
+        if (!version || (confirmedVersionIds.get(orderId) ?? 0) > version.id) {
+          if (terminalOrderStatus(raw.ordStatus)) continue;
+          return null;
+        }
+        if (!contracts.has(raw.contractId)) return null;
+        snapshot.push(buildComposedOrder(orderId, raw, version));
+      }
+      return { orders: snapshot, observedAt: now };
     },
     async listOrders(accountId, options): Promise<BrokerOrder[]> {
       const rawList = options?.fresh
@@ -2328,6 +2385,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         return { order: streamed, completeness: 'authoritative', observedAt: clock() };
       }
 
+      // REST merge do map streamu: snímek streamu mezitím vrací null.
+      return trackOrderMerge(async (): Promise<BrokerOrderStateLookup> => {
       // Recovery po restartu používá jen entity závislé na konkrétním orderu
       // a konkrétním modify commandu. OrderVersion sama je jen požadavek;
       // za potvrzenou ji povýší až přesný ExecutionReport `Replaced`.
@@ -2388,6 +2447,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         }
       }
       throw new TradovateTransportError(`Missing confirmed modify execution for order ${orderId}`);
+      });
     },
     usage(): TradovateBrokerUsage {
       const now = clock();

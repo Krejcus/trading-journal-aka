@@ -87,9 +87,16 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
     props({ entityType: 'command', entity: command }, ...(order === 'version-first' ? [versionItem, reportItem] : [reportItem, versionItem]));
     return commandId;
   };
+  /** Volitelný háček GET požadavků: zdržení (REST merge v běhu) nebo vlastní odpověď (např. 429). */
+  let restHook: ((path: string) => Promise<Response | null> | Response | null) | null = null;
+  const setRestHook = (hook: typeof restHook) => { restHook = hook; };
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     const path = url.pathname.replace('/v1', '');
+    if (init?.method !== 'POST' && restHook) {
+      const custom = await restHook(path);
+      if (custom) return custom;
+    }
     if (init?.method === 'POST') {
       const body = JSON.parse(String(init.body));
       requests.push({ path, body });
@@ -145,5 +152,5 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
   const stop = broker.subscribe(event => events.push(event));
   const sync = () => socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
   const drain = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
-  return { broker, socket, events, orders, versions, commands, reports, fills, positions, requests, props, place, fill, replace, position, sync, drain, stop, clock, advance, setModifyOutcome, setPartialCancelAsFilled, cancelLikeTradovate };
+  return { broker, socket, events, orders, versions, commands, reports, fills, positions, requests, props, place, fill, replace, position, sync, drain, stop, clock, advance, setModifyOutcome, setPartialCancelAsFilled, cancelLikeTradovate, setRestHook };
 };
