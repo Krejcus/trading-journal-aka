@@ -1404,6 +1404,14 @@ existující ochranu.
   followera jde stávající cestou (jen správa u nativního OSO, jinak fail-closed),
   žádná nová výjimka. UI pojistka (8 ticků od ceny z P&L brokera) jen blokuje.
   Hlídá test: `tests/manualOrderManage.test.ts` (fáze 2c), `tests/liveChartData.test.ts`.
+- **Graf (30. 10. 2026):** živá pozice leadera ve štítcích jako návrh
+  (`lib/liveChartOrderLines.ts`). Tah SL/TP = okamžité `move-*` po puštění (mrtvá
+  zóna 4 px), `expect` = cena při chycení čáry (změna během tahu = nic se nepošle);
+  BE a × čekajícího vstupu dvoukrokově (druhý klik po ≥ 350 ms, do 4 s). Jen jedna
+  změna naráz; „odesílám“ drží do výsledku. Notifikace vlevo dole
+  (`components/LiveTradeToasts.tsx`) jsou jen zobrazení `recentCopyEvents`; tečky
+  nejsou důkaz kopie (zelené jen za zapnuté kopírky). Hlídá test:
+  `tests/liveChartOrderLines.test.ts`, `tests/liveTradeToasts.test.ts`.
 - - **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
   časovač ani fill před nohami ho neflushnou, čeká se nejvýš 5 s, pak
   failClosed + cílené zrušení. Cílené zrušení (`cancelOwnManualEntry`) jen

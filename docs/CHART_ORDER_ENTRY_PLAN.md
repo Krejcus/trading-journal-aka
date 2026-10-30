@@ -724,3 +724,51 @@ odmítá `unknown` natrvalo — zvážit `wait` pro `unknown` mladší než 3× 
 důvod „followeři mají původní SL“ chybí u `acknowledged` dořešeného později
 čtením; UI pojistka neověřuje stáří `mark`; push při `rejected` („cena přes trh“)
 může být zbytečný šum; `definitiveBrokerRejection` stojí na textu chyby.
+
+### 10.4 Fáze 2d — zavřít obchod leadera z grafu (návrh, 30. 10. 2026)
+
+Filip: „× na štítku pozice = zavření obchodu; když je to leader, tak skupiny
+(kopírka zavře kopie); do budoucna jeden účet“. Ne Flatten skupiny (ten
+vypíná kopírku a zavírá vše).
+
+- **Akce:** `manage-leader-order` s `action: 'close-position'` (vedle move-*
+  a cancel-entry), cíl = spravovaný obchod (vlastní / sledovaný, stejné
+  `resolveManagedTrade`), `expect: { price: průměr vstupu leadera, quantity:
+  |pozice leadera| }`, bez `newPrice`.
+- **Provedení:** stejné jako tlačítko „zavřít pozici“ v TradingView/Tradovate,
+  které kopírka už zrcadlí (ověřeno naostro 29. 10., krok D: exit leadera →
+  kopie exitu, nohy followerů zruší lifecycle): `broker.liquidatePosition(
+  { accountId: leader, symbol, tag: operationId })` — Tradovate zruší pracující
+  příkazy kontraktu a zavře pozici trhem.
+- **Brány:** jen ARMED a ne kill/halt (jinak by kopie zůstaly otevřené — UI pak
+  nabídne Flatten na přehledu); pozice leadera ≠ 0 na symbolu s qty = expect;
+  čistý tvar jako u move-* (kvůli jednoznačnosti obchodu); fence fronty; brzda
+  (risk-redukční) zavření neruší — stejně jako `cancel-entry`.
+- **Záznam a výsledek:** durable `manualOrderActions` `sending` → `acknowledged`
+  (liquidate přijat) / `rejected` / `unknown`; `unknown` se dořeší čtením pozice
+  leadera (flat = vyřešeno). Jeden pokus, žádný retry, mimo frontu po
+  synchronní kontrole fence.
+- **Capability:** `manual-order-close-v1`; UI ukáže × u pozice jen se schopností
+  workeru a za ARMED, dvoukrokově („Opravdu?“).
+- **INV:** INV-MANUAL-01 (2d), INV-OUTBOX-01/02, INV-BRAKE-01..03, INV-MODE-02
+  (liquidate potvrzuje stav), INV-DIVERGENCE-01, INV-RELAY-01..03, INV-UI-01..04.
+
+**Oponentura 2d (30. 10.): OPRAVIT PŘED IMPLEMENTACÍ.** Základ (liquidate leadera,
+kopírka zrcadlí zrušení nohou a exit) drží; do návrhu doplnit:
+- P1 souběh s Flatten / expirací ARM / cutem → dvě likvidace: zápis přes
+  `registerInFlightBrokerWrite`, synchronně před zápisem ARMED ∧ ¬shadow ∧ ¬kill,
+  generation, fence, žádný emergency flatten ani jiný zápis na leaderovi.
+- P2 brzda zavření ZNEPLATNÍ (agent `brake-after-request`, relay supersede i pro
+  `close-position`); brzda po POSTu → výsledek přizná otevřené kopie („použij Flatten“).
+- P3 výsledek z `{submitted|already-flat|rejected|indeterminate}`, ne z promise;
+  `acknowledged` jen po ohraničeném čtení (net 0 a žádný pracující příkaz na symbolu).
+- P4 vlastní větev `close-position` v dořešení ze streamu / čtením / po startu —
+  jen autoritativní pozicí, nikdy koncem nohy; flat po `createdAt` = vyřešeno.
+- P5 „nohy zrušené, pozice trvá“ → `unknown` + incident bez auto-close + push.
+- P6 `closeReachBlockers`: follower s pozicí v exit-ineligible, net ≠ očekávané,
+  chybějící vazby nohou, rozpracované outboxy/ingress/cut, sequence/divergence.
+- P7 fence fronty a ingress leadera před zápisem (výjimka `cancel-entry` neplatí).
+- P8 NEOVĚŘENO, že TV zavírá přes `liquidateposition` → záznam
+  `record-leader-oso.ts --scenario liquidate` (spouští Filip) + replay s 3 on-submit followery.
+- P9 porovnávat id vstupu/nohou + stranu + |net| (ne float průměr), TTL 5 s,
+  UI neslibuje „kopírka poběží dál“ (day lock/cooldown), restart v `sending` přizná.

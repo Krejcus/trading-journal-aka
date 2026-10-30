@@ -293,13 +293,17 @@ export interface LiveOrderEntryBridge {
   /** Pravý klik do grafu na ceně → návrh v panelu. */
   onChartOrder?: (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number }) => void;
   orderLines: BacktestChartOrderLine[];
-  onOrderLineChange: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number) => void;
+  onOrderLineChange: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number, startLine?: BacktestChartOrderLine) => void;
   onOrderLineCancel: (line: BacktestChartOrderLine) => void;
   onOrderLineAddBracket?: (
     line: BacktestChartOrderLine,
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
     price?: number,
   ) => void;
+  /** Tlačítka ve štítku (BE u živé pozice). */
+  onOrderLineAction?: (line: BacktestChartOrderLine, actionId: string) => void;
+  /** Id vlastníka čar živé pozice: kreslí se i bez přepínače „čáry příkazů“, jen na grafu exekučního instrumentu. */
+  livePositionOwnerId?: string;
 }
 
 interface AlphaTradeChartWorkspaceProps {
@@ -666,6 +670,14 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     ? context.liveOrderEntry
     : undefined;
   const orderLineSource = config.root === backtestSession?.executionInstrument ? backtestSession : liveOrderEntry;
+  // Čáry živé pozice kopírky kreslí overlay vždy (dřív cenové čáry bez přepínače);
+  // návrh a backtest dál podle přepínače „čáry příkazů“. `liveOrderEntry` je jen v panelu trhu exekuce.
+  const panelOrderLines = useMemo(() => {
+    const all = orderLineSource?.orderLines ?? [];
+    if (context.tradingSettings.orderLines) return all;
+    const liveOwner = orderLineSource === liveOrderEntry ? liveOrderEntry?.livePositionOwnerId : undefined;
+    return liveOwner ? all.filter(line => line.ownerId === liveOwner) : [];
+  }, [context.tradingSettings.orderLines, liveOrderEntry, orderLineSource]);
   const liveOnChartOrder = liveOrderEntry?.onChartOrder;
   const liveChartOrder = useMemo(
     () => (liveOnChartOrder ? (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number }) => liveOnChartOrder(input) : undefined),
@@ -1028,16 +1040,17 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onChange={() => {}}
             />
           )}
-          {context.tradingSettings.orderLines && chartApi && orderLineSource?.orderLines?.length && orderLineSource.onOrderLineChange && orderLineSource.onOrderLineCancel ? (
+          {chartApi && panelOrderLines.length > 0 && orderLineSource?.onOrderLineChange && orderLineSource.onOrderLineCancel ? (
             <BacktestOrderLinesOverlay
               api={chartApi}
-              lines={orderLineSource.orderLines}
+              lines={panelOrderLines}
               showPriceLabels={showOrderPriceLabels}
               labelMode={context.tradingSettings.orderLineLabels}
               isDark={context.isDark}
               onChange={orderLineSource.onOrderLineChange}
               onCancel={orderLineSource.onOrderLineCancel}
               onAddBracket={orderLineSource.onOrderLineAddBracket}
+              onAction={orderLineSource === liveOrderEntry ? liveOrderEntry?.onOrderLineAction : undefined}
             />
           ) : null}
           {(context.tradingSettings.tradeLines || context.tradingSettings.executionMarkers) && chartApi && config.root === context.backtestSession?.executionInstrument && (context.backtestSession.fills?.length || context.backtestSession.closedTrades?.length) ? (
@@ -1202,7 +1215,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     followEdge: !backtestSession && Boolean(liveOrderEntry),
   });
   // Živá pozice z kopírky (deník dneška): čáry vstupu, SL/TP a čekajícího vstupu.
-  useLivePriceLinesBinding(!backtestSession && replay.phase !== 'active' ? livePriceLines : null, liveCandleTargets);
+  // Panel exekučního instrumentu kreslí živou pozici štítky (overlay) — cenové čáry jen v ostatních panelech (např. NQ).
+  const livePositionOverlay = Boolean(liveOrderEntry?.livePositionOwnerId && liveOrderEntry.orderLines.some(line => line.ownerId === liveOrderEntry.livePositionOwnerId));
+  const livePriceLineTargets = useMemo(() => (livePositionOverlay
+    ? liveCandleTargets.filter(target => target.root !== liveOrderEntry?.executionInstrument)
+    : liveCandleTargets), [liveCandleTargets, liveOrderEntry?.executionInstrument, livePositionOverlay]);
+  useLivePriceLinesBinding(!backtestSession && replay.phase !== 'active' ? livePriceLines : null, livePriceLineTargets);
   const [workspaceHistory] = useState(() => new ChartWorkspaceHistory());
   const restoredSessionLayoutRef = useRef(false);
   const pendingSessionPanelsRef = useRef<WorkspaceSnapshot>({ ...backtestSession?.workspaceState?.panels });

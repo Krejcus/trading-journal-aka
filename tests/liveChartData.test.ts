@@ -187,10 +187,10 @@ describe('LIVE → Graf: vypnutí a strážní pravidla', () => {
     expect(screen).toMatch(/if \(!onDisarm \|\| disarmBusy \|\| disarmInFlightRef\.current\) return;\n    disarmInFlightRef\.current = true;/);
   });
 
-  it('BE a Zavřít pozici v panelu nic neodesílají', () => {
+  it('karta pozice je jen zobrazení: žádná tlačítka (správa je v sekci a ve štítcích grafu)', () => {
     const ticket = readFileSync('components/LiveOrderTicket.tsx', 'utf8');
     const card = ticket.slice(ticket.indexOf('const PositionCard'), ticket.indexOf('/** Jak dlouho výsledek náhledu platí'));
-    expect(card).toMatch(/disabled\n/);
+    expect(card).not.toMatch(/<button/);
     expect(card).not.toMatch(/onClick/);
   });
 });

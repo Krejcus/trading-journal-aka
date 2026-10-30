@@ -5,6 +5,7 @@ import type { Trade } from '../types';
 import AlphaTradeChartWorkspace, { type LiveOrderEntryBridge } from './AlphaTradeChartWorkspace';
 import LiveOrderTicket, { formatPrice, type TicketScope } from './LiveOrderTicket';
 import LiveGroupChip from './LiveGroupChip';
+import LiveTradeToasts from './LiveTradeToasts';
 import { QuantumSpinner } from './QuantumLoader';
 import { useDayChartData } from '../hooks/useDayChartData';
 import { DAY_ANCHOR_ACCOUNT_ID, chartMarketDay, pragueDayKey } from '../lib/dayJournal';
@@ -31,6 +32,7 @@ import {
 } from '../lib/liveTradeTarget';
 import { readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
+import { LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
 import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
@@ -180,7 +182,58 @@ const LiveTradingScreen: React.FC<Props> = ({
   useEffect(() => {
     onTargetChange?.(targetKey === 'group' ? GROUP_TARGET : { kind: 'account', accountId: targetKey });
   }, [onTargetChange, targetKey]);
-  // Čáry živé pozice (jen ověřený pohled; desk je dodává hotové).
+  // Živá pozice leadera ve štítcích jako návrh (tažení SL/TP, BE, × čekajícího vstupu).
+  // Posun čeká na potvrzení workerem: čára drží novou cenu se štítkem „odesílám“.
+  const summary = position?.summary ?? null;
+  const [pendingMove, setPendingMove] = useState<{ kind: 'stopLoss' | 'takeProfit'; price: number; until: number } | null>(null);
+  const [lineNotice, setLineNotice] = useState<{ tone: 'ok' | 'bad' | 'warn'; text: string; at: number } | null>(null);
+  const liveBusyRef = useRef(false);
+  useEffect(() => {
+    if (!pendingMove) return undefined;
+    const landed = pendingMove.kind === 'stopLoss' ? summary?.stop : summary?.target;
+    if (landed === pendingMove.price) { setPendingMove(null); return undefined; }
+    if (!Number.isFinite(pendingMove.until)) return undefined;
+    const timer = window.setTimeout(() => setPendingMove(null), Math.max(0, pendingMove.until - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [pendingMove, summary?.stop, summary?.target]);
+  useEffect(() => {
+    if (!lineNotice) return undefined;
+    const timer = window.setTimeout(() => setLineNotice(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [lineNotice]);
+  const liveLines = useMemo(() => (summary ? livePositionChartLines(summary, {
+    manageable: Boolean(onManageEntry),
+    entryAvg: manageEntryAvgPrice ?? null,
+    pointValue: INSTRUMENT.pointValue,
+    ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
+  }) : []), [manageEntryAvgPrice, onManageEntry, pendingMove, summary]);
+  const runLiveManage = useCallback(async (
+    action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit',
+  ) => {
+    if (!onManageEntry || expectPrice == null) return;
+    if (liveBusyRef.current) { setLineNotice({ at: Date.now(), tone: 'warn', text: 'Čeká se na výsledek předchozí změny — nic se neodeslalo.' }); return; }
+    liveBusyRef.current = true;
+    // „Odesílám“ drží, dokud příkaz neskončí (relay čeká až ~35 s), pak ještě chvíli na dosednutí ceny.
+    if (move && newPrice != null) setPendingMove({ kind: move, price: newPrice, until: Number.POSITIVE_INFINITY });
+    try {
+      const result = await onManageEntry(action, expectPrice, newPrice);
+      if (result.status !== 'acknowledged') setPendingMove(null);
+      else setPendingMove(current => (current ? { ...current, until: Date.now() + 5_000 } : current));
+      setLineNotice({ at: Date.now(), ...(result.status === 'acknowledged'
+        ? (result.reason && /zastavila|spustil|vyplnil|skončil/.test(result.reason)
+          ? { tone: 'warn' as const, text: result.reason }
+          : { tone: 'ok' as const, text: action === 'cancel-entry' ? 'Vstup zrušen; kopírka zruší kopie.' : 'Posunuto u leadera; kopírka posune kopie.' })
+        : result.status === 'blocked' ? { tone: 'bad' as const, text: `Neodesláno: ${result.blockers.map(issue => issue.text).join(' ')}` }
+          : result.status === 'rejected' ? { tone: 'bad' as const, text: result.reason ?? 'Broker změnu odmítl.' }
+            : { tone: 'warn' as const, text: result.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.' }) });
+    } catch (reason) {
+      setPendingMove(null);
+      setLineNotice({ at: Date.now(), tone: 'warn', text: `Výsledek neznámý (${reason instanceof Error ? reason.message.slice(0, 120) : 'chyba'}) — zkontroluj leadera v Tradovate.` });
+    } finally {
+      liveBusyRef.current = false;
+    }
+  }, [onManageEntry]);
+  // Cenové čáry pozice: workspace je vynechá v panelu, kde pozici kreslí štítky (jinak by byla dvakrát).
   const [positionLines] = useState(createLivePriceLinesFeed);
   useEffect(() => {
     positionLines.publish(position?.symbol ?? null, position?.lines ?? []);
@@ -217,8 +270,8 @@ const LiveTradingScreen: React.FC<Props> = ({
 
   const picked = group ? targetAccount(group, target) : null;
   const orderLines = useMemo(
-    () => (draft && quote && ticketOpen ? liveDraftChartLines(draft, INSTRUMENT, quote, picked?.short) : []),
-    [draft, picked?.short, quote, ticketOpen],
+    () => [...liveLines, ...(draft && quote && ticketOpen ? liveDraftChartLines(draft, INSTRUMENT, quote, picked?.short) : [])],
+    [draft, liveLines, picked?.short, quote, ticketOpen],
   );
 
   const liveOrderEntry = useMemo<LiveOrderEntryBridge>(() => ({
@@ -251,7 +304,23 @@ const LiveTradingScreen: React.FC<Props> = ({
       setFromBox(false);
       setTicketOpen(true);
     },
-    onOrderLineChange: (_line, kind, price) => {
+    livePositionOwnerId: LIVE_POSITION_OWNER,
+    onOrderLineChange: (line, kind, price, startLine) => {
+      if (line.ownerId === LIVE_POSITION_OWNER) {
+        if (!summary || kind === 'entry') return;
+        const snapped = snapToTick(price, INSTRUMENT.tickSize);
+        const current = kind === 'stopLoss' ? summary.stop : summary.target;
+        // „Co jsem viděl“ = cena při chycení čáry; změnila-li se během tahu, nic neposílat.
+        if (startLine && startLine.price !== current) {
+          setLineNotice({ at: Date.now(), tone: 'bad', text: `${kind === 'stopLoss' ? 'SL' : 'TP'} se během tažení změnil — nic se neodeslalo.` });
+          return;
+        }
+        if (snapped === current) return;
+        const blocked = liveLineMoveBlockReason(summary, kind, snapped);
+        if (blocked) { setLineNotice({ at: Date.now(), tone: 'bad', text: blocked }); return; }
+        void runLiveManage(kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
+        return;
+      }
       setDraft(previous => {
         if (!previous) return previous;
         if (kind === 'entry') return withEntryPrice(previous, price, INSTRUMENT);
@@ -260,14 +329,24 @@ const LiveTradingScreen: React.FC<Props> = ({
       });
     },
     onOrderLineCancel: line => {
+      if (line.ownerId === LIVE_POSITION_OWNER) {
+        if (line.kind === 'entry' && summary?.kind === 'pending') void runLiveManage('cancel-entry', summary.leader?.entry);
+        return;
+      }
       if (line.kind === 'entry') { updateDraft(null); return; }
       setDraft(previous => (previous ? (line.kind === 'stopLoss' ? { ...previous, stopLoss: null } : { ...previous, takeProfit: null }) : previous));
+    },
+    onOrderLineAction: (line, actionId) => {
+      if (line.ownerId !== LIVE_POSITION_OWNER || actionId !== 'break-even' || !summary) return;
+      const be = liveBreakEven(summary, manageEntryAvgPrice ?? null);
+      if (be.blocked || be.price == null) { setLineNotice({ at: Date.now(), tone: 'bad', text: be.blocked ?? 'BE teď nejde.' }); return; }
+      void runLiveManage('move-stop', summary.stop, be.price, 'stopLoss');
     },
     onOrderLineAddBracket: (_line, kind, price) => {
       if (!quote) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [draft, orderLines, quote, updateDraft]);
+  }), [draft, manageEntryAvgPrice, orderLines, quote, runLiveManage, summary, updateDraft]);
 
   const surface = isDark ? 'bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900';
   const bar = isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white';
@@ -359,6 +438,10 @@ const LiveTradingScreen: React.FC<Props> = ({
       </header>
       <div className="flex min-h-0 flex-1">
         <div className="relative min-w-0 flex-1">
+          {lineNotice && <div role="status" className={`absolute left-1/2 top-2 z-[700] max-w-[440px] -translate-x-1/2 rounded-lg border px-3 py-1.5 text-[11.5px] font-bold shadow-lg ${lineNotice.tone === 'ok'
+            ? 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200'
+            : lineNotice.tone === 'bad' ? 'border-rose-500/40 bg-rose-950/90 text-rose-200' : 'border-amber-500/40 bg-amber-950/90 text-amber-100'}`}>{lineNotice.text}</div>}
+          <LiveTradeToasts events={copier.available ? copier.status?.recentCopyEvents : undefined} copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} />
           {chart.candles.length > 0 ? (
             <AlphaTradeChartWorkspace
               key={day}

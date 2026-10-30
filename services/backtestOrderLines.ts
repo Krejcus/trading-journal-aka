@@ -18,6 +18,12 @@ export interface BacktestChartOrderLine {
   draggable: boolean;
   cancellable?: boolean;
   cancelAction?: 'cancel-order' | 'close-position' | 'remove-bracket';
+  /** Tah se počítá až po tolika px (chvění při kliknutí nic nepošle); default 0. */
+  dragDeadZonePx?: number;
+  /** × se musí potvrdit druhým kliknutím (živé příkazy brokera). */
+  confirmCancel?: boolean;
+  /** Další tlačítka ve štítku (např. „BE“ u živé pozice); `confirm` = dvoukrokově. */
+  actions?: Array<{ id: string; label: string; title?: string; disabled?: boolean; confirm?: boolean }>;
   filledLabel?: boolean;
   addableBrackets?: Array<Exclude<BacktestChartOrderLineKind, 'entry'>>;
   /** Popisek pro cenu během tažení (P&L a velikost se počítají hned, ne až po puštění). */

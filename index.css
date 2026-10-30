@@ -5272,6 +5272,10 @@ html.boot-pre [data-boot] { opacity: 0; }
 .live-chart-enter .live-chart-header { animation: live-chart-header-in 420ms 90ms cubic-bezier(.22, .61, .36, 1) both; }
 .live-chart-enter .live-chart-ticket { animation: live-chart-ticket-in 520ms 140ms cubic-bezier(.22, .61, .36, 1) both; }
 .live-chart-leave { animation: live-chart-fold 280ms cubic-bezier(.4, 0, .2, 1) both; pointer-events: none; }
+/* Notifikace obchodů v LIVE grafu (karta B, vlevo dole). */
+.live-trade-toast { animation: live-trade-toast-in 240ms cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes live-trade-toast-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .live-trade-toast { animation: none; } }
 .live-chart-leave .live-chart-ticket { animation: live-chart-ticket-out 220ms cubic-bezier(.4, 0, 1, 1) both; }
 .live-chart-aurora {
   position: absolute; inset: 0; z-index: 900; pointer-events: none;

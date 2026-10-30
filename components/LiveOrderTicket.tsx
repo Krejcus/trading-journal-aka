@@ -65,10 +65,9 @@ const UNIT_SUFFIX: Record<TicketBracketUnits, string> = { pts: 'b', ticks: 't', 
 
 /**
  * Živá pozice cíle panelu (jen zobrazení). Otevřené P&L je z brokera, ne
- * z ceny grafu. BE a Zavřít pozici zatím nic nedělají — odesílání příkazů
- * je samostatný krok přes jádro kopírky.
+ * z ceny grafu. Správa (SL/TP, BE) je v sekci pod kartou a ve štítcích grafu.
  */
-const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummary; muted: string; ink: string; field: string }> = ({ isDark, summary, muted, ink, field }) => {
+const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummary; muted: string; ink: string; field: string }> = ({ summary, muted, ink, field }) => {
   const long = summary.side === 'long';
   const price = (value: number | null) => (value == null ? '—' : formatPrice(value));
   return <div className={`grid gap-1.5 rounded-[11px] border p-2.5 ${field}`}>
@@ -90,17 +89,33 @@ const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummar
       <span>SL {price(summary.stop)}</span><span>TP {price(summary.target)}</span>
       <span className={`flex-1 text-right font-sans font-bold ${muted}`}>{summary.protection}</span>
     </div>
-    {summary.kind === 'position' && <div className="grid grid-cols-2 gap-1.5">
-      {['SL na BE', 'Zavřít pozici'].map(text => <button
-        key={text}
-        type="button"
-        disabled
-        title="Zatím bez akce — odesílání příkazů přijde jako samostatný krok"
-        className={`flex h-8 items-center justify-center gap-1 rounded-lg border text-[10.5px] font-extrabold opacity-50 ${isDark ? 'border-white/10' : 'border-slate-900/10'}`}
-      ><Lock size={10} />{text}</button>)}
-    </div>}
   </div>;
 };
+
+/** Text výsledku ručního vstupu (náhled i přímé odeslání). */
+const placedResultView = (entry: LeaderEntryPlaceResult): { tone: 'ok' | 'bad' | 'warn'; text: string } => {
+  switch (entry.status) {
+    case 'acknowledged': return entry.reason
+      ? { tone: 'warn', text: `Přijato brokerem (vstup ${entry.entryBrokerOrderId}), ale: ${entry.reason}` }
+      : { tone: 'ok', text: `Přijato brokerem (vstup ${entry.entryBrokerOrderId}). Kopie followerům řídí kopírka.` };
+    case 'rejected': return { tone: 'bad', text: `Broker odmítl: ${entry.reason ?? 'bez důvodu'}` };
+    case 'blocked': return { tone: 'bad', text: `Neodesláno: ${entry.blockers.map(issue => issue.text).join(' ')}` };
+    case 'abandoned': return { tone: 'bad', text: entry.reason ?? 'Broker vrátil vstup bez ochrany — vstup se ruší, kopírka je vypnutá.' };
+    default: return { tone: 'warn', text: entry.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.' };
+  }
+};
+
+/**
+ * Chyba odeslání: jen prokazatelně neodeslané je „neodesláno“ (vč. read-only
+ * localhostu, 405 před relayí); vše ostatní je neznámý výsledek — nikdy neopakovat naslepo.
+ */
+const placeErrorView = (message: string): { tone: 'bad' | 'warn'; text: string } => (
+  /entry-busy|entry-daily-cap|entry-conflict|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|worker-disconnected|pouze read-only/.test(message)
+    ? { tone: 'bad', text: /entry-busy/.test(message) ? 'Neodesláno: jiný ruční vstup se právě zpracovává.'
+      : /entry-daily-cap/.test(message) ? 'Neodesláno: dosažen denní strop ručních vstupů.'
+        : /pouze read-only/.test(message) ? 'Neodesláno: z localhostu se k brokerovi nezapisuje (jen na produkci).' : `Neodesláno: ${message}` }
+    : { tone: 'warn', text: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate, než to zkusíš znovu.` }
+);
 
 /** Jak dlouho výsledek náhledu platí jako „aktuální“; pak zešedne. */
 const PREVIEW_FRESH_MS = 15_000;
@@ -179,29 +194,14 @@ const PreviewSection: React.FC<{
     try {
       setPlaced({ key, result: await onPlace(previewDraft, shown!.operationId!) });
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.';
-      // Jen prokazatelně neodeslané chyby jsou „neodesláno“; vše ostatní je
-      // neznámý výsledek (relay mohl příkaz doručit) — nikdy neopakovat naslepo.
-      const notSent = /entry-busy|entry-daily-cap|entry-conflict|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|worker-disconnected/.test(message);
-      setPlaced({ key, ...(notSent
-        ? { error: /entry-busy/.test(message) ? 'Jiný ruční vstup se právě zpracovává.' : /entry-daily-cap/.test(message) ? 'Dosažen denní strop ručních vstupů.' : message }
-        : { unknown: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate, než to zkusíš znovu.` }) });
+      const view = placeErrorView(reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.');
+      setPlaced({ key, ...(view.tone === 'bad' ? { error: view.text.replace(/^Neodesláno: /, '') } : { unknown: view.text }) });
     } finally {
       placingRef.current = false;
       setPlacing(false);
     }
   };
-  const placedText = (entry: LeaderEntryPlaceResult): { tone: 'ok' | 'bad' | 'warn'; text: string } => {
-    switch (entry.status) {
-      case 'acknowledged': return entry.reason
-        ? { tone: 'warn', text: `Přijato brokerem (vstup ${entry.entryBrokerOrderId}), ale: ${entry.reason}` }
-        : { tone: 'ok', text: `Přijato brokerem (vstup ${entry.entryBrokerOrderId}). Kopie followerům řídí kopírka.` };
-      case 'rejected': return { tone: 'bad', text: `Broker odmítl: ${entry.reason ?? 'bez důvodu'}` };
-      case 'blocked': return { tone: 'bad', text: `Neodesláno: ${entry.blockers.map(issue => issue.text).join(' ')}` };
-      case 'abandoned': return { tone: 'bad', text: entry.reason ?? 'Broker vrátil vstup bez ochrany — vstup se ruší, kopírka je vypnutá.' };
-      default: return { tone: 'warn', text: entry.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.' };
-    }
-  };
+  const placedText = placedResultView;
   const order = (entry: { side: string; quantity: number; orderType: string; price: number; stopLoss: number; takeProfit: number }) =>
     `${entry.side === 'Buy' ? 'BUY' : 'SELL'} ${entry.orderType === 'Limit' ? 'LMT' : 'STP'} ${entry.quantity} @ ${formatPrice(entry.price)} · SL ${formatPrice(entry.stopLoss)} · TP ${formatPrice(entry.takeProfit)}`;
   return <div className="grid gap-1.5">
@@ -434,6 +434,30 @@ const LiveOrderTicket: React.FC<Props> = ({
       : draft.stopLoss == null || draft.takeProfit == null ? 'Náhled potřebuje SL i TP.'
         : single ? 'Náhled zatím jen pro skupinu (vstup na leadera).'
           : problems.some(problem => problem.level === 'error') ? 'Nejdřív oprav chyby v panelu.' : null;
+  // Přímé odeslání velkým tlačítkem (Filip 30. 10.: jedním kliknutím, bez náhledu).
+  // Worker při odeslání znovu vyhodnotí všechny brány náhledu; při problému nic nepošle.
+  const [direct, setDirect] = useState<{ key: string; view: { tone: 'ok' | 'bad' | 'warn'; text: string } } | null>(null);
+  const [directBusy, setDirectBusy] = useState(false);
+  const directBusyRef = useRef(false);
+  const directKey = previewDraft ? JSON.stringify(previewDraft) : '';
+  const shownDirect = direct && direct.key === directKey ? direct : null;
+  const directBlocked = !onPlaceEntry ? 'Worker odeslání z grafu neumí.'
+    : previewBlockedReason ?? (!previewDraft ? 'Doplň cenu, SL i TP.' : null);
+  const sendDirect = async () => {
+    if (directBlocked != null || !previewDraft || !onPlaceEntry || directBusyRef.current) return;
+    directBusyRef.current = true;
+    setDirectBusy(true);
+    const sentKey = directKey;
+    try {
+      const result = await onPlaceEntry(previewDraft, `entry:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`);
+      setDirect({ key: sentKey, view: placedResultView(result) });
+    } catch (reason) {
+      setDirect({ key: sentKey, view: placeErrorView(reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.') });
+    } finally {
+      directBusyRef.current = false;
+      setDirectBusy(false);
+    }
+  };
   const multiplier = single || scope === 'account' ? 1 : groupMultiplier;
   const sideColor = draft?.side === 'sell' ? '#e11d48' : '#2563eb';
 
@@ -726,19 +750,20 @@ const LiveOrderTicket: React.FC<Props> = ({
       </div>}
       <button
         type="button"
-        disabled
-        title="Odesílání ze grafu zatím není zapojené — přijde přes jádro kopírky (pravidla INV) v samostatném kroku."
-        className="grid h-[42px] cursor-not-allowed content-center rounded-[10px] text-[12px] font-extrabold leading-tight text-white opacity-70"
+        disabled={directBlocked != null || directBusy}
+        title={directBlocked ?? 'Odešle hned — worker znovu ověří všechny pojistky a při problému nic nepošle.'}
+        onClick={() => void sendDirect()}
+        className="grid h-[42px] content-center rounded-[10px] text-[12px] font-extrabold leading-tight text-white disabled:cursor-not-allowed disabled:opacity-60"
         style={{ background: `linear-gradient(180deg, color-mix(in srgb, ${sideColor} 82%, #fff), ${sideColor})` }}
       >
-        <span className="inline-flex items-center justify-center gap-1.5"><Lock size={11} />{draft.side === 'buy' ? 'Koupit' : 'Prodat'} {m.quantity} {instrument.symbol}</span>
+        <span className="inline-flex items-center justify-center gap-1.5">{directBlocked != null && <Lock size={11} />}{directBusy ? 'Odesílám…' : `${draft.side === 'buy' ? 'Koupit' : 'Prodat'} ${m.quantity} ${instrument.symbol}`}</span>
         <small className="font-mono text-[10px] font-semibold opacity-85">
           {TYPE_LABEL[draft.type]}{draft.type === 'market' ? ` · ${formatPrice(m.entry)}` : ` @ ${formatPrice(draft.price)}`}
           {' · '}{single && picked ? `jen ${picked.short}` : group?.armed === false ? 'jen leader' : group ? `skupina ×${groupMultiplier}` : 'leader + kopírka'}
           {limitIsMarketable(draft, quote) ? ' · hned' : ''}
         </small>
       </button>
-      <div className={`text-center text-[9.5px] font-bold ${tone.muted}`}>Odesílání zatím není zapojené</div>
+      {shownDirect && <div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${shownDirect.view.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : shownDirect.view.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{shownDirect.view.text}</div>}
     </div>}
   </div>;
 };

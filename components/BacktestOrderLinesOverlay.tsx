@@ -10,8 +10,11 @@ interface Props {
   /** Štítky SL/TP: body od vstupu + P&L, nebo jen P&L. */
   labelMode?: ChartOrderLineLabels;
   isDark?: boolean;
-  onChange: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number) => void;
+  /** `startLine` = čára v okamžiku chycení (živé příkazy posílají „co jsem viděl“ ze začátku tahu). */
+  onChange: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number, startLine?: BacktestChartOrderLine) => void;
   onCancel: (line: BacktestChartOrderLine) => void;
+  /** Tlačítka `line.actions` (např. BE u živé pozice). */
+  onAction?: (line: BacktestChartOrderLine, actionId: string) => void;
   onAddBracket?: (
     line: BacktestChartOrderLine,
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
@@ -60,7 +63,27 @@ const OrderLineBadge: React.FC<{
   );
 };
 
-const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAddBracket }) => {
+const CONFIRM_MS = 4_000;
+
+const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onAddBracket }) => {
+  // Dvoukrokové potvrzení živých akcí (× / BE): první klik „Opravdu?“, druhý do 4 s odešle.
+  // window.confirm prohlížeč v appce potichu blokuje (29. 10.).
+  const [confirming, setConfirming] = useState<{ key: string; until: number } | null>(null);
+  useEffect(() => {
+    if (!confirming) return undefined;
+    const timer = window.setTimeout(() => setConfirming(null), Math.max(0, confirming.until - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [confirming]);
+  const confirmed = (key: string, needsConfirm: boolean | undefined) => {
+    if (!needsConfirm) return true;
+    const now = Date.now();
+    // Dvojklik se nepočítá jako potvrzení: druhý klik až po 350 ms.
+    if (confirming?.key === key && confirming.until > now && now - (confirming.until - CONFIRM_MS) >= 350) { setConfirming(null); return true; }
+    if (confirming?.key === key && confirming.until > now) return false;
+    setConfirming({ key, until: now + CONFIRM_MS });
+    return false;
+  };
+  const asking = (key: string) => confirming?.key === key;
   const rootRef = useRef<HTMLDivElement>(null);
   const linesRef = useRef(lines);
   const lineElementsRef = useRef(new Map<string, HTMLDivElement>());
@@ -69,6 +92,8 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
     bracketKind?: Exclude<BacktestChartOrderLineKind, 'entry'>;
     moved?: boolean;
     lastPrice?: number;
+    startY?: number;
+    startLine?: BacktestChartOrderLine;
   } | null>(null);
   const suppressBracketClickRef = useRef<Exclude<BacktestChartOrderLineKind, 'entry'> | null>(null);
   const refreshRef = useRef<(() => void) | null>(null);
@@ -151,6 +176,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
       event.preventDefault();
       const line = linesRef.current.find(item => item.id === dragging.id);
       if (!line) return;
+      if (!dragging.moved && dragging.startY !== undefined && Math.abs(event.clientY - dragging.startY) < (line.dragDeadZonePx ?? 0)) return;
       const raw = api.controller.getSeries().coordinateToPrice(event.clientY - root.getBoundingClientRect().top);
       if (raw === null || !Number.isFinite(raw)) return;
       const snapped = Math.round(raw / 0.25) * 0.25;
@@ -179,7 +205,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
         suppressBracketClickRef.current = dragging.bracketKind;
         onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice);
       } else {
-        onChange(line, line.kind, dragging.lastPrice);
+        onChange(line, line.kind, dragging.lastPrice, dragging.startLine);
       }
     };
     const stop = () => finish(true);
@@ -255,7 +281,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                 if (!line.draggable || (event.target as HTMLElement).closest('[data-order-line-control]')) return;
                 event.preventDefault();
                 event.stopPropagation();
-                dragRef.current = { id: line.id };
+                dragRef.current = { id: line.id, startY: event.clientY, startLine: line };
                 if (line.kind !== 'entry') {
                   const anchor = linesRef.current.find(item =>
                     item.ownerId === line.ownerId && item.ownerType === line.ownerType && item.kind === 'entry');
@@ -300,19 +326,40 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                 isDark={isDark}
                 labelMode={labelMode}
               >
+                {line.actions?.map(action => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    data-order-line-control
+                    disabled={action.disabled}
+                    title={action.title}
+                    className={`flex h-[15px] items-center justify-center rounded-[3px] border px-[5px] text-[9.5px] font-bold leading-none disabled:cursor-not-allowed disabled:opacity-40 ${isDark ? 'border-white/15 text-slate-200 hover:bg-white/10' : 'border-slate-300 text-slate-700 hover:bg-slate-900/[0.06]'}`}
+                    onPointerDown={event => event.stopPropagation()}
+                    onClick={event => {
+                      event.stopPropagation();
+                      if (action.disabled || !confirmed(`${line.id}:${action.id}`, action.confirm)) return;
+                      onAction?.(line, action.id);
+                    }}
+                    aria-label={action.title ?? action.label}
+                  >{asking(`${line.id}:${action.id}`) ? 'Opravdu?' : action.label}</button>
+                ))}
                 {line.cancellable && (
                   <button
                     type="button"
                     data-order-line-control
-                    className={`flex h-[15px] w-[15px] items-center justify-center rounded-[3px] text-[11px] leading-none ${isDark ? 'text-slate-400 hover:bg-white/10' : 'text-slate-500 hover:bg-slate-900/[0.06]'}`}
+                    className={`flex h-[15px] min-w-[15px] items-center justify-center rounded-[3px] text-[11px] leading-none ${asking(`${line.id}:cancel`) ? 'px-[5px] text-[9.5px] font-bold text-rose-400' : ''} ${isDark ? 'text-slate-400 hover:bg-white/10' : 'text-slate-500 hover:bg-slate-900/[0.06]'}`}
                     onPointerDown={event => event.stopPropagation()}
-                    onClick={event => { event.stopPropagation(); onCancel(line); }}
+                    onClick={event => {
+                      event.stopPropagation();
+                      if (!confirmed(`${line.id}:cancel`, line.confirmCancel)) return;
+                      onCancel(line);
+                    }}
                     aria-label={line.cancelAction === 'close-position'
                       ? 'Zavřít pozici'
                       : line.cancelAction === 'remove-bracket'
                         ? `Odstranit ${line.kind === 'stopLoss' ? 'stop loss' : 'take profit'}`
                         : 'Zrušit čekající příkaz'}
-                  >×</button>
+                  >{asking(`${line.id}:cancel`) ? 'Opravdu?' : '×'}</button>
                 )}
               </OrderLineBadge>
             </div>

@@ -48,7 +48,7 @@ describe('LIVE → Graf: otevřená pozice skupiny až do panelu', () => {
     expect(position.lines.map(line => [line.id, line.price])).toEqual([['entry', position.summary!.entry], ['stop', 21470], ['target', 21500]]);
   });
 
-  it('panel objednávky ukáže pozici, P&L z brokera a vypnuté BE / Zavřít', () => {
+  it('panel objednávky ukáže pozici a P&L z brokera; bez správy (onManageEntry) žádná tlačítka BE / Zavřít', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveOrderTicket, {
       isDark: true,
       instrument: { symbol: 'MNQ', tickSize: 0.25, pointValue: 2 },
@@ -64,8 +64,8 @@ describe('LIVE → Graf: otevřená pozice skupiny až do panelu', () => {
     expect(markup).toContain('+$58.00');
     expect(markup).toContain('z brokera');
     expect(markup).toContain('SL 2/2 · TP 2/2');
-    expect(markup).toMatch(/<button[^>]*disabled[^>]*>[^]*?SL na BE/);
-    expect(markup).toMatch(/<button[^>]*disabled[^>]*>[^]*?Zavřít pozici/);
+    expect(markup).not.toContain('SL na BE');
+    expect(markup).not.toContain('Zavřít pozici');
   });
 
   it('přehled účtů ukáže pozici každého účtu z ověřeného čtení', () => {

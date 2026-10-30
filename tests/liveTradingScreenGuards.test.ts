@@ -97,10 +97,11 @@ describe('LIVE → Graf je jen UI', () => {
     }
   });
 
-  it('tlačítko odeslání je napevno vypnuté', () => {
+  it('velké tlačítko odesílá jen přes onPlaceEntry (relay → worker ověří brány), nikdy přímo k brokerovi', () => {
     const ticket = source('components/LiveOrderTicket.tsx');
     const submit = ticket.slice(ticket.indexOf('<button', ticket.indexOf('problems.length > 0')));
-    expect(submit.slice(0, 200)).toMatch(/<button\s+type="button"\s+disabled\s/);
+    // Zamčené, dokud náhled nejde (Market, SL/TP, chyby panelu, zastaralá cena, worker bez odeslání).
+    expect(submit.slice(0, 200)).toMatch(/disabled=\{directBlocked != null \|\| directBusy\}/);
     expect(ticket).not.toMatch(/onSubmit|executeAgent|placeOrder/);
   });
 
