@@ -1244,6 +1244,12 @@ const Settings: React.FC<SettingsProps> = ({
           <SettingsRow label="Verze aplikace" desc={<span className="font-mono">{appVersion ?? '—'}</span>} keywords="obnovit mezipamet">
             {onHardRefresh && <button type="button" onClick={onHardRefresh} className={btnGhost}>Vynutit obnovení</button>}
           </SettingsRow>
+          {/* Licence lightweight-charts: atribuce z NOTICE a odkaz na TradingView (logo v grafech je vypnuté). */}
+          <SettingsRow
+            label="Grafy"
+            desc={<>TradingView Lightweight Charts™ · Copyright (с) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">tradingview.com</a></>}
+            keywords="licence tradingview lightweight charts"
+          />
         </SettingsSection>
 
         {isNativeBuild && (

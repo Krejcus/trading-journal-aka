@@ -313,6 +313,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Testy: `tests/marketStructureForming.test.ts` (shoda s plným výpočtem pro
   přepsaný bar, připsané bary i náhodnou řadu; validace `none`). Cílené sady
   52/52 a tsc čisté při DISARMED; celá sada čeká na DISARM (od 7:23 ARMED).
+- **Logo TradingView v grafech pryč** (Filip): `layout.attributionLogo: false`
+  v `CandleKitTradeChart` i klasickém `TradeMarketChart`. Licence
+  lightweight-charts chce atribuci z NOTICE a odkaz na tradingview.com někde,
+  kde ho uživatel uvidí — řádek „Grafy“ v Nastavení → Účet (pod verzí appky).
+  Logo nevracet bez náhrady; atribuci nemazat.
 
 ### 2026-10-30 — Obchodování z grafu: test fází 2a a 2b naostro + oprava „co jsem viděl“ (Claude, oprava nasazena 07:18 @ 666ed1cc)
 

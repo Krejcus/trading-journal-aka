@@ -4953,7 +4953,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const { symbol, scales } = chartSettings;
     return {
       ...canvas,
-      layout: { ...canvas.layout, fontFamily: chartStyle.fontFamily },
+      // Logo TradingView v rohu grafu ne — licence je splněná atribucí v Nastavení.
+      layout: { ...canvas.layout, fontFamily: chartStyle.fontFamily, attributionLogo: false },
       timeScale: {
         ...canvas.timeScale,
         timeVisible: true,

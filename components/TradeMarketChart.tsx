@@ -668,7 +668,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
       height: containerRef.current.clientHeight,
-      layout: { background: { type: ColorType.Solid, color: background }, textColor: text, fontFamily: chartStyle.fontFamily },
+      layout: { background: { type: ColorType.Solid, color: background }, textColor: text, fontFamily: chartStyle.fontFamily, attributionLogo: false },
       grid: { vertLines: { color: 'transparent' }, horzLines: { color: 'transparent' } },
       rightPriceScale: { borderColor: border, scaleMargins: { top: 0.08, bottom: 0.22 } },
       timeScale: {
