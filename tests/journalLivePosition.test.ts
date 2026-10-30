@@ -5,6 +5,7 @@ import {
 } from '../lib/journalLivePosition';
 import { tradovatePositionPollDelay, tradovatePositionPollFirstDelay } from '../components/useTradovateLiveData';
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
+import { leaderManageBasis, liveChartPosition } from '../lib/liveChartPosition';
 import { devLiveCopyFixtureSnapshot } from '../lib/devLiveCopyFixture';
 import type { LiveAccount, LiveOrder } from '../services/tradecopiaLiveService';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
@@ -147,6 +148,41 @@ describe('živá pozice v grafu deníku', () => {
     expect(buildJournalLiveView(input).model?.quantity).toBe(2);
     expect(buildJournalLiveView({ ...input, workerMismatches: { pending: new Set([2]), confirmed: new Set(), ok: new Set() } }).model?.quantity).toBe(2);
     expect(buildJournalLiveView({ ...input, workerMismatches: { pending: new Set(), confirmed: new Set([2]), ok: new Set() } })).toMatchObject({ issue: 'divergent', model: null });
+  });
+
+  it('správa příkazu leadera z grafu: „co jsem viděl“ je leader skupiny, nikdy součet ani follower (test naostro 30. 10.)', () => {
+    const group3: CopyGroupConfig = { ...group, followers: [
+      { accountId: 2, mode: 'on-submit', multiplier: 1, enabled: true } as CopyGroupConfig['followers'][number],
+      { accountId: 3, mode: 'on-submit', multiplier: 2, enabled: true } as CopyGroupConfig['followers'][number],
+    ] };
+    const buy = (accountId: number, quantity: number) => order(accountId, { action: 'Buy', orderType: 'Limit', price: 28931.5, quantity });
+    const pending = {
+      accounts: [account(1, 0, 0, 0), account(2, 0, 0, 0), account(3, 0, 0, 0)],
+      orders: [buy(1, 1), buy(2, 1), buy(3, 2)], feeRates: new Map(), group: group3, now, copierArmed: true,
+    };
+    // Skupina: souhrn 4 ks, ale správa dostane leadera (1 ks, jeho cena).
+    const groupSummary = liveChartPosition(buildJournalLiveView({ ...pending, target: 'group' }), 'group').summary;
+    expect(groupSummary).toMatchObject({ kind: 'pending', quantity: 4 });
+    expect(leaderManageBasis(groupSummary, 1)).toEqual({ accountId: 1, quantity: 1, entry: 28931.5 });
+    // Pohled leadera: totéž.
+    expect(leaderManageBasis(liveChartPosition(buildJournalLiveView({ ...pending, target: 1 }), 1).summary, 1)).toMatchObject({ accountId: 1, quantity: 1 });
+    // Pohled followera (zobrazení mu dá isLeader): správa se nenabídne.
+    const followerSummary = liveChartPosition(buildJournalLiveView({ ...pending, target: 2 }), 2).summary;
+    expect(followerSummary?.leader?.accountId).toBe(2);
+    expect(leaderManageBasis(followerSummary, 1)).toBeNull();
+    // Vypnutá kopírka, expozice jen u followera: taky ne.
+    const onlyFollower = buildJournalLiveView({ ...pending, orders: [buy(2, 1)], target: 'group', copierArmed: false });
+    expect(leaderManageBasis(liveChartPosition(onlyFollower, 'group').summary, 1)).toBeNull();
+    // Bez známého leadera skupiny ne.
+    expect(leaderManageBasis(groupSummary, null)).toBeNull();
+    // Pozice ve skupině: množství leadera, SL/TP leadera i při jiných cenách followerů.
+    const position = liveChartPosition(buildJournalLiveView({
+      accounts: [account(1, 1, 21480, 20), account(2, 1, 21481, 18), account(3, 2, 21481, 30)],
+      orders: [...bracket(1, 21470, 21500, 1), ...bracket(2, 21471, 21501, 1), ...bracket(3, 21471, 21501, 2)],
+      feeRates: new Map(), group: group3, target: 'group', now, copierArmed: true,
+    }), 'group').summary;
+    expect(position).toMatchObject({ kind: 'position', quantity: 4, stop: 21470, target: 21500 });
+    expect(leaderManageBasis(position, 1)).toEqual({ accountId: 1, quantity: 1, entry: 21480 });
   });
 
   it('vypnutá kopírka: rozdíl proti leaderovi není poplach — ukáže se, co účty drží', () => {

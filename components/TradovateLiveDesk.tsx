@@ -125,6 +125,7 @@ import {
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { leaderManageBasis } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
 import {
@@ -953,20 +954,25 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // Fáze 2a/2b: spravovatelný obchod = právě jeden na symbolu a straně pozice v grafu.
   const chartPositionSymbol = chartData.position?.symbol ?? null;
   const chartPositionSide = chartData.position?.summary?.side ?? null;
+  // Správa jen nad skutečným leaderem skupiny workeru: pohled jednoho followera
+  // (nebo vypnutá kopírka s expozicí jen u followera) nesmí ovládat leadera.
+  const chartLeaderBasis = leaderManageBasis(chartData.position?.summary, workerGroup?.leaderAccountId);
   const ownManualEntry = useMemo(() => {
+    if (!chartLeaderBasis) return null;
     const trades = (agentStatus?.controller.manageableLeaderTrades ?? []).filter(trade => (
       chartPositionSymbol != null && trade.symbol === chartPositionSymbol
       && chartPositionSide === (trade.side === 'Buy' ? 'long' : 'short')
     ));
     return trades.length === 1 ? trades[0] : null;
-  }, [agentStatus?.controller.manageableLeaderTrades, chartPositionSymbol, chartPositionSide]);
+  }, [agentStatus?.controller.manageableLeaderTrades, chartPositionSymbol, chartPositionSide, chartLeaderBasis]);
   const ownManualEntryRef = useRef(ownManualEntry);
   ownManualEntryRef.current = ownManualEntry;
   const manageLeaderEntry = useCallback(async (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number): Promise<LeaderOrderManageResult> => {
     const current = armStatusRef.current;
     const executionGroup = copierWorkerExecutionGroup(current.status);
     const entry = ownManualEntryRef.current;
-    const quantity = chartData.position?.summary?.quantity ?? null;
+    // Worker porovnává s příkazem leadera — součet skupiny by vždy neseděl.
+    const quantity = leaderManageBasis(chartData.position?.summary, executionGroup?.leaderAccountId)?.quantity ?? null;
     if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !entry || quantity == null) {
       throw new Error('Stav kopírky není čerstvě ověřený nebo chybí spravovatelný obchod — nic se neodeslalo.');
     }
@@ -983,7 +989,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const result = (response as { result?: unknown }).result as LeaderOrderManageResult | undefined;
     if (!result || result.type !== 'leader-order-managed') throw new Error('Výsledek změny chybí — zkontroluj leadera v Tradovate.');
     return result;
-  }, [chartData.position?.summary?.quantity]);
+  }, [chartData.position?.summary]);
 
   // Vypnutí z grafu: stejná safety cesta jako přehled (INV-UI-02). Stabilní
   // funkce přes ref — graf nesmí držet starou trasu ani starý fence.

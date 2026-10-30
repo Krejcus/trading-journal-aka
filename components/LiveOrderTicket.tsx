@@ -291,7 +291,7 @@ const ManageSection: React.FC<{
   return <div className={`grid gap-1.5 rounded-[9px] border p-2 ${field}`}>
     <div className={`text-[9.5px] font-black uppercase tracking-[0.06em] ${muted}`}>Vlastní vstup z grafu</div>
     {summary.kind === 'pending'
-      ? <button type="button" disabled={busy || summary.entry == null} onClick={() => void run('cancel-entry', summary.entry)} className={button}>{label('cancel-entry', 'Zrušit čekající vstup')}</button>
+      ? <button type="button" disabled={busy || summary.leader?.entry == null} onClick={() => void run('cancel-entry', summary.leader?.entry ?? null)} className={button}>{label('cancel-entry', 'Zrušit čekající vstup')}</button>
       : <>
         <div className="flex items-center gap-1.5">
           <input value={stop} onChange={event => setStop(event.target.value)} placeholder={`SL ${long ? 'níž' : 'výš'} než ${summary.stop ?? '—'}`} className="h-7 min-w-0 flex-1 rounded-[7px] border bg-transparent px-2 text-[11px]" />

@@ -26,6 +26,12 @@ export interface LiveChartPositionSummary {
   accounts: number;
   /** Souhrn jen jednoho účtu skupiny (ručně vypnutá kopírka, expozice jen na něm), např. „jen T2“. */
   scopeLabel: string | null;
+  /**
+   * Účet označený v pohledu jako leader (ne součet skupiny) — „co jsem viděl“ u správy
+   * příkazu leadera. POZOR: `isLeader` je zobrazovací příznak (pohled jednoho účtu ho
+   * dá i followerovi), proto správa vždy porovná `accountId` s leaderem skupiny workeru.
+   */
+  leader: { accountId: number; quantity: number; entry: number | null } | null;
 }
 
 export interface LiveChartPosition {
@@ -39,6 +45,20 @@ export interface LiveChartPosition {
 }
 
 export const NO_LIVE_CHART_POSITION: LiveChartPosition = { key: 'none', symbol: null, lines: [], summary: null, issue: null };
+
+const leaderOf = (accounts: readonly { accountId: number; isLeader: boolean; quantity: number; entry: number | null }[]) => {
+  const leader = accounts.find(account => account.isLeader);
+  return leader ? { accountId: leader.accountId, quantity: leader.quantity, entry: leader.entry } : null;
+};
+
+/**
+ * „Co jsem viděl“ pro správu příkazu leadera — jen když souhrn opravdu patří
+ * leaderovi skupiny workeru (ne followerovi s přepsaným `isLeader`). null = nenabízet.
+ */
+export function leaderManageBasis(summary: LiveChartPositionSummary | null | undefined, leaderAccountId: number | null | undefined) {
+  const leader = summary?.leader ?? null;
+  return leader && leaderAccountId != null && leader.accountId === leaderAccountId ? leader : null;
+}
 
 export function liveChartPosition(view: JournalLiveView, requested: JournalLiveTarget): LiveChartPosition {
   // Pohled tiše spadlý na skupinu (účet zmizel) nesmí ukázat cizí pozici.
@@ -64,6 +84,7 @@ export function liveChartPosition(view: JournalLiveView, requested: JournalLiveT
     protection: `SL ${model.stopCovered}/${accounts} · TP ${model.targetCovered}/${accounts}`,
     accounts,
     scopeLabel: view.scopeLabel,
+    leader: leaderOf(model.accounts),
   };
   const lines = journalLivePriceLines(model);
   return { key: JSON.stringify([model.symbol, summary, lines.map(line => [line.id, line.price, line.title])]), symbol: model.symbol, lines, summary, issue: null };
