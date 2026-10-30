@@ -6,7 +6,8 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('../server/tradovateOAuthStore', () => ({
   readTradovateServerConfig: () => ({ environment: 'demo', supabaseUrl: 'https://mock.invalid', supabaseAnonKey: 'mock-public' }),
-  createTradovateAdminClient: () => ({}), requireSupabaseUserId: vi.fn(),
+  createTradovateAdminClient: () => ({}),
+  beginSupabaseUserIdVerification: vi.fn(),
 }));
 vi.mock('../server/tradovateCopierDevice', () => ({ authorizeTradovateCopierDevice: mocks.authorize }));
 vi.mock('../server/tradovateCopierCommandRelay', () => ({

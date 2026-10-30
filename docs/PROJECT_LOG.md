@@ -306,6 +306,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Nic nebylo pushnuto, nasazeno, worker nebyl restartován a k brokerovi nešel
   žádný požadavek. Produkční ověření vyžaduje samostatné schválení a nejdřív
   shodu web/worker verze; samotné UI nikdy neopravňuje ARM.
+- Následný lokální balíček F2c zkrátil dříve sériový úsek `auth + resolve` bez
+  vypuštění čerstvé kontroly relace: po kryptografickém `auth.getClaims(token)`
+  běží `auth.getUser(token)` souběžně s owner-scoped DB lookupem a odpověď čeká
+  na obě větve. Současný projekt má read-only ověřený JWKS s jedním `ES256`
+  klíčem, takže úvodní ověření je po zahřátí lokální; `getUser` zůstává kvůli
+  relaci odvolané na jiném zařízení. Regrese pokrývají chybný podpis, revokaci,
+  neshodu uživatele a HS256 fallback; přesný zisk změří `Server-Timing` až po
+  samostatně schváleném nasazení.
 
 ### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, nasazeno 19:28 web + worker @ e1fd4af3)
 

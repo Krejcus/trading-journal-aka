@@ -93,18 +93,48 @@ export function createTradovateAdminClient(config: TradovateServerConfig): Supab
   });
 }
 
-export async function requireSupabaseUserId(
+export interface PendingSupabaseUserIdVerification {
+  userId: string;
+  /** Fresh Auth-server confirmation; callers may overlap it with owner-scoped DB reads. */
+  confirmed: Promise<void>;
+}
+
+export async function beginSupabaseUserIdVerification(
   authorization: string | undefined,
   config: TradovateServerConfig,
-): Promise<string> {
+): Promise<PendingSupabaseUserIdVerification> {
   if (!authorization?.startsWith('Bearer ')) throw new Error('missing-auth-token');
+  const accessToken = authorization.slice('Bearer '.length).trim();
+  if (!accessToken) throw new Error('missing-auth-token');
   const auth = createClient(config.supabaseUrl, config.supabaseAnonKey, {
     global: { headers: { Authorization: authorization } },
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const { data, error } = await auth.auth.getUser();
-  if (error || !data.user) throw new Error('invalid-auth-token');
-  return data.user.id;
+  // Verify before starting any owner-scoped DB work. With an asymmetric key
+  // this is local against cached JWKS; HS256 falls back to getUser internally.
+  const { data, error } = await auth.auth.getClaims(accessToken);
+  const userId = data?.claims.sub;
+  if (error || typeof userId !== 'string' || !userId.trim()) {
+    throw new Error('invalid-auth-token');
+  }
+  // A valid JWT can outlive a remotely revoked session. Preserve the former
+  // getUser freshness guarantee for ES/RSA tokens, but let the hot relay
+  // overlap this network call with its owner-scoped connection lookup.
+  const confirmed = data.header.alg?.startsWith('HS')
+    ? Promise.resolve()
+    : auth.auth.getUser(accessToken).then(({ data: fresh, error: freshError }) => {
+      if (freshError || fresh.user?.id !== userId) throw new Error('invalid-auth-token');
+    });
+  return { userId, confirmed };
+}
+
+export async function requireSupabaseUserId(
+  authorization: string | undefined,
+  config: TradovateServerConfig,
+): Promise<string> {
+  const verification = await beginSupabaseUserIdVerification(authorization, config);
+  await verification.confirmed;
+  return verification.userId;
 }
 
 const expiresAt = (token: TradovateTokenResponse, now: number): string =>

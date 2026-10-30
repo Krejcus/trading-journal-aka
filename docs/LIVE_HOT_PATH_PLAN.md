@@ -221,3 +221,26 @@ INV-MANUAL-01 (průměr ani pozice z kanálu nevstupují do příkazu; příkazy
 - Události: u stejného id vyhrává verze z kanálu.
 - BE skryté, dokud expozice z kanálu předbíhá poll (`manageEntryAvgPrice` null).
 - Log fillu (`BROKER FILL …`) v try/catch.
+
+## 11. F2c — souběžné ověření identity a connection lookup
+
+Měření po fázi 1 ukázalo před vytvořením příkazu dalších ~0,2–0,28 s v úseku
+`auth + resolve`. Původní cesta nejdřív celá čekala na `auth.getUser()` a teprve
+potom spouštěla owner-scoped DB lookup připojení.
+
+- Nejprve oficiální `auth.getClaims(accessToken)`: podpis, expirace a `sub` se
+  kryptograficky ověří. Teprve potom se souběžně spustí owner-scoped DB lookup
+  a čerstvé `auth.getUser(accessToken)` potvrzení. Odpověď čeká na obě větve.
+- Čerstvá kontrola Auth serverem zůstala záměrně zachovaná: samotný platný JWT
+  totiž nemusí odhalit relaci odvolanou z jiného zařízení. Optimalizace mění
+  pořadí čekání, ne autorizační výsledek.
+- U asymetrického klíče se veřejný JWKS po prvním načtení sdílí v paměti všech
+  klientů v dané instanci a úvodní ověření je lokální.
+- Ověřeno read-only proti současnému projektu: JWKS vrací jeden klíč `ES256`, takže
+  rychlá cesta není jen teoretická. U legacy `HS256` auth-js automaticky volá
+  `getUser()` a bezpečnostní chování zůstává stejné.
+- Chybějící token, chyba podpisu nebo ověřené claims bez neprázdného `sub` dál
+  končí `invalid-auth-token`; payload se nikdy jen slepě nedekóduje.
+- Přesný zisk určí existující `Server-Timing`: `auth` nyní měří úvodní ověření a
+  `resolve` kritickou cestu souběžného fresh-auth + DB lookupu. Očekávání je ušetřit
+  kratší z těchto dříve sériových větví, ne slibovat pevnou latenci před měřením.

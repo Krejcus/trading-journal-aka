@@ -9,7 +9,7 @@ import {
   heartbeatTradovateCopierDevice, readTradovateCopierCommand, readTradovateCopierDeviceRuntime,
   resolveCopierRelayConnectionId,
 } from '../../../server/tradovateCopierCommandRelay.js';
-import { createTradovateAdminClient, readTradovateServerConfig, requireSupabaseUserId } from '../../../server/tradovateOAuthStore.js';
+import { beginSupabaseUserIdVerification, createTradovateAdminClient, readTradovateServerConfig } from '../../../server/tradovateOAuthStore.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 import { sendImmediateCopierArmPush, sendImmediateCopyEventPushes, type CopierArmTransition } from '../../../server/nativeCopierStatePush.js';
 import { tickNativeLiveActivitiesWithinBudget } from '../../../server/nativeLiveActivityTick.js';
@@ -361,12 +361,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       res.setHeader('Server-Timing', timing.header());
       return res.status(status).json(body);
     };
-    const userId = await requireSupabaseUserId(req.headers.authorization, config);
+    const verification = await beginSupabaseUserIdVerification(req.headers.authorization, config);
+    const { userId } = verification;
     timing.mark('auth');
     const requestedConnectionId = String(req.method === 'GET' ? req.query.connectionId ?? '' : req.body?.connectionId ?? '').trim();
-    if (!requestedConnectionId) return res.status(400).json({ error: 'missing-connection-id' });
+    if (!requestedConnectionId) {
+      await verification.confirmed;
+      return res.status(400).json({ error: 'missing-connection-id' });
+    }
     // Libovolné připojení uživatele najde jeho Mac worker (owner scope).
-    const connectionId = await resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId });
+    const [, connectionId] = await Promise.all([
+      verification.confirmed,
+      resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId }),
+    ]);
     timing.mark('resolve');
     if (req.method === 'GET') {
       const commandId = typeof req.query.commandId === 'string' ? req.query.commandId : '';
