@@ -285,6 +285,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-30 — Oprava: čáry BoS/CHoCH se samy označovaly (Claude, větev `claude/structure-select-fix-20261030`, NENASAZENO)
+
+- Filip: „některé BoS/CHoCH, většinou poslední, se zvýrazní a mají na konci
+  velké tečky“. Příčina v mé živé synchronizaci čar (17f9fa9c, i dřívější
+  e23b7c2f): `DrawingEngine.commit` z CandleKitu přidanou kresbu **označí**
+  (úchyty na koncích) a **vynuluje `activeTool` i náhled kresby** — čára, která
+  naskočila během kreslení, by vzala nástroj. `handleReady` to řešil
+  `select(null)` na konci, synchronizace ne.
+- Oprava (`lib/structureDrawings.ts`): po přidání vrátit výběr, jak byl
+  (uživatelův zůstane, jinak nic); dokud je aktivní nástroj nebo náhled,
+  nové čáry nepřidávat (staré odebrat jde) a doplnit je přes `engine.onChange`,
+  jakmile nástroj skončí. Pozor i jinde: každý `commit` mimo dokončení kresby
+  uživatelem má tyhle vedlejší účinky (např. boxy pozic v přehrávání).
+- Ověřeno na zkušební stránce (zlom pod pivot → čára bez označení; se
+  spuštěným nástrojem TrendLine čára nepřibyla a nástroj zůstal; po ukončení
+  nástroje čára doplněna). Testy `tests/structureDrawings.test.ts` s enginem,
+  který `commit` simuluje jako knihovna. Celá sada 6155 zelená, tsc čisté
+  (DISARMED).
+
 ### 2026-10-30 — Obchodování z grafu, fáze 2c: utažení SL a SL na BE (Claude, nasazeno 08:23 @ 65594d9d, test naostro prošel)
 
 - **Záznam u brokera (Filip, 07:39, `--scenario modify-through-market`, za

@@ -213,6 +213,7 @@ import {
   resetChartView,
 } from '../services/chartContextMenu';
 import { sameCandleSeries } from '../lib/candleSeries';
+import { structureDrawing, syncStructureDrawings } from '../lib/structureDrawings';
 import { armOlderHistory, createOlderHistoryGate, markOlderHistoryRequested, olderHistoryDue, settleOlderHistory } from '../lib/olderHistoryGate';
 import {
   futureAxisTimes,
@@ -1020,41 +1021,6 @@ const loadKeepDrawing = (): boolean => {
 };
 
 export type CandleKitDrawingEngine = NonNullable<ChartViewApi['drawing']>['engine'];
-
-/**
- * Generovaná (needitovaná uživatelem) čára BoS/CHoCH mimo přehrávání. Id je
- * dané zlomem, ne pořadím — zlom z tvořící se svíčky pak přidá/odebere jen
- * svou čáru a ostatní zůstanou.
- */
-const structureDrawing = (
-  event: MarketStructureEvent,
-  style: { bullishColor: string; bearishColor: string; lineWidth: number },
-): Parameters<CandleKitDrawingEngine['commit']>[0] => ({
-  id: `auto-structure-${event.type}-${event.direction}-${event.pivotTime}-${event.breakTime}`,
-  tool: 'TrendLine',
-  points: [{ time: event.pivotTime, price: event.price }, { time: event.breakTime, price: event.price }],
-  style: {
-    color: event.direction === 'bullish' ? style.bullishColor : style.bearishColor,
-    width: style.lineWidth,
-    dashed: false,
-    fill: null,
-  },
-});
-
-/** Srovná čáry BoS/CHoCH na `events`: odebere navíc, přidá chybějící. Vrací, zda se něco změnilo. */
-const syncStructureDrawings = (
-  engine: CandleKitDrawingEngine,
-  events: readonly { event: MarketStructureEvent }[],
-  style: { bullishColor: string; bearishColor: string; lineWidth: number },
-): boolean => {
-  const wanted = events.map(({ event }) => structureDrawing(event, style));
-  const wantedIds = new Set(wanted.map(drawing => drawing.id));
-  const stale = engine.getDrawings().filter(drawing => drawing.id.startsWith('auto-structure-') && !wantedIds.has(drawing.id));
-  const missing = wanted.filter(drawing => !engine.getById(drawing.id));
-  stale.forEach(drawing => engine.remove(drawing.id));
-  missing.forEach(drawing => engine.commit(drawing));
-  return stale.length > 0 || missing.length > 0;
-};
 
 export const AlphaTradeDrawingToolbar: React.FC<{
   isDark: boolean;
@@ -3122,15 +3088,30 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     structureOverlayEventsRef.current = structureOverlayEvents;
   }
   /** Mimo přehrávání jsou čáry BoS/CHoCH kresby grafu — srovnat je na aktuální zlomy. */
+  // Čáry, které se nepřidaly, protože uživatel zrovna kreslí.
+  const structureSyncDeferredRef = useRef(false);
   const syncStructureLines = () => {
     const engine = apiRef.current?.drawing?.engine;
-    if (!engine || !syncStructureDrawings(engine, structureOverlayEventsRef.current, indicatorSettingsRef.current.structure)) return;
+    if (!engine) return;
+    const { changed, deferred } = syncStructureDrawings(engine, structureOverlayEventsRef.current, indicatorSettingsRef.current.structure);
+    structureSyncDeferredRef.current = deferred;
+    if (!changed) return;
     // Nové generované čáry chránit stejně jako ty z `handleReady`.
     protectedDrawingsUnsubscribeRef.current?.();
     protectedDrawingsUnsubscribeRef.current = protectGeneratedDrawings(engine);
   };
   const syncStructureLinesRef = useRef(syncStructureLines);
   syncStructureLinesRef.current = syncStructureLines;
+  // Odložené čáry doplnit, jakmile uživatel nástroj dokreslí nebo zruší.
+  useEffect(() => {
+    const engine = apiRef.current?.drawing?.engine;
+    if (!engine || replayActive) return;
+    return engine.onChange(() => {
+      if (!structureSyncDeferredRef.current || engine.getActiveTool() !== null || engine.getDraft() !== null) return;
+      structureSyncDeferredRef.current = false;
+      syncStructureLinesRef.current();
+    });
+  }, [chartApiEpoch, replayActive]);
   // LIVE se s novou svíčkou nepřestavuje (`liveSeries`), takže čáry BoS/CHoCH
   // z `handleReady` by zůstaly z doby otevření grafu — srovnat je tady.
   useEffect(() => {
