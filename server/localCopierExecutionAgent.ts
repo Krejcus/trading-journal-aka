@@ -398,6 +398,8 @@ export async function startLocalCopierExecutionAgent(
     return { missingOptional, inactiveOptional };
   };
 
+  /** Monotónní pořadí sestavení statusu (řazení zobrazení pozice, F2a); nic neautorizuje. */
+  let displaySeq = 0;
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
     capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY,
@@ -414,6 +416,8 @@ export async function startLocalCopierExecutionAgent(
     group: structuredClone(group),
     controller: options.controller.status(),
     startedAt,
+    displaySeq: ++displaySeq,
+    displayBuiltAt: Date.now(),
     ...(options.installation ? { installation: structuredClone(options.installation) } : {}),
     ...(devices[0] ? { device: structuredClone(devices[0]) } : {}),
     ...(devices.length > 0 ? { devices: structuredClone(devices) } : {}),

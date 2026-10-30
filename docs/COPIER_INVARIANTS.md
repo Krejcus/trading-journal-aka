@@ -800,6 +800,23 @@ existující ochranu.
   data, neposouvá čerstvost ani nic neautorizuje; podvržená umí jen vyvolat
   čtení navíc. Test: `tests/macCopierCommandRelay.test.ts` (budíček),
   `tests/copierStatusNudgeTopic.test.ts`.
+- Expozice přímo do grafu (F2a, 30. 10. 2026, §10 plánu): na tématu budíčku
+  událost `exposure` = AES-256-GCM (klíč `copierStatusNudgeKey` ze zařízení,
+  AAD = téma) výřezu statusu: `controller.exposure` (smí být `null`), ≤ 10
+  událostí, `startedAt`, `displaySeq`, `displayBuiltAt`. Worker ji jen
+  naplánuje z posluchače změny (mimo eventTail), nejvýš 1 požadavek najednou,
+  rozestup ≥ 150 ms, fire-and-forget; klíč nedostanou zobrazovací doplňky
+  (`onRealtimeConfig`) ani log. Prohlížeč: jen při otevřeném grafu, jen
+  nejnovější čekající zpráva, sloučí se (`mergeCopierLiveExposure`) jen nad
+  čerstvým pollem téže instance: stejný `startedAt`, vyšší `displaySeq` (novější
+  poll vyhrává i s `null`), stáří od kotvy pollu, „budoucí“ zpráva zahozena.
+  Výsledek jen pro graf a karty obchodů — nikdy do `acceptAgentStatus`,
+  uloženého stavu, čerstvosti (`workerFresh` dál z pollu), ARM ani příkazů;
+  `expect` u správy z grafu je „co uživatel viděl“ a worker ho ověří u brokera.
+  Deterministický klíč: kdo ho jednou dostal (jen přihlášený uživatel s živým
+  workerem), umí zobrazení číst i podvrhnout do rotace tajemství. Testy:
+  `tests/copierLiveExposure.test.ts`, `tests/macCopierCommandRelay.test.ts`,
+  `tests/copierRelayPriceChannel.test.ts`, `tests/copierStatusNudgeTopic.test.ts`.
 - Nikdy: Poslat přes Realtime příkaz, ARM/DISARM, risk ani stav, podle
   kterého se rozhoduje; logovat téma nebo klíč; čekat v poll smyčce na
   přihlášení ke kanálu. Přímé doručení claimnutého příkazu kick kanálem

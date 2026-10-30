@@ -4,6 +4,7 @@ import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { LIVE_CANDLE_MAX_GAP_SEC, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
 import { followLiveEdge, type LiveFollowMemory } from '../lib/liveChartFollow';
 import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../services/marketData';
+import { perfDuration } from '../lib/perfTrace';
 
 /**
  * Napojí živou svíčku na grafy: při každé změně zdroje (nejvýš 1× za snímek)
@@ -51,9 +52,9 @@ export function revertLiveCandle(controller: ChartController, drawn: LiveCandleD
   }
 }
 
-export function applyLiveCandle(feed: LiveCandleFeed, target: LiveCandleTarget, drawnByController: Map<ChartController, LiveCandleDrawn>): void {
+export function applyLiveCandle(feed: LiveCandleFeed, target: LiveCandleTarget, drawnByController: Map<ChartController, LiveCandleDrawn>): boolean {
   const api = target.api;
-  if (!api) return;
+  if (!api) return false;
   try {
     const controller = api.controller;
     const drawn = drawnByController.get(controller);
@@ -63,15 +64,15 @@ export function applyLiveCandle(feed: LiveCandleFeed, target: LiveCandleTarget, 
         drawnByController.delete(controller);
         revertLiveCandle(controller, drawn);
       }
-      return;
+      return false;
     }
     const lastBar = controller.getBars().at(-1);
     const bar = planLiveCandleUpdate({ lastBar, live, timeframe: target.timeframe, rawCandles: target.rawCandles });
-    if (!bar || !lastBar) return;
+    if (!bar || !lastBar) return false;
     // Beze změny baru nic nepřekreslovat (emit storu jen s čítači, heartbeat).
     const signature = `${bar.time}:${bar.open}:${bar.high}:${bar.low}:${bar.close}:${bar.volume}`;
     const state = drawn ?? emptyDrawn();
-    if (state.last === signature) return;
+    if (state.last === signature) return false;
     const ts = bar.time * 1_000;
     let written: Bar = { ts, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume };
     if (lastBar.ts === ts) {
@@ -91,8 +92,10 @@ export function applyLiveCandle(feed: LiveCandleFeed, target: LiveCandleTarget, 
     state.bars.set(ts, written);
     state.last = signature;
     drawnByController.set(controller, state);
+    return true;
   } catch {
     // Graf se právě přestavuje (jiný timeframe, nová data).
+    return false;
   }
 }
 
@@ -247,8 +250,12 @@ export function useLiveCandleBinding(
   useEffect(() => {
     if (!feed) return;
     activeFeedRef.current = feed;
+    const drawnByController = drawnRef.current;
     let frame = 0;
     let followFrame = 0;
+    let metricFrame = 0;
+    let scheduledAt = 0;
+    let lastPaintMetricAt = -Infinity;
     let followMemory: LiveFollowMemory = new WeakMap();
     const held = (element: HTMLElement) => {
       const pressed = pressedRef.current;
@@ -269,11 +276,24 @@ export function useLiveCandleBinding(
     scheduleFollowRef.current = scheduleFollow;
     const apply = () => {
       frame = 0;
-      for (const target of targetsRef.current) applyLiveCandle(feed, target, drawnRef.current);
+      let updated = false;
+      for (const target of targetsRef.current) updated = applyLiveCandle(feed, target, drawnByController) || updated;
+      const appliedAt = performance.now();
+      if (updated && appliedAt - lastPaintMetricAt >= 500) {
+        lastPaintMetricAt = appliedAt;
+        const startedAt = scheduledAt;
+        metricFrame = window.requestAnimationFrame(() => {
+          metricFrame = 0;
+          perfDuration('live:chart:tick-to-paint', performance.now() - startedAt);
+        });
+      }
       scheduleFollow();
     };
     const schedule = () => {
-      if (!frame) frame = window.requestAnimationFrame(apply);
+      if (!frame) {
+        scheduledAt = performance.now();
+        frame = window.requestAnimationFrame(apply);
+      }
     };
     scheduleRef.current = schedule;
     const unsubscribe = feed.subscribe(schedule);
@@ -283,12 +303,13 @@ export function useLiveCandleBinding(
       unsubscribe();
       if (frame) window.cancelAnimationFrame(frame);
       if (followFrame) window.cancelAnimationFrame(followFrame);
+      if (metricFrame) window.cancelAnimationFrame(metricFrame);
       scheduleRef.current = () => undefined;
       scheduleFollowRef.current = () => undefined;
       followMemory = new WeakMap();
       // Feed vypnut (přehrávání, konec dne): grafy zpět na jejich data.
-      drawnRef.current.forEach((drawn, controller) => revertLiveCandle(controller, drawn));
-      drawnRef.current.clear();
+      drawnByController.forEach((drawn, controller) => revertLiveCandle(controller, drawn));
+      drawnByController.clear();
     };
   }, [feed]);
   // Nový graf nebo nová data: překreslit živou svíčku hned, ne až s další cenou.

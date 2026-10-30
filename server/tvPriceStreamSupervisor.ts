@@ -241,13 +241,14 @@ export function createTvPriceStreamSupervisor(options: {
       if (type === 'diag' && now() - lastDiagLog >= DIAG_LOG_INTERVAL_MS) {
         lastDiagLog = now();
         const diag = message as {
-          state?: unknown; reads?: unknown; sends?: unknown; errors?: unknown;
+          state?: unknown; reads?: unknown; sends?: unknown; errors?: unknown; skippedRateCap?: unknown;
           source?: unknown; ibkr?: unknown; ibkrCode?: unknown; ibkrTrades?: unknown;
         };
         const code = (value: unknown) => String(value ?? '-').replace(/[^a-z0-9-]/gi, '').slice(0, 16) || '-';
         // Jen čísla a krátké kódy — žádné téma, klíč, obsah zpráv ani text chyb Gateway.
         const ibkr = diag.source === undefined ? '' : ` zdroj=${code(diag.source)} ibkr=${code(diag.ibkr)} kód=${code(diag.ibkrCode)} obchody=${Number(diag.ibkrTrades) || 0}`;
-        log(`TV STREAM stav=${String(diag.state).slice(0, 16)} reads=${Number(diag.reads) || 0} sends=${Number(diag.sends) || 0} errors=${Number(diag.errors) || 0}${ibkr}`);
+        log(`TV STREAM stav=${String(diag.state).slice(0, 16)} reads=${Number(diag.reads) || 0} sends=${Number(diag.sends) || 0}`
+          + ` rate-cap=${Number(diag.skippedRateCap) || 0} errors=${Number(diag.errors) || 0}${ibkr}`);
       }
     } catch { /* výjimka v posluchači na hlavním vlákně by shodila proces kopírky */ } });
     created.on('error', error => { try { end(error instanceof Error ? error.name : 'error'); } catch { /* viz výše */ } });

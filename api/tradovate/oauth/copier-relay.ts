@@ -31,13 +31,19 @@ import {
 } from '../../../server/snapshotImagePush.js';
 import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '../../../server/tvAlertNotifications.js';
 import { validateTvBarsCapture } from '../../../lib/tradingViewBars.js';
-import { copierStatusNudgeTopic, tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
+import { copierStatusNudgeKey, copierStatusNudgeTopic, tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
 
 /** Téma a klíč kanálu ceny + téma budíčku statusu pro worker; bez tajemství pole chybí (nikdy 502). */
-const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string; nudgeTopic?: string } => {
+const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string; nudgeTopic?: string; nudgeKey?: string } => {
   const grant = tvPriceChannelGrant(deviceId);
   const nudgeTopic = copierStatusNudgeTopic(deviceId);
-  return { ...(grant ? { priceTopic: grant.topic, priceKey: grant.key } : {}), ...(nudgeTopic ? { nudgeTopic } : {}) };
+  // Klíč expozice jen spolu s tématem (F2a); obě funkce nikdy nevyhodí (INV-BRAKE-03).
+  const nudgeKey = nudgeTopic ? copierStatusNudgeKey(deviceId) : null;
+  return {
+    ...(grant ? { priceTopic: grant.topic, priceKey: grant.key } : {}),
+    ...(nudgeTopic ? { nudgeTopic } : {}),
+    ...(nudgeTopic && nudgeKey ? { nudgeKey } : {}),
+  };
 };
 
 const snapshotRateLimiter = new CopierSnapshotRateLimiter();
@@ -380,10 +386,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const priceChannel = runtime.connected === true ? tvPriceChannelGrant(deviceId) : null;
       // Budíček statusu (jen podnět ke čtení, bez dat) — stejně vedle statusu, ne v něm.
       const nudgeTopic = runtime.connected === true ? copierStatusNudgeTopic(deviceId) : null;
+      const nudgeKey = nudgeTopic ? copierStatusNudgeKey(deviceId) : null;
       return timed(200, {
         ...visible,
         ...(priceChannel ? { priceChannel } : {}),
         ...(nudgeTopic ? { nudgeTopic } : {}),
+        ...(nudgeTopic && nudgeKey ? { nudgeKey } : {}),
       });
     }
     if (req.method === 'POST') {

@@ -9,6 +9,7 @@ import LiveTradeToasts from './LiveTradeToasts';
 import { QuantumSpinner } from './QuantumLoader';
 import { useDayChartData } from '../hooks/useDayChartData';
 import { useLiveTicketQuote } from '../hooks/useLiveTicketQuote';
+import { perfDuration } from '../lib/perfTrace';
 import { DAY_ANCHOR_ACCOUNT_ID, chartMarketDay, pragueDayKey } from '../lib/dayJournal';
 import {
   draftFromPositionBox,
@@ -82,6 +83,7 @@ export type LiveTradingCopierState = Pick<LiveStatusStripInput, 'status' | 'avai
   /** Počet připojení Tradovate, která chtějí nové přihlášení. */
   reconnectRequired: number;
 };
+export type LiveTradingCopyEvent = NonNullable<NonNullable<LiveTradingCopierState['status']>['recentCopyEvents']>[number];
 
 export interface LiveTradingTab {
   id: TradovateLiveTab;
@@ -96,6 +98,12 @@ interface Props {
   /** Záložky jsou dočasně zamčené (desk čeká na potvrzení změny konfigurace); přehled zůstává dostupný. */
   navigationBlocked?: boolean;
   copier: LiveTradingCopierState;
+  /** Události pro karty obchodů (poll ∪ expozice přímo z workeru, F2a); chybí = ze statusu. */
+  copyEvents?: readonly LiveTradingCopyEvent[];
+  /** Měření poslední rychlé expozice; nepoužívá se pro stav ani příkazy. */
+  liveExposurePaint?: { id: string; receivedPerformanceAt: number } | null;
+  /** Monotónní čas kliknutí/otevření záložky pro měření lazy-loadu a prvních svíček. */
+  chartOpenPerformanceAt?: number;
   /** Dohrává se odchod z grafu (animace, vrstva už nebere kliky). */
   leaving?: boolean;
   group?: LiveTradeGroup | null;
@@ -122,12 +130,49 @@ function useMinuteNow() {
 }
 
 const LiveTradingScreen: React.FC<Props> = ({
-  isDark, tabs, onNavigate, navigationBlocked = false, copier, leaving = false,
+  isDark, tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
-  const chart = useDayChartData(day, NO_TRADES, NO_TRADES, now);
+  const chart = useDayChartData(day, NO_TRADES, NO_TRADES, now, { perfScope: 'live' });
+  const chartComponentMeasured = useRef(false);
+  const chartCandlesMeasured = useRef(false);
+  useEffect(() => {
+    if (chartComponentMeasured.current || chartOpenPerformanceAt <= 0) return;
+    chartComponentMeasured.current = true;
+    perfDuration('live:chart:component-ready', performance.now() - chartOpenPerformanceAt);
+  }, [chartOpenPerformanceAt]);
+  useEffect(() => {
+    if (chartCandlesMeasured.current || chartOpenPerformanceAt <= 0 || chart.candles.length === 0) return undefined;
+    chartCandlesMeasured.current = true;
+    perfDuration('live:chart:first-candles-data', performance.now() - chartOpenPerformanceAt);
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        perfDuration('live:chart:first-candles-paint', performance.now() - chartOpenPerformanceAt);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [chart.candles.length, chartOpenPerformanceAt]);
+  const measuredExposureId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!liveExposurePaint || measuredExposureId.current === liveExposurePaint.id) return undefined;
+    measuredExposureId.current = liveExposurePaint.id;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        perfDuration('live:exposure:to-paint', performance.now() - liveExposurePaint.receivedPerformanceAt);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [liveExposurePaint]);
 
   // Kotva grafu bez obchodu (jako graf dne) — určí jen první záběr.
   const [anchor] = useState<Trade>(() => ({
@@ -473,7 +518,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           {lineNotice && <div role="status" className={`absolute left-1/2 top-2 z-[700] max-w-[440px] -translate-x-1/2 rounded-lg border px-3 py-1.5 text-[11.5px] font-bold shadow-lg ${lineNotice.tone === 'ok'
             ? 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200'
             : lineNotice.tone === 'bad' ? 'border-rose-500/40 bg-rose-950/90 text-rose-200' : 'border-amber-500/40 bg-amber-950/90 text-amber-100'}`}>{lineNotice.text}</div>}
-          <LiveTradeToasts events={copier.available ? copier.status?.recentCopyEvents : undefined} copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} />
+          <LiveTradeToasts events={copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined} copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} />
           {chart.candles.length > 0 ? (
             <AlphaTradeChartWorkspace
               key={day}

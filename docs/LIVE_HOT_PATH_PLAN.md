@@ -157,3 +157,67 @@ změřeno) + poll-v2. Úprava:
   rozestup a strop nikdy atomické nebyly (jen jedinečnost operationId přes unikátní index).
 
 Odhad: −2 až −3 kola DB (~50–100 ms) u posunu/vstupu, −~40 ms na výsledku.
+
+## 10. Fáze 2 — pozice z workeru přímo do grafu (návrh, 30. 10. večer)
+
+Filip po nasazení fáze 1: pozice se v grafu ukáže 1–2 s po vyplnění. Rozklad posledního vstupu
+(19:49:35): broker fill 35,466 → worker zpracoval 35,953 (+0,49 s) → heartbeat do relaye
+(+0,25–0,5 s) → poll/budíček + GET (+0,2–0,5 s). Broker ve streamu `netPrice` posílá (záznamy
+29. a 30. 10.), cena vstupu je tedy hned.
+
+### F2a — zašifrovaná expozice na tématu budíčku (jen zobrazení)
+- Server: k tématu budíčku klíč `nudgeKey` = HMAC(`TV_PRICE_CHANNEL_SECRET`, `copier-nudge-enc:<deviceId>`)
+  (32 B, base64url). Worker ho dostane v `realtime` (poll-v2, legacy poll), prohlížeč v GET statusu
+  vedle `nudgeTopic` — jen při `connected`, nikdy neukládat, nelogovat.
+- Controller: `exposure.builtAt` = čas sestavení (hodiny workeru) — jen řazení zobrazení.
+- Worker (`macCopierCommandRelay`): po změně u brokera (`subscribeLiveChange`) hned, bez čekání na
+  heartbeat, nejvýš 1× za 150 ms (trailing), pošle REST broadcast `event: 'exposure'` na téma budíčku:
+  `{ v: 1, iv, ct }` = AES-256-GCM(`{ v: 1, startedAt, exposure, events }`), `events` = posledních
+  ≤ 10 `recentCopyEvents`. Fire-and-forget, strop velikosti 64 KB (jinak neposlat), žádný await
+  v poll smyčce ani u brzd (INV-WORKER-04). Budíček po heartbeatu zůstává.
+- Prohlížeč (`useCopierStatusNudge`): událost `exposure` dešifruje (jeden slot „nejnovější“, viz níže),
+  ověří tvar a předá; LIVE desk drží poslední zobrazovací expozici. Pro **graf a karty obchodů**
+  (`useLiveChartData`, toasty) se použije sloučený status: když `startedAt` sedí a `exposure.builtAt`
+  je novější než v pollovaném statusu, nahradí se `controller.exposure` (události se sjednotí); stáří
+  viz „Po oponentuře“ bod 2 (kotva pollu), ne čas přijetí. Čerstvost stavu, ARM, povolení příkazů, brzdy a vše ostatní
+  dál jen z pollovaného statusu (INV-FRESH-02/03, INV-UI-01/03). Jiný `startedAt` = zahodit.
+- Odhad: fill → graf ≈ 0,5–0,8 s (z 1–2 s); zbývá hlavně zpracování fillu ve workeru (F2b).
+
+### F2b — měření zpracování fillu ve workeru
+- `tradovateBroker`: u emitovaného `fill` log `STREAM FILL acc=… brokerTs→frame … frame→emit …`
+  (časová značka brokera, přijetí rámce, emit). Jen log, žádná změna chování. Podle čísel pak
+  rozhodnout o odstranění REST dočítání (hydrate) v cestě streamu.
+- `macCopierCommandRelay`: každý pokus rychlé expozice loguje jen technická čísla
+  (`seq`, bajty, šifrování, HTTP, celkem a status), nikdy účet, pozici, téma ani klíč.
+- Prohlížeč s `localStorage['at:dev:perf']='1'`: `live:exposure:decrypt`,
+  `live:exposure:to-paint`, `live:chart:component-ready`, `live:chart:first-candles-data`,
+  `live:chart:first-candles-paint`, historický/live snapshot a vzorkované `tick-to-paint`
+  ve `window.__atPerf`.
+
+### Dotčená pravidla
+INV-RELAY-04 (téma budíčku nese zašifrovanou expozici jen pro zobrazení), INV-UI-03, INV-UI-01,
+INV-FRESH-02/03 (nic z kanálu neautorizuje ani neposouvá čerstvost), INV-WORKER-04 (fire-and-forget),
+INV-MANUAL-01 (průměr ani pozice z kanálu nevstupují do příkazu; příkazy dál z pollovaného statusu).
+
+### Po oponentuře návrhu F2 (OPRAVIT PŘED IMPLEMENTACÍ → zapracováno)
+1. Řazení `displaySeq` (monotónní za běh, na úrovni statusu agenta, vždy přítomné) + `displayBuiltAt`;
+   novější poll vyhrává i s `exposure: null`; ne podle hodin.
+2. `exposureObservedAt` jen pro overlay (`useLiveChartData.exposureObservedAt`); `workerFresh`,
+   `statusFresh` a vše ostatní z pollu; slučuje se jen nad čerstvým pollem; stáří = kotva pollu
+   + (builtAt − displayBuiltAt), nejvýš čas přijetí; zpráva z budoucnosti (> uplynulý čas + 1 s) pryč.
+3. Worker: posluchač jen plánuje (setTimeout), 1 požadavek najednou, nejnovější stav, rozestup 150 ms.
+4. Karty: sjednocení událostí podle id (poll ∪ kanál, max 20), nikdy nahrazení.
+5. Klíč: v nevyhazující `tvPriceRealtimeFields`; `onRealtimeConfig` ho nedostane; desk ho maže při
+   změně uživatele; AAD = téma; deterministický klíč zapsán do INV-RELAY-04.
+6. Text: `expect` u správy z grafu je ze zobrazeného (sloučeného) souhrnu = „co uživatel viděl“;
+   worker vyžaduje přesnou shodu s brokerem. `fresh`, `manageableLeaderTrades`, `entryAvgPrice`,
+   `canClose` z pollu.
+7. Prohlížeč: jeden slot „nejnovější“; `exposure` nekickuje poll.
+
+### Po oponentuře diffu F2 (OPRAVIT PŘED COMMITEM → zapracováno)
+- `copier.status` pro panel grafu dál z pollu; karty dostanou `copyEvents` zvlášť (hlídací test).
+- Meze tvaru zprávy (čas v rozsahu Date, celá čísla, délky textů, typy polí událostí).
+- Hook drží klíč v refu (odběr se při změně klíče neotevírá znovu).
+- Události: u stejného id vyhrává verze z kanálu.
+- BE skryté, dokud expozice z kanálu předbíhá poll (`manageEntryAvgPrice` null).
+- Log fillu (`BROKER FILL …`) v try/catch.

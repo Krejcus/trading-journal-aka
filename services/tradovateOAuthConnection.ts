@@ -337,6 +337,8 @@ export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
   priceChannel?: unknown;
   /** Téma budíčku statusu (jen podnět ke čtení); nikdy neukládat. */
   nudgeTopic?: unknown;
+  /** Klíč k zašifrované expozici na tématu budíčku (F2a); nikdy neukládat ani nelogovat. */
+  nudgeKey?: unknown;
 } | null> {
   return authenticatedRequest(`/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}`);
 }

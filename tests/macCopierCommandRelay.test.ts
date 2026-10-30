@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { startMacCopierCommandRelay } from '../server/macCopierCommandRelay';
+import { decryptCopierLiveExposure } from '../lib/copierLiveExposure';
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 import {
   LocalCopierAgentCommandError,
@@ -631,6 +632,53 @@ describe('recoverable relay lane isolation', () => {
       // ACK příkazu (complete-v2 accepted) → budíček.
       await vi.waitFor(() => expect(commandSent).toBe(true), { timeout: 4_000 });
       await vi.waitFor(() => expect(nudges.length).toBeGreaterThanOrEqual(3), { timeout: 2_000 });
+    } finally { await relay.close(); }
+  });
+
+  it('expozice přímo do grafu (F2a): po změně zašifrovaná zpráva, klíč nedojde do onRealtimeConfig, bez klíče nic', async () => {
+    const listeners = new Set<() => void>();
+    let seq = 0;
+    const exposure = { verifiedAt: 1, positions: [{ accountId: 1, symbol: 'MNQZ6', netQuantity: 1, avgPrice: 28_274.5 }], followers: [], orders: [] };
+    const liveStatus = (): LocalCopierAgentStatus => ({ ...status(), displaySeq: ++seq, displayBuiltAt: 1_000 + seq,
+      controller: { ...status().controller, exposure, recentCopyEvents: [{ id: 'e-1', at: 1, kind: 'entry', side: 'Long', quantity: 1, symbol: 'MNQZ6', followers: 1 }] } } as LocalCopierAgentStatus);
+    const agent = {
+      status: liveStatus, execute: vi.fn(async () => ({ ok: true })),
+      subscribeLiveChange: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    } as unknown as LocalCopierExecutionAgent;
+    const key = 'K'.repeat(43);
+    const topic = 'copier-nudge-abcdefghijklmnopqrstuv';
+    const broadcasts: Array<{ event: string; payload: unknown; topic: string }> = [];
+    const configs: unknown[] = [];
+    const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith('/realtime/v1/api/broadcast')) {
+        const message = JSON.parse(String(init?.body)).messages[0];
+        broadcasts.push({ event: message.event, payload: message.payload, topic: message.topic });
+        return new Response(null, { status: 202 });
+      }
+      const body = JSON.parse(String(init?.body));
+      if (body.action === 'poll-v2') return Response.json({ protocol: 2, command: null, realtime: {
+        url: 'https://project.invalid', anonKey: 'anon', topic: 'copier-kick-x', nudgeTopic: topic, nudgeKey: key, priceTopic: 'tv-price-x' } });
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({ apiOrigin: 'https://offline.invalid', agent, authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => null, write: async () => undefined }, fetchImpl: fetchImpl as typeof fetch,
+      onRealtimeConfig: realtime => configs.push(realtime) });
+    try {
+      await vi.waitFor(() => expect(configs.length).toBeGreaterThan(0));
+      expect(configs[0]).not.toHaveProperty('nudgeKey');
+      expect(configs[0]).toMatchObject({ nudgeTopic: topic, priceTopic: 'tv-price-x' });
+      for (const listener of listeners) listener();
+      for (const listener of listeners) listener();
+      await vi.waitFor(() => expect(broadcasts.some(item => item.event === 'exposure')).toBe(true), { timeout: 1_000 });
+      const sent = broadcasts.find(item => item.event === 'exposure')!;
+      expect(sent.topic).toBe(topic);
+      expect(JSON.stringify(sent.payload)).not.toContain('MNQZ6');
+      const decrypted = await decryptCopierLiveExposure(sent.payload, key, topic);
+      expect(decrypted).toMatchObject({ v: 1, startedAt: status().startedAt, exposure, events: [{ id: 'e-1' }] });
+      expect(decrypted!.seq).toBeGreaterThan(0);
+      // Dvě rychlé změny: nejvýš dvě zprávy (jedna hned, druhá po rozestupu), ne zahlcení.
+      await new Promise(resolve => setTimeout(resolve, 400));
+      expect(broadcasts.filter(item => item.event === 'exposure').length).toBeLessThanOrEqual(2);
     } finally { await relay.close(); }
   });
 

@@ -85,6 +85,14 @@ export interface LocalCopierAgentStatus {
   group: CopyGroupConfig;
   controller: CopierControllerStatus;
   startedAt: string;
+  /**
+   * Pořadí sestavení statusu v tomto běhu workeru (monotónní) a čas sestavení
+   * (hodiny workeru). Jen pro řazení zobrazení pozice v grafu (expozice z kanálu
+   * vs. poll, docs/LIVE_HOT_PATH_PLAN.md §10); nic neautorizují. Starší workery
+   * pole nemají.
+   */
+  displaySeq?: number;
+  displayBuiltAt?: number;
   /** Durable provenance instalačního bundle; starší workery pole nemají. */
   installation?: LocalCopierAgentInstallation;
   /** Primární relay zařízení; zachováno kvůli kompatibilitě starších UI. */

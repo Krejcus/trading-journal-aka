@@ -3,6 +3,7 @@ import { isLeaderOrderManageCommand } from '../lib/leaderOrderManage.js';
 import type { TvBarsCapture } from '../lib/tradingViewBars.js';
 import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery } from './recoverableCopierDelivery.js';
 import type { RelayDeliveryStore } from './copierRelayDeliveryStore.js';
+import { COPIER_LIVE_EXPOSURE_EVENT, COPIER_LIVE_EXPOSURE_EVENTS, encryptCopierLiveExposure } from '../lib/copierLiveExposure.js';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
 import {
   localCopierAgentErrorDetails,
@@ -142,7 +143,7 @@ export function startMacCopierCommandRelay(options: {
    * hned přečte status běžnou cestou. Fire-and-forget, nejvýš 1× za 250 ms; nic na
    * ni nečeká (INV-WORKER-04) a nenese data (INV-RELAY-04).
    */
-  let nudgeConfig: { url: string; anonKey: string; topic: string } | null = null;
+  let nudgeConfig: { url: string; anonKey: string; topic: string; key: string | null } | null = null;
   let lastNudgeAt = 0;
   let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
   const NUDGE_MIN_SPACING_MS = 250;
@@ -169,16 +170,80 @@ export function startMacCopierCommandRelay(options: {
     nudgeTimer.unref?.();
   };
   const notifyRealtimeConfig = (realtime: unknown) => {
-    const config = realtime as { url?: unknown; anonKey?: unknown; nudgeTopic?: unknown } | null | undefined;
+    const config = realtime as { url?: unknown; anonKey?: unknown; nudgeTopic?: unknown; nudgeKey?: unknown } | null | undefined;
     nudgeConfig = typeof config?.url === 'string' && typeof config.anonKey === 'string'
       && typeof config.nudgeTopic === 'string' && config.nudgeTopic.startsWith('copier-nudge-')
-      ? { url: config.url, anonKey: config.anonKey, topic: config.nudgeTopic }
+      ? { url: config.url, anonKey: config.anonKey, topic: config.nudgeTopic,
+        key: typeof config.nudgeKey === 'string' && /^[A-Za-z0-9_-]{43}$/.test(config.nudgeKey) ? config.nudgeKey : null }
       : null;
     try {
-      options.onRealtimeConfig?.(realtime);
+      // Klíč expozice patří jen sem: zobrazovací doplňky (vlákno ceny) ho nedostanou.
+      const { nudgeKey: _omit, ...rest } = (realtime && typeof realtime === 'object' ? realtime : {}) as Record<string, unknown>;
+      options.onRealtimeConfig?.(realtime && typeof realtime === 'object' ? rest : realtime);
     } catch {
       // Zobrazovací doplněk nesmí ovlivnit doručení příkazu.
     }
+  };
+
+  /**
+   * Expozice přímo do otevřeného LIVE grafu (F2a, docs/LIVE_HOT_PATH_PLAN.md §10):
+   * po změně u brokera — posluchač běží uvnitř eventTail, proto jen naplánuje — se
+   * mimo něj sestaví status, zašifruje (AES-GCM, AAD = téma) a pošle na téma budíčku.
+   * Nejvýš jeden požadavek najednou, další změna = nejnovější stav po jeho dokončení,
+   * rozestup ≥ 150 ms. Fire-and-forget; nic na něj nečeká (INV-WORKER-04).
+   */
+  const EXPOSURE_MIN_SPACING_MS = 150;
+  let exposureWanted = false;
+  let exposureTimer: ReturnType<typeof setTimeout> | null = null;
+  let exposureInFlight = false;
+  let lastExposureAt = 0;
+  const sendExposureNow = async () => {
+    exposureTimer = null;
+    const config = nudgeConfig;
+    if (stopped || exposureInFlight || !config?.key) return;
+    exposureWanted = false;
+    exposureInFlight = true;
+    lastExposureAt = Date.now();
+    let seq: number | null = null;
+    const totalStartedAt = performance.now();
+    try {
+      const status = options.agent.status();
+      if (typeof status.displaySeq !== 'number' || typeof status.displayBuiltAt !== 'number') return;
+      seq = status.displaySeq;
+      const encryptStartedAt = performance.now();
+      const envelope = await encryptCopierLiveExposure({
+        v: 1, startedAt: status.startedAt, seq: status.displaySeq, builtAt: status.displayBuiltAt,
+        exposure: status.controller.exposure ?? null,
+        events: (status.controller.recentCopyEvents ?? []).slice(-COPIER_LIVE_EXPOSURE_EVENTS),
+      }, config.key, config.topic);
+      if (!envelope || stopped) return;
+      const encryptMs = performance.now() - encryptStartedAt;
+      const body = JSON.stringify({ messages: [{ topic: config.topic, event: COPIER_LIVE_EXPOSURE_EVENT, payload: envelope }] });
+      const httpStartedAt = performance.now();
+      const response = await fetchImpl(`${config.url}/realtime/v1/api/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: config.anonKey, Authorization: `Bearer ${config.anonKey}` },
+        body,
+        signal: AbortSignal.timeout(1_500),
+      });
+      console.log(`${new Date().toISOString()} LIVE EXPOSURE seq=${status.displaySeq} bytes=${body.length}`
+        + ` encryptMs=${Math.round(encryptMs)} httpMs=${Math.round(performance.now() - httpStartedAt)}`
+        + ` totalMs=${Math.round(performance.now() - totalStartedAt)} status=${response.status}`);
+    } catch {
+      console.log(`${new Date().toISOString()} LIVE EXPOSURE seq=${seq ?? '?'} failed totalMs=${Math.round(performance.now() - totalStartedAt)}`);
+      // Jen zrychlení zobrazení; poll a heartbeat jedou dál.
+    } finally {
+      exposureInFlight = false;
+      if (exposureWanted) scheduleExposureSend();
+    }
+  };
+  const scheduleExposureSend = () => {
+    if (stopped || !nudgeConfig?.key) return;
+    exposureWanted = true;
+    if (exposureTimer || exposureInFlight) return;
+    const wait = Math.max(0, lastExposureAt + EXPOSURE_MIN_SPACING_MS - Date.now());
+    exposureTimer = setTimeout(() => { void sendExposureNow(); }, wait);
+    exposureTimer.unref?.();
   };
 
   const maybeSubscribeKick = async (realtime: unknown) => {
@@ -440,7 +505,11 @@ export function startMacCopierCommandRelay(options: {
   running = loop();
   publishBackground();
   publishStatus();
-  const unsubscribeLiveChange = options.agent.subscribeLiveChange?.(publishStatusSoon) ?? (() => undefined);
+  // Změna u brokera: status na relay (heartbeat) i expozice přímo do grafu — obojí jen naplánovat.
+  const unsubscribeLiveChange = options.agent.subscribeLiveChange?.(() => {
+    publishStatusSoon();
+    scheduleExposureSend();
+  }) ?? (() => undefined);
   return {
     commandQueueIdleSince: () => (deliveryBusy || !delivery ? null : idleProofSince),
     lastEmptyPollStartedAt: () => lastEmptyPollStartedAt,
@@ -514,6 +583,8 @@ export function startMacCopierCommandRelay(options: {
       wake?.();
       if (backgroundTimer) clearTimeout(backgroundTimer);
       if (statusTimer) clearTimeout(statusTimer);
+      if (exposureTimer) clearTimeout(exposureTimer);
+      if (nudgeTimer) clearTimeout(nudgeTimer);
       await Promise.all([running, background, statusHeartbeat]);
       await clearKickSubscription();
     },

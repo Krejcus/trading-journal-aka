@@ -28,7 +28,7 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
   it('LIVE → Graf se načítá líně jen za vlastní hranicí Suspense, ne v desku', () => {
     const slot = source('components/LiveTradingScreenSlot.tsx');
     expect(slot).toMatch(/React\.lazy\(\(\) => import\('\.\/LiveTradingScreen'\)\)/);
-    expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer[^>]*\/>\}>\s*<LiveTradingScreen \{\.\.\.props\} leaving=\{closing\} \/>\s*<\/Suspense>/);
+    expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer[^>]*\/>\}>\s*<LiveTradingScreen \{\.\.\.props\} chartOpenPerformanceAt=\{openPerformanceAtRef\.current\} leaving=\{closing\} \/>\s*<\/Suspense>/);
     expect(source('components/TradovateLiveDesk.tsx')).toMatch(/import LiveTradingScreenSlot, \{ liveChartCrashedThisSession \} from '\.\/LiveTradingScreenSlot';/);
   });
 

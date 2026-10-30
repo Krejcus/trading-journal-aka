@@ -8,6 +8,7 @@ import { storageService } from '../services/storageService';
 import { tradeChartTiming } from '../services/tradeChartData';
 import { useLiveCandles } from './useLiveCandles';
 import { useTvLiveCandleFeed } from './useTvLiveCandleFeed';
+import { perfDuration } from '../lib/perfTrace';
 
 /**
  * Data grafu dne: obchody dne s historií plnění (šipky, SL/TP) a svíčky
@@ -15,7 +16,14 @@ import { useTvLiveCandleFeed } from './useTvLiveCandleFeed';
  * `liveFeed`: rozpracovaná poslední svíčka z kanálu ceny (jen překreslení
  * v grafu, do `candles` se nikdy nepřidává).
  */
-export function useDayChartData(day: string, dayTrades: readonly Trade[], allTrades: readonly Trade[], now: number) {
+export function useDayChartData(
+  day: string,
+  dayTrades: readonly Trade[],
+  allTrades: readonly Trade[],
+  now: number,
+  options: { perfScope?: 'live' | 'day' } = {},
+) {
+  const perfScope = options.perfScope;
   // Detaily (historie plnění) jedním dotazem; sloučené karty berou svůj zdroj.
   const sources = useMemo(() => dayTrades.map(trade => tradeDetailSource(trade, allTrades) ?? trade), [allTrades, dayTrades]);
   const detailKey = sources.filter(isEvidenceJournalTrade).map(trade => String(trade.id)).join(',');
@@ -50,8 +58,14 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
   useEffect(() => {
     if (!detailsReady) return;
     let cancelled = false;
+    const startedAt = performance.now();
     loadDayHistoricalCandles({ day, anchor, now: capKey ? capKey + HISTORICAL_LAG_MS : undefined })
-      .then(({ response }) => { if (!cancelled) setHistorical({ day, key: historicalKey, candles: response?.candles ?? [], symbol: response?.symbol ?? 'MNQ' }); })
+      .then(({ response }) => {
+        if (!cancelled) {
+          if (perfScope) perfDuration(`${perfScope}:chart:historical-load`, performance.now() - startedAt);
+          setHistorical({ day, key: historicalKey, candles: response?.candles ?? [], symbol: response?.symbol ?? 'MNQ' });
+        }
+      })
       .catch(reason => {
         if (cancelled) return;
         // Neúspěšné obnovení stejného dne nechá dosavadní svíčky na místě.
@@ -61,9 +75,12 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- klíč pokrývá den, kotvu i hranici historie
-  }, [historicalKey, detailsReady]);
+  }, [historicalKey, detailsReady, perfScope]);
 
-  const { live, status: liveStatus } = useLiveCandles('MNQ', { enabled: candleWindow.needsLive });
+  const { live, status: liveStatus } = useLiveCandles('MNQ', {
+    enabled: candleWindow.needsLive,
+    perfScope,
+  });
   // Během obnovení (posun hranice, ověřený kontrakt) zůstávají svíčky téhož dne —
   // graf se neodpojí ani neztratí záběr.
   const sameDay = historical?.day === day ? historical : null;

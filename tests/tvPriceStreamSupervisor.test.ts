@@ -111,8 +111,10 @@ describe('hlídač vlákna kanálu ceny (hlavní vlákno workeru)', () => {
   it('diagnostika z vlákna se loguje jen jako čísla, nikdy téma ani klíč', () => {
     const t = setup();
     t.supervisor.update(ON);
-    t.workers[0].emit('message', { type: 'diag', state: 'streaming', reads: 10, sends: 4, errors: 0, topic: ON.topic, key: ON.key });
-    expect(t.logs()).toContain('reads=10 sends=4');
+    t.workers[0].emit('message', {
+      type: 'diag', state: 'streaming', reads: 10, sends: 4, skippedRateCap: 3, errors: 0, topic: ON.topic, key: ON.key,
+    });
+    expect(t.logs()).toContain('reads=10 sends=4 rate-cap=3');
     expect(t.logs()).not.toContain(ON.topic!);
     expect(t.logs()).not.toContain(ON.key!);
     t.supervisor.stop();

@@ -57,6 +57,18 @@ describe('LIVE → Graf: DISARM je vždy dosažitelný (INV-UI-02)', () => {
     expect(screen).toMatch(/buildLiveStatusStrip\(\{ status: copier\.status, available: copier\.available, pending: copier\.pending, transport: copier\.transport, journalHealth: copier\.journalHealth \}\)/);
     const desk = source('components/TradovateLiveDesk.tsx');
     expect(desk).toMatch(/status: agentStatus\?\.controller \?\? null,\s*available: runtimeAvailable,\s*pending: !agentStatusResolved,/);
+    // Expozice přímo z workeru (F2a) jen do grafu, karet a skrytí BE — nikdy do stavu kopírky ani příkazů.
+    const liveUses = desk.match(/chartLive\.[A-Za-z.?]+/g) ?? [];
+    expect(liveUses.sort()).toEqual([
+      'chartLive.exposureObservedAt',
+      'chartLive.status',
+      'chartLive.status',
+      'chartLive.status',
+      'chartLive.status?.controller.recentCopyEvents',
+    ].sort());
+    expect(desk).toMatch(/agentStatus: chartLive\.status,/);
+    expect(desk).toMatch(/copyEvents=\{chartLive\.status\?\.controller\.recentCopyEvents\}/);
+    expect(desk).toMatch(/manageEntryAvgPrice=\{chartLive\.status === agentStatus \? /);
     expect(desk).toMatch(/armFlowActiveRef\.current = true;\s*setArmFlowActive\(true\);\s*try \{\s*return await armLiveGroupFlow\(targetGroup\);\s*\} finally \{\s*armFlowActiveRef\.current = false;/);
     // Deep link jde stejnou bránou; graf během zapínání se zahodí.
     expect(desk).toMatch(/if \(requestedTab === 'chart' && armFlowActiveRef\.current\) \{ onRequestedTabHandled\?\.\(\); return; \}\s*if \(!liveTabNavigationAllowed\(tab, requestedTab,/);

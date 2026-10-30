@@ -136,6 +136,7 @@ import { buildCopierWorkerAccountRoutes } from '../lib/copierWorkerAccountRoutes
 import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
 import { useCopierStatusNudge } from '../hooks/useCopierStatusNudge';
 import { copierStatusNudgeTopic } from '../lib/copierStatusNudge';
+import { mergeCopierLiveExposure, type CopierLiveExposureReceived } from '../lib/copierLiveExposure';
 import { isNativeBuild } from '../utils/runtimeConfig';
 import { isNativeShell } from '../utils/nativeShell';
 // Živý graf s panelem objednávky; těžký workspace se načte líně uvnitř obálky.
@@ -486,7 +487,19 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // Worker po změně u brokera pošle budíček → status hned, ne až při dalším pollu.
   // Jen s otevřeným LIVE grafem (objem čtení relaye, oponentura 30. 10.).
   const [statusNudgeTopic, setStatusNudgeTopic] = useState<string | null>(null);
-  useCopierStatusNudge(statusNudgeTopic, () => statusPollKickRef.current?.(), () => chartOpenRef.current);
+  // Expozice přímo z workeru (F2a): jen zobrazení grafu a karet; nikdy do acceptAgentStatus,
+  // čerstvosti, uloženého stavu ani příkazů (INV-RELAY-04, INV-FRESH-02/03).
+  const [statusNudgeKey, setStatusNudgeKey] = useState<string | null>(null);
+  const [liveExposure, setLiveExposure] = useState<CopierLiveExposureReceived | null>(null);
+  useEffect(() => { setLiveExposure(null); }, [statusNudgeTopic, statusNudgeKey]);
+  useCopierStatusNudge(statusNudgeTopic, () => statusPollKickRef.current?.(), () => chartOpenRef.current, {
+    key: statusNudgeKey,
+    onExposure: (payload, receivedAt, receivedPerformanceAt) => setLiveExposure(current => (
+      current && current.payload.startedAt === payload.startedAt && current.payload.seq >= payload.seq
+        ? current
+        : { payload, receivedAt, receivedPerformanceAt }
+    )),
+  });
   const chartTradeRef = useRef(false);
   const directAgentProbe = useRef<'unknown' | 'available' | 'unavailable'>('unknown');
   const directAgentProbeLastAttemptAt = useRef<number | null>(null);
@@ -538,6 +551,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     setAgentTransport(null);
     setRelayConnectionId(null);
     relayConnectionIdRef.current = null;
+    // Téma, klíč i odšifrovaná expozice patří jen předchozímu uživateli.
+    setStatusNudgeTopic(null);
+    setStatusNudgeKey(null);
+    setLiveExposure(null);
     clearCopierAgentStatusStore();
     relayFeedSourcesRef.current = copierRelayFeedSourcesFor<TradovateAccountDisplayFeedState>(userId);
     setDisplayFeedReceipt(null);
@@ -929,7 +946,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       return result;
     } catch (reason) {
       if (controller?.signal.aborted) {
-        throw new Error('Mac worker brzdu do 10 s nepotvrdil. Výsledek není ověřen; zkontroluj stav kopírky a účtů. Příkaz se automaticky neopakuje.');
+        throw new Error(
+          'Mac worker brzdu do 10 s nepotvrdil. Výsledek není ověřen; zkontroluj stav kopírky a účtů. Příkaz se automaticky neopakuje.',
+          { cause: reason },
+        );
       }
       throw reason;
     } finally {
@@ -948,12 +968,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     })),
     sourceGroupsById: new Map(copyTradeSnapshot?.groups.map(group => [group.id, group]) ?? []),
   }), [copyTradeSnapshot, live.profiles]);
+  // Graf a karty: novější expozice přímo z workeru (F2a) jen nad čerstvým pollem této
+  // instance; čerstvost workeru (`agentStatusObservedAt`) zůstává z pollu.
+  const chartLive = useMemo(() => (agentStatusFresh && !agentStatusRestored
+    ? mergeCopierLiveExposure(agentStatus, agentStatusObservedAt, liveExposure)
+    : { status: agentStatus, exposureObservedAt: agentStatusObservedAt }), [agentStatus, agentStatusObservedAt, agentStatusFresh, agentStatusRestored, liveExposure]);
   const chartData = useLiveChartData({
     enabled: chartAvailable && tab === 'chart',
     data: live.data,
     profiles: live.profiles,
-    agentStatus,
+    agentStatus: chartLive.status,
     agentStatusObservedAt,
+    exposureObservedAt: chartLive.exposureObservedAt,
     statusFresh: agentStatusFresh && !agentStatusRestored,
     displayAccounts: (displaySnapshot ?? copyTradeSnapshot)?.accounts ?? EMPTY_LIVE_ACCOUNTS,
     group: workerGroup,
@@ -1352,6 +1378,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
             offerTvPriceGrant(userId, firstConnected.remote.priceChannel ?? null, firstConnected.remote.connected);
             // Budíček statusu: jen podnět k dalšímu čtení touto cestou (INV-RELAY-04).
             setStatusNudgeTopic(firstConnected.remote.connected ? copierStatusNudgeTopic(firstConnected.remote.nudgeTopic) : null);
+            setStatusNudgeKey(firstConnected.remote.connected && typeof firstConnected.remote.nudgeKey === 'string'
+              && /^[A-Za-z0-9_-]{43}$/.test(firstConnected.remote.nudgeKey) ? firstConnected.remote.nudgeKey : null);
           }
         },
         // Pomalejší spojení dočítají jen zobrazovací feedy.
@@ -1587,6 +1615,14 @@ acceptAgentStatus((await executeAgent({
             journalHealth: agentStatus?.journalHealth,
             reconnectRequired: (live.status?.connections ?? []).filter(connection => live.connectionHealth[connection.id]?.state === 'reconnect-required').length,
           }}
+          // Karty obchodů: události i z novější expozice workeru (F2a) — jen zobrazení.
+          copyEvents={chartLive.status?.controller.recentCopyEvents}
+          liveExposurePaint={chartLive.status !== agentStatus && liveExposure
+            ? {
+              id: `${liveExposure.payload.startedAt}:${liveExposure.payload.seq}`,
+              receivedPerformanceAt: liveExposure.receivedPerformanceAt,
+            }
+            : null}
           group={chartData.group}
           groupKey={chartData.groupKey}
           position={chartData.position}
@@ -1596,7 +1632,9 @@ acceptAgentStatus((await executeAgent({
           onPreviewEntry={previewLeaderEntry}
           {...(supportsCopierManualEntry(agentStatus) ? { onPlaceEntry: placeLeaderEntry } : {})}
           {...(supportsCopierManualOrderManage(agentStatus) && ownManualEntry ? { onManageEntry: manageLeaderEntry } : {})}
-          manageEntryAvgPrice={ownManualEntry?.entryAvgPrice ?? null}
+          // BE jen když graf ukazuje stav pollu: když expozice z kanálu (F2a) předbíhá, průměr
+          // z pollu nemusí patřit ke kusům v grafu (přikoupení) — BE počká na poll.
+          manageEntryAvgPrice={chartLive.status === agentStatus ? ownManualEntry?.entryAvgPrice ?? null : null}
           manageCloseSupported={supportsCopierManualOrderClose(agentStatus)}
         />
       ) : null}

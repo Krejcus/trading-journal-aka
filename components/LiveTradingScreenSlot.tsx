@@ -1,8 +1,8 @@
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ErrorBoundary } from './ErrorBoundary';
 import { QuantumSpinner } from './QuantumLoader';
-import type { LiveTradingCopierState, LiveTradingTab } from './LiveTradingScreen';
+import type { LiveTradingCopierState, LiveTradingCopyEvent, LiveTradingTab } from './LiveTradingScreen';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 import type { LiveTradeGroup, LiveTradeTarget } from '../lib/liveTradeTarget';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
@@ -46,6 +46,10 @@ interface Props {
   onNavigate: (tab: TradovateLiveTab) => void;
   navigationBlocked?: boolean;
   copier: LiveTradingCopierState;
+  /** Události kopírky pro karty obchodů (poll ∪ expozice přímo z workeru, F2a) — jen zobrazení. */
+  copyEvents?: readonly LiveTradingCopyEvent[];
+  /** Měření poslední rychlé expozice; nepoužívá se pro stav ani příkazy. */
+  liveExposurePaint?: { id: string; receivedPerformanceAt: number } | null;
   /** Skupina a účty ze stavu workeru; null = žádná skupina (bez čipu a výběru účtu). */
   group?: LiveTradeGroup | null;
   /** Obsahový klíč skupiny (porovnání bez překreslování po každém tiku desku). */
@@ -94,6 +98,10 @@ const sameCopier = (left: LiveTradingCopierState, right: LiveTradingCopierState)
 );
 
 const LiveTradingScreenSlot: React.FC<Props> = ({ open, ...props }) => {
+  const previousOpenRef = useRef(open);
+  const openPerformanceAtRef = useRef(open ? performance.now() : 0);
+  if (open && !previousOpenRef.current) openPerformanceAtRef.current = performance.now();
+  previousOpenRef.current = open;
   // Odchod z grafu: vrstva ještě 280 ms dohraje „složení“, ale kliky už
   // nebere (`.live-chart-leave`) — přehled s DISARM je pod ní dostupný hned.
   const [present, setPresent] = useState(open);
@@ -110,7 +118,7 @@ const LiveTradingScreenSlot: React.FC<Props> = ({ open, ...props }) => {
   return (
     <ErrorBoundary name="LiveTradingScreen" onError={rememberLiveChartCrash} fallback={<FallbackLayer isDark={props.isDark} failed leaving={closing} onNavigate={props.onNavigate} />}>
       <Suspense fallback={<FallbackLayer isDark={props.isDark} failed={false} leaving={closing} onNavigate={props.onNavigate} />}>
-        <LiveTradingScreen {...props} leaving={closing} />
+        <LiveTradingScreen {...props} chartOpenPerformanceAt={openPerformanceAtRef.current} leaving={closing} />
       </Suspense>
     </ErrorBoundary>
   );
@@ -121,6 +129,8 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   left.open === right.open && left.isDark === right.isDark && left.onNavigate === right.onNavigate
   && left.navigationBlocked === right.navigationBlocked
   && sameTabs(left.tabs, right.tabs) && sameCopier(left.copier, right.copier)
+  && left.copyEvents === right.copyEvents
+  && left.liveExposurePaint?.id === right.liveExposurePaint?.id
   && (left.groupKey ?? '') === (right.groupKey ?? '') && (left.position?.key ?? '') === (right.position?.key ?? '')
   && left.disarm?.label === right.disarm?.label && left.disarm?.unverified === right.disarm?.unverified
   && left.onDisarm === right.onDisarm && left.onTargetChange === right.onTargetChange

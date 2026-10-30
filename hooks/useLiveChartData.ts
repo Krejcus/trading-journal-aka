@@ -23,7 +23,10 @@ export function useLiveChartData(input: {
   data: TradovateAccountDataResult | null;
   profiles: TradovateAccountProfile[];
   agentStatus: LocalCopierAgentStatus | null;
+  /** Kdy přišel pollovaný status — čerstvost workeru (verdikty, zapnutost kopírky). */
   agentStatusObservedAt: number | null;
+  /** Stáří zobrazené expozice (F2a: novější z kanálu, jinak = agentStatusObservedAt); jen overlay pozic. */
+  exposureObservedAt?: number | null;
   /** Čerstvý stav této instance (`armStatusRef.fresh`: ne obnovený, ne po grace). */
   statusFresh: boolean;
   /** Účty se zobrazovacími hodnotami přehledu (dnešní výsledek, limit). */
@@ -35,10 +38,11 @@ export function useLiveChartData(input: {
   now: number;
 }): { group: LiveTradeGroup | null; groupKey: string; position: LiveChartPosition; disarm: LiveChartDisarm | null } {
   const { enabled, data, profiles, agentStatus, agentStatusObservedAt, statusFresh, group, now } = input;
+  const exposureObservedAt = input.exposureObservedAt === undefined ? agentStatusObservedAt : input.exposureObservedAt;
   // Pozice z heartbeatu jen do 8 s podle hodin desku (ne až s dalšími daty).
   const chartData = useMemo(
-    () => (enabled ? overlayWorkerExposure(data, agentStatus, agentStatusObservedAt, now) : null),
-    [enabled, data, agentStatus, agentStatusObservedAt, now],
+    () => (enabled ? overlayWorkerExposure(data, agentStatus, exposureObservedAt, now) : null),
+    [enabled, data, agentStatus, exposureObservedAt, now],
   );
   const accounts = useMemo(() => (chartData ? tradovateCopyTradeSnapshot(chartData, profiles).accounts : []), [chartData, profiles]);
   const orders = useMemo(() => (chartData ? tradovateCopyTradeOrders(chartData) : []), [chartData]);

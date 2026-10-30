@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { LIVE_CANDLES_STALE_MS, loadLiveCandles, type LiveCandles } from '../services/liveCandles';
+import { perfDuration } from '../lib/perfTrace';
 
 export const LIVE_CANDLES_POLL_MS = 60_000;
 /**
@@ -36,9 +37,13 @@ export type LiveCandlesStatus = 'loading' | 'live' | 'stale' | 'unavailable';
  * TradingView neběží (poslední čtení je starší než 3 min); `unavailable` =
  * žádné čtení zatím neexistuje. Jen zobrazení.
  */
-export function useLiveCandles(symbol: string | null, options: { enabled?: boolean; pollMs?: number } = {}) {
+export function useLiveCandles(
+  symbol: string | null,
+  options: { enabled?: boolean; pollMs?: number; perfScope?: 'live' | 'day' } = {},
+) {
   const enabled = options.enabled !== false && !!symbol;
   const pollMs = Math.max(15_000, options.pollMs ?? LIVE_CANDLES_POLL_MS);
+  const perfScope = options.perfScope;
   const [live, setLive] = useState<LiveCandles | null>(null);
   const [status, setStatus] = useState<LiveCandlesStatus>(enabled ? 'loading' : 'unavailable');
   const generation = useRef(0);
@@ -55,9 +60,11 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
     const refresh = async () => {
       if (inFlight || document.visibilityState === 'hidden') return;
       inFlight = true;
+      const startedAt = performance.now();
       try {
         const next = await loadLiveCandles(symbol);
         if (generation.current !== current) return;
+        if (perfScope) perfDuration(`${perfScope}:chart:live-snapshot-load`, performance.now() - startedAt);
         if (next) { setLive(next); setStatus(next.stale ? 'stale' : 'live'); }
         else setStatus(previous => (previous === 'loading' ? 'unavailable' : previous));
       } catch {
@@ -87,7 +94,7 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
       if (catchUpTimer) clearTimeout(catchUpTimer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [enabled, symbol, pollMs]);
+  }, [enabled, symbol, pollMs, perfScope]);
 
   // Čtení, které mezi obnovami zestárne, přepne stav i bez nového stažení.
   useEffect(() => {

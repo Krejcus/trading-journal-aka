@@ -285,6 +285,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-30 večer — LIVE výkon: přímá expozice worker → graf + úplné měření (Codex, lokálně)
+
+- Izolovaná větev `codex/live-quality-20261030` vychází z `fb2199e7`; Claudeova
+  necommitnutá větev ani špinavý Documents checkout se neměnily. Převzatý návrh
+  F2a prošel novou kontrolou; opravena syntaktická chyba validátoru a zakázaný
+  import execution controlleru do grafového UI.
+- Worker po broker změně posílá nejvýš 1×/150 ms zašifrovaný snapshot expozice
+  a posledních událostí na existující Realtime téma. Je to výhradně zobrazovací
+  projekce: ARM, čerstvost, brzdy, povolení příkazů a BE dál z autoritativního
+  pollu; chybějící nebo zahozený Broadcast překryje stávající poll.
+- Doplněno měření: broker fill→frame→emit, sestavení/šifrování/bajty/HTTP rychlé
+  expozice, browser receive→decrypt→paint, otevření LIVE grafu, historický a
+  živý snapshot, první data/paint a vzorkované tick→paint. Price stream loguje
+  i `rate-cap`, takže se limit 5 zpráv/s nebude zvyšovat bez důkazu.
+- Ověření: cílená LIVE sada 118/118, cílený ESLint bez nálezu, `npx tsc --noEmit`
+  čisté a produkční Vite build čistý. První plná sada: 6259 zelených + 1
+  zastaralý source-regex po novém měřicím prop; po opravě závěrečný plný běh
+  6260/6260 zelených (1 evidované todo).
+- Nic nebylo pushnuto, nasazeno, worker nebyl restartován a k brokerovi nešel
+  žádný požadavek. Produkční ověření vyžaduje samostatné schválení a nejdřív
+  shodu web/worker verze; samotné UI nikdy neopravňuje ARM.
+
 ### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, nasazeno 19:28 web + worker @ e1fd4af3)
 
 - **Podnět:** Filip: „chci tu objednávku vidět ihned a mohl ji posouvat“ + „je reálné dotáhnout live

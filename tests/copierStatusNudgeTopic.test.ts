@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { copierStatusNudgeTopic, tvPriceChannelGrant } from '../server/tvPriceChannel';
+import { copierStatusNudgeKey, copierStatusNudgeTopic, tvPriceChannelGrant } from '../server/tvPriceChannel';
 import { copierStatusNudgeTopic as clientNudgeTopic } from '../lib/copierStatusNudge';
 
 const SECRET = 's'.repeat(40);
@@ -27,5 +27,15 @@ describe('téma budíčku statusu (30. 10.)', () => {
     for (const value of [null, undefined, 42, 'copier-kick-abc', 'tv-price-abcdefghijklmnopqrstuv', 'copier-nudge-short', `copier-nudge-${'a'.repeat(22)}x`]) {
       expect(clientNudgeTopic(value)).toBeNull();
     }
+  });
+
+  it('klíč expozice: 32 B base64url, deterministický, jiný než téma i klíč ceny; bez tajemství null', () => {
+    const key = copierStatusNudgeKey(DEVICE, SECRET)!;
+    expect(key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(copierStatusNudgeKey(DEVICE.toUpperCase(), SECRET)).toBe(key);
+    expect(key).not.toBe(tvPriceChannelGrant(DEVICE, SECRET)!.key);
+    expect(copierStatusNudgeTopic(DEVICE, SECRET)).not.toContain(key.slice(0, 22));
+    expect(copierStatusNudgeKey(DEVICE, undefined)).toBeNull();
+    expect(copierStatusNudgeKey('not-a-device', SECRET)).toBeNull();
   });
 });

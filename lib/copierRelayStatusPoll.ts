@@ -8,6 +8,8 @@ export interface CopierRelayStatusEnvelope<T> {
   priceChannel?: unknown;
   /** Téma budíčku statusu vedle statusu (jen podnět ke čtení); nikdy neukládat. */
   nudgeTopic?: unknown;
+  /** Klíč k zašifrované expozici na tématu budíčku (F2a); nikdy neukládat ani nelogovat. */
+  nudgeKey?: unknown;
 }
 
 /** Převod serverového stáří na lokální monotónní bod přijetí bez porovnání

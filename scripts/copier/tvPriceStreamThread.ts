@@ -360,6 +360,7 @@ setInterval(() => {
   const ib = ibkr?.stats();
   port.postMessage({
     type: 'diag', state: stats?.state ?? 'off', reads: stats?.reads ?? 0, sends: stats?.sends ?? 0, errors: stats?.errors ?? 0,
+    skippedRateCap: stats?.skippedRateCap ?? 0,
     // Zdroj a stav IBKR jen jako krátké kódy (nikdy text chyb Gateway).
     source: sourceSwitch.active, ibkr: ib?.state ?? null, ibkrCode: ib?.lastCode ?? null, ibkrTrades: ib?.trades ?? 0,
   });
