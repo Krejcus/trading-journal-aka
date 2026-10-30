@@ -285,7 +285,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-29 — LIVE → Graf: pravé tlačítko a posun za svíčkami (Claude, větev `claude/live-chart-follow-20261029`, NENASAZENO)
+### 2026-10-29 — LIVE → Graf: pravé tlačítko a posun za svíčkami (Claude, nasazeno 30. 10. 06:11 @ e23b7c2f)
+
+- **Nasazení (Filip „nasaď“, 30. 10.)**: větev přenesena na main 286d2b7f
+  (fáze 2b kopírky); konflikt jen v tomto logu, `LiveTradingScreen` se spojil
+  sám a vrstva zůstala `role="region"`. Při DISARMED (brána před každým
+  těžkým krokem): celá sada 6140 testů zelená (650 souborů), tsc čisté, build
+  prošel. Push e23b7c2f na main, Documents fast-forward.
 
 - **Pravé tlačítko v LIVE grafu nikdy nefungovalo.** Kořen vrstvy
   (`LiveTradingScreen`) měl `role="dialog"` a `CandleKitTradeChart` uvnitř
