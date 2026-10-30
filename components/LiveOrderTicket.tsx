@@ -134,7 +134,9 @@ const PreviewSection: React.FC<{
   onPreview: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
   /** Fáze 1b: odeslání po čerstvém náhledu bez blockerů; chybí = worker odeslání neumí. */
   onPlace?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
-}> = ({ isDark, muted, field, previewDraft, resetKey, blockedReason, onPreview, onPlace }) => {
+  /** Přijatý vstup — návrh se zavře, zůstane živý příkaz. */
+  onAcknowledged?: () => void;
+}> = ({ isDark, muted, field, previewDraft, resetKey, blockedReason, onPreview, onPlace, onAcknowledged }) => {
   const [state, setState] = useState<{ key: string; receivedAt?: number; result?: LeaderEntryPreviewResult; error?: string; operationId?: string } | null>(null);
   const [placing, setPlacing] = useState(false);
   /** Dvoukrokové potvrzení v tlačítku (window.confirm prohlížeč umí potichu zablokovat). */
@@ -192,7 +194,9 @@ const PreviewSection: React.FC<{
     placingRef.current = true;
     setPlacing(true);
     try {
-      setPlaced({ key, result: await onPlace(previewDraft, shown!.operationId!) });
+      const placedResult = await onPlace(previewDraft, shown!.operationId!);
+      setPlaced({ key, result: placedResult });
+      if (placedResult.status === 'acknowledged') onAcknowledged?.();
     } catch (reason) {
       const view = placeErrorView(reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.');
       setPlaced({ key, ...(view.tone === 'bad' ? { error: view.text.replace(/^Neodesláno: /, '') } : { unknown: view.text }) });
@@ -451,6 +455,8 @@ const LiveOrderTicket: React.FC<Props> = ({
     try {
       const result = await onPlaceEntry(previewDraft, `entry:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`);
       setDirect({ key: sentKey, view: placedResultView(result) });
+      // Přijatý vstup: návrh se „promění“ v živý příkaz (štítek pozice v grafu, karta „Zadáno“).
+      if (result.status === 'acknowledged') onDraft(null);
     } catch (reason) {
       setDirect({ key: sentKey, view: placeErrorView(reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.') });
     } finally {
@@ -744,6 +750,7 @@ const LiveOrderTicket: React.FC<Props> = ({
         blockedReason={previewBlockedReason}
         onPreview={onPreviewEntry}
         {...(onPlaceEntry ? { onPlace: onPlaceEntry } : {})}
+        onAcknowledged={() => onDraft(null)}
       />}
       {problems.length > 0 && <div className="grid gap-1">
         {problems.map(problem => <div key={problem.text} className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${problem.level === 'error' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{problem.text}</div>)}

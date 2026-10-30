@@ -77,6 +77,10 @@ describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)
     // Blokace náhledu (Market, SL/TP, chyby panelu, zastaralá cena) blokuje i přímé odeslání.
     expect(ticket).toMatch(/previewBlockedReason \?\? \(!previewDraft/);
   });
+  it('přijatý vstup zavře návrh (zůstane jen živý příkaz), chyba návrh nechá', () => {
+    expect(ticket).toMatch(/if \(result\.status === 'acknowledged'\) onDraft\(null\);/);
+    expect(ticket).toMatch(/if \(placedResult\.status === 'acknowledged'\) onAcknowledged\?\.\(\);/);
+  });
   it('read-only localhost je „neodesláno“, ne neznámý výsledek', () => {
     expect(ticket).toMatch(/worker-disconnected\|pouze read-only/);
   });
