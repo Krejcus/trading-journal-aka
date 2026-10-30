@@ -285,6 +285,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-30 odpoledne — LIVE graf: živé štítky, tažení SL/TP, BE, karty obchodů, odeslání jedním klikem (Claude, nasazeno @ 92dfb252 + 60052239)
+
+- **Štítky pozice v grafu** jako u návrhu (`lib/liveChartOrderLines.ts`, overlay
+  `BacktestOrderLinesOverlay` s `actions`/`confirmCancel`/`dragDeadZonePx`):
+  tah SL/TP = `move-*` po puštění (mrtvá zóna 4 px, `expect` z chycení čáry,
+  jedna změna naráz, „odesílám“ do výsledku), BE a × čekajícího vstupu
+  dvoukrokově (≥ 350 ms). Cenové čáry zůstávají v panelech bez overlay (NQ).
+- **Karty obchodů vlevo dole** (návrh B, `mockups/live-order-toasts.html`;
+  `components/LiveTradeToasts.tsx`): z `recentCopyEvents`, mizí po 2 s, tečky
+  zelené jen za ARMED a ne shadow (nejsou důkaz kopie).
+- **Odeslání jedním klikem** (Filip): velké „Prodat/Koupit 1 MNQ“ pošle hned,
+  worker ověří brány; přijatý vstup zavře návrh. Localhost read-only (405 před
+  relayí) = „Neodesláno“. Odstraněna zástupná tlačítka v kartě pozice.
+- Oponentura (copier-design-critic): OPRAVIT PŘED COMMITEM → OK s výhradami
+  (tečky vs. konfigurace, „odesílám“ vs. 35 s relay, expect ze začátku tahu).
+  Ověřeno: tsc, celá sada 6175 (1 zastaralý test upraven), build; Filip
+  vyzkoušel naostro na Vercelu („obojí fungovalo“), návrh po odeslání zůstával
+  → opraveno 60052239.
+- **Incident 09:25:50:** kopírka fail-closed `stale-heartbeat` hned po SL (BE)
+  hitu — Mac přetížený (Filip: „sekal se“; běžel TV, IB Gateway, dva náhledy
+  grafu, testy/kompilace). Followeři vystoupili vlastními SL, leader-flat guard
+  potvrdil flat. Ponaučení: za ARMED neotevírat víc živých grafů a nepouštět
+  kompilace; ARMED brána musí zastavit i malé testy (porušeno jednou dnes).
+- **Zavření obchodu z grafu (× u pozice):** návrh §10.4 + oponentura OPRAVIT
+  PŘED IMPLEMENTACÍ (P1–P9); čeká na záznam `--scenario liquidate` (Filip).
+
 ### 2026-10-30 — Oprava: čáry BoS/CHoCH se samy označovaly (Claude, nasazeno 09:35 @ c8eba4b2)
 
 - **Nasazení (Filip „nasaď“)**: přeneseno na main 6085b2b4 (fáze 2c), po
