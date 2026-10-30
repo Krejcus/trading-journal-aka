@@ -285,7 +285,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-30 — BoS/CHoCH živě a „Bez textu“ (Claude, větev `claude/structure-realtime-20261030`, NENASAZENO)
+### 2026-10-30 — BoS/CHoCH živě a „Bez textu“ + logo TradingView pryč (Claude, nasazeno 07:52 @ 17f9fa9c)
+
+- **Nasazení (Filip „nasaď po testech“)**: přeneseno na main bbdd86e7. Celá
+  sada 6150 testů zelená při DISARMED (7:44); tsc a build po krátkém ARM znovu
+  až po Filipově „vypnuto“ (7:51). Push 17f9fa9c, Documents fast-forward.
+  Produkční bundle ověřen: „Bez textu“, nová id čar, `attributionLogo:!1`
+  v obou grafech, atribuce v Nastavení. Localhost:3000 — graf bez loga.
 
 - Filip: „velikost textu → bez textu (jen čára)“ a „vykreslovat realtime, ne až
   po uzavření — jako FVG: když svíčka splní podmínku, čára se udělá, když se
@@ -312,7 +318,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Přehrávání backtestu jde stejnou cestou, ale v prohlížeči ověřené není.
 - Testy: `tests/marketStructureForming.test.ts` (shoda s plným výpočtem pro
   přepsaný bar, připsané bary i náhodnou řadu; validace `none`). Cílené sady
-  52/52 a tsc čisté při DISARMED; celá sada čeká na DISARM (od 7:23 ARMED).
+  52/52 a tsc čisté při DISARMED.
 - **Logo TradingView v grafech pryč** (Filip): `layout.attributionLogo: false`
   v `CandleKitTradeChart` i klasickém `TradeMarketChart`. Licence
   lightweight-charts chce atribuci z NOTICE a odkaz na tradingview.com někde,
