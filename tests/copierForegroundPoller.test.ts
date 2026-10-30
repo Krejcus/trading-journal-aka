@@ -61,4 +61,17 @@ describe('copier status freshness',()=>{
  it('tolerates a small negative age instead of depending on the client wall clock',()=>{
   expect(isCopierStatusFresh(10_200,10_000,true)).toBe(true);
  });
+ it('LIVE graf: rychlejší rozestup (min 250 ms) a kick čte hned, běžící čtení jen vyžádá další kolo',async()=>{
+  vi.useFakeTimers();let fast=true;let finish:(()=>void)|null=null;
+  const read=vi.fn(async()=>{await new Promise<void>(r=>{finish=r;});});
+  const poller=createCopierForegroundPoller({visible:()=>true,read,invalidate:vi.fn(),intervalMs:()=>fast?500:2000});
+  expect(read).toHaveBeenCalledTimes(1);poller.kick();expect(read).toHaveBeenCalledTimes(1);
+  finish!();await vi.advanceTimersByTimeAsync(0);expect(read).toHaveBeenCalledTimes(2);
+  finish!();await vi.advanceTimersByTimeAsync(499);expect(read).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);expect(read).toHaveBeenCalledTimes(3);
+  finish!();await vi.advanceTimersByTimeAsync(0);poller.kick();expect(read).toHaveBeenCalledTimes(4);
+  fast=false;finish!();await vi.advanceTimersByTimeAsync(1999);expect(read).toHaveBeenCalledTimes(4);
+  await vi.advanceTimersByTimeAsync(1);expect(read).toHaveBeenCalledTimes(5);poller.stop();
+ });
 });
+

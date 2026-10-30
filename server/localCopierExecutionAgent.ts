@@ -164,6 +164,8 @@ export interface LocalCopierExecutionAgent {
   execute(command: LocalCopierAgentCommand, context?: LocalCopierAgentExecutionContext): Promise<LocalCopierAgentCommandResult>;
   /** Synchronně odmítne nový/pending command ingress před graceful drainem. */
   beginShutdown(): void;
+  /** Signál „stav brokera se změnil“ (z controlleru) — relay pak hned odešle status (30. 10.). */
+  subscribeLiveChange?(listener: () => void): () => void;
   /** Rozpracované příkazy a čas posledního dokončeného (údržbový restart). */
   commandActivity?(): { pending: number; lastSettledAt: number };
   /**
@@ -1632,6 +1634,7 @@ export async function startLocalCopierExecutionAgent(
     execute: dispatchTracked,
     commandActivity: () => ({ pending: pendingCommands, lastSettledAt: lastCommandSettledAt }),
     beginShutdown,
+    subscribeLiveChange: listener => options.controller.subscribeLiveChange?.(listener) ?? (() => undefined),
     setRemoteQueueProbe(probe) {
       remoteQueueProbe = probe;
     },

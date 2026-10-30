@@ -110,7 +110,7 @@ const placedResultView = (entry: LeaderEntryPlaceResult): { tone: 'ok' | 'bad' |
  * localhostu, 405 před relayí); vše ostatní je neznámý výsledek — nikdy neopakovat naslepo.
  */
 const placeErrorView = (message: string): { tone: 'bad' | 'warn'; text: string } => (
-  /entry-busy|entry-daily-cap|entry-conflict|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|worker-disconnected|pouze read-only/.test(message)
+  /entry-busy|entry-daily-cap|manage-daily-cap|entry-conflict|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|Chybí cesta k Mac workeru|worker-disconnected|pouze read-only/.test(message)
     ? { tone: 'bad', text: /entry-busy/.test(message) ? 'Neodesláno: jiný ruční vstup se právě zpracovává.'
       : /entry-daily-cap/.test(message) ? 'Neodesláno: dosažen denní strop ručních vstupů.'
         : /pouze read-only/.test(message) ? 'Neodesláno: z localhostu se k brokerovi nezapisuje (jen na produkci).' : `Neodesláno: ${message}` }

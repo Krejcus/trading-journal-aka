@@ -556,6 +556,32 @@ describe('recoverable relay lane isolation', () => {
     } finally { await relay.close(); }
   });
 
+  it('změna u brokera (subscribeLiveChange) pošle status na relay hned, ne až po 2 s; po close odhlášení', async () => {
+    const listeners = new Set<() => void>();
+    const agent = {
+      status, execute: vi.fn(async () => ({ ok: true })),
+      subscribeLiveChange: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    } as unknown as LocalCopierExecutionAgent;
+    const heartbeats: number[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.action === 'heartbeat-v2') heartbeats.push(Date.now());
+      if (body.action === 'poll-v2') return Response.json({ protocol: 2, command: null });
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({ apiOrigin: 'https://offline.invalid', agent, authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => null, write: async () => undefined }, fetchImpl: fetchImpl as typeof fetch });
+    try {
+      await vi.waitFor(() => expect(heartbeats.length).toBe(1));
+      expect(listeners.size).toBe(1);
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const before = heartbeats.length;
+      for (const listener of listeners) listener();
+      await vi.waitFor(() => expect(heartbeats.length).toBe(before + 1), { timeout: 600 });
+    } finally { await relay.close(); }
+    expect(listeners.size).toBe(0);
+  });
+
   it('hlásí začátek posledního prázdného vyzvednutí; čekající příkaz ho neposune (pojistka auto-zapnutí)', async () => {
     let pending = true;
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {

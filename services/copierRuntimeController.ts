@@ -798,6 +798,11 @@ export interface CopierRuntimeController {
   waiveManualEntry(options: { operationId: string; reason: string }): Promise<void>;
   /** Fáze 2a: posun SL/TP dál od trhu nebo zrušení čekajícího vlastního ručního vstupu (plán §10.1). */
   manageLeaderOrder(command: LeaderOrderManageCommand, options: { deadlineAt: number }): Promise<LeaderOrderManageResult>;
+  /**
+   * Jen signál „stav brokera se změnil“ (příkaz, pozice, fill) po zpracování události —
+   * relay pak hned odešle status (`server/macCopierCommandRelay.ts`). Nenese data a nic neautorizuje.
+   */
+  subscribeLiveChange?(listener: () => void): () => void;
   status(): CopierControllerStatus;
   waitForIdle(): Promise<void>;
   stop(): void;
@@ -15104,6 +15109,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return { safelyUnmapped, unmapped };
   };
 
+  const liveChangeListeners = new Set<() => void>();
+  const notifyLiveChange = () => {
+    for (const listener of liveChangeListeners) {
+      try { listener(); } catch { /* posluchač UI nesmí shodit zpracování */ }
+    }
+  };
   const handleBrokerEvent = async (
     event: BrokerEvent,
     admissionGeneration: number,
@@ -18465,6 +18476,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             await settleS1bPostCancelCleanups();
           } finally {
             flushDeferredStaleFailClosed();
+            if (event.type !== 'heartbeat' && event.type !== 'connection') notifyLiveChange();
           }
         });
       })
@@ -18729,6 +18741,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
     },
     prepareArm,
+    subscribeLiveChange(listener) {
+      liveChangeListeners.add(listener);
+      return () => { liveChangeListeners.delete(listener); };
+    },
     async manageLeaderOrder(command, { deadlineAt }) {
       const existing = manualOrderActionRecords().find(record => record.operationId === command.operationId);
       if (!Number.isFinite(deadlineAt) && !existing) return manageBlocked(command, 'no-deadline', 'Příkaz nemá platnost — nic se neodeslalo.');

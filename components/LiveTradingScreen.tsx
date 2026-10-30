@@ -235,7 +235,11 @@ const LiveTradingScreen: React.FC<Props> = ({
             : { tone: 'warn' as const, text: result.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.' }) });
     } catch (reason) {
       setPendingMove(null);
-      setLineNotice({ at: Date.now(), tone: 'warn', text: `Výsledek neznámý (${reason instanceof Error ? reason.message.slice(0, 120) : 'chyba'}) — zkontroluj leadera v Tradovate.` });
+      const message = reason instanceof Error ? reason.message : 'chyba';
+      // Prokazatelně neodeslané (strop, rozestup, chybějící cesta, neověřený stav) = „Neodesláno“.
+      setLineNotice({ at: Date.now(), ...(/entry-busy|manage-daily-cap|entry-daily-cap|Chybí cesta|není čerstvě ověřený|nic se neodeslalo/.test(message)
+        ? { tone: 'bad' as const, text: `Neodesláno: ${/entry-busy/.test(message) ? 'jiná změna se právě zpracovává' : message.slice(0, 120)}` }
+        : { tone: 'warn' as const, text: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate.` }) });
     } finally {
       liveBusyRef.current = false;
     }

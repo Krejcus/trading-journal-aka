@@ -529,3 +529,22 @@ describe('fáze 2d: zavřít obchod leadera z grafu', () => {
     expect(ctx.controller.status().lastError).toBeNull();
   });
 });
+
+describe('zrychlení zobrazení (30. 10.): signál změny u brokera', () => {
+  it('po zpracování události příkazu/fillu/pozice zavolá posluchače; chyba posluchače nic neshodí; po odhlášení ticho', async () => {
+    const ctx = await setup();
+    let calls = 0;
+    const off = ctx.controller.subscribeLiveChange!(() => { calls += 1; });
+    const offThrowing = ctx.controller.subscribeLiveChange!(() => { throw new Error('ui'); });
+    await fillEntries(ctx);
+    expect(calls).toBeGreaterThan(0);
+    expect(ctx.controller.status().lastError).toBeNull();
+    off(); offThrowing();
+    const before = calls;
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYMBOL, netQuantity: 1 } });
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    expect(calls).toBe(before);
+  });
+});
+

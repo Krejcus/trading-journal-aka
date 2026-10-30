@@ -247,8 +247,22 @@ export function startMacCopierCommandRelay(options: {
   };
   let statusHeartbeat: Promise<void> | null = null;
   let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  // 30. 10.: změna u brokera (příkaz, pozice, fill) → status na relay hned, ne až po 2 s
+  // (LIVE graf čte čáry příkazů z tohoto stavu). Nejvýš 4× za sekundu.
+  const STATUS_CHANGE_MIN_SPACING_MS = 250;
+  let lastStatusStartedAt = 0;
+  let statusChangePending = false;
+  const publishStatusSoon = () => {
+    if (stopped || !options.deliveryStore) return;
+    if (statusHeartbeat) { statusChangePending = true; return; }
+    const wait = Math.max(0, lastStatusStartedAt + STATUS_CHANGE_MIN_SPACING_MS - Date.now());
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = setTimeout(publishStatus, wait);
+  };
   const publishStatus = () => {
     if (stopped || statusHeartbeat || !options.deliveryStore) return;
+    lastStatusStartedAt = Date.now();
+    statusChangePending = false;
     statusHeartbeat = (async () => {
       try {
         const response = await request({ action: 'heartbeat-v2', status: options.agent.status(), revision: ++statusRevision }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
@@ -257,7 +271,10 @@ export function startMacCopierCommandRelay(options: {
         if (!stopped) console.warn(`COPIER RELAY status: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         statusHeartbeat = null;
-        if (!stopped) statusTimer = setTimeout(publishStatus, 2_000);
+        if (!stopped) {
+          statusTimer = setTimeout(publishStatus, 2_000);
+          if (statusChangePending) publishStatusSoon();
+        }
       }
     })();
   };
@@ -377,6 +394,7 @@ export function startMacCopierCommandRelay(options: {
   running = loop();
   publishBackground();
   publishStatus();
+  const unsubscribeLiveChange = options.agent.subscribeLiveChange?.(publishStatusSoon) ?? (() => undefined);
   return {
     commandQueueIdleSince: () => (deliveryBusy || !delivery ? null : idleProofSince),
     lastEmptyPollStartedAt: () => lastEmptyPollStartedAt,
@@ -445,6 +463,7 @@ export function startMacCopierCommandRelay(options: {
     },
     async close() {
       stopped = true;
+      unsubscribeLiveChange();
       loopAbort.abort(new Error('copier-relay-close'));
       wake?.();
       if (backgroundTimer) clearTimeout(backgroundTimer);

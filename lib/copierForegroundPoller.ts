@@ -19,6 +19,8 @@ export function createCopierForegroundPoller(options: {
   invalidate: () => void;
   now?: () => number;
   resumeCoalesceMs?: number;
+  /** Rozestup čtení (ms); default 2 s. LIVE graf čte rychleji (30. 10.: čáry příkazů z workeru). */
+  intervalMs?: () => number;
 }) {
   let stopped = false;
   let busy = false;
@@ -46,7 +48,7 @@ export function createCopierForegroundPoller(options: {
       busy = false;
       if (!stopped && options.visible()) {
         if (requested) void run();
-        else timer = setTimeout(() => void run(), 2_000);
+        else timer = setTimeout(() => void run(), Math.max(250, options.intervalMs?.() ?? 2_000));
       }
     }
   };
@@ -72,6 +74,13 @@ export function createCopierForegroundPoller(options: {
     clearTimeout(timer);
     void run();
   };
+  /** Číst hned (po vlastním příkazu) — bez koalescence resume; běžící čtení jen vyžádá další kolo. */
+  const kick = () => {
+    if (stopped || !options.visible()) return;
+    if (busy) { requested = true; return; }
+    clearTimeout(timer);
+    void run();
+  };
   void run();
-  return { resume, stop() { stopped = true; hiddenGeneration += 1; clearTimeout(timer); } };
+  return { resume, kick, stop() { stopped = true; hiddenGeneration += 1; clearTimeout(timer); } };
 }

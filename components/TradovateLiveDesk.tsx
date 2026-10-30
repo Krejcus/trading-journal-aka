@@ -477,6 +477,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // telefon při pomalém relay nemohl kopírku vypnout. ARM ani konfiguraci
   // tudy poslat nejde; ty dál vyžadují čerstvý stav.
   const lastAgentRouteRef = useRef<{ transport: 'local' | 'relay'; relayConnectionId: string | null } | null>(restoredAgent?.lastRoute ?? null);
+  // Rychlé čtení stavu workeru při otevřeném LIVE grafu + čtení hned po vlastním příkazu.
+  const chartOpenRef = useRef(false);
+  chartOpenRef.current = tab === 'chart';
+  const statusPollKickRef = useRef<(() => void) | null>(null);
+  const chartTradeRef = useRef(false);
   const directAgentProbe = useRef<'unknown' | 'available' | 'unavailable'>('unknown');
   const directAgentProbeLastAttemptAt = useRef<number | null>(null);
   const forceDirectAgentProbeRef = useRef(false);
@@ -874,6 +879,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (!route.relayConnectionId) throw new Error('Odeslání jde jen přes relay — chybí připojení k workeru.');
     const response = await executeTradovateCopierRelayCommand(route.relayConnectionId, { type: 'copy-command', command });
     const result = (response as { result?: unknown }).result as LeaderEntryPlaceResult | undefined;
+    // Nový stav (příkaz v grafu, karta) hned, ne až v dalším kole čtení.
+    statusPollKickRef.current?.();
     if (!result || result.type !== 'leader-entry-placed') {
       throw new Error('Výsledek odeslání chybí — zkontroluj leadera v Tradovate, než to zkusíš znovu.');
     }
@@ -952,6 +959,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // Fáze 2a: správa vlastního ručního vstupu (poslední přijatý). Jen přes
   // relay; ceny „co jsem viděl“ jsou ze živé pozice, worker je ověří u brokera.
   // Fáze 2a/2b: spravovatelný obchod = právě jeden na symbolu a straně pozice v grafu.
+  chartTradeRef.current = chartData.position?.summary != null;
   const chartPositionSymbol = chartData.position?.symbol ?? null;
   const chartPositionSide = chartData.position?.summary?.side ?? null;
   // Správa jen nad skutečným leaderem skupiny workeru: pohled jednoho followera
@@ -987,6 +995,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     });
     const response = await executeTradovateCopierRelayCommand(route.relayConnectionId, { type: 'copy-command', command });
     const result = (response as { result?: unknown }).result as LeaderOrderManageResult | undefined;
+    statusPollKickRef.current?.();
     if (!result || result.type !== 'leader-order-managed') throw new Error('Výsledek změny chybí — zkontroluj leadera v Tradovate.');
     return result;
   }, [chartData.position?.summary]);
@@ -1375,7 +1384,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       visible: isAppForeground,
       read: poll,
       invalidate: markAgentStatusStale,
+      // LIVE graf: čáry příkazů a pozice jdou z workeru (stream brokera) — číst po 0,5 s, jinak 2 s.
+      // Worker po změně u brokera stav na relay posílá hned (ne až po 2 s), takže 0,5 s má smysl i přes relay.
+      // 0,5 s jen s pozicí / čekajícím příkazem v grafu (objem relaye, oponentura); prázdný graf 1 s.
+      intervalMs: () => (chartOpenRef.current ? (chartTradeRef.current ? 500 : 1_000) : 2_000),
     });
+    statusPollKickRef.current = poller.kick;
     let wasVisible = isAppForeground();
     const resume = () => {
       const visible = isAppForeground();
@@ -1390,6 +1404,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     return () => {
       stopped = true;
       poller.stop();
+      statusPollKickRef.current = null;
       unsubscribeForeground();
       window.removeEventListener('online', poller.resume);
       window.removeEventListener('focus', poller.resume);
