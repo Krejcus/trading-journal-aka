@@ -1384,7 +1384,9 @@ existující ochranu.
   `place-leader-entry` (`lib/leaderEntryPlace.ts`: prefix `entry:`, otisk
   payloadu). Jen přes relay (loopback = `manual-entry-relay-only`), s
   platností 15 s (`deadlineAt` bez ACK rezervy; chybí = blocked), jeden
-  na zařízení, 3 s rozestup, 30 za 24 h, idempotence `operationId` per
+  na zařízení, 3 s rozestup, 100 za 24 h (do 30. 10. 2026 30; Filip zvedl;
+  denní strop správy 100 neplatí pro zavření obchodu — snižuje riziko),
+  idempotence `operationId` per
   uživatel, brzda čekající vstup zneplatní. Controller
   (`placeLeaderEntry`/`executeManualEntry`): běží ve frontě controlleru
   s ohraničeným startem (2 s), znovu projde VŠEMI branami náhledu, vyžaduje

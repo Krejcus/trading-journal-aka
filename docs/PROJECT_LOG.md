@@ -285,7 +285,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, NENASAZENO)
+### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, nasazeno 19:28 web + worker @ e1fd4af3)
 
 - **Podnět:** Filip: „chci tu objednávku vidět ihned a mohl ji posouvat“ + „je reálné dotáhnout live
   na úroveň ATAS/NT/TV?“ → rozbor trhu `docs/reviews/live-quality-verdict-20261030.md` (Documents,
@@ -310,6 +310,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   → opraveno → OK S VÝHRADAMI → výhrady zapracovány. Ověřeno: tsc, cílené sady (475 + 232).
 - **Odhad:** posun/vstup u brokera −0,1–0,15 s, výsledek v grafu −0,15 s, pozice a čáry po změně
   u brokera −~0,25 s a hned se správnou cenou vstupu. Skok k ~0,6 s by dal až F1b s opravami.
+- **Nasazeno 19:28** (Filip „Nasaď“): push main → Vercel, worker reinstall `mac-reinstall-safe.sh`
+  (bundle a62478a5…), post-restart read-only reconcile čistý. Hláška `conn:53157614 … not-connected`
+  při startu je stará (Tradeify), s nasazením nesouvisí.
+- **Strop ručních vstupů 30 → 100 za 24 h** (Filip 19:31 narazil na „dosažen denní strop“: 30 vstupů
+  od 29. 10. 19:53, z toho 4 test). Oponentura OK s výhradami → zavření obchodu z grafu už denní
+  strop správy (100) nezastaví (snižuje riziko; busy/rozestup platí). Otevřené: strop správy hlásí
+  stejný token jako vstupy (`entry-daily-cap`) — vlastní token + text v UI; test stropu ověřuje jen
+  hranici, ne filtry dotazu.
 - **Měření po nasazení:** porovnat stejné rozklady (DB, `RELAY KICK přijat`/`RELAY CMD`/`EXECUTED`/
   `ACK`, `at:dev:hot-command-timings`). Pořadí nasazení: server (push main) → worker.
 

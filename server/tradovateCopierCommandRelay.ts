@@ -117,7 +117,9 @@ const isLeaderTradeClose = (command: unknown): boolean => {
   return inner?.type === 'copy-command' && inner.command?.type === 'manage-leader-order' && inner.command.action === 'close-position';
 };
 const ENTRY_MIN_INTERVAL_MS = 3_000;
-const ENTRY_DAILY_CAP = 30;
+// Filip 30. 10. 2026: 30 nestačilo na aktivní den (26 vstupů do 15:00) → 100 jako u správy.
+// Proti smyčce chrání dál rozestup 3 s a „jeden čekající na zařízení“ (P7).
+const ENTRY_DAILY_CAP = 100;
 /** Správa vlastního vstupu (fáze 2a): rozestup 2 s na vstup, 100 za 24 h na uživatele (INV-TRAD-04). */
 const MANAGE_MIN_INTERVAL_MS = 2_000;
 const MANAGE_DAILY_CAP = 100;
@@ -706,7 +708,8 @@ export async function enqueueTradovateCopierCommand(options: {
     ? quiet(findEntryByOperationId({ db: options.db, userId: options.userId, operationId: entryOperationId }))
     : null;
   const prefetchedManage = manageEntry
-    ? quiet(assertManageAdmissible({ db: options.db, userId: options.userId, trade: manageEntry, now }))
+    ? quiet(assertManageAdmissible({ db: options.db, userId: options.userId, trade: manageEntry, now,
+      riskReducing: isLeaderTradeClose(options.command) }))
     : null;
   const device = await selectRelayDeviceTarget({
     db: options.db,
@@ -1077,6 +1080,8 @@ const manageEntryOperationId = (command: LocalCopierAgentCommand): Record<string
 /** Správa vstupu: jeden rozpracovaný na uživatele a vstup, 2 s rozestup, denní strop. */
 async function assertManageAdmissible(options: {
   db: SupabaseClient; userId: string; trade: Record<string, string>; now: number;
+  /** Zavření obchodu snižuje riziko: denní strop správy ho nezastaví (busy/rozestup ano; 30. 10.). */
+  riskReducing?: boolean;
 }): Promise<void> {
   const nowIso = new Date(options.now).toISOString();
   // Obě čtení souběžně, vyhodnocení v původním pořadí (busy, pak strop).
@@ -1099,6 +1104,7 @@ async function assertManageAdmissible(options: {
   ]);
   if (busyError) throw new Error(`copier-relay-entry-lookup-failed: ${busyError.message}`);
   if (busy) throw new Error('copier-relay-entry-busy');
+  if (options.riskReducing) return;
   if (countError) throw new Error(`copier-relay-entry-lookup-failed: ${countError.message}`);
   if ((count ?? 0) >= MANAGE_DAILY_CAP) throw new Error('copier-relay-entry-daily-cap');
 }
@@ -1119,7 +1125,7 @@ async function findEntryByOperationId(options: {
 
 /**
  * Ruční vstup: nejvýš jeden čekající nebo vykonávaný na zařízení, nový
- * nejdřív 3 s po předchozím a nejvýš 30 za 24 h na uživatele (P7). Jinak 409.
+ * nejdřív 3 s po předchozím a nejvýš 100 za 24 h na uživatele (P7; do 30. 10. 30). Jinak 409.
  */
 async function assertEntryAdmissible(options: {
   db: SupabaseClient; userId: string; deviceId: string; now: number;

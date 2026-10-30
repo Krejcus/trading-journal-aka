@@ -244,6 +244,63 @@ describe('Tradovate copier command relay', () => {
     expect(armUpsert).toHaveBeenCalledOnce();
   });
 
+  describe('denní strop ručních vstupů (100 za 24 h, Filip 30. 10.)', () => {
+    const entryDb = (count: number, upsert: (row: unknown) => void): SupabaseClient => {
+      const devices = { eq: () => devices, is: () => devices,
+        then: (resolve: (value: unknown) => void) => resolve({ data: [{ id: deviceId }], error: null }) };
+      const runtime = { eq: () => runtime, in: () => runtime, order: () => runtime, limit: () => runtime,
+        maybeSingle: async () => ({ data: { device_id: deviceId, status: { controller: { connected: true } }, last_seen_at: '2099-01-01T00:00:00.000Z' }, error: null }) };
+      const commands = () => {
+        const query: Record<string, unknown> = {};
+        for (const method of ['eq', 'in', 'contains', 'gte', 'gt', 'or', 'order', 'limit']) query[method] = () => query;
+        query.maybeSingle = async () => ({ data: null, error: null });
+        query.then = (resolve: (value: unknown) => void) => resolve({ count, error: null });
+        return query;
+      };
+      const upserted = { select: () => upserted, maybeSingle: async () => ({ data: { id: 'entry-row', status: 'pending', expires_at: '2026-08-21T12:00:15.000Z' }, error: null }) };
+      return { from: (table: string) => {
+        if (table === 'tradovate_copier_devices') return { select: () => devices };
+        if (table === 'tradovate_copier_device_runtime') return { select: () => runtime };
+        if (table === 'tradovate_copier_commands') return { select: commands, upsert: (row: unknown) => { upsert(row); return upserted; } };
+        throw new Error(`unexpected-table:${table}`);
+      } } as unknown as SupabaseClient;
+    };
+    const entry = (): LocalCopierAgentCommand => ({ type: 'copy-command', command: buildLeaderEntryPlaceCommand({
+      type: 'preview-leader-entry', groupId: 'group-1', operationId: 'preview:captest00001', leaderAccountId: 100,
+      symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 29_500, stopLoss: 29_480, takeProfit: 29_560,
+      intent: { armedAt: 1, groupConfigHash: 'abcdefgh12345678', followerQuantities: [] },
+    }, 'entry:captest00001') as CopyCommand['command'] });
+
+    it('99 vstupů za 24 h → další projde', async () => {
+      const upsert = vi.fn();
+      await enqueueTradovateCopierCommand({ db: entryDb(99, upsert), userId, connectionId, command: entry(), now: Date.parse('2026-08-21T12:00:00.000Z') });
+      expect(upsert).toHaveBeenCalledOnce();
+    });
+
+    const manageCmd = (action: 'move-stop' | 'close-position'): LocalCopierAgentCommand => ({ type: 'copy-command', command: buildLeaderOrderManageCommand({
+      groupId: 'group-1', operationId: `manage:capcheck-${action}`, leaderAccountId: 100, entryOperationId: 'entry:captest00001', symbol: 'MNQZ6',
+      action, expect: { price: 29_480, quantity: 1 }, ...(action === 'move-stop' ? { newPrice: 29_470 } : {}),
+    }) as CopyCommand['command'] });
+
+    it('strop správy (100) zastaví posun SL, ale ne zavření obchodu (snižuje riziko)', async () => {
+      const blocked = vi.fn();
+      await expect(enqueueTradovateCopierCommand({ db: entryDb(100, blocked), userId, connectionId, command: manageCmd('move-stop'), now: Date.parse('2026-08-21T12:00:00.000Z') }))
+        .rejects.toThrow('copier-relay-entry-daily-cap');
+      expect(blocked).not.toHaveBeenCalled();
+      const closed = vi.fn();
+      await enqueueTradovateCopierCommand({ db: entryDb(100, closed), userId, connectionId, command: manageCmd('close-position'), now: Date.parse('2026-08-21T12:00:00.000Z') });
+      expect(closed).toHaveBeenCalledOnce();
+    });
+
+    it('100 vstupů za 24 h → 409 daily-cap, nic se nevloží', async () => {
+      const upsert = vi.fn();
+      await expect(enqueueTradovateCopierCommand({ db: entryDb(100, upsert), userId, connectionId, command: entry(), now: Date.parse('2026-08-21T12:00:00.000Z') }))
+        .rejects.toThrow('copier-relay-entry-daily-cap');
+      expect(upsert).not.toHaveBeenCalled();
+      expect(copierRelayValidationErrorStatus('copier-relay-entry-daily-cap')).toBe(409);
+    });
+  });
+
   describe('správa z grafu: souběžná čtení admission (30. 10., F1f)', () => {
     const manageInner = (operationId: string) => buildLeaderOrderManageCommand({
       groupId: 'group-1', operationId, leaderAccountId: 100, entryOperationId: 'entry:relaytest01', symbol: 'MNQZ6',
