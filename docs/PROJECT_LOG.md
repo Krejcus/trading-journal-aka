@@ -285,7 +285,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-30 — Oprava: čáry BoS/CHoCH se samy označovaly (Claude, větev `claude/structure-select-fix-20261030`, NENASAZENO)
+### 2026-10-30 — Oprava: čáry BoS/CHoCH se samy označovaly (Claude, nasazeno 09:35 @ c8eba4b2)
+
+- **Nasazení (Filip „nasaď“)**: přeneseno na main 6085b2b4 (fáze 2c), po
+  Filipově DISARM celá sada 6167 zelená, tsc a build čisté. Produkční chunk
+  grafu obsahuje odložení při kreslení i vrácení výběru.
 
 - Filip: „některé BoS/CHoCH, většinou poslední, se zvýrazní a mají na konci
   velké tečky“. Příčina v mé živé synchronizaci čar (17f9fa9c, i dřívější
@@ -301,8 +305,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověřeno na zkušební stránce (zlom pod pivot → čára bez označení; se
   spuštěným nástrojem TrendLine čára nepřibyla a nástroj zůstal; po ukončení
   nástroje čára doplněna). Testy `tests/structureDrawings.test.ts` s enginem,
-  který `commit` simuluje jako knihovna. Celá sada 6155 zelená, tsc čisté
-  (DISARMED).
+  který `commit` simuluje jako knihovna.
 
 ### 2026-10-30 — Obchodování z grafu, fáze 2c: utažení SL a SL na BE (Claude, nasazeno 08:23 @ 65594d9d, test naostro prošel)
 
