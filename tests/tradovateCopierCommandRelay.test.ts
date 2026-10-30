@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 import type { LocalCopierAgentCommand, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 import { buildLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace';
+import { buildLeaderOrderManageCommand } from '../lib/leaderOrderManage';
 import {
   claimTradovateCopierCommand,
   copierRelayValidationErrorStatus,
@@ -241,6 +242,73 @@ describe('Tradovate copier command relay', () => {
     });
     expect(lookup).toContainEqual(['gt', ['expires_at', '2026-08-21T12:00:00.000Z']]);
     expect(armUpsert).toHaveBeenCalledOnce();
+  });
+
+  describe('správa z grafu: souběžná čtení admission (30. 10., F1f)', () => {
+    const manageInner = (operationId: string) => buildLeaderOrderManageCommand({
+      groupId: 'group-1', operationId, leaderAccountId: 100, entryOperationId: 'entry:relaytest01', symbol: 'MNQZ6',
+      action: 'move-stop', expect: { price: 29_000, quantity: 1 }, newPrice: 28_990,
+    });
+    const manage = (operationId: string): LocalCopierAgentCommand => (
+      { type: 'copy-command', command: manageInner(operationId) as CopyCommand['command'] });
+    const now = Date.parse('2026-08-21T12:00:00.000Z');
+
+    it('existující operace vyhraje nad busy: vrátí původní řádek, nic nevloží', async () => {
+      const inner = manageInner('manage:replay-01');
+      const command: LocalCopierAgentCommand = { type: 'copy-command', command: inner as CopyCommand['command'] };
+      const upsert = vi.fn();
+      const queued = await enqueueTradovateCopierCommand({
+        db: enqueueDb(upsert, null, calls => {
+          if (calls.some(([method, args]) => method === 'eq' && args[0] === 'idempotency_key')) {
+            return { id: 'existing-id', status: 'claimed', expires_at: '2026-08-21T12:00:15.000Z',
+              payload: { command: { payloadHash: inner.payloadHash } } };
+          }
+          return { id: 'busy-id', status: 'pending', expires_at: '2026-08-21T12:00:15.000Z' };
+        }),
+        userId, connectionId, command, now,
+      });
+      expect(queued).toMatchObject({ id: 'existing-id', status: 'claimed' });
+      expect(upsert).not.toHaveBeenCalled();
+    });
+
+    it('bez existující operace platí busy jako dřív', async () => {
+      const upsert = vi.fn();
+      await expect(enqueueTradovateCopierCommand({
+        db: enqueueDb(upsert, null, calls => (
+          calls.some(([method]) => method === 'contains') ? { id: 'busy-id', status: 'pending', expires_at: '2026-08-21T12:00:15.000Z' } : null
+        )),
+        userId, connectionId, command: manage('manage:busycheck-01'), now,
+      })).rejects.toThrow('copier-relay-entry-busy');
+      expect(upsert).not.toHaveBeenCalled();
+    });
+
+    it('chyba výběru zařízení má přednost; předem spuštěná čtení, která selžou, nenechají unhandled rejection', async () => {
+      const failing = () => {
+        const query: Record<string, unknown> = {};
+        for (const method of ['eq', 'in', 'contains', 'gte', 'gt', 'or', 'order', 'limit', 'is']) query[method] = () => query;
+        query.maybeSingle = async () => { throw new Error('lookup-down'); };
+        query.then = (_resolve: unknown, reject: (reason: unknown) => void) => reject(new Error('lookup-down'));
+        return query;
+      };
+      const noDevices = { eq: () => noDevices, is: () => noDevices,
+        then: (resolve: (value: unknown) => void) => resolve({ data: [], error: null }) };
+      const db = { from: (table: string) => {
+        if (table === 'tradovate_copier_devices') return { select: () => noDevices };
+        if (table === 'tradovate_copier_commands') return { select: () => failing(), upsert: vi.fn() };
+        throw new Error(`unexpected-table:${table}`);
+      } } as unknown as SupabaseClient;
+      await expect(enqueueTradovateCopierCommand({ db, userId, connectionId, command: manage('manage:devicefail-01'), now }))
+        .rejects.toThrow('copier-relay-device-not-found');
+      // Odmítnutá předem spuštěná čtení se nesmí projevit ani po dokončení (vitest padá na unhandled rejection).
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+
+    it('volná správa projde a vloží jeden řádek s klíčem operationId', async () => {
+      const upsert = vi.fn();
+      await enqueueTradovateCopierCommand({ db: enqueueDb(upsert, null, null), userId, connectionId, command: manage('manage:freecheck-01'), now });
+      expect(upsert).toHaveBeenCalledOnce();
+      expect(upsert.mock.calls[0][0]).toMatchObject({ idempotency_key: 'manage:freecheck-01', status: 'pending' });
+    });
   });
 
   it('enqueue brzdy expiruje starší pending ARM a SHADOW stejného zařízení', async () => {

@@ -731,6 +731,14 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je při transportním retry zachovat
   původní klíč a dohledat původní command. Nebezpečné je po nejisté odpovědi
   automaticky znovu enqueueovat mutaci s novým UUID.
+- Rychlost admission (30. 10. 2026, `docs/LIVE_HOT_PATH_PLAN.md` §9): u ručního
+  vstupu a správy z grafu běží čtení existující operace a busy/strop souběžně
+  s výběrem zařízení; vyhodnocují se ve stejném místě a pořadí (výběr zařízení →
+  existující operace → busy → strop), výsledek i chyby jsou stejné. Okno mezi
+  čtením a insertem je o desítky ms delší; busy, rozestup a strop atomické nikdy
+  nebyly (jedinečnost operationId drží unikátní index per uživatel + zařízení,
+  dvě živá zařízení = otevřená N6). Test: `tests/tradovateCopierCommandRelay.test.ts`
+  („souběžná čtení admission“). Long-poll výsledku: prvních 1,5 s krok 25 ms, pak 100 ms.
 
 ### INV-RELAY-02: Obnovuje se transport a ACK, nikoli execution, která už začala
 
@@ -783,9 +791,20 @@ existující ochranu.
   ověřování).
 - Hlídá test: `tests/copierRelayPriceChannel.test.ts`,
   `tests/tvPriceStreamWiring.test.ts`, `tests/tvPriceChannelClient.test.ts`.
+- Budíček statusu (30. 10. 2026, `docs/LIVE_HOT_PATH_PLAN.md` §5): téma
+  `copier-nudge-…` odvozené ze zařízení (`copierStatusNudgeTopic`). Worker po
+  potvrzeném heartbeatu vyvolaném změnou u brokera a po přijatém ACK příkazu
+  pošle prázdnou zprávu (fire-and-forget, ≥ 250 ms od sebe); LIVE jen kickne
+  běžný poll statusu (`hooks/useCopierStatusNudge.ts`: jen s otevřeným LIVE
+  grafem, ≥ 250 ms, nejvýš 60 za minutu). Zpráva nenese
+  data, neposouvá čerstvost ani nic neautorizuje; podvržená umí jen vyvolat
+  čtení navíc. Test: `tests/macCopierCommandRelay.test.ts` (budíček),
+  `tests/copierStatusNudgeTopic.test.ts`.
 - Nikdy: Poslat přes Realtime příkaz, ARM/DISARM, risk ani stav, podle
   kterého se rozhoduje; logovat téma nebo klíč; čekat v poll smyčce na
-  přihlášení ke kanálu.
+  přihlášení ke kanálu. Přímé doručení claimnutého příkazu kick kanálem
+  (návrh F1b) oponentura 30. 10. vrátila (restart, věčné `claimed`, hodiny,
+  klíč = oprávnění k execution) — bez nového návrhu nezavádět.
 - Bezpečné změny vs. nebezpečné: Bezpečné je kanál vypnout (pole chybí)
   — kopírka jede dál přes poll. Nebezpečné je z přítomnosti zpráv
   odvozovat čerstvost workeru (INV-FRESH-03).
@@ -1274,9 +1293,26 @@ existující ochranu.
   a u followera jen tehdy, když ji worker prokazatelně zná (OK verdikt po
   porovnání, „drží X, očekáváno Y“ nebo záznam pozice) — zlikvidovaný účet,
   denní limit, příkazy mimo kopii, vypnutý režim, rozjetí čekající na
-  reconcile nebo „pozice neověřena“ zůstanou na REST. Platí i pro LIVE,
-  stejně jako `averagePrice: null` po změně velikosti pozice (vstup, body
-  SL/TP a TV P&L do dalšího plného REST ticku chybí) — obojí jen přísněji.
+  reconcile nebo „pozice neověřena“ zůstanou na REST. Platí i pro LIVE.
+  Průměrná cena po změně velikosti pozice (30. 10. 2026, oponentura):
+  přednost má průměr z REST pro tutéž `netPosition`; jinak průměr od workeru
+  (`exposure.positions[].avgPrice`): broker `netPrice` ze streamu Position
+  (`displayAveragePrice` v události, záměrně mimo `BrokerPosition`), jinak
+  průměr z fillů (denní počítadlo leadera, risk ledger followera) — vždy jen
+  když sedí na kusy pozice a cena je konečná > 0; jinak `null`. Pozice tak v grafu stojí hned po fillu (dřív až po REST
+  ticku). Když REST za workerem zaostává, overlay nastaví
+  `openPnlBehindPosition` → `unrealizedPnlBehindPosition`: karta obchodu,
+  telefonní detail i TV noha řádku P&L z dřívějšího stavu neukáží, cena
+  trhu z P&L je `null`, takže utažení SL k trhu i BE zůstanou blokované
+  do dalšího plného REST ticku. `unrealizedPnlSource` se záměrně nemění
+  (odvození denního limitu účtu, `lib/copyTradeAccountEligibility.ts`).
+  Průměr do žádného příkazu nevstupuje (BE bere `entryAvgPrice` od workeru,
+  zavření stop a kusy ze streamu). Známé omezení: chybí-li zavírací i
+  vstupní fill téže velikosti, nebo pozice 2→0→2 předběhne fill, ukáže se
+  do REST ticku starý průměr (čára vstupu a částky SL/TP) — ceny trhu ani
+  brány se to netýká. Testy `tests/tradovateWorkerExposureOverlay.test.ts`,
+  `tests/copierRuntimeController.test.ts`, `tests/tvLivePnl.test.ts`,
+  `tests/liveMobilePresentation.test.ts`.
   Test hlídá, že každý OK verdikt ve workeru před kontrolou `held` je jeden
   ze tří známých.
   Neověřené čtení pozic (> 45 s), chybějící účet skupiny, neověřené příkazy

@@ -79,6 +79,13 @@ export function overlayWorkerExposure<T extends TradovateAccountDataResult>(
     if (!members.has(account.id) || !positionKnown(account.id)) return account;
     changed = true;
     const previousBySymbol = new Map(account.positions.flatMap(position => (position.symbol ? [[position.symbol, position] as const] : [])));
+    // REST tutéž pozici ještě nezná (čerstvý vstup, přikoupení, otočení): jeho
+    // otevřené P&L patří k dřívějšímu stavu — karta obchodu ho do potvrzení
+    // z REST neukáže (nedopočítá cenu trhu z cizího P&L, utažení SL zůstane
+    // blokované). Zdroj P&L pro ostatní (denní limit účtu) se nemění.
+    const restBehind = (positionsByAccount.get(account.id) ?? []).some(position => previousBySymbol.get(position.symbol)?.netPosition !== position.netQuantity)
+      || account.positions.some(position => position.netPosition !== 0
+        && !(positionsByAccount.get(account.id) ?? []).some(next => next.symbol === position.symbol));
     const positions: TradovateAccountPosition[] = (positionsByAccount.get(account.id) ?? []).map(position => {
       const previous = previousBySymbol.get(position.symbol);
       return {
@@ -94,8 +101,11 @@ export function overlayWorkerExposure<T extends TradovateAccountDataResult>(
         soldValue: previous?.soldValue ?? null,
         previousPosition: previous?.previousPosition ?? null,
         // Průměrná cena z REST platí jen pro tutéž pozici; jinak (otočení,
-        // přikoupení, částečné zavření) není známa, dokud ji nepotvrdí REST.
-        averagePrice: previous && previous.netPosition === position.netQuantity ? previous.averagePrice : null,
+        // přikoupení, částečné zavření) průměr z fillů workeru (jen když jeho
+        // lot sedí na kusy), nebo neznámo, dokud ji nepotvrdí REST.
+        averagePrice: previous && previous.netPosition === position.netQuantity
+          ? previous.averagePrice
+          : typeof position.avgPrice === 'number' && Number.isFinite(position.avgPrice) && position.avgPrice > 0 ? position.avgPrice : null,
         previousPrice: previous?.previousPrice ?? null,
       };
     });
@@ -121,6 +131,7 @@ export function overlayWorkerExposure<T extends TradovateAccountDataResult>(
     const workingOrderCount = orders.filter(order => order.status === 'Working').length;
     return {
       ...account,
+      ...(restBehind ? { balance: { ...account.balance, openPnlBehindPosition: true } } : {}),
       positions,
       orders,
       netPositionCount: positions.filter(position => position.netPosition !== 0).length,

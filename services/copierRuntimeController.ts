@@ -321,7 +321,8 @@ export interface CopierControllerStatus {
    */
   exposure?: {
     verifiedAt: number;
-    positions: Array<{ accountId: number; symbol: string; netQuantity: number }>;
+    /** `avgPrice` = průměrný vstup (broker `netPrice` ze streamu, jinak z fillů), jen když sedí na kusy (zobrazení). */
+    positions: Array<{ accountId: number; symbol: string; netQuantity: number; avgPrice?: number }>;
     followers: Array<{ accountId: number; ok: boolean; detail: string | null }>;
     /**
      * Aktivní příkazy účtů skupiny z brokerového streamu a poslední úplné
@@ -2141,6 +2142,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     leaderFillAheadOfPosition.delete(symbol);
   };
   const positionsByAccount = new Map<number, Map<string, number>>();
+  /**
+   * Jen zobrazení: průměrný vstup brokera (`netPrice` ze streamu) ke kusům, ke kterým
+   * ho broker poslal. Platí jen při shodě kusů s `positionsByAccount`; nikdy nevstupuje
+   * do plánování, risku ani příkazu (INV-UI-03, INV-MANUAL-01). `positions` = mapa účtu,
+   * kterou ta Position událost zapsala: přepis pozic z REST (reconcile, resync) vytvoří
+   * novou mapu, a tím průměr zneplatní (oponentura 30. 10., nález 4).
+   */
+  const brokerDisplayAverages = new Map<string, { netQuantity: number; avgPrice: number; positions: Map<string, number> }>();
   /**
    * Aktivní příkazy účtů skupiny z `order` událostí streamu a z úplných
    * broker čtení při reconciliation. Pro execution se používají pouze jako
@@ -6123,6 +6132,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const followerPositions = positionsByAccount.get(pending.accountId) ?? new Map<string, number>();
       followerPositions.set(pending.symbol, brokerFollowerNet);
       positionsByAccount.set(pending.accountId, followerPositions);
+      // Přepis z REST na místě: průměr ze streamu k těmto kusům už nemusí patřit (zobrazení).
+      brokerDisplayAverages.delete(`${pending.accountId}:${pending.symbol}`);
 
       if (brokerFollowerNet === 0) return;
       if (brokerLeaderNet !== 0 && Math.sign(brokerLeaderNet) === Math.sign(brokerFollowerNet)) return;
@@ -6682,6 +6693,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const followerPositions = positionsByAccount.get(accountId) ?? new Map<string, number>();
       followerPositions.set(symbol, followerNet);
       positionsByAccount.set(accountId, followerPositions);
+      // Přepis z REST na místě: průměr ze streamu k těmto kusům už nemusí patřit (zobrazení).
+      brokerDisplayAverages.delete(`${accountId}:${symbol}`);
 
       if (followerNet === expectedFollowerNet) {
         awaitingCopiedEntries.delete(key);
@@ -15760,6 +15773,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const exitOnlyFillReachedFlat = exitOnlyFlatFillAwaitingPosition.delete(transitionKey);
       accountPositions.set(event.position.symbol, event.position.netQuantity);
       positionsByAccount.set(event.position.accountId, accountPositions);
+      const displayKey = `${event.position.accountId}:${event.position.symbol}`;
+      if (event.displayAveragePrice != null && event.position.netQuantity !== 0) {
+        brokerDisplayAverages.set(displayKey, { netQuantity: event.position.netQuantity, avgPrice: event.displayAveragePrice, positions: accountPositions });
+      } else {
+        brokerDisplayAverages.delete(displayKey);
+      }
       lastBrokerPositionAt = clock();
       // Incident 24. 8.: follower byl flat v 19.198, ale jeho stop u brokera
       // dál pracoval (venue ho přeasertoval na vyšší total) a o 980 ms
@@ -18333,6 +18352,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       osoOpeningExcludedAccounts.clear();
       leaderPositions.clear();
       positionsByAccount.clear();
+      brokerDisplayAverages.clear();
       leaderPositionSnapshotComplete = false;
       flatReconciledLeaderEpochIds.clear();
       leaderFillAheadOfPosition.clear();
@@ -20017,9 +20037,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         })(),
         exposure: (() => {
           if (retiredGroup || lastAuthoritativeReadAt == null || !gate.connected) return null;
+          // Průměrný vstup: přednostně broker `netPrice` ze streamu (stejný zdroj jako
+          // REST read model), jinak z fillů (denní počítadlo leadera, risk ledger
+          // followera) — vždy jen když sedí na kusy pozice. Web pak kreslí pozici
+          // hned, bez čekání na REST. Jen zobrazení; nic z toho neautorizuje příkaz.
+          const leaderLots = currentRuntime().state.safety.dailyStats?.openLots ?? [];
+          const fillAverage = (accountId: number, symbol: string, netQuantity: number): number | null => {
+            const broker = brokerDisplayAverages.get(`${accountId}:${symbol}`);
+            if (broker && broker.netQuantity === netQuantity && positionsByAccount.get(accountId) === broker.positions) return broker.avgPrice;
+            const lot = accountId === group.leaderAccountId
+              ? leaderLots.find(item => item.symbol === symbol)
+              : followerRiskLots.get(`${accountId}:${symbol}`);
+            return lot && lot.netQuantity === netQuantity && Number.isFinite(lot.avgPrice) && lot.avgPrice > 0 ? lot.avgPrice : null;
+          };
           const positions = [...positionsByAccount].flatMap(([accountId, bySymbol]) => [...bySymbol]
             .filter(([, netQuantity]) => netQuantity !== 0)
-            .map(([symbol, netQuantity]) => ({ accountId, symbol, netQuantity })));
+            .map(([symbol, netQuantity]) => {
+              const avgPrice = fillAverage(accountId, symbol, netQuantity);
+              return { accountId, symbol, netQuantity, ...(avgPrice != null ? { avgPrice } : {}) };
+            }));
           const leaderHeld = positionsByAccount.get(group.leaderAccountId as number);
           const symbols = new Set(positions.map(position => position.symbol));
           const followers = group.followers.map(follower => {

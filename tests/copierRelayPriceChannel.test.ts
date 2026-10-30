@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TV_PRICE_CHANNEL_SECRET_ENV, tvPriceChannelGrant } from '../server/tvPriceChannel';
+import { TV_PRICE_CHANNEL_SECRET_ENV, copierStatusNudgeTopic, tvPriceChannelGrant } from '../server/tvPriceChannel';
 
 const DEVICE = '0b9d1c64-1f0a-4c55-9d21-6a3f7e2b8c11';
 const SECRET = 's'.repeat(48);
@@ -63,7 +63,7 @@ describe('relay: kanál ceny z TV (krok 1)', () => {
     const grant = tvPriceChannelGrant(DEVICE, SECRET)!;
     expect(status).toBe(200);
     expect(body.realtime).toEqual({ url: 'https://mock.invalid', anonKey: 'mock-public', topic: `copier-kick-${DEVICE}`,
-      priceTopic: grant.topic, priceKey: grant.key });
+      priceTopic: grant.topic, priceKey: grant.key, nudgeTopic: copierStatusNudgeTopic(DEVICE, SECRET) });
   });
 
   it('bez tajemství poll-v2 i legacy poll odpoví normálně, jen bez polí ceny (brzdy dál procházejí)', async () => {
@@ -89,8 +89,10 @@ describe('relay: kanál ceny z TV (krok 1)', () => {
     const { status, body } = await call(userGet());
     const grant = tvPriceChannelGrant(DEVICE, SECRET)!;
     expect(status).toBe(200);
-    expect(body).toEqual({ status: { startedAt: 'x' }, lastSeenAt: 'now', ageMs: 1, connected: true, priceChannel: grant });
+    expect(body).toEqual({ status: { startedAt: 'x' }, lastSeenAt: 'now', ageMs: 1, connected: true, priceChannel: grant,
+      nudgeTopic: copierStatusNudgeTopic(DEVICE, SECRET) });
     expect(body.status).not.toHaveProperty('priceChannel');
+    expect(body.status).not.toHaveProperty('nudgeTopic');
     expect(body).not.toHaveProperty('deviceId');
   });
 

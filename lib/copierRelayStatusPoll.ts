@@ -6,6 +6,8 @@ export interface CopierRelayStatusEnvelope<T> {
   ageMs?: number;
   /** Kanál ceny z TV vedle statusu (jen zobrazení); ověřuje `isTvPriceGrant`. */
   priceChannel?: unknown;
+  /** Téma budíčku statusu vedle statusu (jen podnět ke čtení); nikdy neukládat. */
+  nudgeTopic?: unknown;
 }
 
 /** Převod serverového stáří na lokální monotónní bod přijetí bez porovnání

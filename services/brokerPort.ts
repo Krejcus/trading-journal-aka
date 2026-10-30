@@ -178,7 +178,12 @@ export type BrokerEvent =
   /** `receivedAt` je čas přijetí zdrojového WS frame; legacy/mock emitery jej mohou vynechat. */
   | { type: 'order'; order: BrokerOrder; receivedAt?: number }
   | { type: 'fill'; fill: BrokerFill; receivedAt?: number }
-  | { type: 'position'; position: BrokerPosition }
+  /**
+   * `displayAveragePrice` = průměrný vstup brokera (Tradovate `netPrice`) k těmto
+   * kusům. Jen zobrazení: záměrně mimo `BrokerPosition`, který čte engine,
+   * reconcile i liquidation recovery.
+   */
+  | { type: 'position'; position: BrokerPosition; displayAveragePrice?: number }
   | { type: 'heartbeat'; at: number }
   | { type: 'error'; error: Error; at: number }
   /**

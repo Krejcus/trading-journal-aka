@@ -134,6 +134,8 @@ import {
 } from '../lib/localCopierAgentProtocol';
 import { buildCopierWorkerAccountRoutes } from '../lib/copierWorkerAccountRoutes';
 import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
+import { useCopierStatusNudge } from '../hooks/useCopierStatusNudge';
+import { copierStatusNudgeTopic } from '../lib/copierStatusNudge';
 import { isNativeBuild } from '../utils/runtimeConfig';
 import { isNativeShell } from '../utils/nativeShell';
 // Živý graf s panelem objednávky; těžký workspace se načte líně uvnitř obálky.
@@ -481,6 +483,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const chartOpenRef = useRef(false);
   chartOpenRef.current = tab === 'chart';
   const statusPollKickRef = useRef<(() => void) | null>(null);
+  // Worker po změně u brokera pošle budíček → status hned, ne až při dalším pollu.
+  // Jen s otevřeným LIVE grafem (objem čtení relaye, oponentura 30. 10.).
+  const [statusNudgeTopic, setStatusNudgeTopic] = useState<string | null>(null);
+  useCopierStatusNudge(statusNudgeTopic, () => statusPollKickRef.current?.(), () => chartOpenRef.current);
   const chartTradeRef = useRef(false);
   const directAgentProbe = useRef<'unknown' | 'available' | 'unavailable'>('unknown');
   const directAgentProbeLastAttemptAt = useRef<number | null>(null);
@@ -1344,6 +1350,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
             // Kanál ceny z TV (jen zobrazení) jen z odpovědi přijaté jako status,
             // až po route pro brzdy.
             offerTvPriceGrant(userId, firstConnected.remote.priceChannel ?? null, firstConnected.remote.connected);
+            // Budíček statusu: jen podnět k dalšímu čtení touto cestou (INV-RELAY-04).
+            setStatusNudgeTopic(firstConnected.remote.connected ? copierStatusNudgeTopic(firstConnected.remote.nudgeTopic) : null);
           }
         },
         // Pomalejší spojení dočítají jen zobrazovací feedy.

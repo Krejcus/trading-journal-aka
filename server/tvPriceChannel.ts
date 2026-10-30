@@ -39,3 +39,23 @@ export function tvPriceChannelGrant(
     return null;
   }
 }
+
+/**
+ * Téma „stav workeru se změnil“ (30. 10. 2026, docs/LIVE_HOT_PATH_PLAN.md §5): worker
+ * po potvrzeném heartbeatu se změnou pošle prázdnou zprávu, otevřené LIVE si hned
+ * přečte status běžnou cestou. Bez dat a bez podpisu — podvržená zpráva umí jen
+ * vyvolat čtení navíc (klient je drží ≥ 250 ms od sebe). Nikdy nevyhodí; téma se neloguje.
+ */
+export function copierStatusNudgeTopic(
+  deviceId: unknown,
+  secret: string | undefined = process.env[TV_PRICE_CHANNEL_SECRET_ENV],
+): string | null {
+  try {
+    const value = secret?.trim();
+    if (!value || value.length < MIN_SECRET_LENGTH || typeof deviceId !== 'string' || !DEVICE_ID.test(deviceId)) return null;
+    const digest = createHmac('sha256', value).update(`copier-nudge-topic:${deviceId.toLowerCase()}`).digest('base64url');
+    return `copier-nudge-${digest.slice(0, 22)}`;
+  } catch {
+    return null;
+  }
+}

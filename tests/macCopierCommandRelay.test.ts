@@ -582,6 +582,86 @@ describe('recoverable relay lane isolation', () => {
     expect(listeners.size).toBe(0);
   });
 
+  it('budíček statusu: po heartbeatu se změnou a po ACK příkazu, ne při běžném heartbeatu; nejvýš 1× za 250 ms (30. 10.)', async () => {
+    const listeners = new Set<() => void>();
+    const agent = {
+      status, execute: vi.fn(async () => ({ ok: true, status: status() })),
+      subscribeLiveChange: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    } as unknown as LocalCopierExecutionAgent;
+    const nudges: Array<{ at: number; topic: string; auth: string | null }> = [];
+    let heartbeats = 0;
+    let commandSent = false;
+    const realtime = { url: 'https://project.invalid', anonKey: 'anon-key', topic: 'copier-kick-x', nudgeTopic: 'copier-nudge-abcdefghijklmnopqrstuv' };
+    const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith('/realtime/v1/api/broadcast')) {
+        const body = JSON.parse(String(init?.body));
+        nudges.push({ at: Date.now(), topic: body.messages[0].topic, auth: new Headers(init?.headers).get('authorization') });
+        return new Response(null, { status: 202 });
+      }
+      const body = JSON.parse(String(init?.body));
+      if (body.action === 'heartbeat-v2') heartbeats += 1;
+      if (body.action === 'poll-v2') {
+        if (!commandSent && heartbeats >= 3) {
+          commandSent = true;
+          return Response.json({ protocol: 2, realtime, serverNow: new Date().toISOString(), command: {
+            id: '11111111-1111-4111-8111-111111111111', status: 'claimed', command: { type: 'disarm' },
+            createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          } });
+        }
+        return Response.json({ protocol: 2, command: null, realtime });
+      }
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({ apiOrigin: 'https://offline.invalid', agent, authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => null, write: async () => undefined }, fetchImpl: fetchImpl as typeof fetch });
+    try {
+      await vi.waitFor(() => expect(heartbeats).toBeGreaterThanOrEqual(1));
+      await new Promise(resolve => setTimeout(resolve, 300));
+      // Úvodní (periodický) heartbeat budíček nevyvolá.
+      expect(nudges).toEqual([]);
+      for (const listener of listeners) listener();
+      for (const listener of listeners) listener();
+      await vi.waitFor(() => expect(nudges.length).toBe(1), { timeout: 800 });
+      expect(nudges[0]).toMatchObject({ topic: realtime.nudgeTopic, auth: 'Bearer anon-key' });
+      // Další změna hned po budíčku: odstup ≥ 250 ms.
+      await new Promise(resolve => setTimeout(resolve, 300));
+      for (const listener of listeners) listener();
+      await vi.waitFor(() => expect(nudges.length).toBe(2), { timeout: 800 });
+      expect(nudges[1].at - nudges[0].at).toBeGreaterThanOrEqual(250);
+      // ACK příkazu (complete-v2 accepted) → budíček.
+      await vi.waitFor(() => expect(commandSent).toBe(true), { timeout: 4_000 });
+      await vi.waitFor(() => expect(nudges.length).toBeGreaterThanOrEqual(3), { timeout: 2_000 });
+    } finally { await relay.close(); }
+  });
+
+  it('bez nudgeTopic v realtime konfiguraci žádný budíček (starý server)', async () => {
+    const listeners = new Set<() => void>();
+    const agent = {
+      status, execute: vi.fn(async () => ({ ok: true })),
+      subscribeLiveChange: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    } as unknown as LocalCopierExecutionAgent;
+    const broadcasts: unknown[] = [];
+    let heartbeats = 0;
+    const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith('/realtime/v1/api/broadcast')) { broadcasts.push(init?.body); return new Response(null, { status: 202 }); }
+      const body = JSON.parse(String(init?.body));
+      if (body.action === 'heartbeat-v2') heartbeats += 1;
+      if (body.action === 'poll-v2') return Response.json({ protocol: 2, command: null, realtime: { url: 'https://project.invalid', anonKey: 'anon', topic: 'copier-kick-x' } });
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({ apiOrigin: 'https://offline.invalid', agent, authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => null, write: async () => undefined }, fetchImpl: fetchImpl as typeof fetch });
+    try {
+      await vi.waitFor(() => expect(heartbeats).toBeGreaterThanOrEqual(1));
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const before = heartbeats;
+      for (const listener of listeners) listener();
+      await vi.waitFor(() => expect(heartbeats).toBe(before + 1), { timeout: 800 });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(broadcasts).toEqual([]);
+    } finally { await relay.close(); }
+  });
+
   it('hlásí začátek posledního prázdného vyzvednutí; čekající příkaz ho neposune (pojistka auto-zapnutí)', async () => {
     let pending = true;
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {

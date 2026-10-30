@@ -136,7 +136,44 @@ export function startMacCopierCommandRelay(options: {
     if (unsubscribe) await unsubscribe();
   };
 
+  /**
+   * Budíček statusu (docs/LIVE_HOT_PATH_PLAN.md §5): po potvrzeném heartbeatu se
+   * změnou nebo po ACK příkazu prázdná zpráva na téma ze serveru → otevřené LIVE si
+   * hned přečte status běžnou cestou. Fire-and-forget, nejvýš 1× za 250 ms; nic na
+   * ni nečeká (INV-WORKER-04) a nenese data (INV-RELAY-04).
+   */
+  let nudgeConfig: { url: string; anonKey: string; topic: string } | null = null;
+  let lastNudgeAt = 0;
+  let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+  const NUDGE_MIN_SPACING_MS = 250;
+  const sendNudgeNow = () => {
+    const config = nudgeConfig;
+    if (stopped || !config) return;
+    lastNudgeAt = Date.now();
+    try {
+      void fetchImpl(`${config.url}/realtime/v1/api/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: config.anonKey, Authorization: `Bearer ${config.anonKey}` },
+        body: JSON.stringify({ messages: [{ topic: config.topic, event: 'status', payload: {} }] }),
+        signal: AbortSignal.timeout(1_500),
+      }).catch(() => undefined);
+    } catch {
+      // Budíček je jen optimalizace zobrazení.
+    }
+  };
+  const sendStatusNudge = () => {
+    if (stopped || !nudgeConfig || nudgeTimer) return;
+    const wait = lastNudgeAt + NUDGE_MIN_SPACING_MS - Date.now();
+    if (wait <= 0) { sendNudgeNow(); return; }
+    nudgeTimer = setTimeout(() => { nudgeTimer = null; sendNudgeNow(); }, wait);
+    nudgeTimer.unref?.();
+  };
   const notifyRealtimeConfig = (realtime: unknown) => {
+    const config = realtime as { url?: unknown; anonKey?: unknown; nudgeTopic?: unknown } | null | undefined;
+    nudgeConfig = typeof config?.url === 'string' && typeof config.anonKey === 'string'
+      && typeof config.nudgeTopic === 'string' && config.nudgeTopic.startsWith('copier-nudge-')
+      ? { url: config.url, anonKey: config.anonKey, topic: config.nudgeTopic }
+      : null;
     try {
       options.onRealtimeConfig?.(realtime);
     } catch {
@@ -252,8 +289,11 @@ export function startMacCopierCommandRelay(options: {
   const STATUS_CHANGE_MIN_SPACING_MS = 250;
   let lastStatusStartedAt = 0;
   let statusChangePending = false;
+  /** Heartbeat vyvolaný změnou u brokera → po potvrzení budíček pro LIVE. */
+  let statusNudgeWanted = false;
   const publishStatusSoon = () => {
     if (stopped || !options.deliveryStore) return;
+    statusNudgeWanted = true;
     if (statusHeartbeat) { statusChangePending = true; return; }
     const wait = Math.max(0, lastStatusStartedAt + STATUS_CHANGE_MIN_SPACING_MS - Date.now());
     if (statusTimer) clearTimeout(statusTimer);
@@ -263,11 +303,16 @@ export function startMacCopierCommandRelay(options: {
     if (stopped || statusHeartbeat || !options.deliveryStore) return;
     lastStatusStartedAt = Date.now();
     statusChangePending = false;
+    const nudge = statusNudgeWanted;
+    statusNudgeWanted = false;
     statusHeartbeat = (async () => {
       try {
         const response = await request({ action: 'heartbeat-v2', status: options.agent.status(), revision: ++statusRevision }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
         if (response.protocol !== 2 || response.accepted !== true) throw new Error('relay-heartbeat-not-confirmed');
+        if (nudge) sendStatusNudge();
       } catch (error) {
+        // Neodeslaná změna: budíček až s dalším potvrzeným heartbeatem.
+        if (nudge) statusNudgeWanted = true;
         if (!stopped) console.warn(`COPIER RELAY status: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         statusHeartbeat = null;
@@ -283,7 +328,8 @@ export function startMacCopierCommandRelay(options: {
     request: body => request(body, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal),
     nextRevision: () => ++statusRevision,
     isActive: () => !stopped,
-    onComplete: id => { completedNotifications.add(id); publishBackground(); },
+    // ACK uložil výsledek i autoritativní status → budíček pro otevřené LIVE.
+    onComplete: id => { completedNotifications.add(id); publishBackground(); sendStatusNudge(); },
   }) : null;
   let deliveryBusy = false;
   /** Důkaz prázdné fronty pro údržbový restart; maže se začátkem každého pollu. */

@@ -213,6 +213,12 @@ export async function resolveCopierRelayConnectionId(options: {
   return rows[0]?.connection_id ?? options.connectionId;
 }
 
+/** Předem spuštěné čtení: tlumí unhandled rejection, pozdější await chybu dál vyhodí. */
+const quiet = <T>(pending: Promise<T>): Promise<T> => {
+  pending.catch(() => undefined);
+  return pending;
+};
+
 /** Selects the freshest runtime only among non-revoked devices. */
 const selectRelayDeviceTarget = async (options: {
   db: SupabaseClient;
@@ -691,6 +697,17 @@ export async function enqueueTradovateCopierCommand(options: {
   const entryOperationId = leaderEntryPlaceOperationId(options.command);
   const idempotencyKey = entryOperationId ?? (options.idempotencyKey?.trim() || randomUUID());
   const payload = commandPayload(options.command);
+  // Rychlost (30. 10.): uživatelská čtení admission ručního vstupu/správy na výběru
+  // zařízení nezávisí — běží souběžně s ním. Vyhodnocují se níž ve stejném pořadí
+  // jako dřív (napřed existující operace, pak busy/strop), takže výsledek i chyba
+  // zůstávají stejné. `quiet` jen tlumí unhandled rejection; await chybu vyhodí.
+  const manageEntry = entryOperationId ? manageEntryOperationId(options.command) : null;
+  const prefetchedExisting = entryOperationId
+    ? quiet(findEntryByOperationId({ db: options.db, userId: options.userId, operationId: entryOperationId }))
+    : null;
+  const prefetchedManage = manageEntry
+    ? quiet(assertManageAdmissible({ db: options.db, userId: options.userId, trade: manageEntry, now }))
+    : null;
   const device = await selectRelayDeviceTarget({
     db: options.db,
     userId: options.userId,
@@ -726,7 +743,7 @@ export async function enqueueTradovateCopierCommand(options: {
 
   await assertPreviewAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, command: options.command, now });
   if (entryOperationId) {
-    const existing = await findEntryByOperationId({ db: options.db, userId: options.userId, operationId: entryOperationId });
+    const existing = await prefetchedExisting!;
     if (existing) {
       // Stejný klíč s jiným obsahem = nikdy tiše nepřepsat ani neposlat znovu.
       if (existing.payloadHash !== (options.command as { command?: { payloadHash?: unknown } }).command?.payloadHash) {
@@ -734,8 +751,7 @@ export async function enqueueTradovateCopierCommand(options: {
       }
       return { id: existing.id, status: existing.status, expiresAt: existing.expiresAt, deviceId: device.id };
     }
-    const manageEntry = manageEntryOperationId(options.command);
-    if (manageEntry) await assertManageAdmissible({ db: options.db, userId: options.userId, trade: manageEntry, now });
+    if (prefetchedManage) await prefetchedManage;
     else await assertEntryAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, now });
   }
 
@@ -1063,23 +1079,26 @@ async function assertManageAdmissible(options: {
   db: SupabaseClient; userId: string; trade: Record<string, string>; now: number;
 }): Promise<void> {
   const nowIso = new Date(options.now).toISOString();
-  const { data: busy, error: busyError } = await options.db.from('tradovate_copier_commands')
-    .select('id')
-    .eq('user_id', options.userId)
-    .eq('command_type', 'copy-command')
-    .contains('payload', { command: { type: 'manage-leader-order', ...options.trade } })
-    .or(`created_at.gt.${new Date(options.now - MANAGE_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
-    .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
-    .limit(1)
-    .maybeSingle<{ id: string }>();
+  // Obě čtení souběžně, vyhodnocení v původním pořadí (busy, pak strop).
+  const [{ data: busy, error: busyError }, { count, error: countError }] = await Promise.all([
+    options.db.from('tradovate_copier_commands')
+      .select('id')
+      .eq('user_id', options.userId)
+      .eq('command_type', 'copy-command')
+      .contains('payload', { command: { type: 'manage-leader-order', ...options.trade } })
+      .or(`created_at.gt.${new Date(options.now - MANAGE_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
+      .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
+      .limit(1)
+      .maybeSingle<{ id: string }>(),
+    options.db.from('tradovate_copier_commands')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', options.userId)
+      .eq('command_type', 'copy-command')
+      .contains('payload', { command: { type: 'manage-leader-order' } })
+      .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString()),
+  ]);
   if (busyError) throw new Error(`copier-relay-entry-lookup-failed: ${busyError.message}`);
   if (busy) throw new Error('copier-relay-entry-busy');
-  const { count, error: countError } = await options.db.from('tradovate_copier_commands')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', options.userId)
-    .eq('command_type', 'copy-command')
-    .contains('payload', { command: { type: 'manage-leader-order' } })
-    .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString());
   if (countError) throw new Error(`copier-relay-entry-lookup-failed: ${countError.message}`);
   if ((count ?? 0) >= MANAGE_DAILY_CAP) throw new Error('copier-relay-entry-daily-cap');
 }
@@ -1106,25 +1125,28 @@ async function assertEntryAdmissible(options: {
   db: SupabaseClient; userId: string; deviceId: string; now: number;
 }): Promise<void> {
   const nowIso = new Date(options.now).toISOString();
-  const { data: busy, error: busyError } = await options.db.from('tradovate_copier_commands')
-    .select('id')
-    .eq('user_id', options.userId)
-    .eq('device_id', options.deviceId)
-    .eq('command_type', 'copy-command')
-    .contains('payload', { command: { type: 'place-leader-entry' } })
-    .or(`created_at.gt.${new Date(options.now - ENTRY_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
-    // Visící `claimed` starší než 2 min nesmí trvale blokovat (worker už má výsledek nebo spadl).
-    .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
-    .limit(1)
-    .maybeSingle<{ id: string }>();
+  // Obě čtení souběžně, vyhodnocení v původním pořadí (busy, pak strop).
+  const [{ data: busy, error: busyError }, { count, error: countError }] = await Promise.all([
+    options.db.from('tradovate_copier_commands')
+      .select('id')
+      .eq('user_id', options.userId)
+      .eq('device_id', options.deviceId)
+      .eq('command_type', 'copy-command')
+      .contains('payload', { command: { type: 'place-leader-entry' } })
+      .or(`created_at.gt.${new Date(options.now - ENTRY_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
+      // Visící `claimed` starší než 2 min nesmí trvale blokovat (worker už má výsledek nebo spadl).
+      .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
+      .limit(1)
+      .maybeSingle<{ id: string }>(),
+    options.db.from('tradovate_copier_commands')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', options.userId)
+      .eq('command_type', 'copy-command')
+      .contains('payload', { command: { type: 'place-leader-entry' } })
+      .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString()),
+  ]);
   if (busyError) throw new Error(`copier-relay-entry-lookup-failed: ${busyError.message}`);
   if (busy) throw new Error('copier-relay-entry-busy');
-  const { count, error: countError } = await options.db.from('tradovate_copier_commands')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', options.userId)
-    .eq('command_type', 'copy-command')
-    .contains('payload', { command: { type: 'place-leader-entry' } })
-    .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString());
   if (countError) throw new Error(`copier-relay-entry-lookup-failed: ${countError.message}`);
   if ((count ?? 0) >= ENTRY_DAILY_CAP) throw new Error('copier-relay-entry-daily-cap');
 }

@@ -24,7 +24,8 @@ export interface MobilePosition {
 }
 
 export function mobileOpenPnl(account: LiveAccount | undefined): number | null {
-  return account && account.unrealizedPnlSource !== 'stale' && finite(account.unrealizedPnl)
+  // Pozice z workeru novější než čtení P&L: P&L patří k dřívějšímu stavu.
+  return account && account.unrealizedPnlSource !== 'stale' && !account.unrealizedPnlBehindPosition && finite(account.unrealizedPnl)
     ? account.unrealizedPnl : null;
 }
 export function mobileGroupOpenPnl(accounts: Array<LiveAccount | undefined>): number | null {

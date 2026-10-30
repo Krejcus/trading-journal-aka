@@ -433,7 +433,8 @@ describe('bootstrapCopierRuntime', () => {
     const open = controller.status().exposure;
     expect(open!.positions).toEqual(expect.arrayContaining([
       { accountId: 100, symbol: 'MNQU6', netQuantity: 1 },
-      { accountId: 200, symbol: 'MNQU6', netQuantity: 1 },
+      // Kopii followera vyplnil mock (fill 1 @ 29 500) → průměr z fillů (zobrazení, 30. 10.).
+      { accountId: 200, symbol: 'MNQU6', netQuantity: 1, avgPrice: 29_500 },
     ]));
     expect(open!.followers).toEqual([{ accountId: 200, ok: true, detail: null }]);
     expect(open!.verifiedAt).toBeGreaterThan(flat!.verifiedAt);
@@ -450,6 +451,105 @@ describe('bootstrapCopierRuntime', () => {
     broker.setConnected(false);
     await controller.waitForIdle();
     expect(controller.status().exposure).toBeNull();
+    controller.stop();
+  });
+
+  it('expozice nese průměr vstupu z fillů, jen když lot sedí na kusy pozice (zobrazení v grafu, 30. 10.)', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 29_500 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-entry-avg', quantity: 2, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: 'leader-avg-1', tag: '', brokerOrderId: 'leader-entry-avg', accountId: 100,
+      symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 29_500, filledAt: 100,
+    } });
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: 'leader-avg-2', tag: '', brokerOrderId: 'leader-entry-avg', accountId: 100,
+      symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 29_501, filledAt: 101,
+    } });
+    broker.setPosition(100, 'MNQU6', 2);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    await controller.waitForIdle();
+    // Kopie followera vyplní mock broker (fill 2 @ 29 500 + pozice 2).
+    const positions = controller.status().exposure!.positions;
+    expect(positions.find(position => position.accountId === 100)).toEqual({ accountId: 100, symbol: 'MNQU6', netQuantity: 2, avgPrice: 29_500.5 });
+    expect(positions.find(position => position.accountId === 200)).toEqual({ accountId: 200, symbol: 'MNQU6', netQuantity: 2, avgPrice: 29_500 });
+
+    // Lot followera nesedí na kusy pozice (fill navíc bez změny pozice) → bez průměru.
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: 'follower-avg-extra', tag: '', brokerOrderId: 'follower-extra', accountId: 200,
+      symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 29_510, filledAt: 102,
+    } });
+    await controller.waitForIdle();
+    expect(controller.status().exposure!.positions.find(position => position.accountId === 200)).toEqual({ accountId: 200, symbol: 'MNQU6', netQuantity: 2 });
+
+    // Pozice se změnila dřív než lot (fill ještě nedorazil) → průměr neznámý, ne starý.
+    broker.setPosition(100, 'MNQU6', 3);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 3 } });
+    await controller.waitForIdle();
+    expect(controller.status().exposure!.positions.find(position => position.accountId === 100)).toEqual({ accountId: 100, symbol: 'MNQU6', netQuantity: 3 });
+    controller.stop();
+  });
+
+  it('broker netPrice ze streamu po přepisu pozic z REST (reconcile) neplatí (oponentura 30. 10., nález 4)', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    broker.setPosition(100, 'MNQU6', 2);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 }, displayAveragePrice: 29_499.75 });
+    await controller.waitForIdle();
+    const leader = () => controller.status().exposure!.positions.find(position => position.accountId === 100);
+    expect(leader()).toEqual({ accountId: 100, symbol: 'MNQU6', netQuantity: 2, avgPrice: 29_499.75 });
+    // Stejné kusy z REST snapshotu, ale průměr ze streamu k nim už nepatří.
+    await controller.reconcile();
+    expect(leader()).toEqual({ accountId: 100, symbol: 'MNQU6', netQuantity: 2 });
+    controller.stop();
+  });
+
+  it('broker netPrice ze streamu má přednost před průměrem z fillů, jen při shodě kusů (zobrazení, 30. 10.)', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 29_500 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-entry-net', quantity: 2, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: 'leader-net-1', tag: '', brokerOrderId: 'leader-entry-net', accountId: 100,
+      symbol: 'MNQU6', side: 'Buy', quantity: 2, price: 29_500, filledAt: 100,
+    } });
+    broker.setPosition(100, 'MNQU6', 2);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 }, displayAveragePrice: 29_499.75 });
+    await controller.waitForIdle();
+    const leader = () => controller.status().exposure!.positions.find(position => position.accountId === 100);
+    expect(leader()).toEqual({ accountId: 100, symbol: 'MNQU6', netQuantity: 2, avgPrice: 29_499.75 });
+
+    // Broker průměr k jiným kusům (pozice mezitím 3) se nepoužije; lot 2 taky nesedí → bez průměru.
+    broker.setPosition(100, 'MNQU6', 3);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 3 } });
+    await controller.waitForIdle();
+    expect(leader()).toEqual({ accountId: 100, symbol: 'MNQU6', netQuantity: 3 });
+
+    // Position bez netPrice smaže starý broker průměr — návrat na průměr z fillů (lot 2).
+    broker.setPosition(100, 'MNQU6', 2);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    await controller.waitForIdle();
+    expect(leader()).toEqual({ accountId: 100, symbol: 'MNQU6', netQuantity: 2, avgPrice: 29_500 });
     controller.stop();
   });
 

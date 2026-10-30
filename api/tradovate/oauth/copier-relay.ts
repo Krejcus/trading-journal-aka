@@ -31,12 +31,13 @@ import {
 } from '../../../server/snapshotImagePush.js';
 import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '../../../server/tvAlertNotifications.js';
 import { validateTvBarsCapture } from '../../../lib/tradingViewBars.js';
-import { tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
+import { copierStatusNudgeTopic, tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
 
-/** Téma a klíč kanálu ceny pro worker; bez tajemství pole chybí (nikdy 502). */
-const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string } => {
+/** Téma a klíč kanálu ceny + téma budíčku statusu pro worker; bez tajemství pole chybí (nikdy 502). */
+const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string; nudgeTopic?: string } => {
   const grant = tvPriceChannelGrant(deviceId);
-  return grant ? { priceTopic: grant.topic, priceKey: grant.key } : {};
+  const nudgeTopic = copierStatusNudgeTopic(deviceId);
+  return { ...(grant ? { priceTopic: grant.topic, priceKey: grant.key } : {}), ...(nudgeTopic ? { nudgeTopic } : {}) };
 };
 
 const snapshotRateLimiter = new CopierSnapshotRateLimiter();
@@ -377,7 +378,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Jen živé zařízení: heartbeat mladší 10 s vyžaduje platnou autentizaci
       // zařízení, takže revokovaný Mac kanál (deterministický klíč) do 10 s ztratí.
       const priceChannel = runtime.connected === true ? tvPriceChannelGrant(deviceId) : null;
-      return timed(200, priceChannel ? { ...visible, priceChannel } : visible);
+      // Budíček statusu (jen podnět ke čtení, bez dat) — stejně vedle statusu, ne v něm.
+      const nudgeTopic = runtime.connected === true ? copierStatusNudgeTopic(deviceId) : null;
+      return timed(200, {
+        ...visible,
+        ...(priceChannel ? { priceChannel } : {}),
+        ...(nudgeTopic ? { nudgeTopic } : {}),
+      });
     }
     if (req.method === 'POST') {
       if (req.body?.command?.type === 'snapshot-test' && req.body?.command?.repairCamera !== true) {
@@ -412,9 +419,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         // 30. 10.: 6 s místo 2,2 s — správa z grafu (posun, vstup) trvá ve workeru
         // 1–3 s; miss znamenal klientský polling s dalšími RTT (měřeno 1,5–2,5 s celkem).
-        const longPollDeadline = Date.now() + 6_000;
+        const longPollStartedAt = Date.now();
+        const longPollDeadline = longPollStartedAt + 6_000;
         while (Date.now() < longPollDeadline) {
-          await new Promise(resolve => setTimeout(resolve, 100));
+          // 30. 10.: prvních 1,5 s krok 25 ms (výsledek v průměru o ~40 ms dřív), pak
+          // zpět 100 ms — levné čtení podle id, jen po dobu čekání na tento příkaz.
+          await new Promise(resolve => setTimeout(resolve, Date.now() - longPollStartedAt < 1_500 ? 25 : 100));
           const current = await readTradovateCopierCommand({ db, userId, commandId: queued.id });
           if (current.status === 'succeeded' || current.status === 'rejected' || current.status === 'expired') {
             resolution = current;

@@ -70,7 +70,7 @@ interface TradovateUserAccountAutoLiqEntity {
   trailingMaxDrawdown?: number;
   trailingMaxDrawdownLimit?: number;
 }
-interface TradovatePositionEntity { accountId: number; contractId: number; netPos: number }
+interface TradovatePositionEntity { accountId: number; contractId: number; netPos: number; netPrice?: number | null }
 interface TradovateRawOrderEntity {
   id: number;
   accountId: number;
@@ -1465,11 +1465,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         notifyAccountDataChange((item.entity as { accountId?: number }).accountId, 'position');
         const position = item.entity as TradovatePositionEntity;
         await hydrateContracts([position.contractId]);
+        // netPrice jen pro zobrazení (stejný zdroj jako REST averagePrice read modelu).
+        const displayAveragePrice = typeof position.netPrice === 'number' && Number.isFinite(position.netPrice) && position.netPrice > 0
+          ? position.netPrice
+          : undefined;
         emitBrokerState({ type: 'position', position: {
           accountId: position.accountId,
           symbol: contracts.get(position.contractId) as string,
           netQuantity: position.netPos,
-        } });
+        }, ...(displayAveragePrice != null && position.netPos !== 0 ? { displayAveragePrice } : {}) });
       } else if (entityType === 'fill') {
         const fill = item.entity as TradovateFillEntity;
         // REST lookup smí fill započíst do Order grafu, ale nesmí jej označit

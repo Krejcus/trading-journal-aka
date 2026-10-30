@@ -285,6 +285,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, NENASAZENO)
+
+- **Podnět:** Filip: „chci tu objednávku vidět ihned a mohl ji posouvat“ + „je reálné dotáhnout live
+  na úroveň ATAS/NT/TV?“ → rozbor trhu `docs/reviews/live-quality-verdict-20261030.md` (Documents,
+  untracked): strop je topologie (DB fronta, polling, IBKR dávky, přetížený Mac), ne kód. Filip:
+  „udělej fázi 1 a změř to“. Návrh `docs/LIVE_HOT_PATH_PLAN.md`.
+- **Výchozí měření 30. 10.** (DB 3 dny p50 / log workeru odpoledne): posun SL created→claimed 388,
+  claimed→completed 1087 ms; vstup 427/528; náhled 359/275. Fronta ~450 ms = **created→kick 322 ms
+  (admission na serveru)** + kick→start 155 ms; broker 210–320 ms; ACK 200–440 ms. `created_at` se
+  bere na začátku enqueue, „fronta“ je hlavně ~6 sériových dotazů do DB. Kick REST z Prahy ~50–90 ms,
+  checkpoint fsync ~7–15 ms, status workeru ~39 KB.
+- **Oponentura návrhu: OPRAVIT PŘED IMPLEMENTACÍ** → odloženo F1b (server claimne za worker a pošle
+  podepsaný příkaz kick kanálem: restart s nerotující delivery, věčné `claimed`, hodiny z pushe,
+  klíč = oprávnění k execution, zúžené okno brzd) a F1c (výsledek kanálem před ACK vrátí čáru).
+- **Implementováno:** F1a broker `netPrice` ze streamu Position (`displayAveragePrice` mimo
+  `BrokerPosition`, controller `brokerDisplayAverages` svázaný s mapou účtu → REST přepis ho
+  zneplatní) s předností před průměrem z fillů; F1f souběžná čtení admission (existující operace,
+  busy, strop) s výběrem zařízení, vyhodnocení v původním pořadí, long-poll 25 ms první 1,5 s;
+  F1d budíček statusu (`copier-nudge-…`, worker po heartbeatu se změnou a po ACK, LIVE kickne poll
+  jen s otevřeným grafem, ≥ 250 ms, ≤ 60/min); F1e `localStorage['at:dev:hot-command-timings']`.
+  Spolu s dřívějším necommitnutým diffem (průměr z fillů, `openPnlBehindPosition`, INV-UI-03).
+- **Oponentura diffu:** OPRAVIT PŘED COMMITEM (tsc, 2 testy, objem budíčků, REST přepis průměru)
+  → opraveno → OK S VÝHRADAMI → výhrady zapracovány. Ověřeno: tsc, cílené sady (475 + 232).
+- **Odhad:** posun/vstup u brokera −0,1–0,15 s, výsledek v grafu −0,15 s, pozice a čáry po změně
+  u brokera −~0,25 s a hned se správnou cenou vstupu. Skok k ~0,6 s by dal až F1b s opravami.
+- **Měření po nasazení:** porovnat stejné rozklady (DB, `RELAY KICK přijat`/`RELAY CMD`/`EXECUTED`/
+  `ACK`, `at:dev:hot-command-timings`). Pořadí nasazení: server (push main) → worker.
+
+
 ### 2026-10-30 odpoledne — LIVE graf: živé štítky, tažení SL/TP, BE, karty obchodů, odeslání jedním klikem (Claude, nasazeno @ 92dfb252 + 60052239)
 
 - **Štítky pozice v grafu** jako u návrhu (`lib/liveChartOrderLines.ts`, overlay

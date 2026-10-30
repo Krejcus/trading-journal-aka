@@ -154,6 +154,8 @@ export interface TradovateAccountDataAccount {
     /** Broker is exact, estimated is derived from an exact anchor mark. */
     openPnlSource?: 'broker' | 'estimated' | 'stale';
     openPnlAsOf?: string | null;
+    /** Overlay workeru: pozice je novější než REST, `openPnL` patří k dřívějšímu stavu (jen karta obchodu). */
+    openPnlBehindPosition?: boolean;
     realizedPnL: number | null;
     weekRealizedPnL: number | null;
     cashUSD: number | null;

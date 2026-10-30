@@ -335,8 +335,29 @@ export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
   ageMs?: number;
   /** Téma a klíč kanálu ceny z TV vedle statusu; nikdy neukládat (INV-UI-04). */
   priceChannel?: unknown;
+  /** Téma budíčku statusu (jen podnět ke čtení); nikdy neukládat. */
+  nudgeTopic?: unknown;
 } | null> {
   return authenticatedRequest(`/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}`);
+}
+
+/**
+ * Měření horké cesty (docs/LIVE_HOT_PATH_PLAN.md §6): posledních 50 příkazů z grafu
+ * do `localStorage['at:dev:hot-command-timings']` — jen diagnostika, nic nečte zpět.
+ */
+const HOT_COMMAND_TIMINGS_KEY = 'at:dev:hot-command-timings';
+const HOT_COMMAND_TYPES = new Set(['preview-leader-entry', 'place-leader-entry', 'manage-leader-order']);
+function recordHotCommandTiming(command: LocalCopierAgentCommand, sentAt: number, via: 'inline' | 'poll' | 'error') {
+  try {
+    const inner = command.type === 'copy-command' ? (command.command as { type?: unknown; action?: unknown }) : null;
+    if (!inner || typeof inner.type !== 'string' || !HOT_COMMAND_TYPES.has(inner.type)) return;
+    const rows = JSON.parse(window.localStorage.getItem(HOT_COMMAND_TIMINGS_KEY) ?? '[]') as unknown[];
+    rows.push({ at: new Date().toISOString(), type: inner.type, ...(typeof inner.action === 'string' ? { action: inner.action } : {}),
+      ms: Math.round(performance.now() - sentAt), via });
+    window.localStorage.setItem(HOT_COMMAND_TIMINGS_KEY, JSON.stringify(Array.isArray(rows) ? rows.slice(-50) : []));
+  } catch {
+    // Diagnostika nesmí ovlivnit příkaz.
+  }
 }
 
 export async function executeTradovateCopierRelayCommand(
@@ -346,6 +367,7 @@ export async function executeTradovateCopierRelayCommand(
 ): Promise<LocalCopierAgentCommandResult> {
   const idempotencyKey = crypto.randomUUID();
   const perfCommand = `relay:${perfSlug(command.type)}`;
+  const sentAt = performance.now();
   perfMark(`${perfCommand}:send`);
   const queued = await authenticatedRequest<{
     id: string;
@@ -359,6 +381,7 @@ export async function executeTradovateCopierRelayCommand(
   });
   perfMark(`${perfCommand}:${queued.resolution ? 'inline' : 'queued'}`);
   if (queued.resolution) {
+    recordHotCommandTiming(command, sentAt, queued.resolution.status === 'succeeded' ? 'inline' : 'error');
     if (queued.resolution.status === 'succeeded' && queued.resolution.result) return queued.resolution.result as LocalCopierAgentCommandResult;
     const details = localCopierAgentErrorDetails(
       queued.resolution.result && typeof queued.resolution.result === 'object' && 'errorDetails' in queued.resolution.result
@@ -387,7 +410,10 @@ export async function executeTradovateCopierRelayCommand(
       { signal: options.signal },
     );
     perfMark(`${perfCommand}:poll`);
-    if (result.status === 'succeeded' && result.result) return result.result as LocalCopierAgentCommandResult;
+    if (result.status === 'succeeded' && result.result) {
+      recordHotCommandTiming(command, sentAt, 'poll');
+      return result.result as LocalCopierAgentCommandResult;
+    }
     if (result.status === 'rejected' || result.status === 'expired') {
       const details = localCopierAgentErrorDetails(
         result.result && typeof result.result === 'object' && 'errorDetails' in result.result

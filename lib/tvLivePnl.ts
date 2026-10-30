@@ -186,13 +186,16 @@ export function tvLivePnlDelta(legs: readonly TvLivePnlLeg[] | null | undefined,
 
 /**
  * Noha účtu z řádku LIVE: jen ověřené čtení pozic, jediná otevřená pozice
- * (P&L účtu = P&L té pozice) a kotva, která není „stale“.
+ * (P&L účtu = P&L té pozice) a kotva, která není „stale“ ani z doby před
+ * pozicí hlášenou workerem.
  */
 export function liveAccountTvLegs(
-  account: Pick<LiveAccount, 'positions' | 'unrealizedPnl' | 'unrealizedPnlSource' | 'unrealizedPnlUpdatedAt'> | undefined,
+  account: Pick<LiveAccount, 'positions' | 'unrealizedPnl' | 'unrealizedPnlSource' | 'unrealizedPnlUpdatedAt' | 'unrealizedPnlBehindPosition'> | undefined,
   positionsVerified: boolean,
 ): TvLivePnlLeg[] | null {
-  if (!account || !positionsVerified || account.unrealizedPnlSource === 'stale' || !finite(account.unrealizedPnl)) return null;
+  // Kotva z P&L jiné pozice (worker už zná novou, REST ne) — do dalšího REST čtení nic.
+  if (!account || !positionsVerified || account.unrealizedPnlSource === 'stale' || account.unrealizedPnlBehindPosition
+    || !finite(account.unrealizedPnl)) return null;
   const open = account.positions.filter(position => position.netPosition !== 0);
   if (open.length !== 1 || open[0].netPrice == null) return null;
   const anchorAt = Date.parse(account.unrealizedPnlUpdatedAt ?? '');
