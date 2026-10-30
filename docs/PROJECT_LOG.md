@@ -318,7 +318,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   strop správy (100) nezastaví (snižuje riziko; busy/rozestup platí). Otevřené: strop správy hlásí
   stejný token jako vstupy (`entry-daily-cap`) — vlastní token + text v UI; test stropu ověřuje jen
   hranici, ne filtry dotazu.
-- **Měření po nasazení:** porovnat stejné rozklady (DB, `RELAY KICK přijat`/`RELAY CMD`/`EXECUTED`/
+- **Změřeno po nasazení 19:49–19:50** (1 vstup + 3 posuny SL, malý vzorek): prohlížeč klik→výsledek
+  963 / 970 / 1169 / 1567 ms; DB created→completed 695 / 690 / 917 / 1313 ms (mimo DB ~250–280 ms:
+  auth getUser + resolve před insertem, long-poll a odpověď). Fronta created→start medián 0,44 → 0,36 s
+  (created→kick 0,32 → 0,25 s, kick→start 0,16 s beze změny), claim posunu 0,39 → 0,27 s; broker
+  0,26–0,63 s a ACK 0,25–0,41 s beze změny. Zbývající rezervy: auth+resolve před enqueue (~0,2 s),
+  výběr zařízení 2 kola, převzetí workerem (F1b) a čekání na ACK (F1c).
+- **Měření po nasazení (původní plán):** porovnat stejné rozklady (DB, `RELAY KICK přijat`/`RELAY CMD`/`EXECUTED`/
   `ACK`, `at:dev:hot-command-timings`). Pořadí nasazení: server (push main) → worker.
 
 
