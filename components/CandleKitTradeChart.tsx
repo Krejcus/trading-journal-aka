@@ -89,6 +89,7 @@ import {
   nearestBuiltinTimeframe,
   updateFairValueGapAccumulator,
   fairValueGapsWithFormingBars,
+  marketStructureWithFormingBars,
   updateMarketStructureAccumulator,
   type BuiltinMarketTimeframe,
   type FairValueGap,
@@ -1020,13 +1021,16 @@ const loadKeepDrawing = (): boolean => {
 
 export type CandleKitDrawingEngine = NonNullable<ChartViewApi['drawing']>['engine'];
 
-/** Generovaná (needitovaná uživatelem) čára BoS/CHoCH mimo přehrávání. */
+/**
+ * Generovaná (needitovaná uživatelem) čára BoS/CHoCH mimo přehrávání. Id je
+ * dané zlomem, ne pořadím — zlom z tvořící se svíčky pak přidá/odebere jen
+ * svou čáru a ostatní zůstanou.
+ */
 const structureDrawing = (
   event: MarketStructureEvent,
-  index: number,
   style: { bullishColor: string; bearishColor: string; lineWidth: number },
 ): Parameters<CandleKitDrawingEngine['commit']>[0] => ({
-  id: `auto-structure-${event.breakTime}-${index}`,
+  id: `auto-structure-${event.type}-${event.direction}-${event.pivotTime}-${event.breakTime}`,
   tool: 'TrendLine',
   points: [{ time: event.pivotTime, price: event.price }, { time: event.breakTime, price: event.price }],
   style: {
@@ -1036,6 +1040,21 @@ const structureDrawing = (
     fill: null,
   },
 });
+
+/** Srovná čáry BoS/CHoCH na `events`: odebere navíc, přidá chybějící. Vrací, zda se něco změnilo. */
+const syncStructureDrawings = (
+  engine: CandleKitDrawingEngine,
+  events: readonly { event: MarketStructureEvent }[],
+  style: { bullishColor: string; bearishColor: string; lineWidth: number },
+): boolean => {
+  const wanted = events.map(({ event }) => structureDrawing(event, style));
+  const wantedIds = new Set(wanted.map(drawing => drawing.id));
+  const stale = engine.getDrawings().filter(drawing => drawing.id.startsWith('auto-structure-') && !wantedIds.has(drawing.id));
+  const missing = wanted.filter(drawing => !engine.getById(drawing.id));
+  stale.forEach(drawing => engine.remove(drawing.id));
+  missing.forEach(drawing => engine.commit(drawing));
+  return stale.length > 0 || missing.length > 0;
+};
 
 export const AlphaTradeDrawingToolbar: React.FC<{
   isDark: boolean;
@@ -1813,6 +1832,11 @@ const chartTailAfterData = (
   }
   return tail;
 };
+const sameCandles = (previous: readonly MarketCandle[], next: readonly MarketCandle[]) => previous.length === next.length
+  && previous.every((bar, index) => {
+    const other = next[index];
+    return bar.time === other.time && bar.open === other.open && bar.high === other.high && bar.low === other.low && bar.close === other.close;
+  });
 const sharedIndicatorSettingsCache = new Map<string, AlphaTradeIndicatorSettings>();
 
 /** Uložená obálka — buď z backtest session, nebo z globálního localStorage. */
@@ -2891,9 +2915,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     return next.gaps;
   }, [candles, entryMs, renderedCandleWindow.end, renderedCandleWindow.start, replayActive, visibleFvg]);
   const marketStructureAccumulatorRef = useRef<MarketStructureAccumulator | null>(null);
+  // Vstup posledního výpočtu struktury (data) — k němu se počítá tvořící se bar.
+  const structureInputRef = useRef<MarketCandle[]>([]);
+  const structureFormingBarsRef = useRef<MarketCandle[]>([]);
   const structureEvents = useMemo(() => {
     if (!visibleStructure) {
       marketStructureAccumulatorRef.current = null;
+      structureInputRef.current = [];
       return [];
     }
     const firstRenderedTime = visibleCandles[0]?.time ?? Number.NEGATIVE_INFINITY;
@@ -2901,6 +2929,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const input = candleWindowSlice(candles, { start: contextStart, end: renderedCandleWindow.end });
     const next = updateMarketStructureAccumulator(marketStructureAccumulatorRef.current, input);
     marketStructureAccumulatorRef.current = next;
+    structureInputRef.current = input;
     return next.events
       .filter(event => event.breakTime >= firstRenderedTime);
   }, [candles, renderedCandleWindow.end, renderedCandleWindow.start, visibleCandles, visibleStructure]);
@@ -3030,12 +3059,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // neznají — bez ní by zaplnění z ní do obnovy dat zmizelo a zase se
       // vrátilo (problikávání).
       const forming = chartTailAfterData(controller.getBars(), input.at(-1));
-      const previous = fvgFormingBarsRef.current;
-      const same = previous.length === forming.length && previous.every((bar, index) => {
-        const next = forming[index];
-        return bar.time === next.time && bar.open === next.open && bar.high === next.high && bar.low === next.low && bar.close === next.close;
-      });
-      if (same) return;
+      if (sameCandles(fvgFormingBarsRef.current, forming)) return;
       fvgFormingBarsRef.current = forming;
       renderedFvgsRef.current = deriveRenderedFvgsRef.current(
         fairValueGapsWithFormingBars(fvgAccumulatorRef.current, input, forming),
@@ -3050,7 +3074,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       fvgFormingBarsRef.current = [];
     };
   }, [chartApiEpoch, visibleFvg]);
-  const structureOverlayEvents = useMemo(() => {
+  // Zlomy ze struktury dat a z konce řady grafu (tvořící se svíčka) → co se kreslí.
+  const deriveStructureOverlay = (forming: readonly MarketCandle[]) => {
     const style = indicatorSettings.structure;
     const shown = (event: MarketStructureEvent) => (event.type === 'BOS' && style.showBos) || (event.type === 'CHoCH' && style.showChoch);
     // Jen posledních N (jako FVG). V detailu mimo přehrávání „posledních“
@@ -3058,8 +3083,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     // běžel, vypadly právě události kolem obchodu. V přehrávání do kurzoru.
     const limit = Math.max(1, Math.min(50, Number(style.maxCount) || 10));
     const anchorTime = centeredTradeView && !replayActive ? Math.floor(exitMs / 1000) + 30 * 60 : Number.POSITIVE_INFINITY;
+    const firstRenderedTime = visibleCandles[0]?.time ?? Number.NEGATIVE_INFINITY;
+    const withForming = visibleStructure && forming.length
+      ? marketStructureWithFormingBars(marketStructureAccumulatorRef.current, structureInputRef.current, forming)
+        .filter(event => event.breakTime >= firstRenderedTime)
+      : structureEvents;
     const regular = visibleStructure
-      ? structureEvents.filter(event => shown(event) && event.breakTime <= anchorTime).slice(-limit)
+      ? withForming.filter(event => shown(event) && event.breakTime <= anchorTime).slice(-limit)
       : [];
     const events = uniqueStructureEvents([
       ...regular,
@@ -3072,22 +3102,67 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         Math.floor((event.pivotTime + event.breakTime) / 2),
       ),
     }));
-  }, [centeredTradeView, entryStructure, exitMs, indicatorSettings.structure, replayActive, showEntryStructure, structureEvents, visibleCandles, visibleStructure]);
+  };
+  const deriveStructureOverlayRef = useRef(deriveStructureOverlay);
+  deriveStructureOverlayRef.current = deriveStructureOverlay;
+  const structureOverlayEvents = useMemo(() => {
+    // Konec řady čte přímo z grafu (vůči novým datům), stejně jako FVG.
+    const forming = visibleStructure ? chartTailAfterData(apiRef.current?.controller.getBars() ?? [], structureInputRef.current.at(-1)) : [];
+    structureFormingBarsRef.current = forming;
+    return deriveStructureOverlay(forming);
+  },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [centeredTradeView, entryStructure, exitMs, indicatorSettings.structure, replayActive, showEntryStructure, structureEvents, visibleCandles, visibleStructure]);
+  // Do kreslení jen při novém výpočtu: jiný render nesmí přepsat novější
+  // stav z posluchače řady (zlom z tvořící se svíčky) starým.
   const structureOverlayEventsRef = useRef(structureOverlayEvents);
-  structureOverlayEventsRef.current = structureOverlayEvents;
+  const structureOverlayMemoRef = useRef(structureOverlayEvents);
+  if (structureOverlayMemoRef.current !== structureOverlayEvents) {
+    structureOverlayMemoRef.current = structureOverlayEvents;
+    structureOverlayEventsRef.current = structureOverlayEvents;
+  }
+  /** Mimo přehrávání jsou čáry BoS/CHoCH kresby grafu — srovnat je na aktuální zlomy. */
+  const syncStructureLines = () => {
+    const engine = apiRef.current?.drawing?.engine;
+    if (!engine || !syncStructureDrawings(engine, structureOverlayEventsRef.current, indicatorSettingsRef.current.structure)) return;
+    // Nové generované čáry chránit stejně jako ty z `handleReady`.
+    protectedDrawingsUnsubscribeRef.current?.();
+    protectedDrawingsUnsubscribeRef.current = protectGeneratedDrawings(engine);
+  };
+  const syncStructureLinesRef = useRef(syncStructureLines);
+  syncStructureLinesRef.current = syncStructureLines;
   // LIVE se s novou svíčkou nepřestavuje (`liveSeries`), takže čáry BoS/CHoCH
   // z `handleReady` by zůstaly z doby otevření grafu — srovnat je tady.
   useEffect(() => {
     if (!liveSeries || replayActive) return;
-    const engine = apiRef.current?.drawing?.engine;
-    if (!engine) return;
-    const style = indicatorSettingsRef.current.structure;
-    const wanted = structureOverlayEvents.map(({ event }, index) => structureDrawing(event, index, style));
-    const shown = engine.getDrawings().filter(drawing => drawing.id.startsWith('auto-structure-'));
-    if (shown.length === wanted.length && wanted.every(drawing => engine.getById(drawing.id))) return;
-    shown.forEach(drawing => engine.remove(drawing.id));
-    wanted.forEach(drawing => engine.commit(drawing));
+    syncStructureLinesRef.current();
   }, [chartApiEpoch, liveSeries, replayActive, structureOverlayEvents]);
+  // BoS/CHoCH živě jako FVG: zlom z tvořící se svíčky (živá přes `updateBar`,
+  // přehrávaná) se ukáže hned, jak je zavření za pivotem, a zmizí, když se
+  // cena vrátí. Jen kreslení — data, mapa vstupu ani magnet ho nevidí.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api || !visibleStructure) {
+      structureFormingBarsRef.current = [];
+      return;
+    }
+    const controller = api.controller;
+    const series = controller.getSeries() as ISeriesApi<'Candlestick'>;
+    const onDataChanged = () => {
+      const forming = chartTailAfterData(controller.getBars(), structureInputRef.current.at(-1));
+      if (sameCandles(structureFormingBarsRef.current, forming)) return;
+      structureFormingBarsRef.current = forming;
+      structureOverlayEventsRef.current = deriveStructureOverlayRef.current(forming);
+      if (!replayActive) syncStructureLinesRef.current();
+      structurePrimitiveRequestUpdateRef.current?.();
+    };
+    series.subscribeDataChanged(onDataChanged);
+    onDataChanged();
+    return () => {
+      try { series.unsubscribeDataChanged(onDataChanged); } catch { /* graf už zmizel */ }
+      structureFormingBarsRef.current = [];
+    };
+  }, [chartApiEpoch, replayActive, visibleStructure]);
   const drawingMagnetSourcesRef = useRef<DrawingMagnetSources>({ candles: [] });
   const magnetLevelStyle = indicatorSettings.levels;
   const magnetLastCandleTime = visibleCandles.at(-1)?.time ?? 0;
@@ -4294,7 +4369,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         overlayArtifactsRef.current.primitives.push(fvgPrimitive);
       }
       const structureStyle = indicatorSettingsRef.current.structure;
-      if (!replayActive) structureOverlayEventsRef.current.forEach(({ event }, index) => commitOnce(structureDrawing(event, index, structureStyle)));
+      if (!replayActive) structureOverlayEventsRef.current.forEach(({ event }) => commitOnce(structureDrawing(event, structureStyle)));
 
       // CandleKit does not currently provide a text drawing tool. Render the
       // market-structure caption as a tiny series primitive so it remains
@@ -4305,6 +4380,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           target.useMediaCoordinateSpace(({ context, mediaSize }) => {
             context.save();
             const currentStructureStyle = indicatorSettingsRef.current.structure;
+            // „Bez textu“: jen čára (v přehrávání ji kreslí tenhle primitiv).
+            const structureText = currentStructureStyle.textSize !== 'none';
             const structureFontSize = currentStructureStyle.textSize === 'tiny'
               ? 9 : currentStructureStyle.textSize === 'small' ? 10 : currentStructureStyle.textSize === 'large' ? 14 : 12;
             context.font = `600 ${structureFontSize}px ${chartStyle.fontFamily}`;
@@ -4331,6 +4408,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
                 context.lineTo(endX, y);
                 context.stroke();
               }
+              if (!structureText) return;
               if (currentStructureStyle.textBackground) {
                 const width = context.measureText(event.type).width + 6;
                 context.fillStyle = colorWithOpacity(currentStructureStyle.textBackgroundColor, 0.9);

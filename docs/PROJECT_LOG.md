@@ -285,6 +285,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-30 — BoS/CHoCH živě a „Bez textu“ (Claude, větev `claude/structure-realtime-20261030`, NENASAZENO)
+
+- Filip: „velikost textu → bez textu (jen čára)“ a „vykreslovat realtime, ne až
+  po uzavření — jako FVG: když svíčka splní podmínku, čára se udělá, když se
+  vrátí, zmizí“.
+- **Bez textu**: `StructureIndicatorSettings.textSize` má `none`; primitiv
+  popisků při něm nekreslí text ani pozadí (v přehrávání dál kreslí čáru),
+  dialog skryje volby pozadí. Validace vzhledu `none` přijímá.
+- **Živě**: zlomy se počítají i s koncem řady grafu za daty (živá svíčka přes
+  `updateBar`, přehrávaná svíčka) stejně jako FVG — `marketStructureWithFormingBars`
+  nad akumulátorem dat, přepsaný poslední bar ze `tailCheckpoint` (stav před
+  posledním barem; pivoty i zlomy jsou neměnné, stačí počty). Potvrzení dál
+  zavřením (cenou tvořící se svíčky), knot nestačí — jako TradingView na
+  živém baru. Jen kreslení: data, mapa vstupu, hodnocení, AI export ani
+  magnet tvořící se zlom nevidí.
+- Posluchač `subscribeDataChanged` (jako FVG) přepočítá jen při změně konce
+  řady; mimo přehrávání srovná kresby rozdílově. Id čar je teď dané zlomem
+  (`auto-structure-{typ}-{směr}-{pivot}-{zlom}`), ne pořadím — tvořící se
+  zlom přidá/odebere jen svou čáru. Nově přidané generované čáry se znovu
+  chrání (`protectGeneratedDrawings`).
+- Ověřeno na dočasné zkušební stránce (skutečný workspace, vymyšlené svíčky,
+  řízená živá cena): zavření pod pivot low → CHoCH hned na tvořící se svíčce,
+  zpět nad → zmizí, znovu pod → je zpět; po uzavření minuty a obnově dat čára
+  zůstala (90 vzorků po 100 ms bez výpadku); „Bez textu“ nechá jen čáru.
+  Přehrávání backtestu jde stejnou cestou, ale v prohlížeči ověřené není.
+- Testy: `tests/marketStructureForming.test.ts` (shoda s plným výpočtem pro
+  přepsaný bar, připsané bary i náhodnou řadu; validace `none`). Cílené sady
+  52/52 a tsc čisté při DISARMED; celá sada čeká na DISARM (od 7:23 ARMED).
+
 ### 2026-10-30 — Obchodování z grafu: test fází 2a a 2b naostro + oprava „co jsem viděl“ (Claude, oprava nasazena 07:18 @ 666ed1cc)
 
 - **Nález v prvním testu (06:52).** Zrušení čekajícího vstupu z appky

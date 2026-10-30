@@ -41,7 +41,8 @@ export interface StructureIndicatorSettings {
   bullishColor: string;
   bearishColor: string;
   lineWidth: 1 | 2 | 3 | 4;
-  textSize: 'tiny' | 'small' | 'medium' | 'large';
+  /** `none` = jen čára, bez popisku BOS/CHoCH. */
+  textSize: 'none' | 'tiny' | 'small' | 'medium' | 'large';
   textBackground: boolean;
   textBackgroundColor: string;
   /** Kolik posledních BOS/CHoCH kreslit (jako „Max počet aktivních FVG“). */

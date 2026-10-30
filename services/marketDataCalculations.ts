@@ -923,6 +923,18 @@ export interface MarketStructureAccumulator {
   trend: 'bullish' | 'bearish' | null;
   previousAtr: number | null;
   initialTrueRanges: number[];
+  /** Stav před posledním barem — z něj se přepočítá tvořící se svíčka (jen kreslení). */
+  tailCheckpoint?: MarketStructureCheckpoint | null;
+}
+
+interface MarketStructureCheckpoint {
+  candleCount: number;
+  eventCount: number;
+  lastPivotHigh: MarketStructureAccumulator['lastPivotHigh'];
+  lastPivotLow: MarketStructureAccumulator['lastPivotLow'];
+  trend: MarketStructureAccumulator['trend'];
+  previousAtr: number | null;
+  initialTrueRangeCount: number;
 }
 
 const appendMarketStructureCandle = (
@@ -1015,13 +1027,70 @@ export function updateMarketStructureAccumulator(
     trend: null,
     previousAtr: null,
     initialTrueRanges: [],
+    tailCheckpoint: null,
   };
   const start = canAppend ? previous.candleCount : 0;
-  for (let index = start; index < candles.length; index += 1) {
+  for (let index = start; index < candles.length - 1; index += 1) {
     appendMarketStructureCandle(state, candles, index);
+  }
+  if (candles.length > 0) {
+    // Pivoty i zlomy jsou neměnné objekty — stačí si pamatovat počty.
+    state.tailCheckpoint = {
+      candleCount: candles.length - 1,
+      eventCount: state.events.length,
+      lastPivotHigh: state.lastPivotHigh,
+      lastPivotLow: state.lastPivotLow,
+      trend: state.trend,
+      previousAtr: state.previousAtr,
+      initialTrueRangeCount: state.initialTrueRanges.length,
+    };
+    appendMarketStructureCandle(state, candles, candles.length - 1);
   }
   state.candleCount = candles.length;
   state.lastTime = lastTime;
   state.lastSignature = lastSignature;
   return state;
+}
+
+/**
+ * BOS/CHoCH s rozpracovanou (živou nebo přehrávanou) svíčkou na konci, jako
+ * TradingView s potvrzením zavřením na živém baru: zlom se ukáže, jakmile je
+ * cena (zavření tvořící se svíčky) za pivotem, a zmizí, když se cena vrátí.
+ * `base` je akumulátor nad `input` (data grafu), `tail` konec řady grafu od
+ * posledního baru dat (přepsaný poslední bar a/nebo připsané bary). Jen pro
+ * kreslení — nikdy do dat, hodnocení, mapy vstupu ani úložiště.
+ */
+export function marketStructureWithFormingBars(
+  base: MarketStructureAccumulator | null,
+  input: MarketCandle[],
+  tail: readonly MarketCandle[],
+): MarketStructureEvent[] {
+  if (!base) return [];
+  const last = input.at(-1);
+  if (!last) return base.events;
+  const bars = tail.filter(bar => bar.time >= last.time);
+  const replaced = bars[0]?.time === last.time ? bars.shift()! : null;
+  const replacesLast = replaced !== null
+    && (replaced.open !== last.open || replaced.high !== last.high || replaced.low !== last.low || replaced.close !== last.close);
+  if (!replacesLast) return bars.length ? updateMarketStructureAccumulator(base, [...input, ...bars]).events : base.events;
+  const candles = [...input.slice(0, -1), { ...replaced, volume: last.volume }, ...bars];
+  const checkpoint = base.tailCheckpoint;
+  if (!checkpoint || base.candleCount !== input.length || checkpoint.candleCount !== input.length - 1) {
+    return updateMarketStructureAccumulator(null, candles).events;
+  }
+  // Stav před posledním barem dat platí dál (předchozí bary se nemění).
+  const beforeLast = input[input.length - 2];
+  return updateMarketStructureAccumulator({
+    ...base,
+    lastTime: beforeLast?.time ?? null,
+    lastSignature: candleSignature(beforeLast),
+    candleCount: checkpoint.candleCount,
+    events: base.events.slice(0, checkpoint.eventCount),
+    lastPivotHigh: checkpoint.lastPivotHigh,
+    lastPivotLow: checkpoint.lastPivotLow,
+    trend: checkpoint.trend,
+    previousAtr: checkpoint.previousAtr,
+    initialTrueRanges: base.initialTrueRanges.slice(0, checkpoint.initialTrueRangeCount),
+    tailCheckpoint: null,
+  }, candles).events;
 }

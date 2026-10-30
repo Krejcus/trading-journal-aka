@@ -115,6 +115,7 @@ const rules = {
     },
     "textSize": {
       "enum": [
+        "none",
         "tiny",
         "small",
         "medium",
