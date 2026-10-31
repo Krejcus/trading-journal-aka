@@ -285,6 +285,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-31 ráno — LIVE výkon nasazen, worker bezpečně ponechán na starší verzi (Codex)
+
+- Ověřený balík F2a–F2i byl z čisté větve nasazen na produkční web jako
+  `211794d8`. GitHub `main`, release větev i Vercel deployment ukazovaly na
+  stejný SHA; preview i produkce skončily `READY`, build log bez chyby a veřejná
+  stránka vracela HTTP 200. Před nasazením prošel TypeScript, cílený ESLint,
+  6293 testů (1 todo) a produkční build.
+- Reálný CDN přenos po kompresi: `TradovateLiveDesk` 50,8 kB,
+  `LiveTradingScreen` 22,9 kB, oddělený `LiveCopyTradeOverview` 78,6 kB,
+  `CopierEventsPanel` 1,6 kB a `liveCandles` 1,0 kB. Výchozí graf tak nestahuje
+  ani neparsuje celý kopírovací přehled a technické panely před jejich použitím.
+- Worker zůstal záměrně na `e1fd4af3`: čerstvý read-only status byl DISARMED,
+  ale `connected=false`, `reconciliationRequired=true` a broker stream nebyl
+  autorizovaný/stabilní. Poslední account snapshoty byly z předchozího večera,
+  všechny účty hlavního connection čekaly na obnovu; další connection hlásil
+  `account/list` HTTP 502 a jiný vyžadoval nové OAuth připojení. Reinstall by
+  v tomto stavu porušil bezpečnostní gate a nevytvořil důvěryhodná data.
+- Víkendový audit tedy potvrzuje webový release a statické rychlosti, ne 100%
+  čerstvost LIVE dat ani tick/fill latenci. Další krok je v UI znovu autorizovat
+  neplatná Tradovate připojení, nechat worker dokončit read-only reconciliation
+  (`connected`, `groupFlat`, bez working/divergence/error) a teprve potom použít
+  safe reinstall na `211794d8`. Žádný ARM, Flatten ani broker write neproběhl.
+- Vercel runtime audit navíc ukázal starší opakované 429 v minutovém nativním
+  broker snapshotu. Cesta je fail-closed a neukládá syntetické nuly, ale před
+  tvrzením o 100% pokrytí je potřeba odděleně doplnit backoff/telemetrii a
+  ověřit ji proti limitům Tradovate; bez důkazu se frekvence broker čtení
+  nezvyšovala.
+
 ### 2026-10-31 ráno — LIVE výkon: vedlejší panely mimo výchozí graf (Codex, lokálně)
 
 - F2i přesunul mimo výchozí graf neaktivní Risk, technické Události, správu
