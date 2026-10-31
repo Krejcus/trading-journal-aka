@@ -98,7 +98,15 @@ import {
   devTradeMockGroup,
   type DevTradeMockScenario,
 } from '../lib/devLiveTradeMock';
-import LiveCopyTradeOverviewSlot, { LiveMobileAccountDetailSlot, preloadLiveCopyTradeOverview } from './LiveCopyTradeOverviewSlot';
+import LiveCopyTradeOverviewSlot, {
+  CopierEventsPanelSlot,
+  LiveMobileAccountDetailSlot,
+  LiveRiskTabSlot,
+  MacCompanionSettingsSlot,
+  TradovateAccountProfileSetupSlot,
+  TradovateAddConnectionModalSlot,
+  preloadLiveDeferredTab,
+} from './LiveCopyTradeOverviewSlot';
 import {
   devLiveCopyFixtureDailyStats,
   devLiveCopyFixtureEligibility,
@@ -108,12 +116,7 @@ import {
   devLiveCopyFixtureSnapshot,
   devLiveCopyFixtureSyncPauses,
 } from '../lib/devLiveCopyFixture';
-import LiveRiskTab from './LiveRiskTab';
 import LiveStatusStrip from './LiveStatusStrip';
-import CopierEventsPanel from './CopierEventsPanel';
-import MacCompanionSettings from './MacCompanionSettings';
-import TradovateAccountProfileSetup from './TradovateAccountProfileSetup';
-import TradovateAddConnectionModal from './TradovateAddConnectionModal';
 import type { TradovateLiveData } from './useTradovateLiveData';
 import type { TradovateConnectionSummary } from '../lib/tradovateLiveConnectionCache';
 import { tradovateAccountProfileNeedsPlan } from '../lib/tradovateAccountOnboarding';
@@ -350,11 +353,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   useEffect(() => {
     if (tab === 'chart' && !chartAvailable) setTab('overview');
   }, [chartAvailable, tab]);
-  // Telefon a explicitně otevřený přehled začnou velký modul načítat hned,
-  // souběžně se stavem LIVE. Desktop míří rovnou do grafu a tento chunk do té
-  // doby vůbec nepotřebuje.
+  // Načítá se jen panel aktivní záložky, souběžně se stavem LIVE. Desktop míří
+  // rovnou do grafu a vedlejší panely do té doby vůbec nepotřebuje.
   useEffect(() => {
-    if (tab === 'overview') void preloadLiveCopyTradeOverview().catch(() => { /* Slot nabídne retry. */ });
+    void preloadLiveDeferredTab(tab).catch(() => { /* Slot nabídne retry. */ });
   }, [tab]);
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -1681,8 +1683,8 @@ acceptAgentStatus((await executeAgent({
           const blockedByArm = item.id === 'chart' && armFlowActive;
           const warmTab = item.id === 'chart'
             ? () => { void preloadLiveTradingScreen().catch(() => { /* Kliknutí může zopakovat import. */ }); }
-            : item.id === 'overview'
-              ? () => { void preloadLiveCopyTradeOverview().catch(() => { /* Slot nabídne retry. */ }); }
+            : item.id === 'overview' || item.id === 'connections' || item.id === 'risk' || item.id === 'events'
+              ? () => { void preloadLiveDeferredTab(item.id).catch(() => { /* Slot nabídne retry. */ }); }
               : undefined;
           return <button key={item.id} type="button" disabled={blockedByConfigMutation || blockedByArm} title={blockedByArm ? 'Během zapínání kopírky se graf neotevírá' : blockedByConfigMutation ? 'Čekám na potvrzení změny konfigurace workerem' : undefined} onPointerEnter={warmTab} onFocus={warmTab} onClick={() => navigateToTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
         })}
@@ -1818,7 +1820,7 @@ acceptAgentStatus((await executeAgent({
               live.setError(error instanceof Error ? error.message : String(error));
             })}
           />
-          <MacCompanionSettings confirmAction={confirmAction} />
+          <MacCompanionSettingsSlot confirmAction={confirmAction} />
         </>
       ) : checkingConnection ? (
         <LiveDashboardSkeleton />
@@ -1933,7 +1935,7 @@ acceptAgentStatus((await executeAgent({
             <Camera size={21} className="shrink-0" /><span className="flex-1">{!agentStatusDisplayFresh || !agentStatus?.snapshotHealth ? 'Stav snímků neověřen' : !agentStatus.snapshotHealth.enabled ? 'Snímky vypnuté' : agentStatus.snapshotHealth.state === 'ready' ? 'Snímky připravené' : agentStatus.snapshotHealth.state === 'checking' ? 'Kontroluji snímky' : 'Snímky nejsou připravené'}</span><span className="text-[10px]">Detail</span><ChevronRight size={14} />
           </button> : null}
           {tab === 'risk' && copyTradeSnapshot ? (
-            <LiveRiskTab
+            <LiveRiskTabSlot
               runtimeAvailable={runtimeAvailable}
               riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
               snapshot={displaySnapshot ?? copyTradeSnapshot}
@@ -1959,7 +1961,7 @@ acceptAgentStatus((await executeAgent({
                 journalHealth={agentStatus?.journalHealth}
                 onRepairSnapshots={repairSnapshots}
               />
-              <CopierEventsPanel
+              <CopierEventsPanelSlot
                 status={agentStatus?.controller ?? null}
                 transport={agentTransport}
                 snapshotHealth={agentStatus?.snapshotHealth}
@@ -1989,9 +1991,9 @@ acceptAgentStatus((await executeAgent({
           }}
         />
       ) : null}
-      {addConnectionOpen ? <TradovateAddConnectionModal environment={live.status?.environment ?? 'demo'} connecting={live.busy === 'connect'} onClose={() => setAddConnectionOpen(false)} onConnect={() => void live.connect()} /> : null}
+      {addConnectionOpen ? <TradovateAddConnectionModalSlot environment={live.status?.environment ?? 'demo'} connecting={live.busy === 'connect'} onClose={() => setAddConnectionOpen(false)} onConnect={() => void live.connect()} /> : null}
       {live.profileSetupOpen && liveData ? (
-        <TradovateAccountProfileSetup
+        <TradovateAccountProfileSetupSlot
           accounts={liveData.accounts.filter(account => !profileSetupAccountIds || profileSetupAccountIds.has(String(account.id)))}
           profiles={live.profiles}
           onClose={() => { live.setProfileSetupOpen(false); setProfileSetupAccountIds(null); }}

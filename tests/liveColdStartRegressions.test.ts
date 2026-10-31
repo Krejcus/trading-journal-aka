@@ -25,14 +25,29 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
     }
   });
 
-  it('desktopový graf netahá těžký přehled kopírky; přehled má vlastní retry-safe hranici', () => {
+  it('desktopový graf netahá skryté LIVE panely; každý má vlastní retry-safe hranici', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
     const slot = source('components/LiveCopyTradeOverviewSlot.tsx');
-    expect(desk).not.toMatch(/from '\.\/LiveCopyTradeOverview';/);
-    expect(desk).not.toMatch(/from '\.\/LiveMobileAccountDetail';/);
+    for (const component of [
+      'LiveCopyTradeOverview',
+      'LiveMobileAccountDetail',
+      'LiveRiskTab',
+      'CopierEventsPanel',
+      'MacCompanionSettings',
+      'TradovateAccountProfileSetup',
+      'TradovateAddConnectionModal',
+    ]) expect(desk).not.toMatch(new RegExp(`from '\\./${component}';`));
     expect(desk).toMatch(/from '\.\/LiveCopyTradeOverviewSlot';/);
-    expect(slot).toContain("import('./LiveCopyTradeOverview')");
-    expect(slot).toContain("import('./LiveMobileAccountDetail')");
+    for (const component of [
+      'LiveCopyTradeOverview',
+      'LiveMobileAccountDetail',
+      'LiveRiskTab',
+      'CopierEventsPanel',
+      'MacCompanionSettings',
+      'TradovateAccountProfileSetup',
+      'TradovateAddConnectionModal',
+    ]) expect(slot).toContain(`import('./${component}')`);
+    expect(desk).toContain('preloadLiveDeferredTab(item.id)');
     expect(slot).toContain('state.pending = null;');
     expect(slot).toContain('Zkusit znovu');
   });

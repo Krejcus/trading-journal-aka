@@ -329,3 +329,24 @@ proto přesunuly za vlastní retry-safe hranici bez stránkového Suspense.
   daty. Po úspěšném preloadu se komponenta zobrazí bez mezifáze.
 - Přechodná chyba chunku se necachuje jako trvalý pád: lokální fallback nabízí
   retry a graf i safety ovládání zůstávají funkční. Celá stránka nesuspenduje.
+
+## 17. F2i — vedlejší LIVE panely mimo výchozí graf
+
+Po oddělení velkého přehledu zůstávaly ve vstupním `TradovateLiveDesk` staticky
+zabalené také Risk, technické Události, správa Mac companionu a dva nastavovací
+modaly. Výchozí desktopový graf je přitom nepoužije.
+
+- Každý panel má vlastní retry-safe dynamický modul. Aktivní záložka ho začne
+  načítat okamžitě souběžně s LIVE stavem; pointer/focus navigace jej připraví
+  před kliknutím. Chyba zasáhne jen daný panel a nabídne opakování.
+- Produkční `TradovateLiveDesk` klesl z 262,50 kB / 78,14 kB gzip na
+  169,71 kB / 53,06 kB gzip (−92,79 kB / −25,08 kB gzip, přibližně −35 % / −32 %).
+  Odložené části mají samostatně: Risk 37,46/11,11 kB, profily účtů
+  18,02/5,91 kB, Mac companion 16,85/5,65 kB, technické Události 4,02/1,64 kB
+  a připojovací modal 2,85/1,27 kB (raw/gzip).
+- Potvrzovací dialogy, status, brzdy a ostatní bezpečnostní ovládání zůstávají
+  ve vstupní cestě a jsou dostupné bez dodatečného stažení. Modaly mají vlastní
+  lokální loading/retry/close stav a stránkový Suspense se nepoužívá.
+- Jde o úsporu stažení/parsing/evaluace při vstupu do výchozího grafu, ne o
+  snížení celkové offline PWA sady: service worker jednotlivé chunky dál zahrne
+  do precache.

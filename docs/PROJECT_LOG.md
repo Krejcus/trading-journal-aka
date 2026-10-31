@@ -285,6 +285,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-31 ráno — LIVE výkon: vedlejší panely mimo výchozí graf (Codex, lokálně)
+
+- F2i přesunul mimo výchozí graf neaktivní Risk, technické Události, správu
+  Mac companionu a nastavovací modaly. Aktivní/hoverovaná záložka se předehřeje,
+  každá část má lokální retry a potvrzovací/safety dialogy zůstaly statické.
+- Produkční `TradovateLiveDesk` klesl z 262,50/78,14 kB gzip na
+  169,71/53,06 kB gzip; PWA precache dál obsahuje všechny chunky, zisk je v
+  rychlejším vstupu a menším parsování. Cíleně 52/52, TypeScript a ESLint čisté;
+  celý projekt 6292 testů zelených (1 todo) a produkční build čistý.
+- Lokální aplikace se vykreslila až po přihlašovací obrazovku. Autentizovaný
+  LIVE render nebyl bez přihlášení obcházen. Nic nebylo pushnuto ani nasazeno,
+  worker se neměnil a k brokerovi nešel žádný požadavek.
+
 ### 2026-10-30 večer — LIVE výkon: přímá expozice worker → graf + úplné měření (Codex, lokálně)
 
 - Izolovaná větev `codex/live-quality-20261030` vychází z `fb2199e7`; Claudeova
