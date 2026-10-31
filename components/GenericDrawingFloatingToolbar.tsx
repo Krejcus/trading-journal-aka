@@ -113,6 +113,15 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
       >
         <GripVertical size={13} strokeWidth={1.4} />
       </button>
+      {/* Emoji má jen velikost — barva, čára ani šablona na znak nepůsobí. */}
+      {drawing.tool === 'Emoji' ? <select
+        className={selectClass}
+        aria-label="Velikost emoji"
+        value={drawing.style.fontSize ?? 28}
+        onChange={event => updateDrawingStyleAndDefault(engine, drawing, { fontSize: Number(event.target.value) })}
+      >
+        {[16, 20, 24, 28, 32, 40, 48, 56, 64, 72].map(size => <option key={size} value={size}>{size}px</option>)}
+      </select> : <>
       <IndicatorTemplateMenu
         compact
         placement="bottom"
@@ -180,6 +189,7 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
       >
         <Settings size={14} strokeWidth={1.35} />
       </button>}
+      </>}
       <button
         type="button"
         className={controlClass}

@@ -19,7 +19,7 @@ import {
   type TicketQuote,
   type TicketSide,
 } from '../lib/liveOrderTicket';
-import { breakEvenStop, tightenBlockReason, type LiveChartPosition, type LiveChartPositionSummary } from '../lib/liveChartPosition';
+import type { LiveChartPosition, LiveChartPositionSummary } from '../lib/liveChartPosition';
 import { previewSymbolFromChartSource, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
@@ -67,10 +67,27 @@ const UNIT_SUFFIX: Record<TicketBracketUnits, string> = { pts: 'b', ticks: 't', 
  * Živá pozice cíle panelu (jen zobrazení). Otevřené P&L je z brokera, ne
  * z ceny grafu. Správa (SL/TP, BE) je v sekci pod kartou a ve štítcích grafu.
  */
-const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummary; muted: string; ink: string; field: string }> = ({ summary, muted, ink, field }) => {
+const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummary; muted: string; ink: string; field: string }> = ({ isDark, summary, muted, ink, field }) => {
+  const [expanded, setExpanded] = useState(false);
   const long = summary.side === 'long';
   const price = (value: number | null) => (value == null ? '—' : formatPrice(value));
-  return <div className={`grid gap-1.5 rounded-[11px] border p-2.5 ${field}`}>
+  const canExpand = summary.rows.length > 0;
+  // Poloha trhu mezi SL a TP (jen zobrazení z marku brokera).
+  const progress = summary.kind === 'position' && summary.mark != null && summary.stop != null && summary.target != null && summary.target !== summary.stop
+    ? Math.min(1, Math.max(0, (summary.mark - summary.stop) / (summary.target - summary.stop)))
+    : null;
+  const entryAt = progress != null && summary.entry != null && summary.stop != null && summary.target != null
+    ? Math.min(1, Math.max(0, (summary.entry - summary.stop) / (summary.target - summary.stop)))
+    : null;
+  return <div
+    role={canExpand ? 'button' : undefined}
+    tabIndex={canExpand ? 0 : undefined}
+    aria-expanded={canExpand ? expanded : undefined}
+    title={canExpand ? (expanded ? 'Sbalit účty' : 'Ukázat jednotlivé účty') : undefined}
+    onClick={() => canExpand && setExpanded(value => !value)}
+    onKeyDown={event => { if (canExpand && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setExpanded(value => !value); } }}
+    className={`grid gap-1.5 rounded-[6px] border p-2.5 transition-colors ${field} ${canExpand ? `cursor-pointer ${isDark ? 'hover:border-blue-400/40' : 'hover:border-blue-500/40'}` : ''}`}
+  >
     <div className="flex items-baseline gap-2">
       <b className={`text-[11px] font-black uppercase tracking-[0.06em] ${long ? 'text-blue-500' : 'text-rose-500'}`}>
         {summary.kind === 'position' ? `${long ? 'Long' : 'Short'} ${summary.quantity}` : `Čeká ${long ? 'BUY' : 'SELL'} ${summary.entryType ?? ''} ${summary.quantity}`}
@@ -80,15 +97,34 @@ const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummar
       {summary.scopeLabel
         ? <span className="rounded border border-violet-500/45 px-1 text-[9px] font-black text-violet-500" title="Kopírka je vypnutá — souhrn jen tohoto účtu, ne celé skupiny">{summary.scopeLabel}</span>
         : summary.accounts > 1 && <span className={`text-[9.5px] font-bold ${muted}`}>{summary.accounts} účty</span>}
+      {canExpand && <ChevronDown size={12} className={`${muted} transition-transform duration-300 ${expanded ? 'rotate-180' : ''}`} />}
     </div>
     {summary.kind === 'position' && <div className="flex items-baseline gap-2">
       <b className={`font-mono text-[22px] font-black leading-none ${summary.openPnl == null ? muted : summary.openPnl < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(summary.openPnl)}</b>
       <span className={`text-[9.5px] font-bold ${muted}`} title="Otevřené P&L z brokera (ne z ceny grafu)">z brokera</span>
     </div>}
+    {progress != null && <div className={`relative flex h-1.5 overflow-hidden rounded-full ${isDark ? 'bg-white/[0.06]' : 'bg-slate-900/[0.06]'}`} title="Cena mezi SL a TP">
+      <i className="block h-full bg-rose-500/45" style={{ width: `${(entryAt ?? 0) * 100}%` }} />
+      <i className="block h-full flex-1 bg-emerald-500/35" />
+      <span className={`absolute top-0 h-full w-[2px] rounded transition-[left] duration-500 ${isDark ? 'bg-white' : 'bg-slate-900'}`} style={{ left: `calc(${progress * 100}% - 1px)` }} />
+    </div>}
     <div className={`flex gap-3 font-mono text-[10px] ${ink}`}>
-      <span>SL {price(summary.stop)}</span><span>TP {price(summary.target)}</span>
+      <span className="text-rose-500">SL {price(summary.stop)}</span><span className="text-emerald-500">TP {price(summary.target)}</span>
       <span className={`flex-1 text-right font-sans font-bold ${muted}`}>{summary.protection}</span>
     </div>
+    {canExpand && <div className={`live-ticket-accounts ${expanded ? 'is-open' : ''}`}>
+      <div>
+        {summary.rows.map(row => <div key={row.accountId} className={`grid grid-cols-[8px_minmax(0,1fr)_auto_68px] items-center gap-1.5 border-t py-1.5 text-[10.5px] ${isDark ? 'border-white/[0.08]' : 'border-slate-900/[0.08]'}`}>
+          <i className={`h-[7px] w-[7px] rounded-full ${row.protectedFully ? 'bg-emerald-500' : 'bg-amber-500'}`} title={row.protectedFully ? 'SL i TP kryjí celou pozici' : 'Ochrana nekryje celou pozici'} />
+          <span className="min-w-0">
+            <b className={`block truncate font-extrabold ${ink}`}>{row.name}{row.isLeader && <span className="ml-1 rounded-[3px] border border-indigo-400/45 px-[3px] align-[1px] text-[8px] font-black uppercase tracking-[0.06em] text-indigo-400">leader</span>}</b>
+            <small className={`block font-mono text-[9.5px] ${muted}`}>@ {price(row.entry)} · SL {price(row.stop)} · TP {price(row.target)}</small>
+          </span>
+          <span className={`text-right font-mono text-[10.5px] font-bold ${muted}`}>{row.quantity}×</span>
+          <b className={`text-right font-mono text-[11px] font-extrabold ${row.openPnl == null ? muted : row.openPnl < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(row.openPnl)}</b>
+        </div>)}
+      </div>
+    </div>}
   </div>;
 };
 
@@ -259,79 +295,6 @@ const PreviewSection: React.FC<{
   </div>;
 };
 
-/**
- * Fáze 2a: správa vlastního ručního vstupu z grafu — posun SL/TP DÁL od trhu
- * a zrušení čekajícího vstupu. Ceny jsou z živé pozice (jen zobrazení);
- * worker je ověří proti brokerovi a kopírka posun zrcadlí followerům.
- */
-const ManageSection: React.FC<{
-  muted: string; field: string;
-  summary: LiveChartPositionSummary;
-  /** Průměrný vstup leadera od workeru (filly brokera) pro „SL na BE“; null = neznámý. */
-  entryAvg: number | null;
-  onManage: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
-}> = ({ muted, field, summary, entryAvg, onManage }) => {
-  const long = summary.side === 'long';
-  const [stop, setStop] = useState('');
-  const [target, setTarget] = useState('');
-  // Klíč potvrzení: akce, nebo „move-be“ (stejný move-stop, jiné tlačítko).
-  const [confirm, setConfirm] = useState<{ action: string; until: number } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: 'ok' | 'bad' | 'warn'; text: string } | null>(null);
-  const run = async (action: LeaderOrderManageAction, expectPrice: number | null, newPrice?: number, key: string = action) => {
-    if (busy || expectPrice == null) return;
-    // Dvoukrokové potvrzení v tlačítku (do 5 s).
-    if (!confirm || confirm.action !== key || confirm.until < Date.now()) { setConfirm({ action: key, until: Date.now() + 5_000 }); return; }
-    setConfirm(null);
-    setBusy(true);
-    try {
-      const result = await onManage(action, expectPrice, newPrice);
-      setMessage(result.status === 'acknowledged'
-        ? (result.reason && /zastavila/.test(result.reason)
-          ? { tone: 'warn', text: `Leader posunut, ale ${result.reason}.` }
-          : result.reason && /spustil|vyplnil|skončil/.test(result.reason)
-            ? { tone: 'warn', text: `${result.reason}.` }
-          : { tone: 'ok', text: action === 'cancel-entry' ? 'Vstup leadera zrušen; kopírka zruší kopie, které se ještě nevyplnily.' : 'Leader posunut; kopie followerům posune kopírka.' })
-        : result.status === 'blocked' ? { tone: 'bad', text: `Neodesláno: ${result.blockers.map(issue => issue.text).join(' ')}` }
-          : result.status === 'rejected' ? { tone: 'bad', text: `Broker odmítl: ${result.reason ?? ''}` }
-            : { tone: 'warn', text: result.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.' });
-    } catch (reason) {
-      setMessage({ tone: 'warn', text: `Výsledek neznámý (${reason instanceof Error ? reason.message.slice(0, 120) : 'chyba'}) — zkontroluj leadera v Tradovate.` });
-    } finally {
-      setBusy(false);
-    }
-  };
-  const label = (action: string, text: string) => (confirm?.action === action && confirm.until > Date.now() ? 'Opravdu? Klikni znovu' : text);
-  const parsed = (value: string) => { const number = Number(value.replace(',', '.')); return Number.isFinite(number) && number > 0 ? Math.round(number * 4) / 4 : null; };
-  const button = 'h-7 rounded-[7px] border px-2 text-[10.5px] font-extrabold disabled:cursor-not-allowed disabled:opacity-40';
-  const be = breakEvenStop(summary.side, entryAvg);
-  const beBlocked = be == null ? 'Průměrný vstup leadera není známý.'
-    : summary.stop != null && be === summary.stop ? 'SL už je na BE.'
-      : tightenBlockReason(summary.side, summary.stop, be, summary.mark);
-  const stopBlocked = tightenBlockReason(summary.side, summary.stop, parsed(stop), summary.mark);
-  return <div className={`grid gap-1.5 rounded-[9px] border p-2 ${field}`}>
-    <div className={`text-[9.5px] font-black uppercase tracking-[0.06em] ${muted}`}>Vlastní vstup z grafu</div>
-    {summary.kind === 'pending'
-      ? <button type="button" disabled={busy || summary.leader?.entry == null} onClick={() => void run('cancel-entry', summary.leader?.entry ?? null)} className={button}>{label('cancel-entry', 'Zrušit čekající vstup')}</button>
-      : <>
-        <div className="flex items-center gap-1.5">
-          <input value={stop} onChange={event => setStop(event.target.value)} placeholder={`Nový SL (teď ${summary.stop ?? '—'})`} className="h-7 min-w-0 flex-1 rounded-[7px] border bg-transparent px-2 text-[11px]" />
-          <button type="button" title={stopBlocked ?? undefined} disabled={busy || summary.stop == null || parsed(stop) == null || stopBlocked != null} onClick={() => void run('move-stop', summary.stop, parsed(stop) ?? undefined)} className={button}>{label('move-stop', 'Posunout SL')}</button>
-        </div>
-        <button type="button" title={beBlocked ?? undefined} disabled={busy || summary.stop == null || beBlocked != null} onClick={() => { if (be != null) void run('move-stop', summary.stop, be, 'move-be'); }} className={button}>
-          {label('move-be', be != null ? `SL na BE leadera ${be} (bez poplatků)` : 'SL na BE')}
-        </button>
-        {stopBlocked && parsed(stop) != null && <div className={`text-[10px] ${muted}`}>{stopBlocked}</div>}
-        <div className="flex items-center gap-1.5">
-          <input value={target} onChange={event => setTarget(event.target.value)} placeholder={`TP ${long ? 'výš' : 'níž'} než ${summary.target ?? '—'}`} className="h-7 min-w-0 flex-1 rounded-[7px] border bg-transparent px-2 text-[11px]" />
-          <button type="button" disabled={busy || summary.target == null || parsed(target) == null} onClick={() => void run('move-target', summary.target, parsed(target) ?? undefined)} className={button}>{label('move-target', 'Posunout TP')}</button>
-        </div>
-        <div className={`text-[10px] ${muted}`}>SL jde i k trhu (cenu přes trh broker odmítne), TP jen dál od trhu. Když trh mezitím přeskočí nový SL, kopírka může přejít do režimu jen správy nebo se vypnout.</div>
-      </>}
-    {message && <div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${message.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : message.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{message.text}</div>}
-  </div>;
-};
-
 interface Props {
   isDark: boolean;
   instrument: TicketInstrument;
@@ -395,7 +358,7 @@ const NumberField: React.FC<{
 
 const LiveOrderTicket: React.FC<Props> = ({
   isDark, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
-  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, onNewDraft, onClose,
+  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onNewDraft, onClose,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -409,7 +372,8 @@ const LiveOrderTicket: React.FC<Props> = ({
   const single = target.kind === 'account';
   const picked = group ? targetAccount(group, target) : null;
   const tone = {
-    card: isDark ? 'border-white/[0.12] bg-[#101720]/70 text-slate-200' : 'border-white/85 bg-white/70 text-slate-800',
+    // Panel je přilepený ke grafu: plný podklad hlavičky LIVE, jen levá hrana.
+    dock: isDark ? 'border-white/10 bg-[#0d1219] text-slate-200' : 'border-slate-200 bg-white text-slate-800',
     field: isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-900/10 bg-white/70',
     muted: isDark ? 'text-slate-400' : 'text-slate-500',
     ink: isDark ? 'text-slate-100' : 'text-slate-900',
@@ -420,9 +384,6 @@ const LiveOrderTicket: React.FC<Props> = ({
   };
   const seg = (on: boolean) => `h-full flex-1 rounded-[7px] px-1.5 text-[10.5px] font-bold transition-colors ${on ? tone.segOn : tone.segOff}`;
   const label = `text-[9px] font-black uppercase tracking-[0.1em] ${tone.muted}`;
-  const cardShadow = isDark
-    ? 'shadow-[0_22px_40px_-14px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.08)]'
-    : 'shadow-[0_22px_40px_-18px_rgba(15,23,42,0.4),0_0_0_1px_rgba(15,23,42,0.06),inset_0_1px_0_rgba(255,255,255,0.95)]';
 
   const m = draft && quote ? ticketMetrics(draft, instrument, quote) : null;
   const limits = group ? limitAccounts(group, target).map(({ account, multiplier }) => ({
@@ -456,6 +417,14 @@ const LiveOrderTicket: React.FC<Props> = ({
   const [direct, setDirect] = useState<{ key: string; view: { tone: 'ok' | 'bad' | 'warn'; text: string } } | null>(null);
   const [directBusy, setDirectBusy] = useState(false);
   const directBusyRef = useRef(false);
+  // Po přijetí se návrh hned maže (nic nejde poslat podruhé); zelené „Přijato“
+  // je jen chvilková ozvěna místo tlačítka, ne tlačítko.
+  const [sentFlash, setSentFlash] = useState<{ text: string } | null>(null);
+  useEffect(() => {
+    if (!sentFlash) return undefined;
+    const timer = window.setTimeout(() => setSentFlash(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [sentFlash]);
   // U Marketu se cena mění s každým tickem — výsledek odeslání nesmí s tickem zmizet.
   // U Marketu klíčuje vzdálenost SL/TP od vstupu (ceny jedou s tickem), ne absolutní ceny.
   const directKey = previewDraft ? JSON.stringify(draft?.type === 'market'
@@ -473,7 +442,10 @@ const LiveOrderTicket: React.FC<Props> = ({
       const result = await onPlaceEntry(previewDraft, `entry:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`);
       setDirect({ key: sentKey, view: placedResultView(result) });
       // Přijatý vstup: návrh se „promění“ v živý příkaz (štítek pozice v grafu, karta „Zadáno“).
-      if (result.status === 'acknowledged') onDraft(null);
+      if (result.status === 'acknowledged') {
+        setSentFlash({ text: `${draft?.side === 'sell' ? 'Prodat' : 'Koupit'} ${previewDraft.quantity} ${instrument.symbol}` });
+        onDraft(null);
+      }
     } catch (reason) {
       setDirect({ key: sentKey, view: placeErrorView(reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.') });
     } finally {
@@ -604,7 +576,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     </div>;
   };
 
-  return <div className={`flex h-full min-h-0 flex-col gap-2.5 overflow-hidden rounded-2xl border p-2.5 backdrop-blur-xl ${tone.card} ${cardShadow} ${single ? '!border-violet-500/60' : ''}`}>
+  return <div className={`flex h-full min-h-0 flex-col gap-2.5 overflow-hidden border-l p-2.5 ${tone.dock} ${single ? '!border-violet-500/60' : ''}`}>
     <div className="flex items-center gap-1.5">
       <h3 className={`m-0 flex-1 truncate text-[12.5px] font-black ${tone.ink}`}>
         {headerTitle}<small className={`ml-1.5 font-bold ${tone.muted}`}>{instrument.symbol}</small>
@@ -632,9 +604,8 @@ const LiveOrderTicket: React.FC<Props> = ({
       {pickerMenu}
     </div>
 
-    <div className="-mx-2.5 flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto px-2.5 pb-0.5">
+    <div className="live-ticket-stagger -mx-2.5 flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto px-2.5 pb-0.5">
       {position?.summary && <PositionCard isDark={isDark} summary={position.summary} muted={tone.muted} ink={tone.ink} field={tone.field} />}
-      {position?.summary && onManageEntry && <ManageSection muted={tone.muted} field={tone.field} summary={position.summary} entryAvg={manageEntryAvgPrice ?? null} onManage={onManageEntry} />}
       {position?.issue && <div className={`rounded-[9px] border px-2.5 py-2 text-[10.5px] font-bold ${tone.field} ${tone.muted}`}>{position.issue}</div>}
       {!quote ? (
         <p className={`m-0 py-6 text-center text-[11px] ${tone.muted}`}>Čekám na cenu z grafu…</p>
@@ -647,7 +618,7 @@ const LiveOrderTicket: React.FC<Props> = ({
               key={side}
               type="button"
               onClick={() => (draft ? onDraft(withSide(draft, side, quote, instrument)) : onNewDraft(side))}
-              className={`grid h-[52px] content-center rounded-[10px] border px-2.5 ${quoteInfo.stale ? 'opacity-60' : ''} ${side === 'buy' ? 'justify-items-end text-right' : 'justify-items-start text-left'} ${on
+              className={`live-ticket-side ${on ? 'is-on' : ''} grid h-[52px] content-center rounded-[10px] border px-2.5 ${quoteInfo.stale ? 'opacity-60' : ''} ${side === 'buy' ? 'justify-items-end text-right' : 'justify-items-start text-left'} ${on
                 ? color === 'rose' ? 'border-rose-500/60 bg-rose-500/[0.14] text-rose-500' : 'border-blue-500/60 bg-blue-500/[0.14] text-blue-500'
                 : `${tone.field} ${tone.ink}`}`}
             >
@@ -753,7 +724,7 @@ const LiveOrderTicket: React.FC<Props> = ({
             <div className={`flex items-baseline justify-between text-[11px] ${tone.muted}`}><span>Poměr R:R</span><b className={`font-mono text-[12px] ${tone.ink}`}>{m.riskReward != null ? `1 : ${m.riskReward.toFixed(2)}` : '—'}</b></div>
             {group?.sample && !single && scope !== 'account' && <div className="text-[9.5px] font-bold text-amber-600">Účty jsou ukázka — napojení na worker přijde zvlášť.</div>}
           </div>
-        </> : <p className={`m-0 text-center text-[11px] ${tone.muted}`}>Klikni na Koupit / Prodat, ⚡ v position boxu, nebo pravým do grafu.</p>}
+        </> : <p className={`m-0 text-center text-[11px] ${tone.muted}`}>Klikni na Koupit / Prodat, nebo pravým na position box či do grafu.</p>}
       </>}
     </div>
 
@@ -777,10 +748,10 @@ const LiveOrderTicket: React.FC<Props> = ({
         disabled={directBlocked != null || directBusy}
         title={directBlocked ?? 'Odešle hned — worker znovu ověří všechny pojistky a při problému nic nepošle.'}
         onClick={() => void sendDirect()}
-        className="grid h-[42px] content-center rounded-[10px] text-[12px] font-extrabold leading-tight text-white disabled:cursor-not-allowed disabled:opacity-60"
-        style={{ background: `linear-gradient(180deg, color-mix(in srgb, ${sideColor} 82%, #fff), ${sideColor})` }}
+        className={`live-ticket-send ${directBusy ? 'is-sending' : ''} grid h-[44px] content-center rounded-[8px] text-[12px] font-extrabold leading-tight text-white disabled:cursor-not-allowed disabled:opacity-60`}
+        style={{ background: `linear-gradient(180deg, color-mix(in srgb, ${sideColor} 82%, #fff), ${sideColor})`, boxShadow: `0 10px 22px -12px ${sideColor}` }}
       >
-        <span className="inline-flex items-center justify-center gap-1.5">{directBlocked != null && <Lock size={11} />}{directBusy ? 'Odesílám…' : `${draft.side === 'buy' ? 'Koupit' : 'Prodat'} ${m.quantity} ${instrument.symbol}`}</span>
+        <span className="inline-flex items-center justify-center gap-1.5">{directBlocked != null && <Lock size={11} />}{directBusy ? <><span className="live-ticket-spinner" aria-hidden="true" />Odesílám…</> : `${draft.side === 'buy' ? 'Koupit' : 'Prodat'} ${m.quantity} ${instrument.symbol}`}</span>
         <small className="font-mono text-[10px] font-semibold opacity-85">
           {TYPE_LABEL[draft.type]}{draft.type === 'market' ? ` · ${formatPrice(m.entry)} (nejhůř ${marketGuardPrice != null ? formatPrice(marketGuardPrice) : '—'})` : ` @ ${formatPrice(draft.price)}`}
           {' · '}{single && picked ? `jen ${picked.short}` : group?.armed === false ? 'jen leader' : group ? `skupina ×${groupMultiplier}` : 'leader + kopírka'}
@@ -788,6 +759,15 @@ const LiveOrderTicket: React.FC<Props> = ({
         </small>
       </button>
       {shownDirect && <div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${shownDirect.view.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : shownDirect.view.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{shownDirect.view.text}</div>}
+    </div>}
+    {!draft && sentFlash && <div className={`grid shrink-0 gap-1.5 border-t pt-2 ${tone.line}`}>
+      <div role="status" className="live-ticket-send is-ok grid h-[44px] place-items-center rounded-[8px] text-[12px] font-extrabold text-white">
+        <span className="live-ticket-ring" aria-hidden="true" />
+        <span className="inline-flex items-center gap-2">
+          <svg className="live-ticket-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5 10 17.5 19 7" /></svg>
+          Přijato · {sentFlash.text}
+        </span>
+      </div>
     </div>}
   </div>;
 };

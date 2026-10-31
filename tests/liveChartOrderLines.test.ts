@@ -6,7 +6,7 @@ import type { LiveChartPositionSummary } from '../lib/liveChartPosition';
 const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositionSummary => ({
   kind: 'position', side: 'short', quantity: 4, entry: 28975.5, entryType: null, openPnl: 12, mark: 28960,
   stop: 28984.25, target: 28958, protection: 'SL 4/4 · TP 4/4', accounts: 4, scopeLabel: null,
-  leader: { accountId: 1, quantity: 1, entry: 28975.5 }, ...patch,
+  leader: { accountId: 1, quantity: 1, entry: 28975.5 }, rows: [], ...patch,
 });
 const controls = { manageable: true, entryAvg: 28975.5, pointValue: 2 };
 
@@ -78,7 +78,9 @@ describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)
     expect(ticket).toMatch(/previewBlockedReason \?\? \(!previewDraft/);
   });
   it('přijatý vstup zavře návrh (zůstane jen živý příkaz), chyba návrh nechá', () => {
-    expect(ticket).toMatch(/if \(result\.status === 'acknowledged'\) onDraft\(null\);/);
+    // Přijatý vstup návrh hned maže; zelené „Přijato“ je jen ozvěna, ne tlačítko.
+    expect(ticket).toMatch(/if \(result\.status === 'acknowledged'\) \{\s*setSentFlash\([^;]*\);\s*onDraft\(null\);\s*\}/);
+    expect(ticket).toMatch(/\{!draft && sentFlash && <div[\s\S]{0,200}<div role="status"/);
     expect(ticket).toMatch(/if \(placedResult\.status === 'acknowledged'\) onAcknowledged\?\.\(\);/);
   });
   it('read-only localhost je „neodesláno“, ne neznámý výsledek', () => {

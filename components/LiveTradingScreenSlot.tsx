@@ -10,6 +10,11 @@ import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
+import {
+  getLiveScreenThemePreference,
+  resolveLiveScreenDark,
+  subscribeLiveScreenThemePreference,
+} from '../services/liveScreenTheme';
 
 /**
  * Obálka LIVE → Graf pro desk. Graf s workspace je těžký, a tak se načítá
@@ -126,7 +131,11 @@ const sameCopier = (left: LiveTradingCopierState, right: LiveTradingCopierState)
   && left.journalHealth === right.journalHealth
 );
 
-const LiveTradingScreenSlot: React.FC<Props> = ({ open, ...props }) => {
+const LiveTradingScreenSlot: React.FC<Props> = ({ open, isDark: appIsDark, ...rest }) => {
+  // LIVE má vlastní motiv (přepínač v liště grafu); „Podle aplikace“ = beze změny.
+  const [themePreference, setThemePreference] = useState(getLiveScreenThemePreference);
+  useEffect(() => subscribeLiveScreenThemePreference(setThemePreference), []);
+  const props = { ...rest, isDark: resolveLiveScreenDark(themePreference, appIsDark), themePreference };
   const previousOpenRef = useRef(open);
   const openPerformanceAtRef = useRef(open ? performance.now() : 0);
   if (open && !previousOpenRef.current) openPerformanceAtRef.current = performance.now();

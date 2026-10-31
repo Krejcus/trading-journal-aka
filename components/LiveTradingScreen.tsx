@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { PanelRightClose, PanelRightOpen, Power, X } from 'lucide-react';
 import type { Trade } from '../types';
 import AlphaTradeChartWorkspace, { type LiveOrderEntryBridge } from './AlphaTradeChartWorkspace';
-import LiveOrderTicket, { formatPrice, type TicketScope } from './LiveOrderTicket';
+import LiveOrderTicket, { formatPrice, formatUsd, type TicketScope } from './LiveOrderTicket';
 import LiveGroupChip from './LiveGroupChip';
 import LiveTradeToasts from './LiveTradeToasts';
 import { QuantumSpinner } from './QuantumLoader';
@@ -42,6 +42,8 @@ import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import { buildLiveStatusStrip, liveAttentionReasons, type LiveStatusStripInput, type LiveStatusTone } from '../services/liveStatusStrip';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
+import type { LiveScreenThemePreference } from '../services/liveScreenTheme';
+import LiveThemeToggle from './LiveThemeToggle';
 
 /**
  * LIVE → Graf: živý graf MNQ přes celou obrazovku s panelem objednávky vpravo
@@ -93,6 +95,8 @@ export interface LiveTradingTab {
 
 interface Props {
   isDark: boolean;
+  /** Volba motivu LIVE (přepínač v liště grafu); isDark už je podle ní. */
+  themePreference?: LiveScreenThemePreference;
   tabs: LiveTradingTab[];
   onNavigate: (tab: TradovateLiveTab) => void;
   /** Záložky jsou dočasně zamčené (desk čeká na potvrzení změny konfigurace); přehled zůstává dostupný. */
@@ -130,7 +134,7 @@ function useMinuteNow() {
 }
 
 const LiveTradingScreen: React.FC<Props> = ({
-  isDark, tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
+  isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false,
 }) => {
   const now = useMinuteNow();
@@ -219,7 +223,9 @@ const LiveTradingScreen: React.FC<Props> = ({
     () => workerGroup ?? (sample ? { ...SAMPLE_LIVE_TRADE_GROUP, armed: null } : null),
     [sample, workerGroup],
   );
-  const [ticketOpen, setTicketOpen] = useState(true);
+  // Panel je ve výchozím stavu zavřený; otevře ho tlačítko Objednávka, propsání
+  // boxu (pravý klik) nebo pravý klik do grafu.
+  const [ticketOpen, setTicketOpen] = useState(false);
   const [draft, setDraft] = useState<TicketDraft | null>(null);
   const [fromBox, setFromBox] = useState(false);
   const [units, setUnits] = useState<TicketBracketUnits>('pts');
@@ -363,7 +369,7 @@ const LiveTradingScreen: React.FC<Props> = ({
         const kind = next.draft.type === 'market' ? 'MKT' : next.draft.type === 'limit' ? 'LMT' : 'STP';
         return {
           ok: true,
-          message: `⚡ ${next.draft.side === 'buy' ? 'BUY' : 'SELL'} ${kind} ${next.quantity} @ ${formatPrice(next.draft.price)} — zkontroluj v panelu`,
+          message: `${next.draft.side === 'buy' ? 'BUY' : 'SELL'} ${kind} ${next.quantity} @ ${formatPrice(next.draft.price)} — zkontroluj v panelu`,
         };
       } catch (reason) {
         return { ok: false, message: reason instanceof Error ? reason.message : 'Z boxu se nepodařilo vytvořit návrh.' };
@@ -435,7 +441,9 @@ const LiveTradingScreen: React.FC<Props> = ({
     <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} role="region" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
       {/* Aurorová záře při příchodu — jednou, pak je průhledná a nebere kliky. */}
       <div className="live-chart-aurora" aria-hidden="true" />
-      <header className={`live-chart-header flex h-11 shrink-0 items-center gap-1 border-b px-2 ${bar}`}>
+      {/* Vlastní vrstva nad grafem: rozbalovací okna hlavičky (účty skupiny,
+          potvrzení vypnutí) jinak zapadnou pod plovoucí prvky grafu. */}
+      <header className={`live-chart-header relative z-[800] flex h-11 shrink-0 items-center gap-1 border-b px-2 ${bar}`}>
         <span className="px-2 text-[11px] font-black tracking-[0.14em] text-indigo-500">LIVE</span>
         <nav className="flex h-full min-w-0 items-stretch gap-0.5 overflow-x-auto no-scrollbar" aria-label="LIVE navigace">
           {tabs.map(item => {
@@ -504,7 +512,12 @@ const LiveTradingScreen: React.FC<Props> = ({
           className={`ml-1 flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-[11px] font-extrabold ${ticketOpen
             ? isDark ? 'bg-white/10 text-white' : 'bg-slate-900/[0.06] text-slate-900'
             : 'bg-gradient-to-b from-blue-500 to-blue-600 text-white shadow-[0_6px_16px_-8px_#2563eb]'}`}
-        >{ticketOpen ? <><PanelRightClose size={13} />Skrýt objednávku</> : <><PanelRightOpen size={13} />Objednávka</>}</button>
+        >{ticketOpen ? <><PanelRightClose size={13} />Skrýt objednávku</> : <><PanelRightOpen size={13} />Objednávka</>}
+          {/* Se zavřeným panelem ukazuje tlačítko běžící pozici (jen zobrazení z brokera). */}
+          {!ticketOpen && summary?.kind === 'position' && <span className="rounded-[5px] bg-white/[0.18] px-1.5 py-px font-mono text-[10px] font-extrabold">
+            {summary.side === 'long' ? 'LONG' : 'SHORT'} {summary.quantity}{summary.openPnl != null ? ` · ${formatUsd(summary.openPnl)}` : ''}
+          </span>}
+        </button>
         <button
           type="button"
           onClick={() => onNavigate('overview')}
@@ -531,6 +544,7 @@ const LiveTradingScreen: React.FC<Props> = ({
               defaultLayoutId="1"
               initialCandles={chart.candles}
               isDark={isDark}
+              toolbarEnd={<LiveThemeToggle isDark={isDark} preference={themePreference} />}
               tradeIndicators={tradeIndicators}
               onTradeIndicatorsChange={writeTradeChartIndicators}
               liveCandles={chart.liveFeed}
@@ -550,7 +564,10 @@ const LiveTradingScreen: React.FC<Props> = ({
             </div>
           )}
         </div>
-        {ticketOpen && <aside className="live-chart-ticket w-[304px] shrink-0 p-2 pl-0">
+        {/* Přilepený ke grafu; zavřený zůstává připojený (bez šířky, inert),
+            aby otevření i zavření mohlo plynule animovat. */}
+        <div className={`live-chart-ticket-dock ${ticketOpen ? 'is-open' : ''}`} inert={!ticketOpen} aria-hidden={!ticketOpen || undefined}>
+        <aside className="live-chart-ticket h-full w-[304px]">
           <LiveOrderTicket
             isDark={isDark}
             instrument={INSTRUMENT}
@@ -574,7 +591,8 @@ const LiveTradingScreen: React.FC<Props> = ({
             onNewDraft={side => { if (quote) { setDraft(newTicketDraft(side, 'limit', side === 'buy' ? quote.ask - 10 : quote.bid + 10, INSTRUMENT, quote)); setFromBox(false); } }}
             onClose={() => setTicketOpen(false)}
           />
-        </aside>}
+        </aside>
+        </div>
       </div>
     </div>
   );

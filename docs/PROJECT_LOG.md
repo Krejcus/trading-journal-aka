@@ -285,6 +285,64 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-31 večer — graf: Path, kurzory a šablony indikátorů jako v TradingView (Claude, lokálně)
+
+- Předloha z TradingView Desktop přes CDP (jen pozorování UI, žádný RE):
+  menu kurzorů Cross/Dot/Arrow/Demonstration/Magic/Eraser, Path ve skupině
+  Shapes, u Indicators záložka Templates (uložit / naposledy použité / otevřít).
+- **Path** (patch `@getcandlekit/charts`, ESM i CJS): `TOOL_POINTS.Path =
+  Infinity`, body se přidávají klikem, dvojklik nebo Enter dokončí (zdvojený
+  bod z dvojkliku se sloučí, < 2 body = zrušit), Esc zruší; vykreslení lomené
+  čáry se šipkou na konci, zásah na každém úseku. V liště ve „Geometrických
+  tvarech“ jako „Cesta“.
+- **Kurzory**: veřejné `DrawingController.setPointerMode(mode, css)` v patchi;
+  v aplikaci `services/chartCursorMode.ts` (localStorage, platí pro všechny
+  grafy). Kříž/Tečka nechávají čáry crosshairu, Šipka/Prezentace/Guma je skryjí
+  (popisky na osách zůstávají). Guma maže kresbu kliknutím přes `engine.remove`
+  (zamčené kresby a `auto-*` chrání stávající hit-test), klik do prázdna graf
+  posouvá. Prezentace = jen vizuální kruh v místě kliknutí. Magic vynechán.
+- **Šablony indikátorů**: v menu „ƒ Indikátory“ třetí záložka Šablony. Ukládá
+  `WorkspaceIndicatorState` (vlastní FVG/levely/struktura + knihovní s parametry)
+  do existující tabulky `chart_templates` pod klíčem `indicator-set` — bez
+  migrace, synchronizace s účtem jako u ostatních šablon. Stejný název přepíše.
+  Styl vlastních indikátorů (barvy) šablona zatím nenese.
+- Druhé kolo podle Filipa: Path se ukončí i dvojklikem s tolerancí (druhý klik
+  do 400 ms v okruhu 8 px nepřidá bod; body blíž než 4 px se sloučí) a pravým
+  tlačítkem — kontextové menu grafu se v tu chvíli spolkne. Nový nástroj
+  **Emoji** (1 bod, znak ve `style.text`, systémový emoji font = Apple emoji na
+  Macu/iPhonu, výběr s naposledy použitými v boční liště). Šablony indikátorů
+  mají hvězdičku a ikonu (emoji, jinak první písmeno); oblíbené jsou tlačítka
+  v horní liště vedle „ƒ Indikátory“. `favorite`/`icon` žijí v hodnotě šablony,
+  takže se synchronizují s účtem a normalizace stavu je ignoruje.
+- Třetí kolo: u kresby Emoji ukazuje plovoucí lišta jen velikost a koš.
+  Hlavička LIVE má vlastní vrstvu (`relative z-[800]`), aby okno účtů
+  skupiny a potvrzení vypnutí kopírky nezapadala pod plovoucí prvky grafu
+  (jen zobrazení, INV-UI). Nový **motiv LIVE** (Podle aplikace / Tmavý /
+  Světlý) v liště grafu: `services/liveScreenTheme.ts`, localStorage, řeší se
+  v `LiveTradingScreenSlot` → `isDark` pro celou obrazovku LIVE; motiv
+  aplikace ani `html.light-theme` se nemění (LIVE strom nepoužívá `dark:`
+  varianty). Návrhy panelu Objednávka: `mockups/order-panel-variants.html`
+  (v Documents, mimo git), doporučení A + D + řádek rozpočtu z B.
+- Čtvrté kolo (Filip vybral dnešní panel + úpravy, mockup
+  `mockups/order-panel-attached.html`): panel Objednávka je **ve výchozím stavu
+  zavřený** a přilepený k pravé hraně grafu (bez zaoblení, jen levá hrana,
+  plný podklad). Zavřený zůstává připojený (`width: 0`, `inert`) kvůli
+  plynulé animaci otevření/zavření; obsah naskakuje postupně. ⚡ v liště
+  position boxu je v LIVE pryč — propsání jen pravým klikem („Propsat box do
+  objednávky“), v LIVE bez ohledu na nastavení Quick Order; backtest beze
+  změny. Odeslání má animaci stisku a průběhu; po přijetí se návrh dál
+  **hned maže** (nic nejde poslat podruhé) a místo tlačítka se na 1,6 s ukáže
+  nekliknutelné zelené „Přijato“. **Sekce správy (posun SL/TP, SL na BE) z
+  panelu zmizela** — správa zůstává ve štítcích grafu. Karta pozice se
+  rozklikne na jednotlivé účty (`LiveChartPositionSummary.rows` z modelu
+  karty obchodu: název, leader jako zobrazovací štítek, kontrakty, vstup,
+  P&L z brokera, krytí SL/TP); tlačítko v hlavičce se zavřeným panelem ukazuje
+  pozici a P&L. Vše jen zobrazení (INV-UI-01..03), odesílací cesta ani
+  pojistky se nemění.
+- Worktree `~/alphatrade-worktrees/chart-tv-tools` má vlastní `node_modules`
+  (odkazy do Documents + vlastní kopie `@getcandlekit`), aby úprava knihovny
+  nesahala na sdílený strom. Nic nebylo pushnuto ani nasazeno.
+
 ### 2026-10-31 ráno — LIVE výkon: vedlejší panely mimo výchozí graf (Codex, lokálně)
 
 - F2i přesunul mimo výchozí graf neaktivní Risk, technické Události, správu

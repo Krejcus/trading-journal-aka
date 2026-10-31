@@ -46,6 +46,7 @@ import {
   LocateFixed,
   Rewind,
   RotateCcw,
+  Save,
   Scissors,
   Settings,
   StickyNote,
@@ -118,6 +119,37 @@ import {
   setWorkspaceDrawingTool,
 } from '../services/chartDrawingToolTransfer';
 import { chartDrawingToolForShortcut } from '../services/chartDrawingShortcuts';
+import {
+  chartTemplateId,
+  chartTemplates,
+  chartTemplateSyncStatus,
+  deleteChartTemplate,
+  saveChartTemplate,
+  subscribeChartTemplates,
+  syncChartTemplates,
+  type ChartTemplateRecord,
+} from '../services/chartTemplateStore';
+import {
+  describeIndicatorSetTemplate,
+  indicatorSetTemplateBadge,
+  indicatorSetTemplateMeta,
+  INDICATOR_SET_TEMPLATE_KEY,
+  normalizeIndicatorSetTemplate,
+  withIndicatorSetTemplateMeta,
+  type IndicatorSetTemplateMeta,
+} from '../services/chartIndicatorSetTemplates';
+import type { WorkspaceIndicatorState } from '../services/chartWorkspaceHistory';
+import ChartEmojiPicker from './ChartEmojiPicker';
+import { CHART_EMOJI_FONT, getChartEmoji, setChartEmoji, subscribeChartEmoji } from '../services/chartEmoji';
+import {
+  CHART_CURSOR_MODES,
+  chartCursorCss,
+  chartCursorShowsCrosshairLines,
+  getChartCursorMode,
+  setChartCursorMode,
+  subscribeChartCursorMode,
+  type ChartCursorMode,
+} from '../services/chartCursorMode';
 import { installKeepDrawingBehavior } from '../services/chartDrawingContinuation';
 import {
   CHART_DRAWING_TOOL_GROUPS,
@@ -616,19 +648,40 @@ export interface WorkspaceIndicatorControls {
   onToggleStructure: () => void;
 }
 
+/** Uložení a načtení celé sady indikátorů aktivního grafu (šablony). */
+export interface WorkspaceIndicatorTemplateControls {
+  getState: () => WorkspaceIndicatorState;
+  applyState: (state: WorkspaceIndicatorState) => void;
+}
+
 export const WorkspaceIndicatorMenu: React.FC<{
   controller: IndicatorController;
   custom: WorkspaceIndicatorControls;
   timeframe: MarketTimeframe;
   isDark: boolean;
   inline?: boolean;
-}> = ({ controller, custom, timeframe, isDark, inline = false }) => {
+  templates?: WorkspaceIndicatorTemplateControls;
+}> = ({ controller, custom, timeframe, isDark, inline = false, templates }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
+  const templateNameRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   useKeepInViewport(popupRef, open);
-  const [tab, setTab] = useState<'custom' | 'library'>('custom');
+  const [tab, setTab] = useState<'custom' | 'library' | 'templates'>('custom');
   const [, refresh] = useState(0);
+  const [templateRecords, setTemplateRecords] = useState<ChartTemplateRecord[]>(() => typeof window === 'undefined' ? [] : chartTemplates());
+  const [templateSync, setTemplateSync] = useState(chartTemplateSyncStatus);
+  const [namingTemplate, setNamingTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  const [iconPickerFor, setIconPickerFor] = useState<string | null>(null);
+
+  useEffect(() => subscribeChartTemplates(records => {
+    setTemplateRecords(records);
+    setTemplateSync(chartTemplateSyncStatus());
+  }), []);
+  useEffect(() => {
+    if (namingTemplate) window.setTimeout(() => templateNameRef.current?.focus(), 0);
+  }, [namingTemplate]);
 
   useEffect(() => {
     if (!open) return;
@@ -644,6 +697,38 @@ export const WorkspaceIndicatorMenu: React.FC<{
     [controller],
   );
   const activeNames = controller.activeNames();
+  const libraryTitle = (name: string) => available.find(indicator => indicator.name === name)?.title ?? name;
+  const indicatorSetTemplates = templateRecords
+    .filter(record => record.indicator === INDICATOR_SET_TEMPLATE_KEY)
+    .flatMap(record => {
+      const state = normalizeIndicatorSetTemplate(record.value);
+      return state ? [{ record, state, meta: indicatorSetTemplateMeta(record.value) }] : [];
+    })
+    // Oblíbené nahoře, jinak podle názvu.
+    .sort((a, b) => Number(b.meta.favorite) - Number(a.meta.favorite) || a.record.name.localeCompare(b.record.name, 'cs'));
+  const updateTemplateMeta = (record: ChartTemplateRecord, state: WorkspaceIndicatorState, meta: IndicatorSetTemplateMeta) => {
+    void saveChartTemplate({
+      ...record,
+      value: withIndicatorSetTemplateMeta(state, meta),
+      updatedAt: new Date().toISOString(),
+    });
+  };
+  const saveIndicatorTemplate = () => {
+    const name = templateName.trim();
+    if (!name || !templates) return;
+    const existing = indicatorSetTemplates.find(item => item.record.name.trim().toLocaleLowerCase('cs') === name.toLocaleLowerCase('cs'));
+    void saveChartTemplate({
+      // Stejný název přepíše starou šablonu (jako v TradingView).
+      id: existing?.record.id ?? chartTemplateId(),
+      indicator: INDICATOR_SET_TEMPLATE_KEY,
+      name,
+      // Přepsání stejného názvu si nechá hvězdičku i ikonu.
+      value: withIndicatorSetTemplateMeta(structuredClone(templates.getState()), existing?.meta ?? { favorite: false, icon: null }),
+      updatedAt: new Date().toISOString(),
+    });
+    setTemplateName('');
+    setNamingTemplate(false);
+  };
   const rowClass = `w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-[10px] font-bold transition-colors ${isDark ? 'hover:bg-white/5 text-slate-300' : 'hover:bg-slate-50 text-slate-700'}`;
   const checkClass = (active: boolean) => `w-4 h-4 shrink-0 rounded border flex items-center justify-center ${active ? 'bg-blue-500 border-blue-500 text-white' : isDark ? 'border-white/15' : 'border-slate-300'}`;
 
@@ -665,12 +750,88 @@ export const WorkspaceIndicatorMenu: React.FC<{
       </button>
       {open && (
         <div ref={popupRef} data-toolbar-popup className={`absolute ${inline ? 'left-0 top-8' : 'right-0 top-9'} w-[290px] max-h-[420px] overflow-hidden rounded-xl border shadow-2xl ${isDark ? 'bg-[#111821] border-white/10' : 'bg-white border-slate-200'}`}>
-          <div className={`grid grid-cols-2 p-1 border-b ${isDark ? 'border-white/10' : 'border-slate-100'}`}>
+          <div className={`grid ${templates ? 'grid-cols-3' : 'grid-cols-2'} p-1 border-b ${isDark ? 'border-white/10' : 'border-slate-100'}`}>
             <button type="button" onClick={() => setTab('custom')} className={`h-8 rounded-lg text-[9px] font-black uppercase tracking-wider ${tab === 'custom' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Vlastní</button>
             <button type="button" onClick={() => setTab('library')} className={`h-8 rounded-lg text-[9px] font-black uppercase tracking-wider ${tab === 'library' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Knihovna</button>
+            {templates && <button type="button" onClick={() => { setTab('templates'); void syncChartTemplates(); }} className={`h-8 rounded-lg text-[9px] font-black uppercase tracking-wider ${tab === 'templates' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Šablony</button>}
           </div>
           <div className="max-h-[370px] overflow-y-auto py-1">
-            {tab === 'custom' ? customRows.map(item => (
+            {tab === 'templates' && templates ? <>
+              {namingTemplate ? <form onSubmit={event => { event.preventDefault(); saveIndicatorTemplate(); }} className="space-y-2 px-3 py-2">
+                <label className={`block text-[9px] font-black uppercase tracking-wider ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Název šablony</label>
+                <input
+                  ref={templateNameRef}
+                  value={templateName}
+                  onChange={event => setTemplateName(event.target.value)}
+                  onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setNamingTemplate(false); setTemplateName(''); } }}
+                  maxLength={60}
+                  placeholder="Např. Nasdaq ráno"
+                  className={`h-8 w-full rounded-md border px-2 text-[11px] font-semibold outline-none focus:border-blue-500 ${isDark ? 'bg-white/5 border-white/10 text-white' : 'bg-white border-slate-300 text-slate-900'}`}
+                />
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => { setNamingTemplate(false); setTemplateName(''); }} className={`h-7 rounded px-2 text-[10px] font-bold ${isDark ? 'text-slate-400 hover:bg-white/5' : 'text-slate-600 hover:bg-slate-100'}`}>Zrušit</button>
+                  <button type="submit" disabled={!templateName.trim()} className="flex h-7 items-center gap-1 rounded bg-blue-500 px-2.5 text-[10px] font-black text-white disabled:opacity-40"><Save size={12} /> Uložit</button>
+                </div>
+              </form> : <button
+                type="button"
+                disabled={templateSync === 'signed-out'}
+                onClick={() => setNamingTemplate(true)}
+                className={`${rowClass} disabled:opacity-40`}
+              >
+                <span className="flex items-center gap-2"><Save size={13} /> Uložit šablonu indikátorů…</span>
+              </button>}
+              {indicatorSetTemplates.length > 0 && <div className={`my-1 border-t ${isDark ? 'border-white/10' : 'border-slate-100'}`} />}
+              {indicatorSetTemplates.map(({ record, state, meta }) => (
+                <React.Fragment key={record.id}>
+                <div className={`group flex items-center ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-50'}`}>
+                  <button
+                    type="button"
+                    onClick={() => setIconPickerFor(current => current === record.id ? null : record.id)}
+                    title="Ikona v horní liště: emoji, nebo první písmeno"
+                    aria-label={`Ikona šablony ${record.name}`}
+                    aria-expanded={iconPickerFor === record.id}
+                    className={`ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${meta.icon ? 'text-[16px]' : 'text-[11px] font-black'} ${isDark ? 'border-white/10 text-slate-200 hover:bg-white/10' : 'border-slate-200 text-slate-700 hover:bg-white'}`}
+                    style={meta.icon ? { fontFamily: CHART_EMOJI_FONT } : undefined}
+                  >{indicatorSetTemplateBadge(record.name, meta.icon)}</button>
+                  <button
+                    type="button"
+                    onClick={() => { templates.applyState(structuredClone(state)); refresh(value => value + 1); setOpen(false); }}
+                    className={`min-w-0 flex-1 px-3 py-2 text-left text-[10px] font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}
+                    title={`Načíst šablonu ${record.name}`}
+                  >
+                    <span className="block truncate">{record.name}</span>
+                    <span className="block mt-0.5 truncate text-[8px] font-semibold text-slate-500">{describeIndicatorSetTemplate(state, libraryTitle)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`${meta.favorite ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}: ${record.name}`}
+                    title={meta.favorite ? 'Odebrat z horní lišty' : 'Přidat do horní lišty'}
+                    aria-pressed={meta.favorite}
+                    onClick={() => updateTemplateMeta(record, state, { ...meta, favorite: !meta.favorite })}
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded transition-opacity focus:opacity-100 group-hover:opacity-100 ${meta.favorite ? 'text-amber-400' : 'text-slate-400 opacity-0 hover:text-amber-400'}`}
+                  ><Star size={13} fill={meta.favorite ? 'currentColor' : 'none'} /></button>
+                  <button
+                    type="button"
+                    aria-label={`Smazat šablonu ${record.name}`}
+                    onClick={() => { void deleteChartTemplate(record.id); }}
+                    className="mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-400 opacity-0 transition-opacity hover:text-rose-500 focus:opacity-100 group-hover:opacity-100"
+                  ><Trash2 size={13} /></button>
+                </div>
+                {iconPickerFor === record.id && <div className={`mx-2 mb-1 rounded-lg border ${isDark ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-slate-50'}`}>
+                  <ChartEmojiPicker
+                    value={meta.icon}
+                    isDark={isDark}
+                    noneLabel={`Bez emoji — písmeno „${indicatorSetTemplateBadge(record.name, null)}“`}
+                    onNone={() => { updateTemplateMeta(record, state, { ...meta, icon: null }); setIconPickerFor(null); }}
+                    onPick={emoji => { updateTemplateMeta(record, state, { ...meta, icon: emoji, favorite: true }); setIconPickerFor(null); }}
+                  />
+                </div>}
+                </React.Fragment>
+              ))}
+              {!indicatorSetTemplates.length && !namingTemplate && <p className="px-3 py-2 text-[9px] font-semibold text-slate-500">Zatím žádná šablona. Ulož aktuální sadu indikátorů a načteš ji jedním klikem na jakémkoli grafu.</p>}
+              {templateSync === 'signed-out' && <p className="px-3 py-2 text-[9px] font-semibold text-slate-500">Pro ukládání šablon se přihlas.</p>}
+              {(templateSync === 'offline' || templateSync === 'memory-only') && <p className="px-3 py-2 text-[9px] font-semibold text-amber-500">Šablony teď nejdou uložit do cloudu.</p>}
+            </> : tab === 'custom' ? customRows.map(item => (
               <button key={item.label} type="button" onClick={item.onClick} className={rowClass}>
                 <span><span className="block">{item.label}</span><span className="block mt-0.5 text-[8px] font-semibold text-slate-500">{item.detail}</span></span>
                 <span className={checkClass(item.active)}>{item.active && <Check size={11} strokeWidth={3} />}</span>
@@ -872,6 +1033,25 @@ const ToolSvg: React.FC<ToolIconProps & { children: React.ReactNode }> = ({ size
 const CursorToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
   <path d="M12 3.5V9M12 15v5.5M3.5 12H9M15 12h5.5" /><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
 </ToolSvg>;
+const DotCursorIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
+  <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
+</ToolSvg>;
+const ArrowCursorIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
+  <path d="M6.5 4.5v14l3.6-3.4 2.4 5.4 2.3-1-2.4-5.3h5.1L6.5 4.5Z" />
+</ToolSvg>;
+const DemonstrationCursorIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
+  <circle cx="12" cy="12" r="7.5" opacity=".55" /><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" />
+</ToolSvg>;
+const EraserCursorIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
+  <path d="m4 15.5 9-9 6.5 6.5-6 6H7.5L4 15.5Z" /><path d="m9 10.5 6.5 6.5M13.5 19h6.5" />
+</ToolSvg>;
+const CURSOR_MODE_ICONS: Record<ChartCursorMode, React.FC<ToolIconProps>> = {
+  cross: CursorToolIcon,
+  dot: DotCursorIcon,
+  arrow: ArrowCursorIcon,
+  demonstration: DemonstrationCursorIcon,
+  eraser: EraserCursorIcon,
+};
 const TrendLineToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
   <path d="M6.5 17.5 17.5 6.5" /><circle cx="5.2" cy="18.8" r="1.8" /><circle cx="18.8" cy="5.2" r="1.8" />
 </ToolSvg>;
@@ -907,6 +1087,12 @@ const CircleToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
 </ToolSvg>;
 const TriangleToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
   <path d="M12 5.2 20 18.5H4L12 5.2Z" />
+</ToolSvg>;
+const PathToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
+  <path d="m4.5 17 5-7.5 4.5 5 5.5-8" /><path d="M15.3 6.3h4.2v4.2" />
+</ToolSvg>;
+const EmojiToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
+  <circle cx="12" cy="12" r="8" /><path d="M8.8 14.2a4 4 0 0 0 6.4 0" /><circle cx="9.3" cy="10" r=".9" fill="currentColor" stroke="none" /><circle cx="14.7" cy="10" r=".9" fill="currentColor" stroke="none" />
 </ToolSvg>;
 const ParallelChannelToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
   <path d="M4 15.5 15.5 4M8.5 20 20 8.5" /><path d="M6.25 17.75 17.75 6.25" opacity=".45" strokeDasharray="1.5 2.5" />
@@ -961,9 +1147,11 @@ export const ALPHATRADE_DRAWING_TOOLS: AlphaTradeDrawingTool[] = [
   { id: 'CrossLine', title: 'Křížová čára', icon: CrossLineToolIcon, shortcut: 'Alt+C' },
   { id: 'Arrow', title: 'Šipka', icon: ArrowToolIcon, dividerBefore: true },
   { id: 'Text', title: 'Text', icon: TextToolIcon },
+  { id: 'Emoji', title: 'Emoji', icon: EmojiToolIcon },
   { id: 'Rectangle', title: 'Obdélník', icon: RectangleToolIcon },
   { id: 'Circle', title: 'Elipsa', icon: CircleToolIcon },
   { id: 'Triangle', title: 'Trojúhelník', icon: TriangleToolIcon },
+  { id: 'Path', title: 'Cesta', icon: PathToolIcon },
   { id: 'ParallelChannel', title: 'Paralelní kanál', icon: ParallelChannelToolIcon, dividerBefore: true },
   { id: 'PriceRange', title: 'Cenové rozpětí', icon: PriceRangeToolIcon },
   { id: 'DateRange', title: 'Časové rozpětí', icon: DateRangeToolIcon },
@@ -1061,8 +1249,12 @@ export const AlphaTradeDrawingToolbar: React.FC<{
   const favoritesLeaveTimerRef = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(favoritesLeaveTimerRef.current), []);
   const [keepDrawing, setKeepDrawing] = useState(loadKeepDrawing);
+  const [cursorMode, setCursorModeState] = useState<ChartCursorMode>(getChartCursorMode);
+  useEffect(() => subscribeChartCursorMode(setCursorModeState), []);
+  const [chartEmoji, setChartEmojiState] = useState(getChartEmoji);
+  useEffect(() => subscribeChartEmoji(setChartEmojiState), []);
   const [toolGroupMenu, setToolGroupMenu] = useState<{
-    id: ChartDrawingToolGroupId;
+    id: ChartDrawingToolGroupId | 'cursor';
     left: number;
     top: number;
   } | null>(null);
@@ -1357,7 +1549,7 @@ export const AlphaTradeDrawingToolbar: React.FC<{
     setWorkspaceDrawingTool(workspaceEngines, tool);
     setToolGroupMenu(null);
   };
-  const openToolGroupMenu = (id: ChartDrawingToolGroupId, target: HTMLElement, itemCount: number) => {
+  const openToolGroupMenu = (id: ChartDrawingToolGroupId | 'cursor', target: HTMLElement, itemCount: number) => {
     const rect = target.getBoundingClientRect();
     const menuHeight = 36 + itemCount * 40 + 8;
     setToolGroupMenu(current => current?.id === id ? null : {
@@ -1473,23 +1665,35 @@ export const AlphaTradeDrawingToolbar: React.FC<{
       aria-label="Kreslicí nástroje"
       inert={docked && collapsed}
     >
-      <button
-        type="button"
-        className={buttonClass(activeTool === null)}
-        onClick={selectPointer}
-        title="Kurzor / výběr"
-        aria-label="Kurzor / výběr"
-        aria-pressed={activeTool === null}
-      >
-        <CursorToolIcon size={20} />
-      </button>
+      <div className="alphatrade-chart-tool-group">
+        <button
+          type="button"
+          className={buttonClass(activeTool === null)}
+          onClick={selectPointer}
+          title={`Kurzor: ${CHART_CURSOR_MODES.find(mode => mode.id === cursorMode)?.title ?? 'Kříž'}`}
+          aria-label="Kurzor / výběr"
+          aria-pressed={activeTool === null}
+        >
+          {React.createElement(CURSOR_MODE_ICONS[cursorMode], { size: 20 })}
+        </button>
+        <button
+          type="button"
+          className="alphatrade-chart-tool-group-trigger"
+          onClick={event => openToolGroupMenu('cursor', event.currentTarget.parentElement!, CHART_CURSOR_MODES.length)}
+          title="Kurzory"
+          aria-label="Kurzory"
+          aria-haspopup="menu"
+          aria-expanded={toolGroupMenu?.id === 'cursor'}
+        ><ChevronDown size={8} /></button>
+      </div>
       {CHART_DRAWING_TOOL_GROUPS.map(group => {
         const selectedTool = ALPHATRADE_DRAWING_TOOL_MAP.get(
           group.tools.includes(activeTool as DrawingToolId) ? activeTool as DrawingToolId : toolSelections[group.id],
         );
         if (!selectedTool) return null;
         const Icon = selectedTool.icon;
-        const hasMenu = group.tools.length > 1;
+        const isEmojiGroup = group.id === 'emoji';
+        const hasMenu = group.tools.length > 1 || isEmojiGroup;
         return (
           <React.Fragment key={group.id}>
             {group.dividerBefore && <span className="alphatrade-chart-tool-divider" />}
@@ -1503,12 +1707,14 @@ export const AlphaTradeDrawingToolbar: React.FC<{
               aria-keyshortcuts={selectedTool.shortcut}
               aria-pressed={activeTool === selectedTool.id}
             >
-              <Icon size={20} />
+              {isEmojiGroup
+                ? <span className="text-[18px] leading-none" style={{ fontFamily: CHART_EMOJI_FONT }} aria-hidden="true">{chartEmoji}</span>
+                : <Icon size={20} />}
             </button>
             {hasMenu && <button
               type="button"
               className="alphatrade-chart-tool-group-trigger"
-              onClick={event => openToolGroupMenu(group.id, event.currentTarget.parentElement!, group.tools.length)}
+              onClick={event => openToolGroupMenu(group.id, event.currentTarget.parentElement!, isEmojiGroup ? 11 : group.tools.length)}
               title={`Další nástroje: ${group.title}`}
               aria-label={`Další nástroje: ${group.title}`}
               aria-haspopup="menu"
@@ -1518,7 +1724,58 @@ export const AlphaTradeDrawingToolbar: React.FC<{
           </React.Fragment>
         );
       })}
-      {toolGroupMenu && createPortal((() => {
+      {toolGroupMenu?.id === 'cursor' && createPortal(<div
+        ref={toolGroupMenuRef}
+        data-chart-overlay-menu
+        className={`alphatrade-chart-tool-menu ${isDark ? 'is-dark' : ''}`}
+        style={{ left: toolGroupMenu.left, top: toolGroupMenu.top }}
+        role="menu"
+        aria-label="Kurzory"
+      >
+        <div className="alphatrade-chart-tool-menu-title">Kurzory</div>
+        {CHART_CURSOR_MODES.map(mode => {
+          const ModeIcon = CURSOR_MODE_ICONS[mode.id];
+          const selected = cursorMode === mode.id;
+          return <div className="alphatrade-chart-tool-menu-row" key={mode.id}>
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={selected}
+              className={selected ? 'is-selected' : ''}
+              onClick={() => {
+                setChartCursorMode(mode.id);
+                selectPointer();
+                setToolGroupMenu(null);
+              }}
+            >
+              <ModeIcon size={20} />
+              <span>{mode.title}</span>
+            </button>
+          </div>;
+        })}
+      </div>, document.body)}
+      {toolGroupMenu?.id === 'emoji' && createPortal(<div
+        ref={toolGroupMenuRef}
+        data-chart-overlay-menu
+        className={`alphatrade-chart-tool-menu is-emoji ${isDark ? 'is-dark' : ''}`}
+        style={{ left: toolGroupMenu.left, top: toolGroupMenu.top }}
+        role="menu"
+        aria-label="Emoji"
+      >
+        <div className="alphatrade-chart-tool-menu-title">Emoji</div>
+        <ChartEmojiPicker
+          value={chartEmoji}
+          isDark={isDark}
+          onPick={emoji => {
+            setChartEmoji(emoji);
+            rememberToolSelection('Emoji');
+            // Znovu spustit i aktivní nástroj, ať nový bod nese nové emoji.
+            setWorkspaceDrawingTool(workspaceEngines, 'Emoji');
+            setToolGroupMenu(null);
+          }}
+        />
+      </div>, document.body)}
+      {toolGroupMenu && toolGroupMenu.id !== 'cursor' && toolGroupMenu.id !== 'emoji' && createPortal((() => {
         const group = CHART_DRAWING_TOOL_GROUPS.find(item => item.id === toolGroupMenu.id);
         if (!group) return null;
         return <div
@@ -2142,6 +2399,32 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const [priceScaleMode, setPriceScaleMode] = useState<ChartPriceScaleModeName>('normal');
   const [priceScaleAuto, setPriceScaleAuto] = useState(true);
   const [chartApiEpoch, setChartApiEpoch] = useState(0);
+  // Režim kurzoru z levé lišty (Kříž/Tečka/Šipka/Prezentace/Guma) platí pro
+  // všechny grafy; kurzor myši a gumu řídí kreslicí ovladač.
+  const [cursorMode, setCursorMode] = useState<ChartCursorMode>(getChartCursorMode);
+  useEffect(() => subscribeChartCursorMode(setCursorMode), []);
+  useEffect(() => {
+    apiRef.current?.drawing?.setPointerMode(cursorMode, chartCursorCss(cursorMode));
+  }, [chartApiEpoch, cursorMode]);
+  // Prezentace: klik do grafu nechá rozbíhající se kruh, aby divák viděl, kam
+  // se ukazuje. Jen vizuál — na graf ani kresby nesahá.
+  useEffect(() => {
+    if (cursorMode !== 'demonstration') return;
+    const element = apiRef.current?.controller.getChart().chartElement();
+    if (!element) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const rect = element.getBoundingClientRect();
+      const ripple = document.createElement('span');
+      ripple.className = 'alphatrade-chart-demo-ripple';
+      ripple.style.left = `${event.clientX - rect.left}px`;
+      ripple.style.top = `${event.clientY - rect.top}px`;
+      element.appendChild(ripple);
+      window.setTimeout(() => ripple.remove(), 700);
+    };
+    if (getComputedStyle(element).position === 'static') element.style.position = 'relative';
+    element.addEventListener('pointerdown', handlePointerDown);
+    return () => element.removeEventListener('pointerdown', handlePointerDown);
+  }, [chartApiEpoch, cursorMode]);
   const chartApiInstanceRef = useRef<ChartViewApi | null>(null);
   const previousDayCloseLineRef = useRef<ManagedPriceLine | null>(null);
   const highLineRef = useRef<ManagedPriceLine | null>(null);
@@ -4932,8 +5215,14 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const chartSettingsOptions = useMemo(() => {
     const canvas = chartCanvasOptions(chartSettings);
     const { symbol, scales } = chartSettings;
+    const crosshairLines = chartCursorShowsCrosshairLines(cursorMode);
     return {
       ...canvas,
+      crosshair: {
+        ...canvas.crosshair,
+        vertLine: { ...canvas.crosshair?.vertLine, visible: crosshairLines },
+        horzLine: { ...canvas.crosshair?.horzLine, visible: crosshairLines },
+      },
       // Logo TradingView v rohu grafu ne — licence je splněná atribucí v Nastavení.
       layout: { ...canvas.layout, fontFamily: chartStyle.fontFamily, attributionLogo: false },
       timeScale: {
@@ -4960,7 +5249,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         priceFormatter: chartPriceFormatter(symbol.precision, formatNqMnqTickPrice),
       },
     };
-  }, [chartSettings, timeframe]);
+  }, [chartSettings, cursorMode, timeframe]);
 
   const appliedMarginRightRef = useRef<number | null>(null);
   useEffect(() => {

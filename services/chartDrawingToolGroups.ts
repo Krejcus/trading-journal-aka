@@ -1,6 +1,6 @@
 import type { DrawingToolId } from '@getcandlekit/charts/react';
 
-export type ChartDrawingToolGroupId = 'lines' | 'fibonacci' | 'annotation' | 'shapes' | 'measure' | 'position';
+export type ChartDrawingToolGroupId = 'lines' | 'fibonacci' | 'annotation' | 'emoji' | 'shapes' | 'measure' | 'position';
 
 export interface ChartDrawingToolGroup {
   id: ChartDrawingToolGroupId;
@@ -35,9 +35,15 @@ export const CHART_DRAWING_TOOL_GROUPS: readonly ChartDrawingToolGroup[] = [
     defaultTool: 'Arrow',
   },
   {
+    id: 'emoji',
+    title: 'Emoji',
+    tools: ['Emoji'],
+    defaultTool: 'Emoji',
+  },
+  {
     id: 'shapes',
     title: 'Geometrické tvary',
-    tools: ['Rectangle', 'Circle', 'Triangle'],
+    tools: ['Rectangle', 'Path', 'Circle', 'Triangle'],
     defaultTool: 'Rectangle',
   },
   {

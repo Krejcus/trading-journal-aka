@@ -69,6 +69,7 @@ import CandleKitTradeChart, {
   WorkspaceIndicatorMenu,
   type CandleKitDrawingEngine,
 } from './CandleKitTradeChart';
+import IndicatorTemplateFavorites from './IndicatorTemplateFavorites';
 import ChartTimeframePicker from './ChartTimeframePicker';
 import ChartLayoutPicker, {
   CurrentChartLayoutGlyph,
@@ -350,6 +351,8 @@ interface AlphaTradeChartWorkspaceProps {
   defaultLayoutId?: ChartWorkspaceLayoutId;
   /** LIVE → Graf: panel objednávky (jen návrh, nic se neodesílá). V backtestu se ignoruje. */
   liveOrderEntry?: LiveOrderEntryBridge;
+  /** Doplňkové ovládání na konci horní lišty (LIVE: motiv obrazovky). */
+  toolbarEnd?: React.ReactNode;
 }
 
 export interface WorkspaceReviewSlots {
@@ -988,7 +991,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               : undefined}
             showManagedPositionBoxes={context.tradingSettings.positionBoxes}
             chartOrderQuantity={context.backtestSession?.chartOrderQuantity ?? context.liveOrderEntry?.chartOrderQuantity}
-            onPositionQuickOrder={context.tradingSettings.quickOrderButton ? context.onPositionQuickOrder : undefined}
+            // LIVE: propsání boxu jen pravým klikem, vždy (⚡ v liště boxu tam není).
+            onPositionQuickOrder={context.tradingSettings.quickOrderButton || context.liveOrderEntry ? context.onPositionQuickOrder : undefined}
             positionQuickOrderLabel={context.liveOrderEntry ? 'Propsat box do objednávky' : undefined}
             liveSeries={Boolean(context.liveOrderEntry)}
             chartOrderLabelSuffix={context.liveOrderEntry ? ' · návrh' : undefined}
@@ -1112,6 +1116,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   resetViewOnOpen = false,
   livePriceLines = null,
   liveOrderEntry,
+  toolbarEnd,
 }) => {
   const layoutStorageKey = layoutScope ? `${WORKSPACE_LAYOUT_STORAGE_KEY}:${layoutScope}` : WORKSPACE_LAYOUT_STORAGE_KEY;
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -3020,6 +3025,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           timeframe={activeControl.config.timeframe}
           isDark={isDark}
           inline
+          templates={{
+            getState: activeControl.getIndicatorState,
+            applyState: activeControl.applyIndicatorState,
+          }}
           custom={{
             showFvg: activeControl.config.showFvg,
             showLevels: activeControl.config.showLevels,
@@ -3028,6 +3037,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             onToggleLevels: () => activeControl.updateConfig({ showLevels: !activeControl.config.showLevels }),
             onToggleStructure: () => activeControl.updateConfig({ showStructure: !activeControl.config.showStructure }),
           }}
+        />}
+        {activeControl && <IndicatorTemplateFavorites
+          isDark={isDark}
+          onApply={activeControl.applyIndicatorState}
         />}
         {!liveTradingChart && <button
           type="button"
@@ -3126,6 +3139,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           title={workspaceHistoryState.redoLabel ? `Dopředu: ${workspaceHistoryState.redoLabel} (Shift+⌘/Ctrl+Z)` : 'Dopředu (Shift+⌘/Ctrl+Z)'}
           aria-label="Opakovat poslední změnu workspace"
         ><Redo2 size={15} /></button>
+        {toolbarEnd}
         <span className="hidden 2xl:block text-[8px] font-bold uppercase tracking-wider text-slate-600">{status}</span>
           </div>
           {toolbarOffset < toolbarMaxOffset && (
@@ -3173,7 +3187,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             onClose={() => setPositionSettingsOpen(false)}
             onOpenSettings={() => setPositionSettingsOpen(true)}
             isDark={isDark}
-            onQuickOrder={chartTradingSettings.quickOrderButton && (backtestSession?.onQuickOrder || liveQuickOrder) ? submitSelectedPositionQuickOrder : undefined}
+            onQuickOrder={chartTradingSettings.quickOrderButton && backtestSession?.onQuickOrder ? submitSelectedPositionQuickOrder : undefined}
             quickOrderDisabled={Boolean(quickOrderDisabledReason)}
             quickOrderTitle={quickOrderDisabledReason ?? (liveQuickOrder
               ? 'Propsat box do objednávky — vstup, SL, TP a kontrakty z rizika (nic se neodesílá)'

@@ -34,6 +34,23 @@ export interface LiveChartPositionSummary {
    * dá i followerovi), proto správa vždy porovná `accountId` s leaderem skupiny workeru.
    */
   leader: { accountId: number; quantity: number; entry: number | null } | null;
+  /** Účty v obchodu pro rozbalení karty pozice (jen zobrazení; leader první). */
+  rows: readonly LiveChartPositionAccountRow[];
+}
+
+export interface LiveChartPositionAccountRow {
+  accountId: number;
+  name: string;
+  /** Zobrazovací příznak — nikdy autorizace (viz `leader`). */
+  isLeader: boolean;
+  quantity: number;
+  entry: number | null;
+  /** Otevřené P&L účtu z brokera po poplatcích; null = neznámo. */
+  openPnl: number | null;
+  stop: number | null;
+  target: number | null;
+  /** SL i TP kryjí celou pozici účtu. */
+  protectedFully: boolean;
 }
 
 export interface LiveChartPosition {
@@ -116,6 +133,17 @@ export function liveChartPosition(view: JournalLiveView, requested: JournalLiveT
     accounts,
     scopeLabel: view.scopeLabel,
     leader: leaderOf(model.accounts),
+    rows: model.accounts.map(account => ({
+      accountId: account.accountId,
+      name: account.name,
+      isLeader: account.isLeader,
+      quantity: account.quantity,
+      entry: account.entry,
+      openPnl: model.kind === 'position' ? account.openPnl : null,
+      stop: account.stop?.price ?? null,
+      target: account.target?.price ?? null,
+      protectedFully: account.stop?.exact === true && account.target?.exact === true,
+    })),
   };
   const lines = journalLivePriceLines(model);
   return { key: JSON.stringify([model.symbol, summary, lines.map(line => [line.id, line.price, line.title])]), symbol: model.symbol, lines, summary, issue: null };

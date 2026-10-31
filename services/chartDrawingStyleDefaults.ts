@@ -7,6 +7,7 @@ import {
   writeChartAppearance,
   writeGlobalChartAppearance,
 } from './chartAppearanceScope';
+import { getChartEmoji } from './chartEmoji';
 
 const STORAGE_KEY = CHART_APPEARANCE_STORAGE_KEYS.drawingStyleDefaults;
 
@@ -183,7 +184,9 @@ export const installDrawingStyleDefaults = (
   const baseStyle = engine.getDefaultStyle();
   const originalStartTool = engine.startTool.bind(engine);
   const patchedStartTool: DrawingEngine['startTool'] = tool => {
-    engine.setDefaultStyle(getDrawingStyleDefault(tool, baseStyle, storage));
+    const style = getDrawingStyleDefault(tool, baseStyle, storage);
+    // Emoji nese znak ve style.text — vždy ten aktuálně vybraný v liště.
+    engine.setDefaultStyle(tool === 'Emoji' ? { ...style, text: getChartEmoji(), fontSize: style.fontSize ?? 28 } : style);
     originalStartTool(tool);
   };
   engine.startTool = patchedStartTool;
