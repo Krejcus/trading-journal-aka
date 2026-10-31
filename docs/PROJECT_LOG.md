@@ -339,6 +339,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   P&L z brokera, krytí SL/TP); tlačítko v hlavičce se zavřeným panelem ukazuje
   pozici a P&L. Vše jen zobrazení (INV-UI-01..03), odesílací cesta ani
   pojistky se nemění.
+- Oprava: LIVE graf dostával profil indikátorů (FVG/levely/struktura) zmrazený
+  při otevření (`useState(readTradeChartIndicators)` bez odběru) — workspace
+  pak každé přepnutí v menu i × v legendě vrátil („probliknutí“, změna až po
+  obnovení). Teď odebírá `onTradeChartIndicatorsChange` jako deník a graf dne.
+  Prázdný otevřený panel ukazuje celý formulář ztlumený a `inert` (vzor
+  Limit −10 b), ožije výběrem Koupit/Prodat; do grafu ani k odeslání nic nejde.
 - Worktree `~/alphatrade-worktrees/chart-tv-tools` má vlastní `node_modules`
   (odkazy do Documents + vlastní kopie `@getcandlekit`), aby úprava knihovny
   nesahala na sdílený strom. Nic nebylo pushnuto ani nasazeno.

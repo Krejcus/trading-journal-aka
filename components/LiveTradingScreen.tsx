@@ -32,7 +32,7 @@ import {
   type LiveTradeGroup,
   type LiveTradeTarget,
 } from '../lib/liveTradeTarget';
-import { readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
+import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
 import { LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
@@ -316,7 +316,10 @@ const LiveTradingScreen: React.FC<Props> = ({
     try { setDisarmResult(await onDisarm()); } finally { disarmInFlightRef.current = false; setDisarmBusy(false); }
   }, [disarmBusy, onDisarm]);
   // Návrh se sám nezakládá: čáry SL/TP na živém grafu jen když o ně uživatel požádá.
-  const [tradeIndicators] = useState(readTradeChartIndicators);
+  // Profil indikátorů (FVG, levely, struktura) se mění za běhu — bez odběru by graf
+  // po každém přepnutí vrátil stav z otevření (probliknutí, změna až po obnovení).
+  const [tradeIndicators, setTradeIndicators] = useState(readTradeChartIndicators);
+  useEffect(() => onTradeChartIndicatorsChange(setTradeIndicators), []);
 
   // Market: SL a TP jedou s cenou (drží nastavenou vzdálenost od vstupu).
   const marketEntryRef = useRef<number | null>(null);

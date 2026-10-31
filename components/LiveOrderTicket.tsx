@@ -5,6 +5,7 @@ import {
   bracketPriceFromInput,
   limitIsMarketable,
   marketPrice,
+  newTicketDraft,
   snapToTick,
   ticketMetrics,
   ticketProblems,
@@ -386,6 +387,11 @@ const LiveOrderTicket: React.FC<Props> = ({
   const label = `text-[9px] font-black uppercase tracking-[0.1em] ${tone.muted}`;
 
   const m = draft && quote ? ticketMetrics(draft, instrument, quote) : null;
+  // Otevřený panel bez návrhu ukazuje celý formulář (ztlumený, neaktivní) —
+  // ožije až výběrem Koupit / Prodat. Nic z něj nejde do grafu ani k odeslání.
+  const restingDraft = !draft && quote ? newTicketDraft('buy', 'limit', quote.ask - 10, instrument, quote) : null;
+  const formDraft = draft ?? restingDraft;
+  const formMetrics = formDraft && quote ? (draft ? m : ticketMetrics(formDraft, instrument, quote)) : null;
   const limits = group ? limitAccounts(group, target).map(({ account, multiplier }) => ({
     name: account.name, remainingUsd: account.dayRemaining.value, stale: account.dayRemaining.stale, multiplier,
   })) : null;
@@ -634,7 +640,7 @@ const LiveOrderTicket: React.FC<Props> = ({
           {quoteInfo.stale ? 'Cena z grafu je stará — ' : 'Orientačně z grafu · '}{quoteInfo.source ?? 'zdroj neznámý'}{quoteAge != null ? ` · před ${quoteAge} s` : ''}
         </div>
 
-        {draft && m ? <>
+        {formDraft && formMetrics ? <div className={draft ? 'contents' : 'pointer-events-none flex select-none flex-col gap-2.5 opacity-45'} inert={!draft} aria-hidden={!draft || undefined}>{((draft: TicketDraft, m: NonNullable<typeof formMetrics>) => <>
           <div className={`flex h-[30px] rounded-[9px] border p-0.5 ${tone.seg}`}>
             {(['market', 'limit', 'stop'] as const).map(type => <button key={type} type="button" onClick={() => setType(type)} className={seg(draft.type === type)}>{TYPE_LABEL[type]}</button>)}
           </div>
@@ -724,7 +730,7 @@ const LiveOrderTicket: React.FC<Props> = ({
             <div className={`flex items-baseline justify-between text-[11px] ${tone.muted}`}><span>Poměr R:R</span><b className={`font-mono text-[12px] ${tone.ink}`}>{m.riskReward != null ? `1 : ${m.riskReward.toFixed(2)}` : '—'}</b></div>
             {group?.sample && !single && scope !== 'account' && <div className="text-[9.5px] font-bold text-amber-600">Účty jsou ukázka — napojení na worker přijde zvlášť.</div>}
           </div>
-        </> : <p className={`m-0 text-center text-[11px] ${tone.muted}`}>Klikni na Koupit / Prodat, nebo pravým na position box či do grafu.</p>}
+        </>)(formDraft, formMetrics)}</div> : null}
       </>}
     </div>
 
@@ -759,6 +765,11 @@ const LiveOrderTicket: React.FC<Props> = ({
         </small>
       </button>
       {shownDirect && <div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${shownDirect.view.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : shownDirect.view.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{shownDirect.view.text}</div>}
+    </div>}
+    {!draft && !sentFlash && quote && <div className={`grid shrink-0 gap-1.5 border-t pt-2 ${tone.line}`}>
+      <div className={`grid h-[44px] place-items-center rounded-[8px] border border-dashed text-[11.5px] font-bold ${tone.field} ${tone.muted}`}>
+        Vyber Koupit nebo Prodat
+      </div>
     </div>}
     {!draft && sentFlash && <div className={`grid shrink-0 gap-1.5 border-t pt-2 ${tone.line}`}>
       <div role="status" className="live-ticket-send is-ok grid h-[44px] place-items-center rounded-[8px] text-[12px] font-extrabold text-white">
