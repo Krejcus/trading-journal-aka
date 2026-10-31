@@ -84,6 +84,7 @@ describe('INV-UI-04: soubory předběžných svíček (tv-live, tv-bars) jen pro
       cwd: join(__dirname, '..'), encoding: 'utf8',
     }).trim().split('\n').filter(file => !file.startsWith('tests/') && !file.startsWith('docs/'));
     expect(files.sort()).toEqual([
+      'components/LiveTradingScreenSlot.tsx',
       'components/TradeMarketChart.tsx',
       'hooks/useDayChartData.ts',
       'hooks/useLiveCandles.ts',

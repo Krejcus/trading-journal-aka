@@ -33,12 +33,14 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
     expect(source('components/TradovateLiveDesk.tsx')).toMatch(/import LiveTradingScreenSlot, \{ liveChartCrashedThisSession, preloadLiveTradingScreen \} from '\.\/LiveTradingScreenSlot';/);
   });
 
-  it('bundle grafu se zahřeje až po úplném LIVE přehledu a explicitně z navigace', () => {
+  it('bundle a první snapshot grafu se zahřejí až po úplném LIVE přehledu a explicitně z navigace', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
+    const slot = source('components/LiveTradingScreenSlot.tsx');
     expect(desk).toContain('if (!chartAvailable || !livePriorityReleasable || liveChartCrashedThisSession()) return undefined;');
     expect(desk).toContain("connection?.effectiveType === 'slow-2g'");
     expect(desk).toContain("const warmChart = item.id === 'chart'");
     expect(desk).toContain('onPointerEnter={warmChart} onFocus={warmChart}');
+    expect(slot).toMatch(/Promise\.all\(\[\s*loadLiveTradingScreen\(\),\s*preloadLiveTradingCandles\(\),\s*\]\)/);
   });
 
   it('přednačtený LIVE desk se vykreslí bez Suspense a volba typu se během připojení nemění', () => {

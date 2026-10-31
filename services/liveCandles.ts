@@ -20,6 +20,12 @@ const BUCKET = 'copier-snapshots';
  * (přestávka, víkend) se za výpadek nevydává.
  */
 export const LIVE_CANDLES_STALE_MS = 5 * 60_000;
+/**
+ * Spekulativní čtení z LIVE dashboardu čeká v paměti jen krátce. Je
+ * jednorázové: první skutečný loader grafu ho spotřebuje, takže minutový poll
+ * dál vždy čte nový soubor a nezůstane přilepený na staré svíčce.
+ */
+export const LIVE_CANDLES_WARM_TTL_MS = 45_000;
 
 export interface LiveCandles {
   response: MarketCandleResponse;
@@ -28,6 +34,55 @@ export interface LiveCandles {
   /** Čtení je starší než `LIVE_CANDLES_STALE_MS` — graf stojí. */
   stale: boolean;
 }
+
+interface LiveCandlesIdentity {
+  root: string;
+  userId: string;
+  key: string;
+}
+
+interface PendingLiveCandles {
+  promise: Promise<LiveCandles | null>;
+  /** Otevřený graf už stejný rozpracovaný požadavek převzal. */
+  consumed: boolean;
+}
+
+const warmLiveCandles = new Map<string, { value: LiveCandles; loadedAt: number }>();
+const pendingLiveCandles = new Map<string, PendingLiveCandles>();
+
+const pruneWarmLiveCandles = (now: number): void => {
+  warmLiveCandles.forEach((entry, key) => {
+    if (now - entry.loadedAt > LIVE_CANDLES_WARM_TTL_MS) warmLiveCandles.delete(key);
+  });
+};
+
+const liveCandlesIdentity = async (symbol: string): Promise<LiveCandlesIdentity | null> => {
+  const root = tvSymbolRoot(symbol);
+  if (!root) return null;
+  const { data: auth } = await supabase.auth.getSession();
+  const userId = auth.session?.user.id;
+  return userId ? { root, userId, key: `${userId}|${root}` } : null;
+};
+
+const withCurrentStaleness = (value: LiveCandles | null, now: number): LiveCandles | null => value
+  ? { ...value, stale: now - value.capturedAt > LIVE_CANDLES_STALE_MS }
+  : null;
+
+const downloadLiveCandles = async (identity: LiveCandlesIdentity, now: number): Promise<LiveCandles | null> => {
+  const { data, error } = await supabase.storage.from(BUCKET).download(tvLiveBarsStoragePath(identity.userId, identity.root));
+  if (error || !data) return null;
+  return parseLiveCandlesFile(await data.text(), identity.root, now);
+};
+
+const startLiveCandlesRequest = (identity: LiveCandlesIdentity, now: number, preload: boolean): PendingLiveCandles => {
+  const entry = {} as PendingLiveCandles;
+  entry.consumed = !preload;
+  entry.promise = downloadLiveCandles(identity, now).finally(() => {
+    if (pendingLiveCandles.get(identity.key) === entry) pendingLiveCandles.delete(identity.key);
+  });
+  pendingLiveCandles.set(identity.key, entry);
+  return entry;
+};
 
 /** Rozparsuje uložený soubor; vadný obsah = `null`, nikdy výjimka. */
 export function parseLiveCandlesFile(text: string, root: string, now = Date.now()): LiveCandles | null {
@@ -46,14 +101,44 @@ export function parseLiveCandlesFile(text: string, root: string, now = Date.now(
 
 /** Poslední živé čtení pro kořen (MNQ i NQ sdílí jeden soubor). */
 export async function loadLiveCandles(symbol: string, now = Date.now()): Promise<LiveCandles | null> {
-  const root = tvSymbolRoot(symbol);
-  if (!root) return null;
-  const { data: auth } = await supabase.auth.getSession();
-  const userId = auth.session?.user.id;
-  if (!userId) return null;
-  const { data, error } = await supabase.storage.from(BUCKET).download(tvLiveBarsStoragePath(userId, root));
-  if (error || !data) return null;
-  return parseLiveCandlesFile(await data.text(), root, now);
+  const identity = await liveCandlesIdentity(symbol);
+  if (!identity) return null;
+  pruneWarmLiveCandles(now);
+  const warm = warmLiveCandles.get(identity.key);
+  if (warm) {
+    warmLiveCandles.delete(identity.key);
+    if (now - warm.loadedAt <= LIVE_CANDLES_WARM_TTL_MS) return withCurrentStaleness(warm.value, now);
+  }
+  const pending = pendingLiveCandles.get(identity.key);
+  if (pending) {
+    pending.consumed = true;
+    const value = await pending.promise;
+    warmLiveCandles.delete(identity.key);
+    return withCurrentStaleness(value, now);
+  }
+  return startLiveCandlesRequest(identity, now, false).promise;
+}
+
+/**
+ * Připraví první svíčky pro očekávané otevření LIVE grafu. Cache je pouze
+ * paměťová, oddělená podle přihlášeného uživatele a spotřebuje ji jen první
+ * `loadLiveCandles`; P&L ani copier ji nikdy nečtou.
+ */
+export async function preloadLiveCandles(symbol: string, now = Date.now()): Promise<void> {
+  const identity = await liveCandlesIdentity(symbol);
+  if (!identity) return;
+  pruneWarmLiveCandles(now);
+  const warm = warmLiveCandles.get(identity.key);
+  if (warm && now - warm.loadedAt <= LIVE_CANDLES_WARM_TTL_MS) return;
+  if (warm) warmLiveCandles.delete(identity.key);
+  const pending = pendingLiveCandles.get(identity.key);
+  if (pending) {
+    await pending.promise;
+    return;
+  }
+  const entry = startLiveCandlesRequest(identity, now, true);
+  const value = await entry.promise;
+  if (value && !entry.consumed) warmLiveCandles.set(identity.key, { value, loadedAt: now });
 }
 
 /**

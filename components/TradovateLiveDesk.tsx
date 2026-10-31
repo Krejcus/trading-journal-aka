@@ -1563,9 +1563,10 @@ acceptAgentStatus((await executeAgent({
   useEffect(() => {
     if (livePriorityReleasable) releaseLivePriority();
   }, [livePriorityReleasable]);
-  // Až po úplném odkrytí LIVE přehledu zahřát těžký bundle grafu. Import
-  // komponenty nic nemountuje a nic nečte; jen odstraní síť/parsing z kliknutí
-  // na Graf. Šetření dat respektujeme, pointer/focus níže je explicitní záměr.
+  // Až po úplném odkrytí LIVE přehledu zahřát těžký bundle grafu a jednorázový
+  // snapshot svíček. Nic se nemountuje ani nepřipojuje k živému feedu; snapshot
+  // je jen user-scoped paměťová cache pro první otevření. Šetření dat
+  // respektujeme, pointer/focus níže je explicitní záměr.
   useEffect(() => {
     if (!chartAvailable || !livePriorityReleasable || liveChartCrashedThisSession()) return undefined;
     const connection = (navigator as Navigator & {

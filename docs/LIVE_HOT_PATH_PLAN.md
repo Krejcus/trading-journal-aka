@@ -281,3 +281,20 @@ dvě kola). Otevřený LIVE přitom čte tentýž runtime každé ~2 s.
 - Chybějící, poškozený, cizí nebo starý hint znamená dnešní plný owner lookup.
   DB chyba se nemaskuje jako fallback. Platný hint běží souběžně s čerstvým
   Auth potvrzením a v běžném případě odstraňuje dvě DB kola před insertem.
+
+## 14. F2f — první živé svíčky připravené před kliknutím
+
+F2d odstranil z kliknutí stažení a parsing JS grafu, ale snapshot živých svíček
+ze soukromého Storage se dál začal číst až po mountu grafu. Po úplném odkrytí
+LIVE dashboardu a ve stejném idle/save-data gate se proto nyní připraví i tento
+snapshot.
+
+- Cache žije jen v paměti, je svázaná s přihlášeným user id a kořenem trhu a
+  expiruje po 45 s. Nikdy se neukládá do browser storage.
+- První skutečný loader grafu ji jednorázově spotřebuje. Následující minutový
+  poll tedy dál čte nový soubor a nemůže zůstat na přednačteném snapshotu.
+- Když už preload běží a uživatel graf otevře, oba čekají na tentýž request;
+  nevznikne druhý download. Chyba preloadu se necachuje a standardní otevření
+  ji může zopakovat.
+- Jde pořád výhradně o zobrazovací svíčky. Copier, P&L, risk a brokerové
+  rozhodování tento zdroj nečtou.

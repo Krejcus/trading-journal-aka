@@ -328,6 +328,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   padá na původní owner resolution, DB chyba fail-closed. Cíleně 105/105 a
   TypeScript čisté; závěrečně celý projekt 6286 testů zelených (1 todo) a
   produkční build čistý. Očekávaný zisk jsou dvě DB kola, potvrdit `Server-Timing`.
+- F2f připravuje po úplném odkrytí LIVE dashboardu spolu s bundlem grafu i
+  první snapshot živých svíček. User-scoped cache žije jen v paměti 45 s a
+  první loader ji jednorázově spotřebuje; pravidelný minutový poll proto dál
+  vždy čte nový soubor. Otevření během preloadu sdílí stejný request, chyba se
+  necachuje. Cíleně 71/71, TypeScript a ESLint čisté; celý projekt 6290 testů
+  zelených (1 todo) a produkční build čistý. Dopad potvrdit metrikou
+  `live:chart:first-candles-data` po samostatně schváleném nasazení.
 
 ### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, nasazeno 19:28 web + worker @ e1fd4af3)
 
