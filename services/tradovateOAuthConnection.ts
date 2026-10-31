@@ -328,6 +328,13 @@ export function revokeTradovateCopierDevice(deviceId: string): Promise<{ revoked
   });
 }
 
+interface CachedRelayTargetHint {
+  value: string;
+  receivedAt: number;
+}
+const relayTargetHints = new Map<string, CachedRelayTargetHint>();
+const RELAY_TARGET_HINT_CLIENT_MAX_AGE_MS = 7_000;
+
 export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
   status: LocalCopierAgentStatus;
   lastSeenAt: string;
@@ -340,7 +347,31 @@ export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
   /** Klíč k zašifrované expozici na tématu budíčku (F2a); nikdy neukládat ani nelogovat. */
   nudgeKey?: unknown;
 } | null> {
-  return authenticatedRequest(`/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}`);
+  return authenticatedRequest<{
+    status: LocalCopierAgentStatus;
+    lastSeenAt: string;
+    connected: boolean;
+    ageMs?: number;
+    priceChannel?: unknown;
+    nudgeTopic?: unknown;
+    nudgeKey?: unknown;
+    relayTargetHint?: unknown;
+  } | null>(`/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}`)
+    .then(result => {
+      const hint = result?.relayTargetHint;
+      if (typeof hint === 'string' && hint.length >= 20 && hint.length <= 2_000) {
+        // Lokální stáří měří monotónní hodiny; rozdíl systémových hodin Macu
+        // a serveru nesmí validní hint zahodit ani prodloužit. Server expiraci
+        // znovu ověří svými hodinami.
+        relayTargetHints.set(connectionId, { value: hint, receivedAt: performance.now() });
+      } else {
+        relayTargetHints.delete(connectionId);
+      }
+      if (!result) return null;
+      // Opaque blob dál do React stavu ani diagnostiky nepouštět.
+      const { relayTargetHint: _relayTargetHint, ...visible } = result;
+      return visible;
+    });
 }
 
 /**
@@ -349,6 +380,8 @@ export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
  */
 const HOT_COMMAND_TIMINGS_KEY = 'at:dev:hot-command-timings';
 const HOT_COMMAND_TYPES = new Set(['preview-leader-entry', 'place-leader-entry', 'manage-leader-order']);
+const hotRelayCommand = (command: LocalCopierAgentCommand): boolean => command.type === 'copy-command'
+  && HOT_COMMAND_TYPES.has(String((command.command as { type?: unknown }).type ?? ''));
 function recordHotCommandTiming(command: LocalCopierAgentCommand, sentAt: number, via: 'inline' | 'poll' | 'error') {
   try {
     const inner = command.type === 'copy-command' ? (command.command as { type?: unknown; action?: unknown }) : null;
@@ -371,6 +404,11 @@ export async function executeTradovateCopierRelayCommand(
   const perfCommand = `relay:${perfSlug(command.type)}`;
   const sentAt = performance.now();
   perfMark(`${perfCommand}:send`);
+  const cachedHint = hotRelayCommand(command) ? relayTargetHints.get(connectionId) : undefined;
+  const relayTargetHint = cachedHint && performance.now() - cachedHint.receivedAt <= RELAY_TARGET_HINT_CLIENT_MAX_AGE_MS
+    ? cachedHint.value
+    : undefined;
+  if (cachedHint && !relayTargetHint) relayTargetHints.delete(connectionId);
   const queued = await authenticatedRequest<{
     id: string;
     expiresAt: string;
@@ -378,7 +416,7 @@ export async function executeTradovateCopierRelayCommand(
     resolution?: { status: string; result?: unknown; error?: string };
   }>('/api/tradovate/oauth/copier-relay', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ connectionId, command, idempotencyKey }),
+    body: JSON.stringify({ connectionId, command, idempotencyKey, ...(relayTargetHint ? { relayTargetHint } : {}) }),
     signal: options.signal,
   });
   perfMark(`${perfCommand}:${queued.resolution ? 'inline' : 'queued'}`);

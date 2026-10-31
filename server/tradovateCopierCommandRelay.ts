@@ -102,6 +102,9 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   // ON (arm-live), incident maže jen s výslovným potvrzením. Produkční DB
   // check `reconcile` stejně nikdy nepustil, takže se nic neztrácí.
 ]);
+const RELAY_TARGET_HINT_COMMAND_TYPES = new Set(['preview-leader-entry', 'place-leader-entry', 'manage-leader-order']);
+const commandMayUseRelayTargetHint = (command: LocalCopierAgentCommand): boolean => command.type === 'copy-command'
+  && RELAY_TARGET_HINT_COMMAND_TYPES.has(String((command.command as { type?: unknown }).type ?? ''));
 
 const BRAKE_COMMAND_TYPES = ['disarm', 'kill-switch', 'lock-until-session-end'] as const;
 const BRAKE_COMMAND_TTL_MS = 10 * 60_000;
@@ -146,10 +149,20 @@ export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | n
   return null;
 };
 
-interface RelayDeviceTarget {
+export interface RelayDeviceTarget {
   id: string;
   status?: LocalCopierAgentStatus;
   lastSeenAt?: string;
+}
+
+export interface CopierRelayTargetHint {
+  kind: 'copier-relay-target';
+  v: 1;
+  userId: string;
+  deviceId: string;
+  connectionId: string;
+  startedAt: string;
+  expiresAt: number;
 }
 
 /**
@@ -253,6 +266,49 @@ const selectRelayDeviceTarget = async (options: {
 
   return { id: runtime.device_id, status: runtime.status, lastSeenAt: runtime.last_seen_at };
 };
+
+const RELAY_HINT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Krátkodobý hint z posledního GET statusu pouze zkrátí výběr cíle. Není to
+ * oprávnění: zařízení se znovu ověří proti user_id, connection_id, revokaci,
+ * instanci workeru a čerstvému heartbeatu. Neplatný/stárnoucí hint = fallback.
+ */
+export async function verifyCopierRelayTargetHint(options: {
+  db: SupabaseClient;
+  userId: string;
+  hint: unknown;
+  now?: number;
+}): Promise<{ connectionId: string; device: RelayDeviceTarget } | null> {
+  const hint = options.hint as Partial<CopierRelayTargetHint> | null;
+  const now = options.now ?? Date.now();
+  if (!hint || hint.v !== 1
+    || hint.kind !== 'copier-relay-target'
+    || hint.userId !== options.userId
+    || typeof hint.deviceId !== 'string' || !RELAY_HINT_UUID.test(hint.deviceId)
+    || typeof hint.connectionId !== 'string' || !RELAY_HINT_UUID.test(hint.connectionId)
+    || typeof hint.startedAt !== 'string' || !Number.isFinite(Date.parse(hint.startedAt))
+    || typeof hint.expiresAt !== 'number' || !Number.isFinite(hint.expiresAt)
+    || hint.expiresAt < now || hint.expiresAt > now + WORKER_CONNECTED_MAX_AGE_MS) return null;
+  let device: RelayDeviceTarget;
+  try {
+    device = await selectRelayDeviceTarget({
+      db: options.db,
+      userId: options.userId,
+      connectionId: hint.connectionId,
+      deviceId: hint.deviceId,
+    });
+  } catch (reason) {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    if (message === 'copier-relay-device-not-found' || message === 'copier-relay-runtime-not-found') return null;
+    throw reason;
+  }
+  const lastSeenAt = device.lastSeenAt ? Date.parse(device.lastSeenAt) : NaN;
+  if (device.status?.startedAt !== hint.startedAt
+    || !Number.isFinite(lastSeenAt)
+    || now - lastSeenAt >= WORKER_CONNECTED_MAX_AGE_MS) return null;
+  return { connectionId: hint.connectionId, device };
+}
 
 /**
  * Důvod denního locku přichází z nevalidovaného JSON. Přenáší se do
@@ -690,6 +746,8 @@ export async function enqueueTradovateCopierCommand(options: {
   command: LocalCopierAgentCommand;
   /** Volitelně připne neobchodní požadavek na už ověřený aktivní worker. */
   deviceId?: string;
+  /** Serverem znovu ověřený krátkodobý hint; nikdy nebrat přímo z requestu. */
+  verifiedDevice?: RelayDeviceTarget;
   idempotencyKey?: string;
   now?: number;
 }): Promise<{ id: string; status: string; expiresAt: string; deviceId: string }> {
@@ -711,12 +769,16 @@ export async function enqueueTradovateCopierCommand(options: {
     ? quiet(assertManageAdmissible({ db: options.db, userId: options.userId, trade: manageEntry, now,
       riskReducing: isLeaderTradeClose(options.command) }))
     : null;
-  const device = await selectRelayDeviceTarget({
-    db: options.db,
-    userId: options.userId,
-    connectionId: options.connectionId,
-    ...(options.deviceId ? { deviceId: options.deviceId } : {}),
-  });
+  // Obrana do hloubky: ani interní volající nesmí hintem zkrátit ARM, brzdy,
+  // Flatten nebo změny konfigurace. Ty vždy znovu projdou plným výběrem cíle.
+  const device = (options.verifiedDevice && commandMayUseRelayTargetHint(options.command))
+    ? options.verifiedDevice
+    : await selectRelayDeviceTarget({
+      db: options.db,
+      userId: options.userId,
+      connectionId: options.connectionId,
+      ...(options.deviceId ? { deviceId: options.deviceId } : {}),
+    });
   if (options.command.type === 'arm-live' && (
     !device.status?.controller?.connected
     || !device.lastSeenAt

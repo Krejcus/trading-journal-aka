@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { startMacCopierCommandRelay } from '../server/macCopierCommandRelay';
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
-import { executeTradovateCopierRelayCommand } from '../services/tradovateOAuthConnection';
+import { executeTradovateCopierRelayCommand, loadTradovateCopierRelayStatus } from '../services/tradovateOAuthConnection';
 import { CopierBrakeQueuedError } from '../lib/copierBrakeDelivery';
 
 vi.mock('../services/supabase', () => ({
@@ -14,6 +14,40 @@ const agentWith = (execute = vi.fn()) => ({
 }) as unknown as LocalCopierExecutionAgent;
 
 describe('copier relay boundary review', () => {
+  it('echoes a fresh status hint only for hot chart commands and never treats it as command authority', async () => {
+    const posts: Array<Record<string, unknown>> = [];
+    const hint = 'v1.opaque-encrypted-relay-target-hint';
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        posts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return Response.json({
+          id: `command-${posts.length}`,
+          expiresAt: new Date(Date.now() + 5_000).toISOString(),
+          resolution: { status: 'succeeded', result: { ok: true } },
+        });
+      }
+      return Response.json({
+        status: { startedAt: '2026-10-31T02:00:00.000Z', controller: { connected: true } },
+        lastSeenAt: new Date().toISOString(),
+        connected: true,
+        relayTargetHint: hint,
+      });
+    }));
+    try {
+      const visible = await loadTradovateCopierRelayStatus('hint-source-connection');
+      expect(visible).not.toHaveProperty('relayTargetHint');
+      await executeTradovateCopierRelayCommand('hint-source-connection', {
+        type: 'copy-command',
+        command: { type: 'preview-leader-entry' } as never,
+      });
+      await executeTradovateCopierRelayCommand('hint-source-connection', { type: 'disarm' });
+      expect(posts[0].relayTargetHint).toEqual(hint);
+      expect(posts[1]).not.toHaveProperty('relayTargetHint');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('ukončí polling i když abort přijde těsně mezi GET odpovědí a čekáním', async () => {
     const controller = new AbortController();
     vi.stubGlobal('window', { setTimeout, clearTimeout });

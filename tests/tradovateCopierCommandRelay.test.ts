@@ -201,6 +201,24 @@ describe('Tradovate copier command relay', () => {
     expect(armUpsert).not.toHaveBeenCalled();
   });
 
+  it('interní target hint nikdy nezkrátí plný výběr zařízení pro brzdu', async () => {
+    const upsert = vi.fn();
+    const queued = await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      command: { type: 'disarm' },
+      verifiedDevice: {
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        status: { startedAt: '2026-10-31T02:00:00.000Z' } as LocalCopierAgentStatus,
+        lastSeenAt: '2099-01-01T00:00:00.000Z',
+      },
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(queued.deviceId).toBe(deviceId);
+    expect(upsert.mock.calls[0][0]).toMatchObject({ device_id: deviceId });
+  });
+
   it('ARM s jiným payloadem se k rozpracovanému ARMu nepřichytí a vrátí 409', async () => {
     const armUpsert = vi.fn();
     await expect(enqueueTradovateCopierCommand({

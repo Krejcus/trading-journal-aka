@@ -320,6 +320,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Import nic nemountuje ani nečte; po odchodu se graf dál unmountuje, takže
   deník/backtest nenesou jeho CPU ani odběry. Cílená regrese 19/19, ESLint a
   TypeScript čisté; dopad změří `live:chart:component-ready`.
+- F2e odstranil opakovaný owner lookup na běžné horké cestě: GET status vydá
+  na 8 s AES-GCM šifrovaný hint cíle, klient ho drží jen v paměti a posílá jen
+  pro preview/vstup/správu. Server znovu ověřuje user, connection, revokaci,
+  `startedAt` i heartbeat a teprve pak předá vybraný runtime enqueue; interní
+  deviceId se v API neodhaluje. Brzdy/ARM hint nepoužijí, starý či vadný blob
+  padá na původní owner resolution, DB chyba fail-closed. Cíleně 105/105 a
+  TypeScript čisté; závěrečně celý projekt 6286 testů zelených (1 todo) a
+  produkční build čistý. Očekávaný zisk jsou dvě DB kola, potvrdit `Server-Timing`.
 
 ### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, nasazeno 19:28 web + worker @ e1fd4af3)
 

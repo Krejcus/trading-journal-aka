@@ -262,3 +262,22 @@ megabajtu minifikovaného JS ještě před prvním datovým efektem.
   živé odběry nebo renderovací práci.
 - Přesný zisk zachytí `live:chart:component-ready`; datová část zůstává zvlášť
   v `historical-load`, `live-snapshot-load` a `first-candles-*`.
+
+## 13. F2e — krátkodobý ověřený cíl relaye
+
+Před každým horkým POSTem server znovu prováděl owner-scope resolution (až dvě
+DB kola) a následně uvnitř enqueue znovu vybíral stejné zařízení/runtime (další
+dvě kola). Otevřený LIVE přitom čte tentýž runtime každé ~2 s.
+
+- Úspěšný GET status vrací na 8 s AES-GCM šifrovaný hint svázaný s userId,
+  deviceId, skutečným connectionId a `startedAt` instance workeru. Interní
+  deviceId zůstává před prohlížečem skrytý; blob se neukládá ani neloguje.
+- Klient ho pouze v paměti nejvýš 7 s přiloží k preview/vstupu/správě pozice.
+  Brzdy, ARM, změny konfigurace a ostatní příkazy hint nikdy nepoužijí.
+- Server blob dešifruje, ale stále mu nevěří: znovu ověří user_id,
+  connection_id, nerevokované zařízení, shodu `startedAt` a heartbeat mladší
+  10 s. Výsledek výběru předá enqueue; všechny admission, idempotence, TTL,
+  durable insert, worker claim i brokerové kontroly zůstávají beze změny.
+- Chybějící, poškozený, cizí nebo starý hint znamená dnešní plný owner lookup.
+  DB chyba se nemaskuje jako fallback. Platný hint běží souběžně s čerstvým
+  Auth potvrzením a v běžném případě odstraňuje dvě DB kola před insertem.

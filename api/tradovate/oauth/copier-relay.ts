@@ -7,9 +7,10 @@ import {
   claimTradovateCopierCommand, completeTradovateCopierCommand, enqueueTradovateCopierCommand,
   copierRelayValidationErrorStatus,
   heartbeatTradovateCopierDevice, readTradovateCopierCommand, readTradovateCopierDeviceRuntime,
-  resolveCopierRelayConnectionId,
+  resolveCopierRelayConnectionId, verifyCopierRelayTargetHint,
 } from '../../../server/tradovateCopierCommandRelay.js';
 import { beginSupabaseUserIdVerification, createTradovateAdminClient, readTradovateServerConfig } from '../../../server/tradovateOAuthStore.js';
+import { decryptTradovateSecret, encryptTradovateSecret } from '../../../server/tradovateOAuth.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 import { sendImmediateCopierArmPush, sendImmediateCopyEventPushes, type CopierArmTransition } from '../../../server/nativeCopierStatePush.js';
 import { tickNativeLiveActivitiesWithinBudget } from '../../../server/nativeLiveActivityTick.js';
@@ -52,6 +53,28 @@ const snapshotRateLimiter = new CopierSnapshotRateLimiter();
 const liveBarsRateLimiter = new CopierSnapshotRateLimiter(4, 60_000);
 const LIVE_BARS_MAX_AGE_MS = 2 * 60_000;
 const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const HOT_RELAY_COMMANDS = new Set(['preview-leader-entry', 'place-leader-entry', 'manage-leader-order']);
+const isHotRelayCommand = (command: unknown): boolean => {
+  const candidate = command as { type?: unknown; command?: { type?: unknown } } | null;
+  return candidate?.type === 'copy-command'
+    && typeof candidate.command?.type === 'string'
+    && HOT_RELAY_COMMANDS.has(candidate.command.type);
+};
+const openRelayTargetHint = (value: unknown, encryptionKey: string): unknown => {
+  if (typeof value !== 'string' || value.length < 20 || value.length > 2_000) return null;
+  try {
+    return JSON.parse(decryptTradovateSecret(value, encryptionKey)) as unknown;
+  } catch {
+    return null;
+  }
+};
+const sealRelayTargetHint = (value: Record<string, unknown>, encryptionKey: string): string | null => {
+  try {
+    return encryptTradovateSecret(JSON.stringify(value), encryptionKey);
+  } catch {
+    return null;
+  }
+};
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
@@ -369,11 +392,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await verification.confirmed;
       return res.status(400).json({ error: 'missing-connection-id' });
     }
-    // Libovolné připojení uživatele najde jeho Mac worker (owner scope).
-    const [, connectionId] = await Promise.all([
-      verification.confirmed,
-      resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId }),
-    ]);
+    // Horký příkaz může použít krátkodobý hint z posledního status pollu.
+    // Server ho znovu ověří; neplatný hint jen spadne na plný owner lookup.
+    const hintVerification = req.method === 'POST' && isHotRelayCommand(req.body?.command)
+      ? verifyCopierRelayTargetHint({
+        db,
+        userId,
+        hint: openRelayTargetHint(req.body?.relayTargetHint, config.tokenEncryptionKey),
+      })
+      : null;
+    let connectionId: string;
+    let verifiedDevice: Awaited<ReturnType<typeof verifyCopierRelayTargetHint>>['device'] | undefined;
+    if (hintVerification) {
+      const [, hinted] = await Promise.all([verification.confirmed, hintVerification]);
+      if (hinted) {
+        connectionId = hinted.connectionId;
+        verifiedDevice = hinted.device;
+      } else {
+        connectionId = await resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId });
+      }
+    } else {
+      // Libovolné připojení uživatele najde jeho Mac worker (owner scope).
+      [, connectionId] = await Promise.all([
+        verification.confirmed,
+        resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId }),
+      ]);
+    }
     timing.mark('resolve');
     if (req.method === 'GET') {
       const commandId = typeof req.query.commandId === 'string' ? req.query.commandId : '';
@@ -394,8 +438,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Budíček statusu (jen podnět ke čtení, bez dat) — stejně vedle statusu, ne v něm.
       const nudgeTopic = runtime.connected === true ? copierStatusNudgeTopic(deviceId) : null;
       const nudgeKey = nudgeTopic ? copierStatusNudgeKey(deviceId) : null;
+      const relayTargetHint = runtime.connected === true && typeof runtime.status?.startedAt === 'string'
+        && Number.isFinite(Date.parse(runtime.status.startedAt))
+        ? sealRelayTargetHint({
+          kind: 'copier-relay-target',
+          v: 1,
+          userId,
+          deviceId,
+          connectionId,
+          startedAt: runtime.status.startedAt,
+          expiresAt: Date.now() + 8_000,
+        }, config.tokenEncryptionKey)
+        : null;
       return timed(200, {
         ...visible,
+        ...(relayTargetHint ? { relayTargetHint } : {}),
         ...(priceChannel ? { priceChannel } : {}),
         ...(nudgeTopic ? { nudgeTopic } : {}),
         ...(nudgeTopic && nudgeKey ? { nudgeKey } : {}),
@@ -405,7 +462,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.body?.command?.type === 'snapshot-test' && req.body?.command?.repairCamera !== true) {
         return res.status(400).json({ error: 'snapshot-test-use-dedicated-endpoint' });
       }
-      const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: req.body?.command, idempotencyKey: req.body?.idempotencyKey });
+      const queued = await enqueueTradovateCopierCommand({
+        db, userId, connectionId, command: req.body?.command,
+        idempotencyKey: req.body?.idempotencyKey,
+        ...(verifiedDevice ? { verifiedDevice } : {}),
+      });
       timing.mark('enqueue');
       // Budíček pro worker: bez něj příkaz čeká na další poll (~750 ms).
       // Kick je jen optimalizace — selhání nesmí shodit enqueue.
