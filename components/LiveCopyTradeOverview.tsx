@@ -18,6 +18,7 @@ import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { useCopierPowerDisplay } from '../hooks/useCopierPowerDisplay';
 import { copierPowerDisplayKey } from '../lib/copierPowerDisplay';
 import { isCopierBrakeQueuedError } from '../lib/copierBrakeDelivery';
+import { liveSafetyFailureMessage } from '../lib/liveSafetyAction';
 import { useFlipReorder, useIsomorphicLayoutEffect } from '../hooks/useFlipReorder';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
@@ -1790,7 +1791,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       });
       return true;
     } catch (reason) {
-      const message = formatCopierCommandError(reason, accountName);
+      const formatted = formatCopierCommandError(reason, accountName);
+      const message = command.type === 'flatten-group' ? liveSafetyFailureMessage(new Error(formatted)) : formatted;
       if (onError) onError(message);
       else {
         setToast({
@@ -4374,7 +4376,7 @@ const CompactSheet = ({ label, busy = false, onClose, children }: {
   return createPortal(
     <div className="fixed inset-0 z-[160]" role="dialog" aria-modal="true" aria-label={label}>
       <button type="button" aria-label="Zavřít" className="compact-sheet-scrim absolute inset-0 cursor-default bg-slate-950/50" onClick={() => { if (!busy) onClose(); }} />
-      <section className="compact-sheet absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-2xl border-t border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 pt-2 shadow-2xl">
+      <section className="compact-sheet absolute inset-x-0 max-h-[88vh] overflow-y-auto rounded-t-2xl border-t border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 pt-2 shadow-2xl" style={{ bottom: 'var(--live-safety-height, 100px)' }}>
         <div aria-hidden="true" className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-[var(--border-subtle)]" />
         {children}
       </section>
@@ -7452,7 +7454,7 @@ const CopyTradingHelpDialog = ({ onClose, apiReady }: { onClose: () => void; api
 );
 
 const StatusToast = ({ tone, text }: { tone: 'success' | 'info' | 'error'; text: string }) => createPortal(
-  <div role="status" className={`native-fixed-above-tab-bar fixed z-[180] right-5 bottom-5 max-w-sm rounded-lg border bg-[var(--bg-card)] shadow-xl px-4 py-3 flex items-start gap-2.5 ${tone === 'error' ? 'border-rose-500/30' : tone === 'success' ? 'border-emerald-500/30' : 'border-blue-500/30'}`}>
+  <div role="status" className={`fixed z-[180] right-5 max-w-sm rounded-lg border bg-[var(--bg-card)] shadow-xl px-4 py-3 flex items-start gap-2.5 ${tone === 'error' ? 'border-rose-500/30' : tone === 'success' ? 'border-emerald-500/30' : 'border-blue-500/30'}`} style={{ bottom: 'calc(var(--live-safety-height, 100px) + 1.25rem)' }}>
     {tone === 'error' ? <AlertTriangle size={17} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={17} className={tone === 'success' ? 'text-emerald-500 shrink-0' : 'text-blue-500 shrink-0'} />}<span className="text-xs font-bold text-[var(--text-primary)] leading-relaxed">{text}</span>
   </div>, document.body,
 );

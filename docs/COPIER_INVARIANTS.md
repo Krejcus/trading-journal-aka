@@ -1269,6 +1269,16 @@ existující ochranu.
   poslední známou route bez fresh statusu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je oddělit safety command path od
   běžných commandů. Nebezpečné je sdílet jednu obecnou `disabled={!fresh}`.
+- Statická nouzová lišta (`components/LiveSafetyControls.tsx`) je mountnutá
+  nad líným přehledem i grafem a oba sloty mají vlastní error boundary. OFF,
+  kill a full-group Flatten tak nesmí zmizet po pádu grafu/přehledu. Lišta je
+  na úzkém webu nad BottomNav, v native shellu používá
+  `native-fixed-above-tab-bar` a při otevřeném dialogu se schová.
+- Full-group Flatten z lišty i přehledu sdílí jediný zámek podle `groupId`
+  (`lib/liveSafetyAction.ts:createFlattenGroupCoordinator`). Druhý caller se
+  připojí ke skutečnému výsledku prvního; lokální Flatten nemá 10s abort a
+  zámek se uvolní až po resolve/reject workeru. Nikdy nesmí timeout UI vytvořit
+  druhý brokerový příkaz. Hlídá `tests/liveSafetyControls.test.ts`.
 - LIVE → Graf (29. 10. 2026): tlačítko Vypnout v hlavičce grafu nezávisle na
   skupině, skryté jen při `lib/liveTradeGroupSource.ts:copierProvablyOff`
   (čerstvý stav, `armed: false` a žádné čekající automatické pokračování —

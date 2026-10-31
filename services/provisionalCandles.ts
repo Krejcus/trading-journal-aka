@@ -10,6 +10,8 @@ import {
 } from '../lib/tradingViewBars';
 import type { MarketCandleResponse } from './marketDataCalculations';
 import { supabase } from './supabase';
+import { inspectCandleSnapshot } from '../lib/candleSnapshotValidation';
+import { regularNasdaqSession } from '../lib/chartDataQuality';
 
 /**
  * Předběžný graf hodnocení: 1m svíčky, které worker přečetl z TradingView po
@@ -22,10 +24,27 @@ const BUCKET = 'copier-snapshots';
 const CACHE_MS = 60_000;
 const cache = new Map<string, { at: number; request: Promise<MarketCandleResponse | null> }>();
 
-/** Svíčky pokrývají obchod: před vstupem i minuta výstupu jsou v datech. */
+/** Both fill minutes and every minute of the regular session must be present. */
 export function coversTrade(bars: readonly TvBar[], entryMs: number, exitMs: number): boolean {
-  if (!bars.length) return false;
-  return bars[0][0] * 1000 <= entryMs && bars[bars.length - 1][0] * 1000 >= Math.floor(exitMs / 60_000) * 60_000;
+  if (!bars.length || !Number.isFinite(entryMs) || !Number.isFinite(exitMs) || exitMs < entryMs) return false;
+  const start = Math.floor(entryMs / 60_000) * 60;
+  const end = Math.floor(exitMs / 60_000) * 60;
+  let expected = start;
+  let missingRegularMinutes = 0;
+  for (const bar of bars) {
+    if (bar[0] < start) continue;
+    if (bar[0] > end) return false;
+    // Fill minutes themselves always need evidence, even at a scheduled halt.
+    if (expected === start && bar[0] !== start) return false;
+    while (expected < bar[0]) {
+      if (regularNasdaqSession(expected * 1000) && ++missingRegularMinutes > 1) return false;
+      expected += 60;
+    }
+    if (bar[0] !== expected) return false;
+    if (bar[0] === end) return true;
+    expected += 60;
+  }
+  return false;
 }
 
 export function provisionalResponse(bars: readonly TvBar[], symbol: string, source: string): MarketCandleResponse {
@@ -66,11 +85,15 @@ async function load(trade: Trade, { entryMs, exitMs }: ProvisionalTiming): Promi
     const { data, error } = await supabase.storage.from(BUCKET).download(file.path);
     if (error || !data) return null;
     try {
-      const body = JSON.parse(await data.text()) as { at?: unknown; bars?: unknown; source?: unknown; contract?: unknown };
+      const body: unknown = JSON.parse(await data.text());
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+      // Legacy captures omit `at`; their authenticated storage filename supplies it.
+      const parsed = inspectCandleSnapshot(JSON.stringify({ at: file.at, ...body }), root);
+      if (!parsed.ok) return null;
       // Čtení jiného kontraktu než obchodu (týden rollu) do grafu hodnocení nepatří.
       const symbol = trade.symbol || trade.instrument || '';
-      if (barsContractConflicts(typeof body.contract === 'string' ? body.contract : null, symbol)) return null;
-      return Array.isArray(body.bars) ? { at: file.at, bars: body.bars as TvBar[], source: String(body.source ?? '') } : null;
+      if (barsContractConflicts(parsed.validation.contract, symbol)) return null;
+      return { at: parsed.at, bars: parsed.bars, source: parsed.source };
     } catch { return null; }
   }))).filter((capture): capture is { at: number; bars: TvBar[]; source: string } => capture != null);
   const bars = mergeTvBarCaptures(captures);

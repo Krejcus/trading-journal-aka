@@ -90,7 +90,7 @@ const OverviewFallback = ({ failed, onRetry }: { failed: boolean; onRetry: () =>
     <div>
       <span className={`mx-auto block h-7 w-7 rounded-full border-2 border-indigo-500/20 border-t-indigo-500 ${failed ? '' : 'animate-spin'}`} />
       <p className="mt-3 text-xs font-bold text-[var(--text-secondary)]">
-        {failed ? 'LIVE přehled se nepodařilo načíst. Graf a bezpečnostní ovládání fungují dál.' : 'Načítám LIVE přehled…'}
+        {failed ? 'LIVE přehled se nepodařilo načíst. Nouzové ovládání je v samostatné liště; provedení akce musí potvrdit worker.' : 'Načítám LIVE přehled… Nouzové ovládání je v samostatné liště.'}
       </p>
       {failed ? <button type="button" onClick={onRetry} className="mt-4 h-9 rounded-md bg-indigo-600 px-4 text-xs font-black text-white">Zkusit znovu</button> : null}
     </div>

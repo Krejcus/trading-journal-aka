@@ -133,12 +133,16 @@ describe('V12 šestá iterace — rychlé exity a S1b settlement', () => {
     try {
       await openMarketPosition(broker, controller);
       const rawPlace = broker.placeOrder.bind(broker);
-      const startedAt = new Map<number, number>();
-      const started = performance.now();
+      const beganBeforeSlowFirstCompleted = new Map<number, boolean>();
+      let slowFirstCompleted = false;
       broker.placeOrder = async (request: any) => {
         if (request.side === 'Sell' && request.orderType === 'Market') {
-          startedAt.set(request.accountId, performance.now() - started);
-          if (request.accountId === 200) await sleep(delayMs);
+          if (request.accountId === 200) {
+            await sleep(delayMs);
+            slowFirstCompleted = true;
+          } else {
+            beganBeforeSlowFirstCompleted.set(request.accountId, !slowFirstCompleted);
+          }
         }
         return rawPlace(request);
       };
@@ -152,8 +156,10 @@ describe('V12 šestá iterace — rychlé exity a S1b settlement', () => {
       });
       await controller.waitForIdle();
 
-      expect(startedAt.get(300)).toBeLessThan(5);
-      expect(startedAt.get(400)).toBeLessThan(5);
+      // Semantic proof of fan-out: both healthy followers started before the
+      // deliberately slow first POST completed, independent of host latency.
+      expect(beganBeforeSlowFirstCompleted.get(300)).toBe(true);
+      expect(beganBeforeSlowFirstCompleted.get(400)).toBe(true);
     } finally {
       controller.stop();
     }
@@ -167,12 +173,9 @@ describe('V12 šestá iterace — rychlé exity a S1b settlement', () => {
       await openMarketPosition(broker, controller);
       const rawPlace = broker.placeOrder.bind(broker);
       const started = new Set<number>();
-      const startedAt = new Map<number, number>();
-      const startedClock = performance.now();
       broker.placeOrder = async (request: any) => {
         if (request.side === 'Sell' && request.orderType === 'Market') {
           started.add(request.accountId);
-          startedAt.set(request.accountId, performance.now() - startedClock);
           if (request.accountId === 200) await blocked;
         }
         return rawPlace(request);
@@ -188,8 +191,6 @@ describe('V12 šestá iterace — rychlé exity a S1b settlement', () => {
       await sleep(25);
 
       expect(started).toEqual(new Set([200, 300, 400]));
-      expect(startedAt.get(300)).toBeLessThan(5);
-      expect(startedAt.get(400)).toBeLessThan(5);
       release();
       await controller.waitForIdle();
     } finally {

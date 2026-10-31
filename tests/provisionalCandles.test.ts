@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Trade } from '../types';
+import type { TvBar } from '../lib/tradingViewBars';
 
 const storage = vi.hoisted(() => ({
   files: new Map<string, unknown>(),
@@ -24,7 +25,7 @@ vi.mock('../services/supabase', () => ({
   },
 }));
 
-const { loadProvisionalCandles } = await import('../services/provisionalCandles');
+const { coversTrade, loadProvisionalCandles } = await import('../services/provisionalCandles');
 
 const ENTRY = Date.UTC(2026, 8, 30, 18, 40, 10);
 const EXIT = Date.UTC(2026, 8, 30, 18, 47, 40);
@@ -59,5 +60,14 @@ describe('loadProvisionalCandles', () => {
     storage.files.set(`user-1/tv-bars/2026-09-30/MNQ-${EXIT - 60_000}.json`, { bars: bars(ENTRY - 3_600_000, EXIT - 60_000) });
     storage.files.set(`user-1/tv-bars/2026-09-30/MNQ-${EXIT + 65_000}.json`, { bars: bars(EXIT - 60_000, EXIT + 65_000) });
     expect(await loadProvisionalCandles(trade('uncovered'), { entryMs: ENTRY, exitMs: EXIT })).toBeNull();
+  });
+
+  it('keeps the graph for one empty regular-session minute but still requires both fill minutes', () => {
+    const complete = bars(ENTRY, EXIT) as TvBar[];
+    const oneGap = complete.filter((_, index) => index !== 3);
+    const twoGaps = complete.filter((_, index) => index !== 3 && index !== 4);
+    expect(coversTrade(oneGap, ENTRY, EXIT)).toBe(true);
+    expect(coversTrade(twoGaps, ENTRY, EXIT)).toBe(false);
+    expect(coversTrade(complete.slice(1), ENTRY, EXIT)).toBe(false);
   });
 });
