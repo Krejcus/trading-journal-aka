@@ -140,7 +140,7 @@ import { mergeCopierLiveExposure, type CopierLiveExposureReceived } from '../lib
 import { isNativeBuild } from '../utils/runtimeConfig';
 import { isNativeShell } from '../utils/nativeShell';
 // Živý graf s panelem objednávky; těžký workspace se načte líně uvnitř obálky.
-import LiveTradingScreenSlot, { liveChartCrashedThisSession } from './LiveTradingScreenSlot';
+import LiveTradingScreenSlot, { liveChartCrashedThisSession, preloadLiveTradingScreen } from './LiveTradingScreenSlot';
 
 /** Desktop mimo nativní aplikaci (stejná hranice jako `useCompactViewport`). */
 const liveChartAvailableNow = () => typeof window !== 'undefined'
@@ -1563,6 +1563,32 @@ acceptAgentStatus((await executeAgent({
   useEffect(() => {
     if (livePriorityReleasable) releaseLivePriority();
   }, [livePriorityReleasable]);
+  // Až po úplném odkrytí LIVE přehledu zahřát těžký bundle grafu. Import
+  // komponenty nic nemountuje a nic nečte; jen odstraní síť/parsing z kliknutí
+  // na Graf. Šetření dat respektujeme, pointer/focus níže je explicitní záměr.
+  useEffect(() => {
+    if (!chartAvailable || !livePriorityReleasable || liveChartCrashedThisSession()) return undefined;
+    const connection = (navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string };
+    }).connection;
+    if (connection?.saveData || connection?.effectiveType === 'slow-2g' || connection?.effectiveType === '2g') return undefined;
+    let cancelled = false;
+    const warm = () => {
+      if (!cancelled && document.visibilityState === 'visible') {
+        void preloadLiveTradingScreen().catch(() => { /* Výslovné otevření to zkusí znovu. */ });
+      }
+    };
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (idleWindow.requestIdleCallback) {
+      const idle = idleWindow.requestIdleCallback(warm, { timeout: 2_500 });
+      return () => { cancelled = true; idleWindow.cancelIdleCallback?.(idle); };
+    }
+    const timer = window.setTimeout(warm, 750);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [chartAvailable, livePriorityReleasable]);
   // Zapnutá kopírka: přehled s vypnutím (OFF, kill) se nedrží ani chvíli.
   const holdColdReveal = coldReadsPending && !coldRevealCapReached && agentStatus?.controller.armed !== true;
   useEffect(() => {
@@ -1647,7 +1673,10 @@ acceptAgentStatus((await executeAgent({
           const Icon = item.icon;
           const blockedByConfigMutation = (configMutationPending || copyGroupStatusPollFence.inFlight) && item.id !== tab;
           const blockedByArm = item.id === 'chart' && armFlowActive;
-          return <button key={item.id} type="button" disabled={blockedByConfigMutation || blockedByArm} title={blockedByArm ? 'Během zapínání kopírky se graf neotevírá' : blockedByConfigMutation ? 'Čekám na potvrzení změny konfigurace workerem' : undefined} onClick={() => navigateToTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
+          const warmChart = item.id === 'chart'
+            ? () => { void preloadLiveTradingScreen().catch(() => { /* Kliknutí může zopakovat import. */ }); }
+            : undefined;
+          return <button key={item.id} type="button" disabled={blockedByConfigMutation || blockedByArm} title={blockedByArm ? 'Během zapínání kopírky se graf neotevírá' : blockedByConfigMutation ? 'Čekám na potvrzení změny konfigurace workerem' : undefined} onPointerEnter={warmChart} onFocus={warmChart} onClick={() => navigateToTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
         })}
       </nav>
 

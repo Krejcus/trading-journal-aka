@@ -314,6 +314,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   relaci odvolané na jiném zařízení. Regrese pokrývají chybný podpis, revokaci,
   neshodu uživatele a HS256 fallback; přesný zisk změří `Server-Timing` až po
   samostatně schváleném nasazení.
+- F2d přesunul studené stažení/parsing chunků grafu mimo kliknutí: po úplném
+  odkrytí LIVE dashboardu se `LiveTradingScreen` retry-safe zahřeje v idle čase
+  (ne při `saveData`/2g), pointer nebo focus na záložce Graf ho zahřeje ihned.
+  Import nic nemountuje ani nečte; po odchodu se graf dál unmountuje, takže
+  deník/backtest nenesou jeho CPU ani odběry. Cílená regrese 19/19, ESLint a
+  TypeScript čisté; dopad změří `live:chart:component-ready`.
 
 ### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, nasazeno 19:28 web + worker @ e1fd4af3)
 

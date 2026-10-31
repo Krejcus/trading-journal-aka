@@ -27,9 +27,18 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
 
   it('LIVE → Graf se načítá líně jen za vlastní hranicí Suspense, ne v desku', () => {
     const slot = source('components/LiveTradingScreenSlot.tsx');
-    expect(slot).toMatch(/React\.lazy\(\(\) => import\('\.\/LiveTradingScreen'\)\)/);
+    expect(slot).toMatch(/liveTradingScreenPromise = import\('\.\/LiveTradingScreen'\)/);
+    expect(slot).toContain('const LiveTradingScreen = React.lazy(loadLiveTradingScreen);');
     expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer[^>]*\/>\}>\s*<LiveTradingScreen \{\.\.\.props\} chartOpenPerformanceAt=\{openPerformanceAtRef\.current\} leaving=\{closing\} \/>\s*<\/Suspense>/);
-    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/import LiveTradingScreenSlot, \{ liveChartCrashedThisSession \} from '\.\/LiveTradingScreenSlot';/);
+    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/import LiveTradingScreenSlot, \{ liveChartCrashedThisSession, preloadLiveTradingScreen \} from '\.\/LiveTradingScreenSlot';/);
+  });
+
+  it('bundle grafu se zahřeje až po úplném LIVE přehledu a explicitně z navigace', () => {
+    const desk = source('components/TradovateLiveDesk.tsx');
+    expect(desk).toContain('if (!chartAvailable || !livePriorityReleasable || liveChartCrashedThisSession()) return undefined;');
+    expect(desk).toContain("connection?.effectiveType === 'slow-2g'");
+    expect(desk).toContain("const warmChart = item.id === 'chart'");
+    expect(desk).toContain('onPointerEnter={warmChart} onFocus={warmChart}');
   });
 
   it('přednačtený LIVE desk se vykreslí bez Suspense a volba typu se během připojení nemění', () => {

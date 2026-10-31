@@ -21,7 +21,25 @@ import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/le
  * INV-UI-02). Pád si zapamatuje session, aby po reloadu LIVE neotevřelo
  * znovu graf a nespadlo do kola.
  */
-const LiveTradingScreen = React.lazy(() => import('./LiveTradingScreen'));
+type LiveTradingScreenModule = typeof import('./LiveTradingScreen');
+let liveTradingScreenPromise: Promise<LiveTradingScreenModule> | null = null;
+
+const loadLiveTradingScreen = (): Promise<LiveTradingScreenModule> => {
+  if (!liveTradingScreenPromise) {
+    liveTradingScreenPromise = import('./LiveTradingScreen').catch(reason => {
+      // Přechodná síťová chyba při spekulativním preloadu nesmí otrávit
+      // pozdější výslovné otevření grafu — další pokus dostane nový import.
+      liveTradingScreenPromise = null;
+      throw reason;
+    });
+  }
+  return liveTradingScreenPromise;
+};
+
+/** Zahřeje JS grafu bez mountu, datových čtení nebo živých odběrů. */
+export const preloadLiveTradingScreen = (): Promise<void> => loadLiveTradingScreen().then(() => undefined);
+
+const LiveTradingScreen = React.lazy(loadLiveTradingScreen);
 
 export const LIVE_CHART_CRASH_KEY = 'at:live-chart-crashed';
 

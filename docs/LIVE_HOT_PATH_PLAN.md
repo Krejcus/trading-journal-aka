@@ -244,3 +244,21 @@ potom spouštěla owner-scoped DB lookup připojení.
 - Přesný zisk určí existující `Server-Timing`: `auth` nyní měří úvodní ověření a
   `resolve` kritickou cestu souběžného fresh-auth + DB lookupu. Očekávání je ušetřit
   kratší z těchto dříve sériových větví, ne slibovat pevnou latenci před měřením.
+
+## 12. F2d — zahřátí bundle grafu mimo kliknutí
+
+Produkční build dělí LIVE graf do samostatných chunků (`LiveTradingScreen`,
+`AlphaTradeChartWorkspace`, `CandleKitTradeChart`). To chrání rychlost přehledu,
+ale studené kliknutí na Graf čekalo na stažení, parsování a vyhodnocení přibližně
+megabajtu minifikovaného JS ještě před prvním datovým efektem.
+
+- `LiveTradingScreenSlot` sdílí jediný retry-safe import promise pro preload i
+  `React.lazy`; preload pouze načte kód, nic nemountuje a nespustí svíčky ani feed.
+- Automatický preload se plánuje přes idle callback až po úplném odkrytí LIVE
+  dashboardu a přítomnosti stavu workera, tedy po uvolnění LIVE priority. Na
+  `saveData`, `slow-2g` a `2g` se spekulativně nestahuje.
+- Pointer/focus na záložce Graf vyjadřuje přímý záměr a import spustí okamžitě.
+  Odchod z grafu dál komponentu unmountuje; deník ani backtest tak nenesou jeho
+  živé odběry nebo renderovací práci.
+- Přesný zisk zachytí `live:chart:component-ready`; datová část zůstává zvlášť
+  v `historical-load`, `live-snapshot-load` a `first-candles-*`.
