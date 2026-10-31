@@ -52,6 +52,12 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
     expect(slot).toContain('Zkusit znovu');
   });
 
+  it('produkční LIVE bundle odřízne vývojové fixture už na call site', () => {
+    const desk = source('components/TradovateLiveDesk.tsx');
+    expect(desk).toContain('if (import.meta.env.DEV && devLiveTradeMockEnabled()) {');
+    expect(desk).toContain('if (import.meta.env.DEV && devLiveCopyFixtureEnabled()) {');
+  });
+
   it('LIVE → Graf se načítá líně jen za vlastní hranicí Suspense, ne v desku', () => {
     const slot = source('components/LiveTradingScreenSlot.tsx');
     expect(slot).toMatch(/liveTradingScreenPromise = import\('\.\/LiveTradingScreen'\)/);

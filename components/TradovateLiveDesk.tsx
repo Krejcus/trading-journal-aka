@@ -1607,7 +1607,7 @@ acceptAgentStatus((await executeAgent({
 
   // Dev háček (at:dev:live-copy-fixture): ukázková skupina bez Tradovate dat,
   // jen pro ladění vizuálu LIVE přehledu. Prod build větev neobsahuje.
-  if (devLiveTradeMockEnabled()) {
+  if (import.meta.env.DEV && devLiveTradeMockEnabled()) {
     return (
       <div className="mx-auto max-w-[1500px] space-y-4">
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-600">
@@ -1617,7 +1617,7 @@ acceptAgentStatus((await executeAgent({
       </div>
     );
   }
-  if (devLiveCopyFixtureEnabled()) {
+  if (import.meta.env.DEV && devLiveCopyFixtureEnabled()) {
     return (
       <div className="mx-auto max-w-[1500px] space-y-4">
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-600">

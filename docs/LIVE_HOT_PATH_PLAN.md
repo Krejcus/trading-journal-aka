@@ -350,3 +350,18 @@ modaly. Výchozí desktopový graf je přitom nepoužije.
 - Jde o úsporu stažení/parsing/evaluace při vstupu do výchozího grafu, ne o
   snížení celkové offline PWA sady: service worker jednotlivé chunky dál zahrne
   do precache.
+
+## 18. F2j — vývojové LIVE fixture mimo produkční bundle
+
+Source mapa po F2i ukázala, že produkční `TradovateLiveDesk` stále obsahuje oba
+rozsáhlé vývojové mocky. Jejich helper sice v produkci vracel `false`, statické
+importy a call site ale bundler nedokázal bezpečně odstranit.
+
+- Obě call site jsou nyní přímo za compile-time `import.meta.env.DEV` podmínkou.
+  Produkční tree-shaking tak odstraní komponenty i jejich datové moduly; vývojový
+  režim a stávající lokální fixture se chovají beze změny.
+- `TradovateLiveDesk` klesl z 169,71/53,06 kB na 161,79/50,75 kB raw/gzip.
+  Standardní PWA precache klesla z 5 327,66 na 5 319,93 KiB a produkční chunk
+  už neobsahuje kontrolní texty ani query marker vývojových mocků.
+- Nejde o další dynamický request ani o změnu runtime cesty; odstraňuje se pouze
+  kód, který v produkci nemohl být spuštěn.

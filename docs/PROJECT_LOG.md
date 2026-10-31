@@ -294,6 +294,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   169,71/53,06 kB gzip; PWA precache dál obsahuje všechny chunky, zisk je v
   rychlejším vstupu a menším parsování. Cíleně 52/52, TypeScript a ESLint čisté;
   celý projekt 6292 testů zelených (1 todo) a produkční build čistý.
+- Source-map audit následně našel v produkčním chunku dva nikdy nespustitelné
+  DEV mocky. Compile-time brána na call site je nechá odstranit tree-shakingem:
+  desk klesl dál na 161,79/50,75 kB raw/gzip a standardní PWA precache na
+  5 319,93 KiB; kontrolní texty mocků v chunku nejsou. DEV režim zůstal zachován.
+  Cíleně 21/21, TypeScript a ESLint čisté; celý projekt 6293 testů zelených
+  (1 todo) a produkční build čistý.
 - Lokální aplikace se vykreslila až po přihlašovací obrazovku. Autentizovaný
   LIVE render nebyl bez přihlášení obcházen. Nic nebylo pushnuto ani nasazeno,
   worker se neměnil a k brokerovi nešel žádný požadavek.
