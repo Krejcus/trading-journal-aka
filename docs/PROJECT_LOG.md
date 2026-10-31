@@ -285,6 +285,276 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-31 — Review nouzové lišty, historie a crosshairu uzavřené (Codex, lokálně)
+
+- Nálezy 1–10 z Claude/copy critic review jsou opravené v jediném aktivním
+  worktree `codex-live-quality`: Flatten má jeden sdílený group lock bez
+  lokálního 10s abortu, nouzová lišta přežije pád obou lazy slotů, sedí nad
+  mobilní navigací a pod dialogy, ukazuje stáří/ověřenost cíle a po nejistém
+  výsledku výslovně říká, že se akce neopakuje. Dialog nezobrazuje identitu
+  účtů. Kontrakt je doplněný v `COPIER_INVARIANTS.md`.
+- Graf drží oddělené úseky hluboké historie a později doplní šev, Day grafy
+  ukazují chybu HTF i se zachovanými svíčkami, vadný řádek se zahodí bez
+  zahození stránky/souboru a jedna chybějící minuta už neschová celý graf.
+  Crosshair ignoruje touch, obnoví přesnou polohu po zoomu, respektuje téma a
+  mapa legendy se počítá přes `useMemo`.
+- Bod 11 nevyžadoval další rizikovou optimalizaci: CME clock cache už má limit
+  32 768 položek a FVG/structure používají inkrementální akumulátory s
+  full-prefix ověřením při opravě starších dat. Kvalita má přednost před
+  neprokázaným dalším capem.
+- Ověření: TypeScript bez chyb; produkční build; 20 dotčených testovacích
+  souborů / 151 testů sériově zelených; cílený ESLint 0 chyb (24 starších
+  warningů ve velkých chart komponentách); `git diff --check` čistý. Úzký
+  renderer 390×844 potvrdil lištu 92 px nad spodkem, skrytí při dialogu,
+  anonymní Flatten dialog a přežití simulovaného pádu přehledu. První celé
+  běhy byly zkreslené souběžným `tsc`/Vitest z jiných Claude worktree. Po
+  jejich skončení prošel řízený suite se 2 workery: 671 souborů / 6 366 testů,
+  1 todo a 1 záměrně přeskočený. Dva dříve kolísající copier soubory samostatně
+  prošly 29/29. Jediná testovací změna nahrazuje křehký limit fan-outu `<5 ms`
+  přímým důkazem, že zdravé POSTy začaly před dokončením blokovaného prvního
+  POSTu; produkční copier engine se neměnil.
+- Localhost `:3000` je ověřený (HTTP 200 i autentizovaný Dashboard) a běží z
+  `codex-live-quality`. Druhý chart-validation worktree už není zdroj práce;
+  nic se z něj nemaže. Celkem 28 untracked měřicích harnessů/reportů bylo
+  beze ztráty přesunuto mimo repo do Codex visualization evidence adresáře;
+  `vite.config.ts` už neobsahuje QA-only změnu.
+- Změna je rozdělena do 4 lokálních věcných commitů (safety / validace /
+  historie / TF+crosshair+indikátory). Zatím bez pushe, deploye, reinstalu
+  workeru, ARM/Flatten akce a bez komunikace s brokerem.
+
+### 2026-10-31 — Křížek a hlavní vypínač indikátoru opravdu čistí canvas (Codex, lokálně)
+
+- Příčina byla v životním cyklu stabilního chart primitive: opožděný `detach`
+  staré vrstvy mohl vynulovat `requestUpdate` callback už připojené nové
+  vrstvy. Oko fungovalo, ale křížek nebo hlavní přepínač pak nechaly poslední
+  geometrii VWAP/levelů v canvasu bez dalšího paintu.
+- Callback nyní čistí jen primitive, který jej vlastní. Stejná pojistka platí
+  pro levely/VWAP, FVG i Market Structure. Skrytý renderer levelů navíc ihned
+  vrací prázdný paint i prázdné štítky cenové osy; změna viditelnosti vyžádá
+  okamžitý a jeden `requestAnimationFrame` paint bez remountu grafu.
+- Renderer QA ověřil hlavní vypínač i křížek: v obou případech zmizely
+  `levelFirst/levelLast` a proběhly 3 paint requesty. Po celou dobu zůstalo
+  1 290 svíček, hash `1550657642`, střed `1793314320000` a span `134` — bez
+  změny dat a polohy grafu.
+- Ověření: TypeScript bez chyb; 19/19 cílených Vitest testů; produkční build
+  čistý; cílený ESLint 0 chyb (13 starších warningů v chart komponentě).
+- Jen lokálně v `codex-live-quality`; bez commitu, push, deploye, workeru nebo
+  komunikace s brokerem. Localhost 3000 zůstává uživateli zapnutý.
+
+### 2026-10-31 — LIVE VWAP/deviace drží rychlý posun grafu (Codex, lokálně)
+
+- Uživatelský test odhalil regresi po stabilizaci LIVE chart instance: dlouho
+  žijící range listener četl `visibleLevels/visibleFvg` zachycené při prvním
+  `onReady`. Pokud se levely zapnuly později, VWAP/deviace při prudkém
+  posunu nemusely vyžádat paint a čekaly na 100ms přepočet kontextu.
+- Listener nově čte aktuální viditelnost z refů a při každé změně rozsahu
+  invaliduje existující level primitive přes `requestUpdate`. Neprobíhá
+  rebuild, přepočet dat, autoscale ani změna viewportu.
+- Přesný QA scénář „graf vznikne bez indikátorů → levely se zapnou → 180
+  rychlých pan kroků“: 180/180 paint requestů, frame 6,1/6,4/11,7 ms
+  median/P95/max, hash 1290 svíček beze změny, 0 chyb konzole.
+- Ověření: 28/28 cílených testů + nová source regrese 14/14, TypeScript,
+  ESLint 0 chyb (13 starších warningů) a produkční build. Jen lokálně; bez
+  commitu, pushnutí, deploye, workeru, Tradovate a broker akce.
+
+### 2026-10-31 — Stabilní LIVE timeframe a přepínače indikátorů (Codex, lokálně)
+
+- LIVE graf při změně `1m/5m/15m/1h/4h/D` už nemění chart instanci.
+  Zůstává stejný viewport, crosshair/controller i runtime; kresby se přitom
+  dál ukládají a obnovují odděleně pro každý timeframe. Změna instrument rootu
+  zůstává bezpečnou hranicí nové instance.
+- Párové A/B ze stejného zdroje a datasetu, 23 zahřátých přechodů:
+  vizuální dokončení 496,2 → 81,1 ms median a 514,5 → 97,7 ms P95
+  (−83,7/−81,0 %); 23 chart API instancí před změnou, 1 po změně.
+  Posun středu viewportu po změně: 0 ms median/P95/max.
+- Indikátory se už při zapnutí/vypnutí celé neodpojují a znovu nestaví;
+  skryté vrstvy pouze vracejí prázdná data a žádají paint. U 36 kliknutí nad
+  1290 svíčkami se samotná odezva měřitelně nezlepšila (51,2 → 51,8 ms
+  median), frame rytmus ale zůstal stabilní a instance/viewport/hash svíček
+  se nezměnily. Kontrolní pan s indikátory: P95 16,8 ms, 0 framů nad 25 ms.
+- Kvalita: 0 rozdílů full vs. incremental FVG i full vs. cache agregace na
+  15k minutových svíčkách; izolace a obnova kreseb 1m/5m prošla všemi checky.
+- Report `docs/reviews/live-timeframe-indicator-performance-20261031.md/.json`.
+  TypeScript, build a celá sada 6353 testů prošly (1 todo, 1 přeskočený). Jen lokálně,
+  bez commitu, pushnutí, deploye, workeru, Tradovate a broker akce.
+
+### 2026-10-31 — Rozpad výkonu LIVE indikátorů po vrstvách (Codex, lokálně)
+
+- Offline produkční renderer změřen po vrstvách při 15k min → 3001 5m,
+  update 5 Hz a pointer streamu 8 ms. Dvě zrcadlová pořadí, 960 dokončených
+  update vzorků a 11 882 frame intervalů, 0 JS chyb a 0 ztracených vzorků.
+- Dokončení updatu: holý graf 29,4/36,5 ms median/P95; FVG20 29,6/35,3;
+  struktura 29,8/35,8; úrovně bez štítků 30,2/36,5; se štítky 30,8/36,9;
+  vše 31,5/38,2. Štítky tedy stojí přibližně 0,6 ms median, vše +2,1 ms.
+- Frame rytmus byl u všech variant 16,7 ms median a 17,6–17,9 ms P95,
+  žádný frame nad 50 ms. Všechny indikátory měly 1 frame nad 25 ms, holý
+  graf 2; po deduplikaci paintů se indikátory samy neprokázaly jako zdroj
+  viditelného janku. Živý full-screen s feed/order overlayi zůstává na trh.
+- Report `docs/reviews/indicator-layer-performance-20261031.md/.json`.
+  Měřicí harness prošel cíleným TypeScriptem, lintem a diff checkem. Jen
+  lokálně; bez commitu, pushnutí, deploye, workeru a broker akce.
+
+### 2026-10-31 — LIVE crosshair v2 a stabilní paint indikátorů (Codex, lokálně)
+
+- Uživatelský test ukázal, že první crosshair oprava (callback Lightweight
+  Charts, chyba pod 1 px) nebyla při rychlém pohybu skutečně přesná. Nahrazena
+  přímou DOM vrstvou z posledního coalesced PointerEvent: vlastní svislá i
+  vodorovná čára, časový a cenový štítek; OHLC zůstává na nejbližší svíčce.
+- Produkční renderer, 180 pohybů po 4 ms: s indikátory medián chyby
+  0,000007 px, P95 0,000029 px, vstup → čára 3,0 / 5,6 ms median/P95;
+  bez indikátorů prakticky stejné. Obě osy a štítky vizuálně ověřeny.
+- Potvrzen uživatelský postřeh u FVG/Market Structure: živý OHLC tick žádal
+  repaint i beze změny výsledné geometrie. Nová sémantická deduplikace drží
+  posledních N objektů beze změny a paint vyžádá jen při skutečné změně
+  gapu, mitigace/vyplnění nebo struktury. 15k barů, 5m, 5 Hz + pointer 8 ms:
+  indikátory po změně 25,6/26,9 ms median, 34,4/34,1 ms P95; bez indikátorů
+  25,5/26,0 ms a 33,4/33,8 ms.
+- Časové zmrazení všech indikátorů během pohybu bylo změřeno a odstraněno,
+  protože nepomohlo. Kvalita dat a viewport se tím nemění.
+- Ověření: 12 souborů / 127 testů, cílený TypeScript a ESLint bez chyb
+  (12 starších warningů v hlavní komponentě). Finální build/diff kontrola
+  viz navazující handoff. Nic nebylo commitnuto, pushnuto, nasazeno ani
+  spojeno s workerem či brokerem.
+
+### 2026-10-31 — Přesný crosshair při rychlém pohybu (Codex, lokálně)
+
+- Kořen problému byl v Lightweight Charts: i `CrosshairMode.Normal` mapoval
+  fyzické X ukazatele na index baru a svislou čáru kreslil doprostřed svíčky.
+  Při rychlém pohybu proto opticky zaostávala až o polovinu rozestupu barů.
+- Svislá čára a časový štítek se nově kreslí na skutečném X pointeru; OHLC a
+  čas dál odpovídají nejbližší validní svíčce. Nativní horizontální čára a
+  cenový štítek zůstaly zachované. Programová synchronizace panelů i úmyslný
+  magnet kreslení mají samostatnou cestu, aby oprava nerozbila jejich polohu.
+- Finální A–B–B–A při stejné sekvenci 180 pohybů: před opravou medián chyby
+  1,65–2,76 px, P95 3,47–4,82 px a 58/125 vzorků nad 2 px; po opravě medián
+  0,47 px, P95 0,88 px, maximum 0,94 px a 0/128 nad 2 px. Vstupní latence se
+  průkazně nezměnila, takže se tvrdí přesnost, ne rychlejší event loop.
+- Skutečný autentizovaný localhost vykreslil pointer i čáru přesně na X=1500.
+  Šlo o starší snapshot při zavřené burze, nikoli důkaz živé feed/broker latence.
+- Prošlo 9 souborů / 114 testů, cílené typy, lint 0 chyb / 13 starších warningů,
+  produkční build a `git diff --check`. Plný repo typecheck tentokrát nedoběhl.
+  Report: `docs/reviews/crosshair-precision-20261031.md` a `.json`.
+- Pouze lokálně v izolovaném worktree; bez commitu, pushnutí, deploye, workeru
+  nebo příkazu brokerovi. Localhost 3000 zůstává otevřený.
+
+### 2026-10-31 — Hluboká historie, vyšší TF, historické indikátory a párové měření (Codex, lokálně)
+
+- V hlavním LIVE/journal workspace je stránkování minulosti mimo backtest,
+  sdílená validovaná historie, zachování časové kotvy/zlomkového offsetu a
+  ruční levé/pravé cenové osy. Příchod historie již neregeneruje graf ani
+  neresetuje pohled. Aktuální API drží také přepnutí z popupu W/M.
+- FVG zahrnuje načtenou historii; FVG/struktura ověřují celý prefix před
+  opětovným použitím. OHLC legenda zachytí starší opravy. TF agregace má
+  hodnotově ověřenou cache a chráněné kopie výstupů. Levely/VWAP zahrnují
+  viditelnou minulost, s 100ms debounce kontextu po posunu.
+- Opraveny i integrační závody: stale loading v posluchači dlouho žijícího
+  grafu, druhá stránka zařazená gestem během čekání a kliknutí ovládání
+  považované za gesto pro načítání. Přibyl minutový most pro šev uvnitř hodiny.
+- LIVE prohlížeč: studený D 749→1116 barů, pět let 1850 barů, následné pomalé
+  čtení 1850→2217 jedním požadavkem; zachování posledního posunu uživatele
+  **0 px**. Výpadek zachoval 2217 barů a jejich hash, retry načetl 2584.
+  W/M zachovaly historické období bez dalších čtení, ruční M stránka 85→110
+  barů také 0 px. Šlo o syntetická data a skutečnou větev rendereru LIVE,
+  bez execution bridge; netvrdí se živá burzovní latence nebo úplnost feedu.
+- Finální A–B–B–A, 1122×930, 116 přepnutí / 76 vzorků po warm-upu:
+  medián první view **47,60→44,65 ms**, ale P95 **57,80→91,50 ms**.
+  Násobné zrychlení celého přepínání **není prokázané**; pomalý okraj zůstává
+  otevřený. Shodný úplný výpočet: FVG **17,4→0,6 ms**, TF cache **5,5→0,2 ms**,
+  120 vzorků a nulové odchylky. Posouvání v průměru zásadně nezrychlilo.
+- Finální relevantní sada **83 souborů / 741 testů** prošla v jednom workeru,
+  typy a produkční build prošly, cílený lint 0 chyb / 26 starších warningů.
+  První úplný běh měl 7 selhání; dotčených 54 testů následně prošlo samostatně.
+  Podrobnosti a hranice tvrzení jsou v reportu, tento běh není označován za
+  jediný čistý průchod celé sady.
+- Report a syrové důkazy: `docs/reviews/deep-history-performance-quality-20261031.md`
+  a `.json`; referenční moduly a aktuální zdroje mají SHA256. Localhost 3000
+  zůstává z tohoto izolovaného checkoutu. Nic jsem necommitoval, nepushoval,
+  nenasazoval, neinstaloval worker ani neposílal k brokerovi.
+- Následná kontrola skutečného localhostu: D úspěšně načetlo a vykreslilo
+  529 reálných svíček, bez hlášení chyby historie; datové API je tedy ověřeno
+  také mimo fixture. Nejde o nezávislou certifikaci burzovní úplnosti. Uživatelův
+  tab zůstal otevřený na Daily, měřicí taby a servery byly ukončeny.
+
+### 2026-10-31 — Naměřené zrychlení obnovy 5m grafu a spuštěný localhost (Codex, lokálně)
+
+- Na výslovný pokyn zrychlit graf se nově opakovaně používá pouze neměnný
+  převod přesného timestampu do NY hodina/minuta/sekunda (FIFO max 32768).
+  OHLCV se nadále celé počítá ze vstupu, takže opravy starých řádků/objemu
+  fungují. Žádné vyřazení dat/indikátorů, žádný odhad DST ani cache agregovaných cen.
+- Před/po měřeno v jednom produkčním rendereru, stejné 15k min → 3001 5m,
+  indikátory, viewport 1122×930 a 200ms vstupy. Dvě pořadí A–B–B–A a B–A–A–B,
+  každý blok 10 warmup + 60 vzorků. Během měření žádná kompilace/testy.
+  Kontrolní běh medián 66,0 → 29,0 ms (−56 %), P95 69,2 → 34,6 ms.
+  První běh 64,5 → 27,6 ms; jeho pomalejší závěrečný A blok je v reportu přiznaný.
+  Celkem 480 vzorků, 0 chyb i nahrazených vzorků, shodné sekvence datových otisků.
+- Přesná OHLCV ekvivalence proti zmrazenému původnímu modulu z HEAD ověřena
+  přes DST, vlastní TF, opravy historie i eviction cache. Rozšířená sada
+  chart/market-data/replay/HTF/liquidity: 71 souborů / 635 passed. Finální
+  TypeScript a produkční build passed, lint výpočtu/testů bez chyb, diff check čistý.
+- Localhost `http://127.0.0.1:3000/` z tohoto worktree zůstal spuštěný.
+  Opravena chybějící env konfigurace ignorovaným odkazem na canonical `.env.local`
+  (žádné hodnoty zveřejněné). Vite deps scan omezen na app index, aby neskenoval
+  QA virtuální importy. Přihlášený Dashboard a skutečný LIVE 5m graf vizuálně ověřeny.
+  Broker odpojený, starý snapshot poctivě označený; žádné brokerové akce.
+- Report `docs/reviews/live-chart-speed-ab-20261031.md` a stejnojmenné JSON.
+  Jde o lokální obnovu grafu se zahřátými časovými převody, ne dokázaný zisk
+  prvního načtení nebo broker latence. Žádný push/deploy/reinstall workeru.
+
+### 2026-10-31 — Statické brzdy LIVE, pravdivý stav dat a oprava obou os (Codex, lokálně)
+
+- Na pokyn uživatele opravená dostupnost OFF / Kill switch / Flatten All:
+  statická samostatná lišta mimo lazy přehled/graf, přednačtení přehledu,
+  vlastní rezervovaný prostor a potvrzení nad grafem. Flatten kontroluje
+  aktuálně známou skupinu a členy, ACK není vydáván za potvrzený flat.
+  Offline test skutečného odmítnutí importu prošel na desktopu i mobilním
+  rozměru; všechny callbacky byly simulované, síť blokovaná.
+- Čtečka odmítá vadný tvar/čas/trh/kontrakt, označuje neověřený zdroj,
+  vyřazené řádky a objem. Graf ukazuje stáří, pokrytí i důvod neúspěšné obnovy,
+  starší platná data ponechá. Po warm cache hned následuje nové čtení.
+  Pokrytí obchodu kontroluje vnitřní mezery a respektuje pravidelné pauzy.
+- Cenová osa ignoruje odstraněnou/nahradenou instanci. Další test odhalil
+  prázdný graf při 15k → 1,7k: starý výřez byl za koncem nové řady. Opraven
+  neplatný výřez i odložená obnova časového rozsahu; skutečné svíčky a stejný
+  časový záběr vizuálně ověřeny. Platný výřez ani paint-only nastavení se neresetují.
+- Finální cílená regrese 13 souborů / 118 testů prošla, TypeScript a produkční
+  build prošly. Lint 0 chyb (12 starších CandleKit warningů), diff check čistý.
+  Celá sada před posledním doplněním: 6314 passed / 6 failed / 1 todo; všech
+  pět selhavších souborů zopakováno samostatně: 47/47 passed bez změny copier
+  execution kódu. Původní plný běh se neoznačuje za zelený.
+- Nové měření finálního rendereru pod souběžnými kompilacemi: 1,7k/1m
+  32,3 ms/P95 60,1 (n213), 15k/1m 43,3/97,3 (220), 15k → 5m
+  156,9/214,8 (218); JS chyby 0, nahrazené vzorky kumulativně 0/1/59.
+  Nejde o prokázané zrychlení ani broker latency; 5m zátěž zůstává problém.
+  Podrobnosti a syrové syntetické metriky v `docs/reviews/offline-live-performance-quality-20261031.md`.
+- Práce je necommitnutá na `codex/live-quality-20261030` v izolovaném
+  `/Users/filipkrejca/alphatrade-worktrees/codex-live-quality`. Nové opravy
+  nebyly pushnuté ani nasazené; worker se neměnil, žádný skutečný brokerový
+  příkaz se neposlal. V canonical checkoutu přidaný pouze odkazový zápis.
+
+### 2026-10-31 — Offline měření grafu a kvality svíček při údržbě Tradovate (Codex)
+
+- Na žádost uživatele pokračoval audit bez připojeného brokera. Přibyl
+  izolovaný production-build harness (`tests/qa/start-live-performance.mjs`,
+  port 4188): skutečný CandleKit renderer, syntetická OHLCV, prázdné env,
+  blokovaná síť. Nejde o přihlášený produkční LIVE ani skutečný tick latency.
+- Pět skutečných GET na každý veřejný produkční soubor: medián HTML 94 ms,
+  LIVE desk 106 ms (50 826 B), obchodní obrazovka 95 ms (22 909 B), vše 200.
+- Celé snapshoty 5 Hz: 1 700 svíček medián 23,9 ms/P95 26,2 ms (78 vzorků),
+  15 000 svíček 1m 34,5/41,1 ms (82). Při agregaci 15 000 minut do 5m
+  66,8/72,1 ms (396); P95 snímkového intervalu vzrostl na 49,9 ms.
+  Měření končí dvěma rAF po commit/ready, není hardwarovým důkazem pixel paint.
+- Odhaleny mezery: JSON `null` shodí live parser, chybí obranná kontrola
+  trhu/capture času a `coversTrade` neodhalí vnitřní díry. Není potvrzeno,
+  že produkční soubory takové vady obsahují. Kód grafu navíc zobrazuje libovolnou
+  nenulovou historickou řadu bez vlastního údaje o úplnosti/stáří svíček.
+- Po změně timeframu zaznamenáno 7 chyb v `priceScale.width()` z wheel handleru
+  (`CandleKitTradeChart.tsx:3662`); samostatná lifecycle regrese je prioritní.
+  První dva 1m stress scénáře proběhly bez JS chyby, náročný 5m už ne.
+- TypeScript a build QA prošly, test sady 74 a 68 zelených (překryv, nesčítat).
+  Podrobná metodika a limity v
+  `docs/reviews/offline-live-performance-quality-20261031.md`. Produkční
+  aplikační kód, worker ani uložená data se během auditu neměnily; žádný deploy.
+
 ### 2026-10-31 ráno — LIVE výkon nasazen, worker bezpečně ponechán na starší verzi (Codex)
 
 - Ověřený balík F2a–F2i byl z čisté větve nasazen na produkční web jako

@@ -145,8 +145,42 @@ describe('LIVE → Graf je jen UI', () => {
     // Objednávky z pravého menu jen vyplní panel — v textu je to vidět.
     expect(workspace).toMatch(/chartOrderLabelSuffix=\{context\.liveOrderEntry \? ' · návrh' : undefined\}/);
     const chart = source('components/CandleKitTradeChart.tsx');
-    expect(chart).toMatch(/: liveSeries \? \{ start: candleWindow\.start, end: candles\.length \} : candleWindow,/);
-    expect(chart).toMatch(/\? `overlay-v2:\$\{trade\.id\}:\$\{timeframe\}:\$\{renderedCandleWindow\.start\}:live`/);
+    expect(chart).toMatch(/renderableCandleWindow\(liveSeries \? \{ start: candleWindow\.start, end: candles\.length \} : candleWindow, initialWindow, candles\.length\)/);
+    // LIVE drží stejný controller i při změně timeframe; instrument zůstává
+    // hranicí série. Deník/history si dál nechává timeframe v klíči.
+    expect(chart).toMatch(/\? `overlay-v3:\$\{trade\.id\}:\$\{resolvedInstrumentRoot\}:live`/);
+    expect(chart).not.toMatch(/overlay-v3:\$\{trade\.id\}:\$\{timeframe\}:live/);
+    expect(chart).toMatch(/: `overlay-v2:\$\{trade\.id\}:\$\{timeframe\}:history`/);
+  });
+
+  it('stabilní LIVE graf při posunu překreslí VWAP podle aktuálního stavu přepínače', () => {
+    const chart = source('components/CandleKitTradeChart.tsx');
+    // Listener přežívá přepnutí indikátoru, proto nesmí držet hodnotu
+    // visibleLevels zachycenou při prvním onReady.
+    expect(chart).toMatch(/visibleLevelsRef\.current = visibleLevels;/);
+    expect(chart).toMatch(/if \(visibleLevelsRef\.current\) \{[\s\S]*?levelsPrimitiveRequestUpdateRef\.current\?\.\(\);/);
+    expect(chart).toMatch(/if \(visibleLevelsRef\.current && !replayActive\)/);
+    expect(chart).not.toMatch(/if \(visibleLevels && !replayActive\)/);
+  });
+
+  it('křížek i hlavní vypínač odstraní levely bez přestavby grafu', () => {
+    const chart = source('components/CandleKitTradeChart.tsx');
+    // Skrytá stabilní vrstva nesmí znovu nakreslit geometrii, která zůstala
+    // v posledním canvas snímku. Price-axis štítky platí totéž.
+    expect(chart).toMatch(/if \(!visibleLevelsRef\.current\) return;/);
+    expect(chart).toMatch(/if \(!visibleLevelsRef\.current\) return \[\];/);
+    // Opožděný detach staré vrstvy nesmí vymazat callback nově připojené.
+    expect(chart).toMatch(/createPrimitiveUpdateBinding\(levelsPrimitiveRequestUpdateRef\)/);
+    // Druhý paint v dalším snímku kryje výměnu callbacku v témže React commitu.
+    expect(chart).toMatch(/indicatorVisibilityPaintFrameRef\.current = window\.requestAnimationFrame/);
+  });
+
+  it('přesný DOM crosshair zachová touch long-press, téma a obnovu po zoomu', () => {
+    const chart = source('components/CandleKitTradeChart.tsx');
+    expect(chart).toMatch(/if \(event\.pointerType === 'touch'\) \{[\s\S]*?hideExactCrosshair\(\);/);
+    expect(chart).toMatch(/refreshExactCrosshairRef\.current\?\.\(\);/);
+    expect(chart).toMatch(/backgroundColor: isDark \? '#131722' : '#ffffff'/);
+    expect(chart).toMatch(/const visibleCandleLookup = useMemo\(\(\) => \{/);
   });
 
   it('výpočty panelu nikdo z cest příkazů nepoužívá', () => {

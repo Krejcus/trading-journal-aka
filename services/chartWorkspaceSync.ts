@@ -2,6 +2,7 @@ import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { IChartApi, Time, UTCTimestamp } from 'lightweight-charts';
 import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from './marketData';
 import { roundNqMnqPriceToTick } from './chartPriceTick';
+import { dispatchExactCrosshairSync } from './chartCrosshairPrecision';
 
 export interface ChartWorkspaceSyncSettings {
   symbol: boolean;
@@ -129,6 +130,7 @@ export const installChartWorkspaceSync = (
           const targetChart = target.chartApi.controller.getChart();
           if (typeof param.time !== 'number' || !param.point) {
             targetChart.clearCrosshairPosition();
+            dispatchExactCrosshairSync(targetChart.chartElement(), null);
             return;
           }
           const targetTime = syncedCrosshairTime({
@@ -142,6 +144,7 @@ export const installChartWorkspaceSync = (
           // myší přímo nad ním.
           if (targetTime === null) {
             targetChart.clearCrosshairPosition();
+            dispatchExactCrosshairSync(targetChart.chartElement(), null);
             return;
           }
           const cursorPrice = sourceApi.controller.getSeries().coordinateToPrice(param.point.y);
@@ -152,9 +155,11 @@ export const installChartWorkspaceSync = (
               targetTime as UTCTimestamp,
               target.chartApi.controller.getSeries(),
             );
+            dispatchExactCrosshairSync(targetChart.chartElement(), targetTime, roundNqMnqPriceToTick(cursorPrice));
           } catch {
             // Čas za koncem osy budoucnosti cílového panelu — kurzor tam nemá kde stát.
             targetChart.clearCrosshairPosition();
+            dispatchExactCrosshairSync(targetChart.chartElement(), null);
           }
         });
         queueMicrotask(() => { crosshairSyncing = false; });

@@ -665,11 +665,18 @@ export const chartCanvasOptions = (settings: ChartSettings): DeepPartial<ChartOp
     crosshair: {
       mode: CrosshairMode.Normal,
       vertLine: {
+        // Lightweight Charts snaps this line to a logical bar even in Normal
+        // mode. CandleKitTradeChart renders the exact physical X as a DOM
+        // overlay while retaining the native horizontal line and data lookup.
+        visible: false,
+        labelVisible: false,
         color: canvas.crosshair.color,
         width: canvas.crosshair.width,
         style: chartLineStyle(canvas.crosshair.style),
       },
       horzLine: {
+        visible: false,
+        labelVisible: false,
         color: canvas.crosshair.color,
         width: canvas.crosshair.width,
         style: chartLineStyle(canvas.crosshair.style),

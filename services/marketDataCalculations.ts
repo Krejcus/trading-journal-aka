@@ -564,11 +564,20 @@ export function timeframeBucketStart(unixSeconds: number, timeframe: MarketTimef
 }
 
 /** Align intraday and daily bars to the CME equity-index session opening at 18:00 New York. */
+const cmeClockCache = new Map<number, readonly [number, number, number]>();
+const CME_CLOCK_CACHE_LIMIT = 32_768;
 function cmeBucketStart(unixSeconds: number, minutes: number): number {
-  const parts = Object.fromEntries(nyParts.formatToParts(new Date(unixSeconds * 1000)).map(part => [part.type, part.value]));
-  const hour = Number(parts.hour);
-  const minute = Number(parts.minute);
-  const second = Number(parts.second);
+  // Only immutable timestamp -> NY clock conversion is reused. OHLCV is always
+  // recomputed from the supplied rows, including corrections to old candles.
+  // Exact timestamps retain Intl's DST behavior; no assumed/fixed UTC offset.
+  let clock = cmeClockCache.get(unixSeconds);
+  if (!clock) {
+    const parts = Object.fromEntries(nyParts.formatToParts(new Date(unixSeconds * 1000)).map(part => [part.type, part.value]));
+    clock = [Number(parts.hour), Number(parts.minute), Number(parts.second)];
+    if (cmeClockCache.size >= CME_CLOCK_CACHE_LIMIT) cmeClockCache.delete(cmeClockCache.keys().next().value!);
+    cmeClockCache.set(unixSeconds, clock);
+  }
+  const [hour, minute, second] = clock;
   const minutesSinceSessionOpen = ((hour - 18 + 24) % 24) * 60 + minute;
   const secondsIntoBucket = (minutesSinceSessionOpen % minutes) * 60 + second;
   return unixSeconds - secondsIntoBucket;

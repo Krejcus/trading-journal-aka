@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ColorType, LineStyle, PriceScaleMode } from 'lightweight-charts';
+import { ColorType, CrosshairMode, LineStyle, PriceScaleMode } from 'lightweight-charts';
 import {
   barCloseCountdown,
   barIsUpAgainstPreviousClose,
@@ -138,6 +138,16 @@ describe('mapování na options knihovny', () => {
     expect(options.grid?.vertLines?.visible).toBe(true);
     expect(options.grid?.horzLines?.visible).toBe(false);
     expect(options.grid?.horzLines?.color).toBe('rgba(0,0,0,0)');
+  });
+
+  it('nativní crosshair je skrytý pro přesnou DOM vrstvu na obou osách', () => {
+    const crosshair = chartCanvasOptions(settings()).crosshair;
+
+    expect(crosshair?.mode).toBe(CrosshairMode.Normal);
+    expect(crosshair?.vertLine?.visible).toBe(false);
+    expect(crosshair?.vertLine?.labelVisible).toBe(false);
+    expect(crosshair?.horzLine?.visible).toBe(false);
+    expect(crosshair?.horzLine?.labelVisible).toBe(false);
   });
 
   it('přechodové pozadí použije obě barvy', () => {

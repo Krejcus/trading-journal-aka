@@ -1,12 +1,17 @@
 import { createEntryOrdersPrimitive } from '../services/journalEntryOrdersPrimitive';
 import { cancelledOrderOutcome } from '../lib/entryOrderOutcome';
 import { attachChartTouchGestures } from '../services/chartTouchPriceAxis';
+import { readInteractivePriceScale, resetInteractivePriceScale, restoreInteractiveTimeRange, zoomInteractivePriceScale } from '../services/chartPriceScaleInteraction';
+import { indicatorContextWindow, renderableCandleWindow } from '../services/chartCandleWindow';
+import { captureChartViewport, restoreChartViewport, type AnchoredChartViewport } from '../services/chartViewportContinuity';
+import { updateVerifiedFvg, updateVerifiedStructure, type VerifiedFvgState, type VerifiedStructureState } from '../services/verifiedChartIndicators';
 import { createJournalArrowStacks, createJournalChartPrimitive, createReviewPoint, createReviewPriceFocus, journalTradePriceRange, type JournalChartPrimitive } from '../services/journalChartPrimitive';
 import { createJournalPositionPrimitive } from '../services/journalPositionDrawing';
 import { retainEqualNumbers, uniqueStructureEvents } from '../services/chartReplayPaint';
+import { createPrimitiveUpdateBinding, sameRenderedFvgSnapshot, sameRenderedStructure } from '../services/chartIndicatorPaint';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { DEFAULT_STYLE, type Drawing } from '@getcandlekit/charts';
+import { DEFAULT_STYLE, localStorageKV, type Drawing, type KVStore } from '@getcandlekit/charts';
 import {
   ChartView,
   IndicatorController,
@@ -87,10 +92,8 @@ import {
   findEntryStructureEvent,
   findFairValueGaps,
   nearestBuiltinTimeframe,
-  updateFairValueGapAccumulator,
   fairValueGapsWithFormingBars,
   marketStructureWithFormingBars,
-  updateMarketStructureAccumulator,
   type BuiltinMarketTimeframe,
   type FairValueGap,
   type FairValueGapAccumulator,
@@ -191,6 +194,15 @@ import {
   type ChartSettings,
   type ChartStatusLineSettings,
 } from '../services/chartSettings';
+import {
+  crosshairCssLineStyle,
+  EXACT_CROSSHAIR_SYNC_EVENT,
+  exactCrosshairLabelLeft,
+  exactCrosshairPoint,
+  exactCrosshairPriceLabelTop,
+  exactCrosshairX,
+  type ExactCrosshairSyncDetail,
+} from '../services/chartCrosshairPrecision';
 import { createBarCountdownPrimitive } from '../services/barCountdownPrimitive';
 import {
   canvasLineDash,
@@ -245,6 +257,8 @@ interface CandleKitTradeChartProps {
   showIndicatorPicker?: boolean;
   indicatorController?: IndicatorController | null;
   focusRequest?: number;
+  initialViewport?: AnchoredChartViewport;
+  onInitialViewportRestored?: () => void;
   hideFocusButton?: boolean;
   /** Bez řádku OHLC v legendě (malý graf deníku na telefonu). */
   hideOhlcLegend?: boolean;
@@ -340,7 +354,7 @@ interface CandleKitTradeChartProps {
     input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number },
     candle: MarketCandle | null,
   ) => void;
-  onNeedOlderHistory?: (oldestTime: number) => void;
+  onNeedOlderHistory?: (oldestTime: number) => void | Promise<void>;
   olderHistoryLoading?: boolean;
 }
 
@@ -1923,6 +1937,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   showIndicatorPicker = false,
   indicatorController: suppliedIndicatorController,
   focusRequest,
+  initialViewport,
+  onInitialViewportRestored,
   hideFocusButton = false,
   compactMode = false,
   hideDrawingToolbar = false,
@@ -1974,13 +1990,26 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const chartRootRef = useRef<HTMLDivElement>(null);
   const olderHistoryGateRef = useRef(createOlderHistoryGate());
   const olderHistoryCheckFrameRef = useRef<number | null>(null);
+  const levelViewportTimerRef = useRef<number | null>(null);
+  const [levelViewport, setLevelViewport] = useState<{ from: number; to: number } | null>(null);
   const olderHistoryWasLoadingRef = useRef(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const rangeSubscriptionRef = useRef<{ chart: IChartApi; handler: () => void } | null>(null);
+  const olderHistoryLoadingRef = useRef(olderHistoryLoading);
+  olderHistoryLoadingRef.current = olderHistoryLoading;
+  const olderHistoryLoaderRef = useRef(onNeedOlderHistory);
+  olderHistoryLoaderRef.current = onNeedOlderHistory;
   const crosshairSubscriptionRef = useRef<{
     chart: IChartApi;
     handler: Parameters<IChartApi['subscribeCrosshairMove']>[0];
   } | null>(null);
+  const exactCrosshairLineRef = useRef<HTMLSpanElement>(null);
+  const exactCrosshairHorizontalLineRef = useRef<HTMLSpanElement>(null);
+  const exactCrosshairTimeLabelRef = useRef<HTMLSpanElement>(null);
+  const exactCrosshairPriceLabelRef = useRef<HTMLSpanElement>(null);
+  const exactCrosshairSyncCleanupRef = useRef<(() => void) | null>(null);
+  const exactPointerClientRef = useRef<{ x: number; y: number } | null>(null);
+  const refreshExactCrosshairRef = useRef<(() => void) | null>(null);
   const protectedDrawingsUnsubscribeRef = useRef<(() => void) | null>(null);
   const drawingMagnetCleanupRef = useRef<(() => void) | null>(null);
   const drawingSelectionUnsubscribeRef = useRef<(() => void) | null>(null);
@@ -2006,6 +2035,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const futureAxisSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const levelsPrimitiveRequestUpdateRef = useRef<(() => void) | null>(null);
   const structurePrimitiveRequestUpdateRef = useRef<(() => void) | null>(null);
+  const indicatorVisibilityPaintFrameRef = useRef<number | null>(null);
   const positionProgressPrimitiveRequestUpdateRef = useRef<(() => void) | null>(null);
   const positionProgressUnsubscribeRef = useRef<(() => void) | null>(null);
   const showManagedPositionBoxesRef = useRef(showManagedPositionBoxes);
@@ -2136,7 +2166,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     if (!chartSettingsRequest) return;
     chartSettingsBackupRef.current = structuredClone(chartSettingsRef.current);
     setChartSettingsOpen(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- jen nový požadavek
   }, [chartSettingsRequest]);
   const chartSettingsBackupRef = useRef<ChartSettings | null>(null);
   const [priceScaleMode, setPriceScaleMode] = useState<ChartPriceScaleModeName>('normal');
@@ -2589,6 +2618,14 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     && !hiddenCustomIndicators.has('structure')
     && indicatorSettings.structure.enabled
     && indicatorVisibleOnTimeframe(timeframe, indicatorSettings.structure.visibility);
+  // ChartView zůstává v LIVE připojený i přes změnu timeframe a přepínačů.
+  // Dlouho žijící range listener proto nesmí číst hodnotu zachycenou při
+  // prvním onReady; po pozdějším zapnutí indikátoru by jinak VWAP/levely při
+  // rychlém posunu čekaly až na odložený přepočet kontextu.
+  const visibleFvgRef = useRef(visibleFvg);
+  const visibleLevelsRef = useRef(visibleLevels);
+  visibleFvgRef.current = visibleFvg;
+  visibleLevelsRef.current = visibleLevels;
   // Detail: FVG vstupu i v přehrávání — až od vstupu, ať nic neprozradí dopředu.
   const entryMinuteUnix = Math.floor(entryMs / 60_000) * 60;
   const showEntryFvg = !reviewMode && (!replayActive || (centeredTradeView && replayCursorTime != null && replayCursorTime >= entryMinuteUnix))
@@ -2641,9 +2678,20 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }),
     [isDark],
   );
+  const intervalWindowRef = useRef({ key: `${trade.id}:${timeframe}`, viewport: initialViewport });
+  if (intervalWindowRef.current.key !== `${trade.id}:${timeframe}`) intervalWindowRef.current = { key: `${trade.id}:${timeframe}`, viewport: initialViewport };
+  const intervalViewport = intervalWindowRef.current.viewport;
   const initialWindow = useMemo(
-    () => initialCandleWindow(candles, timeframe, trade, entryMs, exitMs, compactMode),
-    [candles, timeframe, trade, entryMs, exitMs, compactMode],
+    () => {
+      const standard = initialCandleWindow(candles, timeframe, trade, entryMs, exitMs, compactMode);
+      if (!intervalViewport || !candles.length) return standard;
+      const center = candleIndexAtOrAfter(candles, intervalViewport.centerMs / 1000);
+      const radius = Math.max(160, Math.ceil(intervalViewport.span));
+      // Keep both the requested historical view and the trade available. A
+      // later explicit "Obchod" action must still be able to focus the trade.
+      return { start: Math.min(standard.start, Math.max(0, center - radius)), end: Math.max(standard.end, Math.min(candles.length, center + radius + 1)) };
+    },
+    [candles, timeframe, trade, entryMs, exitMs, compactMode, intervalViewport],
   );
   const [candleWindow, setCandleWindow] = useState<CandleWindow>(initialWindow);
   const previousFirstCandleTimeRef = useRef<number | null>(candles[0]?.time ?? null);
@@ -2669,10 +2717,19 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   useEffect(() => {
     // Review kreslí vždy celou sérii — okno kolem obchodu nepotřebuje.
     if (replayActive || reviewMode) return;
-    if (pendingVisibleRangeRef.current) return;
-    expandingWindowRef.current = false;
     const sameTimeframe = windowTimeframeRef.current === timeframe;
     windowTimeframeRef.current = timeframe;
+    if (!sameTimeframe) {
+      pendingVisibleRangeRef.current = null;
+      expandingWindowRef.current = false;
+      setCandleWindow(initialWindow);
+      return;
+    }
+    if (pendingVisibleRangeRef.current) {
+      setCandleWindow(current => renderableCandleWindow(current, initialWindow, candles.length));
+      return;
+    }
+    expandingWindowRef.current = false;
     // LIVE: okno rozšířené zleva (pohled do historie) přežije obnovu dat —
     // jeho zúžení by změnilo klíč grafu a záběr by skočil zpět na kotvu.
     setCandleWindow(current => liveSeries && sameTimeframe
@@ -2682,8 +2739,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
   useEffect(() => () => {
     if (olderHistoryCheckFrameRef.current !== null) window.cancelAnimationFrame(olderHistoryCheckFrameRef.current);
+    if (levelViewportTimerRef.current !== null) window.clearTimeout(levelViewportTimerRef.current);
     unsubscribeVisibleRangeSafely(rangeSubscriptionRef.current);
     unsubscribeCrosshairSafely(crosshairSubscriptionRef.current);
+    exactCrosshairSyncCleanupRef.current?.();
+    exactPointerClientRef.current = null;
+    refreshExactCrosshairRef.current = null;
     protectedDrawingsUnsubscribeRef.current?.();
     drawingMagnetCleanupRef.current?.();
     drawingSelectionUnsubscribeRef.current?.();
@@ -2724,8 +2785,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const renderedCandleWindow = useMemo<CandleWindow>(
     () => replayActive || centeredTradeView || reviewMode
       ? { start: 0, end: candles.length }
-      : liveSeries ? { start: candleWindow.start, end: candles.length } : candleWindow,
-    [candleWindow, candles.length, centeredTradeView, liveSeries, replayActive, reviewMode],
+      : renderableCandleWindow(liveSeries ? { start: candleWindow.start, end: candles.length } : candleWindow, initialWindow, candles.length),
+    // The fallback's numeric bounds are stable across a tick; its array-derived
+    // identity must not rebuild chart overlays on every live update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [candleWindow, candles.length, centeredTradeView, initialWindow.start, initialWindow.end, liveSeries, replayActive, reviewMode],
   );
   // Detail: nový graf se ukáže až s vycentrovaným záběrem.
   const [viewportSettled, setViewportSettled] = useState(!centeredTradeView);
@@ -2744,31 +2808,23 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
   const visibleCandlesRef = useRef(visibleCandles);
   visibleCandlesRef.current = visibleCandles;
-  const visibleCandleLookupCacheRef = useRef<{
-    firstTime: number | null;
-    length: number;
-    lookup: Map<number, { candle: MarketCandle; previousClose?: number }>;
-  }>({ firstTime: null, length: 0, lookup: new Map() });
-  const visibleCandleLookupRef = useRef(visibleCandleLookupCacheRef.current.lookup);
-  const visibleFirstTime = visibleCandles[0]?.time ?? null;
-  const lookupCache = visibleCandleLookupCacheRef.current;
-  if (lookupCache.firstTime !== visibleFirstTime || visibleCandles.length < lookupCache.length) {
-    lookupCache.lookup = new Map();
-    lookupCache.firstTime = visibleFirstTime;
-    lookupCache.length = 0;
-  }
-  // The newest candle can still change OHLC while its timestamp stays the
-  // same, so refresh it and append only the genuinely new tail.
-  const lookupUpdateStart = Math.max(0, lookupCache.length - 1);
-  for (let index = lookupUpdateStart; index < visibleCandles.length; index += 1) {
-    const candle = visibleCandles[index];
-    lookupCache.lookup.set(candle.time, {
-      candle,
-      previousClose: visibleCandles[index - 1]?.close,
-    });
-  }
-  lookupCache.length = visibleCandles.length;
-  visibleCandleLookupRef.current = lookupCache.lookup;
+  const timeframeRef = useRef(timeframe);
+  timeframeRef.current = timeframe;
+  // Legend lookup is rebuilt only when the rendered candle series changes,
+  // never on unrelated toolbar/hover renders. Value copies preserve provider
+  // corrections even if an upstream array is mutated in place.
+  const visibleCandleLookup = useMemo(() => {
+    const lookup = new Map<number, { candle: MarketCandle; previousClose?: number }>();
+    for (let index = 0; index < visibleCandles.length; index += 1) {
+      lookup.set(visibleCandles[index].time, {
+        candle: { ...visibleCandles[index] },
+        previousClose: visibleCandles[index - 1]?.close,
+      });
+    }
+    return lookup;
+  }, [visibleCandles]);
+  const visibleCandleLookupRef = useRef(visibleCandleLookup);
+  visibleCandleLookupRef.current = visibleCandleLookup;
 
   const handleManagedPositionPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!replayActive || replaySelecting || managedPositionBoxes.length === 0) {
@@ -2838,22 +2894,23 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // přestane platit plný průchod v každém panelu. Mimo replay se epoch bumpá
   // synchronně a chování je stejné jako dřív.
   const levelsEpoch = useThrottledEpoch(candles, replayActive && visibleLevels, REPLAY_LEVELS_THROTTLE_MS);
+  const levelsContext = indicatorContextWindow(candles, replayActive ? null : levelViewport, LEVEL_CONTEXT_BARS[nearestBuiltinTimeframe(timeframe)], renderedCandleWindow.end);
   const liquidityLevels = useMemo(
     () => {
       if (!visibleLevels) return EMPTY_LIQUIDITY_LEVELS;
       const source = candlesRef.current;
-      const end = renderedCandleWindowRef.current.end;
-      const start = Math.max(0, end - LEVEL_CONTEXT_BARS[nearestBuiltinTimeframe(timeframe)]);
-      return calculateLiquidityLevels(candleWindowSlice(source, { start, end }), indicatorSettings.levels);
+      const context = replayActive ? indicatorContextWindow(source, null, LEVEL_CONTEXT_BARS[nearestBuiltinTimeframe(timeframe)], renderedCandleWindowRef.current.end) : levelsContext;
+      return calculateLiquidityLevels(candleWindowSlice(source, context), indicatorSettings.levels);
     },
     // Mimo replay řídí přepočet přímo identita candles (jako dřív); za
     // přehrávání ho přebírá škrcená epocha a data se čtou z refů.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [replayActive ? levelsEpoch : candles, replayActive ? null : renderedCandleWindow.end, indicatorSettings.levels, timeframe, visibleLevels],
+    [replayActive ? levelsEpoch : candles, replayActive ? null : levelsContext.start, replayActive ? null : levelsContext.end, indicatorSettings.levels, timeframe, visibleLevels],
   );
   const liquidityLevelsRef = useRef(liquidityLevels);
   liquidityLevelsRef.current = liquidityLevels;
   const fvgAccumulatorRef = useRef<FairValueGapAccumulator | null>(null);
+  const verifiedFvgRef = useRef<VerifiedFvgState | null>(null);
   // Vstup posledního výpočtu FVG (dokončená data) — k němu se kreslí tvořící se bar.
   const fvgInputRef = useRef<MarketCandle[]>([]);
   // Konec řady grafu za daty (živá svíčka, přehrávaná svíčka), jen pro kreslení FVG.
@@ -2861,39 +2918,48 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const fvgs = useMemo(() => {
     if (!visibleFvg) {
       fvgAccumulatorRef.current = null;
+      verifiedFvgRef.current = null;
       fvgInputRef.current = [];
       return [];
     }
     if (replayActive) {
       const replayContextStart = Math.max(0, renderedCandleWindow.start - 600);
       const input = candleWindowSlice(candles, { start: replayContextStart, end: renderedCandleWindow.end });
-      const next = updateFairValueGapAccumulator(fvgAccumulatorRef.current, input);
+      const verified = updateVerifiedFvg(verifiedFvgRef.current, input);
+      verifiedFvgRef.current = verified;
+      const next = verified.state;
       fvgAccumulatorRef.current = next;
       fvgInputRef.current = input;
       return next.gaps;
     }
-    const from = Math.floor(entryMs / 1000) - 8 * 3600;
-    const input = candles.filter(candle => candle.time >= from);
-    // Akumulátor (ne jen seznam) — živá svíčka pak přepočítá jen poslední bar.
-    const next = updateFairValueGapAccumulator(null, input);
+    // Every loaded historical bar contributes, including Daily/Weekly history
+    // far before the journal entry. Cached prefixes are validated row by row.
+    const input = candleWindowSlice(candles, { start: 0, end: renderedCandleWindow.end });
+    const verified = updateVerifiedFvg(verifiedFvgRef.current, input);
+    verifiedFvgRef.current = verified;
+    const next = verified.state;
     fvgAccumulatorRef.current = next;
     fvgInputRef.current = input;
     return next.gaps;
-  }, [candles, entryMs, renderedCandleWindow.end, renderedCandleWindow.start, replayActive, visibleFvg]);
+  }, [candles, renderedCandleWindow.end, renderedCandleWindow.start, replayActive, visibleFvg]);
   const marketStructureAccumulatorRef = useRef<MarketStructureAccumulator | null>(null);
+  const verifiedStructureRef = useRef<VerifiedStructureState | null>(null);
   // Vstup posledního výpočtu struktury (data) — k němu se počítá tvořící se bar.
   const structureInputRef = useRef<MarketCandle[]>([]);
   const structureFormingBarsRef = useRef<MarketCandle[]>([]);
   const structureEvents = useMemo(() => {
     if (!visibleStructure) {
       marketStructureAccumulatorRef.current = null;
+      verifiedStructureRef.current = null;
       structureInputRef.current = [];
       return [];
     }
     const firstRenderedTime = visibleCandles[0]?.time ?? Number.NEGATIVE_INFINITY;
     const contextStart = Math.max(0, renderedCandleWindow.start - STRUCTURE_CONTEXT_BARS);
     const input = candleWindowSlice(candles, { start: contextStart, end: renderedCandleWindow.end });
-    const next = updateMarketStructureAccumulator(marketStructureAccumulatorRef.current, input);
+    const verified = updateVerifiedStructure(verifiedStructureRef.current, input);
+    verifiedStructureRef.current = verified;
+    const next = verified.state;
     marketStructureAccumulatorRef.current = next;
     structureInputRef.current = input;
     return next.events
@@ -2955,6 +3021,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const firstRenderedTime = visibleCandles[0]?.time ?? Number.NEGATIVE_INFINITY;
     const activeFvgLimit = Math.max(1, Math.min(30, Number(indicatorSettings.fvg.maxCount) || 1));
     const lastCandleTime = candles.at(-1)?.time;
+    let viewport: { from: number; to: number } | null = null;
+    try {
+      const shown = apiRef.current?.controller.getChart().timeScale().getVisibleRange();
+      if (shown && typeof shown.from === 'number' && typeof shown.to === 'number') viewport = { from: shown.from, to: shown.to };
+    } catch { /* chart is being replaced */ }
     const drawn = [
       ...(visibleFvg
         ? gaps
@@ -2962,6 +3033,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           // active count. Trim before deriving forming times so a replay step
           // does not remap thousands of historical, off-screen gaps.
           .filter(gap => gap.endTime >= firstRenderedTime)
+          .filter(gap => !viewport || gap.endTime >= viewport.from && gap.startTime <= viewport.to)
           .slice(-activeFvgLimit * 2)
           .filter(gap => gap.startTime !== displayedEntryFvg?.startTime)
           .map(gap => ({ gap, isEntry: false }))
@@ -3027,10 +3099,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const forming = chartTailAfterData(controller.getBars(), input.at(-1));
       if (sameCandles(fvgFormingBarsRef.current, forming)) return;
       fvgFormingBarsRef.current = forming;
-      renderedFvgsRef.current = deriveRenderedFvgsRef.current(
+      const next = deriveRenderedFvgsRef.current(
         fairValueGapsWithFormingBars(fvgAccumulatorRef.current, input, forming),
         forming,
       );
+      if (sameRenderedFvgSnapshot(renderedFvgsRef.current, next)) return;
+      renderedFvgsRef.current = next;
       fvgPrimitiveRequestUpdateRef.current?.();
     };
     series.subscribeDataChanged(onDataChanged);
@@ -3112,12 +3186,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       syncStructureLinesRef.current();
     });
   }, [chartApiEpoch, replayActive]);
-  // LIVE se s novou svíčkou nepřestavuje (`liveSeries`), takže čáry BoS/CHoCH
-  // z `handleReady` by zůstaly z doby otevření grafu — srovnat je tady.
+  // Graf se při toggle indikátoru ani LIVE změně timeframe znovu nestaví,
+  // takže generované čáry BoS/CHoCH srovnává tento cílený sync.
   useEffect(() => {
-    if (!liveSeries || replayActive) return;
+    if (replayActive) return;
     syncStructureLinesRef.current();
-  }, [chartApiEpoch, liveSeries, replayActive, structureOverlayEvents]);
+  }, [chartApiEpoch, replayActive, structureOverlayEvents]);
   // BoS/CHoCH živě jako FVG: zlom z tvořící se svíčky (živá přes `updateBar`,
   // přehrávaná) se ukáže hned, jak je zavření za pivotem, a zmizí, když se
   // cena vrátí. Jen kreslení — data, mapa vstupu ani magnet ho nevidí.
@@ -3133,7 +3207,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const forming = chartTailAfterData(controller.getBars(), structureInputRef.current.at(-1));
       if (sameCandles(structureFormingBarsRef.current, forming)) return;
       structureFormingBarsRef.current = forming;
-      structureOverlayEventsRef.current = deriveStructureOverlayRef.current(forming);
+      const next = deriveStructureOverlayRef.current(forming);
+      if (sameRenderedStructure(structureOverlayEventsRef.current, next)) return;
+      structureOverlayEventsRef.current = next;
       if (!replayActive) syncStructureLinesRef.current();
       structurePrimitiveRequestUpdateRef.current?.();
     };
@@ -3143,7 +3219,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       try { series.unsubscribeDataChanged(onDataChanged); } catch { /* graf už zmizel */ }
       structureFormingBarsRef.current = [];
     };
-  }, [chartApiEpoch, replayActive, visibleStructure]);
+  }, [chartApiEpoch, liveSeries, replayActive, visibleStructure]);
   const drawingMagnetSourcesRef = useRef<DrawingMagnetSources>({ candles: [] });
   const magnetLevelStyle = indicatorSettings.levels;
   const magnetLastCandleTime = visibleCandles.at(-1)?.time ?? 0;
@@ -3209,36 +3285,61 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // Obnova dat (nová svíčka ze souboru, živý graf dne) nesmí posunout záběr.
   // ChartView dosadí data `setData` ve svém efektu a knihovna při tom drží
   // odsazení od POSLEDNÍHO baru — když na konci bar přibude nebo ubude, celý
-  // záběr poskočí. Stejné logické indexy = stejné svíčky na stejném místě.
-  // Výjimkou je dotažená historie zleva (posun indexů řeší `pendingVisibleRangeRef`)
-  // a přehrávání (má vlastní správu záběru).
-  const dataViewportRef = useRef<{ controller: ChartViewApi['controller']; from: number; to: number; firstTs: number } | null>(null);
-  useLayoutEffect(() => {
-    dataViewportRef.current = null;
-    const controller = apiRef.current?.controller;
-    if (replayActive || !controller) return;
-    try {
-      const range = controller.getChart().timeScale().getVisibleLogicalRange();
-      const firstTs = controller.getBars()[0]?.ts;
-      if (range && firstTs !== undefined) dataViewportRef.current = { controller, from: range.from, to: range.to, firstTs };
-    } catch {
-      // Graf právě zaniká.
-    }
-  }, [chartBars, replayActive]);
+  // záběr poskočí. Kotva v čase + zlomkový logický offset drží tutéž
+  // svíčku na stejném pixelu i po prependu. Replay má vlastní správu záběru.
+  const pendingDataViewportRef = useRef<AnchoredChartViewport | null>(null);
+  const restoredViewportApiRef = useRef<ChartViewApi | null>(null);
+  const viewportInputKeyRef = useRef(`${trade.id}:${timeframe}:${replayActive}`);
+  // Read the old chart before React gives the replacement data to ChartView.
+  // An after-commit snapshot can already contain shifted logical indices.
+  const beforeDataViewport = useMemo(() => {
+    const key = `${trade.id}:${timeframe}:${replayActive}`;
+    const same = viewportInputKeyRef.current === key;
+    viewportInputKeyRef.current = key;
+    if (!same || replayActive) { pendingDataViewportRef.current = null; return null; }
+    // A prepend can cause several intermediate window renders. Preserve the
+    // first pre-update snapshot until it has actually been restored.
+    return pendingDataViewportRef.current ?? captureChartViewport(apiRef.current);
+  // Snapshot must run before each new data identity, before ChartView effects.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartBars, replayActive, timeframe, trade.id]);
+  useLayoutEffect(() => { pendingDataViewportRef.current = beforeDataViewport; }, [beforeDataViewport]);
+  // Window expansion updates data in the existing chart. It no longer causes
+  // an onReady callback, so release its reentrancy guard after that commit.
   useEffect(() => {
-    const saved = dataViewportRef.current;
-    dataViewportRef.current = null;
-    if (!saved || replayActive || apiRef.current?.controller !== saved.controller) return;
-    try {
-      if (saved.controller.getBars()[0]?.ts !== saved.firstTs) return;
-      const timeScale = saved.controller.getChart().timeScale();
-      const range = timeScale.getVisibleLogicalRange();
-      if (range && range.from === saved.from && range.to === saved.to) return;
-      timeScale.setVisibleLogicalRange({ from: saved.from, to: saved.to });
-    } catch {
-      // Graf právě zaniká.
-    }
-  }, [chartBars, replayActive]);
+    const frame = window.requestAnimationFrame(() => { expandingWindowRef.current = false; });
+    return () => window.cancelAnimationFrame(frame);
+  }, [chartBars]);
+  useEffect(() => {
+    const saved = beforeDataViewport;
+    if (!saved || replayActive) return;
+    let second = 0;
+    const first = window.requestAnimationFrame(() => {
+      second = window.requestAnimationFrame(() => {
+        const api = apiRef.current;
+        if (pendingDataViewportRef.current !== saved || !restoreChartViewport(api, saved)) return;
+        restoredViewportApiRef.current = api;
+        pendingDataViewportRef.current = null;
+        pendingVisibleRangeRef.current = null;
+      });
+    });
+    return () => { window.cancelAnimationFrame(first); if (second) window.cancelAnimationFrame(second); };
+  }, [beforeDataViewport, replayActive]);
+  const appliedIntervalViewportRef = useRef<AnchoredChartViewport | null>(null);
+  useEffect(() => {
+    if (!initialViewport || appliedIntervalViewportRef.current === initialViewport || replayActive) return;
+    let second = 0;
+    const first = window.requestAnimationFrame(() => {
+      second = window.requestAnimationFrame(() => {
+        if (appliedIntervalViewportRef.current === initialViewport || !restoreChartViewport(apiRef.current, initialViewport, true)) return;
+        appliedIntervalViewportRef.current = initialViewport;
+        pendingDataViewportRef.current = null;
+        pendingVisibleRangeRef.current = null;
+        onInitialViewportRestored?.();
+      });
+    });
+    return () => { window.cancelAnimationFrame(first); if (second) window.cancelAnimationFrame(second); };
+  }, [chartBars, initialViewport, onInitialViewportRestored, replayActive]);
 
   useLayoutEffect(() => {
     if (!replayActive || visibleCandles.length === 0) return;
@@ -3531,19 +3632,56 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [layerWindow?.fromDay, layerWindow?.toDay],
   );
+  const scopedDrawingStorageKey = `alphatrade:candlekit:${drawingStorageId}:${drawingScope || timeframe}`;
+  const scopedDrawingStorageKeyRef = useRef(scopedDrawingStorageKey);
+  const scopedDrawingKV = useMemo<KVStore>(() => ({
+    get: () => localStorageKV.get(scopedDrawingStorageKeyRef.current),
+    set: (_key, value) => localStorageKV.set(scopedDrawingStorageKeyRef.current, value),
+  }), []);
+  const liveDrawingOptions = useMemo(() => ({
+    storageKey: `alphatrade:candlekit:active-scope:${drawingStorageId}`,
+    kv: scopedDrawingKV,
+    ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
+  }), [drawingHitTolerance, drawingStorageId, scopedDrawingKV]);
   const drawingOptions = useMemo(() => (layerWindow && layerKV
     ? {
       storageKey: `layer:${layerWindow.fromDay}:${layerWindow.toDay}`,
       kv: layerKV,
       ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
     }
-    : {
-      storageKey: `alphatrade:candlekit:${drawingStorageId}:${drawingScope || timeframe}`,
-      ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
-    }
+    : liveSeries
+      ? liveDrawingOptions
+      : {
+        storageKey: scopedDrawingStorageKey,
+        ...(drawingHitTolerance != null ? { hitTolerance: drawingHitTolerance } : {}),
+      }
   // Klíč okna (dny), ne objekt — jinak by každý render postavil nový ovladač.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [drawingHitTolerance, drawingStorageId, drawingScope, timeframe, layerKV]);
+  ), [drawingHitTolerance, layerKV, layerWindow?.fromDay, layerWindow?.toDay, liveDrawingOptions, liveSeries, scopedDrawingStorageKey]);
+  useLayoutEffect(() => {
+    if (!liveSeries) {
+      scopedDrawingStorageKeyRef.current = scopedDrawingStorageKey;
+      return;
+    }
+    // Sdílená denní vrstva má vlastní KV a mezi timeframe se nepřepíná.
+    if (layerWindow) {
+      scopedDrawingStorageKeyRef.current = scopedDrawingStorageKey;
+      return;
+    }
+    if (scopedDrawingStorageKeyRef.current === scopedDrawingStorageKey) return;
+    const engine = apiRef.current?.drawing?.engine;
+    if (!engine) {
+      scopedDrawingStorageKeyRef.current = scopedDrawingStorageKey;
+      return;
+    }
+    // Uložit starý interval, přesměrovat KV a importovat kresby nového.
+    // Svíčky, osy, crosshair a viewport zůstávají na stejném chart controlleru.
+    localStorageKV.set(scopedDrawingStorageKeyRef.current, engine.export());
+    scopedDrawingStorageKeyRef.current = scopedDrawingStorageKey;
+    engine.import(localStorageKV.get(scopedDrawingStorageKey) ?? '[]');
+    applyFibRuntimeTimeframe(engine, timeframe);
+    applyPositionRuntimeInterval(engine, timeframeMinutes(timeframe) * 60);
+  }, [layerWindow, liveSeries, scopedDrawingStorageKey, timeframe]);
   // Změna vrstvy z jiného grafu nebo zařízení → rovnou do enginu tohoto grafu,
   // bez překreslení Reactu (při tahu myší by se jinak překreslovaly všechny grafy).
   const layerSyncRef = useRef({ layerWindow, layerKV, timeframe });
@@ -3658,31 +3796,18 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const root = chartRootRef.current;
     if (!api || !root) return;
     const rect = root.getBoundingClientRect();
-    const priceScale = api.controller.getChart().priceScale('right');
-    const interactiveWidth = Math.max(64, priceScale.width());
-    if (event.clientX < rect.right - interactiveWidth) return;
+    const priceScale = readInteractivePriceScale(api);
+    if (!priceScale || event.clientX < rect.right - priceScale.width) return;
     event.preventDefault();
     event.stopPropagation();
     priceWheelDeltaRef.current = Math.max(-240, Math.min(240, priceWheelDeltaRef.current + event.deltaY));
     if (priceWheelFrameRef.current !== null) return;
     priceWheelFrameRef.current = window.requestAnimationFrame(() => {
       priceWheelFrameRef.current = null;
-      const currentApi = apiRef.current;
-      if (!currentApi) return;
-      const currentPriceScale = currentApi.controller.getChart().priceScale('right');
-      const range = currentPriceScale.getVisibleRange();
       const delta = priceWheelDeltaRef.current;
       priceWheelDeltaRef.current = 0;
-      if (!range || delta === 0) return;
-      const span = range.to - range.from;
-      const center = (range.from + range.to) / 2;
-      const zoomFactor = Math.exp(Math.max(-0.24, Math.min(0.24, delta * 0.0015)));
-      const nextSpan = Math.max(5, Math.min(20_000, span * zoomFactor));
-      if (currentPriceScale.options().autoScale) currentPriceScale.setAutoScale(false);
-      currentPriceScale.setVisibleRange({
-        from: center - nextSpan / 2,
-        to: center + nextSpan / 2,
-      });
+      zoomInteractivePriceScale(api, apiRef.current, delta);
+      refreshExactCrosshairRef.current?.();
     });
   }, []);
 
@@ -3697,8 +3822,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const api = apiRef.current;
     if (!api) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const priceScale = api.controller.getChart().priceScale('right');
-    if (event.clientX < rect.right - Math.max(64, priceScale.width())) return;
+    const priceScale = readInteractivePriceScale(api);
+    if (!priceScale || event.clientX < rect.right - priceScale.width) return;
     event.preventDefault();
     event.stopPropagation();
     if (priceWheelFrameRef.current !== null) {
@@ -3707,11 +3832,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       priceWheelDeltaRef.current = 0;
     }
     replayPriceRangeTargetRef.current = null;
-    priceScale.setAutoScale(true);
+    resetInteractivePriceScale(api);
   }, []);
 
   const handleReadyLatest = useCallback((api: ChartViewApi) => {
     const chartChanged = overlayArtifactsRef.current.api !== api;
+    const newInstance = chartApiInstanceRef.current !== api;
     positionProgressUnsubscribeRef.current?.();
     positionProgressUnsubscribeRef.current = null;
     positionProgressPrimitiveRequestUpdateRef.current = null;
@@ -3719,7 +3845,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     onChartApiReady?.(api);
     const chart = api.controller.getChart();
     const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
-    installFibDrawingDefaults(api.drawing?.engine, () => timeframe);
+    installFibDrawingDefaults(api.drawing?.engine, () => timeframeRef.current);
     installDrawingStyleDefaults(api.drawing?.engine);
     installPositionDrawingDefaults(
       api.drawing?.engine,
@@ -3784,7 +3910,81 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const latestPreviousClose = visibleCandles[visibleCandles.length - 2]?.close;
     if (latest) updateOhlcLegend(latest, latestPreviousClose);
     unsubscribeCrosshairSafely(crosshairSubscriptionRef.current);
+    exactCrosshairSyncCleanupRef.current?.();
+    const hideExactCrosshair = () => {
+      if (exactCrosshairLineRef.current) exactCrosshairLineRef.current.style.opacity = '0';
+      if (exactCrosshairHorizontalLineRef.current) exactCrosshairHorizontalLineRef.current.style.opacity = '0';
+      if (exactCrosshairTimeLabelRef.current) exactCrosshairTimeLabelRef.current.style.opacity = '0';
+      if (exactCrosshairPriceLabelRef.current) exactCrosshairPriceLabelRef.current.style.opacity = '0';
+    };
+    const updateExactCrosshair = (x: number | null, y: number | null, time: number | undefined, price: number | null) => {
+      const exactLine = exactCrosshairLineRef.current;
+      const exactHorizontalLine = exactCrosshairHorizontalLineRef.current;
+      const exactLabel = exactCrosshairTimeLabelRef.current;
+      const exactPriceLabel = exactCrosshairPriceLabelRef.current;
+      const timeScale = chart.timeScale();
+      if (x === null || y === null) {
+        hideExactCrosshair();
+        return;
+      }
+      const chartRect = chart.chartElement().getBoundingClientRect();
+      const rootRect = chartRootRef.current?.getBoundingClientRect() ?? chartRect;
+      const leftScaleWidth = Math.max(0, chart.priceScale('left').width());
+      const rightScaleWidth = Math.max(0, chart.priceScale('right').width());
+      const plotWidth = Math.max(0, chartRect.width - leftScaleWidth - rightScaleWidth);
+      const plotHeight = Math.max(0, chartRect.height - timeScale.height());
+      const chartOffsetX = chartRect.left - rootRect.left;
+      const chartOffsetY = chartRect.top - rootRect.top;
+      const plotLeft = chartOffsetX + leftScaleWidth;
+      if (exactLine) {
+        exactLine.style.top = `${chartOffsetY}px`;
+        exactLine.style.height = `${plotHeight}px`;
+        exactLine.style.transform = `translate3d(${plotLeft + x}px, 0, 0)`;
+        exactLine.style.opacity = '1';
+      }
+      if (exactHorizontalLine) {
+        exactHorizontalLine.style.left = `${plotLeft}px`;
+        exactHorizontalLine.style.width = `${plotWidth}px`;
+        exactHorizontalLine.style.transform = `translate3d(0, ${chartOffsetY + y}px, 0)`;
+        exactHorizontalLine.style.opacity = '1';
+      }
+      if (exactLabel && time !== undefined) {
+        exactLabel.textContent = chartCrosshairTimeLabel(time, {
+          withTime: timeframeRef.current !== '1d',
+          timeZone: chartSettingsRef.current.symbol.timeZone,
+          dateFormat: chartSettingsRef.current.scales.dateFormat,
+          dayOfWeek: chartSettingsRef.current.scales.dayOfWeekOnLabels,
+          hour12: chartSettingsRef.current.scales.hour12,
+        });
+        exactLabel.style.top = `${chartOffsetY + plotHeight}px`;
+        exactLabel.style.transform = `translate3d(${plotLeft + exactCrosshairLabelLeft(x, plotWidth) - 64}px, 0, 0)`;
+        exactLabel.style.opacity = '1';
+      } else if (exactLabel) exactLabel.style.opacity = '0';
+      if (exactPriceLabel && price !== null) {
+        const placement = chartSettingsRef.current.scales.placement;
+        const scaleWidth = placement === 'left' ? leftScaleWidth : rightScaleWidth;
+        exactPriceLabel.textContent = series.priceFormatter().format(price);
+        exactPriceLabel.style.left = `${placement === 'left' ? chartOffsetX : plotLeft + plotWidth}px`;
+        exactPriceLabel.style.top = `${chartOffsetY + exactCrosshairPriceLabelTop(y, plotHeight)}px`;
+        exactPriceLabel.style.width = `${Math.max(42, scaleWidth)}px`;
+        exactPriceLabel.style.opacity = '1';
+      } else if (exactPriceLabel) exactPriceLabel.style.opacity = '0';
+    };
     const handleCrosshairMove: Parameters<IChartApi['subscribeCrosshairMove']>[0] = param => {
+      const timeScale = chart.timeScale();
+      const exactX = exactCrosshairX({
+        sourceX: param.sourceEvent?.localX,
+        fallbackX: param.point?.x,
+        plotWidth: timeScale.width(),
+      });
+      // Physical pointer samples are handled synchronously by the raw DOM
+      // listener below. The library callback is intentionally only a fallback
+      // for keyboard/programmatic moves because it may arrive after an
+      // indicator paint and its X is snapped to the nearest bar.
+      if (!param.sourceEvent) {
+        const fallbackPrice = param.point ? series.coordinateToPrice(param.point.y) : null;
+        updateExactCrosshair(param.point ? exactX : null, param.point?.y ?? null, param.time === undefined ? undefined : Number(param.time), fallbackPrice);
+      }
       const drawingEngine = api.drawing?.engine;
       if (
         !magnetCrosshairUpdatingRef.current
@@ -3813,11 +4013,65 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     };
     chart.subscribeCrosshairMove(handleCrosshairMove);
     crosshairSubscriptionRef.current = { chart, handler: handleCrosshairMove };
+    const exactSyncTarget = chart.chartElement();
+    const updateExactCrosshairFromClient = (clientX: number, clientY: number) => {
+      const rect = exactSyncTarget.getBoundingClientRect();
+      const leftScaleWidth = Math.max(0, chart.priceScale('left').width());
+      const rightScaleWidth = Math.max(0, chart.priceScale('right').width());
+      const point = exactCrosshairPoint({
+        clientX,
+        clientY,
+        chartLeft: rect.left,
+        chartTop: rect.top,
+        plotLeft: leftScaleWidth,
+        plotWidth: Math.max(0, rect.width - leftScaleWidth - rightScaleWidth),
+        plotHeight: Math.max(0, rect.height - chart.timeScale().height()),
+      });
+      if (!point) {
+        hideExactCrosshair();
+        return;
+      }
+      const pointerTime = chart.timeScale().coordinateToTime(point.x);
+      const pointerPrice = series.coordinateToPrice(point.y);
+      updateExactCrosshair(point.x, point.y, pointerTime === null ? undefined : Number(pointerTime), pointerPrice);
+    };
+    const handleExactPointerMove = (event: PointerEvent) => {
+      // Touch keeps the library's long-press crosshair and pan/pinch behavior.
+      if (event.pointerType === 'touch') {
+        exactPointerClientRef.current = null;
+        hideExactCrosshair();
+        return;
+      }
+      const samples = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [];
+      const pointer = samples.at(-1) ?? event;
+      exactPointerClientRef.current = { x: pointer.clientX, y: pointer.clientY };
+      updateExactCrosshairFromClient(pointer.clientX, pointer.clientY);
+    };
+    const refreshExactCrosshair = () => {
+      const pointer = exactPointerClientRef.current;
+      if (pointer) updateExactCrosshairFromClient(pointer.x, pointer.y);
+    };
+    refreshExactCrosshairRef.current = refreshExactCrosshair;
+    const handleExactCrosshairSync = (event: Event) => {
+      const { time, price } = (event as CustomEvent<ExactCrosshairSyncDetail>).detail;
+      if (time === null) {
+        hideExactCrosshair();
+        return;
+      }
+      const y = price == null ? null : series.priceToCoordinate(price);
+      updateExactCrosshair(chart.timeScale().timeToCoordinate(time as UTCTimestamp), y, time, price ?? null);
+    };
+    exactSyncTarget.addEventListener('pointermove', handleExactPointerMove, { capture: true, passive: true });
+    exactSyncTarget.addEventListener(EXACT_CROSSHAIR_SYNC_EVENT, handleExactCrosshairSync);
+    exactCrosshairSyncCleanupRef.current = () => {
+      exactSyncTarget.removeEventListener('pointermove', handleExactPointerMove, { capture: true });
+      exactSyncTarget.removeEventListener(EXACT_CROSSHAIR_SYNC_EVENT, handleExactCrosshairSync);
+      if (refreshExactCrosshairRef.current === refreshExactCrosshair) refreshExactCrosshairRef.current = null;
+    };
 
-    // Replay keeps one stable primitive attached even while the indicator is
-    // hidden. Recreating every primitive and subscription when a user toggles
-    // an indicator blocks large 1m workspaces and can crash the renderer.
-    if (replayActive || visibleLevels) {
+    // Stable primitive stays attached even while the indicator is hidden.
+    // Its ref-backed dataset becomes empty, so toggling only requests paint.
+    {
       const currentLevelLabels = (rightTime?: number) => {
         const result = liquidityLevelsRef.current;
         const style = indicatorSettingsRef.current.levels;
@@ -3851,6 +4105,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const levelRenderer: IPrimitivePaneRenderer = {
         draw: target => {
           target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+            // Hlavní přepínač/X nechává primitive připojený. Skrytá vrstva
+            // nesmí ani na jediný paint použít předchozí snapshot dat.
+            if (!visibleLevelsRef.current) return;
             const result = liquidityLevelsRef.current;
             const style = indicatorSettingsRef.current.levels;
             const visibleTimeRange = chart.timeScale().getVisibleRange();
@@ -3964,6 +4221,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         },
       };
       const priceAxisViews = (): ISeriesPrimitiveAxisView[] => {
+        if (!visibleLevelsRef.current) return [];
         const timeRange = chart.timeScale().getVisibleRange();
         const rightTime = timeRange ? Number(timeRange.to) : visibleCandlesRef.current.at(-1)?.time;
         if (!indicatorSettingsRef.current.levels.showLabels) return [];
@@ -3982,9 +4240,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           visible: () => true,
           })) : [];
       };
+      const levelUpdateBinding = createPrimitiveUpdateBinding(levelsPrimitiveRequestUpdateRef);
       const levelPrimitive: ISeriesPrimitive<Time> = {
-        attached: ({ requestUpdate }) => { levelsPrimitiveRequestUpdateRef.current = requestUpdate; },
-        detached: () => { levelsPrimitiveRequestUpdateRef.current = null; },
+        attached: ({ requestUpdate }) => levelUpdateBinding.attach(requestUpdate),
+        detached: levelUpdateBinding.detach,
         paneViews: () => [{ zOrder: () => 'bottom', renderer: () => levelRenderer }],
         priceAxisViews,
       };
@@ -4070,6 +4329,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           timeToX: time => chart.timeScale().timeToCoordinate(time as UTCTimestamp),
           priceToY: price => series.priceToCoordinate(price),
           onSnap: point => {
+            updateExactCrosshair(
+              chart.timeScale().timeToCoordinate(point.time as UTCTimestamp),
+              series.priceToCoordinate(point.price),
+              point.time,
+              point.price,
+            );
             if (magnetFirstAnchorPreviewRef.current) {
               // CrosshairMove fires after Lightweight Charts has processed the
               // pointer, so the first-anchor preview can be applied immediately
@@ -4197,7 +4462,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           });
         }
       }
-      if (replayActive || visibleFvg || showEntryFvg) {
+      {
         const fvgRenderer: IPrimitivePaneRenderer = {
           draw: target => {
             target.useMediaCoordinateSpace(({ context, mediaSize }) => {
@@ -4338,9 +4603,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             });
           },
         };
+        const fvgUpdateBinding = createPrimitiveUpdateBinding(fvgPrimitiveRequestUpdateRef);
         const fvgPrimitive: ISeriesPrimitive<Time> = {
-          attached: ({ requestUpdate }) => { fvgPrimitiveRequestUpdateRef.current = requestUpdate; },
-          detached: () => { fvgPrimitiveRequestUpdateRef.current = null; },
+          attached: ({ requestUpdate }) => fvgUpdateBinding.attach(requestUpdate),
+          detached: fvgUpdateBinding.detach,
           paneViews: () => [{
             zOrder: () => 'bottom',
             renderer: () => fvgRenderer,
@@ -4404,11 +4670,14 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           });
         },
       };
+      const structureUpdateBinding = createPrimitiveUpdateBinding(structurePrimitiveRequestUpdateRef);
       const structureLabelPrimitive: ISeriesPrimitive<Time> = {
-        attached: ({ requestUpdate }) => { structurePrimitiveRequestUpdateRef.current = requestUpdate; },
-        detached: () => { structurePrimitiveRequestUpdateRef.current = null; },
+        attached: ({ requestUpdate }) => structureUpdateBinding.attach(requestUpdate),
+        detached: structureUpdateBinding.detach,
         paneViews: () => [{
-          zOrder: () => 'top',
+          // Static labels belong below the cursor. Keeping them on `top`
+          // redraws every structure event for every crosshair frame.
+          zOrder: () => 'normal',
           renderer: () => structureLabelRenderer,
         }],
       };
@@ -4422,6 +4691,27 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
     unsubscribeVisibleRangeSafely(rangeSubscriptionRef.current);
     const handleVisibleRangeChange = () => {
+      if (visibleLevelsRef.current) {
+        // Lightweight Charts neposílá stabilnímu custom primitive vždy nový
+        // paint v témže snímku jako rychlý posun osy. requestUpdate pouze
+        // invaliduje existující vrstvu; nic nepřepočítává ani nemění viewport.
+        levelsPrimitiveRequestUpdateRef.current?.();
+      }
+      if (visibleLevelsRef.current && !replayActive) {
+        const range = chart.timeScale().getVisibleRange();
+        if (range && typeof range.from === 'number' && typeof range.to === 'number') {
+          const next = { from: range.from, to: range.to };
+          if (levelViewportTimerRef.current !== null) window.clearTimeout(levelViewportTimerRef.current);
+          levelViewportTimerRef.current = window.setTimeout(() => {
+            levelViewportTimerRef.current = null;
+            setLevelViewport(current => current?.from === next.from && current.to === next.to ? current : next);
+          }, 100);
+        }
+      }
+      if (visibleFvgRef.current) {
+        renderedFvgsRef.current = deriveRenderedFvgsRef.current(fairValueGapsWithFormingBars(fvgAccumulatorRef.current, fvgInputRef.current, fvgFormingBarsRef.current), fvgFormingBarsRef.current);
+        fvgPrimitiveRequestUpdateRef.current?.();
+      }
       if (expandingWindowRef.current) return;
       const logicalRange = chart.timeScale().getVisibleLogicalRange();
       if (!logicalRange) return;
@@ -4439,8 +4729,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const needsExternalHistory = olderHistoryDue(olderHistoryGateRef.current, {
         fromLogical: logicalRange.from,
         windowStart: currentWindow.start,
-        hasLoader: Boolean(onNeedOlderHistory),
-        loading: olderHistoryLoading,
+        hasLoader: Boolean(olderHistoryLoaderRef.current),
+        loading: olderHistoryLoadingRef.current,
         firstTime: currentCandles[0]?.time,
       });
       if (!nearLeftEdge && !nearRightEdge && !needsExternalHistory) return;
@@ -4458,7 +4748,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       }
       if (needsExternalHistory && currentCandles[0]) {
         markOlderHistoryRequested(olderHistoryGateRef.current, currentCandles[0].time);
-        onNeedOlderHistory?.(currentCandles[0].time);
+        Promise.resolve().then(() => olderHistoryLoaderRef.current?.(currentCandles[0].time)).catch(() => undefined)
+          .finally(() => settleOlderHistory(olderHistoryGateRef.current));
         window.setTimeout(() => { expandingWindowRef.current = false; }, 250);
       }
     };
@@ -4490,10 +4781,20 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
 
     window.setTimeout(() => {
+      if (apiRef.current !== api) return;
       const pendingRange = pendingVisibleRangeRef.current;
-      if (pendingRange && !replayActive) {
-        chart.timeScale().setVisibleRange(pendingRange);
+      const anchored = pendingDataViewportRef.current;
+      if (anchored && !replayActive && restoreChartViewport(api, anchored)) {
+        pendingDataViewportRef.current = null;
         pendingVisibleRangeRef.current = null;
+        restoredViewportApiRef.current = api;
+      } else if (pendingRange && !replayActive) {
+        const restore = (framesLeft: number) => {
+          if (apiRef.current !== api || pendingVisibleRangeRef.current !== pendingRange) return;
+          if (restoreInteractiveTimeRange(api, apiRef.current, pendingRange)) pendingVisibleRangeRef.current = null;
+          else if (framesLeft > 0) window.requestAnimationFrame(() => restore(framesLeft - 1));
+        };
+        restore(2);
       } else if (replayActive && centeredTradeView) {
         pendingVisibleRangeRef.current = null;
         focusTrade();
@@ -4550,12 +4851,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             to: visibleCandles.length + 6,
           });
         }
-      } else {
+      } else if (newInstance && !initialViewport && !anchored && restoredViewportApiRef.current !== api) {
         focusTrade();
       }
       window.setTimeout(() => { expandingWindowRef.current = false; }, 50);
     }, 0);
-  }, [candles, centeredTradeView, compactMode, displayedEntryFvg, entryFvg, entryMs, entryStructure, exitMs, focusTrade, fvgs, hideDrawingToolbar, olderHistoryLoading, onChartApiReady, onNeedOlderHistory, renderedCandleWindow, replayActive, showEntryFvg, showEntryStructure, structureEvents, timeframe, trade, visibleCandles, visibleFvg, visibleLevels, visibleStructure, isDark]);
+  }, [candles, centeredTradeView, compactMode, displayedEntryFvg, entryFvg, entryMs, entryStructure, exitMs, focusTrade, fvgs, hideDrawingToolbar, initialViewport, olderHistoryLoading, onChartApiReady, onNeedOlderHistory, renderedCandleWindow, replayActive, showEntryFvg, showEntryStructure, structureEvents, timeframe, trade, visibleCandles, visibleFvg, visibleLevels, visibleStructure, isDark]);
 
   // Keep the callback given to the chart stable even though replay inputs
   // change on every candle. The imperative body still sees the newest data via
@@ -4718,24 +5019,26 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   useEffect(() => {
     if (previousOverlayRebuildRef.current === overlayRebuildSignature) return;
     previousOverlayRebuildRef.current = overlayRebuildSignature;
-    const api = apiRef.current;
-    if (!api) return;
-    if (replayActive) {
-      // All replay primitives are attached once in handleReady. Visibility
-      // changes only alter the ref-backed data they paint; rebuilding the
-      // complete overlay stack here was the immediate Market Structure freeze.
-      fvgPrimitiveRequestUpdateRef.current?.();
-      levelsPrimitiveRequestUpdateRef.current?.();
-      structurePrimitiveRequestUpdateRef.current?.();
-      return;
+    fvgPrimitiveRequestUpdateRef.current?.();
+    levelsPrimitiveRequestUpdateRef.current?.();
+    structurePrimitiveRequestUpdateRef.current?.();
+    // Attached callback může být v témže React commitu krátce vyměněný.
+    // Jeden coalesced paint v dalším snímku spolehlivě vyčistí starý canvas,
+    // aniž by přestavoval overlay, autoscale nebo viewport.
+    if (indicatorVisibilityPaintFrameRef.current === null) {
+      indicatorVisibilityPaintFrameRef.current = window.requestAnimationFrame(() => {
+        indicatorVisibilityPaintFrameRef.current = null;
+        fvgPrimitiveRequestUpdateRef.current?.();
+        levelsPrimitiveRequestUpdateRef.current?.();
+        structurePrimitiveRequestUpdateRef.current?.();
+      });
     }
-    const currentRange = api.controller.getChart().timeScale().getVisibleRange();
-    if (currentRange) pendingVisibleRangeRef.current = currentRange;
-    handleReady(api);
-    // Indicator visibility is refreshed imperatively so the expensive
-    // CandleKit chart and its viewport never remount or flash.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!replayActive) syncStructureLinesRef.current();
   }, [overlayRebuildSignature, replayActive, showEntryFvg, showEntryStructure, visibleFvg, visibleLevels, visibleStructure]);
+
+  useEffect(() => () => {
+    if (indicatorVisibilityPaintFrameRef.current !== null) window.cancelAnimationFrame(indicatorVisibilityPaintFrameRef.current);
+  }, []);
 
   useLayoutEffect(() => {
     fvgPrimitiveRequestUpdateRef.current?.();
@@ -5215,7 +5518,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const primitive: ISeriesPrimitive<Time> = {
       attached: ({ requestUpdate }) => { shortPriceLinesRequestUpdateRef.current = requestUpdate; },
       detached: () => { shortPriceLinesRequestUpdateRef.current = null; },
-      paneViews: () => [{ zOrder: () => 'top', renderer: () => renderer }],
+      paneViews: () => [{ zOrder: () => 'normal', renderer: () => renderer }],
     };
     series.attachPrimitive(primitive);
     return () => {
@@ -5310,6 +5613,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           .map(Number);
         setSessionBreakOffsets(previous => retainEqualNumbers(previous, offsets));
         applyManagedPriceLines();
+        refreshExactCrosshairRef.current?.();
         const range = timeScale.getVisibleRange();
         const logical = timeScale.getVisibleLogicalRange();
         if (keepLeftEdgeOnIntervalChange && range && logical) {
@@ -5381,8 +5685,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // kontrolu levého okraje — i když se záběr nepohne (klik do grafu u okraje,
   // kolečko na krajním přiblížení), kdy by posluchač rozsahu mlčel. Po
   // doběhnutí dotazu (i chybou) smí další gesto žádat znovu.
-  const armOlderHistoryFromGesture = useCallback(() => {
-    armOlderHistory(olderHistoryGateRef.current, candlesRef.current[0]?.time);
+  const armOlderHistoryFromGesture = useCallback((event?: { target: EventTarget | null }) => {
+    const target = event?.target;
+    if (target instanceof Element && target.closest('button, input, select, textarea, [role="menu"], [role="dialog"], [role="checkbox"]')) return;
+    if (!olderHistoryLoadingRef.current) armOlderHistory(olderHistoryGateRef.current, candlesRef.current[0]?.time);
+    pendingDataViewportRef.current = null;
+    pendingVisibleRangeRef.current = null;
+    appliedIntervalViewportRef.current = initialViewport ?? null;
     if (olderHistoryCheckFrameRef.current !== null) return;
     olderHistoryCheckFrameRef.current = window.requestAnimationFrame(() => {
       olderHistoryCheckFrameRef.current = null;
@@ -5390,7 +5699,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         rangeSubscriptionRef.current?.handler();
       } catch { /* graf mezitím zanikl */ }
     });
-  }, []);
+  }, [initialViewport]);
   useEffect(() => {
     if (olderHistoryLoading) {
       olderHistoryWasLoadingRef.current = true;
@@ -5419,16 +5728,22 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       onPointerMoveCapture={handleManagedPositionPointerMove}
       onPointerMove={event => {
         pointerClientRef.current = { x: event.clientX, y: event.clientY };
+        if (event.pointerType !== 'touch') exactPointerClientRef.current = { x: event.clientX, y: event.clientY };
         handlePricePointerMove(event);
       }}
       onPointerLeave={() => {
         pointerClientRef.current = null;
+        exactPointerClientRef.current = null;
+        if (exactCrosshairLineRef.current) exactCrosshairLineRef.current.style.opacity = '0';
+        if (exactCrosshairHorizontalLineRef.current) exactCrosshairHorizontalLineRef.current.style.opacity = '0';
+        if (exactCrosshairTimeLabelRef.current) exactCrosshairTimeLabelRef.current.style.opacity = '0';
+        if (exactCrosshairPriceLabelRef.current) exactCrosshairPriceLabelRef.current.style.opacity = '0';
         setManagedPositionHover(null);
         setPricePointer(null);
       }}
       onContextMenu={openContextMenu}
-      onWheelCapture={() => {
-        armOlderHistoryFromGesture();
+      onWheelCapture={event => {
+        armOlderHistoryFromGesture(event);
         setManagedPositionHover(null);
       }}
       onDoubleClickCapture={event => {
@@ -5455,11 +5770,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           ? `overlay-v2:${trade.id}:${timeframe}:detail`
           : replayActive
           ? `overlay-v2:${trade.id}:${timeframe}:replay`
-          // LIVE: nové svíčky vpravo jdou přes setData; nový graf jen při
-          // rozšíření okna zleva (záběr drží `pendingVisibleRangeRef`).
+          // A prepend changes data, not the chart instance. Recreating here
+          // resets axes/drawings and introduces competing initial-focus tasks.
           : liveSeries
-          ? `overlay-v2:${trade.id}:${timeframe}:${renderedCandleWindow.start}:live`
-          : `overlay-v2:${trade.id}:${timeframe}:${renderedCandleWindow.start}:${renderedCandleWindow.end}`}
+          // LIVE keeps one chart/controller across intervals; root remains
+          // the safety boundary and timeframe drawings switch via scoped KV.
+          ? `overlay-v3:${trade.id}:${resolvedInstrumentRoot}:live`
+          : `overlay-v2:${trade.id}:${timeframe}:history`}
         data={chartBars}
         style={centeredTradeView ? { opacity: viewportSettled ? 1 : 0, transition: viewportSettled ? 'opacity 140ms ease-out' : 'none' } : undefined}
         theme={chartTheme}
@@ -5488,6 +5805,44 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         />}
         <MeasurementOverlay />
       </ChartView>
+      <span
+        ref={exactCrosshairLineRef}
+        data-exact-crosshair-line
+        aria-hidden="true"
+        className="pointer-events-none absolute left-0 top-0 z-[12] opacity-0 will-change-transform"
+        style={{
+          width: 0,
+          borderLeftColor: chartSettings.canvas.crosshair.color,
+          borderLeftStyle: crosshairCssLineStyle(chartSettings.canvas.crosshair.style),
+          borderLeftWidth: chartSettings.canvas.crosshair.width,
+        }}
+      />
+      <span
+        ref={exactCrosshairHorizontalLineRef}
+        data-exact-crosshair-horizontal-line
+        aria-hidden="true"
+        className="pointer-events-none absolute left-0 top-0 z-[12] opacity-0 will-change-transform"
+        style={{
+          height: 0,
+          borderTopColor: chartSettings.canvas.crosshair.color,
+          borderTopStyle: crosshairCssLineStyle(chartSettings.canvas.crosshair.style),
+          borderTopWidth: chartSettings.canvas.crosshair.width,
+        }}
+      />
+      <span
+        ref={exactCrosshairTimeLabelRef}
+        data-exact-crosshair-time-label
+        aria-hidden="true"
+        className="pointer-events-none absolute left-0 z-[61] flex h-[22px] w-32 items-center justify-center overflow-hidden whitespace-nowrap rounded-[2px] border px-1 text-[10px] font-medium opacity-0 will-change-transform"
+        style={{ backgroundColor: isDark ? '#131722' : '#ffffff', borderColor: isDark ? '#2a2e39' : '#d1d5db', color: isDark ? '#ffffff' : '#111827' }}
+      />
+      <span
+        ref={exactCrosshairPriceLabelRef}
+        data-exact-crosshair-price-label
+        aria-hidden="true"
+        className="pointer-events-none absolute z-[61] flex h-[22px] items-center justify-center overflow-hidden whitespace-nowrap rounded-[2px] border px-1 text-[10px] font-medium opacity-0"
+        style={{ backgroundColor: isDark ? '#131722' : '#ffffff', borderColor: isDark ? '#2a2e39' : '#d1d5db', color: isDark ? '#ffffff' : '#111827' }}
+      />
       {managedPositionHover && (() => {
         const box = managedPositionHover.box;
         const settings = normalizePositionSettings(box.style.position, resolvedInstrumentRoot);

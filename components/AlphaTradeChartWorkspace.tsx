@@ -49,10 +49,9 @@ import {
   X,
 } from 'lucide-react';
 import { Trade } from '../types';
-import { useHtfHistory, useResetViewOnHtfHistory } from '../hooks/useHtfHistory';
+import { useHtfHistory } from '../hooks/useHtfHistory';
 import { aggregateWithHtfHistory, withHtfHistory } from '../services/htfHistory';
 import {
-  aggregateCandles,
   isMarketTimeframe,
   timeframeMinutes,
   loadTradeMarketCandles,
@@ -100,6 +99,7 @@ import PositionDrawingSettingsDialog, { PositionDrawingFloatingToolbar } from '.
 import { isPositionDrawing, type PositionDrawing } from '../services/chartPositionDrawing';
 import { countChartIndicators } from '../services/chartContextMenu';
 import { useResetViewOnOpen } from '../hooks/useResetViewOnOpen';
+import { captureChartViewport, type AnchoredChartViewport } from '../services/chartViewportContinuity';
 import BacktestOrderLinesOverlay from './BacktestOrderLinesOverlay';
 import BacktestTradeExecutionsOverlay from './BacktestTradeExecutionsOverlay';
 import BacktestTradeReviewDialog from './BacktestTradeReviewDialog';
@@ -698,19 +698,23 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState(0);
   const [chartApi, setChartApi] = useState<ChartViewApi | null>(null);
+  const latestChartApiRef = useRef<ChartViewApi | null>(null);
+  const timeframeViewport = useRef<AnchoredChartViewport | null>(null);
   const [activeLibraryIndicators, setActiveLibraryIndicators] = useState<string[]>([]);
   const indicatorController = useMemo(
     () => new IndicatorController(createBuiltinRegistry(), { onChange: setActiveLibraryIndicators }),
     [],
   );
   const focusTrade = useCallback(() => setFocusRequest(value => value + 1), []);
-  const handleChartApiReady = useCallback((api: ChartViewApi | null) => setChartApi(api), []);
+  const handleChartApiReady = useCallback((api: ChartViewApi | null) => { latestChartApiRef.current = api; setChartApi(api); }, []);
   const updatePanelConfig = useCallback((next: Partial<WorkspacePanelConfig>, options?: { fromProfile?: boolean }) => {
-    // Nový timeframe / trh graf přestaví — místo probliknutí se starý prolne do nového.
+    // Změna trhu graf opravdu přestaví. LIVE změna timeframe drží stejný
+    // controller a nepotřebuje snímek přes už hotový nový obraz.
     if ((next.timeframe !== undefined && next.timeframe !== config.timeframe) || (next.root !== undefined && next.root !== config.root)) {
-      crossfadeChart(chartAreaRef.current, chartApi, { holdMs: 140 });
+      if (next.timeframe !== undefined && (next.root === undefined || next.root === config.root)) timeframeViewport.current = captureChartViewport(latestChartApiRef.current) ?? timeframeViewport.current;
+      if (next.root !== undefined || !context.liveOrderEntry) crossfadeChart(chartAreaRef.current, chartApi, { holdMs: 140 });
     }
-    if (next.root !== undefined || next.timeframe !== undefined) setChartApi(null);
+    if (next.root !== undefined) setChartApi(null);
     updateConfig(next);
     if (!options?.fromProfile && context.onTradeIndicatorsChange && (next.showFvg !== undefined || next.showLevels !== undefined || next.showStructure !== undefined)) {
       context.onTradeIndicatorsChange({
@@ -719,7 +723,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
         structure: next.showStructure ?? config.showStructure,
       });
     }
-  }, [chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.onTradeIndicatorsChange, updateConfig]);
+  }, [chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.liveOrderEntry, context.onTradeIndicatorsChange, updateConfig]);
   const getIndicatorState = useCallback((): WorkspaceIndicatorState => ({
     custom: {
       fvg: config.showFvg,
@@ -794,24 +798,30 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     if (sessionHistoryCandles.length > 0) setHistoryError(null);
   }, [sessionHistoryCandles.length]);
 
+  const htf = useHtfHistory(config.root, backtestSession ? [] : [config.timeframe], rawCandles[0]?.time, context.trade.symbol);
+  const loadOlderRead = htf.loadOlder;
+  const htfHistory = historySchema === 'ohlcv-1h' ? htf.candles : EMPTY_SESSION_HISTORY;
+  const extendedMinutes = useMemo(() => {
+    const prefix = historySchema === 'ohlcv-1m' ? htf.candles : htf.minuteBridge;
+    if (backtestSession || !prefix.length || !rawCandles.length) return rawCandles;
+    return [...prefix.filter(c => c.time < rawCandles[0].time), ...rawCandles];
+  }, [backtestSession, historySchema, htf.candles, htf.minuteBridge, rawCandles]);
   const replayRevealedCount = useMemo(() => {
     if (!backtestSession) return context.replay.phase === 'active'
-      ? replayCandleCountAt(rawCandles, context.replay.cursorTime)
-      : rawCandles.length;
+      ? replayCandleCountAt(extendedMinutes, context.replay.cursorTime)
+      : extendedMinutes.length;
     const sessionStartSeconds = Math.floor(backtestSession.startMs / 1_000);
     return replayCandleCountAt(rawCandles, context.replay.cursorTime ?? sessionStartSeconds);
-  }, [backtestSession?.startMs, context.replay.cursorTime, context.replay.phase, rawCandles]);
+  }, [backtestSession, context.replay.cursorTime, context.replay.phase, rawCandles, extendedMinutes]);
   const replayRawCandles = useMemo(
-    () => sharedRevealedCandles(rawCandles, replayRevealedCount),
-    [rawCandles, replayRevealedCount],
+    () => sharedRevealedCandles(backtestSession ? rawCandles : extendedMinutes, replayRevealedCount),
+    [backtestSession, extendedMinutes, rawCandles, replayRevealedCount],
   );
   const replayAnalysisAccumulatorRef = useRef<ReplayAnalysisAccumulator | null>(null);
   // Deník: na timeframu z hodin (1h+, D, W, M) hodinová historie Databento před 1m daty grafu.
-  const htf = useHtfHistory(config.root, backtestSession ? [] : [config.timeframe], rawCandles[0]?.time);
-  const htfHistory = htf.candles;
   const liveRawCandles = useMemo(
-    () => (backtestSession ? rawCandles : withHtfHistory(rawCandles, htfHistory, config.timeframe)),
-    [backtestSession, config.timeframe, htfHistory, rawCandles],
+    () => (backtestSession ? rawCandles : withHtfHistory(extendedMinutes, htfHistory, config.timeframe)),
+    [backtestSession, config.timeframe, htfHistory, rawCandles, extendedMinutes],
   );
   const candles = useMemo(() => {
     if (!backtestSession) {
@@ -827,15 +837,17 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     });
     replayAnalysisAccumulatorRef.current = next;
     return next.candles;
-  }, [backtestSession?.startMs, config.timeframe, htfHistory, rawCandles, replayRawCandles, replayRevealedCount, sessionHistoryCandles]);
-  useResetViewOnHtfHistory(backtestSession ? null : chartApi, htf, config.timeframe, context.replay.phase !== 'active');
+  }, [backtestSession, config.timeframe, htfHistory, rawCandles, replayRawCandles, replayRevealedCount, sessionHistoryCandles]);
+  const handleIntervalViewportRestored = useCallback(() => { timeframeViewport.current = null; }, []);
   const requestOlderHistory = useCallback((oldestTime: number) => {
-    if (!requestSessionHistory) return;
     setHistoryError(null);
-    void requestSessionHistory(config.root, historySchema, oldestTime * 1_000).catch(reason => {
+    const read = backtestSession
+      ? requestSessionHistory?.(config.root, historySchema, oldestTime * 1_000)
+      : loadOlderRead(oldestTime);
+    return read?.catch(reason => {
       setHistoryError(reason instanceof Error ? reason.message : 'Starší historii se nepodařilo načíst.');
     });
-  }, [config.root, historySchema, requestSessionHistory]);
+  }, [backtestSession, config.root, historySchema, requestSessionHistory, loadOlderRead]);
   const candlesRef = useRef(candles);
   candlesRef.current = candles;
   const getCandles = useCallback(() => candlesRef.current, []);
@@ -927,7 +939,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       ref={paneRef}
       className={`group/pane absolute inset-0 flex flex-col alphatrade-workspace-panel ${isActive ? 'is-active' : ''} ${context.isDark ? 'is-dark bg-[#090d12]' : 'bg-white'}`}
       data-left-edge={atLeftEdge || undefined}
-      onPointerDownCapture={() => context.activatePanel(instance.id)}
+      onPointerDownCapture={() => { timeframeViewport.current = null; context.activatePanel(instance.id); }}
+      onWheelCapture={() => { timeframeViewport.current = null; }}
       data-panel-id={instance.id}
       data-active-panel={isActive || undefined}
       data-panel-root={config.root}
@@ -995,8 +1008,10 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             onChartOrder={config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.onChartOrder
               : liveChartOrder}
-            onNeedOlderHistory={backtestSession ? requestOlderHistory : undefined}
-            olderHistoryLoading={sessionHistoryLoading}
+            onNeedOlderHistory={requestOlderHistory}
+            olderHistoryLoading={backtestSession ? sessionHistoryLoading : htf.loading}
+            initialViewport={timeframeViewport.current ?? undefined}
+            onInitialViewportRestored={handleIntervalViewportRestored}
             onReplaySelectionTimeChange={context.setReplaySelectionTime}
             onReplayStart={context.selectReplayStart}
             onChartApiReady={handleChartApiReady}
@@ -1067,14 +1082,24 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
           ) : null}
           </>
         )}
-        {sessionHistoryLoading ? (
+        {(backtestSession ? sessionHistoryLoading : htf.loading) ? (
           <div style={{ left: 'calc(var(--chart-left-inset, 8px) + 4px)' }} className="pointer-events-none absolute top-3 z-[650] flex items-center gap-1.5 rounded-md border border-slate-700/60 bg-slate-950/80 px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-slate-300">
             <Loader2 size={11} className="animate-spin" /> Načítám starší historii
           </div>
         ) : null}
-        {historyError ? (
+        {(historyError || (!backtestSession && htf.error)) ? (
           <div style={{ left: 'calc(var(--chart-left-inset, 8px) + 4px)' }} className="pointer-events-none absolute bottom-3 z-[650] max-w-[360px] rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-[9px] font-semibold text-amber-100">
-            Starší historie není dostupná: {historyError}
+            Starší historie není dostupná: {historyError ?? htf.error}. Dosavadní svíčky zůstávají zobrazené; dalším posunem načtení zopakuješ.
+          </div>
+        ) : null}
+        {!backtestSession && historySchema === 'ohlcv-1h' && htfHistory.length > 0 && liveRawCandles.length === extendedMinutes.length ? (
+          <div role="status" className="absolute bottom-3 left-3 z-[650] max-w-[420px] rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-[10px] text-amber-100">
+            Starší řadu nelze bezpečně cenově napojit. Může jít o jiný kontrakt nebo skutečnou mezeru; načtenou historii jsme nespojili odhadem.
+          </div>
+        ) : null}
+        {timeframeViewport.current && candles.length > 0 && timeframeViewport.current.centerMs < candles[0].time * 1000 ? (
+          <div role="status" className="absolute bottom-3 left-3 z-[650] max-w-[420px] rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-[10px] text-amber-100">
+            Zvolený čas v tomto intervalu zatím není načtený. Starší data doplníš posunem doleva.
           </div>
         ) : null}
         {loading && (
