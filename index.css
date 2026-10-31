@@ -188,6 +188,12 @@ html.native-shell .native-fixed-above-tab-bar {
   bottom: calc(var(--native-shell-tab-bar-height) + 1rem);
 }
 
+/* Safety controls stay above the chart, but never cover a confirmation or
+   another modal. The dialog itself remains interactive and owns the screen. */
+body:has([role="dialog"]) [data-live-safety-controls] {
+  visibility: hidden;
+}
+
 /* Every full-screen flex dialog in the shared React app gets a safe interactive
    viewport on iOS. The backdrop still paints edge-to-edge because backgrounds
    cover padding and absolute inset backdrops use the full padding box. */
