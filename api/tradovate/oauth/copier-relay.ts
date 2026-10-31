@@ -469,47 +469,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       timing.mark('enqueue');
       // Budíček pro worker: bez něj příkaz čeká na další poll (~750 ms).
-      // Kick je jen optimalizace — selhání nesmí shodit enqueue.
-      try {
-        await fetch(`${config.supabaseUrl}/realtime/v1/api/broadcast`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: config.supabaseServiceRoleKey,
-            Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
-          },
-          body: JSON.stringify({ messages: [{ topic: `copier-kick-${queued.deviceId}`, event: 'kick', payload: {} }] }),
-          signal: AbortSignal.timeout(1_500),
-        });
-      } catch {
-        // Poll fallback příkaz doručí i bez kicku.
-      }
-      timing.mark('kick');
+      // Kick je jen optimalizace — selhání nesmí shodit enqueue. Jeho HTTP
+      // potvrzení ale nemusí blokovat první čtení výsledku: broadcast může
+      // worker doručit dřív, než se jeho response vrátí do této funkce.
+      const kick = (async () => {
+        try {
+          await fetch(`${config.supabaseUrl}/realtime/v1/api/broadcast`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: config.supabaseServiceRoleKey,
+              Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
+            },
+            body: JSON.stringify({ messages: [{ topic: `copier-kick-${queued.deviceId}`, event: 'kick', payload: {} }] }),
+            signal: AbortSignal.timeout(1_500),
+          });
+        } catch {
+          // Poll fallback příkaz doručí i bez kicku.
+        }
+      })();
       // Long-poll: worker s kickem vyřídí příkaz typicky do ~1,5 s — když
       // výsledek stihneme, UI ušetří celé polling kolečko (další RTT).
       // POZOR: enqueue už durable proběhl — selhání long-pollu se MUSÍ
       // degradovat na obyčejné `202 queued`. Chyba (502) by klienta svedla
       // k novému pokusu s novým idempotencyKey = duplicitní příkaz.
       // (Nález GPT cross-review, 2026-08-21.)
-      let resolution: Awaited<ReturnType<typeof readTradovateCopierCommand>> | null = null;
-      try {
-        // 30. 10.: 6 s místo 2,2 s — správa z grafu (posun, vstup) trvá ve workeru
-        // 1–3 s; miss znamenal klientský polling s dalšími RTT (měřeno 1,5–2,5 s celkem).
-        const longPollStartedAt = Date.now();
-        const longPollDeadline = longPollStartedAt + 6_000;
-        while (Date.now() < longPollDeadline) {
-          // 30. 10.: prvních 1,5 s krok 25 ms (výsledek v průměru o ~40 ms dřív), pak
-          // zpět 100 ms — levné čtení podle id, jen po dobu čekání na tento příkaz.
-          await new Promise(resolve => setTimeout(resolve, Date.now() - longPollStartedAt < 1_500 ? 25 : 100));
-          const current = await readTradovateCopierCommand({ db, userId, commandId: queued.id });
-          if (current.status === 'succeeded' || current.status === 'rejected' || current.status === 'expired') {
-            resolution = current;
-            break;
+      const waitForResolution = (async (): Promise<Awaited<ReturnType<typeof readTradovateCopierCommand>> | null> => {
+        try {
+          // 30. 10.: 6 s místo 2,2 s — správa z grafu (posun, vstup) trvá ve workeru
+          // 1–3 s; miss znamenal klientský polling s dalšími RTT (měřeno 1,5–2,5 s celkem).
+          const longPollStartedAt = Date.now();
+          const longPollDeadline = longPollStartedAt + 6_000;
+          while (Date.now() < longPollDeadline) {
+            // 30. 10.: prvních 1,5 s krok 25 ms (výsledek v průměru o ~40 ms dřív), pak
+            // zpět 100 ms — levné čtení podle id, jen po dobu čekání na tento příkaz.
+            await new Promise(resolve => setTimeout(resolve, Date.now() - longPollStartedAt < 1_500 ? 25 : 100));
+            const current = await readTradovateCopierCommand({ db, userId, commandId: queued.id });
+            if (current.status === 'succeeded' || current.status === 'rejected' || current.status === 'expired') return current;
           }
+        } catch {
+          // UI si výsledek vyzvedne klasickým pollingem.
         }
-      } catch {
-        // UI si výsledek vyzvedne klasickým pollingem.
-      }
+        return null;
+      })();
+      // Odpověď stále čeká i na kick: serverless runtime ho nesmí ukončit
+      // uprostřed odesílání. Jen samotné čekání už nepřidává waterfall.
+      await kick;
+      timing.mark('kick');
+      const resolution = await waitForResolution;
       timing.mark(resolution ? 'longpoll-hit' : 'longpoll-miss');
       return timed(202, { ...queued, ...(resolution ? { resolution } : {}) });
     }

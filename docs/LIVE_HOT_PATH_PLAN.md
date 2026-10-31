@@ -298,3 +298,18 @@ snapshot.
   ji může zopakovat.
 - Jde pořád výhradně o zobrazovací svíčky. Copier, P&L, risk a brokerové
   rozhodování tento zdroj nečtou.
+
+## 15. F2g — realtime kick a čekání na výsledek souběžně
+
+Po durable vložení příkazu server dříve čekal na HTTP odpověď Supabase
+broadcastu a až potom začal číst dokončení příkazu. Worker přitom může kick
+dostat dřív, než se broadcast response vrátí do Vercel funkce.
+
+- Broadcast a long-poll nyní startují současně. První čtení výsledku zůstává
+  po 25 ms a žádný příkaz ani kick se neposílá podruhé.
+- Odpověď klientovi stále čeká na dokončení obou větví, takže serverless
+  runtime neukončí rozpracovaný kick. Chyba kicku dál znamená poll fallback;
+  chyba čtení výsledku dál vrátí durable `202 queued`.
+- Enqueue, idempotency key, TTL, worker claim, brokerové kontroly ani
+  fail-closed zpracování výsledku se nemění. Zisk je pouze odstranění
+  zbytečného waterfallu mezi dvěma nezávislými čekáními.

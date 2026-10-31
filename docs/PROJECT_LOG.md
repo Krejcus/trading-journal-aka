@@ -335,6 +335,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   necachuje. Cíleně 71/71, TypeScript a ESLint čisté; celý projekt 6290 testů
   zelených (1 todo) a produkční build čistý. Dopad potvrdit metrikou
   `live:chart:first-candles-data` po samostatně schváleném nasazení.
+- F2g překryl HTTP čekání na realtime kick se serverovým long-pollem výsledku.
+  Worker může broadcast přijmout před návratem jeho HTTP response, takže první
+  čtení výsledku už na response nečeká. Funkce před odpovědí stále dokončí obě
+  větve; selhání kicku i lookupu zachovává původní durable `202 queued` bez
+  retry příkazu. Cíleně 106/106, TypeScript a ESLint čisté; celý projekt 6291
+  testů zelených (1 todo) a produkční build čistý. Skutečný zisk potvrdit
+  produkčním `Server-Timing` po samostatném schválení.
 
 ### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, nasazeno 19:28 web + worker @ e1fd4af3)
 
