@@ -313,3 +313,19 @@ dostat dřív, než se broadcast response vrátí do Vercel funkce.
 - Enqueue, idempotency key, TTL, worker claim, brokerové kontroly ani
   fail-closed zpracování výsledku se nemění. Zisk je pouze odstranění
   zbytečného waterfallu mezi dvěma nezávislými čekáními.
+
+## 16. F2h — desktopový vstup do grafu bez skrytého přehledu
+
+Desktop otevírá LIVE rovnou do grafu, ale vstupní chunk dosud obsahoval i
+7 500řádkový `LiveCopyTradeOverview` a mobilní detail účtu. Obě komponenty se
+proto přesunuly za vlastní retry-safe hranici bez stránkového Suspense.
+
+- Produkční `TradovateLiveDesk` klesl z 549,82 kB / 156,71 kB gzip na
+  262,50 kB / 78,14 kB gzip. Skrytý přehled je samostatných
+  280,81 kB / 77,99 kB gzip.
+- Na desktopu se přehled nestahuje ani neparsuje při přímém vstupu do grafu.
+  Pointer/focus na záložce Přehled ho začne připravovat před kliknutím.
+- Telefon a explicitně otevřený přehled spouštějí import hned souběžně s LIVE
+  daty. Po úspěšném preloadu se komponenta zobrazí bez mezifáze.
+- Přechodná chyba chunku se necachuje jako trvalý pád: lokální fallback nabízí
+  retry a graf i safety ovládání zůstávají funkční. Celá stránka nesuspenduje.

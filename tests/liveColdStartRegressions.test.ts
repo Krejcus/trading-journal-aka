@@ -25,6 +25,18 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
     }
   });
 
+  it('desktopový graf netahá těžký přehled kopírky; přehled má vlastní retry-safe hranici', () => {
+    const desk = source('components/TradovateLiveDesk.tsx');
+    const slot = source('components/LiveCopyTradeOverviewSlot.tsx');
+    expect(desk).not.toMatch(/from '\.\/LiveCopyTradeOverview';/);
+    expect(desk).not.toMatch(/from '\.\/LiveMobileAccountDetail';/);
+    expect(desk).toMatch(/from '\.\/LiveCopyTradeOverviewSlot';/);
+    expect(slot).toContain("import('./LiveCopyTradeOverview')");
+    expect(slot).toContain("import('./LiveMobileAccountDetail')");
+    expect(slot).toContain('state.pending = null;');
+    expect(slot).toContain('Zkusit znovu');
+  });
+
   it('LIVE → Graf se načítá líně jen za vlastní hranicí Suspense, ne v desku', () => {
     const slot = source('components/LiveTradingScreenSlot.tsx');
     expect(slot).toMatch(/liveTradingScreenPromise = import\('\.\/LiveTradingScreen'\)/);
@@ -38,8 +50,9 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
     const slot = source('components/LiveTradingScreenSlot.tsx');
     expect(desk).toContain('if (!chartAvailable || !livePriorityReleasable || liveChartCrashedThisSession()) return undefined;');
     expect(desk).toContain("connection?.effectiveType === 'slow-2g'");
-    expect(desk).toContain("const warmChart = item.id === 'chart'");
-    expect(desk).toContain('onPointerEnter={warmChart} onFocus={warmChart}');
+    expect(desk).toContain("const warmTab = item.id === 'chart'");
+    expect(desk).toContain("item.id === 'overview'");
+    expect(desk).toContain('onPointerEnter={warmTab} onFocus={warmTab}');
     expect(slot).toMatch(/Promise\.all\(\[\s*loadLiveTradingScreen\(\),\s*preloadLiveTradingCandles\(\),\s*\]\)/);
   });
 

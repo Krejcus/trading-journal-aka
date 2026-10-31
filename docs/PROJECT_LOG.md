@@ -342,6 +342,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   retry příkazu. Cíleně 106/106, TypeScript a ESLint čisté; celý projekt 6291
   testů zelených (1 todo) a produkční build čistý. Skutečný zisk potvrdit
   produkčním `Server-Timing` po samostatném schválení.
+- F2h oddělil 7 500řádkový kopírovací přehled a mobilní detail od výchozího
+  desktopového vstupu do grafu. Vlastní retry-safe slot nesuspenduje stránku;
+  telefon/import explicitního přehledu startuje souběžně s LIVE daty a hover
+  záložky ho předehřeje. Produkční `TradovateLiveDesk` klesl z
+  549,82 kB / 156,71 kB gzip na 262,50 kB / 78,14 kB gzip; přehled je
+  samostatných 280,81 kB / 77,99 kB gzip. Cíleně 52/52, TypeScript a ESLint
+  čisté; celý projekt 6292 testů zelených (1 todo) a produkční build čistý.
 
 ### 2026-10-30 večer — LIVE horká cesta, fáze 1: pozice ze streamu, souběžná admission, budíček statusu (Claude, nasazeno 19:28 web + worker @ e1fd4af3)
 

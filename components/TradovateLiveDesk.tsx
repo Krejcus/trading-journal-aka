@@ -14,7 +14,6 @@ import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
 import { clearTvPriceChannel, offerTvPriceGrant } from '../services/tvPriceGrant';
 import { clearCopierAgentStatusStore, copierRelayFeedSourcesFor, readCopierAgentStatusSnapshot, writeCopierAgentStatusSnapshot } from '../lib/copierAgentStatusStore';
 import { shouldProbeLocalCopierAgent } from '../lib/localCopierProbePolicy';
-import LiveMobileAccountDetail from './LiveMobileAccountDetail';
 import { useLiveLayout } from '../hooks/useLiveLayout';
 import { readTradovateDisplaySession, writeTradovateDisplaySession } from '../lib/tradovateDisplaySessionCache';
 import { liveBalanceDisplay, liveDailyPnlDisplay } from '../lib/liveBalanceDisplay';
@@ -99,7 +98,7 @@ import {
   devTradeMockGroup,
   type DevTradeMockScenario,
 } from '../lib/devLiveTradeMock';
-import LiveCopyTradeOverview from './LiveCopyTradeOverview';
+import LiveCopyTradeOverviewSlot, { LiveMobileAccountDetailSlot, preloadLiveCopyTradeOverview } from './LiveCopyTradeOverviewSlot';
 import {
   devLiveCopyFixtureDailyStats,
   devLiveCopyFixtureEligibility,
@@ -224,7 +223,7 @@ const DevLiveCopyFixtureOverview = () => {
     },
   }), []);
   return (
-    <LiveCopyTradeOverview
+    <LiveCopyTradeOverviewSlot
       snapshot={devLiveCopyFixtureSnapshot}
       orders={devLiveCopyFixtureOrders}
       accountEligibility={devLiveCopyFixtureEligibility}
@@ -268,7 +267,7 @@ const DevLiveTradeMockOverview = () => {
           <option value="pending">Čekající limit</option>
         </select>
       </label>
-      <LiveCopyTradeOverview
+      <LiveCopyTradeOverviewSlot
         snapshot={snapshot}
         orders={orders}
         tradeFeeRates={devTradeMockFeeRates}
@@ -351,6 +350,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   useEffect(() => {
     if (tab === 'chart' && !chartAvailable) setTab('overview');
   }, [chartAvailable, tab]);
+  // Telefon a explicitně otevřený přehled začnou velký modul načítat hned,
+  // souběžně se stavem LIVE. Desktop míří rovnou do grafu a tento chunk do té
+  // doby vůbec nepotřebuje.
+  useEffect(() => {
+    if (tab === 'overview') void preloadLiveCopyTradeOverview().catch(() => { /* Slot nabídne retry. */ });
+  }, [tab]);
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   // Skupiny hned z lokální cache (stejný zdroj, ze kterého startuje přehled).
@@ -1674,10 +1679,12 @@ acceptAgentStatus((await executeAgent({
           const Icon = item.icon;
           const blockedByConfigMutation = (configMutationPending || copyGroupStatusPollFence.inFlight) && item.id !== tab;
           const blockedByArm = item.id === 'chart' && armFlowActive;
-          const warmChart = item.id === 'chart'
+          const warmTab = item.id === 'chart'
             ? () => { void preloadLiveTradingScreen().catch(() => { /* Kliknutí může zopakovat import. */ }); }
-            : undefined;
-          return <button key={item.id} type="button" disabled={blockedByConfigMutation || blockedByArm} title={blockedByArm ? 'Během zapínání kopírky se graf neotevírá' : blockedByConfigMutation ? 'Čekám na potvrzení změny konfigurace workerem' : undefined} onPointerEnter={warmChart} onFocus={warmChart} onClick={() => navigateToTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
+            : item.id === 'overview'
+              ? () => { void preloadLiveCopyTradeOverview().catch(() => { /* Slot nabídne retry. */ }); }
+              : undefined;
+          return <button key={item.id} type="button" disabled={blockedByConfigMutation || blockedByArm} title={blockedByArm ? 'Během zapínání kopírky se graf neotevírá' : blockedByConfigMutation ? 'Čekám na potvrzení změny konfigurace workerem' : undefined} onPointerEnter={warmTab} onFocus={warmTab} onClick={() => navigateToTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
         })}
       </nav>
 
@@ -1823,7 +1830,7 @@ acceptAgentStatus((await executeAgent({
         <>
           {displayInterrupted && <div role="status" className="text-xs text-[var(--text-secondary)]">Obnovuji spojení pro aktualizaci zůstatků. Zobrazené hodnoty jsou poslední potvrzené.</div>}
           {tab === 'overview' && copyTradeSnapshot ? (
-            <LiveCopyTradeOverview
+            <LiveCopyTradeOverviewSlot
               journalHistory={journalHistory}
               userId={userId}
               owner={cardOwner}
@@ -1996,7 +2003,7 @@ acceptAgentStatus((await executeAgent({
           }}
         />
       ) : null}
-      {mobileLayout && selectedLiveAccount ? <LiveMobileAccountDetail key={selectedLiveAccount.id} account={selectedLiveAccount} history={selectedAccount ?? undefined} orders={copyTradeOrders}
+      {mobileLayout && selectedLiveAccount ? <LiveMobileAccountDetailSlot key={selectedLiveAccount.id} account={selectedLiveAccount} history={selectedAccount ?? undefined} orders={copyTradeOrders}
         dailyPnlPending={false} leader={selectedMembership?.leaderAccountId === selectedAccountId}
         multiplier={selectedMembership?.followers.find(f => f.accountId === selectedAccountId)?.multiplier ?? 1}
         onClose={() => setSelectedAccountId(null)} /> : selectedAccount ? <AccountDetail account={selectedAccount} profile={profileMap(live.profiles).get(String(selectedAccount.id))} onClose={() => setSelectedAccountId(null)} /> : null}
