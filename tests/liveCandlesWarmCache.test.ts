@@ -31,9 +31,11 @@ describe('warm cache prvních LIVE svíček', () => {
     await preloadLiveCandles('MNQ', NOW);
     const first = await loadLiveCandles('MNQ', NOW + 1_000);
     expect(first?.response.candles).toHaveLength(1);
+    expect(first?.fromWarmCache).toBe(true);
     expect(mocks.download).toHaveBeenCalledOnce();
 
-    await loadLiveCandles('MNQ', NOW + 2_000);
+    const nextRead = await loadLiveCandles('MNQ', NOW + 2_000);
+    expect(nextRead?.fromWarmCache).not.toBe(true);
     expect(mocks.download).toHaveBeenCalledTimes(2);
   });
 
@@ -70,5 +72,9 @@ describe('warm cache prvních LIVE svíček', () => {
     await preloadLiveCandles('MNQ', NOW);
     await expect(loadLiveCandles('MNQ', NOW + 1)).resolves.toMatchObject({ stale: false });
     expect(mocks.download).toHaveBeenCalledTimes(2);
+  });
+  it.each([[404, 'snapshot-missing'], [403, 'access-denied'], [502, 'download-failed']])('rozliší potvrzené HTTP %s od neznámé příčiny', async (statusCode, problem) => {
+    mocks.download.mockResolvedValueOnce({ data: null, error: { statusCode: String(statusCode) } });
+    await expect(loadLiveCandles('MNQ', NOW)).rejects.toMatchObject({ problem });
   });
 });

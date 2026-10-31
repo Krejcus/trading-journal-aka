@@ -7,9 +7,10 @@ import LiveOrderTicket, { formatPrice, type TicketScope } from './LiveOrderTicke
 import LiveGroupChip from './LiveGroupChip';
 import LiveTradeToasts from './LiveTradeToasts';
 import { QuantumSpinner } from './QuantumLoader';
+import ChartDataStatus from './ChartDataStatus';
 import { useDayChartData } from '../hooks/useDayChartData';
 import { useLiveTicketQuote } from '../hooks/useLiveTicketQuote';
-import { perfDuration } from '../lib/perfTrace';
+import { perfDuration, perfMark } from '../lib/perfTrace';
 import { DAY_ANCHOR_ACCOUNT_ID, chartMarketDay, pragueDayKey } from '../lib/dayJournal';
 import {
   draftFromPositionBox,
@@ -138,6 +139,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   const chart = useDayChartData(day, NO_TRADES, NO_TRADES, now, { perfScope: 'live' });
   const chartComponentMeasured = useRef(false);
   const chartCandlesMeasured = useRef(false);
+  const chartCandlesDataMeasured = useRef(false);
   useEffect(() => {
     if (chartComponentMeasured.current || chartOpenPerformanceAt <= 0) return;
     chartComponentMeasured.current = true;
@@ -145,11 +147,14 @@ const LiveTradingScreen: React.FC<Props> = ({
   }, [chartOpenPerformanceAt]);
   useEffect(() => {
     if (chartCandlesMeasured.current || chartOpenPerformanceAt <= 0 || chart.candles.length === 0) return undefined;
-    chartCandlesMeasured.current = true;
-    perfDuration('live:chart:first-candles-data', performance.now() - chartOpenPerformanceAt);
+    if (!chartCandlesDataMeasured.current) {
+      chartCandlesDataMeasured.current = true;
+      perfDuration('live:chart:first-candles-data', performance.now() - chartOpenPerformanceAt);
+    }
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => {
+        chartCandlesMeasured.current = true;
         perfDuration('live:chart:first-candles-paint', performance.now() - chartOpenPerformanceAt);
       });
     });
@@ -162,13 +167,16 @@ const LiveTradingScreen: React.FC<Props> = ({
   useEffect(() => {
     if (!liveExposurePaint || measuredExposureId.current === liveExposurePaint.id) return undefined;
     measuredExposureId.current = liveExposurePaint.id;
+    let painted = false;
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => {
+        painted = true;
         perfDuration('live:exposure:to-paint', performance.now() - liveExposurePaint.receivedPerformanceAt);
       });
     });
     return () => {
+      if (!painted) perfMark('live:exposure:paint-superseded');
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
     };
@@ -432,7 +440,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     : `border-transparent ${isDark ? 'text-slate-400 hover:text-slate-100' : 'text-slate-500 hover:text-slate-900'}`);
 
   const screen = (
-    <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} role="region" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
+    <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} style={{ bottom: 'var(--live-safety-height, 100px)' }} role="region" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
       {/* Aurorová záře při příchodu — jednou, pak je průhledná a nebere kliky. */}
       <div className="live-chart-aurora" aria-hidden="true" />
       <header className={`live-chart-header flex h-11 shrink-0 items-center gap-1 border-b px-2 ${bar}`}>
@@ -514,7 +522,9 @@ const LiveTradingScreen: React.FC<Props> = ({
         ><X size={16} /></button>
       </header>
       <div className="flex min-h-0 flex-1">
-        <div className="relative min-w-0 flex-1">
+        <div className="relative flex min-w-0 flex-1 flex-col">
+          <ChartDataStatus quality={chart.quality} />
+          <div className="relative min-h-0 flex-1">
           {lineNotice && <div role="status" className={`absolute left-1/2 top-2 z-[700] max-w-[440px] -translate-x-1/2 rounded-lg border px-3 py-1.5 text-[11.5px] font-bold shadow-lg ${lineNotice.tone === 'ok'
             ? 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200'
             : lineNotice.tone === 'bad' ? 'border-rose-500/40 bg-rose-950/90 text-rose-200' : 'border-amber-500/40 bg-amber-950/90 text-amber-100'}`}>{lineNotice.text}</div>}
@@ -549,6 +559,7 @@ const LiveTradingScreen: React.FC<Props> = ({
               )}
             </div>
           )}
+          </div>
         </div>
         {ticketOpen && <aside className="live-chart-ticket w-[304px] shrink-0 p-2 pl-0">
           <LiveOrderTicket

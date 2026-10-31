@@ -1,4 +1,5 @@
-import { sanitizeTvBars, tvLiveBarsStoragePath, tvSymbolRoot, type TvBar } from '../lib/tradingViewBars';
+import { tvLiveBarsStoragePath, tvSymbolRoot } from '../lib/tradingViewBars';
+import { inspectCandleSnapshot, type CandleFileProblem, type CandleValidation } from '../lib/candleSnapshotValidation';
 import type { MarketCandle, MarketCandleResponse } from './marketDataCalculations';
 import { provisionalResponse } from './provisionalCandles';
 import { supabase } from './supabase';
@@ -33,6 +34,13 @@ export interface LiveCandles {
   capturedAt: number;
   /** Čtení je starší než `LIVE_CANDLES_STALE_MS` — graf stojí. */
   stale: boolean;
+  validation?: CandleValidation;
+  /** First paint may reuse preload; the hook immediately follows it with a fresh read. */
+  fromWarmCache?: boolean;
+}
+
+export class LiveCandlesReadError extends Error {
+  constructor(public readonly problem: CandleFileProblem) { super(problem); this.name = 'LiveCandlesReadError'; }
 }
 
 interface LiveCandlesIdentity {
@@ -70,8 +78,15 @@ const withCurrentStaleness = (value: LiveCandles | null, now: number): LiveCandl
 
 const downloadLiveCandles = async (identity: LiveCandlesIdentity, now: number): Promise<LiveCandles | null> => {
   const { data, error } = await supabase.storage.from(BUCKET).download(tvLiveBarsStoragePath(identity.userId, identity.root));
-  if (error || !data) return null;
-  return parseLiveCandlesFile(await data.text(), identity.root, now);
+  if (error || !data) {
+    const failure = error as unknown as { status?: unknown; statusCode?: unknown } | null;
+    const status = Number(failure?.statusCode ?? failure?.status);
+    throw new LiveCandlesReadError(status === 404 ? 'snapshot-missing' : status === 401 || status === 403 ? 'access-denied' : 'download-failed');
+  }
+  const text = await data.text();
+  const inspected = inspectCandleSnapshot(text, identity.root, now);
+  if (inspected.ok === false) throw new LiveCandlesReadError(inspected.problem);
+  return parsedLiveCandles(inspected, identity.root, now);
 };
 
 const startLiveCandlesRequest = (identity: LiveCandlesIdentity, now: number, preload: boolean): PendingLiveCandles => {
@@ -86,16 +101,16 @@ const startLiveCandlesRequest = (identity: LiveCandlesIdentity, now: number, pre
 
 /** Rozparsuje uložený soubor; vadný obsah = `null`, nikdy výjimka. */
 export function parseLiveCandlesFile(text: string, root: string, now = Date.now()): LiveCandles | null {
-  let body: { at?: unknown; bars?: unknown; source?: unknown };
-  try { body = JSON.parse(text) as typeof body; } catch { return null; }
-  const at = Number(body.at);
-  if (!Number.isFinite(at) || at > now + 5 * 60_000) return null;
-  const bars: TvBar[] = sanitizeTvBars(body.bars, at);
-  if (!bars.length) return null;
+  const inspected = inspectCandleSnapshot(text, root, now);
+  return inspected.ok ? parsedLiveCandles(inspected, root, now) : null;
+}
+
+function parsedLiveCandles(body: Extract<ReturnType<typeof inspectCandleSnapshot>, { ok: true }>, root: string, now: number): LiveCandles {
   return {
-    response: provisionalResponse(bars, root, typeof body.source === 'string' ? body.source : ''),
-    capturedAt: at,
-    stale: now - at > LIVE_CANDLES_STALE_MS,
+    response: provisionalResponse(body.bars, root, body.source),
+    capturedAt: body.at,
+    stale: now - body.at > LIVE_CANDLES_STALE_MS,
+    validation: body.validation,
   };
 }
 
@@ -107,14 +122,16 @@ export async function loadLiveCandles(symbol: string, now = Date.now()): Promise
   const warm = warmLiveCandles.get(identity.key);
   if (warm) {
     warmLiveCandles.delete(identity.key);
-    if (now - warm.loadedAt <= LIVE_CANDLES_WARM_TTL_MS) return withCurrentStaleness(warm.value, now);
+    if (now - warm.loadedAt <= LIVE_CANDLES_WARM_TTL_MS) return { ...withCurrentStaleness(warm.value, now)!, fromWarmCache: true };
   }
   const pending = pendingLiveCandles.get(identity.key);
   if (pending) {
+    const fromPreload = !pending.consumed;
     pending.consumed = true;
     const value = await pending.promise;
     warmLiveCandles.delete(identity.key);
-    return withCurrentStaleness(value, now);
+    const current = withCurrentStaleness(value, now);
+    return current && fromPreload ? { ...current, fromWarmCache: true } : current;
   }
   return startLiveCandlesRequest(identity, now, false).promise;
 }
@@ -133,11 +150,11 @@ export async function preloadLiveCandles(symbol: string, now = Date.now()): Prom
   if (warm) warmLiveCandles.delete(identity.key);
   const pending = pendingLiveCandles.get(identity.key);
   if (pending) {
-    await pending.promise;
+    await pending.promise.catch(() => undefined);
     return;
   }
   const entry = startLiveCandlesRequest(identity, now, true);
-  const value = await entry.promise;
+  const value = await entry.promise.catch(() => null);
   if (value && !entry.consumed) warmLiveCandles.set(identity.key, { value, loadedAt: now });
 }
 

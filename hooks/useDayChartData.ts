@@ -9,6 +9,7 @@ import { tradeChartTiming } from '../services/tradeChartData';
 import { useLiveCandles } from './useLiveCandles';
 import { useTvLiveCandleFeed } from './useTvLiveCandleFeed';
 import { perfDuration } from '../lib/perfTrace';
+import { chartDataQuality } from '../lib/chartDataQuality';
 
 /**
  * Data grafu dne: obchody dne s historií plnění (šipky, SL/TP) a svíčky
@@ -70,14 +71,14 @@ export function useDayChartData(
         if (cancelled) return;
         // Neúspěšné obnovení stejného dne nechá dosavadní svíčky na místě.
         setHistorical(previous => previous?.day === day && previous.candles.length
-          ? { ...previous, key: historicalKey }
+          ? { ...previous, key: historicalKey, error: reason instanceof Error ? reason.message : 'Tržní data se nepodařilo obnovit.' }
           : { day, key: historicalKey, candles: [], symbol: 'MNQ', error: reason instanceof Error ? reason.message : 'Tržní data se nepodařilo načíst.' });
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- klíč pokrývá den, kotvu i hranici historie
   }, [historicalKey, detailsReady, perfScope]);
 
-  const { live, status: liveStatus } = useLiveCandles('MNQ', {
+  const { live, status: liveStatus, problem: liveProblem } = useLiveCandles('MNQ', {
     enabled: candleWindow.needsLive,
     perfScope,
   });
@@ -89,10 +90,18 @@ export function useDayChartData(
     [candleWindow, live, sameDay],
   );
   const loading = !sameDay || (candleWindow.needsLive && liveStatus === 'loading');
+  const qualityMinute = Math.floor(now / 60_000) * 60_000;
+  const quality = useMemo(() => chartDataQuality({
+    candles, dayStart: candleWindow.dayStart, dayEnd: candleWindow.dayEnd, now: qualityMinute,
+    needsLive: candleWindow.needsLive, liveStatus, liveCapturedAt: live?.capturedAt ?? null,
+    liveSource: live?.response.sourceSymbol ?? null, liveProblem, validation: live?.validation,
+    historicalError: sameDay?.error, historicalLoading: !sameDay || sameDay.key !== historicalKey,
+  }), [candles, candleWindow, qualityMinute, liveStatus, live, liveProblem, sameDay, historicalKey]);
   // Jen dokud den běží (včerejšek v živém okně ani sobota už živou svíčku nemají).
   const liveFeed = useTvLiveCandleFeed(candleWindow.needsLive && now < candleWindow.dayEnd, candleWindow.dayEnd);
   return {
     candles,
+    quality,
     chartTrades,
     window: candleWindow,
     loading,
