@@ -1,97 +1,70 @@
-import { useEffect, useRef, useState } from 'react';
-import type { ChartViewApi } from '@getcandlekit/charts/react';
-import { resetChartView } from '../services/chartContextMenu';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { htfHistoryDaysFor, htfHistoryRange } from '../services/htfHistory';
-import { loadMarketCandles, resolveMarketSymbol, type MarketCandle, type MarketTimeframe } from '../services/marketData';
+import { loadMarketCandles, resolveMarketSymbol, marketDataSchemaForTimeframe, type MarketCandle, type MarketTimeframe } from '../services/marketData';
+import { createChartPastHistory, historyPageDays } from '../services/chartPastHistory';
 
-const EMPTY: readonly MarketCandle[] = Object.freeze([]);
-/** Neúspěšné načtení (výpadek sítě, limit funkce) se jednou zopakuje. */
-const RETRY_MS = 5_000;
-/** Reset záběru po příchodu historie jen takhle brzy po přepnutí timeframu / otevření grafu. */
-export const HTF_RESET_WINDOW_MS = 20_000;
-
+const stores = new Map<string, ReturnType<typeof createChartPastHistory>>();
+const EMPTY_CANDLES: readonly MarketCandle[] = [];
+const getStore = (symbol: string, schema: 'ohlcv-1h' | 'ohlcv-1m', scope = '') => {
+  const key = `${symbol}|${schema}|${scope}`;
+  let store = stores.get(key);
+  if (!store) {
+    store = createChartPastHistory(symbol, schema, loadMarketCandles);
+    if (stores.size >= 8) stores.delete(stores.keys().next().value!);
+    stores.set(key, store);
+  }
+  return store;
+};
 export interface HtfHistory {
   candles: readonly MarketCandle[];
-  /**
-   * Zvýší se, když do grafu dorazí historie, kterou dosud neměl (žádnou, nebo
-   * kratší). Graf pak smí srovnat záběr (`useResetViewOnHtfHistory`) —
-   * doplnění zleva jinak drží záběr na posledních pár svíčkách.
-   */
+  minuteBridge: readonly MarketCandle[];
   arrived: number;
+  loading: boolean;
+  error: string | null;
+  startMs: number | null;
+  loadOlder: (beforeSeconds: number) => Promise<void>;
 }
 
-/**
- * Hodinová historie Databento pro vyšší timeframy grafu deníku (`services/htfHistory.ts`).
- * Načte se jen když některý panel má timeframe skládaný z hodin; selhání = jeden
- * opakovaný pokus, pak graf zůstane jen se svými 1m daty. Cache po dnech drží
- * `loadMarketCandles` (IndexedDB), uzavřené měsíce i serverové úložiště.
- */
-export function useHtfHistory(root: 'MNQ' | 'NQ', timeframes: readonly MarketTimeframe[], firstRawTime: number | null | undefined): HtfHistory {
+/** Shared symbol/schema history survives timeframe changes and failed refreshes. */
+export function useHtfHistory(root: 'MNQ' | 'NQ', timeframes: readonly MarketTimeframe[], firstRawTime: number | null | undefined, tradeSymbol?: string): HtfHistory {
+  const tf = timeframes[0] ?? '1m';
   const days = htfHistoryDaysFor(timeframes);
+  const schema = days > 0 ? 'ohlcv-1h' : marketDataSchemaForTimeframe(tf);
+  const symbol = resolveMarketSymbol(root, tradeSymbol);
+  const store = useMemo(() => getStore(symbol, schema), [symbol, schema]);
+  const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  // An hourly page cannot supply the minutes between its final whole hour
+  // and a recent series that starts mid-hour. Fetch that seam at 1m resolution.
+  const bridgeEnd = schema === 'ohlcv-1h' && firstRawTime != null && Number.isFinite(firstRawTime) ? firstRawTime * 1000 : 0;
+  const bridgeStart = Math.floor(bridgeEnd / 3600_000) * 3600_000;
+  const bridgeStore = useMemo(() => getStore(symbol, 'ohlcv-1m', `bridge:${bridgeStart}`), [symbol, bridgeStart]);
+  const bridgeState = useSyncExternalStore(bridgeStore.subscribe, bridgeStore.getSnapshot, bridgeStore.getSnapshot);
+  const needsBridge = bridgeEnd > bridgeStart;
+  useEffect(() => {
+    if (needsBridge && timeframes.length) void bridgeStore.ensure(bridgeStart, bridgeEnd).catch(() => undefined);
+  }, [bridgeStore, bridgeStart, bridgeEnd, needsBridge, timeframes.length]);
+  const minuteBridge = useMemo(() => needsBridge
+    ? bridgeState.candles.filter(c => c.time * 1000 >= bridgeStart && c.time * 1000 < bridgeEnd)
+    : EMPTY_CANDLES, [bridgeState.candles, needsBridge, bridgeStart, bridgeEnd]);
   const range = htfHistoryRange(firstRawTime, days);
-  const key = range ? `${root}|${range.startMs}|${range.endMs}` : '';
-  const [state, setState] = useState<{ key: string; candles: readonly MarketCandle[]; arrived: number }>({ key: '', candles: EMPTY, arrived: 0 });
+  const start = range?.startMs, end = range?.endMs;
   useEffect(() => {
-    if (!range) return;
-    let cancelled = false;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-    const load = (attempt: number) => {
-      loadMarketCandles({ symbol: resolveMarketSymbol(root), start: new Date(range.startMs), end: new Date(range.endMs), schema: 'ohlcv-1h' })
-        .then(response => {
-          if (cancelled) return;
-          setState(previous => {
-            // Nová historie začíná dřív než ta, co graf ukazuje (nebo žádnou neměl).
-            const shown = previous.key.startsWith(`${root}|`) ? previous.candles : EMPTY;
-            const longer = response.candles.length > 0 && (!shown.length || response.candles[0].time < shown[0].time);
-            return { key, candles: response.candles, arrived: previous.arrived + (longer ? 1 : 0) };
-          });
-        })
-        .catch(reason => {
-          if (cancelled) return;
-          if (attempt === 0) { retry = setTimeout(() => { retry = null; if (!cancelled) load(1); }, RETRY_MS); return; }
-          console.warn('Hodinovou historii pro vyšší timeframe se nepodařilo načíst', reason instanceof Error ? reason.message : reason);
-          setState(previous => ({ key, candles: EMPTY, arrived: previous.arrived }));
-        });
-    };
-    load(0);
-    return () => { cancelled = true; if (retry) clearTimeout(retry); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- klíč pokrývá trh i okno
-  }, [key]);
-  // Během načtení jiného okna téhož trhu zůstane dosavadní historie (graf neztratí levou část).
-  const candles = range && (state.key === key || state.key.startsWith(`${root}|`)) ? state.candles : EMPTY;
-  return { candles, arrived: state.arrived };
-}
-
-/**
- * Srovnat záběr jako „Reset chart view“, když vyšší timeframe dostal historii —
- * po přepnutí na jiný timeframe skládaný z hodin a po příchodu delší historie.
- * Jen krátce po přepnutí / otevření (pozdní příchod historie nesmí přeskočit
- * graf, se kterým uživatel mezitím pracuje) a jen když to graf dovolí
- * (`enabled`: ne v přehrávání, ne s vybraným obchodem).
- */
-export function useResetViewOnHtfHistory(api: ChartViewApi | null, history: HtfHistory, timeframe: MarketTimeframe, enabled = true): void {
-  const handledRef = useRef({ arrived: history.arrived, timeframe });
-  const changedAtRef = useRef(Date.now());
-  const lastTimeframeRef = useRef(timeframe);
-  if (lastTimeframeRef.current !== timeframe) {
-    lastTimeframeRef.current = timeframe;
-    changedAtRef.current = Date.now();
-  }
-  const hasHistory = history.candles.length > 0;
+    if (start == null || end == null || !timeframes.length) return;
+    void store.ensure(start, end).catch(() => undefined);
+  }, [store, start, end, timeframes.length]);
+  const minuteEnd = schema === 'ohlcv-1m' && firstRawTime != null ? firstRawTime * 1000 : null;
   useEffect(() => {
-    // Graf se po přepnutí timeframu vytváří znovu — počkat na něj, nic neodškrtnout.
-    if (!api) return;
-    const handled = handledRef.current;
-    if (handled.arrived === history.arrived && handled.timeframe === timeframe) return;
-    if (!enabled || !hasHistory || htfHistoryDaysFor([timeframe]) === 0 || Date.now() - changedAtRef.current > HTF_RESET_WINDOW_MS) {
-      handledRef.current = { arrived: history.arrived, timeframe };
-      return;
-    }
-    const target = { arrived: history.arrived, timeframe };
-    const frame = window.requestAnimationFrame(() => {
-      handledRef.current = target;
-      try { resetChartView(api); } catch { /* graf mezitím zanikl */ }
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [api, enabled, hasHistory, history.arrived, timeframe]);
+    // A rolling recent window can move forward while shared past data stays
+    // cached. Fill its newly exposed seam before treating it as continuous.
+    if (!timeframes.length || minuteEnd == null || state.startMs == null || state.endMs == null || minuteEnd <= state.endMs) return;
+    void store.ensure(state.startMs, minuteEnd).catch(() => undefined);
+  }, [store, minuteEnd, state.startMs, state.endMs, timeframes.length]);
+  const loadOlder = useCallback(async (beforeSeconds: number) => {
+    if (needsBridge) await bridgeStore.ensure(bridgeStart, bridgeEnd);
+    const known = store.getSnapshot();
+    const step = schema === 'ohlcv-1h' ? 3600_000 : 60_000;
+    const right = Math.floor(Math.min(beforeSeconds * 1000, known.startMs ?? Infinity) / step) * step;
+    await store.ensure(right - historyPageDays(schema, tf) * 86400_000, known.endMs ?? right);
+  }, [store, schema, tf, bridgeStore, bridgeStart, bridgeEnd, needsBridge]);
+  return { candles: state.candles, minuteBridge, arrived: state.revision + (needsBridge ? bridgeState.revision : 0), loading: state.loading || (needsBridge && bridgeState.loading), error: state.error ?? (needsBridge ? bridgeState.error : null), startMs: state.startMs, loadOlder };
 }

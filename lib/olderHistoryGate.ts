@@ -18,9 +18,11 @@ export interface OlderHistoryGate {
 export const createOlderHistoryGate = (): OlderHistoryGate => ({ armed: false, requestedBefore: null });
 
 /** Gesto uživatele v grafu. */
-export function armOlderHistory(gate: OlderHistoryGate, firstTime: number | undefined): void {
+export function armOlderHistory(gate: OlderHistoryGate, _firstTime: number | undefined): void {
+  // A pan during an outstanding read changes the view; it must not queue a
+  // second page when the first prepend restores its temporary logical range.
+  if (gate.requestedBefore !== null) return;
   gate.armed = true;
-  if (gate.requestedBefore !== firstTime) gate.requestedBefore = null;
 }
 
 export function olderHistoryDue(gate: OlderHistoryGate, input: {
@@ -50,5 +52,6 @@ export function markOlderHistoryRequested(gate: OlderHistoryGate, firstTime: num
  * denního baru), by jinak historii zablokoval až do přestavění grafu.
  */
 export function settleOlderHistory(gate: OlderHistoryGate): void {
+  gate.armed = false;
   gate.requestedBefore = null;
 }

@@ -5,6 +5,17 @@ import { aggregateCandles, type MarketCandle } from '../services/marketDataCalcu
 const candle = (time: number, close: number): MarketCandle => ({ time, open: close, high: close + 1, low: close - 1, close, volume: 1 });
 
 describe('hodinová historie pro vyšší timeframy grafu deníku', () => {
+  it('joins a minute bridge at a mid-hour seam without losing or double-counting OHLCV', () => {
+    const start = Date.UTC(2026, 9, 13, 0) / 1000;
+    const all = Array.from({ length: 240 }, (_, i) => candle(start + i * 60, 28000 + i / 100));
+    const hourly = aggregateCandles(all.slice(0, 120), '1h');
+    const raw = all.slice(154);
+    const bridge = all.slice(120, 154);
+    const joined = [...bridge, ...raw];
+    for (const tf of ['1h', '4h', '1d', 'W', 'M'] as const) {
+      expect(aggregateWithHtfHistory(joined, hourly, tf)).toEqual(aggregateCandles(all, tf));
+    }
+  });
   it('jen timeframy skládané z hodin; M 3 roky, D/W 2 roky, hodinové 120 dní', () => {
     expect(htfHistoryDays('5m')).toBe(0);
     expect(htfHistoryDays('90m')).toBe(0);

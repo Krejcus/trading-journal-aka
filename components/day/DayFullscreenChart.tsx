@@ -13,8 +13,8 @@ import { isPositionDrawing } from '../../services/chartPositionDrawing';
 import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 import type { FibDrawing } from '../../services/chartFibDrawing';
 import { QuantumSpinner } from '../QuantumLoader';
-import { aggregateCandles, timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../../services/marketData';
-import { useHtfHistory, useResetViewOnHtfHistory } from '../../hooks/useHtfHistory';
+import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../../services/marketData';
+import { useHtfHistory } from '../../hooks/useHtfHistory';
 import { aggregateWithHtfHistory, withHtfHistory } from '../../services/htfHistory';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../../services/detailIndicators';
 import { tradeChartTiming } from '../../services/tradeChartData';
@@ -341,15 +341,17 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   );
   const htf = useHtfHistory('MNQ', shownTimeframes, raw[0]?.time);
   const htfHistory = htf.candles;
-  const candles = useMemo(() => aggregateWithHtfHistory(raw, htfHistory, timeframe), [htfHistory, raw, timeframe]);
+  const recentWithBridge = useMemo(() => htf.minuteBridge?.length && raw.length ? [...htf.minuteBridge.filter(c => c.time < raw[0].time), ...raw] : raw, [htf.minuteBridge, raw]);
+  const completeWithBridge = useMemo(() => htf.minuteBridge?.length && fullRaw.length ? [...htf.minuteBridge.filter(c => c.time < fullRaw[0].time), ...fullRaw] : fullRaw, [htf.minuteBridge, fullRaw]);
+  const candles = useMemo(() => aggregateWithHtfHistory(recentWithBridge, htfHistory, timeframe), [htfHistory, recentWithBridge, timeframe]);
   const barTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
   const extraCandles = useMemo(
     () => [1, 2, 3].map(index => {
       if (index >= paneCount) return [];
       const paneTf = paneTimeframes[index - 1] ?? '5m';
-      return aggregateWithHtfHistory(raw, htfHistory, paneTf);
+      return aggregateWithHtfHistory(recentWithBridge, htfHistory, paneTf);
     }),
-    [htfHistory, paneCount, raw, paneTimeframes],
+    [htfHistory, paneCount, recentWithBridge, paneTimeframes],
   );
   const paneCandles = (index: number) => (index === 0 ? candles : extraCandles[index - 1] ?? []);
   const extraBarTimes = useMemo(() => extraCandles.map(list => list.map(candle => candle.time)), [extraCandles]);
@@ -357,22 +359,17 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   // Stabilní pole na panel (nové pole při každém renderu by vazbu živé svíčky zbytečně přepočítávalo).
   const paneLiveRaw = useMemo(
     // Jen mimo přehrávání (živá svíčka v něm neběží) a z celé řady, ne po každém kroku.
-    () => (replayOn ? [] : shownTimeframes.map(paneTf => withHtfHistory(raw, htfHistory, paneTf))),
-    [htfHistory, raw, replayOn, shownTimeframes],
+    () => (replayOn ? [] : shownTimeframes.map(paneTf => withHtfHistory(recentWithBridge, htfHistory, paneTf))),
+    [htfHistory, recentWithBridge, replayOn, shownTimeframes],
   );
   const liveCandleTargets: LiveCandleTarget[] = Array.from({ length: paneCount }, (_, index) => ({
     api: paneApi(index), root: 'MNQ', timeframe: paneTimeframe(index), rawCandles: paneLiveRaw[index] ?? raw,
   }));
   useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets);
-  // Každý panel zvlášť (pevný počet volání hooku).
-  useResetViewOnHtfHistory(paneApi(0), htf, paneTimeframe(0), !replayOn);
-  useResetViewOnHtfHistory(paneCount > 1 ? paneApi(1) : null, htf, paneTimeframe(1), !replayOn);
-  useResetViewOnHtfHistory(paneCount > 2 ? paneApi(2) : null, htf, paneTimeframe(2), !replayOn);
-  useResetViewOnHtfHistory(paneCount > 3 ? paneApi(3) : null, htf, paneTimeframe(3), !replayOn);
   // Přehrávání: rozpracovaný bar vyššího timeframu i s historií (z celé řady — mění se jen s daty).
   const fullRawWithHistory = useMemo(
-    () => shownTimeframes.map(paneTf => withHtfHistory(fullRaw, htfHistory, paneTf)),
-    [fullRaw, htfHistory, shownTimeframes],
+    () => shownTimeframes.map(paneTf => withHtfHistory(completeWithBridge, htfHistory, paneTf)),
+    [completeWithBridge, htfHistory, shownTimeframes],
   );
   // Kurzor / čas / rozsah mezi okny podle „Synchronizace“ (jako workspace na Macu).
   useEffect(() => {
@@ -656,6 +653,9 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
                 {src.loading ? <QuantumSpinner /> : <p style={{ margin: 0, fontSize: 12, color: 'var(--dj-text-2)' }}>{src.error ?? (ctl ? 'Svíčky pro tenhle den zatím nejsou.' : 'Svíčky zatím nejsou.')}</p>}
               </div>
             ) : null}
+            {index === 0 && htf.error && list.length > 0 ? <div role="status" className="pointer-events-none absolute right-2 top-2 z-20 max-w-[70%] rounded-md border border-amber-500/35 bg-[var(--dj-bg)]/95 px-2 py-1 text-[10px] font-bold text-amber-500 shadow-sm">
+              Starší historie není úplná: {htf.error}
+            </div> : null}
             {/* Poznámky k obchodům dne (detail obchodu, Review) — jen pro čtení, v hlavním okně. */}
             {index === 0 && (tradeNotes.length > 0 || source?.onChartNotesChange) && (
               <ChartNotesLayer
