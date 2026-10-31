@@ -285,7 +285,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-10-31 — Review nouzové lišty, historie a crosshairu uzavřené (Codex, lokálně)
+### 2026-10-31 — Review nouzové lišty, historie a crosshairu uzavřené (Codex, nasazeno)
 
 - Nálezy 1–10 z Claude/copy critic review jsou opravené v jediném aktivním
   worktree `codex-live-quality`: Flatten má jeden sdílený group lock bez
@@ -318,9 +318,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   nic se z něj nemaže. Celkem 28 untracked měřicích harnessů/reportů bylo
   beze ztráty přesunuto mimo repo do Codex visualization evidence adresáře;
   `vite.config.ts` už neobsahuje QA-only změnu.
-- Změna je rozdělena do 4 lokálních věcných commitů (safety / validace /
-  historie / TF+crosshair+indikátory). Zatím bez pushe, deploye, reinstalu
-  workeru, ARM/Flatten akce a bez komunikace s brokerem.
+- Změna je rozdělena do 4 věcných commitů (safety / validace / historie /
+  TF+crosshair+indikátory) a byla 31. 10. pushnuta bez force na `origin/main`
+  (`211794d8..96f45e17`). Produkční Vercel deployment
+  `dpl_E7gXfkHCkaanYQmgL8ssYH1JkvcY` dosáhl `READY` za 1 min 46 s; hlavní
+  alias vrací HTTP 200, přihlášený Dashboard se vykreslil bez chyb konzole a
+  desetiminutové scany neobsahovaly runtime error ani HTTP 5xx. Worker nebyl
+  reinstalován a neproběhl ARM, Flatten ani jiná komunikace s brokerem.
 
 ### 2026-10-31 — Křížek a hlavní vypínač indikátoru opravdu čistí canvas (Codex, lokálně)
 
