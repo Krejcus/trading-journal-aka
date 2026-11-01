@@ -302,6 +302,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `tests/candleAggregationEquivalence.test.ts` je cizí — main (96f45e17)
   importuje necommitnutý `tests/qa/beforeLiveMarketCalculations.ts` (je jen
   ve worktree `atomic-admission-20261101`); kvůli tomu i tsc na mainu hlásí 1 chybu.
+- **iPhone build 1. 11. 08:09 z této větve** (main 3ece8dcf + crosshair):
+  `ios:sync` → `xcodebuild` Debug pro iPhone 13 Pro Max (bez simulátoru i okna
+  Xcode) → čistá odinstalace + instalace (`devicectl`), spuštěno na LIVE,
+  přihlášení zůstalo. Balík ověřen (Supabase URL, přichycení crosshairu, bez
+  loga, živé BoS/CHoCH). Telefon tak má crosshair dřív než web.
 
 ### 2026-10-31 večer — graf: Path, kurzory a šablony indikátorů jako v TradingView; LIVE panel Objednávka (Claude, nasazeno)
 
