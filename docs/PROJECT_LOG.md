@@ -285,7 +285,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-01 — Jeden crosshair, svislá čára na svíčce (Claude, větev `claude/crosshair-snap-20261101`, NENASAZENO)
+### 2026-11-01 — Jeden crosshair, svislá čára na svíčce (Claude, nasazeno 08:17 @ fde85e94)
+
+- **Nasazení (Filip „nasaď na web“)**: main se nehnul (3ece8dcf), push
+  fast-forward. Gate proti základu mainu: jediný pád testu i jediná chyba tsc
+  jsou cizí (chybějící `tests/qa/beforeLiveMarketCalculations.ts`), build
+  prošel. Produkční chunk grafu: přichycení přes `coordinateToLogical`, žádné
+  znovuzapnutí vestavěných čar.
 
 - Filip viděl dva crosshairy (jeden skákal po svíčkách, druhý hned za myší).
   96f45e17 (Codex) vypnul vestavěné čáry lightweight-charts a kreslí vlastní
