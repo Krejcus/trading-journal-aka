@@ -344,6 +344,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
     souřadnicemi dotyku se chová jako TradingView (podržení → tah hýbe →
     po zvednutí zůstane → klepnutí ho schová), nereprodukováno → čeká na
     video z iPhonu.
+- Druhé kolo připomínek z iPhonu (video, 1. 11. odpoledne):
+  - Crosshair problikával kvůli `onPointerLeave` na kořeni grafu:
+    `pointerleave` z dotyku chodí po každém zvednutí prstu a při převzetí
+    gesta iOS. DOM kurzor zhasl, i když lightweight-charts dál sledoval.
+    Dotykový `pointerleave` už kurzor neschovává (f1ffc516).
+  - Všechny listy (LIVE menu, ks, objednávka, menu boxu, nástroje,
+    rozložení, nastavení grafu, přehrávání) jdou stáhnout dolů za úchyt
+    (`SheetGrip`, 6c5e1915).
+  - Na LIVE grafu je iOS lišta schovaná (Filipův nápad, víc místa);
+    na ostatních LIVE záložkách se vrací (501d78fc). Start appky lištu
+    vždy ukáže, protože skrytí přežije reload WebView (b743d86b).
+    Critic kolo 3 i 4: OK.
+  - Roztažený position box blokoval cenovou osu (tah osy chytil kresbu).
+    Dotyk na cenové nebo časové ose teď jde vždy grafu, ještě než ho kresba
+    může chytit (f77b7bf3 + test). Ověřeno v prohlížeči podvrženým zásahem
+    kresby: v grafu dotyk chytí, na osách ne.
+  - Náhled „v obchodě“ (https://claude.ai/artifact/EkQateEvNCynqk8rLyQUrr):
+    čáry pozice jako na PC (`livePositionChartLines`, štítky u osy, protože
+    vlevo dole je obchodní lišta) a P&L skupiny ve třech variantách
+    (A hlavička + list účtů, B pruh účtů, C nad lištou). Čeká na Filipovu
+    volbu, nic se nestaví.
 - Celá sada: 6398 testů zelených. Jediný pád je cizí baseline
   `candleAggregationEquivalence` (stejně tsc).
 
