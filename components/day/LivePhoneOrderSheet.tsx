@@ -5,6 +5,7 @@ import {
   type TicketDraft, type TicketInstrument, type TicketOrderType, type TicketQuote,
 } from '../../lib/liveOrderTicket';
 import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
+import SheetGrip from './SheetGrip';
 
 const SELL = '#ef4655';
 const BUY = '#2f6bff';
@@ -103,7 +104,7 @@ export default function LivePhoneOrderSheet({ initial, instrument, quote, onSubm
     <div style={{ position: 'absolute', inset: 0, zIndex: 46 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', animation: 'dj-fade .18s ease both' }} />
       <section aria-label="Objednávka" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, top: 'calc(env(safe-area-inset-top, 0px) + 36px)', display: 'flex', flexDirection: 'column', borderRadius: '20px 20px 0 0', background: 'var(--dj-sheet, var(--dj-card))', borderTop: '1px solid var(--dj-line)', animation: 'dj-sheet .28s cubic-bezier(.2,.9,.25,1) both' }}>
-        <div aria-hidden="true" style={{ display: 'grid', placeItems: 'center', padding: '8px 0 4px' }}><span style={{ width: 38, height: 5, borderRadius: 3, background: 'var(--dj-line)', filter: 'brightness(2.2)' }} /></div>
+        <div style={{ padding: '8px 16px 0' }}><SheetGrip onClose={onClose} gap={4} /></div>
         <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px 8px' }}>
           <p style={{ margin: 0, flex: 1, fontSize: 16, fontWeight: 800 }}>{instrument.symbol} · objednávka</p>
           <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ width: 30, height: 30, borderRadius: 15, border: 0, background: 'var(--dj-chip)', color: 'var(--dj-muted)', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><X size={16} /></button>

@@ -46,6 +46,7 @@ import { dayAnchorTrade, focusTarget, reviewFocusKey, useReviewFocus } from './d
 import type { DayController } from './useDayController';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../../hooks/useLiveCandleBinding';
 import { TIMEFRAME_FAVORITES_EVENT, readTimeframeFavorites, timeframeTitle } from '../ChartTimeframePicker';
+import SheetGrip from './SheetGrip';
 import { ChartShotCard, ChartShotFlash, composeChartShot, takeChartShot, type ChartShot } from './ChartShot';
 import { resetChartView } from '../../services/chartContextMenu';
 import DayIntervalSheet from './DayIntervalSheet';
@@ -905,7 +906,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
           <div onClick={() => setReplaySheet(null)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
           <section aria-label="Volby přehrávání" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '80%', overflowY: 'auto', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 14px calc(14px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .24s cubic-bezier(.2,.9,.25,1) both' }}>
-            <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px' }} />
+            <SheetGrip onClose={() => setReplaySheet(null)} gap={10} />
             <p style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 800, textAlign: 'center' }}>{replaySheet === 'speed' ? 'Rychlost přehrávání' : replaySheet === 'step' ? 'Interval kroku' : 'Svíčky v přehrávání'}</p>
             {(replaySheet === 'speed'
               ? CHART_REPLAY_SPEEDS.map(speed => ({ key: String(speed), label: `${speed}x`, detail: chartReplaySpeedDescription(speed), on: replaySpeed === speed, pick: () => setReplayPrefs({ ...replayPrefs, speed }) }))
@@ -1010,7 +1011,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
           <div onClick={() => setToolsOpen(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
           <section aria-label="Nástroje kreslení" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '78%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', padding: '8px 14px calc(14px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
-            <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 12px' }} />
+            <SheetGrip onClose={() => setToolsOpen(false)} gap={12} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <p style={{ margin: 0, fontSize: 15, fontWeight: 800 }}>Kreslení</p>
               <span style={{ flex: 1 }} />
@@ -1345,7 +1346,7 @@ function LayoutSheet({ layout, activeId, sync, onSync, onPick, onClose }: {
     <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
       <section aria-label="Rozvržení grafů" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
-        <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px' }} />
+        <SheetGrip onClose={onClose} gap={10} />
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
           <span style={{ width: 34 }} />
           <p style={{ margin: 0, flex: 1, textAlign: 'center', fontSize: 16, fontWeight: 800 }}>Rozvržení</p>
@@ -1429,7 +1430,7 @@ function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet,
     <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
       <section aria-label="Další volby grafu" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
-        <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px' }} />
+        <SheetGrip onClose={onClose} gap={10} />
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
           {page === 'main'
             ? <span style={{ width: 34 }} />
@@ -1504,7 +1505,7 @@ function PositionMenuSheet({ drawing, onOrder, onSettings, onRemove, onClose }: 
     <div style={{ position: 'absolute', inset: 0, zIndex: 45 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
       <section aria-label="Position tool" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderRadius: '20px 20px 0 0', background: 'var(--dj-sheet, var(--dj-card))', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
-        <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px', filter: 'brightness(2.2)' }} />
+        <SheetGrip onClose={onClose} gap={10} />
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
           <p style={{ margin: 0, flex: 1, fontSize: 16, fontWeight: 800 }}>{drawing.tool === 'LongPosition' ? 'Long pozice' : 'Short pozice'}</p>
           <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, width: 30, height: 30, borderRadius: 99, background: 'var(--dj-chip)' }}><X size={16} /></button>
