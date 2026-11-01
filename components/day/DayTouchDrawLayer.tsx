@@ -106,9 +106,11 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     if (!controller || typeof controller.onDown !== 'function') return;
     const { engine } = controller;
     let element: HTMLElement;
+    let chart: ReturnType<ChartViewApi['controller']['getChart']>;
     let series: { coordinateToPrice: (y: number) => number | null } | null = null;
     try {
-      element = chartApi.controller.getChart().chartElement();
+      chart = chartApi.controller.getChart();
+      element = chart.chartElement();
       series = chartApi.controller.getSeries();
     } catch { return; }
 
@@ -152,6 +154,13 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     };
     const block = (event: TouchEvent) => { event.preventDefault(); event.stopPropagation(); };
     const drawingMode = () => pathActive || Boolean(engine.getActiveTool());
+    /** Cenová / časová osa: vždy patří grafu (roztažení), i když pod ní vede kresba. */
+    const onAxis = (point: { x: number; y: number }) => {
+      try {
+        const rect = element.getBoundingClientRect();
+        return point.x >= rect.width - chart.priceScale('right').width() || point.y >= rect.height - chart.timeScale().height();
+      } catch { return false; }
+    };
 
     // ── Cesta ────────────────────────────────────────────────────────────
     const segmentStyle = (): DrawingStyle => ({ ...engine.getDefaultStyle(), color: pathStyle?.color ?? engine.getDefaultStyle().color, width: pathStyle?.width ?? 2, fill: null });
@@ -305,6 +314,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       }
       if (engine.isLocked()) return;
       const point = offset(event.touches[0]);
+      if (onAxis(point)) { touching = false; captured = false; dragging = false; return; }
       touching = true; touchStart = point; touchLast = point; moved = false; dragging = false;
       window.clearTimeout(longTimer); longPressed = false;
 
