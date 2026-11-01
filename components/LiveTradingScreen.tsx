@@ -16,6 +16,7 @@ import {
   draftFromPositionBox,
   liveDraftChartLines,
   newTicketDraft,
+  clickedOrderType,
   snapToTick,
   ticketQuantity,
   withBracket,
@@ -394,7 +395,9 @@ const LiveTradingScreen: React.FC<Props> = ({
     },
     onChartOrder: input => {
       if (!quote) return;
-      setDraft(previous => newTicketDraft(input.side, input.type, input.price ?? quote.ask, INSTRUMENT, quote, {
+      // Typ podle živé kotace, ne podle viditelné svíčky grafu (historie po odscrollování).
+      const type = input.price != null ? clickedOrderType(input.side, snapToTick(input.price, INSTRUMENT.tickSize), quote, INSTRUMENT.tickSize) : input.type;
+      setDraft(previous => newTicketDraft(input.side, type, input.price ?? quote.ask, INSTRUMENT, quote, {
         sizing: previous?.sizing ?? 'qty',
         quantity: input.quantity,
         riskUsd: previous?.riskUsd ?? 200,

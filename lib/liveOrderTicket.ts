@@ -299,6 +299,18 @@ export const withBracket = (
   return which === 'sl' ? { ...draft, stopLoss: price } : { ...draft, takeProfit: price };
 };
 
+/**
+ * Typ příkazu z kliknuté ceny proti ŽIVÉ kotaci panelu (2. 11. 2026): BUY pod
+ * trhem = Limit, nad trhem = Stop; SELL obráceně; na trhu = Market. Graf sám
+ * bere poslední viditelnou svíčku — po odscrollování do historie by typ obrátil.
+ */
+export const clickedOrderType = (side: TicketSide, price: number, quote: TicketQuote, tickSize: number): TicketOrderType => {
+  const market = marketPrice(side, quote);
+  if (Math.abs(price - market) < tickSize / 2) return 'market';
+  if (side === 'buy') return price < market ? 'limit' : 'stop';
+  return price > market ? 'limit' : 'stop';
+};
+
 /** Nový návrh na ceně (pravý klik do grafu, tlačítko strany) s výchozími závorkami. */
 export const newTicketDraft = (
   side: TicketSide,
