@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 
 const pg = (await import(process.env.PG_MODULE ?? 'pg')).default;
 const url = process.env.PG_URL ?? 'postgres://postgres@127.0.0.1:54329/postgres';
-const migration = await readFile(new URL('../../supabase/migrations/20261101120000_copier_manual_admission.sql', import.meta.url), 'utf8');
+const migration = await readFile(new URL('../../supabase/migrations/20261101090849_copier_manual_admission.sql', import.meta.url), 'utf8');
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';

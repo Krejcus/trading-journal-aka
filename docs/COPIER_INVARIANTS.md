@@ -758,7 +758,7 @@ existující ochranu.
 - **Atomická admission ručního vstupu a správy (1. 11. 2026):** `place-leader-entry`
   a `manage-leader-order` po výběru zařízení volají jediné RPC
   `public.admit_tradovate_copier_manual_command` (migrace
-  `20261101120000_copier_manual_admission.sql`; SECURITY INVOKER, `search_path ''`,
+  `20261101090849_copier_manual_admission.sql`; SECURITY INVOKER, `search_path ''`,
   `lock_timeout 2s`, jen service_role). Jedna transakce pod jediným
   `pg_advisory_xact_lock` na uživatele (žádné pořadí více zámků): existující
   operationId per uživatel → brzda → busy/rozestup → strop → insert. Dvě různé

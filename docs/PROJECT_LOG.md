@@ -298,7 +298,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   - pojistka `manual-entry-too-soon` (3 s, `MANUAL_ENTRY_MIN_INTERVAL_MS`
     v `lib/leaderEntryPlace.ts`) je před durable `sending`.
 - DB: `public.admit_tradovate_copier_manual_command`, migrace
-  `20261101120000_copier_manual_admission.sql`.
+  `20261101090849_copier_manual_admission.sql`.
   - Jediný advisory xact zámek na uživatele.
   - Pořadí: existing → brzda (500 ms) → busy → strop → insert.
   - `lock_timeout 2s`; jen service_role.
