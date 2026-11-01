@@ -33,6 +33,15 @@ describe('obchodní lišta na telefonu', () => {
     expect(qtyFromBuffer('25')).toBe(25);
   });
 
+  it('cenová a časová osa patří grafu i pod roztaženou kresbou (dotyk se pustí dřív, než ho kresba chytí)', () => {
+    const source = readFileSync('components/day/DayTouchDrawLayer.tsx', 'utf8');
+    const start = source.slice(source.indexOf('const onTouchStart'), source.indexOf('const onTouchMove'));
+    expect(source).toMatch(/priceScale\('right'\)\.width\(\)[\s\S]*timeScale\(\)\.height\(\)/);
+    expect(start.indexOf('onAxis(point)')).toBeGreaterThan(-1);
+    expect(start.indexOf('onAxis(point)')).toBeLessThan(start.indexOf('drawingMode()'));
+    expect(start.indexOf('onAxis(point)')).toBeLessThan(start.indexOf('startDrag(point'));
+  });
+
   it('fáze A: lišta ani LIVE graf na telefonu nemají cestu k brokerovi', () => {
     for (const file of ['components/day/LivePhoneTrade.tsx', 'components/day/LivePhoneChart.tsx', 'components/day/LivePhoneOrderSheet.tsx', 'lib/livePhoneTrade.ts']) {
       const source = readFileSync(file, 'utf8');
