@@ -119,7 +119,14 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
    * LIVE → Graf na telefonu: nativní lišta zůstává (LIVE je její karta),
    * nahoře LIVE hlavička, vrstvy LIVE (menu) nad grafem a graf se nezavírá.
    */
-  live?: { header: React.ReactNode; overlay?: React.ReactNode };
+  live?: {
+    header: React.ReactNode;
+    overlay?: React.ReactNode;
+    /** Vrstva v ploše grafu (obchodní lišta); dostane poslední cenu svíčky. */
+    chartLayer?: (info: { lastPrice: number | null }) => React.ReactNode;
+    /** LIVE tlačítka vpravo ve spodní liště (místo zavření). */
+    toolbar?: React.ReactNode;
+  };
 }) {
   // Jednotný zdroj: deník dne z controlleru, jinde ze `source`.
   const src = {
@@ -775,6 +782,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         {chromeHidden && (
           <button type="button" className="dj-btn" aria-label="Zobrazit ovládání" onClick={() => setChromeHidden(false)} style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 10, zIndex: 25, ...iconButton, background: 'var(--dj-card)', border: '1px solid var(--dj-line)', opacity: 0.85 }}><Minimize2 size={16} /></button>
         )}
+        {live?.chartLayer?.({ lastPrice: candles.length ? candles[candles.length - 1].close : null })}
       </div>
 
       {onSlotsReady && <div ref={slotBottomRef} data-phone-review-slot="bottom" style={{ flex: 'none', display: chromeHidden ? 'none' : undefined }} />}
@@ -864,7 +872,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           {onSlotsReady && (
             <button type="button" className="dj-btn" aria-label="Hodnocení obchodu" aria-expanded={reviewPanelOpen} onClick={() => { cancelTool(); setReviewPanelOpen(open => !open); }} style={{ ...chip, height: 38, padding: '0 10px', gap: 6, fontWeight: 800, flex: 'none', marginRight: 4, ...(reviewPanelOpen ? { color: '#fff', border: 0, background: 'linear-gradient(180deg,#10b981,#059669)' } : {}) }}><ClipboardCheck size={16} />Hodnotit</button>
           )}
-          {!live && <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={18} /></button>}
+          {live ? live.toolbar : <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={18} /></button>}
         </div>
       )}
       {onSlotsReady && (

@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import type { SessionConfig, Trade } from '../../types';
 import DayFullscreenChart from './DayFullscreenChart';
 import { useDayController } from './useDayController';
 import { focusRange } from './dayFocus';
 import { readStoredDayChartTimeframe, writeStoredDayChartTimeframe } from '../../lib/dayChartTools';
 import type { MarketTimeframe } from '../../services/marketData';
+import { readLivePillPrefs, writeLivePillPrefs, type LivePillPrefs } from '../../lib/livePhoneTrade';
+import { LiveChartNotice, LiveQtySheet, LiveTradePill, LiveTradeToggle } from './LivePhoneTrade';
 import './dayJournal.css';
 
 export interface LivePhoneChartSlots {
@@ -33,6 +35,13 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [timeframe, setTimeframeState] = useState<MarketTimeframe>(() => readStoredDayChartTimeframe(typeof window === 'undefined' ? null : window.localStorage));
   const setTimeframe = (next: MarketTimeframe) => { setTimeframeState(next); writeStoredDayChartTimeframe(window.localStorage, next); };
   const range = focusRange({ mode: 'day', session: 'ny', scope: ctl.scope, windows: ctl.chartWindows, now: ctl.now, isToday: ctl.isToday });
+  const [pill, setPill] = useState<LivePillPrefs>(() => readLivePillPrefs(typeof window === 'undefined' ? null : window.localStorage));
+  const savePill = (next: LivePillPrefs) => { setPill(next); writeLivePillPrefs(window.localStorage, next); };
+  const [qtySheet, setQtySheet] = useState(false);
+  const [notice, setNotice] = useState<{ key: number; text: string } | null>(null);
+  const clearNotice = useCallback(() => setNotice(null), []);
+  // Fáze A: lišta je jen UI. Odesílání z telefonu se napojí zvlášť (invarianty + oponentura).
+  const onSide = (side: 'buy' | 'sell') => setNotice({ key: Date.now(), text: `${side === 'buy' ? 'Koupit' : 'Prodat'} ${pill.qty} market — nic se neodeslalo. Odesílání z telefonu napojíme v další fázi.` });
   return (
     <DayFullscreenChart
       ctl={ctl}
@@ -43,7 +52,19 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       focusKeyPrefix={`live:${ctl.scope}`}
       selectedTrade={null}
       onClose={onLeave}
-      live={slots}
+      live={{
+        header: slots.header,
+        overlay: <>
+          {slots.overlay}
+          {qtySheet && <LiveQtySheet value={pill.qty} onClose={() => setQtySheet(false)} onDone={qty => { savePill({ ...pill, qty }); setQtySheet(false); }} />}
+        </>,
+        // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
+        chartLayer: ({ lastPrice }) => <>
+          <LiveTradePill prefs={pill} onPrefs={savePill} bid={lastPrice} ask={lastPrice} onQty={() => setQtySheet(true)} onSide={onSide} />
+          {notice && <LiveChartNotice key={notice.key} text={notice.text} onDone={clearNotice} />}
+        </>,
+        toolbar: <LiveTradeToggle on={pill.on} onToggle={() => savePill({ ...pill, on: !pill.on })} />,
+      }}
     />
   );
 }
