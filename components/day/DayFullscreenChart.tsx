@@ -9,7 +9,7 @@ import GenericDrawingSettingsDialog from '../GenericDrawingSettingsDialog';
 import GenericDrawingFloatingToolbar from '../GenericDrawingFloatingToolbar';
 import FibDrawingSettingsDialog, { FibDrawingFloatingToolbar } from '../FibDrawingSettingsDialog';
 import PositionDrawingSettingsDialog, { PositionDrawingFloatingToolbar } from '../PositionDrawingSettingsDialog';
-import { isPositionDrawing } from '../../services/chartPositionDrawing';
+import { isPositionDrawing, type PositionDrawing } from '../../services/chartPositionDrawing';
 import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 import type { FibDrawing } from '../../services/chartFibDrawing';
 import { QuantumSpinner } from '../QuantumLoader';
@@ -94,6 +94,8 @@ export interface PhoneChartSource {
   onReplayCursor?: (cursorTime: number | null) => void;
 }
 
+export interface LiveChartInfo { lastPrice: number | null }
+
 export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onTimeframe, range, focusKeyPrefix, selectedTrade, pins = [], bubbles = 'selected', placing = null, onPick = () => {}, onCancelPlacing = () => {}, pending = null, nowTime = null, bands = [], onClose, onVoice = () => {}, live }: {
   /** Deník dne: poznámky, seance, mikrofon. Bez něj je to obecný telefonní graf (`source`). */
   ctl?: DayController;
@@ -121,11 +123,14 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
    */
   live?: {
     header: React.ReactNode;
-    overlay?: React.ReactNode;
-    /** Vrstva v ploše grafu (obchodní lišta); dostane poslední cenu svíčky. */
-    chartLayer?: (info: { lastPrice: number | null }) => React.ReactNode;
+    /** Vrstvy LIVE nad celým grafem (menu, listy); dostanou poslední cenu svíčky. */
+    overlay?: (info: LiveChartInfo) => React.ReactNode;
+    /** Vrstva v ploše grafu (obchodní lišta). */
+    chartLayer?: (info: LiveChartInfo) => React.ReactNode;
     /** LIVE tlačítka vpravo ve spodní liště (místo zavření). */
     toolbar?: React.ReactNode;
+    /** ⚡ / „Vytvořit limitní objednávku…“ u position toolu — jen otevře návrh. */
+    onPositionOrder?: (drawing: PositionDrawing, info: LiveChartInfo) => void;
   };
 }) {
   // Jednotný zdroj: deník dne z controlleru, jinde ze `source`.
@@ -581,6 +586,23 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     }
   };
   const openSettingsFor = useCallback((id: string) => { if (!id.startsWith('auto-')) setSettingsFor(id); }, []);
+  // LIVE: podržení position toolu otevře jeho menu (jako v TradingView).
+  const [positionMenu, setPositionMenu] = useState<string | null>(null);
+  const openPositionMenu = useCallback((id: string) => {
+    const drawing = engine?.getById(id);
+    if (!drawing || !isPositionDrawing(drawing)) return false;
+    playNativeHapticIfAvailable('medium');
+    setPositionMenu(id);
+    return true;
+  }, [engine]);
+  const positionMenuDrawing = positionMenu && engine ? engine.getById(positionMenu) ?? null : null;
+  /** Objednávka z boxu: výběr pryč, ať plovoucí lišta kresby nepřekrývá list objednávky. */
+  const openPositionOrder = (drawing: PositionDrawing) => {
+    setPositionMenu(null);
+    engine?.select(null);
+    live?.onPositionOrder?.(drawing, liveInfo);
+  };
+  const liveInfo: LiveChartInfo = { lastPrice: candles.length ? candles[candles.length - 1].close : null };
   const settingsDrawing = settingsFor && engine ? engine.getById(settingsFor) ?? null : null;
   const removeSelected = () => {
     if (!engine) return;
@@ -722,7 +744,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
             {tfSwap > 0 && <TimeframeSwapFx key={tfSwap} />}
             {cutFx && <ReplayCutFx key={cutFx.key} chartApi={paneApi(index)} time={cutFx.time} />}
             {/* Dotyky na kresby: výběr, přesun, úprava bodů vždy; s nástrojem v ruce crosshair. */}
-            <DayTouchDrawLayer chartApi={paneApi(index)} containerRef={ref} enabled={!placing && !textEdit && replayPhase !== 'selecting' && (!split || isActive)} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={toolDone} onDrawingDoubleTap={openSettingsFor} />
+            <DayTouchDrawLayer chartApi={paneApi(index)} containerRef={ref} enabled={!placing && !textEdit && replayPhase !== 'selecting' && (!split || isActive)} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={toolDone} onDrawingDoubleTap={openSettingsFor} onDrawingLongPress={live ? openPositionMenu : undefined} />
           </div>
         );
       })}
@@ -738,12 +760,12 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         )}
         {/* Vybraná kresba: stejné plovoucí lišty jako na PC (posun za úchyt, šablony, barvy,
             ⚙ nastavení, koš); dvojklep na kresbu otevře nastavení. */}
-        {!drawingNow && selected && engine && !textEdit && !settingsFor && (
+        {!drawingNow && selected && engine && !textEdit && !settingsFor && !positionMenu && (
           <div data-touch-toolbar style={{ display: 'contents' }}>
             {selected.tool === 'FibRetracement'
               ? <FibDrawingFloatingToolbar key={selected.id} engine={engine} drawing={selected as FibDrawing} isDark={isDark} onOpenSettings={() => setSettingsFor(selected.id)} />
               : isPositionDrawing(selected)
-                ? <PositionDrawingFloatingToolbar key={selected.id} engine={engine} drawing={selected} isDark={isDark} onClose={() => {}} onOpenSettings={() => setSettingsFor(selected.id)} />
+                ? <PositionDrawingFloatingToolbar key={selected.id} engine={engine} drawing={selected} isDark={isDark} onClose={() => {}} onOpenSettings={() => setSettingsFor(selected.id)} onQuickOrder={live?.onPositionOrder ? () => openPositionOrder(selected) : undefined} quickOrderTitle="Vytvořit objednávku z position boxu" />
                 : <GenericDrawingFloatingToolbar key={selected.id} engine={engine} drawing={selected} isDark={isDark} onOpenSettings={() => setSettingsFor(selected.id)} onRemove={removeSelected} />}
           </div>
         )}
@@ -782,7 +804,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         {chromeHidden && (
           <button type="button" className="dj-btn" aria-label="Zobrazit ovládání" onClick={() => setChromeHidden(false)} style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 10, zIndex: 25, ...iconButton, background: 'var(--dj-card)', border: '1px solid var(--dj-line)', opacity: 0.85 }}><Minimize2 size={16} /></button>
         )}
-        {live?.chartLayer?.({ lastPrice: candles.length ? candles[candles.length - 1].close : null })}
+        {live?.chartLayer?.(liveInfo)}
       </div>
 
       {onSlotsReady && <div ref={slotBottomRef} data-phone-review-slot="bottom" style={{ flex: 'none', display: chromeHidden ? 'none' : undefined }} />}
@@ -1004,7 +1026,16 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           </section>
         </div>
       )}
-      {live?.overlay}
+      {positionMenuDrawing && isPositionDrawing(positionMenuDrawing) && (
+        <PositionMenuSheet
+          drawing={positionMenuDrawing}
+          onOrder={live?.onPositionOrder ? () => openPositionOrder(positionMenuDrawing) : undefined}
+          onSettings={() => { setPositionMenu(null); setSettingsFor(positionMenuDrawing.id); }}
+          onRemove={() => { setPositionMenu(null); engine?.remove(positionMenuDrawing.id); }}
+          onClose={() => setPositionMenu(null)}
+        />
+      )}
+      {live?.overlay?.(liveInfo)}
     </div>,
     document.body,
   );
@@ -1390,6 +1421,32 @@ function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet,
             <p style={{ margin: '8px 2px 0', fontSize: 12, color: 'var(--dj-muted)' }}>⚙ otevře nastavení indikátoru včetně šablon (Uložit jako… / Použít výchozí), stejné jako na PC.</p>
           </div>
         )}
+      </section>
+    </div>
+  );
+}
+
+/** Menu position toolu po podržení: objednávka z boxu, nastavení, odebrat. */
+function PositionMenuSheet({ drawing, onOrder, onSettings, onRemove, onClose }: {
+  drawing: PositionDrawing;
+  onOrder?: () => void;
+  onSettings: () => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const item: React.CSSProperties = { width: '100%', minHeight: 48, display: 'flex', alignItems: 'center', gap: 12, padding: '6px 4px', border: 0, borderBottom: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text)', font: '600 15px Inter, sans-serif', textAlign: 'left', cursor: 'pointer' };
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 45 }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
+      <section aria-label="Position tool" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderRadius: '20px 20px 0 0', background: 'var(--dj-sheet, var(--dj-card))', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+        <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px', filter: 'brightness(2.2)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+          <p style={{ margin: 0, flex: 1, fontSize: 16, fontWeight: 800 }}>{drawing.tool === 'LongPosition' ? 'Long pozice' : 'Short pozice'}</p>
+          <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, width: 30, height: 30, borderRadius: 99, background: 'var(--dj-chip)' }}><X size={16} /></button>
+        </div>
+        {onOrder && <button type="button" className="dj-btn" onClick={onOrder} style={{ ...item, color: 'var(--dj-indigo-text)', fontWeight: 800 }}>Vytvořit limitní objednávku…</button>}
+        <button type="button" className="dj-btn" onClick={onSettings} style={item}><Settings size={18} color="var(--dj-muted)" />Nastavení…</button>
+        <button type="button" className="dj-btn" onClick={onRemove} style={{ ...item, color: 'var(--dj-rose)', borderBottom: 0 }}><Trash2 size={18} />Odebrat</button>
       </section>
     </div>
   );

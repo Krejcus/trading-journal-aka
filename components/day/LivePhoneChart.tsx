@@ -5,8 +5,10 @@ import { useDayController } from './useDayController';
 import { focusRange } from './dayFocus';
 import { readStoredDayChartTimeframe, writeStoredDayChartTimeframe } from '../../lib/dayChartTools';
 import type { MarketTimeframe } from '../../services/marketData';
-import { readLivePillPrefs, writeLivePillPrefs, type LivePillPrefs } from '../../lib/livePhoneTrade';
+import { LIVE_PHONE_INSTRUMENT, draftSummary, readLivePillPrefs, writeLivePillPrefs, type LivePillPrefs } from '../../lib/livePhoneTrade';
+import { draftFromPositionBox, type TicketDraft } from '../../lib/liveOrderTicket';
 import { LiveChartNotice, LiveQtySheet, LiveTradePill, LiveTradeToggle } from './LivePhoneTrade';
+import LivePhoneOrderSheet from './LivePhoneOrderSheet';
 import './dayJournal.css';
 
 export interface LivePhoneChartSlots {
@@ -42,6 +44,9 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const clearNotice = useCallback(() => setNotice(null), []);
   // Fáze A: lišta je jen UI. Odesílání z telefonu se napojí zvlášť (invarianty + oponentura).
   const onSide = (side: 'buy' | 'sell') => setNotice({ key: Date.now(), text: `${side === 'buy' ? 'Koupit' : 'Prodat'} ${pill.qty} market — nic se neodeslalo. Odesílání z telefonu napojíme v další fázi.` });
+  // Objednávka z position toolu: návrh jako ⚡ na PC (draftFromPositionBox), velikost v kontraktech.
+  const [order, setOrder] = useState<{ key: number; draft: TicketDraft } | null>(null);
+  const quoteOf = (lastPrice: number) => ({ bid: lastPrice, ask: lastPrice });
   return (
     <DayFullscreenChart
       ctl={ctl}
@@ -54,10 +59,29 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       onClose={onLeave}
       live={{
         header: slots.header,
-        overlay: <>
+        overlay: ({ lastPrice }) => <>
           {slots.overlay}
           {qtySheet && <LiveQtySheet value={pill.qty} onClose={() => setQtySheet(false)} onDone={qty => { savePill({ ...pill, qty }); setQtySheet(false); }} />}
+          {order && lastPrice != null && (
+            <LivePhoneOrderSheet
+              key={order.key}
+              initial={order.draft}
+              instrument={LIVE_PHONE_INSTRUMENT}
+              quote={quoteOf(lastPrice)}
+              onClose={() => setOrder(null)}
+              onSubmit={draft => { setOrder(null); setNotice({ key: Date.now(), text: `${draftSummary(draft)} — nic se neodeslalo. Odesílání z telefonu napojíme v další fázi.` }); }}
+            />
+          )}
         </>,
+        onPositionOrder: (drawing, { lastPrice }) => {
+          if (lastPrice == null) { setNotice({ key: Date.now(), text: 'Cena trhu zatím není — objednávku nejde připravit.' }); return; }
+          try {
+            const { draft, quantity } = draftFromPositionBox(drawing, LIVE_PHONE_INSTRUMENT, quoteOf(lastPrice));
+            setOrder({ key: Date.now(), draft: { ...draft, sizing: 'qty', quantity: Math.max(1, quantity) } });
+          } catch (error) {
+            setNotice({ key: Date.now(), text: error instanceof Error ? error.message : 'Position box nejde převést na objednávku.' });
+          }
+        },
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
         chartLayer: ({ lastPrice }) => <>
           <LiveTradePill prefs={pill} onPrefs={savePill} bid={lastPrice} ask={lastPrice} onQty={() => setQtySheet(true)} onSide={onSide} />

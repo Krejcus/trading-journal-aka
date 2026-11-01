@@ -1,3 +1,5 @@
+import type { TicketDraft, TicketInstrument } from './liveOrderTicket';
+
 /**
  * Obchodní lišta na telefonním LIVE grafu (Prodat · množství · Koupit):
  * zapnutí, poloha a množství. Jen preference zobrazení na tomhle zařízení —
@@ -15,6 +17,9 @@ export interface LivePillPrefs {
 }
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
+
+/** Stejný nástroj jako panel objednávky na PC (LiveTradingScreen). */
+export const LIVE_PHONE_INSTRUMENT: TicketInstrument = { symbol: 'MNQ', tickSize: 0.25, pointValue: 2 };
 
 export const LIVE_PILL_STORAGE_KEY = 'alphatrade:live-phone-pill';
 export const LIVE_QTY_PRESETS = [1, 5, 10, 25, 100] as const;
@@ -63,4 +68,14 @@ export function pressQtyKey(buffer: string, key: string): string {
 /** Hotovo: prázdný nebo nulový vstup necháme na 1 kontraktu. */
 export function qtyFromBuffer(buffer: string): number {
   return sanitizeLiveQty(Number.parseInt(buffer || '1', 10));
+}
+
+/** Text oznámení po „odeslání“ návrhu ve fázi A (nic se neodesílá). */
+export function draftSummary(draft: TicketDraft): string {
+  const side = draft.side === 'buy' ? 'Koupit' : 'Prodat';
+  const type = draft.type === 'market' ? 'market' : draft.type === 'limit' ? 'LMT' : 'STP';
+  const at = draft.type === 'market' ? '' : ` @ ${draft.price.toFixed(2)}`;
+  const tp = draft.takeProfit == null ? '' : ` · TP ${draft.takeProfit.toFixed(2)}`;
+  const sl = draft.stopLoss == null ? '' : ` · SL ${draft.stopLoss.toFixed(2)}`;
+  return `${side} ${draft.quantity} ${type}${at}${tp}${sl}`;
 }
