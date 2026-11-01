@@ -34,9 +34,11 @@ describe('obchodní lišta na telefonu', () => {
   });
 
   it('fáze A: lišta ani LIVE graf na telefonu nemají cestu k brokerovi', () => {
-    for (const file of ['components/day/LivePhoneTrade.tsx', 'components/day/LivePhoneChart.tsx', 'lib/livePhoneTrade.ts']) {
+    for (const file of ['components/day/LivePhoneTrade.tsx', 'components/day/LivePhoneChart.tsx', 'components/day/LivePhoneOrderSheet.tsx', 'lib/livePhoneTrade.ts']) {
       const source = readFileSync(file, 'utf8');
-      expect(source, file).not.toMatch(/from ['"][^'"]*(tradovate|copier|relay|liveOrder|brokerCommand|LiveDesk)[^'"]*['"]/i);
+      // liveOrderTicket je jen výpočet návrhu (sdílený s PC panelem), nic neodesílá.
+      expect(source, file).not.toMatch(/from ['"][^'"]*(tradovate|copier|relay|broker|LiveDesk|liveChartOrder|chartOrderEntry)[^'"]*['"]/i);
+      expect(source, file).not.toMatch(/fetch\(|supabase|invoke\(/);
     }
   });
 });

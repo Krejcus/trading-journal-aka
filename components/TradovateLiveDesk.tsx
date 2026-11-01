@@ -147,7 +147,7 @@ import { mergeCopierLiveExposure, type CopierLiveExposureReceived } from '../lib
 import { isNativeBuild } from '../utils/runtimeConfig';
 import { isNativeShell } from '../utils/nativeShell';
 // Živý graf s panelem objednávky; těžký workspace se načte líně uvnitř obálky.
-import LiveTradingScreenSlot, { liveChartCrashedThisSession, preloadLiveTradingScreen } from './LiveTradingScreenSlot';
+import LiveTradingScreenSlot, { liveChartCrashedThisSession, preloadLiveTradingScreen, rememberLiveChartCrash } from './LiveTradingScreenSlot';
 
 /** Desktop mimo nativní aplikaci (stejná hranice jako `useCompactViewport`). */
 const liveChartAvailableNow = () => typeof window !== 'undefined'
@@ -1734,7 +1734,7 @@ acceptAgentStatus((await executeAgent({
           />
         </ErrorBoundary>
       ) : phoneChartAvailable && tab === 'chart' && phoneChart ? (
-        <ErrorBoundary name="LivePhoneChart" fallback={<LiveSlotFailure label="LIVE graf" />}>
+        <ErrorBoundary name="LivePhoneChart" onError={rememberLiveChartCrash} fallback={<LiveSlotFailure label="LIVE graf" />}>
           {phoneChart({
             header: <LivePhoneHeader
               groupName={workerGroup?.name ?? null}

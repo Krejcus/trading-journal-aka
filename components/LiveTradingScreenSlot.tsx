@@ -63,7 +63,8 @@ export const liveChartCrashedThisSession = (): boolean => {
   try { return typeof window !== 'undefined' && window.sessionStorage.getItem(LIVE_CHART_CRASH_KEY) === '1'; } catch { return false; }
 };
 
-const rememberLiveChartCrash = () => {
+/** Pád LIVE grafu (PC i telefon): do konce relace se LIVE otevírá na přehledu, ne na grafu. */
+export const rememberLiveChartCrash = () => {
   try { window.sessionStorage.setItem(LIVE_CHART_CRASH_KEY, '1'); } catch { /* bez úložiště jen bez paměti */ }
 };
 
