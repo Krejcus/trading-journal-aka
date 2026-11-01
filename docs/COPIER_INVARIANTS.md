@@ -306,6 +306,12 @@ existující ochranu.
 - Ruční vstup z grafu (29. 10. 2026): vzdálená brzda čeká v sériové lince
   relaye za právě vykonávaným vstupem nejvýš ~7 s (start ve frontě ≤ 2 s +
   POST ≤ 5 s); lokální brzdy v controlleru blokování neovlivní.
+- Vzdálená cesta (1. 11. 2026): `claim_tradovate_copier_command_v2` vydá
+  čekající brzdu (disarm, kill-switch, lock-until-session-end) před staršími
+  NErisk-redukčními příkazy zařízení; risk-redukční Flatten (account, group,
+  follower-trade) je ve stejné prioritní třídě a uvnitř ní platí FIFO, takže ho
+  novější brzda nepředběhne. Právě vykonávaný příkaz se nepřeruší. Detail
+  a souběh s ručním vstupem v INV-RELAY-03.
 
 ### INV-BRAKE-04: Day lock čeká na flat a ručně se neodemyká; relay příkaz jej fixuje na konec session
 
@@ -814,31 +820,46 @@ existující ochranu.
   automatické opakování). Výjimka: `cancel-entry` (snižuje riziko). Worker
   vstup dál odmítne podle `lastBrakeCreatedAt`/ARM brány.
 - **Brzda × ruční příkaz — garantovaný výsledek (1. 11. 2026):**
-  1. Relay: brzda po svém insertu volá `supersede_tradovate_copier_manual_commands`
-     (id brzdy, celý uživatel) pod STEJNÝM zámkem jako admission. Admission,
-     která zámek držela, commitne dřív a její čekající vstup/posun/zavření
-     s `created_at ≤` brzda se zneplatní; admission, která zámek dostane
-     později, brzdu vidí (`superseded-by-brake` do 500 ms) nebo vloží řádek
-     novější než brzda. `cancel-entry` zůstává. Selže-li RPC, běží stará
-     nezamčená cesta per zařízení (jen zneplatňuje; zbytkové okno ms).
-     Supersede čeká na zámek nejvýš 500 ms; brzda je v DB už před ním, takže
-     pomalé RPC zdrží jen kick a odpověď, ne claim (poll 750 ms). Zneplatňuje
-     se celý uživatel, tedy i čekající příkaz pro jiné zařízení/připojení
-     (opatrné: v ms okně může propadnout i zavření obchodu jinde — klik znovu).
-  2. Worker: FIFO podle `created_at`. Ruční vstup a posun/zavření s
-     `createdAt ≤ lastBrakeCreatedAt` (+ rezerva na hodiny) vrátí
-     `brake-after-request` a controller se vůbec nezavolá; novější příkaz
-     controller za DISARMED odmítne `not-armed`. `lastBrakeCreatedAt` je jen
-     v paměti procesu: po restartu workeru chrání DISARMED default a brána ARM.
-  3. Nepokryto: příkaz zadaný a claimnutý workerem dřív, než brzda dorazila do
-     DB, se provede — pak platí běžná pravidla brzdy (DISARM pozice nezavírá;
-     ACK za DISARMED → vlastní vstup se zruší). Priorita brzd v claimu (C2) je
-     dál otevřená.
+  1. Relay: brzda jde jedním RPC `enqueue_tradovate_copier_brake` — insert
+     (nebo idempotentní dohledání podle user + device + key) a supersede
+     čekajících ARM/SHADOW téhož zařízení a ručních vstupů/posunů/zavření
+     celého uživatele s `created_at ≤` brzda v TÉŽE transakci pod zámkem
+     admission. Brzda proto nikdy není v DB viditelná bez svého supersede:
+     claim_v2 souběžně vidí buď stav před brzdou (pak může vyzvednout starší
+     vstup, který ještě nikdo nezamkl — bod 5), nebo řádek vstupu už zamčený
+     supersedem (SKIP LOCKED) a brzdu neviditelnou, nebo obojí hotové. Admission, která zámek držela,
+     commitne dřív a její řádek se zneplatní; pozdější admission brzdu vidí
+     (`superseded-by-brake` do 500 ms) nebo vloží řádek novější než brzda.
+     `cancel-entry` zůstává. Zneplatňuje se celý uživatel, i příkaz pro jiné
+     zařízení/připojení (opatrné; v ms okně může propadnout i zavření obchodu
+     jinde — klik znovu).
+  2. Brzda nesmí selhat: RPC čeká na zámek nejvýš 500 ms; jakákoli chyba RPC
+     (timeout, chybí migrace, síť, divná odpověď) → dřívější cesta se STEJNÝM
+     idempotency key (upsert + nezamčený supersede per zařízení). Tam okno
+     mezi commitem brzdy a supersede zůstává — kryje ho bod 3.
+  3. Claim (defense-in-depth, INV-BRAKE-03): `claim_tradovate_copier_command_v2`
+     vydá přednostně třídu „brzdy + risk-redukční Flatten“ (flatten-account,
+     flatten-group, flatten-follower-trade), uvnitř ní FIFO; ostatní dál FIFO.
+     Durable brzda tak předběhne i starší čekající vstup, který supersede minul,
+     ale nikdy starší Flatten (follower do konce obchodu za DISARMED selže).
+  4. Worker: ruční vstup a posun/zavření s `createdAt ≤ lastBrakeCreatedAt`
+     (+ rezerva na hodiny) vrátí `brake-after-request` a controller se vůbec
+     nezavolá; novější příkaz controller za DISARMED odmítne `not-armed`.
+     `lastBrakeCreatedAt` je jen v paměti procesu: po restartu chrání DISARMED
+     default a brána ARM.
+  5. Nepokryto: příkaz, který worker vyzvedl (claimed) dřív, než brzda
+     commitla, se provede (supersede na jeho řádek počká a `claimed` nemění) —
+     pak platí běžná pravidla brzdy (DISARM pozice nezavírá; ACK za DISARMED →
+     vlastní vstup se zruší). Kdy worker brzdu převezme, závisí na sériové
+     smyčce: poll ~750 ms platí jen pro nečinný zdravý worker, jinak brzda
+     čeká, až doběhne právě vykonávaný příkaz a jeho ACK (u ručního vstupu
+     ~7 s, viz INV-BRAKE-03), a kick zdržený pomalým RPC to neurychlí.
   Testy: `tests/sql/copierManualAdmission.pg.mjs` (držené transakce: brzda
-  během admission, necommitnutá brzda před admission, brzda zpracovaná
-  před admission, posun hodin, výjimka cancel-entry, cizí brzda = RAISE),
-  `tests/localCopierExecutionAgent.test.ts` („garantovaný výsledek“),
-  `tests/tradovateCopierCommandRelay.test.ts` (RPC s id brzdy, záloha).
+  během admission; claim_v2 během necommitnuté brzdy = nic, po commitu brzda
+  a vstup pryč; claim_v2 držící starší vstup; priorita brzdy před starším
+  vstupem i ARMem; supersede ARM/SHADOW a ručních příkazů; idempotence; lock
+  timeout), `tests/localCopierExecutionAgent.test.ts` („garantovaný výsledek“),
+  `tests/tradovateCopierCommandRelay.test.ts` (brzdové RPC, záloha se stejným klíčem).
 - Bezpečné změny vs. nebezpečné: Bezpečné je ukázat platnost fronty do
   `expiresAt`. Nebezpečné je po UI timeoutu brzdu automaticky zopakovat.
 

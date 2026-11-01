@@ -807,6 +807,16 @@ export async function enqueueTradovateCopierCommand(options: {
   });
   if (inFlightArm) return { ...inFlightArm, deviceId: device.id };
 
+  if (isTradovateCopierBrakeCommand(options.command)) {
+    const atomic = await enqueueBrakeAtomically({
+      db: options.db, userId: options.userId, deviceId: device.id, connectionId: options.connectionId,
+      commandType: options.command.type, payload, idempotencyKey, now,
+    });
+    if (atomic) return atomic;
+    // Záloha níž (dřívější cesta): upsert + nezamčený supersede per zařízení.
+    // Stejný idempotency key → případně už vložená brzda se jen dohledá.
+  }
+
   const createdAt = new Date(now).toISOString();
   const expiresAt = new Date(now + (isTradovateCopierBrakeCommand(options.command)
     ? BRAKE_COMMAND_TTL_MS
@@ -852,7 +862,7 @@ export async function enqueueTradovateCopierCommand(options: {
         console.error(`COPIER RELAY brake supersede failed after enqueue: ${error instanceof Error ? error.message : String(error)}`);
       }
       try {
-        await supersedeManualCommandsByBrake({ db: options.db, userId: options.userId, deviceId: device.id, brakeId: data.id, brakeCreatedAt: createdAt });
+        await expirePendingEntriesSupersededByBrake({ db: options.db, deviceId: device.id, brakeCreatedAt: createdAt });
       } catch (error) {
         console.error(`COPIER RELAY entry supersede failed after enqueue: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -889,27 +899,41 @@ const expirePendingArmsSupersededByBrake = async (options: {
 };
 
 /**
- * Brzda zneplatní čekající ruční vstupy a správu celého uživatele POD ZÁMKEM
- * atomické admission (1. 11.): rozběhnutá admission buď commitne dřív a její
- * řádek se tu zneplatní, nebo začne až po brzdě a brzdu sama uvidí. Selže-li
- * RPC (lock timeout, chybí migrace), zbývá stará nezamčená cesta per zařízení —
- * jen zneplatňuje, takže jako záloha riziko nezvyšuje.
+ * Brzda jedním RPC (1. 11., INV-RELAY-03): insert nebo idempotentní dohledání
+ * a supersede čekajících ARM/SHADOW i ručních příkazů v TÉŽE transakci pod
+ * zámkem admission — claim_v2 nikdy neuvidí brzdu bez jejího supersede.
+ * Brzda nesmí selhat: jakákoli chyba RPC (lock timeout 500 ms, chybí migrace,
+ * síť) vrátí null a volající jde dřívější cestou se stejným idempotency key.
  */
-const supersedeManualCommandsByBrake = async (options: {
-  db: SupabaseClient; userId: string; deviceId: string; brakeId: string; brakeCreatedAt: string;
-}): Promise<void> => {
-  let failure: string;
+const enqueueBrakeAtomically = async (options: {
+  db: SupabaseClient; userId: string; deviceId: string; connectionId: string;
+  commandType: LocalCopierAgentCommand['type']; payload: Record<string, unknown>; idempotencyKey: string; now: number;
+}): Promise<{ id: string; status: string; expiresAt: string; deviceId: string } | null> => {
   try {
-    const { error } = await options.db.rpc('supersede_tradovate_copier_manual_commands', {
-      p_user_id: options.userId, p_brake_id: options.brakeId,
+    const { data, error } = await options.db.rpc('enqueue_tradovate_copier_brake', {
+      p_user_id: options.userId,
+      p_device_id: options.deviceId,
+      p_connection_id: options.connectionId,
+      p_command_type: options.commandType,
+      p_payload: options.payload,
+      p_idempotency_key: options.idempotencyKey,
+      p_now: new Date(options.now).toISOString(),
+      p_expires_at: new Date(options.now + BRAKE_COMMAND_TTL_MS).toISOString(),
     });
-    if (!error) return;
-    failure = error.message;
+    if (error) throw new Error(error.message);
+    const row = (Array.isArray(data) && data.length === 1 ? data[0] : null) as {
+      result_code?: unknown; id?: unknown; status?: unknown; expires_at?: unknown; device_id?: unknown;
+    } | null;
+    if ((row?.result_code !== 'inserted' && row?.result_code !== 'existing')
+      || typeof row.id !== 'string' || typeof row.status !== 'string'
+      || typeof row.expires_at !== 'string' || typeof row.device_id !== 'string') {
+      throw new Error('invalid-brake-response');
+    }
+    return { id: row.id, status: row.status, expiresAt: row.expires_at, deviceId: row.device_id };
   } catch (error) {
-    failure = error instanceof Error ? error.message : String(error);
+    console.error(`COPIER RELAY atomic brake enqueue failed, falling back: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
   }
-  console.error(`COPIER RELAY locked entry supersede failed, falling back to device scope: ${failure}`);
-  await expirePendingEntriesSupersededByBrake({ db: options.db, deviceId: options.deviceId, brakeCreatedAt: options.brakeCreatedAt });
 };
 
 /**

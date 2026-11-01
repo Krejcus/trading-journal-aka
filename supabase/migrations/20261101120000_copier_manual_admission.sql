@@ -4,9 +4,11 @@
 -- oba. Teď jedna transakce pod jediným zámkem na uživatele: existující operace →
 -- brzda → busy/rozestup → strop → insert. Pořadí kontrol i chybové kódy zůstávají.
 -- Aditivní: nic nemaže ani nemění; relay ji volá bez fallbacku (chyba = 5xx).
--- Druhá funkce: brzda po svém insertu zneplatní čekající ruční příkazy POD
--- STEJNÝM zámkem — rozběhnutá admission buď doběhne dřív (a její řádek se
--- zneplatní), nebo začne až po brzdě (a brzdu uvidí). Žádné mezery mezi nimi.
+-- Druhá funkce: brzda se vloží (nebo idempotentně dohledá) a v TÉŽE transakci
+-- pod stejným zámkem zneplatní čekající ARM/SHADOW a ruční příkazy. Brzda tak
+-- nikdy není v DB viditelná bez svého supersede (claim_v2 by mezitím vyzvedl
+-- starší čekající vstup). Třetí změna: claim_v2 vydá přednostně brzdy
+-- a risk-redukční Flatten (uvnitř FIFO).
 
 create function public.admit_tradovate_copier_manual_command(
   p_user_id uuid,
@@ -215,52 +217,6 @@ begin
 end;
 $$;
 
-create function public.supersede_tradovate_copier_manual_commands(
-  p_user_id uuid,
-  p_brake_id uuid
-)
-returns integer
-language plpgsql
-volatile
-security invoker
-set search_path = ''
-set lock_timeout = '500ms'
-as $$
-declare
-  v_brake_created_at timestamptz;
-  v_count integer;
-begin
-  if p_user_id is null or p_brake_id is null then
-    raise exception 'copier-supersede-invalid-arguments';
-  end if;
-  -- Jen skutečná, už uložená brzda téhož uživatele; jinak nic nezneplatní.
-  select b.created_at into v_brake_created_at
-    from public.tradovate_copier_commands b
-   where b.id = p_brake_id and b.user_id = p_user_id
-     and b.command_type in ('disarm', 'kill-switch', 'lock-until-session-end');
-  if v_brake_created_at is null then
-    raise exception 'copier-supersede-brake-invalid';
-  end if;
-  -- Stejný zámek jako admission: čeká na rozběhnutou admission (ms), pak vidí její řádek.
-  -- Krátký lock_timeout: brzda je už uložená; při timeoutu relay spadne na zálohu per zařízení.
-  perform pg_catalog.pg_advisory_xact_lock(
-    pg_catalog.hashtextextended('copier-manual-admission:' || p_user_id::text, 0)
-  );
-  -- Vstup a posun/zavření (zavření slibuje kopie followerů); zrušení vstupu snižuje riziko a zůstává.
-  update public.tradovate_copier_commands c
-     set status = 'expired', completed_at = v_brake_created_at, error = 'superseded-by-brake'
-   where c.user_id = p_user_id
-     and c.status = 'pending'
-     and c.command_type = 'copy-command'
-     and c.created_at <= v_brake_created_at
-     and (c.payload @> '{"command":{"type":"place-leader-entry"}}'::jsonb
-       or (c.payload @> '{"command":{"type":"manage-leader-order"}}'::jsonb
-         and (c.payload -> 'command' ->> 'action') in ('move-stop', 'move-target', 'close-position')));
-  get diagnostics v_count = row_count;
-  return v_count;
-end;
-$$;
-
 revoke execute on function public.admit_tradovate_copier_manual_command(
   uuid, uuid, uuid, text, jsonb, timestamptz, timestamptz, integer, integer, integer, integer
 ) from public, anon, authenticated;
@@ -272,9 +228,145 @@ comment on function public.admit_tradovate_copier_manual_command(
   uuid, uuid, uuid, text, jsonb, timestamptz, timestamptz, integer, integer, integer, integer
 ) is 'Atomická admission ručního vstupu/správy z grafu: existing → brzda → busy → strop → insert pod zámkem uživatele.';
 
-revoke execute on function public.supersede_tradovate_copier_manual_commands(uuid, uuid)
-  from public, anon, authenticated;
-grant execute on function public.supersede_tradovate_copier_manual_commands(uuid, uuid) to service_role;
 
-comment on function public.supersede_tradovate_copier_manual_commands(uuid, uuid) is
-  'Brzda zneplatní čekající ruční vstupy/správu uživatele pod zámkem admission (INV-RELAY-03).';
+-- ---------------------------------------------------------------------------
+-- Brzda: insert/dohledání + supersede jedním commitem (INV-RELAY-03, 1. 11.).
+create function public.enqueue_tradovate_copier_brake(
+  p_user_id uuid,
+  p_device_id uuid,
+  p_connection_id uuid,
+  p_command_type text,
+  p_payload jsonb,
+  p_idempotency_key text,
+  p_now timestamptz,
+  p_expires_at timestamptz
+)
+returns table (
+  result_code text, id uuid, status text, expires_at timestamptz, device_id uuid,
+  superseded_arms integer, superseded_manual integer
+)
+language plpgsql
+volatile
+security invoker
+set search_path = ''
+set lock_timeout = '500ms'
+as $$
+#variable_conflict use_column
+declare
+  v_row record;
+  v_code text := 'inserted';
+  v_arms integer;
+  v_manual integer;
+begin
+  if pg_catalog.current_setting('transaction_isolation') <> 'read committed' then
+    raise exception 'copier-brake-isolation-unsupported';
+  end if;
+  -- Hodiny se tu záměrně neověřují: brzda nesmí selhat kvůli posunu hodin.
+  if p_user_id is null or p_device_id is null or p_connection_id is null or p_payload is null
+    or p_idempotency_key is null or p_now is null or p_expires_at is null
+    or p_command_type is null or p_command_type not in ('disarm', 'kill-switch', 'lock-until-session-end')
+    or p_expires_at <= p_now or p_expires_at - p_now > interval '10 minutes' then
+    raise exception 'copier-brake-invalid-arguments';
+  end if;
+  if not exists (
+    select 1 from public.tradovate_copier_devices d
+     where d.id = p_device_id and d.user_id = p_user_id and d.revoked_at is null
+       and d.connection_id = p_connection_id
+  ) then
+    raise exception 'copier-brake-device-invalid';
+  end if;
+
+  -- Stejný zámek jako admission: rozběhnutá admission (ms) doběhne dřív a její
+  -- řádek tu zneplatníme; pozdější admission uvidí už commitnutou brzdu.
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('copier-manual-admission:' || p_user_id::text, 0)
+  );
+
+  insert into public.tradovate_copier_commands as c (
+    user_id, device_id, connection_id, command_type, payload, idempotency_key, status, created_at, expires_at
+  ) values (
+    p_user_id, p_device_id, p_connection_id, p_command_type, p_payload, p_idempotency_key, 'pending', p_now, p_expires_at
+  )
+  on conflict (user_id, device_id, idempotency_key) do nothing
+  returning c.id, c.status, c.expires_at, c.created_at, c.command_type into v_row;
+  if not found then
+    -- Opakovaný POST téže brzdy: původní řádek. Supersede se zopakuje (idempotentní).
+    v_code := 'existing';
+    select c.id, c.status, c.expires_at, c.created_at, c.command_type into v_row
+      from public.tradovate_copier_commands c
+     where c.user_id = p_user_id and c.device_id = p_device_id and c.idempotency_key = p_idempotency_key;
+    if v_row.command_type is distinct from p_command_type then
+      raise exception 'copier-brake-idempotency-conflict';
+    end if;
+  end if;
+
+  -- ARM/SHADOW stejného zařízení (jako dosud; brake epoch je per zařízení).
+  update public.tradovate_copier_commands c
+     set status = 'expired', completed_at = v_row.created_at, error = 'superseded-by-brake'
+   where c.device_id = p_device_id
+     and c.status = 'pending'
+     and c.command_type in ('arm-live', 'shadow')
+     and c.created_at <= v_row.created_at;
+  get diagnostics v_arms = row_count;
+  -- Ruční vstup a posun/zavření celého uživatele; zrušení vstupu snižuje riziko a zůstává.
+  -- Řádek, který claim_v2 právě drží, počká na jeho commit a už `pending` není.
+  update public.tradovate_copier_commands c
+     set status = 'expired', completed_at = v_row.created_at, error = 'superseded-by-brake'
+   where c.user_id = p_user_id
+     and c.status = 'pending'
+     and c.command_type = 'copy-command'
+     and c.created_at <= v_row.created_at
+     and (c.payload @> '{"command":{"type":"place-leader-entry"}}'::jsonb
+       or (c.payload @> '{"command":{"type":"manage-leader-order"}}'::jsonb
+         and (c.payload -> 'command' ->> 'action') in ('move-stop', 'move-target', 'close-position')));
+  get diagnostics v_manual = row_count;
+
+  return query select v_code, v_row.id, v_row.status, v_row.expires_at, p_device_id, v_arms, v_manual;
+end;
+$$;
+
+revoke execute on function public.enqueue_tradovate_copier_brake(
+  uuid, uuid, uuid, text, jsonb, text, timestamptz, timestamptz
+) from public, anon, authenticated;
+grant execute on function public.enqueue_tradovate_copier_brake(
+  uuid, uuid, uuid, text, jsonb, text, timestamptz, timestamptz
+) to service_role;
+
+comment on function public.enqueue_tradovate_copier_brake(
+  uuid, uuid, uuid, text, jsonb, text, timestamptz, timestamptz
+) is 'Brzda: insert/dohledání + supersede ARM/SHADOW a ručních příkazů jedním commitem pod zámkem admission.';
+
+-- ---------------------------------------------------------------------------
+-- Defense-in-depth: čekající brzda (a risk-redukční Flatten) se vydá před
+-- staršími ostatními příkazy téhož zařízení (INV-BRAKE-03 i pro vzdálenou cestu).
+-- PŘED APLIKACÍ: porovnat produkční pg_get_functiondef s 20260913154140 a rollback
+-- uložit z produkčního těla, ne z repa (historie migrací se rozešla). Jinak tělo beze změny proti
+-- 20260913154140; stejná signatura, oprávnění zůstávají. ROLLBACK: znovu
+-- vytvořit tělo z 20260913154140 (jen `order by created_at, id`).
+create or replace function public.claim_tradovate_copier_command_v2(target_device_id uuid, target_delivery_id uuid)
+returns setof public.tradovate_copier_commands
+language plpgsql security invoker set search_path = '' as $$
+begin
+  if target_delivery_id is null then raise exception 'invalid-delivery-id'; end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(target_device_id::text, 917));
+  return query select * from public.tradovate_copier_commands
+    where device_id = target_device_id and delivery_id = target_delivery_id;
+  if found then return; end if;
+  update public.tradovate_copier_commands
+    set status = 'expired', completed_at = now(), error = 'command-expired'
+    where device_id = target_device_id and status = 'pending' and expires_at <= now();
+  return query with candidate as (
+    select id from public.tradovate_copier_commands
+      where device_id = target_device_id and status = 'pending' and expires_at > now()
+      -- Přednost: brzdy a risk-redukční Flatten (ten za DISARMED u followera do konce
+      -- obchodu selže, nesmí ho předběhnout novější brzda); uvnitř třídy FIFO.
+      order by coalesce(command_type in ('disarm', 'kill-switch', 'lock-until-session-end')
+        or (command_type = 'copy-command' and (payload -> 'command' ->> 'type')
+          in ('flatten-account', 'flatten-group', 'flatten-follower-trade')), false) desc,
+        created_at, id
+      for update skip locked limit 1
+  ) update public.tradovate_copier_commands command
+    set status = 'claimed', claimed_at = now(), delivery_id = target_delivery_id
+    from candidate where command.id = candidate.id returning command.*;
+end;
+$$;

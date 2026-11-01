@@ -321,11 +321,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   nástupce), NE e98e6c4f** — jen tady je zvýšení verze při ACK a
   `manual-entry-too-soon`; worker z e98e6c4f by po nasazení webu na RPC
   pojistku neměl.
-- Dodatek (Filip, 1. 11.): brzda zneplatní čekající ruční příkazy zamčeným RPC
-  `supersede_tradovate_copier_manual_commands` (deterministické testy souběhu
-  brzda × admission, garance ve workeru v INV-RELAY-03); RPC kontroluje trojici
-  user/device/connection; chyby před insertem = 409 „Neodesláno“
+- Dodatek (Filip, 1. 11.): RPC kontroluje trojici user/device/connection;
+  chyby před insertem = 409 „Neodesláno: tento pokus server nepřijal“
   (`copier-relay-entry-not-admitted`).
+- Dodatek 2 (Filip, 1. 11., P0 z review 40328732): brzda se commitovala
+  upsertem a supersede běžel až dalším RPC — claim_v2 mezitím mohl vyzvednout
+  starší čekající vstup, i když brzda už byla durable. Teď
+  `enqueue_tradovate_copier_brake`: insert/dohledání brzdy + supersede ARM/SHADOW
+  i ručních příkazů jednou transakcí pod zámkem admission (lock_timeout 500 ms,
+  při chybě dřívější cesta se stejným klíčem) a claim_v2 vydá přednostně třídu
+  „brzdy + risk-redukční Flatten“, uvnitř FIFO (`create or replace`, jen řazení;
+  kritik: samotné brzdy by předběhly starší flatten-follower-trade, který za
+  DISARMED selže). Souběžné testy s claim_v2 na Postgresu.
+  Před migrací ověřit, že produkční tělo claim_v2 = 20260913154140.
 - Rollout (každý krok se samostatným souhlasem):
   1. záloha + read-only kontrola duplicit;
   2. reinstall workeru z čistého release worktree na commitu této větve;

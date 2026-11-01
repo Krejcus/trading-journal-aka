@@ -29,6 +29,8 @@ const connect = async () => {
   const client = new pg.Client({ connectionString: url });
   await client.connect();
   await client.query(`set search_path = ${schema}_shadow`); // nic nesmí záviset na search_path volajícího
+  // Spadlý test s drženou transakcí nesmí zaseknout ostatní (truncate by čekal navždy).
+  await client.query(`set idle_in_transaction_session_timeout = '5s'`);
   clients.push(client);
   return client;
 };
@@ -68,6 +70,7 @@ before(async () => {
       expires_at timestamptz not null,
       claimed_at timestamptz, completed_at timestamptz, result jsonb, error text,
       constraint tradovate_copier_commands_expiry check (expires_at > created_at),
+      delivery_id uuid,
       constraint tradovate_copier_commands_idempotency unique (user_id, device_id, idempotency_key)
     );
     create index on public.tradovate_copier_commands (user_id, created_at desc);
@@ -303,86 +306,182 @@ test('oprávnění: authenticated ani anon funkci nevolají; search_path volají
 });
 
 // ---------------------------------------------------------------------------
-// Brzda × admission: skutečně souběžné vložení, deterministicky přes držené
-// transakce. Garantovaný výsledek: po supersede brzdy nezůstane čekající
-// vstup s created_at ≤ brzda; pozdější vstup brzdu vidí (superseded) nebo
-// leží ve FIFO za ní (worker: brake-after-request / not-armed).
-const SUPERSEDE = 'select public.supersede_tradovate_copier_manual_commands($1, $2) as n';
-const insertBrake = async (client, type = 'disarm', createdAt = new Date()) => (await client.query(`
-  insert into public.tradovate_copier_commands (user_id, device_id, command_type, payload, idempotency_key, status, created_at, expires_at)
-  values ($1, $2, $3, '{}'::jsonb, $4, 'pending', $5, $5::timestamptz + interval '10 minutes') returning id, created_at`,
-  [USER, DEV1, type, randomUUID(), createdAt])).rows[0];
+// Brzda × admission × claim_v2: skutečně souběžně, deterministicky přes držené
+// transakce. Brzda (insert + supersede) je jeden commit pod zámkem admission;
+// claim_v2 vydá čekající brzdu přednostně.
+const BRAKE = `select * from public.enqueue_tradovate_copier_brake($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`;
+const brakeArgs = (type = 'disarm', key = randomUUID(), now = new Date(), device = DEV1) =>
+  [USER, device, CONN, type, '{}', key, now, new Date(now.getTime() + 600_000)];
+const brake = async (client, ...rest) => (await asService(client, BRAKE, brakeArgs(...rest))).rows[0];
+const CLAIM = 'select * from public.claim_tradovate_copier_command_v2($1, $2)';
+const claim = async (client, device = DEV1) => (await asService(client, CLAIM, [device, randomUUID()])).rows[0] ?? null;
 const statusOf = async id => (await admin.query('select status, error from public.tradovate_copier_commands where id = $1', [id])).rows[0];
+const rawBrake = async (type = 'disarm', createdAt = new Date()) => (await admin.query(`
+  insert into public.tradovate_copier_commands (user_id, device_id, command_type, payload, idempotency_key, status, created_at, expires_at)
+  values ($1, $2, $3, '{}'::jsonb, $4, 'pending', $5, $5::timestamptz + interval '10 minutes') returning id`,
+  [USER, DEV1, type, randomUUID(), createdAt])).rows[0];
 
-test('brzda během rozběhnuté admission: supersede počká na zámek a čekající vstup zneplatní', async () => {
+test('brzda během rozběhnuté admission: počká na zámek, pak čekající vstup zneplatní v témže commitu', async () => {
   await reset();
   const a = await connect();
-  const c = await connect();
+  const b = await connect();
   await a.query('begin');
   const admitted = (await asServiceInTx(a, entry())).rows[0];
-  assert.equal(admitted.result_code, 'inserted');
-  const brake = await insertBrake(admin, 'kill-switch', new Date(Date.now() + 5));
-  let superseded = false;
-  const supersede = asService(c, SUPERSEDE, [USER, brake.id]).then(result => { superseded = true; return result.rows[0].n; });
+  let done = false;
+  const pending = brake(b, 'kill-switch', randomUUID(), new Date(Date.now() + 5)).then(row => { done = true; return row; });
   await new Promise(resolve => setTimeout(resolve, 200));
-  assert.equal(superseded, false, 'supersede musí čekat na commit admission');
+  assert.equal(done, false, 'brzda musí čekat na commit admission');
   await a.query('commit');
-  assert.equal(await supersede, 1);
+  const row = await pending;
+  assert.equal(row.result_code, 'inserted');
+  assert.equal(row.superseded_manual, 1);
   assert.deepEqual(await statusOf(admitted.id), { status: 'expired', error: 'superseded-by-brake' });
 });
 
-test('brzda vložená (necommitnutá) před admission: admission ji nevidí a vloží, supersede po commitu brzdy vstup zneplatní', async () => {
+test('P0: claim_v2 souběžně s brzdou — dokud brzda necommitne, starší vstup nejde vyzvednout; po commitu přijde brzda, vstup je pryč', async () => {
   await reset();
-  const b = await connect();
   const a = await connect();
-  await b.query('begin');
-  const brake = (await b.query(`
-    insert into public.tradovate_copier_commands (user_id, device_id, command_type, payload, idempotency_key, status, created_at, expires_at)
-    values ($1, $2, 'disarm', '{}'::jsonb, $3, 'pending', now() + interval '50 milliseconds', now() + interval '10 minutes') returning id`,
-  [USER, DEV1, randomUUID()])).rows[0];
+  const b = await connect();
+  const w = await connect();
   const admitted = await admit(a, entry());
   assert.equal(admitted.result_code, 'inserted');
+  await b.query('begin');
+  await b.query('set local role service_role');
+  const held = (await b.query(BRAKE, brakeArgs('disarm', randomUUID(), new Date(Date.now() + 5)))).rows[0];
+  assert.equal(held.superseded_manual, 1);
+  // Brzda i supersede jsou v jedné necommitnuté transakci: řádek vstupu je zamčený
+  // (SKIP LOCKED ho přeskočí) a brzda ještě není vidět → worker nedostane nic.
+  assert.equal(await claim(w), null);
   await b.query('commit');
-  assert.equal((await asService(a, SUPERSEDE, [USER, brake.id])).rows[0].n, 1);
-  assert.equal((await statusOf(admitted.id)).status, 'expired');
+  const first = await claim(w);
+  assert.equal(first.id, held.id);
+  assert.equal(first.command_type, 'disarm');
+  assert.equal(await claim(w), null);
+  assert.deepEqual(await statusOf(admitted.id), { status: 'expired', error: 'superseded-by-brake' });
 });
 
-test('brzda commitnutá i zpracovaná před admission: admission vrátí superseded-by-brake, nic nevloží', async () => {
+test('claim_v2 drží starší vstup (vyzvednut DŘÍV, než brzda vznikla): brzda počká na jeho commit a claimed nezmění', async () => {
   await reset();
-  const client = await connect();
-  const brake = await insertBrake(admin, 'lock-until-session-end');
-  assert.equal((await asService(client, SUPERSEDE, [USER, brake.id])).rows[0].n, 0);
-  assert.equal((await admit(client, entry())).result_code, 'superseded-by-brake');
-  assert.equal(await count(), 1);
+  const a = await connect();
+  const b = await connect();
+  const w = await connect();
+  const admitted = await admit(a, entry());
+  await w.query('begin');
+  await w.query('set local role service_role');
+  const claimed = (await w.query(CLAIM, [DEV1, randomUUID()])).rows[0];
+  assert.equal(claimed.id, admitted.id);
+  let done = false;
+  const pending = brake(b, 'disarm', randomUUID(), new Date(Date.now() + 5)).then(row => { done = true; return row; });
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(done, false, 'supersede čeká na zámek řádku, který claim drží');
+  await w.query('commit');
+  const row = await pending;
+  assert.equal(row.superseded_manual, 0);
+  assert.equal((await statusOf(admitted.id)).status, 'claimed'); // vykoná worker; brzda je ve frontě hned za ním
 });
 
-test('vstup s created_at po brzdě (posun hodin) supersede přežije, ale ve FIFO leží až za brzdou', async () => {
+test('priorita brzd v claim_v2: brzda vložená mimo RPC (záloha) se vydá před starším čekajícím vstupem i ARMem', async () => {
   await reset();
-  const client = await connect();
-  const brake = await insertBrake(admin, 'disarm', new Date(Date.now() - 800));
-  const admitted = await admit(client, entry());
-  assert.equal(admitted.result_code, 'inserted');
-  assert.equal((await asService(client, SUPERSEDE, [USER, brake.id])).rows[0].n, 0);
-  const fifo = (await admin.query(`select id from public.tradovate_copier_commands where status = 'pending' order by created_at, id`)).rows.map(row => row.id);
-  assert.deepEqual(fifo, [brake.id, admitted.id]);
+  const a = await connect();
+  const w = await connect();
+  await seed([{ user_id: USER, device_id: DEV1, command_type: 'arm-live', payload: {}, idempotency_key: randomUUID(),
+    status: 'pending', created_at: ago(300), expires_at: new Date(Date.now() + 30_000).toISOString() }]);
+  const admitted = await admit(a, entry());
+  const fallback = await rawBrake('lock-until-session-end', new Date(Date.now() + 5));
+  assert.equal((await claim(w)).id, fallback.id);
+  const next = await claim(w);
+  assert.equal(next.command_type, 'arm-live'); // ostatní dál FIFO
+  assert.equal((await claim(w)).id, admitted.id);
 });
 
-test('supersede: zrušení vstupu zůstává, posun/zavření a vstup jdou pryč; jiný uživatel ani starší brzda se nedotknou; cizí brzda = RAISE', async () => {
+test('priorita: starší risk-redukční Flatten (follower do konce obchodu) zůstane PŘED novější brzdou; brzda před starším nerisk-redukčním', async () => {
+  await reset();
+  const w = await connect();
+  const row = (type, inner, createdAt) => ({ user_id: USER, device_id: DEV1, command_type: type,
+    payload: inner ? { command: inner } : {}, idempotency_key: randomUUID(), status: 'pending',
+    created_at: createdAt, expires_at: new Date(Date.now() + 30_000).toISOString() });
+  await seed([
+    row('copy-command', { type: 'update-group' }, ago(400)),
+    row('copy-command', { type: 'flatten-follower-trade', groupId: 'g', accountId: 200 }, ago(300)),
+    row('copy-command', { type: 'flatten-account', groupId: 'g', accountId: 300 }, ago(250)),
+    row('copy-command', null, ago(500)), // bez command.type: výraz řazení NULL nesmí předběhnout brzdu
+  ]);
+  const late = await rawBrake('disarm', new Date(Date.now() - 100));
+  const order = [];
+  for (let next = await claim(w); next; next = await claim(w)) order.push(next.command_type === 'copy-command' ? (next.payload.command?.type ?? 'copy-command:?') : next.command_type);
+  assert.deepEqual(order, ['flatten-follower-trade', 'flatten-account', 'disarm', 'copy-command:?', 'update-group']); // bez typu = běžná FIFO
+  assert.ok(late.id);
+});
+
+test('brzda: superseduje ARM/SHADOW téhož zařízení a ruční příkazy celého uživatele; cancel-entry, novější vstup a cizí uživatel zůstávají', async () => {
   await reset();
   const client = await connect();
-  const trade = { entryOperationId: 'entry:t-trade-sup1' };
+  const arm = (k, device = DEV1, type = 'arm-live') => ({ user_id: USER, device_id: device, command_type: type, payload: {}, idempotency_key: k,
+    status: 'pending', created_at: ago(200), expires_at: new Date(Date.now() + 30_000).toISOString() });
+  await seed([arm(randomUUID()), arm(randomUUID(), DEV1, 'shadow'), arm(randomUUID(), DEV2)]);
   const ids = {};
-  ids.entry = (await admit(client, entry())).id;
-  ids.cancel = (await admit(client, manage(trade, 'cancel-entry'))).id;
+  ids.entry = (await admit(client, entry(), { device: DEV2 })).id;
+  ids.cancel = (await admit(client, manage({ entryOperationId: 'entry:t-trade-sup1' }, 'cancel-entry'))).id;
   ids.close = (await admit(client, manage({ entryOperationId: 'entry:t-trade-sup2' }, 'close-position'))).id;
   await seed([{ user_id: OTHER, device_id: FOREIGN, command_type: 'copy-command', payload: entry(), idempotency_key: opId(),
     status: 'pending', created_at: ago(100), expires_at: new Date(Date.now() + 14_000).toISOString() }]);
-  const brake = await insertBrake(admin, 'disarm', new Date(Date.now() + 5));
-  assert.equal((await asService(client, SUPERSEDE, [USER, brake.id])).rows[0].n, 2);
+  const row = await brake(client, 'disarm', randomUUID(), new Date(Date.now() + 5));
+  assert.equal(row.superseded_arms, 2);
+  assert.equal(row.superseded_manual, 2);
   assert.equal((await statusOf(ids.entry)).status, 'expired');
   assert.equal((await statusOf(ids.close)).status, 'expired');
   assert.equal((await statusOf(ids.cancel)).status, 'pending');
+  const remaining = (await admin.query(`select command_type, device_id from public.tradovate_copier_commands where status = 'pending' and command_type = 'arm-live'`)).rows;
+  assert.deepEqual(remaining, [{ command_type: 'arm-live', device_id: DEV2 }]);
   assert.equal(Number((await admin.query(`select count(*) from public.tradovate_copier_commands where user_id = $1 and status = 'pending'`, [OTHER])).rows[0].count), 1);
-  await assert.rejects(asService(client, SUPERSEDE, [OTHER, brake.id]), /copier-supersede-brake-invalid/);
-  await assert.rejects(asService(client, SUPERSEDE, [USER, ids.entry]), /copier-supersede-brake-invalid/);
+  // Vstup s created_at po brzdě (posun hodin) přežije, ale ve FIFO leží až za ní.
+  await reset();
+  const early = await rawBrake('disarm', new Date(Date.now() - 800));
+  const later = await admit(client, entry());
+  assert.equal(later.result_code, 'inserted');
+  assert.equal((await claim(await connect())).id, early.id);
+});
+
+test('brzda idempotentně: stejný klíč = existing (jeden řádek, supersede znovu bez škody); jiný typ se stejným klíčem = RAISE', async () => {
+  await reset();
+  const client = await connect();
+  const key = randomUUID();
+  const first = await brake(client, 'disarm', key);
+  const again = await brake(client, 'disarm', key);
+  assert.equal(first.result_code, 'inserted');
+  assert.equal(again.result_code, 'existing');
+  assert.equal(again.id, first.id);
+  assert.equal(await count(), 1);
+  await assert.rejects(brake(client, 'kill-switch', key), /copier-brake-idempotency-conflict/);
+});
+
+test('brzda: RAISE na neplatné argumenty a nesourodé zařízení; hodiny NEověřuje (brzda nesmí selhat na posunu hodin)', async () => {
+  await reset();
+  const client = await connect();
+  await assert.rejects(brake(client, 'arm-live'), /copier-brake-invalid-arguments/);
+  await assert.rejects(brake(client, 'disarm', randomUUID(), new Date(), DEV_CONN2), /copier-brake-device-invalid/);
+  await assert.rejects(brake(client, 'disarm', randomUUID(), new Date(), REVOKED), /copier-brake-device-invalid/);
+  assert.equal((await brake(client, 'disarm', randomUUID(), new Date(Date.now() - 60_000))).result_code, 'inserted');
+});
+
+test('brzda při držené admission déle než 500 ms: lock timeout (relay pak jde zálohou), nic nevloží', async () => {
+  await reset();
+  const a = await connect();
+  const b = await connect();
+  await a.query('begin');
+  await asServiceInTx(a, entry());
+  await assert.rejects(brake(b, 'disarm'), error => error.code === '55P03');
+  await a.query('rollback');
+  assert.equal(await count(), 0);
+});
+
+test('oprávnění brzdového RPC a claim_v2: authenticated/anon nevolají; claim_v2 má jen změněné řazení', async () => {
+  const client = await connect();
+  for (const role of ['authenticated', 'anon']) {
+    await client.query(`set role ${role}`);
+    await assert.rejects(client.query(BRAKE, brakeArgs()), error => error.code === '42501');
+    await client.query('reset role');
+  }
+  const def = (await admin.query(`select pg_get_functiondef('public.claim_tradovate_copier_command_v2(uuid, uuid)'::regprocedure) as d`)).rows[0].d;
+  assert.match(def, /'flatten-account', 'flatten-group', 'flatten-follower-trade'\)\), false\) DESC,\s+created_at, id/i);
 });

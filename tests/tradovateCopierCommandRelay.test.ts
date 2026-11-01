@@ -423,22 +423,37 @@ describe('Tradovate copier command relay', () => {
 
   });
 
-  it('brzda zneplatní ruční příkazy jedním zamčeným RPC per uživatel (s id brzdy); per-zařízení updaty pak neběží', async () => {
+  it('brzda jde jedním atomickým RPC (insert + supersede ARM/SHADOW i ručních příkazů); žádný upsert ani update zvlášť', async () => {
     const updates: unknown[] = [];
-    const rpc = vi.fn(async () => ({ data: 2, error: null }));
-    const db = Object.assign(enqueueDb(vi.fn(), null, null, undefined, value => { updates.push(value); }), { rpc });
-    await enqueueTradovateCopierCommand({ db, userId, connectionId, command: { type: 'kill-switch' }, now: Date.parse('2026-08-21T12:00:00.000Z') });
-    expect(rpc).toHaveBeenCalledWith('supersede_tradovate_copier_manual_commands', { p_user_id: userId, p_brake_id: 'command-id' });
-    expect(updates).toHaveLength(1); // jen ARM/SHADOW
+    const upsert = vi.fn();
+    const rpc = vi.fn(async () => ({ data: [{ result_code: 'inserted', id: 'brake-id', status: 'pending',
+      expires_at: '2026-08-21T12:10:00.000Z', device_id: deviceId, superseded_arms: 1, superseded_manual: 2 }], error: null }));
+    const db = Object.assign(enqueueDb(upsert, null, null, undefined, value => { updates.push(value); }), { rpc });
+    const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: { type: 'kill-switch' }, idempotencyKey: 'brake-key-000000001', now: Date.parse('2026-08-21T12:00:00.000Z') });
+    expect(queued).toEqual({ id: 'brake-id', status: 'pending', expiresAt: '2026-08-21T12:10:00.000Z', deviceId });
+    expect(rpc).toHaveBeenCalledWith('enqueue_tradovate_copier_brake', {
+      p_user_id: userId, p_device_id: deviceId, p_connection_id: connectionId, p_command_type: 'kill-switch',
+      p_payload: {}, p_idempotency_key: 'brake-key-000000001',
+      p_now: '2026-08-21T12:00:00.000Z', p_expires_at: '2026-08-21T12:10:00.000Z',
+    });
+    expect(upsert).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
   });
 
-  it('chyba zamčeného supersede RPC: záloha per zařízení, brzda dál projde bez chyby', async () => {
-    const updates: unknown[] = [];
-    const db = Object.assign(enqueueDb(vi.fn(), null, null, undefined, value => { updates.push(value); }),
-      { rpc: vi.fn(async () => ({ data: null, error: { message: 'canceling statement due to lock timeout' } })) });
-    const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: { type: 'disarm' }, now: Date.parse('2026-08-21T12:00:00.000Z') });
-    expect(queued).toMatchObject({ id: 'command-id' });
-    expect(updates).toHaveLength(5);
+  it('chyba atomického brzdového RPC: brzda projde dřívější cestou se STEJNÝM klíčem (upsert + supersede per zařízení)', async () => {
+    for (const failure of [
+      async () => ({ data: null, error: { message: 'canceling statement due to lock timeout' } }),
+      async () => { throw new Error('fetch failed'); },
+      async () => ({ data: [{ result_code: 'weird' }], error: null }),
+    ]) {
+      const updates: unknown[] = [];
+      const upsert = vi.fn();
+      const db = Object.assign(enqueueDb(upsert, null, null, undefined, value => { updates.push(value); }), { rpc: vi.fn(failure) });
+      const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: { type: 'disarm' }, idempotencyKey: 'brake-key-000000002', now: Date.parse('2026-08-21T12:00:00.000Z') });
+      expect(queued).toMatchObject({ id: 'command-id' });
+      expect(upsert.mock.calls[0][0]).toMatchObject({ idempotency_key: 'brake-key-000000002', command_type: 'disarm' });
+      expect(updates).toHaveLength(5);
+    }
   });
 
   it('enqueue brzdy expiruje starší pending ARM a SHADOW stejného zařízení (bez RPC = záloha per zařízení)', async () => {
