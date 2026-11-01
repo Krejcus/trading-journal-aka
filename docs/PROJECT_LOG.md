@@ -285,6 +285,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-01 — Jeden crosshair, svislá čára na svíčce (Claude, větev `claude/crosshair-snap-20261101`, NENASAZENO)
+
+- Filip viděl dva crosshairy (jeden skákal po svíčkách, druhý hned za myší).
+  96f45e17 (Codex) vypnul vestavěné čáry lightweight-charts a kreslí vlastní
+  DOM vrstvu přesně pod myší; 97ab6ded (režimy kurzoru) je v
+  `chartSettingsOptions` znovu zapnul `visible: crosshairLines` → obojí.
+- Filip zvolil „skákat po svíčkách“ (jako TradingView). Vestavěné čáry zůstávají
+  vypnuté (hlídá test), vlastní vrstva přichytí svislou čáru na střed slotu
+  časové osy (`snapCrosshairXToBar`, cena dál přesně pod myší), čáry jen pro
+  Kříž/Tečku (popisky vždy) a na dotyku se kreslí z pozice knihovny (dřív tam
+  crosshair dělaly jen znovu zapnuté vestavěné čáry).
+- Ověřeno na localhost:3000 (Filipův graf, jen pohyb myši): myš 40 % mezi
+  svíčkami → čára na středu svíčky; Šipka → bez čar, s popisky; vestavěné čáry
+  `visible: false`. Celá sada: 6387 testů zelených, jediný pád
+  `tests/candleAggregationEquivalence.test.ts` je cizí — main (96f45e17)
+  importuje necommitnutý `tests/qa/beforeLiveMarketCalculations.ts` (je jen
+  ve worktree `atomic-admission-20261101`); kvůli tomu i tsc na mainu hlásí 1 chybu.
+
 ### 2026-10-31 večer — graf: Path, kurzory a šablony indikátorů jako v TradingView; LIVE panel Objednávka (Claude, nasazeno)
 
 - Předloha z TradingView Desktop přes CDP (jen pozorování UI, žádný RE):
