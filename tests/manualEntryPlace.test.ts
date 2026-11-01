@@ -54,6 +54,7 @@ async function setup(options: {
   const controller = await bootstrapCopierRuntime({
     broker, store, group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
     manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, ...options.timings },
+    manualEntryQuote: () => ({ contract: 'MNQZ6', last: 29_500, lastAt: clock.now, bid: 29_499.75, ask: 29_500, quoteAt: clock.now }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
   active = controller;

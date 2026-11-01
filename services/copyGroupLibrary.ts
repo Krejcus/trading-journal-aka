@@ -59,7 +59,7 @@ const isValidStoredGroup = (group: CopyGroupConfig): boolean => {
 export const copyGroupForStorage = (group: CopyGroupConfig): CopyGroupConfig => {
   // Installer-owned manual-only skupina nikdy není cloudová šablona. Bez
   // localOnly příznaku by navíc její tvar nebyl bezpečně znovupoužitelný.
-  const { localOnly: _localOnly, manualOnly: _manualOnly, ...stored } = group;
+  const { localOnly: _localOnly, manualOnly: _manualOnly, manualEntryMaxContracts: _manualCap, ...stored } = group;
   return {
     ...stored,
     enabled: false,

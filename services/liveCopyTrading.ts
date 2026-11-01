@@ -239,6 +239,12 @@ export interface CopyGroupConfig {
    * vstupy/správu leader účtu z LIVE; běžná copy group musí mít followera.
    */
   manualOnly?: boolean;
+  /**
+   * Strop kontraktů ručního vstupu (2. 11. 2026). Smí ho mít jen manual-only
+   * local-only skupina a nastavuje ho výhradně installer (`--manual-entry-max-contracts`);
+   * bez něj platí 1. Vzdálená změna skupiny ho nepřepíše.
+   */
+  manualEntryMaxContracts?: number;
 }
 
 export type LiveCopyTradingCommand =
@@ -632,6 +638,10 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
     if (raw.leaderAccountId !== null && typeof raw.leaderAccountId !== 'number') return null;
     if (!Array.isArray(raw.followers)) return null;
     if (raw.manualOnly != null && typeof raw.manualOnly !== 'boolean') return null;
+    // Neplatný strop se zahodí (= výchozí 1), skupina zůstává — žádný crash loop.
+    const manualEntryMaxContracts = raw.manualOnly === true && raw.localOnly === true
+      && Number.isSafeInteger(raw.manualEntryMaxContracts) && raw.manualEntryMaxContracts! >= 1 && raw.manualEntryMaxContracts! <= 5
+      ? raw.manualEntryMaxContracts : undefined;
     const followers: CopyFollowerConfig[] = [];
     for (const followerCandidate of raw.followers) {
       if (!followerCandidate || typeof followerCandidate !== 'object') return null;
@@ -670,6 +680,7 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
       safety,
       ...(raw.localOnly === true ? { localOnly: true } : {}),
       ...(manualOnly ? { manualOnly: true } : {}),
+      ...(manualOnly && manualEntryMaxContracts != null ? { manualEntryMaxContracts } : {}),
     });
   }
   return groups;

@@ -39,6 +39,16 @@ export interface TvStreamWorkerLike {
   unref(): void;
 }
 
+/** Kotace IBKR pro ruční vstup: časy jsou hodiny procesu (ms), bid/ask null = neplatné. */
+export interface TvPriceStreamQuote {
+  contract: string;
+  last: number;
+  lastAt: number;
+  bid: number | null;
+  ask: number | null;
+  quoteAt: number | null;
+}
+
 export interface TvPriceStreamSupervisor {
   update(config: TvPriceStreamConfig): void;
   stop(): void;
@@ -49,6 +59,12 @@ export interface TvPriceStreamSupervisor {
    * než 90 s. Synchronní, nikdy nevyhodí.
    */
   latestBars(root: string): TvBarsCapture | null;
+  /**
+   * Poslední kotace z IBKR pro root (`MNQ`) jako Tradovate kontrakt (`MNQZ6`),
+   * jen z běžícího vlákna se zdrojem IBKR a nejvýš 3 s stará; jinak `null`.
+   * Synchronní, nikdy nevyhodí. Ruční vstup jí ověřuje kontrakt a cenu Marketu.
+   */
+  latestQuote(root: string): TvPriceStreamQuote | null;
 }
 
 /**
@@ -143,6 +159,7 @@ export function createTvPriceStreamSupervisor(options: {
   const preferredSource: TvPriceSourceName = options.priceSource === 'ibkr' ? 'ibkr' : 'tv';
   let workerSource: TvPriceSourceName | null = null;
   let latest: { worker: TvStreamWorkerLike; receivedAt: number; capture: TvBarsCapture } | null = null;
+  let latestQuote: { worker: TvStreamWorkerLike; root: string; quote: TvPriceStreamQuote } | null = null;
   let lastBarsAt = -Infinity;
 
   /** Ověří zprávu `bars` z vlákna: typ a délka v O(1) dřív než cokoli dalšího. */
@@ -225,6 +242,25 @@ export function createTvPriceStreamSupervisor(options: {
       }
       if (type === 'bars') {
         acceptBars(created, message as Record<string, unknown>);
+        return;
+      }
+      if (type === 'quote') {
+        const row = message as { front?: unknown; last?: unknown; lastAt?: unknown; bid?: unknown; ask?: unknown; quoteAt?: unknown };
+        const match = typeof row.front === 'string' ? /^([A-Z]{1,4})([FGHJKMNQUVXZ])20(\d{2})$/.exec(row.front) : null;
+        const positive = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null);
+        const last = positive(row.last);
+        const lastAt = positive(row.lastAt);
+        if (!match || workerSource !== 'ibkr' || last == null || lastAt == null) return;
+        const bid = positive(row.bid);
+        const ask = positive(row.ask);
+        const quoteAt = positive(row.quoteAt);
+        const receivedAt = now();
+        // Časy nikdy dál než přijetí na hlavním vlákně (stejné hodiny procesu).
+        latestQuote = { worker: created, root: match[1], quote: {
+          contract: `${match[1]}${match[2]}${match[3].slice(-1)}`, last, lastAt: Math.min(lastAt, receivedAt),
+          bid: bid != null && ask != null && bid <= ask ? bid : null, ask: bid != null && ask != null && bid <= ask ? ask : null,
+          quoteAt: quoteAt != null && bid != null && ask != null && bid <= ask ? Math.min(quoteAt, receivedAt) : null,
+        } };
         return;
       }
       if (type === 'price-source') {
@@ -315,6 +351,17 @@ export function createTvPriceStreamSupervisor(options: {
       } catch { /* best effort */ }
     },
     status: () => ({ running: worker !== null, tripped, crashes: crashes.length }),
+    latestQuote(root) {
+      try {
+        const current = latestQuote;
+        if (!current || stopped || tripped || !config?.enabled || worker === null || current.worker !== worker || workerSource !== 'ibkr') return null;
+        const seen = Math.max(current.quote.lastAt, current.quote.quoteAt ?? 0);
+        if (current.root !== root || now() - seen > 15_000) return null;
+        return { ...current.quote };
+      } catch {
+        return null;
+      }
+    },
     latestBars(root) {
       try {
         const current = latest;

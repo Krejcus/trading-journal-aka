@@ -99,6 +99,10 @@ interface Props {
   onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
   manageEntryAvgPrice?: number | null;
   manageCloseSupported?: boolean;
+  /** Worker umí nativní Market ručního vstupu. */
+  entryMarketSupported?: boolean;
+  /** Strop kontraktů ručního vstupu skupiny workeru. */
+  entryMaxContracts?: number;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -177,4 +181,6 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && left.onManageEntry === right.onManageEntry
   && (left.manageEntryAvgPrice ?? null) === (right.manageEntryAvgPrice ?? null)
   && Boolean(left.manageCloseSupported) === Boolean(right.manageCloseSupported)
+  && Boolean(left.entryMarketSupported) === Boolean(right.entryMarketSupported)
+  && (left.entryMaxContracts ?? 1) === (right.entryMaxContracts ?? 1)
 ));

@@ -60,6 +60,7 @@ const inputs = (patch: Partial<ManualEntryPreviewInputs> = {}): ManualEntryPrevi
   entryIneligible: new Map(),
   excludedFollowers: new Set(),
   frontSymbols: ['MNQZ6'],
+  workerQuote: { contract: 'MNQZ6', last: 29_500, lastAt: NOW - 500, bid: null, ask: null, quoteAt: null },
   ...patch,
 });
 const codes = (patch: Partial<ManualEntryPreviewInputs> = {}) => evaluateManualEntryPreview(inputs(patch)).blockers.map(issue => issue.code);

@@ -300,6 +300,20 @@ port.on('message', message => {
 });
 
 setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
+// Kotace pro ruční vstup (2. 11. 2026): jen když je IBKR aktivní zdroj, konkrétní
+// kontrakt a časy posledního obchodu / bid-ask. Hlavní vlákno z ní ověřuje původ
+// kontraktu a čerstvost ceny Marketu; z TV se nikdy neposílá.
+setInterval(() => {
+  try {
+    if (priceSource !== 'ibkr' || sourceSwitch.active !== 'ibkr') return;
+    const reading = ibkr?.reading() ?? null;
+    if (!reading) return;
+    port.postMessage({
+      type: 'quote', front: reading.front, last: reading.last, lastAt: reading.lastAt,
+      bid: reading.bid, ask: reading.ask, quoteAt: reading.quoteAt,
+    });
+  } catch { /* best effort */ }
+}, 250);
 // Výpadek IBKR (Gateway neběží, přihlášení jinde, ztráta spojení): cena tiše jede ze zálohy TV,
 // proto se ohlásí — jen stav a krátký kód, nikdy text chyb Gateway (může nést účet).
 let ibkrAlert = initialIbkrAlertState();

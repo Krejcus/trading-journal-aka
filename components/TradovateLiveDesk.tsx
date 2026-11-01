@@ -130,7 +130,8 @@ import {
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
-import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualOrderClose, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { manualEntryContractCap } from '../services/manualEntryPreview';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryMarket, supportsCopierManualOrderClose, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
@@ -1719,6 +1720,8 @@ acceptAgentStatus((await executeAgent({
           // z pollu nemusí patřit ke kusům v grafu (přikoupení) — BE počká na poll.
           manageEntryAvgPrice={chartLive.status === agentStatus ? ownManualEntry?.entryAvgPrice ?? null : null}
           manageCloseSupported={supportsCopierManualOrderClose(agentStatus)}
+          entryMarketSupported={supportsCopierManualEntryMarket(agentStatus)}
+          entryMaxContracts={manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null)}
           />
         </ErrorBoundary>
       ) : null}

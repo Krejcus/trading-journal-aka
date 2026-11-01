@@ -281,3 +281,52 @@ describe('hlídač vlákna kanálu ceny (hlavní vlákno workeru)', () => {
     });
   });
 });
+
+describe('kotace IBKR pro ruční vstup (zpráva quote, 2. 11. 2026)', () => {
+  const ibkrSetup = (priceSource: 'ibkr' | 'tv' = 'ibkr') => {
+    const workers: FakeWorker[] = [];
+    const supervisor = createTvPriceStreamSupervisor({
+      priceSource,
+      createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
+    });
+    supervisor.update(ON);
+    return { supervisor, workers };
+  };
+  const quote = (patch: Record<string, unknown> = {}) => ({
+    type: 'quote', front: 'MNQZ2026', last: 25_000, lastAt: Date.now(), bid: 24_999.75, ask: 25_000, quoteAt: Date.now(), ...patch,
+  });
+
+  it('převede kontrakt na Tradovate tvar a drží časy; jiný root ani po 15 s nic', () => {
+    const t = ibkrSetup();
+    t.workers[0].emit('message', quote());
+    expect(t.supervisor.latestQuote('MNQ')).toMatchObject({ contract: 'MNQZ6', last: 25_000, bid: 24_999.75, ask: 25_000 });
+    expect(t.supervisor.latestQuote('NQ')).toBeNull();
+    vi.advanceTimersByTime(15_001);
+    expect(t.supervisor.latestQuote('MNQ')).toBeNull();
+    t.supervisor.stop();
+  });
+
+  it('zdroj TV, neplatný tvar a bid > ask: z TV nic, bid/ask zahozené', () => {
+    const tv = ibkrSetup('tv');
+    tv.workers[0].emit('message', quote());
+    expect(tv.supervisor.latestQuote('MNQ')).toBeNull();
+    tv.supervisor.stop();
+    const t = ibkrSetup();
+    t.workers[0].emit('message', quote({ front: 'MNQ1!' }));
+    expect(t.supervisor.latestQuote('MNQ')).toBeNull();
+    t.workers[0].emit('message', quote({ bid: 25_001, ask: 25_000 }));
+    expect(t.supervisor.latestQuote('MNQ')).toMatchObject({ bid: null, ask: null, quoteAt: null, last: 25_000 });
+    // Čas z budoucnosti se ořízne na přijetí.
+    t.workers[0].emit('message', quote({ lastAt: Date.now() + 60_000 }));
+    expect(t.supervisor.latestQuote('MNQ')!.lastAt).toBeLessThanOrEqual(Date.now());
+    t.supervisor.stop();
+  });
+
+  it('výměna vlákna zahodí kotaci starého', async () => {
+    const t = ibkrSetup();
+    t.workers[0].emit('message', quote());
+    t.workers[0].emit('error', new Error('boom'));
+    expect(t.supervisor.latestQuote('MNQ')).toBeNull();
+    t.supervisor.stop();
+  });
+});

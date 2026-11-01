@@ -350,11 +350,23 @@ export interface CopierManualEntryRecord {
     symbol: string;
     side: OrderSide;
     quantity: number;
-    orderType: 'Limit' | 'Stop';
-    price: number;
+    orderType: 'Limit' | 'Stop' | 'Market';
+    /** Cena Limit/Stop; u Marketu chybí (broker dostal Market bez ceny). */
+    price?: number;
+    /** Cena, kterou uživatel viděl (u Marketu povinná) — jen odhad rizika a audit. */
+    referencePrice?: number;
+    /** Kdy klient kotaci přijal (epoch ms). */
+    quoteReceivedAt?: number;
     stopLoss: number;
     takeProfit: number;
   };
+  /**
+   * Časy cesty jednoho operationId ve workeru (2. 11. 2026, jen měření):
+   * zařazení do fronty, start ve frontě, odeslání POSTu, odpověď brokera.
+   */
+  timing?: { queuedAt?: number; startedAt?: number; dispatchAt?: number; ackAt?: number };
+  /** Broker odmítl SL/TP nohu přijatého vstupu — incident už byl vyhlášen (jednou). */
+  legRejectedAt?: number;
   entryBrokerOrderId?: string;
   stopBrokerOrderId?: string;
   targetBrokerOrderId?: string;

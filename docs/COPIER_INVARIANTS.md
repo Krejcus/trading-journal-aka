@@ -1653,6 +1653,23 @@ existující ochranu.
   failClosed + cílené zrušení. Cílené zrušení (`cancelOwnManualEntry`) jen
   id z vlastního záznamu na leaderu, raw broker mimo frontu, jeden pokus
   s durable stavem, smí i za DISARMED/kill, vyplněný vstup se neruší.
+- **Nativní Market, strop skupiny a jen MNQ (2. 11. 2026, oponentura
+  copier-design-critic):** `place-leader-entry` zná `orderType: 'Market'` bez
+  `price` (povinné `referencePrice` + `quoteReceivedAt`, viz INV-UI-04); broker
+  dostane `placeoso` s Market rodičem. Capability `manual-entry-market-v1`
+  inzeruje worker jen pro manual-only skupinu; bez ní UI Market neodešle
+  (žádný převod na Limit). Market a brzda: ACK za DISARMED Market neruší
+  (je vyplněný) — `acknowledged` + incident; neznámý výsledek Marketu =
+  incident (DISARM, lastError), nikdy opakování. Broker odmítl SL/TP nohu
+  přijatého ručního vstupu = incident bez auto-close. Strop kontraktů
+  `group.manualEntryMaxContracts` (1–5) smí mít jen manual-only local-only
+  skupina, nastavuje ho jen installer (`--manual-entry-max-contracts`),
+  pilot ho při startu vždy přepíše instalační hodnotou, vzdálená změna
+  skupiny ho nepřevezme a cloudová knihovna ho neukládá; jinak 1.
+  Ruční vstup jen MNQ (`LEADER_ENTRY_SYMBOL_PATTERN`) na klientu, relayi i ve
+  workeru; správa existujících obchodů (`manage-leader-order`) NQ dál smí
+  (risk-redukční). Měření: `timing` v záznamu (fronta, start, POST, ACK)
+  a v paměti stream (Order, vyplnění, Fill + průměr, Position), jen zobrazení.
 - Hlídá test (1b): `tests/manualEntryPlace.test.ts`, `tests/leaderEntryPlace.test.ts`,
   `tests/localCopierExecutionAgent.test.ts`, `tests/tradovateCopierCommandRelay.test.ts`.
 
@@ -1661,7 +1678,26 @@ existující ochranu.
 - Proč: Filip 26. 10. povolil cenu z TV pro P&L zobrazené na obrazovce, nikdy
   pro risk, day lock, limity ani kopírku. Veřejný Realtime kanál je
   podvrhnutelný, proto se zprávy podepisují.
-- **Výjimka Market (Filip 30. 10. 2026, výslovně schváleno):** Market z panelu
+- **Nativní Market a IBKR v riziku ručního vstupu (Filip 1. 11. 2026 večer,
+  výslovně schváleno: „jen IBKR pro risk“):** od 2. 11. 2026 Market z panelu
+  posílá skutečný Market (`orderType: 'Market'`, bez ceny příkazu; výjimka
+  „Limit +2 b“ níže tím skončila). Cena grafu jde jen jako `referencePrice`
+  (Buy = ask, Sell = bid) + `quoteReceivedAt`: odhad rizika, strana SL/TP
+  a zobrazení, nikdy cena příkazu. Worker smí pro ruční vstup číst VLASTNÍ
+  kotaci z IBKR (vlákno ceny → `server/tvPriceStreamSupervisor.ts:latestQuote`,
+  jen když je IBKR aktivní zdroj; TradingView NIKDY): (1) původ kontraktu —
+  i Limit/Stop vyžaduje stejný konkrétní kontrakt v kotaci ≤ 15 s;
+  (2) Market — cena workeru (ask/bid ≤ 3 s, jinak last ≤ 3 s), posun od
+  `referencePrice` ≤ 8 ticků, SL i TP ≥ 16 ticků od obou cen a na správné
+  straně trhu, riziko z horší z obou cen + 6 ticků skluzu; totéž se znovu
+  synchronně ověří těsně před POSTem. Do read modelu, day locku, ARM,
+  reconcile ani kopírování followerů kotace nevstupuje. Market jen pro
+  instalační manual-only DEMO skupinu bez followerů (`market-manual-only`).
+  Vynucuje `services/manualEntryPreview.ts:manualEntryMarketQuoteBlockers`,
+  `services/copierRuntimeController.ts:executeManualEntry`; hlídá
+  `tests/manualEntryMarketCapMnq.test.ts`, `tests/manualEntryMarketController.test.ts`.
+- **Výjimka Market (Filip 30. 10. 2026, výslovně schváleno; NAHRAZENO 2. 11. 2026
+  nativním Marketem výše):** Market z panelu
   posílá Limit o `MARKET_GUARD_POINTS` (2 b) přes ask/bid grafu. Cena grafu smí
   být JEN strop ceny příkazu uživatele (Buy se vyplní za ni nebo lépe), a jen
   mladší než 3 s; nikdy nevstupuje do read modelu, rizika, day locku ani rozhodnutí

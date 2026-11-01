@@ -99,11 +99,11 @@ describe('LIVE → Graf: × u pozice a Market (30. 10.)', () => {
     expect(screen).toMatch(/runLiveManage\('close-position', summary\.stop\)/);
   });
 
-  it('Market = marketable limit o pojistku přes trh (známá nejhorší cena pro riziko workeru)', () => {
+  it('Market = skutečný Market u brokera (2. 11. 2026): žádný převod na Limit, cena grafu jen jako referencePrice', () => {
     const ticket = readFileSync('components/LiveOrderTicket.tsx', 'utf8');
-    expect(ticket).toMatch(/export const MARKET_GUARD_POINTS = 2;/);
-    expect(ticket).toMatch(/draft\.side === 'buy' \? quote\.ask \+ MARKET_GUARD_POINTS : quote\.bid - MARKET_GUARD_POINTS/);
-    expect(ticket).toMatch(/orderType: draft\.type === 'stop' \? 'Stop' : 'Limit', price: marketGuardPrice \?\? draft\.price/);
-    expect(ticket).not.toMatch(/Market zatím ne/);
+    expect(ticket).not.toMatch(/MARKET_GUARD_POINTS/);
+    expect(ticket).toMatch(/orderType: 'Market' as const, referencePrice: marketReference!, quoteReceivedAt:/);
+    expect(ticket).toMatch(/!entryMarketSupported \? 'Worker zatím neumí nativní Market/);
+    expect(ticket).toMatch(/`MKT · ~/);
   });
 });

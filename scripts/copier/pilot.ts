@@ -761,6 +761,13 @@ async function runLocalAgent(
   if (manualOnly && (followersFlag || followerId != null || stringFlag('multiplier', false))) {
     throw new Error('--manual-only se nesmí kombinovat s follower konfigurací');
   }
+  // Strop ručního vstupu (2. 11. 2026): jen manual-only, 1–5, vždy z instalace.
+  const manualEntryCapFlag = stringFlag('manual-entry-max-contracts', false);
+  if (manualEntryCapFlag && !manualOnly) throw new Error('--manual-entry-max-contracts je povolený jen s --manual-only');
+  const manualEntryMaxContracts = manualEntryCapFlag ? Number(manualEntryCapFlag) : null;
+  if (manualEntryMaxContracts != null && (!Number.isSafeInteger(manualEntryMaxContracts) || manualEntryMaxContracts < 1 || manualEntryMaxContracts > 5)) {
+    throw new Error('--manual-entry-max-contracts musí být celé číslo 1–5');
+  }
   const followers: CopyFollowerConfig[] = manualOnly
     ? []
     : followersFlag
@@ -828,7 +835,17 @@ async function runLocalAgent(
   // CLI leader určuje jen stabilní instalační slot/soubor. Po první bezpečné
   // změně z UI je autoritativní uložená skupina, takže reinstall nepřepíše
   // leadera zpět na původní hodnotu.
-  const group = persistedGroup ?? fallbackGroup;
+  const storedGroup = persistedGroup ?? fallbackGroup;
+  // Strop ručního vstupu nese výhradně instalace: uložená hodnota se nahradí argumentem
+  // (chybí = výchozí 1), takže reinstall bez flagu strop vždy vrátí na 1.
+  const { manualEntryMaxContracts: _storedCap, ...storedWithoutCap } = storedGroup;
+  const group: CopyGroupConfig = storedGroup.manualOnly === true
+    ? { ...storedWithoutCap, ...(manualEntryMaxContracts != null ? { manualEntryMaxContracts } : {}) }
+    : storedWithoutCap;
+  if (manualEntryMaxContracts != null && group.manualOnly !== true) {
+    throw new Error('--manual-entry-max-contracts: uložená skupina není manual-only');
+  }
+  if (group.manualOnly === true) console.log(`${new Date().toISOString()} MANUAL ENTRY strop ${group.manualEntryMaxContracts ?? 1} kontrakt(y) (instalace).`);
   // Controller topologii pri editaci nahradi vlastnim snapshotem. Tuto
   // referenci aktualizuje durable callback agenta, aby getter dispatch limitu
   // cetl prave aktualni skupinu, ne pocet followeru pri startu procesu.
@@ -1337,6 +1354,8 @@ async function runLocalAgent(
     }
     controller = await bootstrapCopierRuntime({
       broker,
+      // Ruční vstup (2. 11. 2026): kontrakt a cena Marketu jen z kotace IBKR vlákna ceny.
+      manualEntryQuote: root => tvPriceStream?.latestQuote(root) ?? null,
       store: {
         load: () => runtimeStore.load(),
         async commit(snapshot, expectedRevision) {

@@ -27,7 +27,7 @@ async function setup() {
   const clock = { now: START };
   const broker = createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(LEADER, START + 500), risk(FOLLOWER, START + 500)] });
   const controller = await bootstrapCopierRuntime({
-    broker, store: createMemoryCopierStore(), group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
+    broker, store: createMemoryCopierStore(), group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50, manualEntryQuote: () => ({ contract: 'MNQZ6', last: 29_500, lastAt: clock.now, bid: 29_499.75, ask: 29_500, quoteAt: clock.now }),
     manualEntryTimingsMs: { post: 500, start: 500, legWait: 300 },
   });
   active = controller;

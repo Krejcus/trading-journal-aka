@@ -29,6 +29,17 @@ export const supportsCopierManualEntry = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_MANUAL_ENTRY_CAPABILITY);
 
+/**
+ * Worker umí nativní Market ručního vstupu (`orderType: 'Market'` bez ceny,
+ * 2. 11. 2026). Bez ní panel Market nenabídne — žádný převod na Limit.
+ */
+export const COPIER_MANUAL_ENTRY_MARKET_CAPABILITY = 'manual-entry-market-v1';
+
+export const supportsCopierManualEntryMarket = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ENTRY_MARKET_CAPABILITY);
+
 /** Worker umí spravovat vlastní ruční vstup z grafu (fáze 2a, 29. 10. 2026). */
 export const COPIER_MANUAL_ORDER_MANAGE_CAPABILITY = 'manual-order-manage-v1';
 

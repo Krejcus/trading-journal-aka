@@ -47,7 +47,7 @@ async function setup(options: {
   const store = options.store ?? createMemoryCopierStore();
   const audits: string[] = [];
   const controller = await bootstrapCopierRuntime({
-    broker, store, group: config, clock: () => clock.now, osoCorrelationWindowMs: 50,
+    broker, store, group: config, clock: () => clock.now, osoCorrelationWindowMs: 50, manualEntryQuote: () => ({ contract: 'MNQZ6', last: 29_500, lastAt: clock.now, bid: 29_499.75, ask: 29_500, quoteAt: clock.now }),
     manualEntryTimingsMs: { post: 500, start: 500, legWait: 300, manage: 500, settle: 50, verify: 100 },
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });

@@ -83,6 +83,12 @@ export interface IbkrReading {
   bar: [number, number, number, number, number];
   bid: number | null;
   ask: number | null;
+  /**
+   * Kdy přišel poslední obchod a poslední bid/ask (hodiny procesu, ms). Ruční
+   * Market podle nich ověřuje čerstvost ceny (2. 11. 2026).
+   */
+  lastAt: number;
+  quoteAt: number | null;
   mode: 'streaming';
 }
 
@@ -184,6 +190,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
   let bar: MinuteBar | null = null;
   let bid: number | null = null;
   let ask: number | null = null;
+  let quoteAt: number | null = null;
   let trail: IbkrTrail | null = null;
   let failures = 0;
   let contractReqId = CONTRACT_REQ_BASE;
@@ -222,6 +229,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     trail = null;
     bid = null;
     ask = null;
+    quoteAt = null;
   };
 
   const contract = (candidate: FrontContractCandidate) => ({ conId: candidate.conId, exchange: 'CME' });
@@ -503,6 +511,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
       if (reqId !== REQ.quote || !subscribed) return;
       const value = price > 0 ? price : null;
       if (side === 'bid') bid = value; else ask = value;
+      quoteAt = now();
     },
   };
 
@@ -571,6 +580,8 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
           bar: [fullBar.minute, fullBar.open, fullBar.high, fullBar.low, fullBar.close],
           bid: quoteValid ? bid : null,
           ask: quoteValid ? ask : null,
+          lastAt: last.receivedAt,
+          quoteAt: quoteValid ? quoteAt : null,
           mode: 'streaming',
         };
       } catch {

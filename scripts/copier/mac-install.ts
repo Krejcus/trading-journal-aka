@@ -233,6 +233,13 @@ async function install(): Promise<void> {
     }
     cliFollowers = [{ accountId: follower, mode: 'on-submit', multiplier }];
   }
+  // Strop ručního vstupu manual-only skupiny (2. 11. 2026): 1–5, bez flagu 1.
+  const manualEntryCapRaw = flags.get('manual-entry-max-contracts')?.trim();
+  if (manualEntryCapRaw && !manualOnly) throw new Error('--manual-entry-max-contracts je povolený jen s --manual-only');
+  const manualEntryCap = manualEntryCapRaw ? Number(manualEntryCapRaw) : null;
+  if (manualEntryCap != null && (!Number.isSafeInteger(manualEntryCap) || manualEntryCap < 1 || manualEntryCap > 5)) {
+    throw new Error('--manual-entry-max-contracts musí být celé číslo 1–5');
+  }
   const follower = cliFollowers[0]?.accountId ?? null;
   const sourceManifest = flags.get('connections-manifest')?.trim();
   const manifest = sourceManifest ? await loadMacCopierConnectionManifest(sourceManifest) : null;
@@ -445,7 +452,7 @@ async function install(): Promise<void> {
     '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
     ...(manualOnly
-      ? ['--manual-only', 'true']
+      ? ['--manual-only', 'true', ...(manualEntryCap != null ? ['--manual-entry-max-contracts', String(manualEntryCap)] : [])]
       : ['--follower', String(follower), ...(followers ? ['--followers', followers] : ['--multiplier', flags.get('multiplier')?.trim() || '1'])]),
     '--minutes', '720',
     '--service-lifetime', 'persistent',

@@ -23,7 +23,7 @@ describe('fáze 1a: náhled v controlleru kopírky', () => {
     const store = createMemoryCopierStore();
     const audits: unknown[] = [];
     controller = await bootstrapCopierRuntime({
-      broker, store, group: group(), clock: () => now,
+      broker, store, group: group(), clock: () => now, manualEntryQuote: () => ({ contract: 'MNQZ6', last: 29_500, lastAt: now, bid: 29_499.75, ask: 29_500, quoteAt: now }),
       onAudit: entries => { audits.push(...entries); },
     });
     broker.setConnected(true);

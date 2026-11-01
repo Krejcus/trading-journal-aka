@@ -123,6 +123,10 @@ interface Props {
   manageEntryAvgPrice?: number | null;
   /** Worker umí zavřít obchod z grafu (× u pozice). */
   manageCloseSupported?: boolean;
+  /** Worker umí nativní Market ručního vstupu (`manual-entry-market-v1`). */
+  entryMarketSupported?: boolean;
+  /** Strop kontraktů ručního vstupu skupiny workeru. */
+  entryMaxContracts?: number;
 }
 
 function useMinuteNow() {
@@ -136,7 +140,7 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -604,6 +608,8 @@ const LiveTradingScreen: React.FC<Props> = ({
             {...(onPlaceEntry ? { onPlaceEntry } : {})}
             {...(onManageEntry ? { onManageEntry } : {})}
             manageEntryAvgPrice={manageEntryAvgPrice ?? null}
+            entryMarketSupported={entryMarketSupported}
+            entryMaxContracts={entryMaxContracts}
             onNewDraft={side => { if (quote) { setDraft(newTicketDraft(side, 'limit', side === 'buy' ? quote.ask - 10 : quote.bid + 10, INSTRUMENT, quote)); setFromBox(false); } }}
             onClose={() => setTicketOpen(false)}
           />

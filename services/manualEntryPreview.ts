@@ -4,6 +4,9 @@ import { pointValueUsd } from './futuresContractSpecs';
 import type { BrokerOrderRequest } from './brokerPort';
 import {
   copyGroupConfigHash,
+  leaderEntryRiskPrice,
+  LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS,
+  LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS,
   type LeaderEntryPreviewCommand,
   type LeaderEntryPreviewIssue,
   type LeaderEntryPreviewOrder,
@@ -19,8 +22,90 @@ import {
  * (fáze 1b) musí všechno přepočítat znovu.
  */
 
-/** Strop ručního vstupu, dokud nebude nastavení s UI a perzistencí (fáze 1c = 1 kontrakt). */
+/**
+ * Výchozí strop ručního vstupu (fáze 1c = 1 kontrakt). Skupina ho smí zvýšit jen
+ * instalačním `manualEntryMaxContracts` (manual-only DEMO, nejvýš
+ * `MANUAL_ENTRY_GROUP_CAP_MAX`); běžné skupiny zůstávají na 1.
+ */
 export const MANUAL_ENTRY_MAX_CONTRACTS = 1;
+export const MANUAL_ENTRY_GROUP_CAP_MAX = 5;
+/** Platný strop ručního vstupu skupiny: instalační hodnota jen u manual-only, jinak 1. */
+export function manualEntryContractCap(group: { manualOnly?: boolean; localOnly?: boolean; manualEntryMaxContracts?: number } | null | undefined): number {
+  const raw = group?.manualEntryMaxContracts;
+  if (group?.manualOnly !== true || group.localOnly !== true || raw == null) return MANUAL_ENTRY_MAX_CONTRACTS;
+  return Number.isSafeInteger(raw) && raw >= 1 && raw <= MANUAL_ENTRY_GROUP_CAP_MAX ? raw : MANUAL_ENTRY_MAX_CONTRACTS;
+}
+/** Market: kotace workeru z IBKR nejvýš tak stará a nejvýš tolik ticků od ceny, kterou viděl uživatel. */
+export const MANUAL_ENTRY_MARKET_WORKER_QUOTE_MAX_AGE_MS = 3_000;
+/** Původ kontraktu (i Limit/Stop): poslední kotace IBKR nejvýš tak stará (klidná noc). */
+export const MANUAL_ENTRY_CONTRACT_QUOTE_MAX_AGE_MS = 15_000;
+export const MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS = 8;
+/**
+ * Market: SL i TP aspoň tolik ticků od ceny, kterou viděl uživatel, i od kotace
+ * workeru (≥ drift + skluz) — skluz fillu nesmí nohu přehodit přes trh.
+ */
+export const MANUAL_ENTRY_MARKET_MIN_BRACKET_TICKS = 16;
+
+/** Kotace workeru z IBKR (vlákno ceny): poslední obchod a bid/ask s časy (hodiny procesu). */
+export interface ManualEntryWorkerQuote {
+  contract: string;
+  last: number;
+  lastAt: number;
+  bid: number | null;
+  ask: number | null;
+  quoteAt: number | null;
+}
+
+/** Nejčerstvější cena workeru pro stranu Marketu (Buy = ask, Sell = bid, jinak last), nebo null = stará. */
+export function workerMarketPrice(quote: ManualEntryWorkerQuote | null, side: 'Buy' | 'Sell', now: number): number | null {
+  if (!quote) return null;
+  const fresh = (at: number | null) => at != null && now - at <= MANUAL_ENTRY_MARKET_WORKER_QUOTE_MAX_AGE_MS && at <= now + LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS;
+  const sidePrice = side === 'Buy' ? quote.ask : quote.bid;
+  if (sidePrice != null && sidePrice > 0 && fresh(quote.quoteAt)) return sidePrice;
+  return fresh(quote.lastAt) && quote.last > 0 ? quote.last : null;
+}
+
+/**
+ * Brány Marketu nad kotacemi (čisté; stejně v náhledu i synchronně těsně před POSTem):
+ * stáří ceny klienta, čerstvá cena workeru z IBKR, posun trhu a vzdálenost nohou.
+ */
+export function manualEntryMarketQuoteBlockers(
+  command: Pick<LeaderEntryPreviewCommand, 'side' | 'referencePrice' | 'quoteReceivedAt' | 'stopLoss' | 'takeProfit'>,
+  quote: ManualEntryWorkerQuote | null,
+  now: number,
+): LeaderEntryPreviewIssue[] {
+  const issues: LeaderEntryPreviewIssue[] = [];
+  const reference = command.referencePrice!;
+  const quoteAge = now - command.quoteReceivedAt!;
+  if (command.quoteReceivedAt! > now + LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS || quoteAge > LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS) {
+    issues.push(blocker('market-quote-stale', `Cena, ze které jsi Market poslal, je stará ${Math.round(quoteAge / 100) / 10} s — nic se neodešle.`));
+  }
+  const market = workerMarketPrice(quote, command.side, now);
+  if (market == null) {
+    issues.push(blocker('market-worker-quote-stale', 'Worker nemá čerstvou cenu z IBKR (≤ 3 s) — Market teď nejde.'));
+    return issues;
+  }
+  if (Math.abs(market - reference) > MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS * TICK + 1e-9) {
+    issues.push(blocker('market-quote-drift', `Trh se od ceny, kterou jsi viděl, pohnul o víc než ${MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS} ticků — nic se neodešle.`));
+  }
+  const minDistance = MANUAL_ENTRY_MARKET_MIN_BRACKET_TICKS * TICK - 1e-9;
+  const tooClose = [reference, market].some(price => Math.abs(price - command.stopLoss) < minDistance || Math.abs(price - command.takeProfit) < minDistance);
+  const long = command.side === 'Buy';
+  const wrongSide = long ? !(command.stopLoss < market && command.takeProfit > market) : !(command.stopLoss > market && command.takeProfit < market);
+  if (tooClose || wrongSide) {
+    issues.push(blocker('market-bracket-too-close', `U Marketu musí být SL i TP aspoň ${MANUAL_ENTRY_MARKET_MIN_BRACKET_TICKS} ticků od ceny i od trhu.`));
+  }
+  return issues;
+}
+
+/** Cena vstupu pro riziko Marketu: horší z ceny, kterou viděl uživatel, a ceny workeru. */
+export function manualEntryMarketRiskPrice(side: 'Buy' | 'Sell', reference: number, quote: ManualEntryWorkerQuote | null, now: number): number {
+  const market = workerMarketPrice(quote, side, now);
+  if (market == null) return reference;
+  return side === 'Buy' ? Math.max(reference, market) : Math.min(reference, market);
+}
+/** Market: skluz vstupu v tickách navíc k rezervě SL. */
+export const MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS = 4;
 /** Náhled musí mít aspoň tolik času do konce okna / session / ARM. */
 export const MANUAL_ENTRY_END_RESERVE_MS = 5 * 60_000;
 /** Čerstvost risk snapshotu účtu (stejná jako ARM). */
@@ -61,6 +146,8 @@ export interface ManualEntryPreviewInputs {
     id: string;
     enabled: boolean;
     manualOnly?: boolean;
+    localOnly?: boolean;
+    manualEntryMaxContracts?: number;
     leaderAccountId: number | null;
     followers: ReadonlyArray<{ accountId: number; mode: string; multiplier: number; enabled?: boolean; maxContracts?: number | null; dailyLossCutUsd?: number | null }>;
     safety?: { dailyLossLimitUsd?: number; dailyMaxLosingTrades?: number; dailyMaxTrades?: number } | null;
@@ -95,6 +182,11 @@ export interface ManualEntryPreviewInputs {
   excludedFollowers: ReadonlySet<number>;
   /** Kandidáti front kontraktu (aktuální; kolem rollu i příští). */
   frontSymbols: readonly string[];
+  /**
+   * Poslední kotace workeru z IBKR (konkrétní kontrakt, jen když je IBKR aktivní
+   * zdroj); null = není. Jen odhad rizika Marketu a původ kontraktu — nikdy TV.
+   */
+  workerQuote: ManualEntryWorkerQuote | null;
 }
 
 const blocker = (code: string, text: string): LeaderEntryPreviewIssue => ({ code, text });
@@ -178,22 +270,41 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
   if ((safety.dailyLossLimitUsd ?? 0) > 0 && -input.dailyStats.realizedPnlUsd >= safety.dailyLossLimitUsd!) blockers.push(blocker('daily-loss-limit', 'Dosažena denní ztráta skupiny (ruční vstup je přísnější než kopírka).'));
 
   // Příkaz samotný.
-  if (command.quantity > MANUAL_ENTRY_MAX_CONTRACTS) blockers.push(blocker('manual-cap', `Ruční vstup je zatím omezený na ${MANUAL_ENTRY_MAX_CONTRACTS} kontrakt.`));
+  const cap = manualEntryContractCap(group);
+  if (command.quantity > cap) blockers.push(blocker('manual-cap', `Ruční vstup je omezený na ${cap} ${cap === 1 ? 'kontrakt' : 'kontrakty'} (strop skupiny).`));
   const long = command.side === 'Buy';
-  if (long ? !(command.stopLoss < command.price) : !(command.stopLoss > command.price)) blockers.push(blocker('stop-side', 'SL je na špatné straně vstupu.'));
-  if (long ? !(command.takeProfit > command.price) : !(command.takeProfit < command.price)) blockers.push(blocker('target-side', 'TP je na špatné straně vstupu.'));
+  const market = command.orderType === 'Market';
+  // Nativní Market jen v instalační manual-only DEMO skupině bez followerů: korelace
+  // OSO kopírky Market rodiče nezná a kopie by vznikla bez nohou (oponentura 2. 11.).
+  if (market && !(group.manualOnly === true && group.localOnly === true && group.followers.length === 0 && input.riskGate.brokerEnvironment === 'demo')) {
+    blockers.push(blocker('market-manual-only', 'Market z appky je zatím jen pro ruční DEMO účet bez followerů.'));
+  }
+  const entryPrice = market
+    ? manualEntryMarketRiskPrice(command.side, command.referencePrice!, input.workerQuote, now)
+    : leaderEntryRiskPrice(command);
+  if (long ? !(command.stopLoss < entryPrice) : !(command.stopLoss > entryPrice)) blockers.push(blocker('stop-side', 'SL je na špatné straně vstupu.'));
+  if (long ? !(command.takeProfit > entryPrice) : !(command.takeProfit < entryPrice)) blockers.push(blocker('target-side', 'TP je na špatné straně vstupu.'));
   if (!input.frontSymbols.includes(command.symbol)) blockers.push(blocker('symbol-not-front', `Kontrakt ${command.symbol} není aktuální front (${input.frontSymbols.join(' / ')}).`));
   else if (input.frontSymbols.length > 1) notes.push(blocker('roll-window', `Týden rollu — ověř, že ${command.symbol} je kontrakt, který chceš.`));
+  // Původ kontraktu (2. 11. 2026): stejný konkrétní kontrakt musí mít čerstvou kotaci
+  // workeru z IBKR. Kalendář sám nestačí, cena z TV se nepočítá.
+  const workerQuote = input.workerQuote;
+  const quoteSeenAt = workerQuote ? Math.max(workerQuote.lastAt, workerQuote.quoteAt ?? 0) : null;
+  const lineageFresh = quoteSeenAt != null && now - quoteSeenAt <= MANUAL_ENTRY_CONTRACT_QUOTE_MAX_AGE_MS && quoteSeenAt <= now + LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS;
+  if (!workerQuote || !lineageFresh) blockers.push(blocker('contract-unverified', 'Worker nemá čerstvou kotaci z IBKR — kontrakt teď nejde ověřit.'));
+  else if (workerQuote.contract !== command.symbol) blockers.push(blocker('contract-mismatch', `Kontrakt ${command.symbol} nesedí s kotací workeru z IBKR (${workerQuote.contract}).`));
+  if (market) blockers.push(...manualEntryMarketQuoteBlockers(command, workerQuote, now));
   if (command.orderType === 'Limit') notes.push(blocker('limit-marketability', 'Jestli limit není přes trh, ověří až broker (vyplnil by se hned).'));
   notes.push(blocker('leader-can-trade', 'Oprávnění leadera obchodovat náhled nečte (žádné volání brokera) — ověří odeslání.'));
 
   const pointValue = pointValueUsd(command.symbol);
   if (pointValue == null) blockers.push(blocker('point-value', 'Neznámá hodnota bodu kontraktu.'));
   const fee = FEE_PER_CONTRACT_USD[command.symbol.replace(/[FGHJKMNQUVXZ]\d$/, '')] ?? 5;
+  const slippageTicks = MANUAL_ENTRY_SLIPPAGE_TICKS + (market ? MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS : 0);
   const lossPerContract = pointValue == null ? null
-    : (Math.abs(command.price - command.stopLoss) + MANUAL_ENTRY_SLIPPAGE_TICKS * TICK) * pointValue + fee;
+    : (Math.abs(entryPrice - command.stopLoss) + slippageTicks * TICK) * pointValue + fee;
   const swingPerContract = pointValue == null ? null
-    : (Math.abs(command.takeProfit - command.stopLoss) + MANUAL_ENTRY_SLIPPAGE_TICKS * TICK) * pointValue + fee;
+    : (Math.abs(command.takeProfit - command.stopLoss) + slippageTicks * TICK) * pointValue + fee;
 
   const checkAccount = (accountId: number, label: string, quantity: number, configuredCutUsd: number | null = null) => {
     const account = input.accounts.get(accountId);
@@ -256,7 +367,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
     if (follower.maxContracts != null) notes.push(blocker('max-contracts-fallback', `${label}: má strop kontraktů — při rozpadu OSO korelace by obchod vynechal.`));
     checkAccount(follower.accountId, label, quantity, follower.dailyLossCutUsd ?? null);
     const gateRequests: BrokerOrderRequest[] = [
-      { tag: 'preview', accountId: follower.accountId, symbol: command.symbol, side: command.side, quantity, orderType: command.orderType, ...(command.orderType === 'Limit' ? { limitPrice: command.price } : { stopPrice: command.price }) },
+      { tag: 'preview', accountId: follower.accountId, symbol: command.symbol, side: command.side, quantity, orderType: command.orderType, ...(command.orderType === 'Limit' ? { limitPrice: command.price } : command.orderType === 'Stop' ? { stopPrice: command.price } : {}) },
       { tag: 'previews', accountId: follower.accountId, symbol: command.symbol, side: exit, quantity, orderType: 'Stop', stopPrice: command.stopLoss },
       { tag: 'previewt', accountId: follower.accountId, symbol: command.symbol, side: exit, quantity, orderType: 'Limit', limitPrice: command.takeProfit },
     ];
@@ -264,7 +375,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
     const reasons = [...new Set(decision.blocked.map(entry => entry.reason))];
     if (decision.haltReason) continue; // halt hlásí leader výš
     if (reasons.length) { blockers.push(blocker('follower-gate', `${label}: kopírka by odmítla (${reasons.join(', ')}).`)); continue; }
-    followers.push({ accountId: follower.accountId, side: command.side, quantity, orderType: command.orderType, price: command.price, stopLoss: command.stopLoss, takeProfit: command.takeProfit });
+    followers.push({ accountId: follower.accountId, side: command.side, quantity, orderType: command.orderType, price: entryPrice, stopLoss: command.stopLoss, takeProfit: command.takeProfit });
   }
   const leaderDecision = evaluateRiskGate([{ tag: 'preview', accountId: group.leaderAccountId, symbol: command.symbol, side: command.side, quantity: command.quantity, orderType: command.orderType }], { ...input.riskGate, maxQuantityPerAccount: new Map(), ineligibleAccounts: new Map() });
   if (leaderDecision.haltReason) blockers.push(blocker('halt', `Kopírka teď nesmí posílat: ${leaderDecision.haltReason}.`));
@@ -283,7 +394,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
 
   const leader: LeaderEntryPreviewOrder = {
     accountId: group.leaderAccountId, side: command.side, quantity: command.quantity, orderType: command.orderType,
-    price: command.price, stopLoss: command.stopLoss, takeProfit: command.takeProfit,
+    price: entryPrice, stopLoss: command.stopLoss, takeProfit: command.takeProfit,
   };
   return result({ leader, followers });
 }

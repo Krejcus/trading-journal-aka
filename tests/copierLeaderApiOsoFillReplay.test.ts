@@ -59,7 +59,7 @@ async function boot(options: { slowStore?: boolean; patchBroker?: (broker: MockB
     : memory;
   const audits: string[] = [];
   const controller = await bootstrapCopierRuntime({
-    broker, store, group: group(), clock: () => clock.now, manualEntryTimingsMs: { legWait: 300 },
+    broker, store, group: group(), clock: () => clock.now, manualEntryTimingsMs: { legWait: 300 }, manualEntryQuote: () => ({ contract: 'MNQZ6', last: 29_500, lastAt: clock.now, bid: 29_499.75, ask: 29_500, quoteAt: clock.now }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
   active = controller;

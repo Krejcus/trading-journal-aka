@@ -9,7 +9,16 @@ import { stableHash64 } from '../services/copierKeys.js';
 
 export const LEADER_ENTRY_TICK = 0.25;
 export const LEADER_ENTRY_MAX_QUANTITY = 50;
-const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
+/** Ruční vstup jen na MNQ (2. 11. 2026): NQ, kontinuální řada ani jiný root neprojdou. */
+export const LEADER_ENTRY_SYMBOL_PATTERN = /^MNQ[HMUZ]\d$/;
+const SYMBOL_PATTERN = LEADER_ENTRY_SYMBOL_PATTERN;
+/**
+ * Market (2. 11. 2026): nejstarší kotace, ze které smí uživatel Market poslat
+ * (stáří v okamžiku vyhodnocení ve workeru, včetně cesty relayí), a tolerance
+ * hodin klienta do budoucna.
+ */
+export const LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS = 5_000;
+export const LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS = 2_000;
 /** Vlastní jmenný prostor — náhled se nikdy nesmí plést s id skutečného odeslání. */
 const OPERATION_ID_PATTERN = /^preview:[a-zA-Z0-9_-]{8,100}$/;
 
@@ -22,8 +31,17 @@ export interface LeaderEntryPreviewCommand {
   symbol: string;
   side: 'Buy' | 'Sell';
   quantity: number;
-  orderType: 'Limit' | 'Stop';
-  price: number;
+  /** `Market` = skutečný Market u brokera (bez `price`), nikdy převod na Limit. */
+  orderType: LeaderEntryOrderType;
+  /** Cena Limit/Stop; u Marketu chybí. */
+  price?: number;
+  /**
+   * Cena, kterou uživatel viděl (Buy = ask, Sell = bid). U Marketu povinná —
+   * jen odhad rizika a zobrazení, nikdy cena příkazu.
+   */
+  referencePrice?: number;
+  /** Kdy klient kotaci přijal (epoch ms); u Marketu povinné. */
+  quoteReceivedAt?: number;
   stopLoss: number;
   takeProfit: number;
   /** Co uživatel viděl v náhledu panelu; worker musí přepočtem dojít ke stejnému. */
@@ -34,13 +52,16 @@ export interface LeaderEntryPreviewCommand {
   };
 }
 
+export type LeaderEntryOrderType = 'Limit' | 'Stop' | 'Market';
+
 export interface LeaderEntryPreviewIssue { code: string; text: string }
 
 export interface LeaderEntryPreviewOrder {
   accountId: number;
   side: 'Buy' | 'Sell';
   quantity: number;
-  orderType: 'Limit' | 'Stop';
+  orderType: LeaderEntryOrderType;
+  /** U Marketu cena, kterou uživatel viděl (odhad), ne cena příkazu. */
   price: number;
   stopLoss: number;
   takeProfit: number;
@@ -63,7 +84,8 @@ const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 
 const price = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
 const accountId = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const quantity = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= LEADER_ENTRY_MAX_QUANTITY;
-const COMMAND_KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'symbol', 'side', 'quantity', 'orderType', 'price', 'stopLoss', 'takeProfit', 'intent'];
+const COMMAND_KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'symbol', 'side', 'quantity', 'orderType', 'price', 'referencePrice', 'quoteReceivedAt', 'stopLoss', 'takeProfit', 'intent'];
+const epochMs = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value > 1_500_000_000_000 && value < 4_000_000_000_000;
 const INTENT_KEYS = ['armedAt', 'groupConfigHash', 'followerQuantities'];
 
 /** Striktní validace náhledu (whitelist klíčů, typy, tick); vyhodí `invalid-relay-command-payload`. */
@@ -79,8 +101,16 @@ export function validateLeaderEntryPreview(value: unknown): LeaderEntryPreviewCo
   if (typeof command.symbol !== 'string' || !SYMBOL_PATTERN.test(command.symbol)) fail();
   if (command.side !== 'Buy' && command.side !== 'Sell') fail();
   if (!quantity(command.quantity)) fail();
-  if (command.orderType !== 'Limit' && command.orderType !== 'Stop') fail();
-  if (!price(command.price) || !price(command.stopLoss) || !price(command.takeProfit)) fail();
+  if (command.orderType !== 'Limit' && command.orderType !== 'Stop' && command.orderType !== 'Market') fail();
+  if (command.orderType === 'Market') {
+    // Market nemá cenu příkazu; cena, kterou uživatel viděl, a čas kotace jsou povinné.
+    if (command.price !== undefined || !price(command.referencePrice) || !epochMs(command.quoteReceivedAt)) fail();
+  } else {
+    if (!price(command.price)) fail();
+    if (command.referencePrice !== undefined && !price(command.referencePrice)) fail();
+    if (command.quoteReceivedAt !== undefined && !epochMs(command.quoteReceivedAt)) fail();
+  }
+  if (!price(command.stopLoss) || !price(command.takeProfit)) fail();
   const intent = command.intent as Record<string, unknown> | null;
   if (!intent || typeof intent !== 'object' || Object.keys(intent).some(key => !INTENT_KEYS.includes(key))) fail();
   if (typeof intent!.armedAt !== 'number' || !Number.isSafeInteger(intent!.armedAt) || intent!.armedAt < 0) fail();
@@ -121,10 +151,17 @@ export interface LiveEntryPreviewDraft {
   symbol: string;
   side: 'Buy' | 'Sell';
   quantity: number;
-  orderType: 'Limit' | 'Stop';
-  price: number;
+  orderType: LeaderEntryOrderType;
+  price?: number;
+  referencePrice?: number;
+  quoteReceivedAt?: number;
   stopLoss: number;
   takeProfit: number;
+}
+
+/** Cena vstupu pro odhad rizika a strany SL/TP: Limit/Stop cena příkazu, Market cena, kterou uživatel viděl. */
+export function leaderEntryRiskPrice(command: { orderType: LeaderEntryOrderType; price?: number; referencePrice?: number }): number {
+  return command.orderType === 'Market' ? command.referencePrice! : command.price!;
 }
 
 /**
@@ -164,6 +201,6 @@ export function previewSymbolFromChartSource(source: string | null | undefined):
   const trimmed = (source ?? '').trim().toUpperCase();
   const prefix = trimmed.includes(':') ? trimmed.slice(0, trimmed.indexOf(':')) : null;
   if (prefix != null && prefix !== 'IBKR') return null;
-  const match = /(?:^|[:\s])(MNQ|NQ)([HMUZ])(?:20)?(\d{1,2})$/.exec((source ?? '').trim().toUpperCase());
+  const match = /(?:^|[:\s])(MNQ)([HMUZ])(?:20)?(\d{1,2})$/.exec((source ?? '').trim().toUpperCase());
   return match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
 }
