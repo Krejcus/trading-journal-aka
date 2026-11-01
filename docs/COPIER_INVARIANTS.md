@@ -1291,7 +1291,8 @@ existující ochranu.
   kopírky nebo 10 min zmizí (`tests/liveChartData.test.ts`).
 - LIVE na telefonu (nativní appka, 1. 11. 2026): LIVE se otevírá rovnou na
   celoobrazovkovém grafu (`components/day/LivePhoneChart.tsx`,
-  `role="dialog"`, takže nouzová lišta je pod ním schovaná). **Výjimka podle
+  `role="dialog"`, takže nouzová lišta je pod ním schovaná; od 1. 11. je na
+  grafu schovaná i nativní lišta iOS, na ostatních záložkách LIVE se vrací). **Výjimka podle
   výslovného rozhodnutí uživatele:** nouzová lišta ani Vypnout NEJSOU na
   telefonním grafu, v menu LIVE ▾ ani v •••. DISARM je dosažitelný takto:
   - LIVE ▾ → Live Dashboard (menu obsahuje přehled vždy) → OFF → potvrzení,

@@ -297,16 +297,17 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   useEffect(() => { if (!split) setMaximized(false); }, [split]);
 
   // Nativní lišta pryč po dobu celé obrazovky (v LIVE zůstává); stránka pod vrstvou neroluje.
-  const liveMode = Boolean(live);
+  // I LIVE graf je bez nativní lišty (Filip 1. 11.: víc místa na obchodování);
+  // vrátí se na ostatních záložkách LIVE (Live Dashboard s nouzovou lištou) i mimo LIVE.
   useEffect(() => {
-    if (!liveMode) void setNativeShellTabBarHidden(true);
+    void setNativeShellTabBarHidden(true);
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = previous;
-      if (!liveMode) void setNativeShellTabBarHidden(false);
+      void setNativeShellTabBarHidden(false);
     };
-  }, [liveMode]);
+  }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !textEdit) onClose(); };
     window.addEventListener('keydown', onKey);
