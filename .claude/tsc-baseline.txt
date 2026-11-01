@@ -16,13 +16,6 @@ components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may on
 components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may only specify known properties, and 'textColor' does not exist in type 'Partial<DrawingStyle>'.
 components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may only specify known properties, and 'textHorizontal' does not exist in type 'Partial<DrawingStyle>'.
 components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may only specify known properties, and 'textVertical' does not exist in type 'Partial<DrawingStyle>'.
-extension/src/background/index.ts: error TS2304: Cannot find name 'chrome'.
-extension/src/background/index.ts: error TS2688: Cannot find type definition file for 'chrome'.
-extension/src/content/Sidebar.tsx: error TS2304: Cannot find name 'chrome'.
-extension/src/lib/positionReader.ts: error TS2304: Cannot find name 'chrome'.
-extension/src/lib/positionReader.ts: error TS2688: Cannot find type definition file for 'chrome'.
-extension/src/popup/Popup.tsx: error TS2304: Cannot find name 'chrome'.
-extension/vite.config.ts: error TS2307: Cannot find module '@crxjs/vite-plugin' or its corresponding type declarations.
 scripts/audit-data.ts: error TS2304: Cannot find name 'stats'.
 scripts/check-business-data.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
 scripts/check-journal.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
