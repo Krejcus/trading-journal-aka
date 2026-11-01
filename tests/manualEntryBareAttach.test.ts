@@ -206,4 +206,26 @@ describe('holý Market a doplnění SL/TP (manual-only DEMO)', () => {
     expect(attached.blockers.map(issue => issue.code)).toContain('entry-closed');
     expect(ctx.broker.placedOcoRequests()).toHaveLength(0);
   });
+
+  it('leader zplochl bez dohledu workeru: kontrola pozic po reconnectu holý vstup uzavře', async () => {
+    const ctx = await setup();
+    const placed = await ctx.controller.placeLeaderEntry(ctx.bare(1), { deadlineAt: ctx.clock.now + 15_000 });
+    fillMarket(ctx.broker, placed.entryBrokerOrderId!, 1);
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    ctx.controller.disarm('manual');
+    await ctx.controller.waitForIdle();
+    ctx.broker.setConnected(false);
+    await ctx.controller.waitForIdle();
+    // Mezitím zavřeno mimo dohled (žádný position event).
+    ctx.broker.setPosition(LEADER, SYM, 0);
+    for (const order of ctx.broker.orders()) if (order.status === 'working') order.status = 'canceled';
+    ctx.broker.setConnected(true);
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    // Automatická kontrola se kvůli pozici leadera přeskočí → ruční Kontrola pozic.
+    await ctx.controller.reconcile();
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status().manualEntries?.find(entry => entry.operationId === 'entry:baretest001')).toMatchObject({ open: false });
+  });
 });

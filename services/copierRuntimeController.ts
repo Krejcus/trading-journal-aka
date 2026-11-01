@@ -11637,6 +11637,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         pendingReadOnlyConnectionRecovery = false;
         lastError = null;
         if (lastDisarm?.trigger === 'transport') updateDisarmOutcome(lastDisarm.at, 'flat');
+        // Leader prokazatelně flat (i když zplochl, zatímco worker neběžel): otevřené holé
+        // vstupy jsou uzavřené — attach k nim už nikdy nepatří (oponentura 2. 11., P2).
+        const closedAt = clock();
+        for (const record of manualEntryRecords()) {
+          if (record.bare !== true || record.closedAt != null || record.status !== 'acknowledged') continue;
+          await persistManualEntry(record.operationId, current => ({ ...(current ?? record), closedAt, updatedAt: closedAt }));
+        }
         options.onAudit?.([{
           at: clock(), leaderEventId: 'connection-preflight', kind: 'recovered',
           reason: 'automatická read-only kontrola po reconnectu potvrdila flat/no-working stav; runtime zůstává DISARMED',
@@ -19634,9 +19641,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       let incidentMismatchError: Error | null = null;
       const mayClear = reconciliationOptions.internal !== true
         && (incidentToClear == null || incidentToClear.id === expectedIncidentId);
+      const reconcileStartedAt = clock();
       const result = await performReconciliation({ ...reconciliationOptions, clearLastError: mayClear });
       // Čistá Kontrola pozic = čerstvý autoritativní snapshot všech účtů.
       if (result.authoritativelyClean) await releaseAccountSyncPausesSafely(accountSyncPauseReleasableFromCache);
+      if (result.authoritativelyClean && group.leaderAccountId != null) {
+        // Čistá kontrola s leaderem flat na symbolu: otevřené holé vstupy jsou uzavřené (P2, 2. 11.).
+        for (const record of manualEntryRecords()) {
+          if (record.bare !== true || record.closedAt != null || record.status !== 'acknowledged' || record.createdAt > reconcileStartedAt) continue;
+          if ((positionsByAccount.get(group.leaderAccountId)?.get(record.request.symbol) ?? null) !== 0) continue;
+          const closedAt = clock();
+          await persistManualEntry(record.operationId, current => ({ ...(current ?? record), closedAt, updatedAt: closedAt }));
+        }
+      }
       if (result.authoritativelyClean && mayClear && currentManualRecovery === incidentToClear) {
         // 22. 10. 2026: zápis incidentu z failClosed může ještě čekat ve
         // frontě (pomalý disk). Potvrzení by jinak „smazalo“ prázdné místo a
