@@ -233,6 +233,7 @@ import {
   exactCrosshairPoint,
   exactCrosshairPriceLabelTop,
   exactCrosshairX,
+  snapCrosshairXToBar,
   type ExactCrosshairSyncDetail,
 } from '../services/chartCrosshairPrecision';
 import { createBarCountdownPrimitive } from '../services/barCountdownPrimitive';
@@ -2431,9 +2432,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // Režim kurzoru z levé lišty (Kříž/Tečka/Šipka/Prezentace/Guma) platí pro
   // všechny grafy; kurzor myši a gumu řídí kreslicí ovladač.
   const [cursorMode, setCursorMode] = useState<ChartCursorMode>(getChartCursorMode);
+  const cursorModeRef = useRef(cursorMode);
+  cursorModeRef.current = cursorMode;
   useEffect(() => subscribeChartCursorMode(setCursorMode), []);
   useEffect(() => {
     apiRef.current?.drawing?.setPointerMode(cursorMode, chartCursorCss(cursorMode));
+    // Čáry crosshairu kreslí jen vlastní vrstva — přepnutí režimu ukázat hned.
+    refreshExactCrosshairRef.current?.();
   }, [chartApiEpoch, cursorMode]);
   // Prezentace: klik do grafu nechá rozbíhající se kruh, aby divák viděl, kam
   // se ukazuje. Jen vizuál — na graf ani kresby nesahá.
@@ -4219,17 +4224,19 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const chartOffsetX = chartRect.left - rootRect.left;
       const chartOffsetY = chartRect.top - rootRect.top;
       const plotLeft = chartOffsetX + leftScaleWidth;
+      // Čáry jen Kříž a Tečka (jako TradingView); popisky na osách vždy.
+      const lineOpacity = chartCursorShowsCrosshairLines(cursorModeRef.current) ? '1' : '0';
       if (exactLine) {
         exactLine.style.top = `${chartOffsetY}px`;
         exactLine.style.height = `${plotHeight}px`;
         exactLine.style.transform = `translate3d(${plotLeft + x}px, 0, 0)`;
-        exactLine.style.opacity = '1';
+        exactLine.style.opacity = lineOpacity;
       }
       if (exactHorizontalLine) {
         exactHorizontalLine.style.left = `${plotLeft}px`;
         exactHorizontalLine.style.width = `${plotWidth}px`;
         exactHorizontalLine.style.transform = `translate3d(0, ${chartOffsetY + y}px, 0)`;
-        exactHorizontalLine.style.opacity = '1';
+        exactHorizontalLine.style.opacity = lineOpacity;
       }
       if (exactLabel && time !== undefined) {
         exactLabel.textContent = chartCrosshairTimeLabel(time, {
@@ -4255,16 +4262,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     };
     const handleCrosshairMove: Parameters<IChartApi['subscribeCrosshairMove']>[0] = param => {
       const timeScale = chart.timeScale();
+      // X knihovny už stojí na středu svíčky (jako vlastní vrstva).
       const exactX = exactCrosshairX({
-        sourceX: param.sourceEvent?.localX,
         fallbackX: param.point?.x,
         plotWidth: timeScale.width(),
       });
-      // Physical pointer samples are handled synchronously by the raw DOM
-      // listener below. The library callback is intentionally only a fallback
-      // for keyboard/programmatic moves because it may arrive after an
-      // indicator paint and its X is snapped to the nearest bar.
-      if (!param.sourceEvent) {
+      // Physical mouse samples are handled synchronously by the raw DOM
+      // listener below. The library callback drives the crosshair only for
+      // keyboard/programmatic moves and touch (long-press), where the raw
+      // listener does not track the pointer.
+      if (!param.sourceEvent || !exactPointerClientRef.current) {
         const fallbackPrice = param.point ? series.coordinateToPrice(param.point.y) : null;
         updateExactCrosshair(param.point ? exactX : null, param.point?.y ?? null, param.time === undefined ? undefined : Number(param.time), fallbackPrice);
       }
@@ -4314,15 +4321,22 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         hideExactCrosshair();
         return;
       }
-      const pointerTime = chart.timeScale().coordinateToTime(point.x);
+      const timeScale = chart.timeScale();
+      const x = snapCrosshairXToBar(
+        point.x,
+        value => timeScale.coordinateToLogical(value),
+        logical => timeScale.logicalToCoordinate(logical as Logical),
+        Math.max(0, rect.width - leftScaleWidth - rightScaleWidth),
+      );
+      const pointerTime = timeScale.coordinateToTime(x);
       const pointerPrice = series.coordinateToPrice(point.y);
-      updateExactCrosshair(point.x, point.y, pointerTime === null ? undefined : Number(pointerTime), pointerPrice);
+      updateExactCrosshair(x, point.y, pointerTime === null ? undefined : Number(pointerTime), pointerPrice);
     };
     const handleExactPointerMove = (event: PointerEvent) => {
-      // Touch keeps the library's long-press crosshair and pan/pinch behavior.
+      // Touch keeps the library's long-press crosshair and pan/pinch behavior;
+      // the crosshair callback above draws it from the library's position.
       if (event.pointerType === 'touch') {
         exactPointerClientRef.current = null;
-        hideExactCrosshair();
         return;
       }
       const samples = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [];
@@ -5518,14 +5532,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const chartSettingsOptions = useMemo(() => {
     const canvas = chartCanvasOptions(chartSettings);
     const { symbol, scales } = chartSettings;
-    const crosshairLines = chartCursorShowsCrosshairLines(cursorMode);
+    // Vestavěné čáry crosshairu zůstávají vypnuté (`chartCanvasOptions`) —
+    // kreslí je jen vlastní vrstva, jinak by byly dva crosshairy.
     return {
       ...canvas,
-      crosshair: {
-        ...canvas.crosshair,
-        vertLine: { ...canvas.crosshair?.vertLine, visible: crosshairLines },
-        horzLine: { ...canvas.crosshair?.horzLine, visible: crosshairLines },
-      },
       // Logo TradingView v rohu grafu ne — licence je splněná atribucí v Nastavení.
       layout: { ...canvas.layout, fontFamily: chartStyle.fontFamily, attributionLogo: false },
       timeScale: {
@@ -5552,7 +5562,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         priceFormatter: chartPriceFormatter(symbol.precision, formatNqMnqTickPrice),
       },
     };
-  }, [chartSettings, cursorMode, timeframe]);
+  }, [chartSettings, timeframe]);
 
   const appliedMarginRightRef = useRef<number | null>(null);
   useEffect(() => {
