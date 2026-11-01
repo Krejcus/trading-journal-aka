@@ -285,7 +285,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-01 — izolovaný single-account DEMO režim (Codex, worker NAINSTALOVÁN; web NENASAZEN)
+### 2026-11-01 — izolovaný single-account DEMO režim (Codex, worker + web NASAZENO)
 
 - Pro cílový účet `DEMO8661118` (`61038658`) vznikl instalačně označený
   `manualOnly` režim: jeden leader, nula followerů, pouze lokální worker a
@@ -303,7 +303,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověření: 6 408 testů + 1 todo (celá sada), samostatně 87/87 loopback testů
   execution agenta, TypeScript bez chyb s 4GB heapem, produkční build a oba
   worker bundly OK; `git diff --check` čistý.
-- Lokální commit `cbce0283`; nic nebylo pushnuto ani nasazeno na web. Mac worker
+- Implementace `cbce0283` a instalační zápis `849fea3c` byly fast-forward
+  pushnuté na `main`. Produkční Vercel deployment
+  `dpl_DnoXYwKemC1dpFVtnPSwGpdmRy1o` je READY; root vrací 200 a autentizované
+  LIVE v produkci ukázalo `DEMO8661118`, leader → 0, OFF, graf i nouzové
+  ovládání bez nové chyby v konzoli. Mac worker
   je nainstalovaný z čistého commitu `cbce0283` s jediným argumentem leader
   `61038658`, `--manual-only true` a target-only manifestem. Po startu:
   `armed=false`, `connected=true`, `reconciliationRequired=false`, `groupFlat=true`,
