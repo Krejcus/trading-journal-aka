@@ -59,6 +59,8 @@ const toolIcon = (tool: string) => (tool === DAY_PATH_TOOL ? TOOL_BY_ID.get('Arr
 // „Šipka“ je na telefonu cesta se zlomy; jednoduchá šipka motoru se jmenuje jinak, ať se neplete.
 const toolTitle = (tool: string | null) => (tool === DAY_PATH_TOOL ? 'Šipka' : tool === 'Arrow' ? 'Rovná šipka' : tool ? DAY_DRAW_TOOLS.find(item => item.id === tool)?.label ?? TOOL_BY_ID.get(tool)?.title ?? tool : '');
 const SCOPE_LABEL: Record<'day' | 'london' | 'ny', string> = { day: 'Celý den', london: 'London', ny: 'New York' };
+/** Krátké popisky čipu v LIVE liště (na úzkém telefonu musí být vidět i •••). */
+const SCOPE_SHORT: Record<'day' | 'london' | 'ny', string> = { day: 'Den', london: 'LDN', ny: 'NY' };
 
 /**
  * Graf dne přes celou obrazovku telefonu (docs/DAY_CHART_PHONE_FULLSCREEN.md,
@@ -657,6 +659,9 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px calc(6px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', flex: 'none', minHeight: 52 };
   // LIVE na telefonu v tmavém režimu: Aurora (sklo nad barevným polem, graf průsvitný).
   const aurora = Boolean(live) && isDark;
+  // LIVE lišta má navíc fotoaparát a ⇅ — užší ikony, ať se na 390 pt vejde i •••.
+  const stripIcon: React.CSSProperties = live ? { ...iconButton, width: 36 } : iconButton;
+  const hubButton = <button type="button" className="dj-btn" aria-label="Další volby grafu" aria-expanded={hubOpen} onClick={() => { cancelTool(); setHubOpen(true); }} style={{ ...stripIcon, ...(hubOpen ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><MoreHorizontal size={19} /></button>;
 
   return createPortal(
     <div ref={rootRef} className={aurora ? 'dj dj-aurora' : 'dj'} role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', animation: 'dj-fade .18s ease both' }}>
@@ -853,20 +858,20 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
       {!chromeHidden && replayOn && replayRange && (
         <div role="toolbar" aria-label="Přehrávání" style={{ ...bar, gap: 0, padding: 4, minHeight: 48, animation: 'dj-rise .2s ease both' }}>
           <div className="dj-scroll" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 2, overflowX: 'auto', scrollbarWidth: 'none' }}>
-            <button type="button" className="dj-btn" aria-label="Vybrat nový start" onClick={startReplay} style={iconButton}><Scissors size={18} /></button>
+            <button type="button" className="dj-btn" aria-label="Vybrat nový start" onClick={startReplay} style={stripIcon}><Scissors size={18} /></button>
             <span style={divider} />
-            <button type="button" className="dj-btn" aria-label="Krok zpět" onClick={() => stepReplay(-1)} style={iconButton}><StepBack size={18} /></button>
-            <button type="button" className="dj-btn" aria-label={replayPlaying ? 'Pozastavit' : 'Přehrát'} disabled={replayAtEnd} onClick={() => setReplayPlaying(playing => !playing)} style={{ ...iconButton, width: 46, height: 40, borderRadius: 12, color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', opacity: replayAtEnd ? 0.4 : 1 }}>{replayPlaying ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</button>
-            <button type="button" className="dj-btn" aria-label="Krok vpřed" disabled={replayAtEnd} onClick={() => stepReplay(1)} style={{ ...iconButton, opacity: replayAtEnd ? 0.35 : 1 }}><StepForward size={18} /></button>
+            <button type="button" className="dj-btn" aria-label="Krok zpět" onClick={() => stepReplay(-1)} style={stripIcon}><StepBack size={18} /></button>
+            <button type="button" className="dj-btn" aria-label={replayPlaying ? 'Pozastavit' : 'Přehrát'} disabled={replayAtEnd} onClick={() => setReplayPlaying(playing => !playing)} style={{ ...stripIcon, width: 46, height: 40, borderRadius: 12, color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', opacity: replayAtEnd ? 0.4 : 1 }}>{replayPlaying ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</button>
+            <button type="button" className="dj-btn" aria-label="Krok vpřed" disabled={replayAtEnd} onClick={() => stepReplay(1)} style={{ ...stripIcon, opacity: replayAtEnd ? 0.35 : 1 }}><StepForward size={18} /></button>
             <span style={divider} />
             <button type="button" className="dj-btn" aria-label={`Rychlost ${replaySpeed}x`} onClick={() => setReplaySheet('speed')} style={{ ...chip, height: 34, minWidth: 44, justifyContent: 'center', fontWeight: 800, flex: 'none' }}>{replaySpeed}x</button>
             <button type="button" className="dj-btn" aria-label={`Interval kroku ${replayStep} min`} onClick={() => setReplaySheet('step')} style={{ ...chip, height: 34, minWidth: 44, justifyContent: 'center', fontWeight: 800, flex: 'none', marginLeft: 4 }}>{DAY_REPLAY_STEP_LABEL[replayStep]}</button>
             <button type="button" className="dj-btn" aria-label="Svíčky v přehrávání" onClick={() => setReplaySheet('candles')} style={{ ...chip, height: 34, fontWeight: 700, flex: 'none', marginLeft: 4 }}>{REPLAY_CANDLE_MODE_OPTIONS.find(option => option.value === replayCandleMode)?.label ?? 'Plynule'}</button>
             <span className="dj-mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--dj-text-2)', minWidth: 42, textAlign: 'center', flex: 'none' }}>{replayCursor != null ? new Intl.DateTimeFormat('cs-CZ', { timeZone: 'Europe/Prague', hour: '2-digit', minute: '2-digit' }).format(replayCursor * 1000) : ''}</span>
-            <button type="button" className="dj-btn" aria-label="Skočit na konec" disabled={replayAtEnd} onClick={() => { setReplayPlaying(false); setReplayCursor(replayRange.end); }} style={{ ...iconButton, opacity: replayAtEnd ? 0.35 : 1 }}><SkipForward size={18} /></button>
+            <button type="button" className="dj-btn" aria-label="Skočit na konec" disabled={replayAtEnd} onClick={() => { setReplayPlaying(false); setReplayCursor(replayRange.end); }} style={{ ...stripIcon, opacity: replayAtEnd ? 0.35 : 1 }}><SkipForward size={18} /></button>
           </div>
           <span style={{ ...divider, margin: '0 4px' }} />
-          <button type="button" className="dj-btn" aria-label="Ukončit přehrávání" onClick={stopReplay} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={17} /></button>
+          <button type="button" className="dj-btn" aria-label="Ukončit přehrávání" onClick={stopReplay} style={{ ...stripIcon, border: '1px solid var(--dj-line)' }}><X size={17} /></button>
         </div>
       )}
       {replaySheet && (
@@ -900,26 +905,28 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           <div className="dj-scroll" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 2, overflowX: 'auto', scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
             {ctl && (<>
             {/* Rozsah dne jako jeden čip (Den → LDN → NY). */}
-            <button type="button" className="dj-btn" aria-label={`Rozsah: ${SCOPE_LABEL[ctl.scope]}, další`} onClick={() => pickScope(ctl.scope === 'day' ? 'london' : ctl.scope === 'london' ? 'ny' : 'day')} style={{ ...chip, height: 34, padding: '0 10px', gap: 6, fontWeight: 800, flex: 'none', margin: '0 2px' }}>
-              <span style={{ width: 8, height: 8, borderRadius: 9, background: ctl.scope === 'london' ? '#3b82f6' : ctl.scope === 'ny' ? '#f97316' : '#94a3b8' }} />{SCOPE_LABEL[ctl.scope]}
+            <button type="button" className="dj-btn" aria-label={`Rozsah: ${SCOPE_LABEL[ctl.scope]}, další`} onClick={() => pickScope(ctl.scope === 'day' ? 'london' : ctl.scope === 'london' ? 'ny' : 'day')} style={{ ...chip, height: 34, padding: live ? '0 8px' : '0 10px', gap: 6, fontWeight: 800, flex: 'none', margin: '0 2px' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 9, background: ctl.scope === 'london' ? '#3b82f6' : ctl.scope === 'ny' ? '#f97316' : '#94a3b8' }} />{live ? SCOPE_SHORT[ctl.scope] : SCOPE_LABEL[ctl.scope]}
             </button>
             </>)}
             <span style={divider} />
-            <button type="button" className="dj-btn" aria-label="Nástroje kreslení" aria-pressed={drawingNow} onClick={() => (drawingNow ? cancelTool() : setToolsOpen(true))} style={{ ...iconButton, ...(drawingNow ? { color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' } : {}) }}>{drawingNow ? <X size={18} /> : <PenLine size={18} />}</button>
-            <button type="button" className="dj-btn" aria-label={historyState.undoLabel ? `Zpět: ${historyState.undoLabel}` : 'Zpět'} disabled={!historyState.canUndo || drawingNow} onClick={() => history.undo()} style={{ ...iconButton, opacity: historyState.canUndo && !drawingNow ? 1 : 0.35 }}><Undo2 size={18} /></button>
-            <button type="button" className="dj-btn" aria-label={historyState.redoLabel ? `Vpřed: ${historyState.redoLabel}` : 'Vpřed'} disabled={!historyState.canRedo || drawingNow} onClick={() => history.redo()} style={{ ...iconButton, opacity: historyState.canRedo && !drawingNow ? 1 : 0.35 }}><Redo2 size={18} /></button>
-            {live && <button type="button" className="dj-btn" aria-label="Snímek grafu do schránky" onClick={takeShot} style={iconButton}><Camera size={18} /></button>}
+            <button type="button" className="dj-btn" aria-label="Nástroje kreslení" aria-pressed={drawingNow} onClick={() => (drawingNow ? cancelTool() : setToolsOpen(true))} style={{ ...stripIcon, ...(drawingNow ? { color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' } : {}) }}>{drawingNow ? <X size={18} /> : <PenLine size={18} />}</button>
+            <button type="button" className="dj-btn" aria-label={historyState.undoLabel ? `Zpět: ${historyState.undoLabel}` : 'Zpět'} disabled={!historyState.canUndo || drawingNow} onClick={() => history.undo()} style={{ ...stripIcon, opacity: historyState.canUndo && !drawingNow ? 1 : 0.35 }}><Undo2 size={18} /></button>
+            <button type="button" className="dj-btn" aria-label={historyState.redoLabel ? `Vpřed: ${historyState.redoLabel}` : 'Vpřed'} disabled={!historyState.canRedo || drawingNow} onClick={() => history.redo()} style={{ ...stripIcon, opacity: historyState.canRedo && !drawingNow ? 1 : 0.35 }}><Redo2 size={18} /></button>
+            {live && <button type="button" className="dj-btn" aria-label="Snímek grafu do schránky" onClick={takeShot} style={stripIcon}><Camera size={18} /></button>}
             <span style={divider} />
             {split && (
-              <button type="button" className="dj-btn" aria-label={maximized ? 'Zpět na obě okna' : 'Označené okno přes celou plochu'} aria-pressed={maximized} onClick={() => setMaximized(on => !on)} style={{ ...iconButton, ...(maximized ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}>{maximized ? <Shrink size={18} /> : <Expand size={18} />}</button>
+              <button type="button" className="dj-btn" aria-label={maximized ? 'Zpět na obě okna' : 'Označené okno přes celou plochu'} aria-pressed={maximized} onClick={() => setMaximized(on => !on)} style={{ ...stripIcon, ...(maximized ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}>{maximized ? <Shrink size={18} /> : <Expand size={18} />}</button>
             )}
-            <span style={divider} />
-{ctl && (<>
-            <button type="button" className="dj-btn" aria-label="Poznámka do grafu" aria-pressed={placing === 'note'} onClick={() => { cancelTool(); ctl?.setPendingPoint(null); ctl?.setPlacing(placing === 'note' ? null : 'note'); }} style={{ ...iconButton, ...(placing === 'note' ? { color: '#1c1203', background: '#fbbf24' } : {}) }}><StickyNote size={18} /></button>
-            <button type="button" className="dj-btn" aria-label="Poznámka hlasem" aria-pressed={placing === 'voice'} onClick={() => { cancelTool(); onVoice(); }} style={{ ...iconButton, ...(placing === 'voice' ? { color: '#fff', background: '#f43f5e' } : {}) }}><Mic size={18} /></button>
+            {(split || !live) && <span style={divider} />}
+{/* LIVE: ••• hned za fotoaparátem (vidět i na úzkém telefonu), poznámky až za ním. */}
+            {live && hubButton}
+            {ctl && (<>
+            <button type="button" className="dj-btn" aria-label="Poznámka do grafu" aria-pressed={placing === 'note'} onClick={() => { cancelTool(); ctl?.setPendingPoint(null); ctl?.setPlacing(placing === 'note' ? null : 'note'); }} style={{ ...stripIcon, ...(placing === 'note' ? { color: '#1c1203', background: '#fbbf24' } : {}) }}><StickyNote size={18} /></button>
+            <button type="button" className="dj-btn" aria-label="Poznámka hlasem" aria-pressed={placing === 'voice'} onClick={() => { cancelTool(); onVoice(); }} style={{ ...stripIcon, ...(placing === 'voice' ? { color: '#fff', background: '#f43f5e' } : {}) }}><Mic size={18} /></button>
             </>)}
-            <button type="button" className="dj-btn" aria-label="Další volby grafu" aria-expanded={hubOpen} onClick={() => { cancelTool(); setHubOpen(true); }} style={{ ...iconButton, ...(hubOpen ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><MoreHorizontal size={19} /></button>
-            <button type="button" className="dj-btn" aria-label="Skrýt ovládání" onClick={() => setChromeHidden(true)} style={iconButton}><Maximize2 size={17} /></button>
+            {!live && hubButton}
+            <button type="button" className="dj-btn" aria-label="Skrýt ovládání" onClick={() => setChromeHidden(true)} style={stripIcon}><Maximize2 size={17} /></button>
           </div>
           <span style={{ ...divider, margin: '0 4px' }} />
           {onSlotsReady && (
