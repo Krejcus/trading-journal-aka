@@ -285,7 +285,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-01 — atomická admission ručního vstupu a správy z grafu + workerová pojistka (Claude, větev, NENASAZENO)
+### 2026-11-01 — produkční rollout atomické admission a brzd (Codex, DB + web NASAZENO; worker čeká)
+
+- Před produkční změnou vznikla úplná logická záloha
+  `~/AlphaTrade-backups/supabase/20261101T083140Z`: archiv byl celý přečten
+  (136 tabulek / 4 697 428 řádků), Storage 1 854/1 854 objektů, bez chyby.
+  Produkční tělo `claim_tradovate_copier_command_v2` bylo zvlášť uloženo jako
+  rollback; před migrací bylo 0 duplicitních idempotency skupin a 0 pending
+  příkazů.
+- Supabase migrace je v produkci pod skutečnou historií
+  `20261101090849_copier_manual_admission`. Přidala service-role-only,
+  SECURITY INVOKER RPC `admit_tradovate_copier_manual_command` a
+  `enqueue_tradovate_copier_brake`; `claim_v2` nyní prioritizuje brzdy a
+  risk-redukční Flatten. `anon` ani `authenticated` nemají EXECUTE. Security
+  i performance advisory jsou po migraci přesně stejné jako před ní.
+- Webový release `9703d0e25f2aaa2256f6a9e5865b22b204624e89` je na `main` a
+  Vercel deployment `dpl_GGE3jHKJK6zsWthjoqhePi5HACAX` je READY na
+  `alphatrade-mentor-15.vercel.app`. Root vrací 200; neautorizovaný
+  `copier-relay` a prázdný POST `pilot-lease` vracejí 401. Runtime po deployi
+  nemá novou aplikační chybu; jediný záznam je známé Node `url.parse()`
+  deprecation upozornění vyvolané kontrolním GETem.
+- Ověření release: TypeScript regression 0 nových chyb, 6 402 testů + 1 todo,
+  produkční Vite/PWA build OK; po srovnání názvu migrace ještě cíleně 183/183.
+- Worker se záměrně NEPŘEINSTALOVAL: nainstalovaný SHA zůstává `e1fd4af3`,
+  `armed=false`, `groupFlat=true`, bez working orders a stuck outboxu, ale
+  `connected=false`, `reconciliationRequired=true` a OAuth hlásí
+  `tradovate-connection-not-connected`. Reinstall `9703d0e2` až po ručním
+  obnovení OAuth a čisté read-only reconciliation před i po instalaci.
+- Nebyl proveden ARM, Flatten ani žádný brokerový zápis.
+
+### 2026-11-01 — atomická admission ručního vstupu a správy z grafu + workerová pojistka (Claude + Codex, DB/web NASAZENO; worker čeká)
 
 - Proč: relay dřív četl existující operaci, busy/rozestup a strop zvlášť a pak
   vkládal (TOCTOU). Dva souběžné požadavky (PC + telefon, dvě záložky, dvě
