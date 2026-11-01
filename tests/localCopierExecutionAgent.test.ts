@@ -1,4 +1,5 @@
 import { buildLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace';
+import { buildLeaderOrderManageCommand } from '../lib/leaderOrderManage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { request as httpRequest } from 'node:http';
 import {
@@ -1983,6 +1984,49 @@ describe('fáze 1a: náhled ručního vstupu v agentu', () => {
       await agent.close();
     }
   });
+});
+
+describe('brzda × ruční příkaz ve workeru: garantovaný výsledek (1. 11.)', () => {
+  // Relay může kvůli souběhu (brzda bez zámku, posun hodin) doručit ruční příkaz,
+  // jehož createdAt není novější než už provedená brzda. Worker ho pak NIKDY
+  // nepředá controlleru; novější příkaz jde dál a controller za DISARMED odmítne not-armed.
+  const entry = () => buildLeaderEntryPlaceCommand({
+    type: 'preview-leader-entry', groupId: group().id, operationId: 'preview:agentbrake01', leaderAccountId: 100,
+    symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 29_500, stopLoss: 29_480, takeProfit: 29_560,
+    intent: { armedAt: 0, groupConfigHash: 'abcdefgh12345678', followerQuantities: [] },
+  }, 'entry:agentbrake01');
+  const manage = (action: 'move-stop' | 'cancel-entry') => buildLeaderOrderManageCommand({
+    groupId: group().id, operationId: `manage:agentbrake-${action}`, leaderAccountId: 100, entryOperationId: 'entry:agentbrake01',
+    symbol: 'MNQZ6', action, expect: { price: 29_480, quantity: 1 }, ...(action === 'move-stop' ? { newPrice: 29_470 } : {}),
+  });
+
+  for (const brake of ['disarm', 'kill-switch'] as const) {
+    it(`${brake}: vstup a posun se stejným i starším createdAt = brake-after-request bez volání controlleru; zrušení vstupu projde`, async () => {
+      const runtime = controller();
+      const place = vi.fn(async () => ({ type: 'leader-entry-placed' as const, operationId: 'entry:agentbrake01', status: 'acknowledged' as const, checkedAt: 1, blockers: [] }));
+      const manageFn = vi.fn(async () => ({ type: 'leader-order-managed' as const, operationId: 'x', action: 'cancel-entry' as const, status: 'acknowledged' as const, checkedAt: 1, blockers: [] }));
+      Object.assign(runtime as object, { placeLeaderEntry: place, manageLeaderOrder: manageFn });
+      const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+      try {
+        const brakeAt = Date.now();
+        await agent.execute({ type: brake }, { createdAt: brakeAt });
+        for (const createdAt of [brakeAt, brakeAt - 1]) {
+          const late = await agent.execute({ type: 'copy-command', command: entry() }, { source: 'relay', createdAt, deadlineAt: Date.now() + 15_000 });
+          expect(JSON.stringify(late)).toContain('brake-after-request');
+          const move = await agent.execute({ type: 'copy-command', command: manage('move-stop') }, { source: 'relay', createdAt, deadlineAt: Date.now() + 15_000 });
+          expect(JSON.stringify(move)).toContain('brake-after-request');
+        }
+        expect(place).not.toHaveBeenCalled();
+        await agent.execute({ type: 'copy-command', command: manage('cancel-entry') }, { source: 'relay', createdAt: brakeAt - 1, deadlineAt: Date.now() + 15_000 });
+        expect(manageFn).toHaveBeenCalledTimes(1);
+        // Novější příkaz jde dál ke controlleru (ten za DISARMED vrátí not-armed — tests/manualEntryPlace.test.ts).
+        await agent.execute({ type: 'copy-command', command: entry() }, { source: 'relay', createdAt: brakeAt + 1, deadlineAt: Date.now() + 15_000 });
+        expect(place).toHaveBeenCalledTimes(1);
+      } finally {
+        await agent.close();
+      }
+    });
+  }
 });
 
 describe('fáze 1b: odeslání ručního vstupu v agentu', () => {

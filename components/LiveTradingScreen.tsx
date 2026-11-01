@@ -296,9 +296,10 @@ const LiveTradingScreen: React.FC<Props> = ({
       setPendingMove(null);
       const message = reason instanceof Error ? reason.message : 'chyba';
       // Prokazatelně neodeslané (strop, rozestup, chybějící cesta, neověřený stav) = „Neodesláno“.
-      setLineNotice({ at: Date.now(), ...(/entry-busy|entry-superseded|manage-daily-cap|entry-daily-cap|Chybí cesta|není čerstvě ověřený|nic se neodeslalo/.test(message)
+      setLineNotice({ at: Date.now(), ...(/entry-busy|entry-superseded|entry-not-admitted|manage-daily-cap|entry-daily-cap|Chybí cesta|není čerstvě ověřený|nic se neodeslalo/.test(message)
         ? { tone: 'bad' as const, text: `Neodesláno: ${/entry-busy/.test(message) ? 'jiná změna se právě zpracovává'
-          : /entry-superseded/.test(message) ? 'mezitím přišlo vypnutí kopírky (brzda)' : message.slice(0, 120)}` }
+          : /entry-superseded/.test(message) ? 'mezitím přišlo vypnutí kopírky (brzda)'
+            : /entry-not-admitted/.test(message) ? 'server změnu nepřijal' : message.slice(0, 120)}` }
         : { tone: 'warn' as const, text: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate.` }) });
     } finally {
       liveBusyRef.current = false;

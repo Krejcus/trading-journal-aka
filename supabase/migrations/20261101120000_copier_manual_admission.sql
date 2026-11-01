@@ -4,6 +4,9 @@
 -- oba. Teď jedna transakce pod jediným zámkem na uživatele: existující operace →
 -- brzda → busy/rozestup → strop → insert. Pořadí kontrol i chybové kódy zůstávají.
 -- Aditivní: nic nemaže ani nemění; relay ji volá bez fallbacku (chyba = 5xx).
+-- Druhá funkce: brzda po svém insertu zneplatní čekající ruční příkazy POD
+-- STEJNÝM zámkem — rozběhnutá admission buď doběhne dřív (a její řádek se
+-- zneplatní), nebo začne až po brzdě (a brzdu uvidí). Žádné mezery mezi nimi.
 
 create function public.admit_tradovate_copier_manual_command(
   p_user_id uuid,
@@ -39,7 +42,7 @@ begin
   if pg_catalog.current_setting('transaction_isolation') <> 'read committed' then
     raise exception 'copier-admission-isolation-unsupported';
   end if;
-  if p_user_id is null or p_device_id is null or p_operation_id is null or p_payload is null
+  if p_user_id is null or p_device_id is null or p_connection_id is null or p_operation_id is null or p_payload is null
     or p_now is null or p_expires_at is null
     or p_entry_min_interval_ms is null or p_manage_min_interval_ms is null
     or p_entry_cap is null or p_manage_cap is null then
@@ -77,9 +80,19 @@ begin
     v_action := v_command ->> 'action';
   end if;
 
+  -- Cíl musí sedět dohromady: připojení patří uživateli, zařízení patří témuž
+  -- uživateli, není odvolané a je spárované právě s tímto připojením (stejná
+  -- trojice, jakou vybírá relay; owner-scope Mac je veden pod svým připojením).
+  if not exists (
+    select 1 from public.tradovate_oauth_connections o
+     where o.id = p_connection_id and o.user_id = p_user_id
+  ) then
+    raise exception 'copier-admission-connection-invalid';
+  end if;
   if not exists (
     select 1 from public.tradovate_copier_devices d
      where d.id = p_device_id and d.user_id = p_user_id and d.revoked_at is null
+       and d.connection_id = p_connection_id
   ) then
     raise exception 'copier-admission-device-invalid';
   end if;
@@ -202,6 +215,52 @@ begin
 end;
 $$;
 
+create function public.supersede_tradovate_copier_manual_commands(
+  p_user_id uuid,
+  p_brake_id uuid
+)
+returns integer
+language plpgsql
+volatile
+security invoker
+set search_path = ''
+set lock_timeout = '500ms'
+as $$
+declare
+  v_brake_created_at timestamptz;
+  v_count integer;
+begin
+  if p_user_id is null or p_brake_id is null then
+    raise exception 'copier-supersede-invalid-arguments';
+  end if;
+  -- Jen skutečná, už uložená brzda téhož uživatele; jinak nic nezneplatní.
+  select b.created_at into v_brake_created_at
+    from public.tradovate_copier_commands b
+   where b.id = p_brake_id and b.user_id = p_user_id
+     and b.command_type in ('disarm', 'kill-switch', 'lock-until-session-end');
+  if v_brake_created_at is null then
+    raise exception 'copier-supersede-brake-invalid';
+  end if;
+  -- Stejný zámek jako admission: čeká na rozběhnutou admission (ms), pak vidí její řádek.
+  -- Krátký lock_timeout: brzda je už uložená; při timeoutu relay spadne na zálohu per zařízení.
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('copier-manual-admission:' || p_user_id::text, 0)
+  );
+  -- Vstup a posun/zavření (zavření slibuje kopie followerů); zrušení vstupu snižuje riziko a zůstává.
+  update public.tradovate_copier_commands c
+     set status = 'expired', completed_at = v_brake_created_at, error = 'superseded-by-brake'
+   where c.user_id = p_user_id
+     and c.status = 'pending'
+     and c.command_type = 'copy-command'
+     and c.created_at <= v_brake_created_at
+     and (c.payload @> '{"command":{"type":"place-leader-entry"}}'::jsonb
+       or (c.payload @> '{"command":{"type":"manage-leader-order"}}'::jsonb
+         and (c.payload -> 'command' ->> 'action') in ('move-stop', 'move-target', 'close-position')));
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
 revoke execute on function public.admit_tradovate_copier_manual_command(
   uuid, uuid, uuid, text, jsonb, timestamptz, timestamptz, integer, integer, integer, integer
 ) from public, anon, authenticated;
@@ -212,3 +271,10 @@ grant execute on function public.admit_tradovate_copier_manual_command(
 comment on function public.admit_tradovate_copier_manual_command(
   uuid, uuid, uuid, text, jsonb, timestamptz, timestamptz, integer, integer, integer, integer
 ) is 'Atomická admission ručního vstupu/správy z grafu: existing → brzda → busy → strop → insert pod zámkem uživatele.';
+
+revoke execute on function public.supersede_tradovate_copier_manual_commands(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.supersede_tradovate_copier_manual_commands(uuid, uuid) to service_role;
+
+comment on function public.supersede_tradovate_copier_manual_commands(uuid, uuid) is
+  'Brzda zneplatní čekající ruční vstupy/správu uživatele pod zámkem admission (INV-RELAY-03).';

@@ -753,9 +753,17 @@ existující ochranu.
   operace téhož uživatele (PC + telefon, dvě záložky, dvě zařízení) se tím
   serializují: projde jedna, druhá `copier-relay-entry-busy`. `p_now` = hodiny
   Node (jako `created_at` ostatních řádků), rozdíl proti DB ≥ 2 s = RAISE.
-  Chyba RPC (i lock timeout) = `copier-relay-enqueue-failed` → 502, **žádný
-  fallback** na nezamčené čtení + upsert; nový pokus jen se stejným
-  operationId (jinak ho zastaví busy). Kick míří na `device_id` vráceného řádku.
+  Cíl musí tvořit sourodou trojici: připojení patří uživateli, zařízení
+  patří témuž uživateli, není odvolané a má `connection_id = p_connection_id`
+  (stejně jako výběr cíle v relayi); jinak RAISE. Chyby, u kterých se
+  prokazatelně nic nevložilo (RAISE `copier-admission-*`, `55P03` lock timeout,
+  `57014` statement timeout, `PGRST202` chybějící funkce), vrací
+  `copier-relay-entry-not-admitted: …` (409, UI „Neodesláno: tento pokus server
+  nepřijal“ — platí pro tento pokus; dřívější pokus se stejným operationId mohl
+  projít, proto UI neslibuje „nic se neodeslalo“). Jiná chyba RPC
+  (síť, odpověď po commitu) = `copier-relay-enqueue-failed` → 502 „výsledek
+  neznámý“. **Žádný fallback** na nezamčené čtení + upsert; `p_now` se bere
+  těsně před RPC. Kick míří na `device_id` vráceného řádku.
   Vědomě nepokryto: zapisovatel mimo RPC (starý relay během rolloutu) zámek
   nebere — na něj zbývá unikátní index (user, device, key) a workerová pojistka
   rozestupu (INV-OUTBOX-01). Test: `tests/sql/copierManualAdmission.pg.mjs`
@@ -805,6 +813,32 @@ existující ochranu.
   `copier-relay-entry-superseded` (409, nic se nevloží, UI „Neodesláno“, žádné
   automatické opakování). Výjimka: `cancel-entry` (snižuje riziko). Worker
   vstup dál odmítne podle `lastBrakeCreatedAt`/ARM brány.
+- **Brzda × ruční příkaz — garantovaný výsledek (1. 11. 2026):**
+  1. Relay: brzda po svém insertu volá `supersede_tradovate_copier_manual_commands`
+     (id brzdy, celý uživatel) pod STEJNÝM zámkem jako admission. Admission,
+     která zámek držela, commitne dřív a její čekající vstup/posun/zavření
+     s `created_at ≤` brzda se zneplatní; admission, která zámek dostane
+     později, brzdu vidí (`superseded-by-brake` do 500 ms) nebo vloží řádek
+     novější než brzda. `cancel-entry` zůstává. Selže-li RPC, běží stará
+     nezamčená cesta per zařízení (jen zneplatňuje; zbytkové okno ms).
+     Supersede čeká na zámek nejvýš 500 ms; brzda je v DB už před ním, takže
+     pomalé RPC zdrží jen kick a odpověď, ne claim (poll 750 ms). Zneplatňuje
+     se celý uživatel, tedy i čekající příkaz pro jiné zařízení/připojení
+     (opatrné: v ms okně může propadnout i zavření obchodu jinde — klik znovu).
+  2. Worker: FIFO podle `created_at`. Ruční vstup a posun/zavření s
+     `createdAt ≤ lastBrakeCreatedAt` (+ rezerva na hodiny) vrátí
+     `brake-after-request` a controller se vůbec nezavolá; novější příkaz
+     controller za DISARMED odmítne `not-armed`. `lastBrakeCreatedAt` je jen
+     v paměti procesu: po restartu workeru chrání DISARMED default a brána ARM.
+  3. Nepokryto: příkaz zadaný a claimnutý workerem dřív, než brzda dorazila do
+     DB, se provede — pak platí běžná pravidla brzdy (DISARM pozice nezavírá;
+     ACK za DISARMED → vlastní vstup se zruší). Priorita brzd v claimu (C2) je
+     dál otevřená.
+  Testy: `tests/sql/copierManualAdmission.pg.mjs` (držené transakce: brzda
+  během admission, necommitnutá brzda před admission, brzda zpracovaná
+  před admission, posun hodin, výjimka cancel-entry, cizí brzda = RAISE),
+  `tests/localCopierExecutionAgent.test.ts` („garantovaný výsledek“),
+  `tests/tradovateCopierCommandRelay.test.ts` (RPC s id brzdy, záloha).
 - Bezpečné změny vs. nebezpečné: Bezpečné je ukázat platnost fronty do
   `expiresAt`. Nebezpečné je po UI timeoutu brzdu automaticky zopakovat.
 

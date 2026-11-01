@@ -367,6 +367,32 @@ describe('Tradovate copier command relay', () => {
       expect(copierRelayValidationErrorStatus('copier-relay-enqueue-failed: canceling statement due to lock timeout')).toBeNull();
     });
 
+    it('známé chyby před insertem (RAISE, lock/statement timeout, chybějící funkce) = not-admitted 409 „Neodesláno“', async () => {
+      const cases: Array<[{ code: string; message: string }, string]> = [
+        [{ code: 'P0001', message: 'copier-admission-clock-skew' }, 'copier-relay-entry-not-admitted: copier-admission-clock-skew'],
+        [{ code: 'P0001', message: 'copier-admission-device-invalid' }, 'copier-relay-entry-not-admitted: copier-admission-device-invalid'],
+        [{ code: '55P03', message: 'canceling statement due to lock timeout' }, 'copier-relay-entry-not-admitted: lock-timeout'],
+        [{ code: '57014', message: 'canceling statement due to statement timeout' }, 'copier-relay-entry-not-admitted: statement-timeout'],
+        [{ code: 'PGRST202', message: 'Could not find the function in the schema cache' }, 'copier-relay-entry-not-admitted: admission-unavailable'],
+      ];
+      for (const [error, expected] of cases) {
+        const upsert = vi.fn();
+        const failure = await enqueueTradovateCopierCommand({ db: rpcDb(null, upsert, error), userId, connectionId, command: manage('manage:notadmit-01'), now })
+          .then(() => null, (reason: Error) => reason.message);
+        expect(failure).toBe(expected);
+        expect(copierRelayValidationErrorStatus(failure!)).toBe(409);
+        expect(failure!.endsWith('not-found')).toBe(false);
+        expect(upsert).not.toHaveBeenCalled();
+      }
+      // Jiný RAISE nebo síť = neznámý výsledek (502), ne „Neodesláno“.
+      for (const error of [{ code: 'P0001', message: 'something else' }, { code: '', message: 'TypeError: fetch failed' }]) {
+        const failure = await enqueueTradovateCopierCommand({ db: rpcDb(null, vi.fn(), error), userId, connectionId, command: manage('manage:notadmit-02'), now })
+          .then(() => null, (reason: Error) => reason.message);
+        expect(failure).toMatch(/^copier-relay-enqueue-failed: /);
+        expect(copierRelayValidationErrorStatus(failure!)).toBeNull();
+      }
+    });
+
     it('neznámý nebo neúplný výsledek RPC = enqueue-failed, nikdy tichý úspěch', async () => {
       for (const row of [null, { result_code: 'weird' }, { result_code: 'inserted', id: 'x', status: 'pending', expires_at: 'y' }]) {
         await expect(enqueueTradovateCopierCommand({ db: rpcDb(row), userId, connectionId, command: manage('manage:badrow-0001'), now }))
@@ -397,7 +423,25 @@ describe('Tradovate copier command relay', () => {
 
   });
 
-  it('enqueue brzdy expiruje starší pending ARM a SHADOW stejného zařízení', async () => {
+  it('brzda zneplatní ruční příkazy jedním zamčeným RPC per uživatel (s id brzdy); per-zařízení updaty pak neběží', async () => {
+    const updates: unknown[] = [];
+    const rpc = vi.fn(async () => ({ data: 2, error: null }));
+    const db = Object.assign(enqueueDb(vi.fn(), null, null, undefined, value => { updates.push(value); }), { rpc });
+    await enqueueTradovateCopierCommand({ db, userId, connectionId, command: { type: 'kill-switch' }, now: Date.parse('2026-08-21T12:00:00.000Z') });
+    expect(rpc).toHaveBeenCalledWith('supersede_tradovate_copier_manual_commands', { p_user_id: userId, p_brake_id: 'command-id' });
+    expect(updates).toHaveLength(1); // jen ARM/SHADOW
+  });
+
+  it('chyba zamčeného supersede RPC: záloha per zařízení, brzda dál projde bez chyby', async () => {
+    const updates: unknown[] = [];
+    const db = Object.assign(enqueueDb(vi.fn(), null, null, undefined, value => { updates.push(value); }),
+      { rpc: vi.fn(async () => ({ data: null, error: { message: 'canceling statement due to lock timeout' } })) });
+    const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: { type: 'disarm' }, now: Date.parse('2026-08-21T12:00:00.000Z') });
+    expect(queued).toMatchObject({ id: 'command-id' });
+    expect(updates).toHaveLength(5);
+  });
+
+  it('enqueue brzdy expiruje starší pending ARM a SHADOW stejného zařízení (bez RPC = záloha per zařízení)', async () => {
     const updates: Array<{ value: unknown; calls: Array<[string, unknown[]]> }> = [];
     await enqueueTradovateCopierCommand({
       db: enqueueDb(vi.fn(), null, null, undefined, (value, calls) => {

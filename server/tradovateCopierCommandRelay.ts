@@ -142,7 +142,8 @@ export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | n
     || message === 'copier-relay-entry-busy'
     || message === 'copier-relay-entry-conflict'
     || message === 'copier-relay-entry-daily-cap'
-    || message === 'copier-relay-entry-superseded') return 409;
+    || message === 'copier-relay-entry-superseded'
+    || message.startsWith('copier-relay-entry-not-admitted:')) return 409;
   if (message === 'unsupported-command'
     || message === 'unsupported-relay-command'
     || message === 'unsupported-remote-copy-command'
@@ -791,10 +792,12 @@ export async function enqueueTradovateCopierCommand(options: {
 
   await assertPreviewAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, command: options.command, now });
   if (entryOperationId) {
+    // Hodiny až těsně před RPC: výběr zařízení může trvat a DB odmítá p_now starší než 2 s.
+    const admissionNow = options.now ?? Date.now();
     return admitManualCommand({
       db: options.db, userId: options.userId, deviceId: device.id, connectionId: options.connectionId,
-      operationId: entryOperationId, payload, now,
-      expiresAt: now + (isLeaderTradeClose(options.command) ? CLOSE_COMMAND_TTL_MS : ENTRY_COMMAND_TTL_MS),
+      operationId: entryOperationId, payload, now: admissionNow,
+      expiresAt: admissionNow + (isLeaderTradeClose(options.command) ? CLOSE_COMMAND_TTL_MS : ENTRY_COMMAND_TTL_MS),
     });
   }
 
@@ -849,7 +852,7 @@ export async function enqueueTradovateCopierCommand(options: {
         console.error(`COPIER RELAY brake supersede failed after enqueue: ${error instanceof Error ? error.message : String(error)}`);
       }
       try {
-        await expirePendingEntriesSupersededByBrake({ db: options.db, deviceId: device.id, brakeCreatedAt: createdAt });
+        await supersedeManualCommandsByBrake({ db: options.db, userId: options.userId, deviceId: device.id, brakeId: data.id, brakeCreatedAt: createdAt });
       } catch (error) {
         console.error(`COPIER RELAY entry supersede failed after enqueue: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -883,6 +886,30 @@ const expirePendingArmsSupersededByBrake = async (options: {
     .in('command_type', ['arm-live', 'shadow'])
     .lte('created_at', options.brakeCreatedAt);
   if (error) throw new Error(`copier-relay-brake-supersede-failed: ${error.message}`);
+};
+
+/**
+ * Brzda zneplatní čekající ruční vstupy a správu celého uživatele POD ZÁMKEM
+ * atomické admission (1. 11.): rozběhnutá admission buď commitne dřív a její
+ * řádek se tu zneplatní, nebo začne až po brzdě a brzdu sama uvidí. Selže-li
+ * RPC (lock timeout, chybí migrace), zbývá stará nezamčená cesta per zařízení —
+ * jen zneplatňuje, takže jako záloha riziko nezvyšuje.
+ */
+const supersedeManualCommandsByBrake = async (options: {
+  db: SupabaseClient; userId: string; deviceId: string; brakeId: string; brakeCreatedAt: string;
+}): Promise<void> => {
+  let failure: string;
+  try {
+    const { error } = await options.db.rpc('supersede_tradovate_copier_manual_commands', {
+      p_user_id: options.userId, p_brake_id: options.brakeId,
+    });
+    if (!error) return;
+    failure = error.message;
+  } catch (error) {
+    failure = error instanceof Error ? error.message : String(error);
+  }
+  console.error(`COPIER RELAY locked entry supersede failed, falling back to device scope: ${failure}`);
+  await expirePendingEntriesSupersededByBrake({ db: options.db, deviceId: options.deviceId, brakeCreatedAt: options.brakeCreatedAt });
 };
 
 /**
@@ -1111,6 +1138,21 @@ const MANUAL_ADMISSION_ERRORS: Record<string, string> = {
 };
 
 /**
+ * Chyby, u kterých se prokazatelně nic nevložilo: RAISE z admission (validace
+ * před zámkem i insertem), lock / statement timeout (celá RPC transakce se
+ * vrátí) a chybějící funkce (nic se nezavolalo). UI je ukáže jako „Neodesláno“.
+ * Cokoli jiného (síť, odpověď po commitu) zůstává neznámý výsledek → 502.
+ */
+const manualAdmissionRejectedBeforeInsert = (error: { code?: string; message?: string }): string | null => {
+  const message = error.message ?? '';
+  if (error.code === 'P0001' && /^copier-admission-[a-z-]+$/.test(message)) return message;
+  if (error.code === '55P03') return 'lock-timeout';
+  if (error.code === '57014') return 'statement-timeout';
+  if (error.code === 'PGRST202') return 'admission-unavailable';
+  return null;
+};
+
+/**
  * Ruční vstup a správa z grafu (1. 11., INV-RELAY-01): existující operace, brzda,
  * busy/rozestup, denní strop i insert v JEDNÉ transakci pod zámkem uživatele —
  * PC + telefon ani dvě záložky už nepropadnou mezi čtením a zápisem. Pořadí
@@ -1134,7 +1176,12 @@ async function admitManualCommand(options: {
     p_entry_cap: ENTRY_DAILY_CAP,
     p_manage_cap: MANAGE_DAILY_CAP,
   });
-  if (error) throw new Error(`copier-relay-enqueue-failed: ${error.message}`);
+  if (error) {
+    const notAdmitted = manualAdmissionRejectedBeforeInsert(error);
+    throw new Error(notAdmitted
+      ? `copier-relay-entry-not-admitted: ${notAdmitted}`
+      : `copier-relay-enqueue-failed: ${error.message}`);
+  }
   const row = (Array.isArray(data) && data.length === 1 ? data[0] : null) as {
     result_code?: unknown; id?: unknown; status?: unknown; expires_at?: unknown; device_id?: unknown;
   } | null;

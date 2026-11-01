@@ -317,9 +317,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Dále `tests/qa/beforeLiveMarketCalculations.ts` (zmrazená kopie
   `96f45e17^:services/marketDataCalculations.ts`): main od 96f45e17 padal na
   chybějícím souboru.
+- **Release target workeru = tato větev (3c8ed4b3 nebo její opravený
+  nástupce), NE e98e6c4f** — jen tady je zvýšení verze při ACK a
+  `manual-entry-too-soon`; worker z e98e6c4f by po nasazení webu na RPC
+  pojistku neměl.
+- Dodatek (Filip, 1. 11.): brzda zneplatní čekající ruční příkazy zamčeným RPC
+  `supersede_tradovate_copier_manual_commands` (deterministické testy souběhu
+  brzda × admission, garance ve workeru v INV-RELAY-03); RPC kontroluje trojici
+  user/device/connection; chyby před insertem = 409 „Neodesláno“
+  (`copier-relay-entry-not-admitted`).
 - Rollout (každý krok se samostatným souhlasem):
   1. záloha + read-only kontrola duplicit;
-  2. reinstall workeru z čistého release worktree;
+  2. reinstall workeru z čistého release worktree na commitu této větve;
   3. migrace přes `db query --linked` + `migration repair`, `notify pgrst`,
      EXPLAIN s force_generic_plan a měření doby držení zámku;
   4. push webu.

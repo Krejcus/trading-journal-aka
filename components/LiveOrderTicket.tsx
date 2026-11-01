@@ -147,10 +147,11 @@ const placedResultView = (entry: LeaderEntryPlaceResult): { tone: 'ok' | 'bad' |
  * localhostu, 405 před relayí); vše ostatní je neznámý výsledek — nikdy neopakovat naslepo.
  */
 const placeErrorView = (message: string): { tone: 'bad' | 'warn'; text: string } => (
-  /entry-busy|entry-daily-cap|manage-daily-cap|entry-conflict|entry-superseded|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|Chybí cesta k Mac workeru|worker-disconnected|pouze read-only/.test(message)
+  /entry-busy|entry-daily-cap|manage-daily-cap|entry-conflict|entry-superseded|entry-not-admitted|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|Chybí cesta k Mac workeru|worker-disconnected|pouze read-only/.test(message)
     ? { tone: 'bad', text: /entry-busy/.test(message) ? 'Neodesláno: jiný ruční vstup se právě zpracovává.'
       : /entry-daily-cap/.test(message) ? 'Neodesláno: dosažen denní strop ručních vstupů.'
         : /entry-superseded/.test(message) ? 'Neodesláno: mezitím přišlo vypnutí kopírky (brzda) — nic se neodeslalo.'
+          : /entry-not-admitted/.test(message) ? 'Neodesláno: tento pokus server nepřijal.'
         : /pouze read-only/.test(message) ? 'Neodesláno: z localhostu se k brokerovi nezapisuje (jen na produkci).' : `Neodesláno: ${message}` }
     : { tone: 'warn', text: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate, než to zkusíš znovu.` }
 );
