@@ -268,6 +268,15 @@ begin
     or p_expires_at <= p_now or p_expires_at - p_now > interval '10 minutes' then
     raise exception 'copier-brake-invalid-arguments';
   end if;
+  -- Stejná trojice jako admission: připojení patří uživateli a zařízení je
+  -- spárované právě s ním. Kontrola na devices nestačí — connection_id je od
+  -- 20261004120000 nullable s FK ON DELETE SET NULL, vlastnictví negarantuje.
+  if not exists (
+    select 1 from public.tradovate_oauth_connections o
+     where o.id = p_connection_id and o.user_id = p_user_id
+  ) then
+    raise exception 'copier-brake-connection-invalid';
+  end if;
   if not exists (
     select 1 from public.tradovate_copier_devices d
      where d.id = p_device_id and d.user_id = p_user_id and d.revoked_at is null
@@ -295,6 +304,11 @@ begin
     select c.id, c.status, c.expires_at, c.created_at, c.command_type into v_row
       from public.tradovate_copier_commands c
      where c.user_id = p_user_id and c.device_id = p_device_id and c.idempotency_key = p_idempotency_key;
+    if not found then
+      -- Konfliktní řádek mezi insertem a selectem zmizel (jen ruční zásah;
+      -- kód řádky nemaže). Není to konflikt typů: relay jde zálohou a brzdu vloží.
+      raise exception 'copier-brake-row-vanished';
+    end if;
     if v_row.command_type is distinct from p_command_type then
       raise exception 'copier-brake-idempotency-conflict';
     end if;

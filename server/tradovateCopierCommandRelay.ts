@@ -143,6 +143,8 @@ export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | n
     || message === 'copier-relay-entry-conflict'
     || message === 'copier-relay-entry-daily-cap'
     || message === 'copier-relay-entry-superseded'
+    || message === 'copier-relay-idempotency-conflict'
+    || message === 'copier-brake-idempotency-conflict'
     || message.startsWith('copier-relay-entry-not-admitted:')) return 409;
   if (message === 'unsupported-command'
     || message === 'unsupported-relay-command'
@@ -871,12 +873,15 @@ export async function enqueueTradovateCopierCommand(options: {
   }
   const { data: existing, error: existingError } = await options.db
     .from('tradovate_copier_commands')
-    .select('id,status,expires_at,payload')
+    .select('id,status,expires_at,command_type,payload')
     .eq('user_id', options.userId)
     .eq('device_id', device.id)
     .eq('idempotency_key', idempotencyKey)
-    .single<{ id: string; status: string; expires_at: string; payload?: { command?: { payloadHash?: unknown } } | null }>();
+    .single<{ id: string; status: string; expires_at: string; command_type: string; payload?: { command?: { payloadHash?: unknown } } | null }>();
   if (existingError || !existing) throw new Error(`copier-relay-idempotency-lookup-failed: ${existingError?.message ?? 'missing'}`);
+  // Recyklovaný klíč s jiným typem příkazu nesmí projít jako úspěch: u brzdy
+  // by klient viděl „zařazeno", ale brzda by neexistovala a nic by nesupersedla.
+  if (existing.command_type !== options.command.type) throw new Error('copier-relay-idempotency-conflict');
   return { id: existing.id, status: existing.status, expiresAt: existing.expires_at, deviceId: device.id };
 }
 
@@ -902,8 +907,10 @@ const expirePendingArmsSupersededByBrake = async (options: {
  * Brzda jedním RPC (1. 11., INV-RELAY-03): insert nebo idempotentní dohledání
  * a supersede čekajících ARM/SHADOW i ručních příkazů v TÉŽE transakci pod
  * zámkem admission — claim_v2 nikdy neuvidí brzdu bez jejího supersede.
- * Brzda nesmí selhat: jakákoli chyba RPC (lock timeout 500 ms, chybí migrace,
- * síť) vrátí null a volající jde dřívější cestou se stejným idempotency key.
+ * Brzda nesmí selhat: chyba RPC (lock timeout 500 ms, chybí migrace, síť)
+ * vrátí null a volající jde dřívější cestou se stejným idempotency key.
+ * Výjimka: `copier-brake-idempotency-conflict` se propaguje — fallback by ho
+ * zamaskoval vrácením staršího řádku jiného typu jako úspěšné brzdy.
  */
 const enqueueBrakeAtomically = async (options: {
   db: SupabaseClient; userId: string; deviceId: string; connectionId: string;
@@ -931,7 +938,12 @@ const enqueueBrakeAtomically = async (options: {
     }
     return { id: row.id, status: row.status, expiresAt: row.expires_at, deviceId: row.device_id };
   } catch (error) {
-    console.error(`COPIER RELAY atomic brake enqueue failed, falling back: ${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    // Konflikt idempotence je chyba klienta (tentýž klíč, jiný typ), ne výpadek:
+    // fallback by starý řádek vrátil jako úspěšnou brzdu, která nikdy nevznikla.
+    // Rovnost, ne includes — transportní chyba s tímto textem v těle musí do zálohy.
+    if (message === 'copier-brake-idempotency-conflict') throw error;
+    console.error(`COPIER RELAY atomic brake enqueue failed, falling back: ${message}`);
     return null;
   }
 };

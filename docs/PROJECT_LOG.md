@@ -342,6 +342,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   4. push webu.
   Web před migrací = 502 u všech ručních vstupů (fail-closed).
   Rollback = revert webu, funkce zůstává.
+- Dodatek 3 (review kanál Codex ↔ Claude, 1. 11. odpoledne): dva nálezy
+  Codexe potvrzené a opravené nad 61b86641.
+  1. `copier-brake-idempotency-conflict` z RPC maskoval catch-all fallback:
+     existing lookup nečetl `command_type` a vrátil starší řádek JINÉHO typu
+     (klidně `arm-live`) jako úspěšnou brzdu — brzda přitom nevznikla a nic
+     nesupersedla. Teď se konflikt propaguje (409) a fallback lookup typ
+     kontroluje (`copier-relay-idempotency-conflict`, 409, platí pro všechny
+     typy příkazů).
+  2. `enqueue_tradovate_copier_brake` nekontroloval vlastnictví
+     `tradovate_oauth_connections` jako admission — a kontrola přes `devices`
+     nestačí: `connection_id` je od 20261004120000 nullable s FK
+     ON DELETE SET NULL, vlastnictví negarantuje. Doplněn stejný exists-check
+     (`copier-brake-connection-invalid`). Pozor: záložní cesta ho vědomě
+     obchází (brzda nesmí selhat) — pro brzdy je to advisory vrstva vynucená
+     jen na RPC cestě; bezpečné, protože zařízení patří uživateli a brzda jen
+     snižuje riziko. Relay vrstva vlastnictví connection NEvynucuje
+     (`resolveCopierRelayConnectionId` cizí id vrací beze změny).
+  Merge origin/main (crosshair fde85e94) do větve — jediný konflikt
+  PROJECT_LOG, oba zápisy zachovány; `beforeLiveMarketCalculations.ts` je
+  teď v repu, pády cizí sady na mainu tím mizí.
 
 ### 2026-11-01 — Jeden crosshair, svislá čára na svíčce (Claude, nasazeno 08:17 @ fde85e94)
 

@@ -737,6 +737,12 @@ existující ochranu.
   `tests/copierRelayDetailedReview.test.ts`.
 - Nikdy: Vydávat současný náhodný klíč per call za ochranu proti dvojkliku;
   odlišný současný ARM payload naopak nesmí být deduplikován jako shodný.
+- Recyklovaný klíč s jiným `command_type` (1. 11. 2026, review): dohledání
+  existujícího řádku po konfliktu upsertu čte i `command_type` a při neshodě
+  vrací `copier-relay-idempotency-conflict` (409, všechny typy příkazů) —
+  nikdy nevrátí starší řádek jiného typu jako úspěch aktuálního příkazu.
+  U brzdy totéž hlídá RPC (`copier-brake-idempotency-conflict`, propaguje se,
+  viz INV-RELAY-03 bod 2).
 - Bezpečné změny vs. nebezpečné: Bezpečné je při transportním retry zachovat
   původní klíč a dohledat původní command. Nebezpečné je po nejisté odpovědi
   automaticky znovu enqueueovat mutaci s novým UUID.
@@ -833,10 +839,22 @@ existující ochranu.
      `cancel-entry` zůstává. Zneplatňuje se celý uživatel, i příkaz pro jiné
      zařízení/připojení (opatrné; v ms okně může propadnout i zavření obchodu
      jinde — klik znovu).
-  2. Brzda nesmí selhat: RPC čeká na zámek nejvýš 500 ms; jakákoli chyba RPC
+  2. Brzda nesmí selhat: RPC čeká na zámek nejvýš 500 ms; chyba RPC
      (timeout, chybí migrace, síť, divná odpověď) → dřívější cesta se STEJNÝM
      idempotency key (upsert + nezamčený supersede per zařízení). Tam okno
      mezi commitem brzdy a supersede zůstává — kryje ho bod 3.
+     Jediná výjimka (1. 11. 2026, review): `copier-brake-idempotency-conflict`
+     (tentýž klíč, jiný typ příkazu) se propaguje jako 409 — fallback by starší
+     řádek jiného typu (klidně `arm-live`) vrátil jako úspěšnou brzdu, která
+     nevznikla a nic nesupersedla. Nový klik = nový klíč = brzda projde.
+     Naproti tomu `copier-brake-connection-invalid` (RPC ověřuje vlastnictví
+     `tradovate_oauth_connections` jako admission; kontrola přes `devices`
+     nestačí — `connection_id` je od 20261004120000 nullable, ON DELETE SET
+     NULL) se NEpropaguje a padá do záložní cesty: záloha ownership check
+     vědomě obchází a brzdu zařadí. Bezpečné proto, že zařízení patří
+     uživateli (jinak selže výběr cíle v relayi i `copier-brake-device-invalid`)
+     a brzda jen snižuje riziko; SQL check je tedy pro brzdy advisory vrstva,
+     vynucená jen na RPC cestě.
   3. Claim (defense-in-depth, INV-BRAKE-03): `claim_tradovate_copier_command_v2`
      vydá přednostně třídu „brzdy + risk-redukční Flatten“ (flatten-account,
      flatten-group, flatten-follower-trade), uvnitř ní FIFO; ostatní dál FIFO.

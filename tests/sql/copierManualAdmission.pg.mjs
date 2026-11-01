@@ -310,8 +310,8 @@ test('oprávnění: authenticated ani anon funkci nevolají; search_path volají
 // transakce. Brzda (insert + supersede) je jeden commit pod zámkem admission;
 // claim_v2 vydá čekající brzdu přednostně.
 const BRAKE = `select * from public.enqueue_tradovate_copier_brake($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`;
-const brakeArgs = (type = 'disarm', key = randomUUID(), now = new Date(), device = DEV1) =>
-  [USER, device, CONN, type, '{}', key, now, new Date(now.getTime() + 600_000)];
+const brakeArgs = (type = 'disarm', key = randomUUID(), now = new Date(), device = DEV1, connection = CONN, user = USER) =>
+  [user, device, connection, type, '{}', key, now, new Date(now.getTime() + 600_000)];
 const brake = async (client, ...rest) => (await asService(client, BRAKE, brakeArgs(...rest))).rows[0];
 const CLAIM = 'select * from public.claim_tradovate_copier_command_v2($1, $2)';
 const claim = async (client, device = DEV1) => (await asService(client, CLAIM, [device, randomUUID()])).rows[0] ?? null;
@@ -462,6 +462,25 @@ test('brzda: RAISE na neplatné argumenty a nesourodé zařízení; hodiny NEov�
   await assert.rejects(brake(client, 'disarm', randomUUID(), new Date(), DEV_CONN2), /copier-brake-device-invalid/);
   await assert.rejects(brake(client, 'disarm', randomUUID(), new Date(), REVOKED), /copier-brake-device-invalid/);
   assert.equal((await brake(client, 'disarm', randomUUID(), new Date(Date.now() - 60_000))).result_code, 'inserted');
+});
+
+test('brzda: cizí connection a cizí user = RAISE connection-invalid, nic se nezapíše (devices.connection_id je od 20261004120000 nullable, vlastnictví negarantuje)', async () => {
+  await reset();
+  const client = await connect();
+  // Cizí user s připojením pravého vlastníka: zastaví ho už kontrola připojení.
+  await assert.rejects(brake(client, 'disarm', randomUUID(), new Date(), DEV1, CONN, OTHER), /copier-brake-connection-invalid/);
+  // Chyba párování: zařízení uživatele ukazuje na CIZÍ connection. Kontrola na
+  // devices by prošla — zastavit to musí vlastnictví tradovate_oauth_connections.
+  const BUGGED = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9';
+  await admin.query(`insert into public.tradovate_copier_devices values ('${BUGGED}', '${USER}', '${FOREIGN_CONN}', null)`);
+  try {
+    await assert.rejects(brake(client, 'disarm', randomUUID(), new Date(), BUGGED, FOREIGN_CONN), /copier-brake-connection-invalid/);
+  } finally {
+    await admin.query(`delete from public.tradovate_copier_devices where id = '${BUGGED}'`);
+  }
+  assert.equal(await count(), 0);
+  // Vlastní druhé připojení se správně spárovaným zařízením dál projde.
+  assert.equal((await brake(client, 'disarm', randomUUID(), new Date(), DEV_CONN2, CONN2)).result_code, 'inserted');
 });
 
 test('brzda při držené admission déle než 500 ms: lock timeout (relay pak jde zálohou), nic nevloží', async () => {

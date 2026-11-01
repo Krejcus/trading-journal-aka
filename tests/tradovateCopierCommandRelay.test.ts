@@ -440,11 +440,15 @@ describe('Tradovate copier command relay', () => {
     expect(updates).toHaveLength(0);
   });
 
-  it('chyba atomického brzdového RPC: brzda projde dřívější cestou se STEJNÝM klíčem (upsert + supersede per zařízení)', async () => {
+  it('chyba atomického brzdového RPC: brzda projde dřívější cestou se STEJNÝM klíčem (upsert + supersede per zařízení); connection-invalid a row-vanished se NEpropagují', async () => {
     for (const failure of [
       async () => ({ data: null, error: { message: 'canceling statement due to lock timeout' } }),
       async () => { throw new Error('fetch failed'); },
       async () => ({ data: [{ result_code: 'weird' }], error: null }),
+      // Ownership check je pro brzdy advisory (INV-RELAY-03 bod 2): záloha ho
+      // vědomě obchází, brzda nesmí skončit 409 kvůli chybě párování.
+      async () => ({ data: null, error: { code: 'P0001', message: 'copier-brake-connection-invalid' } }),
+      async () => ({ data: null, error: { code: 'P0001', message: 'copier-brake-row-vanished' } }),
     ]) {
       const updates: unknown[] = [];
       const upsert = vi.fn();
@@ -454,6 +458,49 @@ describe('Tradovate copier command relay', () => {
       expect(upsert.mock.calls[0][0]).toMatchObject({ idempotency_key: 'brake-key-000000002', command_type: 'disarm' });
       expect(updates).toHaveLength(5);
     }
+  });
+
+  it('copier-brake-idempotency-conflict z RPC se propaguje (409); žádný fallback, žádný upsert', async () => {
+    const upsert = vi.fn();
+    const db = Object.assign(enqueueDb(upsert), {
+      rpc: vi.fn(async () => ({ data: null, error: { code: 'P0001', message: 'copier-brake-idempotency-conflict' } })),
+    });
+    await expect(enqueueTradovateCopierCommand({ db, userId, connectionId, command: { type: 'disarm' }, idempotencyKey: 'brake-key-000000003', now: Date.parse('2026-08-21T12:00:00.000Z') }))
+      .rejects.toThrow('copier-brake-idempotency-conflict');
+    expect(upsert).not.toHaveBeenCalled();
+    expect(copierRelayValidationErrorStatus('copier-brake-idempotency-conflict')).toBe(409);
+  });
+
+  it('fallback: recyklovaný klíč s jiným typem (arm-live i jiná brzda) = idempotency-conflict, nikdy úspěch starého řádku', async () => {
+    // Bez RPC (chybí migrace) upsert narazí na konflikt klíče → existing lookup
+    // najde starý řádek jiného typu. Dřív se vrátil jako úspěšná brzda.
+    const fallbackConflictDb = (existingType: string) => {
+      const db = enqueueDb(vi.fn()) as unknown as { from: (table: string) => Record<string, unknown> };
+      const originalFrom = db.from.bind(db);
+      db.from = (table: string) => {
+        if (table !== 'tradovate_copier_commands') return originalFrom(table);
+        const existingQuery: Record<string, unknown> = {};
+        for (const method of ['eq', 'in', 'contains', 'gte', 'gt', 'or', 'order', 'limit']) existingQuery[method] = () => existingQuery;
+        existingQuery.maybeSingle = async () => ({ data: null, error: null });
+        existingQuery.single = async () => ({
+          data: { id: 'old-id', status: 'completed', expires_at: '2026-08-21T11:59:00.000Z', command_type: existingType, payload: {} },
+          error: null,
+        });
+        const conflictUpsert = { select: () => conflictUpsert, maybeSingle: async () => ({ data: null, error: null }) };
+        const updateQuery: Record<string, unknown> = { error: null };
+        for (const method of ['eq', 'in', 'lte', 'contains']) updateQuery[method] = () => updateQuery;
+        return { select: () => existingQuery, upsert: () => conflictUpsert, update: () => updateQuery };
+      };
+      return Object.assign(db, { rpc: vi.fn(async () => { throw new Error('Could not find the function in the schema cache'); }) }) as unknown as SupabaseClient;
+    };
+    for (const existingType of ['arm-live', 'lock-until-session-end']) {
+      await expect(enqueueTradovateCopierCommand({ db: fallbackConflictDb(existingType), userId, connectionId, command: { type: 'disarm' }, idempotencyKey: 'brake-key-000000004', now: Date.parse('2026-08-21T12:00:00.000Z') }))
+        .rejects.toThrow('copier-relay-idempotency-conflict');
+    }
+    // Stejný typ zůstává idempotentní: vrátí se původní řádek brzdy.
+    const repeated = await enqueueTradovateCopierCommand({ db: fallbackConflictDb('disarm'), userId, connectionId, command: { type: 'disarm' }, idempotencyKey: 'brake-key-000000004', now: Date.parse('2026-08-21T12:00:00.000Z') });
+    expect(repeated).toMatchObject({ id: 'old-id', status: 'completed' });
+    expect(copierRelayValidationErrorStatus('copier-relay-idempotency-conflict')).toBe(409);
   });
 
   it('enqueue brzdy expiruje starší pending ARM a SHADOW stejného zařízení (bez RPC = záloha per zařízení)', async () => {
