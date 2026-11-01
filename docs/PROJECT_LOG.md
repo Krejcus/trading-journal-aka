@@ -343,6 +343,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Web před migrací = 502 u všech ručních vstupů (fail-closed).
   Rollback = revert webu, funkce zůstává.
 
+### 2026-11-01 — Jeden crosshair, svislá čára na svíčce (Claude, nasazeno 08:17 @ fde85e94)
+
+- **Nasazení (Filip „nasaď na web“)**: main se nehnul (3ece8dcf), push
+  fast-forward. Gate proti základu mainu: jediný pád testu i jediná chyba tsc
+  jsou cizí (chybějící `tests/qa/beforeLiveMarketCalculations.ts`), build
+  prošel. Produkční chunk grafu: přichycení přes `coordinateToLogical`, žádné
+  znovuzapnutí vestavěných čar.
+
+- Filip viděl dva crosshairy (jeden skákal po svíčkách, druhý hned za myší).
+  96f45e17 (Codex) vypnul vestavěné čáry lightweight-charts a kreslí vlastní
+  DOM vrstvu přesně pod myší; 97ab6ded (režimy kurzoru) je v
+  `chartSettingsOptions` znovu zapnul `visible: crosshairLines` → obojí.
+- Filip zvolil „skákat po svíčkách“ (jako TradingView). Vestavěné čáry zůstávají
+  vypnuté (hlídá test), vlastní vrstva přichytí svislou čáru na střed slotu
+  časové osy (`snapCrosshairXToBar`, cena dál přesně pod myší), čáry jen pro
+  Kříž/Tečku (popisky vždy) a na dotyku se kreslí z pozice knihovny (dřív tam
+  crosshair dělaly jen znovu zapnuté vestavěné čáry).
+- Ověřeno na localhost:3000 (Filipův graf, jen pohyb myši): myš 40 % mezi
+  svíčkami → čára na středu svíčky; Šipka → bez čar, s popisky; vestavěné čáry
+  `visible: false`. Celá sada: 6387 testů zelených, jediný pád
+  `tests/candleAggregationEquivalence.test.ts` je cizí — main (96f45e17)
+  importuje necommitnutý `tests/qa/beforeLiveMarketCalculations.ts` (je jen
+  ve worktree `atomic-admission-20261101`); kvůli tomu i tsc na mainu hlásí 1 chybu.
+- **iPhone build 1. 11. 08:09 z této větve** (main 3ece8dcf + crosshair):
+  `ios:sync` → `xcodebuild` Debug pro iPhone 13 Pro Max (bez simulátoru i okna
+  Xcode) → čistá odinstalace + instalace (`devicectl`), spuštěno na LIVE,
+  přihlášení zůstalo. Balík ověřen (Supabase URL, přichycení crosshairu, bez
+  loga, živé BoS/CHoCH). Telefon tak má crosshair dřív než web.
+
 ### 2026-10-31 večer — graf: Path, kurzory a šablony indikátorů jako v TradingView; LIVE panel Objednávka (Claude, nasazeno)
 
 - Předloha z TradingView Desktop přes CDP (jen pozorování UI, žádný RE):

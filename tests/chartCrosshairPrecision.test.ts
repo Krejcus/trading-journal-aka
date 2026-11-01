@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { crosshairCssLineStyle, exactCrosshairLabelLeft, exactCrosshairPoint, exactCrosshairPriceLabelTop, exactCrosshairX } from '../services/chartCrosshairPrecision';
+import { crosshairCssLineStyle, exactCrosshairLabelLeft, exactCrosshairPoint, exactCrosshairPriceLabelTop, exactCrosshairX, snapCrosshairXToBar } from '../services/chartCrosshairPrecision';
 
 describe('exact chart crosshair', () => {
   it('uses the physical pointer x instead of the bar-centre fallback', () => {
@@ -45,5 +46,29 @@ describe('exact chart crosshair', () => {
     expect(crosshairCssLineStyle('dotted')).toBe('dotted');
     expect(crosshairCssLineStyle('sparse-dotted')).toBe('dotted');
     expect(crosshairCssLineStyle('large-dashed')).toBe('dashed');
+  });
+
+  it('svislou čáru přichytí na střed svíčky jako TradingView', () => {
+    // Rozestup 10 px, bar 0 na x = 5.
+    const toLogical = (x: number) => (x - 5) / 10;
+    const toCoordinate = (logical: number) => 5 + logical * 10;
+    expect(snapCrosshairXToBar(48.9, toLogical, toCoordinate, 900)).toBe(45);
+    expect(snapCrosshairXToBar(50.1, toLogical, toCoordinate, 900)).toBe(55);
+    expect(snapCrosshairXToBar(55, toLogical, toCoordinate, 900)).toBe(55);
+  });
+
+  it('mimo časovou osu nebo s krajní svíčkou za okrajem nechá souřadnici myši', () => {
+    expect(snapCrosshairXToBar(40, () => null, () => 35, 900)).toBe(40);
+    expect(snapCrosshairXToBar(898, () => 89.6, () => 905, 900)).toBe(898);
+    expect(snapCrosshairXToBar(40, () => 3.6, () => null, 900)).toBe(40);
+  });
+});
+
+describe('jeden crosshair', () => {
+  it('vestavěné čáry knihovny se v grafu znovu nezapínají (kreslí je vlastní vrstva)', () => {
+    const source = readFileSync(new URL('../components/CandleKitTradeChart.tsx', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/vertLine:\s*\{[^}]*visible:\s*(?!false)/);
+    expect(source).not.toMatch(/horzLine:\s*\{[^}]*visible:\s*(?!false)/);
+    expect(source).toMatch(/chartCursorShowsCrosshairLines\(cursorModeRef\.current\)/);
   });
 });

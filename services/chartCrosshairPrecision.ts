@@ -54,6 +54,25 @@ export function exactCrosshairX({ sourceX, fallbackX, plotWidth }: ExactCrosshai
   return candidate;
 }
 
+/**
+ * Svislá čára crosshairu jako v TradingView: stojí na středu svíčky (slotu
+ * časové osy, i v prázdném místě vpravo), ne mezi svíčkami — sedí tak
+ * s časovým popiskem i legendou OHLC. Cena (vodorovná čára) zůstává přesně
+ * pod myší. Mimo osu nebo s krajní svíčkou za okrajem nechá souřadnici myši.
+ */
+export function snapCrosshairXToBar(
+  x: number,
+  toLogical: (x: number) => number | null,
+  toCoordinate: (logical: number) => number | null,
+  plotWidth: number,
+): number {
+  const logical = toLogical(x);
+  if (logical === null || !Number.isFinite(logical)) return x;
+  const snapped = toCoordinate(Math.round(logical));
+  if (snapped === null || !Number.isFinite(snapped) || snapped < 0 || snapped > plotWidth) return x;
+  return snapped;
+}
+
 export function exactCrosshairLabelLeft(x: number, plotWidth: number, labelWidth = 128): number {
   const half = Math.max(0, labelWidth / 2);
   if (!Number.isFinite(plotWidth) || plotWidth <= 0) return 0;
