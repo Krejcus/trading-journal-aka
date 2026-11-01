@@ -47,6 +47,7 @@ import type { DayController } from './useDayController';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../../hooks/useLiveCandleBinding';
 import { TIMEFRAME_FAVORITES_EVENT, readTimeframeFavorites, timeframeTitle } from '../ChartTimeframePicker';
 import { ChartShotCard, ChartShotFlash, composeChartShot, takeChartShot, type ChartShot } from './ChartShot';
+import { resetChartView } from '../../services/chartContextMenu';
 import DayIntervalSheet from './DayIntervalSheet';
 
 type DrawingEngine = NonNullable<ChartViewApi['drawing']>['engine'];
@@ -498,6 +499,31 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   // eslint-disable-next-line react-hooks/exhaustive-deps -- panely čte z aktuálního renderu
   }, [replayOn, replayPlaying, replayStep, replayCandleMode, replaySpeed, fullRaw, fullRawWithHistory, paneCount, api, extraApis, paneTfKey, timeframe]);
   const timing = selectedTrade ? tradeChartTiming(selectedTrade) : { entryMs: anchor.entryTime!, exitMs: anchor.timestamp };
+  // Každý nový graf (otevření, změna intervalu) začíná jako „Reset chart view“:
+  // poslední svíčka vpravo, výchozí šířka svíček, automatické měřítko ceny.
+  // Platí pro LIVE a dnešní den deníku; starší dny a obchody drží svůj výřez.
+  const resetViewOnOpen = Boolean(live) || Boolean(ctl?.isToday && !selectedTrade);
+  const resetDoneRef = useRef(new WeakSet<ChartViewApi>());
+  useEffect(() => {
+    if (!resetViewOnOpen || replayPhase !== 'off') return;
+    const targets = [api, ...extraApis].filter((item): item is ChartViewApi => Boolean(item) && !resetDoneRef.current.has(item!));
+    if (!targets.length) return;
+    let frame = 0;
+    const timer = window.setTimeout(() => {
+      frame = window.requestAnimationFrame(() => {
+        for (const target of targets) {
+          try {
+            // Až když graf má svíčky — jinak by se výřez nastavil prázdnému grafu.
+            if (!target.controller.getSeries()?.data().length) continue;
+            resetDoneRef.current.add(target);
+            resetChartView(target);
+          } catch { /* graf mezitím zanikl */ }
+        }
+      });
+    }, 0);
+    return () => { window.clearTimeout(timer); window.cancelAnimationFrame(frame); };
+  }, [api, extraApis, candles.length, replayPhase, resetViewOnOpen]);
+
   const focusKey = reviewFocusKey(focusKeyPrefix, selectedTrade?.id);
   const detail = selectedTrade ? { ...tradeChartTiming(selectedTrade), id: String(selectedTrade.id) } : { entryMs: target.entryMs, exitMs: target.exitMs, id: String(anchor.id) };
   useReviewFocus(focusKey, { entryMs: detail.entryMs, exitMs: detail.exitMs, id: detail.id }, Boolean(api), `${src.key}:${timeframe}:full`);
