@@ -18,7 +18,7 @@ import {
   type DurableGroupInstallStrategy,
   type DurableGroupReplacementStatus,
 } from '../../services/copierPilotGroup';
-import type { CopyFollowerConfig, CopyGroupConfig } from '../../services/liveCopyTrading';
+import { manualOnlyDemoSafety, type CopyFollowerConfig, type CopyGroupConfig } from '../../services/liveCopyTrading';
 import {
   assertMacCopierInstallNotDowngrade,
   loadMacCopierInstallManifest,
@@ -89,6 +89,7 @@ AlphaTrade Mac copier service
   npm run copier:mac -- install --connection-id UUID --leader ID --follower ID --lease /cesta/lease.json
   npm run copier:mac -- install --connections-manifest /cesta/connections.json --leader ID --followers "ID@MULT,ID@MULT@MAX"
     [--adopt-durable-group | --replace-durable-group] [--allow-full-dev-origins] [--allow-downgrade]
+  npm run copier:mac -- install --connections-manifest /cesta/connections.json --leader ID --manual-only
   npm run copier:mac -- status
   npm run copier:mac -- reconcile
   npm run copier:mac -- resolve-stuck --kind cancel-or-modify --key KEY --reason "DŮVOD" --approval POTVRZUJI_RUCNI_RESOLUTION_BEZ_BROKER_PRIKAZU
@@ -212,9 +213,15 @@ async function addConnection(): Promise<void> {
 
 async function install(): Promise<void> {
   const leader = positiveInteger('leader');
+  const manualOnly = flags.has('manual-only');
   const followers = flags.get('followers')?.trim() || '';
   let cliFollowers: CopyFollowerConfig[];
-  if (followers) {
+  if (manualOnly) {
+    if (followers || flags.has('follower') || flags.has('multiplier')) {
+      throw new Error('--manual-only se nesmí kombinovat s --follower, --followers ani --multiplier');
+    }
+    cliFollowers = [];
+  } else if (followers) {
     cliFollowers = parseCopierFollowersFlag(followers, leader);
   } else {
     const follower = Number(flags.get('follower')?.trim());
@@ -226,7 +233,7 @@ async function install(): Promise<void> {
     }
     cliFollowers = [{ accountId: follower, mode: 'on-submit', multiplier }];
   }
-  const follower = cliFollowers[0]!.accountId;
+  const follower = cliFollowers[0]?.accountId ?? null;
   const sourceManifest = flags.get('connections-manifest')?.trim();
   const manifest = sourceManifest ? await loadMacCopierConnectionManifest(sourceManifest) : null;
   let candidateShaRaw: string;
@@ -295,12 +302,14 @@ async function install(): Promise<void> {
     : adoptDurableGroup ? 'adopt' : 'require-match';
   const cliGroup = { leaderAccountId: leader, followers: cliFollowers };
   const fallbackGroup: CopyGroupConfig = {
-    id: `agent-${leader}-${cliFollowers.map(item => item.accountId).join('-')}`,
-    name: 'Lokální DEMO agent',
+    id: manualOnly ? `manual-demo-${leader}` : `agent-${leader}-${cliFollowers.map(item => item.accountId).join('-')}`,
+    name: manualOnly ? 'Ruční DEMO test' : 'Lokální DEMO agent',
     enabled: true,
     leaderAccountId: leader,
     followers: cliFollowers,
     localOnly: true,
+    ...(manualOnly ? { manualOnly: true } : {}),
+    ...(manualOnly ? { safety: manualOnlyDemoSafety() } : {}),
   };
   const groupPath = copierPilotGroupPath(resolve(pilotRoot, '.copier-pilot'), connectionId, leader);
   const durableGroup = await createFileCopyGroupStore(groupPath).load();
@@ -435,8 +444,9 @@ async function install(): Promise<void> {
   const programArguments = [
     '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
-    '--follower', String(follower),
-    ...(followers ? ['--followers', followers] : ['--multiplier', flags.get('multiplier')?.trim() || '1']),
+    ...(manualOnly
+      ? ['--manual-only', 'true']
+      : ['--follower', String(follower), ...(followers ? ['--followers', followers] : ['--multiplier', flags.get('multiplier')?.trim() || '1'])]),
     '--minutes', '720',
     '--service-lifetime', 'persistent',
     '--install-manifest', installManifestPath,

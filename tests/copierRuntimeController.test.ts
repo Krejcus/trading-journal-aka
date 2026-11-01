@@ -108,6 +108,25 @@ describe('bootstrapCopierRuntime', () => {
     expect(broker.placedRequests()).toHaveLength(0);
   });
 
+  it('povolí ARM instalační manual-only DEMO skupiny bez followera', async () => {
+    const broker = createMockBroker();
+    const manualOnly: CopyGroupConfig = {
+      id: 'manual-demo-100', name: 'Ruční DEMO test', enabled: true,
+      leaderAccountId: 100, followers: [], localOnly: true, manualOnly: true,
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: manualOnly,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+
+    expect(() => controller.arm()).not.toThrow();
+    expect(controller.status()).toMatchObject({ armed: true, groupFlat: true });
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
   it('ignoruje historický sync, po startu ověří flat a live event pustí až po explicitním ARM', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({

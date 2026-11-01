@@ -60,6 +60,7 @@ export interface ManualEntryPreviewInputs {
   group: {
     id: string;
     enabled: boolean;
+    manualOnly?: boolean;
     leaderAccountId: number | null;
     followers: ReadonlyArray<{ accountId: number; mode: string; multiplier: number; enabled?: boolean; maxContracts?: number | null; dailyLossCutUsd?: number | null }>;
     safety?: { dailyLossLimitUsd?: number; dailyMaxLosingTrades?: number; dailyMaxTrades?: number } | null;
@@ -221,7 +222,14 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
     if (headroom.drawdownUsd != null && swing > headroom.drawdownUsd) blockers.push(blocker('risk-drawdown', `${label}: rezerva DD (${Math.round(Math.max(0, headroom.drawdownUsd))} $) nestačí na rozpětí TP–SL (~${Math.round(swing)} $).`));
   };
 
-  checkAccount(group.leaderAccountId, 'Leader', command.quantity);
+  // DEMO bez venue limitu má instalačně daný lokální denní strop. Jen tento
+  // úzce označený režim ho smí použít jako známou rezervu leadera.
+  checkAccount(
+    group.leaderAccountId,
+    'Leader',
+    command.quantity,
+    group.manualOnly === true ? safety.dailyLossLimitUsd ?? null : null,
+  );
   const leaderIneligible = input.entryIneligible.get(group.leaderAccountId);
   if (leaderIneligible) blockers.push(blocker('leader-ineligible', `Leader nesmí nové vstupy: ${leaderIneligible}.`));
   if ((safety.dailyLossLimitUsd ?? 0) > 0 && lossPerContract != null) {
@@ -260,7 +268,9 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
   }
   const leaderDecision = evaluateRiskGate([{ tag: 'preview', accountId: group.leaderAccountId, symbol: command.symbol, side: command.side, quantity: command.quantity, orderType: command.orderType }], { ...input.riskGate, maxQuantityPerAccount: new Map(), ineligibleAccounts: new Map() });
   if (leaderDecision.haltReason) blockers.push(blocker('halt', `Kopírka teď nesmí posílat: ${leaderDecision.haltReason}.`));
-  if (!followers.length && !blockers.some(issue => issue.code === 'halt')) blockers.push(blocker('no-follower-would-copy', 'Kopii by nedostal žádný follower — vstup jen na leadera zatím není podporovaný.'));
+  if (!followers.length && group.manualOnly !== true && !blockers.some(issue => issue.code === 'halt')) {
+    blockers.push(blocker('no-follower-would-copy', 'Kopii by nedostal žádný follower — vstup jen na leadera zatím není podporovaný.'));
+  }
 
   // Množství followerů, která viděl uživatel, musí sedět s přepočtem.
   // Rozhoduje, co by worker opravdu poslal: kopie followerovi, kterého panel

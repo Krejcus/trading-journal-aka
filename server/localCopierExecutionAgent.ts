@@ -456,6 +456,17 @@ export async function startLocalCopierExecutionAgent(
       allowStartupRepair?: true;
     } = {},
   ): Promise<LiveCopyTradingCommandResult> => {
+    // Manual-only je instalační bezpečnostní hranice, ne vzdáleně volitelný
+    // typ skupiny. UI smí měnit jen její název/risk metadata; nikdy leadera,
+    // přidat followera ani převést běžnou skupinu na single-account režim.
+    if (group.manualOnly === true) {
+      if (next.manualOnly !== true || next.localOnly !== true
+        || next.leaderAccountId !== group.leaderAccountId || next.followers.length !== 0) {
+        throw new Error('Manual-only DEMO skupina má instalačně uzamčený jediný účet');
+      }
+    } else if (next.manualOnly === true) {
+      throw new Error('Manual-only DEMO skupinu lze vytvořit jen lokálním installerem');
+    }
     // Smazaná skupina (11. 10. 2026): jedinou změnou je čerstvá aktivace
     // celé skupiny. Stará topologie neexistuje, nic se z ní nevyřazuje ani
     // nepřebírá (ani účast followerů) a routuje se jen nová skupina.

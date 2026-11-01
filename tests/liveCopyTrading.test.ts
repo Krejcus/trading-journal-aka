@@ -103,6 +103,20 @@ describe('liveCopyTrading', () => {
     expect(validateCopyGroup({ ...valid, followers: [{ accountId: 1, mode: 'on-fill', multiplier: 0 }] }, [1, 2]).errors).toHaveLength(2);
   });
 
+  it('povolí nula followerů jen explicitní lokální manual-only skupině', () => {
+    const manualOnly: CopyGroupConfig = {
+      id: 'manual-demo-1', name: 'Ruční DEMO test', enabled: true,
+      leaderAccountId: 1, followers: [], localOnly: true, manualOnly: true,
+    };
+    expect(validateCopyGroup(manualOnly, [1])).toMatchObject({ valid: true, errors: [] });
+    expect(validateCopyGroup({ ...manualOnly, localOnly: false }, [1]).issues?.map(issue => issue.code))
+      .toContain('manual-only-must-be-local');
+    expect(validateCopyGroup({
+      ...manualOnly,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }],
+    }, [1, 2]).issues?.map(issue => issue.code)).toContain('manual-only-has-followers');
+  });
+
   it('vrací legacy text i strukturované stale leader/follower issues a UI je přeloží názvem', () => {
     const stale: CopyGroupConfig = {
       id: 'g', name: 'Test', enabled: false, leaderAccountId: 11,
@@ -281,6 +295,19 @@ describe('sanitizeCopyGroups', () => {
       id: 'local-1', name: 'Draft', enabled: true, leaderAccountId: 1,
       followers: [{ accountId: 2, mode: 'on-fill', multiplier: 100 }], safety: DEFAULT_COPY_GROUP_SAFETY, localOnly: true,
     }]);
+  });
+
+  it('zachová pouze bezpečný lokální manual-only tvar', () => {
+    const manualOnly = {
+      id: 'manual-demo-1', name: 'Ruční DEMO test', enabled: true,
+      leaderAccountId: 1, followers: [], localOnly: true, manualOnly: true,
+    };
+    expect(sanitizeCopyGroups([manualOnly])?.[0]).toMatchObject(manualOnly);
+    expect(sanitizeCopyGroups([{ ...manualOnly, localOnly: false }])).toBeNull();
+    expect(sanitizeCopyGroups([{
+      ...manualOnly,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }],
+    }])).toBeNull();
   });
 
   it('migrates an older unsafe divergence setting to fail-closed', () => {

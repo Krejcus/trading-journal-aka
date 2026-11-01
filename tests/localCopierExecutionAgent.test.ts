@@ -98,6 +98,35 @@ describe('local copier execution agent', () => {
     running = null;
   });
 
+  it('manual-only režim uzamkne jediný instalační účet proti vzdálené změně', async () => {
+    const runtime = controller();
+    const manualOnly: CopyGroupConfig = {
+      id: 'manual-demo-11', name: 'Ruční DEMO test', enabled: true,
+      leaderAccountId: 11, followers: [], localOnly: true, manualOnly: true,
+    };
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: manualOnly, port: 0,
+    });
+    const nonce = running.status().nonce;
+
+    const changedLeader = await post(running, nonce, {
+      type: 'copy-command',
+      command: { type: 'update-group', group: { ...manualOnly, leaderAccountId: 33 } },
+    });
+    const addedFollower = await post(running, nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'update-group',
+        group: { ...manualOnly, followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }] },
+      },
+    });
+
+    expect(changedLeader.status).toBe(409);
+    expect(addedFollower.status).toBe(409);
+    expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
+    expect(running.status().group).toMatchObject({ leaderAccountId: 11, followers: [], manualOnly: true });
+  });
+
   it('přepne followera trvale bez DISARM a stale update-group jeho účast nepřepíše', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const runtime = await bootstrapCopierRuntime({ broker, store: createMemoryCopierStore(), group: group() });

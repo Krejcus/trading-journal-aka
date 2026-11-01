@@ -1178,7 +1178,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const ineligible = effectiveAccountEligibility.filter(entry =>
       entry.state !== 'active' && enabledFollowerIds.has(entry.accountId));
     const participating = enabledFollowers.length - ineligible.length;
-    if (participating <= 0) {
+    if (targetGroup.manualOnly !== true && participating <= 0) {
       throw new Error('Zapnutí blokováno: skupina nemá žádný způsobilý follower účet.');
     }
     const memberIds = new Set([

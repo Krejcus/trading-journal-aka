@@ -285,6 +285,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-01 — izolovaný single-account DEMO režim připraven lokálně (Codex, NENASAZENO)
+
+- Pro cílový účet `DEMO8661118` (`61038658`) vznikl instalačně označený
+  `manualOnly` režim: jeden leader, nula followerů, pouze lokální worker a
+  ruční LIVE vstup/správa. Běžná copy group dál bez followera neprojde.
+- Topologie je fail-closed: vzdálené UI nesmí změnit leadera, přidat účet ani
+  převést běžnou skupinu na manual-only; cloudová knihovna instalační příznak
+  neukládá. UI, preview i controller povolí nula followerů jen tomuto tvaru.
+- Výchozí safety profilu: 1 kontrakt z existující ruční brány, denní strop
+  250 USD, nejvýše 40 obchodů za session a při expiraci ARM Flatten celé
+  skupiny. Venue DEMO nemá vlastní DLL/DD, proto preview používá tento lokální
+  strop a bez něj zůstává fail-closed.
+- Read-only broker kontrola cíle: cash 50 000 USD, žádná pozice, žádný aktivní
+  ani poslední příkaz; `dailyLossAutoLiq`, `minNetLiq` a venue drawdown jsou
+  null. Manifest obsahoval pouze cílové OAuth connection a account ID.
+- Ověření: 6 408 testů + 1 todo (celá sada), samostatně 87/87 loopback testů
+  execution agenta, TypeScript bez chyb s 4GB heapem, produkční build a oba
+  worker bundly OK; `git diff --check` čistý.
+- Nic nebylo commitnuto, pushnuto, nasazeno ani nainstalováno. Worker zůstává
+  starý `e1fd4af3`, DISARMED; brokerovi neodešel žádný write příkaz.
+
 ### 2026-11-01 — produkční rollout atomické admission a brzd (Codex, DB + web NASAZENO; worker čeká)
 
 - Před produkční změnou vznikla úplná logická záloha

@@ -939,7 +939,13 @@ function assertRuntimeGroup(group: CopyGroupConfig): void {
   if (!Number.isSafeInteger(group.leaderAccountId) || Number(group.leaderAccountId) <= 0) {
     throw new Error('Copy group musí mít platný leader účet');
   }
-  if (!Array.isArray(group.followers) || group.followers.length === 0) {
+  if (!Array.isArray(group.followers)) {
+    throw new Error('Copy group musí mít pole follower účtů');
+  }
+  if (group.manualOnly === true && (group.localOnly !== true || group.followers.length !== 0)) {
+    throw new Error('Manual-only skupina musí být lokální a bez follower účtů');
+  }
+  if (group.manualOnly !== true && group.followers.length === 0) {
     throw new Error('Copy group musí mít alespoň jeden follower účet');
   }
   const seen = new Set<number>();
@@ -18709,7 +18715,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         follower.enabled !== false && follower.mode !== 'off'
         && !ineligible.has(follower.accountId)
         && !activeFollowerCut(follower.accountId, now));
-      if (participatingFollowers.length === 0) {
+      if (group.manualOnly !== true && participatingFollowers.length === 0) {
         throw new Error('ARM blokován: skupina nemá žádný způsobilý follower účet');
       }
     }

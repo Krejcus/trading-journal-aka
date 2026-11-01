@@ -1509,6 +1509,18 @@ existující ochranu.
   brokera. Kontrakt jen ze zdroje ceny grafu, nikdy odhadem v týdnu rollu.
 - Bezpečné vs. nebezpečné: Bezpečné je přidat blocker. Nebezpečné je náhledu
   dát přístup k brokerovi, REST čtení nebo čekání na `eventTail`.
+- **Manual-only DEMO (1. 11. 2026):** výjimka bez followerů je platná pouze
+  pro skupinu s `localOnly: true` a `manualOnly: true`. Installer ji vytvoří
+  jen explicitním `--manual-only`, který se nesmí kombinovat s follower
+  parametry. Skupina smí posílat výhradně vlastní ruční vstup/správu leadera;
+  běžná copy group dál vyžaduje alespoň jednoho odlišného followera. Sanitizer
+  odmítne manual-only skupinu s followerem nebo bez local-only příznaku.
+  Worker instalační topologii uzamkne: vzdálený příkaz nesmí změnit leadera,
+  přidat followera ani převést běžnou skupinu na manual-only. Cloudová knihovna
+  příznak `manualOnly` neukládá. Instalační safety profil má denní strop 250 USD,
+  nejvýše 40 obchodů za session a při expiraci ARM zavírá celou skupinu (tedy
+  jediný DEMO účet). Venue bez vlastního DLL/DD používá pro preview tento lokální
+  strop; bez něj zůstává `risk-unknown` fail-closed.
 - **Fáze 1b — odeslání (29. 10. 2026):** jediný risk-zvyšující příkaz appky
   `place-leader-entry` (`lib/leaderEntryPlace.ts`: prefix `entry:`, otisk
   payloadu). Jen přes relay (loopback = `manual-entry-relay-only`), s

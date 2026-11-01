@@ -122,6 +122,43 @@ describe('fáze 1a: náhled ručního vstupu (čisté vyhodnocení)', () => {
     expect(codes({ entryIneligible: new Map([[1, 'breached']]) })).toContain('leader-ineligible');
   });
 
+  it('explicitní local manual-only DEMO dovolí vstup pouze na leadera', () => {
+    const manualGroup = {
+      ...group,
+      id: 'manual-demo-1',
+      followers: [],
+      localOnly: true,
+      manualOnly: true,
+      safety: { ...group.safety, dailyLossLimitUsd: 250 },
+    };
+    const manualCommand = command({
+      groupId: manualGroup.id,
+      intent: {
+        armedAt: NOW - 600_000,
+        groupConfigHash: copyGroupConfigHash(manualGroup),
+        followerQuantities: [],
+      },
+    });
+    const result = evaluateManualEntryPreview(inputs({
+      group: manualGroup,
+      command: manualCommand,
+      accounts: new Map([[1, flat({ risk: risk({
+        netLiq: null, minNetLiq: null, dailyLossAutoLiq: null,
+      }) })]]),
+    }));
+    expect(result.blockers).toEqual([]);
+    expect(result.wouldPlace).toMatchObject({ leader: { accountId: 1, quantity: 1 }, followers: [] });
+
+    const oversizedLoss = evaluateManualEntryPreview(inputs({
+      group: manualGroup,
+      command: { ...manualCommand, stopLoss: 29_300 },
+      accounts: new Map([[1, flat({ risk: risk({
+        netLiq: null, minNetLiq: null, dailyLossAutoLiq: null,
+      }) })]]),
+    }));
+    expect(oversizedLoss.blockers.map(issue => issue.code)).toContain('risk-daily');
+  });
+
   it('strop kontraktů followera nejhorším případem jako exposureCappedBroker', () => {
     const capped = { ...group, followers: [{ accountId: 2, mode: 'on-submit', multiplier: 3, maxContracts: 2 }] };
     expect(codes({ group: capped, command: command({ intent: { armedAt: NOW - 600_000, groupConfigHash: copyGroupConfigHash(capped), followerQuantities: [{ accountId: 2, quantity: 3 }] } }) })).toContain('max-contracts');

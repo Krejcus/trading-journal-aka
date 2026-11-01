@@ -31,12 +31,14 @@ const broker = Array.isArray(input.connections)
   : await brokerFromLease(inputPath);
 
 for (const accountId of accountIds) {
-  const [orders, positions] = await Promise.all([
+  const [orders, positions, risk] = await Promise.all([
     broker.listOrders(accountId),
     broker.listPositions(accountId),
+    broker.listAccountRiskSnapshots([accountId]),
   ]);
   console.log(JSON.stringify({
     accountId,
+    risk: risk[0] ?? null,
     positions: positions.filter(position => position.netQuantity !== 0),
     activeOrders: orders.filter(order => isOpenOrderStatus(order.status)),
     latestOrders: orders

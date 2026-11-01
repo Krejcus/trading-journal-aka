@@ -54,6 +54,7 @@ import {
 } from '../../services/copierRunner';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
+  manualOnlyDemoSafety,
   validateStoredCopyGroupForStartup,
   type CopyFollowerConfig,
   type CopyGroupConfig,
@@ -465,7 +466,8 @@ async function runMultiConnectionAgent(): Promise<void> {
     throw reason instanceof Error ? reason : new Error('Žádné OAuth připojení workeru nejde načíst');
   }
   const leaderId = integerFlag('leader');
-  const followerId = integerFlag('follower');
+  const manualOnly = stringFlag('manual-only', false) === 'true';
+  const followerId = manualOnly ? null : integerFlag('follower');
   const routingFor = (items: typeof loaded) => ({
     connections: items.map((item): DynamicOAuthConnection => ({
       connectionId: item.context.connectionId,
@@ -707,7 +709,7 @@ function makeDisplayFeed(context: PilotContext, accountIds: number[]) {
 async function runLocalAgent(
   contexts: PilotContext[],
   leaderId: number,
-  followerId: number,
+  followerId: number | null,
   accounts: ExecutionAccount[],
   baseBroker: BrokerPort,
   renewableBrokers: ReadonlyArray<{ broker: TradovateBrokerPort; label: string; connectionId: string }> = [],
@@ -754,10 +756,16 @@ async function runLocalAgent(
   }
   // `--followers` rozšiřuje agenta na víc účtů s vlastními parametry;
   // bez něj platí původní dvojice `--follower/--multiplier` (mac-install).
+  const manualOnly = stringFlag('manual-only', false) === 'true';
   const followersFlag = stringFlag('followers', false);
-  const followers: CopyFollowerConfig[] = followersFlag
-    ? parseCopierFollowersFlag(followersFlag, leaderId)
-    : [{ accountId: followerId, mode: 'on-submit', multiplier: Number(multiplierValue) }];
+  if (manualOnly && (followersFlag || followerId != null || stringFlag('multiplier', false))) {
+    throw new Error('--manual-only se nesmí kombinovat s follower konfigurací');
+  }
+  const followers: CopyFollowerConfig[] = manualOnly
+    ? []
+    : followersFlag
+      ? parseCopierFollowersFlag(followersFlag, leaderId)
+      : [{ accountId: followerId!, mode: 'on-submit', multiplier: Number(multiplierValue) }];
   for (const candidate of contexts) {
     if (!candidate.renewable && candidate.expiresAt) {
       // Nespárovaný device má jednorázový bootstrap token, ale po schválení
@@ -804,8 +812,8 @@ async function runLocalAgent(
     throw new Error('--cooldown-min musí být v rozsahu 0–720');
   }
   const fallbackGroup: CopyGroupConfig = {
-    id: `agent-${leaderId}-${followerIdsKey}`,
-    name: 'Lokální DEMO agent',
+    id: manualOnly ? `manual-demo-${leaderId}` : `agent-${leaderId}-${followerIdsKey}`,
+    name: manualOnly ? 'Ruční DEMO test' : 'Lokální DEMO agent',
     enabled: true,
     leaderAccountId: leaderId,
     followers,
@@ -813,6 +821,8 @@ async function runLocalAgent(
       safety: { ...DEFAULT_COPY_GROUP_SAFETY, entryCooldownMinutes: Math.floor(cooldownMinutes) },
     } : {}),
     localOnly: true,
+    ...(manualOnly ? { manualOnly: true } : {}),
+    ...(manualOnly ? { safety: manualOnlyDemoSafety() } : {}),
   };
   const persistedGroup = await groupStore.load();
   // CLI leader určuje jen stabilní instalační slot/soubor. Po první bezpečné
@@ -2541,6 +2551,7 @@ Ranní Tradovate copier pilot (vždy DEMO)
   npm run copier:pilot -- agent --leader ID --follower ID --lease LEASE_JSON --device-config .copier-pilot/mac-device.json --minutes 480
   npm run copier:pilot -- agent --leader ID --follower ID --followers "ID@MULT,ID@MULT@MAXKONTRAKTU" ... (vice followeru; --followers ma prednost)
   npm run copier:pilot -- agent --connections-manifest /cesta/connections.json --leader ID --follower ID --followers "ID@MULT,..."
+  npm run copier:pilot -- agent --connections-manifest /cesta/connections.json --leader ID --manual-only true
 
 Volitelné: --connection-id UUID, --account-spec USERNAME
 Lokální lease: --lease /cesta/k/pilot-lease.json [--private-key /cesta/pilot-private.pem]
