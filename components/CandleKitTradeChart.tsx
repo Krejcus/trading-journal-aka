@@ -6039,7 +6039,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         if (event.pointerType !== 'touch') exactPointerClientRef.current = { x: event.clientX, y: event.clientY };
         handlePricePointerMove(event);
       }}
-      onPointerLeave={() => {
+      onPointerLeave={event => {
+        // Dotyk: pointerleave přijde po každém zvednutí prstu (a při převzetí
+        // gesta iOS), zatímco crosshair v režimu sledování zůstává — schovávání
+        // tady ho na telefonu rozblikalo. Viditelnost u dotyku řídí knihovna
+        // (crosshairMove bez bodu = konec sledování).
+        if (event.pointerType === 'touch') return;
         pointerClientRef.current = null;
         exactPointerClientRef.current = null;
         if (exactCrosshairLineRef.current) exactCrosshairLineRef.current.style.opacity = '0';
