@@ -629,7 +629,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     engine?.select(null);
     live?.onPositionOrder?.(drawing, liveInfo);
   };
-  const liveInfo: LiveChartInfo = { lastPrice: candles.length ? candles[candles.length - 1].close : null };
+  // Při přehrávání by poslední svíčka byla historická cena — lišta a objednávka ji nesmí ukázat.
+  const liveInfo: LiveChartInfo = { lastPrice: !replayOn && candles.length ? candles[candles.length - 1].close : null };
   const settingsDrawing = settingsFor && engine ? engine.getById(settingsFor) ?? null : null;
   const removeSelected = () => {
     if (!engine) return;
@@ -664,7 +665,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const hubButton = <button type="button" className="dj-btn" aria-label="Další volby grafu" aria-expanded={hubOpen} onClick={() => { cancelTool(); setHubOpen(true); }} style={{ ...stripIcon, ...(hubOpen ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><MoreHorizontal size={19} /></button>;
 
   return createPortal(
-    <div ref={rootRef} className={aurora ? 'dj dj-aurora' : 'dj'} role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', animation: 'dj-fade .18s ease both' }}>
+    <div ref={rootRef} className={`dj${live ? ' dj-live' : ''}${aurora ? ' dj-aurora' : ''}`} role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', animation: 'dj-fade .18s ease both' }}>
       {onSlotsReady && <div ref={slotHeaderRef} data-phone-review-slot="header" style={{ flex: 'none', display: chromeHidden ? 'none' : undefined }} />}
       {live && !chromeHidden && <div style={{ flex: 'none' }}>{live.header}</div>}
       <div ref={chartAreaRef} style={{ position: 'relative', flex: 1, minHeight: 0, background: aurora ? 'transparent' : isDark ? '#05080f' : '#fff' }}>
