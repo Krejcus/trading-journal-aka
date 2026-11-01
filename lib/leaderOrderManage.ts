@@ -9,7 +9,11 @@ import { stableHash64 } from '../services/copierKeys.js';
  */
 
 /** `close-position` (fáze 2d): zavřít obchod leadera (liquidate), kopírka zavře kopie. */
-export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position';
+/**
+ * `attach-brackets` (2. 11. 2026): k holému Marketu (vlastní vstup bez nohou)
+ * doplnit SL + TP jako OCO na celou pozici.
+ */
+export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position' | 'attach-brackets';
 
 export interface LeaderOrderManageCommand {
   type: 'manage-leader-order';
@@ -26,6 +30,9 @@ export interface LeaderOrderManageCommand {
   expect: { price: number; quantity: number };
   /** Jen `move-*`. */
   newPrice?: number;
+  /** Jen `attach-brackets` (obě povinné): ceny nových nohou. U attach je `expect.price` cena trhu, kterou uživatel viděl. */
+  stopLoss?: number;
+  takeProfit?: number;
   payloadHash: string;
 }
 
@@ -45,8 +52,8 @@ export interface LeaderOrderManageResult {
 const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
 const OPERATION_ID_PATTERN = /^manage:[a-zA-Z0-9_-]{8,100}$/;
 const ENTRY_OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
-const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry', 'close-position'];
-const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'payloadHash'];
+const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry', 'close-position', 'attach-brackets'];
+const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'stopLoss', 'takeProfit', 'payloadHash'];
 const LEADER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 1e-9;
 const price = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
@@ -87,6 +94,10 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
   if (typeof expect!.quantity !== 'number' || !Number.isSafeInteger(expect!.quantity) || expect!.quantity < 1 || expect!.quantity > 50) fail();
   const moves = command.action === 'move-stop' || command.action === 'move-target';
   if (moves ? !price(command.newPrice) : command.newPrice !== undefined) fail();
+  // Doplnění nohou: jen vlastní vstup, obě ceny; jinde nohy v příkazu být nesmí.
+  const attach = command.action === 'attach-brackets';
+  if (attach ? (!own || !price(command.stopLoss) || !price(command.takeProfit) || command.stopLoss === command.takeProfit)
+    : (command.stopLoss !== undefined || command.takeProfit !== undefined)) fail();
   if (typeof command.payloadHash !== 'string' || !/^[a-z0-9]{8,64}$/.test(command.payloadHash)) fail();
   const typed = command as unknown as LeaderOrderManageCommand;
   if (leaderOrderManagePayloadHash(typed) !== typed.payloadHash) fail();

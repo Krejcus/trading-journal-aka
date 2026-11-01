@@ -1699,6 +1699,42 @@ existující ochranu.
   workeru; správa existujících obchodů (`manage-leader-order`) NQ dál smí
   (risk-redukční). Měření: `timing` v záznamu (fronta, start, POST, ACK)
   a v paměti stream (Order, vyplnění, Fill + průměr, Position), jen zobrazení.
+- **Holý Market a doplnění SL/TP z telefonu (2. 11. 2026, rozhodnutí Filipa
+  „pilulka koupí/prodá market ihned bez SL/TP, je to fakt objednávka“, oponentura
+  copier-design-critic):** jen manual-only DEMO skupina (`market-manual-only`,
+  capability `manual-entry-bare-v1`). `place-leader-entry` Market bez obou nohou
+  (jen jedna noha = neplatný payload) → worker pošle jediný Market `placeOrder`,
+  záznam `bare: true`; pozice je VĚDOMĚ bez ochrany (ztráta otevřené pozice nemá
+  strop kromě Flattenu / vypršení ARM; day lock až po flat). Stejné brány jako
+  Market (kontrakt + čerstvá cena IBKR, posun, strop, flat, ARMED). Nohy doplní
+  `manage-leader-order` `attach-brackets` (`stopLoss` + `takeProfit`): jen vlastní
+  přijatý holý vstup bez nohou, REST (fresh, s limitem) plně vyplněný vstup,
+  pozice = qty na správné straně, na symbolu nic nepracuje, fence fronty; nohy
+  ≥ 8 ticků od čerstvé ceny IBKR na správné straně; riziko attach NIKDY
+  neblokuje (snižuje ho). Snižuje riziko, proto smí i za DISARMED/kill a agent ho
+  nechá projít po brzdě (jako `cancel-entry`). Těsně před POSTem synchronně:
+  žádný běžící Flatten, jiný zápis na leaderovi, nové eventy, fence a pozice
+  ze streamu; zápis je registrovaný (Flatten ho vidí jako rozpracovaný). Po ACK
+  se pozice vždy autoritativně přečte: prokazatelně flat = obě nohy se cíleně
+  zruší + incident; neověřeno = jen incident (nohy zůstávají, pozice může trvat).
+  Attach jen k NEJNOVĚJŠÍMU ručnímu vstupu, dokud leader na symbolu od jeho
+  fillu nezplochl (`closedAt`, status `open`) — starý záznam nesmí „adoptovat“
+  cizí pozici. Flatten v telefonu jde stejným zámkem skupiny jako Dashboard
+  a nečeká na rozpracovaný vstup/attach. Flatten při rozběhnutém attach leadera
+  vynechá jako nejasný zápis (precedent zavření z grafu); relay strop/rozestup
+  se pro attach nemění; zápisy ručního vstupu nejdou přes `dispatchBroker`
+  (INV-WORKER-02 dál otevřený). Úspěch zapíše id nohou do záznamu vstupu → dál běžný
+  spravovaný obchod (posun SL/TP, BE, ×). `unknown` attach / restart v `sending`
+  = incident, automaticky se nedořešuje (Flatten + auditovaný waiver). Zavření
+  holé pozice v telefonu = Flatten skupiny (jediný DEMO účet), dvoukrokově.
+  Telefon (`components/day/LivePhoneChart.tsx`, `lib/livePhoneOrders.ts`) posílá
+  přes stejný desk callback, relay a admission jako PC; odeslat jen nad čerstvým
+  neobnoveným stavem, zapnutou kopírkou a bez rozpracovaného vstupu; zámek
+  jednoho příkazu naráz. OFF/Kill/Flatten celé skupiny zůstávají na Live
+  Dashboardu (Filip: žádná nouzová lišta na telefonním grafu; INV-UI-02 se plní
+  navigací LIVE ▾ → Live Dashboard). Posun SL dál od trhu v manual-only skupině
+  počítá s lokálním denním stropem jako náhled (dřív `risk-unknown`).
+  Hlídá test: `tests/manualEntryBareAttach.test.ts`, `tests/livePhoneOrders.test.ts`.
 - Hlídá test (1b): `tests/manualEntryPlace.test.ts`, `tests/leaderEntryPlace.test.ts`,
   `tests/localCopierExecutionAgent.test.ts`, `tests/tradovateCopierCommandRelay.test.ts`.
 

@@ -4,6 +4,7 @@ import { pointValueUsd } from './futuresContractSpecs';
 import type { BrokerOrderRequest } from './brokerPort';
 import {
   copyGroupConfigHash,
+  isBareLeaderEntry,
   leaderEntryRiskPrice,
   LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS,
   LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS,
@@ -88,6 +89,7 @@ export function manualEntryMarketQuoteBlockers(
   if (Math.abs(market - reference) > MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS * TICK + 1e-9) {
     issues.push(blocker('market-quote-drift', `Trh se od ceny, kterou jsi viděl, pohnul o víc než ${MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS} ticků — nic se neodešle.`));
   }
+  if (isBareLeaderEntry(command)) return issues;
   const minDistance = MANUAL_ENTRY_MARKET_MIN_BRACKET_TICKS * TICK - 1e-9;
   const tooClose = [reference, market].some(price => Math.abs(price - command.stopLoss) < minDistance || Math.abs(price - command.takeProfit) < minDistance);
   const long = command.side === 'Buy';
@@ -282,8 +284,14 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
   const entryPrice = market
     ? manualEntryMarketRiskPrice(command.side, command.referencePrice!, input.workerQuote, now)
     : leaderEntryRiskPrice(command);
-  if (long ? !(command.stopLoss < entryPrice) : !(command.stopLoss > entryPrice)) blockers.push(blocker('stop-side', 'SL je na špatné straně vstupu.'));
-  if (long ? !(command.takeProfit > entryPrice) : !(command.takeProfit < entryPrice)) blockers.push(blocker('target-side', 'TP je na špatné straně vstupu.'));
+  // Holý Market (telefonní lišta, Filip 1. 11.): bez nohou, vědomě bez ochrany; SL/TP doplní attach-brackets.
+  const bare = isBareLeaderEntry(command);
+  if (bare) {
+    notes.push(blocker('bare-unprotected', 'Market bez SL/TP — pozice je bez ochrany, dokud nohy nedoplníš.'));
+  } else {
+    if (long ? !(command.stopLoss! < entryPrice) : !(command.stopLoss! > entryPrice)) blockers.push(blocker('stop-side', 'SL je na špatné straně vstupu.'));
+    if (long ? !(command.takeProfit! > entryPrice) : !(command.takeProfit! < entryPrice)) blockers.push(blocker('target-side', 'TP je na špatné straně vstupu.'));
+  }
   if (!input.frontSymbols.includes(command.symbol)) blockers.push(blocker('symbol-not-front', `Kontrakt ${command.symbol} není aktuální front (${input.frontSymbols.join(' / ')}).`));
   else if (input.frontSymbols.length > 1) notes.push(blocker('roll-window', `Týden rollu — ověř, že ${command.symbol} je kontrakt, který chceš.`));
   // Původ kontraktu (2. 11. 2026): stejný konkrétní kontrakt musí mít čerstvou kotaci
@@ -301,10 +309,10 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
   if (pointValue == null) blockers.push(blocker('point-value', 'Neznámá hodnota bodu kontraktu.'));
   const fee = FEE_PER_CONTRACT_USD[command.symbol.replace(/[FGHJKMNQUVXZ]\d$/, '')] ?? 5;
   const slippageTicks = MANUAL_ENTRY_SLIPPAGE_TICKS + (market ? MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS : 0);
-  const lossPerContract = pointValue == null ? null
-    : (Math.abs(entryPrice - command.stopLoss) + slippageTicks * TICK) * pointValue + fee;
-  const swingPerContract = pointValue == null ? null
-    : (Math.abs(command.takeProfit - command.stopLoss) + slippageTicks * TICK) * pointValue + fee;
+  const lossPerContract = pointValue == null || bare ? null
+    : (Math.abs(entryPrice - command.stopLoss!) + slippageTicks * TICK) * pointValue + fee;
+  const swingPerContract = pointValue == null || bare ? null
+    : (Math.abs(command.takeProfit! - command.stopLoss!) + slippageTicks * TICK) * pointValue + fee;
 
   const checkAccount = (accountId: number, label: string, quantity: number, configuredCutUsd: number | null = null) => {
     const account = input.accounts.get(accountId);
@@ -375,7 +383,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
     const reasons = [...new Set(decision.blocked.map(entry => entry.reason))];
     if (decision.haltReason) continue; // halt hlásí leader výš
     if (reasons.length) { blockers.push(blocker('follower-gate', `${label}: kopírka by odmítla (${reasons.join(', ')}).`)); continue; }
-    followers.push({ accountId: follower.accountId, side: command.side, quantity, orderType: command.orderType, price: entryPrice, stopLoss: command.stopLoss, takeProfit: command.takeProfit });
+    followers.push({ accountId: follower.accountId, side: command.side, quantity, orderType: command.orderType, price: entryPrice, stopLoss: command.stopLoss ?? null, takeProfit: command.takeProfit ?? null });
   }
   const leaderDecision = evaluateRiskGate([{ tag: 'preview', accountId: group.leaderAccountId, symbol: command.symbol, side: command.side, quantity: command.quantity, orderType: command.orderType }], { ...input.riskGate, maxQuantityPerAccount: new Map(), ineligibleAccounts: new Map() });
   if (leaderDecision.haltReason) blockers.push(blocker('halt', `Kopírka teď nesmí posílat: ${leaderDecision.haltReason}.`));
@@ -394,7 +402,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
 
   const leader: LeaderEntryPreviewOrder = {
     accountId: group.leaderAccountId, side: command.side, quantity: command.quantity, orderType: command.orderType,
-    price: entryPrice, stopLoss: command.stopLoss, takeProfit: command.takeProfit,
+    price: entryPrice, stopLoss: command.stopLoss ?? null, takeProfit: command.takeProfit ?? null,
   };
   return result({ leader, followers });
 }

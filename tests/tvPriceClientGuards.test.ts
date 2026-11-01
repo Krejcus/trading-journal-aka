@@ -211,6 +211,9 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
         ? /useTvLiveCandleFeed\(|^liveFeed,$|liveFeed`: rozpracovaná/
         : file === 'components/LiveTradingScreen.tsx'
           ? /^liveCandles=\{chart\.liveFeed\}$|^const tick = useLiveTicketQuote\(chart\.liveFeed, ROOT, candleClose\);$/
+          // Telefon (2. 11. 2026): stejná výjimka pro lištu a list objednávky (cena, kterou uživatel vidí).
+          : file === 'components/day/LivePhoneChart.tsx'
+            ? /^const tick = useLiveTicketQuote\(ctl\.chart\.liveFeed, 'MNQ', candleClose\);$|liveCandles=\{ctl\.chart\.liveFeed\}/
           : /liveCandles=\{ctl\.chart\.liveFeed\}|useLiveCandleBinding\(/;
       expect(line, file).toMatch(allowed);
     }
@@ -235,7 +238,8 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
     expect(readers).toEqual(['hooks/useLiveCandleBinding.ts', 'hooks/useLiveTicketQuote.ts', 'hooks/useTvLiveCandleFeed.ts']);
     const ticketQuote = readFileSync(join(root, 'hooks/useLiveTicketQuote.ts'), 'utf8').split('\n').filter(line => /\.current\(/.test(line)).map(line => line.trim());
     expect(ticketQuote).toEqual(['const price = feed.current(root)?.close;']);
-    expect(importersOf('hooks/useLiveTicketQuote.ts')).toEqual(['components/LiveTradingScreen.tsx']);
+    // Telefon (2. 11. 2026): lišta a list objednávky na telefonním grafu — stejná výjimka.
+    expect(importersOf('hooks/useLiveTicketQuote.ts')).toEqual(['components/LiveTradingScreen.tsx', 'components/day/LivePhoneChart.tsx']);
     const hook = readFileSync(join(root, 'hooks/useTvLiveCandleFeed.ts'), 'utf8').split('\n').filter(line => /\.current\(/.test(line)).map(line => line.trim());
     expect(hook).toEqual(['current: root => feed.current(root),']);
     const dayData = readFileSync(join(root, 'hooks/useDayChartData.ts'), 'utf8');

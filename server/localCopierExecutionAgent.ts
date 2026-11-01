@@ -22,7 +22,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -406,7 +406,7 @@ export async function startLocalCopierExecutionAgent(
       ...(typeof options.controller.placeLeaderEntry === 'function' ? [COPIER_MANUAL_ENTRY_CAPABILITY] : []),
       // Nativní Market jen pro instalační manual-only skupinu bez followerů (oponentura 2. 11.).
       ...(typeof options.controller.placeLeaderEntry === 'function' && group.manualOnly === true && group.localOnly === true && group.followers.length === 0
-        ? [COPIER_MANUAL_ENTRY_MARKET_CAPABILITY] : []),
+        ? [COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ENTRY_BARE_CAPABILITY] : [])] : []),
       ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY] : []),
       ...(options.autoRearmAfterTransport === true && autoResumeAdmission ? [COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY] : []),
       ...(typeof options.controller.retireGroup === 'function' && options.previewGroupAccounts
@@ -954,7 +954,8 @@ export async function startLocalCopierExecutionAgent(
           return { type: 'leader-order-managed', operationId: manage.operationId, action: manage.action, status: 'blocked', checkedAt: Date.now(),
             blockers: [{ code: 'no-deadline', text: 'Příkaz nemá platnost — nic se neodeslalo.' }] };
         }
-        if (manage.action !== 'cancel-entry' && context.createdAt != null
+        // Doplnění SL/TP k holému Marketu riziko snižuje stejně jako zrušení vstupu (2. 11.).
+        if (manage.action !== 'cancel-entry' && manage.action !== 'attach-brackets' && context.createdAt != null
           && context.createdAt <= lastBrakeCreatedAt + Math.max(0, context.clockSkewReserveMs ?? 0)) {
           return { type: 'leader-order-managed', operationId: manage.operationId, action: manage.action, status: 'blocked', checkedAt: Date.now(),
             blockers: [{ code: 'brake-after-request', text: 'Po zadání změny přišlo vypnutí kopírky nebo zámek.' }] };

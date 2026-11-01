@@ -357,9 +357,14 @@ export interface CopierManualEntryRecord {
     referencePrice?: number;
     /** Kdy klient kotaci přijal (epoch ms). */
     quoteReceivedAt?: number;
-    stopLoss: number;
-    takeProfit: number;
+    /** Obě chybí = holý Market (bez nohou, `bare`). */
+    stopLoss?: number;
+    takeProfit?: number;
   };
+  /** Holý Market bez SL/TP (telefonní lišta); nohy doplní `attach-brackets`. */
+  bare?: true;
+  /** Kdy leader na symbolu po fillu holého vstupu zplochl — attach už nepatří k tomuto záznamu. */
+  closedAt?: number;
   /**
    * Časy cesty jednoho operationId ve workeru (2. 11. 2026, jen měření):
    * zařazení do fronty, start ve frontě, odeslání POSTu, odpověď brokera.
@@ -382,7 +387,7 @@ export interface CopierManualOrderActionRecord {
   operationId: string;
   payloadHash: string;
   entryOperationId: string;
-  action: 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position';
+  action: 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position' | 'attach-brackets';
   status: 'sending' | 'acknowledged' | 'rejected' | 'unknown' | 'not-sent' | 'waived';
   /** Symbol obchodu (dořešení zavření po restartu nezávisle na outboxech). Volitelné kvůli starším záznamům. */
   symbol?: string;

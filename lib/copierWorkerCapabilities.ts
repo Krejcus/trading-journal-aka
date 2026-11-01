@@ -40,6 +40,17 @@ export const supportsCopierManualEntryMarket = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_MANUAL_ENTRY_MARKET_CAPABILITY);
 
+/**
+ * Worker umí holý Market bez SL/TP (telefonní lišta) a doplnění SL/TP k němu
+ * (`attach-brackets`), 2. 11. 2026 — jen manual-only DEMO skupina.
+ */
+export const COPIER_MANUAL_ENTRY_BARE_CAPABILITY = 'manual-entry-bare-v1';
+
+export const supportsCopierManualEntryBare = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ENTRY_BARE_CAPABILITY);
+
 /** Worker umí spravovat vlastní ruční vstup z grafu (fáze 2a, 29. 10. 2026). */
 export const COPIER_MANUAL_ORDER_MANAGE_CAPABILITY = 'manual-order-manage-v1';
 

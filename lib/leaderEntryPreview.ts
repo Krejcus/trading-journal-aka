@@ -42,8 +42,13 @@ export interface LeaderEntryPreviewCommand {
   referencePrice?: number;
   /** Kdy klient kotaci přijal (epoch ms); u Marketu povinné. */
   quoteReceivedAt?: number;
-  stopLoss: number;
-  takeProfit: number;
+  /**
+   * SL a TP; obě chybí jen u holého Marketu z telefonní lišty (Filip 1. 11. 2026:
+   * „market ihned bez SL/TP“) — pozice je pak vědomě bez ochrany, nohy se
+   * doplní `attach-brackets`.
+   */
+  stopLoss?: number;
+  takeProfit?: number;
   /** Co uživatel viděl v náhledu panelu; worker musí přepočtem dojít ke stejnému. */
   intent: {
     armedAt: number;
@@ -63,8 +68,9 @@ export interface LeaderEntryPreviewOrder {
   orderType: LeaderEntryOrderType;
   /** U Marketu cena, kterou uživatel viděl (odhad), ne cena příkazu. */
   price: number;
-  stopLoss: number;
-  takeProfit: number;
+  /** null = holý Market bez nohou. */
+  stopLoss: number | null;
+  takeProfit: number | null;
 }
 
 export interface LeaderEntryPreviewResult {
@@ -110,7 +116,9 @@ export function validateLeaderEntryPreview(value: unknown): LeaderEntryPreviewCo
     if (command.referencePrice !== undefined && !price(command.referencePrice)) fail();
     if (command.quoteReceivedAt !== undefined && !epochMs(command.quoteReceivedAt)) fail();
   }
-  if (!price(command.stopLoss) || !price(command.takeProfit)) fail();
+  // Holý Market: SL i TP chybí oba (nikdy jen jedna noha).
+  const bare = command.stopLoss === undefined && command.takeProfit === undefined;
+  if (bare ? command.orderType !== 'Market' : (!price(command.stopLoss) || !price(command.takeProfit))) fail();
   const intent = command.intent as Record<string, unknown> | null;
   if (!intent || typeof intent !== 'object' || Object.keys(intent).some(key => !INTENT_KEYS.includes(key))) fail();
   if (typeof intent!.armedAt !== 'number' || !Number.isSafeInteger(intent!.armedAt) || intent!.armedAt < 0) fail();
@@ -155,9 +163,13 @@ export interface LiveEntryPreviewDraft {
   price?: number;
   referencePrice?: number;
   quoteReceivedAt?: number;
-  stopLoss: number;
-  takeProfit: number;
+  /** Obě chybí = holý Market. */
+  stopLoss?: number;
+  takeProfit?: number;
 }
+
+/** Holý Market (bez SL i TP)? */
+export const isBareLeaderEntry = (command: { stopLoss?: number; takeProfit?: number }): boolean => command.stopLoss === undefined && command.takeProfit === undefined;
 
 /** Cena vstupu pro odhad rizika a strany SL/TP: Limit/Stop cena příkazu, Market cena, kterou uživatel viděl. */
 export function leaderEntryRiskPrice(command: { orderType: LeaderEntryOrderType; price?: number; referencePrice?: number }): number {

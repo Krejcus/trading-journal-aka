@@ -134,7 +134,8 @@ import {
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
 import { manualEntryContractCap } from '../services/manualEntryPreview';
-import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryMarket, supportsCopierManualOrderClose, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import type { LivePhoneTradeBridge } from '../lib/livePhoneOrders';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryMarket, supportsCopierManualOrderClose, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
@@ -183,7 +184,7 @@ interface TradovateLiveDeskProps {
    * Telefon a nativní appka: LIVE → Graf = graf dneška z deníku (data dodá
    * App). Desktop má vlastní LIVE graf a tohle nepoužije.
    */
-  phoneChart?: (slots: { header: React.ReactNode; overlay?: React.ReactNode; onLeave: () => void }) => React.ReactNode;
+  phoneChart?: (slots: { header: React.ReactNode; overlay?: React.ReactNode; onLeave: () => void; trade?: LivePhoneTradeBridge | null }) => React.ReactNode;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -1034,7 +1035,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     ? mergeCopierLiveExposure(agentStatus, agentStatusObservedAt, liveExposure)
     : { status: agentStatus, exposureObservedAt: agentStatusObservedAt }), [agentStatus, agentStatusObservedAt, agentStatusFresh, agentStatusRestored, liveExposure]);
   const chartData = useLiveChartData({
-    enabled: chartAvailable && tab === 'chart',
+    // Telefonní graf (2. 11.) potřebuje stejnou pozici leadera pro lištu a „Přidat SL/TP“.
+    enabled: (chartAvailable || phoneChartAvailable) && tab === 'chart',
     data: live.data,
     profiles: live.profiles,
     agentStatus: chartLive.status,
@@ -1091,6 +1093,62 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (!result || result.type !== 'leader-order-managed') throw new Error('Výsledek změny chybí — zkontroluj leadera v Tradovate.');
     return result;
   }, [chartData.position?.summary]);
+
+  // Telefon (2. 11. 2026): stejné odeslání a správa jako PC graf, žádná druhá execution cesta.
+  const attachBrackets = useCallback(async (input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number }): Promise<LeaderOrderManageResult> => {
+    const executionGroup = copierWorkerExecutionGroup(armStatusRef.current.status);
+    if (!armStatusRef.current.fresh || !executionGroup || executionGroup.leaderAccountId == null) {
+      throw new Error('Stav kopírky není čerstvě ověřený — nic se neodeslalo.');
+    }
+    const route = previewRouteRef.current;
+    if (!route.relayConnectionId) throw new Error('Změna jde jen přes relay — chybí připojení k workeru.');
+    const command = buildLeaderOrderManageCommand({
+      groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
+      leaderAccountId: executionGroup.leaderAccountId, entryOperationId: input.entryOperationId, symbol: input.symbol,
+      action: 'attach-brackets', expect: { price: input.expectPrice, quantity: input.quantity }, stopLoss: input.stopLoss, takeProfit: input.takeProfit,
+    });
+    const response = await executeTradovateCopierRelayCommand(route.relayConnectionId, { type: 'copy-command', command });
+    const result = (response as { result?: unknown }).result as LeaderOrderManageResult | undefined;
+    statusPollKickRef.current?.();
+    if (!result || result.type !== 'leader-order-managed') throw new Error('Výsledek chybí — zkontroluj pozici v Tradovate.');
+    return result;
+  }, []);
+  const phoneTrade = useMemo<LivePhoneTradeBridge | null>(() => {
+    if (!phoneChartAvailable || !workerGroup) return null;
+    const controller = agentStatus?.controller;
+    const entries = controller?.manualEntries ?? [];
+    const summary = chartData.position?.summary ?? null;
+    const leaderBasis = leaderManageBasis(summary, workerGroup.leaderAccountId);
+    const symbol = chartData.position?.symbol ?? null;
+    // Jen nejnovější ruční vstup a jen otevřený (worker ho po flat uzavře) — starý nesmí „adoptovat“ pozici.
+    const newest = entries.reduce<(typeof entries)[number] | null>((latest, entry) => (!latest || entry.createdAt > latest.createdAt ? entry : latest), null);
+    const bare = newest && newest.status === 'acknowledged' && newest.bare === true && newest.protected !== true && newest.open !== false && newest.symbol === symbol ? newest : null;
+    // INV-UI-01/02 (P2-10): odeslat jen nad čerstvým neobnoveným stavem, zapnutou kopírkou
+    // a bez rozpracovaného ručního vstupu; po návratu z pozadí rozhodne až nový poll.
+    const blockedReason = !supportsCopierManualEntry(agentStatus) ? 'Worker odeslání z appky neumí.'
+      : !agentStatusFresh || agentStatusRestored ? 'Stav kopírky se ověřuje…'
+        : controller?.armed !== true || controller.shadowMode === true ? 'Kopírka je vypnutá — zapni ji na Live Dashboardu.'
+          : entries.some(entry => entry.status === 'sending' || entry.status === 'unknown') ? 'Předchozí vstup nemá výsledek — počkej / vyřeš na Live Dashboardu.'
+            : !relayConnectionId ? 'Chybí připojení k workeru přes relay.'
+              : null;
+    return {
+      blockedReason,
+      marketSupported: supportsCopierManualEntryMarket(agentStatus),
+      bareSupported: supportsCopierManualEntryBare(agentStatus),
+      maxContracts: manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null),
+      place: placeLeaderEntry,
+      position: leaderBasis && summary && symbol ? {
+        side: summary.side, quantity: leaderBasis.quantity, symbol,
+        bareEntryOperationId: bare?.operationId ?? null,
+      } : null,
+      attach: attachBrackets,
+      // Stejná cesta jako statická lišta / Dashboard: jeden zámek Flattenu na skupinu
+      // (createFlattenGroupCoordinator v executeSafetyCommand) — dvojklep ani souběh nevytvoří druhý.
+      flatten: () => runStaticSafetyAction('flatten-group', { id: workerGroup.id, name: workerGroup.name,
+        accountIds: [workerGroup.leaderAccountId, ...workerGroup.followers.map(follower => follower.accountId)],
+        observedAt: agentStatusObservedAt, verified: agentStatusFresh && !agentStatusRestored }),
+    };
+  }, [phoneChartAvailable, workerGroup, agentStatus, agentStatusFresh, agentStatusRestored, chartData.position, relayConnectionId, placeLeaderEntry, attachBrackets, agentStatusObservedAt, runStaticSafetyAction]);
 
   // Vypnutí z grafu: stejná safety cesta jako přehled (INV-UI-02). Stabilní
   // funkce přes ref — graf nesmí držet starou trasu ani starý fence.
@@ -1763,6 +1821,7 @@ acceptAgentStatus((await executeAgent({
               onClose={() => setPhoneMenuOpen(false)}
             /> : null,
             onLeave: () => navigateToTab('overview'),
+            trade: phoneTrade,
           })}
         </ErrorBoundary>
       ) : null}
