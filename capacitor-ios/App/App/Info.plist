@@ -49,6 +49,8 @@
 	<string>AlphaTrade používá mikrofon pouze při diktování obchodní poznámky.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>AlphaTrade používá rozpoznávání řeči k převodu diktované obchodní poznámky na text.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>AlphaTrade uloží do Fotek jen snímek grafu nebo obchodu, který se rozhodnete uložit.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

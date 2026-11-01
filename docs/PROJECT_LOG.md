@@ -421,6 +421,88 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Merge origin/main (crosshair fde85e94) do větve — jediný konflikt
   PROJECT_LOG, oba zápisy zachovány; `beforeLiveMarketCalculations.ts` je
   teď v repu, pády cizí sady na mainu tím mizí.
+### 2026-11-01 — LIVE na telefonu, fáze A: graf hned po otevření, obchodní lišta, objednávka z boxu, fotoaparát, Aurora (Claude, větev `claude/phone-live-ui-20261101`, NEnasazeno)
+
+- Filip při obchodování na mobilu chodí hlavně na graf → LIVE v nativní appce
+  otevře rovnou dnešní graf deníku (`LivePhoneChart` = `DayFullscreenChart`
+  v režimu `live`). Ostatní záložky přes „LIVE ▾“ (spodní list), zpátky
+  plovoucím „Graf“. Nativní lišta zůstává vidět. PC beze změny.
+- **Nouzová lišta (OFF / Kill / Flatten) na grafu ani v menu NENÍ** — Filip
+  výslovně („tu nouzovou lištu tam určitě nechci“). INV-UI-02 plní cesta
+  LIVE ▾ → Live Dashboard (lišta tam zůstává jako dnes). Pád telefonního grafu
+  se pamatuje stejně jako na PC (`rememberLiveChartCrash`) → do konce relace se
+  LIVE otevírá na přehledu.
+- **Fáze A = jen UI** („data napojíme zvlášť“): obchodní lišta
+  [⋮⋮][PRODAT][ks][KOUPIT] (posun za mřížku, ⇅ ve spodní liště, klávesnice
+  množství 1/5/10/25/100); podržení position boxu → menu → „Vytvořit limitní
+  objednávku…“ (i ⚡ v liště boxu) → list objednávky počítaný stejně jako
+  panel na PC (`lib/liveOrderTicket.ts`), riziko a cíl v USD i ticích.
+  Prodat / Koupit / odeslání jen ukážou „nic se neodeslalo“. Test hlídá, že
+  telefonní soubory nemají cestu k brokerovi, `fetch` ani Supabase. Ceny
+  v liště jsou z poslední svíčky (INV-UI-04, orientační); bid/ask
+  a odesílání přijdou ve fázi B přes invarianty a critic. Filip chce
+  Prodat / Koupit jedním klepnutím bez potvrzení jako v TradingView.
+  To je výjimka z pravidla 29. 10. jen pro tuto lištu a rozhodne se
+  o ní při napojení.
+- Fotoaparát v liště grafu: snímek aktivního okna (screenshot CandleKit
+  + popisek) do schránky (ClipboardItem vzniká v gestu), náhled jako na iOS
+  se Sdílet / Uložit, který zmizí po 2,5 s. Nová nativní metoda
+  `saveImageToPhotos` (jen přidání) a `NSPhotoLibraryAddUsageDescription`.
+  Bez toho popisu by i „Uložit obrázek“ v listu sdílení (dosavadní
+  `shareFile`) appku shodilo.
+- Aurora jen pro LIVE na telefonu v tmavém režimu. Rozložení zůstává jako
+  dnes, plátno grafu je průsvitné (`canvasBackground`, jinde beze změny),
+  sklo má vždy vlastní výplň. Lišta grafu v LIVE má krátký čip rozsahu
+  (Den / LDN / NY) a užší ikony, aby se na 390 pt vešel fotoaparát i •••.
+  ⇅ je vpravo místo zavření.
+- Neověřeno v prohlížeči: dlouhé podržení boxu. Syntetické doteky ho
+  netrefily, protože box na nedělním grafu ležel mimo svíčky; ověřit prstem
+  na iPhonu.
+- **Oponentura (copier-design-critic), 2× „OPRAVIT PŘED COMMITEM“, opraveno:**
+  - Notifikace z kopírky vedly na graf bez nouzové lišty. Nově každé „LIVE“
+    z notifikace (lokální, APNs, tlačítko) jde na `live:overview`.
+    Převod je v klientovi, server posílá dál `live` kvůli starším buildům.
+  - Čip kopírky nově vychází z `copierValue` a `liveAttentionReasons` jako
+    na PC, takže neschová automatické vypnutí, sledovací režim, čekající
+    pokračování ani rozjeté účty.
+  - Cena v liště a v listu je při přehrávání `null`.
+  - Telefonní graf nezrychluje čtení přes relay.
+  - Graf končí nad nativní lištou (`.dj-live`, `--dj-safe-bottom`).
+  - Výjimka i cesta ke 4 klepnutím jsou zapsané v INV-UI-02.
+- Filip po prvním buildu (1. 11.):
+  - Po změně intervalu měl každý graf začít jako „Reset chart view“. Hotovo
+    pro LIVE a dnešní deník (nový graf = reset výřezu; starší dny a obchody
+    drží svůj výřez).
+  - Spodní lištu grafu zakrývala iOS lišta → opraveno.
+  - Motiv: graf jede podle motivu celé appky (tmavý → světlý → OLED), barvy
+    grafu se pamatují zvlášť pro světlý a tmavý; Aurora jen v tmavém.
+  - Crosshair „při šoupnutí na chvilku zhasne“: v prohlížeči se skutečnými
+    souřadnicemi dotyku se chová jako TradingView (podržení → tah hýbe →
+    po zvednutí zůstane → klepnutí ho schová), nereprodukováno → čeká na
+    video z iPhonu.
+- Druhé kolo připomínek z iPhonu (video, 1. 11. odpoledne):
+  - Crosshair problikával kvůli `onPointerLeave` na kořeni grafu:
+    `pointerleave` z dotyku chodí po každém zvednutí prstu a při převzetí
+    gesta iOS. DOM kurzor zhasl, i když lightweight-charts dál sledoval.
+    Dotykový `pointerleave` už kurzor neschovává (f1ffc516).
+  - Všechny listy (LIVE menu, ks, objednávka, menu boxu, nástroje,
+    rozložení, nastavení grafu, přehrávání) jdou stáhnout dolů za úchyt
+    (`SheetGrip`, 6c5e1915).
+  - Na LIVE grafu je iOS lišta schovaná (Filipův nápad, víc místa);
+    na ostatních LIVE záložkách se vrací (501d78fc). Start appky lištu
+    vždy ukáže, protože skrytí přežije reload WebView (b743d86b).
+    Critic kolo 3 i 4: OK.
+  - Roztažený position box blokoval cenovou osu (tah osy chytil kresbu).
+    Dotyk na cenové nebo časové ose teď jde vždy grafu, ještě než ho kresba
+    může chytit (f77b7bf3 + test). Ověřeno v prohlížeči podvrženým zásahem
+    kresby: v grafu dotyk chytí, na osách ne.
+  - Náhled „v obchodě“ (https://claude.ai/artifact/EkQateEvNCynqk8rLyQUrr):
+    čáry pozice jako na PC (`livePositionChartLines`, štítky u osy, protože
+    vlevo dole je obchodní lišta) a P&L skupiny ve třech variantách
+    (A hlavička + list účtů, B pruh účtů, C nad lištou). Čeká na Filipovu
+    volbu, nic se nestaví.
+- Celá sada: 6398 testů zelených. Jediný pád je cizí baseline
+  `candleAggregationEquivalence` (stejně tsc).
 
 ### 2026-11-01 — Jeden crosshair, svislá čára na svíčce (Claude, nasazeno 08:17 @ fde85e94)
 

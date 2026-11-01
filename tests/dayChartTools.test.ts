@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DAY_CHART_TIMEFRAME_KEY, DAY_DRAW_TOOLS, dayDrawColorOf, dayDrawStyle, dayDrawingsStorageKey, lastManualDrawingId, pathGroupOf, pathSegmentId, pathSegmentIds,
   nextDayChartTimeframe, readStoredDayChartTimeframe, writeStoredDayChartTimeframe,
-  cycleDayChartTimeframe, DAY_DRAW_FAVORITES_KEY, DAY_DRAW_PANEL_KEY, effectiveDayChartLayout, readDayChartLayout, readDayChartSync, readDayPaneTimeframes, writeDayChartLayout, writeDayChartSync, writeDayPaneTimeframes, readDayDrawFavorites, readDayDrawPanel, toggleDayDrawFavorite, writeDayDrawFavorites, writeDayDrawPanel,
+  cycleDayChartTimeframe, cycleTimeframeIn, DAY_DRAW_FAVORITES_KEY, DAY_DRAW_PANEL_KEY, effectiveDayChartLayout, readDayChartLayout, readDayChartSync, readDayPaneTimeframes, writeDayChartLayout, writeDayChartSync, writeDayPaneTimeframes, readDayDrawFavorites, readDayDrawPanel, toggleDayDrawFavorite, writeDayDrawFavorites, writeDayDrawPanel,
 } from '../lib/dayChartTools';
 
 const memoryStorage = () => {
@@ -23,7 +23,10 @@ describe('dayChartTools', () => {
     writeStoredDayChartTimeframe(storage, '15m');
     expect(storage.map.get(DAY_CHART_TIMEFRAME_KEY)).toBe('15m');
     expect(readStoredDayChartTimeframe(storage)).toBe('15m');
+    // Z listu intervalů jde vybrat libovolný platný interval (svíčky se skládají z 1m).
     storage.setItem(DAY_CHART_TIMEFRAME_KEY, '1h');
+    expect(readStoredDayChartTimeframe(storage, '1m')).toBe('1h');
+    storage.setItem(DAY_CHART_TIMEFRAME_KEY, 'abc');
     expect(readStoredDayChartTimeframe(storage, '1m')).toBe('1m');
     expect(readStoredDayChartTimeframe(null)).toBe('5m');
   });
@@ -117,8 +120,8 @@ describe('rozvržení grafů', () => {
     expect(readDayPaneTimeframes(storage)).toEqual(['15m', '1m', '5m']);
     writeDayPaneTimeframes(storage, ['5m', '5m', '15m']);
     expect(readDayPaneTimeframes(storage)).toEqual(['5m', '5m', '15m']);
-    storage.setItem('at:day-chart:pane-timeframes', JSON.stringify(['1h', '1m']));
-    expect(readDayPaneTimeframes(storage)).toEqual(['15m', '1m', '5m']);
+    storage.setItem('at:day-chart:pane-timeframes', JSON.stringify(['1h', 'xx']));
+    expect(readDayPaneTimeframes(storage)).toEqual(['1h', '1m', '5m']);
     expect(readDayChartSync(storage)).toEqual({ interval: false, crosshair: true, time: true, dateRange: false });
     writeDayChartSync(storage, { interval: true, crosshair: false, time: true, dateRange: true });
     expect(readDayChartSync(storage)).toEqual({ interval: true, crosshair: false, time: true, dateRange: true });
@@ -132,5 +135,12 @@ describe('kolečko timeframe', () => {
     expect(cycleDayChartTimeframe('1m', -1)).toBe('15m');
     expect(cycleDayChartTimeframe('5m', 7)).toBe('15m');
     expect(cycleDayChartTimeframe('5m', -4)).toBe('1m');
+    // Kolečko přes oblíbené (list intervalů): dokola, mimo seznam od prvního.
+    const favorites = ['1m', '5m', '30m', '4h'] as const;
+    expect(cycleTimeframeIn(favorites, '5m', 1)).toBe('30m');
+    expect(cycleTimeframeIn(favorites, '4h', 1)).toBe('1m');
+    expect(cycleTimeframeIn(favorites, '1m', -1)).toBe('4h');
+    expect(cycleTimeframeIn(favorites, '15m', 0)).toBe('1m');
+    expect(cycleTimeframeIn([], '15m', 3)).toBe('15m');
   });
 });

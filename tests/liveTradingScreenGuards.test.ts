@@ -82,7 +82,9 @@ describe('LIVE → Graf: DISARM je vždy dosažitelný (INV-UI-02)', () => {
     // Odchodová animace nesmí držet kliky: přehled je pod vrstvou dostupný hned.
     expect(source('index.css')).toMatch(/\.live-chart-leave \{ animation: live-chart-fold [^}]*pointer-events: none; \}/);
     expect(source('components/LiveTradingScreen.tsx')).toMatch(/\$\{leaving \? 'live-chart-leave' : 'live-chart-enter'\}/);
-    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/chartAvailable: liveChartAvailableNow\(\) && !liveChartCrashedThisSession\(\)/);
+    // Graf na PC i na telefonu (phoneChart): po pádu v relaci se LIVE otevře na přehledu.
+    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/chartAvailable: \(liveChartAvailableNow\(\) \|\| Boolean\(phoneChart\)\) && !liveChartCrashedThisSession\(\)/);
+    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/<ErrorBoundary name="LivePhoneChart" onError=\{rememberLiveChartCrash\}/);
     expect(source('components/ErrorBoundary.tsx')).toMatch(/this\.props\.onError\?\.\(error\);/);
   });
 

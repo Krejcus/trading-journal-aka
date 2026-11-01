@@ -125,6 +125,8 @@ const loadLiveDesk = () => import('./components/TradovateLiveDesk').then(module 
   return module;
 });
 const LazyLiveDesk = React.lazy(loadLiveDesk);
+// LIVE → Graf na telefonu: graf dneška z deníku (těžký graf jen když je potřeba).
+const LazyLivePhoneChart = React.lazy(() => import('./components/day/LivePhoneChart'));
 /** Přednačtený LIVE se vykreslí hned, bez Suspense; jinak jako dřív přes lazy.
  * Volba platí po celou dobu připojení, jinak by změna typu LIVE remountovala. */
 const LiveDesk: React.FC<React.ComponentProps<LiveDeskModule['default']>> = props => {
@@ -204,6 +206,7 @@ import { isSupabaseConfigured, supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
 import { playNativeHapticIfAvailable } from './services/nativeCapabilities';
+import { LIVE_OVERVIEW_ROUTE } from './lib/liveOverviewRoute';
 import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage, reportNativeShellReview, reportNativeShellReviewCount, type NativeReviewRequest } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 import {
@@ -1547,6 +1550,13 @@ const App: React.FC = () => {
           setReview(null);
           if (page === 'native-system') {
             window.dispatchEvent(new Event('alphatrade:open-native-system'));
+            return;
+          }
+          // `live:overview` (rizikové notifikace): LIVE rovnou na přehledu s nouzovou
+          // lištou, ne na telefonním grafu (INV-UI-02).
+          if (page === LIVE_OVERVIEW_ROUTE) {
+            setRequestedLiveTab('overview');
+            nativeActions.current.navigate('live');
             return;
           }
           nativeActions.current.navigate(page);
@@ -4908,6 +4918,12 @@ const App: React.FC = () => {
                       onRequestedTabHandled={handleRequestedLiveTabHandled}
                       macCompanionPairingIntent={macCompanionPairingIntent}
                       onMacCompanionPairingIntentHandled={handleMacCompanionPairingIntentHandled}
+                      phoneChart={slots => (
+                        <React.Suspense fallback={null}>
+                          <LazyLivePhoneChart trades={journalDayTrades} allTrades={trades} sessions={activeSessions}
+                            isDark={theme !== 'light'} onUpdateTrade={handleUpdateTrade} slots={slots} onLeave={slots.onLeave} />
+                        </React.Suspense>
+                      )}
                     />
                   )}
 

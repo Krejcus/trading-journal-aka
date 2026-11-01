@@ -1391,6 +1391,35 @@ existující ochranu.
   přímo v grafu (dialog desku je pod vrstvou grafu), brzda ve frontě relaye
   = informace, nic se neopakuje; výsledek i na přehledu s časem, po zapnutí
   kopírky nebo 10 min zmizí (`tests/liveChartData.test.ts`).
+- LIVE na telefonu (nativní appka, 1. 11. 2026): LIVE se otevírá rovnou na
+  celoobrazovkovém grafu (`components/day/LivePhoneChart.tsx`,
+  `role="dialog"`, takže nouzová lišta je pod ním schovaná; od 1. 11. je na
+  grafu schovaná i nativní lišta iOS, na ostatních záložkách LIVE se vrací). **Výjimka podle
+  výslovného rozhodnutí uživatele:** nouzová lišta ani Vypnout NEJSOU na
+  telefonním grafu, v menu LIVE ▾ ani v •••. DISARM je dosažitelný takto:
+  - LIVE ▾ → Live Dashboard (menu obsahuje přehled vždy) → OFF → potvrzení,
+    tedy 4 klepnutí;
+  - přechod z grafu na přehled je povolený vždy (`lib/tradovateLiveTab.ts`);
+  - notifikace z kopírky (risk, zámek dne, odpojený follower, časovače)
+    otevírají `live:overview` (`lib/liveOverviewRoute.ts`) přímo na
+    přehledu;
+  - pád telefonního grafu se pamatuje jako na PC
+    (`rememberLiveChartCrash`), takže do konce relace se LIVE otevírá na
+    přehledu.
+
+  Rizikové notifikace i tlačítko „Zkontrolovat LIVE“ (lokální i APNs
+  s `route: 'live'`) převádí `services/nativeNotifications.ts:dispatchNativeNotificationAction`
+  na tuto cestu. Server dál posílá `live`, protože starší build appky novou
+  cestu nezná.
+
+  Čip kopírky v hlavičce (`lib/livePhoneCopierChip.ts`) ukazuje ZAP/VYP jen
+  z čerstvého neobnoveného stavu. Vychází ze stejného výkladu jako stavová
+  lišta na PC (`copierValue`) a s důvody `liveAttentionReasons` (incident,
+  rozjeté účty, zaseknutá operace…) se změní na „Pozor: …“. Hlídá to
+  `tests/livePhoneCopierChip.test.ts`. Obchodní lišta a list objednávky
+  na telefonu (fáze A) nemají cestu k brokerovi
+  (`tests/livePhoneTrade.test.ts`). Odesílání z telefonu je nová cesta do
+  jádra a půjde přes INV-* a critic.
 
 ### INV-UI-03: Retained risk, „rozhodnutí dne“ a poslední worker status jsou pouze zobrazení
 

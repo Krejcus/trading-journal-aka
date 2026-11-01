@@ -2,14 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Drawing, DrawingToolId } from '@getcandlekit/charts';
-import { Check, ChevronDown, ClipboardCheck, Scissors, ChevronLeft, Redo2, MoreHorizontal, Settings, SlidersHorizontal, Expand, GripVertical, Lock, Shrink, Undo2, Magnet, Maximize2, Mic, Minimize2, Pause, PenLine, Play, SkipForward, StepBack, StepForward, Star, StickyNote, Trash2, Unlock, X } from 'lucide-react';
+import { Camera, Check, ChevronDown, ClipboardCheck, Scissors, ChevronLeft, Redo2, MoreHorizontal, Settings, SlidersHorizontal, Expand, GripVertical, Lock, Shrink, Undo2, Magnet, Maximize2, Mic, Minimize2, Pause, PenLine, Play, SkipForward, StepBack, StepForward, Star, StickyNote, Trash2, Unlock, X } from 'lucide-react';
 import type { Trade } from '../../types';
 import CandleKitTradeChart, { ALPHATRADE_DRAWING_TOOLS } from '../CandleKitTradeChart';
 import GenericDrawingSettingsDialog from '../GenericDrawingSettingsDialog';
 import GenericDrawingFloatingToolbar from '../GenericDrawingFloatingToolbar';
 import FibDrawingSettingsDialog, { FibDrawingFloatingToolbar } from '../FibDrawingSettingsDialog';
 import PositionDrawingSettingsDialog, { PositionDrawingFloatingToolbar } from '../PositionDrawingSettingsDialog';
-import { isPositionDrawing } from '../../services/chartPositionDrawing';
+import { isPositionDrawing, type PositionDrawing } from '../../services/chartPositionDrawing';
 import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 import type { FibDrawing } from '../../services/chartFibDrawing';
 import { QuantumSpinner } from '../QuantumLoader';
@@ -33,7 +33,7 @@ import { REPLAY_CANDLE_MODE_OPTIONS, setReplayCandleMode, useReplayCandleMode } 
 import { candleReplayPath, partialReplayCandle } from '../../lib/candleReplayPath';
 import { historyAt } from '../../lib/tradeReplay';
 import {
-  DAY_CHART_TIMEFRAME_LABEL, DAY_DRAW_COLORS, cycleDayChartTimeframe, DAY_DRAW_TOOLS, DAY_PATH_TOOL, dayDrawStyle,
+  DAY_DRAW_COLORS, cycleTimeframeIn, DAY_DRAW_TOOLS, DAY_PATH_TOOL, dayDrawStyle,
   pathGroupOf, pathSegmentIds, readDayDrawFavorites, readDayDrawPanel, toggleDayDrawFavorite, writeDayDrawFavorites, writeDayDrawPanel,
   effectiveDayChartLayout, readDayChartLayout, readDayChartSync, readDayPaneTimeframes, writeDayChartLayout, writeDayChartSync, writeDayPaneTimeframes,
   type DayChartLayout, type DayChartSync, type DayDrawColorId, type DayDrawPanel,
@@ -45,6 +45,11 @@ import DayTouchDrawLayer from './DayTouchDrawLayer';
 import { dayAnchorTrade, focusTarget, reviewFocusKey, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../../hooks/useLiveCandleBinding';
+import { TIMEFRAME_FAVORITES_EVENT, readTimeframeFavorites, timeframeTitle } from '../ChartTimeframePicker';
+import SheetGrip from './SheetGrip';
+import { ChartShotCard, ChartShotFlash, composeChartShot, takeChartShot, type ChartShot } from './ChartShot';
+import { resetChartView } from '../../services/chartContextMenu';
+import DayIntervalSheet from './DayIntervalSheet';
 
 type DrawingEngine = NonNullable<ChartViewApi['drawing']>['engine'];
 type MarketCandleLike = { time: number; open: number; high: number; low: number; close: number; volume: number };
@@ -56,6 +61,8 @@ const toolIcon = (tool: string) => (tool === DAY_PATH_TOOL ? TOOL_BY_ID.get('Arr
 // „Šipka“ je na telefonu cesta se zlomy; jednoduchá šipka motoru se jmenuje jinak, ať se neplete.
 const toolTitle = (tool: string | null) => (tool === DAY_PATH_TOOL ? 'Šipka' : tool === 'Arrow' ? 'Rovná šipka' : tool ? DAY_DRAW_TOOLS.find(item => item.id === tool)?.label ?? TOOL_BY_ID.get(tool)?.title ?? tool : '');
 const SCOPE_LABEL: Record<'day' | 'london' | 'ny', string> = { day: 'Celý den', london: 'London', ny: 'New York' };
+/** Krátké popisky čipu v LIVE liště (na úzkém telefonu musí být vidět i •••). */
+const SCOPE_SHORT: Record<'day' | 'london' | 'ny', string> = { day: 'Den', london: 'LDN', ny: 'NY' };
 
 /**
  * Graf dne přes celou obrazovku telefonu (docs/DAY_CHART_PHONE_FULLSCREEN.md,
@@ -92,7 +99,9 @@ export interface PhoneChartSource {
   onReplayCursor?: (cursorTime: number | null) => void;
 }
 
-export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onTimeframe, range, focusKeyPrefix, selectedTrade, pins = [], bubbles = 'selected', placing = null, onPick = () => {}, onCancelPlacing = () => {}, pending = null, nowTime = null, bands = [], onClose, onVoice = () => {} }: {
+export interface LiveChartInfo { lastPrice: number | null }
+
+export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onTimeframe, range, focusKeyPrefix, selectedTrade, pins = [], bubbles = 'selected', placing = null, onPick = () => {}, onCancelPlacing = () => {}, pending = null, nowTime = null, bands = [], onClose, onVoice = () => {}, live }: {
   /** Deník dne: poznámky, seance, mikrofon. Bez něj je to obecný telefonní graf (`source`). */
   ctl?: DayController;
   source?: PhoneChartSource;
@@ -113,6 +122,23 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   onClose: () => void;
   /** Poznámka hlasem: přepne umisťování (`placing: 'voice'`). */
   onVoice?: () => void;
+  /**
+   * LIVE → Graf na telefonu: nativní lišta zůstává (LIVE je její karta),
+   * nahoře LIVE hlavička, vrstvy LIVE (menu) nad grafem a graf se nezavírá.
+   */
+  live?: {
+    header: React.ReactNode;
+    /** Vrstvy LIVE nad celým grafem (menu, listy); dostanou poslední cenu svíčky. */
+    overlay?: (info: LiveChartInfo) => React.ReactNode;
+    /** Vrstva v ploše grafu (obchodní lišta). */
+    chartLayer?: (info: LiveChartInfo) => React.ReactNode;
+    /** LIVE tlačítka vpravo ve spodní liště (místo zavření). */
+    toolbar?: React.ReactNode;
+    /** Symbol do popisku snímku grafu (fotoaparát ve spodní liště). */
+    symbol?: string;
+    /** ⚡ / „Vytvořit limitní objednávku…“ u position toolu — jen otevře návrh. */
+    onPositionOrder?: (drawing: PositionDrawing, info: LiveChartInfo) => void;
+  };
 }) {
   // Jednotný zdroj: deník dne z controlleru, jinde ze `source`.
   const src = {
@@ -195,6 +221,19 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const [activePane, setActivePane] = useState(0);
   const [maximized, setMaximized] = useState(false);
   const [layoutSheet, setLayoutSheet] = useState(false);
+  // List intervalů a oblíbené (sdílené s nabídkou intervalů na PC v tomto zařízení).
+  const [intervalSheet, setIntervalSheet] = useState(false);
+  const [timeframeFavorites, setTimeframeFavorites] = useState(readTimeframeFavorites);
+  useEffect(() => {
+    const sync = () => setTimeframeFavorites(readTimeframeFavorites());
+    window.addEventListener(TIMEFRAME_FAVORITES_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => { window.removeEventListener(TIMEFRAME_FAVORITES_EVENT, sync); window.removeEventListener('storage', sync); };
+  }, []);
+  // Kolečko jede přes oblíbené; aktuální interval v něm je vždy (i když oblíbený není).
+  const wheelOptions = (current: MarketTimeframe): MarketTimeframe[] => (
+    timeframeFavorites.includes(current) ? timeframeFavorites : [...timeframeFavorites, current]
+  ).slice().sort((left, right) => timeframeMinutes(left) - timeframeMinutes(right));
   // Menu ⋯ (jako „Analysis hub“ v TradingView): rozvržení, indikátory, nastavení grafu, přehrávání.
   const [hubOpen, setHubOpen] = useState(false);
   const [chartReq, setChartReq] = useState<{ pane: number; n: number } | null>(null);
@@ -257,7 +296,9 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   }, [activePane, paneCount, paneTimeframes, timeframe, onTimeframe]);
   useEffect(() => { if (!split) setMaximized(false); }, [split]);
 
-  // Nativní lišta pryč po dobu celé obrazovky; stránka pod vrstvou neroluje.
+  // Nativní lišta pryč po dobu celé obrazovky (v LIVE zůstává); stránka pod vrstvou neroluje.
+  // I LIVE graf je bez nativní lišty (Filip 1. 11.: víc místa na obchodování);
+  // vrátí se na ostatních záložkách LIVE (Live Dashboard s nouzovou lištou) i mimo LIVE.
   useEffect(() => {
     void setNativeShellTabBarHidden(true);
     const previous = document.body.style.overflow;
@@ -460,6 +501,31 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   // eslint-disable-next-line react-hooks/exhaustive-deps -- panely čte z aktuálního renderu
   }, [replayOn, replayPlaying, replayStep, replayCandleMode, replaySpeed, fullRaw, fullRawWithHistory, paneCount, api, extraApis, paneTfKey, timeframe]);
   const timing = selectedTrade ? tradeChartTiming(selectedTrade) : { entryMs: anchor.entryTime!, exitMs: anchor.timestamp };
+  // Každý nový graf (otevření, změna intervalu) začíná jako „Reset chart view“:
+  // poslední svíčka vpravo, výchozí šířka svíček, automatické měřítko ceny.
+  // Platí pro LIVE a dnešní den deníku; starší dny a obchody drží svůj výřez.
+  const resetViewOnOpen = Boolean(live) || Boolean(ctl?.isToday && !selectedTrade);
+  const resetDoneRef = useRef(new WeakSet<ChartViewApi>());
+  useEffect(() => {
+    if (!resetViewOnOpen || replayPhase !== 'off') return;
+    const targets = [api, ...extraApis].filter((item): item is ChartViewApi => Boolean(item) && !resetDoneRef.current.has(item!));
+    if (!targets.length) return;
+    let frame = 0;
+    const timer = window.setTimeout(() => {
+      frame = window.requestAnimationFrame(() => {
+        for (const target of targets) {
+          try {
+            // Až když graf má svíčky — jinak by se výřez nastavil prázdnému grafu.
+            if (!target.controller.getSeries()?.data().length) continue;
+            resetDoneRef.current.add(target);
+            resetChartView(target);
+          } catch { /* graf mezitím zanikl */ }
+        }
+      });
+    }, 0);
+    return () => { window.clearTimeout(timer); window.cancelAnimationFrame(frame); };
+  }, [api, extraApis, candles.length, replayPhase, resetViewOnOpen]);
+
   const focusKey = reviewFocusKey(focusKeyPrefix, selectedTrade?.id);
   const detail = selectedTrade ? { ...tradeChartTiming(selectedTrade), id: String(selectedTrade.id) } : { entryMs: target.entryMs, exitMs: target.exitMs, id: String(anchor.id) };
   useReviewFocus(focusKey, { entryMs: detail.entryMs, exitMs: detail.exitMs, id: detail.id }, Boolean(api), `${src.key}:${timeframe}:full`);
@@ -553,6 +619,46 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     }
   };
   const openSettingsFor = useCallback((id: string) => { if (!id.startsWith('auto-')) setSettingsFor(id); }, []);
+  // LIVE: podržení position toolu otevře jeho menu (jako v TradingView).
+  const [positionMenu, setPositionMenu] = useState<string | null>(null);
+  const openPositionMenu = useCallback((id: string) => {
+    const drawing = engine?.getById(id);
+    if (!drawing || !isPositionDrawing(drawing)) return false;
+    playNativeHapticIfAvailable('medium');
+    setPositionMenu(id);
+    return true;
+  }, [engine]);
+  const positionMenuDrawing = positionMenu && engine ? engine.getById(positionMenu) ?? null : null;
+  // Fotoaparát: snímek aktivního okna do schránky + náhled se Sdílet / Uložit.
+  const [shot, setShot] = useState<ChartShot | null>(null);
+  const [flash, setFlash] = useState(0);
+  const closeShot = useCallback(() => setShot(null), []);
+  const takeShot = () => {
+    const pane = split ? activePane : 0;
+    const target = paneApi(pane);
+    if (!target) return;
+    playNativeHapticIfAvailable('medium');
+    const now = new Date();
+    const when = now.toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const symbol = live?.symbol ?? 'MNQ';
+    try {
+      const canvas = composeChartShot(target, `${symbol} · ${timeframeTitle(paneTimeframe(pane))} · ${when}`);
+      const stamp = `${now.toISOString().slice(0, 10)}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+      const next = takeChartShot(canvas, `alphatrade_${symbol}_${stamp}.png`, ok => setShot(current => (current && current.key === next.key && current.state === 'copying' ? { ...current, state: ok ? 'copied' : 'taken' } : current)));
+      setShot(next);
+      setFlash(count => count + 1);
+    } catch (error) {
+      console.warn('[Snímek grafu]', error);
+    }
+  };
+  /** Objednávka z boxu: výběr pryč, ať plovoucí lišta kresby nepřekrývá list objednávky. */
+  const openPositionOrder = (drawing: PositionDrawing) => {
+    setPositionMenu(null);
+    engine?.select(null);
+    live?.onPositionOrder?.(drawing, liveInfo);
+  };
+  // Při přehrávání by poslední svíčka byla historická cena — lišta a objednávka ji nesmí ukázat.
+  const liveInfo: LiveChartInfo = { lastPrice: !replayOn && candles.length ? candles[candles.length - 1].close : null };
   const settingsDrawing = settingsFor && engine ? engine.getById(settingsFor) ?? null : null;
   const removeSelected = () => {
     if (!engine) return;
@@ -579,12 +685,18 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const drawingNow = pathActive || Boolean(activeTool);
   const toolName = pathActive ? DAY_PATH_TOOL : activeTool;
 
-  const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px calc(6px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', flex: 'none', minHeight: 52 };
+  const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px calc(6px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', flex: 'none', minHeight: 52 };
+  // LIVE na telefonu v tmavém režimu: Aurora (sklo nad barevným polem, graf průsvitný).
+  const aurora = Boolean(live) && isDark;
+  // LIVE lišta má navíc fotoaparát a ⇅ — užší ikony, ať se na 390 pt vejde i •••.
+  const stripIcon: React.CSSProperties = live ? { ...iconButton, width: 36 } : iconButton;
+  const hubButton = <button type="button" className="dj-btn" aria-label="Další volby grafu" aria-expanded={hubOpen} onClick={() => { cancelTool(); setHubOpen(true); }} style={{ ...stripIcon, ...(hubOpen ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><MoreHorizontal size={19} /></button>;
 
   return createPortal(
-    <div ref={rootRef} className="dj" role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', animation: 'dj-fade .18s ease both' }}>
+    <div ref={rootRef} className={`dj${live ? ' dj-live' : ''}${aurora ? ' dj-aurora' : ''}`} role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', animation: 'dj-fade .18s ease both' }}>
       {onSlotsReady && <div ref={slotHeaderRef} data-phone-review-slot="header" style={{ flex: 'none', display: chromeHidden ? 'none' : undefined }} />}
-      <div ref={chartAreaRef} style={{ position: 'relative', flex: 1, minHeight: 0, background: isDark ? '#05080f' : '#fff' }}>
+      {live && !chromeHidden && <div style={{ flex: 'none' }}>{live.header}</div>}
+      <div ref={chartAreaRef} style={{ position: 'relative', flex: 1, minHeight: 0, background: aurora ? 'transparent' : isDark ? '#05080f' : '#fff' }}>
       {onSlotsReady && <div ref={slotOverlayRef} style={{ position: 'absolute', inset: 0, zIndex: 26, pointerEvents: 'none' }} />}
       {template.cells.map(cell => {
         const index = cell.panel - 1;
@@ -625,6 +737,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
                 isDark={isDark}
                 compactMode
                 phoneLayout
+                canvasBackground={aurora ? AURORA_CHART_BG : undefined}
                 compactToolbar
                 hideDrawingToolbar
                 hideFocusButton
@@ -693,7 +806,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
             {tfSwap > 0 && <TimeframeSwapFx key={tfSwap} />}
             {cutFx && <ReplayCutFx key={cutFx.key} chartApi={paneApi(index)} time={cutFx.time} />}
             {/* Dotyky na kresby: výběr, přesun, úprava bodů vždy; s nástrojem v ruce crosshair. */}
-            <DayTouchDrawLayer chartApi={paneApi(index)} containerRef={ref} enabled={!placing && !textEdit && replayPhase !== 'selecting' && (!split || isActive)} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={toolDone} onDrawingDoubleTap={openSettingsFor} />
+            <DayTouchDrawLayer chartApi={paneApi(index)} containerRef={ref} enabled={!placing && !textEdit && replayPhase !== 'selecting' && (!split || isActive)} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={toolDone} onDrawingDoubleTap={openSettingsFor} onDrawingLongPress={live ? openPositionMenu : undefined} />
           </div>
         );
       })}
@@ -709,12 +822,12 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         )}
         {/* Vybraná kresba: stejné plovoucí lišty jako na PC (posun za úchyt, šablony, barvy,
             ⚙ nastavení, koš); dvojklep na kresbu otevře nastavení. */}
-        {!drawingNow && selected && engine && !textEdit && !settingsFor && (
+        {!drawingNow && selected && engine && !textEdit && !settingsFor && !positionMenu && (
           <div data-touch-toolbar style={{ display: 'contents' }}>
             {selected.tool === 'FibRetracement'
               ? <FibDrawingFloatingToolbar key={selected.id} engine={engine} drawing={selected as FibDrawing} isDark={isDark} onOpenSettings={() => setSettingsFor(selected.id)} />
               : isPositionDrawing(selected)
-                ? <PositionDrawingFloatingToolbar key={selected.id} engine={engine} drawing={selected} isDark={isDark} onClose={() => {}} onOpenSettings={() => setSettingsFor(selected.id)} />
+                ? <PositionDrawingFloatingToolbar key={selected.id} engine={engine} drawing={selected} isDark={isDark} onClose={() => {}} onOpenSettings={() => setSettingsFor(selected.id)} onQuickOrder={live?.onPositionOrder ? () => openPositionOrder(selected) : undefined} quickOrderTitle="Vytvořit objednávku z position boxu" />
                 : <GenericDrawingFloatingToolbar key={selected.id} engine={engine} drawing={selected} isDark={isDark} onOpenSettings={() => setSettingsFor(selected.id)} onRemove={removeSelected} />}
           </div>
         )}
@@ -753,6 +866,9 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         {chromeHidden && (
           <button type="button" className="dj-btn" aria-label="Zobrazit ovládání" onClick={() => setChromeHidden(false)} style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 10, zIndex: 25, ...iconButton, background: 'var(--dj-card)', border: '1px solid var(--dj-line)', opacity: 0.85 }}><Minimize2 size={16} /></button>
         )}
+        {live?.chartLayer?.(liveInfo)}
+        {flash > 0 && <ChartShotFlash key={flash} />}
+        {shot && <ChartShotCard key={shot.key} shot={shot} onChange={setShot} onClose={closeShot} />}
       </div>
 
       {onSlotsReady && <div ref={slotBottomRef} data-phone-review-slot="bottom" style={{ flex: 'none', display: chromeHidden ? 'none' : undefined }} />}
@@ -771,27 +887,27 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
       {!chromeHidden && replayOn && replayRange && (
         <div role="toolbar" aria-label="Přehrávání" style={{ ...bar, gap: 0, padding: 4, minHeight: 48, animation: 'dj-rise .2s ease both' }}>
           <div className="dj-scroll" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 2, overflowX: 'auto', scrollbarWidth: 'none' }}>
-            <button type="button" className="dj-btn" aria-label="Vybrat nový start" onClick={startReplay} style={iconButton}><Scissors size={18} /></button>
+            <button type="button" className="dj-btn" aria-label="Vybrat nový start" onClick={startReplay} style={stripIcon}><Scissors size={18} /></button>
             <span style={divider} />
-            <button type="button" className="dj-btn" aria-label="Krok zpět" onClick={() => stepReplay(-1)} style={iconButton}><StepBack size={18} /></button>
-            <button type="button" className="dj-btn" aria-label={replayPlaying ? 'Pozastavit' : 'Přehrát'} disabled={replayAtEnd} onClick={() => setReplayPlaying(playing => !playing)} style={{ ...iconButton, width: 46, height: 40, borderRadius: 12, color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', opacity: replayAtEnd ? 0.4 : 1 }}>{replayPlaying ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</button>
-            <button type="button" className="dj-btn" aria-label="Krok vpřed" disabled={replayAtEnd} onClick={() => stepReplay(1)} style={{ ...iconButton, opacity: replayAtEnd ? 0.35 : 1 }}><StepForward size={18} /></button>
+            <button type="button" className="dj-btn" aria-label="Krok zpět" onClick={() => stepReplay(-1)} style={stripIcon}><StepBack size={18} /></button>
+            <button type="button" className="dj-btn" aria-label={replayPlaying ? 'Pozastavit' : 'Přehrát'} disabled={replayAtEnd} onClick={() => setReplayPlaying(playing => !playing)} style={{ ...stripIcon, width: 46, height: 40, borderRadius: 12, color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', opacity: replayAtEnd ? 0.4 : 1 }}>{replayPlaying ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</button>
+            <button type="button" className="dj-btn" aria-label="Krok vpřed" disabled={replayAtEnd} onClick={() => stepReplay(1)} style={{ ...stripIcon, opacity: replayAtEnd ? 0.35 : 1 }}><StepForward size={18} /></button>
             <span style={divider} />
             <button type="button" className="dj-btn" aria-label={`Rychlost ${replaySpeed}x`} onClick={() => setReplaySheet('speed')} style={{ ...chip, height: 34, minWidth: 44, justifyContent: 'center', fontWeight: 800, flex: 'none' }}>{replaySpeed}x</button>
             <button type="button" className="dj-btn" aria-label={`Interval kroku ${replayStep} min`} onClick={() => setReplaySheet('step')} style={{ ...chip, height: 34, minWidth: 44, justifyContent: 'center', fontWeight: 800, flex: 'none', marginLeft: 4 }}>{DAY_REPLAY_STEP_LABEL[replayStep]}</button>
             <button type="button" className="dj-btn" aria-label="Svíčky v přehrávání" onClick={() => setReplaySheet('candles')} style={{ ...chip, height: 34, fontWeight: 700, flex: 'none', marginLeft: 4 }}>{REPLAY_CANDLE_MODE_OPTIONS.find(option => option.value === replayCandleMode)?.label ?? 'Plynule'}</button>
             <span className="dj-mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--dj-text-2)', minWidth: 42, textAlign: 'center', flex: 'none' }}>{replayCursor != null ? new Intl.DateTimeFormat('cs-CZ', { timeZone: 'Europe/Prague', hour: '2-digit', minute: '2-digit' }).format(replayCursor * 1000) : ''}</span>
-            <button type="button" className="dj-btn" aria-label="Skočit na konec" disabled={replayAtEnd} onClick={() => { setReplayPlaying(false); setReplayCursor(replayRange.end); }} style={{ ...iconButton, opacity: replayAtEnd ? 0.35 : 1 }}><SkipForward size={18} /></button>
+            <button type="button" className="dj-btn" aria-label="Skočit na konec" disabled={replayAtEnd} onClick={() => { setReplayPlaying(false); setReplayCursor(replayRange.end); }} style={{ ...stripIcon, opacity: replayAtEnd ? 0.35 : 1 }}><SkipForward size={18} /></button>
           </div>
           <span style={{ ...divider, margin: '0 4px' }} />
-          <button type="button" className="dj-btn" aria-label="Ukončit přehrávání" onClick={stopReplay} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={17} /></button>
+          <button type="button" className="dj-btn" aria-label="Ukončit přehrávání" onClick={stopReplay} style={{ ...stripIcon, border: '1px solid var(--dj-line)' }}><X size={17} /></button>
         </div>
       )}
       {replaySheet && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
           <div onClick={() => setReplaySheet(null)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-          <section aria-label="Volby přehrávání" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '80%', overflowY: 'auto', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 14px calc(14px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .24s cubic-bezier(.2,.9,.25,1) both' }}>
-            <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px' }} />
+          <section aria-label="Volby přehrávání" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '80%', overflowY: 'auto', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 14px calc(14px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .24s cubic-bezier(.2,.9,.25,1) both' }}>
+            <SheetGrip onClose={() => setReplaySheet(null)} gap={10} />
             <p style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 800, textAlign: 'center' }}>{replaySheet === 'speed' ? 'Rychlost přehrávání' : replaySheet === 'step' ? 'Interval kroku' : 'Svíčky v přehrávání'}</p>
             {(replaySheet === 'speed'
               ? CHART_REPLAY_SPEEDS.map(speed => ({ key: String(speed), label: `${speed}x`, detail: chartReplaySpeedDescription(speed), on: replaySpeed === speed, pick: () => setReplayPrefs({ ...replayPrefs, speed }) }))
@@ -811,45 +927,48 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
       )}
       {!chromeHidden && (
         // Jedna spodní lišta jako v TradingView: posouvá se do strany, zavřít je vždy vpravo.
-        <div style={{ ...bar, gap: 0, padding: '4px 4px calc(4px + env(safe-area-inset-bottom, 0px)) 4px' }}>
+        <div className={aurora ? 'dj-glass' : undefined} style={{ ...bar, gap: 0, padding: '4px 4px calc(4px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px))) 4px' }}>
           {/* Kolečko rámce je vlevo vždy vidět (jako zavřít vpravo); posouvá se jen střed lišty. */}
-          <TimeframeWheel key={split ? `pane${activePane}` : 'pane0'} value={paneTimeframe(split ? activePane : 0)} onChange={item => setPaneTimeframe(split ? activePane : 0, item)} />
+          <TimeframeWheel key={split ? `pane${activePane}` : 'pane0'} value={paneTimeframe(split ? activePane : 0)} options={wheelOptions(paneTimeframe(split ? activePane : 0))} onChange={item => setPaneTimeframe(split ? activePane : 0, item)} onTap={() => setIntervalSheet(true)} />
           <span style={{ ...divider, margin: '0 4px 0 0' }} />
           <div className="dj-scroll" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 2, overflowX: 'auto', scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
             {ctl && (<>
             {/* Rozsah dne jako jeden čip (Den → LDN → NY). */}
-            <button type="button" className="dj-btn" aria-label={`Rozsah: ${SCOPE_LABEL[ctl.scope]}, další`} onClick={() => pickScope(ctl.scope === 'day' ? 'london' : ctl.scope === 'london' ? 'ny' : 'day')} style={{ ...chip, height: 34, padding: '0 10px', gap: 6, fontWeight: 800, flex: 'none', margin: '0 2px' }}>
-              <span style={{ width: 8, height: 8, borderRadius: 9, background: ctl.scope === 'london' ? '#3b82f6' : ctl.scope === 'ny' ? '#f97316' : '#94a3b8' }} />{SCOPE_LABEL[ctl.scope]}
+            <button type="button" className="dj-btn" aria-label={`Rozsah: ${SCOPE_LABEL[ctl.scope]}, další`} onClick={() => pickScope(ctl.scope === 'day' ? 'london' : ctl.scope === 'london' ? 'ny' : 'day')} style={{ ...chip, height: 34, padding: live ? '0 8px' : '0 10px', gap: 6, fontWeight: 800, flex: 'none', margin: '0 2px' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 9, background: ctl.scope === 'london' ? '#3b82f6' : ctl.scope === 'ny' ? '#f97316' : '#94a3b8' }} />{live ? SCOPE_SHORT[ctl.scope] : SCOPE_LABEL[ctl.scope]}
             </button>
             </>)}
             <span style={divider} />
-            <button type="button" className="dj-btn" aria-label="Nástroje kreslení" aria-pressed={drawingNow} onClick={() => (drawingNow ? cancelTool() : setToolsOpen(true))} style={{ ...iconButton, ...(drawingNow ? { color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' } : {}) }}>{drawingNow ? <X size={18} /> : <PenLine size={18} />}</button>
-            <button type="button" className="dj-btn" aria-label={historyState.undoLabel ? `Zpět: ${historyState.undoLabel}` : 'Zpět'} disabled={!historyState.canUndo || drawingNow} onClick={() => history.undo()} style={{ ...iconButton, opacity: historyState.canUndo && !drawingNow ? 1 : 0.35 }}><Undo2 size={18} /></button>
-            <button type="button" className="dj-btn" aria-label={historyState.redoLabel ? `Vpřed: ${historyState.redoLabel}` : 'Vpřed'} disabled={!historyState.canRedo || drawingNow} onClick={() => history.redo()} style={{ ...iconButton, opacity: historyState.canRedo && !drawingNow ? 1 : 0.35 }}><Redo2 size={18} /></button>
+            <button type="button" className="dj-btn" aria-label="Nástroje kreslení" aria-pressed={drawingNow} onClick={() => (drawingNow ? cancelTool() : setToolsOpen(true))} style={{ ...stripIcon, ...(drawingNow ? { color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' } : {}) }}>{drawingNow ? <X size={18} /> : <PenLine size={18} />}</button>
+            <button type="button" className="dj-btn" aria-label={historyState.undoLabel ? `Zpět: ${historyState.undoLabel}` : 'Zpět'} disabled={!historyState.canUndo || drawingNow} onClick={() => history.undo()} style={{ ...stripIcon, opacity: historyState.canUndo && !drawingNow ? 1 : 0.35 }}><Undo2 size={18} /></button>
+            <button type="button" className="dj-btn" aria-label={historyState.redoLabel ? `Vpřed: ${historyState.redoLabel}` : 'Vpřed'} disabled={!historyState.canRedo || drawingNow} onClick={() => history.redo()} style={{ ...stripIcon, opacity: historyState.canRedo && !drawingNow ? 1 : 0.35 }}><Redo2 size={18} /></button>
+            {live && <button type="button" className="dj-btn" aria-label="Snímek grafu do schránky" onClick={takeShot} style={stripIcon}><Camera size={18} /></button>}
             <span style={divider} />
             {split && (
-              <button type="button" className="dj-btn" aria-label={maximized ? 'Zpět na obě okna' : 'Označené okno přes celou plochu'} aria-pressed={maximized} onClick={() => setMaximized(on => !on)} style={{ ...iconButton, ...(maximized ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}>{maximized ? <Shrink size={18} /> : <Expand size={18} />}</button>
+              <button type="button" className="dj-btn" aria-label={maximized ? 'Zpět na obě okna' : 'Označené okno přes celou plochu'} aria-pressed={maximized} onClick={() => setMaximized(on => !on)} style={{ ...stripIcon, ...(maximized ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}>{maximized ? <Shrink size={18} /> : <Expand size={18} />}</button>
             )}
-            <span style={divider} />
-{ctl && (<>
-            <button type="button" className="dj-btn" aria-label="Poznámka do grafu" aria-pressed={placing === 'note'} onClick={() => { cancelTool(); ctl?.setPendingPoint(null); ctl?.setPlacing(placing === 'note' ? null : 'note'); }} style={{ ...iconButton, ...(placing === 'note' ? { color: '#1c1203', background: '#fbbf24' } : {}) }}><StickyNote size={18} /></button>
-            <button type="button" className="dj-btn" aria-label="Poznámka hlasem" aria-pressed={placing === 'voice'} onClick={() => { cancelTool(); onVoice(); }} style={{ ...iconButton, ...(placing === 'voice' ? { color: '#fff', background: '#f43f5e' } : {}) }}><Mic size={18} /></button>
+            {(split || !live) && <span style={divider} />}
+{/* LIVE: ••• hned za fotoaparátem (vidět i na úzkém telefonu), poznámky až za ním. */}
+            {live && hubButton}
+            {ctl && (<>
+            <button type="button" className="dj-btn" aria-label="Poznámka do grafu" aria-pressed={placing === 'note'} onClick={() => { cancelTool(); ctl?.setPendingPoint(null); ctl?.setPlacing(placing === 'note' ? null : 'note'); }} style={{ ...stripIcon, ...(placing === 'note' ? { color: '#1c1203', background: '#fbbf24' } : {}) }}><StickyNote size={18} /></button>
+            <button type="button" className="dj-btn" aria-label="Poznámka hlasem" aria-pressed={placing === 'voice'} onClick={() => { cancelTool(); onVoice(); }} style={{ ...stripIcon, ...(placing === 'voice' ? { color: '#fff', background: '#f43f5e' } : {}) }}><Mic size={18} /></button>
             </>)}
-            <button type="button" className="dj-btn" aria-label="Další volby grafu" aria-expanded={hubOpen} onClick={() => { cancelTool(); setHubOpen(true); }} style={{ ...iconButton, ...(hubOpen ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><MoreHorizontal size={19} /></button>
-            <button type="button" className="dj-btn" aria-label="Skrýt ovládání" onClick={() => setChromeHidden(true)} style={iconButton}><Maximize2 size={17} /></button>
+            {!live && hubButton}
+            <button type="button" className="dj-btn" aria-label="Skrýt ovládání" onClick={() => setChromeHidden(true)} style={stripIcon}><Maximize2 size={17} /></button>
           </div>
           <span style={{ ...divider, margin: '0 4px' }} />
           {onSlotsReady && (
             <button type="button" className="dj-btn" aria-label="Hodnocení obchodu" aria-expanded={reviewPanelOpen} onClick={() => { cancelTool(); setReviewPanelOpen(open => !open); }} style={{ ...chip, height: 38, padding: '0 10px', gap: 6, fontWeight: 800, flex: 'none', marginRight: 4, ...(reviewPanelOpen ? { color: '#fff', border: 0, background: 'linear-gradient(180deg,#10b981,#059669)' } : {}) }}><ClipboardCheck size={16} />Hodnotit</button>
           )}
-          <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={18} /></button>
+          {live ? live.toolbar : <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={18} /></button>}
         </div>
       )}
       {onSlotsReady && (
         // Hodnocení obchodu (panel review) jako výsuvný list; místo zůstává v DOM i zavřené.
         <div style={{ position: 'absolute', inset: 0, zIndex: 38, pointerEvents: reviewPanelOpen ? 'auto' : 'none', visibility: reviewPanelOpen ? 'visible' : 'hidden' }}>
           <div onClick={() => setReviewPanelOpen(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.35)', opacity: reviewPanelOpen ? 1 : 0, transition: 'opacity .2s' }} />
-          <section aria-label="Hodnocení obchodu" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '72%', display: 'flex', flexDirection: 'column', borderRadius: '20px 20px 0 0', overflow: 'hidden', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', paddingBottom: 'env(safe-area-inset-bottom, 0px)', transform: reviewPanelOpen ? 'none' : 'translateY(100%)', transition: 'transform .28s cubic-bezier(.2,.9,.25,1)' }}>
+          <section aria-label="Hodnocení obchodu" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '72%', display: 'flex', flexDirection: 'column', borderRadius: '20px 20px 0 0', overflow: 'hidden', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', paddingBottom: 'var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px))', transform: reviewPanelOpen ? 'none' : 'translateY(100%)', transition: 'transform .28s cubic-bezier(.2,.9,.25,1)' }}>
             <div style={{ display: 'flex', alignItems: 'center', padding: '8px 10px 4px' }}>
               <span style={{ flex: 1 }} />
               <span style={{ width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)' }} />
@@ -878,14 +997,22 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           onClose={() => setHubOpen(false)}
         />
       )}
+      {intervalSheet && (
+        <DayIntervalSheet
+          value={paneTimeframe(split ? activePane : 0)}
+          favorites={timeframeFavorites}
+          onPick={item => setPaneTimeframe(split ? activePane : 0, item)}
+          onClose={() => setIntervalSheet(false)}
+        />
+      )}
       {layoutSheet && <LayoutSheet layout={layout} activeId={template.id} sync={sync} onSync={setSync} onPick={next => { setLayout(next); setLayoutSheet(false); }} onClose={() => setLayoutSheet(false)} />}
 
       {/* Spodní list nástrojů: oblíbené nahoře, pak všechny, dole magnet/zámek/smazání. */}
       {toolsOpen && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
           <div onClick={() => setToolsOpen(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-          <section aria-label="Nástroje kreslení" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '78%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', padding: '8px 14px calc(14px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
-            <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 12px' }} />
+          <section aria-label="Nástroje kreslení" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '78%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', padding: '8px 14px calc(14px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+            <SheetGrip onClose={() => setToolsOpen(false)} gap={12} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <p style={{ margin: 0, fontSize: 15, fontWeight: 800 }}>Kreslení</p>
               <span style={{ flex: 1 }} />
@@ -955,7 +1082,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
       {textEdit && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 45, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
           <div onClick={cancelText} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)' }} />
-          <section aria-label="Text v grafu" style={{ position: 'relative', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .24s ease both' }}>
+          <section aria-label="Text v grafu" style={{ position: 'relative', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '14px 14px calc(14px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .24s ease both' }}>
             {/* Tlačítka nad polem: lišta nad klávesnicí iOS by je jinak zakryla. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <button type="button" className="dj-btn" onClick={cancelText} style={{ height: 36, padding: '0 12px', borderRadius: 10, border: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text-2)', font: '600 13px Inter, sans-serif', cursor: 'pointer' }}>{textEdit.fresh ? 'Zahodit' : 'Zrušit'}</button>
@@ -966,6 +1093,16 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           </section>
         </div>
       )}
+      {positionMenuDrawing && isPositionDrawing(positionMenuDrawing) && (
+        <PositionMenuSheet
+          drawing={positionMenuDrawing}
+          onOrder={live?.onPositionOrder ? () => openPositionOrder(positionMenuDrawing) : undefined}
+          onSettings={() => { setPositionMenu(null); setSettingsFor(positionMenuDrawing.id); }}
+          onRemove={() => { setPositionMenu(null); engine?.remove(positionMenuDrawing.id); }}
+          onClose={() => setPositionMenu(null)}
+        />
+      )}
+      {live?.overlay?.(liveInfo)}
     </div>,
     document.body,
   );
@@ -994,7 +1131,16 @@ const WHEEL_ANGLE = 18;
 const WHEEL_RADIUS = 96;
 const WHEEL_DWELL_MS = 240; // jak dlouho musí prst na rámci setrvat, než se graf přepne
 const WHEEL_ARC_PX = 52; // jak moc se okrajové řádky stáčí doleva
-function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange: (next: MarketTimeframe) => void }) {
+/**
+ * Čip intervalu: klepnutí otevře list intervalů (jako TradingView), tah točí
+ * kolečkem přes oblíbené (`options`, seřazené podle délky).
+ */
+function TimeframeWheel({ value, options, onChange, onTap }: {
+  value: MarketTimeframe;
+  options: readonly MarketTimeframe[];
+  onChange: (next: MarketTimeframe) => void;
+  onTap: () => void;
+}) {
   // `pos` = posun v položkách od `base` (rámec při začátku tahu); plynulé číslo, i záporné.
   // Base drží kolečko pevně, i když se graf během tahu přepíná.
   const [pos, setPos] = useState<number | null>(null);
@@ -1013,12 +1159,15 @@ function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange:
   useEffect(() => () => clearDwell(), []);
   const valueRef = useRef(value);
   valueRef.current = value;
+  // Seznam se během tahu nemění (oblíbené z listu se projeví až u dalšího tahu).
+  const optionsRef = useRef(options);
+  if (pos == null) optionsRef.current = options;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   useEffect(() => () => { if (frameRef.current != null) cancelAnimationFrame(frameRef.current); }, []);
   const stopFrame = () => { if (frameRef.current != null) { cancelAnimationFrame(frameRef.current); frameRef.current = null; } };
   const apply = (step: number) => {
-    const target = cycleDayChartTimeframe(baseRef.current, step);
+    const target = cycleTimeframeIn(optionsRef.current, baseRef.current, step);
     if (target !== valueRef.current) onChangeRef.current(target);
   };
 
@@ -1080,8 +1229,8 @@ function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange:
     frameRef.current = requestAnimationFrame(tick);
   };
 
-  const shown = pos == null ? value : cycleDayChartTimeframe(base, Math.round(pos));
-  const around = (offset: number) => cycleDayChartTimeframe(shown, offset);
+  const shown = pos == null ? value : cycleTimeframeIn(optionsRef.current, base, Math.round(pos));
+  const around = (offset: number) => cycleTimeframeIn(optionsRef.current, shown, offset);
   const fraction = pos == null ? 0 : pos - Math.round(pos);
   return (
     <>
@@ -1120,7 +1269,7 @@ function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange:
             if (pos == null) {
               liveRef.current = false;
               playNativeHapticIfAvailable('selection');
-              onChange(cycleDayChartTimeframe(value, 1));
+              onTap();
             } else finish();
             return;
           }
@@ -1154,7 +1303,7 @@ function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange:
                 transform: `translate(calc(-50% + ${x.toFixed(2)}px), ${y.toFixed(2)}px) scale(${scale.toFixed(3)})`,
                 color: `color-mix(in srgb, var(--dj-wheel-on) ${Math.round(near * 100)}%, var(--dj-wheel-off))`,
                 opacity: Math.max(0, 1 - Math.max(0, Math.abs(d) - 1) * 0.2),
-              }}>{DAY_CHART_TIMEFRAME_LABEL[item] ?? item}</span>
+              }}>{timeframeTitle(item)}</span>
             );
           })}
         </div>,
@@ -1197,8 +1346,8 @@ function LayoutSheet({ layout, activeId, sync, onSync, onPick, onClose }: {
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-      <section aria-label="Rozvržení grafů" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
-        <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px' }} />
+      <section aria-label="Rozvržení grafů" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+        <SheetGrip onClose={onClose} gap={10} />
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
           <span style={{ width: 34 }} />
           <p style={{ margin: 0, flex: 1, textAlign: 'center', fontSize: 16, fontWeight: 800 }}>Rozvržení</p>
@@ -1281,8 +1430,8 @@ function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet,
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-      <section aria-label="Další volby grafu" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
-        <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px' }} />
+      <section aria-label="Další volby grafu" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+        <SheetGrip onClose={onClose} gap={10} />
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
           {page === 'main'
             ? <span style={{ width: 34 }} />
@@ -1343,6 +1492,35 @@ function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet,
     </div>
   );
 }
+
+/** Menu position toolu po podržení: objednávka z boxu, nastavení, odebrat. */
+function PositionMenuSheet({ drawing, onOrder, onSettings, onRemove, onClose }: {
+  drawing: PositionDrawing;
+  onOrder?: () => void;
+  onSettings: () => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const item: React.CSSProperties = { width: '100%', minHeight: 48, display: 'flex', alignItems: 'center', gap: 12, padding: '6px 4px', border: 0, borderBottom: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text)', font: '600 15px Inter, sans-serif', textAlign: 'left', cursor: 'pointer' };
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 45 }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
+      <section aria-label="Position tool" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderRadius: '20px 20px 0 0', background: 'var(--dj-sheet, var(--dj-card))', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+        <SheetGrip onClose={onClose} gap={10} />
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+          <p style={{ margin: 0, flex: 1, fontSize: 16, fontWeight: 800 }}>{drawing.tool === 'LongPosition' ? 'Long pozice' : 'Short pozice'}</p>
+          <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, width: 30, height: 30, borderRadius: 99, background: 'var(--dj-chip)' }}><X size={16} /></button>
+        </div>
+        {onOrder && <button type="button" className="dj-btn" onClick={onOrder} style={{ ...item, color: 'var(--dj-indigo-text)', fontWeight: 800 }}>Vytvořit limitní objednávku…</button>}
+        <button type="button" className="dj-btn" onClick={onSettings} style={item}><Settings size={18} color="var(--dj-muted)" />Nastavení…</button>
+        <button type="button" className="dj-btn" onClick={onRemove} style={{ ...item, color: 'var(--dj-rose)', borderBottom: 0 }}><Trash2 size={18} />Odebrat</button>
+      </section>
+    </div>
+  );
+}
+
+/** Průsvitné plátno grafu v Aurora, ať barevné pole jemně prosvítá (náhled 1. 11.). */
+const AURORA_CHART_BG = 'rgba(8, 10, 22, 0.5)';
 
 const DAY_REPLAY_STEP_LABEL: Record<DayReplayStep, string> = { 1: '1m', 5: '5m', 15: '15m', 30: '30m', 60: '1h' };
 

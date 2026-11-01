@@ -8,6 +8,7 @@ import { isNativeBuild } from './utils/runtimeConfig';
 import { registerNativeOAuthCallback } from './services/nativeOAuth';
 import { registerNativeNotificationActions } from './services/nativeNotifications';
 import NativePrivacyGate from './components/NativePrivacyGate';
+import { setNativeShellTabBarHidden } from './utils/nativeShell';
 const DrawingMigrationPrompt = React.lazy(() => import('./components/DrawingMigrationPrompt'));
 import { parseSnapshotRenderParams } from './lib/snapshotRender';
 import { perfMark, startJankMonitor } from './lib/perfTrace';
@@ -133,6 +134,10 @@ const renderApp = () => {
     throw new Error("Could not find root element to mount to");
   }
 
+  // Nativní lištu drží iOS i přes přenačtení WebView: start vždy s viditelnou
+  // lištou (graf ji pak schová sám), ať po reloadu s otevřeným grafem nezmizí.
+  // Volá se před renderem, takže předbíhá skrytí z efektu grafu.
+  void setNativeShellTabBarHidden(false);
   const root = ReactDOM.createRoot(rootElement);
   if (snapshotRenderParams) {
     root.render(
