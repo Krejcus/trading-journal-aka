@@ -159,7 +159,7 @@ export function LiveChartNotice({ text, onDone }: { text: string; onDone: () => 
     return () => window.clearTimeout(id);
   }, [onDone, text]);
   return (
-    <div role="status" style={{ position: 'absolute', top: 10, left: '50%', zIndex: 30, maxWidth: 'calc(100% - 32px)', padding: '8px 12px', borderRadius: 12, border: '1px solid var(--dj-line)', background: 'var(--dj-glass, rgba(13,18,27,.94))', backdropFilter: 'blur(24px) saturate(180%)', WebkitBackdropFilter: 'blur(24px) saturate(180%)', boxShadow: '0 14px 34px -16px rgba(0,0,0,.75)', fontSize: 12.5, fontWeight: 600, lineHeight: 1.35, textAlign: 'center', pointerEvents: 'none', animation: 'dj-saved 2.6s ease both' }}>
+    <div role="status" style={{ position: 'absolute', top: 46, left: '50%', zIndex: 30, maxWidth: 'calc(100% - 32px)', padding: '8px 12px', borderRadius: 12, border: '1px solid var(--dj-line)', background: 'var(--dj-glass, rgba(13,18,27,.94))', backdropFilter: 'blur(24px) saturate(180%)', WebkitBackdropFilter: 'blur(24px) saturate(180%)', boxShadow: '0 14px 34px -16px rgba(0,0,0,.75)', fontSize: 12.5, fontWeight: 600, lineHeight: 1.35, textAlign: 'center', pointerEvents: 'none', animation: 'dj-saved 2.6s ease both' }}>
       {text}
     </div>
   );
