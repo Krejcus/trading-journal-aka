@@ -83,6 +83,37 @@ const writeStored = (key: string, value: unknown) => {
   try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* soukromý režim */ }
 };
 
+// Sdílený model pro telefonní list intervalů — stejné úložiště jako tahle nabídka.
+export const TIMEFRAME_FAVORITES_EVENT = FAVORITES_EVENT;
+export const readTimeframeFavorites = (): MarketTimeframe[] => [...readFavorites()].sort(byDuration);
+export function saveTimeframeFavorites(next: readonly MarketTimeframe[]): void {
+  writeStored(STORAGE_KEY, [...new Set(next)].sort(byDuration));
+  window.dispatchEvent(new Event(FAVORITES_EVENT));
+}
+/** Text z formuláře („90“ + minuty) → timeframe; 60 min = 1h. Neplatný = null. */
+export function customTimeframeFromDraft(count: string, unit: 'm' | 'h'): MarketTimeframe | null {
+  if (!/^\d+$/.test(count.trim())) return null;
+  const value = Number.parseInt(count, 10);
+  const timeframe = unit === 'm' && value % 60 === 0 && value / 60 <= CUSTOM_TIMEFRAME_LIMITS.h.max
+    ? `${value / 60}h` : `${value}${unit}`;
+  return isMarketTimeframe(timeframe) ? timeframe : null;
+}
+/** Přidá vlastní timeframe (pevný ani duplicitní ne) a dá ho do oblíbených. */
+export function addCustomTimeframe(timeframe: MarketTimeframe): void {
+  if (!BUILTIN_VALUES.has(timeframe) && customTimeframeOption(timeframe)) {
+    const customs = readCustomTimeframes();
+    if (!customs.includes(timeframe)) writeStored(CUSTOM_STORAGE_KEY, [...customs, timeframe].sort(byDuration).slice(0, MAX_CUSTOM));
+  }
+  const favorites = readFavorites();
+  saveTimeframeFavorites(favorites.includes(timeframe) ? favorites : [...favorites, timeframe]);
+}
+export function deleteCustomTimeframe(timeframe: MarketTimeframe): void {
+  writeStored(CUSTOM_STORAGE_KEY, readCustomTimeframes().filter(item => item !== timeframe));
+  saveTimeframeFavorites(readFavorites().filter(item => item !== timeframe));
+}
+export const timeframeTitle = (timeframe: MarketTimeframe): string =>
+  MARKET_TIMEFRAME_OPTIONS.find(option => option.value === timeframe)?.title ?? customTimeframeOption(timeframe)?.title ?? timeframe;
+
 export const ChartTimeframePicker: React.FC<{
   value: MarketTimeframe;
   onChange: (timeframe: MarketTimeframe) => void;
@@ -140,11 +171,9 @@ export const ChartTimeframePicker: React.FC<{
       : [...favorites, timeframe].sort(byDuration));
   };
 
-  const draftNumber = Number.parseInt(draftCount, 10);
   // 60 min = 1h, 120 min = 2h… — jeden timeframe, ne dva stejné pod jiným názvem.
-  const draftValue = draftUnit === 'm' && draftNumber % 60 === 0 && draftNumber / 60 <= CUSTOM_TIMEFRAME_LIMITS.h.max
-    ? `${draftNumber / 60}h` : `${draftNumber}${draftUnit}`;
-  const draftValid = /^\d+$/.test(draftCount.trim()) && isMarketTimeframe(draftValue);
+  const draftValue = customTimeframeFromDraft(draftCount, draftUnit);
+  const draftValid = draftValue !== null;
   const limits = CUSTOM_TIMEFRAME_LIMITS[draftUnit];
 
   const addCustom = () => {

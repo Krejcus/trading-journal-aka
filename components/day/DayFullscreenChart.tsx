@@ -33,7 +33,7 @@ import { REPLAY_CANDLE_MODE_OPTIONS, setReplayCandleMode, useReplayCandleMode } 
 import { candleReplayPath, partialReplayCandle } from '../../lib/candleReplayPath';
 import { historyAt } from '../../lib/tradeReplay';
 import {
-  DAY_CHART_TIMEFRAME_LABEL, DAY_DRAW_COLORS, cycleDayChartTimeframe, DAY_DRAW_TOOLS, DAY_PATH_TOOL, dayDrawStyle,
+  DAY_DRAW_COLORS, cycleTimeframeIn, DAY_DRAW_TOOLS, DAY_PATH_TOOL, dayDrawStyle,
   pathGroupOf, pathSegmentIds, readDayDrawFavorites, readDayDrawPanel, toggleDayDrawFavorite, writeDayDrawFavorites, writeDayDrawPanel,
   effectiveDayChartLayout, readDayChartLayout, readDayChartSync, readDayPaneTimeframes, writeDayChartLayout, writeDayChartSync, writeDayPaneTimeframes,
   type DayChartLayout, type DayChartSync, type DayDrawColorId, type DayDrawPanel,
@@ -45,6 +45,8 @@ import DayTouchDrawLayer from './DayTouchDrawLayer';
 import { dayAnchorTrade, focusTarget, reviewFocusKey, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../../hooks/useLiveCandleBinding';
+import { TIMEFRAME_FAVORITES_EVENT, readTimeframeFavorites, timeframeTitle } from '../ChartTimeframePicker';
+import DayIntervalSheet from './DayIntervalSheet';
 
 type DrawingEngine = NonNullable<ChartViewApi['drawing']>['engine'];
 type MarketCandleLike = { time: number; open: number; high: number; low: number; close: number; volume: number };
@@ -195,6 +197,19 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const [activePane, setActivePane] = useState(0);
   const [maximized, setMaximized] = useState(false);
   const [layoutSheet, setLayoutSheet] = useState(false);
+  // List intervalů a oblíbené (sdílené s nabídkou intervalů na PC v tomto zařízení).
+  const [intervalSheet, setIntervalSheet] = useState(false);
+  const [timeframeFavorites, setTimeframeFavorites] = useState(readTimeframeFavorites);
+  useEffect(() => {
+    const sync = () => setTimeframeFavorites(readTimeframeFavorites());
+    window.addEventListener(TIMEFRAME_FAVORITES_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => { window.removeEventListener(TIMEFRAME_FAVORITES_EVENT, sync); window.removeEventListener('storage', sync); };
+  }, []);
+  // Kolečko jede přes oblíbené; aktuální interval v něm je vždy (i když oblíbený není).
+  const wheelOptions = (current: MarketTimeframe): MarketTimeframe[] => (
+    timeframeFavorites.includes(current) ? timeframeFavorites : [...timeframeFavorites, current]
+  ).slice().sort((left, right) => timeframeMinutes(left) - timeframeMinutes(right));
   // Menu ⋯ (jako „Analysis hub“ v TradingView): rozvržení, indikátory, nastavení grafu, přehrávání.
   const [hubOpen, setHubOpen] = useState(false);
   const [chartReq, setChartReq] = useState<{ pane: number; n: number } | null>(null);
@@ -813,7 +828,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         // Jedna spodní lišta jako v TradingView: posouvá se do strany, zavřít je vždy vpravo.
         <div style={{ ...bar, gap: 0, padding: '4px 4px calc(4px + env(safe-area-inset-bottom, 0px)) 4px' }}>
           {/* Kolečko rámce je vlevo vždy vidět (jako zavřít vpravo); posouvá se jen střed lišty. */}
-          <TimeframeWheel key={split ? `pane${activePane}` : 'pane0'} value={paneTimeframe(split ? activePane : 0)} onChange={item => setPaneTimeframe(split ? activePane : 0, item)} />
+          <TimeframeWheel key={split ? `pane${activePane}` : 'pane0'} value={paneTimeframe(split ? activePane : 0)} options={wheelOptions(paneTimeframe(split ? activePane : 0))} onChange={item => setPaneTimeframe(split ? activePane : 0, item)} onTap={() => setIntervalSheet(true)} />
           <span style={{ ...divider, margin: '0 4px 0 0' }} />
           <div className="dj-scroll" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 2, overflowX: 'auto', scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
             {ctl && (<>
@@ -876,6 +891,14 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           onChartSettings={() => { setHubOpen(false); setChartReq({ pane: split ? activePane : 0, n: Date.now() }); }}
           onReplay={() => { setHubOpen(false); startReplay(); }}
           onClose={() => setHubOpen(false)}
+        />
+      )}
+      {intervalSheet && (
+        <DayIntervalSheet
+          value={paneTimeframe(split ? activePane : 0)}
+          favorites={timeframeFavorites}
+          onPick={item => setPaneTimeframe(split ? activePane : 0, item)}
+          onClose={() => setIntervalSheet(false)}
         />
       )}
       {layoutSheet && <LayoutSheet layout={layout} activeId={template.id} sync={sync} onSync={setSync} onPick={next => { setLayout(next); setLayoutSheet(false); }} onClose={() => setLayoutSheet(false)} />}
@@ -994,7 +1017,16 @@ const WHEEL_ANGLE = 18;
 const WHEEL_RADIUS = 96;
 const WHEEL_DWELL_MS = 240; // jak dlouho musí prst na rámci setrvat, než se graf přepne
 const WHEEL_ARC_PX = 52; // jak moc se okrajové řádky stáčí doleva
-function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange: (next: MarketTimeframe) => void }) {
+/**
+ * Čip intervalu: klepnutí otevře list intervalů (jako TradingView), tah točí
+ * kolečkem přes oblíbené (`options`, seřazené podle délky).
+ */
+function TimeframeWheel({ value, options, onChange, onTap }: {
+  value: MarketTimeframe;
+  options: readonly MarketTimeframe[];
+  onChange: (next: MarketTimeframe) => void;
+  onTap: () => void;
+}) {
   // `pos` = posun v položkách od `base` (rámec při začátku tahu); plynulé číslo, i záporné.
   // Base drží kolečko pevně, i když se graf během tahu přepíná.
   const [pos, setPos] = useState<number | null>(null);
@@ -1013,12 +1045,15 @@ function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange:
   useEffect(() => () => clearDwell(), []);
   const valueRef = useRef(value);
   valueRef.current = value;
+  // Seznam se během tahu nemění (oblíbené z listu se projeví až u dalšího tahu).
+  const optionsRef = useRef(options);
+  if (pos == null) optionsRef.current = options;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   useEffect(() => () => { if (frameRef.current != null) cancelAnimationFrame(frameRef.current); }, []);
   const stopFrame = () => { if (frameRef.current != null) { cancelAnimationFrame(frameRef.current); frameRef.current = null; } };
   const apply = (step: number) => {
-    const target = cycleDayChartTimeframe(baseRef.current, step);
+    const target = cycleTimeframeIn(optionsRef.current, baseRef.current, step);
     if (target !== valueRef.current) onChangeRef.current(target);
   };
 
@@ -1080,8 +1115,8 @@ function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange:
     frameRef.current = requestAnimationFrame(tick);
   };
 
-  const shown = pos == null ? value : cycleDayChartTimeframe(base, Math.round(pos));
-  const around = (offset: number) => cycleDayChartTimeframe(shown, offset);
+  const shown = pos == null ? value : cycleTimeframeIn(optionsRef.current, base, Math.round(pos));
+  const around = (offset: number) => cycleTimeframeIn(optionsRef.current, shown, offset);
   const fraction = pos == null ? 0 : pos - Math.round(pos);
   return (
     <>
@@ -1120,7 +1155,7 @@ function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange:
             if (pos == null) {
               liveRef.current = false;
               playNativeHapticIfAvailable('selection');
-              onChange(cycleDayChartTimeframe(value, 1));
+              onTap();
             } else finish();
             return;
           }
@@ -1154,7 +1189,7 @@ function TimeframeWheel({ value, onChange }: { value: MarketTimeframe; onChange:
                 transform: `translate(calc(-50% + ${x.toFixed(2)}px), ${y.toFixed(2)}px) scale(${scale.toFixed(3)})`,
                 color: `color-mix(in srgb, var(--dj-wheel-on) ${Math.round(near * 100)}%, var(--dj-wheel-off))`,
                 opacity: Math.max(0, 1 - Math.max(0, Math.abs(d) - 1) * 0.2),
-              }}>{DAY_CHART_TIMEFRAME_LABEL[item] ?? item}</span>
+              }}>{timeframeTitle(item)}</span>
             );
           })}
         </div>,
