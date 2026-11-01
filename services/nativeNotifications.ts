@@ -170,7 +170,9 @@ export async function removeDeliveredNativeNotification(id: number): Promise<voi
 
 export function openDeliveredNativeNotification(notification: NativeDeliveredNotification): void {
   assertNativeBuild();
-  navigateNativeShell(notification.route ?? 'dashboard');
+  const route = notification.route ?? 'dashboard';
+  // Stejně jako klepnutí na notifikaci: LIVE na přehled s nouzovou lištou (INV-UI-02).
+  navigateNativeShell(route === 'live' ? LIVE_OVERVIEW_ROUTE : route);
 }
 
 export async function cancelAllNativeNotifications(): Promise<void> {
