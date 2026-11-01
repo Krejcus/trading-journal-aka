@@ -28,6 +28,7 @@ import LiveSafetyControls from './LiveSafetyControls';
 import { assertSameSafetyTarget, createFlattenGroupCoordinator, liveSafetyReceipt, type LiveSafetyAction, type LiveSafetyTarget } from '../lib/liveSafetyAction';
 import { ErrorBoundary } from './ErrorBoundary';
 import { syncCopierNativeNotifications } from '../services/nativeCopierNotifications';
+import { LivePhoneHeader, LivePhoneMenu } from './LivePhoneChrome';
 import {
   buildNativeLiveWidgetState,
   syncNativeLiveWidgetSnapshot,
@@ -175,6 +176,11 @@ interface TradovateLiveDeskProps {
   onRequestedTabHandled?: () => void;
   macCompanionPairingIntent?: boolean;
   onMacCompanionPairingIntentHandled?: () => void;
+  /**
+   * Telefon a nativní appka: LIVE → Graf = graf dneška z deníku (data dodá
+   * App). Desktop má vlastní LIVE graf a tohle nepoužije.
+   */
+  phoneChart?: (slots: { header: React.ReactNode; overlay?: React.ReactNode; onLeave: () => void }) => React.ReactNode;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -348,6 +354,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   onRequestedTabHandled,
   macCompanionPairingIntent = false,
   onMacCompanionPairingIntentHandled,
+  phoneChart,
 }) => {
   // Desktop: klik na LIVE otevře rovnou živý graf přes celou obrazovku
   // (Filip 29. 10.); deep link s konkrétní záložkou má přednost. Telefon
@@ -356,16 +363,21 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     requestedTab,
     search: typeof window === 'undefined' ? '' : window.location.search,
     // Po pádu grafu v této session LIVE otevře přehled (žádné kolo pádů).
-    chartAvailable: liveChartAvailableNow() && !liveChartCrashedThisSession(),
+    // Telefon: LIVE se při obchodování otevírá rovnou na grafu (Filip 1. 11.).
+    chartAvailable: (liveChartAvailableNow() || Boolean(phoneChart)) && !liveChartCrashedThisSession(),
   }));
   const { compact: mobileLayout, narrow } = useLiveLayout();
   // Jediný zámek full-group Flattenu pro statickou lištu i těžký přehled.
   // Žije nad oběma sloty, takže jejich pád/unmount nevytvoří druhý příkaz.
   const [flattenCoordinator] = useState(createFlattenGroupCoordinator);
   const chartAvailable = !narrow && !isNativeShell();
+  // Telefon a nativní appka: graf dneška z deníku místo desktopového LIVE grafu.
+  const phoneChartAvailable = !chartAvailable && Boolean(phoneChart);
+  const [phoneMenuOpen, setPhoneMenuOpen] = useState(false);
   useEffect(() => {
-    if (tab === 'chart' && !chartAvailable) setTab('overview');
-  }, [chartAvailable, tab]);
+    if (tab === 'chart' && !chartAvailable && !phoneChartAvailable) setTab('overview');
+    if (tab !== 'chart') setPhoneMenuOpen(false);
+  }, [chartAvailable, phoneChartAvailable, tab]);
   // Načítá se jen panel aktivní záložky, souběžně se stavem LIVE. Desktop míří
   // rovnou do grafu a vedlejší panely do té doby vůbec nepotřebuje.
   useEffect(() => {
@@ -1580,7 +1592,7 @@ acceptAgentStatus((await executeAgent({
   }, [acceptAgentStatus, confirmAction, executeAgent]);
 
   const tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }> = [
-    ...(chartAvailable ? [{ id: 'chart' as const, label: 'Graf', icon: CandlestickChart }] : []),
+    ...(chartAvailable || phoneChartAvailable ? [{ id: 'chart' as const, label: 'Graf', icon: CandlestickChart }] : []),
     { id: 'connections', label: 'Připojení', icon: Link2 },
     { id: 'overview', label: 'Live Dashboard', icon: Gauge },
     { id: 'risk', label: 'Risk', icon: Shield },
@@ -1721,7 +1733,29 @@ acceptAgentStatus((await executeAgent({
           manageCloseSupported={supportsCopierManualOrderClose(agentStatus)}
           />
         </ErrorBoundary>
+      ) : phoneChartAvailable && tab === 'chart' && phoneChart ? (
+        <ErrorBoundary name="LivePhoneChart" fallback={<LiveSlotFailure label="LIVE graf" />}>
+          {phoneChart({
+            header: <LivePhoneHeader
+              groupName={workerGroup?.name ?? null}
+              copier={!agentStatusResolved ? 'pending' : !(agentStatusFresh && !agentStatusRestored) ? 'unverified' : agentStatus?.controller.armed === true ? 'on' : 'off'}
+              onMenu={() => setPhoneMenuOpen(true)}
+            />,
+            overlay: phoneMenuOpen ? <LivePhoneMenu
+              tabs={tabs.filter(item => item.id !== 'chart')}
+              onPick={id => { setPhoneMenuOpen(false); navigateToTab(id); }}
+              onClose={() => setPhoneMenuOpen(false)}
+            /> : null,
+            onLeave: () => navigateToTab('overview'),
+          })}
+        </ErrorBoundary>
       ) : null}
+      {phoneChartAvailable && tab !== 'chart' && (
+        // Zpátky na graf z jakékoli záložky (nad nouzovou lištou, ta zůstává dole).
+        <button type="button" onClick={() => navigateToTab('chart')} className="native-fixed-above-tab-bar fixed right-4 z-[360] flex h-11 items-center gap-2 rounded-full bg-gradient-to-b from-blue-500 to-blue-600 px-4 text-sm font-black text-white shadow-[0_10px_24px_-10px_#2563eb]" style={{ bottom: 'calc(var(--live-safety-height, 100px) + 6px)' }}>
+          <CandlestickChart size={16} />Graf
+        </button>
+      )}
       {chartSafetyNotice && <div role="status" className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${chartSafetyNotice.tone === 'error' ? 'border-rose-500/50 bg-rose-500/10 text-rose-500' : 'border-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>
         <span className="flex-1">Graf · {new Date(chartSafetyNotice.at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })} · {chartSafetyNotice.text}</span>
         <button type="button" onClick={() => setChartSafetyNotice(null)} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]" aria-label="Zavřít hlášku">×</button>

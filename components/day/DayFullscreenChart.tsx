@@ -94,7 +94,7 @@ export interface PhoneChartSource {
   onReplayCursor?: (cursorTime: number | null) => void;
 }
 
-export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onTimeframe, range, focusKeyPrefix, selectedTrade, pins = [], bubbles = 'selected', placing = null, onPick = () => {}, onCancelPlacing = () => {}, pending = null, nowTime = null, bands = [], onClose, onVoice = () => {} }: {
+export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onTimeframe, range, focusKeyPrefix, selectedTrade, pins = [], bubbles = 'selected', placing = null, onPick = () => {}, onCancelPlacing = () => {}, pending = null, nowTime = null, bands = [], onClose, onVoice = () => {}, live }: {
   /** Deník dne: poznámky, seance, mikrofon. Bez něj je to obecný telefonní graf (`source`). */
   ctl?: DayController;
   source?: PhoneChartSource;
@@ -115,6 +115,11 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   onClose: () => void;
   /** Poznámka hlasem: přepne umisťování (`placing: 'voice'`). */
   onVoice?: () => void;
+  /**
+   * LIVE → Graf na telefonu: nativní lišta zůstává (LIVE je její karta),
+   * nahoře LIVE hlavička, vrstvy LIVE (menu) nad grafem a graf se nezavírá.
+   */
+  live?: { header: React.ReactNode; overlay?: React.ReactNode };
 }) {
   // Jednotný zdroj: deník dne z controlleru, jinde ze `source`.
   const src = {
@@ -272,16 +277,17 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   }, [activePane, paneCount, paneTimeframes, timeframe, onTimeframe]);
   useEffect(() => { if (!split) setMaximized(false); }, [split]);
 
-  // Nativní lišta pryč po dobu celé obrazovky; stránka pod vrstvou neroluje.
+  // Nativní lišta pryč po dobu celé obrazovky (v LIVE zůstává); stránka pod vrstvou neroluje.
+  const liveMode = Boolean(live);
   useEffect(() => {
-    void setNativeShellTabBarHidden(true);
+    if (!liveMode) void setNativeShellTabBarHidden(true);
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = previous;
-      void setNativeShellTabBarHidden(false);
+      if (!liveMode) void setNativeShellTabBarHidden(false);
     };
-  }, []);
+  }, [liveMode]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !textEdit) onClose(); };
     window.addEventListener('keydown', onKey);
@@ -599,6 +605,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   return createPortal(
     <div ref={rootRef} className="dj" role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', animation: 'dj-fade .18s ease both' }}>
       {onSlotsReady && <div ref={slotHeaderRef} data-phone-review-slot="header" style={{ flex: 'none', display: chromeHidden ? 'none' : undefined }} />}
+      {live && !chromeHidden && <div style={{ flex: 'none' }}>{live.header}</div>}
       <div ref={chartAreaRef} style={{ position: 'relative', flex: 1, minHeight: 0, background: isDark ? '#05080f' : '#fff' }}>
       {onSlotsReady && <div ref={slotOverlayRef} style={{ position: 'absolute', inset: 0, zIndex: 26, pointerEvents: 'none' }} />}
       {template.cells.map(cell => {
@@ -857,7 +864,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           {onSlotsReady && (
             <button type="button" className="dj-btn" aria-label="Hodnocení obchodu" aria-expanded={reviewPanelOpen} onClick={() => { cancelTool(); setReviewPanelOpen(open => !open); }} style={{ ...chip, height: 38, padding: '0 10px', gap: 6, fontWeight: 800, flex: 'none', marginRight: 4, ...(reviewPanelOpen ? { color: '#fff', border: 0, background: 'linear-gradient(180deg,#10b981,#059669)' } : {}) }}><ClipboardCheck size={16} />Hodnotit</button>
           )}
-          <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={18} /></button>
+          {!live && <button type="button" className="dj-btn" aria-label="Zavřít" onClick={onClose} style={{ ...iconButton, border: '1px solid var(--dj-line)' }}><X size={18} /></button>}
         </div>
       )}
       {onSlotsReady && (
@@ -989,6 +996,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           </section>
         </div>
       )}
+      {live?.overlay}
     </div>,
     document.body,
   );
