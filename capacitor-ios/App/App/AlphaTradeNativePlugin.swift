@@ -5,6 +5,7 @@ import AVFoundation
 import EventKit
 import EventKitUI
 import LocalAuthentication
+import Photos
 import Security
 import Speech
 import UIKit
@@ -27,6 +28,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         CAPPluginMethod(name: "secureRemove", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "shareFile", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "shareText", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "saveImageToPhotos", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "requestSpeechPermissions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPermissionStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
@@ -608,6 +610,31 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
                 }
             }
             presenter.present(activity, animated: true)
+        }
+    }
+
+    /// Uloží PNG (snímek grafu) do Fotek. Jen přidání — appka Fotky nečte.
+    @objc public func saveImageToPhotos(_ call: CAPPluginCall) {
+        guard let base64 = call.getString("base64"),
+              let data = Data(base64Encoded: base64),
+              let image = UIImage(data: data) else {
+            call.reject("Obrázek se nepodařilo načíst.")
+            return
+        }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else {
+                call.reject("Přístup k Fotkám není povolený.")
+                return
+            }
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }) { success, error in
+                if success {
+                    call.resolve(["saved": true])
+                } else {
+                    call.reject("Snímek se nepodařilo uložit do Fotek.", nil, error)
+                }
+            }
         }
     }
 

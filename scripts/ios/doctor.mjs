@@ -50,7 +50,7 @@ requireMatch(plist, /<string>alphatrade-native<\/string>/, 'Info.plist nemá OAu
 requireMatch(plist, /<key>NSSupportsLiveActivities<\/key>\s*<true\/>/, 'Info.plist nepovoluje Live Activities');
 requireMatch(plist, /<key>NSSupportsLiveActivitiesFrequentUpdates<\/key>\s*<true\/>/, 'Info.plist nepovoluje časté vzdálené Live Activity aktualizace');
 requireMatch(plist, /<key>NSCalendarsWriteOnlyAccessUsageDescription<\/key>/, 'Info.plist nemá účel přístupu k zápisu do Kalendáře');
-for (const key of ['NSFaceIDUsageDescription', 'NSMicrophoneUsageDescription', 'NSSpeechRecognitionUsageDescription']) {
+for (const key of ['NSFaceIDUsageDescription', 'NSMicrophoneUsageDescription', 'NSSpeechRecognitionUsageDescription', 'NSPhotoLibraryAddUsageDescription']) {
   requireMatch(plist, new RegExp(`<key>${key}<\\/key>`), `Info.plist nemá ${key}`);
 }
 requireMatch(project, /AlphaTradeNativePlugin\.swift in Sources/, 'Swift plugin není součástí Xcode targetu');

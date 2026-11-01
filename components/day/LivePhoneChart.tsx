@@ -87,6 +87,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
           <LiveTradePill prefs={pill} onPrefs={savePill} bid={lastPrice} ask={lastPrice} onQty={() => setQtySheet(true)} onSide={onSide} />
           {notice && <LiveChartNotice key={notice.key} text={notice.text} onDone={clearNotice} />}
         </>,
+        symbol: LIVE_PHONE_INSTRUMENT.symbol,
         toolbar: <LiveTradeToggle on={pill.on} onToggle={() => savePill({ ...pill, on: !pill.on })} />,
       }}
     />

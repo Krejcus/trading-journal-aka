@@ -195,3 +195,7 @@ html:not(.light-theme) .dj-wheel-card {
 /* Review týdne na telefonu: panel hodnocení (PC sloupec 228 px) ve výsuvném listu přes celou šířku. */
 [data-phone-review-slot="side"] > aside { width: 100% !important; flex: 1; min-height: 0; border-left: 0 !important; box-shadow: none !important; }
 [data-phone-review-slot="bottom"] > div { border-top-width: 1px; }
+
+/* LIVE na telefonu: snímek grafu (záblesk + náhled vlevo dole jako na iOS). */
+@keyframes dj-flash { from { opacity: .55; } to { opacity: 0; } }
+@keyframes dj-shot-in { from { opacity: 0; transform: translate(-12px, 18px) scale(.9); } to { opacity: 1; transform: none; } }

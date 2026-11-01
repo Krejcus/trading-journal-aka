@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Drawing, DrawingToolId } from '@getcandlekit/charts';
-import { Check, ChevronDown, ClipboardCheck, Scissors, ChevronLeft, Redo2, MoreHorizontal, Settings, SlidersHorizontal, Expand, GripVertical, Lock, Shrink, Undo2, Magnet, Maximize2, Mic, Minimize2, Pause, PenLine, Play, SkipForward, StepBack, StepForward, Star, StickyNote, Trash2, Unlock, X } from 'lucide-react';
+import { Camera, Check, ChevronDown, ClipboardCheck, Scissors, ChevronLeft, Redo2, MoreHorizontal, Settings, SlidersHorizontal, Expand, GripVertical, Lock, Shrink, Undo2, Magnet, Maximize2, Mic, Minimize2, Pause, PenLine, Play, SkipForward, StepBack, StepForward, Star, StickyNote, Trash2, Unlock, X } from 'lucide-react';
 import type { Trade } from '../../types';
 import CandleKitTradeChart, { ALPHATRADE_DRAWING_TOOLS } from '../CandleKitTradeChart';
 import GenericDrawingSettingsDialog from '../GenericDrawingSettingsDialog';
@@ -46,6 +46,7 @@ import { dayAnchorTrade, focusTarget, reviewFocusKey, useReviewFocus } from './d
 import type { DayController } from './useDayController';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../../hooks/useLiveCandleBinding';
 import { TIMEFRAME_FAVORITES_EVENT, readTimeframeFavorites, timeframeTitle } from '../ChartTimeframePicker';
+import { ChartShotCard, ChartShotFlash, composeChartShot, takeChartShot, type ChartShot } from './ChartShot';
 import DayIntervalSheet from './DayIntervalSheet';
 
 type DrawingEngine = NonNullable<ChartViewApi['drawing']>['engine'];
@@ -129,6 +130,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     chartLayer?: (info: LiveChartInfo) => React.ReactNode;
     /** LIVE tlačítka vpravo ve spodní liště (místo zavření). */
     toolbar?: React.ReactNode;
+    /** Symbol do popisku snímku grafu (fotoaparát ve spodní liště). */
+    symbol?: string;
     /** ⚡ / „Vytvořit limitní objednávku…“ u position toolu — jen otevře návrh. */
     onPositionOrder?: (drawing: PositionDrawing, info: LiveChartInfo) => void;
   };
@@ -596,6 +599,28 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     return true;
   }, [engine]);
   const positionMenuDrawing = positionMenu && engine ? engine.getById(positionMenu) ?? null : null;
+  // Fotoaparát: snímek aktivního okna do schránky + náhled se Sdílet / Uložit.
+  const [shot, setShot] = useState<ChartShot | null>(null);
+  const [flash, setFlash] = useState(0);
+  const closeShot = useCallback(() => setShot(null), []);
+  const takeShot = () => {
+    const pane = split ? activePane : 0;
+    const target = paneApi(pane);
+    if (!target) return;
+    playNativeHapticIfAvailable('medium');
+    const now = new Date();
+    const when = now.toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const symbol = live?.symbol ?? 'MNQ';
+    try {
+      const canvas = composeChartShot(target, `${symbol} · ${timeframeTitle(paneTimeframe(pane))} · ${when}`);
+      const stamp = `${now.toISOString().slice(0, 10)}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+      const next = takeChartShot(canvas, `alphatrade_${symbol}_${stamp}.png`, ok => setShot(current => (current && current.key === next.key && current.state === 'copying' ? { ...current, state: ok ? 'copied' : 'taken' } : current)));
+      setShot(next);
+      setFlash(count => count + 1);
+    } catch (error) {
+      console.warn('[Snímek grafu]', error);
+    }
+  };
   /** Objednávka z boxu: výběr pryč, ať plovoucí lišta kresby nepřekrývá list objednávky. */
   const openPositionOrder = (drawing: PositionDrawing) => {
     setPositionMenu(null);
@@ -805,6 +830,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           <button type="button" className="dj-btn" aria-label="Zobrazit ovládání" onClick={() => setChromeHidden(false)} style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 10, zIndex: 25, ...iconButton, background: 'var(--dj-card)', border: '1px solid var(--dj-line)', opacity: 0.85 }}><Minimize2 size={16} /></button>
         )}
         {live?.chartLayer?.(liveInfo)}
+        {flash > 0 && <ChartShotFlash key={flash} />}
+        {shot && <ChartShotCard key={shot.key} shot={shot} onChange={setShot} onClose={closeShot} />}
       </div>
 
       {onSlotsReady && <div ref={slotBottomRef} data-phone-review-slot="bottom" style={{ flex: 'none', display: chromeHidden ? 'none' : undefined }} />}
@@ -878,6 +905,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
             <button type="button" className="dj-btn" aria-label="Nástroje kreslení" aria-pressed={drawingNow} onClick={() => (drawingNow ? cancelTool() : setToolsOpen(true))} style={{ ...iconButton, ...(drawingNow ? { color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' } : {}) }}>{drawingNow ? <X size={18} /> : <PenLine size={18} />}</button>
             <button type="button" className="dj-btn" aria-label={historyState.undoLabel ? `Zpět: ${historyState.undoLabel}` : 'Zpět'} disabled={!historyState.canUndo || drawingNow} onClick={() => history.undo()} style={{ ...iconButton, opacity: historyState.canUndo && !drawingNow ? 1 : 0.35 }}><Undo2 size={18} /></button>
             <button type="button" className="dj-btn" aria-label={historyState.redoLabel ? `Vpřed: ${historyState.redoLabel}` : 'Vpřed'} disabled={!historyState.canRedo || drawingNow} onClick={() => history.redo()} style={{ ...iconButton, opacity: historyState.canRedo && !drawingNow ? 1 : 0.35 }}><Redo2 size={18} /></button>
+            {live && <button type="button" className="dj-btn" aria-label="Snímek grafu do schránky" onClick={takeShot} style={iconButton}><Camera size={18} /></button>}
             <span style={divider} />
             {split && (
               <button type="button" className="dj-btn" aria-label={maximized ? 'Zpět na obě okna' : 'Označené okno přes celou plochu'} aria-pressed={maximized} onClick={() => setMaximized(on => !on)} style={{ ...iconButton, ...(maximized ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}>{maximized ? <Shrink size={18} /> : <Expand size={18} />}</button>
