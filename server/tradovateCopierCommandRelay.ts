@@ -1,5 +1,5 @@
 import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview.js';
-import { validateLeaderEntryPlace } from '../lib/leaderEntryPlace.js';
+import { MANUAL_ENTRY_MIN_INTERVAL_MS, validateLeaderEntryPlace } from '../lib/leaderEntryPlace.js';
 import { validateLeaderOrderManage } from '../lib/leaderOrderManage.js';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -119,9 +119,9 @@ const isLeaderTradeClose = (command: unknown): boolean => {
   const inner = (command as { type?: unknown; command?: { type?: unknown; action?: unknown } } | null);
   return inner?.type === 'copy-command' && inner.command?.type === 'manage-leader-order' && inner.command.action === 'close-position';
 };
-const ENTRY_MIN_INTERVAL_MS = 3_000;
+const ENTRY_MIN_INTERVAL_MS = MANUAL_ENTRY_MIN_INTERVAL_MS;
 // Filip 30. 10. 2026: 30 nestačilo na aktivní den (26 vstupů do 15:00) → 100 jako u správy.
-// Proti smyčce chrání dál rozestup 3 s a „jeden čekající na zařízení“ (P7).
+// Proti smyčce chrání dál rozestup 3 s a „jeden čekající na uživatele“ (P7; od 1. 11. atomicky v DB).
 const ENTRY_DAILY_CAP = 100;
 /** Správa vlastního vstupu (fáze 2a): rozestup 2 s na vstup, 100 za 24 h na uživatele (INV-TRAD-04). */
 const MANAGE_MIN_INTERVAL_MS = 2_000;
@@ -141,7 +141,8 @@ export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | n
     || message === 'copier-relay-preview-busy'
     || message === 'copier-relay-entry-busy'
     || message === 'copier-relay-entry-conflict'
-    || message === 'copier-relay-entry-daily-cap') return 409;
+    || message === 'copier-relay-entry-daily-cap'
+    || message === 'copier-relay-entry-superseded') return 409;
   if (message === 'unsupported-command'
     || message === 'unsupported-relay-command'
     || message === 'unsupported-remote-copy-command'
@@ -227,12 +228,6 @@ export async function resolveCopierRelayConnectionId(options: {
   if (liveDirect) return liveDirect.connection_id ?? options.connectionId;
   return rows[0]?.connection_id ?? options.connectionId;
 }
-
-/** Předem spuštěné čtení: tlumí unhandled rejection, pozdější await chybu dál vyhodí. */
-const quiet = <T>(pending: Promise<T>): Promise<T> => {
-  pending.catch(() => undefined);
-  return pending;
-};
 
 /** Selects the freshest runtime only among non-revoked devices. */
 const selectRelayDeviceTarget = async (options: {
@@ -757,18 +752,6 @@ export async function enqueueTradovateCopierCommand(options: {
   const entryOperationId = leaderEntryPlaceOperationId(options.command);
   const idempotencyKey = entryOperationId ?? (options.idempotencyKey?.trim() || randomUUID());
   const payload = commandPayload(options.command);
-  // Rychlost (30. 10.): uživatelská čtení admission ručního vstupu/správy na výběru
-  // zařízení nezávisí — běží souběžně s ním. Vyhodnocují se níž ve stejném pořadí
-  // jako dřív (napřed existující operace, pak busy/strop), takže výsledek i chyba
-  // zůstávají stejné. `quiet` jen tlumí unhandled rejection; await chybu vyhodí.
-  const manageEntry = entryOperationId ? manageEntryOperationId(options.command) : null;
-  const prefetchedExisting = entryOperationId
-    ? quiet(findEntryByOperationId({ db: options.db, userId: options.userId, operationId: entryOperationId }))
-    : null;
-  const prefetchedManage = manageEntry
-    ? quiet(assertManageAdmissible({ db: options.db, userId: options.userId, trade: manageEntry, now,
-      riskReducing: isLeaderTradeClose(options.command) }))
-    : null;
   // Obrana do hloubky: ani interní volající nesmí hintem zkrátit ARM, brzdy,
   // Flatten nebo změny konfigurace. Ty vždy znovu projdou plným výběrem cíle.
   const device = (options.verifiedDevice && commandMayUseRelayTargetHint(options.command))
@@ -808,16 +791,11 @@ export async function enqueueTradovateCopierCommand(options: {
 
   await assertPreviewAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, command: options.command, now });
   if (entryOperationId) {
-    const existing = await prefetchedExisting!;
-    if (existing) {
-      // Stejný klíč s jiným obsahem = nikdy tiše nepřepsat ani neposlat znovu.
-      if (existing.payloadHash !== (options.command as { command?: { payloadHash?: unknown } }).command?.payloadHash) {
-        throw new Error('copier-relay-entry-conflict');
-      }
-      return { id: existing.id, status: existing.status, expiresAt: existing.expiresAt, deviceId: device.id };
-    }
-    if (prefetchedManage) await prefetchedManage;
-    else await assertEntryAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, now });
+    return admitManualCommand({
+      db: options.db, userId: options.userId, deviceId: device.id, connectionId: options.connectionId,
+      operationId: entryOperationId, payload, now,
+      expiresAt: now + (isLeaderTradeClose(options.command) ? CLOSE_COMMAND_TTL_MS : ENTRY_COMMAND_TTL_MS),
+    });
   }
 
   const inFlightArm = await findInFlightArm({
@@ -830,8 +808,7 @@ export async function enqueueTradovateCopierCommand(options: {
   const expiresAt = new Date(now + (isTradovateCopierBrakeCommand(options.command)
     ? BRAKE_COMMAND_TTL_MS
     : isLeaderEntryPreview(options.command) ? PREVIEW_COMMAND_TTL_MS
-      : isLeaderTradeClose(options.command) ? CLOSE_COMMAND_TTL_MS
-        : entryOperationId ? ENTRY_COMMAND_TTL_MS : STANDARD_COMMAND_TTL_MS)).toISOString();
+      : STANDARD_COMMAND_TTL_MS)).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands').upsert({
     user_id: options.userId,
     device_id: device.id,
@@ -887,10 +864,6 @@ export async function enqueueTradovateCopierCommand(options: {
     .eq('idempotency_key', idempotencyKey)
     .single<{ id: string; status: string; expires_at: string; payload?: { command?: { payloadHash?: unknown } } | null }>();
   if (existingError || !existing) throw new Error(`copier-relay-idempotency-lookup-failed: ${existingError?.message ?? 'missing'}`);
-  // Souběžný enqueue téhož vstupu s jiným obsahem: vítěz zůstává, druhý je konflikt.
-  if (entryOperationId && existing.payload?.command?.payloadHash !== (payload.command as { payloadHash?: unknown } | undefined)?.payloadHash) {
-    throw new Error('copier-relay-entry-conflict');
-  }
   return { id: existing.id, status: existing.status, expiresAt: existing.expires_at, deviceId: device.id };
 }
 
@@ -1130,93 +1103,50 @@ const leaderEntryPlaceOperationId = (command: LocalCopierAgentCommand): string |
   return (inner?.type === 'place-leader-entry' || inner?.type === 'manage-leader-order') && typeof inner.operationId === 'string'
     ? inner.operationId : null;
 };
-/** Spravovaný obchod: vlastní vstup (`entryOperationId`) nebo sledovaný obchod (`leaderEntryOrderId`). */
-const manageEntryOperationId = (command: LocalCopierAgentCommand): Record<string, string> | null => {
-  const inner = (command as { command?: { type?: unknown; entryOperationId?: unknown; leaderEntryOrderId?: unknown } }).command;
-  if (inner?.type !== 'manage-leader-order') return null;
-  if (typeof inner.entryOperationId === 'string') return { entryOperationId: inner.entryOperationId };
-  if (typeof inner.leaderEntryOrderId === 'string') return { leaderEntryOrderId: inner.leaderEntryOrderId };
-  return null;
+const MANUAL_ADMISSION_ERRORS: Record<string, string> = {
+  'entry-conflict': 'copier-relay-entry-conflict',
+  'entry-busy': 'copier-relay-entry-busy',
+  'entry-daily-cap': 'copier-relay-entry-daily-cap',
+  'superseded-by-brake': 'copier-relay-entry-superseded',
 };
 
-/** Správa vstupu: jeden rozpracovaný na uživatele a vstup, 2 s rozestup, denní strop. */
-async function assertManageAdmissible(options: {
-  db: SupabaseClient; userId: string; trade: Record<string, string>; now: number;
-  /** Zavření obchodu snižuje riziko: denní strop správy ho nezastaví (busy/rozestup ano; 30. 10.). */
-  riskReducing?: boolean;
-}): Promise<void> {
-  const nowIso = new Date(options.now).toISOString();
-  // Obě čtení souběžně, vyhodnocení v původním pořadí (busy, pak strop).
-  const [{ data: busy, error: busyError }, { count, error: countError }] = await Promise.all([
-    options.db.from('tradovate_copier_commands')
-      .select('id')
-      .eq('user_id', options.userId)
-      .eq('command_type', 'copy-command')
-      .contains('payload', { command: { type: 'manage-leader-order', ...options.trade } })
-      .or(`created_at.gt.${new Date(options.now - MANAGE_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
-      .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
-      .limit(1)
-      .maybeSingle<{ id: string }>(),
-    options.db.from('tradovate_copier_commands')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', options.userId)
-      .eq('command_type', 'copy-command')
-      .contains('payload', { command: { type: 'manage-leader-order' } })
-      .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString()),
-  ]);
-  if (busyError) throw new Error(`copier-relay-entry-lookup-failed: ${busyError.message}`);
-  if (busy) throw new Error('copier-relay-entry-busy');
-  if (options.riskReducing) return;
-  if (countError) throw new Error(`copier-relay-entry-lookup-failed: ${countError.message}`);
-  if ((count ?? 0) >= MANAGE_DAILY_CAP) throw new Error('copier-relay-entry-daily-cap');
-}
-
-/** Per uživatel, ne per zařízení: tentýž vstup nesmí projít podruhé ani přes jiný worker. */
-async function findEntryByOperationId(options: {
-  db: SupabaseClient; userId: string; operationId: string;
-}): Promise<{ id: string; status: string; expiresAt: string; payloadHash: unknown } | null> {
-  const { data, error } = await options.db.from('tradovate_copier_commands')
-    .select('id,status,expires_at,payload')
-    .eq('user_id', options.userId)
-    .eq('idempotency_key', options.operationId)
-    .limit(1)
-    .maybeSingle<{ id: string; status: string; expires_at: string; payload: { command?: { payloadHash?: unknown } } | null }>();
-  if (error) throw new Error(`copier-relay-entry-lookup-failed: ${error.message}`);
-  return data ? { id: data.id, status: data.status, expiresAt: data.expires_at, payloadHash: data.payload?.command?.payloadHash } : null;
-}
-
 /**
- * Ruční vstup: nejvýš jeden čekající nebo vykonávaný na zařízení, nový
- * nejdřív 3 s po předchozím a nejvýš 100 za 24 h na uživatele (P7; do 30. 10. 30). Jinak 409.
+ * Ruční vstup a správa z grafu (1. 11., INV-RELAY-01): existující operace, brzda,
+ * busy/rozestup, denní strop i insert v JEDNÉ transakci pod zámkem uživatele —
+ * PC + telefon ani dvě záložky už nepropadnou mezi čtením a zápisem. Pořadí
+ * kontrol a kódy chyb zůstávají. Chyba RPC = `copier-relay-enqueue-failed` (5xx)
+ * bez jakéhokoli fallbacku na starou nezamčenou cestu.
  */
-async function assertEntryAdmissible(options: {
-  db: SupabaseClient; userId: string; deviceId: string; now: number;
-}): Promise<void> {
-  const nowIso = new Date(options.now).toISOString();
-  // Obě čtení souběžně, vyhodnocení v původním pořadí (busy, pak strop).
-  const [{ data: busy, error: busyError }, { count, error: countError }] = await Promise.all([
-    options.db.from('tradovate_copier_commands')
-      .select('id')
-      .eq('user_id', options.userId)
-      .eq('device_id', options.deviceId)
-      .eq('command_type', 'copy-command')
-      .contains('payload', { command: { type: 'place-leader-entry' } })
-      .or(`created_at.gt.${new Date(options.now - ENTRY_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
-      // Visící `claimed` starší než 2 min nesmí trvale blokovat (worker už má výsledek nebo spadl).
-      .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
-      .limit(1)
-      .maybeSingle<{ id: string }>(),
-    options.db.from('tradovate_copier_commands')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', options.userId)
-      .eq('command_type', 'copy-command')
-      .contains('payload', { command: { type: 'place-leader-entry' } })
-      .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString()),
-  ]);
-  if (busyError) throw new Error(`copier-relay-entry-lookup-failed: ${busyError.message}`);
-  if (busy) throw new Error('copier-relay-entry-busy');
-  if (countError) throw new Error(`copier-relay-entry-lookup-failed: ${countError.message}`);
-  if ((count ?? 0) >= ENTRY_DAILY_CAP) throw new Error('copier-relay-entry-daily-cap');
+async function admitManualCommand(options: {
+  db: SupabaseClient; userId: string; deviceId: string; connectionId: string;
+  operationId: string; payload: Record<string, unknown>; now: number; expiresAt: number;
+}): Promise<{ id: string; status: string; expiresAt: string; deviceId: string }> {
+  const { data, error } = await options.db.rpc('admit_tradovate_copier_manual_command', {
+    p_user_id: options.userId,
+    p_device_id: options.deviceId,
+    p_connection_id: options.connectionId,
+    p_operation_id: options.operationId,
+    p_payload: options.payload,
+    p_now: new Date(options.now).toISOString(),
+    p_expires_at: new Date(options.expiresAt).toISOString(),
+    p_entry_min_interval_ms: ENTRY_MIN_INTERVAL_MS,
+    p_manage_min_interval_ms: MANAGE_MIN_INTERVAL_MS,
+    p_entry_cap: ENTRY_DAILY_CAP,
+    p_manage_cap: MANAGE_DAILY_CAP,
+  });
+  if (error) throw new Error(`copier-relay-enqueue-failed: ${error.message}`);
+  const row = (Array.isArray(data) && data.length === 1 ? data[0] : null) as {
+    result_code?: unknown; id?: unknown; status?: unknown; expires_at?: unknown; device_id?: unknown;
+  } | null;
+  const code = typeof row?.result_code === 'string' ? row.result_code : '';
+  if (MANUAL_ADMISSION_ERRORS[code]) throw new Error(MANUAL_ADMISSION_ERRORS[code]);
+  if ((code !== 'inserted' && code !== 'existing')
+    || typeof row?.id !== 'string' || typeof row.status !== 'string'
+    || typeof row.expires_at !== 'string' || typeof row.device_id !== 'string') {
+    throw new Error('copier-relay-enqueue-failed: invalid-admission-response');
+  }
+  // Kick patří zařízení, které řádek drží (u `existing` i jinému než vybranému).
+  return { id: row.id, status: row.status, expiresAt: row.expires_at, deviceId: row.device_id };
 }
 
 /** Čekající (neexpirovaný) nebo právě vykonávaný Flatten stejného cíle, k němuž se nový požadavek přichytí. */

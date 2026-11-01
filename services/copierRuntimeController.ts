@@ -23,6 +23,7 @@ import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib
 import type { LeaderOrderManageCommand, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import {
   leaderEntryPlaceAsPreview,
+  MANUAL_ENTRY_MIN_INTERVAL_MS,
   type LeaderEntryPlaceCommand,
   type LeaderEntryPlaceResult,
 } from '../lib/leaderEntryPlace';
@@ -3338,6 +3339,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const MANUAL_ENTRY_DEADLINE_RESERVE_MS = 1_000;
   const MANUAL_ENTRY_KEEP = 50;
   const UNRESOLVED_MANUAL_ENTRY: ReadonlySet<CopierManualEntryStatus> = new Set(['sending', 'unknown', 'abandoned']);
+  /** Vstupy, které mohly k brokerovi odejít — počítají se do rozestupu (rejected/not-sent ne). */
+  const SPACED_MANUAL_ENTRY: ReadonlySet<CopierManualEntryStatus> = new Set(['sending', 'acknowledged', 'unknown', 'abandoned', 'waived']);
   /** Vstupy leadera z vlastního ACK → operationId; po restartu z durable záznamů. */
   const ownManualEntryOrderIds = new Map<string, string>();
   for (const record of runtime.state.safety.manualEntries ?? []) {
@@ -3500,6 +3503,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (unresolved) {
       return blocked([{ code: 'manual-entry-unresolved', text: 'Předchozí ruční vstup má neznámý výsledek — nejdřív ho vyřeš.' }]);
     }
+    // Pojistka za relay admission (INV-OUTBOX-01, 1. 11.): i kdyby dva vstupy
+    // prošly frontou, druhý do 3 s po odeslaném k brokerovi nikdy neodejde.
+    const now = clock();
+    if (manualEntryRecords().some(record => SPACED_MANUAL_ENTRY.has(record.status)
+      && now - record.createdAt < MANUAL_ENTRY_MIN_INTERVAL_MS)) {
+      return blocked([{ code: 'manual-entry-too-soon', text: 'Předchozí ruční vstup odešel před chvílí — nic se neodeslalo, zkus to za pár sekund.' }]);
+    }
     if (!gate.armed || gate.shadowMode) {
       return blocked([{ code: 'not-armed', text: 'Ruční vstup jde jen za zapnuté kopírky (ne shadow).' }]);
     }
@@ -3609,6 +3619,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       : status === 'rejected' ? `Broker vstup odmítl${ack.rejectReason ? `: ${ack.rejectReason.slice(0, 200)}` : ''}.`
         : status === 'unknown' ? 'Broker výsledek nepotvrdil — zkontroluj leadera v Tradovate.'
           : undefined;
+    if (entryId) {
+      // ACK je pozorování obchodu leadera stejně jako eventy téhož OSO, které
+      // dorazí o ~100 ms později. REST snímek rozběhnutý před ACK proto neprojde
+      // svými fence a nesmaže id z ACK (1. 11.).
+      tradeObservationVersionByAccount.set(request.accountId, (tradeObservationVersionByAccount.get(request.accountId) ?? 0) + 1);
+      tradeBoundaryObservationVersion += 1;
+      brokerObservationVersion += 1;
+    }
     if (status === 'acknowledged') {
       // Brána klidu skupiny pak blokuje další vstup, dokud stream příkazy
       // neukončí (P5) — ACK předbíhá eventy téhož OSO o ~100 ms.

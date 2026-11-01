@@ -262,25 +262,23 @@ describe('Tradovate copier command relay', () => {
     expect(armUpsert).toHaveBeenCalledOnce();
   });
 
-  describe('denní strop ručních vstupů (100 za 24 h, Filip 30. 10.)', () => {
-    const entryDb = (count: number, upsert: (row: unknown) => void): SupabaseClient => {
+  describe('denní strop ručních vstupů (100 za 24 h, Filip 30. 10.; od 1. 11. atomicky v RPC)', () => {
+    const entryDb = (resultCode: string, upsert: (row: unknown) => void, rpcCalls: unknown[][] = []): SupabaseClient => {
       const devices = { eq: () => devices, is: () => devices,
         then: (resolve: (value: unknown) => void) => resolve({ data: [{ id: deviceId }], error: null }) };
       const runtime = { eq: () => runtime, in: () => runtime, order: () => runtime, limit: () => runtime,
         maybeSingle: async () => ({ data: { device_id: deviceId, status: { controller: { connected: true } }, last_seen_at: '2099-01-01T00:00:00.000Z' }, error: null }) };
-      const commands = () => {
-        const query: Record<string, unknown> = {};
-        for (const method of ['eq', 'in', 'contains', 'gte', 'gt', 'or', 'order', 'limit']) query[method] = () => query;
-        query.maybeSingle = async () => ({ data: null, error: null });
-        query.then = (resolve: (value: unknown) => void) => resolve({ count, error: null });
-        return query;
-      };
-      const upserted = { select: () => upserted, maybeSingle: async () => ({ data: { id: 'entry-row', status: 'pending', expires_at: '2026-08-21T12:00:15.000Z' }, error: null }) };
       return { from: (table: string) => {
         if (table === 'tradovate_copier_devices') return { select: () => devices };
         if (table === 'tradovate_copier_device_runtime') return { select: () => runtime };
-        if (table === 'tradovate_copier_commands') return { select: commands, upsert: (row: unknown) => { upsert(row); return upserted; } };
+        if (table === 'tradovate_copier_commands') return { upsert: (row: unknown) => { upsert(row); throw new Error('unexpected-direct-insert'); } };
         throw new Error(`unexpected-table:${table}`);
+      }, rpc: async (...call: unknown[]) => {
+        rpcCalls.push(call);
+        return { data: [{ result_code: resultCode, id: resultCode === 'inserted' ? 'entry-row' : null,
+          status: resultCode === 'inserted' ? 'pending' : null,
+          expires_at: resultCode === 'inserted' ? '2026-08-21T12:00:15.000Z' : null,
+          device_id: resultCode === 'inserted' ? deviceId : null }], error: null };
       } } as unknown as SupabaseClient;
     };
     const entry = (): LocalCopierAgentCommand => ({ type: 'copy-command', command: buildLeaderEntryPlaceCommand({
@@ -289,10 +287,19 @@ describe('Tradovate copier command relay', () => {
       intent: { armedAt: 1, groupConfigHash: 'abcdefgh12345678', followerQuantities: [] },
     }, 'entry:captest00001') as CopyCommand['command'] });
 
-    it('99 vstupů za 24 h → další projde', async () => {
+    it('strop 100 a rozestupy jdou do RPC; vložení dělá jen RPC, nikdy přímý upsert', async () => {
       const upsert = vi.fn();
-      await enqueueTradovateCopierCommand({ db: entryDb(99, upsert), userId, connectionId, command: entry(), now: Date.parse('2026-08-21T12:00:00.000Z') });
-      expect(upsert).toHaveBeenCalledOnce();
+      const calls: unknown[][] = [];
+      const queued = await enqueueTradovateCopierCommand({ db: entryDb('inserted', upsert, calls), userId, connectionId, command: entry(), now: Date.parse('2026-08-21T12:00:00.000Z') });
+      expect(queued).toMatchObject({ id: 'entry-row', status: 'pending', deviceId });
+      expect(upsert).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toBe('admit_tradovate_copier_manual_command');
+      expect(calls[0][1]).toMatchObject({
+        p_user_id: userId, p_device_id: deviceId, p_connection_id: connectionId, p_operation_id: 'entry:captest00001',
+        p_now: '2026-08-21T12:00:00.000Z', p_expires_at: '2026-08-21T12:00:15.000Z',
+        p_entry_min_interval_ms: 3_000, p_manage_min_interval_ms: 2_000, p_entry_cap: 100, p_manage_cap: 100,
+      });
     });
 
     const manageCmd = (action: 'move-stop' | 'close-position'): LocalCopierAgentCommand => ({ type: 'copy-command', command: buildLeaderOrderManageCommand({
@@ -300,19 +307,17 @@ describe('Tradovate copier command relay', () => {
       action, expect: { price: 29_480, quantity: 1 }, ...(action === 'move-stop' ? { newPrice: 29_470 } : {}),
     }) as CopyCommand['command'] });
 
-    it('strop správy (100) zastaví posun SL, ale ne zavření obchodu (snižuje riziko)', async () => {
-      const blocked = vi.fn();
-      await expect(enqueueTradovateCopierCommand({ db: entryDb(100, blocked), userId, connectionId, command: manageCmd('move-stop'), now: Date.parse('2026-08-21T12:00:00.000Z') }))
-        .rejects.toThrow('copier-relay-entry-daily-cap');
-      expect(blocked).not.toHaveBeenCalled();
-      const closed = vi.fn();
-      await enqueueTradovateCopierCommand({ db: entryDb(100, closed), userId, connectionId, command: manageCmd('close-position'), now: Date.parse('2026-08-21T12:00:00.000Z') });
-      expect(closed).toHaveBeenCalledOnce();
+    it('zavření obchodu má platnost 5 s, ostatní správa 15 s', async () => {
+      const calls: unknown[][] = [];
+      await enqueueTradovateCopierCommand({ db: entryDb('inserted', vi.fn(), calls), userId, connectionId, command: manageCmd('close-position'), now: Date.parse('2026-08-21T12:00:00.000Z') });
+      await enqueueTradovateCopierCommand({ db: entryDb('inserted', vi.fn(), calls), userId, connectionId, command: manageCmd('move-stop'), now: Date.parse('2026-08-21T12:00:00.000Z') });
+      expect(calls.map(call => (call[1] as { p_expires_at: string }).p_expires_at))
+        .toEqual(['2026-08-21T12:00:05.000Z', '2026-08-21T12:00:15.000Z']);
     });
 
-    it('100 vstupů za 24 h → 409 daily-cap, nic se nevloží', async () => {
+    it('entry-daily-cap z RPC → 409, nic se nevloží', async () => {
       const upsert = vi.fn();
-      await expect(enqueueTradovateCopierCommand({ db: entryDb(100, upsert), userId, connectionId, command: entry(), now: Date.parse('2026-08-21T12:00:00.000Z') }))
+      await expect(enqueueTradovateCopierCommand({ db: entryDb('entry-daily-cap', upsert), userId, connectionId, command: entry(), now: Date.parse('2026-08-21T12:00:00.000Z') }))
         .rejects.toThrow('copier-relay-entry-daily-cap');
       expect(upsert).not.toHaveBeenCalled();
       expect(copierRelayValidationErrorStatus('copier-relay-entry-daily-cap')).toBe(409);
@@ -328,36 +333,48 @@ describe('Tradovate copier command relay', () => {
       { type: 'copy-command', command: manageInner(operationId) as CopyCommand['command'] });
     const now = Date.parse('2026-08-21T12:00:00.000Z');
 
-    it('existující operace vyhraje nad busy: vrátí původní řádek, nic nevloží', async () => {
-      const inner = manageInner('manage:replay-01');
-      const command: LocalCopierAgentCommand = { type: 'copy-command', command: inner as CopyCommand['command'] };
-      const upsert = vi.fn();
-      const queued = await enqueueTradovateCopierCommand({
-        db: enqueueDb(upsert, null, calls => {
-          if (calls.some(([method, args]) => method === 'eq' && args[0] === 'idempotency_key')) {
-            return { id: 'existing-id', status: 'claimed', expires_at: '2026-08-21T12:00:15.000Z',
-              payload: { command: { payloadHash: inner.payloadHash } } };
-          }
-          return { id: 'busy-id', status: 'pending', expires_at: '2026-08-21T12:00:15.000Z' };
-        }),
-        userId, connectionId, command, now,
-      });
-      expect(queued).toMatchObject({ id: 'existing-id', status: 'claimed' });
-      expect(upsert).not.toHaveBeenCalled();
+    const rpcDb = (row: Record<string, unknown> | null, upsert = vi.fn(), error: { message: string } | null = null) => Object.assign(
+      enqueueDb(upsert, null, null),
+      { rpc: vi.fn(async () => ({ data: row ? [row] : [], error })) },
+    );
+
+    it('existující operace (i z jiného zařízení) vrátí původní řádek a kick míří na jeho zařízení', async () => {
+      const db = rpcDb({ result_code: 'existing', id: 'existing-id', status: 'claimed', expires_at: '2026-08-21T12:00:15.000Z',
+        device_id: '44444444-4444-4444-8444-444444444444' });
+      const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: manage('manage:replay-01'), now });
+      expect(queued).toMatchObject({ id: 'existing-id', status: 'claimed', deviceId: '44444444-4444-4444-8444-444444444444' });
     });
 
-    it('bez existující operace platí busy jako dřív', async () => {
-      const upsert = vi.fn();
-      await expect(enqueueTradovateCopierCommand({
-        db: enqueueDb(upsert, null, calls => (
-          calls.some(([method]) => method === 'contains') ? { id: 'busy-id', status: 'pending', expires_at: '2026-08-21T12:00:15.000Z' } : null
-        )),
-        userId, connectionId, command: manage('manage:busycheck-01'), now,
-      })).rejects.toThrow('copier-relay-entry-busy');
-      expect(upsert).not.toHaveBeenCalled();
+    it('busy z RPC → copier-relay-entry-busy (409)', async () => {
+      await expect(enqueueTradovateCopierCommand({ db: rpcDb({ result_code: 'entry-busy' }), userId, connectionId, command: manage('manage:busycheck-01'), now }))
+        .rejects.toThrow('copier-relay-entry-busy');
     });
 
-    it('chyba výběru zařízení má přednost; předem spuštěná čtení, která selžou, nenechají unhandled rejection', async () => {
+    it('brzda těsně před admission → copier-relay-entry-superseded (409), nic se nevloží', async () => {
+      const upsert = vi.fn();
+      await expect(enqueueTradovateCopierCommand({ db: rpcDb({ result_code: 'superseded-by-brake' }, upsert), userId, connectionId, command: manage('manage:brakecheck-01'), now }))
+        .rejects.toThrow('copier-relay-entry-superseded');
+      expect(upsert).not.toHaveBeenCalled();
+      expect(copierRelayValidationErrorStatus('copier-relay-entry-superseded')).toBe(409);
+    });
+
+    it('chyba RPC = enqueue-failed (5xx) bez fallbacku na přímý insert', async () => {
+      const upsert = vi.fn();
+      const db = rpcDb(null, upsert, { message: 'canceling statement due to lock timeout' });
+      await expect(enqueueTradovateCopierCommand({ db, userId, connectionId, command: manage('manage:rpcdown-001'), now }))
+        .rejects.toThrow('copier-relay-enqueue-failed: canceling statement due to lock timeout');
+      expect(upsert).not.toHaveBeenCalled();
+      expect(copierRelayValidationErrorStatus('copier-relay-enqueue-failed: canceling statement due to lock timeout')).toBeNull();
+    });
+
+    it('neznámý nebo neúplný výsledek RPC = enqueue-failed, nikdy tichý úspěch', async () => {
+      for (const row of [null, { result_code: 'weird' }, { result_code: 'inserted', id: 'x', status: 'pending', expires_at: 'y' }]) {
+        await expect(enqueueTradovateCopierCommand({ db: rpcDb(row), userId, connectionId, command: manage('manage:badrow-0001'), now }))
+          .rejects.toThrow('copier-relay-enqueue-failed: invalid-admission-response');
+      }
+    });
+
+    it('chyba výběru zařízení má přednost; RPC se vůbec nezavolá', async () => {
       const failing = () => {
         const query: Record<string, unknown> = {};
         for (const method of ['eq', 'in', 'contains', 'gte', 'gt', 'or', 'order', 'limit', 'is']) query[method] = () => query;
@@ -378,12 +395,6 @@ describe('Tradovate copier command relay', () => {
       await new Promise(resolve => setTimeout(resolve, 20));
     });
 
-    it('volná správa projde a vloží jeden řádek s klíčem operationId', async () => {
-      const upsert = vi.fn();
-      await enqueueTradovateCopierCommand({ db: enqueueDb(upsert, null, null), userId, connectionId, command: manage('manage:freecheck-01'), now });
-      expect(upsert).toHaveBeenCalledOnce();
-      expect(upsert.mock.calls[0][0]).toMatchObject({ idempotency_key: 'manage:freecheck-01', status: 'pending' });
-    });
   });
 
   it('enqueue brzdy expiruje starší pending ARM a SHADOW stejného zařízení', async () => {
@@ -1375,48 +1386,35 @@ describe('fáze 1b: relay ručního vstupu', () => {
       intent: { armedAt: 1, groupConfigHash: 'abcdefgh12345678', followerQuantities: [] },
     }, 'entry:relaytest0001'),
   });
-  const isIdLookup = (calls: Array<[string, unknown[]]>) => calls.some(([method, args]) => method === 'eq' && args[0] === 'idempotency_key');
-  const isBusyLookup = (calls: Array<[string, unknown[]]>) => calls.some(([method]) => method === 'or');
 
-  it('nový vstup: klíč idempotence = operationId, platnost 15 s', async () => {
-    const upsert = vi.fn();
+  const rpcDb = (row: Record<string, unknown>, calls: unknown[][] = []) => Object.assign(
+    enqueueDb(vi.fn(), null, () => null),
+    { rpc: async (...call: unknown[]) => { calls.push(call); return { data: [row], error: null }; } },
+  );
+
+  it('nový vstup: RPC dostane operationId, celý payload a platnost 15 s', async () => {
+    const calls: unknown[][] = [];
+    const command = entry();
     await enqueueTradovateCopierCommand({
-      db: enqueueDb(upsert, null, () => null), userId, connectionId,
-      command: entry() as unknown as LocalCopierAgentCommand, now: NOW,
+      db: rpcDb({ result_code: 'inserted', id: 'new', status: 'pending', expires_at: '2026-10-29T15:00:15.000Z', device_id: deviceId }, calls),
+      userId, connectionId, command: command as unknown as LocalCopierAgentCommand, now: NOW,
     });
-    expect(upsert).toHaveBeenCalledOnce();
-    expect(upsert.mock.calls[0][0]).toMatchObject({
-      idempotency_key: 'entry:relaytest0001', expires_at: '2026-10-29T15:00:15.000Z',
+    expect(calls[0][1]).toMatchObject({
+      p_operation_id: 'entry:relaytest0001', p_expires_at: '2026-10-29T15:00:15.000Z',
+      p_payload: { command: { type: 'place-leader-entry', operationId: 'entry:relaytest0001', payloadHash: command.command.payloadHash } },
     });
   });
 
-  it('stejné operationId: stejný obsah vrátí existující řádek, jiný obsah = konflikt; obojí bez nového řádku', async () => {
-    const upsert = vi.fn();
-    const stored = entry();
-    const existing = { id: 'old', status: 'completed', expires_at: '2026-10-29T15:00:15.000Z', payload: { command: stored.command } };
+  it('stejné operationId: existing vrátí původní řádek, entry-conflict = 409', async () => {
     const same = await enqueueTradovateCopierCommand({
-      db: enqueueDb(upsert, null, calls => (isIdLookup(calls) ? existing : null)), userId, connectionId,
-      command: stored as unknown as LocalCopierAgentCommand, now: NOW,
+      db: rpcDb({ result_code: 'existing', id: 'old', status: 'succeeded', expires_at: '2026-10-29T15:00:15.000Z', device_id: deviceId }),
+      userId, connectionId, command: entry() as unknown as LocalCopierAgentCommand, now: NOW,
     });
-    expect(same).toMatchObject({ id: 'old', status: 'completed' });
+    expect(same).toMatchObject({ id: 'old', status: 'succeeded' });
     await expect(enqueueTradovateCopierCommand({
-      db: enqueueDb(upsert, null, calls => (isIdLookup(calls) ? existing : null)), userId, connectionId,
+      db: rpcDb({ result_code: 'entry-conflict' }), userId, connectionId,
       command: entry(29_499) as unknown as LocalCopierAgentCommand, now: NOW,
     })).rejects.toThrow('copier-relay-entry-conflict');
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it('jiný vstup ve frontě nebo do 3 s = entry-busy; hledá se per uživatel', async () => {
-    const upsert = vi.fn();
-    const lookups: Array<Array<[string, unknown[]]>> = [];
-    await expect(enqueueTradovateCopierCommand({
-      db: enqueueDb(upsert, null, calls => (isBusyLookup(calls) ? { id: 'busy', status: 'pending', expires_at: 'x' } : null),
-        calls => { lookups.push([...calls]); }),
-      userId, connectionId, command: entry() as unknown as LocalCopierAgentCommand, now: NOW,
-    })).rejects.toThrow('copier-relay-entry-busy');
-    expect(upsert).not.toHaveBeenCalled();
-    const idLookup = lookups.find(isIdLookup)!;
-    expect(idLookup.some(([method, args]) => method === 'eq' && args[0] === 'device_id')).toBe(false);
   });
 
   it('ruční vstup projde validací jen s platným otiskem', async () => {

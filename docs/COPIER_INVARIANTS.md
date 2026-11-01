@@ -497,6 +497,9 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečný je lookup podle account/order/tag
   a retry jen po autoritativním důkazu, že objednávka nevznikla. Nebezpečný je
   časový retry nebo víra v unikátnost `clOrdId`.
+- Ruční vstup (1. 11. 2026): pojistka rozestupu 3 s se vyhodnotí PŘED durable
+  `sending` (`executeManualEntry`) — odmítnutí nic nezapíše ani neodešle
+  (detail v INV-MANUAL-01).
 
 ### INV-OUTBOX-02: `sending`, `unknown`, `rejected` a `abandoned` zůstávají ARM-blocking, dokud nemají explicitní bezpečné rozuzlení
 
@@ -739,6 +742,25 @@ existující ochranu.
   nebyly (jedinečnost operationId drží unikátní index per uživatel + zařízení,
   dvě živá zařízení = otevřená N6). Test: `tests/tradovateCopierCommandRelay.test.ts`
   („souběžná čtení admission“). Long-poll výsledku: prvních 1,5 s krok 25 ms, pak 100 ms.
+  **Nahrazeno 1. 11. 2026:** viz atomická admission níže.
+- **Atomická admission ručního vstupu a správy (1. 11. 2026):** `place-leader-entry`
+  a `manage-leader-order` po výběru zařízení volají jediné RPC
+  `public.admit_tradovate_copier_manual_command` (migrace
+  `20261101120000_copier_manual_admission.sql`; SECURITY INVOKER, `search_path ''`,
+  `lock_timeout 2s`, jen service_role). Jedna transakce pod jediným
+  `pg_advisory_xact_lock` na uživatele (žádné pořadí více zámků): existující
+  operationId per uživatel → brzda → busy/rozestup → strop → insert. Dvě různé
+  operace téhož uživatele (PC + telefon, dvě záložky, dvě zařízení) se tím
+  serializují: projde jedna, druhá `copier-relay-entry-busy`. `p_now` = hodiny
+  Node (jako `created_at` ostatních řádků), rozdíl proti DB ≥ 2 s = RAISE.
+  Chyba RPC (i lock timeout) = `copier-relay-enqueue-failed` → 502, **žádný
+  fallback** na nezamčené čtení + upsert; nový pokus jen se stejným
+  operationId (jinak ho zastaví busy). Kick míří na `device_id` vráceného řádku.
+  Vědomě nepokryto: zapisovatel mimo RPC (starý relay během rolloutu) zámek
+  nebere — na něj zbývá unikátní index (user, device, key) a workerová pojistka
+  rozestupu (INV-OUTBOX-01). Test: `tests/sql/copierManualAdmission.pg.mjs`
+  (skutečný Postgres, dvě spojení, lock_timeout, force_generic_plan),
+  `tests/tradovateCopierCommandRelay.test.ts` (mapování kódů, 5xx bez upsertu).
 
 ### INV-RELAY-02: Obnovuje se transport a ACK, nikoli execution, která už začala
 
@@ -776,6 +798,13 @@ existující ochranu.
   `tests/localCopierExecutionAgent.test.ts`, `tests/copierRelayApiDetailedReview.test.ts`.
 - Nikdy: Nedovolit ARM s `createdAt` před poslední brake epoch a nehlásit 502,
   když brzda už durable čeká.
+- Ruční vstup a správa při admission (1. 11. 2026): supersede update brzdy
+  nemusí vidět řádek vložený souběžně s ním, proto atomická admission odmítne
+  vstup/správu, je-li u uživatele (libovolné zařízení, libovolný stav) brzda
+  s `created_at ≥ p_now − 500 ms` → `superseded-by-brake` →
+  `copier-relay-entry-superseded` (409, nic se nevloží, UI „Neodesláno“, žádné
+  automatické opakování). Výjimka: `cancel-entry` (snižuje riziko). Worker
+  vstup dál odmítne podle `lastBrakeCreatedAt`/ARM brány.
 - Bezpečné změny vs. nebezpečné: Bezpečné je ukázat platnost fronty do
   `expiresAt`. Nebezpečné je po UI timeoutu brzdu automaticky zopakovat.
 
@@ -1411,7 +1440,8 @@ existující ochranu.
   `place-leader-entry` (`lib/leaderEntryPlace.ts`: prefix `entry:`, otisk
   payloadu). Jen přes relay (loopback = `manual-entry-relay-only`), s
   platností 15 s (`deadlineAt` bez ACK rezervy; chybí = blocked), jeden
-  na zařízení, 3 s rozestup, 100 za 24 h (do 30. 10. 2026 30; Filip zvedl;
+  na uživatele (do 1. 11. 2026 na zařízení; od té doby atomicky v DB, viz
+  INV-RELAY-01), 3 s rozestup, 100 za 24 h (do 30. 10. 2026 30; Filip zvedl;
   denní strop správy 100 neplatí pro zavření obchodu — snižuje riziko),
   idempotence `operationId` per
   uživatel, brzda čekající vstup zneplatní. Controller
@@ -1428,6 +1458,24 @@ existující ochranu.
   definitivní odmítnutí bez id = `rejected`; jinak `unknown`. ACK za
   DISARMED (brzda během POSTu) = vlastní vstup se hned zruší. Restart
   v `sending` = `unknown`.
+- **Pojistka za relay (1. 11. 2026):** worker před durable `sending` odmítne
+  vstup `manual-entry-too-soon`, pokud poslední záznam ve stavu sending |
+  acknowledged | unknown | abandoned | waived vznikl před méně než
+  `MANUAL_ENTRY_MIN_INTERVAL_MS` (3 s, `lib/leaderEntryPlace.ts`, sdílí relay).
+  rejected a not-sent se nepočítají. ACK s id vstupu je pozorování obchodu
+  leadera: zvýší `tradeObservationVersionByAccount` leadera,
+  `tradeBoundaryObservationVersion` i `brokerObservationVersion` (stejné
+  čítače jako eventy téhož OSO o ~100 ms později), takže REST snímek
+  rozběhnutý před ACK neprojde fence a nesmaže id z ACK z živých příkazů.
+  Snímkové cesty: reconcile, route-epoch refresh a přepnutí followera čtou
+  verzi účtu; návrat ručně zavřeného followera `tradeBoundaryObservationVersion`;
+  ARM preflight `brokerObservationVersion` (a běží jen za DISARMED); route-gap
+  porovnání při neshodě failClosed; opravné čtení followerů leadera nečte.
+  Test: `tests/manualEntryPlace.test.ts` — vypnutí followera za ARMED čte REST
+  před POSTem, aplikace po ACK (eventy OSO zadržené) skončí „Stav se během
+  ověření změnil“ a další vstup po 3,1 s zastaví brána klidu (mutačně ověřeno:
+  bez zvýšení verze test padá); pojistka rozestupu má vlastní testy.
+  Dvě živé instance workeru tím nejsou vyřešené (INV-WORKER-02 zůstává otevřený).
 - **Vědomá odchylka od INV-DEFAULT-02:** `unknown` nechá kopírku ARMED
   (leaderovy eventy dál zrcadlí; vstup bez nohou se během `unknown` nikdy
   nekopíruje). `unknown`/`abandoned` blokuje jen ARM a další ruční vstup —

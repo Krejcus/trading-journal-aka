@@ -285,6 +285,47 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-01 — atomická admission ručního vstupu a správy z grafu + workerová pojistka (Claude, větev, NENASAZENO)
+
+- Proč: relay dřív četl existující operaci, busy/rozestup a strop zvlášť a pak
+  vkládal (TOCTOU). Dva souběžné požadavky (PC + telefon, dvě záložky, dvě
+  zařízení) prošly oba. S jedním workerem duplicitní pozici zastavila brána
+  klidu, takže to bylo P1, ne P0. REST snímek ale mohl po ACK smazat id z ACK
+  a bránu tím obejít.
+- Worker (release první):
+  - ACK s id vstupu zvýší verzi pozorování leadera i oba globální čítače
+    (stejně jako eventy téhož OSO o ~100 ms později);
+  - pojistka `manual-entry-too-soon` (3 s, `MANUAL_ENTRY_MIN_INTERVAL_MS`
+    v `lib/leaderEntryPlace.ts`) je před durable `sending`.
+- DB: `public.admit_tradovate_copier_manual_command`, migrace
+  `20261101120000_copier_manual_admission.sql`.
+  - Jediný advisory xact zámek na uživatele.
+  - Pořadí: existing → brzda (500 ms) → busy → strop → insert.
+  - `lock_timeout 2s`; jen service_role.
+- Relay: jedno RPC, žádný fallback (chyba = 502). Nový kód
+  `copier-relay-entry-superseded` (409, UI „Neodesláno“).
+- Ověření:
+  - skutečný Postgres 18 (Postgres.app, dočasný cluster na 127.0.0.1):
+    `tests/sql/copierManualAdmission.pg.mjs` 11/11 (dvě spojení, lock_timeout,
+    force_generic_plan);
+  - celá sada 6391, tsc bez nových chyb, build i bundle workeru OK;
+  - test souběhu snímku je mutačně ověřený.
+- copier-design-critic: 1. kolo OPRAVIT PŘED COMMITEM (chyběl test zvýšení
+  verze) → doplněno; 2. kolo **OK**. Neblokující: RAISE/lock timeout/hodiny
+  končí 502 „Výsledek neznámý“, i když se prokazatelně nic nevložilo (šlo by
+  mapovat na 409 „Neodesláno“); rozestup relaye a workeru měří jiné hodiny.
+- Dále `tests/qa/beforeLiveMarketCalculations.ts` (zmrazená kopie
+  `96f45e17^:services/marketDataCalculations.ts`): main od 96f45e17 padal na
+  chybějícím souboru.
+- Rollout (každý krok se samostatným souhlasem):
+  1. záloha + read-only kontrola duplicit;
+  2. reinstall workeru z čistého release worktree;
+  3. migrace přes `db query --linked` + `migration repair`, `notify pgrst`,
+     EXPLAIN s force_generic_plan a měření doby držení zámku;
+  4. push webu.
+  Web před migrací = 502 u všech ručních vstupů (fail-closed).
+  Rollback = revert webu, funkce zůstává.
+
 ### 2026-10-31 večer — graf: Path, kurzory a šablony indikátorů jako v TradingView; LIVE panel Objednávka (Claude, nasazeno)
 
 - Předloha z TradingView Desktop přes CDP (jen pozorování UI, žádný RE):
