@@ -21,6 +21,8 @@ export function livePhoneCopierChip(input: {
   /** Čerstvý a neobnovený stav workeru. */
   fresh: boolean;
   controller: CopierControllerStatus | null | undefined;
+  /** `liveAttentionReasons` — co přehled hlásí a samotný stav kopírky neodliší. */
+  attention?: readonly string[];
   now?: number;
 }): LivePhoneCopierChip {
   if (input.pending) return { label: 'Kopírka…', tone: 'muted', armed: false };
@@ -30,9 +32,15 @@ export function livePhoneCopierChip(input: {
     return { label: 'Kopírka se obnovuje', tone: 'warn', armed: false, title: 'Kopírka čeká na automatické pokračování po výpadku spojení.' };
   }
   const value = copierValue(controller, input.now ?? Date.now());
+  const armed = controller.armed === true && value.value === 'Zapnutá';
+  // Rozjeté účty, incident, zaseknutá operace…: ZAP/VYP by je schovalo (jako graf na PC).
+  const attention = input.attention ?? [];
+  if (attention.length && ['Zapnutá', 'Vypnutá', 'Pouze sledování'].includes(value.value)) {
+    return { label: `Pozor: ${attention[0]}`, tone: 'warn', armed, title: `Kopírka ${value.value.toLowerCase()} · ${attention.join(', ')} — viz Live Dashboard.` };
+  }
   const label = value.value === 'Zapnutá' ? 'Kopírka ZAP'
     : value.value === 'Vypnutá' ? 'Kopírka VYP'
       : value.value === 'Pouze sledování' ? 'Jen sledování'
         : value.value;
-  return { label, tone: value.tone, armed: controller.armed === true && value.value === 'Zapnutá', ...(value.title ? { title: value.title } : {}) };
+  return { label, tone: value.tone, armed, ...(value.title ? { title: value.title } : {}) };
 }

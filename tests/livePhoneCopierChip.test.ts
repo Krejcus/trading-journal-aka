@@ -29,6 +29,13 @@ describe('čip kopírky v hlavičce telefonního LIVE grafu', () => {
     expect(chip(status({ armed: true, dayLockUntil: now + 60_000 }))).toMatchObject({ label: 'Zámek dne', armed: false });
   });
 
+  it('incident nebo rozjeté účty nepřebije ZAP / VYP (jako graf na PC)', () => {
+    expect(livePhoneCopierChip({ pending: false, fresh: true, controller: status({ armed: true }), attention: ['rozjeté účty'], now }))
+      .toMatchObject({ label: 'Pozor: rozjeté účty', tone: 'warn', armed: true });
+    expect(livePhoneCopierChip({ pending: false, fresh: true, controller: status(), attention: ['incident — Kontrola pozic'], now }))
+      .toMatchObject({ label: 'Pozor: incident — Kontrola pozic', tone: 'warn', armed: false });
+  });
+
   it('čekající automatické pokračování (INV-RECON-04) není „VYP“', () => {
     const resume = { phase: 'waiting' } as CopierControllerStatus['transportResume'];
     expect(chip(status({ transportResume: resume }))).toMatchObject({ label: 'Kopírka se obnovuje', tone: 'warn', armed: false });

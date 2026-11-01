@@ -151,7 +151,7 @@ export default function DayIntervalSheet({ value, favorites, onPick, onClose }: 
           position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column',
           maxHeight: expanded ? '94%' : '72%', height: expanded ? '94%' : undefined,
           borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)',
-          paddingBottom: 'env(safe-area-inset-bottom, 0px)', transform: dragY ? `translateY(${dragY}px)` : undefined,
+          paddingBottom: 'var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px))', transform: dragY ? `translateY(${dragY}px)` : undefined,
           transition: dragY ? 'none' : 'transform .26s cubic-bezier(.2,.9,.25,1), max-height .26s cubic-bezier(.2,.9,.25,1)',
           animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both',
         }}

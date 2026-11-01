@@ -1,5 +1,5 @@
 import { isNativeBuild } from '../utils/runtimeConfig';
-import { LIVE_OVERVIEW_ROUTE } from '../utils/nativeShell';
+import { LIVE_OVERVIEW_ROUTE } from '../lib/liveOverviewRoute';
 import {
   cancelNativeNotification,
   listPendingNativeNotifications,

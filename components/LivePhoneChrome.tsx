@@ -41,7 +41,7 @@ export function LivePhoneMenu({ tabs, onPick, onClose }: {
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 45 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-      <section aria-label="LIVE" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '80%', overflowY: 'auto', borderRadius: '20px 20px 0 0', background: 'var(--dj-sheet, var(--dj-card))', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+      <section aria-label="LIVE" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '80%', overflowY: 'auto', borderRadius: '20px 20px 0 0', background: 'var(--dj-sheet, var(--dj-card))', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
         <div aria-hidden="true" style={{ display: 'grid', placeItems: 'center', padding: '0 0 6px' }}><span style={{ width: 38, height: 5, borderRadius: 3, background: 'var(--dj-line)', filter: 'brightness(2.2)' }} /></div>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
           <p style={{ margin: 0, flex: 1, fontSize: 16, fontWeight: 800 }}>LIVE</p>

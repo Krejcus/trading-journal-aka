@@ -79,11 +79,16 @@ describe('notification source and shared actions', () => {
     expect(mocks.capture).toHaveBeenLastCalledWith({tradeId:'trade-7',note:'Avoid chasing'});
     callback({actionId:'OPEN_COACH',notification:{data:{route:'live'}}});
     expect(mocks.navigate).toHaveBeenLastCalledWith('ai');
+    // INV-UI-02: LIVE z notifikace (tlačítko i klepnutí) jde na přehled, ne na telefonní graf.
+    callback({actionId:'OPEN_LIVE',notification:{data:{route:'dashboard'}}});
+    expect(mocks.navigate).toHaveBeenLastCalledWith('live:overview');
+    callback({actionId:'tap',notification:{data:{route:'live'}}});
+    expect(mocks.navigate).toHaveBeenLastCalledWith('live:overview');
     callback({actionId:'CAPTURE_TRADE',notification:{data:{}}});
     expect(mocks.capture).toHaveBeenLastCalledWith(undefined);
-    expect(mocks.clearBadge).toHaveBeenCalledTimes(4);
+    expect(mocks.clearBadge).toHaveBeenCalledTimes(6);
     callback({actionId:'dismiss',notification:{data:{route:'live'}}});
-    expect(mocks.clearBadge).toHaveBeenCalledTimes(4);
+    expect(mocks.clearBadge).toHaveBeenCalledTimes(6);
   });
 
   it('logout removes a notification that finishes scheduling after cleanup', async () => {

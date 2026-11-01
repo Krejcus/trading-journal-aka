@@ -1297,16 +1297,22 @@ existující ochranu.
   - LIVE ▾ → Live Dashboard (menu obsahuje přehled vždy) → OFF → potvrzení,
     tedy 4 klepnutí;
   - přechod z grafu na přehled je povolený vždy (`lib/tradovateLiveTab.ts`);
-  - rizikové notifikace (risk, zámek dne, odpojený follower, časovače)
-    otevírají `live:overview` (`utils/nativeShell.ts:LIVE_OVERVIEW_ROUTE`)
-    přímo na přehledu;
+  - notifikace z kopírky (risk, zámek dne, odpojený follower, časovače)
+    otevírají `live:overview` (`lib/liveOverviewRoute.ts`) přímo na
+    přehledu;
   - pád telefonního grafu se pamatuje jako na PC
     (`rememberLiveChartCrash`), takže do konce relace se LIVE otevírá na
     přehledu.
 
+  Rizikové notifikace i tlačítko „Zkontrolovat LIVE“ (lokální i APNs
+  s `route: 'live'`) převádí `services/nativeNotifications.ts:dispatchNativeNotificationAction`
+  na tuto cestu. Server dál posílá `live`, protože starší build appky novou
+  cestu nezná.
+
   Čip kopírky v hlavičce (`lib/livePhoneCopierChip.ts`) ukazuje ZAP/VYP jen
-  z čerstvého neobnoveného stavu a nikdy neschová incident, zámek dne,
-  sledovací režim ani čekající automatické pokračování. Hlídá to
+  z čerstvého neobnoveného stavu. Vychází ze stejného výkladu jako stavová
+  lišta na PC (`copierValue`) a s důvody `liveAttentionReasons` (incident,
+  rozjeté účty, zaseknutá operace…) se změní na „Pozor: …“. Hlídá to
   `tests/livePhoneCopierChip.test.ts`. Obchodní lišta a list objednávky
   na telefonu (fáze A) nemají cestu k brokerovi
   (`tests/livePhoneTrade.test.ts`). Odesílání z telefonu je nová cesta do

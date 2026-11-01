@@ -1,4 +1,5 @@
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { LIVE_OVERVIEW_ROUTE } from '../lib/liveOverviewRoute';
 import type { PermissionState } from '@capacitor/core';
 
 import { isNativeBuild } from '../utils/runtimeConfig';
@@ -356,5 +357,9 @@ export function dispatchNativeNotificationAction(action: {
     [NATIVE_NOTIFICATION_ACTIONS.openJournal]: 'journal',
     [NATIVE_NOTIFICATION_ACTIONS.openCoach]: 'ai',
   };
-  navigateNativeShell(actionRoutes[action.actionId] || (typeof data.route === 'string' ? data.route : 'dashboard'));
+  const route = actionRoutes[action.actionId] || (typeof data.route === 'string' ? data.route : 'dashboard');
+  // Notifikace z kopírky (i APNs ze serveru s `route: 'live'`) otevře LIVE na
+  // přehledu s nouzovou lištou, ne na telefonním grafu (INV-UI-02). Server
+  // dál posílá `live`, starší buildy appky by novou cestu neznaly.
+  navigateNativeShell(route === 'live' ? LIVE_OVERVIEW_ROUTE : route);
 }

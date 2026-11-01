@@ -63,7 +63,7 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
     expect(slot).toMatch(/liveTradingScreenPromise = import\('\.\/LiveTradingScreen'\)/);
     expect(slot).toContain('const LiveTradingScreen = React.lazy(loadLiveTradingScreen);');
     expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer[^>]*\/>\}>\s*<LiveTradingScreen \{\.\.\.props\} chartOpenPerformanceAt=\{openPerformanceAtRef\.current\} leaving=\{closing\} \/>\s*<\/Suspense>/);
-    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/import LiveTradingScreenSlot, \{ liveChartCrashedThisSession, preloadLiveTradingScreen \} from '\.\/LiveTradingScreenSlot';/);
+    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/import LiveTradingScreenSlot, \{ liveChartCrashedThisSession, preloadLiveTradingScreen, rememberLiveChartCrash \} from '\.\/LiveTradingScreenSlot';/);
   });
 
   it('bundle a první snapshot grafu se zahřejí až po úplném LIVE přehledu a explicitně z navigace', () => {

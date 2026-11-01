@@ -683,7 +683,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const drawingNow = pathActive || Boolean(activeTool);
   const toolName = pathActive ? DAY_PATH_TOOL : activeTool;
 
-  const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px calc(6px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', flex: 'none', minHeight: 52 };
+  const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px calc(6px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', flex: 'none', minHeight: 52 };
   // LIVE na telefonu v tmavém režimu: Aurora (sklo nad barevným polem, graf průsvitný).
   const aurora = Boolean(live) && isDark;
   // LIVE lišta má navíc fotoaparát a ⇅ — užší ikony, ať se na 390 pt vejde i •••.
@@ -904,7 +904,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
       {replaySheet && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
           <div onClick={() => setReplaySheet(null)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-          <section aria-label="Volby přehrávání" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '80%', overflowY: 'auto', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 14px calc(14px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .24s cubic-bezier(.2,.9,.25,1) both' }}>
+          <section aria-label="Volby přehrávání" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '80%', overflowY: 'auto', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 14px calc(14px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .24s cubic-bezier(.2,.9,.25,1) both' }}>
             <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px' }} />
             <p style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 800, textAlign: 'center' }}>{replaySheet === 'speed' ? 'Rychlost přehrávání' : replaySheet === 'step' ? 'Interval kroku' : 'Svíčky v přehrávání'}</p>
             {(replaySheet === 'speed'
@@ -925,7 +925,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
       )}
       {!chromeHidden && (
         // Jedna spodní lišta jako v TradingView: posouvá se do strany, zavřít je vždy vpravo.
-        <div className={aurora ? 'dj-glass' : undefined} style={{ ...bar, gap: 0, padding: '4px 4px calc(4px + env(safe-area-inset-bottom, 0px)) 4px' }}>
+        <div className={aurora ? 'dj-glass' : undefined} style={{ ...bar, gap: 0, padding: '4px 4px calc(4px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px))) 4px' }}>
           {/* Kolečko rámce je vlevo vždy vidět (jako zavřít vpravo); posouvá se jen střed lišty. */}
           <TimeframeWheel key={split ? `pane${activePane}` : 'pane0'} value={paneTimeframe(split ? activePane : 0)} options={wheelOptions(paneTimeframe(split ? activePane : 0))} onChange={item => setPaneTimeframe(split ? activePane : 0, item)} onTap={() => setIntervalSheet(true)} />
           <span style={{ ...divider, margin: '0 4px 0 0' }} />
@@ -966,7 +966,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         // Hodnocení obchodu (panel review) jako výsuvný list; místo zůstává v DOM i zavřené.
         <div style={{ position: 'absolute', inset: 0, zIndex: 38, pointerEvents: reviewPanelOpen ? 'auto' : 'none', visibility: reviewPanelOpen ? 'visible' : 'hidden' }}>
           <div onClick={() => setReviewPanelOpen(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.35)', opacity: reviewPanelOpen ? 1 : 0, transition: 'opacity .2s' }} />
-          <section aria-label="Hodnocení obchodu" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '72%', display: 'flex', flexDirection: 'column', borderRadius: '20px 20px 0 0', overflow: 'hidden', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', paddingBottom: 'env(safe-area-inset-bottom, 0px)', transform: reviewPanelOpen ? 'none' : 'translateY(100%)', transition: 'transform .28s cubic-bezier(.2,.9,.25,1)' }}>
+          <section aria-label="Hodnocení obchodu" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '72%', display: 'flex', flexDirection: 'column', borderRadius: '20px 20px 0 0', overflow: 'hidden', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', paddingBottom: 'var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px))', transform: reviewPanelOpen ? 'none' : 'translateY(100%)', transition: 'transform .28s cubic-bezier(.2,.9,.25,1)' }}>
             <div style={{ display: 'flex', alignItems: 'center', padding: '8px 10px 4px' }}>
               <span style={{ flex: 1 }} />
               <span style={{ width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)' }} />
@@ -1009,7 +1009,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
       {toolsOpen && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
           <div onClick={() => setToolsOpen(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-          <section aria-label="Nástroje kreslení" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '78%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', padding: '8px 14px calc(14px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+          <section aria-label="Nástroje kreslení" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '78%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', padding: '8px 14px calc(14px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
             <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 12px' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <p style={{ margin: 0, fontSize: 15, fontWeight: 800 }}>Kreslení</p>
@@ -1080,7 +1080,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
       {textEdit && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 45, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
           <div onClick={cancelText} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)' }} />
-          <section aria-label="Text v grafu" style={{ position: 'relative', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .24s ease both' }}>
+          <section aria-label="Text v grafu" style={{ position: 'relative', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '14px 14px calc(14px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .24s ease both' }}>
             {/* Tlačítka nad polem: lišta nad klávesnicí iOS by je jinak zakryla. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <button type="button" className="dj-btn" onClick={cancelText} style={{ height: 36, padding: '0 12px', borderRadius: 10, border: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text-2)', font: '600 13px Inter, sans-serif', cursor: 'pointer' }}>{textEdit.fresh ? 'Zahodit' : 'Zrušit'}</button>
@@ -1344,7 +1344,7 @@ function LayoutSheet({ layout, activeId, sync, onSync, onPick, onClose }: {
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-      <section aria-label="Rozvržení grafů" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+      <section aria-label="Rozvržení grafů" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
         <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px' }} />
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
           <span style={{ width: 34 }} />
@@ -1428,7 +1428,7 @@ function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet,
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-      <section aria-label="Další volby grafu" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+      <section aria-label="Další volby grafu" className="dj-scroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '86%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '20px 20px 0 0', background: 'var(--dj-card)', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
         <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px' }} />
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
           {page === 'main'
@@ -1503,7 +1503,7 @@ function PositionMenuSheet({ drawing, onOrder, onSettings, onRemove, onClose }: 
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 45 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-      <section aria-label="Position tool" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderRadius: '20px 20px 0 0', background: 'var(--dj-sheet, var(--dj-card))', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + env(safe-area-inset-bottom, 0px))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
+      <section aria-label="Position tool" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderRadius: '20px 20px 0 0', background: 'var(--dj-sheet, var(--dj-card))', borderTop: '1px solid var(--dj-line)', padding: '8px 16px calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' }}>
         <span style={{ display: 'block', width: 38, height: 5, borderRadius: 9, background: 'var(--dj-line)', margin: '0 auto 10px', filter: 'brightness(2.2)' }} />
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
           <p style={{ margin: 0, flex: 1, fontSize: 16, fontWeight: 800 }}>{drawing.tool === 'LongPosition' ? 'Long pozice' : 'Short pozice'}</p>

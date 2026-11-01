@@ -189,7 +189,7 @@ export default function LivePhoneOrderSheet({ initial, instrument, quote, onSubm
             {row('Tick', `${String(tick).replace('.', ',')} = ${(tick * instrument.pointValue).toFixed(2).replace('.', ',')} USD`)}
           </div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 8, padding: '10px 16px calc(12px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--dj-line)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 8, padding: '10px 16px calc(12px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', borderTop: '1px solid var(--dj-line)' }}>
           <button type="button" className="dj-btn" onClick={onClose} style={{ height: 48, borderRadius: 12, border: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text)', font: '700 14px Inter, sans-serif', cursor: 'pointer' }}>Zahodit</button>
           <button type="button" className="dj-btn" disabled={blocked} onClick={() => { playNativeHapticIfAvailable('medium'); onSubmit({ ...draft, sizing: 'qty', quantity: m.quantity }); }} style={{ height: 48, borderRadius: 12, border: 0, color: '#fff', background: sell ? SELL : BUY, opacity: blocked ? 0.4 : 1, font: '800 14px Inter, sans-serif', cursor: blocked ? 'not-allowed' : 'pointer' }}>
             {sell ? 'Prodat' : 'Koupit'} {m.quantity} {market ? 'market' : draft.type === 'limit' ? 'limit' : 'stop'}

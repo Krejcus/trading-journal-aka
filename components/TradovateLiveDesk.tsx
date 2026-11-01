@@ -30,6 +30,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { syncCopierNativeNotifications } from '../services/nativeCopierNotifications';
 import { LivePhoneHeader, LivePhoneMenu } from './LivePhoneChrome';
 import { livePhoneCopierChip } from '../lib/livePhoneCopierChip';
+import { buildLiveStatusStrip, liveAttentionReasons } from '../services/liveStatusStrip';
 import {
   buildNativeLiveWidgetState,
   syncNativeLiveWidgetSnapshot,
@@ -1741,7 +1742,16 @@ acceptAgentStatus((await executeAgent({
           {phoneChart({
             header: <LivePhoneHeader
               groupName={workerGroup?.name ?? null}
-              copier={livePhoneCopierChip({ pending: !agentStatusResolved, fresh: agentStatusFresh && !agentStatusRestored, controller: agentStatus?.controller })}
+              copier={livePhoneCopierChip({
+                pending: !agentStatusResolved,
+                fresh: agentStatusFresh && !agentStatusRestored,
+                controller: agentStatus?.controller,
+                attention: liveAttentionReasons(
+                  buildLiveStatusStrip({ status: agentStatus?.controller ?? null, available: runtimeAvailable, pending: !agentStatusResolved, transport: agentTransport, journalHealth: agentStatus?.journalHealth }),
+                  agentStatus?.controller ?? null,
+                  runtimeAvailable,
+                ),
+              })}
               onMenu={() => setPhoneMenuOpen(true)}
             />,
             overlay: phoneMenuOpen ? <LivePhoneMenu
