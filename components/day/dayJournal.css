@@ -199,3 +199,43 @@ html:not(.light-theme) .dj-wheel-card {
 /* LIVE na telefonu: snímek grafu (záblesk + náhled vlevo dole jako na iOS). */
 @keyframes dj-flash { from { opacity: .55; } to { opacity: 0; } }
 @keyframes dj-shot-in { from { opacity: 0; transform: translate(-12px, 18px) scale(.9); } to { opacity: 1; transform: none; } }
+
+/* LIVE na telefonu, tmavě: Aurora — mléčné sklo nad pomalým barevným polem.
+   Rozložení zůstává jako dnes (graf přes celou šířku, lišty od kraje ke kraji).
+   Sklo má vždy vlastní výplň; rozmazání je jen bonus (Chrome ho nekreslí). */
+.dj.dj-aurora {
+  --dj-bg: #070914;
+  --dj-card: rgba(16, 19, 38, 0.64);
+  --dj-sheet: rgba(16, 19, 38, 0.8);
+  --dj-glass: rgba(16, 19, 38, 0.7);
+  --dj-chip: rgba(255, 255, 255, 0.07);
+  --dj-line: rgba(255, 255, 255, 0.11);
+  --dj-hi: rgba(255, 255, 255, 0.09);
+  isolation: isolate;
+  overflow: hidden;
+}
+.dj.dj-aurora::before {
+  content: "";
+  position: absolute;
+  inset: -25%;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.5;
+  filter: blur(34px);
+  background:
+    radial-gradient(38% 28% at 18% 18%, #4f46e5, transparent 70%),
+    radial-gradient(34% 26% at 86% 28%, #0e7490, transparent 70%),
+    radial-gradient(40% 30% at 28% 86%, #be185d, transparent 70%),
+    radial-gradient(30% 24% at 82% 82%, #6d28d9, transparent 70%),
+    radial-gradient(28% 22% at 56% 52%, #0369a1, transparent 70%);
+  animation: dj-aurora-drift 26s ease-in-out infinite alternate;
+}
+@keyframes dj-aurora-drift { to { transform: translate3d(4%, -3%, 0) scale(1.06); } }
+@media (prefers-reduced-motion: reduce) { .dj.dj-aurora::before { animation: none; } }
+.dj.dj-aurora section,
+.dj.dj-aurora .dj-glass {
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+}
+.dj.dj-aurora section { box-shadow: inset 0 1px 0 var(--dj-hi), 0 -18px 44px -18px rgba(0, 0, 0, 0.85); }
+.dj.dj-aurora .dj-glass { box-shadow: inset 0 1px 0 var(--dj-hi); }

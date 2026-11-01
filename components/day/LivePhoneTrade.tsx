@@ -6,7 +6,9 @@ import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 export type LiveTradeSide = 'buy' | 'sell';
 
 const PILL_HEIGHT = 48;
-const SELL = '#ef4655';
+// Aurora: sytá skleněná tlačítka s jemnou září.
+const SELL_FILL: React.CSSProperties = { background: 'linear-gradient(180deg, rgba(255,92,108,.95), rgba(222,52,70,.92))', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.35), 0 8px 18px -10px rgba(239,70,85,.9)' };
+const BUY_FILL: React.CSSProperties = { background: 'linear-gradient(180deg, rgba(88,136,255,.95), rgba(40,96,240,.92))', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.35), 0 8px 18px -10px rgba(47,107,255,.9)' };
 const BUY = '#2f6bff';
 
 export const formatLivePrice = (price: number | null) => (
@@ -41,7 +43,7 @@ export function LiveTradePill({ prefs, onPrefs, bid, ask, onQty, onSide }: {
       className="dj-btn dj-pill-side"
       aria-label={kind === 'sell' ? 'Prodat market' : 'Koupit market'}
       onClick={() => { playNativeHapticIfAvailable('medium'); onSide(kind); }}
-      style={{ minWidth: 92, padding: '5px 10px', border: 0, borderRadius: 9, cursor: 'pointer', color: '#fff', background: kind === 'sell' ? SELL : BUY, textAlign: 'center', lineHeight: 1.1 }}
+      style={{ minWidth: 92, padding: '5px 10px', border: 0, borderRadius: 9, cursor: 'pointer', color: '#fff', textAlign: 'center', lineHeight: 1.1, ...(kind === 'sell' ? SELL_FILL : BUY_FILL) }}
     >
       <small style={{ display: 'block', fontSize: 9.5, fontWeight: 800, letterSpacing: '.08em', opacity: 0.82 }}>{kind === 'sell' ? 'PRODAT' : 'KOUPIT'}</small>
       <span className="dj-mono" style={{ fontSize: 14, fontWeight: 700 }}>{formatLivePrice(price)}</span>

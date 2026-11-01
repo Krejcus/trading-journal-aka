@@ -37,6 +37,7 @@ import {
   type Logical,
   type Time,
   type UTCTimestamp,
+  ColorType,
 } from 'lightweight-charts';
 import {
   ChartNoAxesCombined,
@@ -358,6 +359,8 @@ interface CandleKitTradeChartProps {
    * a štítky úrovní na cenové ose bez překryvů, jako TradingView mobile.
    */
   phoneLayout?: boolean;
+  /** Pozadí plátna místo barvy z Nastavení grafu (průsvitné u LIVE Aurora na telefonu). */
+  canvasBackground?: string;
   replaySelecting?: boolean;
   replaySelectionCandles?: MarketCandle[];
   replaySelectionTime?: number | null;
@@ -2223,6 +2226,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   onIndicatorSettingsSaved,
   onIndicatorAppliedToAllPanels,
   phoneLayout = false,
+  canvasBackground,
   hideOhlcLegend = false,
   chartSettingsRequest = 0,
   indicatorSettingsRequest = null,
@@ -5537,7 +5541,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     return {
       ...canvas,
       // Logo TradingView v rohu grafu ne — licence je splněná atribucí v Nastavení.
-      layout: { ...canvas.layout, fontFamily: chartStyle.fontFamily, attributionLogo: false },
+      layout: {
+        ...canvas.layout,
+        ...(canvasBackground ? { background: { type: ColorType.Solid, color: canvasBackground } } : {}),
+        fontFamily: chartStyle.fontFamily,
+        attributionLogo: false,
+      },
       timeScale: {
         ...canvas.timeScale,
         timeVisible: true,
@@ -5562,7 +5571,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         priceFormatter: chartPriceFormatter(symbol.precision, formatNqMnqTickPrice),
       },
     };
-  }, [chartSettings, timeframe]);
+  }, [canvasBackground, chartSettings, timeframe]);
 
   const appliedMarginRightRef = useRef<number | null>(null);
   useEffect(() => {

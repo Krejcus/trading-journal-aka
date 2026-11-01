@@ -655,12 +655,14 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const toolName = pathActive ? DAY_PATH_TOOL : activeTool;
 
   const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px calc(6px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--dj-line)', background: 'var(--dj-card)', flex: 'none', minHeight: 52 };
+  // LIVE na telefonu v tmavém režimu: Aurora (sklo nad barevným polem, graf průsvitný).
+  const aurora = Boolean(live) && isDark;
 
   return createPortal(
-    <div ref={rootRef} className="dj" role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', animation: 'dj-fade .18s ease both' }}>
+    <div ref={rootRef} className={aurora ? 'dj dj-aurora' : 'dj'} role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', animation: 'dj-fade .18s ease both' }}>
       {onSlotsReady && <div ref={slotHeaderRef} data-phone-review-slot="header" style={{ flex: 'none', display: chromeHidden ? 'none' : undefined }} />}
       {live && !chromeHidden && <div style={{ flex: 'none' }}>{live.header}</div>}
-      <div ref={chartAreaRef} style={{ position: 'relative', flex: 1, minHeight: 0, background: isDark ? '#05080f' : '#fff' }}>
+      <div ref={chartAreaRef} style={{ position: 'relative', flex: 1, minHeight: 0, background: aurora ? 'transparent' : isDark ? '#05080f' : '#fff' }}>
       {onSlotsReady && <div ref={slotOverlayRef} style={{ position: 'absolute', inset: 0, zIndex: 26, pointerEvents: 'none' }} />}
       {template.cells.map(cell => {
         const index = cell.panel - 1;
@@ -701,6 +703,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
                 isDark={isDark}
                 compactMode
                 phoneLayout
+                canvasBackground={aurora ? AURORA_CHART_BG : undefined}
                 compactToolbar
                 hideDrawingToolbar
                 hideFocusButton
@@ -890,7 +893,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
       )}
       {!chromeHidden && (
         // Jedna spodní lišta jako v TradingView: posouvá se do strany, zavřít je vždy vpravo.
-        <div style={{ ...bar, gap: 0, padding: '4px 4px calc(4px + env(safe-area-inset-bottom, 0px)) 4px' }}>
+        <div className={aurora ? 'dj-glass' : undefined} style={{ ...bar, gap: 0, padding: '4px 4px calc(4px + env(safe-area-inset-bottom, 0px)) 4px' }}>
           {/* Kolečko rámce je vlevo vždy vidět (jako zavřít vpravo); posouvá se jen střed lišty. */}
           <TimeframeWheel key={split ? `pane${activePane}` : 'pane0'} value={paneTimeframe(split ? activePane : 0)} options={wheelOptions(paneTimeframe(split ? activePane : 0))} onChange={item => setPaneTimeframe(split ? activePane : 0, item)} onTap={() => setIntervalSheet(true)} />
           <span style={{ ...divider, margin: '0 4px 0 0' }} />
@@ -1479,6 +1482,9 @@ function PositionMenuSheet({ drawing, onOrder, onSettings, onRemove, onClose }: 
     </div>
   );
 }
+
+/** Průsvitné plátno grafu v Aurora, ať barevné pole jemně prosvítá (náhled 1. 11.). */
+const AURORA_CHART_BG = 'rgba(8, 10, 22, 0.5)';
 
 const DAY_REPLAY_STEP_LABEL: Record<DayReplayStep, string> = { 1: '1m', 5: '5m', 15: '15m', 30: '30m', 60: '1h' };
 
