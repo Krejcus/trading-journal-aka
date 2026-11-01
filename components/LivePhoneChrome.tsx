@@ -1,15 +1,13 @@
 import React from 'react';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
+import type { LivePhoneCopierChip } from '../lib/livePhoneCopierChip';
 
-export type LivePhoneCopierState = 'on' | 'off' | 'unverified' | 'pending';
-
-const COPIER: Record<LivePhoneCopierState, { label: string; color: string; ring: string }> = {
-  // Zapnutá kopírka: jantarový prstenec (směr Aurora), ne zelená.
-  on: { label: 'Kopírka ZAP', color: '#fbbf24', ring: 'rgba(251,191,36,.45)' },
-  off: { label: 'Kopírka VYP', color: 'var(--dj-muted)', ring: 'var(--dj-line)' },
-  unverified: { label: 'Kopírka neověřená', color: '#fbbf24', ring: 'var(--dj-line)' },
-  pending: { label: 'Kopírka…', color: 'var(--dj-muted)', ring: 'var(--dj-line)' },
+const TONE_COLOR: Record<LivePhoneCopierChip['tone'], string> = {
+  muted: 'var(--dj-muted)',
+  ok: '#34d399',
+  warn: '#fbbf24',
+  danger: '#fb7185',
 };
 
 /**
@@ -18,10 +16,9 @@ const COPIER: Record<LivePhoneCopierState, { label: string; color: string; ring:
  */
 export function LivePhoneHeader({ groupName, copier, onMenu }: {
   groupName: string | null;
-  copier: LivePhoneCopierState;
+  copier: LivePhoneCopierChip;
   onMenu: () => void;
 }) {
-  const state = COPIER[copier];
   const chip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px', borderRadius: 9, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', minWidth: 0 };
   return (
     <div className="dj-glass" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--dj-line)', background: 'var(--dj-card)' }}>
@@ -29,7 +26,8 @@ export function LivePhoneHeader({ groupName, copier, onMenu }: {
         LIVE<ChevronDown size={14} color="var(--dj-muted)" />
       </button>
       {groupName && <span style={{ ...chip, color: 'var(--dj-text)', overflow: 'hidden', textOverflow: 'ellipsis' }}><i style={{ width: 7, height: 7, borderRadius: 7, background: '#818cf8', flex: 'none' }} />{groupName}</span>}
-      <span style={{ ...chip, color: state.color, boxShadow: copier === 'on' ? `0 0 0 2px ${state.ring}` : undefined }}>{state.label}</span>
+      {/* Zapnutá kopírka: jantarový prstenec (směr Aurora), ne zelená. */}
+      <span title={copier.title} style={{ ...chip, color: copier.armed ? '#fbbf24' : TONE_COLOR[copier.tone], boxShadow: copier.armed ? '0 0 0 2px rgba(251,191,36,.45)' : undefined, overflow: 'hidden', textOverflow: 'ellipsis' }}>{copier.label}</span>
     </div>
   );
 }

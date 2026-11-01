@@ -29,6 +29,7 @@ import { assertSameSafetyTarget, createFlattenGroupCoordinator, liveSafetyReceip
 import { ErrorBoundary } from './ErrorBoundary';
 import { syncCopierNativeNotifications } from '../services/nativeCopierNotifications';
 import { LivePhoneHeader, LivePhoneMenu } from './LivePhoneChrome';
+import { livePhoneCopierChip } from '../lib/livePhoneCopierChip';
 import {
   buildNativeLiveWidgetState,
   syncNativeLiveWidgetSnapshot,
@@ -514,7 +515,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const lastAgentRouteRef = useRef<{ transport: 'local' | 'relay'; relayConnectionId: string | null } | null>(restoredAgent?.lastRoute ?? null);
   // Rychlé čtení stavu workeru při otevřeném LIVE grafu + čtení hned po vlastním příkazu.
   const chartOpenRef = useRef(false);
-  chartOpenRef.current = tab === 'chart';
+  // Jen graf na PC kreslí ze stavu workeru; telefonní graf (fáze A) z něj nic
+  // nečte, tak nezrychluje čtení přes relay ani neodebírá budíčky.
+  chartOpenRef.current = chartAvailable && tab === 'chart';
   const statusPollKickRef = useRef<(() => void) | null>(null);
   // Worker po změně u brokera pošle budíček → status hned, ne až při dalším pollu.
   // Jen s otevřeným LIVE grafem (objem čtení relaye, oponentura 30. 10.).
@@ -1738,7 +1741,7 @@ acceptAgentStatus((await executeAgent({
           {phoneChart({
             header: <LivePhoneHeader
               groupName={workerGroup?.name ?? null}
-              copier={!agentStatusResolved ? 'pending' : !(agentStatusFresh && !agentStatusRestored) ? 'unverified' : agentStatus?.controller.armed === true ? 'on' : 'off'}
+              copier={livePhoneCopierChip({ pending: !agentStatusResolved, fresh: agentStatusFresh && !agentStatusRestored, controller: agentStatus?.controller })}
               onMenu={() => setPhoneMenuOpen(true)}
             />,
             overlay: phoneMenuOpen ? <LivePhoneMenu

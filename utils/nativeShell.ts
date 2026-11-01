@@ -145,6 +145,9 @@ export async function saveNativeShellTabs(slots: readonly string[]): Promise<str
   return normalized;
 }
 
+/** Cesta notifikací, která otevře LIVE na přehledu (nouzová lišta), ne na grafu. */
+export const LIVE_OVERVIEW_ROUTE = 'live:overview';
+
 /**
  * Zpřístupní navigaci nativnímu shellu. Vrací cleanup pro `useEffect`.
  * Mimo shell je to no-op, takže běžný web zůstává nedotčený.

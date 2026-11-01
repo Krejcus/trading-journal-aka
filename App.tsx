@@ -206,7 +206,7 @@ import { isSupabaseConfigured, supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
 import { playNativeHapticIfAvailable } from './services/nativeCapabilities';
-import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage, reportNativeShellReview, reportNativeShellReviewCount, type NativeReviewRequest } from './utils/nativeShell';
+import { LIVE_OVERVIEW_ROUTE, isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage, reportNativeShellReview, reportNativeShellReviewCount, type NativeReviewRequest } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 import {
   initializeNativeRemoteNotifications,
@@ -1549,6 +1549,13 @@ const App: React.FC = () => {
           setReview(null);
           if (page === 'native-system') {
             window.dispatchEvent(new Event('alphatrade:open-native-system'));
+            return;
+          }
+          // `live:overview` (rizikové notifikace): LIVE rovnou na přehledu s nouzovou
+          // lištou, ne na telefonním grafu (INV-UI-02).
+          if (page === LIVE_OVERVIEW_ROUTE) {
+            setRequestedLiveTab('overview');
+            nativeActions.current.navigate('live');
             return;
           }
           nativeActions.current.navigate(page);
