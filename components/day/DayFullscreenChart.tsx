@@ -101,7 +101,16 @@ export interface PhoneChartSource {
   onReplayCursor?: (cursorTime: number | null) => void;
 }
 
-export interface LiveChartInfo { lastPrice: number | null }
+export interface LiveChartInfo {
+  lastPrice: number | null;
+  /** Hlavní panel grafu (čáry příkazů, upozornění, plusko, šipky plnění); null do připojení. */
+  api: ChartViewApi | null;
+  /** Zobrazené svíčky hlavního panelu a jejich délka (šipky plnění na svíčce). */
+  candles: readonly MarketCandle[];
+  intervalSeconds: number;
+  /** Přehrávání běží — živé vrstvy se schovají. */
+  replay: boolean;
+}
 
 export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onTimeframe, range, focusKeyPrefix, selectedTrade, pins = [], bubbles = 'selected', placing = null, onPick = () => {}, onCancelPlacing = () => {}, pending = null, nowTime = null, bands = [], onClose, onVoice = () => {}, live }: {
   /** Deník dne: poznámky, seance, mikrofon. Bez něj je to obecný telefonní graf (`source`). */
@@ -663,7 +672,10 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     live?.onPositionOrder?.(drawing, liveInfo);
   };
   // Při přehrávání by poslední svíčka byla historická cena — lišta a objednávka ji nesmí ukázat.
-  const liveInfo: LiveChartInfo = { lastPrice: !replayOn && candles.length ? candles[candles.length - 1].close : null };
+  const liveInfo: LiveChartInfo = {
+    lastPrice: !replayOn && candles.length ? candles[candles.length - 1].close : null,
+    api, candles, intervalSeconds: timeframeMinutes(timeframe) * 60, replay: replayOn,
+  };
   const settingsDrawing = settingsFor && engine ? engine.getById(settingsFor) ?? null : null;
   const removeSelected = () => {
     if (!engine) return;

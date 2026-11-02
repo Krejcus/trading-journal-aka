@@ -1,6 +1,6 @@
 import type { LiveEntryPreviewDraft } from './leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from './leaderEntryPlace';
-import type { LeaderOrderManageResult } from './leaderOrderManage';
+import type { LeaderOrderManageAction, LeaderOrderManageResult } from './leaderOrderManage';
 import { snapToTick, ticketQuantity, type TicketDraft, type TicketInstrument } from './liveOrderTicket';
 
 /**
@@ -27,6 +27,15 @@ export interface LivePhoneTradeBridge {
   attach: (input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number }) => Promise<LeaderOrderManageResult>;
   /** Flatten celé manual-only skupiny (jediný DEMO účet) safety cestou; vrací text výsledku. */
   flatten: () => Promise<string>;
+  /**
+   * Správa obchodu leadera z čar v grafu (posun SL/TP, BE, × zavřít/zrušit) — stejná
+   * cesta jako PC `onManageEntry`. Zatím nenapojeno: bez ní jsou čáry jen zobrazení.
+   */
+  manage?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+  /** × u pozice: worker umí zavřít a kopírka je čerstvě zapnutá (ne shadow) — jako PC. */
+  closeSupported?: boolean;
+  /** Průměrný vstup leadera od workeru (BE). */
+  entryAvg?: number | null;
 }
 
 /** Lišta nad grafem: otevřená pozice, nebo jen čekající vstup (`pending` — zatím žádná pozice). */

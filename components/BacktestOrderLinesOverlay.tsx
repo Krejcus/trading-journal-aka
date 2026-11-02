@@ -20,6 +20,12 @@ interface Props {
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
     price?: number,
   ) => void;
+  /**
+   * Telefon: čára se nejdřív klepnutím vybere (jemné zvýraznění), táhnout jde až
+   * vybranou — tah prstem přes graf ji tak omylem neposune. Tažení navíc drží
+   * v ploše grafu (cena za okrajem by s prstem „ujela“).
+   */
+  selectToDrag?: boolean;
 }
 
 const sameCoordinates = (left: Record<string, number>, right: Record<string, number>) => {
@@ -37,8 +43,9 @@ const OrderLineBadge: React.FC<{
   color: string;
   isDark: boolean;
   labelMode: ChartOrderLineLabels;
+  selected?: boolean;
   children?: React.ReactNode;
-}> = ({ label, kind, color, isDark, labelMode, children }) => {
+}> = ({ label, kind, color, isDark, labelMode, selected = false, children }) => {
   const parts = orderLineLabelParts(label);
   const muted = isDark ? '#8391a7' : '#64748b';
   const showPoints = kind === 'entry' || labelMode === 'points-pnl';
@@ -46,9 +53,9 @@ const OrderLineBadge: React.FC<{
     <div
       className="flex h-[19px] items-center gap-[7px] whitespace-nowrap rounded-[4px] border pl-[7px] pr-[2px] text-[10.5px] font-medium backdrop-blur-md backdrop-saturate-150"
       style={{
-        borderColor: `${color}61`,
+        borderColor: selected ? color : `${color}61`,
         backgroundColor: isDark ? 'rgba(13, 18, 26, 0.86)' : 'rgba(255, 255, 255, 0.9)',
-        boxShadow: `0 4px 12px -8px ${color}bf, inset 0 1px 0 rgba(255, 255, 255, ${isDark ? 0.06 : 0.5})`,
+        boxShadow: `${selected ? `0 0 0 2px ${color}40, ` : ''}0 4px 12px -8px ${color}bf, inset 0 1px 0 rgba(255, 255, 255, ${isDark ? 0.06 : 0.5})`,
         color: isDark ? '#e2e8f0' : '#0f172a',
       }}
       data-order-line-badge
@@ -65,7 +72,21 @@ const OrderLineBadge: React.FC<{
 
 const CONFIRM_MS = 4_000;
 
-const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onAddBracket }) => {
+const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onAddBracket, selectToDrag = false }) => {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Klepnutí mimo vybraný štítek výběr zruší (jen telefonní režim).
+  useEffect(() => {
+    if (!selectToDrag || !selectedId) return undefined;
+    const clear = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (!target?.closest?.(`[data-order-line-wrap="${selectedId}"]`)) setSelectedId(null);
+    };
+    window.addEventListener('pointerdown', clear, true);
+    return () => window.removeEventListener('pointerdown', clear, true);
+  }, [selectToDrag, selectedId]);
+  useEffect(() => {
+    if (selectedId && !lines.some(line => line.id === selectedId && line.draggable)) setSelectedId(null);
+  }, [lines, selectedId]);
   // Dvoukrokové potvrzení živých akcí (× / BE): první klik „Opravdu?“, druhý do 4 s odešle.
   // window.confirm prohlížeč v appce potichu blokuje (29. 10.).
   const [confirming, setConfirming] = useState<{ key: string; until: number } | null>(null);
@@ -177,7 +198,11 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
       const line = linesRef.current.find(item => item.id === dragging.id);
       if (!line) return;
       if (!dragging.moved && dragging.startY !== undefined && Math.abs(event.clientY - dragging.startY) < (line.dragDeadZonePx ?? 0)) return;
-      const raw = api.controller.getSeries().coordinateToPrice(event.clientY - root.getBoundingClientRect().top);
+      const rect = root.getBoundingClientRect();
+      const rawY = event.clientY - rect.top;
+      // Telefon: cena jen z viditelné plochy grafu (nad osou času).
+      const y = selectToDrag ? Math.max(6, Math.min(rect.height - api.controller.getChart().timeScale().height() - 6, rawY)) : rawY;
+      const raw = api.controller.getSeries().coordinateToPrice(y);
       if (raw === null || !Number.isFinite(raw)) return;
       const snapped = Math.round(raw / 0.25) * 0.25;
       const top = api.controller.getSeries().priceToCoordinate(snapped);
@@ -218,7 +243,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
       window.removeEventListener('pointerup', stop, true);
       window.removeEventListener('pointercancel', cancel, true);
     };
-  }, [api, onAddBracket, onChange]);
+  }, [api, onAddBracket, onChange, selectToDrag]);
 
   return (
     <div ref={rootRef} className="pointer-events-none absolute inset-0 z-[115] overflow-hidden" data-backtest-order-lines>
@@ -277,10 +302,12 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
               aria-label={line.draggable ? `Posunout ${line.label} ${line.price.toFixed(2)}` : undefined}
               tabIndex={line.draggable ? 0 : undefined}
               className={`pointer-events-auto absolute right-1 top-0 flex h-[19px] -translate-y-1/2 items-center gap-[4px] ${line.draggable ? 'cursor-ns-resize' : 'cursor-default'}`}
+              data-order-line-wrap={line.id}
               onPointerDown={event => {
                 if (!line.draggable || (event.target as HTMLElement).closest('[data-order-line-control]')) return;
                 event.preventDefault();
                 event.stopPropagation();
+                if (selectToDrag && selectedId !== line.id) { setSelectedId(line.id); return; }
                 dragRef.current = { id: line.id, startY: event.clientY, startLine: line };
                 if (line.kind !== 'entry') {
                   const anchor = linesRef.current.find(item =>
@@ -325,6 +352,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                 color={line.color}
                 isDark={isDark}
                 labelMode={labelMode}
+                selected={selectToDrag && selectedId === line.id}
               >
                 {line.actions?.map(action => (
                   <button

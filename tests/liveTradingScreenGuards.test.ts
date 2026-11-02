@@ -65,7 +65,10 @@ describe('LIVE → Graf: DISARM je vždy dosažitelný (INV-UI-02)', () => {
       'chartLive.status',
       'chartLive.status',
       'chartLive.status?.controller.recentCopyEvents',
+      // Telefonní graf (2. 11.): stejné události jen do karet vlevo dole, za běžícího runtime.
+      'chartLive.status?.controller.recentCopyEvents',
     ].sort());
+    expect(desk).toMatch(/copyEvents: runtimeAvailable \? chartLive\.status\?\.controller\.recentCopyEvents : undefined,/);
     expect(desk).toMatch(/agentStatus: chartLive\.status,/);
     expect(desk).toMatch(/copyEvents=\{chartLive\.status\?\.controller\.recentCopyEvents\}/);
     expect(desk).toMatch(/manageEntryAvgPrice=\{chartLive\.status === agentStatus \? /);

@@ -240,3 +240,5 @@ html:not(.light-theme) .dj-wheel-card {
 .dj.dj-aurora section { box-shadow: inset 0 1px 0 var(--dj-hi), 0 -18px 44px -18px rgba(0, 0, 0, 0.85); }
 .dj.dj-aurora .dj-glass { box-shadow: inset 0 1px 0 var(--dj-hi); }
 
+
+@keyframes dj-alert-flash { 0%, 100% { opacity: 1; filter: none; } 50% { opacity: .35; filter: brightness(1.8) drop-shadow(0 0 4px currentColor); } }

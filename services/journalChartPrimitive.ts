@@ -56,7 +56,11 @@ export interface JournalChartOptions {
 }
 
 /** Journal primitiv; `highlight` spustí zvýraznění šipek i po připojení (review: hned při kliknutí). */
-export type JournalChartPrimitive = ISeriesPrimitive<Time> & { highlight: (ms: number) => void };
+export type JournalChartPrimitive = ISeriesPrimitive<Time> & {
+  highlight: (ms: number) => void;
+  /** Telefon: klepnutí na bod grafu (souřadnice panelu) jako najetí kurzorem; null = nic nevybrané. */
+  hoverAt: (point: { x: number; y: number } | null) => void;
+};
 
 type StackedArrow = { candle: number | null; buy: boolean };
 export interface JournalArrowStacks {
@@ -510,6 +514,7 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
       params.requestUpdate();
     },
     highlight,
+    hoverAt: point => onCrosshair({ point: point ?? undefined }),
     detached: () => {
       chart.unsubscribeCrosshairMove?.(onCrosshair);
       if (frame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);

@@ -185,7 +185,7 @@ interface TradovateLiveDeskProps {
    * App). Desktop má vlastní LIVE graf a tohle nepoužije.
    */
   /** Telefon: `header(group)` = hlavička s P&L skupiny místo názvu; `position` = stejný read model jako PC graf (jen zobrazení); `trade` = obchodování přes relay. */
-  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null }) => React.ReactNode;
+  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null; copyEvents?: LocalCopierAgentStatus['controller']['recentCopyEvents']; copierArmed?: boolean }) => React.ReactNode;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -1826,6 +1826,9 @@ acceptAgentStatus((await executeAgent({
               onClose={() => setPhoneMenuOpen(false)}
             /> : null,
             position: chartData.position,
+            // Karty obchodů vlevo dole jako na PC (stejné události z čerstvého stavu workeru).
+            copyEvents: runtimeAvailable ? chartLive.status?.controller.recentCopyEvents : undefined,
+            copierArmed: runtimeAvailable && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode !== true,
             onLeave: () => navigateToTab('overview'),
             trade: phoneTrade,
           })}

@@ -54,8 +54,23 @@ const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boo
   );
 };
 
-const LiveTradeToasts: React.FC<{ events: readonly CopierCopyEvent[] | undefined; copierArmed: boolean; isDark: boolean }> = ({ events, copierArmed, isDark }) => {
+const LiveTradeToasts: React.FC<{
+  events: readonly CopierCopyEvent[] | undefined;
+  copierArmed: boolean;
+  isDark: boolean;
+  /** Telefon: vlastní umístění (nad obchodní lištou); jinak vlevo dole v grafu PC. */
+  placement?: React.CSSProperties;
+  /** Karty, které nevznikly z událostí kopírky (upozornění na cenu, posun upozornění). */
+  extra?: readonly TradeToast[];
+}> = ({ events, copierArmed, isDark, placement, extra }) => {
   const [toasts, setToasts] = useState<TradeToast[]>([]);
+  const extraSeenRef = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh = (extra ?? []).filter(toast => !extraSeenRef.current.has(toast.id));
+    if (!fresh.length) return;
+    for (const toast of fresh) extraSeenRef.current.add(toast.id);
+    setToasts(current => [...current, ...fresh].slice(-TRADE_TOAST_MAX));
+  }, [extra]);
   const seenRef = useRef<Set<string> | null>(null);
   useEffect(() => {
     if (!events) return;
@@ -71,7 +86,7 @@ const LiveTradeToasts: React.FC<{ events: readonly CopierCopyEvent[] | undefined
   const dismiss = useCallback((id: string) => setToasts(current => current.filter(item => item.id !== id)), []);
   if (toasts.length === 0) return null;
   return (
-    <div className="pointer-events-none absolute bottom-9 left-2 z-[640] flex flex-col gap-2" aria-live="polite">
+    <div className={`pointer-events-none absolute ${placement ? '' : 'bottom-9 left-2 '}z-[640] flex flex-col gap-2`} style={placement} aria-live="polite">
       {toasts.map(toast => (
         <ToastCard key={toast.id} toast={toast} isDark={isDark} copierArmed={copierArmed} onDismiss={dismiss} />
       ))}
