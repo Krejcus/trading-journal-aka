@@ -288,7 +288,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-02 — LIVE telefon: data do nového UI — správa z čar, šipky plnění, upozornění na cenu (Claude, větev `claude/phone-live-data-20261102`, NEnasazeno)
+### 2026-11-02 večer — rollout dat LIVE telefonu (Claude, NASAZENO: DB + web + worker + iPhone)
+
+- Filip: „udělej to vše za mě“ (není u PC). Nasazen `5f181808` (23 oprav nezávislé revize nad
+  `a5fe153d`; verze `a5fe153d` zastavena dřív, než cokoli šlo ven) rebasovaný na main → `339c0fc5`.
+- Brána z čistého release worktree `~/alphatrade-worktrees/release-20261102-phone-data` za DISARMED:
+  plná sada 6607/6607 (jednou flaky `macCopierCommandRelay` „budíček statusu“ 249 < 250 ms pod zátěží,
+  samostatně 5/5, druhý plný běh zelený), tsc 0, build OK.
+- DB: migrace `20261102140000_price_alerts.sql` přes `db query -f` + `migration repair` (z release
+  worktree se zkopírovaným `supabase/.temp`); ověřeno 4 tabulky s RLS, 3 funkce, realtime publikace
+  `price_alerts`, `price_alert_defaults`, `price_alert_events`. Vrácení: `rollback-price-alerts.sql`
+  ve scratchpadu session c1f7de63.
+- Web: fast-forward push `36e3f97b..339c0fc5` na main (Vercel auto-deploy).
+- Worker: manual-only DEMO (`--leader 61038658 --manual-only true --manual-entry-max-contracts 5`,
+  bez followerů — `mac-reinstall-safe.sh` tenhle tvar neumí, proto ruční install se stejnými branami:
+  armed=false, čistý stav, čistý strom, nainstalovaný 8652e136 je předek) s `--adopt-durable-group
+  --tv-stream on --price-source ibkr --price-alerts on`. Po startu `339c0fc5`, DISARMED, connected,
+  reconciliationRequired=false, flat, bez chyb; log „hlídání upozornění na cenu povoleno“; status nese
+  `leaderFills`.
+- iPhone: čistá instalace z release worktree (uninstall smaže lokální frontu staré verze).
+- Otevřené: `mac-reinstall-safe.sh` neumí manual-only tvar (bez `--followers`); ověřit prstem
+  upozornění (založení, spuštění, notifikace, hlas) a šipky při příštím obchodu.
+
+### 2026-11-02 — LIVE telefon: data do nového UI — správa z čar, šipky plnění, upozornění na cenu (Claude, větev `claude/phone-live-data-20261102`, nasazeno 2. 11. večer jako 339c0fc5)
 
 - Proč: Filip — „Napoj data na nové UI LIVE grafu v iPhone appce“ (UI z `claude/phone-live-ui-20261101`).
   Návrh i diff přes `copier-design-critic` ve 4 kolech: návrh úkolu 3 nejdřív BLOKUJE (cena IBKR
