@@ -433,7 +433,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     // Market bere cenu grafu jako strop ceny příkazu — jen čerstvou (oponentura 2d/C).
     : draft.type === 'market' && !entryMarketSupported ? 'Worker zatím neumí nativní Market — použij Limit.'
     : draft.type === 'market' && (quoteInfo.capturedAt == null || Date.now() - quoteInfo.capturedAt > MARKET_QUOTE_MAX_AGE_MS) ? 'Cena grafu je starší než 3 s — Market teď nejde (zkus Limit).'
-    : m && m.quantity > entryMaxContracts ? `Ruční vstup je omezený na ${entryMaxContracts} ${entryMaxContracts === 1 ? 'kontrakt' : 'kontrakty'} (strop skupiny).`
+    : m && m.quantity > entryMaxContracts ? `Ruční vstup je omezený na ${entryMaxContracts} ${entryMaxContracts === 1 ? 'kontrakt' : entryMaxContracts < 5 ? 'kontrakty' : 'kontraktů'} (strop skupiny).`
       : draft.stopLoss == null || draft.takeProfit == null ? 'Náhled potřebuje SL i TP.'
         : single ? 'Náhled zatím jen pro skupinu (vstup na leadera).'
           : problems.some(problem => problem.level === 'error') ? 'Nejdřív oprav chyby v panelu.' : null;
@@ -672,11 +672,11 @@ const LiveOrderTicket: React.FC<Props> = ({
                 : <><b className={`font-mono ${tone.ink}`}>{formatPoints(draft.price - marketPrice(draft.side, quote))}</b> {draft.price < marketPrice(draft.side, quote) ? 'pod' : 'nad'} trhem</>}</span>
             </div>
             <div className={`flex h-[34px] items-center rounded-[9px] border ${tone.field}`}>
-              <button type="button" disabled={draft.type === 'market'} onClick={() => onDraft(withEntryPrice(draft, draft.price - instrument.tickSize, instrument))} className={`h-full w-8 text-[15px] disabled:opacity-30 ${tone.muted}`}>−</button>
+              <button type="button" disabled={draft.type === 'market'} onClick={() => onDraft(withEntryPrice(draft, draft.price - instrument.tickSize, instrument, true))} className={`h-full w-8 text-[15px] disabled:opacity-30 ${tone.muted}`}>−</button>
               {draft.type === 'market'
                 ? <span className={`flex-1 text-center font-mono text-[13px] ${tone.muted}`}>Market</span>
-                : <NumberField ariaLabel="Cena" value={draft.price} format={value => value.toFixed(2)} onCommit={value => onDraft(withEntryPrice(draft, value, instrument))} className={`min-w-0 flex-1 bg-transparent text-center font-mono text-[13px] outline-none ${tone.ink}`} />}
-              <button type="button" disabled={draft.type === 'market'} onClick={() => onDraft(withEntryPrice(draft, draft.price + instrument.tickSize, instrument))} className={`h-full w-8 text-[15px] disabled:opacity-30 ${tone.muted}`}>+</button>
+                : <NumberField ariaLabel="Cena" value={draft.price} format={value => value.toFixed(2)} onCommit={value => onDraft(withEntryPrice(draft, value, instrument, true))} className={`min-w-0 flex-1 bg-transparent text-center font-mono text-[13px] outline-none ${tone.ink}`} />}
+              <button type="button" disabled={draft.type === 'market'} onClick={() => onDraft(withEntryPrice(draft, draft.price + instrument.tickSize, instrument, true))} className={`h-full w-8 text-[15px] disabled:opacity-30 ${tone.muted}`}>+</button>
             </div>
           </div>
 

@@ -20,4 +20,13 @@ describe('pravý klik / + v LIVE grafu: typ podle živé kotace', () => {
     expect(draft.stopLoss).not.toBeNull();
     expect(draft.takeProfit).not.toBeNull();
   });
+
+  it('změna ceny vstupu v panelu drží vzdálenosti SL/TP', async () => {
+    const { withEntryPrice } = await import('../lib/liveOrderTicket');
+    const draft = newTicketDraft('buy', 'limit', 25_000, instrument, quote);
+    const moved = withEntryPrice(draft, 24_850, instrument, true);
+    expect(moved.price).toBe(24_850);
+    expect(moved.stopLoss! - moved.price).toBe(draft.stopLoss! - draft.price);
+    expect(moved.takeProfit! - moved.price).toBe(draft.takeProfit! - draft.price);
+  });
 });
