@@ -950,8 +950,8 @@ existující ochranu.
   aktuální nečinnou delivery této session a s offsetem hodin z pollu ≤ 60 s; jinak
   poll (vrátí tentýž řádek). Dál jde stejným automatem (INV-RELAY-02). Prohlížeč
   `relayIdle` nedostane. Tajemství: `COPIER_PUSH_SIGNING_SECRET` (≥ 32 znaků), když je
-  nastavené, jinak společné `TV_PRICE_CHANNEL_SECRET` (2. 11. 2026: kód připraven, proměnná
-  zatím nenastavená — změna secrets čeká na souhlas). Výměnu worker převezme z pollu sám. Ověřený push pro aktuální
+  nastavené, jinak společné `TV_PRICE_CHANNEL_SECRET` (nastaveno v Production 2. 11. 2026 10:38
+  se souhlasem Filipa; ověřeno na DEMO: vstup i zavření `via=push`). Výměnu worker převezme z pollu sám. Ověřený push pro aktuální
   nečinnou delivery smí přerušit právě běžící poll (nejvýš jedno ověření za poll; podvrh ani
   starý push nikdy) — přerušení není selhání a poll se stejným id vrátí tentýž řádek. Server
   čte `relayIdle` souběžně s admission (použije jen při shodě zařízení). Testy:
