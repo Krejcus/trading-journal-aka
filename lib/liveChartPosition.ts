@@ -51,6 +51,12 @@ export interface LiveChartPositionAccountRow {
   target: number | null;
   /** SL i TP kryjí celou pozici účtu. */
   protectedFully: boolean;
+  /** Výsledek na SL / TP v USD po poplatcích (jen při přesném krytí); null = neznámo. */
+  stopUsd: number | null;
+  targetUsd: number | null;
+  /** Poplatky celé pozice a čas kotvy P&L — podklad živého P&L s cenou trhu (jen zobrazení). */
+  fees: number | null;
+  openPnlAsOf: string | null;
 }
 
 export interface LiveChartPosition {
@@ -167,6 +173,10 @@ export function liveChartPosition(view: JournalLiveView, requested: JournalLiveT
       stop: account.stop?.price ?? null,
       target: account.target?.price ?? null,
       protectedFully: account.stop?.exact === true && account.target?.exact === true,
+      stopUsd: account.stop?.usd ?? null,
+      targetUsd: account.target?.usd ?? null,
+      fees: account.fees,
+      openPnlAsOf: model.kind === 'position' ? account.openPnlAsOf : null,
     })),
   };
   const lines = journalLivePriceLines(model);

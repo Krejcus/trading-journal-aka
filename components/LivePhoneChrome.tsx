@@ -15,10 +15,12 @@ const TONE_COLOR: Record<LivePhoneCopierChip['tone'], string> = {
  * Hlavička LIVE nad telefonním grafem: „LIVE ▾“ otevře menu záložek, vedle
  * skupina a stav kopírky. Jen zobrazení (INV-UI-01/03) — nic neodesílá.
  */
-export function LivePhoneHeader({ groupName, copier, onMenu }: {
+export function LivePhoneHeader({ groupName, copier, onMenu, group }: {
   groupName: string | null;
   copier: LivePhoneCopierChip;
   onMenu: () => void;
+  /** P&L skupiny v obchodě (varianta A) — místo názvu skupiny; jen zobrazení. */
+  group?: React.ReactNode;
 }) {
   const chip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px', borderRadius: 9, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', minWidth: 0 };
   return (
@@ -26,7 +28,7 @@ export function LivePhoneHeader({ groupName, copier, onMenu }: {
       <button type="button" className="dj-btn" aria-label="LIVE menu" onClick={onMenu} style={{ ...chip, height: 32, padding: '0 10px 0 12px', color: '#a5b4fc', fontWeight: 900, letterSpacing: '.06em', cursor: 'pointer' }}>
         LIVE<ChevronDown size={14} color="var(--dj-muted)" />
       </button>
-      {groupName && <span style={{ ...chip, color: 'var(--dj-text)', overflow: 'hidden', textOverflow: 'ellipsis' }}><i style={{ width: 7, height: 7, borderRadius: 7, background: '#818cf8', flex: 'none' }} />{groupName}</span>}
+      {group ?? (groupName && <span style={{ ...chip, color: 'var(--dj-text)', overflow: 'hidden', textOverflow: 'ellipsis' }}><i style={{ width: 7, height: 7, borderRadius: 7, background: '#818cf8', flex: 'none' }} />{groupName}</span>)}
       {/* Zapnutá kopírka: jantarový prstenec (směr Aurora), ne zelená. */}
       <span title={copier.title} style={{ ...chip, color: copier.armed ? '#fbbf24' : TONE_COLOR[copier.tone], boxShadow: copier.armed ? '0 0 0 2px rgba(251,191,36,.45)' : undefined, overflow: 'hidden', textOverflow: 'ellipsis' }}>{copier.label}</span>
     </div>

@@ -1,4 +1,6 @@
 import type { TicketDraft, TicketInstrument } from './liveOrderTicket';
+import type { LiveChartPosition, LiveChartPositionAccountRow } from './liveChartPosition';
+import type { TvLivePnlLeg } from './tvLivePnl';
 
 /**
  * Obchodní lišta na telefonním LIVE grafu (Prodat · množství · Koupit):
@@ -78,4 +80,52 @@ export function draftSummary(draft: TicketDraft): string {
   const tp = draft.takeProfit == null ? '' : ` · TP ${draft.takeProfit.toFixed(2)}`;
   const sl = draft.stopLoss == null ? '' : ` · SL ${draft.stopLoss.toFixed(2)}`;
   return `${side} ${draft.quantity} ${type}${at}${tp}${sl}`;
+}
+
+/** „1 účet / 3 účty / 5 účtů“. */
+export function accountsLabel(count: number): string {
+  return `${count} ${count === 1 ? 'účet' : count >= 2 && count <= 4 ? 'účty' : 'účtů'}`;
+}
+
+/** Kořen kontraktu pro popisek (`MNQZ6` → `MNQ`). */
+export const contractRoot = (symbol: string | null) => (symbol ?? '').trim().toUpperCase().replace(/[FGHJKMNQUVXZ]\d{1,2}$/, '');
+
+const entryTypeLabel = (type: string | null) => {
+  const key = (type ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  return key === 'limit' ? 'Limit' : key === 'stop' ? 'Stop' : key === 'stoplimit' ? 'Stop Limit' : (type ?? '');
+};
+
+/**
+ * Horní řádek tlačítka skupiny v hlavičce LIVE grafu (varianta A, 1. 11.):
+ * „MNQ · Long 2 · 3 účty“ / „MNQ · Buy Limit 2 · 3 účty“. Jen zobrazení.
+ */
+export function livePhoneGroupLine(position: Pick<LiveChartPosition, 'symbol' | 'summary'>): string | null {
+  const summary = position.summary;
+  if (!summary) return null;
+  const long = summary.side === 'long';
+  const what = summary.kind === 'position'
+    ? `${long ? 'Long' : 'Short'} ${summary.quantity}`
+    : `${long ? 'Buy' : 'Sell'} ${entryTypeLabel(summary.entryType)} ${summary.quantity}`.replace(/\s+/g, ' ');
+  return [contractRoot(position.symbol) || null, what, summary.scopeLabel ?? accountsLabel(summary.accounts)].filter(Boolean).join(' · ');
+}
+
+/**
+ * Nohy živého P&L (kotva brokera + pohyb ceny trhu) pro řádky účtů — stejné
+ * jako `tradeCardTvLegs` u karty obchodu. Jen zobrazení (INV-UI-04); chybí-li
+ * u kteréhokoli účtu kotva, vstup nebo kusy, `null` = jen kotva brokera.
+ */
+export function livePhoneTvLegs(
+  position: Pick<LiveChartPosition, 'symbol' | 'summary'>,
+  rows: readonly LiveChartPositionAccountRow[] | undefined = position.summary?.rows,
+): TvLivePnlLeg[] | null {
+  const summary = position.summary;
+  if (!position.symbol || !summary || summary.kind !== 'position' || !rows || rows.length === 0) return null;
+  const direction = summary.side === 'long' ? 1 : -1;
+  const legs: TvLivePnlLeg[] = [];
+  for (const row of rows) {
+    const anchorAt = Date.parse(row.openPnlAsOf ?? '');
+    if (row.openPnl == null || row.entry == null || row.quantity <= 0 || !Number.isFinite(anchorAt)) return null;
+    legs.push({ symbol: position.symbol, netPosition: row.quantity * direction, averagePrice: row.entry, grossPnl: row.openPnl + (row.fees ?? 0), anchorAt });
+  }
+  return legs;
 }

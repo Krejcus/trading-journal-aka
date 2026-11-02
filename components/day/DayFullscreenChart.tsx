@@ -45,6 +45,8 @@ import DayTouchDrawLayer from './DayTouchDrawLayer';
 import { dayAnchorTrade, focusTarget, reviewFocusKey, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../../hooks/useLiveCandleBinding';
+import { useLivePriceLinesBinding } from '../../hooks/useLivePriceLinesBinding';
+import type { LivePriceLinesFeed } from '../../lib/livePriceLinesFeed';
 import { TIMEFRAME_FAVORITES_EVENT, readTimeframeFavorites, timeframeTitle } from '../ChartTimeframePicker';
 import SheetGrip from './SheetGrip';
 import { ChartShotCard, ChartShotFlash, composeChartShot, takeChartShot, type ChartShot } from './ChartShot';
@@ -138,6 +140,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     symbol?: string;
     /** ⚡ / „Vytvořit limitní objednávku…“ u position toolu — jen otevře návrh. */
     onPositionOrder?: (drawing: PositionDrawing, info: LiveChartInfo) => void;
+    /** Čáry živé pozice (vstup, SL, TP) z read modelu — jen zobrazení, mimo přehrávání. */
+    priceLines?: LivePriceLinesFeed;
   };
 }) {
   // Jednotný zdroj: deník dne z controlleru, jinde ze `source`.
@@ -407,6 +411,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     api: paneApi(index), root: 'MNQ', timeframe: paneTimeframe(index), rawCandles: paneLiveRaw[index] ?? raw,
   }));
   useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets);
+  useLivePriceLinesBinding(live?.priceLines && !replayOn ? live.priceLines : null, liveCandleTargets.map(target => ({ api: target.api, root: 'MNQ' })));
   // Přehrávání: rozpracovaný bar vyššího timeframu i s historií (z celé řady — mění se jen s daty).
   const fullRawWithHistory = useMemo(
     () => shownTimeframes.map(paneTf => withHtfHistory(completeWithBridge, htfHistory, paneTf)),

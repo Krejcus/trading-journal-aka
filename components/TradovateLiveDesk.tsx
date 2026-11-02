@@ -136,7 +136,7 @@ import {
 import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryMarket, supportsCopierManualOrderClose, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
-import { leaderManageBasis } from '../lib/liveChartPosition';
+import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
 import {
@@ -184,7 +184,8 @@ interface TradovateLiveDeskProps {
    * Telefon a nativní appka: LIVE → Graf = graf dneška z deníku (data dodá
    * App). Desktop má vlastní LIVE graf a tohle nepoužije.
    */
-  phoneChart?: (slots: { header: React.ReactNode; overlay?: React.ReactNode; onLeave: () => void; trade?: LivePhoneTradeBridge | null }) => React.ReactNode;
+  /** Telefon: `header(group)` = hlavička s P&L skupiny místo názvu; `position` = stejný read model jako PC graf (jen zobrazení); `trade` = obchodování přes relay. */
+  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null }) => React.ReactNode;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -1035,7 +1036,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     ? mergeCopierLiveExposure(agentStatus, agentStatusObservedAt, liveExposure)
     : { status: agentStatus, exposureObservedAt: agentStatusObservedAt }), [agentStatus, agentStatusObservedAt, agentStatusFresh, agentStatusRestored, liveExposure]);
   const chartData = useLiveChartData({
-    // Telefonní graf (2. 11.) potřebuje stejnou pozici leadera pro lištu a „Přidat SL/TP“.
+    // Telefonní graf (2. 11.) potřebuje stejnou pozici leadera pro lištu, „Přidat SL/TP“ a P&L
+    // skupiny v hlavičce; tempo čtení se tím nemění (`chartOpenRef`).
     enabled: (chartAvailable || phoneChartAvailable) && tab === 'chart',
     data: live.data,
     profiles: live.profiles,
@@ -1803,8 +1805,9 @@ acceptAgentStatus((await executeAgent({
       ) : phoneChartAvailable && tab === 'chart' && phoneChart ? (
         <ErrorBoundary name="LivePhoneChart" onError={rememberLiveChartCrash} fallback={<LiveSlotFailure label="LIVE graf" />}>
           {phoneChart({
-            header: <LivePhoneHeader
+            header: group => <LivePhoneHeader
               groupName={workerGroup?.name ?? null}
+              group={group}
               copier={livePhoneCopierChip({
                 pending: !agentStatusResolved,
                 fresh: agentStatusFresh && !agentStatusRestored,
@@ -1822,6 +1825,7 @@ acceptAgentStatus((await executeAgent({
               onPick={id => { setPhoneMenuOpen(false); navigateToTab(id); }}
               onClose={() => setPhoneMenuOpen(false)}
             /> : null,
+            position: chartData.position,
             onLeave: () => navigateToTab('overview'),
             trade: phoneTrade,
           })}

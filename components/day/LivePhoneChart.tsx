@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionConfig, Trade } from '../../types';
 import DayFullscreenChart from './DayFullscreenChart';
 import { useDayController } from './useDayController';
@@ -18,15 +18,20 @@ import {
   type LivePhoneQuote, type LivePhoneTradeBridge,
 } from '../../lib/livePhoneOrders';
 import type { LiveEntryPreviewDraft } from '../../lib/leaderEntryPreview';
+import { LivePhoneAccountsSheet, LivePhoneGroupPnl } from './LivePhoneAccounts';
+import type { LiveChartPosition } from '../../lib/liveChartPosition';
+import { createLivePriceLinesFeed } from '../../lib/livePriceLinesFeed';
 import './dayJournal.css';
 
 export interface LivePhoneChartSlots {
-  /** LIVE hlavička nad grafem (LIVE ▾, skupina, stav kopírky). */
-  header: React.ReactNode;
+  /** LIVE hlavička nad grafem (LIVE ▾, skupina, stav kopírky); `group` = P&L skupiny místo názvu. */
+  header: (group?: React.ReactNode) => React.ReactNode;
   /** Vrstvy LIVE nad grafem (menu záložek). */
   overlay?: React.ReactNode;
   /** Obchodování z telefonu (2. 11. 2026): stejný relay jako PC; null = jen zobrazení. */
   trade?: LivePhoneTradeBridge | null;
+  /** Živá pozice a účty skupiny — stejný read model jako PC graf, jen zobrazení. */
+  position: LiveChartPosition;
 }
 
 /** Market jen s cenou kanálu mladší než tohle (worker ji ověří znovu proti IBKR). */
@@ -106,6 +111,14 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   // Objednávka z position toolu: návrh jako ⚡ na PC (draftFromPositionBox), velikost v kontraktech.
   const [order, setOrder] = useState<{ key: number; draft: TicketDraft } | null>(null);
   const quoteOf = (lastPrice: number) => ({ bid: lastPrice, ask: lastPrice });
+  // Pozice v grafu: čáry vstupu a SL/TP z read modelu (jen zobrazení, neověřené = žádné čáry).
+  const chartPosition = slots.position;
+  const [priceLines] = useState(createLivePriceLinesFeed);
+  useEffect(() => { priceLines.publish(chartPosition.symbol, chartPosition.lines); }, [chartPosition.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => priceLines.publish(null, []), [priceLines]);
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const showGroup = chartPosition.summary != null || chartPosition.issue != null;
+  useEffect(() => { if (!chartPosition.summary) setAccountsOpen(false); }, [chartPosition.summary]);
   return (
     <DayFullscreenChart
       ctl={ctl}
@@ -117,9 +130,11 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       selectedTrade={null}
       onClose={onLeave}
       live={{
-        header: slots.header,
+        header: slots.header(showGroup ? <LivePhoneGroupPnl position={chartPosition} onOpen={() => setAccountsOpen(true)} /> : undefined),
+        priceLines,
         overlay: ({ lastPrice }) => <>
           {slots.overlay}
+          {accountsOpen && chartPosition.summary && <LivePhoneAccountsSheet position={chartPosition} onClose={() => setAccountsOpen(false)} />}
           {qtySheet && <LiveQtySheet value={pill.qty} onClose={() => setQtySheet(false)} onDone={qty => { savePill({ ...pill, qty }); setQtySheet(false); }} />}
           {order && lastPrice != null && (
             <LivePhoneOrderSheet
