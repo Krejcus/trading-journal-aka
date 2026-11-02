@@ -564,7 +564,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
     vlevo dole je obchodní lišta) a P&L skupiny ve třech variantách
     (A hlavička + list účtů, B pruh účtů, C nad lištou). Čeká na Filipovu
     volbu, nic se nestaví.
-- Celá sada: 6398 testů zelených. Jediný pád je cizí baseline
+- 2. 11. — Filip zvolil A, postaveno (622c6cbe, 05e02e26, 89077b9a, fe09df9e):
+  - Hlavička LIVE grafu ukáže místo názvu skupiny „MNQ · Long 6 · 3 účty“
+    a otevřené P&L skupiny (živě s cenou trhu, INV-UI-04); klepnutí = list
+    „Účty v obchodě“ s P&L a SL/TP v $ u každého účtu. V grafu čáry vstupu,
+    SL a TP (`useLivePriceLinesBinding`). Jen zobrazení, žádné tlačítko.
+  - Data: `useLiveChartData` v desku je zapnutý i pro telefon (stejný model
+    jako PC graf); `chartOpenRef` zůstává jen PC → žádné rychlejší čtení
+    relaye ani budíčky.
+  - Oponentura: 1. kolo OPRAVIT (červený strážný test INV-UI-04, staré P&L
+    v řádku účtu, neznámé SL/TP jako „bez SL“), 2. kolo OK s výhradami
+    (zdvojený SL bez značky, souhrn „0/n“ u neověřených příkazů) — vše
+    opraveno. P&L řádku účtu má teď brzdu 15 s jako souhrn (oprava i pro PC
+    panel objednávky), neověřené příkazy = „SL ?“ a „SL ?/n“, nesedící krytí
+    = jantarový podíl. Testy `tests/livePhoneAccounts.test.ts`.
+  - Náhled rozšířen o crosshair s pluskem (limit/stop na ceně, upozornění,
+    vodorovná čára) a návrh upozornění na cenu pro telefon i PC: malé
+    průsvitné plusko, v grafu jen zvoneček a tenká/tlustá čára, při spuštění
+    blikání, karta jako `LiveTradeToasts` (štítek „Upoz.“, 8 s), notifikace
+    iOS nebo hlas. Hlídat má Mac worker z IBKR ticků (bez přístupu
+    k příkazům), doručení přes stávající frontu notifikací (APNs, web push).
+    Nic z upozornění se nestaví bez dalšího „ano“.
+- Celá sada: 6408 testů zelených (2. 11.). Jediný pád je cizí baseline
   `candleAggregationEquivalence` (stejně tsc).
 
 ### 2026-11-01 — Jeden crosshair, svislá čára na svíčce (Claude, nasazeno 08:17 @ fde85e94)
