@@ -78,3 +78,14 @@ export function copyEventToast(event: CopierCopyEvent): TradeToast | null {
 export function newCopyEvents(events: readonly CopierCopyEvent[] | undefined, seen: ReadonlySet<string>): CopierCopyEvent[] {
   return (events ?? []).filter(event => !seen.has(event.id));
 }
+
+/**
+ * Nejvýš TRADE_TOAST_MAX karet; problém (sticky, např. odpojený follower) nikdy
+ * nevytlačí běžná karta ani lokální karta (upozornění na cenu).
+ */
+export function keepStickyToasts<T extends { sticky: boolean }>(all: readonly T[]): T[] {
+  const sticky = all.filter(toast => toast.sticky);
+  const room = Math.max(0, TRADE_TOAST_MAX - sticky.length);
+  const normal = room ? all.filter(toast => !toast.sticky).slice(-room) : [];
+  return all.filter(toast => toast.sticky || normal.includes(toast));
+}

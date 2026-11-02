@@ -1826,7 +1826,7 @@ acceptAgentStatus((await executeAgent({
               onClose={() => setPhoneMenuOpen(false)}
             /> : null,
             position: chartData.position,
-            // Karty obchodů vlevo dole jako na PC (stejné události z čerstvého stavu workeru).
+            // Karty obchodů vlevo dole jako na PC (stejná brána `runtimeAvailable` vč. krátké grace obnoveného stavu).
             copyEvents: runtimeAvailable ? chartLive.status?.controller.recentCopyEvents : undefined,
             copierArmed: runtimeAvailable && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode !== true,
             onLeave: () => navigateToTab('overview'),

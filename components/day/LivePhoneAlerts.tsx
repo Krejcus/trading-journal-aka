@@ -7,6 +7,7 @@ import {
   type PriceAlertLineStyle, type PriceAlertLineWidth,
 } from '../../lib/priceAlerts';
 import { formatLivePrice } from './LivePhoneTrade';
+import { clickedOrderType } from '../../lib/liveOrderTicket';
 import SheetGrip from './SheetGrip';
 
 /**
@@ -118,11 +119,12 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
             <span aria-hidden style={{ position: 'absolute', right: 6, top: 0, transform: 'translateY(-50%)', width: 16, height: 16, borderRadius: 8, display: 'grid', placeItems: 'center', color: rgba(color, flash || selected ? 1 : 0.45), background: selected ? 'rgba(20,22,36,.72)' : 'transparent', boxShadow: selected ? `0 0 0 1px ${rgba(color, 0.55)}` : undefined, animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
               <Bell size={10} strokeWidth={2.2} />
             </span>
-            {/* Zásah na celé čáře (prst), ne jen na zvonečku. */}
+            {/* Nevybrané upozornění bere dotyk jen na zvonečku (přes čáru jde graf posouvat,
+                jako u kreseb); vybrané celou čárou (tah). */}
             <div
               role="button"
               aria-label={`Upozornění ${alertConditionText(alert.condition).toLowerCase()} ${formatLivePrice(alert.price)}`}
-              style={{ position: 'absolute', left: 0, right: 0, top: -9, height: 18, pointerEvents: 'auto', touchAction: 'none', cursor: selected ? 'ns-resize' : 'pointer' }}
+              style={{ position: 'absolute', left: selected ? 0 : undefined, right: 0, width: selected ? undefined : 30, top: selected ? -9 : -12, height: selected ? 18 : 24, pointerEvents: 'auto', touchAction: 'none', cursor: selected ? 'ns-resize' : 'pointer' }}
               onPointerDown={event => {
                 event.stopPropagation();
                 pressRef.current = { id: alert.id, y0: event.clientY, moved: false };
@@ -194,7 +196,7 @@ export function LivePhoneCrosshairPlus({ api, onPlus }: { api: ChartViewApi | nu
         const raw = api.controller.getSeries().coordinateToPrice(point.y);
         if (raw != null && Number.isFinite(raw)) onPlus(Math.round(raw / TICK) * TICK);
       }}
-      style={{ position: 'absolute', left: paneWidth - 22, top: point.y, transform: 'translateY(-50%)', zIndex: 16, width: 16, height: 16, borderRadius: 5, padding: 0, display: 'grid', placeItems: 'center', fontSize: 12, lineHeight: 1, color: 'rgba(232,236,246,.9)', background: 'rgba(255,255,255,.07)', border: '1px solid rgba(190,200,255,.28)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', cursor: 'pointer' }}
+      style={{ position: 'absolute', left: paneWidth - 22, top: point.y, transform: 'translateY(-50%)', zIndex: 16, pointerEvents: 'auto', width: 16, height: 16, borderRadius: 5, padding: 0, display: 'grid', placeItems: 'center', fontSize: 12, lineHeight: 1, color: 'rgba(232,236,246,.9)', background: 'rgba(255,255,255,.07)', border: '1px solid rgba(190,200,255,.28)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', cursor: 'pointer' }}
     >
       +
       <span aria-hidden style={{ position: 'absolute', inset: -12 }} />
@@ -349,19 +351,24 @@ export function LivePhoneAlertList({ alerts, watching, onEdit, onRemove, onClose
 }
 
 /** Menu plusu u crosshairu: limit/stop na ceně, upozornění, vodorovná čára. */
-export function LivePhonePlusSheet({ price, market, quantity, onOrder, onAlert, onLine, onClose }: {
+export function LivePhonePlusSheet({ price, market, quote, quantity, onOrder, onAlert, onLine, onClose }: {
   price: number;
   market: number | null;
+  /** Čerstvá kotace (≤ 3 s); typ příkazu podle ní jako na PC. null = příkaz z plusu teď nejde. */
+  quote: { bid: number; ask: number } | null;
   quantity: number;
-  onOrder: (side: 'buy' | 'sell', type: 'limit' | 'stop') => void;
+  onOrder: (side: 'buy' | 'sell', type: 'market' | 'limit' | 'stop') => void;
   onAlert: () => void;
   onLine: () => void;
   onClose: () => void;
 }) {
   const above = market != null && price > market;
   const distance = market == null ? null : Math.abs(price - market);
-  const buyType = above ? 'stop' : 'limit';
-  const sellType = above ? 'limit' : 'stop';
+  const buyType = quote ? clickedOrderType('buy', price, quote, TICK) : null;
+  const sellType = quote ? clickedOrderType('sell', price, quote, TICK) : null;
+  const typeHint = (side: 'buy' | 'sell', type: string | null) => (type == null ? 'cena trhu není čerstvá — příkaz teď nejde'
+    : type === 'market' ? 'na trhu' : type === 'limit' ? (side === 'buy' ? 'vstup long pod trhem' : 'vstup short nad trhem')
+      : side === 'buy' ? 'vstup long při průrazu nahoru' : 'vstup short při průrazu dolů');
   const row = (key: string, icon: React.ReactNode, iconStyle: React.CSSProperties, title: string, sub: string, onClick: () => void) => (
     <button key={key} type="button" className="dj-btn" onClick={onClick} style={{ width: '100%', display: 'grid', gridTemplateColumns: '32px minmax(0,1fr) auto', gap: 10, alignItems: 'center', padding: '11px 16px', border: 0, borderBottom: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text)', textAlign: 'left', cursor: 'pointer' }}>
       <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 800, ...iconStyle }}>{icon}</span>
@@ -375,8 +382,8 @@ export function LivePhonePlusSheet({ price, market, quantity, onOrder, onAlert, 
         <b className="dj-mono" style={{ fontSize: 16 }}>{formatLivePrice(price)}</b>
         <span style={{ fontSize: 12, color: 'var(--dj-muted)' }}>{distance == null ? '' : distance < TICK / 2 ? 'na trhu' : `${distance.toFixed(2)} b ${above ? 'nad' : 'pod'} trhem`}</span>
       </div>
-      {row('buy', 'B', { background: 'rgba(37,99,235,.2)', color: '#93b4ff' }, `Koupit ${quantity} ${buyType}`, buyType === 'limit' ? 'vstup long pod trhem' : 'vstup long při průrazu nahoru', () => onOrder('buy', buyType))}
-      {row('sell', 'S', { background: 'rgba(225,29,72,.2)', color: '#fda4af' }, `Prodat ${quantity} ${sellType}`, sellType === 'limit' ? 'vstup short nad trhem' : 'vstup short při průrazu dolů', () => onOrder('sell', sellType))}
+      {row('buy', 'B', { background: 'rgba(37,99,235,.2)', color: '#93b4ff', opacity: buyType ? 1 : 0.45 }, `Koupit ${quantity}${buyType ? ` ${buyType}` : ''}`, typeHint('buy', buyType), () => { if (buyType) onOrder('buy', buyType); })}
+      {row('sell', 'S', { background: 'rgba(225,29,72,.2)', color: '#fda4af', opacity: sellType ? 1 : 0.45 }, `Prodat ${quantity}${sellType ? ` ${sellType}` : ''}`, typeHint('sell', sellType), () => { if (sellType) onOrder('sell', sellType); })}
       {row('alert', <Bell size={16} />, { background: 'rgba(245,181,61,.18)', color: '#fcd34d' }, 'Přidat upozornění', 'hned, podle tvého nastavení', onAlert)}
       {row('line', '—', { background: 'rgba(148,163,184,.16)', color: '#cbd5e1' }, 'Vodorovná čára', 'kresba do grafu', onLine)}
     </Sheet>

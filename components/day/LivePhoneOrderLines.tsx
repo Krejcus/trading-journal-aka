@@ -12,6 +12,23 @@ const POINT_VALUE = 2;
 /** Správa obchodu leadera z telefonu — stejná cesta jako PC (`onManageEntry`); dodá ji datová vrstva. */
 export type LivePhoneManage = (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
 
+type PendingMove = { kind: 'stopLoss' | 'takeProfit'; price: number; until: number };
+/**
+ * Zámek „jeden příkaz naráz“ a „odesílám“ žijí v rodiči (LivePhoneChart): vrstva
+ * čar se při přehrávání nebo výměně grafu odpojí a stav letícího příkazu nesmí
+ * zmizet (jinak by čára ukázala starý SL jako aktuální a pustila druhý tah).
+ */
+export interface LivePhoneLineState {
+  pendingMove: PendingMove | null;
+  setPendingMove: React.Dispatch<React.SetStateAction<PendingMove | null>>;
+  busyRef: React.MutableRefObject<boolean>;
+}
+export function useLivePhoneLineState(): LivePhoneLineState {
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+  const busyRef = useRef(false);
+  return { pendingMove, setPendingMove, busyRef };
+}
+
 /**
  * Čáry obchodu v LIVE grafu telefonu stejně jako na PC: tenké Aurora štítky
  * (`BacktestOrderLinesOverlay` + `livePositionChartLines`). Na telefonu se SL/TP
@@ -20,8 +37,9 @@ export type LivePhoneManage = (action: LeaderOrderManageAction, expectPrice: num
  * zavření a zrušení je stejné jako `LiveTradingScreen` (INV-UI-01..04): „co
  * jsem viděl“ ze začátku tahu, předkontroly jen blokují, rozhoduje worker.
  */
-export function LivePhoneOrderLines({ api, summary, manage, canClose, entryAvg, isDark, onNotice }: {
+export function LivePhoneOrderLines({ api, state, summary, manage, canClose, entryAvg, isDark, onNotice }: {
   api: ChartViewApi;
+  state: LivePhoneLineState;
   summary: LiveChartPositionSummary | null;
   manage: LivePhoneManage | null;
   /** × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jako PC. */
@@ -31,8 +49,7 @@ export function LivePhoneOrderLines({ api, summary, manage, canClose, entryAvg, 
   isDark: boolean;
   onNotice: (text: string) => void;
 }) {
-  const [pendingMove, setPendingMove] = useState<{ kind: 'stopLoss' | 'takeProfit'; price: number; until: number } | null>(null);
-  const busyRef = useRef(false);
+  const { pendingMove, setPendingMove, busyRef } = state;
   useEffect(() => {
     if (!pendingMove) return undefined;
     const landed = pendingMove.kind === 'stopLoss' ? summary?.stop : summary?.target;
@@ -40,15 +57,17 @@ export function LivePhoneOrderLines({ api, summary, manage, canClose, entryAvg, 
     if (!Number.isFinite(pendingMove.until)) return undefined;
     const timer = window.setTimeout(() => setPendingMove(null), Math.max(0, pendingMove.until - Date.now()));
     return () => window.clearTimeout(timer);
-  }, [pendingMove, summary?.stop, summary?.target]);
+  }, [pendingMove, setPendingMove, summary?.stop, summary?.target]);
 
+  // Telefon: × (zavřít pozici i zrušit vstup) vždy na dvě klepnutí — leží u osy hned
+  // vedle plusu crosshairu a jedno klepnutí by mohlo zavřít leadera omylem.
   const lines = useMemo(() => (summary ? livePositionChartLines(summary, {
     manageable: manage != null,
     canClose,
     entryAvg,
     pointValue: POINT_VALUE,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
-  }) : []), [canClose, entryAvg, manage, pendingMove, summary]);
+  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, entryAvg, manage, pendingMove, summary]);
 
   const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit') => {
     if (!manage || expect == null) return;
@@ -74,7 +93,7 @@ export function LivePhoneOrderLines({ api, summary, manage, canClose, entryAvg, 
     } finally {
       busyRef.current = false;
     }
-  }, [manage, onNotice]);
+  }, [busyRef, manage, onNotice, setPendingMove]);
 
   if (!lines.length) return null;
   return (

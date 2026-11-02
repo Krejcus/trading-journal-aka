@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { CopierCopyEvent } from '../services/copierRuntimeController';
-import { TRADE_TOAST_MAX, TRADE_TOAST_MS, copyEventToast, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
+import { TRADE_TOAST_MS, copyEventToast, keepStickyToasts, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
 
 const TONE: Record<TradeToastTone, string> = {
   blue: '#3b82f6', violet: '#8b5cf6', red: '#f43f5e', teal: '#14b8a6', green: '#10b981', amber: '#f59e0b', muted: '#64748b',
@@ -69,7 +69,7 @@ const LiveTradeToasts: React.FC<{
     const fresh = (extra ?? []).filter(toast => !extraSeenRef.current.has(toast.id));
     if (!fresh.length) return;
     for (const toast of fresh) extraSeenRef.current.add(toast.id);
-    setToasts(current => [...current, ...fresh].slice(-TRADE_TOAST_MAX));
+    setToasts(current => keepStickyToasts([...current, ...fresh]));
   }, [extra]);
   const seenRef = useRef<Set<string> | null>(null);
   useEffect(() => {
@@ -80,7 +80,7 @@ const LiveTradeToasts: React.FC<{
     if (fresh.length === 0) return;
     for (const event of fresh) seenRef.current.add(event.id);
     const added = fresh.map(copyEventToast).filter((toast): toast is TradeToast => toast != null);
-    if (added.length) setToasts(current => [...current, ...added].slice(-TRADE_TOAST_MAX));
+    if (added.length) setToasts(current => keepStickyToasts([...current, ...added]));
   }, [events]);
   // Stabilní: časovač karty se nesmí restartovat s každým pollem statusu.
   const dismiss = useCallback((id: string) => setToasts(current => current.filter(item => item.id !== id)), []);

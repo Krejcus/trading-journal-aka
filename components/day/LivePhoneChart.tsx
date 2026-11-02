@@ -22,12 +22,13 @@ import { LivePhoneAccountsSheet, LivePhoneGroupPnl } from './LivePhoneAccounts';
 import type { LiveChartPosition } from '../../lib/liveChartPosition';
 import LiveTradeToasts from '../LiveTradeToasts';
 import type { TradeToast } from '../../lib/liveTradeToasts';
-import { LivePhoneOrderLines } from './LivePhoneOrderLines';
+import { LivePhoneOrderLines, useLivePhoneLineState } from './LivePhoneOrderLines';
+import { createLivePriceLinesFeed, type LivePriceLinesFeed } from '../../lib/livePriceLinesFeed';
 import { LivePhoneAlertLines, LivePhoneAlertList, LivePhoneAlertSheet, LivePhoneAlertsButton, LivePhoneCrosshairPlus, LivePhonePlusSheet } from './LivePhoneAlerts';
 import { alertTitle, createLocalPriceAlertStore, movedAlert, newPriceAlert, type PriceAlert } from '../../lib/priceAlerts';
 import { useLiveFillArrows } from './useLiveFillArrows';
 import type { LiveFillMarker } from '../../lib/liveFillMarkers';
-import { newTicketDraft } from '../../lib/liveOrderTicket';
+import { limitIsMarketable, newTicketDraft, stopIsTriggered, type TicketQuote } from '../../lib/liveOrderTicket';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { MarketCandle } from '../../services/marketData';
 import './dayJournal.css';
@@ -56,6 +57,16 @@ export interface LivePhoneChartSlots {
 }
 
 const NO_FILLS: readonly LiveFillMarker[] = [];
+
+/**
+ * Dvě okna / roztažené jiné okno: štítky a upozornění by seděly na souřadnicích
+ * okna 0 přes okno s jiným měřítkem — pozici pak kreslí cenové čáry do všech oken.
+ */
+function PositionPriceLines({ feed, position, enabled }: { feed: LivePriceLinesFeed; position: LiveChartPosition; enabled: boolean }) {
+  useEffect(() => { feed.publish(enabled ? position.symbol : null, enabled ? position.lines : []); }, [enabled, feed, position.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => feed.publish(null, []), [feed]);
+  return null;
+}
 
 /** Šipky plnění (hook uvnitř vrstvy grafu, kde je API panelu). */
 function LiveFillArrows(props: { api: ChartViewApi | null; fills: readonly LiveFillMarker[]; open: boolean; candles: readonly MarketCandle[]; intervalSeconds: number; enabled: boolean; isDark: boolean }) {
@@ -141,8 +152,12 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [order, setOrder] = useState<{ key: number; draft: TicketDraft } | null>(null);
   const quoteOf = (lastPrice: number) => ({ bid: lastPrice, ask: lastPrice });
   // Pozice v grafu: čáry vstupu a SL/TP z read modelu (jen zobrazení, neověřené = žádné čáry).
-  // Pozici kreslí štítky jako na PC (LivePhoneOrderLines), ne cenové čáry řady.
+  // Pozici kreslí štítky jako na PC (LivePhoneOrderLines); ve dvou oknech cenové čáry řady.
   const chartPosition = slots.position;
+  const [priceLines] = useState(createLivePriceLinesFeed);
+  const lineState = useLivePhoneLineState();
+  // Typ příkazu a kontrola proti trhu z čerstvé kotace (≤ 3 s), jako PC — ne z close svíčky.
+  const freshQuote = (): TicketQuote | null => (quote && Date.now() - quote.at <= PHONE_MARKET_QUOTE_MAX_AGE_MS ? { bid: quote.bid, ask: quote.ask } : null);
   const [accountsOpen, setAccountsOpen] = useState(false);
   const showGroup = chartPosition.summary != null || chartPosition.issue != null;
   useEffect(() => { if (!chartPosition.summary) setAccountsOpen(false); }, [chartPosition.summary]);
@@ -201,6 +216,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       onClose={onLeave}
       live={{
         header: slots.header(showGroup ? <LivePhoneGroupPnl position={chartPosition} onOpen={() => setAccountsOpen(true)} /> : undefined),
+        priceLines,
         overlay: ({ lastPrice, api, candles }) => <>
           {slots.overlay}
           {accountsOpen && chartPosition.summary && <LivePhoneAccountsSheet position={chartPosition} onClose={() => setAccountsOpen(false)} />}
@@ -208,6 +224,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             <LivePhonePlusSheet
               price={plus}
               market={lastPrice}
+              quote={freshQuote()}
               quantity={pill.qty}
               onClose={() => setPlus(null)}
               onOrder={(side, type) => {
@@ -215,13 +232,13 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
                 setPlus(null);
                 if (lastPrice == null) { say('Cena trhu zatím není — objednávku nejde připravit.'); return; }
                 // Stejný list a odeslání jako objednávka z position boxu (kontroly beze změny).
-                setOrder({ key: Date.now(), draft: newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, quoteOf(lastPrice), { sizing: 'qty', quantity: pill.qty, riskUsd: 200 }) });
+                setOrder({ key: Date.now(), draft: newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice), { sizing: 'qty', quantity: pill.qty, riskUsd: 200 }) });
               }}
               onAlert={() => {
                 const alert = newPriceAlert(plus, lastPrice, alertStore.getState().defaults);
                 alertStore.add(alert);
                 setPlus(null);
-                card('amber', 'Upoz.', 'Upozornění přidáno', `${alertTitle(alert)} · klepni na čáru = ×, dvojklep = nastavení`);
+                card('amber', 'Upoz.', 'Upozornění přidáno', `${alertTitle(alert)} · ${slots.alertWatch ? 'zvoneček = výběr, dvojklep = nastavení' : 'zatím jen v tomto zařízení, hlídání se napojí'}`);
               }}
               onLine={() => {
                 const engine = api?.drawing?.engine;
@@ -262,13 +279,18 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
               key={order.key}
               initial={order.draft}
               instrument={LIVE_PHONE_INSTRUMENT}
-              quote={quoteOf(lastPrice)}
+              quote={freshQuote() ?? quoteOf(lastPrice)}
               onClose={() => setOrder(null)}
               onSubmit={draft => {
                 setOrder(null);
                 const blocked = sendBlocked(draft.type === 'market')
                   ?? (draft.quantity > (trade?.maxContracts ?? 1) ? `Strop ručního vstupu je ${trade?.maxContracts ?? 1} kontraktů.` : null);
                 if (blocked) { say(`${draftSummary(draft)} — ${blocked}`); return; }
+                // Znovu proti čerstvé kotaci: limit/stop, který by se teď hned vyplnil, neposílat.
+                const now = freshQuote();
+                const crossed = now && draft.type === 'limit' && limitIsMarketable(draft, now) ? 'limit je už na druhé straně trhu (vyplnil by se hned)'
+                  : now && draft.type === 'stop' && stopIsTriggered(draft, now) ? 'stop je už za trhem (spustil by se hned)' : null;
+                if (crossed) { say(`${draftSummary(draft)} — ${crossed}, nic se neodeslalo.`); return; }
                 // Limit/Stop bez IBKR: kontrakt podle brokera (worker ho ověří znovu); Market jen z IBKR.
                 void send(livePhoneSheetEntry(draft, LIVE_PHONE_INSTRUMENT, { ...quote!, symbol: sheetContract(draft.type) }));
               }}
@@ -304,10 +326,12 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
           }
         },
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
-        chartLayer: ({ lastPrice, api, candles, intervalSeconds, replay }) => <>
-          {api && !replay && <>
+        chartLayer: ({ lastPrice, api, candles, intervalSeconds, replay, fullPane }) => <>
+          <PositionPriceLines feed={priceLines} position={chartPosition} enabled={!fullPane && !replay} />
+          {api && !replay && fullPane && <>
             <LivePhoneOrderLines
               api={api}
+              state={lineState}
               summary={chartPosition.summary}
               manage={trade?.manage ?? null}
               canClose={trade?.closeSupported === true}
@@ -327,7 +351,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             />
             <LivePhoneCrosshairPlus api={api} onPlus={setPlus} />
           </>}
-          <LiveFillArrows api={api} fills={slots.fills ?? NO_FILLS} open={slots.fillsOpen ?? true} candles={candles} intervalSeconds={intervalSeconds} enabled={!replay} isDark={isDark} />
+          <LiveFillArrows api={api} fills={slots.fills ?? NO_FILLS} open={slots.fillsOpen === true} candles={candles} intervalSeconds={intervalSeconds} enabled={!replay && slots.fillsOpen != null} isDark={isDark} />
           <LiveTradeToasts events={slots.copyEvents} copierArmed={slots.copierArmed ?? false} isDark={isDark} placement={{ left: 8, bottom: 84 }} extra={cards} />
           {position && <LivePhonePositionBar
             side={position.side} quantity={position.quantity} symbol={position.symbol} pending={position.pending}

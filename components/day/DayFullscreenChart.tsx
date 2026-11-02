@@ -110,6 +110,12 @@ export interface LiveChartInfo {
   intervalSeconds: number;
   /** Přehrávání běží — živé vrstvy se schovají. */
   replay: boolean;
+  /**
+   * Hlavní panel zabírá celou plochu grafu (jedno okno, nebo roztažené okno 0).
+   * Jen tehdy smí vrstvy v ploše (štítky, upozornění, plusko) kreslit podle `api`
+   * — ve dvou oknech by seděly na souřadnicích okna 0 přes okno s jiným měřítkem.
+   */
+  fullPane: boolean;
 }
 
 export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onTimeframe, range, focusKeyPrefix, selectedTrade, pins = [], bubbles = 'selected', placing = null, onPick = () => {}, onCancelPlacing = () => {}, pending = null, nowTime = null, bands = [], onClose, onVoice = () => {}, live }: {
@@ -706,6 +712,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const liveInfo: LiveChartInfo = {
     lastPrice: !replayOn && candles.length ? candles[candles.length - 1].close : null,
     api, candles, intervalSeconds: timeframeMinutes(timeframe) * 60, replay: replayOn,
+    fullPane: !split || (maximized && activePane === 0),
   };
   const settingsDrawing = settingsFor && engine ? engine.getById(settingsFor) ?? null : null;
   const removeSelected = () => {
@@ -914,7 +921,9 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         {chromeHidden && (
           <button type="button" className="dj-btn" aria-label="Zobrazit ovládání" onClick={() => setChromeHidden(false)} style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top, 0px) + 8px)', right: 10, zIndex: 25, ...iconButton, background: 'var(--dj-card)', border: '1px solid var(--dj-line)', opacity: 0.85 }}><Minimize2 size={16} /></button>
         )}
-        {live?.chartLayer?.(liveInfo)}
+        {/* Vrstvy LIVE v ploše grafu pod listy a menu (LIVE ▾ = cesta k vypnutí, INV-UI-02):
+            vlastní stacking context se z-indexem pod listy (40+); prvky si klikání zapínají samy. */}
+        {live?.chartLayer && <div data-live-chart-layer style={{ position: 'absolute', inset: 0, zIndex: 20, isolation: 'isolate', pointerEvents: 'none' }}>{live.chartLayer(liveInfo)}</div>}
         {flash > 0 && <ChartShotFlash key={flash} />}
         {shot && <ChartShotCard key={shot.key} shot={shot} onChange={setShot} onClose={closeShot} />}
       </div>

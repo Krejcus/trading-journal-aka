@@ -1445,7 +1445,12 @@ existující ochranu.
   telefonním grafu, v menu LIVE ▾ ani v •••. DISARM je dosažitelný takto:
   - LIVE ▾ → Live Dashboard (menu obsahuje přehled vždy) → OFF → potvrzení,
     tedy 4 klepnutí; s otevřeným listem (účty v obchodě, objednávka,
-    nástroje) o jedno víc, list zakrývá i LIVE ▾ (vědomě přijato 2. 11.);
+    nástroje, menu plusu, nastavení a seznam upozornění) o jedno víc, list
+    zakrývá i LIVE ▾ (vědomě přijato 2. 11.);
+  - vrstva LIVE v ploše grafu (štítky příkazů, upozornění, plusko, karty,
+    lišta) je ve vlastním stacking contextu se z-indexem 20, tedy vždy pod
+    listy a menu LIVE ▾ (40+) — nic z grafu nesmí zakrýt ani pohltit
+    klepnutí na cestu k vypnutí (`tests/priceAlerts.test.ts`, oponentura 2. 11.);
   - přechod z grafu na přehled je povolený vždy (`lib/tradovateLiveTab.ts`);
   - notifikace z kopírky (risk, zámek dne, odpojený follower, časovače)
     otevírají `live:overview` (`lib/liveOverviewRoute.ts`) přímo na
@@ -1794,6 +1799,25 @@ existující ochranu.
   navigací LIVE ▾ → Live Dashboard). Posun SL dál od trhu v manual-only skupině
   počítá s lokálním denním stropem jako náhled (dřív `risk-unknown`).
   Hlídá test: `tests/manualEntryBareAttach.test.ts`, `tests/livePhoneOrders.test.ts`.
+- **Čáry obchodu na telefonu (2. 11. 2026, UI; data napojí další session):**
+  `components/day/LivePhoneOrderLines.tsx` kreslí štítky jako PC
+  (`BacktestOrderLinesOverlay` + `livePositionChartLines`) se stejným ošetřením
+  (startLine = „co jsem viděl“, `liveLineMoveBlockReason`, `liveBreakEven`).
+  Na telefonu se čára nejdřív klepnutím vybere a teprve vybraná jde táhnout,
+  tah drží v ploše grafu (`selectToDrag`, PC beze změny); × (zavřít pozici
+  i zrušit vstup) je na telefonu vždy dvoukrokové (leží u osy vedle plusu).
+  Akce jdou jen přes volitelné `LivePhoneTradeBridge.manage` = deskový
+  `manageLeaderEntry`, předané jen za stejných podmínek jako PC
+  (`supportsCopierManualOrderManage && ownManualEntry`); bez něj jsou čáry jen
+  zobrazení. Zámek jednoho příkazu a „odesílám“ žijí v rodiči
+  (`useLivePhoneLineState`), aby přežily odpojení vrstvy. Ve dvou oknech se
+  štítky nekreslí (souřadnice okna 0), pozici pak kreslí cenové čáry do všech
+  oken (`fullPane`). Plusko u crosshairu volí typ příkazu ze čerstvé kotace
+  (`clickedOrderType`, ≤ 3 s) a otevírá stejný list objednávky; odeslání z listu
+  (i z position boxu) znovu odmítne limit/stop, který je proti čerstvé kotaci
+  už na druhé straně trhu. Karty vlevo dole = `LiveTradeToasts` z týchž událostí
+  kopírky jako PC; problémové (sticky) karty nic nevytlačí (`keepStickyToasts`).
+  Hlídá test: `tests/priceAlerts.test.ts`, `tests/livePhoneTrade.test.ts`.
 - Hlídá test (1b): `tests/manualEntryPlace.test.ts`, `tests/leaderEntryPlace.test.ts`,
   `tests/localCopierExecutionAgent.test.ts`, `tests/tradovateCopierCommandRelay.test.ts`.
 
@@ -1883,6 +1907,10 @@ existující ochranu.
   nikdy z ceny TV. Totéž P&L skupiny a list účtů na LIVE grafu telefonu
   (`components/day/LivePhoneAccounts.tsx`, 2. 11. 2026; nohy
   `liveChartPositionTvLegs` v `lib/tvLivePnl.ts`).
+  Upozornění na cenu (`lib/priceAlerts.ts`, 2. 11. 2026): podmínka nahoru/dolů
+  se při založení a posunu odvodí z close svíčky grafu — jen popisek v UI.
+  Skutečné hlídání musí brát cenu z IBKR ve workeru (nikdy z TV) a podmínku
+  přepočítat tam; upozornění nikdy neobchoduje a nevstupuje do rizika.
   Přehrání ticků z dávky (28. 10. 2026): zpráva smí nést cestu ceny
   (`TvPriceTrail`, skutečně zobchodované ceny rozpracované minuty od minulé
   zprávy, max 64) v polích obálky `t`/`ts` — zvlášť podepsané (HMAC nad

@@ -5,6 +5,7 @@ import {
   createLocalPriceAlertStore, movedAlert, newPriceAlert, readPriceAlertState,
 } from '../lib/priceAlerts';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../lib/liveFillMarkers';
+import { TRADE_TOAST_MAX, keepStickyToasts } from '../lib/liveTradeToasts';
 
 const memory = (initial: Record<string, string> = {}) => {
   const data = { ...initial };
@@ -108,5 +109,51 @@ describe('čáry obchodu na telefonu jako na PC', () => {
     const phone = readFileSync('components/day/LivePhoneOrderLines.tsx', 'utf8');
     expect(phone).toMatch(/manageable: manage != null/);
     expect(phone).toMatch(/if \(!manage \|\| expect == null\) return;/);
+  });
+});
+
+describe('oponentura 2. 11. — vrstvy, okna, ×, plusko, karty', () => {
+  it('sticky karta (odpojený follower) se nevytlačí běžnými ani lokálními kartami', () => {
+    const card = (id: string, sticky = false) => ({ id, sticky });
+    const out = keepStickyToasts([card('risk', true), card('a'), card('b'), card('c'), card('d')]);
+    expect(out.map(item => item.id)).toEqual(['risk', 'c', 'd']);
+    expect(out).toHaveLength(TRADE_TOAST_MAX);
+    expect(keepStickyToasts([card('a'), card('b'), card('c'), card('d')]).map(item => item.id)).toEqual(['b', 'c', 'd']);
+    expect(keepStickyToasts([card('r1', true), card('r2', true), card('r3', true), card('x')]).map(item => item.id)).toEqual(['r1', 'r2', 'r3']);
+  });
+
+  it('vrstva LIVE v grafu leží pod listy a menu LIVE ▾ (cesta k vypnutí, INV-UI-02)', () => {
+    const chart = readFileSync('components/day/DayFullscreenChart.tsx', 'utf8');
+    expect(chart).toMatch(/data-live-chart-layer style=\{\{ position: 'absolute', inset: 0, zIndex: 20, isolation: 'isolate', pointerEvents: 'none' \}\}/);
+    // Listy a menu v kořeni dialogu mají z-index 40+.
+    expect(readFileSync('components/LivePhoneChrome.tsx', 'utf8')).toMatch(/position: 'absolute', inset: 0, zIndex: 45/);
+    expect(readFileSync('components/day/LivePhoneAlerts.tsx', 'utf8')).toMatch(/position: 'absolute', inset: 0, zIndex: 46/);
+  });
+
+  it('dvě okna: štítky a upozornění jen když hlavní okno zabírá celou plochu, jinak cenové čáry do všech oken', () => {
+    const chart = readFileSync('components/day/DayFullscreenChart.tsx', 'utf8');
+    expect(chart).toMatch(/fullPane: !split \|\| \(maximized && activePane === 0\)/);
+    const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
+    expect(phone).toMatch(/<PositionPriceLines feed=\{priceLines\} position=\{chartPosition\} enabled=\{!fullPane && !replay\} \/>/);
+    expect(phone).toMatch(/\{api && !replay && fullPane && <>/);
+  });
+
+  it('× na telefonu vždy na dvě klepnutí; zámek a „odesílám“ v rodiči (přežijí odpojení vrstvy)', () => {
+    const lines = readFileSync('components/day/LivePhoneOrderLines.tsx', 'utf8');
+    expect(lines).toMatch(/\.map\(line => \(\{ \.\.\.line, confirmCancel: true \}\)\)/);
+    expect(lines).toMatch(/const \{ pendingMove, setPendingMove, busyRef \} = state;/);
+    expect(readFileSync('components/day/LivePhoneChart.tsx', 'utf8')).toMatch(/const lineState = useLivePhoneLineState\(\);/);
+  });
+
+  it('plusko a odeslání listu: typ i kontrola proti trhu z čerstvé kotace, ne z close svíčky', () => {
+    expect(readFileSync('components/day/LivePhoneAlerts.tsx', 'utf8')).toMatch(/clickedOrderType\('buy', price, quote, TICK\)/);
+    const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
+    expect(phone).toMatch(/limitIsMarketable\(draft, now\)/);
+    expect(phone).toMatch(/stopIsTriggered\(draft, now\)/);
+    expect(phone).toMatch(/quote=\{freshQuote\(\) \?\? quoteOf\(lastPrice\)\}/);
+  });
+
+  it('šipky jen se známým stavem obchodu (neznámý = schované)', () => {
+    expect(readFileSync('components/day/LivePhoneChart.tsx', 'utf8')).toMatch(/enabled=\{!replay && slots\.fillsOpen != null\}/);
   });
 });
