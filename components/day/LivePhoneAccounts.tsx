@@ -2,7 +2,8 @@ import React from 'react';
 import { ChevronDown, X } from 'lucide-react';
 import { LiveOpenPnlValue, LiveTvMark, TV_LIVE_PNL_TITLE } from '../LiveOpenPnlValue';
 import type { LiveChartPosition, LiveChartPositionAccountRow } from '../../lib/liveChartPosition';
-import { contractRoot, livePhoneGroupLine, livePhoneTvLegs } from '../../lib/livePhoneTrade';
+import { contractRoot, livePhoneGroupLine } from '../../lib/livePhoneTrade';
+import { liveChartPositionTvLegs } from '../../lib/tvLivePnl';
 import { formatLivePrice } from './LivePhoneTrade';
 import SheetGrip from './SheetGrip';
 
@@ -44,7 +45,7 @@ export function LivePhoneGroupPnl({ position, onOpen }: { position: LiveChartPos
           ? <span style={{ color: 'var(--dj-muted)', fontSize: 12.5 }}>čeká na fill{summary.entry != null ? ` · ${formatLivePrice(summary.entry)}` : ''}</span>
           : summary.openPnl == null
             ? <span style={{ color: 'var(--dj-muted)' }}>P&amp;L —</span>
-            : <LiveOpenPnlValue anchor={summary.openPnl} legs={livePhoneTvLegs(position)}>
+            : <LiveOpenPnlValue anchor={summary.openPnl} legs={liveChartPositionTvLegs(position)}>
               {(value, live) => <span title={live ? TV_LIVE_PNL_TITLE : undefined} style={{ color: tone(value) }}>{usd(value)}{live ? <LiveTvMark /> : null}</span>}
             </LiveOpenPnlValue>}
       </span>
@@ -83,13 +84,15 @@ export function LivePhoneAccountsSheet({ position, onClose }: { position: LiveCh
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', padding: '12px 16px 0', fontSize: 12.5, color: 'var(--dj-muted)' }}>
               <span>Celkem otevřeno</span>
               <span className="dj-mono" style={{ fontSize: 15, fontWeight: 800 }}>
-                {summary.openPnl == null ? '—' : <LiveOpenPnlValue anchor={summary.openPnl} legs={livePhoneTvLegs(position)}>
+                {summary.openPnl == null ? '—' : <LiveOpenPnlValue anchor={summary.openPnl} legs={liveChartPositionTvLegs(position)}>
                   {(value, live) => <span title={live ? TV_LIVE_PNL_TITLE : undefined} style={{ color: tone(value) }}>{usd(value)}{live ? <LiveTvMark /> : null}</span>}
                 </LiveOpenPnlValue>}
               </span>
             </div>
           )}
-          <p style={{ margin: 0, padding: '10px 16px 0', fontSize: 11, color: 'var(--dj-muted)', opacity: 0.8 }}>Z brokera po poplatcích. Živý pohyb s cenou trhu je jen pro zobrazení.</p>
+          <p style={{ margin: 0, padding: '10px 16px 0', fontSize: 11, color: 'var(--dj-muted)', opacity: 0.8 }}>
+            {summary.rows.every(row => row.fees != null) ? 'Z brokera po poplatcích.' : 'Z brokera, bez poplatků (broker je neposlal).'} Živý pohyb s cenou trhu je jen pro zobrazení.
+          </p>
         </>}
       </section>
     </div>
@@ -99,10 +102,13 @@ export function LivePhoneAccountsSheet({ position, onClose }: { position: LiveCh
 function AccountRow({ row, position }: { row: LiveChartPositionAccountRow; position: LiveChartPosition }) {
   const summary = position.summary!;
   const side = summary.side === 'long' ? 'L' : 'S';
-  const level = (label: 'SL' | 'TP', price: number | null, value: number | null, color: string) => (
-    price == null ? <span>bez {label}</span>
-      : <span style={{ color }}>{label} {value != null ? usd(value) : formatLivePrice(price)}</span>
-  );
+  // Neznámé ≠ žádné: „bez SL“ jen u ověřených příkazů bez krytí (INV-UI-03).
+  const level = (label: 'SL' | 'TP', price: number | null, value: number | null, coverage: number, color: string) => {
+    if (!row.ordersVerified) return <span title="Příkazy účtu nejsou ověřené">{label} ?</span>;
+    if (price == null) return coverage > 0 ? <span style={{ color }}>{label} víc cen</span> : <span>bez {label}</span>;
+    const partial = coverage < row.quantity ? ` (${coverage}/${row.quantity})` : '';
+    return <span style={{ color }}>{label} {value != null ? usd(value) : formatLivePrice(price)}{partial}</span>;
+  };
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 96px', gap: 8, alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid var(--dj-line)' }}>
       <div style={{ minWidth: 0 }}>
@@ -112,8 +118,8 @@ function AccountRow({ row, position }: { row: LiveChartPositionAccountRow; posit
         </div>
         <div className="dj-mono" style={{ display: 'flex', flexWrap: 'wrap', columnGap: 6, rowGap: 1, marginTop: 3, fontSize: 11.5, color: 'var(--dj-muted)', whiteSpace: 'nowrap' }}>
           <span>{side} {row.quantity}{row.entry != null ? ` @ ${formatLivePrice(row.entry)}` : ''}</span>
-          {level('SL', row.stop, row.stopUsd, '#f87171')}
-          {level('TP', row.target, row.targetUsd, '#2dd4bf')}
+          {level('SL', row.stop, row.stopUsd, row.stopCoverage, '#f87171')}
+          {level('TP', row.target, row.targetUsd, row.targetCoverage, '#2dd4bf')}
         </div>
       </div>
       <div className="dj-mono" style={{ textAlign: 'right', fontSize: 14.5, fontWeight: 800 }}>
@@ -121,7 +127,7 @@ function AccountRow({ row, position }: { row: LiveChartPositionAccountRow; posit
           ? <span style={{ color: 'var(--dj-muted)', fontSize: 12.5 }}>čeká</span>
           : row.openPnl == null
             ? <span style={{ color: 'var(--dj-muted)' }}>—</span>
-            : <LiveOpenPnlValue anchor={row.openPnl} legs={livePhoneTvLegs(position, [row])}>
+            : <LiveOpenPnlValue anchor={row.openPnl} legs={liveChartPositionTvLegs(position, [row])}>
               {(value, live) => <span title={live ? TV_LIVE_PNL_TITLE : undefined} style={{ color: tone(value) }}>{usd(value)}{live ? <LiveTvMark /> : null}</span>}
             </LiveOpenPnlValue>}
       </div>

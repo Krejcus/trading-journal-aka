@@ -131,14 +131,20 @@ export function buildJournalLiveView(input: {
   // Otevřené P&L jen čerstvé a ke známému vstupu: kusy může mít worker už
   // nové (přikoupení, otočení), P&L je z REST a v penalizaci by stálo minuty.
   const finalize = (model: TradeCardModel, scopeLabel: string | null = null): JournalLiveView => {
-    if (model.kind === 'position' && model.openPnl != null) {
-      const fresh = model.entry != null && model.accounts.every(account => {
-        const at = account.openPnlAsOf ? Date.parse(account.openPnlAsOf) : Number.NaN;
-        return Number.isFinite(at) && now - at <= JOURNAL_PNL_MAX_AGE_MS;
-      });
-      if (!fresh) return result({ ...model, openPnl: null, mark: null }, null, scopeLabel);
+    if (model.kind !== 'position') return result(model, null, scopeLabel);
+    const anchorFresh = (account: TradeCardModel['accounts'][number]) => {
+      const at = account.openPnlAsOf ? Date.parse(account.openPnlAsOf) : Number.NaN;
+      return Number.isFinite(at) && now - at <= JOURNAL_PNL_MAX_AGE_MS;
+    };
+    // Totéž pro řádky účtů (list účtů v telefonu, PC panel objednávky): účet se
+    // starou kotvou nebo bez vstupu ukáže „—“, ne poslední známé číslo.
+    const accounts = model.accounts.map(account => (account.openPnl != null && (account.entry == null || !anchorFresh(account))
+      ? { ...account, openPnl: null, openPnlAsOf: null }
+      : account));
+    if (model.openPnl != null && !(model.entry != null && model.accounts.every(anchorFresh))) {
+      return result({ ...model, accounts, openPnl: null, mark: null }, null, scopeLabel);
     }
-    return result(model, null, scopeLabel);
+    return result({ ...model, accounts }, null, scopeLabel);
   };
   // Rozjetí musí trvat celé okno (výstup, vstup on-submit, otočení i zrušení
   // se ke followerům kopírují se zpožděním). Jeden společný začátek pro

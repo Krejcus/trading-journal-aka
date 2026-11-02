@@ -519,8 +519,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const lastAgentRouteRef = useRef<{ transport: 'local' | 'relay'; relayConnectionId: string | null } | null>(restoredAgent?.lastRoute ?? null);
   // Rychlé čtení stavu workeru při otevřeném LIVE grafu + čtení hned po vlastním příkazu.
   const chartOpenRef = useRef(false);
-  // Jen graf na PC kreslí ze stavu workeru; telefonní graf (fáze A) z něj nic
-  // nečte, tak nezrychluje čtení přes relay ani neodebírá budíčky.
+  // Rychlé tempo jen pro graf na PC. Telefonní graf čte stejný model pozice
+  // (`useLiveChartData`), ale nezrychluje čtení přes relay ani neodebírá budíčky.
   chartOpenRef.current = chartAvailable && tab === 'chart';
   const statusPollKickRef = useRef<(() => void) | null>(null);
   // Worker po změně u brokera pošle budíček → status hned, ne až při dalším pollu.

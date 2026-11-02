@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_LIVE_PILL, LIVE_PILL_STORAGE_KEY, accountsLabel, contractRoot, livePhoneGroupLine, livePhoneTvLegs, pressQtyKey, qtyFromBuffer, readLivePillPrefs, writeLivePillPrefs,
+  DEFAULT_LIVE_PILL, LIVE_PILL_STORAGE_KEY, accountsLabel, contractRoot, livePhoneGroupLine, pressQtyKey, qtyFromBuffer, readLivePillPrefs, writeLivePillPrefs,
 } from '../lib/livePhoneTrade';
 import type { LiveChartPositionAccountRow, LiveChartPositionSummary } from '../lib/liveChartPosition';
+import { liveChartPositionTvLegs as livePhoneTvLegs } from '../lib/tvLivePnl';
 
 const row = (over: Partial<LiveChartPositionAccountRow> = {}): LiveChartPositionAccountRow => ({
   accountId: 1, name: 'LUCID', isLeader: true, quantity: 2, entry: 21452.25, openPnl: 120.5, stop: 21421, target: 21514.75,
-  protectedFully: true, stopUsd: -127.48, targetUsd: 247.52, fees: 2.48, openPnlAsOf: '2026-11-02T14:30:00.000Z', ...over,
+  protectedFully: true, stopUsd: -127.48, targetUsd: 247.52, fees: 2.48, openPnlAsOf: '2026-11-02T14:30:00.000Z',
+  ordersVerified: true, stopCoverage: 2, targetCoverage: 2, ...over,
 });
 const summary = (over: Partial<LiveChartPositionSummary> = {}): LiveChartPositionSummary => ({
   kind: 'position', side: 'long', quantity: 6, entry: 21452.25, entryType: null, openPnl: 361.5, mark: 21482.5, stop: 21421, target: 21514.75,

@@ -57,6 +57,11 @@ export interface LiveChartPositionAccountRow {
   /** Poplatky celé pozice a čas kotvy P&L — podklad živého P&L s cenou trhu (jen zobrazení). */
   fees: number | null;
   openPnlAsOf: string | null;
+  /** Příkazy účtu ověřené; jinak SL/TP neznámé (nikdy „bez SL“). */
+  ordersVerified: boolean;
+  /** Kontrakty kryté SL / TP (víc cen = `stop`/`target` null, krytí > 0). */
+  stopCoverage: number;
+  targetCoverage: number;
 }
 
 export interface LiveChartPosition {
@@ -177,8 +182,13 @@ export function liveChartPosition(view: JournalLiveView, requested: JournalLiveT
       targetUsd: account.target?.usd ?? null,
       fees: account.fees,
       openPnlAsOf: model.kind === 'position' ? account.openPnlAsOf : null,
+      ordersVerified: account.ordersVerified,
+      stopCoverage: account.stop?.coverage ?? 0,
+      targetCoverage: account.target?.coverage ?? 0,
     })),
   };
   const lines = journalLivePriceLines(model);
-  return { key: JSON.stringify([model.symbol, summary, lines.map(line => [line.id, line.price, line.title])]), symbol: model.symbol, lines, summary, issue: null };
+  // Klíč bez polí, která se mění každým tickem bez změny obrazu PC grafu (kotva P&L, poplatky, $ úrovní).
+  const keyRows = summary.rows.map(({ openPnlAsOf: _asOf, fees: _fees, stopUsd: _stopUsd, targetUsd: _targetUsd, ...row }) => row);
+  return { key: JSON.stringify([model.symbol, { ...summary, rows: keyRows }, lines.map(line => [line.id, line.price, line.title])]), symbol: model.symbol, lines, summary, issue: null };
 }

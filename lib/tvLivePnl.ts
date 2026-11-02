@@ -1,5 +1,6 @@
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 import type { TradeCardModel } from './liveTradeCard';
+import type { LiveChartPosition, LiveChartPositionAccountRow } from './liveChartPosition';
 import { tradovateContractRoot, tradovateValuePerPoint } from './tradovateLivePnl';
 import type { TvPricePayload } from './tvPriceMessage';
 import type { TvPriceFeedView, TvPriceSample } from './tvPriceStore';
@@ -217,6 +218,27 @@ export function tradeCardTvLegs(card: TradeCardModel | null | undefined): TvLive
       grossPnl: account.openPnl + (account.fees ?? 0),
       anchorAt,
     });
+  }
+  return legs;
+}
+
+/**
+ * Totéž pro živou pozici LIVE grafu (`LiveChartPosition`, list účtů na
+ * telefonu): noha na účet z kotvy brokera. Chybí-li u kteréhokoli účtu
+ * kotva, vstup nebo kusy, `null` = jen kotva brokera.
+ */
+export function liveChartPositionTvLegs(
+  position: Pick<LiveChartPosition, 'symbol' | 'summary'>,
+  rows: readonly LiveChartPositionAccountRow[] | undefined = position.summary?.rows,
+): TvLivePnlLeg[] | null {
+  const summary = position.summary;
+  if (!position.symbol || !summary || summary.kind !== 'position' || !rows || rows.length === 0) return null;
+  const direction = summary.side === 'long' ? 1 : -1;
+  const legs: TvLivePnlLeg[] = [];
+  for (const row of rows) {
+    const anchorAt = Date.parse(row.openPnlAsOf ?? '');
+    if (row.openPnl == null || row.entry == null || row.quantity <= 0 || !Number.isFinite(anchorAt)) return null;
+    legs.push({ symbol: position.symbol, netPosition: row.quantity * direction, averagePrice: row.entry, grossPnl: row.openPnl + (row.fees ?? 0), anchorAt });
   }
   return legs;
 }

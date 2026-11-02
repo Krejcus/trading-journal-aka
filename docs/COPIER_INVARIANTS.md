@@ -1444,7 +1444,8 @@ existující ochranu.
   výslovného rozhodnutí uživatele:** nouzová lišta ani Vypnout NEJSOU na
   telefonním grafu, v menu LIVE ▾ ani v •••. DISARM je dosažitelný takto:
   - LIVE ▾ → Live Dashboard (menu obsahuje přehled vždy) → OFF → potvrzení,
-    tedy 4 klepnutí;
+    tedy 4 klepnutí; s otevřeným listem (účty v obchodě, objednávka,
+    nástroje) o jedno víc, list zakrývá i LIVE ▾ (vědomě přijato 2. 11.);
   - přechod z grafu na přehled je povolený vždy (`lib/tradovateLiveTab.ts`);
   - notifikace z kopírky (risk, zámek dne, odpojený follower, časovače)
     otevírají `live:overview` (`lib/liveOverviewRoute.ts`) přímo na
@@ -1879,7 +1880,9 @@ existující ochranu.
   Štítek živé pozice v grafu deníku (`components/day/DayLivePositionChip.tsx`,
   27. 10. 2026) používá stejnou listovou komponentu se stejným pravidlem;
   čáry pozice v grafu (vstup, SL/TP) jsou jen z read modelu brokera/workeru,
-  nikdy z ceny TV.
+  nikdy z ceny TV. Totéž P&L skupiny a list účtů na LIVE grafu telefonu
+  (`components/day/LivePhoneAccounts.tsx`, 2. 11. 2026; nohy
+  `liveChartPositionTvLegs` v `lib/tvLivePnl.ts`).
   Přehrání ticků z dávky (28. 10. 2026): zpráva smí nést cestu ceny
   (`TvPriceTrail`, skutečně zobchodované ceny rozpracované minuty od minulé
   zprávy, max 64) v polích obálky `t`/`ts` — zvlášť podepsané (HMAC nad
@@ -1897,7 +1900,7 @@ existující ochranu.
   sběr ve workeru, přehrání), `tests/tvPriceClientGuards.test.ts` (kdo smí moduly
   importovat vč. aliasu `@/`, rozhodovací/ukládací/sdílené cesty kanál
   nevidí ani tranzitivně, žádné storage, grant jen do kanálu, render-prop
-  jen formátuje — 6 bloků bez `set*`/`on*`/ref/limitů, ekvivalence
+  jen formátuje — 9 bloků bez `set*`/`on*`/ref/limitů, ekvivalence
   způsobilosti a souhrnu dne; živá svíčka jen do překreslení grafu),
   `tests/tvLivePnl.test.ts`, `tests/tvLiveCandle.test.ts`,
   `tests/tvPriceGrantRefresh.test.ts`, `tests/tvPriceStore.test.ts`,
@@ -1941,6 +1944,16 @@ existující ochranu.
   ≤ 8 s, reset paměti při novém `startedAt`); pohled skupiny bez vyřazených
   followerů, účet mimo skupinu sám za sebe, pohled tiše spadlý na skupinu se
   neukáže. Nic z toho neautorizuje příkaz.
+  Telefon (2. 11. 2026): stejný `useLiveChartData` je zapnutý i pro LIVE graf
+  telefonu (`phoneChartAvailable`), tempo čtení se nemění (`chartOpenRef`,
+  budíček i expozice jen pro graf na PC). Hlavička ukáže P&L skupiny
+  (`components/day/LivePhoneAccounts.tsx`, listová komponenta INV-UI-04),
+  list „Účty v obchodě“ P&L a SL/TP každého účtu. P&L řádku účtu má stejnou
+  brzdu 15 s jako souhrn (`finalize` v `lib/journalLivePosition.ts` vynuluje
+  `openPnl` účtu se starou kotvou nebo bez vstupu — platí i pro PC panel
+  objednávky). Neověřené příkazy účtu = „SL ?“, víc cen = „víc cen“, „bez SL“
+  jen u ověřených příkazů s nulovým krytím (`tests/livePhoneAccounts.test.ts`).
+  Žádné tlačítko příkazu.
 - LIVE → Graf (29. 10. 2026, jen UI): `components/LiveTradingScreen.tsx`
   předává živou svíčku z kanálu jen grafu (`liveCandles={chart.liveFeed}`,
   výjimka v `tests/tvPriceClientGuards.test.ts`); panel objednávky ji nečte.
