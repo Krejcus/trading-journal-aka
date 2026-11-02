@@ -71,16 +71,27 @@ export function createLeaderDisplayFills(max = LEADER_DISPLAY_FILLS_MAX) {
       const exitQty = Math.max(0, Math.min(reducing, fill.quantity));
       const entryQty = fill.quantity - exitQty;
       let current = episode;
-      if (preNet === 0) current = start(fill.symbol, true, 0);
-      else if (!current || current.symbol !== fill.symbol) current = start(fill.symbol, false, preNet);
+      let pre = preNet;
+      if (pre !== 0 && current && current.symbol === fill.symbol && current.netAfter !== pre) {
+        // Position dorazila před Fillem: u vstupu z flat (ledger ještě bez lotu) má rozdělení
+        // kopírky pozici už PO fillu. Jen tenhle jednoznačný tvar se bere jako vstup z flat;
+        // jakýkoli jiný nesoulad s epizodou = mezera (nikdy přilepit k cizímu obchodu).
+        if (current.netAfter === 0 && reducing === 0 && pre === signed) pre = 0;
+        else {
+          current.gap = true;
+          return;
+        }
+      }
+      if (pre === 0) current = start(fill.symbol, true, 0);
+      else if (!current || current.symbol !== fill.symbol) current = start(fill.symbol, false, pre);
       push(current, fill, exitQty, 'exit');
-      if (exitQty > 0 && entryQty > 0 && exitQty >= Math.abs(preNet)) {
+      if (exitQty > 0 && entryQty > 0 && exitQty >= Math.abs(pre)) {
         // Flip: stará epizoda končí výstupem, nová začíná z flat jen vstupní částí.
         current.netAfter = 0;
         current = start(fill.symbol, true, 0);
       }
       push(current, fill, entryQty, 'entry');
-      current.netAfter = preNet + signed;
+      current.netAfter = pre + signed;
     },
     setEpisodeId(symbol: string, episodeId: string | undefined): void {
       if (episode && episode.symbol === symbol && episodeId && !episode.episodeId) episode.episodeId = episodeId;

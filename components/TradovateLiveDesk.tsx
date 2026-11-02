@@ -187,7 +187,7 @@ interface TradovateLiveDeskProps {
    * App). Desktop má vlastní LIVE graf a tohle nepoužije.
    */
   /** Telefon: `header(group)` = hlavička s P&L skupiny místo názvu; `position` = stejný read model jako PC graf (jen zobrazení); `trade` = obchodování přes relay. */
-  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null; copyEvents?: LocalCopierAgentStatus['controller']['recentCopyEvents']; copierArmed?: boolean; fills?: readonly LiveFillMarker[]; fillsOpen?: boolean; alertWatch?: string | null }) => React.ReactNode;
+  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null; copyEvents?: LocalCopierAgentStatus['controller']['recentCopyEvents']; copierArmed?: boolean; fills?: readonly LiveFillMarker[]; fillsOpen?: boolean; fillsSymbol?: string; alertWatch?: string | null }) => React.ReactNode;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -1851,6 +1851,7 @@ acceptAgentStatus((await executeAgent({
             // Šipky plnění leadera (jen zobrazení): čerstvý neobnovený stav, expozice ≤ 8 s.
             fills: phoneFills.fills,
             fillsOpen: phoneFills.open,
+            fillsSymbol: phoneFills.symbol,
             // Kdo hlídá upozornění na cenu: jen čerstvý neobnovený status s cenou z IBKR (jen text).
             alertWatch: priceAlertWatchLabel({ fresh: agentStatusFresh && !agentStatusRestored, watch: agentStatus?.priceAlertWatch,
               statusAgeMs: agentStatusObservedAt == null ? null : freshnessNow - agentStatusObservedAt }),

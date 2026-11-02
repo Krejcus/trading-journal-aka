@@ -81,7 +81,7 @@ export function liveFillMarkersFromStatus(input: {
   /** Kořen grafu (MNQ — NQ i MNQ kontrakty téže rodiny se nekreslí přes sebe). */
   root: string;
   now: number;
-}): { fills: LiveFillMarker[]; open: boolean | undefined } {
+}): { fills: LiveFillMarker[]; open: boolean | undefined; symbol?: string } {
   const none = { fills: [] as LiveFillMarker[], open: undefined };
   const controller = input.controller;
   const ring = controller?.leaderFills;
@@ -94,6 +94,8 @@ export function liveFillMarkersFromStatus(input: {
     .find(position => position.accountId === input.leaderAccountId && position.symbol === ring.symbol)?.netQuantity ?? 0;
   if (Math.sign(net) !== Math.sign(ring.netAfter)) return none;
   return {
+    // Kontrakt epizody: graf šipky kreslí jen nad stejným kontraktem (týden rollu — jiný měsíc).
+    symbol: ring.symbol,
     fills: ring.fills.map(fill => ({ id: fill.fillId, orderId: fill.orderId, at: fill.at, price: fill.price, side: fill.side, role: fill.role, quantity: fill.quantity })),
     open: net !== 0,
   };

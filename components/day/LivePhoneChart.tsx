@@ -53,6 +53,8 @@ export interface LivePhoneChartSlots {
   fills?: readonly LiveFillMarker[];
   /** Obchod plnění je otevřený (šipky bez výstupu). */
   fillsOpen?: boolean;
+  /** Kontrakt plnění (`MNQZ6`) — šipky jen nad stejným kontraktem grafu. */
+  fillsSymbol?: string;
   /** Kdo hlídá upozornění (text do seznamu); null = zatím nikdo. */
   alertWatch?: string | null;
   /** Spuštěná upozornění od datové vrstvy → bliknutí čáry a karta. */
@@ -162,7 +164,11 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const chartPosition = slots.position;
   // Šipky plnění: jen dnešní den a jen plnění, která deník ještě nekreslí (stejné id plnění u brokera).
   const journalFillIds = useMemo(() => new Set(ctl.chart.chartTrades.flatMap(trade => trade.executionHistory?.fills.map(fill => String(fill.id)) ?? [])), [ctl.chart.chartTrades]);
-  const shownFills = useMemo(() => (ctl.isToday ? liveFillsNotInJournal(slots.fills ?? NO_FILLS, journalFillIds) : NO_FILLS), [ctl.isToday, slots.fills, journalFillIds]);
+  // Kontrakt grafu: IBKR zdroj nese konkrétní měsíc; souvislá řada TV = front od brokera; jinak pozice.
+  // Jiný měsíc (týden rollu) nebo neznámý kontrakt = šipky se nekreslí (ceny by seděly o spread vedle).
+  const chartContract = previewSymbolFromChartSource(ctl.chart.liveSource) ?? chartPosition.symbol ?? trade?.frontContract ?? null;
+  const shownFills = useMemo(() => (ctl.isToday && slots.fillsSymbol != null && slots.fillsSymbol === chartContract
+    ? liveFillsNotInJournal(slots.fills ?? NO_FILLS, journalFillIds) : NO_FILLS), [ctl.isToday, slots.fills, slots.fillsSymbol, chartContract, journalFillIds]);
   // Pojistky utažení SL a BE jako PC (LiveTradingScreen.guardSummaryAt): bez ceny z P&L brokera
   // čerstvá kotace IBKR téhož kontraktu (≤ 3 s). Jen blokuje, nic neautorizuje (INV-UI-04).
   const guardAt = useCallback((at: number) => (chartPosition.summary
@@ -194,14 +200,18 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [alertList, setAlertList] = useState(false);
   const [plus, setPlus] = useState<number | null>(null);
   const [flashIds, setFlashIds] = useState<ReadonlySet<string>>(() => new Set());
-  const seenAlertEvents = useRef<Set<string> | null>(null);
+  const seenAlertEvents = useRef<{ store: unknown; ids: Set<string> } | null>(null);
   useEffect(() => {
     const events = alertEvents;
-    // První načtení = staré události, jen si je zapamatovat (jako karty obchodů).
-    if (!seenAlertEvents.current) { seenAlertEvents.current = new Set(events.map(event => event.id)); return; }
-    const fresh = events.filter(event => !seenAlertEvents.current!.has(event.id));
+    // První načtení i výměna úložiště (přihlášení) = staré události, jen si je zapamatovat.
+    if (!seenAlertEvents.current || seenAlertEvents.current.store !== alertStore) {
+      seenAlertEvents.current = { store: alertStore, ids: new Set(events.map(event => event.id)) };
+      return;
+    }
+    const seen = seenAlertEvents.current.ids;
+    const fresh = events.filter(event => !seen.has(event.id));
     for (const event of fresh) {
-      seenAlertEvents.current.add(event.id);
+      seen.add(event.id);
       // Karta a hlas jen u čerstvého spuštění (pozdě doručená stará událost jen zmizí v seznamu).
       if (Date.now() - event.at > ALERT_EVENT_FRESH_MS) continue;
       const alert = alertStore.getState().alerts.find(item => item.id === event.alertId);
@@ -267,7 +277,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
                 const alert = newPriceAlert(plus, lastPrice, alertStore.getState().defaults);
                 alertStore.add(alert);
                 setPlus(null);
-                card('amber', 'Upoz.', 'Upozornění přidáno', `${alertTitle(alert)} · ${!alertState.sync ? 'jen v tomto zařízení (nepřihlášeno)' : slots.alertWatch ? 'hlídá Mac · zvoneček = výběr, dvojklep = nastavení' : 'uloženo — Mac ho teď nehlídá'}`);
+                card('amber', 'Upoz.', 'Upozornění přidáno', `${alertTitle(alert)} · ${!alertState.sync ? 'jen v tomto zařízení (nepřihlášeno)' : alertState.sync === 'offline' ? 'zatím neuloženo — server nedostupný, odešle se později' : slots.alertWatch ? 'hlídá Mac · zvoneček = výběr, dvojklep = nastavení' : 'uloženo — Mac ho teď nehlídá'}`);
               }}
               onLine={() => {
                 const engine = api?.drawing?.engine;
@@ -297,6 +307,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             <LivePhoneAlertList
               alerts={alertState.alerts}
               watching={slots.alertWatch ?? null}
+              error={alertState.error ?? null}
               onClose={() => setAlertList(false)}
               onEdit={id => { setAlertList(false); setEditAlert(id); }}
               onRemove={removeAlert}

@@ -13,7 +13,7 @@ návrhu“). Každý díl implementuje jen své soubory; rozhraní mezi díly js
   `last_triggered_at timestamptz`; `trigger_count int not null default 0`; `edited_at`, `deleted_at`,
   `created_at`, `updated_at` timestamptz. **Žádná cena z IBKR** (INV-UI-04).
 - Triggery (security invoker, `search_path ''`):
-  - insert vlastníkem: stav spouštění vynucen (active, null, 0), `version=1`, strop 50 neodstraněných
+  - insert vlastníkem: stav spouštění vynucen (active, null, 0), `version=1`, strop 50 neodstraněných a nevypršelých
     (advisory lock na uživatele, upsert existujícího řádku projde), `expires_at` = pro `session` nejbližší
     17:00 America/Chicago po `now()` v pracovní den (Po–Pá; DST přes `at time zone`), pro `gtc` null.
   - update vlastníkem: `user_id/id/created_at` z old; LWW (`edited_at` < old → return old); tombstone konečný;
@@ -30,13 +30,15 @@ návrhu“). Každý díl implementuje jen své soubory; rozhraní mezi díly js
   `observed_at timestamptz` (ořez ±5 min od now()), `triggered_at timestamptz default now()`,
   `suppressed_reason text`; `unique(user_id, trigger_id)`. RLS select vlastník; zápis jen RPC.
 - `public.price_alert_outbox` (jen service_role): `id uuid pk`, `user_id`, `event_id uuid references price_alert_events`,
-  `channel text` apns|web, `target_id uuid` (subscription), `title text`, `body text`, `status` pending|sent|failed|dead,
-  `attempts int`, `next_attempt_at`, `created_at`, `sent_at`, `error text`; `unique(event_id, channel, target_id)`.
+  `channel text` apns|web, `subscription_id uuid`, `status` pending|sending|retry|sent|failed|expired, `attempt_count`,
+  `lease_token`, `next_attempt_at`, `expires_at` (+15 min), `created_at`, `updated_at`, `sent_at`, `last_error`;
+  `unique(event_id, channel, subscription_id)`. Text notifikace se skládá až při odeslání z události a upozornění.
+  APNs se posílá s `apns-expiration: 0` (neukládat: nevytlačí rizikovou notifikaci kopírky, nepřijde pozdě).
 - RLS: price_alerts select/insert/update vlastník (bez delete — měkké mazání); service_role select/update.
 - Realtime: `price_alerts`, `price_alert_defaults`, `price_alert_events`.
 - RPC (všechny `revoke execute … from public, anon, authenticated`, kromě rearm):
   - `trigger_price_alert(p_user uuid, p_alert text, p_version bigint, p_trigger uuid, p_observed_at timestamptz, p_front text)`
-    returns `table(event_id uuid, status text, triggered_at timestamptz, frequency text)`; status
+    returns `table(event_id uuid, status text, suppressed boolean)` (PostgREST vrací pole o jednom řádku); status
     `triggered` | `duplicate` | `rejected:<důvod>`; `for update` řádku; duplicita až po zámku a jen při shodě
     user+alert; odmítne: není active, `deleted_at`, vypršelo (`expires_at <= now()` → označí expired),
     jiná verze, `every` a `last_triggered_at > now()-60s`; `once` → triggered; zapíše event.
@@ -78,12 +80,14 @@ návrhu“). Každý díl implementuje jen své soubory; rozhraní mezi díly js
 
 ## C. Mac worker
 
-- `scripts/copier/tvPriceStreamThread.ts`: stávající zpráva `{type:'quote', ...}` (250 ms, jen IBKR živě) dostane
-  `batch: { prev: number|null, min: number, max: number, last: number }` = obchody od minulé zprávy quote
-  (`prev` = poslední cena před nimi); try/catch, jinak beze změny.
-- `server/tvPriceStreamSupervisor.ts`: volitelný posluchač `onQuoteBatch?(quote)` — jen ve větvi IBKR
-  (`workerSource === 'ibkr'`), až po uložení `latestQuote`, synchronně v try/catch (chyba nikdy nezablokuje
-  kotaci ručního Marketu). `prev` po restartu vlákna ceny nebo změně kontraktu = `null` (jen nová výchozí cena).
+- `scripts/copier/tvPriceStreamThread.ts` (po revizi 2. 11. večer): vlastní zpráva
+  `{type:'alert-batch', front, prev, min, max, last}` každých 250 ms, když od minula proběhly obchody —
+  platnost podle `ibkr.reading()` samotného, NE podle zdroje zobrazení (ten se přepíná jen při čtení pro
+  diváka; bez otevřeného LIVE by po restartu vlákna nevznikla žádná dávka). Neohlášené a mimolimitní
+  obchody se vynechají. Zpráva `quote` pro ruční Market zůstává beze změny.
+- `server/tvPriceStreamSupervisor.ts`: volitelný posluchač `onAlertBatch?(batch)` pro `alert-batch` — jen
+  z vlákna se zdrojem IBKR (`workerSource === 'ibkr'`), synchronně v try/catch, kotace se nedotýká.
+  `prev` po restartu vlákna ceny nebo změně kontraktu = `null` (jen nová výchozí cena).
 - `scripts/copier/priceAlertWatchThread.ts` (bundle `price-alert-watch.mjs`, `env: {}`, resourceLimits ~48 MB):
   zprávy dovnitř `{type:'config', apiOrigin, deviceId, key} | {type:'config', off:true}` a
   `{type:'batch', contract, prev, min, max, last, at}`; směr `condition_auto` přepočítává jen v paměti

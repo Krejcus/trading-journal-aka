@@ -12,7 +12,7 @@ let configured = false;
 
 export interface WebPushTarget { endpoint: string; keys: { p256dh: string; auth: string } }
 
-export async function sendWebPushNotification(target: WebPushTarget, input: { title: string; body: string; tag: string; url?: string }): Promise<ApnsResult> {
+export async function sendWebPushNotification(target: WebPushTarget, input: { title: string; body: string; tag: string; url?: string; timeoutMs?: number }): Promise<ApnsResult> {
   try {
     if (!configured) {
       const privateKey = process.env.VAPID_PRIVATE_KEY;
@@ -21,9 +21,11 @@ export async function sendWebPushNotification(target: WebPushTarget, input: { ti
       configured = true;
     }
     await webpush.sendNotification(target, JSON.stringify({ title: input.title, body: input.body, url: input.url ?? '/', tag: input.tag }), {
-      timeout: 4_000,
+      timeout: Math.max(500, Math.min(4_000, input.timeoutMs ?? 4_000)),
       TTL: 600,
-      headers: { Topic: createHash('sha256').update(input.tag).digest('base64url').slice(0, 32), Urgency: 'high' },
+      // `urgency` musí být volba nahoře: web-push hlavičku Urgency z `headers` přepíše výchozí „normal“.
+      urgency: 'high',
+      headers: { Topic: createHash('sha256').update(input.tag).digest('base64url').slice(0, 32) },
     });
     return { status: 'sent' };
   } catch (error: unknown) {

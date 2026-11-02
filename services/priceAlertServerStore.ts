@@ -21,6 +21,14 @@ type PendingOp =
 interface Cache { alerts: PriceAlert[]; defaults: PriceAlertDefaults; events: PriceAlertEvent[] }
 
 const EVENTS_MAX = 20;
+/** Chyby, které opakování nespraví (strop 50, neplatná data): operace se zahodí a nahlásí. */
+const PERMANENT_DB_ERRORS = new Set(['23514', '22P02', '23502', '22003', '22023']);
+const permanentError = (error: { code?: string; message?: string } | null | undefined) => (
+  !!error && (PERMANENT_DB_ERRORS.has(error.code ?? '') || /price-alerts-limit/.test(error.message ?? ''))
+);
+const permanentErrorText = (error: { message?: string }) => (/price-alerts-limit/.test(error.message ?? '')
+  ? 'Upozornění se neuložilo: víc než 50 najednou — nejdřív některé smaž.'
+  : 'Upozornění se neuložilo: server ho odmítl (neplatná data).');
 const RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
 const TRIGGER_FIELDS: (keyof PriceAlert)[] = ['price', 'condition', 'frequency', 'expiry', 'symbol'];
 
@@ -55,7 +63,7 @@ export function priceAlertToRow(userId: string, alert: PriceAlert, deletedAt: nu
     condition: alert.condition, condition_auto: alert.conditionAuto === true, frequency: alert.frequency, expiry: alert.expiry,
     line: alert.line, channels: alert.channels, note: alert.note.slice(0, 80),
     // Smazání je nová úprava (jinak by ho novější úprava z jiného zařízení tiše zahodila).
-    edited_at: new Date(deletedAt != null ? now : Math.min(alert.updatedAt || now, now)).toISOString(),
+    edited_at: new Date(deletedAt != null ? Math.max(now, (alert.updatedAt || 0) + 1) : Math.min(alert.updatedAt || now, now)).toISOString(),
     deleted_at: deletedAt == null ? null : new Date(deletedAt).toISOString(),
   };
 }
@@ -92,13 +100,19 @@ export function createServerPriceAlertStore(deps: {
     return alert && (op.kind === 'upsert' || op.kind === 'delete') ? [[id, { ...op, alert } as PendingOp] as const] : [];
   }));
   let sync: NonNullable<PriceAlertState['sync']> = 'syncing';
+  let error: string | null = null;
   let disposed = false;
   let flushing = false;
+  // Změna zadaná během odesílání: po doběhnutí se fronta projde znovu (jinak by čekala na pull).
+  let rerun = false;
+  // Pořadí čtení vůči zápisům: snímek starší než poslední zápis mapu nepřepíše.
+  let writeGen = 0;
+  let pullSeq = 0;
   let retry = 0;
   let retryTimer: unknown = null;
   let pulledOnce = false;
   const listeners = new Set<() => void>();
-  let state: PriceAlertState = { alerts: [], defaults, sync, events };
+  let state: PriceAlertState = { alerts: [], defaults, sync, events, error };
 
   const rebuild = () => {
     const merged = new Map(server);
@@ -108,7 +122,7 @@ export function createServerPriceAlertStore(deps: {
       else merged.set(id, op.alert);
     }
     const alerts = [...merged.values()].filter(alert => alert.status !== 'expired').sort((a, b) => a.createdAt - b.createdAt).slice(0, 50);
-    state = { alerts, defaults, sync: queue.size || defaultsDirty ? (sync === 'synced' ? 'syncing' : sync) : sync, events };
+    state = { alerts, defaults, sync: queue.size || defaultsDirty ? (sync === 'synced' ? 'syncing' : sync) : sync, events, error };
     write(cacheKey(userId), { alerts: [...server.values()], defaults, events } satisfies Cache);
     write(queueKey(userId), Object.fromEntries(queue));
     listeners.forEach(listener => { try { listener(); } catch { /* posluchač nesmí shodit store */ } });
@@ -120,28 +134,47 @@ export function createServerPriceAlertStore(deps: {
     retry += 1;
   };
 
+  const flushQueue = async (): Promise<void> => {
+    for (const [id, op] of [...queue]) {
+      if (disposed) return;
+      if (queue.get(id) !== op) continue;
+      const row = priceAlertToRow(userId, op.alert, op.kind === 'delete' ? now() : null, now());
+      const { data, error: upsertError } = await client.from('price_alerts').upsert(row, { onConflict: 'user_id,id' }).select('*').maybeSingle();
+      if (upsertError) {
+        // Trvalá chyba nesmí zablokovat zbytek fronty (např. smazání jiného upozornění).
+        if (!permanentError(upsertError)) throw new Error(upsertError.message);
+        if (queue.get(id) === op) queue.delete(id);
+        error = permanentErrorText(upsertError);
+        writeGen += 1;
+        continue;
+      }
+      // Znovuzapnutí jen když ho server potvrdí: `false` = mezitím znovu spustilo nebo už je
+      // aktivní — UI pak ukáže skutečný stav ze serveru, nikdy vnucené „hlídá“.
+      let rearmed = false;
+      if (op.kind === 'upsert' && op.rearm != null) {
+        const result = await client.rpc('rearm_price_alert', { p_alert: id, p_expected_trigger_count: op.rearm });
+        if (result.error) throw new Error(result.error.message);
+        rearmed = result.data === true;
+      }
+      if (queue.get(id) === op) queue.delete(id);
+      writeGen += 1;
+      const saved = data ? priceAlertFromRow(data as Record<string, unknown>) : null;
+      // Smazání platí, jen když ho server opravdu zapsal (novější úprava jinde ho odmítne).
+      if (data && (data as { deleted_at?: unknown }).deleted_at) server.delete(id);
+      else if (saved) server.set(id, rearmed ? { ...saved, status: 'active', version: (saved.version ?? 1) + 1 } : saved);
+      else if (op.kind === 'delete') server.delete(id);
+    }
+  };
+
   const flush = async (): Promise<void> => {
-    if (disposed || flushing) return;
+    if (disposed) return;
+    if (flushing) { rerun = true; return; }
     flushing = true;
     try {
-      for (const [id, op] of [...queue]) {
-        if (disposed) return;
-        const row = priceAlertToRow(userId, op.alert, op.kind === 'delete' ? now() : null, now());
-        const { data, error } = await client.from('price_alerts').upsert(row, { onConflict: 'user_id,id' }).select('*').maybeSingle();
-        if (error) throw new Error(error.message);
-        // Znovuzapnutí jen když ho server potvrdí: `false` = mezitím znovu spustilo nebo už je
-        // aktivní — UI pak ukáže skutečný stav ze serveru, nikdy vnucené „hlídá“.
-        let rearmed = false;
-        if (op.kind === 'upsert' && op.rearm != null) {
-          const result = await client.rpc('rearm_price_alert', { p_alert: id, p_expected_trigger_count: op.rearm });
-          if (result.error) throw new Error(result.error.message);
-          rearmed = result.data === true;
-        }
-        if (queue.get(id) === op) queue.delete(id);
-        const saved = data ? priceAlertFromRow(data as Record<string, unknown>) : null;
-        if (op.kind === 'delete' || (data && (data as { deleted_at?: unknown }).deleted_at)) server.delete(id);
-        else if (saved) server.set(id, rearmed ? { ...saved, status: 'active', version: (saved.version ?? 1) + 1 } : saved);
-      }
+      do {
+        rerun = false;
+        await flushQueue();
+      } while (rerun && !disposed);
       if (defaultsDirty) {
         const { error } = await client.from('price_alert_defaults').upsert({ user_id: userId, defaults, edited_at: new Date(now()).toISOString() }, { onConflict: 'user_id' });
         if (error) throw new Error(error.message);
@@ -160,18 +193,28 @@ export function createServerPriceAlertStore(deps: {
 
   const pull = async (): Promise<void> => {
     if (disposed) return;
+    const seq = pullSeq += 1;
+    const gen = writeGen;
     try {
       const [alerts, defaultsRow, eventRows] = await Promise.all([
-        client.from('price_alerts').select('*').is('deleted_at', null).order('created_at', { ascending: true }).limit(100),
+        // Vypršelá se nemažou a strop je nepočítá: číst jen živá (a nejnovější), jinak by nová vypadla z limitu.
+        client.from('price_alerts').select('*').is('deleted_at', null).neq('status', 'expired').order('created_at', { ascending: false }).limit(100),
         client.from('price_alert_defaults').select('defaults').maybeSingle(),
         client.from('price_alert_events').select('*').gte('triggered_at', new Date(now() - 24 * 3_600_000).toISOString())
           .order('triggered_at', { ascending: false }).limit(EVENTS_MAX),
       ]);
+      // Odstavený store ani starší z dvou souběžných čtení už nic nezapíše (ani do úložiště).
+      if (disposed || seq !== pullSeq) return;
       if (alerts.error || defaultsRow.error || eventRows.error) throw new Error('pull-failed');
-      server = new Map((alerts.data ?? []).flatMap(row => {
-        const alert = priceAlertFromRow(row as Record<string, unknown>);
-        return alert ? [[alert.id, alert] as const] : [];
-      }));
+      if (gen === writeGen) {
+        server = new Map((alerts.data ?? []).flatMap(row => {
+          const alert = priceAlertFromRow(row as Record<string, unknown>);
+          return alert ? [[alert.id, alert] as const] : [];
+        }));
+      } else {
+        // Snímek je starší než zápis, který mezitím doběhl: nepřepsat, přečíst znovu.
+        schedule(() => { void pull(); }, 500);
+      }
       if (defaultsRow.data && !defaultsDirty) defaults = sanitizePriceAlertDefaults((defaultsRow.data as { defaults?: unknown }).defaults);
       events = (eventRows.data ?? []).flatMap(row => {
         const event = priceAlertEventFromRow(row as Record<string, unknown>);
@@ -183,6 +226,7 @@ export function createServerPriceAlertStore(deps: {
       }
       sync = queue.size || defaultsDirty ? 'syncing' : 'synced';
     } catch {
+      if (disposed || seq !== pullSeq) return;
       sync = 'offline';
     }
     rebuild();
@@ -206,6 +250,8 @@ export function createServerPriceAlertStore(deps: {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'price_alerts', filter }, payload => {
           const row = payload.new as Record<string, unknown> | undefined;
           if (!row || typeof row.id !== 'string' || queue.has(row.id)) return;
+          // Změna z realtime je novější než rozběhnuté čtení.
+          writeGen += 1;
           if (row.deleted_at) server.delete(row.id);
           else {
             const alert = priceAlertFromRow(row);

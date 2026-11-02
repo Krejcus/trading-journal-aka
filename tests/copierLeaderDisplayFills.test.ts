@@ -57,6 +57,20 @@ describe('plnění leadera pro šipky (jen zobrazení)', () => {
     expect(ring.snapshot()).toBeNull();
   });
 
+  it('Position před Fillem: vstup z flat s pozicí už po fillu = nová epizoda z flat; jiný nesoulad = mezera', () => {
+    const ring = createLeaderDisplayFills();
+    ring.observe(fill('Buy', 1, 100), 0, 0);
+    ring.observe(fill('Sell', 1, 110), 1, 1);
+    // Ledger ještě bez lotu → rozdělení kopírky vrátí pozici po fillu (+1), ne 0.
+    ring.observe(fill('Buy', 1, 105), 1, 0);
+    expect(ring.snapshot()).toMatchObject({ fromFlat: true, netAfter: 1, fills: [{ role: 'entry', price: 105 }] });
+    expect(ring.snapshot()!.fills).toHaveLength(1);
+    // Pozice před fillem nesedí s epizodou (+1 → hlášeno +3): nepřilepit, mezera.
+    ring.observe(fill('Buy', 1, 106), 3, 0);
+    expect(ring.snapshot()).toMatchObject({ gap: true });
+    expect(ring.snapshot()!.fills).toHaveLength(1);
+  });
+
   it('snapshot je kopie (status nesmí měnit vnitřní stav)', () => {
     const ring = createLeaderDisplayFills();
     ring.observe(fill('Buy', 1, 100), 0, 0);

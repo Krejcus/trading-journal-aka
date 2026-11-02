@@ -181,6 +181,8 @@ export interface PriceAlertState {
   sync?: 'local' | 'syncing' | 'synced' | 'offline';
   /** Poslední spuštění ze serveru (nejnovější poslední). */
   events?: readonly PriceAlertEvent[];
+  /** Poslední trvalá chyba uložení (operace se zahodila) — UI ji ukáže. */
+  error?: string | null;
 }
 
 /**

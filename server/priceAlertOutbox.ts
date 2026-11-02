@@ -39,7 +39,7 @@ export const priceAlertCollapseId = (alertId: string) => `price-alert:${createHa
 
 export interface PriceAlertDrainDeps {
   sendApns?: (device: Parameters<typeof sendApnsNotification>[0], notification: ApnsNotification) => Promise<ApnsResult>;
-  sendWebPush?: (target: WebPushTarget, input: { title: string; body: string; tag: string }) => Promise<ApnsResult>;
+  sendWebPush?: (target: WebPushTarget, input: { title: string; body: string; tag: string; url?: string; timeoutMs?: number }) => Promise<ApnsResult>;
 }
 
 export async function drainPriceAlertOutbox(options: {
@@ -99,10 +99,12 @@ export async function drainPriceAlertOutbox(options: {
             environment: device.data.environment, bundleId: device.data.bundle_id }, {
             ...content, route: 'live', threadId: 'alphatrade-price-alerts', interruptionLevel: 'active',
             collapseId, silent: alert.data?.channels?.sound === false, timeoutMs: options.timeoutMs ?? 7_000,
+            // Neukládat u Applu: nevytlačí rizikovou notifikaci kopírky a nepřijde pozdě (INV-WATCH-01).
+            expirationSeconds: 0,
           });
         } else {
           result = await sendWeb({ endpoint: device.data.endpoint, keys: { p256dh: device.data.p256dh, auth: device.data.auth } },
-            { ...content, tag: collapseId });
+            { ...content, tag: collapseId, url: '/', timeoutMs: options.timeoutMs });
         }
         if (result.status === 'expired' && device.data) {
           await options.db.from(table).update({ expired_at: new Date(now()).toISOString(), last_error: result.error ?? null })

@@ -18,11 +18,19 @@ function fakeClient() {
   const rpcs: { name: string; args: Record<string, unknown> }[] = [];
   const realtime: Record<string, (payload: { new?: Record<string, unknown> }) => void> = {};
   let offline = false;
+  let hold = false;
+  const held: (() => void)[] = [];
+  const rejectIds = new Map<string, { code: string; message: string }>();
+  const staleIds = new Set<string>();
   const fail = { data: null, error: { message: 'offline' } };
   const run = (table: string, op: string, payload: Record<string, unknown> | null) => {
     if (offline) return fail;
     if (table === 'price_alerts' && op === 'upsert') {
       upserts.push(payload!);
+      const rejected = rejectIds.get(payload!.id as string);
+      if (rejected) return { data: null, error: rejected };
+      // LWW v DB: starší úprava vrátí původní řádek (smazání se nezapíše).
+      if (staleIds.has(payload!.id as string)) return { data: rows.get(payload!.id as string) ?? null, error: null };
       const previous = rows.get(payload!.id as string);
       const conditionChanged = previous && (['price', 'condition', 'frequency', 'expiry'] as const).some(key => previous[key] !== payload![key]);
       const row: Record<string, unknown> = {
@@ -42,10 +50,24 @@ function fakeClient() {
     from(table: string) {
       let op = 'select';
       let payload: Record<string, unknown> | null = null;
+      let hideExpired = false;
+      let limit = Infinity;
       const api = {
-        select: () => api, is: () => api, order: () => api, limit: () => api, gte: () => api, maybeSingle: () => api,
+        select: () => api, is: () => api, order: () => api, gte: () => api, maybeSingle: () => api,
+        neq: (column: string, value: unknown) => { if (column === 'status' && value === 'expired') hideExpired = true; return api; },
+        limit: (count: number) => { limit = count; return api; },
         upsert: (value: Record<string, unknown>) => { op = 'upsert'; payload = value; return api; },
-        then: (resolve: (value: unknown) => void, reject: (reason: unknown) => void) => Promise.resolve(run(table, op, payload)).then(resolve, reject),
+        then: (resolve: (value: unknown) => void, reject: (reason: unknown) => void) => {
+          if (hold && op === 'upsert') {
+            return new Promise(done => { held.push(() => done(run(table, op, payload))); }).then(resolve, reject);
+          }
+          const result = run(table, op, payload) as { data: unknown; error: unknown };
+          if (table === 'price_alerts' && op === 'select' && Array.isArray(result.data)) {
+            const rowsOut = (result.data as Record<string, unknown>[]).filter(row => !hideExpired || row.status !== 'expired');
+            return Promise.resolve({ ...result, data: rowsOut.slice(0, limit) }).then(resolve, reject);
+          }
+          return Promise.resolve(result).then(resolve, reject);
+        },
       };
       return api;
     },
@@ -67,8 +89,10 @@ function fakeClient() {
     removeChannel: () => Promise.resolve('ok'),
   };
   return {
-    client: client as unknown as SupabaseClient, rows, upserts, rpcs, realtime,
+    client: client as unknown as SupabaseClient, rows, upserts, rpcs, realtime, rejectIds, staleIds,
     setOffline: (value: boolean) => { offline = value; },
+    setHold: (value: boolean) => { hold = value; },
+    release: () => { while (held.length) held.shift()!(); },
   };
 }
 
@@ -179,6 +203,76 @@ describe('serverový store upozornění na cenu', () => {
     await settle();
     expect(fake.rows.has(local.id)).toBe(false);
     second.dispose();
+  });
+});
+
+describe('serverový store: fronta a chyby (revize 2. 11.)', () => {
+  it('změna zadaná během odesílání odejde hned po něm (bez čekání na pull)', async () => {
+    const fake = fakeClient();
+    const alerts = store(fake);
+    await settle();
+    const a = newPriceAlert(21480, 21467.5, DEFAULT_PRICE_ALERT, 40_000);
+    const b = newPriceAlert(21490, 21467.5, DEFAULT_PRICE_ALERT, 40_001);
+    fake.setHold(true);
+    alerts.add(a);
+    alerts.add(b);
+    fake.setHold(false);
+    fake.release();
+    await settle();
+    expect(fake.rows.has(a.id)).toBe(true);
+    expect(fake.rows.has(b.id)).toBe(true);
+    alerts.dispose();
+  });
+
+  it('trvalá chyba (strop 50) frontu nezablokuje: zbytek odejde, chyba se ukáže', async () => {
+    const fake = fakeClient();
+    const alerts = store(fake);
+    await settle();
+    const over = newPriceAlert(21480, 21467.5, DEFAULT_PRICE_ALERT, 40_000);
+    const other = newPriceAlert(21490, 21467.5, DEFAULT_PRICE_ALERT, 40_001);
+    fake.rejectIds.set(over.id, { code: '23514', message: 'price-alerts-limit' });
+    fake.setOffline(true);
+    alerts.add(over);
+    alerts.add(other);
+    await settle();
+    fake.setOffline(false);
+    await alerts.refresh();
+    await settle();
+    expect(fake.rows.has(other.id)).toBe(true);
+    expect(alerts.getState().alerts.map(item => item.id)).toEqual([other.id]);
+    expect(alerts.getState().error).toMatch(/víc než 50/);
+    alerts.dispose();
+  });
+
+  it('smazání, které DB odmítne (novější úprava jinde), upozornění neschová natrvalo', async () => {
+    const fake = fakeClient();
+    const alerts = store(fake);
+    await settle();
+    const alert = newPriceAlert(21480, 21467.5, DEFAULT_PRICE_ALERT, 40_000);
+    alerts.add(alert);
+    await settle();
+    fake.staleIds.add(alert.id);
+    alerts.remove(alert.id);
+    await settle();
+    expect(fake.upserts.at(-1)).toMatchObject({ id: alert.id, deleted_at: expect.any(String) });
+    expect(alerts.getState().alerts.map(item => item.id)).toEqual([alert.id]);
+    alerts.dispose();
+  });
+});
+
+describe('serverový store: čtení', () => {
+  it('stovka vypršelých (nemažou se) nevytlačí živá upozornění z čtení', async () => {
+    const fake = fakeClient();
+    for (let i = 0; i < 120; i += 1) {
+      const old = newPriceAlert(20000 + i, 21467.5, DEFAULT_PRICE_ALERT, 1_000 + i);
+      fake.rows.set(old.id, { ...priceAlertToRow(USER, old, null, 2_000), created_at: new Date(1_000 + i).toISOString(), status: 'expired', trigger_count: 0, version: 1 });
+    }
+    const live = newPriceAlert(21480, 21467.5, DEFAULT_PRICE_ALERT, 40_000);
+    fake.rows.set(live.id, { ...priceAlertToRow(USER, live, null, 50_000), created_at: new Date(40_000).toISOString(), status: 'active', trigger_count: 0, version: 1 });
+    const alerts = store(fake);
+    await settle();
+    expect(alerts.getState().alerts.map(item => item.id)).toEqual([live.id]);
+    alerts.dispose();
   });
 });
 

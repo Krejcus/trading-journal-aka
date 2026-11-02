@@ -106,6 +106,7 @@ describe('jádro hlídače: křížení jen z platné výchozí ceny', () => {
     expired.onBatch(batch({ prev: null }));
     expect(expired.onBatch(batch({ at: NOW + 250, prev: 99.5, min: 99.5, max: 101, last: 101 }))).toEqual([]);
     const many = core(Array.from({ length: 40 }, (_, index) => ({ id: `pa-m${index}` })));
+
     many.onBatch(batch({ prev: null }));
     expect(many.onBatch(batch({ at: NOW + 250, prev: 99.5, min: 99.5, max: 101, last: 101 }))).toHaveLength(LOCAL_CAP);
   });
@@ -116,6 +117,56 @@ describe('jádro hlídače: křížení jen z platné výchozí ceny', () => {
     expect(parseWatchAlert({ ...alert(), price: -1 })).toBeNull();
     expect(parseWatchAlert({ ...alert(), version: 0 })).toBeNull();
     expect(parseWatchAlert(alert())).toEqual(alert());
+  });
+});
+
+describe('jádro hlídače: odpověď serveru', () => {
+  const make = (patch: Partial<WatchAlert> = {}) => {
+    let n = 0;
+    const watch = createPriceAlertWatchCore({ now: () => NOW, uuid: () => `t${(n += 1)}` });
+    watch.setAlerts([alert(patch)]);
+    watch.onBatch(batch({ prev: null }));
+    return watch;
+  };
+  const cross = (watch: ReturnType<typeof make>, at: number) => watch.onBatch(batch({ at, prev: 99.5, min: 99.5, max: 100.5, last: 100.5 }))
+    .concat(watch.onBatch(batch({ at: at + 1, prev: 100.5, min: 99, max: 100.5, last: 99 })));
+  // Klidné dávky pod úrovní, ať čas mezi kříženími není „výpadek ceny“ (> 15 s = nová výchozí cena).
+  const idle = (watch: ReturnType<typeof make>, from: number, to: number) => {
+    for (let at = from; at < to; at += 10_000) expect(watch.onBatch(batch({ at, prev: 99, min: 99, max: 99, last: 99 }))).toEqual([]);
+  };
+
+  it('„jednou“ bez konečné odpovědi (výpadek) se uvolní a příští křížení znovu nahlásí; konečná odpověď ho nechá', () => {
+    const watch = make();
+    const [first] = cross(watch, NOW + 250);
+    expect(first).toMatchObject({ triggerId: 't1' });
+    expect(cross(watch, NOW + 500)).toEqual([]);
+    watch.settle('t1', 'retry');
+    expect(cross(watch, NOW + 750)).toHaveLength(1);
+    watch.settle('t2', 'final');
+    expect(cross(watch, NOW + 1_000)).toEqual([]);
+  });
+
+  it('„pokaždé“: odmítnutí kvůli odstupu serveru vrátí předchozí čas; místní odstup 62 s', () => {
+    const watch = make({ frequency: 'every' });
+    expect(cross(watch, NOW + 250)).toHaveLength(1);
+    idle(watch, NOW + 10_000, NOW + 61_000);
+    expect(cross(watch, NOW + 61_000)).toEqual([]);
+    const [second] = cross(watch, NOW + 62_500);
+    expect(second).toBeDefined();
+    watch.settle(second.triggerId, 'retry');
+    // Po vrácení času platí odstup od prvního spuštění — další křížení hned projde.
+    expect(cross(watch, NOW + 63_000)).toHaveLength(1);
+  });
+
+  it('upozornění přibylé během hlídání bere směr z konce dávky (výchozí cena příští dávky)', () => {
+    let n = 0;
+    const watch = createPriceAlertWatchCore({ now: () => NOW, uuid: () => `t${(n += 1)}` });
+    watch.setAlerts([]);
+    watch.onBatch(batch({ prev: null, min: 100.75, max: 100.75, last: 100.75 }));
+    watch.setAlerts([alert({ price: 101, conditionAuto: true, condition: 'up' })]);
+    // Dávka 100.75 → 101.25: konec je nad úrovní, směr tedy „dolů“.
+    expect(watch.onBatch(batch({ at: NOW + 250, prev: 100.75, min: 100.75, max: 101.25, last: 101.25 }))).toEqual([]);
+    expect(watch.onBatch(batch({ at: NOW + 500, prev: 101.25, min: 100.5, max: 101.25, last: 100.5 }))).toHaveLength(1);
   });
 });
 
@@ -322,12 +373,15 @@ describe('oddělení hlídače od příkazů (INV-WORKER-04, INV-WATCH-01)', () 
     expect(notify).toMatch(/\{ apiOrigin: options\.apiOrigin, deviceId: grant\.deviceId, key: grant\.key \}/);
   });
 
-  it('supervisor ceny předá dávku jen ve větvi IBKR a až po uložení kotace', () => {
+  it('vlákno ceny: dávka podle platnosti čtení IBKR (ne zdroje zobrazení), vlastní zprávou; kotace beze změny', () => {
+    const thread = source('scripts/copier/tvPriceStreamThread.ts');
+    expect(thread).toContain("const ibkrReading = priceSource === 'ibkr' ? ibkr?.reading() ?? null : null;");
+    expect(thread).toContain('ibkr?.takeAlertBatch(ibkrReading != null)');
+    expect(thread).toMatch(/type: 'alert-batch', front: batch\.contract/);
+    expect(thread).toContain("if (priceSource !== 'ibkr' || sourceSwitch.active !== 'ibkr' || !ibkrReading) return;");
     const supervisor = source('server/tvPriceStreamSupervisor.ts');
-    const quote = supervisor.slice(supervisor.indexOf("if (type === 'quote')"), supervisor.indexOf("if (type === 'price-source')"));
-    expect(quote.indexOf("workerSource !== 'ibkr'")).toBeGreaterThan(-1);
-    expect(quote.indexOf('latestQuote = {')).toBeLessThan(quote.indexOf('options.onQuoteBatch('));
-    expect(quote).toMatch(/catch \{ \/\* hlídač upozornění je jen doplněk \*\/ \}/);
+    const quote = supervisor.slice(supervisor.indexOf("if (type === 'quote')"), supervisor.indexOf("if (type === 'alert-batch')"));
+    expect(quote).not.toMatch(/onAlertBatch|batch/);
   });
 
   it('cron: upozornění ve vlastním try/catch za sekcí kopírky; fronta incidentů beze změny', () => {

@@ -100,6 +100,10 @@ test('strop 50 neodstraněných; upsert existujícího na stropu projde', async 
   await assert.rejects(() => upsert(A, 'pa-cap-50'), /price-alerts-limit/);
   await upsert(A, 'pa-cap-3', { note: 'na stropu', edited_at: later(1_000) });
   assert.equal((await alert('pa-cap-3')).note, 'na stropu');
+  // Vypršelá (UI je nezobrazuje, smazat je nejde) strop neblokují.
+  await raw(`update public.price_alerts set status = 'expired' where user_id = '${A}' and id = 'pa-cap-7'`);
+  await upsert(A, 'pa-cap-50');
+  await assert.rejects(() => upsert(A, 'pa-cap-51'), /price-alerts-limit/);
   await raw(`update public.price_alerts set deleted_at = now() where user_id = '${A}' and id like 'pa-cap-%'`);
 });
 

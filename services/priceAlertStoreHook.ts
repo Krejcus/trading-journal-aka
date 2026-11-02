@@ -9,36 +9,46 @@ const localStorageOrNull = () => {
 
 /**
  * Úložiště upozornění na cenu pro UI (2. 11. 2026): přihlášený uživatel = server (sdílené
- * PC ↔ telefon, hlídá Mac worker), jinak jen toto zařízení. Přihlášení/odhlášení store vymění.
+ * PC ↔ telefon, hlídá Mac worker), jinak jen toto zařízení. Jeden store na přihlášeného
+ * uživatele po celou dobu běhu appky (ne na jedno otevření grafu): fronta změn se dál
+ * odesílá i po odchodu z grafu a události se po návratu nepřehrají znovu.
  */
+type ServerStore = ReturnType<typeof createServerPriceAlertStore>;
+let shared: { userId: string; store: ServerStore } | null = null;
+let local: PriceAlertStore | null = null;
+let started = false;
+const listeners = new Set<(store: PriceAlertStore) => void>();
+
+const localStore = () => (local ??= createLocalPriceAlertStore(localStorageOrNull()));
+const currentStore = (): PriceAlertStore => shared?.store ?? localStore();
+
+function bind(userId: string | null): void {
+  if ((shared?.userId ?? null) === userId) return;
+  shared?.store.dispose();
+  shared = userId ? { userId, store: createServerPriceAlertStore({ client: supabase, userId, storage: localStorageOrNull() }) } : null;
+  const store = currentStore();
+  listeners.forEach(listener => listener(store));
+}
+
+function start(): void {
+  if (started || typeof window === 'undefined') return;
+  started = true;
+  void supabase.auth.getSession().then(({ data }) => bind(data.session?.user.id ?? null)).catch(() => undefined);
+  supabase.auth.onAuthStateChange((_event, session) => bind(session?.user.id ?? null));
+  // Realtime v pozadí (iOS) nic nedoručí: po návratu a každou minutu stav znovu načíst.
+  const refresh = () => { if (document.visibilityState === 'visible') void shared?.store.refresh(); };
+  window.setInterval(refresh, 60_000);
+  document.addEventListener('visibilitychange', refresh);
+  window.addEventListener('focus', refresh);
+}
+
 export function usePriceAlertStore(): PriceAlertStore {
-  const [store, setStore] = useState<PriceAlertStore>(() => createLocalPriceAlertStore(localStorageOrNull()));
+  const [store, setStore] = useState<PriceAlertStore>(currentStore);
   useEffect(() => {
-    let current: ReturnType<typeof createServerPriceAlertStore> | null = null;
-    let owner: string | null = null;
-    let disposed = false;
-    const bind = (userId: string | null) => {
-      if (disposed || userId === owner) return;
-      owner = userId;
-      current?.dispose();
-      current = userId ? createServerPriceAlertStore({ client: supabase, userId, storage: localStorageOrNull() }) : null;
-      setStore(current ?? createLocalPriceAlertStore(localStorageOrNull()));
-    };
-    void supabase.auth.getSession().then(({ data }) => bind(data.session?.user.id ?? null)).catch(() => undefined);
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => bind(session?.user.id ?? null));
-    // Realtime v pozadí (iOS) nic nedoručí: po návratu a každou minutu stav znovu načíst.
-    const refresh = () => { if (document.visibilityState === 'visible') void current?.refresh(); };
-    const timer = window.setInterval(refresh, 60_000);
-    document.addEventListener('visibilitychange', refresh);
-    window.addEventListener('focus', refresh);
-    return () => {
-      disposed = true;
-      subscription.unsubscribe();
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', refresh);
-      window.removeEventListener('focus', refresh);
-      current?.dispose();
-    };
+    start();
+    listeners.add(setStore);
+    setStore(currentStore());
+    return () => { listeners.delete(setStore); };
   }, []);
   return store;
 }

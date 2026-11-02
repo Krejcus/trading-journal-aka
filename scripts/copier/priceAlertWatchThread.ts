@@ -85,13 +85,20 @@ async function flush(): Promise<void> {
     // Odpověď serveru je konečná (triggered / duplicate / rejected); opakuje se jen transport
     // a vždy se stejným id (server pak pozná duplicitu).
     const results = data?.results;
-    const answered = new Set(Array.isArray(results)
-      ? results.flatMap((item: unknown) => {
+    const answered = new Map<string, string>();
+    if (Array.isArray(results)) {
+      for (const item of results as unknown[]) {
         const row = item as { triggerId?: unknown; status?: unknown } | null;
-        return row && typeof row.triggerId === 'string' && row.status !== 'error' ? [row.triggerId] : [];
-      })
-      : []);
-    for (let index = pending.length - 1; index >= 0; index -= 1) if (answered.has(pending[index].triggerId)) pending.splice(index, 1);
+        if (row && typeof row.triggerId === 'string' && typeof row.status === 'string' && row.status !== 'error') answered.set(row.triggerId, row.status);
+      }
+    }
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      const status = answered.get(pending[index].triggerId);
+      if (status == null) continue;
+      // Odmítnutí kvůli odstupu serveru: lokálně neumlčet, příští křížení smí projít.
+      core.settle(pending[index].triggerId, status === 'rejected:cooldown' ? 'retry' : 'final');
+      pending.splice(index, 1);
+    }
     sendBackoff = 0;
     nextSendAt = 0;
   } catch {
@@ -100,7 +107,12 @@ async function flush(): Promise<void> {
   } finally {
     sending = false;
     const cutoff = Date.now() - PENDING_MAX_AGE_MS;
-    for (let index = pending.length - 1; index >= 0; index -= 1) if (pending[index].firstAt < cutoff) pending.splice(index, 1);
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      if (pending[index].firstAt >= cutoff) continue;
+      // Bez konečné odpovědi serveru: upozornění zůstává u serveru aktivní, hlídač ho nesmí umlčet.
+      core.settle(pending[index].triggerId, 'retry');
+      pending.splice(index, 1);
+    }
   }
 }
 

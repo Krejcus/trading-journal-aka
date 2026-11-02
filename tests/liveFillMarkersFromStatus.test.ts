@@ -24,7 +24,7 @@ const derive = (patch: Partial<Parameters<typeof liveFillMarkersFromStatus>[0]> 
 
 describe('šipky plnění ze statusu workeru (jen zobrazení)', () => {
   it('čerstvý stav a otevřená pozice: plnění leadera, open=true', () => {
-    expect(derive()).toEqual({ open: true, fills: [{ id: '11', orderId: '7', at: NOW - 3_000, price: 28_000, side: 'Buy', role: 'entry', quantity: 2 }] });
+    expect(derive()).toEqual({ open: true, symbol: 'MNQZ6', fills: [{ id: '11', orderId: '7', at: NOW - 3_000, price: 28_000, side: 'Buy', role: 'entry', quantity: 2 }] });
   });
 
   it('obnovený/starý/odpojený stav nebo expozice > 8 s = nic (nikdy jako aktuální)', () => {
@@ -185,7 +185,7 @@ describe('šipky plnění nikdy neautorizují příkaz (INV-UI-*)', async () => 
   it('phoneFills jde jen do slotu grafu, nikdy do phoneTrade ani relay', () => {
     const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
     const uses = desk.split('\n').filter(line => /\bphoneFills\b/.test(line)).map(line => line.trim());
-    expect(uses.filter(line => !/^const phoneFills = useMemo|^fills: phoneFills\.fills,|^fillsOpen: phoneFills\.open,/.test(line))).toEqual([]);
+    expect(uses.filter(line => !/^const phoneFills = useMemo|^fills: phoneFills\.fills,|^fillsOpen: phoneFills\.open,|^fillsSymbol: phoneFills\.symbol,/.test(line))).toEqual([]);
     const tradeBlock = desk.slice(desk.indexOf('const phoneTrade = useMemo'), desk.indexOf('const phoneFills = useMemo'));
     expect(tradeBlock).not.toMatch(/leaderFills|phoneFills|liveFillMarkers/);
   });

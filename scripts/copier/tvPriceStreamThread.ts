@@ -305,22 +305,21 @@ setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
 // kontraktu a čerstvost ceny Marketu; z TV se nikdy neposílá.
 setInterval(() => {
   try {
-    const active = priceSource === 'ibkr' && sourceSwitch.active === 'ibkr';
-    const reading = active ? ibkr?.reading() ?? null : null;
-    // Dávka obchodů pro upozornění na cenu se vybírá vždy; bez platného čtení IBKR se
-    // zahodí i s výchozí cenou (záloha TV ani opožděná data nikdy nic nespustí).
-    let batch: ReturnType<IbkrPriceSource['takeAlertBatch']> = null;
+    const ibkrReading = priceSource === 'ibkr' ? ibkr?.reading() ?? null : null;
+    // Upozornění na cenu: platnost podle čtení IBKR samotného, ne podle zdroje zobrazení —
+    // ten se přepíná jen při čtení pro diváka, takže bez otevřeného LIVE by po restartu vlákna
+    // žádná dávka nevznikla. Bez platného čtení IBKR se dávka zahodí i s výchozí cenou;
+    // TradingView upozornění nikdy nespouští.
     try {
-      batch = ibkr?.takeAlertBatch(reading != null) ?? null;
-      if (batch && batch.contract !== reading?.front) batch = null;
-    } catch {
-      batch = null;
-    }
-    if (!reading) return;
+      const batch = ibkr?.takeAlertBatch(ibkrReading != null) ?? null;
+      if (batch && ibkrReading && batch.contract === ibkrReading.front) {
+        port.postMessage({ type: 'alert-batch', front: batch.contract, prev: batch.prev, min: batch.min, max: batch.max, last: batch.last });
+      }
+    } catch { /* upozornění jsou jen doplněk */ }
+    if (priceSource !== 'ibkr' || sourceSwitch.active !== 'ibkr' || !ibkrReading) return;
     port.postMessage({
-      type: 'quote', front: reading.front, last: reading.last, lastAt: reading.lastAt,
-      bid: reading.bid, ask: reading.ask, quoteAt: reading.quoteAt,
-      ...(batch ? { batch: { prev: batch.prev, min: batch.min, max: batch.max, last: batch.last } } : {}),
+      type: 'quote', front: ibkrReading.front, last: ibkrReading.last, lastAt: ibkrReading.lastAt,
+      bid: ibkrReading.bid, ask: ibkrReading.ask, quoteAt: ibkrReading.quoteAt,
     });
   } catch { /* best effort */ }
 }, 250);

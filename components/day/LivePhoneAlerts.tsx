@@ -311,8 +311,10 @@ export function LivePhoneAlertSheet({ alert, market, onSave, onDelete, onClose }
 }
 
 /** Seznam upozornění (zvonek ve spodní liště). */
-export function LivePhoneAlertList({ alerts, watching, onEdit, onRemove, onClose }: {
+export function LivePhoneAlertList({ alerts, watching, error, onEdit, onRemove, onClose }: {
   alerts: readonly PriceAlert[];
+  /** Poslední trvalá chyba uložení na server (operace zahozená). */
+  error?: string | null;
   /** Kdo upozornění hlídá — text od datové vrstvy; null = zatím nikdo (jen v tomto zařízení). */
   watching: string | null;
   onEdit: (id: string) => void;
@@ -330,6 +332,7 @@ export function LivePhoneAlertList({ alerts, watching, onEdit, onRemove, onClose
         <i style={{ width: 7, height: 7, borderRadius: 4, flex: 'none', background: watching ? '#22c55e' : '#f2a623' }} />
         {watching ?? 'Upozornění teď nikdo nehlídá — Mac worker neběží nebo nemá cenu z IBKR. Křížení mezitím se nedoženou.'}
       </div>
+      {error && <div role="alert" style={{ margin: '0 16px 10px', padding: '9px 11px', borderRadius: 11, fontSize: 12, background: 'rgba(239,70,85,.12)', color: '#fda4af' }}>{error}</div>}
       {alerts.length === 0 && <p style={{ margin: 0, padding: '6px 16px 0', fontSize: 13, color: 'var(--dj-muted)' }}>Žádné upozornění. Podrž prst na grafu a klepni na +.</p>}
       {alerts.map(alert => {
         const channels = [alert.channels.phone && 'iPhone', alert.channels.voice && 'hlas', alert.channels.pc && 'PC'].filter(Boolean).join(' + ');

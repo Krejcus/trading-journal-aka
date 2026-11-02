@@ -134,8 +134,8 @@ export function createTvPriceStreamSupervisor(options: {
   log?: (line: string) => void;
   /** Výpadek / návrat IBKR (jen stav a krátké kódy) — oznámení na Macu. Nikdy nesmí vyhodit ven. */
   onPriceSourceAlert?: (alert: PriceSourceAlert) => void;
-  /** Dávka obchodů IBKR pro hlídač upozornění; volá se synchronně, výjimka se spolkne. */
-  onQuoteBatch?: (batch: TvPriceStreamQuoteBatch) => void;
+  /** Dávka obchodů IBKR pro hlídač upozornění (jen vlákno se zdrojem IBKR); synchronně, výjimka se spolkne. */
+  onAlertBatch?: (batch: TvPriceStreamQuoteBatch) => void;
   now?: () => number;
   setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
   clearTimeoutImpl?: (timer: unknown) => void;
@@ -278,16 +278,21 @@ export function createTvPriceStreamSupervisor(options: {
           bid: bid != null && ask != null && bid <= ask ? bid : null, ask: bid != null && ask != null && bid <= ask ? ask : null,
           quoteAt: quoteAt != null && bid != null && ask != null && bid <= ask ? Math.min(quoteAt, receivedAt) : null,
         } };
-        // Až po uložení kotace: chyba hlídače upozornění nikdy nezablokuje cenu ručního Marketu.
+        return;
+      }
+      if (type === 'alert-batch') {
+        // Vlastní zpráva, kotaci ručního Marketu se nedotýká. Jen vlákno se zdrojem IBKR (TV nikdy).
+        if (workerSource !== 'ibkr' || !options.onAlertBatch) return;
         try {
-          const batch = (message as { batch?: unknown }).batch as { prev?: unknown; min?: unknown; max?: unknown; last?: unknown } | undefined;
-          const min = batch ? positive(batch.min) : null;
-          const max = batch ? positive(batch.max) : null;
-          const batchLast = batch ? positive(batch.last) : null;
-          const prev = batch && batch.prev !== null ? positive(batch.prev) : null;
-          if (options.onQuoteBatch && batch && min != null && max != null && batchLast != null && min <= batchLast && batchLast <= max
-            && (batch.prev === null || prev != null)) {
-            options.onQuoteBatch({ contract: row.front as string, prev, min, max, last: batchLast, at: receivedAt });
+          const batch = message as { front?: unknown; prev?: unknown; min?: unknown; max?: unknown; last?: unknown };
+          const positive = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null);
+          const front = typeof batch.front === 'string' && /^[A-Z]{1,4}[FGHJKMNQUVXZ]20\d{2}$/.test(batch.front) ? batch.front : null;
+          const min = positive(batch.min);
+          const max = positive(batch.max);
+          const last = positive(batch.last);
+          const prev = batch.prev === null ? null : positive(batch.prev);
+          if (front && min != null && max != null && last != null && min <= last && last <= max && (batch.prev === null || prev != null)) {
+            options.onAlertBatch({ contract: front, prev, min, max, last, at: now() });
           }
         } catch { /* hlídač upozornění je jen doplněk */ }
         return;

@@ -315,8 +315,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - NEověřeno / čeká: migrace do produkce (supabase-migrate, souhlas), push na main a reinstall
   workeru s `--price-alerts on` (po „nasaď“), čistá instalace do iPhonu (nový `speak`), prst na
   iPhonu: plusko vs × u pozice, rozpočet proti limitu APNs na token.
+- Po commitu a5fe153d nezávislá revize (workflow, 5 oblastí + oponenti): 23 potvrzených nálezů,
+  opraveno v následujícím commitu (critic kolo 5 OK). Nejvážnější: dávky pro hlídač vázané na
+  zdroj zobrazení (bez otevřeného LIVE po restartu workeru žádné hlídání) → vlastní zpráva
+  `alert-batch` podle platnosti čtení IBKR; store ztrácel změny zadané během odesílání a trvalá DB
+  chyba blokovala frontu; strop 50 počítal vypršelá; „jednou“ po nepřijatém spuštění zůstalo umlčené
+  (`settle`); APNs upozornění s `apns-expiration: 0` (uložené by vytlačilo rizikovou notifikaci);
+  šipky jen nad kontraktem grafu a Position-před-Fill; PC × při vyplnění během „Opravdu?“.
+  NEnasazovat a5fe153d samotný.
 - Otevřené: pojistka proti záplavě zpráv i u stávajícího vlákna ceny (`tvPriceStreamSupervisor`);
-  PC verze upozornění; PC graf by mohl sdílet `livePhoneManageFields` (parita vynucená strukturálně).
+  stávající ne-rizikové pushe (ALPHATRADE_TRADE, `nativeCopierStatePush`) mají APNs expiraci 1 h —
+  uložená může vytlačit uloženou rizikovou notifikaci (zvážit 0 jako u upozornění); store upozornění
+  obnovuje každých 60 s po celou dobu běhu appky (navázat na posluchače); PC verze upozornění;
+  PC graf by mohl sdílet `livePhoneManageFields`.
 
 ### 2026-11-02 — Fronta relaye (F1b′), zavření × ze snímku, poplatky v denním limitu (Claude, web/relay + worker `8652e136`)
 

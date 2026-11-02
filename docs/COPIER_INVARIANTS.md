@@ -1281,8 +1281,9 @@ existující ochranu.
   (`scripts/copier/priceAlertWatchThread.ts`, `env: {}`, 48 MB), jen se zdrojem
   IBKR a `ALPHATRADE_PRICE_ALERTS=on` (`--price-alerts on`, přežije reinstall).
   Dostane jen klíč upozornění z poll-v2 (`realtime.priceAlert`, relay ho do
-  `onRealtimeConfig` nepředá) a dávky obchodů IBKR (`takeAlertBatch`, předané
-  supervisorem ceny synchronně až po uložení kotace, jen ve větvi IBKR); nezná
+  `onRealtimeConfig` nepředá) a dávky obchodů IBKR (`takeAlertBatch` podle platnosti
+  čtení IBKR, ne podle zdroje zobrazení; vlastní zpráva `alert-batch`, kotace ručního
+  Marketu beze změny; supervisor ceny ji předá synchronně jen z vlákna se zdrojem IBKR); nezná
   token zařízení ani relay příkazů. Křížení počítá `services/priceAlertWatchCore.ts`
   (bez výchozí ceny nikdy, „jednou“ rozhoduje server), supervisor
   `server/priceAlertWatchSupervisor.ts` má stejná pravidla (nikdy nevyhodí, jistič

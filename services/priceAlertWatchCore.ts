@@ -25,7 +25,11 @@ export interface WatchTrigger { alertId: string; version: number; triggerId: str
 export const PRICE_GAP_MS = 15_000;
 export const LOCAL_CAP = 30;
 export const LOCAL_CAP_WINDOW_MS = 10 * 60_000;
-export const EVERY_COOLDOWN_MS = 60_000;
+/**
+ * Odstup „pokaždé“: server hlídá 60 s od svého času zápisu, hlídač od času pozorování —
+ * o 2 s víc, ať pomalejší první doručení nezpůsobí odmítnutí druhého (a ztracené křížení).
+ */
+export const EVERY_COOLDOWN_MS = 62_000;
 const ALERT_ID = /^pa-[0-9a-z-]{1,61}$/;
 const FRONT = /^(MNQ|NQ)[FGHJKMNQUVXZ]\d{4}$/;
 
@@ -51,6 +55,8 @@ export function createPriceAlertWatchCore(deps: { now?: () => number; uuid: () =
   const now = deps.now ?? Date.now;
   const watched = new Map<string, Watched>();
   const fired: number[] = [];
+  // Spuštění čekající na konečnou odpověď serveru: odkud a jaký byl předchozí čas spuštění.
+  const unsettled = new Map<string, { key: string; previous: number | null }>();
   let priceAt: number | null = null;
   let contract: string | null = null;
   const keyOf = (alert: WatchAlert) => `${alert.id}:${alert.version}`;
@@ -69,6 +75,7 @@ export function createPriceAlertWatchCore(deps: { now?: () => number; uuid: () =
     },
     clear(): void {
       watched.clear();
+      unsettled.clear();
       priceAt = null;
       contract = null;
     },
@@ -89,8 +96,9 @@ export function createPriceAlertWatchCore(deps: { now?: () => number; uuid: () =
         const { alert } = entry;
         if (alert.expiresAt != null && alert.expiresAt <= at) continue;
         if (entry.condition == null) {
-          // Upozornění přibylo během hlídání: dávka jen nastaví směr z výchozí ceny před ní.
-          entry.condition = priceAlertWatchCondition(alert, prev);
+          // Upozornění přibylo během hlídání: dávka jen nastaví směr — z konce dávky, protože
+          // ten je výchozí cenou příští dávky (stejně jako po mezeře).
+          entry.condition = priceAlertWatchCondition(alert, batch.last);
           continue;
         }
         if (alert.frequency === 'once' && entry.firedAt != null) continue;
@@ -99,10 +107,25 @@ export function createPriceAlertWatchCore(deps: { now?: () => number; uuid: () =
         while (fired.length && at - fired[0] > LOCAL_CAP_WINDOW_MS) fired.shift();
         if (fired.length >= LOCAL_CAP) continue;
         fired.push(at);
+        const triggerId = deps.uuid();
+        unsettled.set(triggerId, { key: keyOf(alert), previous: entry.firedAt });
         entry.firedAt = batch.at;
-        triggers.push({ alertId: alert.id, version: alert.version, triggerId: deps.uuid(), observedAt: batch.at, front: batch.contract });
+        triggers.push({ alertId: alert.id, version: alert.version, triggerId, observedAt: batch.at, front: batch.contract });
       }
       return triggers;
+    },
+    /**
+     * Konečná odpověď serveru na spuštění. `final` (triggered / duplicate / jiné odmítnutí) ho
+     * nechá; `retry` (odmítnuto kvůli odstupu, nebo zahozeno bez odpovědi po výpadku) vrátí
+     * předchozí čas spuštění, aby upozornění neumlklo, zatímco ho server dál drží aktivní.
+     */
+    settle(triggerId: string, outcome: 'final' | 'retry'): void {
+      const pending = unsettled.get(triggerId);
+      if (!pending) return;
+      unsettled.delete(triggerId);
+      if (outcome !== 'retry') return;
+      const entry = watched.get(pending.key);
+      if (entry) entry.firedAt = pending.previous;
     },
     state(): { alerts: number; priceAt: number | null } {
       return { alerts: watched.size, priceAt };

@@ -102,12 +102,13 @@ begin
     new.deleted_at := now();
   end if;
   new.expires_at := case when new.expiry = 'session' then public.price_alert_session_end(now()) else null end;
-  -- Strop 50 neodstraněných na uživatele; upsert existujícího řádku projde
-  -- (BEFORE INSERT běží i u ON CONFLICT DO UPDATE).
+  -- Strop 50 živých na uživatele (vypršelá se nepočítají — UI je nezobrazuje a smazat je nejde);
+  -- upsert existujícího řádku projde (BEFORE INSERT běží i u ON CONFLICT DO UPDATE).
   perform pg_advisory_xact_lock(hashtextextended('price_alerts:' || new.user_id::text, 0));
   if new.deleted_at is null
     and not exists (select 1 from public.price_alerts a where a.user_id = new.user_id and a.id = new.id)
-    and (select count(*) from public.price_alerts a where a.user_id = new.user_id and a.deleted_at is null) >= 50 then
+    and (select count(*) from public.price_alerts a
+         where a.user_id = new.user_id and a.deleted_at is null and a.status <> 'expired') >= 50 then
     raise exception 'price-alerts-limit' using errcode = 'check_violation';
   end if;
   return new;

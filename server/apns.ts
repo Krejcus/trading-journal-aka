@@ -26,6 +26,12 @@ export interface ApnsNotification {
   timeoutMs?: number;
   /** Bez zvuku (upozornění na cenu s vypnutým zvukem); výchozí je `default`. */
   silent?: boolean;
+  /**
+   * `apns-expiration` v sekundách od teď; 0 = APNs notifikaci neuloží (doručí jen hned).
+   * Výchozí 1 h. Upozornění na cenu posílá 0: uložená by vytlačila uloženou rizikovou
+   * notifikaci kopírky (APNs drží jen poslední) a dorazila by pozdě.
+   */
+  expirationSeconds?: number;
 }
 
 export interface ApnsLiveActivityContentState {
@@ -309,7 +315,8 @@ export async function sendApnsNotification(
     topic: device.bundleId,
     pushType: 'alert',
     priority: '10',
-    expiration: Math.floor(Date.now() / 1_000) + 60 * 60,
+    expiration: notification.expirationSeconds === 0 ? 0
+      : Math.floor(Date.now() / 1_000) + Math.max(1, Math.floor(notification.expirationSeconds ?? 60 * 60)),
     collapseId: notification.collapseId,
     payload: buildApnsPayload(notification),
     timeoutMs: notification.timeoutMs,

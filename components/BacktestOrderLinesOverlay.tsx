@@ -101,8 +101,15 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
     return () => window.clearTimeout(timer);
   }, [confirming]);
   const confirmed = (key: string, needsConfirm: boolean | undefined) => {
-    if (!needsConfirm) return true;
     const now = Date.now();
+    // Rozběhnuté „Opravdu?“ téže čáry s jinou akcí (vstup se mezitím vyplnil → × teď zavírá
+    // pozici, na PC jedním klikem): klik, který měl potvrdit zrušení, nic neodešle.
+    const sameLine = (other: string) => other.slice(0, other.indexOf(':cancel:')) === key.slice(0, key.indexOf(':cancel:'));
+    if (confirming && confirming.key !== key && confirming.until > now && key.includes(':cancel:') && confirming.key.includes(':cancel:') && sameLine(confirming.key)) {
+      setConfirming(needsConfirm ? { key, until: now + CONFIRM_MS } : null);
+      return false;
+    }
+    if (!needsConfirm) return true;
     // Dvojklik se nepočítá jako potvrzení: druhý klik až po 350 ms.
     if (confirming?.key === key && confirming.until > now && now - (confirming.until - CONFIRM_MS) >= 350) { setConfirming(null); return true; }
     if (confirming?.key === key && confirming.until > now) return false;

@@ -1015,7 +1015,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
                 return
             }
             self.speechSynthesizer.delegate = self.speechSessionRelease
-            if self.speechSynthesizer.isSpeaking { self.speechSynthesizer.stopSpeaking(at: .immediate) }
+            // Bez přerušení: dvě upozornění najednou se přečtou za sebou (AVSpeechSynthesizer řadí).
             let utterance = AVSpeechUtterance(string: text)
             utterance.voice = AVSpeechSynthesisVoice(language: language) ?? AVSpeechSynthesisVoice(language: "cs-CZ")
             self.speechSynthesizer.speak(utterance)

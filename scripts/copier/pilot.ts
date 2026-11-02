@@ -1022,7 +1022,7 @@ async function runLocalAgent(
     ? createTvPriceStreamSupervisor({
       priceSource: tvPriceSource,
       // Dávky obchodů IBKR jen předá vláknu hlídače (synchronně, bez čekání).
-      onQuoteBatch: batch => priceAlertWatch?.onBatch(batch),
+      onAlertBatch: batch => priceAlertWatch?.onBatch(batch),
       createWorker: priceSource => {
         // Výstup vlákna se nepřeposílá do logu workeru (šel by přes event loop
         // hlavního vlákna); stav hlásí jen omezená diagnostika.

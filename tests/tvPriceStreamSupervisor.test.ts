@@ -330,3 +330,37 @@ describe('kotace IBKR pro ruční vstup (zpráva quote, 2. 11. 2026)', () => {
     t.supervisor.stop();
   });
 });
+
+describe('dávky obchodů IBKR pro hlídač upozornění (zpráva alert-batch, 2. 11. 2026)', () => {
+  const setupWith = (priceSource: 'ibkr' | 'tv', onAlertBatch: (batch: unknown) => void) => {
+    const workers: FakeWorker[] = [];
+    const supervisor = createTvPriceStreamSupervisor({
+      priceSource, onAlertBatch,
+      createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
+    });
+    supervisor.update(ON);
+    return { supervisor, workers };
+  };
+  const batch = (patch: Record<string, unknown> = {}) => ({ type: 'alert-batch', front: 'MNQZ2026', prev: 25_000, min: 24_999, max: 25_002, last: 25_001, ...patch });
+
+  it('jen z vlákna se zdrojem IBKR, ověřená čísla; kotaci ručního Marketu se nedotkne; výjimka posluchače se spolkne', () => {
+    const seen: unknown[] = [];
+    const t = setupWith('ibkr', value => seen.push(value));
+    t.workers[0].emit('message', batch());
+    expect(seen).toEqual([expect.objectContaining({ contract: 'MNQZ2026', prev: 25_000, min: 24_999, max: 25_002, last: 25_001 })]);
+    expect(t.supervisor.latestQuote('MNQ')).toBeNull();
+    t.workers[0].emit('message', batch({ prev: null }));
+    expect(seen.at(-1)).toMatchObject({ prev: null });
+    for (const bad of [{ front: 'MNQ1!' }, { min: 25_003 }, { last: -1 }, { prev: 'x' }]) t.workers[0].emit('message', batch(bad));
+    expect(seen).toHaveLength(2);
+    t.supervisor.stop();
+    const tv: unknown[] = [];
+    const fromTv = setupWith('tv', value => tv.push(value));
+    fromTv.workers[0].emit('message', batch());
+    expect(tv).toEqual([]);
+    fromTv.supervisor.stop();
+    const throwing = setupWith('ibkr', () => { throw new Error('hlídač spadl'); });
+    expect(() => throwing.workers[0].emit('message', batch())).not.toThrow();
+    throwing.supervisor.stop();
+  });
+});
