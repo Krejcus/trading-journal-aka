@@ -69,6 +69,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
+- [ ] **BE z grafu v manual-only DEMO nejde** (2. 11. 2026): utažení SL potřebuje cenu trhu z P&L brokera,
+      která u leadera chyběla („Cena trhu od brokera není známá“). Zvážit kotaci IBKR workeru jako zdroj
+      strany trhu pro utažení (s oponenturou). Viz `docs/reviews/night-conformance-20261102.md`.
 - [x] **Deník dne — nasazení**: migrace `20261013120000_day_journal_entries` už je
       na produkci (13. 10.); zbývá merge větve, nastavit `GROQ_API_KEY` ve Vercelu a odebrat `VITE_GROQ_API_KEY`,
       nasadit server (relay `live-bars`, `TV_BARS_MAX` 1700) před workerem, redeploy
@@ -284,6 +287,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       „Výstraha na zaseknutou relay frontu“.
 
 ## Deník
+
+### 2026-11-02 — LIVE order entry: nativní Market, strop 5 MNQ, jen MNQ, telefon přes stejný relay + noční DEMO conformance (Claude, web + worker NASAZENO @ 0f710405)
+
+- Proč: Market byl Limit ±2 b, worker pustil jen 1 kontrakt, NQ/kontinuální řada nebyly tvrdě vyloučené
+  a telefon neměl odesílání. Filip výslovně autorizoval noční implementaci, nasazení a test jen na
+  DEMO8661118 (61038658). Report: `docs/reviews/night-conformance-20261102.md`.
+- Rozhodnutí Filipa (1. 11. večer): IBKR smí do rizika ručního vstupu (jen IBKR, nikdy TV, nikdy jako cena
+  příkazu) — zapsáno v INV-UI-04; pilulka Koupit/Prodat na telefonu = skutečný Market IHNED bez SL/TP,
+  SL/TP se doplní později (`attach-brackets`); bez IBKR „pojedou jen vzdálené Limity“ (původ kontraktu
+  pak potvrdí broker: Tradovate `isFront`, jen Limit).
+- Nasazeno: `2f87cb2e` (Market, strop, MNQ-only, incidenty Marketu), `68e43b22` (telefon, holý Market,
+  attach, Flatten; oprava `risk-unknown` při posunu SL v manual-only), `c2c7c94f` (typ pravého kliku podle
+  živé kotace), `4438feb7` (uzavření holých vstupů po flat), `34a78b5a` (front od brokera pro Limit),
+  `e42c9a8c` (panel drží vzdálenosti SL/TP), `0f710405` (start workeru: retry v procesu místo launchd smyčky).
+  Každá změna jádra prošla copier-design-critic (konečně OK). Celá sada 6464 testů, tsc, build čisté.
+- Ověřeno DEMO brokerem: 8 vzdálených Limitů (1/2/3/5 MNQ) submit+cancel na přesné ceně; 5 nativních
+  Market round-tripů (1/1/1/2/3 MNQ) se SL+TP, posunem SL a TP a zavřením ×; telefon (úzký web): holý
+  Market → „Přidat SL/TP“ (OCO) → Flatten; front kontrakt MNQZ6 od Tradovate. Broker realizováno −48,10 USD
+  (testy zastaveny před −50). Konec: flat, bez příkazů, DISARMED, vše leader 61038658, vše MNQZ6.
+- Incidenty: IB Gateway 23:45 Auto log off (doporučení: Auto restart / IBC); 01:28–02:06 Tradovate DEMO REST
+  s tokenem neodpovídal → worker ve smyčce restartů (opraveno `0f710405`).
+- Neověřeno: BE (UI blokuje — chybí cena trhu od brokera pro utažení), 5 MNQ round-trip, opakování 2/3 MNQ,
+  telefonní list z position boxu, nativní iPhone (ráno s Filipem).
+- **Provozní změna:** Limit/Stop v jakékoli skupině teď vyžaduje kotaci IBKR stejného kontraktu (Limit
+  alternativně front od brokera); bez IB Gateway Market a Stop nejdou.
 
 ### 2026-11-01 — izolovaný single-account DEMO režim (Codex, worker + web NASAZENO)
 
