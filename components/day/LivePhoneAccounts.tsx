@@ -110,7 +110,7 @@ function AccountRow({ row, position }: { row: LiveChartPositionAccountRow; posit
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
           {row.isLeader && <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.06em', color: '#fbbf24' }}>LEADER</span>}
         </div>
-        <div className="dj-mono" style={{ display: 'flex', gap: 6, marginTop: 3, fontSize: 11.5, color: 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+        <div className="dj-mono" style={{ display: 'flex', flexWrap: 'wrap', columnGap: 6, rowGap: 1, marginTop: 3, fontSize: 11.5, color: 'var(--dj-muted)', whiteSpace: 'nowrap' }}>
           <span>{side} {row.quantity}{row.entry != null ? ` @ ${formatLivePrice(row.entry)}` : ''}</span>
           {level('SL', row.stop, row.stopUsd, '#f87171')}
           {level('TP', row.target, row.targetUsd, '#2dd4bf')}
