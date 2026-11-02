@@ -55,6 +55,15 @@ describe('obchodní lišta na telefonu', () => {
     expect(start.indexOf('onAxis(point)')).toBeLessThan(start.indexOf('startDrag(point'));
   });
 
+  it('kresba je aktivní až po klepnutí: dotyk na nevybrané kresbě posouvá graf, táhne se až vybraná (jako TV)', () => {
+    const source = readFileSync('components/day/DayTouchDrawLayer.tsx', 'utf8');
+    const start = source.slice(source.indexOf('const onTouchStart'), source.indexOf('const onTouchMove'));
+    expect(start).toMatch(/if \(hit && hit\.id !== engine\.getSelectedId\?\.\(\)\) \{ pendingSelect = hit\.id; captured = false; return; \}/);
+    expect(start.indexOf('pendingSelect = hit.id')).toBeLessThan(start.indexOf('startDrag(point'));
+    const end = source.slice(source.indexOf('const onTouchEnd'), source.indexOf('const onTouchCancel'));
+    expect(end).toMatch(/if \(moved\) return;\s*engine\.select\(id\);/);
+  });
+
   it('P&L skupiny v hlavičce: popisek obchodu, čekající vstup, jeden účet', () => {
     expect(accountsLabel(1)).toBe('1 účet');
     expect(accountsLabel(3)).toBe('3 účty');

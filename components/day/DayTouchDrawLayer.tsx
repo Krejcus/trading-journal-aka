@@ -234,6 +234,12 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     /** Podržení: časovač a příznak, že dotyk už patří menu (konec není klepnutí). */
     let longTimer = 0;
     let longPressed = false;
+    /**
+     * Dotyk na kresbě, která ještě není vybraná: patří grafu (posun), klepnutí
+     * ji jen vybere — táhnout jde až vybranou (jako TradingView; Filip 2. 11.:
+     * posun grafu chytal position box).
+     */
+    let pendingSelect: string | null = null;
     const segmentIndex = (id: string) => Number(id.split(':')[2]);
     const startDrag = (point: { x: number; y: number }, event: TouchEvent) => {
       const hit = typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
@@ -326,10 +332,18 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
         block(event);
         return;
       }
+      const hit = typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
+      if (hit && hit.id !== engine.getSelectedId?.()) { pendingSelect = hit.id; captured = false; return; }
+      pendingSelect = null;
       startDrag(point, event);
     };
 
     const onTouchMove = (event: TouchEvent) => {
+      if (pendingSelect && touching && event.touches.length === 1 && touchStart) {
+        const point = offset(event.touches[0]);
+        if (Math.hypot(point.x - touchStart.x, point.y - touchStart.y) > TAP_TOLERANCE_PX) { moved = true; pendingSelect = null; }
+        return;
+      }
       if (!touching || event.touches.length !== 1 || !captured) return;
       if (longPressed) { block(event); return; }
       const point = offset(event.touches[0]);
@@ -350,6 +364,19 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       if (!touching) return;
       touching = false;
       window.clearTimeout(longTimer);
+      if (pendingSelect) {
+        // Klepnutí na nevybranou kresbu: jen výběr (úchyty, lišta kresby). Dvojklep dál otevře nastavení.
+        const id = pendingSelect;
+        pendingSelect = null;
+        if (moved) return;
+        engine.select(id);
+        const now = Date.now();
+        if (lastDrawingTap && lastDrawingTap.id === id && now - lastDrawingTap.at < DOUBLE_TAP_MS * 1.3) {
+          lastDrawingTap = null;
+          doubleTapRef.current?.(id);
+        } else lastDrawingTap = { id, at: now };
+        return;
+      }
       if (!captured) return;
       block(event);
       if (longPressed) { longPressed = false; captured = false; return; }
@@ -381,7 +408,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     };
 
     const onTouchCancel = () => {
-      window.clearTimeout(longTimer); longPressed = false;
+      window.clearTimeout(longTimer); longPressed = false; pendingSelect = null;
       if (!touching) return;
       if (dragging) controller.onUp();
       touching = false; captured = false; dragging = false;
