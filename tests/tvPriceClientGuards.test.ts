@@ -237,7 +237,10 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
     // + cena panelu objednávky (výjimka INV-UI-04): jen `close`, jen zobrazení a strop ceny příkazu.
     expect(readers).toEqual(['hooks/useLiveCandleBinding.ts', 'hooks/useLiveTicketQuote.ts', 'hooks/useTvLiveCandleFeed.ts']);
     const ticketQuote = readFileSync(join(root, 'hooks/useLiveTicketQuote.ts'), 'utf8').split('\n').filter(line => /\.current\(/.test(line)).map(line => line.trim());
-    expect(ticketQuote).toEqual(['const price = feed.current(root)?.close;']);
+    expect(ticketQuote).toEqual(['const price = (feed.final ? feed.final(root) : feed.current(root))?.close;']);
+    // Konečná cena bez přehrání (2. 11. 2026) — čte ji jen panel objednávky a obal feedu.
+    const finalReaders = allSources.filter(file => /\b(?:feed|liveFeed|liveCandles)\.final\(/.test(readFileSync(join(root, file), 'utf8')));
+    expect(finalReaders).toEqual(['hooks/useLiveTicketQuote.ts', 'hooks/useTvLiveCandleFeed.ts']);
     // Telefon (2. 11. 2026): lišta a list objednávky na telefonním grafu — stejná výjimka.
     expect(importersOf('hooks/useLiveTicketQuote.ts')).toEqual(['components/LiveTradingScreen.tsx', 'components/day/LivePhoneChart.tsx']);
     const hook = readFileSync(join(root, 'hooks/useTvLiveCandleFeed.ts'), 'utf8').split('\n').filter(line => /\.current\(/.test(line)).map(line => line.trim());

@@ -22,7 +22,8 @@ export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, re
       timer = null;
       if (!pending) return;
       pending = false;
-      const price = feed.current(root)?.close;
+      // Konečná cena poslední zprávy, ne animovaná svíčka grafu (ta se umí zaseknout, 2. 11.).
+      const price = (feed.final ? feed.final(root) : feed.current(root))?.close;
       const ref = referenceRef.current;
       if (price == null || !Number.isFinite(price) || ref == null || Math.abs(price - ref) > Math.abs(ref) * LIVE_CANDLE_MAX_JUMP_RATIO) {
         setQuote(null);

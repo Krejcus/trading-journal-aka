@@ -167,6 +167,9 @@ export function createReplayingLiveCandleFeed(deps: ReplayingLiveCandleFeedDeps)
         }
       };
     },
+    final(root) {
+      return tvLiveCandle(deps.view(), root, deps.dayEndMs);
+    },
     current(root) {
       if (flush) {
         // Jen dokud kanál žije a běh je stejný — výpadek ceny vrací graf přesně na data (INV-UI-01).

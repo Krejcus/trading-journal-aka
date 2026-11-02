@@ -1836,7 +1836,11 @@ existující ochranu.
   kopírky (worker počítá riziko z ceny příkazu jako z nejhoršího vstupu).
   Cenu panelu objednávky (zobrazení + strop Marketu) bere `hooks/useLiveTicketQuote.ts`
   přímo z kanálu ceny (`close` rozpracované svíčky, ≤ 10×/s) — jediný čtenář feedu
-  mimo graf; hlídá `tests/tvPriceClientGuards.test.ts`.
+  mimo graf; hlídá `tests/tvPriceClientGuards.test.ts`. Od 2. 11. 2026 přes
+  `feed.final(root)` = svíčka poslední zprávy BEZ přehrání ticků: animace grafu se při
+  netikajícím `requestAnimationFrame` (karta na pozadí) zasekne v dokreslení a panel by
+  ukazoval starší cenu jako čerstvou (DEMO: 9 ticků, 2× `market-quote-drift`). Test:
+  `tests/tvPriceTrail.test.ts`.
 - Vynucuje: `lib/tvPriceMessage.ts` (HMAC nad surovým řetězcem, přísný
   tvar), `lib/tvPriceStore.ts` (jen paměť, ochrana proti přehrání
   `seq`/`runId`/`at`), `lib/tvPriceChannelClient.ts` (postupné ověření,

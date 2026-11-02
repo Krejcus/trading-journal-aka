@@ -279,6 +279,17 @@ describe('přehrání v živé svíčce', () => {
     expect(t.feed.current('MNQ')).toMatchObject({ time: MINUTE + 60, close: 102.5 });
   });
 
+  it('cena panelu objednávky (`final`) je hned z poslední zprávy, i když animace netiká (2. 11.)', () => {
+    const t = feedSetup();
+    t.feed.subscribe(() => {});
+    t.push(view(1, [102, 103, 99, 101], [MINUTE, 100, 103, 99, 101]));
+    t.push(view(2, [101.5, 102], [MINUTE + 60, 101.25, 102, 101.25, 102]));
+    // Bez snímků (karta na pozadí) graf dokresluje starou minutu…
+    expect(t.feed.current('MNQ')).toMatchObject({ time: MINUTE, close: 101 });
+    // …ale panel objednávky má cenu poslední zprávy.
+    expect(t.feed.final('MNQ')).toMatchObject({ time: MINUTE + 60, close: 102 });
+  });
+
   it('nová minuta těsně po doběhnutí přehrání: stará se ještě dokreslí', () => {
     const t = feedSetup();
     t.feed.subscribe(() => {});

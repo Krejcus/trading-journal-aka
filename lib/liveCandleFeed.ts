@@ -11,6 +11,12 @@ export interface LiveCandleFeed {
   subscribe(listener: () => void): () => void;
   /** Rozpracovaná 1m svíčka pro kořen panelu, nebo `null` (stojí, jiný trh, mimo den). */
   current(root: string): MarketCandle | null;
+  /**
+   * Táž svíčka z poslední přijaté zprávy BEZ přehrání ticků (2. 11. 2026): pro cenu panelu
+   * objednávky a hlídač BE. Animace grafu se při netikajícím `requestAnimationFrame`
+   * (karta na pozadí) zasekne a `current` by vracel starší cenu jako čerstvou.
+   */
+  final?(root: string): MarketCandle | null;
 }
 
 /**
