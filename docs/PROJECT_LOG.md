@@ -310,8 +310,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   cena, dočtení dat, 0 příkazů). Neověřeno ťuknutí hned po návratu (bez dotyku).
 - `COPIER_PUSH_SIGNING_SECRET` (Production, Filipův souhlas) nastaven + redeploy; worker převzal
   nový veřejný klíč z pollu sám, DEMO round trip `via=push` (240/232 ms). Kód `bd827142`.
-- Otevřené: formální potvrzení `tradeDate`/poplatků na Lucid v den s leaderem (stejné Tradovate
-  `demo` API jako DEMO8661118). Ťuknutí po návratu z pozadí: Filip bere simulaci z noci jako dostačující.
+- Otevřené: formální potvrzení `tradeDate`/poplatků na Lucid — dnes nejde: Lucid je na jiném
+  OAuth loginu a obě ostatní připojení jsou `disconnected` (live-pnl cash pro Lucid = 502; DEMO
+  `dailyRealizedPnL` −168,10 OK). Po znovupřipojení Lucid ověřit `realizedTradeDate` ve statusu. Ťuknutí po návratu z pozadí: Filip bere simulaci z noci jako dostačující.
 
 ### 2026-11-02 — LIVE order entry: nativní Market, strop 5 MNQ, jen MNQ, telefon přes stejný relay + noční DEMO conformance (Claude, web + worker NASAZENO @ 4ce53856)
 
