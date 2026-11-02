@@ -1113,6 +1113,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (!result || result.type !== 'leader-order-managed') throw new Error('Výsledek chybí — zkontroluj pozici v Tradovate.');
     return result;
   }, []);
+  // Front kontrakt podle brokera ze statusu workeru, jen čerstvý (≤ 30 min) — výběr kontraktu Limit/Stop bez IBKR.
+  const brokerFront = agentStatus?.controller.brokerFrontContract ?? null;
+  const entryFrontContract = brokerFront && freshnessNow - brokerFront.at <= 30 * 60_000 ? brokerFront.contract : null;
   const phoneTrade = useMemo<LivePhoneTradeBridge | null>(() => {
     if (!phoneChartAvailable || !workerGroup) return null;
     const controller = agentStatus?.controller;
@@ -1136,6 +1139,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       marketSupported: supportsCopierManualEntryMarket(agentStatus),
       bareSupported: supportsCopierManualEntryBare(agentStatus),
       maxContracts: manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null),
+      frontContract: entryFrontContract,
       place: placeLeaderEntry,
       position: leaderBasis && summary && symbol ? {
         side: summary.side, quantity: leaderBasis.quantity, symbol,
@@ -1148,7 +1152,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         accountIds: [workerGroup.leaderAccountId, ...workerGroup.followers.map(follower => follower.accountId)],
         observedAt: agentStatusObservedAt, verified: agentStatusFresh && !agentStatusRestored }),
     };
-  }, [phoneChartAvailable, workerGroup, agentStatus, agentStatusFresh, agentStatusRestored, chartData.position, relayConnectionId, placeLeaderEntry, attachBrackets, agentStatusObservedAt, runStaticSafetyAction]);
+  }, [phoneChartAvailable, workerGroup, agentStatus, agentStatusFresh, agentStatusRestored, chartData.position, relayConnectionId, placeLeaderEntry, attachBrackets, agentStatusObservedAt, runStaticSafetyAction, entryFrontContract]);
 
   // Vypnutí z grafu: stejná safety cesta jako přehled (INV-UI-02). Stabilní
   // funkce přes ref — graf nesmí držet starou trasu ani starý fence.
@@ -1796,6 +1800,7 @@ acceptAgentStatus((await executeAgent({
           manageCloseSupported={supportsCopierManualOrderClose(agentStatus)}
           entryMarketSupported={supportsCopierManualEntryMarket(agentStatus)}
           entryMaxContracts={manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null)}
+          entryFrontContract={entryFrontContract}
           />
         </ErrorBoundary>
       ) : phoneChartAvailable && tab === 'chart' && phoneChart ? (

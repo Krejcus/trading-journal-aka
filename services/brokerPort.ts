@@ -361,6 +361,11 @@ export interface BrokerPort {
   placeOco?(request: BrokerOcoRequest): Promise<BrokerOcoAck>;
   /** Nativní atomický entry + bracket. Chybějící implementace znamená fail-closed. */
   placeOso?(request: BrokerOsoRequest): Promise<BrokerOsoAck>;
+  /**
+   * Front kontrakt rootu podle brokera (2. 11. 2026, původ kontraktu ručního vstupu
+   * bez IBKR): právě jedna nearchivovaná splatnost s `isFront`, jinak null. Jen čtení.
+   */
+  frontContract?(root: string, accountId: number): Promise<{ contract: string; expiration: string | null } | null>;
   cancelOrder(accountId: number, brokerOrderId: string): Promise<void>;
   /**
    * Vrací potvrzení jen tehdy, když adaptér viděl Replaced execution report

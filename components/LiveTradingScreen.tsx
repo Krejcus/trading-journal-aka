@@ -128,6 +128,8 @@ interface Props {
   entryMarketSupported?: boolean;
   /** Strop kontraktů ručního vstupu skupiny workeru. */
   entryMaxContracts?: number;
+  /** Front kontrakt podle brokera (jen Limit/Stop bez IBKR). */
+  entryFrontContract?: string | null;
 }
 
 function useMinuteNow() {
@@ -141,7 +143,7 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -613,6 +615,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             manageEntryAvgPrice={manageEntryAvgPrice ?? null}
             entryMarketSupported={entryMarketSupported}
             entryMaxContracts={entryMaxContracts}
+            entryFrontContract={entryFrontContract}
             onNewDraft={side => { if (quote) { setDraft(newTicketDraft(side, 'limit', side === 'buy' ? quote.ask - 10 : quote.bid + 10, INSTRUMENT, quote)); setFromBox(false); } }}
             onClose={() => setTicketOpen(false)}
           />

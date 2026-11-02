@@ -189,7 +189,15 @@ export interface ManualEntryPreviewInputs {
    * zdroj); null = není. Jen odhad rizika Marketu a původ kontraktu — nikdy TV.
    */
   workerQuote: ManualEntryWorkerQuote | null;
+  /**
+   * Front kontrakt podle brokera (Tradovate splatnost `isFront`) a kdy se přečetl.
+   * Původ kontraktu pro Limit/Stop, když kotace IBKR chybí; Market ho nikdy nestačí.
+   */
+  brokerFront?: { contract: string; at: number } | null;
 }
+
+/** Jak starý smí být front kontrakt od brokera (obnovuje se po 5 min). */
+export const MANUAL_ENTRY_BROKER_FRONT_MAX_AGE_MS = 30 * 60_000;
 
 const blocker = (code: string, text: string): LeaderEntryPreviewIssue => ({ code, text });
 
@@ -299,8 +307,23 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
   const workerQuote = input.workerQuote;
   const quoteSeenAt = workerQuote ? Math.max(workerQuote.lastAt, workerQuote.quoteAt ?? 0) : null;
   const lineageFresh = quoteSeenAt != null && now - quoteSeenAt <= MANUAL_ENTRY_CONTRACT_QUOTE_MAX_AGE_MS && quoteSeenAt <= now + LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS;
-  if (!workerQuote || !lineageFresh) blockers.push(blocker('contract-unverified', 'Worker nemá čerstvou kotaci z IBKR — kontrakt teď nejde ověřit.'));
-  else if (workerQuote.contract !== command.symbol) blockers.push(blocker('contract-mismatch', `Kontrakt ${command.symbol} nesedí s kotací workeru z IBKR (${workerQuote.contract}).`));
+  // Původ kontraktu: kotace IBKR (≤ 15 s), u Limit/Stop jinak front od brokera (≤ 30 min).
+  // Rozpor IBKR s příkazem blokuje vždy; Market potřebuje IBKR vždy (cena).
+  const brokerFront = input.brokerFront ?? null;
+  const brokerFrontFresh = brokerFront != null && now - brokerFront.at <= MANUAL_ENTRY_BROKER_FRONT_MAX_AGE_MS && brokerFront.at <= now + LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS;
+  if (workerQuote && lineageFresh) {
+    if (workerQuote.contract !== command.symbol) blockers.push(blocker('contract-mismatch', `Kontrakt ${command.symbol} nesedí s kotací workeru z IBKR (${workerQuote.contract}).`));
+  } else if (command.orderType === 'Limit' && brokerFrontFresh) {
+    // Jen Limit (Filip 1. 11.: „když IBKR spadne, pojedou jen vzdálené Limity“); Stop bez trhu ne.
+    if (brokerFront!.contract !== command.symbol) blockers.push(blocker('contract-mismatch', `Kontrakt ${command.symbol} není front podle brokera (${brokerFront!.contract}).`));
+    else notes.push(blocker('contract-broker-front', `Kontrakt ověřen podle brokera (${brokerFront!.contract}), IBKR teď neběží.`));
+  } else {
+    blockers.push(blocker('contract-unverified', market
+      ? 'Worker nemá čerstvou kotaci z IBKR — Market teď nejde.'
+      : command.orderType === 'Stop'
+        ? 'Worker nemá čerstvou kotaci z IBKR — Stop teď nejde (bez IBKR jen Limit).'
+        : 'Worker nemá čerstvou kotaci z IBKR ani front kontrakt od brokera — kontrakt teď nejde ověřit.'));
+  }
   if (market) blockers.push(...manualEntryMarketQuoteBlockers(command, workerQuote, now));
   if (command.orderType === 'Limit') notes.push(blocker('limit-marketability', 'Jestli limit není přes trh, ověří až broker (vyplnil by se hned).'));
   notes.push(blocker('leader-can-trade', 'Oprávnění leadera obchodovat náhled nečte (žádné volání brokera) — ověří odeslání.'));

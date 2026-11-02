@@ -334,6 +334,8 @@ interface Props {
   entryMarketSupported?: boolean;
   /** Strop kontraktů ručního vstupu skupiny workeru (výchozí 1). */
   entryMaxContracts?: number;
+  /** Front kontrakt podle brokera (čerstvý) — jen pro Limit/Stop, když graf nejede z IBKR. */
+  entryFrontContract?: string | null;
   onNewDraft: (side: TicketSide) => void;
   onClose: () => void;
 }
@@ -369,7 +371,7 @@ const NumberField: React.FC<{
 
 const LiveOrderTicket: React.FC<Props> = ({
   isDark, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
-  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, entryMarketSupported = false, entryMaxContracts = 1, onNewDraft, onClose,
+  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, onNewDraft, onClose,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -409,7 +411,8 @@ const LiveOrderTicket: React.FC<Props> = ({
   const groupMultiplier = group ? targetMultiplier(group, target) : 1;
   // Fáze 1a: co by panel poslal workeru k náhledu (jen Limit/Stop se SL i TP, skupina).
   // Kontrakt bere náhled ze zdroje ceny grafu — v týdnu rollu nikdy odhadem.
-  const previewSymbol = previewSymbolFromChartSource(quoteInfo.source);
+  // Kontrakt: ze zdroje IBKR; u Limit/Stop jinak front podle brokera (2. 11.) — Market jen z IBKR.
+  const previewSymbol = previewSymbolFromChartSource(quoteInfo.source) ?? (draft && draft.type === 'limit' ? entryFrontContract : null);
   // Market (2. 11. 2026) = skutečný Market u brokera bez ceny příkazu. Cena, kterou
   // uživatel vidí (Buy = ask, Sell = bid), a čas kotace jdou jen k odhadu rizika.
   const marketReference = draft && quote && draft.type === 'market' ? (draft.side === 'buy' ? quote.ask : quote.bid) : null;
@@ -422,7 +425,10 @@ const LiveOrderTicket: React.FC<Props> = ({
       stopLoss: draft.stopLoss, takeProfit: draft.takeProfit }
     : null;
   const previewBlockedReason = !draft ? null
-    : !previewSymbol ? 'Kontrakt grafu není známý (kontinuální řada nebo cena z TradingView) — náhled teď nejde.'
+    : !previewSymbol ? (draft.type === 'market'
+      ? 'Market potřebuje cenu z IBKR (graf teď jede z TradingView / kontinuální řady) — použij Limit.'
+      : draft.type === 'stop' ? 'Stop potřebuje cenu z IBKR — bez ní jen Limit.'
+      : 'Kontrakt není ověřený (IBKR ani broker) — náhled teď nejde.')
     : quoteInfo.stale ? 'Cena grafu je zastaralá — náhled ani odeslání teď nejde.'
     // Market bere cenu grafu jako strop ceny příkazu — jen čerstvou (oponentura 2d/C).
     : draft.type === 'market' && !entryMarketSupported ? 'Worker zatím neumí nativní Market — použij Limit.'

@@ -1751,7 +1751,16 @@ existující ochranu.
   a zobrazení, nikdy cena příkazu. Worker smí pro ruční vstup číst VLASTNÍ
   kotaci z IBKR (vlákno ceny → `server/tvPriceStreamSupervisor.ts:latestQuote`,
   jen když je IBKR aktivní zdroj; TradingView NIKDY): (1) původ kontraktu —
-  i Limit/Stop vyžaduje stejný konkrétní kontrakt v kotaci ≤ 15 s;
+  i Limit/Stop vyžaduje stejný konkrétní kontrakt v kotaci ≤ 15 s; rozpor
+  s kotací IBKR blokuje vždy. Jen když kotace IBKR chybí, smí LIMIT (ne Stop,
+  ne Market) potvrdit front kontrakt přímo od brokera: Tradovate
+  `product/find` → `contractMaturity/deps` (právě jedna nearchivovaná `isFront`)
+  → `contract/deps` (právě jeden název), čteno jen při připojení, nejvýš po
+  5 min, platnost ≤ 30 min (`BrokerPort.frontContract`, status
+  `brokerFrontContract`; Filip 1. 11.: „když IBKR spadne, Market se zablokuje
+  a pojedou jen vzdálené Limity“; 2. 11. po auto log off IB Gateway).
+  Kalendářní `frontSymbols` platí dál. Hlídá `tests/brokerFrontContract.test.ts`
+  a blok „původ kontraktu bez IBKR“ v `tests/manualEntryMarketCapMnq.test.ts`;
   (2) Market — cena workeru (ask/bid ≤ 3 s, jinak last ≤ 3 s), posun od
   `referencePrice` ≤ 8 ticků, SL i TP ≥ 16 ticků od obou cen a na správné
   straně trhu, riziko z horší z obou cen + 6 ticků skluzu; totéž se znovu

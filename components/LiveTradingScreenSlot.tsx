@@ -104,6 +104,8 @@ interface Props {
   entryMarketSupported?: boolean;
   /** Strop kontraktů ručního vstupu skupiny workeru. */
   entryMaxContracts?: number;
+  /** Front kontrakt podle brokera (jen Limit/Stop bez IBKR). */
+  entryFrontContract?: string | null;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -184,4 +186,5 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && Boolean(left.manageCloseSupported) === Boolean(right.manageCloseSupported)
   && Boolean(left.entryMarketSupported) === Boolean(right.entryMarketSupported)
   && (left.entryMaxContracts ?? 1) === (right.entryMaxContracts ?? 1)
+  && (left.entryFrontContract ?? null) === (right.entryFrontContract ?? null)
 ));

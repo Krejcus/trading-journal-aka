@@ -89,7 +89,9 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     !trade ? 'Odesílání z telefonu tu není dostupné.'
       : trade.blockedReason ?? (market && !trade.marketSupported ? 'Worker zatím neumí Market.'
         : !quote || Date.now() - quote.at > PHONE_MARKET_QUOTE_MAX_AGE_MS ? 'Cena není čerstvá (starší než 3 s) — nic se neodeslalo.'
-          : !quote.symbol ? 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' : null)
+          : !(quote.symbol ?? (market ? null : trade.frontContract)) ? 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' : null)
+  );
+  const sheetContract = (type: string): string | null => (quote?.symbol ?? (type === 'limit' ? trade?.frontContract ?? null : null)
   );
   // Lišta: Koupit / Prodat = holý Market hned (Filip 1. 11.), SL/TP doplní „Přidat SL/TP“.
   const onSide = (side: 'buy' | 'sell') => {
@@ -131,7 +133,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
                 const blocked = sendBlocked(draft.type === 'market')
                   ?? (draft.quantity > (trade?.maxContracts ?? 1) ? `Strop ručního vstupu je ${trade?.maxContracts ?? 1} kontraktů.` : null);
                 if (blocked) { say(`${draftSummary(draft)} — ${blocked}`); return; }
-                void send(livePhoneSheetEntry(draft, LIVE_PHONE_INSTRUMENT, quote!));
+                // Limit/Stop bez IBKR: kontrakt podle brokera (worker ho ověří znovu); Market jen z IBKR.
+                void send(livePhoneSheetEntry(draft, LIVE_PHONE_INSTRUMENT, { ...quote!, symbol: sheetContract(draft.type) }));
               }}
             />
           )}

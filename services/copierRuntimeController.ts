@@ -227,6 +227,11 @@ export interface CopierControllerStatus {
     toPrice: number | null;
     reason?: string;
   }>;
+  /**
+   * Front kontrakt MNQ podle brokera (2. 11. 2026) a kdy se naposledy přečetl —
+   * původ kontraktu pro Limit/Stop bez IBKR; null = neznámý. Zobrazení + výběr kontraktu v panelu.
+   */
+  brokerFrontContract?: { contract: string; at: number } | null;
   /** Poslední ruční vstupy z grafu (fáze 1b) — jen zobrazení, autorita je durable záznam. */
   manualEntries?: Array<{
     operationId: string;
@@ -18847,6 +18852,43 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // Market se vyplní hned: neznámý výsledek může být otevřená pozice (P2-2) — trvalý incident.
     failClosed(new Error(`Ruční Market ${restartedMarket.request.side} ${restartedMarket.request.quantity} ${restartedMarket.request.symbol}: worker se restartoval během odesílání — výsledek neznámý, zkontroluj pozici leadera`), { autoClose: false, recordWhenDisarmed: true });
   }
+  // Front kontrakt podle brokera (2. 11. 2026): jen čtení, při startu a pak po 5 min.
+  // Původ kontraktu pro Limit/Stop, když IBKR neběží; Market dál potřebuje cenu z IBKR.
+  let brokerFrontContract: { contract: string; at: number } | null = null;
+  let brokerFrontAttemptAt = Number.NEGATIVE_INFINITY;
+  const refreshBrokerFrontContract = async () => {
+    if (stopped || !gate.connected || group.leaderAccountId == null || !options.broker.frontContract) return;
+    // Rozestup od posledního POKUSU (i neúspěšného) — žádné čtení po 15 s donekonečna.
+    if (clock() - brokerFrontAttemptAt < 5 * 60_000) return;
+    brokerFrontAttemptAt = clock();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        options.broker.frontContract('MNQ', group.leaderAccountId),
+        new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 5_000); }),
+      ]);
+      const previous = brokerFrontContract?.contract ?? null;
+      brokerFrontContract = result ? { contract: result.contract, at: clock() } : null;
+      if ((result?.contract ?? null) !== previous) {
+        options.onAudit?.([{ at: clock(), leaderEventId: 'broker-front-contract', kind: 'recovered',
+          reason: result ? `front kontrakt MNQ podle brokera: ${result.contract}${result.expiration ? ` (expirace ${result.expiration.slice(0, 10)})` : ''}` : 'front kontrakt MNQ podle brokera neznámý' }]);
+      }
+    } catch (error) {
+      brokerFrontContract = null;
+      options.onError?.(new Error(`Front kontrakt od brokera nejde přečíst: ${errorOf(error).message.slice(0, 160)}`));
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  // Jen při připojeném spojení (token se nesmí brát dřív než autorizace brokera); první čtení
+  // do ~15 s po připojení, pak nejvýš jednou za 5 min.
+  let brokerFrontReading = false;
+  const brokerFrontTimer = setInterval(() => {
+    if (brokerFrontReading) return;
+    brokerFrontReading = true;
+    void refreshBrokerFrontContract().finally(() => { brokerFrontReading = false; });
+  }, 15_000);
+  (brokerFrontTimer as { unref?: () => void }).unref?.();
   const unsubscribe = broker.subscribe(event => {
     if (retiredGroup && (event.type === 'order' || event.type === 'fill' || event.type === 'position')) {
       // Smazaná skupina nic nespravuje: obchodní eventy starých účtů se
@@ -19250,6 +19292,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         workerQuote: (() => {
           try { return options.manualEntryQuote?.('MNQ') ?? null; } catch { return null; }
         })(),
+        brokerFront: brokerFrontContract,
       });
     },
     prepareArm,
@@ -20383,6 +20426,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           status: record.status, createdAt: record.createdAt, updatedAt: record.updatedAt,
           fromPrice: record.fromPrice, toPrice: record.toPrice, ...(record.reason ? { reason: record.reason } : {}),
         })),
+        brokerFrontContract: brokerFrontContract ? { ...brokerFrontContract } : null,
         manualEntries: manualEntryRecords().slice(-10).map(record => ({
           operationId: record.operationId,
           status: record.status,
@@ -20740,6 +20784,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     stop() {
       if (stopped) return;
       stopped = true;
+      clearInterval(brokerFrontTimer);
       stopCopierSettlement();
       gate = { ...gate, armed: false, connected: false };
       cancelFollowerCutBackgroundLanes('stop');

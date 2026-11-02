@@ -194,3 +194,18 @@ describe('ruční vstup jen MNQ s ověřeným kontraktem', () => {
     expect(codes({ command: limit, workerQuote: { contract: 'MNQU5', last: 25_000, lastAt: NOW - 300, bid: null, ask: null, quoteAt: null } })).toContain('contract-mismatch');
   });
 });
+
+describe('původ kontraktu bez IBKR: front podle brokera (jen Limit/Stop)', () => {
+  const limit = market({ orderType: 'Limit', price: 24_990, referencePrice: undefined, quoteReceivedAt: undefined, stopLoss: 24_980, takeProfit: 25_010 });
+  it('Limit projde s čerstvým frontem od brokera, Market ani Stop ne', () => {
+    const stop = market({ orderType: 'Stop', price: 25_010, referencePrice: undefined, quoteReceivedAt: undefined, stopLoss: 25_000, takeProfit: 25_030 });
+    expect(codes({ command: stop, workerQuote: null, brokerFront: { contract: 'MNQZ6', at: NOW - 60_000 } })).toContain('contract-unverified');
+    expect(codes({ command: limit, workerQuote: null, brokerFront: { contract: 'MNQZ6', at: NOW - 60_000 } })).toEqual([]);
+    expect(codes({ workerQuote: null, brokerFront: { contract: 'MNQZ6', at: NOW - 60_000 } })).toContain('contract-unverified');
+  });
+  it('jiný front, starý front nebo rozpor s IBKR = blokováno', () => {
+    expect(codes({ command: limit, workerQuote: null, brokerFront: { contract: 'MNQH7', at: NOW - 60_000 } })).toContain('contract-mismatch');
+    expect(codes({ command: limit, workerQuote: null, brokerFront: { contract: 'MNQZ6', at: NOW - 30 * 60_000 - 1 } })).toContain('contract-unverified');
+    expect(codes({ command: limit, workerQuote: { contract: 'MNQH7', last: 25_000, lastAt: NOW - 300, bid: null, ask: null, quoteAt: null }, brokerFront: { contract: 'MNQZ6', at: NOW - 60_000 } })).toContain('contract-mismatch');
+  });
+});

@@ -2207,6 +2207,23 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       // Predikát výše = Replaced přesně tohoto commandu + otevřený příkaz v odeslaném tvaru.
       return confirmed ? { confirmedBy: 'stream-replaced' as const, order: { ...confirmed } } : undefined;
     },
+    async frontContract(root) {
+      // Jen čtení: product → splatnosti (právě jedna `isFront`, nearchivovaná) → kontrakt.
+      const product = await request<{ id?: number; name?: string }>(`/product/find?name=${encodeURIComponent(root)}`, { method: 'GET' }, true);
+      if (!product?.id || product.name !== root) return null;
+      const maturities = await request<Array<{ id: number; productId?: number; archived?: boolean; isFront?: boolean; expirationDate?: string }>>(
+        `/contractMaturity/deps?masterid=${encodeURIComponent(String(product.id))}`, { method: 'GET' },
+      );
+      const front = (maturities ?? []).filter(item => item.productId === product.id && item.archived !== true && item.isFront === true);
+      if (front.length !== 1) return null;
+      const contracts = await request<Array<{ id: number; name?: string; contractMaturityId?: number }>>(
+        `/contract/deps?masterid=${encodeURIComponent(String(front[0].id))}`, { method: 'GET' },
+      );
+      const pattern = new RegExp(`^${root}[FGHJKMNQUVXZ]\\d$`);
+      const names = (contracts ?? []).filter(item => (item.contractMaturityId == null || item.contractMaturityId === front[0].id)
+        && typeof item.name === 'string' && pattern.test(item.name)).map(item => item.name!);
+      return names.length === 1 ? { contract: names[0], expiration: front[0].expirationDate ?? null } : null;
+    },
     async listAccountCapabilities(accountIds): Promise<BrokerAccountCapability[]> {
       const entities = await listAccountEntities();
       const selected = new Set(accountIds);

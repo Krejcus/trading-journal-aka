@@ -19,6 +19,8 @@ export interface LivePhoneTradeBridge {
   marketSupported: boolean;
   bareSupported: boolean;
   maxContracts: number;
+  /** Front kontrakt podle brokera (čerstvý) — jen pro Limit/Stop z listu, když cena není z IBKR. */
+  frontContract: string | null;
   place: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
   /** Pozice leadera na MNQ (z workeru); `bareEntryOperationId` = vlastní holý Market bez nohou. */
   position: { side: 'long' | 'short'; quantity: number; bareEntryOperationId: string | null; symbol: string } | null;

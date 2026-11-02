@@ -173,6 +173,11 @@ export function createBrokerRouter(
     listOrders: (accountId, options) => options
       ? brokerFor(accountId).listOrders(accountId, options)
       : brokerFor(accountId).listOrders(accountId),
+    // Front kontrakt čte route účtu (leadera); bez metody = null.
+    frontContract: async (root, accountId) => {
+      const broker = brokerFor(accountId);
+      return broker.frontContract ? broker.frontContract(root, accountId) : null;
+    },
     // Jen vlastnická route účtu (INV-TRAD-06); bez route nebo bez metody = null → REST.
     streamOrderSnapshot: accountId => {
       const owner = byAccount.get(accountId);
