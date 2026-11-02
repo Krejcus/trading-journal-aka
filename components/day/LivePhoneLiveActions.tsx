@@ -12,10 +12,12 @@ const BUY = '#2f6bff';
  * „bez SL/TP“ u holého Marketu, doplnění nohou a zavření Flattenem (jediný DEMO
  * účet manual-only skupiny). Zavření je dvoukrokové (druhé klepnutí do 4 s).
  */
-export function LivePhonePositionBar({ side, quantity, symbol, unprotected, busy, onAttach, onClose }: {
+export function LivePhonePositionBar({ side, quantity, symbol, pending = null, unprotected, busy, onAttach, onClose }: {
   side: 'long' | 'short';
   quantity: number;
   symbol: string;
+  /** Jen čekající vstup (Limit/Stop), pozice zatím není — „Zrušit“ jde stejnou cestou Flattenu skupiny. */
+  pending?: { type: string | null; price: number | null } | null;
   unprotected: boolean;
   busy: boolean;
   onAttach: () => void;
@@ -25,8 +27,10 @@ export function LivePhonePositionBar({ side, quantity, symbol, unprotected, busy
   const confirming = armedAt != null && Date.now() - armedAt < 4_000;
   const chip: React.CSSProperties = { height: 30, padding: '0 10px', borderRadius: 9, border: 0, cursor: 'pointer', font: '800 12px Inter, sans-serif', color: '#fff' };
   return (
-    <div role="group" aria-label="Pozice" style={{ position: 'absolute', zIndex: 24, top: 8, left: 8, right: 8, display: 'flex', alignItems: 'center', gap: 6, padding: 6, borderRadius: 12, border: `1px solid ${unprotected ? 'rgba(239,70,85,.7)' : 'var(--dj-line)'}`, background: 'var(--dj-glass, rgba(13,18,27,.94))', boxShadow: '0 14px 34px -16px rgba(0,0,0,.75)' }}>
-      <span className="dj-mono" style={{ fontWeight: 800, fontSize: 13, color: side === 'long' ? BUY : SELL }}>{side === 'long' ? 'LONG' : 'SHORT'} {quantity}</span>
+    <div role="group" aria-label={pending ? 'Čekající příkaz' : 'Pozice'} style={{ position: 'absolute', zIndex: 24, top: 8, left: 8, right: 8, display: 'flex', alignItems: 'center', gap: 6, padding: 6, borderRadius: 12, border: `1px solid ${unprotected ? 'rgba(239,70,85,.7)' : 'var(--dj-line)'}`, background: 'var(--dj-glass, rgba(13,18,27,.94))', boxShadow: '0 14px 34px -16px rgba(0,0,0,.75)' }}>
+      {pending
+        ? <span className="dj-mono" style={{ fontWeight: 800, fontSize: 13, color: side === 'long' ? BUY : SELL }}>ČEKÁ {side === 'long' ? 'BUY' : 'SELL'} {quantity} {pendingTypeLabel(pending.type)}{pending.price != null ? ` ${pending.price.toFixed(2)}` : ''}</span>
+        : <span className="dj-mono" style={{ fontWeight: 800, fontSize: 13, color: side === 'long' ? BUY : SELL }}>{side === 'long' ? 'LONG' : 'SHORT'} {quantity}</span>}
       <span className="dj-mono" style={{ fontSize: 11, color: 'var(--dj-muted)' }}>{symbol}</span>
       {unprotected && <span style={{ fontSize: 11, fontWeight: 800, color: SELL }}>BEZ SL/TP</span>}
       <span style={{ flex: 1 }} />
@@ -35,15 +39,21 @@ export function LivePhonePositionBar({ side, quantity, symbol, unprotected, busy
       <button
         type="button"
         className="dj-btn"
-        aria-label={confirming ? 'Potvrdit zavření (Flatten)' : 'Zavřít pozici (Flatten)'}
+        aria-label={pending ? (confirming ? 'Potvrdit zrušení (Flatten)' : 'Zrušit čekající příkaz (Flatten)') : confirming ? 'Potvrdit zavření (Flatten)' : 'Zavřít pozici (Flatten)'}
         onClick={() => {
           playNativeHapticIfAvailable('medium');
           if (confirming) { setArmedAt(null); onClose(); } else setArmedAt(Date.now());
         }}
         style={{ ...chip, background: confirming ? SELL : 'var(--dj-chip)', color: confirming ? '#fff' : 'var(--dj-text)' }}
-      >{confirming ? 'Opravdu zavřít?' : 'Zavřít'}</button>
+      >{pending ? (confirming ? 'Opravdu zrušit?' : 'Zrušit') : confirming ? 'Opravdu zavřít?' : 'Zavřít'}</button>
     </div>
   );
+}
+
+function pendingTypeLabel(type: string | null): string {
+  if (!type) return '';
+  const lower = type.toLowerCase();
+  return lower.startsWith('limit') ? 'LMT' : lower.startsWith('stop') ? 'STP' : type.toUpperCase();
 }
 
 /** Doplnění SL + TP k holému Marketu: ceny v bodech od trhu, odeslání tlačítkem. */

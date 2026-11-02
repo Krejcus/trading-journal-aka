@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { livePhoneBareMarket, livePhoneSheetEntry } from '../lib/livePhoneOrders';
+import { livePhoneBareMarket, livePhonePosition, livePhoneSheetEntry } from '../lib/livePhoneOrders';
 import { validateLeaderEntryPreview, buildLeaderEntryPreviewCommand } from '../lib/leaderEntryPreview';
 import type { TicketDraft } from '../lib/liveOrderTicket';
 
@@ -30,5 +30,21 @@ describe('telefon: lišta a list objednávky → stejný příkaz jako PC', () =
     expect(bare).toMatchObject({ orderType: 'Market', referencePrice: 25_000 });
     expect(bare).not.toHaveProperty('stopLoss');
     expect(() => valid(bare)).not.toThrow();
+  });
+});
+
+describe('telefon: lišta pozice vs. čekající vstup', () => {
+  const leader = { quantity: 1 };
+  it('čekající Limit není pozice a nenabízí Přidat SL/TP (DEMO 2. 11.: ukázal „LONG 1“)', () => {
+    const pending = livePhonePosition({ kind: 'pending', side: 'long', entry: 28_753.5, entryType: 'Limit' }, leader, 'MNQZ6', 'entry:abc');
+    expect(pending).toEqual({ side: 'long', quantity: 1, symbol: 'MNQZ6', bareEntryOperationId: null, pending: { type: 'Limit', price: 28_753.5 } });
+  });
+  it('otevřená pozice drží holý vstup pro attach', () => {
+    const open = livePhonePosition({ kind: 'position', side: 'short', entry: 28_791.5, entryType: null }, leader, 'MNQZ6', 'entry:abc');
+    expect(open).toMatchObject({ side: 'short', pending: null, bareEntryOperationId: 'entry:abc' });
+  });
+  it('bez leadera nebo kontraktu nic', () => {
+    expect(livePhonePosition({ kind: 'position', side: 'long', entry: 1, entryType: null }, null, 'MNQZ6', null)).toBeNull();
+    expect(livePhonePosition({ kind: 'position', side: 'long', entry: 1, entryType: null }, leader, null, null)).toBeNull();
   });
 });

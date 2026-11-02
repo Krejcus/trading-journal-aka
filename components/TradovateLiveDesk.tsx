@@ -134,7 +134,7 @@ import {
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
 import { manualEntryContractCap } from '../services/manualEntryPreview';
-import type { LivePhoneTradeBridge } from '../lib/livePhoneOrders';
+import { livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryMarket, supportsCopierManualOrderClose, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
@@ -1141,10 +1141,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       maxContracts: manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null),
       frontContract: entryFrontContract,
       place: placeLeaderEntry,
-      position: leaderBasis && summary && symbol ? {
-        side: summary.side, quantity: leaderBasis.quantity, symbol,
-        bareEntryOperationId: bare?.operationId ?? null,
-      } : null,
+      position: livePhonePosition(summary, leaderBasis, symbol, bare?.operationId ?? null),
       attach: attachBrackets,
       // Stejná cesta jako statická lišta / Dashboard: jeden zámek Flattenu na skupinu
       // (createFlattenGroupCoordinator v executeSafetyCommand) — dvojklep ani souběh nevytvoří druhý.

@@ -23,10 +23,38 @@ export interface LivePhoneTradeBridge {
   frontContract: string | null;
   place: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
   /** Pozice leadera na MNQ (z workeru); `bareEntryOperationId` = vlastní holý Market bez nohou. */
-  position: { side: 'long' | 'short'; quantity: number; bareEntryOperationId: string | null; symbol: string } | null;
+  position: LivePhonePosition | null;
   attach: (input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number }) => Promise<LeaderOrderManageResult>;
   /** Flatten celé manual-only skupiny (jediný DEMO účet) safety cestou; vrací text výsledku. */
   flatten: () => Promise<string>;
+}
+
+/** Lišta nad grafem: otevřená pozice, nebo jen čekající vstup (`pending` — zatím žádná pozice). */
+export interface LivePhonePosition {
+  side: 'long' | 'short';
+  quantity: number;
+  symbol: string;
+  bareEntryOperationId: string | null;
+  pending: { type: string | null; price: number | null } | null;
+}
+
+/**
+ * Souhrn grafu leadera → lišta. Čekající vstup (kind `pending`) se nesmí tvářit jako pozice
+ * (DEMO 2. 11.: Limit z listu ukázal „LONG 1“) a nikdy nenabízí „Přidat SL/TP“.
+ */
+export function livePhonePosition(
+  summary: { kind: 'position' | 'pending'; side: 'long' | 'short'; entry: number | null; entryType: string | null } | null,
+  leader: { quantity: number } | null,
+  symbol: string | null,
+  bareEntryOperationId: string | null,
+): LivePhonePosition | null {
+  if (!summary || !leader || !symbol) return null;
+  const pending = summary.kind === 'pending';
+  return {
+    side: summary.side, quantity: leader.quantity, symbol,
+    bareEntryOperationId: pending ? null : bareEntryOperationId,
+    pending: pending ? { type: summary.entryType, price: summary.entry } : null,
+  };
 }
 
 export const livePhoneOperationId = (): string => `entry:${globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;

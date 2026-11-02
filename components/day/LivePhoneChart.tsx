@@ -170,7 +170,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
         chartLayer: ({ lastPrice }) => <>
           {position && <LivePhonePositionBar
-            side={position.side} quantity={position.quantity} symbol={position.symbol}
+            side={position.side} quantity={position.quantity} symbol={position.symbol} pending={position.pending}
             unprotected={position.bareEntryOperationId != null} busy={busy}
             onAttach={() => { if (marketNow == null) say('Cena není čerstvá — SL/TP teď nejde připravit.'); else setAttachOpen(true); }}
             onClose={() => { void trade?.flatten().then(say, error => say(`Flatten: ${error instanceof Error ? error.message.slice(0, 140) : 'chyba'}`)); }}
