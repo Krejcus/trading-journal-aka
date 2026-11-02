@@ -199,3 +199,15 @@ všech 8 potvrzen u brokera.
 - Nativní iPhone appka (build + pozadí/popředí): ráno s Filipem. Návrat z pozadí ověřen jen simulací
   v prohlížeči: „Stav kopírky se ověřuje…“, 0 POST.
 - Odmítnutí stopu přes trh u Market OSO naostro (při 16tickové minimální vzdálenosti nenastalo).
+
+## Nativní iPhone (2. 11. 10:17–10:21)
+
+- Build z `c5547419` (vč. ceny lístku z `feed.final`, lišty „ČEKÁ … · Zrušit“, BE přes IBKR),
+  čistá instalace (uninstall → install → launch `alphatrade-native://live`) na iPhone 13 Pro Max.
+- Pozadí → popředí: AlphaTrade na LIVE, 30 s v pozadí (otevřené Nastavení), návrat. Appka
+  přihlášená, skupina „Ruční DEMO test“, „Kopírka VYP“, živá cena v liště (28 776,50/75), během
+  ~5 s dočetla data dne (značky obchodů, svíčky). DB: žádný příkaz od začátku testu, DISARMED, flat.
+- Neověřeno: ťuknutí na lištu Koupit/Prodat hned po návratu („Stav kopírky se ověřuje…“, 0 POST)
+  — na fyzickém telefonu bez dotyku neumím; v noci ověřeno simulací v prohlížeči.
+- Pozor: jiná session („Svíčky realtime P&L…“) chystá vlastní build do iPhonu — upozorněna, ať
+  staví z aktuálního `main`.

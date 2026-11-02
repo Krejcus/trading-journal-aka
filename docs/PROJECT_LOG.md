@@ -306,8 +306,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   přeruší běžící poll (nejvýš 1× za delivery). Fronta medián ~194 ms (ráno ~330), 8/8 pushem.
   Nález: lístek bral cenu z animované svíčky, která bez rAF (karta na pozadí) uvízla — zaostával
   o 9 ticků s „před 0 s“ (drift gate 2× správně blokoval). Opraveno `915bb2dd` (`feed.final`).
+- iPhone 10:17–10:21: čistá instalace z `c5547419`, pozadí → popředí OK (přihlášení, LIVE, živá
+  cena, dočtení dat, 0 příkazů). Neověřeno ťuknutí hned po návratu (bez dotyku).
 - Otevřené: samostatné tajemství podpisu pushů (změna secrets → souhlas); ověřit `tradeDate`
-  a poplatky na Lucid; nativní iPhone (build hotový, instalace s Filipem).
+  a poplatky na Lucid.
 
 ### 2026-11-02 — LIVE order entry: nativní Market, strop 5 MNQ, jen MNQ, telefon přes stejný relay + noční DEMO conformance (Claude, web + worker NASAZENO @ 4ce53856)
 
