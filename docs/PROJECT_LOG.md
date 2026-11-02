@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-02 — LIVE order entry: nativní Market, strop 5 MNQ, jen MNQ, telefon přes stejný relay + noční DEMO conformance (Claude, web + worker NASAZENO @ 0f710405)
+### 2026-11-02 — LIVE order entry: nativní Market, strop 5 MNQ, jen MNQ, telefon přes stejný relay + noční DEMO conformance (Claude, web + worker NASAZENO @ 4ce53856)
 
 - Proč: Market byl Limit ±2 b, worker pustil jen 1 kontrakt, NQ/kontinuální řada nebyly tvrdě vyloučené
   a telefon neměl odesílání. Filip výslovně autorizoval noční implementaci, nasazení a test jen na
@@ -308,8 +308,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   (testy zastaveny před −50). Konec: flat, bez příkazů, DISARMED, vše leader 61038658, vše MNQZ6.
 - Incidenty: IB Gateway 23:45 Auto log off (doporučení: Auto restart / IBC); 01:28–02:06 Tradovate DEMO REST
   s tokenem neodpovídal → worker ve smyčce restartů (opraveno `0f710405`).
-- Neověřeno: BE (UI blokuje — chybí cena trhu od brokera pro utažení), 5 MNQ round-trip, opakování 2/3 MNQ,
-  telefonní list z position boxu, nativní iPhone (ráno s Filipem).
+- Ráno (Filip: „Nejdřív oprav BE… rozpočet 500 USD“): `4ce53856`: když chybí cena trhu od brokera, BE /
+  utažení SL vezme čerstvou IBKR kotaci (≤ 3 s, stejný kontrakt), worker navíc odmítne utažení blíž
+  než 8 ticků od IBKR (`tighten-too-close`); critic OK, nasazeno web + worker. **BE ověřeno u brokera**
+  (short 1 MNQ, stop → 28791.5 = průměr vstupu, worker 297 ms). Doběhly round-tripy 2/2/3/3/5 MNQ (celkem
+  3× 1, 3× 2, 3× 3, 1× 5) a naostro zafungovaly drift gate (2×) a denní limit skupiny (5 MNQ s SL 12 b).
+  Konec 07:24 DISARMED, flat; broker za celý test −150,80 USD.
+- Nové nálezy: denní limit workeru počítá hrubé P&L bez poplatků (−99,50 vs. broker −150,80, ~1,90 USD na
+  kontrakt) → návrh započítat `fillFee` (jádro, přes critic); `market-candles` ráno 502 (jen historie).
+- Neověřeno: telefonní list z position boxu, nativní iPhone (dopoledne s Filipem).
 - **Provozní změna:** Limit/Stop v jakékoli skupině teď vyžaduje kotaci IBKR stejného kontraktu (Limit
   alternativně front od brokera); bez IB Gateway Market a Stop nejdou.
 
