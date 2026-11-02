@@ -31,6 +31,14 @@ Nativní iPhone zůstává na dopoledne s Filipem. Od 23:45 do 05:23 byl IB Gate
 - **Pojistky, které zafungovaly naostro:** 2× `market-quote-drift` (rychlý trh, nic neodešlo) a 1× denní
   limit skupiny („ztráta při SL ~143 $ je víc, než zbývá do denního limitu (126 $)“). 5 MNQ pak šlo
   s SL 8 b.
+- **Telefonní list z position boxu (úzký web 390×844, 07:28–07:42):** long box → „Quick Order z position
+  boxu“ → list (Limit, cena z boxu, SL/TP z boxu). Při OFF: „Kopírka je vypnutá“, 0 POST. Velikost z rizika
+  boxu 22 ks: „Strop ručního vstupu je 5 kontraktů“, 0 POST. Po ARM 1 MNQ Limit 28753.50 (80–134 ticků pod
+  trhem): broker OSO přijal (POST 224–232 ms), klik→„přijal“ v UI 1,27 s. **Nález:** lišta ukázala čekající
+  Limit jako „LONG 1 · Zavřít“. Opraveno ve `f6465e28` (jen web): teď „ČEKÁ BUY 1 LMT 28753.50 · Zrušit“,
+  bez „Přidat SL/TP“. Ověřeno naostro: „Zrušit“ → „Opravdu zrušit?“ → Flatten potvrzen, příkazy zrušené,
+  flat. Flatten skupinu zároveň vypne (DISARM) a `reconciliationRequired` se do 30 s samo vyčistí.
+  Testovací box jsem z grafu smazal.
 - Konec 07:24: **DISARM** tlačítkem v grafu, preflight OK, flat, žádné working orders, `lastError=null`.
 - P&L u brokera za celý test: **−150,80 USD** (cash 49 849,20; noc −48,10, ráno −102,70) v rámci
   rozpočtu 500 USD.
@@ -43,7 +51,7 @@ Nativní iPhone zůstává na dopoledne s Filipem. Od 23:45 do 05:23 byl IB Gate
 | B. Strop 1–5 MNQ jen manual-only (instalace) | ano | ano | ano | ano | **ano** (Limit 2/3/5, Market 2/3/5; 6 blok UI; denní limit blokoval 5 MNQ s SL 12 b) |
 | C. Jen MNQ, konkrétní kontrakt, původ IBKR/broker | ano | ano | ano | ano | **ano** (vše MNQZ6; TV/kontinuální = blok) |
 | D. `+`/pravý klik jen návrh, typ podle živé kotace | ano | ano | ano | – | **ano** (UI návrh, přesná cena, 0 POST; Limit u brokera) |
-| E. Telefon: holý Market, list, „Přidat SL/TP“, Flatten | ano | ano | ano | ano | **ano** úzký web; **ne** nativní iPhone, list z position boxu |
+| E. Telefon: holý Market, list, „Přidat SL/TP“, Flatten | ano | ano | ano | ano | **ano** úzký web vč. listu z position boxu; **ne** nativní iPhone |
 | F. Instrumentace operationId | ano | ano | ano | ano | **ano** (fronta, POST, ACK, Order, Fill, Position) |
 
 ## Commity (vše na `main`, fast-forward)
@@ -57,6 +65,7 @@ Nativní iPhone zůstává na dopoledne s Filipem. Od 23:45 do 05:23 byl IB Gate
 | `34a78b5a` | Původ kontraktu od brokera (Tradovate `isFront`), jen pro Limit bez IBKR | OPRAVIT (INV) → OK |
 | `e42c9a8c` | Panel drží vzdálenosti SL/TP při změně ceny; gramatika | jen web |
 | `0f710405` | Start workeru: retry uvnitř procesu místo launchd smyčky | provoz |
+| `f6465e28` | Telefon: čekající vstup jako „ČEKÁ … · Zrušit“, ne jako pozice | jen web (zobrazení) |
 | `4ce53856` | BE / utažení SL: čerstvá IBKR kotace, když chybí cena od brokera; worker guard `tighten-too-close` | OK |
 
 **Web commit: `4ce53856` · worker commit: `4ce53856`** (dirty=false, lifetime persistent,
@@ -187,7 +196,6 @@ všech 8 potvrzen u brokera.
 
 ## Neověřeno
 
-- Telefonní list objednávky z position boxu (long-press) se skutečným odesláním.
 - Nativní iPhone appka (build + pozadí/popředí): ráno s Filipem. Návrat z pozadí ověřen jen simulací
   v prohlížeči: „Stav kopírky se ověřuje…“, 0 POST.
 - Odmítnutí stopu přes trh u Market OSO naostro (při 16tickové minimální vzdálenosti nenastalo).

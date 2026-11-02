@@ -316,7 +316,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Konec 07:24 DISARMED, flat; broker za celý test −150,80 USD.
 - Nové nálezy: denní limit workeru počítá hrubé P&L bez poplatků (−99,50 vs. broker −150,80, ~1,90 USD na
   kontrakt) → návrh započítat `fillFee` (jádro, přes critic); `market-candles` ráno 502 (jen historie).
-- Neověřeno: telefonní list z position boxu, nativní iPhone (dopoledne s Filipem).
+- Telefonní list z position boxu ověřen naostro (OFF i strop blokují bez POST, 1 MNQ Limit přijat a zrušen).
+  Nález: čekající Limit se na liště tvářil jako „LONG 1“ → `f6465e28` (jen web): „ČEKÁ BUY 1 LMT … · Zrušit“.
+- Neověřeno: nativní iPhone build + pozadí/popředí (s Filipem; disk má 9,6 GB, build až po úklidu).
 - **Provozní změna:** Limit/Stop v jakékoli skupině teď vyžaduje kotaci IBKR stejného kontraktu (Limit
   alternativně front od brokera); bez IB Gateway Market a Stop nejdou.
 
