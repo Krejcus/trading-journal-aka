@@ -34,7 +34,7 @@ import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '
 import { validateTvBarsCapture } from '../../../lib/tradingViewBars.js';
 import { copierStatusNudgeKey, copierStatusNudgeTopic, tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
 import { copierCommandPushGrant } from '../../../server/copierCommandPush.js';
-import { pushBoundCopierCommand } from '../../../server/copierCommandPushRelay.js';
+import { copierKickWaitsForPush, pushBoundCopierCommand, scheduleCopierKickAfterPush } from '../../../server/copierCommandPushRelay.js';
 
 /** Téma a klíč kanálu ceny + téma budíčku statusu pro worker; bez tajemství pole chybí (nikdy 502). */
 const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string; nudgeTopic?: string; nudgeKey?: string } => {
@@ -482,7 +482,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Kick je jen optimalizace — selhání nesmí shodit enqueue. Jeho HTTP
       // potvrzení ale nemusí blokovat první čtení výsledku: broadcast může
       // worker doručit dřív, než se jeho response vrátí do této funkce.
-      const kick = (async () => {
+      // F1b′: navázání k nečinné delivery + podepsaný push souběžně s long-pollem.
+      // Nikdy nevyhodí, každý krok ≤ 1 s; výsledek nemění 202 ani nezdrží brzdu.
+      const push = pushBoundCopierCommand({ db, deviceId: queued.deviceId, supabaseUrl: config.supabaseUrl,
+        serviceRoleKey: config.supabaseServiceRoleKey }).then(outcome => { timing.mark(`push-${outcome}`); return outcome; });
+      const sendKick = async () => {
         try {
           await fetch(`${config.supabaseUrl}/realtime/v1/api/broadcast`, {
             method: 'POST',
@@ -497,11 +501,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } catch {
           // Poll fallback příkaz doručí i bez kicku.
         }
-      })();
-      // F1b′: navázání k nečinné delivery + podepsaný push souběžně s kickem a long-pollem.
-      // Nikdy nevyhodí, každý krok ≤ 1 s; výsledek nemění 202 ani nezdrží brzdu.
-      const push = pushBoundCopierCommand({ db, deviceId: queued.deviceId, supabaseUrl: config.supabaseUrl,
-        serviceRoleKey: config.supabaseServiceRoleKey }).then(outcome => { timing.mark(`push-${outcome}`); });
+      };
+      // Vstup/náhled/posun z grafu: kick až po pokusu o push — jinak ho worker pollem předběhne
+      // a push zahodí (DEMO 2. 11.: 2 ze 4). Po pushi +250 ms, při neúspěchu hned, nejpozději
+      // 400 ms; s výsledkem se už neposílá. Brzdy, Flatten, ARM a risk-redukční správa: hned.
+      let settled = false;
+      const kick = copierKickWaitsForPush(req.body?.command)
+        ? scheduleCopierKickAfterPush({ push, sendKick, settled: () => settled })
+        : sendKick();
+
       // Long-poll: worker s kickem vyřídí příkaz typicky do ~1,5 s — když
       // výsledek stihneme, UI ušetří celé polling kolečko (další RTT).
       // POZOR: enqueue už durable proběhl — selhání long-pollu se MUSÍ
@@ -528,12 +536,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })();
       // Odpověď stále čeká i na kick: serverless runtime ho nesmí ukončit
       // uprostřed odesílání. Jen samotné čekání už nepřidává waterfall.
-      await kick;
-      timing.mark('kick');
       const resolution = await waitForResolution;
-      // Push typicky doběhne dávno před výsledkem; visící krok odpověď zdrží nejvýš o 300 ms
-      // (nedoběhnutý push = worker vezme příkaz kickem/pollem jako dřív).
-      await Promise.race([push, new Promise(resolve => setTimeout(resolve, 300))]);
+      settled = true;
+      // Kick i push typicky doběhnou dávno před výsledkem; visící krok odpověď zdrží nejvýš
+      // o 300 ms (nedoběhnutý kick/push = worker vezme příkaz pollem jako dřív).
+      await Promise.race([Promise.all([kick, push]), new Promise(resolve => setTimeout(resolve, 300))]);
+      timing.mark('kick');
       timing.mark(resolution ? 'longpoll-hit' : 'longpoll-miss');
       return timed(202, { ...queued, ...(resolution ? { resolution } : {}) });
     }

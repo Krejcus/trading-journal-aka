@@ -61,3 +61,44 @@ export async function pushBoundCopierCommand(options: {
     return 'failed';
   }
 }
+
+/** Risk-redukční správa dostane kick hned — prohraný závod u ní stojí jen optimalizaci (oponentura P2). */
+const IMMEDIATE_KICK_MANAGE_ACTIONS = new Set(['close-position', 'cancel-entry', 'attach-brackets']);
+
+/**
+ * Kick až po pokusu o push jen pro vstup, náhled a posuny SL/TP z grafu (DEMO 2. 11.: jinak kick
+ * a poll workeru předběhnou push ve 2 ze 4 případů). Brzdy, Flatten, ARM a risk-redukční správa:
+ * kick hned jako dřív.
+ */
+export function copierKickWaitsForPush(command: unknown): boolean {
+  const candidate = command as { type?: unknown; command?: { type?: unknown; action?: unknown } } | null;
+  if (candidate?.type !== 'copy-command') return false;
+  const inner = candidate.command;
+  if (inner?.type === 'preview-leader-entry' || inner?.type === 'place-leader-entry') return true;
+  return inner?.type === 'manage-leader-order' && typeof inner.action === 'string' && !IMMEDIATE_KICK_MANAGE_ACTIONS.has(inner.action);
+}
+
+export const COPIER_KICK_AFTER_PUSH_MS = 250;
+export const COPIER_KICK_MAX_DELAY_MS = 400;
+
+/**
+ * Naplánuje záložní kick po pokusu o push: neúspěch → hned, úspěch → +250 ms, nejpozději 400 ms
+ * od zařazení. Když mezitím přišel výsledek (`settled`), kick se už neposílá. Nikdy nevyhodí.
+ */
+export async function scheduleCopierKickAfterPush(options: {
+  push: Promise<CopierPushOutcome>;
+  sendKick: () => Promise<void>;
+  settled: () => boolean;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<'sent' | 'skipped'> {
+  const sleep = options.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  try {
+    const outcome = await Promise.race([options.push, sleep(COPIER_KICK_MAX_DELAY_MS).then(() => 'late' as const)]);
+    if (outcome === 'pushed') await sleep(COPIER_KICK_AFTER_PUSH_MS);
+    if (options.settled()) return 'skipped';
+    await options.sendKick();
+    return 'sent';
+  } catch {
+    return 'skipped';
+  }
+}

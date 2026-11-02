@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { pushBoundCopierCommand } from '../server/copierCommandPushRelay';
+import { copierKickWaitsForPush, pushBoundCopierCommand, scheduleCopierKickAfterPush } from '../server/copierCommandPushRelay';
 import { copierCommandPushGrant, verifyCopierCommandPush } from '../server/copierCommandPush';
 import { TV_PRICE_CHANNEL_SECRET_ENV } from '../server/tvPriceChannel';
 
@@ -90,5 +90,55 @@ describe('F1b′ server: pushBoundCopierCommand', () => {
     // Pozměněné tělo / cizí zařízení = zahodit.
     expect(verifyCopierCommandPush({ ...sent.payload, body: sent.payload.body.replace('cmd-1', 'cmd-2') }, grant.publicKey, DEVICE)).toBeNull();
     expect(verifyCopierCommandPush(sent.payload, grant.publicKey, '11111111-1111-4111-8111-111111111111')).toBeNull();
+  });
+});
+
+describe('F1b′ server: kick po pokusu o push (oponentura P2)', () => {
+  const timeline = () => {
+    const events: string[] = [];
+    let t = 0;
+    const sleep = async (ms: number) => { t += ms; events.push(`sleep ${ms}`); };
+    return { events, sleep, sendKick: async () => { events.push(`kick @${t}`); }, now: () => t };
+  };
+
+  it('jen vstup, náhled a posun SL/TP čekají na push; brzdy, ARM, Flatten a risk-redukční správa ne', () => {
+    const copy = (inner: object) => ({ type: 'copy-command', command: inner });
+    expect(copierKickWaitsForPush(copy({ type: 'place-leader-entry' }))).toBe(true);
+    expect(copierKickWaitsForPush(copy({ type: 'preview-leader-entry' }))).toBe(true);
+    expect(copierKickWaitsForPush(copy({ type: 'manage-leader-order', action: 'move-stop' }))).toBe(true);
+    for (const action of ['close-position', 'cancel-entry', 'attach-brackets']) {
+      expect(copierKickWaitsForPush(copy({ type: 'manage-leader-order', action }))).toBe(false);
+    }
+    expect(copierKickWaitsForPush(copy({ type: 'flatten-group' }))).toBe(false);
+    expect(copierKickWaitsForPush({ type: 'disarm' })).toBe(false);
+    expect(copierKickWaitsForPush({ type: 'kill-switch' })).toBe(false);
+    expect(copierKickWaitsForPush({ type: 'arm-live' })).toBe(false);
+  });
+
+  it('push vyšel → záložní kick o 250 ms později', async () => {
+    const tl = timeline();
+    expect(await scheduleCopierKickAfterPush({ push: Promise.resolve('pushed'), sendKick: tl.sendKick, settled: () => false, sleep: tl.sleep })).toBe('sent');
+    expect(tl.events.at(-1)).toBe('kick @650');
+    expect(tl.events).toContain('sleep 250');
+  });
+
+  it('push selhal → kick hned (bez +250 ms)', async () => {
+    const sent: string[] = [];
+    const result = await scheduleCopierKickAfterPush({ push: Promise.resolve('stale'), sendKick: async () => { sent.push('kick'); },
+      settled: () => false, sleep: () => new Promise(() => undefined) });
+    expect(result).toBe('sent');
+    expect(sent).toEqual(['kick']);
+  });
+
+  it('push visí → kick nejpozději po 400 ms', async () => {
+    const tl = timeline();
+    expect(await scheduleCopierKickAfterPush({ push: new Promise(() => undefined), sendKick: tl.sendKick, settled: () => false, sleep: tl.sleep })).toBe('sent');
+    expect(tl.events).toEqual(['sleep 400', 'kick @400']);
+  });
+
+  it('výsledek už je → záložní kick se neposílá', async () => {
+    const tl = timeline();
+    expect(await scheduleCopierKickAfterPush({ push: Promise.resolve('pushed'), sendKick: tl.sendKick, settled: () => true, sleep: tl.sleep })).toBe('skipped');
+    expect(tl.events.some(event => event.startsWith('kick'))).toBe(false);
   });
 });

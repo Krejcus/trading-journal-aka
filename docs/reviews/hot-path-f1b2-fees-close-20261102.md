@@ -127,3 +127,12 @@ vyhodnotí na dalším heartbeatu brokera.
   vlastní tajemství pro podpis = změna secrets → čeká na Filipův souhlas.
 - Zavření: INV-MANUAL-01 upraveno, testy snímek nesedí → REST a změna route epochy → `not-sent`.
 - Poplatky P1: `realizedTradeDate` z `cashBalance.tradeDate`; test přelomu session.
+
+## 6. Po prvním DEMO běhu (2. 11. 09:03) — pořadí kicku
+
+Naostro push vyhrál jen 2 ze 4 horkých příkazů: kick dorazil dřív, worker si příkaz vzal pollem
+(fronta 399–439 ms) a push zahodil. Úprava (critic OK s P2, zapracováno): vstup, náhled a posun
+SL/TP z grafu pošlou kick až po pokusu o push (`scheduleCopierKickAfterPush`: neúspěch hned,
+po pushi +250 ms, nejpozději 400 ms, s výsledkem už ne). Brzdy, Flatten, ARM a risk-redukční
+správa (`close-position`, `cancel-entry`, `attach-brackets`) kick hned. Odpověď na kick ani push
+nečeká déle než 300 ms po výsledku. Testy: `tests/copierCommandPushRelay.test.ts`.
