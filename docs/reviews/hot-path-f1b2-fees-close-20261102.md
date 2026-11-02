@@ -136,3 +136,28 @@ SL/TP z grafu pošlou kick až po pokusu o push (`scheduleCopierKickAfterPush`: 
 po pushi +250 ms, nejpozději 400 ms, s výsledkem už ne). Brzdy, Flatten, ARM a risk-redukční
 správa (`close-position`, `cancel-entry`, `attach-brackets`) kick hned. Odpověď na kick ani push
 nečeká déle než 300 ms po výsledku. Testy: `tests/copierCommandPushRelay.test.ts`.
+
+## 7. Měření na DEMO (2. 11. 09:03–09:18, worker `a83a214a`, web/relay `ed17d09b`)
+
+4 round tripy 1 MNQ (vstup, posun SL, posun TP, ×), vše `succeeded`, flat, DB audit: 12 příkazů,
+vše `leaderAccountId 61038658`, `MNQZ6`. Fronta = zařazení (DB `created_at`) → start execution
+ve workeru (`RELAY CMD queueMs`; DB `claimed_at` už neměří worker — váže server).
+
+| cesta | n | hodnoty (ms) | medián |
+|---|---|---|---|
+| push (F1b′) | 6 | 188, 187, 279, 226, 418, 236 | ~231 |
+| kick + poll (nový kód) | 6 | 439, 399, 277, 229, 188, 290 | ~284 |
+| ráno před změnou (kick + poll) | 11 | log `queueMs` | ~330 |
+
+- Push na serveru ~90–105 ms (čtení runtime + claim RPC + broadcast za sebou, Server-Timing)
+  + Realtime na Mac ~100 ms. Ušetří claim REST workeru (~170 ms), ale polovinu vrátí. Zisk proti
+  ránu ~100 ms, ne očekávaných ~150–200 ms. Push vyhrál 6 z 12 (po úpravě pořadí kicku 4 z 8).
+- **Další krok (vyžaduje migraci = souhlas):** navázání v téže transakci jako atomická admission
+  (`admit_tradovate_copier_manual_command` vrátí rovnou vázaný řádek k `relayIdle`) a čtení
+  runtime souběžně s admission → server ~40 ms místo ~100 ms; přerušit rozběhnutý poll workeru
+  při příchodu pushe (dnes až +170 ms, když push dorazí během pollu).
+- **Zavření ×:** pre-read ze snímku 1–2 ms (dřív REST 213 ms); worker celkem 1,07–1,14 s (dřív
+  p50 1,29 s); audit: zápis 341–373 ms (`/position/list` + POST), stream flat 504–508 ms, REST
+  ověření 210–244 ms.
+- **Poplatky:** Tradovate DEMO posílá `cashBalance.tradeDate` (2026-11-02) → `lossPnlUsd` −146
+  (`broker`) proti ledgeru −89; limit 250 USD tak počítá skutečnou ztrátu.

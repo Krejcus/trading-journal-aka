@@ -288,6 +288,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-02 — Fronta relaye (F1b′), zavření × ze snímku, poplatky v denním limitu (Claude, web/relay `ed17d09b`, worker `a83a214a`)
+
+- Proč: Filip po ranním měření „Všechny tři z ‚Co by pomohlo‘“. Návrh + oponentura:
+  `docs/reviews/hot-path-f1b2-fees-close-20261102.md` (návrh OPRAVIT → zapracováno; diff OK s P2).
+- F1b′: server po enqueue naváže frontu k nečinné delivery workeru (`relayIdle`) stejnou
+  `claim_v2` a pošle řádek podepsaný Ed25519 (soukromý klíč jen server, z `TV_PRICE_CHANNEL_SECRET`);
+  worker drží nečinnou delivery přes prázdné polly, push jde stejným automatem. Vstup/náhled/posun
+  posílají kick až po pokusu o push (brzdy a risk-redukční správa hned). Bez migrace, bez secrets.
+  INV-RELAY-02/03/04, INV-FRESH-03 upraveny.
+- Zavření ×: pre-read ze stream snímku (REST ověření flat beze změny); audit nese časy kroků.
+- Poplatky: denní ztráta = min(ledger, čisté realized brokera téhož `tradeDate`) — INV-RISK-02.
+- DEMO 09:03–09:18: 4 round tripy 1 MNQ OK, fronta push ~231 ms / kick ~284 / ráno ~330 (zisk
+  ~100 ms, menší než odhad); zavření 1,07–1,14 s (dřív 1,29); `lossPnlUsd` −146 broker vs. −89 ledger.
+  Konec DISARMED, flat. Další zrychlení fronty = navázání v admission RPC (migrace → souhlas).
+- Otevřené: samostatné tajemství podpisu pushů (změna secrets → souhlas); ověřit `tradeDate`
+  a poplatky na Lucid; nativní iPhone (build hotový, instalace s Filipem).
+
 ### 2026-11-02 — LIVE order entry: nativní Market, strop 5 MNQ, jen MNQ, telefon přes stejný relay + noční DEMO conformance (Claude, web + worker NASAZENO @ 4ce53856)
 
 - Proč: Market byl Limit ±2 b, worker pustil jen 1 kontrakt, NQ/kontinuální řada nebyly tvrdě vyloučené
