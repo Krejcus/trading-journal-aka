@@ -3364,6 +3364,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // Správa příkazu: adaptér Tradovate čeká na potvrzení modify až 5 s + POST —
   // timeout controlleru musí být delší, jinak pozdní odmítnutí vždy prohraje (oponentura 2c, bod 3).
   const MANUAL_ORDER_MANAGE_TIMEOUT_MS = options.manualEntryTimingsMs?.manage ?? 8_000;
+  /** Utažení SL / BE: nový SL aspoň tolik ticků na ochranné straně čerstvé kotace IBKR (stejně jako UI pojistka). */
+  const MANUAL_TIGHTEN_MIN_TICKS = 8;
   /** Doplnění SL/TP: nohy aspoň tolik ticků od čerstvé ceny workeru (jinak by je broker odmítl / hned vyplnil). */
   const MANUAL_ATTACH_MIN_TICKS = 8;
   const MANUAL_ORDER_SETTLE_MS = options.manualEntryTimingsMs?.settle ?? 10_000;
@@ -4609,6 +4611,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const tp = other.limitPrice;
         if (tp == null || !(long ? next < tp : next > tp)) {
           return manageBlocked(command, 'beyond-target', `SL musí zůstat ${long ? 'pod' : 'nad'} TP.`);
+        }
+        // Utažení / BE (2. 11. 2026): s čerstvou kotací IBKR stejného kontraktu musí nový SL
+        // zůstat aspoň 8 ticků na ochranné straně trhu. Bez kotace rozhoduje broker (SL přes trh odmítne).
+        let tightenQuote: ManualEntryWorkerQuote | null = null;
+        try { tightenQuote = options.manualEntryQuote?.('MNQ') ?? null; } catch { tightenQuote = null; }
+        const tightenMarket = tightenQuote && tightenQuote.contract === symbol ? workerMarketPrice(tightenQuote, long ? 'Sell' : 'Buy', clock()) : null;
+        if (tightenMarket != null && (long ? tightenMarket - next : next - tightenMarket) < MANUAL_TIGHTEN_MIN_TICKS * 0.25 - 1e-9) {
+          return manageBlocked(command, 'tighten-too-close', `Nový SL je blíž než ${MANUAL_TIGHTEN_MIN_TICKS} ticků od trhu (IBKR ${tightenMarket}) — nic se neodeslalo.`);
         }
       }
       // Utažení riziko snižuje → přepočet limitů jen pro posun SL dál od trhu.

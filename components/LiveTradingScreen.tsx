@@ -37,6 +37,7 @@ import {
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
 import { LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
+import { withIbkrTightenMark } from '../lib/liveChartPosition';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
 import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
@@ -255,6 +256,12 @@ const LiveTradingScreen: React.FC<Props> = ({
   // Živá pozice leadera ve štítcích jako návrh (tažení SL/TP, BE, × čekajícího vstupu).
   // Posun čeká na potvrzení workerem: čára drží novou cenu se štítkem „odesílám“.
   const summary = position?.summary ?? null;
+  // Pojistky utažení SL a BE: bez ceny z P&L brokera smí vzít čerstvou kotaci IBKR téhož
+  // kontraktu (2. 11. 2026; jen blokuje, nic neautorizuje). Při akci se vyhodnotí znovu.
+  const guardSummaryAt = useCallback((at: number) => (summary
+    ? withIbkrTightenMark(summary, position?.symbol ?? null, { source: quoteInfo.source, price: tick?.price ?? null, at: tick?.at ?? null, stale: quoteInfo.stale }, at)
+    : null), [summary, position?.symbol, quoteInfo.source, quoteInfo.stale, tick]);
+  const guardSummary = useMemo(() => guardSummaryAt(Date.now()), [guardSummaryAt]);
   const [pendingMove, setPendingMove] = useState<{ kind: 'stopLoss' | 'takeProfit'; price: number; until: number } | null>(null);
   const [lineNotice, setLineNotice] = useState<{ tone: 'ok' | 'bad' | 'warn'; text: string; at: number } | null>(null);
   const liveBusyRef = useRef(false);
@@ -271,14 +278,14 @@ const LiveTradingScreen: React.FC<Props> = ({
     const timer = window.setTimeout(() => setLineNotice(null), 8_000);
     return () => window.clearTimeout(timer);
   }, [lineNotice]);
-  const liveLines = useMemo(() => (summary ? livePositionChartLines(summary, {
+  const liveLines = useMemo(() => (guardSummary ? livePositionChartLines(guardSummary, {
     manageable: Boolean(onManageEntry),
     // × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jinak by kopie zůstaly otevřené (Flatten na přehledu).
     canClose: manageCloseSupported && copier.available && copier.status?.armed === true && copier.status.shadowMode !== true,
     entryAvg: manageEntryAvgPrice ?? null,
     pointValue: INSTRUMENT.pointValue,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
-  }) : []), [copier.available, copier.status, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, summary]);
+  }) : []), [copier.available, copier.status, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary]);
   const runLiveManage = useCallback(async (
     action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit',
   ) => {
@@ -419,7 +426,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           return;
         }
         if (snapped === current) return;
-        const blocked = liveLineMoveBlockReason(summary, kind, snapped);
+        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped);
         if (blocked) { setLineNotice({ at: Date.now(), tone: 'bad', text: blocked }); return; }
         void runLiveManage(kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
         return;
@@ -443,7 +450,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     },
     onOrderLineAction: (line, actionId) => {
       if (line.ownerId !== LIVE_POSITION_OWNER || actionId !== 'break-even' || !summary) return;
-      const be = liveBreakEven(summary, manageEntryAvgPrice ?? null);
+      const be = liveBreakEven(guardSummaryAt(Date.now()) ?? summary, manageEntryAvgPrice ?? null);
       if (be.blocked || be.price == null) { setLineNotice({ at: Date.now(), tone: 'bad', text: be.blocked ?? 'BE teď nejde.' }); return; }
       void runLiveManage('move-stop', summary.stop, be.price, 'stopLoss');
     },
@@ -451,7 +458,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [draft, manageEntryAvgPrice, orderLines, quote, runLiveManage, summary, updateDraft]);
+  }), [draft, guardSummaryAt, manageEntryAvgPrice, orderLines, quote, runLiveManage, summary, updateDraft]);
 
   const surface = isDark ? 'bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900';
   const bar = isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white';

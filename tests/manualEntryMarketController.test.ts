@@ -29,12 +29,13 @@ afterEach(() => { active?.stop(); active = null; });
 async function setup() {
   const clock = { now: START };
   const quote = { last: 25_000, bid: 24_999.75, ask: 25_000 };
+  const ctxQuote = { contract: SYM };
   const broker = createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(START + 500)] });
   const audits: string[] = [];
   const controller = await bootstrapCopierRuntime({
     broker, store: createMemoryCopierStore(), group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
     manualEntryTimingsMs: { post: 300, start: 500, legWait: 300 },
-    manualEntryQuote: () => ({ contract: SYM, last: quote.last, lastAt: clock.now - 100, bid: quote.bid, ask: quote.ask, quoteAt: clock.now - 50 }),
+    manualEntryQuote: () => ({ contract: ctxQuote.contract, last: quote.last, lastAt: clock.now - 100, bid: quote.bid, ask: quote.ask, quoteAt: clock.now - 50 }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
   active = controller;
@@ -56,7 +57,8 @@ async function setup() {
     return buildLeaderEntryPlaceCommand(preview, patch.operationId ?? 'entry:markettest01');
   };
   const place = (entry: LeaderEntryPlaceCommand) => controller.placeLeaderEntry(entry, { deadlineAt: clock.now + 15_000 });
-  return { broker, controller, audits, clock, quote, command, place };
+  return { broker, controller, audits, clock, quote, command, place,
+    set quoteContract(value: string) { ctxQuote.contract = value; } };
 }
 
 const fillEntry = (broker: MockBroker, entryId: string, quantity: number, price: number) => {
@@ -196,6 +198,44 @@ describe('nativní Market ručního vstupu (controller, manual-only DEMO)', () =
     expect(ctx.broker.cancelRequestCount(result.entryBrokerOrderId!)).toBe(0);
     expect(ctx.broker.orders().find(order => order.brokerOrderId === result.entryBrokerOrderId)).toMatchObject({ status: 'working', limitPrice: 24_980 });
     expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('BE / utažení SL: worker hlídá 8 ticků od své kotace IBKR (2. 11.)', async () => {
+    const ctx = await setup();
+    const result = await ctx.place(ctx.command());
+    fillEntry(ctx.broker, result.entryBrokerOrderId!, 1, 25_000.25);
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    ctx.clock.now += 4_000;
+    const { buildLeaderOrderManageCommand } = await import('../lib/leaderOrderManage');
+    const be = (id: string) => buildLeaderOrderManageCommand({ groupId: group().id, operationId: id, leaderAccountId: LEADER,
+      entryOperationId: 'entry:markettest01', symbol: SYM, action: 'move-stop', expect: { price: 24_990, quantity: 1 }, newPrice: 25_000.25 });
+    // Trh (bid) jen 3 ticky nad BE → blokováno ve workeru, nic k brokerovi.
+    ctx.quote.last = 25_001; ctx.quote.bid = 25_001; ctx.quote.ask = 25_001.25;
+    const close = await ctx.controller.manageLeaderOrder(be('manage:betest0001'), { deadlineAt: ctx.clock.now + 15_000 });
+    expect(close.blockers.map(issue => issue.code)).toContain('tighten-too-close');
+    expect(ctx.broker.modifyRequests()).toHaveLength(0);
+    // Trh 12 ticků nad BE → projde.
+    ctx.quote.last = 25_003.25; ctx.quote.bid = 25_003.25; ctx.quote.ask = 25_003.5;
+    const ok = await ctx.controller.manageLeaderOrder(be('manage:betest0002'), { deadlineAt: ctx.clock.now + 15_000 });
+    expect(ok.blockers).toEqual([]);
+    expect(ctx.broker.modifyRequests().at(-1)).toMatchObject({ changes: { orderType: 'Stop', stopPrice: 25_000.25 } });
+  });
+
+  it('utažení SL: čerstvá kotace JINÉHO kontraktu se ignoruje, rozhodne broker (2. 11.)', async () => {
+    const ctx = await setup();
+    const result = await ctx.place(ctx.command());
+    fillEntry(ctx.broker, result.entryBrokerOrderId!, 1, 25_000.25);
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    ctx.clock.now += 4_000;
+    ctx.quoteContract = 'MNQH7';
+    ctx.quote.last = 25_000.5; ctx.quote.bid = 25_000.5; ctx.quote.ask = 25_000.75;
+    const { buildLeaderOrderManageCommand } = await import('../lib/leaderOrderManage');
+    const moved = await ctx.controller.manageLeaderOrder(buildLeaderOrderManageCommand({ groupId: group().id, operationId: 'manage:betest0003', leaderAccountId: LEADER,
+      entryOperationId: 'entry:markettest01', symbol: SYM, action: 'move-stop', expect: { price: 24_990, quantity: 1 }, newPrice: 24_995 }), { deadlineAt: ctx.clock.now + 15_000 });
+    expect(moved.blockers.map(issue => issue.code)).not.toContain('tighten-too-close');
+    expect(ctx.broker.modifyRequests().at(-1)).toMatchObject({ changes: { stopPrice: 24_995 } });
   });
 
   it('trh utekl mezi vyhodnocením a POSTem: Market se neodešle', async () => {

@@ -1631,6 +1631,12 @@ existující ochranu.
   Brzda během zápisu = výsledek přizná původní SL followerů. Odmítnutý modify
   followera jde stávající cestou (jen správa u nativního OSO, jinak fail-closed),
   žádná nová výjimka. UI pojistka (8 ticků od ceny z P&L brokera) jen blokuje.
+  **BE / utažení bez ceny z P&L (2. 11. 2026, noční test: BE nešlo ani jednou):** UI pojistka smí místo
+  chybějící ceny z P&L brokera vzít čerstvou kotaci IBKR (≤ 3 s) téhož konkrétního kontraktu pozice
+  (`lib/liveChartPosition.ts:withIbkrTightenMark`; TradingView/kontinuální nikdy; při akci se vyhodnotí
+  znovu). Worker při `move-stop` k trhu nově sám odmítne nový SL blíž než 8 ticků od své kotace IBKR
+  (`tighten-too-close`); bez čerstvé kotace dál rozhoduje broker (SL přes trh odmítne). Hlídá
+  `tests/liveTightenIbkrMark.test.ts`, `tests/manualEntryMarketController.test.ts` (BE).
   Hlídá test: `tests/manualOrderManage.test.ts` (fáze 2c), `tests/liveChartData.test.ts`.
 - **Zrychlení posunu SL/TP (30. 10. 2026, oponentura návrhu):** jen `move-stop`
   a `move-target` smí místo REST order grafu předčíst synchronní snímek
@@ -1767,6 +1773,9 @@ existující ochranu.
   synchronně ověří těsně před POSTem. Do read modelu, day locku, ARM,
   reconcile ani kopírování followerů kotace nevstupuje. Market jen pro
   instalační manual-only DEMO skupinu bez followerů (`market-manual-only`).
+  Utažení SL / BE (2. 11. 2026): UI pojistka smí bez ceny z P&L brokera použít čerstvou kotaci IBKR
+  téhož kontraktu — tedy blok i uvolnit; worker utažení znovu hlídá 8 ticků od své kotace IBKR
+  (INV-MANUAL-01 fáze 2c). Čerstvost v UI se měří od příchodu zprávy, ne od času IBKR.
   Vynucuje `services/manualEntryPreview.ts:manualEntryMarketQuoteBlockers`,
   `services/copierRuntimeController.ts:executeManualEntry`; hlídá
   `tests/manualEntryMarketCapMnq.test.ts`, `tests/manualEntryMarketController.test.ts`.

@@ -98,6 +98,30 @@ export function tightenBlockReason(
   return null;
 }
 
+/** Nejstarší kotace IBKR, kterou smí pojistka utažení SL použít místo ceny z P&L brokera. */
+export const TIGHTEN_IBKR_MARK_MAX_AGE_MS = 3_000;
+
+/**
+ * Cena trhu pro pojistku utažení SL / BE (2. 11. 2026, Filip: „jen IBKR pro risk“):
+ * když cena z P&L brokera chybí (čerstvá pozice, REST zaostává), vezme se čerstvá
+ * kotace z IBKR pro STEJNÝ konkrétní kontrakt pozice. TradingView ani kontinuální
+ * řada nikdy. Jen blokuje — nic neautorizuje; SL přes trh odmítne broker.
+ */
+export function withIbkrTightenMark<T extends { mark: number | null }>(
+  summary: T,
+  positionSymbol: string | null,
+  quote: { source: string | null; price: number | null; at: number | null; stale: boolean },
+  now: number,
+): T {
+  if (summary.mark != null && Number.isFinite(summary.mark)) return summary;
+  const source = (quote.source ?? '').trim().toUpperCase();
+  const match = /^IBKR:(MNQ)([HMUZ])20(\d{2})$/.exec(source);
+  const contract = match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
+  if (!contract || contract !== positionSymbol || quote.stale || quote.price == null || !Number.isFinite(quote.price)
+    || quote.at == null || now - quote.at > TIGHTEN_IBKR_MARK_MAX_AGE_MS || quote.at > now + 2_000) return summary;
+  return { ...summary, mark: quote.price };
+}
+
 /**
  * „Co jsem viděl“ pro správu příkazu leadera — jen když souhrn opravdu patří
  * leaderovi skupiny workeru (ne followerovi s přepsaným `isLeader`). null = nenabízet.
