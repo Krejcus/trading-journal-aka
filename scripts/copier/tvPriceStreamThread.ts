@@ -305,12 +305,22 @@ setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
 // kontraktu a čerstvost ceny Marketu; z TV se nikdy neposílá.
 setInterval(() => {
   try {
-    if (priceSource !== 'ibkr' || sourceSwitch.active !== 'ibkr') return;
-    const reading = ibkr?.reading() ?? null;
+    const active = priceSource === 'ibkr' && sourceSwitch.active === 'ibkr';
+    const reading = active ? ibkr?.reading() ?? null : null;
+    // Dávka obchodů pro upozornění na cenu se vybírá vždy; bez platného čtení IBKR se
+    // zahodí i s výchozí cenou (záloha TV ani opožděná data nikdy nic nespustí).
+    let batch: ReturnType<IbkrPriceSource['takeAlertBatch']> = null;
+    try {
+      batch = ibkr?.takeAlertBatch(reading != null) ?? null;
+      if (batch && batch.contract !== reading?.front) batch = null;
+    } catch {
+      batch = null;
+    }
     if (!reading) return;
     port.postMessage({
       type: 'quote', front: reading.front, last: reading.last, lastAt: reading.lastAt,
       bid: reading.bid, ask: reading.ask, quoteAt: reading.quoteAt,
+      ...(batch ? { batch: { prev: batch.prev, min: batch.min, max: batch.max, last: batch.last } } : {}),
     });
   } catch { /* best effort */ }
 }, 250);

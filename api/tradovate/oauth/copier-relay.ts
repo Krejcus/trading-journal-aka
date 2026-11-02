@@ -34,6 +34,7 @@ import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '
 import { validateTvBarsCapture } from '../../../lib/tradingViewBars.js';
 import { copierStatusNudgeKey, copierStatusNudgeTopic, tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
 import { copierCommandPushGrant } from '../../../server/copierCommandPush.js';
+import { priceAlertWatchGrant } from '../../../server/priceAlertWatchKey.js';
 import { copierKickWaitsForPush, pushBoundCopierCommand, readCopierRelayIdle, scheduleCopierKickAfterPush } from '../../../server/copierCommandPushRelay.js';
 
 /** Téma a klíč kanálu ceny + téma budíčku statusu pro worker; bez tajemství pole chybí (nikdy 502). */
@@ -47,6 +48,19 @@ const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKe
     ...(nudgeTopic ? { nudgeTopic } : {}),
     ...(nudgeTopic && nudgeKey ? { nudgeKey } : {}),
   };
+};
+
+/**
+ * Klíč hlídače upozornění na cenu — JEN poll-v2 (autentizovaný worker), nikdy ve sdílené
+ * `tvPriceRealtimeFields` (tu čte i background-v2 a odpověď prohlížeči). Nikdy nevyhodí.
+ */
+const priceAlertRealtimeFields = (deviceId: string): { priceAlert?: { key: string; deviceId: string } } => {
+  try {
+    const grant = priceAlertWatchGrant(deviceId);
+    return grant ? { priceAlert: grant } : {};
+  } catch {
+    return {};
+  }
 };
 
 const snapshotRateLimiter = new CopierSnapshotRateLimiter();
@@ -108,6 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ protocol: 2, command, serverNow: new Date().toISOString(), realtime: {
           url: config.supabaseUrl, anonKey: config.supabaseAnonKey, topic: `copier-kick-${device.id}`,
           ...tvPriceRealtimeFields(device.id),
+          ...priceAlertRealtimeFields(device.id),
           ...(pushGrant ? { pushTopic: pushGrant.topic, pushKey: pushGrant.publicKey, pushDeviceId: device.id.toLowerCase() } : {}),
         } });
       }

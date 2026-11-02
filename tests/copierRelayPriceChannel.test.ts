@@ -32,6 +32,7 @@ vi.mock('../server/nativeCors', () => ({ handleNativeCors: () => false }));
 vi.mock('../server/nativeLiveActivityTick', () => ({ tickNativeLiveActivitiesWithinBudget: mocks.tick }));
 import handler from '../api/tradovate/oauth/copier-relay';
 import { copierCommandPushGrant } from '../server/copierCommandPush';
+import { priceAlertWatchGrant } from '../server/priceAlertWatchKey';
 
 const response = () => {
   const res = { setHeader: vi.fn(), status: vi.fn(), json: vi.fn() };
@@ -70,8 +71,15 @@ describe('relay: kanál ceny z TV (krok 1)', () => {
     expect(body.realtime).toEqual({ url: 'https://mock.invalid', anonKey: 'mock-public', topic: `copier-kick-${DEVICE}`,
       priceTopic: grant.topic, priceKey: grant.key, nudgeTopic: copierStatusNudgeTopic(DEVICE, SECRET), nudgeKey: copierStatusNudgeKey(DEVICE, SECRET),
       // F1b′: téma pushů a jen VEŘEJNÝ Ed25519 klíč (32 B) — podepisovat jím nejde.
-      pushTopic: copierCommandPushGrant(DEVICE, SECRET)!.topic, pushKey: copierCommandPushGrant(DEVICE, SECRET)!.publicKey, pushDeviceId: DEVICE });
+      pushTopic: copierCommandPushGrant(DEVICE, SECRET)!.topic, pushKey: copierCommandPushGrant(DEVICE, SECRET)!.publicKey, pushDeviceId: DEVICE,
+      // Klíč hlídače upozornění na cenu jen workeru v poll-v2 (nikdy prohlížeči ani background-v2).
+      priceAlert: priceAlertWatchGrant(DEVICE, SECRET) });
     expect(Buffer.from(body.realtime.pushKey, 'base64url')).toHaveLength(32);
+    // Legacy poll / background-v2 sdílí `tvPriceRealtimeFields` — klíč upozornění tam nikdy není.
+    const legacy = await call(devicePost({ action: 'poll', status: {} }));
+    expect(legacy.status).toBe(200);
+    expect(legacy.body.realtime).toMatchObject({ priceTopic: grant.topic });
+    expect(legacy.body.realtime).not.toHaveProperty('priceAlert');
   });
 
   it('bez tajemství poll-v2 i legacy poll odpoví normálně, jen bez polí ceny (brzdy dál procházejí)', async () => {

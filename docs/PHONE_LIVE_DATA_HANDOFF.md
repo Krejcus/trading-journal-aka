@@ -97,11 +97,12 @@ serverovým se stejným rozhraním:
   „Jednou“ = atomicky `update … set status='triggered' where id=… and status='active' returning`
   **před** zařazením notifikace; „pokaždé“ nejvýš 1× za minutu (`last_triggered_at`).
   `session` vyprší s koncem seance.
-- **Doručení**: stávající fronta `server/notificationDelivery.ts` (APNs do
-  iPhonu, web push na PC), klíč `price-alert:<id>:<triggeredAt>` → právě jednou
-  i po restartu workeru. Vlastní kategorie a dedupe oddělené od incidentů
-  kopírky (INV-WATCH-01): záplava upozornění nesmí vyčerpat limit ani potlačit
-  rizikové notifikace; rizikové dál otevírají `live:overview`. Hlas: nativně (AVSpeechSynthesizer přes Capacitor
+- **Doručení** (upřesněno po oponentuře 2. 11.): vlastní fronta `price_alert_outbox`
+  (`server/priceAlertOutbox.ts`), ne `notification_delivery_outbox` kopírky. „Jednou“
+  je atomické jen v DB (`trigger_price_alert` pod zámkem řádku); doručení APNs / web push
+  je „aspoň jednou“ se sbalením (`apns-collapse-id` / `Topic` podle upozornění). Oddělené
+  od incidentů kopírky (INV-WATCH-01): záplava upozornění nesmí vyčerpat limit ani potlačit
+  rizikové notifikace (rozpočet 20 / 10 min / uživatel); rizikové dál otevírají `live:overview`. Hlas: nativně (AVSpeechSynthesizer přes Capacitor
   plugin) v telefonu, `speechSynthesis` na PC; jen když `channels.voice`.
 - **Karty upozornění** nejsou sticky (8 s, `TradeToast.ms`), aby se „pokaždé“
   nehromadilo nad lištou pozice; sticky zůstávají jen problémy kopírky.

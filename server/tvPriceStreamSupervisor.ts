@@ -49,6 +49,21 @@ export interface TvPriceStreamQuote {
   quoteAt: number | null;
 }
 
+/**
+ * Obchody IBKR od minulé kotace pro hlídač upozornění na cenu (jen ze zdroje IBKR).
+ * `prev` null = nová výchozí cena (restart vlákna, jiný kontrakt, výpadek) — nic nespouští.
+ */
+export interface TvPriceStreamQuoteBatch {
+  /** Kontrakt ve formátu TV (`MNQZ2026`). */
+  contract: string;
+  prev: number | null;
+  min: number;
+  max: number;
+  last: number;
+  /** Přijetí na hlavním vlákně (hodiny procesu). */
+  at: number;
+}
+
 export interface TvPriceStreamSupervisor {
   update(config: TvPriceStreamConfig): void;
   stop(): void;
@@ -119,6 +134,8 @@ export function createTvPriceStreamSupervisor(options: {
   log?: (line: string) => void;
   /** Výpadek / návrat IBKR (jen stav a krátké kódy) — oznámení na Macu. Nikdy nesmí vyhodit ven. */
   onPriceSourceAlert?: (alert: PriceSourceAlert) => void;
+  /** Dávka obchodů IBKR pro hlídač upozornění; volá se synchronně, výjimka se spolkne. */
+  onQuoteBatch?: (batch: TvPriceStreamQuoteBatch) => void;
   now?: () => number;
   setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
   clearTimeoutImpl?: (timer: unknown) => void;
@@ -261,6 +278,18 @@ export function createTvPriceStreamSupervisor(options: {
           bid: bid != null && ask != null && bid <= ask ? bid : null, ask: bid != null && ask != null && bid <= ask ? ask : null,
           quoteAt: quoteAt != null && bid != null && ask != null && bid <= ask ? Math.min(quoteAt, receivedAt) : null,
         } };
+        // Až po uložení kotace: chyba hlídače upozornění nikdy nezablokuje cenu ručního Marketu.
+        try {
+          const batch = (message as { batch?: unknown }).batch as { prev?: unknown; min?: unknown; max?: unknown; last?: unknown } | undefined;
+          const min = batch ? positive(batch.min) : null;
+          const max = batch ? positive(batch.max) : null;
+          const batchLast = batch ? positive(batch.last) : null;
+          const prev = batch && batch.prev !== null ? positive(batch.prev) : null;
+          if (options.onQuoteBatch && batch && min != null && max != null && batchLast != null && min <= batchLast && batchLast <= max
+            && (batch.prev === null || prev != null)) {
+            options.onQuoteBatch({ contract: row.front as string, prev, min, max, last: batchLast, at: receivedAt });
+          }
+        } catch { /* hlídač upozornění je jen doplněk */ }
         return;
       }
       if (type === 'price-source') {

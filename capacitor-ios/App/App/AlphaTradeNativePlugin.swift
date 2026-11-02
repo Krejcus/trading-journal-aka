@@ -36,6 +36,8 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         CAPPluginMethod(name: "setKeepAwakeEnabled", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startDictation", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopDictation", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "speak", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopSpeaking", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPrivacyState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setPrivacyEnabled", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "lockPrivacy", returnType: CAPPluginReturnPromise),
@@ -67,6 +69,8 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     private var latestTranscript = ""
     private var dictationTimeout: DispatchWorkItem?
     private var hasAudioTap = false
+    private let speechSynthesizer = AVSpeechSynthesizer()
+    private let speechSessionRelease = AlphaTradeSpeechSessionRelease()
     private var calendarEventCall: CAPPluginCall?
     private let keychainService = "app.alphatrade.native.auth"
     private let widgetSuiteName = "group.app.alphatrade.native"
@@ -987,6 +991,45 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         }
     }
 
+    /// Upozornění na cenu nahlas (2. 11. 2026) — jen v popředí; při diktování mlčí.
+    @objc public func speak(_ call: CAPPluginCall) {
+        let text = (call.getString("text") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 240 else {
+            call.reject("Neplatný text pro hlas.")
+            return
+        }
+        let language = call.getString("lang") ?? "cs-CZ"
+        DispatchQueue.main.async {
+            guard self.dictationCall == nil, UIApplication.shared.applicationState == .active else {
+                call.resolve(["spoken": false])
+                return
+            }
+            do {
+                let session = AVAudioSession.sharedInstance()
+                // Původní kategorii si zapamatovat: po dočtení se vrátí (tichý režim zase platí).
+                self.speechSessionRelease.remember(session)
+                try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+                try session.setActive(true)
+            } catch {
+                call.resolve(["spoken": false])
+                return
+            }
+            self.speechSynthesizer.delegate = self.speechSessionRelease
+            if self.speechSynthesizer.isSpeaking { self.speechSynthesizer.stopSpeaking(at: .immediate) }
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.voice = AVSpeechSynthesisVoice(language: language) ?? AVSpeechSynthesisVoice(language: "cs-CZ")
+            self.speechSynthesizer.speak(utterance)
+            call.resolve(["spoken": true])
+        }
+    }
+
+    @objc public func stopSpeaking(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            if self.speechSynthesizer.isSpeaking { self.speechSynthesizer.stopSpeaking(at: .immediate) }
+            call.resolve()
+        }
+    }
+
     private func finishDictation(error: Error? = nil) {
         guard let call = dictationCall else { return }
         dictationCall = nil
@@ -1077,6 +1120,33 @@ struct AlphaTradeCapturePreviewSession {
     }
 }
 #endif
+
+/// Po dočtení vrátí zvuk ostatním aplikacím (jen když zrovna neběží diktování ani další věta).
+final class AlphaTradeSpeechSessionRelease: NSObject, AVSpeechSynthesizerDelegate {
+    private var previous: (category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions)?
+
+    func remember(_ session: AVAudioSession) {
+        // Jen první věta v řadě: další upozornění během čtení původní stav nepřepíše.
+        if previous == nil, session.category != .playback || session.mode != .spokenAudio {
+            previous = (session.category, session.mode, session.categoryOptions)
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) { release(synthesizer) }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) { release(synthesizer) }
+
+    private func release(_ synthesizer: AVSpeechSynthesizer) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            let session = AVAudioSession.sharedInstance()
+            guard let self, !synthesizer.isSpeaking, session.category == .playback, session.mode == .spokenAudio else { return }
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            if let previous = self.previous {
+                try? session.setCategory(previous.category, mode: previous.mode, options: previous.options)
+            }
+            self.previous = nil
+        }
+    }
+}
 
 final class AlphaTradePrivacyShield: NSObject {
     static let shared = AlphaTradePrivacyShield()

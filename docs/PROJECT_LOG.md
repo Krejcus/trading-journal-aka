@@ -288,6 +288,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-02 — LIVE telefon: data do nového UI — správa z čar, šipky plnění, upozornění na cenu (Claude, větev `claude/phone-live-data-20261102`, NEnasazeno)
+
+- Proč: Filip — „Napoj data na nové UI LIVE grafu v iPhone appce“ (UI z `claude/phone-live-ui-20261101`).
+  Návrh i diff přes `copier-design-critic` ve 4 kolech: návrh úkolu 3 nejdřív BLOKUJE (cena IBKR
+  v DB, sdílená fronta incidentů) → přepracováno (`docs/reviews/phone-live-data-design-20261102.md`,
+  smlouva `docs/reviews/price-alerts-contract-20261102.md`); kolo 4 = OK pro všechny tři úkoly.
+- Úkol 1 (správa z čar): telefon používá deskový `manageLeaderEntry` jen za
+  `supportsCopierManualOrderManage && ownManualEntry` (`livePhoneManageFields`), pojistky utažení/BE
+  přes `withIbkrTightenMark`; potvrzení × nese akci i cenu (`cancelConfirmKey`) — potvrzené
+  zrušení čekajícího vstupu už nikdy nezavře pozici (platí i pro PC).
+- Úkol 2 (šipky plnění): kruh plnění leadera ve workeru (`services/copierLeaderDisplayFills.ts`),
+  role z rozdělení kopírky; mezera při neznámé pozici/odpojení/fillu v mezeře; reset na přelomu
+  seance a po změně skupiny (až na konci bloků, v try/catch — `displayFillsSafely`). Web kreslí jen
+  čerstvý neobnovený stav, epizodu z flat a znaménko shodné s autoritativní pozicí; plnění už
+  v deníku se živě nekreslí. Jen poll (exposure push pole zatím neposílá).
+- Úkol 3 (upozornění na cenu): migrace `20261102140000_price_alerts.sql` (NEaplikovaná) — úroveň
+  uživatele, nikdy cena IBKR (INV-UI-04); „jednou“ atomicky v `trigger_price_alert` pod zámkem,
+  rozpočet 20/10 min, vlastní fronta `price_alert_outbox` v téže transakci (INV-WATCH-01);
+  rearm jen RPC s očekávaným počtem spuštění. Hlídá vlákno `price-alert-watch.mjs` ve workeru
+  (`env: {}`, jen klíč upozornění z poll-v2, dávky obchodů IBKR; INV-WORKER-04), výchozí vypnuto
+  (`--price-alerts on`). Telefon: sdílený serverový store, karta/hlas jen ≤ 30 s, max 2 karty,
+  spuštěné tlumeně, „hlídá“ jen při čerstvém statusu. Nativní hlas (`speak`) v Swift pluginu.
+- Ověřeno: vitest celá sada (6596 prošlo; 2 strážné testy rozšířeny o nová pole a znovu zelené),
+  tsc, PGlite `tests/sql/priceAlerts.pg.mjs` 10/10 (3 mutace odhaleny), bundle vlákna naběhne s `env: {}`.
+- NEověřeno / čeká: migrace do produkce (supabase-migrate, souhlas), push na main a reinstall
+  workeru s `--price-alerts on` (po „nasaď“), čistá instalace do iPhonu (nový `speak`), prst na
+  iPhonu: plusko vs × u pozice, rozpočet proti limitu APNs na token.
+- Otevřené: pojistka proti záplavě zpráv i u stávajícího vlákna ceny (`tvPriceStreamSupervisor`);
+  PC verze upozornění; PC graf by mohl sdílet `livePhoneManageFields` (parita vynucená strukturálně).
+
 ### 2026-11-02 — Fronta relaye (F1b′), zavření × ze snímku, poplatky v denním limitu (Claude, web/relay + worker `8652e136`)
 
 - Proč: Filip po ranním měření „Všechny tři z ‚Co by pomohlo‘“. Návrh + oponentura:

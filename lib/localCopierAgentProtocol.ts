@@ -114,6 +114,11 @@ export interface LocalCopierAgentStatus {
    * rozhodování copieru; chybí, když TradingView neběží.
    */
   marketPrices?: CopierMarketPrice[];
+  /**
+   * Hlídač upozornění na cenu (2. 11. 2026): stav vlákna a stáří ceny/synchronizace v ms
+   * při sestavení statusu. Jen zobrazení „kdo hlídá“; starší workery pole nemají.
+   */
+  priceAlertWatch?: CopierPriceAlertWatchStatus | null;
   /** Read-only display snapshots; never authorize broker actions. */
   accountDisplay?: TradovateAccountDisplayFeedState[];
   /** Využití Tradovate API a stav session každého OAuth spojení workeru; jen zobrazení. */
@@ -123,6 +128,13 @@ export interface LocalCopierAgentStatus {
    * která worker načte po nejbližším bezpečném restartu. Jen zobrazení.
    */
   connectionDiscovery?: CopierConnectionDiscoveryStatus;
+}
+
+export interface CopierPriceAlertWatchStatus {
+  state: 'watching' | 'no-price' | 'no-sync' | 'off' | 'tripped';
+  alerts: number;
+  priceAgeMs: number | null;
+  syncAgeMs: number | null;
 }
 
 export interface CopierConnectionDiscoveryStatus {

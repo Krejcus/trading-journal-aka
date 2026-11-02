@@ -39,6 +39,7 @@ import { updateNativeWidgetPushes } from '../../server/nativeWidgetPushUpdater.j
 import { readTradovateServerConfig } from '../../server/tradovateOAuthStore.js';
 import { collectConnectedAccountSnapshots } from '../../server/copierAccountSnapshotStore.js';
 import { purgeExpiredTvAlerts, shouldRunTvAlertPurge } from '../../server/tvAlertPurge.js';
+import { drainPriceAlertOutbox } from '../../server/priceAlertOutbox.js';
 
 // Init Supabase with Service Role Key to bypass RLS in Cron job
 // VITE_ prefix vars are only available at build time, not in serverless runtime
@@ -669,6 +670,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             console.error('[Cron] Copier watchdog failed:', copierWatchdogError);
         }
 
+        // Upozornění na cenu: vlastní fronta a vlastní try/catch, nikdy neovlivní alerty kopírky (INV-WATCH-01).
+        let priceAlertsSent = 0;
+        try {
+            await supabase.rpc('expire_price_alerts', { p_user: null });
+            priceAlertsSent = (await drainPriceAlertOutbox({ db: supabase })).sent;
+        } catch (priceAlertError) {
+            console.error('[Cron] Price alert delivery failed:', priceAlertError instanceof Error ? priceAlertError.message : String(priceAlertError));
+        }
+
         console.log(`[Cron] Done: ${sentCount} web sent, ${nativeSentCount} APNs sent, ${duplicateCount} deduped, ${pushJobs.length + nativePushJobs.length} total jobs, ${profiles.length} profiles, ${(subsResult.data?.length || 0) + (nativeSubsResult.data?.length || 0)} devices, ${copierAlertsSent} copier alerts, ${liveActivityStartResult.sent} live activity starts, ${liveActivityResult.sent} live activity updates, ${widgetPushResult.sent} widget pushes, ${accountSnapshotResult.inserted} account snapshots`);
         return res.status(200).json({
             success: true,
@@ -680,6 +690,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             time: pragueTime,
             profiles: profiles.length,
             copierAlerts: copierAlertsSent,
+            priceAlerts: priceAlertsSent,
             liveActivities: liveActivityResult,
             liveActivityStarts: liveActivityStartResult,
             widgetPushes: widgetPushResult,

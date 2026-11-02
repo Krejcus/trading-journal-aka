@@ -34,6 +34,11 @@ export interface CopierLiveExposurePayload {
   /** `null` = worker expozici nezná (odpojený, bez kontroly) — i to je novější stav. */
   exposure: CopierLiveExposure | null;
   events: CopyEvents;
+  /**
+   * Plnění leadera aktuální epizody (šipky v grafu, 2. 11. 2026) — ve stejné zprávě jako
+   * expozice, aby seděly k sobě. Chybí = starší worker (platí hodnota z pollu).
+   */
+  leaderFills?: LocalCopierAgentStatus['controller']['leaderFills'];
 }
 
 export interface CopierLiveExposureEnvelope {
@@ -106,6 +111,21 @@ const isExposure = (value: unknown): value is CopierLiveExposure => {
     && (order.side === 'Buy' || order.side === 'Sell') && text(order.orderType, 32)
     && int(order.quantity) && int(order.filledQuantity) && text(order.status, 32) && time(order.updatedAt)
     && (order.limitPrice === null || finite(order.limitPrice)) && (order.stopPrice === null || finite(order.stopPrice))));
+};
+
+const LEADER_FILLS_MAX = 50;
+const isLeaderFills = (value: unknown): boolean => {
+  if (value === null) return true;
+  if (!value || typeof value !== 'object') return false;
+  const ring = value as Record<string, unknown>;
+  return text(ring.symbol, 32) && typeof ring.fromFlat === 'boolean' && int(ring.netAfter)
+    && (ring.gap === undefined || ring.gap === true) && (ring.episodeId === undefined || text(ring.episodeId))
+    && Array.isArray(ring.fills) && ring.fills.length <= LEADER_FILLS_MAX && ring.fills.every(fill => {
+      const row = fill as Record<string, unknown> | null;
+      return !!row && text(row.fillId, 32) && text(row.orderId, 32) && time(row.at) && finite(row.price) && (row.price as number) > 0
+        && int(row.quantity) && (row.quantity as number) > 0 && (row.side === 'Buy' || row.side === 'Sell')
+        && (row.role === 'entry' || row.role === 'exit');
+    });
 };
 
 const EXIT_REASONS = new Set(['sl', 'tp', 'manual']);
@@ -201,6 +221,8 @@ export function mergeCopierLiveExposure(
         ...status.controller,
         exposure: live.payload.exposure,
         recentCopyEvents: mergeCopyEvents(status.controller.recentCopyEvents ?? [], live.payload.events),
+        // Neplatné nebo chybějící pole = platí poll (nikdy kvůli němu nezahodit expozici).
+        ...(live.payload.leaderFills !== undefined && isLeaderFills(live.payload.leaderFills) ? { leaderFills: live.payload.leaderFills } : {}),
       },
     },
     exposureObservedAt: Math.min(live.receivedAt, observedAt + Math.max(0, ahead)),

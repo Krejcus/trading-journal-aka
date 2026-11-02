@@ -18,6 +18,7 @@ import {
   type BrokerAccountRiskSnapshot,
 } from './brokerPort';
 import { msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
+import { createLeaderDisplayFills, type CopierLeaderDisplayFills } from './copierLeaderDisplayFills';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { evaluateManualEntryPreview, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualEntryMarketQuoteBlockers, workerMarketPrice, manualStopLossUsd, remainingLossHeadroom, type ManualEntryAccountInputs, type ManualEntryWorkerQuote } from './manualEntryPreview';
 import { runnerUnmappedReplaceAccounts } from './copierRunner';
@@ -424,6 +425,8 @@ export interface CopierControllerStatus {
    * notifikace. Server je čte z heartbeat statusu, appka z pollu.
    */
   recentCopyEvents?: CopierCopyEvent[];
+  /** Plnění leadera aktuální epizody pro šipky v grafu (2. 11. 2026) — jen zobrazení, nic z toho nečte risk ani příkazy. */
+  leaderFills?: CopierLeaderDisplayFills | null;
   /** Výsledek posledního auto-flatten (expirace ARM / fail-closed / reconnect); jen tento běh. */
   autoClose?: CopierAutoClose | null;
   /**
@@ -1273,6 +1276,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const defaultArmTtlMs = gate.armTtlMs;
   /** Deník vstupů/exitů pro notifikace; jen poslední položky, jen tento běh. */
   const recentCopyEvents: CopierCopyEvent[] = [];
+  // Šipky plnění v LIVE grafu (jen zobrazení, jen paměť, nic durable).
+  const leaderDisplayFills = createLeaderDisplayFills();
+  let leaderDisplayFillsErrors = 0;
+  /** Chyba šipek je jen zobrazovací: nahlásit nejvýš 3× za běh, kopírování pokračuje. */
+  const reportLeaderDisplayFillsError = (error: unknown) => {
+    leaderDisplayFillsErrors += 1;
+    if (leaderDisplayFillsErrors <= 3) {
+      try { options.onError?.(new Error(`Šipky plnění (jen zobrazení): ${error instanceof Error ? error.message : String(error)}`)); } catch { /* jen zobrazení */ }
+    }
+  };
+  /** Volání zobrazovací vrstvy šipek: výjimka nikdy neopustí rizikovou cestu (INV-WORKER-04). */
+  const displayFillsSafely = (operation: () => void) => {
+    try { operation(); } catch (error) { reportLeaderDisplayFillsError(error); }
+  };
   let copyEventCounter = 0;
   // ── Account eligibility ────────────────────────────────────────────────
   // Oddělená vrstva od connection statusu a od poslední execution události.
@@ -4896,6 +4913,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     leaderReducingQuantityByEventId.clear();
     appliedRuleActionSignatures.clear();
     appliedRuleActionSignaturesInitialized = false;
+    // Šipky včerejší epizody nepatří do dnešního grafu (až po risk paměti, nikdy nevyhodí).
+    displayFillsSafely(() => leaderDisplayFills.reset());
     return true;
   };
   const followerLossAtRiskSnapshot = (
@@ -15735,10 +15754,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     if (event.type === 'connection') {
+      // Výpadek spojení = možná nezachycená plnění: epizoda šipek je neúplná.
+      if (!event.connected) displayFillsSafely(() => leaderDisplayFills.markGap());
       // Fill leadera v mezeře (reconnect i plánovaná obměna socketu) =
       // automatické pokračování by nevědělo o celém obchodu.
       if (event.connected && event.resync?.gapFills?.some(fill => fill.accountId === group.leaderAccountId)) {
         declineTransportResume('leader během výpadku obchodoval (fill v mezeře)');
+        // Fill v mezeře nikdy jako živá šipka (INV-TRAD-01): epizoda je neúplná.
+        displayFillsSafely(() => leaderDisplayFills.markGap());
       }
       // Snapshot po skutečném reconnectu, jehož disconnect controller viděl
       // (přímý broker bez routeru), je obyčejné obnovení spojení s plnou
@@ -16456,6 +16479,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Když Position=0 dorazila před Fillem, právě tento pre-fill lot
       // zůstává autoritativním důkazem, že jde o exit, ne nový entry.
       preclassifyLeaderFillExposure(event.fill);
+      // Šipky plnění (jen zobrazení): role z právě uloženého rozdělení kopírky; synchronně,
+      // nikdy nevyhodí ven a nic nečeká (INV-WORKER-04).
+      try {
+        const displayEventId = `fill:${event.fill.fillId}`;
+        leaderDisplayFills.observe(event.fill, leaderPreFillNetByEventId.get(displayEventId),
+          leaderReducingQuantityByEventId.get(displayEventId) ?? 0);
+      } catch (error) {
+        reportLeaderDisplayFillsError(error);
+      }
       // Atribuce exitu (SL/TP/ručně): flat přechod se páruje s objednávkou
       // posledního fillu daného symbolu.
       lastLeaderFillOrderId.set(event.fill.symbol, event.fill.brokerOrderId);
@@ -16481,6 +16513,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Denní risk počítadlo čte leader filly; event pak normálně pokračuje
       // do leader event source (on-fill replikace se nemění).
       await trackLeaderFill(event.fill, now);
+      try {
+        const stats = currentRuntime().state.safety.dailyStats;
+        leaderDisplayFills.setEpisodeId(event.fill.symbol,
+          stats?.openLots.find(lot => lot.symbol === event.fill.symbol)?.episodeId
+          ?? stats?.recentClosedTrades?.find(trade => trade.id === event.fill.fillId)?.episodeId);
+      } catch (error) {
+        reportLeaderDisplayFillsError(error);
+      }
       // Kryje pořadí, kdy flat position event předběhl závěrečný fill.
       await maybeEngageDayLock(now);
     }
@@ -18846,6 +18886,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         stuckOutbox: false,
       };
       void syncLiveCopyExposureFlag('clear').catch(() => undefined);
+      // Jiný leader = jiné plnění; šipky starého leadera nepatří k nové skupině (až na konci, nikdy nevyhodí).
+      displayFillsSafely(() => leaderDisplayFills.reset());
       });
         eventTail = apply.then(() => undefined, () => undefined);
         await apply;
@@ -20776,6 +20818,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : 0,
         armedAt: gate.armed ? gate.armedAt : 0,
         recentCopyEvents: [...recentCopyEvents],
+        leaderFills: (() => {
+          // Status jde i v pollu brzd a v ACK: zobrazovací pole nikdy nevyhodí.
+          try { return retiredGroup ? null : leaderDisplayFills.snapshot(); } catch { return null; }
+        })(),
         autoClose: lastAutoClose ? { ...lastAutoClose, accountIds: [...lastAutoClose.accountIds] } : null,
         resumeOffer: lastResumeOffer ? { ...lastResumeOffer } : null,
         dailyStats: current.state.safety.dailyStats

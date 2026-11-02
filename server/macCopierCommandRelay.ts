@@ -108,6 +108,12 @@ export function startMacCopierCommandRelay(options: {
    * poll smyčka a brzdy na nic z toho nečekají (INV-RELAY-04).
    */
   onRealtimeConfig?: (realtime: unknown) => void;
+  /**
+   * Klíč hlídače upozornění na cenu z poll-v2 (`realtime.priceAlert`) — jen pro vlákno
+   * hlídače, nikdy do `onRealtimeConfig`. `null` = server klíč nevydal (hlídání vypnout).
+   * Synchronní, výjimka se spolkne (INV-WORKER-04).
+   */
+  onPriceAlertConfig?: (config: { apiOrigin: string; deviceId: string; key: string } | null) => void;
 }): MacCopierCommandRelay {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const pollMs = Math.max(500, options.pollMs ?? 750);
@@ -241,11 +247,23 @@ export function startMacCopierCommandRelay(options: {
         key: typeof config.nudgeKey === 'string' && /^[A-Za-z0-9_-]{43}$/.test(config.nudgeKey) ? config.nudgeKey : null }
       : null;
     try {
-      // Klíč expozice patří jen sem: zobrazovací doplňky (vlákno ceny) ho nedostanou.
-      const { nudgeKey: _omit, ...rest } = (realtime && typeof realtime === 'object' ? realtime : {}) as Record<string, unknown>;
+      // Klíč expozice patří jen sem: zobrazovací doplňky (vlákno ceny) ho nedostanou;
+      // klíč hlídače upozornění jde zvlášť jen jeho vláknu.
+      const { nudgeKey: _omit, priceAlert: _alert, ...rest } = (realtime && typeof realtime === 'object' ? realtime : {}) as Record<string, unknown>;
       options.onRealtimeConfig?.(realtime && typeof realtime === 'object' ? rest : realtime);
     } catch {
       // Zobrazovací doplněk nesmí ovlivnit doručení příkazu.
+    }
+    try {
+      if (options.onPriceAlertConfig) {
+        const grant = (realtime as { priceAlert?: { key?: unknown; deviceId?: unknown } } | null | undefined)?.priceAlert;
+        options.onPriceAlertConfig(typeof grant?.key === 'string' && /^[A-Za-z0-9_-]{43}$/.test(grant.key)
+          && typeof grant.deviceId === 'string' && /^[0-9a-f-]{36}$/.test(grant.deviceId)
+          ? { apiOrigin: options.apiOrigin, deviceId: grant.deviceId, key: grant.key }
+          : null);
+      }
+    } catch {
+      // Hlídač upozornění nesmí ovlivnit doručení příkazu.
     }
   };
 

@@ -48,3 +48,23 @@ describe('telefon: lišta pozice vs. čekající vstup', () => {
     expect(livePhonePosition({ kind: 'position', side: 'long', entry: 1, entryType: null }, leader, null, null)).toBeNull();
   });
 });
+
+describe('telefon: podmínky správy z čar = PC', async () => {
+  const { livePhoneManageFields } = await import('../lib/livePhoneOrders');
+  const base = { manageSupported: true, closeCapability: true, ownEntry: { entryAvgPrice: 100 }, manage: 'fn', runtimeAvailable: true, armed: true, shadowMode: false, chartShowsPoll: true };
+  it('manage jen s capability a vlastním obchodem', () => {
+    expect(livePhoneManageFields(base).manage).toBe('fn');
+    expect(livePhoneManageFields({ ...base, manageSupported: false })).not.toHaveProperty('manage');
+    expect(livePhoneManageFields({ ...base, ownEntry: null })).not.toHaveProperty('manage');
+  });
+  it('× u pozice ne při shadow, vypnuté kopírce, nedostupném runtime nebo bez capability', () => {
+    expect(livePhoneManageFields(base).closeSupported).toBe(true);
+    for (const patch of [{ shadowMode: true }, { armed: false }, { runtimeAvailable: false }, { closeCapability: false }]) {
+      expect(livePhoneManageFields({ ...base, ...patch }).closeSupported).toBe(false);
+    }
+  });
+  it('průměr pro BE jen ze stavu pollu (expozice z kanálu předbíhá = null)', () => {
+    expect(livePhoneManageFields(base).entryAvg).toBe(100);
+    expect(livePhoneManageFields({ ...base, chartShowsPoll: false }).entryAvg).toBeNull();
+  });
+});

@@ -37,10 +37,16 @@ export function useLivePhoneLineState(): LivePhoneLineState {
  * zavření a zrušení je stejné jako `LiveTradingScreen` (INV-UI-01..04): „co
  * jsem viděl“ ze začátku tahu, předkontroly jen blokují, rozhoduje worker.
  */
-export function LivePhoneOrderLines({ api, state, summary, manage, canClose, entryAvg, isDark, onNotice }: {
+export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canClose, entryAvg, isDark, onNotice }: {
   api: ChartViewApi;
   state: LivePhoneLineState;
   summary: LiveChartPositionSummary | null;
+  /**
+   * Souhrn pro pojistky utažení SL a BE jako na PC (`withIbkrTightenMark`): bez ceny z P&L
+   * brokera čerstvá kotace IBKR téhož kontraktu. Jen předkontrola v UI (může blok i uvolnit,
+   * INV-UI-04); rozhoduje worker. Při akci se vyhodnotí znovu s aktuálním časem.
+   */
+  guardAt?: (at: number) => LiveChartPositionSummary | null;
   manage: LivePhoneManage | null;
   /** × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jako PC. */
   canClose: boolean;
@@ -61,13 +67,14 @@ export function LivePhoneOrderLines({ api, state, summary, manage, canClose, ent
 
   // Telefon: × (zavřít pozici i zrušit vstup) vždy na dvě klepnutí — leží u osy hned
   // vedle plusu crosshairu a jedno klepnutí by mohlo zavřít leadera omylem.
-  const lines = useMemo(() => (summary ? livePositionChartLines(summary, {
+  const guardSummary = useMemo(() => (summary ? guardAt?.(Date.now()) ?? summary : null), [guardAt, summary]);
+  const lines = useMemo(() => (guardSummary ? livePositionChartLines(guardSummary, {
     manageable: manage != null,
     canClose,
     entryAvg,
     pointValue: POINT_VALUE,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
-  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, entryAvg, manage, pendingMove, summary]);
+  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, entryAvg, manage, pendingMove, guardSummary]);
 
   const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit') => {
     if (!manage || expect == null) return;
@@ -88,7 +95,7 @@ export function LivePhoneOrderLines({ api, state, summary, manage, canClose, ent
     } catch (reason) {
       setPendingMove(null);
       const message = reason instanceof Error ? reason.message : 'chyba';
-      onNotice(/entry-busy|entry-superseded|entry-not-admitted|manage-daily-cap|Chybí cesta|není čerstvě ověřený|nic se neodeslalo/.test(message)
+      onNotice(/entry-busy|entry-superseded|entry-not-admitted|entry-daily-cap|manage-daily-cap|Chybí cesta|není čerstvě ověřený|nic se neodeslalo/.test(message)
         ? `Neodesláno: ${message.slice(0, 120)}` : `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate.`);
     } finally {
       busyRef.current = false;
@@ -108,7 +115,7 @@ export function LivePhoneOrderLines({ api, state, summary, manage, canClose, ent
         const current = kind === 'stopLoss' ? summary.stop : summary.target;
         if (startLine && startLine.price !== current) { onNotice(`${kind === 'stopLoss' ? 'SL' : 'TP'} se během tažení změnil — nic se neodeslalo.`); return; }
         if (snapped === current) return;
-        const blocked = liveLineMoveBlockReason(summary, kind, snapped);
+        const blocked = liveLineMoveBlockReason(guardAt?.(Date.now()) ?? summary, kind, snapped);
         if (blocked) { onNotice(blocked); return; }
         void run(kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
       }}
@@ -119,7 +126,7 @@ export function LivePhoneOrderLines({ api, state, summary, manage, canClose, ent
       }}
       onAction={(line, actionId) => {
         if (line.ownerId !== LIVE_POSITION_OWNER || actionId !== 'break-even' || !summary) return;
-        const be = liveBreakEven(summary, entryAvg);
+        const be = liveBreakEven(guardAt?.(Date.now()) ?? summary, entryAvg);
         if (be.blocked || be.price == null) { onNotice(be.blocked ?? 'BE teď nejde.'); return; }
         void run('move-stop', summary.stop, be.price, 'stopLoss');
       }}

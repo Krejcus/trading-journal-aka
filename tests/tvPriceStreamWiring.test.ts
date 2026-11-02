@@ -166,8 +166,9 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     expect(pilot).toContain("new URL('./tv-price-stream.mjs', import.meta.url)");
     expect(pilot).toContain('tvPriceStream?.stop();');
     expect(pilot).toContain('stdout: true, stderr: true');
-    // Nikdy nespouštět bundle workeru jako vlákno.
-    expect(pilot).not.toMatch(/new Worker\((?!tvPriceStreamBundle)/);
+    // Nikdy nespouštět bundle workeru jako vlákno; jediná další vlákna = hlídač upozornění (env {}).
+    expect(pilot).not.toMatch(/new Worker\((?!tvPriceStreamBundle|priceAlertWatchBundle)/);
+    expect(pilot.match(/new Worker\(/g)).toHaveLength(2);
   });
 
   it('konfigurace z realtime: bez tématu nebo klíče = vypnuto (serverový vypínač)', () => {

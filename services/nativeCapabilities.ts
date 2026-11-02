@@ -78,6 +78,8 @@ interface AlphaTradeNativePlugin {
   setKeepAwakeEnabled(options: { enabled: boolean }): Promise<NativeKeepAwakeState>;
   startDictation(): Promise<{ text: string }>;
   stopDictation(): Promise<{ recording: boolean }>;
+  speak(options: { text: string; lang?: string }): Promise<{ spoken: boolean }>;
+  stopSpeaking(): Promise<void>;
   getPrivacyState(): Promise<{ enabled: boolean; generation?: number }>;
   setPrivacyEnabled(options: { enabled: boolean }): Promise<{ enabled: boolean }>;
   lockPrivacy(): Promise<void>;
@@ -226,4 +228,15 @@ export async function startNativeDictation(): Promise<string> {
 export async function stopNativeDictation(): Promise<void> {
   assertNativeBuild();
   await AlphaTradeNative.stopDictation();
+}
+
+/** Přečte text nahlas (AVSpeechSynthesizer); false = nepřečteno (pozadí, diktování, starší build). */
+export async function speakNative(text: string, lang = 'cs-CZ'): Promise<boolean> {
+  assertNativeBuild();
+  return (await AlphaTradeNative.speak({ text, lang })).spoken === true;
+}
+
+export async function stopNativeSpeaking(): Promise<void> {
+  assertNativeBuild();
+  await AlphaTradeNative.stopSpeaking();
 }

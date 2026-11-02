@@ -4,9 +4,10 @@
  * nastavení. Upozornění jen hlásí — nikdy nic neobchoduje a nevstupuje do
  * kopírky, rizika ani day locku.
  *
- * Úložiště je zatím jen v tomto zařízení (`localStorage`). Hlídání ceny
- * (Mac worker z IBKR), sdílení PC ↔ telefon a doručení (APNs, web push)
- * napojí datová vrstva — viz `PriceAlertStore`, který stačí nahradit.
+ * Úložiště: přihlášený uživatel = server (`services/priceAlertServerStore.ts`,
+ * sdílené PC ↔ telefon, hlídá Mac worker z IBKR, doručuje APNs / web push);
+ * bez přihlášení jen toto zařízení (`createLocalPriceAlertStore`). Rozhraní
+ * `PriceAlertStore` je pro obě stejné.
  */
 
 export type PriceAlertCondition = 'cross' | 'up' | 'down';
@@ -44,6 +45,23 @@ export interface PriceAlert {
   note: string;
   createdAt: number;
   updatedAt: number;
+  /** Směr odvozený ze strany trhu v UI (ne ruční volba) — hlídač ho přepočítá z IBKR. */
+  conditionAuto?: boolean;
+  /** Stav ze serveru (jen serverový store); spouštění mění jen server. */
+  status?: 'active' | 'triggered' | 'expired';
+  version?: number;
+  lastTriggeredAt?: number | null;
+  triggerCount?: number;
+}
+
+/** Spuštění upozornění ze serveru (úroveň uživatele, nikdy cena trhu). */
+export interface PriceAlertEvent {
+  id: string;
+  alertId: string;
+  at: number;
+  level: number;
+  condition: PriceAlertCondition;
+  suppressed: boolean;
 }
 
 /** Nastavení, které dostane nové upozornění (naposledy uložené). */
@@ -81,10 +99,12 @@ export function alertConditionText(condition: PriceAlertCondition): string {
 /** Posun čáry: „nahoru/dolů přes“ se přepne podle nové strany trhu, „překročí“ zůstává. */
 export function movedAlert(alert: PriceAlert, price: number, market: number | null, now = Date.now()): PriceAlert {
   const next = snap(price);
+  const condition = alert.condition === 'cross' ? 'cross' : alertConditionFor(next, market);
   return {
     ...alert,
     price: next,
-    condition: alert.condition === 'cross' ? 'cross' : alertConditionFor(next, market),
+    condition,
+    conditionAuto: alert.condition === 'cross' ? alert.conditionAuto === true : condition !== 'cross',
     updatedAt: now,
   };
 }
@@ -96,6 +116,7 @@ export function newPriceAlert(price: number, market: number | null, defaults: Pr
     symbol,
     price: at,
     condition: alertConditionFor(at, market),
+    conditionAuto: market != null && Number.isFinite(market),
     frequency: defaults.frequency,
     expiry: defaults.expiry,
     line: { ...defaults.line },
@@ -156,6 +177,10 @@ interface StorageLike { getItem(key: string): string | null; setItem(key: string
 export interface PriceAlertState {
   alerts: readonly PriceAlert[];
   defaults: PriceAlertDefaults;
+  /** Serverový store: `local` = jen zařízení, `syncing`, `synced`, `offline` (změny čekají). */
+  sync?: 'local' | 'syncing' | 'synced' | 'offline';
+  /** Poslední spuštění ze serveru (nejnovější poslední). */
+  events?: readonly PriceAlertEvent[];
 }
 
 /**
@@ -170,6 +195,26 @@ export interface PriceAlertStore {
   update(alert: PriceAlert): void;
   remove(id: string): void;
   setDefaults(defaults: PriceAlertDefaults): void;
+}
+
+/** Řádek ze serveru / cache → upozornění pro UI (stejné čištění jako v zařízení). */
+export function sanitizePriceAlert(raw: unknown): PriceAlert | null {
+  const alert = sanitizeAlert(raw);
+  if (!alert) return null;
+  const value = raw as Record<string, unknown>;
+  const status = oneOf(value.status, ['active', 'triggered', 'expired'], 'active');
+  return {
+    ...alert,
+    conditionAuto: value.conditionAuto === true,
+    status,
+    ...(Number.isSafeInteger(value.version) ? { version: value.version as number } : {}),
+    lastTriggeredAt: Number.isFinite(Number(value.lastTriggeredAt)) && value.lastTriggeredAt != null ? Number(value.lastTriggeredAt) : null,
+    triggerCount: Number.isSafeInteger(value.triggerCount) ? value.triggerCount as number : 0,
+  };
+}
+
+export function sanitizePriceAlertDefaults(raw: unknown): PriceAlertDefaults {
+  return sanitizeDefaults(raw);
 }
 
 export function readPriceAlertState(storage: StorageLike | null | undefined): PriceAlertState {

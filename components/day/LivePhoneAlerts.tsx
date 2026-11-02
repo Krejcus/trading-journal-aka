@@ -106,11 +106,13 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
         if (y == null || y < 0 || y > paneHeight) return null;
         const selected = selectedId === alert.id;
         const flash = flashIds.has(alert.id);
+        // Spuštěné „jednou“ už nehlídá nikdo: tlumeně, ať čára netvrdí, že hlídá (posun ho znovu zapne).
+        const spent = alert.status === 'triggered';
         const color = alert.line.color;
         const css = alertLineCss(alert.line, selected);
         const showLine = alert.line.width !== 'none' || selected;
         return (
-          <div key={alert.id} data-alert-line={alert.id} style={{ position: 'absolute', left: 0, top: y, width: paneWidth, height: 0 }}>
+          <div key={alert.id} data-alert-line={alert.id} data-alert-spent={spent ? '' : undefined} style={{ position: 'absolute', left: 0, top: y, width: paneWidth, height: 0, opacity: spent && !selected && !flash ? 0.4 : 1 }}>
             {showLine && <div style={{
               position: 'absolute', left: 0, right: selected ? 52 : 22, top: 0, transform: 'translateY(-50%)',
               borderTop: `${css.width}px ${css.style} ${rgba(color, selected ? 0.9 : 0.55)}`,
@@ -123,7 +125,7 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
                 jako u kreseb); vybrané celou čárou (tah). */}
             <div
               role="button"
-              aria-label={`Upozornění ${alertConditionText(alert.condition).toLowerCase()} ${formatLivePrice(alert.price)}`}
+              aria-label={`Upozornění ${alertConditionText(alert.condition).toLowerCase()} ${formatLivePrice(alert.price)}${spent ? ' (spuštěno)' : ''}`}
               style={{ position: 'absolute', left: selected ? 0 : undefined, right: 0, width: selected ? undefined : 30, top: selected ? -9 : -12, height: selected ? 18 : 24, pointerEvents: 'auto', touchAction: 'none', cursor: selected ? 'ns-resize' : 'pointer' }}
               onPointerDown={event => {
                 event.stopPropagation();
@@ -274,7 +276,7 @@ export function LivePhoneAlertSheet({ alert, market, onSave, onDelete, onClose }
         </div>
         {distance != null && <span className="dj-mono" style={{ fontSize: 11.5, color: 'var(--dj-muted)' }}>{Math.abs(distance) < TICK / 2 ? 'na trhu' : `${Math.abs(distance).toFixed(2)} b ${distance > 0 ? 'nad' : 'pod'} trhem`}</span>}
       </Field>
-      <Field label="Podmínka"><Seg<PriceAlertCondition> value={draft.condition} onChange={condition => set({ condition })} options={[['cross', 'Překročí'], ['up', 'Nahoru přes'], ['down', 'Dolů přes']]} /></Field>
+      <Field label="Podmínka"><Seg<PriceAlertCondition> value={draft.condition} onChange={condition => set({ condition, conditionAuto: false })} options={[['cross', 'Překročí'], ['up', 'Nahoru přes'], ['down', 'Dolů přes']]} /></Field>
       <Field label="Spustit"><Seg<PriceAlertFrequency> value={draft.frequency} onChange={frequency => set({ frequency })} options={[['once', 'Jednou'], ['every', 'Pokaždé, max 1×/min']]} /></Field>
       <Field label="Čára · tloušťka"><Seg<PriceAlertLineWidth> value={draft.line.width} onChange={width => set({ line: { ...draft.line, width } })} options={[['thin', 'Tenká'], ['thick', 'Tlustá'], ['none', 'Jen zvoneček']]} /></Field>
       <Field label="Čára · styl"><Seg<PriceAlertLineStyle> value={draft.line.style} onChange={style => set({ line: { ...draft.line, style } })} options={[['solid', 'Plná'], ['dashed', 'Čárkovaná'], ['dotted', 'Tečkovaná']]} /></Field>
@@ -317,19 +319,21 @@ export function LivePhoneAlertList({ alerts, watching, onEdit, onRemove, onClose
   onRemove: (id: string) => void;
   onClose: () => void;
 }) {
+  const activeCount = alerts.filter(alert => alert.status !== 'triggered').length;
   return (
     <Sheet label="Upozornění" onClose={onClose}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', padding: '2px 16px 10px' }}>
         <b style={{ fontSize: 16 }}>Upozornění</b>
-        <span style={{ fontSize: 12, color: 'var(--dj-muted)' }}>{alerts.length} {alerts.length === 1 ? 'aktivní' : 'aktivních'}</span>
+        <span style={{ fontSize: 12, color: 'var(--dj-muted)' }}>{activeCount} {activeCount === 1 ? 'aktivní' : 'aktivních'}</span>
       </div>
       <div style={{ margin: '0 16px 10px', padding: '9px 11px', borderRadius: 11, fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', background: watching ? 'rgba(34,197,94,.1)' : 'rgba(242,166,35,.12)', color: watching ? '#86efac' : '#fcd34d' }}>
         <i style={{ width: 7, height: 7, borderRadius: 4, flex: 'none', background: watching ? '#22c55e' : '#f2a623' }} />
-        {watching ?? 'Upozornění teď nikdo nehlídá — hlídání se napojí na Mac worker.'}
+        {watching ?? 'Upozornění teď nikdo nehlídá — Mac worker neběží nebo nemá cenu z IBKR. Křížení mezitím se nedoženou.'}
       </div>
       {alerts.length === 0 && <p style={{ margin: 0, padding: '6px 16px 0', fontSize: 13, color: 'var(--dj-muted)' }}>Žádné upozornění. Podrž prst na grafu a klepni na +.</p>}
       {alerts.map(alert => {
         const channels = [alert.channels.phone && 'iPhone', alert.channels.voice && 'hlas', alert.channels.pc && 'PC'].filter(Boolean).join(' + ');
+        const spent = alert.status === 'triggered';
         return (
           <div key={alert.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 8, alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid var(--dj-line)' }}>
             <button type="button" className="dj-btn" onClick={() => onEdit(alert.id)} style={{ minWidth: 0, textAlign: 'left', border: 0, background: 'transparent', color: 'var(--dj-text)', padding: 0, cursor: 'pointer' }}>
@@ -338,7 +342,7 @@ export function LivePhoneAlertList({ alerts, watching, onEdit, onRemove, onClose
                 <span className="dj-mono">{alertConditionText(alert.condition)} {formatLivePrice(alert.price)}</span>
               </div>
               <div style={{ marginTop: 3, fontSize: 11.5, color: 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {alert.frequency === 'once' ? 'jednou' : 'pokaždé'} · {alert.expiry === 'session' ? 'do konce seance' : 'do zrušení'} · {channels || 'bez kanálu'}{alert.note ? ` · ${alert.note}` : ''}
+                {spent ? 'spuštěno — nehlídá se, posun nebo změna podmínky ho znovu zapne · ' : ''}{alert.frequency === 'once' ? 'jednou' : 'pokaždé'} · {alert.expiry === 'session' ? 'do konce seance' : 'do zrušení'} · {channels || 'bez kanálu'}{alert.note ? ` · ${alert.note}` : ''}
               </div>
             </button>
             <button type="button" className="dj-btn" onClick={() => onRemove(alert.id)} style={{ height: 30, padding: '0 10px', borderRadius: 9, border: 0, cursor: 'pointer', fontSize: 12, fontWeight: 700, background: 'rgba(239,70,85,.14)', color: '#fb7185' }}>Smazat</button>

@@ -71,6 +71,11 @@ const OrderLineBadge: React.FC<{
 };
 
 const CONFIRM_MS = 4_000;
+/**
+ * Klíč dvoukrokového ×: nese i akci (oponentura 2. 11.): čekající vstup se mezi klepnutími
+ * může vyplnit a × pak znamená zavřít pozici — potvrzení zrušení vstupu nesmí potvrdit zavření.
+ */
+export const cancelConfirmKey = (line: BacktestChartOrderLine) => `${line.id}:cancel:${line.cancelAction ?? line.ownerType}:${line.price}`;
 
 const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onAddBracket, selectToDrag = false }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -375,11 +380,11 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                   <button
                     type="button"
                     data-order-line-control
-                    className={`flex h-[15px] min-w-[15px] items-center justify-center rounded-[3px] text-[11px] leading-none ${asking(`${line.id}:cancel`) ? 'px-[5px] text-[9.5px] font-bold text-rose-400' : ''} ${isDark ? 'text-slate-400 hover:bg-white/10' : 'text-slate-500 hover:bg-slate-900/[0.06]'}`}
+                    className={`flex h-[15px] min-w-[15px] items-center justify-center rounded-[3px] text-[11px] leading-none ${asking(cancelConfirmKey(line)) ? 'px-[5px] text-[9.5px] font-bold text-rose-400' : ''} ${isDark ? 'text-slate-400 hover:bg-white/10' : 'text-slate-500 hover:bg-slate-900/[0.06]'}`}
                     onPointerDown={event => event.stopPropagation()}
                     onClick={event => {
                       event.stopPropagation();
-                      if (!confirmed(`${line.id}:cancel`, line.confirmCancel)) return;
+                      if (!confirmed(cancelConfirmKey(line), line.confirmCancel)) return;
                       onCancel(line);
                     }}
                     aria-label={line.cancelAction === 'close-position'
@@ -387,7 +392,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                       : line.cancelAction === 'remove-bracket'
                         ? `Odstranit ${line.kind === 'stopLoss' ? 'stop loss' : 'take profit'}`
                         : 'Zrušit čekající příkaz'}
-                  >{asking(`${line.id}:cancel`) ? 'Opravdu?' : '×'}</button>
+                  >{asking(cancelConfirmKey(line)) ? 'Opravdu?' : '×'}</button>
                 )}
               </OrderLineBadge>
             </div>

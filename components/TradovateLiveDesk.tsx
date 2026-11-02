@@ -1,3 +1,5 @@
+import { liveFillMarkersFromStatus, type LiveFillMarker } from '../lib/liveFillMarkers';
+import { priceAlertWatchLabel } from '../lib/priceAlertWatchLabel';
 import { manualEntryDisplayStuckOperations } from '../lib/manualEntryDisplay';
 import { buildLeaderEntryPreviewCommand, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import { buildLeaderEntryPlaceCommand, type LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
@@ -134,7 +136,7 @@ import {
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
 import { manualEntryContractCap } from '../services/manualEntryPreview';
-import { livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
+import { livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryMarket, supportsCopierManualOrderClose, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
@@ -185,7 +187,7 @@ interface TradovateLiveDeskProps {
    * App). Desktop má vlastní LIVE graf a tohle nepoužije.
    */
   /** Telefon: `header(group)` = hlavička s P&L skupiny místo názvu; `position` = stejný read model jako PC graf (jen zobrazení); `trade` = obchodování přes relay. */
-  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null; copyEvents?: LocalCopierAgentStatus['controller']['recentCopyEvents']; copierArmed?: boolean }) => React.ReactNode;
+  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null; copyEvents?: LocalCopierAgentStatus['controller']['recentCopyEvents']; copierArmed?: boolean; fills?: readonly LiveFillMarker[]; fillsOpen?: boolean; alertWatch?: string | null }) => React.ReactNode;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -1145,13 +1147,28 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       place: placeLeaderEntry,
       position: livePhonePosition(summary, leaderBasis, symbol, bare?.operationId ?? null),
       attach: attachBrackets,
+      // Správa z čar = PŘESNĚ deskový `manageLeaderEntry` a za stejné podmínky jako PC graf
+      // (`onManageEntry`); × u pozice jako PC `canClose`; BE průměr jen ze stavu pollu (jako PC).
+      ...livePhoneManageFields({
+        manageSupported: supportsCopierManualOrderManage(agentStatus), closeCapability: supportsCopierManualOrderClose(agentStatus),
+        ownEntry: ownManualEntry, manage: manageLeaderEntry, runtimeAvailable,
+        armed: controller?.armed === true, shadowMode: controller?.shadowMode === true, chartShowsPoll: chartLive.status === agentStatus,
+      }),
       // Stejná cesta jako statická lišta / Dashboard: jeden zámek Flattenu na skupinu
       // (createFlattenGroupCoordinator v executeSafetyCommand) — dvojklep ani souběh nevytvoří druhý.
       flatten: () => runStaticSafetyAction('flatten-group', { id: workerGroup.id, name: workerGroup.name,
         accountIds: [workerGroup.leaderAccountId, ...workerGroup.followers.map(follower => follower.accountId)],
         observedAt: agentStatusObservedAt, verified: agentStatusFresh && !agentStatusRestored }),
     };
-  }, [phoneChartAvailable, workerGroup, agentStatus, agentStatusFresh, agentStatusRestored, chartData.position, relayConnectionId, placeLeaderEntry, attachBrackets, agentStatusObservedAt, runStaticSafetyAction, entryFrontContract]);
+  }, [phoneChartAvailable, workerGroup, agentStatus, agentStatusFresh, agentStatusRestored, chartData.position, relayConnectionId, placeLeaderEntry, attachBrackets, agentStatusObservedAt, runStaticSafetyAction, entryFrontContract, ownManualEntry, manageLeaderEntry, runtimeAvailable, chartLive.status]);
+
+  // Šipky plnění v grafu telefonu (2. 11. 2026): jen zobrazení, z čerstvého stavu a expozice ≤ 8 s.
+  const phoneFills = useMemo(() => (phoneChartAvailable
+    ? liveFillMarkersFromStatus({
+      controller: chartLive.status?.controller, exposureObservedAt: chartLive.exposureObservedAt,
+      fresh: agentStatusFresh && !agentStatusRestored, leaderAccountId: workerGroup?.leaderAccountId, root: 'MNQ', now: freshnessNow,
+    })
+    : { fills: [], open: undefined }), [phoneChartAvailable, chartLive.status, chartLive.exposureObservedAt, agentStatusFresh, agentStatusRestored, workerGroup?.leaderAccountId, freshnessNow]);
 
   // Vypnutí z grafu: stejná safety cesta jako přehled (INV-UI-02). Stabilní
   // funkce přes ref — graf nesmí držet starou trasu ani starý fence.
@@ -1831,6 +1848,12 @@ acceptAgentStatus((await executeAgent({
             copierArmed: runtimeAvailable && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode !== true,
             onLeave: () => navigateToTab('overview'),
             trade: phoneTrade,
+            // Šipky plnění leadera (jen zobrazení): čerstvý neobnovený stav, expozice ≤ 8 s.
+            fills: phoneFills.fills,
+            fillsOpen: phoneFills.open,
+            // Kdo hlídá upozornění na cenu: jen čerstvý neobnovený status s cenou z IBKR (jen text).
+            alertWatch: priceAlertWatchLabel({ fresh: agentStatusFresh && !agentStatusRestored, watch: agentStatus?.priceAlertWatch,
+              statusAgeMs: agentStatusObservedAt == null ? null : freshnessNow - agentStatusObservedAt }),
           })}
         </ErrorBoundary>
       ) : null}

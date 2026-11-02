@@ -112,6 +112,20 @@ export interface IbkrTrail {
 /** Strop bufferu cesty mezi dvěma čteními (čte se po ~25–250 ms). */
 const TRAIL_BUFFER_MAX = 256;
 
+/**
+ * Obchody od minulého odběru pro hlídání upozornění na cenu (2. 11. 2026): křížení úrovně
+ * mezi dvěma čteními po 250 ms nesmí utéct jen proto, že poslední cena už je zpátky.
+ * `prev` = poslední cena minulé dávky téhož kontraktu, `null` = nová výchozí cena
+ * (nový odběr, výpadek, jiný kontrakt) — z takové dávky se nikdy nespouští.
+ */
+export interface IbkrAlertBatch {
+  contract: string;
+  prev: number | null;
+  min: number;
+  max: number;
+  last: number;
+}
+
 export interface IbkrPriceSourceStats {
   state: 'stopped' | 'connecting' | 'subscribing' | 'live' | 'paused';
   trades: number;
@@ -131,6 +145,11 @@ export interface IbkrPriceSource {
    * sloučené) a vyprázdní je. Jen pro přehrání v grafu (INV-UI-04).
    */
   takeTrail(): IbkrTrail | null;
+  /**
+   * Vezme dávku obchodů pro upozornění a vyprázdní ji. `valid=false` (neplatné čtení,
+   * zdroj TV, opožděná data) dávku zahodí a zapomene i výchozí cenu.
+   */
+  takeAlertBatch(valid: boolean): IbkrAlertBatch | null;
   stats(): IbkrPriceSourceStats;
 }
 
@@ -192,6 +211,8 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
   let ask: number | null = null;
   let quoteAt: number | null = null;
   let trail: IbkrTrail | null = null;
+  let alertBatch: IbkrAlertBatch | null = null;
+  let alertPrev: { contract: string; price: number } | null = null;
   let failures = 0;
   let contractReqId = CONTRACT_REQ_BASE;
   let rollTimer: unknown = null;
@@ -227,6 +248,8 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     last = null;
     bar = null;
     trail = null;
+    alertBatch = null;
+    alertPrev = null;
     bid = null;
     ask = null;
     quoteAt = null;
@@ -492,6 +515,16 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
         if (trail.prices[trail.prices.length - 1] !== trade.price) trail.prices.push(trade.price);
         if (trail.prices.length > TRAIL_BUFFER_MAX) trail.prices.splice(0, trail.prices.length - TRAIL_BUFFER_MAX);
       }
+      // Neohlášené a mimolimitní obchody upozornění nespouští (výstřelky mimo trh).
+      if (frontTv && !trade.unreported && !trade.pastLimit) {
+        if (!alertBatch || alertBatch.contract !== frontTv) {
+          alertBatch = { contract: frontTv, prev: alertPrev?.contract === frontTv ? alertPrev.price : null, min: trade.price, max: trade.price, last: trade.price };
+        } else {
+          alertBatch.min = Math.min(alertBatch.min, trade.price);
+          alertBatch.max = Math.max(alertBatch.max, trade.price);
+          alertBatch.last = trade.price;
+        }
+      }
       try { deps.onTrade?.(); } catch { /* zdroj nikdy nevyhodí */ }
     },
     onBar: (reqId, bar) => {
@@ -607,6 +640,16 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
       const taken = trail;
       trail = null;
       return taken && taken.prices.length ? taken : null;
+    },
+    takeAlertBatch(valid) {
+      const taken = alertBatch;
+      alertBatch = null;
+      if (!valid) {
+        alertPrev = null;
+        return null;
+      }
+      if (taken) alertPrev = { contract: taken.contract, price: taken.last };
+      return taken;
     },
     stats: () => ({ ...stats }),
   };

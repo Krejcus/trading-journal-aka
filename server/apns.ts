@@ -24,6 +24,8 @@ export interface ApnsNotification {
   mutableContent?: boolean;
   /** Bounded request budget for latency-sensitive best-effort notifications. */
   timeoutMs?: number;
+  /** Bez zvuku (upozornění na cenu s vypnutým zvukem); výchozí je `default`. */
+  silent?: boolean;
 }
 
 export interface ApnsLiveActivityContentState {
@@ -152,7 +154,7 @@ export function buildApnsPayload(notification: ApnsNotification): Record<string,
   return {
     aps: {
       alert: { title: notification.title, body: notification.body },
-      sound: 'default',
+      ...(notification.silent ? {} : { sound: 'default' }),
       ...(notification.badge == null ? {} : { badge: Math.max(0, Math.floor(notification.badge)) }),
       ...(notification.threadId ? { 'thread-id': notification.threadId } : {}),
       ...(notification.category ? { category: notification.category } : {}),

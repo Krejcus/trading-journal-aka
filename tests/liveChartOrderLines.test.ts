@@ -57,7 +57,9 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
 
   it('graf: × a BE jsou dvoukrokové v overlay; cenové čáry se nekreslí dvakrát', () => {
     const overlay = readFileSync('components/BacktestOrderLinesOverlay.tsx', 'utf8');
-    expect(overlay).toMatch(/confirmed\(`\$\{line\.id\}:cancel`, line\.confirmCancel\)/);
+    expect(overlay).toMatch(/confirmed\(cancelConfirmKey\(line\), line\.confirmCancel\)/);
+    // Klíč potvrzení nese akci a cenu: potvrzené „zrušit příkaz“ nikdy nezavře pozici (ani jiný obchod).
+    expect(overlay).toMatch(/cancelConfirmKey = \(line: BacktestChartOrderLine\) => `\$\{line\.id\}:cancel:\$\{line\.cancelAction \?\? line\.ownerType\}:\$\{line\.price\}`/);
     expect(overlay).toMatch(/now - \(confirming\.until - CONFIRM_MS\) >= 350/);
     const workspace = readFileSync('components/AlphaTradeChartWorkspace.tsx', 'utf8');
     expect(workspace).toMatch(/target\.root !== liveOrderEntry\?\.executionInstrument/);

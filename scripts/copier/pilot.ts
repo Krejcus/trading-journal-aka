@@ -120,6 +120,7 @@ const leaseRetry = (connectionId: string): RetryTransientOptions => ({
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
 import { createTvPriceStreamSupervisor, tvPriceStreamConfigFromRealtime, type TvPriceStreamSupervisor } from '../../server/tvPriceStreamSupervisor';
+import { createPriceAlertWatchSupervisor, type PriceAlertWatchSupervisor } from '../../server/priceAlertWatchSupervisor';
 import { createPriceSourceNotifier } from '../../server/priceSourceNotifier';
 import { readTradingViewBars, scheduleTradingViewBarsCapture, startTradingViewLiveBars, TV_LIVE_BARS_PHASE_MS, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
 import { barsContractConflicts, barsContractMatchesSymbol, tvSymbolRoot } from '../../lib/tradingViewBars';
@@ -232,6 +233,11 @@ const sessionSuspectHandler = (context: PilotContext, label: string) => (info: T
   );
 };
 const logControllerError = (error: Error) => {
+  // Chyba jen zobrazovací vrstvy (šipky plnění) není fail-closed — prostý log, ať neplete diagnostiku.
+  if (error.message.startsWith('Šipky plnění (jen zobrazení)')) {
+    console.warn(`${new Date().toISOString()} DISPLAY ${error.message}`);
+    return;
+  }
   const connection = error.message.includes('connection=') ? '' : 'connection=aggregate ';
   const phase = error.message.includes('phase=') ? '' : 'phase=controller ';
   console.error(`${new Date().toISOString()} FAIL-CLOSED ${connection}${phase}${error.message}`);
@@ -986,11 +992,37 @@ async function runLocalAgent(
       },
     })
     : null;
+  // Hlídač upozornění na cenu (2. 11. 2026): vlastní vlákno a bundle, jen s cenou z IBKR
+  // vlákna ceny, výchozí VYPNUTO (`--price-alerts on`). Dostane jen klíč upozornění, nikdy
+  // token zařízení ani přístup k příkazům; `env: {}` (INV-WORKER-04, INV-WATCH-01).
+  const priceAlertWatchBundle = fileURLToPath(new URL('./price-alert-watch.mjs', import.meta.url));
+  const priceAlertWatch: PriceAlertWatchSupervisor | null = snapshotsEnabled
+    && tvPriceSource === 'ibkr'
+    && process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() === 'on'
+    && process.env.ALPHATRADE_PRICE_ALERTS?.trim().toLowerCase() === 'on'
+    && existsSync(tvPriceStreamBundle) && existsSync(priceAlertWatchBundle)
+    ? createPriceAlertWatchSupervisor({
+      createWorker: () => {
+        const thread = new Worker(priceAlertWatchBundle, {
+          env: {},
+          stdout: true, stderr: true,
+          resourceLimits: { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 8 },
+        });
+        thread.stdout.resume();
+        thread.stderr.resume();
+        return thread;
+      },
+      log: line => console.log(`${new Date().toISOString()} ${line}`),
+    })
+    : null;
+  if (priceAlertWatch) console.log(`${new Date().toISOString()} PRICE ALERTS hlídání upozornění na cenu povoleno (vlastní vlákno, cena z IBKR, nic neobchoduje).`);
   const tvPriceStream: TvPriceStreamSupervisor | null = snapshotsEnabled
     && process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() === 'on'
     && existsSync(tvPriceStreamBundle)
     ? createTvPriceStreamSupervisor({
       priceSource: tvPriceSource,
+      // Dávky obchodů IBKR jen předá vláknu hlídače (synchronně, bez čekání).
+      onQuoteBatch: batch => priceAlertWatch?.onBatch(batch),
       createWorker: priceSource => {
         // Výstup vlákna se nepřeposílá do logu workeru (šel by přes event loop
         // hlavního vlákna); stav hlásí jen omezená diagnostika.
@@ -1198,6 +1230,7 @@ async function runLocalAgent(
     void snapshotDelivery?.close().catch(() => {});
     marketPriceFeed?.stop();
     tvPriceStream?.stop();
+    priceAlertWatch?.stop();
     contexts.forEach(item => item.displayFeed?.close());
     const cancelShutdownWatchdog = startAgentShutdownWatchdog({
       timeoutMs: 20_000,
@@ -1552,6 +1585,7 @@ async function runLocalAgent(
         };
       }),
       marketPrices: () => marketPriceFeed?.current() ?? [],
+      priceAlertWatch: () => priceAlertWatch?.status() ?? null,
       accountDisplay: () => contexts.flatMap(item => item.displayFeed ? [item.displayFeed.state()] : []),
       ...(connectionWatch ? {
         connectionDiscovery: () => ({
@@ -1919,6 +1953,8 @@ async function runLocalAgent(
         onRealtimeConfig: realtime => tvPriceStream?.update(tvPriceStreamConfigFromRealtime(realtime, {
           targetId: dedicatedChartRef.targetId, chartId: dedicatedChartRef.chartId,
         })),
+        // Klíč upozornění jen vláknu hlídače (relay ho do onRealtimeConfig nepředává).
+        onPriceAlertConfig: config => priceAlertWatch?.update(config),
         onSnapshotRequests: requests => {
           console.log(`${new Date().toISOString()} SNAPSHOT požadavky: ${requests.map(r => `${r.id.slice(0, 8)}/${r.symbol}`).join(', ')}`);
           if (!snapshotsEnabled || !relay) return;

@@ -136,6 +136,8 @@ interface LocalCopierExecutionAgentOptions {
   journalHealth?: () => NonNullable<LocalCopierAgentStatus['journalHealth']>;
   /** Ceny z TradingView jen pro zobrazení; prázdné pole = žádná čerstvá cena. */
   marketPrices?: () => NonNullable<LocalCopierAgentStatus['marketPrices']>;
+  /** Stav hlídače upozornění na cenu; jen zobrazení, výjimka = pole chybí. */
+  priceAlertWatch?: () => LocalCopierAgentStatus['priceAlertWatch'];
   accountDisplay?: () => NonNullable<LocalCopierAgentStatus['accountDisplay']>;
   /** Využití Tradovate API a stav session po spojení; jen zobrazení. */
   connectionUsage?: () => NonNullable<LocalCopierAgentStatus['connectionUsage']>;
@@ -438,6 +440,14 @@ export async function startLocalCopierExecutionAgent(
     ...(() => {
       const marketPrices = options.marketPrices?.() ?? [];
       return marketPrices.length > 0 ? { marketPrices: structuredClone(marketPrices) } : {};
+    })(),
+    ...(() => {
+      try {
+        const watch = options.priceAlertWatch?.();
+        return watch ? { priceAlertWatch: { state: watch.state, alerts: watch.alerts, priceAgeMs: watch.priceAgeMs, syncAgeMs: watch.syncAgeMs } } : {};
+      } catch {
+        return {};
+      }
     })(),
   });
 

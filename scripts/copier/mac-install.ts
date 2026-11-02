@@ -418,7 +418,10 @@ async function install(): Promise<void> {
   // jeho selhání pak nenechá na disku nový runtime z napůl hotové instalace.
   const tvPriceStreamSource = resolve(projectRoot, 'scripts/copier/tvPriceStreamThread.ts');
   const tvPriceStreamPath = resolve(pilotRoot, 'tv-price-stream.mjs');
-  await Promise.all([access(esbuild), access(pilotSource), access(tvPriceStreamSource)]);
+  // Hlídač upozornění na cenu: vlastní bundle, staví se vždy (zapíná ho jen `--price-alerts on`).
+  const priceAlertWatchSource = resolve(projectRoot, 'scripts/copier/priceAlertWatchThread.ts');
+  const priceAlertWatchPath = resolve(pilotRoot, 'price-alert-watch.mjs');
+  await Promise.all([access(esbuild), access(pilotSource), access(tvPriceStreamSource), access(priceAlertWatchSource)]);
   await execFileAsync(esbuild, [
     tvPriceStreamSource,
     '--bundle',
@@ -430,6 +433,15 @@ async function install(): Promise<void> {
     `--outfile=${tvPriceStreamPath}`,
   ]);
   await chmod(tvPriceStreamPath, 0o700);
+  await execFileAsync(esbuild, [
+    priceAlertWatchSource,
+    '--bundle',
+    '--platform=node',
+    '--format=esm',
+    '--target=node20',
+    `--outfile=${priceAlertWatchPath}`,
+  ]);
+  await chmod(priceAlertWatchPath, 0o700);
   await execFileAsync(esbuild, [
     pilotSource,
     '--bundle',
@@ -448,6 +460,8 @@ async function install(): Promise<void> {
   const tvStreamEnabled = flags.get('tv-stream')?.trim().toLowerCase() === 'on';
   // Zdroj ceny vlákna: IBKR (IB Gateway, záloha TV) jen výslovně (`--price-source ibkr`).
   const priceSourceIbkr = tvStreamEnabled && flags.get('price-source')?.trim().toLowerCase() === 'ibkr';
+  // Hlídání upozornění na cenu jen s cenou z IBKR a jen výslovně (`--price-alerts on`); musí přežít reinstall.
+  const priceAlertsEnabled = priceSourceIbkr && flags.get('price-alerts')?.trim().toLowerCase() === 'on';
   const programArguments = [
     '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
@@ -482,6 +496,7 @@ async function install(): Promise<void> {
     : ''}
     ${tvStreamEnabled ? '<key>ALPHATRADE_TV_STREAM</key><string>on</string>' : ''}
     ${priceSourceIbkr ? '<key>ALPHATRADE_PRICE_SOURCE</key><string>ibkr</string>' : ''}
+    ${priceAlertsEnabled ? '<key>ALPHATRADE_PRICE_ALERTS</key><string>on</string>' : ''}
   </dict>
 </dict></plist>
 `;

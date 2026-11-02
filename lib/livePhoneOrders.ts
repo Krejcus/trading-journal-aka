@@ -101,3 +101,26 @@ export function livePhonePlacedText(result: LeaderEntryPlaceResult): string {
   if (result.status === 'rejected') return result.reason ?? 'Broker příkaz odmítl.';
   return result.reason ?? 'Výsledek neznámý — zkontroluj pozici, nic neopakuj.';
 }
+
+/**
+ * Správa obchodu z čar telefonu (2. 11. 2026) — PŘESNĚ podmínky PC grafu:
+ * `manage` jen s capability workeru a jediným vlastním obchodem leadera (PC `onManageEntry`),
+ * × u pozice jen za dostupného runtime, zapnuté kopírky a ne shadow (PC `canClose`),
+ * průměr pro BE jen když graf ukazuje stav pollu (PC `manageEntryAvgPrice`).
+ */
+export function livePhoneManageFields<M>(input: {
+  manageSupported: boolean;
+  closeCapability: boolean;
+  ownEntry: { entryAvgPrice?: number | null } | null | undefined;
+  manage: M;
+  runtimeAvailable: boolean;
+  armed: boolean;
+  shadowMode: boolean;
+  chartShowsPoll: boolean;
+}): { manage?: M; closeSupported: boolean; entryAvg: number | null } {
+  return {
+    ...(input.manageSupported && input.ownEntry ? { manage: input.manage } : {}),
+    closeSupported: input.closeCapability && input.runtimeAvailable && input.armed && !input.shadowMode,
+    entryAvg: input.chartShowsPoll ? input.ownEntry?.entryAvgPrice ?? null : null,
+  };
+}

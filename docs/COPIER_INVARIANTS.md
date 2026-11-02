@@ -1277,9 +1277,21 @@ existující ochranu.
   dávky, rozestup 200 ms, po chybě prodleva 1 s); cesta ceny pro přehrání
   v grafu (`takeTrail`, strop 256 ve zdroji, 64 ve streamu, maže se při
   změně minuty, po odeslání a po nečinnosti) je jen v paměti vlákna.
+  Hlídač upozornění na cenu (2. 11. 2026): druhé vlákno `price-alert-watch.mjs`
+  (`scripts/copier/priceAlertWatchThread.ts`, `env: {}`, 48 MB), jen se zdrojem
+  IBKR a `ALPHATRADE_PRICE_ALERTS=on` (`--price-alerts on`, přežije reinstall).
+  Dostane jen klíč upozornění z poll-v2 (`realtime.priceAlert`, relay ho do
+  `onRealtimeConfig` nepředá) a dávky obchodů IBKR (`takeAlertBatch`, předané
+  supervisorem ceny synchronně až po uložení kotace, jen ve větvi IBKR); nezná
+  token zařízení ani relay příkazů. Křížení počítá `services/priceAlertWatchCore.ts`
+  (bez výchozí ceny nikdy, „jednou“ rozhoduje server), supervisor
+  `server/priceAlertWatchSupervisor.ts` má stejná pravidla (nikdy nevyhodí, jistič
+  3 pády / 10 min, liveness 15 s); do statusu jde jen stav a stáří v ms.
 - Hlídá test: `tests/tvPriceStreamSupervisor.test.ts`,
   `tests/tvPriceStreamWiring.test.ts` (allowlist importů vlákna, pořadí
-  buildu, relay hook), `tests/tradingViewPriceStream.test.ts`.
+  buildu, relay hook, dvě vlákna), `tests/tradingViewPriceStream.test.ts`,
+  `tests/priceAlertWatch.test.ts` (importy vlákna hlídače, `env: {}`, klíč jen
+  v poll-v2, jádro křížení, supervisor, bundle naběhne).
 - Nikdy: Spouštět bundle workeru jako vlákno, přidávat globální
   `process.on('unhandledRejection')` kvůli doplňku, čekat v poll smyčce na
   přihlášení k Realtime, spouštět/ukončovat TradingView z vlákna.
@@ -1799,6 +1811,26 @@ existující ochranu.
   navigací LIVE ▾ → Live Dashboard). Posun SL dál od trhu v manual-only skupině
   počítá s lokálním denním stropem jako náhled (dřív `risk-unknown`).
   Hlídá test: `tests/manualEntryBareAttach.test.ts`, `tests/livePhoneOrders.test.ts`.
+- **Čáry obchodu na telefonu — napojení dat (2. 11. 2026):** `phoneTrade` dostává
+  `manage`/`closeSupported`/`entryAvg` z `livePhoneManageFields` = výrazy PC grafu (capability
+  + jediný vlastní obchod; × jen za dostupného runtime, zapnuté kopírky a ne shadow; BE průměr
+  jen ze stavu pollu). Pojistky utažení SL a BE berou souhrn s kotací IBKR (`guardAt` →
+  `withIbkrTightenMark`, jako PC `guardSummaryAt`), vyhodnocený znovu v okamžiku akce.
+  Dvoukrokové × má klíč potvrzení včetně akce (`cancelConfirmKey`: `cancel-order` vs.
+  `close-position`) — čekající vstup vyplněný mezi klepnutími nikdy nepotvrdí zavření pozice
+  (PC i telefon). Testy: `tests/livePhoneOrderLinesBehavior.test.ts`, `tests/livePhoneOrders.test.ts`.
+- **Šipky plnění v LIVE grafu (2. 11. 2026, jen zobrazení):** controller drží v paměti kruh
+  plnění leadera aktuální epizody (`services/copierLeaderDisplayFills.ts`, max 40), plněný
+  synchronně v try/catch hned po `preclassifyLeaderFillExposure` z jeho rozdělení vstup/výstup;
+  nic durable, risk/ledger/příkazy ho nečtou. Neúplná řada = `gap` (neznámá pozice, pozice 0
+  s redukující částí, neplatný čas, výpadek spojení, resync `gapFills` — INV-TRAD-01);
+  reset při změně leadera a přelomu seance; status pole v try/catch (`null`). Web
+  (`liveFillMarkersFromStatus`): jen čerstvý neobnovený stav, expozice ≤ 8 s, `connected`,
+  epizoda `fromFlat` bez mezery, `open` z expozice leadera (nesoulad znaménka = skryto, ne
+  flat); jakmile je kterékoli plnění epizody v deníku, kreslí ji deník celou. Kanál expozice
+  pole v1 neposílá (telefon ho nečte); neplatné pole zprávu nikdy nezahodí. `phoneFills` nikdy
+  nejde do `phoneTrade` ani relay (statický test). Testy: `tests/copierLeaderDisplayFills.test.ts`,
+  `tests/liveFillMarkersFromStatus.test.ts`.
 - **Čáry obchodu na telefonu (2. 11. 2026, UI; data napojí další session):**
   `components/day/LivePhoneOrderLines.tsx` kreslí štítky jako PC
   (`BacktestOrderLinesOverlay` + `livePositionChartLines`) se stejným ošetřením
@@ -1856,6 +1888,13 @@ existující ochranu.
   Vynucuje `services/manualEntryPreview.ts:manualEntryMarketQuoteBlockers`,
   `services/copierRuntimeController.ts:executeManualEntry`; hlídá
   `tests/manualEntryMarketCapMnq.test.ts`, `tests/manualEntryMarketController.test.ts`.
+- **Upozornění na cenu (2. 11. 2026):** IBKR smí upozornění SPUSTIT (vlákno hlídače,
+  INV-WORKER-04), ale cena z IBKR se nikam neukládá ani neposílá: `price_alerts` /
+  `price_alert_events` nesou jen úroveň uživatele, podmínku, kontrakt a časy; notifikace,
+  karta i hlas říkají úroveň uživatele, ne cenu trhu. Automaticky odvozený směr se
+  přepočítá z IBKR jen v paměti hlídače (událost pak tvrdí „překročí“). Platí jen pro
+  vlastní IBKR uživatele (licence dat, viz zdroj ceny výše). TradingView upozornění nikdy
+  nespouští. Hlídá `tests/sql/priceAlerts.pg.mjs`, `tests/priceAlertWatch.test.ts`.
 - **Výjimka Market (Filip 30. 10. 2026, výslovně schváleno; NAHRAZENO 2. 11. 2026
   nativním Marketem výše):** Market z panelu
   posílá Limit o `MARKET_GUARD_POINTS` (2 b) přes ask/bid grafu. Cena grafu smí
@@ -2025,6 +2064,14 @@ existující ochranu.
   beze změny. Fronta se nikdy neexpiruje, neopakuje ani nemění a
   `lastError` se nedotýká. PostgREST `.or(...)` filtru je ověřen jen
   mockem (NEOVĚŘENO proti serveru).
+- Upozornění na cenu (2. 11. 2026): vlastní fronta `price_alert_outbox`, kterou plní
+  `trigger_price_alert` v téže transakci jako spuštění; drain `server/priceAlertOutbox.ts`
+  běží v endpointu hlídače (`api/price-alerts/watch.ts`) a v cronu ve vlastním
+  try/catch ZA sekcí kopírky. `notification_delivery_outbox` a `drainNotificationDeliveries`
+  se nemění; rozpočet 20 notifikací / 10 min / uživatel a sbalení podle upozornění,
+  aby záplava upozornění nevyčerpala limit ani nepotlačila rizikové notifikace.
+  Upozornění nikdy nevstupuje do ARM, risku, day locku ani kopírky. Rozpočet proti
+  limitu APNs na token zařízení je NEOVĚŘENO.
 
 ## 3. Kontrolní seznam před změnou jádra
 
