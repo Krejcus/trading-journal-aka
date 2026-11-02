@@ -54,6 +54,7 @@ describe('LIVE graf telefonu: P&L skupiny a list účtů', () => {
       orders: bracket(1), feeRates: new Map(), group: solo, target: 'group', now,
     });
     expect(p.summary?.rows[0].ordersVerified).toBe(false);
+    expect(p.summary?.protection).toBe('SL ?/1 · TP ?/1');
     expect(sheet(p)).toContain('SL ?');
     expect(sheet(p)).not.toMatch(/bez (SL|TP)/);
   });
@@ -68,6 +69,16 @@ describe('LIVE graf telefonu: P&L skupiny a list účtů', () => {
     expect(html).toContain('TP víc cen');
     expect(html).not.toContain('bez TP');
     expect(html).not.toContain('po poplatcích');
+  });
+
+  it('zdvojený SL (krytí 4 při pozici 2) se v řádku označí podílem, ne jako obyčejný SL', () => {
+    const p = position({
+      accounts: [account(1, 21480, 40, fresh)],
+      orders: [order(1, { orderType: 'Stop', stopPrice: 21470 }), order(1, { orderType: 'Stop', stopPrice: 21470 }), order(1, { orderType: 'Limit', price: 21500 })],
+      feeRates: new Map(), group: solo, target: 'group', now,
+    });
+    expect(p.summary?.rows[0].stopCoverage).toBe(4);
+    expect(sheet(p)).toMatch(/SL [^T]*\( ?4 ?\/ ?2 ?\)/);
   });
 
   it('neověřený pohled: hlavička jen slovy (žádné $ ani částky), ověřený flat = nic (název skupiny)', () => {

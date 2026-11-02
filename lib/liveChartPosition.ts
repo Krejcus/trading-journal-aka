@@ -164,7 +164,10 @@ export function liveChartPosition(view: JournalLiveView, requested: JournalLiveT
     mark: model.kind === 'position' ? model.mark : null,
     stop: model.ladder.stop,
     target: model.ladder.target,
-    protection: `SL ${model.stopCovered}/${accounts} · TP ${model.targetCovered}/${accounts}`,
+    // Neověřené příkazy některého účtu: krytí neznámé, ne „0/n“ (PC panel i telefon).
+    protection: model.accounts.some(account => account.ordersVerified === false)
+      ? `SL ?/${accounts} · TP ?/${accounts}`
+      : `SL ${model.stopCovered}/${accounts} · TP ${model.targetCovered}/${accounts}`,
     accounts,
     scopeLabel: view.scopeLabel,
     leader: leaderOf(model.accounts),

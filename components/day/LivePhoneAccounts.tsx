@@ -105,9 +105,11 @@ function AccountRow({ row, position }: { row: LiveChartPositionAccountRow; posit
   // Neznámé ≠ žádné: „bez SL“ jen u ověřených příkazů bez krytí (INV-UI-03).
   const level = (label: 'SL' | 'TP', price: number | null, value: number | null, coverage: number, color: string) => {
     if (!row.ordersVerified) return <span title="Příkazy účtu nejsou ověřené">{label} ?</span>;
-    if (price == null) return coverage > 0 ? <span style={{ color }}>{label} víc cen</span> : <span>bez {label}</span>;
-    const partial = coverage < row.quantity ? ` (${coverage}/${row.quantity})` : '';
-    return <span style={{ color }}>{label} {value != null ? usd(value) : formatLivePrice(price)}{partial}</span>;
+    // Krytí ≠ kusy (málo i moc — zdvojený SL by pozici při zásahu otočil) = vždy podíl, jantarově.
+    const mismatch = coverage !== row.quantity;
+    const ratio = mismatch ? <span style={{ color: '#fbbf24' }}> ({coverage}/{row.quantity})</span> : null;
+    if (price == null) return coverage > 0 ? <span style={{ color }}>{label} víc cen{ratio}</span> : <span>bez {label}</span>;
+    return <span style={{ color }}>{label} {value != null ? usd(value) : formatLivePrice(price)}{ratio}</span>;
   };
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 96px', gap: 8, alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid var(--dj-line)' }}>
