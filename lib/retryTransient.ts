@@ -35,7 +35,10 @@ export function isTransientRemoteError(error: unknown): boolean {
 
 export async function retryTransient<T>(task: (attempt: number) => Promise<T>, options: RetryTransientOptions = {}): Promise<T> {
   const clock = options.clock ?? Date.now;
-  const sleep = options.sleep ?? (ms => new Promise<void>(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); }));
+  // Časovač čekání drží proces naživu (2. 11. 2026): s `unref()` při startu workeru, kdy
+  // nic jiného neběží, Node proces ukončil („unsettled top-level await“) a launchd ho
+  // restartoval každých ~11 s — smyčka, která navíc zatěžovala Tradovate.
+  const sleep = options.sleep ?? (ms => new Promise<void>(resolve => { setTimeout(resolve, ms); }));
   const deadlineMs = Math.max(0, options.deadlineMs ?? 10 * 60_000);
   const initialDelayMs = Math.max(1, options.initialDelayMs ?? 5_000);
   const maxDelayMs = Math.max(initialDelayMs, options.maxDelayMs ?? 60_000);
