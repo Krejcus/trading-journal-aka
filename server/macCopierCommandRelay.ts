@@ -1,7 +1,8 @@
 import { isLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace.js';
 import { isLeaderOrderManageCommand } from '../lib/leaderOrderManage.js';
 import type { TvBarsCapture } from '../lib/tradingViewBars.js';
-import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery } from './recoverableCopierDelivery.js';
+import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery, type PushedCopierDelivery } from './recoverableCopierDelivery.js';
+import { verifyCopierCommandPush } from './copierCommandPush.js';
 import type { RelayDeliveryStore } from './copierRelayDeliveryStore.js';
 import { COPIER_LIVE_EXPOSURE_EVENT, COPIER_LIVE_EXPOSURE_EVENTS, encryptCopierLiveExposure } from '../lib/copierLiveExposure.js';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
@@ -90,6 +91,15 @@ export function startMacCopierCommandRelay(options: {
     config: MacCopierRealtimeKickConfig,
     onKick: () => void,
   ) => () => Promise<void> | void;
+  /**
+   * F1b′: přihlášení k tématu podepsaných pushů navázaných příkazů. Zprávu relay ověří
+   * (Ed25519, zařízení, verze) a jen uloží do schránky + probudí smyčku; o použití
+   * rozhoduje doručovací automat (shoda nečinné delivery). Selhání = poll jako dřív.
+   */
+  createPushSubscription?: (
+    config: MacCopierRealtimeKickConfig,
+    onMessage: (payload: unknown) => void,
+  ) => () => Promise<void> | void;
   /** Fire-and-forget handoff; the relay poll never awaits chart capture. */
   onSnapshotRequests?: (requests: readonly MacTvAlertSnapshotRequest[]) => void;
   /**
@@ -111,6 +121,11 @@ export function startMacCopierCommandRelay(options: {
   let acknowledgedCopyEventsRevision = 0;
   let unsubscribeKick: (() => Promise<void> | void) | null = null;
   let kickTopic: string | null = null;
+  let unsubscribePush: (() => Promise<void> | void) | null = null;
+  let pushTopic: string | null = null;
+  /** Poslední přijatá (zatím neověřená) push zpráva + čím ji ověřit; ověřuje až smyčka a jen
+   *  nejnovější — záplava podvrhů na tématu tak nepřidá víc ověření než otočení smyčky. */
+  let pushMailbox: { payload: unknown; key: string; deviceId: string } | null = null;
   const loopAbort = new AbortController();
 
   const sleep = (ms: number) => new Promise<void>(resolve => {
@@ -135,6 +150,37 @@ export function startMacCopierCommandRelay(options: {
     unsubscribeKick = null;
     kickTopic = null;
     if (unsubscribe) await unsubscribe();
+  };
+  const clearPushSubscription = async () => {
+    const unsubscribe = unsubscribePush;
+    unsubscribePush = null;
+    pushTopic = null;
+    if (unsubscribe) await unsubscribe();
+  };
+  const maybeSubscribePush = async (realtime: unknown) => {
+    if (!options.createPushSubscription || stopped || !options.deliveryStore) return;
+    const config = realtime as { url?: unknown; anonKey?: unknown; pushTopic?: unknown; pushKey?: unknown; pushDeviceId?: unknown } | null | undefined;
+    const topic = typeof config?.pushTopic === 'string' && config.pushTopic.startsWith('copier-push-') ? config.pushTopic : null;
+    const key = typeof config?.pushKey === 'string' ? config.pushKey : null;
+    const deviceId = typeof config?.pushDeviceId === 'string' ? config.pushDeviceId : null;
+    if (!topic || !key || !deviceId || typeof config?.url !== 'string' || typeof config.anonKey !== 'string') {
+      if (pushTopic) await clearPushSubscription();
+      return;
+    }
+    if (topic === pushTopic) return;
+    await clearPushSubscription();
+    pushTopic = topic;
+    unsubscribePush = options.createPushSubscription({ url: config.url, anonKey: config.anonKey, topic }, payload => {
+      if (stopped) return;
+      pushMailbox = { payload, key, deviceId };
+      kickPending = true;
+      wake?.();
+    });
+  };
+  /** Status pro relay (heartbeat/background): + nečinná delivery pro F1b′. */
+  const relayStatus = () => {
+    const idle = delivery?.idleDeliveryId() ?? null;
+    return { ...options.agent.status(), relayIdle: idle ? { deliveryId: idle } : null };
   };
 
   /**
@@ -332,7 +378,7 @@ export function startMacCopierCommandRelay(options: {
     const ids = [...completedNotifications].slice(0, 20);
     background = (async () => {
       try {
-        const response = await request({ action: 'background-v2', status: options.agent.status(), revision: ++statusRevision,
+        const response = await request({ action: 'background-v2', status: relayStatus(), revision: ++statusRevision,
           ...(sentRevision !== acknowledgedCopyEventsRevision ? { copyEvents: true } : {}), completedCommandIds: ids,
         }, RELAY_COMMAND_TIMEOUT_MS, loopAbort.signal);
         if (response.protocol !== 2) throw new Error('relay-delivery-protocol-unavailable');
@@ -356,9 +402,10 @@ export function startMacCopierCommandRelay(options: {
   let statusChangePending = false;
   /** Heartbeat vyvolaný změnou u brokera → po potvrzení budíček pro LIVE. */
   let statusNudgeWanted = false;
-  const publishStatusSoon = () => {
+  const publishStatusSoon = (nudge = true) => {
     if (stopped || !options.deliveryStore) return;
-    statusNudgeWanted = true;
+    // Ohlášení nové nečinné delivery (F1b′) jen pro server — žádný budíček LIVE.
+    if (nudge) statusNudgeWanted = true;
     if (statusHeartbeat) { statusChangePending = true; return; }
     const wait = Math.max(0, lastStatusStartedAt + STATUS_CHANGE_MIN_SPACING_MS - Date.now());
     if (statusTimer) clearTimeout(statusTimer);
@@ -372,7 +419,7 @@ export function startMacCopierCommandRelay(options: {
     statusNudgeWanted = false;
     statusHeartbeat = (async () => {
       try {
-        const response = await request({ action: 'heartbeat-v2', status: options.agent.status(), revision: ++statusRevision }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
+        const response = await request({ action: 'heartbeat-v2', status: relayStatus(), revision: ++statusRevision }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
         if (response.protocol !== 2 || response.accepted !== true) throw new Error('relay-heartbeat-not-confirmed');
         if (nudge) sendStatusNudge();
       } catch (error) {
@@ -383,7 +430,8 @@ export function startMacCopierCommandRelay(options: {
         statusHeartbeat = null;
         if (!stopped) {
           statusTimer = setTimeout(publishStatus, 2_000);
-          if (statusChangePending) publishStatusSoon();
+          // Budíček odložené změny už nese `statusNudgeWanted` z jejího volání.
+          if (statusChangePending) publishStatusSoon(false);
         }
       }
     })();
@@ -411,14 +459,25 @@ export function startMacCopierCommandRelay(options: {
           idleProofSince = null;
           deliveryBusy = true;
           let response: Awaited<ReturnType<typeof delivery>>;
+          const idleBefore = delivery.idleDeliveryId();
+          const raw = pushMailbox;
+          pushMailbox = null;
+          const verified = raw ? verifyCopierCommandPush(raw.payload, raw.key, raw.deviceId) : null;
+          const pushed: PushedCopierDelivery | null = verified ? { deliveryId: verified.deliveryId, command: verified.command } : null;
           try {
-            response = await delivery();
+            response = await delivery(pushed);
           } finally {
             deliveryBusy = false;
           }
           if (response.command == null) idleProofSince = pollStartedAt;
-          notifyRealtimeConfig(response.realtime);
-          await maybeSubscribeKick(response.realtime);
+          // Odpověď z pushe realtime konfiguraci nenese — stávající kanály zůstávají.
+          if (response.realtime !== undefined) {
+            notifyRealtimeConfig(response.realtime);
+            await maybeSubscribeKick(response.realtime);
+            await maybeSubscribePush(response.realtime);
+          }
+          // Nová nečinná delivery → server ji musí znát co nejdřív (F1b′).
+          if (delivery.idleDeliveryId() !== idleBefore && delivery.idleDeliveryId() != null) publishStatusSoon(false);
           failures = 0;
           if (response.command == null) lastEmptyPollStartedAt = pollStartedAt;
         } else {
@@ -587,6 +646,7 @@ export function startMacCopierCommandRelay(options: {
       if (nudgeTimer) clearTimeout(nudgeTimer);
       await Promise.all([running, background, statusHeartbeat]);
       await clearKickSubscription();
+      await clearPushSubscription();
     },
   };
 }

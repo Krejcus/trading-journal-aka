@@ -18,6 +18,7 @@ import {
   type BrokerAccountRiskSnapshot,
 } from './brokerPort';
 import { msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
+import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { evaluateManualEntryPreview, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualEntryMarketQuoteBlockers, workerMarketPrice, manualStopLossUsd, remainingLossHeadroom, type ManualEntryAccountInputs, type ManualEntryWorkerQuote } from './manualEntryPreview';
 import { runnerUnmappedReplaceAccounts } from './copierRunner';
 import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
@@ -441,6 +442,9 @@ export interface CopierControllerStatus {
     warnedRules?: CopierRuleWarning[];
     unpricedSymbols: string[];
     recentClosedTrades?: CopierClosedTrade[];
+    /** Ztráta, ze které jdou pravidla dne: přísnější z ledgeru a čistého P&L brokera (2. 11. 2026). */
+    lossPnlUsd?: number;
+    lossPnlSource?: 'ledger' | 'broker';
   } | null;
 }
 
@@ -547,6 +551,8 @@ export interface CopierAccountRiskSnapshot {
   /** Čas broker dotazu; snapshot starší než 90 s je „neověřeno". */
   verifiedAt: number;
   realizedPnlUsd: number | null;
+  /** Obchodní den brokerova `realizedPnlUsd` (`YYYY-MM-DD`); null = neznámý. */
+  realizedTradeDate?: string | null;
   /** Přímé otevřené P&L; null = broker ho neposkytl. */
   openPnlUsd?: number | null;
   /** Net liq jen když ho broker transport vydal; jinak null. */
@@ -3977,9 +3983,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const executeClose = async (
     command: LeaderOrderManageCommand,
     finish: (status: CopierManualOrderActionRecord['status'], reason?: string) => Promise<LeaderOrderManageResult>,
-    context: { leader: number; symbol: string; managed: { stopId: string; targetId: string }; quantity: number; generation: number; queuedFence: string },
+    context: { leader: number; symbol: string; managed: { stopId: string; targetId: string }; quantity: number; generation: number; queuedFence: string; timing: ManualOrderActionTiming },
   ): Promise<LeaderOrderManageResult> => {
-    const { leader, symbol, managed, quantity, generation, queuedFence } = context;
+    const { leader, symbol, managed, quantity, generation, queuedFence, timing } = context;
     // Synchronně těsně před zápisem (P1, P2, P7): nic z toho se nesmí změnit od přípravy.
     const legsLive = liveOrdersByAccount.get(leader)?.get(managed.stopId)?.status === 'working'
       && liveOrdersByAccount.get(leader)?.get(managed.targetId)?.status === 'working';
@@ -3993,6 +3999,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
                   : closeReachBlockers(managed, symbol, quantity)[0] ?? null;
     if (blocked) return finish('not-sent', blocked);
     const tag = `mclose${command.operationId.slice('manage:'.length).replace(/[^a-zA-Z0-9]/g, '').slice(0, 20)}`;
+    timing.writeStartedAt = clock();
     const raw = options.broker.liquidatePosition!({ tag, accountId: leader, symbol });
     // P1: Flatten / cut uvidí na leaderovi rozpracovaný zápis — leadera vynechá (ohlásí nejasný
     // zápis, flat:false) místo druhé likvidace. Proto Flatten během zavírání hlásí leadera jako nejasného.
@@ -4011,6 +4018,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     } finally {
       if (timer) clearTimeout(timer);
     }
+    timing.writeMs = clock() - timing.writeStartedAt;
     const unprotected = (state: { net: number; working: number } | null) => state != null && state.net !== 0 && state.working === 0;
     const raiseUnprotected = async (state: { net: number }, why: string) => {
       const reason = `Leader má pozici ${state.net} bez SL/TP (${why}) — zavři v Tradovate nebo Flattenem.`;
@@ -4035,9 +4043,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const verifyDeadline = Date.now() + MANUAL_ORDER_VERIFY_TIMEOUT_MS;
     const streamFlat = () => (positionsByAccount.get(leader)?.get(symbol) ?? null) === 0
       && ![...(liveOrdersByAccount.get(leader)?.values() ?? [])].some(order => order.symbol === symbol && isOpenOrderStatus(order.status));
+    const streamWaitStartedAt = clock();
     while (outcome.status === 'submitted' && !streamFlat() && Date.now() + 100 < verifyDeadline - 1_000) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
+    timing.streamFlatMs = streamFlat() ? clock() - streamWaitStartedAt : undefined;
+    const verifyStartedAt = clock();
     let state = await readLeaderSymbolState(leader, symbol);
     // Přechod „nohy zrušené, Market ještě nevyplněný“ (+0,3 s) nebo REST snímek starší
     // než stream (in-flight dedup) nesmí vyhlásit falešný incident: v rozpočtu (~4 s)
@@ -4046,6 +4057,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await new Promise(resolve => setTimeout(resolve, 250));
       state = await readLeaderSymbolState(leader, symbol);
     }
+    timing.verify = 'rest';
+    timing.verifyMs = clock() - verifyStartedAt;
     if (state && state.net === 0 && state.working === 0) {
       return outcome.status === 'submitted'
         ? finish('acknowledged', 'leader zavřen (ověřeno čtením u brokera)')
@@ -4171,11 +4184,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     writeStartedAt?: number;
     writeMs?: number;
     verify?: 'adapter' | 'stream' | 'rest';
+    /** Zavření: od odpovědi brokera po flat ve streamu; undefined = stream flat nepotvrdil. */
+    streamFlatMs?: number;
+    /** Zavření: trvání autoritativního REST ověření (včetně opakování). */
+    verifyMs?: number;
   }
   const manualOrderTimingText = (timing: ManualOrderActionTiming, now: number) => (
     `[čtení ${timing.preRead} ${Math.round(timing.preReadMs)} ms`
     + `${timing.writeMs != null ? ` · zápis ${Math.round(timing.writeMs)} ms` : ''}`
-    + `${timing.verify ? ` · ověření ${timing.verify}` : ''}`
+    + `${timing.streamFlatMs != null ? ` · stream flat ${Math.round(timing.streamFlatMs)} ms` : ''}`
+    + `${timing.verify ? ` · ověření ${timing.verify}${timing.verifyMs != null ? ` ${Math.round(timing.verifyMs)} ms` : ''}` : ''}`
     + `${timing.writeStartedAt != null ? ` · od zápisu ${Math.round(now - timing.writeStartedAt)} ms` : ''}]`
   );
   /**
@@ -4504,11 +4522,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const readStartedAt = clock();
     // Posun SL/TP (oponentura 30. 10.): synchronní snímek dohnaného streamu adaptéru
     // místo REST order grafu celého dne. Nejistota = null → dnešní REST čtení.
-    // Zrušení vstupu a zavření obchodu zůstávají na REST.
+    // Zavření obchodu (2. 11. 2026): snímek jen pro kontrolu tvaru před zápisem; výsledek
+    // dál výhradně z REST ověření po zavření (INV-MODE-02). Zrušení vstupu zůstává na REST.
     const snapshotRouteEpoch = leaderRouteEpoch(leader);
     let snapshot: BrokerStreamOrderSnapshot | null = null;
     // Bez route epochy (broker bez routeru) by kontrola před zápisem nic nehlídala → REST.
-    if ((command.action === 'move-stop' || command.action === 'move-target') && snapshotRouteEpoch !== undefined) {
+    if ((command.action === 'move-stop' || command.action === 'move-target' || command.action === 'close-position') && snapshotRouteEpoch !== undefined) {
       try {
         snapshot = broker.streamOrderSnapshot?.(leader) ?? null;
       } catch {
@@ -4711,7 +4730,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (timing.preRead === 'stream' && leaderRouteEpoch(leader) !== timing.routeEpoch) {
         return finish('not-sent', 'Mezitím se změnilo spojení leadera — nic se neodeslalo.');
       }
-      if (command.action === 'close-position') return executeClose(command, finish, { leader, symbol, managed, quantity: targetLive.quantity, generation, queuedFence });
+      if (command.action === 'close-position') return executeClose(command, finish, { leader, symbol, managed, quantity: targetLive.quantity, generation, queuedFence, timing });
       // Cena v cache streamu před zápisem — rychlé potvrzení posunu jen když se po zápisu ZMĚNILA
       // na novou cenu (ne starý / syntetický řádek, který už novou cenu náhodou měl).
       const preWriteRow = liveOrdersByAccount.get(leader)?.get(targetOrderId);
@@ -5892,9 +5911,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return safety.dayRuleActions.windowEnd.atEnd;
   };
 
+  /**
+   * Denní ztráta pro pravidla dne (2. 11. 2026): ledger leadera je hrubý (bez poplatků),
+   * broker vykazuje čisté realized P&L. Platí přísnější z obou; broker hodnota jen z čerstvého
+   * (≤ 90 s) bezchybného snímku leadera, jehož obchodní den (`cashBalance.tradeDate`) je den
+   * této session — po 17:00 CT nesmí nevynulovaná včerejší ztráta zamknout nový den (oponentura).
+   * Jinak ledger jako dřív (nikdy volnější).
+   */
+  const dailyLossPnl = (stats: CopierDailyStats, at: number): { pnl: number; source: 'ledger' | 'broker' } => {
+    const risk = accountRisk.get(group.leaderAccountId);
+    const broker = risk && !risk.error && typeof risk.realizedPnlUsd === 'number' && Number.isFinite(risk.realizedPnlUsd)
+      && risk.verifiedAt <= at && at - risk.verifiedAt <= ACCOUNT_RISK_STALE_MS
+      && sameTradovateSession(risk.verifiedAt, stats.sessionEndAt - 1)
+      && risk.realizedTradeDate != null && risk.realizedTradeDate === tradovateDisplayTradeDate(stats.sessionEndAt - 1)
+      ? risk.realizedPnlUsd : null;
+    return broker != null && broker < stats.realizedPnlUsd ? { pnl: broker, source: 'broker' } : { pnl: stats.realizedPnlUsd, source: 'ledger' };
+  };
+
   /** Vyhodnotí pravidla dne. Lock vždy přebíjí pauzu; obě větve jsou durable. */
   const evaluateDailyRules = async (at: number): Promise<void> => {
     const stats = await ensureDailySession(at);
+    const lossPnl = dailyLossPnl(stats, at).pnl;
     const safety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
     if (!appliedRuleActionSignaturesInitialized) {
       // Starý durable warning znamená, že konfigurace, se kterou worker
@@ -5956,8 +5993,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       addWarning('max-trades', stats.tradesToday ?? 0, safety.dailyMaxTrades);
     }
     if (safety.dailyLossLimitUsd > 0
-      && stats.realizedPnlUsd <= -0.8 * safety.dailyLossLimitUsd) {
-      addWarning('daily-loss', Math.abs(stats.realizedPnlUsd), safety.dailyLossLimitUsd);
+      && lossPnl <= -0.8 * safety.dailyLossLimitUsd) {
+      addWarning('daily-loss', Math.abs(lossPnl), safety.dailyLossLimitUsd);
     }
     if (isTradingWindowWarningAt(safety.tradingWindow, at)
       || (gate.armed && !gate.shadowMode && stats.windowState === 'outside')) {
@@ -6004,10 +6041,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       candidates.push({ rule, action, actionKey, actionSignature, reason, atLimit, current, limit });
     };
 
-    if (safety.dailyLossLimitUsd > 0 && stats.realizedPnlUsd <= -safety.dailyLossLimitUsd) {
+    if (safety.dailyLossLimitUsd > 0 && lossPnl <= -safety.dailyLossLimitUsd) {
       addCandidate('daily-loss', safety.dayRuleActions.dailyLoss.atLimit,
         `denní ztráta dosáhla limitu ${safety.dailyLossLimitUsd} USD`, true,
-        Math.abs(stats.realizedPnlUsd), safety.dailyLossLimitUsd);
+        Math.abs(lossPnl), safety.dailyLossLimitUsd);
     }
     if (safety.dailyMaxLosingTrades > 0 && stats.losingTrades >= safety.dailyMaxLosingTrades) {
       addCandidate('losing-trades', safety.dayRuleActions.losingTrades.atLimit,
@@ -6029,11 +6066,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         minute, lastEnd);
     }
     if (safety.dailyLossLimitUsd > 0
-      && stats.realizedPnlUsd <= -0.8 * safety.dailyLossLimitUsd
-      && stats.realizedPnlUsd > -safety.dailyLossLimitUsd) {
+      && lossPnl <= -0.8 * safety.dailyLossLimitUsd
+      && lossPnl > -safety.dailyLossLimitUsd) {
       addCandidate('daily-loss', safety.dayRuleActions.dailyLoss.at80Percent,
         `denní ztráta dosáhla 80 % limitu ${safety.dailyLossLimitUsd} USD`, false,
-        Math.abs(stats.realizedPnlUsd), safety.dailyLossLimitUsd);
+        Math.abs(lossPnl), safety.dailyLossLimitUsd);
     }
     if (safety.dailyMaxLosingTrades >= 2
       && stats.losingTrades >= safety.dailyMaxLosingTrades - 1
@@ -8102,6 +8139,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // či vadný broker payload změnil na čerstvě ověřený cut signál.
       verifiedAt: validTimestamp ? snapshot.at : 0,
       realizedPnlUsd: finiteOrNull(snapshot.realizedPnlUsd),
+      realizedTradeDate: typeof snapshot.realizedTradeDate === 'string' ? snapshot.realizedTradeDate : null,
       openPnlUsd: finiteOrNull(snapshot.openPnlUsd ?? null),
       netLiq,
       cashBalanceUsd,
@@ -9516,6 +9554,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           accountId,
           verifiedAt: previous?.verifiedAt ?? 0,
           realizedPnlUsd: previous?.realizedPnlUsd ?? null,
+          realizedTradeDate: previous?.realizedTradeDate ?? null,
           openPnlUsd: previous?.openPnlUsd ?? null,
           netLiq: previous?.netLiq ?? null,
           cashBalanceUsd: previous?.cashBalanceUsd ?? null,
@@ -19293,7 +19332,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         sessionEndAt: now + msUntilTradovateSessionEnd(now),
         armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : null,
         transportResumePending: transportResume != null && transportResume.state === 'waiting',
-        dailyStats: { realizedPnlUsd: stats.realizedPnlUsd, losingTrades: stats.losingTrades, tradesToday: stats.tradesToday ?? 0 },
+        dailyStats: { realizedPnlUsd: dailyLossPnl(stats, now).pnl, losingTrades: stats.losingTrades, tradesToday: stats.tradesToday ?? 0 },
         lastGroupFillAt: closedAt.length ? Math.max(...closedAt) : null,
         accounts,
         entryIneligible: currentEntryIneligibleAccounts(now),
@@ -20750,6 +20789,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             warnedRules: current.state.safety.dailyStats.warnedRules?.map(warning => ({ ...warning })) ?? [],
             recentClosedTrades: current.state.safety.dailyStats.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
             unpricedSymbols: [...current.state.safety.dailyStats.unpricedSymbols],
+            ...(() => {
+              const loss = dailyLossPnl(current.state.safety.dailyStats!, clock());
+              return { lossPnlUsd: loss.pnl, lossPnlSource: loss.source };
+            })(),
           }
           : null,
       };

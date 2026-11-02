@@ -86,6 +86,11 @@ export interface LocalCopierAgentStatus {
   controller: CopierControllerStatus;
   startedAt: string;
   /**
+   * F1b′ (2. 11. 2026): nečinná durable delivery relaye, ke které smí server navázat příkaz
+   * a poslat ho podepsaným pushem. Jen relay status workeru; prohlížeč ho nedostane.
+   */
+  relayIdle?: { deliveryId: string } | null;
+  /**
    * Pořadí sestavení statusu v tomto běhu workeru (monotónní) a čas sestavení
    * (hodiny workeru). Jen pro řazení zobrazení pozice v grafu (expozice z kanálu
    * vs. poll, docs/LIVE_HOT_PATH_PLAN.md §10); nic neautorizují. Starší workery

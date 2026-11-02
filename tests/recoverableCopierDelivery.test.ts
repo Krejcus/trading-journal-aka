@@ -8,6 +8,13 @@ import { fileRelayDeliveryStore, type RelayDelivery, type RelayDeliveryStore } f
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 import type { LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol';
 
+/** F1b′: po dokončení/zahození zůstane nová nečinná delivery (ne null) — bez příkazu a výsledku. */
+const expectIdle = (saved: unknown) => {
+  expect(saved).toMatchObject({ version: 1, phase: 'polling' });
+  expect((saved as { commandId?: unknown }).commandId).toBeUndefined();
+};
+
+
 function fixture() {
   let saved: RelayDelivery | null = null;
   let now = 1_000;
@@ -31,7 +38,7 @@ describe('recoverable copier delivery', () => {
       return body.action === 'poll-v2' ? { protocol: 2, command: f.remote } : { protocol: 2, accepted: true };
     });
     vi.mocked(f.options.agent.execute).mockImplementation(async () => { expect(f.saved?.phase).toBe('executing'); return { ok: true } as never; });
-    await step(); expect(f.options.agent.execute).toHaveBeenCalledTimes(1); expect(f.saved).toBeNull();
+    await step(); expect(f.options.agent.execute).toHaveBeenCalledTimes(1); expectIdle(f.saved);
   });
   it('předá ARM deadline s desetisekundovou rezervou na durable ACK a serverový createdAt', async () => {
     const f = fixture();

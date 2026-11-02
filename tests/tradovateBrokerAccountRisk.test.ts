@@ -16,7 +16,7 @@ describe('Tradovate broker account risk snapshots', () => {
       const accountId = Number(url.searchParams.get('masterid'));
       if (url.pathname.endsWith('/cashBalance/deps')) {
         return json(accountId === 101
-          ? [{ accountId, amount: 49_675.25, realizedPnL: -324.75, openPnL: -25 }]
+          ? [{ accountId, amount: 49_675.25, realizedPnL: -324.75, openPnL: -25, tradeDate: { year: 2026, month: 9, day: 8 } }]
           : [{ accountId, amount: 50_125, realizedPnL: 125, openPnL: 40 }]);
       }
       if (url.pathname.endsWith('/accountRiskStatus/deps')) {
@@ -44,6 +44,7 @@ describe('Tradovate broker account risk snapshots', () => {
         accountId: 101,
         at: 1_789_000_000_000,
         realizedPnlUsd: -324.75,
+        realizedTradeDate: '2026-09-08',
         openPnlUsd: -25,
         // `/deps` cash entity nese jen realizovaný cash, ne net liq.
         netLiq: null,
@@ -59,6 +60,7 @@ describe('Tradovate broker account risk snapshots', () => {
         accountId: 202,
         at: 1_789_000_000_000,
         realizedPnlUsd: 125,
+        realizedTradeDate: null,
         openPnlUsd: 40,
         netLiq: null,
         cashBalanceUsd: 50_125,
@@ -109,6 +111,7 @@ describe('Tradovate broker account risk snapshots', () => {
       accountId: 303,
       at: 321,
       realizedPnlUsd: null,
+      realizedTradeDate: null,
       openPnlUsd: null,
       netLiq: null,
       cashBalanceUsd: 49_900,

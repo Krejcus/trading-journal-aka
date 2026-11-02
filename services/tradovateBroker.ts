@@ -1,3 +1,4 @@
+import { explicitTradovateTradeDate } from '../lib/tradovateDisplayDay';
 import { createJournalBackfillPlan, validateJournalBackfillScope } from '../lib/journalBackfillPlan';
 import { createTradovateUsageMeter, type TradovateUsageWindow } from '../lib/tradovateUsageMeter';
 import { positionSnapshotObservations } from '../lib/journalPositionSnapshot';
@@ -53,6 +54,8 @@ interface TradovateCashBalanceEntity {
   /** Realizovaný cash zůstatek; běžná `/deps` entita nic víc nenese. */
   amount?: number;
   realizedPnL?: number;
+  /** Obchodní den, ke kterému `realizedPnL` patří (`{ year, month, day }`). */
+  tradeDate?: unknown;
 }
 /**
  * `maxNetLiq`/`minNetLiq` jsou brokerem zaznamenané extrémy net liq účtu
@@ -2267,6 +2270,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           accountId,
           at: clock(),
           realizedPnlUsd: finiteNumber(cashBalance?.realizedPnL),
+          realizedTradeDate: explicitTradovateTradeDate(cashBalance?.tradeDate),
           openPnlUsd: finiteNumber(cashBalance?.openPnL),
           // Běžná GET /deps entita nese jen `amount` (realizovaný cash), ne net
           // liquidation; net liq se vydává jen tam, kde ho transport opravdu poslal.

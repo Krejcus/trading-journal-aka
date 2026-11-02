@@ -11,6 +11,11 @@ export const COPIER_COMMAND_ACK_RESERVE_MS = 10_000;
 export const COPIER_RELAY_CLOCK_SKEW_RESERVE_MS = 2_000;
 /** Kolik id příkazů zahájených v této session si relay pamatuje (pojistka proti druhé execution). */
 export const COPIER_RELAY_STARTED_MEMORY = 200;
+/** Push (F1b′) smí použít offset hodin jen z pollu ne staršího než tohle; jinak čeká na poll. */
+export const COPIER_RELAY_PUSH_CLOCK_MAX_AGE_MS = 60_000;
+
+/** Řádek navázaný serverem k nečinné delivery a doručený podepsaným pushem (už ověřený podpis). */
+export interface PushedCopierDelivery { deliveryId: string; command: unknown }
 /** Serial, durable transport recovery. Only HTTP delivery/ACK is retried;
  * once execution starts a trading or configuration command can NEVER be
  * executed by this relay again. Idempotent brakes (DISARM, kill switch, day
@@ -50,22 +55,52 @@ export function recoverableCopierDelivery(options: {
     checkpoint = next;
     await options.store.write(next);
   };
-  return async () => {
+  /** Offset hodin serveru z posledního pollu (push vlastní `serverNow` nemá — jednosměrná latence). */
+  let lastClock: { offsetMs: number; reserveMs: number; at: number } | null = null;
+  const freshPolling = () => ({ version: 1 as const, session, deliveryId: randomUUID(), phase: 'polling' as const });
+  /** Durable checkpoint, jehož id se smí ohlásit serveru (`relayIdle`): jen `polling` této session. */
+  let advertised: string | null = null;
+  const run = async (pushed?: PushedCopierDelivery | null) => {
     if (!loaded) { checkpoint = await options.store.read(); loaded = true; }
-    if (!checkpoint) await persist({ version: 1, session, deliveryId: randomUUID(), phase: 'polling' });
+    if (!checkpoint) await persist(freshPolling());
     let current = checkpoint!;
     await options.store.write(current);
+    advertised = current.phase === 'polling' && current.session === session ? current.deliveryId : null;
+    // Push se použije jen pro aktuální nečinnou delivery této session a s čerstvým offsetem
+    // hodin z pollu; jinak se zahodí a jde se běžným pollem (ten vrátí tentýž vázaný řádek).
+    const usePush = pushed != null && pushed.deliveryId === current.deliveryId && current.phase === 'polling'
+      && current.session === session && lastClock != null && now() - lastClock.at <= COPIER_RELAY_PUSH_CLOCK_MAX_AGE_MS;
     const pollStartedAt = now();
-    const response = await options.request({ action: 'poll-v2', deliveryId: current.deliveryId });
+    const response: Record<string, unknown> = usePush
+      ? { protocol: 2, command: pushed!.command, pushed: true }
+      : await options.request({ action: 'poll-v2', deliveryId: current.deliveryId });
     const pollReceivedAt = now();
     if (!Object.hasOwn(response, 'command')) throw new Error('relay-delivery-response-invalid');
     if (response.protocol !== 2) throw new Error('relay-delivery-protocol-unavailable');
+    if (!usePush) {
+      const serverNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
+      if (Number.isFinite(serverNow)) {
+        lastClock = {
+          offsetMs: serverNow - (pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2)),
+          reserveMs: Math.max(COPIER_RELAY_CLOCK_SKEW_RESERVE_MS, Math.ceil(Math.max(0, pollReceivedAt - pollStartedAt) / 2)),
+          at: pollReceivedAt,
+        };
+      }
+    }
     const remote = response.command as { id: string; command: LocalCopierAgentCommand; createdAt: string; expiresAt: string; status: string } | null;
+    if (usePush && (!remote || typeof remote.id !== 'string' || remote.status !== 'claimed' || !remote.command)) {
+      throw new Error('relay-delivery-push-invalid');
+    }
     if (!remote) {
       // DB delivery nezná a nic k ní nepřiřadila — checkpoint je osiřelý.
       if (current.phase !== 'polling') orphan(current, 'unknown-to-server');
-      await persist(null); return response;
+      // F1b′: nečinná delivery této session zůstává (server k ní smí navázat příkaz);
+      // cizí session nebo osiřelý checkpoint se vymění za nový.
+      if (current.phase !== 'polling' || current.session !== session) await persist(freshPolling());
+      advertised = checkpoint!.deliveryId;
+      return response;
     }
+    advertised = null;
     // Řádek s naší delivery zase `pending` (ruční zásah): mohl už běžet, takže
     // se zapamatuje jako zahájený a vezme se znovu pod novou delivery.
     if (remote.status === 'pending') {
@@ -113,10 +148,11 @@ export function recoverableCopierDelivery(options: {
       await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
         error: 'command-rejected-relay-delivery-recovered' });
     } else if (current.phase === 'polling' || idempotentBrake) {
-      const serverNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
-      const localMidpoint = pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2);
-      const serverClockOffsetMs = Number.isFinite(serverNow) ? serverNow - localMidpoint : 0;
-      const clockSkewReserveMs = Math.max(
+      // Offset hodin: u pollu z jeho vlastního měření, u pushe z posledního pollu (≤ 60 s).
+      const pollServerNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
+      const serverClockOffsetMs = usePush ? lastClock!.offsetMs
+        : Number.isFinite(pollServerNow) ? pollServerNow - (pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2)) : 0;
+      const clockSkewReserveMs = usePush ? lastClock!.reserveMs : Math.max(
         COPIER_RELAY_CLOCK_SKEW_RESERVE_MS,
         Math.ceil(Math.max(0, pollReceivedAt - pollStartedAt) / 2),
       );
@@ -140,7 +176,7 @@ export function recoverableCopierDelivery(options: {
         await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
           error: 'command-expired-or-predates-worker-session' });
       } else {
-        console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} id=${remote.id} queueMs=${Math.max(0, now() - created)}`);
+        console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} id=${remote.id} queueMs=${Math.max(0, now() - created)}${usePush ? ' via=push' : ''}`);
         rememberStarted(remote.id);
         await persist({ ...current, phase: 'executing', commandId: remote.id });
         const executionStarted = performance.now();
@@ -182,8 +218,15 @@ export function recoverableCopierDelivery(options: {
       status: options.agent.status(), revision: options.nextRevision() });
     if (ack.protocol !== 2 || ack.accepted !== true) throw new Error('relay-delivery-ack-not-confirmed');
     console.log(`${new Date().toISOString()} RELAY ACK id=${remote.id} durationMs=${Math.round(performance.now() - ackStarted)}`);
+    // Budíček UI dřív než zápis nové delivery — jeho selhání ho nesmí spolknout (oponentura P2-3).
     options.onComplete(remote.id);
-    await persist(null);
+    // Rovnou nová nečinná delivery (F1b′): server ji uvidí v nejbližším statusu.
+    await persist(freshPolling());
+    advertised = checkpoint!.deliveryId;
     return response;
   };
+  return Object.assign(run, {
+    /** `relayIdle` pro status: id durable nečinné delivery této session, jinak null. */
+    idleDeliveryId: (): string | null => advertised,
+  });
 }

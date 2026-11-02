@@ -31,6 +31,7 @@ vi.mock('../server/tvAlertNotifications', () => ({ loadPendingTvAlertSnapshotReq
 vi.mock('../server/nativeCors', () => ({ handleNativeCors: () => false }));
 vi.mock('../server/nativeLiveActivityTick', () => ({ tickNativeLiveActivitiesWithinBudget: mocks.tick }));
 import handler from '../api/tradovate/oauth/copier-relay';
+import { copierCommandPushGrant } from '../server/copierCommandPush';
 
 const response = () => {
   const res = { setHeader: vi.fn(), status: vi.fn(), json: vi.fn() };
@@ -67,7 +68,10 @@ describe('relay: kanál ceny z TV (krok 1)', () => {
     const grant = tvPriceChannelGrant(DEVICE, SECRET)!;
     expect(status).toBe(200);
     expect(body.realtime).toEqual({ url: 'https://mock.invalid', anonKey: 'mock-public', topic: `copier-kick-${DEVICE}`,
-      priceTopic: grant.topic, priceKey: grant.key, nudgeTopic: copierStatusNudgeTopic(DEVICE, SECRET), nudgeKey: copierStatusNudgeKey(DEVICE, SECRET) });
+      priceTopic: grant.topic, priceKey: grant.key, nudgeTopic: copierStatusNudgeTopic(DEVICE, SECRET), nudgeKey: copierStatusNudgeKey(DEVICE, SECRET),
+      // F1b′: téma pushů a jen VEŘEJNÝ Ed25519 klíč (32 B) — podepisovat jím nejde.
+      pushTopic: copierCommandPushGrant(DEVICE, SECRET)!.topic, pushKey: copierCommandPushGrant(DEVICE, SECRET)!.publicKey, pushDeviceId: DEVICE });
+    expect(Buffer.from(body.realtime.pushKey, 'base64url')).toHaveLength(32);
   });
 
   it('bez tajemství poll-v2 i legacy poll odpoví normálně, jen bez polí ceny (brzdy dál procházejí)', async () => {
@@ -101,6 +105,16 @@ describe('relay: kanál ceny z TV (krok 1)', () => {
     expect(body.status).not.toHaveProperty('nudgeKey');
     expect(body).not.toHaveProperty('deviceId');
     expect(body.relayTargetHint).not.toContain(DEVICE);
+  });
+
+  it('GET pro prohlížeč nikdy nevydá relayIdle (F1b′ — nečinná delivery patří jen relayi)', async () => {
+    process.env[TV_PRICE_CHANNEL_SECRET_ENV] = SECRET;
+    mocks.runtime.mockResolvedValue({ deviceId: DEVICE, status: { startedAt: STARTED_AT, relayIdle: { deliveryId: '6f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f607' } },
+      lastSeenAt: 'now', ageMs: 1, connected: true });
+    const { status, body } = await call(userGet());
+    expect(status).toBe(200);
+    expect(body.status).toEqual({ startedAt: STARTED_AT });
+    expect(JSON.stringify(body)).not.toContain('6f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f607');
   });
 
   it('GET se zastaralým runtime (revokované nebo mrtvé zařízení) vrátí status, ale bez kanálu ceny', async () => {

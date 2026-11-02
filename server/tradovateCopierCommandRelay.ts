@@ -1284,10 +1284,11 @@ export async function claimTradovateCopierCommand(options: { db: SupabaseClient;
   } : null;
 }
 
-export async function claimTradovateCopierCommandV2(options: { db: SupabaseClient; deviceId: string; deliveryId: string }) {
-  const { data, error } = await options.db.rpc('claim_tradovate_copier_command_v2', {
+export async function claimTradovateCopierCommandV2(options: { db: SupabaseClient; deviceId: string; deliveryId: string; signal?: AbortSignal }) {
+  const call = options.db.rpc('claim_tradovate_copier_command_v2', {
     target_device_id: options.deviceId, target_delivery_id: options.deliveryId,
   });
+  const { data, error } = await (options.signal ? call.abortSignal(options.signal) : call);
   if (error) throw new Error(`copier-relay-claim-failed: ${error.message}`);
   if (!Array.isArray(data) || data.length > 1) throw new Error('copier-relay-claim-invalid-response');
   const row = data[0] as (CommandRow & { created_at: string }) | undefined;

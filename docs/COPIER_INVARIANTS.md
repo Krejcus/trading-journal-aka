@@ -719,6 +719,14 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je cache zobrazit jako „obnovené“ a
   dovolit přesně vyjmenované risk-reducing Flatteny. Nebezpečné je zobrazit
   cached ON jako potvrzený live stav.
+- F1b′ (2. 11. 2026): server váže příkaz k `relayIdle` jen při `last_seen_at` ≤ 4 s.
+  Uspaný Mac (heartbeat čerstvý, proces stojí) nechá řádek `claimed` do probuzení;
+  pak ho TTL/`created < startedAt` neprovede — bezpečné, UI jen ukazuje „čeká“.
+  Restart workeru do 4 s po posledním heartbeatu: server může navázat k `relayIdle`
+  staré instance (řádek v DB nese starou instanci celý, shoda `startedAt` to neodhalí);
+  nová instance ho vezme větví „session se změnila“ = neprovede, UI „výsledek neznámý“.
+  Okno zkracuje status s `relayIdle: null` hned při startu relaye. Po ACK nese status
+  z `complete-v2` `relayIdle` bez hodnoty → push až po dalším heartbeatu (≤ ~250 ms).
 
 ### Relay příkazy
 
@@ -803,7 +811,12 @@ existující ochranu.
   se a vezme pod novou delivery. Relay si pamatuje id zahájených příkazů této
   session (`COPIER_RELAY_STARTED_MEMORY`); ne-brzdu z nich DB vydanou znovu
   neprovede (`command-outcome-unknown-already-started-this-session`). Po
-  restartu stejnou roli hraje `created < startedAt`. Vědomě nepokryto: ACK
+  restartu stejnou roli hraje `created < startedAt`. F1b′ (2. 11. 2026): nečinná
+  `polling` delivery se po prázdném pollu nemaže (server k ní smí navázat), pokud patří
+  této session; checkpoint předchozí session se po prázdném pollu vymění, vázaný
+  řádek k němu jde konzervativní větví „session se změnila“ (neprovede se). Po ACK se
+  hned uloží nová nečinná delivery; `relayIdle` se hlásí jen po potvrzeném zápisu.
+  Vědomě nepokryto: ACK
   trvale 409, když DB zná novější `startedAt` (INV-WORKER-02/03). Test:
   `tests/recoverableCopierDeliveryOrphan.test.ts`.
 
@@ -866,7 +879,11 @@ existující ochranu.
      `lastBrakeCreatedAt` je jen v paměti procesu: po restartu chrání DISARMED
      default a brána ARM.
   5. Nepokryto: příkaz, který worker vyzvedl (claimed) dřív, než brzda
-     commitla, se provede (supersede na jeho řádek počká a `claimed` nemění) —
+     commitla, se provede. **F1b′ (2. 11. 2026) toto okno vědomě zkracuje:** server
+     váže příkaz k nečinné delivery hned po admission (stejná `claim_v2`, přednost
+     brzd), takže brzda zadaná ~100 ms po vstupu/ARM ho už nezneplatní (dřív 0–750 ms
+     podle pollu) — provede se až po něm. Pojistky workeru (`brake-after-request`,
+     ARM brána) beze změny (supersede na jeho řádek počká a `claimed` nemění) —
      pak platí běžná pravidla brzdy (DISARM pozice nezavírá; ACK za DISARMED →
      vlastní vstup se zruší). Kdy worker brzdu převezme, závisí na sériové
      smyčce: poll ~750 ms platí jen pro nečinný zdravý worker, jinak brzda
@@ -920,10 +937,22 @@ existující ochranu.
   `tests/copierLiveExposure.test.ts`, `tests/macCopierCommandRelay.test.ts`,
   `tests/copierRelayPriceChannel.test.ts`, `tests/copierStatusNudgeTopic.test.ts`.
 - Nikdy: Poslat přes Realtime příkaz, ARM/DISARM, risk ani stav, podle
-  kterého se rozhoduje; logovat téma nebo klíč; čekat v poll smyčce na
-  přihlášení ke kanálu. Přímé doručení claimnutého příkazu kick kanálem
-  (návrh F1b) oponentura 30. 10. vrátila (restart, věčné `claimed`, hodiny,
-  klíč = oprávnění k execution) — bez nového návrhu nezavádět.
+  kterého se rozhoduje — s jedinou výjimkou F1b′ níže; logovat téma nebo klíč;
+  čekat v poll smyčce na přihlášení ke kanálu.
+- **Výjimka F1b′ (2. 11. 2026, `docs/reviews/hot-path-f1b2-fees-close-20261102.md`):**
+  transport řádku, který `claim_tradovate_copier_command_v2` už navázal k nečinné
+  delivery workeru (`status.relayIdle`, runtime ≤ 4 s). Server (`server/copierCommandPushRelay.ts`)
+  ho po enqueue pošle na téma `copier-push-…` (HMAC zařízení) podepsaný **Ed25519**;
+  soukromý klíč existuje jen na serveru (odvozený z `TV_PRICE_CHANNEL_SECRET`), worker
+  dostane jen veřejný klíč přes autentizovaný `poll-v2`. Push nic nevytváří ani
+  neprodlužuje; každý krok ≤ 1 s, chyba = žádný push (kick a poll jako dřív), 202 ani
+  brzdu nezdrží. Worker ověřuje jen nejnovější zprávu ve smyčce, použije ji jen pro
+  aktuální nečinnou delivery této session a s offsetem hodin z pollu ≤ 60 s; jinak
+  poll (vrátí tentýž řádek). Dál jde stejným automatem (INV-RELAY-02). Prohlížeč
+  `relayIdle` nedostane. Tajemství je společné s kanálem ceny (vlastní
+  `COPIER_PUSH_SIGNING_SECRET` = změna secrets, čeká na souhlas). Testy:
+  `tests/copierCommandPushDelivery.test.ts`, `tests/copierCommandPushRelay.test.ts`,
+  `tests/copierRelayPriceChannel.test.ts`.
 - Bezpečné změny vs. nebezpečné: Bezpečné je kanál vypnout (pole chybí)
   — kopírka jede dál přes poll. Nebezpečné je z přítomnosti zpráv
   odvozovat čerstvost workeru (INV-FRESH-03).
@@ -1099,6 +1128,17 @@ existující ochranu.
   `tests/copierDayRuleActions.test.ts`, `tests/copierRuntimeControllerRiskConfig.test.ts`.
 - Nikdy: Nezaměňovat `dailyLossLimitUsd`, počet losing trades a počet trades;
   neaplikovat window-end lock po prvním dílčím okně dne.
+- Poplatky (2. 11. 2026, `docs/reviews/hot-path-f1b2-fees-close-20261102.md` §3):
+  ztráta pro `daily-loss` (zámek/pauza/80 %), blokátor náhledu `daily-loss-limit`
+  a poznámku `group-daily-loss` = **min(hrubý ledger leadera, čisté realized P&L
+  leadera od brokera)** (`dailyLossPnl`). Broker hodnota jen ze snímku bez chyby,
+  ≤ 90 s, téže session a s `cashBalance.tradeDate` = obchodní den session
+  (`realizedTradeDate`; po 17:00 CT nevynulovaná včerejší ztráta nesmí zamknout nový
+  den). Jinak ledger jako dřív — nikdy volnější. Počet ztrátových obchodů zůstává
+  z ledgeru (hrubý). Broker realized je celoúčtový (i obchody mimo appku) → jen
+  přísnější; status ukazuje `dailyStats.lossPnlUsd` a `lossPnlSource`. Test:
+  `tests/copierDailyLossFees.test.ts`. Neověřeno: že Lucid (leader naostro) vede
+  `realizedPnL` denně a s poplatky jako DEMO.
 - Bezpečné změny vs. nebezpečné: Bezpečné je varovat/pauznout a po flat
   durable locknout. Nebezpečné je ukončit správu protective orders jen proto,
   že právě skončilo okno.
@@ -1649,7 +1689,13 @@ existující ochranu.
   příkazy symbolu sedí s `liveOrdersByAccount` (tvar, stav, `sourceVersion`)
   a vstup se stavem, který už zpracoval; jinak REST. Před zápisem se navíc
   porovná `routeEpoch` leadera (změna = `not-sent`). `cancel-entry`
-  a `close-position` zůstávají na REST. Snímek nikdy pro ARM, reconcile,
+  zůstává na REST. **Od 2. 11. 2026 i `close-position`** bere pre-read ze snímku
+  (jen kontrola tvaru před `liquidateposition`; výsledek dál výhradně z REST ověření
+  po zavření, INV-MODE-02; audit nese `zápis`, `stream flat` a `ověření rest` ms).
+  Vědomě beze změny: `liquidateposition` zruší všechny příkazy kontraktu — cizí příkaz,
+  který stream ještě nedohnal, zruší stejně jako dřív s REST pre-readem (závod existoval
+  i tehdy). Testy: `tests/manualOrderManage.test.ts` (snímek nesedí → REST, změna route
+  epochy → `not-sent`). Snímek nikdy pro ARM, reconcile,
   důkaz flat/no-working ani Flatten. Třetí důkaz úspěchu posunu: potvrzení
   adaptéru z `modifyOrder` (Replaced přesně odeslaného commandu + otevřený
   příkaz v odeslaném tvaru), které controller přijme jen pro stejné id, účet

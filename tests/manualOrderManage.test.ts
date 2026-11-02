@@ -645,7 +645,7 @@ describe('zrychlení posunu (30. 10.): snímek streamu a potvrzení adaptéru', 
     expect(reads.fresh).toBe(1);
   });
 
-  it('zrušení vstupu i zavření obchodu jdou přes REST i s dostupným snímkem', async () => {
+  it('zrušení vstupu jde přes REST; zavření bere pre-read ze snímku, ověření flat dál REST (2. 11.)', async () => {
     const reads = { fresh: 0 };
     const ctx = await setup({ patchBroker: broker => { withSnapshot(broker); countFreshReads(broker, reads); } });
     reads.fresh = 0;
@@ -656,9 +656,11 @@ describe('zrychlení posunu (30. 10.): snímek streamu a potvrzení adaptéru', 
     const close = await setup({ nativeLiquidate: true, patchBroker: broker => { withSnapshot(broker); countFreshReads(broker, closeReads); } });
     await fillEntries(close);
     closeReads.fresh = 0;
-    await manage(close, 'close-position', SL, undefined, 'manage:fast0005');
+    expect((await manage(close, 'close-position', SL, undefined, 'manage:fast0005')).status).toBe('acknowledged');
+    // Pre-read ze snímku (žádné čtení před zápisem); důkaz flat = REST čtení po zavření.
     expect(closeReads.fresh).toBeGreaterThanOrEqual(1);
-    expect(auditOf(close, 'modified:close-position')).not.toMatch(/čtení stream/);
+    expect(auditOf(close, 'modified:close-position')).toMatch(/čtení stream .*zápis \d+ ms.*ověření rest \d+ ms/);
+    expect(auditOf(close, 'modified:close-position')).toMatch(/ověřeno čtením u brokera/);
   });
 
   it.each([
@@ -689,6 +691,37 @@ describe('zrychlení posunu (30. 10.): snímek streamu a potvrzení adaptéru', 
     expect(result.status).toBe('blocked');
     expect(result.blockers.map(item => item.text).join(' ')).toMatch(/změnilo spojení leadera/);
     expect(leaderModifies(ctx.broker).length).toBe(before);
+  });
+
+  it('zavření: snímek nesedí se streamem → pre-read přes REST (2. 11.)', async () => {
+    const reads = { fresh: 0 };
+    const ctx = await setup({ nativeLiquidate: true, patchBroker: broker => {
+      withSnapshot(broker, accountId => ({
+        orders: broker.orders().filter(order => order.accountId === accountId).map(order => ({ ...order, stopPrice: order.stopPrice != null ? order.stopPrice - 1 : order.stopPrice })),
+        observedAt: Date.now(),
+      }));
+      countFreshReads(broker, reads);
+    } });
+    await fillEntries(ctx);
+    reads.fresh = 0;
+    expect((await manage(ctx, 'close-position', SL, undefined, 'manage:fast0011')).status).toBe('acknowledged');
+    expect(auditOf(ctx, 'modified:close-position')).toMatch(/čtení rest/);
+    expect(reads.fresh).toBeGreaterThanOrEqual(2);
+  });
+
+  it('zavření: přepnutí route leadera mezi snímkem a zápisem → nic neodejde (2. 11.)', async () => {
+    let epoch = 1;
+    const ctx = await setup({ nativeLiquidate: true, patchBroker: broker => {
+      withSnapshot(broker);
+      broker.routeEpoch = () => epoch;
+    } });
+    await fillEntries(ctx);
+    const real = ctx.broker.streamOrderSnapshot!;
+    ctx.broker.streamOrderSnapshot = accountId => { const snapshot = real(accountId); epoch += 1; return snapshot; };
+    const result = await manage(ctx, 'close-position', SL, undefined, 'manage:fast0012');
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(item => item.text).join(' ')).toMatch(/změnilo spojení leadera/);
+    expect(ctx.broker.liquidateRequests()).toEqual([]);
   });
 
   it('opačné pořadí: událost leadera přijde během ukládání `sending` → nic neodejde', async () => {

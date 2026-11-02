@@ -1896,6 +1896,25 @@ async function runLocalAgent(
             }
           };
         },
+        // F1b′: podepsaný push navázaného příkazu (ověření a použití řeší relay smyčka).
+        createPushSubscription: (config, onMessage) => {
+          const client = createSupabaseClient(config.url, config.anonKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          });
+          const channel = client.channel(config.topic);
+          channel.on('broadcast', { event: 'cmd' }, message => {
+            onMessage((message as { payload?: unknown }).payload);
+          }).subscribe(subscriptionState => {
+            if (subscriptionState === 'SUBSCRIBED') console.log(`${new Date().toISOString()} RELAY PUSH aktivní`);
+          });
+          return async () => {
+            try {
+              await client.removeChannel(channel);
+            } finally {
+              await client.realtime.disconnect();
+            }
+          };
+        },
         // Jen předání konfigurace kanálu ceny vláknu — relay na nic nečeká.
         onRealtimeConfig: realtime => tvPriceStream?.update(tvPriceStreamConfigFromRealtime(realtime, {
           targetId: dedicatedChartRef.targetId, chartId: dedicatedChartRef.chartId,

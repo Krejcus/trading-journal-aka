@@ -33,6 +33,8 @@ import {
 import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '../../../server/tvAlertNotifications.js';
 import { validateTvBarsCapture } from '../../../lib/tradingViewBars.js';
 import { copierStatusNudgeKey, copierStatusNudgeTopic, tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
+import { copierCommandPushGrant } from '../../../server/copierCommandPush.js';
+import { pushBoundCopierCommand } from '../../../server/copierCommandPushRelay.js';
 
 /** Téma a klíč kanálu ceny + téma budíčku statusu pro worker; bez tajemství pole chybí (nikdy 502). */
 const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string; nudgeTopic?: string; nudgeKey?: string } => {
@@ -101,9 +103,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const deliveryId = String(req.body?.deliveryId ?? '');
         if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId)) return res.status(400).json({ error: 'invalid-delivery-id' });
         const command = await claimTradovateCopierCommandV2({ db, deviceId: device.id, deliveryId });
+        // F1b′: téma a jen VEŘEJNÝ klíč podepsaných pushů (+ id zařízení k ověření těla).
+        const pushGrant = copierCommandPushGrant(device.id);
         return res.status(200).json({ protocol: 2, command, serverNow: new Date().toISOString(), realtime: {
           url: config.supabaseUrl, anonKey: config.supabaseAnonKey, topic: `copier-kick-${device.id}`,
           ...tvPriceRealtimeFields(device.id),
+          ...(pushGrant ? { pushTopic: pushGrant.topic, pushKey: pushGrant.publicKey, pushDeviceId: device.id.toLowerCase() } : {}),
         } });
       }
       if (action === 'complete-v2' || action === 'heartbeat-v2' || action === 'background-v2') {
@@ -432,6 +437,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Kanál ceny z TV patří VEDLE statusu, ne do něj — status se ukládá
       // (obnovený stav LIVE) a téma ani klíč se ukládat nemají.
       const { deviceId, ...visible } = runtime;
+      // `relayIdle` (F1b′) patří jen relayi — prohlížeči se nevydává.
+      if (visible.status && typeof visible.status === 'object' && 'relayIdle' in visible.status) {
+        const { relayIdle: _relayIdle, ...status } = visible.status;
+        visible.status = status;
+      }
       // Jen živé zařízení: heartbeat mladší 10 s vyžaduje platnou autentizaci
       // zařízení, takže revokovaný Mac kanál (deterministický klíč) do 10 s ztratí.
       const priceChannel = runtime.connected === true ? tvPriceChannelGrant(deviceId) : null;
@@ -488,6 +498,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           // Poll fallback příkaz doručí i bez kicku.
         }
       })();
+      // F1b′: navázání k nečinné delivery + podepsaný push souběžně s kickem a long-pollem.
+      // Nikdy nevyhodí, každý krok ≤ 1 s; výsledek nemění 202 ani nezdrží brzdu.
+      const push = pushBoundCopierCommand({ db, deviceId: queued.deviceId, supabaseUrl: config.supabaseUrl,
+        serviceRoleKey: config.supabaseServiceRoleKey }).then(outcome => { timing.mark(`push-${outcome}`); });
       // Long-poll: worker s kickem vyřídí příkaz typicky do ~1,5 s — když
       // výsledek stihneme, UI ušetří celé polling kolečko (další RTT).
       // POZOR: enqueue už durable proběhl — selhání long-pollu se MUSÍ
@@ -517,6 +531,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await kick;
       timing.mark('kick');
       const resolution = await waitForResolution;
+      // Push typicky doběhne dávno před výsledkem; visící krok odpověď zdrží nejvýš o 300 ms
+      // (nedoběhnutý push = worker vezme příkaz kickem/pollem jako dřív).
+      await Promise.race([push, new Promise(resolve => setTimeout(resolve, 300))]);
       timing.mark(resolution ? 'longpoll-hit' : 'longpoll-miss');
       return timed(202, { ...queued, ...(resolution ? { resolution } : {}) });
     }
