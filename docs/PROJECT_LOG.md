@@ -304,7 +304,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Konec DISARMED, flat. Migraci (navázání v admission RPC) jsem nedoporučil (riziko pro brzdy
   vs. ~60 ms); místo ní `8652e136`: předčtení `relayIdle` souběžně s admission + ověřený push
   přeruší běžící poll (nejvýš 1× za delivery). Fronta medián ~194 ms (ráno ~330), 8/8 pushem.
-  Nález: stáří ceny v lístku měří příchod notifikace, ne změnu ceny (drift gate 2× správně blokoval).
+  Nález: lístek bral cenu z animované svíčky, která bez rAF (karta na pozadí) uvízla — zaostával
+  o 9 ticků s „před 0 s“ (drift gate 2× správně blokoval). Opraveno `915bb2dd` (`feed.final`).
 - Otevřené: samostatné tajemství podpisu pushů (změna secrets → souhlas); ověřit `tradeDate`
   a poplatky na Lucid; nativní iPhone (build hotový, instalace s Filipem).
 

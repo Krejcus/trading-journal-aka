@@ -192,5 +192,9 @@ i brzdy, a nasazuje se ručně (rozešlá historie) za ~60 ms. Místo ní:
 - **Nález (zobrazení, ne bezpečnost):** 2× `market-quote-drift` — lístek ukazoval bid/ask
   28 761,50/75 s „před 0 s“, TradingView 28 763,75 (9 ticků). `useLiveTicketQuote` bere jako
   čas ceny příchod jakékoli notifikace kanálu, ne změnu ceny → údaj o stáří může lhát. Worker
-  má vlastní čerstvou IBKR cenu a drift gate nic nepustil. Oprava = samostatný úkol (INV-UI).
+  má vlastní čerstvou IBKR cenu a drift gate nic nepustil. **Opraveno `915bb2dd`:** skutečná
+  příčina byla animace přehrání ticků — bez `requestAnimationFrame` (skrytý panel/karta na
+  pozadí) uvízla v dokreslení a `current()` vracel starou svíčku. Panel objednávky (a hlídač BE)
+  bere `feed.final(root)` bez přehrání. Ověřeno na produkci ve skrytém panelu: lišta 28 752,75
+  vs. TradingView 28 752,50 (1 tick).
 - Konec 09:48 DISARMED, flat, DB audit od 08:40 UTC: 10 příkazů, vše 61038658 / MNQZ6, `succeeded`.
