@@ -176,3 +176,21 @@ i brzdy, a nasazuje se ručně (rozešlá historie) za ~60 ms. Místo ní:
    řádek (claim je idempotentní). Testy: `tests/copierPushAbortsPoll.test.ts`,
    `tests/copierCommandPushRelay.test.ts`.
 - P2 (oponentura diffu): ověřený push přeruší poll nejvýš jednou pro danou delivery — přehrávání téže zprávy nezastaví polly ani obnovu hodin.
+
+## 9. Měření po zrychlení bez migrace (2. 11. 09:44–09:47, web/relay + worker `8652e136`)
+
+| verze | n | fronta (ms) | medián |
+|---|---|---|---|
+| ráno před změnou (kick + poll) | 11 | log `queueMs` | ~330 |
+| F1b′ (`ed17d09b`) — push | 6 | 188, 187, 279, 226, 418, 236 | ~231 |
+| + přerušení pollu (server bez předčtení) | 4 | 316, 282, 217, 250 | ~266 |
+| + předčtení `relayIdle` (`8652e136`) | 4 | 181, 236, 156, 208 | **~194** |
+
+- Všech 8 horkých příkazů po úpravě kicku prošlo pushem. Server: push 133–146 ms od zařazení
+  (claim RPC + broadcast), Realtime na Mac ~40–80 ms. Proti ránu −~135 ms (~40 %).
+- Malé vzorky (n=4) a různé chvíle trhu — čísla berte jako orientační.
+- **Nález (zobrazení, ne bezpečnost):** 2× `market-quote-drift` — lístek ukazoval bid/ask
+  28 761,50/75 s „před 0 s“, TradingView 28 763,75 (9 ticků). `useLiveTicketQuote` bere jako
+  čas ceny příchod jakékoli notifikace kanálu, ne změnu ceny → údaj o stáří může lhát. Worker
+  má vlastní čerstvou IBKR cenu a drift gate nic nepustil. Oprava = samostatný úkol (INV-UI).
+- Konec 09:48 DISARMED, flat, DB audit od 08:40 UTC: 10 příkazů, vše 61038658 / MNQZ6, `succeeded`.

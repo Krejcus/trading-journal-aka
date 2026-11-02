@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-02 — Fronta relaye (F1b′), zavření × ze snímku, poplatky v denním limitu (Claude, web/relay `ed17d09b`, worker `a83a214a`)
+### 2026-11-02 — Fronta relaye (F1b′), zavření × ze snímku, poplatky v denním limitu (Claude, web/relay + worker `8652e136`)
 
 - Proč: Filip po ranním měření „Všechny tři z ‚Co by pomohlo‘“. Návrh + oponentura:
   `docs/reviews/hot-path-f1b2-fees-close-20261102.md` (návrh OPRAVIT → zapracováno; diff OK s P2).
@@ -301,7 +301,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Poplatky: denní ztráta = min(ledger, čisté realized brokera téhož `tradeDate`) — INV-RISK-02.
 - DEMO 09:03–09:18: 4 round tripy 1 MNQ OK, fronta push ~231 ms / kick ~284 / ráno ~330 (zisk
   ~100 ms, menší než odhad); zavření 1,07–1,14 s (dřív 1,29); `lossPnlUsd` −146 broker vs. −89 ledger.
-  Konec DISARMED, flat. Další zrychlení fronty = navázání v admission RPC (migrace → souhlas).
+  Konec DISARMED, flat. Migraci (navázání v admission RPC) jsem nedoporučil (riziko pro brzdy
+  vs. ~60 ms); místo ní `8652e136`: předčtení `relayIdle` souběžně s admission + ověřený push
+  přeruší běžící poll (nejvýš 1× za delivery). Fronta medián ~194 ms (ráno ~330), 8/8 pushem.
+  Nález: stáří ceny v lístku měří příchod notifikace, ne změnu ceny (drift gate 2× správně blokoval).
 - Otevřené: samostatné tajemství podpisu pushů (změna secrets → souhlas); ověřit `tradeDate`
   a poplatky na Lucid; nativní iPhone (build hotový, instalace s Filipem).
 
