@@ -64,6 +64,15 @@ describe('obchodní lišta na telefonu', () => {
     expect(end).toMatch(/if \(moved\) return;\s*engine\.select\(id\);/);
   });
 
+  it('přepnutí intervalu jako TradingView: zoom (šířka svíček) zůstane, skok na poslední svíčku; plný reset jen při otevření', () => {
+    const source = readFileSync('components/day/DayFullscreenChart.tsx', 'utf8');
+    expect(source).toMatch(/carriedSpacingRef\.current = barSpacingRef\.current;/);
+    expect(source).toMatch(/applyOptions\(\{ barSpacing: carried \}\);\s*chart\.timeScale\(\)\.scrollToRealTime\(\);/);
+    expect(source).toMatch(/\} else \{\s*resetChartView\(target\);/);
+    // Výchozí šířku nového grafu (před převzetím výřezu) si nepamatovat.
+    expect(source).toMatch(/if \(!resetDoneRef\.current\.has\(api\)\) return;/);
+  });
+
   it('P&L skupiny v hlavičce: popisek obchodu, čekající vstup, jeden účet', () => {
     expect(accountsLabel(1)).toBe('1 účet');
     expect(accountsLabel(3)).toBe('3 účty');

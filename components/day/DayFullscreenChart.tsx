@@ -515,11 +515,34 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   // eslint-disable-next-line react-hooks/exhaustive-deps -- panely čte z aktuálního renderu
   }, [replayOn, replayPlaying, replayStep, replayCandleMode, replaySpeed, fullRaw, fullRawWithHistory, paneCount, api, extraApis, paneTfKey, timeframe]);
   const timing = selectedTrade ? tradeChartTiming(selectedTrade) : { entryMs: anchor.entryTime!, exitMs: anchor.timestamp };
-  // Každý nový graf (otevření, změna intervalu) začíná jako „Reset chart view“:
-  // poslední svíčka vpravo, výchozí šířka svíček, automatické měřítko ceny.
+  // Nový graf (otevření, změna intervalu) jako v TradingView: první otevření =
+  // „Reset chart view“ (poslední svíčka vpravo, výchozí šířka svíček, automatické
+  // měřítko ceny). Přepnutí intervalu šířku svíček (zoom) převezme z předchozího
+  // grafu a jen skočí na poslední svíčku s automatickým měřítkem — na 1m i 5m je
+  // tak vidět stejný počet svíček (Filip 2. 11., video z TV).
   // Platí pro LIVE a dnešní den deníku; starší dny a obchody drží svůj výřez.
   const resetViewOnOpen = Boolean(live) || Boolean(ctl?.isToday && !selectedTrade);
   const resetDoneRef = useRef(new WeakSet<ChartViewApi>());
+  /** Poslední šířka svíčky hlavního grafu (px) a šířka převzatá při přepnutí intervalu. */
+  const barSpacingRef = useRef<number | null>(null);
+  const carriedSpacingRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!api || !resetViewOnOpen) return undefined;
+    let timeScale: ReturnType<ReturnType<ChartViewApi['controller']['getChart']>['timeScale']>;
+    try { timeScale = api.controller.getChart().timeScale(); } catch { return undefined; }
+    const remember = () => {
+      // Výchozí šířku nového grafu (před převzetím výřezu) si nepamatovat.
+      if (!resetDoneRef.current.has(api)) return;
+      const range = timeScale.getVisibleLogicalRange();
+      const width = timeScale.width();
+      if (range && width > 0 && range.to > range.from) barSpacingRef.current = width / (range.to - range.from);
+    };
+    timeScale.subscribeVisibleLogicalRangeChange(remember);
+    return () => {
+      timeScale.unsubscribeVisibleLogicalRangeChange(remember);
+      carriedSpacingRef.current = barSpacingRef.current;
+    };
+  }, [api, resetViewOnOpen]);
   useEffect(() => {
     if (!resetViewOnOpen || replayPhase !== 'off') return;
     const targets = [api, ...extraApis].filter((item): item is ChartViewApi => Boolean(item) && !resetDoneRef.current.has(item!));
@@ -531,8 +554,16 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           try {
             // Až když graf má svíčky — jinak by se výřez nastavil prázdnému grafu.
             if (!target.controller.getSeries()?.data().length) continue;
+            const carried = target === api ? carriedSpacingRef.current : null;
+            if (carried != null && Number.isFinite(carried) && carried > 0) {
+              const chart = target.controller.getChart();
+              (['right', 'left'] as const).forEach(scaleId => { try { chart.priceScale(scaleId).setAutoScale(true); } catch { /* osa není v grafu */ } });
+              chart.timeScale().applyOptions({ barSpacing: carried });
+              chart.timeScale().scrollToRealTime();
+            } else {
+              resetChartView(target);
+            }
             resetDoneRef.current.add(target);
-            resetChartView(target);
           } catch { /* graf mezitím zanikl */ }
         }
       });
