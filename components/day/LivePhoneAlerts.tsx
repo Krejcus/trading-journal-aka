@@ -70,8 +70,9 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
   onRemove: (id: string) => void;
 }) {
   const [drag, setDrag] = useState<{ id: string; price: number } | null>(null);
-  const shown = alerts.map(alert => (drag?.id === alert.id ? { ...alert, price: drag.price } : alert));
-  const { ys, paneWidth, paneHeight, scaleWidth } = usePaneTracking(api, shown.map(alert => alert.price));
+  // Při tažení se kreslí cena pod prstem; uložená cena (`alert.price`) zůstává do puštění.
+  const shownPrice = (alert: PriceAlert) => (drag?.id === alert.id ? drag.price : alert.price);
+  const { ys, paneWidth, paneHeight, scaleWidth } = usePaneTracking(api, alerts.map(shownPrice));
   const pressRef = useRef<{ id: string; y0: number; moved: boolean } | null>(null);
   const lastTapRef = useRef<{ id: string; at: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -99,7 +100,7 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
 
   return (
     <div ref={rootRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 14 }} data-price-alert-lines>
-      {shown.map((alert, index) => {
+      {alerts.map((alert, index) => {
         const y = ys[index];
         if (y == null || y < 0 || y > paneHeight) return null;
         const selected = selectedId === alert.id;
@@ -160,7 +161,7 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
                 <X size={11} />
               </button>
               <span style={{ position: 'absolute', left: paneWidth + 2, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 4, height: 18, borderRadius: 4, display: 'grid', placeItems: 'center', background: rgba(color, 0.8), color: '#fff', fontSize: 9.5, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
-                {formatLivePrice(alert.price)}
+                {formatLivePrice(shownPrice(alert))}
               </span>
             </>}
           </div>
