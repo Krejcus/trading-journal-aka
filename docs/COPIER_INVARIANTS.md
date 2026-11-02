@@ -1141,8 +1141,10 @@ existující ochranu.
   den). Jinak ledger jako dřív — nikdy volnější. Počet ztrátových obchodů zůstává
   z ledgeru (hrubý). Broker realized je celoúčtový (i obchody mimo appku) → jen
   přísnější; status ukazuje `dailyStats.lossPnlUsd` a `lossPnlSource`. Test:
-  `tests/copierDailyLossFees.test.ts`. Neověřeno: že Lucid (leader naostro) vede
-  `realizedPnL` denně a s poplatky jako DEMO.
+  `tests/copierDailyLossFees.test.ts`. Lucid: připojení leadera běží ve stejném Tradovate
+  prostředí `demo` (stejné API a entita `cashBalance`) jako DEMO8661118, kde je `tradeDate`
+  i čisté P&L ověřené naostro (2. 11.); formální potvrzení až v den s leaderem — bez
+  `tradeDate` platí ledger (nikdy volnější).
 - Bezpečné změny vs. nebezpečné: Bezpečné je varovat/pauznout a po flat
   durable locknout. Nebezpečné je ukončit správu protective orders jen proto,
   že právě skončilo okno.
