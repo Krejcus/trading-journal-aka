@@ -163,9 +163,10 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   useEffect(() => { if (!chartPosition.summary) setAccountsOpen(false); }, [chartPosition.summary]);
   // Karty vlevo dole, které nevznikly z událostí kopírky (upozornění).
   const [cards, setCards] = useState<TradeToast[]>([]);
-  const card = useCallback((tone: TradeToast['tone'], badge: string, title: string, line: string, sticky = false) => {
+  // Lokální karty nikdy nejsou sticky (nesmí se hromadit nad lištou ani vytlačit kartu rizika).
+  const card = useCallback((tone: TradeToast['tone'], badge: string, title: string, line: string, ms?: number) => {
     const at = Date.now();
-    setCards(current => [...current.slice(-5), { id: `local-${at}-${Math.random().toString(36).slice(2, 6)}`, at, tone, badge, title, line, pnl: null, accounts: 0, sticky }]);
+    setCards(current => [...current.slice(-5), { id: `local-${at}-${Math.random().toString(36).slice(2, 6)}`, at, tone, badge, title, line, pnl: null, accounts: 0, sticky: false, ms }]);
   }, []);
   // Upozornění na cenu: zatím jen v tomto zařízení (hlídání a doručení napojí datová vrstva).
   const [alertStore] = useState(() => createLocalPriceAlertStore(typeof window === 'undefined' ? null : window.localStorage));
@@ -185,7 +186,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       seenAlertEvents.current.add(event.id);
       const alert = alertStore.getState().alerts.find(item => item.id === event.alertId);
       if (!alert) continue;
-      card('amber', 'Upoz.', alertTitle(alert), alert.note ? `${alert.note} · cena ${event.price.toFixed(2)}` : `cena ${event.price.toFixed(2)}`, true);
+      card('amber', 'Upoz.', alertTitle(alert), alert.note ? `${alert.note} · cena ${event.price.toFixed(2)}` : `cena ${event.price.toFixed(2)}`, 8_000);
       setFlashIds(current => new Set(current).add(alert.id));
       window.setTimeout(() => setFlashIds(current => { const next = new Set(current); next.delete(alert.id); return next; }), 2_400);
     }
@@ -319,7 +320,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         onPositionOrder: (drawing, { lastPrice }) => {
           if (lastPrice == null) { setNotice({ key: Date.now(), text: 'Cena trhu zatím není — objednávku nejde připravit.' }); return; }
           try {
-            const { draft, quantity } = draftFromPositionBox(drawing, LIVE_PHONE_INSTRUMENT, quoteOf(lastPrice));
+            const { draft, quantity } = draftFromPositionBox(drawing, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice));
             setOrder({ key: Date.now(), draft: { ...draft, sizing: 'qty', quantity: Math.max(1, quantity) } });
           } catch (error) {
             setNotice({ key: Date.now(), text: error instanceof Error ? error.message : 'Position box nejde převést na objednávku.' });

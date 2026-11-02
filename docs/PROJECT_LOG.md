@@ -585,6 +585,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
     iOS nebo hlas. Hlídat má Mac worker z IBKR ticků (bez přístupu
     k příkazům), doručení přes stávající frontu notifikací (APNs, web push).
     Nic z upozornění se nestaví bez dalšího „ano“.
+- 2. 11. odpoledne — Filip schválil náhledy a řekl „vše postav, data napojí jiná session“:
+  - Čáry obchodu jako na PC (`LivePhoneOrderLines` = `BacktestOrderLinesOverlay` +
+    `livePositionChartLines`), na telefonu klepnutí = výběr, pak tah (jen v ploše
+    grafu), × vždy dvoukrokově; akce jen přes volitelné `trade.manage` (nenapojeno →
+    čáry jen zobrazení). Zámek a „odesílám“ v rodiči.
+  - Plusko u crosshairu (malé, průsvitné, nad štítky) → limit/stop z čerstvé kotace
+    přes stávající list objednávky, upozornění hned podle posledního nastavení,
+    vodorovná čára. Odeslání z listu (i z position boxu) znovu odmítne limit/stop
+    za trhem.
+  - Upozornění: `lib/priceAlerts.ts` (zatím `localStorage`), čára se zvonečkem
+    (tloušťka, styl, barva), výběr = cena + ×, vybrané jde táhnout (karta
+    „Upozornění posunuto“), dvojklep = nastavení, seznam pod zvonkem.
+  - Karty vlevo dole = `LiveTradeToasts` z událostí kopírky (jako PC); sticky
+    karty nic nevytlačí; lokální karty upozornění nejsou sticky (8 s).
+  - Šipky plnění: primitiva deníku (`hoverAt` pro klepnutí) z `LiveFillMarker[]`
+    — slot `fills` nenapojen.
+  - Kresby aktivní až po klepnutí (DayTouchDrawLayer), zoom při změně intervalu
+    zůstává jako v TradingView (plný reset jen při otevření).
+  - Vrstva LIVE v grafu je pod listy a menu LIVE ▾ (z 20, isolation); ve dvou
+    oknech štítky ne, pozice cenovými čarami do všech oken.
+  - Oponentura: 1. kolo OPRAVIT (vrstvy přes LIVE ▾, dvě okna, × jedním
+    klepnutím, zámek v odpojované komponentě, plusko ze staré ceny, sticky
+    karty, zásah upozornění), 2. kolo OK s výhradami — vše opraveno.
+  - Předávka pro datovou session: `docs/PHONE_LIVE_DATA_HANDOFF.md`.
+- Celá sada: 6535 testů zelených (2. 11. odpoledne), tsc čistý.
 - Celá sada: 6408 testů zelených (2. 11.). Jediný pád je cizí baseline
   `candleAggregationEquivalence` (stejně tsc).
 

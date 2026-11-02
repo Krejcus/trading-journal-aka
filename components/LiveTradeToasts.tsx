@@ -19,9 +19,9 @@ const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boo
   const [hovered, setHovered] = useState(false);
   useEffect(() => {
     if (toast.sticky || hovered) return undefined;
-    const timer = window.setTimeout(onClose, TRADE_TOAST_MS);
+    const timer = window.setTimeout(onClose, toast.ms ?? TRADE_TOAST_MS);
     return () => window.clearTimeout(timer);
-  }, [hovered, onClose, toast.sticky]);
+  }, [hovered, onClose, toast.ms, toast.sticky]);
   return (
     <div
       role="status"

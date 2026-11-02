@@ -26,6 +26,8 @@ export interface TradeToast {
   accounts: number;
   /** Problém: nezmizí sám. */
   sticky: boolean;
+  /** Jak dlouho karta vydrží (ms); jinak TRADE_TOAST_MS. Upozornění na cenu 8 s. */
+  ms?: number;
 }
 
 const price = (value: number | undefined) => (value == null ? '—' : value.toFixed(2));

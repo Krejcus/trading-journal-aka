@@ -157,3 +157,15 @@ describe('oponentura 2. 11. — vrstvy, okna, ×, plusko, karty', () => {
     expect(readFileSync('components/day/LivePhoneChart.tsx', 'utf8')).toMatch(/enabled=\{!replay && slots\.fillsOpen != null\}/);
   });
 });
+
+describe('oponentura 2. 11., 2. kolo', () => {
+  it('plusko leží nad štítky čar (klepnutí na + nikdy netrefí × u pozice)', () => {
+    expect(readFileSync('components/day/LivePhoneAlerts.tsx', 'utf8')).toMatch(/zIndex: 130, pointerEvents: 'auto', width: 16, height: 16/);
+    expect(readFileSync('components/BacktestOrderLinesOverlay.tsx', 'utf8')).toMatch(/z-\[115\]/);
+  });
+  it('lokální karty (upozornění) nejsou sticky; position box bere čerstvou kotaci', () => {
+    const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
+    expect(phone).toMatch(/sticky: false, ms \}/);
+    expect(phone).toMatch(/draftFromPositionBox\(drawing, LIVE_PHONE_INSTRUMENT, freshQuote\(\) \?\? quoteOf\(lastPrice\)\)/);
+  });
+});

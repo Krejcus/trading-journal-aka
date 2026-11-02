@@ -54,6 +54,11 @@ v desku) doplnit:
 - Chybí testy chování (render overlaye se `selectToDrag`, `LivePhoneOrderLines`
   s mock `manage`: starý startLine = nic, druhý tah během letu odmítnut, bez
   `manage` žádné ×/BE/tah, `canClose=false` = žádné × u pozice) — dodat s napojením.
+- Plusko u crosshairu je nad štítky (z 130 > 115), klepnutí na něj tedy nikdy
+  netrefí × u pozice. Při napojení to ověřit na iPhonu (crosshair u ceny vstupu).
+- Ve dvou oknech (na šířku je 2h výchozí) se štítky, upozornění ani plusko
+  nekreslí — pozice jde cenovými čarami do všech oken (bez „odesílám“). Případně
+  doplnit upozornění i tam.
 - Lišta `LivePhonePositionBar` (Přidat SL/TP, Flatten) zůstává; po napojení
   zvážit, jestli ji štítky nenahradí (× u pozice = zavřít obchod jako na PC).
 
@@ -98,6 +103,8 @@ serverovým se stejným rozhraním:
   kopírky (INV-WATCH-01): záplava upozornění nesmí vyčerpat limit ani potlačit
   rizikové notifikace; rizikové dál otevírají `live:overview`. Hlas: nativně (AVSpeechSynthesizer přes Capacitor
   plugin) v telefonu, `speechSynthesis` na PC; jen když `channels.voice`.
+- **Karty upozornění** nejsou sticky (8 s, `TradeToast.ms`), aby se „pokaždé“
+  nehromadilo nad lištou pozice; sticky zůstávají jen problémy kopírky.
 - **V appce**: do slotu `alertEvents` posílat spuštění se stabilními unikátními
   id → čára blikne a vyjede karta „Upoz.“ (už postavené; sticky karty rizika se
   nevytlačí). `alertWatch` = text jen z čerstvého heartbeatu vlákna upozornění,

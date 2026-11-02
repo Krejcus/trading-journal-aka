@@ -196,7 +196,7 @@ export function LivePhoneCrosshairPlus({ api, onPlus }: { api: ChartViewApi | nu
         const raw = api.controller.getSeries().coordinateToPrice(point.y);
         if (raw != null && Number.isFinite(raw)) onPlus(Math.round(raw / TICK) * TICK);
       }}
-      style={{ position: 'absolute', left: paneWidth - 22, top: point.y, transform: 'translateY(-50%)', zIndex: 16, pointerEvents: 'auto', width: 16, height: 16, borderRadius: 5, padding: 0, display: 'grid', placeItems: 'center', fontSize: 12, lineHeight: 1, color: 'rgba(232,236,246,.9)', background: 'rgba(255,255,255,.07)', border: '1px solid rgba(190,200,255,.28)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', cursor: 'pointer' }}
+      style={{ position: 'absolute', left: paneWidth - 22, top: point.y, transform: 'translateY(-50%)', zIndex: 130, pointerEvents: 'auto', width: 16, height: 16, borderRadius: 5, padding: 0, display: 'grid', placeItems: 'center', fontSize: 12, lineHeight: 1, color: 'rgba(232,236,246,.9)', background: 'rgba(255,255,255,.07)', border: '1px solid rgba(190,200,255,.28)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', cursor: 'pointer' }}
     >
       +
       <span aria-hidden style={{ position: 'absolute', inset: -12 }} />
