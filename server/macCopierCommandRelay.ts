@@ -126,6 +126,14 @@ export function startMacCopierCommandRelay(options: {
   /** Poslední přijatá (zatím neověřená) push zpráva + čím ji ověřit; ověřuje až smyčka a jen
    *  nejnovější — záplava podvrhů na tématu tak nepřidá víc ověření než otočení smyčky. */
   let pushMailbox: { payload: unknown; key: string; deviceId: string } | null = null;
+  /** Právě běžící poll-v2 (F1b′): ověřený push pro tutéž nečinnou delivery ho smí přerušit. */
+  let pollAbort: AbortController | null = null;
+  /** Nejvýš jedno ověření podpisu za běžící poll — záplava zpráv nepřidá práci ani přerušení. */
+  let pollPushChecked = false;
+  /** Delivery, pro kterou už push jednou poll přerušil — přehrání téže zprávy (útok s tématem)
+   *  nesmí přerušovat další polly a tím zastavit obnovu hodin i doručení brzd (oponentura P2). */
+  let pollAbortedFor: string | null = null;
+  const POLL_SUPERSEDED_BY_PUSH = 'relay-poll-superseded-by-push';
   const loopAbort = new AbortController();
 
   const sleep = (ms: number) => new Promise<void>(resolve => {
@@ -175,6 +183,16 @@ export function startMacCopierCommandRelay(options: {
       pushMailbox = { payload, key, deviceId };
       kickPending = true;
       wake?.();
+      // Push dorazil během pollu: poll by vrátil tentýž řádek až po svém RTT. Přerušit jen po
+      // OVĚŘENÉM podpisu a jen pro aktuální nečinnou delivery — podvrh ani starý push poll nezastaví.
+      if (pollAbort && !pollPushChecked) {
+        pollPushChecked = true;
+        const verified = verifyCopierCommandPush(payload, key, deviceId);
+        if (verified && verified.deliveryId === delivery?.idleDeliveryId() && verified.deliveryId !== pollAbortedFor) {
+          pollAbortedFor = verified.deliveryId;
+          pollAbort.abort(new Error(POLL_SUPERSEDED_BY_PUSH));
+        }
+      }
     });
   };
   /** Status pro relay (heartbeat/background): + nečinná delivery pro F1b′. */
@@ -436,9 +454,24 @@ export function startMacCopierCommandRelay(options: {
       }
     })();
   };
+  /** poll-v2 s vlastním přerušením (F1b′); ostatní požadavky doručení jako dřív. */
+  const deliveryRequest = async (body: Record<string, unknown>) => {
+    if (body.action !== 'poll-v2') return request(body, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
+    const controller = new AbortController();
+    const forward = () => controller.abort(loopAbort.signal.reason);
+    if (loopAbort.signal.aborted) forward(); else loopAbort.signal.addEventListener('abort', forward, { once: true });
+    pollAbort = controller;
+    pollPushChecked = false;
+    try {
+      return await request(body, RELAY_STATUS_TIMEOUT_MS, controller.signal);
+    } finally {
+      pollAbort = null;
+      loopAbort.signal.removeEventListener('abort', forward);
+    }
+  };
   const delivery = options.deliveryStore ? recoverableCopierDelivery({
     store: options.deliveryStore, agent: options.agent,
-    request: body => request(body, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal),
+    request: deliveryRequest,
     nextRevision: () => ++statusRevision,
     isActive: () => !stopped,
     // ACK uložil výsledek i autoritativní status → budíček pro otevřené LIVE.
@@ -552,6 +585,8 @@ export function startMacCopierCommandRelay(options: {
         }
       } catch (error) {
         if (stopped && loopAbort.signal.aborted) break;
+        // Poll přerušený ověřeným pushem není selhání: hned další kolo vezme push ze schránky.
+        if (error instanceof Error && error.message === POLL_SUPERSEDED_BY_PUSH) continue;
         failures += 1;
         if (failures === 1 || failures % 20 === 0) {
           console.error(`${new Date().toISOString()} COPIER RELAY (${failures}. selhání v řadě) ${error instanceof Error ? error.message : String(error)}`);

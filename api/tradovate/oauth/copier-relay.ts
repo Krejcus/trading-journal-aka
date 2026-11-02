@@ -34,7 +34,7 @@ import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '
 import { validateTvBarsCapture } from '../../../lib/tradingViewBars.js';
 import { copierStatusNudgeKey, copierStatusNudgeTopic, tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
 import { copierCommandPushGrant } from '../../../server/copierCommandPush.js';
-import { copierKickWaitsForPush, pushBoundCopierCommand, scheduleCopierKickAfterPush } from '../../../server/copierCommandPushRelay.js';
+import { copierKickWaitsForPush, pushBoundCopierCommand, readCopierRelayIdle, scheduleCopierKickAfterPush } from '../../../server/copierCommandPushRelay.js';
 
 /** Téma a klíč kanálu ceny + téma budíčku statusu pro worker; bez tajemství pole chybí (nikdy 502). */
 const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string; nudgeTopic?: string; nudgeKey?: string } => {
@@ -472,6 +472,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.body?.command?.type === 'snapshot-test' && req.body?.command?.repairCamera !== true) {
         return res.status(400).json({ error: 'snapshot-test-use-dedicated-endpoint' });
       }
+      // F1b′: nečinná delivery workeru se čte souběžně s admission (nikdy nevyhodí).
+      const relayIdle = readCopierRelayIdle({ db, userId, connectionId });
       const queued = await enqueueTradovateCopierCommand({
         db, userId, connectionId, command: req.body?.command,
         idempotencyKey: req.body?.idempotencyKey,
@@ -485,7 +487,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // F1b′: navázání k nečinné delivery + podepsaný push souběžně s long-pollem.
       // Nikdy nevyhodí, každý krok ≤ 1 s; výsledek nemění 202 ani nezdrží brzdu.
       const push = pushBoundCopierCommand({ db, deviceId: queued.deviceId, supabaseUrl: config.supabaseUrl,
-        serviceRoleKey: config.supabaseServiceRoleKey }).then(outcome => { timing.mark(`push-${outcome}`); return outcome; });
+        serviceRoleKey: config.supabaseServiceRoleKey, prefetched: relayIdle }).then(outcome => { timing.mark(`push-${outcome}`); return outcome; });
       const sendKick = async () => {
         try {
           await fetch(`${config.supabaseUrl}/realtime/v1/api/broadcast`, {

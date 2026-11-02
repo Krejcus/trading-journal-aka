@@ -161,3 +161,18 @@ ve workeru (`RELAY CMD queueMs`; DB `claimed_at` už neměří worker — váže
   ověření 210–244 ms.
 - **Poplatky:** Tradovate DEMO posílá `cashBalance.tradeDate` (2026-11-02) → `lossPnlUsd` −146
   (`broker`) proti ledgeru −89; limit 250 USD tak počítá skutečnou ztrátu.
+
+## 8. Zrychlení bez migrace (2. 11. odpoledne, Filip: „Ano udělej“)
+
+Migraci (navázání v admission RPC) jsem nedoporučil: mění atomickou admission, která hlídá
+i brzdy, a nasazuje se ručně (rozešlá historie) za ~60 ms. Místo ní:
+1. **Předčtení `relayIdle` souběžně s admission** (`readCopierRelayIdle` podle uživatele +
+   připojení; push ho použije jen při shodě `deviceId`, jinak čte sám). Nikdy nevyhodí. Zastaralé
+   předčtení (rotace mezi čtením a claimem) = claim vrátí hotový řádek → žádný push, kick.
+2. **Ověřený push přeruší běžící poll** workeru (dřív až +RTT pollu ~170 ms). Jen po ověřeném
+   podpisu, jen pro aktuální nečinnou delivery, nejvýš jedno ověření za běžící poll — podvrh ani
+   starý push poll nezastaví (jinak by záplava zpráv mohla blokovat i doručení brzd). Přerušený
+   poll není selhání (bez backoffu); další kolo vezme push, nebo poll se stejným id vrátí tentýž
+   řádek (claim je idempotentní). Testy: `tests/copierPushAbortsPoll.test.ts`,
+   `tests/copierCommandPushRelay.test.ts`.
+- P2 (oponentura diffu): ověřený push přeruší poll nejvýš jednou pro danou delivery — přehrávání téže zprávy nezastaví polly ani obnovu hodin.

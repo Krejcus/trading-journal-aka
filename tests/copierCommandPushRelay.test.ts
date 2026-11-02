@@ -142,3 +142,21 @@ describe('F1b′ server: kick po pokusu o push (oponentura P2)', () => {
     expect(tl.events.some(event => event.startsWith('kick'))).toBe(false);
   });
 });
+
+describe('F1b′ server: předčtení relayIdle souběžně s admission', () => {
+  it('shoda zařízení → bez druhého čtení; jiné zařízení → čte se podle device_id', async () => {
+    process.env[TV_PRICE_CHANNEL_SECRET_ENV] = SECRET;
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 202 }));
+    const from = vi.fn();
+    const base = fakeDb({ claim: async () => row('claimed') });
+    const db = { ...base.db, from: (...args: unknown[]) => { from(...args); return (base.db as unknown as { from: (...a: unknown[]) => unknown }).from(...args); } } as unknown as SupabaseClient;
+    const fresh = { deviceId: DEVICE.toUpperCase(), relayIdle: { deliveryId: DELIVERY }, lastSeenAt: new Date(NOW - 300).toISOString() };
+    expect(await pushBoundCopierCommand({ db, deviceId: DEVICE, supabaseUrl: 'https://s', serviceRoleKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch, now: () => NOW, prefetched: Promise.resolve(fresh) })).toBe('pushed');
+    expect(from).not.toHaveBeenCalled();
+    expect(await pushBoundCopierCommand({ db, deviceId: DEVICE, supabaseUrl: 'https://s', serviceRoleKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch, now: () => NOW,
+      prefetched: Promise.resolve({ ...fresh, deviceId: '11111111-1111-4111-8111-111111111111' }) })).toBe('pushed');
+    expect(from).toHaveBeenCalledTimes(1);
+  });
+});

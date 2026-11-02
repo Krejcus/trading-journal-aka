@@ -11,6 +11,31 @@ export type CopierPushOutcome = 'pushed' | 'no-grant' | 'no-idle' | 'stale' | 'n
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Nečinná delivery workeru z runtime řádku (jen pole potřebná pro push). */
+export interface CopierRelayIdleRow { deviceId: string; relayIdle: { deliveryId?: unknown } | null; lastSeenAt: string }
+
+/**
+ * Předčtení `relayIdle` souběžně s admission (2. 11. odpoledne): zařízení ještě není známé,
+ * proto podle uživatele + připojení (jako výběr cíle). Použije se jen při shodě `deviceId`
+ * s řádkem z admission; jinak push čte sám. Nikdy nevyhodí (null).
+ */
+export async function readCopierRelayIdle(options: {
+  db: SupabaseClient; userId: string; connectionId: string; stepTimeoutMs?: number;
+}): Promise<CopierRelayIdleRow | null> {
+  try {
+    const { data, error } = await options.db.from('tradovate_copier_device_runtime')
+      .select('device_id,relay_idle:status->relayIdle,last_seen_at')
+      .eq('user_id', options.userId).eq('connection_id', options.connectionId)
+      .order('last_seen_at', { ascending: false }).limit(1)
+      .abortSignal(AbortSignal.timeout(options.stepTimeoutMs ?? COPIER_PUSH_STEP_TIMEOUT_MS))
+      .maybeSingle<{ device_id: string; relay_idle: { deliveryId?: unknown } | null; last_seen_at: string }>();
+    if (error || !data) return null;
+    return { deviceId: data.device_id, relayIdle: data.relay_idle, lastSeenAt: data.last_seen_at };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * F1b′ (docs/reviews/hot-path-f1b2-fees-close-20261102.md): po durable enqueue naváže
  * frontu zařízení k jeho nečinné delivery STEJNOU RPC jako poll workeru (advisory lock,
@@ -29,18 +54,27 @@ export async function pushBoundCopierCommand(options: {
   fetchImpl?: typeof fetch;
   now?: () => number;
   stepTimeoutMs?: number;
+  /** Předčtení z `readCopierRelayIdle` (souběžně s admission); jiné zařízení = čte se znovu. */
+  prefetched?: Promise<CopierRelayIdleRow | null>;
 }): Promise<CopierPushOutcome> {
   try {
     const grant = copierCommandPushGrant(options.deviceId);
     if (!grant) return 'no-grant';
     const now = options.now ?? Date.now;
     const step = options.stepTimeoutMs ?? COPIER_PUSH_STEP_TIMEOUT_MS;
-    const { data, error } = await options.db.from('tradovate_copier_device_runtime')
-      .select('relay_idle:status->relayIdle,last_seen_at')
-      .eq('device_id', options.deviceId)
-      .abortSignal(AbortSignal.timeout(step))
-      .maybeSingle<{ relay_idle: { deliveryId?: unknown } | null; last_seen_at: string }>();
-    if (error || !data) return 'failed';
+    const prefetched = options.prefetched ? await options.prefetched.catch(() => null) : null;
+    let data: { relay_idle: { deliveryId?: unknown } | null; last_seen_at: string } | null = null;
+    if (prefetched && prefetched.deviceId.toLowerCase() === options.deviceId.toLowerCase()) {
+      data = { relay_idle: prefetched.relayIdle, last_seen_at: prefetched.lastSeenAt };
+    } else {
+      const read = await options.db.from('tradovate_copier_device_runtime')
+        .select('relay_idle:status->relayIdle,last_seen_at')
+        .eq('device_id', options.deviceId)
+        .abortSignal(AbortSignal.timeout(step))
+        .maybeSingle<{ relay_idle: { deliveryId?: unknown } | null; last_seen_at: string }>();
+      if (read.error || !read.data) return 'failed';
+      data = read.data;
+    }
     const deliveryId = data.relay_idle?.deliveryId;
     if (typeof deliveryId !== 'string' || !UUID.test(deliveryId)) return 'no-idle';
     const seenAt = Date.parse(data.last_seen_at);

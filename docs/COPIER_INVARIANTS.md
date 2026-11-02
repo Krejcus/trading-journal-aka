@@ -950,7 +950,10 @@ existující ochranu.
   aktuální nečinnou delivery této session a s offsetem hodin z pollu ≤ 60 s; jinak
   poll (vrátí tentýž řádek). Dál jde stejným automatem (INV-RELAY-02). Prohlížeč
   `relayIdle` nedostane. Tajemství je společné s kanálem ceny (vlastní
-  `COPIER_PUSH_SIGNING_SECRET` = změna secrets, čeká na souhlas). Testy:
+  `COPIER_PUSH_SIGNING_SECRET` = změna secrets, čeká na souhlas). Ověřený push pro aktuální
+  nečinnou delivery smí přerušit právě běžící poll (nejvýš jedno ověření za poll; podvrh ani
+  starý push nikdy) — přerušení není selhání a poll se stejným id vrátí tentýž řádek. Server
+  čte `relayIdle` souběžně s admission (použije jen při shodě zařízení). Testy:
   `tests/copierCommandPushDelivery.test.ts`, `tests/copierCommandPushRelay.test.ts`,
   `tests/copierRelayPriceChannel.test.ts`.
 - Bezpečné změny vs. nebezpečné: Bezpečné je kanál vypnout (pole chybí)
