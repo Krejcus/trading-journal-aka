@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { copierKickWaitsForPush, pushBoundCopierCommand, scheduleCopierKickAfterPush } from '../server/copierCommandPushRelay';
-import { copierCommandPushGrant, verifyCopierCommandPush } from '../server/copierCommandPush';
+import { copierCommandPushGrant, signCopierCommandPush, verifyCopierCommandPush } from '../server/copierCommandPush';
 import { TV_PRICE_CHANNEL_SECRET_ENV } from '../server/tvPriceChannel';
 
 // F1b′ server: navázání + podepsaný push nikdy nevyhodí, každý krok ≤ limit, nic nepošle
@@ -158,5 +158,26 @@ describe('F1b′ server: předčtení relayIdle souběžně s admission', () => 
       fetchImpl: fetchImpl as unknown as typeof fetch, now: () => NOW,
       prefetched: Promise.resolve({ ...fresh, deviceId: '11111111-1111-4111-8111-111111111111' }) })).toBe('pushed');
     expect(from).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('F1b′: vlastní tajemství podpisu pushů (volitelné)', () => {
+  afterEach(() => { delete process.env.COPIER_PUSH_SIGNING_SECRET; });
+  it('bez vlastního tajemství platí sdílené; s ním jiné téma i klíč a starý veřejný klíč podpis neověří', () => {
+    process.env[TV_PRICE_CHANNEL_SECRET_ENV] = SECRET;
+    const shared = copierCommandPushGrant(DEVICE)!;
+    expect(shared).toEqual(copierCommandPushGrant(DEVICE, SECRET));
+    process.env.COPIER_PUSH_SIGNING_SECRET = 'z'.repeat(48);
+    const own = copierCommandPushGrant(DEVICE)!;
+    expect(own.topic).not.toBe(shared.topic);
+    expect(own.publicKey).not.toBe(shared.publicKey);
+    const message = signCopierCommandPush({ deviceId: DEVICE, deliveryId: DELIVERY, command: { id: 'c' } })!;
+    expect(verifyCopierCommandPush(message, own.publicKey, DEVICE)).not.toBeNull();
+    expect(verifyCopierCommandPush(message, shared.publicKey, DEVICE)).toBeNull();
+  });
+  it('krátké vlastní tajemství (< 32) se ignoruje — zůstává sdílené', () => {
+    process.env[TV_PRICE_CHANNEL_SECRET_ENV] = SECRET;
+    process.env.COPIER_PUSH_SIGNING_SECRET = 'short';
+    expect(copierCommandPushGrant(DEVICE)).toEqual(copierCommandPushGrant(DEVICE, SECRET));
   });
 });

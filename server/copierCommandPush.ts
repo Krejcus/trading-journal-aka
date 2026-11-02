@@ -14,6 +14,17 @@ import { TV_PRICE_CHANNEL_SECRET_ENV } from './tvPriceChannel.js';
  * žádné 5xx na cestě brzd — INV-BRAKE-03). Téma, klíče ani tělo se nelogují.
  */
 export const COPIER_COMMAND_PUSH_EVENT = 'cmd';
+/**
+ * Vlastní tajemství podpisu pushů (2. 11. 2026, oponentura P2): když je nastavené (≥ 32 znaků),
+ * podpis i téma se odvozují z něj, takže rotace kanálu ceny a příkazů jsou nezávislé. Jinak
+ * dosavadní `TV_PRICE_CHANNEL_SECRET`. Worker dostává jen veřejný klíč z pollu → výměnu převezme
+ * sám; pushe podepsané novým klíčem před jeho dalším pollem se zahodí (kick/poll jako dřív).
+ */
+export const COPIER_PUSH_SIGNING_SECRET_ENV = 'COPIER_PUSH_SIGNING_SECRET';
+const pushSecretFromEnv = (): string | undefined => {
+  const own = process.env[COPIER_PUSH_SIGNING_SECRET_ENV]?.trim();
+  return own && own.length >= 32 ? own : process.env[TV_PRICE_CHANNEL_SECRET_ENV];
+};
 export const COPIER_COMMAND_PUSH_VERSION = 1;
 /** Strop těla zprávy (ochrana ověřování před záplavou podvrhů). */
 export const COPIER_COMMAND_PUSH_MAX_BODY = 64_000;
@@ -46,7 +57,7 @@ export interface CopierCommandPushGrant {
 /** Téma a veřejný klíč pro worker (posílá se v `realtime` odpovědi poll-v2). */
 export function copierCommandPushGrant(
   deviceId: unknown,
-  secret: string | undefined = process.env[TV_PRICE_CHANNEL_SECRET_ENV],
+  secret: string | undefined = pushSecretFromEnv(),
 ): CopierCommandPushGrant | null {
   try {
     const device = deviceSecret(deviceId, secret);
@@ -64,7 +75,7 @@ export interface CopierCommandPushMessage { body: string; sig: string }
 /** Podepsaná zpráva s navázaným řádkem; `null` = nepushovat (kick a poll jako dřív). */
 export function signCopierCommandPush(
   input: { deviceId: string; deliveryId: string; command: unknown },
-  secret: string | undefined = process.env[TV_PRICE_CHANNEL_SECRET_ENV],
+  secret: string | undefined = pushSecretFromEnv(),
 ): CopierCommandPushMessage | null {
   try {
     const device = deviceSecret(input.deviceId, secret);
