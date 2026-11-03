@@ -318,9 +318,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověřeno z appky (prod web, DEMO8661118): vstup Limit 1 → přikoupení Limit 1 (panel přitáhl SL/TP pozice,
   štítek „přikoupení“) → Long 2 ze 2 lístků bez incidentu → tah čáry SL = posun obou nohou (zápis 249 ms,
   ověřeno adaptérem) → čekající přikoupení s vlastní čárou → × „Opravdu?“ = zrušeno → × u pozice = zavřeno
-  celé (ověřeno čtením) → DISARM, flat. BE bylo správně zablokované (blíž než 8 ticků od trhu); Market
-  přikoupení neověřeno (IB Gateway neběží — Market z appky jen s IBKR).
-- Otevřené: Market přikoupení a BE z appky při běžící IB Gateway; telefon prstem (list přikoupení, čáry).
+  celé (ověřeno čtením) → DISARM, flat. BE bylo nejdřív správně zablokované (blíž než 8 ticků od trhu).
+- Druhý běh (short): Short 1 → přikoupení Short 1 (Short 2 @ 28 223,63) → v zisku BE celé pozice z čáry
+  (dvoukrokové „Opravdu?“, druhý klik ≥ 350 ms — pojistka proti dvojkliku) = obě nohy SL na 28 223,75,
+  zápis 239 ms → Flatten (bezpečnostní cesta za DISARMED), flat. DEMO den −69,68 USD.
+- Otevřené: Market přikoupení (IB Gateway neběží, přihlášení jen Filip); telefon prstem (list přikoupení, čáry).
 
 ### 2026-11-03 — HTF FVG v grafu (FVG vyššího TF na nižším grafu, jako Pine) (Claude, nasazeno 3. 11. na Filipovo „nasaď“, jen web)
 
