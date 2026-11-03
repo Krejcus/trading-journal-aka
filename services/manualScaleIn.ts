@@ -144,7 +144,9 @@ export function leaderPositionModel(input: {
   };
   const tickets: ScaleInTicket[] = [];
   for (const record of input.records) {
-    if (record.status !== 'acknowledged' || record.bare || record.accountId !== input.leaderAccountId || record.symbol !== symbol) continue;
+    if (record.status !== 'acknowledged' || record.accountId !== input.leaderAccountId || record.symbol !== symbol) continue;
+    // Holý Market z lišty telefonu je lístkem až s doplněnými nohami („Přidat SL/TP“ = OCO na celou jeho
+    // pozici); bez nohou do pozice nepatří a brána ho vidí jako nekrytou část (3. 11., telefon).
     if (!record.entryId || !record.stopId || !record.targetId) continue;
     const entryLive = open(record.entryId);
     const stop = open(record.stopId);

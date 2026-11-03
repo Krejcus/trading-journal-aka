@@ -345,10 +345,10 @@ describe('scale-in: doplněné testy po nezávislé kontrole (3. 11.)', () => {
     expect(pendingAddViolation({ ...ok, net: 1 })).toBe('pozice je na druhé straně');
   });
 
-  it('filtry lístků: holý Market, jiný symbol, jiný účet, nepřijatý záznam do pozice nepatří', () => {
+  it('filtry lístků: holý Market bez nohou, jiný symbol, jiný účet, nepřijatý záznam do pozice nepatří', () => {
     const records = [
-      record('b1', { bare: true }), record('b2', { symbol: 'MNQH7' }), record('b3', { accountId: 1 }), record('b4', { status: 'unknown' }),
-      record('b5', { entryId: undefined }),
+      record('b1', { bare: true, stopId: undefined, targetId: undefined }), record('b2', { symbol: 'MNQH7' }), record('b3', { accountId: 1 }),
+      record('b4', { status: 'unknown' }), record('b5', { entryId: undefined }),
     ];
     const orders = records.flatMap(item => legs(item.operationId.slice('entry:'.length)));
     const m = model(records, orders, 1);
@@ -398,5 +398,16 @@ describe('hlídání nadkrytí: incident jen za zapnuté kopírky (Filip 3. 11.,
     expect(overCoverStep('warned', base)).toEqual({ next: 'incident', action: 'incident' });
     // Během rozpracovaných eventů počká na klid, ale stav `warned` nezahodí.
     expect(overCoverStep('warned', { ...base, transient: true })).toEqual({ next: 'warned', action: 'none' });
+  });
+});
+
+describe('holý Market z lišty telefonu s doplněnými nohami (3. 11.)', () => {
+  it('po „Přidat SL/TP“ je lístkem pozice: brána přikoupení projde, bez nohou ne', () => {
+    const attached = model([record('a1', { bare: true })], legs('a1'), 1);
+    expect(attached.tickets.map(ticket => ticket.operationId)).toEqual(['entry:a1']);
+    expect(gate(attached)).toEqual([]);
+    const naked = model([record('a1', { bare: true, stopId: undefined, targetId: undefined })], [], 1);
+    expect(naked.tickets).toEqual([]);
+    expect(gate(naked)).toContain('scale-in-foreign-position');
   });
 });
