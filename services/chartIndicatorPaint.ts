@@ -9,6 +9,8 @@ export interface RenderedFvgItem {
 export interface RenderedFvgSnapshot {
   regular: RenderedFvgItem[];
   entry: RenderedFvgItem[];
+  /** HTF FVG (vyšší timeframe na nižším grafu); kreslí se od prostřední vyšší svíčky. */
+  htf: RenderedFvgItem[];
 }
 
 export interface RenderedStructureItem {
@@ -64,7 +66,8 @@ const sameRenderedFvgItems = (left: RenderedFvgItem[], right: RenderedFvgItem[])
   });
 
 export const sameRenderedFvgSnapshot = (left: RenderedFvgSnapshot, right: RenderedFvgSnapshot): boolean =>
-  sameRenderedFvgItems(left.regular, right.regular) && sameRenderedFvgItems(left.entry, right.entry);
+  sameRenderedFvgItems(left.regular, right.regular) && sameRenderedFvgItems(left.entry, right.entry)
+  && sameRenderedFvgItems(left.htf, right.htf);
 
 const sameStructureEvent = (left: MarketStructureEvent, right: MarketStructureEvent) =>
   left.type === right.type

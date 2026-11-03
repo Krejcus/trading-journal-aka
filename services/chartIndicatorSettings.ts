@@ -1,6 +1,10 @@
 /** Shared data and visibility rules; safe to import in workers. */
 import type { MarketTimeframe } from './marketDataCalculations';
 
+/** Timeframe HTF FVG (vyšší než graf, do kterého se graf vejde celý). */
+export const HTF_FVG_TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h'] as const;
+export type HtfFvgTimeframe = typeof HTF_FVG_TIMEFRAMES[number];
+
 export interface IndicatorVisibilitySettings {
   minutes: boolean;
   minuteFrom: number;
@@ -32,6 +36,18 @@ export interface FvgIndicatorSettings {
   paneLabels: boolean;
   statusInputs: boolean;
   visibility: IndicatorVisibilitySettings;
+  /** HTF FVG (Pine skupina „HTF FVG“): FVG vyššího timeframe na grafu s nižším. */
+  htfEnabled: boolean;
+  htfTimeframe: HtfFvgTimeframe;
+  htfBullColor: string;
+  htfBearColor: string;
+  htfBullOpacity: number;
+  htfBearOpacity: number;
+  htfMitigatedTransparency: number;
+  htfMaxCount: number;
+  /** Prázdné = název timeframe („5m“). */
+  htfLabelText: string;
+  htfLabelColor: string;
 }
 
 export interface StructureIndicatorSettings {
@@ -154,6 +170,17 @@ export const DEFAULT_INDICATOR_SETTINGS: AlphaTradeIndicatorSettings = {
     paneLabels: true,
     statusInputs: true,
     visibility: visibilityDefaults(),
+    // Barvy, Mitig % a Max jako Pine (#9C27B0 / #FF5722 s průhledností 60).
+    htfEnabled: false,
+    htfTimeframe: '5m',
+    htfBullColor: '#9c27b0',
+    htfBearColor: '#ff5722',
+    htfBullOpacity: 40,
+    htfBearOpacity: 40,
+    htfMitigatedTransparency: 90,
+    htfMaxCount: 5,
+    htfLabelText: '',
+    htfLabelColor: '#ffffff',
   },
   structure: {
     enabled: true,
@@ -272,6 +299,9 @@ export const mergeIndicatorSettings = (saved: string | null): AlphaTradeIndicato
         bullOpacity: savedFvg?.bullOpacity ?? savedFvg?.fillOpacity ?? defaults.fvg.bullOpacity,
         bearOpacity: savedFvg?.bearOpacity ?? savedFvg?.fillOpacity ?? defaults.fvg.bearOpacity,
         visibility: { ...defaults.fvg.visibility, ...savedFvg?.visibility },
+        htfTimeframe: (HTF_FVG_TIMEFRAMES as readonly string[]).includes(String(savedFvg?.htfTimeframe))
+          ? savedFvg!.htfTimeframe!
+          : defaults.fvg.htfTimeframe,
       },
       structure: {
         ...defaults.structure,

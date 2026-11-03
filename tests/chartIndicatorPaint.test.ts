@@ -23,6 +23,7 @@ const fvgSnapshot = (): RenderedFvgSnapshot => ({
     },
   }],
   entry: [],
+  htf: [],
 });
 
 const structureSnapshot = (): RenderedStructureItem[] => [{

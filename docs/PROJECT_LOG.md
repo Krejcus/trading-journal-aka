@@ -288,6 +288,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-03 — HTF FVG v grafu (FVG vyššího TF na nižším grafu, jako Pine) (Claude, nasazeno 3. 11. na Filipovo „nasaď“, jen web)
+
+- Filip: „v indikátoru FVG si v TV můžu zapnout HTF FVG — na minutovém grafu vidět pětiminutový“.
+  Předloha `tradingview/alphatrade-fvg-instant-cz.pine`, skupina „HTF FVG“ (TF, barvy #9C27B0/#FF5722,
+  Mitig % 90, Max 5, text). V aplikaci: nastavení FVG → blok „📊 HTF FVG“ (Zobrazit, Timeframe
+  5m/15m/30m/1h/4h, Bull/Bear, Mitig %, Max, Text — prázdné = název TF, štítek „5m“). Výchozí vypnuto.
+- `services/htfFairValueGaps.ts`: vyšší svíčky se skládají ze svíček grafu po CME session (5m–1h prosté
+  zaokrouhlení, 4h přes `timeframeBucketStart` kvůli DST), FVG vzniká až ze TŘÍ UZAVŘENÝCH vyšších svíček
+  (v replayi nic nepředbíhá, nepřekresluje se — Pine `request.security` bez offsetu ukazuje zónu už během
+  3. svíčky a přidává ji při každé změně, to jsme nepřebírali). Zaplnění po svíčkách grafu jako Pine (dotyk,
+  šedé schody, konec při úplném zaplnění / zavření za zónou); tvořící se svíčka jen dotkne a zúží, nikdy
+  neukončí. Kreslí se od první svíčky prostřední vyšší svíčky. Jen na nižším TF, do kterého se vyšší vejde
+  celý (1m→5m ano, 5m→5m ne, 3m→5m ne).
+- Graf (`CandleKitTradeChart`): stejná vrstva jako FVG (`paintGaps` pro běžné i HTF), snímek `htf`
+  i v posluchači živé svíčky a při posunu; platí všude, kde je sdílený graf (deník, LIVE, backtest) — jen
+  kreslení, nic nepovoluje příkaz.
+- Ověřeno: test, že HTF zóny na 1m == FVG na 5m grafu aplikace (směr, horní/dolní hrana); v QA stránce
+  backtestu (dočasně skokové syntetické svíčky, vráceno) zapnutí přes dialog nastavení → 6 HTF zón se
+  štítkem 5m vedle běžných FVG, na 5m grafu se HTF neukazuje a běžné FVG sedí na stejných cenách.
+- Revize (code-reviewer): nic blokujícího; opraveno: (1) v replayi grafu nad 1m je poslední svíčka
+  složená z odkrytých minut — dřív se brala jako hotová a HTF zóna mohla vzniknout z neúplné svíčky
+  (např. 1h graf + 4h HTF až o 59 min dřív) → `htfLastCandleClosed` (kurzor na poslední minutě svíčky);
+  (2) 4h přes `timeframeBucketStart` pro každou svíčku vyhazovalo cache hodin session (32k) → 600 ms
+  při 40k svíčkách, 2,2 s při 100k; teď Intl jednou na vyšší svíčku (3–7 ms / 5 ms). Test 4h přes změnu
+  času 1. 11. 2026 = 4h graf aplikace. Ponecháno: celý přepočet při každé změně dat (10–15 ms při 100k
+  1m svíček, HTF je výchozí vypnuté); svíčka přepisující poslední data se do HTF promítne až s daty;
+  zóna se kreslí od prostřední vyšší svíčky a štítek je název TF (Pine: od potvrzení, text „HTF“).
+
 ### 2026-11-03 — Backtest graf dohnal LIVE: indikátory, panel Objednávka, BE, karty obchodů (Claude, nasazeno 3. 11. na Filipovo „nasaď“, jen web; worker beze změny)
 
 - Filip: „backtest graf je hodně pozadu od našeho live grafu“ → „udělej vše“. Jádro grafu je

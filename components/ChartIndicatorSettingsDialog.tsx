@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import TradingViewColorPicker, { colorWithAlpha } from './TradingViewColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 
-import { DEFAULT_INDICATOR_SETTINGS, type IndicatorVisibilitySettings, type FvgIndicatorSettings, type StructureIndicatorSettings, type LevelsIndicatorSettings, type AlphaTradeIndicatorSettings } from '../services/chartIndicatorSettings';
+import { DEFAULT_INDICATOR_SETTINGS, HTF_FVG_TIMEFRAMES, type IndicatorVisibilitySettings, type FvgIndicatorSettings, type StructureIndicatorSettings, type LevelsIndicatorSettings, type AlphaTradeIndicatorSettings } from '../services/chartIndicatorSettings';
 export * from '../services/chartIndicatorSettings';
 
 type IndicatorId = keyof AlphaTradeIndicatorSettings;
@@ -186,6 +186,15 @@ export const ChartIndicatorSettingsDialog: React.FC<{
             <Field label="Text"><input value={value.labelText} onChange={event => update('fvg', { labelText: event.target.value })} className="h-9 w-full rounded-md border border-slate-300 px-2 outline-none focus:border-[#2962ff]" /></Field>
             <Field label="Velikost"><select value={value.labelSize} onChange={event => update('fvg', { labelSize: event.target.value as FvgIndicatorSettings['labelSize'] })} className="h-9 w-full rounded-md border border-slate-300 px-2"><option value="tiny">Mikro</option><option value="small">Malé</option><option value="medium">Střední</option></select></Field>
             <Field label="Barva textu"><ColorInput label="Barva textu FVG" value={value.labelColor} onChange={labelColor => update('fvg', { labelColor })} /></Field>
+            <h3 className="mb-2 mt-5 text-xs font-medium uppercase tracking-wide text-slate-500">📊 HTF FVG</h3>
+            <Check checked={value.htfEnabled} onChange={htfEnabled => update('fvg', { htfEnabled })} label="Zobrazit HTF FVG" />
+            <Field label="Timeframe"><select value={value.htfTimeframe} onChange={event => update('fvg', { htfTimeframe: event.target.value as FvgIndicatorSettings['htfTimeframe'] })} className="h-9 w-full rounded-md border border-slate-300 px-2">{HTF_FVG_TIMEFRAMES.map(timeframe => <option key={timeframe} value={timeframe}>{timeframe}</option>)}</select></Field>
+            <Field label="Bull / Bear"><ColorInput label="Bullish HTF FVG barva" value={value.htfBullColor} opacity={value.htfBullOpacity} onChange={(htfBullColor, htfBullOpacity) => update('fvg', { htfBullColor, htfBullOpacity })} /><ColorInput label="Bearish HTF FVG barva" value={value.htfBearColor} opacity={value.htfBearOpacity} onChange={(htfBearColor, htfBearOpacity) => update('fvg', { htfBearColor, htfBearOpacity })} /></Field>
+            <Field label="Mitig %"><NumberInput value={value.htfMitigatedTransparency} min={80} max={98} onChange={htfMitigatedTransparency => update('fvg', { htfMitigatedTransparency })} /></Field>
+            <Field label="Max počet aktivních HTF FVG"><NumberInput value={value.htfMaxCount} min={1} max={20} onChange={htfMaxCount => update('fvg', { htfMaxCount })} /></Field>
+            <Field label="Text"><input value={value.htfLabelText} placeholder={`prázdné = ${value.htfTimeframe}`} onChange={event => update('fvg', { htfLabelText: event.target.value })} className="h-9 w-full rounded-md border border-slate-300 px-2 outline-none focus:border-[#2962ff]" /></Field>
+            <Field label="Barva textu"><ColorInput label="Barva textu HTF FVG" value={value.htfLabelColor} onChange={htfLabelColor => update('fvg', { htfLabelColor })} /></Field>
+            <p className="mt-1 text-[11px] leading-snug text-slate-500">Kreslí se jen na grafu s nižším timeframe, který se do zvoleného vejde celý (např. 5m FVG na 1m grafu). Zóna vzniká až po uzavření třetí {value.htfTimeframe} svíčky.</p>
           </div>; })()}
           {tab === 'inputs' && indicator === 'structure' && (() => { const value = draft.structure; return <div>
             <h3 className="mb-2 mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">BoS/ChoCh</h3>

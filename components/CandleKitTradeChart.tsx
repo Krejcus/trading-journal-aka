@@ -5,6 +5,7 @@ import { readInteractivePriceScale, resetInteractivePriceScale, restoreInteracti
 import { indicatorContextWindow, renderableCandleWindow } from '../services/chartCandleWindow';
 import { captureChartViewport, restoreChartViewport, type AnchoredChartViewport } from '../services/chartViewportContinuity';
 import { updateVerifiedFvg, updateVerifiedStructure, type VerifiedFvgState, type VerifiedStructureState } from '../services/verifiedChartIndicators';
+import { calculateHtfFairValueGaps, htfFairValueGapsWithFormingBars, htfFvgApplies, htfLastCandleClosed, type HtfFairValueGap } from '../services/htfFairValueGaps';
 import { createJournalArrowStacks, createJournalChartPrimitive, createReviewPoint, createReviewPriceFocus, journalTradePriceRange, type JournalChartPrimitive } from '../services/journalChartPrimitive';
 import { createJournalPositionPrimitive } from '../services/journalPositionDrawing';
 import { retainEqualNumbers, uniqueStructureEvents } from '../services/chartReplayPaint';
@@ -2903,6 +2904,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     && indicatorSettings.fvg.enabled
     && indicatorSettings.fvg.boxes
     && indicatorVisibleOnTimeframe(timeframe, indicatorSettings.fvg.visibility);
+  // HTF FVG (Pine „HTF FVG“): vlastní přepínač, jen na nižším TF grafu.
+  const visibleHtfFvg = showFvg
+    && !hiddenCustomIndicators.has('fvg')
+    && indicatorSettings.fvg.htfEnabled
+    && indicatorSettings.fvg.boxes
+    && indicatorVisibleOnTimeframe(timeframe, indicatorSettings.fvg.visibility)
+    && htfFvgApplies(timeframe, indicatorSettings.fvg.htfTimeframe);
   const visibleLevels = showLevels
     && !hiddenCustomIndicators.has('levels')
     && indicatorVisibleOnTimeframe(timeframe, indicatorSettings.levels.visibility);
@@ -2915,8 +2923,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // prvním onReady; po pozdějším zapnutí indikátoru by jinak VWAP/levely při
   // rychlém posunu čekaly až na odložený přepočet kontextu.
   const visibleFvgRef = useRef(visibleFvg);
+  const visibleHtfFvgRef = useRef(visibleHtfFvg);
   const visibleLevelsRef = useRef(visibleLevels);
   visibleFvgRef.current = visibleFvg;
+  visibleHtfFvgRef.current = visibleHtfFvg;
   visibleLevelsRef.current = visibleLevels;
   // Detail: FVG vstupu i v přehrávání — až od vstupu, ať nic neprozradí dopředu.
   const entryMinuteUnix = Math.floor(entryMs / 60_000) * 60;
@@ -2943,6 +2953,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     labelText: indicatorSettings.fvg.labelText,
     labelSize: indicatorSettings.fvg.labelSize,
     labelColor: indicatorSettings.fvg.labelColor,
+    htf: [indicatorSettings.fvg.htfBullColor, indicatorSettings.fvg.htfBearColor, indicatorSettings.fvg.htfBullOpacity, indicatorSettings.fvg.htfBearOpacity,
+      indicatorSettings.fvg.htfMitigatedTransparency, indicatorSettings.fvg.htfMaxCount, indicatorSettings.fvg.htfLabelText, indicatorSettings.fvg.htfLabelColor],
   });
   const previousOverlayRebuildRef = useRef(overlayRebuildSignature);
   const internalIndicatorController = useMemo(
@@ -3234,6 +3246,25 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     fvgInputRef.current = input;
     return next.gaps;
   }, [candles, renderedCandleWindow.end, renderedCandleWindow.start, replayActive, visibleFvg]);
+  // HTF FVG ze všech načtených svíček až po konec vykresleného okna (v replayi
+  // jen odkryté) — vyšší svíčka potřebuje víc kontextu než okno běžných FVG.
+  const htfInputLastRef = useRef<MarketCandle | undefined>(undefined);
+  const htfFvgs = useMemo((): HtfFairValueGap[] => {
+    if (!visibleHtfFvg) {
+      htfInputLastRef.current = undefined;
+      return [];
+    }
+    const input = candleWindowSlice(candles, { start: 0, end: renderedCandleWindow.end });
+    const last = input.at(-1);
+    htfInputLastRef.current = last;
+    // Svíčka grafu nad 1m je v replayi hotová až s kurzorem na její poslední minutě.
+    const lastClosed = htfLastCandleClosed({
+      lastTime: last?.time, chartTimeframe: timeframe, replayActive, replayCursorTime, nowSeconds: Date.now() / 1_000,
+    });
+    return calculateHtfFairValueGaps(input, timeframe, indicatorSettings.fvg.htfTimeframe, lastClosed);
+  }, [candles, indicatorSettings.fvg.htfTimeframe, renderedCandleWindow.end, replayActive, replayCursorTime, timeframe, visibleHtfFvg]);
+  const htfFvgsRef = useRef(htfFvgs);
+  htfFvgsRef.current = htfFvgs;
   const marketStructureAccumulatorRef = useRef<MarketStructureAccumulator | null>(null);
   const verifiedStructureRef = useRef<VerifiedStructureState | null>(null);
   // Vstup posledního výpočtu struktury (data) — k němu se počítá tvořící se bar.
@@ -3309,7 +3340,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       desiredType,
     );
   }, [entryStructureEvents, entryMs, trade]);
-  const deriveRenderedFvgs = (gaps: FairValueGap[], forming: readonly MarketCandle[]) => {
+  const deriveRenderedFvgs = (gaps: FairValueGap[], forming: readonly MarketCandle[], htfGaps: readonly HtfFairValueGap[]) => {
     const firstRenderedTime = visibleCandles[0]?.time ?? Number.NEGATIVE_INFINITY;
     const activeFvgLimit = Math.max(1, Math.min(30, Number(indicatorSettings.fvg.maxCount) || 1));
     const lastCandleTime = candles.at(-1)?.time;
@@ -3346,9 +3377,17 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         formingTime: candles[Math.max(0, confirmationIndex - 1)]?.time,
       };
     }).filter((item): item is typeof item & { formingTime: number } => item.formingTime !== undefined);
+    const htfLimit = Math.max(1, Math.min(20, Number(indicatorSettings.fvg.htfMaxCount) || 1));
+    // Jako Pine: nejvýš 2× Max HTF zón (aktivní i ukončené); kreslí se od prostřední vyšší svíčky.
+    const htf = (visibleHtfFvg ? htfGaps : [])
+      .filter(gap => gap.endTime >= firstRenderedTime)
+      .filter(gap => !viewport || gap.endTime >= viewport.from && gap.drawFrom <= viewport.to)
+      .slice(-htfLimit * 2)
+      .map(gap => ({ gap, isEntry: false, formingTime: gap.drawFrom }));
     return {
       regular: rendered.filter(item => !item.isEntry),
       entry: rendered.filter(item => item.isEntry),
+      htf,
     };
   };
   const deriveRenderedFvgsRef = useRef(deriveRenderedFvgs);
@@ -3356,12 +3395,17 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const renderedFvgs = useMemo(() => {
     // Konec řady čte přímo z grafu (vůči novým datům) — uložený patří k
     // předchozím datům a před `setData` by kreslení ukázalo jiný stav.
-    const forming = visibleFvg ? chartTailAfterData(apiRef.current?.controller.getBars() ?? [], fvgInputRef.current.at(-1)) : [];
+    const lastData = fvgInputRef.current.at(-1) ?? htfInputLastRef.current;
+    const forming = visibleFvg || visibleHtfFvg ? chartTailAfterData(apiRef.current?.controller.getBars() ?? [], lastData) : [];
     fvgFormingBarsRef.current = forming;
-    return deriveRenderedFvgs(fairValueGapsWithFormingBars(fvgAccumulatorRef.current, fvgInputRef.current, forming), forming);
+    return deriveRenderedFvgs(
+      fairValueGapsWithFormingBars(fvgAccumulatorRef.current, fvgInputRef.current, forming),
+      forming,
+      htfFairValueGapsWithFormingBars(htfFvgs, htfInputLastRef.current?.time, forming),
+    );
   },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [candles, displayedEntryFvg, fvgs, indicatorSettings.fvg.maxCount, showEntryFvg, visibleCandles, visibleFvg]);
+  [candles, displayedEntryFvg, fvgs, htfFvgs, indicatorSettings.fvg.htfMaxCount, indicatorSettings.fvg.maxCount, showEntryFvg, visibleCandles, visibleFvg, visibleHtfFvg]);
   // Do kreslení jen při novém výpočtu: jiný render (rodič, hodiny) nesmí
   // přepsat novější stav z posluchače řady starým (problikávání).
   const renderedFvgsRef = useRef(renderedFvgs);
@@ -3376,7 +3420,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // uzavření. Jen kreslení — data grafu, magnet ani nic uloženého ho nevidí.
   useEffect(() => {
     const api = apiRef.current;
-    if (!api || !visibleFvg) {
+    if (!api || (!visibleFvg && !visibleHtfFvg)) {
       fvgFormingBarsRef.current = [];
       return;
     }
@@ -3388,12 +3432,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // přelomu minuty graf drží dokončenou živou svíčku, kterou data ještě
       // neznají — bez ní by zaplnění z ní do obnovy dat zmizelo a zase se
       // vrátilo (problikávání).
-      const forming = chartTailAfterData(controller.getBars(), input.at(-1));
+      const forming = chartTailAfterData(controller.getBars(), input.at(-1) ?? htfInputLastRef.current);
       if (sameCandles(fvgFormingBarsRef.current, forming)) return;
       fvgFormingBarsRef.current = forming;
       const next = deriveRenderedFvgsRef.current(
         fairValueGapsWithFormingBars(fvgAccumulatorRef.current, input, forming),
         forming,
+        htfFairValueGapsWithFormingBars(htfFvgsRef.current, htfInputLastRef.current?.time, forming),
       );
       if (sameRenderedFvgSnapshot(renderedFvgsRef.current, next)) return;
       renderedFvgsRef.current = next;
@@ -3405,7 +3450,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       try { series.unsubscribeDataChanged(onDataChanged); } catch { /* graf už zmizel */ }
       fvgFormingBarsRef.current = [];
     };
-  }, [chartApiEpoch, visibleFvg]);
+  }, [chartApiEpoch, visibleFvg, visibleHtfFvg]);
   // Zlomy ze struktury dat a z konce řady grafu (tvořící se svíčka) → co se kreslí.
   const deriveStructureOverlay = (forming: readonly MarketCandle[]) => {
     const style = indicatorSettings.structure;
@@ -4769,10 +4814,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             target.useMediaCoordinateSpace(({ context, mediaSize }) => {
               context.save();
               const fvgStyle = indicatorSettingsRef.current.fvg;
-              const mitigatedFill = colorWithOpacity(
-                '#808080',
-                (100 - fvgStyle.mitigatedTransparency) / 100,
-              );
               const xCoordinates = new Map<number, number | null>();
               const yCoordinates = new Map<number, number | null>();
               // The primitive is intentionally attached once. Always read the
@@ -4819,86 +4860,111 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
                   .slice(-activeFvgLimit * 2),
                 ...entryRenderedFvgs.filter(item => item.formingTime <= lastVisibleTime && item.gap.endTime >= firstVisibleTime),
               ];
-              visibleRenderedFvgs.forEach(({ gap, formingTime }) => {
-                const drawSegment = (
-                  startTime: number,
-                  endTime: number,
-                  topPrice: number,
-                  bottomPrice: number,
-                  fill: string,
-                  projectAtRightEdge = false,
-                ) => {
-                  const startX = xForTime(startTime);
-                  const endX = xForTime(endTime, projectAtRightEdge);
-                  const topY = yForPrice(topPrice);
-                  const bottomY = yForPrice(bottomPrice);
-                  if (startX === null || endX === null || topY === null || bottomY === null) return;
-                  const left = Math.max(0, Math.min(startX, endX));
-                  const right = Math.min(mediaSize.width, Math.max(startX, endX));
-                  const top = Math.max(0, Math.min(topY, bottomY));
-                  const bottom = Math.min(mediaSize.height, Math.max(topY, bottomY));
-                  if (right <= left || bottom <= top) return;
-                  context.fillStyle = fill;
-                  context.fillRect(left, top, right - left, bottom - top);
-                };
-                const baseColor = gap.direction === 'bullish'
-                  ? fvgStyle.bullColor
-                  : fvgStyle.bearColor;
-                const baseOpacity = (gap.direction === 'bullish'
-                  ? (fvgStyle.bullOpacity ?? fvgStyle.fillOpacity)
-                  : (fvgStyle.bearOpacity ?? fvgStyle.fillOpacity)) / 100;
-                // Pine uses color.new(..., 85) after the first touch, i.e. a
-                // fixed 15% opacity regardless of the original fill opacity.
-                const activeFill = colorWithOpacity(baseColor, gap.touched ? 0.15 : baseOpacity);
+              // Běžné i HTF FVG stejnou cestou, jen vlastní barvy, Mitig % a text.
+              type GapPaintStyle = {
+                bullColor: string; bearColor: string; bullOpacity: number; bearOpacity: number;
+                mitigatedTransparency: number; labelText: string; labelColor: string;
+              };
+              const paintGaps = (items: ReadonlyArray<{ gap: FairValueGap; formingTime: number }>, style: GapPaintStyle) => {
+                const mitigatedFill = colorWithOpacity('#808080', (100 - style.mitigatedTransparency) / 100);
+                items.forEach(({ gap, formingTime }) => {
+                  const drawSegment = (
+                    startTime: number,
+                    endTime: number,
+                    topPrice: number,
+                    bottomPrice: number,
+                    fill: string,
+                    projectAtRightEdge = false,
+                  ) => {
+                    const startX = xForTime(startTime);
+                    const endX = xForTime(endTime, projectAtRightEdge);
+                    const topY = yForPrice(topPrice);
+                    const bottomY = yForPrice(bottomPrice);
+                    if (startX === null || endX === null || topY === null || bottomY === null) return;
+                    const left = Math.max(0, Math.min(startX, endX));
+                    const right = Math.min(mediaSize.width, Math.max(startX, endX));
+                    const top = Math.max(0, Math.min(topY, bottomY));
+                    const bottom = Math.min(mediaSize.height, Math.max(topY, bottomY));
+                    if (right <= left || bottom <= top) return;
+                    context.fillStyle = fill;
+                    context.fillRect(left, top, right - left, bottom - top);
+                  };
+                  const baseColor = gap.direction === 'bullish'
+                    ? style.bullColor
+                    : style.bearColor;
+                  const baseOpacity = (gap.direction === 'bullish' ? style.bullOpacity : style.bearOpacity) / 100;
+                  // Pine uses color.new(..., 85) after the first touch, i.e. a
+                  // fixed 15% opacity regardless of the original fill opacity.
+                  const activeFill = colorWithOpacity(baseColor, gap.touched ? 0.15 : baseOpacity);
 
-                // Pine creates the first box at bar_index - 1. Starting at the
-                // middle candle's centre and drawing below the candles removes
-                // the visible inter-bar gap while preserving that geometry.
-                let stageStart = formingTime;
-                let stageTop = gap.top;
-                let stageBottom = gap.bottom;
-                gap.mitigationSteps.forEach(step => {
-                  drawSegment(stageStart, step.time, stageTop, stageBottom, activeFill);
-                  stageStart = step.time;
-                  stageTop = step.remainingTop;
-                  stageBottom = step.remainingBottom;
-                });
-                drawSegment(
-                  stageStart,
-                  gap.endTime,
-                  stageTop,
-                  stageBottom,
-                  activeFill,
-                  !gap.mitigated,
-                );
-
-                // Every confirmed partial wick adds a persistent grey strip
-                // from that candle onward, producing the same stepped fill as
-                // the TradingView box-array implementation.
-                gap.mitigationSteps.forEach(step => {
+                  // Pine creates the first box at bar_index - 1. Starting at the
+                  // middle candle's centre and drawing below the candles removes
+                  // the visible inter-bar gap while preserving that geometry.
+                  let stageStart = formingTime;
+                  let stageTop = gap.top;
+                  let stageBottom = gap.bottom;
+                  gap.mitigationSteps.forEach(step => {
+                    drawSegment(stageStart, step.time, stageTop, stageBottom, activeFill);
+                    stageStart = step.time;
+                    stageTop = step.remainingTop;
+                    stageBottom = step.remainingBottom;
+                  });
                   drawSegment(
-                    step.time,
+                    stageStart,
                     gap.endTime,
-                    step.filledTop,
-                    step.filledBottom,
-                    mitigatedFill,
+                    stageTop,
+                    stageBottom,
+                    activeFill,
                     !gap.mitigated,
                   );
-                });
 
-                if (fvgStyle.labelText && !gap.mitigated) {
-                  const endX = fvgStyle.extendRight === 'bars' ? projectedRightX : xForTime(gap.endTime);
-                  const topY = yForPrice(stageTop);
-                  const bottomY = yForPrice(stageBottom);
-                  if (endX !== null && topY !== null && bottomY !== null) {
-                    const fontSize = fvgStyle.labelSize === 'tiny' ? 9 : fvgStyle.labelSize === 'medium' ? 13 : 11;
-                    context.font = `500 ${fontSize}px ${chartStyle.fontFamily}`;
-                    context.textAlign = 'right';
-                    context.textBaseline = 'middle';
-                    context.fillStyle = fvgStyle.labelColor;
-                    context.fillText(fvgStyle.labelText, Math.min(mediaSize.width - 4, endX - 4), (topY + bottomY) / 2);
+                  // Every confirmed partial wick adds a persistent grey strip
+                  // from that candle onward, producing the same stepped fill as
+                  // the TradingView box-array implementation.
+                  gap.mitigationSteps.forEach(step => {
+                    drawSegment(
+                      step.time,
+                      gap.endTime,
+                      step.filledTop,
+                      step.filledBottom,
+                      mitigatedFill,
+                      !gap.mitigated,
+                    );
+                  });
+
+                  if (style.labelText && !gap.mitigated) {
+                    const endX = fvgStyle.extendRight === 'bars' ? projectedRightX : xForTime(gap.endTime);
+                    const topY = yForPrice(stageTop);
+                    const bottomY = yForPrice(stageBottom);
+                    if (endX !== null && topY !== null && bottomY !== null) {
+                      const fontSize = fvgStyle.labelSize === 'tiny' ? 9 : fvgStyle.labelSize === 'medium' ? 13 : 11;
+                      context.font = `500 ${fontSize}px ${chartStyle.fontFamily}`;
+                      context.textAlign = 'right';
+                      context.textBaseline = 'middle';
+                      context.fillStyle = style.labelColor;
+                      context.fillText(style.labelText, Math.min(mediaSize.width - 4, endX - 4), (topY + bottomY) / 2);
+                    }
                   }
-                }
+                });
+              };
+              paintGaps(visibleRenderedFvgs, {
+                bullColor: fvgStyle.bullColor,
+                bearColor: fvgStyle.bearColor,
+                bullOpacity: fvgStyle.bullOpacity ?? fvgStyle.fillOpacity,
+                bearOpacity: fvgStyle.bearOpacity ?? fvgStyle.fillOpacity,
+                mitigatedTransparency: fvgStyle.mitigatedTransparency,
+                labelText: fvgStyle.labelText,
+                labelColor: fvgStyle.labelColor,
+              });
+              paintGaps(renderedFvgsRef.current.htf
+                .filter(item => item.formingTime <= lastVisibleTime && item.gap.endTime >= firstVisibleTime), {
+                bullColor: fvgStyle.htfBullColor,
+                bearColor: fvgStyle.htfBearColor,
+                bullOpacity: fvgStyle.htfBullOpacity,
+                bearOpacity: fvgStyle.htfBearOpacity,
+                mitigatedTransparency: fvgStyle.htfMitigatedTransparency,
+                labelText: fvgStyle.htfLabelText || fvgStyle.htfTimeframe,
+                labelColor: fvgStyle.htfLabelColor,
               });
               context.restore();
             });
@@ -5009,8 +5075,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           }, 100);
         }
       }
-      if (visibleFvgRef.current) {
-        renderedFvgsRef.current = deriveRenderedFvgsRef.current(fairValueGapsWithFormingBars(fvgAccumulatorRef.current, fvgInputRef.current, fvgFormingBarsRef.current), fvgFormingBarsRef.current);
+      if (visibleFvgRef.current || visibleHtfFvgRef.current) {
+        renderedFvgsRef.current = deriveRenderedFvgsRef.current(
+          fairValueGapsWithFormingBars(fvgAccumulatorRef.current, fvgInputRef.current, fvgFormingBarsRef.current),
+          fvgFormingBarsRef.current,
+          htfFairValueGapsWithFormingBars(htfFvgsRef.current, htfInputLastRef.current?.time, fvgFormingBarsRef.current),
+        );
         fvgPrimitiveRequestUpdateRef.current?.();
       }
       if (expandingWindowRef.current) return;
@@ -6030,6 +6100,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       data-entry-structure={entryStructure ? `${entryStructure.type}:${entryStructure.breakTime}` : undefined}
       data-fvg-settings-signature={fvgPaintSignature}
       data-replay-fvg-count={replayActive ? renderedFvgs.regular.length : undefined}
+      data-htf-fvg-count={visibleHtfFvg ? renderedFvgs.htf.length : undefined}
       data-replay-structure-count={replayActive ? structureOverlayEvents.length : undefined}
       data-trade-box-locked="true"
       onPointerDownCapture={armOlderHistoryFromGesture}

@@ -87,6 +87,24 @@ const rules = {
     "boxes": "boolean",
     "paneLabels": "boolean",
     "statusInputs": "boolean",
+    "htfEnabled": "boolean",
+    "htfTimeframe": {
+      "enum": [
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "4h"
+      ]
+    },
+    "htfBullColor": "string",
+    "htfBearColor": "string",
+    "htfBullOpacity": "number",
+    "htfBearOpacity": "number",
+    "htfMitigatedTransparency": "number",
+    "htfMaxCount": "number",
+    "htfLabelText": "string",
+    "htfLabelColor": "string",
     "visibility": {
       "minutes": "boolean",
       "minuteFrom": "number",
