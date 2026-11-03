@@ -22,7 +22,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY, COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -413,6 +413,11 @@ export async function startLocalCopierExecutionAgent(
       // Přikoupení do pozice (3. 11. 2026): jen když ho controller opravdu povoluje (opt-in + manual-only DEMO).
       ...(typeof options.controller.manageLeaderOrder === 'function' && options.controller.manualEntryScaleInEnabled?.() === true
         ? [COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY] : []),
+      // × holé pozice (C8, 3. 11. 2026): jen když to controller pro tuto skupinu umí (sólo manual-only DEMO).
+      ...(typeof options.controller.manageLeaderOrder === 'function' && options.controller.manualBareCloseEnabled?.() === true
+        ? [COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY] : []),
+      // „Zrušit čekající“ (C7, 3. 11. 2026): status vlastních čekajících vstupů + ověřený výsledek cancel-entry.
+      ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY] : []),
       ...(options.autoRearmAfterTransport === true && autoResumeAdmission ? [COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY] : []),
       ...(typeof options.controller.retireGroup === 'function' && options.previewGroupAccounts
         ? [COPIER_GROUP_DELETE_CAPABILITY]
@@ -924,7 +929,10 @@ export async function startLocalCopierExecutionAgent(
         });
         return { type: 'configuration', group };
       case 'cancel-order':
-        throw new Error('Ruční cancel z UI zatím není napojen na durable runtime');
+        // C7 (3. 11. 2026): obecné zrušení libovolného příkazu worker NIKDY neprovede (mohl by to být
+        // SL otevřené pozice nebo cizí příkaz). Odmítnutí bez jakéhokoli zápisu; starý Dashboard ho
+        // dál posílá. Vlastní čekající vstup = `manage-leader-order` `cancel-entry` přes relay.
+        throw new Error('unsupported-copy-command:cancel-order — obecné zrušení příkazu worker neprovádí, nic se neodeslalo. Vlastní čekající vstup zruš tlačítkem „Zrušit čekající“, ostatní příkazy v Tradovate nebo Flattenem.');
       case 'preview-leader-entry': {
         // Fáze 1a: jen náhled — controller sebere stav bez IO a vyhodnotí
         // čistou funkcí; k brokerovi nic nejde. Brzda zadaná po náhledu ho

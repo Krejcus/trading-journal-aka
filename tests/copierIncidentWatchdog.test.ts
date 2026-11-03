@@ -966,8 +966,46 @@ describe('fáze 2a: push o neúspěšné změně ručního vstupu', () => {
 
   it('odmítnutí a neznámý výsledek se hlásí, úspěch ne', () => {
     expect(run([action()])[0]).toMatchObject({ title: 'Posun SL odmítnut', kind: 'opened' });
-    expect(run([action({ status: 'unknown', action: 'cancel-entry' })])[0].title).toBe('Zrušení vstupu: výsledek neznámý');
+    expect(run([action({ status: 'unknown', action: 'cancel-entry', updatedAt: NOW - 30_000 })])[0].title).toBe('Zrušení vstupu: výsledek neznámý');
     expect(run([action({ status: 'acknowledged' })])).toEqual([]);
     expect(run([action({ updatedAt: NOW - 11 * 60_000 })])).toEqual([]);
+  });
+
+  it('C7: zrušení, během kterého se vstup vyplnil, netvrdí „vstup dál čeká“ — pozice je otevřená', () => {
+    const filled = run([action({ action: 'cancel-entry', resultCode: 'entry-filled', reason: 'Vstup se vyplnil (2) dřív, než ho broker zrušil — pozice je otevřená; zavři ji × nebo Flattenem.' })])[0];
+    expect(filled).toMatchObject({ title: 'Vstup se vyplnil během rušení', kind: 'opened' });
+    expect(filled.body).toContain('pozice je otevřená');
+    expect(filled.body).not.toContain('dál čeká');
+    expect(run([action({ action: 'cancel-entry', resultCode: 'entry-partially-filled' })])[0].title).toBe('Vstup se vyplnil během rušení');
+    // Bez kódu (zrušení odmítnuté / bez účinku) zůstává „vstup dál čeká“.
+    expect(run([action({ action: 'cancel-entry', reason: 'Broker zrušení odmítl — vstup dál čeká' })])[0].body).toContain('Vstup dál čeká');
+  });
+
+  it('C7 kolo 3: mladé `unknown` zrušení vstupu (odmítnutí, čeká na ustálení) se zatím nehlásí — jiné akce ano', () => {
+    expect(run([action({ status: 'unknown', action: 'cancel-entry', updatedAt: NOW - 4_000 })])).toEqual([]);
+    expect(run([action({ status: 'unknown', action: 'cancel-entry', updatedAt: NOW - 25_000 })])[0].title).toBe('Zrušení vstupu: výsledek neznámý');
+    expect(run([action({ status: 'unknown', action: 'move-stop', updatedAt: NOW - 4_000 })])[0].title).toBe('Posun SL: výsledek neznámý');
+    expect(run([action({ status: 'rejected', action: 'cancel-entry', updatedAt: NOW - 4_000 })])[0].title).toBe('Zrušení vstupu odmítnut');
+  });
+
+  it('C7 kolo 3: vyplněno a obchod už skončil (flat) → push „Ověř v Tradovate“, ne „Zkontroluj SL/TP“; jinak beze změny', () => {
+    const flat = run([action({ action: 'cancel-entry', resultCode: 'entry-filled',
+      reason: 'Vstup se vyplnil (2) dřív, než ho broker zrušil — pozice už je zavřená a nic nepracuje (ověřeno čtením; příčina neověřena).' })])[0];
+    expect(flat.body).toContain('pozice už je zavřená');
+    expect(flat.body).toContain('Ověř v Tradovate.');
+    expect(flat.body).not.toContain('SL/TP v Tradovate');
+    expect(flat.body).not.toContain('..');
+    const open = run([action({ action: 'cancel-entry', resultCode: 'entry-filled', reason: 'Vstup se vyplnil (2) dřív, než ho broker zrušil — pozice je otevřená; zavři ji × nebo Flattenem.' })])[0];
+    expect(open.body).toContain('Zkontroluj SL/TP v Tradovate.');
+    expect(open.body).not.toContain('..');
+  });
+
+  it('C8 kolo 3: důvod s koncovou tečkou → push bez dvojité tečky', () => {
+    const bare = run([action({ action: 'close-position',
+      reason: 'Holá pozice leadera 2 (bez SL/TP) trvá — zavření nepotvrzeno (zavření odmítnuto: Market closed); zavři ji v Tradovate nebo Flattenem.' })])[0];
+    expect(bare.title).toBe('Zavření obchodu odmítnut');
+    expect(bare.body).toContain('Flattenem. Zkontroluj leadera');
+    expect(bare.body).not.toContain('..');
+    expect(run([action()])[0].body).toBe('Broker změnu odmítl. Leader i followeři mají původní cenu.');
   });
 });

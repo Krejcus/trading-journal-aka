@@ -11,6 +11,14 @@ const initialGroup: CopyGroupConfig = {
 };
 
 describe('createCopierRuntimeCommandAdapter', () => {
+  it('obecné cancel-order odmítne bez zápisu se stejným textem jako agent (C7)', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({ broker, store: createMemoryCopierStore(), group: initialGroup });
+    const adapter = createCopierRuntimeCommandAdapter({ controller, getGroup: () => initialGroup, setGroup: () => undefined });
+    await expect(adapter.execute({ type: 'cancel-order', groupId: 'g1', orderId: 1 })).rejects.toThrow(/unsupported-copy-command:cancel-order — .*nic se neodeslalo/);
+    controller.stop();
+  });
+
   it('přepne followera přímo bez změny mode a bez odzbrojení', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({

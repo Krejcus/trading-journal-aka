@@ -187,7 +187,10 @@ describe('fáze 2a: správa vlastního ručního vstupu', () => {
     const ctx = await setup();
     await fillEntries(ctx);
     const result = await manage(ctx, 'cancel-entry', ENTRY, undefined, 'manage:cancel0002');
-    expect(result.blockers.map(issue => issue.code)).toContain('entry-not-pending');
+    // C7 (oponentura diffu, P3): vyplněný vstup = kód `entry-filled` „pozice je otevřená“, ne obecné „nečeká“.
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(issue => issue.code)).toContain('entry-filled');
+    expect(result.blockers[0].text).toContain('pozice je otevřená');
     expect(ctx.broker.cancelRequestCount(ctx.placed.entryBrokerOrderId!)).toBe(0);
   });
 

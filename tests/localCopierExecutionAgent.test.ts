@@ -2093,3 +2093,57 @@ describe('fáze 1b: odeslání ručního vstupu v agentu', () => {
     }
   });
 });
+
+describe('C8: capability × holé pozice (3. 11. 2026)', () => {
+  it('inzeruje manual-order-close-bare-v1 jen když controller umí správu a pro skupinu povolí holé zavření', async () => {
+    const manageFn = vi.fn(async () => ({ type: 'leader-order-managed' as const, operationId: 'x', action: 'close-position' as const, status: 'acknowledged' as const, checkedAt: 1, blockers: [] }));
+    for (const [enabled, withManage, expected] of [[true, true, true], [false, true, false], [undefined, true, false], [true, false, false]] as const) {
+      const runtime = controller();
+      Object.assign(runtime as object, {
+        ...(withManage ? { manageLeaderOrder: manageFn } : {}),
+        ...(enabled !== undefined ? { manualBareCloseEnabled: () => enabled } : {}),
+      });
+      const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+      try {
+        expect(agent.status().capabilities?.includes('manual-order-close-bare-v1')).toBe(expected);
+      } finally {
+        await agent.close();
+      }
+    }
+  });
+});
+
+describe('C7: „Zrušit čekající“ — capability a odmítnutí cancel-order (3. 11. 2026)', () => {
+  it('inzeruje manual-order-cancel-pending-v1 jen když controller umí správu (cancel-entry)', async () => {
+    const manageFn = vi.fn(async () => ({ type: 'leader-order-managed' as const, operationId: 'x', action: 'cancel-entry' as const, status: 'acknowledged' as const, checkedAt: 1, blockers: [] }));
+    for (const [withManage, expected] of [[true, true], [false, false]] as const) {
+      const runtime = controller();
+      if (withManage) Object.assign(runtime as object, { manageLeaderOrder: manageFn });
+      const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+      try {
+        expect(agent.status().capabilities?.includes('manual-order-cancel-pending-v1')).toBe(expected);
+      } finally {
+        await agent.close();
+      }
+    }
+  });
+
+  it('cancel-order (starý Dashboard) worker odmítne srozumitelně a nic neprovede — ani přes loopback, ani přes relay', async () => {
+    const runtime = controller({ armed: true, shadowMode: false });
+    const manageFn = vi.fn();
+    Object.assign(runtime as object, { manageLeaderOrder: manageFn });
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      for (const context of [{}, { source: 'relay' as const, createdAt: Date.now(), deadlineAt: Date.now() + 15_000 }]) {
+        await expect(agent.execute({ type: 'copy-command', command: { type: 'cancel-order', groupId: group().id, orderId: 123 } }, context))
+          .rejects.toThrow(/unsupported-copy-command:cancel-order.*Zrušit čekající/);
+      }
+      expect(manageFn).not.toHaveBeenCalled();
+      expect(runtime.flattenAccount).not.toHaveBeenCalled();
+      expect(runtime.flattenGroup).not.toHaveBeenCalled();
+      expect(runtime.disarm).not.toHaveBeenCalled();
+    } finally {
+      await agent.close();
+    }
+  });
+});

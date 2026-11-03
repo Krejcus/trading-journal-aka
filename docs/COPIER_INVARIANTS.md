@@ -288,6 +288,12 @@ existující ochranu.
   přikoupení do pozice (`reviewPendingScaleIns` → `cancelOwnManualEntry`, raw
   broker mimo `dispatchBroker`) běží i pod kill a za DISARMED — jen zrušení,
   jeden pokus, nikdy zápis, který by expozici vytvořil.
+  Ruční `manage-leader-order` `cancel-entry` (fáze 2a, výslovně zapsáno 3. 11. 2026
+  s C7 „Zrušit čekající“): zrušení VLASTNÍHO přijatého ručního vstupu / přikoupení
+  s nulovým fillem z čerstvého REST čtení, raw broker mimo `dispatchBroker`, jeden
+  pokus — kill, DISARM ani brzda po zadání (agent, relay supersede) ho nezastaví.
+  C7 nepřidává novou výjimku: posílá N× tutéž akci. Ochrannou nohu otevřené pozice
+  ani cizí příkaz žádná z výjimek nikdy neruší (INV-MANUAL-01, C7).
 - Bezpečné změny vs. nebezpečné: Bezpečné je zpřesnit audit a doručení brzdy.
   Nebezpečné je zaměnit kill za dočasný boolean ovládaný posledním poll response.
 
@@ -1207,6 +1213,11 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je `position → orders → position`,
   potvrdit flat/no-active a uložit `confirmed-by-state`. Nebezpečné je Market
   fallback bez nového přesného stavu nebo account-wide rozšíření cíle.
+- Zavření z grafu (fáze 2d) i × holé pozice bez SL/TP (C8, 3. 11. 2026,
+  `services/copierRuntimeController.ts:executeClose` s `managed: null`) se
+  potvrzují stejně: flat ∧ nic nepracuje z REST čtení, pozice trvá = incident bez
+  auto-close, nikdy opakování (detail v INV-MANUAL-01;
+  `tests/manualEntryBareClose.test.ts`).
 
 ### Worker identita, durable store a lease
 
@@ -1864,7 +1875,9 @@ existující ochranu.
   (INV-WORKER-02 dál otevřený). Úspěch zapíše id nohou do záznamu vstupu → dál běžný
   spravovaný obchod (posun SL/TP, BE, ×). `unknown` attach / restart v `sending`
   = incident, automaticky se nedořešuje (Flatten + auditovaný waiver). Zavření
-  holé pozice v telefonu = Flatten skupiny (jediný DEMO účet), dvoukrokově.
+  holé pozice = `close-position` holého záznamu (jen sólo skupina, výsledek stavem;
+  C8 níže, od 3. 11. 2026); Flatten skupiny (jediný DEMO účet) zůstává záloha na
+  Dashboardu a v telefonní liště.
   Telefon (`components/day/LivePhoneChart.tsx`, `lib/livePhoneOrders.ts`) posílá
   přes stejný desk callback, relay a admission jako PC; odeslat jen nad čerstvým
   neobnoveným stavem, zapnutou kopírkou, bez rozpracovaného vstupu a mimo
@@ -1877,6 +1890,177 @@ existující ochranu.
   navigací LIVE ▾ → Live Dashboard). Posun SL dál od trhu v manual-only skupině
   počítá s lokálním denním stropem jako náhled (dřív `risk-unknown`).
   Hlídá test: `tests/manualEntryBareAttach.test.ts`, `tests/livePhoneOrders.test.ts`.
+- **× zavřít holý Market bez SL/TP (C8, 3. 11. 2026, `docs/reviews/trading-gaps-designs/safety.md`,
+  oponentura copier-design-critic):** payload beze změny — `manage-leader-order` `close-position`
+  s `entryOperationId` holého záznamu a `expect = { price: referencePrice, quantity }`
+  (`lib/manualBareClose.ts:bareCloseManageFields`). Jen **sólo skupina** (`soloManualGroup`:
+  manual-only ∧ local-only ∧ bez followerů ∧ DEMO; smazaná skupina nikdy), capability
+  `manual-order-close-bare-v1` (worker ji inzeruje jen když `manualBareCloseEnabled()`);
+  starý worker stejný payload odmítne `not-own-entry` (`resolveManagedTrade` chce obě nohy)
+  a nic neodešle. Status `bareLeaderTrade` (nejnovější, acknowledged, holý, bez nohou,
+  otevřený) je jen výběr pro UI (INV-UI-01/03).
+  - **Jen ARMED ∧ ¬shadow ∧ ¬kill** (jako dnešní × fáze 2d) — ve frontě (`not-armed`) i
+    synchronně před zápisem. C8 tedy NENÍ výjimkou z INV-DEFAULT-01, INV-BRAKE-02 ani
+    INV-ARM-04; za DISARMED až s C9 (výjimka se pak zapíše uzavřeným seznamem). Relay
+    supersede brzdou, agent `brake-after-request`, TTL 5 s a výjimka z denního stropu beze změny.
+  - **„Co jsem viděl“ = počet kontraktů** (oponentura P3): `expect.price` = `referencePrice`
+    záznamu je konstanta a zastaralé zobrazení nezachytí. Vlastnictví pozice dokládají
+    VÝHRADNĚ kontroly ve workeru: vlastní přijatý holý záznam bez nohou, NEJNOVĚJŠÍ ruční vstup
+    a `closedAt == null` (starý záznam nesmí „adoptovat“ cizí pozici), vstup v aktuální session
+    (čerstvý REST graf příkazů) vyplněný přesně na qty, |net| = qty na správné straně, **otevřený
+    lot deníku dne obsahuje fill vstupu a jeho pozice = očekávaná se znaménkem**
+    (`bareCloseLotBlockers`, `entry-not-open`; oponentura C8 P3: Tradovate umí obrat +2 → −2 → +2
+    jedním fillem bez eventu net 0, `closedAt` se pak nenastaví — lot vstupu se ale uzavře a nový
+    nemá jeho id; chybějící lot = jiná session / obchod před startem počítadla = taky blokováno,
+    zavři Flattenem) a na symbolu NIC nepracuje (REST i cache streamu, včetně typu, který appka
+    nezná — INV-TRAD-07; cizí příkaz se bez souhlasu neruší → `other-orders`, zavři Flattenem).
+    Z pozice samotné se vlastnictví nikdy neodvozuje (INV-PART-03).
+  - Ve frontě (`prepareBareClose`, vzor attach): nic nevyřešeného u záznamu ani pozice
+    (`manage-unresolved`), žádný nevyřešený ruční vstup, žádný běžící Flatten, ingress leadera 0,
+    ohraničené čerstvé REST čtení příkazů i pozic (3 s, snímek streamu ne), fence fronty,
+    tvar, durable `safety.manualOrderActions` `sending` (INV-OUTBOX-01).
+  - Mimo frontu `executeClose` s `managed: null`: synchronně ARM/shadow/kill, generace + fence,
+    Flatten, jiný zápis na leaderovi, ingress a z cache „na symbolu nic nepracuje ∧ stream net =
+    qty“ (místo `legsLive`); jinak `not-sent`. `closeReachBlockers` se u holé pozice VĚDOMĚ
+    přeskočí celé — přesně (oprava textu po oponentuře C8): ARM/shadow/kill a běžící Flatten se
+    kontrolují zvlášť (výše); `sequenceBroken` / `needsReconciliation` za ARMED bez DISARM nenastane
+    (odpojení, failClosed i Flatten nejdřív odzbrojí a zvednou generaci — zachytí brána ARM
+    a generace), proto se do holé větve nepřidávají (stav by nešel ani otestovat); stuck outbox,
+    divergence, čekající kopie vstupu, vyřazení followera, nenamapovaní followeři, jejich pozice,
+    exit sada a ingress followerů jsou jen o followerech — sólo skupina je nemá. Raw
+    `liquidatePosition` jeden pokus, registrovaný jako rozpracovaný zápis (Flatten leadera
+    vynechá jako nejasný zápis — druhá likvidace nevznikne). Flatten běžící už před × zastaví
+    × dvakrát: odzbrojí (`not-armed`) a `busy`.
+  - Výsledek jen stavem u brokera (INV-MODE-02): flat ∧ nic nepracuje = `acknowledged`
+    a `closedAt` záznamu zapíše worker sám (nečeká na stream); `already-flat` / flat při
+    odmítnutí = `waived` „ne tímto příkazem“ (kauzalita se netvrdí) + `closedAt`; pozice trvá po
+    timeoutu / výjimce / indeterminate / potvrzeném zápisu = `unknown` + incident „holá pozice N
+    trvá, zavření nepotvrzeno“ bez auto-close (INV-DEFAULT-02); **pozice trvá po DEFINITIVNÍM
+    odmítnutí = incident, ale záznam `rejected`** (broker nic neprovedl; oponentura C8 P3) — `rejected`
+    neblokuje doplnění SL/TP, jedinou risk-redukční akci, která smí i za DISARMED. Flat po timeoutu /
+    indeterminate = `unknown` bez incidentu. `unknown` (i restart v `sending`) dořeší jen čtení
+    pozice: trvá = incident, flat = `waived` + `closedAt`; do té doby blokuje další × i attach
+    téhož záznamu (`manage-unresolved`). **Dořešení nevyhlásí incident o cizí pozici**
+    (`bareCloseSuperseded`, oponentura C8 P3): když stream holý záznam mezitím uzavřel (`closedAt`)
+    nebo ho nahradil novější ruční vstup, který došel k brokerovi a není přikoupení (prošel branou
+    z flat), = `waived` „současná pozice patří jinému vstupu“ bez čtení a bez incidentu — **ale jen
+    když surový liquidate této operace už doběhl** (`manageWritesInFlight`; oponentura kolo 3, P3):
+    jinak rozhodne čtení navázané na konec zápisu, protože pozdě doběhnutý liquidate by zavřel
+    i současnou pozici. Nikdy opakování.
+  - **Nový ruční vstup se nepustí, dokud na leaderovi běží surový zápis** (`inFlightBrokerWritesByAccount`:
+    × liquidate, doplnění SL/TP; kolo 3, P3) — `leader-write-in-flight`, brána ve frontě (bez záznamu)
+    i synchronně těsně před POST (`not-sent`). Po timeoutu × tak liquidate nemůže tiše zavřít nový
+    vstup. Nový vstup během `unknown` zavření s už doběhlým zápisem se neblokuje (řeší
+    `bareCloseSuperseded`).
+  - Dořešení čtením, které najde holou pozici trvající, vyhlásí incident i za DISARMED
+    (`recordWhenDisarmed`, kolo 3 — výhrada C8 č. 6; worker po restartu startuje DISARMED). Restart
+    v `sending` sám incident nevyhlásí: flat / cizí pozice by byly falešný incident; výsledek
+    neznámý hlásí push záznamu `unknown`.
+  - Vědomě beze změny (jako 2d): cizí příkaz, který vznikne až po synchronní kontrole a před
+    zpracováním liquidate u brokera, liquidate zruší.
+  Hlídá test: `tests/manualEntryBareClose.test.ts` (mutačně ověřeno 18 pravidel; po oponentuře
+  dalších 12: timeout s pozicí / flat, výjimka, indeterminate, odmítnutí s pozicí / flat, `unknown`
+  blokuje attach, nejnovější záznam v controlleru, obrat přes nulu, Flatten před ×, `scope:
+  'position'`, dořešení po novém vstupu / `closedAt`; kolo 3 mutačně dalších 4: zkratka až po konci zápisu,
+  nový vstup během zápisu ve frontě i před POST, incident za DISARMED po restartu),
+  `tests/localCopierExecutionAgent.test.ts` (capability).
+- **„Zrušit vše“ = zrušit VLASTNÍ čekající vstupy, nikdy ochranu pozice (C7, 3. 11. 2026,
+  `docs/reviews/trading-gaps-designs/safety.md`; oponentura copier-design-critic: návrh OK, diff
+  kolo 1 „OPRAVIT PŘED COMMITEM“ → opraveno týž den; kolo 2 „OK S VÝHRADAMI“ (8× P3) → výhrady
+  uzavřené týž den; kolo 3 (1× P2, 5× P3) → opraveno týž den, viz níže):**
+  žádný nový příkaz ani výjimka — N× existující `manage-leader-order` `cancel-entry`, každý
+  s vlastním `operationId`, sekvenčně, výsledek po položkách, nic se automaticky neopakuje
+  (`lib/liveCancelPending.ts:cancelOwnPendingEntries`). Capability `manual-order-cancel-pending-v1`
+  (worker se správou); bez ní UI nic nenabídne.
+  - **Nikdy:** „Zrušit čekající“ neruší ochrannou SL/TP nohu otevřené pozice (zrušení zvětšuje
+    riziko — INV-BRAKE-01/02; kdo chce pryč i pozici, má Flatten), cizí příkaz bez stopy appky
+    (může to být uživatelův ochranný Stop; duch INV-PART-03 — appka ho jen spočítá a pošle do
+    Tradovate / na Flatten) ani částečně vyplněný vstup (INV-TRAD-02: zbytek by šel i s nohami,
+    kaskáda NEOVĚŘENÁ → blokováno s kódem `entry-partially-filled` „pozice je otevřená, zavři ji
+    Flattenem (× u částečně vyplněné pozice nejde)“ — × chce vstup vyplněný přesně na qty, oponentura
+    C7 kolo 2). **Worker to hlídá sám, ne jen výběr pro zobrazení** (oponentura C7 kolo 2,
+    `cancelEntryTargetProblem`): cíl `cancel-entry` z čerstvého REST nesmí mít `parentOrderId`, jeho id
+    nesmí být id žádné známé ochranné nohy (vlastní záznamy + OSO/bracket outboxy) a u vlastního vstupu
+    musí strana i typ sedět se záznamem — jinak `not-entry` a nic se neodešle (chyba mapování ACK
+    ani poškozený store nikdy nezruší SL). Kolo 3 (P3, obrana do hloubky): příkaz na OPAČNÉ straně,
+    než je otevřená pozice leadera v cache streamu, by ji zmenšil = ochrana (i uživatelův samostatný
+    Stop/Limit z Tradovate, který žádný záznam nezná) → taky `not-entry`; přikoupení je vždy na
+    stejné straně a běžný vstup jde jen z flat. Mimo rozsah zůstává `cancelOwnManualEntry` (zrušení
+    vlastního vstupu po `submitted` eventu za DISARMED): bere id ze záznamu bez těchto kontrol —
+    poškozený záznam by tam mohl zrušit cizí příkaz (hypotetické, NEOVĚŘENO, k posouzení). Po liquidate nohy zmizí, protože liquidate ruší VŠE na
+    kontraktu — to kaskádu rodič → nohy nedokazuje. Odchod pozastavených nohou s rodičem při přímém
+    zrušení čekajícího vstupu je **NEOVĚŘENÝ** (hlavně TP přikoupení bez `parentId`; DEMO záznam
+    zrušení čekajícího přikoupení chybí) a po čistém zrušení worker nohy nečte — vědomá mezera.
+    Zbývající pojistka je jen kontrola nadkrytí přikoupení (`reviewScaleInCoverage`): za ARMED
+    incident, za DISARMED jen audit (C7 je dostupné i za DISARMED). Obecné `cancel-order` (starý
+    Dashboard) worker i běžící runtime adaptér odmítnou `unsupported-copy-command:cancel-order` bez
+    jakéhokoli zápisu; relay ho nepouští.
+  - Status `pendingOwnEntries` (`selectOwnPendingEntries`, jen zobrazení INV-UI-01/03) = vlastní
+    `acknowledged` Limit/Stop záznam leadera s id vstupu i obou nohou ∩ otevřený příkaz v cache
+    streamu s fillem 0, stejného symbolu/strany/typu, bez `parentOrderId` a s id, které není id
+    žádné vlastní nohy; bez rozběhnutého zrušení či nevyřešené změny. `pendingCancelContext` jen
+    počítá, co zůstává (cizí, ochranné nohy, částečně vyplněné) a proč teď nejde nic
+    (nevyřešený ruční vstup). Worker při každém zrušení vše ověří znovu čerstvým REST čtením.
+  - **Výsledek `cancel-entry` jen stavem (od C7, `lib/liveCancelPending.ts:cancelEntryOutcome`):**
+    adaptér `cancelOrder` skončí úspěchem i u příkazu, který se mezitím vyplnil (čeká na
+    canceled|filled|rejected), a Tradovate zrušení vyplněného vstupu ODMÍTNE („TooLateToCancel“).
+    Proto po úspěchu i po definitivním odmítnutí (inline i pozdě po timeoutu) ohraničené autoritativní
+    `findOrderById` vstupu: `canceled` s fillem 0 = `acknowledged` (po odmítnutí `waived` „ne tímto
+    příkazem“ — kauzalita se netvrdí); jakýkoli fill = `rejected` s kódem `entry-filled` /
+    `entry-partially-filled` (nikdy „zrušeno“, kód je i v durable záznamu `resultCode` a vrací ho
+    idempotentní replay); `waived` nese kód ověřený stavem (`canceled-elsewhere` / `entry-ended`)
+    a replay ho mapuje na „zrušeno“ JEN s tímto kódem — ruční waiver (`waiveManualEntry`) ani starý
+    záznam bez kódu nikdy nejsou „zrušeno“, replay vrátí `unknown` „ověř v Tradovate“ (kolo 2).
+    Vstup po odmítnutí dál čeká = nejdřív `unknown` „vstup zatím pracuje — ověřuji“ (REST hned po
+    „TooLateToCancel“ nemusí fill ještě ukazovat, kolo 2) a teprve čtení po ustálení (časovač nebo
+    konec vstupu ve streamu) rozhodne: dál čeká = `rejected` „vstup dál čeká“, fill = `entry-filled`
+    + kontrola nohou; totéž u pozdního odmítnutí po timeoutu. **Odmítnutí se při odkladu uloží do
+    záznamu** (`brokerRejection`, kolo 3, P3; v paměti synchronně, durable pro restart) — vstup
+    zrušený během ustálení jinak (uživatel v Tradovate) je pak `waived` `canceled-elsewhere` „ne tímto
+    příkazem“, nikdy `acknowledged` „zrušení potvrzeno“. Pozdní výsledek zápisu (odmítnutí i „úspěch“)
+    přijde dřív, než se zápis uklidí z `manageWritesInFlight`, a plánovaná čtení už mohla proběhnout —
+    odklad se proto naváže na konec zápisu (čtení hned po něm), takže záznam nezůstane navždy
+    `unknown` (kolo 3, P3). Při konečném fillu se PŘED uložením
+    výsledku ohraničeně přečtou obě nohy: chrání jen PŘESNĚ — obě `working`, otevřené qty = fill,
+    opačná strana, stejný symbol (`legsProtectionProblem`; přerostlá noha by po vyplnění otočila
+    pozici); noha `pending` (Suspended hned po fillu) se v rozpočtu ověření přečte znovu. Kontrola
+    běží jednou na operaci a proces a souběžní volající (stream konec vstupu, pozdní výsledek zápisu,
+    časovač) čekají na TENTÝŽ běh (`Map` s promise) — konečný výsledek se tak uloží až po kontrole
+    i při souběhu; pád mezi = záznam zůstane `unknown` a dořešení po startu kontrolu zopakuje. Než
+    se vyhlásí incident, přečte se pozice: leader ověřeně flat a na symbolu nic nepracuje = obchod
+    mezitím skončil (SL/TP, Flatten). **„Ověřeně flat“ (`leaderVerifiedFlat`, kolo 3, P2):** DVĚ po
+    sobě jdoucí čtení shodně net 0 a working 0 (`listPositions` adaptéru se přidá k už běžícímu
+    `/position/list` — první snímek může být z doby PŘED fillem, zatímco `listOrders(fresh)` je nový;
+    druhé čtení začíná až po konci prvního) A stream po zpracování všech přijatých eventů leadera
+    (`pendingTradeIngressByAccount` 0) nehlásí na symbolu nenulovou pozici ani otevřený příkaz; jinak
+    incident. Pak → jen audit a text „pozice už je zavřená (příčina neověřena)“,
+    žádný falešný incident (kód `entry-filled` zůstává — push „Vstup se vyplnil během rušení“ je
+    pravdivý); jinak (pozice trvá, osiřelá noha pracuje, nečitelné) incident bez auto-close
+    (INV-DEFAULT-02). Nečitelné = `unknown` + dořešení jen čtením; `unknown`, u kterého vstup po
+    ustálení (`settle`) dál pracuje (zrušení k brokerovi nedorazilo, restart v `sending`), =
+    `rejected` „zrušení se neprojevilo“ — vstup se znovu nabídne, nic se automaticky neopakuje.
+    Stream konec vstupu jen spustí totéž čtení (Order(Canceled) může předběhnout Fill). Vyplnění mezi
+    zobrazením a příkazem = blokováno s kódem `entry-filled` „pozice je otevřená; nic se nezrušilo“.
+    Zrušení přikoupení během běžící změny celé pozice = `busy` (oponentura C17, P2), po změně celé
+    pozice s neznámým výsledkem = `manage-unresolved`.
+  - UI (`cancelOwnPendingEntries`): výjimka relaye „neodesláno“ jen u prokazatelně neodeslaných vzorů
+    (`CANCEL_PENDING_NOT_SENT_PATTERN`, stejné jako `LiveTradingScreen`), jinak „výsledek neznámý“.
+    Status `manualOrderActions[].resultCode` nese kód vyplnění; push watchdogu pak hlásí „Vstup se
+    vyplnil během rušení“, nikdy „vstup dál čeká“ (`server/copierIncidentWatchdog.ts`); u „pozice už
+    je zavřená“ radí „Ověř v Tradovate“, ne „Zkontroluj SL/TP“; `unknown` zrušení mladší než 20 s
+    (čeká na ustálení) se zatím nehlásí, aby „výsledek neznámý“ nepředběhl konečný výsledek; důvod
+    s koncovou tečkou bez „..“ (kolo 3). Dashboard
+    „Zrušit příkaz“ (`dashboardCancelTarget`) má stejné brány jako tlačítko: čerstvý neobnovený
+    status a relay (INV-FRESH-03, INV-UI-01/02; kolo 2) — UI zatím zapojené není.
+  Hlídá test (kolo 1 mutačně 16 mutací, kolo 2 dalších 20, kolo 3 dalších 15):
+  `tests/liveCancelPending.test.ts` (odmítnutí inline i pozdě, dvojí zrušení, přerostlé nohy, pořadí
+  kontrola→záznam i při souběhu, odmítnutí s REST „working“, restart v `sending`, replay po waiveru,
+  flat po fillu, noha `pending`, cíl = noha, texty částečné pozice, Dashboard brány; kolo 3: zastaralé
+  první čtení pozic, stream s pozicí / pracující nohou, odmítnutí v záznamu inline / pozdě / po
+  restartu, pozdní odmítnutí i „úspěch“ po obou čteních, ochrana z opačné pozice), `tests/manualOrderManage.test.ts`
+  (`entry-filled`), `tests/manualScaleInReplay.test.ts` (`busy`, `manage-unresolved`),
+  `tests/copierIncidentWatchdog.test.ts` (push), `tests/localCopierExecutionAgent.test.ts`
+  a `tests/copierRuntimeCommandAdapter.test.ts` (capability, odmítnutí `cancel-order`).
 - **Čáry obchodu na telefonu — napojení dat (2. 11. 2026):** `phoneTrade` dostává
   `manage`/`closeSupported`/`entryAvg` z `livePhoneManageFields` = výrazy PC grafu (capability
   + jediný vlastní obchod; × jen za dostupného runtime, zapnuté kopírky a ne shadow; BE průměr

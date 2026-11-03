@@ -663,6 +663,17 @@ export function manualEntryNotifications(
 }
 
 const MANAGE_ACTION_LABEL: Record<string, string> = { 'move-stop': 'Posun SL', 'move-target': 'Posun TP', 'cancel-entry': 'Zrušení vstupu', 'close-position': 'Zavření obchodu' };
+/**
+ * C7 kolo 3 (P3): `cancel-entry` po odmítnutí brokerem je ~10 s `unknown` „zatím pracuje — ověřuji“,
+ * než čtení po ustálení (worker `settle` 10 s + ohraničené čtení) rozhodne. Push „výsledek neznámý“ by
+ * hned předběhl konečný výsledek (dvě zprávy) — mladší `unknown` zrušení se proto zatím nehlásí; když
+ * `unknown` trvá déle, push přijde při dalším průchodu.
+ */
+const CANCEL_ENTRY_UNKNOWN_GRACE_MS = 20_000;
+/** Text, kterým worker hlásí „vstup se vyplnil, ale obchod už skončil“ (`cancelEntryFilledFlatReason`). */
+const CANCEL_ENTRY_FLAT_TEXT = 'pozice už je zavřená';
+/** Důvod bez koncové tečky — push za něj přidává vlastní větu (žádné „..“). */
+const withoutFinalDot = (text: string) => text.replace(/[.\s]+$/, '');
 
 /** Problémové výsledky správy ručního vstupu (fáze 2a): push jen při odmítnutí / neznámém výsledku. */
 export function manualOrderActionNotifications(
@@ -680,8 +691,18 @@ export function manualOrderActionNotifications(
     if (!Number.isFinite(updatedAt) || now - updatedAt > MANUAL_ENTRY_NOTIFY_WINDOW_MS) continue;
     const label = MANAGE_ACTION_LABEL[asText(action.action) ?? ''] ?? 'Změna vstupu';
     const reason = asText(action.reason);
+    if (status === 'unknown' && asText(action.action) === 'cancel-entry' && now - updatedAt < CANCEL_ENTRY_UNKNOWN_GRACE_MS) continue;
+    // C7: zrušení, během kterého se vstup vyplnil, NENÍ „vstup dál čeká“ — pozice je otevřená.
+    const resultCode = asText(action.resultCode);
+    if (status === 'rejected' && asText(action.action) === 'cancel-entry' && (resultCode === 'entry-filled' || resultCode === 'entry-partially-filled')) {
+      // Kolo 3 (P3): obchod už skončil (ověřeně flat) — rada „zkontroluj SL/TP“ by si protiřečila.
+      const flat = reason?.includes(CANCEL_ENTRY_FLAT_TEXT) === true;
+      out.push({ key: `manual-order:${operationId}`, detail: `${status}:${resultCode}`, title: 'Vstup se vyplnil během rušení',
+        body: `${withoutFinalDot(reason ?? 'Vstup se při rušení vyplnil — pozice je otevřená')}. ${flat ? 'Ověř v Tradovate.' : 'Zkontroluj SL/TP v Tradovate.'}` });
+      continue;
+    }
     out.push(status === 'rejected'
-      ? { key: `manual-order:${operationId}`, detail: status, title: `${label} odmítnut`, body: `${reason ?? 'Broker změnu odmítl'}.${asText(action.action) === 'cancel-entry' ? ' Vstup dál čeká — zkontroluj ho v Tradovate.' : asText(action.action) === 'close-position' ? ' Zkontroluj leadera v Tradovate — pozice a ochrana.' : ' Leader i followeři mají původní cenu.'}` }
+      ? { key: `manual-order:${operationId}`, detail: status, title: `${label} odmítnut`, body: `${withoutFinalDot(reason ?? 'Broker změnu odmítl')}.${asText(action.action) === 'cancel-entry' ? ' Vstup dál čeká — zkontroluj ho v Tradovate.' : asText(action.action) === 'close-position' ? ' Zkontroluj leadera v Tradovate — pozice a ochrana.' : ' Leader i followeři mají původní cenu.'}` }
       : { key: `manual-order:${operationId}`, detail: status, title: `${label}: výsledek neznámý`, body: 'Zkontroluj leadera v Tradovate; kopírka se po výpadku sama nezapne, dokud se to nevyřeší.' });
   }
   return out;

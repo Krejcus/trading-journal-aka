@@ -409,6 +409,19 @@ export interface CopierManualOrderActionRecord {
   createdAt: number;
   updatedAt: number;
   reason?: string;
+  /**
+   * C7: kód výsledku `cancel-entry`, když se vstup při rušení vyplnil (pozice je otevřená) — idempotentní
+   * replay stejného `operationId` ho vrátí v `blockers`, aby UI ukázalo „pozice je otevřená“, ne „odmítnuto“.
+   * `canceled-elsewhere` / `entry-ended` = `waived` ověřený stavem (vstup bez fillu skončil) — jen s nimi
+   * replay mapuje `waived` na „zrušeno“; ruční waiver kód nemá (oponentura C7 kolo 2).
+   */
+  resultCode?: 'entry-filled' | 'entry-partially-filled' | 'canceled-elsewhere' | 'entry-ended';
+  /**
+   * C7 kolo 3: definitivní odmítnutí `cancel-entry` brokerem (zkrácený text), když se rozhodnutí odkládá
+   * (`unknown` „zatím pracuje“ / nečitelné). Dořešení čtením ho předá do `cancelEntryOutcome` — vstup
+   * zrušený jinak během ustálení je pak `waived` „ne tímto příkazem“, nikdy „zrušení potvrzeno“.
+   */
+  brokerRejection?: string;
   waiver?: { at: number; reason: string };
 }
 

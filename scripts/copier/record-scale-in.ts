@@ -15,6 +15,17 @@
  *
  * Exit 0 = záznam + leader ověřeně čistý; 4 = stav leadera neověřen; 1 = nespuštěno.
  * Po záznamu: `npm run copier:mac -- reconcile` (read-only) před ARM.
+ *
+ * R16 / R17 (`docs/reviews/trading-gaps-designs/safety.md` C16/C17 bod 6) jdou přes
+ * společný interpret `recordDemoSession.ts` (jen DEMO8661118, MNQ front, DISARMED gate
+ * před scénářem i každým zadáním, expozice ≤ 2, flat na začátku, úklid a ověřený flat):
+ *
+ *   npx tsx scripts/copier/record-scale-in.ts --scenario foreign-close --account 61038658 \
+ *     --symbol MNQZ6 --side Buy --market-price 28075 [--confirm --allow-fill]
+ *   npx tsx scripts/copier/record-scale-in.ts --scenario pending-modify --account 61038658 \
+ *     --symbol MNQZ6 --side Buy --market-price 28075 [--add-points 45 --sl-points 85 --tp-points 80] [--confirm --allow-fill]
+ *
+ * Exit pro R16/R17: 0 hotovo a čisto; 2 přerušeno, čisto; 4 neověřeno; 1 nespuštěno.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -27,12 +38,27 @@ import { createMacCopierDeviceTokenProvider, loadMacCopierDevice } from '../../s
 import { leakedIdentifiers, sanitizeRecordedFrame } from './recordLeaderOsoPlan';
 import {
   decideScaleInCleanup,
+  isScaleInDemoScenario,
   SCALE_IN_FIVE_ADDS,
   parseRecordScaleInArgs,
+  parseScaleInDemoArgs,
   recordScaleInProblems,
   scaleInLoosened,
   type ScaleInCleanupDecision,
 } from './recordScaleInPlan';
+import { runDemoRecording } from './recordDemoSession';
+
+// R16 `foreign-close` / R17 `pending-modify`: společný interpret, původní tok níže se nespustí.
+if (isScaleInDemoScenario(process.argv.slice(2))) {
+  let demoPlan: ReturnType<typeof parseScaleInDemoArgs>;
+  try {
+    demoPlan = parseScaleInDemoArgs(process.argv.slice(2));
+  } catch (reason) {
+    console.error(`NESPUŠTĚNO: ${reason instanceof Error ? reason.message : String(reason)}`);
+    process.exit(1);
+  }
+  process.exit(await runDemoRecording(demoPlan, { script: 'record-scale-in', filePrefix: 'leader-scale-in', tagPrefix: 'rsd' }));
+}
 
 const COPIER_DIR = join(homedir(), 'Library/Application Support/AlphaTrade/copier');
 const STATUS_URL = 'http://127.0.0.1:3211/v1/status';
@@ -259,7 +285,7 @@ const runFive = async () => {
     const sentAt = elapsed();
     step(`modify ${label} souběžně (${ids.length} nohou)`, { ids });
     const results = await Promise.allSettled(ids.map(id => broker.modifyOrder(plan.accountId, id, change(id))
-      .then(result => ({ id, ms: elapsed() - sentAt, confirmedBy: result?.confirmedBy ?? null }))));
+      .then(result => ({ id, ms: elapsed() - sentAt, confirmedBy: result ? result.confirmedBy ?? null : null }))));
     step(`modify ${label} výsledky`, results.map(item => item.status === 'fulfilled' ? item.value : { error: message(item.reason) }));
   }
   await sleep(1_000);
@@ -295,7 +321,7 @@ try {
     const sentAt = elapsed();
     step(`modify ${label} souběžně`, { ids, change });
     const results = await Promise.allSettled(ids.map(id => broker.modifyOrder(plan.accountId, id, change)
-      .then(result => ({ id, ms: elapsed() - sentAt, confirmedBy: result?.confirmedBy ?? null }))));
+      .then(result => ({ id, ms: elapsed() - sentAt, confirmedBy: result ? result.confirmedBy ?? null : null }))));
     step(`modify ${label} výsledky`, results.map(item => item.status === 'fulfilled' ? item.value : { error: message(item.reason) }));
   }
   await sleep(1_000);
