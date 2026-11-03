@@ -326,7 +326,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   přikoupení 2 nejdřív správně zablokované („SL i TP aspoň 16 ticků od trhu“ — trh 15 ticků nad SL) → tah SL
   dál od trhu → Market přikoupení 2 = Long 3 ze 2 lístků (nohy 1+2, jedna cena SL/TP) → × zavřeno (ověřeno
   čtením). Filip mezitím z telefonu: holý Market → Přidat SL/TP → posuny SL/TP → zavřeno, bez incidentu.
-- Otevřené: telefon prstem pro přikoupení a správu celé pozice (Filip zkouší sám); Lucid poplatky po připojení.
+- Telefon (prod web v mobilním viewportu = stejný kód jako appka v iPhonu): plus → list Market → přikoupení
+  z listu (převzal SL/TP pozice) → čekající přikoupení s čárou → × „Opravdu?“ → × zavřít; vše OK.
+- Nález: lišta telefonu (holý Market) + „Přidat SL/TP“ nebyla lístkem pozice → přikoupit nešlo. Oprava
+  e37d7963 (holý záznam s doplněnými nohami = lístek; bez nohou dál mimo), critic kolo 4 OK; nasazeno
+  (web + worker e37d7963 `--scale-in on`; iPhone beze změny — oprava je jen ve workeru). Ověřeno z mobilního
+  pohledu: lišta → Přidat SL/TP → přikoupení Market (Long 2, 2 lístky) → × zavřeno. DEMO den −159,48 USD.
+- Otevřené: Filip prstem na fyzickém iPhonu (stejný kód ověřený v mobilním viewportu); Lucid poplatky po připojení.
 
 ### 2026-11-03 — HTF FVG v grafu (FVG vyššího TF na nižším grafu, jako Pine) (Claude, nasazeno 3. 11. na Filipovo „nasaď“, jen web)
 
