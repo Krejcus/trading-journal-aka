@@ -1,4 +1,5 @@
 import React, { Suspense, useEffect, useRef, useState } from 'react';
+import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import { createPortal } from 'react-dom';
 import { ErrorBoundary } from './ErrorBoundary';
 import { QuantumSpinner } from './QuantumLoader';
@@ -106,6 +107,8 @@ interface Props {
   entryMaxContracts?: number;
   /** Front kontrakt podle brokera (jen Limit/Stop bez IBKR). */
   entryFrontContract?: string | null;
+  /** Přikoupení do otevřené pozice (SL/TP pozice a stav pro panel). */
+  entryScaleIn?: LiveTicketScaleIn | null;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -187,4 +190,5 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && Boolean(left.entryMarketSupported) === Boolean(right.entryMarketSupported)
   && (left.entryMaxContracts ?? 1) === (right.entryMaxContracts ?? 1)
   && (left.entryFrontContract ?? null) === (right.entryFrontContract ?? null)
+  && JSON.stringify(left.entryScaleIn ?? null) === JSON.stringify(right.entryScaleIn ?? null)
 ));

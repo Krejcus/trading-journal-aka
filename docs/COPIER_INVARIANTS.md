@@ -284,6 +284,10 @@ existující ochranu.
   `dispatchBroker` smí přes kill pustit jen úzký `terminalCancel` hlídaný
   `cancelLifecycleHaltReason`; ruční Flatten je samostatná výslovná safety
   akce. Ani jedna výjimka nesmí vytvořit nebo zvětšit expozici.
+  Třetí výjimka (3. 11. 2026, přikoupení): cílené zrušení VLASTNÍHO čekajícího
+  přikoupení do pozice (`reviewPendingScaleIns` → `cancelOwnManualEntry`, raw
+  broker mimo `dispatchBroker`) běží i pod kill a za DISARMED — jen zrušení,
+  jeden pokus, nikdy zápis, který by expozici vytvořil.
 - Bezpečné změny vs. nebezpečné: Bezpečné je zpřesnit audit a doručení brzdy.
   Nebezpečné je zaměnit kill za dočasný boolean ovládaný posledním poll response.
 
@@ -1853,6 +1857,24 @@ existující ochranu.
   Hlídá test: `tests/priceAlerts.test.ts`, `tests/livePhoneTrade.test.ts`.
 - Hlídá test (1b): `tests/manualEntryPlace.test.ts`, `tests/leaderEntryPlace.test.ts`,
   `tests/localCopierExecutionAgent.test.ts`, `tests/tradovateCopierCommandRelay.test.ts`.
+
+- Přikoupení do otevřené pozice (3. 11. 2026, `docs/reviews/scale-in-design-20261102.md` v5):
+  jen manual-only local-only DEMO skupina bez followerů s instalačním opt-inem
+  `--scale-in on` (capability `manual-entry-scale-in-v1`). Příkaz nese záměr
+  `position` (pozice, kterou uživatel viděl); bez něj platí `account-not-flat`
+  beze změny. Brána `scaleInAddBlockers` (čistá, z paměti) nahrazuje flat bránu
+  jen pro leadera: vstupy lístků plně vyplněné podle fillů, krytí = |net| nohami
+  potvrzenými streamem bez dílčího fillu, jedna cena SL/TP a přikoupení s touž
+  cenou, žádný cizí příkaz, deník a epocha sedí, strop na CELOU pozici, čekající
+  Limit/Stop jen po 1 kontraktu; synchronně znovu těsně před POSTem (nikdy REST).
+  Riziko po lístcích z VWAP fillů, rezerva bez otevřeného P&L. Čekající přikoupení
+  je stavová podmínka (jeden pokus o zrušení i za DISARMED / kill; selhané zrušení,
+  neznámý výsledek POSTu a restart během odesílání = incident). Správa pozice s víc lístky
+  jen celá (`scope: 'position'`): jedna kontrola, všechny nohy durable `sending`,
+  souběžné modify s qty ze streamu, výsledek po nohách bez opakování; starý tvar
+  příkazu na takové pozici = `position-multi`.
+  Hlídá test: `tests/manualScaleIn.test.ts`, `tests/manualScaleInReplay.test.ts`,
+  `tests/manualScaleInPreview.test.ts`, `tests/liveScaleIn.test.ts`.
 
 ### INV-UI-04: Data z TradingView jsou jen pro zobrazení; nikdy nevstupují do read modelu, rozhodování ani úložišť (26. 10. 2026)
 

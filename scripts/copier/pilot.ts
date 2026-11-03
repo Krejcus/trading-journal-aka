@@ -1389,6 +1389,9 @@ async function runLocalAgent(
       broker,
       // Ruční vstup (2. 11. 2026): kontrakt a cena Marketu jen z kotace IBKR vlákna ceny.
       manualEntryQuote: root => tvPriceStream?.latestQuote(root) ?? null,
+      // Přikoupení do pozice (3. 11. 2026): jen instalační opt-in; controller ho navíc pustí jen
+      // pro manual-only local-only DEMO skupinu bez followerů.
+      manualEntryScaleIn: process.env.ALPHATRADE_SCALE_IN?.trim().toLowerCase() === 'on',
       store: {
         load: () => runtimeStore.load(),
         async commit(snapshot, expectedRevision) {

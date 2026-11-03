@@ -9,6 +9,8 @@ import { breakEvenStop, tightenBlockReason, type LiveChartPositionSummary } from
  */
 
 export const LIVE_POSITION_OWNER = 'live-position';
+/** Čára čekajícího přikoupení do pozice (3. 11. 2026): × = zrušit jen přikoupení, ne pozici. */
+export const LIVE_PENDING_ADD_LINE_ID = `${LIVE_POSITION_OWNER}:pending-add`;
 const LONG_COLOR = '#2563eb';
 const SHORT_COLOR = '#e11d48';
 const SL_COLOR = '#ef4444';
@@ -26,6 +28,8 @@ export interface LivePositionLineControls {
   entryAvg: number | null;
   /** Odeslaný posun čekající na potvrzení: čára drží novou cenu se štítkem „odesílám“. */
   pending?: { stopLoss?: number; takeProfit?: number };
+  /** Čekající přikoupení do pozice (worker `leaderPositions`) — vlastní čára s × (zrušit). */
+  pendingAdd?: { price: number | null; quantity: number; orderType: string } | null;
   pointValue: number;
 }
 
@@ -53,6 +57,8 @@ export function liveLineMoveBlockReason(
 export function liveBreakEven(summary: LiveChartPositionSummary, entryAvg: number | null): { price: number | null; blocked: string | null } {
   const price = breakEvenStop(summary.side, entryAvg);
   if (summary.kind !== 'position') return { price: null, blocked: 'BE jde až u vyplněné pozice.' };
+  // Rozjeté SL nohy (pozice z přikoupení) = žádná jedna cena SL: BE nejde, místo tichého kliknutí důvod.
+  if (summary.stop == null) return { price, blocked: 'SL pozice není na jedné ceně (nebo není známý) — BE teď nejde.' };
   if (price == null) return { price, blocked: 'Průměrný vstup leadera není známý.' };
   if (summary.stop != null && price === summary.stop) return { price, blocked: 'SL už je na BE.' };
   return { price, blocked: tightenBlockReason(summary.side, summary.stop, price, summary.mark) };
@@ -106,6 +112,17 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
       draggable: canMove && pendingPrice == null,
       // Chvění při kliknutí nesmí poslat skutečný posun.
       dragDeadZonePx: 4,
+    });
+  }
+  const add = controls.pendingAdd;
+  if (position && add && add.price != null && Number.isFinite(add.price)) {
+    lines.push({
+      id: LIVE_PENDING_ADD_LINE_ID, ownerId: LIVE_POSITION_OWNER, ownerType: 'order', kind: 'entry',
+      price: add.price, color: long ? LONG_COLOR : SHORT_COLOR,
+      label: `PŘIKOUPENÍ ${long ? 'BUY' : 'SELL'} ${add.quantity} ${add.orderType.toUpperCase()}  ${add.price.toFixed(2)} · čeká`,
+      draggable: false,
+      // × = zrušit jen čekající přikoupení (dvoukrokově, jako čekající vstup).
+      cancellable: controls.manageable, cancelAction: 'cancel-order', confirmCancel: true,
     });
   }
   return lines;

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import BacktestOrderLinesOverlay from '../BacktestOrderLinesOverlay';
-import { LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../../lib/liveChartOrderLines';
+import { LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../../lib/liveChartOrderLines';
 import type { LiveChartPositionSummary } from '../../lib/liveChartPosition';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../../lib/leaderOrderManage';
 import { snapToTick } from '../../lib/liveOrderTicket';
@@ -37,7 +37,7 @@ export function useLivePhoneLineState(): LivePhoneLineState {
  * zavření a zrušení je stejné jako `LiveTradingScreen` (INV-UI-01..04): „co
  * jsem viděl“ ze začátku tahu, předkontroly jen blokují, rozhoduje worker.
  */
-export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canClose, entryAvg, isDark, onNotice }: {
+export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice }: {
   api: ChartViewApi;
   state: LivePhoneLineState;
   summary: LiveChartPositionSummary | null;
@@ -52,6 +52,10 @@ export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canC
   canClose: boolean;
   /** Průměrný vstup leadera od workeru (BE). */
   entryAvg: number | null;
+  /** Čekající přikoupení do pozice (čára s × = zrušit jen přikoupení). */
+  pendingAdd?: { price: number | null; quantity: number; orderType: string } | null;
+  /** Pozice z přikoupení: nejochrannější SL od workeru — „co jsem viděl“ pro × při rozjetých SL. */
+  closeExpect?: number | null;
   isDark: boolean;
   onNotice: (text: string) => void;
 }) {
@@ -74,10 +78,12 @@ export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canC
     entryAvg,
     pointValue: POINT_VALUE,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
-  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, entryAvg, manage, pendingMove, guardSummary]);
+    pendingAdd,
+  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, entryAvg, manage, pendingMove, guardSummary, pendingAdd]);
 
   const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit') => {
-    if (!manage || expect == null) return;
+    if (!manage) return;
+    if (expect == null) { onNotice('Cena SL/TP pozice není jedna nebo není známá — nic se neodeslalo. Sjednoť ji v Tradovate, nebo zavři Flattenem.'); return; }
     if (busyRef.current) { onNotice('Čeká se na výsledek předchozí změny — nic se neodeslalo.'); return; }
     busyRef.current = true;
     if (move && newPrice != null) setPendingMove({ kind: move, price: newPrice, until: Number.POSITIVE_INFINITY });
@@ -120,9 +126,13 @@ export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canC
         void run(kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
       }}
       onCancel={line => {
+        if (line.id === LIVE_PENDING_ADD_LINE_ID) {
+          if (pendingAdd?.price != null) void run('cancel-entry', pendingAdd.price);
+          return;
+        }
         if (line.ownerId !== LIVE_POSITION_OWNER || line.kind !== 'entry' || !summary) return;
         if (summary.kind === 'pending') void run('cancel-entry', summary.leader?.entry);
-        else void run('close-position', summary.stop);
+        else void run('close-position', summary.stop ?? closeExpect);
       }}
       onAction={(line, actionId) => {
         if (line.ownerId !== LIVE_POSITION_OWNER || actionId !== 'break-even' || !summary) return;

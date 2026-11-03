@@ -288,6 +288,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-03 — Dokupování do otevřené pozice + správa celé pozice (Claude, větev `claude/scale-in-20261103`, NENASAZENO)
+
+- Filip 2.–3. 11.: chce přikupovat do pozice / další limit v pozici; rozhodl variantu B (každé přikoupení
+  vlastní nativní OSO se SL/TP = společné SL/TP pozice), „neomezeně“ (jen strop účtu na celou pozici),
+  přikoupení i správu celé pozice najednou, DEMO testy smím sám. Návrh v5 = implementace:
+  `docs/reviews/scale-in-design-20261102.md`; INV-MANUAL-01 a INV-BRAKE-02 doplněné.
+- Jen manual-only local-only DEMO skupina bez followerů s `--scale-in on` (capability
+  `manual-entry-scale-in-v1`); jinde dál `account-not-flat`. Čistá logika `services/manualScaleIn.ts`.
+- Fáze 0 + 0b na DEMO8661118 (`scripts/copier/record-scale-in.ts`): TP noha druhého OSO nemá `parentId`
+  (bez směrování podle id z ACK by Limit přikoupení skončilo „ochranné nohy nedorazily“ — mutačně ověřeno);
+  4× SL + 4× TP souběžný modify ~170 ms; liquidate ruší i čekající přikoupení. Fixture replay z reálného záznamu.
+- copier-design-critic: v4 OPRAVIT (7× P1) → vše zapracované (rezerva bez open P&L — opraveno i v dnešním
+  posunu SL jednoho lístku; riziko po lístcích z VWAP; Limit/Stop přikoupení jen qty 1; modify jen nohy bez
+  dílčího fillu s qty ze streamu; restart = `unknown`; mutex a `position-multi` pro starý tvar; nadkrytí =
+  incident). Bez migrace admission (správa pozice nese `entryOperationId` nejstaršího lístku).
+- Oponentura hotového diffu: OPRAVIT (P1-A nadkrytí počítalo Suspended nohy čekajícího vstupu → každý
+  čekající Limit by po 5 s vyhlásil falešný incident; P1-B UI by tiše přepsalo upravené SL/TP na SL/TP pozice)
+  → opraveno: nadkrytí jen do `coverCap` lístku, UI ceny nikdy nemění (neshoda = „nic se neodeslalo“).
+  Nezávislá kontrola workflow (UI / závody / testy, 24 agentů, ověření každého nálezu) potvrdila 18 nálezů
+  (4× P2) — zapracované: čára čekajícího přikoupení s × (PC i telefon), × a BE u rozjetých SL nemlčí,
+  selhané zrušení / neznámé přikoupení = incident, sentinel nadkrytí, doplněné testy (short, filtry, náhled,
+  ořez, epizoda, čerstvost rizika) s mutačním ověřením klíčových.
+- Nasazení až po „nasaď“: web → reinstall s `--scale-in on` → iPhone build. Pak ověřit z appky na DEMO.
+
 ### 2026-11-03 — HTF FVG v grafu (FVG vyššího TF na nižším grafu, jako Pine) (Claude, nasazeno 3. 11. na Filipovo „nasaď“, jen web)
 
 - Filip: „v indikátoru FVG si v TV můžu zapnout HTF FVG — na minutovém grafu vidět pětiminutový“.
@@ -315,6 +339,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   času 1. 11. 2026 = 4h graf aplikace. Ponecháno: celý přepočet při každé změně dat (10–15 ms při 100k
   1m svíček, HTF je výchozí vypnuté); svíčka přepisující poslední data se do HTF promítne až s daty;
   zóna se kreslí od prostřední vyšší svíčky a štítek je název TF (Pine: od potvrzení, text „HTF“).
+
 
 ### 2026-11-03 — Backtest graf dohnal LIVE: indikátory, panel Objednávka, BE, karty obchodů (Claude, nasazeno 3. 11. na Filipovo „nasaď“, jen web; worker beze změny)
 

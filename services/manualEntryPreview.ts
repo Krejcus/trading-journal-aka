@@ -194,6 +194,13 @@ export interface ManualEntryPreviewInputs {
    * Původ kontraktu pro Limit/Stop, když kotace IBKR chybí; Market ho nikdy nestačí.
    */
   brokerFront?: { contract: string; at: number } | null;
+  /**
+   * Přikoupení do otevřené pozice (3. 11. 2026, návrh v4): brána ze
+   * `scaleInAddBlockers` a riziko stávající pozice při společném SL (body bez skluzu;
+   * null = průměr pozice neznámý). Chybí/null = přikoupení vypnuté — příkaz
+   * s `position` se zablokuje. Pro vstup z flat se nepoužije.
+   */
+  scaleIn?: { blockers: ReadonlyArray<LeaderEntryPreviewIssue>; existingLossPoints: number | null; existingQuantity: number } | null;
 }
 
 /** Jak starý smí být front kontrakt od brokera (obnovuje se po 5 min). */
@@ -213,6 +220,17 @@ export function remainingLossHeadroom(risk: ManualEntryAccountRisk, configuredCu
   const cuts = [risk.effectiveDailyLossCutUsd, configuredCutUsd].filter((value): value is number => value != null && value > 0);
   const cutUsd = cuts.length ? Math.min(...cuts) + loss : null;
   return { dailyUsd, drawdownUsd, cutUsd };
+}
+
+/**
+ * Rezerva s otevřenou pozicí (přikoupení, posun SL dál od trhu): otevřený P&L se do
+ * rezervy nikdy nepočítá — riziko pozice se měří ke SL zvlášť. Equity pro DD bez
+ * otevřeného P&L (oponentura v4, P1-1: zisk pozice by jinak „smazal“ realizovanou ztrátu).
+ */
+export function realizedLossHeadroom(risk: ManualEntryAccountRisk, configuredCutUsd: number | null = null) {
+  const equity = risk.netLiq != null && risk.openPnlUsd != null ? risk.netLiq - risk.openPnlUsd
+    : risk.cashBalanceUsd;
+  return remainingLossHeadroom({ ...risk, openPnlUsd: 0, netLiq: equity ?? null, cashBalanceUsd: equity ?? null }, configuredCutUsd);
 }
 
 /** Ztráta při SL stejným vzorcem jako náhled (skluz + poplatky); null = neznámá hodnota bodu. */
@@ -279,9 +297,15 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
   if ((safety.dailyMaxLosingTrades ?? 0) > 0 && input.dailyStats.losingTrades >= safety.dailyMaxLosingTrades!) blockers.push(blocker('daily-max-losing', 'Dosažen počet ztrátových obchodů dne (ruční vstup je přísnější než kopírka).'));
   if ((safety.dailyLossLimitUsd ?? 0) > 0 && -input.dailyStats.realizedPnlUsd >= safety.dailyLossLimitUsd!) blockers.push(blocker('daily-loss-limit', 'Dosažena denní ztráta skupiny (ruční vstup je přísnější než kopírka).'));
 
+  // Přikoupení do pozice: brána přikoupení nahrazuje `account-not-flat` leadera a strop
+  // na příkaz (strop drží na celou pozici — |net| + čekající + nové, scaleInAddBlockers).
+  const add = command.position !== undefined;
+  const scaleIn = add ? input.scaleIn ?? null : null;
+  if (add && !scaleIn) blockers.push(blocker('scale-in-off', 'Přikoupení do pozice tento worker nepovoluje.'));
+  if (scaleIn) for (const issue of scaleIn.blockers) blockers.push(issue);
   // Příkaz samotný.
   const cap = manualEntryContractCap(group);
-  if (command.quantity > cap) blockers.push(blocker('manual-cap', `Ruční vstup je omezený na ${cap} ${cap === 1 ? 'kontrakt' : 'kontrakty'} (strop skupiny).`));
+  if (!add && command.quantity > cap) blockers.push(blocker('manual-cap', `Ruční vstup je omezený na ${cap} ${cap === 1 ? 'kontrakt' : 'kontrakty'} (strop skupiny).`));
   const long = command.side === 'Buy';
   const market = command.orderType === 'Market';
   // Nativní Market jen v instalační manual-only DEMO skupině bez followerů: korelace
@@ -337,13 +361,15 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
   const swingPerContract = pointValue == null || bare ? null
     : (Math.abs(command.takeProfit! - command.stopLoss!) + slippageTicks * TICK) * pointValue + fee;
 
-  const checkAccount = (accountId: number, label: string, quantity: number, configuredCutUsd: number | null = null) => {
+  const checkAccount = (accountId: number, label: string, quantity: number, configuredCutUsd: number | null = null,
+    /** Přikoupení: pozice leadera se ověřuje branou přikoupení; do rizika jde i stávající pozice. */
+    existing: { lossPoints: number | null; quantity: number } | null = null) => {
     const account = input.accounts.get(accountId);
     if (!account || account.positions == null || account.liveOrders == null) {
       blockers.push(blocker('account-unverified', `${label}: pozice nebo příkazy nejsou ověřené.`));
       return;
     }
-    if (account.positions.some(position => position.net !== 0) || account.liveOrders.length > 0) {
+    if (!existing && (account.positions.some(position => position.net !== 0) || account.liveOrders.length > 0)) {
       blockers.push(blocker('account-not-flat', `${label}: má otevřenou pozici nebo příkaz.`));
     }
     if (account.cut === 'in-progress') blockers.push(blocker('cut-in-progress', `${label}: zavírání kopie po cutu ještě neskončilo.`));
@@ -353,12 +379,21 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
       blockers.push(blocker('risk-unverified', `${label}: denní limit není čerstvě ověřený.`));
       return;
     }
-    const headroom = remainingLossHeadroom(risk, configuredCutUsd);
+    // Přikoupení: rezerva jen z realizovaného výsledku (riziko celé pozice ke SL se přičte níž).
+    const headroom = existing ? realizedLossHeadroom(risk, configuredCutUsd) : remainingLossHeadroom(risk, configuredCutUsd);
     const known = [headroom.dailyUsd, headroom.drawdownUsd, headroom.cutUsd].filter((value): value is number => value != null);
     if (!known.length) { blockers.push(blocker('risk-unknown', `${label}: žádný limit účtu není známý.`)); return; }
     if (lossPerContract == null || swingPerContract == null) return;
-    const loss = lossPerContract * quantity;
-    const swing = swingPerContract * quantity;
+    if (existing && existing.lossPoints == null) {
+      blockers.push(blocker('risk-unverified', `${label}: průměrná cena pozice není známá — riziko přikoupení nejde spočítat.`));
+      return;
+    }
+    // Stávající pozice: ztráta ke společnému SL (SL za BE = 0) + skluz SL a poplatek na kontrakt.
+    const existingLoss = existing && pointValue != null
+      ? (existing.lossPoints! + MANUAL_ENTRY_SLIPPAGE_TICKS * TICK * existing.quantity) * pointValue + fee * existing.quantity
+      : 0;
+    const loss = lossPerContract * quantity + existingLoss;
+    const swing = swingPerContract * (quantity + (existing?.quantity ?? 0));
     const daily = [headroom.dailyUsd, headroom.cutUsd].filter((value): value is number => value != null);
     if (daily.some(left => loss > left)) blockers.push(blocker('risk-daily', `${label}: ztráta při SL (~${Math.round(loss)} $) je víc, než zbývá do denního limitu (${Math.round(Math.max(0, Math.min(...daily)))} $).`));
     if (headroom.drawdownUsd != null && swing > headroom.drawdownUsd) blockers.push(blocker('risk-drawdown', `${label}: rezerva DD (${Math.round(Math.max(0, headroom.drawdownUsd))} $) nestačí na rozpětí TP–SL (~${Math.round(swing)} $).`));
@@ -371,6 +406,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
     'Leader',
     command.quantity,
     group.manualOnly === true ? safety.dailyLossLimitUsd ?? null : null,
+    scaleIn ? { lossPoints: scaleIn.existingLossPoints, quantity: scaleIn.existingQuantity } : null,
   );
   const leaderIneligible = input.entryIneligible.get(group.leaderAccountId);
   if (leaderIneligible) blockers.push(blocker('leader-ineligible', `Leader nesmí nové vstupy: ${leaderIneligible}.`));

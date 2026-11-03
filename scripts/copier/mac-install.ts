@@ -462,6 +462,10 @@ async function install(): Promise<void> {
   const priceSourceIbkr = tvStreamEnabled && flags.get('price-source')?.trim().toLowerCase() === 'ibkr';
   // Hlídání upozornění na cenu jen s cenou z IBKR a jen výslovně (`--price-alerts on`); musí přežít reinstall.
   const priceAlertsEnabled = priceSourceIbkr && flags.get('price-alerts')?.trim().toLowerCase() === 'on';
+  // Přikoupení do otevřené pozice (3. 11. 2026): jen manual-only skupina a jen výslovně (`--scale-in on`).
+  const scaleInFlag = flags.get('scale-in')?.trim().toLowerCase();
+  if (scaleInFlag === 'on' && !manualOnly) throw new Error('--scale-in on je povolený jen s --manual-only');
+  const scaleInEnabled = manualOnly && scaleInFlag === 'on';
   const programArguments = [
     '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
@@ -497,6 +501,7 @@ async function install(): Promise<void> {
     ${tvStreamEnabled ? '<key>ALPHATRADE_TV_STREAM</key><string>on</string>' : ''}
     ${priceSourceIbkr ? '<key>ALPHATRADE_PRICE_SOURCE</key><string>ibkr</string>' : ''}
     ${priceAlertsEnabled ? '<key>ALPHATRADE_PRICE_ALERTS</key><string>on</string>' : ''}
+    ${scaleInEnabled ? '<key>ALPHATRADE_SCALE_IN</key><string>on</string>' : ''}
   </dict>
 </dict></plist>
 `;

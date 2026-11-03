@@ -2,6 +2,7 @@ import type { LiveEntryPreviewDraft } from './leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from './leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from './leaderOrderManage';
 import { snapToTick, ticketQuantity, type TicketDraft, type TicketInstrument } from './liveOrderTicket';
+import type { LiveTicketScaleIn } from './liveScaleIn';
 
 /**
  * LIVE obchodování z telefonu (2. 11. 2026): převod lišty Koupit/Prodat a listu
@@ -36,6 +37,32 @@ export interface LivePhoneTradeBridge {
   closeSupported?: boolean;
   /** Průměrný vstup leadera od workeru (BE). */
   entryAvg?: number | null;
+  /** Přikoupení do otevřené pozice (worker `manual-entry-scale-in-v1`): SL/TP pozice a stav. */
+  scaleIn?: LiveTicketScaleIn | null;
+}
+
+/**
+ * Návrh z listu na stranu otevřené pozice = přikoupení: převezme SL/TP pozice (worker
+ * jiné nepustí) a strop platí na celou pozici. Jen příprava návrhu — rozhoduje worker.
+ */
+export function livePhoneScaleInDraft(draft: TicketDraft, scaleIn: LiveTicketScaleIn | null | undefined): TicketDraft {
+  if (!scaleIn || draft.side !== scaleIn.side || scaleIn.stopLoss == null || scaleIn.targetPrice == null) return draft;
+  return { ...draft, stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice };
+}
+
+/** Důvod, proč přikoupení z listu nejde (strop celé pozice, Limit/Stop jen po 1, čekající přikoupení). */
+export function livePhoneScaleInBlocked(draft: TicketDraft, quantity: number, scaleIn: LiveTicketScaleIn | null | undefined, maxContracts: number): string | null {
+  if (!scaleIn) return null;
+  if (draft.side !== scaleIn.side) return 'V pozici jde jen přikoupit na její stranu — zavři ji ×.';
+  if (scaleIn.pendingAdd) return 'Předchozí přikoupení ještě čeká — nejdřív ať se vyplní, nebo ho zruš.';
+  // Upravené SL/TP se nikdy tiše nepřepíšou na SL/TP pozice (P1-B) — nic neodejde.
+  const tick = (value: number | null) => (value == null ? null : snapToTick(value, 0.25));
+  if (scaleIn.stopLoss == null || scaleIn.targetPrice == null || tick(draft.stopLoss) !== scaleIn.stopLoss || tick(draft.takeProfit) !== scaleIn.targetPrice) {
+    return `Přikoupení musí mít SL a TP pozice (SL ${scaleIn.stopLoss?.toFixed(2) ?? '?'}, TP ${scaleIn.targetPrice?.toFixed(2) ?? '?'}) — vrať je, nic se neodeslalo.`;
+  }
+  if (draft.type !== 'market' && quantity > 1) return 'Čekající přikoupení (Limit/Stop) jde zatím jen po 1 kontraktu — větší množství Marketem.';
+  if (scaleIn.quantity + quantity > maxContracts) return `Pozice by měla ${scaleIn.quantity + quantity} kontraktů — strop účtu je ${maxContracts}.`;
+  return scaleIn.canAdd ? null : scaleIn.reason ?? 'Přikoupení teď nejde.';
 }
 
 /** Lišta nad grafem: otevřená pozice, nebo jen čekající vstup (`pending` — zatím žádná pozice). */

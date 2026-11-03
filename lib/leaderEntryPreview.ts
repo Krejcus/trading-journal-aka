@@ -49,6 +49,12 @@ export interface LeaderEntryPreviewCommand {
    */
   stopLoss?: number;
   takeProfit?: number;
+  /**
+   * Přikoupení do otevřené pozice (3. 11. 2026, návrh v4): pozice, kterou uživatel
+   * viděl. Chybí = vstup jen z flat (dnešní brána `account-not-flat`). Worker při
+   * jakékoli neshodě s čerstvým stavem vrátí `intent-position-changed`.
+   */
+  position?: LeaderEntryPositionIntent;
   /** Co uživatel viděl v náhledu panelu; worker musí přepočtem dojít ke stejnému. */
   intent: {
     armedAt: number;
@@ -58,6 +64,16 @@ export interface LeaderEntryPreviewCommand {
 }
 
 export type LeaderEntryOrderType = 'Limit' | 'Stop' | 'Market';
+
+export interface LeaderEntryPositionIntent {
+  mode: 'add';
+  /** Strana pozice (= strana přikoupení). */
+  side: 'Buy' | 'Sell';
+  /** |pozice| leadera, kterou uživatel viděl. */
+  quantity: number;
+  /** Id vstupů vlastních lístků pozice ze statusu workeru (seřazená). */
+  ticketEntryIds: string[];
+}
 
 export interface LeaderEntryPreviewIssue { code: string; text: string }
 
@@ -90,7 +106,9 @@ const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 
 const price = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
 const accountId = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const quantity = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= LEADER_ENTRY_MAX_QUANTITY;
-const COMMAND_KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'symbol', 'side', 'quantity', 'orderType', 'price', 'referencePrice', 'quoteReceivedAt', 'stopLoss', 'takeProfit', 'intent'];
+const COMMAND_KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'symbol', 'side', 'quantity', 'orderType', 'price', 'referencePrice', 'quoteReceivedAt', 'stopLoss', 'takeProfit', 'position', 'intent'];
+const POSITION_KEYS = ['mode', 'side', 'quantity', 'ticketEntryIds'];
+const BROKER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const epochMs = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value > 1_500_000_000_000 && value < 4_000_000_000_000;
 const INTENT_KEYS = ['armedAt', 'groupConfigHash', 'followerQuantities'];
 
@@ -119,6 +137,15 @@ export function validateLeaderEntryPreview(value: unknown): LeaderEntryPreviewCo
   // Holý Market: SL i TP chybí oba (nikdy jen jedna noha).
   const bare = command.stopLoss === undefined && command.takeProfit === undefined;
   if (bare ? command.orderType !== 'Market' : (!price(command.stopLoss) || !price(command.takeProfit))) fail();
+  if (command.position !== undefined) {
+    // Přikoupení: vždy se SL i TP (holé přikoupení nikdy), strana = strana pozice.
+    const position = command.position as Record<string, unknown> | null;
+    if (!position || typeof position !== 'object' || Array.isArray(position) || Object.keys(position).some(key => !POSITION_KEYS.includes(key))) fail();
+    if (position!.mode !== 'add' || position!.side !== command.side || !quantity(position!.quantity) || bare) fail();
+    const ids = position!.ticketEntryIds;
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > LEADER_ENTRY_MAX_QUANTITY
+      || ids.some(id => typeof id !== 'string' || !BROKER_ORDER_ID_PATTERN.test(id)) || new Set(ids).size !== ids.length) fail();
+  }
   const intent = command.intent as Record<string, unknown> | null;
   if (!intent || typeof intent !== 'object' || Object.keys(intent).some(key => !INTENT_KEYS.includes(key))) fail();
   if (typeof intent!.armedAt !== 'number' || !Number.isSafeInteger(intent!.armedAt) || intent!.armedAt < 0) fail();
@@ -166,6 +193,8 @@ export interface LiveEntryPreviewDraft {
   /** Obě chybí = holý Market. */
   stopLoss?: number;
   takeProfit?: number;
+  /** Přikoupení do otevřené pozice (jen s capability `manual-entry-scale-in-v1`). */
+  position?: LeaderEntryPositionIntent;
 }
 
 /** Holý Market (bez SL i TP)? */

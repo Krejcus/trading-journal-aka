@@ -363,6 +363,15 @@ export interface CopierManualEntryRecord {
   };
   /** Holý Market bez SL/TP (telefonní lišta); nohy doplní `attach-brackets`. */
   bare?: true;
+  /**
+   * Přikoupení do otevřené pozice (3. 11. 2026, návrh v4): vlastní OSO se SL/TP
+   * rovným společnému SL/TP pozice. `baseEpisodeId` = epizoda deníku (lot) pozice
+   * v okamžiku odeslání — fill v jiné epizodě = přikoupení otevřelo nový obchod.
+   */
+  scaleIn?: true;
+  baseEpisodeId?: string;
+  /** Incident „přikoupení otevřelo nový obchod“ už vyhlášený (jednou, přežije restart). */
+  episodeIncidentAt?: number;
   /** Kdy leader na symbolu po fillu holého vstupu zplochl — attach už nepatří k tomuto záznamu. */
   closedAt?: number;
   /**

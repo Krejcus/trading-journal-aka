@@ -22,7 +22,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -410,6 +410,9 @@ export async function startLocalCopierExecutionAgent(
       ...(typeof options.controller.placeLeaderEntry === 'function' && group.manualOnly === true && group.localOnly === true && group.followers.length === 0
         ? [COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ENTRY_BARE_CAPABILITY] : [])] : []),
       ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY] : []),
+      // Přikoupení do pozice (3. 11. 2026): jen když ho controller opravdu povoluje (opt-in + manual-only DEMO).
+      ...(typeof options.controller.manageLeaderOrder === 'function' && options.controller.manualEntryScaleInEnabled?.() === true
+        ? [COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY] : []),
       ...(options.autoRearmAfterTransport === true && autoResumeAdmission ? [COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY] : []),
       ...(typeof options.controller.retireGroup === 'function' && options.previewGroupAccounts
         ? [COPIER_GROUP_DELETE_CAPABILITY]

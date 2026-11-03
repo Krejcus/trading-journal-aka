@@ -100,7 +100,8 @@ describe('LIVE → Graf: × u pozice a Market (30. 10.)', () => {
     expect(livePositionChartLines(summary(), controls)[0].cancellable).toBe(false);
     const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
     expect(screen).toMatch(/canClose: manageCloseSupported && copier\.available && copier\.status\?\.armed === true && copier\.status\.shadowMode !== true/);
-    expect(screen).toMatch(/runLiveManage\('close-position', summary\.stop\)/);
+    // Pozice z přikoupení s rozjetými SL: „co jsem viděl“ = nejochrannější SL od workeru (3. 11.).
+    expect(screen).toMatch(/runLiveManage\('close-position', summary\.stop \?\? entryScaleIn\?\.stopLoss\)/);
   });
 
   it('Market = skutečný Market u brokera (2. 11. 2026): žádný převod na Limit, cena grafu jen jako referencePrice', () => {

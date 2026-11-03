@@ -51,6 +51,17 @@ export const supportsCopierManualEntryBare = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_MANUAL_ENTRY_BARE_CAPABILITY);
 
+/**
+ * Worker umí přikoupení do otevřené pozice a správu celé pozice (3. 11. 2026,
+ * docs/reviews/scale-in-design-20261102.md) — jen manual-only DEMO s opt-inem instalace.
+ */
+export const COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY = 'manual-entry-scale-in-v1';
+
+export const supportsCopierManualEntryScaleIn = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY);
+
 /** Worker umí spravovat vlastní ruční vstup z grafu (fáze 2a, 29. 10. 2026). */
 export const COPIER_MANUAL_ORDER_MANAGE_CAPABILITY = 'manual-order-manage-v1';
 

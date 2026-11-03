@@ -36,7 +36,7 @@ import {
 } from '../lib/liveTradeTarget';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
-import { LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
+import { LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
 import { withIbkrTightenMark } from '../lib/liveChartPosition';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
 import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
@@ -47,6 +47,7 @@ import { buildLiveStatusStrip, liveAttentionReasons, type LiveStatusStripInput, 
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 import type { LiveScreenThemePreference } from '../services/liveScreenTheme';
 import LiveThemeToggle from './LiveThemeToggle';
+import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 
 /**
  * LIVE → Graf: živý graf MNQ přes celou obrazovku s panelem objednávky vpravo
@@ -129,6 +130,8 @@ interface Props {
   entryMarketSupported?: boolean;
   /** Strop kontraktů ručního vstupu skupiny workeru. */
   entryMaxContracts?: number;
+  /** Přikoupení do otevřené pozice (worker `manual-entry-scale-in-v1`): SL/TP pozice a stav. */
+  entryScaleIn?: LiveTicketScaleIn | null;
   /** Front kontrakt podle brokera (jen Limit/Stop bez IBKR). */
   entryFrontContract?: string | null;
 }
@@ -144,7 +147,7 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -285,11 +288,17 @@ const LiveTradingScreen: React.FC<Props> = ({
     entryAvg: manageEntryAvgPrice ?? null,
     pointValue: INSTRUMENT.pointValue,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
-  }) : []), [copier.available, copier.status, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary]);
+    pendingAdd: entryScaleIn?.pendingAdd ?? null,
+  }) : []), [copier.available, copier.status, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd]);
   const runLiveManage = useCallback(async (
     action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit',
   ) => {
-    if (!onManageEntry || expectPrice == null) return;
+    if (!onManageEntry) return;
+    // „Co jsem viděl“ chybí (např. rozjeté SL nohy pozice z přikoupení) — nikdy tiché nic.
+    if (expectPrice == null) {
+      setLineNotice({ at: Date.now(), tone: 'bad', text: 'Cena SL/TP pozice není jedna nebo není známá — nic se neodeslalo. Sjednoť ji v Tradovate, nebo zavři Flattenem.' });
+      return;
+    }
     if (liveBusyRef.current) { setLineNotice({ at: Date.now(), tone: 'warn', text: 'Čeká se na výsledek předchozí změny — nic se neodeslalo.' }); return; }
     liveBusyRef.current = true;
     // „Odesílám“ drží, dokud příkaz neskončí (relay čeká až ~35 s), pak ještě chvíli na dosednutí ceny.
@@ -355,6 +364,8 @@ const LiveTradingScreen: React.FC<Props> = ({
     const previous = marketSideRef.current === draft.side ? marketEntryRef.current : null;
     marketSideRef.current = draft.side;
     marketEntryRef.current = entry;
+    // Přikoupení drží SL/TP pozice (zamčené v panelu) — s cenou nejedou.
+    if (entryScaleIn != null && entryScaleIn.side === draft.side && entryScaleIn.stopLoss != null && entryScaleIn.targetPrice != null) return;
     if (previous == null || previous === entry) return;
     const delta = entry - previous;
     setDraft(current => (current && current.type === 'market' ? {
@@ -362,7 +373,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       stopLoss: current.stopLoss == null ? null : snapToTick(current.stopLoss + delta, INSTRUMENT.tickSize),
       takeProfit: current.takeProfit == null ? null : snapToTick(current.takeProfit + delta, INSTRUMENT.tickSize),
     } : current));
-  }, [draft?.side, draft?.type, quote]);
+  }, [draft?.side, draft?.type, quote, entryScaleIn?.side, entryScaleIn?.stopLoss, entryScaleIn?.targetPrice]);
 
   const updateDraft = useCallback((next: TicketDraft | null) => {
     setDraft(next);
@@ -439,10 +450,16 @@ const LiveTradingScreen: React.FC<Props> = ({
       });
     },
     onOrderLineCancel: line => {
+      // Čekající přikoupení: zrušit jen jeho vstup (desk pošle `cancel-entry` jeho lístku s jeho qty).
+      if (line.id === LIVE_PENDING_ADD_LINE_ID) {
+        if (entryScaleIn?.pendingAdd?.price != null) void runLiveManage('cancel-entry', entryScaleIn.pendingAdd.price);
+        return;
+      }
       if (line.ownerId === LIVE_POSITION_OWNER) {
         if (line.kind === 'entry' && summary?.kind === 'pending') void runLiveManage('cancel-entry', summary.leader?.entry);
         // Zavřít obchod: „co jsem viděl“ = SL leadera (+ qty leadera v desku); worker ověří tvar u brokera.
-        if (line.kind === 'entry' && summary?.kind === 'position') void runLiveManage('close-position', summary.stop);
+        // Pozice z přikoupení s rozjetými SL: „co jsem viděl“ = nejochrannější SL od workeru (worker ho porovná znovu).
+        if (line.kind === 'entry' && summary?.kind === 'position') void runLiveManage('close-position', summary.stop ?? entryScaleIn?.stopLoss);
         return;
       }
       if (line.kind === 'entry') { updateDraft(null); return; }
@@ -458,7 +475,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [draft, guardSummaryAt, manageEntryAvgPrice, orderLines, quote, runLiveManage, summary, updateDraft]);
+  }), [draft, guardSummaryAt, manageEntryAvgPrice, orderLines, quote, runLiveManage, summary, updateDraft, entryScaleIn?.pendingAdd]);
 
   const surface = isDark ? 'bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900';
   const bar = isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white';
@@ -622,6 +639,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             manageEntryAvgPrice={manageEntryAvgPrice ?? null}
             entryMarketSupported={entryMarketSupported}
             entryMaxContracts={entryMaxContracts}
+            entryScaleIn={entryScaleIn}
             entryFrontContract={entryFrontContract}
             onNewDraft={side => { if (quote) { setDraft(newTicketDraft(side, 'limit', side === 'buy' ? quote.ask - 10 : quote.bid + 10, INSTRUMENT, quote)); setFromBox(false); } }}
             onClose={() => setTicketOpen(false)}

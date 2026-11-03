@@ -14,7 +14,7 @@ import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
 import { previewSymbolFromChartSource } from '../../lib/leaderEntryPreview';
 import { snapToTick } from '../../lib/liveOrderTicket';
 import {
-  livePhoneBareMarket, livePhoneOperationId, livePhonePlacedText, livePhoneSheetEntry,
+  livePhoneBareMarket, livePhoneOperationId, livePhonePlacedText, livePhoneScaleInBlocked, livePhoneScaleInDraft, livePhoneSheetEntry,
   type LivePhoneQuote, type LivePhoneTradeBridge,
 } from '../../lib/livePhoneOrders';
 import type { LiveEntryPreviewDraft } from '../../lib/leaderEntryPreview';
@@ -271,7 +271,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
                 setPlus(null);
                 if (lastPrice == null) { say('Cena trhu zatím není — objednávku nejde připravit.'); return; }
                 // Stejný list a odeslání jako objednávka z position boxu (kontroly beze změny).
-                setOrder({ key: Date.now(), draft: newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice), { sizing: 'qty', quantity: pill.qty, riskUsd: 200 }) });
+                // V pozici na stejnou stranu = přikoupení: list převezme SL/TP pozice.
+                setOrder({ key: Date.now(), draft: livePhoneScaleInDraft(newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice), { sizing: 'qty', quantity: pill.qty, riskUsd: 200 }), trade?.scaleIn) });
               }}
               onAlert={() => {
                 const alert = newPriceAlert(plus, lastPrice, alertStore.getState().defaults);
@@ -322,6 +323,9 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
               quote={freshQuote() ?? quoteOf(lastPrice)}
               onClose={() => setOrder(null)}
               onSubmit={draft => {
+                // Přikoupení s jinými SL/TP / nad strop: list zůstane otevřený, ať jde opravit (nic neodešlo).
+                const scaleBlocked = livePhoneScaleInBlocked(draft, draft.quantity, trade?.scaleIn, trade?.maxContracts ?? 1);
+                if (scaleBlocked) { say(`${draftSummary(draft)} — ${scaleBlocked}`); return; }
                 setOrder(null);
                 const blocked = sendBlocked(draft.type === 'market')
                   ?? (draft.quantity > (trade?.maxContracts ?? 1) ? `Strop ručního vstupu je ${trade?.maxContracts ?? 1} kontraktů.` : null);
@@ -360,7 +364,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
           if (lastPrice == null) { setNotice({ key: Date.now(), text: 'Cena trhu zatím není — objednávku nejde připravit.' }); return; }
           try {
             const { draft, quantity } = draftFromPositionBox(drawing, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice));
-            setOrder({ key: Date.now(), draft: { ...draft, sizing: 'qty', quantity: Math.max(1, quantity) } });
+            // V pozici na stejnou stranu = přikoupení: list viditelně převezme SL/TP pozice.
+            setOrder({ key: Date.now(), draft: livePhoneScaleInDraft({ ...draft, sizing: 'qty', quantity: Math.max(1, quantity) }, trade?.scaleIn) });
           } catch (error) {
             setNotice({ key: Date.now(), text: error instanceof Error ? error.message : 'Position box nejde převést na objednávku.' });
           }
@@ -377,6 +382,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
               manage={trade?.manage ?? null}
               canClose={trade?.closeSupported === true}
               entryAvg={trade?.entryAvg ?? null}
+              pendingAdd={trade?.scaleIn?.pendingAdd ?? null}
+              closeExpect={trade?.scaleIn?.stopLoss ?? null}
               isDark={isDark}
               onNotice={say}
             />

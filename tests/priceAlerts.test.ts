@@ -108,7 +108,9 @@ describe('čáry obchodu na telefonu jako na PC', () => {
   it('bez napojené správy jsou čáry jen zobrazení (manage chybí = nic se neodešle)', () => {
     const phone = readFileSync('components/day/LivePhoneOrderLines.tsx', 'utf8');
     expect(phone).toMatch(/manageable: manage != null/);
-    expect(phone).toMatch(/if \(!manage \|\| expect == null\) return;/);
+    expect(phone).toMatch(/if \(!manage\) return;/);
+    // Chybějící „co jsem viděl“ (rozjeté SL pozice z přikoupení) = hláška, nikdy tiché nic ani odeslání (3. 11.).
+    expect(phone).toMatch(/if \(expect == null\) \{ onNotice\(/);
   });
 });
 

@@ -145,6 +145,12 @@ INSTALLED_PRICE_ALERTS="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariable
 if [[ "${COPIER_PRICE_ALERTS:-$INSTALLED_PRICE_ALERTS}" == "on" ]]; then
   TV_STREAM_ARGS+=(--price-alerts on)
 fi
+# Přikoupení do pozice (jen manual-only) přežije reinstall stejně;
+# přepsat jde COPIER_SCALE_IN=on|off scripts/copier/mac-reinstall-safe.sh
+INSTALLED_SCALE_IN="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_SCALE_IN' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_SCALE_IN:-$INSTALLED_SCALE_IN}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--scale-in on)
+fi
 npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group "${DEV_ORIGIN_ARGS[@]}" "${ALLOW_DOWNGRADE_ARGS[@]}" "${TV_STREAM_ARGS[@]}"
 
 BUNDLE="$HOME/Library/Application Support/AlphaTrade/copier/copier-agent.mjs"

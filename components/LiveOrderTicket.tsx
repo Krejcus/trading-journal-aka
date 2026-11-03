@@ -24,6 +24,7 @@ import type { LiveChartPosition, LiveChartPositionSummary } from '../lib/liveCha
 import { previewSymbolFromChartSource, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
+import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import {
   GROUP_TARGET,
   allTradeAccounts,
@@ -147,7 +148,7 @@ const placedResultView = (entry: LeaderEntryPlaceResult): { tone: 'ok' | 'bad' |
  * localhostu, 405 před relayí); vše ostatní je neznámý výsledek — nikdy neopakovat naslepo.
  */
 const placeErrorView = (message: string): { tone: 'bad' | 'warn'; text: string } => (
-  /entry-busy|entry-daily-cap|manage-daily-cap|entry-conflict|entry-superseded|entry-not-admitted|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|Chybí cesta k Mac workeru|worker-disconnected|pouze read-only/.test(message)
+  /entry-busy|entry-daily-cap|manage-daily-cap|entry-conflict|entry-superseded|entry-not-admitted|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|Chybí cesta k Mac workeru|worker-disconnected|pouze read-only|Přikoupení musí mít SL a TP pozice/.test(message)
     ? { tone: 'bad', text: /entry-busy/.test(message) ? 'Neodesláno: jiný ruční vstup se právě zpracovává.'
       : /entry-daily-cap/.test(message) ? 'Neodesláno: dosažen denní strop ručních vstupů.'
         : /entry-superseded/.test(message) ? 'Neodesláno: tento pokus zastavila brzda (vypnutí kopírky).'
@@ -336,6 +337,11 @@ interface Props {
   entryMaxContracts?: number;
   /** Front kontrakt podle brokera (čerstvý) — jen pro Limit/Stop, když graf nejede z IBKR. */
   entryFrontContract?: string | null;
+  /**
+   * Přikoupení do otevřené pozice (3. 11. 2026): návrh na stranu pozice přebírá společné
+   * SL/TP pozice (zamčené) a strop platí na celou pozici. Jen zobrazení — rozhoduje worker.
+   */
+  entryScaleIn?: LiveTicketScaleIn | null;
   onNewDraft: (side: TicketSide) => void;
   onClose: () => void;
 }
@@ -371,8 +377,16 @@ export const NumberField: React.FC<{
 
 const LiveOrderTicket: React.FC<Props> = ({
   isDark, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
-  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, onNewDraft, onClose,
+  group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null, onNewDraft, onClose,
 }) => {
+  // Přikoupení: návrh na stranu otevřené pozice drží SL/TP pozice (čáry návrhu se k nim vrátí).
+  const scaleIn = entryScaleIn && draft && draft.side === entryScaleIn.side ? entryScaleIn : null;
+  useEffect(() => {
+    if (!scaleIn || !draft || scaleIn.stopLoss == null || scaleIn.targetPrice == null) return;
+    if (draft.stopLoss !== scaleIn.stopLoss || draft.takeProfit !== scaleIn.targetPrice) {
+      onDraft({ ...draft, stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice });
+    }
+  }, [scaleIn, draft, onDraft]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -433,6 +447,12 @@ const LiveOrderTicket: React.FC<Props> = ({
     // Market bere cenu grafu jako strop ceny příkazu — jen čerstvou (oponentura 2d/C).
     : draft.type === 'market' && !entryMarketSupported ? 'Worker zatím neumí nativní Market — použij Limit.'
     : draft.type === 'market' && (quoteInfo.capturedAt == null || Date.now() - quoteInfo.capturedAt > MARKET_QUOTE_MAX_AGE_MS) ? 'Cena grafu je starší než 3 s — Market teď nejde (zkus Limit).'
+    : entryScaleIn && draft.side !== entryScaleIn.side ? 'V pozici jde jen přikoupit na její stranu — zmenšit / otočit ji z panelu nejde (zavři ×).'
+    : scaleIn && scaleIn.pendingAdd ? 'Předchozí přikoupení ještě čeká — nejdřív ať se vyplní, nebo ho zruš.'
+    : scaleIn && (draft.stopLoss !== scaleIn.stopLoss || draft.takeProfit !== scaleIn.targetPrice) ? 'Přikoupení musí mít SL a TP pozice — nic se neodešle, dokud nesedí.'
+    : scaleIn && draft.type !== 'market' && m && m.quantity > 1 ? 'Čekající přikoupení (Limit/Stop) jde zatím jen po 1 kontraktu — větší množství Marketem.'
+    : scaleIn && m && scaleIn.quantity + m.quantity > entryMaxContracts ? `Pozice by měla ${scaleIn.quantity + m.quantity} kontraktů — strop účtu je ${entryMaxContracts}.`
+    : scaleIn && !scaleIn.canAdd ? scaleIn.reason ?? 'Přikoupení teď nejde.'
     : m && m.quantity > entryMaxContracts ? `Ruční vstup je omezený na ${entryMaxContracts} ${entryMaxContracts === 1 ? 'kontrakt' : entryMaxContracts < 5 ? 'kontrakty' : 'kontraktů'} (strop skupiny).`
       : draft.stopLoss == null || draft.takeProfit == null ? 'Náhled potřebuje SL i TP.'
         : single ? 'Náhled zatím jen pro skupinu (vstup na leadera).'
@@ -452,8 +472,10 @@ const LiveOrderTicket: React.FC<Props> = ({
   }, [sentFlash]);
   // U Marketu se cena mění s každým tickem — výsledek odeslání nesmí s tickem zmizet.
   // U Marketu klíčuje vzdálenost SL/TP od vstupu (ceny jedou s tickem), ne absolutní ceny.
+  // Přikoupení: SL/TP jsou zamčené na cenách pozice — klíčuje absolutní cena, ne vzdálenost od ticku.
   const directKey = previewDraft ? JSON.stringify(previewDraft.orderType === 'Market'
-    ? { ...previewDraft, referencePrice: 'market', quoteReceivedAt: 'market', stopLoss: previewDraft.stopLoss - previewDraft.referencePrice!, takeProfit: previewDraft.takeProfit - previewDraft.referencePrice! }
+    ? { ...previewDraft, referencePrice: 'market', quoteReceivedAt: 'market',
+      ...(scaleIn ? {} : { stopLoss: previewDraft.stopLoss - previewDraft.referencePrice!, takeProfit: previewDraft.takeProfit - previewDraft.referencePrice! }) }
     : previewDraft) : '';
   const shownDirect = direct && direct.key === directKey ? direct : null;
   const directBlocked = !onPlaceEntry ? 'Worker odeslání z grafu neumí.'
@@ -606,6 +628,7 @@ const LiveOrderTicket: React.FC<Props> = ({
       <h3 className={`m-0 flex-1 truncate text-[12.5px] font-black ${tone.ink}`}>
         {headerTitle}<small className={`ml-1.5 font-bold ${tone.muted}`}>{instrument.symbol}</small>
         {fromBox && <span className="ml-1.5 rounded border border-blue-500/45 px-1 align-[1px] text-[8.5px] font-black uppercase tracking-[0.06em] text-blue-500">z position boxu</span>}
+        {scaleIn && <span className="ml-1.5 rounded border border-emerald-500/45 px-1 align-[1px] text-[8.5px] font-black uppercase tracking-[0.06em] text-emerald-500">přikoupení · SL/TP pozice</span>}
       </h3>
       <button type="button" onClick={onClose} title="Skrýt panel" aria-label="Skrýt panel objednávky" className={`flex h-7 w-7 items-center justify-center rounded-lg ${isDark ? 'text-slate-400 hover:bg-white/[0.08] hover:text-white' : 'text-slate-500 hover:bg-white/70 hover:text-slate-900'}`}><X size={14} /></button>
     </div>
