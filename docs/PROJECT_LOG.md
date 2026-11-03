@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-03 — Dokupování do otevřené pozice + správa celé pozice (Claude, větev `claude/scale-in-20261103`, NENASAZENO)
+### 2026-11-03 — Dokupování do otevřené pozice + správa celé pozice (Claude, NASAZENO 3. 11. na Filipovo „nasaď“: web 90de8e36, worker 90de8e36 s `--scale-in on`, iPhone)
 
 - Filip 2.–3. 11.: chce přikupovat do pozice / další limit v pozici; rozhodl variantu B (každé přikoupení
   vlastní nativní OSO se SL/TP = společné SL/TP pozice), „neomezeně“ (jen strop účtu na celou pozici),
@@ -310,7 +310,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   (4× P2) — zapracované: čára čekajícího přikoupení s × (PC i telefon), × a BE u rozjetých SL nemlčí,
   selhané zrušení / neznámé přikoupení = incident, sentinel nadkrytí, doplněné testy (short, filtry, náhled,
   ořez, epizoda, čerstvost rizika) s mutačním ověřením klíčových.
-- Nasazení až po „nasaď“: web → reinstall s `--scale-in on` → iPhone build. Pak ověřit z appky na DEMO.
+- Filip 3. 11.: nadkrytí jen za zapnuté kopírky (vypnutá = upozornění + zrušení automatického pokračování;
+  `warned` → ARMED = incident hned, critic kolo 3 OK) — commit 90de8e36.
+- Nasazeno 3. 11. dopoledne: brána plná sada 6703/6703, tsc 0, build → push `8259afd1..90de8e36` (Vercel READY)
+  → worker ruční install (manual-only DEMO, `--adopt-durable-group --tv-stream on --price-source ibkr
+  --price-alerts on --scale-in on`; DISARMED, capability `manual-entry-scale-in-v1`) → iPhone čistá instalace.
+- Ověřeno z appky (prod web, DEMO8661118): vstup Limit 1 → přikoupení Limit 1 (panel přitáhl SL/TP pozice,
+  štítek „přikoupení“) → Long 2 ze 2 lístků bez incidentu → tah čáry SL = posun obou nohou (zápis 249 ms,
+  ověřeno adaptérem) → čekající přikoupení s vlastní čárou → × „Opravdu?“ = zrušeno → × u pozice = zavřeno
+  celé (ověřeno čtením) → DISARM, flat. BE bylo správně zablokované (blíž než 8 ticků od trhu); Market
+  přikoupení neověřeno (IB Gateway neběží — Market z appky jen s IBKR).
+- Otevřené: Market přikoupení a BE z appky při běžící IB Gateway; telefon prstem (list přikoupení, čáry).
 
 ### 2026-11-03 — HTF FVG v grafu (FVG vyššího TF na nižším grafu, jako Pine) (Claude, nasazeno 3. 11. na Filipovo „nasaď“, jen web)
 
