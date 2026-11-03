@@ -322,7 +322,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Druhý běh (short): Short 1 → přikoupení Short 1 (Short 2 @ 28 223,63) → v zisku BE celé pozice z čáry
   (dvoukrokové „Opravdu?“, druhý klik ≥ 350 ms — pojistka proti dvojkliku) = obě nohy SL na 28 223,75,
   zápis 239 ms → Flatten (bezpečnostní cesta za DISARMED), flat. DEMO den −69,68 USD.
-- Otevřené: Market přikoupení (IB Gateway neběží, přihlášení jen Filip); telefon prstem (list přikoupení, čáry).
+- Market přikoupení (po Filipově přihlášení do IB Gateway, cena workeru z IBKR): Market Buy 1 → Market
+  přikoupení 2 nejdřív správně zablokované („SL i TP aspoň 16 ticků od trhu“ — trh 15 ticků nad SL) → tah SL
+  dál od trhu → Market přikoupení 2 = Long 3 ze 2 lístků (nohy 1+2, jedna cena SL/TP) → × zavřeno (ověřeno
+  čtením). Filip mezitím z telefonu: holý Market → Přidat SL/TP → posuny SL/TP → zavřeno, bez incidentu.
+- Otevřené: telefon prstem pro přikoupení a správu celé pozice (Filip zkouší sám); Lucid poplatky po připojení.
 
 ### 2026-11-03 — HTF FVG v grafu (FVG vyššího TF na nižším grafu, jako Pine) (Claude, nasazeno 3. 11. na Filipovo „nasaď“, jen web)
 
