@@ -285,7 +285,7 @@ const runFive = async () => {
     const sentAt = elapsed();
     step(`modify ${label} souběžně (${ids.length} nohou)`, { ids });
     const results = await Promise.allSettled(ids.map(id => broker.modifyOrder(plan.accountId, id, change(id))
-      .then(result => ({ id, ms: elapsed() - sentAt, confirmedBy: result?.confirmedBy ?? null }))));
+      .then(result => ({ id, ms: elapsed() - sentAt, confirmedBy: result ? result.confirmedBy ?? null : null }))));
     step(`modify ${label} výsledky`, results.map(item => item.status === 'fulfilled' ? item.value : { error: message(item.reason) }));
   }
   await sleep(1_000);
@@ -321,7 +321,7 @@ try {
     const sentAt = elapsed();
     step(`modify ${label} souběžně`, { ids, change });
     const results = await Promise.allSettled(ids.map(id => broker.modifyOrder(plan.accountId, id, change)
-      .then(result => ({ id, ms: elapsed() - sentAt, confirmedBy: result?.confirmedBy ?? null }))));
+      .then(result => ({ id, ms: elapsed() - sentAt, confirmedBy: result ? result.confirmedBy ?? null : null }))));
     step(`modify ${label} výsledky`, results.map(item => item.status === 'fulfilled' ? item.value : { error: message(item.reason) }));
   }
   await sleep(1_000);

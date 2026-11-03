@@ -207,7 +207,7 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
     return stop([`účet ${plan.accountId} není v adresáři připojení obchodovatelný ${DEMO_RECORD_ACCOUNT_SPEC}`]);
   }
   identifiers.push(...directory.flatMap(item => [item.accountId, item.accountSpec ?? '']));
-  const accountMap = new Map(directory.map((item, index) => [item.accountId, item.accountId === plan.accountId ? LEADER_PLACEHOLDER_ID : 2001 + index]));
+  const accountMap = new Map<number, number>(directory.map((item, index) => [Number(item.accountId), item.accountId === plan.accountId ? LEADER_PLACEHOLDER_ID : 2001 + index]));
   const front = await broker.frontContract?.('MNQ', plan.accountId).catch(() => null);
   if (front?.contract !== plan.symbol) return stop([`broker hlásí front kontrakt ${front?.contract ?? 'neznámý'}, plán ${plan.symbol}`]);
   const finalProblems = demoStartProblems(plan, await readStatus().catch(() => ({})), Date.now());
@@ -566,7 +566,7 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
       const sentAt = elapsed();
       note(step.label, prepared.map(item => ({ order: item.name, id: item.id, ...item.changes })));
       const settled = await Promise.allSettled(prepared.map(item => track(broker.modifyOrder(plan.accountId, item.id, item.changes))
-        .then(result => ({ ms: elapsed() - sentAt, confirmedBy: result?.confirmedBy ?? null }))));
+        .then(result => ({ ms: elapsed() - sentAt, confirmedBy: result ? result.confirmedBy ?? null : null }))));
       settled.forEach((item, index) => {
         const { id, apply } = prepared[index];
         if (item.status === 'fulfilled') { apply(); results.push({ id, ok: true, ...item.value }); }

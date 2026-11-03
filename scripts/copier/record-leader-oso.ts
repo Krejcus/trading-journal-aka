@@ -264,7 +264,7 @@ const finish = async (decision: CleanupDecision) => {
     console.log(`${plan.scenario !== 'cancel' ? 'Pozice zavřena, ' : ''}Leader ověřeně čistý. Teď: npm run copier:mac -- reconcile (read-only) — leaderův příkaz zneplatnil kontrolu pozic.`);
     process.exit(0);
   }
-  console.error(`POZOR: ${decision.reason}. Zkontroluj leadera v Tradovate${decision.kind === 'filled' ? ' (SL/TP ponechány)' : ' a ruč zruš/zavři, co tam zůstalo'}.`);
+  console.error(`POZOR: ${'reason' in decision ? decision.reason : decision.kind}. Zkontroluj leadera v Tradovate${decision.kind === 'filled' ? ' (SL/TP ponechány)' : ' a ruč zruš/zavři, co tam zůstalo'}.`);
   process.exit(decision.kind === 'filled' ? 3 : 4);
 };
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
@@ -354,7 +354,7 @@ async function runStopLimitSteps(acknowledged: Extract<RecordPlacement, { kind: 
     step(`stop-limit ${name}`, { stopId, stopPrice: item.stopPrice, limitPrice: item.limitPrice, checks: item.checks, anchor });
     const sentAt = Date.now();
     await broker.modifyOrder(plan.accountId, stopId, { quantity: 1, orderType: 'StopLimit', stopPrice: item.stopPrice, limitPrice: item.limitPrice })
-      .then(result => step(`stop-limit ${name}: přijato`, { ms: Date.now() - sentAt, confirmedBy: result?.confirmedBy ?? null }))
+      .then(result => step(`stop-limit ${name}: přijato`, { ms: Date.now() - sentAt, confirmedBy: result ? result.confirmedBy ?? null : null }))
       .catch(reason => step(`stop-limit ${name}: chyba`, { ms: Date.now() - sentAt, error: message(reason) }));
     await sleep(1_500);
     step(`stop-limit tvar po ${name}`, await observe());
