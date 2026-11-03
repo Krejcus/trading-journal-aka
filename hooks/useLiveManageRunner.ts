@@ -151,10 +151,11 @@ export function createLiveManageRun(deps: LiveManageRunDeps) {
  * druhý klik se stejným klíčem 350 ms až 4 s po prvním = odeslat. Rychlejší
  * druhý klik (dvojklik) se nepočítá a okno se jím neprodlužuje.
  */
-export function liveManageConfirmStep(current: LiveManageConfirm | null, key: string, now: number): { next: LiveManageConfirm | null; fire: boolean } {
+export function liveManageConfirmStep(current: LiveManageConfirm | null, key: string, now: number): { next: LiveManageConfirm | null; fire: boolean; tooSoon?: true } {
   if (current && current.key === key && current.until > now) {
     if (now - current.since >= LIVE_MANAGE_CONFIRM_MIN_MS) return { next: null, fire: true };
-    return { next: current, fire: false };
+    // Příliš rychlý klik posune kotvu na sebe: trojklik nic nepotvrdí.
+    return { next: { key, since: now, until: now + LIVE_MANAGE_CONFIRM_MS }, fire: false, tooSoon: true };
   }
   return { next: { key, since: now, until: now + LIVE_MANAGE_CONFIRM_MS }, fire: false };
 }
@@ -262,8 +263,8 @@ export function useLiveManageRunner(options: UseLiveManageRunnerOptions): LiveMa
       setConfirm(null);
       return { step: 'sent', outcome: send() };
     }
-    // Dvojklik (druhý klik do 350 ms): okno se neprodlužuje, nic se neodešle.
-    if (step.next === current) return { step: 'waiting' };
+    // Dvojklik/trojklik (klik do 350 ms od předchozího): nic se neodešle, pauza běží znovu.
+    if (step.tooSoon) { setConfirm(step.next); return { step: 'waiting' }; }
     setConfirm(step.next);
     return { step: 'asking' };
   }, [run, setConfirm]);

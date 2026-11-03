@@ -68,14 +68,17 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
     // „Co jsem viděl“ ze začátku tahu; souběžná změna = nic se neodešle.
     expect(screen).toMatch(/startLine && startLine\.price !== current/);
-    expect(screen).toMatch(/Čeká se na výsledek předchozí změny/);
+    // Jeden příkaz naráz: od U10 (3. 11.) zámek drží sdílený runner správy (čáry, zkratky i panel).
+    expect(screen).toMatch(/const runLiveManage = manageRunner\.run;/);
+    expect(readFileSync('hooks/useLiveManageRunner.ts', 'utf8')).toMatch(/Čeká se na výsledek předchozí změny/);
   });
 });
 
 describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)', () => {
   const ticket = readFileSync('components/LiveOrderTicket.tsx', 'utf8');
   it('jedním kliknutím, bez náhledu; brány dál ověří worker; jedno odeslání naráz s novým id', () => {
-    expect(ticket).toMatch(/onClick=\{\(\) => void sendDirect\(\)\}/);
+    // Klik pustí fokus tlačítka (Enter po zkratce nesmí odeslat vyměněný návrh — oponentura vlny B).
+    expect(ticket).toMatch(/onClick=\{event => \{ event\.currentTarget\.blur\(\); void sendDirect\(\); \}\}/);
     expect(ticket).toMatch(/directBusyRef\.current\) return;/);
     expect(ticket).toMatch(/onPlaceEntry\(previewDraft, `entry:\$\{crypto\.randomUUID\(\)/);
     // Blokace náhledu (Market, SL/TP, chyby panelu, zastaralá cena) blokuje i přímé odeslání.

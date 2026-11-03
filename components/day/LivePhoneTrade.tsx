@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowDownUp, GripVertical, X } from 'lucide-react';
+import { ArrowDownUp, GripVertical, Volume2, X } from 'lucide-react';
 import { LIVE_QTY_PRESETS, pressQtyKey, qtyFromBuffer, type LivePillPrefs } from '../../lib/livePhoneTrade';
+import { LIVE_FILL_ANNOUNCE_LABELS, LIVE_FILL_ANNOUNCE_MODES, type LiveFillAnnounceMode } from '../../lib/liveFillAnnouncer';
 import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 import SheetGrip from './SheetGrip';
 
@@ -152,6 +153,31 @@ export function LiveQtySheet({ value, onDone, onClose }: { value: number; onDone
         <button type="button" className="dj-btn" onClick={() => onDone(qtyFromBuffer(buffer))} style={{ width: '100%', height: 46, marginTop: 12, borderRadius: 12, border: 0, cursor: 'pointer', color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)', font: '800 15px Inter, sans-serif' }}>Hotovo</button>
       </section>
     </div>
+  );
+}
+
+/**
+ * Zvuk / hlas při fillu (U7, 3. 11. 2026) v menu ⋯ LIVE grafu: Vypnuto / Tón / Hlas,
+ * jedna volba pro celé zařízení, výchozí Vypnuto (opt-in). Klepnutí je gesto uživatele:
+ * odemkne zvuk a přehraje ukázku (`useLiveFillAnnounceMode`). Jen zobrazení, nic neodesílá.
+ */
+export function LiveFillAnnounceSetting({ mode, onMode }: { mode: LiveFillAnnounceMode; onMode: (mode: LiveFillAnnounceMode) => void }) {
+  return (
+    <>
+      <p style={{ margin: '18px 0 6px', fontSize: 10.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dj-muted)' }}>LIVE</p>
+      <div style={{ borderRadius: 14, border: '1px solid var(--dj-line)', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 10px 10px 12px' }}>
+        <Volume2 size={18} color="var(--dj-muted)" />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Zvuk při fillu</p>
+          <p style={{ margin: '1px 0 0', fontSize: 11.5, color: 'var(--dj-muted)' }}>Jen čerstvé filly s otevřeným grafem</p>
+        </div>
+        <div role="radiogroup" aria-label="Zvuk při fillu" style={{ display: 'flex', gap: 2, padding: 2, borderRadius: 10, background: 'var(--dj-chip)', flex: 'none' }}>
+          {LIVE_FILL_ANNOUNCE_MODES.map(item => (
+            <button key={item} type="button" role="radio" aria-checked={mode === item} className="dj-btn" onClick={() => { playNativeHapticIfAvailable('selection'); onMode(item); }} style={{ height: 30, padding: '0 10px', borderRadius: 8, border: 0, cursor: 'pointer', font: '700 12.5px Inter, sans-serif', background: mode === item ? 'var(--dj-seg-on)' : 'transparent', color: mode === item ? 'var(--dj-seg-on-ink)' : 'var(--dj-muted)' }}>{LIVE_FILL_ANNOUNCE_LABELS[item]}</button>
+          ))}
+        </div>
+      </div>
+    </>
   );
 }
 

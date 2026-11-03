@@ -7,8 +7,10 @@ import type { TicketBracketUnits } from './liveOrderTicket';
  * čistý výpočet ceny ZÁMĚRU uživatele pro stávající `move-stop` / `move-target`.
  * Nic odsud neodesílá a nic neautorizuje (INV-UI-01..04): „co jsem viděl“
  * (`expectPrice`) je cena nohy z read modelu brokera (`summary.stop/target`),
- * průměr vstupu je ze stavu pollu workeru (`manageEntryAvgPrice`) a poplatky
- * z ověřeného čtení leadera (`summary.rows[].fees`). Předkontroly jen blokují —
+ * průměr vstupu je ze stavu pollu workeru (`manageEntryAvgPrice`) a poplatky jsou
+ * ODHAD z poslední sazby brokera (`summary.rows[].fees` = průměrný poplatek za kontrakt
+ * z posledních až 20 fillů účtu × kusy, `lib/liveTradeCard.ts:tradeCardFeeRates`) —
+ * skutečné poplatky pozice se můžou lišit. Předkontroly jen blokují —
  * TP k trhu (`toward-market`), SL za TP (`beyond-target`) a SL blíž než 8 ticků
  * od trhu (`tighten-too-close`) znovu odmítne worker, SL přes trh broker.
  *
@@ -16,7 +18,7 @@ import type { TicketBracketUnits } from './liveOrderTicket';
  * - BE a BE + n ticků: `breakEvenStop` (na tick ve směru ochrany — long dolů,
  *   short nahoru) ± n ticků do zisku;
  * - BE s poplatky: na stranu zisku (long nahoru, short dolů) — stop na té ceně
- *   pokryje poplatky celé pozice (bez skluzu);
+ *   pokryje odhadnuté poplatky celé pozice (bez skluzu);
  * - číslo z pole (body / ticky / $ / cena): na stranu trhu (long SL nahoru, long TP
  *   dolů, short zrcadlově) — na ticku nikdy větší ztráta ani vzdálenější cíl, než
  *   uživatel zadal.
@@ -50,7 +52,7 @@ export interface LiveManageBasis {
   entryAvg: number | null;
   /** Kontrakty leadera (ne součet skupiny); null = neznámo. */
   quantity: number | null;
-  /** Poplatky celé pozice leadera v USD (sazba z fillů brokera × qty × 2); null = neznámé. */
+  /** ODHAD poplatků celé pozice leadera v USD (poslední sazba z fillů brokera × kusy); null = neznámé. */
   feesUsd: number | null;
   /** Dolarů za 1 bod a 1 kontrakt (MNQ 2). */
   pointValue: number;
@@ -273,7 +275,7 @@ export function planManageMove(
 }
 
 const variantLabel = (variant: LiveManageBreakEvenVariant) => (
-  variant.kind === 'be' ? 'BE' : variant.kind === 'be-plus' ? `BE +${variant.ticks} t` : 'BE + poplatky'
+  variant.kind === 'be' ? 'BE' : variant.kind === 'be-plus' ? `BE +${variant.ticks} t` : 'BE + odhad poplatků'
 );
 
 /**
@@ -321,4 +323,29 @@ export function liveManageBreakEvenOffers(
     plus: planBreakEven(summary, basis, { kind: 'be-plus', ticks: plusTicks }),
     fees: basis.feesUsd == null ? null : planBreakEven(summary, basis, { kind: 'be-fees' }),
   };
+}
+
+// ── Cena na tlačítku „Posunout“ (oponentura vlny B, INV-UI-03/04) ──────────
+
+/** Jak dlouho musí cena záměru viset na tlačítku, než ji klik smí odeslat (jako dvoukrok). */
+export const LIVE_MANAGE_SEEN_MIN_MS = 350;
+
+/** Cena záměru, kterou tlačítko právě ukazuje, a od kdy (změna ceny = nové `since`). */
+export interface LiveManageShownPrice { price: number; since: number }
+
+/** Další stav „co tlačítko ukazuje“: stejná cena drží původní `since`, jiná začíná znovu, žádná = null. */
+export function liveManageShownPrice(previous: LiveManageShownPrice | null, price: number | null, now: number): LiveManageShownPrice | null {
+  if (price == null || !finite(price)) return null;
+  return previous && previous.price === price ? previous : { price, since: now };
+}
+
+/**
+ * Smí klik na „Posunout → X“ odeslat cenu `price`? Jen když přesně tahle cena visela
+ * na tlačítku aspoň `LIVE_MANAGE_SEEN_MIN_MS` — změna průměru (poll po přikoupení),
+ * jednotek nebo zadání těsně před klikem = nic se neodešle, uživatel vidí novou cenu
+ * a klikne znovu. null = smí.
+ */
+export function liveManageSeenPriceProblem(shown: LiveManageShownPrice | null | undefined, price: number, now: number): string | null {
+  if (shown && shown.price === price && now - shown.since >= LIVE_MANAGE_SEEN_MIN_MS) return null;
+  return `Cena se právě změnila na ${priceText(price)} — zkontroluj ji na tlačítku a klikni znovu. Nic se neodeslalo.`;
 }

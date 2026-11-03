@@ -116,6 +116,20 @@ export interface LiveChartInfo {
    * — ve dvou oknech by seděly na souřadnicích okna 0 přes okno s jiným měřítkem.
    */
   fullPane: boolean;
+  /** Ukončí přehrávání (štítek „Zpět na živo“); mimo přehrávání nic nedělá. */
+  exitReplay: () => void;
+}
+
+/**
+ * Vrstva LIVE uvnitř jednoho okna grafu (U3, 3. 11. 2026): `api`, svíčky a interval
+ * jsou právě tohoto okna, takže štítky čar sedí na jeho měřítku i ve dvou oknech.
+ * Skryté okno (roztažené jiné) vrstvu nedostane vůbec.
+ */
+export interface LivePaneInfo extends LiveChartInfo {
+  /** Index okna (0 = hlavní). */
+  paneIndex: number;
+  /** Okno, kam jdou dotyky nástrojů (plusko u kříže jen tady); v jednom okně vždy true. */
+  active: boolean;
 }
 
 export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onTimeframe, range, focusKeyPrefix, selectedTrade, pins = [], bubbles = 'selected', placing = null, onPick = () => {}, onCancelPlacing = () => {}, pending = null, nowTime = null, bands = [], onClose, onVoice = () => {}, live }: {
@@ -149,6 +163,13 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     overlay?: (info: LiveChartInfo) => React.ReactNode;
     /** Vrstva v ploše grafu (obchodní lišta). */
     chartLayer?: (info: LiveChartInfo) => React.ReactNode;
+    /**
+     * Vrstva v každém viditelném okně grafu (čáry obchodu, návrhu, příkazů, upozornění,
+     * plusko) — kreslí se podle API toho okna. O přehrávání rozhoduje volající (`info.replay`).
+     */
+    paneLayer?: (info: LivePaneInfo) => React.ReactNode;
+    /** LIVE volby navíc v menu ⋯ (např. zvuk při fillu). */
+    hubExtra?: React.ReactNode;
     /** LIVE tlačítka vpravo ve spodní liště (místo zavření). */
     toolbar?: React.ReactNode;
     /** Symbol do popisku snímku grafu (fotoaparát ve spodní liště). */
@@ -713,6 +734,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     lastPrice: !replayOn && candles.length ? candles[candles.length - 1].close : null,
     api, candles, intervalSeconds: timeframeMinutes(timeframe) * 60, replay: replayOn,
     fullPane: !split || (maximized && activePane === 0),
+    exitReplay: () => { if (replayPhase !== 'off') stopReplay(); },
   };
   const settingsDrawing = settingsFor && engine ? engine.getById(settingsFor) ?? null : null;
   const removeSelected = () => {
@@ -862,6 +884,13 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
             {cutFx && <ReplayCutFx key={cutFx.key} chartApi={paneApi(index)} time={cutFx.time} />}
             {/* Dotyky na kresby: výběr, přesun, úprava bodů vždy; s nástrojem v ruce crosshair. */}
             <DayTouchDrawLayer chartApi={paneApi(index)} containerRef={ref} enabled={!placing && !textEdit && replayPhase !== 'selecting' && (!split || isActive)} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={toolDone} onDrawingDoubleTap={openSettingsFor} onDrawingLongPress={live ? openPositionMenu : undefined} />
+            {/* Vrstva LIVE v okně (U3): souřadnice a měřítko tohoto okna; skryté okno ji nemá.
+                Stejné vrstvení jako `data-live-chart-layer` (pod listy a menu, INV-UI-02). */}
+            {live?.paneLayer && visible && (
+              <div data-live-pane-layer={index} style={{ position: 'absolute', inset: 0, zIndex: 20, isolation: 'isolate', pointerEvents: 'none' }}>
+                {live.paneLayer({ ...liveInfo, api: paneApi(index), candles: list, intervalSeconds: timeframeMinutes(paneTf) * 60, paneIndex: index, active: !split || isActive })}
+              </div>
+            )}
           </div>
         );
       })}
@@ -1051,6 +1080,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           onLayout={() => { setHubOpen(false); setLayoutSheet(true); }}
           onChartSettings={() => { setHubOpen(false); setChartReq({ pane: split ? activePane : 0, n: Date.now() }); }}
           onReplay={() => { setHubOpen(false); startReplay(); }}
+          extra={live?.hubExtra}
           onClose={() => setHubOpen(false)}
         />
       )}
@@ -1455,7 +1485,7 @@ function LayoutSheet({ layout, activeId, sync, onSync, onPick, onClose }: {
 const MAGNET_LABEL: Record<'off' | 'weak' | 'strong', string> = { off: 'vyp.', weak: 'slabý', strong: 'silný' };
 
 /** Menu ⋯ grafu dne (TradingView „Analysis hub“): vše, co se nevešlo do spodní lišty. */
-function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet, locked, onLock, onToggleIndicator, onIndicatorSettings, onLayout, onChartSettings, onReplay, onClose }: {
+function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet, locked, onLock, onToggleIndicator, onIndicatorSettings, onLayout, onChartSettings, onReplay, extra = null, onClose }: {
   layoutCells: Parameters<typeof ChartLayoutGlyph>[0]['cells'];
   indicators: { levels: boolean; fvg: boolean; structure: boolean };
   canReplay: boolean;
@@ -1468,6 +1498,8 @@ function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet,
   onLayout: () => void;
   onChartSettings: () => void;
   onReplay: () => void;
+  /** LIVE volby navíc pod Kreslením (`live.hubExtra`). */
+  extra?: React.ReactNode;
   onClose: () => void;
 }) {
   // Složky jako v TradingView: hlavní stránka → Indikátory.
@@ -1527,6 +1559,7 @@ function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet,
                 {toggle(locked, onLock, 'Zamknout kresby')}
               </div>
             </div>
+            {extra}
           </div>
         ) : (
           <div key="indicators" style={{ animation: 'dj-fade .16s ease both' }}>

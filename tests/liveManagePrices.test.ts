@@ -201,7 +201,7 @@ describe('BE varianty — záměr move-stop, vždy dvoukrokově (U10)', () => {
     const summary = long({ mark: 25_010 });
     expect(planBreakEven(summary, basis(), { kind: 'be' })).toMatchObject({ ok: true, intent: { id: 'be', action: 'move-stop', expectPrice: 24_990, newPrice: 25_000, confirm: true, direction: 'tighten' } });
     expect(planBreakEven(summary, basis(), { kind: 'be-plus', ticks: 2 })).toMatchObject({ ok: true, intent: { newPrice: 25_000.5, label: 'SL na BE +2 t 25000.50' } });
-    expect(planBreakEven(summary, basis(), { kind: 'be-fees' })).toMatchObject({ ok: true, intent: { newPrice: 25_000.75, label: 'SL na BE + poplatky 25000.75' } });
+    expect(planBreakEven(summary, basis(), { kind: 'be-fees' })).toMatchObject({ ok: true, intent: { newPrice: 25_000.75, label: 'SL na BE + odhad poplatků 25000.75' } });
   });
 
   it('klíč potvrzení nese variantu, akci, „co jsem viděl“ i novou cenu', () => {

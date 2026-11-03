@@ -185,8 +185,21 @@ describe('šipky plnění nikdy neautorizují příkaz (INV-UI-*)', async () => 
   it('phoneFills jde jen do slotu grafu, nikdy do phoneTrade ani relay', () => {
     const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
     const uses = desk.split('\n').filter(line => /\bphoneFills\b/.test(line)).map(line => line.trim());
-    expect(uses.filter(line => !/^const phoneFills = useMemo|^fills: phoneFills\.fills,|^fillsOpen: phoneFills\.open,|^fillsSymbol: phoneFills\.symbol,/.test(line))).toEqual([]);
+    expect(uses.filter(line => !/^const phoneFills = useMemo|^fills: phoneFills\.fills,|^fillsOpen: phoneFills\.open,|^fillsSymbol: phoneFills\.symbol,|^const pcFills = useKeyedValue\(liveChartFills\(phoneFills\)\);$/.test(line))).toEqual([]);
     const tradeBlock = desk.slice(desk.indexOf('const phoneTrade = useMemo'), desk.indexOf('const phoneFills = useMemo'));
-    expect(tradeBlock).not.toMatch(/leaderFills|phoneFills|liveFillMarkers/);
+    expect(tradeBlock).not.toMatch(/leaderFills|phoneFills|pcFills|liveFillMarkers/);
+  });
+
+  it('PC (U4, 3. 11. 2026): tytéž šipky jen do obálky grafu (liveFills), nikdy do příkazů ani relaye', () => {
+    const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
+    const uses = desk.split('\n').filter(line => /\bpcFills\b/.test(line)).map(line => line.trim());
+    expect(uses).toEqual(['const pcFills = useKeyedValue(liveChartFills(phoneFills));', 'liveFills={pcFills}']);
+    // Desk callbacky a relay šipky nikdy nevidí.
+    for (const name of ['previewLeaderEntry', 'placeLeaderEntry', 'manageLeaderEntry', 'attachBrackets', 'runStaticSafetyAction', 'executeSafetyCommand']) {
+      const start = desk.indexOf(`const ${name} = useCallback`);
+      expect(start, name).toBeGreaterThan(0);
+      const body = desk.slice(start, desk.indexOf('\n  }, [', start));
+      expect(body, name).not.toMatch(/leaderFills|phoneFills|pcFills|liveFills|liveFillMarkers/);
+    }
   });
 });

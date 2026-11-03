@@ -142,11 +142,16 @@ describe('dvoukrokové potvrzení (350 ms – 4 s, klíč s akcí a cenou)', () 
     expect(liveManageConfirmStep(first.next, 'be:move-stop:24990:25000', NOW + LIVE_MANAGE_CONFIRM_MIN_MS)).toEqual({ fire: true, next: null });
   });
 
-  it('dvojklik (< 350 ms) neodešle a okno neprodlouží', () => {
+  it('dvojklik (< 350 ms) neodešle a kotvu posune; trojklik nepotvrdí', () => {
     const first = liveManageConfirmStep(null, 'k', NOW).next;
     const quick = liveManageConfirmStep(first, 'k', NOW + LIVE_MANAGE_CONFIRM_MIN_MS - 1);
-    expect(quick.fire).toBe(false);
-    expect(quick.next).toBe(first);
+    expect(quick).toEqual({ fire: false, tooSoon: true, next: { key: 'k', since: NOW + 349, until: NOW + 349 + LIVE_MANAGE_CONFIRM_MS } });
+    // 0 / 200 / 360 ms: třetí klik je jen 160 ms po druhém → nic.
+    const a = liveManageConfirmStep(null, 'k', NOW).next;
+    const b = liveManageConfirmStep(a, 'k', NOW + 200);
+    const c = liveManageConfirmStep(b.next, 'k', NOW + 360);
+    expect(c.fire).toBe(false);
+    expect(liveManageConfirmStep(c.next, 'k', NOW + 710).fire).toBe(true);
   });
 
   it('po 4 s nebo s jiným klíčem (jiná cena / SL se mezitím změnil) se ptá znovu', () => {

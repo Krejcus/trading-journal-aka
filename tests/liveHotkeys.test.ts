@@ -157,8 +157,10 @@ describe('U1 klávesy: dvoukrokové potvrzení', () => {
     expect(LIVE_HOTKEY_CONFIRM_WINDOW_MS).toBe(4_000);
     const guard = createTwoStepGuard();
     expect(guard.press('k', T0)).toEqual({ status: 'armed', until: T0 + 4_000 });
-    expect(guard.press('k', T0 + 349)).toEqual({ status: 'too-soon', until: T0 + 4_000 });
-    expect(guard.press('k', T0 + 350)).toEqual({ status: 'confirmed' });
+    expect(guard.press('k', T0 + 349)).toEqual({ status: 'too-soon', until: T0 + 349 + 4_000 });
+    // Kotva se posunula na 349 ms: 350 ms je jen 1 ms po předchozím stisku → nic.
+    expect(guard.press('k', T0 + 350).status).toBe('too-soon');
+    expect(guard.press('k', T0 + 700)).toEqual({ status: 'confirmed' });
     // Po potvrzení je stav pryč — třetí stisk jen znovu ptá.
     expect(guard.press('k', T0 + 500).status).toBe('armed');
   });

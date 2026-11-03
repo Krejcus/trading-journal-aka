@@ -1,6 +1,7 @@
-import type { LiveEntryPreviewDraft } from './leaderEntryPreview';
+import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from './leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from './leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from './leaderOrderManage';
+import type { LiveBareEntryRecord } from './liveBareEntry';
 import { snapToTick, ticketQuantity, type TicketDraft, type TicketInstrument } from './liveOrderTicket';
 import type { LiveTicketScaleIn } from './liveScaleIn';
 
@@ -39,6 +40,71 @@ export interface LivePhoneTradeBridge {
   entryAvg?: number | null;
   /** Přikoupení do otevřené pozice (worker `manual-entry-scale-in-v1`): SL/TP pozice a stav. */
   scaleIn?: LiveTicketScaleIn | null;
+  /**
+   * „Zkontrolovat u workeru (nic se neodešle)“ (U2, 3. 11. 2026) = deskový `previewLeaderEntry`
+   * beze změny; jen když worker umí ruční vstup. Chybí = tlačítko se nenabízí. Výsledek náhledu
+   * nic neautorizuje — odeslání jde dál jen přes `place` a worker vše ověří znovu (INV-MANUAL-01).
+   */
+  preview?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
+  /**
+   * Vlastní přijatý holý Market bez SL/TP (nejnovější ruční vstup vůbec, otevřený, symbol pozice
+   * leadera skupiny workeru) — vstup `liveAttachIntent.bareEntry` (U4). Null/chybí = není k čemu
+   * doplňovat nohy. Jen zobrazení a předvyplnění; o doplnění rozhoduje worker (`entry-closed`…).
+   */
+  bareEntry?: LiveBareEntryRecord | null;
+  /**
+   * Leader execution skupiny workeru (ne zobrazovací `isLeader`) — podklad `liveManageBasis`
+   * pro BE+n / BE s poplatky (U10). Jen výpočet ceny záměru, nic neautorizuje.
+   */
+  leaderAccountId?: number | null;
+}
+
+/**
+ * Brána odeslání ručního vstupu z appky — telefonní lišta a list i PC panel (U2/U4, 3. 11. 2026).
+ * INV-UI-01/02 (P2-10): odeslat jen nad čerstvým neobnoveným stavem, zapnutou kopírkou (ne
+ * shadow), bez rozpracovaného ručního vstupu a s relayem; po návratu z pozadí rozhodne až nový
+ * poll. Jen UI pojistka (null = UI pustí k tlačítku) — autoritou zůstávají brány workeru.
+ * Pořadí a texty jsou přesně dřívější inline `blockedReason` telefonu (2. 11.).
+ */
+export function liveEntryBlockedReason(input: {
+  /** Worker inzeruje ruční vstup (`supportsCopierManualEntry`). */
+  entrySupported: boolean;
+  /** Čerstvý a neobnovený stav této instance (`agentStatusFresh && !agentStatusRestored`). */
+  fresh: boolean;
+  armed: boolean;
+  shadowMode: boolean;
+  /** `controller.manualEntries` — rozpracovaný vstup (`sending` / `unknown`) blokuje. */
+  entries: readonly { status: string }[] | null | undefined;
+  /** Cesta přes relay existuje (odeslání jinudy nejde). */
+  relay: boolean;
+}): string | null {
+  if (!input.entrySupported) return 'Worker odeslání z appky neumí.';
+  if (!input.fresh) return 'Stav kopírky se ověřuje…';
+  if (input.armed !== true || input.shadowMode === true) return 'Kopírka je vypnutá — zapni ji na Live Dashboardu.';
+  if ((input.entries ?? []).some(entry => entry.status === 'sending' || entry.status === 'unknown')) {
+    return 'Předchozí vstup nemá výsledek — počkej / vyřeš na Live Dashboardu.';
+  }
+  if (!input.relay) return 'Chybí připojení k workeru přes relay.';
+  return null;
+}
+
+/**
+ * Holý záznam ze statusu workeru zúžený na pole `LiveBareEntryRecord` (U4): do grafu nejde nic
+ * navíc z durable záznamu (časy, důvody) a porovnání v obálce grafu je stabilní.
+ */
+export function liveBareEntryRecord(entry: LiveBareEntryRecord | null | undefined): LiveBareEntryRecord | null {
+  if (!entry) return null;
+  return {
+    operationId: entry.operationId,
+    status: entry.status,
+    createdAt: entry.createdAt,
+    symbol: entry.symbol,
+    ...(entry.side ? { side: entry.side } : {}),
+    ...(entry.quantity != null ? { quantity: entry.quantity } : {}),
+    ...(entry.bare != null ? { bare: entry.bare } : {}),
+    ...(entry.protected != null ? { protected: entry.protected } : {}),
+    ...(entry.open != null ? { open: entry.open } : {}),
+  };
 }
 
 /**

@@ -132,12 +132,17 @@ describe('oponentura 2. 11. — vrstvy, okna, ×, plusko, karty', () => {
     expect(readFileSync('components/day/LivePhoneAlerts.tsx', 'utf8')).toMatch(/position: 'absolute', inset: 0, zIndex: 46/);
   });
 
-  it('dvě okna: štítky a upozornění jen když hlavní okno zabírá celou plochu, jinak cenové čáry do všech oken', () => {
+  it('dvě okna (U3, 3. 11.): štítky a upozornění v každém okně podle jeho API, plusko jen v aktivním, za přehrávání nic', () => {
     const chart = readFileSync('components/day/DayFullscreenChart.tsx', 'utf8');
     expect(chart).toMatch(/fullPane: !split \|\| \(maximized && activePane === 0\)/);
+    // Vrstva v buňce okna se souřadnicemi a měřítkem toho okna; skryté (roztažené jiné) okno ji nemá.
+    expect(chart).toMatch(/\{live\?\.paneLayer && visible && \(/);
+    expect(chart).toMatch(/live\.paneLayer\(\{ \.\.\.liveInfo, api: paneApi\(index\), candles: list, intervalSeconds: timeframeMinutes\(paneTf\) \* 60, paneIndex: index, active: !split \|\| isActive \}\)/);
     const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
-    expect(phone).toMatch(/<PositionPriceLines feed=\{priceLines\} position=\{chartPosition\} enabled=\{!fullPane && !replay\} \/>/);
-    expect(phone).toMatch(/\{api && !replay && fullPane && <>/);
+    expect(phone).toMatch(/paneLayer: \(\{ api, replay, active, lastPrice \}\) => \(api && !replay \? <>/);
+    expect(phone).toMatch(/\{active && <LivePhoneCrosshairPlus api=\{api\} onPlus=\{setPlus\} \/>\}/);
+    // Cenové čáry pozice (náhrada štítků ve dvou oknech) už nejsou potřeba — štítky by byly dvakrát.
+    expect(phone).not.toMatch(/PositionPriceLines|createLivePriceLinesFeed/);
   });
 
   it('× na telefonu vždy na dvě klepnutí; zámek a „odesílám“ v rodiči (přežijí odpojení vrstvy)', () => {

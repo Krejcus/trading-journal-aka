@@ -105,7 +105,11 @@ import BacktestOrderLinesOverlay from './BacktestOrderLinesOverlay';
 import BacktestTradeExecutionsOverlay from './BacktestTradeExecutionsOverlay';
 import BacktestTradeReviewDialog from './BacktestTradeReviewDialog';
 import type { BacktestClosedTrade, BacktestFill, BacktestOrderSide, BacktestOrderType } from '../services/backtestTypes';
-import type { BacktestChartOrderLine, BacktestChartOrderLineKind } from '../services/backtestOrderLines';
+import { orderLineLabelParts, type BacktestChartOrderLine, type BacktestChartOrderLineKind } from '../services/backtestOrderLines';
+import type { LiveFillMarker } from '../lib/liveFillMarkers';
+import type { LiveWorkingOrdersView } from '../lib/liveWorkingOrderLines';
+import { chartDrawingIdle } from '../lib/liveHotkeys';
+import { useLiveFillArrows } from './day/useLiveFillArrows';
 import type { BacktestManagedPositionBox } from '../services/backtestManagedPosition';
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import {
@@ -315,7 +319,177 @@ export interface LiveOrderEntryBridge {
   onOrderLineAction?: (line: BacktestChartOrderLine, actionId: string) => void;
   /** Id vlastníka čar živé pozice: kreslí se i bez přepínače „čáry příkazů“, jen na grafu exekučního instrumentu. */
   livePositionOwnerId?: string;
+  /**
+   * U1 (11/2026): Esc v grafu — volá se ve fázi capture JEN při nečinném kreslení ve všech
+   * panelech (žádný nástroj, rozkreslená kresba ani výběr; stav čtený dřív, než ho candlekit
+   * na Esc změní). První Esc tak patří kreslení, teprve další smí zahodit návrh panelu.
+   */
+  onEscape?: (event: KeyboardEvent) => void;
+  /**
+   * U3-PC pojistka: přehrávání v grafu začalo / skončilo. Během přehrávání graf kreslí
+   * živé čáry jen pro čtení (bez tahu, ×, BE), návrh ani „· přidat“ nekreslí a pravý klik
+   * ani ⚡ návrh nevytvoří; obrazovka podle toho vypne panel a zkratky.
+   */
+  onReplayActiveChange?: (active: boolean) => void;
+  /** U4: šipky plnění leadera (jen kontrakt grafu, jen zobrazení — nikdy do příkazů). */
+  liveFills?: { key: string; fills: readonly LiveFillMarker[]; open: boolean | undefined } | null;
+  /**
+   * U5: pracující příkazy mimo spravovaný obchod a rozjeté nohy SL/TP — JEN ZOBRAZENÍ.
+   * Kreslí je vlastní vrstva bez jakéhokoli ovládání (tečkovaně, s tooltipem); do overlaye
+   * čar s handlery (tah, ×, BE) se nikdy nedostanou.
+   */
+  liveDisplayOrders?: Pick<LiveWorkingOrdersView, 'key' | 'lines' | 'badges'> | null;
 }
+
+/**
+ * U3-PC pojistka: živé čáry během přehrávání jen pro čtení. Zůstanou jen čáry živé pozice
+ * (bez tahu, ×, BE, přidání SL/TP a popisku tahu); návrh, „· přidat“ a cokoli jiného zmizí.
+ * Bez vlastníka živé pozice = nic.
+ */
+export function liveOrderLinesDuringReplay(lines: readonly BacktestChartOrderLine[], livePositionOwnerId: string | undefined): BacktestChartOrderLine[] {
+  if (!livePositionOwnerId) return [];
+  return lines.filter(line => line.ownerId === livePositionOwnerId).map(line => ({
+    ...line,
+    draggable: false,
+    cancellable: false,
+    confirmCancel: undefined,
+    cancelAction: undefined,
+    actions: undefined,
+    addableBrackets: undefined,
+    labelAt: undefined,
+    bracketLabelAt: undefined,
+  }));
+}
+
+/** Kreslicí jádro panelu, jak ho čte pojistka Esc (podmnožina enginu candlekitu). */
+interface LiveEscapeDrawingEngine {
+  getActiveTool: () => unknown;
+  getDraft: () => unknown;
+  getSelectedId: () => unknown;
+}
+
+/** Kreslení nic nedělá v ŽÁDNÉM panelu (candlekit reaguje na Esc ve všech). Chyba čtení = činné. */
+export function liveDrawingIdle(engines: readonly LiveEscapeDrawingEngine[]): boolean {
+  return engines.every(engine => {
+    try {
+      return chartDrawingIdle({ activeTool: engine.getActiveTool(), draft: engine.getDraft(), selectedId: engine.getSelectedId() });
+    } catch {
+      return false;
+    }
+  });
+}
+
+const sameLineCoordinates = (left: Record<string, number>, right: Record<string, number>) => {
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every(key => left[key] === right[key]);
+};
+
+/**
+ * Pracující příkazy jako čáry (U5) — JEN ZOBRAZENÍ, žádný handler: nejde je táhnout,
+ * zrušit, ani z nich nic poslat (jádro správu cizích a rozjetých příkazů nemá).
+ * Tlumeně a tečkovaně, tooltip „Spravuj v Tradovate…“; štítky nepodporovaných typů
+ * a „+N dalších“ vpravo nahoře. Pod overlayem čar pozice (ten má přednost při překryvu).
+ * Sklo s vlastní výplní (Chrome nekreslí backdrop blur).
+ */
+const LiveDisplayOrderLinesLayer: React.FC<{
+  api: ChartViewApi;
+  orders: Pick<LiveWorkingOrdersView, 'key' | 'lines' | 'badges'>;
+  isDark: boolean;
+  showPriceLabels: boolean;
+}> = ({ api, orders, isDark, showPriceLabels }) => {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const linesRef = useRef(orders.lines);
+  linesRef.current = orders.lines;
+  const refreshRef = useRef<(() => void) | null>(null);
+  const [coordinates, setCoordinates] = useState<Record<string, number>>({});
+  const [priceScaleWidth, setPriceScaleWidth] = useState(64);
+  useEffect(() => {
+    let frame = 0;
+    const chart = api.controller.getChart();
+    const series = api.controller.getSeries();
+    const update = () => {
+      frame = 0;
+      const next: Record<string, number> = {};
+      try {
+        linesRef.current.forEach(line => {
+          const coordinate = series.priceToCoordinate(line.price);
+          if (coordinate !== null && Number.isFinite(coordinate)) next[line.id] = Math.round(coordinate * 2) / 2;
+        });
+        const width = Math.max(54, chart.priceScale('right').width());
+        setPriceScaleWidth(current => (current === width ? current : width));
+      } catch { /* graf se právě ruší */ }
+      setCoordinates(current => (sameLineCoordinates(current, next) ? current : next));
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+    refreshRef.current = schedule;
+    chart.timeScale().subscribeVisibleLogicalRangeChange(schedule);
+    const observer = new ResizeObserver(schedule);
+    if (rootRef.current?.parentElement) observer.observe(rootRef.current.parentElement);
+    window.addEventListener('pointermove', schedule, true);
+    window.addEventListener('wheel', schedule, true);
+    // Cenová osa se posouvá i sama (živá svíčka, autoscale) — dorovnání jednou za sekundu.
+    const timer = window.setInterval(schedule, 1_000);
+    update();
+    return () => {
+      refreshRef.current = null;
+      if (frame) window.cancelAnimationFrame(frame);
+      window.clearInterval(timer);
+      observer.disconnect();
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(schedule);
+      window.removeEventListener('pointermove', schedule, true);
+      window.removeEventListener('wheel', schedule, true);
+    };
+  }, [api]);
+  useEffect(() => { refreshRef.current?.(); }, [orders.key]);
+
+  const muted = isDark ? '#8391a7' : '#64748b';
+  const glass = isDark ? 'rgba(13, 18, 26, 0.86)' : 'rgba(255, 255, 255, 0.9)';
+  return (
+    <div ref={rootRef} className="pointer-events-none absolute inset-0 z-[114] overflow-hidden" data-live-display-order-lines>
+      {orders.lines.map(line => {
+        const top = coordinates[line.id];
+        if (!Number.isFinite(top)) return null;
+        const parts = orderLineLabelParts(line.label);
+        return (
+          <div key={line.id} className="absolute left-0 h-0" style={{ right: priceScaleWidth, top }} data-live-display-line={line.id}>
+            <div className="absolute inset-x-0 top-0 border-t border-dotted opacity-70" style={{ borderColor: line.color }} />
+            <div
+              title={line.title}
+              className="pointer-events-auto absolute right-1 top-0 flex h-[17px] -translate-y-1/2 cursor-help items-center gap-[6px] whitespace-nowrap rounded-[4px] border border-dotted px-[6px] text-[10px] font-medium opacity-90"
+              style={{ borderColor: `${line.color}99`, backgroundColor: glass, color: muted }}
+            >
+              <span className="font-semibold tracking-[0.02em]" style={{ color: line.color }}>{parts.key}</span>
+              {parts.price && <span className="font-mono">{parts.price}</span>}
+              {parts.pnl && <span className="font-mono" style={{ color: line.color }}>{parts.pnl}</span>}
+              {parts.points && <span className="font-mono">{parts.points}</span>}
+              {parts.note && <span>{parts.note}</span>}
+            </div>
+            {showPriceLabels && (
+              <div
+                className="absolute top-0 flex h-[18px] -translate-y-1/2 items-center justify-center px-1 text-[9px] font-bold text-white opacity-75"
+                style={{ left: '100%', width: priceScaleWidth, backgroundColor: line.color }}
+              >{line.price.toFixed(2)}</div>
+            )}
+          </div>
+        );
+      })}
+      {orders.badges.length > 0 && (
+        <div className="absolute top-9 flex flex-col items-end gap-1" style={{ right: priceScaleWidth + 6 }}>
+          {orders.badges.map(badge => (
+            <div
+              key={badge.id}
+              title={badge.title}
+              className="pointer-events-auto flex h-[18px] cursor-help items-center whitespace-nowrap rounded-[4px] border border-dotted px-[6px] text-[10px] font-semibold"
+              style={{ borderColor: `${badge.color}99`, backgroundColor: glass, color: badge.color }}
+            >{badge.text}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface AlphaTradeChartWorkspaceProps {
   trade: Trade;
@@ -652,6 +826,7 @@ class ResilientWorkspacePanel extends React.Component<WorkspacePanelProps, Resil
 }
 
 const EMPTY_SESSION_HISTORY: MarketCandle[] = [];
+const NO_LIVE_FILLS: readonly LiveFillMarker[] = [];
 
 const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, updateConfig }) => {
   const context = useContext(WorkspaceDataContext);
@@ -686,17 +861,23 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   const orderLineSource = config.root === backtestSession?.executionInstrument ? backtestSession : liveOrderEntry;
   // Čáry živé pozice kopírky kreslí overlay vždy (dřív cenové čáry bez přepínače);
   // návrh a backtest dál podle přepínače „čáry příkazů“. `liveOrderEntry` je jen v panelu trhu exekuce.
+  // U3-PC pojistka: LIVE graf přehrávání nenabízí, ale kdyby běželo (nebo se vybíral start),
+  // ovládací čáry ani návrh nad historií nikdy — jen živá pozice pro čtení.
+  const liveReplayLocked = Boolean(liveOrderEntry) && context.replay.phase !== 'off';
   const panelOrderLines = useMemo(() => {
     const all = orderLineSource?.orderLines ?? [];
-    if (context.tradingSettings.orderLines) return all;
     const liveOwner = orderLineSource === liveOrderEntry ? liveOrderEntry?.livePositionOwnerId : undefined;
+    if (orderLineSource === liveOrderEntry && liveReplayLocked) return liveOrderLinesDuringReplay(all, liveOwner);
+    if (context.tradingSettings.orderLines) return all;
     return liveOwner ? all.filter(line => line.ownerId === liveOwner) : [];
-  }, [context.tradingSettings.orderLines, liveOrderEntry, orderLineSource]);
-  const liveOnChartOrder = liveOrderEntry?.onChartOrder;
+  }, [context.tradingSettings.orderLines, liveOrderEntry, liveReplayLocked, orderLineSource]);
+  const liveOnChartOrder = liveReplayLocked ? undefined : liveOrderEntry?.onChartOrder;
   const liveChartOrder = useMemo(
     () => (liveOnChartOrder ? (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number }) => liveOnChartOrder(input) : undefined),
     [liveOnChartOrder],
   );
+  // U5: pracující příkazy jen pro zobrazení — vlastní vrstva mimo overlay s handlery.
+  const liveDisplayOrders = liveOrderEntry?.liveDisplayOrders ?? null;
   const sessionCandles = backtestSession?.candlesByRoot[config.root]
     ?? (config.root === context.initialRoot ? context.initialCandles : undefined);
   const historySchema = marketDataSchemaForTimeframe(config.timeframe);
@@ -885,6 +1066,19 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       applyIndicatorState,
     });
   }, [activeLibraryIndicators, applyIndicatorState, chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.registerPanel, focusTrade, getCandles, getIndicatorState, indicatorController, instance.id, liveRawCandles, rawCandles, updatePanelConfig]);
+
+  // U4: šipky plnění leadera v PC LIVE grafu (stejná primitiva jako telefon a deník) —
+  // jen panel trhu exekuce, jen kontrakt grafu (filtruje obrazovka), ne v přehrávání.
+  const liveFills = liveOrderEntry?.liveFills ?? null;
+  useLiveFillArrows({
+    api: chartApi,
+    fills: liveFills?.fills ?? NO_LIVE_FILLS,
+    open: liveFills?.open === true,
+    candles,
+    intervalSeconds: timeframeMinutes(config.timeframe) * 60,
+    enabled: Boolean(liveFills && liveFills.open !== undefined && liveFills.fills.length > 0) && context.replay.phase === 'off',
+    isDark: context.isDark,
+  });
 
   const isActive = context.activePanelId === instance.id;
   // Fullscreen obchodu i review týdne: v replayi se obchody kreslí jen do
@@ -1082,6 +1276,14 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onCancel={orderLineSource.onOrderLineCancel}
               onAddBracket={orderLineSource.onOrderLineAddBracket}
               onAction={orderLineSource?.onOrderLineAction}
+            />
+          ) : null}
+          {chartApi && liveDisplayOrders && (liveDisplayOrders.lines.length > 0 || liveDisplayOrders.badges.length > 0) ? (
+            <LiveDisplayOrderLinesLayer
+              api={chartApi}
+              orders={liveDisplayOrders}
+              isDark={context.isDark}
+              showPriceLabels={showOrderPriceLabels}
             />
           ) : null}
           {(context.tradingSettings.tradeLines || context.tradingSettings.executionMarkers) && chartApi && config.root === context.backtestSession?.executionInstrument && (context.backtestSession.fills?.length || context.backtestSession.closedTrades?.length) ? (
@@ -2198,6 +2400,34 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     dev.__atOpenTradeReview = openBacktestTradeReview;
     dev.__atBacktestTrades = backtestSession?.closedTrades?.map(closed => ({ id: closed.id, entry: closed.entryTime, exit: closed.exitTime }));
   }
+  // U1: Esc v LIVE grafu — návrh panelu smí zahodit až při nečinném kreslení ve všech
+  // panelech. Capture fáze = stav se čte dřív, než ho candlekit na Esc změní.
+  const liveEscape = backtestSession ? undefined : liveOrderEntry?.onEscape;
+  const liveEscapeRef = useRef(liveEscape);
+  liveEscapeRef.current = liveEscape;
+  const drawingEnginesRef = useRef(drawingEngines);
+  drawingEnginesRef.current = drawingEngines;
+  const liveEscapeOn = Boolean(liveEscape);
+  useEffect(() => {
+    if (!liveEscapeOn) return undefined;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' && event.key !== 'Esc') return;
+      const onEscape = liveEscapeRef.current;
+      if (!onEscape || !liveDrawingIdle(drawingEnginesRef.current)) return;
+      onEscape(event);
+    };
+    window.addEventListener('keydown', handleEscape, true);
+    return () => window.removeEventListener('keydown', handleEscape, true);
+  }, [liveEscapeOn]);
+  // U3-PC pojistka: obrazovka LIVE ví, kdy graf přehrává (vypne panel a zkratky).
+  const liveReplayChange = backtestSession ? undefined : liveOrderEntry?.onReplayActiveChange;
+  const liveReplayChangeRef = useRef(liveReplayChange);
+  liveReplayChangeRef.current = liveReplayChange;
+  const liveReplayActive = liveTradingChart && replay.phase !== 'off';
+  useEffect(() => {
+    liveReplayChangeRef.current?.(liveReplayActive);
+  }, [liveReplayActive]);
+  useEffect(() => () => liveReplayChangeRef.current?.(false), []);
   const [workspaceHistoryState, setWorkspaceHistoryState] = useState<ChartWorkspaceHistoryState>({ canUndo: false, canRedo: false });
   const [selectedFib, setSelectedFib] = useState<{ engine: CandleKitDrawingEngine; drawing: FibDrawing } | null>(null);
   const [selectedPosition, setSelectedPosition] = useState<{ engine: CandleKitDrawingEngine; drawing: PositionDrawing } | null>(null);
@@ -2965,9 +3195,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const selectedPositionInstrument = activeControl?.config.root ?? initialRoot;
   const liveQuickOrder = backtestSession ? undefined : liveOrderEntry;
   const quickOrderDisabledReason = liveQuickOrder
-    ? selectedPositionInstrument !== liveQuickOrder.executionInstrument
-      ? `Objednávku lze zadat jen z ${liveQuickOrder.executionInstrument} grafu`
-      : null
+    ? replay.phase !== 'off'
+      // U3-PC pojistka: návrh z boxu nad přehrávanou historií nikdy.
+      ? 'Přehrávání v grafu — obchoduj v živém grafu.'
+      : selectedPositionInstrument !== liveQuickOrder.executionInstrument
+        ? `Objednávku lze zadat jen z ${liveQuickOrder.executionInstrument} grafu`
+        : null
     : !replayCandle
       ? 'Quick Order není dostupný bez aktuální replay ceny'
       : backtestSession && selectedPositionInstrument !== backtestSession.executionInstrument

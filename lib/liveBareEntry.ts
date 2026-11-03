@@ -145,12 +145,13 @@ export interface LiveConfirmState { key: string; at: number }
 /**
  * Klik na tlačítko s potvrzením. `send: true` jen pro druhý klik se STEJNÝM
  * klíčem v okně [350 ms, 4 s); cokoli jiného jen (znovu) ukáže „Opravdu?“.
- * Příliš rychlý druhý klik nic neodešle a okno neprodlouží.
+ * Příliš rychlý klik nic neodešle a kotvu posune na sebe: pauza 350 ms se počítá
+ * od POSLEDNÍHO kliku, takže ani trojklik / „bušení“ do tlačítka nic nepotvrdí.
  */
 export function liveConfirmClick(state: LiveConfirmState | null, key: string, now: number): { send: boolean; next: LiveConfirmState | null } {
   if (state && state.key === key && now < state.at + LIVE_CONFIRM_WINDOW_MS) {
     if (now - state.at >= LIVE_CONFIRM_MIN_MS) return { send: true, next: null };
-    return { send: false, next: state };
+    return { send: false, next: { key, at: now } };
   }
   return { send: false, next: { key, at: now } };
 }
@@ -175,6 +176,74 @@ export function liveBareConfirmKey(draft: Pick<LiveEntryPreviewDraft, 'symbol' |
 /** Text výstražného tlačítka holého Marketu (PC panel). */
 export function liveBareMarketButtonLabel(side: TicketSide, quantity: number, asking: boolean): string {
   return asking ? 'Opravdu bez ochrany? Klikni znovu' : `${side === 'buy' ? 'Koupit' : 'Prodat'} ${quantity} MARKET · BEZ SL/TP`;
+}
+
+/** Návrh pro worker = holý Market (Market bez SL i TP)? Stejný výklad jako `liveBareConfirmKey`. */
+export const isBarePreviewDraft = (draft: Pick<LiveEntryPreviewDraft, 'orderType' | 'stopLoss' | 'takeProfit'>): boolean => (
+  draft.orderType === 'Market' && draft.stopLoss == null && draft.takeProfit == null
+);
+
+export const LIVE_BARE_POSITION_UNVERIFIED = 'Pozice není ověřená — holý Market teď nejde.';
+
+/**
+ * Pozice pro bránu holého Marketu z PC panelu (oponentura vlny B, unknown ≠ flat):
+ * souhrn nebo čekající vstup leadera = ne flat; neověřené čtení (`issue`, např. stav
+ * starší než 45 s, chybějící účet, rozjetí) i úplně chybějící data = NEZNÁMO, tedy
+ * taky ne flat — s vlastním textem. Autoritou zůstává worker (`account-not-flat`).
+ */
+export function liveTicketBarePosition(
+  position: { summary: unknown; issue: string | null } | null | undefined,
+  leaderPosition: unknown,
+): { open: boolean; reason: string | null } {
+  if (!position || position.issue != null) return { open: true, reason: LIVE_BARE_POSITION_UNVERIFIED };
+  if (position.summary != null || leaderPosition != null) return { open: true, reason: null };
+  return { open: false, reason: null };
+}
+
+/**
+ * Klik na výstražné tlačítko holého Marketu (PC `sendDirect`). Brána se vyhodnotí
+ * v okamžiku KAŽDÉHO kliku (kotace ≤ 3 s, flat, strop, brána desku) — zablokovaný
+ * klik rozběhnuté „Opravdu?“ zahodí, takže po objevení pozice nebo obnoveném stavu
+ * ani další klik nic neodešle bez nového dvoukroku. `send: true` jen pro druhý klik
+ * se stejným klíčem 350 ms – 4 s po prvním.
+ */
+export function liveBareSendClick(input: {
+  gate: LiveBareMarketGate;
+  confirm: LiveConfirmState | null;
+  draft: Pick<LiveEntryPreviewDraft, 'symbol' | 'side' | 'quantity' | 'orderType' | 'stopLoss' | 'takeProfit'>;
+}): { send: boolean; next: LiveConfirmState | null; blocked: string | null } {
+  const blocked = liveBareMarketBlockReason(input.gate, input.draft.quantity);
+  if (blocked) return { send: false, next: null, blocked };
+  const step = liveConfirmClick(input.confirm, liveBareConfirmKey(input.draft), input.gate.now);
+  return { send: step.send, next: step.next, blocked: null };
+}
+
+export const LIVE_PREVIEW_PLACE_BARE = 'Holý Market (bez SL/TP) odešle jen velké tlačítko panelu — dvoukrokově.';
+
+/**
+ * Klik „Odeslat“ v Náhledu (PC `PreviewSection`, oponentura vlny B P2): vždy dvoukrok
+ * 350 ms – 4 s (dvojklik nic nepotvrdí) s klíčem = id odeslání náhledu + celý návrh
+ * včetně ceny (`previewKey`). Holý Market odtud nikdy (jde jen přes `liveBareSendClick`).
+ * Čerstvost náhledu a brána panelu se kontrolují v okamžiku kliku; blokace rozběhnuté
+ * „Opravdu?“ zahodí. Worker při odeslání znovu projde všechny brány.
+ */
+export function livePreviewPlaceClick(input: {
+  confirm: LiveConfirmState | null;
+  draft: Pick<LiveEntryPreviewDraft, 'orderType' | 'stopLoss' | 'takeProfit'>;
+  operationId: string | null | undefined;
+  previewKey: string;
+  receivedAt: number | null | undefined;
+  blockedReason: string | null;
+  freshMs: number;
+  now: number;
+}): { send: boolean; next: LiveConfirmState | null; reason: string | null } {
+  if (isBarePreviewDraft(input.draft)) return { send: false, next: null, reason: LIVE_PREVIEW_PLACE_BARE };
+  if (input.blockedReason) return { send: false, next: null, reason: input.blockedReason };
+  if (!input.operationId || !input.previewKey) return { send: false, next: null, reason: 'Náhled chybí — zkontroluj znovu.' };
+  const age = input.receivedAt == null ? Number.NaN : input.now - input.receivedAt;
+  if (!(age >= 0 && age <= input.freshMs)) return { send: false, next: null, reason: 'Náhled už není čerstvý — zkontroluj znovu.' };
+  const step = liveConfirmClick(input.confirm, `place:${input.operationId}:${input.previewKey}`, input.now);
+  return { send: step.send, next: step.next, reason: null };
 }
 
 // ── „Přidat SL/TP“ k holému vstupu ─────────────────────────────────────────

@@ -159,7 +159,7 @@ describe('dvoukrokové potvrzení (350 ms – 4 s, klíč nese akci)', () => {
   it('dvojklik pod 350 ms neodešle a okno neprodlouží (mutace hranice → červená)', () => {
     expect(LIVE_CONFIRM_MIN_MS).toBe(350);
     const asked = { key: KEY, at: NOW };
-    expect(liveConfirmClick(asked, KEY, NOW + 349)).toEqual({ send: false, next: asked });
+    expect(liveConfirmClick(asked, KEY, NOW + 349)).toEqual({ send: false, next: { key: KEY, at: NOW + 349 } });
     expect(liveConfirmClick(asked, KEY, NOW + 350)).toEqual({ send: true, next: null });
   });
 

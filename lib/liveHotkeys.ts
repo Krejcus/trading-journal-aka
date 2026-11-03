@@ -204,7 +204,8 @@ export type TwoStepPress =
 export interface TwoStepGuard {
   /**
    * Stisk s klíčem potvrzení. První (nebo jiný klíč, nebo po vypršení) = `armed`;
-   * týž klíč dřív než za 350 ms = `too-soon` (okno běží dál); týž klíč za 350 ms
+   * týž klíč dřív než za 350 ms = `too-soon` (kotva se posune na tento stisk, pauza
+   * 350 ms běží znovu — trojklik nepotvrdí); týž klíč za 350 ms
    * až 4 s = `confirmed` a stav se vynuluje. Neplatný klíč/čas = `invalid` + reset.
    */
   press: (key: string, at?: number) => TwoStepPress;
@@ -230,7 +231,8 @@ export function createTwoStepGuard(options: { minGapMs?: number; windowMs?: numb
       const current = live(at);
       if (current && current.key === key) {
         if (at - current.armedAt >= minGap) { state = null; return { status: 'confirmed' }; }
-        return { status: 'too-soon', until: current.until };
+        state = { key, armedAt: at, until: at + windowMs };
+        return { status: 'too-soon', until: state.until };
       }
       state = { key, armedAt: at, until: at + windowMs };
       return { status: 'armed', until: state.until };

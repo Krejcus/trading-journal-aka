@@ -11,6 +11,9 @@ import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
+import type { LiveAttachInput, LiveBareEntryRecord } from '../lib/liveBareEntry';
+import type { LivePhonePosition } from '../lib/livePhoneOrders';
+import type { LiveChartFills, LiveChartWorkingOrders } from '../hooks/useLiveChartData';
 import {
   getLiveScreenThemePreference,
   resolveLiveScreenDark,
@@ -109,6 +112,25 @@ interface Props {
   entryFrontContract?: string | null;
   /** Přikoupení do otevřené pozice (SL/TP pozice a stav pro panel). */
   entryScaleIn?: LiveTicketScaleIn | null;
+  // ── U4/U5/U8/U10 (3. 11. 2026): jen podklady panelu a grafu, výchozí = dnešní chování ──
+  /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); chybí = false. */
+  entryBareSupported?: boolean;
+  /** Vlastní přijatý holý Market bez nohou (jen v pohledu leadera skupiny workeru); chybí = null. */
+  entryBareEntry?: LiveBareEntryRecord | null;
+  /** Pozice leadera skupiny workeru na symbolu grafu (vstup `liveAttachIntent.position`); chybí = null. */
+  entryLeaderPosition?: LivePhonePosition | null;
+  /** Doplnění SL/TP k holému vstupu = deskový `attachBrackets`; chybí = worker attach neumí. */
+  onAttachBrackets?: (input: LiveAttachInput) => Promise<LeaderOrderManageResult>;
+  /** Brána odeslání z desku (tatáž jako telefonní lišta); null/chybí = desk nic navíc neblokuje. */
+  entryBlockedReason?: string | null;
+  /** Leader execution skupiny workeru — podklad `liveManageBasis` (BE+n, BE s poplatky); chybí = null. */
+  manageLeaderAccountId?: number | null;
+  /** Pracující příkazy jako čáry jen pro zobrazení (`live-working`); chybí = žádné. */
+  workingOrders?: LiveChartWorkingOrders | null;
+  /** Šipky plnění leadera (jen zobrazení); chybí = žádné. */
+  liveFills?: LiveChartFills | null;
+  /** Přihlášený uživatel — jen klíč knihovny šablon SL/TP na zařízení; chybí = jen vestavěná šablona. */
+  userId?: string | null;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -191,4 +213,13 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.entryMaxContracts ?? 1) === (right.entryMaxContracts ?? 1)
   && (left.entryFrontContract ?? null) === (right.entryFrontContract ?? null)
   && JSON.stringify(left.entryScaleIn ?? null) === JSON.stringify(right.entryScaleIn ?? null)
+  && Boolean(left.entryBareSupported) === Boolean(right.entryBareSupported)
+  && JSON.stringify(left.entryBareEntry ?? null) === JSON.stringify(right.entryBareEntry ?? null)
+  && JSON.stringify(left.entryLeaderPosition ?? null) === JSON.stringify(right.entryLeaderPosition ?? null)
+  && left.onAttachBrackets === right.onAttachBrackets
+  && (left.entryBlockedReason ?? null) === (right.entryBlockedReason ?? null)
+  && (left.manageLeaderAccountId ?? null) === (right.manageLeaderAccountId ?? null)
+  && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')
+  && (left.liveFills?.key ?? 'none') === (right.liveFills?.key ?? 'none')
+  && (left.userId ?? null) === (right.userId ?? null)
 ));

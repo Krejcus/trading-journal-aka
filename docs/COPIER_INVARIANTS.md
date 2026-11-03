@@ -1490,6 +1490,17 @@ existující ochranu.
   připojí ke skutečnému výsledku prvního; lokální Flatten nemá 10s abort a
   zámek se uvolní až po resolve/reject workeru. Nikdy nesmí timeout UI vytvořit
   druhý brokerový příkaz. Hlídá `tests/liveSafetyControls.test.ts`.
+- Zkratka Shift+F na PC (U1, 3. 11. 2026) a akce notifikace jen OTEVŘOU dialog
+  Flatten All nouzové lišty (`lib/liveSafetyShortcut.ts:requestLiveSafetyConfirmation`
+  → `LiveSafetyControls.tsx:liveSafetyShortcutListener` → `setConfirmation`) se stejným
+  cílem a týmž zámkem skupiny; nic neprovedou. Otevřený dialog se nepřepíše, běžící
+  Flatten ani neznámá skupina dialog neotevře, Kill switch zkratkou nikdy. Dialog
+  otevřený zkratkou má fokus na **Zrušit** (`liveSafetyDialogInitialFocus`,
+  `ConfirmActionDialog` `initialFocus: 'cancel'`), takže reflexní Enter / mezerník hned
+  po Shift+F Flatten nepotvrdí; potvrzuje se klikem (nebo Tab + Enter). Dialog
+  otevřený tlačítkem lišty má fokus beze změny.
+  Hlídá `tests/liveSafetyShortcut.test.ts`, `tests/liveChartPcIntegration.test.ts`,
+  `tests/liveWaveBCriticFixes.test.ts`.
 - LIVE → Graf (29. 10. 2026): tlačítko Vypnout v hlavičce grafu nezávisle na
   skupině, skryté jen při `lib/liveTradeGroupSource.ts:copierProvablyOff`
   (čerstvý stav, `armed: false` a žádné čekající automatické pokračování —
@@ -1856,8 +1867,12 @@ existující ochranu.
   holé pozice v telefonu = Flatten skupiny (jediný DEMO účet), dvoukrokově.
   Telefon (`components/day/LivePhoneChart.tsx`, `lib/livePhoneOrders.ts`) posílá
   přes stejný desk callback, relay a admission jako PC; odeslat jen nad čerstvým
-  neobnoveným stavem, zapnutou kopírkou a bez rozpracovaného vstupu; zámek
-  jednoho příkazu naráz. OFF/Kill/Flatten celé skupiny zůstávají na Live
+  neobnoveným stavem, zapnutou kopírkou, bez rozpracovaného vstupu a mimo
+  přehrávání; zámek jednoho příkazu naráz. „Zrušit“ čekajícího vstupu v liště
+  pozice (`cancel-entry`, ne Flatten) jde přes sdílený zámek čar a listu správy
+  (`LivePhoneLiveActions.tsx:createLivePhoneBarClose` + `lineState.busyRef`), takže
+  souběžně s × / BE / posunem z čáry neodejde druhý příkaz; Flatten pozice zůstává
+  mimo zámek i mimo `busy` (INV-UI-02). OFF/Kill/Flatten celé skupiny zůstávají na Live
   Dashboardu (Filip: žádná nouzová lišta na telefonním grafu; INV-UI-02 se plní
   navigací LIVE ▾ → Live Dashboard). Posun SL dál od trhu v manual-only skupině
   počítá s lokálním denním stropem jako náhled (dřív `risk-unknown`).
@@ -1893,14 +1908,74 @@ existující ochranu.
   `manageLeaderEntry`, předané jen za stejných podmínek jako PC
   (`supportsCopierManualOrderManage && ownManualEntry`); bez něj jsou čáry jen
   zobrazení. Zámek jednoho příkazu a „odesílám“ žijí v rodiči
-  (`useLivePhoneLineState`), aby přežily odpojení vrstvy. Ve dvou oknech se
-  štítky nekreslí (souřadnice okna 0), pozici pak kreslí cenové čáry do všech
-  oken (`fullPane`). Plusko u crosshairu volí typ příkazu ze čerstvé kotace
+  (`useLivePhoneLineState`), aby přežily odpojení vrstvy. Ve dvou oknech (U3,
+  3. 11. 2026) kreslí každé okno vlastní vrstvu (`paneLayer`) se svým API grafu:
+  štítky, BE, ×, tah SL/TP, čáry návrhu, pracující příkazy a ✎ správy v měřítku
+  toho okna; zámek jednoho příkazu (`lineState`) je společný, plusko jen v aktivním
+  okně, skryté okno (druhé maximalizované) nekreslí nic. Při přehrávání žádné
+  ovládání ani odeslání (čáry, návrh, plusko, list objednávky i správy, lišta
+  Koupit/Prodat, lišta návrhu) — jen štítek živé pozice a cesta zpět na živo;
+  Zavřít a Přidat SL/TP v liště pozice zůstávají (snižují riziko). Plusko u crosshairu volí typ příkazu ze čerstvé kotace
   (`clickedOrderType`, ≤ 3 s) a otevírá stejný list objednávky; odeslání z listu
   (i z position boxu) znovu odmítne limit/stop, který je proti čerstvé kotaci
   už na druhé straně trhu. Karty vlevo dole = `LiveTradeToasts` z týchž událostí
   kopírky jako PC; problémové (sticky) karty nic nevytlačí (`keepStickyToasts`).
   Hlídá test: `tests/priceAlerts.test.ts`, `tests/livePhoneTrade.test.ts`.
+- **Obchodování z PC grafu — UI vlna B (3. 11. 2026, `docs/reviews/trading-gaps-20261103.md`,
+  oponentura copier-design-critic):** jádro, relay ani worker se nemění; všechno jde přes
+  stávající desk callbacky (`placeLeaderEntry`, `manageLeaderEntry`, `attachBrackets`,
+  `runStaticSafetyAction`), které bez `armStatusRef.fresh` hodí „nic se neodeslalo“.
+  - **Klávesy PC (U1):** opt-in (výchozí vypnuto, `at:live:hotkeys`). Shift+B/S jen návrh
+    v panelu jako ⚡ (Market jen s capability a kotací ≤ 3 s, jinak Limit ±10 b; SL/TP
+    z výchozí šablony ★) a fokus pryč z panelu (`liveReleaseTicketFocus`); Esc zahodí
+    návrh jen při nečinném kreslení; Shift+E/X/C dvoukrokově (nový stisk ≥ 350 ms, do 4 s,
+    klíč akce + čára + cena, `createTwoStepGuard`) TOUŽ funkcí jako BE / × na čáře
+    (Shift+X jen když × nabízí čára); Shift+F jen dialog lišty (INV-UI-02). Zkratky mlčí
+    při `repeat`, IME, Meta/Ctrl/Alt, fokusu v poli / editoru / dialogu, otevřeném dialogu
+    nebo menu, odchodu z grafu, skryté stránce a během přehrávání (kromě Flatten dialogu,
+    nápovědy a zahození návrhu). **Žádná klávesa neodešle vstup:** globální Enter není,
+    odesílací tlačítka panelu po kliku pouští fokus (`event.currentTarget.blur()`), takže
+    Enter / mezerník po zkratce nepošle vyměněný návrh.
+  - **Holý Market z PC panelu (U4):** jen s `manual-entry-bare-v1`, jen skupina (vstup na
+    leadera), jen v kontraktech, kontrakt jen z kotace IBKR ≤ 3 s. Výstražné tlačítko
+    „MARKET · BEZ SL/TP“, dvoukrok 350 ms – 4 s s klíčem akce + kontrakt + strana + počet;
+    brána (`liveBareMarketBlockReason`: brána desku, capability, kotace, strop, pozice) se
+    vyhodnotí při KAŽDÉM kliku (`liveBareSendClick`); rozběhnuté potvrzení zahodí blokace
+    i bez kliku (tlačítko je disabled) a změna klíče (qty 1→2→1 = znovu od 1. kliku).
+    Klik dřív než 350 ms od PŘEDCHOZÍHO kliku kotvu posune, trojklik nepotvrdí (totéž
+    `liveManageConfirmStep` a `createTwoStepGuard`); tlačítka Správy po kliku pouští fokus.
+    Neověřené čtení pozice (`issue`) i chybějící data = ne flat (`liveTicketBarePosition`,
+    unknown ≠ flat), autoritou zůstává worker (`account-not-flat`). Holý Market NIKDY přes
+    Náhled → Odeslat (Náhled ho jen zkontroluje); ostatní vstupy z Náhledu dvoukrokově
+    350 ms – 4 s s klíčem id náhledu + celý návrh včetně ceny, čerstvost náhledu (≤ 15 s)
+    a brána panelu při kliku (`livePreviewPlaceClick`). Velké tlačítko běžného vstupu
+    zůstává jedním klikem (Filip 30. 10.).
+  - **„Přidat SL/TP“ z PC (U4):** jen s capability, `onAttachBrackets` a vlastním holým
+    vstupem (`newestOpenBareEntry`); záměr `liveAttachIntent` se skládá při kliku (kotace
+    IBKR téhož kontraktu ≤ 3 s, pozice = holý vstup, nohy ≥ 8 ticků na správné straně);
+    přijatý nebo neznámý výsledek se neodešle znovu, „nic se neodeslalo“ = Neodesláno
+    (jde opravit). Čáry „· přidat“ jen mění nohy v panelu. Předvolby qty a šablony
+    (U4/U8) ukládají jen velikost, jednotky a vzdálenosti, nikdy cenu.
+  - **Správa číslem a BE varianty (U10, PC panel i telefonní list):** jen záměr pro
+    sdílený runner (`useLiveManageRunner`, jeden zámek s čarami grafu; PC jen s runnerem
+    a jen u leadera skupiny workeru, `leaderManageBasis`). SL/TP zadané v ceně / bodech /
+    ticích / $ od průměru z pollu se převede na absolutní cenu záměru, která je vidět na
+    tlačítku („Posunout → X“); odejde jen cena, která na tlačítku visela ≥ 350 ms
+    (`liveManageSeenPriceProblem` — změna průměru pollem těsně před klikem = nic).
+    SL dál od trhu dvoukrokově, utažení SL a TP na PC jedním klikem (jako tah čáry),
+    na telefonu vše dvoukrokově. BE, BE + n (1–40 t) a BE + odhad poplatků jsou jen jiná
+    cena záměru `move-stop`, vždy dvoukrokově s cenou v klíči. **Poplatky jsou ODHAD**
+    z poslední sazby brokera (`lib/liveTradeCard.ts:tradeCardFeeRates`: průměrný poplatek
+    za kontrakt z posledních ≤ 20 fillů účtu × kusy), ne skutečné poplatky pozice;
+    neznámé = tlačítko se nenabízí.
+  - **Pojistka přehrávání na PC (U3-PC):** během přehrávání zůstanou jen čáry živé
+    pozice pro čtení; návrh a „· přidat“ zmizí, pravý klik ani ⚡ nic nevytvoří, panel
+    Objednávka je zavřený a `inert`, zkratky nic nenavrhnou ani nespustí.
+  - Pracující příkazy (U5) a šipky plnění na PC (U4) jsou jen zobrazení: vlastní vrstva
+    bez ovládání, do příkazů ani do „co jsem viděl“ nevstupují.
+  Hlídá test: `tests/liveOrderTicketPanel.test.ts`, `tests/liveChartPcIntegration.test.ts`,
+  `tests/liveHotkeys.test.ts`, `tests/liveManagePrices.test.ts`, `tests/livePhoneSheets.test.ts`,
+  `tests/livePhoneChartB5.test.ts`, `tests/liveWaveBCriticFixes.test.ts` (mutačně ověřeno).
 - Hlídá test (1b): `tests/manualEntryPlace.test.ts`, `tests/leaderEntryPlace.test.ts`,
   `tests/localCopierExecutionAgent.test.ts`, `tests/tradovateCopierCommandRelay.test.ts`.
 
