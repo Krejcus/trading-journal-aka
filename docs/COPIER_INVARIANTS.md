@@ -1207,6 +1207,11 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je `position → orders → position`,
   potvrdit flat/no-active a uložit `confirmed-by-state`. Nebezpečné je Market
   fallback bez nového přesného stavu nebo account-wide rozšíření cíle.
+- Zavření z grafu (fáze 2d) i × holé pozice bez SL/TP (C8, 3. 11. 2026,
+  `services/copierRuntimeController.ts:executeClose` s `managed: null`) se
+  potvrzují stejně: flat ∧ nic nepracuje z REST čtení, pozice trvá = incident bez
+  auto-close, nikdy opakování (detail v INV-MANUAL-01;
+  `tests/manualEntryBareClose.test.ts`).
 
 ### Worker identita, durable store a lease
 
@@ -1853,7 +1858,9 @@ existující ochranu.
   (INV-WORKER-02 dál otevřený). Úspěch zapíše id nohou do záznamu vstupu → dál běžný
   spravovaný obchod (posun SL/TP, BE, ×). `unknown` attach / restart v `sending`
   = incident, automaticky se nedořešuje (Flatten + auditovaný waiver). Zavření
-  holé pozice v telefonu = Flatten skupiny (jediný DEMO účet), dvoukrokově.
+  holé pozice = `close-position` holého záznamu (jen sólo skupina, výsledek stavem;
+  C8 níže, od 3. 11. 2026); Flatten skupiny (jediný DEMO účet) zůstává záloha na
+  Dashboardu a v telefonní liště.
   Telefon (`components/day/LivePhoneChart.tsx`, `lib/livePhoneOrders.ts`) posílá
   přes stejný desk callback, relay a admission jako PC; odeslat jen nad čerstvým
   neobnoveným stavem, zapnutou kopírkou a bez rozpracovaného vstupu; zámek
@@ -1862,6 +1869,48 @@ existující ochranu.
   navigací LIVE ▾ → Live Dashboard). Posun SL dál od trhu v manual-only skupině
   počítá s lokálním denním stropem jako náhled (dřív `risk-unknown`).
   Hlídá test: `tests/manualEntryBareAttach.test.ts`, `tests/livePhoneOrders.test.ts`.
+- **× zavřít holý Market bez SL/TP (C8, 3. 11. 2026, `docs/reviews/trading-gaps-designs/safety.md`,
+  oponentura copier-design-critic):** payload beze změny — `manage-leader-order` `close-position`
+  s `entryOperationId` holého záznamu a `expect = { price: referencePrice, quantity }`
+  (`lib/manualBareClose.ts:bareCloseManageFields`). Jen **sólo skupina** (`soloManualGroup`:
+  manual-only ∧ local-only ∧ bez followerů ∧ DEMO; smazaná skupina nikdy), capability
+  `manual-order-close-bare-v1` (worker ji inzeruje jen když `manualBareCloseEnabled()`);
+  starý worker stejný payload odmítne `not-own-entry` (`resolveManagedTrade` chce obě nohy)
+  a nic neodešle. Status `bareLeaderTrade` (nejnovější, acknowledged, holý, bez nohou,
+  otevřený) je jen výběr pro UI (INV-UI-01/03).
+  - **Jen ARMED ∧ ¬shadow ∧ ¬kill** (jako dnešní × fáze 2d) — ve frontě (`not-armed`) i
+    synchronně před zápisem. C8 tedy NENÍ výjimkou z INV-DEFAULT-01, INV-BRAKE-02 ani
+    INV-ARM-04; za DISARMED až s C9 (výjimka se pak zapíše uzavřeným seznamem). Relay
+    supersede brzdou, agent `brake-after-request`, TTL 5 s a výjimka z denního stropu beze změny.
+  - **„Co jsem viděl“ = počet kontraktů** (oponentura P3): `expect.price` = `referencePrice`
+    záznamu je konstanta a zastaralé zobrazení nezachytí. Vlastnictví pozice dokládají
+    VÝHRADNĚ kontroly ve workeru: vlastní přijatý holý záznam bez nohou, NEJNOVĚJŠÍ ruční vstup
+    a `closedAt == null` (starý záznam nesmí „adoptovat“ cizí pozici), vstup v aktuální session
+    (čerstvý REST graf příkazů) vyplněný přesně na qty, |net| = qty na správné straně a na
+    symbolu NIC nepracuje (REST i cache streamu, včetně typu, který appka nezná — INV-TRAD-07;
+    cizí příkaz se bez souhlasu neruší → `other-orders`, zavři Flattenem). Z pozice samotné se
+    vlastnictví nikdy neodvozuje (INV-PART-03).
+  - Ve frontě (`prepareBareClose`, vzor attach): nic nevyřešeného u záznamu ani pozice
+    (`manage-unresolved`), žádný nevyřešený ruční vstup, žádný běžící Flatten, ingress leadera 0,
+    ohraničené čerstvé REST čtení příkazů i pozic (3 s, snímek streamu ne), fence fronty,
+    tvar, durable `safety.manualOrderActions` `sending` (INV-OUTBOX-01).
+  - Mimo frontu `executeClose` s `managed: null`: synchronně ARM/shadow/kill, generace + fence,
+    Flatten, jiný zápis na leaderovi, ingress a z cache „na symbolu nic nepracuje ∧ stream net =
+    qty“ (místo `legsLive`); jinak `not-sent`. `closeReachBlockers` se u holé pozice VĚDOMĚ
+    přeskočí — sólo skupina nemá followery a brána dosahu je jen o nich (oponentura C8). Raw
+    `liquidatePosition` jeden pokus, registrovaný jako rozpracovaný zápis (Flatten leadera
+    vynechá jako nejasný zápis — druhá likvidace nevznikne).
+  - Výsledek jen stavem u brokera (INV-MODE-02): flat ∧ nic nepracuje = `acknowledged`
+    a `closedAt` záznamu zapíše worker sám (nečeká na stream); `already-flat` / flat při
+    odmítnutí = `waived` (kauzalita se netvrdí) + `closedAt`; pozice trvá = `unknown`
+    + incident „holá pozice N trvá, zavření nepotvrzeno“ bez auto-close (INV-DEFAULT-02);
+    timeout / indeterminate = stávající ověřovací větev 2d. `unknown` (i restart v `sending`)
+    dořeší jen čtení pozice: trvá = incident, flat = `waived` + `closedAt`; do té doby blokuje
+    další × i attach téhož záznamu. Nikdy opakování.
+  - Vědomě beze změny (jako 2d): cizí příkaz, který vznikne až po synchronní kontrole a před
+    zpracováním liquidate u brokera, liquidate zruší.
+  Hlídá test: `tests/manualEntryBareClose.test.ts` (mutačně ověřeno 18 pravidel),
+  `tests/localCopierExecutionAgent.test.ts` (capability).
 - **Čáry obchodu na telefonu — napojení dat (2. 11. 2026):** `phoneTrade` dostává
   `manage`/`closeSupported`/`entryAvg` z `livePhoneManageFields` = výrazy PC grafu (capability
   + jediný vlastní obchod; × jen za dostupného runtime, zapnuté kopírky a ne shadow; BE průměr

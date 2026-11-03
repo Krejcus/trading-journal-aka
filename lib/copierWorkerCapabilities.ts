@@ -78,6 +78,19 @@ export const supportsCopierManualOrderClose = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_MANUAL_ORDER_CLOSE_CAPABILITY);
 
+/**
+ * Worker umí × zavřít holý Market bez SL/TP (`close-position` holého záznamu, C8, 3. 11. 2026)
+ * — jen sólo skupina (manual-only local-only DEMO bez followerů), zatím jen za zapnuté kopírky.
+ * Bez ní UI × u holé pozice nenabídne (zůstává Flatten). Starý worker stejný payload odmítne
+ * (`not-own-entry` — `resolveManagedTrade` chce obě nohy), nic neodešle.
+ */
+export const COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY = 'manual-order-close-bare-v1';
+
+export const supportsCopierManualOrderCloseBare = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY);
+
 /** Worker umí smazat svou skupinu a běžet bez skupiny (11. 10. 2026). */
 export const COPIER_GROUP_DELETE_CAPABILITY = 'group-delete-v1';
 
