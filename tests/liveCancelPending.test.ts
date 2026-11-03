@@ -20,6 +20,8 @@ import {
   cancelPendingConfirmText,
   cancelEntryOutcome,
   cancelPendingSummary,
+  cancelEntryFilledFlatReason,
+  cancelEntryTargetProblem,
   classifyCancelPendingResult,
   dashboardCancelTarget,
   legsProtectFill,
@@ -242,11 +244,58 @@ describe('C7 — UI helpery (čistě)', () => {
 
   it('Dashboard „Zrušit příkaz“ jen u vlastního čekajícího vstupu leadera; jinde se neukáže', () => {
     const entries = [entry('a', { entryBrokerOrderId: '1234' })];
-    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 1234 }, { capability: true, leaderAccountId: LEADER, entries })).toBe(entries[0]);
-    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 999 }, { capability: true, leaderAccountId: LEADER, entries })).toBeNull();
-    expect(dashboardCancelTarget({ accountId: 7, orderId: 1234 }, { capability: true, leaderAccountId: LEADER, entries })).toBeNull();
-    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 1234 }, { capability: false, leaderAccountId: LEADER, entries })).toBeNull();
-    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 1234 }, { capability: true, leaderAccountId: null, entries })).toBeNull();
+    const gates = { statusFresh: true, restored: false, relayConnected: true };
+    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 1234 }, { capability: true, leaderAccountId: LEADER, entries, ...gates })).toBe(entries[0]);
+    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 999 }, { capability: true, leaderAccountId: LEADER, entries, ...gates })).toBeNull();
+    expect(dashboardCancelTarget({ accountId: 7, orderId: 1234 }, { capability: true, leaderAccountId: LEADER, entries, ...gates })).toBeNull();
+    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 1234 }, { capability: false, leaderAccountId: LEADER, entries, ...gates })).toBeNull();
+    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 1234 }, { capability: true, leaderAccountId: null, entries, ...gates })).toBeNull();
+    // Oponentura C7 kolo 2 (INV-FRESH-03, INV-UI-01/02): zastaralý / obnovený status ani chybějící relay mutaci nenabídne.
+    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 1234 }, { capability: true, leaderAccountId: LEADER, entries, ...gates, statusFresh: false })).toBeNull();
+    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 1234 }, { capability: true, leaderAccountId: LEADER, entries, ...gates, restored: true })).toBeNull();
+    expect(dashboardCancelTarget({ accountId: LEADER, orderId: 1234 }, { capability: true, leaderAccountId: LEADER, entries, ...gates, relayConnected: false })).toBeNull();
+  });
+
+  it('kolo 2: cíl zrušení musí být vstup — noha (parent / známé id nohy) ani jiná strana / typ nikdy (čistě)', () => {
+    const order = (overrides: Record<string, unknown> = {}) => ({ brokerOrderId: 'E1', side: 'Buy', orderType: 'Limit', ...overrides });
+    const expected = { side: 'Buy', orderType: 'Limit' };
+    const legIds = new Set(['S1', 'T1']);
+    expect(cancelEntryTargetProblem({ order: order(), expected, legIds })).toBeNull();
+    expect(cancelEntryTargetProblem({ order: order({ parentOrderId: 'E0' }), expected, legIds })).toMatch(/má parent/);
+    expect(cancelEntryTargetProblem({ order: order({ brokerOrderId: 'S1' }), expected, legIds })).toMatch(/ochranná noha/);
+    expect(cancelEntryTargetProblem({ order: order({ side: 'Sell' }), expected, legIds })).toMatch(/strana \/ typ/);
+    expect(cancelEntryTargetProblem({ order: order({ orderType: 'Stop' }), expected, legIds })).toMatch(/strana \/ typ/);
+    // Sledovaný obchod (2b) nemá záznam strany/typu — parent i id nohy platí dál.
+    expect(cancelEntryTargetProblem({ order: order({ side: 'Sell' }), expected: null, legIds })).toBeNull();
+    expect(cancelEntryTargetProblem({ order: order({ brokerOrderId: 'T1' }), expected: null, legIds })).toMatch(/ochranná noha/);
+  });
+
+  it('kolo 3: příkaz na opačné straně než otevřená pozice leadera = ochrana, ne vstup (čistě)', () => {
+    const order = (side: string) => ({ brokerOrderId: 'U1', side, orderType: 'Limit' });
+    const expected = (side: string) => ({ side, orderType: 'Limit' });
+    const legIds = new Set<string>();
+    // Short z Tradovate, Buy příkaz by ho zmenšil → blokováno (i když strana / typ sedí se záznamem).
+    expect(cancelEntryTargetProblem({ order: order('Buy'), expected: expected('Buy'), legIds, leaderNet: -2 })).toMatch(/zmenšil otevřenou pozici leadera \(-2\)/);
+    expect(cancelEntryTargetProblem({ order: order('Sell'), expected: expected('Sell'), legIds, leaderNet: 1 })).toMatch(/zmenšil/);
+    expect(cancelEntryTargetProblem({ order: order('Buy'), expected: null, legIds, leaderNet: -1 })).toMatch(/zmenšil/);
+    // Přikoupení (stejná strana) a běžný vstup z flat / bez známé pozice projdou.
+    expect(cancelEntryTargetProblem({ order: order('Buy'), expected: expected('Buy'), legIds, leaderNet: 2 })).toBeNull();
+    expect(cancelEntryTargetProblem({ order: order('Sell'), expected: expected('Sell'), legIds, leaderNet: -2 })).toBeNull();
+    expect(cancelEntryTargetProblem({ order: order('Buy'), expected: expected('Buy'), legIds, leaderNet: 0 })).toBeNull();
+    expect(cancelEntryTargetProblem({ order: order('Buy'), expected: expected('Buy'), legIds, leaderNet: null })).toBeNull();
+  });
+
+  it('kolo 2: texty — částečná pozice jen Flattenem (× nejde); vyplněný a už flat bez „pozice je otevřená“ (čistě)', () => {
+    expect(cancelEntryVerdict({ status: 'canceled', quantity: 2, filledQuantity: 1 })?.reason).toContain('zavři ji Flattenem (× u částečně vyplněné pozice nejde)');
+    const open = cancelEntryOutcome({ status: 'working', quantity: 2, filledQuantity: 1 }, { settled: true });
+    expect(open?.reason).toContain('zavři ji Flattenem (× u částečně vyplněné pozice nejde)');
+    expect(open?.reason).not.toContain('× nebo Flattenem');
+    // Úplně vyplněný vstup × zavřít jde — rada zůstává.
+    expect(cancelEntryVerdict({ status: 'filled', quantity: 2, filledQuantity: 2 })?.reason).toContain('zavři ji × nebo Flattenem');
+    const flat = cancelEntryFilledFlatReason({ code: 'entry-filled', filled: 2 });
+    expect(flat).toContain('pozice už je zavřená');
+    expect(flat).not.toContain('pozice je otevřená');
+    expect(cancelEntryFilledFlatReason({ code: 'entry-partially-filled', filled: 1 })).toContain('z části vyplnil (1)');
   });
 
   it('capability: bez ní UI nic nenabídne', () => {
@@ -327,14 +376,14 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let active: CopierRuntimeController | null = null;
 afterEach(() => { active?.stop(); active = null; });
 
-async function setup(options: { patchBroker?: (broker: MockBroker) => void; settleMs?: number; store?: ReturnType<typeof createMemoryCopierStore>; broker?: MockBroker; arm?: boolean } = {}) {
+async function setup(options: { patchBroker?: (broker: MockBroker) => void; settleMs?: number; verifyMs?: number; store?: ReturnType<typeof createMemoryCopierStore>; broker?: MockBroker; arm?: boolean } = {}) {
   const clock = { now: START };
   const broker = options.broker ?? createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(START + 500)] });
   options.patchBroker?.(broker);
   const audits: string[] = [];
   const controller = await bootstrapCopierRuntime({
     broker, store: options.store ?? createMemoryCopierStore(), group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
-    manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, manage: 500, settle: options.settleMs ?? 50, verify: 100 },
+    manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, manage: 500, settle: options.settleMs ?? 50, verify: options.verifyMs ?? 100 },
     manualEntryQuote: () => ({ contract: SYM, last: REF, lastAt: clock.now - 100, bid: REF - 0.25, ask: REF, quoteAt: clock.now - 50 }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
@@ -468,6 +517,8 @@ describe('C7 — controller: status pendingOwnEntries a cancel-entry ověřené 
     expect(results[0]).toMatchObject({ outcome: 'partially-filled' });
     expect(results[0].text).toContain('z části vyplněný');
     expect(results[0].text).toContain('pozice 1 je otevřená');
+    // Kolo 2 (P3): × částečnou pozici nezavře (`shape`) — rada jen Flatten.
+    expect(results[0].text).toContain('zavři ji Flattenem (× u částečně vyplněné pozice nejde)');
     expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(0);
   });
 
@@ -657,21 +708,217 @@ describe('C7 — oponentura diffu: odmítnuté zrušení, pozdní výsledek, res
     expect(ctx.broker.liquidateRequests()).toHaveLength(0);
   });
 
-  it('P2: broker zrušení odmítne a vstup dál čeká → rejected „vstup dál čeká“, znovu se nabídne, nic se neopakuje', async () => {
+  it('P2 + kolo 2: broker zrušení odmítne a vstup dál čeká → nejdřív unknown „ověřuji“, po ustálení rejected „dál čeká“, znovu se nabídne, nic se neopakuje', async () => {
     const ctx = await setup();
     const placed = await placePending(ctx);
     const entryId = placed.entryBrokerOrderId!;
     let calls = 0;
     ctx.broker.cancelOrder = async (_accountId, id) => { if (id === entryId) { calls += 1; throw new Error('cancelOrder rejected: Unknown'); } };
     const results = await runCancelAll(ctx);
-    expect(results[0]).toMatchObject({ outcome: 'rejected' });
-    expect(results[0].text).toContain('vstup dál čeká');
+    // Kolo 2 (P3, PROBE-E): REST hned po odmítnutí ještě nemusí ukázat fill — konečné „dál čeká“ až po ustálení.
+    expect(results[0]).toMatchObject({ outcome: 'unknown' });
+    expect(results[0].text).toContain('vstup zatím pracuje');
+    expect(actionStatus(ctx)).toMatchObject({ status: 'unknown' });
     expect(calls).toBe(1);
+    ctx.clock.now += 1_000;
     await sleep(120);
     await ctx.controller.waitForIdle();
     expect(calls).toBe(1);
     expect(actionStatus(ctx)).toMatchObject({ status: 'rejected' });
+    expect(actionStatus(ctx)?.reason).toContain('vstup dál čeká');
     expect(ctx.controller.status().pendingOwnEntries?.map(entry => entry.entryBrokerOrderId)).toEqual([entryId]);
+  });
+
+  it('kolo 2 (PROBE-E): odmítnutí s REST ještě „working“, fill a zmizení nohou až potom → stream spustí čtení: entry-filled + incident', async () => {
+    const ctx = await setup({ settleMs: 10_000 });
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    ctx.broker.cancelOrder = async (_accountId, id) => { if (id === entryId) throw new Error(REJECTION); };
+    const results = await runCancelAll(ctx);
+    expect(results[0]).toMatchObject({ outcome: 'unknown' });
+    const entry = brokerOrder(ctx, entryId);
+    entry.status = 'filled';
+    entry.filledQuantity = 2;
+    ctx.broker.setPosition(LEADER, SYM, 2);
+    emitOrder(ctx, entry, '9:Filled');
+    cancelLegs(ctx, placed);
+    await sleep(80);
+    await ctx.controller.waitForIdle();
+    expect(actionStatus(ctx)).toMatchObject({ status: 'rejected', resultCode: 'entry-filled' });
+    expect(ctx.controller.status().armed).toBe(false);
+    expect(ctx.controller.status().lastError).toMatch(/při rušení vyplnil \(2\) a SL\/TP pozice nejsou potvrzené/);
+    expect(ctx.broker.liquidateRequests()).toHaveLength(0);
+  });
+
+  it('kolo 2: pozdní odmítnutí po timeoutu, vstup podle REST dál pracuje → zůstává unknown až do ustálení (žádné předčasné „dál čeká“)', async () => {
+    const ctx = await setup({ settleMs: 10_000 });
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    let reject: ((error: Error) => void) | undefined;
+    ctx.broker.cancelOrder = (_accountId, id) => (id === entryId ? new Promise<void>((_resolve, fail) => { reject = fail; }) : Promise.resolve());
+    const results = await runCancelAll(ctx);
+    expect(results[0]).toMatchObject({ outcome: 'unknown' });
+    reject?.(new Error(REJECTION));
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    expect(actionStatus(ctx)).toMatchObject({ status: 'unknown' });
+    expect(brokerOrder(ctx, entryId).status).toBe('working');
+  });
+
+  it('kolo 2: inline — vstup se při rušení vyplnil a obchod hned skončil na TP (flat) → bez incidentu, text „pozice už je zavřená“', async () => {
+    const ctx = await setup();
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    ctx.broker.cancelOrder = async (_accountId, id) => {
+      if (id !== entryId) return;
+      fillAtBroker(ctx, entryId, 2, 'filled');
+      const sl = brokerOrder(ctx, placed.stopBrokerOrderId!);
+      sl.status = 'canceled';
+      const tp = brokerOrder(ctx, placed.targetBrokerOrderId!);
+      tp.status = 'filled';
+      tp.filledQuantity = 2;
+      ctx.broker.setPosition(LEADER, SYM, 0);
+      // Kolo 3 (P2): „flat“ potlačí incident jen když to potvrdí i stream (TP vyplněný, SL zrušený, pozice 0).
+      emitOrder(ctx, tp, '9:Filled');
+      emitOrder(ctx, sl, '9:Canceled');
+      ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 0 } });
+    };
+    const results = await runCancelAll(ctx);
+    expect(results[0]).toMatchObject({ outcome: 'filled' });
+    expect(results[0].text).toContain('pozice už je zavřená');
+    expect(results[0].text).not.toContain('pozice je otevřená');
+    await sleep(20);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('kolo 2 (PROBE-C): souběžné dořešení (stream Filled + pozdní odmítnutí) — konečný výsledek až PO dočtení nohou', async () => {
+    let legIds: string[] = [];
+    let ref: Ctx | null = null;
+    const atLegReturn: string[] = [];
+    const ctx = await setup({ settleMs: 10_000, verifyMs: 1_000, patchBroker: broker => {
+      const real = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId, id) => {
+        if (ref && legIds.includes(id)) {
+          await sleep(150);
+          const result = await real(accountId, id);
+          atLegReturn.push(actionStatus(ref)?.status ?? 'none');
+          return result;
+        }
+        return real(accountId, id);
+      };
+    } });
+    ref = ctx;
+    const placed = await placePending(ctx);
+    legIds = [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!];
+    const entryId = placed.entryBrokerOrderId!;
+    let reject: ((error: Error) => void) | undefined;
+    ctx.broker.cancelOrder = (_accountId, id) => (id === entryId ? new Promise<void>((_resolve, fail) => { reject = fail; }) : Promise.resolve());
+    const results = await runCancelAll(ctx);
+    expect(results[0]).toMatchObject({ outcome: 'unknown' });
+    const entry = brokerOrder(ctx, entryId);
+    entry.status = 'filled';
+    entry.filledQuantity = 2;
+    ctx.broker.setPosition(LEADER, SYM, 2);
+    emitOrder(ctx, entry, '9:Filled');
+    reject?.(new Error(REJECTION));
+    await sleep(450);
+    await ctx.controller.waitForIdle();
+    expect(atLegReturn.length).toBeGreaterThanOrEqual(2);
+    expect(atLegReturn.every(status => status === 'unknown')).toBe(true);
+    expect(actionStatus(ctx)).toMatchObject({ status: 'rejected', resultCode: 'entry-filled' });
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('kolo 2 (PROBE-D): unknown zrušení vyřešené ručním waiverem → replay NENÍ „zrušeno“ (unknown, ověř v Tradovate)', async () => {
+    const ctx = await setup({ settleMs: 10_000 });
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    ctx.broker.cancelOrder = async (_accountId, id) => { if (id === entryId) throw new Error('cancelOrder command 7 was not confirmed by the order stream'); };
+    const shown = ctx.controller.status().pendingOwnEntries ?? [];
+    const command = validateLeaderOrderManage(buildCancelPendingCommand(shown[0], { groupId: group().id, leaderAccountId: LEADER, operationId: 'manage:cancelall0001' }));
+    expect((await ctx.controller.manageLeaderOrder(command, { deadlineAt: ctx.clock.now + 15_000 })).status).toBe('unknown');
+    await ctx.controller.waiveManualEntry({ operationId: 'manage:cancelall0001', reason: 'ručně ověřeno v Tradovate' });
+    expect(actionStatus(ctx)).toMatchObject({ status: 'waived' });
+    const replay = await ctx.controller.manageLeaderOrder(command, { deadlineAt: ctx.clock.now + 15_000 });
+    expect(replay.status).toBe('unknown');
+    expect(replay.reason).toContain('ověř v Tradovate');
+    expect(classifyCancelPendingResult(replay).outcome).not.toBe('canceled');
+    expect(brokerOrder(ctx, entryId).status).toBe('working');
+  });
+
+  it('kolo 2: starý `waived` záznam zrušení BEZ kódu (před C7, „cílový příkaz skončil (filled)“) → replay NENÍ „zrušeno“', async () => {
+    const store = createMemoryCopierStore();
+    const first = await setup({ store });
+    const placed = await placePending(first);
+    const shown = first.controller.status().pendingOwnEntries ?? [];
+    const command = validateLeaderOrderManage(buildCancelPendingCommand(shown[0], { groupId: group().id, leaderAccountId: LEADER, operationId: 'manage:oldwaive01' }));
+    first.controller.stop();
+    active = null;
+    const snapshot = await store.load();
+    await store.commit({ ...snapshot, safety: { ...snapshot.safety!, manualOrderActions: [...(snapshot.safety?.manualOrderActions ?? []), {
+      operationId: 'manage:oldwaive01', payloadHash: command.payloadHash, entryOperationId: 'entry:pendc701', action: 'cancel-entry',
+      status: 'waived', reason: 'cílový příkaz skončil (filled)', symbol: SYM, targetBrokerOrderId: placed.entryBrokerOrderId!,
+      fromPrice: ENTRY, toPrice: null, quantity: 2, createdAt: first.clock.now, updatedAt: first.clock.now,
+    }] } }, snapshot.revision);
+    const second = await setup({ store, broker: first.broker, arm: false });
+    const replay = await second.controller.manageLeaderOrder(command, { deadlineAt: second.clock.now + 15_000 });
+    expect(replay.status).toBe('unknown');
+    expect(classifyCancelPendingResult(replay).outcome).not.toBe('canceled');
+    expect(second.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(0);
+  });
+
+  it('kolo 2 („nikdy nohu“): záznam s id SL otevřené pozice jako vstupem → worker blocked not-entry, nic se nezruší', async () => {
+    const store = createMemoryCopierStore();
+    const first = await setup({ store });
+    const placed = await placePending(first);
+    fillAtBroker(first, placed.entryBrokerOrderId!, 2, 'filled');
+    await sleep(20);
+    await first.controller.waitForIdle();
+    first.controller.stop();
+    active = null;
+    // Poškozený záznam (chyba mapování ACK / store): id vstupu = id SL otevřené pozice.
+    const snapshot = await store.load();
+    await store.commit({ ...snapshot, safety: { ...snapshot.safety!, manualEntries: (snapshot.safety?.manualEntries ?? []).map(record => (
+      record.operationId === 'entry:pendc701' ? { ...record, entryBrokerOrderId: placed.stopBrokerOrderId! } : record)) } }, snapshot.revision);
+    const second = await setup({ store, broker: first.broker, arm: false });
+    const stop = brokerOrder(second, placed.stopBrokerOrderId!);
+    expect(stop.status).toBe('working');
+    const command = validateLeaderOrderManage(buildCancelPendingCommand({
+      entryOperationId: 'entry:pendc701', entryBrokerOrderId: stop.brokerOrderId, symbol: SYM, side: 'Buy', quantity: 2,
+      orderType: 'Stop', price: stop.stopPrice!, scaleIn: false, createdAt: 1,
+    }, { groupId: group().id, leaderAccountId: LEADER, operationId: 'manage:cancelleg01' }));
+    const result = await second.controller.manageLeaderOrder(command, { deadlineAt: second.clock.now + 15_000 });
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(issue => issue.code)).toEqual(['not-entry']);
+    expect(second.broker.cancelRequestCount(stop.brokerOrderId)).toBe(0);
+    expect(brokerOrder(second, placed.stopBrokerOrderId!).status).toBe('working');
+  });
+
+  it('kolo 2: noha `pending` hned po fillu (Suspended) se v rozpočtu přečte znovu → working = bez falešného incidentu', async () => {
+    let suspendedReads = 2;
+    let legIds: string[] = [];
+    const ctx = await setup({ verifyMs: 1_000, patchBroker: broker => {
+      const real = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId, id) => {
+        const result = await real(accountId, id);
+        if (legIds.includes(id) && suspendedReads > 0 && result.order) {
+          suspendedReads -= 1;
+          return { ...result, order: { ...result.order, status: 'pending' } };
+        }
+        return result;
+      };
+    } });
+    const placed = await placePending(ctx);
+    legIds = [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!];
+    ctx.broker.cancelOrder = async (_accountId, id) => { if (id === placed.entryBrokerOrderId) fillAtBroker(ctx, id, 2, 'filled'); };
+    const results = await runCancelAll(ctx);
+    expect(results[0]).toMatchObject({ outcome: 'filled' });
+    expect(suspendedReads).toBe(0);
+    await sleep(20);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(ctx.audits.some(line => line.includes('pozice chráněná SL/TP'))).toBe(true);
   });
 
   it('P2: dvojí zrušení (vstup už zrušený jinak) a broker druhé odmítne → „zrušeno“ bez tvrzení kauzality; replay = acknowledged', async () => {
@@ -691,7 +938,7 @@ describe('C7 — oponentura diffu: odmítnuté zrušení, pozdní výsledek, res
     expect(first).toMatchObject({ status: 'acknowledged' });
     expect(first.reason).toContain('ne tímto příkazem');
     expect(classifyCancelPendingResult(first).outcome).toBe('canceled');
-    expect(actionStatus(ctx)).toMatchObject({ status: 'waived' });
+    expect(actionStatus(ctx)).toMatchObject({ status: 'waived', resultCode: 'canceled-elsewhere' });
     // Idempotentní replay (ztracený ACK): známý výsledek, ne „neznámý“ (oponentura diffu, P3).
     const replay = await ctx.controller.manageLeaderOrder(command, { deadlineAt: ctx.clock.now + 15_000 });
     expect(replay).toMatchObject({ status: 'acknowledged' });
@@ -815,5 +1062,302 @@ describe('C7 — oponentura diffu: odmítnuté zrušení, pozdní výsledek, res
     expect(seen.length).toBeGreaterThanOrEqual(2);
     expect(seen.every(status => status === 'unknown')).toBe(true);
     expect(second.broker.liquidateRequests()).toHaveLength(0);
+  });
+
+  it('kolo 2 (PROBE-F): restart v `sending`, vstup se vyplnil a obchod už skončil na TP (flat) → bez incidentu, bez „pozice je otevřená“', async () => {
+    const { second } = await restartWithCancelRecord((ctx, placed) => {
+      const entry = brokerOrder(ctx, placed.entryBrokerOrderId!);
+      entry.status = 'filled';
+      entry.filledQuantity = 2;
+      brokerOrder(ctx, placed.stopBrokerOrderId!).status = 'canceled';
+      const tp = brokerOrder(ctx, placed.targetBrokerOrderId!);
+      tp.status = 'filled';
+      tp.filledQuantity = 2;
+      ctx.broker.setPosition(LEADER, SYM, 0);
+    });
+    await sleep(250);
+    await second.controller.waitForIdle();
+    const record = actionStatus(second, 'manage:restart0001');
+    expect(record).toMatchObject({ status: 'rejected', resultCode: 'entry-filled' });
+    expect(record?.reason).toContain('pozice už je zavřená');
+    expect(record?.reason).not.toContain('pozice je otevřená');
+    expect(second.controller.status().lastError).toBeNull();
+    expect(second.audits.some(line => line.includes('pozice je už zavřená'))).toBe(true);
+    expect(second.broker.liquidateRequests()).toHaveLength(0);
+  });
+
+  it('kolo 2: dořešení čtením uloží i kód `waived` ověřeného stavem (vstup skončil bez fillu → entry-ended)', async () => {
+    const { second } = await restartWithCancelRecord((ctx, placed) => {
+      brokerOrder(ctx, placed.entryBrokerOrderId!).status = 'rejected';
+    });
+    await sleep(250);
+    await second.controller.waitForIdle();
+    expect(actionStatus(second, 'manage:restart0001')).toMatchObject({ status: 'waived', resultCode: 'entry-ended' });
+    expect(second.controller.status().lastError).toBeNull();
+  });
+
+  it('kolo 2: flat podle pozice, ale noha dál pracuje (osiřelá) → incident zůstává', async () => {
+    const { second } = await restartWithCancelRecord((ctx, placed) => {
+      const entry = brokerOrder(ctx, placed.entryBrokerOrderId!);
+      entry.status = 'filled';
+      entry.filledQuantity = 2;
+      brokerOrder(ctx, placed.stopBrokerOrderId!).status = 'canceled';
+      ctx.broker.setPosition(LEADER, SYM, 0);
+    });
+    await sleep(250);
+    await second.controller.waitForIdle();
+    expect(actionStatus(second, 'manage:restart0001')).toMatchObject({ status: 'rejected', resultCode: 'entry-filled' });
+    expect(second.controller.status().lastError).toMatch(/při rušení vyplnil \(2\) a SL\/TP pozice nejsou potvrzené/);
+  });
+});
+
+describe('C7 — oponentura kolo 3: ověřeně flat, odmítnutí v záznamu, pozdní odmítnutí, ochrana z pozice', () => {
+  const REJECTION = 'cancelOrder rejected: TooLateToCancel';
+  /** Vstup se při rušení vyplní a kaskáda zruší obě nohy (NEOVĚŘENÉ chování Tradovate) — pozice +2 nahá. */
+  const fillAndCascade = (ctx: Ctx, placed: { entryBrokerOrderId?: string; stopBrokerOrderId?: string; targetBrokerOrderId?: string }, emitPosition: boolean) => {
+    const entry = brokerOrder(ctx, placed.entryBrokerOrderId!);
+    entry.status = 'filled';
+    entry.filledQuantity = 2;
+    ctx.broker.setPosition(LEADER, SYM, 2);
+    emitOrder(ctx, entry, '9:Filled');
+    for (const legId of [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!]) {
+      const leg = brokerOrder(ctx, legId);
+      leg.status = 'canceled';
+      emitOrder(ctx, leg, '9:Canceled');
+    }
+    if (emitPosition) ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 2 } });
+  };
+
+  it('P2 (SONDA-1): první čtení pozic zastaralé (připojené k /position/list před fillem), nohy zrušené, pozice 2 → incident, ne „už je zavřená“', async () => {
+    let legIds: string[] = [];
+    let armStale = false;
+    let staleReads = 0;
+    const ctx = await setup({ patchBroker: broker => {
+      const realPositions = broker.listPositions.bind(broker);
+      broker.listPositions = async accountId => {
+        if (staleReads > 0) { staleReads -= 1; return []; }
+        return realPositions(accountId);
+      };
+      const realFind = broker.findOrderById.bind(broker);
+      // Zastaralý snímek pozic dostane PRVNÍ čtení po ověření nohou (= první čtení kontroly „flat“).
+      broker.findOrderById = async (accountId, id) => {
+        if (armStale && legIds.includes(id)) { armStale = false; staleReads = 1; }
+        return realFind(accountId, id);
+      };
+    } });
+    const placed = await placePending(ctx);
+    legIds = [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!];
+    const entryId = placed.entryBrokerOrderId!;
+    // Stream pozici ještě nedoručil (zpoždění) — o „flat“ rozhoduje REST.
+    ctx.broker.cancelOrder = async (_accountId, id) => { if (id === entryId) { fillAndCascade(ctx, placed, false); armStale = true; throw new Error(REJECTION); } };
+    const results = await runCancelAll(ctx);
+    expect(staleReads).toBe(0); // zastaralé čtení se opravdu spotřebovalo
+    expect(results[0]).toMatchObject({ outcome: 'filled' });
+    expect(results[0].text).not.toContain('pozice už je zavřená');
+    await sleep(20);
+    await ctx.controller.waitForIdle();
+    expect(actionStatus(ctx)).toMatchObject({ status: 'rejected', resultCode: 'entry-filled' });
+    expect(actionStatus(ctx)?.reason).not.toContain('už je zavřená');
+    expect(ctx.controller.status().armed).toBe(false);
+    expect(ctx.controller.status().lastError).toMatch(/při rušení vyplnil \(2\) a SL\/TP pozice nejsou potvrzené/);
+    expect(ctx.broker.liquidateRequests()).toHaveLength(0);
+  });
+
+  it('P2: REST pozic zastaralý při obou čteních, ale stream ukazuje +2 → incident (stream nesmí hlásit nenulovou pozici)', async () => {
+    let stale = false;
+    const ctx = await setup({ patchBroker: broker => {
+      const real = broker.listPositions.bind(broker);
+      broker.listPositions = async accountId => (stale ? [] : real(accountId));
+    } });
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    ctx.broker.cancelOrder = async (_accountId, id) => { if (id === entryId) { fillAndCascade(ctx, placed, true); stale = true; } };
+    const results = await runCancelAll(ctx);
+    expect(results[0]).toMatchObject({ outcome: 'filled' });
+    expect(results[0].text).not.toContain('pozice už je zavřená');
+    await sleep(20);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status().armed).toBe(false);
+    expect(ctx.controller.status().lastError).toMatch(/při rušení vyplnil \(2\) a SL\/TP pozice nejsou potvrzené/);
+    stale = false;
+    expect(await ctx.broker.listPositions(LEADER)).toEqual([expect.objectContaining({ symbol: SYM, netQuantity: 2 })]);
+  });
+
+  it('P3 (SONDA-2): inline odmítnutí, vstup pak zrušený jinde (Tradovate) během ustálení → waived „ne tímto příkazem“, replay netvrdí kauzalitu', async () => {
+    const ctx = await setup({ settleMs: 10_000 });
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    ctx.broker.cancelOrder = async (_accountId, id) => { if (id === entryId) throw new Error(REJECTION); };
+    const shown = ctx.controller.status().pendingOwnEntries ?? [];
+    const command = validateLeaderOrderManage(buildCancelPendingCommand(shown[0], { groupId: group().id, leaderAccountId: LEADER, operationId: 'manage:cancelall0001' }));
+    const first = await ctx.controller.manageLeaderOrder(command, { deadlineAt: ctx.clock.now + 15_000 });
+    expect(first.status).toBe('unknown');
+    const entry = brokerOrder(ctx, entryId);
+    entry.status = 'canceled';
+    emitOrder(ctx, entry, '10:Canceled');
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    expect(actionStatus(ctx)).toMatchObject({ status: 'waived', resultCode: 'canceled-elsewhere' });
+    expect(actionStatus(ctx)?.reason).toContain('ne tímto příkazem');
+    expect(actionStatus(ctx)?.reason).not.toContain('zrušení potvrzeno');
+    const replay = await ctx.controller.manageLeaderOrder(command, { deadlineAt: ctx.clock.now + 15_000 });
+    expect(replay.status).toBe('acknowledged');
+    const classified = classifyCancelPendingResult(replay);
+    expect(classified.text).toContain('ne tímto příkazem');
+    expect(classified.text).not.toBe('Zrušeno.');
+  });
+
+  it('P3: totéž po timeoutu — pozdní odmítnutí se uloží, vstup pak zrušený jinde → waived „ne tímto příkazem“', async () => {
+    const ctx = await setup({ settleMs: 10_000 });
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    let reject: ((error: Error) => void) | undefined;
+    ctx.broker.cancelOrder = (_accountId, id) => (id === entryId ? new Promise<void>((_resolve, fail) => { reject = fail; }) : Promise.resolve());
+    const results = await runCancelAll(ctx);
+    expect(results[0]).toMatchObject({ outcome: 'unknown' });
+    reject?.(new Error(REJECTION));
+    await sleep(40);
+    await ctx.controller.waitForIdle();
+    expect(actionStatus(ctx)).toMatchObject({ status: 'unknown' });
+    const entry = brokerOrder(ctx, entryId);
+    entry.status = 'canceled';
+    emitOrder(ctx, entry, '10:Canceled');
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    expect(actionStatus(ctx)).toMatchObject({ status: 'waived', resultCode: 'canceled-elsewhere' });
+    expect(actionStatus(ctx)?.reason).toContain('ne tímto příkazem');
+  });
+
+  it('P3: pozdní odmítnutí se uloží durable — po restartu a zrušení vstupu jinde pořád waived „ne tímto příkazem“', async () => {
+    const store = createMemoryCopierStore();
+    const first = await setup({ store, settleMs: 10_000 });
+    const placed = await placePending(first);
+    const entryId = placed.entryBrokerOrderId!;
+    let reject: ((error: Error) => void) | undefined;
+    first.broker.cancelOrder = (_accountId, id) => (id === entryId ? new Promise<void>((_resolve, fail) => { reject = fail; }) : Promise.resolve());
+    const results = await runCancelAll(first);
+    expect(results[0]).toMatchObject({ outcome: 'unknown' });
+    reject?.(new Error(REJECTION));
+    await sleep(40);
+    await first.controller.waitForIdle();
+    expect(actionStatus(first)).toMatchObject({ status: 'unknown' });
+    first.controller.stop();
+    active = null;
+    const second = await setup({ store, broker: first.broker, arm: false, settleMs: 10_000 });
+    const entry = brokerOrder(second, entryId);
+    entry.status = 'canceled';
+    emitOrder(second, entry, '10:Canceled');
+    await sleep(60);
+    await second.controller.waitForIdle();
+    expect(actionStatus(second)).toMatchObject({ status: 'waived', resultCode: 'canceled-elsewhere' });
+    expect(actionStatus(second)?.reason).toContain('ne tímto příkazem');
+  });
+
+  it('P3 (SONDA-3): pozdní odmítnutí až po obou plánovaných čteních → po ustálení rejected „dál čeká“, ne navždy unknown', async () => {
+    const ctx = await setup({ settleMs: 50 });
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    let reject: ((error: Error) => void) | undefined;
+    let calls = 0;
+    ctx.broker.cancelOrder = (_accountId, id) => {
+      if (id !== entryId) return Promise.resolve();
+      calls += 1;
+      return new Promise<void>((_resolve, fail) => { reject = fail; });
+    };
+    const results = await runCancelAll(ctx);
+    expect(results[0]).toMatchObject({ outcome: 'unknown' });
+    ctx.clock.now += 1_000;
+    await sleep(250); // obě plánovaná čtení (50 ms, 150 ms) proběhla, zápis pořád visí
+    expect(actionStatus(ctx)).toMatchObject({ status: 'unknown' });
+    reject?.(new Error(REJECTION));
+    await sleep(100);
+    await ctx.controller.waitForIdle();
+    expect(actionStatus(ctx)).toMatchObject({ status: 'rejected' });
+    expect(actionStatus(ctx)?.reason).toContain('vstup dál čeká');
+    expect(actionStatus(ctx)?.reason).toContain('TooLateToCancel');
+    expect(brokerOrder(ctx, entryId).status).toBe('working');
+    expect(calls).toBe(1); // nic se automaticky neopakuje
+  });
+
+  it('P3: pozdní „úspěch“ zrušení až po obou plánovaných čteních, vstup dál pracuje → po konci zápisu rejected „neprojevilo“, ne navždy unknown', async () => {
+    const ctx = await setup({ settleMs: 50 });
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    let accept: (() => void) | undefined;
+    ctx.broker.cancelOrder = (_accountId, id) => (id === entryId ? new Promise<void>(resolve => { accept = () => resolve(); }) : Promise.resolve());
+    const results = await runCancelAll(ctx);
+    expect(results[0]).toMatchObject({ outcome: 'unknown' });
+    ctx.clock.now += 1_000;
+    await sleep(250); // obě plánovaná čtení proběhla, zápis pořád visí
+    expect(actionStatus(ctx)).toMatchObject({ status: 'unknown' });
+    accept?.(); // broker „přijal“, ale vstup dál pracuje (bez eventu)
+    await sleep(100);
+    await ctx.controller.waitForIdle();
+    expect(actionStatus(ctx)).toMatchObject({ status: 'rejected' });
+    expect(actionStatus(ctx)?.reason).toContain('neprojevilo');
+    expect(brokerOrder(ctx, entryId).status).toBe('working');
+  });
+
+  it('P2: REST tvrdí flat (pozice zastaralá, nohy zrušené), ale stream nohy pořád ukazuje pracující → incident', async () => {
+    let stale = false;
+    const ctx = await setup({ patchBroker: broker => {
+      const real = broker.listPositions.bind(broker);
+      broker.listPositions = async accountId => (stale ? [] : real(accountId));
+    } });
+    const placed = await placePending(ctx);
+    const entryId = placed.entryBrokerOrderId!;
+    ctx.broker.cancelOrder = async (_accountId, id) => {
+      if (id !== entryId) return;
+      const entry = brokerOrder(ctx, entryId);
+      entry.status = 'filled';
+      entry.filledQuantity = 2;
+      ctx.broker.setPosition(LEADER, SYM, 2);
+      emitOrder(ctx, entry, '9:Filled');
+      // Nohy u brokera zrušené, stream to zatím nedoručil (a pozici taky ne). Cache streamu drží vlastní
+      // kopie řádků (mock jinak sdílí objekty a změna u „brokera“ by se propsala i do streamu).
+      for (const legId of [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!]) {
+        const leg = brokerOrder(ctx, legId);
+        emitOrder(ctx, { ...leg }, '8:Working');
+        leg.status = 'canceled';
+      }
+      stale = true;
+    };
+    const results = await runCancelAll(ctx);
+    expect(results[0].text).not.toContain('pozice už je zavřená');
+    await sleep(20);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status().lastError).toMatch(/při rušení vyplnil \(2\) a SL\/TP pozice nejsou potvrzené/);
+  });
+
+  it('P3 („nikdy ochrana“): záznam s id uživatelova samostatného Buy Limitu, který chrání short z Tradovate → not-entry, nic se nezruší', async () => {
+    const store = createMemoryCopierStore();
+    const first = await setup({ store });
+    await placePending(first);
+    // Short 2 otevřený v Tradovate a uživatelův samostatný ochranný Buy Limit (TP shortu): bez parentu, žádný záznam ho nezná.
+    const userTp: BrokerOrder = { tag: 'tvUser', brokerOrderId: 'user-tp', accountId: LEADER, symbol: SYM, side: 'Buy', orderType: 'Limit',
+      quantity: 2, filledQuantity: 0, limitPrice: 24_950, status: 'working', sourceVersion: '1:Working', updatedAt: START };
+    first.broker.seedOrder(userTp);
+    first.broker.setPosition(LEADER, SYM, -2);
+    first.controller.stop();
+    active = null;
+    // Poškozený záznam: id vstupu = id uživatelova příkazu (strana i typ sedí se záznamem).
+    const snapshot = await store.load();
+    await store.commit({ ...snapshot, safety: { ...snapshot.safety!, manualEntries: (snapshot.safety?.manualEntries ?? []).map(record => (
+      record.operationId === 'entry:pendc701' ? { ...record, entryBrokerOrderId: 'user-tp' } : record)) } }, snapshot.revision);
+    const second = await setup({ store, broker: first.broker, arm: false });
+    // Jen pozice ve streamu; uživatelův příkaz vidí worker z čerstvého REST čtení při přípravě zrušení.
+    second.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: -2 } });
+    await sleep(20);
+    await second.controller.waitForIdle();
+    const command = validateLeaderOrderManage(buildCancelPendingCommand({
+      entryOperationId: 'entry:pendc701', entryBrokerOrderId: 'user-tp', symbol: SYM, side: 'Buy', quantity: 2,
+      orderType: 'Limit', price: 24_950, scaleIn: false, createdAt: 1,
+    }, { groupId: group().id, leaderAccountId: LEADER, operationId: 'manage:cancelusr01' }));
+    const result = await second.controller.manageLeaderOrder(command, { deadlineAt: second.clock.now + 15_000 });
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(issue => issue.code)).toEqual(['not-entry']);
+    expect(result.blockers[0].text).toMatch(/zmenšil otevřenou pozici leadera \(-2\)/);
+    expect(second.broker.cancelRequestCount('user-tp')).toBe(0);
+    expect(brokerOrder(second, 'user-tp').status).toBe('working');
   });
 });

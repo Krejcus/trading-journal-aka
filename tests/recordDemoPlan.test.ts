@@ -48,6 +48,8 @@ const status = (controller: Record<string, unknown> = {}, extra: Record<string, 
 const marketOso: DemoStep = {
   kind: 'place-oso', label: 'Market', tickets: [{ ticket: 't1', quantity: 1, entry: { orderType: 'Market' }, stopLoss: { from: 'market', points: -40 }, takeProfit: { from: 'market', points: 40 } }],
 };
+/** Lístek Market OSO kroku (typově přes člen unie `place-oso`, ne přes `never[]`). */
+const marketTicket = (marketOso as Extract<DemoStep, { kind: 'place-oso' }>).tickets[0];
 const scenario = (steps: DemoStep[]): DemoScenario => ({ name: 'x', purpose: 'test', steps });
 const plan = (patch: Partial<DemoRecordPlan> = {}): DemoRecordPlan => ({
   accountId: DEMO_RECORD_ACCOUNT_ID, symbol: 'MNQZ6', side: 'Buy', marketPrice: ANCHOR, confirm: false, allowFill: false,
@@ -109,10 +111,10 @@ describe('statické pojistky plánu', () => {
   });
 
   it('možná pozice > 2 a qty > 2 se odmítne', () => {
-    const three = scenario([marketOso, { ...marketOso, tickets: [{ ...(marketOso as { tickets: never[] }).tickets[0], ticket: 't2', quantity: 2 }] } as DemoStep]);
+    const three = scenario([marketOso, { ...marketOso, tickets: [{ ...marketTicket, ticket: 't2', quantity: 2 }] } as DemoStep]);
     expect(scenarioMaxExposure(three.steps)).toBe(3);
     expect(demoPlanProblems(plan({ scenarios: [three] }), NOW).join(' ')).toContain('možná pozice 3');
-    const big = scenario([{ ...marketOso, tickets: [{ ...(marketOso as { tickets: never[] }).tickets[0], quantity: 3 }] } as DemoStep]);
+    const big = scenario([{ ...marketOso, tickets: [{ ...marketTicket, quantity: 3 }] } as DemoStep]);
     expect(scenarioStructureProblems(big).join(' ')).toContain('qty 3');
   });
 
@@ -123,7 +125,7 @@ describe('statické pojistky plánu', () => {
       marketOso,
       { kind: 'place-order', label: 'r', ref: 'r', side: 'opposite', orderType: 'Market', quantity: 1, reducing: true },
       { kind: 'liquidate', label: 'l', ref: 'l' },
-      { ...marketOso, tickets: [{ ...(marketOso as { tickets: never[] }).tickets[0], ticket: 't9', quantity: 2 }] } as DemoStep,
+      { ...marketOso, tickets: [{ ...marketTicket, ticket: 't9', quantity: 2 }] } as DemoStep,
     ];
     expect(scenarioMaxExposure(steps)).toBe(2);
     expect(scenarioFills(steps)).toBe(true);
@@ -133,7 +135,7 @@ describe('statické pojistky plánu', () => {
   it('struktura: odkaz na neznámý lístek, holý Market vstup, current při zadání', () => {
     expect(scenarioStructureProblems(scenario([{ kind: 'cancel', label: 'c', targets: [{ ticket: 'zz', order: 'entry' }] }])).join()).toContain('neznámý');
     expect(scenarioStructureProblems(scenario([{ kind: 'place-order', label: 'm', ref: 'm', side: 'position', orderType: 'Market', quantity: 1 }])).join()).toContain('redukce');
-    expect(scenarioStructureProblems(scenario([{ ...marketOso, tickets: [{ ...(marketOso as { tickets: never[] }).tickets[0], stopLoss: { from: 'current', points: -1 } }] } as DemoStep])).join()).toContain('current');
+    expect(scenarioStructureProblems(scenario([{ ...marketOso, tickets: [{ ...marketTicket, stopLoss: { from: 'current', points: -1 } }] } as DemoStep])).join()).toContain('current');
   });
 
   it('seznam scénářů: all, aliasy, přesunuté a neznámé jméno', () => {
@@ -286,7 +288,9 @@ describe('klasifikace výsledků', () => {
     expect(classifyDemo({ name: 'suspended-modify', ticket: 't1', order: 'sl' }, input(after, { expected: { t1: { sl: 27_536 } } })).verdict).toBe('accepted-pending');
     expect(classifyDemo({ name: 'suspended-modify', ticket: 't1', order: 'sl' }, input(after, { expected: { t1: { sl: 28_010 } }, results: [{ id: 's1', ok: false, error: 'InvalidPrice' }] })).verdict).toBe('rejected');
     expect(classifyDemo({ name: 'suspended-modify', ticket: 't1', order: 'sl' }, input(after, { expected: { t1: { sl: 28_010 } } })).verdict).toBe('unconfirmed');
-    expect(classifyDemo({ name: 'suspended-modify', ticket: 't1', order: 'sl' }, input(after, { expected: { t1: { sl: 28_010 } }, results: [{ id: 's1', ok: false, notSent: true, error: 'nevyslán' }] })).verdict).toBe('rejected');
+    // Výsledek kroku ze session nese i `notSent` (StepResult); klasifikace ho čte jen přes `error` — proměnná, ne literál (excess property).
+    const notSent = { id: 's1', ok: false, notSent: true, error: 'nevyslán' };
+    expect(classifyDemo({ name: 'suspended-modify', ticket: 't1', order: 'sl' }, input(after, { expected: { t1: { sl: 28_010 } }, results: [notSent] })).verdict).toBe('rejected');
   });
 
   it('fill-with-modified-legs: nové ceny, staré ceny, bez fillu', () => {

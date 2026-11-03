@@ -12,7 +12,7 @@
  * záznamu, zastaralé zobrazení nezachytí — oponentura P3); vlastnictví pozice
  * dokládají výhradně kontroly ve workeru (nejnovější záznam, `closedAt == null`,
  * vstup v aktuální session vyplněný přesně na qty, |net| = qty na správné straně,
- * na symbolu nic nepracuje).
+ * otevřený lot deníku dne s fillem vstupu = očekávaná pozice, na symbolu nic nepracuje).
  *
  * Jen sólo skupina (manual-only local-only DEMO bez followerů) a zatím jen za
  * ARMED ∧ ¬shadow ∧ ¬kill — za DISARMED až s C9 (INV-MANUAL-01).
@@ -174,6 +174,39 @@ export function bareCloseShapeBlockers(input: {
 
 /** Očekávaná pozice leadera se znaménkem (long +, short −). */
 export const bareCloseSignedNet = (side: BareCloseSide, quantity: number): number => (side === 'Buy' ? quantity : -quantity);
+
+/**
+ * Pozice je pořád ta z tohoto Marketu (oponentura C8, P3 „obrat přes nulu“): otevřený lot deníku dne
+ * obsahuje fill vstupu a jeho pozice = očekávaná se znaménkem. Obrat jedním fillem (+2 → −2 → +2 bez
+ * eventu net 0) uzavře lot vstupu a založí nový bez jeho id → blokováno. Lot chybí (jiná session,
+ * obchod před startem počítadla, neúplná data) = taky blokováno — zavřít jde Flattenem (fail-closed).
+ */
+export function bareCloseLotBlockers(input: {
+  lots: readonly { symbol: string; netQuantity: number; entryOrderIds?: readonly string[] }[];
+  symbol: string;
+  entryBrokerOrderId: string;
+  expectedNet: number;
+}): BareCloseIssue[] {
+  const lot = input.lots.find(item => item.symbol === input.symbol && (item.entryOrderIds ?? []).includes(input.entryBrokerOrderId));
+  if (!lot || lot.netQuantity !== input.expectedNet) {
+    return [{ code: 'entry-not-open', text: 'Pozice už není ta z tohoto Marketu (mezitím se otočila nebo ji deník dne nezná) — zavři ji Flattenem.' }];
+  }
+  return [];
+}
+
+/**
+ * Dořešení `unknown` zavření holé pozice (oponentura C8, P3 „falešný incident“): záznam už současnou
+ * pozici nevlastní, když ho stream uzavřel (`closedAt`, leader byl flat) nebo ho nahradil novější
+ * ruční vstup, který došel k brokerovi a není přikoupení (ten prošel branou z flat `account-not-flat`).
+ * Pak současná pozice patří jinému vstupu — žádný incident „holá pozice trvá“, nic se neposílá.
+ */
+export function bareCloseSuperseded(
+  entry: { operationId: string; createdAt: number; closedAt?: number | null },
+  records: readonly { operationId: string; createdAt: number; scaleIn?: boolean; entryBrokerOrderId?: string }[],
+): boolean {
+  return entry.closedAt != null || records.some(other => other.operationId !== entry.operationId && other.createdAt > entry.createdAt
+    && other.scaleIn !== true && !!other.entryBrokerOrderId);
+}
 
 /**
  * Synchronní kontrola z cache streamu těsně před `liquidatePosition` (místo

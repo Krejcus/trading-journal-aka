@@ -4,16 +4,19 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { BrokerAccountRiskSnapshot, BrokerLiquidateRequest, BrokerLiquidateResult, BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime, type CopierRuntimeController } from '../services/copierRuntimeController';
 import { createMemoryCopierStore, type CopierStore } from '../services/copierStore';
+import type { CopierManualEntryRecord } from '../services/copierEngine';
 import { manualOnlyDemoSafety, type CopyGroupConfig } from '../services/liveCopyTrading';
 import { createMockBroker, type MockBroker } from '../services/mockBroker';
 import { buildLeaderEntryPreviewCommand } from '../lib/leaderEntryPreview';
 import { buildLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace';
 import { buildLeaderOrderManageCommand, validateLeaderOrderManage } from '../lib/leaderOrderManage';
 import {
+  bareCloseLotBlockers,
   bareCloseManageFields,
   bareClosePreWriteBlocker,
   bareCloseRecordBlockers,
   bareCloseShapeBlockers,
+  bareCloseSuperseded,
   selectBareLeaderTrade,
   soloManualGroup,
   type BareCloseEntryRecord,
@@ -39,15 +42,18 @@ async function setup(options: {
   patchBroker?: (broker: MockBroker) => void;
   store?: CopierStore;
   onController?: (controller: CopierRuntimeController) => void;
+  settleMs?: number;
+  broker?: MockBroker;
+  arm?: boolean;
 } = {}) {
   const clock = { now: START };
-  const broker = createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(START + 500)], nativeLiquidate: true });
+  const broker = options.broker ?? createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(START + 500)], nativeLiquidate: true });
   options.patchBroker?.(broker);
   const audits: string[] = [];
   const store = options.store ?? createMemoryCopierStore();
   const controller = await bootstrapCopierRuntime({
     broker, store, group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
-    manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, manage: 500, settle: 50, verify: 100 },
+    manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, manage: 500, settle: options.settleMs ?? 50, verify: 100 },
     manualEntryQuote: () => ({ contract: SYM, last: REF, lastAt: clock.now - 100, bid: REF - 0.25, ask: REF, quoteAt: clock.now - 50 }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
@@ -55,9 +61,11 @@ async function setup(options: {
   options.onController?.(controller);
   broker.setConnected(true);
   await controller.waitForIdle();
-  await controller.reconcile();
-  controller.arm();
-  await controller.waitForIdle();
+  if (options.arm !== false) {
+    await controller.reconcile();
+    controller.arm();
+    await controller.waitForIdle();
+  }
   clock.now = START + 1_000;
   await sleep(20);
   await controller.waitForIdle();
@@ -78,7 +86,8 @@ async function openBare(ctx: Ctx, quantity = 2, id = 'barec001') {
   entry.status = 'filled';
   entry.filledQuantity = quantity;
   ctx.broker.emitEvent({ type: 'order', order: { ...entry, sourceVersion: '2:Filled' } });
-  ctx.broker.emitEvent({ type: 'fill', fill: { fillId: `f-${entry.brokerOrderId}`, tag: entry.tag, brokerOrderId: entry.brokerOrderId, accountId: LEADER, symbol: SYM, side: 'Buy', quantity, price: REF + 0.25, filledAt: 2 } });
+  // Čas fillu v aktuální session: lot deníku dne s fillem vstupu je podmínka × (obrat přes nulu, oponentura C8).
+  ctx.broker.emitEvent({ type: 'fill', fill: { fillId: `f-${entry.brokerOrderId}`, tag: entry.tag, brokerOrderId: entry.brokerOrderId, accountId: LEADER, symbol: SYM, side: 'Buy', quantity, price: REF + 0.25, filledAt: ctx.clock.now } });
   ctx.broker.setPosition(LEADER, SYM, quantity);
   ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: quantity } });
   await sleep(30);
@@ -175,6 +184,31 @@ describe('C8 — čisté helpery', () => {
     const command = buildLeaderOrderManageCommand({ groupId: 'g', operationId: 'manage:uiclose001', leaderAccountId: LEADER, ...bareCloseManageFields(trade) });
     expect(() => validateLeaderOrderManage(command)).not.toThrow();
     expect(command).toMatchObject({ action: 'close-position', entryOperationId: 'entry:barepure01', expect: { price: REF, quantity: 2 } });
+  });
+
+  it('oponentura: lot deníku dne s fillem vstupu = očekávaná pozice; obrat přes nulu nebo chybějící lot → blocked', () => {
+    const lot = (overrides: Record<string, unknown> = {}) => ({ symbol: SYM, netQuantity: 2, entryOrderIds: ['E1'], ...overrides });
+    const check = (lots: ReturnType<typeof lot>[], expectedNet = 2) => bareCloseLotBlockers({ lots, symbol: SYM, entryBrokerOrderId: 'E1', expectedNet }).map(issue => issue.code);
+    expect(check([lot()])).toEqual([]);
+    expect(check([lot({ netQuantity: -2 })], -2)).toEqual([]);
+    // +2 → −2 → +2 jedním fillem: nový lot bez id vstupu.
+    expect(check([lot({ entryOrderIds: ['REV2'] })])).toEqual(['entry-not-open']);
+    expect(check([])).toEqual(['entry-not-open']);
+    expect(check([lot({ netQuantity: 1 })])).toEqual(['entry-not-open']);
+    expect(check([lot({ netQuantity: -2 })])).toEqual(['entry-not-open']);
+    expect(check([lot({ symbol: 'MNQH7' })])).toEqual(['entry-not-open']);
+    expect(check([lot({ entryOrderIds: undefined })])).toEqual(['entry-not-open']);
+  });
+
+  it('oponentura: dořešení zavření — záznam nevlastní pozici, když ho stream uzavřel nebo ho nahradil novější vstup z flat', () => {
+    const entry = { operationId: 'entry:a', createdAt: 10 };
+    expect(bareCloseSuperseded(entry, [entry])).toBe(false);
+    expect(bareCloseSuperseded({ ...entry, closedAt: 20 }, [entry])).toBe(true);
+    expect(bareCloseSuperseded(entry, [entry, { operationId: 'entry:b', createdAt: 11, entryBrokerOrderId: 'E2' }])).toBe(true);
+    // Novější záznam, který k brokerovi nedošel, ani přikoupení (neprošlo branou z flat) vlastnictví nemění.
+    expect(bareCloseSuperseded(entry, [entry, { operationId: 'entry:b', createdAt: 11 }])).toBe(false);
+    expect(bareCloseSuperseded(entry, [entry, { operationId: 'entry:b', createdAt: 11, entryBrokerOrderId: 'E2', scaleIn: true }])).toBe(false);
+    expect(bareCloseSuperseded(entry, [{ operationId: 'entry:z', createdAt: 9, entryBrokerOrderId: 'E0' }, entry])).toBe(false);
   });
 
   it('capability: bez ní UI × u holé pozice nenabídne', () => {
@@ -458,6 +492,8 @@ describe('C8 — × zavřít holý Market (controller, sólo DEMO skupina)', () 
     await controller.waitForIdle();
     expect(controller.status().manualOrderActions?.[0]).toMatchObject({ status: 'unknown', reason: expect.stringMatching(/Holá pozice leadera 2 \(bez SL\/TP\) trvá/) });
     expect(controller.status().lastError).toMatch(/Holá pozice leadera 2/);
+    // Kolo 3 (výhrada C8 č. 6): worker po restartu startuje DISARMED — incident se přesto zapíše (recordWhenDisarmed).
+    expect(controller.status().lastDisarm).toMatchObject({ trigger: 'fail-closed', detail: expect.stringMatching(/Holá pozice leadera 2/) });
     expect(broker.liquidateRequests()).toEqual([]);
   });
 
@@ -481,5 +517,253 @@ describe('C8 — × zavřít holý Market (controller, sólo DEMO skupina)', () 
     expect(controller.status().manualOrderActions?.[0]).toMatchObject({ status: 'waived', reason: expect.stringMatching(/příčina neověřena/) });
     expect(controller.status().manualEntries?.find(entry => entry.operationId === 'entry:barec001')).toMatchObject({ open: false });
     expect(broker.liquidateRequests()).toEqual([]);
+  });
+});
+
+describe('C8 — oponentura: chybové větve, nejnovější záznam, obrat přes nulu, nový vstup během unknown', () => {
+  const attachBare = (ctx: Ctx, id = 'manage:bareatt0001', entryOperationId = 'entry:barec001') => ctx.controller.manageLeaderOrder(buildLeaderOrderManageCommand({
+    groupId: group().id, operationId: id, leaderAccountId: LEADER, entryOperationId, symbol: SYM, action: 'attach-brackets',
+    expect: { price: REF, quantity: 2 }, stopLoss: REF - 10, takeProfit: REF + 20,
+  }), { deadlineAt: ctx.clock.now + 15_000 });
+  /** Liquidate, který u brokera proběhne (pozice 0), ale odpověď přijde až po timeoutu správy. */
+  const lateLiquidate = (broker: MockBroker, flatten = true, afterMs = 600) => {
+    broker.liquidatePosition = async request => {
+      if (flatten) broker.setPosition(request.accountId, request.symbol, 0);
+      await sleep(afterMs);
+      return { status: 'submitted', brokerOrderId: 'liq-late' };
+    };
+  };
+
+  it('timeout a pozice trvá → unknown + incident; unknown pak blokuje doplnění SL/TP (manage-unresolved)', async () => {
+    const ctx = await setup({ settleMs: 10_000, patchBroker: broker => lateLiquidate(broker, false) });
+    await openBare(ctx);
+    const result = await closeBare(ctx);
+    expect(result.status).toBe('unknown');
+    expect(result.reason).toMatch(/Holá pozice leadera 2 \(bez SL\/TP\) trvá — zavření nepotvrzeno \(zavření nepotvrzené\)/);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status()).toMatchObject({ armed: false, lastError: expect.stringMatching(/Holá pozice leadera 2/) });
+    expect(actionRecord(ctx)).toMatchObject({ status: 'unknown' });
+    expect(codes(await attachBare(ctx))).toEqual(['manage-unresolved']);
+  });
+
+  it('timeout a leader flat → unknown bez incidentu, dořešení čtením = waived + holý záznam uzavřený; žádný druhý zápis', async () => {
+    let calls = 0;
+    const ctx = await setup({ patchBroker: broker => { lateLiquidate(broker); const real = broker.liquidatePosition!; broker.liquidatePosition = request => { calls += 1; return real(request); }; } });
+    await openBare(ctx);
+    const result = await closeBare(ctx);
+    expect(result.status).toBe('unknown');
+    expect(ctx.controller.status().lastError).toBeNull();
+    await sleep(250);
+    await ctx.controller.waitForIdle();
+    expect(actionRecord(ctx)).toMatchObject({ status: 'waived', reason: expect.stringMatching(/příčina neověřena/) });
+    expect(bareEntryStatus(ctx)).toMatchObject({ open: false });
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(calls).toBe(1);
+  });
+
+  it('výjimka zápisu a pozice trvá → unknown + incident; indeterminate a flat → unknown, pak waived', async () => {
+    const thrown = await setup({ patchBroker: broker => { broker.liquidatePosition = async () => { throw new Error('socket hang up'); }; } });
+    await openBare(thrown);
+    const first = await closeBare(thrown);
+    expect(first.status).toBe('unknown');
+    expect(first.reason).toMatch(/Holá pozice leadera 2/);
+    expect(thrown.controller.status().lastError).toMatch(/Holá pozice leadera 2/);
+    thrown.controller.stop();
+    active = null;
+    const indeterminate = await setup({ patchBroker: broker => {
+      broker.liquidatePosition = async request => { broker.setPosition(request.accountId, request.symbol, 0); return { status: 'indeterminate', reason: 'adapter lost reply' }; };
+    } });
+    await openBare(indeterminate);
+    const second = await closeBare(indeterminate);
+    expect(second.status).toBe('unknown');
+    expect(indeterminate.controller.status().lastError).toBeNull();
+    await sleep(250);
+    await indeterminate.controller.waitForIdle();
+    expect(actionRecord(indeterminate)).toMatchObject({ status: 'waived' });
+    expect(bareEntryStatus(indeterminate)).toMatchObject({ open: false });
+  });
+
+  it('definitivní odmítnutí a pozice trvá → incident, ale záznam `rejected` (ne unknown) → doplnění SL/TP zůstává dostupné', async () => {
+    const ctx = await setup({ patchBroker: broker => { broker.liquidatePosition = async (): Promise<BrokerLiquidateResult> => ({ status: 'rejected', reason: 'Market closed' }); } });
+    await openBare(ctx);
+    const result = await closeBare(ctx);
+    expect(result.status).toBe('rejected');
+    expect(result.reason).toMatch(/Holá pozice leadera 2 \(bez SL\/TP\) trvá — zavření nepotvrzeno \(zavření odmítnuto: Market closed\)/);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status()).toMatchObject({ armed: false, lastError: expect.stringMatching(/Holá pozice leadera 2/) });
+    expect(actionRecord(ctx)).toMatchObject({ status: 'rejected' });
+    expect(bareEntryStatus(ctx)).toMatchObject({ open: true });
+    // Risk-redukční doplnění SL/TP i za DISARMED (incident vypnul kopírku) — ne manage-unresolved.
+    const attach = await attachBare(ctx);
+    expect(codes(attach)).not.toContain('manage-unresolved');
+    expect(attach.status).toBe('acknowledged');
+  });
+
+  it('definitivní odmítnutí a leader flat → waived „ne tímto příkazem“, záznam uzavřený, bez incidentu', async () => {
+    const ctx = await setup({ patchBroker: broker => {
+      broker.liquidatePosition = async request => { broker.setPosition(request.accountId, request.symbol, 0); return { status: 'rejected', reason: 'Already flat' }; };
+    } });
+    await openBare(ctx);
+    const result = await closeBare(ctx);
+    expect(result.status).toBe('acknowledged');
+    expect(result.reason).toMatch(/ne tímto příkazem/);
+    expect(result.reason).not.toMatch(/followery/);
+    expect(actionRecord(ctx)).toMatchObject({ status: 'waived' });
+    expect(bareEntryStatus(ctx)).toMatchObject({ open: false });
+    expect(ctx.controller.status().lastError).toBeNull();
+  });
+
+  it('nejnovější záznam na úrovni controlleru: starší holý záznam (closedAt null) vedle novějšího vstupu → entry-closed, nic se nepošle', async () => {
+    const store = createMemoryCopierStore();
+    const first = await setup({ store });
+    await openBare(first);
+    first.controller.stop();
+    active = null;
+    const snapshot = await store.load();
+    const entries = snapshot.safety?.manualEntries ?? [];
+    const old = entries.find(record => record.operationId === 'entry:barec001')!;
+    expect(old.closedAt).toBeUndefined();
+    await store.commit({ ...snapshot, safety: { ...snapshot.safety!, manualEntries: [...entries, {
+      ...old, operationId: 'entry:barec009', createdAt: old.createdAt + 1, entryBrokerOrderId: 'other-entry', updatedAt: old.updatedAt + 1,
+    }] } }, snapshot.revision);
+    const second = await setup({ store, broker: first.broker, arm: false });
+    const result = await closeBare(second);
+    expect(codes(result)).toEqual(['entry-closed']);
+    expect(second.broker.liquidateRequests()).toEqual([]);
+  });
+
+  it('obrat přes nulu bez eventu net 0 (+2 → −2 → +2 jedním fillem) → entry-not-open, nic se nepošle', async () => {
+    const ctx = await setup();
+    await openBare(ctx);
+    const fill = (id: string, side: 'Buy' | 'Sell') => ctx.broker.emitEvent({ type: 'fill', fill: {
+      fillId: `f-${id}`, tag: id, brokerOrderId: id, accountId: LEADER, symbol: SYM, side, quantity: 4, price: REF + 0.25, filledAt: ctx.clock.now,
+    } });
+    fill('rev-1', 'Sell');
+    fill('rev-2', 'Buy');
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    // Stream ani REST net 0 nikdy neukázaly — holý záznam zůstal „otevřený“.
+    expect(bareEntryStatus(ctx)).toMatchObject({ open: true });
+    const result = await closeBare(ctx);
+    expect(codes(result)).toEqual(['entry-not-open']);
+    expect(ctx.broker.liquidateRequests()).toEqual([]);
+  });
+
+  it('Flatten běžící ještě před × → blocked, × nic neodešle (jediná likvidace je Flattenu)', async () => {
+    let release: (value: BrokerLiquidateResult) => void = () => undefined;
+    let calls = 0;
+    const ctx = await setup({ patchBroker: broker => {
+      broker.liquidatePosition = (_request: BrokerLiquidateRequest) => { calls += 1; return new Promise(resolve => { release = resolve; }); };
+    } });
+    await openBare(ctx);
+    const flatten = ctx.controller.flattenGroup('flatten:barefirst1').catch(error => ({ error: String(error) }));
+    for (let i = 0; i < 50 && calls === 0; i += 1) await sleep(5);
+    expect(calls).toBe(1);
+    const result = await closeBare(ctx);
+    expect(result.status).toBe('blocked');
+    expect(calls).toBe(1);
+    expect(actionRecord(ctx)).toBeUndefined();
+    ctx.broker.setPosition(LEADER, SYM, 0);
+    release({ status: 'submitted', brokerOrderId: 'liq-flat' });
+    await flatten;
+  });
+
+  it('close se `scope: position` na holém záznamu → blocked, nic se nepošle', async () => {
+    const ctx = await setup();
+    await openBare(ctx);
+    const command = buildLeaderOrderManageCommand({
+      groupId: group().id, operationId: 'manage:barescope1', leaderAccountId: LEADER, entryOperationId: 'entry:barec001', symbol: SYM,
+      action: 'close-position', expect: { price: REF, quantity: 2 }, scope: 'position',
+    });
+    const result = await ctx.controller.manageLeaderOrder(validateLeaderOrderManage(command), { deadlineAt: ctx.clock.now + 15_000 });
+    expect(result.status).toBe('blocked');
+    expect(ctx.broker.liquidateRequests()).toEqual([]);
+  });
+
+  /** Restart s `close-position` v `sending` u holého záznamu A; `patch` upraví durable záznamy vstupů. */
+  async function restartUnknownBareClose(patch: (entries: CopierManualEntryRecord[]) => CopierManualEntryRecord[]) {
+    const store = createMemoryCopierStore();
+    const ctx = await setup({ store });
+    const { entryBrokerOrderId } = await openBare(ctx);
+    ctx.controller.stop();
+    active = null;
+    const snapshot = await store.load();
+    await store.commit({ ...snapshot, safety: { ...snapshot.safety!, manualEntries: patch(snapshot.safety?.manualEntries ?? []), manualOrderActions: [{
+      operationId: 'manage:barenew001', payloadHash: 'abcdefgh12', entryOperationId: 'entry:barec001', action: 'close-position',
+      status: 'sending', targetBrokerOrderId: entryBrokerOrderId, fromPrice: REF, toPrice: null, symbol: SYM, quantity: 2, createdAt: START, updatedAt: START,
+    }] } }, snapshot.revision);
+    // U brokera je pozice 2 bez příkazů — ale patří jinému vstupu / mimo appku.
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }), nativeLiquidate: true });
+    broker.setPosition(LEADER, SYM, 2);
+    const controller = await bootstrapCopierRuntime({ broker, store, group: group(), clock: () => START + 5_000, manualEntryTimingsMs: { settle: 30, verify: 100 } });
+    active = controller;
+    broker.setConnected(true);
+    await sleep(150);
+    await controller.waitForIdle();
+    return { controller, broker };
+  }
+
+  it('nový vstup během `unknown` zavření (novější záznam z flat došel k brokerovi) → dořešení NEvyhlásí falešný incident o nové pozici', async () => {
+    const { controller, broker } = await restartUnknownBareClose(entries => {
+      const old = entries.find(record => record.operationId === 'entry:barec001')!;
+      expect(old.closedAt).toBeUndefined();
+      return [...entries, { ...old, operationId: 'entry:barec002', createdAt: old.createdAt + 5_000, updatedAt: old.updatedAt + 5_000, entryBrokerOrderId: 'B-entry' }];
+    });
+    const action = controller.status().manualOrderActions?.find(item => item.operationId === 'manage:barenew001');
+    expect(action).toMatchObject({ status: 'waived', reason: expect.stringMatching(/patří jinému vstupu/) });
+    expect(controller.status().lastError).toBeNull();
+    expect(controller.status().manualEntries?.find(entry => entry.operationId === 'entry:barec001')).toMatchObject({ open: false });
+    expect(broker.liquidateRequests()).toEqual([]);
+  });
+
+  it('`unknown` zavření, stream mezitím holý záznam uzavřel (closedAt) a u brokera je jiná pozice → waived, žádný falešný incident', async () => {
+    const { controller, broker } = await restartUnknownBareClose(entries => entries.map(record => (
+      record.operationId === 'entry:barec001' ? { ...record, closedAt: START + 2_000 } : record)));
+    const action = controller.status().manualOrderActions?.find(item => item.operationId === 'manage:barenew001');
+    expect(action).toMatchObject({ status: 'waived', reason: expect.stringMatching(/patří jinému vstupu/) });
+    expect(controller.status().lastError).toBeNull();
+    expect(broker.liquidateRequests()).toEqual([]);
+  });
+
+  it('kolo 3 (P3): × skončí timeoutem a liquidate dál visí, flat způsobil někdo jiný → `waived` až po konci zápisu; nový vstup mezitím nejde', async () => {
+    let release: (value: BrokerLiquidateResult) => void = () => undefined;
+    let calls = 0;
+    const ctx = await setup({ patchBroker: broker => {
+      broker.liquidatePosition = request => {
+        calls += 1;
+        // Pozici zavřelo něco jiného (REST i stream flat), liquidate u brokera visí.
+        broker.setPosition(request.accountId, request.symbol, 0);
+        broker.emitEvent({ type: 'position', position: { accountId: request.accountId, symbol: request.symbol, netQuantity: 0 } });
+        return new Promise(resolve => { release = resolve; });
+      };
+    } });
+    await openBare(ctx);
+    const result = await closeBare(ctx);
+    expect(result.status).toBe('unknown');
+    await sleep(250); // obě plánovaná čtení (50 / 150 ms) proběhla, zápis pořád visí
+    await ctx.controller.waitForIdle();
+    // Stream holý záznam uzavřel (closedAt) → zkratka `bareCloseSuperseded` by platila, ale zápis běží.
+    expect(bareEntryStatus(ctx)).toMatchObject({ open: false });
+    expect(actionRecord(ctx)).toMatchObject({ status: 'unknown' });
+    // Nový holý vstup B, dokud liquidate visí: nic neodejde (liquidate by ho mohl tiše zavřít).
+    ctx.clock.now += 5_000;
+    const status = ctx.controller.status();
+    const preview = buildLeaderEntryPreviewCommand(
+      { symbol: SYM, side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: REF, quoteReceivedAt: ctx.clock.now - 300 },
+      { group: { ...group(), leaderAccountId: LEADER }, armedAt: status.armedAt ?? 0, excludedFollowers: new Set(), participation: [], operationId: 'preview:barec002' },
+    );
+    const sentBefore = ctx.broker.placedRequests().length + ctx.broker.placedOsoRequests().length;
+    const placedB = await ctx.controller.placeLeaderEntry(buildLeaderEntryPlaceCommand(preview, 'entry:barec002'), { deadlineAt: ctx.clock.now + 15_000 });
+    expect(placedB.status).toBe('blocked');
+    expect(codes(placedB)).toEqual(['leader-write-in-flight']);
+    expect(ctx.broker.placedRequests().length + ctx.broker.placedOsoRequests().length).toBe(sentBefore);
+    expect(ctx.controller.status().manualEntries?.find(entry => entry.operationId === 'entry:barec002')).toBeUndefined();
+    // Zápis doběhne → dořešení navázané na jeho konec: `waived` „patří jinému vstupu“, žádný incident, žádný druhý zápis.
+    release({ status: 'submitted', brokerOrderId: 'liq-late' });
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    expect(actionRecord(ctx)).toMatchObject({ status: 'waived', reason: expect.stringMatching(/patří jinému vstupu/) });
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(calls).toBe(1);
   });
 });

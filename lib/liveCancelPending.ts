@@ -176,6 +176,53 @@ export function selectOwnPendingEntries(input: {
   return { entries, context };
 }
 
+/**
+ * Rada u částečně vyplněného vstupu (oponentura C7 kolo 2, P3): × (`close-position`) chce vstup vyplněný
+ * PŘESNĚ na qty a částečnou pozici odmítne (`shape`) — jediná cesta z appky je Flatten.
+ */
+export const PARTIAL_CLOSE_HINT = 'zavři ji Flattenem (× u částečně vyplněné pozice nejde).';
+
+/**
+ * Worker před `cancel-entry` (oponentura C7 kolo 2, P3 „nikdy nohu“): cíl musí být opravdu vstup —
+ * nevěří jen id ze záznamu (chyba mapování ACK, poškozený store). Noha má `parentOrderId` nebo je id
+ * některé známé ochranné nohy; u vlastního vstupu navíc strana a typ = záznam. `null` = cíl je vstup.
+ *
+ * Kolo 3 (P3, obrana do hloubky, INV-BRAKE-01/02): uživatelův samostatný ochranný příkaz z Tradovate
+ * (bez parentu, žádný záznam ho nezná, strana i typ můžou sedět) prozradí jen pozice — příkaz na
+ * OPAČNÉ straně, než je otevřená pozice leadera, by ji zmenšil = ochrana, ne vstup. Přikoupení je vždy
+ * na stejné straně a běžný vstup jde jen z flat, takže legitimní zrušení to neblokuje.
+ */
+export function cancelEntryTargetProblem(input: {
+  order: { brokerOrderId: string; side: string; orderType: string; parentOrderId?: string | null };
+  /** Strana a typ ze záznamu vlastního vstupu; u sledovaného obchodu (2b) `null`. */
+  expected: { side: string; orderType: string } | null;
+  /** Id všech známých ochranných nohou (vlastní záznamy, OSO/bracket outboxy). */
+  legIds: ReadonlySet<string>;
+  /** Pozice leadera na symbolu se znaménkem (cache streamu); `null` / 0 = žádná známá pozice. */
+  leaderNet?: number | null;
+}): string | null {
+  if (input.order.parentOrderId != null) return 'Cíl zrušení je noha jiného příkazu (má parent) — nic se nezrušilo.';
+  if (input.legIds.has(input.order.brokerOrderId)) return 'Cíl zrušení je ochranná noha (SL/TP) — nic se nezrušilo.';
+  if (input.expected && (input.order.side !== input.expected.side || input.order.orderType !== input.expected.orderType)) {
+    return 'Cíl zrušení nesedí se vstupem (strana / typ) — nic se nezrušilo.';
+  }
+  const net = input.leaderNet ?? 0;
+  if (net !== 0 && (input.order.side === 'Buy') !== (net > 0)) {
+    return `Cíl zrušení by zmenšil otevřenou pozici leadera (${net}) — je to ochrana, ne vstup; nic se nezrušilo, zkontroluj ho v Tradovate.`;
+  }
+  return null;
+}
+
+/**
+ * Vstup se při rušení vyplnil, ale leader je na symbolu ověřeně flat a nic nepracuje (oponentura C7 kolo 2,
+ * P3): obchod mezitím skončil (SL/TP, Flatten, uživatel) — pravdivý text bez „pozice je otevřená“ a bez
+ * incidentu; kauzalita se netvrdí.
+ */
+export function cancelEntryFilledFlatReason(outcome: { code: 'entry-filled' | 'entry-partially-filled'; filled: number }): string {
+  return `${outcome.code === 'entry-filled' ? `Vstup se vyplnil (${outcome.filled}) dřív, než ho broker zrušil` : `Vstup se z části vyplnil (${outcome.filled}), zbytek zrušen`}`
+    + ' — pozice už je zavřená a nic nepracuje (ověřeno čtením; příčina neověřena).';
+}
+
 /** Výsledek zrušení vstupu podle stavu u brokera (worker; INV-MODE-02 duch, INV-TRAD-02). */
 export type CancelEntryVerdict =
   | { status: 'acknowledged'; code: 'canceled'; reason: string }
@@ -197,7 +244,7 @@ export function cancelEntryVerdict(order: { status: string; quantity: number; fi
   }
   if (filled > 0) {
     return { status: 'rejected', code: 'entry-partially-filled', filled,
-      reason: `Vstup se z části vyplnil (${filled}/${order.quantity}), zbytek zrušen — pozice ${filled} je otevřená; zavři ji × nebo Flattenem.` };
+      reason: `Vstup se z části vyplnil (${filled}/${order.quantity}), zbytek zrušen — pozice ${filled} je otevřená; ${PARTIAL_CLOSE_HINT}` };
   }
   if (order.status === 'canceled') return { status: 'acknowledged', code: 'canceled', reason: 'zrušení potvrzeno stavem u brokera' };
   return { status: 'waived', code: 'entry-ended', reason: `vstup skončil bez vyplnění (${order.status})` };
@@ -238,7 +285,7 @@ export function cancelEntryOutcome(
   const filled = Math.max(0, order.filledQuantity);
   if (filled > 0) {
     return { status: 'rejected', code: 'entry-partially-filled', filled, open: true,
-      reason: `${why} — vstup je z části vyplněný (${filled}/${order.quantity}) a dál pracuje; pozice ${filled} je otevřená, zavři ji × nebo Flattenem.` };
+      reason: `${why} — vstup je z části vyplněný (${filled}/${order.quantity}) a dál pracuje; pozice ${filled} je otevřená, ${PARTIAL_CLOSE_HINT}` };
   }
   return { status: 'rejected', code: 'cancel-not-effective', open: true,
     reason: `${why} — vstup dál čeká; nic se automaticky neopakuje, zruš ho znovu nebo v Tradovate.` };
@@ -348,12 +395,22 @@ export function cancelPendingAvailability(input: {
 /**
  * Dashboard „Zrušit příkaz“ (dřív `cancel-order`, worker ho odmítá): jen u vlastního
  * čekajícího vstupu leadera → `cancel-entry`. Jinde `null` = tlačítko se neukáže.
+ * Stejné brány jako `cancelPendingAvailability` (oponentura C7 kolo 2, INV-FRESH-03 / INV-UI-01/02):
+ * jen nad čerstvým neobnoveným statusem a s relay trasou — zastaralý status mutaci nenabídne.
  */
 export function dashboardCancelTarget(
   order: { accountId: number; orderId: number | string },
-  input: { capability: boolean; leaderAccountId: number | null | undefined; entries: readonly PendingOwnEntry[] | null | undefined },
+  input: {
+    capability: boolean;
+    leaderAccountId: number | null | undefined;
+    entries: readonly PendingOwnEntry[] | null | undefined;
+    statusFresh: boolean;
+    restored: boolean;
+    relayConnected: boolean;
+  },
 ): PendingOwnEntry | null {
-  if (!input.capability || input.leaderAccountId == null || order.accountId !== input.leaderAccountId) return null;
+  if (!input.capability || !input.statusFresh || input.restored || !input.relayConnected) return null;
+  if (input.leaderAccountId == null || order.accountId !== input.leaderAccountId) return null;
   return (input.entries ?? []).find(entry => entry.entryBrokerOrderId === String(order.orderId)) ?? null;
 }
 
