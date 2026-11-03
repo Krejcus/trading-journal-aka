@@ -22,6 +22,7 @@ import type {
   BrokerPort,
   BrokerPosition,
   OrderSide,
+  ObservedOrderType,
   OrderType,
 } from './brokerPort';
 import { isOpenOrderStatus, propDrawdownFloor } from './brokerPort';
@@ -41,6 +42,7 @@ import {
   type TradovatePlaceOrderResult,
   type TradovatePlaceOcoResult,
   type TradovatePlaceOsoResult,
+  assertWritableOrderType,
 } from './tradovateMapping';
 
 interface TradovateContractEntity { id: number; name: string }
@@ -263,9 +265,14 @@ const numberId = (value: string): number => {
   return parsed;
 };
 
-const supportedOrderType = (value: string): OrderType => {
-  if (value === 'Market' || value === 'Limit' || value === 'Stop' || value === 'StopLimit') return value;
-  throw new TradovateTransportError(`Unsupported Tradovate order type: ${value}`);
+/**
+ * Typ příkazu od brokera → náš typ. Neznámý typ (TrailingStop, MIT, TrailingStopLimit, …) NIKDY
+ * nevyhodí výjimku: dřív shodil synchronizaci celého přihlášení a po reconnectu znovu (crash loop,
+ * 3. 11. 2026). Teď je z něj `Unsupported` = cizí aktivní příkaz (INV-TRAD-07).
+ */
+const observedOrderType = (value: unknown): { orderType: ObservedOrderType; raw?: string } => {
+  if (value === 'Market' || value === 'Limit' || value === 'Stop' || value === 'StopLimit') return { orderType: value };
+  return { orderType: 'Unsupported', raw: String(value ?? 'unknown').slice(0, 32) };
 };
 
 const finiteNumber = (value: unknown): number | null =>
@@ -932,11 +939,13 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     raw: TradovateRawOrderEntity,
     version: TradovateOrderVersionEntity,
   ): BrokerOrder => {
+    const observedType = observedOrderType(version.orderType);
     const entity: TradovateOrderEntity = {
       ...raw,
       ordStatus: orderRejectReasons.has(orderId) ? 'Rejected' : raw.ordStatus,
       orderQty: version.orderQty,
-      orderType: supportedOrderType(version.orderType),
+      orderType: observedType.orderType,
+      ...(observedType.raw ? { brokerOrderType: observedType.raw } : {}),
       cumQty: fillTotals.get(orderId) ?? 0,
       price: version.price,
       stopPrice: version.stopPrice,
@@ -2186,6 +2195,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     },
     async modifyOrder(_accountId, brokerOrderId, changes) {
       const orderId = numberId(brokerOrderId);
+      // INV-TRAD-07: před POSTem, takže výsledek je jistě „nic neodesláno“.
+      assertWritableOrderType(changes.orderType);
       const result = await post<TradovateCommandResult>('/order/modifyorder', {
         orderId,
         orderQty: changes.quantity,
@@ -2439,7 +2450,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const matchingVersions = (versions ?? []).filter(version => (
         version.orderId === orderId
         && version.orderQty === changes.quantity
-        && supportedOrderType(version.orderType) === changes.orderType
+        && observedOrderType(version.orderType).orderType === changes.orderType
         && version.price === changes.limitPrice
         && version.stopPrice === changes.stopPrice
       ));

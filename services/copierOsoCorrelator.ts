@@ -1,4 +1,4 @@
-import type { OrderType } from './brokerPort';
+import type { ObservedOrderType, OrderType } from './brokerPort';
 import type { LeaderEvent } from './copierEngine';
 
 export interface LeaderOsoPair {
@@ -46,7 +46,7 @@ export type OsoObservation =
   | { kind: 'ambiguous'; reason: string };
 
 const opposite = (side: 'Buy' | 'Sell') => side === 'Buy' ? 'Sell' : 'Buy';
-const isEntryType = (type: OrderType): type is Extract<OrderType, 'Limit' | 'Stop' | 'StopLimit'> =>
+const isEntryType = (type: ObservedOrderType): type is Extract<OrderType, 'Limit' | 'Stop' | 'StopLimit'> =>
   type === 'Limit' || type === 'Stop' || type === 'StopLimit';
 
 /**

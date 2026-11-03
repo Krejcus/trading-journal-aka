@@ -1398,6 +1398,52 @@ existující ochranu.
   per-route epoch. Nebezpečný je fallback „první broker, který účet vidí“ bez
   stabilního ownership.
 
+### INV-TRAD-07: Typ příkazu, který adaptér nezná, nikdy nezastaví čtení a nikdy se nekopíruje ani nemodifikuje
+
+- Proč: 3. 11. 2026 se z kódu (a testem) ukázalo, že jediný TrailingStop / MIT /
+  TrailingStopLimit / QTS zadaný v Tradovate na KTERÉMKOLI účtu přihlášení — i
+  vyplněný nebo zrušený v `/order/list` aktuální session — shodil při skládání
+  příkazu synchronizaci, po reconnectu znovu (crash loop): kopírka byla slepá do
+  konce session. Kopírovat takový typ followerům bez ověřené sémantiky
+  (`pegDifference`, spuštění MIT) by byl zápis s neznámým výsledkem.
+- Vynucuje: `services/tradovateBroker.ts:observedOrderType` složí neznámý typ
+  jako `orderType: 'Unsupported'` se surovým `brokerOrderType` (nikdy výjimka);
+  `services/brokerPort.ts` — zápisy (`BrokerOrderRequest`, modify) nesou jen
+  `OrderType`, pozorované příkazy `ObservedOrderType`;
+  `services/tradovateMapping.ts:assertWritableOrderType` (placeorder, OCO/OSO
+  nohy) a `modifyOrder` adaptéru vyhodí PŘED POSTem;
+  `services/copierRuntimeController.ts` hned za `source.observe`: submitted /
+  replaced `Unsupported` leadera = jednou na id `processor.record` + audit
+  `leader-unsupported-order-type`, se followery za ARMED `failClosed` bez
+  auto-close (text jmenuje followery se starou kopií), za DISARMED
+  `invalidateReconciliation`, v manual-only skupině jen audit; canceled/rejected
+  jdou dál běžnou cestou (runner zruší kopie podle durable vazeb);
+  `services/copierEngine.ts:planReplication/planModify` druhá pojistka
+  (`unsupported-order-type`); `services/manualScaleIn.ts` `leg-type`;
+  `prepareManualOrderAction` posouvá jen SL typu Stop a TP typu Limit;
+  `copierManualActions.mayResendLiquidation` se při `Unsupported` neopakuje;
+  durable `lastExecution` typ `Unsupported` nikdy neukládá (validace ho nezná).
+  Pracující `Unsupported` je aktivní příkaz (`isOpenOrderStatus`), takže ARM,
+  flat a no-working brány i `foreignOrders` přikoupení blokují. Kopie followera
+  (vazba v `links`), kterou někdo v Tradovate změní na takový typ, = za ARMED
+  `failClosed` bez auto-close (další modify zastaví změna generace), za DISARMED
+  zneplatnění. Text incidentu leadera jmenuje i followery, kteří drží pozici na
+  symbolu bez této ochrany (typicky trailing SL k otevřené pozici). Fill takového
+  příkazu (např. MIT vyplněný hned, bez viditelného submitu) se on-fill followerům
+  kopíruje jako Market — kopíruje se exekuce, ne typ (záměr).
+- Hlídá test: `tests/tradovateBrokerUnsupportedOrderType.test.ts`,
+  `tests/copierUnsupportedLeaderOrder.test.ts` (mutace: vypnutý intercept → 3 testy padají;
+  vypnutá kontrola kopie followera → test „kopie followera změněná…“ padá).
+- Nikdy: Nemapovat neznámý typ na nejbližší známý (TrailingStop ≠ Stop — follower
+  by dostal statický stop), neposílat ho ve `modifyOrder`, nedorovnávat trailing
+  leadera obchodem a nevyhazovat ze čtecí cesty kvůli typu.
+- Bezpečné změny vs. nebezpečné: Bezpečné je přidat typ do `OrderType` až se
+  záznamem chování u brokera na DEMO (R1) a s vlastním návrhem pro critic.
+  Nebezpečné je povolit `Unsupported` v outboxu nebo ve validaci durable stavu.
+- Ověření u brokera: záznam R1 (`docs/reviews/trading-gaps-designs/safety.md`, C1)
+  až po nasazení této opravy do VŠECH workerů na přihlášení — dřív by sám
+  záznam shodil běžící worker.
+
 ### UI pravidla
 
 ### INV-UI-01: Obnovený stav může krátce stabilizovat zobrazení, ale neautorizuje příkaz; po grace je stale/unknown neutrální
