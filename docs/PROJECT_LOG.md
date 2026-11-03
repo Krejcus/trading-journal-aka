@@ -288,6 +288,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-03 — Chybějící typy obchodování: ověřený seznam, návrhy všech skupin, oprava pádu na trailing/MIT (Claude, ROZPRACOVÁNO, nic nenasazeno)
+
+- Filip: „pořád velká spousta věcí chybí (typy obchodování)“ → ověřený seznam (průzkum + protikontrola
+  každého řádku) `docs/reviews/trading-gaps-20261103.md`; pak cíl „udělej vše, použij víc agentů“.
+- Návrhy všech chybějících schopností po skupinách (safety, exits, pending, automation, types, scope,
+  followers, ui) + posudek `copier-design-critic` ke každé skupině jádra: `docs/reviews/trading-gaps-designs/`.
+  Všechny skupiny jádra mají verdikt návrhu „OPRAVIT PŘED COMMITEM“ — P1 výhrady se řeší před stavbou
+  každé položky. Zamítnuto pravidly (critic potvrdil): skutečné LIVE peníze, Market bez IBKR s cenou z TV,
+  OCO breakout (C5e), vstup na vybraný follower/za OFF (C20b), Lucid↔Tradeify, uvolnění pravidel followerů za ARMED.
+- **C1 hotovo (větev `claude/trading-gaps-20261103`, f2a2b070):** TrailingStop/MIT/… zadaný v Tradovate na
+  kterémkoli účtu přihlášení (i ukončený v `/order/list`) shodil sync workeru → crash loop do konce session
+  (reprodukováno testem). Teď `ObservedOrderType` = `Unsupported` + surový typ; zápisy nesou jen `OrderType`
+  (kompilátor vynutil zúžení) + pojistka před POSTem; nikdy se nekopíruje ani nemodifikuje; nové INV-TRAD-07.
+  Critic: návrh OPRAVIT → diff OK s výhradami (P2 opraveny). Záznam R1 na DEMO až PO nasazení do všech workerů
+  na přihlášení — dřív by ho sám záznam shodil.
+- Telefon (2d6a7e70): lišta Koupit/Prodat se při přehrávání neukáže (dřív živý Market nad historickým
+  grafem); „Zrušit“ čekajícího vstupu v liště = cancel-entry, ne Flatten skupiny (ten navíc vypínal kopírku).
+- UI vlna A (větev `claude/trading-gaps-ui-20261103`, 82ea24bb): čisté moduly + 271 testů — zkratky, ATM
+  šablony, čáry všech pracujících příkazů, ceny pro BE+n/s poplatky a SL/TP číslem, holý Market na PC,
+  předvolby, náhled pro telefon, hlášení fillů. Zatím NEZAPOJENO (vlna B).
+- Testy: plná sada 6721 zelená, tsc čisté (mimo staré `extension/`). Nasazení jen po „nasaď“; worker
+  s C1 potřebuje reinstall (obchodní den → čekat na souhlas).
+
 ### 2026-11-03 — Dokupování do otevřené pozice + správa celé pozice (Claude, NASAZENO 3. 11. na Filipovo „nasaď“: web 90de8e36, worker 90de8e36 s `--scale-in on`, iPhone)
 
 - Filip 2.–3. 11.: chce přikupovat do pozice / další limit v pozici; rozhodl variantu B (každé přikoupení
