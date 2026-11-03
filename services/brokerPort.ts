@@ -22,6 +22,18 @@ export type OrderSide = 'Buy' | 'Sell';
 
 export type OrderType = 'Market' | 'Limit' | 'Stop' | 'StopLimit';
 
+/**
+ * Typ pozorovaného příkazu u brokera. `Unsupported` = typ, který adaptér nezná (TrailingStop,
+ * MIT, TrailingStopLimit, …; surový název je v `BrokerOrder.brokerOrderType`). Čtecí cesta se
+ * kvůli němu nikdy nezastaví; takový příkaz je cizí aktivní příkaz — blokuje ARM, vstup i
+ * správu na svém účtu a nikdy se nekopíruje ani nemodifikuje (INV-TRAD-07). Zápisy
+ * (`BrokerOrderRequest`, modify) nesou jen `OrderType`, takže se k brokerovi dostat nemůže.
+ */
+export type ObservedOrderType = OrderType | 'Unsupported';
+
+export const isSupportedOrderType = (value: string): value is OrderType =>
+  value === 'Market' || value === 'Limit' || value === 'Stop' || value === 'StopLimit';
+
 export type OrderStatus = 'working' | 'pending' | 'filled' | 'canceled' | 'rejected';
 
 /** PendingNew/Suspended stále může přejít do Working nebo fillu. Pro risk,
@@ -53,7 +65,9 @@ export interface BrokerOrder {
   accountId: number;
   symbol: string;
   side: OrderSide;
-  orderType: OrderType;
+  orderType: ObservedOrderType;
+  /** Surový typ od brokera u `Unsupported` (jen audit a zobrazení, nejvýš 32 znaků). */
+  brokerOrderType?: string;
   quantity: number;
   filledQuantity: number;
   limitPrice?: number;

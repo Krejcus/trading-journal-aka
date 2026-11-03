@@ -16,7 +16,7 @@ export function LivePhonePositionBar({ side, quantity, symbol, pending = null, u
   side: 'long' | 'short';
   quantity: number;
   symbol: string;
-  /** Jen čekající vstup (Limit/Stop), pozice zatím není — „Zrušit“ jde stejnou cestou Flattenu skupiny. */
+  /** Jen čekající vstup (Limit/Stop), pozice zatím není — „Zrušit“ zruší jen tento vstup (cancel-entry); Flatten až bez cílené cesty. */
   pending?: { type: string | null; price: number | null } | null;
   unprotected: boolean;
   busy: boolean;
@@ -39,7 +39,7 @@ export function LivePhonePositionBar({ side, quantity, symbol, pending = null, u
       <button
         type="button"
         className="dj-btn"
-        aria-label={pending ? (confirming ? 'Potvrdit zrušení (Flatten)' : 'Zrušit čekající příkaz (Flatten)') : confirming ? 'Potvrdit zavření (Flatten)' : 'Zavřít pozici (Flatten)'}
+        aria-label={pending ? (confirming ? 'Potvrdit zrušení čekajícího příkazu' : 'Zrušit čekající příkaz') : confirming ? 'Potvrdit zavření (Flatten)' : 'Zavřít pozici (Flatten)'}
         onClick={() => {
           playNativeHapticIfAvailable('medium');
           if (confirming) { setArmedAt(null); onClose(); } else setArmedAt(Date.now());

@@ -1,4 +1,4 @@
-import { oppositeSide, type BrokerOrder, type BrokerPort } from './brokerPort';
+import { isSupportedOrderType, oppositeSide, type BrokerOrder, type BrokerOrderStateLookup, type BrokerPort } from './brokerPort';
 import type { LeaderEvent, ModifyCommand } from './copierEngine';
 import type { OsoOutboxEntry } from './copierOsoOutbox';
 import type { CopyGroupConfig } from './liveCopyTrading';
@@ -170,8 +170,8 @@ export async function planOsoModifyCascade(options: {
   }
 
   const mapping = relevant[0].mapping;
-  let stopLookup;
-  let targetLookup;
+  let stopLookup: BrokerOrderStateLookup;
+  let targetLookup: BrokerOrderStateLookup;
   try {
     [stopLookup, targetLookup] = await Promise.all([
       broker.findOrderById(group.leaderAccountId, mapping.leaderStopOrderId),
@@ -237,6 +237,12 @@ export async function planOsoModifyCascade(options: {
 
   const leaderStop = stopLookup.order;
   const leaderTarget = targetLookup.order;
+  // `validateLeaderChild` už pustí jen Stop/StopLimit a Limit; zúžení pro typy zápisu (INV-TRAD-07).
+  const stopType = leaderStop.orderType;
+  const targetType = leaderTarget.orderType;
+  if (!isSupportedOrderType(stopType) || !isSupportedOrderType(targetType)) {
+    return { commands: [], error: 'oso-leader-protection-unverified: noha leadera má typ, který appka nezná' };
+  }
   return {
     ...(pendingLeaderEntryOrderId ? { pendingLeaderEntryOrderId } : {}),
     ...(pendingLeaderEntry ? { pendingLeaderEntry } : {}),
@@ -246,7 +252,7 @@ export async function planOsoModifyCascade(options: {
         accountId: modification.accountId,
         brokerOrderId: followerMapping.firstBrokerOrderId!,
         quantity: modification.quantity,
-        orderType: leaderStop.orderType,
+        orderType: stopType,
         ...(leaderStop.limitPrice != null ? { limitPrice: leaderStop.limitPrice } : {}),
         ...(leaderStop.stopPrice != null ? { stopPrice: leaderStop.stopPrice } : {}),
         stage: 1 as const,
@@ -256,7 +262,7 @@ export async function planOsoModifyCascade(options: {
         accountId: modification.accountId,
         brokerOrderId: followerMapping.secondBrokerOrderId!,
         quantity: modification.quantity,
-        orderType: leaderTarget.orderType,
+        orderType: targetType,
         ...(leaderTarget.limitPrice != null ? { limitPrice: leaderTarget.limitPrice } : {}),
         ...(leaderTarget.stopPrice != null ? { stopPrice: leaderTarget.stopPrice } : {}),
         stage: 2 as const,

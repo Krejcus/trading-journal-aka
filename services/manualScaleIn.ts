@@ -112,6 +112,8 @@ export interface LeaderPositionModel {
   ownOpen: number;
   /** Některá noha má dílčí fill (broker jí sám mění qty) — jen zavřít / brzdy. */
   legsPartiallyFilled: boolean;
+  /** SL nohy jsou prosté Stop a TP nohy prosté Limit (INV-TRAD-07: typ z Tradovate, který appka nezná, se nemodifikuje). */
+  legTypesOk: boolean;
   /**
    * Σ zbytků vlastních nohou, každá nejvýš do `coverCap` lístku — nadkrytí pozice. Suspended
    * nohy nevyplněného čekajícího vstupu se nepočítají (oponentura diffu, P1-A).
@@ -202,6 +204,7 @@ export function leaderPositionModel(input: {
     ownFilled: tickets.reduce((sum, ticket) => sum + ticket.entryFilled, 0),
     ownOpen: tickets.reduce((sum, ticket) => sum + Math.max(0, ticket.entryFilled - (ticket.stop?.filledQuantity ?? 0) - (ticket.target?.filledQuantity ?? 0)), 0),
     legsPartiallyFilled: [...stops, ...targets].some(order => order.filledQuantity > 0),
+    legTypesOk: stops.every(order => order.orderType === 'Stop') && targets.every(order => order.orderType === 'Limit'),
     stopOpenQuantity: legOpen(tickets, 'stop'),
     targetOpenQuantity: legOpen(tickets, 'target'),
   };
@@ -279,6 +282,7 @@ export function scaleInAddBlockers(input: {
     add('scale-in-uncovered', 'SL a TP nekryjí celou pozici (nebo je broker ještě nepotvrdil) — přikoupení teď nejde.');
   }
   if (!model.stopUniform || !model.targetUniform) add('scale-in-legs-diverged', 'SL nebo TP pozice nejsou na jedné ceně — nejdřív je sjednoť.');
+  if (!model.legTypesOk) add('leg-type', 'SL nebo TP pozice má u brokera jiný typ (např. trailing z Tradovate) — přikoupení z appky nejde.');
   if (command.stopLoss !== model.stopPrice || command.takeProfit !== model.targetPrice) {
     add('scale-in-brackets-mismatch', 'SL a TP přikoupení musí být stejné jako SL a TP pozice.');
   }
@@ -396,6 +400,7 @@ export function positionManageBlockers(input: {
   }
   // Běžný posun jen z jedné ceny; rozjeté nohy = žádné tiché sjednocení (P2-6 oponentury v4).
   if (!model.stopUniform || !model.targetUniform) add('legs-diverged', 'SL nebo TP pozice nejsou na jedné ceně — sjednoť je v Tradovate, nebo pozici zavři.');
+  if (!model.legTypesOk) add('leg-type', 'SL nebo TP pozice má u brokera jiný typ (např. trailing z Tradovate) — posun z appky nejde, jen zavřít.');
   const current = input.action === 'move-stop' ? model.stopPrice : model.targetPrice;
   if (current == null || input.expect.price !== current) add('order-changed', 'Příkaz se od zobrazení změnil — obnov panel.');
   return issues;

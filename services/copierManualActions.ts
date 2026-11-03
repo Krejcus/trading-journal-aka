@@ -314,7 +314,9 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
     && entry.attempts < liquidateAttempts
     && confirmed.netQuantity != null
     && confirmed.netQuantity !== 0
-    && !(confirmed.openOrders ?? []).some(order => order.orderType === 'Market')
+    && !(confirmed.openOrders ?? []).some(order => order.orderType === 'Market'
+      // INV-TRAD-07: MIT se po dotyku chová jako trh; neznámý typ = nikdy neopakovat.
+      || order.orderType === 'Unsupported')
   );
 
   // Účty, které selhaly jen na přechodnou chybu brokera (timeout, síť, 5xx),

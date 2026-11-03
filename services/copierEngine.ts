@@ -1,4 +1,4 @@
-import type { BrokerOrder, BrokerOrderRequest, BrokerPosition, OrderSide, OrderType } from './brokerPort';
+import { isSupportedOrderType, type BrokerOrder, type BrokerOrderRequest, type BrokerPosition, type ObservedOrderType, type OrderSide, type OrderType } from './brokerPort';
 import { brokerTag, replicationKey } from './copierKeys';
 import type { LeaderFlatEpoch } from './copierLeaderFlatGuard';
 import type { CopyGroupConfig, CopyReplicationMode, DayLockTrigger } from './liveCopyTrading';
@@ -34,7 +34,8 @@ export interface LeaderEvent {
   symbol: string;
   side: OrderSide;
   quantity: number;
-  orderType: OrderType;
+  /** `Unsupported` se do plánů nikdy nedostane — controller ho zachytí na vstupu (INV-TRAD-07). */
+  orderType: ObservedOrderType;
   limitPrice?: number;
   stopPrice?: number;
   /**
@@ -68,7 +69,8 @@ export type SkipReason =
   | 'mode-mismatch'
   | 'already-replicated'
   | 'stale-cumulative-fill'
-  | 'zero-quantity';
+  | 'zero-quantity'
+  | 'unsupported-order-type';
 
 export interface SkippedReplication {
   followerAccountId: number;
@@ -662,6 +664,10 @@ export function planModify(
   group: CopyGroupConfig,
 ): ModifyCommand[] {
   if (event.kind !== 'replaced') return [];
+  // Typ, který adaptér nezná, se followerům nikdy nemodifikuje (INV-TRAD-07); controller ho
+  // zachytí už na vstupu, tohle je druhá pojistka.
+  const orderType = event.orderType;
+  if (!isSupportedOrderType(orderType)) return [];
   const links = state.links.get(event.orderId) ?? [];
   return links.flatMap(link => {
     const follower = group.followers.find(item => item.accountId === link.accountId);
@@ -684,7 +690,7 @@ export function planModify(
       accountId: link.accountId,
       brokerOrderId: link.brokerOrderId,
       quantity,
-      orderType: event.orderType,
+      orderType,
       ...(event.limitPrice != null ? { limitPrice: event.limitPrice } : {}),
       ...(event.stopPrice != null ? { stopPrice: event.stopPrice } : {}),
       ...(link.nativeOsoRole ? { nativeOsoRole: link.nativeOsoRole } : {}),
@@ -787,6 +793,10 @@ export function planReplication(
     return plan;
   }
 
+  // Typ, který adaptér nezná, se nikdy nekopíruje (INV-TRAD-07); controller ho zachytí už na
+  // vstupu, tohle je druhá pojistka (až za `modeAccepts`, ať zrušení nehlásí falešný důvod).
+  const orderType = isSupportedOrderType(event.orderType) ? event.orderType : null;
+
   for (const follower of group.followers) {
     const skip = (reason: SkipReason) =>
       plan.skipped.push({ followerAccountId: follower.accountId, reason });
@@ -801,6 +811,10 @@ export function planReplication(
     }
     if (!modeAccepts(follower.mode, event.kind)) {
       skip('mode-mismatch');
+      continue;
+    }
+    if (orderType == null) {
+      skip('unsupported-order-type');
       continue;
     }
 
@@ -837,7 +851,7 @@ export function planReplication(
         symbol: event.symbol,
         side: event.side,
         quantity,
-        orderType: event.orderType,
+        orderType,
         ...(event.limitPrice != null ? { limitPrice: event.limitPrice } : {}),
         ...(event.stopPrice != null ? { stopPrice: event.stopPrice } : {}),
       },

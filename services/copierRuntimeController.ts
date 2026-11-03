@@ -2,6 +2,7 @@ import { isRetiredDurableGroup } from './copierRetiredGroup';
 import {
   brokerRiskEquity,
   isOpenOrderStatus,
+  isSupportedOrderType,
   type BrokerEvent,
   type BrokerFill,
   type BrokerOrder,
@@ -16,6 +17,8 @@ import {
   type BrokerPort,
   type BrokerStreamOrderSnapshot,
   type BrokerAccountRiskSnapshot,
+  type OrderSide,
+  type OrderType,
 } from './brokerPort';
 import { msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
 import { createLeaderDisplayFills, type CopierLeaderDisplayFills } from './copierLeaderDisplayFills';
@@ -231,6 +234,11 @@ export interface CopierControllerStatus {
     /** Průměrná cena vyplnění vstupu leadera od brokera (filly) — podklad pro „SL na BE“; null = neznámá. */
     entryAvgPrice?: number | null;
   }>;
+  /**
+   * INV-TRAD-07: pracující příkazy typu, který appka nezná (TrailingStop, MIT, … zadané v
+   * Tradovate) na účtech skupiny. Jen zobrazení (INV-UI-03) — blokují vstup, přikoupení i správu.
+   */
+  unsupportedOrders?: Array<{ accountId: number; symbol: string; brokerOrderId: string; type: string; side: OrderSide; quantity: number }>;
   /**
    * Pozice leadera složená z vlastních lístků (přikoupení, 3. 11. 2026) — jen pro UI:
    * čáry SL/TP celé pozice, „Přikoupit“, čekající přikoupení. Jen se zapnutým přikoupením.
@@ -1388,7 +1396,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       reason,
       symbol: order.symbol,
       brokerOrderId: order.brokerOrderId,
-      orderType: order.orderType,
+      // `Unsupported` do durable stavu nepatří: validace (i starší verze workeru) ho nezná.
+      ...(isSupportedOrderType(order.orderType) ? { orderType: order.orderType } : {}),
       side: order.side,
       ...(order.limitPrice != null ? { limitPrice: order.limitPrice } : {}),
       ...(order.stopPrice != null ? { stopPrice: order.stopPrice } : {}),
@@ -2212,6 +2221,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * nezávisle na stáří kopíruje jen exit-only).
    */
   const staleReversalOrderIds = new Map<string, Error>();
+  /** INV-TRAD-07: id příkazů leadera s nepodporovaným typem, už ohlášené (jednou na id). */
+  const unsupportedLeaderOrderIds = new Set<string>();
+  /** INV-TRAD-07: kopie followerů změněné v Tradovate na nepodporovaný typ, už ohlášené. */
+  const unsupportedFollowerCopyIds = new Set<string>();
   interface EpisodeFollowerIsolationEvidence {
     accountId: number;
     symbol: string;
@@ -4990,6 +5003,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (manualEntryQueueFence() !== queuedFence || generation !== safetyGeneration) return notSentAll('Mezitím se změnil stav kopírky — nic se neodeslalo.');
       if (timing.preRead === 'stream' && leaderRouteEpoch(leader) !== timing.routeEpoch) return notSentAll('Mezitím se změnilo spojení leadera — nic se neodeslalo.');
       for (const leg of legs) {
+        // INV-TRAD-07: typ, který appka nezná, se nikdy nemodifikuje.
+        if (!isSupportedOrderType(leg.orderType)) return notSentAll('Noha pozice má typ, který appka nezná — nic se neodeslalo.');
         const reach = manageReachBlockers(leg.brokerOrderId, symbol, leg.quantity);
         if (reach.length > 0) return notSentAll(reach.join(' '));
         const live = liveOrdersByAccount.get(leader)?.get(leg.brokerOrderId);
@@ -5004,7 +5019,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         let write: Promise<void | BrokerModifyConfirmation>;
         try {
           write = fenced.modifyOrder(leader, leg.brokerOrderId, {
-            quantity: leg.quantity, orderType: leg.orderType as BrokerOrder['orderType'],
+            // Typ ověřený výše (isSupportedOrderType) v téže synchronní kontrole.
+            quantity: leg.quantity, orderType: leg.orderType as OrderType,
             ...(stopMove ? { stopPrice: next } : { limitPrice: next }),
           });
         } catch (error) {
@@ -5192,6 +5208,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (command.action === 'move-stop' && target.orderType !== 'Stop') {
         return manageBlocked(command, 'stop-type', 'SL není prostý Stop (např. StopLimit) — posun z appky nejde.');
       }
+      // INV-TRAD-07: TP, který není prostý Limit (např. typ z Tradovate, který appka nezná), se nemodifikuje.
+      if (command.action === 'move-target' && target.orderType !== 'Limit') {
+        return manageBlocked(command, 'target-type', 'TP není prostý Limit — posun z appky nejde.');
+      }
       const current = command.action === 'move-stop' ? target.stopPrice : target.limitPrice;
       if (current == null || command.expect.price !== current || command.expect.quantity !== quantity) {
         return manageBlocked(command, 'order-changed', 'Příkaz se od zobrazení změnil — obnov panel.');
@@ -5318,6 +5338,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // na novou cenu (ne starý / syntetický řádek, který už novou cenu náhodou měl).
       const preWriteRow = liveOrdersByAccount.get(leader)?.get(targetOrderId);
       const preWritePrice = command.action === 'move-stop' ? preWriteRow?.stopPrice : preWriteRow?.limitPrice;
+      // INV-TRAD-07: typ, který appka nezná, se nikdy nemodifikuje (zrušit ho jde).
+      const modifyOrderType = isSupportedOrderType(targetLive.orderType) ? targetLive.orderType : null;
+      if (command.action !== 'cancel-entry' && modifyOrderType == null) {
+        return finish('not-sent', 'Příkaz má typ, který appka nezná — nic se neodeslalo.');
+      }
       let write: Promise<void | BrokerModifyConfirmation>;
       timing.writeStartedAt = clock();
       try {
@@ -5325,7 +5350,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ? options.broker.cancelOrder(leader, targetOrderId)
           : dispatchBroker(generation).modifyOrder(leader, targetOrderId, {
             quantity: targetLive.quantity,
-            orderType: targetLive.orderType,
+            orderType: modifyOrderType!,
             ...(command.action === 'move-stop' ? { stopPrice: command.newPrice! } : { limitPrice: command.newPrice! }),
           });
       } catch (error) {
@@ -16680,6 +16705,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         .flat()
         .find(link => link.brokerOrderId === event.order.brokerOrderId);
       const nativeProtective = linked?.nativeOsoRole === 'stop' || linked?.nativeOsoRole === 'target';
+      // INV-TRAD-07 (oponentura diffu C1, P2-2): kopii followera, kterou někdo v Tradovate změnil na
+      // typ, který appka nezná (např. trailing), kopírka už nesmí modifikovat. Za ARMED incident bez
+      // auto-close — změna generace zastaví další modify; za DISARMED zneplatněná kontrola pozic.
+      if (linked && event.order.orderType === 'Unsupported' && isOpenOrderStatus(event.order.status)
+        && !unsupportedFollowerCopyIds.has(event.order.brokerOrderId)) {
+        unsupportedFollowerCopyIds.add(event.order.brokerOrderId);
+        const copyError = new Error(
+          `Copier fail-closed: kopie followera ${event.order.accountId} (#${event.order.brokerOrderId}) je v Tradovate změněná `
+          + `na typ ${event.order.brokerOrderType ?? 'neznámý'}, který kopírka neumí upravovat — zkontroluj účet v Tradovate`,
+        );
+        if (gate.armed) failClosed(copyError, { autoClose: false });
+        else invalidateReconciliation();
+      }
       const accountPositionSnapshot = positionsByAccount.get(event.order.accountId);
       // Po autoritativním snapshotu znamená chybějící symbol flat. Bez
       // snapshotu je stav neznámý a ochranný příkaz se nikdy naslepo neruší.
@@ -17111,6 +17149,48 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const leaderEvent = source.observe(event, group.leaderAccountId, sequence, eventReceivedAt);
     if (!leaderEvent) return;
+    // INV-TRAD-07 (3. 11. 2026): typ příkazu, který adaptér nezná (TrailingStop, MIT, …), se nikdy
+    // nekopíruje ani nemodifikuje. Nový nebo změněný takový příkaz leadera = se followery za ARMED
+    // incident bez auto-close (followeři ho nemají, případně drží starou kopii), za DISARMED
+    // zneplatněná kontrola pozic. Každé id jen jednou: trailing může poslat novou verzi při každém
+    // posunu a opakované zneplatnění by točilo safety generaci. Zrušení a zamítnutí jdou dál běžnou
+    // cestou — runner podle durable vazeb zruší kopie followerů (oponentura C1, P1).
+    // Stejné id zpět na podporovaný typ = znovu ohlásit, kdyby se změnilo zase (oponentura diffu C1, P3).
+    if (leaderEvent.orderType !== 'Unsupported') unsupportedLeaderOrderIds.delete(leaderEvent.orderId);
+    if (leaderEvent.orderType === 'Unsupported' && (leaderEvent.kind === 'submitted' || leaderEvent.kind === 'replaced')) {
+      if (unsupportedLeaderOrderIds.has(leaderEvent.orderId)) return;
+      unsupportedLeaderOrderIds.add(leaderEvent.orderId);
+      while (unsupportedLeaderOrderIds.size > 500) {
+        const oldest = unsupportedLeaderOrderIds.values().next().value as string | undefined;
+        if (!oldest) break;
+        unsupportedLeaderOrderIds.delete(oldest);
+      }
+      const rawType = event.type === 'order' ? (event.order.brokerOrderType ?? 'neznámý') : 'neznámý';
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
+      runtime = recorded.runtime;
+      if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
+      options.onAudit?.([{
+        at: now, leaderEventId: leaderEvent.id, kind: 'blocked',
+        reason: `leader-unsupported-order-type:${rawType}:${leaderEvent.orderId}`,
+      }]);
+      if (group.manualOnly === true) return;
+      const linked = (runtime.state.links.get(leaderEvent.orderId) ?? []).map(link => link.accountId);
+      // Oponentura diffu C1 (P2-1): typicky trailing SL k otevřené pozici — followeři v pozici
+      // tuhle ochranu nemají, i když kopie samotného příkazu nevznikla.
+      const inPosition = group.followers.map(follower => follower.accountId)
+        .filter(accountId => (positionsByAccount.get(accountId)?.get(leaderEvent.symbol) ?? 0) !== 0);
+      const unsupportedError = new Error(
+        `Copier fail-closed: leader má příkaz typu ${rawType} (#${leaderEvent.orderId}), který kopírka neumí zkopírovat ani upravit`
+        + (linked.length > 0
+          ? ` — followeři ${[...new Set(linked)].join(', ')} drží starou kopii`
+          : ' — followeři ho nedostali')
+        + (inPosition.length > 0 ? `; followeři ${inPosition.join(', ')} drží pozici ${leaderEvent.symbol} bez této ochrany` : '')
+        + '; zkontroluj je v Tradovate',
+      );
+      if (gate.armed) failClosed(unsupportedError, { autoClose: false });
+      else invalidateReconciliation();
+      return;
+    }
     // Vlastní ruční vstup zpracovaný až za vypnuté kopírky (brzda mezi ACK
     // a eventy OSO, M3a): followeři ho nedostanou, na leaderovi nesmí zůstat.
     if (leaderEvent.kind === 'submitted' && (!gate.armed || gate.shadowMode)) {
@@ -21113,6 +21193,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
           return out.slice(-10);
         })(),
+        unsupportedOrders: [...liveOrdersByAccount.entries()]
+          .filter(([accountId]) => accountId === group.leaderAccountId || group.followers.some(follower => follower.accountId === accountId))
+          .flatMap(([, orders]) => [...orders.values()])
+          .filter(order => order.orderType === 'Unsupported' && isOpenOrderStatus(order.status))
+          .slice(0, 10)
+          .map(order => ({ accountId: order.accountId, symbol: order.symbol, brokerOrderId: order.brokerOrderId,
+            type: order.brokerOrderType ?? 'neznámý', side: order.side, quantity: order.quantity })),
         leaderPositions: (() => {
           if (!scaleInOn() || group.leaderAccountId == null) return [];
           const symbols = new Set(manualEntryRecords().filter(record => record.status === 'acknowledged').map(record => record.request.symbol));

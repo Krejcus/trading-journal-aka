@@ -8,6 +8,7 @@ import type {
   BrokerOsoAck,
   BrokerOsoRequest,
   BrokerOrderRequest,
+  ObservedOrderType,
   OrderStatus,
 } from './brokerPort';
 
@@ -65,10 +66,21 @@ export interface TradovatePlaceOrderPayload {
   isAutomated: true;
 }
 
+/**
+ * Pojistka zápisu (INV-TRAD-07): k brokerovi smí jen Market/Limit/Stop/StopLimit. Typy to
+ * hlídají už při kompilaci (`BrokerOrderRequest.orderType: OrderType`); tohle chytí přetypování
+ * a vyhodí PŘED POSTem, takže výsledek je jistě „nic neodesláno“.
+ */
+export const assertWritableOrderType = (value: unknown): void => {
+  if (value === 'Market' || value === 'Limit' || value === 'Stop' || value === 'StopLimit') return;
+  throw new Error(`unsupported-order-type-write: ${String(value).slice(0, 32)}`);
+};
+
 export function toPlaceOrderPayload(
   request: BrokerOrderRequest,
   accountSpec: string,
 ): TradovatePlaceOrderPayload {
+  assertWritableOrderType(request.orderType);
   return {
     accountId: request.accountId,
     accountSpec,
@@ -156,7 +168,12 @@ export interface TradovatePlaceOcoPayload {
   };
 }
 
-const ocoLegPayload = (leg: BrokerOcoRequest['first']) => ({
+const ocoLegPayload = (leg: BrokerOcoRequest['first']) => {
+  assertWritableOrderType(leg.orderType);
+  return ocoLegFields(leg);
+};
+
+const ocoLegFields = (leg: BrokerOcoRequest['first']) => ({
   action: leg.side,
   orderType: leg.orderType,
   ...(leg.limitPrice != null ? { price: leg.limitPrice } : {}),
@@ -303,7 +320,9 @@ export interface TradovateOrderEntity {
   action: 'Buy' | 'Sell';
   ordStatus: string;
   orderQty: number;
-  orderType: 'Market' | 'Limit' | 'Stop' | 'StopLimit';
+  orderType: ObservedOrderType;
+  /** Surový typ od brokera u `Unsupported`. */
+  brokerOrderType?: string;
   /** Kumulativní plněné množství, ne přírůstek. */
   cumQty?: number;
   price?: number;
@@ -329,6 +348,7 @@ export function fromOrderEntity(
     symbol,
     side: entity.action,
     orderType: entity.orderType,
+    ...(entity.orderType === 'Unsupported' && entity.brokerOrderType ? { brokerOrderType: entity.brokerOrderType } : {}),
     quantity: entity.orderQty,
     filledQuantity: entity.cumQty ?? 0,
     ...(entity.price != null ? { limitPrice: entity.price } : {}),
