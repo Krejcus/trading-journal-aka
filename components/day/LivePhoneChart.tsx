@@ -405,9 +405,23 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             side={position.side} quantity={position.quantity} symbol={position.symbol} pending={position.pending}
             unprotected={position.bareEntryOperationId != null} busy={busy}
             onAttach={() => { if (marketNow == null) say('Cena není čerstvá — SL/TP teď nejde připravit.'); else setAttachOpen(true); }}
-            onClose={() => { void trade?.flatten().then(say, error => say(`Flatten: ${error instanceof Error ? error.message.slice(0, 140) : 'chyba'}`)); }}
+            onClose={() => {
+              // Čekající vstup se ruší cílenou cestou × (cancel-entry, i za vypnuté kopírky) — ne
+              // Flattenem skupiny, který by navíc kopírku vypnul (TEL-ZRUŠIT, 3. 11.). Flatten jen
+              // u pozice nebo když cílená cesta není k dispozici.
+              const pendingPrice = position.pending?.price ?? null;
+              if (position.pending && trade?.manage && pendingPrice != null) {
+                void trade.manage('cancel-entry', pendingPrice).then(
+                  result => say(result.status === 'acknowledged' ? 'Čekající příkaz zrušen.' : result.reason ?? result.blockers[0]?.text ?? 'Zrušení neprošlo — zkus × na čáře nebo Flatten.'),
+                  error => say(`Zrušení: ${error instanceof Error ? error.message.slice(0, 140) : 'chyba'}`),
+                );
+                return;
+              }
+              void trade?.flatten().then(say, error => say(`Flatten: ${error instanceof Error ? error.message.slice(0, 140) : 'chyba'}`));
+            }}
           />}
-          <LiveTradePill prefs={pill} onPrefs={savePill} bid={quote?.bid ?? lastPrice} ask={quote?.ask ?? lastPrice} onQty={() => setQtySheet(true)} onSide={onSide} />
+          {/* Při přehrávání je graf historický: lišta by poslala živý Market nad starými svíčkami (N1, 3. 11.). */}
+          {!replay && <LiveTradePill prefs={pill} onPrefs={savePill} bid={quote?.bid ?? lastPrice} ask={quote?.ask ?? lastPrice} onQty={() => setQtySheet(true)} onSide={onSide} />}
           {notice && <LiveChartNotice key={notice.key} text={notice.text} onDone={clearNotice} />}
         </>,
         symbol: LIVE_PHONE_INSTRUMENT.symbol,
