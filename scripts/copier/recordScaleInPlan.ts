@@ -5,6 +5,17 @@
  * 2026: „na demu je to čistě tvé“); tady se nic neposílá k brokerovi.
  */
 import { recordLeaderOsoProblems, RECORD_TICK_SIZE, type RecordLeaderOsoPlan } from './recordLeaderOsoPlan';
+import {
+  DEMO_FAR_RATIO,
+  DEMO_MAX_SL_RATIO,
+  DEMO_MIN_BRACKET_POINTS,
+  cliNumber,
+  cliValue,
+  parseDemoBaseArgs,
+  type DemoPriceRef,
+  type DemoRecordPlan,
+  type DemoScenario,
+} from './recordDemoPlan';
 
 export interface RecordScaleInPlan {
   accountId: number;
@@ -127,4 +138,130 @@ export function decideScaleInCleanup(observation: ScaleInObservation, entryIds: 
   if (entries.length) return { kind: 'cancel', ids: entries.map(order => order.id) };
   if (open.length) return { kind: 'cancel', ids: open.map(order => order.id) };
   return { kind: 'clean' };
+}
+
+// ─── R16 / R17 (`docs/reviews/trading-gaps-designs/safety.md` C16 bod 6, C17 bod 6) ─────────
+// Běží přes společný interpret `recordDemoSession.ts` (pojistky v `recordDemoPlan.ts`): jen
+// DEMO8661118, MNQ front, DISARMED gate před scénářem i každým zadáním, expozice ≤ 2,
+// `--allow-fill` (oba scénáře se vyplní). `basic` a `five` výše zůstávají beze změny.
+
+export const SCALE_IN_DEMO_SCENARIOS = ['foreign-close', 'pending-modify'] as const;
+export type ScaleInDemoScenarioName = typeof SCALE_IN_DEMO_SCENARIOS[number];
+
+/** Přikoupení přes trh u pozastaveného SL (R17 bod 5): o tolik bodů za kotvou. */
+export const SCALE_IN_THROUGH_MARKET_POINTS = 10;
+/** Marketable posun čekajícího přikoupení k trhu (R17 bod 4). */
+export const SCALE_IN_MARKETABLE_POINTS = 2;
+/** SL základu je o tolik dál než čekající přikoupení (rezerva na pohyb trhu mezi zadáními). */
+export const SCALE_IN_DEMO_SL_BEYOND_ADD_POINTS = 40;
+
+export function isScaleInDemoScenario(argv: readonly string[]): boolean {
+  return (SCALE_IN_DEMO_SCENARIOS as readonly string[]).includes(cliValue(argv, 'scenario') ?? '');
+}
+
+export interface ScaleInDemoOptions { addPoints: number; slPoints: number; tpPoints: number }
+
+const ceilTick = (value: number) => Math.ceil(value / RECORD_TICK_SIZE - 1e-9) * RECORD_TICK_SIZE;
+const onTickValue = (value: number) => Math.abs(value / RECORD_TICK_SIZE - Math.round(value / RECORD_TICK_SIZE)) < 1e-9;
+
+/**
+ * `--scenario foreign-close|pending-modify` + `--account --symbol --side --market-price`;
+ * volitelně `--add-points` (výchozí 0,16 % trhu), `--sl-points` (přikoupení + 40), `--tp-points` (80).
+ */
+export function parseScaleInDemoArgs(argv: readonly string[]): DemoRecordPlan & { options: ScaleInDemoOptions } {
+  const base = parseDemoBaseArgs(argv);
+  const name = cliValue(argv, 'scenario') as ScaleInDemoScenarioName;
+  if (!(SCALE_IN_DEMO_SCENARIOS as readonly string[]).includes(name)) throw new Error(`--scenario musí být ${SCALE_IN_DEMO_SCENARIOS.join(' nebo ')}`);
+  const addPoints = cliNumber(argv, 'add-points', ceilTick(Math.max(DEMO_MIN_BRACKET_POINTS, base.marketPrice * (SCALE_IN_ADD_MIN_DISTANCE_RATIO + 0.0001))));
+  const slPoints = cliNumber(argv, 'sl-points', addPoints + SCALE_IN_DEMO_SL_BEYOND_ADD_POINTS);
+  const tpPoints = cliNumber(argv, 'tp-points', 2 * DEMO_MIN_BRACKET_POINTS);
+  for (const [flag, value] of [['add-points', addPoints], ['sl-points', slPoints], ['tp-points', tpPoints]] as const) {
+    if (!onTickValue(value)) throw new Error(`--${flag} musí být na tick ${RECORD_TICK_SIZE}`);
+  }
+  if (!(addPoints >= base.marketPrice * SCALE_IN_ADD_MIN_DISTANCE_RATIO)) {
+    throw new Error(`--add-points musí být aspoň ${Math.ceil(base.marketPrice * SCALE_IN_ADD_MIN_DISTANCE_RATIO)} (0,15 % trhu)`);
+  }
+  if (!(slPoints - addPoints >= 2 * SCALE_IN_ADD_MIN_SL_POINTS)) throw new Error(`--sl-points musí být aspoň o ${2 * SCALE_IN_ADD_MIN_SL_POINTS} b dál než --add-points`);
+  if (!(slPoints >= DEMO_MIN_BRACKET_POINTS && slPoints <= base.marketPrice * DEMO_MAX_SL_RATIO)) {
+    throw new Error(`--sl-points musí být ${DEMO_MIN_BRACKET_POINTS}–${Math.floor(base.marketPrice * DEMO_MAX_SL_RATIO)}`);
+  }
+  if (!(tpPoints >= DEMO_MIN_BRACKET_POINTS && tpPoints <= base.marketPrice * 0.02)) throw new Error(`--tp-points musí být ${DEMO_MIN_BRACKET_POINTS}–${Math.floor(base.marketPrice * 0.02)}`);
+  const options = { addPoints, slPoints, tpPoints };
+  return { ...base, options, scenarios: [scaleInDemoScenario(name, options)] };
+}
+
+const fromMarket = (points: number): DemoPriceRef => ({ from: 'market', points });
+
+export function scaleInDemoScenario(name: ScaleInDemoScenarioName, options: ScaleInDemoOptions): DemoScenario {
+  const marketTicket = (ticket: string) => ({
+    ticket, quantity: 1, entry: { orderType: 'Market' as const },
+    stopLoss: fromMarket(-options.slPoints), takeProfit: fromMarket(options.tpPoints),
+  });
+  const pendingAdd = (ticket: string, base: string) => ({
+    ticket, quantity: 1, entry: { orderType: 'Limit' as const, price: fromMarket(-options.addPoints) },
+    stopLoss: { from: 'ticket' as const, ticket: base, order: 'sl' as const },
+    takeProfit: { from: 'ticket' as const, ticket: base, order: 'tp' as const },
+  });
+  if (name === 'foreign-close') {
+    return {
+      name,
+      purpose: 'R16 (C16): pozice 1 s OSO + cizí Limit daleko na stejném kontraktu (mimo záznamy appky) — zruší liquidate i cizí Limit?',
+      steps: [
+        { kind: 'place-oso', label: 'základ: Market OSO 1', tickets: [marketTicket('base')] },
+        { kind: 'wait-net', label: 'základ vyplněn', net: 1, timeoutMs: 10_000 },
+        {
+          kind: 'place-order', label: 'cizí Limit 1 daleko (1,5 %) na stejném kontraktu', ref: 'f1', side: 'position', orderType: 'Limit',
+          price: { from: 'market', ratio: -DEMO_FAR_RATIO }, quantity: 1, observeMs: [500, 1_500],
+        },
+        {
+          kind: 'liquidate', label: 'liquidate s cizím Limitem', ref: 'liq', observeMs: [500, 2_000, 4_000],
+          classify: { name: 'liquidate-cancels-all', plain: 'f1' },
+        },
+      ],
+    };
+  }
+  return {
+    name,
+    purpose: 'R17 (C17): souběžný modify nohou základu i Suspended nohou čekajícího přikoupení; po fillu nohy s novou cenou; Suspended SL přes trh; modify + zrušení přikoupení; liquidate',
+    steps: [
+      { kind: 'place-oso', label: 'fáze 1: základ Market OSO 1', tickets: [marketTicket('base')] },
+      { kind: 'wait-net', label: 'základ vyplněn', net: 1, timeoutMs: 10_000 },
+      {
+        kind: 'place-oso', label: 'čekající přikoupení Limit 1 se SL/TP základu', tickets: [pendingAdd('a1', 'base')],
+        observeMs: [500, 1_500], classify: { name: 'independent-pairs', tickets: ['a1'] },
+      },
+      {
+        kind: 'modify', label: 'souběžně SL/TP základu i Suspended nohy přikoupení o 1 b dál',
+        changes: [
+          { target: { ticket: 'base', order: 'sl' }, price: { from: 'current', points: -1 } },
+          { target: { ticket: 'base', order: 'tp' }, price: { from: 'current', points: 1 } },
+          { target: { ticket: 'a1', order: 'sl' }, price: { from: 'current', points: -1 } },
+          { target: { ticket: 'a1', order: 'tp' }, price: { from: 'current', points: 1 } },
+        ],
+        observeMs: [300, 1_500], classify: { name: 'suspended-modify', ticket: 'a1' },
+      },
+      {
+        kind: 'modify', label: 'přikoupení k trhu (marketable, vyplní se)',
+        changes: [{ target: { ticket: 'a1', order: 'entry' }, price: { from: 'market', points: SCALE_IN_MARKETABLE_POINTS, marketable: true } }],
+      },
+      { kind: 'wait-net', label: 'přikoupení vyplněno (pozice 2)', net: 2, timeoutMs: 10_000, optional: true },
+      { kind: 'observe', label: 'nohy přikoupení po fillu', observeMs: [500, 2_000], classify: { name: 'fill-with-modified-legs', ticket: 'a1' } },
+      { kind: 'liquidate', label: 'fáze 1: liquidate', ref: 'liq1', observeMs: [500, 2_000], classify: { name: 'liquidate-cancels-all' } },
+      { kind: 'require-flat', label: 'fáze 1: REST flat bez příkazů' },
+      { kind: 'place-oso', label: 'fáze 2: základ Market OSO 1', tickets: [marketTicket('base2')] },
+      { kind: 'wait-net', label: 'základ 2 vyplněn', net: 1, timeoutMs: 10_000 },
+      { kind: 'place-oso', label: 'čekající přikoupení 2', tickets: [pendingAdd('a2', 'base2')], observeMs: [500] },
+      {
+        kind: 'modify', label: 'Suspended SL přikoupení přes trh (u Buy trh + 10 b)',
+        changes: [{ target: { ticket: 'a2', order: 'sl' }, price: fromMarket(SCALE_IN_THROUGH_MARKET_POINTS), throughMarket: true }],
+        observeMs: [300, 1_500], classify: { name: 'suspended-modify', ticket: 'a2', order: 'sl' },
+      },
+      {
+        kind: 'modify', label: 'Suspended TP přikoupení +1 b', changes: [{ target: { ticket: 'a2', order: 'tp' }, price: { from: 'current', points: 1 } }],
+        observeMs: [300, 1_500], classify: { name: 'suspended-modify', ticket: 'a2', order: 'tp' },
+      },
+      { kind: 'cancel', label: 'zrušit přikoupení', targets: [{ ticket: 'a2', order: 'entry' }], observeMs: [500, 2_000], classify: { name: 'cascade', ticket: 'a2' } },
+      { kind: 'liquidate', label: 'fáze 2: liquidate', ref: 'liq2', observeMs: [500, 2_000], classify: { name: 'liquidate-cancels-all' } },
+    ],
+  };
 }

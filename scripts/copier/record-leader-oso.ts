@@ -18,6 +18,13 @@
  * `--scenario market` (fáze 2e): totéž s Market vstupem (OSO s Market parentem) —
  * zaznamená, jak Tradovate hlásí Market OSO a přechod nohou; pak liquidate.
  * `--non-group-account`: účet mimo skupinu workeru (např. Tradeify připojení).
+ * `--scenario stop-limit` (R11, `docs/reviews/trading-gaps-designs/safety.md` C11 bod 6): jen
+ * `--account 61038658` (DEMO8661118) v manual-only skupině bez followerů, jen front MNQ (ověří
+ * se u brokera). Market OSO 1 MNQ (brány jako `market`), pak SL → StopLimit (limit 2 t na
+ * horší straně), posun dál, utažení, BE (obojí jen s rezervou 16 t od ceny workeru), limit
+ * na lepší straně, stop 20 b přes trh; před každým krokem DISARMED a pozice 1; pak liquidate.
+ *   npx tsx scripts/copier/record-leader-oso.ts --account 61038658 --symbol MNQZ6 --side Buy \
+ *     --scenario stop-limit --market-price 25000 --entry 25001 --sl 24900 --tp 25400 [--confirm]
  *
  * Během běhu: na nic nesahat (ARM, Tradovate), NEpřerušovat Ctrl+C.
  * Exit 0 = záznam + leader ověřeně čistý; 3 = něco se vyplnilo (ochrana
@@ -32,14 +39,21 @@ import { createTradovateBroker, type WebSocketLike } from '../../services/tradov
 import type { BrokerEvent } from '../../services/brokerPort';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
 import { createMacCopierDeviceTokenProvider, loadMacCopierDevice } from '../../server/macCopierDevice';
+import { pickCopierMarketPrice } from '../../lib/copierMarketPrice';
 import {
   throughMarketStopPrice,
+  averageFillPrice,
   decideFillCleanup,
   decideRecordCleanup,
+  frontContractProblem,
   leakedIdentifiers,
   parseRecordLeaderOsoArgs,
   recordLeaderOsoProblems,
   sanitizeRecordedFrame,
+  stopLimitStepProblems,
+  stopLimitSteps,
+  RECORD_DEMO_ACCOUNT_SPEC,
+  STOP_LIMIT_STEP_ORDER,
   type CleanupDecision,
   type CleanupObservation,
   type RecordPlacement,
@@ -59,9 +73,16 @@ const refuse = (problems: string[]) => {
 };
 
 const plan = parseRecordLeaderOsoArgs(process.argv.slice(2));
+const marketEntry = plan.scenario === 'market' || plan.scenario === 'stop-limit';
 console.log(plan.scenario !== 'cancel'
-  ? `Plán ${plan.scenario === 'market' ? 'MARKET' : 'FILL'}: ${plan.side} 1 ${plan.symbol} ${plan.scenario === 'market' ? 'MKT ~' : 'LMT '}${plan.entry} (vyplní se), SL ${plan.stopLoss}, TP ${plan.takeProfit}; trh ${plan.marketPrice}; zavřít po ${plan.holdMs} ms; max. ztráta při SL ≈ ${(Math.abs(plan.entry - plan.stopLoss) * 2).toFixed(0)} USD`
+  ? `Plán ${plan.scenario === 'stop-limit' ? 'STOP-LIMIT (R11)' : marketEntry ? 'MARKET' : 'FILL'}: ${plan.side} 1 ${plan.symbol} ${marketEntry ? 'MKT ~' : 'LMT '}${plan.entry} (vyplní se), SL ${plan.stopLoss}, TP ${plan.takeProfit}; trh ${plan.marketPrice}; zavřít po ${plan.holdMs} ms; max. ztráta při SL ≈ ${(Math.abs(plan.entry - plan.stopLoss) * 2).toFixed(0)} USD`
   : `Plán: ${plan.side} 1 ${plan.symbol} LMT ${plan.entry}, SL ${plan.stopLoss}, TP ${plan.takeProfit}; trh ${plan.marketPrice}; zrušit po ${plan.holdMs} ms`);
+if (plan.scenario === 'stop-limit') {
+  // Ukázka kroků z --entry/--market-price; skutečné ceny z fillu a čerstvé ceny workeru před každým krokem.
+  for (const item of stopLimitSteps(plan, { entryFill: plan.entry, anchor: plan.marketPrice })) {
+    console.log(`  ${item.name}: stop ${item.stopPrice} / limit ${item.limitPrice} — ${item.checks}${item.skip ? ` (přeskočí se: ${item.skip})` : ''}`);
+  }
+}
 const initialStatus = await readStatus();
 const initialProblems = recordLeaderOsoProblems(plan, initialStatus, Date.now());
 if (initialProblems.length) refuse(initialProblems);
@@ -130,6 +151,13 @@ if (!synced) abort(['WS se nesynchronizoval do 20 s — nic se neposlalo']);
 const directory = await broker.refreshAccountDirectory();
 const leader = directory.find(account => account.accountId === plan.accountId);
 if (!leader?.canTrade || !leader.accountSpec) abort(['leader není v adresáři připojení obchodovatelný']);
+if (plan.scenario === 'stop-limit') {
+  // R11: jen DEMO8661118 a jen front MNQ podle brokera (jen čtení).
+  if (leader?.accountSpec !== RECORD_DEMO_ACCOUNT_SPEC) abort([`stop-limit: účet není ${RECORD_DEMO_ACCOUNT_SPEC}`]);
+  const front = broker.frontContract ? await broker.frontContract('MNQ', plan.accountId).catch(() => null) : null;
+  const frontProblem = frontContractProblem(plan.symbol, front);
+  if (frontProblem) abort([frontProblem]);
+}
 const identifiers: Array<string | number> = [
   ...directory.flatMap(account => [account.accountId, account.accountSpec ?? '']),
   lease.accountSpec ?? '', connectionId!,
@@ -153,6 +181,12 @@ const observe = async (): Promise<CleanupObservation> => {
       .then(items => items.filter(order => !beforeIds.has(order.brokerOrderId)).map(order => ({
         id: order.brokerOrderId, status: order.status, filledQuantity: order.filledQuantity, side: order.side,
         ...(order.parentOrderId ? { parentOrderId: order.parentOrderId } : {}),
+        // Tvar SL po modify (stop-limit); úklid tato pole nečte.
+        ...(plan.scenario === 'stop-limit' ? {
+          orderType: String(order.orderType),
+          ...(order.limitPrice != null ? { limitPrice: order.limitPrice } : {}),
+          ...(order.stopPrice != null ? { stopPrice: order.stopPrice } : {}),
+        } : {}),
       })))
       .catch(reason => { step('čtení příkazů selhalo', message(reason)); return null; }),
     broker.listPositions(plan.accountId)
@@ -246,7 +280,7 @@ try {
   placement = { kind: 'uncertain', entrySide: plan.side };
   const request = broker.placeOso!({
     tag, accountId: plan.accountId, symbol: plan.symbol, side: plan.side, quantity: 1,
-    ...(plan.scenario === 'market' ? { orderType: 'Market' as const } : { orderType: 'Limit' as const, limitPrice: plan.entry }),
+    ...(marketEntry ? { orderType: 'Market' as const } : { orderType: 'Limit' as const, limitPrice: plan.entry }),
     first: { side: exitSide, orderType: 'Stop', stopPrice: plan.stopLoss },
     second: { side: exitSide, orderType: 'Limit', limitPrice: plan.takeProfit },
   });
@@ -286,6 +320,7 @@ try {
       await sleep(2_000);
       step('tvar po modify', await observe());
     }
+    if (plan.scenario === 'stop-limit' && placement.kind === 'acknowledged') await runStopLimitSteps(placement);
   }
   await sleep(plan.holdMs);
 } catch (reason) {
@@ -293,6 +328,38 @@ try {
   step('placeOso výjimka', message(reason));
 }
 await finish(await runCleanup());
+
+/**
+ * R11: kroky modify SL nohy na StopLimit. Každý krok jeden pokus, výsledek (přijato s/bez
+ * `stream-replaced`, chyba s důvodem) do záznamu. Před každým krokem znovu DISARMED (jako
+ * armed-gate.sh) a pozice přesně 1; jinak kroky končí a jde se rovnou do úklidu.
+ */
+async function runStopLimitSteps(acknowledged: Extract<RecordPlacement, { kind: 'acknowledged' }>) {
+  const stopId = acknowledged.legIds[0];
+  const fills = events.flatMap(item => (item.event.type === 'fill' ? [item.event.fill] : []));
+  const entryFill = averageFillPrice(fills, acknowledged.entryId);
+  step('stop-limit: fill vstupu', { entryFill });
+  for (const name of STOP_LIMIT_STEP_ORDER) {
+    const status = await readStatus().catch(() => null);
+    const controller = (status?.controller ?? {}) as { armed?: unknown };
+    if (!status || controller.armed !== false) { step('stop-limit: kopírka není prokazatelně DISARMED — kroky končí'); return; }
+    const net = await broker.listPositions(plan.accountId)
+      .then(items => items.reduce((sum, position) => sum + Math.abs(position.netQuantity), 0)).catch(() => null);
+    if (net !== 1) { step('stop-limit: pozice už není 1 — kroky končí', { net }); return; }
+    const anchor = pickCopierMarketPrice(Array.isArray(status.marketPrices) ? status.marketPrices : [], plan.symbol, Date.now());
+    const item = stopLimitSteps(plan, { entryFill, anchor }).find(candidate => candidate.name === name)!;
+    if (item.skip) { step(`stop-limit ${name}: přeskočeno`, { reason: item.skip, anchor }); continue; }
+    const problems = stopLimitStepProblems(item, plan);
+    if (problems.length) { step(`stop-limit ${name}: pojistka — kroky končí`, problems); return; }
+    step(`stop-limit ${name}`, { stopId, stopPrice: item.stopPrice, limitPrice: item.limitPrice, checks: item.checks, anchor });
+    const sentAt = Date.now();
+    await broker.modifyOrder(plan.accountId, stopId, { quantity: 1, orderType: 'StopLimit', stopPrice: item.stopPrice, limitPrice: item.limitPrice })
+      .then(result => step(`stop-limit ${name}: přijato`, { ms: Date.now() - sentAt, confirmedBy: result?.confirmedBy ?? null }))
+      .catch(reason => step(`stop-limit ${name}: chyba`, { ms: Date.now() - sentAt, error: message(reason) }));
+    await sleep(1_500);
+    step(`stop-limit tvar po ${name}`, await observe());
+  }
+}
 
 async function writeRecording(decision: CleanupDecision) {
   const placedAt = steps.find(item => item.step === 'placeOso')?.t ?? Infinity;
