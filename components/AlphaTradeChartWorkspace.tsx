@@ -273,11 +273,21 @@ export interface BacktestChartSessionBridge {
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
     price?: number,
   ) => void;
+  /** Tlačítka ve štítku (BE u pozice), stejně jako v LIVE. */
+  onOrderLineAction?: (line: BacktestChartOrderLine, actionId: string) => void;
   renderTradingPanel?: (context: {
     replay: ChartReplayState;
     candle: MarketCandle | null;
     instrument: MarketRoot;
   }) => React.ReactNode;
+  /** Panel Objednávka přilepený k pravé hraně grafu (jako LIVE). */
+  renderTradingDock?: (context: {
+    replay: ChartReplayState;
+    candle: MarketCandle | null;
+    instrument: MarketRoot;
+  }) => React.ReactNode;
+  /** Vrstva nad grafy (karty obchodů vlevo dole, hlášky štítků). */
+  renderChartOverlay?: () => React.ReactNode;
 }
 
 /**
@@ -317,8 +327,9 @@ interface AlphaTradeChartWorkspaceProps {
   onClose: () => void;
   backtestSession?: BacktestChartSessionBridge;
   /**
-   * Fullscreen obchodu (mimo backtest): indikátory sdílené s detailem —
-   * panely s nimi startují a každé zapnutí/vypnutí se propíše zpět.
+   * Fullscreen obchodu: indikátory sdílené s detailem — panely s nimi startují
+   * a každé zapnutí/vypnutí se propíše zpět. Backtest je dostane jen jako start
+   * nových panelů (uložená session má svůj stav a nic se nepropisuje).
    */
   tradeIndicators?: TradeChartIndicators;
   onTradeIndicatorsChange?: (next: TradeChartIndicators) => void;
@@ -1008,7 +1019,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             onPositionQuickOrder={context.tradingSettings.quickOrderButton || context.liveOrderEntry ? context.onPositionQuickOrder : undefined}
             positionQuickOrderLabel={context.liveOrderEntry ? 'Propsat box do objednávky' : undefined}
             liveSeries={Boolean(context.liveOrderEntry)}
-            chartOrderLabelSuffix={context.liveOrderEntry ? ' · návrh' : undefined}
+            // Pravý klik do grafu jen vyplní panel Objednávka (LIVE i backtest).
+            chartOrderLabelSuffix={context.liveOrderEntry || context.backtestSession ? ' · návrh' : undefined}
             onChartOrder={config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.onChartOrder
               : liveChartOrder}
@@ -1069,7 +1081,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onChange={orderLineSource.onOrderLineChange}
               onCancel={orderLineSource.onOrderLineCancel}
               onAddBracket={orderLineSource.onOrderLineAddBracket}
-              onAction={orderLineSource === liveOrderEntry ? liveOrderEntry?.onOrderLineAction : undefined}
+              onAction={orderLineSource?.onOrderLineAction}
             />
           ) : null}
           {(context.tradingSettings.tradeLines || context.tradingSettings.executionMarkers) && chartApi && config.root === context.backtestSession?.executionInstrument && (context.backtestSession.fills?.length || context.backtestSession.closedTrades?.length) ? (
@@ -1148,8 +1160,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const workspaceShellRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
   const replayToolbarRef = useRef<HTMLDivElement>(null);
-  // Jen fullscreen obchodu; backtest má vlastní uložený stav panelů.
-  const indicatorDefaults = backtestSession ? undefined : tradeIndicators;
+  // Výchozí indikátory nových panelů. Backtest: jen start nové session nebo
+  // nového panelu — uložené panely session mají vlastní stav (importLayout).
+  const indicatorDefaults = tradeIndicators;
   const savedLayoutId = backtestSession?.workspaceState?.layoutId as ChartWorkspaceLayoutId | undefined;
   const initialLayoutIdRef = useRef<ChartWorkspaceLayoutId>(
     savedLayoutId && getChartWorkspaceLayout(savedLayoutId).id === savedLayoutId ? savedLayoutId : loadLayoutId(layoutStorageKey, defaultLayoutId),
@@ -2948,6 +2961,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     return found;
   }, [replaySource, replay.cursorTime]);
   const tradingPanel = backtestSession?.renderTradingPanel?.({ replay, candle: replayCandle, instrument: backtestSession.executionInstrument });
+  const tradingDock = backtestSession?.renderTradingDock?.({ replay, candle: replayCandle, instrument: backtestSession.executionInstrument });
   const selectedPositionInstrument = activeControl?.config.root ?? initialRoot;
   const liveQuickOrder = backtestSession ? undefined : liveOrderEntry;
   const quickOrderDisabledReason = liveQuickOrder
@@ -3200,6 +3214,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               ? isDark ? 'border-emerald-500/30 bg-[#10251d] text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700'
               : isDark ? 'border-rose-500/30 bg-[#2a1519] text-rose-300' : 'border-rose-200 bg-rose-50 text-rose-700'}`}
           >{quickOrderFeedback.message}</div>}
+          {backtestSession?.renderChartOverlay?.()}
           {selectedFib && <FibDrawingFloatingToolbar
             engine={selectedFib.engine}
             drawing={selectedFib.drawing}
@@ -3412,6 +3427,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           />}
         </div>
       </WorkspaceDataContext.Provider>
+      {tradingDock}
       {review && <div ref={reviewSideRef} className="shrink-0 flex min-h-0" />}
       </div>
       {review && <div ref={reviewBottomRef} className="shrink-0" />}

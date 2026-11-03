@@ -288,6 +288,51 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-03 — Backtest graf dohnal LIVE: indikátory, panel Objednávka, BE, karty obchodů (Claude, nasazeno 3. 11. na Filipovo „nasaď“, jen web; worker beze změny)
+
+- Filip: „backtest graf je hodně pozadu od našeho live grafu“ → „udělej vše“. Jádro grafu je
+  sdílené (`AlphaTradeChartWorkspace` → `CandleKitTradeChart`), takže kreslení, kurzory, šablony,
+  crosshair i TF se zoomem backtest už měl. Pozadu byl ve dvou věcech: indikátory a obchodování z grafu.
+- **Indikátory:** nová backtest session / nový panel startuje s profilem deníku a LIVE (FVG, levely
+  vč. VWAP, struktura) — `tradeIndicators={startIndicators}`, `indicatorDefaults = tradeIndicators`.
+  Uložené panely session si drží svůj stav (importLayout), do profilu se nic nepropisuje.
+  Staré session se nemění: indikátory v nich zapne ƒ Indikátory (nebo Šablony).
+- **Panel Objednávka** (`components/BacktestOrderTicket.tsx`): stejný postup a vzhled jako LIVE
+  (Koupit/Prodat → fialový návrh v grafu → jedno velké tlačítko, Market/Limit/Stop, Kontrakty / Riziko $,
+  závorky v bodech/ticích/$/ceně, R:R, „Vyplněno/Zadáno“ ozvěna). Přilepený vpravo přes nový slot
+  `renderTradingDock` (globální CSS `.live-chart-ticket-dock`), otevřený/zavřený si pamatuje prohlížeč.
+  Cena = závěr svíčky replaye (bid = ask), odeslání jde jen do enginu session (Market hned, Limit/Stop
+  podle dalších svíček). Ze spodní lišty zmizelo zadávání (Mkt/Lmt/Stp, BUY/SELL) — je tam tlačítko
+  Objednávka s pozicí a P&L; účet, pozice (½, Zavřít) a čekající příkazy zůstaly.
+- **Pravý klik do grafu jen vyplní panel** (jako LIVE, text „· návrh“), dřív hned zadal příkaz. ⚡ Quick
+  Order z position boxu (nastavení) dál odesílá hned — beze změny.
+- **Štítky v grafu** (`lib/backtestChartTrading.ts` `withBacktestLineControls`): BE u pozice dvoukrokově
+  (zamčené s důvodem, dokud cena replaye není za vstupem / SL už je na BE nebo v zisku), mrtvá zóna 4 px,
+  × čekajícího příkazu dvoukrokově, × pozice zavírá jedním klikem (jako LIVE). `onOrderLineAction` je
+  nově i v bridge backtestu; workspace bere `orderLineSource?.onOrderLineAction` (LIVE beze změny).
+- **Karty obchodů vlevo dole** (`LiveTradeToasts` přes `extra`, slot `renderChartOverlay`): Zadáno,
+  Vyplněno, Otočeno, TP/SL/BE zasažen s P&L, Pozice zavřena, SL na BE. Čas = čas replaye. Události
+  starší než otevření session se jen zapamatují.
+- Ověřeno na izolované QA stránce `tests/qa/backtest.html` (syntetická data, falešný Supabase, port 4184;
+  :3000/5273 drží jiné servery): odeslání Market/Limit, karta pozice, BE blokace → BE → „SL na BE
+  zasažen −$0.74“, pravý klik → návrh bez odeslání, × čekajícího (Opravdu?) i pozice, nová session se
+  zapnutými indikátory. S dočasně upravenými daty (skoky + různé knoty, vráceno) se v přehrávání
+  backtestu kreslí FVG i BoS/CHoCH (9 zlomů) — to v zápisu 30. 10. ověřené nebylo. Proč syntetická data
+  dřív strukturu neměla: 3barový pivot chce striktně vyšší maximum, zaokrouhlená sinusovka má shodná.
+- Výkon 10× (viditelný panel, VWAP + levely): ~10 svíček/s, 59–60 fps; s otevřeným panelem 1 dlouhá úloha
+  za 8 s (64 ms), se zavřeným 5 (264 ms) — panel přehrávání nebrzdí. Měření se všemi indikátory
+  neplatné (panel prohlížeče se skryl, rAF 1 Hz).
+- Revize (code-reviewer, jen čtení): nic blokujícího, LIVE beze změny; opraveno před commitem:
+  (A) panel a čáry čtou cenu z posledního překreslení (při přehrávání až ~0,5 s starou), engine plní
+  za čerstvý závěr → `backtestSubmitDraft` posune SL/TP Marketu o rozdíl a znovu zkontroluje (SL za
+  cenou = „Neodesláno: cena se mezitím pohnula“); (B) engine při přikoupení přepíše SL/TP celé pozice
+  závorkami příkazu (`order.stopLoss ?? current.stopLoss`) — panel teď varuje („nahradí SL/TP celé
+  pozice (i SL na BE)“ / „proti pozici ji nejdřív zmenší“); „Vyplněno“ jen při skutečném plnění (Market
+  v čase flat session engine zruší); BE karta podle SL = vstup (i se skluzem); návrh se zahodí při
+  novém startu replaye. Ponecháno: ⚡ Quick Order dál odesílá hned (nastavení, managed plan);
+  `ticketDraft*` v `services/backtestOrderLines.ts` jsou teď nepoužité (testy je drží); formulář
+  panelu je kopie LIVE (~250 řádků) — při další změně panelu vytáhnout společný formulář.
+
 ### 2026-11-02 večer — rollout dat LIVE telefonu (Claude, NASAZENO: DB + web + worker + iPhone)
 
 - Filip: „udělej to vše za mě“ (není u PC). Nasazen `5f181808` (23 oprav nezávislé revize nad

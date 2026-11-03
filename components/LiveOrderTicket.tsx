@@ -340,8 +340,8 @@ interface Props {
   onClose: () => void;
 }
 
-/** Číselné pole: při psaní drží text, potvrzuje se Enterem nebo opuštěním. */
-const NumberField: React.FC<{
+/** Číselné pole: při psaní drží text, potvrzuje se Enterem nebo opuštěním (i panel backtestu). */
+export const NumberField: React.FC<{
   value: number | null;
   format: (value: number) => string;
   onCommit: (value: number) => void;
