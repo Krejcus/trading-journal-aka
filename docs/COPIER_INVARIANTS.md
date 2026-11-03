@@ -288,6 +288,12 @@ existující ochranu.
   přikoupení do pozice (`reviewPendingScaleIns` → `cancelOwnManualEntry`, raw
   broker mimo `dispatchBroker`) běží i pod kill a za DISARMED — jen zrušení,
   jeden pokus, nikdy zápis, který by expozici vytvořil.
+  Ruční `manage-leader-order` `cancel-entry` (fáze 2a, výslovně zapsáno 3. 11. 2026
+  s C7 „Zrušit čekající“): zrušení VLASTNÍHO přijatého ručního vstupu / přikoupení
+  s nulovým fillem z čerstvého REST čtení, raw broker mimo `dispatchBroker`, jeden
+  pokus — kill, DISARM ani brzda po zadání (agent, relay supersede) ho nezastaví.
+  C7 nepřidává novou výjimku: posílá N× tutéž akci. Ochrannou nohu otevřené pozice
+  ani cizí příkaz žádná z výjimek nikdy neruší (INV-MANUAL-01, C7).
 - Bezpečné změny vs. nebezpečné: Bezpečné je zpřesnit audit a doručení brzdy.
   Nebezpečné je zaměnit kill za dočasný boolean ovládaný posledním poll response.
 
@@ -1911,6 +1917,58 @@ existující ochranu.
     zpracováním liquidate u brokera, liquidate zruší.
   Hlídá test: `tests/manualEntryBareClose.test.ts` (mutačně ověřeno 18 pravidel),
   `tests/localCopierExecutionAgent.test.ts` (capability).
+- **„Zrušit vše“ = zrušit VLASTNÍ čekající vstupy, nikdy ochranu pozice (C7, 3. 11. 2026,
+  `docs/reviews/trading-gaps-designs/safety.md`; oponentura copier-design-critic: návrh OK, diff
+  „OPRAVIT PŘED COMMITEM“ → opraveno týž den, viz výsledek stavem níže):**
+  žádný nový příkaz ani výjimka — N× existující `manage-leader-order` `cancel-entry`, každý
+  s vlastním `operationId`, sekvenčně, výsledek po položkách, nic se automaticky neopakuje
+  (`lib/liveCancelPending.ts:cancelOwnPendingEntries`). Capability `manual-order-cancel-pending-v1`
+  (worker se správou); bez ní UI nic nenabídne.
+  - **Nikdy:** „Zrušit čekající“ neruší ochrannou SL/TP nohu otevřené pozice (zrušení zvětšuje
+    riziko — INV-BRAKE-01/02; kdo chce pryč i pozici, má Flatten), cizí příkaz bez stopy appky
+    (může to být uživatelův ochranný Stop; duch INV-PART-03 — appka ho jen spočítá a pošle do
+    Tradovate / na Flatten) ani částečně vyplněný vstup (INV-TRAD-02: zbytek by šel i s nohami,
+    kaskáda NEOVĚŘENÁ → blokováno s kódem `entry-partially-filled` „pozice je otevřená, zavři × /
+    Flatten“). Pozastavené nohy čekajícího vstupu mají odejít s parentem (nativní OSO) — u liquidate
+    ověřeno záznamem (`tests/fixtures/tradovate-leader-scale-in.json`, i TP přikoupení BEZ `parentId`),
+    u přímého zrušení rodiče **NEOVĚŘENO** (hlavně TP přikoupení bez `parentId`; po čistém zrušení
+    worker nohy nečte — vědomá mezera, DEMO záznam zrušení čekajícího přikoupení chybí). Obecné
+    `cancel-order` (starý Dashboard) worker odmítne `unsupported-copy-command:cancel-order` bez
+    jakéhokoli zápisu; relay ho nepouští.
+  - Status `pendingOwnEntries` (`selectOwnPendingEntries`, jen zobrazení INV-UI-01/03) = vlastní
+    `acknowledged` Limit/Stop záznam leadera s id vstupu i obou nohou ∩ otevřený příkaz v cache
+    streamu s fillem 0, stejného symbolu/strany/typu, bez `parentOrderId` a s id, které není id
+    žádné vlastní nohy; bez rozběhnutého zrušení či nevyřešené změny. `pendingCancelContext` jen
+    počítá, co zůstává (cizí, ochranné nohy, částečně vyplněné) a proč teď nejde nic
+    (nevyřešený ruční vstup). Worker při každém zrušení vše ověří znovu čerstvým REST čtením.
+  - **Výsledek `cancel-entry` jen stavem (od C7, `lib/liveCancelPending.ts:cancelEntryOutcome`):**
+    adaptér `cancelOrder` skončí úspěchem i u příkazu, který se mezitím vyplnil (čeká na
+    canceled|filled|rejected), a Tradovate zrušení vyplněného vstupu ODMÍTNE („TooLateToCancel“).
+    Proto po úspěchu i po definitivním odmítnutí (inline i pozdě po timeoutu) ohraničené autoritativní
+    `findOrderById` vstupu: `canceled` s fillem 0 = `acknowledged` (po odmítnutí `waived` „ne tímto
+    příkazem“ — kauzalita se netvrdí); jakýkoli fill = `rejected` s kódem `entry-filled` /
+    `entry-partially-filled` (nikdy „zrušeno“, kód je i v durable záznamu `resultCode` a vrací ho
+    idempotentní replay); vstup po odmítnutí dál čeká = `rejected` „vstup dál čeká“. Při konečném
+    fillu se PŘED uložením výsledku (pád mezi = záznam zůstane `unknown`, dořešení po startu kontrolu
+    zopakuje) ohraničeně přečtou obě nohy: chrání jen PŘESNĚ — obě `working`, otevřené qty = fill,
+    opačná strana, stejný symbol (`legsProtectionProblem`; přerostlá noha by po vyplnění otočila
+    pozici); jinak incident bez auto-close (INV-DEFAULT-02). Nečitelné = `unknown` + dořešení jen
+    čtením; `unknown`, u kterého vstup po ustálení (`settle`) dál pracuje (zrušení k brokerovi
+    nedorazilo, restart v `sending`), = `rejected` „zrušení se neprojevilo“ — vstup se znovu nabídne,
+    nic se automaticky neopakuje. Stream konec vstupu jen spustí totéž čtení (Order(Canceled) může
+    předběhnout Fill). Vyplnění mezi zobrazením a příkazem = blokováno s kódem `entry-filled`
+    „pozice je otevřená; nic se nezrušilo“. Zrušení přikoupení během běžící změny celé pozice = `busy`
+    (oponentura C17, P2), po změně celé pozice s neznámým výsledkem = `manage-unresolved`.
+  - UI (`cancelOwnPendingEntries`): výjimka relaye „neodesláno“ jen u prokazatelně neodeslaných vzorů
+    (`CANCEL_PENDING_NOT_SENT_PATTERN`, stejné jako `LiveTradingScreen`), jinak „výsledek neznámý“.
+    Status `manualOrderActions[].resultCode` nese kód vyplnění; push watchdogu pak hlásí „Vstup se
+    vyplnil během rušení“, nikdy „vstup dál čeká“ (`server/copierIncidentWatchdog.ts`).
+  Hlídá test (oprava oponentury diffu, mutačně ověřeno 16 mutací): `tests/liveCancelPending.test.ts`
+  (odmítnutí inline i pozdě, dvojí zrušení, přerostlé nohy, pořadí kontrola→záznam, restart v `sending`,
+  replay), `tests/manualOrderManage.test.ts` (`entry-filled`), `tests/manualScaleInReplay.test.ts`
+  (`manage-unresolved`), `tests/copierIncidentWatchdog.test.ts` (push).
+  Hlídá test: `tests/liveCancelPending.test.ts` (mutačně ověřeno), `tests/manualScaleInReplay.test.ts`
+  (busy), `tests/localCopierExecutionAgent.test.ts` (capability, odmítnutí `cancel-order`).
 - **Čáry obchodu na telefonu — napojení dat (2. 11. 2026):** `phoneTrade` dostává
   `manage`/`closeSupported`/`entryAvg` z `livePhoneManageFields` = výrazy PC grafu (capability
   + jediný vlastní obchod; × jen za dostupného runtime, zapnuté kopírky a ne shadow; BE průměr

@@ -91,6 +91,20 @@ export const supportsCopierManualOrderCloseBare = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY);
 
+/**
+ * Worker hlásí vlastní čekající vstupy leadera (`controller.pendingOwnEntries` + `pendingCancelContext`)
+ * a výsledek `cancel-entry` ověřuje stavem u brokera (C7, 3. 11. 2026): vyplnění během rušení =
+ * `rejected` s kódem `entry-filled` / `entry-partially-filled`, nikdy „zrušeno“. Bez ní UI „Zrušit
+ * čekající“ ani Dashboard „Zrušit příkaz“ nenabídne. Žádný nový příkaz: N× existující `cancel-entry`.
+ * Starý worker pole nepošle (UI nic nenabídne) a `cancel-order` z Dashboardu dál odmítá.
+ */
+export const COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY = 'manual-order-cancel-pending-v1';
+
+export const supportsCopierManualOrderCancelPending = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY);
+
 /** Worker umí smazat svou skupinu a běžet bez skupiny (11. 10. 2026). */
 export const COPIER_GROUP_DELETE_CAPABILITY = 'group-delete-v1';
 

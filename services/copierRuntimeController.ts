@@ -39,6 +39,14 @@ import {
   type BareLeaderTrade,
 } from '../lib/manualBareClose';
 import {
+  cancelEntryOutcome,
+  cancelEntryVerdict,
+  legsProtectionProblem,
+  selectOwnPendingEntries,
+  type PendingCancelContext,
+  type PendingOwnEntry,
+} from '../lib/liveCancelPending';
+import {
   leaderEntryPlaceAsPreview,
   MANUAL_ENTRY_MIN_INTERVAL_MS,
   type LeaderEntryPlaceCommand,
@@ -253,6 +261,15 @@ export interface CopierControllerStatus {
    */
   bareLeaderTrade?: BareLeaderTrade | null;
   /**
+   * C7 (3. 11. 2026): vlastní čekající vstupy leadera (ruční vstup z grafu i přikoupení) s nulovým
+   * fillem, které „Zrušit čekající“ zruší (N× `cancel-entry`). Ochranné nohy pozice, nohy čekajícího
+   * vstupu, částečně vyplněný vstup ani cizí příkazy sem z definice nepatří. Jen zobrazení
+   * (INV-UI-01/03) — worker při zrušení vše ověří znovu čerstvým REST čtením. Chybí u starého workeru.
+   */
+  pendingOwnEntries?: PendingOwnEntry[];
+  /** C7: co „Zrušit čekající“ VĚDOMĚ nechá (text potvrzení) a proč teď zrušit nejde; null = neznámé. */
+  pendingCancelContext?: PendingCancelContext | null;
+  /**
    * INV-TRAD-07: pracující příkazy typu, který appka nezná (TrailingStop, MIT, … zadané v
    * Tradovate) na účtech skupiny. Jen zobrazení (INV-UI-03) — blokují vstup, přikoupení i správu.
    */
@@ -293,6 +310,8 @@ export interface CopierControllerStatus {
     fromPrice: number | null;
     toPrice: number | null;
     reason?: string;
+    /** C7: `cancel-entry` skončil vyplněním vstupu (pozice je otevřená) — push nesmí tvrdit „vstup dál čeká“. */
+    resultCode?: CopierManualOrderActionRecord['resultCode'];
   }>;
   /**
    * Front kontrakt MNQ podle brokera (2. 11. 2026) a kdy se naposledy přečetl —
@@ -4161,6 +4180,36 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status) && (entryOperationId == null || record.entryOperationId === entryOperationId)
   )) ?? null;
   const manualOrderActionJobs = new Set<Promise<void>>();
+  /**
+   * C7 status: vlastní čekající vstupy leadera s nulovým fillem (∩ cache streamu) + co „Zrušit
+   * čekající“ vědomě nechá. Čistě z paměti, bez IO; chyba = prázdný výběr (nic se nenabídne).
+   */
+  const pendingOwnEntriesStatus = (): Pick<CopierControllerStatus, 'pendingOwnEntries' | 'pendingCancelContext'> => {
+    try {
+      const leader = retiredGroup ? null : group.leaderAccountId ?? null;
+      const records = manualEntryRecords();
+      const byOperation = new Map(records.map(record => [record.operationId, record]));
+      const view = selectOwnPendingEntries({
+        leaderAccountId: leader,
+        records: records.map(record => ({
+          operationId: record.operationId, status: record.status, createdAt: record.createdAt, tag: record.tag,
+          scaleIn: record.scaleIn === true, bare: record.bare === true,
+          entryBrokerOrderId: record.entryBrokerOrderId, stopBrokerOrderId: record.stopBrokerOrderId, targetBrokerOrderId: record.targetBrokerOrderId,
+          lateEntryBrokerOrderId: record.lateResult?.entryBrokerOrderId, cancelStatus: record.cancel?.status,
+          request: { accountId: record.request.accountId, symbol: record.request.symbol, side: record.request.side, quantity: record.request.quantity, orderType: record.request.orderType },
+        })),
+        openOrders: leader == null ? [] : (liveOrdersByAccount.get(leader)?.values() ?? []),
+        // Rozběhnuté cílené zrušení workerem (ještě bez durable `sent`/`failed`) nebo nevyřešená změna obchodu.
+        excluded: operationId => (manualEntryCancelRequested.has(operationId)
+          && (byOperation.get(operationId)?.cancel == null || byOperation.get(operationId)?.cancel?.status === 'sending'))
+          || unresolvedManualOrderAction(operationId) != null,
+        blockedReason: unresolvedManualEntry() ? 'Ruční vstup má neznámý výsledek — nejdřív ho vyřeš na Live Dashboardu.' : null,
+      });
+      return { pendingOwnEntries: view.entries, pendingCancelContext: view.context };
+    } catch {
+      return { pendingOwnEntries: [], pendingCancelContext: null };
+    }
+  };
   /** Průměrná cena fillů vlastních vstupů (z fill eventů brokera, nikdy TV/IBKR). */
   const ownEntryFillPrices = new Map<string, { quantity: number; avg: number }>();
   const ownEntryFillIds = new Set<string>();
@@ -4446,8 +4495,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (lookup.completeness !== 'authoritative' || !lookup.order) return null;
     const order = lookup.order;
     if (action.action === 'cancel-entry') {
-      if (order.status === 'canceled') return { status: 'acknowledged', reason: 'potvrzeno čtením u brokera' };
-      return isOpenOrderStatus(order.status) ? null : { status: 'waived', reason: `cílový příkaz skončil (${order.status})` };
+      // C7: úspěch jen `canceled` s nulovým fillem; fill (i dílčí, INV-TRAD-02) = zrušení nemělo plný účinek.
+      const verdict = cancelEntryVerdict(order);
+      return verdict ? { status: verdict.status, reason: verdict.reason } : null;
     }
     if (order.status === 'filled') {
       return { status: 'waived', reason: action.action === 'move-stop' ? 'SL se spustil — pozice zavřena stopem' : 'TP se vyplnil' };
@@ -4466,8 +4516,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return null;
   };
   const manageWritesInFlight = new Set<string>();
-  /** Dořeší `unknown` záznam čtením u brokera (jen čtení, žádný zápis). */
-  const resolveManualOrderActionByLookup = async (operationId: string): Promise<void> => {
+  /**
+   * Dořeší `unknown` záznam čtením u brokera (jen čtení, žádný zápis). `brokerRejection` = pozdní
+   * definitivní odmítnutí zápisu (C7: u `cancel-entry` rozhodne stav, ne text odmítnutí).
+   */
+  const resolveManualOrderActionByLookup = async (operationId: string, hint: { brokerRejection?: string } = {}): Promise<void> => {
     const record = manualOrderActionRecords().find(item => item.operationId === operationId && item.status === 'unknown');
     // Doplnění nohou (2. 11.) se automaticky nedořešuje: incident + auditovaný waiver.
     if (!record || group.leaderAccountId == null || record.action === 'attach-brackets') return;
@@ -4504,6 +4557,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     try {
       lookup = await options.broker.findOrderById(group.leaderAccountId, record.targetBrokerOrderId);
     } catch {
+      return;
+    }
+    if (record.action === 'cancel-entry') {
+      // C7 (oponentura diffu): výsledek zrušení jen stavem vstupu — i po odmítnutí brokerem a i když
+      // zrušení k brokerovi nedorazilo (restart v `sending`): vstup dál pracuje po ustálení = `rejected`
+      // „zrušení se neprojevilo“ (vstup se znovu nabídne, nic se automaticky neopakuje).
+      const order = lookup.completeness === 'authoritative' ? lookup.order : null;
+      const outcome = cancelEntryOutcome(order, { settled, brokerRejection: hint.brokerRejection ?? null });
+      if (!outcome) return;
+      // Vyplnění během rušení: ochranu ověřit DŘÍV, než se uloží konečný výsledek — pád mezi tím
+      // nechá záznam `unknown` a dořešení po startu kontrolu zopakuje (oponentura diffu, P3).
+      if (outcome.status === 'rejected' && outcome.open !== true && 'filled' in outcome && order) {
+        await checkCancelEntryFillProtection(operationId, record.entryOperationId, record.targetBrokerOrderId, outcome.filled, order);
+      }
+      const resultCode = outcome.code === 'entry-filled' || outcome.code === 'entry-partially-filled' ? outcome.code : undefined;
+      await persistManualOrderAction(operationId, current => (current?.status === 'unknown'
+        ? { ...current, status: outcome.status, reason: outcome.reason, ...(resultCode ? { resultCode } : {}), updatedAt: clock() }
+        : current!));
       return;
     }
     const verdict = classifyManagedOrderLookup(record, lookup, settled);
@@ -4594,6 +4665,41 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       (timer as { unref?: () => void }).unref?.();
     }
   };
+  /** Id nohou spravovaného obchodu z durable stopy (vlastní záznam / sledované OSO+bracket); null = neznámé. */
+  const managedTradeLegIds = (key: string): { stopId: string; targetId: string } | null => {
+    const own = manualEntryRecords().find(record => record.operationId === key);
+    if (own) return own.stopBrokerOrderId && own.targetBrokerOrderId ? { stopId: own.stopBrokerOrderId, targetId: own.targetBrokerOrderId } : null;
+    if (!key.startsWith('leader:')) return null;
+    const entryId = key.slice('leader:'.length);
+    const item = [...currentRuntime().osoOutbox.values(), ...currentRuntime().bracketOutbox.values()].find(candidate => candidate.leaderEntryOrderId === entryId);
+    return item?.leaderStopOrderId && item.leaderTargetOrderId ? { stopId: item.leaderStopOrderId, targetId: item.leaderTargetOrderId } : null;
+  };
+  /**
+   * C7: vstup se vyplnil (i z části) dřív, než ho broker zrušil — pozice je otevřená. Ochrana se ověří
+   * ohraničeným autoritativním čtením obou nohou: obě `working`, otevřené qty PŘESNĚ = fill, opačná
+   * strana a stejný symbol (`legsProtectionProblem`; přerostlá noha = není ochrana). Jinak incident
+   * bez auto-close (dílčí zrušení a kaskáda na nohy jsou NEOVĚŘENÉ). Jednou na operaci a proces; volá
+   * se PŘED uložením konečného výsledku (pád mezi = dořešení po startu ji zopakuje). Nic neposílá.
+   */
+  const cancelEntryFillChecked = new Set<string>();
+  const checkCancelEntryFillProtection = async (
+    operationId: string, key: string, entryId: string, filled: number, entry: { side: string; symbol: string } | null,
+  ): Promise<boolean> => {
+    const leader = group.leaderAccountId;
+    if (leader == null || cancelEntryFillChecked.has(operationId)) return true;
+    cancelEntryFillChecked.add(operationId);
+    const legs = managedTradeLegIds(key);
+    const reads = legs ? await Promise.all([boundedManagedOrderLookup(leader, legs.stopId), boundedManagedOrderLookup(leader, legs.targetId)]) : [];
+    const orders = reads.map(read => (read?.completeness === 'authoritative' ? read.order : null));
+    const problem = legs ? legsProtectionProblem(orders, filled, entry) : 'nohy neznámé';
+    if (problem == null) {
+      manualEntryAudit(operationId, 'blocked', `cancel-entry ${entryId}: vstup se při rušení vyplnil (${filled}) — pozice chráněná SL/TP (ověřeno čtením)`, entryId);
+      return true;
+    }
+    const states = orders.map(order => (order ? `${order.status} ${order.quantity - order.filledQuantity}` : 'neověřeno')).join(' / ');
+    failClosed(new Error(`Copier fail-closed: vstup ${entryId} se při rušení vyplnil (${filled}) a SL/TP pozice nejsou potvrzené u brokera (${problem}${states ? `; ${states}` : ''}) — zkontroluj leadera v Tradovate`), { autoClose: false });
+    return false;
+  };
   /**
    * Změna s neznámým výsledkem se vyřeší jen pozorováním (P6, žádné TTL):
    * příkaz leadera má novou cenu → provedeno; zrušený vstup / ukončený příkaz
@@ -4603,9 +4709,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const action = manualOrderActionRecords().find(record => record.status === 'unknown' && record.targetBrokerOrderId === order.brokerOrderId);
     // Zavření obchodu (2d) se dořeší jen stavem pozice čtením, ne koncem příkazu (P4).
     if (!action || action.action === 'close-position' || action.action === 'attach-brackets') return;
+    if (action.action === 'cancel-entry') {
+      // C7: konec vstupu ve streamu jen spustí autoritativní čtení (fill může dorazit až po
+      // Order(Canceled), INV-TRAD-02) — mimo frontu událostí, nic se neposílá.
+      if (!isOpenOrderStatus(order.status)) void resolveManualOrderActionByLookup(action.operationId).catch(error => failClosed(errorOf(error), { autoClose: false }));
+      return;
+    }
     const price = action.action === 'move-stop' ? order.stopPrice : order.limitPrice;
-    const landed = action.action === 'cancel-entry' ? order.status === 'canceled'
-      : isOpenOrderStatus(order.status) && price === action.toPrice;
+    const landed = isOpenOrderStatus(order.status) && price === action.toPrice;
     const ended = !isOpenOrderStatus(order.status);
     if (!landed && !ended) return;
     await persistManualOrderAction(action.operationId, current => ({
@@ -5242,10 +5353,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const existing = manualOrderActionRecords().find(record => record.operationId === command.operationId);
     if (existing) {
+      // C7 (oponentura diffu, P3): replay (ztracený ACK, redelivery) vrátí i kód vyplnění a `waived`
+      // u zrušení vstupu mapuje stejně jako `finish` (výsledek známý, ne neznámý).
       return existing.payloadHash !== command.payloadHash
         ? manageBlocked(command, 'operation-conflict', 'Stejné id operace s jiným obsahem — nic se neodeslalo.')
-        : manageResult(command, existing.status === 'acknowledged' ? 'acknowledged' : existing.status === 'rejected' ? 'rejected'
-          : existing.status === 'not-sent' ? 'blocked' : 'unknown', { brokerOrderId: existing.targetBrokerOrderId, ...(existing.reason ? { reason: existing.reason } : {}) });
+        : manageResult(command, existing.status === 'acknowledged' || (existing.status === 'waived' && existing.action === 'cancel-entry') ? 'acknowledged'
+          : existing.status === 'rejected' ? 'rejected'
+            : existing.status === 'not-sent' ? 'blocked' : 'unknown', {
+          brokerOrderId: existing.targetBrokerOrderId, ...(existing.reason ? { reason: existing.reason } : {}),
+          ...(existing.resultCode ? { blockers: [{ code: existing.resultCode, text: existing.reason ?? 'Vstup se při rušení vyplnil — pozice je otevřená.' }] } : {}),
+        });
     }
     if (clock() + MANUAL_ENTRY_DEADLINE_RESERVE_MS >= deadlineAt) return manageBlocked(command, 'expired', 'Platnost příkazu vypršela — nic se neodeslalo.');
     if (manualEntryQueueFence() !== queuedFence) return manageBlocked(command, 'state-changed', 'Mezitím přišla změna spojení nebo účtů — zkus to znovu.');
@@ -5276,6 +5393,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (unresolvedManualEntry()) return manageBlocked(command, 'manual-entry-unresolved', 'Ruční vstup má neznámý výsledek — nejdřív ho vyřeš.');
     const leader = group.leaderAccountId;
     if ((pendingTradeIngressByAccount.get(leader) ?? 0) > 0) return manageBlocked(command, 'busy', 'Kopírka ještě zpracovává události leadera — zkus to znovu.');
+    // C7 / oponentura C17 (P2): zrušení přikoupení uprostřed změny celé pozice by odneslo i jeho
+    // pozastavené nohy a správa pozice by skončila falešným `unknown` — až po jejím výsledku.
+    if (command.action === 'cancel-entry' && manualEntryRecords().some(record => record.operationId === managed.key && record.scaleIn === true)) {
+      if (positionActionsInFlight.size > 0) return manageBlocked(command, 'busy', 'Běží změna celé pozice — přikoupení zruš až po jejím výsledku.');
+      // Oponentura diffu (P3): i po změně celé pozice s neznámým výsledkem (záznamy jejích nohou by jinak
+      // navždy zůstaly `unknown` a správa pozice by se zasekla). Cesta ven: Tradovate nebo Flatten.
+      if (unresolvedManualOrderAction(positionManageKey(managed.symbol))) {
+        return manageBlocked(command, 'manage-unresolved', 'Předchozí změna celé pozice má neznámý výsledek — přikoupení zruš v Tradovate nebo Flattenem.');
+      }
+    }
     let orders: BrokerOrder[];
     const readStartedAt = clock();
     // Posun SL/TP (oponentura 30. 10.): synchronní snímek dohnaného streamu adaptéru
@@ -5314,8 +5441,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const symbol = managed.symbol;
     const currentEntryPrice = entryOrder.limitPrice ?? entryOrder.stopPrice ?? null;
     if (command.action === 'cancel-entry') {
-      if (!entryOrder || !isOpenOrderStatus(entryOrder.status) || entryOrder.filledQuantity !== 0) {
-        return manageBlocked(command, 'entry-not-pending', 'Vstup už nečeká (vyplněný nebo ukončený) — zrušit jde jen čekající vstup.');
+      // INV-TRAD-02 / C7: částečně vyplněný vstup se neruší (zbytek by šel s nohami, kaskáda NEOVĚŘENÁ).
+      if (isOpenOrderStatus(entryOrder.status) && entryOrder.filledQuantity > 0) {
+        return manageBlocked(command, 'entry-partially-filled', `Vstup je z části vyplněný (${entryOrder.filledQuantity}/${entryOrder.quantity}) a dál pracuje — neruší se; pozice ${entryOrder.filledQuantity} je otevřená, zavři ji × nebo Flattenem.`);
+      }
+      // Oponentura diffu (P3): vyplnění mezi zobrazením a příkazem = „pozice je otevřená“, ne obecné „nečeká“.
+      if (!isOpenOrderStatus(entryOrder.status) && (entryOrder.status === 'filled' || entryOrder.filledQuantity > 0)) {
+        const full = entryOrder.status === 'filled' || entryOrder.filledQuantity >= entryOrder.quantity;
+        return manageBlocked(command, full ? 'entry-filled' : 'entry-partially-filled', full
+          ? `Vstup se mezitím vyplnil (${Math.max(entryOrder.filledQuantity, entryOrder.quantity)}) — pozice je otevřená; nic se nezrušilo, zavři ji × nebo Flattenem.`
+          : `Vstup se mezitím z části vyplnil (${entryOrder.filledQuantity}/${entryOrder.quantity}) a skončil — pozice je otevřená; nic se nezrušilo, zavři ji × nebo Flattenem.`);
+      }
+      if (!isOpenOrderStatus(entryOrder.status) || entryOrder.filledQuantity !== 0) {
+        return manageBlocked(command, 'entry-not-pending', 'Vstup už nečeká (ukončený) — nic se nezrušilo.');
       }
       const followerWithPosition = group.followers.find(follower => (positionsByAccount.get(follower.accountId)?.get(symbol) ?? 0) !== 0);
       if (followerWithPosition) return manageBlocked(command, 'follower-has-position', `Follower ${followerWithPosition.accountId} už má na symbolu pozici — vstup zruš v Tradovate a pozice zkontroluj.`);
@@ -5461,14 +5599,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }));
     const generation = safetyGeneration;
     return async () => {
-      const finish = async (status: CopierManualOrderActionRecord['status'], reason?: string): Promise<LeaderOrderManageResult> => {
+      const finish = async (
+        status: CopierManualOrderActionRecord['status'],
+        reason?: string,
+        resultCode?: CopierManualOrderActionRecord['resultCode'],
+      ): Promise<LeaderOrderManageResult> => {
         // Brzda během zápisu (oponentura 2c, bod 6): leader se změnil, kopie followerům už ne.
         if (status === 'acknowledged' && command.action !== 'cancel-entry' && (generation !== safetyGeneration || !gate.armed)) {
           reason = `${reason ? `${reason}; ` : ''}kopírka se mezitím zastavila — ${command.action === 'close-position'
             ? 'kopie followerů mohly zůstat otevřené, použij Flatten'
             : `followeři mají původní ${command.action === 'move-stop' ? 'SL' : 'TP'}`}`;
         }
-        await persistManualOrderAction(command.operationId, current => ({ ...current!, status, ...(reason ? { reason } : {}), updatedAt: clock() }))
+        await persistManualOrderAction(command.operationId, current => ({ ...current!, status, ...(reason ? { reason } : {}), ...(resultCode ? { resultCode } : {}), updatedAt: clock() }))
           .catch(error => failClosed(new Error(`Správa vstupu: výsledek se nepodařilo uložit (${errorOf(error).message})`), { autoClose: false }));
         manualEntryAudit(command.operationId, status === 'acknowledged' ? 'modified' : status === 'rejected' ? 'rejected' : status === 'unknown' ? 'unknown' : 'blocked',
           `${command.action} ${targetOrderId}${command.newPrice != null ? ` → ${command.newPrice}` : ''}${reason ? `: ${reason}` : ''} ${manualOrderTimingText(timing, clock())}`, targetOrderId);
@@ -5476,8 +5618,35 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return manageResult(command, status === 'acknowledged' || status === 'waived' ? 'acknowledged' : status === 'rejected' ? 'rejected' : status === 'not-sent' ? 'blocked' : 'unknown', {
           brokerOrderId: targetOrderId,
           ...(reason ? { reason } : {}),
-          ...(status === 'not-sent' ? { blockers: [{ code: 'not-sent', text: reason ?? 'Nic se neodeslalo.' }] } : {}),
+          ...(status === 'not-sent' ? { blockers: [{ code: 'not-sent', text: reason ?? 'Nic se neodeslalo.' }] }
+            : resultCode ? { blockers: [{ code: resultCode, text: reason ?? 'Vstup se při rušení vyplnil — pozice je otevřená.' }] } : {}),
         });
+      };
+      /**
+       * C7: výsledek `cancel-entry` jen stavem vstupu u brokera (ohraničené autoritativní čtení) — po
+       * „úspěchu“ adaptéru (čeká na canceled|filled|rejected) i po definitivním odmítnutí brokerem
+       * („TooLateToCancel“ = vstup se vyplnil, oponentura diffu P2). Fill = `rejected` s kódem, nikdy
+       * „zrušeno“; ochrana se ověří PŘED uložením konečného výsledku. Nečitelné = `unknown` + dořešení čtením.
+       */
+      const settleCancelEntryByState = async (brokerRejection: string | null): Promise<LeaderOrderManageResult> => {
+        timing.verify = 'rest';
+        const verifyStartedAt = clock();
+        const lookup = await boundedManagedOrderLookup(leader, targetOrderId);
+        timing.verifyMs = clock() - verifyStartedAt;
+        const order = lookup?.completeness === 'authoritative' ? lookup.order : null;
+        const outcome = cancelEntryOutcome(order, { settled: false, brokerRejection });
+        if (!outcome) {
+          const result = await finish('unknown', brokerRejection
+            ? `Broker zrušení odmítl (${brokerRejection.slice(0, 120)}), stav vstupu zatím nejde ověřit — ověřuji čtením, zkontroluj leadera v Tradovate.`
+            : 'Broker zrušení přijal, stav vstupu zatím nejde ověřit — ověřuji čtením, zkontroluj leadera v Tradovate.');
+          scheduleManualOrderActionLookup(command.operationId);
+          return result;
+        }
+        if (outcome.status !== 'rejected') return finish(outcome.status, outcome.status === 'acknowledged' ? undefined : outcome.reason);
+        if (outcome.code === 'cancel-not-effective') return finish('rejected', outcome.reason);
+        // Vyplněný (i z části) vstup: pozice je otevřená. Konečný (ne pracující) vstup → ověřit nohy.
+        if (outcome.open !== true && order) await checkCancelEntryFillProtection(command.operationId, managed.key, targetOrderId, outcome.filled, order);
+        return finish('rejected', outcome.reason, outcome.code);
       };
       // Synchronní kontrola těsně před zápisem (P7 + oponentura 2a b1): fence i celá brána dosahu.
       if (clock() >= deadlineAt) return finish('not-sent', 'Platnost příkazu vypršela — nic se neodeslalo.');
@@ -5540,7 +5709,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           settleLate();
           scheduleManualOrderActionLookup(command.operationId);
           // Pozdní výsledek zápisu: úspěch se ověří čtením, definitivní odmítnutí = rejected.
+          // C7: u zrušení vstupu rozhodne i po odmítnutí stav (vstup se mohl vyplnit) — surové `rejected` nikdy.
           void write.then(() => resolveManualOrderActionByLookup(command.operationId), error => {
+            if (command.action === 'cancel-entry') {
+              return resolveManualOrderActionByLookup(command.operationId, definitiveBrokerRejection(error) ? { brokerRejection: errorOf(error).message } : {});
+            }
             if (!definitiveBrokerRejection(error)) return resolveManualOrderActionByLookup(command.operationId);
             if (!manualOrderActionRecords().some(record => record.operationId === command.operationId && record.status === 'unknown')) return undefined;
             return persistManualOrderAction(command.operationId, current => (current?.status === 'unknown'
@@ -5549,7 +5722,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }).catch(error => failClosed(errorOf(error), { autoClose: false }));
           return result;
         }
-        if (command.action === 'cancel-entry') return finish('acknowledged');
+        // C7: `cancelOrder` adaptéru skončí úspěchem i u vstupu, který se mezitím vyplnil — „zrušeno“ jen stavem.
+        if (command.action === 'cancel-entry') return settleCancelEntryByState(null);
         // Nejrychlejší důkaz: adaptér viděl Replaced přesně tohoto commandu a příkaz
         // leadera otevřený v odeslaném tvaru. Jen výsledek akce — do cache controlleru
         // ani read modelu se nezapisuje, zrcadlení followerům jde dál přes eventTail.
@@ -5583,6 +5757,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       } catch (error) {
         if (error instanceof CopierDispatchRevokedError) return finish('not-sent', `Pojistka kopírky změnu zastavila (${error.message}).`);
         const message = errorOf(error).message;
+        // C7 (oponentura diffu, P2): odmítnuté zrušení vstupu se rozhodne stavem — „TooLateToCancel“
+        // znamená typicky vyplněný vstup (pozice otevřená), dvojí zrušení vstup už zrušený.
+        if (command.action === 'cancel-entry' && definitiveBrokerRejection(error)) return settleCancelEntryByState(message);
         if (definitiveBrokerRejection(error)) {
           return finish('rejected', command.action === 'move-stop' && /InvalidPrice/i.test(message)
             ? 'Broker posun odmítl — cena je přes trh, SL se nezměnil.' : message.slice(0, 200));
@@ -5597,7 +5774,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
         }
         const pending = await finish('unknown', message.slice(0, 200));
-        if (command.action !== 'cancel-entry') scheduleManualOrderActionLookup(command.operationId);
+        // C7: i zrušení vstupu se dořeší jen čtením (stream konec vstupu čtení jen spouští).
+        scheduleManualOrderActionLookup(command.operationId);
         return pending;
       } finally {
         if (timer) clearTimeout(timer);
@@ -21358,6 +21536,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         })(),
         // C8: jen výběr pro UI (× u holé pozice); worker při zavření vše ověří znovu.
         bareLeaderTrade: selectBareLeaderTrade(manualEntryRecords(), { solo: soloGroupOn(), leaderAccountId: group.leaderAccountId ?? null }),
+        // C7: jen výběr pro UI („Zrušit čekající“); worker při každém zrušení vše ověří znovu (REST).
+        ...pendingOwnEntriesStatus(),
         unsupportedOrders: [...liveOrdersByAccount.entries()]
           .filter(([accountId]) => accountId === group.leaderAccountId || group.followers.some(follower => follower.accountId === accountId))
           .flatMap(([, orders]) => [...orders.values()])
@@ -21400,6 +21580,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           operationId: record.operationId, entryOperationId: record.entryOperationId, action: record.action,
           status: record.status, createdAt: record.createdAt, updatedAt: record.updatedAt,
           fromPrice: record.fromPrice, toPrice: record.toPrice, ...(record.reason ? { reason: record.reason } : {}),
+          ...(record.resultCode ? { resultCode: record.resultCode } : {}),
         })),
         brokerFrontContract: brokerFrontContract ? { ...brokerFrontContract } : null,
         manualEntries: manualEntryRecords().slice(-10).map(record => ({

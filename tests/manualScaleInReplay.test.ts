@@ -509,6 +509,41 @@ describe('přikoupení do pozice: replay záznamu z DEMO (3. 11. 2026)', { timeo
       expect(ctx.broker.cancelRequestCount(PENDING.entryBrokerOrderId)).toBe(1);
     });
 
+    it('C7 / oponentura C17 (P2): zrušení přikoupení uprostřed změny celé pozice = busy, nic se neodešle', async () => {
+      const ctx = await setup();
+      await withPendingAdd(ctx, '0109');
+      const { loosened } = recording.prices;
+      let liquidateStarted = false;
+      let release: (() => void) | undefined;
+      ctx.broker.liquidatePosition = async () => {
+        liquidateStarted = true;
+        await new Promise<void>(resolve => { release = resolve; });
+        return { status: 'submitted' as const };
+      };
+      const closing = ctx.manage('posxcl0109', { action: 'close-position', price: loosened.stopLoss, quantity: 2, entryOperationId: 'entry:scalebase0109', scope: 'position' });
+      for (let waited = 0; !liquidateStarted && waited < 2_000; waited += 5) await sleep(5);
+      expect(liquidateStarted).toBe(true);
+      const cancel = await ctx.manage('pospndc0109', { action: 'cancel-entry', price: recording.prices.addLimit, quantity: 1, entryOperationId: 'entry:scalepnd0109' });
+      expect(cancel.blockers.map(issue => issue.code)).toEqual(['busy']);
+      expect(ctx.broker.cancelRequestCount(PENDING.entryBrokerOrderId)).toBe(0);
+      release?.();
+      await closing;
+    });
+
+    it('C7 oponentura diffu (P3): po změně celé pozice s neznámým výsledkem zrušení přikoupení = manage-unresolved, nic se neodešle', async () => {
+      const ctx = await setup();
+      await withPendingAdd(ctx, '0110');
+      const { loosened } = recording.prices;
+      ctx.broker.liquidatePosition = async () => ({ status: 'indeterminate' as const, reason: 'test: výsledek neznámý' });
+      const closing = await ctx.manage('posxcl0110', { action: 'close-position', price: loosened.stopLoss, quantity: 2, entryOperationId: 'entry:scalebase0110', scope: 'position' });
+      expect(closing.status).toBe('unknown');
+      const cancel = await ctx.manage('pospndc0110', { action: 'cancel-entry', price: recording.prices.addLimit, quantity: 1, entryOperationId: 'entry:scalepnd0110' });
+      expect(cancel.status).toBe('blocked');
+      expect(cancel.blockers.map(issue => issue.code)).toEqual(['manage-unresolved']);
+      expect(cancel.blockers[0].text).toContain('Flattenem');
+      expect(ctx.broker.cancelRequestCount(PENDING.entryBrokerOrderId)).toBe(0);
+    });
+
     it('posun SL dál od trhu: rezerva bez otevřeného zisku (P1-1) — realizovaná ztráta se nesmaže', async () => {
       // Limit 900, realizováno −300, otevřeno +400: stará rezerva 900, správná 600; ztráta 2 lístků ke SL 27 930 ≈ 625 $.
       const ctx = await setup({ dailyLossLimitUsd: 900, realizedPnlUsd: -300, openPnlUsd: 400 });

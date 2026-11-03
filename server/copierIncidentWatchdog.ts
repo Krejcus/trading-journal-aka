@@ -680,6 +680,13 @@ export function manualOrderActionNotifications(
     if (!Number.isFinite(updatedAt) || now - updatedAt > MANUAL_ENTRY_NOTIFY_WINDOW_MS) continue;
     const label = MANAGE_ACTION_LABEL[asText(action.action) ?? ''] ?? 'Změna vstupu';
     const reason = asText(action.reason);
+    // C7: zrušení, během kterého se vstup vyplnil, NENÍ „vstup dál čeká“ — pozice je otevřená.
+    const resultCode = asText(action.resultCode);
+    if (status === 'rejected' && asText(action.action) === 'cancel-entry' && (resultCode === 'entry-filled' || resultCode === 'entry-partially-filled')) {
+      out.push({ key: `manual-order:${operationId}`, detail: `${status}:${resultCode}`, title: 'Vstup se vyplnil během rušení',
+        body: `${reason ?? 'Vstup se při rušení vyplnil — pozice je otevřená.'} Zkontroluj SL/TP v Tradovate.` });
+      continue;
+    }
     out.push(status === 'rejected'
       ? { key: `manual-order:${operationId}`, detail: status, title: `${label} odmítnut`, body: `${reason ?? 'Broker změnu odmítl'}.${asText(action.action) === 'cancel-entry' ? ' Vstup dál čeká — zkontroluj ho v Tradovate.' : asText(action.action) === 'close-position' ? ' Zkontroluj leadera v Tradovate — pozice a ochrana.' : ' Leader i followeři mají původní cenu.'}` }
       : { key: `manual-order:${operationId}`, detail: status, title: `${label}: výsledek neznámý`, body: 'Zkontroluj leadera v Tradovate; kopírka se po výpadku sama nezapne, dokud se to nevyřeší.' });

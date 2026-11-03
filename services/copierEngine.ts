@@ -409,6 +409,11 @@ export interface CopierManualOrderActionRecord {
   createdAt: number;
   updatedAt: number;
   reason?: string;
+  /**
+   * C7: kód výsledku `cancel-entry`, když se vstup při rušení vyplnil (pozice je otevřená) — idempotentní
+   * replay stejného `operationId` ho vrátí v `blockers`, aby UI ukázalo „pozice je otevřená“, ne „odmítnuto“.
+   */
+  resultCode?: 'entry-filled' | 'entry-partially-filled';
   waiver?: { at: number; reason: string };
 }
 

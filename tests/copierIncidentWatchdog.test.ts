@@ -970,4 +970,14 @@ describe('fáze 2a: push o neúspěšné změně ručního vstupu', () => {
     expect(run([action({ status: 'acknowledged' })])).toEqual([]);
     expect(run([action({ updatedAt: NOW - 11 * 60_000 })])).toEqual([]);
   });
+
+  it('C7: zrušení, během kterého se vstup vyplnil, netvrdí „vstup dál čeká“ — pozice je otevřená', () => {
+    const filled = run([action({ action: 'cancel-entry', resultCode: 'entry-filled', reason: 'Vstup se vyplnil (2) dřív, než ho broker zrušil — pozice je otevřená; zavři ji × nebo Flattenem.' })])[0];
+    expect(filled).toMatchObject({ title: 'Vstup se vyplnil během rušení', kind: 'opened' });
+    expect(filled.body).toContain('pozice je otevřená');
+    expect(filled.body).not.toContain('dál čeká');
+    expect(run([action({ action: 'cancel-entry', resultCode: 'entry-partially-filled' })])[0].title).toBe('Vstup se vyplnil během rušení');
+    // Bez kódu (zrušení odmítnuté / bez účinku) zůstává „vstup dál čeká“.
+    expect(run([action({ action: 'cancel-entry', reason: 'Broker zrušení odmítl — vstup dál čeká' })])[0].body).toContain('Vstup dál čeká');
+  });
 });
