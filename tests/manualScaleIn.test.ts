@@ -377,3 +377,26 @@ describe('scale-in: doplněné testy po nezávislé kontrole (3. 11.)', () => {
     expect(trimManualEntryRecords(records.map(item => ({ ...item, live: true })), 50, item => item.live)).toHaveLength(55);
   });
 });
+
+describe('hlídání nadkrytí: incident jen za zapnuté kopírky (Filip 3. 11., oponentura kola 3)', () => {
+  it('za ARMED po ustálení incident jednou; za DISARMED upozornění; přechod nic nevyhlásí', async () => {
+    const { overCoverStep } = await import('../services/manualScaleIn');
+    const base = { overCovered: true, transient: false, armed: true, now: 0, settleMs: 5_000 };
+    expect(overCoverStep(undefined, base)).toEqual({ next: 0, action: 'none' });
+    expect(overCoverStep(0, { ...base, now: 5_000 })).toEqual({ next: 'incident', action: 'incident' });
+    expect(overCoverStep('incident', { ...base, now: 9_000 })).toEqual({ next: 'incident', action: 'none' });
+    expect(overCoverStep(0, { ...base, now: 5_000, armed: false })).toEqual({ next: 'warned', action: 'warn' });
+    expect(overCoverStep('warned', { ...base, now: 9_000, armed: false })).toEqual({ next: 'warned', action: 'none' });
+    expect(overCoverStep(0, { ...base, now: 5_000, transient: true })).toEqual({ next: undefined, action: 'none' });
+    expect(overCoverStep('incident', { ...base, transient: true })).toEqual({ next: 'incident', action: 'none' });
+    expect(overCoverStep('incident', { ...base, overCovered: false })).toEqual({ next: undefined, action: 'none' });
+  });
+
+  it('nadkrytí z DISARMED přetrvá do ARMED (automatické pokračování) → incident hned, upozornění ho neschová', async () => {
+    const { overCoverStep } = await import('../services/manualScaleIn');
+    const base = { overCovered: true, transient: false, armed: true, now: 20_000, settleMs: 5_000 };
+    expect(overCoverStep('warned', base)).toEqual({ next: 'incident', action: 'incident' });
+    // Během rozpracovaných eventů počká na klid, ale stav `warned` nezahodí.
+    expect(overCoverStep('warned', { ...base, transient: true })).toEqual({ next: 'warned', action: 'none' });
+  });
+});

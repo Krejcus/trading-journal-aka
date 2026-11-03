@@ -411,3 +411,27 @@ export function trimManualEntryRecords<T>(records: readonly T[], keep: number, p
     return true;
   });
 }
+
+/** Stav hlídání nadkrytí na symbolu: začátek měření (ms), `incident` (vyhlášen) nebo `warned` (upozornění za DISARMED). */
+export type OverCoverState = number | 'incident' | 'warned';
+
+/**
+ * Krok hlídání nadkrytí (Filip 3. 11.: incident jen za zapnuté kopírky; oponentura kola 3):
+ * ustálené nadkrytí za ARMED = incident (jednou); za DISARMED = jedno upozornění a stav `warned`.
+ * Nadkrytí, které z DISARMED přetrvá do ARMED (např. automatické pokračování po výpadku), vyhlásí
+ * incident hned po uklidnění — upozornění ho nesmí schovat. Přechod (rozpracované eventy, správa)
+ * zahodí jen rozběhnuté měření, nikdy vyhlášený stav.
+ */
+export function overCoverStep(state: OverCoverState | undefined, input: {
+  overCovered: boolean; transient: boolean; armed: boolean; now: number; settleMs: number;
+}): { next: OverCoverState | undefined; action: 'none' | 'incident' | 'warn' } {
+  if (!input.overCovered) return { next: undefined, action: 'none' };
+  if (state === 'incident') return { next: state, action: 'none' };
+  if (state === 'warned') {
+    return input.armed && !input.transient ? { next: 'incident', action: 'incident' } : { next: state, action: 'none' };
+  }
+  if (input.transient) return { next: undefined, action: 'none' };
+  const since = state ?? input.now;
+  if (input.now - since < input.settleMs) return { next: since, action: 'none' };
+  return input.armed ? { next: 'incident', action: 'incident' } : { next: 'warned', action: 'warn' };
+}

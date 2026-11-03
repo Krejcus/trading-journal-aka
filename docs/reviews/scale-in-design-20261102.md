@@ -90,8 +90,10 @@ auto-close, durable jednou).
   streamem / čtením; souhrn `acknowledged` / `rejected` / `blocked` / `unknown` („potvrzeno u x z y“).
   Restart: `sending` nohy → `unknown` (INV-OUTBOX-02, P1-4). Nikdy opakování.
 - Zavření celé pozice = `liquidate` (zruší i čekající přikoupení), ověření stavem u brokera (`executeClose`).
-- **Nadkrytí** (Σ zbytků vlastních SL nebo TP > |net|, trvá 5 s bez rozpracovaných eventů) = incident (P2-8),
-  i za DISARMED (vědomě: SL by prodal víc, než je pozice → otočení bez ochrany). Počítají se jen nohy lístků
+- **Nadkrytí** (Σ zbytků vlastních SL nebo TP > |net|, trvá 5 s bez rozpracovaných eventů) = incident (P2-8)
+  jen za zapnuté kopírky; za vypnuté jen jedno upozornění v auditu (Filip 3. 11.) + zrušení automatického
+  pokračování po výpadku; nadkrytí, které z DISARMED přetrvá do ARMED, vyhlásí incident hned
+  (`overCoverStep`, oponentura kola 3). Ruční ARM s otevřenou pozicí stejně nejde. Počítají se jen nohy lístků
   s fillem vstupu, každá nejvýš do vyplněného qty lístku — Suspended nohy čekajícího vstupu ne (diff P1-A:
   jinak by každý čekající Limit po 5 s vyhlásil falešný incident).
 - Zavření celé pozice jen když otevřená expozice lístků (fill vstupu − filly nohou) = |net|; kontrakty

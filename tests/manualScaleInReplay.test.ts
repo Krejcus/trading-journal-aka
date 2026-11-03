@@ -302,6 +302,20 @@ describe('přikoupení do pozice: replay záznamu z DEMO (3. 11. 2026)', { timeo
     expect(ctx.controller.status().armed).toBe(false);
   }, 30_000);
 
+  it('nadkrytí za vypnuté kopírky = jen upozornění v auditu, žádný incident (Filip 3. 11.)', async () => {
+    const ctx = await setup();
+    await ctx.place(ctx.command('scalebase0016', {}));
+    await ctx.settle();
+    await ctx.place(ctx.command('scaleadd00016', { position: addIntent([BASE.entryBrokerOrderId], 1) }));
+    await ctx.settle();
+    ctx.controller.disarm('manual');
+    await ctx.controller.waitForIdle();
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 1 }, receivedAt: ctx.clock.now } as never);
+    await holdFor(ctx, 8_000);
+    expect(ctx.controller.status().lastError).toBeNull();
+    expect(ctx.audits.filter(line => line.includes('scale-in-overcover'))).toHaveLength(1);
+  }, 30_000);
+
   it('selhané zrušení čekajícího přikoupení = viditelný incident (P2-1)', async () => {
     const ctx = await setup();
     await withPendingAdd(ctx, '0012');

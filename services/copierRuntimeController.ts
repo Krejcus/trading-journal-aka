@@ -134,7 +134,9 @@ import {
   scaleInEnabled,
   scaleInPositionLossPoints,
   positionOverCovered,
+  overCoverStep,
   trimManualEntryRecords,
+  type OverCoverState,
   type LeaderPositionModel,
   type ScaleInRecord,
 } from './manualScaleIn';
@@ -3761,8 +3763,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
   };
-  /** Nadkrytí vlastních nohou (P2-8): od kdy trvá na symbolu; incident až po ustálení. */
-  const scaleInOverCoveredSince = new Map<string, number>();
+  /** Nadkrytí vlastních nohou (P2-8): stav hlídání na symbolu (`overCoverStep`); incident až po ustálení. */
+  const scaleInOverCoverState = new Map<string, OverCoverState>();
   const SCALE_IN_OVERCOVER_SETTLE_MS = 5_000;
   const reviewScaleInCoverage = () => {
     const leader = group.leaderAccountId;
@@ -3771,21 +3773,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const symbols = new Set(manualEntryRecords().filter(record => record.status === 'acknowledged').map(record => record.request.symbol));
     for (const symbol of symbols) {
       const model = leaderPosition(symbol);
-      if (!model || !positionOverCovered(model)) {
-        scaleInOverCoveredSince.delete(symbol);
-        continue;
-      }
       // Přechody (TP vyplněný, broker ještě nezmenšil SL; liquidate ruší nohy) jsou krátké — čeká se na ustálení.
-      // Rozběhnuté měření se zahodí, vyhlášený incident (−1) zůstává: neopakovat ho při každé dávce eventů.
-      if ((pendingTradeIngressByAccount.get(leader) ?? 0) > 0 || manualOrderActionJobs.size > 0) {
-        if (scaleInOverCoveredSince.get(symbol) !== -1) scaleInOverCoveredSince.delete(symbol);
-        continue;
-      }
-      const since = scaleInOverCoveredSince.get(symbol) ?? now;
-      scaleInOverCoveredSince.set(symbol, since);
-      if (now - since >= SCALE_IN_OVERCOVER_SETTLE_MS && since !== -1) {
-        scaleInOverCoveredSince.set(symbol, -1);
-        failClosed(new Error(`Copier fail-closed: SL/TP nohy leadera na ${symbol} kryjí víc kontraktů (${model.stopOpenQuantity}/${model.targetOpenQuantity}), než má pozice (${Math.abs(model.net ?? 0)}) — zkontroluj nohy v Tradovate`), { autoClose: false });
+      const step = overCoverStep(scaleInOverCoverState.get(symbol), {
+        overCovered: model != null && positionOverCovered(model),
+        transient: (pendingTradeIngressByAccount.get(leader) ?? 0) > 0 || manualOrderActionJobs.size > 0,
+        armed: gate.armed, now, settleMs: SCALE_IN_OVERCOVER_SETTLE_MS,
+      });
+      if (step.next === undefined) scaleInOverCoverState.delete(symbol);
+      else scaleInOverCoverState.set(symbol, step.next);
+      if (step.action === 'none' || !model) continue;
+      const text = `SL/TP nohy leadera na ${symbol} kryjí víc kontraktů (${model.stopOpenQuantity}/${model.targetOpenQuantity}), než má pozice (${Math.abs(model.net ?? 0)}) — zkontroluj nohy v Tradovate`;
+      if (step.action === 'incident') {
+        failClosed(new Error(`Copier fail-closed: ${text}`), { autoClose: false });
+      } else {
+        // Filip 3. 11.: za vypnuté kopírky jen upozornění; nadkrytá pozice se ale sama znovu nezapne.
+        options.onAudit?.([{ at: now, leaderEventId: `scale-in-overcover:${symbol}`, kind: 'blocked', reason: `scale-in-overcover: ${text}`, accountId: leader }]);
+        declineTransportResume('nadkrytí nohou leadera (SL/TP kryjí víc kontraktů, než má pozice)');
       }
     }
   };
