@@ -288,6 +288,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE latency: DEMO order write přes existující WebSocket (Codex, NASAZENO; A/B čeká na reset risku)
+
+- Ruční order write cesta umí pro explicitně povolený `manual-only` DEMO
+  worker použít už synchronizovaný Tradovate WebSocket místo nového REST
+  requestu. Podporuje place/OSO/OCO, modify, cancel a liquidate; produkční
+  výchozí stav zůstává vypnutý a funded/live instalace tím nejsou aktivované.
+- Přímý ACK je spárovaný podle request ID a nečeká za pomalou semantickou
+  hydratací Order/OrderVersion. Fill, Order a Position stav dál mění pouze
+  autoritativní broker stream. Pokud socket není před odesláním připravený,
+  použije se REST; po pokusu o WS zápis už timeout/close/send error znamená
+  neznámý výsledek bez REST fallbacku a bez automatického retry.
+- Ověření: cílené WS/broker testy 30/30, širší broker/controller/manual sady
+  308/308, plná sada 7 527 testů prošla (1 todo), produkční build a worker
+  bundle prošly. TypeScript s 4 GB ukázal pouze známý baseline Chrome extension
+  typů/pluginu a starší tuple chybu testu, nic v dotčených souborech.
+- Commit `fd26fe6a0a5041622d85d727365d877c2c391327` je na `main`; preview
+  `dpl_C4hc3qPSNfbqNJQwDxeQPv4xMnpQ` i produkce
+  `dpl_ARAv9y3a1HJg5CBKi77epB3WcwYW` jsou READY bez alias chyby. Mac worker
+  byl z téhož čistého SHA reinstalován s
+  `ALPHATRADE_TRADOVATE_WS_WRITES=on`; čerstvý a nainstalovaný bundle jsou
+  byte-for-byte shodné (SHA-256
+  `12c2edfac3f8ce60d2cda353afda8f0d08dd37ec8b6eb53b4d2d4add959d74f6`).
+- Post-install read-only reconcile: pouze DEMO účet `61038658`, connected,
+  OFF, flat, `positions=[]`, `orders=[]`, bez divergence/stuck/chyby a
+  `authoritativelyClean=true`. Žádný broker write po změně neproběhl: denní
+  broker ztráta je −197,56 USD proti internímu limitu 250 USD. Reálné A/B
+  `WS WRITE ACK` proti dosavadním REST 219–255 ms proto proběhne až po resetu
+  denního risku; do té doby se neuvádí neověřený rychlostní zisk.
+
 ### 2026-11-04 — LIVE latency: socket OrderVersion před pomalým REST (Codex, NASAZENO)
 
 - Poslední chráněný DEMO vzorek prokázal `broker→frame 53 ms`, ale Fill čekal
