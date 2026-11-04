@@ -27,6 +27,7 @@ import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import type { LivePhonePosition } from '../lib/livePhoneOrders';
+import { startLiveCommandTrace } from '../lib/liveCommandPerformance';
 import {
   LIVE_CONFIRM_WINDOW_MS,
   LIVE_PREVIEW_PLACE_BARE,
@@ -344,6 +345,8 @@ const PreviewSection: React.FC<{
     setNow(at);
     if (step.reason) { setPlaced({ key, error: step.reason }); return; }
     if (!step.send) return;
+    // Přesná kotva klik → pixel. Jen lokální diagnostika; do příkazu ani bran nevstupuje.
+    startLiveCommandTrace(shown!.operationId!, { kind: 'place-leader-entry' });
     placingRef.current = true;
     setPlacing(true);
     try {

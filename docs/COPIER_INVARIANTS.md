@@ -932,7 +932,10 @@ existující ochranu.
 - Expozice přímo do grafu (F2a, 30. 10. 2026, §10 plánu): na tématu budíčku
   událost `exposure` = AES-256-GCM (klíč `copierStatusNudgeKey` ze zařízení,
   AAD = téma) výřezu statusu: `controller.exposure` (smí být `null`), ≤ 10
-  událostí, `startedAt`, `displaySeq`, `displayBuiltAt`. Worker ji jen
+  událostí, `startedAt`, `displaySeq`, `displayBuiltAt`; od 4. 11. navíc ≤ 10
+  `manualEntries` a `manualOrderActions` jen pro korelaci `operationId` a
+  měření potvrzovací klik → worker/broker → první paint. Diagnostická pole se
+  do sloučeného controlleru vůbec nekopírují a nikdy neautorizují příkaz. Worker ji jen
   naplánuje z posluchače změny (mimo eventTail), nejvýš 1 požadavek najednou,
   rozestup ≥ 150 ms, fire-and-forget; klíč nedostanou zobrazovací doplňky
   (`onRealtimeConfig`) ani log. Prohlížeč: jen při otevřeném grafu, jen

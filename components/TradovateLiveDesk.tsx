@@ -1,4 +1,10 @@
 import { liveFillMarkersFromStatus, type LiveFillMarker } from '../lib/liveFillMarkers';
+import {
+  hasActiveLiveCommandTrace,
+  liveCommandWorkerStage,
+  markLiveCommandResult,
+  startLiveCommandTrace,
+} from '../lib/liveCommandPerformance';
 import { priceAlertWatchLabel } from '../lib/priceAlertWatchLabel';
 import { manualEntryDisplayStuckOperations } from '../lib/manualEntryDisplay';
 import { buildLeaderEntryPreviewCommand, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
@@ -934,6 +940,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // Záměr (zapnutí kopírky, otisk skupiny) z čerstvého stavu — worker ho
   // znovu ověří. Výsledek „neznámý“ nikdy neukazujeme jako „neodesláno“.
   const placeLeaderEntry = useCallback(async (rawDraft: LiveEntryPreviewDraft, operationId: string): Promise<LeaderEntryPlaceResult> => {
+    // Telefon volá přímo tento callback; desktop má přesnější kotvu už na potvrzovacím kliku.
+    startLiveCommandTrace(operationId, { kind: 'place-leader-entry' });
     const current = armStatusRef.current;
     const status = current.status;
     const executionGroup = copierWorkerExecutionGroup(status);
@@ -956,8 +964,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     // Nový stav (příkaz v grafu, karta) hned, ne až v dalším kole čtení.
     statusPollKickRef.current?.();
     if (!result || result.type !== 'leader-entry-placed') {
+      markLiveCommandResult(operationId, 'missing-result');
       throw new Error('Výsledek odeslání chybí — zkontroluj leadera v Tradovate, než to zkusíš znovu.');
     }
+    markLiveCommandResult(operationId, result.status);
     return result;
   }, []);
   const executeSafetyCommand = useCallback(async (command:
@@ -1047,6 +1057,20 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const chartLive = useMemo(() => (agentStatusFresh && !agentStatusRestored
     ? mergeCopierLiveExposure(agentStatus, agentStatusObservedAt, liveExposure)
     : { status: agentStatus, exposureObservedAt: agentStatusObservedAt }), [agentStatus, agentStatusObservedAt, agentStatusFresh, agentStatusRestored, liveExposure]);
+  // Pouze právě měřený příkaz: operationId z šifrované expozice spojí klik s
+  // workerovým fill/position časem. Staré záznamy se do měření nemíchají.
+  const tracedExposureCommand = [
+    ...(liveExposure?.payload.manualEntries ?? []).map(entry => ({
+      operationId: entry.operationId, updatedAt: entry.updatedAt,
+      stage: liveCommandWorkerStage(entry.timing), workerTiming: entry.timing,
+    })),
+    ...(liveExposure?.payload.manualOrderActions ?? [])
+      .filter(action => action.status === 'acknowledged' || action.status === 'waived')
+      .map(action => ({
+      operationId: action.operationId, updatedAt: action.updatedAt, stage: 'position' as const,
+      })),
+  ].filter(entry => hasActiveLiveCommandTrace(entry.operationId))
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
   const chartData = useLiveChartData({
     // Telefonní graf (2. 11.) potřebuje stejnou pozici leadera pro lištu, „Přidat SL/TP“ a P&L
     // skupiny v hlavičce; tempo čtení se tím nemění (`chartOpenRef`).
@@ -1907,6 +1931,12 @@ acceptAgentStatus((await executeAgent({
             ? {
               id: `${liveExposure.payload.startedAt}:${liveExposure.payload.seq}`,
               receivedPerformanceAt: liveExposure.receivedPerformanceAt,
+              ...(tracedExposureCommand ? {
+                operationId: tracedExposureCommand.operationId,
+                stage: tracedExposureCommand.stage,
+                ...('workerTiming' in tracedExposureCommand && tracedExposureCommand.workerTiming
+                  ? { workerTiming: tracedExposureCommand.workerTiming } : {}),
+              } : {}),
             }
             : null}
           group={chartData.group}

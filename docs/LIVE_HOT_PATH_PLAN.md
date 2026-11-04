@@ -172,8 +172,10 @@ Filip po nasazení fáze 1: pozice se v grafu ukáže 1–2 s po vyplnění. Roz
 - Controller: `exposure.builtAt` = čas sestavení (hodiny workeru) — jen řazení zobrazení.
 - Worker (`macCopierCommandRelay`): po změně u brokera (`subscribeLiveChange`) hned, bez čekání na
   heartbeat, nejvýš 1× za 150 ms (trailing), pošle REST broadcast `event: 'exposure'` na téma budíčku:
-  `{ v: 1, iv, ct }` = AES-256-GCM(`{ v: 1, startedAt, exposure, events }`), `events` = posledních
-  ≤ 10 `recentCopyEvents`. Fire-and-forget, strop velikosti 64 KB (jinak neposlat), žádný await
+  `{ v: 1, iv, ct }` = AES-256-GCM(`{ v: 1, startedAt, exposure, events, manualEntries,
+  manualOrderActions }`), `events` = posledních ≤ 10 `recentCopyEvents`; posledních ≤ 10 ručních
+  vstupů/akcí nese jen `operationId`, stav a technické časy pro E2E diagnostiku (4. 11.).
+  Fire-and-forget, strop velikosti 64 KB (jinak neposlat), žádný await
   v poll smyčce ani u brzd (INV-WORKER-04). Budíček po heartbeatu zůstává.
 - Prohlížeč (`useCopierStatusNudge`): událost `exposure` dešifruje (jeden slot „nejnovější“, viz níže),
   ověří tvar a předá; LIVE desk drží poslední zobrazovací expozici. Pro **graf a karty obchodů**
@@ -193,6 +195,10 @@ Filip po nasazení fáze 1: pozice se v grafu ukáže 1–2 s po vyplnění. Roz
   `live:exposure:to-paint`, `live:chart:component-ready`, `live:chart:first-candles-data`,
   `live:chart:first-candles-paint`, historický/live snapshot a vzorkované `tick-to-paint`
   ve `window.__atPerf`.
+- E2E stopy posledních 60 ručních příkazů jsou v
+  `localStorage['at:dev:live-command-traces-v1']`: potvrzovací klik, relay/Server-Timing,
+  worker timing, přijetí expozice a paint. `validForeground=true` jen pokud karta i okno
+  zůstaly po celý vzorek aktivní; diagnostika zapisuje localStorage odloženě mimo click/paint hot path.
 
 ### Dotčená pravidla
 INV-RELAY-04 (téma budíčku nese zašifrovanou expozici jen pro zobrazení), INV-UI-03, INV-UI-01,

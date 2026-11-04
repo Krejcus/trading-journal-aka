@@ -288,6 +288,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE rychlost: pravdivá stopa potvrzovací klik → worker/broker → první pixel (Codex, lokálně, NENASAZENO)
+
+- Proč: noční funkční/safety práce nepřeměřila rychlost v aktivním grafu; staré browserové vzorky
+  byly ze skryté karty a kvantované kolem 1 s. Bez korelace konkrétního příkazu se nedalo poctivě
+  rozhodnout, kterou část dál optimalizovat.
+- V čistém release worktree z produkčního `eb461e22`, větev `codex/live-speed-20261104`, vznikla
+  lokální E2E diagnostika podle `operationId`: poslední potvrzovací klik (telefon nejpozději vstup
+  do desk callbacku), relay + strukturovaný `Server-Timing`, výsledek, časy workeru/brokera,
+  přijetí šifrované expozice a první commit grafu po dvou `requestAnimationFrame`.
+- F2a payload nově nese posledních ≤ 10 `manualEntries` a `manualOrderActions`; pole jsou AES-GCM,
+  tvarově omezená a používají se výhradně pro diagnostickou korelaci. Do sloučeného controlleru,
+  freshness, admission, ARM ani příkazů se nekopírují. Stopy jsou v
+  `at:dev:live-command-traces-v1` (max 60); viditelnost/focus po celý vzorek určuje
+  `validForeground`. LocalStorage zápis je dávkovaný 750 ms mimo click/relay/paint hot path.
+- Ověření: cílené 32/32; plná sada 7491 zelených (1 todo, 1 skip); produkční build čistý.
+  App typecheck s dočasným vyloučením samostatné `extension/` je čistý; kořenový `tsc --noEmit`
+  s 4GB hlásí jen existující chybějící typy/balík Chrome extensionu v tomto release worktree.
+  React performance kontrola vedla právě
+  k odložení synchronního localStorage zápisu.
+- Balík je uložen jen v lokální větvi; nic nebylo pushnuto ani nasazeno a brokerovi se nic neposlalo.
+  Pro skutečný baseline je potřeba samostatně schválený web deploy + reinstall
+  stejného workeru, potom řízené 1× MNQ DEMO scénáře v aktivním grafu; až podle největšího úseku A/B
+  optimalizace a stejné přeměření.
+
 ### 2026-11-03 — Chybějící typy obchodování: ověřený seznam, návrhy všech skupin, oprava pádu na trailing/MIT (Claude, ROZPRACOVÁNO, nic nenasazeno)
 
 - Filip: „pořád velká spousta věcí chybí (typy obchodování)“ → ověřený seznam (průzkum + protikontrola

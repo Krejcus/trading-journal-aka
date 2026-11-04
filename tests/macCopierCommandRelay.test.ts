@@ -640,7 +640,11 @@ describe('recoverable relay lane isolation', () => {
     let seq = 0;
     const exposure = { verifiedAt: 1, positions: [{ accountId: 1, symbol: 'MNQZ6', netQuantity: 1, avgPrice: 28_274.5 }], followers: [], orders: [] };
     const liveStatus = (): LocalCopierAgentStatus => ({ ...status(), displaySeq: ++seq, displayBuiltAt: 1_000 + seq,
-      controller: { ...status().controller, exposure, recentCopyEvents: [{ id: 'e-1', at: 1, kind: 'entry', side: 'Long', quantity: 1, symbol: 'MNQZ6', followers: 1 }] } } as LocalCopierAgentStatus);
+      controller: { ...status().controller, exposure,
+        recentCopyEvents: [{ id: 'e-1', at: 1, kind: 'entry', side: 'Long', quantity: 1, symbol: 'MNQZ6', followers: 1 }],
+        manualEntries: [{ operationId: 'entry:abcdefghijklmnopqrstuvwx', status: 'acknowledged', createdAt: 900, updatedAt: 1_000,
+          symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', timing: { ackAt: 950, fillAt: 970, positionAt: 990 } }],
+      } } as LocalCopierAgentStatus);
     const agent = {
       status: liveStatus, execute: vi.fn(async () => ({ ok: true })),
       subscribeLiveChange: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -674,7 +678,8 @@ describe('recoverable relay lane isolation', () => {
       expect(sent.topic).toBe(topic);
       expect(JSON.stringify(sent.payload)).not.toContain('MNQZ6');
       const decrypted = await decryptCopierLiveExposure(sent.payload, key, topic);
-      expect(decrypted).toMatchObject({ v: 1, startedAt: status().startedAt, exposure, events: [{ id: 'e-1' }] });
+      expect(decrypted).toMatchObject({ v: 1, startedAt: status().startedAt, exposure, events: [{ id: 'e-1' }],
+        manualEntries: [{ operationId: 'entry:abcdefghijklmnopqrstuvwx', timing: { fillAt: 970, positionAt: 990 } }] });
       expect(decrypted!.seq).toBeGreaterThan(0);
       // Dvě rychlé změny: nejvýš dvě zprávy (jedna hned, druhá po rozestupu), ne zahlcení.
       await new Promise(resolve => setTimeout(resolve, 400));

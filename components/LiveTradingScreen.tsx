@@ -28,6 +28,11 @@ import ChartDataStatus from './ChartDataStatus';
 import { useDayChartData } from '../hooks/useDayChartData';
 import { useLiveTicketQuote } from '../hooks/useLiveTicketQuote';
 import { perfDuration, perfMark } from '../lib/perfTrace';
+import {
+  markLiveCommandPaint,
+  type LiveCommandTraceStage,
+  type LiveCommandWorkerTiming,
+} from '../lib/liveCommandPerformance';
 import { DAY_ANCHOR_ACCOUNT_ID, chartMarketDay, pragueDayKey } from '../lib/dayJournal';
 import {
   LIVE_ATTACH_OWNER,
@@ -146,7 +151,13 @@ interface Props {
   /** Události pro karty obchodů (poll ∪ expozice přímo z workeru, F2a); chybí = ze statusu. */
   copyEvents?: readonly LiveTradingCopyEvent[];
   /** Měření poslední rychlé expozice; nepoužívá se pro stav ani příkazy. */
-  liveExposurePaint?: { id: string; receivedPerformanceAt: number } | null;
+  liveExposurePaint?: {
+    id: string;
+    receivedPerformanceAt: number;
+    operationId?: string;
+    stage?: LiveCommandTraceStage;
+    workerTiming?: LiveCommandWorkerTiming;
+  } | null;
   /** Monotónní čas kliknutí/otevření záložky pro měření lazy-loadu a prvních svíček. */
   chartOpenPerformanceAt?: number;
   /** Dohrává se odchod z grafu (animace, vrstva už nebere kliky). */
@@ -280,6 +291,14 @@ const LiveTradingScreen: React.FC<Props> = ({
       secondFrame = window.requestAnimationFrame(() => {
         painted = true;
         perfDuration('live:exposure:to-paint', performance.now() - liveExposurePaint.receivedPerformanceAt);
+        if (liveExposurePaint.operationId && liveExposurePaint.stage) {
+          markLiveCommandPaint({
+            operationId: liveExposurePaint.operationId,
+            stage: liveExposurePaint.stage,
+            receivedPerformanceAt: liveExposurePaint.receivedPerformanceAt,
+            workerTiming: liveExposurePaint.workerTiming,
+          });
+        }
       });
     });
     return () => {

@@ -297,6 +297,10 @@ export function startMacCopierCommandRelay(options: {
         v: 1, startedAt: status.startedAt, seq: status.displaySeq, builtAt: status.displayBuiltAt,
         exposure: status.controller.exposure ?? null,
         events: (status.controller.recentCopyEvents ?? []).slice(-COPIER_LIVE_EXPOSURE_EVENTS),
+        // Jen posledních 10 zobrazovacích záznamů; operationId spojí konkrétní klik
+        // s brokerovým fill/position časem a následným paintem grafu.
+        manualEntries: (status.controller.manualEntries ?? []).slice(-10),
+        manualOrderActions: (status.controller.manualOrderActions ?? []).slice(-10),
       }, config.key, config.topic);
       if (!envelope || stopped) return;
       const encryptMs = performance.now() - encryptStartedAt;
