@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-04 — LIVE latency: DEMO order write přes existující WebSocket (Codex, NASAZENO; A/B čeká na reset risku)
+### 2026-11-04 — LIVE latency: DEMO order write přes existující WebSocket (Codex, NASAZENO A ZMĚŘENO)
 
 - Ruční order write cesta umí pro explicitně povolený `manual-only` DEMO
   worker použít už synchronizovaný Tradovate WebSocket místo nového REST
@@ -312,10 +312,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `12c2edfac3f8ce60d2cda353afda8f0d08dd37ec8b6eb53b4d2d4add959d74f6`).
 - Post-install read-only reconcile: pouze DEMO účet `61038658`, connected,
   OFF, flat, `positions=[]`, `orders=[]`, bez divergence/stuck/chyby a
-  `authoritativelyClean=true`. Žádný broker write po změně neproběhl: denní
-  broker ztráta je −197,56 USD proti internímu limitu 250 USD. Reálné A/B
-  `WS WRITE ACK` proti dosavadním REST 219–255 ms proto proběhne až po resetu
-  denního risku; do té doby se neuvádí neověřený rychlostní zisk.
+  `authoritativelyClean=true`. Kvůli broker ztrátě −197,56 USD proti internímu
+  limitu 250 USD se netestoval fill: 1× MNQ BUY limit byl bezpečně 1 000+ bodů
+  pod trhem a po potvrzení čekajícího stavu ihned zrušen. Přímý WS ACK měl
+  `placeoso` 150 ms (controller 160 ms) a `cancelorder` 132 ms (controller
+  write 146 ms), proti poslednímu REST baseline 219–255 ms tedy jediný vzorek
+  ukazuje zisk přibližně 70–120 ms / 31–48 % brokerového zápisu. Cloud queue
+  byla 186 ms pro place a 173 ms pro cancel; ta se tímto krokem neměnila.
+  Worker byl ihned DISARMED a závěrečný broker reconcile znovu potvrdil
+  `authoritativelyClean=true`, flat, žádné pracovní příkazy ani divergence.
+  Jde o n=1 pro každý typ, ne p50/p95; fill→pixel se změří až po denním resetu.
 
 ### 2026-11-04 — LIVE latency: socket OrderVersion před pomalým REST (Codex, NASAZENO)
 
