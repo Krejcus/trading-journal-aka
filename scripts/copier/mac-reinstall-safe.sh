@@ -153,6 +153,13 @@ INSTALLED_SCALE_IN="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:AL
 if [[ "${COPIER_SCALE_IN:-$INSTALLED_SCALE_IN}" == "on" ]]; then
   TV_STREAM_ARGS+=(--scale-in on)
 fi
+# Rychlá order write cesta přes autorizovaný Tradovate WebSocket. Výchozí je
+# vypnutá a installer ji dovolí jen pro manual-only DEMO. Reinstall zachová stav;
+# přepsat jde COPIER_TRADOVATE_WS_WRITES=on|off.
+INSTALLED_WS_WRITES="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_TRADOVATE_WS_WRITES' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_TRADOVATE_WS_WRITES:-$INSTALLED_WS_WRITES}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--tradovate-ws-writes on)
+fi
 GROUP_ARGS=()
 if [[ "$MANUAL_ONLY" == "1" ]]; then
   GROUP_ARGS+=(--manual-only)

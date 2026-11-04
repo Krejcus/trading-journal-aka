@@ -253,6 +253,12 @@ describe('Mac copier agent lifecycle', () => {
     expect(safeReinstall).toContain('"1" if "--manual-only" in argv else "0"');
     expect(safeReinstall).toContain('GROUP_ARGS+=(--manual-only)');
     expect(safeReinstall).toContain('GROUP_ARGS+=(--manual-entry-max-contracts "$MANUAL_ENTRY_MAX_CONTRACTS")');
+    expect(installer).toContain("webSocketWritesFlag === 'on' && !manualOnly");
+    expect(installer).toContain('<key>ALPHATRADE_TRADOVATE_WS_WRITES</key><string>on</string>');
+    expect(safeReinstall).toContain('Print :EnvironmentVariables:ALPHATRADE_TRADOVATE_WS_WRITES');
+    expect(safeReinstall).toContain('TV_STREAM_ARGS+=(--tradovate-ws-writes on)');
+    expect(pilot).toContain("process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'");
+    expect(pilot).toContain("stringFlag('manual-only', false) === 'true'");
     expect(installer).toContain('Git provenance kandidáta nelze načíst');
     expect(pilot).toContain('loadMacCopierInstallManifestBestEffort');
     expect(installer).toContain("installation: 'provenance neznámá'");

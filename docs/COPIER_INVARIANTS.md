@@ -1458,6 +1458,30 @@ existující ochranu.
   až po nasazení této opravy do VŠECH workerů na přihlášení — dřív by sám
   záznam shodil běžící worker.
 
+### INV-TRAD-08: WebSocket write se po odeslání nikdy neopakuje přes REST; ACK je korelovaný request ID, ne execution důkaz
+
+- Proč: Tradovate přijímá stejné order endpointy přes autorizovaný WebSocket.
+  Ztráta odpovědi ale neříká, zda broker zápis provedl; REST fallback po
+  `send()` by mohl vytvořit duplicitní objednávku.
+- Vynucuje: `services/tradovateBroker.ts:requestSocketWrite` registruje request
+  před odesláním, páruje odpověď podle jedinečného `i`, timeout/close/send
+  failure vrací jako neznámý výsledek a blokuje plánovanou obnovu socketu,
+  dokud write čeká. `writeOrderRequest` smí použít REST jen před WS odesláním,
+  pokud socket není plně synchronizovaný. Přímý ACK se vyřídí mimo semantic
+  frame tail, ale broker Order/Fill/Position události zůstávají ve svém pořadí.
+- Aktivace: výchozí stav je vypnuto. Mac installer dovolí
+  `--tradovate-ws-writes on` pouze pro `manual-only` DEMO worker; funded/live
+  cesta se tím bez výslovné budoucí validace nemění.
+- Hlídá test: `tests/tradovateBrokerWebSocketWrites.test.ts`,
+  `tests/tradovateBrokerReconnect.test.ts`, `tests/tradovateBrokerRenewal.test.ts`,
+  `tests/copierAgentLifecycle.test.ts`.
+- Nikdy: Po WS timeoutu, pádu nebo chybě `send()` neposlat totéž přes REST;
+  nepovažovat transportní ACK za fill ani výslednou pozici; neobnovit socket
+  uprostřed nevyřízeného write requestu.
+- Bezpečné změny vs. nebezpečné: Bezpečný je REST fallback před prvním WS
+  bytem a pozdější read-only lookup podle `clOrdId`/order ID. Nebezpečný je
+  transportní retry nebo přepsání execution state jen z ACK payloadu.
+
 ### UI pravidla
 
 ### INV-UI-01: Obnovený stav může krátce stabilizovat zobrazení, ale neautorizuje příkaz; po grace je stale/unknown neutrální

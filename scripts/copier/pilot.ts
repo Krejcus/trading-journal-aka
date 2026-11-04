@@ -324,6 +324,8 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
     context.displayFeed = makeDisplayFeed(context, Object.keys(accountSpecsByAccountId).map(Number));
     const broker = createTradovateBroker({
       environment: 'demo',
+      preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
+        && stringFlag('manual-only', false) === 'true',
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
@@ -385,6 +387,8 @@ async function runMultiConnectionAgent(): Promise<void> {
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
     const broker = createTradovateBroker({
       environment: 'demo',
+      preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
+        && stringFlag('manual-only', false) === 'true',
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,

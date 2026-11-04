@@ -228,6 +228,15 @@ export interface TradovateBrokerConfig {
   renewalDeadlineMs?: number;
   /** Jak dlouho po command ACK čekat na autoritativní Order update ze sync streamu. */
   commandConfirmationTimeoutMs?: number;
+  /**
+   * Odesílá order write endpointy přes už autorizovaný execution WebSocket.
+   * Výchozí false: produkční/funded instalace se bez výslovného přepnutí nemění.
+   * Když socket před odesláním není plně synchronizovaný, použije se REST.
+   * Jakmile ale WS `send()` proběhne, chyba/timeout se nikdy neopakuje přes REST.
+   */
+  preferWebSocketOrderWrites?: boolean;
+  /** Deadline pouze pro odpověď na WS order write; timeout = neznámý výsledek. */
+  webSocketWriteTimeoutMs?: number;
 }
 
 /** Stav + text odpovědi Tradovate do chybové hlášky (do logu; bez tokenů). */
@@ -494,6 +503,19 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let lastReconnectReason = 'subscribe';
   let disconnectedSince = 0;
   let requestId = 2;
+  type PendingSocketWrite = {
+    endpoint: string;
+    socket: WebSocketLike;
+    startedAt: number;
+    timeout: ReturnType<typeof setTimeout>;
+    resolve: (value: unknown) => void;
+    reject: (reason: Error) => void;
+  };
+  const pendingSocketWrites = new Map<number, PendingSocketWrite>();
+  const webSocketWriteTimeoutMs = Math.max(
+    1,
+    config.webSocketWriteTimeoutMs ?? config.restRequestTimeoutMs ?? 45_000,
+  );
   let syncReady = false;
   /**
    * Plánovaná obměna socketu (cyklus access tokenu). Dokud běží, disconnect
@@ -1602,6 +1624,137 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     socket.send(`${endpoint}\n${id}\n\n${JSON.stringify(body)}`);
   };
 
+  const rejectPendingSocketWrites = (candidate: WebSocketLike, reason: string) => {
+    for (const [id, pending] of pendingSocketWrites) {
+      if (pending.socket !== candidate) continue;
+      pendingSocketWrites.delete(id);
+      clearTimeouts(pending.timeout);
+      diagnostic(`WS WRITE UNKNOWN endpoint=${pending.endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} reason=${reason}`);
+      pending.reject(contextualError(new TradovateTransportError(
+        `Tradovate WebSocket ${pending.endpoint} ${reason}; výsledek zápisu je neznámý`,
+      ), 'websocket'));
+    }
+  };
+
+  const parseSocketResponseData = (value: unknown): unknown => {
+    if (typeof value !== 'string') return value ?? null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try { return JSON.parse(trimmed) as unknown; }
+    catch { throw new TradovateTransportError('Tradovate WebSocket returned malformed JSON'); }
+  };
+
+  /**
+   * Vyřídí pouze přímou odpověď na náš request (i >= 2). Nejde přes
+   * `socketMessageTail`: ACK není execution state a nesmí čekat za REST
+   * hydratací staršího Order frame. Props/auth/sync zůstávají serializované.
+   */
+  const settleSocketWriteResponse = (
+    value: { i?: unknown; s?: unknown; d?: unknown },
+    candidate: WebSocketLike,
+  ): boolean => {
+    if (!Number.isSafeInteger(value.i) || (value.i as number) < 2) return false;
+    const id = value.i as number;
+    const pending = pendingSocketWrites.get(id);
+    if (!pending || pending.socket !== candidate) {
+      // Cizí/pozdní request může být například penalizovaný syncrequest z
+      // existující reconnect diagnostiky. Nech ho projít původním handlerem.
+      return false;
+    }
+    pendingSocketWrites.delete(id);
+    clearTimeouts(pending.timeout);
+    diagnostic(`WS WRITE ACK endpoint=${pending.endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} status=${String(value.s ?? '-')}`);
+    const reject = (reason: Error) => pending.reject(contextualError(reason, 'websocket'));
+    try {
+      const data = parseSocketResponseData(value.d);
+      const penalty = data && typeof data === 'object' && !Array.isArray(data)
+        ? data as { 'p-ticket'?: string; 'p-time'?: number; 'p-captcha'?: boolean; 'p-message'?: string }
+        : null;
+      if (value.s === 423 || value.s === 429 || penalty?.['p-ticket']) {
+        const retryAfterMs = penalty && Number.isFinite(penalty['p-time'])
+          ? Math.max(0, penalty['p-time'] as number) * 1_000
+          : value.s === 429 ? 60 * 60 * 1_000 : null;
+        const error = new TradovateRateLimitError(
+          penalty?.['p-message'] ?? `Tradovate WebSocket ${pending.endpoint} rate limited (${String(value.s ?? 'penalty')})`,
+          retryAfterMs,
+          penalty?.['p-captcha'] === true || value.s === 429,
+          penalty?.['p-ticket'],
+          typeof value.s === 'number' ? value.s : undefined,
+        );
+        armRateLimitBreaker(error);
+        reject(error);
+        return true;
+      }
+      if (value.s !== 200) {
+        reject(new TradovateTransportError(
+          `Tradovate WebSocket ${pending.endpoint} failed${socketFailureDetail(value as { s?: unknown; d?: unknown })}`,
+          typeof value.s === 'number' ? value.s : undefined,
+        ));
+        return true;
+      }
+      pending.resolve(data);
+    } catch (reason) {
+      reject(reason instanceof Error ? reason : new Error(String(reason)));
+    }
+    return true;
+  };
+
+  const requestSocketWrite = <T>(endpoint: string, body: unknown): Promise<T | null> => {
+    assertNotRateLimited();
+    const candidate = socket;
+    if (!candidate || candidate.readyState !== 1 || !syncReady || socketState !== 'connected' || renewalInProgress) {
+      throw new TradovateTransportError(`Tradovate WebSocket ${endpoint} is not ready`);
+    }
+    const id = requestId++;
+    return new Promise<T | null>((resolveRequest, rejectRequest) => {
+      const timeout = timeouts(() => {
+        const pending = pendingSocketWrites.get(id);
+        if (!pending || pending.socket !== candidate) return;
+        pendingSocketWrites.delete(id);
+        diagnostic(`WS WRITE UNKNOWN endpoint=${endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} reason=timeout`);
+        pending.reject(contextualError(new TradovateTransportError(
+          `Tradovate WebSocket ${endpoint} request timeout (${webSocketWriteTimeoutMs} ms); výsledek zápisu je neznámý`,
+        ), 'websocket'));
+      }, webSocketWriteTimeoutMs);
+      pendingSocketWrites.set(id, {
+        endpoint,
+        socket: candidate,
+        startedAt: clock(),
+        timeout,
+        resolve: value => resolveRequest(value as T | null),
+        reject: rejectRequest,
+      });
+      try {
+        // Od tohoto okamžiku je výsledek při jakékoli chybě neznámý. Volající
+        // proto nesmí přejít na REST ani stejný příkaz automaticky zopakovat.
+        sendSocketRequest(endpoint, body, id);
+      } catch (reason) {
+        const pending = pendingSocketWrites.get(id);
+        if (!pending) return;
+        pendingSocketWrites.delete(id);
+        clearTimeouts(pending.timeout);
+        diagnostic(`WS WRITE UNKNOWN endpoint=${endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} reason=send-failed`);
+        pending.reject(contextualError(new TradovateTransportError(
+          `Tradovate WebSocket ${endpoint} send failed; výsledek zápisu je neznámý: ${reason instanceof Error ? reason.message : String(reason)}`,
+        ), 'websocket'));
+      }
+    });
+  };
+
+  const writeOrderRequest = <T>(restPath: string, socketEndpoint: string, body: unknown): Promise<T | null> => {
+    // REST fallback je dovolený jen před WS sendem. Po vstupu do
+    // requestSocketWrite už každá chyba zůstává neznámým výsledkem.
+    if (
+      config.preferWebSocketOrderWrites
+      && socket
+      && socket.readyState === 1
+      && syncReady
+      && socketState === 'connected'
+      && !renewalInProgress
+    ) return requestSocketWrite<T>(socketEndpoint, body);
+    return post<T>(restPath, body);
+  };
+
   const applyCommandReport = async (
     report: TradovateCommandReportEntity,
     receivedAt = clock(),
@@ -2004,6 +2157,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   const releaseSocket = (candidate: WebSocketLike) => {
     if (socket !== candidate) return false;
+    rejectPendingSocketWrites(candidate, 'connection was released');
     journalSnapshotAbort?.abort();
     journalAccounting.reset();
     journalBackfillPlan.reset(); journalRoster = [];
@@ -2022,6 +2176,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   const closeSocket = (candidate: WebSocketLike, reason: string, minimumDelayMs = 0) => {
     if (socket !== candidate) return;
+    rejectPendingSocketWrites(candidate, `connection is closing (${reason})`);
     observe('connection', { state: 'disconnected', reason }, 'transport');
     socketState = 'closing';
     journalSnapshotAbort?.abort();
@@ -2159,7 +2314,17 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (typeof event.data === 'string' && event.data[0] === 'a') {
           const parsed: unknown = JSON.parse(event.data.slice(1));
           if (!Array.isArray(parsed)) throw new TradovateTransportError('Invalid WebSocket frame');
-          messages = parsed;
+          // Přímé odpovědi order write requestů jsou korelované request ID a
+          // nemají execution sémantiku. Vyřiď je v transportním callbacku,
+          // aby nečekaly za pomalou hydratací staršího Order frame.
+          messages = parsed.filter(message => {
+            if (!message || typeof message !== 'object') return true;
+            return !settleSocketWriteResponse(
+              message as { i?: unknown; s?: unknown; d?: unknown },
+              candidate,
+            );
+          });
+          if (messages.length === 0) return;
           // REST requesty zacinaji pri prijeti ramce, ne az kdyz na nej prijde
           // rada v semantic tailu. Vysledky se ale do cache aplikuji a eventy
           // emituji porad striktne v poradi ramcu.
@@ -2389,8 +2554,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       });
     },
     async placeOrder(requestBody: BrokerOrderRequest): Promise<BrokerOrderAck> {
-      const result = await post<TradovatePlaceOrderResult>(
+      const result = await writeOrderRequest<TradovatePlaceOrderResult>(
         '/order/placeorder',
+        'order/placeorder',
         toPlaceOrderPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
       const ack = fromPlaceOrderResult(result ?? {});
@@ -2411,7 +2577,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         return { status: 'already-flat' as const };
       }
       try {
-        const result = await post<TradovatePlaceOrderResult>('/order/liquidateposition', {
+        const result = await writeOrderRequest<TradovatePlaceOrderResult>('/order/liquidateposition', 'order/liquidateposition', {
           accountId: requestBody.accountId,
           contractId: position.contractId,
           admin: false,
@@ -2435,8 +2601,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
     },
     async placeOco(requestBody: BrokerOcoRequest) {
-      const result = await post<TradovatePlaceOcoResult>(
+      const result = await writeOrderRequest<TradovatePlaceOcoResult>(
         '/order/placeoco',
+        'order/placeoco',
         toPlaceOcoPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
       const ack = fromPlaceOcoResult(result ?? {});
@@ -2447,8 +2614,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return ack;
     },
     async placeOso(requestBody: BrokerOsoRequest) {
-      const result = await post<TradovatePlaceOsoResult>(
+      const result = await writeOrderRequest<TradovatePlaceOsoResult>(
         '/order/placeoso',
+        'order/placeoso',
         toPlaceOsoPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
       const ack = fromPlaceOsoResult(result ?? {});
@@ -2461,7 +2629,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     },
     async cancelOrder(_accountId, brokerOrderId) {
       const orderId = numberId(brokerOrderId);
-      const result = await post<TradovateCommandResult>('/order/cancelorder', {
+      const result = await writeOrderRequest<TradovateCommandResult>('/order/cancelorder', 'order/cancelorder', {
         orderId,
         isAutomated: true,
       });
@@ -2485,7 +2653,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const orderId = numberId(brokerOrderId);
       // INV-TRAD-07: před POSTem, takže výsledek je jistě „nic neodesláno“.
       assertWritableOrderType(changes.orderType);
-      const result = await post<TradovateCommandResult>('/order/modifyorder', {
+      const result = await writeOrderRequest<TradovateCommandResult>('/order/modifyorder', 'order/modifyorder', {
         orderId,
         orderQty: changes.quantity,
         orderType: changes.orderType,
@@ -2796,7 +2964,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       };
     },
     renewSocket() {
-      if (!socket || !syncReady || renewalInProgress || listeners.size === 0) return false;
+      if (!socket || !syncReady || renewalInProgress || listeners.size === 0 || pendingSocketWrites.size > 0) return false;
       renewalKnownFillIds = new Set([...baselineFillIds, ...deliveredFillIds]);
       renewalInProgress = true;
       renewalHeldEvents = [];

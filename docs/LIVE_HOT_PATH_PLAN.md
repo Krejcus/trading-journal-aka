@@ -35,9 +35,10 @@ a odpověď ~0,1 s. **Broker je ~20 %, zbytek naše doručování.**
 - **Beze změny serverových bran:** admission (rozestupy, busy, denní stropy, payloadHash,
   operationId), idempotence, TTL, trvalý claim před execution a jeden durable výsledek
   zůstávají v DB přesně jako dnes. Brzdy (DISARM, kill, day lock) beze změny.
-- Mimo rozsah (vědomě): zápisy přes Tradovate WebSocket (broker je ~0,27 s, zisk desítky ms
-  při velkém riziku), admission ve workeru (−0,1–0,2 s, ale přepis pojistek P3/P7), VPS,
-  Databento.
+- Původně mimo rozsah: zápisy přes Tradovate WebSocket. Po produkčním rozkladu
+  4. 11. zůstal REST write 219–255 ms jednou z hlavních podlah, proto vznikla
+  samostatná, výchozím stavem vypnutá DEMO-only fáze F3 níže. Admission ve
+  workeru, VPS a placená data zůstávají mimo tento balík.
 
 ## 2. F1a — Pozice ze streamu (jen zobrazení)
 
@@ -378,3 +379,21 @@ importy a call site ale bundler nedokázal bezpečně odstranit.
   už neobsahuje kontrolní texty ani query marker vývojových mocků.
 - Nejde o další dynamický request ani o změnu runtime cesty; odstraňuje se pouze
   kód, který v produkci nemohl být spuštěn.
+
+## 19. F3 — order write přes autorizovaný Tradovate WebSocket (4. 11. 2026, lokálně)
+
+- Oficiální wire protokol páruje request `endpoint\nid\nquery\nbody` s
+  odpovědí `{ i, s, d }`. Worker už stejný socket drží pro `user/syncrequest`.
+- `placeorder`, `placeoco`, `placeoso`, `cancelorder`, `modifyorder` a
+  `liquidateposition` mohou při plně synchronizovaném socketu použít tento
+  transport. Když socket před odesláním připravený není, zachová se REST.
+- Po WS `send()` není žádný REST retry: timeout, close i send chyba jsou
+  neznámý broker výsledek a pokračují dnešní durable lookup/fail-closed cestou.
+- Korelovaný ACK se vyřídí hned v transportním callbacku a nečeká za REST
+  hydratací staršího Order frame. Execution props zůstávají v serial tailu;
+  ACK sám nikdy nevytváří fill ani pozici.
+- Aktivace je výchozím stavem vypnutá a installer ji dovolí jen kombinací
+  `manual-only` + DEMO + `--tradovate-ws-writes on`. Reinstall stav zachová.
+- Cíl měření: stejný 1× MNQ DEMO scénář REST vs. WS v popředí, odděleně
+  click→worker, broker write ACK, broker Fill→worker a Fill→pixel. Malé `n`
+  se nevydává za p50/p95. Produkční aktivace mimo tento DEMO účet není součástí.
