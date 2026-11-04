@@ -171,7 +171,7 @@ Filip po nasazení fáze 1: pozice se v grafu ukáže 1–2 s po vyplnění. Roz
   vedle `nudgeTopic` — jen při `connected`, nikdy neukládat, nelogovat.
 - Controller: `exposure.builtAt` = čas sestavení (hodiny workeru) — jen řazení zobrazení.
 - Worker (`macCopierCommandRelay`): po změně u brokera (`subscribeLiveChange`) hned, bez čekání na
-  heartbeat, nejvýš 1× za 50 ms (trailing), pošle broadcast `event: 'exposure'` na téma budíčku:
+  heartbeat, nejvýš 1× za 16 ms (trailing), pošle broadcast `event: 'exposure'` na téma budíčku:
   `{ v: 1, iv, ct }` = AES-256-GCM(`{ v: 1, startedAt, exposure, events, manualEntries,
   manualOrderActions }`), `events` = posledních ≤ 10 `recentCopyEvents`; posledních ≤ 10 ručních
   vstupů/akcí nese jen `operationId`, stav a technické časy pro E2E diagnostiku (4. 11.).
@@ -211,7 +211,7 @@ INV-MANUAL-01 (průměr ani pozice z kanálu nevstupují do příkazu; příkazy
 2. `exposureObservedAt` jen pro overlay (`useLiveChartData.exposureObservedAt`); `workerFresh`,
    `statusFresh` a vše ostatní z pollu; slučuje se jen nad čerstvým pollem; stáří = kotva pollu
    + (builtAt − displayBuiltAt), nejvýš čas přijetí; zpráva z budoucnosti (> uplynulý čas + 1 s) pryč.
-3. Worker: posluchač jen plánuje (setTimeout), 1 požadavek najednou, nejnovější stav, rozestup 50 ms.
+3. Worker: posluchač jen plánuje (setTimeout), 1 požadavek najednou, nejnovější stav, rozestup 16 ms.
 4. Karty: sjednocení událostí podle id (poll ∪ kanál, max 20), nikdy nahrazení.
 5. Klíč: v nevyhazující `tvPriceRealtimeFields`; `onRealtimeConfig` ho nedostane; desk ho maže při
    změně uživatele; AAD = téma; deterministický klíč zapsán do INV-RELAY-04.

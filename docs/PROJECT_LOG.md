@@ -288,6 +288,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — bezpečný balík LIVE latency: display cadence + diagnostika fronty broker frame (lokálně)
+
+- Dvě agresivnější varianty (dispatch `Fill` mimo pořadí a dočasně autoritativní
+  tvar objednávky z place ACK) byly po bezpečnostní kontrole zamítnuty a v diffu
+  nezůstaly. Mohly by změnit produkční execution semantics.
+- Zobrazovací F2a expozice z workeru do grafu má trailing rozestup snížený z
+  50 ms na 16 ms. Dál je pouze display-only, nejvýš jeden HTTP požadavek běží,
+  nejnovější stav se sloučí a execution/risk/admission cesta se nemění.
+- Broker stream nově při pomalém semantickém frame loguje pouze redigovaný typ
+  entity a order ID. U `Fill` zároveň ukáže typy frame, které před ním čekaly.
+  Neloguje účet, cenu, tag ani token. Cílem je změřit příčinu dosavadního
+  110–217ms čekání před handlerem, ne měnit pořadí zpracování.
+- Ověření: cílené sady 79/79, plná sada 7518 testů prošla (1 todo), produkční
+  build a oba worker bundly prošly; TypeScript neukázal novou chybu (zůstává
+  známý baseline extension typů a starší tuple chyba testu).
+- Stav: změny jsou zatím pouze lokální. Nic nebylo pushnuto ani nasazeno,
+  worker nebyl přeinstalován, ARM se neměnil a brokerovi nic neodešlo.
+
 ### 2026-11-04 — Telefonní E2E měření + pravdivý Fill dispatch (Codex, NASAZENO A ZMĚŘENO)
 
 - Produkční narrow-layout test commitu `c74f91d8` ukázal, že `LivePhoneChart` sice obchoduje stejnou

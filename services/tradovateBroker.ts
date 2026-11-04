@@ -432,7 +432,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let syncRetry: ReturnType<typeof setTimeout> | null = null;
   let socketMessageTail: Promise<void> = Promise.resolve();
   let semanticFrameSequence = 0;
-  let pendingSemanticFrames: Array<{ id: number; receivedAt: number }> = [];
+  let pendingSemanticFrames: Array<{ id: number; receivedAt: number; summary: string }> = [];
   let lastSocketMessageAt = 0;
   /** Běžící REST merge do map příkazů (order graf, cílené čtení) — snímek streamu pak není konzistentní. */
   let orderGraphMerges = 0;
@@ -898,6 +898,34 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     };
     visit(messages);
     return prepared;
+  };
+
+  /** Redigovaný popis frame pro latency diagnostiku; žádný účet, cena ani tag. */
+  const semanticFrameSummary = (messages: readonly unknown[]): string => {
+    const parts: string[] = [];
+    const visitProps = (payload: unknown) => {
+      for (const raw of Array.isArray(payload) ? payload : [payload]) {
+        if (!raw || typeof raw !== 'object') continue;
+        const item = raw as { entityType?: string; entity?: Record<string, unknown> };
+        const type = item.entityType?.trim() || 'unknown';
+        const entity = item.entity;
+        const orderId = entity && (entity.orderId ?? (type.toLowerCase() === 'order' ? entity.id : undefined));
+        parts.push(`${type}${typeof orderId === 'number' ? `#${orderId}` : ''}`);
+      }
+    };
+    const visit = (message: unknown) => {
+      if (Array.isArray(message)) {
+        for (const item of message) visit(item);
+        return;
+      }
+      if (!message || typeof message !== 'object') return;
+      const value = message as { e?: string; d?: unknown; i?: unknown };
+      if (value.e === 'props') visitProps(value.d);
+      else if (Array.isArray(value.d)) visit(value.d);
+      else if (typeof value.i === 'number') parts.push(`response#${value.i}`);
+    };
+    for (const message of messages) visit(message);
+    return parts.slice(0, 12).join('+') || 'other';
   };
 
   const rememberFill = (fill: TradovateFillEntity): boolean => {
@@ -2006,7 +2034,18 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           });
         return;
       }
-      const semanticFrame = { id: ++semanticFrameSequence, receivedAt };
+      const summary = semanticFrameSummary(messages);
+      const blockers = summary.includes('Fill')
+        ? pendingSemanticFrames.map(frame => frame.summary).slice(-4)
+        : [];
+      if (blockers.length > 0) {
+        try {
+          console.log(`${new Date(receivedAt).toISOString()} BROKER FILL QUEUE frame=${summary} behind=${blockers.join('|')}`);
+        } catch {
+          // Diagnostika nesmí ovlivnit stream.
+        }
+      }
+      const semanticFrame = { id: ++semanticFrameSequence, receivedAt, summary };
       pendingSemanticFrames.push(semanticFrame);
       socketMessageTail = socketMessageTail
         .then(() => {
@@ -2033,6 +2072,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           closeSocket(candidate, 'socket-message-error', minimumDelayMs);
         })
         .finally(() => {
+          const durationMs = Math.max(0, clock() - semanticFrame.receivedAt);
+          if (durationMs >= 50) {
+            try {
+              console.log(`${new Date(clock()).toISOString()} BROKER SEMANTIC SLOW frame=${semanticFrame.summary} duration=${Math.round(durationMs)}ms`);
+            } catch {
+              // Diagnostika nesmí ovlivnit stream.
+            }
+          }
           pendingSemanticFrames = pendingSemanticFrames.filter(frame => frame.id !== semanticFrame.id);
         });
     };

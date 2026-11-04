@@ -937,7 +937,7 @@ existující ochranu.
   měření potvrzovací klik → worker/broker → první paint. Diagnostická pole se
   do sloučeného controlleru vůbec nekopírují a nikdy neautorizují příkaz. Worker ji jen
   naplánuje z posluchače změny (mimo eventTail), nejvýš 1 požadavek najednou,
-  rozestup ≥ 50 ms, fire-and-forget; klíč nedostanou zobrazovací doplňky
+  rozestup ≥ 16 ms (jeden obrazový snímek), fire-and-forget; klíč nedostanou zobrazovací doplňky
   (`onRealtimeConfig`) ani log. Prohlížeč: jen při otevřeném grafu, jen
   nejnovější čekající zpráva, sloučí se (`mergeCopierLiveExposure`) jen nad
   čerstvým pollem téže instance: stejný `startedAt`, vyšší `displaySeq` (novější
