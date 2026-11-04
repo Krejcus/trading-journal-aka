@@ -318,13 +318,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   read-only reconcile potvrdil `armed=false`, `groupFlat=true`, 0 pozic/příkazů, bez divergence,
   stuck operací nebo chyby; broker daily realized je `-154,42 USD` a instalovaný SHA přesně odpovídá
   commitu výše.
-- Navazující lokální diagnostika (zatím nenasazená) přidává nezávislé konzolové milníky
-  `start/result/paint` a workerový rozklad `frame→handler` + `handler→dispatch`. Tím další DEMO vzorek
-  rozliší, zda zbývajících ~216 ms vzniká ve frontě sémantických broker rámců, nebo hydratací uvnitř
-  konkrétního frame. Nemění admission, broker request, pořadí eventů ani React state. Cílené sady po
-  poslední úpravě 60/60, plná sada před poslední čistě diagnostickou snapshot úpravou 735 souborů /
-  7 518 testů (1 skip, 1 todo), produkční build a `git diff --check` prošly; TypeScript má pouze stejný
-  známý baseline extension + tuple testu.
+- Navazující diagnostika v commitu `7cdfb51784e00f8d0e7130a253e7e1cbb357cb69` přidala nezávislé
+  konzolové milníky `start/result/paint` a workerový rozklad `frame→handler` + `handler→dispatch`.
+  Commit je na `main`, produkční deployment `dpl_EPxEfjP2zVmvMVL2jBmdTjgyKYtb` je READY a worker byl
+  reinstalován ze stejného SHA (bundle prefix `bb7d0f9dc020e49e`). Foreground DEMO vzorek měl klik
+  `15:05:19.112Z`, cloud queue `186,5 ms`, relay execution `293 ms` a result v telefonu `819,1 ms`.
+  Fill rozklad prokázal `broker→frame 37 ms`, `frame→handler 217 ms`, `handler→dispatch 0 ms`: zbytek
+  tedy nevzniká hydratací fillu ani React listenery, ale čekáním za předchozím sémantickým broker frame.
+- Zásadní runtime nález: telefonní `LivePhoneChart` měl připravený F2a paint, ale `chartOpenRef` povoloval
+  push expozice a rychlý poll jen desktopu. Proto konzole ukázala `start` + `result`, nikdy `paint`, a
+  viditelná pozice přišla až z pollu. Lokální oprava zahrnuje do stejné brány i `phoneChartAvailable`;
+  tím telefon dostane stejný okamžitý fill/position push jako PC. Cílené regrese 21/21 prošly; tato
+  poslední podmínka zatím není commitnutá ani nasazená.
+- Diagnostický commit předtím prošel cíleně 60/60, plnou sadou 735 souborů / 7 518 testů (1 skip,
+  1 todo), produkčním buildem a `git diff --check`; TypeScript měl pouze známý baseline extension +
+  tuple testu. Vzorek byl potvrzeně zavřen, worker vypnut a závěrečný reconcile byl autoritativně čistý.
 
 ### 2026-11-04 — LIVE rychlost: Fill po place ACK bez čekání na Order + 50ms exposure (Codex, NASAZENO A ZMĚŘENO)
 

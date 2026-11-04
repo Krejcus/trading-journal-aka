@@ -535,9 +535,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const lastAgentRouteRef = useRef<{ transport: 'local' | 'relay'; relayConnectionId: string | null } | null>(restoredAgent?.lastRoute ?? null);
   // Rychlé čtení stavu workeru při otevřeném LIVE grafu + čtení hned po vlastním příkazu.
   const chartOpenRef = useRef(false);
-  // Rychlé tempo jen pro graf na PC. Telefonní graf čte stejný model pozice
-  // (`useLiveChartData`), ale nezrychluje čtení přes relay ani neodebírá budíčky.
-  chartOpenRef.current = chartAvailable && tab === 'chart';
+  // Otevřený graf na PC i telefonu odebírá push expozice a zrychlí fallback poll.
+  // Bez telefonu v této bráně se jeho připravený F2a paint nikdy nespustil a
+  // pozice se ukázala až z pomalejšího pollu (~0,8–2 s po kliku).
+  chartOpenRef.current = (chartAvailable || phoneChartAvailable) && tab === 'chart';
   const statusPollKickRef = useRef<(() => void) | null>(null);
   // Worker po změně u brokera pošle budíček → status hned, ne až při dalším pollu.
   // Jen s otevřeným LIVE grafem (objem čtení relaye, oponentura 30. 10.).
@@ -1084,8 +1085,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     : null;
   const chartData = useLiveChartData({
-    // Telefonní graf (2. 11.) potřebuje stejnou pozici leadera pro lištu, „Přidat SL/TP“ a P&L
-    // skupiny v hlavičce; tempo čtení se tím nemění (`chartOpenRef`).
+    // Telefonní graf potřebuje stejnou pozici leadera pro lištu, „Přidat SL/TP“ a P&L
+    // skupiny v hlavičce; push expozice i fallback poll řídí společný `chartOpenRef`.
     enabled: (chartAvailable || phoneChartAvailable) && tab === 'chart',
     data: live.data,
     profiles: live.profiles,

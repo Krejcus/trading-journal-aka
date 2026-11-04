@@ -102,7 +102,7 @@ describe('obchodní lišta na telefonu', () => {
     expect(desk).toMatch(/enabled: \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart'/);
     expect(desk).toMatch(/position: chartData\.position/);
     // Tempo čtení zrychluje jen PC graf, telefon ne.
-    expect(desk).toMatch(/chartOpenRef\.current = chartAvailable && tab === 'chart';/);
+    expect(desk).toMatch(/chartOpenRef\.current = \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart';/);
     const accounts = readFileSync('components/day/LivePhoneAccounts.tsx', 'utf8');
     expect(accounts).not.toMatch(/useDisplayWorkerStatus|useJournalLivePosition|flatten|close-position|cancel-order|manage-leader/i);
   });
