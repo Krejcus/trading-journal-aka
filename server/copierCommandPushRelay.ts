@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { claimTradovateCopierCommandV2 } from './tradovateCopierCommandRelay.js';
+import {
+  claimTradovateCopierCommandV2,
+  type CopierRelayIdleCandidate,
+  type PreclaimedCopierRelayCommand,
+} from './tradovateCopierCommandRelay.js';
 import { COPIER_COMMAND_PUSH_EVENT, copierCommandPushGrant, signCopierCommandPush } from './copierCommandPush.js';
 
 /** Runtime workeru musí být takhle čerstvý, aby server navázal příkaz k jeho nečinné delivery. */
@@ -12,7 +16,7 @@ export type CopierPushOutcome = 'pushed' | 'no-grant' | 'no-idle' | 'stale' | 'n
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Nečinná delivery workeru z runtime řádku (jen pole potřebná pro push). */
-export interface CopierRelayIdleRow { deviceId: string; relayIdle: { deliveryId?: unknown } | null; lastSeenAt: string }
+export type CopierRelayIdleRow = CopierRelayIdleCandidate;
 
 /**
  * Předčtení `relayIdle` souběžně s admission (2. 11. odpoledne): zařízení ještě není známé,
@@ -56,12 +60,27 @@ export async function pushBoundCopierCommand(options: {
   stepTimeoutMs?: number;
   /** Předčtení z `readCopierRelayIdle` (souběžně s admission); jiné zařízení = čte se znovu. */
   prefetched?: Promise<CopierRelayIdleRow | null>;
+  /** Admission v2 už navázala právě vložený řádek; přeskočí druhé claim RPC. */
+  preclaimed?: PreclaimedCopierRelayCommand;
 }): Promise<CopierPushOutcome> {
   try {
     const grant = copierCommandPushGrant(options.deviceId);
     if (!grant) return 'no-grant';
     const now = options.now ?? Date.now;
     const step = options.stepTimeoutMs ?? COPIER_PUSH_STEP_TIMEOUT_MS;
+    if (options.preclaimed) {
+      const { deliveryId, command } = options.preclaimed;
+      if (!UUID.test(deliveryId) || command.status !== 'claimed') return 'not-claimed';
+      const message = signCopierCommandPush({ deviceId: options.deviceId, deliveryId, command });
+      if (!message) return 'no-grant';
+      const response = await (options.fetchImpl ?? fetch)(`${options.supabaseUrl}/realtime/v1/api/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: options.serviceRoleKey, Authorization: `Bearer ${options.serviceRoleKey}` },
+        body: JSON.stringify({ messages: [{ topic: grant.topic, event: COPIER_COMMAND_PUSH_EVENT, payload: message }] }),
+        signal: AbortSignal.timeout(step),
+      });
+      return response.ok ? 'pushed' : 'failed';
+    }
     const prefetched = options.prefetched ? await options.prefetched.catch(() => null) : null;
     let data: { relay_idle: { deliveryId?: unknown } | null; last_seen_at: string } | null = null;
     if (prefetched && prefetched.deviceId.toLowerCase() === options.deviceId.toLowerCase()) {

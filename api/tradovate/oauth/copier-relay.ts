@@ -500,9 +500,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const queued = await enqueueTradovateCopierCommand({
         db, userId, connectionId, command: req.body?.command,
         idempotencyKey: req.body?.idempotencyKey,
+        relayIdle,
         ...(verifiedDevice ? { verifiedDevice } : {}),
       });
       timing.mark('enqueue');
+      const { preclaimed, ...queuedResponse } = queued;
       // Budíček pro worker: bez něj příkaz čeká na další poll (~750 ms).
       // Kick je jen optimalizace — selhání nesmí shodit enqueue. Jeho HTTP
       // potvrzení ale nemusí blokovat první čtení výsledku: broadcast může
@@ -510,7 +512,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // F1b′: navázání k nečinné delivery + podepsaný push souběžně s long-pollem.
       // Nikdy nevyhodí, každý krok ≤ 1 s; výsledek nemění 202 ani nezdrží brzdu.
       const push = pushBoundCopierCommand({ db, deviceId: queued.deviceId, supabaseUrl: config.supabaseUrl,
-        serviceRoleKey: config.supabaseServiceRoleKey, prefetched: relayIdle }).then(outcome => { timing.mark(`push-${outcome}`); return outcome; });
+        serviceRoleKey: config.supabaseServiceRoleKey, prefetched: relayIdle, preclaimed }).then(outcome => { timing.mark(`push-${outcome}`); return outcome; });
       const kickAbort = new AbortController();
       const sendKick = async () => {
         const timeout = setTimeout(() => kickAbort.abort('copier-kick-timeout'), 1_500);
@@ -578,7 +580,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       timing.mark('kick');
       timing.mark(resolution ? 'longpoll-hit' : 'longpoll-miss');
-      return timed(202, { ...queued, ...(resolution ? { resolution } : {}) });
+      return timed(202, { ...queuedResponse, ...(resolution ? { resolution } : {}) });
     }
     return res.status(405).json({ error: 'method-not-allowed' });
   } catch (error) {

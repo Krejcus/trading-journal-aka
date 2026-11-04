@@ -288,6 +288,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE rychlost: atomické navázání admission na idle delivery (Codex, DB NASAZENA, web čeká na deploy)
+
+- Foreground DEMO kontrola na jediném účtu `DEMO8661118`: ARM, BUY 1 MNQZ6 LIMIT 28 500 se SL 28 488
+  a TP 28 524, ověření working OSO, cancel a OFF. Vstup se nevyplnil; po testu je účet autoritativně flat,
+  bez pozic, working orders, pending vlastních vstupů, divergence nebo chyby a worker zůstal `armed=false`.
+  Vstup strávil 166,5 ms ve frontě, 24 ms přípravou, 245 ms broker OSO POSTem a 366 ms celou worker
+  execution; následný ACK commit trval 238 ms. Cancel: 262,5 ms fronta, 258 ms broker write, 321 ms worker
+  execution a 216 ms ACK. Největší dál ovlivnitelný úsek je server -> převzetí workerem.
+- Nová aditivní admission v2 při čerstvé nečinné durable delivery vloží a naváže ruční vstup/správu v jedné
+  DB transakci. Zachovává původní admission v1 jako jediný zdroj bezpečnostních pravidel, pořadí zámků
+  uživatel -> zařízení, unikátní delivery index a plný starý claim/poll fallback. Existující/idempotentní řádky
+  se nově nevážou; pomalé předčtení se čeká nejvýš 25 ms. Browser nikdy nedostane interní `preclaimed` data.
+- Ověření před produkcí: cílené relay testy 88/88, širší relay sada 145/145, skutečný PostgreSQL 18 test
+  26/26, produkční Vite/PWA build a `git diff --check`. Kořenový TypeScript s 4 GB hlásí jen známé starší
+  chyby samostatné Chrome extension a `tests/macCopierCommandRelay.test.ts`; dotčené soubory bez nové chyby.
+  Celá sada pod přetíženým Macem dala široké nesouvisející timeouty a nebyla vydávána za platný výsledek.
+- Před migrací ověřena kompletní noční záloha `~/AlphaTrade-backups/supabase/20261104T023009Z`: databáze
+  5,78 GB, 1 941/1 941 Storage objektů a všechny SHA-256 v pořádku; poslední zkušební obnova je PASS z 25. 10.
+  Produkční preflight: žádná v2 funkce, 0 duplicitních delivery, 0 pending/claimed neexpirovaných příkazů.
+- Produkční migrace `copier_manual_admission_bound_delivery` byla aplikována jako verze `20261104123920`.
+  Postkontrola potvrdila `security invoker`, prázdný `search_path`, 2s lock timeout, EXECUTE jen pro
+  `service_role`, 0 duplicit a 0 pending/claimed příkazů. Supabase security/performance advisory nemají proti
+  preflightu žádný nový ani změněný nález. Webový commit/push/deploy ještě v okamžiku tohoto zápisu neproběhl;
+  bez něj produkce dál používá původní v1 a migrace je pouze neaktivní aditivní schopnost.
+
 ### 2026-11-04 — Produkční `d5a8e943` + přesné měření broker ACK → durable commit (Codex, web + worker NASAZENY, DISARMED)
 
 - Na Filipovo potvrzení byl `d5a8e943` pushnutý na pracovní větev i produkční `main`; Vercel deployment

@@ -15,6 +15,28 @@ export interface CopierRelayCommand {
   expiresAt: string;
 }
 
+/** Čerstvá nečinná durable delivery předčtená souběžně s výběrem cíle. */
+export interface CopierRelayIdleCandidate {
+  deviceId: string;
+  relayIdle: { deliveryId?: unknown } | null;
+  lastSeenAt: string;
+}
+
+/** Nový řádek, který admission v téže transakci už navázala na worker delivery. */
+export interface PreclaimedCopierRelayCommand {
+  deliveryId: string;
+  command: CopierRelayCommand & { status: 'claimed' };
+}
+
+export interface EnqueuedCopierCommand {
+  id: string;
+  status: string;
+  expiresAt: string;
+  deviceId: string;
+  /** Interní optimalizace serveru; handler ji nikdy nevrací prohlížeči. */
+  preclaimed?: PreclaimedCopierRelayCommand;
+}
+
 interface CommandRow {
   id: string;
   command_type: LocalCopierAgentCommand['type'];
@@ -128,6 +150,11 @@ const MANAGE_MIN_INTERVAL_MS = 2_000;
 const MANAGE_DAILY_CAP = 100;
 const STANDARD_COMMAND_TTL_MS = 30_000;
 const WORKER_CONNECTED_MAX_AGE_MS = 10_000;
+/** Musí zůstat shodné s čerstvostí push runtime v copierCommandPushRelay. */
+const ADMISSION_BOUND_DELIVERY_MAX_AGE_MS = 4_000;
+/** Předčtení běží souběžně; na pomalé DB nečekáme a použijeme původní claim fallback. */
+const ADMISSION_RELAY_IDLE_WAIT_MS = 25;
+const DELIVERY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const isTradovateCopierBrakeCommand = (command: LocalCopierAgentCommand): boolean =>
   BRAKE_COMMAND_TYPES.includes(command.type as (typeof BRAKE_COMMAND_TYPES)[number]);
@@ -765,6 +792,28 @@ const enforceRelayTightenOnly = async (options: {
   }
 };
 
+/**
+ * Vezme delivery jen tehdy, když už ji souběžné předčtení téměř dokončilo.
+ * Pomalé/chybné čtení nesmí admission zdržet: v2 RPC dostane null a původní
+ * claim_v2 + poll/push cesta zůstane autoritativní záloha.
+ */
+const admissionDeliveryId = async (options: {
+  candidate?: Promise<CopierRelayIdleCandidate | null>;
+  deviceId: string;
+  now: number;
+}): Promise<string | null> => {
+  if (!options.candidate) return null;
+  const timeout = new Promise<null>(resolve => setTimeout(resolve, ADMISSION_RELAY_IDLE_WAIT_MS, null));
+  const candidate = await Promise.race([options.candidate.catch(() => null), timeout]);
+  if (!candidate || candidate.deviceId.toLowerCase() !== options.deviceId.toLowerCase()) return null;
+  const deliveryId = candidate.relayIdle?.deliveryId;
+  const lastSeenAt = Date.parse(candidate.lastSeenAt);
+  if (typeof deliveryId !== 'string' || !DELIVERY_ID.test(deliveryId)
+    || !Number.isFinite(lastSeenAt)
+    || options.now - lastSeenAt > ADMISSION_BOUND_DELIVERY_MAX_AGE_MS) return null;
+  return deliveryId;
+};
+
 export async function enqueueTradovateCopierCommand(options: {
   db: SupabaseClient;
   userId: string;
@@ -774,9 +823,11 @@ export async function enqueueTradovateCopierCommand(options: {
   deviceId?: string;
   /** Serverem znovu ověřený krátkodobý hint; nikdy nebrat přímo z requestu. */
   verifiedDevice?: RelayDeviceTarget;
+  /** Předčtená nečinná delivery; používá se jen pro atomickou admission v2. */
+  relayIdle?: Promise<CopierRelayIdleCandidate | null>;
   idempotencyKey?: string;
   now?: number;
-}): Promise<{ id: string; status: string; expiresAt: string; deviceId: string }> {
+}): Promise<EnqueuedCopierCommand> {
   const now = options.now ?? Date.now();
   // Ruční vstup: klíč idempotence JE operationId (dvojklik / opakovaný POST
   // = tentýž řádek, nikdy druhý vstup).
@@ -824,10 +875,16 @@ export async function enqueueTradovateCopierCommand(options: {
   if (entryOperationId) {
     // Hodiny až těsně před RPC: výběr zařízení může trvat a DB odmítá p_now starší než 2 s.
     const admissionNow = options.now ?? Date.now();
+    const deliveryId = await admissionDeliveryId({
+      candidate: options.relayIdle,
+      deviceId: device.id,
+      now: admissionNow,
+    });
     return admitManualCommand({
       db: options.db, userId: options.userId, deviceId: device.id, connectionId: options.connectionId,
       operationId: entryOperationId, payload, now: admissionNow,
       expiresAt: admissionNow + (isLeaderTradeClose(options.command) ? CLOSE_COMMAND_TTL_MS : ENTRY_COMMAND_TTL_MS),
+      deliveryId,
     });
   }
 
@@ -1226,8 +1283,9 @@ const manualAdmissionRejectedBeforeInsert = (error: { code?: string; message?: s
 async function admitManualCommand(options: {
   db: SupabaseClient; userId: string; deviceId: string; connectionId: string;
   operationId: string; payload: Record<string, unknown>; now: number; expiresAt: number;
-}): Promise<{ id: string; status: string; expiresAt: string; deviceId: string }> {
-  const { data, error } = await options.db.rpc('admit_tradovate_copier_manual_command', {
+  deliveryId: string | null;
+}): Promise<EnqueuedCopierCommand> {
+  const { data, error } = await options.db.rpc('admit_tradovate_copier_manual_command_v2', {
     p_user_id: options.userId,
     p_device_id: options.deviceId,
     p_connection_id: options.connectionId,
@@ -1239,6 +1297,7 @@ async function admitManualCommand(options: {
     p_manage_min_interval_ms: MANAGE_MIN_INTERVAL_MS,
     p_entry_cap: ENTRY_DAILY_CAP,
     p_manage_cap: MANAGE_DAILY_CAP,
+    p_delivery_id: options.deliveryId,
   });
   if (error) {
     const notAdmitted = manualAdmissionRejectedBeforeInsert(error);
@@ -1248,16 +1307,40 @@ async function admitManualCommand(options: {
   }
   const row = (Array.isArray(data) && data.length === 1 ? data[0] : null) as {
     result_code?: unknown; id?: unknown; status?: unknown; expires_at?: unknown; device_id?: unknown;
+    delivery_id?: unknown; created_at?: unknown;
   } | null;
   const code = typeof row?.result_code === 'string' ? row.result_code : '';
   if (MANUAL_ADMISSION_ERRORS[code]) throw new Error(MANUAL_ADMISSION_ERRORS[code]);
-  if ((code !== 'inserted' && code !== 'existing')
+  if ((code !== 'inserted' && code !== 'inserted-claimed' && code !== 'existing')
     || typeof row?.id !== 'string' || typeof row.status !== 'string'
     || typeof row.expires_at !== 'string' || typeof row.device_id !== 'string') {
     throw new Error('copier-relay-enqueue-failed: invalid-admission-response');
   }
   // Kick patří zařízení, které řádek drží (u `existing` i jinému než vybranému).
-  return { id: row.id, status: row.status, expiresAt: row.expires_at, deviceId: row.device_id };
+  const queued: EnqueuedCopierCommand = {
+    id: row.id,
+    status: row.status,
+    expiresAt: row.expires_at,
+    deviceId: row.device_id,
+  };
+  if (code === 'inserted-claimed') {
+    if (row.status !== 'claimed'
+      || typeof row.delivery_id !== 'string' || !DELIVERY_ID.test(row.delivery_id)
+      || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))) {
+      throw new Error('copier-relay-enqueue-failed: invalid-admission-response');
+    }
+    queued.preclaimed = {
+      deliveryId: row.delivery_id,
+      command: {
+        id: row.id,
+        status: 'claimed',
+        command: { type: 'copy-command', command: options.payload.command as never },
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+      },
+    };
+  }
+  return queued;
 }
 
 /** Čekající (neexpirovaný) nebo právě vykonávaný Flatten stejného cíle, k němuž se nový požadavek přichytí. */
