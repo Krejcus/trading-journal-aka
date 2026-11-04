@@ -138,6 +138,33 @@ const update = (operationId: string, mutate: (trace: LiveCommandTrace) => void):
   return trace;
 };
 
+/**
+ * A successful command can paint before its HTTP response returns. Keep the
+ * original click anchor alive until both facts are known; deleting it on the
+ * early paint would let the later relay/result callback create a fresh trace
+ * whose "start" is after the worker already executed the command.
+ */
+export function liveCommandTraceReadyToComplete(trace: LiveCommandTrace): boolean {
+  if (trace.resultMs == null) return false;
+  const successful = trace.resultStatus === 'acknowledged'
+    || trace.resultStatus === 'succeeded'
+    || trace.resultStatus === 'waived';
+  return !successful || trace.stages?.position != null;
+}
+
+const completeIfReady = (trace: LiveCommandTrace) => {
+  if (!liveCommandTraceReadyToComplete(trace)) return;
+  const state = browserState();
+  if (!state.visible || !state.focused) trace.stayedForeground = false;
+  trace.completedAt = new Date().toISOString();
+  trace.validForeground = trace.startVisible
+    && trace.startFocused
+    && trace.stayedForeground
+    && state.visible
+    && state.focused;
+  active.delete(trace.operationId);
+};
+
 export function markLiveCommandRelayStart(operationId: string): void {
   update(operationId, trace => { trace.relayStartedMs = performance.now() - trace.startedPerformanceMs; });
 }
@@ -158,6 +185,7 @@ export function markLiveCommandResult(operationId: string, status: string): void
   update(operationId, trace => {
     trace.resultMs = performance.now() - trace.startedPerformanceMs;
     trace.resultStatus = status;
+    completeIfReady(trace);
   });
 }
 
@@ -172,6 +200,9 @@ export function markLiveCommandPaint(input: {
   workerTiming?: LiveCommandWorkerTiming;
 }): void {
   update(input.operationId, trace => {
+    // Každý milestone měří první pixel. Periodický F2a heartbeat nesmí
+    // přepisovat order/fill stopu, zatímco limit čeká na trhu.
+    if (trace.stages?.[input.stage]) return;
     const paintedAt = performance.now();
     const state = browserState();
     trace.workerTiming = input.workerTiming;
@@ -187,11 +218,7 @@ export function markLiveCommandPaint(input: {
       },
     };
     if (!state.visible || !state.focused) trace.stayedForeground = false;
-    if (input.stage === 'position') {
-      trace.completedAt = new Date().toISOString();
-      trace.validForeground = trace.startVisible && trace.startFocused && trace.stayedForeground && state.visible && state.focused;
-      active.delete(input.operationId);
-    }
+    completeIfReady(trace);
   });
 }
 

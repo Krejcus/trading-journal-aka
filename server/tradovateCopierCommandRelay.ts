@@ -267,6 +267,40 @@ const selectRelayDeviceTarget = async (options: {
 
 const RELAY_HINT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+type RelayHintRuntime = {
+  status: LocalCopierAgentStatus;
+  last_seen_at: string;
+};
+
+/**
+ * Cílený hint zná zařízení i připojení. Zařízení + jeho 1:1 runtime proto
+ * ověříme jedním PostgREST joinem místo dvou sériových HTTP kol. FK a PK na
+ * runtime.device_id zachovávají stejnou vazbu; parent filtry dál vynucují
+ * vlastníka, připojení a neodvolané zařízení.
+ */
+const selectRelayHintTarget = async (options: {
+  db: SupabaseClient;
+  userId: string;
+  connectionId: string;
+  deviceId: string;
+}): Promise<RelayDeviceTarget | null> => {
+  const { data, error } = await options.db.from('tradovate_copier_devices')
+    .select('id,runtime:tradovate_copier_device_runtime!inner(status,last_seen_at)')
+    .eq('id', options.deviceId)
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId)
+    .is('revoked_at', null)
+    .limit(1)
+    .maybeSingle<{
+      id: string;
+      runtime: RelayHintRuntime | RelayHintRuntime[] | null;
+    }>();
+  if (error) throw new Error(`copier-relay-target-hint-lookup-failed: ${error.message}`);
+  const runtime = Array.isArray(data?.runtime) ? data.runtime[0] : data?.runtime;
+  if (!data || !runtime) return null;
+  return { id: data.id, status: runtime.status, lastSeenAt: runtime.last_seen_at };
+};
+
 /**
  * Krátkodobý hint z posledního GET statusu pouze zkrátí výběr cíle. Není to
  * oprávnění: zařízení se znovu ověří proti user_id, connection_id, revokaci,
@@ -288,19 +322,13 @@ export async function verifyCopierRelayTargetHint(options: {
     || typeof hint.startedAt !== 'string' || !Number.isFinite(Date.parse(hint.startedAt))
     || typeof hint.expiresAt !== 'number' || !Number.isFinite(hint.expiresAt)
     || hint.expiresAt < now || hint.expiresAt > now + WORKER_CONNECTED_MAX_AGE_MS) return null;
-  let device: RelayDeviceTarget;
-  try {
-    device = await selectRelayDeviceTarget({
-      db: options.db,
-      userId: options.userId,
-      connectionId: hint.connectionId,
-      deviceId: hint.deviceId,
-    });
-  } catch (reason) {
-    const message = reason instanceof Error ? reason.message : String(reason);
-    if (message === 'copier-relay-device-not-found' || message === 'copier-relay-runtime-not-found') return null;
-    throw reason;
-  }
+  const device = await selectRelayHintTarget({
+    db: options.db,
+    userId: options.userId,
+    connectionId: hint.connectionId,
+    deviceId: hint.deviceId,
+  });
+  if (!device) return null;
   const lastSeenAt = device.lastSeenAt ? Date.parse(device.lastSeenAt) : NaN;
   if (device.status?.startedAt !== hint.startedAt
     || !Number.isFinite(lastSeenAt)

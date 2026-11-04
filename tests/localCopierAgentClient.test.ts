@@ -63,7 +63,7 @@ describe('canUseDirectLocalCopierAgent', () => {
 
 describe('local copier reprobe policy', () => {
   it('retries an unavailable desktop agent only after backoff or a visibility return', () => {
-    const base = { nativeBuild: false, state: 'unavailable' as const, lastAttemptAt: 10_000 };
+    const base = { directSupported: true, nativeBuild: false, state: 'unavailable' as const, lastAttemptAt: 10_000 };
     expect(shouldProbeLocalCopierAgent({ ...base, now: 29_999 })).toBe(false);
     expect(shouldProbeLocalCopierAgent({ ...base, now: 30_000 })).toBe(true);
     expect(shouldProbeLocalCopierAgent({ ...base, now: 10_100, resumedFromHidden: true })).toBe(true);
@@ -71,7 +71,19 @@ describe('local copier reprobe policy', () => {
 
   it('never probes loopback in a native build', () => {
     expect(shouldProbeLocalCopierAgent({
+      directSupported: true,
       nativeBuild: true,
+      state: 'unknown',
+      now: 30_000,
+      lastAttemptAt: null,
+      resumedFromHidden: true,
+    })).toBe(false);
+  });
+
+  it('never probes loopback from a production HTTPS page', () => {
+    expect(shouldProbeLocalCopierAgent({
+      directSupported: false,
+      nativeBuild: false,
       state: 'unknown',
       now: 30_000,
       lastAttemptAt: null,

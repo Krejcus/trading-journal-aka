@@ -1569,17 +1569,17 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     });
   }, [acceptConfigAck, agentStatus, executeAgent, runConfigMutation, workerGroup]);
 
-  // Přímý loopback agent zkoušíme i z produkčního HTTPS webu: na Macu
-  // s běžícím workerem to sráží ARM/Flatten z relay sekund na stovky ms
-  // (agent má produkční origin v CORS allowlistu + private-network header).
-  // Nativní iOS build loopback nikdy nezkouší. Desktop po výpadku přejde na
-  // relay, ale lokální cestu znovu ověří s backoffem a při návratu do okna.
+  // Přímý loopback agent smí zkoušet jen lokálně servírované HTTP UI. Safari
+  // produkční HTTPS → http://127.0.0.1 blokuje jako mixed content ještě před
+  // CORS/PNA a opakovaný probe jen zahlcuje konzoli; cloud proto rovnou použije
+  // zabezpečený relay. Nativní iOS build loopback nikdy nezkouší.
   useEffect(() => {
     let stopped = false;
     const poll = async (isCurrent: () => boolean) => {
       const pollGeneration = copyGroupStatusPollFence.beginPoll();
       const now = Date.now();
       const probeLocal = shouldProbeLocalCopierAgent({
+        directSupported: canUseDirectLocalCopierAgent(window.location),
         nativeBuild: isNativeBuild,
         state: directAgentProbe.current,
         now,

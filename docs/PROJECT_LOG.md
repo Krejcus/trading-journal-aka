@@ -288,6 +288,45 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE rychlost: pravdivé E2E měření + rychlý relay a cancel bez dvou REST kol (Codex, lokálně, NENASAZENO)
+
+- Autoritativní pracovní strom je čistý release worktree
+  `/Users/filipkrejca/alphatrade-worktrees/release-20261104-eb461e22`, větev
+  `codex/live-speed-20261104` nad produkčním web commitem `2902a696`. Hlavní Documents checkout
+  zůstal nedotčený (je zastaralý a má uživatelské změny).
+- Produkční foreground vzorek na jediném manual-only účtu `DEMO8661118` zrušil starý BUY limit a
+  odeslal nový BUY 1 MNQZ6 LIMIT 28 566 se SL 28 554 a TP 28 590. Vstup se vyplnil 28 561,75 a
+  později skončil SL; účet je znovu flat a bez working orderu. Worker příkaz claimnul za 278 ms,
+  broker OSO přijal za 188 ms a worker měl durable výsledek za 350 ms od startu execution. Předchozí
+  cancel trval ve workeru 634 ms: pre-read REST 266 ms, broker zápis 151 ms a post-verify REST 138 ms.
+- Browserová stopa tohoto vzorku byla neplatná: display-only position pixel přišel před HTTP výsledkem
+  a měřič aktivní stopu hned smazal; pozdější výsledek založil novou stopu se startem až po brokerovi
+  (`relayCompletedMs=0`, worker údajně před klikem). Oprava drží původní click anchor až do kombinace
+  HTTP výsledku + prvního position pixelu; definitivní neúspěch končí po výsledku. Každý milestone
+  bere jen první pixel, takže periodický F2a heartbeat už nepřepisuje latenci.
+- Relay hot path: ověření šifrovaného target hintu načte device + jeho 1:1 runtime jedním vnořeným
+  PostgREST dotazem místo dvou sériových kol a API znovu používá již ověřené `relayIdle/lastSeenAt`.
+  Produkční HTTPS Safari už nezkouší blokovaný `http://127.0.0.1` loopback; jde rovnou bezpečným
+  relayem. Admission, oprávnění, revokace, freshness a fallback výběr cíle zůstaly beze změny.
+- Cancel hot path: synchronizovaný order snapshot s přesnou shodou controller cache + `routeEpoch`
+  nahrazuje pre-read REST. Tradovate adaptér vrací výsledek bez dalšího lookupu jen po přesném
+  `Order(Canceled)` rušeného id; chybějící, neshodný nebo neterminální důkaz jde původním REST
+  fallbackem. Plná sada odhalila důležitou partial-fill hranu: přechodný raw `Filled` před Completed
+  cancel reportem se nesmí vydat za výsledek. Oprava čeká na `Canceled`; fill race dál bezpečně
+  klasifikuje původní REST cesta včetně kontroly ochranných nohou. Dvě dříve změřená REST kola
+  (~404 ms v konkrétním vzorku) tak na zdravé cestě odpadají; skutečný přínos NENÍ ještě A/B změřený.
+- Ověření finálního lokálního stromu: cílené LIVE/relay/controller sady 209/209, dotčené integrační
+  regrese 128/128, plná sada 735 souborů / 7 506 testů (1 skip, 1 todo), app-only TypeScript čistý;
+  kořenový typecheck hlásí jen známé chybějící Chrome extension typy/balík a starý nesouvisející typ
+  v `macCopierCommandRelay.test.ts`. Scoped lint 0 chyb (9 starších warningů), `git diff --check`,
+  produkční Vite/PWA build a samostatné Node 20 bundly pilotu, TV price threadu a price-alert threadu
+  se syntax kontrolou prošly.
+- Balík je lokálně commitnutý ve větvi `codex/live-speed-20261104`, ale nebyl pushnutý, nasazený ani
+  nainstalovaný do workeru; žádná DB migrace ani změna produkční konfigurace. Další důkaz vyžaduje
+  výslovně schválený push/deploy + reinstall
+  stejného SHA a potom nový přesně stejný foreground DEMO A/B. Každý další broker write vyžaduje
+  konkrétní akci potvrzenou v okamžiku odeslání.
+
 ### 2026-11-04 — LIVE rychlost: reálný A/B odhalil 300ms post-ACK čekání a mrtvý Safari kanál (Codex, lokálně, NENASAZENO)
 
 - Produkční web i worker byly před vzorkem sjednocené na `4bf49ab8`. Uživatel výslovně potvrdil

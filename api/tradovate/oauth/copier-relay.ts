@@ -488,7 +488,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: 'snapshot-test-use-dedicated-endpoint' });
       }
       // F1b′: nečinná delivery workeru se čte souběžně s admission (nikdy nevyhodí).
-      const relayIdle = readCopierRelayIdle({ db, userId, connectionId });
+      // Čerstvý hint už v jediném joinu načetl stejný runtime řádek. Znovu ho
+      // přes PostgREST nečteme; push tak po admission rovnou claimne delivery.
+      const relayIdle = verifiedDevice?.lastSeenAt
+        ? Promise.resolve({
+          deviceId: verifiedDevice.id,
+          relayIdle: verifiedDevice.status?.relayIdle ?? null,
+          lastSeenAt: verifiedDevice.lastSeenAt,
+        })
+        : readCopierRelayIdle({ db, userId, connectionId });
       const queued = await enqueueTradovateCopierCommand({
         db, userId, connectionId, command: req.body?.command,
         idempotencyKey: req.body?.idempotencyKey,

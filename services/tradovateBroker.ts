@@ -2185,13 +2185,20 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         isAutomated: true,
       });
       const commandId = assertCommandAccepted(result, 'cancelOrder');
-      const confirmed = await waitForOrder(orderId, order =>
-        order.status === 'canceled' || order.status === 'filled' || order.status === 'rejected', commandId);
+      // Přesný Order(Canceled) téhož id je autoritativní důkaz, že vstup už
+      // nepracuje; kauzalita není pro risk-redukční výsledek potřeba. Samotné
+      // `Filled` ale nestačí: u partial fillu ho Tradovate krátce skládá před
+      // Completed reportem, který teprve mapuje zrušený zbytek na `canceled`.
+      // Fill race / odmítnutí proto zůstává na původním REST fallbacku.
+      const confirmed = await waitForOrder(orderId, order => order.status === 'canceled', commandId);
       if (syncReady && !confirmed) {
         const rejection = await commandRejection(commandId);
         if (rejection) throw new TradovateTransportError(`cancelOrder command ${commandId} rejected: ${rejection}`);
         throw new TradovateTransportError(`cancelOrder command ${commandId} was not confirmed by the order stream`);
       }
+      // Predikát výše = terminální stav přesně rušeného orderu po přijetí
+      // tohoto commandu. Controller z něj ještě rozliší canceled vs fill.
+      return confirmed ? { confirmedBy: 'stream-terminal' as const, order: { ...confirmed } } : undefined;
     },
     async modifyOrder(_accountId, brokerOrderId, changes) {
       const orderId = numberId(brokerOrderId);

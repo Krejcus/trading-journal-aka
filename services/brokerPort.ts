@@ -346,6 +346,12 @@ export interface BrokerModifyConfirmation {
   order: BrokerOrder;
 }
 
+/** Důkaz od adaptéru: terminální stav přesně rušeného příkazu z dohnaného streamu. */
+export interface BrokerCancelConfirmation {
+  confirmedBy: 'stream-terminal';
+  order: BrokerOrder;
+}
+
 export interface BrokerStreamOrderSnapshot {
   orders: BrokerOrder[];
   observedAt: number;
@@ -382,7 +388,12 @@ export interface BrokerPort {
    * bez IBKR): právě jedna nearchivovaná splatnost s `isFront`, jinak null. Jen čtení.
    */
   frontContract?(root: string, accountId: number): Promise<{ contract: string; expiration: string | null } | null>;
-  cancelOrder(accountId: number, brokerOrderId: string): Promise<void>;
+  /**
+   * `stream-terminal` je autoritativní výsledek konkrétního cancel commandu.
+   * `void` znamená, že stream nebyl synchronizovaný a volající musí výsledek
+   * ověřit čtením; nikdy z něj nesmí odvodit úspěch.
+   */
+  cancelOrder(accountId: number, brokerOrderId: string): Promise<void | BrokerCancelConfirmation>;
   /**
    * Vrací potvrzení jen tehdy, když adaptér viděl Replaced execution report
    * přesně tohoto modify commandu a otevřený příkaz v odeslaném tvaru.
@@ -405,7 +416,8 @@ export interface BrokerPort {
    * a bez vedlejších efektů. `null`, kdykoli stream není prokazatelně dohnaný
    * (bez syncu, obměna socketu, rozpracovaný rámec, ticho socketu, REST merge,
    * rate limit). Completeness eventual: jen předčtení posunu SL/TP leadera
-   * (INV-MANUAL-01) — nikdy ARM, reconcile, důkaz flat/no-working ani Flatten.
+   * a risk-redukujícího `cancel-entry` (INV-MANUAL-01) — nikdy ARM,
+   * reconcile, důkaz flat/no-working ani Flatten.
    */
   streamOrderSnapshot?(accountId: number): BrokerStreamOrderSnapshot | null;
   /**

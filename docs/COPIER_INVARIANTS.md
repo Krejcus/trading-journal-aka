@@ -1797,8 +1797,15 @@ existující ochranu.
   `orders`, žádné buzení čekatelů). Controller ho použije jen když pracující
   příkazy symbolu sedí s `liveOrdersByAccount` (tvar, stav, `sourceVersion`)
   a vstup se stavem, který už zpracoval; jinak REST. Před zápisem se navíc
-  porovná `routeEpoch` leadera (změna = `not-sent`). `cancel-entry`
-  zůstává na REST. **Od 2. 11. 2026 i `close-position`** bere pre-read ze snímku
+  porovná `routeEpoch` leadera (změna = `not-sent`). **Od 4. 11. 2026 i
+  risk-redukční `cancel-entry`** smí použít tentýž přesně shodný snímek pro
+  předčtení; obecný controller přijme bez dalšího REST jen jako terminální
+  `canceled|filled|rejected` Order přesně rušeného id a účtu, který adaptér
+  autoritativně dohnal. Tradovate adaptér tuto zkratku vrací pouze pro přesný
+  `Order(Canceled)`; `Filled`/odmítnutí nechává původnímu REST fallbacku, protože
+  u partial fillu může raw `Filled` předběhnout Completed cancel report. Chybějící, neterminální nebo neshodné
+  potvrzení = původní přesný REST lookup; fill dál spouští kontrolu ochranných
+  nohou a nikdy se nevydává za „zrušeno“. **Od 2. 11. 2026 i `close-position`** bere pre-read ze snímku
   (jen kontrola tvaru před `liquidateposition`; výsledek dál výhradně z REST ověření
   po zavření, INV-MODE-02; audit nese `zápis`, `stream flat` a `ověření rest` ms).
   Vědomě beze změny: `liquidateposition` zruší všechny příkazy kontraktu — cizí příkaz,
@@ -2043,7 +2050,8 @@ existující ochranu.
     kaskáda NEOVĚŘENÁ → blokováno s kódem `entry-partially-filled` „pozice je otevřená, zavři ji
     Flattenem (× u částečně vyplněné pozice nejde)“ — × chce vstup vyplněný přesně na qty, oponentura
     C7 kolo 2). **Worker to hlídá sám, ne jen výběr pro zobrazení** (oponentura C7 kolo 2,
-    `cancelEntryTargetProblem`): cíl `cancel-entry` z čerstvého REST nesmí mít `parentOrderId`, jeho id
+    `cancelEntryTargetProblem`): cíl `cancel-entry` z přesně shodného synchronizovaného snímku
+    (jinak z čerstvého REST) nesmí mít `parentOrderId`, jeho id
     nesmí být id žádné známé ochranné nohy (vlastní záznamy + OSO/bracket outboxy) a u vlastního vstupu
     musí strana i typ sedět se záznamem — jinak `not-entry` a nic se neodešle (chyba mapování ACK
     ani poškozený store nikdy nezruší SL). Kolo 3 (P3, obrana do hloubky): příkaz na OPAČNÉ straně,
@@ -2064,12 +2072,14 @@ existující ochranu.
     streamu s fillem 0, stejného symbolu/strany/typu, bez `parentOrderId` a s id, které není id
     žádné vlastní nohy; bez rozběhnutého zrušení či nevyřešené změny. `pendingCancelContext` jen
     počítá, co zůstává (cizí, ochranné nohy, částečně vyplněné) a proč teď nejde nic
-    (nevyřešený ruční vstup). Worker při každém zrušení vše ověří znovu čerstvým REST čtením.
+    (nevyřešený ruční vstup). Worker při každém zrušení vše ověří ze synchronizovaného, přesně
+    shodného snímku s route fence; při jakékoli nejistotě znovu čerstvým REST čtením.
   - **Výsledek `cancel-entry` jen stavem (od C7, `lib/liveCancelPending.ts:cancelEntryOutcome`):**
-    adaptér `cancelOrder` skončí úspěchem i u příkazu, který se mezitím vyplnil (čeká na
-    canceled|filled|rejected), a Tradovate zrušení vyplněného vstupu ODMÍTNE („TooLateToCancel“).
-    Proto po úspěchu i po definitivním odmítnutí (inline i pozdě po timeoutu) ohraničené autoritativní
-    `findOrderById` vstupu: `canceled` s fillem 0 = `acknowledged` (po odmítnutí `waived` „ne tímto
+    Tradovate adaptér `cancelOrder` vrátí rychlé potvrzení jen po přesném `Order(Canceled)`; vstup,
+    který se mezitím vyplnil, broker typicky ODMÍTNE („TooLateToCancel“) a raw `Filled` se za úspěch
+    nikdy nevydává. Proto po platném streamovém potvrzení terminální stav přesně tohoto id/účtu, jinak — a po
+    definitivním odmítnutí vždy — ohraničené autoritativní `findOrderById` vstupu:
+    `canceled` s fillem 0 = `acknowledged` (po odmítnutí `waived` „ne tímto
     příkazem“ — kauzalita se netvrdí); jakýkoli fill = `rejected` s kódem `entry-filled` /
     `entry-partially-filled` (nikdy „zrušeno“, kód je i v durable záznamu `resultCode` a vrací ho
     idempotentní replay); `waived` nese kód ověřený stavem (`canceled-elsewhere` / `entry-ended`)

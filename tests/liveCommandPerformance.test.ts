@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { liveCommandWorkerDurations, liveCommandWorkerStage } from '../lib/liveCommandPerformance';
+import {
+  hasActiveLiveCommandTrace,
+  liveCommandTraceReadyToComplete,
+  liveCommandWorkerDurations,
+  liveCommandWorkerStage,
+  markLiveCommandPaint,
+  markLiveCommandResult,
+  startLiveCommandTrace,
+  type LiveCommandTrace,
+} from '../lib/liveCommandPerformance';
+
+const trace = (patch: Partial<LiveCommandTrace> = {}): LiveCommandTrace => ({
+  operationId: 'entry:test',
+  kind: 'place-leader-entry',
+  startedAt: '2026-11-04T00:00:00.000Z',
+  startedEpochMs: 1,
+  startedPerformanceMs: 1,
+  startVisible: true,
+  startFocused: true,
+  stayedForeground: true,
+  ...patch,
+});
 
 describe('LIVE command end-to-end performance', () => {
   it('rozliší order, fill a autoritativní position milestone', () => {
@@ -19,5 +40,35 @@ describe('LIVE command end-to-end performance', () => {
       fillToPositionMs: 20,
     });
     expect(liveCommandWorkerDurations({ startedAt: 20, queuedAt: 30 })).toEqual({});
+  });
+
+  it('nesmaže kotvu kliku, když position paint předběhne HTTP výsledek', () => {
+    expect(liveCommandTraceReadyToComplete(trace({
+      stages: { position: { receivedMs: 100, paintedMs: 120, receiveToPaintMs: 20, clickToPaintMs: 120, visible: true, focused: true } },
+    }))).toBe(false);
+    expect(liveCommandTraceReadyToComplete(trace({
+      resultMs: 300,
+      resultStatus: 'acknowledged',
+      stages: { position: { receivedMs: 100, paintedMs: 120, receiveToPaintMs: 20, clickToPaintMs: 120, visible: true, focused: true } },
+    }))).toBe(true);
+  });
+
+  it('udrží v reálném lifecycle stejnou aktivní stopu až do pozdějšího HTTP výsledku', () => {
+    const operationId = 'entry:paint-before-result';
+    startLiveCommandTrace(operationId);
+    markLiveCommandPaint({
+      operationId,
+      stage: 'position',
+      receivedPerformanceAt: performance.now(),
+      workerTiming: { queuedAt: 10, startedAt: 11, positionAt: 20 },
+    });
+    expect(hasActiveLiveCommandTrace(operationId)).toBe(true);
+    markLiveCommandResult(operationId, 'acknowledged');
+    expect(hasActiveLiveCommandTrace(operationId)).toBe(false);
+  });
+
+  it('ponechá úspěšný working limit aktivní, ale definitivní reject uzavře bez paintu', () => {
+    expect(liveCommandTraceReadyToComplete(trace({ resultMs: 300, resultStatus: 'acknowledged' }))).toBe(false);
+    expect(liveCommandTraceReadyToComplete(trace({ resultMs: 300, resultStatus: 'blocked' }))).toBe(true);
   });
 });
