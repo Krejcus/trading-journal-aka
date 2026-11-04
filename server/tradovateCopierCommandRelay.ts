@@ -1420,6 +1420,30 @@ export async function completeTradovateCopierCommandV2(options: {
   return data === true;
 }
 
+/**
+ * Compact durable ACK for the two hot manual command families. The command row
+ * and delivery binding stay authoritative, while the large runtime snapshot is
+ * sent by the immediately scheduled heartbeat after this ACK. Exact startedAt
+ * equality fences a superseded worker before the command can become terminal.
+ */
+export async function completeTradovateCopierHotCommandV3(options: {
+  db: SupabaseClient; deviceId: string; deliveryId: string; commandId: string;
+  result?: unknown; error?: string; workerStartedAt: string;
+}): Promise<boolean> {
+  const { data, error } = await options.db.rpc('complete_tradovate_copier_hot_command_v3', {
+    target_device_id: options.deviceId,
+    target_delivery_id: options.deliveryId,
+    target_command_id: options.commandId,
+    command_result: options.result ?? null,
+    command_error: options.error?.slice(0, 500) || null,
+    worker_started_at: options.workerStartedAt,
+  });
+  // Funkce v DB není (neaplikovaná migrace, stará schema cache): worker přejde na complete-v2.
+  if (error?.code === 'PGRST202' || error?.code === '42883') throw new Error('copier-relay-hot-ack-unavailable');
+  if (error) throw new Error(`copier-relay-complete-failed: ${error.message}`);
+  return data === true;
+}
+
 export async function completeTradovateCopierCommand(options: {
   db: SupabaseClient; deviceId: string; commandId: string; result?: unknown; error?: string;
 }): Promise<boolean> {

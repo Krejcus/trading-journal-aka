@@ -20,6 +20,8 @@ import {
  */
 const RELAY_STATUS_TIMEOUT_MS = 20_000;
 const RELAY_COMMAND_TIMEOUT_MS = 30_000;
+/** Kompaktní ACK je jen optimalizace: uvíznutý nesmí zdržet brzdu za příkazem (INV-BRAKE-03). */
+const RELAY_COMPACT_ACK_TIMEOUT_MS = 3_000;
 
 export interface MacCopierCommandRelay {
   /**
@@ -539,6 +541,7 @@ export function startMacCopierCommandRelay(options: {
   };
   /** poll-v2 s vlastním přerušením (F1b′); ostatní požadavky doručení jako dřív. */
   const deliveryRequest = async (body: Record<string, unknown>) => {
+    if (body.action === 'complete-hot-v3') return request(body, RELAY_COMPACT_ACK_TIMEOUT_MS, loopAbort.signal);
     if (body.action !== 'poll-v2') return request(body, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
     const controller = new AbortController();
     const forward = () => controller.abort(loopAbort.signal.reason);
@@ -560,8 +563,14 @@ export function startMacCopierCommandRelay(options: {
     // Po broker ACK + fsync ukaž výsledek v grafu hned. Serverový ACK, audit,
     // background heartbeat i budíček zůstávají v onComplete níže.
     onDurableResult: () => scheduleExposureSend(),
-    // ACK uložil výsledek i autoritativní status → budíček pro otevřené LIVE.
-    onComplete: id => { completedNotifications.add(id); publishBackground(); sendStatusNudge(); },
+    // ACK uložil výsledek → budíček pro otevřené LIVE, až když je v DB i status:
+    // po complete-v2 hned, po kompaktním ACK až po potvrzeném heartbeatu.
+    onComplete: (id, statusPending) => {
+      completedNotifications.add(id);
+      publishBackground();
+      if (statusPending) publishStatusSoon(true);
+      else sendStatusNudge();
+    },
   }) : null;
   let deliveryBusy = false;
   /** Důkaz prázdné fronty pro údržbový restart; maže se začátkem každého pollu. */

@@ -288,6 +288,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE latency: kompaktní ACK horkých příkazů dokončený lokálně (Claude po Codexovi, NENASAZENO)
+
+- Codex skončil na limitu před celou sadou a oponenturou. Záměr: `place-leader-entry`
+  a `manage-leader-order` nečekají po broker ACK 161–315 ms na zápis celého statusu
+  (~24 kB); ACK jde přes `complete-hot-v3`, status hned potom fenced heartbeatem.
+- Oponentura našla P1, které Codexova verze měla: nedostupné v3 (starý web, chybějící
+  migrace) trvale ucpalo sériovou linku i se vzdálenými brzdami za příkazem. Proto
+  v3 je jen optimalizace: rozpočet 3 s, při selhání v téže delivery `complete-v2`
+  (opakuje se jen ACK, nikdy execution), při „server v3 neumí“ pauza 5 min. Budíček
+  LIVE po v3 až po potvrzeném heartbeatu, aby UI nečetlo starý status.
+- `copier-design-critic`: kolo 1 a 2 OPRAVIT PŘED COMMITEM → kolo 3 OK S VÝHRADAMI (jen P3).
+  Otevřené P3: mimo graf se status po v3 ukáže o ≤ 2 s později; při trvale pomalém API
+  zaplatí každý horký příkaz až 3 s navíc; souběh v2 za nepotvrzeným v3 na skutečných
+  funkcích ověřený jen sondou na PGlite (jedno spojení), opakování v3 na Postgresu.
+- Testy: mutace 16/16 + SQL mutace, SQL 7/7 na dočasném Postgresu, celá sada, tsc, build.
+  Migrace `20261104164250` NENÍ aplikovaná, web ani worker nenasazené, přínos NENÍ změřený.
+  Pořadí: migrace, web, worker; před tím A/B na DEMO podle `docs/LIVE_HOT_PATH_PLAN.md` §20.
+- Tento worktree se jmenuje `release-20261104-eb461e22`, ale je na větvi
+  `codex/live-speed-20261104`; název neodpovídá obsahu.
+
 ### 2026-11-04 — LIVE latency: DEMO order write přes existující WebSocket (Codex, NASAZENO A ZMĚŘENO)
 
 - Ruční order write cesta umí pro explicitně povolený `manual-only` DEMO

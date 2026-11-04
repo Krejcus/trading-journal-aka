@@ -4,7 +4,8 @@ import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierD
 import {
   admitCopierAutoResume,
   claimTradovateCopierCommandV2, completeTradovateCopierCommandV2,
-  claimTradovateCopierCommand, completeTradovateCopierCommand, enqueueTradovateCopierCommand,
+  claimTradovateCopierCommand, completeTradovateCopierCommand, completeTradovateCopierHotCommandV3,
+  enqueueTradovateCopierCommand,
   copierRelayValidationErrorStatus,
   heartbeatTradovateCopierDevice, readTradovateCopierCommand, readTradovateCopierDeviceRuntime,
   resolveCopierRelayConnectionId, verifyCopierRelayTargetHint,
@@ -106,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
       const action = String(req.body?.action ?? '');
       const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization,
-        ...(['poll-v2', 'complete-v2', 'live-bars'].includes(action) ? { touchLastUsed: false } : {}),
+        ...(['poll-v2', 'complete-v2', 'complete-hot-v3', 'live-bars'].includes(action) ? { touchLastUsed: false } : {}),
       });
       if (action === 'auto-resume-admit') {
         const since = Number(req.body?.since);
@@ -131,6 +132,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           || !req.body?.status || !Number.isFinite(Date.parse(req.body.status.startedAt))) {
           return res.status(400).json({ error: 'invalid-relay-heartbeat' });
         }
+      }
+      if (action === 'complete-hot-v3') {
+        const deliveryId = String(req.body?.deliveryId ?? '');
+        const commandId = String(req.body?.commandId ?? '');
+        const workerStartedAt = String(req.body?.workerStartedAt ?? '');
+        if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId) || !SNAPSHOT_TEST_REQUEST_ID.test(commandId)) {
+          return res.status(400).json({ error: 'invalid-delivery-id' });
+        }
+        if (!Number.isFinite(Date.parse(workerStartedAt))) {
+          return res.status(400).json({ error: 'invalid-hot-command-ack' });
+        }
+        const accepted = await completeTradovateCopierHotCommandV3({
+          db,
+          deviceId: device.id,
+          deliveryId,
+          commandId,
+          result: req.body?.result,
+          error: typeof req.body?.error === 'string' ? req.body.error : undefined,
+          workerStartedAt,
+        });
+        return res.status(accepted ? 200 : 409).json({ protocol: 3, accepted });
       }
       if (action === 'heartbeat-v2') {
         await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId,
@@ -587,6 +609,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('auth-token') || message === 'invalid-copier-device-auth') return res.status(401).json({ error: message });
     if (message.endsWith('not-found')) return res.status(404).json({ error: message });
+    if (message === 'copier-relay-hot-ack-unavailable') return res.status(503).json({ error: message });
     if (message === 'snapshot-too-large') return res.status(413).json({ error: message });
     if (message === 'invalid-snapshot-payload' || message === 'invalid-snapshot-png') {
       return res.status(400).json({ error: message });

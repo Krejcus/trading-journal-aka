@@ -736,7 +736,9 @@ existující ochranu.
   staré instance (řádek v DB nese starou instanci celý, shoda `startedAt` to neodhalí);
   nová instance ho vezme větví „session se změnila“ = neprovede, UI „výsledek neznámý“.
   Okno zkracuje status s `relayIdle: null` hned při startu relaye. Po ACK nese status
-  z `complete-v2` `relayIdle` bez hodnoty → push až po dalším heartbeatu (≤ ~250 ms).
+  z `complete-v2` `relayIdle` bez hodnoty → push až po dalším heartbeatu (≤ ~250 ms);
+  po kompaktním `complete-hot-v3` zůstane do heartbeatu stará hodnota a chrání kontrola
+  `occupied` v admission.
 
 ### Relay příkazy
 
@@ -829,6 +831,29 @@ existující ochranu.
   Vědomě nepokryto: ACK
   trvale 409, když DB zná novější `startedAt` (INV-WORKER-02/03). Test:
   `tests/recoverableCopierDeliveryOrphan.test.ts`.
+- Kompaktní ACK horkých ručních příkazů (4. 11. 2026): pouze
+  `place-leader-entry` a `manage-leader-order` po lokálně durable výsledku smí
+  použít `complete-hot-v3`. RPC dál zamyká přesný command + delivery, přijímá
+  jen `claimed`, kontroluje přesnou shodu `startedAt` aktuálního runtime a
+  idempotentně přijme jen totožné opakování výsledku. Plný status se neposílá
+  v ACK; worker jej hned publikuje existujícím fenced heartbeatem a budíček LIVE
+  pošle až po jeho potvrzení. `last_seen_at` se ACKem neposouvá, čerstvost se tedy
+  falešně neprodlužuje. Selhání v3 linku s brzdami trvale neblokuje (INV-BRAKE-03):
+  v3 má rozpočet 3 s (SQL `lock_timeout` 2 s) a v téže delivery následuje už jen
+  `complete-v2` (rozpočet 20 s jako dřív), který po zapsaném v3 vrátí jen shodu.
+  `lock_timeout` platí na každý zámek zvlášť, takže v3 může commitnout až po přechodu
+  na v2; oba směry končí shodou bez druhého zápisu.
+  Brzda za příkazem tak v nejhorším čeká o 3 s déle než s v2. Když server v3 neumí
+  (starý web 400, chybějící funkce 503 `copier-relay-hot-ack-unavailable`), worker
+  ho 5 min nezkouší; přechodné chyby a 409 pauzu nezapnou.
+  Brzdy, ARM, konfigurace a ostatní příkazy vždy zůstávají na atomickém
+  `complete-v2` se statusem. Kompaktní ACK nikdy neopakuje execution ani
+  neautorizuje další příkaz. Mezi terminálním commandem a heartbeatem může runtime
+  krátce nést starou `relayIdle` delivery; admission to řeší kontrolou `occupied`,
+  příkaz jde jen bez zkratky pushem. Testy:
+  `tests/recoverableCopierDelivery.test.ts`,
+  `tests/macCopierCommandRelay.test.ts`,
+  `tests/sql/copierHotCommandCompactAck.pg.mjs`.
 
 ### INV-RELAY-03: Novější brzda superseduje starší ARM a durable čekající brzda není selhání
 
@@ -923,6 +948,7 @@ existující ochranu.
 - Budíček statusu (30. 10. 2026, `docs/LIVE_HOT_PATH_PLAN.md` §5): téma
   `copier-nudge-…` odvozené ze zařízení (`copierStatusNudgeTopic`). Worker po
   potvrzeném heartbeatu vyvolaném změnou u brokera a po přijatém ACK příkazu
+  (po kompaktním ACK až po potvrzeném heartbeatu, který status dorovná)
   pošle prázdnou zprávu (fire-and-forget, ≥ 250 ms od sebe); LIVE jen kickne
   běžný poll statusu (`hooks/useCopierStatusNudge.ts`: jen s otevřeným LIVE
   grafem, ≥ 250 ms, nejvýš 60 za minutu). Zpráva nenese

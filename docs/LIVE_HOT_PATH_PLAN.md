@@ -397,3 +397,29 @@ importy a call site ale bundler nedokázal bezpečně odstranit.
 - Cíl měření: stejný 1× MNQ DEMO scénář REST vs. WS v popředí, odděleně
   click→worker, broker write ACK, broker Fill→worker a Fill→pixel. Malé `n`
   se nevydává za p50/p95. Produkční aktivace mimo tento DEMO účet není součástí.
+
+## 20. F4 — kompaktní durable ACK horkých příkazů (4. 11. 2026, lokálně)
+
+Produkční vzorek 1× MNQ LIMIT + Cancel ukázal, že samotný DB claim trval
+23–37 ms a brokerový WS ACK 132–150 ms, ale následný `complete-v2` ještě
+161–315 ms nahrával a atomicky zapisoval celý přibližně 24kB runtime status.
+Graf už přitom dostal zobrazovací F2a expozici před tímto ACK.
+
+- `place-leader-entry` a `manage-leader-order` proto po lokálním durable fsync
+  posílají `complete-hot-v3`: delivery, command id, kompaktní výsledek/chybu a
+  přesný `startedAt` workeru. Žádný status ani revision.
+- Databázová funkce zamkne přesný command + delivery, přijme pouze oba uvedené
+  vnitřní typy ve stavu `claimed` a pod zámkem ověří přesnou worker epochu v
+  runtime. Ztracenou HTTP odpověď lze zopakovat jen se stejným terminálním
+  výsledkem; `completed_at` se neposune.
+- Po ACK worker plánuje plný status přes existující fenced heartbeat a budíček
+  LIVE pošle až po jeho potvrzení. Selhání v3 = v téže delivery `complete-v2`
+  (opakuje se jen ACK), takže nesoulad verzí webu a migrace nezablokuje brzdy.
+  Brzdy, ARM, změny konfigurace a všechny ostatní příkazy dál používají
+  `complete-v2`, takže bezpečnostní stav zůstává atomickou součástí jejich ACK.
+- Nasazení: migrace, web, worker. Návrat: worker, web, `drop function`. Jiné pořadí
+  skončí na `complete-v2` bez blokace brzd, jen bez zisku. Před A/B měřením ověřit
+  v logu workeru, že v3 opravdu běží (nebo pauza 5 min nezkresluje vzorek).
+- Očekávaný zisk je pouze v úseku broker ACK → důvěryhodný výsledek v UI.
+  Číslo se uzná až z A/B DEMO měření za stejných podmínek; lokální test není
+  důkaz produkční latence.
