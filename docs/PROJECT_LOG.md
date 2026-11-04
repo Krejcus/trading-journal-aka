@@ -327,9 +327,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   tedy nevzniká hydratací fillu ani React listenery, ale čekáním za předchozím sémantickým broker frame.
 - Zásadní runtime nález: telefonní `LivePhoneChart` měl připravený F2a paint, ale `chartOpenRef` povoloval
   push expozice a rychlý poll jen desktopu. Proto konzole ukázala `start` + `result`, nikdy `paint`, a
-  viditelná pozice přišla až z pollu. Lokální oprava zahrnuje do stejné brány i `phoneChartAvailable`;
-  tím telefon dostane stejný okamžitý fill/position push jako PC. Cílené regrese 21/21 prošly; tato
-  poslední podmínka zatím není commitnutá ani nasazená.
+  viditelná pozice přišla až z pollu. Oprava v commitu `21ca646436192e225642019726f64d482887d080`
+  zahrnuje do stejné brány i `phoneChartAvailable`; tím telefon dostává stejný okamžitý fill/position
+  push jako PC. Cílené regrese 21/21 a produkční build prošly. Commit je na `main`, Vercel deployment
+  `dpl_CKTF6ybddFAH6CrwmjTjrj7nVoHY` je READY a worker je bezpečně sjednocený na témže SHA (bundle se
+  nezměnil, prefix `bb7d0f9dc020e49e`).
+- Foreground telefonní A/B po opravě: platný 1× MNQ DEMO Market měl první `order` pixel za **634,1 ms**
+  a skutečnou `position` za **737,9 ms** od potvrzovacího kliku; příjem → dva paint snímky trval pouze
+  **31,1 / 29,3 ms**. Relay výsledek dorazil za 744,6 ms, cloud queue byla 242,5 ms, broker Fill měl
+  `broker→frame 38 ms`, `frame→handler 136 ms`, `handler→dispatch 0 ms`. To potvrzuje, že mobilní render
+  už není brzda; další optimalizační cíl je admission/delivery fronta a serializace sémantických broker
+  framů. Pozice byla potvrzeně zavřena, worker vypnut a závěrečný read-only reconcile potvrdil flat,
+  0 pracovních příkazů, bez divergence/stuck/error; broker daily realized skončil na `-190,68 USD`.
 - Diagnostický commit předtím prošel cíleně 60/60, plnou sadou 735 souborů / 7 518 testů (1 skip,
   1 todo), produkčním buildem a `git diff --check`; TypeScript měl pouze známý baseline extension +
   tuple testu. Vzorek byl potvrzeně zavřen, worker vypnut a závěrečný reconcile byl autoritativně čistý.
