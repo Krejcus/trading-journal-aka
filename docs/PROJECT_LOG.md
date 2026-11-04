@@ -320,8 +320,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   zahájených `/orderVersion/deps` hydratací a odděluje `queue/handler/total`.
   Exekuční pořadí ani chování nemění. Regrese 57/57; plná sada 7519 testů
   prošla (1 todo), produkční build a worker bundle prošly. TypeScript má jen
-  známý baseline extension typů a starší tuple chybu mimo změnu. Tato v2 je
-  zatím lokální a před dalším nasazením neproběhne další broker obchod dnes.
+  známý baseline extension typů a starší tuple chybu mimo změnu. Diagnostika
+  v2 je nasazená jako `1a26c9942aee058cda6b4844193caa3ff5e37491`:
+  Vercel `dpl_Hu46bgYHedxLJBmnUZF8gB9kLe4W` READY, worker stejný čistý SHA.
+  Finální read-only reconcile: OFF, connected, flat, orders `[]`, bez chyby;
+  další broker obchod dnes neproběhne.
 
 ### 2026-11-04 — Telefonní E2E měření + pravdivý Fill dispatch (Codex, NASAZENO A ZMĚŘENO)
 
