@@ -824,6 +824,49 @@ describe('createTradovateBroker WebSocket', () => {
     unsubscribe();
   });
 
+  it('fill bez accountId vydá hned po přesném placeOSO ACK, bez čekání na Order rámec', async () => {
+    const fills: Array<{ accountId: number; tag: string; quantity: number }> = [];
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.endsWith('/order/placeoso')) {
+        return jsonResponse({ orderId: 42, oso1Id: 43, oso2Id: 44, failureReason: 'Success' });
+      }
+      if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+    });
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'fill') fills.push({
+        accountId: event.fill.accountId, tag: event.fill.tag, quantity: event.fill.quantity,
+      });
+    });
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'Fill', eventType: 'Created',
+      entity: { id: 12, orderId: 42, contractId: 7, action: 'Buy', qty: 1, price: 29_500 },
+    }] })}]` });
+    await Promise.resolve();
+    expect(fills).toEqual([]);
+
+    await broker.placeOso?.({
+      ...request({ tag: 'fast-fill', accountId: 200, orderType: 'Limit', limitPrice: 29_500, quantity: 1 }),
+      first: { side: 'Sell', orderType: 'Stop', stopPrice: 29_488 },
+      second: { side: 'Sell', orderType: 'Limit', limitPrice: 29_524 },
+    });
+
+    await expect.poll(() => fills.length).toBe(1);
+    expect(fills).toEqual([{ accountId: 200, tag: 'fast-fill', quantity: 1 }]);
+    unsubscribe();
+  });
+
   it('pozdní CommandReport reject koreluje přes Command a zachová důvod', async () => {
     const rejected: Array<{ status: string; rejectReason?: string }> = [];
     const socket: WebSocketLike = {

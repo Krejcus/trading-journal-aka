@@ -288,6 +288,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE rychlost: Fill po place ACK bez čekání na Order + 50ms exposure (Codex, lokálně, NENASAZENO)
+
+- Produkční logy ukázaly, že skutečný Tradovate Fill dorazil do workeru za 25–65 ms, ale při chybějícím
+  `accountId` ve Fill entitě čekal dalších 123–221 ms na pozdější Order/ExecutionReport. Přijatý
+  `placeOrder`/`placeOCO`/`placeOSO` ACK nyní uloží přesnou korelaci broker order ID → účet + `clOrdId`
+  z původního requestu a hned zkusí vydat už přijatý skutečný Fill. Nic se nesyntetizuje; bez definitivního
+  accepted ACK zůstává původní Order fallback. Neúspěšná hydratace pending Fill nemaže, takže se neztratí.
+- Display-only exposure z workeru do otevřeného grafu má při rychlém sledu brokerových událostí rozestup
+  50 místo 150 ms. Zůstává jeden in-flight publish, trailing nejnovější stav, šifrování, fire-and-forget
+  a úplné oddělení od admission, risku a brokerové exekuce. Cíl je ubrat až ~100 ms hlavně u Market fillu
+  a změny pozice na počítači i telefonu.
+- Nová regrese reprodukuje Fill bez `accountId`, který přijde před Order rámcem, a dokládá jeho jediné
+  vydání hned po přesném OSO ACK se správným účtem a tagem. Cílené broker/relay sady: 160/161 v prvním
+  zatíženém běhu (starý 250ms nudge test jednou naměřil 249 ms), samostatný rerun 23/23; širší brokerová
+  sada předtím 116/116. Úplná sada: 735 souborů / 7 516 testů zeleně (1 skip, 1 todo). Produkční build,
+  worker bundle + syntax check a `git diff --check` prošly. Kořenový TypeScript hlásí jen stejné známé
+  chyby samostatné Chrome extension a starý tuple typ v `tests/macCopierCommandRelay.test.ts`.
+- Změna zatím není commitnutá, pushnutá, nasazená ani nainstalovaná; žádný brokerový příkaz při vývoji
+  neodešel. Čerstvý read-only reconcile před prací potvrdil DEMO, DISARMED, flat, 0 orders/pozic,
+  `authoritativelyClean=true` a bez divergence/stuck/error.
+
 ### 2026-11-04 — Produkční A/B rychlosti: limit 628 ms, Market 660–751 ms, flat milník před ACK (Codex, NASAZENO A ZMĚŘENO)
 
 - Web i Mac worker byly sjednocené na čistém commitu `174c1b4b0c556bdcedf01e70b9038c61372ca886`;

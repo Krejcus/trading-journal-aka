@@ -408,6 +408,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   /** Raw fill tvar pro account-scoped resync snapshot; execution delivery řídí množiny výše. */
   const rawFills = new Map<number, TradovateFillEntity>();
   const pendingFills = new Map<number, PendingTradovateFill[]>();
+  /**
+   * Přesná korelace z úspěšného place ACK. Tradovate umí poslat Fill dřív než
+   * Order/ExecutionReport a samotný Fill občas nenese accountId. Dřív proto
+   * čekal v pendingFills dalších ~120–220 ms na Order rámec. ACK ale už
+   * autoritativně svazuje broker order ID s requestem konkrétního účtu; hint
+   * pouze umožní vydat SKUTEČNOU Fill entitu dřív, nic nesyntetizuje.
+   */
+  const orderAccountHints = new Map<number, number>();
   const orders = new Map<string, BrokerOrder>();
   const orderWaiters = new Map<number, Set<(order: BrokerOrder) => void>>();
   let socket: WebSocketLike | null = null;
@@ -1024,7 +1032,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return true;
     }
     const linked = orders.get(String(fill.orderId));
-    const accountId = fill.accountId ?? linked?.accountId ?? rawOrders.get(fill.orderId)?.accountId;
+    const accountId = fill.accountId ?? linked?.accountId ?? rawOrders.get(fill.orderId)?.accountId
+      ?? orderAccountHints.get(fill.orderId);
     if (accountId == null) {
       const waiting = pendingFills.get(fill.orderId) ?? [];
       if (!waiting.some(item => item.fill.id === fill.id)) {
@@ -1068,8 +1077,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const flushPendingFills = async (orderId: number) => {
     const waiting = pendingFills.get(orderId) ?? [];
     if (waiting.length === 0) return;
-    pendingFills.delete(orderId);
-    for (const item of waiting) await emitMappedFill(item.fill, item.receivedAt);
+    // Mazat po jedné až po úspěšném emitu. Když selže třeba hydratace
+    // kontraktu, pozdější Order/ExecutionReport smí bezpečně zkusit fallback;
+    // fill se neztratí a deliveredFillIds dál brání duplicitě.
+    for (const item of waiting) {
+      if (await emitMappedFill(item.fill, item.receivedAt)) dropPendingFill(orderId, item.fill.id);
+    }
   };
 
   const dropPendingFill = (orderId: number, fillId: number) => {
@@ -1078,6 +1091,17 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     const remaining = waiting.filter(item => item.fill.id !== fillId);
     if (remaining.length > 0) pendingFills.set(orderId, remaining);
     else pendingFills.delete(orderId);
+  };
+
+  const rememberAcceptedOrderHint = (brokerOrderId: string, accountId: number, tag: string) => {
+    const orderId = Number(brokerOrderId);
+    if (!Number.isSafeInteger(orderId) || orderId <= 0 || !Number.isSafeInteger(accountId) || accountId <= 0) return;
+    orderAccountHints.set(orderId, accountId);
+    if (tag) orderTags.set(orderId, tag);
+    // Fill mohl přijít ještě během HTTP POSTu. Rychlý flush nesmí prodloužit
+    // ani změnit broker ACK; při chybě zůstává položka pending pro původní
+    // Order/ExecutionReport fallback.
+    void flushPendingFills(orderId).catch(() => undefined);
   };
 
   /**
@@ -2125,7 +2149,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         '/order/placeorder',
         toPlaceOrderPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
-      return fromPlaceOrderResult(result ?? {});
+      const ack = fromPlaceOrderResult(result ?? {});
+      if (ack.accepted) rememberAcceptedOrderHint(ack.brokerOrderId, requestBody.accountId, requestBody.tag);
+      return ack;
     },
     async liquidatePosition(requestBody) {
       // ContractId vybíráme z čerstvé brokerové Position entity, ne ze stale
@@ -2169,14 +2195,25 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         '/order/placeoco',
         toPlaceOcoPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
-      return fromPlaceOcoResult(result ?? {});
+      const ack = fromPlaceOcoResult(result ?? {});
+      if (ack.accepted) {
+        rememberAcceptedOrderHint(ack.firstBrokerOrderId, requestBody.accountId, requestBody.tag);
+        rememberAcceptedOrderHint(ack.secondBrokerOrderId, requestBody.accountId, `${requestBody.tag}b`);
+      }
+      return ack;
     },
     async placeOso(requestBody: BrokerOsoRequest) {
       const result = await post<TradovatePlaceOsoResult>(
         '/order/placeoso',
         toPlaceOsoPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
-      return fromPlaceOsoResult(result ?? {});
+      const ack = fromPlaceOsoResult(result ?? {});
+      if (ack.accepted) {
+        rememberAcceptedOrderHint(ack.entryBrokerOrderId, requestBody.accountId, requestBody.tag);
+        rememberAcceptedOrderHint(ack.firstBrokerOrderId, requestBody.accountId, `${requestBody.tag}s`);
+        rememberAcceptedOrderHint(ack.secondBrokerOrderId, requestBody.accountId, `${requestBody.tag}t`);
+      }
+      return ack;
     },
     async cancelOrder(_accountId, brokerOrderId) {
       const orderId = numberId(brokerOrderId);

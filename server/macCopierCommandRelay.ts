@@ -319,9 +319,9 @@ export function startMacCopierCommandRelay(options: {
    * po změně u brokera — posluchač běží uvnitř eventTail, proto jen naplánuje — se
    * mimo něj sestaví status, zašifruje (AES-GCM, AAD = téma) a pošle na téma budíčku.
    * Nejvýš jeden požadavek najednou, další změna = nejnovější stav po jeho dokončení,
-   * rozestup ≥ 150 ms. Fire-and-forget; nic na něj nečeká (INV-WORKER-04).
+   * rozestup ≥ 50 ms. Fire-and-forget; nic na něj nečeká (INV-WORKER-04).
    */
-  const EXPOSURE_MIN_SPACING_MS = 150;
+  const EXPOSURE_MIN_SPACING_MS = 50;
   let exposureWanted = false;
   let exposureTimer: ReturnType<typeof setTimeout> | null = null;
   let exposureInFlight = false;
