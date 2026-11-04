@@ -288,6 +288,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE rychlost: reálný A/B odhalil 300ms post-ACK čekání a mrtvý Safari kanál (Codex, lokálně, NENASAZENO)
+
+- Produkční web i worker byly před vzorkem sjednocené na `4bf49ab8`. Uživatel výslovně potvrdil
+  jediný BUY 1 MNQZ6 LIMIT 28 420 se SL 28 408 a TP 28 444 na manual-only `DEMO8661118`.
+  Broker potvrdil vstup `611860531988` jako working a obě ochranné nohy jako pending; účet zůstal
+  flat, bez chyby, divergence nebo stuck outboxu. Příkaz nebyl zrušen a dál leží u brokera.
+- Stejný foreground klik dal 1 052 ms do HTTP výsledku proti baseline 1 080 ms. Worker příkaz přijal
+  352 ms po kliku, příprava trvala 21 ms, broker OSO POST 263 ms a worker měl durable výsledek za
+  702 ms od kliku. Zašifrovanou expozici publikoval přes již otevřený WS za dalších 15 ms.
+- Server však po durable výsledku čekal ještě až 300 ms na HTTP odpověď záložního kicku, přestože
+  worker už příkaz provedl. Lokální oprava při známém výsledku kick abortuje a odpoví hned; při
+  neznámém výsledku zachovává durable enqueue, push/kick i původní 300ms dokončovací okno.
+- Browserová stopa nezískala `order` paint, i když payload ze skutečného statusu prochází validací
+  (`valid=true`, 7,3 kB). `useCopierStatusNudge` neměl callback stavu ani watchdog; Safari mohl
+  nechat display-only kanál navždy v connecting/disconnecting. Přibyl izolovaný 12s watchdog,
+  bezpečné odebrání zaseklého tématu a reopen po 1 s. Polling fallback, freshness, admission,
+  příkazy a risk se nemění.
+- Ověření lokálního diffu: finální cílená sada 28/28, app-only TypeScript s dočasně vyloučenou
+  samostatnou `extension/` a jedním známým nesouvisejícím testovým typem, ESLint změněných souborů,
+  `git diff --check` a produkční build prošly. Nic z tohoto nového diffu nebylo commitnuto,
+  pushnuto, nasazeno ani instalováno; další důkaz vyžaduje nový shodný foreground A/B po deployi.
+
 ### 2026-11-04 — LIVE rychlost: první reálný baseline a dřívější ACK do grafu (Codex, lokálně, NENASAZENO)
 
 - Produkční web i worker `8353358d` byly ověřené na jediném účtu `DEMO8661118` (manual-only,

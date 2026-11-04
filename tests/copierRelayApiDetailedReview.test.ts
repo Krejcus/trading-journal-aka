@@ -149,7 +149,7 @@ describe('copier relay API fault review', () => {
     } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
   });
 
-  it('starts result lookup while the realtime kick response is still in flight', async () => {
+  it('returns a durable result while the redundant realtime kick response is still in flight', async () => {
     vi.useFakeTimers();
     let finishKick: (response: Response) => void = () => undefined;
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finishKick = resolve; })));
@@ -165,9 +165,36 @@ describe('copier relay API fault review', () => {
       } } as VercelRequest, res as unknown as VercelResponse);
       await vi.advanceTimersByTimeAsync(30);
       expect(mocks.read).toHaveBeenCalledOnce();
-      expect(res.json).not.toHaveBeenCalled();
-      finishKick(Response.json({ ok: true }));
       await pending;
+      expect(res.status).toHaveBeenCalledWith(202);
+      expect(res.json).toHaveBeenCalledWith({ ...queued, resolution });
+      // Pozdní síťová odpověď už hotový příkaz nedrží; dokončení stubu jen uklidí test.
+      finishKick(Response.json({ ok: true }));
+    } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
+  });
+
+  it('returns a durable result immediately and aborts a redundant in-flight kick', async () => {
+    vi.useFakeTimers();
+    let kickAborted = false;
+    vi.stubGlobal('fetch', vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        kickAborted = true;
+        reject(new DOMException('aborted', 'AbortError'));
+      }, { once: true });
+    })));
+    mocks.requireUser.mockResolvedValue('user');
+    const queued = { id: 'fast-result', deviceId: 'device', status: 'pending', expiresAt: '2026-09-05T20:00:00Z' };
+    const resolution = { id: queued.id, status: 'succeeded', result: { ok: true }, error: null };
+    mocks.enqueue.mockResolvedValue(queued);
+    mocks.read.mockResolvedValue(resolution);
+    const res = response();
+    try {
+      const pending = handler({ method: 'POST', headers: { authorization: 'Bearer mock' }, body: {
+        connectionId: 'connection', command: { type: 'disarm' }, idempotencyKey: 'same-key',
+      } } as VercelRequest, res as unknown as VercelResponse);
+      await vi.advanceTimersByTimeAsync(30);
+      await pending;
+      expect(kickAborted).toBe(true);
       expect(res.status).toHaveBeenCalledWith(202);
       expect(res.json).toHaveBeenCalledWith({ ...queued, resolution });
     } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }

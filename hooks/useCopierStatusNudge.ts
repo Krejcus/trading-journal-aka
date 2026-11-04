@@ -5,6 +5,9 @@ import {
   COPIER_LIVE_EXPOSURE_EVENT, decryptCopierLiveExposure, type CopierLiveExposurePayload,
 } from '../lib/copierLiveExposure';
 import { perfDuration, perfMark } from '../lib/perfTrace';
+import {
+  createResilientRealtimeSubscription, type ResilientRealtimeStatus,
+} from '../lib/resilientRealtimeSubscription';
 
 /**
  * Budíček statusu (docs/LIVE_HOT_PATH_PLAN.md §5): worker po změně u brokera pošle
@@ -87,20 +90,35 @@ export function useCopierStatusNudge(
       latest = { envelope: message?.payload, receivedAt: Date.now(), receivedPerformanceAt: performance.now() };
       void drain();
     };
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    try {
-      channel = supabase.channel(topic, { config: { broadcast: { self: false, ack: false } } });
-      channel.on('broadcast', { event: 'status' }, nudge);
-      channel.on('broadcast', { event: COPIER_LIVE_EXPOSURE_EVENT }, exposureMessage);
-      channel.subscribe();
-    } catch {
-      // Jen zrychlení zobrazení; poll jede dál.
-    }
+    const subscription = createResilientRealtimeSubscription({
+      open: onStatus => {
+        const channel = supabase.channel(topic, { config: { broadcast: { self: false, ack: false } } });
+        const close = () => {
+          const pending = supabase.removeChannel(channel);
+          // Safari/realtime-js může nechat odcházející téma registrované; nový kanál
+          // se stejným tématem by pak nikdy neposlal join. Odebrání je best effort
+          // a používá stejnou interní pojistku jako kanál živé ceny.
+          (supabase.realtime as unknown as { _remove?: (item: unknown) => void })._remove?.(channel);
+          return pending;
+        };
+        try {
+          channel.on('broadcast', { event: 'status' }, nudge);
+          channel.on('broadcast', { event: COPIER_LIVE_EXPOSURE_EVENT }, exposureMessage);
+          channel.subscribe(status => onStatus(status as ResilientRealtimeStatus));
+        } catch (error) {
+          void close().catch(() => undefined);
+          throw error;
+        }
+        return { close };
+      },
+      onStatus: status => perfMark(`live:exposure:channel-${status.toLowerCase()}`),
+    });
+    subscription.start();
     return () => {
       active = false;
       latest = null;
       if (timer != null) window.clearTimeout(timer);
-      if (channel) void supabase.removeChannel(channel).catch(() => undefined);
+      subscription.stop();
     };
   }, [topic]);
 }

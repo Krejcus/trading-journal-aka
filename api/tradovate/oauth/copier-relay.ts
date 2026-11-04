@@ -503,7 +503,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Nikdy nevyhodí, každý krok ≤ 1 s; výsledek nemění 202 ani nezdrží brzdu.
       const push = pushBoundCopierCommand({ db, deviceId: queued.deviceId, supabaseUrl: config.supabaseUrl,
         serviceRoleKey: config.supabaseServiceRoleKey, prefetched: relayIdle }).then(outcome => { timing.mark(`push-${outcome}`); return outcome; });
+      const kickAbort = new AbortController();
       const sendKick = async () => {
+        const timeout = setTimeout(() => kickAbort.abort('copier-kick-timeout'), 1_500);
         try {
           await fetch(`${config.supabaseUrl}/realtime/v1/api/broadcast`, {
             method: 'POST',
@@ -513,10 +515,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
             },
             body: JSON.stringify({ messages: [{ topic: `copier-kick-${queued.deviceId}`, event: 'kick', payload: {} }] }),
-            signal: AbortSignal.timeout(1_500),
+            signal: kickAbort.signal,
           });
         } catch {
           // Poll fallback příkaz doručí i bez kicku.
+        } finally {
+          clearTimeout(timeout);
         }
       };
       // Vstup/náhled/posun z grafu: kick až po pokusu o push — jinak ho worker pollem předběhne
@@ -551,13 +555,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         return null;
       })();
-      // Odpověď stále čeká i na kick: serverless runtime ho nesmí ukončit
-      // uprostřed odesílání. Jen samotné čekání už nepřidává waterfall.
+      // Dokud výsledek není známý, push/kick smějí doběhnout jako záloha.
+      // Jakmile je výsledek durable, redundantní kick se ukončí a odpověď se nezdržuje.
       const resolution = await waitForResolution;
       settled = true;
-      // Kick i push typicky doběhnou dávno před výsledkem; visící krok odpověď zdrží nejvýš
-      // o 300 ms (nedoběhnutý kick/push = worker vezme příkaz pollem jako dřív).
-      await Promise.race([Promise.all([kick, push]), new Promise(resolve => setTimeout(resolve, 300))]);
+      if (resolution) {
+        // Výsledek je už durable a worker příkaz provedl: dobíhající záložní kick nemá co
+        // doručit. Jeho HTTP odpověď dřív držela hotový výsledek až dalších 300 ms.
+        kickAbort.abort('copier-command-resolved');
+      } else {
+        // Bez výsledku musí serverless runtime dát pushi/kicku krátké okno na dokončení;
+        // enqueue je durable a po 300 ms odpovíme queued jako dřív.
+        await Promise.race([Promise.all([kick, push]), new Promise(resolve => setTimeout(resolve, 300))]);
+      }
       timing.mark('kick');
       timing.mark(resolution ? 'longpoll-hit' : 'longpoll-miss');
       return timed(202, { ...queued, ...(resolution ? { resolution } : {}) });
