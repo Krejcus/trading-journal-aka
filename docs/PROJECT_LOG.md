@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-04 — Telefonní E2E měření + pravdivý Fill dispatch (Codex, lokálně, NENASAZENO)
+### 2026-11-04 — Telefonní E2E měření + pravdivý Fill dispatch (Codex, NASAZENO A ZMĚŘENO)
 
 - Produkční narrow-layout test commitu `c74f91d8` ukázal, že `LivePhoneChart` sice obchoduje stejnou
   relay cestou jako nativní appka, ale na rozdíl od desktopového `LiveTradingScreen` vůbec nepřebíral
@@ -302,7 +302,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověření: cílené 58/58, plná sada 735 souborů / 7 517 testů zeleně (1 skip, 1 todo), produkční build
   čistý a `git diff --check` prošel. Kořenový TypeScript má jen známé chyby chybějících Chrome typů/
   pluginu v samostatné extension a starý tuple typ v `tests/macCopierCommandRelay.test.ts`; žádná nová
-  chyba v dotčených souborech. Změna zatím není commitnutá, pushnutá, nasazená ani reinstalovaná.
+  chyba v dotčených souborech. Commit `68ff171e7804258b853eef841ca83fd7e3886c86` je na `main`;
+  produkční Vercel deployment `dpl_BWBPwb4sffoBKmjoXxE4PXZqvUJU` je READY a drží hlavní alias.
+  Mac worker byl reinstalován ze stejného čistého commitu; bundle SHA-256 začíná `f7aedd2b25bd7d62`.
+- Foreground narrow-layout 1× MNQ DEMO vzorek: potvrzovací klik `14:49:22.843Z`, worker převzal příkaz
+  s cloud queue `146,5 ms`, příkaz dokončil za `282 ms` a první exposure publish vznikl `602 ms` od
+  kliku. Skutečný Fill měl broker timestamp → přijetí frame `35 ms`, frame → dispatch `216 ms` a
+  synchronní listenery `0 ms`; zobrazovací exposure s pozicí následovala přibližně `814 ms` od kliku.
+  Telefonní pixel se v automatizačním prohlížeči zatím nepodařilo autoritativně vyčíst: jeho read-only
+  izolace nezpřístupňuje `localStorage`/Performance API a dokončená konzolová stopa se neobjevila, proto
+  `814 ms` není vydáváno za klik → pixel. Produkční assety byly nezávisle staženy a obsahují nový phone
+  paint hook; další krok je přidat explicitní nezávislý stage log a oddělit frontu semantic frame od
+  hydratace uvnitř frame.
+- Vzorek byl zavřen potvrzeným broker fill za `+29,50 USD`. Po testu byl worker ručně vypnut a čerstvý
+  read-only reconcile potvrdil `armed=false`, `groupFlat=true`, 0 pozic/příkazů, bez divergence,
+  stuck operací nebo chyby; broker daily realized je `-154,42 USD` a instalovaný SHA přesně odpovídá
+  commitu výše.
+- Navazující lokální diagnostika (zatím nenasazená) přidává nezávislé konzolové milníky
+  `start/result/paint` a workerový rozklad `frame→handler` + `handler→dispatch`. Tím další DEMO vzorek
+  rozliší, zda zbývajících ~216 ms vzniká ve frontě sémantických broker rámců, nebo hydratací uvnitř
+  konkrétního frame. Nemění admission, broker request, pořadí eventů ani React state. Cílené sady po
+  poslední úpravě 60/60, plná sada před poslední čistě diagnostickou snapshot úpravou 735 souborů /
+  7 518 testů (1 skip, 1 todo), produkční build a `git diff --check` prošly; TypeScript má pouze stejný
+  známý baseline extension + tuple testu.
 
 ### 2026-11-04 — LIVE rychlost: Fill po place ACK bez čekání na Order + 50ms exposure (Codex, NASAZENO A ZMĚŘENO)
 

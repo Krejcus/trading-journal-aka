@@ -59,6 +59,23 @@ let visibilityListenerInstalled = false;
 const pendingPersist = new Map<string, LiveCommandTrace>();
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
+const logStage = (stage: string, trace: LiveCommandTrace) => {
+  if (typeof window === 'undefined') return;
+  // Konzole je nezávislý důkaz pro iOS/IAB, kde automatizační read-only scope
+  // nesmí číst localStorage ani Performance API. Až mimo měřený hot path.
+  const paintedStage = stage.startsWith('paint:')
+    ? trace.stages?.[stage.slice('paint:'.length) as LiveCommandTraceStage]
+    : undefined;
+  const snapshot = {
+    stage,
+    operationId: trace.operationId,
+    resultStatus: trace.resultStatus,
+    resultMs: trace.resultMs,
+    ...(paintedStage ? { paintedStage: { ...paintedStage } } : {}),
+  };
+  window.setTimeout(() => console.info(`[live-command-perf-stage] ${JSON.stringify(snapshot)}`), 0);
+};
+
 const browserState = () => ({
   visible: typeof document !== 'undefined' && document.visibilityState === 'visible',
   focused: typeof document !== 'undefined' && typeof document.hasFocus === 'function' && document.hasFocus(),
@@ -129,6 +146,7 @@ export function startLiveCommandTrace(
   if (active.size >= MAX_TRACES) active.delete(active.keys().next().value as string);
   active.set(operationId, trace);
   persist(trace);
+  logStage('start', trace);
   return trace;
 }
 
@@ -200,6 +218,7 @@ export function markLiveCommandResult(operationId: string, status: string): void
   update(operationId, trace => {
     trace.resultMs = performance.now() - trace.startedPerformanceMs;
     trace.resultStatus = status;
+    logStage('result', trace);
     completeIfReady(trace);
   });
 }
@@ -233,6 +252,7 @@ export function markLiveCommandPaint(input: {
       },
     };
     if (!state.visible || !state.focused) trace.stayedForeground = false;
+    logStage(`paint:${input.stage}`, trace);
     completeIfReady(trace);
   });
 }

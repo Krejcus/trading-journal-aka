@@ -88,4 +88,12 @@ describe('LIVE command end-to-end performance', () => {
     expect(phone).toMatch(/markLiveCommandPaint\(\{/);
     expect(phone).toMatch(/requestAnimationFrame\(\(\) => \{[\s\S]*requestAnimationFrame/);
   });
+
+  it('produkční diagnostika zveřejní nezávislé start/result/paint milníky', () => {
+    const source = readFileSync('lib/liveCommandPerformance.ts', 'utf8');
+    expect(source).toContain('[live-command-perf-stage]');
+    expect(source).toContain("logStage('start', trace)");
+    expect(source).toContain("logStage('result', trace)");
+    expect(source).toContain('logStage(`paint:${input.stage}`, trace)');
+  });
 });

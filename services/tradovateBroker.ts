@@ -143,6 +143,8 @@ interface PendingTradovateFill {
   fill: TradovateFillEntity;
   /** Čas původního Created frame, ne pozdější hydratace/Order update. */
   receivedAt: number;
+  /** Začátek sémantického handleru původního frame; oddělí queue od hydratace. */
+  processingStartedAt: number;
 }
 interface TradovateCommandResult { commandId?: number; failureReason?: string; failureText?: string }
 
@@ -1023,7 +1025,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     });
   };
 
-  const emitMappedFill = async (fill: TradovateFillEntity, receivedAt: number): Promise<boolean> => {
+  const emitMappedFill = async (
+    fill: TradovateFillEntity,
+    receivedAt: number,
+    processingStartedAt = receivedAt,
+  ): Promise<boolean> => {
     if (deliveredFillIds.has(fill.id)) return true;
     if (renewalInProgress && !syncReady) {
       // Fill bude součástí `resync.gapFills`; zde se nikdy nesmí vydat za
@@ -1037,7 +1043,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     if (accountId == null) {
       const waiting = pendingFills.get(fill.orderId) ?? [];
       if (!waiting.some(item => item.fill.id === fill.id)) {
-        pendingFills.set(fill.orderId, [...waiting, { fill, receivedAt }]);
+        pendingFills.set(fill.orderId, [...waiting, { fill, receivedAt, processingStartedAt }]);
       }
       return false;
     }
@@ -1072,6 +1078,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const listenersReturnedAt = clock();
       console.log(`${new Date(listenersReturnedAt).toISOString()} BROKER FILL order=${fill.orderId} qty=${fill.qty}`
         + ` broker→frame=${Number.isFinite(mapped.filledAt) ? Math.round(receivedAt - mapped.filledAt) : '?'}ms`
+        + ` frame→handler=${Math.round(processingStartedAt - receivedAt)}ms`
+        + ` handler→dispatch=${Math.round(dispatchedAt - processingStartedAt)}ms`
         + ` frame→dispatch=${Math.round(dispatchedAt - receivedAt)}ms listeners=${Math.round(listenersReturnedAt - dispatchedAt)}ms`);
     } catch {
       // Diagnostika nesmí ovlivnit doručený fill.
@@ -1086,7 +1094,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     // kontraktu, pozdější Order/ExecutionReport smí bezpečně zkusit fallback;
     // fill se neztratí a deliveredFillIds dál brání duplicitě.
     for (const item of waiting) {
-      if (await emitMappedFill(item.fill, item.receivedAt)) dropPendingFill(orderId, item.fill.id);
+      if (await emitMappedFill(item.fill, item.receivedAt, item.processingStartedAt)) dropPendingFill(orderId, item.fill.id);
     }
   };
 
@@ -1451,6 +1459,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     payload: unknown,
     receivedAt: number,
     preparedOrderVersions?: PreparedOrderVersions,
+    processingStartedAt = clock(),
   ) => {
     const items = Array.isArray(payload) ? payload : [payload];
     for (const raw of items) {
@@ -1541,7 +1550,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         const changedAccount = (item.entity as { accountId?: number }).accountId ?? rawOrders.get(fill.orderId)?.accountId;
         if (changedAccount != null) notifyAccountDataChange(changedAccount, 'fill');
         else notifyAccountDataChange(null, 'resync');
-        await emitMappedFill(fill, receivedAt);
+        await emitMappedFill(fill, receivedAt, processingStartedAt);
         const updated = await composeOrder(fill.orderId);
         if (updated) emitBrokerState({ type: 'order', order: updated, receivedAt });
       }
@@ -1555,6 +1564,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     preparedOrderVersions?: PreparedOrderVersions,
   ) => {
     if (!isCurrent()) return;
+    const processingStartedAt = clock();
     if (!message || typeof message !== 'object') return;
     const value = message as { e?: string; d?: unknown; i?: number; s?: number };
     if (value.s === 423 || value.s === 429) {
@@ -1623,7 +1633,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
     }
     if (value.e === 'props') {
-      await handleProps(value.d, receivedAt, preparedOrderVersions);
+      await handleProps(value.d, receivedAt, preparedOrderVersions, processingStartedAt);
       return;
     }
     if (value.i === 0) {
@@ -1637,7 +1647,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       if (value.s !== 200) throw new TradovateTransportError(`WebSocket synchronization failed${socketFailureDetail(value)}`);
       const wasRenewal = renewalInProgress;
       const wasReconnect = !wasRenewal && hasSyncedOnce && gapKnownFillIds != null;
-      if (Array.isArray(value.d)) await handleProps(value.d, receivedAt, preparedOrderVersions);
+      if (Array.isArray(value.d)) await handleProps(value.d, receivedAt, preparedOrderVersions, processingStartedAt);
       if (!syncReady) {
         const baseline = await loadOrderGraph(undefined, true);
         if (!isCurrent()) return;
