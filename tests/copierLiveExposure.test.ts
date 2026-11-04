@@ -33,7 +33,7 @@ const payload = (seq: number, builtAt: number, netQuantity = 1): CopierLiveExpos
   manualOrderActions: [{
     operationId: 'manage:abcdefghijklmnopqrstuv', entryOperationId: 'entry:abcdefghijklmnopqrstuvwx',
     action: 'move-stop', status: 'acknowledged', createdAt: Math.max(0, builtAt - 5), updatedAt: builtAt,
-    fromPrice: 28_250, toPrice: 28_255,
+    fromPrice: 28_250, toPrice: 28_255, displayAt: builtAt - 1, displayStage: 'position',
   }],
 });
 
@@ -100,6 +100,8 @@ describe('expozice workeru přímo do grafu (F2a, 30. 10.)', () => {
     expect(broken(value => { value.manualEntries![0].timing!.positionAt = Number.NaN; })).toBe(false);
     expect(broken(value => { value.manualEntries![0].timing!.committedAt = Number.NaN; })).toBe(false);
     expect(broken(value => { (value.manualOrderActions![0] as { action: string }).action = 'flatten-everything'; })).toBe(false);
+    expect(broken(value => { value.manualOrderActions![0].displayAt = Number.NaN; })).toBe(false);
+    expect(broken(value => { (value.manualOrderActions![0] as { displayStage: string }).displayStage = 'broker'; })).toBe(false);
   });
 
   it('sloučení: novější seq téhož běhu nahradí expozici; stáří od kotvy pollu, nejvýš čas přijetí', () => {

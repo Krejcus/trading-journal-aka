@@ -148,6 +148,8 @@ const isManualActions = (value: unknown): value is CopierLiveManualActions => Ar
     return text(action.operationId, 80) && text(action.entryOperationId, 80)
       && MANUAL_ACTIONS.has(String(action.action)) && MANUAL_ACTION_STATUSES.has(String(action.status))
       && time(action.createdAt) && time(action.updatedAt)
+      && (action.displayAt === undefined || time(action.displayAt))
+      && (action.displayStage === undefined || action.displayStage === 'order' || action.displayStage === 'fill' || action.displayStage === 'position')
       && (action.fromPrice === null || finite(action.fromPrice))
       && (action.toPrice === null || finite(action.toPrice));
   });

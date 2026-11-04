@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
+import {
+  canUseDirectLocalCopierAgent,
+  canUseLocalCopierRelayWake,
+  createLocalCopierAgentClient,
+  nudgeLocalCopierRelay,
+} from '../services/localCopierAgentClient';
 import { shouldProbeLocalCopierAgent } from '../lib/localCopierProbePolicy';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -58,6 +63,33 @@ describe('canUseDirectLocalCopierAgent', () => {
   it('na produkční HTTPS stránce vždy použije zabezpečený relay', () => {
     expect(canUseDirectLocalCopierAgent({ protocol: 'https:', hostname: 'alphatrade-mentor-15.vercel.app' })).toBe(false);
     expect(canUseDirectLocalCopierAgent({ protocol: 'https:', hostname: '127.0.0.1' })).toBe(false);
+  });
+});
+
+describe('local relay wake', () => {
+  it('povolí pouze lokální stránku a přesný produkční origin', () => {
+    expect(canUseLocalCopierRelayWake({ protocol: 'http:', hostname: '127.0.0.1' })).toBe(true);
+    expect(canUseLocalCopierRelayWake({ protocol: 'http:', hostname: 'localhost' })).toBe(true);
+    expect(canUseLocalCopierRelayWake({ protocol: 'https:', hostname: 'alphatrade-mentor-15.vercel.app' })).toBe(true);
+    expect(canUseLocalCopierRelayWake({ protocol: 'https:', hostname: 'evil.example' })).toBe(false);
+  });
+
+  it('je best-effort: 202 = úspěch, chyba nebo timeout = false', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 202 }))
+      .mockRejectedValueOnce(new Error('blocked'));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(nudgeLocalCopierRelay('http://127.0.0.1:3211')).resolves.toBe(true);
+    await expect(nudgeLocalCopierRelay('http://127.0.0.1:3211')).resolves.toBe(false);
+
+    vi.useFakeTimers();
+    fetcher.mockImplementationOnce((_url, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    }));
+    const timed = nudgeLocalCopierRelay('http://127.0.0.1:3211', 25);
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(timed).resolves.toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

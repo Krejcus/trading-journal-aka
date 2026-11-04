@@ -145,6 +145,11 @@ interface LocalCopierExecutionAgentOptions {
   connectionDiscovery?: () => LocalCopierAgentStatus['connectionDiscovery'];
   /** Naplánuje observability test mimo broker dispatch a okamžitě se vrátí. */
   onSnapshotTest?: (requestId: string, options: { repairCamera: boolean }) => void;
+  /**
+   * Probudí cloud relay bez předání příkazu. Produkční UI tím může zkrátit
+   * čekání na Realtime push; admission, claim i execution zůstávají beze změny.
+   */
+  onRelayWake?: () => void;
   onDevicePaired?: (deviceId: string) => Promise<void>;
   /** Requests a restart after pairing; the pilot performs the final safe-state gate. */
   onDevicePairingRestart?: (deviceId: string) => void;
@@ -1459,6 +1464,17 @@ export async function startLocalCopierExecutionAgent(
     if (request.method === 'GET' && url.pathname === '/v1/status') {
       options.controller.noteArmPreparationInterest?.();
       json(response, 200, status());
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/relay-wake') {
+      if (shuttingDown) {
+        json(response, 503, { error: shutdownError().message });
+        return;
+      }
+      // Endpoint nemá command body ani execution capability. Origin je ověřen
+      // výše; i podvržený lokální request může nanejvýš vyvolat prázdný poll.
+      try { options.onRelayWake?.(); } catch { /* poll fallback běží dál */ }
+      json(response, 202, { accepted: true });
       return;
     }
     if (request.method !== 'POST' || url.pathname !== '/v1/command') {

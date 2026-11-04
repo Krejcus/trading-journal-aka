@@ -1689,6 +1689,12 @@ async function runLocalAgent(
           snapshotTestInFlight = false;
         });
       },
+      // Produkční HTTPS může loopbackem pouze probudit relay. Samotný příkaz
+      // dál přichází výhradně přes cloudovou admission/claim cestu.
+      onRelayWake: () => {
+        console.log(`${new Date().toISOString()} RELAY LOCAL WAKE`);
+        relay?.nudgeCommands();
+      },
       onDevicePaired: async deviceId => {
         const owner = contexts.find(candidate => candidate.device?.deviceId === deviceId);
         if (!owner?.onDevicePaired) throw new Error('Párované zařízení nemá vlastní OAuth pairing callback');

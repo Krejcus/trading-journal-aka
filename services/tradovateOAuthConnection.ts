@@ -4,6 +4,7 @@ import {
   markLiveCommandRelayStart,
   startLiveCommandTrace,
 } from '../lib/liveCommandPerformance';
+import { canUseLocalCopierRelayWake, nudgeLocalCopierRelay } from './localCopierAgentClient';
 import type { TradovateAccountDisplaySnapshot } from '../lib/tradovateAccountDisplayTypes';
 import { recordTradovateBrokerCalls } from '../lib/tradovateApiTelemetry';
 import { supabase } from './supabase';
@@ -463,6 +464,15 @@ export async function executeTradovateCopierRelayCommand(
     : undefined;
   if (cachedHint && !relayTargetHint) relayTargetHints.delete(connectionId);
   let queued: { id: string; expiresAt: string; resolution?: { status: string; result?: unknown; error?: string } };
+  // Cloud admission zůstává jediná autorita. Dva krátké loopback budíčky jen
+  // zkrátí čekání workeru na Realtime push; první může admission předběhnout,
+  // druhý ji bezpečně dožene. Selhání/mixed-content se úplně ignoruje.
+  const wakeTimers: Array<ReturnType<typeof setTimeout>> = [];
+  if (hotRelayCommand(command) && typeof window !== 'undefined' && canUseLocalCopierRelayWake(window.location)) {
+    for (const delay of [60, 160]) {
+      wakeTimers.push(setTimeout(() => { void nudgeLocalCopierRelay(); }, delay));
+    }
+  }
   try {
     queued = await authenticatedRequest('/api/tradovate/oauth/copier-relay', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -470,6 +480,7 @@ export async function executeTradovateCopierRelayCommand(
       signal: options.signal,
     }, undefined, observeTraceTiming);
   } catch (reason) {
+    wakeTimers.forEach(timer => clearTimeout(timer));
     markTraceResult('error', 'request-error');
     throw reason;
   }

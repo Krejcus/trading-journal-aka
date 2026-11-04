@@ -16,6 +16,7 @@ import type { LivePhonePosition } from '../lib/livePhoneOrders';
 import type { LiveBareCloseOffer } from '../lib/liveBareCloseUi';
 import type { BareLeaderTrade } from '../lib/manualBareClose';
 import type { LiveChartFills, LiveChartWorkingOrders } from '../hooks/useLiveChartData';
+import type { LiveCommandTraceStage, LiveCommandWorkerTiming } from '../lib/liveCommandPerformance';
 import {
   getLiveScreenThemePreference,
   resolveLiveScreenDark,
@@ -90,7 +91,13 @@ interface Props {
   /** Události kopírky pro karty obchodů (poll ∪ expozice přímo z workeru, F2a) — jen zobrazení. */
   copyEvents?: readonly LiveTradingCopyEvent[];
   /** Měření poslední rychlé expozice; nepoužívá se pro stav ani příkazy. */
-  liveExposurePaint?: { id: string; receivedPerformanceAt: number } | null;
+  liveExposurePaint?: {
+    id: string;
+    receivedPerformanceAt: number;
+    operationId?: string;
+    stage?: LiveCommandTraceStage;
+    workerTiming?: LiveCommandWorkerTiming;
+  } | null;
   /** Skupina a účty ze stavu workeru; null = žádná skupina (bez čipu a výběru účtu). */
   group?: LiveTradeGroup | null;
   /** Obsahový klíč skupiny (porovnání bez překreslování po každém tiku desku). */

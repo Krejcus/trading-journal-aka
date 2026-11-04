@@ -281,15 +281,23 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
     };
   }, [chart.candles.length, chartOpenPerformanceAt]);
-  const measuredExposureId = useRef<string | null>(null);
+  const measuredExposureIds = useRef(new Set<string>());
+  const exposurePaintFrames = useRef(new Set<number>());
+  useEffect(() => () => {
+    for (const frame of exposurePaintFrames.current) window.cancelAnimationFrame(frame);
+    exposurePaintFrames.current.clear();
+    measuredExposureIds.current.clear();
+  }, []);
   useEffect(() => {
-    if (!liveExposurePaint || measuredExposureId.current === liveExposurePaint.id) return undefined;
-    measuredExposureId.current = liveExposurePaint.id;
-    let painted = false;
-    let secondFrame = 0;
+    if (!liveExposurePaint || measuredExposureIds.current.has(liveExposurePaint.id)) return;
+    measuredExposureIds.current.add(liveExposurePaint.id);
+    // Novější exposure nesmí zrušit měření předchozího brokerového účinku.
+    // Každý seq dostane vlastní dva snímky; zruší se až při unmountu grafu.
     const firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => {
-        painted = true;
+      exposurePaintFrames.current.delete(firstFrame);
+      const secondFrame = window.requestAnimationFrame(() => {
+        exposurePaintFrames.current.delete(secondFrame);
+        measuredExposureIds.current.delete(liveExposurePaint.id);
         perfDuration('live:exposure:to-paint', performance.now() - liveExposurePaint.receivedPerformanceAt);
         if (liveExposurePaint.operationId && liveExposurePaint.stage) {
           markLiveCommandPaint({
@@ -300,12 +308,9 @@ const LiveTradingScreen: React.FC<Props> = ({
           });
         }
       });
+      exposurePaintFrames.current.add(secondFrame);
     });
-    return () => {
-      if (!painted) perfMark('live:exposure:paint-superseded');
-      window.cancelAnimationFrame(firstFrame);
-      if (secondFrame) window.cancelAnimationFrame(secondFrame);
-    };
+    exposurePaintFrames.current.add(firstFrame);
   }, [liveExposurePaint]);
 
   // Kotva grafu bez obchodu (jako graf dne) — určí jen první záběr.

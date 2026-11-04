@@ -172,6 +172,12 @@ const completeIfReady = (trace: LiveCommandTrace) => {
     && state.visible
     && state.focused;
   active.delete(trace.operationId);
+  // Automatizované A/B měření čte dokončenou stopu z konzole. Zápis běží až
+  // po změřeném paintu a nikdy neblokuje obchod ani React commit.
+  if (typeof window !== 'undefined') {
+    const completed = JSON.stringify(trace);
+    window.setTimeout(() => console.info(`[live-command-perf] ${completed}`), 0);
+  }
 };
 
 export function markLiveCommandRelayStart(operationId: string): void {

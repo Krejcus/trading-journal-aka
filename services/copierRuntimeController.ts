@@ -316,6 +316,9 @@ export interface CopierControllerStatus {
     fromPrice: number | null;
     toPrice: number | null;
     reason?: string;
+    /** Display-only korelace prvního brokerového účinku ještě před durable výsledkem. */
+    displayAt?: number;
+    displayStage?: 'order' | 'fill' | 'position';
     /** C7: `cancel-entry` skončil vyplněním vstupu (pozice je otevřená) — push nesmí tvrdit „vstup dál čeká“. */
     resultCode?: CopierManualOrderActionRecord['resultCode'];
   }>;
@@ -4199,6 +4202,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const MANUAL_ORDER_ACTION_KEEP = 50;
   const UNRESOLVED_MANUAL_ORDER_ACTION = new Set(['sending', 'unknown']);
   const manualOrderActionRecords = (): readonly CopierManualOrderActionRecord[] => currentRuntime().state.safety.manualOrderActions ?? [];
+  /**
+   * Zobrazovací milník změny u brokera může předběhnout durable commit výsledku.
+   * Drží se jen v paměti a nikdy nevstupuje do execution/risk rozhodnutí.
+   */
+  const manualOrderDisplay = new Map<string, { at: number; stage: 'order' | 'fill' | 'position' }>();
+  const markManualOrderDisplay = (operationId: string, stage: 'order' | 'fill' | 'position') => {
+    if (manualOrderDisplay.has(operationId)) return;
+    manualOrderDisplay.set(operationId, { at: clock(), stage });
+    while (manualOrderDisplay.size > 20) manualOrderDisplay.delete(manualOrderDisplay.keys().next().value!);
+    notifyLiveChange();
+  };
   const unresolvedManualOrderAction = (entryOperationId?: string) => manualOrderActionRecords().find(record => (
     UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status) && (entryOperationId == null || record.entryOperationId === entryOperationId)
   )) ?? null;
@@ -4487,6 +4501,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     timing.streamFlatMs = streamFlat() ? clock() - streamWaitStartedAt : undefined;
+    // První skutečný flat z broker streamu je okamžik, kdy graf smí zmizet.
+    // Durable výsledek a autoritativní REST ověření dál doběhnou beze změny,
+    // ale diagnostika už může korelovat klik s tímto prvním pixelem.
+    if (timing.streamFlatMs != null) markManualOrderDisplay(command.operationId, 'position');
     const verifyStartedAt = clock();
     let state = await readLeaderSymbolState(leader, symbol);
     // Přechod „nohy zrušené, Market ještě nevyplněný“ (+0,3 s) nebo REST snímek starší
@@ -21803,6 +21821,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return out;
         })(),
         manualOrderActions: manualOrderActionRecords().slice(-10).map(record => ({
+          ...(() => {
+            const display = manualOrderDisplay.get(record.operationId);
+            return display ? { displayAt: display.at, displayStage: display.stage } : {};
+          })(),
           operationId: record.operationId, entryOperationId: record.entryOperationId, action: record.action,
           status: record.status, createdAt: record.createdAt, updatedAt: record.updatedAt,
           fromPrice: record.fromPrice, toPrice: record.toPrice, ...(record.reason ? { reason: record.reason } : {}),

@@ -45,6 +45,7 @@ async function setup(options: {
   settleMs?: number;
   broker?: MockBroker;
   arm?: boolean;
+  verifyMs?: number;
 } = {}) {
   const clock = { now: START };
   const broker = options.broker ?? createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(START + 500)], nativeLiquidate: true });
@@ -53,7 +54,7 @@ async function setup(options: {
   const store = options.store ?? createMemoryCopierStore();
   const controller = await bootstrapCopierRuntime({
     broker, store, group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
-    manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, manage: 500, settle: options.settleMs ?? 50, verify: 100 },
+    manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, manage: 500, settle: options.settleMs ?? 50, verify: options.verifyMs ?? 100 },
     manualEntryQuote: () => ({ contract: SYM, last: REF, lastAt: clock.now - 100, bid: REF - 0.25, ask: REF, quoteAt: clock.now - 50 }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
@@ -221,7 +222,7 @@ describe('C8 — čisté helpery', () => {
 
 describe('C8 — × zavřít holý Market (controller, sólo DEMO skupina)', () => {
   it('běžná cesta: jeden liquidate, výsledek stavem, záznam uzavřený, kopírka dál zapnutá; attach pak nejde', async () => {
-    const ctx = await setup();
+    const ctx = await setup({ verifyMs: 3_000 });
     expect(ctx.controller.manualBareCloseEnabled?.()).toBe(true);
     await openBare(ctx);
     expect(ctx.controller.status().bareLeaderTrade).toEqual({ entryOperationId: 'entry:barec001', symbol: SYM, side: 'Buy', quantity: 2, referencePrice: REF });
@@ -229,7 +230,10 @@ describe('C8 — × zavřít holý Market (controller, sólo DEMO skupina)', () 
     expect(result).toMatchObject({ status: 'acknowledged', blockers: [] });
     expect(result.reason).toMatch(/ověřeno čtením/);
     expect(ctx.broker.liquidateRequests()).toEqual([expect.objectContaining({ accountId: LEADER, symbol: SYM })]);
-    expect(actionRecord(ctx)).toMatchObject({ action: 'close-position', status: 'acknowledged', entryOperationId: 'entry:barec001' });
+    expect(actionRecord(ctx)).toMatchObject({
+      action: 'close-position', status: 'acknowledged', entryOperationId: 'entry:barec001',
+      displayStage: 'position', displayAt: expect.any(Number),
+    });
     expect(bareEntryStatus(ctx)).toMatchObject({ open: false });
     expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null, bareLeaderTrade: null });
     expect(ctx.audits.some(line => line.startsWith('modified:close-position holé pozice Buy 2'))).toBe(true);

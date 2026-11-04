@@ -288,6 +288,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE rychlost: loopback wake + první flat pixel před finálním potvrzením (Codex, lokálně, NENASAZENO)
+
+- Čerstvý rozklad produkčního DEMO vzorku ukázal, že samotný zašifrovaný worker → graf broadcast stojí
+  jen 2–5 ms a crash-safe 55kB zápis na disk lokálně medián 7,6 ms (p95 7,8 ms). Zbývající ovlivnitelná
+  prodleva je hlavně cloudové převzetí workerem (~109–216 ms v dosavadních vzorcích) a u zavření finální
+  REST/stream ověření. Broker write zůstal v tomto vzorku 207–310 ms a je externí podlaha.
+- Produkční web na stejném Macu nově po cloudové admission posílá dva best-effort loopback budíčky
+  workeru (60/160 ms). Endpoint nepřijímá tělo, command ani nonce a pouze probudí poll; cloudová admission,
+  DB claim, oprávnění a idempotence zůstávají jedinou autoritou. Cizí Origin dostane 403 a chyba/PNA blokace
+  se ignoruje. Telefon tuto lokální zkratku nepoužije; jeho cloudová cesta se nemění.
+- Zavření pozice publikuje display-only `position` milník hned po prvním broker stream flat, zatímco durable
+  výsledek a autoritativní REST ověření dál doběhnou beze změny. Korelace prohlížeče umí přijmout tento
+  milník i při stále `sending` příkazu; souběžný novější exposure už nezruší rozběhnuté double-rAF měření.
+  Dokončená stopa se po změřeném paintu vypíše do konzole pro skutečné klik → pixel A/B.
+- Ověření lokálního balíku: nové bezpečnostní/funkční testy 165/165; úplná sada 735 souborů / 7 514 testů
+  zeleně (1 skip, 1 todo); produkční Vite/PWA build, samostatný Node 20 pilot bundle + syntax check a
+  `git diff --check` prošly. Kořenový typecheck s 4 GB hlásí jen stejné známé chyby samostatné Chrome
+  extension a starý nesouvisející tuple typ v `tests/macCopierCommandRelay.test.ts`; dotčený kód nemá novou
+  chybu. Balík v tomto commitu ještě není pushnutý, nasazený ani nainstalovaný a v této fázi neposlal
+  brokerovi žádný nový příkaz; další krok je přesný web+worker release a stejné foreground DEMO A/B.
+
 ### 2026-11-04 — LIVE rychlost: durable výsledek do grafu před server ACK + kompaktní hot result (Codex, lokálně, NENASAZENO)
 
 - Produkční foreground A/B po admission v2 nepotvrdil celkové zrychlení: přesný BUY 1 MNQZ6 LIMIT na jediném

@@ -22,6 +22,11 @@ const RELAY_STATUS_TIMEOUT_MS = 20_000;
 const RELAY_COMMAND_TIMEOUT_MS = 30_000;
 
 export interface MacCopierCommandRelay {
+  /**
+   * Lokální budíček doručovací smyčky. Nenese příkaz ani oprávnění k exekuci:
+   * worker dál musí příkaz atomicky claimnout přes autentizovaný cloud relay.
+   */
+  nudgeCommands(): void;
   /** Okamžitě probudí poll s příznakem nových trade eventů — server pošle
    *  push hned místo čekání na minutový cron. */
   nudgeCopyEvents(): void;
@@ -697,6 +702,10 @@ export function startMacCopierCommandRelay(options: {
     nudgeCopyEvents() {
       copyEventsRevision += 1;
       publishBackground();
+      kickPending = true;
+      wake?.();
+    },
+    nudgeCommands() {
       kickPending = true;
       wake?.();
     },

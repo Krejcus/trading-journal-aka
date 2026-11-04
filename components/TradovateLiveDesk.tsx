@@ -1065,9 +1065,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       stage: liveCommandWorkerStage(entry.timing), workerTiming: entry.timing,
     })),
     ...(liveExposure?.payload.manualOrderActions ?? [])
-      .filter(action => action.status === 'acknowledged' || action.status === 'waived')
+      .filter(action => action.displayStage != null || action.status === 'acknowledged' || action.status === 'waived')
       .map(action => ({
-      operationId: action.operationId, updatedAt: action.updatedAt, stage: 'position' as const,
+      operationId: action.operationId, updatedAt: action.displayAt ?? action.updatedAt,
+      stage: action.displayStage ?? ('position' as const),
       })),
   ].filter(entry => hasActiveLiveCommandTrace(entry.operationId))
     .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
