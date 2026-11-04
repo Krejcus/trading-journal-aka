@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-04 — LIVE rychlost: atomické navázání admission na idle delivery (Codex, DB NASAZENA, web čeká na deploy)
+### 2026-11-04 — LIVE rychlost: atomické navázání admission na idle delivery (Codex, DB + web NASAZENY)
 
 - Foreground DEMO kontrola na jediném účtu `DEMO8661118`: ARM, BUY 1 MNQZ6 LIMIT 28 500 se SL 28 488
   a TP 28 524, ověření working OSO, cancel a OFF. Vstup se nevyplnil; po testu je účet autoritativně flat,
@@ -310,8 +310,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Produkční migrace `copier_manual_admission_bound_delivery` byla aplikována jako verze `20261104123920`.
   Postkontrola potvrdila `security invoker`, prázdný `search_path`, 2s lock timeout, EXECUTE jen pro
   `service_role`, 0 duplicit a 0 pending/claimed příkazů. Supabase security/performance advisory nemají proti
-  preflightu žádný nový ani změněný nález. Webový commit/push/deploy ještě v okamžiku tohoto zápisu neproběhl;
-  bez něj produkce dál používá původní v1 a migrace je pouze neaktivní aditivní schopnost.
+  preflightu žádný nový ani změněný nález.
+- Kód je commit `e0e8c3d5`, pushnutý na `codex/live-speed-20261104` i produkční `main`. Vercel deployment
+  `dpl_FZr5XpyhqfugaFHiQbfdoqP7SdQR` je `READY`, bez alias chyby; hlavní doména vrací HTTP 200. Závěrečná
+  read-only kontrola workeru: `environment=demo`, připojeno a reconciled, `armed=false`, `groupFlat=true`,
+  0 expozice, 0 broker orders, 0 pending vlastních vstupů a `lastError=null`; relay má 0 neexpirovaných
+  pending/claimed příkazů. Worker se nereinstaloval, protože změna je výhradně server + DB a jeho bundle se
+  nezměnil. Reálný přínos nové cesty ještě není poctivě A/B změřený; další broker write vyžaduje nový přesný
+  scénář potvrzený v okamžiku odeslání.
 
 ### 2026-11-04 — Produkční `d5a8e943` + přesné měření broker ACK → durable commit (Codex, web + worker NASAZENY, DISARMED)
 
