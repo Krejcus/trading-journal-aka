@@ -201,7 +201,7 @@ interface TradovateLiveDeskProps {
    * Telefon: `header(group)` = hlavička s P&L skupiny místo názvu; `position` = stejný read model jako PC graf (jen zobrazení); `trade` = obchodování přes relay.
    * U5/U8 (3. 11. 2026): `workingOrders` = pracující příkazy jako čáry jen pro zobrazení (nikdy do `trade`); `userId` = jen klíč knihovny šablon SL/TP na zařízení.
    */
-  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null; copyEvents?: LocalCopierAgentStatus['controller']['recentCopyEvents']; copierArmed?: boolean; fills?: readonly LiveFillMarker[]; fillsOpen?: boolean; fillsSymbol?: string; alertWatch?: string | null; workingOrders?: LiveChartWorkingOrders | null; userId?: string | null }) => React.ReactNode;
+  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null; copyEvents?: LocalCopierAgentStatus['controller']['recentCopyEvents']; copierArmed?: boolean; fills?: readonly LiveFillMarker[]; fillsOpen?: boolean; fillsSymbol?: string; alertWatch?: string | null; workingOrders?: LiveChartWorkingOrders | null; userId?: string | null; liveExposurePaint?: React.ComponentProps<typeof LiveTradingScreenSlot>['liveExposurePaint'] }) => React.ReactNode;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -1071,6 +1071,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       })),
   ].filter(entry => hasActiveLiveCommandTrace(entry.operationId))
     .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+  const liveExposurePaint = chartLive.status !== agentStatus && liveExposure
+    ? {
+      id: `${liveExposure.payload.startedAt}:${liveExposure.payload.seq}`,
+      receivedPerformanceAt: liveExposure.receivedPerformanceAt,
+      ...(tracedExposureCommand ? {
+        operationId: tracedExposureCommand.operationId,
+        stage: tracedExposureCommand.stage,
+        ...('workerTiming' in tracedExposureCommand && tracedExposureCommand.workerTiming
+          ? { workerTiming: tracedExposureCommand.workerTiming } : {}),
+      } : {}),
+    }
+    : null;
   const chartData = useLiveChartData({
     // Telefonní graf (2. 11.) potřebuje stejnou pozici leadera pro lištu, „Přidat SL/TP“ a P&L
     // skupiny v hlavičce; tempo čtení se tím nemění (`chartOpenRef`).
@@ -1927,18 +1939,7 @@ acceptAgentStatus((await executeAgent({
           }}
           // Karty obchodů: události i z novější expozice workeru (F2a) — jen zobrazení.
           copyEvents={chartLive.status?.controller.recentCopyEvents}
-          liveExposurePaint={chartLive.status !== agentStatus && liveExposure
-            ? {
-              id: `${liveExposure.payload.startedAt}:${liveExposure.payload.seq}`,
-              receivedPerformanceAt: liveExposure.receivedPerformanceAt,
-              ...(tracedExposureCommand ? {
-                operationId: tracedExposureCommand.operationId,
-                stage: tracedExposureCommand.stage,
-                ...('workerTiming' in tracedExposureCommand && tracedExposureCommand.workerTiming
-                  ? { workerTiming: tracedExposureCommand.workerTiming } : {}),
-              } : {}),
-            }
-            : null}
+          liveExposurePaint={liveExposurePaint}
           group={chartData.group}
           groupKey={chartData.groupKey}
           position={chartData.position}
@@ -2003,6 +2004,8 @@ acceptAgentStatus((await executeAgent({
             copierArmed: runtimeAvailable && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode !== true,
             onLeave: () => navigateToTab('overview'),
             trade: phoneTrade,
+            // Stejná potvrzovací stopa jako PC: příjem expozice → dva paint snímky.
+            liveExposurePaint,
             // Šipky plnění leadera (jen zobrazení): čerstvý neobnovený stav, expozice ≤ 8 s.
             fills: phoneFills.fills,
             fillsOpen: phoneFills.open,

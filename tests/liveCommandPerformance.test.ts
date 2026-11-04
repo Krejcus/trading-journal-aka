@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   hasActiveLiveCommandTrace,
   liveCommandTraceReadyToComplete,
@@ -76,5 +77,15 @@ describe('LIVE command end-to-end performance', () => {
       stages: { order: { receivedMs: 301, paintedMs: 320, receiveToPaintMs: 19, clickToPaintMs: 320, visible: true, focused: true } },
     }))).toBe(true);
     expect(liveCommandTraceReadyToComplete(trace({ resultMs: 300, resultStatus: 'blocked' }))).toBe(true);
+  });
+
+  it('propíše stejnou exposure paint stopu do desktopového i telefonního grafu', () => {
+    const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
+    const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
+    expect(desk).toMatch(/liveExposurePaint=\{liveExposurePaint\}/);
+    expect(desk).toMatch(/trade: phoneTrade,\s*\/\/[^\n]*\n\s*liveExposurePaint,/);
+    expect(phone).toMatch(/const paint = slots\.liveExposurePaint;/);
+    expect(phone).toMatch(/markLiveCommandPaint\(\{/);
+    expect(phone).toMatch(/requestAnimationFrame\(\(\) => \{[\s\S]*requestAnimationFrame/);
   });
 });

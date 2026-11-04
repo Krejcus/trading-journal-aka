@@ -288,7 +288,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-04 — LIVE rychlost: Fill po place ACK bez čekání na Order + 50ms exposure (Codex, lokálně, NENASAZENO)
+### 2026-11-04 — Telefonní E2E měření + pravdivý Fill dispatch (Codex, lokálně, NENASAZENO)
+
+- Produkční narrow-layout test commitu `c74f91d8` ukázal, že `LivePhoneChart` sice obchoduje stejnou
+  relay cestou jako nativní appka, ale na rozdíl od desktopového `LiveTradingScreen` vůbec nepřebíral
+  `liveExposurePaint`; stopa `at:dev:live-command-traces-v1` proto na telefonu nevznikla. Nově dostává
+  přesně stejný F2a payload a po dvou `requestAnimationFrame` zapisuje příjem → paint i klik → paint
+  pod stejným `operationId`. Měření používá jen refy, bez nového React state nebo renderovací smyčky.
+- Starý log `frame→emit` měřil čas až po návratu všech synchronních controller listenerů. Ve vzorku tak
+  hlásil 208 ms, přestože první exposure publish začal výrazně dřív. Log nově odděluje
+  `frame→dispatch` (skutečné předání Fill entity) a `listeners` (navazující synchronní práce); žádné
+  exekuční chování se tím nemění.
+- Ověření: cílené 58/58, plná sada 735 souborů / 7 517 testů zeleně (1 skip, 1 todo), produkční build
+  čistý a `git diff --check` prošel. Kořenový TypeScript má jen známé chyby chybějících Chrome typů/
+  pluginu v samostatné extension a starý tuple typ v `tests/macCopierCommandRelay.test.ts`; žádná nová
+  chyba v dotčených souborech. Změna zatím není commitnutá, pushnutá, nasazená ani reinstalovaná.
+
+### 2026-11-04 — LIVE rychlost: Fill po place ACK bez čekání na Order + 50ms exposure (Codex, NASAZENO A ZMĚŘENO)
 
 - Produkční logy ukázaly, že skutečný Tradovate Fill dorazil do workeru za 25–65 ms, ale při chybějícím
   `accountId` ve Fill entitě čekal dalších 123–221 ms na pozdější Order/ExecutionReport. Přijatý
@@ -305,9 +321,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   sada předtím 116/116. Úplná sada: 735 souborů / 7 516 testů zeleně (1 skip, 1 todo). Produkční build,
   worker bundle + syntax check a `git diff --check` prošly. Kořenový TypeScript hlásí jen stejné známé
   chyby samostatné Chrome extension a starý tuple typ v `tests/macCopierCommandRelay.test.ts`.
-- Změna zatím není commitnutá, pushnutá, nasazená ani nainstalovaná; žádný brokerový příkaz při vývoji
-  neodešel. Čerstvý read-only reconcile před prací potvrdil DEMO, DISARMED, flat, 0 orders/pozic,
-  `authoritativelyClean=true` a bez divergence/stuck/error.
+- Commit `c74f91d8e9e6cc4c24a61fc19883e9cd9ef25a5a` je na `main`; produkční Vercel deployment
+  `dpl_48eiEXuod3SUfHGoKiBa3rQN7pfi` je READY a drží hlavní alias. Mac worker byl bezpečně
+  reinstalován ze stejného čistého commitu; bundle SHA-256 začíná `cf71828aecc31008`.
+- Foreground narrow-layout DEMO vzorek: klik `14:36:36.837Z`, worker claim po 234,5 ms cloud queue,
+  příprava 23 ms, Tradovate Market POST 253 ms, broker Fill timestamp → frame 37 ms a první exposure
+  publish v `14:36:37.547Z` (710 ms od kliku). Telefonní pixel nebyl v tomto buildu instrumentovaný,
+  proto číslo není vydáváno za klik → pixel; právě tuto mezeru opravuje následující lokální balík.
+  Jediný 1× MNQ DEMO Market byl cíleně zavřen, worker vypnut a následný read-only reconcile potvrdil
+  `armed=false`, `groupFlat=true`, 0 pozic/příkazů, bez divergence/stuck/error a přesný instalovaný SHA.
 
 ### 2026-11-04 — Produkční A/B rychlosti: limit 628 ms, Market 660–751 ms, flat milník před ACK (Codex, NASAZENO A ZMĚŘENO)
 

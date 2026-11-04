@@ -186,7 +186,7 @@ Filip po nasazení fáze 1: pozice se v grafu ukáže 1–2 s po vyplnění. Roz
 - Odhad: fill → graf ≈ 0,5–0,8 s (z 1–2 s); zbývá hlavně zpracování fillu ve workeru (F2b).
 
 ### F2b — měření zpracování fillu ve workeru
-- `tradovateBroker`: u emitovaného `fill` log `STREAM FILL acc=… brokerTs→frame … frame→emit …`
+- `tradovateBroker`: u emitovaného `fill` log `BROKER FILL … broker→frame … frame→dispatch … listeners …`; dispatch je čas do předání skutečné Fill entity, `listeners` odděluje synchronní práci controlleru.
   (časová značka brokera, přijetí rámce, emit). Jen log, žádná změna chování. Podle čísel pak
   rozhodnout o odstranění REST dočítání (hydrate) v cestě streamu.
 - `macCopierCommandRelay`: každý pokus rychlé expozice loguje jen technická čísla
@@ -226,7 +226,7 @@ INV-MANUAL-01 (průměr ani pozice z kanálu nevstupují do příkazu; příkazy
 - Hook drží klíč v refu (odběr se při změně klíče neotevírá znovu).
 - Události: u stejného id vyhrává verze z kanálu.
 - BE skryté, dokud expozice z kanálu předbíhá poll (`manageEntryAvgPrice` null).
-- Log fillu (`BROKER FILL …`) v try/catch.
+- Log fillu (`BROKER FILL …`) v try/catch; telefonní i desktopový graf zapisují stejný příjem expozice → první paint.
 
 ## 11. F2c — souběžné ověření identity a connection lookup
 

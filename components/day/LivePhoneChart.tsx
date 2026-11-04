@@ -42,6 +42,8 @@ import type { LiveFillMarker } from '../../lib/liveFillMarkers';
 import { limitIsMarketable, newTicketDraft, stopIsTriggered, type TicketQuote } from '../../lib/liveOrderTicket';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { MarketCandle } from '../../services/marketData';
+import { perfDuration } from '../../lib/perfTrace';
+import { markLiveCommandPaint, type LiveCommandTraceStage, type LiveCommandWorkerTiming } from '../../lib/liveCommandPerformance';
 import './dayJournal.css';
 
 export interface LivePhoneChartSlots {
@@ -74,6 +76,14 @@ export interface LivePhoneChartSlots {
   workingOrders?: (LiveWorkingOrdersView & { contract: string | null }) | null;
   /** U8: klíč knihovny šablon SL/TP na zařízení (nic neautorizuje); null = nepřihlášeno. */
   userId?: string | null;
+  /** F2a E2E diagnostika: stejný první paint jako desktop, jen lokální měření. */
+  liveExposurePaint?: {
+    id: string;
+    receivedPerformanceAt: number;
+    operationId?: string;
+    stage?: LiveCommandTraceStage;
+    workerTiming?: LiveCommandWorkerTiming;
+  } | null;
 }
 
 const NO_FILLS: readonly LiveFillMarker[] = [];
@@ -118,6 +128,36 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   onLeave: () => void;
 }) {
   const ctl = useDayController({ trades, allTrades, sessions, onUpdateTrade });
+  const measuredExposureIds = useRef(new Set<string>());
+  const exposurePaintFrames = useRef(new Set<number>());
+  useEffect(() => () => {
+    for (const frame of exposurePaintFrames.current) window.cancelAnimationFrame(frame);
+    exposurePaintFrames.current.clear();
+    measuredExposureIds.current.clear();
+  }, []);
+  useEffect(() => {
+    const paint = slots.liveExposurePaint;
+    if (!paint || measuredExposureIds.current.has(paint.id)) return;
+    measuredExposureIds.current.add(paint.id);
+    const firstFrame = window.requestAnimationFrame(() => {
+      exposurePaintFrames.current.delete(firstFrame);
+      const secondFrame = window.requestAnimationFrame(() => {
+        exposurePaintFrames.current.delete(secondFrame);
+        measuredExposureIds.current.delete(paint.id);
+        perfDuration('live:exposure:to-paint', performance.now() - paint.receivedPerformanceAt);
+        if (paint.operationId && paint.stage) {
+          markLiveCommandPaint({
+            operationId: paint.operationId,
+            stage: paint.stage,
+            receivedPerformanceAt: paint.receivedPerformanceAt,
+            workerTiming: paint.workerTiming,
+          });
+        }
+      });
+      exposurePaintFrames.current.add(secondFrame);
+    });
+    exposurePaintFrames.current.add(firstFrame);
+  }, [slots.liveExposurePaint]);
   const [timeframe, setTimeframeState] = useState<MarketTimeframe>(() => readStoredDayChartTimeframe(typeof window === 'undefined' ? null : window.localStorage));
   const setTimeframe = (next: MarketTimeframe) => { setTimeframeState(next); writeStoredDayChartTimeframe(window.localStorage, next); };
   const range = focusRange({ mode: 'day', session: 'ny', scope: ctl.scope, windows: ctl.chartWindows, now: ctl.now, isToday: ctl.isToday });

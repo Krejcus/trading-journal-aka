@@ -1061,13 +1061,18 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       price: fill.price,
       filledAt: fill.timestamp ? Date.parse(fill.timestamp) : clock(),
     };
+    const dispatchedAt = clock();
     emitBrokerState({ type: 'fill', fill: mapped, receivedAt });
-    // Měření (F2b, docs/LIVE_HOT_PATH_PLAN.md §10): broker čas fillu → přijetí rámce → emit
-    // (u REST hydratace taky). Jen diagnostika bez čísla účtu; nikdy nevyhodí.
+    // Měření (F2b, docs/LIVE_HOT_PATH_PLAN.md §10): broker čas fillu → přijetí rámce
+    // → začátek synchronního dispatch a návrat posluchačů. Staré `frame→emit`
+    // se měřilo až PO všech synchronních listenerech a neprávem připisovalo
+    // jejich controller práci mapování Fill entity. Jen diagnostika bez čísla
+    // účtu; nikdy nevyhodí.
     try {
-      const emittedAt = clock();
-      console.log(`${new Date(emittedAt).toISOString()} BROKER FILL order=${fill.orderId} qty=${fill.qty}`
-        + ` broker→frame=${Number.isFinite(mapped.filledAt) ? Math.round(receivedAt - mapped.filledAt) : '?'}ms frame→emit=${Math.round(emittedAt - receivedAt)}ms`);
+      const listenersReturnedAt = clock();
+      console.log(`${new Date(listenersReturnedAt).toISOString()} BROKER FILL order=${fill.orderId} qty=${fill.qty}`
+        + ` broker→frame=${Number.isFinite(mapped.filledAt) ? Math.round(receivedAt - mapped.filledAt) : '?'}ms`
+        + ` frame→dispatch=${Math.round(dispatchedAt - receivedAt)}ms listeners=${Math.round(listenersReturnedAt - dispatchedAt)}ms`);
     } catch {
       // Diagnostika nesmí ovlivnit doručený fill.
     }
