@@ -130,7 +130,8 @@ describe('P2: Odeslat v Náhledu = dvoukrok 350 ms – 4 s; holý Market jen vel
   });
 
   it('zdroj: Náhled dostane onPlace jen pro návrh, který není holý; send jen přes livePreviewPlaceClick', () => {
-    expect(ticket).toMatch(/\{\.\.\.\(onPlaceEntry && !bareDraft \? \{ onPlace: onPlaceEntry \} : \{\}\)\}/);
+    // Náhled → Odeslat dostane vstup přes sdílený zámek jednoho příkazu (C7/C8 kolo 1).
+    expect(ticket).toMatch(/\{\.\.\.\(placeEntryLocked && !bareDraft \? \{ onPlace: placeEntryLocked \} : \{\}\)\}/);
     const section = between(ticket, 'const PreviewSection: React.FC', '// ── Předvolby, šablony a výchozí návrh');
     expect(section).not.toMatch(/confirmUntil|5_000/);
     expect(section).toMatch(/const placeFn = barePreview \? undefined : onPlace;/);
@@ -312,7 +313,7 @@ describe('P3: telefon — Zrušit z lišty pozice jde sdíleným zámkem (jeden 
     const result = await close(pending);
     expect(manage).not.toHaveBeenCalled();
     expect(result).toMatchObject({ kind: 'cancel', outcome: { called: false, status: 'not-sent' } });
-    expect(say).toHaveBeenCalledWith('Čeká se na výsledek předchozí změny — nic se neodeslalo.');
+    expect(say).toHaveBeenCalledWith('Čeká se na výsledek předchozí změny — nic se neodeslalo. Zavřít jde hned Flattenem.');
     expect(busyRef.current).toBe(true);
   });
 
@@ -550,11 +551,17 @@ describe('kontrolní seznam 25: attach z PC bez čerstvého stavu = „Neodeslá
 
   it('zdroj: desk kontroluje čerstvý stav PŘED relayem; panel konečnost odvozuje z tónu', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
-    const attach = between(desk, 'const attachBrackets = useCallback(', '}, []);');
+    // C8 (4. 11. 2026): relay volá jen sdílený `sendLeaderManage` (správa, attach, × holé pozice, C7).
+    const attach = between(desk, 'const attachBrackets = useCallback(', '}, [sendLeaderManage]);');
     const fresh = attach.indexOf('if (!armStatusRef.current.fresh');
-    const relay = attach.indexOf('executeTradovateCopierRelayCommand(');
+    const relay = attach.indexOf('sendLeaderManage(');
     expect(fresh).toBeGreaterThan(0);
     expect(relay).toBeGreaterThan(fresh);
+    // Relay odeslání správy je v čisté továrně desku (lib/liveDeskCommands.ts); desk dodá jen relay klienta.
+    expect(desk).toMatch(/relay: \(relayId, command\) => executeTradovateCopierRelayCommand\(relayId, \{ type: 'copy-command', command \}\),/);
+    expect(desk).toMatch(/const sendLeaderManage = deskCommands\.sendLeaderManage;/);
+    const factory = source('lib/liveDeskCommands.ts');
+    expect(between(factory, 'const sendLeaderManage = async', 'const closeBareLeader')).toMatch(/if \(!route\) throw new Error\(LIVE_DESK_RELAY_MISSING\);\s*const response = await deps\.relay\(route, command\);/);
     expect(attach.slice(fresh, relay)).toMatch(/throw new Error\('Stav kopírky není čerstvě ověřený — nic se neodeslalo\.'\);/);
     expect(ticket).toMatch(/const notice = attachErrorNotice\(reason, Date\.now\(\)\);\s*setAttachNotice\(\{ entryOperationId: operationId, notice, final: notice\.tone !== 'bad' \}\);/);
   });

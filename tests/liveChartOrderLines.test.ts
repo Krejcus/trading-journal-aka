@@ -59,10 +59,15 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     const overlay = readFileSync('components/BacktestOrderLinesOverlay.tsx', 'utf8');
     expect(overlay).toMatch(/confirmed\(cancelConfirmKey\(line\), line\.confirmCancel\)/);
     // PC: vstup se během „Opravdu?“ vyplnil (× teď zavírá pozici jedním klikem) — klik nic neodešle.
-    expect(overlay).toMatch(/confirming\.key !== key && confirming\.until > now && key\.includes\(':cancel:'\) && confirming\.key\.includes\(':cancel:'\) && sameLine\(confirming\.key\)/);
+    // (C8, 4. 11. 2026: logika v čisté `orderLineConfirmStep`, chování hlídá tests/liveC7C8Ui.test.ts.)
+    // Čára holé pozice `…:entry:bare:<id>` je pro tuto ochranu tatáž čára jako `…:entry` (C8 kolo 1);
+    // změna čar mezi kliky nechá neaktivní značku `stale`, nikdy jen null (kolo 2 — složení v (f2)).
+    expect(overlay).toMatch(/sameCancelLine\(live\.key, key\)\s*\? live\.stale === true \|\| live\.key !== key\s*: live\.stale === true && \(live\.key === key \|\| sameLiveCancelOwner\(live\.key, key\)\)/);
+    expect(overlay).toMatch(/const next = orderLineConfirmSync\(current, lines\);/);
     // Klíč potvrzení nese akci a cenu: potvrzené „zrušit příkaz“ nikdy nezavře pozici (ani jiný obchod).
     expect(overlay).toMatch(/cancelConfirmKey = \(line: BacktestChartOrderLine\) => `\$\{line\.id\}:cancel:\$\{line\.cancelAction \?\? line\.ownerType\}:\$\{line\.price\}`/);
-    expect(overlay).toMatch(/now - \(confirming\.until - CONFIRM_MS\) >= 350/);
+    // Dvojklik se nepočítá: 2. klik ≥ 350 ms od PŘEDCHOZÍHO kliku (sdílený `liveManageConfirmStep`).
+    expect(overlay).toMatch(/const step = liveManageConfirmStep\(live\?\.stale \? null : live, key, now\);/);
     const workspace = readFileSync('components/AlphaTradeChartWorkspace.tsx', 'utf8');
     expect(workspace).toMatch(/target\.root !== liveOrderEntry\?\.executionInstrument/);
     const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
@@ -80,7 +85,8 @@ describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)
     // Klik pustí fokus tlačítka (Enter po zkratce nesmí odeslat vyměněný návrh — oponentura vlny B).
     expect(ticket).toMatch(/onClick=\{event => \{ event\.currentTarget\.blur\(\); void sendDirect\(\); \}\}/);
     expect(ticket).toMatch(/directBusyRef\.current\) return;/);
-    expect(ticket).toMatch(/onPlaceEntry\(previewDraft, `entry:\$\{crypto\.randomUUID\(\)/);
+    // Vstup jde přes sdílený zámek jednoho příkazu (`placeEntryLocked` = `runWithCommandLock` + onPlaceEntry).
+    expect(ticket).toMatch(/placeEntryLocked\(previewDraft, `entry:\$\{crypto\.randomUUID\(\)/);
     // Blokace náhledu (Market, SL/TP, chyby panelu, zastaralá cena) blokuje i přímé odeslání.
     expect(ticket).toMatch(/previewBlockedReason \?\? \(!previewDraft/);
   });

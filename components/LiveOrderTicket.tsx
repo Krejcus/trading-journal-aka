@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Lock, Star, X } from 'lucide-react';
 import {
   bracketDisplayValue,
@@ -98,7 +98,10 @@ import {
   type LiveManagePlan,
   type LiveManageShownPrice,
 } from '../lib/liveManagePrices';
-import { liveManageErrorNotice, liveManageResultNotice, type LiveManageNotice, type LiveManageRunner } from '../hooks/useLiveManageRunner';
+import { liveManageErrorNotice, liveManageResultNotice, type LiveManageNotice, type LiveManageOutcome, type LiveManageRunner } from '../hooks/useLiveManageRunner';
+import { liveBareCloseLabel, type LiveBareCloseOffer } from '../lib/liveBareCloseUi';
+import { LIVE_COMMAND_BUSY_TEXT, createLiveBareClosePanelClick, runWithCommandLock } from '../hooks/liveCommandRuns';
+import { useLiveConfirmGate } from '../hooks/useLiveConfirmGate';
 import {
   GROUP_TARGET,
   allTradeAccounts,
@@ -222,7 +225,7 @@ const placedResultView = (entry: LeaderEntryPlaceResult): { tone: 'ok' | 'bad' |
  * localhostu, 405 před relayí); vše ostatní je neznámý výsledek — nikdy neopakovat naslepo.
  */
 const placeErrorView = (message: string): { tone: 'bad' | 'warn'; text: string } => (
-  /entry-busy|entry-daily-cap|manage-daily-cap|entry-conflict|entry-superseded|entry-not-admitted|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|Chybí cesta k Mac workeru|worker-disconnected|pouze read-only|Přikoupení musí mít SL a TP pozice/.test(message)
+  /entry-busy|entry-daily-cap|manage-daily-cap|entry-conflict|entry-superseded|entry-not-admitted|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|Chybí cesta k Mac workeru|worker-disconnected|pouze read-only|Přikoupení musí mít SL a TP pozice|nic se neodeslalo/.test(message)
     ? { tone: 'bad', text: /entry-busy/.test(message) ? 'Neodesláno: jiný ruční vstup se právě zpracovává.'
       : /entry-daily-cap/.test(message) ? 'Neodesláno: dosažen denní strop ručních vstupů.'
         : /entry-superseded/.test(message) ? 'Neodesláno: tento pokus zastavila brzda (vypnutí kopírky).'
@@ -609,7 +612,9 @@ const AttachSection: React.FC<{
   displayValue: (leg: LiveManageLeg, price: number | null) => number | null;
   onCommit: (leg: LiveManageLeg, value: number) => void;
   onSend: () => void;
-}> = ({ muted, field, ink, side, quantity, units, legs, reference, market, problem, sendBlocked, busy, notice, displayValue, onCommit, onSend }) => (
+  /** C8: × zavřít tuto holou pozici (dvoukrokově); chybí = jen Flatten. */
+  close?: React.ReactNode;
+}> = ({ muted, field, ink, side, quantity, units, legs, reference, market, problem, sendBlocked, busy, notice, displayValue, onCommit, onSend, close }) => (
   <div className="grid gap-1.5 rounded-[9px] border border-rose-500/45 bg-rose-500/[0.06] p-2.5">
     <div className="flex items-baseline gap-2">
       <b className="text-[11px] font-black uppercase tracking-[0.06em] text-rose-500">{`${side === 'long' ? 'Long' : 'Short'} ${quantity} · BEZ SL/TP`}</b>
@@ -641,8 +646,33 @@ const AttachSection: React.FC<{
       className="h-[34px] rounded-[9px] bg-indigo-600 text-[11.5px] font-extrabold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-45"
     >{busy ? 'Odesílám…' : `Odeslat SL a TP${legs?.stopLoss != null && legs.takeProfit != null ? ` · ${formatPrice(legs.stopLoss)} / ${formatPrice(legs.takeProfit)}` : ''}`}</button>
     {notice && <div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${noticeTone(notice.tone)}`}>{notice.text}</div>}
+    {close}
   </div>
 );
+
+/**
+ * C8 (4. 11. 2026): × zavřít vlastní holý Market z panelu — dvoukrokově (2. klik 350 ms – 4 s
+ * od PŘEDCHOZÍHO kliku, klíč akce + id cíle), tatáž funkce obrazovky jako × na čáře (jeden zámek).
+ * Neaktivní s důvodem nad zastaralým stavem / mimo zapnutou kopírku; po kliku pouští fokus.
+ */
+export const BareCloseButton: React.FC<{
+  offer: LiveBareCloseOffer;
+  asking: boolean;
+  busy: boolean;
+  notice: LiveManageNotice | null;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+}> = ({ offer, asking, busy, notice, onClick }) => <div className="grid gap-1">
+  <button
+    type="button"
+    data-live-bare-close
+    disabled={!offer.enabled || busy}
+    onClick={onClick}
+    title={offer.reason ?? 'Zavře holou pozici leadera (close-position); worker ji před zavřením ověří u brokera. Potvrdíš druhým kliknutím.'}
+    className={`h-[30px] rounded-[9px] border text-[11px] font-extrabold disabled:cursor-not-allowed disabled:opacity-45 ${asking ? 'border-rose-600 bg-rose-600 text-white' : 'border-rose-500/50 text-rose-500 hover:bg-rose-500/10'}`}
+  >{busy ? 'Zavírám…' : liveBareCloseLabel(offer.trade, asking)}</button>
+  {offer.reason && <div className="text-[10px] font-bold text-amber-600">{offer.reason}</div>}
+  {notice && <div role="status" className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${noticeTone(notice.tone)}`}>{notice.text}</div>}
+</div>;
 
 /** Plán tlačítka správy pro vykreslení: popisek, stav a klíč potvrzení. */
 interface ManageButtonView { label: string; disabled: boolean; title: string; asking: boolean }
@@ -780,6 +810,17 @@ interface Props {
   manageRunner?: LiveManageRunner | null;
   /** Přihlášený uživatel — klíč knihovny šablon na zařízení; chybí = jen vestavěná šablona, nic se neukládá. */
   userId?: string | null;
+  /** C8: nabídka × u vlastní holé pozice (jen zobrazení); výchozí null = tlačítko se neukáže. */
+  bareClose?: LiveBareCloseOffer | null;
+  /** C8: × holé pozice obrazovky (`closeBare`, sdílený zámek s čarou); chybí = tlačítko se neukáže. */
+  onBareClose?: (entryOperationId: string) => Promise<LiveManageOutcome | null>;
+  /**
+   * Sdílený zámek jednoho příkazu obrazovky / desku (LiveTradingScreen `manageState.busyRef` =
+   * `liveCommandLockRef`): vstup (velké tlačítko i Náhled → Odeslat), „Přidat SL/TP“ i × holé
+   * pozice z panelu jdou tímtéž zámkem jako čáry, zkratky, lišta „Zrušit čekající“ a Dashboard.
+   * Chybí = vlastní zámek panelu.
+   */
+  commandLockRef?: { current: boolean } | null;
   onNewDraft: (side: TicketSide) => void;
   onClose: () => void;
 }
@@ -819,8 +860,14 @@ const LiveOrderTicket: React.FC<Props> = ({
   entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
   attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, userId = null,
-  onNewDraft, onClose,
+  bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose,
 }) => {
+  const ownCommandLockRef = useRef(false);
+  const lockRef = commandLockRef ?? ownCommandLockRef;
+  // Vstup z panelu (velké tlačítko i Náhled → Odeslat) jen pod sdíleným zámkem jednoho příkazu.
+  const placeEntryLocked = onPlaceEntry
+    ? (entryDraft: LiveEntryPreviewDraft, operationId: string) => runWithCommandLock(lockRef, () => onPlaceEntry(entryDraft, operationId))
+    : undefined;
   // Přikoupení: návrh na stranu otevřené pozice drží SL/TP pozice (čáry návrhu se k nim vrátí).
   const scaleIn = entryScaleIn && draft && draft.side === entryScaleIn.side ? entryScaleIn : null;
   useEffect(() => {
@@ -982,7 +1029,9 @@ const LiveOrderTicket: React.FC<Props> = ({
   const bareAsking = bareKey != null && liveConfirmAsking(bareConfirm, bareKey, Date.now());
   const sendDirect = async () => {
     if (directBlocked != null) { setBareConfirmState(null); return; }
-    if (!previewDraft || !onPlaceEntry || directBusyRef.current) return;
+    if (!previewDraft || !placeEntryLocked || directBusyRef.current) return;
+    // Jiný příkaz (× / posun z čáry, Zrušit čekající, Dashboard) právě letí — nic neodejde, potvrzení beze změny.
+    if (lockRef.current) { setDirect({ key: directKey, view: { tone: 'warn', text: LIVE_COMMAND_BUSY_TEXT } }); return; }
     if (bareSend) {
       // Brána znovu v okamžiku kliku (kotace ≤ 3 s, flat, strop) — render mohl být starší;
       // zablokovaný klik rozběhnuté „Opravdu?“ zahodí. Pak dvoukrok 350 ms – 4 s.
@@ -995,7 +1044,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     setDirectBusy(true);
     const sentKey = directKey;
     try {
-      const result = await onPlaceEntry(previewDraft, `entry:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`);
+      const result = await placeEntryLocked(previewDraft, `entry:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`);
       setDirect({ key: sentKey, view: placedResultView(result) });
       // Přijatý vstup: návrh se „promění“ v živý příkaz (štítek pozice v grafu, karta „Zadáno“).
       if (result.status === 'acknowledged') {
@@ -1158,6 +1207,8 @@ const LiveOrderTicket: React.FC<Props> = ({
     if (!attachEntry || !onAttachBrackets || !shownLegs || attachBusyRef.current || directBusyRef.current) return;
     if (shownAttachNotice?.final) return;
     const operationId = attachEntry.operationId;
+    // Jiný příkaz pod sdíleným zámkem (× holé pozice z čáry, Zrušit čekající, Dashboard) — attach neodejde.
+    if (lockRef.current) { setAttachNotice({ entryOperationId: operationId, notice: { tone: 'warn', text: LIVE_COMMAND_BUSY_TEXT, at: Date.now() }, final: false }); return; }
     // Záměr se skládá až při kliku: čerstvá kotace IBKR téhož kontraktu, pozice = holý vstup, ≥ 8 ticků.
     const intent = liveAttachIntent({
       bareEntry: attachEntry, position: entryLeaderPosition, quote: bareQuote,
@@ -1167,7 +1218,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     attachBusyRef.current = true;
     setAttachBusy(true);
     try {
-      const result = await onAttachBrackets(intent.attach);
+      const result = await runWithCommandLock(lockRef, () => onAttachBrackets(intent.attach));
       const notice = liveManageResultNotice('attach-brackets', result, Date.now());
       // Přijato nebo neznámé = konec (nic se neopakuje); blokace / odmítnutí = jde opravit a zkusit znovu.
       const final = result.status === 'acknowledged' || result.status === 'unknown';
@@ -1180,6 +1231,42 @@ const LiveOrderTicket: React.FC<Props> = ({
       setAttachBusy(false);
     }
   };
+
+  // ── C8: × zavřít vlastní holý Market z panelu (dvoukrok, tatáž funkce jako čára) ──
+  const bareCloseOffer = bareClose && onBareClose ? bareClose : null;
+  // Automat dvoukroku: zablokovaná, změněná nebo zmizelá nabídka zahodí rozběhnuté „Opravdu?“
+  // i bez kliku (jako holý Market a C7); dva kliky v jednom snímku nic nepošlou.
+  const { gate: bareCloseGate } = useLiveConfirmGate([bareCloseOffer]);
+  const [bareCloseBusy, setBareCloseBusy] = useState(false);
+  const [bareCloseNotice, setBareCloseNotice] = useState<{ entryOperationId: string; notice: LiveManageNotice } | null>(null);
+  const shownBareCloseNotice = bareCloseOffer && bareCloseNotice?.entryOperationId === bareCloseOffer.trade.entryOperationId ? bareCloseNotice.notice : null;
+  const onBareCloseRef = useRef(onBareClose);
+  onBareCloseRef.current = onBareClose;
+  const bareClosePanelClick = useMemo(() => createLiveBareClosePanelClick({
+    gate: bareCloseGate,
+    // Sdílený zámek (čáry, zkratky, C7, Dashboard) + vstup / attach panelu právě letí = nic.
+    busy: () => lockRef.current || attachBusyRef.current || directBusyRef.current,
+    close: () => onBareCloseRef.current,
+    report: (entryOperationId, notice) => setBareCloseNotice({ entryOperationId, notice }),
+  }), [bareCloseGate, lockRef]);
+  const clickBareClose = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.currentTarget.blur();
+    const target = bareCloseOffer?.trade.entryOperationId ?? null;
+    const sent = bareClosePanelClick(bareCloseOffer);
+    if (!sent || !target) return;
+    setBareCloseBusy(true);
+    void sent
+      .then(outcome => { if (outcome) setBareCloseNotice({ entryOperationId: target, notice: outcome.notice }); })
+      .finally(() => setBareCloseBusy(false));
+  };
+  const bareCloseInAttach = Boolean(attachEntry && attachSide && bareCloseOffer && attachEntry.operationId === bareCloseOffer.trade.entryOperationId);
+  const bareCloseView = bareCloseOffer ? <BareCloseButton
+    offer={bareCloseOffer}
+    asking={bareCloseGate.asking(bareCloseOffer.key)}
+    busy={bareCloseBusy}
+    notice={shownBareCloseNotice}
+    onClick={clickBareClose}
+  /> : null;
 
   // ── Správa pozice leadera z panelu (U10): jen záměr pro sdílený runner ──
   const manageSummary = position?.summary ?? null;
@@ -1257,7 +1344,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     return {
       label: asking ? `Opravdu ${plan.intent.label}? Klikni znovu` : idle,
       disabled: busy,
-      title: busy ? 'Čeká se na výsledek předchozí změny.' : `${plan.intent.label}${plan.intent.confirm ? ' — potvrdíš druhým kliknutím' : ''}`,
+      title: busy ? 'Čeká se na výsledek předchozí změny — zavřít jde hned Flattenem.' : `${plan.intent.label}${plan.intent.confirm ? ' — potvrdíš druhým kliknutím' : ''}`,
       asking,
     };
   };
@@ -1431,7 +1518,10 @@ const LiveOrderTicket: React.FC<Props> = ({
         displayValue={attachDisplay}
         onCommit={commitAttach}
         onSend={() => void sendAttach()}
+        close={bareCloseInAttach ? bareCloseView : null}
       />}
+      {/* Holá pozice bez (téže) sekce „Přidat SL/TP“ — worker attach nenabízí: × zavřít samostatně. */}
+      {!bareCloseInAttach && bareCloseView}
       {manageView && <ManageSection
         muted={tone.muted}
         field={tone.field}
@@ -1609,7 +1699,7 @@ const LiveOrderTicket: React.FC<Props> = ({
         onPreview={onPreviewEntry}
         // Holý Market (bez SL/TP) nikdy přes Náhled → Odeslat: jen velké tlačítko (sendDirect,
         // dvoukrok 350 ms – 4 s, brána při kliku). Oponentura vlny B, P2.
-        {...(onPlaceEntry && !bareDraft ? { onPlace: onPlaceEntry } : {})}
+        {...(placeEntryLocked && !bareDraft ? { onPlace: placeEntryLocked } : {})}
         onAcknowledged={() => onDraft(null)}
       />}
       {problems.length > 0 && <div className="grid gap-1">

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import ConfirmActionDialog from './ConfirmActionDialog';
+import { LiveCancelPendingBar, LiveCancelPendingBoundary, type LiveCancelPendingBarInput } from './LivePendingCancel';
 import { isCopierBrakeQueuedError } from '../lib/copierBrakeDelivery';
 import { liveSafetyFailureMessage, liveSafetyTargetAge, type FlattenGroupCoordinator, type LiveSafetyAction, type LiveSafetyTarget } from '../lib/liveSafetyAction';
 import {
@@ -47,10 +48,16 @@ interface Props {
   onAction: (action: LiveSafetyAction, confirmedTarget?: LiveSafetyTarget) => Promise<string>;
   flattenCoordinator: FlattenGroupCoordinator;
   copierArmed: boolean;
+  /**
+   * C7 (4. 11. 2026): „Zrušit čekající“ vedle Flatten All (PC) — jen vlastní čekající vstupy,
+   * dvoukrokově, sdíleným zámkem desku. Chybí / null = tlačítko není. Flatten tím zamčený není.
+   * Vykresluje se ve vlastní hranici chyb: pád části C7 lištu OFF / Kill / Flatten nesundá.
+   */
+  cancelPending?: LiveCancelPendingBarInput | null;
 }
 
 /** Static LIVE shell. No dependency on overview/chart chunks, balances or fresh ARM data. */
-export default function LiveSafetyControls({ target, onAction, flattenCoordinator, copierArmed }: Props) {
+export default function LiveSafetyControls({ target, onAction, flattenCoordinator, copierArmed, cancelPending = null }: Props) {
   const [confirmation, setConfirmation] = useState<LiveSafetyConfirmation | null>(null);
   const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'error'; at: number } | null>(null);
   const [pending, setPending] = useState<LiveSafetyAction[]>([]);
@@ -133,12 +140,15 @@ export default function LiveSafetyControls({ target, onAction, flattenCoordinato
   const content = <>
     <section ref={barRef} data-live-safety-controls aria-label="Nouzové ovládání LIVE" className="native-fixed-above-tab-bar fixed bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] left-3 right-3 z-[350] mx-auto max-w-[1500px] rounded-xl border border-rose-500/40 bg-[var(--bg-card)] p-2 shadow-xl lg:bottom-[max(12px,env(safe-area-inset-bottom))]">
       <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]"><b>Nouzové ovládání</b><span className="truncate">{target ? `Skupina: ${target.name} · ${liveSafetyTargetAge(target)}` : 'Skupina workeru nezjištěna · stav cíle neověřený'}</span></div>
-      <div className="flex gap-2">{(['disarm', 'kill-switch', 'flatten-group'] as const).map(action => {
+      <div className="flex flex-wrap gap-2">{(['disarm', 'kill-switch', 'flatten-group'] as const).map(action => {
         const waiting = pending.includes(action) || (action === 'flatten-group' && sharedFlattenPending);
         return <button key={action} type="button" disabled={waiting || (action === 'flatten-group' && !target)} onClick={() => setConfirmation({ action, target })} className={`min-h-9 flex-1 rounded-lg border px-2 text-xs font-black disabled:opacity-45 ${action === 'disarm' ? 'border-[var(--border-subtle)] bg-[var(--bg-page)] text-[var(--text-primary)]' : 'border-rose-500/40 bg-rose-600 text-white'}`}>
           {waiting ? `${labels[action]} · čekám` : labels[action]}
         </button>;
-      })}</div>
+      })}
+        {/* C7 (není safety akce): vlastní hranice chyb, stále připojené kvůli výsledku po zmizení nabídky. */}
+        <LiveCancelPendingBoundary resetKey={typeof cancelPending?.view?.key === 'string' ? cancelPending.view.key : ''}><LiveCancelPendingBar input={cancelPending} /></LiveCancelPendingBoundary>
+      </div>
       {!target && <p className="mb-0 mt-1.5 text-[10px] text-[var(--text-secondary)]">Flatten vyžaduje známou skupinu. Pokud worker není dostupný, ověř a zavři pozice přímo u brokera.</p>}
       {shortcutNotice && <p role="status" className="mb-0 mt-1.5 text-[10.5px] font-bold text-amber-600">Zkratka: {shortcutNotice.text}</p>}
       {notice && <p role="status" className={`mb-0 mt-2 text-[11px] font-bold ${notice.tone === 'error' ? 'text-rose-500' : 'text-[var(--text-primary)]'}`}>Poslední akce {new Date(notice.at).toLocaleTimeString('cs-CZ')} · {notice.text}</p>}

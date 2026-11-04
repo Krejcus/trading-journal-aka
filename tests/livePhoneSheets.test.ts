@@ -209,13 +209,18 @@ describe('lišta pozice: Zrušit / Zavřít dvoukrokově s klíčem akce, mimo s
     expect(livePhonePositionCloseKey({ side: 'long', quantity: 1, symbol: 'MNQZ6', pending: { type: 'Limit', price: 24_989.75 } })).not.toBe(pending);
   });
 
-  it('busy vypne jen „Přidat SL/TP“, Zavřít (Flatten) nikdy; SL/TP správa jen u chráněné pozice', () => {
+  it('busy vypne jen „Přidat SL/TP“, Flatten / Zavřít nikdy; SL/TP správa jen u chráněné pozice', () => {
     const base = { side: 'long' as const, quantity: 1, symbol: 'MNQZ6', busy: true, onAttach: vi.fn(), onClose: vi.fn(), onManage: vi.fn() };
     const bare = renderToStaticMarkup(React.createElement(LivePhonePositionBar, { ...base, unprotected: true }));
     expect(bare).toMatch(/<button[^>]*disabled=""[^>]*>Přidat SL\/TP<\/button>/);
-    const close = bare.match(/<button[^>]*aria-label="Zavřít pozici \(Flatten\)"[^>]*>/)?.[0] ?? '';
+    // Holá pozice: záložní tlačítko se vždy jmenuje „Flatten“ (C8 kolo 1 — „Zavřít“ jen pro cílené zavření).
+    const close = bare.match(/<button[^>]*aria-label="Flatten — zavřít vše"[^>]*>/)?.[0] ?? '';
     expect(close).not.toBe('');
     expect(close).not.toMatch(/disabled/);
+    const managedClose = renderToStaticMarkup(React.createElement(LivePhonePositionBar, { ...base, unprotected: false }))
+      .match(/<button[^>]*aria-label="Zavřít pozici \(Flatten\)"[^>]*>/)?.[0] ?? '';
+    expect(managedClose).not.toBe('');
+    expect(managedClose).not.toMatch(/disabled/);
     expect(bare).not.toMatch(/Správa SL a TP/);
     expect(renderToStaticMarkup(React.createElement(LivePhonePositionBar, { ...base, unprotected: false }))).toMatch(/aria-label="Správa SL a TP"/);
     const pending = renderToStaticMarkup(React.createElement(LivePhonePositionBar, { ...base, unprotected: false, pending: { type: 'Limit', price: 24_990 } }));
@@ -312,11 +317,12 @@ describe('statika: listy a lišty nemají vlastní cestu k brokerovi (INV-UI-01)
     expect(sheet).toMatch(/useLiveManageRunner\(\{\s*manage,\s*state,/);
   });
 
-  it('lišta pozice: dvoukrok přes liveConfirmClick s klíčem akce, Zavřít bez busy', () => {
+  it('lišta pozice: dvoukrok přes sdílený automat (liveConfirmClick) s klíčem akce, Zavřít bez busy', () => {
     const actions = source('LivePhoneLiveActions.tsx');
     expect(actions).not.toMatch(broker);
-    expect(actions).toMatch(/liveConfirmClick\(confirm, actionKey, Date\.now\(\)\)/);
-    expect(actions).toMatch(/if \(step\.send\) onClose\(\);/);
+    expect(actions).toMatch(/useLiveConfirmGate\(\[\{ key: actionKey, enabled: true \}, bare\]\)/);
+    expect(actions).toMatch(/if \(livePhoneBarClick\(gate, 'flatten', \{ flattenKey: actionKey, bare \}\) === 'flatten'\) onClose\(\);/);
+    expect(source('../../lib/liveConfirmGate.ts')).toMatch(/const step = liveConfirmClick\(state, target\.key, now\(\)\);/);
     expect(actions).not.toMatch(/armedAt/);
     expect(actions).toMatch(/liveAttachProblem\(side, market, sl, tp, tickSize\)/);
   });

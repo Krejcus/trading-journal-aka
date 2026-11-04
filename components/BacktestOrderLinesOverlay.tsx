@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { orderLineLabelParts, type BacktestChartOrderLine, type BacktestChartOrderLineKind } from '../services/backtestOrderLines';
 import type { ChartOrderLineLabels } from '../services/chartSettings';
+import { liveManageConfirmStep, type LiveManageConfirm } from '../hooks/useLiveManageRunner';
 
 interface Props {
   api: ChartViewApi;
@@ -70,12 +71,101 @@ const OrderLineBadge: React.FC<{
   );
 };
 
-const CONFIRM_MS = 4_000;
 /**
  * Klíč dvoukrokového ×: nese i akci (oponentura 2. 11.): čekající vstup se mezi klepnutími
  * může vyplnit a × pak znamená zavřít pozici — potvrzení zrušení vstupu nesmí potvrdit zavření.
  */
 export const cancelConfirmKey = (line: BacktestChartOrderLine) => `${line.id}:cancel:${line.cancelAction ?? line.ownerType}:${line.price}`;
+
+/**
+ * Čára klíče × normalizovaně: čára holé pozice `live-position:entry:bare:<id>` (C8) je TATÁŽ čára
+ * jako `live-position:entry` spravovaného obchodu (po doplnění SL/TP se id čáry změní, cíl zůstává).
+ * Klíč bez `:cancel:` (BE a jiná tlačítka čáry) = null (ochrana „téže čáry“ je jen pro ×).
+ */
+const confirmLineOf = (key: string): string | null => {
+  const at = key.indexOf(':cancel:');
+  if (at < 0) return null;
+  const line = key.slice(0, at);
+  const bare = line.indexOf(':bare:');
+  return bare >= 0 ? line.slice(0, bare) : line;
+};
+const sameCancelLine = (left: string, right: string): boolean => {
+  const line = confirmLineOf(left);
+  return line != null && line === confirmLineOf(right);
+};
+/**
+ * × dvou různých čar téže živé pozice (`live-position:…`: vstup, přikoupení, holá pozice). Všechna ×
+ * jsou v jednom sloupci vpravo, takže po vyplnění přikoupení může pod kurzor dojet × pozice
+ * (oponentura 4. 11., P3a) — neaktivní značka jedné spolkne i jednoklikové × druhé.
+ */
+const sameLiveCancelOwner = (left: string, right: string): boolean => {
+  const a = confirmLineOf(left);
+  const b = confirmLineOf(right);
+  return a != null && b != null && a.startsWith('live-position:') && b.startsWith('live-position:');
+};
+
+/**
+ * Rozběhnuté „Opravdu?“ čáry. `stale` = neaktivní značka (oponentura UI C7/C8 kolo 2): klíč, na
+ * který uživatel klikl, čáry už nenabízejí (čekající vstup se vyplnil, holá pozice dostala SL/TP,
+ * nabídka se zablokovala, čára zmizela). „Opravdu?“ se už neukazuje, ale do `until` značka spolkne
+ * klik na tutéž čáru — potvrzení jedné akce tak nikdy nespustí jinou (ani po návratu nabídky).
+ */
+export interface OrderLineConfirm extends LiveManageConfirm { stale?: true }
+
+/**
+ * Krok dvoukrokového × / BE na čáře (C8, 4. 11. 2026: sjednoceno s `liveManageConfirmStep`).
+ * Klik na tutéž čáru, dokud běží okno rozběhnutého potvrzení, nic neodešle, když:
+ * - potvrzení je neaktivní (`stale`, viz `orderLineConfirmSync`) — klik je jen 1. krok nového dvoukroku,
+ * - nebo má × téže čáry jinou akci (vstup se mezitím vyplnil → × teď zavírá pozici, na PC jedním
+ *   klikem; holá pozice dostala SL/TP → × je teď jednoklikové zavření spravovaného obchodu).
+ * Jinak druhý klik se stejným klíčem 350 ms až 4 s od PŘEDCHOZÍHO kliku; rychlejší klik kotvu
+ * posune (trojklik ani bušení nic nepotvrdí). Spolknutý klik rozběhne AKTIVNÍ 1. krok s novým
+ * klíčem i u jednoklikové akce (×, které se mezitím změnilo, ukáže „Opravdu?“), takže ani dvojklik
+ * po přechodu čáry nic nepošle — další klik musí přijít ≥ 350 ms od předchozího. Akce bez
+ * potvrzení (`needsConfirm` false) bez rozběhnutého kroku projde hned a rozběhnutý stav nemění.
+ */
+export function orderLineConfirmStep(
+  current: OrderLineConfirm | null,
+  key: string,
+  needsConfirm: boolean | undefined,
+  now: number,
+): { next: OrderLineConfirm | null; fire: boolean } {
+  const live = current && current.until > now ? current : null;
+  const swallow = live != null && (sameCancelLine(live.key, key)
+    ? live.stale === true || live.key !== key
+    : live.stale === true && (live.key === key || sameLiveCancelOwner(live.key, key)));
+  if (swallow) return { next: liveManageConfirmStep(null, key, now).next, fire: false };
+  if (!needsConfirm && !(live && !live.stale && live.key === key)) return { next: current, fire: true };
+  // Neaktivní značka jiné čáry se do nového dvoukroku nepočítá.
+  const step = liveManageConfirmStep(live?.stale ? null : live, key, now);
+  return { next: step.next, fire: step.fire };
+}
+
+/**
+ * Klíče potvrzení, které čáry právě nabízejí (× `cancellable`, aktivní tlačítka `actions`).
+ */
+export function orderLineConfirmKeys(lines: readonly BacktestChartOrderLine[]): Set<string> {
+  const keys = new Set<string>();
+  for (const line of lines) {
+    if (line.cancellable) keys.add(cancelConfirmKey(line));
+    for (const action of line.actions ?? []) if (!action.disabled) keys.add(`${line.id}:${action.id}`);
+  }
+  return keys;
+}
+
+/**
+ * Změna čar mezi kliky (efekt overlaye, INV-UI-01, INV-FRESH-03; jako holý Market a C7): klíč
+ * rozběhnutého potvrzení, který čáry už nenabízejí (čára zmizela, změnila id / cenu / akci,
+ * nabídka × holé pozice nebo tlačítko se zablokovaly), z potvrzení udělá NEAKTIVNÍ značku
+ * (`stale`) do `until` — nikdy jen `null`: další klik přijde až po efektu, a s `null` by
+ * jednoklikové × vyplněné / spravované pozice odešlo (oponentura UI C7/C8 kolo 2, P2). Značka
+ * zůstane i když se nabídka vrátí (blokace zahodí potvrzení; po návratu nic nepotvrdí) i když
+ * čára na chvíli zmizí (vyplnění může projít stavem bez čáry). Po `until` ji smaže časovač.
+ */
+export function orderLineConfirmSync(current: OrderLineConfirm | null, lines: readonly BacktestChartOrderLine[]): OrderLineConfirm | null {
+  if (!current || current.stale) return current;
+  return orderLineConfirmKeys(lines).has(current.key) ? current : { ...current, stale: true };
+}
 
 const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onAddBracket, selectToDrag = false }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -94,29 +184,30 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
   }, [lines, selectedId]);
   // Dvoukrokové potvrzení živých akcí (× / BE): první klik „Opravdu?“, druhý do 4 s odešle.
   // window.confirm prohlížeč v appce potichu blokuje (29. 10.).
-  const [confirming, setConfirming] = useState<{ key: string; until: number } | null>(null);
+  const [confirming, setConfirming] = useState<OrderLineConfirm | null>(null);
+  // Ref kvůli dvěma klikům v jednom snímku (stav by ještě nebyl překreslený).
+  const confirmingRef = useRef<OrderLineConfirm | null>(null);
   useEffect(() => {
     if (!confirming) return undefined;
-    const timer = window.setTimeout(() => setConfirming(null), Math.max(0, confirming.until - Date.now()));
+    const timer = window.setTimeout(() => { confirmingRef.current = null; setConfirming(null); }, Math.max(0, confirming.until - Date.now()));
     return () => window.clearTimeout(timer);
   }, [confirming]);
+  // Čára s rozběhnutým potvrzením zmizela / změnila klíč / zablokovala se = „Opravdu?“ pryč i bez
+  // kliku, ale jako neaktivní značka do `until` (klik na tutéž čáru nic neodešle; `orderLineConfirmSync`).
+  useEffect(() => {
+    const current = confirmingRef.current;
+    const next = orderLineConfirmSync(current, lines);
+    if (next !== current) { confirmingRef.current = next; setConfirming(next); }
+  }, [lines]);
   const confirmed = (key: string, needsConfirm: boolean | undefined) => {
-    const now = Date.now();
-    // Rozběhnuté „Opravdu?“ téže čáry s jinou akcí (vstup se mezitím vyplnil → × teď zavírá
-    // pozici, na PC jedním klikem): klik, který měl potvrdit zrušení, nic neodešle.
-    const sameLine = (other: string) => other.slice(0, other.indexOf(':cancel:')) === key.slice(0, key.indexOf(':cancel:'));
-    if (confirming && confirming.key !== key && confirming.until > now && key.includes(':cancel:') && confirming.key.includes(':cancel:') && sameLine(confirming.key)) {
-      setConfirming(needsConfirm ? { key, until: now + CONFIRM_MS } : null);
-      return false;
+    const step = orderLineConfirmStep(confirmingRef.current, key, needsConfirm, Date.now());
+    if (step.next !== confirmingRef.current) {
+      confirmingRef.current = step.next;
+      setConfirming(step.next);
     }
-    if (!needsConfirm) return true;
-    // Dvojklik se nepočítá jako potvrzení: druhý klik až po 350 ms.
-    if (confirming?.key === key && confirming.until > now && now - (confirming.until - CONFIRM_MS) >= 350) { setConfirming(null); return true; }
-    if (confirming?.key === key && confirming.until > now) return false;
-    setConfirming({ key, until: now + CONFIRM_MS });
-    return false;
+    return step.fire;
   };
-  const asking = (key: string) => confirming?.key === key;
+  const asking = (key: string) => confirming?.key === key && !confirming.stale;
   const rootRef = useRef<HTMLDivElement>(null);
   const linesRef = useRef(lines);
   const lineElementsRef = useRef(new Map<string, HTMLDivElement>());
@@ -377,6 +468,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                     onPointerDown={event => event.stopPropagation()}
                     onClick={event => {
                       event.stopPropagation();
+                      event.currentTarget.blur();
                       if (action.disabled || !confirmed(`${line.id}:${action.id}`, action.confirm)) return;
                       onAction?.(line, action.id);
                     }}
@@ -391,6 +483,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                     onPointerDown={event => event.stopPropagation()}
                     onClick={event => {
                       event.stopPropagation();
+                      event.currentTarget.blur();
                       if (!confirmed(cancelConfirmKey(line), line.confirmCancel)) return;
                       onCancel(line);
                     }}
@@ -399,7 +492,9 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                       : line.cancelAction === 'remove-bracket'
                         ? `Odstranit ${line.kind === 'stopLoss' ? 'stop loss' : 'take profit'}`
                         : 'Zrušit čekající příkaz'}
-                  >{asking(cancelConfirmKey(line)) ? 'Opravdu?' : '×'}</button>
+                  >{asking(cancelConfirmKey(line))
+                    ? (line.cancelAction === 'close-position' ? 'Zavřít?' : line.cancelAction === 'remove-bracket' ? 'Odstranit?' : 'Zrušit?')
+                    : '×'}</button>
                 )}
               </OrderLineBadge>
             </div>

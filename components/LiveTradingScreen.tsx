@@ -50,10 +50,13 @@ import {
 } from '../lib/liveOrderTicket';
 import { liveTicketDraftBase, liveTicketInitialQuantity, readLiveTicketPrefs } from '../lib/liveTicketPrefs';
 import { defaultLiveBracketTemplate } from '../lib/liveBracketTemplates';
-import { createTwoStepGuard, liveHotkeyAction, liveHotkeyDraft, resolveLiveHotkey, type TwoStepGuard } from '../lib/liveHotkeys';
+import { createTwoStepGuard, liveHotkeyAction, liveHotkeyDraft, liveHotkeyGuardSync, resolveLiveHotkey, type TwoStepGuard } from '../lib/liveHotkeys';
 import { requestLiveSafetyConfirmation } from '../lib/liveSafetyShortcut';
 import { isLiveDisplayOnlyLine } from '../lib/liveWorkingOrderLines';
-import { useLiveManageRunner, useLiveManageRunnerState } from '../hooks/useLiveManageRunner';
+import { useLiveManageRunner, useLiveManageRunnerState, type LiveManageOutcome } from '../hooks/useLiveManageRunner';
+import { createLiveBareCloseRun } from '../hooks/liveCommandRuns';
+import { liveBareLineEntryId, type LiveBareCloseOffer } from '../lib/liveBareCloseUi';
+import type { BareLeaderTrade } from '../lib/manualBareClose';
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../hooks/useLiveFillAnnouncer';
 import { LIVE_FILL_ANNOUNCE_LABELS, LIVE_FILL_ANNOUNCE_MODES } from '../lib/liveFillAnnouncer';
 import { previewSymbolFromChartSource } from '../lib/leaderEntryPreview';
@@ -187,6 +190,15 @@ interface Props {
   liveFills?: LiveChartFills | null;
   /** Přihlášený uživatel — jen klíč knihovny šablon SL/TP na zařízení (U8); výchozí null. */
   userId?: string | null;
+  // ── C7/C8 (4. 11. 2026): výchozí hodnoty = dnešní chování ──
+  /** Nabídka × u vlastní holé pozice (desk `liveBareCloseOffer`, jen zobrazení); výchozí null. */
+  bareClose?: LiveBareCloseOffer | null;
+  /** Deskový `closeBareLeader` (jen s capability C8); chybí = × holé pozice se nenabídne. */
+  onBareClose?: (seen: BareLeaderTrade) => Promise<LeaderOrderManageResult>;
+  /** Sdílený zámek jednoho příkazu desku (lišta „Zrušit čekající“, Dashboard); chybí = vlastní zámek obrazovky. */
+  manageLockRef?: React.MutableRefObject<boolean> | null;
+  /** Přehrávání v grafu (U3-PC) pro desk — lišta pod grafem pak „Zrušit čekající“ nenabídne. */
+  onReplayChange?: (active: boolean) => void;
 }
 
 /** Text pojistky U3-PC u tlačítka Objednávka během přehrávání v grafu. */
@@ -227,6 +239,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null,
+  bareClose = null, onBareClose, manageLockRef = null, onReplayChange,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -349,7 +362,9 @@ const LiveTradingScreen: React.FC<Props> = ({
   const [lineNotice, setLineNotice] = useState<{ tone: 'ok' | 'bad' | 'warn'; text: string; at: number; until?: number } | null>(null);
   // Správa obchodu leadera (U10): JEDEN runner a jeden zámek pro čáry grafu, zkratky i sekci
   // Správa v panelu — jediná cesta je `onManageEntry` desku (worker vše ověří znovu, nic se neopakuje).
-  const manageState = useLiveManageRunnerState();
+  // Zámek je sdílený s deskem (lišta „Zrušit čekající“, Dashboard „Zrušit“), když ho desk dodá.
+  const ownManageState = useLiveManageRunnerState();
+  const manageState = manageLockRef ? { ...ownManageState, busyRef: manageLockRef } : ownManageState;
   const liveBusyRef = manageState.busyRef;
   const manageRunner = useLiveManageRunner({
     manage: onManageEntry,
@@ -359,6 +374,31 @@ const LiveTradingScreen: React.FC<Props> = ({
   });
   const pendingMove = manageRunner.pendingMove;
   const runLiveManage = manageRunner.run;
+  // C8: × holé pozice (čára, Shift+X, panel) TÝMŽ zámkem jako správa; odejde jen nabídka, kterou
+  // uživatel viděl (id cíle je v id čáry i v klíči dvoukroku), a jen když ji worker teď nabízí.
+  const bareOffer = bareClose && onBareClose ? bareClose : null;
+  const bareOfferRef = useRef(bareOffer);
+  bareOfferRef.current = bareOffer;
+  const onBareCloseRef = useRef(onBareClose);
+  onBareCloseRef.current = onBareClose;
+  const bareCloseRun = useMemo(() => createLiveBareCloseRun({
+    close: () => onBareCloseRef.current,
+    busyRef: manageState.busyRef,
+    setPendingMove: manageState.setPendingMove,
+    report: notice => setLineNotice(notice),
+  }), [manageState.busyRef, manageState.setPendingMove]);
+  const closeBare = useCallback(async (entryOperationId: string): Promise<LiveManageOutcome | null> => {
+    const offer = bareOfferRef.current;
+    if (!offer || offer.trade.entryOperationId !== entryOperationId) {
+      setLineNotice({ at: Date.now(), tone: 'bad', text: 'Holá pozice se mezitím změnila — nic se neodeslalo.' });
+      return null;
+    }
+    if (!offer.enabled) {
+      setLineNotice({ at: Date.now(), tone: 'bad', text: `${offer.reason ?? 'Zavřít teď nejde.'} Nic se neodeslalo.` });
+      return null;
+    }
+    return bareCloseRun(offer.trade);
+  }, [bareCloseRun]);
   useEffect(() => {
     if (!lineNotice) return undefined;
     const timer = window.setTimeout(() => setLineNotice(current => (current === lineNotice ? null : current)), Math.max(0, (lineNotice.until ?? lineNotice.at + 8_000) - Date.now()));
@@ -372,7 +412,8 @@ const LiveTradingScreen: React.FC<Props> = ({
     pointValue: INSTRUMENT.pointValue,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd: entryScaleIn?.pendingAdd ?? null,
-  }) : []), [copier.available, copier.status, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd]);
+    bareClose: bareOffer?.enabled ? { entryOperationId: bareOffer.trade.entryOperationId } : null,
+  }) : []), [copier.available, copier.status, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
   // Cenové čáry pozice: workspace je vynechá v panelu, kde pozici kreslí štítky (jinak by byla dvakrát).
   const [positionLines] = useState(createLivePriceLinesFeed);
   useEffect(() => {
@@ -436,6 +477,10 @@ const LiveTradingScreen: React.FC<Props> = ({
   // zavřený a vypnutý, zkratky nic nenavrhnou ani nespustí a čáry jsou jen pro čtení).
   const [chartReplay, setChartReplay] = useState(false);
   useEffect(() => { if (chartReplay) setTicketOpen(false); }, [chartReplay]);
+  const onReplayChangeRef = useRef(onReplayChange);
+  onReplayChangeRef.current = onReplayChange;
+  useEffect(() => { onReplayChangeRef.current?.(chartReplay); }, [chartReplay]);
+  useEffect(() => () => onReplayChangeRef.current?.(false), []);
   const replayNotice = useCallback(() => setLineNotice({ at: Date.now(), tone: 'bad', text: LIVE_HOTKEY_REPLAY_TEXT }), []);
 
   // U8: výchozí šablona SL/TP (★) pro nové návrhy — jen předvyplnění, nic neautorizuje.
@@ -499,6 +544,8 @@ const LiveTradingScreen: React.FC<Props> = ({
   }, []);
   const hotkeyGuardRef = useRef<TwoStepGuard | null>(null);
   if (hotkeyGuardRef.current == null) hotkeyGuardRef.current = createTwoStepGuard();
+  // Čas textu rozběhnuté výzvy zkratky (`prompt`) — zahozená výzva smaže jen svůj text.
+  const hotkeyPromptAtRef = useRef<number | null>(null);
   // Esc z grafu (most `onEscape`) i posluchač kláves volají vždy nejnovější obsluhu.
   const hotkeyHandlerRef = useRef<(event: KeyboardEvent, fromChartEscape: boolean) => void>(() => undefined);
 
@@ -590,6 +637,9 @@ const LiveTradingScreen: React.FC<Props> = ({
         return;
       }
       if (line.ownerId === LIVE_POSITION_OWNER) {
+        // C8: × holé pozice (po dvoukroku čáry / Shift+X) — jen nabídka s týmž id cíle.
+        const bareEntryId = liveBareLineEntryId(line.id);
+        if (bareEntryId != null) { void closeBare(bareEntryId); return; }
         if (line.kind === 'entry' && summary?.kind === 'pending') void runLiveManage('cancel-entry', summary.leader?.entry);
         // Zavřít obchod: „co jsem viděl“ = SL leadera (+ qty leadera v desku); worker ověří tvar u brokera.
         // Pozice z přikoupení s rozjetými SL: „co jsem viděl“ = nejochrannější SL od workeru (worker ho porovná znovu).
@@ -613,7 +663,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [attachOperationId, chartReplay, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
+  }), [attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít
@@ -673,6 +723,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     const outcome = resolveLiveHotkey(intent, { lines: orderLines, breakEven, hasDraft: draft != null, busy: liveBusyRef.current }, guard, now);
     if (outcome.kind === 'none') return;
     event.preventDefault();
+    hotkeyPromptAtRef.current = outcome.kind === 'prompt' ? now : null;
     dispatchLiveHotkeyOutcome(outcome, {
       prefill: prefillFromHotkey,
       discard: () => updateDraft(null),
@@ -684,6 +735,18 @@ const LiveTradingScreen: React.FC<Props> = ({
       toggleHelp: () => setHotkeysHelp(open => !open),
     });
   };
+  // Zablokovaný / zmizelý / změněný cíl zkratky zahodí rozběhnutou výzvu i bez stisku (oponentura
+  // UI C7/C8 kolo 2): BE stejnou funkcí jako stisk; smaže se jen text téže výzvy, ne jiné hlášky.
+  useEffect(() => {
+    const guard = hotkeyGuardRef.current;
+    if (!guard) return;
+    const at = Date.now();
+    const breakEven = summary ? liveBreakEven(guardSummaryAt(at) ?? summary, manageEntryAvgPrice ?? null) : null;
+    if (!liveHotkeyGuardSync(guard, { lines: orderLines, breakEven }, at)) return;
+    const promptAt = hotkeyPromptAtRef.current;
+    hotkeyPromptAtRef.current = null;
+    if (promptAt != null) setLineNotice(current => (current && current.at === promptAt && current.tone === 'warn' ? null : current));
+  }, [orderLines, summary, guardSummaryAt, manageEntryAvgPrice]);
   useEffect(() => {
     const guard = hotkeyGuardRef.current;
     if (!hotkeysOn) { guard?.reset(); return undefined; }
@@ -874,6 +937,11 @@ const LiveTradingScreen: React.FC<Props> = ({
             manageLeaderAccountId={manageLeaderAccountId}
             manageGuardAt={guardSummaryAt}
             manageRunner={onManageEntry ? manageRunner : null}
+            // C8: × holé pozice i z panelu — tatáž funkce jako čára (jeden zámek, id cíle).
+            bareClose={bareOffer}
+            {...(bareOffer ? { onBareClose: closeBare } : {})}
+            // Vstup, Přidat SL/TP i × z panelu jdou TÍMTÉŽ zámkem jako čáry, zkratky, lišta C7 a Dashboard.
+            commandLockRef={liveBusyRef}
             userId={userId}
             onNewDraft={side => {
               if (!quote) return;

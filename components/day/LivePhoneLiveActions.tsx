@@ -1,14 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import { snapToTick } from '../../lib/liveOrderTicket';
 import {
-  LIVE_ATTACH_DEFAULT_TARGET_POINTS, LIVE_CONFIRM_WINDOW_MS, liveAttachDefaults, liveAttachProblem, liveConfirmAsking, liveConfirmClick,
-  type LiveConfirmState,
+  LIVE_ATTACH_DEFAULT_TARGET_POINTS, liveAttachDefaults, liveAttachProblem,
 } from '../../lib/liveBareEntry';
 import { LIVE_BUILTIN_TEMPLATE_ID, defaultLiveBracketTemplate, liveTemplateBracketPrices, type LiveBracketTemplate } from '../../lib/liveBracketTemplates';
 import { readLiveBracketTemplates } from '../../services/liveBracketTemplateStore';
 import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 import { createLiveManageRun, type LiveManageCallback, type LiveManageOutcome, type LiveManageRunDeps } from '../../hooks/useLiveManageRunner';
+import type { LiveBareCloseOffer } from '../../lib/liveBareCloseUi';
+import type { LiveCancelPendingView } from '../../lib/liveCancelPendingUi';
+import { useLiveCancelPendingAction, type LiveCancelPendingCallback } from '../LivePendingCancel';
+import { useLiveConfirmGate } from '../../hooks/useLiveConfirmGate';
+import type { LiveConfirmGate } from '../../lib/liveConfirmGate';
 import SheetGrip from './SheetGrip';
 
 const SELL = '#ef4655';
@@ -82,7 +86,7 @@ export function createLivePhoneBarClose(deps: {
  * na sdílený zámek `busy` (rozpracovaný vstup / attach) — záložní Flatten musí jít vždy
  * (INV-UI-02); `busy` vypíná jen „Přidat SL/TP“.
  */
-export function LivePhonePositionBar({ side, quantity, symbol, pending = null, unprotected, busy, onAttach, onClose, onManage }: {
+export function LivePhonePositionBar({ side, quantity, symbol, pending = null, unprotected, busy, onAttach, onClose, onManage, bareClose = null, onBareClose }: {
   side: 'long' | 'short';
   quantity: number;
   symbol: string;
@@ -94,16 +98,26 @@ export function LivePhonePositionBar({ side, quantity, symbol, pending = null, u
   onClose: () => void;
   /** U10: „SL/TP“ otevře list správy (číslo, BE + n, BE s poplatky). Chybí = správa z lišty není. */
   onManage?: () => void;
+  /**
+   * C8 (4. 11. 2026): × zavřít vlastní holý Market (`close-position`) — vlastní tlačítko „Zavřít“
+   * s klíčem akce + `entryOperationId` (`offer.key`); Flatten pak zůstává vedle jako „Flatten“
+   * (mimo zámek). Chybí / null (starý worker, přehrávání) = „Zavřít“ je Flatten jako dřív.
+   */
+  bareClose?: LiveBareCloseOffer | null;
+  /** Rodič ověří, že nabídka má pořád tento klíč, a pošle ji sdíleným zámkem čar. */
+  onBareClose?: (key: string) => void;
 }) {
-  const [confirm, setConfirm] = useState<LiveConfirmState | null>(null);
   const actionKey = livePhonePositionCloseKey({ side, quantity, symbol, pending });
-  // „Opravdu?“ zmizí samo po 4 s (bez překreslení by zůstalo viset).
-  useEffect(() => {
-    if (!confirm) return undefined;
-    const timer = window.setTimeout(() => setConfirm(null), Math.max(0, confirm.at + LIVE_CONFIRM_WINDOW_MS - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [confirm]);
-  const confirming = liveConfirmAsking(confirm, actionKey, Date.now());
+  const bare = !pending && bareClose && onBareClose ? bareClose : null;
+  // JEDEN automat potvrzení pro Flatten / Zrušit i „Zavřít“ holé pozice: klepnutí na jedno a pak
+  // na druhé nic nepošle (jiný klíč). Zablokovaná nebo zmizelá nabídka C8 i změněná pozice zahodí
+  // rozběhnuté „Opravdu?“ i bez klepnutí; po 4 s zmizí samo.
+  const { gate } = useLiveConfirmGate([{ key: actionKey, enabled: true }, bare]);
+  const confirming = gate.asking(actionKey);
+  const bareConfirming = bare != null && gate.asking(bare.key);
+  // U holé pozice (bez SL/TP) je záložní tlačítko VŽDY „Flatten“ — i bez nabídky C8 a při
+  // přehrávání; „Zavřít“ znamená jen cílené zavření holé pozice (C8). Spravovaná pozice beze změny.
+  const flattenLabel = !pending && (bare != null || unprotected);
   const chip: React.CSSProperties = { height: 30, padding: '0 10px', borderRadius: 9, border: 0, cursor: 'pointer', font: '800 12px Inter, sans-serif', color: '#fff' };
   return (
     <div role="group" aria-label={pending ? 'Čekající příkaz' : 'Pozice'} style={{ position: 'absolute', zIndex: 24, top: 8, left: 8, right: 8, pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 6, padding: 6, borderRadius: 12, border: `1px solid ${unprotected ? 'rgba(239,70,85,.7)' : 'var(--dj-line)'}`, background: 'var(--dj-glass, rgba(13,18,27,.94))', boxShadow: '0 14px 34px -16px rgba(0,0,0,.75)' }}>
@@ -116,19 +130,81 @@ export function LivePhonePositionBar({ side, quantity, symbol, pending = null, u
       {unprotected && <button type="button" className="dj-btn" disabled={busy} onClick={() => { playNativeHapticIfAvailable('selection'); onAttach(); }} style={{ ...chip, background: 'linear-gradient(180deg,#6366f1,#4f46e5)', opacity: busy ? 0.6 : 1 }}>Přidat SL/TP</button>}
       {/* Správa jen otevře list — příkaz odejde až tlačítkem v něm (INV-UI-01). */}
       {onManage && !pending && !unprotected && <button type="button" className="dj-btn" aria-label="Správa SL a TP" onClick={() => { playNativeHapticIfAvailable('selection'); onManage(); }} style={{ ...chip, background: 'var(--dj-chip)', color: 'var(--dj-text)' }}>SL/TP</button>}
-      {/* Zavřít (Flatten) nikdy nečeká na rozpracovaný vstup/attach (INV-UI-02): bez `busy`. */}
+      {/* C8: × holé pozice dvoukrokově (klíč akce + id vstupu); zámek hlídá rodič. Neaktivní = jen důvod. */}
+      {bare && <button
+        type="button"
+        className="dj-btn"
+        data-live-bare-close
+        aria-label={bare.enabled ? (bareConfirming ? 'Potvrdit zavření holé pozice' : 'Zavřít holou pozici') : `Zavřít teď nejde: ${bare.reason ?? ''}`}
+        onClick={event => {
+          event.currentTarget.blur();
+          playNativeHapticIfAvailable('medium');
+          const action = livePhoneBarClick(gate, 'bare', { flattenKey: actionKey, bare });
+          if (action === 'bare-close' || action === 'bare-blocked') onBareClose!(bare.key);
+        }}
+        style={{ ...chip, background: bareConfirming ? SELL : 'var(--dj-chip)', color: bareConfirming ? '#fff' : 'var(--dj-text)', opacity: bare.enabled ? 1 : 0.55 }}
+      >{bareConfirming ? 'Opravdu zavřít?' : 'Zavřít'}</button>}
+      {/* Flatten / Zrušit nikdy nečeká na rozpracovaný vstup/attach ani na zámek (INV-UI-02): bez `busy`. */}
       <button
         type="button"
         className="dj-btn"
-        aria-label={pending ? (confirming ? 'Potvrdit zrušení čekajícího příkazu' : 'Zrušit čekající příkaz') : confirming ? 'Potvrdit zavření (Flatten)' : 'Zavřít pozici (Flatten)'}
-        onClick={() => {
+        data-live-bar-flatten
+        aria-label={pending ? (confirming ? 'Potvrdit zrušení čekajícího příkazu' : 'Zrušit čekající příkaz')
+          : flattenLabel ? (confirming ? 'Potvrdit Flatten' : 'Flatten — zavřít vše')
+            : confirming ? 'Potvrdit zavření (Flatten)' : 'Zavřít pozici (Flatten)'}
+        onClick={event => {
+          event.currentTarget.blur();
           playNativeHapticIfAvailable('medium');
-          const step = liveConfirmClick(confirm, actionKey, Date.now());
-          setConfirm(step.next);
-          if (step.send) onClose();
+          if (livePhoneBarClick(gate, 'flatten', { flattenKey: actionKey, bare }) === 'flatten') onClose();
         }}
         style={{ ...chip, background: confirming ? SELL : 'var(--dj-chip)', color: confirming ? '#fff' : 'var(--dj-text)' }}
-      >{pending ? (confirming ? 'Opravdu zrušit?' : 'Zrušit') : confirming ? 'Opravdu zavřít?' : 'Zavřít'}</button>
+      >{pending ? (confirming ? 'Opravdu zrušit?' : 'Zrušit') : flattenLabel ? (confirming ? 'Opravdu Flatten?' : 'Flatten') : confirming ? 'Opravdu zavřít?' : 'Zavřít'}</button>
+    </div>
+  );
+}
+
+/**
+ * Klepnutí v liště pozice (čistý krok, sdílený automat `gate`): `flatten` = druhé klepnutí na
+ * Flatten / Zrušit se stejným klíčem; `bare-close` = druhé klepnutí na „Zavřít“ holé pozice
+ * s klíčem nabídky; `bare-blocked` = nabídka je zablokovaná (rodič jen řekne důvod, nic neodešle).
+ * Klepnutí na jedno tlačítko a pak na druhé nic nepošle (jiný klíč = znovu první krok).
+ */
+export function livePhoneBarClick(
+  gate: LiveConfirmGate,
+  which: 'flatten' | 'bare',
+  input: { flattenKey: string; bare: LiveBareCloseOffer | null },
+): 'flatten' | 'bare-close' | 'bare-blocked' | null {
+  if (which === 'flatten') return gate.click({ key: input.flattenKey, enabled: true }).kind === 'send' ? 'flatten' : null;
+  const step = gate.click(input.bare);
+  return step.kind === 'send' ? 'bare-close' : step.kind === 'blocked' ? 'bare-blocked' : null;
+}
+
+/**
+ * C7 (4. 11. 2026): „Zrušit čekající (N)“ nad telefonním grafem — jen když pohled desku říká
+ * ano (capability, vlastní čekající vstupy), dvoukrokově (`useLiveCancelPendingAction`: klíč =
+ * sada, 2. klepnutí 350 ms – 4 s od předchozího), sdíleným zámkem čar (`lockRef`), text kolik
+ * a čeho. Za přehrávání ho rodič nevykreslí (bez ovládání). Flatten tudy nejde.
+ */
+export function LivePhoneCancelPendingChip({ view, lockRef, cancel, top, onNotice }: {
+  view: LiveCancelPendingView;
+  lockRef: { current: boolean };
+  cancel: LiveCancelPendingCallback;
+  top: number;
+  onNotice: (text: string) => void;
+}) {
+  const action = useLiveCancelPendingAction({ view, lockRef, cancel, onNotice: notice => onNotice(notice.text) });
+  return (
+    <div role="group" aria-label="Čekající vstupy" style={{ position: 'absolute', zIndex: 24, top, right: 8, pointerEvents: 'auto', display: 'grid', justifyItems: 'end', gap: 4, maxWidth: 'calc(100% - 16px)' }}>
+      <button
+        type="button"
+        className="dj-btn"
+        data-live-cancel-pending
+        aria-label={view.enabled ? (action.asking ? `Potvrdit: ${view.confirmText}` : view.label) : `Zrušit čekající teď nejde: ${view.reason ?? ''}`}
+        disabled={action.busy}
+        onClick={event => { playNativeHapticIfAvailable('medium'); action.click(event); }}
+        style={{ height: 30, padding: '0 10px', borderRadius: 9, border: 0, cursor: 'pointer', font: '800 12px Inter, sans-serif', color: action.asking ? '#fff' : 'var(--dj-text)', background: action.asking ? '#d97706' : 'var(--dj-glass, rgba(13,18,27,.94))', boxShadow: '0 10px 24px -14px rgba(0,0,0,.75)', opacity: view.enabled && !action.busy ? 1 : 0.55 }}
+      >{action.busy ? 'Ruším…' : action.asking ? 'Opravdu zrušit?' : view.label}</button>
+      {action.asking && <span role="status" style={{ maxWidth: 260, padding: '4px 8px', borderRadius: 8, background: 'var(--dj-glass, rgba(13,18,27,.94))', color: 'var(--dj-text-2)', fontSize: 11, fontWeight: 600, textAlign: 'right' }}>{view.confirmText} Klepni znovu do 4 s.</span>}
     </div>
   );
 }

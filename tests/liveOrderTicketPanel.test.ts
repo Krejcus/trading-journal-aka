@@ -157,10 +157,10 @@ describe('holý Market z PC panelu (U4)', () => {
     expect(sendButton(markup)).not.toContain('MARKET · BEZ SL/TP');
   });
 
-  it('zdroj: brána i dvoukrok v okamžiku kliku (liveBareSendClick), pak jediné onPlaceEntry', () => {
+  it('zdroj: brána i dvoukrok v okamžiku kliku (liveBareSendClick), pak jediné onPlaceEntry (přes sdílený zámek)', () => {
     const send = ticket.slice(ticket.indexOf('const sendDirect = async'), ticket.indexOf('const multiplier ='));
     const step = send.indexOf('liveBareSendClick({ gate: bareGateAt(Date.now()), confirm: bareConfirmRef.current, draft: previewDraft })');
-    const place = send.indexOf('onPlaceEntry(previewDraft');
+    const place = send.indexOf('placeEntryLocked(previewDraft');
     expect(step).toBeGreaterThan(0);
     expect(send.slice(step, place)).toMatch(/if \(step\.blocked\) \{ setDirect\(.*\); return; \}/);
     expect(send.slice(step, place)).toMatch(/if \(!step\.send\) return;/);

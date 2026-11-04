@@ -4,6 +4,10 @@ import type { LeaderOrderManageAction, LeaderOrderManageResult } from './leaderO
 import type { LiveBareEntryRecord } from './liveBareEntry';
 import { snapToTick, ticketQuantity, type TicketDraft, type TicketInstrument } from './liveOrderTicket';
 import type { LiveTicketScaleIn } from './liveScaleIn';
+import type { LiveBareCloseOffer } from './liveBareCloseUi';
+import type { LiveCancelPendingView } from './liveCancelPendingUi';
+import type { CancelPendingItemResult, PendingOwnEntry } from './liveCancelPending';
+import type { BareLeaderTrade } from './manualBareClose';
 
 /**
  * LIVE obchodování z telefonu (2. 11. 2026): převod lišty Koupit/Prodat a listu
@@ -57,6 +61,25 @@ export interface LivePhoneTradeBridge {
    * pro BE+n / BE s poplatky (U10). Jen výpočet ceny záměru, nic neautorizuje.
    */
   leaderAccountId?: number | null;
+  /**
+   * Sdílený zámek jednoho příkazu desku (`liveCommandLockRef`, oponentura UI C7/C8 kolo 1): telefon
+   * ho použije pro VŠECHNO odesílané z grafu (lišta, čáry, list správy, vstup, attach, × holé pozice,
+   * „Zrušit čekající“) — tentýž ref drží Dashboard „Zrušit“. Chybí = vlastní zámek grafu. Flatten mimo.
+   */
+  commandLockRef?: { current: boolean } | null;
+  /**
+   * C8 (4. 11. 2026): × zavřít vlastní holý Market bez SL/TP — nabídka (`liveBareCloseOffer`, jen
+   * zobrazení) a deskový `closeBareLeader`; obojí jen s capability `manual-order-close-bare-v1`.
+   * Chybí = lišta nabízí jen Flatten. Odeslání jde sdíleným zámkem (`commandLockRef`).
+   */
+  bareClose?: LiveBareCloseOffer | null;
+  closeBare?: (seen: BareLeaderTrade) => Promise<LeaderOrderManageResult>;
+  /**
+   * C7 (4. 11. 2026): „Zrušit čekající“ — pohled (`liveCancelPendingView`, null = tlačítko není)
+   * a deskový `cancelPendingEntries` (N× `cancel-entry`); jen s capability `manual-order-cancel-pending-v1`.
+   */
+  cancelPending?: LiveCancelPendingView | null;
+  cancelPendingEntries?: (entries: readonly PendingOwnEntry[]) => Promise<CancelPendingItemResult[]>;
 }
 
 /**
@@ -157,6 +180,35 @@ export function livePhonePosition(
     bareEntryOperationId: pending ? null : bareEntryOperationId,
     pending: pending ? { type: summary.entryType, price: summary.entry } : null,
   };
+}
+
+/**
+ * Telefonní čip „Zrušit čekající“ (C7) nad grafem. Schová se JEN když tutéž jedinou položku cíleně
+ * ruší „Zrušit“ v liště pozice: most má `manage` (lišta pak jde `cancel-entry` cíleně, jinak
+ * `createLivePhoneBarClose` spustí Flatten skupiny) a čekající příkaz lišty je přesně ten vstup
+ * (kontrakt, strana, počet, cena). Cokoli jiného — chybí `manage` (`ownManualEntry` null, starý
+ * worker), dva čekající, jiný kontrakt / strana / počet / cena, neznámá cena — čip ukáže, aby
+ * cílené C7 nechybělo právě tam, kde je jedinou cílenou cestou (oponentura UI C7/C8 kolo 2, P3).
+ * Jen zobrazení: odeslání dál jde dvoukrokem, sdíleným zámkem a deskem (worker vše ověří znovu).
+ */
+export function livePhoneCancelPendingChipShown(input: {
+  cancelPending: LiveCancelPendingView | null | undefined;
+  /** Most má deskový `cancelPendingEntries`. */
+  canCancel: boolean;
+  /** Most má `manage` (lišta pozice ruší čekající vstup cíleně, ne Flattenem). */
+  barManage: boolean;
+  position: LivePhonePosition | null | undefined;
+}): boolean {
+  const view = input.cancelPending;
+  if (!view || !input.canCancel) return false;
+  const pending = input.position?.pending ?? null;
+  const only = view.entries.length === 1 ? view.entries[0] : null;
+  const barCancelsSame = input.barManage && input.position != null && pending != null && only != null
+    && only.symbol === input.position.symbol
+    && (only.side === 'Buy' ? 'long' : 'short') === input.position.side
+    && only.quantity === input.position.quantity
+    && pending.price != null && pending.price === only.price;
+  return !barCancelsSame;
 }
 
 export const livePhoneOperationId = (): string => `entry:${globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;

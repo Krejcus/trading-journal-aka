@@ -61,6 +61,11 @@ export const LIVE_HOTKEY_HELP: ReadonlyArray<{ keys: string; text: string }> = [
   { keys: 'Shift+F', text: 'Otevřít dialog Flatten All nouzové lišty (potvrzuje se v dialogu)' },
   { keys: '?', text: 'Tato nápověda' },
 ];
+/**
+ * Zámek jednoho příkazu drží jiný příkaz (i rozběhnutý vstup z panelu nebo „Zrušit čekající“ —
+ * až ~35 s relaye): Flatten All jím neprochází (INV-UI-02), proto ho text nabízí.
+ */
+export const LIVE_HOTKEY_BUSY_TEXT = 'Předchozí živá akce ještě běží — nic se neodeslalo. Zavřít jde hned Flattenem (Shift+F).';
 export const LIVE_HOTKEY_HELP_NOTE = 'Vstup odešle jen tlačítko v panelu objednávky. Držená klávesa se nepočítá.';
 
 // ---------------------------------------------------------------------------
@@ -380,6 +385,26 @@ function hotkeyTarget(command: LiveHotkeyCommand, state: LiveHotkeyState): Hotke
 }
 
 /**
+ * Rozběhnutá výzva zkratky (Shift+E / Shift+X / Shift+C), jejíž cíl čáry grafu už nenabízejí —
+ * čára zmizela, zablokovala se (nabídka × holé pozice, BE), změnila id / tvar / cenu / akci —, se
+ * zahodí i BEZ stisku (jako čáry grafu, panel, telefon a C7; oponentura UI C7/C8 kolo 2, P3):
+ * po návratu cíle je další stisk jen 1. krok. Cíl se počítá TOUŽ funkcí jako stisk
+ * (`hotkeyTarget` + `liveHotkeyConfirmKey`). `true` = výzva zahozena (integrace smaže i její text).
+ */
+export function liveHotkeyGuardSync(guard: TwoStepGuard, state: Pick<LiveHotkeyState, 'lines' | 'breakEven'>, now: number): boolean {
+  const pending = guard.pending(now);
+  if (!pending) return false;
+  const full: LiveHotkeyState = { lines: state.lines, breakEven: state.breakEven, hasDraft: false, busy: false };
+  const offered = LIVE_HOTKEY_COMMANDS.some(command => {
+    const target = hotkeyTarget(command, full);
+    return !('blocked' in target) && liveHotkeyConfirmKey(command, target.line, target.price) === pending.key;
+  });
+  if (offered) return false;
+  guard.reset();
+  return true;
+}
+
+/**
  * Záměr klávesy → co má integrace udělat. Jediný výsledek, který vede k příkazu,
  * je `run` (BE / zavřít / zrušit čekající) a vzniká jen druhým stiskem téhož
  * klíče v okně 350 ms–4 s. Vstup (`prefill-draft`) je vždy jen návrh do panelu.
@@ -393,7 +418,7 @@ export function resolveLiveHotkey(intent: LiveHotkeyIntent, state: LiveHotkeySta
       const command = intent.kind;
       if (state.busy) {
         guard.reset();
-        return { kind: 'blocked', command, text: 'Předchozí živá akce ještě běží — nic se neodeslalo.' };
+        return { kind: 'blocked', command, text: LIVE_HOTKEY_BUSY_TEXT };
       }
       const target = hotkeyTarget(command, state);
       if ('blocked' in target) {

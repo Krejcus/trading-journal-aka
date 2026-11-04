@@ -1496,6 +1496,15 @@ existující ochranu.
   kill a full-group Flatten tak nesmí zmizet po pádu grafu/přehledu. Lišta je
   na úzkém webu nad BottomNav, v native shellu používá
   `native-fixed-above-tab-bar` a při otevřeném dialogu se schová.
+- „Zrušit čekající“ v liště vedle Flatten All (C7 UI, 4. 11. 2026) NENÍ safety akce: jen
+  s capability a vlastními čekajícími vstupy, nad čerstvým neobnoveným statusem s relayem,
+  dvoukrokově a sdíleným zámkem jednoho příkazu desku (`liveCommandLockRef`). OFF, kill
+  a Flatten All tím zámkem ani jeho `busy` zamčené nejsou a jejich cesta se nemění. Část C7
+  se v liště vykresluje ve VLASTNÍ hranici chyb (`LiveCancelPendingBoundary`, fallback nic)
+  a pohled `liveCancelPendingView` / `dashboardOrderCancelView` status workeru sanitizuje
+  (`validPendingOwnEntries`, `validPendingCancelContext`: pole s `null` prvkem, objekt místo pole,
+  položka bez ceny, objekt místo textu důvodu) a chybu výpočtu chytí (= nic se nenabídne) — rozjetý
+  status web/worker tak nesundá render desku ani OFF / Kill / Flatten All (oponentura UI kolo 1).
 - Full-group Flatten z lišty i přehledu sdílí jediný zámek podle `groupId`
   (`lib/liveSafetyAction.ts:createFlattenGroupCoordinator`). Druhý caller se
   připojí ke skutečnému výsledku prvního; lokální Flatten nemá 10s abort a
@@ -1883,7 +1892,8 @@ existující ochranu.
   neobnoveným stavem, zapnutou kopírkou, bez rozpracovaného vstupu a mimo
   přehrávání; zámek jednoho příkazu naráz. „Zrušit“ čekajícího vstupu v liště
   pozice (`cancel-entry`, ne Flatten) jde přes sdílený zámek čar a listu správy
-  (`LivePhoneLiveActions.tsx:createLivePhoneBarClose` + `lineState.busyRef`), takže
+  (`LivePhoneLiveActions.tsx:createLivePhoneBarClose` + `lineState.busyRef`; od 4. 11. 2026 je to
+  tentýž ref jako zámek desku `liveCommandLockRef` — i pro vstup, attach a Dashboard), takže
   souběžně s × / BE / posunem z čáry neodejde druhý příkaz; Flatten pozice zůstává
   mimo zámek i mimo `busy` (INV-UI-02). OFF/Kill/Flatten celé skupiny zůstávají na Live
   Dashboardu (Filip: žádná nouzová lišta na telefonním grafu; INV-UI-02 se plní
@@ -1964,6 +1974,57 @@ existující ochranu.
   'position'`, dořešení po novém vstupu / `closedAt`; kolo 3 mutačně dalších 4: zkratka až po konci zápisu,
   nový vstup během zápisu ve frontě i před POST, incident za DISARMED po restartu),
   `tests/localCopierExecutionAgent.test.ts` (capability).
+  - **UI (4. 11. 2026, `lib/liveBareCloseUi.ts`, `hooks/liveCommandRuns.ts:createLiveBareCloseRun`):**
+    nabídka `liveBareCloseOffer` = jen zobrazení (INV-UI-01/03): capability, `bareLeaderTrade`,
+    žádný spravovatelný obchod s nohami na grafu a pozice leadera skupiny workeru, která PŘESNĚ
+    sedí s Marketem (kontrakt, strana, počet, ne čekající) — neznámá / nesedící pozice = žádné ×
+    (unknown ≠ flat, zůstává Flatten). Neaktivní s důvodem nad zastaralým / obnoveným statusem,
+    bez relaye a mimo ARMED ∧ ¬shadow ∧ ¬kill. PC: × na čáře vstupu (id čáry nese
+    `entryOperationId`, vždy dvoukrokově), Shift+X tutéž čáru a panel (sekce „Přidat SL/TP“)
+    TOUŽ funkcí obrazovky `closeBare`; telefon: „Zavřít“ v liště pozice vedle „Flatten“ (klíč
+    akce + `entryOperationId`, jen mimo přehrávání; záložní tlačítko u holé pozice se VŽDY jmenuje
+    „Flatten“, i bez nabídky a při přehrávání — „Zavřít“ znamená jen C8). JEDEN zámek jednoho
+    příkazu desku `liveCommandLockRef` (oponentura UI kolo 1): PC čáry, Shift+E/X/C, panel (vstup
+    velkým tlačítkem i Náhled → Odeslat, „Přidat SL/TP“, × holé pozice — `runWithCommandLock`),
+    lišta „Zrušit čekající“ a Dashboard; telefon dostane týž ref mostem (`commandLockRef`) pro čáry,
+    lištu pozice, list správy, vstup, attach i čip C7. Flatten, OFF a Kill mimo zámek. VĚDOMÝ
+    dopad (oponentura UI kolo 2, P3): zámek drží i běžící vstup z panelu / telefonu (POST zápisu
+    a relay až ~35 s) a celou sekvenci C7 (až 10× `cancel-entry`), takže na tomto zařízení mezitím
+    neodejde ani akce, která riziko SNIŽUJE (× zavření, posun SL, BE, C8). Cesta, která jde vždy, je
+    Flatten (lišta pozice / Flatten All, mimo zámek, INV-UI-02) — text obsazeného zámku to říká
+    („… Zavřít jde hned Flattenem“, `LIVE_MANAGE_BUSY_TEXT` / `LIVE_COMMAND_BUSY_TEXT`, Shift+E/X/C
+    „… Flattenem (Shift+F)“). Zkrácení zámku C7 (uvolnit po prvním `unknown` / timeoutu) by byla
+    změna jádra `cancelOwnPendingEntries` — jen přes critic, zatím ne. Dvoukrok
+    (`lib/liveConfirmGate.ts:createLiveConfirmGate` nad `liveConfirmClick`) zahodí rozběhnuté
+    „Opravdu?“ i BEZ kliku, když nabídka zmizí, změní klíč nebo se zablokuje (panel, telefonní lišta;
+    zkratky Shift+E/X/C `lib/liveHotkeys.ts:liveHotkeyGuardSync` — efekt obrazovky na čárách, cíl
+    týmž `hotkeyTarget` + `liveHotkeyConfirmKey` jako stisk). Čáry grafu (PC i telefon,
+    `BacktestOrderLinesOverlay`): efekt na `lines` = čistá `orderLineConfirmSync` — klíč, který čáry
+    už nenabízejí (vyplnění, attach, blokace nabídky, zmizení čáry), udělá z potvrzení NEAKTIVNÍ
+    značku `stale` do `until`, NIKDY jen `null` (oponentura UI kolo 2, P2: s `null` React spustil
+    efekt před dalším klikem a jednoklikové × vyplněné / spravované pozice odešlo — ochrana „téže
+    čáry“ z 2. 11. i z kola 1 byla vyřazená). `orderLineConfirmStep`: klik na tutéž čáru (čára holé
+    pozice `live-position:entry:bare:<id>` = tatáž čára jako `live-position:entry`) do `until`
+    při `stale` nebo při jiné akci × nic neodešle (u dvoukrokové akce jen začne nový dvoukrok);
+    značka se po návratu nabídky neoživí a zůstane i když čára na chvíli zmizí. Přechod čekající →
+    vyplněno (PC jednoklik), holá → spravovaná i zablokováno → vráceno tak mezi kliky nic nepotvrdí; spolknutý klik
+    rozběhne aktivní výzvu nového × (text podle akce: „Zavřít?“ / „Zrušit?“ / „Odstranit?“), takže
+    ani dvojklik po přechodu nic nepošle (další klik ≥ 350 ms od předchozího); neaktivní značka × jedné
+    čáry živé pozice (`live-position:…`) spolkne i jednoklikové × jiné čáry téže pozice (vyplněné
+    přikoupení → pod kurzor dojede × pozice)
+    — hlídá test SLOŽENÍ klik → sync → klik (`tests/liveC7C8Ui.test.ts` (f2)).
+    Odeslání = deskový `closeBareLeader` (čistá továrna `lib/liveDeskCommands.ts`): čerstvý status
+    + capability + `sameBareTrade` (odejde jen obchod, který uživatel viděl) →
+    `buildLeaderOrderManageCommand({ …, ...bareCloseManageFields })` → jediné relay odeslání správy
+    `sendLeaderManage` (sdílené se správou, attach a C7).
+    Texty `liveBareCloseResultNotice`: ověřeně flat = „zavřena — ověřeno stavem“; `waived` (worker
+    hlásí `acknowledged` s „ne tímto příkazem“) = „Leader je flat — ne tímto příkazem“; `rejected`
+    = „Broker zavření odmítl… zkontroluj, případně Flatten“; `unknown` i výjimka po odeslání =
+    „Neověřeno — zkontroluj Tradovate“, NIKDY „zavřeno“; nic se neopakuje. Dvoukrok čar grafu
+    (`BacktestOrderLinesOverlay:orderLineConfirmStep`, PC i telefon) od téhož dne počítá 350 ms od
+    PŘEDCHOZÍHO kliku (`liveManageConfirmStep`; dřív od prvního — trojklik potvrdil).
+    Hlídá test: `tests/liveC7C8Ui.test.ts` (behaviorálně přes čisté továrny a automat dvoukroku;
+    bezpečnostní větve mutačně ověřil stavitel v kolech oprav oponentury UI 1 a 2 skriptem mimo repo).
 - **„Zrušit vše“ = zrušit VLASTNÍ čekající vstupy, nikdy ochranu pozice (C7, 3. 11. 2026,
   `docs/reviews/trading-gaps-designs/safety.md`; oponentura copier-design-critic: návrh OK, diff
   kolo 1 „OPRAVIT PŘED COMMITEM“ → opraveno týž den; kolo 2 „OK S VÝHRADAMI“ (8× P3) → výhrady
@@ -2051,7 +2112,40 @@ existující ochranu.
     (čeká na ustálení) se zatím nehlásí, aby „výsledek neznámý“ nepředběhl konečný výsledek; důvod
     s koncovou tečkou bez „..“ (kolo 3). Dashboard
     „Zrušit příkaz“ (`dashboardCancelTarget`) má stejné brány jako tlačítko: čerstvý neobnovený
-    status a relay (INV-FRESH-03, INV-UI-01/02; kolo 2) — UI zatím zapojené není.
+    status a relay (INV-FRESH-03, INV-UI-01/02; kolo 2).
+  - **UI (4. 11. 2026, `lib/liveCancelPendingUi.ts`, `components/LivePendingCancel.tsx`,
+    `hooks/liveCommandRuns.ts:createLiveCancelPendingRun`):** tlačítko „Zrušit čekající (N)“ jen když
+    `cancelPendingAvailability` říká `show` (PC lišta pod grafem vedle Flatten All, telefon čip nad
+    grafem); neaktivní s důvodem nad zastaralým / obnoveným statusem, bez relaye, při blokaci workeru
+    a během přehrávání. Dvoukrok `createLiveConfirmGate` nad `liveConfirmClick` (2. klik 350 ms – 4 s od
+    PŘEDCHOZÍHO kliku; klíč = `cancelPendingConfirmKey` přesně zobrazené sady — vyplnění / nový vstup
+    = znovu od 1. kliku a rozběhnuté „Opravdu?“ zmizí i bez kliku; dva kliky v jednom snímku nic).
+    `cancelPendingConfirmStep` jádra se v UI NEPOUŽÍVÁ (rychlý klik neposouvá kotvu — trojklik
+    0/200/400 ms by potvrdil); test hlídá, že ho žádný runtime soubor neimportuje, sjednocení nebo
+    odstranění exportu je samostatná změna jádra přes critic. Text potvrzení `cancelPendingConfirmText`
+    (kolik a čeho, co zůstává) přes `liveCancelPendingConfirmText`: kontext ze statusu, který je, ale
+    není objekt (pole, text), = zamčeno „Stav čekajících příkazů nejde přečíst — zruš v Tradovate nebo
+    Flatten.“ (fail-closed, i Dashboard); nečitelný / chybějící počet = `null` a text přidá „Co zůstává
+    (…), nejde ověřit“ — nikdy se neukáže jako „nic nezůstává“ (INV-UI-01 unknown ≠ 0, INV-DEFAULT-02;
+    kolo 2). Telefonní čip se schová jen když tutéž jedinou položku cíleně ruší „Zrušit“ lišty pozice
+    (most má `manage` a čekající příkaz lišty sedí kontraktem, stranou, počtem i cenou —
+    `livePhoneCancelPendingChipShown`); jinak by lišta spustila Flatten a cílené C7 by na grafu
+    chybělo (kolo 2). Sdílený zámek jednoho příkazu = `liveCommandLockRef` desku (PC čáry,
+    zkratky, panel, lišta; telefon mostem `commandLockRef`; Dashboard), Flatten mimo zámek; sekvence
+    drží zámek celou dobu — na zařízení mezitím neodejde × / posun SL / BE ani vstup (vědomě, viz C8
+    UI výše; zbývá Flatten). Desk
+    `cancelPendingEntries` (`lib/liveDeskCommands.ts`): čerstvý status + capability +
+    `cancelPendingSeenProblem` (každá potvrzená položka pořád v čerstvém statusu se stejným id, cenou
+    a počtem) → `cancelOwnPendingEntries` přes `sendLeaderManage` s trasou relaye zachycenou JEDNOU před
+    sekvencí (INV-TRAD-06, INV-RELAY-01): změna trasy uprostřed = zbytek „Neodesláno“, nic na jinou
+    trasu; výsledek po položkách `cancelPendingSummary` (fill nikdy „zrušeno“), ukáže se i když
+    nabídka mezitím zmizela (status dřív než ACK). Dashboard: nefunkční `cancel-order` nahrazeno
+    `dashboardOrderCancelView` → `dashboardCancelTarget` (jen vlastní čekající vstup leadera skupiny
+    workeru, dvoukrokově, týž zámek); `blockedReason` workeru zamkne i Dashboard (jako lištu); skupina,
+    kterou worker neřídí, má vlastní text („Zrušit jde jen u skupiny, kterou řídí worker“); starý
+    worker bez capability, SL/TP noha, follower, cizí příkaz i neověřený stav = tlačítko zamčené
+    s vysvětlením; přehled `cancel-order` už nikdy nesestaví. Hlídá test: `tests/liveC7C8Ui.test.ts`
+    (behaviorálně; bezpečnostní větve mutačně ověřil stavitel v kolech oprav oponentury UI 1 a 2 skriptem mimo repo).
   Hlídá test (kolo 1 mutačně 16 mutací, kolo 2 dalších 20, kolo 3 dalších 15):
   `tests/liveCancelPending.test.ts` (odmítnutí inline i pozdě, dvojí zrušení, přerostlé nohy, pořadí
   kontrola→záznam i při souběhu, odmítnutí s REST „working“, restart v `sending`, replay po waiveru,

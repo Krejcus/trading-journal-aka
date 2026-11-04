@@ -149,7 +149,8 @@ describe('oponentura 2. 11. — vrstvy, okna, ×, plusko, karty', () => {
     const lines = readFileSync('components/day/LivePhoneOrderLines.tsx', 'utf8');
     expect(lines).toMatch(/\.map\(line => \(\{ \.\.\.line, confirmCancel: true \}\)\)/);
     expect(lines).toMatch(/const \{ pendingMove, setPendingMove, busyRef \} = state;/);
-    expect(readFileSync('components/day/LivePhoneChart.tsx', 'utf8')).toMatch(/const lineState = useLivePhoneLineState\(\);/);
+    // Zámek drží rodič; s deskem je to tentýž ref (`trade.commandLockRef`, C7/C8 kolo 1).
+    expect(readFileSync('components/day/LivePhoneChart.tsx', 'utf8')).toMatch(/const ownLineState = useLivePhoneLineState\(\);\s*const lineState = trade\?\.commandLockRef \? \{ \.\.\.ownLineState, busyRef: trade\.commandLockRef \} : ownLineState;/);
   });
 
   it('plusko a odeslání listu: typ i kontrola proti trhu z čerstvé kotace, ne z close svíčky', () => {

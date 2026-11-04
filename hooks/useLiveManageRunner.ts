@@ -53,6 +53,12 @@ export interface LiveManageConfirm { key: string; since: number; until: number }
 export const LIVE_MANAGE_CONFIRM_MS = 4_000;
 /** Dvojklik se nepočítá jako potvrzení: druhý klik nejdřív po 350 ms. */
 export const LIVE_MANAGE_CONFIRM_MIN_MS = 350;
+/**
+ * Sdílený zámek jednoho příkazu drží jiný příkaz. Zámek kryje i vstup (až ~35 s relaye) a sekvenci
+ * „Zrušit čekající“, takže na zařízení mezitím neodejde ani × / posun SL / BE — Flatten jím neprochází
+ * (INV-UI-02), proto ho text nabízí (oponentura UI C7/C8 kolo 2).
+ */
+export const LIVE_MANAGE_BUSY_TEXT = 'Čeká se na výsledek předchozí změny — nic se neodeslalo. Zavřít jde hned Flattenem.';
 /** Po potvrzeném posunu drží čára „odesílám“ ještě chvíli na dosednutí ceny. */
 export const LIVE_MANAGE_PENDING_HOLD_MS = 5_000;
 
@@ -104,6 +110,10 @@ export interface LiveManageRunDeps {
   setBusy?: (busy: boolean) => void;
   report: (notice: LiveManageNotice) => void;
   now?: () => number;
+  /** Jiné texty výsledku (C8 holá pozice); výchozí `liveManageResultNotice`. Stav běhu se nemění. */
+  resultNotice?: (action: LeaderOrderManageAction, result: LeaderOrderManageResult, at: number) => LiveManageNotice;
+  /** Jiné texty výjimky (C8); výchozí `liveManageErrorNotice`. „Neodesláno“ vs. neznámé rozhoduje dál vzor. */
+  errorNotice?: (reason: unknown, at: number) => LiveManageNotice;
 }
 
 /**
@@ -125,7 +135,7 @@ export function createLiveManageRun(deps: LiveManageRunDeps) {
     if (expectPrice == null || !Number.isFinite(expectPrice)) {
       return finish({ tone: 'bad', text: 'Cena SL/TP pozice není jedna nebo není známá — nic se neodeslalo. Sjednoť ji v Tradovate, nebo zavři Flattenem.', at: now() }, false, 'not-sent');
     }
-    if (deps.busyRef.current) return finish({ tone: 'warn', text: 'Čeká se na výsledek předchozí změny — nic se neodeslalo.', at: now() }, false, 'not-sent');
+    if (deps.busyRef.current) return finish({ tone: 'warn', text: LIVE_MANAGE_BUSY_TEXT, at: now() }, false, 'not-sent');
     deps.busyRef.current = true;
     deps.setBusy?.(true);
     // „Odesílám“ drží, dokud příkaz neskončí (relay čeká až ~35 s), pak ještě chvíli na dosednutí ceny.
@@ -134,11 +144,11 @@ export function createLiveManageRun(deps: LiveManageRunDeps) {
       const result = await manage(action, expectPrice, newPrice);
       if (result.status !== 'acknowledged') deps.setPendingMove(null);
       else deps.setPendingMove(current => (current ? { ...current, until: now() + LIVE_MANAGE_PENDING_HOLD_MS } : current));
-      return finish(liveManageResultNotice(action, result, now()), true, result.status);
+      return finish((deps.resultNotice ?? liveManageResultNotice)(action, result, now()), true, result.status);
     } catch (reason) {
       deps.setPendingMove(null);
       // Výjimka po odeslání = výsledek neznámý; nic se znovu neposílá (žádné slepé opakování).
-      return finish(liveManageErrorNotice(reason, now()), true, errorNotSent(reason) ? 'not-sent' : 'unknown');
+      return finish((deps.errorNotice ?? liveManageErrorNotice)(reason, now()), true, errorNotSent(reason) ? 'not-sent' : 'unknown');
     } finally {
       deps.busyRef.current = false;
       deps.setBusy?.(false);

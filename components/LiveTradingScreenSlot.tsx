@@ -13,6 +13,8 @@ import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import type { LiveAttachInput, LiveBareEntryRecord } from '../lib/liveBareEntry';
 import type { LivePhonePosition } from '../lib/livePhoneOrders';
+import type { LiveBareCloseOffer } from '../lib/liveBareCloseUi';
+import type { BareLeaderTrade } from '../lib/manualBareClose';
 import type { LiveChartFills, LiveChartWorkingOrders } from '../hooks/useLiveChartData';
 import {
   getLiveScreenThemePreference,
@@ -131,6 +133,15 @@ interface Props {
   liveFills?: LiveChartFills | null;
   /** Přihlášený uživatel — jen klíč knihovny šablon SL/TP na zařízení; chybí = jen vestavěná šablona. */
   userId?: string | null;
+  // ── C7/C8 (4. 11. 2026) ──
+  /** Nabídka × u vlastní holé pozice (`liveBareCloseOffer`, jen zobrazení); chybí = žádná. */
+  bareClose?: LiveBareCloseOffer | null;
+  /** Deskový `closeBareLeader` (jen s capability C8); chybí = × holé pozice se nenabídne. */
+  onBareClose?: (seen: BareLeaderTrade) => Promise<LeaderOrderManageResult>;
+  /** Sdílený zámek jednoho příkazu desku (lišta „Zrušit čekající“, Dashboard); chybí = vlastní. */
+  manageLockRef?: React.MutableRefObject<boolean> | null;
+  /** Graf hlásí přehrávání (U3-PC pojistka) — desk pak lištu „Zrušit čekající“ zamkne. */
+  onReplayChange?: (active: boolean) => void;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -222,4 +233,8 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')
   && (left.liveFills?.key ?? 'none') === (right.liveFills?.key ?? 'none')
   && (left.userId ?? null) === (right.userId ?? null)
+  && JSON.stringify(left.bareClose ?? null) === JSON.stringify(right.bareClose ?? null)
+  && left.onBareClose === right.onBareClose
+  && left.manageLockRef === right.manageLockRef
+  && left.onReplayChange === right.onReplayChange
 ));

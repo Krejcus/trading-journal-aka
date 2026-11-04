@@ -7,6 +7,7 @@ import type { LiveChartPositionSummary } from '../../lib/liveChartPosition';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../../lib/leaderOrderManage';
 import { LIVE_DRAFT_ID, liveDraftChartLines, snapToTick, withBracket, withEntryPrice, type TicketDraft, type TicketInstrument, type TicketQuote } from '../../lib/liveOrderTicket';
 import type { LiveTicketScaleIn } from '../../lib/liveScaleIn';
+import { LIVE_MANAGE_BUSY_TEXT } from '../../hooks/useLiveManageRunner';
 import { isLiveDisplayOnlyLine, type LiveWorkingOrderBadge, type LiveWorkingOrdersView } from '../../lib/liveWorkingOrderLines';
 
 const TICK = 0.25;
@@ -196,7 +197,7 @@ export function LivePhoneOrderLines({
   const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit') => {
     if (!manage) return;
     if (expect == null) { onNotice('Cena SL/TP pozice není jedna nebo není známá — nic se neodeslalo. Sjednoť ji v Tradovate, nebo zavři Flattenem.'); return; }
-    if (busyRef.current) { onNotice('Čeká se na výsledek předchozí změny — nic se neodeslalo.'); return; }
+    if (busyRef.current) { onNotice(LIVE_MANAGE_BUSY_TEXT); return; }
     busyRef.current = true;
     if (move && newPrice != null) setPendingMove({ kind: move, price: newPrice, until: Number.POSITIVE_INFINITY });
     try {

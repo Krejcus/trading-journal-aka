@@ -12,13 +12,14 @@ import LivePhoneOrderSheet, { livePhoneSheetPayload } from './LivePhoneOrderShee
 import LivePhoneDraftBar from './LivePhoneDraftBar';
 import LivePhoneManageSheet from './LivePhoneManageSheet';
 import LivePhoneReplayLiveChip from './LivePhoneReplayLiveChip';
-import { LivePhoneAttachSheet, LivePhonePositionBar, createLivePhoneBarClose } from './LivePhoneLiveActions';
+import { LivePhoneAttachSheet, LivePhoneCancelPendingChip, LivePhonePositionBar, createLivePhoneBarClose } from './LivePhoneLiveActions';
+import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/liveCommandRuns';
 import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../../hooks/useLiveFillAnnouncer';
 import { previewSymbolFromChartSource } from '../../lib/leaderEntryPreview';
 import { snapToTick } from '../../lib/liveOrderTicket';
 import {
-  livePhoneBareMarket, livePhoneOperationId, livePhonePlacedText, livePhoneScaleInBlocked, livePhoneScaleInDraft,
+  livePhoneBareMarket, livePhoneCancelPendingChipShown, livePhoneOperationId, livePhonePlacedText, livePhoneScaleInBlocked, livePhoneScaleInDraft,
   type LivePhoneQuote, type LivePhoneTradeBridge,
 } from '../../lib/livePhoneOrders';
 import type { LiveEntryPreviewDraft } from '../../lib/leaderEntryPreview';
@@ -83,6 +84,8 @@ const ALERT_CARDS_MAX = 2;
 const REPLAY_NO_TRADE = 'Přehrávání — obchoduj v živém grafu. Nic se neodeslalo.';
 /** Lišta pozice nahoře zabírá ~52 px; štítky pod ní. */
 const BELOW_POSITION_BAR = 56;
+/** Místo pro „Zrušit čekající“ nad odznaky pracujících příkazů (C7). */
+const CANCEL_PENDING_CHIP_SPACE = 38;
 
 /**
  * Návrh objednávky: list (`sheet`), nebo stažený do lišty návrhu s čarami v grafu (`chart`, U2).
@@ -134,12 +137,18 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     return { symbol: contract, bid, ask: bid + LIVE_PHONE_INSTRUMENT.tickSize, at: tick.at };
   }, [tick, contract, ctl.chart.liveStatus]);
   // Jeden příkaz naráz (zámek přes ref — dvojklep nepošle druhý; nový operationId jen za nový pokus).
-  const busyRef = useRef(false);
+  // Zámek je JEDEN pro celý graf i desk (oponentura UI C7/C8 kolo 1): vstup, attach, × / BE / posun
+  // z čar, list správy, Zavřít holé pozice i „Zrušit čekající“; s deskem (`trade.commandLockRef`)
+  // ho sdílí i Dashboard „Zrušit“. Flatten jím nikdy neprochází (INV-UI-02).
+  const ownLineState = useLivePhoneLineState();
+  const lineState = trade?.commandLockRef ? { ...ownLineState, busyRef: trade.commandLockRef } : ownLineState;
+  const busyRef = lineState.busyRef;
   const [busy, setBusy] = useState(false);
   const say = (text: string) => setNotice({ key: Date.now(), text });
   const send = async (draft: LiveEntryPreviewDraft | { error: string }) => {
     if ('error' in draft) { say(draft.error); return; }
-    if (!trade || busyRef.current) return;
+    if (!trade) return;
+    if (busyRef.current) { say(LIVE_COMMAND_BUSY_TEXT); return; }
     busyRef.current = true;
     setBusy(true);
     try {
@@ -197,7 +206,6 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     ? withIbkrTightenMark(chartPosition.summary, chartPosition.symbol ?? null,
       { source: ctl.chart.liveSource ?? null, price: tick?.price ?? null, at: tick?.at ?? null, stale: ctl.chart.liveStatus !== 'live' }, at)
     : null), [chartPosition.summary, chartPosition.symbol, ctl.chart.liveSource, ctl.chart.liveStatus, tick]);
-  const lineState = useLivePhoneLineState();
   // „Zavřít / Zrušit“ lišty pozice: zrušení čekajícího vstupu jde sdíleným zámkem čar (jeden příkaz naráz).
   const barTradeRef = useRef(trade);
   barTradeRef.current = trade;
@@ -207,6 +215,25 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     setPendingMove: lineState.setPendingMove,
     say: text => setNotice({ key: Date.now(), text }),
   }), [lineState.busyRef, lineState.setPendingMove]);
+  // C8: „Zavřít“ holé pozice = deskový closeBare TÝMŽ zámkem čar; odejde jen nabídka s klíčem,
+  // který uživatel potvrdil (akce + entryOperationId). Neaktivní nabídka = jen důvod, nic neodejde.
+  const barBareCloseRun = useMemo(() => createLiveBareCloseRun({
+    close: () => barTradeRef.current?.closeBare,
+    busyRef: lineState.busyRef,
+    setPendingMove: lineState.setPendingMove,
+    report: notice => setNotice({ key: Date.now(), text: notice.text }),
+  }), [lineState.busyRef, lineState.setPendingMove]);
+  // C7: čip schová jen to, co lišta pozice ruší cíleně (`manage` + tentýž jediný vstup);
+  // jinak by „Zrušit“ lišty spustilo Flatten a cílené C7 by na grafu chybělo.
+  const cancelPendingChip = livePhoneCancelPendingChipShown({
+    cancelPending: trade?.cancelPending, canCancel: trade?.cancelPendingEntries != null, barManage: trade?.manage != null, position,
+  });
+  const barBareClose = (key: string) => {
+    const offer = barTradeRef.current?.bareClose ?? null;
+    if (!offer || offer.key !== key) { say('Holá pozice se mezitím změnila — nic se neodeslalo.'); return; }
+    if (!offer.enabled) { say(`${offer.reason ?? 'Zavřít teď nejde.'} Nic se neodeslalo.`); return; }
+    void barBareCloseRun(offer.trade);
+  };
   // Typ příkazu a kontrola proti trhu z čerstvé kotace (≤ 3 s), jako PC — ne z close svíčky.
   const freshQuote = (): TicketQuote | null => (quote && Date.now() - quote.at <= PHONE_MARKET_QUOTE_MAX_AGE_MS ? { bid: quote.bid, ask: quote.ask } : null);
   // Orientační cena návrhu v grafu (stejná jako pro list); null = cena zatím není.
@@ -438,7 +465,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
               onClose={() => setAttachOpen(false)}
               onSubmit={(stopLoss, takeProfit) => {
                 setAttachOpen(false);
-                if (!trade || busyRef.current) return;
+                if (!trade) return;
+                if (busyRef.current) { say(LIVE_COMMAND_BUSY_TEXT); return; }
                 busyRef.current = true;
                 setBusy(true);
                 void trade.attach({ entryOperationId: position.bareEntryOperationId!, symbol: position.symbol, quantity: position.quantity, expectPrice: marketNow, stopLoss, takeProfit })
@@ -507,7 +535,15 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
         chartLayer: ({ lastPrice, api, candles, intervalSeconds, replay, exitReplay }) => <>
           <LiveFillArrows api={api} fills={shownFills} open={slots.fillsOpen === true} candles={candles} intervalSeconds={intervalSeconds} enabled={!replay && slots.fillsOpen != null && shownFills.length > 0} isDark={isDark} />
-          {!replay && <LivePhoneWorkingBadges badges={working.badges} top={position ? BELOW_POSITION_BAR : 8} />}
+          {!replay && <LivePhoneWorkingBadges badges={working.badges} top={(position ? BELOW_POSITION_BAR : 8) + (cancelPendingChip ? CANCEL_PENDING_CHIP_SPACE : 0)} />}
+          {/* C7: „Zrušit čekající“ jen s pohledem desku a mimo přehrávání; sdílený zámek čar. */}
+          {!replay && cancelPendingChip && trade?.cancelPending && trade.cancelPendingEntries && <LivePhoneCancelPendingChip
+            view={trade.cancelPending}
+            lockRef={lineState.busyRef}
+            cancel={trade.cancelPendingEntries}
+            top={position ? BELOW_POSITION_BAR : 8}
+            onNotice={say}
+          />}
           <LiveTradeToasts events={slots.copyEvents} copierArmed={slots.copierArmed ?? false} isDark={isDark} placement={{ left: 8, bottom: chartDraft && !replay ? draftBarBottom + 72 : 84 }} extra={cards} />
           {position && <LivePhonePositionBar
             side={position.side} quantity={position.quantity} symbol={position.symbol} pending={position.pending}
@@ -520,6 +556,10 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             // sdílený zámek čar (`lineState.busyRef`): souběžně s × / BE z čáry nic druhého.
             // Flatten jen u pozice nebo když cílená cesta není k dispozici; zámek ho neblokuje.
             onClose={() => { void barClose(position); }}
+            // C8: „Zavřít“ holé pozice (close-position) jen s nabídkou workeru a mimo přehrávání;
+            // Flatten zůstává vedle (mimo zámek) a u holé pozice se VŽDY jmenuje „Flatten“.
+            bareClose={!replay && trade?.closeBare ? trade.bareClose ?? null : null}
+            onBareClose={barBareClose}
           />}
           {/* Přehrávání (U3): štítek živého stavu a cesta zpět; obchodovat jde jen v živém grafu. */}
           {replay && <LivePhoneReplayLiveChip position={replayLive} pnl={chartPosition.summary?.openPnl ?? null} top={position ? BELOW_POSITION_BAR : 8} onExit={exitReplay} />}
