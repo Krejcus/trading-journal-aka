@@ -151,7 +151,14 @@ export function liveCommandTraceReadyToComplete(trace: LiveCommandTrace): boolea
   const successful = trace.resultStatus === 'acknowledged'
     || trace.resultStatus === 'succeeded'
     || trace.resultStatus === 'waived';
-  return !successful || trace.stages?.position != null;
+  if (!successful) return true;
+  // Vstupní Limit/Stop je hotový pro UX ve chvíli, kdy se poprvé opravdu
+  // vykreslí jako přijatý/working order. Čekat na position by u limitu
+  // znamenalo minuty a znehodnotilo klik → pixel měření. Market se z F2a
+  // klasifikuje rovnou jako fill/position, takže stejná podmínka zůstává pravdivá.
+  if (trace.kind === 'place-leader-entry') return trace.stages != null
+    && Object.keys(trace.stages).length > 0;
+  return trace.stages?.position != null;
 }
 
 const completeIfReady = (trace: LiveCommandTrace) => {

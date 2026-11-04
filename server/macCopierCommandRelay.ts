@@ -551,6 +551,9 @@ export function startMacCopierCommandRelay(options: {
     request: deliveryRequest,
     nextRevision: () => ++statusRevision,
     isActive: () => !stopped,
+    // Po broker ACK + fsync ukaž výsledek v grafu hned. Serverový ACK, audit,
+    // background heartbeat i budíček zůstávají v onComplete níže.
+    onDurableResult: () => scheduleExposureSend(),
     // ACK uložil výsledek i autoritativní status → budíček pro otevřené LIVE.
     onComplete: id => { completedNotifications.add(id); publishBackground(); sendStatusNudge(); },
   }) : null;

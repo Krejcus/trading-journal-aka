@@ -596,7 +596,11 @@ describe('recoverable relay lane isolation', () => {
     const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
       if (String(url).endsWith('/realtime/v1/api/broadcast')) {
         const body = JSON.parse(String(init?.body));
-        nudges.push({ at: Date.now(), topic: body.messages[0].topic, auth: new Headers(init?.headers).get('authorization') });
+        // Nová pre-ACK expozice používá stejný Broadcast endpoint, ale není
+        // statusový budíček a do jeho rate-limit testu nepatří.
+        if (body.messages[0].event === 'status') {
+          nudges.push({ at: Date.now(), topic: body.messages[0].topic, auth: new Headers(init?.headers).get('authorization') });
+        }
         return new Response(null, { status: 202 });
       }
       const body = JSON.parse(String(init?.body));

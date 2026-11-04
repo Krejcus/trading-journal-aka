@@ -288,6 +288,37 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE rychlost: durable výsledek do grafu před server ACK + kompaktní hot result (Codex, lokálně, NENASAZENO)
+
+- Produkční foreground A/B po admission v2 nepotvrdil celkové zrychlení: přesný BUY 1 MNQZ6 LIMIT na jediném
+  manual-only účtu `DEMO8661118` měl klik -> inline výsledek 1 099 ms. DB vytvoření -> claim bylo 61 ms,
+  ale vytvoření -> worker 284 ms, broker OSO POST 237 ms, worker execution včetně durable zápisu 363 ms,
+  worker -> server ACK 273 ms a DB completion 824 ms od vytvoření. Příkaz se nevyplnil, byl autoritativně
+  zrušen a závěrečný stav byl DISARMED, flat, bez orders/pozic/pending a bez chyby. Cancel měl DB claim 45 ms,
+  ale vytvoření -> worker 485 ms, broker cancel 254 ms, execution 468 ms a ACK 248 ms. Admission v2 tedy
+  zrychlila DB claim, ne celý průchod; nesmí se vydávat za E2E zrychlení.
+- Browserová stopa working limitu byla neplatná: čekala na `position`, takže první `order` pixel zaznamenala až
+  po ztrátě popředí. Měřič teď ukončí úspěšný vstup při prvním skutečném order/fill/position paintu; ticket má
+  po dvou animation frames fallback na viditelné „Přijato“. Reject/blocked dál končí bez falešného paintu.
+- Worker po broker ACK a fsync nově naplánuje šifrovanou display-only expozici **před** vzdáleným
+  `complete-v2`. Serverový ACK, command JSONB, heartbeat, audit, fencing, durable checkpoint a zákaz retry se
+  nemění; zobrazovací callback nesmí execution ovlivnit a jeho výjimka se ignoruje. Cíl je odstranit z prvního
+  pixelu dosavadních ~200–300 ms čekání na ACK, skutečný přínos ale ještě musí potvrdit stejné DEMO A/B.
+- Produkční read-only kontrola potvrdila, že relay už běží v `arn1` (Vercel hlavička `fra1::arn1`), takže
+  stěhování regionu není zbývající zkratka. Jeden hot command ukládal ~21 kB `result`, z toho ~21 kB byl
+  duplicitní plný status; tentýž status se zároveň posílá samostatným heartbeat parametrem. Ruční vstup a
+  správa teď do durable command resultu ukládají jen `{ok,result}`; ostatní bezpečnostní/config příkazy zůstaly
+  beze změny. ACK log nově uvádí skutečné bajty pro další A/B.
+- Ověření lokálního balíku: dotčené sady 79/79, produkční Vite/PWA build, samostatné Node 20 bundly workeru,
+  TV price threadu a price-alert threadu se syntax kontrolou a `git diff --check` prošly. Plná sada dala
+  734 souborů / 7 510 testů zeleně (1 skip, 1 todo) a jediný nesouvisející TTL test pod plnou zátěží selhal
+  o 1 ms; samostatný rerun téhož souboru je 16/16 zelený. Kořenový TypeScript s 4 GB doběhl a hlásí jen
+  stejné známé chyby samostatné Chrome extension a starý nesouvisející tuple typ v
+  `tests/macCopierCommandRelay.test.ts`; dotčený kód nemá novou chybu. Balík je lokálně commitnutý jako
+  `1bebac69`; přesný commit znovu prošel produkčním Vite/PWA buildem. Čerstvý read-only broker reconcile
+  potvrdil DEMO, DISARMED, flat, 0 orders/pozic, bez divergence, stuck operací a chyby. Změna zatím není
+  pushnutá, nasazená ani nainstalovaná ve workeru; brokerovi po A/B nic dalšího neposlala.
+
 ### 2026-11-04 — LIVE rychlost: atomické navázání admission na idle delivery (Codex, DB + web NASAZENY)
 
 - Foreground DEMO kontrola na jediném účtu `DEMO8661118`: ARM, BUY 1 MNQZ6 LIMIT 28 500 se SL 28 488

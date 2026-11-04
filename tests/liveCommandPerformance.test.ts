@@ -43,14 +43,14 @@ describe('LIVE command end-to-end performance', () => {
     expect(liveCommandWorkerDurations({ startedAt: 20, queuedAt: 30 })).toEqual({});
   });
 
-  it('nesmaže kotvu kliku, když position paint předběhne HTTP výsledek', () => {
+  it('nesmaže kotvu kliku, když order paint předběhne HTTP výsledek', () => {
     expect(liveCommandTraceReadyToComplete(trace({
-      stages: { position: { receivedMs: 100, paintedMs: 120, receiveToPaintMs: 20, clickToPaintMs: 120, visible: true, focused: true } },
+      stages: { order: { receivedMs: 100, paintedMs: 120, receiveToPaintMs: 20, clickToPaintMs: 120, visible: true, focused: true } },
     }))).toBe(false);
     expect(liveCommandTraceReadyToComplete(trace({
       resultMs: 300,
       resultStatus: 'acknowledged',
-      stages: { position: { receivedMs: 100, paintedMs: 120, receiveToPaintMs: 20, clickToPaintMs: 120, visible: true, focused: true } },
+      stages: { order: { receivedMs: 100, paintedMs: 120, receiveToPaintMs: 20, clickToPaintMs: 120, visible: true, focused: true } },
     }))).toBe(true);
   });
 
@@ -68,8 +68,13 @@ describe('LIVE command end-to-end performance', () => {
     expect(hasActiveLiveCommandTrace(operationId)).toBe(false);
   });
 
-  it('ponechá úspěšný working limit aktivní, ale definitivní reject uzavře bez paintu', () => {
+  it('ponechá úspěšný working limit aktivní do prvního order paintu, ale definitivní reject uzavře bez paintu', () => {
     expect(liveCommandTraceReadyToComplete(trace({ resultMs: 300, resultStatus: 'acknowledged' }))).toBe(false);
+    expect(liveCommandTraceReadyToComplete(trace({
+      resultMs: 300,
+      resultStatus: 'acknowledged',
+      stages: { order: { receivedMs: 301, paintedMs: 320, receiveToPaintMs: 19, clickToPaintMs: 320, visible: true, focused: true } },
+    }))).toBe(true);
     expect(liveCommandTraceReadyToComplete(trace({ resultMs: 300, resultStatus: 'blocked' }))).toBe(true);
   });
 });

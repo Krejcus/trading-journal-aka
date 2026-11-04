@@ -16,6 +16,21 @@ export const COPIER_RELAY_PUSH_CLOCK_MAX_AGE_MS = 60_000;
 
 /** Řádek navázaný serverem k nečinné delivery a doručený podepsaným pushem (už ověřený podpis). */
 export interface PushedCopierDelivery { deliveryId: string; command: unknown }
+
+/**
+ * Ruční vstup/správa používají z odpovědi jen konkrétní brokerový výsledek.
+ * Autoritativní status se v complete-v2 posílá samostatně a stejný 20kB objekt
+ * uvnitř `result.status` by se jinak dvakrát přenesl, dvakrát zapsal do JSONB
+ * a znovu vrátil prohlížeči. Ostatní příkazy status v odpovědi používají, proto
+ * se kompaktují jen tyto dvě přesně vymezené horké cesty.
+ */
+export function compactRecoverableCopierResult(command: LocalCopierAgentCommand, result: unknown): unknown {
+  if (!isLeaderEntryPlaceCommand(command) && !isLeaderOrderManageCommand(command)) return result;
+  if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true
+    || !Object.hasOwn(result, 'result')) return result;
+  return { ok: true, result: (result as { result: unknown }).result };
+}
+
 /** Serial, durable transport recovery. Only HTTP delivery/ACK is retried;
  * once execution starts a trading or configuration command can NEVER be
  * executed by this relay again. Idempotent brakes (DISARM, kill switch, day
@@ -24,6 +39,12 @@ export interface PushedCopierDelivery { deliveryId: string; command: unknown }
 export function recoverableCopierDelivery(options: {
   store: RelayDeliveryStore; agent: LocalCopierExecutionAgent; request: Request;
   nextRevision: () => number; onComplete: (id: string) => void;
+  /**
+   * Zobrazovací nudge po durable lokálním zápisu výsledku, ještě před vzdáleným
+   * ACK. Nesmí autorizovat další příkaz ani měnit delivery; jeho selhání se
+   * ignoruje a autoritativní complete-v2 pokračuje beze změny.
+   */
+  onDurableResult?: (id: string) => void;
   now?: () => number; isActive?: () => boolean;
 }) {
   const session = randomUUID();
@@ -190,7 +211,7 @@ export function recoverableCopierDelivery(options: {
         // novějšího ARM je fail-safe — kopírka zůstane vypnutá a ukáže důvod.
         else {
           try {
-            result = await options.agent.execute(remote.command, {
+            result = compactRecoverableCopierResult(remote.command, await options.agent.execute(remote.command, {
               source: 'relay',
               createdAt: created,
               clockSkewReserveMs,
@@ -199,7 +220,7 @@ export function recoverableCopierDelivery(options: {
                 : {}),
               // Ruční vstup (fáze 1b): platnost do expiresAt bez ACK rezervy (§4).
               ...(isLeaderEntryPlaceCommand(remote.command) || isLeaderOrderManageCommand(remote.command) ? { deadlineAt: expires } : {}),
-            });
+            }));
           }
           catch (error) {
             executionError = error instanceof Error ? error.message : String(error);
@@ -212,12 +233,19 @@ export function recoverableCopierDelivery(options: {
       }
     }
     current = checkpoint!;
+    // Brokerův výsledek je už durable na disku workeru. Otevřený LIVE graf ho
+    // smí zobrazit hned přes šifrovanou display-only cestu; serverový ACK a
+    // audit dál proběhnou níže a nikdy se tímto nudgem neobcházejí.
+    try { options.onDurableResult?.(remote.id); } catch { /* display-only */ }
     const ackStarted = performance.now();
-    const ack = await options.request({ action: 'complete-v2', deliveryId: current.deliveryId,
+    const ackBody = { action: 'complete-v2', deliveryId: current.deliveryId,
       commandId: remote.id, result: current.result ?? null, error: current.error ?? null,
-      status: options.agent.status(), revision: options.nextRevision() });
+      status: options.agent.status(), revision: options.nextRevision() };
+    const ackBytes = new TextEncoder().encode(JSON.stringify(ackBody)).byteLength;
+    const ack = await options.request(ackBody);
     if (ack.protocol !== 2 || ack.accepted !== true) throw new Error('relay-delivery-ack-not-confirmed');
-    console.log(`${new Date().toISOString()} RELAY ACK id=${remote.id} durationMs=${Math.round(performance.now() - ackStarted)}`);
+    console.log(`${new Date().toISOString()} RELAY ACK id=${remote.id} bytes=${ackBytes}`
+      + ` durationMs=${Math.round(performance.now() - ackStarted)}`);
     // Budíček UI dřív než zápis nové delivery — jeho selhání ho nesmí spolknout (oponentura P2-3).
     options.onComplete(remote.id);
     // Rovnou nová nečinná delivery (F1b′): server ji uvidí v nejbližším statusu.

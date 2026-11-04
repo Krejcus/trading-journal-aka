@@ -27,7 +27,7 @@ import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import type { LivePhonePosition } from '../lib/livePhoneOrders';
-import { startLiveCommandTrace } from '../lib/liveCommandPerformance';
+import { hasActiveLiveCommandTrace, markLiveCommandPaint, startLiveCommandTrace } from '../lib/liveCommandPerformance';
 import {
   LIVE_CONFIRM_WINDOW_MS,
   LIVE_PREVIEW_PLACE_BARE,
@@ -283,7 +283,10 @@ const PreviewSection: React.FC<{
     return () => window.clearTimeout(timer);
   }, [placeConfirm]);
   const placingRef = useRef(false);
-  const [placed, setPlaced] = useState<{ key: string; result?: LeaderEntryPlaceResult; error?: string; unknown?: string } | null>(null);
+  const [placed, setPlaced] = useState<{
+    key: string; result?: LeaderEntryPlaceResult; error?: string; unknown?: string;
+    operationId?: string; receivedPerformanceAt?: number;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [now, setNow] = useState(() => Date.now());
@@ -330,6 +333,23 @@ const PreviewSection: React.FC<{
   const canSend = Boolean(view?.canSend && previewDraft && result?.wouldPlace && now - receivedAt <= PREVIEW_FRESH_MS);
   useEffect(() => { if (!canSend) { placeConfirmRef.current = null; setPlaceConfirm(null); } }, [canSend]);
   const shownPlaced = placed && placed.key === key ? placed : null;
+  useEffect(() => {
+    if (shownPlaced?.result?.status !== 'acknowledged' || !shownPlaced.operationId
+      || shownPlaced.receivedPerformanceAt == null) return undefined;
+    const operationId = shownPlaced.operationId;
+    const receivedPerformanceAt = shownPlaced.receivedPerformanceAt;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        if (!hasActiveLiveCommandTrace(operationId)) return;
+        markLiveCommandPaint({ operationId, stage: 'order', receivedPerformanceAt });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [shownPlaced?.operationId, shownPlaced?.receivedPerformanceAt, shownPlaced?.result?.status]);
   const placeKey = shown?.operationId ? `place:${shown.operationId}:${key}` : null;
   const confirming = placeKey != null && liveConfirmAsking(placeConfirm, placeKey, Date.now());
   const send = async () => {
@@ -351,7 +371,7 @@ const PreviewSection: React.FC<{
     setPlacing(true);
     try {
       const placedResult = await placeFn(previewDraft, shown!.operationId!);
-      setPlaced({ key, result: placedResult });
+      setPlaced({ key, result: placedResult, operationId: shown!.operationId!, receivedPerformanceAt: performance.now() });
       if (placedResult.status === 'acknowledged') onAcknowledged?.();
     } catch (reason) {
       const view = placeErrorView(reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.');
@@ -997,11 +1017,28 @@ const LiveOrderTicket: React.FC<Props> = ({
   const directBusyRef = useRef(false);
   // Po přijetí se návrh hned maže (nic nejde poslat podruhé); zelené „Přijato“
   // je jen chvilková ozvěna místo tlačítka, ne tlačítko.
-  const [sentFlash, setSentFlash] = useState<{ text: string } | null>(null);
+  const [sentFlash, setSentFlash] = useState<{
+    text: string; operationId: string; receivedPerformanceAt: number;
+  } | null>(null);
   useEffect(() => {
     if (!sentFlash) return undefined;
     const timer = window.setTimeout(() => setSentFlash(null), 1600);
     return () => window.clearTimeout(timer);
+  }, [sentFlash]);
+  useEffect(() => {
+    if (!sentFlash) return undefined;
+    const { operationId, receivedPerformanceAt } = sentFlash;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        if (!hasActiveLiveCommandTrace(operationId)) return;
+        markLiveCommandPaint({ operationId, stage: 'order', receivedPerformanceAt });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
   }, [sentFlash]);
   // U Marketu se cena mění s každým tickem — výsledek odeslání nesmí s tickem zmizet.
   // U Marketu klíčuje vzdálenost SL/TP od vstupu (ceny jedou s tickem), ne absolutní ceny.
@@ -1047,11 +1084,16 @@ const LiveOrderTicket: React.FC<Props> = ({
     setDirectBusy(true);
     const sentKey = directKey;
     try {
-      const result = await placeEntryLocked(previewDraft, `entry:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`);
+      const operationId = `entry:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+      const result = await placeEntryLocked(previewDraft, operationId);
       setDirect({ key: sentKey, view: placedResultView(result) });
       // Přijatý vstup: návrh se „promění“ v živý příkaz (štítek pozice v grafu, karta „Zadáno“).
       if (result.status === 'acknowledged') {
-        setSentFlash({ text: `${draft?.side === 'sell' ? 'Prodat' : 'Koupit'} ${previewDraft.quantity} ${instrument.symbol}` });
+        setSentFlash({
+          text: `${draft?.side === 'sell' ? 'Prodat' : 'Koupit'} ${previewDraft.quantity} ${instrument.symbol}`,
+          operationId,
+          receivedPerformanceAt: performance.now(),
+        });
         onDraft(null);
       }
     } catch (reason) {

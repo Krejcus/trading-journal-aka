@@ -86,7 +86,8 @@ describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)
     expect(ticket).toMatch(/onClick=\{event => \{ event\.currentTarget\.blur\(\); void sendDirect\(\); \}\}/);
     expect(ticket).toMatch(/directBusyRef\.current\) return;/);
     // Vstup jde přes sdílený zámek jednoho příkazu (`placeEntryLocked` = `runWithCommandLock` + onPlaceEntry).
-    expect(ticket).toMatch(/placeEntryLocked\(previewDraft, `entry:\$\{crypto\.randomUUID\(\)/);
+    expect(ticket).toMatch(/const operationId = `entry:\$\{crypto\.randomUUID\(\)/);
+    expect(ticket).toMatch(/placeEntryLocked\(previewDraft, operationId\)/);
     // Blokace náhledu (Market, SL/TP, chyby panelu, zastaralá cena) blokuje i přímé odeslání.
     expect(ticket).toMatch(/previewBlockedReason \?\? \(!previewDraft/);
   });

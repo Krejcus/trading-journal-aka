@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { recoverableCopierDelivery } from '../server/recoverableCopierDelivery';
+import { compactRecoverableCopierResult, recoverableCopierDelivery } from '../server/recoverableCopierDelivery';
 import { fileRelayDeliveryStore, type RelayDelivery, type RelayDeliveryStore } from '../server/copierRelayDeliveryStore';
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 import type { LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol';
@@ -26,10 +26,18 @@ function fixture() {
   const agent = { execute: vi.fn(async () => ({ ok: true })), status: vi.fn(() => ({ startedAt: new Date(0).toISOString() })) } as unknown as LocalCopierExecutionAgent;
   const request = vi.fn(async (body: Record<string, unknown>): Promise<Record<string, unknown>> => body.action === 'poll-v2'
     ? { protocol: 2, command: remote } : { protocol: 2, accepted: true });
-  const options = { store, agent, request, nextRevision: () => 1, onComplete: vi.fn(), now: () => now };
+  const options = { store, agent, request, nextRevision: () => 1,
+    onDurableResult: vi.fn(), onComplete: vi.fn(), now: () => now };
   return { options, remote, get saved() { return saved; }, set saved(v) { saved = v; }, setNow: (v: number) => { now = v; } };
 }
 describe('recoverable copier delivery', () => {
+  it('z horkého vstupu odstraní duplicitní status, ale u bezpečnostního příkazu ho zachová', () => {
+    const status = { startedAt: '2026-11-04T00:00:00.000Z', controller: { large: 'x'.repeat(20_000) } };
+    const result = { ok: true, status, result: { type: 'leader-entry-placed', status: 'acknowledged' } };
+    const entry = { type: 'copy-command', command: { type: 'place-leader-entry' } } as LocalCopierAgentCommand;
+    expect(compactRecoverableCopierResult(entry, result)).toEqual({ ok: true, result: result.result });
+    expect(compactRecoverableCopierResult({ type: 'disarm' }, result)).toBe(result);
+  });
   it('persists delivery before claiming and execution intent before executing', async () => {
     const f = fixture(); const step = recoverableCopierDelivery(f.options);
     f.options.request.mockImplementation(async body => {
@@ -39,6 +47,16 @@ describe('recoverable copier delivery', () => {
     });
     vi.mocked(f.options.agent.execute).mockImplementation(async () => { expect(f.saved?.phase).toBe('executing'); return { ok: true } as never; });
     await step(); expect(f.options.agent.execute).toHaveBeenCalledTimes(1); expectIdle(f.saved);
+  });
+  it('zobrazovací callback běží po durable výsledku, ale před vzdáleným ACK', async () => {
+    const f = fixture();
+    f.options.onDurableResult.mockImplementation(() => {
+      expect(f.saved?.phase).toBe('completed');
+      expect(f.options.request.mock.calls.some(([body]) => body.action === 'complete-v2')).toBe(false);
+    });
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.onDurableResult).toHaveBeenCalledWith(f.remote.id);
+    expect(f.options.onComplete).toHaveBeenCalledWith(f.remote.id);
   });
   it('předá ARM deadline s desetisekundovou rezervou na durable ACK a serverový createdAt', async () => {
     const f = fixture();
