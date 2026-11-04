@@ -967,7 +967,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       markLiveCommandResult(operationId, 'missing-result');
       throw new Error('Výsledek odeslání chybí — zkontroluj leadera v Tradovate, než to zkusíš znovu.');
     }
-    markLiveCommandResult(operationId, result.status);
     return result;
   }, []);
   const executeSafetyCommand = useCallback(async (command:

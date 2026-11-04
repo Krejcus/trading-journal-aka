@@ -288,7 +288,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-04 — LIVE rychlost: loopback wake + první flat pixel před finálním potvrzením (Codex, lokálně, NENASAZENO)
+### 2026-11-04 — Produkční A/B rychlosti: limit 628 ms, Market 660–751 ms, flat milník před ACK (Codex, NASAZENO A ZMĚŘENO)
+
+- Web i Mac worker byly sjednocené na čistém commitu `174c1b4b0c556bdcedf01e70b9038c61372ca886`;
+  Vercel deployment `dpl_5JMkDSVVZajQWejvKFcHSXuNfHPA` je READY bez alias chyby a nainstalovaný
+  bundle workeru má shodný SHA-256 `69483c74ba7f8259d52dc73ea8cafd81a816e6e06167198de78b4fb2fe4e3255`.
+- Foreground DEMO A/B na jediném manual-only účtu `DEMO8661118` potvrdilo funkční loopback wake:
+  každý hot příkaz z produkční stránky vyvolal dva `RELAY LOCAL WAKE`; vlastní workerová fronta byla
+  0–1 ms. BUY 1 MNQZ6 LIMIT se poprvé vykreslil v grafu za **628 ms** od potvrzovacího kliku
+  (předchozí srovnatelný inline výsledek 1 099 ms); broker OSO POST trval 219 ms. Limit se nevyplnil,
+  byl autoritativně zrušen. Dva nativní BUY 1 MNQZ6 Market vzorky vykreslily první order/fill stav za
+  **660 ms** a **751 ms**; broker POST trval 255/235 ms. Jde o malé n, ne p50/p95.
+- Ruční close posledního Marketu měl v durable akci `createdAt=1793801230697`, první display-only flat
+  `displayAt=1793801231665` (**968 ms**), finální durable update 1 180 ms a relay ACK přibližně 1 400 ms
+  od vytvoření. Nový flat milník tedy odstranil z prvního zobrazení asi 212 ms čekání na finální durable
+  výsledek a zhruba 432 ms čekání na relay ACK; brokerová cesta sama byla dál dominantní
+  (write 440 ms, stream flat 511 ms, REST verify 212 ms).
+- Nativní iPhone app tuto desktopovou loopback zkratku nepoužije (`capacitor://localhost` není Mac
+  `127.0.0.1`) a současný nainstalovaný iOS bundle změnu ještě neobsahuje. Po novém iOS buildu získá
+  dřívější display-only stav, ale command delivery dál poběží cloudovou Realtime cestou; telefonní
+  přínos proto musí mít vlastní native foreground A/B a nesmí se odvozovat z webového narrow layoutu.
+- Produkční měření odhalilo diagnostickou díru: management/close stopa znala relay výsledek, ale neoznačila
+  ho jako `resultMs`, takže se po position paintu nedokončila do konzole. Lokální následný patch nyní
+  propíše úspěšný vnitřní status pro inline i poll výsledek a odstraní dřívější dvojité uzavření vstupní
+  stopy. Cílené regrese 133/133, plná sada 735 souborů / 7 515 testů zeleně (1 skip, 1 todo), produkční
+  build a `git diff --check` prošly. Patch je pouze diagnostický a execution chování nemění.
+- Závěr testu: kopírka ručně OFF, `environment=demo`, `armed=false`, `groupFlat=true`, 0 broker pozic,
+  0 working orders, bez divergence/stuck/error. Následný read-only reconcile vrátil
+  `authoritativelyClean=true`; žádný broker příkaz při reconcile neodešel.
+
+### 2026-11-04 — LIVE rychlost: loopback wake + první flat pixel před finálním potvrzením (Codex, NASAZENO)
 
 - Čerstvý rozklad produkčního DEMO vzorku ukázal, že samotný zašifrovaný worker → graf broadcast stojí
   jen 2–5 ms a crash-safe 55kB zápis na disk lokálně medián 7,6 ms (p95 7,8 ms). Zbývající ovlivnitelná
@@ -306,8 +335,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   zeleně (1 skip, 1 todo); produkční Vite/PWA build, samostatný Node 20 pilot bundle + syntax check a
   `git diff --check` prošly. Kořenový typecheck s 4 GB hlásí jen stejné známé chyby samostatné Chrome
   extension a starý nesouvisející tuple typ v `tests/macCopierCommandRelay.test.ts`; dotčený kód nemá novou
-  chybu. Balík v tomto commitu ještě není pushnutý, nasazený ani nainstalovaný a v této fázi neposlal
-  brokerovi žádný nový příkaz; další krok je přesný web+worker release a stejné foreground DEMO A/B.
+  chybu. Balík byl následně pushnutý, nasazený a nainstalovaný jako `174c1b4b`; přesné produkční A/B a
+  závěrečný bezpečný stav jsou v zápisu výše.
 
 ### 2026-11-04 — LIVE rychlost: durable výsledek do grafu před server ACK + kompaktní hot result (Codex, lokálně, NENASAZENO)
 

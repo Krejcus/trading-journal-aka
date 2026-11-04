@@ -1,5 +1,6 @@
 import { perfDuration, perfMark, perfServerTiming, perfSlug } from '../lib/perfTrace';
 import {
+  markLiveCommandResult,
   markLiveCommandRelayResult,
   markLiveCommandRelayStart,
   startLiveCommandTrace,
@@ -457,6 +458,17 @@ export async function executeTradovateCopierRelayCommand(
   const markTraceResult = (via: 'inline' | 'poll' | 'error', status?: string) => {
     if (traceOperationId) markLiveCommandRelayResult(traceOperationId, { via, ...(status ? { status } : {}), serverTiming: traceServerTiming });
   };
+  const markTraceSuccess = (payload: unknown, fallback: string) => {
+    if (!traceOperationId) return;
+    const commandResult = payload && typeof payload === 'object' && 'result' in payload
+      ? (payload as { result?: unknown }).result
+      : null;
+    const status = commandResult && typeof commandResult === 'object' && 'status' in commandResult
+      && typeof (commandResult as { status?: unknown }).status === 'string'
+      ? (commandResult as { status: string }).status
+      : fallback;
+    markLiveCommandResult(traceOperationId, status);
+  };
   perfMark(`${perfCommand}:send`);
   const cachedHint = hotRelayCommand(command) ? relayTargetHints.get(connectionId) : undefined;
   const relayTargetHint = cachedHint && performance.now() - cachedHint.receivedAt <= RELAY_TARGET_HINT_CLIENT_MAX_AGE_MS
@@ -489,7 +501,10 @@ export async function executeTradovateCopierRelayCommand(
     const via = queued.resolution.status === 'succeeded' ? 'inline' : 'error';
     recordHotCommandTiming(command, sentAt, via);
     markTraceResult(via, queued.resolution.status);
-    if (queued.resolution.status === 'succeeded' && queued.resolution.result) return queued.resolution.result as LocalCopierAgentCommandResult;
+    if (queued.resolution.status === 'succeeded' && queued.resolution.result) {
+      markTraceSuccess(queued.resolution.result, queued.resolution.status);
+      return queued.resolution.result as LocalCopierAgentCommandResult;
+    }
     const details = localCopierAgentErrorDetails(
       queued.resolution.result && typeof queued.resolution.result === 'object' && 'errorDetails' in queued.resolution.result
         ? { details: queued.resolution.result.errorDetails }
@@ -526,6 +541,7 @@ export async function executeTradovateCopierRelayCommand(
     if (result.status === 'succeeded' && result.result) {
       recordHotCommandTiming(command, sentAt, 'poll');
       markTraceResult('poll', result.status);
+      markTraceSuccess(result.result, result.status);
       return result.result as LocalCopierAgentCommandResult;
     }
     if (result.status === 'rejected' || result.status === 'expired') {
