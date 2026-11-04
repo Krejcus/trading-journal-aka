@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-04 — bezpečný balík LIVE latency: display cadence + diagnostika fronty broker frame (lokálně)
+### 2026-11-04 — LIVE latency: 16ms display nasazen + Order hydratace změřena (Codex)
 
 - Dvě agresivnější varianty (dispatch `Fill` mimo pořadí a dočasně autoritativní
   tvar objednávky z place ACK) byly po bezpečnostní kontrole zamítnuty a v diffu
@@ -303,8 +303,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověření: cílené sady 79/79, plná sada 7518 testů prošla (1 todo), produkční
   build a oba worker bundly prošly; TypeScript neukázal novou chybu (zůstává
   známý baseline extension typů a starší tuple chyba testu).
-- Stav: změny jsou zatím pouze lokální. Nic nebylo pushnuto ani nasazeno,
-  worker nebyl přeinstalován, ARM se neměnil a brokerovi nic neodešlo.
+- Commit `1e05ff4c74a719b69135231e22a4e310e864d33c` je na `main`; produkční
+  deployment `dpl_FJhjYWLhL3DNf7NQ8T3U92eytWTT` je READY a Mac worker byl
+  bezpečně reinstalován ze stejného čistého SHA. Před i po instalaci: DEMO,
+  DISARMED, flat, bez pracovních příkazů/divergence/chyby, reconcile čistý.
+- Jediný chráněný test: první Market pokus worker správně odmítl bez zápisu,
+  protože se cena pohnula o více než 8 ticků. Druhý 1× MNQ Market měl SL 6 bodů
+  a TP 12 bodů; broker přijal OSO za 232 ms, Fill dorazil do Macu 53 ms po
+  broker timestampu, ale čekal 227 ms před handlerem. SL uzavřel pozici za
+  −5 USD (broker den po poplatcích −197,56 USD). Ihned potom DISARM; závěrečný
+  reconcile: autoritativně flat, orders `[]`, žádná divergence, worker OFF.
+- Nový log prokázal, že čekání Fill není render: před ním zpracovával první
+  balík `Order/Command/OrderVersion` přibližně 242 ms. Display exposure se po
+  broker ACK publikovala za 26 ms; šifrování+WS publish typicky 1–4 ms.
+- Následná lokální diagnostika v2 opravuje lowercase `fill`, přidává ID
+  zahájených `/orderVersion/deps` hydratací a odděluje `queue/handler/total`.
+  Exekuční pořadí ani chování nemění. Regrese 57/57; plná sada 7519 testů
+  prošla (1 todo), produkční build a worker bundle prošly. TypeScript má jen
+  známý baseline extension typů a starší tuple chybu mimo změnu. Tato v2 je
+  zatím lokální a před dalším nasazením neproběhne další broker obchod dnes.
 
 ### 2026-11-04 — Telefonní E2E měření + pravdivý Fill dispatch (Codex, NASAZENO A ZMĚŘENO)
 

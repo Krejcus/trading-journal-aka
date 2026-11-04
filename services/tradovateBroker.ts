@@ -432,7 +432,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let syncRetry: ReturnType<typeof setTimeout> | null = null;
   let socketMessageTail: Promise<void> = Promise.resolve();
   let semanticFrameSequence = 0;
-  let pendingSemanticFrames: Array<{ id: number; receivedAt: number; summary: string }> = [];
+  let pendingSemanticFrames: Array<{
+    id: number;
+    receivedAt: number;
+    processingStartedAt?: number;
+    summary: string;
+  }> = [];
   let lastSocketMessageAt = 0;
   /** Běžící REST merge do map příkazů (order graf, cílené čtení) — snímek streamu pak není konzistentní. */
   let orderGraphMerges = 0;
@@ -2034,8 +2039,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           });
         return;
       }
-      const summary = semanticFrameSummary(messages);
-      const blockers = summary.includes('Fill')
+      const hydrationSummary = preparedOrderVersions?.size
+        ? `+hydrate#${[...preparedOrderVersions.keys()].slice(0, 6).join(',')}`
+        : '';
+      const summary = `${semanticFrameSummary(messages)}${hydrationSummary}`;
+      const blockers = summary.toLowerCase().includes('fill')
         ? pendingSemanticFrames.map(frame => frame.summary).slice(-4)
         : [];
       if (blockers.length > 0) {
@@ -2045,11 +2053,16 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           // Diagnostika nesmí ovlivnit stream.
         }
       }
-      const semanticFrame = { id: ++semanticFrameSequence, receivedAt, summary };
+      const semanticFrame: (typeof pendingSemanticFrames)[number] = {
+        id: ++semanticFrameSequence,
+        receivedAt,
+        summary,
+      };
       pendingSemanticFrames.push(semanticFrame);
       socketMessageTail = socketMessageTail
         .then(() => {
           if (socket !== candidate) return;
+          semanticFrame.processingStartedAt = clock();
           if (parseError) throw parseError;
           return handleSocketData(
             event.data,
@@ -2072,10 +2085,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           closeSocket(candidate, 'socket-message-error', minimumDelayMs);
         })
         .finally(() => {
-          const durationMs = Math.max(0, clock() - semanticFrame.receivedAt);
-          if (durationMs >= 50) {
+          const completedAt = clock();
+          const processingStartedAt = semanticFrame.processingStartedAt ?? completedAt;
+          const queueMs = Math.max(0, processingStartedAt - semanticFrame.receivedAt);
+          const handlerMs = Math.max(0, completedAt - processingStartedAt);
+          const totalMs = Math.max(0, completedAt - semanticFrame.receivedAt);
+          if (handlerMs >= 50) {
             try {
-              console.log(`${new Date(clock()).toISOString()} BROKER SEMANTIC SLOW frame=${semanticFrame.summary} duration=${Math.round(durationMs)}ms`);
+              console.log(`${new Date(completedAt).toISOString()} BROKER SEMANTIC SLOW frame=${semanticFrame.summary}`
+                + ` queue=${Math.round(queueMs)}ms handler=${Math.round(handlerMs)}ms total=${Math.round(totalMs)}ms`);
             } catch {
               // Diagnostika nesmí ovlivnit stream.
             }
