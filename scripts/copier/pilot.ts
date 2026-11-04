@@ -1952,6 +1952,33 @@ async function runLocalAgent(
             }
           };
         },
+        // F2a: potvrzenou expozici poslat už otevřeným WebSocketem. Dokud
+        // kanál není připojený, `false` nechá relay použít původní REST cestu.
+        createExposurePublisher: config => {
+          const client = createSupabaseClient(config.url, config.anonKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          });
+          const channel = client.channel(config.topic, { config: { broadcast: { self: false, ack: false } } });
+          let joined = false;
+          channel.subscribe(subscriptionState => {
+            joined = subscriptionState === 'SUBSCRIBED';
+            if (joined) console.log(`${new Date().toISOString()} LIVE EXPOSURE WS aktivní`);
+          });
+          return {
+            async publish(event, payload) {
+              if (!joined || !client.realtime.isConnected() || channel.state !== 'joined') return false;
+              return await channel.send({ type: 'broadcast', event, payload }) === 'ok';
+            },
+            async close() {
+              joined = false;
+              try {
+                await client.removeChannel(channel);
+              } finally {
+                client.realtime.disconnect();
+              }
+            },
+          };
+        },
         // Jen předání konfigurace kanálu ceny vláknu — relay na nic nečeká.
         onRealtimeConfig: realtime => tvPriceStream?.update(tvPriceStreamConfigFromRealtime(realtime, {
           targetId: dedicatedChartRef.targetId, chartId: dedicatedChartRef.chartId,

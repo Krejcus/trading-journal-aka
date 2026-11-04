@@ -4179,6 +4179,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     manualEntryAudit(operationId, status === 'acknowledged' ? 'recovered' : status === 'rejected' ? 'rejected' : status === 'abandoned' ? 'abandoned' : 'unknown',
       status === 'acknowledged' ? (bare ? `ruční Market BEZ SL/TP přijat: vstup ${entryId} [POST ${ackAt - dispatchAt} ms]` : `ruční OSO přijato: vstup ${entryId}, SL ${stopId}, TP ${targetId} [POST ${ackAt - dispatchAt} ms]`) : reason!, entryId);
+    // ACK už je autoritativní brokerová odpověď a výše jsme z něj sestavili
+    // zobrazovací liveOrders i durable manualEntry. Probuď LIVE hned teď:
+    // čekat na následný order event stejného OSO přidávalo stovky ms, přestože
+    // už nebylo na co čekat. Signál je pouze display-only; exekuci ani risk
+    // brány neovlivňuje a relay si rychlé duplicity sloučí.
+    notifyLiveChange();
     return {
       type: 'leader-entry-placed', operationId, status, checkedAt: clock(), blockers: [], ...ids, ...(resultReason ? { reason: resultReason } : {}),
     };

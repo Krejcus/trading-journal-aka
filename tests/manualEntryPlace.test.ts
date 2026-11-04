@@ -110,6 +110,39 @@ describe('fáze 1b: odeslání ručního vstupu na leadera', () => {
     expect(stored[0]).toMatchObject({ operationId: 'entry:manualtest01', status: 'acknowledged', entryBrokerOrderId: result.entryBrokerOrderId });
   });
 
+  it('broker ACK probudí LIVE ihned i bez následné stream události', async () => {
+    const ctx = await setup({
+      patchBroker: broker => {
+        broker.placeOso = async (request: BrokerOsoRequest) => ({
+          entryBrokerOrderId: `ack-${request.accountId}-entry`,
+          firstBrokerOrderId: `ack-${request.accountId}-stop`,
+          secondBrokerOrderId: `ack-${request.accountId}-target`,
+          accepted: true,
+          definitive: true,
+        });
+      },
+    });
+    let calls = 0;
+    const off = ctx.controller.subscribeLiveChange!(() => { calls += 1; });
+    try {
+      const result = await ctx.place(ctx.command());
+      expect(result).toMatchObject({
+        status: 'acknowledged',
+        entryBrokerOrderId: 'ack-100-entry',
+        stopBrokerOrderId: 'ack-100-stop',
+        targetBrokerOrderId: 'ack-100-target',
+      });
+      expect(calls).toBe(1);
+      expect(ctx.controller.status().manualEntries?.at(-1)).toMatchObject({
+        operationId: 'entry:manualtest01',
+        status: 'acknowledged',
+        entryBrokerOrderId: 'ack-100-entry',
+      });
+    } finally {
+      off();
+    }
+  });
+
   it('stejné operationId se nikdy nepošle znovu; jiný obsah se stejným id = blocked', async () => {
     const ctx = await setup();
     const first = await ctx.place(ctx.command());

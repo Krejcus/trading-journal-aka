@@ -67,6 +67,12 @@ export interface MacCopierRealtimeKickConfig {
   topic: string;
 }
 
+export interface MacCopierRealtimePublisher {
+  /** `true` jen když zpráva odešla už připojeným WebSocketem; `false` = použít REST fallback. */
+  publish(event: string, payload: unknown): Promise<boolean>;
+  close(): Promise<void> | void;
+}
+
 export interface MacTvAlertSnapshotRequest {
   id: string;
   symbol: string;
@@ -100,6 +106,12 @@ export function startMacCopierCommandRelay(options: {
     config: MacCopierRealtimeKickConfig,
     onMessage: (payload: unknown) => void,
   ) => () => Promise<void> | void;
+  /**
+   * F2a fast path: dlouho žijící Realtime kanál pro display-only expozici.
+   * Nepřipojený/porouchaný publisher vrátí `false` a relay použije původní
+   * HTTP broadcast. Exekuce ani potvrzení příkazu na této cestě nečekají.
+   */
+  createExposurePublisher?: (config: MacCopierRealtimeKickConfig) => MacCopierRealtimePublisher;
   /** Fire-and-forget handoff; the relay poll never awaits chart capture. */
   onSnapshotRequests?: (requests: readonly MacTvAlertSnapshotRequest[]) => void;
   /**
@@ -214,6 +226,16 @@ export function startMacCopierCommandRelay(options: {
    * ni nečeká (INV-WORKER-04) a nenese data (INV-RELAY-04).
    */
   let nudgeConfig: { url: string; anonKey: string; topic: string; key: string | null } | null = null;
+  let exposurePublisher: MacCopierRealtimePublisher | null = null;
+  let exposurePublisherKey: string | null = null;
+  const clearExposurePublisher = async () => {
+    const current = exposurePublisher;
+    exposurePublisher = null;
+    exposurePublisherKey = null;
+    if (current) {
+      try { await current.close(); } catch { /* display-only publisher */ }
+    }
+  };
   let lastNudgeAt = 0;
   let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
   const NUDGE_MIN_SPACING_MS = 250;
@@ -236,16 +258,35 @@ export function startMacCopierCommandRelay(options: {
     if (stopped || !nudgeConfig || nudgeTimer) return;
     const wait = lastNudgeAt + NUDGE_MIN_SPACING_MS - Date.now();
     if (wait <= 0) { sendNudgeNow(); return; }
-    nudgeTimer = setTimeout(() => { nudgeTimer = null; sendNudgeNow(); }, wait);
+    // Platformní timer smí kvůli zaokrouhlení probudit o 1 ms dřív. Po probuzení
+    // proto podmínku znovu vyhodnotit, neporušit deklarovaný minimální rozestup.
+    nudgeTimer = setTimeout(() => { nudgeTimer = null; sendStatusNudge(); }, wait);
     nudgeTimer.unref?.();
+  };
+  const updateExposurePublisher = (next: typeof nudgeConfig) => {
+    const nextPublisherKey = next?.key ? `${next.url}\n${next.anonKey}\n${next.topic}` : null;
+    if (nextPublisherKey === exposurePublisherKey) return;
+    const previous = exposurePublisher;
+    exposurePublisher = null;
+    exposurePublisherKey = null;
+    if (previous) void Promise.resolve(previous.close()).catch(() => undefined);
+    if (nextPublisherKey && next && options.createExposurePublisher) {
+      try {
+        exposurePublisher = options.createExposurePublisher({ url: next.url, anonKey: next.anonKey, topic: next.topic });
+        exposurePublisherKey = nextPublisherKey;
+      } catch {
+        // HTTP broadcast zůstává autoritativní fallback zobrazovací cesty.
+      }
+    }
   };
   const notifyRealtimeConfig = (realtime: unknown) => {
     const config = realtime as { url?: unknown; anonKey?: unknown; nudgeTopic?: unknown; nudgeKey?: unknown } | null | undefined;
-    nudgeConfig = typeof config?.url === 'string' && typeof config.anonKey === 'string'
+    const next = typeof config?.url === 'string' && typeof config.anonKey === 'string'
       && typeof config.nudgeTopic === 'string' && config.nudgeTopic.startsWith('copier-nudge-')
       ? { url: config.url, anonKey: config.anonKey, topic: config.nudgeTopic,
         key: typeof config.nudgeKey === 'string' && /^[A-Za-z0-9_-]{43}$/.test(config.nudgeKey) ? config.nudgeKey : null }
       : null;
+    nudgeConfig = next;
     try {
       // Klíč expozice patří jen sem: zobrazovací doplňky (vlákno ceny) ho nedostanou;
       // klíč hlídače upozornění jde zvlášť jen jeho vláknu.
@@ -265,6 +306,7 @@ export function startMacCopierCommandRelay(options: {
     } catch {
       // Hlídač upozornění nesmí ovlivnit doručení příkazu.
     }
+    updateExposurePublisher(next);
   };
 
   /**
@@ -305,16 +347,29 @@ export function startMacCopierCommandRelay(options: {
       if (!envelope || stopped) return;
       const encryptMs = performance.now() - encryptStartedAt;
       const body = JSON.stringify({ messages: [{ topic: config.topic, event: COPIER_LIVE_EXPOSURE_EVENT, payload: envelope }] });
-      const httpStartedAt = performance.now();
-      const response = await fetchImpl(`${config.url}/realtime/v1/api/broadcast`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: config.anonKey, Authorization: `Bearer ${config.anonKey}` },
-        body,
-        signal: AbortSignal.timeout(1_500),
-      });
+      const publishStartedAt = performance.now();
+      let transport = 'rest';
+      let publishStatus: string | number = 'fallback';
+      try {
+        if (await exposurePublisher?.publish(COPIER_LIVE_EXPOSURE_EVENT, envelope)) {
+          transport = 'ws';
+          publishStatus = 'ok';
+        }
+      } catch {
+        // Připojený kanál je pouze optimalizace; níže vždy zůstává REST fallback.
+      }
+      if (transport === 'rest') {
+        const response = await fetchImpl(`${config.url}/realtime/v1/api/broadcast`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: config.anonKey, Authorization: `Bearer ${config.anonKey}` },
+          body,
+          signal: AbortSignal.timeout(1_500),
+        });
+        publishStatus = response.status;
+      }
       console.log(`${new Date().toISOString()} LIVE EXPOSURE seq=${status.displaySeq} bytes=${body.length}`
-        + ` encryptMs=${Math.round(encryptMs)} httpMs=${Math.round(performance.now() - httpStartedAt)}`
-        + ` totalMs=${Math.round(performance.now() - totalStartedAt)} status=${response.status}`);
+        + ` encryptMs=${Math.round(encryptMs)} publishMs=${Math.round(performance.now() - publishStartedAt)}`
+        + ` totalMs=${Math.round(performance.now() - totalStartedAt)} transport=${transport} status=${publishStatus}`);
     } catch {
       console.log(`${new Date().toISOString()} LIVE EXPOSURE seq=${seq ?? '?'} failed totalMs=${Math.round(performance.now() - totalStartedAt)}`);
       // Jen zrychlení zobrazení; poll a heartbeat jedou dál.
@@ -704,6 +759,7 @@ export function startMacCopierCommandRelay(options: {
       await Promise.all([running, background, statusHeartbeat]);
       await clearKickSubscription();
       await clearPushSubscription();
+      await clearExposurePublisher();
     },
   };
 }

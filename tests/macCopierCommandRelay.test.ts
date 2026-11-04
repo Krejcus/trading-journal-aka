@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { startMacCopierCommandRelay } from '../server/macCopierCommandRelay';
-import { decryptCopierLiveExposure } from '../lib/copierLiveExposure';
+import { COPIER_LIVE_EXPOSURE_EVENT, decryptCopierLiveExposure } from '../lib/copierLiveExposure';
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 import {
   LocalCopierAgentCommandError,
@@ -685,6 +685,53 @@ describe('recoverable relay lane isolation', () => {
       await new Promise(resolve => setTimeout(resolve, 400));
       expect(broadcasts.filter(item => item.event === 'exposure').length).toBeLessThanOrEqual(2);
     } finally { await relay.close(); }
+  });
+
+  it('expozice používá připojený WebSocket publisher a při úspěchu nedělá REST broadcast', async () => {
+    const listeners = new Set<() => void>();
+    let seq = 0;
+    const agent = {
+      status: () => ({ ...status(), displaySeq: ++seq, displayBuiltAt: 2_000 + seq }),
+      execute: vi.fn(async () => ({ ok: true })),
+      subscribeLiveChange: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    } as unknown as LocalCopierExecutionAgent;
+    const key = 'W'.repeat(43);
+    const topic = 'copier-nudge-websocketpublisher';
+    const restExposure: unknown[] = [];
+    const publish = vi.fn(async () => true);
+    const closePublisher = vi.fn(async () => undefined);
+    const configs: unknown[] = [];
+    const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith('/realtime/v1/api/broadcast')) {
+        const message = JSON.parse(String(init?.body)).messages[0];
+        if (message.event === COPIER_LIVE_EXPOSURE_EVENT) restExposure.push(message);
+        return new Response(null, { status: 202 });
+      }
+      const body = JSON.parse(String(init?.body));
+      if (body.action === 'poll-v2') return Response.json({ protocol: 2, command: null, realtime: {
+        url: 'https://project.invalid', anonKey: 'anon', topic: 'copier-kick-x', nudgeTopic: topic, nudgeKey: key,
+      } });
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://offline.invalid', agent, authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => null, write: async () => undefined }, fetchImpl: fetchImpl as typeof fetch,
+      createExposurePublisher: config => {
+        configs.push(config);
+        return { publish, close: closePublisher };
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(configs).toHaveLength(1));
+      expect(configs[0]).toMatchObject({ url: 'https://project.invalid', anonKey: 'anon', topic });
+      for (const listener of listeners) listener();
+      await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce(), { timeout: 1_000 });
+      expect(publish.mock.calls[0]?.[0]).toBe(COPIER_LIVE_EXPOSURE_EVENT);
+      expect(restExposure).toEqual([]);
+    } finally {
+      await relay.close();
+    }
+    expect(closePublisher).toHaveBeenCalledOnce();
   });
 
   it('bez nudgeTopic v realtime konfiguraci žádný budíček (starý server)', async () => {

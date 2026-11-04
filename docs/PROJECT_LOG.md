@@ -288,6 +288,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE rychlost: první reálný baseline a dřívější ACK do grafu (Codex, lokálně, NENASAZENO)
+
+- Produkční web i worker `8353358d` byly ověřené na jediném účtu `DEMO8661118` (manual-only,
+  MNQZ6, bez followerů). Jediný uživatelem potvrzený BUY 1 LIMIT 28 358,50 se SL 28 346,50
+  a TP 28 382,50 broker přijal bez duplicity. Příkaz později vyplnil 28 358,50 a SL ho uzavřel
+  28 346,25; brokerový stav je znovu flat/no-working, worker zůstal ARMED bez chyby.
+- Čistý foreground baseline potvrzovací klik → HTTP výsledek byl 1 080 ms a klik → první
+  autoritativní order paint 1 318 ms. Rozklad: klik → worker queue 445 ms, queue → start 1 ms,
+  příprava 16 ms, broker dispatch → order event 268 ms / ACK 290 ms, exposure receive → paint
+  107 ms. Pozdější fill → position paint vyšel 702 ms, ale karta mezitím ztratila focus, proto
+  tento vzorek není platný foreground benchmark.
+- Kořen zbytečného čekání: ACK už obsahoval autoritativní ID vstupu/SL/TP a controller z něj
+  sestavil durable záznam i zobrazovací working orders, ale `subscribeLiveChange` se probudil až
+  po navazujícím broker eventu za frontou. Lokální změna volá display-only notifikaci hned po
+  commitu ACK; exekuci, admission, risk ani pořadí událostí nemění. Regrese bez jediného stream
+  eventu dokládá okamžitý signál a autoritativní ACK stav.
+- První F2a broadcast po delší nečinnosti stál 157 ms, další 59 ms. Lokální změna proto drží
+  samostatný Realtime WebSocket publisher pro zašifrovanou display-only expozici; pokud kanál
+  není joinutý nebo selže, beze změny použije původní REST broadcast. Žádný příkaz ani broker ACK
+  na této optimalizaci nečeká. Očekávaný cíl stejného A/B je klik → order pixel přibližně
+  0,8–1,0 s; tvrdit výsledek lze až po shodném deployi webu/workeru a novém foreground vzorku.
+- Ověření lokální větve `codex/live-speed-20261104`: 118/118 cílených testů, TypeScript čistý,
+  worker bundle i čerstvý produkční `dist` vznikly. Plná paralelní sada dala 7 484/7 494; všech
+  devět pádů (šest 5s timeoutů pod zatížením, dva známé časové/WS flaky a jeden po změně příliš
+  krátký zdrojový guard) bylo po opravě guardu izolovaně zopakováno 85/85. Nic nebylo commitnuto,
+  pushnuto, nasazeno ani reinstalováno; produkční worker dál běží na `8353358d`.
+
 ### 2026-11-04 — LIVE rychlost: pravdivá stopa potvrzovací klik → worker/broker → první pixel (Codex, lokálně, NENASAZENO)
 
 - Proč: noční funkční/safety práce nepřeměřila rychlost v aktivním grafu; staré browserové vzorky
