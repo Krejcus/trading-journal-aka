@@ -288,6 +288,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — LIVE latency: socket OrderVersion před pomalým REST (Codex, LOKÁLNĚ)
+
+- Poslední chráněný DEMO vzorek prokázal `broker→frame 53 ms`, ale Fill čekal
+  dalších 227 ms za předchozím Order rámcem; ten blokovala přibližně 242ms
+  `/orderVersion/deps` hydratace. Render ani controller listenery tuto prodlevu
+  nevytvářely.
+- Lokální změna ponechává REST spuštěný souběžně jako fallback. Pokud ale přesně
+  následující broker frame přinese jako první relevantní entitu téhož orderu
+  autoritativní `OrderVersion`, starší Order už na pomalejší REST nečeká. Verzi
+  aplikuje až její vlastní frame v původním serializovaném pořadí; Fill se nikdy
+  nepředbíhá a žádný požadovaný/ACK tvar se nevydává za potvrzený brokerem.
+- Konzervativní hranice: Fill/Order/Command před verzí, pozdější než následující
+  frame, chybějící verze, chyba nebo konec socketu zachovají původní REST cestu.
+  Pozdní REST výsledek už nesmí přepsat dříve aplikovanou socket verzi.
+- Cílené brokerové regrese 59/59: správná verze z následujícího rámce odblokuje
+  Fill i po 75 ms a zachová pořadí `OrderVersion → Fill`; verze až za Fillem
+  zkratku nepovolí. Plná sada: 735 souborů / 7 521 testů prošlo (1 skip,
+  1 todo). Produkční build a worker bundle + syntax check prošly; TypeScript má
+  jen známý baseline chybějících Chrome typů/pluginu v samostatné extension a
+  starší tuple chybu testu, nic z dotčených souborů. Změna je pouze lokální,
+  bez instalace, deploye nebo dalšího broker zápisu. Worker v produkci zůstává
+  OFF a účet podle posledního čerstvého reconcile flat bez pracovních příkazů.
+
 ### 2026-11-04 — LIVE latency: 16ms display nasazen + Order hydratace změřena (Codex)
 
 - Dvě agresivnější varianty (dispatch `Fill` mimo pořadí a dočasně autoritativní

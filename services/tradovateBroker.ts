@@ -437,7 +437,16 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     receivedAt: number;
     processingStartedAt?: number;
     summary: string;
+    stagedOrderVersions: Array<{ orderId: number; versionId: number; frameId: number }>;
   }> = [];
+  let stagedOrderVersions = new Map<number, Map<number, Map<number, number>>>();
+  let activeSemanticFrameId: number | null = null;
+  type StagedOrderVersionWaiter = {
+    requiredVersionId?: number;
+    frameId: number;
+    finish: (seen: boolean) => void;
+  };
+  let stagedOrderVersionWaiters = new Map<number, Set<StagedOrderVersionWaiter>>();
   let lastSocketMessageAt = 0;
   /** Běžící REST merge do map příkazů (order graf, cílené čtení) — snímek streamu pak není konzistentní. */
   let orderGraphMerges = 0;
@@ -825,6 +834,142 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     | { ok: false; error: unknown };
   type PreparedOrderVersions = Map<number, Promise<OrderVersionFetchResult>>;
 
+  const stagedOrderVersionMatches = (
+    orderId: number,
+    requiredVersionId: number | undefined,
+    frameId: number | null = activeSemanticFrameId,
+  ): boolean => {
+    if (frameId == null) return false;
+    const versions = stagedOrderVersions.get(orderId);
+    if (!versions) return false;
+    for (const [versionId, frames] of versions) {
+      if (requiredVersionId != null && versionId < requiredVersionId) continue;
+      if (frames.has(frameId) || frames.has(frameId + 1)) return true;
+    }
+    return false;
+  };
+
+  const waitForStagedOrderVersion = (
+    orderId: number,
+    requiredVersionId?: number,
+  ): Promise<boolean> => {
+    const frameId = activeSemanticFrameId;
+    if (frameId == null) return Promise.resolve(false);
+    if (stagedOrderVersionMatches(orderId, requiredVersionId, frameId)) return Promise.resolve(true);
+    // Následující frame už byl celý prohlédnutý a přesná verze v něm není.
+    // Není tedy na co čekat; rozhodne souběžně běžící REST fallback.
+    if (semanticFrameSequence > frameId) return Promise.resolve(false);
+    return new Promise(resolveWait => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let settled = false;
+      const waiter: StagedOrderVersionWaiter = {
+        requiredVersionId,
+        frameId,
+        finish: seen => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeouts(timer);
+          const waiters = stagedOrderVersionWaiters.get(orderId);
+          waiters?.delete(waiter);
+          if (waiters?.size === 0) stagedOrderVersionWaiters.delete(orderId);
+          resolveWait(seen);
+        },
+      };
+      const waiters = stagedOrderVersionWaiters.get(orderId) ?? new Set<StagedOrderVersionWaiter>();
+      waiters.add(waiter);
+      stagedOrderVersionWaiters.set(orderId, waiters);
+      // REST hydratace běží souběžně. Timeout pouze ohraničuje život čekatele;
+      // důkazem dál zůstane REST nebo přesně následující prohlédnutý frame.
+      timer = timeouts(() => waiter.finish(false), 250);
+      if (stagedOrderVersionMatches(orderId, requiredVersionId, frameId)) waiter.finish(true);
+    });
+  };
+
+  const stageOrderVersions = (
+    messages: readonly unknown[],
+    frameId: number,
+  ): Array<{ orderId: number; versionId: number; frameId: number }> => {
+    const staged: Array<{ orderId: number; versionId: number; frameId: number }> = [];
+    const seenOrderIds = new Set<number>();
+    const visitProps = (payload: unknown) => {
+      for (const raw of Array.isArray(payload) ? payload : [payload]) {
+        if (!raw || typeof raw !== 'object') continue;
+        const item = raw as { entityType?: string; entity?: Record<string, unknown> };
+        const entityType = item.entityType?.toLowerCase();
+        const entity = item.entity;
+        if (!entity) continue;
+        const orderId = Number(entityType === 'order' ? entity.id : entity.orderId);
+        if (!Number.isSafeInteger(orderId)) continue;
+        if (entityType !== 'orderversion' || seenOrderIds.has(orderId)) {
+          seenOrderIds.add(orderId);
+          continue;
+        }
+        const versionId = Number(entity.id);
+        if (!Number.isSafeInteger(versionId)) continue;
+        const versions = stagedOrderVersions.get(orderId) ?? new Map<number, Map<number, number>>();
+        const frames = versions.get(versionId) ?? new Map<number, number>();
+        frames.set(frameId, (frames.get(frameId) ?? 0) + 1);
+        versions.set(versionId, frames);
+        stagedOrderVersions.set(orderId, versions);
+        staged.push({ orderId, versionId, frameId });
+        seenOrderIds.add(orderId);
+        for (const waiter of [...(stagedOrderVersionWaiters.get(orderId) ?? [])]) {
+          if ((waiter.requiredVersionId == null || versionId >= waiter.requiredVersionId)
+            && (frameId === waiter.frameId || frameId === waiter.frameId + 1)) waiter.finish(true);
+        }
+      }
+    };
+    const visit = (message: unknown) => {
+      if (Array.isArray(message)) {
+        for (const item of message) visit(item);
+        return;
+      }
+      if (!message || typeof message !== 'object') return;
+      const value = message as { e?: string; d?: unknown };
+      if (value.e === 'props') visitProps(value.d);
+      else if (Array.isArray(value.d)) visit(value.d);
+    };
+    for (const message of messages) visit(message);
+    // Jakmile je přesně následující frame celý prohlédnutý, záporný výsledek
+    // je také autoritativní pro tuto zkratku. Pozdější frame už nikdy nesmí
+    // odblokovat starší Order před Fill/Order událostmi mezi nimi.
+    for (const [orderId, waiters] of stagedOrderVersionWaiters) {
+      for (const waiter of [...waiters]) {
+        if (frameId === waiter.frameId + 1) {
+          waiter.finish(stagedOrderVersionMatches(
+            orderId,
+            waiter.requiredVersionId,
+            waiter.frameId,
+          ));
+        }
+      }
+    }
+    return staged;
+  };
+
+  const unstageOrderVersions = (
+    staged: readonly { orderId: number; versionId: number; frameId: number }[],
+  ) => {
+    for (const { orderId, versionId, frameId } of staged) {
+      const versions = stagedOrderVersions.get(orderId);
+      const frames = versions?.get(versionId);
+      const count = frames?.get(frameId) ?? 0;
+      if (count <= 1) frames?.delete(frameId);
+      else frames?.set(frameId, count - 1);
+      if (frames?.size === 0) versions?.delete(versionId);
+      if (versions?.size === 0) stagedOrderVersions.delete(orderId);
+    }
+  };
+
+  const resetStagedOrderVersions = () => {
+    for (const waiters of stagedOrderVersionWaiters.values()) {
+      for (const waiter of [...waiters]) waiter.finish(false);
+    }
+    stagedOrderVersionWaiters = new Map();
+    stagedOrderVersions = new Map();
+    activeSemanticFrameId = null;
+  };
+
   const fetchOrderVersions = (orderId: number): Promise<OrderVersionFetchResult> => (
     request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`)
       .then(versions => ({ ok: true as const, versions: versions ?? [] }))
@@ -837,15 +982,23 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const hydrateOrderVersion = async (
     orderId: number,
     prepared?: Promise<OrderVersionFetchResult>,
-  ) => {
+  ): Promise<'ready' | 'deferred'> => {
     const desired = confirmedVersionIds.get(orderId);
-    if (orderVersions.has(orderId) && (desired == null || orderVersions.get(orderId)!.id >= desired)) return;
-    const result = await (prepared ?? fetchOrderVersions(orderId));
+    if (orderVersions.has(orderId) && (desired == null || orderVersions.get(orderId)!.id >= desired)) return 'ready';
+    if (stagedOrderVersionMatches(orderId, desired)) return 'deferred';
+    const fetchResult = prepared ?? fetchOrderVersions(orderId);
+    const winner = await Promise.race([
+      fetchResult.then(result => ({ kind: 'fetch' as const, result })),
+      waitForStagedOrderVersion(orderId, desired).then(seen => ({ kind: 'staged' as const, seen })),
+    ]);
+    if (winner.kind === 'staged' && winner.seen) return 'deferred';
+    const result = winner.kind === 'fetch' ? winner.result : await fetchResult;
     if ('error' in result) throw result.error;
     // Aplikace do execution cache zustava v socket serial tailu. Prefetch tedy
     // prekryva pouze REST latenci; budouci frame nesmi zmenit shape drive,
     // nez controller dostane predchozi order event.
     for (const version of result.versions) rememberVersion(version);
+    return 'ready';
   };
 
   const prepareOrderVersionHydrations = (
@@ -1521,7 +1674,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       } else if (entityType === 'executionreport') {
         const report = item.entity as TradovateExecutionReportEntity;
         if (!rememberExecutionReport(report)) continue;
-        await hydrateOrderVersion(report.orderId, preparedOrderVersions?.get(report.orderId));
+        if (await hydrateOrderVersion(report.orderId, preparedOrderVersions?.get(report.orderId)) === 'deferred') continue;
         const order = await composeOrder(report.orderId);
         if (order) emitBrokerState({ type: 'order', order, receivedAt });
         await flushPendingFills(report.orderId);
@@ -1549,7 +1702,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           }
         }
         rememberRawOrder(orderEntity);
-        await hydrateOrderVersion(orderEntity.id, preparedOrderVersions?.get(orderEntity.id));
+        if (await hydrateOrderVersion(orderEntity.id, preparedOrderVersions?.get(orderEntity.id)) === 'deferred') continue;
         const order = await composeOrder(orderEntity.id);
         if (order) emitBrokerState({ type: 'order', order, receivedAt });
         await flushPendingFills(orderEntity.id);
@@ -1854,6 +2007,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     journalSnapshotAbort?.abort();
     journalAccounting.reset();
     journalBackfillPlan.reset(); journalRoster = [];
+    resetStagedOrderVersions();
     candidate.onopen = null;
     candidate.onmessage = null;
     candidate.onerror = null;
@@ -1930,6 +2084,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     syncReady = false;
     socketMessageTail = Promise.resolve();
     pendingSemanticFrames = [];
+    resetStagedOrderVersions();
     connectWatchdog = timeouts(() => {
       connectWatchdog = null;
       if (socket !== candidate || candidate.readyState === 1) return;
@@ -1996,6 +2151,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       let messages: unknown[] = [];
       let parseError: unknown;
       let preparedOrderVersions: PreparedOrderVersions | undefined;
+      const semanticFrameId = typeof event.data === 'string' && event.data[0] === 'a'
+        ? ++semanticFrameSequence
+        : 0;
+      let stagedVersionsForFrame: Array<{ orderId: number; versionId: number; frameId: number }> = [];
       try {
         if (typeof event.data === 'string' && event.data[0] === 'a') {
           const parsed: unknown = JSON.parse(event.data.slice(1));
@@ -2020,6 +2179,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
               return;
             }
           }
+          stagedVersionsForFrame = stageOrderVersions(messages, semanticFrameId);
         }
       } catch (reason) { parseError = reason; }
 
@@ -2054,14 +2214,16 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         }
       }
       const semanticFrame: (typeof pendingSemanticFrames)[number] = {
-        id: ++semanticFrameSequence,
+        id: semanticFrameId,
         receivedAt,
         summary,
+        stagedOrderVersions: stagedVersionsForFrame,
       };
       pendingSemanticFrames.push(semanticFrame);
       socketMessageTail = socketMessageTail
         .then(() => {
           if (socket !== candidate) return;
+          activeSemanticFrameId = semanticFrame.id;
           semanticFrame.processingStartedAt = clock();
           if (parseError) throw parseError;
           return handleSocketData(
@@ -2085,6 +2247,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           closeSocket(candidate, 'socket-message-error', minimumDelayMs);
         })
         .finally(() => {
+          unstageOrderVersions(semanticFrame.stagedOrderVersions);
+          if (activeSemanticFrameId === semanticFrame.id) activeSemanticFrameId = null;
           const completedAt = clock();
           const processingStartedAt = semanticFrame.processingStartedAt ?? completedAt;
           const queueMs = Math.max(0, processingStartedAt - semanticFrame.receivedAt);

@@ -1822,6 +1822,18 @@ existující ochranu.
   `read-failed`), skončí `unknown` místo `blocked` — fail-closed, dořeší čtení.
   Hlídá test: `tests/manualOrderManage.test.ts` (zrychlení posunu),
   `tests/tradovateConfirmedOrderVersions.test.ts` (snímek streamu).
+- **OrderVersion hydratace nesmí zadržet následující Fill za pomalejším REST
+  (4. 11. 2026):** `/orderVersion/deps` dál začíná při přijetí Order/ExecutionReport
+  rámce a zůstává autoritativním fallbackem. Serializované zpracování socket frame se
+  nikdy nepřeskakuje a žádný budoucí tvar se neaplikuje předčasně. Starší rámec smí
+  přestat čekat na REST pouze tehdy, když ve stejném nebo přesně následujícím již
+  přijatém rámci je `OrderVersion` stejného orderu s dostatečným version ID a zároveň
+  je první relevantní entitou tohoto orderu v daném rámci. Skutečnou verzi pak v
+  pořadí aplikuje až její vlastní socket frame. Fill/Order/Command před verzí, verze
+  v pozdějším rámci, chybějící verze nebo konec socketu vždy ponechá původní REST
+  cestu. Zavření a nové připojení maže všechny staged verze i čekatele. Regrese:
+  `tests/tradovateSpeed11b.test.ts` (rychlá socket cesta, pomalý REST po ní nesmí
+  přepsat stav, Fill před verzí nesmí odblokovat starší Order).
 - **Graf (30. 10. 2026):** živá pozice leadera ve štítcích jako návrh
   (`lib/liveChartOrderLines.ts`). Tah SL/TP = okamžité `move-*` po puštění (mrtvá
   zóna 4 px), `expect` = cena při chycení čáry (změna během tahu = nic se nepošle);

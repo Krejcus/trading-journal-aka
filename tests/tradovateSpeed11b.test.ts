@@ -68,6 +68,131 @@ describe('balicek 11b: rychlost Tradovate kriticke cesty', () => {
     logSpy.mockRestore();
   });
 
+  it('nasledujici socket OrderVersion odblokuje Fill bez cekani na pomale REST a zachova poradi', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let resolveVersions!: (value: Response) => void;
+    const slowVersions = new Promise<Response>(resolve => { resolveVersions = resolve; });
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'token', accountSpec: 'DEMO',
+      webSocketFactory: () => socket,
+      fetchImpl: (async input => {
+        const url = String(input);
+        if (url.includes('/orderVersion/deps?masterid=41')) return slowVersions;
+        if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+        throw new Error(`unexpected url ${url}`);
+      }) as typeof fetch,
+    });
+    const semanticEvents: string[] = [];
+    const orderPrices: Array<number | undefined> = [];
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'order') {
+        semanticEvents.push(`order:${event.order.brokerOrderId}`);
+        orderPrices.push(event.order.limitPrice);
+      }
+      if (event.type === 'fill') semanticEvents.push(`fill:${event.fill.brokerOrderId}`);
+    });
+
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'Order', entity: {
+        id: 41, accountId: 100, contractId: 7, action: 'Buy', ordStatus: 'Filled',
+      },
+    }] })}]` });
+    await flushMicrotasks();
+    expect(semanticEvents).toEqual([]);
+    await vi.advanceTimersByTimeAsync(75);
+    expect(semanticEvents).toEqual([]);
+
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'OrderVersion', entity: {
+        id: 41, orderId: 41, orderQty: 1, orderType: 'Limit', price: 30_000,
+      },
+    }] })}]` });
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'Fill', eventType: 'Created', entity: {
+        id: 91, orderId: 41, accountId: 100, contractId: 7, action: 'Buy', qty: 1, price: 30_000,
+      },
+    }] })}]` });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushMicrotasks();
+
+    expect(semanticEvents).toEqual(['order:41', 'fill:41', 'order:41']);
+    expect(orderPrices).toEqual([30_000, 30_000]);
+
+    // Pozdější REST výsledek už nesmí přepsat autoritativní socket verzi ani
+    // emitovat další order event.
+    resolveVersions(jsonResponse([{
+      id: 99, orderId: 41, orderQty: 1, orderType: 'Limit', price: 29_000,
+    }]));
+    await vi.advanceTimersByTimeAsync(1);
+    await flushMicrotasks();
+    expect(semanticEvents).toEqual(['order:41', 'fill:41', 'order:41']);
+    expect(orderPrices).toEqual([30_000, 30_000]);
+
+    unsubscribe();
+  });
+
+  it('OrderVersion az za Fill nesmi odblokovat predchozi Order mimo poradi', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let resolveVersions!: (value: Response) => void;
+    const slowVersions = new Promise<Response>(resolve => { resolveVersions = resolve; });
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'token', accountSpec: 'DEMO',
+      webSocketFactory: () => socket,
+      fetchImpl: (async input => {
+        const url = String(input);
+        if (url.includes('/orderVersion/deps?masterid=41')) return slowVersions;
+        if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+        throw new Error(`unexpected url ${url}`);
+      }) as typeof fetch,
+    });
+    const semanticEvents: string[] = [];
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'order') semanticEvents.push(`order:${event.order.brokerOrderId}`);
+      if (event.type === 'fill') semanticEvents.push(`fill:${event.fill.brokerOrderId}`);
+    });
+
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'Order', entity: {
+        id: 41, accountId: 100, contractId: 7, action: 'Buy', ordStatus: 'Filled',
+      },
+    }] })}]` });
+    await flushMicrotasks();
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [
+      {
+        entityType: 'Fill', eventType: 'Created', entity: {
+          id: 91, orderId: 41, accountId: 100, contractId: 7, action: 'Buy', qty: 1, price: 30_000,
+        },
+      },
+      {
+        entityType: 'OrderVersion', entity: {
+          id: 41, orderId: 41, orderQty: 1, orderType: 'Limit', price: 30_000,
+        },
+      },
+    ] })}]` });
+    await vi.advanceTimersByTimeAsync(9);
+    await flushMicrotasks();
+    expect(semanticEvents).toEqual([]);
+
+    resolveVersions(jsonResponse([{
+      id: 41, orderId: 41, orderQty: 1, orderType: 'Limit', price: 30_000,
+    }]));
+    await vi.advanceTimersByTimeAsync(1);
+    await flushMicrotasks();
+    expect(semanticEvents).toEqual(['order:41', 'fill:41', 'order:41']);
+
+    unsubscribe();
+  });
+
   it('prekryje dve 60ms OrderVersion hydratace, ale order eventy emituje v poradi ramcu', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

@@ -189,6 +189,13 @@ Filip po nasazení fáze 1: pozice se v grafu ukáže 1–2 s po vyplnění. Roz
 - `tradovateBroker`: u emitovaného `fill` log `BROKER FILL … broker→frame … frame→dispatch … listeners …`; dispatch je čas do předání skutečné Fill entity, `listeners` odděluje synchronní práci controlleru.
   (časová značka brokera, přijetí rámce, emit). Jen log, žádná změna chování. Podle čísel pak
   rozhodnout o odstranění REST dočítání (hydrate) v cestě streamu.
+- Produkční vzorek 4. 11. oddělil `broker→frame 53 ms` od dalších `frame→handler 227 ms`:
+  Fill čekal za předchozím Order rámcem, jehož `/orderVersion/deps` REST hydratace trvala
+  přibližně 242 ms. Lokální optimalizace proto REST nemaže: spustí jej souběžně jako fallback,
+  ale pokud přesně následující socket frame začne autoritativní `OrderVersion` pro stejný order,
+  starší Order přenechá zpracování tomuto rámci. Socketový serial tail a pořadí událostí zůstává
+  beze změny. Jakmile před verzí přijde Fill/Order/Command téhož orderu, verze dorazí až v
+  pozdějším než následujícím rámci nebo socket skončí, čeká se dál na původní REST důkaz.
 - `macCopierCommandRelay`: každý pokus rychlé expozice loguje jen technická čísla
   (`seq`, bajty, šifrování, HTTP, celkem a status), nikdy účet, pozici, téma ani klíč.
 - Prohlížeč s `localStorage['at:dev:perf']='1'`: `live:exposure:decrypt`,
