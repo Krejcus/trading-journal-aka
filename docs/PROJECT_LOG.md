@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-04 — LIVE latency: socket OrderVersion před pomalým REST (Codex, LOKÁLNĚ)
+### 2026-11-04 — LIVE latency: socket OrderVersion před pomalým REST (Codex, NASAZENO)
 
 - Poslední chráněný DEMO vzorek prokázal `broker→frame 53 ms`, ale Fill čekal
   dalších 227 ms za předchozím Order rámcem; ten blokovala přibližně 242ms
@@ -307,9 +307,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   zkratku nepovolí. Plná sada: 735 souborů / 7 521 testů prošlo (1 skip,
   1 todo). Produkční build a worker bundle + syntax check prošly; TypeScript má
   jen známý baseline chybějících Chrome typů/pluginu v samostatné extension a
-  starší tuple chybu testu, nic z dotčených souborů. Změna je pouze lokální,
-  bez instalace, deploye nebo dalšího broker zápisu. Worker v produkci zůstává
-  OFF a účet podle posledního čerstvého reconcile flat bez pracovních příkazů.
+  starší tuple chybu testu, nic z dotčených souborů.
+- Commit `ace716c0ae0765dce4ad7a7dd75a2dbd90071450` je na `main`; preview
+  `dpl_EjhF5j4u3smqUpMzTyqUvUu95B9y` i produkce
+  `dpl_Fp5QGAViexSQvRMiV17WCcQf2xsm` jsou READY, hlavní alias bez chyby.
+  Mac worker byl po čerstvém čistém pre-reconcile bezpečně reinstalován ze
+  stejného SHA. Čerstvý a instalovaný bundle mají shodný SHA-256
+  `f25fe559386b38c28460f5817d68fe9662648ca5635d8f50ee08cadb92f2ff60`.
+  Post-restart reconcile: DEMO, connected, OFF, flat, `positions=[]`,
+  `orders=[]`, bez divergence/stuck/chyby, `authoritativelyClean=true`.
+  Další broker zápis neproběhl: denní broker ztráta je stále −197,56 USD proti
+  internímu limitu 250 USD, takže skutečné A/B této změny počká na nový den.
 
 ### 2026-11-04 — LIVE latency: 16ms display nasazen + Order hydratace změřena (Codex)
 
