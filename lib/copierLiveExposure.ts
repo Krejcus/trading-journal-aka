@@ -125,7 +125,7 @@ const MANUAL_ENTRY_STATUSES = new Set(['sending', 'acknowledged', 'rejected', 'u
 const MANUAL_ENTRY_ORDER_TYPES = new Set(['Limit', 'Stop', 'Market']);
 const MANUAL_ACTIONS = new Set(['move-stop', 'move-target', 'cancel-entry', 'close-position', 'attach-brackets']);
 const MANUAL_ACTION_STATUSES = new Set(['sending', 'acknowledged', 'rejected', 'unknown', 'not-sent', 'waived']);
-const MANUAL_TIMING_FIELDS = ['queuedAt', 'startedAt', 'dispatchAt', 'ackAt', 'orderAt', 'filledOrderAt', 'fillAt', 'fillAvg', 'fillQty', 'positionAt'] as const;
+const MANUAL_TIMING_FIELDS = ['queuedAt', 'startedAt', 'dispatchAt', 'ackAt', 'committedAt', 'orderAt', 'filledOrderAt', 'fillAt', 'fillAvg', 'fillQty', 'positionAt'] as const;
 const isManualEntries = (value: unknown): value is CopierLiveManualEntries => Array.isArray(value)
   && value.length <= MANUAL_ENTRIES_MAX
   && value.every(row => {

@@ -250,6 +250,9 @@ describe('Mac copier agent lifecycle', () => {
     expect(safeReinstall).toContain('merge-base --is-ancestor "$INSTALLED_SHA" "$COMMIT"');
     expect(safeReinstall).toContain('ALLOW_DOWNGRADE_ARGS+=(--allow-downgrade)');
     expect(safeReinstall).toContain('strom obsahuje necommitnuté změny');
+    expect(safeReinstall).toContain('"1" if "--manual-only" in argv else "0"');
+    expect(safeReinstall).toContain('GROUP_ARGS+=(--manual-only)');
+    expect(safeReinstall).toContain('GROUP_ARGS+=(--manual-entry-max-contracts "$MANUAL_ENTRY_MAX_CONTRACTS")');
     expect(installer).toContain('Git provenance kandidáta nelze načíst');
     expect(pilot).toContain('loadMacCopierInstallManifestBestEffort');
     expect(installer).toContain("installation: 'provenance neznámá'");

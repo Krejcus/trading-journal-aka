@@ -137,7 +137,13 @@ describe('fáze 1b: odeslání ručního vstupu na leadera', () => {
         operationId: 'entry:manualtest01',
         status: 'acknowledged',
         entryBrokerOrderId: 'ack-100-entry',
+        timing: {
+          ackAt: expect.any(Number),
+          committedAt: expect.any(Number),
+        },
       });
+      const timing = ctx.controller.status().manualEntries?.at(-1)?.timing;
+      expect(timing!.committedAt).toBeGreaterThanOrEqual(timing!.ackAt!);
     } finally {
       off();
     }
@@ -367,6 +373,7 @@ describe('fáze 1b: oprava po oponentuře diffu (M1–M3)', () => {
     expect(result.status).toBe('acknowledged');
     expect(result.reason).toMatch(/nepodařilo uložit/);
     expect(ctx.controller.status().armed).toBe(false);
+    expect(ctx.controller.status().manualEntries?.at(-1)?.timing?.committedAt).toBeUndefined();
   });
 
   it('M2: abandoned se zrušením i když uložení výsledku selže', async () => {

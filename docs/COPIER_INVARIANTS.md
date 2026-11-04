@@ -1866,7 +1866,9 @@ existující ochranu.
   Ruční vstup jen MNQ (`LEADER_ENTRY_SYMBOL_PATTERN`) na klientu, relayi i ve
   workeru; správa existujících obchodů (`manage-leader-order`) NQ dál smí
   (risk-redukční). Měření: `timing` v záznamu (fronta, start, POST, ACK)
-  a v paměti stream (Order, vyplnění, Fill + průměr, Position), jen zobrazení.
+  a v paměti přesný návrat durable commitu + stream (Order, vyplnění, Fill +
+  průměr, Position), jen zobrazení. `committedAt` se nastavuje až po úspěšném
+  návratu stávajícího commitu; nevytváří další zápis ani neovlivňuje příkaz.
 - **Holý Market a doplnění SL/TP z telefonu (2. 11. 2026, rozhodnutí Filipa
   „pilulka koupí/prodá market ihned bez SL/TP, je to fakt objednávka“, oponentura
   copier-design-critic):** jen manual-only DEMO skupina (`market-manual-only`,

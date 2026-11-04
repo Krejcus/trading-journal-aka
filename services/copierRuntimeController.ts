@@ -342,7 +342,7 @@ export interface CopierControllerStatus {
     open?: boolean;
     price?: number;
     referencePrice?: number;
-    timing?: { queuedAt?: number; startedAt?: number; dispatchAt?: number; ackAt?: number;
+    timing?: { queuedAt?: number; startedAt?: number; dispatchAt?: number; ackAt?: number; committedAt?: number;
       orderAt?: number; filledOrderAt?: number; fillAt?: number; fillAvg?: number; fillQty?: number; positionAt?: number };
     reason?: string;
     entryBrokerOrderId?: string;
@@ -3508,11 +3508,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Vstupy leadera z vlastního ACK → operationId; po restartu z durable záznamů. */
   const ownManualEntryOrderIds = new Map<string, string>();
   /**
-   * Jen měření (2. 11. 2026): kdy dorazil první Order event vstupu, vyplnění
-   * příkazu, první Fill (a průměr) a pozice leadera — podle operationId,
-   * nejvýš 20 posledních. Do rozhodování nevstupuje.
+   * Jen měření (2.–4. 11. 2026): kdy skončil durable commit výsledku a kdy
+   * dorazil první Order event vstupu, vyplnění příkazu, první Fill (a průměr)
+   * a pozice leadera — podle operationId, nejvýš 20 posledních. Do rozhodování
+   * nevstupuje; `committedAt` se nastaví až po úspěšném fsync/commit návratu.
    */
-  const manualEntryStreamTimes = new Map<string, { orderAt?: number; filledOrderAt?: number; fillAt?: number; fillAvg?: number; fillQty?: number; positionAt?: number }>();
+  const manualEntryStreamTimes = new Map<string, { committedAt?: number; orderAt?: number; filledOrderAt?: number; fillAt?: number; fillAvg?: number; fillQty?: number; positionAt?: number }>();
   const manualEntryStreamTime = (operationId: string) => {
     let entry = manualEntryStreamTimes.get(operationId);
     if (!entry) {
@@ -4164,6 +4165,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...current!, status, ...ids, ...(resultReason ? { reason: resultReason } : {}), updatedAt: clock(),
         timing: { ...(current!.timing ?? {}), dispatchAt, ackAt },
       }));
+      // Transientní měřicí bod až PO skutečném durable návratu. Nepřidává druhý
+      // zápis na disk a nikdy nevstupuje do admission, risku ani výsledku příkazu.
+      manualEntryStreamTime(operationId).committedAt ??= clock();
     } catch (error) {
       // Bez durable výsledku dál nic nesmí běžet; uživatel ale dostane pravdu od brokera.
       failClosed(new Error(`Ruční vstup: výsledek se nepodařilo uložit (${errorOf(error).message})`), { autoClose: false });

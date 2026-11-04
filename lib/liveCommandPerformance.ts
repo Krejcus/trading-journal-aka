@@ -17,6 +17,8 @@ export interface LiveCommandWorkerTiming {
   startedAt?: number;
   dispatchAt?: number;
   ackAt?: number;
+  /** Durable commit finished in the worker (after the broker ACK was persisted). */
+  committedAt?: number;
   orderAt?: number;
   filledOrderAt?: number;
   fillAt?: number;
@@ -236,6 +238,7 @@ export function liveCommandWorkerDurations(timing: LiveCommandWorkerTiming | und
     ['queuedToStartedMs', duration(timing.queuedAt, timing.startedAt)],
     ['startedToDispatchMs', duration(timing.startedAt, timing.dispatchAt)],
     ['dispatchToAckMs', duration(timing.dispatchAt, timing.ackAt)],
+    ['ackToCommittedMs', duration(timing.ackAt, timing.committedAt)],
     ['ackToFillMs', duration(timing.ackAt, timing.fillAt ?? timing.filledOrderAt)],
     ['fillToPositionMs', duration(timing.fillAt ?? timing.filledOrderAt, timing.positionAt)],
   ].filter((row): row is [string, number] => row[1] != null));

@@ -31,11 +31,12 @@ describe('LIVE command end-to-end performance', () => {
 
   it('počítá jen úseky na stejných hodinách workeru a záporný závod zahodí', () => {
     expect(liveCommandWorkerDurations({
-      queuedAt: 10, startedAt: 20, dispatchAt: 30, ackAt: 60, fillAt: 80, positionAt: 100,
+      queuedAt: 10, startedAt: 20, dispatchAt: 30, ackAt: 60, committedAt: 70, fillAt: 80, positionAt: 100,
     })).toEqual({
       queuedToStartedMs: 10,
       startedToDispatchMs: 10,
       dispatchToAckMs: 30,
+      ackToCommittedMs: 10,
       ackToFillMs: 20,
       fillToPositionMs: 20,
     });

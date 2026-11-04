@@ -288,6 +288,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-04 — Produkční `d5a8e943` + přesné měření broker ACK → durable commit (Codex, web + worker NASAZENY, DISARMED)
+
+- Na Filipovo potvrzení byl `d5a8e943` pushnutý na pracovní větev i produkční `main`; Vercel deployment
+  `dpl_EUEY2Xf9fJn7QJQkfbERc1E9TPzy` je `READY`, bez alias chyby, a produkční doména ukazuje stejný SHA.
+  Těsně před reinstalací byl jediný účet `DEMO8661118` autoritativně flat, bez working orders, divergence,
+  stuck operací nebo chyby; worker byl ručně DISARMED a žádný brokerový příkaz se při deployi neposlal.
+- Safe reinstall správně nic nezměnil, protože jeho stará brána vyžaduje `--followers`, zatímco tato instalace
+  je `manual-only`. Přímý install se zastavil ještě před spuštěním: zachování
+  `ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS=1` vyžaduje samostatné informované potvrzení. V tomto prvním
+  pokusu proto běžící worker zůstal čistý `4bf49ab8`, připojený, reconciled a DISARMED.
+- Následně byla použita bezpečnější varianta bez plného localhost execution přístupu: z přesného schváleného
+  `d5a8e943` se zachoval manual-only účet, strop 5 MNQ, IBKR price source, TV stream, price alerts i scale-in.
+  Instalace je čistá (`dirty=false`), nový worker je `d5a8e943`, připojený, reconciled, flat, bez orders,
+  divergence, stuck stavu nebo chyby a zůstal `armed=false`. `shadowMode=true` je jeho záměrný fail-closed
+  výchozí gate za DISARMED; opakovaný DISARM nic brokerovi neposlal. Produkční web a worker jsou tedy shodné.
+- Lokální safe-reinstall nástroj teď umí převzít i `manual-only` a jeho `manualEntryMaxContracts` přímo z
+  běžícího LaunchAgentu; follower instalace zůstává beze změny. Po potvrzení localhost přístupu tak další
+  pokus použije stejnou fail-closed bránu místo ručně sestaveného instalačního příkazu.
+- Lokálně nad `d5a8e943` přibyl čistě diagnostický bod `committedAt`: nastaví se až po návratu stávajícího
+  durable commitu výsledku broker ACK, jen do omezené runtime mapy a zašifrovaného display payloadu. Nevytváří
+  druhý diskový zápis a nevstupuje do admission, risku ani výsledku. Report nově oddělí
+  `ackToCommittedMs`, takže další optimalizace persistence nebude odhad; selhání commitu čas nevydá.
+- Ověření lokální diagnostiky: 152/152 worker/relay/agent regresí, 85/85 lifecycle/reinstall/měření regresí,
+  `zsh -n`, produkční Vite/PWA build, Node 20 pilot bundle + syntax check a `git diff --check` prošly.
+  Kořenový typecheck má pouze stejné staré chyby samostatné
+  Chrome extension a `tests/macCopierCommandRelay.test.ts`; žádná chyba v dotčeném kódu. Diagnostika zatím
+  není pushnutá, nasazená ani nainstalovaná a brokerovi nic neposlala.
+
 ### 2026-11-04 — LIVE rychlost: pravdivé E2E měření + rychlý relay a cancel bez dvou REST kol (Codex, lokálně, NENASAZENO)
 
 - Autoritativní pracovní strom je čistý release worktree
