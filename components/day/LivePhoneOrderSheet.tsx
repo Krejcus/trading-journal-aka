@@ -140,7 +140,7 @@ export function livePhoneSheetPreviewBlocked(input: {
   now: number;
 }): string | null {
   if (input.blockedReason) return input.blockedReason;
-  if (!input.liveQuote || !(input.now - input.liveQuote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS)) return 'Cena není čerstvá (starší než 3 s) — náhled teď nejde.';
+  if (!input.liveQuote || !(input.now - input.liveQuote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS)) return 'Cena není čerstvá — náhled teď nejde.';
   const error = input.problems.find(problem => problem.level === 'error');
   if (error) return `Nejdřív oprav: ${error.text}`;
   return 'error' in input.payload ? input.payload.error : null;

@@ -325,7 +325,8 @@ export const liveAttachChartLines = (
       price: value, color: kind === 'stopLoss' ? SL_COLOR : TP_COLOR,
       label: label(kind, value),
       labelAt: next => label(kind, next),
-      draggable: true, cancellable: false,
+      // × jen vyhodí rozpracovanou nohu z návrhu; u brokera nic.
+      draggable: true, cancellable: true, cancelAction: 'remove-bracket',
     });
   }
   return lines;

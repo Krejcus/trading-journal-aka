@@ -3,10 +3,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import BacktestOrderLinesOverlay from '../BacktestOrderLinesOverlay';
 import type { BacktestChartOrderLine, BacktestChartOrderLineKind } from '../../services/backtestOrderLines';
-import { LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../../lib/liveChartOrderLines';
+import { LIVE_ATTACH_SEND_ACTION, LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../../lib/liveChartOrderLines';
 import type { LiveChartPositionSummary } from '../../lib/liveChartPosition';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../../lib/leaderOrderManage';
-import { LIVE_DRAFT_ID, liveDraftChartLines, snapToTick, withBracket, withEntryPrice, type TicketDraft, type TicketInstrument, type TicketQuote } from '../../lib/liveOrderTicket';
+import { LIVE_ATTACH_OWNER, LIVE_DRAFT_ID, liveAttachChartLines, liveDraftChartLines, snapToTick, type LiveAttachLegs, withBracket, withEntryPrice, type TicketDraft, type TicketInstrument, type TicketQuote } from '../../lib/liveOrderTicket';
 import type { LiveTicketScaleIn } from '../../lib/liveScaleIn';
 import { LIVE_MANAGE_BUSY_TEXT } from '../../hooks/useLiveManageRunner';
 import { isLiveDisplayOnlyLine, type LiveWorkingOrderBadge, type LiveWorkingOrdersView } from '../../lib/liveWorkingOrderLines';
@@ -130,7 +130,7 @@ export function livePhoneWorkingView(
  * nikdy nic nepošle) a ✎ na SL/TP, které jen otevře list správy (U10).
  */
 export function LivePhoneOrderLines({
-  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
+  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, attach = null, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
   extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage,
 }: {
   api: ChartViewApi;
@@ -147,6 +147,15 @@ export function LivePhoneOrderLines({
   manage: LivePhoneManage | null;
   /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu. */
   pendingLegs?: boolean;
+  /** Holá pozice: nohy vytažené ze štítků „+ SL“ / „+ TP“; tah mění jen návrh, odchází až tlačítkem na čáře. */
+  attach?: {
+    legs: LiveAttachLegs | null;
+    side: 'long' | 'short';
+    quantity: number;
+    reference: number | null;
+    onLeg: (kind: 'stopLoss' | 'takeProfit', price: number | null | undefined) => void;
+    onSend: () => void;
+  } | null;
   /** × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jako PC. */
   canClose: boolean;
   /** Průměrný vstup leadera od workeru (BE). */
@@ -179,25 +188,36 @@ export function LivePhoneOrderLines({
 
   // Telefon: × (zavřít pozici i zrušit vstup) jedním klepnutím (Filip 5. 11.), jako na PC.
   const guardSummary = useMemo(() => (summary ? guardAt?.(Date.now()) ?? summary : null), [guardAt, summary]);
+  // Most z rodiče je každý render nový objekt: čáry se přepočítají jen při změně nohou (tah nesmí poskočit).
+  const attachOn = attach != null;
+  const attachLegs = attach?.legs ?? null;
+  const attachSide = attach?.side;
+  const attachQuantity = attach?.quantity;
+  const attachReference = attach?.reference;
   const positionLines = useMemo(() => (guardSummary ? livePositionChartLines(guardSummary, {
     manageable: manage != null,
     pendingLegs: pendingLegs === true,
+    attachChips: attachOn && guardSummary.kind === 'position' ? {
+      missing: ([['stopLoss', attachLegs?.stopLoss], ['takeProfit', attachLegs?.takeProfit]] as const).filter(([, value]) => value == null).map(([kind]) => kind),
+      canSend: attachLegs?.stopLoss != null && attachLegs.takeProfit != null,
+    } : null,
     canClose,
     entryAvg,
     pointValue: POINT_VALUE,
     displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd,
-  }) : []), [canClose, displayOpenPnl, entryAvg, manage, pendingLegs, pendingMove, guardSummary, pendingAdd]);
+  }) : []), [attachOn, attachLegs, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, pendingMove, guardSummary, pendingAdd]);
   const lines = useMemo(() => [
     // ✎ jen u táhnutelné SL/TP (správa jde a nic se právě neodesílá); jen otevře list.
     ...(onManage ? positionLines.map(line => (line.ownerId === LIVE_POSITION_OWNER && line.kind !== 'entry' && line.draggable && guardSummary?.kind === 'position'
       ? { ...line, actions: [...(line.actions ?? []), { ...LIVE_PHONE_MANAGE_ACTION }] } : line)) : positionLines),
+    ...(attachLegs && attachSide && attachQuantity != null ? liveAttachChartLines(attachLegs, { side: attachSide, quantity: attachQuantity }, attachReference ?? null, { tickSize: TICK, pointValue: POINT_VALUE } as TicketInstrument) : []),
     // Pracující příkazy: jen zobrazení — vynucené bez tahu, × a tlačítek, ať je pustí jen tato vrstva.
     ...(extraLines ?? []).map(line => ({ ...line, draggable: false, cancellable: false, actions: undefined, addableBrackets: undefined })),
     // Návrh nahoře (poslední v DOM). × návrhu jedním klepnutím: jen zahodí návrh (u brokera nic).
     ...(draftLines ?? []).map(line => ({ ...line, confirmCancel: false })),
-  ], [draftLines, extraLines, onManage, positionLines]);
+  ], [attachLegs, attachReference, attachSide, attachQuantity, draftLines, extraLines, onManage, positionLines]);
 
   const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit') => {
     if (!manage) return;
@@ -239,6 +259,7 @@ export function LivePhoneOrderLines({
         if (isLiveDisplayOnlyLine(line)) return;
         // Návrh: tah jen změní návrh v rodiči — k brokerovi nic (odeslání jen tlačítkem).
         if (line.ownerId === LIVE_DRAFT_ID) { onDraftChange?.(kind, snapToTick(price, TICK)); return; }
+        if (line.ownerId === LIVE_ATTACH_OWNER) { if (kind !== 'entry') attach?.onLeg(kind, snapToTick(price, TICK)); return; }
         if (line.ownerId !== LIVE_POSITION_OWNER || !summary || kind === 'entry') return;
         const snapped = snapToTick(price, TICK);
         const current = kind === 'stopLoss' ? summary.stop : summary.target;
@@ -251,6 +272,7 @@ export function LivePhoneOrderLines({
       onCancel={line => {
         if (isLiveDisplayOnlyLine(line)) return;
         if (line.ownerId === LIVE_DRAFT_ID) { onDraftRemove?.(line.kind); return; }
+        if (line.ownerId === LIVE_ATTACH_OWNER) { if (line.kind !== 'entry') attach?.onLeg(line.kind, null); return; }
         if (line.id === LIVE_PENDING_ADD_LINE_ID) {
           if (pendingAdd?.price != null) void run('cancel-entry', pendingAdd.price);
           return;
@@ -261,6 +283,7 @@ export function LivePhoneOrderLines({
       }}
       onAction={(line, actionId) => {
         if (isLiveDisplayOnlyLine(line) || line.ownerId !== LIVE_POSITION_OWNER || !summary) return;
+        if (actionId === LIVE_ATTACH_SEND_ACTION) { attach?.onSend(); return; }
         // ✎ jen otevře list správy; příkaz odejde až tlačítkem v listu.
         if (actionId === LIVE_PHONE_MANAGE_ACTION.id) { if (line.kind !== 'entry') onManage?.(line.kind); return; }
         if (actionId !== 'break-even') return;
@@ -269,7 +292,8 @@ export function LivePhoneOrderLines({
         void run('move-stop', summary.stop, be.price, 'stopLoss');
       }}
       onAddBracket={(line, kind, price) => {
-        // „+ SL“ / „+ TP“ jen na vstupu návrhu (čáry pozice ani příkazů ho nemají).
+        if (line.ownerId === LIVE_POSITION_OWNER) { attach?.onLeg(kind, price); return; }
+        // Jinak jen na vstupu návrhu.
         if (line.ownerId !== LIVE_DRAFT_ID || isLiveDisplayOnlyLine(line)) return;
         onDraftAddBracket?.(kind, price);
       }}

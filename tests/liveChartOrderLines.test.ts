@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
+import { LIVE_ATTACH_SEND_ACTION, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
 import { liveDisplayOpenPnl, type LiveChartPositionSummary } from '../lib/liveChartPosition';
 
 const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositionSummary => ({
@@ -73,6 +73,19 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
   it('odeslaný posun: čára drží novou cenu se štítkem „odesílám“ a netáhne se', () => {
     const stop = livePositionChartLines(summary(), { ...controls, pending: { stopLoss: 28980 } })[1];
     expect(stop).toMatchObject({ price: 28980, draggable: false, label: expect.stringMatching(/odesílám/) });
+  });
+
+  it('holá pozice: štítky jen chybějících nohou, odeslání až s oběma', () => {
+    const bare = summary({ stop: null, target: null });
+    const entry = (chips: { missing: ('stopLoss' | 'takeProfit')[]; canSend: boolean }) => livePositionChartLines(bare, { ...controls, manageable: false, attachChips: chips }).find(line => line.kind === 'entry')!;
+    expect(entry({ missing: ['stopLoss', 'takeProfit'], canSend: false }).addableBrackets).toEqual(['stopLoss', 'takeProfit']);
+    expect(entry({ missing: ['takeProfit'], canSend: false }).addableBrackets).toEqual(['takeProfit']);
+    const ready = entry({ missing: [], canSend: true });
+    expect(ready.addableBrackets).toBeUndefined();
+    expect(ready.actions?.map(action => action.id)).toEqual([LIVE_ATTACH_SEND_ACTION]);
+    // Čekající vstup štítky nikdy nemá.
+    expect(livePositionChartLines(summary({ kind: 'pending', stop: null, target: null }), { ...controls, attachChips: { missing: ['stopLoss'], canSend: false } })
+      .find(line => line.kind === 'entry')?.addableBrackets).toBeUndefined();
   });
 
   it('s capability: TP blíž jen s odstupem od trhu a ne přes SL (short)', () => {

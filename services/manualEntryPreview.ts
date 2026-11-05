@@ -42,9 +42,11 @@ export const MANUAL_ENTRY_MARKET_WORKER_QUOTE_MAX_AGE_MS = 3_000;
 /** Původ kontraktu (i Limit/Stop): poslední kotace IBKR nejvýš tak stará (klidná noc). */
 export const MANUAL_ENTRY_CONTRACT_QUOTE_MAX_AGE_MS = 15_000;
 export const MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS = 8;
+/** Sólo DEMO: na Openu se trh pohne o 2 body i za zlomek sekundy (5. 11.: 9 z 15 Marketů zablokovaných). */
+export const MANUAL_ENTRY_SOLO_MARKET_MAX_QUOTE_DRIFT_TICKS = 40;
 /**
  * Market: SL i TP aspoň tolik ticků od ceny, kterou viděl uživatel, i od kotace
- * workeru (≥ drift + skluz) — skluz fillu nesmí nohu přehodit přes trh.
+ * workeru (kontrola proti oběma cenám) — skluz fillu nesmí nohu přehodit přes trh.
  */
 export const MANUAL_ENTRY_MARKET_MIN_BRACKET_TICKS = 16;
 
@@ -75,6 +77,7 @@ export function manualEntryMarketQuoteBlockers(
   command: Pick<LeaderEntryPreviewCommand, 'side' | 'referencePrice' | 'quoteReceivedAt' | 'stopLoss' | 'takeProfit'>,
   quote: ManualEntryWorkerQuote | null,
   now: number,
+  maxDriftTicks: number = MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS,
 ): LeaderEntryPreviewIssue[] {
   const issues: LeaderEntryPreviewIssue[] = [];
   const reference = command.referencePrice!;
@@ -87,8 +90,9 @@ export function manualEntryMarketQuoteBlockers(
     issues.push(blocker('market-worker-quote-stale', 'Worker nemá čerstvou cenu z IBKR (≤ 3 s) — Market teď nejde.'));
     return issues;
   }
-  if (Math.abs(market - reference) > MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS * TICK + 1e-9) {
-    issues.push(blocker('market-quote-drift', `Trh se od ceny, kterou jsi viděl, pohnul o víc než ${MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS} ticků — nic se neodešle.`));
+  if (Math.abs(market - reference) > maxDriftTicks * TICK + 1e-9) {
+    const moved = Math.round(Math.abs(market - reference) / TICK);
+    issues.push(blocker('market-quote-drift', `Trh se pohnul o ${moved} ticků od ceny, kterou jsi viděl (viděno ${reference}, IBKR ${market}, limit ${maxDriftTicks}) — nic se neodešle.`));
   }
   if (isBareLeaderEntry(command)) return issues;
   const minDistance = MANUAL_ENTRY_MARKET_MIN_BRACKET_TICKS * TICK - 1e-9;
@@ -144,6 +148,8 @@ export interface ManualEntryAccountInputs {
 
 export interface ManualEntryPreviewInputs {
   now: number;
+  /** Limit pohybu trhu proti viděné ceně; výchozí `MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS`. */
+  marketMaxDriftTicks?: number;
   command: LeaderEntryPreviewCommand;
   group: {
     id: string;
@@ -354,7 +360,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
         ? 'Worker nemá čerstvou kotaci z IBKR — Stop teď nejde (bez IBKR jen Limit).'
         : 'Worker nemá čerstvou kotaci z IBKR ani front kontrakt od brokera — kontrakt teď nejde ověřit.'));
   }
-  if (market) blockers.push(...manualEntryMarketQuoteBlockers(command, workerQuote, now));
+  if (market) blockers.push(...manualEntryMarketQuoteBlockers(command, workerQuote, now, input.marketMaxDriftTicks));
   if (command.orderType === 'Limit') notes.push(blocker('limit-marketability', 'Jestli limit není přes trh, ověří až broker (vyplnil by se hned).'));
   notes.push(blocker('leader-can-trade', 'Oprávnění leadera obchodovat náhled nečte (žádné volání brokera) — ověří odeslání.'));
 

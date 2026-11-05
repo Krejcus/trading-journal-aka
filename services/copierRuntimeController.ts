@@ -24,7 +24,7 @@ import {
 import { cmeDailyHaltWindow, msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
 import { createLeaderDisplayFills, type CopierLeaderDisplayFills } from './copierLeaderDisplayFills';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
-import { evaluateManualEntryPreview, manualEntryContractCap, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualEntryMarketQuoteBlockers, workerMarketPrice, manualStopLossUsd, realizedLossHeadroom, remainingLossHeadroom, type ManualEntryAccountInputs, type ManualEntryWorkerQuote } from './manualEntryPreview';
+import { MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS, MANUAL_ENTRY_SOLO_MARKET_MAX_QUOTE_DRIFT_TICKS, evaluateManualEntryPreview, manualEntryContractCap, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualEntryMarketQuoteBlockers, workerMarketPrice, manualStopLossUsd, realizedLossHeadroom, remainingLossHeadroom, type ManualEntryAccountInputs, type ManualEntryWorkerQuote } from './manualEntryPreview';
 import { runnerUnmappedReplaceAccounts } from './copierRunner';
 import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
 import { pendingLegSideProblem, type LeaderOrderManageCommand, type LeaderOrderManageResult } from '../lib/leaderOrderManage';
@@ -3745,6 +3745,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   options.bindPendingLegsGate?.(accountId => pendingLegsOn() && accountId === group.leaderAccountId);
   /** Sólo skupina (C8, návrh §0.2): manual-only local-only DEMO bez followerů; smazaná skupina nikdy. */
   const soloGroupOn = () => soloManualGroup({ group: retiredGroup ? null : group, brokerEnvironment: gate.brokerEnvironment });
+  /** Limit pohybu trhu proti viděné ceně u Marketu: sólo DEMO má širší, ostatní skupiny beze změny. */
+  const manualMarketDriftTicks = () => (soloGroupOn() ? MANUAL_ENTRY_SOLO_MARKET_MAX_QUOTE_DRIFT_TICKS : MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS);
   const scaleInRecords = (): ScaleInRecord[] => manualEntryRecords().map(record => ({
     operationId: record.operationId, status: record.status, createdAt: record.createdAt, accountId: record.request.accountId,
     symbol: record.request.symbol, side: record.request.side, quantity: record.request.quantity, orderType: record.request.orderType,
@@ -5049,12 +5051,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // ověřit znovu synchronně těsně před odesláním (oponentura 2. 11., P1-3).
       let quoteNow: ManualEntryWorkerQuote | null = null;
       try { quoteNow = options.manualEntryQuote?.('MNQ') ?? null; } catch { quoteNow = null; }
-      const late = manualEntryMarketQuoteBlockers(command, quoteNow, clock());
+      const late = manualEntryMarketQuoteBlockers(command, quoteNow, clock(), manualMarketDriftTicks());
       if (quoteNow && quoteNow.contract !== command.symbol) late.push({ code: 'contract-mismatch', text: 'Kontrakt nesedí s kotací workeru z IBKR.' });
       // Riziko z náhledu stojí na `leader.price` + rezervě skluzu: trh smí být proti
       // ní horší nejvýš o rezervu vstupu, jinak by ztráta při SL přesáhla spočítanou (P2-3).
       const marketNow = workerMarketPrice(quoteNow, command.side, clock());
-      if (marketNow != null && (command.side === 'Buy' ? marketNow - leader.price : leader.price - marketNow) > MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS * 0.25 + 1e-9) {
+      // Holý Market nemá SL, takže žádnou rezervu nepřekročí; s nohami drží spočítané riziko i u sólo skupiny.
+      const lateDriftTicks = bare && soloGroupOn() ? manualMarketDriftTicks() : MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS;
+      if (marketNow != null && (command.side === 'Buy' ? marketNow - leader.price : leader.price - marketNow) > lateDriftTicks * 0.25 + 1e-9) {
         late.push({ code: 'market-quote-drift', text: 'Trh se před odesláním pohnul proti spočítanému riziku — nic se neodeslalo.' });
       }
       if (late.length > 0) return notSent(late[0].code, `${late[0].text}`);
@@ -6328,6 +6332,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
         for (const [brokerOrderId, leg] of [[ids.stopId, 'stop'], [ids.targetId, 'target']] as const) {
           if (liveOrdersByAccount.get(leader)?.has(brokerOrderId)) continue;
+          // Fill mohl předběhnout ACK: skončenou nohu nezakládat znovu jako čekající.
+          const observedLeg = observedOrderStatusesByAccount.get(leader)?.get(brokerOrderId);
+          if (observedLeg && !isOpenOrderStatus(observedLeg)) continue;
           rememberLiveOrder({
             tag: `${tag}${leg === 'stop' ? 's' : 't'}`, brokerOrderId, accountId: leader, symbol, side: exitSide, quantity, filledQuantity: 0,
             orderType: leg === 'stop' ? 'Stop' : 'Limit', ...(leg === 'stop' ? { stopPrice: stop } : { limitPrice: target }),
@@ -6350,9 +6357,47 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return finish('unknown', 'Nohy přijaty, ale pozici nejde ověřit — zkontroluj leadera.', ids);
         }
         if (state.net === 0) {
-          for (const legId of [ids.stopId, ids.targetId]) {
-            void options.broker.cancelOrder(leader, legId).catch(error => options.onError?.(new Error(`Zrušení nohy ${legId} po flat selhalo: ${errorOf(error).message}`)));
+          // Nohy pryč hned: na flat účtu by mohly otevřít nový obchod. Chyby se zatím jen drží.
+          let reportCancelFailures = false;
+          const cancelFailures: Error[] = [];
+          const noteCancelFailure = (legId: string, error: unknown) => {
+            const failure = new Error(`Zrušení nohy ${legId} po flat selhalo: ${errorOf(error).message}`);
+            if (reportCancelFailures) options.onError?.(failure);
+            else cancelFailures.push(failure);
+          };
+          const cancels = [ids.stopId, ids.targetId].map(legId => options.broker.cancelOrder(leader, legId).then(() => undefined, error => noteCancelFailure(legId, error)));
+          // Pozici zavřela naše vlastní noha (5. 11.: SL do 307 ms na rychlém trhu)? Jen s plným důkazem:
+          // právě jedna noha vyplněná na celý počet, druhá skončila bez fillu a AŽ PO tom účet ověřeně flat.
+          // Cokoli jiného (otočená pozice, zbylá noha, nejasné čtení) je dál incident (INV-DEFAULT-02).
+          // Jeden společný limit a po celou dobu rozpracovaný zápis: žádný nový vstup do nejistého stavu.
+          const proveClosedByLeg = async (): Promise<'SL' | 'TP' | null> => {
+            await Promise.all(cancels);
+            for (const delayMs of [0, ...TOO_LATE_STREAM_SETTLE_DELAYS_MS]) {
+              if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+              const [stopRead, targetRead] = await Promise.all([boundedManagedOrderLookup(leader, ids.stopId), boundedManagedOrderLookup(leader, ids.targetId)]);
+              const stopLeg = stopRead?.completeness === 'authoritative' ? stopRead.order : null;
+              const targetLeg = targetRead?.completeness === 'authoritative' ? targetRead.order : null;
+              if (!stopLeg || !targetLeg) continue;
+              const ended = (leg: BrokerOrder) => !isOpenOrderStatus(leg.status) && leg.status !== 'filled' && leg.filledQuantity === 0;
+              const filled = (leg: BrokerOrder) => leg.status === 'filled' && leg.filledQuantity === quantity;
+              const by = filled(stopLeg) && ended(targetLeg) ? 'SL' as const : filled(targetLeg) && ended(stopLeg) ? 'TP' as const : null;
+              if (by) return by;
+            }
+            return null;
+          };
+          const proof = proveClosedByLeg();
+          registerInFlightBrokerWrite(leader, proof.then(() => undefined, () => undefined));
+          let proofTimer: ReturnType<typeof setTimeout> | undefined;
+          const closedBy = await Promise.race([
+            proof.catch(() => null),
+            new Promise<null>(resolve => { proofTimer = setTimeout(() => resolve(null), MANUAL_ORDER_VERIFY_TIMEOUT_MS); }),
+          ]);
+          if (proofTimer) clearTimeout(proofTimer);
+          if (closedBy && await leaderVerifiedFlat(leader, symbol)) {
+            return finish('acknowledged', `${closedBy} se hned vyplnil, pozice je zavřená.`, ids);
           }
+          reportCancelFailures = true;
+          for (const failure of cancelFailures) options.onError?.(failure);
           failClosed(new Error(`Ruční vstup ${entryId}: nohy doplněné na flat účet — rušíme je, zkontroluj leadera v Tradovate`), { autoClose: false });
           return finish('unknown', 'Pozice se mezitím zavřela — doplněné nohy se ruší, zkontroluj leadera.', ids);
         }
@@ -21991,6 +22036,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const rollSoon = quarterlyContractsAround(command.symbol.startsWith('NQ') ? 'NQ' : 'MNQ', now + 10 * 86_400_000)[0] !== front;
       return evaluateManualEntryPreview({
         now,
+        marketMaxDriftTicks: manualMarketDriftTicks(),
         command,
         group: retiredGroup ? null : group,
         riskGate: {

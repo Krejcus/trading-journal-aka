@@ -7,6 +7,7 @@ import { createMemoryCopierStore } from '../services/copierStore';
 import { manualOnlyDemoSafety, type CopyGroupConfig } from '../services/liveCopyTrading';
 import { createMockBroker, type MockBroker } from '../services/mockBroker';
 import { buildLeaderEntryPreviewCommand, validateLeaderEntryPreview } from '../lib/leaderEntryPreview';
+import type { BrokerOrder } from '../services/brokerPort';
 import { buildLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace';
 import { buildLeaderOrderManageCommand, validateLeaderOrderManage } from '../lib/leaderOrderManage';
 
@@ -29,8 +30,17 @@ async function setup() {
   const quote = { last: 25_000, bid: 24_999.75, ask: 25_000 };
   const broker = createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(START + 500)] });
   const audits: string[] = [];
+  const memory = createMemoryCopierStore();
+  const onCommit: { fn: (() => void) | null } = { fn: null };
+  const store = { load: () => memory.load(), commit: async (...args: Parameters<typeof memory.commit>) => {
+    const saved = await memory.commit(...args);
+    const hook = onCommit.fn;
+    onCommit.fn = null;
+    hook?.();
+    return saved;
+  } };
   const controller = await bootstrapCopierRuntime({
-    broker, store: createMemoryCopierStore(), group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
+    broker, store, group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
     manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, manage: 500, settle: 50, verify: 100 },
     manualEntryQuote: () => ({ contract: SYM, last: quote.last, lastAt: clock.now - 100, bid: quote.bid, ask: quote.ask, quoteAt: clock.now - 50 }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
@@ -52,7 +62,7 @@ async function setup() {
     );
     return buildLeaderEntryPlaceCommand(preview, 'entry:baretest001');
   };
-  return { broker, controller, audits, clock, quote, bare };
+  return { onCommit, broker, controller, audits, clock, quote, bare };
 }
 
 const fillMarket = (broker: MockBroker, entryId: string, quantity: number) => {
@@ -165,6 +175,71 @@ describe('holý Market a doplnění SL/TP (manual-only DEMO)', () => {
     expect(legs.length).toBe(2);
     for (const leg of legs) expect(ctx.broker.cancelRequestCount(leg.brokerOrderId)).toBe(1);
     expect(ctx.controller.status().lastError).toContain('nohy doplněné na flat účet');
+  });
+
+  it.each([[39, 'acknowledged'], [41, 'blocked']] as const)('holý Market: trh se během ukládání pohne o %i ticků: %s', async (ticks, status) => {
+    const ctx = await setup();
+    const command = ctx.bare(1);
+    ctx.onCommit.fn = () => { ctx.quote.bid = 25_000 - ticks * 0.25; ctx.quote.last = ctx.quote.bid; ctx.quote.ask = ctx.quote.bid + 0.25 + 2 * ticks * 0.25; };
+    const result = await ctx.controller.placeLeaderEntry(command, { deadlineAt: ctx.clock.now + 15_000 });
+    expect(result.status).toBe(status);
+  });
+
+  const attachWithStopFilled = async (id: string, after?: (ctx: Awaited<ReturnType<typeof setup>>, legs: { stop: BrokerOrder; target: BrokerOrder }) => void) => {
+    const ctx = await setup();
+    const placed = await ctx.controller.placeLeaderEntry(ctx.bare(1), { deadlineAt: ctx.clock.now + 15_000 });
+    fillMarket(ctx.broker, placed.entryBrokerOrderId!, 1);
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    const original = ctx.broker.placeOco!.bind(ctx.broker);
+    ctx.broker.placeOco = async request => {
+      const ack = await original(request);
+      const stop = ctx.broker.orders().find(order => order.brokerOrderId === ack.firstBrokerOrderId)!;
+      const target = ctx.broker.orders().find(order => order.brokerOrderId === ack.secondBrokerOrderId)!;
+      stop.status = 'filled';
+      stop.filledQuantity = stop.quantity;
+      target.status = 'canceled';
+      ctx.broker.setPosition(LEADER, SYM, 0);
+      ctx.broker.emitEvent({ type: 'order', order: { ...stop } });
+      ctx.broker.emitEvent({ type: 'order', order: { ...target } });
+      ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 0 } });
+      after?.(ctx, { stop, target });
+      return ack;
+    };
+    const attached = await ctx.controller.manageLeaderOrder(buildLeaderOrderManageCommand({ groupId: group().id, operationId: id, leaderAccountId: LEADER,
+      entryOperationId: 'entry:baretest001', symbol: SYM, action: 'attach-brackets', expect: { price: 25_000, quantity: 1 }, stopLoss: 24_990, takeProfit: 25_020 }), { deadlineAt: ctx.clock.now + 15_000 });
+    return { ctx, attached };
+  };
+
+  it('vlastní SL se hned vyplnil a účet je ověřeně flat: žádný incident (5. 11. na Openu)', async () => {
+    const { ctx, attached } = await attachWithStopFilled('manage:attach0009');
+    expect(attached.status).toBe('acknowledged');
+    expect(attached.reason).toMatch(/SL se hned vyplnil/);
+    expect(ctx.controller.status().lastError ?? null).toBeNull();
+  });
+
+  it('noha vyplněná, ale pozice se otočila: incident, ne „zavřeno“', async () => {
+    const { ctx, attached } = await attachWithStopFilled('manage:attach0010', context => {
+      const positions = context.broker.listPositions.bind(context.broker);
+      let reads = 0;
+      context.broker.listPositions = async accountId => {
+        reads += 1;
+        // První čtení net 0, pak se ukáže otočená pozice.
+        if (reads > 1) context.broker.setPosition(LEADER, SYM, -1);
+        return positions(accountId);
+      };
+    });
+    expect(attached.status).toBe('unknown');
+    expect(ctx.controller.status().lastError).toContain('nohy doplněné na flat účet');
+  });
+
+  it('noha vyplněná, druhá dál pracuje a zrušit nejde: incident', async () => {
+    const { ctx, attached } = await attachWithStopFilled('manage:attach0011', (context, legs) => {
+      legs.target.status = 'working';
+      context.broker.cancelOrder = async () => { throw new Error('timeout'); };
+    });
+    expect(attached.status).toBe('unknown');
+    expect(ctx.controller.status().lastError).toBeTruthy();
   });
 
   it('ACK dřív, než stream ukáže flat: rozhodne čtení u brokera (P1-1)', async () => {

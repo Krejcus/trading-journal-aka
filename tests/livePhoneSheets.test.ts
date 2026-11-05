@@ -88,7 +88,7 @@ describe('U2 list: náhled u workeru', () => {
     const ok = { blockedReason: null, problems: [], payload, liveQuote, now: NOW + 3_000 };
     expect(livePhoneSheetPreviewBlocked(ok)).toBeNull();
     expect(livePhoneSheetPreviewBlocked({ ...ok, blockedReason: 'Stav kopírky se ověřuje…', liveQuote: null })).toBe('Stav kopírky se ověřuje…');
-    expect(livePhoneSheetPreviewBlocked({ ...ok, now: NOW + 3_001 })).toMatch(/Cena není čerstvá/);
+    expect(livePhoneSheetPreviewBlocked({ ...ok, now: NOW + 5_001 })).toMatch(/Cena není čerstvá/);
     expect(livePhoneSheetPreviewBlocked({ ...ok, liveQuote: null })).toMatch(/Cena není čerstvá/);
     expect(livePhoneSheetPreviewBlocked({ ...ok, problems: [{ level: 'warning', text: 'Bez stop lossu.' }] })).toBeNull();
     expect(livePhoneSheetPreviewBlocked({ ...ok, problems: [{ level: 'error', text: 'Stop loss je na špatné straně vstupu.' }] })).toMatch(/^Nejdřív oprav: Stop loss/);

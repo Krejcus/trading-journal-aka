@@ -2356,6 +2356,11 @@ existující ochranu.
   ze streamu; zápis je registrovaný (Flatten ho vidí jako rozpracovaný). Po ACK
   se pozice vždy autoritativně přečte: prokazatelně flat = obě nohy se cíleně
   zruší + incident; neověřeno = jen incident (nohy zůstávají, pozice může trvat).
+  Výjimka bez incidentu (5. 11. 2026): právě jedna noha vyplněná na celý počet, druhá
+  skončila bez fillu a až potom dvojí ověření flat (`leaderVerifiedFlat`); nohy se ruší hned,
+  důkaz má společný limit a po tu dobu je registrovaný jako rozpracovaný zápis. Štítky „+ SL“ / „+ TP“
+  na čáře holé pozice jen připravují návrh; příkaz je týž `attach-brackets` po kliku přes `liveAttachIntent`.
+  Výsledek přijato / neznámo nabídku na 30 s schová (panel, čára i telefon).
   Attach jen k NEJNOVĚJŠÍMU ručnímu vstupu, dokud leader na symbolu od jeho
   fillu nezplochl (`closedAt`, status `open`) — starý záznam nesmí „adoptovat“
   cizí pozici. Flatten v telefonu jde stejným zámkem skupiny jako Dashboard
@@ -2879,7 +2884,7 @@ existující ochranu.
   Kalendářní `frontSymbols` platí dál. Hlídá `tests/brokerFrontContract.test.ts`
   a blok „původ kontraktu bez IBKR“ v `tests/manualEntryMarketCapMnq.test.ts`;
   (2) Market — cena workeru (ask/bid ≤ 3 s, jinak last ≤ 3 s), posun od
-  `referencePrice` ≤ 8 ticků, SL i TP ≥ 16 ticků od obou cen a na správné
+  `referencePrice` ≤ 8 ticků (sólo DEMO 40 ticků; klient pouští cenu starou do 5 s, zkratky do 3 s), SL i TP ≥ 16 ticků od obou cen a na správné
   straně trhu, riziko z horší z obou cen + 6 ticků skluzu; totéž se znovu
   synchronně ověří těsně před POSTem. Do read modelu, day locku, ARM,
   reconcile ani kopírování followerů kotace nevstupuje. Market jen pro

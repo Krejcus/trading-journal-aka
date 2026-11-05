@@ -32,8 +32,17 @@ async function setup() {
   const ctxQuote = { contract: SYM };
   const broker = createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(START + 500)] });
   const audits: string[] = [];
+  const memory = createMemoryCopierStore();
+  const onCommit: { fn: (() => void) | null } = { fn: null };
+  const store = { load: () => memory.load(), commit: async (...args: Parameters<typeof memory.commit>) => {
+    const saved = await memory.commit(...args);
+    const hook = onCommit.fn;
+    onCommit.fn = null;
+    hook?.();
+    return saved;
+  } };
   const controller = await bootstrapCopierRuntime({
-    broker, store: createMemoryCopierStore(), group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
+    broker, store, group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
     manualEntryTimingsMs: { post: 300, start: 500, legWait: 300 },
     manualEntryQuote: () => ({ contract: ctxQuote.contract, last: quote.last, lastAt: clock.now - 100, bid: quote.bid, ask: quote.ask, quoteAt: clock.now - 50 }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
@@ -57,7 +66,7 @@ async function setup() {
     return buildLeaderEntryPlaceCommand(preview, patch.operationId ?? 'entry:markettest01');
   };
   const place = (entry: LeaderEntryPlaceCommand) => controller.placeLeaderEntry(entry, { deadlineAt: clock.now + 15_000 });
-  return { broker, controller, audits, clock, quote, command, place,
+  return { broker, controller, audits, clock, quote, onCommit, command, place,
     set quoteContract(value: string) { ctxQuote.contract = value; } };
 }
 
@@ -238,14 +247,30 @@ describe('nativní Market ručního vstupu (controller, manual-only DEMO)', () =
     expect(ctx.broker.modifyRequests().at(-1)).toMatchObject({ changes: { stopPrice: 24_995 } });
   });
 
-  it('trh utekl mezi vyhodnocením a POSTem: Market se neodešle', async () => {
+  it('s nohami: trh se proti spočítanému riziku pohne během ukládání záznamu o 5 ticků: neodešle se', async () => {
+    const ctx = await setup();
+    const command = ctx.command();
+    ctx.onCommit.fn = () => { ctx.quote.ask = 25_001.25; ctx.quote.last = 25_001.25; ctx.quote.bid = 25_001; };
+    const result = await ctx.place(command);
+    expect(result.status).toBe('blocked');
+    expect(result.blockers[0].text).toMatch(/proti spočítanému riziku/);
+  });
+
+  it('s nohami: trh už dřív o 12 ticků dál projde, riziko je z horší ceny', async () => {
+    const ctx = await setup();
+    ctx.quote.ask = 25_003; ctx.quote.last = 25_003; ctx.quote.bid = 25_002.75;
+    const result = await ctx.place(ctx.command());
+    expect(result.status).toBe('acknowledged');
+  });
+
+  it('trh utekl o víc než limit sólo skupiny: Market se neodešle', async () => {
     const ctx = await setup();
     const original = ctx.broker.placeOso!.bind(ctx.broker);
     let calls = 0;
     ctx.broker.placeOso = async request => { calls += 1; return original(request); };
-    // Před POSTem (po durable sending) se ask posune o 12 ticků.
+    // Trh je o 44 ticků dál už při vyhodnocení (limit sólo DEMO je 40).
     const command = ctx.command();
-    ctx.quote.ask = 25_003; ctx.quote.last = 25_003; ctx.quote.bid = 25_002.75;
+    ctx.quote.ask = 25_011; ctx.quote.last = 25_011; ctx.quote.bid = 25_010.75;
     const result = await ctx.place(command);
     expect(result.status).toBe('blocked');
     expect(calls).toBe(0);

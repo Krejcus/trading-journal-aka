@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-05 — Market na Openu a návrat appky z pozadí (Claude, větev claude/market-open-20261105, nenasazeno)
+
+- 5. 11. zablokoval limit 8 ticků 9 z 15 Marketů. Sólo DEMO má limit 40 ticků a hláška nese čísla; s nohami zůstává pozdní kontrola 4 ticky kvůli spočítanému riziku. Velikosti driftů těch 9 pokusů neznáme, čísla přinese až nová hláška.
+- Klientské brány čerstvosti Marketu z 3 s na 5 s (co už vynucuje worker). Přímý důkaz je jen Filipovo hlášení; zkratky zůstávají na 3 s.
+- Falešný incident po attach: bez incidentu jen s důkazem (jedna noha vyplněná, druhá skončila bez fillu, potom dvojí ověření flat). Nohy se ruší hned jako dřív.
+- Po návratu z pozadí se kanál ceny otevře hned znovu a graf telefonu ukáže „Načítám živá data…“ do první nové ceny. Příčina odvozená z kódu, na telefonu neměřeno.
+- Štítky „+ SL“ / „+ TP“ u Marketu bez nohou (PC i telefon): tah jen připraví nohu, obě nohy odejdou jedním klikem „Odeslat SL a TP“ na čáře; worker beze změny (`attach-brackets`).
+- Critic kolo 1 i kolo 2: OPRAVIT PŘED COMMITEM; opravené, třetí kolo podle pravidla není. Riziko: širší limit pustí víc OSO Marketů, kde noha může být za trhem, chování Tradovate u toho je neověřené.
+
 ### 2026-11-05 — Posun SL/TP nevyplněného vstupu, TP blíž, téma napříč zařízeními, výdrž svíčky (Claude, nasazeno aedc7adf: web a worker s `--pending-legs on`; iPhone čeká na připojení, build hotový)
 
 - Filip změnil pořadí: nejdřív nohy nevyplněného Limitu a TP blíž, pak telefon a téma. C2 a další položky čekají.

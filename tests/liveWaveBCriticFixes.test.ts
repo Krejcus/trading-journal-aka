@@ -201,7 +201,7 @@ describe('holý Market z panelu: brána při každém kliku, jeden příkaz', ()
   it('zablokovaný stav nic: pozice, obnovený stav, stará kotace', () => {
     expect(run([{ at: 1_000, gate: { positionOpen: true } }])).toEqual({ sent: 0, blocked: [expect.stringMatching(/V pozici holý Market nej/)] });
     expect(run([{ at: 1_500, gate: { blockedReason: 'Stav kopírky není čerstvě ověřený.' } }]).sent).toBe(0);
-    expect(run([{ at: 1_500, gate: { quote: { symbol: 'MNQZ6', bid: 1, ask: 1.25, at: 1_500 - 3_001 } } }]).sent).toBe(0);
+    expect(run([{ at: 1_500, gate: { quote: { symbol: 'MNQZ6', bid: 1, ask: 1.25, at: 1_500 - 5_001 } } }]).sent).toBe(0);
   });
 });
 

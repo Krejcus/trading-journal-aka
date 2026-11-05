@@ -18,6 +18,9 @@ import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/live
 import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../../hooks/useLiveFillAnnouncer';
 import { previewSymbolFromChartSource } from '../../lib/leaderEntryPreview';
+import { useLiveResumeState } from '../../hooks/useLiveResumeState';
+import { LIVE_ATTACH_SENT_HOLD_MS, LIVE_BARE_QUOTE_MAX_AGE_MS, liveAttachDefaults, liveAttachIntent, liveQuoteStaleText } from '../../lib/liveBareEntry';
+import type { LiveAttachLegs } from '../../lib/liveOrderTicket';
 import { snapToTick } from '../../lib/liveOrderTicket';
 import {
   livePhoneBareMarket, livePhoneCancelPendingChipShown, livePhoneOperationId, livePhonePlacedText, livePhoneScaleInBlocked, livePhoneScaleInDraft,
@@ -111,7 +114,7 @@ function LiveFillArrows(props: { api: ChartViewApi | null; fills: readonly LiveF
 }
 
 /** Market jen s cenou kanálu mladší než tohle (worker ji ověří znovu proti IBKR). */
-const PHONE_MARKET_QUOTE_MAX_AGE_MS = 3_000;
+const PHONE_MARKET_QUOTE_MAX_AGE_MS = LIVE_BARE_QUOTE_MAX_AGE_MS;
 
 /**
  * LIVE → Graf na telefonu: graf dneška z deníku (stejné svíčky, kreslení,
@@ -171,6 +174,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   // Živá cena jako panel na PC: kanál ceny grafu, kontrakt jen ze zdroje IBKR (INV-UI-04).
   const candleClose = ctl.chart.candles.at(-1)?.close ?? null;
   const tick = useLiveTicketQuote(ctl.chart.liveFeed, 'MNQ', candleClose);
+  // Po návratu z pozadí je na obrazovce starý stav: musí to být vidět, dokud nepřijde živá cena.
+  const resuming = useLiveResumeState(tick != null || ctl.chart.liveStatus === 'live', tick?.at ?? null);
   const contract = previewSymbolFromChartSource(ctl.chart.liveSource);
   const quote = useMemo<LivePhoneQuote | null>(() => {
     if (!tick || ctl.chart.liveStatus !== 'live') return null;
@@ -205,7 +210,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const sendBlocked = (market: boolean): string | null => (
     !trade ? 'Odesílání z telefonu tu není dostupné.'
       : trade.blockedReason ?? (market && !trade.marketSupported ? 'Worker zatím neumí Market.'
-        : !quote || Date.now() - quote.at > PHONE_MARKET_QUOTE_MAX_AGE_MS ? 'Cena není čerstvá (starší než 3 s) — nic se neodeslalo.'
+        : !quote || Date.now() - quote.at > PHONE_MARKET_QUOTE_MAX_AGE_MS ? liveQuoteStaleText(quote?.at ?? null, Date.now())
           : !(quote.symbol ?? (market ? null : trade.frontContract)) ? 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' : null)
   );
   // Lišta: Koupit / Prodat = holý Market hned (Filip 1. 11.), SL/TP doplní „Přidat SL/TP“.
@@ -220,6 +225,58 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [attachOpen, setAttachOpen] = useState(false);
   const position = trade?.position ?? null;
   const marketNow = quote ? (position?.side === 'short' ? quote.ask : quote.bid) : null;
+  // Nohy holé pozice vytažené ze štítků „+ SL“ / „+ TP“ na čáře; odcházejí až tlačítkem na čáře.
+  const [chipLegs, setChipLegs] = useState<LiveAttachLegs | null>(null);
+  const bareOperationId = position?.bareEntryOperationId ?? null;
+  const shownChipLegs = chipLegs && chipLegs.entryOperationId === bareOperationId ? chipLegs : null;
+  const [chipSentFor, setChipSentFor] = useState<string | null>(null);
+  const chipSent = chipSentFor != null && chipSentFor === bareOperationId;
+  useEffect(() => {
+    if (!chipSentFor) return undefined;
+    const timer = window.setTimeout(() => setChipSentFor(null), LIVE_ATTACH_SENT_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [chipSentFor]);
+  const sendAttach = (stopLoss: number, takeProfit: number) => {
+    if (!trade || !position || !position.bareEntryOperationId) return;
+    const operationId = position.bareEntryOperationId;
+    if (chipSent) { say('SL a TP už odešly — výsledek ověř na pozici, nic neopakuj.'); return; }
+    if (busyRef.current) { say(LIVE_COMMAND_BUSY_TEXT); return; }
+    // Stejná brána jako PC: čerstvá cena téhož kontraktu, pozice = holý vstup, ≥ 8 ticků (rozhoduje worker).
+    const intent = liveAttachIntent({
+      bareEntry: { operationId, symbol: position.symbol, side: position.side === 'long' ? 'Buy' : 'Sell', quantity: position.quantity },
+      position, quote, stopLoss, takeProfit, tickSize: LIVE_PHONE_INSTRUMENT.tickSize, now: Date.now(),
+    });
+    if ('error' in intent) { say(intent.error); return; }
+    busyRef.current = true;
+    setBusy(true);
+    const sent = () => { setChipSentFor(operationId); setChipLegs(null); };
+    void trade.attach(intent.attach)
+      .then(result => {
+        say(result.status === 'acknowledged' ? result.reason ?? 'SL a TP přijaty brokerem.'
+          : result.status === 'blocked' ? `Neodesláno: ${result.blockers[0]?.text ?? ''}` : result.reason ?? 'Výsledek neznámý — zkontroluj pozici.');
+        if (result.status === 'acknowledged' || result.status === 'unknown') sent();
+      })
+      .catch(() => { sent(); say('Výsledek SL/TP je neznámý — zkontroluj pozici, nic neopakuj.'); })
+      .finally(() => { busyRef.current = false; setBusy(false); });
+  };
+  const attachChipBridge = trade && position && bareOperationId && !chipSent ? {
+    legs: shownChipLegs,
+    side: position.side,
+    quantity: position.quantity,
+    reference: trade.entryAvg ?? null,
+    onLeg: (kind: 'stopLoss' | 'takeProfit', price: number | null | undefined) => {
+      const at = price === null ? null : price !== undefined ? price
+        : marketNow != null && quote != null && Date.now() - quote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS ? liveAttachDefaults(position.side, marketNow, LIVE_PHONE_INSTRUMENT.tickSize)[kind] : undefined;
+      if (at === undefined) { say('Cena není čerstvá — nohu teď nejde připravit.'); return; }
+      setChipLegs(previous => {
+        const base = previous && previous.entryOperationId === bareOperationId ? previous : { entryOperationId: bareOperationId, stopLoss: null, takeProfit: null };
+        return kind === 'stopLoss' ? { ...base, stopLoss: at } : { ...base, takeProfit: at };
+      });
+    },
+    onSend: () => {
+      if (shownChipLegs?.stopLoss != null && shownChipLegs.takeProfit != null) sendAttach(shownChipLegs.stopLoss, shownChipLegs.takeProfit);
+    },
+  } : null;
   // Objednávka z position toolu: návrh jako ⚡ na PC (draftFromPositionBox), velikost v kontraktech.
   const [order, setOrder] = useState<PhoneOrder | null>(null);
   const openOrder = (draft: TicketDraft, template: boolean) => setOrder({ key: Date.now(), draft, mode: 'sheet', template });
@@ -516,15 +573,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
               onClose={() => setAttachOpen(false)}
               onSubmit={(stopLoss, takeProfit) => {
                 setAttachOpen(false);
-                if (!trade) return;
-                if (busyRef.current) { say(LIVE_COMMAND_BUSY_TEXT); return; }
-                busyRef.current = true;
-                setBusy(true);
-                void trade.attach({ entryOperationId: position.bareEntryOperationId!, symbol: position.symbol, quantity: position.quantity, expectPrice: marketNow, stopLoss, takeProfit })
-                  .then(result => say(result.status === 'acknowledged' ? 'SL a TP přijaty brokerem.'
-                    : result.status === 'blocked' ? `Neodesláno: ${result.blockers[0]?.text ?? ''}` : result.reason ?? 'Výsledek neznámý — zkontroluj pozici.'))
-                  .catch(error => say(`Neodesláno / neznámé: ${error instanceof Error ? error.message.slice(0, 140) : 'chyba'}`))
-                  .finally(() => { busyRef.current = false; setBusy(false); });
+                sendAttach(stopLoss, takeProfit);
               }}
             />
           )}
@@ -545,6 +594,16 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         // pracující příkazy (U5) a ✎ správy (U10) v měřítku toho okna; zámek jednoho příkazu
         // (`lineState`) je společný. Za přehrávání nic — graf je historický (INV-UI-01).
         paneLayer: ({ api, replay, active, lastPrice }) => (api && !replay ? <>
+          {resuming && (
+            <div
+              aria-live="polite"
+              style={{ position: 'absolute', inset: 0, zIndex: 6, pointerEvents: 'none', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 12, background: isDark ? 'rgba(2,6,23,.55)' : 'rgba(255,255,255,.6)' }}
+            >
+              <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, background: isDark ? '#1e293b' : '#fff', color: isDark ? '#e2e8f0' : '#0f172a', boxShadow: '0 1px 4px rgba(0,0,0,.3)' }}>
+                Načítám živá data…
+              </span>
+            </div>
+          )}
           <LivePhoneOrderLines
             api={api}
             state={lineState}
@@ -552,6 +611,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             guardAt={guardAt}
             displayOpenPnl={displayOpenPnl}
             manage={trade?.manage ?? null}
+            attach={attachChipBridge}
             pendingLegs={trade?.pendingLegs === true}
             canClose={trade?.closeSupported === true}
             entryAvg={trade?.entryAvg ?? null}

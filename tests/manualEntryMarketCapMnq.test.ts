@@ -91,6 +91,14 @@ describe('nativní Market ručního vstupu', () => {
     expect(codes({ workerQuote: { contract: 'MNQZ6', last: 25_002, lastAt: NOW - 300, bid: null, ask: null, quoteAt: null } })).not.toContain('market-quote-drift');
   });
 
+  it('širší limit sólo DEMO: 10 bodů projde, víc ne, a hláška nese čísla', () => {
+    const quote = (last: number) => ({ contract: 'MNQZ6', last, lastAt: NOW - 300, bid: null, ask: null, quoteAt: null });
+    expect(codes({ marketMaxDriftTicks: 40, workerQuote: quote(25_010) })).not.toContain('market-quote-drift');
+    const blocked = evaluateManualEntryPreview(inputs({ marketMaxDriftTicks: 40, workerQuote: quote(25_010.25) })).blockers.find(issue => issue.code === 'market-quote-drift');
+    expect(blocked?.text).toMatch(/41 ticků/);
+    expect(blocked?.text).toMatch(/IBKR 25010\.25, limit 40/);
+  });
+
   it('SL/TP blíž než 16 ticků od ceny i od trhu Market odmítne', () => {
     expect(codes({ command: market({ stopLoss: 24_996.25 }) })).toContain('market-bracket-too-close');
     expect(codes({ command: market({ takeProfit: 25_003.75 }) })).toContain('market-bracket-too-close');

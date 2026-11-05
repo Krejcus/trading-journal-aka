@@ -18,6 +18,8 @@ export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, re
     if (!feed) { setQuote(null); return undefined; }
     let timer: number | null = null;
     let pending = false;
+    // Čas příchodu ceny, ne vykreslení: iOS může čekající `flush` uspat a pustit až po návratu z pozadí.
+    let receivedAt = 0;
     const flush = () => {
       timer = null;
       if (!pending) return;
@@ -29,11 +31,12 @@ export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, re
         setQuote(null);
         return;
       }
-      const at = Date.now();
+      const at = receivedAt;
       setQuote(current => (current?.price === price && at - current.at < 1_000 ? current : { price, at }));
     };
     const unsubscribe = feed.subscribe(() => {
       pending = true;
+      receivedAt = Date.now();
       if (timer == null) timer = window.setTimeout(flush, 100);
     });
     return () => {

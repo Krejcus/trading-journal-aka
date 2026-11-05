@@ -27,14 +27,14 @@ const template = (input: Parameters<typeof createLiveBracketTemplate>[0]): LiveB
 describe('čáry „· přidat“ (U4): jen návrh nohou v panelu', () => {
   const legs = { entryOperationId: 'entry:a', stopLoss: 95, takeProfit: 110 };
 
-  it('táhnutelné, bez × a bez akcí — nic odsud neodchází k brokerovi', () => {
+  it('táhnutelné, × jen vyhodí nohu z návrhu, bez akcí — nic odsud neodchází k brokerovi', () => {
     const lines = liveAttachChartLines(legs, { side: 'long', quantity: 2 }, 100, MNQ);
     expect(lines.map(line => [line.id, line.kind, line.price])).toEqual([
       [`${LIVE_ATTACH_OWNER}:stopLoss`, 'stopLoss', 95], [`${LIVE_ATTACH_OWNER}:takeProfit`, 'takeProfit', 110],
     ]);
     for (const line of lines) {
-      expect(line).toMatchObject({ ownerId: LIVE_ATTACH_OWNER, draggable: true, cancellable: false });
-      expect(line.cancelAction).toBeUndefined();
+      expect(line).toMatchObject({ ownerId: LIVE_ATTACH_OWNER, draggable: true, cancellable: true });
+      expect(line.cancelAction).toBe('remove-bracket');
       expect(line.actions).toBeUndefined();
       expect(line.addableBrackets).toBeUndefined();
     }

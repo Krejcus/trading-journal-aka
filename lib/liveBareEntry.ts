@@ -1,5 +1,5 @@
 import { liveRepeatClick, type LiveClickState } from './liveClickGate';
-import type { LiveEntryPreviewDraft } from './leaderEntryPreview';
+import { LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS, type LiveEntryPreviewDraft } from './leaderEntryPreview';
 import { livePhoneBareMarket, livePhoneSheetEntry, type LivePhoneQuote } from './livePhoneOrders';
 import { snapToTick, type TicketDraft, type TicketInstrument, type TicketSide } from './liveOrderTicket';
 
@@ -20,8 +20,19 @@ import { snapToTick, type TicketDraft, type TicketInstrument, type TicketSide } 
 /** Kotace pro holý Market a attach: stejný tvar jako telefonní lišta (`symbol` jen z IBKR, `at` = příchod ticku). */
 export type LiveBareQuote = LivePhoneQuote;
 
-/** Stejná hranice jako telefonní lišta: Market jen z kotace mladší než 3 s. */
-export const LIVE_BARE_QUOTE_MAX_AGE_MS = 3_000;
+/** Stejná hranice jako telefonní lišta a worker: Market jen z kotace mladší než 5 s. */
+export const LIVE_BARE_QUOTE_MAX_AGE_MS = LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS;
+/**
+ * Nohy holé pozice odeslané s výsledkem přijato / neznámo: dokud se stav nezmění, nic se nenabízí znovu.
+ * Po této době rozhoduje zase status workeru (ten druhé OCO stejně nepustí).
+ */
+export const LIVE_ATTACH_SENT_HOLD_MS = 30_000;
+
+/** Text blokace zastaralé ceny: se skutečným stářím, ať je z hlášky vidět, jak velký výpadek byl. */
+export const liveQuoteStaleText = (quoteAt: number | null, now: number): string => (
+  quoteAt == null ? 'Cena není čerstvá (zatím žádná) — nic se neodeslalo.'
+    : `Cena není čerstvá (stará ${(Math.max(0, now - quoteAt) / 1000).toFixed(1).replace('.', ',')} s, limit ${LIVE_BARE_QUOTE_MAX_AGE_MS / 1000} s) — nic se neodeslalo.`
+);
 
 // ── Záznam holého vstupu ve statusu workeru ─────────────────────────────────
 
@@ -89,7 +100,7 @@ const contractsWord = (count: number) => (count === 1 ? 'kontrakt' : count >= 2 
 export function liveBareMarketBlockReason(gate: LiveBareMarketGate, quantity: number): string | null {
   if (gate.blockedReason) return gate.blockedReason;
   if (!gate.marketSupported) return 'Worker zatím neumí Market.';
-  if (!gate.quote || !(gate.now - gate.quote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS)) return 'Cena není čerstvá (starší než 3 s) — nic se neodeslalo.';
+  if (!gate.quote || !(gate.now - gate.quote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS)) return liveQuoteStaleText(gate.quote?.at ?? null, gate.now);
   if (!gate.quote.symbol) return 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.';
   if (!gate.bareSupported) return 'Worker zatím neumí Market bez SL/TP.';
   if (!Number.isSafeInteger(quantity) || quantity < 1) return 'Neplatný počet kontraktů.';
@@ -310,7 +321,7 @@ export function liveAttachIntent(input: {
     || quantity == null || !Number.isSafeInteger(quantity) || quantity < 1 || position.quantity !== quantity) {
     return { error: 'Pozice nesedí s Marketem (jiný počet nebo strana, nebo je zavřená) — nic se neodeslalo.' };
   }
-  if (!quote || !(input.now - quote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS)) return { error: 'Cena není čerstvá (starší než 3 s) — nic se neodeslalo.' };
+  if (!quote || !(input.now - quote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS)) return { error: liveQuoteStaleText(quote?.at ?? null, input.now) };
   if (quote.symbol !== bareEntry.symbol) return { error: 'Cena není z IBKR pro kontrakt pozice — nohy teď nejde ověřit.' };
   if (input.stopLoss == null || input.takeProfit == null) return { error: 'Vyplň SL i TP.' };
   const stopLoss = snapToTick(input.stopLoss, input.tickSize);

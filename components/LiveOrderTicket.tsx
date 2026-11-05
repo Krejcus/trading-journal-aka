@@ -22,7 +22,7 @@ import {
   type TicketSide,
 } from '../lib/liveOrderTicket';
 import { leaderManageBasis, type LiveChartPosition, type LiveChartPositionSummary } from '../lib/liveChartPosition';
-import { previewSymbolFromChartSource, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
+import { LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS, previewSymbolFromChartSource, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
@@ -243,7 +243,7 @@ const placeErrorView = (message: string): { tone: 'bad' | 'warn'; text: string }
  * Cena grafu jde jen jako `referencePrice` (odhad rizika, zobrazení) a musí být
  * mladší než tohle; worker ji znovu porovná s vlastní kotací z IBKR.
  */
-export const MARKET_QUOTE_MAX_AGE_MS = 3_000;
+export const MARKET_QUOTE_MAX_AGE_MS = LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS;
 /** Krátký štítek typu u brokera (MKT / LMT / STP) — panel i audit ukazují skutečný typ. */
 export const brokerOrderTypeLabel = (orderType: string): string => orderType === 'Market' ? 'MKT' : orderType === 'Limit' ? 'LMT' : 'STP';
 
@@ -815,6 +815,11 @@ interface Props {
   manageRunner?: LiveManageRunner | null;
   /** Worker umí TP blíž k trhu (`manual-order-pending-legs-v1`). */
   managePendingLegs?: boolean;
+  /** Výchozí nohy holé pozice jen s otevřeným panelem; zavřený panel je nezakládá (štítky na čáře). Chybí = otevřený. */
+  attachPanelOpen?: boolean;
+  /** Nohy už odešly s výsledkem přijato / neznámo (panel i čára grafu): znovu se nenabízí. */
+  attachSent?: boolean;
+  onAttachSent?: (entryOperationId: string) => void;
   /** Přihlášený uživatel — klíč knihovny šablon na zařízení; chybí = jen vestavěná šablona, nic se neukládá. */
   userId?: string | null;
   /** C8: nabídka × u vlastní holé pozice (jen zobrazení); výchozí null = tlačítko se neukáže. */
@@ -866,7 +871,7 @@ const LiveOrderTicket: React.FC<Props> = ({
   group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice = null,
   entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
-  attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, managePendingLegs = false, userId = null,
+  attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, managePendingLegs = false, attachPanelOpen = true, attachSent = false, onAttachSent, userId = null,
   bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose,
 }) => {
   const ownCommandLockRef = useRef(false);
@@ -980,7 +985,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     : quoteInfo.stale ? 'Cena grafu je zastaralá — náhled ani odeslání teď nejde.'
     // Market bere cenu grafu jako strop ceny příkazu — jen čerstvou (oponentura 2d/C).
     : draft.type === 'market' && !entryMarketSupported ? 'Worker zatím neumí nativní Market — použij Limit.'
-    : draft.type === 'market' && (quoteInfo.capturedAt == null || Date.now() - quoteInfo.capturedAt > MARKET_QUOTE_MAX_AGE_MS) ? 'Cena grafu je starší než 3 s — Market teď nejde (zkus Limit).'
+    : draft.type === 'market' && (quoteInfo.capturedAt == null || Date.now() - quoteInfo.capturedAt > MARKET_QUOTE_MAX_AGE_MS) ? `Cena grafu je starší než ${MARKET_QUOTE_MAX_AGE_MS / 1000} s${quoteInfo.capturedAt != null ? ` (${((Date.now() - quoteInfo.capturedAt) / 1000).toFixed(1).replace('.', ',')} s)` : ''} — Market teď nejde (zkus Limit).`
     : entryScaleIn && draft.side !== entryScaleIn.side ? 'V pozici jde jen přikoupit na její stranu — zmenšit / otočit ji z panelu nejde (zavři ×).'
     : scaleIn && scaleIn.pendingAdd ? 'Předchozí přikoupení ještě čeká — nejdřív ať se vyplní, nebo ho zruš.'
     : scaleIn && (draft.stopLoss !== scaleIn.stopLoss || draft.takeProfit !== scaleIn.targetPrice) ? 'Přikoupení musí mít SL a TP pozice — nic se neodešle, dokud nesedí.'
@@ -1204,10 +1209,11 @@ const LiveOrderTicket: React.FC<Props> = ({
       if (legsNow) setLegsRef.current(null);
       return;
     }
+    if (!attachPanelOpen || attachSent) return;
     if (legsNow?.entryOperationId === attachOperationId || !attachSide || !attachReady || attachMarketRef.current == null) return;
     const defaults = liveAttachDefaultLegs(attachSide, attachMarketRef.current, attachReference, tick, customDefault);
     setLegsRef.current({ entryOperationId: attachOperationId, ...defaults });
-  }, [attachOperationId, attachSide, attachReady, attachReference, customDefault, legsNow, tick]);
+  }, [attachOperationId, attachPanelOpen, attachSent, attachSide, attachReady, attachReference, customDefault, legsNow, tick]);
   const shownLegs = legsNow && legsNow.entryOperationId === attachOperationId ? legsNow : null;
   const attachQuantity = attachEntry?.quantity ?? entryLeaderPosition?.quantity ?? 0;
   const attachDisplay = (leg: LiveManageLeg, price: number | null) => (attachSide ? manageDisplayValue({
@@ -1229,11 +1235,12 @@ const LiveOrderTicket: React.FC<Props> = ({
   const [attachBusy, setAttachBusy] = useState(false);
   const attachBusyRef = useRef(false);
   const attachSendBlocked = !shownLegs || shownLegs.stopLoss == null || shownLegs.takeProfit == null ? 'Vyplň SL i TP.'
-    : shownAttachNotice?.final ? 'Výsledek už přišel (nebo je neznámý) — nic se neopakuje.'
+    : shownAttachNotice?.final || attachSent ? 'Výsledek už přišel (nebo je neznámý) — nic se neopakuje.'
       : attachProblem;
   const sendAttach = async () => {
     if (!attachEntry || !onAttachBrackets || !shownLegs || attachBusyRef.current || directBusyRef.current) return;
     if (shownAttachNotice?.final) return;
+    if (attachSent) return;
     const operationId = attachEntry.operationId;
     // Jiný příkaz pod sdíleným zámkem (× holé pozice z čáry, Zrušit čekající, Dashboard) — attach neodejde.
     if (lockRef.current) { setAttachNotice({ entryOperationId: operationId, notice: { tone: 'warn', text: LIVE_COMMAND_BUSY_TEXT, at: Date.now() }, final: false }); return; }
@@ -1251,9 +1258,11 @@ const LiveOrderTicket: React.FC<Props> = ({
       // Přijato nebo neznámé = konec (nic se neopakuje); blokace / odmítnutí = jde opravit a zkusit znovu.
       const final = result.status === 'acknowledged' || result.status === 'unknown';
       setAttachNotice({ entryOperationId: operationId, notice: result.status === 'unknown' ? { ...notice, text: `${notice.text} Nic neopakuj.` } : notice, final });
+      if (final) onAttachSent?.(operationId);
     } catch (reason) {
       const notice = attachErrorNotice(reason, Date.now());
       setAttachNotice({ entryOperationId: operationId, notice, final: notice.tone !== 'bad' });
+      if (notice.tone !== 'bad') onAttachSent?.(operationId);
     } finally {
       attachBusyRef.current = false;
       setAttachBusy(false);

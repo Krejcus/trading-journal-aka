@@ -78,10 +78,10 @@ describe('holý Market — brány stejné jako telefonní lišta', () => {
     expect(liveBareMarketBlockReason(gate({ marketSupported: false }), 1)).toBe('Worker zatím neumí Market.');
   });
 
-  it('kotace: 3 000 ms ještě smí, 3 001 ms už ne; chybějící kotace ne', () => {
-    expect(LIVE_BARE_QUOTE_MAX_AGE_MS).toBe(3_000);
-    expect(liveBareMarketBlockReason(gate({ quote: { ...quote, at: NOW - 3_000 } }), 1)).toBeNull();
-    expect(liveBareMarketBlockReason(gate({ quote: { ...quote, at: NOW - 3_001 } }), 1)).toMatch(/není čerstvá/);
+  it('kotace: 5 000 ms ještě smí, 5 001 ms už ne; chybějící kotace ne', () => {
+    expect(LIVE_BARE_QUOTE_MAX_AGE_MS).toBe(5_000);
+    expect(liveBareMarketBlockReason(gate({ quote: { ...quote, at: NOW - 5_000 } }), 1)).toBeNull();
+    expect(liveBareMarketBlockReason(gate({ quote: { ...quote, at: NOW - 5_001 } }), 1)).toMatch(/není čerstvá/);
     expect(liveBareMarketBlockReason(gate({ quote: null }), 1)).toMatch(/není čerstvá/);
     expect(liveBareMarketBlockReason(gate({ quote: { ...quote, at: Number.NaN } }), 1)).toMatch(/není čerstvá/);
   });
@@ -250,7 +250,7 @@ describe('Přidat SL/TP k holému vstupu', () => {
   });
 
   it('stará kotace nebo kotace jiného / neověřeného kontraktu nic', () => {
-    expect(liveAttachIntent({ ...base, quote: { ...quote, at: NOW - 3_001 } })).toEqual({ error: 'Cena není čerstvá (starší než 3 s) — nic se neodeslalo.' });
+    expect(liveAttachIntent({ ...base, quote: { ...quote, at: NOW - 5_001 } })).toEqual({ error: 'Cena není čerstvá (stará 5,0 s, limit 5 s) — nic se neodeslalo.' });
     expect(liveAttachIntent({ ...base, quote: { ...quote, symbol: null } })).toHaveProperty('error');
     expect(liveAttachIntent({ ...base, quote: { ...quote, symbol: 'MNQH7' } })).toHaveProperty('error');
   });

@@ -35,6 +35,11 @@ export interface LivePositionLineControls {
    * (`manual-order-pending-legs-v1`). Bez něj dnešní chování.
    */
   pendingLegs?: boolean;
+  /**
+   * Štítky „+ SL“ / „+ TP“ u holé pozice (Market bez nohou): `missing` nohy se ještě dají vytáhnout,
+   * `canSend` = obě jsou v návrhu a na čáře je tlačítko odeslání. Tah mění jen návrh, odchází až klik.
+   */
+  attachChips?: { missing: ReadonlyArray<'stopLoss' | 'takeProfit'>; canSend: boolean } | null;
   /** Čekající přikoupení do pozice (worker `leaderPositions`) — vlastní čára s × (zrušit). */
   pendingAdd?: { price: number | null; quantity: number; orderType: string } | null;
   /**
@@ -46,6 +51,9 @@ export interface LivePositionLineControls {
   /** Živé P&L jen do štítku (`liveDisplayOpenPnl`); null = číslo brokera. Nic nerozhoduje (INV-UI-04). */
   displayOpenPnl?: number | null;
 }
+
+/** Tlačítko na čáře holé pozice: odešle nohy vytažené ze štítků. */
+export const LIVE_ATTACH_SEND_ACTION = 'send-attach';
 
 /** Proč posun nejde poslat (UI předkontrola; rozhoduje worker a broker). null = smí. */
 export function liveLineMoveBlockReason(
@@ -127,6 +135,10 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
         id: 'break-even', label: 'BE', disabled: be.blocked != null,
         title: be.blocked ?? `SL na BE leadera ${be.price?.toFixed(2)} (bez poplatků)`,
       }],
+    } : {}),
+    ...(position && controls.attachChips ? {
+      ...(controls.attachChips.missing.length > 0 ? { addableBrackets: [...controls.attachChips.missing] } : {}),
+      ...(controls.attachChips.canSend ? { actions: [{ id: LIVE_ATTACH_SEND_ACTION, label: 'Odeslat SL a TP', title: 'Odešle obě nohy k brokerovi' }] } : {}),
     } : {}),
   }];
   for (const kind of ['stopLoss', 'takeProfit'] as const) {
