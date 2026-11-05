@@ -200,6 +200,7 @@ import {
 import AppBackground from './components/AppBackground';
 import BootTransition from './components/BootTransition';
 import { animatePageEnter } from './lib/pageEnter';
+import { incomingThemeToApply, readThemeUpdatedAt, writeThemeUpdatedAt, type AppTheme } from './lib/themeSync';
 import { APPEARANCE_CACHE_KEY, normalizeAppearance, readCachedAppearance, type AppearanceSettings } from './lib/appearance';
 
 import { isSupabaseConfigured, supabase } from './services/supabase';
@@ -506,6 +507,13 @@ const readBusinessMetadata = () => Promise.all([
   storageService.getBusinessGoals(),
   storageService.getBusinessResources(),
 ]);
+
+const safeLocalStorage = (): Storage | null => {
+  try { return window.localStorage; } catch { return null; }
+};
+const safeHasStoredTheme = (): boolean => {
+  try { return window.localStorage.getItem('alphatrade_theme') != null; } catch { return false; }
+};
 
 const App: React.FC = () => {
   const [session, setSession] = useState<Session | null>(null);
@@ -1272,6 +1280,7 @@ const App: React.FC = () => {
     careerRoadmap,
     businessSettings,
     theme,
+    ...(themeUpdatedAtRef.current > 0 ? { themeUpdatedAt: themeUpdatedAtRef.current } : {}),
     appearance,
     dashboardMode,
     systemSettings,
@@ -1579,7 +1588,10 @@ const App: React.FC = () => {
     if (inNativeShell) reportNativeShellPage(activePage);
   }, [inNativeShell, activePage]);
   const [isClearTradesModalOpen, setIsClearTradesModalOpen] = useState(false);
-  const [theme, setTheme] = useState<'dark' | 'light' | 'oled'>(() => {
+  // Měl už tenhle prohlížeč / telefon svou volbu? Nové zařízení převezme téma z účtu.
+  const themeHasLocalChoiceRef = useRef(safeHasStoredTheme());
+  const themeUpdatedAtRef = useRef(readThemeUpdatedAt(safeLocalStorage()));
+  const [theme, setTheme] = useState<AppTheme>(() => {
     try {
       const storedTheme = localStorage.getItem('alphatrade_theme');
       if (storedTheme === 'light' || storedTheme === 'dark' || storedTheme === 'oled') {
@@ -1599,6 +1611,18 @@ const App: React.FC = () => {
     } catch (e) { }
     return 'dark';
   });
+
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+  // Změna tématu uživatelem: čas změny rozhodne, která volba platí na ostatních zařízeních.
+  const changeTheme = (next: AppTheme) => {
+    const at = Date.now();
+    themeUpdatedAtRef.current = at;
+    themeHasLocalChoiceRef.current = true;
+    writeThemeUpdatedAt(safeLocalStorage(), at);
+    markPreferencesDirty();
+    setTheme(next);
+  };
 
   // Barva zvýraznění (dřív Nastavení → Systém) je zrušená: appka drží výchozí
   // modrou a barvy pozadí řeší Vzhled. Starou volbu z localStorage uklidíme.
@@ -2134,9 +2158,22 @@ const App: React.FC = () => {
     if (Array.isArray(prefs.constitutionRules)) setConstitutionRules(prefs.constitutionRules);
     if (Array.isArray(prefs.careerRoadmap)) setCareerRoadmap(prefs.careerRoadmap);
     if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
-    // Theme is NOT applied here — it has its own persistence via localStorage
-    // to prevent cross-tab sync or focus sync from reverting user's theme choice.
-    // Theme is applied only on initial load (useState initializer).
+    // Téma z účtu platí, jen když je jeho volba novější než volba tohoto zařízení:
+    // synchronizace na pozadí tak nikdy nevrátí čerstvou změnu uživatele zpět.
+    const incomingTheme = incomingThemeToApply({
+      incoming: prefs.theme, incomingAt: prefs.themeUpdatedAt, current: themeRef.current,
+      localAt: themeUpdatedAtRef.current, hasLocalChoice: themeHasLocalChoiceRef.current,
+    });
+    if (incomingTheme) {
+      themeRef.current = incomingTheme;
+      setTheme(incomingTheme);
+    }
+    // Zařízení si pamatuje i čas volby, kterou už má, aby ho starší zápis nepřepsal.
+    if (typeof prefs.themeUpdatedAt === 'number' && prefs.themeUpdatedAt > themeUpdatedAtRef.current && prefs.theme === themeRef.current) {
+      themeUpdatedAtRef.current = prefs.themeUpdatedAt;
+      writeThemeUpdatedAt(safeLocalStorage(), prefs.themeUpdatedAt);
+    }
+    if (prefs.theme) themeHasLocalChoiceRef.current = true;
     // Režim (Funded / Challenge / Vše) je volba tohoto zařízení jako téma: uložená
     // místní volba má přednost. Hodnota z DB se použije jen bez ní (nové zařízení,
     // po odhlášení) — jinak starší DB hodnota (neuložená změna při výpadku DB,
@@ -3025,9 +3062,10 @@ const App: React.FC = () => {
   useEffect(() => {
     try {
       safeSetItem('alphatrade_theme', theme);
-      const stored = localStorage.getItem('alphatrade_preferences');
       const currentUserId = session?.user?.id;
       const prefKey = currentUserId ? `alphatrade_preferences_${currentUserId}` : 'alphatrade_preferences';
+      // Číst stejný klíč, který se zapisuje: jinak by cizí záznam přepsal cache preferencí účtu.
+      const stored = localStorage.getItem(prefKey);
 
       const currentPrefs = stored ? JSON.parse(stored) : {};
       if (currentPrefs.theme !== theme) {
@@ -4416,7 +4454,7 @@ const App: React.FC = () => {
                 let newTheme: 'dark' | 'light' | 'oled' = 'dark';
                 if (theme === 'dark') newTheme = 'light';
                 else if (theme === 'light') newTheme = 'oled';
-                setTheme(newTheme);
+                changeTheme(newTheme);
               }}
               className={`p-2.5 rounded-lg border transition-all duration-200 ${
                 theme !== 'light'
@@ -4957,7 +4995,7 @@ const App: React.FC = () => {
                       dailyReviews={dailyReviews}
                       appearance={appearance}
                       onAppearanceChange={(next) => { setAppearance(normalizeAppearance(next)); markPreferencesDirty(); }}
-                      onThemeChange={setTheme}
+                      onThemeChange={changeTheme}
                       onCreateAccount={(account) => updateAccountsLocally(prev => [...prev, account])}
 
                     />

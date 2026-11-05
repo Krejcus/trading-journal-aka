@@ -813,6 +813,8 @@ interface Props {
    * s čarami grafu). Chybí = sekce Správa se nenabídne (vlastní zámek by se s čarami nesdílel).
    */
   manageRunner?: LiveManageRunner | null;
+  /** Worker umí TP blíž k trhu (`manual-order-pending-legs-v1`). */
+  managePendingLegs?: boolean;
   /** Přihlášený uživatel — klíč knihovny šablon na zařízení; chybí = jen vestavěná šablona, nic se neukládá. */
   userId?: string | null;
   /** C8: nabídka × u vlastní holé pozice (jen zobrazení); výchozí null = tlačítko se neukáže. */
@@ -864,7 +866,7 @@ const LiveOrderTicket: React.FC<Props> = ({
   group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice = null,
   entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
-  attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, userId = null,
+  attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, managePendingLegs = false, userId = null,
   bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose,
 }) => {
   const ownCommandLockRef = useRef(false);
@@ -1332,7 +1334,7 @@ const LiveOrderTicket: React.FC<Props> = ({
       side: summary.side, leg, units, value, entryAvg: manageBasis.entryAvg, quantity: manageBasis.quantity, pointValue: instrument.pointValue, tick,
     });
     if ('blocked' in converted) return { ok: false, reason: converted.blocked, price: null };
-    return planManageMove(summary, leg, converted.price, { tick });
+    return planManageMove(summary, leg, converted.price, { tick, pendingLegs: managePendingLegs === true });
   };
   const requestManage = (intent: LiveManageIntent, onSent?: () => void) => {
     if (!manageRunner) return;

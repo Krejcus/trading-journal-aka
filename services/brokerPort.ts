@@ -79,6 +79,8 @@ export interface BrokerOrder {
   status: OrderStatus;
   /** Stabilní revize zdrojové broker entity pro deduplikaci lifecycle eventů. */
   sourceVersion?: string;
+  /** Cena pochází z drženého Modify a broker ji po aktivaci nohy zatím nepotvrdil. */
+  heldPriceUnconfirmed?: boolean;
   /** Vyplněné jen u `rejected` — text od brokera, do auditu. */
   rejectReason?: string;
   updatedAt: number;
@@ -342,7 +344,8 @@ export interface BrokerOrderStatusLookup {
 
 /** Důkaz od adaptéru: Replaced report přesně odeslaného modify + otevřený příkaz v odeslaném tvaru. */
 export interface BrokerModifyConfirmation {
-  confirmedBy: 'stream-replaced';
+  /** `stream-held`: broker Modify pozastavené nohy přijal a drží (OnHold), potvrzení o provedení přijde až s fillem vstupu. */
+  confirmedBy: 'stream-replaced' | 'stream-held';
   order: BrokerOrder;
 }
 

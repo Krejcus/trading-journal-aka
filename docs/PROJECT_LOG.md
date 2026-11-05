@@ -288,6 +288,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-05 — Posun SL/TP nevyplněného vstupu, TP blíž, téma napříč zařízeními, výdrž svíčky (Claude, větev claude/pending-legs-20261105, nenasazeno)
+
+- Filip změnil pořadí: nejdřív nohy nevyplněného Limitu a TP blíž, pak telefon a téma. C2 a další položky čekají.
+- Tradovate Modify pozastavené nohy jen drží (OnHold, bez ExecutionReportu); proto status držel starou cenu. Adaptér ji teď projeví za bránou `promoteHeldModify`, výchozí vypnuto. Záznam `heldMove` se po aktivaci nohy ověří proti brokeru.
+- Omezení v1 podle oponentury: jen 1 kontrakt (částečný fill by Modify vrátil plný počet na nohu), jen sólo DEMO s `--pending-legs on`.
+- Critic: kolo 1 BLOKUJE (10 nálezů), kolo 2 OPRAVIT PŘED COMMITEM (6 nálezů); opravené. Třetí kolo podle Filipova pravidla není. Conformance z API chybí: Filip ověří z appky na DEMO; je potřeba dvojí Modify, aktivace, odmítnutí a stav `/command/list` po restartu.
+- Téma se do profilu ukládalo, ale nečetlo. Nově platí novější volba podle `themeUpdatedAt`, projeví se při návratu do appky. Opravený i zápis, který přepisoval cache preferencí účtu.
+- Svíčka: při 2 s bez ceny se graf hned vracel na minutový soubor (přeblikávání po návratu z pozadí). Nově 30 s výdrž, jen zobrazení (INV-UI-01). Příčina vyvozená z kódu, na telefonu neověřená.
+- Market na Openu (limit 8 ticků zablokoval 9 z 15 pokusů) tahle větev neřeší, je další v pořadí.
+
 ### 2026-11-05 — LIVE: jedno kliknutí, žádné „Opravdu?“ (Claude, commit na větvi, nenasazeno)
 
 - Rozhodnutí Filipa: „jsem zvyklý z TradingView, že se nedoptává“. První klik, klepnutí nebo stisk rovnou odešle.

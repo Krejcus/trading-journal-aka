@@ -153,6 +153,12 @@ INSTALLED_SCALE_IN="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:AL
 if [[ "${COPIER_SCALE_IN:-$INSTALLED_SCALE_IN}" == "on" ]]; then
   TV_STREAM_ARGS+=(--scale-in on)
 fi
+# Posun SL/TP nevyplněného vstupu (jen manual-only) přežije reinstall stejně;
+# přepsat jde COPIER_PENDING_LEGS=on|off.
+INSTALLED_PENDING_LEGS="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_PENDING_LEGS' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_PENDING_LEGS:-$INSTALLED_PENDING_LEGS}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--pending-legs on)
+fi
 # Rychlá order write cesta přes autorizovaný Tradovate WebSocket. Výchozí je
 # vypnutá a installer ji dovolí jen pro manual-only DEMO. Reinstall zachová stav;
 # přepsat jde COPIER_TRADOVATE_WS_WRITES=on|off.

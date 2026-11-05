@@ -498,6 +498,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
               summary={chartPosition.summary}
               guardAt={guardAt}
               leg={manageLeg.leg}
+              pendingLegs={trade?.pendingLegs === true}
               manage={trade?.manage ?? null}
               state={lineState}
               entryAvg={trade?.entryAvg ?? null}
@@ -551,6 +552,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             guardAt={guardAt}
             displayOpenPnl={displayOpenPnl}
             manage={trade?.manage ?? null}
+            pendingLegs={trade?.pendingLegs === true}
             canClose={trade?.closeSupported === true}
             entryAvg={trade?.entryAvg ?? null}
             pendingAdd={trade?.scaleIn?.pendingAdd ?? null}

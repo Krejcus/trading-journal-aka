@@ -75,6 +75,29 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(stop).toMatchObject({ price: 28980, draggable: false, label: expect.stringMatching(/odesílám/) });
   });
 
+  it('s capability: TP blíž jen s odstupem od trhu a ne přes SL (short)', () => {
+    const on = { pendingLegs: true };
+    expect(liveLineMoveBlockReason(summary(), 'takeProfit', 28_958.25, on)).toMatch(/ticků od trhu/);
+    expect(liveLineMoveBlockReason(summary(), 'takeProfit', 28_959, on)).toMatch(/ticků od trhu/);
+    expect(liveLineMoveBlockReason(summary({ target: 28_940, mark: 28_960 }), 'takeProfit', 28_950, on)).toBeNull();
+    expect(liveLineMoveBlockReason(summary({ target: 28_940, mark: null }), 'takeProfit', 28_950, on)).toMatch(/není známá/);
+    expect(liveLineMoveBlockReason(summary({ target: 28_940, mark: 29_000, stop: 28_985 }), 'takeProfit', 28_990, on)).toMatch(/pod SL/);
+  });
+
+  it('nevyplněný vstup: bez capability nejde, s ní platí strana vůči vstupu; Stop vstup má rezervu TP', () => {
+    const pending = (patch = {}) => summary({ kind: 'pending', side: 'long', entry: 100, stop: 90, target: 120, mark: null, entryType: 'limit', ...patch });
+    expect(liveLineMoveBlockReason(pending(), 'stopLoss', 95)).toMatch(/až u vyplněné/);
+    const on = { pendingLegs: true };
+    expect(liveLineMoveBlockReason(pending(), 'stopLoss', 95, on)).toBeNull();
+    expect(liveLineMoveBlockReason(pending(), 'stopLoss', 99.5, on)).toMatch(/pod vstupem/);
+    expect(liveLineMoveBlockReason(pending(), 'takeProfit', 101, on)).toBeNull();
+    expect(liveLineMoveBlockReason(pending(), 'takeProfit', 100.5, on)).toMatch(/nad vstupem/);
+    expect(liveLineMoveBlockReason(pending({ entryType: 'stop' }), 'takeProfit', 101, on)).toMatch(/8 ticků/);
+    const lines = livePositionChartLines(pending(), { ...controls, pendingLegs: true });
+    expect(lines.find(line => line.kind === 'stopLoss')?.draggable).toBe(true);
+    expect(livePositionChartLines(pending(), controls).find(line => line.kind === 'stopLoss')?.draggable).toBe(false);
+  });
+
   it('předkontrola posunu: TP jen dál, SL nepřes TP, utažení s odstupem od trhu (short)', () => {
     expect(liveLineMoveBlockReason(summary(), 'takeProfit', 28950)).toBeNull();
     expect(liveLineMoveBlockReason(summary(), 'takeProfit', 28965)).toMatch(/dál od trhu/);

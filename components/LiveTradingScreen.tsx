@@ -175,6 +175,8 @@ interface Props {
   manageEntryAvgPrice?: number | null;
   /** Worker umí zavřít obchod z grafu (× u pozice). */
   manageCloseSupported?: boolean;
+  /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu (`manual-order-pending-legs-v1`). */
+  managePendingLegsSupported?: boolean;
   /** Worker umí nativní Market ručního vstupu (`manual-entry-market-v1`). */
   entryMarketSupported?: boolean;
   /** Strop kontraktů ručního vstupu skupiny workeru. */
@@ -248,7 +250,7 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null,
   bareClose = null, onBareClose, manageLockRef = null, onReplayChange,
@@ -435,6 +437,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   }, [lineNotice]);
   const liveLines = useMemo(() => (guardSummary ? livePositionChartLines(guardSummary, {
     manageable: Boolean(onManageEntry),
+    pendingLegs: managePendingLegsSupported === true,
     // × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jinak by kopie zůstaly otevřené (Flatten na přehledu).
     canClose: manageCloseSupported && copier.available && copier.status?.armed === true && copier.status.shadowMode !== true,
     entryAvg: manageEntryAvgPrice ?? null,
@@ -443,7 +446,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd: entryScaleIn?.pendingAdd ?? null,
     bareClose: bareOffer?.enabled ? { entryOperationId: bareOffer.trade.entryOperationId } : null,
-  }) : []), [copier.available, copier.status, displayOpenPnl, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
+  }) : []), [copier.available, copier.status, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
   // Cenové čáry pozice: workspace je vynechá v panelu, kde pozici kreslí štítky (jinak by byla dvakrát).
   const [positionLines] = useState(createLivePriceLinesFeed);
   useEffect(() => {
@@ -634,7 +637,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           return;
         }
         if (snapped === current) return;
-        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped);
+        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped, { pendingLegs: managePendingLegsSupported === true });
         if (blocked) { setLineNotice({ at: Date.now(), tone: 'bad', text: blocked }); return; }
         void runLiveManage(kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
         return;
@@ -950,6 +953,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             manageLeaderAccountId={manageLeaderAccountId}
             manageGuardAt={guardSummaryAt}
             manageRunner={onManageEntry ? manageRunner : null}
+            managePendingLegs={managePendingLegsSupported === true}
             // C8: × holé pozice i z panelu — tatáž funkce jako čára (jeden zámek, id cíle).
             bareClose={bareOffer}
             {...(bareOffer ? { onBareClose: closeBare } : {})}

@@ -13,6 +13,38 @@ import { stableHash64 } from '../services/copierKeys.js';
  * `attach-brackets` (2. 11. 2026): k holému Marketu (vlastní vstup bez nohou)
  * doplnit SL + TP jako OCO na celou pozici.
  */
+/** SL i TP nevyplněného vstupu: nejmenší vzdálenost od ceny vstupu. */
+export const PENDING_LEG_MIN_TICKS = 4;
+/** Stop vstup se může vyplnit se skluzem: TP má rezervu navíc, jinak by se po fillu hned vyplnil. */
+export const PENDING_LEG_STOP_ENTRY_TARGET_RESERVE_TICKS = 4;
+const PENDING_LEG_TICK = 0.25;
+
+/**
+ * Pravidlo ceny nohy nevyplněného vstupu (stejně v grafu i ve workeru). `null` = smí.
+ * Noha čeká pozastavená, takže trh ji nespustí: rozhoduje jen strana vůči ceně vstupu.
+ */
+export function pendingLegSideProblem(
+  kind: 'stopLoss' | 'takeProfit',
+  side: 'long' | 'short',
+  entryPrice: number,
+  entryType: string | null,
+  price: number,
+): string | null {
+  const dir = side === 'long' ? 1 : -1;
+  const stopEntry = (entryType ?? '').toLowerCase() === 'stop';
+  if (kind === 'stopLoss') {
+    if ((entryPrice - price) * dir < PENDING_LEG_MIN_TICKS * PENDING_LEG_TICK - 1e-9) {
+      return `SL musí být aspoň ${PENDING_LEG_MIN_TICKS} ticky ${side === 'long' ? 'pod' : 'nad'} vstupem.`;
+    }
+    return null;
+  }
+  const minTicks = PENDING_LEG_MIN_TICKS + (stopEntry ? PENDING_LEG_STOP_ENTRY_TARGET_RESERVE_TICKS : 0);
+  if ((price - entryPrice) * dir < minTicks * PENDING_LEG_TICK - 1e-9) {
+    return `TP musí být aspoň ${minTicks} ticků ${side === 'long' ? 'nad' : 'pod'} vstupem.`;
+  }
+  return null;
+}
+
 export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position' | 'attach-brackets';
 
 export interface LeaderOrderManageCommand {

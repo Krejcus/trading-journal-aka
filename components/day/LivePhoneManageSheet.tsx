@@ -58,6 +58,8 @@ export function livePhoneManagePlans(input: {
   value: number | null;
   plusTicks: number;
   instrument?: TicketInstrument;
+  /** Worker umí TP blíž k trhu (`manual-order-pending-legs-v1`). */
+  pendingLegs?: boolean;
 }): LivePhoneManagePlans {
   const instrument = input.instrument ?? LIVE_PHONE_INSTRUMENT;
   const tick = instrument.tickSize;
@@ -70,7 +72,7 @@ export function livePhoneManagePlans(input: {
       side: input.summary.side, leg: input.leg, units: input.units, value: input.value,
       entryAvg: basis.entryAvg, quantity: basis.quantity, pointValue: instrument.pointValue, tick,
     });
-    move = 'price' in priced ? planManageMove(input.summary, input.leg, priced.price, { tick }) : { ok: false, reason: priced.blocked, price: null };
+    move = 'price' in priced ? planManageMove(input.summary, input.leg, priced.price, { tick, pendingLegs: input.pendingLegs === true }) : { ok: false, reason: priced.blocked, price: null };
   }
   return { basis, move, ...liveManageBreakEvenOffers(input.summary, basis, input.plusTicks) };
 }
@@ -85,7 +87,7 @@ export function livePhoneManagePlans(input: {
  * klepnutí počítá znovu. Předkontroly jen blokují; rozhoduje worker.
  */
 export default function LivePhoneManageSheet({
-  summary, guardAt, leg: initialLeg = 'stopLoss', manage, state, entryAvg, leaderAccountId, instrument = LIVE_PHONE_INSTRUMENT, onNotice, onClose,
+  summary, guardAt, leg: initialLeg = 'stopLoss', manage, pendingLegs, state, entryAvg, leaderAccountId, instrument = LIVE_PHONE_INSTRUMENT, onNotice, onClose,
 }: {
   /** Souhrn pozice leadera z read modelu (`slots.position.summary`). */
   summary: LiveChartPositionSummary | null;
@@ -95,6 +97,8 @@ export default function LivePhoneManageSheet({
   leg?: LiveManageLeg;
   /** `LivePhoneTradeBridge.manage`; chybí = správa nejde, tlačítka vypnutá. */
   manage: LiveManageCallback | null | undefined;
+  /** Worker umí TP blíž k trhu (`manual-order-pending-legs-v1`). */
+  pendingLegs?: boolean;
   /** Sdílený zámek a „odesílám“ s čarami grafu (`useLivePhoneLineState` v `LivePhoneChart`). */
   state: LiveManageRunnerState;
   /** `LivePhoneTradeBridge.entryAvg` — průměr ze stavu pollu (null = graf předbíhá poll). */
@@ -128,6 +132,7 @@ export default function LivePhoneManageSheet({
   const prefill = guard ? manageDisplayValue({ side: guard.side, leg, units, price: current, entryAvg: basis.entryAvg, quantity: basis.quantity, pointValue: instrument.pointValue, tick }) : null;
   const shown = text ?? (prefill == null ? '' : formatValue(prefill, units));
   const plansAt = (at: number) => livePhoneManagePlans({
+    pendingLegs: pendingLegs === true,
     summary: summary ? guardAt?.(at) ?? summary : null,
     leaderAccountId, entryAvg, leg, units, value: parseNumber(shown), plusTicks, instrument,
   });

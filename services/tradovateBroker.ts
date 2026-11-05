@@ -174,6 +174,11 @@ export interface TradovateSessionSuspect {
 }
 
 export interface TradovateBrokerConfig {
+  /**
+   * Smí se držený Modify pozastavené nohy (OnHold) projevit na tomto účtu? Výchozí ne: bez zapnutého
+   * posunu nohou (`--pending-legs on`, sólo DEMO) se chování proti followerům nemění (INV-TRAD-02).
+   */
+  promoteHeldModify?: (accountId: number) => boolean;
   onAccountDataConnectionChange?: (connected: boolean) => void | Promise<void>;
   /** Display-only invalidation. Never awaited; failures cannot enter execution. */
   onAccountDataChange?: (change: TradovateAccountDataChange) => void | Promise<void>;
@@ -396,6 +401,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const requestedVersions = new Map<number, Map<number, TradovateOrderVersionEntity>>();
   const confirmedVersionIds = new Map<number, number>();
   const confirmedCommands = new Set<number>();
+  /** Modify, které broker drží (Command/CommandReport OnHold) a neskončily ExecutionStopped. */
+  const heldCommands = new Set<number>();
+  /** Naposled vydaný tvar příkazu: REST může verzi povýšit dřív, než dorazí stream OnHold. */
+  const lastEmittedOrderSource = new Map<string, string | undefined>();
   const latestExecutionReports = new Map<number, TradovateExecutionReportEntity>();
   /**
    * Incident 5. 10. 2026: Cancel zbytku částečně vyplněné objednávky Tradovate
@@ -612,6 +621,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     for (const listener of listeners) listener(event);
   };
   const emitBrokerState = (event: Extract<BrokerEvent, { type: 'order' | 'fill' | 'position' }>) => {
+    if (event.type === 'order') lastEmittedOrderSource.set(event.order.brokerOrderId, event.order.sourceVersion);
     // Opožděný Fill/Position z mezery se nesmí přehrát jako nový obchod.
     // Order lifecycle ale musí zůstat live: může založit nebo posunout
     // ochranný SL/TP dřív, než controller porovná následný snapshot.
@@ -782,6 +792,22 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
   };
 
+  /** Každý command z REST i streamu: OnHold přidá, ExecutionStopped odebere (i po restartu). */
+  const rememberCommand = (command: TradovateCommandEntity) => {
+    commands.set(command.id, command);
+    if (command.commandType === 'Modify' && command.commandStatus === 'OnHold') heldCommands.add(command.id);
+    if (command.commandStatus === 'ExecutionStopped') heldCommands.delete(command.id);
+  };
+
+  /** Jediný zdroj pravdy o drženém Modify (promoce, potvrzení i čtení). */
+  const isHeldModify = (commandId: number, orderId: number): boolean => {
+    const raw = rawOrders.get(orderId);
+    const command = commands.get(commandId);
+    return raw?.ordStatus === 'Suspended' && heldCommands.has(commandId) && !rejectedCommands.has(commandId)
+      && command?.orderId === orderId && command.commandType === 'Modify'
+      && config.promoteHeldModify?.(raw.accountId) === true;
+  };
+
   const promoteVersion = (orderId: number) => {
     const raw = rawOrders.get(orderId);
     if (!raw) return;
@@ -790,7 +816,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const command = commands.get(version.id);
       const initial = version.id === orderId
         || (command?.orderId === orderId && command.commandType === 'New');
-      if (!initial && (version.id !== confirmedId || rejectedCommands.has(version.id))) continue;
+      // Pozastavená noha OSO: broker Modify jen drží (Command OnHold) a ExecutionReport nepošle až do
+      // fillu vstupu (žurnál 5. 11. 2026, po fillu nese noha tuto cenu ve 73 ze 73 případů).
+      // Qty nesmí držený Modify změnit: změna qty nohy je přechod u brokera, ne posun (INV-TRAD-02).
+      const held = isHeldModify(version.id, orderId)
+        && (orderVersions.get(orderId) == null || version.orderQty === orderVersions.get(orderId)!.orderQty);
+      if (!initial && !held && (version.id !== confirmedId || rejectedCommands.has(version.id))) continue;
       const current = orderVersions.get(orderId);
       if (!current || version.id > current.id) orderVersions.set(orderId, version);
     }
@@ -1175,6 +1206,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     };
     const order = fromOrderEntity(entity, contracts.get(raw.contractId) as string);
     order.sourceVersion = `${version.id}:${raw.ordStatus}`;
+    // Noha opustila pozastavení, ale její cena je zatím jen z drženého Modify: broker ji nepotvrdil.
+    if (raw.ordStatus !== 'Suspended' && heldCommands.has(version.id) && !confirmedCommands.has(version.id)
+      && config.promoteHeldModify?.(raw.accountId) === true) order.heldPriceUnconfirmed = true;
     const partialCancel = orderRejectReasons.has(orderId)
       ? null
       : partialCancelFilledQuantity(orderId, raw.ordStatus, version.orderQty);
@@ -1465,7 +1499,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     const rawList = Array.isArray(rawResult) ? rawResult : rawResult ? [rawResult] : [];
     for (const raw of rawList) rememberRawOrder(raw);
     for (const command of commandResult ?? []) {
-      commands.set(command.id, command);
+      rememberCommand(command);
       const correlationTag = commandCorrelationTag(command);
       if (command.orderId != null && command.commandType === 'New' && correlationTag) {
         orderTags.set(command.orderId, correlationTag);
@@ -1575,7 +1609,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       request<TradovateFillEntity[]>(`/fill/deps?masterid=${orderId}`),
     ]);
     for (const command of dependentCommands ?? []) {
-      commands.set(command.id, command);
+      rememberCommand(command);
       const correlationTag = commandCorrelationTag(command);
       if (command.orderId === orderId && command.commandType === 'New' && correlationTag) {
         orderTags.set(orderId, correlationTag);
@@ -1755,6 +1789,31 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return post<T>(restPath, body);
   };
 
+  /** Vydá příkaz, jen když se jeho tvar liší od naposled vydaného. */
+  const emitOrderIfChanged = async (orderId: number, receivedAt: number) => {
+    const order = await composeOrder(orderId);
+    if (order && lastEmittedOrderSource.get(order.brokerOrderId) !== order.sourceVersion) {
+      emitBrokerState({ type: 'order', order, receivedAt });
+    }
+  };
+
+  /**
+   * Držený Modify odmítnutý nebo zastavený: příkaz se vrátí na poslední verzi, kterou broker opravdu drží.
+   * Status nesmí ukazovat cenu, kterou broker nemá (INV-OUTBOX-02).
+   */
+  const releaseHeldModify = async (commandId: number, orderId: number, receivedAt: number) => {
+    heldCommands.delete(commandId);
+    const raw = rawOrders.get(orderId);
+    const current = orderVersions.get(orderId);
+    // Bez brány se nic nemění (skupiny s followery); potvrzená verze se nikdy nevrací.
+    if (!raw || config.promoteHeldModify?.(raw.accountId) !== true || terminalOrderStatus(raw.ordStatus)
+      || current?.id !== commandId || confirmedCommands.has(commandId) || commands.get(commandId)?.commandType !== 'Modify') return;
+    orderVersions.delete(orderId);
+    promoteVersion(orderId);
+    if (!orderVersions.has(orderId)) orderVersions.set(orderId, current);
+    await emitOrderIfChanged(orderId, receivedAt);
+  };
+
   const applyCommandReport = async (
     report: TradovateCommandReportEntity,
     receivedAt = clock(),
@@ -1767,6 +1826,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
       return false;
     }
+    if (command.commandType === 'Modify' && report.commandStatus === 'OnHold') {
+      heldCommands.add(command.id);
+      promoteVersion(command.orderId);
+      if (isHeldModify(command.id, command.orderId)) await emitOrderIfChanged(command.orderId, receivedAt);
+    }
+    if (report.commandStatus === 'ExecutionStopped') await releaseHeldModify(command.id, command.orderId, receivedAt);
     const rejected = report.ordStatus === 'Rejected'
       || report.commandStatus === 'ExecutionRejected'
       || report.commandStatus === 'RiskRejected';
@@ -1774,6 +1839,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       rejectedCommands.add(command.id);
       const reason = report.text?.trim() || report.rejectReason || 'Tradovate command rejected';
       commandRejectReasons.set(command.id, reason);
+      await releaseHeldModify(command.id, command.orderId, receivedAt);
       if (command.commandType !== 'New') {
         await composeOrder(command.orderId); // Wake only command waiters, preserving the working order.
         return true;
@@ -1813,8 +1879,13 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (contract.id != null && contract.name) contracts.set(contract.id, contract.name);
       } else if (entityType === 'command') {
         const command = item.entity as TradovateCommandEntity;
-        commands.set(command.id, command);
+        rememberCommand(command);
         if (command.orderId != null) promoteVersion(command.orderId);
+        // OnHold přijde až po OrderVersion: teprve tady se změna pozastavené nohy projeví.
+        if (command.orderId != null && isHeldModify(command.id, command.orderId)) await emitOrderIfChanged(command.orderId, receivedAt);
+        if (command.orderId != null && command.commandType === 'Modify' && command.commandStatus === 'ExecutionStopped') {
+          await releaseHeldModify(command.id, command.orderId, receivedAt);
+        }
         const correlationTag = commandCorrelationTag(command);
         if (command.orderId != null && command.commandType === 'New' && correlationTag) {
           orderTags.set(command.orderId, correlationTag);
@@ -1826,7 +1897,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         await applyCommandReport(item.entity as TradovateCommandReportEntity, receivedAt);
       } else if (entityType === 'executionreport') {
         const report = item.entity as TradovateExecutionReportEntity;
-        if (!rememberExecutionReport(report)) continue;
+        const reportChanged = rememberExecutionReport(report);
+        // Odmítnutý držený Modify: příkaz zpět na cenu, kterou broker opravdu drží.
+        if (report.execType === 'Rejected' && report.commandId != null) await releaseHeldModify(report.commandId, report.orderId, receivedAt);
+        if (!reportChanged) continue;
         if (await hydrateOrderVersion(report.orderId, preparedOrderVersions?.get(report.orderId)) === 'deferred') continue;
         const order = await composeOrder(report.orderId);
         if (order) emitBrokerState({ type: 'order', order, receivedAt });
@@ -2663,7 +2737,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       });
       const commandId = assertCommandAccepted(result, 'modifyOrder');
       const confirmed = await waitForOrder(orderId, order =>
-        confirmedCommands.has(commandId)
+        // Pozastavená noha: důkaz je přijatý Modify (OnHold) a jeho verze v aktuálním příkazu.
+        (confirmedCommands.has(commandId) || (isHeldModify(commandId, orderId) && orderVersions.get(orderId)?.id === commandId))
         && isOpenOrderStatus(order.status)
         && order.quantity === changes.quantity
         && order.orderType === changes.orderType
@@ -2674,8 +2749,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (rejection) throw new TradovateTransportError(`modifyOrder command ${commandId} rejected: ${rejection}`);
         throw new TradovateTransportError(`modifyOrder command ${commandId} was not confirmed by the order stream`);
       }
-      // Predikát výše = Replaced přesně tohoto commandu + otevřený příkaz v odeslaném tvaru.
-      return confirmed ? { confirmedBy: 'stream-replaced' as const, order: { ...confirmed } } : undefined;
+      // Predikát výše = Replaced přesně tohoto commandu (nebo držený Modify) + otevřený příkaz v odeslaném tvaru.
+      return confirmed ? { confirmedBy: confirmedCommands.has(commandId) ? 'stream-replaced' as const : 'stream-held' as const, order: { ...confirmed } } : undefined;
     },
     async frontContract(root) {
       // Jen čtení: product → splatnosti (právě jedna `isFront`, nearchivovaná) → kontrakt.
@@ -2822,7 +2897,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
       const order = await composeOrder(orderId);
       if (!order) throw new TradovateTransportError(`Missing OrderVersion for order ${orderId}`);
-      return { order, completeness: 'authoritative', observedAt: clock() };
+      // Pozastavená noha s novější nerozhodnutou verzí (REST nedoložil OnHold ani odmítnutí): stará
+      // cena tu není důkaz, že broker změnu neprovedl. Výsledek zůstane `unknown`, ne `rejected`.
+      const shownVersion = orderVersions.get(orderId)?.id ?? 0;
+      const undecided = raw.ordStatus === 'Suspended' && config.promoteHeldModify?.(accountId) === true
+        && [...(requestedVersions.get(orderId)?.values() ?? [])].some(version => version.id > shownVersion && !rejectedCommands.has(version.id));
+      return { order, completeness: undecided ? 'eventual' : 'authoritative', observedAt: clock() };
     },
     async findOrderStatusById(accountId, brokerOrderId, options) {
       const orderId = numberId(brokerOrderId);
@@ -2900,7 +2980,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         return { order: null, completeness: 'authoritative', observedAt: clock() };
       }
       rememberRawOrder(raw);
-      for (const command of dependentCommands ?? []) commands.set(command.id, command);
+      for (const command of dependentCommands ?? []) rememberCommand(command);
       for (const version of versions ?? []) rememberVersion(version);
 
       const matchingVersions = (versions ?? []).filter(version => (

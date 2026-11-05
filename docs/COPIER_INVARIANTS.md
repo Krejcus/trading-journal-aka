@@ -1666,6 +1666,7 @@ existující ochranu.
 
 ### INV-TRAD-02: Pending/Suspended stav je aktivní riziko, ale jeho venue-managed quantity není automaticky uživatelský replace
 
+- Držený Modify (5. 11. 2026): Modify pozastavené nohy broker jen drží (Command OnHold, bez ExecutionReportu). Projeví se jen s bránou adaptéru `promoteHeldModify` (`--pending-legs on`, sólo DEMO, jen leader) a jen se stejnou qty. Není to provedený posun: záznam nese `heldMove`, po aktivaci nohy se cena ověří, nepotvrzená nebo jiná cena je incident bez automatického zavírání. Bez brány beze změny, s followery se držený Modify nezrcadlí.
 - Proč: Tradovate při partial fillu OSO přechodně mění child quantity; slepé
   kopírování této hodnoty v minulosti zrušilo správnou ochranu followerů.
 - Vynucuje: `services/copierLeaderEventSource.ts:orderEvent`,
@@ -2119,6 +2120,7 @@ existující ochranu.
 
 ### INV-MANUAL-01: Ruční vstup z appky jde jen přes worker na leadera; náhled (fáze 1a) nic nezapíše (29. 10. 2026)
 
+- Nohy nevyplněného vstupu a TP blíž k trhu (5. 11. 2026, `--pending-legs on`, sólo DEMO): SL/TP čekajícího Limit/Stop vstupu jde posunout jen u 1 kontraktu a jen na správnou stranu vstupu; TP blíž k trhu jen s čerstvou kotací IBKR a aspoň 8 ticků na ziskové straně. Conformance z API se dělá z appky na DEMO před zapnutím flagu.
 - Potvrzování: od 5. 11. 2026 bez dvoukroku, první klik odesílá (viz „Jedno kliknutí“ v INV-UI-01). Brány a worker beze změny.
 - Proč: Obchodování z grafu je první risk-zvyšující cesta z appky. Fáze 1a
   ověřuje brány naostro bez zápisu, aby „náhled OK“ nikdy nebylo zaměněno

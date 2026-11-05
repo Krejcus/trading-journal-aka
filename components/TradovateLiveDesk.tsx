@@ -150,6 +150,7 @@ import {
 } from '../lib/tradovateLiveTab';
 import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
+import { supportsCopierManualOrderPendingLegs } from '../lib/copierWorkerCapabilities';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
@@ -1324,6 +1325,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       ...(supportsCopierManualOrderCancelPending(agentStatus) ? { cancelPending: cancelPendingView, cancelPendingEntries } : {}),
       // Správa z čar = PŘESNĚ deskový `manageLeaderEntry` a za stejné podmínky jako PC graf
       // (`onManageEntry`); × u pozice jako PC `canClose`; BE průměr jen ze stavu pollu (jako PC).
+      pendingLegs: supportsCopierManualOrderPendingLegs(agentStatus),
       ...livePhoneManageFields({
         manageSupported: supportsCopierManualOrderManage(agentStatus), closeCapability: supportsCopierManualOrderClose(agentStatus),
         ownEntry: ownManualEntry, manage: manageLeaderEntry, runtimeAvailable,
@@ -2028,6 +2030,7 @@ acceptAgentStatus((await executeAgent({
           // z pollu nemusí patřit ke kusům v grafu (přikoupení) — BE počká na poll.
           manageEntryAvgPrice={chartLive.status === agentStatus ? ownManualEntry?.entryAvgPrice ?? null : null}
           manageCloseSupported={supportsCopierManualOrderClose(agentStatus)}
+          managePendingLegsSupported={supportsCopierManualOrderPendingLegs(agentStatus)}
           entryMarketSupported={supportsCopierManualEntryMarket(agentStatus)}
           entryMaxContracts={manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null)}
           entryFrontContract={entryFrontContract}

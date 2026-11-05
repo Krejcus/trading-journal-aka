@@ -37,6 +37,8 @@ export interface LivePhoneTradeBridge {
    * Správa obchodu leadera z čar v grafu (posun SL/TP, BE, × zavřít/zrušit) — stejná
    * cesta jako PC `onManageEntry`. Zatím nenapojeno: bez ní jsou čáry jen zobrazení.
    */
+  /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu (`manual-order-pending-legs-v1`). */
+  pendingLegs?: boolean;
   manage?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
   /** × u pozice: worker umí zavřít a kopírka je čerstvě zapnutá (ne shadow) — jako PC. */
   closeSupported?: boolean;

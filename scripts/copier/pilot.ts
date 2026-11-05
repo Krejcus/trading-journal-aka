@@ -110,6 +110,8 @@ import { createHostSleepDetector } from '../../lib/hostSleepDetector';
  */
 // Tradovate dnes (17. 9. 2026) potřeboval na syncrequest i /order/list přes
 // 15 s z obou sítí; kratší limit reconnect jen roztočil.
+/** Brána držených Modify (posun nohou nevyplněného vstupu): výchozí vypnuto, naváže ji controller. */
+const pendingLegsGate: { current: (accountId: number) => boolean } = { current: () => false };
 const WS_SYNC_TIMEOUT_MS = 45_000;
 /** Startup reads retry in-process for up to 10 minutes instead of exiting into a launchd crash loop. */
 const STARTUP_RETRY: RetryTransientOptions = { deadlineMs: 10 * 60_000, initialDelayMs: 5_000, maxDelayMs: 60_000 };
@@ -324,6 +326,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
     context.displayFeed = makeDisplayFeed(context, Object.keys(accountSpecsByAccountId).map(Number));
     const broker = createTradovateBroker({
       environment: 'demo',
+      promoteHeldModify: accountId => pendingLegsGate.current(accountId),
       preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
         && stringFlag('manual-only', false) === 'true',
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
@@ -387,6 +390,7 @@ async function runMultiConnectionAgent(): Promise<void> {
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
     const broker = createTradovateBroker({
       environment: 'demo',
+      promoteHeldModify: accountId => pendingLegsGate.current(accountId),
       preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
         && stringFlag('manual-only', false) === 'true',
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
@@ -1396,6 +1400,9 @@ async function runLocalAgent(
       // Přikoupení do pozice (3. 11. 2026): jen instalační opt-in; controller ho navíc pustí jen
       // pro manual-only local-only DEMO skupinu bez followerů.
       manualEntryScaleIn: process.env.ALPHATRADE_SCALE_IN?.trim().toLowerCase() === 'on',
+      // Posun SL/TP nevyplněného vstupu a TP blíž k trhu: stejná pravidla jako přikoupení.
+      manualPendingLegs: process.env.ALPHATRADE_PENDING_LEGS?.trim().toLowerCase() === 'on',
+      bindPendingLegsGate: gate => { pendingLegsGate.current = gate; },
       store: {
         load: () => runtimeStore.load(),
         async commit(snapshot, expectedRevision) {

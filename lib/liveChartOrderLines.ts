@@ -1,5 +1,6 @@
 import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
-import { breakEvenStop, tightenBlockReason, type LiveChartPositionSummary } from './liveChartPosition';
+import { MNQ_TICK, TIGHTEN_MIN_TICKS, breakEvenStop, tightenBlockReason, type LiveChartPositionSummary } from './liveChartPosition';
+import { pendingLegSideProblem } from './leaderOrderManage';
 import { liveBareLineId } from './liveBareCloseUi';
 
 /**
@@ -29,6 +30,11 @@ export interface LivePositionLineControls {
   entryAvg: number | null;
   /** Odeslaný posun čekající na potvrzení: čára drží novou cenu se štítkem „odesílám“. */
   pending?: { stopLoss?: number; takeProfit?: number };
+  /**
+   * Worker umí posunout SL/TP nevyplněného vstupu a TP blíž k trhu
+   * (`manual-order-pending-legs-v1`). Bez něj dnešní chování.
+   */
+  pendingLegs?: boolean;
   /** Čekající přikoupení do pozice (worker `leaderPositions`) — vlastní čára s × (zrušit). */
   pendingAdd?: { price: number | null; quantity: number; orderType: string } | null;
   /**
@@ -46,8 +52,15 @@ export function liveLineMoveBlockReason(
   summary: LiveChartPositionSummary,
   kind: 'stopLoss' | 'takeProfit',
   price: number,
+  options: { pendingLegs?: boolean } = {},
 ): string | null {
-  if (summary.kind !== 'position') return 'Posun jde až u vyplněné pozice.';
+  if (summary.kind !== 'position') {
+    if (!options.pendingLegs) return 'Posun jde až u vyplněné pozice.';
+    const current = kind === 'stopLoss' ? summary.stop : summary.target;
+    if (current == null) return `${kind === 'stopLoss' ? 'SL' : 'TP'} vstupu není známý.`;
+    if (summary.entry == null) return 'Cena vstupu není známá.';
+    return pendingLegSideProblem(kind, summary.side, summary.entry, summary.entryType ?? null, price);
+  }
   if (kind === 'stopLoss') {
     if (summary.stop == null) return 'SL leadera není známý.';
     if (price === summary.stop) return null;
@@ -58,7 +71,15 @@ export function liveLineMoveBlockReason(
   }
   if (summary.target == null) return 'TP leadera není známý.';
   const toward = summary.side === 'long' ? price < summary.target : price > summary.target;
-  return toward ? 'TP jde posunout jen dál od trhu (blíž by se hned vyplnil).' : null;
+  if (!toward) return null;
+  if (!options.pendingLegs) return 'TP jde posunout jen dál od trhu (blíž by se hned vyplnil).';
+  if (summary.stop != null && (summary.side === 'long' ? price <= summary.stop : price >= summary.stop)) {
+    return `TP musí zůstat ${summary.side === 'long' ? 'nad' : 'pod'} SL.`;
+  }
+  // Limit přes trh by se hned vyplnil: nový TP musí zůstat na ziskové straně trhu.
+  if (summary.mark == null || !Number.isFinite(summary.mark)) return 'Cena trhu není známá — TP blíž teď nejde.';
+  const gap = summary.side === 'long' ? price - summary.mark : summary.mark - price;
+  return gap < TIGHTEN_MIN_TICKS * MNQ_TICK - 1e-9 ? `Nový TP je blíž než ${TIGHTEN_MIN_TICKS} ticků od trhu (nebo za ním) — hned by se vyplnil.` : null;
 }
 
 /** Stav tlačítka BE na štítku pozice. */
@@ -78,7 +99,7 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
   const long = summary.side === 'long';
   const dir = long ? 1 : -1;
   const position = summary.kind === 'position';
-  const canMove = controls.manageable && position;
+  const canMove = controls.manageable && (position || controls.pendingLegs === true);
   const scope = summary.scopeLabel ? ` ${summary.scopeLabel}` : '';
   const levelLabel = (kind: 'stopLoss' | 'takeProfit', at: number, note?: string) => {
     const pnl = (at - entry) * dir * summary.quantity * controls.pointValue;

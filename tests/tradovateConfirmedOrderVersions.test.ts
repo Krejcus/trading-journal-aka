@@ -200,3 +200,147 @@ describe('Tradovate snímek příkazů ze streamu (zrychlení posunu 30. 10.)', 
     expect(wire.broker.streamOrderSnapshot!(100)).toBeNull();
   });
 });
+
+describe('Tradovate pozastavená noha OSO (žurnál 5. 11. 2026)', () => {
+  const suspended = async (gate = true) => {
+    const { wire, id } = await setup();
+    wire.setHeldGate(gate);
+    const raw = { ...wire.orders.get(id)!, ordStatus: 'Suspended' };
+    wire.orders.set(id, raw);
+    wire.props({ entityType: 'order', entity: raw });
+    await expect.poll(() => latest(wire)?.status).toBe('pending');
+    return { wire, id };
+  };
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+
+  it('bez zapnuté brány se držený Modify neprojeví: žádná událost, stará cena', async () => {
+    const { wire, id } = await suspended(false);
+    const before = wire.events.length;
+    wire.hold(id, { stopPrice: 28_930.5 });
+    await settle();
+    expect(wire.events.slice(before).filter(event => event.type === 'order')).toEqual([]);
+    expect(latest(wire)).toMatchObject({ status: 'pending', stopPrice: 28_941.25 });
+    wire.setModifyOutcome('held');
+    await expect(wire.broker.modifyOrder(100, String(id), { quantity: 1, orderType: 'Stop', stopPrice: 28_920 })).rejects.toThrow('was not confirmed');
+  });
+
+  it('posun mimo appku (TradingView): OnHold bez ExecutionReportu změní cenu ve streamu', async () => {
+    const { wire, id } = await suspended();
+    wire.hold(id, { stopPrice: 28_930.5 });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_930.5);
+    expect(latest(wire)).toMatchObject({ status: 'pending' });
+  });
+
+  it('Modify z appky potvrdí držený Modify jako stream-held s přesným tvarem', async () => {
+    const { wire, id } = await suspended();
+    wire.setModifyOutcome('held');
+    await expect(wire.broker.modifyOrder(100, String(id), { quantity: 1, orderType: 'Stop', stopPrice: 28_930.5 })).resolves
+      .toMatchObject({ confirmedBy: 'stream-held', order: { brokerOrderId: String(id), status: 'pending', stopPrice: 28_930.5 } });
+  });
+
+  it('CommandReport OnHold bez změny Command entity stačí stejně jako Command OnHold', async () => {
+    const { wire, id } = await suspended();
+    const commandId = 9_001;
+    const shape = { ...[...wire.versions.values()].filter(row => row.orderId === id).at(-1)!, id: commandId, orderId: id, stopPrice: 28_925 };
+    wire.versions.set(commandId, shape);
+    wire.props({ entityType: 'command', entity: { id: commandId, orderId: id, commandType: 'Modify', commandStatus: 'Pending' } },
+      { entityType: 'orderVersion', entity: shape }, { entityType: 'commandReport', entity: { id: 9_002, commandId, commandStatus: 'OnHold' } });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_925);
+  });
+
+  it('pracující příkaz se samotným OnHold bez ExecutionReportu cenu nezmění', async () => {
+    const { wire, id } = await setup();
+    wire.setHeldGate(true);
+    wire.hold(id, { stopPrice: 28_930.5 });
+    await settle();
+    expect(latest(wire)).toMatchObject({ status: 'working', stopPrice: 28_941.25 });
+  });
+
+  it('držený Modify s jiným počtem se neprojeví (změna qty je přechod u brokera)', async () => {
+    const { wire, id } = await suspended();
+    wire.hold(id, { stopPrice: 28_930.5, orderQty: 3 });
+    await settle();
+    expect(latest(wire)).toMatchObject({ stopPrice: 28_941.25, quantity: 1 });
+  });
+
+  it('odmítnutí drženého Modify vrátí příkaz na cenu, kterou broker opravdu drží', async () => {
+    const { wire, id } = await suspended();
+    const commandId = wire.hold(id, { stopPrice: 28_930.5 });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_930.5);
+    wire.props({ entityType: 'commandReport', entity: { id: 9_003, commandId, commandStatus: 'ExecutionRejected', rejectReason: 'InvalidPrice' } });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_941.25);
+  });
+
+  it('ExecutionStopped u otevřené nohy vrátí cenu také', async () => {
+    const { wire, id } = await suspended();
+    const commandId = wire.hold(id, { stopPrice: 28_930.5 });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_930.5);
+    wire.props({ entityType: 'command', entity: { id: commandId, orderId: id, commandType: 'Modify', commandStatus: 'ExecutionStopped' } });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_941.25);
+  });
+
+  it('REST verzi povýší dřív než stream: událost přesto přijde', async () => {
+    const { wire, id } = await suspended();
+    const commandId = 9_030;
+    const shape = { ...[...wire.versions.values()].filter(row => row.orderId === id).at(-1)!, id: commandId, orderId: id, stopPrice: 28_915 };
+    const command = { id: commandId, orderId: id, commandType: 'Modify', commandStatus: 'OnHold' };
+    wire.versions.set(commandId, shape);
+    wire.commands.set(commandId, command);
+    await wire.broker.listOrders(100, { fresh: true });
+    wire.props({ entityType: 'command', entity: command });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_915);
+  });
+
+  it('opakovaný stejný OnHold nevydá další událost', async () => {
+    const { wire, id } = await suspended();
+    const commandId = wire.hold(id, { stopPrice: 28_930.5 });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_930.5);
+    const before = wire.events.filter(event => event.type === 'order').length;
+    wire.props({ entityType: 'command', entity: { id: commandId, orderId: id, commandType: 'Modify', commandStatus: 'OnHold' } });
+    await settle();
+    expect(wire.events.filter(event => event.type === 'order')).toHaveLength(before);
+  });
+
+  it('ExecutionReport Rejected drženého Modify vrátí cenu', async () => {
+    const { wire, id } = await suspended();
+    const commandId = wire.hold(id, { stopPrice: 28_930.5 });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_930.5);
+    const raw = wire.orders.get(id)!;
+    wire.props({ entityType: 'executionReport', entity: { ...raw, id: 9_040, orderId: id, commandId, execType: 'Rejected', ordStatus: 'Suspended', rejectReason: 'InvalidPrice' } });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_941.25);
+  });
+
+  it('aktivace bez potvrzení drženého Modify: příkaz nese příznak nepotvrzené ceny, potvrzení ho sundá', async () => {
+    const { wire, id } = await suspended();
+    const commandId = wire.hold(id, { stopPrice: 28_930.5 });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_930.5);
+    const raw = { ...wire.orders.get(id)!, ordStatus: 'Working' };
+    wire.orders.set(id, raw);
+    wire.props({ entityType: 'order', entity: raw });
+    await expect.poll(() => latest(wire)?.status).toBe('working');
+    expect(latest(wire)).toMatchObject({ heldPriceUnconfirmed: true });
+    wire.props({ entityType: 'executionReport', entity: { ...raw, id: 9_050, orderId: id, commandId, execType: 'New', ordStatus: 'Working' } });
+    await expect.poll(() => latest(wire)?.heldPriceUnconfirmed).toBeUndefined();
+  });
+
+  it('čtení s nerozhodnutou novější verzí není důkaz staré ceny (eventual)', async () => {
+    const { wire, id } = await suspended();
+    const commandId = 9_010;
+    const shape = { ...[...wire.versions.values()].filter(row => row.orderId === id).at(-1)!, id: commandId, orderId: id, stopPrice: 28_920 };
+    wire.versions.set(commandId, shape);
+    wire.props({ entityType: 'orderVersion', entity: shape });
+    await settle();
+    expect((await wire.broker.findOrderById(100, String(id))).completeness).toBe('eventual');
+  });
+
+  it('po aktivaci nese stejný command ExecutionReport New: cena drží a stav je working', async () => {
+    const { wire, id } = await suspended();
+    const commandId = wire.hold(id, { stopPrice: 28_930.5 });
+    await expect.poll(() => latest(wire)?.stopPrice).toBe(28_930.5);
+    const raw = { ...wire.orders.get(id)!, ordStatus: 'Working' };
+    wire.orders.set(id, raw);
+    wire.props({ entityType: 'executionReport', entity: { ...raw, id: 9_020, orderId: id, commandId, execType: 'New', ordStatus: 'Working' } });
+    await expect.poll(() => latest(wire)?.status).toBe('working');
+    expect(latest(wire)?.stopPrice).toBe(28_930.5);
+  });
+});

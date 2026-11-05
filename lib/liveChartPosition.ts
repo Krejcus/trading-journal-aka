@@ -81,7 +81,7 @@ const leaderOf = (accounts: readonly { accountId: number; isLeader: boolean; qua
   return leader ? { accountId: leader.accountId, quantity: leader.quantity, entry: leader.entry } : null;
 };
 
-const MNQ_TICK = 0.25;
+export const MNQ_TICK = 0.25;
 /** Odstup SL od trhu (podle P&L brokera), pod kterým UI utažení nenabídne — kopie followerům by závodila s trhem. */
 export const TIGHTEN_MIN_TICKS = 8;
 

@@ -474,6 +474,10 @@ async function install(): Promise<void> {
   const scaleInFlag = flags.get('scale-in')?.trim().toLowerCase();
   if (scaleInFlag === 'on' && !manualOnly) throw new Error('--scale-in on je povolený jen s --manual-only');
   const scaleInEnabled = manualOnly && scaleInFlag === 'on';
+  // Posun SL/TP nevyplněného vstupu a TP blíž k trhu (5. 11. 2026): jen manual-only a jen výslovně (`--pending-legs on`).
+  const pendingLegsFlag = flags.get('pending-legs')?.trim().toLowerCase();
+  if (pendingLegsFlag === 'on' && !manualOnly) throw new Error('--pending-legs on je povolený jen s --manual-only');
+  const pendingLegsEnabled = manualOnly && pendingLegsFlag === 'on';
   const programArguments = [
     '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
@@ -510,6 +514,7 @@ async function install(): Promise<void> {
     ${priceSourceIbkr ? '<key>ALPHATRADE_PRICE_SOURCE</key><string>ibkr</string>' : ''}
     ${priceAlertsEnabled ? '<key>ALPHATRADE_PRICE_ALERTS</key><string>on</string>' : ''}
     ${scaleInEnabled ? '<key>ALPHATRADE_SCALE_IN</key><string>on</string>' : ''}
+    ${pendingLegsEnabled ? '<key>ALPHATRADE_PENDING_LEGS</key><string>on</string>' : ''}
     ${webSocketWritesEnabled ? '<key>ALPHATRADE_TRADOVATE_WS_WRITES</key><string>on</string>' : ''}
   </dict>
 </dict></plist>

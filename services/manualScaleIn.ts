@@ -26,6 +26,21 @@ export function scaleInEnabled(input: {
     && input.group.followers.length === 0 && input.brokerEnvironment === 'demo';
 }
 
+/**
+ * Zvyšuje `replaced` příkaz expozici? Po restartu chybí paměť záměrů (`hadPrevious` false), takže vlastní noha
+ * ručního vstupu by vyšla jako navýšení. V původním počtu není; vyšší qty (změna v Tradovate) zůstává navýšením.
+ */
+export function replacedOrderIncreasesExposure(input: {
+  nextPotential: number;
+  previousPotential: number;
+  hadPrevious: boolean;
+  quantity: number;
+  ownLegQuantity: number | null | undefined;
+}): boolean {
+  if (input.nextPotential <= input.previousPotential) return false;
+  return input.hadPrevious || input.ownLegQuantity == null || input.quantity > input.ownLegQuantity;
+}
+
 export interface ScaleInOrder {
   brokerOrderId: string;
   symbol: string;

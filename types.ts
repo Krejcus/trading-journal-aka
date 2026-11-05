@@ -873,6 +873,8 @@ export interface UserPreferences {
   careerRoadmap?: CareerCheckpoint[];
   labExperiments?: LabExperiment[];
   theme?: 'dark' | 'light' | 'oled';
+  /** Kdy uživatel téma naposledy změnil (ms); novější volba platí na všech zařízeních. */
+  themeUpdatedAt?: number;
   accentColor?: AccentColor;
   /** Vzhled Aurora (pozadí, barvy, síla, průhlednost karet) — sdílený mezi zařízeními. */
   appearance?: import('./lib/appearance').AppearanceSettings;

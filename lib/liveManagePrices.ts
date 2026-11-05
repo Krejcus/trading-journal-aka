@@ -258,12 +258,12 @@ export function planManageMove(
   summary: LiveChartPositionSummary | null | undefined,
   leg: LiveManageLeg,
   price: number,
-  options: { tick?: number } = {},
+  options: { tick?: number; pendingLegs?: boolean } = {},
 ): LiveManagePlan {
   const tick = options.tick ?? MNQ_TICK;
   if (!summary) return blocked('Pozice leadera není známá.');
   if (!validPrice(price) || !onTick(price, tick)) return blocked(`Cena musí být kladná a na ticku ${tick}.`);
-  const reason = liveLineMoveBlockReason(summary, leg, price);
+  const reason = liveLineMoveBlockReason(summary, leg, price, { pendingLegs: options.pendingLegs === true });
   if (reason) return blocked(reason, price);
   const current = leg === 'stopLoss' ? summary.stop : summary.target;
   // liveLineMoveBlockReason už odmítla neznámou nohu; tady jen pro typy.

@@ -70,6 +70,14 @@ export const supportsCopierManualOrderManage = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_MANUAL_ORDER_MANAGE_CAPABILITY);
 
+/** Worker umí posunout SL/TP nevyplněného vstupu a TP blíž k trhu (5. 11. 2026, sólo DEMO s `--pending-legs on`). */
+export const COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY = 'manual-order-pending-legs-v1';
+
+export const supportsCopierManualOrderPendingLegs = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY);
+
 /** Worker umí zavřít obchod leadera z grafu (fáze 2d, 30. 10. 2026). */
 export const COPIER_MANUAL_ORDER_CLOSE_CAPABILITY = 'manual-order-close-v1';
 
