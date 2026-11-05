@@ -288,6 +288,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-05 — LIVE graf: SL/TP čekajícího vstupu, návrh bez nohou, živé P&L na lince (Claude, web NASAZEN na Filipovo „nasaď“, worker beze změny)
+
+- Příčina mizejících SL/TP po odeslání Limitu: nohy z heartbeatu workeru jsou `pending` → `PendingNew`, karta čekajícího
+  vstupu brala jen `Suspended`. Krytí otevřené pozice beze změny.
+- Nový návrh se otevírá bez SL/TP (Filip: nohy si natáhne z „+ SL“ / „+ TP“), šablona ★ dosazuje jen velikost, přikoupení
+  dál bere SL/TP pozice. Pravidla odeslání se nezměnila: Limit/Stop dál chtějí obě nohy.
+- Živé P&L na lince vstupu a tlačítku panelu (`liveDisplayOpenPnl`): IBKR téhož kontraktu ≤ 5 s, jinak číslo brokera; jen
+  zobrazení (INV-UI-04). Stopa příkazu nově měří fill → graf a první status nabízející správu.
+- Telefon je bundlovaný, bez nové instalace změny nemá. V návrhu u critica: Limit/Stop bez nohou a doplňování SL/TP kdykoliv
+  (jen sólo DEMO). Posun čekajícího vstupu a jeho nohou čeká na záznam R1–R4 u brokera.
+
 ### 2026-11-04 — LIVE latency: kompaktní ACK horkých příkazů (Claude po Codexovi, NASAZENO 5. 11. ~05:15, změřeno jen na blokovaných příkazech)
 
 - Codex skončil na limitu před celou sadou a oponenturou. Záměr: `place-leader-entry`
