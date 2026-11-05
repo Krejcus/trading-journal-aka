@@ -42,7 +42,13 @@ export interface LiveCommandTrace {
   via?: 'inline' | 'poll' | 'error';
   serverTiming?: Record<string, number>;
   workerTiming?: LiveCommandWorkerTiming;
+  /** První status workeru, který obchod nabízí ke správě (SL/TP/× v UI). Jen měření, nic neautorizuje. */
+  manageReadyMs?: number;
+  /** Totéž od HTTP výsledku příkazu; chybí, když status předběhl výsledek. */
+  manageReadyAfterResultMs?: number;
   stages?: Partial<Record<LiveCommandTraceStage, {
+    /** Událost u workeru → příjem v prohlížeči. Porovnatelné jen na stejném stroji (hodiny Macu). */
+    workerToReceiveMs?: number;
     receivedMs: number;
     paintedMs: number;
     receiveToPaintMs: number;
@@ -55,6 +61,12 @@ export interface LiveCommandTrace {
 }
 
 const active = new Map<string, LiveCommandTrace>();
+/**
+ * Dokončená stopa zůstává pro pozdější milníky: Limit se vyplní až po dokončení a správa
+ * se odemkne až statusem. Bez toho by se fill měřil od nové, falešné kotvy kliku.
+ */
+const finished = new Map<string, LiveCommandTrace>();
+const knownTrace = (operationId: string) => active.get(operationId) ?? finished.get(operationId) ?? null;
 let visibilityListenerInstalled = false;
 const pendingPersist = new Map<string, LiveCommandTrace>();
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -190,6 +202,8 @@ const completeIfReady = (trace: LiveCommandTrace) => {
     && state.visible
     && state.focused;
   active.delete(trace.operationId);
+  if (finished.size >= MAX_TRACES) finished.delete(finished.keys().next().value as string);
+  finished.set(trace.operationId, trace);
   // Automatizované A/B měření čte dokončenou stopu z konzole. Zápis běží až
   // po změřeném paintu a nikdy neblokuje obchod ani React commit.
   if (typeof window !== 'undefined') {
@@ -227,34 +241,59 @@ export function hasActiveLiveCommandTrace(operationId: string): boolean {
   return active.has(operationId);
 }
 
+/** Čeká stopa ještě na tento milník? Dokončená jen na pozdější fill/position, ne na další order. */
+export function liveCommandTraceWantsPaint(operationId: string, stage: LiveCommandTraceStage): boolean {
+  if (active.has(operationId)) return true;
+  const trace = finished.get(operationId);
+  return trace != null && stage !== 'order' && trace.stages?.[stage] == null;
+}
+
 export function markLiveCommandPaint(input: {
   operationId: string;
   stage: LiveCommandTraceStage;
   receivedPerformanceAt: number;
   workerTiming?: LiveCommandWorkerTiming;
 }): void {
-  update(input.operationId, trace => {
-    // Každý milestone měří první pixel. Periodický F2a heartbeat nesmí
-    // přepisovat order/fill stopu, zatímco limit čeká na trhu.
-    if (trace.stages?.[input.stage]) return;
-    const paintedAt = performance.now();
-    const state = browserState();
-    trace.workerTiming = input.workerTiming;
-    trace.stages = {
-      ...(trace.stages ?? {}),
-      [input.stage]: {
-        receivedMs: input.receivedPerformanceAt - trace.startedPerformanceMs,
-        paintedMs: paintedAt - trace.startedPerformanceMs,
-        receiveToPaintMs: paintedAt - input.receivedPerformanceAt,
-        clickToPaintMs: paintedAt - trace.startedPerformanceMs,
-        visible: state.visible,
-        focused: state.focused,
-      },
-    };
-    if (!state.visible || !state.focused) trace.stayedForeground = false;
-    logStage(`paint:${input.stage}`, trace);
-    completeIfReady(trace);
-  });
+  const trace = knownTrace(input.operationId);
+  // Neznámá stopa (reload stránky, jiné okno): žádná nová kotva, klik jsme neviděli.
+  if (!trace) return;
+  // Každý milestone měří první pixel. Periodický F2a heartbeat nesmí
+  // přepisovat order/fill stopu, zatímco limit čeká na trhu.
+  if (trace.stages?.[input.stage]) return;
+  const paintedAt = performance.now();
+  const state = browserState();
+  trace.workerTiming = input.workerTiming ?? trace.workerTiming;
+  const timing = trace.workerTiming;
+  const workerAt = input.stage === 'position' ? timing?.positionAt
+    : input.stage === 'fill' ? timing?.fillAt ?? timing?.filledOrderAt
+      : timing?.orderAt;
+  const receivedEpochMs = trace.startedEpochMs + (input.receivedPerformanceAt - trace.startedPerformanceMs);
+  trace.stages = {
+    ...(trace.stages ?? {}),
+    [input.stage]: {
+      ...(workerAt != null ? { workerToReceiveMs: receivedEpochMs - workerAt } : {}),
+      receivedMs: input.receivedPerformanceAt - trace.startedPerformanceMs,
+      paintedMs: paintedAt - trace.startedPerformanceMs,
+      receiveToPaintMs: paintedAt - input.receivedPerformanceAt,
+      clickToPaintMs: paintedAt - trace.startedPerformanceMs,
+      visible: state.visible,
+      focused: state.focused,
+    },
+  };
+  if (!state.visible || !state.focused) trace.stayedForeground = false;
+  logStage(`paint:${input.stage}`, trace);
+  if (active.has(trace.operationId)) completeIfReady(trace);
+  persist(trace);
+}
+
+/** Status workeru poprvé nabízí tento obchod ke správě. Neznámá stopa = nic. */
+export function markLiveCommandManageReady(operationId: string): void {
+  const trace = knownTrace(operationId);
+  if (!trace || trace.manageReadyMs != null) return;
+  trace.manageReadyMs = performance.now() - trace.startedPerformanceMs;
+  if (trace.resultMs != null) trace.manageReadyAfterResultMs = trace.manageReadyMs - trace.resultMs;
+  persist(trace);
+  logStage('manage-ready', trace);
 }
 
 export function liveCommandWorkerStage(timing: LiveCommandWorkerTiming | undefined): LiveCommandTraceStage {

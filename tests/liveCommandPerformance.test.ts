@@ -3,8 +3,10 @@ import { readFileSync } from 'node:fs';
 import {
   hasActiveLiveCommandTrace,
   liveCommandTraceReadyToComplete,
+  liveCommandTraceWantsPaint,
   liveCommandWorkerDurations,
   liveCommandWorkerStage,
+  markLiveCommandManageReady,
   markLiveCommandPaint,
   markLiveCommandResult,
   startLiveCommandTrace,
@@ -87,6 +89,60 @@ describe('LIVE command end-to-end performance', () => {
     expect(phone).toMatch(/const paint = slots\.liveExposurePaint;/);
     expect(phone).toMatch(/markLiveCommandPaint\(\{/);
     expect(phone).toMatch(/requestAnimationFrame\(\(\) => \{[\s\S]*requestAnimationFrame/);
+  });
+
+  const orderPaint = (operationId: string) => markLiveCommandPaint({ operationId, stage: 'order', receivedPerformanceAt: performance.now() });
+  it('pozdější fill Limitu i připravenost správy jdou do téže stopy s původní kotvou', () => {
+    const operationId = 'entry:later-fill';
+    const started = startLiveCommandTrace(operationId)!;
+    orderPaint(operationId);
+    markLiveCommandResult(operationId, 'acknowledged');
+    expect(hasActiveLiveCommandTrace(operationId)).toBe(false);
+    const anchor = started.startedPerformanceMs;
+    const fillAt = started.startedEpochMs + 1_000;
+    markLiveCommandPaint({
+      operationId, stage: 'fill', receivedPerformanceAt: anchor + 1_040,
+      workerTiming: { ackAt: 5, fillAt },
+    });
+    markLiveCommandManageReady(operationId);
+    expect(started.startedPerformanceMs).toBe(anchor);
+    expect(started.stages?.fill?.receivedMs).toBeCloseTo(1_040, 5);
+    expect(started.stages?.fill?.workerToReceiveMs).toBeCloseTo(40, 5);
+    expect(started.manageReadyMs).toBeGreaterThanOrEqual(0);
+    expect(started.manageReadyAfterResultMs).toBeGreaterThanOrEqual(0);
+    expect(hasActiveLiveCommandTrace(operationId)).toBe(false);
+  });
+  it('správa se počítá jen poprvé; první fill nepřepíše další heartbeat', () => {
+    const operationId = 'entry:first-only';
+    const started = startLiveCommandTrace(operationId)!;
+    markLiveCommandManageReady(operationId);
+    const first = started.manageReadyMs;
+    expect(started.manageReadyAfterResultMs).toBeUndefined();
+    markLiveCommandManageReady(operationId);
+    expect(started.manageReadyMs).toBe(first);
+    markLiveCommandPaint({ operationId, stage: 'fill', receivedPerformanceAt: performance.now(), workerTiming: { fillAt: 1 } });
+    const paint = started.stages?.fill;
+    markLiveCommandPaint({ operationId, stage: 'fill', receivedPerformanceAt: performance.now() + 500 });
+    expect(started.stages?.fill).toBe(paint);
+    expect(started.workerTiming?.fillAt).toBe(1);
+  });
+  it('neznámá stopa (reload) nezaloží novou kotvu kliku', () => {
+    orderPaint('entry:unknown-after-reload');
+    markLiveCommandManageReady('entry:unknown-after-reload');
+    expect(hasActiveLiveCommandTrace('entry:unknown-after-reload')).toBe(false);
+    expect(liveCommandTraceWantsPaint('entry:unknown-after-reload', 'fill')).toBe(false);
+  });
+  it('dokončená stopa chce jen pozdější fill/position a každý jen jednou', () => {
+    const operationId = 'entry:wants';
+    startLiveCommandTrace(operationId);
+    expect(liveCommandTraceWantsPaint(operationId, 'order')).toBe(true);
+    orderPaint(operationId);
+    markLiveCommandResult(operationId, 'acknowledged');
+    expect(liveCommandTraceWantsPaint(operationId, 'order')).toBe(false);
+    expect(liveCommandTraceWantsPaint(operationId, 'fill')).toBe(true);
+    markLiveCommandPaint({ operationId, stage: 'fill', receivedPerformanceAt: performance.now() });
+    expect(liveCommandTraceWantsPaint(operationId, 'fill')).toBe(false);
+    expect(liveCommandTraceWantsPaint(operationId, 'position')).toBe(true);
   });
 
   it('produkční diagnostika zveřejní nezávislé start/result/paint milníky', () => {

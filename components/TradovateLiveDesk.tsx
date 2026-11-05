@@ -1,6 +1,7 @@
 import { liveFillMarkersFromStatus, type LiveFillMarker } from '../lib/liveFillMarkers';
 import {
-  hasActiveLiveCommandTrace,
+  markLiveCommandManageReady,
+  liveCommandTraceWantsPaint,
   liveCommandWorkerStage,
   markLiveCommandResult,
   startLiveCommandTrace,
@@ -1070,7 +1071,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       operationId: action.operationId, updatedAt: action.displayAt ?? action.updatedAt,
       stage: action.displayStage ?? ('position' as const),
       })),
-  ].filter(entry => hasActiveLiveCommandTrace(entry.operationId))
+  ].filter(entry => liveCommandTraceWantsPaint(entry.operationId, entry.stage))
     .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
   const liveExposurePaint = chartLive.status !== agentStatus && liveExposure
     ? {
@@ -1131,6 +1132,17 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     ));
     return trades.length === 1 ? trades[0] : null;
   }, [agentStatus?.controller.manageableLeaderTrades, chartPositionSymbol, chartPositionSide, chartLeaderBasis, scaleInPosition]);
+  // Jen měření (INV-UI-01): kdy status poprvé nabídne obchod ke správě. Nic to neodemyká.
+  useEffect(() => {
+    const controller = agentStatus?.controller;
+    for (const trade of controller?.manageableLeaderTrades ?? []) {
+      if (trade.entryOperationId) markLiveCommandManageReady(trade.entryOperationId);
+    }
+    for (const position of controller?.leaderPositions ?? []) {
+      if (position.baseEntryOperationId) markLiveCommandManageReady(position.baseEntryOperationId);
+    }
+    if (controller?.bareLeaderTrade?.entryOperationId) markLiveCommandManageReady(controller.bareLeaderTrade.entryOperationId);
+  }, [agentStatus?.controller]);
   const ownManualEntryRef = useRef(ownManualEntry);
   ownManualEntryRef.current = ownManualEntry;
   const scaleInPositionRef = useRef(scaleInPosition);
