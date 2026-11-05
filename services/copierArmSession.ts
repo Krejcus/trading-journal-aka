@@ -91,3 +91,24 @@ export function tradovateSessionEndAt(nowMs: number, timeZone?: string, endHour?
 export function sameTradovateSession(leftMs: number, rightMs: number, timeZone?: string, endHour?: number): boolean {
   return tradovateSessionEndAt(leftMs, timeZone, endHour) === tradovateSessionEndAt(rightMs, timeZone, endHour);
 }
+
+/** Začátek denní pauzy CME Globex (index futures MNQ/NQ): 16:00 America/Chicago; konec = konec session 17:00 CT. */
+export const CME_DAILY_HALT_START_HOUR = 16;
+
+/**
+ * Denní pauza CME 16:00–17:00 CT s rezervou (C12, oponentura P2): okno `[16:00 − reserveMs, 17:00)`
+ * TÉHOŽ obchodního dne. Obě hranice přes sdílený DST-safe výpočet (INV-RISK-04): konec = nejbližší
+ * 17:00 CT po `nowMs` (v 17:00:00 už patří nové session), začátek = 16:00 téhož kalendářního dne zóny.
+ * Samotné `msUntilTradovateSessionEnd(now, tz, 16)` by po 16:00 vrátilo až 16:00 dalšího dne a díra
+ * 16:00–16:55 by zůstala nekrytá. Svátky a zkrácené obchodní dny CME helper NEZNÁ (NEOVĚŘENO).
+ */
+export function cmeDailyHaltWindow(
+  nowMs: number,
+  reserveMs: number,
+  timeZone: string = TRADOVATE_SESSION_TIMEZONE,
+): { haltStartAt: number; haltEndAt: number; inside: boolean } {
+  const haltEndAt = tradovateSessionEndAt(nowMs, timeZone, TRADOVATE_SESSION_END_HOUR);
+  const stamp = zonedStamp(haltEndAt, timeZone);
+  const haltStartAt = sessionEndOfDay(stamp.year, stamp.month, stamp.day, stamp.offsetMs, timeZone, CME_DAILY_HALT_START_HOUR);
+  return { haltStartAt, haltEndAt, inside: nowMs >= haltStartAt - Math.max(0, reserveMs) && nowMs < haltEndAt };
+}

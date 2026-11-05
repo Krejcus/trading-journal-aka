@@ -9,6 +9,7 @@
  * opt-inem. Followeři / běžné skupiny = dál `account-not-flat` beze změny.
  */
 import type { OrderSide, OrderStatus } from './brokerPort';
+import { pendingOwnEntryViolation, type PendingOwnEntryViolationInput } from './manualPendingEntries';
 
 export const SCALE_IN_CAPABILITY = 'manual-entry-scale-in-v1';
 /** Nohy z vlastního ACK (`manual-entry-ack`, `manual-attach-ack`) nejsou potvrzení od brokera. */
@@ -328,43 +329,12 @@ export function scaleInPositionLossPoints(model: LeaderPositionModel, stopLoss: 
  * všechny tvrdé podmínky. Vrací důvod zrušení, nebo null. Přechodné brány
  * (vlastní korelace OSO, ticho po eventu, čekající ingress) ho NEruší; neznámá
  * pozice (chybějící cache) není flat — nic se neruší, čeká se na sync.
+ * C12 (4. 11. 2026): zobecněno na `pendingOwnEntryViolation` (i vstup z flat a denní pauza CME).
  */
-export function pendingAddViolation(input: {
-  armed: boolean;
-  shadowMode: boolean;
-  killSwitch: boolean;
-  dayLockPending: boolean;
-  dayLocked: boolean;
-  pauseActive: boolean;
-  managementOnly: boolean;
-  leaderIneligible: boolean;
-  /** Obchodní okno teď a za rezervu (`off` = vypnuté = uvnitř). */
-  windowNow: 'inside' | 'outside' | 'off';
-  windowAfterReserve: 'inside' | 'outside' | 'off';
-  now: number;
-  sessionEndAt: number;
-  armExpiresAt: number | null;
-  reserveMs: number;
-  /** Pozice ze streamu; null = neznámá. */
-  net: number | null;
-  side: OrderSide;
-  /** Přikoupení se vyplnilo v jiné epizodě deníku než základ (otevřelo nový obchod). */
-  episodeMismatch: boolean;
+export function pendingAddViolation(input: Omit<PendingOwnEntryViolationInput, 'kind' | 'cmeHaltWindow' | 'entryFilled' | 'outsidePositionSettled'> & {
+  cmeHaltWindow?: boolean;
 }): string | null {
-  if (!input.armed || input.shadowMode) return 'kopírka je vypnutá';
-  if (input.killSwitch) return 'kill switch';
-  if (input.dayLockPending || input.dayLocked) return 'denní zámek';
-  if (input.pauseActive) return 'pauza pravidlem dne';
-  if (input.managementOnly) return 'kopírka jen spravuje';
-  if (input.leaderIneligible) return 'leader nesmí nové vstupy';
-  if (input.windowNow === 'outside' || (input.windowNow === 'inside' && input.windowAfterReserve === 'outside')) return 'konec obchodního okna';
-  if (input.sessionEndAt - input.now < input.reserveMs) return 'konec broker session (17:00 CT)';
-  if (input.armExpiresAt != null && input.armExpiresAt - input.now < input.reserveMs) return 'vyprší zapnutí kopírky';
-  if (input.episodeMismatch) return 'přikoupení otevřelo nový obchod';
-  if (input.net == null) return null;
-  if (input.net === 0) return 'pozice je zavřená';
-  if ((input.net > 0) !== (input.side === 'Buy')) return 'pozice je na druhé straně';
-  return null;
+  return pendingOwnEntryViolation({ ...input, kind: 'add', cmeHaltWindow: input.cmeHaltWindow ?? false });
 }
 
 /**

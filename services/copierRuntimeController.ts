@@ -20,7 +20,7 @@ import {
   type OrderSide,
   type OrderType,
 } from './brokerPort';
-import { msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
+import { cmeDailyHaltWindow, msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
 import { createLeaderDisplayFills, type CopierLeaderDisplayFills } from './copierLeaderDisplayFills';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { evaluateManualEntryPreview, manualEntryContractCap, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualEntryMarketQuoteBlockers, workerMarketPrice, manualStopLossUsd, realizedLossHeadroom, remainingLossHeadroom, type ManualEntryAccountInputs, type ManualEntryWorkerQuote } from './manualEntryPreview';
@@ -45,7 +45,9 @@ import {
   cancelEntryOutcome,
   cancelEntryTargetProblem,
   cancelEntryVerdict,
+  fillPositionProblem,
   legsProtectionProblem,
+  OPPOSITE_FILL_SHAPE,
   PARTIAL_CLOSE_HINT,
   selectOwnPendingEntries,
   type PendingCancelContext,
@@ -154,8 +156,14 @@ import {
 } from './copierManualActions';
 import { CopierDispatchRevokedError, createExposureCappedBroker } from './exposureCappedBroker';
 import {
+  pendingEntryAutoCancelAt,
+  pendingEntryNeedsLegOwnershipProof,
+  pendingEntryPreReadDecision,
+  pendingOwnEntryViolation,
+  PENDING_ENTRY_OUTSIDE_SETTLE_MS,
+} from './manualPendingEntries';
+import {
   leaderPositionModel,
-  pendingAddViolation,
   positionManageBlockers,
   scaleInAddBlockers,
   scaleInEnabled,
@@ -346,6 +354,24 @@ export interface CopierControllerStatus {
     reason?: string;
     entryBrokerOrderId?: string;
     cancel?: 'sending' | 'sent' | 'failed';
+    /**
+     * C12: výsledek zrušení ověřený stavem u brokera (`canceled` = zrušen s fillem 0). UI smí
+     * napsat „zrušen“ jen u `canceled` — nikdy u vyplněného. Jen zobrazení (INV-UI-03).
+     */
+    cancelVerified?: 'canceled' | 'ended' | 'filled' | 'partially-filled' | 'working' | 'unverified';
+    /** C12: proč worker vstup zrušil (konec okna, pauza CME, vypnutí…). Jen zobrazení. */
+    cancelReason?: string;
+    /**
+     * C12: kdy se čekající vstup sám zruší podle časových pravidel (pauza CME 15:55 CT, vypršení
+     * ARM) a proč. Jen zobrazení (INV-UI-01/03) — nic neautorizuje; brzdy a konec okna ruší hned.
+     */
+    autoCancelAt?: number;
+    autoCancelReason?: 'cme-halt' | 'arm-expiry';
+    /**
+     * C12 (oponentura kolo 1, P2): poslední incident k čekajícímu vstupu (kdy + text). Watchdog z něj
+     * pošle per-záznamový push i při už otevřeném fail-closed a za kill. Jen zobrazení (INV-UI-03).
+     */
+    pendingIncident?: { at: number; text: string };
   }>;
   /** Režim opravy po startu s nepoužitelnou uloženou skupinou (null = normální běh). */
   startupGroupRepair?: { groupId: string; unavailableAccountIds: number[] } | null;
@@ -1179,6 +1205,33 @@ const migrateDllBreach = (entry: CopierAccountEligibility): CopierAccountEligibi
 );
 
 const RETIRED_GROUP_ERROR = 'Kopírka nemá skupinu (byla smazána); vyber nebo vytvoř skupinu a zapni ji';
+
+/**
+ * Oponentura C12 kolo 5 (P3): cache pozic účtů (účet → symbol → net), která ohlásí NAHRAZENÍ snímku účtu
+ * (`set` jiné mapy, `delete`, `clear`) — `listPositions` je úplný snímek a vynechaný symbol znamená flat.
+ * Stream Position mění mapu účtu na místě (stejná instance) a nic nehlásí. Callback dostane novou mapu
+ * (undefined = účet bez snímku) DŘÍV, než se nahradí; slouží jen k zneplatnění odvozeného stavu z paměti.
+ */
+export class AccountPositionsCache extends Map<number, Map<string, number>> {
+  private readonly onReplace: (accountId: number, next: Map<string, number> | undefined) => void;
+  constructor(onReplace: (accountId: number, next: Map<string, number> | undefined) => void) {
+    super();
+    this.onReplace = onReplace;
+  }
+  override set(accountId: number, positions: Map<string, number>): this {
+    // `onReplace` je při konstrukci Map ještě nepřiřazený (super() bez iterable nic nevkládá).
+    if (this.onReplace && super.get(accountId) !== positions) this.onReplace(accountId, positions);
+    return super.set(accountId, positions);
+  }
+  override delete(accountId: number): boolean {
+    if (super.has(accountId)) this.onReplace(accountId, undefined);
+    return super.delete(accountId);
+  }
+  override clear(): void {
+    for (const accountId of [...super.keys()]) this.onReplace(accountId, undefined);
+    super.clear();
+  }
+}
 
 export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): Promise<CopierRuntimeController> {
   assertRuntimeGroup(options.group);
@@ -2301,7 +2354,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     leaderPositions.set(symbol, netQuantity);
     leaderFillAheadOfPosition.delete(symbol);
   };
-  const positionsByAccount = new Map<number, Map<string, number>>();
+  /**
+   * Oponentura C12 kolo 4 (P2) / kolo 5 (P3): od kdy má follower na symbolu nenulovou pozici (ustálení
+   * „odjinud“, `followerPositionOrigin`). Kolo 5: nahrazení snímku pozic účtu (`listPositions` je úplný
+   * snímek — vynechaný symbol = flat; reconnect, resync, reconciliation) záznam se změněným net (i chybějící
+   * symbol) smaže hned při nahrazení (`AccountPositionsCache`) — jinak by stará ustálená pozice se stejným
+   * net po snímku bez symbolu a nové Position kopie (před jejím Fill) obešla odklad 2 s. Snímek se stejným
+   * net ustálení nepřeruší. Čistě z paměti.
+   */
+  const followerPositionSeen = new Map<string, { accountId: number; symbol: string; net: number; since: number }>();
+  const positionsByAccount = new AccountPositionsCache((accountId, next) => {
+    for (const [key, seen] of followerPositionSeen) {
+      if (seen.accountId === accountId && (next?.get(seen.symbol) ?? 0) !== seen.net) followerPositionSeen.delete(key);
+    }
+  });
   /**
    * Jen zobrazení: průměrný vstup brokera (`netPrice` ze streamu) ke kusům, ke kterým
    * ho broker poslal. Platí jen při shodě kusů s `positionsByAccount`; nikdy nevstupuje
@@ -2318,11 +2384,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const liveOrdersByAccount = new Map<number, Map<string, BrokerOrder>>();
   const liveOrderGenerationsByAccount = new Map<number, Map<string, number>>();
   const observedOrderStatusesByAccount = new Map<number, Map<string, BrokerOrder['status']>>();
+  /**
+   * Oponentura C12 kolo 5 (P3): největší pozorovaný fill příkazu (order eventy, snímky a čtení přes
+   * `rememberLiveOrder`, Fill eventy followerů) — i po jeho konci, protože `liveOrdersByAccount` drží jen
+   * otevřené příkazy. Fill nikdy „nezmizí“, proto jen maximum. `followerCopyFromEntryState` z něj pozná
+   * skončenou kopii s fillem 0 (zrušená / odmítnutá) od kopie s fillem. Čistě z paměti.
+   */
+  const observedOrderFilledByAccount = new Map<number, Map<string, number>>();
+  const noteObservedOrderFill = (accountId: number, brokerOrderId: string, filled: number) => {
+    if (!(filled > 0)) return;
+    const fills = observedOrderFilledByAccount.get(accountId) ?? new Map<string, number>();
+    fills.set(brokerOrderId, Math.max(fills.get(brokerOrderId) ?? 0, filled));
+    observedOrderFilledByAccount.set(accountId, fills);
+  };
   const rememberLiveOrder = (order: BrokerOrder) => {
     const observed = observedOrderStatusesByAccount.get(order.accountId)
       ?? new Map<string, BrokerOrder['status']>();
     observed.set(order.brokerOrderId, order.status);
     observedOrderStatusesByAccount.set(order.accountId, observed);
+    noteObservedOrderFill(order.accountId, order.brokerOrderId, Math.max(order.filledQuantity, order.status === 'filled' ? order.quantity : 0));
     const orders = liveOrdersByAccount.get(order.accountId) ?? new Map<string, BrokerOrder>();
     const generations = liveOrderGenerationsByAccount.get(order.accountId) ?? new Map<string, number>();
     if (isOpenOrderStatus(order.status)) {
@@ -3591,7 +3671,38 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (record.bare !== true && record.stopBrokerOrderId) ownManualLegOrderIds.set(record.stopBrokerOrderId, record.operationId);
     if (record.bare !== true && record.targetBrokerOrderId) ownManualLegOrderIds.set(record.targetBrokerOrderId, record.operationId);
   }
+  /** Pokus o cílené zrušení vlastního vstupu už v tomto běhu proběhl / běží — automaticky nikdy druhý (INV-OUTBOX-01). */
   const manualEntryCancelRequested = new Set<string>();
+  /**
+   * C12 (oponentura kolo 1, P2): cílené zrušení vlastního vstupu PRÁVĚ běží (předčtení, durable `sending`,
+   * zápis, první ověření). Jen tohle blokuje ruční `cancel-entry` (C7) — po skončeném pokusu je ruční
+   * zrušení nový výslovný záměr s vlastním durable záznamem a výsledkem ze stavu.
+   */
+  const manualEntryCancelRunning = new Set<string>();
+  /** C12: ruční `cancel-entry` (C7) právě běží na tento vlastní vstup (klíč záznamu) — revize ho nezruší podruhé. */
+  const manualCancelEntryInFlight = new Set<string>();
+  /**
+   * Oponentura C12 kolo 2 (P3): záznamy z předchozího běhu se zrušením bez ověřeného výsledku
+   * (`cancel` bez `verified` — pád mezi durable `sending` a `sent`/`verified`, zastavení po zápisu).
+   * Po dokončení startovní obnovy spojení je jednou ohraničeně přečte `verifyRestartedOwnEntryCancels`
+   * bez ohledu na cache (vstup, který u brokera mezitím skončil s fillem, revize v cache nevidí).
+   * Jen záznamy ne starší než 24 h (starší vstup už dávno nečeká; nečitelné staré id by byl falešný incident).
+   */
+  const RESTART_CANCEL_VERIFY_MAX_AGE_MS = 24 * 60 * 60_000;
+  /**
+   * Oponentura C12 kolo 3 (P3): výsledek „vyplnil se“ bez značky „nohy ověřeny“ (`legsCheckedAt`) = pád
+   * mezi zjištěním fillu a koncem kontroly nohou (pozdní fill po „zrušen“ se předznačí před kontrolou).
+   */
+  const cancelNeedsRestartVerify = (cancel: NonNullable<CopierManualEntryRecord['cancel']>) => (
+    cancel.verified == null
+    || ((cancel.verified === 'filled' || cancel.verified === 'partially-filled') && cancel.legsCheckedAt == null)
+  );
+  const restartUnverifiedCancels = new Set((runtime.state.safety.manualEntries ?? [])
+    .filter(record => record.cancel != null && cancelNeedsRestartVerify(record.cancel) && record.bare !== true
+      && (record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId) != null
+      && clock() - record.cancel.at <= RESTART_CANCEL_VERIFY_MAX_AGE_MS)
+    .map(record => record.operationId));
+  let restartCancelVerifyStarted = false;
   /** Právě běží `executeManualEntry` — `sending` je pak skutečně rozpracovaný, ne zaseknutý. */
   let manualEntryExecuting = false;
   /** Rozběhnutá cílená zrušení — blokují obměnu spojení a `waitForIdle`. */
@@ -3699,17 +3810,310 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ...(brokerOrderId ? { brokerOrderId } : {}),
     }]);
   };
+  /** Popis vlastního čekajícího vstupu do auditu / incidentu (bez čísel z TV — jen záznam a id). */
+  const pendingEntryLabel = (record: CopierManualEntryRecord | undefined, entryId: string) => {
+    if (!record) return `Čekající vstup ${entryId}`;
+    const { side, quantity, orderType, price, symbol } = record.request;
+    return `${record.scaleIn === true ? 'Čekající přikoupení' : 'Čekající vstup'} ${side} ${quantity} ${orderType}${price != null ? ` ${price}` : ''} ${symbol} (${entryId})`;
+  };
+  /**
+   * C12: incident k čekajícímu vstupu — každý DRUH jednou (durable `pendingIncidentKinds` přežije restart;
+   * oponentura kolo 1 P3: dedup podle (operationId, druh), aby pozdější jiný problém téhož vstupu —
+   * např. „nejde přečíst“ a pak „zrušení bez účinku“ — nezapadl pod starým textem). Bez auto-close
+   * (INV-DEFAULT-02), viditelný i za vypnuté kopírky (`recordWhenDisarmed`). Text + čas jdou do statusu
+   * (`manualEntries[].pendingIncident`) → per-záznamový push i při už otevřeném fail-closed a za kill.
+   */
+  type PendingEntryIncidentKind = 'partial' | 'unreadable' | 'not-entry' | 'cancel-working' | 'cancel-unverified'
+    | 'restart-cancel' | 'prior-manual' | 'position-action' | 'follower-position' | 'follower-unknown' | 'uncovered'
+    | 'fill-unprotected' | 'copy-filled' | 'copy-cancel-failed';
+  const reportedPendingEntryIncidents = new Set<string>();
+  const pendingEntryIncidentReported = (operationId: string, kind: PendingEntryIncidentKind) => (
+    reportedPendingEntryIncidents.has(`${operationId}:${kind}`)
+    || (manualEntryRecords().find(item => item.operationId === operationId)?.pendingIncidentKinds ?? []).includes(kind)
+  );
+  const pendingEntryIncident = (operationId: string, kind: PendingEntryIncidentKind, text: string, entryId?: string) => {
+    const record = manualEntryRecords().find(item => item.operationId === operationId);
+    if (pendingEntryIncidentReported(operationId, kind)) return;
+    reportedPendingEntryIncidents.add(`${operationId}:${kind}`);
+    manualEntryAudit(operationId, 'blocked', text, entryId);
+    failClosed(new Error(`Copier fail-closed: ${text}`), { autoClose: false, recordWhenDisarmed: true });
+    if (!record) return;
+    const at = clock();
+    void persistManualEntry(operationId, current => {
+      const base = current ?? record;
+      return {
+        ...base, pendingIncidentAt: at, pendingIncidentText: text.slice(0, 300),
+        pendingIncidentKinds: [...new Set([...(base.pendingIncidentKinds ?? []), kind])], updatedAt: at,
+      };
+    }).catch(error => options.onError?.(new Error(`Čekající vstup: značku incidentu se nepodařilo uložit (${errorOf(error).message})`)));
+  };
+  /** C12: výsledek zrušení ověřený stavem do durable záznamu (status `cancelVerified`, jen zobrazení). */
+  const markOwnEntryCancelVerified = (
+    operationId: string,
+    reason: string,
+    verified: NonNullable<CopierManualEntryRecord['cancel']>['verified'],
+    {
+      touch = true,
+      legs,
+    }: {
+      /**
+       * false = `updatedAt` se nemění (ověření po restartu, oponentura C12 kolo 2 P3): push watchdogu
+       * o výsledku jde jen v okně od původního zápisu; incident si `updatedAt` posune sám.
+       */
+      touch?: boolean;
+      /**
+       * Oponentura C12 kolo 3 (P3): u fillu (`filled` / `partially-filled`) množství, pro které se nohy
+       * ověřují, a zda už kontrola nohou (`checkCancelEntryFillProtection`) doběhla. `checked: false` =
+       * durable předznačka „nohy ještě neověřené“ — pád před kontrolou → ověření po startu ji zopakuje.
+       */
+      legs?: { filled: number; checked: boolean };
+    } = {},
+  ): Promise<void> => {
+    if (!manualEntryRecords().some(item => item.operationId === operationId)) return Promise.resolve();
+    return persistManualEntry(operationId, current => {
+      const base: NonNullable<CopierManualEntryRecord['cancel']> = current!.cancel ?? { status: 'sent', at: clock(), reason };
+      const { legsCheckedAt: _previousCheck, fillQty: _previousFill, ...prior } = base;
+      const fillResult = verified === 'filled' || verified === 'partially-filled';
+      return {
+        ...current!,
+        cancel: {
+          ...prior, verified,
+          ...(fillResult && legs ? { fillQty: legs.filled, ...(legs.checked ? { legsCheckedAt: clock() } : {}) } : {}),
+        },
+        ...(touch ? { updatedAt: clock() } : {}),
+      };
+    }).then(() => undefined, error => options.onError?.(new Error(`Čekající vstup: výsledek zrušení se nepodařilo uložit (${errorOf(error).message})`)));
+  };
+  /**
+   * C12 (oponentura P1b): `cancelOrder` adaptéru skončí úspěchem i u vyplněného příkazu
+   * (čeká na canceled|filled|rejected) — výsledek zrušení VLASTNÍHO vstupu se proto rozhodne jen
+   * stavem vstupu u brokera (ohraničené autoritativní čtení, C7 `cancelEntryOutcome`), nikdy
+   * „zrušen“ u vyplněného. Fill (i dílčí) = pravdivý audit + ověření nohou (`legsProtectionProblem`,
+   * jinak incident bez auto-close); vstup dál pracuje = incident; nečitelné = druhé ČTENÍ po
+   * ustálení, pak incident. Nic se znovu neposílá (INV-OUTBOX-01).
+   */
+  /** Kolo 5 (P2, INV-UI-03): co fill vstupu během rušení znamená pro pozici (bez nepravdivého „otevřená“). */
+  const fillShapeText = (opposite: boolean) => (opposite ? OPPOSITE_FILL_SHAPE : 'pozice je otevřená');
+  const verifyOwnEntryCancel = async (
+    operationId: string,
+    entryId: string,
+    accountId: number,
+    reason: string,
+    write: { failure: string | null; rejection: string | null; attempt: 1 | 2 },
+  ): Promise<void> => {
+    if (stopped) return;
+    const lookup = await boundedManagedOrderLookup(accountId, entryId);
+    const order = lookup?.completeness === 'authoritative' ? lookup.order : null;
+    // Jen druhé čtení po ustálení je „ustálené“ (jako C7, oponentura C12 kolo 3 P2): po selhaném nebo
+    // odmítnutém zápisu („TooLateToCancel“ = vstup se vyplnil během rušení) REST fill ještě nemusí ukazovat.
+    const settled = write.attempt === 2;
+    // Kolo 5 (P2, INV-UI-03): vstup proti pozici na opačné straně — fill ji zavřel / zmenšil, text netvrdí „otevřená“.
+    const opposite = manualEntryRecords().find(item => item.operationId === operationId)?.cancel?.opposite === true;
+    const outcome = cancelEntryOutcome(order, { settled, brokerRejection: write.rejection, opposite });
+    const label = pendingEntryLabel(manualEntryRecords().find(item => item.operationId === operationId), entryId);
+    const readAgainLater = () => {
+      if (write.attempt !== 1) return;
+      const timer = setTimeout(() => {
+        if (stopped) return;
+        void verifyOwnEntryCancel(operationId, entryId, accountId, reason, { ...write, attempt: 2 })
+          .catch(error => failClosed(errorOf(error), { autoClose: false }));
+      }, MANUAL_ORDER_SETTLE_MS);
+      (timer as { unref?: () => void }).unref?.();
+    };
+    // První čtení: vstup dál pracuje (i s dílčím fillem) nebo nejde přečíst = zatím nerozhodnuto — žádný
+    // výsledek ani incident, rozhodne čtení po ustálení (incident „dál čeká“ by u TooLateToCancel lhal).
+    // Pád mezi tím: `cancel` bez `verified` → ověření po startu (`verifyRestartedOwnEntryCancels`).
+    if (!settled && (!outcome || outcome.open === true)) {
+      readAgainLater();
+      return;
+    }
+    // Oponentura C12 kolo 4 (P3, INV-TRAD-02 / INV-UI-03): REST může zaostávat i po ustálení, zatímco stream
+    // už fill doručil. Fill = největší známý (REST, cache streamu, filly vstupu, Order(Filled)); fill > 0 =
+    // cesta fillu (nohy → výsledek), nikdy „dál čeká“ / „nejde ověřit“ / „zrušen“ u otevřené pozice.
+    const entryQuantity = order?.quantity ?? manualEntryRecords().find(item => item.operationId === operationId)?.request.quantity ?? 0;
+    const streamFilled = Math.max(
+      liveOrdersByAccount.get(accountId)?.get(entryId)?.filledQuantity ?? 0,
+      ownEntryFillPrices.get(entryId)?.quantity ?? 0,
+      observedOrderStatusesByAccount.get(accountId)?.get(entryId) === 'filled' ? entryQuantity : 0,
+    );
+    const restFilled = outcome && 'filled' in outcome ? outcome.filled : 0;
+    if (streamFilled > restFilled) {
+      const filled = Math.max(streamFilled, restFilled);
+      // Oponentura C12 kolo 6 (P3, C6, INV-TRAD-02 / INV-BRAKE-01): dílčí fill ze streamu a vstup v cache
+      // streamu DÁL PRACUJE (REST ho nevidí skončený) = zrušení se neprojevilo, zbytek dál čeká — `working`
+      // a incident „zbytek dál čeká“, ne `partially-filled`. Nohy se teď neověřují (vstup pracuje; fill
+      // zbytku je ověří přes `noteOwnEntryFillAfterVerifiedCancel`). Cesta fillu jen nad koncem vstupu
+      // (v cache už není / Order(Filled) / REST ho hlásí skončený).
+      const streamLive = liveOrdersByAccount.get(accountId)?.get(entryId);
+      const streamStillWorking = streamLive != null && isOpenOrderStatus(streamLive.status)
+        && observedOrderStatusesByAccount.get(accountId)?.get(entryId) !== 'filled'
+        && (!outcome || outcome.open === true);
+      if (streamStillWorking) {
+        await markOwnEntryCancelVerified(operationId, reason, 'working');
+        pendingEntryIncident(operationId, 'cancel-working', partialEntryIncidentText(label, order, { filled, quantity: entryQuantity }, reason), entryId);
+        return;
+      }
+      const full = entryQuantity > 0 && filled >= entryQuantity;
+      manualEntryAudit(operationId, 'filled', `${label}: stream doručil fill (${filled}${full ? '' : `/${entryQuantity}`}), REST ${order ? `hlásí ${order.status} s fillem ${order.filledQuantity}` : 'nejde přečíst'} — ${fillShapeText(opposite)}, nic se neposílá; SL/TP ověřuji čtením (${reason})`, entryId);
+      await checkCancelEntryFillProtection(operationId, operationId, entryId, filled, order ? { side: order.side, symbol: order.symbol } : null);
+      await markOwnEntryCancelVerified(operationId, reason, full ? 'filled' : 'partially-filled', { legs: { filled, checked: true } });
+      return;
+    }
+    if (!outcome) {
+      await markOwnEntryCancelVerified(operationId, reason, 'unverified');
+      pendingEntryIncident(operationId, 'cancel-unverified', `${label}: zrušení ${write.failure ? `selhalo (${write.failure.slice(0, 120)}) a jeho ` : ''}výsledek nejde ověřit u brokera — vstup může dál čekat, zkontroluj leadera v Tradovate (${reason})`, entryId);
+      return;
+    }
+    if (outcome.status === 'acknowledged' || outcome.status === 'waived') {
+      await markOwnEntryCancelVerified(operationId, reason, outcome.status === 'acknowledged' ? 'canceled' : 'ended');
+      manualEntryAudit(operationId, 'canceled', outcome.status === 'acknowledged'
+        ? `vlastní vstup zrušen: ${reason} (ověřeno stavem u brokera)`
+        : `vlastní vstup už nečeká (${outcome.reason}) — ${reason}`, entryId);
+      return;
+    }
+    if (outcome.open === true) {
+      // Čtení po ustálení: vstup dál pracuje = zrušení se neprojevilo (dílčí fill: pozice je otevřená).
+      await markOwnEntryCancelVerified(operationId, reason, 'working');
+      pendingEntryIncident(operationId, 'cancel-working', `${label} se nepodařilo zrušit — ${outcome.reason} (${reason})`, entryId);
+      return;
+    }
+    // Vstup se vyplnil (i z části) dřív, než ho broker zrušil: pozice je otevřená — nikdy „zrušen“.
+    // Oponentura C12 kolo 3 (P3): nohy se ověří PŘED uložením výsledku (pád mezi = `verified` chybí →
+    // ověření po startu kontrolu zopakuje); výsledek nese značku „nohy ověřeny“ (`legsCheckedAt`).
+    manualEntryAudit(operationId, 'filled', `${outcome.reason} (${reason})`, entryId);
+    await checkCancelEntryFillProtection(operationId, operationId, entryId, outcome.filled, order ? { side: order.side, symbol: order.symbol } : null);
+    await markOwnEntryCancelVerified(operationId, reason, outcome.code === 'entry-filled' ? 'filled' : 'partially-filled', {
+      legs: { filled: outcome.filled, checked: true },
+    });
+  };
+  /** C12: odstup a počet nečitelných předčtení (čtení se smí zopakovat, zápis nikdy). */
+  const pendingEntryReadRetryAt = new Map<string, number>();
+  const pendingEntryReadFailures = new Map<string, number>();
+  const pendingEntryEndedAudited = new Set<string>();
+  const PENDING_ENTRY_READ_RETRY_MS = 5_000;
+  /** Strop odstupu mezi nečitelnými předčteními (oponentura kolo 1, P3 — sdílený rate-limit rozpočet). */
+  const PENDING_ENTRY_READ_RETRY_MAX_MS = 5 * 60_000;
+  const PENDING_ENTRY_READ_MAX_FAILURES = 3;
+  /** Odstup po n-tém nečitelném předčtení: 5 s, 10 s, 20 s … nejvýš 5 min (≤ ~12 čtení za hodinu na záznam). */
+  const pendingEntryReadBackoffMs = (failures: number) => Math.min(
+    PENDING_ENTRY_READ_RETRY_MAX_MS, PENDING_ENTRY_READ_RETRY_MS * 2 ** Math.max(0, failures - 1),
+  );
+  /**
+   * C12 (oponentura P1a/P1c): čerstvé REST čtení vstupu těsně před automatickým zrušením. Cache
+   * streamu může být pozadu (fill, Position před Fill) — ruší se jen vstup, který u brokera čeká
+   * s fillem 0 a je to opravdu vstup (ne noha, ne ochrana). Dílčí fill = zbytek NERUŠIT (kaskáda
+   * na nohy NEOVĚŘENÁ, stejně jako C16), jen incident. `true` = smí se poslat jeden cancel.
+   * Strop čtení (oponentura kolo 1, P3): nečitelné = další čtení s exponenciálním odstupem (strop
+   * 5 min), incident po 3. nečitelném; `ended`, `filled`, `partial`, `not-entry` = značka zůstává
+   * a v tomto běhu se už nečte ani neruší.
+   */
+  const preReadPendingEntryCancel = async (
+    record: CopierManualEntryRecord, entryId: string, accountId: number, reason: string,
+  ): Promise<{ opposite: boolean } | null> => {
+    const operationId = record.operationId;
+    const lookup = await boundedManagedOrderLookup(accountId, entryId);
+    const order = lookup?.completeness === 'authoritative' ? lookup.order : null;
+    const input = {
+      order,
+      expected: { side: record.request.side, orderType: record.request.orderType, symbol: record.request.symbol, tag: record.tag },
+      legIds: knownProtectiveLegIds(),
+      leaderNet: positionsByAccount.get(accountId)?.get(record.request.symbol) ?? null,
+      kind: record.scaleIn === true ? 'add' as const : 'from-flat' as const,
+    };
+    // Oponentura C12 kolo 5 (P3, A1): REST čtení nevrátilo clOrdId (u nativního `placeOSO` parentu
+    // NEOVĚŘENO) — záložní důkaz vlastnictví z nohou záznamu (id z ACK): obě ohraničeně a autoritativně
+    // přečtené s `parentOrderId` = tento vstup. Jen u vstupu z flat proti pozici na opačné straně.
+    let legsProveOwnership = false;
+    if (pendingEntryNeedsLegOwnershipProof(input) && record.stopBrokerOrderId && record.targetBrokerOrderId) {
+      const legs = await Promise.all([
+        boundedManagedOrderLookup(accountId, record.stopBrokerOrderId),
+        boundedManagedOrderLookup(accountId, record.targetBrokerOrderId),
+      ]);
+      legsProveOwnership = legs.every(read => read?.completeness === 'authoritative' && read.order?.parentOrderId === entryId);
+    }
+    const decision = pendingEntryPreReadDecision({ ...input, legsProveOwnership });
+    const label = pendingEntryLabel(record, entryId);
+    switch (decision.kind) {
+      case 'cancel':
+        pendingEntryReadFailures.delete(operationId);
+        return { opposite: decision.opposite === true };
+      case 'unreadable': {
+        const failures = (pendingEntryReadFailures.get(operationId) ?? 0) + 1;
+        pendingEntryReadFailures.set(operationId, failures);
+        // Jen čtení se smí zopakovat (po odstupu); značka se uvolní, zápis zatím neodešel.
+        manualEntryCancelRequested.delete(operationId);
+        pendingEntryReadRetryAt.set(operationId, clock() + pendingEntryReadBackoffMs(failures));
+        if (failures >= PENDING_ENTRY_READ_MAX_FAILURES) {
+          pendingEntryIncident(operationId, 'unreadable', `${label} se má zrušit (${reason}), ale jeho stav u brokera nejde přečíst — nic se nezrušilo, zruš ho v Tradovate`, entryId);
+        }
+        return null;
+      }
+      case 'ended':
+        // Vstup u brokera skončil (cache streamu může být pozadu): značka zůstává — v tomto běhu se už nečte.
+        if (!pendingEntryEndedAudited.has(operationId)) {
+          pendingEntryEndedAudited.add(operationId);
+          manualEntryAudit(operationId, 'skipped', `${label} už u brokera nečeká (${decision.status}) — nic se neruší (${reason})`, entryId);
+        }
+        return null;
+      case 'filled':
+        // Oponentura kolo 1 (P3): fill (i dílčí, zbytek zrušený jinde) = pozice je otevřená; nohy se
+        // ověří čtením (kaskáda po dílčím zrušení je NEOVĚŘENÁ), jinak incident — audit nic netvrdí.
+        // Kolo 5 (P2, INV-UI-03): fill nemusel pozici otevřít (vstup proti pozici na opačné straně ji zavře) —
+        // co fill znamená, řekne až kontrola nohou a pozice.
+        manualEntryAudit(operationId, 'filled', `${label} se mezitím vyplnil (${decision.filled}${order && decision.filled < order.quantity ? `/${order.quantity}` : ''}) — nic se neruší; pozici a SL/TP ověřuji čtením (${reason})`, entryId);
+        await checkCancelEntryFillProtection(operationId, operationId, entryId, decision.filled, order ? { side: order.side, symbol: order.symbol } : null);
+        return null;
+      case 'partial':
+        pendingEntryIncident(operationId, 'partial', `${label} je z části vyplněný (${decision.filled}/${decision.quantity}) a zbytek dál čeká — automaticky se neruší (${reason}); zruš zbytek v Tradovate nebo dej Flatten`, entryId);
+        return null;
+      default:
+        break;
+    }
+    // `not-entry`: noha, jiná strana / typ / symbol nebo ochrana pozice — nikdy se neruší.
+    pendingEntryIncident(operationId, 'not-entry', `${label} se má zrušit (${reason}), ale ${decision.problem.charAt(0).toLowerCase()}${decision.problem.slice(1)}`, entryId);
+    return null;
+  };
+  /**
+   * Oponentura C12 kolo 1 (P3): synchronní kontrola cache TĚSNĚ před `cancelOrder` (po předčtení a
+   * durable `sending` byly `await`). Fill nebo konec vstupu, který mezitím doručil stream, = nic se
+   * neposílá. `requireOpen` jen u automatického zrušení (u ACK cesty vstup v cache ještě být nemusí).
+   * Oponentura C12 kolo 2 (P1): dílčí fill a vstup v cache dál pracuje = `partial` (zbytek dál čeká —
+   * pokus se nebere jako uzavřený, volající vyhlásí incident „zbytek dál čeká“), ne `filled`.
+   */
+  const ownEntryCancelLateBlock = (accountId: number, entryId: string, requireOpen: boolean): 'stopped' | 'filled' | 'partial' | 'ended' | null => {
+    if (stopped) return 'stopped';
+    const live = liveOrdersByAccount.get(accountId)?.get(entryId);
+    if (observedOrderStatusesByAccount.get(accountId)?.get(entryId) === 'filled') return 'filled';
+    if (live && live.filledQuantity > 0 && isOpenOrderStatus(live.status)) return 'partial';
+    if ((live?.filledQuantity ?? 0) > 0) return 'filled';
+    if (requireOpen && (!live || !isOpenOrderStatus(live.status))) return 'ended';
+    return null;
+  };
+  /** Text incidentu „dílčí fill, zbytek dál čeká“ (revize i pozdní kontrola těsně před zrušením). */
+  const partialEntryIncidentText = (
+    label: string,
+    order: BrokerOrder | null,
+    cached: { filled: number; quantity: number },
+    why: string,
+  ) => {
+    const filled = order && order.filledQuantity > 0 ? order.filledQuantity : cached.filled;
+    return `${label} je z části vyplněný (${filled}/${order?.quantity ?? cached.quantity}) a zbytek dál čeká${order ? '' : ' (stav u brokera teď nejde ověřit)'} — automaticky se neruší (${why}); zruš zbytek v Tradovate nebo dej Flatten`;
+  };
   /**
    * Jediný pokus o přesně cílené zrušení VLASTNÍHO vstupu leadera (P8): jen id
    * z vlastního záznamu, raw broker mimo frontu controlleru, smí i za DISARMED
    * a kill (risk-redukční — followeři vstup nedostanou). Vyplněný vstup se
    * neruší (zrušení by nic neudělalo a nohy jsou ochrana pozice).
+   * C12 (4. 11. 2026): výsledek se vždy ověří stavem u brokera (`verifyOwnEntryCancel`) a
+   * neúspěch je incident u KAŽDÉHO čekajícího vstupu (dřív jen u přikoupení). `preRead` =
+   * automatické zrušení revizí čekajících vstupů: nejdřív čerstvé REST čtení vstupu.
    */
   const cancelOwnManualEntry = (
     operationId: string,
     reason: string,
     /** Id z právě přijatého ACK, když durable záznam ještě nemá výsledek (M2). */
     known?: { entryId: string; accountId: number },
+    mode: { preRead?: boolean } = {},
   ): void => {
     const record = manualEntryRecords().find(item => item.operationId === operationId);
     const entryId = record?.entryBrokerOrderId ?? record?.lateResult?.entryBrokerOrderId ?? known?.entryId;
@@ -3727,99 +4131,619 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     manualEntryCancelRequested.add(operationId);
+    manualEntryCancelRunning.add(operationId);
     const job = (async () => {
+      // Kolo 5 (P2): vstup z flat proti pozici na opačné straně (z předčtení) — durable `cancel.opposite`.
+      let opposite = false;
+      if (mode.preRead && record) {
+        const pre = await preReadPendingEntryCancel(record, entryId, accountId, reason);
+        if (!pre) return;
+        opposite = pre.opposite;
+        // Restart / zastavení po předčtení, před durable `sending`: nic neodejde — nový běh udělá vlastní
+        // jediný pokus (nic durable o tomhle pokusu neexistuje).
+        if (stopped) return;
+      }
       // Durable značka je pojistka proti druhému pokusu po restartu; její
       // selhání cancel nezastaví (zrušení už zrušeného příkazu nic nepokazí).
       let marked = true;
       try {
         if (record) {
           await persistManualEntry(operationId, current => ({
-            ...(current ?? record), cancel: { status: 'sending', at: clock(), reason }, updatedAt: clock(),
+            ...(current ?? record), cancel: { status: 'sending', at: clock(), reason, ...(opposite ? { opposite: true as const } : {}) }, updatedAt: clock(),
           }));
         }
       } catch (error) {
         marked = false;
         failClosed(new Error(`Ruční vstup: stav zrušení se nepodařilo uložit (${errorOf(error).message}); ruším i tak`), { autoClose: false });
       }
-      let failure: string | undefined;
+      // Oponentura C12 kolo 1 (P3): fill / konec vstupu doručený streamem během předčtení a durable
+      // zápisu = nic neodejde; `cancel` se vrátí na neodeslaný (záznam nesmí tvrdit pokus, který nebyl).
+      // Zastavení až PO durable `sending` zápis dokončí — záznam už pokus tvrdí a nový běh ho neopakuje.
+      const late = ownEntryCancelLateBlock(accountId, entryId, mode.preRead === true);
+      // Oponentura C12 kolo 2 (P3): v režimu předčtení se TĚSNĚ před zápisem synchronně znovu vyhodnotí
+      // i důvod zrušení (`pendingOwnEntryViolationNow`) — během předčtení / durable zápisu mohlo např.
+      // automatické pokračování po výpadku (INV-RECON-04) kopírku znovu zapnout. Důvod pominul = nic
+      // neodejde; bez spojení / při běžící obnově spojení = odklad (čtení se smí zopakovat, zápis neodešel).
+      let why = reason;
+      let resolved: 'gone' | 'deferred' | 'ingress' | 'follower' | null = null;
+      if (!late && mode.preRead && record) {
+        // Oponentura C12 kolo 3 (P3): i nezpracované eventy leadera (fill už dorazil, ale čeká ve frontě —
+        // cache ho ještě nevidí) = odklad; revize na začátku ingress odkládá stejně.
+        if (!gate.connected || recoveryInFlight) resolved = 'deferred';
+        else if ((pendingTradeIngressByAccount.get(accountId) ?? 0) > 0) resolved = 'ingress';
+        else {
+          const fresh = pendingOwnEntryViolationNow(manualEntryRecords().find(item => item.operationId === operationId) ?? record, entryId);
+          if (fresh) why = fresh;
+          else resolved = 'gone';
+          // Oponentura C12 kolo 4 (P2): i stav followerů se během předčtení a durable zápisu mohl změnit
+          // (kopie se vyplnila, dorazila Position / eventy followera) — stejná synchronní podmínka jako revize.
+          const lateNow = clock();
+          if (!resolved && followerPositionOrigin(pendingEntryConcernedFollowers(entryId, currentEntryIneligibleAccounts(lateNow)), entryId, record.request.symbol, lateNow) != null) {
+            resolved = 'follower';
+          }
+        }
+      }
+      if (late === 'filled' || late === 'ended' || late === 'partial' || resolved) {
+        if (record && marked) {
+          await persistManualEntry(operationId, current => {
+            const { cancel: _unsent, ...rest } = current ?? record;
+            return { ...rest, updatedAt: clock() };
+          }).catch(error => failClosed(new Error(`Ruční vstup: neodeslané zrušení se nepodařilo zapsat (${errorOf(error).message})`), { autoClose: false }));
+        }
+        const label = pendingEntryLabel(record, entryId);
+        if (resolved) {
+          // Nic neodešlo a `cancel` je zpět neodeslaný: značka se uvolní, revize rozhodne znovu
+          // (u přetrvávající brzdy nové předčtení a jediný pokus).
+          manualEntryCancelRequested.delete(operationId);
+          manualEntryAudit(operationId, 'skipped', resolved === 'gone'
+            ? `${label}: důvod zrušení pominul (${reason}) — nic se neodeslalo`
+            : resolved === 'follower'
+              ? `${label}: stav followera se během přípravy zrušení změnil (kopie / pozice / eventy) — zrušení odloženo, nic se neodeslalo (${reason})`
+              : resolved === 'ingress'
+              ? `${label}: čekají nezpracované eventy leadera (fill může být ve frontě) — zrušení odloženo, nic se neodeslalo (${reason})`
+              : `${label}: spojení k brokerovi dole nebo běží jeho obnova — zrušení odloženo, nic se neodeslalo (${reason})`, entryId);
+          return;
+        }
+        const live = liveOrdersByAccount.get(accountId)?.get(entryId);
+        if (late === 'partial' && live) {
+          // Oponentura C12 kolo 2 (P1): dílčí fill doručený streamem během předčtení / durable zápisu
+          // a vstup dál pracuje = zbytek se automaticky NERUŠÍ (INV-TRAD-02) a pokus NENÍ uzavřený —
+          // incident „zbytek dál čeká“ (podle čerstvého REST čtení), jinak by o zbytku za DISARMED / kill
+          // nikdo nevěděl. Nohy se teď neověřují (vstup dál pracuje; ověří je až konec vstupu).
+          const cached = { filled: live.filledQuantity, quantity: live.quantity };
+          manualEntryAudit(operationId, 'filled', `${label} se vyplnil z části (${cached.filled}/${cached.quantity}) těsně před zrušením, zbytek dál čeká — nic se neodeslalo (${reason})`, entryId);
+          const current = manualEntryRecords().find(item => item.operationId === operationId) ?? record;
+          if (current) {
+            confirmPendingEntryIncident(current, entryId, accountId, 'partial', order => partialEntryIncidentText(label, order, cached, reason));
+          } else {
+            failClosed(new Error(`Copier fail-closed: ${partialEntryIncidentText(label, null, cached, reason)}`), { autoClose: false, recordWhenDisarmed: true });
+          }
+          return;
+        }
+        const filled = Math.max(
+          live?.filledQuantity ?? 0,
+          ownEntryFillPrices.get(entryId)?.quantity ?? 0,
+          // Order(Filled) bez doručeného Fill: plný fill = množství záznamu.
+          observedOrderStatusesByAccount.get(accountId)?.get(entryId) === 'filled' ? record?.request.quantity ?? 0 : 0,
+        );
+        manualEntryAudit(operationId, late === 'filled' ? 'filled' : 'skipped', late === 'filled'
+          ? `${label} se vyplnil (${filled || '?'}) těsně před zrušením — nic se neodeslalo (${reason})`
+          : `${label} už nečeká (stream) — nic se neodeslalo (${reason})`, entryId);
+        // Oponentura C12 kolo 2 (P1): nohy se ověří čtením u KAŽDÉ cesty (i bez předčtení — zrušení po ACK);
+        // nohy v záznamu jsou po `await` výše zapsané (zápis výsledku ACK je ve frontě před návratem `cancel`).
+        if (late === 'filled') {
+          const symbol = record?.request.symbol ?? live?.symbol;
+          const side = live?.side ?? record?.request.side;
+          await checkCancelEntryFillProtection(operationId, operationId, entryId, filled, symbol && side ? { side, symbol } : null);
+        }
+        return;
+      }
+      // INV-RECON-04: automatické zrušení čekajícího vstupu ukončí epizodu automatického pokračování —
+      // až když zápis opravdu odchází (oponentura C12 kolo 2, P3: dřív i u pokusu, který nic neodeslal).
+      if (mode.preRead) declineTransportResume(`čekající vstup zrušen: ${why}`);
+      let failure: string | null = null;
+      let rejection: string | null = null;
       try {
         await options.broker.cancelOrder(accountId, entryId);
       } catch (error) {
         failure = errorOf(error).message.slice(0, 300);
+        if (definitiveBrokerRejection(error)) rejection = failure;
       }
-      manualEntryAudit(operationId, failure ? 'cancel-failed' : 'canceled', failure
-        ? `zrušení vlastního vstupu selhalo: ${failure} — zkontroluj leadera v Tradovate`
-        : `vlastní vstup zrušen: ${reason}`, entryId);
-      // Čekající přikoupení, které nejde zrušit, může dál zvětšit pozici — viditelný incident (oponentura diffu, P2-1).
-      if (failure && record?.scaleIn === true) {
-        failClosed(new Error(`Čekající přikoupení ${entryId} se nepodařilo zrušit (${failure}) — zruš ho v Tradovate`), { autoClose: false });
+      if (failure) manualEntryAudit(operationId, 'cancel-failed', `zrušení vlastního vstupu selhalo: ${failure} — ověřuji stav u brokera (${why})`, entryId);
+      if (record || manualEntryRecords().some(item => item.operationId === operationId)) {
+        await persistManualEntry(operationId, current => ({
+          ...(current ?? record!),
+          cancel: { status: failure ? 'failed' : 'sent', at: clock(), reason: why, ...(failure ? { error: failure } : {}), ...(opposite ? { opposite: true as const } : {}) },
+          updatedAt: clock(),
+        })).catch(error => {
+          if (marked) failClosed(errorOf(error), { autoClose: false });
+        });
       }
-      if (!record && !manualEntryRecords().some(item => item.operationId === operationId)) return;
-      await persistManualEntry(operationId, current => ({
-        ...(current ?? record!),
-        cancel: { status: failure ? 'failed' : 'sent', at: clock(), reason, ...(failure ? { error: failure } : {}) },
-        updatedAt: clock(),
-      })).catch(error => {
-        if (marked) failClosed(errorOf(error), { autoClose: false });
-      });
+      // „Úspěch“ adaptéru nic nedokazuje: výsledek jen stavem (oponentura C12 P1b).
+      await verifyOwnEntryCancel(operationId, entryId, accountId, why, { failure, rejection, attempt: 1 });
     })();
     manualEntryCancelJobs.add(job);
-    void job.finally(() => manualEntryCancelJobs.delete(job));
+    void job.finally(() => {
+      manualEntryCancelJobs.delete(job);
+      manualEntryCancelRunning.delete(operationId);
+    });
   };
   /**
-   * Stavová podmínka čekajícího přikoupení (návrh v4 §3.5): synchronní kontrola nad
-   * pamětí (bez IO). Porušení = jedno cílené zrušení vlastního vstupu přikoupení —
-   * risk-redukční, i za DISARMED a kill (INV-BRAKE-02, výjimka). Spouští se bez čekání
-   * po kroku broker eventu a 1s časovačem (brzdy, konec okna/session/ARM). Neznámá
-   * pozice (chybějící cache) není flat — nic se neruší. Fill přikoupení v jiné epizodě
-   * deníku než základ = přikoupení otevřelo nový obchod mimo brány z flat = incident.
+   * C12 — stavová podmínka VŠECH vlastních čekajících vstupů leadera (z flat i přikoupení; návrh
+   * safety.md C12): synchronní kontrola nad pamětí (bez IO). Porušení = jedno cílené zrušení
+   * vlastního vstupu — risk-redukční, i za DISARMED a kill (INV-BRAKE-01/02). Před zrušením čerstvé
+   * REST čtení vstupu, po něm ověření stavem. Spouští se bez čekání po kroku broker eventu, po
+   * brzdě a 1s časovačem (konec okna / session / ARM, denní pauza CME). Odklad (nic se nezkouší):
+   * bez spojení, při běžící obnově spojení, s nezpracovanými eventy leadera. Neznámá pozice
+   * (chybějící cache) není flat — nic se neruší. Fill přikoupení v jiné epizodě deníku než základ =
+   * přikoupení otevřelo nový obchod mimo brány z flat = incident.
    */
+  /**
+   * Oponentura C12 kolo 1 (P3a): incident, který by vznikl jen z cache streamu (vstup po zrušení
+   * z dřívějšího běhu „dál pracuje“, dílčí fill „zbytek dál čeká“, ruční zrušení „se neprojevilo“), se
+   * vyhlásí až podle čerstvého REST čtení vstupu (bez zápisu) — cache těsně po obnově spojení nebo před
+   * doručením eventu může být pozadu. Vstup u brokera skončil = žádný incident (fill → ověření nohou);
+   * nečitelné = incident s poctivým „stav nejde ověřit“ (fail-closed). Každý (záznam, druh) se čte
+   * nejvýš jednou za běh — po incidentu i po konci vstupu se už nečte.
+   */
+  const pendingEntryConfirmRunning = new Set<string>();
+  const pendingEntryConfirmDone = new Set<string>();
+  const confirmPendingEntryIncident = (
+    record: CopierManualEntryRecord,
+    entryId: string,
+    accountId: number,
+    kind: Extract<PendingEntryIncidentKind, 'restart-cancel' | 'partial' | 'prior-manual'>,
+    text: (order: BrokerOrder | null) => string,
+  ): void => {
+    const operationId = record.operationId;
+    const key = `${operationId}:${kind}`;
+    if (pendingEntryIncidentReported(operationId, kind) || pendingEntryConfirmDone.has(key) || pendingEntryConfirmRunning.has(operationId)) return;
+    pendingEntryConfirmRunning.add(operationId);
+    const job = (async () => {
+      const lookup = await boundedManagedOrderLookup(accountId, entryId);
+      if (stopped) return;
+      const order = lookup?.completeness === 'authoritative' ? lookup.order : null;
+      const label = pendingEntryLabel(record, entryId);
+      if (order && !isOpenOrderStatus(order.status)) {
+        pendingEntryConfirmDone.add(key);
+        const filled = Math.max(0, order.filledQuantity, order.status === 'filled' ? order.quantity : 0);
+        if (filled > 0) {
+          manualEntryAudit(operationId, 'filled', `${label} už u brokera nečeká — vyplnil se (${filled}${filled < order.quantity ? `/${order.quantity}` : ''}); nic se neruší, SL/TP ověřuji čtením`, entryId);
+          await checkCancelEntryFillProtection(operationId, operationId, entryId, filled, { side: order.side, symbol: order.symbol });
+        } else {
+          manualEntryAudit(operationId, 'skipped', `${label} už u brokera nečeká (${order.status}) — cache streamu byla pozadu, nic se neruší`, entryId);
+        }
+        return;
+      }
+      pendingEntryIncident(operationId, kind, text(order), entryId);
+    })();
+    manualEntryCancelJobs.add(job);
+    void job.catch(error => failClosed(errorOf(error), { autoClose: false })).finally(() => {
+      manualEntryCancelJobs.delete(job);
+      pendingEntryConfirmRunning.delete(operationId);
+    });
+  };
+  /** Text incidentu „vstup po zrušení z dřívějšího běhu u brokera dál pracuje“ (revize i ověření po startu). */
+  const restartCancelIncidentText = (
+    label: string,
+    prior: NonNullable<CopierManualEntryRecord['cancel']>,
+    order: BrokerOrder | null,
+  ) => `${label} po zrušení (${prior.status}: ${prior.reason}) u brokera dál pracuje${order ? (order.filledQuantity > 0 ? ` (vyplněno ${order.filledQuantity}/${order.quantity})` : '') : ' (stav u brokera teď nejde ověřit)'} — nic se znovu neposílá, zruš ho v Tradovate`;
+  /**
+   * Oponentura C12 kolo 2 (P3): zrušení z předchozího běhu bez ověřeného výsledku (`cancel` bez
+   * `verified` — pád mezi durable `sending` a `sent`/`verified`, zastavení po zápisu) se po dokončení
+   * startovní obnovy spojení jednou ohraničeně PŘEČTE (bez zápisu k brokerovi) bez ohledu na cache:
+   * revize vidí jen vstup, který v cache pracuje, a vstup, který mezitím u brokera skončil s fillem
+   * (kaskáda na nohy NEOVĚŘENÁ), by zůstal bez dohledu a watchdog by u `sending` čekal navždy.
+   * Výsledek nastaví `verified` (bez posunu `updatedAt` — push o výsledku jen v okně od zápisu, incident
+   * si ho posune sám); fill → ověření nohou (`checkCancelEntryFillProtection`, jinak incident per
+   * záznam); vstup dál pracuje → incident `restart-cancel`; nečitelné → incident „nejde ověřit“.
+   * Čtení jednou za běh, sekvenčně (sdílený rate-limit rozpočet); nikdy druhý pokus o zrušení.
+   */
+  const verifyRestartedOwnEntryCancels = () => {
+    if (restartCancelVerifyStarted || stopped || !gate.connected || recoveryInFlight || restartUnverifiedCancels.size === 0) return;
+    restartCancelVerifyStarted = true;
+    const job = (async () => {
+      for (const operationId of restartUnverifiedCancels) {
+        if (stopped) return;
+        const record = manualEntryRecords().find(item => item.operationId === operationId);
+        const prior = record?.cancel;
+        const entryId = record?.entryBrokerOrderId ?? record?.lateResult?.entryBrokerOrderId;
+        if (!record || !prior || !cancelNeedsRestartVerify(prior) || !entryId) continue;
+        const lookup = await boundedManagedOrderLookup(record.request.accountId, entryId);
+        if (stopped) return;
+        const order = lookup?.completeness === 'authoritative' ? lookup.order : null;
+        const label = pendingEntryLabel(record, entryId);
+        if (prior.verified === 'filled' || prior.verified === 'partially-filled') {
+          // Kolo 3 (P3): fill už je zjištěný (stream nebo čtení), nohy ne — výsledek se nikdy nesníží na
+          // „zrušen“ (REST cumQty může být pozadu); fill = největší známý. Nohy čtením, pak značka.
+          const filled = Math.max(prior.fillQty ?? 0, order?.filledQuantity ?? 0,
+            prior.verified === 'filled' || order?.status === 'filled' ? record.request.quantity : 0);
+          const full = prior.verified === 'filled' || filled >= record.request.quantity;
+          manualEntryAudit(operationId, 'filled', `${label}: po zrušení z předchozího běhu (${prior.status}) se vstup vyplnil (${filled || '?'}) a SL/TP se před pádem neověřily — ověřuji čtením po startu (${prior.reason})`, entryId);
+          await checkCancelEntryFillProtection(operationId, operationId, entryId, filled, order ? { side: order.side, symbol: order.symbol } : { side: record.request.side, symbol: record.request.symbol });
+          await markOwnEntryCancelVerified(operationId, prior.reason, full ? 'filled' : 'partially-filled', { touch: false, legs: { filled, checked: true } });
+          continue;
+        }
+        if (!order) {
+          await markOwnEntryCancelVerified(operationId, prior.reason, 'unverified', { touch: false });
+          pendingEntryIncident(operationId, 'cancel-unverified', `${label}: výsledek zrušení z předchozího běhu (${prior.status}) nejde po startu ověřit u brokera — vstup může dál čekat nebo být vyplněný, zkontroluj leadera v Tradovate (${prior.reason})`, entryId);
+          continue;
+        }
+        if (isOpenOrderStatus(order.status)) {
+          await markOwnEntryCancelVerified(operationId, prior.reason, 'working', { touch: false });
+          pendingEntryIncident(operationId, 'restart-cancel', restartCancelIncidentText(label, prior, order), entryId);
+          continue;
+        }
+        const verdict = cancelEntryVerdict(order, { opposite: prior.opposite === true });
+        if (verdict?.status === 'rejected') {
+          // Vstup se vyplnil (i z části) dřív, než ho broker zrušil: pozice je otevřená — nohy ověřit
+          // čtením PŘED zápisem výsledku (pád mezi = další start kontrolu zopakuje).
+          const full = verdict.code === 'entry-filled';
+          manualEntryAudit(operationId, 'filled', `${label}: po zrušení z předchozího běhu (${prior.status}) se vstup vyplnil (${verdict.filled}${full ? '' : `/${order.quantity}`}) — ${fillShapeText(prior.opposite === true)}, nic se neposílá; SL/TP ověřuji čtením (${prior.reason})`, entryId);
+          await checkCancelEntryFillProtection(operationId, operationId, entryId, verdict.filled, { side: order.side, symbol: order.symbol });
+          await markOwnEntryCancelVerified(operationId, prior.reason, full ? 'filled' : 'partially-filled', { touch: false, legs: { filled: verdict.filled, checked: true } });
+          continue;
+        }
+        const canceled = verdict?.status === 'acknowledged';
+        await markOwnEntryCancelVerified(operationId, prior.reason, canceled ? 'canceled' : 'ended', { touch: false });
+        manualEntryAudit(operationId, canceled ? 'canceled' : 'skipped', `${label}: zrušení z předchozího běhu (${prior.status}) ověřeno po startu — vstup už u brokera nečeká (${order.status}), nic se neposílá (${prior.reason})`, entryId);
+      }
+    })();
+    manualEntryCancelJobs.add(job);
+    void job.catch(error => failClosed(errorOf(error), { autoClose: false })).finally(() => manualEntryCancelJobs.delete(job));
+  };
   const reportedScaleInEpisodeMismatch = new Set<string>();
-  const reviewPendingScaleIns = () => {
+  /** C12: od kdy u vstupu z flat trvá pozice na symbolu bez fillu vstupu (ustálení, P1c). */
+  const pendingEntryOutsideSince = new Map<string, number>();
+  type OpenLots = NonNullable<CopierDailyStats['openLots']>;
+  /** Fill přikoupení v jiné epizodě deníku než základ = přikoupení otevřelo nový obchod. */
+  const scaleInEpisodeMismatch = (record: CopierManualEntryRecord, entryId: string, openLots: OpenLots): boolean => {
+    if (record.scaleIn !== true) return false;
+    const lot = openLots.find(item => (item.entryOrderIds ?? []).includes(entryId));
+    return lot?.episodeId != null && record.baseEpisodeId != null && lot.episodeId !== record.baseEpisodeId;
+  };
+  /**
+   * Oponentura C12 kolo 2 (P3): vstupy `pendingOwnEntryViolation` ze zmrazeného stavu controlleru —
+   * JEDNA funkce pro revizi i pro synchronní přehodnocení těsně před `cancelOrder` (během předčtení
+   * mohlo např. automatické pokračování po výpadku kopírku znovu zapnout). Vrací důvod zrušení
+   * s předponou, nebo null (vstup smí čekat, nebo v cache nečeká). Bez IO.
+   */
+  const pendingOwnEntryViolationNow = (
+    record: CopierManualEntryRecord,
+    entryId: string,
+    context: { now?: number; openLots?: OpenLots; halt?: { inside: boolean } } = {},
+  ): string | null => {
+    const leader = group.leaderAccountId;
+    const live = leader == null ? undefined : liveOrdersByAccount.get(leader)?.get(entryId);
+    if (leader == null || record.request.accountId !== leader || !live || !isOpenOrderStatus(live.status)) return null;
+    const now = context.now ?? clock();
+    const kind = record.scaleIn === true ? 'add' as const : 'from-flat' as const;
+    const safety = currentRuntime().state.safety;
+    const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
+    const halt = context.halt ?? cmeDailyHaltWindow(now, MANUAL_ENTRY_END_RESERVE_MS);
+    const positions = positionsByAccount.get(leader);
+    const net = positions ? (positions.get(record.request.symbol) ?? 0) : null;
+    const outsideSince = pendingEntryOutsideSince.get(record.operationId);
+    const reason = pendingOwnEntryViolation({
+      kind,
+      armed: gate.armed, shadowMode: gate.shadowMode, killSwitch: gate.killSwitch,
+      dayLockPending: dayLockPending != null, dayLocked: safety.dayLockUntil > now,
+      pauseActive: safety.pauseRule != null && (safety.pauseUntil ?? 0) > now,
+      managementOnly: safety.managementOnly != null,
+      leaderIneligible: currentEntryIneligibleAccounts(now).has(leader),
+      windowNow: tradingWindow.enabled ? tradingWindowStateAt(tradingWindow, now) : 'off',
+      windowAfterReserve: tradingWindow.enabled ? tradingWindowStateAt(tradingWindow, now + MANUAL_ENTRY_END_RESERVE_MS) : 'off',
+      cmeHaltWindow: halt.inside,
+      now, sessionEndAt: now + msUntilTradovateSessionEnd(now),
+      armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : null,
+      reserveMs: MANUAL_ENTRY_END_RESERVE_MS,
+      net, side: record.request.side,
+      episodeMismatch: scaleInEpisodeMismatch(record, entryId, context.openLots ?? currentDailyStats(now).openLots ?? []),
+      entryFilled: live.filledQuantity,
+      outsidePositionSettled: outsideSince != null && now - outsideSince >= PENDING_ENTRY_OUTSIDE_SETTLE_MS,
+    });
+    return reason ? `${kind === 'add' ? 'čekající přikoupení' : 'čekající vstup'}: ${reason}` : null;
+  };
+  /**
+   * Oponentura C12 kolo 3 (P2, INV-BRAKE-01 / INV-MANUAL-01): může pozice followera na symbolu pocházet
+   * z TOHOTO vstupu leadera? `filled` = kopie vstupu (vazba v `links`) má u followera fill > 0;
+   * `unreadable` = vazba existuje, ale stav kopie cache nezná (po restartu, kopie mimo cache) — obojí
+   * blokuje zrušení (incident; zrušením leadera by follower zůstal s kopírovanou pozicí sám). `null` =
+   * kopie žádná (on-fill follower, leader má fill 0) nebo všechny kopie čekají s fillem 0: pozice followera
+   * je odjinud (ruční obchod v Tradovate zkopírovaný kopírkou, vlastní pozice) a zrušení leadera i kopie
+   * (lifecycle `terminalCancel`) je přesné — nic se kvůli ní nevypíná. Kolo 5 (P3): kopie POZOROVANĚ
+   * skončená (`canceled` / `rejected`) s pozorovaným fillem 0 je taky null (nic z ní), s fillem > 0
+   * (`observedOrderFilledByAccount`, i dílčí fill zrušené kopie) `filled`. Čistě z paměti, bez IO.
+   */
+  const followerCopyFromEntryState = (entryId: string, accountId: number): 'filled' | 'unreadable' | null => {
+    const copies = (currentRuntime().state.links.get(entryId) ?? []).filter(link => link.accountId === accountId);
+    let unreadable = false;
+    for (const link of copies) {
+      const copy = liveOrdersByAccount.get(accountId)?.get(link.brokerOrderId);
+      const observed = observedOrderStatusesByAccount.get(accountId)?.get(link.brokerOrderId);
+      const filledMax = observedOrderFilledByAccount.get(accountId)?.get(link.brokerOrderId) ?? 0;
+      if (observed === 'filled' || (copy?.filledQuantity ?? 0) > 0 || filledMax > 0) return 'filled';
+      if (copy) continue;
+      // Oponentura C12 kolo 5 (P3): kopie POZOROVANĚ skončená (zrušená / odmítnutá) s pozorovaným fillem 0
+      // z tohoto vstupu pozici nemá — ne „nejde ověřit“. Pozdní Fill za Order(Canceled) (INV-TRAD-02) zachytí
+      // `filledMax` výš v dalším kole, po zrušení leadera hák `noteOwnEntryCopyAfterLeaderCancel` (DISARMED)
+      // nebo lifecycle / divergence (ARMED). Bez pozorovaného stavu (restart, kopie mimo cache) = neznámý stav.
+      if (observed === 'canceled' || observed === 'rejected') continue;
+      unreadable = true;
+    }
+    return unreadable ? 'unreadable' : null;
+  };
+  /**
+   * Oponentura C12 kolo 4 (P2, „Position předběhne Fill“ u followera): od kdy má follower na symbolu
+   * tuto nenulovou pozici (čistě z paměti; revize ji obnoví každé kolo, C7 a pozdní kontrola líně).
+   * Změna velikosti = nové ustálení. Stav kopie v cache je důkaz „odjinud“ jen nad ustálenou pozicí.
+   */
+  const noteFollowerPosition = (accountId: number, symbol: string, net: number, now: number): number => {
+    const key = `${accountId}:${symbol}`;
+    if (net === 0) {
+      followerPositionSeen.delete(key);
+      return now;
+    }
+    const seen = followerPositionSeen.get(key);
+    if (seen && seen.net === net) return seen.since;
+    followerPositionSeen.set(key, { accountId, symbol, net, since: now });
+    return now;
+  };
+  const refreshFollowerPositionSeen = (now: number) => {
+    for (const follower of group.followers) {
+      for (const [symbol, net] of positionsByAccount.get(follower.accountId) ?? []) noteFollowerPosition(follower.accountId, symbol, net, now);
+    }
+  };
+  /**
+   * Oponentura C12 kolo 4 (P2): smí se pozice followerů na symbolu brát jako „odjinud“?
+   * `from-entry` = kopie TOHOTO vstupu má fill (i když Position followera ještě nedorazila — Fill před
+   * Position) nebo follower s pozicí má vazbu, jejíž stav cache nezná; `unsettled` = follower má
+   * nezpracované eventy, nebo jeho pozice na symbolu trvá kratší dobu než ustálení (Position mohla
+   * předběhnout Order/Fill kopie) — ODKLAD, nikdy zrušení ani incident; null = pozice (pokud jsou) odjinud.
+   * Oponentura C12 kolo 6 (P3, C7, INV-DEFAULT-02): `unknown` = follower nemá načtenou cache pozic (není
+   * flat) — jediná podmínka pro revizi (incident `follower-unknown`), ruční C7 (`follower-has-position`)
+   * i pozdní kontrolu (odklad). Vyhodnotí se PŘED ostatními (dřív samostatná kontrola revize; C7 bral 0).
+   */
+  const followerPositionOrigin = (
+    followers: readonly { accountId: number }[],
+    entryId: string,
+    symbol: string,
+    now: number,
+  ): { kind: 'unknown'; accountId: number } | { kind: 'from-entry'; accountId: number; copy: 'filled' | 'unreadable' } | { kind: 'unsettled' } | null => {
+    const unknown = followers.find(follower => !positionsByAccount.has(follower.accountId));
+    if (unknown) return { kind: 'unknown', accountId: unknown.accountId };
+    let unsettled = false;
+    for (const follower of followers) {
+      const net = positionsByAccount.get(follower.accountId)?.get(symbol) ?? 0;
+      const copy = followerCopyFromEntryState(entryId, follower.accountId);
+      if (copy === 'filled' || (copy === 'unreadable' && net !== 0)) return { kind: 'from-entry', accountId: follower.accountId, copy };
+      if ((pendingTradeIngressByAccount.get(follower.accountId) ?? 0) > 0) unsettled = true;
+      else if (net !== 0 && now - noteFollowerPosition(follower.accountId, symbol, net, now) < PENDING_ENTRY_OUTSIDE_SETTLE_MS) unsettled = true;
+    }
+    return unsettled ? { kind: 'unsettled' } : null;
+  };
+  /**
+   * Followeři, kterých se zrušení vstupu leadera týká (oponentura kolo 2, P3): vazba na vstup (kopie),
+   * nebo zapojení (`enabled !== false`, bez aktivního vyřazení, způsobilí — jako `runnerUnmappedReplaceAccounts`).
+   */
+  const pendingEntryConcernedFollowers = (entryId: string, entryIneligible: ReadonlySet<number>) => {
+    const linkedFollowers = new Set((currentRuntime().state.links.get(entryId) ?? []).map(link => link.accountId));
+    return group.followers.filter(follower => follower.accountId !== group.leaderAccountId
+      && (linkedFollowers.has(follower.accountId) || !entryIneligible.has(follower.accountId)));
+  };
+  /**
+   * Oponentura C12 kolo 4 (P2/P3b): kopie vlastního vstupu leadera u followera po zrušení / konci vstupu
+   * leadera s fillem 0. Za ARMED to řeší běžná lifecycle / divergence cesta (fail-closed); za DISARMED
+   * jinak nikdo — follower by tiše držel pozici, kterou leader nemá. Incident per záznam (push), bez
+   * auto-close (INV-DIVERGENCE-01: divergence se neopravuje obchodem). `filled` = fill kopie ze streamu,
+   * `cancelFailed` = lifecycle zrušení kopie selhalo (kopie může dál čekat). Čistě z paměti, bez IO.
+   */
+  const ownEntryOfFollowerCopy = (accountId: number, copyOrderId: string) => {
+    const leader = group.leaderAccountId;
+    if (leader == null || accountId === leader) return null;
+    for (const [leaderOrderId, links] of currentRuntime().state.links) {
+      if (!links.some(link => link.accountId === accountId && link.brokerOrderId === copyOrderId
+        && (link.nativeOsoRole == null || link.nativeOsoRole === 'entry') && link.protectiveRole == null)) continue;
+      const operationId = ownManualEntryOrderIds.get(leaderOrderId);
+      const record = operationId ? manualEntryRecords().find(item => item.operationId === operationId) : undefined;
+      if (!record || record.bare === true || record.request.accountId !== leader) return null;
+      return { record, leaderOrderId };
+    }
+    return null;
+  };
+  const noteOwnEntryCopyAfterLeaderCancel = (
+    accountId: number,
+    copyOrderId: string,
+    what: { filled: number } | { cancelFailed: string },
+  ) => {
+    if (gate.armed || stopped) return;
+    if ('filled' in what && what.filled <= 0) return;
+    const owner = ownEntryOfFollowerCopy(accountId, copyOrderId);
+    const leader = group.leaderAccountId;
+    if (!owner || leader == null) return;
+    const { record, leaderOrderId } = owner;
+    const leaderStatus = observedOrderStatusesByAccount.get(leader)?.get(leaderOrderId);
+    // Jen nad pozorovaným KONCEM vstupu leadera: dokud v cache pracuje (i s rozběhnutým zrušením —
+    // TooLateToCancel může znamenat i fill leadera, jehož event ještě nedorazil), o kopii s fillem
+    // rozhoduje revize (`from-entry` → incident) a lifecycle zrušení kopie po konci vstupu.
+    if (leaderStatus == null || isOpenOrderStatus(leaderStatus)) return;
+    const leaderFilled = Math.max(
+      ownEntryFillPrices.get(leaderOrderId)?.quantity ?? 0,
+      leaderStatus === 'filled' ? record.request.quantity : 0,
+      record.cancel?.verified === 'filled' || record.cancel?.verified === 'partially-filled' ? Math.max(1, record.cancel.fillQty ?? 0) : 0,
+    );
+    if (leaderFilled > 0) return;
+    const label = pendingEntryLabel(record, leaderOrderId);
+    if ('filled' in what) {
+      pendingEntryIncident(record.operationId, 'copy-filled', `${label} skončil bez fillu, ale kopie ${copyOrderId} u followera ${accountId} se vyplnila (${what.filled}) — pozice followera se změnila a leader ne; nic se automaticky nezavírá, zkontroluj followera v Tradovate`, leaderOrderId);
+    } else {
+      pendingEntryIncident(record.operationId, 'copy-cancel-failed', `${label} skončil bez fillu, ale kopii ${copyOrderId} u followera ${accountId} se nepodařilo prokazatelně zrušit (${what.cancelFailed.slice(0, 120)}) — může dál čekat nebo být vyplněná; zkontroluj followera v Tradovate`, leaderOrderId);
+    }
+  };
+  const reviewPendingOwnEntries = () => {
     const leader = group.leaderAccountId;
     if (stopped || leader == null) return;
     const now = clock();
-    const safety = currentRuntime().state.safety;
-    const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
+    refreshFollowerPositionSeen(now);
     const openLots = currentDailyStats(now).openLots ?? [];
+    const leaderIngress = (pendingTradeIngressByAccount.get(leader) ?? 0) > 0;
+    // Odklad (návrh bod 3): stará cache by vedla k pokusu o zrušení vyplněného vstupu / falešnému incidentu.
+    const deferred = !gate.connected || recoveryInFlight || leaderIngress;
+    // Ověření zrušení z předchozího běhu (kolo 2, P3) — nejpozději s první nedeferovanou revizí.
+    if (!deferred) verifyRestartedOwnEntryCancels();
+    const halt = cmeDailyHaltWindow(now, MANUAL_ENTRY_END_RESERVE_MS);
+    const positions = positionsByAccount.get(leader);
     for (const record of manualEntryRecords()) {
-      if (record.scaleIn !== true || record.request.accountId !== leader) continue;
+      if (record.request.accountId !== leader || record.bare === true) continue;
       const entryId = record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId;
-      // Market přikoupení je u brokera vyplněné hned: zrušit nejde (a audit by se opakoval každou sekundu).
-      const cancellable = record.request.orderType !== 'Market';
       if (!entryId) continue;
-      const lot = openLots.find(item => (item.entryOrderIds ?? []).includes(entryId));
-      const episodeMismatch = lot?.episodeId != null && record.baseEpisodeId != null && lot.episodeId !== record.baseEpisodeId;
-      if (episodeMismatch && record.episodeIncidentAt == null && !reportedScaleInEpisodeMismatch.has(record.operationId)) {
-        reportedScaleInEpisodeMismatch.add(record.operationId);
-        manualEntryAudit(record.operationId, 'blocked', `přikoupení ${entryId} se vyplnilo až v novém obchodu (pozice mezitím zavřená)`, entryId);
-        failClosed(new Error(`Přikoupení ${entryId} otevřelo nový obchod leadera (základ byl mezitím zavřený) — pozice má SL/TP přikoupení, zkontroluj ji`), { autoClose: false });
-        void persistManualEntry(record.operationId, current => ({ ...(current ?? record), episodeIncidentAt: clock(), updatedAt: clock() }))
-          .catch(error => options.onError?.(new Error(`Přikoupení: značku incidentu se nepodařilo uložit (${errorOf(error).message})`)));
+      const kind = record.scaleIn === true ? 'add' as const : 'from-flat' as const;
+      if (kind === 'add') {
+        const episodeMismatch = scaleInEpisodeMismatch(record, entryId, openLots);
+        if (episodeMismatch && record.episodeIncidentAt == null && !reportedScaleInEpisodeMismatch.has(record.operationId)) {
+          reportedScaleInEpisodeMismatch.add(record.operationId);
+          manualEntryAudit(record.operationId, 'blocked', `přikoupení ${entryId} se vyplnilo až v novém obchodu (pozice mezitím zavřená)`, entryId);
+          failClosed(new Error(`Přikoupení ${entryId} otevřelo nový obchod leadera (základ byl mezitím zavřený) — pozice má SL/TP přikoupení, zkontroluj ji`), { autoClose: false });
+          void persistManualEntry(record.operationId, current => ({ ...(current ?? record), episodeIncidentAt: clock(), updatedAt: clock() }))
+            .catch(error => options.onError?.(new Error(`Přikoupení: značku incidentu se nepodařilo uložit (${errorOf(error).message})`)));
+        }
       }
+      // Market je u brokera vyplněný hned: zrušit nejde (a audit by se opakoval každou sekundu).
+      if (record.request.orderType === 'Market') continue;
       const live = liveOrdersByAccount.get(leader)?.get(entryId);
-      if (!cancellable || !live || !isOpenOrderStatus(live.status)) continue;
-      if (record.cancel || manualEntryCancelRequested.has(record.operationId)) continue;
+      if (!live || !isOpenOrderStatus(live.status)) {
+        pendingEntryOutsideSince.delete(record.operationId);
+        continue;
+      }
+      if (manualEntryCancelRequested.has(record.operationId)) continue;
       // Rozpracované odeslání: o výsledku rozhodne `executeManualEntry` (zrušení při brzdě tam).
       if (record.status === 'sending' && manualEntryExecuting) continue;
-      const positions = positionsByAccount.get(leader);
-      const reason = pendingAddViolation({
-        armed: gate.armed, shadowMode: gate.shadowMode, killSwitch: gate.killSwitch,
-        dayLockPending: dayLockPending != null, dayLocked: safety.dayLockUntil > now,
-        pauseActive: safety.pauseRule != null && (safety.pauseUntil ?? 0) > now,
-        managementOnly: safety.managementOnly != null,
-        leaderIneligible: currentEntryIneligibleAccounts(now).has(leader),
-        windowNow: tradingWindow.enabled ? tradingWindowStateAt(tradingWindow, now) : 'off',
-        windowAfterReserve: tradingWindow.enabled ? tradingWindowStateAt(tradingWindow, now + MANUAL_ENTRY_END_RESERVE_MS) : 'off',
-        now, sessionEndAt: now + msUntilTradovateSessionEnd(now),
-        armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : null,
-        reserveMs: MANUAL_ENTRY_END_RESERVE_MS,
-        net: positions ? (positions.get(record.request.symbol) ?? 0) : null,
-        side: record.request.side, episodeMismatch,
-      });
-      if (reason) {
-        cancelOwnManualEntry(record.operationId, `čekající přikoupení: ${reason}`, { entryId, accountId: leader });
+      // Ruční zrušení (C7) téhož vstupu běží nebo má neznámý výsledek: rozhodne jeho dořešení čtením.
+      const manualCancels = manualOrderActionRecords().filter(action => action.action === 'cancel-entry' && action.entryOperationId === record.operationId);
+      if (manualCancelEntryInFlight.has(record.operationId) || manualCancels.some(action => UNRESOLVED_MANUAL_ORDER_ACTION.has(action.status))) continue;
+      const net = positions ? (positions.get(record.request.symbol) ?? 0) : null;
+      // Ustálení „pozice mimo appku“ se měří jen nad dohnaným streamem (Position může předběhnout Fill).
+      if (kind === 'from-flat' && !leaderIngress && net != null && net !== 0 && live.filledQuantity === 0) {
+        if (!pendingEntryOutsideSince.has(record.operationId)) pendingEntryOutsideSince.set(record.operationId, now);
+      } else {
+        pendingEntryOutsideSince.delete(record.operationId);
       }
+      if (deferred) continue;
+      const label = pendingEntryLabel(record, entryId);
+      const unverifiedNote = (order: BrokerOrder | null) => (order ? '' : ' (stav u brokera teď nejde ověřit)');
+      // Zrušení z dřívějšího běhu (restart v `sending` / `failed`, nebo `sent` bez účinku) a vstup
+      // dál pracuje: incident jednou, nikdy druhý pokus (INV-OUTBOX-01, oponentura C12 P3a) — až podle REST.
+      // Záznam bez ověřeného výsledku z předchozího běhu dořeší `verifyRestartedOwnEntryCancels` (kolo 2, P3).
+      if (record.cancel) {
+        const prior = record.cancel;
+        if (!restartUnverifiedCancels.has(record.operationId)) {
+          confirmPendingEntryIncident(record, entryId, leader, 'restart-cancel', order => restartCancelIncidentText(label, prior, order));
+        }
+        continue;
+      }
+      const why = pendingOwnEntryViolationNow(record, entryId, { now, openLots, halt });
+      if (!why) continue;
+      // Dílčí fill: zbytek se automaticky NERUŠÍ (INV-TRAD-02, C16 — kaskáda na nohy NEOVĚŘENÁ), jen incident.
+      if (live.filledQuantity > 0) {
+        const cached = { filled: live.filledQuantity, quantity: live.quantity };
+        confirmPendingEntryIncident(record, entryId, leader, 'partial', order => partialEntryIncidentText(label, order, cached, why));
+        continue;
+      }
+      // Ruční zrušení z appky už u brokera proběhlo a vstup dál čeká: nic se automaticky neopakuje (C7, INV-OUTBOX-01).
+      const priorManualCancel = manualCancels.find(action => action.status !== 'not-sent');
+      if (priorManualCancel) {
+        confirmPendingEntryIncident(record, entryId, leader, 'prior-manual', order => (
+          `${label} se má zrušit (${why}), ale ruční zrušení z appky (${priorManualCancel.status}) se neprojevilo a vstup dál čeká${unverifiedNote(order)} — nic se automaticky neopakuje, zruš ho v Tradovate`));
+        continue;
+      }
+      if (kind === 'add') {
+        // Oponentura C17 (P2): zrušení přikoupení uprostřed změny celé pozice by odneslo jeho nohy — počkat
+        // (běží = `sending` / rozpracovaná); až neznámý výsledek (`unknown`) je incident místo zrušení.
+        const positionAction = unresolvedManualOrderAction(positionManageKey(record.request.symbol));
+        if (positionActionsInFlight.size > 0 || positionAction?.status === 'sending') continue;
+        if (positionAction) {
+          pendingEntryIncident(record.operationId, 'position-action', `${label} se má zrušit (${why}), ale předchozí změna celé pozice má neznámý výsledek — zruš ho v Tradovate nebo Flattenem`, entryId);
+          continue;
+        }
+      }
+      // Skupina s followery: stejné předpoklady jako ruční `cancel-entry`, jinak incident místo zrušení.
+      // Oponentura kolo 2 (P3): jen followeři, kterých se zrušení týká — mají na vstup vazbu (kopii), nebo
+      // se účastní (`enabled !== false`, bez aktivního vyřazení, způsobilí — stejně jako
+      // `runnerUnmappedReplaceAccounts`). Vyřazený follower s vlastní pozicí (INV-PART-03) kopii nemá
+      // a zrušení leadera se ho netýká — nesmí ho natrvalo blokovat.
+      const entryIneligible = currentEntryIneligibleAccounts(now);
+      const concernedFollowers = pendingEntryConcernedFollowers(entryId, entryIneligible);
+      // Oponentura kolo 3 (P2): pozice followera blokuje jen tehdy, když může pocházet z TOHOTO vstupu
+      // (kopie s fillem > 0, nebo stav kopie nejde přečíst). Ruční obchod v Tradovate zkopírovaný kopírkou
+      // za ARMED (pozice mimo appku) nesmí vypnout kopírku uprostřed obchodu — vstup leadera i jeho kopie
+      // s fillem 0 se zruší přesně (lifecycle `terminalCancel`), ARM zůstane.
+      // Kolo 4 (P2): „odjinud“ jen nad dohnaným a ustáleným stavem followera (Position může předběhnout
+      // Order/Fill kopie) — jinak odklad (žádné zrušení ani incident), rozhodne další kolo.
+      const followerOrigin = followerPositionOrigin(concernedFollowers, entryId, record.request.symbol, now);
+      // Oponentura kolo 1 (P3c): follower bez načtené pozice (cache účtu chybí) není flat — incident, ne zrušení
+      // (kolo 6: stejná podmínka jako ruční C7, `followerPositionOrigin` → `unknown`).
+      if (followerOrigin?.kind === 'unknown') {
+        pendingEntryIncident(record.operationId, 'follower-unknown', `${label} se má zrušit (${why}), ale pozice followera ${followerOrigin.accountId} není známá — automaticky se neruší, vstup zruš v Tradovate a pozice zkontroluj`, entryId);
+        continue;
+      }
+      if (followerOrigin?.kind === 'from-entry') {
+        pendingEntryIncident(record.operationId, 'follower-position', `${label} se má zrušit (${why}), ale follower ${followerOrigin.accountId} už má na symbolu pozici ${followerOrigin.copy === 'filled' ? 'z kopie tohoto vstupu' : '(stav kopie tohoto vstupu nejde ověřit)'} — vstup zruš v Tradovate a pozice zkontroluj`, entryId);
+        continue;
+      }
+      if (followerOrigin?.kind === 'unsettled') continue;
+      const uncovered = runnerUnmappedReplaceAccounts(entryId, currentRuntime().state, group, entryIneligible).missingAccounts;
+      if (uncovered.length > 0) {
+        pendingEntryIncident(record.operationId, 'uncovered', `${label} se má zrušit (${why}), ale followeři ${uncovered.join(', ')} nemají kopii vstupu navázanou — zruš ho v Tradovate`, entryId);
+        continue;
+      }
+      if (now < (pendingEntryReadRetryAt.get(record.operationId) ?? 0)) continue;
+      cancelOwnManualEntry(record.operationId, why, { entryId, accountId: leader }, { preRead: true });
+    }
+  };
+  /**
+   * Oponentura C12 kolo 3 (P3): záznamy do statusu `manualEntries` (jen zobrazení a per-záznamový push
+   * watchdogu, INV-UI-01/03, INV-WATCH-01) — posledních 10 a navíc každý starší, jehož vstup nebo noha
+   * v cache pracuje, nebo který má incident / zrušení v okně notifikace watchdogu (10 min). Starší
+   * čekající vstup zrušený v 15:55 CT po deseti dalších vstupech by jinak push o výsledku nedostal.
+   * Pořadí podle `createdAt` (nejnovější poslední) zůstává.
+   */
+  const MANUAL_ENTRY_STATUS_RECENT = 10;
+  const MANUAL_ENTRY_STATUS_NOTIFY_WINDOW_MS = 10 * 60_000;
+  const manualEntryStatusRecords = (): readonly CopierManualEntryRecord[] => {
+    const records = manualEntryRecords();
+    const now = clock();
+    const firstRecent = records.length - MANUAL_ENTRY_STATUS_RECENT;
+    return records.filter((record, index) => {
+      if (index >= firstRecent) return true;
+      const orders = liveOrdersByAccount.get(record.request.accountId);
+      if ([record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId, record.stopBrokerOrderId, record.targetBrokerOrderId]
+        .some(id => id != null && isOpenOrderStatus(orders?.get(id)?.status ?? 'canceled'))) return true;
+      if (record.pendingIncidentAt != null && now - record.pendingIncidentAt <= MANUAL_ENTRY_STATUS_NOTIFY_WINDOW_MS) return true;
+      return record.cancel != null && now - Math.max(record.cancel.at, record.updatedAt) <= MANUAL_ENTRY_STATUS_NOTIFY_WINDOW_MS;
+    });
+  };
+  /**
+   * C12 status: kdy se čekající vlastní vstup sám zruší podle časových pravidel (jen zobrazení,
+   * INV-UI-01/03). Jen pro vstup, který v cache čeká s fillem 0 a nemá rozběhnuté zrušení.
+   */
+  let autoCancelHaltMemo: { now: number; haltStartAt: number } | null = null;
+  const pendingEntryAutoCancelStatus = (record: CopierManualEntryRecord): { autoCancelAt?: number; autoCancelReason?: 'cme-halt' | 'arm-expiry' } => {
+    try {
+      const entryId = record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId;
+      if (!entryId || record.request.orderType === 'Market' || record.bare === true || record.cancel) return {};
+      const live = liveOrdersByAccount.get(record.request.accountId)?.get(entryId);
+      if (!live || !isOpenOrderStatus(live.status) || live.filledQuantity > 0) return {};
+      const now = clock();
+      if (autoCancelHaltMemo?.now !== now) autoCancelHaltMemo = { now, haltStartAt: cmeDailyHaltWindow(now, MANUAL_ENTRY_END_RESERVE_MS).haltStartAt };
+      const next = pendingEntryAutoCancelAt({
+        now, reserveMs: MANUAL_ENTRY_END_RESERVE_MS,
+        cmeHaltStartAt: autoCancelHaltMemo.haltStartAt,
+        armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : null,
+      });
+      return next ? { autoCancelAt: next.at, autoCancelReason: next.reason } : {};
+    } catch {
+      return {};
     }
   };
   /** Nadkrytí vlastních nohou (P2-8): stav hlídání na symbolu (`overCoverStep`); incident až po ustálení. */
@@ -3853,18 +4777,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
   let scaleInReviewQueued = false;
   let scaleInReviewFailed = false;
+  /** Revize běží až po dokončení bootstrapu (všechny závislosti controlleru jsou inicializované). */
+  let pendingEntryReviewReady = false;
   const scheduleScaleInReview = () => {
-    if (scaleInReviewQueued || stopped) return;
+    if (scaleInReviewQueued || stopped || !pendingEntryReviewReady) return;
     scaleInReviewQueued = true;
     setTimeout(() => {
       scaleInReviewQueued = false;
       try {
-        reviewPendingScaleIns();
+        reviewPendingOwnEntries();
         reviewScaleInCoverage();
         scaleInReviewFailed = false;
       } catch (error) {
         // Jeden incident, ne každou sekundu znovu.
-        if (!scaleInReviewFailed) failClosed(new Error(`Přikoupení: kontrola čekajícího přikoupení selhala (${errorOf(error).message})`), { autoClose: false });
+        if (!scaleInReviewFailed) failClosed(new Error(`Čekající vstup: kontrola čekajících vstupů selhala (${errorOf(error).message})`), { autoClose: false });
         scaleInReviewFailed = true;
       }
     }, 0);
@@ -4200,7 +5126,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     try {
       const leader = retiredGroup ? null : group.leaderAccountId ?? null;
       const records = manualEntryRecords();
-      const byOperation = new Map(records.map(record => [record.operationId, record]));
       const view = selectOwnPendingEntries({
         leaderAccountId: leader,
         records: records.map(record => ({
@@ -4211,9 +5136,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           request: { accountId: record.request.accountId, symbol: record.request.symbol, side: record.request.side, quantity: record.request.quantity, orderType: record.request.orderType },
         })),
         openOrders: leader == null ? [] : (liveOrdersByAccount.get(leader)?.values() ?? []),
-        // Rozběhnuté cílené zrušení workerem (ještě bez durable `sent`/`failed`) nebo nevyřešená změna obchodu.
-        excluded: operationId => (manualEntryCancelRequested.has(operationId)
-          && (byOperation.get(operationId)?.cancel == null || byOperation.get(operationId)?.cancel?.status === 'sending'))
+        // PRÁVĚ běžící cílené zrušení workerem nebo nevyřešená změna obchodu (oponentura C12 kolo 1, P2:
+        // po skončeném pokusu — i neúčinném — se vstup zase nabízí; ruční zrušení je nový výslovný záměr).
+        excluded: operationId => manualEntryCancelRunning.has(operationId)
           || unresolvedManualOrderAction(operationId) != null,
         blockedReason: unresolvedManualEntry() ? 'Ruční vstup má neznámý výsledek — nejdřív ho vyřeš na Live Dashboardu.' : null,
       });
@@ -4799,14 +5724,48 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * Kolo 3 (P2): „ověřeně flat“ = `leaderVerifiedFlat` (dvě po sobě jdoucí čtení + stream bez pozice
    * a otevřeného příkazu) — jedno čtení může spojit pozice před fillem s příkazy po kaskádě.
    */
-  const cancelEntryFillChecks = new Map<string, Promise<'protected' | 'flat' | 'incident'>>();
+  /**
+   * Oponentura C12 kolo 2 (P1): memo drží i fill, pro který kontrola běžela — větší fill (zbytek se
+   * vyplnil později, REST cumQty pozadu) nohy ověří znovu; menší / stejný čeká na tentýž běh.
+   */
+  const cancelEntryFillChecks = new Map<string, { filled: number; check: Promise<'protected' | 'flat' | 'incident'> }>();
+  /**
+   * Oponentura C12 kolo 5 (P2, INV-TRAD-02 / INV-DEFAULT-02): kryje pozice leadera na symbolu fill vstupu
+   * (`fillPositionProblem`: znaménko strany vstupu, |net| ≥ fill)? `null` = kryje. Nejdřív cache streamu
+   * (jen bez nezpracovaných eventů leadera), pak nejvýš DVĚ po sobě jdoucí ohraničená REST čtení (první
+   * snímek `/position/list` se může připojit k požadavku zahájenému před fillem — druhé začíná až po něm)
+   * a po každém znovu cache. Stačí jedna shoda: snímek z doby před fillem bez cizích obchodů kryje fill jen
+   * tehdy, když ho kryje i pozice po fillu. Jinak problém s posledním známým net (null = nejde ověřit).
+   */
+  const leaderFillPositionProblem = async (
+    leader: number, symbol: string | null, side: string | null, filled: number,
+  ): Promise<{ problem: string; mismatch: boolean } | null> => {
+    if (!symbol) return { problem: 'symbol vstupu není známý', mismatch: false };
+    if (side !== 'Buy' && side !== 'Sell') return { problem: 'strana vstupu není známá', mismatch: false };
+    const cachedNet = (): number | null => {
+      if ((pendingTradeIngressByAccount.get(leader) ?? 0) > 0) return null;
+      const positions = positionsByAccount.get(leader);
+      return positions ? (positions.get(symbol) ?? 0) : null;
+    };
+    let net = cachedNet();
+    if (net != null && fillPositionProblem({ net, filled, side }) == null) return null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const rest = await readLeaderSymbolState(leader, symbol);
+      if (rest) net = rest.net;
+      if (rest && fillPositionProblem({ net: rest.net, filled, side }) == null) return null;
+      const after = cachedNet();
+      if (after != null && fillPositionProblem({ net: after, filled, side }) == null) return null;
+      if (!rest && after != null) net = after;
+    }
+    return { problem: fillPositionProblem({ net, filled, side }) ?? 'pozice leadera nejde ověřit', mismatch: net != null };
+  };
   const checkCancelEntryFillProtection = (
     operationId: string, key: string, entryId: string, filled: number, entry: { side: string; symbol: string } | null,
   ): Promise<'protected' | 'flat' | 'incident'> => {
     const leader = group.leaderAccountId;
     if (leader == null) return Promise.resolve('protected');
     const running = cancelEntryFillChecks.get(operationId);
-    if (running) return running;
+    if (running && running.filled >= filled) return running.check;
     const check = (async (): Promise<'protected' | 'flat' | 'incident'> => {
       const legs = managedTradeLegIds(key);
       const readLegs = async (): Promise<Array<BrokerOrder | null>> => {
@@ -4821,22 +5780,89 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         orders = await readLegs();
       }
       const problem = legs ? legsProtectionProblem(orders, filled, entry) : 'nohy neznámé';
-      if (problem == null) {
-        manualEntryAudit(operationId, 'blocked', `cancel-entry ${entryId}: vstup se při rušení vyplnil (${filled}) — pozice chráněná SL/TP (ověřeno čtením)`, entryId);
-        return 'protected';
-      }
-      const symbol = entry?.symbol ?? manualEntryRecords().find(record => record.operationId === key)?.request.symbol ?? null;
+      const record = manualEntryRecords().find(item => item.operationId === key);
+      const symbol = entry?.symbol ?? record?.request.symbol ?? null;
+      // Oponentura C12 kolo 1 (P2): automatické zrušení (C12, operationId = klíč záznamu) hlásí incident
+      // per záznam (status `pendingIncident` → vlastní push i při už otevřeném fail-closed a za kill);
+      // obojí se zapíše i za vypnuté kopírky (`recordWhenDisarmed`).
+      const report = (text: string): 'incident' => {
+        if (operationId === key && manualEntryRecords().some(item => item.operationId === key)) {
+          pendingEntryIncident(key, 'fill-unprotected', text, entryId);
+        } else {
+          failClosed(new Error(`Copier fail-closed: ${text}`), { autoClose: false, recordWhenDisarmed: true });
+        }
+        return 'incident';
+      };
       // Kolo 3 (P2): „flat“ potlačí incident → jen ověřeně (dvě čtení + stream), jinak incident.
-      if (symbol && await leaderVerifiedFlat(leader, symbol)) {
+      const verifiedFlatNow = async (): Promise<boolean> => {
+        if (!symbol || !(await leaderVerifiedFlat(leader, symbol))) return false;
         manualEntryAudit(operationId, 'blocked', `cancel-entry ${entryId}: vstup se při rušení vyplnil (${filled}), pozice je už zavřená a nic nepracuje (ověřeno čtením; příčina neověřena)`, entryId);
-        return 'flat';
+        return true;
+      };
+      if (problem == null) {
+        // Oponentura C12 kolo 5 (P2): nohy kryjí fill jen nad pozicí, kterou fill OTEVŘEL / zvětšil (znaménko
+        // strany vstupu, |net| ≥ fill). Fill vstupu proti pozici na opačné straně ji zavřel / zmenšil a nohy
+        // pracují bez pozice jako nové vstupy — incident (nohy se automaticky neruší, INV-DIVERGENCE-01).
+        const position = await leaderFillPositionProblem(leader, symbol, entry?.side ?? record?.request.side ?? null, filled);
+        if (position == null) {
+          manualEntryAudit(operationId, 'blocked', `cancel-entry ${entryId}: vstup se při rušení vyplnil (${filled}) — pozice chráněná SL/TP (ověřeno čtením)`, entryId);
+          return 'protected';
+        }
+        // Oponentura C12 kolo 6 (P3, A6, INV-UI-03 / INV-DEFAULT-03): SL nebo TP se mohly vyplnit mezi čtením
+        // nohou a kontrolou pozice (obchod mezitím skončil) — leader OVĚŘENĚ flat a nic nepracuje = `flat`
+        // (jen audit), žádný falešný incident. Nahé nohy, které dál pracují, `leaderVerifiedFlat` nepustí
+        // (working 0) — incident `fill-unprotected` (kolo 5, PC) zůstává.
+        if (await verifiedFlatNow()) return 'flat';
+        // Tvar z předčtení (`cancel.opposite`): vstup šel proti pozici mimo appku; jinak fill pozici zavřel /
+        // zmenšil sám, nebo ji mezitím zavřel jiný obchod — text netvrdí víc, než je známo (INV-UI-03).
+        if (!position.mismatch) {
+          return report(`vstup ${entryId} se při rušení vyplnil (${filled}) a jeho SL/TP pracují, ale ${position.problem} — SL/TP mohou pracovat bez pozice jako nové vstupy; zkontroluj leadera v Tradovate`);
+        }
+        return report(record?.cancel?.opposite === true
+          ? `vstup ${entryId} se při rušení vyplnil (${filled}), ale ${position.problem} — vstup zavřel nebo zmenšil pozici mimo appku a jeho SL/TP pracují bez pozice jako nové vstupy; zruš je v Tradovate nebo dej Flatten`
+          : `vstup ${entryId} se při rušení vyplnil (${filled}), ale ${position.problem} — fill pozici zavřel nebo zmenšil (nebo ji mezitím zavřel jiný obchod) a SL/TP vstupu pracují bez pozice jako nové vstupy; zruš je v Tradovate nebo dej Flatten`);
       }
+      if (await verifiedFlatNow()) return 'flat';
       const states = orders.map(order => (order ? `${order.status} ${order.quantity - order.filledQuantity}` : 'neověřeno')).join(' / ');
-      failClosed(new Error(`Copier fail-closed: vstup ${entryId} se při rušení vyplnil (${filled}) a SL/TP pozice nejsou potvrzené u brokera (${problem}${states ? `; ${states}` : ''}) — zkontroluj leadera v Tradovate`), { autoClose: false });
-      return 'incident';
+      return report(`vstup ${entryId} se při rušení vyplnil (${filled}) a SL/TP pozice nejsou potvrzené u brokera (${problem}${states ? `; ${states}` : ''}) — zkontroluj leadera v Tradovate`);
     })();
-    cancelEntryFillChecks.set(operationId, check);
+    cancelEntryFillChecks.set(operationId, { filled, check });
     return check;
+  };
+  /**
+   * Oponentura C12 kolo 1 (INV-TRAD-02): ověření zrušení je jedno čtení (+ druhé po ustálení jen
+   * u nejistého výsledku). Fill vlastního vstupu, který stream doručí PO výsledku „zrušen“ / „už nečeká“
+   * (REST cumQty pozadu, Fill za Order(Canceled)), ten výsledek vyvrací: `cancelVerified` se opraví na
+   * fill a nohy se ověří čtením (jinak incident per záznam). Nic se neposílá.
+   * Kolo 2 (P1): po „z části vyplněn“ s už proběhlou kontrolou nohou větší fill ze streamu nohy ověří
+   * znovu podle většího fillu (memo `cancelEntryFillChecks` drží fill své kontroly).
+   */
+  const noteOwnEntryFillAfterVerifiedCancel = (entryId: string, filled: number, side: string, symbol: string) => {
+    const operationId = ownManualEntryOrderIds.get(entryId);
+    const record = operationId ? manualEntryRecords().find(item => item.operationId === operationId) : undefined;
+    const verified = record?.cancel?.verified;
+    if (!record) return;
+    const checked = cancelEntryFillChecks.get(record.operationId);
+    const grows = verified === 'partially-filled' && checked != null && filled > checked.filled;
+    // Oponentura C12 kolo 4 (P3): i po „dál čeká“ / „nejde ověřit“ (REST pozadu i po ustálení) fill výsledek
+    // vyvrací — jinak by status a push dál tvrdily čekající vstup u otevřené pozice a nohy by se neověřily.
+    if (verified !== 'canceled' && verified !== 'ended' && verified !== 'working' && verified !== 'unverified' && !grows) return;
+    const full = filled >= record.request.quantity;
+    const was = verified === 'canceled' ? 'zrušen' : verified === 'ended' ? 'už nečeká'
+      : verified === 'working' ? 'dál čeká' : verified === 'unverified' ? 'nejde ověřit' : `z části vyplněn (${checked?.filled ?? '?'})`;
+    manualEntryAudit(record.operationId, 'filled', `${pendingEntryLabel(record, entryId)}: po výsledku „${was}“ dorazil fill (${filled}) — ${fillShapeText(record.cancel?.opposite === true)}, SL/TP ověřuji čtením`, entryId);
+    const job = (async () => {
+      const reason = record.cancel?.reason ?? 'pozdní fill';
+      const verifiedNow = full ? 'filled' as const : 'partially-filled' as const;
+      // Oponentura C12 kolo 3 (P3): pravdivý výsledek „vyplnil se“ hned, ale jako durable PŘEDZNAČKA bez
+      // „nohy ověřeny“ (`legsCheckedAt`) — pád během kontroly = ověření po startu ji zopakuje (dřív by
+      // zůstalo nepravdivé „zrušen“ / značka bez kontroly). Značka „nohy ověřeny“ až PO kontrole nohou.
+      await markOwnEntryCancelVerified(record.operationId, reason, verifiedNow, { legs: { filled, checked: false } });
+      await checkCancelEntryFillProtection(record.operationId, record.operationId, entryId, filled, { side, symbol });
+      await markOwnEntryCancelVerified(record.operationId, reason, verifiedNow, { touch: false, legs: { filled, checked: true } });
+    })();
+    manualEntryCancelJobs.add(job);
+    void job.catch(error => failClosed(errorOf(error), { autoClose: false })).finally(() => manualEntryCancelJobs.delete(job));
   };
   /**
    * Změna s neznámým výsledkem se vyřeší jen pozorováním (P6, žádné TTL):
@@ -5626,8 +6652,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (!isOpenOrderStatus(entryOrder.status) || entryOrder.filledQuantity !== 0) {
         return manageBlocked(command, 'entry-not-pending', 'Vstup už nečeká (ukončený) — nic se nezrušilo.');
       }
-      const followerWithPosition = group.followers.find(follower => (positionsByAccount.get(follower.accountId)?.get(symbol) ?? 0) !== 0);
-      if (followerWithPosition) return manageBlocked(command, 'follower-has-position', `Follower ${followerWithPosition.accountId} už má na symbolu pozici — vstup zruš v Tradovate a pozice zkontroluj.`);
+      // Oponentura C12 kolo 3 (P2): stejná podmínka jako automatické zrušení — pozice followera blokuje,
+      // jen když může pocházet z TOHOTO vstupu (kopie s fillem > 0 / stav kopie nejde přečíst).
+      // Kolo 4 (P2): „odjinud“ jen nad dohnaným a ustáleným stavem followera (Position může předběhnout
+      // Order/Fill kopie) — jinak se nic neruší a uživatel to zkusí znovu.
+      // Kolo 6 (P3, C7, INV-DEFAULT-02): stejní followeři a stejná podmínka jako revize — follower bez načtené
+      // cache pozic není flat (`unknown`, dřív `?? 0`) → nic se neruší. Vyřazený follower bez vazby na vstup
+      // (kopii nemá, INV-PART-03) zrušení neblokuje (jako revize, kolo 2 / kolo 4 R13).
+      const followerNow = clock();
+      refreshFollowerPositionSeen(followerNow);
+      const followerOrigin = followerPositionOrigin(pendingEntryConcernedFollowers(managed.entryId, currentEntryIneligibleAccounts(followerNow)), managed.entryId, symbol, followerNow);
+      if (followerOrigin?.kind === 'unknown') return manageBlocked(command, 'follower-has-position', `Pozice followera ${followerOrigin.accountId} není známá (pozice nenačtené) — nic se nezrušilo; vstup zruš v Tradovate a pozice zkontroluj.`);
+      if (followerOrigin?.kind === 'from-entry') return manageBlocked(command, 'follower-has-position', `Follower ${followerOrigin.accountId} už má na symbolu pozici z kopie tohoto vstupu (nebo stav kopie nejde ověřit) — vstup zruš v Tradovate a pozice zkontroluj.`);
+      if (followerOrigin?.kind === 'unsettled') return manageBlocked(command, 'busy', 'Pozice followera se právě změnila nebo kopírka ještě zpracovává jeho události — nic se nezrušilo, zkus to za pár sekund znovu.');
       // Pokrytí (oponentura 2b): každý zapojený follower má na vstup leadera vazbu,
       // jinak by se jeho kopie vstupu nezrušila.
       const uncovered = runnerUnmappedReplaceAccounts(managed.entryId, currentRuntime().state, group, currentEntryIneligibleAccounts()).missingAccounts;
@@ -5762,14 +6799,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const fromPrice = command.action === 'cancel-entry' ? currentEntryPrice
       : command.action === 'close-position' ? (stopOrder?.stopPrice ?? null)
         : command.action === 'move-stop' ? (targetLive.stopPrice ?? null) : (targetLive.limitPrice ?? null);
+    // C12: vlastní čekající vstup PRÁVĚ ruší kopírka sama (automatické zrušení běží) — druhé zrušení
+    // se neposílá. Kontrola a značka jsou v jednom synchronním kroku s revizí čekajících vstupů
+    // (`manualEntryCancelRunning` ↔ `manualCancelEntryInFlight`), takže souběžně nikdy neodejdou obě.
+    // Oponentura C12 kolo 1 (P2): skončený pokus (selhaný, neúčinný, neověřený) ruční zrušení NEBLOKUJE —
+    // je to nový výslovný záměr uživatele s vlastním durable záznamem a výsledkem ze stavu (C7); automatika
+    // sama dál nic neopakuje (`manualEntryCancelRequested`).
+    if (command.action === 'cancel-entry') {
+      if (manualEntryCancelRunning.has(managed.key)) {
+        return manageBlocked(command, 'entry-canceling', 'Kopírka tento čekající vstup právě ruší sama — počkej na výsledek.');
+      }
+      manualCancelEntryInFlight.add(managed.key);
+    }
     // INV-OUTBOX-01: záznam je durable dřív, než cokoli odejde k brokerovi.
-    await persistManualOrderAction(command.operationId, () => ({
-      operationId: command.operationId, payloadHash: command.payloadHash, entryOperationId: managed.key,
-      action: command.action, status: 'sending', targetBrokerOrderId: targetOrderId, fromPrice, symbol,
-      toPrice: command.newPrice ?? null, quantity: targetLive.quantity, createdAt, updatedAt: createdAt,
-    }));
+    try {
+      await persistManualOrderAction(command.operationId, () => ({
+        operationId: command.operationId, payloadHash: command.payloadHash, entryOperationId: managed.key,
+        action: command.action, status: 'sending', targetBrokerOrderId: targetOrderId, fromPrice, symbol,
+        toPrice: command.newPrice ?? null, quantity: targetLive.quantity, createdAt, updatedAt: createdAt,
+      }));
+    } catch (error) {
+      manualCancelEntryInFlight.delete(managed.key);
+      throw error;
+    }
     const generation = safetyGeneration;
-    return async () => {
+    const execute = async (): Promise<LeaderOrderManageResult> => {
       const finish = async (
         status: CopierManualOrderActionRecord['status'],
         reason?: string,
@@ -5970,6 +7024,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return pending;
       } finally {
         if (timer) clearTimeout(timer);
+      }
+    };
+    if (command.action !== 'cancel-entry') return execute;
+    // Po výsledku (i `unknown`) drží revizi čekajících vstupů od zrušení durable záznam této akce.
+    return async () => {
+      try {
+        return await execute();
+      } finally {
+        manualCancelEntryInFlight.delete(managed.key);
       }
     };
   };
@@ -6532,6 +7595,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         `Historii vypnutí se nepodařilo durable uložit: ${errorOf(reason).message}`,
       ));
     });
+    // C12: brzda (ruční OFF, incident, kill, transport) = revize čekajících vlastních vstupů hned,
+    // ne až 1s časovačem (výpadek spojení zruší až po obnově — revize do té doby odkládá).
+    scheduleScaleInReview();
     return record;
   };
 
@@ -8722,6 +9788,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (!gate.armed) {
       invalidateReconciliation();
+      // Oponentura C12 kolo 4 (P2/P3b): lifecycle zrušení kopie vlastního vstupu po jeho zrušení selhalo
+      // za DISARMED — incident per záznam (jinak jen audit); za ARMED řeší fail-closed níž.
+      for (const item of critical) {
+        if (item.kind === 'cancel-failed' && item.accountId != null && item.brokerOrderId) {
+          noteOwnEntryCopyAfterLeaderCancel(item.accountId, item.brokerOrderId, { cancelFailed: item.reason ?? 'cancel-failed' });
+        }
+      }
       return;
     }
     // 17. 9. 2026 (uživatel potvrdil sjednocení se stream variantou): když
@@ -12885,6 +13958,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           scheduleStrandedCopiedEntryCancel('obnova po výpadku');
         } finally {
           recoveryInFlight = false;
+          // Oponentura C12 kolo 2 (P3): po startovní obnově spojení dořešit zrušení z předchozího běhu čtením.
+          verifyRestartedOwnEntryCancels();
           scheduleArmPreparation();
         }
       })
@@ -16808,6 +17883,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const now = clock();
     if (event.type === 'order') {
       rememberLiveOrder(event.order);
+      // Oponentura C12 kolo 4 (P2/P3b): kopie vlastního vstupu se vyplnila po jeho zrušení (Order bez Fill).
+      if (event.order.accountId !== group.leaderAccountId && (event.order.status === 'filled' || event.order.filledQuantity > 0)) {
+        noteOwnEntryCopyAfterLeaderCancel(event.order.accountId, event.order.brokerOrderId, {
+          filled: Math.max(event.order.filledQuantity, event.order.status === 'filled' ? event.order.quantity : 0),
+        });
+      }
       // Kopie, na kterou follower čeká, skončila (zrušená/odmítnutá/vyplněná):
       // stav followera se musí znovu ověřit, jinak by výpadek kopie zapadl.
       if (
@@ -17174,6 +18255,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
     if (event.type === 'fill' && event.fill.accountId !== group.leaderAccountId) {
+      noteObservedOrderFill(event.fill.accountId, event.fill.brokerOrderId, event.fill.quantity);
+      noteOwnEntryCopyAfterLeaderCancel(event.fill.accountId, event.fill.brokerOrderId, { filled: event.fill.quantity });
       rememberFollowerFillCause(event.fill, now);
       const cachedNet = positionsByAccount.get(event.fill.accountId)?.get(event.fill.symbol) ?? 0;
       if (
@@ -17675,6 +18758,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ownEntryFillPrices.set(event.fill.brokerOrderId, {
         quantity, avg: quantity > 0 ? (previous.avg * previous.quantity + event.fill.price * event.fill.quantity) / quantity : event.fill.price,
       });
+      noteOwnEntryFillAfterVerifiedCancel(event.fill.brokerOrderId, quantity, event.fill.side, event.fill.symbol);
     }
     const leaderEvent = source.observe(event, group.leaderAccountId, sequence, eventReceivedAt);
     if (!leaderEvent) return;
@@ -20111,9 +21195,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // Fáze 2c: neznámé změny po startu dořeší čtení u brokera (i bez nové kontroly pozic).
   for (const record of manualOrderActionRecords().filter(item => item.status === 'unknown')) scheduleManualOrderActionLookup(record.operationId);
   const restartedMarket = manualEntryRecords().find(record => record.status === 'sending' && record.request.orderType === 'Market');
-  // Přikoupení (Limit/Stop) rozpracované při pádu: bez id ho hlídání čekajících nevidí, u brokera
-  // může pracovat — stejný trvalý incident jako u Marketu (oponentura diffu, kolo 2).
-  const restartedScaleIn = manualEntryRecords().find(record => record.status === 'sending' && record.scaleIn === true && record.request.orderType !== 'Market');
+  // Limit/Stop vstup rozpracovaný při pádu (přikoupení i vstup z flat — C12, oponentura P2): bez id
+  // ho revize čekajících vstupů zrušit nemůže, u brokera ale může pracovat — trvalý incident jako
+  // u Marketu (oponentura diffu, kolo 2). Žádné opakování ani zrušení naslepo (INV-OUTBOX-01/02).
+  const restartedPending = manualEntryRecords().find(record => record.status === 'sending' && record.request.orderType !== 'Market');
   if (manualEntryRecords().some(record => record.status === 'sending')) {
     await persistSafety(current => ({
       manualEntries: (current.manualEntries ?? []).map(record => (record.status === 'sending'
@@ -20124,8 +21209,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   if (restartedAttach) {
     failClosed(new Error(`Doplnění SL/TP ${restartedAttach.entryOperationId}: worker se restartoval během zápisu — zkontroluj leadera, výsledek neznámý`), { autoClose: false, recordWhenDisarmed: true });
   }
-  if (restartedScaleIn) {
-    failClosed(new Error(`Přikoupení ${restartedScaleIn.request.side} ${restartedScaleIn.request.quantity} ${restartedScaleIn.request.symbol}: worker se restartoval během odesílání — výsledek neznámý, zkontroluj leadera v Tradovate (případně přikoupení zruš)`), { autoClose: false, recordWhenDisarmed: true });
+  if (restartedPending?.scaleIn === true) {
+    failClosed(new Error(`Přikoupení ${restartedPending.request.side} ${restartedPending.request.quantity} ${restartedPending.request.symbol}: worker se restartoval během odesílání — výsledek neznámý, zkontroluj leadera v Tradovate (případně přikoupení zruš)`), { autoClose: false, recordWhenDisarmed: true });
+  } else if (restartedPending) {
+    failClosed(new Error(`Ruční vstup ${restartedPending.request.side} ${restartedPending.request.quantity} ${restartedPending.request.orderType} ${restartedPending.request.symbol}: worker se restartoval během odesílání — výsledek neznámý, u brokera může čekat; zkontroluj leadera v Tradovate (případně vstup zruš)`), { autoClose: false, recordWhenDisarmed: true });
   }
   if (restartedMarket) {
     // Market se vyplní hned: neznámý výsledek může být otevřená pozice (P2-2) — trvalý incident.
@@ -20168,9 +21255,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     void refreshBrokerFrontContract().finally(() => { brokerFrontReading = false; });
   }, 15_000);
   (brokerFrontTimer as { unref?: () => void }).unref?.();
-  /** Časové podmínky čekajícího přikoupení a brzdy bez broker eventu (≤ 1 s). */
+  /**
+   * Časové podmínky čekajících vstupů a brzdy bez broker eventu (≤ 1 s). C12: každý vlastní ne-Market
+   * záznam s otevřeným vstupem v cache (z flat i přikoupení), přikoupení kvůli epizodě vždy.
+   */
+  pendingEntryReviewReady = true;
   const scaleInReviewTimer = setInterval(() => {
-    if (manualEntryRecords().some(record => record.scaleIn === true)) scheduleScaleInReview();
+    const leader = group.leaderAccountId;
+    if (manualEntryRecords().some(record => record.scaleIn === true || (record.request.orderType !== 'Market' && record.bare !== true && (() => {
+      const entryId = record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId;
+      const live = entryId && leader != null ? liveOrdersByAccount.get(leader)?.get(entryId) : undefined;
+      return live != null && isOpenOrderStatus(live.status);
+    })()))) scheduleScaleInReview();
   }, 1_000);
   (scaleInReviewTimer as { unref?: () => void }).unref?.();
   const unsubscribe = broker.subscribe(event => {
@@ -21774,7 +22870,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ...(record.resultCode ? { resultCode: record.resultCode } : {}),
         })),
         brokerFrontContract: brokerFrontContract ? { ...brokerFrontContract } : null,
-        manualEntries: manualEntryRecords().slice(-10).map(record => ({
+        manualEntries: manualEntryStatusRecords().map(record => ({
           operationId: record.operationId,
           status: record.status,
           createdAt: record.createdAt,
@@ -21792,7 +22888,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ? { timing: { ...(record.timing ?? {}), ...(manualEntryStreamTimes.get(record.operationId) ?? {}) } } : {}),
           ...(record.reason ? { reason: record.reason } : {}),
           ...(record.entryBrokerOrderId ? { entryBrokerOrderId: record.entryBrokerOrderId } : {}),
-          ...(record.cancel ? { cancel: record.cancel.status } : {}),
+          ...(record.cancel ? { cancel: record.cancel.status, cancelReason: record.cancel.reason } : {}),
+          ...(record.cancel?.verified ? { cancelVerified: record.cancel.verified } : {}),
+          ...(record.pendingIncidentAt != null && record.pendingIncidentText
+            ? { pendingIncident: { at: record.pendingIncidentAt, text: record.pendingIncidentText } } : {}),
+          ...pendingEntryAutoCancelStatus(record),
         })),
         started: !stopped,
         armed: gate.armed,

@@ -46,7 +46,7 @@ afterEach(() => { active?.stop(); active = null; });
 const slice = (from: number, to: number) => recording.events.filter(item => item.t >= from && item.t < to);
 
 async function setup(options: { scaleIn?: boolean; dailyLossLimitUsd?: number; realizedPnlUsd?: number; openPnlUsd?: number; freezeRiskAt?: boolean;
-  store?: ReturnType<typeof createMemoryCopierStore>; arm?: boolean } = {}) {
+  store?: ReturnType<typeof createMemoryCopierStore>; arm?: boolean; settleMs?: number } = {}) {
   const firstAt = recording.events[0].event.receivedAt;
   const clock = { now: firstAt - 60_000 };
   // Risk snímek s časem čtení (jako u brokera): po fillu ho controller vynuceně přečte znovu.
@@ -89,6 +89,21 @@ async function setup(options: { scaleIn?: boolean; dailyLossLimitUsd?: number; r
     return ack;
   };
   broker.listOrders = async accountId => [...orderStates.values()].filter(order => order.accountId === accountId).map(order => ({ ...order }));
+  // REST čtení jednoho příkazu (C12: předčtení a ověření automatického zrušení) ze stejného stavu.
+  broker.findOrderById = async (accountId, brokerOrderId) => {
+    const order = orderStates.get(brokerOrderId);
+    return { order: order && order.accountId === accountId ? { ...order } : null, completeness: 'authoritative' as const, observedAt: clock.now };
+  };
+  // Zrušení jako u Tradovate: otevřený příkaz → Canceled event (stav i pro REST čtení); počet z mocku.
+  const mockCancel = broker.cancelOrder.bind(broker);
+  broker.cancelOrder = async (accountId, brokerOrderId) => {
+    await mockCancel(accountId, brokerOrderId);
+    const current = orderStates.get(brokerOrderId);
+    if (!current || (current.status !== 'working' && current.status !== 'pending')) return;
+    const next: BrokerOrder = { ...current, status: 'canceled', sourceVersion: `${brokerOrderId}:Canceled`, updatedAt: clock.now };
+    orderStates.set(brokerOrderId, next);
+    broker.emitEvent({ type: 'order', order: next, receivedAt: clock.now } as never);
+  };
   // Modify: jako Tradovate — Replaced event s novou cenou a potvrzení `stream-replaced`; `rejectIds` odmítne.
   const modified: Array<{ id: string; changes: Record<string, unknown> }> = [];
   const rejectIds = new Set<string>();
@@ -113,7 +128,7 @@ async function setup(options: { scaleIn?: boolean; dailyLossLimitUsd?: number; r
   const controller = await bootstrapCopierRuntime({
     broker, store: options.store ?? createMemoryCopierStore(), group: group(options.dailyLossLimitUsd), clock: () => clock.now, osoCorrelationWindowMs: 200,
     connectionRenewalClock: () => clock.now,
-    manualEntryTimingsMs: { post: 500, start: 1_000, legWait: 500 },
+    manualEntryTimingsMs: { post: 500, start: 1_000, legWait: 500, ...(options.settleMs != null ? { settle: options.settleMs } : {}) },
     manualEntryScaleIn: options.scaleIn ?? true,
     manualEntryQuote: () => ({ contract: SYM, last: 28_083.5, lastAt: clock.now - 100, bid: 28_083.25, ask: 28_083.5, quoteAt: clock.now - 50 }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
@@ -316,8 +331,8 @@ describe('přikoupení do pozice: replay záznamu z DEMO (3. 11. 2026)', { timeo
     expect(ctx.audits.filter(line => line.includes('scale-in-overcover'))).toHaveLength(1);
   }, 30_000);
 
-  it('selhané zrušení čekajícího přikoupení = viditelný incident (P2-1)', async () => {
-    const ctx = await setup();
+  it('selhané zrušení čekajícího přikoupení = viditelný incident (P2-1); o něm rozhodne čtení po ustálení (C12 kolo 3 P2)', async () => {
+    const ctx = await setup({ settleMs: 300 });
     await withPendingAdd(ctx, '0012');
     ctx.broker.cancelOrder = async () => { throw new Error('network down'); };
     ctx.controller.disarm('manual');
@@ -380,6 +395,61 @@ describe('přikoupení do pozice: replay záznamu z DEMO (3. 11. 2026)', { timeo
     const add = await ctx.place(ctx.command('scaleadd00015', { position: addIntent([BASE.entryBrokerOrderId], 1) }));
     expect(add.status).toBe('blocked');
     expect(add.blockers.map(issue => issue.code)).toContain('risk-unverified');
+  });
+
+  it('C12: výpadek spojení s čekajícím přikoupením → nic se nezkouší bez spojení; po obnově jedno zrušení a automatické pokračování skončí (INV-RECON-04)', async () => {
+    const ctx = await setup();
+    await withPendingAdd(ctx, '0021');
+    ctx.broker.setConnected(false);
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    const waiting = ctx.controller.status().transportResume;
+    expect(waiting?.phase).toBe('waiting');
+    await sleep(1_100);
+    expect(ctx.broker.cancelRequestCount(PENDING.entryBrokerOrderId)).toBe(0);
+    ctx.broker.setConnected(true);
+    await sleep(1_200);
+    await ctx.controller.waitForIdle();
+    expect(ctx.broker.cancelRequestCount(PENDING.entryBrokerOrderId)).toBe(1);
+    expect(ctx.controller.status().transportResume).toMatchObject({ phase: 'declined', reason: expect.stringContaining('čekající vstup zrušen: čekající přikoupení: kopírka je vypnutá') });
+  });
+
+  it('C12 kolo 2 (P3): po výpadku se čekající přikoupení vyplní během durable `sending` (nic se neodešle) → automatické pokračování se NEzamítne „čekající vstup zrušen“ (INV-RECON-04)', async () => {
+    const base = createMemoryCopierStore();
+    let onSending: (() => Promise<void>) | null = null;
+    const store = {
+      load: () => base.load(),
+      commit: async (snapshot: Parameters<typeof base.commit>[0], revision: Parameters<typeof base.commit>[1]) => {
+        if (onSending && snapshot.safety?.manualEntries?.some(record => record.cancel?.status === 'sending')) {
+          const hook = onSending;
+          onSending = null;
+          await hook();
+        }
+        return base.commit(snapshot, revision);
+      },
+    } as ReturnType<typeof createMemoryCopierStore>;
+    const ctx = await setup({ store });
+    await withPendingAdd(ctx, '0031');
+    ctx.broker.setConnected(false);
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status().transportResume?.phase).toBe('waiting');
+    onSending = async () => {
+      // Čekající přikoupení se u brokera vyplní (REST i stream), zatímco se zapisuje `cancel: sending`.
+      const current = ctx.orderStates.get(PENDING.entryBrokerOrderId)!;
+      const filled: BrokerOrder = { ...current, status: 'filled', filledQuantity: current.quantity, sourceVersion: `${current.brokerOrderId}:Filled`, updatedAt: ctx.clock.now };
+      ctx.orderStates.set(filled.brokerOrderId, filled);
+      ctx.broker.emitEvent({ type: 'order', order: filled, receivedAt: ctx.clock.now } as never);
+      ctx.broker.emitEvent({ type: 'fill', fill: { fillId: 'c12r2-late-fill', tag: '', brokerOrderId: filled.brokerOrderId, accountId: LEADER, symbol: SYM, side: 'Buy', quantity: filled.quantity, price: recording.prices.addLimit, filledAt: ctx.clock.now }, receivedAt: ctx.clock.now } as never);
+      await sleep(40);
+    };
+    ctx.broker.setConnected(true);
+    await sleep(1_200);
+    await ctx.controller.waitForIdle();
+    expect(onSending).toBeNull();
+    expect(ctx.broker.cancelRequestCount(PENDING.entryBrokerOrderId)).toBe(0);
+    expect(ctx.audits.some(line => line.includes('těsně před zrušením — nic se neodeslalo'))).toBe(true);
+    expect(ctx.controller.status().transportResume?.reason ?? '').not.toContain('čekající vstup zrušen');
   });
 
   it('restart během odesílání Limit přikoupení = unknown + trvalý incident (nikdy znovu neodesláno)', async () => {
@@ -542,6 +612,45 @@ describe('přikoupení do pozice: replay záznamu z DEMO (3. 11. 2026)', { timeo
       expect(cancel.blockers.map(issue => issue.code)).toEqual(['manage-unresolved']);
       expect(cancel.blockers[0].text).toContain('Flattenem');
       expect(ctx.broker.cancelRequestCount(PENDING.entryBrokerOrderId)).toBe(0);
+    });
+
+    it('C12 / oponentura C17 (P2): automatické zrušení přikoupení počká, dokud běží změna celé pozice', async () => {
+      const ctx = await setup();
+      await withPendingAdd(ctx, '0111');
+      const { loosened } = recording.prices;
+      let liquidateStarted = false;
+      let release: (() => void) | undefined;
+      ctx.broker.liquidatePosition = async () => {
+        liquidateStarted = true;
+        await new Promise<void>(resolve => { release = resolve; });
+        return { status: 'submitted' as const };
+      };
+      const closing = ctx.manage('posxcl0111', { action: 'close-position', price: loosened.stopLoss, quantity: 2, entryOperationId: 'entry:scalebase0111', scope: 'position' });
+      for (let waited = 0; !liquidateStarted && waited < 2_000; waited += 5) await sleep(5);
+      expect(liquidateStarted).toBe(true);
+      ctx.controller.disarm('manual');
+      ctx.broker.emitEvent({ type: 'heartbeat', at: ctx.clock.now });
+      await sleep(1_200);
+      expect(ctx.broker.cancelRequestCount(PENDING.entryBrokerOrderId)).toBe(0);
+      // Rozpracovaná změna není neznámý výsledek: žádný incident, jen odklad.
+      expect(ctx.audits.some(line => line.includes('předchozí změna celé pozice má neznámý výsledek'))).toBe(false);
+      release?.();
+      await closing;
+    });
+
+    it('C12: změna celé pozice s neznámým výsledkem → automatické zrušení přikoupení jen incident (Tradovate / Flatten), nic se neodešle', async () => {
+      const ctx = await setup();
+      await withPendingAdd(ctx, '0112');
+      const { loosened } = recording.prices;
+      ctx.broker.liquidatePosition = async () => ({ status: 'indeterminate' as const, reason: 'test: výsledek neznámý' });
+      const closing = await ctx.manage('posxcl0112', { action: 'close-position', price: loosened.stopLoss, quantity: 2, entryOperationId: 'entry:scalebase0112', scope: 'position' });
+      expect(closing.status).toBe('unknown');
+      ctx.controller.disarm('manual');
+      ctx.broker.emitEvent({ type: 'heartbeat', at: ctx.clock.now });
+      await sleep(1_200);
+      await ctx.controller.waitForIdle();
+      expect(ctx.broker.cancelRequestCount(PENDING.entryBrokerOrderId)).toBe(0);
+      expect(ctx.audits.some(line => line.includes('předchozí změna celé pozice má neznámý výsledek — zruš ho v Tradovate nebo Flattenem'))).toBe(true);
     });
 
     it('posun SL dál od trhu: rezerva bez otevřeného zisku (P1-1) — realizovaná ztráta se nesmaže', async () => {

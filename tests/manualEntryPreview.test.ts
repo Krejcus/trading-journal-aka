@@ -264,3 +264,20 @@ describe('fáze 1a: strážní pravidla', () => {
     expect(relay).toMatch(/PREVIEW_COMMAND_TTL_MS = 15_000/);
   });
 });
+
+describe('C12: denní pauza CME v náhledu vstupu (oponentura P2)', () => {
+  // 3. 11. 2026 (CST, UTC−6) a 8. 3. 2026 (den přechodu na CDT, UTC−5).
+  const cst = (hour: number, minute: number) => Date.UTC(2026, 10, 3, hour + 6, minute);
+  it('nový vstup v 15:55–17:00 CT neprojde (i 16:10, kde stará rezerva „do 17:00“ nic nehlídala)', () => {
+    expect(codes({ now: cst(15, 54) })).not.toContain('cme-halt');
+    expect(codes({ now: cst(15, 55) })).toContain('cme-halt');
+    expect(codes({ now: cst(16, 10) })).toContain('cme-halt');
+    expect(codes({ now: cst(16, 59) })).toContain('cme-halt');
+    expect(codes({ now: cst(17, 0) })).not.toContain('cme-halt');
+  });
+  it('16:10 CT v den přechodu času (březen) i v listopadu', () => {
+    expect(codes({ now: Date.UTC(2026, 2, 8, 21, 10) })).toContain('cme-halt');
+    expect(codes({ now: Date.UTC(2026, 10, 1, 22, 10) })).toContain('cme-halt');
+    expect(codes({ now: Date.UTC(2026, 2, 8, 20, 10) })).not.toContain('cme-halt');
+  });
+});

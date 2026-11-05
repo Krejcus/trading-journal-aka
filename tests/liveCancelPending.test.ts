@@ -24,6 +24,7 @@ import {
   cancelEntryTargetProblem,
   classifyCancelPendingResult,
   dashboardCancelTarget,
+  fillPositionProblem,
   legsProtectFill,
   legsProtectionProblem,
   selectOwnPendingEntries,
@@ -126,9 +127,11 @@ describe('C7 — výběr vlastních čekajících vstupů (čistě)', () => {
       .toMatchObject({ entries: [], context: { otherOwnOrders: 1 } });
     expect(selectOwnPendingEntries({ ...base, records: [record('a')], openOrders: [order('aE', { side: 'Sell' })] }).entries).toEqual([]);
     expect(selectOwnPendingEntries({ ...base, records: [record('a')], openOrders: [order('aE', { symbol: 'MNQH7' })] }).entries).toEqual([]);
-    // Běží zrušení workerem / nevyřešená změna.
-    expect(selectOwnPendingEntries({ ...base, records: [record('a', { cancelStatus: 'sending' })], openOrders: [order('aE')] }).entries).toEqual([]);
+    // Běží zrušení workerem / nevyřešená změna (`excluded`).
+    expect(selectOwnPendingEntries({ ...base, records: [record('a', { cancelStatus: 'sending' })], openOrders: [order('aE')], excluded: id => id === 'entry:a' }).entries).toEqual([]);
     expect(selectOwnPendingEntries({ ...base, records: [record('a')], openOrders: [order('aE')], excluded: id => id === 'entry:a' }).entries).toEqual([]);
+    // Oponentura C12 kolo 2 (P3): durable `sending` BEZ běžícího zrušení (restart) vstup nevylučuje.
+    expect(ids(selectOwnPendingEntries({ ...base, records: [record('a', { cancelStatus: 'sending' })], openOrders: [order('aE')] }).entries)).toEqual(['aE']);
     // Zrušení „odeslané“, ale vstup dál pracuje: uživatel smí znovu (nový příkaz, čerstvé čtení — ne slepé opakování).
     expect(ids(selectOwnPendingEntries({ ...base, records: [record('a', { cancelStatus: 'sent' })], openOrders: [order('aE')] }).entries)).toEqual(['aE']);
   });
@@ -152,6 +155,29 @@ describe('C7 — výsledek zrušení jen stavem u brokera (čistě)', () => {
     expect(cancelEntryVerdict({ status: 'working', quantity: 2, filledQuantity: 0 })).toBeNull();
     expect(cancelEntryVerdict({ status: 'pending', quantity: 2, filledQuantity: 0 })).toBeNull();
     expect(cancelEntryVerdict(null)).toBeNull();
+  });
+
+  it('oponentura C12 kolo 5 (P2): fill kryjí nohy jen nad pozicí, kterou fill otevřel / zvětšil (znaménko strany, |net| ≥ fill)', () => {
+    expect(fillPositionProblem({ net: 1, filled: 1, side: 'Buy' })).toBeNull();
+    expect(fillPositionProblem({ net: 3, filled: 1, side: 'Buy' })).toBeNull();
+    expect(fillPositionProblem({ net: -2, filled: 2, side: 'Sell' })).toBeNull();
+    // Vstup proti pozici na opačné straně: zavřel (0), zmenšil (+1 po SELL 1 ze 2) nebo otočil (−1 po SELL 2 z +1).
+    expect(fillPositionProblem({ net: 0, filled: 1, side: 'Sell' })).toBe('pozice leadera 0 nekryje fill SELL 1');
+    expect(fillPositionProblem({ net: 1, filled: 1, side: 'Sell' })).toContain('nekryje');
+    expect(fillPositionProblem({ net: -1, filled: 2, side: 'Sell' })).toContain('nekryje');
+    expect(fillPositionProblem({ net: 1, filled: 2, side: 'Buy' })).toContain('nekryje');
+    expect(fillPositionProblem({ net: null, filled: 1, side: 'Buy' })).toBe('pozice leadera nejde ověřit');
+    expect(fillPositionProblem({ net: 1, filled: 1, side: undefined })).toBe('strana vstupu neznámá');
+    // Texty výsledku u tvaru „proti pozici na opačné straně“ netvrdí „pozice je otevřená“ (INV-UI-03).
+    const opposite = cancelEntryVerdict({ status: 'filled', quantity: 1, filledQuantity: 1 }, { opposite: true });
+    expect(opposite).toMatchObject({ status: 'rejected', code: 'entry-filled', filled: 1 });
+    expect(opposite?.reason).not.toContain('pozice je otevřená');
+    expect(opposite?.reason).toContain('zavřel nebo zmenšil');
+    const partial = cancelEntryOutcome({ status: 'working', quantity: 2, filledQuantity: 1 }, { settled: true, opposite: true });
+    expect(partial?.reason).not.toContain('je otevřená');
+    expect(cancelEntryVerdict({ status: 'canceled', quantity: 2, filledQuantity: 1 }, { opposite: true })?.reason).not.toContain('je otevřená');
+    // Bez tvaru beze změny (C7).
+    expect(cancelEntryVerdict({ status: 'filled', quantity: 1, filledQuantity: 1 })?.reason).toContain('pozice je otevřená');
   });
 
   it('ochrana po vyplnění: obě nohy working a kryjí PŘESNĚ fill (opačná strana, stejný symbol); jinak nepotvrzená', () => {
@@ -469,14 +495,21 @@ describe('C7 — controller: status pendingOwnEntries a cancel-entry ověřené 
     expect(ctx.controller.status().lastError).toBeNull();
   });
 
-  it('za DISARMED (i po kill switch) zrušení projde — snižuje riziko', async () => {
+  it('za DISARMED (kill switch) čekající vstup zruší worker sám (C12, jediný cancel); ruční zrušení ze starého snímku nic dalšího nepošle', async () => {
     const ctx = await setup();
     const placed = await placePending(ctx);
+    const shown = ctx.controller.status().pendingOwnEntries ?? [];
+    expect(shown.map(entry => entry.entryBrokerOrderId)).toEqual([placed.entryBrokerOrderId]);
     ctx.controller.engageKillSwitch('test');
+    await sleep(30);
     await ctx.controller.waitForIdle();
-    expect(ctx.controller.status().pendingOwnEntries?.map(entry => entry.entryBrokerOrderId)).toEqual([placed.entryBrokerOrderId]);
-    const results = await runCancelAll(ctx);
-    expect(results.map(item => item.outcome)).toEqual(['canceled']);
+    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
+    expect(ctx.controller.status().pendingOwnEntries).toEqual([]);
+    const results = await cancelOwnPendingEntries({
+      entries: shown, groupId: group().id, leaderAccountId: LEADER, newOperationId: () => 'manage:cancelall0001',
+      send: command => ctx.controller.manageLeaderOrder(validateLeaderOrderManage(command), { deadlineAt: ctx.clock.now + 15_000 }),
+    });
+    expect(results[0].result?.status).toBe('blocked');
     expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
   });
 
@@ -1059,6 +1092,8 @@ describe('C7 — oponentura diffu: odmítnuté zrušení, pozdní výsledek, res
     expect(actionStatus(second, 'manage:restart0001')).toMatchObject({ status: 'rejected' });
     expect(actionStatus(second, 'manage:restart0001')?.reason).toContain('z části vyplnil');
     expect(second.controller.status().lastError).toMatch(/při rušení vyplnil \(1\) a SL\/TP pozice nejsou potvrzené/);
+    // Oponentura C12 kolo 1 (P2): incident za vypnuté kopírky se zapíše i do historie vypnutí (`recordWhenDisarmed`).
+    expect(second.controller.status().disarmHistory?.some(record => record.detail.includes('SL/TP pozice nejsou potvrzené'))).toBe(true);
     expect(seen.length).toBeGreaterThanOrEqual(2);
     expect(seen.every(status => status === 'unknown')).toBe(true);
     expect(second.broker.liquidateRequests()).toHaveLength(0);

@@ -105,6 +105,21 @@ export const supportsCopierManualOrderCancelPending = (
 ): boolean => Array.isArray(status?.capabilities)
   && status.capabilities.includes(COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY);
 
+/**
+ * Worker sám zruší vlastní čekající vstup z appky (z flat i přikoupení) jedním cíleným pokusem, když
+ * nesmí dál existovat (vypnutí, kill, denní zámek / pauza, jen správa, konec okna, denní pauza CME
+ * 15:55–17:00 CT, konec session, vypršení ARM, u vstupu z flat pozice mimo appku), výsledek ověří stavem
+ * u brokera a hlásí ho v `controller.manualEntries[]` (`cancelVerified`, `cancelReason`, `autoCancelAt`,
+ * `autoCancelReason`) — C12, 4. 11. 2026. Bez ní UI netvrdí „zruší se sám v …“ a „zrušen“ (starý worker
+ * přikoupení ruší, vstup z flat ne). Žádný nový příkaz ani payload; nic zobrazovacího nic neautorizuje.
+ */
+export const COPIER_MANUAL_ENTRY_AUTO_CANCEL_CAPABILITY = 'manual-entry-auto-cancel-v1';
+
+export const supportsCopierManualEntryAutoCancel = (
+  status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
+): boolean => Array.isArray(status?.capabilities)
+  && status.capabilities.includes(COPIER_MANUAL_ENTRY_AUTO_CANCEL_CAPABILITY);
+
 /** Worker umí smazat svou skupinu a běžet bez skupiny (11. 10. 2026). */
 export const COPIER_GROUP_DELETE_CAPABILITY = 'group-delete-v1';
 
