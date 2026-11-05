@@ -108,6 +108,19 @@ describe('fáze 2b: správa obchodu, který kopírka sleduje', () => {
     expect(ctx.broker.orders().find(order => order.accountId === FOLLOWER && order.side === 'Buy')?.status).toBe('canceled');
   });
 
+  it('sledovaný vstup na opačné straně než pozice leadera = ochrana: zrušení se odmítne, nic k brokerovi (C12)', async () => {
+    const ctx = await setup();
+    ctx.broker.setPosition(LEADER, SYMBOL, -1);
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYMBOL, netQuantity: -1 } });
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    const result = await manage(ctx, 'cancel-entry', 29_500, undefined, 'manage:tracked009');
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(issue => issue.code)).toEqual(['not-entry']);
+    expect(result.blockers[0].text).toContain('je to ochrana');
+    expect(ctx.broker.orders().find(order => order.accountId === LEADER && order.side === 'Buy')?.status).toBe('working');
+  });
+
   it.each([
     ['unknown', 'tracked-unconfirmed', false],
     ['planned', 'tracked-unconfirmed', false],

@@ -306,6 +306,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Zbývá: už odeslaný `arm-live` UI odvolat neumí, brzda ho může předběhnout a rozhoduje pořadí u workeru. Kill v ⋮ je bez potvrzení, rozhodne Filip. Worker texty s „Flattenem“ (`copierRuntimeCommandAdapter.ts`, `localCopierExecutionAgent.ts`) nezměněny, chtěly by reinstall. Rozložení ani chování v prohlížeči se neklikalo.
 - Ověřeno: 7596 testů, build čistý, tsc bez chyb mimo `extension/` (40 starších).
 
+### 2026-11-05 — C12: pozice mimo appku za ARMED jen upozorní (Claude, větev claude/trading-gaps-20261103, nenasazeno, před critikem)
+
+- Filip rozhodl: vlastní čekající vstup a pozice mimo appku (stejná i opačná strana) za ARMED vstup neruší a kopírku
+  nevypíná, jen audit a upozornění jednou za záznam (`outside-position`, push přes watchdog). Ostatní důvody a DISARM
+  vstup ruší dál.
+- `cancel.opposite` zůstal: rušení proti pozici na opačné straně nastává dál po DISARM a texty po fillu ho potřebují.
+- Vstup vyplněný proti pozici nechá nohy leadera bez pozice. Filip schválil variantu A: druhé upozornění z paměti po
+  5 s (`outside-position-filled`), bez zápisu a `failClosed`, oddělené v jedné funkci, aby šlo odebrat. Ve skupině
+  kopírka zruší nohy kopie a pozdější fill nahé nohy skončí divergencí (fail-closed); ověřeno jen v mocku.
+- Ruční „Zrušit čekající“ proti pozici teď projde, když sedí clOrdId se záznamem: je to vědomý klik a za ARMED
+  takový vstup dál žije. Tag ve streamu a čtení u `placeOSO` je na brokeru neověřený; bez něj pravdivé odmítnutí.
+
 ### 2026-11-05 — LIVE graf: SL/TP čekajícího vstupu, návrh bez nohou, živé P&L na lince (Claude, web NASAZEN na Filipovo „nasaď“, worker beze změny)
 
 - Příčina mizejících SL/TP po odeslání Limitu: nohy z heartbeatu workeru jsou `pending` → `PendingNew`, karta čekajícího

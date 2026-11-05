@@ -627,37 +627,144 @@ const relayStuckOutcome = (
 };
 
 const MANUAL_ENTRY_NOTIFY_WINDOW_MS = 10 * 60_000;
+/** Strop záznamů ručních vstupů ze statusu na jeden průchod (worker drží nejvýš 50 záznamů). */
+const MANUAL_ENTRY_NOTIFY_MAX = 50;
+/**
+ * C12 (oponentura kolo 1, P1): ověření zrušení vlastního vstupu (čtení hned a po ustálení ~10 s) trvá
+ * jednotky sekund — bez `cancelVerified` se do té doby čeká jako u `sending`. Kdyby výsledek nedorazil
+ * ani po této době (worker spadl, zápis selhal), přijde poctivé „nejde ověřit“ (fail-closed), nikdy „zrušen“.
+ */
+export const MANUAL_ENTRY_CANCEL_VERIFY_GRACE_MS = 60_000;
+/** Capability workeru s ověřeným výsledkem zrušení (`lib/copierWorkerCapabilities.ts`, C12). */
+const MANUAL_ENTRY_AUTO_CANCEL_CAPABILITY = 'manual-entry-auto-cancel-v1';
+
+type ManualEntryMessage = { title: string; body: string; problem: boolean };
+type CancelOutcomeKind = 'canceled' | 'ended' | 'filled' | 'failed' | 'unverified';
+const withFinalDot = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+const INCIDENT_DETAIL = '|incident:';
+
+/**
+ * Výsledek zrušení z `cancelVerified` (C12 worker): pravdivý text jen podle stavu vstupu u brokera —
+ * „zrušen“ jen u `canceled`, fill = zkontroluj pozici a SL/TP (fill ji mohl otevřít i zavřít — kolo 5),
+ * `working`/`unverified` = vstup může dál čekat.
+ * `wait` = výsledek ještě není ověřený (žádný push).
+ */
+function verifiedCancelOutcome(
+  cancel: string,
+  verified: string | null,
+  ageMs: number,
+): { part: string; suffix: string; problem: boolean; kind: CancelOutcomeKind } | 'wait' {
+  if (!verified) {
+    if (cancel === 'sending' || ageMs < MANUAL_ENTRY_CANCEL_VERIFY_GRACE_MS) return 'wait';
+    return { part: 'no-verify', problem: true, kind: 'unverified',
+      suffix: ` Zrušení vstupu na leaderovi ${cancel === 'failed' ? 'selhalo a jeho výsledek' : 'odešlo, ale výsledek'} nejde ověřit — vstup může dál čekat, zkontroluj leadera v Tradovate.` };
+  }
+  switch (verified) {
+    case 'canceled': return { part: verified, problem: false, kind: 'canceled', suffix: ' Vstup na leaderovi je zrušený (ověřeno u brokera).' };
+    case 'ended': return { part: verified, problem: false, kind: 'ended', suffix: ' Vstup na leaderovi už u brokera nečeká (nic se nevyplnilo).' };
+    case 'filled':
+    case 'partially-filled':
+      // Oponentura C12 kolo 5 (P2, INV-UI-03): fill vstupu proti pozici na opačné straně pozici zavřel nebo
+      // zmenšil — dovětek (připojuje se i k pushi incidentu `fill-unprotected`) netvrdí „pozice je otevřená“.
+      return { part: verified, problem: true, kind: 'filled', suffix: ' Vstup se vyplnil během rušení — zkontroluj pozici a její SL/TP v Tradovate.' };
+    case 'working': return { part: verified, problem: true, kind: 'failed', suffix: ' Zrušení vstupu na leaderovi SELHALO — vstup může dál čekat, zruš ho v Tradovate.' };
+    default: return { part: verified, problem: true, kind: 'unverified', suffix: ' Zrušení vstupu na leaderovi nejde ověřit — vstup může dál čekat, zkontroluj leadera v Tradovate.' };
+  }
+}
 
 /** Výsledky ručních vstupů ze statusu workeru, o kterých má přijít push (čistá funkce). */
 export function manualEntryNotifications(
   entries: unknown,
   now: number,
+  options: {
+    /** Worker hlásí ověřený výsledek zrušení (`cancelVerified`, capability C12); bez ní staré texty. */
+    verifiedCancel?: boolean;
+    /** Detail naposledy odeslané zprávy klíče (alert state) — odliší nový incident od nového výsledku. */
+    previousDetail?: (key: string) => string | null | undefined;
+  } = {},
 ): Array<{ key: string; detail: string; title: string; body: string; problem: boolean }> {
   if (!Array.isArray(entries)) return [];
   const out: Array<{ key: string; detail: string; title: string; body: string; problem: boolean }> = [];
-  for (const raw of entries.slice(-10)) {
+  // Oponentura C12 kolo 3 (P3): status C12 workeru nese kromě posledních 10 i starší záznamy s otevřeným
+  // vstupem / nohou nebo s incidentem / zrušením v okně — strop jen obrana proti přerostlému statusu.
+  for (const raw of entries.slice(-MANUAL_ENTRY_NOTIFY_MAX)) {
     const entry = (raw ?? {}) as Record<string, unknown>;
     const operationId = asText(entry.operationId);
     const status = asText(entry.status);
     const updatedAt = typeof entry.updatedAt === 'number' ? entry.updatedAt : NaN;
     if (!operationId || !status || !Number.isFinite(updatedAt) || now - updatedAt > MANUAL_ENTRY_NOTIFY_WINDOW_MS) continue;
+    const key = `manual-entry:${operationId}`;
     const what = `${entry.side === 'Sell' ? 'SELL' : 'BUY'} ${typeof entry.quantity === 'number' ? entry.quantity : '?'} ${asText(entry.symbol) ?? ''}`.trim();
     const reason = asText(entry.reason);
-    // Rozběhnuté zrušení (`sending`) se nehlásí — až jeho výsledek (sent/failed).
     const cancel = asText(entry.cancel);
-    if (cancel === 'sending') continue;
-    const cancelText = cancel === 'failed'
-      ? ' Zrušení vstupu na leaderovi SELHALO — zkontroluj leadera v Tradovate.'
-      : cancel === 'sent' ? ' Vstup na leaderovi je zrušený.' : '';
-    const message = status === 'acknowledged'
-      ? (cancel ? { title: cancel === 'failed' ? 'Ruční vstup: zrušení selhalo' : 'Ruční vstup zrušen', body: `${what}: followeři vstup nedostali.${cancelText}`, problem: true }
-        : { title: 'Ruční vstup přijat', body: `${what} je u brokera; kopie followerům řídí kopírka.`, problem: false })
-      : status === 'rejected' ? { title: 'Ruční vstup odmítnut', body: `${what}: ${reason ?? 'broker vstup odmítl'}.`, problem: true }
-        : status === 'unknown' ? { title: 'Ruční vstup: výsledek neznámý', body: `${what}: zkontroluj leadera v Tradovate a v LIVE ho vyřeš.${cancelText}`, problem: true }
-          : status === 'abandoned' ? { title: 'Ruční vstup bez ochrany', body: `${what}: broker vrátil vstup bez SL/TP, kopírka je vypnutá.${cancelText || ' Vstup se ruší.'}`, problem: true }
-            : null;
-    if (!message) continue;
-    out.push({ key: `manual-entry:${operationId}`, detail: `${status}${cancel ? `:${cancel}` : ''}`, ...message });
+    const cancelReason = asText(entry.cancelReason);
+    // --- Výsledek záznamu (stav vstupu + výsledek zrušení) --------------------------------------
+    /** `note` = krátký text výsledku zrušení (C12), který se připojí k souběžnému incidentu. */
+    let result: { part: string; message: ManualEntryMessage; note?: string } | 'wait' | null = null;
+    if (options.verifiedCancel && cancel) {
+      // C12 worker: `cancel: sent` znamená jen „adaptér skončil“ — rozhoduje `cancelVerified` (P1).
+      const outcome = verifiedCancelOutcome(cancel, asText(entry.cancelVerified), now - updatedAt);
+      if (outcome === 'wait') result = 'wait';
+      else {
+        const part = `${status}:${cancel}:${outcome.part}`;
+        const titles: Record<CancelOutcomeKind, string> = {
+          canceled: 'Čekající vstup zrušen', ended: 'Čekající vstup už nečeká', filled: 'Vstup se vyplnil během rušení',
+          failed: 'Ruční vstup: zrušení selhalo', unverified: 'Ruční vstup: zrušení nejde ověřit',
+        };
+        // `cancelReason` říká, proč se rušilo (vypnutí, pauza CME, kopírka se vypnula během odesílání…);
+        // věta „followeři vstup nedostali“ jen bez něj (u kopií on-submit by nebyla pravda).
+        const why = cancelReason ? ` Důvod: ${withoutFinalDot(cancelReason)}.` : '';
+        const note = outcome.suffix.trim();
+        result = status === 'acknowledged'
+          ? { part, note, message: { title: titles[outcome.kind], body: `${what}:${cancelReason ? '' : ' followeři vstup nedostali.'}${outcome.suffix}${why}`, problem: outcome.problem } }
+          : status === 'unknown' ? { part, note, message: { title: 'Ruční vstup: výsledek neznámý', body: `${what}: zkontroluj leadera v Tradovate a v LIVE ho vyřeš.${outcome.suffix}`, problem: true } }
+            : status === 'abandoned' ? { part, note, message: { title: 'Ruční vstup bez ochrany', body: `${what}: broker vrátil vstup bez SL/TP, kopírka je vypnutá.${outcome.suffix}`, problem: true } }
+              : status === 'rejected' ? { part, message: { title: 'Ruční vstup odmítnut', body: `${what}: ${reason ?? 'broker vstup odmítl'}.`, problem: true } }
+                : null;
+      }
+    } else if (cancel === 'sending') {
+      // Rozběhnuté zrušení (`sending`) se nehlásí — až jeho výsledek (sent/failed).
+      result = 'wait';
+    } else {
+      // Starý worker bez ověřeného výsledku: původní texty (beze změny).
+      const cancelText = cancel === 'failed'
+        ? ' Zrušení vstupu na leaderovi SELHALO — zkontroluj leadera v Tradovate.'
+        : cancel === 'sent' ? ' Vstup na leaderovi je zrušený.' : '';
+      const message: ManualEntryMessage | null = status === 'acknowledged'
+        ? (cancel ? { title: cancel === 'failed' ? 'Ruční vstup: zrušení selhalo' : 'Ruční vstup zrušen', body: `${what}: followeři vstup nedostali.${cancelText}`, problem: true }
+          : { title: 'Ruční vstup přijat', body: `${what} je u brokera; kopie followerům řídí kopírka.`, problem: false })
+        : status === 'rejected' ? { title: 'Ruční vstup odmítnut', body: `${what}: ${reason ?? 'broker vstup odmítl'}.`, problem: true }
+          : status === 'unknown' ? { title: 'Ruční vstup: výsledek neznámý', body: `${what}: zkontroluj leadera v Tradovate a v LIVE ho vyřeš.${cancelText}`, problem: true }
+            : status === 'abandoned' ? { title: 'Ruční vstup bez ochrany', body: `${what}: broker vrátil vstup bez SL/TP, kopírka je vypnutá.${cancelText || ' Vstup se ruší.'}`, problem: true }
+              : null;
+      result = message ? { part: `${status}${cancel ? `:${cancel}` : ''}`, message } : null;
+    }
+    // --- Incident k čekajícímu vstupu (C12, oponentura kolo 1 P2): vlastní push nezávisle na
+    // globálním `fail-closed` (ten se otevře jen jednou) a i za kill switch ----------------------
+    const pending = entry.pendingIncident as { at?: unknown; text?: unknown } | null | undefined;
+    const incidentAt = typeof pending?.at === 'number' && Number.isFinite(pending.at) ? pending.at : null;
+    const incidentText = asText(pending?.text);
+    const incidentPart = incidentAt != null && incidentText ? `incident:${incidentAt}` : null;
+    const previous = options.previousDetail?.(key) ?? null;
+    const split = previous == null ? -1 : previous.indexOf(INCIDENT_DETAIL);
+    const previousResult = previous == null ? null : split < 0 ? previous : previous.slice(0, split);
+    const previousIncident = previous == null || split < 0 ? null : previous.slice(split + 1);
+    const settled = result != null && result !== 'wait' ? result : null;
+    if (incidentPart && incidentPart !== previousIncident) {
+      // Nový incident má přednost. Oponentura C12 kolo 3 (P2): souběžný NOVÝ výsledek (jiný než naposledy
+      // odeslaný) se za doručený označí jen tehdy, když ho push opravdu nese — text výsledku zrušení (C12,
+      // např. „vyplnil se během rušení — pozice je otevřená“) se připojí k tělu incidentu; jiný výsledek
+      // (bez krátkého textu) zůstane nedoručený a odejde vlastní zprávou při dalším průchodu.
+      const fresh = settled != null && settled.part !== previousResult ? settled : null;
+      const carried = fresh?.note ? fresh : null;
+      const resultPart = carried?.part ?? previousResult ?? '';
+      const body = carried ? `${withFinalDot(incidentText!)} ${withFinalDot(carried.note!)}` : withFinalDot(incidentText!);
+      out.push({ key, detail: `${resultPart}${INCIDENT_DETAIL}${incidentPart.slice('incident:'.length)}`,
+        title: 'Čekající vstup: zkontroluj leadera', body, problem: true });
+      continue;
+    }
+    if (!settled || settled.part === previousResult) continue;
+    out.push({ key, detail: incidentPart ? `${settled.part}${INCIDENT_DETAIL}${incidentPart.slice('incident:'.length)}` : settled.part, ...settled.message });
   }
   return out;
 }
@@ -1046,7 +1153,10 @@ export function evaluateCopierIncidents(options: {
       notifications.push({ userId, deviceId, incidentKey: notification.key, kind: 'opened', title: notification.title, body: notification.body });
       upserts.push({ userId, deviceId, incidentKey: notification.key, active: false, detail: notification.detail, notified: true });
     }
-    for (const notification of manualEntryNotifications(status.manualEntries, options.now)) {
+    for (const notification of manualEntryNotifications(status.manualEntries, options.now, {
+      verifiedCancel: capabilities.includes(MANUAL_ENTRY_AUTO_CANCEL_CAPABILITY),
+      previousDetail: key => activeState(userId, deviceId, key)?.detail ?? null,
+    })) {
       const state = activeState(userId, deviceId, notification.key);
       if (state?.detail === notification.detail) continue;
       // Úspěch je jen informace (bez odznaku a riziková kategorie), problém je `opened`.

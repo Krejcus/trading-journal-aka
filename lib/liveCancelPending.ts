@@ -8,7 +8,8 @@
  *   Ochranné nohy pozice, nohy čekajícího vstupu (odejdou s parentem), částečně
  *   vyplněný vstup a cizí příkazy z definice vypadnou — jen se spočítají pro text potvrzení.
  * - `cancelEntryVerdict` — výsledek zrušení JEN stavem u brokera (adaptér hlásí úspěch
- *   `cancelOrder` i u vyplněného příkazu; INV-TRAD-02: zrušení s cumQty > 0 je dílčí).
+ *   `cancelOrder` i u vyplněného příkazu; INV-TRAD-02: zrušení s cumQty > 0 je dílčí). Fill nemusel
+ *   pozici otevřít: tvar proti pozici na opačné straně má vlastní text (`opposite`).
  * - UI: dvoukrokové potvrzení s klíčem „co jsem viděl“, text potvrzení, sekvenční
  *   odeslání N× `manage-leader-order cancel-entry` (každý s vlastním `operationId`,
  *   nic se automaticky neopakuje) a výsledek po položkách; Dashboard „Zrušit příkaz“
@@ -69,7 +70,10 @@ export interface PendingEntryRecordView {
   stopBrokerOrderId?: string;
   targetBrokerOrderId?: string;
   lateEntryBrokerOrderId?: string;
-  /** Rozběhnuté cílené zrušení workerem (`cancel.status`). */
+  /**
+   * Durable stav cíleného zrušení workerem (`cancel.status`) — jen informace; o vyloučení z nabídky
+   * rozhoduje `excluded` (běžící zrušení), ne durable `sending` (oponentura C12 kolo 2, P3).
+   */
   cancelStatus?: 'sending' | 'sent' | 'failed';
   request: { accountId: number; symbol: string; side: PendingEntrySide; quantity: number; orderType: string };
 }
@@ -145,7 +149,9 @@ export function selectOwnPendingEntries(input: {
       && order.symbol === record.request.symbol && order.side === record.request.side && order.orderType === type
       && typeof price === 'number' && Number.isFinite(price) && price > 0
       && Number.isSafeInteger(order.quantity) && order.quantity >= 1 && order.quantity <= 50
-      && record.cancelStatus !== 'sending'
+      // Oponentura C12 kolo 2 (P3): durable `cancel: sending` bez běžícího jobu (restart, incident
+      // „zruš ho v Tradovate“) vstup NEvylučuje — rozhoduje `excluded` (PRÁVĚ běžící zrušení workerem);
+      // jinak by na telefonu zbyl jen Flatten, ačkoli serverová brána C7 ruční zrušení pouští.
       && !(input.excluded?.(record.operationId) ?? false);
     if (!eligible || selected.has(order.brokerOrderId)) continue;
     selected.set(order.brokerOrderId, {
@@ -223,6 +229,17 @@ export function cancelEntryFilledFlatReason(outcome: { code: 'entry-filled' | 'e
     + ' — pozice už je zavřená a nic nepracuje (ověřeno čtením; příčina neověřena).';
 }
 
+/**
+ * Oponentura C12 kolo 5 (P2, INV-UI-03): tvar zrušeného vstupu. `opposite` = vlastní vstup z flat se rušil
+ * proti pozici leadera na OPAČNÉ straně (pozice mimo appku, durable `cancel.opposite` z předčtení) — jeho
+ * fill pozici zmenšil, zavřel nebo otočil; text nesmí tvrdit „pozice je otevřená“. Jen text, ochranu
+ * rozhoduje kontrola nohou a pozice (`legsProtectionProblem` + `fillPositionProblem`).
+ */
+export type CancelEntryShape = { opposite?: boolean };
+/** Tvar fillu vstupu proti pozici na opačné straně (bez tvrzení „pozice je otevřená“). */
+export const OPPOSITE_FILL_SHAPE = 'šel proti pozici leadera na opačné straně, takže ji zmenšil, zavřel nebo otočil; jeho SL/TP mohou pracovat bez pozice jako nové vstupy';
+const OPPOSITE_FILL_NOTE = `${OPPOSITE_FILL_SHAPE} — ověřuji čtením.`;
+
 /** Výsledek zrušení vstupu podle stavu u brokera (worker; INV-MODE-02 duch, INV-TRAD-02). */
 export type CancelEntryVerdict =
   | { status: 'acknowledged'; code: 'canceled'; reason: string }
@@ -234,17 +251,24 @@ export type CancelEntryVerdict =
  * Úspěch jen `canceled` s nulovým fillem; jakýkoli fill = zrušení nemělo (plný) účinek a pozice
  * je otevřená — nikdy „zrušeno“.
  */
-export function cancelEntryVerdict(order: { status: string; quantity: number; filledQuantity: number } | null | undefined): CancelEntryVerdict | null {
+export function cancelEntryVerdict(
+  order: { status: string; quantity: number; filledQuantity: number } | null | undefined,
+  options: CancelEntryShape = {},
+): CancelEntryVerdict | null {
   if (!order || isOpen(order.status)) return null;
   const filled = Math.max(0, order.filledQuantity);
   if (order.status === 'filled' || (filled > 0 && filled >= order.quantity)) {
     const qty = Math.max(filled, order.quantity);
     return { status: 'rejected', code: 'entry-filled', filled: qty,
-      reason: `Vstup se vyplnil (${qty}) dřív, než ho broker zrušil — pozice je otevřená; zavři ji × nebo Flattenem.` };
+      reason: options.opposite
+        ? `Vstup se vyplnil (${qty}) dřív, než ho broker zrušil — ${OPPOSITE_FILL_NOTE}`
+        : `Vstup se vyplnil (${qty}) dřív, než ho broker zrušil — pozice je otevřená; zavři ji × nebo Flattenem.` };
   }
   if (filled > 0) {
     return { status: 'rejected', code: 'entry-partially-filled', filled,
-      reason: `Vstup se z části vyplnil (${filled}/${order.quantity}), zbytek zrušen — pozice ${filled} je otevřená; ${PARTIAL_CLOSE_HINT}` };
+      reason: options.opposite
+        ? `Vstup se z části vyplnil (${filled}/${order.quantity}), zbytek zrušen — ${OPPOSITE_FILL_NOTE}`
+        : `Vstup se z části vyplnil (${filled}/${order.quantity}), zbytek zrušen — pozice ${filled} je otevřená; ${PARTIAL_CLOSE_HINT}` };
   }
   if (order.status === 'canceled') return { status: 'acknowledged', code: 'canceled', reason: 'zrušení potvrzeno stavem u brokera' };
   return { status: 'waived', code: 'entry-ended', reason: `vstup skončil bez vyplnění (${order.status})` };
@@ -268,12 +292,12 @@ export type CancelEntryOutcome =
  */
 export function cancelEntryOutcome(
   order: { status: string; quantity: number; filledQuantity: number } | null | undefined,
-  context: { settled: boolean; brokerRejection?: string | null },
+  context: { settled: boolean; brokerRejection?: string | null } & CancelEntryShape,
 ): CancelEntryOutcome | null {
   if (!order) return null;
   const rejection = context.brokerRejection ? context.brokerRejection.slice(0, 120) : null;
   if (!isOpen(order.status)) {
-    const verdict = cancelEntryVerdict(order);
+    const verdict = cancelEntryVerdict(order, { opposite: context.opposite });
     if (!verdict) return null;
     if (verdict.status === 'acknowledged' && rejection) {
       return { status: 'waived', code: 'canceled-elsewhere', reason: `vstup už je zrušený — ne tímto příkazem (broker zrušení odmítl: ${rejection})` };
@@ -285,7 +309,9 @@ export function cancelEntryOutcome(
   const filled = Math.max(0, order.filledQuantity);
   if (filled > 0) {
     return { status: 'rejected', code: 'entry-partially-filled', filled, open: true,
-      reason: `${why} — vstup je z části vyplněný (${filled}/${order.quantity}) a dál pracuje; pozice ${filled} je otevřená, ${PARTIAL_CLOSE_HINT}` };
+      reason: context.opposite
+        ? `${why} — vstup je z části vyplněný (${filled}/${order.quantity}) a dál pracuje; ${OPPOSITE_FILL_NOTE}`
+        : `${why} — vstup je z části vyplněný (${filled}/${order.quantity}) a dál pracuje; pozice ${filled} je otevřená, ${PARTIAL_CLOSE_HINT}` };
   }
   return { status: 'rejected', code: 'cancel-not-effective', open: true,
     reason: `${why} — vstup dál čeká; nic se automaticky neopakuje, zruš ho znovu nebo v Tradovate.` };
@@ -316,6 +342,21 @@ export function legsProtectionProblem(
   const open = known.map(leg => leg.quantity - leg.filledQuantity);
   if (open.some(quantity => quantity !== filled)) return `nohy nesedí s pozicí (qty ${open.join('/')} vs fill ${filled})`;
   return null;
+}
+
+/**
+ * Oponentura C12 kolo 5 (P2, INV-TRAD-02 / INV-DEFAULT-02): nohy kryjí fill jen tehdy, když fill vstupu
+ * pozici OTEVŘEL nebo zvětšil — pozice leadera na symbolu má znaménko strany vstupu a |net| ≥ fill. Fill
+ * vstupu proti pozici na opačné straně ji zavřel / zmenšil / otočil a nohy (opačná strana vstupu) by pak
+ * pozici zvětšily nebo otevřely novou: nejsou ochrana, i když qty sedí. `null` = pozice fill kryje;
+ * `net` null (pozice nejde ověřit) nebo neznámá strana = problém (fail-closed). Čisté, bez IO.
+ */
+export function fillPositionProblem(input: { net: number | null; filled: number; side: string | null | undefined }): string | null {
+  if (input.side !== 'Buy' && input.side !== 'Sell') return 'strana vstupu neznámá';
+  if (input.net == null || !Number.isFinite(input.net)) return 'pozice leadera nejde ověřit';
+  const signed = input.side === 'Buy' ? input.net : -input.net;
+  if (signed > 0 && signed >= input.filled) return null;
+  return `pozice leadera ${input.net} nekryje fill ${input.side === 'Buy' ? 'BUY' : 'SELL'} ${input.filled}`;
 }
 
 /** Nohy přesně kryjí vyplněné množství (viz `legsProtectionProblem`). */

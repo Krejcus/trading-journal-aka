@@ -1,4 +1,5 @@
 import { evaluateRiskGate, type RiskGateContext } from './copierRiskGate';
+import { cmeDailyHaltWindow } from './copierArmSession';
 import { followerQuantity } from './copierEngine';
 import { pointValueUsd } from './futuresContractSpecs';
 import type { BrokerOrderRequest } from './brokerPort';
@@ -288,6 +289,11 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
     if (end != null && end - now < MANUAL_ENTRY_END_RESERVE_MS) blockers.push(blocker(code, text));
   };
   if (input.tradingWindowState === 'inside' && input.tradingWindowStateAfterReserve !== 'inside') blockers.push(blocker('window-ending', 'Obchodní okno končí do 5 minut.'));
+  // C12 (oponentura P2): denní pauza CME 16:00–17:00 CT celá i s rezervou 5 min před 16:00 —
+  // nový vstup by v pauze jen čekal (zda ho broker přijme a zařadí, je NEOVĚŘENO, R12).
+  if (cmeDailyHaltWindow(now, MANUAL_ENTRY_END_RESERVE_MS).inside) {
+    blockers.push(blocker('cme-halt', 'Denní pauza CME (16:00–17:00 CT, od 15:55) — nový vstup až po 17:00 CT.'));
+  }
   reserve(input.sessionEndAt, 'session-ending', 'Broker session končí do 5 minut (17:00 CT).');
   reserve(input.armExpiresAt, 'arm-expiring', 'Zapnutí kopírky vyprší do 5 minut.');
 
