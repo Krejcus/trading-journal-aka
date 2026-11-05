@@ -16,7 +16,7 @@ import { newTicketDraft, type TicketDraft, type TicketInstrument, type TicketQuo
  *   záměr `run` s TOUŽ čárou, kterou integrace předá stejné funkci jako klik
  *   myší (`onOrderLineAction` / `onOrderLineCancel` v `LiveTradingScreen`).
  *   „Co jsem viděl“ dál bere desk z read modelu brokera a worker vše ověří znovu.
- * - Shift+F jen otevře existující dialog Flatten All statické nouzové lišty
+ * - Shift+F jen otevře existující dialog Flatten All z `LiveSafetyControls`
  *   (`lib/liveSafetyShortcut.ts`), potvrzuje se v dialogu (INV-UI-02).
  * - Držená klávesa (`event.repeat`) se ignoruje vždy — nikdy z ní nevznikne
  *   druhý krok potvrzení ani druhý návrh (INV-RELAY-01, INV-MANUAL-01).
@@ -58,7 +58,7 @@ export const LIVE_HOTKEY_HELP: ReadonlyArray<{ keys: string; text: string }> = [
   { keys: 'Shift+E ×2', text: 'SL na BE — druhý stisk po chvilce, do 4 s' },
   { keys: 'Shift+X ×2', text: 'Zavřít pozici (jen když ji nabízí × na čáře) — druhý stisk do 4 s' },
   { keys: 'Shift+C ×2', text: 'Zrušit čekající vstup nebo přikoupení — druhý stisk do 4 s' },
-  { keys: 'Shift+F', text: 'Otevřít dialog Flatten All nouzové lišty (potvrzuje se v dialogu)' },
+  { keys: 'Shift+F', text: 'Otevřít dialog Flatten All (potvrzuje se v dialogu)' },
   { keys: '?', text: 'Tato nápověda' },
 ];
 /**

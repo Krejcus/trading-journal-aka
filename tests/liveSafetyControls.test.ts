@@ -10,6 +10,12 @@ const payload = (controller = {}, result?: unknown) => ({ status: { controller: 
 const flat = { type: 'flatten', accountIds: [1, 2], operationId: 'manual-test', canceledOrders: 1, submittedClosures: 1, flat: true, remainingPositionAccounts: [], workingOrderAccounts: [] };
 const target = (patch = {}) => ({ id: 'g', name: 'Test', accountIds: [1, 2], observedAt: 1_000, verified: true, ...patch });
 describe('static LIVE safety shell', () => {
+  it('hideBar: bez lišty a tlačítek, pád grafu ji vrátí', () => {
+    const html = renderToStaticMarkup(React.createElement(LiveSafetyControls, { target: target(), onAction: vi.fn(async () => ''), flattenCoordinator: createFlattenGroupCoordinator(), copierArmed: true, hideBar: true }));
+    for (const label of ['OFF', 'Kill switch', 'Flatten All', 'Nouzové ovládání']) expect(html).not.toContain(label);
+    const visible = renderToStaticMarkup(React.createElement(LiveSafetyControls, { target: target(), onAction: vi.fn(async () => ''), flattenCoordinator: createFlattenGroupCoordinator(), copierArmed: true, hideBar: false }));
+    expect(visible).toContain('Nouzové ovládání');
+  });
   it('renders all brakes independently of overview imports and never dispatches on render', () => {
     const onAction = vi.fn(async () => 'unused');
     const html = renderToStaticMarkup(React.createElement(LiveSafetyControls, { target: target(), onAction, flattenCoordinator: createFlattenGroupCoordinator(), copierArmed: false }));
@@ -22,13 +28,15 @@ describe('static LIVE safety shell', () => {
     const controls = readFileSync(new URL('../components/LiveSafetyControls.tsx', import.meta.url), 'utf8');
     expect(controls).not.toContain('accountIds.join');
     expect(controls).toContain('10 * 60_000');
-    expect(controls).toContain('if (copierArmed)');
+    expect(controls).toContain('liveSafetyNoticeClearedByArm(notice, copierArmed)');
     const desk = readFileSync(new URL('../components/TradovateLiveDesk.tsx', import.meta.url), 'utf8');
     expect(desk.indexOf('<LiveSafetyControls')).toBeLessThan(desk.indexOf('{chartAvailable ? (', desk.indexOf('const requiresConnection =')));
+    expect(desk.match(/<LiveSafetyControls /g)).toHaveLength(1);
+    expect(desk).toContain('hideBar={!liveSafetyBarVisible(safetyBarNeed, safetyBarGraceElapsed)}');
     expect(desk).toContain('<ErrorBoundary name="LiveTradingScreenSlot"');
     expect(desk).toContain('<ErrorBoundary name="LiveCopyTradeOverviewSlot"');
     expect(desk).toMatch(/route\.transport === 'local' && !fullGroupFlatten/);
-    expect(desk.match(/flattenCoordinator\.run\(/g)).toHaveLength(2);
+    expect(desk.match(/flattenCoordinator\.run\(/g)).toHaveLength(1);
   });
   it('keeps OFF and kill available when the group cannot be determined; flatten is explicit', () => {
     const html = renderToStaticMarkup(React.createElement(LiveSafetyControls, { target: null, onAction: vi.fn(), flattenCoordinator: createFlattenGroupCoordinator(), copierArmed: false }));

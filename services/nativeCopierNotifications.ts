@@ -132,7 +132,7 @@ async function syncNow(
         title: planned.title,
         body: planned.body,
         delayMs: Math.max(1_000, planned.at - Date.now()),
-        // Rizikové upozornění vede na přehled s nouzovou lištou (INV-UI-02), ne na graf.
+        // Rizikové upozornění vede na přehled s OFF, Kill a Flatten (INV-UI-02), ne na graf.
         route: LIVE_OVERVIEW_ROUTE,
         threadIdentifier: 'alphatrade-copier',
         actionType: 'risk',

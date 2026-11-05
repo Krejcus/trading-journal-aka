@@ -233,6 +233,13 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je monotónně zvyšovat generation a
   před každým write ji znovu porovnat. Nebezpečné je kontrolovat ji jen při
   začátku příkazu.
+- UI (5. 11. 2026): každý safety příkaz včetně `flatten-group` synchronně zvedne `armCancelEpochRef`
+  v `TradovateLiveDesk.tsx:executeSafetyCommand`. `lib/copierArmPreparation.ts:createCopierArmGuard`
+  ji porovná před `snapshot-test` s opravou kamery, `activate-group` i `arm-live`; rozběhnuté ON po
+  brzdě nic neodešle, i když Flatten mezitím začal i skončil. Nové ON má novou pojistku, takže rearm
+  po Flattenu funguje. Hláška říká jen „tímto požadavkem se kopírka nezapnula“, po odeslaném
+  `activate-group` i to, že se skupina mohla přepnout. Toast „připojený“ jen po potvrzeném ARM. Už
+  odeslaný `arm-live` UI odvolat neumí. Hlídá `tests/liveSafetyFallback.test.ts`.
 
 ### INV-ARM-04: Shadow mode nesmí dispatchovat risk-zvyšující broker write; terminální lifecycle cancel je úzká výjimka
 
@@ -1544,12 +1551,41 @@ existující ochranu.
   poslední známou route bez fresh statusu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je oddělit safety command path od
   běžných commandů. Nebezpečné je sdílet jednu obecnou `disabled={!fresh}`.
-- Statická nouzová lišta (`components/LiveSafetyControls.tsx`) je mountnutá
-  nad líným přehledem i grafem a oba sloty mají vlastní error boundary. OFF,
-  kill a full-group Flatten tak nesmí zmizet po pádu grafu/přehledu. Lišta je
-  na úzkém webu nad BottomNav, v native shellu používá
-  `native-fixed-above-tab-bar` a při otevřeném dialogu se schová.
-- „Zrušit čekající“ v liště vedle Flatten All (C7 UI, 4. 11. 2026) NENÍ safety akce: jen
+- Nouzová lišta se v běžném provozu nekreslí (rozhodnutí Filipa 5. 11. 2026, vědomě proti původní
+  statické liště, je to o klik dál): OFF, Kill a Flatten All jsou na Dashboardu LIVE (OFF a Kill
+  v menu ⋮ bez vazby na skupinu, Flatten All u skupiny), OFF i v hlavičce PC grafu. Přechod na
+  Dashboard je povolený z každé záložky i při čekající změně konfigurace
+  (`lib/tradovateLiveTab.ts:liveTabNavigationAllowed`). `components/LiveSafetyControls.tsx` zůstává
+  jako jediná instance mountnutá s `hideBar` kvůli dialogu Shift+F a hláškám o výsledku.
+  Lišta se vrací, když Dashboard na obrazovce není (`lib/liveSafetyAction.ts:liveSafetyBarNeed`):
+  hned bez Tradovate připojení (`ConnectionRequired`), po pádu přehledu nebo grafu (PC i telefon,
+  i nad `FallbackLayer`) a po selhání chunku přehledu; po prodlevě 3 s při ověřování připojení,
+  studeném startu a dlouhém načítání chunku přehledu. Na záložce Připojení ani na grafu bez pádu
+  se nevrací, cesta na Dashboard tam je. Vykreslená je na úzkém webu nad BottomNav, v native
+  shellu používá `native-fixed-above-tab-bar` a při otevřeném dialogu se schová. Bez lišty drží
+  fixní prvky nad nativní lištou a BottomNav `--live-bottom-clear` (`index.css`).
+- Dialog běžícího příkazu Dashboardu brzdy nezakrývá natrvalo: potvrzovací dialog, list Flatten,
+  editor skupiny, průvodce zapnutí a odebrání nedostupného followera jdou zavřít tlačítkem i během
+  běhu. Příkaz doběhne na pozadí, nic se tím neruší ani neopakuje, výsledek přijde toastem a jiný
+  otevřený dialog se nezavře. Potvrzení zůstává při běhu zamčené, klik mimo dialog a Esc běžící dialog
+  dál nezavírají. Zvolené místo brzd nad dialogem: menší změna bez nové vrstvy, cesta jde ⋮ a Flatten.
+  Zavření průvodce zapnutí během vyřazení účtu ruší záměr: vyřazení doběhne, ARM nikdy
+  (`armBlockExclusionOutcome`). Selhané zapnutí nepřepíše otevřený dialog Flatten All.
+- Výsledek Flatten All z Dashboardu ověřuje `liveSafetyReceipt` nad potvrzeným cílem a předává ho desk
+  do hlášky `LiveSafetyControls` (i s `hideBar`, přežije záložky, chyba zůstává do ×). Bez výsledku,
+  s nekrytými účty nebo po novější brzdě je to chyba; rearm nabídne jen potvrzený flat
+  (`flattenRearmAllowed`) a jde přes přepínač, takže je po cestu vidět OFF. Během Flattenu žádný jiný
+  příkaz nezačne: `flattenRunning` je odvozený i z `flattenCoordinator.anyPending`, takže platí po
+  remountu přehledu i pro Flatten z lišty, Shift+F a telefonu, a stejně ho hlídá pojistka zapínání.
+  Příkaz nese ID skupiny workeru z potvrzeného cíle, i když má knihovna jiné.
+  Během zapínání na pozadí je OFF v menu ⋮ i v grafu i nad stavem „prokazatelně vypnuto“.
+  OFF, Kill, zámek dne a Flatten All synchronně zvednou `armCancelEpochRef` v `executeSafetyCommand`;
+  `createCopierArmGuard` pak před každým `arm-live` a `activate-group` nic neodešle a vyhodí „zapnutí
+  zrušeno brzdou“ (i po Flatten All, viz INV-ARM-03). Už odeslaný příkaz tím odvolat nejde: je-li `arm-live` v letu, rozhoduje pořadí
+  u workeru a skutečný stav ukáže přehled.
+  Hlášky desku mají v `LiveSafetyControls` vlastní sloty (`externalNotices`), `notice` lišty je nepřepíše.
+- „Zrušit čekající“ v liště vedle Flatten All (C7 UI, 4. 11. 2026; od 5. 11. je na PC vidět jen
+  v nouzových stavech lišty, jinak ruší Dashboard „Zrušit“ a Shift+C) NENÍ safety akce: jen
   s capability a vlastními čekajícími vstupy, nad čerstvým neobnoveným statusem s relayem,
   dvoukrokově a sdíleným zámkem jednoho příkazu desku (`liveCommandLockRef`). OFF, kill
   a Flatten All tím zámkem ani jeho `busy` zamčené nejsou a jejich cesta se nemění. Část C7
@@ -1559,19 +1595,28 @@ existující ochranu.
   položka bez ceny, objekt místo textu důvodu) a chybu výpočtu chytí (= nic se nenabídne) — rozjetý
   status web/worker tak nesundá render desku ani OFF / Kill / Flatten All (oponentura UI kolo 1).
 - Full-group Flatten z lišty i přehledu sdílí jediný zámek podle `groupId`
-  (`lib/liveSafetyAction.ts:createFlattenGroupCoordinator`). Druhý caller se
+  (`lib/liveSafetyAction.ts:createFlattenGroupCoordinator`). Na Dashboardu jde mimo zámek běžných
+  příkazů `busyCommand` (`dashboardCommandLock`, `dashboardDialogBusy`) a jde stejnou trasou brzdy
+  jako lišta a Shift+F: `routeDashboardCommand` ověří cíl uložený při otevření dialogu
+  (`assertSameSafetyTarget`) a volá `executeSafetyCommand`, tedy poslední známou route bez nutnosti
+  aktuálního `agentTransport` (INV-BRAKE-03). Flatten jednoho účtu ani jiné příkazy touto trasou
+  nejdou. Druhý caller se
   připojí ke skutečnému výsledku prvního; lokální Flatten nemá 10s abort a
   zámek se uvolní až po resolve/reject workeru. Nikdy nesmí timeout UI vytvořit
   druhý brokerový příkaz. Hlídá `tests/liveSafetyControls.test.ts`.
-- Zkratka Shift+F na PC (U1, 3. 11. 2026) a akce notifikace jen OTEVŘOU dialog
-  Flatten All nouzové lišty (`lib/liveSafetyShortcut.ts:requestLiveSafetyConfirmation`
+- Zkratka Shift+F na PC (U1, 3. 11. 2026) je opt-in, výchozí vypnutá (`readLiveHotkeysEnabled`),
+  a funguje jen v grafu. Není to tedy záruka dosažitelnosti brzdy. Akce notifikace, která by
+  dialog otevřela, v kódu neexistuje; `source: 'native-intent'` je jen připravený typ a jediný
+  volající je graf. Zkratka jen OTEVŘE dialog
+  Flatten All z `LiveSafetyControls` (`lib/liveSafetyShortcut.ts:requestLiveSafetyConfirmation`
   → `LiveSafetyControls.tsx:liveSafetyShortcutListener` → `setConfirmation`) se stejným
   cílem a týmž zámkem skupiny; nic neprovedou. Otevřený dialog se nepřepíše, běžící
   Flatten ani neznámá skupina dialog neotevře, Kill switch zkratkou nikdy. Dialog
   otevřený zkratkou má fokus na **Zrušit** (`liveSafetyDialogInitialFocus`,
   `ConfirmActionDialog` `initialFocus: 'cancel'`), takže reflexní Enter / mezerník hned
   po Shift+F Flatten nepotvrdí; potvrzuje se klikem (nebo Tab + Enter). Dialog
-  otevřený tlačítkem lišty má fokus beze změny.
+  otevřený tlačítkem lišty má fokus beze změny. Neověřený cíl uvede sám dialog
+  (`liveSafetyFlattenMessage`), lišta bývá skrytá.
   Hlídá `tests/liveSafetyShortcut.test.ts`, `tests/liveChartPcIntegration.test.ts`,
   `tests/liveWaveBCriticFixes.test.ts`.
 - LIVE → Graf (29. 10. 2026): tlačítko Vypnout v hlavičce grafu nezávisle na
@@ -1586,7 +1631,7 @@ existující ochranu.
   kopírky nebo 10 min zmizí (`tests/liveChartData.test.ts`).
 - LIVE na telefonu (nativní appka, 1. 11. 2026): LIVE se otevírá rovnou na
   celoobrazovkovém grafu (`components/day/LivePhoneChart.tsx`,
-  `role="dialog"`, takže nouzová lišta je pod ním schovaná; od 1. 11. je na
+  `role="dialog"`, takže případná nouzová lišta je pod ním schovaná; od 1. 11. je na
   grafu schovaná i nativní lišta iOS, na ostatních záložkách LIVE se vrací). **Výjimka podle
   výslovného rozhodnutí uživatele:** nouzová lišta ani Vypnout NEJSOU na
   telefonním grafu, v menu LIVE ▾ ani v •••. DISARM je dosažitelný takto:
@@ -1604,7 +1649,7 @@ existující ochranu.
     přehledu;
   - pád telefonního grafu se pamatuje jako na PC
     (`rememberLiveChartCrash`), takže do konce relace se LIVE otevírá na
-    přehledu.
+    přehledu; v okamžiku pádu se vrátí nouzová lišta (`liveSafetyBarNeed`).
 
   Rizikové notifikace i tlačítko „Zkontrolovat LIVE“ (lokální i APNs
   s `route: 'live'`) převádí `services/nativeNotifications.ts:dispatchNativeNotificationAction`
@@ -2192,7 +2237,7 @@ existující ochranu.
     status a relay (INV-FRESH-03, INV-UI-01/02; kolo 2).
   - **UI (4. 11. 2026, `lib/liveCancelPendingUi.ts`, `components/LivePendingCancel.tsx`,
     `hooks/liveCommandRuns.ts:createLiveCancelPendingRun`):** tlačítko „Zrušit čekající (N)“ jen když
-    `cancelPendingAvailability` říká `show` (PC lišta pod grafem vedle Flatten All, telefon čip nad
+    `cancelPendingAvailability` říká `show` (PC lišta pod grafem vedle Flatten All, od 5. 11. jen v nouzových stavech lišty; telefon čip nad
     grafem); neaktivní s důvodem nad zastaralým / obnoveným statusem, bez relaye, při blokaci workeru
     a během přehrávání. Dvoukrok `createLiveConfirmGate` nad `liveConfirmClick` (2. klik 350 ms – 4 s od
     PŘEDCHOZÍHO kliku; klíč = `cancelPendingConfirmKey` přesně zobrazené sady — vyplnění / nový vstup
@@ -2285,7 +2330,7 @@ existující ochranu.
     z výchozí šablony ★) a fokus pryč z panelu (`liveReleaseTicketFocus`); Esc zahodí
     návrh jen při nečinném kreslení; Shift+E/X/C dvoukrokově (nový stisk ≥ 350 ms, do 4 s,
     klíč akce + čára + cena, `createTwoStepGuard`) TOUŽ funkcí jako BE / × na čáře
-    (Shift+X jen když × nabízí čára); Shift+F jen dialog lišty (INV-UI-02). Zkratky mlčí
+    (Shift+X jen když × nabízí čára); Shift+F jen dialog Flatten All (INV-UI-02). Zkratky mlčí
     při `repeat`, IME, Meta/Ctrl/Alt, fokusu v poli / editoru / dialogu, otevřeném dialogu
     nebo menu, odchodu z grafu, skryté stránce a během přehrávání (kromě Flatten dialogu,
     nápovědy a zahození návrhu). **Žádná klávesa neodešle vstup:** globální Enter není,

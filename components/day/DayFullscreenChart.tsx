@@ -338,7 +338,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
 
   // Nativní lišta pryč po dobu celé obrazovky (v LIVE zůstává); stránka pod vrstvou neroluje.
   // I LIVE graf je bez nativní lišty (Filip 1. 11.: víc místa na obchodování);
-  // vrátí se na ostatních záložkách LIVE (Live Dashboard s nouzovou lištou) i mimo LIVE.
+  // vrátí se na ostatních záložkách LIVE (Live Dashboard s OFF, Kill a Flatten) i mimo LIVE.
   useEffect(() => {
     void setNativeShellTabBarHidden(true);
     const previous = document.body.style.overflow;

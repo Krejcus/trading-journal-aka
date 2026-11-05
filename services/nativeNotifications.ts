@@ -171,7 +171,7 @@ export async function removeDeliveredNativeNotification(id: number): Promise<voi
 export function openDeliveredNativeNotification(notification: NativeDeliveredNotification): void {
   assertNativeBuild();
   const route = notification.route ?? 'dashboard';
-  // Stejně jako klepnutí na notifikaci: LIVE na přehled s nouzovou lištou (INV-UI-02).
+  // Stejně jako klepnutí na notifikaci: LIVE na přehled s OFF, Kill a Flatten (INV-UI-02).
   navigateNativeShell(route === 'live' ? LIVE_OVERVIEW_ROUTE : route);
 }
 
@@ -361,7 +361,7 @@ export function dispatchNativeNotificationAction(action: {
   };
   const route = actionRoutes[action.actionId] || (typeof data.route === 'string' ? data.route : 'dashboard');
   // Notifikace z kopírky (i APNs ze serveru s `route: 'live'`) otevře LIVE na
-  // přehledu s nouzovou lištou, ne na telefonním grafu (INV-UI-02). Server
+  // přehledu s OFF, Kill a Flatten, ne na telefonním grafu (INV-UI-02). Server
   // dál posílá `live`, starší buildy appky by novou cestu neznaly.
   navigateNativeShell(route === 'live' ? LIVE_OVERVIEW_ROUTE : route);
 }

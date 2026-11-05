@@ -18,7 +18,7 @@ import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
  * - Shift+B/S jen předvyplní panel (jako ⚡), vstup odešle jen tlačítko panelu;
  * - BE / zavřít / zrušit čekající vedou na TUTÉŽ funkci jako tlačítko nebo × na čáře
  *   (`onOrderLineAction` / `onOrderLineCancel` v `LiveTradingScreen`), až po dvoukroku;
- * - Shift+F jen požádá nouzovou lištu o otevření dialogu Flatten All (INV-UI-02).
+ * - Shift+F jen požádá `LiveSafetyControls` o otevření dialogu Flatten All (INV-UI-02).
  */
 
 /** Volba zkratek na zařízení (`'1'` = zapnuto; cokoli jiného = vypnuto). */
@@ -117,13 +117,13 @@ export interface LiveHotkeyHandlers {
   /** Zavřít pozici / zrušit čekající — TÁŽ funkce jako × na čáře (`onOrderLineCancel(line)`). */
   cancelLine: (line: BacktestChartOrderLine) => void;
   notice: (notice: { tone: 'warn' | 'bad'; text: string; until?: number }) => void;
-  /** Shift+F: jen požádat nouzovou lištu o dialog Flatten All; false = lišta neposlouchá. */
+  /** Shift+F: jen požádat `LiveSafetyControls` o dialog Flatten All; false = nikdo neposlouchá. */
   openFlatten: () => boolean;
   toggleHelp: () => void;
 }
 
-/** Hláška, když nouzová lišta požadavek nepřevzala (nic se nestalo). */
-export const LIVE_HOTKEY_FLATTEN_UNAVAILABLE = 'Nouzová lišta teď neposlouchá — použij Flatten All na liště dole.';
+/** Hláška, když požadavek nikdo nepřevzal (nic se nestalo). */
+export const LIVE_HOTKEY_FLATTEN_UNAVAILABLE = 'Dialog Flatten All teď nejde otevřít — použij Flatten All na Live Dashboardu.';
 
 /**
  * Výsledek `resolveLiveHotkey` → funkce obrazovky. Příkaz může vzniknout jen z `run`

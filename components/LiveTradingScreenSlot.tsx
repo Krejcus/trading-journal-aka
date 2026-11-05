@@ -149,6 +149,8 @@ interface Props {
   manageLockRef?: React.MutableRefObject<boolean> | null;
   /** Graf hlásí přehrávání (U3-PC pojistka) — desk pak lištu „Zrušit čekající“ zamkne. */
   onReplayChange?: (active: boolean) => void;
+  /** Pád grafu: desk nad FallbackLayer vrátí nouzovou lištu (`liveSafetyBarNeed`). */
+  onCrash?: () => void;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -181,7 +183,7 @@ const sameCopier = (left: LiveTradingCopierState, right: LiveTradingCopierState)
   && left.journalHealth === right.journalHealth
 );
 
-const LiveTradingScreenSlot: React.FC<Props> = ({ open, isDark: appIsDark, ...rest }) => {
+const LiveTradingScreenSlot: React.FC<Props> = ({ open, isDark: appIsDark, onCrash, ...rest }) => {
   // LIVE má vlastní motiv (přepínač v liště grafu); „Podle aplikace“ = beze změny.
   const [themePreference, setThemePreference] = useState(getLiveScreenThemePreference);
   useEffect(() => subscribeLiveScreenThemePreference(setThemePreference), []);
@@ -204,7 +206,7 @@ const LiveTradingScreenSlot: React.FC<Props> = ({ open, isDark: appIsDark, ...re
   if (!open && !present) return null;
   const closing = !open || leaving;
   return (
-    <ErrorBoundary name="LiveTradingScreen" onError={rememberLiveChartCrash} fallback={<FallbackLayer isDark={props.isDark} failed leaving={closing} onNavigate={props.onNavigate} />}>
+    <ErrorBoundary name="LiveTradingScreen" onError={() => { rememberLiveChartCrash(); onCrash?.(); }} fallback={<FallbackLayer isDark={props.isDark} failed leaving={closing} onNavigate={props.onNavigate} />}>
       <Suspense fallback={<FallbackLayer isDark={props.isDark} failed={false} leaving={closing} onNavigate={props.onNavigate} />}>
         <LiveTradingScreen {...props} chartOpenPerformanceAt={openPerformanceAtRef.current} leaving={closing} />
       </Suspense>
@@ -244,4 +246,5 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && left.onBareClose === right.onBareClose
   && left.manageLockRef === right.manageLockRef
   && left.onReplayChange === right.onReplayChange
+  && left.onCrash === right.onCrash
 ));

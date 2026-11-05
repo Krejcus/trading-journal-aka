@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-05 — LIVE: nouzová lišta se v běžném provozu nekreslí, brzdy jsou na Dashboardu (Claude, commit na větvi, nenasazeno)
+
+- Rozhodnutí Filipa: lišta OFF / Kill / Flatten v běžném provozu nikde není, brzdy používá na Dashboardu LIVE. Je to vědomě o klik dál než dřív.
+- Proč výjimky: INV-UI-02 chce brzdy vždy dosažitelné. Lišta se proto vrací jen tam, kde Dashboard není: bez Tradovate připojení, po pádu přehledu nebo grafu, po selhání chunku přehledu a po 3 s při ověřování připojení, studeném startu a načítání chunku (`liveSafetyBarNeed`).
+- Aby Dashboard lištu unesl: Flatten All jde trasou brzdy (poslední route, kontrola cíle, `liveSafetyReceipt`, mimo `busyCommand`), přechod na přehled je povolený vždy, busy dialogy jdou zavřít, výsledek Flattenu přežije záložky, OFF je i v ⋮, každá brzda včetně Flattenu zruší neodeslané zapnutí (`createCopierArmGuard`, INV-ARM-03).
+- Oponentura critica: kola 1–3 našla nálezy P1–P3 (mimo jiné ARM po zavření průvodce, ztracený výsledek Flattenu, OFF nerušící zapínání), všechny opravené. Kolo 4: 2 úzké nálezy, opravené; další kolo se podle koordinátora nekoná, takže hotový diff po opravách kola 4 critic neviděl.
+- Zbývá: už odeslaný `arm-live` UI odvolat neumí, brzda ho může předběhnout a rozhoduje pořadí u workeru. Kill v ⋮ je bez potvrzení, rozhodne Filip. Worker texty s „Flattenem“ (`copierRuntimeCommandAdapter.ts`, `localCopierExecutionAgent.ts`) nezměněny, chtěly by reinstall. Rozložení ani chování v prohlížeči se neklikalo.
+- Ověřeno: 7596 testů, build čistý, tsc bez chyb mimo `extension/` (40 starších).
+
 ### 2026-11-05 — LIVE graf: SL/TP čekajícího vstupu, návrh bez nohou, živé P&L na lince (Claude, web NASAZEN na Filipovo „nasaď“, worker beze změny)
 
 - Příčina mizejících SL/TP po odeslání Limitu: nohy z heartbeatu workeru jsou `pending` → `PendingNew`, karta čekajícího

@@ -82,14 +82,14 @@ describe('LIVE → Graf: DISARM je vždy dosažitelný (INV-UI-02)', () => {
     expect(desk).toMatch(/agentStatus: chartLive\.status,/);
     expect(desk).toMatch(/copyEvents=\{chartLive\.status\?\.controller\.recentCopyEvents\}/);
     expect(desk).toMatch(/manageEntryAvgPrice=\{chartLive\.status === agentStatus \? /);
-    expect(desk).toMatch(/armFlowActiveRef\.current = true;\s*setArmFlowActive\(true\);\s*try \{\s*return await armLiveGroupFlow\(targetGroup\);\s*\} finally \{\s*armFlowActiveRef\.current = false;/);
+    expect(desk).toMatch(/armFlowActiveRef\.current = true;\s*setArmFlowActive\(true\);\s*try \{\s*return await armLiveGroupFlow\(targetGroup, armGuard\);\s*\} finally \{\s*armFlowActiveRef\.current = false;/);
     // Deep link jde stejnou bránou; graf během zapínání se zahodí.
     expect(desk).toMatch(/if \(requestedTab === 'chart' && armFlowActiveRef\.current\) \{ onRequestedTabHandled\?\.\(\); return; \}\s*if \(!liveTabNavigationAllowed\(tab, requestedTab,/);
   });
 
   it('načítání i pád grafu mají cestu na přehled a pád se nezopakuje po reloadu', () => {
     const slot = source('components/LiveTradingScreenSlot.tsx');
-    expect(slot).toMatch(/<ErrorBoundary name="LiveTradingScreen" onError=\{rememberLiveChartCrash\} fallback=\{<FallbackLayer [^>]*failed leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
+    expect(slot).toMatch(/<ErrorBoundary name="LiveTradingScreen" onError=\{\(\) => \{ rememberLiveChartCrash\(\); onCrash\?\.\(\); \}\} fallback=\{<FallbackLayer [^>]*failed leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
     expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer [^>]*failed=\{false\} leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
     expect(slot).toMatch(/onClick=\{\(\) => onNavigate\('overview'\)\}/);
     // Odchodová animace nesmí držet kliky: přehled je pod vrstvou dostupný hned.
@@ -97,7 +97,7 @@ describe('LIVE → Graf: DISARM je vždy dosažitelný (INV-UI-02)', () => {
     expect(source('components/LiveTradingScreen.tsx')).toMatch(/\$\{leaving \? 'live-chart-leave' : 'live-chart-enter'\}/);
     // Graf na PC i na telefonu (phoneChart): po pádu v relaci se LIVE otevře na přehledu.
     expect(source('components/TradovateLiveDesk.tsx')).toMatch(/chartAvailable: \(liveChartAvailableNow\(\) \|\| Boolean\(phoneChart\)\) && !liveChartCrashedThisSession\(\)/);
-    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/<ErrorBoundary name="LivePhoneChart" onError=\{rememberLiveChartCrash\}/);
+    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/<ErrorBoundary name="LivePhoneChart" onError=\{\(\) => \{ rememberLiveChartCrash\(\); noteChartCrash\(\); \}\}/);
     expect(source('components/ErrorBoundary.tsx')).toMatch(/this\.props\.onError\?\.\(error\);/);
   });
 

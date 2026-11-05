@@ -38,7 +38,8 @@ import { LIVE_READ_MAX_AGE_MS, LIVE_READ_STALE_MS, formatReadAge } from '../lib/
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ConfirmActionDialog, { type ConfirmActionOptions } from './ConfirmActionDialog';
 import LiveSafetyControls from './LiveSafetyControls';
-import { assertSameSafetyTarget, createFlattenGroupCoordinator, liveSafetyReceipt, type LiveSafetyAction, type LiveSafetyTarget } from '../lib/liveSafetyAction';
+import { LIVE_SAFETY_BAR_GRACE_MS, assertSameSafetyTarget, copierOffVerifiedForMenu, createFlattenGroupCoordinator, liveSafetyBarNeed, liveSafetyBarVisible, liveSafetyFailureMessage, liveSafetyGraceAfterNeed, liveSafetyReceipt, routeDashboardCommand, type LiveOverviewSlotState, type LiveSafetyAction, type LiveSafetyNotice, type LiveSafetyTarget } from '../lib/liveSafetyAction';
+import { copierProvablyOff, liveChartDisarmDuringArm } from '../lib/liveTradeGroupSource';
 import { ErrorBoundary } from './ErrorBoundary';
 import { syncCopierNativeNotifications } from '../services/nativeCopierNotifications';
 import { LivePhoneHeader, LivePhoneMenu } from './LivePhoneChrome';
@@ -152,7 +153,7 @@ import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, liv
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
-import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup, retireMissingFromError } from '../lib/copierArmPreparation';
+import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
 import {
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
@@ -358,9 +359,19 @@ const LiveDashboardSkeleton = () => (
   </div>
 );
 
+const liveSafetyTargetOf = (
+  group: Pick<CopyGroupConfig, 'id' | 'name' | 'leaderAccountId' | 'followers'>,
+  observedAt: number | null,
+  verified: boolean,
+): LiveSafetyTarget => ({
+  id: group.id, name: group.name,
+  accountIds: [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)],
+  observedAt, verified,
+});
+
 const LiveSlotFailure = ({ label }: { label: string }) => (
   <section role="alert" className="grid min-h-36 place-items-center rounded-xl border border-rose-500/30 bg-rose-500/10 p-5 text-center text-xs font-bold text-rose-500">
-    {label} se nepodařilo zobrazit. Nouzová lišta zůstává dostupná; obnov stránku až po ověření stavu kopírky.
+    {label} se nepodařilo zobrazit. Nouzové ovládání je v liště dole; obnov stránku až po ověření stavu kopírky.
   </section>
 );
 
@@ -389,9 +400,15 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     chartAvailable: (liveChartAvailableNow() || Boolean(phoneChart)) && !liveChartCrashedThisSession(),
   }));
   const { compact: mobileLayout, narrow } = useLiveLayout();
-  // Jediný zámek full-group Flattenu pro statickou lištu i těžký přehled.
+  // Jediný zámek full-group Flattenu pro lištu, zkratku i těžký přehled.
   // Žije nad oběma sloty, takže jejich pád/unmount nevytvoří druhý příkaz.
   const [flattenCoordinator] = useState(createFlattenGroupCoordinator);
+  // Výsledek brzdy nebo uložení, které přežije záložku; zobrazí ho LiveSafetyControls i s hideBar.
+  const [deskSafetyNotice, setDeskSafetyNotice] = useState<LiveSafetyNotice | null>(null);
+  // Výsledek Flatten All má vlastní slot: jiná hláška jeho chybu nepřepíše.
+  const [flattenNotice, setFlattenNotice] = useState<LiveSafetyNotice | null>(null);
+  // Každá brzda včetně Flatten All synchronně zruší rozběhnuté zapínání (`createCopierArmGuard`).
+  const armCancelEpochRef = useRef(0);
   const chartAvailable = !narrow && !isNativeShell();
   // Telefon a nativní appka: graf dneška z deníku místo desktopového LIVE grafu.
   const phoneChartAvailable = !chartAvailable && Boolean(phoneChart);
@@ -471,8 +488,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const timer = window.setTimeout(() => setArrivingFromChart(false), 420);
     return () => window.clearTimeout(timer);
   }, [arrivingFromChart]);
+  const liveTabRef = useRef(tab);
+  liveTabRef.current = tab;
   const navigateToTab = useCallback((nextTab: TradovateLiveTab) => {
-    // Z grafu na přehled se jde vždy: DISARM a kill musí být dosažitelné
+    // Na přehled se jde vždy: OFF, Kill a Flatten jsou na něm a musí být dosažitelné
     // i při čekající změně konfigurace (INV-UI-02).
     if (!liveTabNavigationAllowed(tab, nextTab, {
       configMutationPending: configMutationPending || copyGroupStatusPollFence.inFlight,
@@ -976,6 +995,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     | { type: 'kill-switch' }
     | { type: 'copy-command'; command: Extract<LiveCopyTradingCommand, { type: 'flatten-group' }> }
     | { type: 'lock-until-session-end'; reason: string }) => {
+    armCancelEpochRef.current += 1;
     const run = async () => {
       const currentRoute = agentTransport
         ? { transport: agentTransport, relayConnectionId }
@@ -1028,12 +1048,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   }, [acceptAgentStatus, agentClient, agentTransport, flattenCoordinator, relayConnectionId]);
   const safetyTargetRef = useRef(workerGroup);
   safetyTargetRef.current = workerGroup;
+  const safetyTarget = useMemo(
+    () => (workerGroup ? liveSafetyTargetOf(workerGroup, agentStatusObservedAt, agentStatusFresh && !agentStatusRestored) : null),
+    [workerGroup, agentStatusObservedAt, agentStatusFresh, agentStatusRestored],
+  );
   const runStaticSafetyAction = useCallback(async (action: LiveSafetyAction, confirmedTarget?: LiveSafetyTarget) => {
     if (action === 'flatten-group') {
       const current = safetyTargetRef.current;
-      assertSameSafetyTarget(confirmedTarget, current ? { id: current.id, name: current.name,
-        accountIds: [current.leaderAccountId, ...current.followers.map(follower => follower.accountId)],
-        observedAt: agentStatusObservedAt, verified: agentStatusFresh && !agentStatusRestored } : null);
+      assertSameSafetyTarget(confirmedTarget, current ? liveSafetyTargetOf(current, agentStatusObservedAt, agentStatusFresh && !agentStatusRestored) : null);
       const result = await executeSafetyCommand({ type: 'copy-command', command: {
         type: 'flatten-group', groupId: confirmedTarget.id, operationId: `manual-${crypto.randomUUID()}`,
       } });
@@ -1307,7 +1329,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         ownEntry: ownManualEntry, manage: manageLeaderEntry, runtimeAvailable,
         armed: controller?.armed === true, shadowMode: controller?.shadowMode === true, chartShowsPoll: chartLive.status === agentStatus,
       }),
-      // Stejná cesta jako statická lišta / Dashboard: jeden zámek Flattenu na skupinu
+      // Stejná cesta jako dialog v LiveSafetyControls: jeden zámek Flattenu na skupinu
       // (createFlattenGroupCoordinator v executeSafetyCommand) — dvojklep ani souběh nevytvoří druhý.
       flatten: () => runStaticSafetyAction('flatten-group', { id: workerGroup.id, name: workerGroup.name,
         accountIds: [workerGroup.leaderAccountId, ...workerGroup.followers.map(follower => follower.accountId)],
@@ -1402,7 +1424,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     return false;
   }, [acceptAgentStatus, agentClient, agentTransport, relayConnectionId]);
-  const armLiveGroupFlow = useCallback(async (targetGroup: CopyGroupConfig) => {
+  const armLiveGroupFlow = useCallback(async (targetGroup: CopyGroupConfig, armGuard: () => void) => {
+    armGuard();
     setArmRulesNotice(null);
     const prepare = () => {
       const current = armStatusRef.current;
@@ -1450,8 +1473,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         confirmLabel: armOffer.repairable ? 'Obnovit TradingView a zapnout' : 'Zapnout bez snímků',
         cancelLabel: armOffer.repairable ? 'Zapnout bez snímků' : 'Zrušit',
       });
-      if (!armOffer.repairable && !repair) return;
+      if (!armOffer.repairable && !repair) return false;
       if (armOffer.repairable && repair) {
+        armGuard();
         acceptAgentStatus((await executeAgent({
           type: 'snapshot-test',
           requestId: crypto.randomUUID(),
@@ -1483,13 +1507,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         confirmLabel: 'Ověřit a zapnout',
         cancelLabel: 'Zrušit',
       });
-      if (!acknowledged) return;
+      if (!acknowledged) return false;
       acknowledgeIncidentId = incident.id;
     }
     const armNow = () => runConfigMutation(async () => {
       // Re-read after any camera dialog/repair; the worker still rejects any
       // concurrent tightening that happened after this UI snapshot.
       const prepared = prepare();
+      armGuard();
       const result = await executeAgent({
         type: 'arm-live',
         group: prepared.group,
@@ -1501,50 +1526,50 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         setArmRulesNotice(`Při zapnutí zůstala zachována dnešní potvrzená pravidla: ${prepared.preservedRules.join(', ')}. Aktuální hodnoty najdeš v Risk.`);
       }
     });
-    try {
-      await armNow();
-    } catch (reason) {
-      // 8. 10. 2026: stará skupina má účty, které už v Tradovate nejsou
-      // (breach). Worker je sám nevyřadí; po potvrzení uživatelem je vyřadí
-      // explicitním activate-group a teprve pak novou skupinu zapne.
-      const retirement = retireMissingFromError(reason);
-      if (!retirement) throw reason;
-      const confirmed = await confirmAction({
+    // 8. 10. 2026: stará skupina má účty, které už v Tradovate nejsou
+    // (breach). Worker je sám nevyřadí; po potvrzení uživatelem je vyřadí
+    // explicitním activate-group a teprve pak novou skupinu zapne.
+    return sendCopierArm({
+      guard: armGuard,
+      arm: armNow,
+      retirementFromError: retireMissingFromError,
+      confirmRetirement: retirement => confirmAction({
         title: 'Vyřadit breachnuté účty staré skupiny?',
         message: `Účty ${retirement.accountIds.join(', ')} staré skupiny už v Tradovate nejsou nebo jsou neaktivní (breach). `
           + 'Kopírka je vyřadí a přepne na tuto skupinu. Jejich případné zbylé pozice už hlídat nebude — zkontroluj je u propfirmy.',
         confirmLabel: 'Vyřadit a zapnout',
         cancelLabel: 'Zrušit',
-      });
-      if (!confirmed) return;
-      await runConfigMutation(async () => {
+      }),
+      activate: retirement => runConfigMutation(async () => {
+        const group = prepare().group;
+        armGuard();
         acceptConfigAck((await executeAgent({
           type: 'activate-group',
-          group: prepare().group,
+          group,
           retireMissingOldGroup: {
             groupId: retirement.groupId,
             accountIds: retirement.accountIds,
             reason: `Uživatel v appce potvrdil vyřazení účtů ${retirement.accountIds.join(', ')}, které v Tradovate už nejsou nebo jsou neaktivní (breach)`,
           },
         })).status);
-      });
-      await armNow();
-    }
+      }),
+    });
   }, [acceptAgentStatus, acceptConfigAck, accountEligibilityExclusions, agentStatus?.snapshotHealth, confirmAction, effectiveAccountEligibility, executeAgent, live.connectionData, runConfigMutation, waitForSnapshotReady]);
   const armLiveGroup = useCallback(async (targetGroup: CopyGroupConfig) => {
+    const armGuard = createCopierArmGuard({ cancelEpoch: () => armCancelEpochRef.current, flattenPending: flattenCoordinator.anyPending });
     armFlowActiveRef.current = true;
     setArmFlowActive(true);
     try {
-      return await armLiveGroupFlow(targetGroup);
+      return await armLiveGroupFlow(targetGroup, armGuard);
     } finally {
       armFlowActiveRef.current = false;
       setArmFlowActive(false);
     }
-  }, [armLiveGroupFlow]);
+  }, [armLiveGroupFlow, flattenCoordinator]);
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;
     return {
-      async execute(command) {
+      async execute(command, context) {
         const groupId = command.type === 'create-group' || command.type === 'update-group'
           ? command.group.id
           : 'groupId' in command ? command.groupId : null;
@@ -1564,14 +1589,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         const dispatch = () => COPY_GROUP_CONFIG_COMMANDS.has(command.type)
           ? runConfigMutation(execute)
           : execute();
-        const payload = command.type === 'flatten-group'
-          ? await flattenCoordinator.run(command.groupId, dispatch)
-          : await dispatch();
+        // Flatten All = brzda: poslední známá route a zámek skupiny jako lišta a Shift+F (INV-BRAKE-03).
+        const payload = await routeDashboardCommand(command, context?.confirmedTarget, {
+          onBrakeResult: result => setFlattenNotice({ ...result, at: Date.now() }),
+          currentTarget: () => (safetyTargetRef.current ? liveSafetyTargetOf(safetyTargetRef.current, null, false) : null),
+          brake: flatten => executeSafetyCommand({ type: 'copy-command', command: flatten as Extract<LiveCopyTradingCommand, { type: 'flatten-group' }> }),
+          ordinary: dispatch,
+        });
         return payload.result;
       },
     };
-  }, [acceptConfigAck, executeAgent, executionGroup, flattenCoordinator, runConfigMutation]);
-  const saveRiskGroup = useCallback(async (group: CopyGroupConfig) => {
+  }, [acceptConfigAck, executeAgent, executeSafetyCommand, executionGroup, runConfigMutation]);
+  const saveRiskGroupOnWorker = useCallback(async (group: CopyGroupConfig) => {
     if (!agentStatus) throw new Error('Worker není dostupný pro uložení Risk nastavení.');
     // Změna konfigurace jen nad čerstvým stavem workeru (ne obnoveným ani
     // zestárlým) — stejné pravidlo jako ARM, vynucené i mimo disabled UI.
@@ -1593,6 +1622,17 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       acceptConfigAck(result.status);
     });
   }, [acceptConfigAck, agentStatus, executeAgent, runConfigMutation, workerGroup]);
+  // Na Dashboard se smí odejít i během ukládání (INV-UI-02): odmontovaný formulář chybu neukáže.
+  const saveRiskGroup = useCallback(async (group: CopyGroupConfig) => {
+    try {
+      await saveRiskGroupOnWorker(group);
+    } catch (reason) {
+      if (liveTabRef.current !== 'risk') {
+        setDeskSafetyNotice({ tone: 'error', at: Date.now(), text: `Risk nastavení se neuložilo: ${liveSafetyFailureMessage(reason)}` });
+      }
+      throw reason;
+    }
+  }, [saveRiskGroupOnWorker]);
 
   // Přímý loopback agent smí zkoušet jen lokálně servírované HTTP UI. Safari
   // produkční HTTPS → http://127.0.0.1 blokuje jako mixed content ještě před
@@ -1859,8 +1899,8 @@ acceptAgentStatus((await executeAgent({
   useEffect(() => {
     if (livePriorityReleasable) releaseLivePriority();
   }, [livePriorityReleasable]);
-  // Eager fetch reduces old-deployment chunk misses; static brakes below do
-  // not rely on this succeeding and stay mounted during loading/error states.
+  // Eager fetch reduces old-deployment chunk misses; the safety bar below does
+  // not rely on this succeeding and returns when the overview cannot show.
   useEffect(() => { void preloadLiveCopyTradeOverview().catch(() => undefined); }, []);
   // Až po úplném odkrytí LIVE přehledu zahřát těžký bundle grafu a jednorázový
   // snapshot svíček. Nic se nemountuje ani nepřipojuje k živému feedu; snapshot
@@ -1897,6 +1937,32 @@ acceptAgentStatus((await executeAgent({
     return () => window.clearTimeout(timer);
   }, [holdColdReveal]);
 
+  // Nouzová lišta se běžně nekreslí, vrací se, když Dashboard nejde dosáhnout (INV-UI-02).
+  const requiresConnection = tab !== 'connections' && live.status != null && !live.status.connected;
+  const [chartCrash, setChartCrash] = useState<'none' | 'inner' | 'outer'>('none');
+  const [overviewSlot, setOverviewSlot] = useState<LiveOverviewSlotState>('loading');
+  // Pád v odchodové animaci grafu po odchodu nevisí: přišel by jinak jako lišta na příští graf.
+  const noteChartCrash = useCallback(() => {
+    if (liveTabRef.current !== 'chart') return;
+    setChartCrash(current => (current === 'outer' ? current : 'inner'));
+  }, []);
+  useEffect(() => {
+    if (tab !== 'overview') setOverviewSlot('loading');
+    // Vnitřní boundary se s odchodem z grafu odmontuje a příště to zkusí znovu; vnější zůstává.
+    if (tab !== 'chart') setChartCrash(current => (current === 'inner' ? 'none' : current));
+  }, [tab]);
+  const safetyBarNeed = liveSafetyBarNeed({
+    tab, chartCrashed: chartCrash !== 'none', checkingConnection, requiresConnection,
+    coldHold: !liveData || holdColdReveal, overviewSlot,
+  });
+  const [safetyBarGraceElapsed, setSafetyBarGraceElapsed] = useState(false);
+  useEffect(() => {
+    setSafetyBarGraceElapsed(elapsed => liveSafetyGraceAfterNeed(safetyBarNeed, elapsed));
+    if (safetyBarNeed !== 'after-grace') return undefined;
+    const timer = window.setTimeout(() => setSafetyBarGraceElapsed(true), LIVE_SAFETY_BAR_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [safetyBarNeed]);
+
   // Dev háček (at:dev:live-copy-fixture): ukázková skupina bez Tradovate dat,
   // jen pro ladění vizuálu LIVE přehledu. Prod build větev neobsahuje.
   if (import.meta.env.DEV && devLiveTradeMockEnabled()) {
@@ -1921,21 +1987,17 @@ acceptAgentStatus((await executeAgent({
   }
   const selectedLiveAccount = (displaySnapshot ?? copyTradeSnapshot)?.accounts.find(a => a.id === selectedAccountId);
   const selectedMembership = copyGroups.find(g => g.leaderAccountId === selectedAccountId || g.followers.some(f => f.accountId === selectedAccountId));
-  const requiresConnection = tab !== 'connections' && live.status != null && !live.status.connected;
 
   return (
-    <div className={`mx-auto max-w-[1500px] space-y-4 ${arrivingFromChart ? 'live-tab-arrive' : ''}`} style={{ paddingBottom: 'var(--live-safety-height, 100px)' }}>
-      <LiveSafetyControls target={workerGroup ? {
-        id: workerGroup.id, name: workerGroup.name,
-        accountIds: [workerGroup.leaderAccountId, ...workerGroup.followers.map(follower => follower.accountId)],
-        observedAt: agentStatusObservedAt,
-        verified: agentStatusFresh && !agentStatusRestored,
-      } : null} onAction={runStaticSafetyAction} flattenCoordinator={flattenCoordinator} copierArmed={agentStatusFresh && !agentStatusRestored && agentStatus?.controller.armed === true}
+    <div className={`mx-auto max-w-[1500px] space-y-4 ${arrivingFromChart ? 'live-tab-arrive' : ''}`} style={{ paddingBottom: 'var(--live-safety-height, 0px)' }}>
+      {/* Běžně se lišta nekreslí (Filip 5. 11.), jediná instance drží dialog Shift+F a hlášky. */}
+      <LiveSafetyControls hideBar={!liveSafetyBarVisible(safetyBarNeed, safetyBarGraceElapsed)} target={safetyTarget} externalNotices={[flattenNotice, deskSafetyNotice]} onAction={runStaticSafetyAction} flattenCoordinator={flattenCoordinator} copierArmed={agentStatusFresh && !agentStatusRestored && agentStatus?.controller.armed === true}
       // C7: „Zrušit čekající“ vedle Flatten (PC) — sdílený zámek grafu; Flatten zůstává mimo zámek.
       cancelPending={chartAvailable && cancelPendingBarView ? { view: cancelPendingBarView, lockRef: liveCommandLockRef, cancel: cancelPendingEntries } : null} />
       {chartAvailable ? (
-        <ErrorBoundary name="LiveTradingScreenSlot" fallback={<LiveSlotFailure label="LIVE graf" />}>
+        <ErrorBoundary name="LiveTradingScreenSlot" onError={() => setChartCrash('outer')} fallback={<LiveSlotFailure label="LIVE graf" />}>
           <LiveTradingScreenSlot
+          onCrash={noteChartCrash}
           open={tab === 'chart'}
           isDark={theme !== 'light'}
           tabs={tabs}
@@ -1956,7 +2018,7 @@ acceptAgentStatus((await executeAgent({
           group={chartData.group}
           groupKey={chartData.groupKey}
           position={chartData.position}
-          disarm={chartData.disarm}
+          disarm={liveChartDisarmDuringArm(chartData.disarm, armFlowActive)}
           onDisarm={disarmFromChart}
           onTargetChange={setChartTarget}
           onPreviewEntry={previewLeaderEntry}
@@ -1989,7 +2051,7 @@ acceptAgentStatus((await executeAgent({
           />
         </ErrorBoundary>
       ) : phoneChartAvailable && tab === 'chart' && phoneChart ? (
-        <ErrorBoundary name="LivePhoneChart" onError={rememberLiveChartCrash} fallback={<LiveSlotFailure label="LIVE graf" />}>
+        <ErrorBoundary name="LivePhoneChart" onError={() => { rememberLiveChartCrash(); noteChartCrash(); }} fallback={<LiveSlotFailure label="LIVE graf" />}>
           {phoneChart({
             header: group => <LivePhoneHeader
               groupName={workerGroup?.name ?? null}
@@ -2034,8 +2096,8 @@ acceptAgentStatus((await executeAgent({
         </ErrorBoundary>
       ) : null}
       {phoneChartAvailable && tab !== 'chart' && (
-        // Zpátky na graf z jakékoli záložky (nad nouzovou lištou, ta zůstává dole).
-        <button type="button" onClick={() => navigateToTab('chart')} className="native-fixed-above-tab-bar fixed right-4 z-[360] flex h-11 items-center gap-2 rounded-full bg-gradient-to-b from-blue-500 to-blue-600 px-4 text-sm font-black text-white shadow-[0_10px_24px_-10px_#2563eb]" style={{ bottom: 'calc(var(--live-safety-height, 100px) + 6px)' }}>
+        // Zpátky na graf z jakékoli záložky (nad nativní lištou a BottomNav, případně nad nouzovou lištou).
+        <button type="button" onClick={() => navigateToTab('chart')} className="native-fixed-above-tab-bar fixed right-4 z-[360] flex h-11 items-center gap-2 rounded-full bg-gradient-to-b from-blue-500 to-blue-600 px-4 text-sm font-black text-white shadow-[0_10px_24px_-10px_#2563eb]" style={{ bottom: 'calc(var(--live-safety-height, var(--live-bottom-clear)) + 6px)' }}>
           <CandlestickChart size={16} />Graf
         </button>
       )}
@@ -2046,7 +2108,7 @@ acceptAgentStatus((await executeAgent({
       <nav className="flex items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] no-scrollbar" aria-label="LIVE navigace">
         {tabs.map(item => {
           const Icon = item.icon;
-          const blockedByConfigMutation = (configMutationPending || copyGroupStatusPollFence.inFlight) && item.id !== tab;
+          const blockedByConfigMutation = (configMutationPending || copyGroupStatusPollFence.inFlight) && item.id !== tab && item.id !== 'overview';
           const blockedByArm = item.id === 'chart' && armFlowActive;
           const warmTab = item.id === 'chart'
             ? () => { void preloadLiveTradingScreen().catch(() => { /* Kliknutí může zopakovat import. */ }); }
@@ -2199,8 +2261,14 @@ acceptAgentStatus((await executeAgent({
         <>
           {displayInterrupted && <div role="status" className="text-xs text-[var(--text-secondary)]">Obnovuji spojení pro aktualizaci zůstatků. Zobrazené hodnoty jsou poslední potvrzené.</div>}
           {tab === 'overview' && copyTradeSnapshot ? (
-            <ErrorBoundary name="LiveCopyTradeOverviewSlot" fallback={<LiveSlotFailure label="LIVE přehled" />}>
+            <ErrorBoundary name="LiveCopyTradeOverviewSlot" onError={() => setOverviewSlot('crashed')} fallback={<LiveSlotFailure label="LIVE přehled" />}>
               <LiveCopyTradeOverviewSlot
+              onSlotState={setOverviewSlot}
+              copierOffVerified={copierOffVerifiedForMenu(copierProvablyOff(agentStatus?.controller, agentStatusFresh && !agentStatusRestored), armFlowActive)}
+              copierStatusVerified={agentStatusFresh && !agentStatusRestored}
+              safetyTarget={safetyTarget}
+              flattenCoordinator={flattenCoordinator}
+              onSafetyNotice={text => setDeskSafetyNotice({ tone: 'error', text, at: Date.now() })}
               journalHistory={journalHistory}
               userId={userId}
               owner={cardOwner}

@@ -1,13 +1,13 @@
 import type { LiveSafetyAction, LiveSafetyTarget } from './liveSafetyAction';
 
 /**
- * Bezpečnostní zkratka LIVE (U1 Shift+F na PC, U6 „Flatten…“ z notifikace) —
- * jen požadavek OTEVŘÍT existující potvrzovací dialog statické nouzové lišty
- * (`components/LiveSafetyControls.tsx`). Nic neprovádí: příkaz vzniká dál jen
- * potvrzením v dialogu lišty, tedy `onAction` → `runStaticSafetyAction` desku
- * se stejným `target` a týmž zámkem skupiny (`createFlattenGroupCoordinator`,
- * INV-UI-02, INV-BRAKE-01). OFF i Kill switch zůstávají na liště; Kill switch
- * zkratkou otevřít nejde.
+ * Bezpečnostní zkratka LIVE (U1 Shift+F na PC, výchozí vypnutá; akce notifikace
+ * zatím v kódu není, volá to jen graf) — jen požadavek OTEVŘÍT existující potvrzovací
+ * dialog v `components/LiveSafetyControls.tsx` (lišta se běžně nekreslí, dialog ano).
+ * Nic neprovádí: příkaz vzniká dál jen potvrzením v dialogu, tedy `onAction` →
+ * `runStaticSafetyAction` desku se stejným `target` a týmž zámkem skupiny
+ * (`createFlattenGroupCoordinator`, INV-UI-02, INV-BRAKE-01). OFF i Kill switch jsou
+ * na Dashboardu LIVE; Kill switch zkratkou otevřít nejde.
  *
  * Jen v paměti, bez fronty: bez posluchače se nestane nic (požadavek nečeká, aby
  * dialog později nevyskočil sám). Doručuje se jedinému příjemci — naposledy
@@ -76,7 +76,7 @@ export function createLiveSafetyShortcutBus(): LiveSafetyShortcutBus {
 }
 
 const defaultBus = createLiveSafetyShortcutBus();
-/** Odběr pro `LiveSafetyControls` (jediná statická lišta). */
+/** Odběr pro `LiveSafetyControls` (jediná instance v desku). */
 export const subscribeLiveSafetyShortcut = defaultBus.subscribe;
 /** Shift+F (U1) a akce notifikace (U6): jen otevřít dialog lišty. */
 export const requestLiveSafetyConfirmation = defaultBus.request;

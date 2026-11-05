@@ -213,7 +213,7 @@ interface Props {
 }
 
 /** Text pojistky U3-PC u tlačítka Objednávka během přehrávání v grafu. */
-const REPLAY_TICKET_TEXT = 'Přehrávání v grafu — panel objednávky je vypnutý. Flatten All zůstává na nouzové liště.';
+const REPLAY_TICKET_TEXT = 'Přehrávání v grafu — panel objednávky je vypnutý. Flatten All je na Live Dashboardu.';
 
 /**
  * Volba zvuku/hlasu při fillu (U7) v liště grafu — výchozí Vypnuto, klik přepne
@@ -759,7 +759,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       breakEven: line => liveOrderEntry.onOrderLineAction?.(line, 'break-even'),
       cancelLine: line => liveOrderEntry.onOrderLineCancel(line),
       notice: notice => setLineNotice({ at: now, ...notice }),
-      // Shift+F jen požádá nouzovou lištu o dialog Flatten All (INV-UI-02); nic neprovede.
+      // Shift+F jen požádá LiveSafetyControls o dialog Flatten All (INV-UI-02); nic neprovede.
       openFlatten: () => requestLiveSafetyConfirmation('flatten-group', 'hotkey'),
       toggleHelp: () => setHotkeysHelp(open => !open),
     });
@@ -791,7 +791,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     : `border-transparent ${isDark ? 'text-slate-400 hover:text-slate-100' : 'text-slate-500 hover:text-slate-900'}`);
 
   const screen = (
-    <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} style={{ bottom: 'var(--live-safety-height, 100px)' }} role="region" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
+    <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} style={{ bottom: 'var(--live-safety-height, 0px)' }} role="region" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
       {/* Aurorová záře při příchodu — jednou, pak je průhledná a nebere kliky. */}
       <div className="live-chart-aurora" aria-hidden="true" />
       {/* Vlastní vrstva nad grafem: rozbalovací okna hlavičky (účty skupiny,

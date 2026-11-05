@@ -1,3 +1,4 @@
+import type { LiveSafetyTarget } from '../lib/liveSafetyAction';
 import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceCommand, LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageCommand, LeaderOrderManageResult } from '../lib/leaderOrderManage';
@@ -312,7 +313,8 @@ export type LiveCopyTradingCommandResult =
   };
 
 export interface LiveCopyTradingAdapter {
-  execute(command: LiveCopyTradingCommand): Promise<LiveCopyTradingCommandResult | void>;
+  /** `confirmedTarget`: cíl z dialogu Flatten All Dashboardu (`routeDashboardCommand`). */
+  execute(command: LiveCopyTradingCommand, context?: { confirmedTarget?: LiveSafetyTarget | null }): Promise<LiveCopyTradingCommandResult | void>;
 }
 
 export interface CopyGroupValidation {

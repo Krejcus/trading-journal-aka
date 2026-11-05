@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
+import type { LiveOverviewSlotState } from '../lib/liveSafetyAction';
 
 type OverviewComponent = (typeof import('./LiveCopyTradeOverview'))['default'];
 type OverviewProps = React.ComponentProps<OverviewComponent>;
@@ -90,7 +91,7 @@ const OverviewFallback = ({ failed, onRetry }: { failed: boolean; onRetry: () =>
     <div>
       <span className={`mx-auto block h-7 w-7 rounded-full border-2 border-indigo-500/20 border-t-indigo-500 ${failed ? '' : 'animate-spin'}`} />
       <p className="mt-3 text-xs font-bold text-[var(--text-secondary)]">
-        {failed ? 'LIVE přehled se nepodařilo načíst. Nouzové ovládání je v samostatné liště; provedení akce musí potvrdit worker.' : 'Načítám LIVE přehled… Nouzové ovládání je v samostatné liště.'}
+        {failed ? 'LIVE přehled se nepodařilo načíst. Nouzové ovládání je v liště dole; provedení akce musí potvrdit worker.' : 'Načítám LIVE přehled…'}
       </p>
       {failed ? <button type="button" onClick={onRetry} className="mt-4 h-9 rounded-md bg-indigo-600 px-4 text-xs font-black text-white">Zkusit znovu</button> : null}
     </div>
@@ -146,8 +147,13 @@ export const preloadLiveDeferredTab = (tab: TradovateLiveTab): Promise<void> => 
   }
 };
 
-const LiveCopyTradeOverviewSlot = (props: OverviewProps) => {
+const LiveCopyTradeOverviewSlot = ({ onSlotState, ...props }: OverviewProps & {
+  /** Desk podle toho vrátí nouzovou lištu: selhaný chunk boundary nechytí (`liveSafetyBarNeed`). */
+  onSlotState?: (state: LiveOverviewSlotState) => void;
+}) => {
   const { Component, failed, retry } = useDeferredComponent(overviewModule);
+  const slotState: LiveOverviewSlotState = Component ? 'ready' : failed ? 'failed' : 'loading';
+  useEffect(() => { onSlotState?.(slotState); }, [onSlotState, slotState]);
   return Component ? <Component {...props} /> : <OverviewFallback failed={failed} onRetry={retry} />;
 };
 

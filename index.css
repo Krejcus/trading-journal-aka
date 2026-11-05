@@ -190,8 +190,22 @@ html.native-shell .native-fixed-above-tab-bar {
 
 /* Safety controls stay above the chart, but never cover a confirmation or
    another modal. The dialog itself remains interactive and owns the screen. */
-body:has([role="dialog"]) [data-live-safety-controls] {
+body:has([role="dialog"]) :is([data-live-safety-controls], [data-live-safety-notices]) {
   visibility: hidden;
+}
+
+/* Odsazení fixních prvků LIVE od spodku, když není nouzová lišta: nad BottomNav (úzký web),
+   nad nativní lištou v appce. S lištou platí --live-safety-height. */
+:root {
+  --live-bottom-clear: calc(env(safe-area-inset-bottom, 0px) + 5.75rem);
+}
+@media (min-width: 1024px) {
+  :root {
+    --live-bottom-clear: 12px;
+  }
+}
+html.native-shell {
+  --live-bottom-clear: calc(var(--native-shell-tab-bar-height) + 1rem);
 }
 
 /* Every full-screen flex dialog in the shared React app gets a safe interactive
