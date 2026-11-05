@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-04 — LIVE latency: kompaktní ACK horkých příkazů (Claude po Codexovi, NASAZENO 5. 11. ~05:15, přínos NEZMĚŘENÝ)
+### 2026-11-04 — LIVE latency: kompaktní ACK horkých příkazů (Claude po Codexovi, NASAZENO 5. 11. ~05:15, změřeno jen na blokovaných příkazech)
 
 - Codex skončil na limitu před celou sadou a oponenturou. Záměr: `place-leader-entry`
   a `manage-leader-order` nečekají po broker ACK 161–315 ms na zápis celého statusu
@@ -306,9 +306,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Nasazeno na Filipovo „Ano nasaď“: migrace `20261104164250` (CLI `db query --yes` + `migration repair`,
   PostgREST funkci zná, anon 42501), web `e174e2dc` READY, worker reinstall z téhož SHA (brána čistá,
   `--tradovate-ws-writes on` zachováno, reconcile `authoritativelyClean`). iPhone beze změny, klient se neměnil.
-- NEZMĚŘENO: žádný příkaz po nové cestě ještě neběžel. Základ v2 z logu workeru 3.–4. 11.: ACK horkých
-  příkazů n=31, p50 193 ms, p95 315 ms. Po vstupu/zrušení na DEMO hledat v logu `RELAY ACK … bytes=<~500`;
-  hláška `RELAY compact ACK → complete-v2` znamená, že v3 nejela.
+- Měření 5. 11. 05:45 CET přes relay z produkčního webu: 8× `manage-leader-order` na neexistující vstup
+  (`not-own-entry`, k brokerovi nic, kopírka OFF). ACK v3: 466 B místo ~24 kB, 135–173 ms, p50 ~151 ms, žádný
+  fallback. Základ v2 z logu 3.–4. 11. (n=31, skutečné příkazy, jiná denní doba): p50 193, p95 315, max 387 ms.
+  Není to A/B za stejných podmínek. Úspora je řádově desítky ms na mediánu, víc na špičkách, ne celých 161–315 ms:
+  zbytek je cesta Mac → Vercel → DB. Neměřeno: čas do připravenosti správy (status jde až heartbeatem),
+  zápis k brokerovi, klepnutí → displej a chování za denního provozu.
 - Tento worktree se jmenuje `release-20261104-eb461e22`, ale je na větvi
   `codex/live-speed-20261104`; název neodpovídá obsahu.
 
