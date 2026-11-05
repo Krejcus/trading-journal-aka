@@ -240,6 +240,14 @@ async function install(): Promise<void> {
   if (manualEntryCap != null && (!Number.isSafeInteger(manualEntryCap) || manualEntryCap < 1 || manualEntryCap > 5)) {
     throw new Error('--manual-entry-max-contracts musí být celé číslo 1–5');
   }
+  const webSocketWritesFlag = flags.get('tradovate-ws-writes')?.trim().toLowerCase();
+  if (webSocketWritesFlag && webSocketWritesFlag !== 'on' && webSocketWritesFlag !== 'off') {
+    throw new Error('--tradovate-ws-writes musí být on nebo off');
+  }
+  if (webSocketWritesFlag === 'on' && !manualOnly) {
+    throw new Error('--tradovate-ws-writes on je povolený jen s --manual-only');
+  }
+  const webSocketWritesEnabled = manualOnly && webSocketWritesFlag === 'on';
   const follower = cliFollowers[0]?.accountId ?? null;
   const sourceManifest = flags.get('connections-manifest')?.trim();
   const manifest = sourceManifest ? await loadMacCopierConnectionManifest(sourceManifest) : null;
@@ -502,6 +510,7 @@ async function install(): Promise<void> {
     ${priceSourceIbkr ? '<key>ALPHATRADE_PRICE_SOURCE</key><string>ibkr</string>' : ''}
     ${priceAlertsEnabled ? '<key>ALPHATRADE_PRICE_ALERTS</key><string>on</string>' : ''}
     ${scaleInEnabled ? '<key>ALPHATRADE_SCALE_IN</key><string>on</string>' : ''}
+    ${webSocketWritesEnabled ? '<key>ALPHATRADE_TRADOVATE_WS_WRITES</key><string>on</string>' : ''}
   </dict>
 </dict></plist>
 `;

@@ -71,6 +71,8 @@ import { stabilizeCopyGroups } from '../lib/stabilizeCopyGroups';
 import { copierCommandAllowedWithoutFreshStatus } from '../lib/copierSafetyControls';
 import type { CopierConnectionDiscoveryStatus } from '../lib/localCopierAgentProtocol';
 import { useCompactViewport } from '../utils/useCompactViewport';
+import { DashboardOrderCancelButton, type LiveDashboardPendingCancel } from './LivePendingCancel';
+import { dashboardPendingCancelForGroup } from '../lib/liveCancelPendingUi';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
   adoptRuntimeCopyGroup,
@@ -530,6 +532,12 @@ interface Props {
   /** Výslovný souhlas: Mac smí načítat všechny propfirmy vlastníka. */
   onGrantWorkerOwnerScope?: () => Promise<void>;
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
+  /**
+   * C7 (4. 11. 2026): „Zrušit“ u příkazu = jen vlastní čekající vstup leadera (`dashboardCancelTarget`,
+   * `cancel-entry` přes desk, dvoukrokově, sdílený zámek). Chybí / bez capability = zamčeno s vysvětlením.
+   * Obecné `cancel-order` worker odmítá — z Dashboardu se už neposílá.
+   */
+  pendingEntryCancel?: LiveDashboardPendingCancel | null;
 }
 
 interface PendingAction {
@@ -873,6 +881,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onGrantWorkerOwnerScope,
   marketPrices = [],
   onGroupsChange,
+  pendingEntryCancel = null,
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
   const copierStateVerifying = copierStatusPending || !runtimeAvailable;
@@ -2126,10 +2135,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       confirmArmedGroupChange(group, () => { void saveGroup(updated); });
     },
     onFlattenAccount: (accountId: number) => requestAccountFlatten(group, accountId),
-    onCancelOrder: (orderId: number) => setPendingAction({
-      title: 'Zrušit příkaz?', detail: 'Připraví zrušení tohoto pracovního příkazu.',
-      confirmLabel: 'Zrušit příkaz', danger: true, command: { type: 'cancel-order', groupId: group.id, orderId },
-    }),
+    // C7: jen vlastní čekající vstup leadera skupiny workeru (jiná skupina = zamčeno s vlastním textem).
+    pendingEntryCancel: dashboardPendingCancelForGroup(pendingEntryCancel, group.id, executionGroupId),
     onRemoveUnavailableFollower: () => requestUnavailableFollowerRemoval(group, group, null, 'row'),
   });
 
@@ -2502,10 +2509,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                                 null,
                                 'row',
                               )}
-                              onCancelOrder={orderId => setPendingAction({
-                                title: 'Zrušit příkaz?', detail: 'Připraví zrušení tohoto pracovního příkazu.',
-                                confirmLabel: 'Zrušit příkaz', danger: true, command: { type: 'cancel-order', groupId: group.id, orderId },
-                              })}
+                              pendingEntryCancel={dashboardPendingCancelForGroup(pendingEntryCancel, group.id, executionGroupId)}
                               onTab={t => setGroupTab(prev => ({ ...prev, [group.id]: t }))}
                               redactNames={redactNames}
                               redaction={redaction}
@@ -3994,7 +3998,7 @@ const CompactAccountSectionHead = ({ columns, indent = false }: { columns: 'mark
   </div>
 );
 
-const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, powerDisplayKey = '', dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
+const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, powerDisplayKey = '', dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, pendingEntryCancel = null, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
   group: CopyGroupConfig;
   /** Fáze ze stavového ostrova. Karta je jeden box, takže tu rám obepne
    *  celou skupinu včetně účtů — na rozdíl od tabulkového rozložení. */
@@ -4029,7 +4033,7 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
   onToggleEnabled: () => void;
   onFlatten: () => void;
   onFlattenAccount: (accountId: number) => void;
-  onCancelOrder: (orderId: number) => void;
+  pendingEntryCancel?: LiveDashboardPendingCancel | null;
   onRefreshOrders?: () => Promise<void> | void;
   onRemoveUnavailableFollower: (accountId: number) => void;
   onApplyTemplate: (template: CopyGroupTemplate) => void;
@@ -4328,14 +4332,7 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
                     <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${order.working ? 'bg-blue-500/10 text-blue-500' : 'bg-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>{order.status}</span>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  disabled={!order.working || busyCommand != null}
-                  onClick={() => onCancelOrder(order.id)}
-                  className="h-9 rounded-lg border border-rose-500/20 px-3 font-bold text-rose-500 disabled:opacity-35"
-                >
-                  Zrušit
-                </button>
+                <DashboardOrderCancelButton order={order} cancel={pendingEntryCancel} blocked={busyCommand != null} compact />
               </li>
             ))}
           </ul>
@@ -5203,7 +5200,7 @@ export const AccountEligibilityPill = ({ accountId = null, eligibility, live, un
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, tradeCard = null, orders, eligibilityByAccount, tradeCutsByAccount, participationByAccount, onFollowerEnabled, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, orderColumns }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, tradeCard = null, orders, eligibilityByAccount, tradeCutsByAccount, participationByAccount, onFollowerEnabled, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onFlattenAccount, onRemoveUnavailableFollower, pendingEntryCancel = null, redactNames, redaction, orderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -5224,7 +5221,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, tradeCard =
   dailyPnlPending: boolean;
   onFlattenAccount: (accountId: number) => void;
   onRemoveUnavailableFollower: (accountId: number) => void;
-  onCancelOrder: (orderId: number) => void;
+  pendingEntryCancel?: LiveDashboardPendingCancel | null;
   redactNames: boolean;
   redaction: RedactionSettings;
   orderColumns: Array<{ key: OrderColumnKey; label: string }>;
@@ -5391,7 +5388,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, tradeCard =
                   };
                   return orderColumns.map(column => <React.Fragment key={column.key}>{cells[column.key]}</React.Fragment>);
                 })()}
-                <td className="px-3 py-1.5 text-right"><button disabled={!order.working || busyCommand != null} onClick={() => onCancelOrder(order.id)} className="h-6 rounded-md border border-rose-500/20 px-2 text-[10px] font-bold text-rose-500 disabled:opacity-35">Cancel</button></td>
+                <td className="px-3 py-1.5 text-right"><DashboardOrderCancelButton order={order} cancel={pendingEntryCancel} blocked={busyCommand != null} /></td>
               </tr>
             ))}</tbody>
           </table>

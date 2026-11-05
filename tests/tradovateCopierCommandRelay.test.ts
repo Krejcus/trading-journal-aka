@@ -263,6 +263,7 @@ describe('Tradovate copier command relay', () => {
   });
 
   describe('denní strop ručních vstupů (100 za 24 h, Filip 30. 10.; od 1. 11. atomicky v RPC)', () => {
+    const deliveryId = '6f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f607';
     const entryDb = (resultCode: string, upsert: (row: unknown) => void, rpcCalls: unknown[][] = []): SupabaseClient => {
       const devices = { eq: () => devices, is: () => devices,
         then: (resolve: (value: unknown) => void) => resolve({ data: [{ id: deviceId }], error: null }) };
@@ -275,10 +276,13 @@ describe('Tradovate copier command relay', () => {
         throw new Error(`unexpected-table:${table}`);
       }, rpc: async (...call: unknown[]) => {
         rpcCalls.push(call);
-        return { data: [{ result_code: resultCode, id: resultCode === 'inserted' ? 'entry-row' : null,
-          status: resultCode === 'inserted' ? 'pending' : null,
-          expires_at: resultCode === 'inserted' ? '2026-08-21T12:00:15.000Z' : null,
-          device_id: resultCode === 'inserted' ? deviceId : null }], error: null };
+        const inserted = resultCode === 'inserted' || resultCode === 'inserted-claimed';
+        return { data: [{ result_code: resultCode, id: inserted ? 'entry-row' : null,
+          status: resultCode === 'inserted-claimed' ? 'claimed' : inserted ? 'pending' : null,
+          expires_at: inserted ? '2026-08-21T12:00:15.000Z' : null,
+          device_id: inserted ? deviceId : null,
+          delivery_id: resultCode === 'inserted-claimed' ? deliveryId : null,
+          created_at: resultCode === 'inserted-claimed' ? '2026-08-21T12:00:00.000Z' : null }], error: null };
       } } as unknown as SupabaseClient;
     };
     const entry = (): LocalCopierAgentCommand => ({ type: 'copy-command', command: buildLeaderEntryPlaceCommand({
@@ -294,12 +298,61 @@ describe('Tradovate copier command relay', () => {
       expect(queued).toMatchObject({ id: 'entry-row', status: 'pending', deviceId });
       expect(upsert).not.toHaveBeenCalled();
       expect(calls).toHaveLength(1);
-      expect(calls[0][0]).toBe('admit_tradovate_copier_manual_command');
+      expect(calls[0][0]).toBe('admit_tradovate_copier_manual_command_v2');
       expect(calls[0][1]).toMatchObject({
         p_user_id: userId, p_device_id: deviceId, p_connection_id: connectionId, p_operation_id: 'entry:captest00001',
         p_now: '2026-08-21T12:00:00.000Z', p_expires_at: '2026-08-21T12:00:15.000Z',
         p_entry_min_interval_ms: 3_000, p_manage_min_interval_ms: 2_000, p_entry_cap: 100, p_manage_cap: 100,
+        p_delivery_id: null,
       });
+    });
+
+    it('čerstvá shodná relayIdle se pošle do admission v2 a vrátí podepsatelný preclaim bez druhého claimu', async () => {
+      const now = Date.parse('2026-08-21T12:00:00.000Z');
+      const calls: unknown[][] = [];
+      const queued = await enqueueTradovateCopierCommand({
+        db: entryDb('inserted-claimed', vi.fn(), calls),
+        userId,
+        connectionId,
+        command: entry(),
+        now,
+        relayIdle: Promise.resolve({
+          deviceId,
+          relayIdle: { deliveryId },
+          lastSeenAt: new Date(now - 200).toISOString(),
+        }),
+      });
+      expect((calls[0][1] as { p_delivery_id: string }).p_delivery_id).toBe(deliveryId);
+      expect(queued).toMatchObject({
+        id: 'entry-row',
+        status: 'claimed',
+        deviceId,
+        preclaimed: {
+          deliveryId,
+          command: {
+            id: 'entry-row',
+            status: 'claimed',
+            createdAt: '2026-08-21T12:00:00.000Z',
+            expiresAt: '2026-08-21T12:00:15.000Z',
+          },
+        },
+      });
+    });
+
+    it('stará nebo cizí relayIdle optimalizaci nepoužije a admission zůstane pending', async () => {
+      const now = Date.parse('2026-08-21T12:00:00.000Z');
+      for (const candidate of [
+        { deviceId, relayIdle: { deliveryId }, lastSeenAt: new Date(now - 4_001).toISOString() },
+        { deviceId: '11111111-1111-4111-8111-111111111111', relayIdle: { deliveryId }, lastSeenAt: new Date(now).toISOString() },
+      ]) {
+        const calls: unknown[][] = [];
+        const queued = await enqueueTradovateCopierCommand({
+          db: entryDb('inserted', vi.fn(), calls), userId, connectionId, command: entry(), now,
+          relayIdle: Promise.resolve(candidate),
+        });
+        expect((calls[0][1] as { p_delivery_id: string | null }).p_delivery_id).toBeNull();
+        expect(queued.preclaimed).toBeUndefined();
+      }
     });
 
     const manageCmd = (action: 'move-stop' | 'close-position'): LocalCopierAgentCommand => ({ type: 'copy-command', command: buildLeaderOrderManageCommand({

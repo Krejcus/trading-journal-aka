@@ -35,7 +35,10 @@ describe('Tradovate zrušený zbytek částečně vyplněné objednávky', () =>
     wire.fill(id, 6, 31_241.5);
     await expect.poll(() => latest(wire, id)?.filledQuantity).toBe(6);
     wire.setPartialCancelAsFilled(true);
-    await expect(wire.broker.cancelOrder(100, String(id))).resolves.toBeUndefined();
+    await expect(wire.broker.cancelOrder(100, String(id))).resolves.toMatchObject({
+      confirmedBy: 'stream-terminal',
+      order: { brokerOrderId: String(id), status: 'canceled', filledQuantity: 6 },
+    });
     expect(latest(wire, id)).toMatchObject({ status: 'canceled', filledQuantity: 6 });
     expect(wire.requests.filter(request => request.path === '/order/cancelorder')).toHaveLength(1);
   });

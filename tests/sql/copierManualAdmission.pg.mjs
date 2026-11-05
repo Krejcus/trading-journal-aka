@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 const pg = (await import(process.env.PG_MODULE ?? 'pg')).default;
 const url = process.env.PG_URL ?? 'postgres://postgres@127.0.0.1:54329/postgres';
 const migration = await readFile(new URL('../../supabase/migrations/20261101090849_copier_manual_admission.sql', import.meta.url), 'utf8');
+const boundDeliveryMigration = await readFile(new URL('../../supabase/migrations/20261104115354_copier_manual_admission_bound_delivery.sql', import.meta.url), 'utf8');
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
@@ -22,6 +23,7 @@ const CONN = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const CONN2 = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2';
 const FOREIGN_CONN = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const DEV_CONN2 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4';
+const DELIVERY = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const schema = `adm_${randomUUID().replace(/-/g, '').slice(0, 10)}`;
 
 const clients = [];
@@ -74,14 +76,25 @@ before(async () => {
       constraint tradovate_copier_commands_idempotency unique (user_id, device_id, idempotency_key)
     );
     create index on public.tradovate_copier_commands (user_id, created_at desc);
+    create unique index tradovate_copier_commands_delivery_idx
+      on public.tradovate_copier_commands (device_id, delivery_id) where delivery_id is not null;
+    create table public.tradovate_copier_device_runtime (
+      device_id uuid primary key references public.tradovate_copier_devices(id),
+      user_id uuid not null,
+      connection_id uuid,
+      status jsonb not null default '{}'::jsonb,
+      last_seen_at timestamptz not null default now()
+    );
     grant select, insert, update on public.tradovate_copier_commands to service_role;
     grant select on public.tradovate_copier_devices to service_role;
+    grant select, insert, update on public.tradovate_copier_device_runtime to service_role;
     insert into public.tradovate_copier_devices values
       ('${DEV1}', '${USER}', '${CONN}', null), ('${DEV2}', '${USER}', '${CONN}', null),
       ('${REVOKED}', '${USER}', '${CONN}', now()), ('${FOREIGN}', '${OTHER}', '${FOREIGN_CONN}', null),
       ('${DEV_CONN2}', '${USER}', '${CONN2}', null);
   `);
   await admin.query(migration);
+  await admin.query(boundDeliveryMigration);
 });
 
 after(async () => {
@@ -89,7 +102,7 @@ after(async () => {
   await admin.end();
 });
 
-const reset = () => admin.query('truncate public.tradovate_copier_commands');
+const reset = () => admin.query('truncate public.tradovate_copier_commands, public.tradovate_copier_device_runtime');
 let seq = 0;
 const opId = (prefix = 'entry') => `${prefix}:t${String(++seq).padStart(6, '0')}-${randomUUID().slice(0, 8)}`;
 const entry = (operationId = opId(), hash = 'hash0001') => ({ command: { type: 'place-leader-entry', operationId, payloadHash: hash } });
@@ -98,6 +111,7 @@ const manage = (trade, action = 'move-stop', operationId = opId('manage'), hash 
 });
 
 const ADMIT = `select * from public.admit_tradovate_copier_manual_command($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11)`;
+const ADMIT_V2 = `select * from public.admit_tradovate_copier_manual_command_v2($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12)`;
 const args = (payload, overrides = {}) => {
   const now = overrides.now ?? new Date();
   return [
@@ -111,7 +125,21 @@ const asService = async (client, sql, params) => {
   try { return await client.query(sql, params); } finally { await client.query('reset role'); }
 };
 const admit = async (client, payload, overrides) => (await asService(client, ADMIT, args(payload, overrides))).rows[0];
+const admitV2 = async (client, payload, overrides = {}) => (
+  await asService(client, ADMIT_V2, [...args(payload, overrides), overrides.delivery ?? null])
+).rows[0];
 const count = async () => Number((await admin.query('select count(*) from public.tradovate_copier_commands')).rows[0].count);
+const runtime = (overrides = {}) => admin.query(`
+  insert into public.tradovate_copier_device_runtime (device_id, user_id, connection_id, status, last_seen_at)
+  values ($1, $2, $3, $4::jsonb, $5)
+  on conflict (device_id) do update set user_id = excluded.user_id, connection_id = excluded.connection_id,
+    status = excluded.status, last_seen_at = excluded.last_seen_at`, [
+  overrides.device ?? DEV1,
+  overrides.user ?? USER,
+  overrides.connection ?? CONN,
+  JSON.stringify(overrides.status ?? { relayIdle: { deliveryId: DELIVERY } }),
+  overrides.lastSeenAt ?? new Date(),
+]);
 const seed = (rows) => admin.query(`
   insert into public.tradovate_copier_commands (user_id, device_id, command_type, payload, idempotency_key, status, created_at, expires_at)
   select * from jsonb_to_recordset($1::jsonb) as r(user_id uuid, device_id uuid, command_type text, payload jsonb,
@@ -301,6 +329,77 @@ test('oprávnění: authenticated ani anon funkci nevolají; search_path volají
     await client.query('reset role');
   }
   const settings = (await admin.query(`select proconfig, prosecdef from pg_proc where proname = 'admit_tradovate_copier_manual_command'`)).rows[0];
+  assert.equal(settings.prosecdef, false);
+  assert.deepEqual(settings.proconfig.sort(), ['lock_timeout=2s', 'search_path=""']);
+});
+
+test('v2: čerstvá shodná relayIdle naváže právě vložený řádek v téže transakci', async () => {
+  await reset();
+  await runtime();
+  const client = await connect();
+  const row = await admitV2(client, entry(), { delivery: DELIVERY });
+  assert.equal(row.result_code, 'inserted-claimed');
+  assert.equal(row.status, 'claimed');
+  assert.equal(row.delivery_id, DELIVERY);
+  assert.ok(row.created_at instanceof Date);
+  const stored = (await admin.query(
+    'select status, delivery_id, claimed_at from public.tradovate_copier_commands where id = $1', [row.id],
+  )).rows[0];
+  assert.equal(stored.status, 'claimed');
+  assert.equal(stored.delivery_id, DELIVERY);
+  assert.ok(stored.claimed_at instanceof Date);
+});
+
+test('v2: bez idle, se starým runtime nebo cizí delivery zůstává nový řádek pending pro původní fallback', async () => {
+  const client = await connect();
+  const cases = [
+    null,
+    { status: { relayIdle: { deliveryId: DELIVERY } }, lastSeenAt: new Date(Date.now() - 4_100) },
+    { status: { relayIdle: { deliveryId: randomUUID() } }, lastSeenAt: new Date() },
+  ];
+  for (const candidate of cases) {
+    await reset();
+    if (candidate) await runtime(candidate);
+    const row = await admitV2(client, entry(), { delivery: DELIVERY });
+    assert.equal(row.result_code, 'inserted');
+    assert.equal(row.status, 'pending');
+    assert.equal(row.delivery_id, null);
+  }
+});
+
+test('v2: obsazená delivery neselže a idempotentní existing se nikdy nepřeváže', async () => {
+  await reset();
+  await runtime();
+  const client = await connect();
+  await seed([{
+    user_id: USER, device_id: DEV1, command_type: 'disarm', payload: {}, idempotency_key: randomUUID(),
+    status: 'claimed', created_at: ago(1_000), expires_at: new Date(Date.now() + 600_000).toISOString(),
+  }]);
+  await admin.query('update public.tradovate_copier_commands set delivery_id = $1', [DELIVERY]);
+  const inserted = await admitV2(client, entry(), { delivery: DELIVERY });
+  assert.equal(inserted.result_code, 'inserted');
+  assert.equal(inserted.status, 'pending');
+  assert.equal(inserted.delivery_id, null);
+
+  await reset();
+  await runtime();
+  const operationId = opId();
+  const first = await admitV2(client, entry(operationId), { delivery: null });
+  assert.equal(first.result_code, 'inserted');
+  const replay = await admitV2(client, entry(operationId), { delivery: DELIVERY });
+  assert.equal(replay.result_code, 'existing');
+  assert.equal(replay.status, 'pending');
+  assert.equal(replay.delivery_id, null);
+});
+
+test('v2 oprávnění a konfigurace: jen service_role, invoker, prázdný search_path a 2s lock timeout', async () => {
+  const client = await connect();
+  for (const role of ['authenticated', 'anon']) {
+    await client.query(`set role ${role}`);
+    await assert.rejects(client.query(ADMIT_V2, [...args(entry()), DELIVERY]), error => error.code === '42501');
+    await client.query('reset role');
+  }
+  const settings = (await admin.query(`select proconfig, prosecdef from pg_proc where proname = 'admit_tradovate_copier_manual_command_v2'`)).rows[0];
   assert.equal(settings.prosecdef, false);
   assert.deepEqual(settings.proconfig.sort(), ['lock_timeout=2s', 'search_path=""']);
 });

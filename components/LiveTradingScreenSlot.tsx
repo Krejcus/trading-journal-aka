@@ -11,6 +11,12 @@ import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
+import type { LiveAttachInput, LiveBareEntryRecord } from '../lib/liveBareEntry';
+import type { LivePhonePosition } from '../lib/livePhoneOrders';
+import type { LiveBareCloseOffer } from '../lib/liveBareCloseUi';
+import type { BareLeaderTrade } from '../lib/manualBareClose';
+import type { LiveChartFills, LiveChartWorkingOrders } from '../hooks/useLiveChartData';
+import type { LiveCommandTraceStage, LiveCommandWorkerTiming } from '../lib/liveCommandPerformance';
 import {
   getLiveScreenThemePreference,
   resolveLiveScreenDark,
@@ -85,7 +91,13 @@ interface Props {
   /** Události kopírky pro karty obchodů (poll ∪ expozice přímo z workeru, F2a) — jen zobrazení. */
   copyEvents?: readonly LiveTradingCopyEvent[];
   /** Měření poslední rychlé expozice; nepoužívá se pro stav ani příkazy. */
-  liveExposurePaint?: { id: string; receivedPerformanceAt: number } | null;
+  liveExposurePaint?: {
+    id: string;
+    receivedPerformanceAt: number;
+    operationId?: string;
+    stage?: LiveCommandTraceStage;
+    workerTiming?: LiveCommandWorkerTiming;
+  } | null;
   /** Skupina a účty ze stavu workeru; null = žádná skupina (bez čipu a výběru účtu). */
   group?: LiveTradeGroup | null;
   /** Obsahový klíč skupiny (porovnání bez překreslování po každém tiku desku). */
@@ -109,6 +121,34 @@ interface Props {
   entryFrontContract?: string | null;
   /** Přikoupení do otevřené pozice (SL/TP pozice a stav pro panel). */
   entryScaleIn?: LiveTicketScaleIn | null;
+  // ── U4/U5/U8/U10 (3. 11. 2026): jen podklady panelu a grafu, výchozí = dnešní chování ──
+  /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); chybí = false. */
+  entryBareSupported?: boolean;
+  /** Vlastní přijatý holý Market bez nohou (jen v pohledu leadera skupiny workeru); chybí = null. */
+  entryBareEntry?: LiveBareEntryRecord | null;
+  /** Pozice leadera skupiny workeru na symbolu grafu (vstup `liveAttachIntent.position`); chybí = null. */
+  entryLeaderPosition?: LivePhonePosition | null;
+  /** Doplnění SL/TP k holému vstupu = deskový `attachBrackets`; chybí = worker attach neumí. */
+  onAttachBrackets?: (input: LiveAttachInput) => Promise<LeaderOrderManageResult>;
+  /** Brána odeslání z desku (tatáž jako telefonní lišta); null/chybí = desk nic navíc neblokuje. */
+  entryBlockedReason?: string | null;
+  /** Leader execution skupiny workeru — podklad `liveManageBasis` (BE+n, BE s poplatky); chybí = null. */
+  manageLeaderAccountId?: number | null;
+  /** Pracující příkazy jako čáry jen pro zobrazení (`live-working`); chybí = žádné. */
+  workingOrders?: LiveChartWorkingOrders | null;
+  /** Šipky plnění leadera (jen zobrazení); chybí = žádné. */
+  liveFills?: LiveChartFills | null;
+  /** Přihlášený uživatel — jen klíč knihovny šablon SL/TP na zařízení; chybí = jen vestavěná šablona. */
+  userId?: string | null;
+  // ── C7/C8 (4. 11. 2026) ──
+  /** Nabídka × u vlastní holé pozice (`liveBareCloseOffer`, jen zobrazení); chybí = žádná. */
+  bareClose?: LiveBareCloseOffer | null;
+  /** Deskový `closeBareLeader` (jen s capability C8); chybí = × holé pozice se nenabídne. */
+  onBareClose?: (seen: BareLeaderTrade) => Promise<LeaderOrderManageResult>;
+  /** Sdílený zámek jednoho příkazu desku (lišta „Zrušit čekající“, Dashboard); chybí = vlastní. */
+  manageLockRef?: React.MutableRefObject<boolean> | null;
+  /** Graf hlásí přehrávání (U3-PC pojistka) — desk pak lištu „Zrušit čekající“ zamkne. */
+  onReplayChange?: (active: boolean) => void;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -191,4 +231,17 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.entryMaxContracts ?? 1) === (right.entryMaxContracts ?? 1)
   && (left.entryFrontContract ?? null) === (right.entryFrontContract ?? null)
   && JSON.stringify(left.entryScaleIn ?? null) === JSON.stringify(right.entryScaleIn ?? null)
+  && Boolean(left.entryBareSupported) === Boolean(right.entryBareSupported)
+  && JSON.stringify(left.entryBareEntry ?? null) === JSON.stringify(right.entryBareEntry ?? null)
+  && JSON.stringify(left.entryLeaderPosition ?? null) === JSON.stringify(right.entryLeaderPosition ?? null)
+  && left.onAttachBrackets === right.onAttachBrackets
+  && (left.entryBlockedReason ?? null) === (right.entryBlockedReason ?? null)
+  && (left.manageLeaderAccountId ?? null) === (right.manageLeaderAccountId ?? null)
+  && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')
+  && (left.liveFills?.key ?? 'none') === (right.liveFills?.key ?? 'none')
+  && (left.userId ?? null) === (right.userId ?? null)
+  && JSON.stringify(left.bareClose ?? null) === JSON.stringify(right.bareClose ?? null)
+  && left.onBareClose === right.onBareClose
+  && left.manageLockRef === right.manageLockRef
+  && left.onReplayChange === right.onReplayChange
 ));

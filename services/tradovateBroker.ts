@@ -143,6 +143,8 @@ interface PendingTradovateFill {
   fill: TradovateFillEntity;
   /** Čas původního Created frame, ne pozdější hydratace/Order update. */
   receivedAt: number;
+  /** Začátek sémantického handleru původního frame; oddělí queue od hydratace. */
+  processingStartedAt: number;
 }
 interface TradovateCommandResult { commandId?: number; failureReason?: string; failureText?: string }
 
@@ -226,6 +228,15 @@ export interface TradovateBrokerConfig {
   renewalDeadlineMs?: number;
   /** Jak dlouho po command ACK čekat na autoritativní Order update ze sync streamu. */
   commandConfirmationTimeoutMs?: number;
+  /**
+   * Odesílá order write endpointy přes už autorizovaný execution WebSocket.
+   * Výchozí false: produkční/funded instalace se bez výslovného přepnutí nemění.
+   * Když socket před odesláním není plně synchronizovaný, použije se REST.
+   * Jakmile ale WS `send()` proběhne, chyba/timeout se nikdy neopakuje přes REST.
+   */
+  preferWebSocketOrderWrites?: boolean;
+  /** Deadline pouze pro odpověď na WS order write; timeout = neznámý výsledek. */
+  webSocketWriteTimeoutMs?: number;
 }
 
 /** Stav + text odpovědi Tradovate do chybové hlášky (do logu; bez tokenů). */
@@ -408,6 +419,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   /** Raw fill tvar pro account-scoped resync snapshot; execution delivery řídí množiny výše. */
   const rawFills = new Map<number, TradovateFillEntity>();
   const pendingFills = new Map<number, PendingTradovateFill[]>();
+  /**
+   * Přesná korelace z úspěšného place ACK. Tradovate umí poslat Fill dřív než
+   * Order/ExecutionReport a samotný Fill občas nenese accountId. Dřív proto
+   * čekal v pendingFills dalších ~120–220 ms na Order rámec. ACK ale už
+   * autoritativně svazuje broker order ID s requestem konkrétního účtu; hint
+   * pouze umožní vydat SKUTEČNOU Fill entitu dřív, nic nesyntetizuje.
+   */
+  const orderAccountHints = new Map<number, number>();
   const orders = new Map<string, BrokerOrder>();
   const orderWaiters = new Map<number, Set<(order: BrokerOrder) => void>>();
   let socket: WebSocketLike | null = null;
@@ -422,7 +441,21 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let syncRetry: ReturnType<typeof setTimeout> | null = null;
   let socketMessageTail: Promise<void> = Promise.resolve();
   let semanticFrameSequence = 0;
-  let pendingSemanticFrames: Array<{ id: number; receivedAt: number }> = [];
+  let pendingSemanticFrames: Array<{
+    id: number;
+    receivedAt: number;
+    processingStartedAt?: number;
+    summary: string;
+    stagedOrderVersions: Array<{ orderId: number; versionId: number; frameId: number }>;
+  }> = [];
+  let stagedOrderVersions = new Map<number, Map<number, Map<number, number>>>();
+  let activeSemanticFrameId: number | null = null;
+  type StagedOrderVersionWaiter = {
+    requiredVersionId?: number;
+    frameId: number;
+    finish: (seen: boolean) => void;
+  };
+  let stagedOrderVersionWaiters = new Map<number, Set<StagedOrderVersionWaiter>>();
   let lastSocketMessageAt = 0;
   /** Běžící REST merge do map příkazů (order graf, cílené čtení) — snímek streamu pak není konzistentní. */
   let orderGraphMerges = 0;
@@ -470,6 +503,19 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let lastReconnectReason = 'subscribe';
   let disconnectedSince = 0;
   let requestId = 2;
+  type PendingSocketWrite = {
+    endpoint: string;
+    socket: WebSocketLike;
+    startedAt: number;
+    timeout: ReturnType<typeof setTimeout>;
+    resolve: (value: unknown) => void;
+    reject: (reason: Error) => void;
+  };
+  const pendingSocketWrites = new Map<number, PendingSocketWrite>();
+  const webSocketWriteTimeoutMs = Math.max(
+    1,
+    config.webSocketWriteTimeoutMs ?? config.restRequestTimeoutMs ?? 45_000,
+  );
   let syncReady = false;
   /**
    * Plánovaná obměna socketu (cyklus access tokenu). Dokud běží, disconnect
@@ -810,6 +856,142 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     | { ok: false; error: unknown };
   type PreparedOrderVersions = Map<number, Promise<OrderVersionFetchResult>>;
 
+  const stagedOrderVersionMatches = (
+    orderId: number,
+    requiredVersionId: number | undefined,
+    frameId: number | null = activeSemanticFrameId,
+  ): boolean => {
+    if (frameId == null) return false;
+    const versions = stagedOrderVersions.get(orderId);
+    if (!versions) return false;
+    for (const [versionId, frames] of versions) {
+      if (requiredVersionId != null && versionId < requiredVersionId) continue;
+      if (frames.has(frameId) || frames.has(frameId + 1)) return true;
+    }
+    return false;
+  };
+
+  const waitForStagedOrderVersion = (
+    orderId: number,
+    requiredVersionId?: number,
+  ): Promise<boolean> => {
+    const frameId = activeSemanticFrameId;
+    if (frameId == null) return Promise.resolve(false);
+    if (stagedOrderVersionMatches(orderId, requiredVersionId, frameId)) return Promise.resolve(true);
+    // Následující frame už byl celý prohlédnutý a přesná verze v něm není.
+    // Není tedy na co čekat; rozhodne souběžně běžící REST fallback.
+    if (semanticFrameSequence > frameId) return Promise.resolve(false);
+    return new Promise(resolveWait => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let settled = false;
+      const waiter: StagedOrderVersionWaiter = {
+        requiredVersionId,
+        frameId,
+        finish: seen => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeouts(timer);
+          const waiters = stagedOrderVersionWaiters.get(orderId);
+          waiters?.delete(waiter);
+          if (waiters?.size === 0) stagedOrderVersionWaiters.delete(orderId);
+          resolveWait(seen);
+        },
+      };
+      const waiters = stagedOrderVersionWaiters.get(orderId) ?? new Set<StagedOrderVersionWaiter>();
+      waiters.add(waiter);
+      stagedOrderVersionWaiters.set(orderId, waiters);
+      // REST hydratace běží souběžně. Timeout pouze ohraničuje život čekatele;
+      // důkazem dál zůstane REST nebo přesně následující prohlédnutý frame.
+      timer = timeouts(() => waiter.finish(false), 250);
+      if (stagedOrderVersionMatches(orderId, requiredVersionId, frameId)) waiter.finish(true);
+    });
+  };
+
+  const stageOrderVersions = (
+    messages: readonly unknown[],
+    frameId: number,
+  ): Array<{ orderId: number; versionId: number; frameId: number }> => {
+    const staged: Array<{ orderId: number; versionId: number; frameId: number }> = [];
+    const seenOrderIds = new Set<number>();
+    const visitProps = (payload: unknown) => {
+      for (const raw of Array.isArray(payload) ? payload : [payload]) {
+        if (!raw || typeof raw !== 'object') continue;
+        const item = raw as { entityType?: string; entity?: Record<string, unknown> };
+        const entityType = item.entityType?.toLowerCase();
+        const entity = item.entity;
+        if (!entity) continue;
+        const orderId = Number(entityType === 'order' ? entity.id : entity.orderId);
+        if (!Number.isSafeInteger(orderId)) continue;
+        if (entityType !== 'orderversion' || seenOrderIds.has(orderId)) {
+          seenOrderIds.add(orderId);
+          continue;
+        }
+        const versionId = Number(entity.id);
+        if (!Number.isSafeInteger(versionId)) continue;
+        const versions = stagedOrderVersions.get(orderId) ?? new Map<number, Map<number, number>>();
+        const frames = versions.get(versionId) ?? new Map<number, number>();
+        frames.set(frameId, (frames.get(frameId) ?? 0) + 1);
+        versions.set(versionId, frames);
+        stagedOrderVersions.set(orderId, versions);
+        staged.push({ orderId, versionId, frameId });
+        seenOrderIds.add(orderId);
+        for (const waiter of [...(stagedOrderVersionWaiters.get(orderId) ?? [])]) {
+          if ((waiter.requiredVersionId == null || versionId >= waiter.requiredVersionId)
+            && (frameId === waiter.frameId || frameId === waiter.frameId + 1)) waiter.finish(true);
+        }
+      }
+    };
+    const visit = (message: unknown) => {
+      if (Array.isArray(message)) {
+        for (const item of message) visit(item);
+        return;
+      }
+      if (!message || typeof message !== 'object') return;
+      const value = message as { e?: string; d?: unknown };
+      if (value.e === 'props') visitProps(value.d);
+      else if (Array.isArray(value.d)) visit(value.d);
+    };
+    for (const message of messages) visit(message);
+    // Jakmile je přesně následující frame celý prohlédnutý, záporný výsledek
+    // je také autoritativní pro tuto zkratku. Pozdější frame už nikdy nesmí
+    // odblokovat starší Order před Fill/Order událostmi mezi nimi.
+    for (const [orderId, waiters] of stagedOrderVersionWaiters) {
+      for (const waiter of [...waiters]) {
+        if (frameId === waiter.frameId + 1) {
+          waiter.finish(stagedOrderVersionMatches(
+            orderId,
+            waiter.requiredVersionId,
+            waiter.frameId,
+          ));
+        }
+      }
+    }
+    return staged;
+  };
+
+  const unstageOrderVersions = (
+    staged: readonly { orderId: number; versionId: number; frameId: number }[],
+  ) => {
+    for (const { orderId, versionId, frameId } of staged) {
+      const versions = stagedOrderVersions.get(orderId);
+      const frames = versions?.get(versionId);
+      const count = frames?.get(frameId) ?? 0;
+      if (count <= 1) frames?.delete(frameId);
+      else frames?.set(frameId, count - 1);
+      if (frames?.size === 0) versions?.delete(versionId);
+      if (versions?.size === 0) stagedOrderVersions.delete(orderId);
+    }
+  };
+
+  const resetStagedOrderVersions = () => {
+    for (const waiters of stagedOrderVersionWaiters.values()) {
+      for (const waiter of [...waiters]) waiter.finish(false);
+    }
+    stagedOrderVersionWaiters = new Map();
+    stagedOrderVersions = new Map();
+    activeSemanticFrameId = null;
+  };
+
   const fetchOrderVersions = (orderId: number): Promise<OrderVersionFetchResult> => (
     request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`)
       .then(versions => ({ ok: true as const, versions: versions ?? [] }))
@@ -822,15 +1004,23 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const hydrateOrderVersion = async (
     orderId: number,
     prepared?: Promise<OrderVersionFetchResult>,
-  ) => {
+  ): Promise<'ready' | 'deferred'> => {
     const desired = confirmedVersionIds.get(orderId);
-    if (orderVersions.has(orderId) && (desired == null || orderVersions.get(orderId)!.id >= desired)) return;
-    const result = await (prepared ?? fetchOrderVersions(orderId));
+    if (orderVersions.has(orderId) && (desired == null || orderVersions.get(orderId)!.id >= desired)) return 'ready';
+    if (stagedOrderVersionMatches(orderId, desired)) return 'deferred';
+    const fetchResult = prepared ?? fetchOrderVersions(orderId);
+    const winner = await Promise.race([
+      fetchResult.then(result => ({ kind: 'fetch' as const, result })),
+      waitForStagedOrderVersion(orderId, desired).then(seen => ({ kind: 'staged' as const, seen })),
+    ]);
+    if (winner.kind === 'staged' && winner.seen) return 'deferred';
+    const result = winner.kind === 'fetch' ? winner.result : await fetchResult;
     if ('error' in result) throw result.error;
     // Aplikace do execution cache zustava v socket serial tailu. Prefetch tedy
     // prekryva pouze REST latenci; budouci frame nesmi zmenit shape drive,
     // nez controller dostane predchozi order event.
     for (const version of result.versions) rememberVersion(version);
+    return 'ready';
   };
 
   const prepareOrderVersionHydrations = (
@@ -888,6 +1078,34 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     };
     visit(messages);
     return prepared;
+  };
+
+  /** Redigovaný popis frame pro latency diagnostiku; žádný účet, cena ani tag. */
+  const semanticFrameSummary = (messages: readonly unknown[]): string => {
+    const parts: string[] = [];
+    const visitProps = (payload: unknown) => {
+      for (const raw of Array.isArray(payload) ? payload : [payload]) {
+        if (!raw || typeof raw !== 'object') continue;
+        const item = raw as { entityType?: string; entity?: Record<string, unknown> };
+        const type = item.entityType?.trim() || 'unknown';
+        const entity = item.entity;
+        const orderId = entity && (entity.orderId ?? (type.toLowerCase() === 'order' ? entity.id : undefined));
+        parts.push(`${type}${typeof orderId === 'number' ? `#${orderId}` : ''}`);
+      }
+    };
+    const visit = (message: unknown) => {
+      if (Array.isArray(message)) {
+        for (const item of message) visit(item);
+        return;
+      }
+      if (!message || typeof message !== 'object') return;
+      const value = message as { e?: string; d?: unknown; i?: unknown };
+      if (value.e === 'props') visitProps(value.d);
+      else if (Array.isArray(value.d)) visit(value.d);
+      else if (typeof value.i === 'number') parts.push(`response#${value.i}`);
+    };
+    for (const message of messages) visit(message);
+    return parts.slice(0, 12).join('+') || 'other';
   };
 
   const rememberFill = (fill: TradovateFillEntity): boolean => {
@@ -1015,7 +1233,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     });
   };
 
-  const emitMappedFill = async (fill: TradovateFillEntity, receivedAt: number): Promise<boolean> => {
+  const emitMappedFill = async (
+    fill: TradovateFillEntity,
+    receivedAt: number,
+    processingStartedAt = receivedAt,
+  ): Promise<boolean> => {
     if (deliveredFillIds.has(fill.id)) return true;
     if (renewalInProgress && !syncReady) {
       // Fill bude součástí `resync.gapFills`; zde se nikdy nesmí vydat za
@@ -1024,11 +1246,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return true;
     }
     const linked = orders.get(String(fill.orderId));
-    const accountId = fill.accountId ?? linked?.accountId ?? rawOrders.get(fill.orderId)?.accountId;
+    const accountId = fill.accountId ?? linked?.accountId ?? rawOrders.get(fill.orderId)?.accountId
+      ?? orderAccountHints.get(fill.orderId);
     if (accountId == null) {
       const waiting = pendingFills.get(fill.orderId) ?? [];
       if (!waiting.some(item => item.fill.id === fill.id)) {
-        pendingFills.set(fill.orderId, [...waiting, { fill, receivedAt }]);
+        pendingFills.set(fill.orderId, [...waiting, { fill, receivedAt, processingStartedAt }]);
       }
       return false;
     }
@@ -1052,13 +1275,20 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       price: fill.price,
       filledAt: fill.timestamp ? Date.parse(fill.timestamp) : clock(),
     };
+    const dispatchedAt = clock();
     emitBrokerState({ type: 'fill', fill: mapped, receivedAt });
-    // Měření (F2b, docs/LIVE_HOT_PATH_PLAN.md §10): broker čas fillu → přijetí rámce → emit
-    // (u REST hydratace taky). Jen diagnostika bez čísla účtu; nikdy nevyhodí.
+    // Měření (F2b, docs/LIVE_HOT_PATH_PLAN.md §10): broker čas fillu → přijetí rámce
+    // → začátek synchronního dispatch a návrat posluchačů. Staré `frame→emit`
+    // se měřilo až PO všech synchronních listenerech a neprávem připisovalo
+    // jejich controller práci mapování Fill entity. Jen diagnostika bez čísla
+    // účtu; nikdy nevyhodí.
     try {
-      const emittedAt = clock();
-      console.log(`${new Date(emittedAt).toISOString()} BROKER FILL order=${fill.orderId} qty=${fill.qty}`
-        + ` broker→frame=${Number.isFinite(mapped.filledAt) ? Math.round(receivedAt - mapped.filledAt) : '?'}ms frame→emit=${Math.round(emittedAt - receivedAt)}ms`);
+      const listenersReturnedAt = clock();
+      console.log(`${new Date(listenersReturnedAt).toISOString()} BROKER FILL order=${fill.orderId} qty=${fill.qty}`
+        + ` broker→frame=${Number.isFinite(mapped.filledAt) ? Math.round(receivedAt - mapped.filledAt) : '?'}ms`
+        + ` frame→handler=${Math.round(processingStartedAt - receivedAt)}ms`
+        + ` handler→dispatch=${Math.round(dispatchedAt - processingStartedAt)}ms`
+        + ` frame→dispatch=${Math.round(dispatchedAt - receivedAt)}ms listeners=${Math.round(listenersReturnedAt - dispatchedAt)}ms`);
     } catch {
       // Diagnostika nesmí ovlivnit doručený fill.
     }
@@ -1068,8 +1298,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const flushPendingFills = async (orderId: number) => {
     const waiting = pendingFills.get(orderId) ?? [];
     if (waiting.length === 0) return;
-    pendingFills.delete(orderId);
-    for (const item of waiting) await emitMappedFill(item.fill, item.receivedAt);
+    // Mazat po jedné až po úspěšném emitu. Když selže třeba hydratace
+    // kontraktu, pozdější Order/ExecutionReport smí bezpečně zkusit fallback;
+    // fill se neztratí a deliveredFillIds dál brání duplicitě.
+    for (const item of waiting) {
+      if (await emitMappedFill(item.fill, item.receivedAt, item.processingStartedAt)) dropPendingFill(orderId, item.fill.id);
+    }
   };
 
   const dropPendingFill = (orderId: number, fillId: number) => {
@@ -1078,6 +1312,17 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     const remaining = waiting.filter(item => item.fill.id !== fillId);
     if (remaining.length > 0) pendingFills.set(orderId, remaining);
     else pendingFills.delete(orderId);
+  };
+
+  const rememberAcceptedOrderHint = (brokerOrderId: string, accountId: number, tag: string) => {
+    const orderId = Number(brokerOrderId);
+    if (!Number.isSafeInteger(orderId) || orderId <= 0 || !Number.isSafeInteger(accountId) || accountId <= 0) return;
+    orderAccountHints.set(orderId, accountId);
+    if (tag) orderTags.set(orderId, tag);
+    // Fill mohl přijít ještě během HTTP POSTu. Rychlý flush nesmí prodloužit
+    // ani změnit broker ACK; při chybě zůstává položka pending pro původní
+    // Order/ExecutionReport fallback.
+    void flushPendingFills(orderId).catch(() => undefined);
   };
 
   /**
@@ -1379,6 +1624,137 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     socket.send(`${endpoint}\n${id}\n\n${JSON.stringify(body)}`);
   };
 
+  const rejectPendingSocketWrites = (candidate: WebSocketLike, reason: string) => {
+    for (const [id, pending] of pendingSocketWrites) {
+      if (pending.socket !== candidate) continue;
+      pendingSocketWrites.delete(id);
+      clearTimeouts(pending.timeout);
+      diagnostic(`WS WRITE UNKNOWN endpoint=${pending.endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} reason=${reason}`);
+      pending.reject(contextualError(new TradovateTransportError(
+        `Tradovate WebSocket ${pending.endpoint} ${reason}; výsledek zápisu je neznámý`,
+      ), 'websocket'));
+    }
+  };
+
+  const parseSocketResponseData = (value: unknown): unknown => {
+    if (typeof value !== 'string') return value ?? null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try { return JSON.parse(trimmed) as unknown; }
+    catch { throw new TradovateTransportError('Tradovate WebSocket returned malformed JSON'); }
+  };
+
+  /**
+   * Vyřídí pouze přímou odpověď na náš request (i >= 2). Nejde přes
+   * `socketMessageTail`: ACK není execution state a nesmí čekat za REST
+   * hydratací staršího Order frame. Props/auth/sync zůstávají serializované.
+   */
+  const settleSocketWriteResponse = (
+    value: { i?: unknown; s?: unknown; d?: unknown },
+    candidate: WebSocketLike,
+  ): boolean => {
+    if (!Number.isSafeInteger(value.i) || (value.i as number) < 2) return false;
+    const id = value.i as number;
+    const pending = pendingSocketWrites.get(id);
+    if (!pending || pending.socket !== candidate) {
+      // Cizí/pozdní request může být například penalizovaný syncrequest z
+      // existující reconnect diagnostiky. Nech ho projít původním handlerem.
+      return false;
+    }
+    pendingSocketWrites.delete(id);
+    clearTimeouts(pending.timeout);
+    diagnostic(`WS WRITE ACK endpoint=${pending.endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} status=${String(value.s ?? '-')}`);
+    const reject = (reason: Error) => pending.reject(contextualError(reason, 'websocket'));
+    try {
+      const data = parseSocketResponseData(value.d);
+      const penalty = data && typeof data === 'object' && !Array.isArray(data)
+        ? data as { 'p-ticket'?: string; 'p-time'?: number; 'p-captcha'?: boolean; 'p-message'?: string }
+        : null;
+      if (value.s === 423 || value.s === 429 || penalty?.['p-ticket']) {
+        const retryAfterMs = penalty && Number.isFinite(penalty['p-time'])
+          ? Math.max(0, penalty['p-time'] as number) * 1_000
+          : value.s === 429 ? 60 * 60 * 1_000 : null;
+        const error = new TradovateRateLimitError(
+          penalty?.['p-message'] ?? `Tradovate WebSocket ${pending.endpoint} rate limited (${String(value.s ?? 'penalty')})`,
+          retryAfterMs,
+          penalty?.['p-captcha'] === true || value.s === 429,
+          penalty?.['p-ticket'],
+          typeof value.s === 'number' ? value.s : undefined,
+        );
+        armRateLimitBreaker(error);
+        reject(error);
+        return true;
+      }
+      if (value.s !== 200) {
+        reject(new TradovateTransportError(
+          `Tradovate WebSocket ${pending.endpoint} failed${socketFailureDetail(value as { s?: unknown; d?: unknown })}`,
+          typeof value.s === 'number' ? value.s : undefined,
+        ));
+        return true;
+      }
+      pending.resolve(data);
+    } catch (reason) {
+      reject(reason instanceof Error ? reason : new Error(String(reason)));
+    }
+    return true;
+  };
+
+  const requestSocketWrite = <T>(endpoint: string, body: unknown): Promise<T | null> => {
+    assertNotRateLimited();
+    const candidate = socket;
+    if (!candidate || candidate.readyState !== 1 || !syncReady || socketState !== 'connected' || renewalInProgress) {
+      throw new TradovateTransportError(`Tradovate WebSocket ${endpoint} is not ready`);
+    }
+    const id = requestId++;
+    return new Promise<T | null>((resolveRequest, rejectRequest) => {
+      const timeout = timeouts(() => {
+        const pending = pendingSocketWrites.get(id);
+        if (!pending || pending.socket !== candidate) return;
+        pendingSocketWrites.delete(id);
+        diagnostic(`WS WRITE UNKNOWN endpoint=${endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} reason=timeout`);
+        pending.reject(contextualError(new TradovateTransportError(
+          `Tradovate WebSocket ${endpoint} request timeout (${webSocketWriteTimeoutMs} ms); výsledek zápisu je neznámý`,
+        ), 'websocket'));
+      }, webSocketWriteTimeoutMs);
+      pendingSocketWrites.set(id, {
+        endpoint,
+        socket: candidate,
+        startedAt: clock(),
+        timeout,
+        resolve: value => resolveRequest(value as T | null),
+        reject: rejectRequest,
+      });
+      try {
+        // Od tohoto okamžiku je výsledek při jakékoli chybě neznámý. Volající
+        // proto nesmí přejít na REST ani stejný příkaz automaticky zopakovat.
+        sendSocketRequest(endpoint, body, id);
+      } catch (reason) {
+        const pending = pendingSocketWrites.get(id);
+        if (!pending) return;
+        pendingSocketWrites.delete(id);
+        clearTimeouts(pending.timeout);
+        diagnostic(`WS WRITE UNKNOWN endpoint=${endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} reason=send-failed`);
+        pending.reject(contextualError(new TradovateTransportError(
+          `Tradovate WebSocket ${endpoint} send failed; výsledek zápisu je neznámý: ${reason instanceof Error ? reason.message : String(reason)}`,
+        ), 'websocket'));
+      }
+    });
+  };
+
+  const writeOrderRequest = <T>(restPath: string, socketEndpoint: string, body: unknown): Promise<T | null> => {
+    // REST fallback je dovolený jen před WS sendem. Po vstupu do
+    // requestSocketWrite už každá chyba zůstává neznámým výsledkem.
+    if (
+      config.preferWebSocketOrderWrites
+      && socket
+      && socket.readyState === 1
+      && syncReady
+      && socketState === 'connected'
+      && !renewalInProgress
+    ) return requestSocketWrite<T>(socketEndpoint, body);
+    return post<T>(restPath, body);
+  };
+
   const applyCommandReport = async (
     report: TradovateCommandReportEntity,
     receivedAt = clock(),
@@ -1422,6 +1798,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     payload: unknown,
     receivedAt: number,
     preparedOrderVersions?: PreparedOrderVersions,
+    processingStartedAt = clock(),
   ) => {
     const items = Array.isArray(payload) ? payload : [payload];
     for (const raw of items) {
@@ -1450,7 +1827,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       } else if (entityType === 'executionreport') {
         const report = item.entity as TradovateExecutionReportEntity;
         if (!rememberExecutionReport(report)) continue;
-        await hydrateOrderVersion(report.orderId, preparedOrderVersions?.get(report.orderId));
+        if (await hydrateOrderVersion(report.orderId, preparedOrderVersions?.get(report.orderId)) === 'deferred') continue;
         const order = await composeOrder(report.orderId);
         if (order) emitBrokerState({ type: 'order', order, receivedAt });
         await flushPendingFills(report.orderId);
@@ -1478,7 +1855,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           }
         }
         rememberRawOrder(orderEntity);
-        await hydrateOrderVersion(orderEntity.id, preparedOrderVersions?.get(orderEntity.id));
+        if (await hydrateOrderVersion(orderEntity.id, preparedOrderVersions?.get(orderEntity.id)) === 'deferred') continue;
         const order = await composeOrder(orderEntity.id);
         if (order) emitBrokerState({ type: 'order', order, receivedAt });
         await flushPendingFills(orderEntity.id);
@@ -1512,7 +1889,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         const changedAccount = (item.entity as { accountId?: number }).accountId ?? rawOrders.get(fill.orderId)?.accountId;
         if (changedAccount != null) notifyAccountDataChange(changedAccount, 'fill');
         else notifyAccountDataChange(null, 'resync');
-        await emitMappedFill(fill, receivedAt);
+        await emitMappedFill(fill, receivedAt, processingStartedAt);
         const updated = await composeOrder(fill.orderId);
         if (updated) emitBrokerState({ type: 'order', order: updated, receivedAt });
       }
@@ -1526,6 +1903,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     preparedOrderVersions?: PreparedOrderVersions,
   ) => {
     if (!isCurrent()) return;
+    const processingStartedAt = clock();
     if (!message || typeof message !== 'object') return;
     const value = message as { e?: string; d?: unknown; i?: number; s?: number };
     if (value.s === 423 || value.s === 429) {
@@ -1594,7 +1972,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
     }
     if (value.e === 'props') {
-      await handleProps(value.d, receivedAt, preparedOrderVersions);
+      await handleProps(value.d, receivedAt, preparedOrderVersions, processingStartedAt);
       return;
     }
     if (value.i === 0) {
@@ -1608,7 +1986,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       if (value.s !== 200) throw new TradovateTransportError(`WebSocket synchronization failed${socketFailureDetail(value)}`);
       const wasRenewal = renewalInProgress;
       const wasReconnect = !wasRenewal && hasSyncedOnce && gapKnownFillIds != null;
-      if (Array.isArray(value.d)) await handleProps(value.d, receivedAt, preparedOrderVersions);
+      if (Array.isArray(value.d)) await handleProps(value.d, receivedAt, preparedOrderVersions, processingStartedAt);
       if (!syncReady) {
         const baseline = await loadOrderGraph(undefined, true);
         if (!isCurrent()) return;
@@ -1779,9 +2157,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   const releaseSocket = (candidate: WebSocketLike) => {
     if (socket !== candidate) return false;
+    rejectPendingSocketWrites(candidate, 'connection was released');
     journalSnapshotAbort?.abort();
     journalAccounting.reset();
     journalBackfillPlan.reset(); journalRoster = [];
+    resetStagedOrderVersions();
     candidate.onopen = null;
     candidate.onmessage = null;
     candidate.onerror = null;
@@ -1796,6 +2176,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   const closeSocket = (candidate: WebSocketLike, reason: string, minimumDelayMs = 0) => {
     if (socket !== candidate) return;
+    rejectPendingSocketWrites(candidate, `connection is closing (${reason})`);
     observe('connection', { state: 'disconnected', reason }, 'transport');
     socketState = 'closing';
     journalSnapshotAbort?.abort();
@@ -1858,6 +2239,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     syncReady = false;
     socketMessageTail = Promise.resolve();
     pendingSemanticFrames = [];
+    resetStagedOrderVersions();
     connectWatchdog = timeouts(() => {
       connectWatchdog = null;
       if (socket !== candidate || candidate.readyState === 1) return;
@@ -1924,11 +2306,25 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       let messages: unknown[] = [];
       let parseError: unknown;
       let preparedOrderVersions: PreparedOrderVersions | undefined;
+      const semanticFrameId = typeof event.data === 'string' && event.data[0] === 'a'
+        ? ++semanticFrameSequence
+        : 0;
+      let stagedVersionsForFrame: Array<{ orderId: number; versionId: number; frameId: number }> = [];
       try {
         if (typeof event.data === 'string' && event.data[0] === 'a') {
           const parsed: unknown = JSON.parse(event.data.slice(1));
           if (!Array.isArray(parsed)) throw new TradovateTransportError('Invalid WebSocket frame');
-          messages = parsed;
+          // Přímé odpovědi order write requestů jsou korelované request ID a
+          // nemají execution sémantiku. Vyřiď je v transportním callbacku,
+          // aby nečekaly za pomalou hydratací staršího Order frame.
+          messages = parsed.filter(message => {
+            if (!message || typeof message !== 'object') return true;
+            return !settleSocketWriteResponse(
+              message as { i?: unknown; s?: unknown; d?: unknown },
+              candidate,
+            );
+          });
+          if (messages.length === 0) return;
           // REST requesty zacinaji pri prijeti ramce, ne az kdyz na nej prijde
           // rada v semantic tailu. Vysledky se ale do cache aplikuji a eventy
           // emituji porad striktne v poradi ramcu.
@@ -1948,6 +2344,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
               return;
             }
           }
+          stagedVersionsForFrame = stageOrderVersions(messages, semanticFrameId);
         }
       } catch (reason) { parseError = reason; }
 
@@ -1967,11 +2364,32 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           });
         return;
       }
-      const semanticFrame = { id: ++semanticFrameSequence, receivedAt };
+      const hydrationSummary = preparedOrderVersions?.size
+        ? `+hydrate#${[...preparedOrderVersions.keys()].slice(0, 6).join(',')}`
+        : '';
+      const summary = `${semanticFrameSummary(messages)}${hydrationSummary}`;
+      const blockers = summary.toLowerCase().includes('fill')
+        ? pendingSemanticFrames.map(frame => frame.summary).slice(-4)
+        : [];
+      if (blockers.length > 0) {
+        try {
+          console.log(`${new Date(receivedAt).toISOString()} BROKER FILL QUEUE frame=${summary} behind=${blockers.join('|')}`);
+        } catch {
+          // Diagnostika nesmí ovlivnit stream.
+        }
+      }
+      const semanticFrame: (typeof pendingSemanticFrames)[number] = {
+        id: semanticFrameId,
+        receivedAt,
+        summary,
+        stagedOrderVersions: stagedVersionsForFrame,
+      };
       pendingSemanticFrames.push(semanticFrame);
       socketMessageTail = socketMessageTail
         .then(() => {
           if (socket !== candidate) return;
+          activeSemanticFrameId = semanticFrame.id;
+          semanticFrame.processingStartedAt = clock();
           if (parseError) throw parseError;
           return handleSocketData(
             event.data,
@@ -1994,6 +2412,21 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           closeSocket(candidate, 'socket-message-error', minimumDelayMs);
         })
         .finally(() => {
+          unstageOrderVersions(semanticFrame.stagedOrderVersions);
+          if (activeSemanticFrameId === semanticFrame.id) activeSemanticFrameId = null;
+          const completedAt = clock();
+          const processingStartedAt = semanticFrame.processingStartedAt ?? completedAt;
+          const queueMs = Math.max(0, processingStartedAt - semanticFrame.receivedAt);
+          const handlerMs = Math.max(0, completedAt - processingStartedAt);
+          const totalMs = Math.max(0, completedAt - semanticFrame.receivedAt);
+          if (handlerMs >= 50) {
+            try {
+              console.log(`${new Date(completedAt).toISOString()} BROKER SEMANTIC SLOW frame=${semanticFrame.summary}`
+                + ` queue=${Math.round(queueMs)}ms handler=${Math.round(handlerMs)}ms total=${Math.round(totalMs)}ms`);
+            } catch {
+              // Diagnostika nesmí ovlivnit stream.
+            }
+          }
           pendingSemanticFrames = pendingSemanticFrames.filter(frame => frame.id !== semanticFrame.id);
         });
     };
@@ -2121,11 +2554,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       });
     },
     async placeOrder(requestBody: BrokerOrderRequest): Promise<BrokerOrderAck> {
-      const result = await post<TradovatePlaceOrderResult>(
+      const result = await writeOrderRequest<TradovatePlaceOrderResult>(
         '/order/placeorder',
+        'order/placeorder',
         toPlaceOrderPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
-      return fromPlaceOrderResult(result ?? {});
+      const ack = fromPlaceOrderResult(result ?? {});
+      if (ack.accepted) rememberAcceptedOrderHint(ack.brokerOrderId, requestBody.accountId, requestBody.tag);
+      return ack;
     },
     async liquidatePosition(requestBody) {
       // ContractId vybíráme z čerstvé brokerové Position entity, ne ze stale
@@ -2141,7 +2577,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         return { status: 'already-flat' as const };
       }
       try {
-        const result = await post<TradovatePlaceOrderResult>('/order/liquidateposition', {
+        const result = await writeOrderRequest<TradovatePlaceOrderResult>('/order/liquidateposition', 'order/liquidateposition', {
           accountId: requestBody.accountId,
           contractId: position.contractId,
           admin: false,
@@ -2165,39 +2601,59 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
     },
     async placeOco(requestBody: BrokerOcoRequest) {
-      const result = await post<TradovatePlaceOcoResult>(
+      const result = await writeOrderRequest<TradovatePlaceOcoResult>(
         '/order/placeoco',
+        'order/placeoco',
         toPlaceOcoPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
-      return fromPlaceOcoResult(result ?? {});
+      const ack = fromPlaceOcoResult(result ?? {});
+      if (ack.accepted) {
+        rememberAcceptedOrderHint(ack.firstBrokerOrderId, requestBody.accountId, requestBody.tag);
+        rememberAcceptedOrderHint(ack.secondBrokerOrderId, requestBody.accountId, `${requestBody.tag}b`);
+      }
+      return ack;
     },
     async placeOso(requestBody: BrokerOsoRequest) {
-      const result = await post<TradovatePlaceOsoResult>(
+      const result = await writeOrderRequest<TradovatePlaceOsoResult>(
         '/order/placeoso',
+        'order/placeoso',
         toPlaceOsoPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
-      return fromPlaceOsoResult(result ?? {});
+      const ack = fromPlaceOsoResult(result ?? {});
+      if (ack.accepted) {
+        rememberAcceptedOrderHint(ack.entryBrokerOrderId, requestBody.accountId, requestBody.tag);
+        rememberAcceptedOrderHint(ack.firstBrokerOrderId, requestBody.accountId, `${requestBody.tag}s`);
+        rememberAcceptedOrderHint(ack.secondBrokerOrderId, requestBody.accountId, `${requestBody.tag}t`);
+      }
+      return ack;
     },
     async cancelOrder(_accountId, brokerOrderId) {
       const orderId = numberId(brokerOrderId);
-      const result = await post<TradovateCommandResult>('/order/cancelorder', {
+      const result = await writeOrderRequest<TradovateCommandResult>('/order/cancelorder', 'order/cancelorder', {
         orderId,
         isAutomated: true,
       });
       const commandId = assertCommandAccepted(result, 'cancelOrder');
-      const confirmed = await waitForOrder(orderId, order =>
-        order.status === 'canceled' || order.status === 'filled' || order.status === 'rejected', commandId);
+      // Přesný Order(Canceled) téhož id je autoritativní důkaz, že vstup už
+      // nepracuje; kauzalita není pro risk-redukční výsledek potřeba. Samotné
+      // `Filled` ale nestačí: u partial fillu ho Tradovate krátce skládá před
+      // Completed reportem, který teprve mapuje zrušený zbytek na `canceled`.
+      // Fill race / odmítnutí proto zůstává na původním REST fallbacku.
+      const confirmed = await waitForOrder(orderId, order => order.status === 'canceled', commandId);
       if (syncReady && !confirmed) {
         const rejection = await commandRejection(commandId);
         if (rejection) throw new TradovateTransportError(`cancelOrder command ${commandId} rejected: ${rejection}`);
         throw new TradovateTransportError(`cancelOrder command ${commandId} was not confirmed by the order stream`);
       }
+      // Predikát výše = terminální stav přesně rušeného orderu po přijetí
+      // tohoto commandu. Controller z něj ještě rozliší canceled vs fill.
+      return confirmed ? { confirmedBy: 'stream-terminal' as const, order: { ...confirmed } } : undefined;
     },
     async modifyOrder(_accountId, brokerOrderId, changes) {
       const orderId = numberId(brokerOrderId);
       // INV-TRAD-07: před POSTem, takže výsledek je jistě „nic neodesláno“.
       assertWritableOrderType(changes.orderType);
-      const result = await post<TradovateCommandResult>('/order/modifyorder', {
+      const result = await writeOrderRequest<TradovateCommandResult>('/order/modifyorder', 'order/modifyorder', {
         orderId,
         orderQty: changes.quantity,
         orderType: changes.orderType,
@@ -2508,7 +2964,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       };
     },
     renewSocket() {
-      if (!socket || !syncReady || renewalInProgress || listeners.size === 0) return false;
+      if (!socket || !syncReady || renewalInProgress || listeners.size === 0 || pendingSocketWrites.size > 0) return false;
       renewalKnownFillIds = new Set([...baselineFillIds, ...deliveredFillIds]);
       renewalInProgress = true;
       renewalHeldEvents = [];

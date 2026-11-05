@@ -109,6 +109,39 @@ export function tightenBlockReason(
   return null;
 }
 
+const ibkrContractOfSource = (source: string | null): string | null => {
+  const match = /^IBKR:(MNQ)([HMUZ])20(\d{2})$/.exec((source ?? '').trim().toUpperCase());
+  return match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
+};
+
+/** Nejstarší cena, ze které se ještě počítá živé P&L na lince vstupu. */
+export const LIVE_DISPLAY_PNL_MAX_AGE_MS = 5_000;
+
+/**
+ * Živé P&L na lince vstupu (Filip 5. 11.): cena z IBKR téhož kontraktu proti vstupu účtů,
+ * minus poplatky jako u brokera. **Jen zobrazení (INV-UI-04)**: nikdy risk, limity, day lock
+ * ani příkazy. null = cena chybí, je stará nebo jiný kontrakt → štítek ukáže číslo brokera.
+ */
+export function liveDisplayOpenPnl(
+  summary: Pick<LiveChartPositionSummary, 'kind' | 'side' | 'rows'>,
+  positionSymbol: string | null,
+  quote: { source: string | null; price: number | null; at: number | null; stale: boolean },
+  pointValue: number,
+  now: number,
+): number | null {
+  if (summary.kind !== 'position' || summary.rows.length === 0) return null;
+  const contract = ibkrContractOfSource(quote.source);
+  if (!contract || contract !== positionSymbol || quote.stale || quote.price == null || !Number.isFinite(quote.price)
+    || quote.at == null || now - quote.at > LIVE_DISPLAY_PNL_MAX_AGE_MS || quote.at > now + 2_000) return null;
+  const direction = summary.side === 'long' ? 1 : -1;
+  let total = 0;
+  for (const row of summary.rows) {
+    if (row.entry == null || !Number.isFinite(row.entry) || !(row.quantity > 0)) return null;
+    total += (quote.price - row.entry) * direction * row.quantity * pointValue - (row.fees ?? 0);
+  }
+  return total;
+}
+
 /** Nejstarší kotace IBKR, kterou smí pojistka utažení SL použít místo ceny z P&L brokera. */
 export const TIGHTEN_IBKR_MARK_MAX_AGE_MS = 3_000;
 
@@ -125,9 +158,7 @@ export function withIbkrTightenMark<T extends { mark: number | null }>(
   now: number,
 ): T {
   if (summary.mark != null && Number.isFinite(summary.mark)) return summary;
-  const source = (quote.source ?? '').trim().toUpperCase();
-  const match = /^IBKR:(MNQ)([HMUZ])20(\d{2})$/.exec(source);
-  const contract = match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
+  const contract = ibkrContractOfSource(quote.source);
   if (!contract || contract !== positionSymbol || quote.stale || quote.price == null || !Number.isFinite(quote.price)
     || quote.at == null || now - quote.at > TIGHTEN_IBKR_MARK_MAX_AGE_MS || quote.at > now + 2_000) return summary;
   return { ...summary, mark: quote.price };

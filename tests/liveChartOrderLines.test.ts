@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
-import type { LiveChartPositionSummary } from '../lib/liveChartPosition';
+import { liveDisplayOpenPnl, type LiveChartPositionSummary } from '../lib/liveChartPosition';
 
 const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositionSummary => ({
   kind: 'position', side: 'short', quantity: 4, entry: 28975.5, entryType: null, openPnl: 12, mark: 28960,
@@ -9,6 +9,43 @@ const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositi
   leader: { accountId: 1, quantity: 1, entry: 28975.5 }, rows: [], ...patch,
 });
 const controls = { manageable: true, entryAvg: 28975.5, pointValue: 2 };
+
+describe('živé P&L na lince vstupu (jen zobrazení)', () => {
+  const NOW = 1_000_000;
+  const row = (patch = {}) => ({ quantity: 2, entry: 100, fees: 3, ...patch });
+  const open = (rows: unknown[], side: 'long' | 'short' = 'long') => summary({ side, rows: rows as never });
+  const quote = (patch = {}) => ({ source: 'IBKR:MNQZ2026', price: 110, at: NOW - 100, stale: false, ...patch });
+  it('počítá z ceny IBKR téhož kontraktu po poplatcích, long i short, více účtů', () => {
+    expect(liveDisplayOpenPnl(open([row()]), 'MNQZ6', quote(), 2, NOW)).toBe(37);
+    expect(liveDisplayOpenPnl(open([row()], 'short'), 'MNQZ6', quote(), 2, NOW)).toBe(-43);
+    expect(liveDisplayOpenPnl(open([row(), row({ quantity: 1, entry: 105, fees: 1 })]), 'MNQZ6', quote(), 2, NOW)).toBe(46);
+  });
+  it('bez důvěryhodné ceny null = číslo brokera', () => {
+    const position = open([row()]);
+    expect(liveDisplayOpenPnl(position, 'MNQH7', quote(), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ source: 'TV:MNQ1!' }), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ stale: true }), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ price: null }), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ at: NOW - 5_001 }), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ at: NOW - 5_000 }), 2, NOW)).toBe(37);
+    expect(liveDisplayOpenPnl(open([row({ entry: null })]), 'MNQZ6', quote(), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(summary({ kind: 'pending', rows: [row()] as never }), 'MNQZ6', quote(), 2, NOW)).toBeNull();
+  });
+  it('štítek a barva berou živé číslo, bez něj číslo brokera; rozhodovací pole se nemění', () => {
+    const [live] = livePositionChartLines(summary({ openPnl: 12 }), { ...controls, displayOpenPnl: -30 });
+    expect(live.label).toContain('−$30');
+    expect(live.color).not.toBe('#059669');
+    const [broker] = livePositionChartLines(summary({ openPnl: 12 }), { ...controls, displayOpenPnl: null });
+    expect(broker.label).toContain('12');
+    expect(broker.color).toBe('#059669');
+  });
+  it('nepoužije se pro risk: štítek je jediné místo mimo panel', () => {
+    for (const path of ['lib/liveChartOrderLines.ts', 'lib/liveHotkeys.ts', 'lib/liveManagePrices.ts']) {
+      const source = readFileSync(path, 'utf8');
+      expect(source.match(/displayOpenPnl/g)?.length ?? 0).toBeLessThanOrEqual(path === 'lib/liveChartOrderLines.ts' ? 3 : 0);
+    }
+  });
+});
 
 describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
   it('pozice: vstup se štítkem a BE, SL/TP táhnutelné jen u spravovatelného obchodu', () => {
@@ -59,25 +96,35 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     const overlay = readFileSync('components/BacktestOrderLinesOverlay.tsx', 'utf8');
     expect(overlay).toMatch(/confirmed\(cancelConfirmKey\(line\), line\.confirmCancel\)/);
     // PC: vstup se během „Opravdu?“ vyplnil (× teď zavírá pozici jedním klikem) — klik nic neodešle.
-    expect(overlay).toMatch(/confirming\.key !== key && confirming\.until > now && key\.includes\(':cancel:'\) && confirming\.key\.includes\(':cancel:'\) && sameLine\(confirming\.key\)/);
+    // (C8, 4. 11. 2026: logika v čisté `orderLineConfirmStep`, chování hlídá tests/liveC7C8Ui.test.ts.)
+    // Čára holé pozice `…:entry:bare:<id>` je pro tuto ochranu tatáž čára jako `…:entry` (C8 kolo 1);
+    // změna čar mezi kliky nechá neaktivní značku `stale`, nikdy jen null (kolo 2 — složení v (f2)).
+    expect(overlay).toMatch(/sameCancelLine\(live\.key, key\)\s*\? live\.stale === true \|\| live\.key !== key\s*: live\.stale === true && \(live\.key === key \|\| sameLiveCancelOwner\(live\.key, key\)\)/);
+    expect(overlay).toMatch(/const next = orderLineConfirmSync\(current, lines\);/);
     // Klíč potvrzení nese akci a cenu: potvrzené „zrušit příkaz“ nikdy nezavře pozici (ani jiný obchod).
     expect(overlay).toMatch(/cancelConfirmKey = \(line: BacktestChartOrderLine\) => `\$\{line\.id\}:cancel:\$\{line\.cancelAction \?\? line\.ownerType\}:\$\{line\.price\}`/);
-    expect(overlay).toMatch(/now - \(confirming\.until - CONFIRM_MS\) >= 350/);
+    // Dvojklik se nepočítá: 2. klik ≥ 350 ms od PŘEDCHOZÍHO kliku (sdílený `liveManageConfirmStep`).
+    expect(overlay).toMatch(/const step = liveManageConfirmStep\(live\?\.stale \? null : live, key, now\);/);
     const workspace = readFileSync('components/AlphaTradeChartWorkspace.tsx', 'utf8');
     expect(workspace).toMatch(/target\.root !== liveOrderEntry\?\.executionInstrument/);
     const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
     // „Co jsem viděl“ ze začátku tahu; souběžná změna = nic se neodešle.
     expect(screen).toMatch(/startLine && startLine\.price !== current/);
-    expect(screen).toMatch(/Čeká se na výsledek předchozí změny/);
+    // Jeden příkaz naráz: od U10 (3. 11.) zámek drží sdílený runner správy (čáry, zkratky i panel).
+    expect(screen).toMatch(/const runLiveManage = manageRunner\.run;/);
+    expect(readFileSync('hooks/useLiveManageRunner.ts', 'utf8')).toMatch(/Čeká se na výsledek předchozí změny/);
   });
 });
 
 describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)', () => {
   const ticket = readFileSync('components/LiveOrderTicket.tsx', 'utf8');
   it('jedním kliknutím, bez náhledu; brány dál ověří worker; jedno odeslání naráz s novým id', () => {
-    expect(ticket).toMatch(/onClick=\{\(\) => void sendDirect\(\)\}/);
+    // Klik pustí fokus tlačítka (Enter po zkratce nesmí odeslat vyměněný návrh — oponentura vlny B).
+    expect(ticket).toMatch(/onClick=\{event => \{ event\.currentTarget\.blur\(\); void sendDirect\(\); \}\}/);
     expect(ticket).toMatch(/directBusyRef\.current\) return;/);
-    expect(ticket).toMatch(/onPlaceEntry\(previewDraft, `entry:\$\{crypto\.randomUUID\(\)/);
+    // Vstup jde přes sdílený zámek jednoho příkazu (`placeEntryLocked` = `runWithCommandLock` + onPlaceEntry).
+    expect(ticket).toMatch(/const operationId = `entry:\$\{crypto\.randomUUID\(\)/);
+    expect(ticket).toMatch(/placeEntryLocked\(previewDraft, operationId\)/);
     // Blokace náhledu (Market, SL/TP, chyby panelu, zastaralá cena) blokuje i přímé odeslání.
     expect(ticket).toMatch(/previewBlockedReason \?\? \(!previewDraft/);
   });

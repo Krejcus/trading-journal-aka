@@ -13,6 +13,7 @@ import {
   type BrokerOsoRequest,
   type BrokerPosition,
   type BrokerOrderStatusLookup,
+  type BrokerCancelConfirmation,
   type BrokerModifyConfirmation,
   type BrokerPort,
   type BrokerStreamOrderSnapshot,
@@ -323,6 +324,9 @@ export interface CopierControllerStatus {
     fromPrice: number | null;
     toPrice: number | null;
     reason?: string;
+    /** Display-only korelace prvního brokerového účinku ještě před durable výsledkem. */
+    displayAt?: number;
+    displayStage?: 'order' | 'fill' | 'position';
     /** C7: `cancel-entry` skončil vyplněním vstupu (pozice je otevřená) — push nesmí tvrdit „vstup dál čeká“. */
     resultCode?: CopierManualOrderActionRecord['resultCode'];
   }>;
@@ -349,7 +353,7 @@ export interface CopierControllerStatus {
     open?: boolean;
     price?: number;
     referencePrice?: number;
-    timing?: { queuedAt?: number; startedAt?: number; dispatchAt?: number; ackAt?: number;
+    timing?: { queuedAt?: number; startedAt?: number; dispatchAt?: number; ackAt?: number; committedAt?: number;
       orderAt?: number; filledOrderAt?: number; fillAt?: number; fillAvg?: number; fillQty?: number; positionAt?: number };
     reason?: string;
     entryBrokerOrderId?: string;
@@ -3587,11 +3591,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Vstupy leadera z vlastního ACK → operationId; po restartu z durable záznamů. */
   const ownManualEntryOrderIds = new Map<string, string>();
   /**
-   * Jen měření (2. 11. 2026): kdy dorazil první Order event vstupu, vyplnění
-   * příkazu, první Fill (a průměr) a pozice leadera — podle operationId,
-   * nejvýš 20 posledních. Do rozhodování nevstupuje.
+   * Jen měření (2.–4. 11. 2026): kdy skončil durable commit výsledku a kdy
+   * dorazil první Order event vstupu, vyplnění příkazu, první Fill (a průměr)
+   * a pozice leadera — podle operationId, nejvýš 20 posledních. Do rozhodování
+   * nevstupuje; `committedAt` se nastaví až po úspěšném fsync/commit návratu.
    */
-  const manualEntryStreamTimes = new Map<string, { orderAt?: number; filledOrderAt?: number; fillAt?: number; fillAvg?: number; fillQty?: number; positionAt?: number }>();
+  const manualEntryStreamTimes = new Map<string, { committedAt?: number; orderAt?: number; filledOrderAt?: number; fillAt?: number; fillAvg?: number; fillQty?: number; positionAt?: number }>();
   const manualEntryStreamTime = (operationId: string) => {
     let entry = manualEntryStreamTimes.get(operationId);
     if (!entry) {
@@ -5089,6 +5094,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...current!, status, ...ids, ...(resultReason ? { reason: resultReason } : {}), updatedAt: clock(),
         timing: { ...(current!.timing ?? {}), dispatchAt, ackAt },
       }));
+      // Transientní měřicí bod až PO skutečném durable návratu. Nepřidává druhý
+      // zápis na disk a nikdy nevstupuje do admission, risku ani výsledku příkazu.
+      manualEntryStreamTime(operationId).committedAt ??= clock();
     } catch (error) {
       // Bez durable výsledku dál nic nesmí běžet; uživatel ale dostane pravdu od brokera.
       failClosed(new Error(`Ruční vstup: výsledek se nepodařilo uložit (${errorOf(error).message})`), { autoClose: false });
@@ -5105,6 +5113,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     manualEntryAudit(operationId, status === 'acknowledged' ? 'recovered' : status === 'rejected' ? 'rejected' : status === 'abandoned' ? 'abandoned' : 'unknown',
       status === 'acknowledged' ? (bare ? `ruční Market BEZ SL/TP přijat: vstup ${entryId} [POST ${ackAt - dispatchAt} ms]` : `ruční OSO přijato: vstup ${entryId}, SL ${stopId}, TP ${targetId} [POST ${ackAt - dispatchAt} ms]`) : reason!, entryId);
+    // ACK už je autoritativní brokerová odpověď a výše jsme z něj sestavili
+    // zobrazovací liveOrders i durable manualEntry. Probuď LIVE hned teď:
+    // čekat na následný order event stejného OSO přidávalo stovky ms, přestože
+    // už nebylo na co čekat. Signál je pouze display-only; exekuci ani risk
+    // brány neovlivňuje a relay si rychlé duplicity sloučí.
+    notifyLiveChange();
     return {
       type: 'leader-entry-placed', operationId, status, checkedAt: clock(), blockers: [], ...ids, ...(resultReason ? { reason: resultReason } : {}),
     };
@@ -5114,6 +5128,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const MANUAL_ORDER_ACTION_KEEP = 50;
   const UNRESOLVED_MANUAL_ORDER_ACTION = new Set(['sending', 'unknown']);
   const manualOrderActionRecords = (): readonly CopierManualOrderActionRecord[] => currentRuntime().state.safety.manualOrderActions ?? [];
+  /**
+   * Zobrazovací milník změny u brokera může předběhnout durable commit výsledku.
+   * Drží se jen v paměti a nikdy nevstupuje do execution/risk rozhodnutí.
+   */
+  const manualOrderDisplay = new Map<string, { at: number; stage: 'order' | 'fill' | 'position' }>();
+  const markManualOrderDisplay = (operationId: string, stage: 'order' | 'fill' | 'position') => {
+    if (manualOrderDisplay.has(operationId)) return;
+    manualOrderDisplay.set(operationId, { at: clock(), stage });
+    while (manualOrderDisplay.size > 20) manualOrderDisplay.delete(manualOrderDisplay.keys().next().value!);
+    notifyLiveChange();
+  };
   const unresolvedManualOrderAction = (entryOperationId?: string) => manualOrderActionRecords().find(record => (
     UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status) && (entryOperationId == null || record.entryOperationId === entryOperationId)
   )) ?? null;
@@ -5401,6 +5426,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     timing.streamFlatMs = streamFlat() ? clock() - streamWaitStartedAt : undefined;
+    // První skutečný flat z broker streamu je okamžik, kdy graf smí zmizet.
+    // Durable výsledek a autoritativní REST ověření dál doběhnou beze změny,
+    // ale diagnostika už může korelovat klik s tímto prvním pixelem.
+    if (timing.streamFlatMs != null) markManualOrderDisplay(command.operationId, 'position');
     const verifyStartedAt = clock();
     let state = await readLeaderSymbolState(leader, symbol);
     // Přechod „nohy zrušené, Market ještě nevyplněný“ (+0,3 s) nebo REST snímek starší
@@ -6601,11 +6630,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // Posun SL/TP (oponentura 30. 10.): synchronní snímek dohnaného streamu adaptéru
     // místo REST order grafu celého dne. Nejistota = null → dnešní REST čtení.
     // Zavření obchodu (2. 11. 2026): snímek jen pro kontrolu tvaru před zápisem; výsledek
-    // dál výhradně z REST ověření po zavření (INV-MODE-02). Zrušení vstupu zůstává na REST.
+    // dál výhradně z REST ověření po zavření (INV-MODE-02). Risk-redukující cancel používá
+    // stejný dohnaný snímek; terminální výsledek dál musí potvrdit stream adaptéru nebo REST.
     const snapshotRouteEpoch = leaderRouteEpoch(leader);
     let snapshot: BrokerStreamOrderSnapshot | null = null;
     // Bez route epochy (broker bez routeru) by kontrola před zápisem nic nehlídala → REST.
-    if ((command.action === 'move-stop' || command.action === 'move-target' || command.action === 'close-position') && snapshotRouteEpoch !== undefined) {
+    if ((command.action === 'move-stop' || command.action === 'move-target'
+      || command.action === 'close-position' || command.action === 'cancel-entry')
+      && snapshotRouteEpoch !== undefined) {
       try {
         snapshot = broker.streamOrderSnapshot?.(leader) ?? null;
       } catch {
@@ -6852,17 +6884,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         });
       };
       /**
-       * C7: výsledek `cancel-entry` jen stavem vstupu u brokera (ohraničené autoritativní čtení) — po
-       * „úspěchu“ adaptéru (čeká na canceled|filled|rejected) i po definitivním odmítnutí brokerem
-       * („TooLateToCancel“ = vstup se vyplnil, oponentura diffu P2). Fill = `rejected` s kódem, nikdy
-       * „zrušeno“; ochrana se ověří PŘED uložením konečného výsledku. Nečitelné = `unknown` + dořešení čtením.
+       * C7: společná klasifikace autoritativního terminálního stavu vstupu. Zdroj může být přesný
+       * terminální Order z dohnaného streamu adaptéru po tomto cancel commandu, nebo REST fallback.
+       * Fill = `rejected` s kódem, nikdy „zrušeno“; ochrana se ověří PŘED uložením konečného výsledku.
        */
-      const settleCancelEntryByState = async (brokerRejection: string | null): Promise<LeaderOrderManageResult> => {
-        timing.verify = 'rest';
-        const verifyStartedAt = clock();
-        const lookup = await boundedManagedOrderLookup(leader, targetOrderId);
-        timing.verifyMs = clock() - verifyStartedAt;
-        const order = lookup?.completeness === 'authoritative' ? lookup.order : null;
+      const settleCancelEntryFromOrder = async (
+        order: BrokerOrder | null,
+        brokerRejection: string | null,
+      ): Promise<LeaderOrderManageResult> => {
         const outcome = cancelEntryOutcome(order, { settled: false, brokerRejection });
         if (!outcome) {
           const result = await finish('unknown', brokerRejection
@@ -6894,6 +6923,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
         return finish('rejected', reason, outcome.code);
       };
+      /**
+       * REST fallback po chybějícím/neplatném streamovém potvrzení nebo po definitivním odmítnutí
+       * commandu. Neautoritativní/neudržitelný výsledek zůstává `unknown` a dořeší se čtením.
+       */
+      const settleCancelEntryByState = async (brokerRejection: string | null): Promise<LeaderOrderManageResult> => {
+        timing.verify = 'rest';
+        const verifyStartedAt = clock();
+        const lookup = await boundedManagedOrderLookup(leader, targetOrderId);
+        timing.verifyMs = clock() - verifyStartedAt;
+        const order = lookup?.completeness === 'authoritative' ? lookup.order : null;
+        return settleCancelEntryFromOrder(order, brokerRejection);
+      };
       // Synchronní kontrola těsně před zápisem (P7 + oponentura 2a b1): fence i celá brána dosahu.
       if (clock() >= deadlineAt) return finish('not-sent', 'Platnost příkazu vypršela — nic se neodeslalo.');
       // Zrušení vstupu je risk-redukční: brzda (nová generation) ho neruší.
@@ -6918,7 +6959,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (command.action !== 'cancel-entry' && modifyOrderType == null) {
         return finish('not-sent', 'Příkaz má typ, který appka nezná — nic se neodeslalo.');
       }
-      let write: Promise<void | BrokerModifyConfirmation>;
+      let write: Promise<void | BrokerModifyConfirmation | BrokerCancelConfirmation>;
       timing.writeStartedAt = clock();
       try {
         write = command.action === 'cancel-entry'
@@ -6938,7 +6979,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const outcome = await Promise.race([
-          write.then(result => ({ confirmation: (result as BrokerModifyConfirmation | undefined) ?? null })),
+          write.then(result => ({ confirmation: (result as BrokerModifyConfirmation | BrokerCancelConfirmation | undefined) ?? null })),
           new Promise<'timeout'>(resolve => {
             timer = setTimeout(() => resolve('timeout'), command.action === 'cancel-entry' ? MANUAL_ENTRY_POST_TIMEOUT_MS : MANUAL_ORDER_MANAGE_TIMEOUT_MS);
           }),
@@ -6967,8 +7008,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }).catch(error => failClosed(errorOf(error), { autoClose: false }));
           return result;
         }
-        // C7: `cancelOrder` adaptéru skončí úspěchem i u vstupu, který se mezitím vyplnil — „zrušeno“ jen stavem.
-        if (command.action === 'cancel-entry') return settleCancelEntryByState(null);
+        // C7: „zrušeno“ jen terminálním stavem konkrétního vstupu. Dohnaný
+        // stream adaptéru je tentýž autoritativní důkaz jako následný lookup;
+        // bez něj zůstává bezpečný REST fallback.
+        if (command.action === 'cancel-entry') {
+          const confirmed = outcome.confirmation?.confirmedBy === 'stream-terminal'
+            ? outcome.confirmation.order
+            : null;
+          if (confirmed && confirmed.brokerOrderId === targetOrderId && confirmed.accountId === leader
+            && (confirmed.status === 'canceled' || confirmed.status === 'filled' || confirmed.status === 'rejected')) {
+            timing.verify = 'adapter';
+            return settleCancelEntryFromOrder(confirmed, null);
+          }
+          return settleCancelEntryByState(null);
+        }
         // Nejrychlejší důkaz: adaptér viděl Replaced přesně tohoto commandu a příkaz
         // leadera otevřený v odeslaném tvaru. Jen výsledek akce — do cache controlleru
         // ani read modelu se nezapisuje, zrcadlení followerům jde dál přes eventTail.
@@ -22864,6 +22917,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return out;
         })(),
         manualOrderActions: manualOrderActionRecords().slice(-10).map(record => ({
+          ...(() => {
+            const display = manualOrderDisplay.get(record.operationId);
+            return display ? { displayAt: display.at, displayStage: display.stage } : {};
+          })(),
           operationId: record.operationId, entryOperationId: record.entryOperationId, action: record.action,
           status: record.status, createdAt: record.createdAt, updatedAt: record.updatedAt,
           fromPrice: record.fromPrice, toPrice: record.toPrice, ...(record.reason ? { reason: record.reason } : {}),

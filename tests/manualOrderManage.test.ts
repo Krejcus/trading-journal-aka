@@ -578,6 +578,16 @@ describe('zrychlení posunu (30. 10.): snímek streamu a potvrzení adaptéru', 
       return accountId === LEADER && order ? { confirmedBy: 'stream-replaced' as const, order: tweak({ ...order }) } : undefined;
     }) as MockBroker['modifyOrder'];
   };
+  const confirmingCancel = (broker: MockBroker, tweak: (order: BrokerOrder) => BrokerOrder = order => order) => {
+    const real = broker.cancelOrder.bind(broker);
+    broker.cancelOrder = (async (accountId, brokerOrderId) => {
+      await real(accountId, brokerOrderId);
+      const order = broker.orders().find(item => item.brokerOrderId === brokerOrderId);
+      return accountId === LEADER && order
+        ? { confirmedBy: 'stream-terminal' as const, order: tweak({ ...order }) }
+        : undefined;
+    }) as MockBroker['cancelOrder'];
+  };
   const auditOf = (ctx: Ctx, prefix: string) => ctx.audits.filter(entry => entry.startsWith(prefix)).at(-1) ?? '';
 
   it.each([['move-stop', SL, 29_470], ['move-target', TP, 29_580]] as const)('%s: předčtení ze snímku (bez REST order grafu), potvrzení adaptéru bez findOrderById', async (action, from, to) => {
@@ -648,12 +658,24 @@ describe('zrychlení posunu (30. 10.): snímek streamu a potvrzení adaptéru', 
     expect(reads.fresh).toBe(1);
   });
 
-  it('zrušení vstupu jde přes REST; zavření bere pre-read ze snímku, ověření flat dál REST (2. 11.)', async () => {
+  it('zrušení vstupu: snímek + terminální potvrzení adaptéru bez REST; zavření dál ověří flat přes REST', async () => {
     const reads = { fresh: 0 };
-    const ctx = await setup({ patchBroker: broker => { withSnapshot(broker); countFreshReads(broker, reads); } });
+    let lookups = 0;
+    const ctx = await setup({ patchBroker: broker => {
+      withSnapshot(broker);
+      countFreshReads(broker, reads);
+      confirmingCancel(broker);
+      const real = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId, brokerOrderId) => {
+        if (accountId === LEADER) lookups += 1;
+        return real(accountId, brokerOrderId);
+      };
+    } });
     reads.fresh = 0;
     expect((await manage(ctx, 'cancel-entry', ENTRY, undefined, 'manage:fast0004')).status).toBe('acknowledged');
-    expect(reads.fresh).toBe(1);
+    expect(reads.fresh).toBe(0);
+    expect(lookups).toBe(0);
+    expect(auditOf(ctx, 'modified:cancel-entry')).toMatch(/čtení stream .*ověření adapter/);
 
     const closeReads = { fresh: 0 };
     const close = await setup({ nativeLiquidate: true, patchBroker: broker => { withSnapshot(broker); countFreshReads(broker, closeReads); } });
@@ -664,6 +686,53 @@ describe('zrychlení posunu (30. 10.): snímek streamu a potvrzení adaptéru', 
     expect(closeReads.fresh).toBeGreaterThanOrEqual(1);
     expect(auditOf(close, 'modified:close-position')).toMatch(/čtení stream .*zápis \d+ ms.*ověření rest \d+ ms/);
     expect(auditOf(close, 'modified:close-position')).toMatch(/ověřeno čtením u brokera/);
+  });
+
+  it.each([
+    ['chybějící potvrzení', null, 'missing'],
+    ['jiný účet', (order: BrokerOrder) => ({ ...order, accountId: FOLLOWER }), 'account'],
+    ['jiný příkaz', (order: BrokerOrder) => ({ ...order, brokerOrderId: 'other-order' }), 'order'],
+    ['neterminální stav', (order: BrokerOrder) => ({ ...order, status: 'working' as const }), 'status'],
+  ] as const)('zrušení: %s → bezpečný REST fallback výsledku', async (_name, tweak, id) => {
+    let lookups = 0;
+    const reads = { fresh: 0 };
+    const ctx = await setup({ patchBroker: broker => {
+      withSnapshot(broker);
+      countFreshReads(broker, reads);
+      if (tweak) confirmingCancel(broker, tweak);
+      const real = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId, brokerOrderId) => {
+        if (accountId === LEADER) lookups += 1;
+        return real(accountId, brokerOrderId);
+      };
+    } });
+    reads.fresh = 0;
+    expect((await manage(ctx, 'cancel-entry', ENTRY, undefined, `manage:cancel-fallback-${id}`)).status).toBe('acknowledged');
+    // Předčtení bylo ze synchronizovaného streamu; jen výsledek se ověřil přes přesný REST lookup.
+    expect(reads.fresh).toBe(0);
+    expect(lookups).toBeGreaterThanOrEqual(1);
+    expect(auditOf(ctx, 'modified:cancel-entry')).toMatch(/čtení stream .*ověření rest/);
+  });
+
+  it('zrušení bez route epochy → předčtení i výsledek přes REST', async () => {
+    const reads = { fresh: 0 };
+    let lookups = 0;
+    const ctx = await setup({ patchBroker: broker => {
+      broker.streamOrderSnapshot = streamSnapshot(broker);
+      countFreshReads(broker, reads);
+      confirmingCancel(broker);
+      const real = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId, brokerOrderId) => {
+        if (accountId === LEADER) lookups += 1;
+        return real(accountId, brokerOrderId);
+      };
+    } });
+    reads.fresh = 0;
+    expect((await manage(ctx, 'cancel-entry', ENTRY, undefined, 'manage:cancel-no-epoch')).status).toBe('acknowledged');
+    expect(reads.fresh).toBe(1);
+    // Terminální potvrzení adaptéru je stále dostatečný důkaz výsledku; route fence chrání jen pre-read.
+    expect(lookups).toBe(0);
+    expect(auditOf(ctx, 'modified:cancel-entry')).toMatch(/čtení rest .*ověření adapter/);
   });
 
   it.each([

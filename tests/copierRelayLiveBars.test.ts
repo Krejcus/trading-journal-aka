@@ -12,6 +12,7 @@ vi.mock('../server/tradovateOAuthStore', () => ({
 vi.mock('../server/tradovateCopierDevice', () => ({ authorizeTradovateCopierDevice: mocks.authorize }));
 vi.mock('../server/tradovateCopierCommandRelay', () => ({
   claimTradovateCopierCommandV2: vi.fn(), completeTradovateCopierCommandV2: vi.fn(),
+  completeTradovateCopierHotCommandV3: vi.fn(),
   heartbeatTradovateCopierDevice: mocks.heartbeat, claimTradovateCopierCommand: mocks.claim,
   completeTradovateCopierCommand: vi.fn(), enqueueTradovateCopierCommand: vi.fn(), readTradovateCopierCommand: vi.fn(),
   copierRelayValidationErrorStatus: () => null,

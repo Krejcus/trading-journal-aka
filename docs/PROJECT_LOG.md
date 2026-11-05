@@ -288,6 +288,505 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-05 — LIVE graf: SL/TP čekajícího vstupu, návrh bez nohou, živé P&L na lince (Claude, web NASAZEN na Filipovo „nasaď“, worker beze změny)
+
+- Příčina mizejících SL/TP po odeslání Limitu: nohy z heartbeatu workeru jsou `pending` → `PendingNew`, karta čekajícího
+  vstupu brala jen `Suspended`. Krytí otevřené pozice beze změny.
+- Nový návrh se otevírá bez SL/TP (Filip: nohy si natáhne z „+ SL“ / „+ TP“), šablona ★ dosazuje jen velikost, přikoupení
+  dál bere SL/TP pozice. Pravidla odeslání se nezměnila: Limit/Stop dál chtějí obě nohy.
+- Živé P&L na lince vstupu a tlačítku panelu (`liveDisplayOpenPnl`): IBKR téhož kontraktu ≤ 5 s, jinak číslo brokera; jen
+  zobrazení (INV-UI-04). Stopa příkazu nově měří fill → graf a první status nabízející správu.
+- Telefon je bundlovaný, bez nové instalace změny nemá. V návrhu u critica: Limit/Stop bez nohou a doplňování SL/TP kdykoliv
+  (jen sólo DEMO). Posun čekajícího vstupu a jeho nohou čeká na záznam R1–R4 u brokera.
+
+### 2026-11-04 — LIVE latency: kompaktní ACK horkých příkazů (Claude po Codexovi, NASAZENO 5. 11. ~05:15, změřeno jen na blokovaných příkazech)
+
+- Codex skončil na limitu před celou sadou a oponenturou. Záměr: `place-leader-entry`
+  a `manage-leader-order` nečekají po broker ACK 161–315 ms na zápis celého statusu
+  (~24 kB); ACK jde přes `complete-hot-v3`, status hned potom fenced heartbeatem.
+- Oponentura našla P1, které Codexova verze měla: nedostupné v3 (starý web, chybějící
+  migrace) trvale ucpalo sériovou linku i se vzdálenými brzdami za příkazem. Proto
+  v3 je jen optimalizace: rozpočet 3 s, při selhání v téže delivery `complete-v2`
+  (opakuje se jen ACK, nikdy execution), při „server v3 neumí“ pauza 5 min. Budíček
+  LIVE po v3 až po potvrzeném heartbeatu, aby UI nečetlo starý status.
+- `copier-design-critic`: kolo 1 a 2 OPRAVIT PŘED COMMITEM → kolo 3 OK S VÝHRADAMI (jen P3).
+  Otevřené P3: mimo graf se status po v3 ukáže o ≤ 2 s později; při trvale pomalém API
+  zaplatí každý horký příkaz až 3 s navíc; souběh v2 za nepotvrzeným v3 na skutečných
+  funkcích ověřený jen sondou na PGlite (jedno spojení), opakování v3 na Postgresu.
+- Testy: mutace 16/16 + SQL mutace, SQL 7/7 na dočasném Postgresu, celá sada, tsc, build.
+- Nasazeno na Filipovo „Ano nasaď“: migrace `20261104164250` (CLI `db query --yes` + `migration repair`,
+  PostgREST funkci zná, anon 42501), web `e174e2dc` READY, worker reinstall z téhož SHA (brána čistá,
+  `--tradovate-ws-writes on` zachováno, reconcile `authoritativelyClean`). iPhone beze změny, klient se neměnil.
+- Měření 5. 11. 05:45 CET přes relay z produkčního webu: 8× `manage-leader-order` na neexistující vstup
+  (`not-own-entry`, k brokerovi nic, kopírka OFF). ACK v3: 466 B místo ~24 kB, 135–173 ms, p50 ~151 ms, žádný
+  fallback. Základ v2 z logu 3.–4. 11. (n=31, skutečné příkazy, jiná denní doba): p50 193, p95 315, max 387 ms.
+  Není to A/B za stejných podmínek. Úspora je řádově desítky ms na mediánu, víc na špičkách, ne celých 161–315 ms:
+  zbytek je cesta Mac → Vercel → DB. Neměřeno: čas do připravenosti správy (status jde až heartbeatem),
+  zápis k brokerovi, klepnutí → displej a chování za denního provozu.
+- Tento worktree se jmenuje `release-20261104-eb461e22`, ale je na větvi
+  `codex/live-speed-20261104`; název neodpovídá obsahu.
+
+### 2026-11-04 — LIVE latency: DEMO order write přes existující WebSocket (Codex, NASAZENO A ZMĚŘENO)
+
+- Ruční order write cesta umí pro explicitně povolený `manual-only` DEMO
+  worker použít už synchronizovaný Tradovate WebSocket místo nového REST
+  requestu. Podporuje place/OSO/OCO, modify, cancel a liquidate; produkční
+  výchozí stav zůstává vypnutý a funded/live instalace tím nejsou aktivované.
+- Přímý ACK je spárovaný podle request ID a nečeká za pomalou semantickou
+  hydratací Order/OrderVersion. Fill, Order a Position stav dál mění pouze
+  autoritativní broker stream. Pokud socket není před odesláním připravený,
+  použije se REST; po pokusu o WS zápis už timeout/close/send error znamená
+  neznámý výsledek bez REST fallbacku a bez automatického retry.
+- Ověření: cílené WS/broker testy 30/30, širší broker/controller/manual sady
+  308/308, plná sada 7 527 testů prošla (1 todo), produkční build a worker
+  bundle prošly. TypeScript s 4 GB ukázal pouze známý baseline Chrome extension
+  typů/pluginu a starší tuple chybu testu, nic v dotčených souborech.
+- Commit `fd26fe6a0a5041622d85d727365d877c2c391327` je na `main`; preview
+  `dpl_C4hc3qPSNfbqNJQwDxeQPv4xMnpQ` i produkce
+  `dpl_ARAv9y3a1HJg5CBKi77epB3WcwYW` jsou READY bez alias chyby. Mac worker
+  byl z téhož čistého SHA reinstalován s
+  `ALPHATRADE_TRADOVATE_WS_WRITES=on`; čerstvý a nainstalovaný bundle jsou
+  byte-for-byte shodné (SHA-256
+  `12c2edfac3f8ce60d2cda353afda8f0d08dd37ec8b6eb53b4d2d4add959d74f6`).
+- Post-install read-only reconcile: pouze DEMO účet `61038658`, connected,
+  OFF, flat, `positions=[]`, `orders=[]`, bez divergence/stuck/chyby a
+  `authoritativelyClean=true`. Kvůli broker ztrátě −197,56 USD proti internímu
+  limitu 250 USD se netestoval fill: 1× MNQ BUY limit byl bezpečně 1 000+ bodů
+  pod trhem a po potvrzení čekajícího stavu ihned zrušen. Přímý WS ACK měl
+  `placeoso` 150 ms (controller 160 ms) a `cancelorder` 132 ms (controller
+  write 146 ms), proti poslednímu REST baseline 219–255 ms tedy jediný vzorek
+  ukazuje zisk přibližně 70–120 ms / 31–48 % brokerového zápisu. Cloud queue
+  byla 186 ms pro place a 173 ms pro cancel; ta se tímto krokem neměnila.
+  Worker byl ihned DISARMED a závěrečný broker reconcile znovu potvrdil
+  `authoritativelyClean=true`, flat, žádné pracovní příkazy ani divergence.
+  Jde o n=1 pro každý typ, ne p50/p95; fill→pixel se změří až po denním resetu.
+
+### 2026-11-04 — LIVE latency: socket OrderVersion před pomalým REST (Codex, NASAZENO)
+
+- Poslední chráněný DEMO vzorek prokázal `broker→frame 53 ms`, ale Fill čekal
+  dalších 227 ms za předchozím Order rámcem; ten blokovala přibližně 242ms
+  `/orderVersion/deps` hydratace. Render ani controller listenery tuto prodlevu
+  nevytvářely.
+- Lokální změna ponechává REST spuštěný souběžně jako fallback. Pokud ale přesně
+  následující broker frame přinese jako první relevantní entitu téhož orderu
+  autoritativní `OrderVersion`, starší Order už na pomalejší REST nečeká. Verzi
+  aplikuje až její vlastní frame v původním serializovaném pořadí; Fill se nikdy
+  nepředbíhá a žádný požadovaný/ACK tvar se nevydává za potvrzený brokerem.
+- Konzervativní hranice: Fill/Order/Command před verzí, pozdější než následující
+  frame, chybějící verze, chyba nebo konec socketu zachovají původní REST cestu.
+  Pozdní REST výsledek už nesmí přepsat dříve aplikovanou socket verzi.
+- Cílené brokerové regrese 59/59: správná verze z následujícího rámce odblokuje
+  Fill i po 75 ms a zachová pořadí `OrderVersion → Fill`; verze až za Fillem
+  zkratku nepovolí. Plná sada: 735 souborů / 7 521 testů prošlo (1 skip,
+  1 todo). Produkční build a worker bundle + syntax check prošly; TypeScript má
+  jen známý baseline chybějících Chrome typů/pluginu v samostatné extension a
+  starší tuple chybu testu, nic z dotčených souborů.
+- Commit `ace716c0ae0765dce4ad7a7dd75a2dbd90071450` je na `main`; preview
+  `dpl_EjhF5j4u3smqUpMzTyqUvUu95B9y` i produkce
+  `dpl_Fp5QGAViexSQvRMiV17WCcQf2xsm` jsou READY, hlavní alias bez chyby.
+  Mac worker byl po čerstvém čistém pre-reconcile bezpečně reinstalován ze
+  stejného SHA. Čerstvý a instalovaný bundle mají shodný SHA-256
+  `f25fe559386b38c28460f5817d68fe9662648ca5635d8f50ee08cadb92f2ff60`.
+  Post-restart reconcile: DEMO, connected, OFF, flat, `positions=[]`,
+  `orders=[]`, bez divergence/stuck/chyby, `authoritativelyClean=true`.
+  Další broker zápis neproběhl: denní broker ztráta je stále −197,56 USD proti
+  internímu limitu 250 USD, takže skutečné A/B této změny počká na nový den.
+
+### 2026-11-04 — LIVE latency: 16ms display nasazen + Order hydratace změřena (Codex)
+
+- Dvě agresivnější varianty (dispatch `Fill` mimo pořadí a dočasně autoritativní
+  tvar objednávky z place ACK) byly po bezpečnostní kontrole zamítnuty a v diffu
+  nezůstaly. Mohly by změnit produkční execution semantics.
+- Zobrazovací F2a expozice z workeru do grafu má trailing rozestup snížený z
+  50 ms na 16 ms. Dál je pouze display-only, nejvýš jeden HTTP požadavek běží,
+  nejnovější stav se sloučí a execution/risk/admission cesta se nemění.
+- Broker stream nově při pomalém semantickém frame loguje pouze redigovaný typ
+  entity a order ID. U `Fill` zároveň ukáže typy frame, které před ním čekaly.
+  Neloguje účet, cenu, tag ani token. Cílem je změřit příčinu dosavadního
+  110–217ms čekání před handlerem, ne měnit pořadí zpracování.
+- Ověření: cílené sady 79/79, plná sada 7518 testů prošla (1 todo), produkční
+  build a oba worker bundly prošly; TypeScript neukázal novou chybu (zůstává
+  známý baseline extension typů a starší tuple chyba testu).
+- Commit `1e05ff4c74a719b69135231e22a4e310e864d33c` je na `main`; produkční
+  deployment `dpl_FJhjYWLhL3DNf7NQ8T3U92eytWTT` je READY a Mac worker byl
+  bezpečně reinstalován ze stejného čistého SHA. Před i po instalaci: DEMO,
+  DISARMED, flat, bez pracovních příkazů/divergence/chyby, reconcile čistý.
+- Jediný chráněný test: první Market pokus worker správně odmítl bez zápisu,
+  protože se cena pohnula o více než 8 ticků. Druhý 1× MNQ Market měl SL 6 bodů
+  a TP 12 bodů; broker přijal OSO za 232 ms, Fill dorazil do Macu 53 ms po
+  broker timestampu, ale čekal 227 ms před handlerem. SL uzavřel pozici za
+  −5 USD (broker den po poplatcích −197,56 USD). Ihned potom DISARM; závěrečný
+  reconcile: autoritativně flat, orders `[]`, žádná divergence, worker OFF.
+- Nový log prokázal, že čekání Fill není render: před ním zpracovával první
+  balík `Order/Command/OrderVersion` přibližně 242 ms. Display exposure se po
+  broker ACK publikovala za 26 ms; šifrování+WS publish typicky 1–4 ms.
+- Následná lokální diagnostika v2 opravuje lowercase `fill`, přidává ID
+  zahájených `/orderVersion/deps` hydratací a odděluje `queue/handler/total`.
+  Exekuční pořadí ani chování nemění. Regrese 57/57; plná sada 7519 testů
+  prošla (1 todo), produkční build a worker bundle prošly. TypeScript má jen
+  známý baseline extension typů a starší tuple chybu mimo změnu. Diagnostika
+  v2 je nasazená jako `1a26c9942aee058cda6b4844193caa3ff5e37491`:
+  Vercel `dpl_Hu46bgYHedxLJBmnUZF8gB9kLe4W` READY, worker stejný čistý SHA.
+  Finální read-only reconcile: OFF, connected, flat, orders `[]`, bez chyby;
+  další broker obchod dnes neproběhne.
+
+### 2026-11-04 — Telefonní E2E měření + pravdivý Fill dispatch (Codex, NASAZENO A ZMĚŘENO)
+
+- Produkční narrow-layout test commitu `c74f91d8` ukázal, že `LivePhoneChart` sice obchoduje stejnou
+  relay cestou jako nativní appka, ale na rozdíl od desktopového `LiveTradingScreen` vůbec nepřebíral
+  `liveExposurePaint`; stopa `at:dev:live-command-traces-v1` proto na telefonu nevznikla. Nově dostává
+  přesně stejný F2a payload a po dvou `requestAnimationFrame` zapisuje příjem → paint i klik → paint
+  pod stejným `operationId`. Měření používá jen refy, bez nového React state nebo renderovací smyčky.
+- Starý log `frame→emit` měřil čas až po návratu všech synchronních controller listenerů. Ve vzorku tak
+  hlásil 208 ms, přestože první exposure publish začal výrazně dřív. Log nově odděluje
+  `frame→dispatch` (skutečné předání Fill entity) a `listeners` (navazující synchronní práce); žádné
+  exekuční chování se tím nemění.
+- Ověření: cílené 58/58, plná sada 735 souborů / 7 517 testů zeleně (1 skip, 1 todo), produkční build
+  čistý a `git diff --check` prošel. Kořenový TypeScript má jen známé chyby chybějících Chrome typů/
+  pluginu v samostatné extension a starý tuple typ v `tests/macCopierCommandRelay.test.ts`; žádná nová
+  chyba v dotčených souborech. Commit `68ff171e7804258b853eef841ca83fd7e3886c86` je na `main`;
+  produkční Vercel deployment `dpl_BWBPwb4sffoBKmjoXxE4PXZqvUJU` je READY a drží hlavní alias.
+  Mac worker byl reinstalován ze stejného čistého commitu; bundle SHA-256 začíná `f7aedd2b25bd7d62`.
+- Foreground narrow-layout 1× MNQ DEMO vzorek: potvrzovací klik `14:49:22.843Z`, worker převzal příkaz
+  s cloud queue `146,5 ms`, příkaz dokončil za `282 ms` a první exposure publish vznikl `602 ms` od
+  kliku. Skutečný Fill měl broker timestamp → přijetí frame `35 ms`, frame → dispatch `216 ms` a
+  synchronní listenery `0 ms`; zobrazovací exposure s pozicí následovala přibližně `814 ms` od kliku.
+  Telefonní pixel se v automatizačním prohlížeči zatím nepodařilo autoritativně vyčíst: jeho read-only
+  izolace nezpřístupňuje `localStorage`/Performance API a dokončená konzolová stopa se neobjevila, proto
+  `814 ms` není vydáváno za klik → pixel. Produkční assety byly nezávisle staženy a obsahují nový phone
+  paint hook; další krok je přidat explicitní nezávislý stage log a oddělit frontu semantic frame od
+  hydratace uvnitř frame.
+- Vzorek byl zavřen potvrzeným broker fill za `+29,50 USD`. Po testu byl worker ručně vypnut a čerstvý
+  read-only reconcile potvrdil `armed=false`, `groupFlat=true`, 0 pozic/příkazů, bez divergence,
+  stuck operací nebo chyby; broker daily realized je `-154,42 USD` a instalovaný SHA přesně odpovídá
+  commitu výše.
+- Navazující diagnostika v commitu `7cdfb51784e00f8d0e7130a253e7e1cbb357cb69` přidala nezávislé
+  konzolové milníky `start/result/paint` a workerový rozklad `frame→handler` + `handler→dispatch`.
+  Commit je na `main`, produkční deployment `dpl_EPxEfjP2zVmvMVL2jBmdTjgyKYtb` je READY a worker byl
+  reinstalován ze stejného SHA (bundle prefix `bb7d0f9dc020e49e`). Foreground DEMO vzorek měl klik
+  `15:05:19.112Z`, cloud queue `186,5 ms`, relay execution `293 ms` a result v telefonu `819,1 ms`.
+  Fill rozklad prokázal `broker→frame 37 ms`, `frame→handler 217 ms`, `handler→dispatch 0 ms`: zbytek
+  tedy nevzniká hydratací fillu ani React listenery, ale čekáním za předchozím sémantickým broker frame.
+- Zásadní runtime nález: telefonní `LivePhoneChart` měl připravený F2a paint, ale `chartOpenRef` povoloval
+  push expozice a rychlý poll jen desktopu. Proto konzole ukázala `start` + `result`, nikdy `paint`, a
+  viditelná pozice přišla až z pollu. Oprava v commitu `21ca646436192e225642019726f64d482887d080`
+  zahrnuje do stejné brány i `phoneChartAvailable`; tím telefon dostává stejný okamžitý fill/position
+  push jako PC. Cílené regrese 21/21 a produkční build prošly. Commit je na `main`, Vercel deployment
+  `dpl_CKTF6ybddFAH6CrwmjTjrj7nVoHY` je READY a worker je bezpečně sjednocený na témže SHA (bundle se
+  nezměnil, prefix `bb7d0f9dc020e49e`).
+- Foreground telefonní A/B po opravě: platný 1× MNQ DEMO Market měl první `order` pixel za **634,1 ms**
+  a skutečnou `position` za **737,9 ms** od potvrzovacího kliku; příjem → dva paint snímky trval pouze
+  **31,1 / 29,3 ms**. Relay výsledek dorazil za 744,6 ms, cloud queue byla 242,5 ms, broker Fill měl
+  `broker→frame 38 ms`, `frame→handler 136 ms`, `handler→dispatch 0 ms`. To potvrzuje, že mobilní render
+  už není brzda; další optimalizační cíl je admission/delivery fronta a serializace sémantických broker
+  framů. Pozice byla potvrzeně zavřena, worker vypnut a závěrečný read-only reconcile potvrdil flat,
+  0 pracovních příkazů, bez divergence/stuck/error; broker daily realized skončil na `-190,68 USD`.
+- Diagnostický commit předtím prošel cíleně 60/60, plnou sadou 735 souborů / 7 518 testů (1 skip,
+  1 todo), produkčním buildem a `git diff --check`; TypeScript měl pouze známý baseline extension +
+  tuple testu. Vzorek byl potvrzeně zavřen, worker vypnut a závěrečný reconcile byl autoritativně čistý.
+
+### 2026-11-04 — LIVE rychlost: Fill po place ACK bez čekání na Order + 50ms exposure (Codex, NASAZENO A ZMĚŘENO)
+
+- Produkční logy ukázaly, že skutečný Tradovate Fill dorazil do workeru za 25–65 ms, ale při chybějícím
+  `accountId` ve Fill entitě čekal dalších 123–221 ms na pozdější Order/ExecutionReport. Přijatý
+  `placeOrder`/`placeOCO`/`placeOSO` ACK nyní uloží přesnou korelaci broker order ID → účet + `clOrdId`
+  z původního requestu a hned zkusí vydat už přijatý skutečný Fill. Nic se nesyntetizuje; bez definitivního
+  accepted ACK zůstává původní Order fallback. Neúspěšná hydratace pending Fill nemaže, takže se neztratí.
+- Display-only exposure z workeru do otevřeného grafu má při rychlém sledu brokerových událostí rozestup
+  50 místo 150 ms. Zůstává jeden in-flight publish, trailing nejnovější stav, šifrování, fire-and-forget
+  a úplné oddělení od admission, risku a brokerové exekuce. Cíl je ubrat až ~100 ms hlavně u Market fillu
+  a změny pozice na počítači i telefonu.
+- Nová regrese reprodukuje Fill bez `accountId`, který přijde před Order rámcem, a dokládá jeho jediné
+  vydání hned po přesném OSO ACK se správným účtem a tagem. Cílené broker/relay sady: 160/161 v prvním
+  zatíženém běhu (starý 250ms nudge test jednou naměřil 249 ms), samostatný rerun 23/23; širší brokerová
+  sada předtím 116/116. Úplná sada: 735 souborů / 7 516 testů zeleně (1 skip, 1 todo). Produkční build,
+  worker bundle + syntax check a `git diff --check` prošly. Kořenový TypeScript hlásí jen stejné známé
+  chyby samostatné Chrome extension a starý tuple typ v `tests/macCopierCommandRelay.test.ts`.
+- Commit `c74f91d8e9e6cc4c24a61fc19883e9cd9ef25a5a` je na `main`; produkční Vercel deployment
+  `dpl_48eiEXuod3SUfHGoKiBa3rQN7pfi` je READY a drží hlavní alias. Mac worker byl bezpečně
+  reinstalován ze stejného čistého commitu; bundle SHA-256 začíná `cf71828aecc31008`.
+- Foreground narrow-layout DEMO vzorek: klik `14:36:36.837Z`, worker claim po 234,5 ms cloud queue,
+  příprava 23 ms, Tradovate Market POST 253 ms, broker Fill timestamp → frame 37 ms a první exposure
+  publish v `14:36:37.547Z` (710 ms od kliku). Telefonní pixel nebyl v tomto buildu instrumentovaný,
+  proto číslo není vydáváno za klik → pixel; právě tuto mezeru opravuje následující lokální balík.
+  Jediný 1× MNQ DEMO Market byl cíleně zavřen, worker vypnut a následný read-only reconcile potvrdil
+  `armed=false`, `groupFlat=true`, 0 pozic/příkazů, bez divergence/stuck/error a přesný instalovaný SHA.
+
+### 2026-11-04 — Produkční A/B rychlosti: limit 628 ms, Market 660–751 ms, flat milník před ACK (Codex, NASAZENO A ZMĚŘENO)
+
+- Web i Mac worker byly sjednocené na čistém commitu `174c1b4b0c556bdcedf01e70b9038c61372ca886`;
+  Vercel deployment `dpl_5JMkDSVVZajQWejvKFcHSXuNfHPA` je READY bez alias chyby a nainstalovaný
+  bundle workeru má shodný SHA-256 `69483c74ba7f8259d52dc73ea8cafd81a816e6e06167198de78b4fb2fe4e3255`.
+- Foreground DEMO A/B na jediném manual-only účtu `DEMO8661118` potvrdilo funkční loopback wake:
+  každý hot příkaz z produkční stránky vyvolal dva `RELAY LOCAL WAKE`; vlastní workerová fronta byla
+  0–1 ms. BUY 1 MNQZ6 LIMIT se poprvé vykreslil v grafu za **628 ms** od potvrzovacího kliku
+  (předchozí srovnatelný inline výsledek 1 099 ms); broker OSO POST trval 219 ms. Limit se nevyplnil,
+  byl autoritativně zrušen. Dva nativní BUY 1 MNQZ6 Market vzorky vykreslily první order/fill stav za
+  **660 ms** a **751 ms**; broker POST trval 255/235 ms. Jde o malé n, ne p50/p95.
+- Ruční close posledního Marketu měl v durable akci `createdAt=1793801230697`, první display-only flat
+  `displayAt=1793801231665` (**968 ms**), finální durable update 1 180 ms a relay ACK přibližně 1 400 ms
+  od vytvoření. Nový flat milník tedy odstranil z prvního zobrazení asi 212 ms čekání na finální durable
+  výsledek a zhruba 432 ms čekání na relay ACK; brokerová cesta sama byla dál dominantní
+  (write 440 ms, stream flat 511 ms, REST verify 212 ms).
+- Nativní iPhone app tuto desktopovou loopback zkratku nepoužije (`capacitor://localhost` není Mac
+  `127.0.0.1`) a současný nainstalovaný iOS bundle změnu ještě neobsahuje. Po novém iOS buildu získá
+  dřívější display-only stav, ale command delivery dál poběží cloudovou Realtime cestou; telefonní
+  přínos proto musí mít vlastní native foreground A/B a nesmí se odvozovat z webového narrow layoutu.
+- Produkční měření odhalilo diagnostickou díru: management/close stopa znala relay výsledek, ale neoznačila
+  ho jako `resultMs`, takže se po position paintu nedokončila do konzole. Lokální následný patch nyní
+  propíše úspěšný vnitřní status pro inline i poll výsledek a odstraní dřívější dvojité uzavření vstupní
+  stopy. Cílené regrese 133/133, plná sada 735 souborů / 7 515 testů zeleně (1 skip, 1 todo), produkční
+  build a `git diff --check` prošly. Patch je pouze diagnostický a execution chování nemění.
+- Závěr testu: kopírka ručně OFF, `environment=demo`, `armed=false`, `groupFlat=true`, 0 broker pozic,
+  0 working orders, bez divergence/stuck/error. Následný read-only reconcile vrátil
+  `authoritativelyClean=true`; žádný broker příkaz při reconcile neodešel.
+
+### 2026-11-04 — LIVE rychlost: loopback wake + první flat pixel před finálním potvrzením (Codex, NASAZENO)
+
+- Čerstvý rozklad produkčního DEMO vzorku ukázal, že samotný zašifrovaný worker → graf broadcast stojí
+  jen 2–5 ms a crash-safe 55kB zápis na disk lokálně medián 7,6 ms (p95 7,8 ms). Zbývající ovlivnitelná
+  prodleva je hlavně cloudové převzetí workerem (~109–216 ms v dosavadních vzorcích) a u zavření finální
+  REST/stream ověření. Broker write zůstal v tomto vzorku 207–310 ms a je externí podlaha.
+- Produkční web na stejném Macu nově po cloudové admission posílá dva best-effort loopback budíčky
+  workeru (60/160 ms). Endpoint nepřijímá tělo, command ani nonce a pouze probudí poll; cloudová admission,
+  DB claim, oprávnění a idempotence zůstávají jedinou autoritou. Cizí Origin dostane 403 a chyba/PNA blokace
+  se ignoruje. Telefon tuto lokální zkratku nepoužije; jeho cloudová cesta se nemění.
+- Zavření pozice publikuje display-only `position` milník hned po prvním broker stream flat, zatímco durable
+  výsledek a autoritativní REST ověření dál doběhnou beze změny. Korelace prohlížeče umí přijmout tento
+  milník i při stále `sending` příkazu; souběžný novější exposure už nezruší rozběhnuté double-rAF měření.
+  Dokončená stopa se po změřeném paintu vypíše do konzole pro skutečné klik → pixel A/B.
+- Ověření lokálního balíku: nové bezpečnostní/funkční testy 165/165; úplná sada 735 souborů / 7 514 testů
+  zeleně (1 skip, 1 todo); produkční Vite/PWA build, samostatný Node 20 pilot bundle + syntax check a
+  `git diff --check` prošly. Kořenový typecheck s 4 GB hlásí jen stejné známé chyby samostatné Chrome
+  extension a starý nesouvisející tuple typ v `tests/macCopierCommandRelay.test.ts`; dotčený kód nemá novou
+  chybu. Balík byl následně pushnutý, nasazený a nainstalovaný jako `174c1b4b`; přesné produkční A/B a
+  závěrečný bezpečný stav jsou v zápisu výše.
+
+### 2026-11-04 — LIVE rychlost: durable výsledek do grafu před server ACK + kompaktní hot result (Codex, lokálně, NENASAZENO)
+
+- Produkční foreground A/B po admission v2 nepotvrdil celkové zrychlení: přesný BUY 1 MNQZ6 LIMIT na jediném
+  manual-only účtu `DEMO8661118` měl klik -> inline výsledek 1 099 ms. DB vytvoření -> claim bylo 61 ms,
+  ale vytvoření -> worker 284 ms, broker OSO POST 237 ms, worker execution včetně durable zápisu 363 ms,
+  worker -> server ACK 273 ms a DB completion 824 ms od vytvoření. Příkaz se nevyplnil, byl autoritativně
+  zrušen a závěrečný stav byl DISARMED, flat, bez orders/pozic/pending a bez chyby. Cancel měl DB claim 45 ms,
+  ale vytvoření -> worker 485 ms, broker cancel 254 ms, execution 468 ms a ACK 248 ms. Admission v2 tedy
+  zrychlila DB claim, ne celý průchod; nesmí se vydávat za E2E zrychlení.
+- Browserová stopa working limitu byla neplatná: čekala na `position`, takže první `order` pixel zaznamenala až
+  po ztrátě popředí. Měřič teď ukončí úspěšný vstup při prvním skutečném order/fill/position paintu; ticket má
+  po dvou animation frames fallback na viditelné „Přijato“. Reject/blocked dál končí bez falešného paintu.
+- Worker po broker ACK a fsync nově naplánuje šifrovanou display-only expozici **před** vzdáleným
+  `complete-v2`. Serverový ACK, command JSONB, heartbeat, audit, fencing, durable checkpoint a zákaz retry se
+  nemění; zobrazovací callback nesmí execution ovlivnit a jeho výjimka se ignoruje. Cíl je odstranit z prvního
+  pixelu dosavadních ~200–300 ms čekání na ACK, skutečný přínos ale ještě musí potvrdit stejné DEMO A/B.
+- Produkční read-only kontrola potvrdila, že relay už běží v `arn1` (Vercel hlavička `fra1::arn1`), takže
+  stěhování regionu není zbývající zkratka. Jeden hot command ukládal ~21 kB `result`, z toho ~21 kB byl
+  duplicitní plný status; tentýž status se zároveň posílá samostatným heartbeat parametrem. Ruční vstup a
+  správa teď do durable command resultu ukládají jen `{ok,result}`; ostatní bezpečnostní/config příkazy zůstaly
+  beze změny. ACK log nově uvádí skutečné bajty pro další A/B.
+- Ověření lokálního balíku: dotčené sady 79/79, produkční Vite/PWA build, samostatné Node 20 bundly workeru,
+  TV price threadu a price-alert threadu se syntax kontrolou a `git diff --check` prošly. Plná sada dala
+  734 souborů / 7 510 testů zeleně (1 skip, 1 todo) a jediný nesouvisející TTL test pod plnou zátěží selhal
+  o 1 ms; samostatný rerun téhož souboru je 16/16 zelený. Kořenový TypeScript s 4 GB doběhl a hlásí jen
+  stejné známé chyby samostatné Chrome extension a starý nesouvisející tuple typ v
+  `tests/macCopierCommandRelay.test.ts`; dotčený kód nemá novou chybu. Balík je lokálně commitnutý jako
+  `1bebac69`; přesný commit znovu prošel produkčním Vite/PWA buildem. Čerstvý read-only broker reconcile
+  potvrdil DEMO, DISARMED, flat, 0 orders/pozic, bez divergence, stuck operací a chyby. Změna zatím není
+  pushnutá, nasazená ani nainstalovaná ve workeru; brokerovi po A/B nic dalšího neposlala.
+
+### 2026-11-04 — LIVE rychlost: atomické navázání admission na idle delivery (Codex, DB + web NASAZENY)
+
+- Foreground DEMO kontrola na jediném účtu `DEMO8661118`: ARM, BUY 1 MNQZ6 LIMIT 28 500 se SL 28 488
+  a TP 28 524, ověření working OSO, cancel a OFF. Vstup se nevyplnil; po testu je účet autoritativně flat,
+  bez pozic, working orders, pending vlastních vstupů, divergence nebo chyby a worker zůstal `armed=false`.
+  Vstup strávil 166,5 ms ve frontě, 24 ms přípravou, 245 ms broker OSO POSTem a 366 ms celou worker
+  execution; následný ACK commit trval 238 ms. Cancel: 262,5 ms fronta, 258 ms broker write, 321 ms worker
+  execution a 216 ms ACK. Největší dál ovlivnitelný úsek je server -> převzetí workerem.
+- Nová aditivní admission v2 při čerstvé nečinné durable delivery vloží a naváže ruční vstup/správu v jedné
+  DB transakci. Zachovává původní admission v1 jako jediný zdroj bezpečnostních pravidel, pořadí zámků
+  uživatel -> zařízení, unikátní delivery index a plný starý claim/poll fallback. Existující/idempotentní řádky
+  se nově nevážou; pomalé předčtení se čeká nejvýš 25 ms. Browser nikdy nedostane interní `preclaimed` data.
+- Ověření před produkcí: cílené relay testy 88/88, širší relay sada 145/145, skutečný PostgreSQL 18 test
+  26/26, produkční Vite/PWA build a `git diff --check`. Kořenový TypeScript s 4 GB hlásí jen známé starší
+  chyby samostatné Chrome extension a `tests/macCopierCommandRelay.test.ts`; dotčené soubory bez nové chyby.
+  Celá sada pod přetíženým Macem dala široké nesouvisející timeouty a nebyla vydávána za platný výsledek.
+- Před migrací ověřena kompletní noční záloha `~/AlphaTrade-backups/supabase/20261104T023009Z`: databáze
+  5,78 GB, 1 941/1 941 Storage objektů a všechny SHA-256 v pořádku; poslední zkušební obnova je PASS z 25. 10.
+  Produkční preflight: žádná v2 funkce, 0 duplicitních delivery, 0 pending/claimed neexpirovaných příkazů.
+- Produkční migrace `copier_manual_admission_bound_delivery` byla aplikována jako verze `20261104123920`.
+  Postkontrola potvrdila `security invoker`, prázdný `search_path`, 2s lock timeout, EXECUTE jen pro
+  `service_role`, 0 duplicit a 0 pending/claimed příkazů. Supabase security/performance advisory nemají proti
+  preflightu žádný nový ani změněný nález.
+- Kód je commit `e0e8c3d5`, pushnutý na `codex/live-speed-20261104` i produkční `main`. Vercel deployment
+  `dpl_FZr5XpyhqfugaFHiQbfdoqP7SdQR` je `READY`, bez alias chyby; hlavní doména vrací HTTP 200. Závěrečná
+  read-only kontrola workeru: `environment=demo`, připojeno a reconciled, `armed=false`, `groupFlat=true`,
+  0 expozice, 0 broker orders, 0 pending vlastních vstupů a `lastError=null`; relay má 0 neexpirovaných
+  pending/claimed příkazů. Worker se nereinstaloval, protože změna je výhradně server + DB a jeho bundle se
+  nezměnil. Reálný přínos nové cesty ještě není poctivě A/B změřený; další broker write vyžaduje nový přesný
+  scénář potvrzený v okamžiku odeslání.
+
+### 2026-11-04 — Produkční `d5a8e943` + přesné měření broker ACK → durable commit (Codex, web + worker NASAZENY, DISARMED)
+
+- Na Filipovo potvrzení byl `d5a8e943` pushnutý na pracovní větev i produkční `main`; Vercel deployment
+  `dpl_EUEY2Xf9fJn7QJQkfbERc1E9TPzy` je `READY`, bez alias chyby, a produkční doména ukazuje stejný SHA.
+  Těsně před reinstalací byl jediný účet `DEMO8661118` autoritativně flat, bez working orders, divergence,
+  stuck operací nebo chyby; worker byl ručně DISARMED a žádný brokerový příkaz se při deployi neposlal.
+- Safe reinstall správně nic nezměnil, protože jeho stará brána vyžaduje `--followers`, zatímco tato instalace
+  je `manual-only`. Přímý install se zastavil ještě před spuštěním: zachování
+  `ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS=1` vyžaduje samostatné informované potvrzení. V tomto prvním
+  pokusu proto běžící worker zůstal čistý `4bf49ab8`, připojený, reconciled a DISARMED.
+- Následně byla použita bezpečnější varianta bez plného localhost execution přístupu: z přesného schváleného
+  `d5a8e943` se zachoval manual-only účet, strop 5 MNQ, IBKR price source, TV stream, price alerts i scale-in.
+  Instalace je čistá (`dirty=false`), nový worker je `d5a8e943`, připojený, reconciled, flat, bez orders,
+  divergence, stuck stavu nebo chyby a zůstal `armed=false`. `shadowMode=true` je jeho záměrný fail-closed
+  výchozí gate za DISARMED; opakovaný DISARM nic brokerovi neposlal. Produkční web a worker jsou tedy shodné.
+- Lokální safe-reinstall nástroj teď umí převzít i `manual-only` a jeho `manualEntryMaxContracts` přímo z
+  běžícího LaunchAgentu; follower instalace zůstává beze změny. Po potvrzení localhost přístupu tak další
+  pokus použije stejnou fail-closed bránu místo ručně sestaveného instalačního příkazu.
+- Lokálně nad `d5a8e943` přibyl čistě diagnostický bod `committedAt`: nastaví se až po návratu stávajícího
+  durable commitu výsledku broker ACK, jen do omezené runtime mapy a zašifrovaného display payloadu. Nevytváří
+  druhý diskový zápis a nevstupuje do admission, risku ani výsledku. Report nově oddělí
+  `ackToCommittedMs`, takže další optimalizace persistence nebude odhad; selhání commitu čas nevydá.
+- Ověření lokální diagnostiky: 152/152 worker/relay/agent regresí, 85/85 lifecycle/reinstall/měření regresí,
+  `zsh -n`, produkční Vite/PWA build, Node 20 pilot bundle + syntax check a `git diff --check` prošly.
+  Kořenový typecheck má pouze stejné staré chyby samostatné
+  Chrome extension a `tests/macCopierCommandRelay.test.ts`; žádná chyba v dotčeném kódu. Diagnostika zatím
+  není pushnutá, nasazená ani nainstalovaná a brokerovi nic neposlala.
+
+### 2026-11-04 — LIVE rychlost: pravdivé E2E měření + rychlý relay a cancel bez dvou REST kol (Codex, lokálně, NENASAZENO)
+
+- Autoritativní pracovní strom je čistý release worktree
+  `/Users/filipkrejca/alphatrade-worktrees/release-20261104-eb461e22`, větev
+  `codex/live-speed-20261104` nad produkčním web commitem `2902a696`. Hlavní Documents checkout
+  zůstal nedotčený (je zastaralý a má uživatelské změny).
+- Produkční foreground vzorek na jediném manual-only účtu `DEMO8661118` zrušil starý BUY limit a
+  odeslal nový BUY 1 MNQZ6 LIMIT 28 566 se SL 28 554 a TP 28 590. Vstup se vyplnil 28 561,75 a
+  později skončil SL; účet je znovu flat a bez working orderu. Worker příkaz claimnul za 278 ms,
+  broker OSO přijal za 188 ms a worker měl durable výsledek za 350 ms od startu execution. Předchozí
+  cancel trval ve workeru 634 ms: pre-read REST 266 ms, broker zápis 151 ms a post-verify REST 138 ms.
+- Browserová stopa tohoto vzorku byla neplatná: display-only position pixel přišel před HTTP výsledkem
+  a měřič aktivní stopu hned smazal; pozdější výsledek založil novou stopu se startem až po brokerovi
+  (`relayCompletedMs=0`, worker údajně před klikem). Oprava drží původní click anchor až do kombinace
+  HTTP výsledku + prvního position pixelu; definitivní neúspěch končí po výsledku. Každý milestone
+  bere jen první pixel, takže periodický F2a heartbeat už nepřepisuje latenci.
+- Relay hot path: ověření šifrovaného target hintu načte device + jeho 1:1 runtime jedním vnořeným
+  PostgREST dotazem místo dvou sériových kol a API znovu používá již ověřené `relayIdle/lastSeenAt`.
+  Produkční HTTPS Safari už nezkouší blokovaný `http://127.0.0.1` loopback; jde rovnou bezpečným
+  relayem. Admission, oprávnění, revokace, freshness a fallback výběr cíle zůstaly beze změny.
+- Cancel hot path: synchronizovaný order snapshot s přesnou shodou controller cache + `routeEpoch`
+  nahrazuje pre-read REST. Tradovate adaptér vrací výsledek bez dalšího lookupu jen po přesném
+  `Order(Canceled)` rušeného id; chybějící, neshodný nebo neterminální důkaz jde původním REST
+  fallbackem. Plná sada odhalila důležitou partial-fill hranu: přechodný raw `Filled` před Completed
+  cancel reportem se nesmí vydat za výsledek. Oprava čeká na `Canceled`; fill race dál bezpečně
+  klasifikuje původní REST cesta včetně kontroly ochranných nohou. Dvě dříve změřená REST kola
+  (~404 ms v konkrétním vzorku) tak na zdravé cestě odpadají; skutečný přínos NENÍ ještě A/B změřený.
+- Ověření finálního lokálního stromu: cílené LIVE/relay/controller sady 209/209, dotčené integrační
+  regrese 128/128, plná sada 735 souborů / 7 506 testů (1 skip, 1 todo), app-only TypeScript čistý;
+  kořenový typecheck hlásí jen známé chybějící Chrome extension typy/balík a starý nesouvisející typ
+  v `macCopierCommandRelay.test.ts`. Scoped lint 0 chyb (9 starších warningů), `git diff --check`,
+  produkční Vite/PWA build a samostatné Node 20 bundly pilotu, TV price threadu a price-alert threadu
+  se syntax kontrolou prošly.
+- Balík je lokálně commitnutý ve větvi `codex/live-speed-20261104`, ale nebyl pushnutý, nasazený ani
+  nainstalovaný do workeru; žádná DB migrace ani změna produkční konfigurace. Další důkaz vyžaduje
+  výslovně schválený push/deploy + reinstall
+  stejného SHA a potom nový přesně stejný foreground DEMO A/B. Každý další broker write vyžaduje
+  konkrétní akci potvrzenou v okamžiku odeslání.
+
+### 2026-11-04 — LIVE rychlost: reálný A/B odhalil 300ms post-ACK čekání a mrtvý Safari kanál (Codex, lokálně, NENASAZENO)
+
+- Produkční web i worker byly před vzorkem sjednocené na `4bf49ab8`. Uživatel výslovně potvrdil
+  jediný BUY 1 MNQZ6 LIMIT 28 420 se SL 28 408 a TP 28 444 na manual-only `DEMO8661118`.
+  Broker potvrdil vstup `611860531988` jako working a obě ochranné nohy jako pending; účet zůstal
+  flat, bez chyby, divergence nebo stuck outboxu. Příkaz nebyl zrušen a dál leží u brokera.
+- Stejný foreground klik dal 1 052 ms do HTTP výsledku proti baseline 1 080 ms. Worker příkaz přijal
+  352 ms po kliku, příprava trvala 21 ms, broker OSO POST 263 ms a worker měl durable výsledek za
+  702 ms od kliku. Zašifrovanou expozici publikoval přes již otevřený WS za dalších 15 ms.
+- Server však po durable výsledku čekal ještě až 300 ms na HTTP odpověď záložního kicku, přestože
+  worker už příkaz provedl. Lokální oprava při známém výsledku kick abortuje a odpoví hned; při
+  neznámém výsledku zachovává durable enqueue, push/kick i původní 300ms dokončovací okno.
+- Browserová stopa nezískala `order` paint, i když payload ze skutečného statusu prochází validací
+  (`valid=true`, 7,3 kB). `useCopierStatusNudge` neměl callback stavu ani watchdog; Safari mohl
+  nechat display-only kanál navždy v connecting/disconnecting. Přibyl izolovaný 12s watchdog,
+  bezpečné odebrání zaseklého tématu a reopen po 1 s. Polling fallback, freshness, admission,
+  příkazy a risk se nemění.
+- Ověření lokálního diffu: finální cílená sada 28/28, app-only TypeScript s dočasně vyloučenou
+  samostatnou `extension/` a jedním známým nesouvisejícím testovým typem, ESLint změněných souborů,
+  `git diff --check` a produkční build prošly. Nic z tohoto nového diffu nebylo commitnuto,
+  pushnuto, nasazeno ani instalováno; další důkaz vyžaduje nový shodný foreground A/B po deployi.
+
+### 2026-11-04 — LIVE rychlost: první reálný baseline a dřívější ACK do grafu (Codex, lokálně, NENASAZENO)
+
+- Produkční web i worker `8353358d` byly ověřené na jediném účtu `DEMO8661118` (manual-only,
+  MNQZ6, bez followerů). Jediný uživatelem potvrzený BUY 1 LIMIT 28 358,50 se SL 28 346,50
+  a TP 28 382,50 broker přijal bez duplicity. Příkaz později vyplnil 28 358,50 a SL ho uzavřel
+  28 346,25; brokerový stav je znovu flat/no-working, worker zůstal ARMED bez chyby.
+- Čistý foreground baseline potvrzovací klik → HTTP výsledek byl 1 080 ms a klik → první
+  autoritativní order paint 1 318 ms. Rozklad: klik → worker queue 445 ms, queue → start 1 ms,
+  příprava 16 ms, broker dispatch → order event 268 ms / ACK 290 ms, exposure receive → paint
+  107 ms. Pozdější fill → position paint vyšel 702 ms, ale karta mezitím ztratila focus, proto
+  tento vzorek není platný foreground benchmark.
+- Kořen zbytečného čekání: ACK už obsahoval autoritativní ID vstupu/SL/TP a controller z něj
+  sestavil durable záznam i zobrazovací working orders, ale `subscribeLiveChange` se probudil až
+  po navazujícím broker eventu za frontou. Lokální změna volá display-only notifikaci hned po
+  commitu ACK; exekuci, admission, risk ani pořadí událostí nemění. Regrese bez jediného stream
+  eventu dokládá okamžitý signál a autoritativní ACK stav.
+- První F2a broadcast po delší nečinnosti stál 157 ms, další 59 ms. Lokální změna proto drží
+  samostatný Realtime WebSocket publisher pro zašifrovanou display-only expozici; pokud kanál
+  není joinutý nebo selže, beze změny použije původní REST broadcast. Žádný příkaz ani broker ACK
+  na této optimalizaci nečeká. Očekávaný cíl stejného A/B je klik → order pixel přibližně
+  0,8–1,0 s; tvrdit výsledek lze až po shodném deployi webu/workeru a novém foreground vzorku.
+- Ověření lokální větve `codex/live-speed-20261104`: 118/118 cílených testů, TypeScript čistý,
+  worker bundle i čerstvý produkční `dist` vznikly. Plná paralelní sada dala 7 484/7 494; všech
+  devět pádů (šest 5s timeoutů pod zatížením, dva známé časové/WS flaky a jeden po změně příliš
+  krátký zdrojový guard) bylo po opravě guardu izolovaně zopakováno 85/85. Nic nebylo commitnuto,
+  pushnuto, nasazeno ani reinstalováno; produkční worker dál běží na `8353358d`.
+
+### 2026-11-04 — LIVE rychlost: pravdivá stopa potvrzovací klik → worker/broker → první pixel (Codex, lokálně, NENASAZENO)
+
+- Proč: noční funkční/safety práce nepřeměřila rychlost v aktivním grafu; staré browserové vzorky
+  byly ze skryté karty a kvantované kolem 1 s. Bez korelace konkrétního příkazu se nedalo poctivě
+  rozhodnout, kterou část dál optimalizovat.
+- V čistém release worktree z produkčního `eb461e22`, větev `codex/live-speed-20261104`, vznikla
+  lokální E2E diagnostika podle `operationId`: poslední potvrzovací klik (telefon nejpozději vstup
+  do desk callbacku), relay + strukturovaný `Server-Timing`, výsledek, časy workeru/brokera,
+  přijetí šifrované expozice a první commit grafu po dvou `requestAnimationFrame`.
+- F2a payload nově nese posledních ≤ 10 `manualEntries` a `manualOrderActions`; pole jsou AES-GCM,
+  tvarově omezená a používají se výhradně pro diagnostickou korelaci. Do sloučeného controlleru,
+  freshness, admission, ARM ani příkazů se nekopírují. Stopy jsou v
+  `at:dev:live-command-traces-v1` (max 60); viditelnost/focus po celý vzorek určuje
+  `validForeground`. LocalStorage zápis je dávkovaný 750 ms mimo click/relay/paint hot path.
+- Ověření: cílené 32/32; plná sada 7491 zelených (1 todo, 1 skip); produkční build čistý.
+  App typecheck s dočasným vyloučením samostatné `extension/` je čistý; kořenový `tsc --noEmit`
+  s 4GB hlásí jen existující chybějící typy/balík Chrome extensionu v tomto release worktree.
+  React performance kontrola vedla právě
+  k odložení synchronního localStorage zápisu.
+- Balík je uložen jen v lokální větvi; nic nebylo pushnuto ani nasazeno a brokerovi se nic neposlalo.
+  Pro skutečný baseline je potřeba samostatně schválený web deploy + reinstall
+  stejného workeru, potom řízené 1× MNQ DEMO scénáře v aktivním grafu; až podle největšího úseku A/B
+  optimalizace a stejné přeměření.
+
+### 2026-11-03 — Chybějící typy obchodování: ověřený seznam, návrhy všech skupin, oprava pádu na trailing/MIT (Claude, ROZPRACOVÁNO, nic nenasazeno)
+
+- Filip: „pořád velká spousta věcí chybí (typy obchodování)“ → ověřený seznam (průzkum + protikontrola
+  každého řádku) `docs/reviews/trading-gaps-20261103.md`; pak cíl „udělej vše, použij víc agentů“.
+- Návrhy všech chybějících schopností po skupinách (safety, exits, pending, automation, types, scope,
+  followers, ui) + posudek `copier-design-critic` ke každé skupině jádra: `docs/reviews/trading-gaps-designs/`.
+  Všechny skupiny jádra mají verdikt návrhu „OPRAVIT PŘED COMMITEM“ — P1 výhrady se řeší před stavbou
+  každé položky. Zamítnuto pravidly (critic potvrdil): skutečné LIVE peníze, Market bez IBKR s cenou z TV,
+  OCO breakout (C5e), vstup na vybraný follower/za OFF (C20b), Lucid↔Tradeify, uvolnění pravidel followerů za ARMED.
+- **C1 hotovo (větev `claude/trading-gaps-20261103`, f2a2b070):** TrailingStop/MIT/… zadaný v Tradovate na
+  kterémkoli účtu přihlášení (i ukončený v `/order/list`) shodil sync workeru → crash loop do konce session
+  (reprodukováno testem). Teď `ObservedOrderType` = `Unsupported` + surový typ; zápisy nesou jen `OrderType`
+  (kompilátor vynutil zúžení) + pojistka před POSTem; nikdy se nekopíruje ani nemodifikuje; nové INV-TRAD-07.
+  Critic: návrh OPRAVIT → diff OK s výhradami (P2 opraveny). Záznam R1 na DEMO až PO nasazení do všech workerů
+  na přihlášení — dřív by ho sám záznam shodil.
+- Telefon (2d6a7e70): lišta Koupit/Prodat se při přehrávání neukáže (dřív živý Market nad historickým
+  grafem); „Zrušit“ čekajícího vstupu v liště = cancel-entry, ne Flatten skupiny (ten navíc vypínal kopírku).
+- UI vlna A (větev `claude/trading-gaps-ui-20261103`, 82ea24bb): čisté moduly + 271 testů — zkratky, ATM
+  šablony, čáry všech pracujících příkazů, ceny pro BE+n/s poplatky a SL/TP číslem, holý Market na PC,
+  předvolby, náhled pro telefon, hlášení fillů. Zatím NEZAPOJENO (vlna B).
+- Testy: plná sada 6721 zelená, tsc čisté (mimo staré `extension/`). Nasazení jen po „nasaď“; worker
+  s C1 potřebuje reinstall (obchodní den → čekat na souhlas).
+
 ### 2026-11-03 — Dokupování do otevřené pozice + správa celé pozice (Claude, NASAZENO 3. 11. na Filipovo „nasaď“: web 90de8e36, worker 90de8e36 s `--scale-in on`, iPhone)
 
 - Filip 2.–3. 11.: chce přikupovat do pozice / další limit v pozici; rozhodl variantu B (každé přikoupení

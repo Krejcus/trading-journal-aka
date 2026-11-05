@@ -3,6 +3,7 @@ import { startMacCopierCommandRelay } from '../server/macCopierCommandRelay';
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 import { executeTradovateCopierRelayCommand, loadTradovateCopierRelayStatus } from '../services/tradovateOAuthConnection';
 import { CopierBrakeQueuedError } from '../lib/copierBrakeDelivery';
+import { hasActiveLiveCommandTrace, markLiveCommandPaint } from '../lib/liveCommandPerformance';
 
 vi.mock('../services/supabase', () => ({
   supabase: { auth: { getSession: async () => ({ data: { session: { access_token: 'mock-token' } } }) } },
@@ -14,6 +15,29 @@ const agentWith = (execute = vi.fn()) => ({
 }) as unknown as LocalCopierExecutionAgent;
 
 describe('copier relay boundary review', () => {
+  it('propíše úspěšný manage výsledek do E2E stopy a dokončí ji po position paintu', async () => {
+    const operationId = 'manage:relay-result-before-position';
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      id: 'manage-result-trace',
+      expiresAt: new Date(Date.now() + 5_000).toISOString(),
+      resolution: {
+        status: 'succeeded',
+        result: { ok: true, result: { type: 'leader-order-managed', status: 'acknowledged' } },
+      },
+    })));
+    try {
+      await executeTradovateCopierRelayCommand('mock-connection', {
+        type: 'copy-command',
+        command: { type: 'manage-leader-order', operationId, action: 'close-position' } as never,
+      });
+      expect(hasActiveLiveCommandTrace(operationId)).toBe(true);
+      markLiveCommandPaint({ operationId, stage: 'position', receivedPerformanceAt: performance.now() });
+      expect(hasActiveLiveCommandTrace(operationId)).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('echoes a fresh status hint only for hot chart commands and never treats it as command authority', async () => {
     const posts: Array<Record<string, unknown>> = [];
     const hint = 'v1.opaque-encrypted-relay-target-hint';

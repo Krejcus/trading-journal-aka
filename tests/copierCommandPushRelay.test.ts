@@ -91,6 +91,36 @@ describe('F1b′ server: pushBoundCopierCommand', () => {
     expect(verifyCopierCommandPush({ ...sent.payload, body: sent.payload.body.replace('cmd-1', 'cmd-2') }, grant.publicKey, DEVICE)).toBeNull();
     expect(verifyCopierCommandPush(sent.payload, grant.publicKey, '11111111-1111-4111-8111-111111111111')).toBeNull();
   });
+
+  it('preclaim z admission v2 přeskočí runtime read i claim RPC a jen podepíše+broadcastuje', async () => {
+    process.env[TV_PRICE_CHANNEL_SECRET_ENV] = SECRET;
+    const { db, rpc } = fakeDb({ claim: async () => { throw new Error('claim-must-not-run'); } });
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 202 }));
+    const outcome = await pushBoundCopierCommand({
+      db,
+      deviceId: DEVICE,
+      supabaseUrl: 'https://s',
+      serviceRoleKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => NOW,
+      preclaimed: {
+        deliveryId: DELIVERY,
+        command: {
+          id: 'cmd-fast',
+          status: 'claimed',
+          command: { type: 'disarm' },
+          createdAt: new Date(NOW).toISOString(),
+          expiresAt: new Date(NOW + 30_000).toISOString(),
+        },
+      },
+    });
+    expect(outcome).toBe('pushed');
+    expect(rpc).not.toHaveBeenCalled();
+    const sent = JSON.parse(String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)).messages[0];
+    const verified = verifyCopierCommandPush(sent.payload, copierCommandPushGrant(DEVICE, SECRET)!.publicKey, DEVICE)!;
+    expect(verified.deliveryId).toBe(DELIVERY);
+    expect(verified.command).toMatchObject({ id: 'cmd-fast', status: 'claimed' });
+  });
 });
 
 describe('F1b′ server: kick po pokusu o push (oponentura P2)', () => {

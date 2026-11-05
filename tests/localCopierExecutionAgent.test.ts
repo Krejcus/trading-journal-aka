@@ -98,6 +98,28 @@ describe('local copier execution agent', () => {
     running = null;
   });
 
+  it('relay wake pouze probudí poll; neumí spustit command a cizí origin ho nedostane', async () => {
+    const runtime = controller();
+    const onRelayWake = vi.fn();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, onRelayWake,
+    });
+
+    const accepted = await fetch(`${running.origin}/v1/relay-wake`, {
+      method: 'POST', headers: { Origin: origin },
+    });
+    expect(accepted.status).toBe(202);
+    expect(onRelayWake).toHaveBeenCalledTimes(1);
+
+    const foreign = await fetch(`${running.origin}/v1/relay-wake`, {
+      method: 'POST', headers: { Origin: 'https://evil.example' },
+    });
+    expect(foreign.status).toBe(403);
+    expect(onRelayWake).toHaveBeenCalledTimes(1);
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(runtime.flattenGroup).not.toHaveBeenCalled();
+  });
+
   it('manual-only režim uzamkne jediný instalační účet proti vzdálené změně', async () => {
     const runtime = controller();
     const manualOnly: CopyGroupConfig = {

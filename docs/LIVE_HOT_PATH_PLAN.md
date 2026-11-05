@@ -35,9 +35,10 @@ a odpověď ~0,1 s. **Broker je ~20 %, zbytek naše doručování.**
 - **Beze změny serverových bran:** admission (rozestupy, busy, denní stropy, payloadHash,
   operationId), idempotence, TTL, trvalý claim před execution a jeden durable výsledek
   zůstávají v DB přesně jako dnes. Brzdy (DISARM, kill, day lock) beze změny.
-- Mimo rozsah (vědomě): zápisy přes Tradovate WebSocket (broker je ~0,27 s, zisk desítky ms
-  při velkém riziku), admission ve workeru (−0,1–0,2 s, ale přepis pojistek P3/P7), VPS,
-  Databento.
+- Původně mimo rozsah: zápisy přes Tradovate WebSocket. Po produkčním rozkladu
+  4. 11. zůstal REST write 219–255 ms jednou z hlavních podlah, proto vznikla
+  samostatná, výchozím stavem vypnutá DEMO-only fáze F3 níže. Admission ve
+  workeru, VPS a placená data zůstávají mimo tento balík.
 
 ## 2. F1a — Pozice ze streamu (jen zobrazení)
 
@@ -171,9 +172,11 @@ Filip po nasazení fáze 1: pozice se v grafu ukáže 1–2 s po vyplnění. Roz
   vedle `nudgeTopic` — jen při `connected`, nikdy neukládat, nelogovat.
 - Controller: `exposure.builtAt` = čas sestavení (hodiny workeru) — jen řazení zobrazení.
 - Worker (`macCopierCommandRelay`): po změně u brokera (`subscribeLiveChange`) hned, bez čekání na
-  heartbeat, nejvýš 1× za 150 ms (trailing), pošle REST broadcast `event: 'exposure'` na téma budíčku:
-  `{ v: 1, iv, ct }` = AES-256-GCM(`{ v: 1, startedAt, exposure, events }`), `events` = posledních
-  ≤ 10 `recentCopyEvents`. Fire-and-forget, strop velikosti 64 KB (jinak neposlat), žádný await
+  heartbeat, nejvýš 1× za 16 ms (trailing), pošle broadcast `event: 'exposure'` na téma budíčku:
+  `{ v: 1, iv, ct }` = AES-256-GCM(`{ v: 1, startedAt, exposure, events, manualEntries,
+  manualOrderActions }`), `events` = posledních ≤ 10 `recentCopyEvents`; posledních ≤ 10 ručních
+  vstupů/akcí nese jen `operationId`, stav a technické časy pro E2E diagnostiku (4. 11.).
+  Fire-and-forget, strop velikosti 64 KB (jinak neposlat), žádný await
   v poll smyčce ani u brzd (INV-WORKER-04). Budíček po heartbeatu zůstává.
 - Prohlížeč (`useCopierStatusNudge`): událost `exposure` dešifruje (jeden slot „nejnovější“, viz níže),
   ověří tvar a předá; LIVE desk drží poslední zobrazovací expozici. Pro **graf a karty obchodů**
@@ -184,15 +187,26 @@ Filip po nasazení fáze 1: pozice se v grafu ukáže 1–2 s po vyplnění. Roz
 - Odhad: fill → graf ≈ 0,5–0,8 s (z 1–2 s); zbývá hlavně zpracování fillu ve workeru (F2b).
 
 ### F2b — měření zpracování fillu ve workeru
-- `tradovateBroker`: u emitovaného `fill` log `STREAM FILL acc=… brokerTs→frame … frame→emit …`
+- `tradovateBroker`: u emitovaného `fill` log `BROKER FILL … broker→frame … frame→dispatch … listeners …`; dispatch je čas do předání skutečné Fill entity, `listeners` odděluje synchronní práci controlleru.
   (časová značka brokera, přijetí rámce, emit). Jen log, žádná změna chování. Podle čísel pak
   rozhodnout o odstranění REST dočítání (hydrate) v cestě streamu.
+- Produkční vzorek 4. 11. oddělil `broker→frame 53 ms` od dalších `frame→handler 227 ms`:
+  Fill čekal za předchozím Order rámcem, jehož `/orderVersion/deps` REST hydratace trvala
+  přibližně 242 ms. Lokální optimalizace proto REST nemaže: spustí jej souběžně jako fallback,
+  ale pokud přesně následující socket frame začne autoritativní `OrderVersion` pro stejný order,
+  starší Order přenechá zpracování tomuto rámci. Socketový serial tail a pořadí událostí zůstává
+  beze změny. Jakmile před verzí přijde Fill/Order/Command téhož orderu, verze dorazí až v
+  pozdějším než následujícím rámci nebo socket skončí, čeká se dál na původní REST důkaz.
 - `macCopierCommandRelay`: každý pokus rychlé expozice loguje jen technická čísla
   (`seq`, bajty, šifrování, HTTP, celkem a status), nikdy účet, pozici, téma ani klíč.
 - Prohlížeč s `localStorage['at:dev:perf']='1'`: `live:exposure:decrypt`,
   `live:exposure:to-paint`, `live:chart:component-ready`, `live:chart:first-candles-data`,
   `live:chart:first-candles-paint`, historický/live snapshot a vzorkované `tick-to-paint`
   ve `window.__atPerf`.
+- E2E stopy posledních 60 ručních příkazů jsou v
+  `localStorage['at:dev:live-command-traces-v1']`: potvrzovací klik, relay/Server-Timing,
+  worker timing, přijetí expozice a paint. `validForeground=true` jen pokud karta i okno
+  zůstaly po celý vzorek aktivní; diagnostika zapisuje localStorage odloženě mimo click/paint hot path.
 
 ### Dotčená pravidla
 INV-RELAY-04 (téma budíčku nese zašifrovanou expozici jen pro zobrazení), INV-UI-03, INV-UI-01,
@@ -205,7 +219,7 @@ INV-MANUAL-01 (průměr ani pozice z kanálu nevstupují do příkazu; příkazy
 2. `exposureObservedAt` jen pro overlay (`useLiveChartData.exposureObservedAt`); `workerFresh`,
    `statusFresh` a vše ostatní z pollu; slučuje se jen nad čerstvým pollem; stáří = kotva pollu
    + (builtAt − displayBuiltAt), nejvýš čas přijetí; zpráva z budoucnosti (> uplynulý čas + 1 s) pryč.
-3. Worker: posluchač jen plánuje (setTimeout), 1 požadavek najednou, nejnovější stav, rozestup 150 ms.
+3. Worker: posluchač jen plánuje (setTimeout), 1 požadavek najednou, nejnovější stav, rozestup 16 ms.
 4. Karty: sjednocení událostí podle id (poll ∪ kanál, max 20), nikdy nahrazení.
 5. Klíč: v nevyhazující `tvPriceRealtimeFields`; `onRealtimeConfig` ho nedostane; desk ho maže při
    změně uživatele; AAD = téma; deterministický klíč zapsán do INV-RELAY-04.
@@ -220,7 +234,7 @@ INV-MANUAL-01 (průměr ani pozice z kanálu nevstupují do příkazu; příkazy
 - Hook drží klíč v refu (odběr se při změně klíče neotevírá znovu).
 - Události: u stejného id vyhrává verze z kanálu.
 - BE skryté, dokud expozice z kanálu předbíhá poll (`manageEntryAvgPrice` null).
-- Log fillu (`BROKER FILL …`) v try/catch.
+- Log fillu (`BROKER FILL …`) v try/catch; telefonní i desktopový graf zapisují stejný příjem expozice → první paint.
 
 ## 11. F2c — souběžné ověření identity a connection lookup
 
@@ -365,3 +379,47 @@ importy a call site ale bundler nedokázal bezpečně odstranit.
   už neobsahuje kontrolní texty ani query marker vývojových mocků.
 - Nejde o další dynamický request ani o změnu runtime cesty; odstraňuje se pouze
   kód, který v produkci nemohl být spuštěn.
+
+## 19. F3 — order write přes autorizovaný Tradovate WebSocket (4. 11. 2026, lokálně)
+
+- Oficiální wire protokol páruje request `endpoint\nid\nquery\nbody` s
+  odpovědí `{ i, s, d }`. Worker už stejný socket drží pro `user/syncrequest`.
+- `placeorder`, `placeoco`, `placeoso`, `cancelorder`, `modifyorder` a
+  `liquidateposition` mohou při plně synchronizovaném socketu použít tento
+  transport. Když socket před odesláním připravený není, zachová se REST.
+- Po WS `send()` není žádný REST retry: timeout, close i send chyba jsou
+  neznámý broker výsledek a pokračují dnešní durable lookup/fail-closed cestou.
+- Korelovaný ACK se vyřídí hned v transportním callbacku a nečeká za REST
+  hydratací staršího Order frame. Execution props zůstávají v serial tailu;
+  ACK sám nikdy nevytváří fill ani pozici.
+- Aktivace je výchozím stavem vypnutá a installer ji dovolí jen kombinací
+  `manual-only` + DEMO + `--tradovate-ws-writes on`. Reinstall stav zachová.
+- Cíl měření: stejný 1× MNQ DEMO scénář REST vs. WS v popředí, odděleně
+  click→worker, broker write ACK, broker Fill→worker a Fill→pixel. Malé `n`
+  se nevydává za p50/p95. Produkční aktivace mimo tento DEMO účet není součástí.
+
+## 20. F4 — kompaktní durable ACK horkých příkazů (4. 11. 2026, lokálně)
+
+Produkční vzorek 1× MNQ LIMIT + Cancel ukázal, že samotný DB claim trval
+23–37 ms a brokerový WS ACK 132–150 ms, ale následný `complete-v2` ještě
+161–315 ms nahrával a atomicky zapisoval celý přibližně 24kB runtime status.
+Graf už přitom dostal zobrazovací F2a expozici před tímto ACK.
+
+- `place-leader-entry` a `manage-leader-order` proto po lokálním durable fsync
+  posílají `complete-hot-v3`: delivery, command id, kompaktní výsledek/chybu a
+  přesný `startedAt` workeru. Žádný status ani revision.
+- Databázová funkce zamkne přesný command + delivery, přijme pouze oba uvedené
+  vnitřní typy ve stavu `claimed` a pod zámkem ověří přesnou worker epochu v
+  runtime. Ztracenou HTTP odpověď lze zopakovat jen se stejným terminálním
+  výsledkem; `completed_at` se neposune.
+- Po ACK worker plánuje plný status přes existující fenced heartbeat a budíček
+  LIVE pošle až po jeho potvrzení. Selhání v3 = v téže delivery `complete-v2`
+  (opakuje se jen ACK), takže nesoulad verzí webu a migrace nezablokuje brzdy.
+  Brzdy, ARM, změny konfigurace a všechny ostatní příkazy dál používají
+  `complete-v2`, takže bezpečnostní stav zůstává atomickou součástí jejich ACK.
+- Nasazení: migrace, web, worker. Návrat: worker, web, `drop function`. Jiné pořadí
+  skončí na `complete-v2` bez blokace brzd, jen bez zisku. Před A/B měřením ověřit
+  v logu workeru, že v3 opravdu běží (nebo pauza 5 min nezkresluje vzorek).
+- Očekávaný zisk je pouze v úseku broker ACK → důvěryhodný výsledek v UI.
+  Číslo se uzná až z A/B DEMO měření za stejných podmínek; lokální test není
+  důkaz produkční latence.

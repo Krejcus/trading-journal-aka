@@ -977,7 +977,9 @@ existující ochranu.
   staré instance (řádek v DB nese starou instanci celý, shoda `startedAt` to neodhalí);
   nová instance ho vezme větví „session se změnila“ = neprovede, UI „výsledek neznámý“.
   Okno zkracuje status s `relayIdle: null` hned při startu relaye. Po ACK nese status
-  z `complete-v2` `relayIdle` bez hodnoty → push až po dalším heartbeatu (≤ ~250 ms).
+  z `complete-v2` `relayIdle` bez hodnoty → push až po dalším heartbeatu (≤ ~250 ms);
+  po kompaktním `complete-hot-v3` zůstane do heartbeatu stará hodnota a chrání kontrola
+  `occupied` v admission.
 
 ### Relay příkazy
 
@@ -1070,6 +1072,29 @@ existující ochranu.
   Vědomě nepokryto: ACK
   trvale 409, když DB zná novější `startedAt` (INV-WORKER-02/03). Test:
   `tests/recoverableCopierDeliveryOrphan.test.ts`.
+- Kompaktní ACK horkých ručních příkazů (4. 11. 2026): pouze
+  `place-leader-entry` a `manage-leader-order` po lokálně durable výsledku smí
+  použít `complete-hot-v3`. RPC dál zamyká přesný command + delivery, přijímá
+  jen `claimed`, kontroluje přesnou shodu `startedAt` aktuálního runtime a
+  idempotentně přijme jen totožné opakování výsledku. Plný status se neposílá
+  v ACK; worker jej hned publikuje existujícím fenced heartbeatem a budíček LIVE
+  pošle až po jeho potvrzení. `last_seen_at` se ACKem neposouvá, čerstvost se tedy
+  falešně neprodlužuje. Selhání v3 linku s brzdami trvale neblokuje (INV-BRAKE-03):
+  v3 má rozpočet 3 s (SQL `lock_timeout` 2 s) a v téže delivery následuje už jen
+  `complete-v2` (rozpočet 20 s jako dřív), který po zapsaném v3 vrátí jen shodu.
+  `lock_timeout` platí na každý zámek zvlášť, takže v3 může commitnout až po přechodu
+  na v2; oba směry končí shodou bez druhého zápisu.
+  Brzda za příkazem tak v nejhorším čeká o 3 s déle než s v2. Když server v3 neumí
+  (starý web 400, chybějící funkce 503 `copier-relay-hot-ack-unavailable`), worker
+  ho 5 min nezkouší; přechodné chyby a 409 pauzu nezapnou.
+  Brzdy, ARM, konfigurace a ostatní příkazy vždy zůstávají na atomickém
+  `complete-v2` se statusem. Kompaktní ACK nikdy neopakuje execution ani
+  neautorizuje další příkaz. Mezi terminálním commandem a heartbeatem může runtime
+  krátce nést starou `relayIdle` delivery; admission to řeší kontrolou `occupied`,
+  příkaz jde jen bez zkratky pushem. Testy:
+  `tests/recoverableCopierDelivery.test.ts`,
+  `tests/macCopierCommandRelay.test.ts`,
+  `tests/sql/copierHotCommandCompactAck.pg.mjs`.
 
 ### INV-RELAY-03: Novější brzda superseduje starší ARM a durable čekající brzda není selhání
 
@@ -1164,6 +1189,7 @@ existující ochranu.
 - Budíček statusu (30. 10. 2026, `docs/LIVE_HOT_PATH_PLAN.md` §5): téma
   `copier-nudge-…` odvozené ze zařízení (`copierStatusNudgeTopic`). Worker po
   potvrzeném heartbeatu vyvolaném změnou u brokera a po přijatém ACK příkazu
+  (po kompaktním ACK až po potvrzeném heartbeatu, který status dorovná)
   pošle prázdnou zprávu (fire-and-forget, ≥ 250 ms od sebe); LIVE jen kickne
   běžný poll statusu (`hooks/useCopierStatusNudge.ts`: jen s otevřeným LIVE
   grafem, ≥ 250 ms, nejvýš 60 za minutu). Zpráva nenese
@@ -1173,9 +1199,12 @@ existující ochranu.
 - Expozice přímo do grafu (F2a, 30. 10. 2026, §10 plánu): na tématu budíčku
   událost `exposure` = AES-256-GCM (klíč `copierStatusNudgeKey` ze zařízení,
   AAD = téma) výřezu statusu: `controller.exposure` (smí být `null`), ≤ 10
-  událostí, `startedAt`, `displaySeq`, `displayBuiltAt`. Worker ji jen
+  událostí, `startedAt`, `displaySeq`, `displayBuiltAt`; od 4. 11. navíc ≤ 10
+  `manualEntries` a `manualOrderActions` jen pro korelaci `operationId` a
+  měření potvrzovací klik → worker/broker → první paint. Diagnostická pole se
+  do sloučeného controlleru vůbec nekopírují a nikdy neautorizují příkaz. Worker ji jen
   naplánuje z posluchače změny (mimo eventTail), nejvýš 1 požadavek najednou,
-  rozestup ≥ 150 ms, fire-and-forget; klíč nedostanou zobrazovací doplňky
+  rozestup ≥ 16 ms (jeden obrazový snímek), fire-and-forget; klíč nedostanou zobrazovací doplňky
   (`onRealtimeConfig`) ani log. Prohlížeč: jen při otevřeném grafu, jen
   nejnovější čekající zpráva, sloučí se (`mergeCopierLiveExposure`) jen nad
   čerstvým pollem téže instance: stejný `startedAt`, vyšší `displaySeq` (novější
@@ -1760,6 +1789,30 @@ existující ochranu.
   až po nasazení této opravy do VŠECH workerů na přihlášení — dřív by sám
   záznam shodil běžící worker.
 
+### INV-TRAD-08: WebSocket write se po odeslání nikdy neopakuje přes REST; ACK je korelovaný request ID, ne execution důkaz
+
+- Proč: Tradovate přijímá stejné order endpointy přes autorizovaný WebSocket.
+  Ztráta odpovědi ale neříká, zda broker zápis provedl; REST fallback po
+  `send()` by mohl vytvořit duplicitní objednávku.
+- Vynucuje: `services/tradovateBroker.ts:requestSocketWrite` registruje request
+  před odesláním, páruje odpověď podle jedinečného `i`, timeout/close/send
+  failure vrací jako neznámý výsledek a blokuje plánovanou obnovu socketu,
+  dokud write čeká. `writeOrderRequest` smí použít REST jen před WS odesláním,
+  pokud socket není plně synchronizovaný. Přímý ACK se vyřídí mimo semantic
+  frame tail, ale broker Order/Fill/Position události zůstávají ve svém pořadí.
+- Aktivace: výchozí stav je vypnuto. Mac installer dovolí
+  `--tradovate-ws-writes on` pouze pro `manual-only` DEMO worker; funded/live
+  cesta se tím bez výslovné budoucí validace nemění.
+- Hlídá test: `tests/tradovateBrokerWebSocketWrites.test.ts`,
+  `tests/tradovateBrokerReconnect.test.ts`, `tests/tradovateBrokerRenewal.test.ts`,
+  `tests/copierAgentLifecycle.test.ts`.
+- Nikdy: Po WS timeoutu, pádu nebo chybě `send()` neposlat totéž přes REST;
+  nepovažovat transportní ACK za fill ani výslednou pozici; neobnovit socket
+  uprostřed nevyřízeného write requestu.
+- Bezpečné změny vs. nebezpečné: Bezpečný je REST fallback před prvním WS
+  bytem a pozdější read-only lookup podle `clOrdId`/order ID. Nebezpečný je
+  transportní retry nebo přepsání execution state jen z ACK payloadu.
+
 ### UI pravidla
 
 ### INV-UI-01: Obnovený stav může krátce stabilizovat zobrazení, ale neautorizuje příkaz; po grace je stale/unknown neutrální
@@ -1801,11 +1854,31 @@ existující ochranu.
   kill a full-group Flatten tak nesmí zmizet po pádu grafu/přehledu. Lišta je
   na úzkém webu nad BottomNav, v native shellu používá
   `native-fixed-above-tab-bar` a při otevřeném dialogu se schová.
+- „Zrušit čekající“ v liště vedle Flatten All (C7 UI, 4. 11. 2026) NENÍ safety akce: jen
+  s capability a vlastními čekajícími vstupy, nad čerstvým neobnoveným statusem s relayem,
+  dvoukrokově a sdíleným zámkem jednoho příkazu desku (`liveCommandLockRef`). OFF, kill
+  a Flatten All tím zámkem ani jeho `busy` zamčené nejsou a jejich cesta se nemění. Část C7
+  se v liště vykresluje ve VLASTNÍ hranici chyb (`LiveCancelPendingBoundary`, fallback nic)
+  a pohled `liveCancelPendingView` / `dashboardOrderCancelView` status workeru sanitizuje
+  (`validPendingOwnEntries`, `validPendingCancelContext`: pole s `null` prvkem, objekt místo pole,
+  položka bez ceny, objekt místo textu důvodu) a chybu výpočtu chytí (= nic se nenabídne) — rozjetý
+  status web/worker tak nesundá render desku ani OFF / Kill / Flatten All (oponentura UI kolo 1).
 - Full-group Flatten z lišty i přehledu sdílí jediný zámek podle `groupId`
   (`lib/liveSafetyAction.ts:createFlattenGroupCoordinator`). Druhý caller se
   připojí ke skutečnému výsledku prvního; lokální Flatten nemá 10s abort a
   zámek se uvolní až po resolve/reject workeru. Nikdy nesmí timeout UI vytvořit
   druhý brokerový příkaz. Hlídá `tests/liveSafetyControls.test.ts`.
+- Zkratka Shift+F na PC (U1, 3. 11. 2026) a akce notifikace jen OTEVŘOU dialog
+  Flatten All nouzové lišty (`lib/liveSafetyShortcut.ts:requestLiveSafetyConfirmation`
+  → `LiveSafetyControls.tsx:liveSafetyShortcutListener` → `setConfirmation`) se stejným
+  cílem a týmž zámkem skupiny; nic neprovedou. Otevřený dialog se nepřepíše, běžící
+  Flatten ani neznámá skupina dialog neotevře, Kill switch zkratkou nikdy. Dialog
+  otevřený zkratkou má fokus na **Zrušit** (`liveSafetyDialogInitialFocus`,
+  `ConfirmActionDialog` `initialFocus: 'cancel'`), takže reflexní Enter / mezerník hned
+  po Shift+F Flatten nepotvrdí; potvrzuje se klikem (nebo Tab + Enter). Dialog
+  otevřený tlačítkem lišty má fokus beze změny.
+  Hlídá `tests/liveSafetyShortcut.test.ts`, `tests/liveChartPcIntegration.test.ts`,
+  `tests/liveWaveBCriticFixes.test.ts`.
 - LIVE → Graf (29. 10. 2026): tlačítko Vypnout v hlavičce grafu nezávisle na
   skupině, skryté jen při `lib/liveTradeGroupSource.ts:copierProvablyOff`
   (čerstvý stav, `armed: false` a žádné čekající automatické pokračování —
@@ -2089,8 +2162,15 @@ existující ochranu.
   `orders`, žádné buzení čekatelů). Controller ho použije jen když pracující
   příkazy symbolu sedí s `liveOrdersByAccount` (tvar, stav, `sourceVersion`)
   a vstup se stavem, který už zpracoval; jinak REST. Před zápisem se navíc
-  porovná `routeEpoch` leadera (změna = `not-sent`). `cancel-entry`
-  zůstává na REST. **Od 2. 11. 2026 i `close-position`** bere pre-read ze snímku
+  porovná `routeEpoch` leadera (změna = `not-sent`). **Od 4. 11. 2026 i
+  risk-redukční `cancel-entry`** smí použít tentýž přesně shodný snímek pro
+  předčtení; obecný controller přijme bez dalšího REST jen jako terminální
+  `canceled|filled|rejected` Order přesně rušeného id a účtu, který adaptér
+  autoritativně dohnal. Tradovate adaptér tuto zkratku vrací pouze pro přesný
+  `Order(Canceled)`; `Filled`/odmítnutí nechává původnímu REST fallbacku, protože
+  u partial fillu může raw `Filled` předběhnout Completed cancel report. Chybějící, neterminální nebo neshodné
+  potvrzení = původní přesný REST lookup; fill dál spouští kontrolu ochranných
+  nohou a nikdy se nevydává za „zrušeno“. **Od 2. 11. 2026 i `close-position`** bere pre-read ze snímku
   (jen kontrola tvaru před `liquidateposition`; výsledek dál výhradně z REST ověření
   po zavření, INV-MODE-02; audit nese `zápis`, `stream flat` a `ověření rest` ms).
   Vědomě beze změny: `liquidateposition` zruší všechny příkazy kontraktu — cizí příkaz,
@@ -2107,6 +2187,18 @@ existující ochranu.
   `read-failed`), skončí `unknown` místo `blocked` — fail-closed, dořeší čtení.
   Hlídá test: `tests/manualOrderManage.test.ts` (zrychlení posunu),
   `tests/tradovateConfirmedOrderVersions.test.ts` (snímek streamu).
+- **OrderVersion hydratace nesmí zadržet následující Fill za pomalejším REST
+  (4. 11. 2026):** `/orderVersion/deps` dál začíná při přijetí Order/ExecutionReport
+  rámce a zůstává autoritativním fallbackem. Serializované zpracování socket frame se
+  nikdy nepřeskakuje a žádný budoucí tvar se neaplikuje předčasně. Starší rámec smí
+  přestat čekat na REST pouze tehdy, když ve stejném nebo přesně následujícím již
+  přijatém rámci je `OrderVersion` stejného orderu s dostatečným version ID a zároveň
+  je první relevantní entitou tohoto orderu v daném rámci. Skutečnou verzi pak v
+  pořadí aplikuje až její vlastní socket frame. Fill/Order/Command před verzí, verze
+  v pozdějším rámci, chybějící verze nebo konec socketu vždy ponechá původní REST
+  cestu. Zavření a nové připojení maže všechny staged verze i čekatele. Regrese:
+  `tests/tradovateSpeed11b.test.ts` (rychlá socket cesta, pomalý REST po ní nesmí
+  přepsat stav, Fill před verzí nesmí odblokovat starší Order).
 - **Graf (30. 10. 2026):** živá pozice leadera ve štítcích jako návrh
   (`lib/liveChartOrderLines.ts`). Tah SL/TP = okamžité `move-*` po puštění (mrtvá
   zóna 4 px), `expect` = cena při chycení čáry (změna během tahu = nic se nepošle);
@@ -2151,7 +2243,9 @@ existující ochranu.
   Ruční vstup jen MNQ (`LEADER_ENTRY_SYMBOL_PATTERN`) na klientu, relayi i ve
   workeru; správa existujících obchodů (`manage-leader-order`) NQ dál smí
   (risk-redukční). Měření: `timing` v záznamu (fronta, start, POST, ACK)
-  a v paměti stream (Order, vyplnění, Fill + průměr, Position), jen zobrazení.
+  a v paměti přesný návrat durable commitu + stream (Order, vyplnění, Fill +
+  průměr, Position), jen zobrazení. `committedAt` se nastavuje až po úspěšném
+  návratu stávajícího commitu; nevytváří další zápis ani neovlivňuje příkaz.
 - **Holý Market a doplnění SL/TP z telefonu (2. 11. 2026, rozhodnutí Filipa
   „pilulka koupí/prodá market ihned bez SL/TP, je to fakt objednávka“, oponentura
   copier-design-critic):** jen manual-only DEMO skupina (`market-manual-only`,
@@ -2184,8 +2278,13 @@ existující ochranu.
   Dashboardu a v telefonní liště.
   Telefon (`components/day/LivePhoneChart.tsx`, `lib/livePhoneOrders.ts`) posílá
   přes stejný desk callback, relay a admission jako PC; odeslat jen nad čerstvým
-  neobnoveným stavem, zapnutou kopírkou a bez rozpracovaného vstupu; zámek
-  jednoho příkazu naráz. OFF/Kill/Flatten celé skupiny zůstávají na Live
+  neobnoveným stavem, zapnutou kopírkou, bez rozpracovaného vstupu a mimo
+  přehrávání; zámek jednoho příkazu naráz. „Zrušit“ čekajícího vstupu v liště
+  pozice (`cancel-entry`, ne Flatten) jde přes sdílený zámek čar a listu správy
+  (`LivePhoneLiveActions.tsx:createLivePhoneBarClose` + `lineState.busyRef`; od 4. 11. 2026 je to
+  tentýž ref jako zámek desku `liveCommandLockRef` — i pro vstup, attach a Dashboard), takže
+  souběžně s × / BE / posunem z čáry neodejde druhý příkaz; Flatten pozice zůstává
+  mimo zámek i mimo `busy` (INV-UI-02). OFF/Kill/Flatten celé skupiny zůstávají na Live
   Dashboardu (Filip: žádná nouzová lišta na telefonním grafu; INV-UI-02 se plní
   navigací LIVE ▾ → Live Dashboard). Posun SL dál od trhu v manual-only skupině
   počítá s lokálním denním stropem jako náhled (dřív `risk-unknown`).
@@ -2264,6 +2363,57 @@ existující ochranu.
   'position'`, dořešení po novém vstupu / `closedAt`; kolo 3 mutačně dalších 4: zkratka až po konci zápisu,
   nový vstup během zápisu ve frontě i před POST, incident za DISARMED po restartu),
   `tests/localCopierExecutionAgent.test.ts` (capability).
+  - **UI (4. 11. 2026, `lib/liveBareCloseUi.ts`, `hooks/liveCommandRuns.ts:createLiveBareCloseRun`):**
+    nabídka `liveBareCloseOffer` = jen zobrazení (INV-UI-01/03): capability, `bareLeaderTrade`,
+    žádný spravovatelný obchod s nohami na grafu a pozice leadera skupiny workeru, která PŘESNĚ
+    sedí s Marketem (kontrakt, strana, počet, ne čekající) — neznámá / nesedící pozice = žádné ×
+    (unknown ≠ flat, zůstává Flatten). Neaktivní s důvodem nad zastaralým / obnoveným statusem,
+    bez relaye a mimo ARMED ∧ ¬shadow ∧ ¬kill. PC: × na čáře vstupu (id čáry nese
+    `entryOperationId`, vždy dvoukrokově), Shift+X tutéž čáru a panel (sekce „Přidat SL/TP“)
+    TOUŽ funkcí obrazovky `closeBare`; telefon: „Zavřít“ v liště pozice vedle „Flatten“ (klíč
+    akce + `entryOperationId`, jen mimo přehrávání; záložní tlačítko u holé pozice se VŽDY jmenuje
+    „Flatten“, i bez nabídky a při přehrávání — „Zavřít“ znamená jen C8). JEDEN zámek jednoho
+    příkazu desku `liveCommandLockRef` (oponentura UI kolo 1): PC čáry, Shift+E/X/C, panel (vstup
+    velkým tlačítkem i Náhled → Odeslat, „Přidat SL/TP“, × holé pozice — `runWithCommandLock`),
+    lišta „Zrušit čekající“ a Dashboard; telefon dostane týž ref mostem (`commandLockRef`) pro čáry,
+    lištu pozice, list správy, vstup, attach i čip C7. Flatten, OFF a Kill mimo zámek. VĚDOMÝ
+    dopad (oponentura UI kolo 2, P3): zámek drží i běžící vstup z panelu / telefonu (POST zápisu
+    a relay až ~35 s) a celou sekvenci C7 (až 10× `cancel-entry`), takže na tomto zařízení mezitím
+    neodejde ani akce, která riziko SNIŽUJE (× zavření, posun SL, BE, C8). Cesta, která jde vždy, je
+    Flatten (lišta pozice / Flatten All, mimo zámek, INV-UI-02) — text obsazeného zámku to říká
+    („… Zavřít jde hned Flattenem“, `LIVE_MANAGE_BUSY_TEXT` / `LIVE_COMMAND_BUSY_TEXT`, Shift+E/X/C
+    „… Flattenem (Shift+F)“). Zkrácení zámku C7 (uvolnit po prvním `unknown` / timeoutu) by byla
+    změna jádra `cancelOwnPendingEntries` — jen přes critic, zatím ne. Dvoukrok
+    (`lib/liveConfirmGate.ts:createLiveConfirmGate` nad `liveConfirmClick`) zahodí rozběhnuté
+    „Opravdu?“ i BEZ kliku, když nabídka zmizí, změní klíč nebo se zablokuje (panel, telefonní lišta;
+    zkratky Shift+E/X/C `lib/liveHotkeys.ts:liveHotkeyGuardSync` — efekt obrazovky na čárách, cíl
+    týmž `hotkeyTarget` + `liveHotkeyConfirmKey` jako stisk). Čáry grafu (PC i telefon,
+    `BacktestOrderLinesOverlay`): efekt na `lines` = čistá `orderLineConfirmSync` — klíč, který čáry
+    už nenabízejí (vyplnění, attach, blokace nabídky, zmizení čáry), udělá z potvrzení NEAKTIVNÍ
+    značku `stale` do `until`, NIKDY jen `null` (oponentura UI kolo 2, P2: s `null` React spustil
+    efekt před dalším klikem a jednoklikové × vyplněné / spravované pozice odešlo — ochrana „téže
+    čáry“ z 2. 11. i z kola 1 byla vyřazená). `orderLineConfirmStep`: klik na tutéž čáru (čára holé
+    pozice `live-position:entry:bare:<id>` = tatáž čára jako `live-position:entry`) do `until`
+    při `stale` nebo při jiné akci × nic neodešle (u dvoukrokové akce jen začne nový dvoukrok);
+    značka se po návratu nabídky neoživí a zůstane i když čára na chvíli zmizí. Přechod čekající →
+    vyplněno (PC jednoklik), holá → spravovaná i zablokováno → vráceno tak mezi kliky nic nepotvrdí; spolknutý klik
+    rozběhne aktivní výzvu nového × (text podle akce: „Zavřít?“ / „Zrušit?“ / „Odstranit?“), takže
+    ani dvojklik po přechodu nic nepošle (další klik ≥ 350 ms od předchozího); neaktivní značka × jedné
+    čáry živé pozice (`live-position:…`) spolkne i jednoklikové × jiné čáry téže pozice (vyplněné
+    přikoupení → pod kurzor dojede × pozice)
+    — hlídá test SLOŽENÍ klik → sync → klik (`tests/liveC7C8Ui.test.ts` (f2)).
+    Odeslání = deskový `closeBareLeader` (čistá továrna `lib/liveDeskCommands.ts`): čerstvý status
+    + capability + `sameBareTrade` (odejde jen obchod, který uživatel viděl) →
+    `buildLeaderOrderManageCommand({ …, ...bareCloseManageFields })` → jediné relay odeslání správy
+    `sendLeaderManage` (sdílené se správou, attach a C7).
+    Texty `liveBareCloseResultNotice`: ověřeně flat = „zavřena — ověřeno stavem“; `waived` (worker
+    hlásí `acknowledged` s „ne tímto příkazem“) = „Leader je flat — ne tímto příkazem“; `rejected`
+    = „Broker zavření odmítl… zkontroluj, případně Flatten“; `unknown` i výjimka po odeslání =
+    „Neověřeno — zkontroluj Tradovate“, NIKDY „zavřeno“; nic se neopakuje. Dvoukrok čar grafu
+    (`BacktestOrderLinesOverlay:orderLineConfirmStep`, PC i telefon) od téhož dne počítá 350 ms od
+    PŘEDCHOZÍHO kliku (`liveManageConfirmStep`; dřív od prvního — trojklik potvrdil).
+    Hlídá test: `tests/liveC7C8Ui.test.ts` (behaviorálně přes čisté továrny a automat dvoukroku;
+    bezpečnostní větve mutačně ověřil stavitel v kolech oprav oponentury UI 1 a 2 skriptem mimo repo).
 - **„Zrušit vše“ = zrušit VLASTNÍ čekající vstupy, nikdy ochranu pozice (C7, 3. 11. 2026,
   `docs/reviews/trading-gaps-designs/safety.md`; oponentura copier-design-critic: návrh OK, diff
   kolo 1 „OPRAVIT PŘED COMMITEM“ → opraveno týž den; kolo 2 „OK S VÝHRADAMI“ (8× P3) → výhrady
@@ -2279,7 +2429,8 @@ existující ochranu.
     kaskáda NEOVĚŘENÁ → blokováno s kódem `entry-partially-filled` „pozice je otevřená, zavři ji
     Flattenem (× u částečně vyplněné pozice nejde)“ — × chce vstup vyplněný přesně na qty, oponentura
     C7 kolo 2). **Worker to hlídá sám, ne jen výběr pro zobrazení** (oponentura C7 kolo 2,
-    `cancelEntryTargetProblem`): cíl `cancel-entry` z čerstvého REST nesmí mít `parentOrderId`, jeho id
+    `cancelEntryTargetProblem`): cíl `cancel-entry` z přesně shodného synchronizovaného snímku
+    (jinak z čerstvého REST) nesmí mít `parentOrderId`, jeho id
     nesmí být id žádné známé ochranné nohy (vlastní záznamy + OSO/bracket outboxy) a u vlastního vstupu
     musí strana i typ sedět se záznamem — jinak `not-entry` a nic se neodešle (chyba mapování ACK
     ani poškozený store nikdy nezruší SL). Kolo 3 (P3, obrana do hloubky): příkaz na OPAČNÉ straně,
@@ -2304,12 +2455,14 @@ existující ochranu.
     streamu s fillem 0, stejného symbolu/strany/typu, bez `parentOrderId` a s id, které není id
     žádné vlastní nohy; bez rozběhnutého zrušení či nevyřešené změny. `pendingCancelContext` jen
     počítá, co zůstává (cizí, ochranné nohy, částečně vyplněné) a proč teď nejde nic
-    (nevyřešený ruční vstup). Worker při každém zrušení vše ověří znovu čerstvým REST čtením.
+    (nevyřešený ruční vstup). Worker při každém zrušení vše ověří ze synchronizovaného, přesně
+    shodného snímku s route fence; při jakékoli nejistotě znovu čerstvým REST čtením.
   - **Výsledek `cancel-entry` jen stavem (od C7, `lib/liveCancelPending.ts:cancelEntryOutcome`):**
-    adaptér `cancelOrder` skončí úspěchem i u příkazu, který se mezitím vyplnil (čeká na
-    canceled|filled|rejected), a Tradovate zrušení vyplněného vstupu ODMÍTNE („TooLateToCancel“).
-    Proto po úspěchu i po definitivním odmítnutí (inline i pozdě po timeoutu) ohraničené autoritativní
-    `findOrderById` vstupu: `canceled` s fillem 0 = `acknowledged` (po odmítnutí `waived` „ne tímto
+    Tradovate adaptér `cancelOrder` vrátí rychlé potvrzení jen po přesném `Order(Canceled)`; vstup,
+    který se mezitím vyplnil, broker typicky ODMÍTNE („TooLateToCancel“) a raw `Filled` se za úspěch
+    nikdy nevydává. Proto po platném streamovém potvrzení terminální stav přesně tohoto id/účtu, jinak — a po
+    definitivním odmítnutí vždy — ohraničené autoritativní `findOrderById` vstupu:
+    `canceled` s fillem 0 = `acknowledged` (po odmítnutí `waived` „ne tímto
     příkazem“ — kauzalita se netvrdí); jakýkoli fill = `rejected` s kódem `entry-filled` /
     `entry-partially-filled` (nikdy „zrušeno“, kód je i v durable záznamu `resultCode` a vrací ho
     idempotentní replay); `waived` nese kód ověřený stavem (`canceled-elsewhere` / `entry-ended`)
@@ -2358,7 +2511,40 @@ existující ochranu.
     (čeká na ustálení) se zatím nehlásí, aby „výsledek neznámý“ nepředběhl konečný výsledek; důvod
     s koncovou tečkou bez „..“ (kolo 3). Dashboard
     „Zrušit příkaz“ (`dashboardCancelTarget`) má stejné brány jako tlačítko: čerstvý neobnovený
-    status a relay (INV-FRESH-03, INV-UI-01/02; kolo 2) — UI zatím zapojené není.
+    status a relay (INV-FRESH-03, INV-UI-01/02; kolo 2).
+  - **UI (4. 11. 2026, `lib/liveCancelPendingUi.ts`, `components/LivePendingCancel.tsx`,
+    `hooks/liveCommandRuns.ts:createLiveCancelPendingRun`):** tlačítko „Zrušit čekající (N)“ jen když
+    `cancelPendingAvailability` říká `show` (PC lišta pod grafem vedle Flatten All, telefon čip nad
+    grafem); neaktivní s důvodem nad zastaralým / obnoveným statusem, bez relaye, při blokaci workeru
+    a během přehrávání. Dvoukrok `createLiveConfirmGate` nad `liveConfirmClick` (2. klik 350 ms – 4 s od
+    PŘEDCHOZÍHO kliku; klíč = `cancelPendingConfirmKey` přesně zobrazené sady — vyplnění / nový vstup
+    = znovu od 1. kliku a rozběhnuté „Opravdu?“ zmizí i bez kliku; dva kliky v jednom snímku nic).
+    `cancelPendingConfirmStep` jádra se v UI NEPOUŽÍVÁ (rychlý klik neposouvá kotvu — trojklik
+    0/200/400 ms by potvrdil); test hlídá, že ho žádný runtime soubor neimportuje, sjednocení nebo
+    odstranění exportu je samostatná změna jádra přes critic. Text potvrzení `cancelPendingConfirmText`
+    (kolik a čeho, co zůstává) přes `liveCancelPendingConfirmText`: kontext ze statusu, který je, ale
+    není objekt (pole, text), = zamčeno „Stav čekajících příkazů nejde přečíst — zruš v Tradovate nebo
+    Flatten.“ (fail-closed, i Dashboard); nečitelný / chybějící počet = `null` a text přidá „Co zůstává
+    (…), nejde ověřit“ — nikdy se neukáže jako „nic nezůstává“ (INV-UI-01 unknown ≠ 0, INV-DEFAULT-02;
+    kolo 2). Telefonní čip se schová jen když tutéž jedinou položku cíleně ruší „Zrušit“ lišty pozice
+    (most má `manage` a čekající příkaz lišty sedí kontraktem, stranou, počtem i cenou —
+    `livePhoneCancelPendingChipShown`); jinak by lišta spustila Flatten a cílené C7 by na grafu
+    chybělo (kolo 2). Sdílený zámek jednoho příkazu = `liveCommandLockRef` desku (PC čáry,
+    zkratky, panel, lišta; telefon mostem `commandLockRef`; Dashboard), Flatten mimo zámek; sekvence
+    drží zámek celou dobu — na zařízení mezitím neodejde × / posun SL / BE ani vstup (vědomě, viz C8
+    UI výše; zbývá Flatten). Desk
+    `cancelPendingEntries` (`lib/liveDeskCommands.ts`): čerstvý status + capability +
+    `cancelPendingSeenProblem` (každá potvrzená položka pořád v čerstvém statusu se stejným id, cenou
+    a počtem) → `cancelOwnPendingEntries` přes `sendLeaderManage` s trasou relaye zachycenou JEDNOU před
+    sekvencí (INV-TRAD-06, INV-RELAY-01): změna trasy uprostřed = zbytek „Neodesláno“, nic na jinou
+    trasu; výsledek po položkách `cancelPendingSummary` (fill nikdy „zrušeno“), ukáže se i když
+    nabídka mezitím zmizela (status dřív než ACK). Dashboard: nefunkční `cancel-order` nahrazeno
+    `dashboardOrderCancelView` → `dashboardCancelTarget` (jen vlastní čekající vstup leadera skupiny
+    workeru, dvoukrokově, týž zámek); `blockedReason` workeru zamkne i Dashboard (jako lištu); skupina,
+    kterou worker neřídí, má vlastní text („Zrušit jde jen u skupiny, kterou řídí worker“); starý
+    worker bez capability, SL/TP noha, follower, cizí příkaz i neověřený stav = tlačítko zamčené
+    s vysvětlením; přehled `cancel-order` už nikdy nesestaví. Hlídá test: `tests/liveC7C8Ui.test.ts`
+    (behaviorálně; bezpečnostní větve mutačně ověřil stavitel v kolech oprav oponentury UI 1 a 2 skriptem mimo repo).
   Hlídá test (kolo 1 mutačně 16 mutací, kolo 2 dalších 20, kolo 3 dalších 15):
   `tests/liveCancelPending.test.ts` (odmítnutí inline i pozdě, dvojí zrušení, přerostlé nohy, pořadí
   kontrola→záznam i při souběhu, odmítnutí s REST „working“, restart v `sending`, replay po waiveru,
@@ -2399,14 +2585,74 @@ existující ochranu.
   `manageLeaderEntry`, předané jen za stejných podmínek jako PC
   (`supportsCopierManualOrderManage && ownManualEntry`); bez něj jsou čáry jen
   zobrazení. Zámek jednoho příkazu a „odesílám“ žijí v rodiči
-  (`useLivePhoneLineState`), aby přežily odpojení vrstvy. Ve dvou oknech se
-  štítky nekreslí (souřadnice okna 0), pozici pak kreslí cenové čáry do všech
-  oken (`fullPane`). Plusko u crosshairu volí typ příkazu ze čerstvé kotace
+  (`useLivePhoneLineState`), aby přežily odpojení vrstvy. Ve dvou oknech (U3,
+  3. 11. 2026) kreslí každé okno vlastní vrstvu (`paneLayer`) se svým API grafu:
+  štítky, BE, ×, tah SL/TP, čáry návrhu, pracující příkazy a ✎ správy v měřítku
+  toho okna; zámek jednoho příkazu (`lineState`) je společný, plusko jen v aktivním
+  okně, skryté okno (druhé maximalizované) nekreslí nic. Při přehrávání žádné
+  ovládání ani odeslání (čáry, návrh, plusko, list objednávky i správy, lišta
+  Koupit/Prodat, lišta návrhu) — jen štítek živé pozice a cesta zpět na živo;
+  Zavřít a Přidat SL/TP v liště pozice zůstávají (snižují riziko). Plusko u crosshairu volí typ příkazu ze čerstvé kotace
   (`clickedOrderType`, ≤ 3 s) a otevírá stejný list objednávky; odeslání z listu
   (i z position boxu) znovu odmítne limit/stop, který je proti čerstvé kotaci
   už na druhé straně trhu. Karty vlevo dole = `LiveTradeToasts` z týchž událostí
   kopírky jako PC; problémové (sticky) karty nic nevytlačí (`keepStickyToasts`).
   Hlídá test: `tests/priceAlerts.test.ts`, `tests/livePhoneTrade.test.ts`.
+- **Obchodování z PC grafu — UI vlna B (3. 11. 2026, `docs/reviews/trading-gaps-20261103.md`,
+  oponentura copier-design-critic):** jádro, relay ani worker se nemění; všechno jde přes
+  stávající desk callbacky (`placeLeaderEntry`, `manageLeaderEntry`, `attachBrackets`,
+  `runStaticSafetyAction`), které bez `armStatusRef.fresh` hodí „nic se neodeslalo“.
+  - **Klávesy PC (U1):** opt-in (výchozí vypnuto, `at:live:hotkeys`). Shift+B/S jen návrh
+    v panelu jako ⚡ (Market jen s capability a kotací ≤ 3 s, jinak Limit ±10 b; SL/TP
+    z výchozí šablony ★) a fokus pryč z panelu (`liveReleaseTicketFocus`); Esc zahodí
+    návrh jen při nečinném kreslení; Shift+E/X/C dvoukrokově (nový stisk ≥ 350 ms, do 4 s,
+    klíč akce + čára + cena, `createTwoStepGuard`) TOUŽ funkcí jako BE / × na čáře
+    (Shift+X jen když × nabízí čára); Shift+F jen dialog lišty (INV-UI-02). Zkratky mlčí
+    při `repeat`, IME, Meta/Ctrl/Alt, fokusu v poli / editoru / dialogu, otevřeném dialogu
+    nebo menu, odchodu z grafu, skryté stránce a během přehrávání (kromě Flatten dialogu,
+    nápovědy a zahození návrhu). **Žádná klávesa neodešle vstup:** globální Enter není,
+    odesílací tlačítka panelu po kliku pouští fokus (`event.currentTarget.blur()`), takže
+    Enter / mezerník po zkratce nepošle vyměněný návrh.
+  - **Holý Market z PC panelu (U4):** jen s `manual-entry-bare-v1`, jen skupina (vstup na
+    leadera), jen v kontraktech, kontrakt jen z kotace IBKR ≤ 3 s. Výstražné tlačítko
+    „MARKET · BEZ SL/TP“, dvoukrok 350 ms – 4 s s klíčem akce + kontrakt + strana + počet;
+    brána (`liveBareMarketBlockReason`: brána desku, capability, kotace, strop, pozice) se
+    vyhodnotí při KAŽDÉM kliku (`liveBareSendClick`); rozběhnuté potvrzení zahodí blokace
+    i bez kliku (tlačítko je disabled) a změna klíče (qty 1→2→1 = znovu od 1. kliku).
+    Klik dřív než 350 ms od PŘEDCHOZÍHO kliku kotvu posune, trojklik nepotvrdí (totéž
+    `liveManageConfirmStep` a `createTwoStepGuard`); tlačítka Správy po kliku pouští fokus.
+    Neověřené čtení pozice (`issue`) i chybějící data = ne flat (`liveTicketBarePosition`,
+    unknown ≠ flat), autoritou zůstává worker (`account-not-flat`). Holý Market NIKDY přes
+    Náhled → Odeslat (Náhled ho jen zkontroluje); ostatní vstupy z Náhledu dvoukrokově
+    350 ms – 4 s s klíčem id náhledu + celý návrh včetně ceny, čerstvost náhledu (≤ 15 s)
+    a brána panelu při kliku (`livePreviewPlaceClick`). Velké tlačítko běžného vstupu
+    zůstává jedním klikem (Filip 30. 10.).
+  - **„Přidat SL/TP“ z PC (U4):** jen s capability, `onAttachBrackets` a vlastním holým
+    vstupem (`newestOpenBareEntry`); záměr `liveAttachIntent` se skládá při kliku (kotace
+    IBKR téhož kontraktu ≤ 3 s, pozice = holý vstup, nohy ≥ 8 ticků na správné straně);
+    přijatý nebo neznámý výsledek se neodešle znovu, „nic se neodeslalo“ = Neodesláno
+    (jde opravit). Čáry „· přidat“ jen mění nohy v panelu. Předvolby qty a šablony
+    (U4/U8) ukládají jen velikost, jednotky a vzdálenosti, nikdy cenu.
+  - **Správa číslem a BE varianty (U10, PC panel i telefonní list):** jen záměr pro
+    sdílený runner (`useLiveManageRunner`, jeden zámek s čarami grafu; PC jen s runnerem
+    a jen u leadera skupiny workeru, `leaderManageBasis`). SL/TP zadané v ceně / bodech /
+    ticích / $ od průměru z pollu se převede na absolutní cenu záměru, která je vidět na
+    tlačítku („Posunout → X“); odejde jen cena, která na tlačítku visela ≥ 350 ms
+    (`liveManageSeenPriceProblem` — změna průměru pollem těsně před klikem = nic).
+    SL dál od trhu dvoukrokově, utažení SL a TP na PC jedním klikem (jako tah čáry),
+    na telefonu vše dvoukrokově. BE, BE + n (1–40 t) a BE + odhad poplatků jsou jen jiná
+    cena záměru `move-stop`, vždy dvoukrokově s cenou v klíči. **Poplatky jsou ODHAD**
+    z poslední sazby brokera (`lib/liveTradeCard.ts:tradeCardFeeRates`: průměrný poplatek
+    za kontrakt z posledních ≤ 20 fillů účtu × kusy), ne skutečné poplatky pozice;
+    neznámé = tlačítko se nenabízí.
+  - **Pojistka přehrávání na PC (U3-PC):** během přehrávání zůstanou jen čáry živé
+    pozice pro čtení; návrh a „· přidat“ zmizí, pravý klik ani ⚡ nic nevytvoří, panel
+    Objednávka je zavřený a `inert`, zkratky nic nenavrhnou ani nespustí.
+  - Pracující příkazy (U5) a šipky plnění na PC (U4) jsou jen zobrazení: vlastní vrstva
+    bez ovládání, do příkazů ani do „co jsem viděl“ nevstupují.
+  Hlídá test: `tests/liveOrderTicketPanel.test.ts`, `tests/liveChartPcIntegration.test.ts`,
+  `tests/liveHotkeys.test.ts`, `tests/liveManagePrices.test.ts`, `tests/livePhoneSheets.test.ts`,
+  `tests/livePhoneChartB5.test.ts`, `tests/liveWaveBCriticFixes.test.ts` (mutačně ověřeno).
 - Hlídá test (1b): `tests/manualEntryPlace.test.ts`, `tests/leaderEntryPlace.test.ts`,
   `tests/localCopierExecutionAgent.test.ts`, `tests/tradovateCopierCommandRelay.test.ts`.
 
@@ -2531,6 +2777,9 @@ existující ochranu.
 - Proč: Filip 26. 10. povolil cenu z TV pro P&L zobrazené na obrazovce, nikdy
   pro risk, day lock, limity ani kopírku. Veřejný Realtime kanál je
   podvrhnutelný, proto se zprávy podepisují.
+- **Živé P&L na lince vstupu (Filip 5. 11. 2026):** `liveDisplayOpenPnl` smí do štítku linky
+  a tlačítka panelu, jen s cenou z IBKR téhož kontraktu ≤ 5 s; jinak se ukáže číslo brokera.
+  Stejně jako `LiveOpenPnlValue` nikdy do rizika, limitů, day locku ani příkazů.
 - **Nativní Market a IBKR v riziku ručního vstupu (Filip 1. 11. 2026 večer,
   výslovně schváleno: „jen IBKR pro risk“):** od 2. 11. 2026 Market z panelu
   posílá skutečný Market (`orderType: 'Market'`, bez ceny příkazu; výjimka

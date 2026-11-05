@@ -194,8 +194,12 @@ describe('LIVE → Graf: vypnutí a strážní pravidla', () => {
     // Jediná interakce karty je rozbalení účtů — nic neodesílá.
     expect(card.match(/onClick=\{[^\n]*\}/g)).toEqual(['onClick={() => canExpand && setExpanded(value => !value)}']);
     expect(card).not.toMatch(/onManage|onPlace|onPreview|onDraft/);
-    // Správa SL/TP/BE z panelu zmizela (31. 10.) — zůstává ve štítcích grafu.
-    expect(ticket).not.toMatch(/ManageSection/);
+    // Správa SL/TP/BE z panelu zmizela 31. 10.; U10 (3. 11.) ji vrací jako samostatnou sekci
+    // pod kartou — jen přes sdílený runner správy (jeden zámek s čarami grafu), nikdy z karty.
+    const manage = ticket.slice(ticket.indexOf('const ManageSection'), ticket.indexOf('interface Props {'));
+    expect(manage).not.toMatch(/onManageEntry|onPlaceEntry|onAttachBrackets/);
+    expect(ticket).toMatch(/const step = manageRunner\.request\(intent\);/);
+    expect(ticket.match(/onManageEntry\(/g)).toBeNull();
   });
 });
 

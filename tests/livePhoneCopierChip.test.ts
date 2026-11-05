@@ -50,6 +50,6 @@ describe('čip kopírky v hlavičce telefonního LIVE grafu', () => {
     const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
     expect(desk).toMatch(/tabs=\{tabs\.filter\(item => item\.id !== 'chart'\)\}/);
     // Telefonní graf nečte stav workeru rychleji (jen graf na PC).
-    expect(desk).toMatch(/chartOpenRef\.current = chartAvailable && tab === 'chart';/);
+    expect(desk).toMatch(/chartOpenRef\.current = \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart';/);
   });
 });

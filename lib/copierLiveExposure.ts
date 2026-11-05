@@ -12,6 +12,8 @@ import type { LocalCopierAgentStatus } from './localCopierAgentProtocol';
 type Controller = LocalCopierAgentStatus['controller'];
 export type CopierLiveExposure = NonNullable<Controller['exposure']>;
 type CopyEvents = NonNullable<Controller['recentCopyEvents']>;
+export type CopierLiveManualEntries = NonNullable<Controller['manualEntries']>;
+export type CopierLiveManualActions = NonNullable<Controller['manualOrderActions']>;
 
 export const COPIER_LIVE_EXPOSURE_EVENT = 'exposure';
 /** Větší zpráva se neposílá ani nepřijme (veřejné téma, strop dešifrování). */
@@ -34,6 +36,10 @@ export interface CopierLiveExposurePayload {
   /** `null` = worker expozici nezná (odpojený, bez kontroly) — i to je novější stav. */
   exposure: CopierLiveExposure | null;
   events: CopyEvents;
+  /** Poslední ruční vstupy s časy workeru pro korelaci klik → fill → pixel. Jen diagnostika/zobrazení. */
+  manualEntries?: CopierLiveManualEntries;
+  /** Poslední posuny/zrušení/zavření pro korelaci klik → první paint. Jen diagnostika/zobrazení. */
+  manualOrderActions?: CopierLiveManualActions;
   /**
    * Plnění leadera aktuální epizody (šipky v grafu, 2. 11. 2026) — ve stejné zprávě jako
    * expozice, aby seděly k sobě. Chybí = starší worker (platí hodnota z pollu).
@@ -114,6 +120,40 @@ const isExposure = (value: unknown): value is CopierLiveExposure => {
 };
 
 const LEADER_FILLS_MAX = 50;
+const MANUAL_ENTRIES_MAX = 10;
+const MANUAL_ENTRY_STATUSES = new Set(['sending', 'acknowledged', 'rejected', 'unknown', 'abandoned', 'not-sent', 'waived']);
+const MANUAL_ENTRY_ORDER_TYPES = new Set(['Limit', 'Stop', 'Market']);
+const MANUAL_ACTIONS = new Set(['move-stop', 'move-target', 'cancel-entry', 'close-position', 'attach-brackets']);
+const MANUAL_ACTION_STATUSES = new Set(['sending', 'acknowledged', 'rejected', 'unknown', 'not-sent', 'waived']);
+const MANUAL_TIMING_FIELDS = ['queuedAt', 'startedAt', 'dispatchAt', 'ackAt', 'committedAt', 'orderAt', 'filledOrderAt', 'fillAt', 'fillAvg', 'fillQty', 'positionAt'] as const;
+const isManualEntries = (value: unknown): value is CopierLiveManualEntries => Array.isArray(value)
+  && value.length <= MANUAL_ENTRIES_MAX
+  && value.every(row => {
+    if (!row || typeof row !== 'object') return false;
+    const entry = row as Record<string, unknown>;
+    const timing = entry.timing;
+    return text(entry.operationId, 80) && MANUAL_ENTRY_STATUSES.has(String(entry.status))
+      && time(entry.createdAt) && time(entry.updatedAt) && text(entry.symbol, 32)
+      && (entry.side === 'Buy' || entry.side === 'Sell') && int(entry.quantity) && (entry.quantity as number) > 0
+      && (entry.orderType === undefined || MANUAL_ENTRY_ORDER_TYPES.has(String(entry.orderType)))
+      && (timing === undefined || (!!timing && typeof timing === 'object'
+        && MANUAL_TIMING_FIELDS.every(field => (timing as Record<string, unknown>)[field] === undefined
+          || finite((timing as Record<string, unknown>)[field]))));
+  });
+const isManualActions = (value: unknown): value is CopierLiveManualActions => Array.isArray(value)
+  && value.length <= MANUAL_ENTRIES_MAX
+  && value.every(row => {
+    if (!row || typeof row !== 'object') return false;
+    const action = row as Record<string, unknown>;
+    return text(action.operationId, 80) && text(action.entryOperationId, 80)
+      && MANUAL_ACTIONS.has(String(action.action)) && MANUAL_ACTION_STATUSES.has(String(action.status))
+      && time(action.createdAt) && time(action.updatedAt)
+      && (action.displayAt === undefined || time(action.displayAt))
+      && (action.displayStage === undefined || action.displayStage === 'order' || action.displayStage === 'fill' || action.displayStage === 'position')
+      && (action.fromPrice === null || finite(action.fromPrice))
+      && (action.toPrice === null || finite(action.toPrice));
+  });
+
 const isLeaderFills = (value: unknown): boolean => {
   if (value === null) return true;
   if (!value || typeof value !== 'object') return false;
@@ -149,7 +189,9 @@ export function isCopierLiveExposurePayload(value: unknown): value is CopierLive
   if (payload.v !== 1 || !text(payload.startedAt) || !Number.isFinite(Date.parse(payload.startedAt))) return false;
   if (!int(payload.seq) || payload.seq <= 0 || !time(payload.builtAt)) return false;
   if (payload.exposure !== null && !isExposure(payload.exposure)) return false;
-  return Array.isArray(payload.events) && payload.events.length <= COPIER_LIVE_EXPOSURE_EVENTS && payload.events.every(isCopyEvent);
+  return Array.isArray(payload.events) && payload.events.length <= COPIER_LIVE_EXPOSURE_EVENTS && payload.events.every(isCopyEvent)
+    && (payload.manualEntries === undefined || isManualEntries(payload.manualEntries))
+    && (payload.manualOrderActions === undefined || isManualActions(payload.manualOrderActions));
 }
 
 /** Zašifrovat pro téma budíčku (AAD = téma); příliš velká zpráva nebo chybějící WebCrypto = null. */

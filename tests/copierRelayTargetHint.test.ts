@@ -16,6 +16,7 @@ function hintDb(options: {
   runtime?: Row | null;
   deviceError?: string;
   runtimeError?: string;
+  calls?: string[];
 } = {}): SupabaseClient {
   const device = options.device === undefined
     ? { id: deviceId, user_id: userId, connection_id: connectionId, revoked_at: null }
@@ -43,10 +44,16 @@ function hintDb(options: {
     };
     return api;
   };
+  const embedded = device ? {
+    ...device,
+    runtime: runtime ? { status: runtime.status, last_seen_at: runtime.last_seen_at } : null,
+  } : null;
   return {
     from: (table: string) => {
-      if (table === 'tradovate_copier_devices') return query(device ? [device] : [], options.deviceError);
-      if (table === 'tradovate_copier_device_runtime') return query(runtime ? [runtime] : [], options.runtimeError);
+      options.calls?.push(table);
+      if (table === 'tradovate_copier_devices') {
+        return query(embedded ? [embedded] : [], options.deviceError ?? options.runtimeError);
+      }
       throw new Error(`unexpected-table:${table}`);
     },
   } as unknown as SupabaseClient;
@@ -65,11 +72,13 @@ const validHint = (patch: Record<string, unknown> = {}) => ({
 
 describe('copier relay target hint', () => {
   it('accepts only the same non-revoked device, connection and worker instance with a fresh heartbeat', async () => {
-    await expect(verifyCopierRelayTargetHint({ db: hintDb(), userId, hint: validHint(), now }))
+    const calls: string[] = [];
+    await expect(verifyCopierRelayTargetHint({ db: hintDb({ calls }), userId, hint: validHint(), now }))
       .resolves.toMatchObject({
         connectionId,
         device: { id: deviceId, status: { startedAt } },
       });
+    expect(calls).toEqual(['tradovate_copier_devices']);
   });
 
   it.each([
@@ -115,6 +124,6 @@ describe('copier relay target hint', () => {
       userId,
       hint: validHint(),
       now,
-    })).rejects.toThrow('copier-relay-runtime-status-failed: database offline');
+    })).rejects.toThrow('copier-relay-target-hint-lookup-failed: database offline');
   });
 });

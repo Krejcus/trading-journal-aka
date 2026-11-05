@@ -1,10 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import BacktestOrderLinesOverlay from '../BacktestOrderLinesOverlay';
+import type { BacktestChartOrderLine, BacktestChartOrderLineKind } from '../../services/backtestOrderLines';
 import { LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../../lib/liveChartOrderLines';
 import type { LiveChartPositionSummary } from '../../lib/liveChartPosition';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../../lib/leaderOrderManage';
-import { snapToTick } from '../../lib/liveOrderTicket';
+import { LIVE_DRAFT_ID, liveDraftChartLines, snapToTick, withBracket, withEntryPrice, type TicketDraft, type TicketInstrument, type TicketQuote } from '../../lib/liveOrderTicket';
+import type { LiveTicketScaleIn } from '../../lib/liveScaleIn';
+import { LIVE_MANAGE_BUSY_TEXT } from '../../hooks/useLiveManageRunner';
+import { isLiveDisplayOnlyLine, type LiveWorkingOrderBadge, type LiveWorkingOrdersView } from '../../lib/liveWorkingOrderLines';
 
 const TICK = 0.25;
 const POINT_VALUE = 2;
@@ -29,6 +33,89 @@ export function useLivePhoneLineState(): LivePhoneLineState {
   return { pendingMove, setPendingMove, busyRef };
 }
 
+/** ✎ na čáře SL/TP (U10): jen otevře list správy s touto nohou — nic neodešle. */
+export const LIVE_PHONE_MANAGE_ACTION = { id: 'manage', label: '✎', title: 'Správa SL/TP: číslo, BE, BE + n ticků' } as const;
+
+/**
+ * Přikoupení do pozice drží SL/TP pozice (`livePhoneScaleInDraft`): závorky návrhu se
+ * v grafu netáhnou (worker jiné nepustí, PC je má v panelu zamčené) — kreslí je čáry pozice.
+ */
+export function livePhoneDraftScaleLocked(draft: Pick<TicketDraft, 'side'>, scaleIn: LiveTicketScaleIn | null | undefined): boolean {
+  return scaleIn != null && draft.side === scaleIn.side && scaleIn.stopLoss != null && scaleIn.targetPrice != null;
+}
+
+/**
+ * Čáry návrhu v grafu telefonu (U2, 3. 11. 2026) — stejné jako PC (`liveDraftChartLines`):
+ * vstup Limit/Stop jde táhnout, u Marketu jen SL/TP (vstup jede s cenou). Návrh, ne příkaz:
+ * tah mění jen návrh v rodiči, odchází až tlačítkem lišty návrhu nebo listu (INV-UI-01).
+ */
+export function livePhoneDraftLines(
+  draft: TicketDraft,
+  instrument: TicketInstrument,
+  quote: TicketQuote,
+  scaleIn: LiveTicketScaleIn | null | undefined,
+): BacktestChartOrderLine[] {
+  try {
+    const lines = liveDraftChartLines(draft, instrument, quote);
+    return livePhoneDraftScaleLocked(draft, scaleIn) ? lines.filter(line => line.kind === 'entry').map(line => ({ ...line, addableBrackets: undefined })) : lines;
+  } catch {
+    return [];
+  }
+}
+
+/** Tah čáry návrhu → nový návrh (vstup Limit/Stop, SL, TP; ceny na tick). Market vstup se nemění. */
+export function livePhoneDraftAfterDrag(draft: TicketDraft, kind: BacktestChartOrderLineKind, price: number, instrument: TicketInstrument): TicketDraft {
+  if (!Number.isFinite(price)) return draft;
+  if (kind === 'entry') return draft.type === 'market' ? draft : withEntryPrice(draft, price, instrument);
+  const snapped = snapToTick(price, instrument.tickSize);
+  return kind === 'stopLoss' ? { ...draft, stopLoss: snapped } : { ...draft, takeProfit: snapped };
+}
+
+/** × na čáře návrhu: vstup = zahodit celý návrh (null), SL/TP = jen tu nohu. */
+export function livePhoneDraftAfterRemove(draft: TicketDraft, kind: BacktestChartOrderLineKind): TicketDraft | null {
+  if (kind === 'entry') return null;
+  return kind === 'stopLoss' ? { ...draft, stopLoss: null } : { ...draft, takeProfit: null };
+}
+
+/** „+ SL“ / „+ TP“ na vstupu návrhu (na taženou cenu, jinak výchozí vzdálenost jako PC). */
+export function livePhoneDraftAfterAddBracket(draft: TicketDraft, kind: 'stopLoss' | 'takeProfit', instrument: TicketInstrument, quote: TicketQuote, price?: number): TicketDraft {
+  return withBracket(draft, kind === 'stopLoss' ? 'sl' : 'tp', instrument, quote, price);
+}
+
+/**
+ * Market návrh v grafu: SL a TP jedou s cenou (drží vzdálenost od vstupu) — jako PC
+ * (`LiveTradingScreen`). Přikoupení drží SL/TP pozice. `previousEntry` null = první cena.
+ */
+export function livePhoneMarketDraftFollow(
+  draft: TicketDraft,
+  previousEntry: number | null,
+  entry: number,
+  scaleIn: LiveTicketScaleIn | null | undefined,
+  tickSize: number,
+): TicketDraft {
+  if (draft.type !== 'market' || previousEntry == null || previousEntry === entry || !Number.isFinite(entry)) return draft;
+  if (livePhoneDraftScaleLocked(draft, scaleIn)) return draft;
+  const delta = entry - previousEntry;
+  return {
+    ...draft,
+    stopLoss: draft.stopLoss == null ? null : snapToTick(draft.stopLoss + delta, tickSize),
+    takeProfit: draft.takeProfit == null ? null : snapToTick(draft.takeProfit + delta, tickSize),
+  };
+}
+
+/**
+ * Pracující příkazy (U5) pro graf telefonu: jen když kontrakt čar sedí s kontraktem grafu.
+ * IBKR zdroj nese konkrétní měsíc (`chartContract`); jiný měsíc (týden rollu) = nic. Souvislá
+ * řada (bez měsíce) kreslí čáry kontraktu pozice / frontu podle brokera. Jen zobrazení.
+ */
+export function livePhoneWorkingView(
+  working: (LiveWorkingOrdersView & { contract: string | null }) | null | undefined,
+  chartContract: string | null,
+): { lines: readonly BacktestChartOrderLine[]; badges: readonly LiveWorkingOrderBadge[] } {
+  if (!working || working.contract == null || (chartContract != null && chartContract !== working.contract)) return { lines: [], badges: [] };
+  return { lines: working.lines.filter(line => isLiveDisplayOnlyLine(line)), badges: working.badges };
+}
+
 /**
  * Čáry obchodu v LIVE grafu telefonu stejně jako na PC: tenké Aurora štítky
  * (`BacktestOrderLinesOverlay` + `livePositionChartLines`). Na telefonu se SL/TP
@@ -36,8 +123,15 @@ export function useLivePhoneLineState(): LivePhoneLineState {
  * čáry jen zobrazení (nejde táhnout, žádné × ani BE). Ošetření posunu, BE,
  * zavření a zrušení je stejné jako `LiveTradingScreen` (INV-UI-01..04): „co
  * jsem viděl“ ze začátku tahu, předkontroly jen blokují, rozhoduje worker.
+ *
+ * 3. 11. 2026 ve stejném overlayi (jeden výběr, dotyky se nepřou): čáry návrhu (U2,
+ * tah mění jen návrh v rodiči), pracující příkazy jen pro zobrazení (U5, `live-working`
+ * nikdy nic nepošle) a ✎ na SL/TP, které jen otevře list správy (U10).
  */
-export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice }: {
+export function LivePhoneOrderLines({
+  api, state, summary, guardAt, displayOpenPnl = null, manage, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
+  extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage,
+}: {
   api: ChartViewApi;
   state: LivePhoneLineState;
   summary: LiveChartPositionSummary | null;
@@ -47,6 +141,8 @@ export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canC
    * INV-UI-04); rozhoduje worker. Při akci se vyhodnotí znovu s aktuálním časem.
    */
   guardAt?: (at: number) => LiveChartPositionSummary | null;
+  /** Živé P&L jen do štítku vstupu (`liveDisplayOpenPnl`); null = číslo brokera. */
+  displayOpenPnl?: number | null;
   manage: LivePhoneManage | null;
   /** × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jako PC. */
   canClose: boolean;
@@ -58,6 +154,15 @@ export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canC
   closeExpect?: number | null;
   isDark: boolean;
   onNotice: (text: string) => void;
+  /** U5: pracující příkazy jen pro zobrazení (`livePhoneWorkingView`) — netáhnou se, nemají ×. */
+  extraLines?: readonly BacktestChartOrderLine[];
+  /** U2: čáry návrhu (`livePhoneDraftLines`); tah / × / + SL jen volají `onDraft*`. */
+  draftLines?: readonly BacktestChartOrderLine[];
+  onDraftChange?: (kind: BacktestChartOrderLineKind, price: number) => void;
+  onDraftRemove?: (kind: BacktestChartOrderLineKind) => void;
+  onDraftAddBracket?: (kind: 'stopLoss' | 'takeProfit', price?: number) => void;
+  /** U10: ✎ na čáře SL/TP otevře list správy s touto nohou; chybí = ✎ se nekreslí. */
+  onManage?: (leg: 'stopLoss' | 'takeProfit') => void;
 }) {
   const { pendingMove, setPendingMove, busyRef } = state;
   useEffect(() => {
@@ -72,19 +177,30 @@ export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canC
   // Telefon: × (zavřít pozici i zrušit vstup) vždy na dvě klepnutí — leží u osy hned
   // vedle plusu crosshairu a jedno klepnutí by mohlo zavřít leadera omylem.
   const guardSummary = useMemo(() => (summary ? guardAt?.(Date.now()) ?? summary : null), [guardAt, summary]);
-  const lines = useMemo(() => (guardSummary ? livePositionChartLines(guardSummary, {
+  const positionLines = useMemo(() => (guardSummary ? livePositionChartLines(guardSummary, {
     manageable: manage != null,
     canClose,
     entryAvg,
     pointValue: POINT_VALUE,
+    displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd,
-  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, entryAvg, manage, pendingMove, guardSummary, pendingAdd]);
+  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, displayOpenPnl, entryAvg, manage, pendingMove, guardSummary, pendingAdd]);
+  const lines = useMemo(() => [
+    // ✎ jen u táhnutelné SL/TP (správa jde a nic se právě neodesílá); jen otevře list.
+    ...(onManage ? positionLines.map(line => (line.ownerId === LIVE_POSITION_OWNER && line.kind !== 'entry' && line.draggable
+      ? { ...line, actions: [...(line.actions ?? []), { ...LIVE_PHONE_MANAGE_ACTION }] } : line)) : positionLines),
+    // Pracující příkazy: jen zobrazení — vynucené bez tahu, × a tlačítek, ať je pustí jen tato vrstva.
+    ...(extraLines ?? []).map(line => ({ ...line, draggable: false, cancellable: false, actions: undefined, addableBrackets: undefined })),
+    // Návrh nahoře (poslední v DOM). × návrhu jedním klepnutím: jen zahodí návrh (u brokera nic,
+    // jako [×] lišty návrhu) a klíč potvrzení nese cenu, která u Marketu jede s každým tickem.
+    ...(draftLines ?? []).map(line => ({ ...line, confirmCancel: false })),
+  ], [draftLines, extraLines, onManage, positionLines]);
 
   const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'stopLoss' | 'takeProfit') => {
     if (!manage) return;
     if (expect == null) { onNotice('Cena SL/TP pozice není jedna nebo není známá — nic se neodeslalo. Sjednoť ji v Tradovate, nebo zavři Flattenem.'); return; }
-    if (busyRef.current) { onNotice('Čeká se na výsledek předchozí změny — nic se neodeslalo.'); return; }
+    if (busyRef.current) { onNotice(LIVE_MANAGE_BUSY_TEXT); return; }
     busyRef.current = true;
     if (move && newPrice != null) setPendingMove({ kind: move, price: newPrice, until: Number.POSITIVE_INFINITY });
     try {
@@ -116,6 +232,10 @@ export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canC
       isDark={isDark}
       selectToDrag
       onChange={(line, kind, price, startLine) => {
+        // Pracující příkazy jsou jen zobrazení: žádný posun, žádný návrh (pojistka nad overlayem).
+        if (isLiveDisplayOnlyLine(line)) return;
+        // Návrh: tah jen změní návrh v rodiči — k brokerovi nic (odeslání jen tlačítkem).
+        if (line.ownerId === LIVE_DRAFT_ID) { onDraftChange?.(kind, snapToTick(price, TICK)); return; }
         if (line.ownerId !== LIVE_POSITION_OWNER || !summary || kind === 'entry') return;
         const snapped = snapToTick(price, TICK);
         const current = kind === 'stopLoss' ? summary.stop : summary.target;
@@ -126,6 +246,8 @@ export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canC
         void run(kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
       }}
       onCancel={line => {
+        if (isLiveDisplayOnlyLine(line)) return;
+        if (line.ownerId === LIVE_DRAFT_ID) { onDraftRemove?.(line.kind); return; }
         if (line.id === LIVE_PENDING_ADD_LINE_ID) {
           if (pendingAdd?.price != null) void run('cancel-entry', pendingAdd.price);
           return;
@@ -135,11 +257,40 @@ export function LivePhoneOrderLines({ api, state, summary, guardAt, manage, canC
         else void run('close-position', summary.stop ?? closeExpect);
       }}
       onAction={(line, actionId) => {
-        if (line.ownerId !== LIVE_POSITION_OWNER || actionId !== 'break-even' || !summary) return;
+        if (isLiveDisplayOnlyLine(line) || line.ownerId !== LIVE_POSITION_OWNER || !summary) return;
+        // ✎ jen otevře list správy; příkaz odejde až dvoukrokovým tlačítkem v listu.
+        if (actionId === LIVE_PHONE_MANAGE_ACTION.id) { if (line.kind !== 'entry') onManage?.(line.kind); return; }
+        if (actionId !== 'break-even') return;
         const be = liveBreakEven(guardAt?.(Date.now()) ?? summary, entryAvg);
         if (be.blocked || be.price == null) { onNotice(be.blocked ?? 'BE teď nejde.'); return; }
         void run('move-stop', summary.stop, be.price, 'stopLoss');
       }}
+      onAddBracket={(line, kind, price) => {
+        // „+ SL“ / „+ TP“ jen na vstupu návrhu (čáry pozice ani příkazů ho nemají).
+        if (line.ownerId !== LIVE_DRAFT_ID || isLiveDisplayOnlyLine(line)) return;
+        onDraftAddBracket?.(kind, price);
+      }}
     />
+  );
+}
+
+/**
+ * Štítky pracujících příkazů bez čáry (U5): nepodporovaný typ, neznámá strana, „+N dalších“.
+ * Jen zobrazení; kde jinde spravovat, říká text (Tradovate / × / Flatten).
+ */
+export function LivePhoneWorkingBadges({ badges, top = 8 }: { badges: readonly LiveWorkingOrderBadge[]; top?: number }) {
+  if (!badges.length) return null;
+  return (
+    <div aria-label="Další pracující příkazy" style={{ position: 'absolute', zIndex: 22, top, left: 8, display: 'grid', gap: 4, justifyItems: 'start', maxWidth: 'calc(100% - 90px)', pointerEvents: 'none' }}>
+      {badges.map(badge => (
+        <span
+          key={badge.id}
+          role="note"
+          title={badge.title}
+          className="dj-mono"
+          style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '2px 7px', borderRadius: 6, border: `1px dashed ${badge.color}`, background: 'var(--dj-glass, rgba(13,18,27,.9))', color: 'var(--dj-text-2)', fontSize: 10.5, fontWeight: 600 }}
+        >{badge.text}</span>
+      ))}
+    </div>
   );
 }

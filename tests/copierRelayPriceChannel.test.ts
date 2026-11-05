@@ -22,6 +22,7 @@ vi.mock('../server/tradovateCopierCommandRelay', () => ({
   claimTradovateCopierCommandV2: mocks.claimV2, claimTradovateCopierCommand: mocks.claim,
   heartbeatTradovateCopierDevice: mocks.heartbeat, readTradovateCopierDeviceRuntime: mocks.runtime,
   completeTradovateCopierCommandV2: vi.fn(), completeTradovateCopierCommand: vi.fn(),
+  completeTradovateCopierHotCommandV3: vi.fn(),
   enqueueTradovateCopierCommand: vi.fn(), readTradovateCopierCommand: vi.fn(),
   copierRelayValidationErrorStatus: () => null,
   resolveCopierRelayConnectionId: async ({ connectionId }: { connectionId: string }) => connectionId,

@@ -23,6 +23,18 @@ const payload = (seq: number, builtAt: number, netQuantity = 1): CopierLiveExpos
       limitPrice: null, stopPrice: 28_258.5, status: 'working', updatedAt: builtAt }],
   },
   events: [{ id: 'e-1', at: builtAt, kind: 'entry', side: 'Long', quantity: 1, symbol: 'MNQZ6', followers: 1 } as never],
+  manualEntries: [{
+    operationId: 'entry:abcdefghijklmnopqrstuvwx', status: 'acknowledged', createdAt: Math.max(0, builtAt - 10), updatedAt: builtAt,
+    symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', timing: {
+      queuedAt: builtAt - 9, startedAt: builtAt - 8, dispatchAt: builtAt - 7, ackAt: builtAt - 6,
+      committedAt: builtAt - 5, fillAt: builtAt - 4, positionAt: builtAt - 2,
+    },
+  }],
+  manualOrderActions: [{
+    operationId: 'manage:abcdefghijklmnopqrstuv', entryOperationId: 'entry:abcdefghijklmnopqrstuvwx',
+    action: 'move-stop', status: 'acknowledged', createdAt: Math.max(0, builtAt - 5), updatedAt: builtAt,
+    fromPrice: 28_250, toPrice: 28_255, displayAt: builtAt - 1, displayStage: 'position',
+  }],
 });
 
 const status = (displaySeq: number | undefined, displayBuiltAt: number | undefined, startedAt = STARTED): LocalCopierAgentStatus => ({
@@ -85,6 +97,11 @@ describe('expozice workeru přímo do grafu (F2a, 30. 10.)', () => {
     expect(broken(value => { (value.events[0] as { side?: unknown }).side = 'Buy'; })).toBe(false);
     expect(broken(value => { value.exposure!.positions[0].symbol = 'X'.repeat(100); })).toBe(false);
     expect(broken(value => { value.builtAt = -1; })).toBe(false);
+    expect(broken(value => { value.manualEntries![0].timing!.positionAt = Number.NaN; })).toBe(false);
+    expect(broken(value => { value.manualEntries![0].timing!.committedAt = Number.NaN; })).toBe(false);
+    expect(broken(value => { (value.manualOrderActions![0] as { action: string }).action = 'flatten-everything'; })).toBe(false);
+    expect(broken(value => { value.manualOrderActions![0].displayAt = Number.NaN; })).toBe(false);
+    expect(broken(value => { (value.manualOrderActions![0] as { displayStage: string }).displayStage = 'broker'; })).toBe(false);
   });
 
   it('sloučení: novější seq téhož běhu nahradí expozici; stáří od kotvy pollu, nejvýš čas přijetí', () => {
@@ -95,6 +112,9 @@ describe('expozice workeru přímo do grafu (F2a, 30. 10.)', () => {
     expect(merged.status!.controller.exposure).toEqual(payload(12, 1_300).exposure);
     expect(merged.exposureObservedAt).toBe(8_300);
     expect(merged.status!.controller.recentCopyEvents!.map(event => event.id)).toEqual(['e-0', 'e-1']);
+    // Diagnostická korelace zůstává jen v raw payloadu; nesmí změnit řídicí/statusový model grafu.
+    expect(merged.status!.controller.manualEntries).toBeUndefined();
+    expect(merged.status!.controller.manualOrderActions).toBeUndefined();
     // Zbytek controlleru i statusu z pollu.
     expect(merged.status!.controller.connected).toBe(true);
     expect(merged.status!.displaySeq).toBe(10);

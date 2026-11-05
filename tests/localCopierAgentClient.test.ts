@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
+import {
+  canUseDirectLocalCopierAgent,
+  canUseLocalCopierRelayWake,
+  createLocalCopierAgentClient,
+  nudgeLocalCopierRelay,
+} from '../services/localCopierAgentClient';
 import { shouldProbeLocalCopierAgent } from '../lib/localCopierProbePolicy';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -61,9 +66,36 @@ describe('canUseDirectLocalCopierAgent', () => {
   });
 });
 
+describe('local relay wake', () => {
+  it('povolí pouze lokální stránku a přesný produkční origin', () => {
+    expect(canUseLocalCopierRelayWake({ protocol: 'http:', hostname: '127.0.0.1' })).toBe(true);
+    expect(canUseLocalCopierRelayWake({ protocol: 'http:', hostname: 'localhost' })).toBe(true);
+    expect(canUseLocalCopierRelayWake({ protocol: 'https:', hostname: 'alphatrade-mentor-15.vercel.app' })).toBe(true);
+    expect(canUseLocalCopierRelayWake({ protocol: 'https:', hostname: 'evil.example' })).toBe(false);
+  });
+
+  it('je best-effort: 202 = úspěch, chyba nebo timeout = false', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 202 }))
+      .mockRejectedValueOnce(new Error('blocked'));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(nudgeLocalCopierRelay('http://127.0.0.1:3211')).resolves.toBe(true);
+    await expect(nudgeLocalCopierRelay('http://127.0.0.1:3211')).resolves.toBe(false);
+
+    vi.useFakeTimers();
+    fetcher.mockImplementationOnce((_url, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    }));
+    const timed = nudgeLocalCopierRelay('http://127.0.0.1:3211', 25);
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(timed).resolves.toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
 describe('local copier reprobe policy', () => {
   it('retries an unavailable desktop agent only after backoff or a visibility return', () => {
-    const base = { nativeBuild: false, state: 'unavailable' as const, lastAttemptAt: 10_000 };
+    const base = { directSupported: true, nativeBuild: false, state: 'unavailable' as const, lastAttemptAt: 10_000 };
     expect(shouldProbeLocalCopierAgent({ ...base, now: 29_999 })).toBe(false);
     expect(shouldProbeLocalCopierAgent({ ...base, now: 30_000 })).toBe(true);
     expect(shouldProbeLocalCopierAgent({ ...base, now: 10_100, resumedFromHidden: true })).toBe(true);
@@ -71,7 +103,19 @@ describe('local copier reprobe policy', () => {
 
   it('never probes loopback in a native build', () => {
     expect(shouldProbeLocalCopierAgent({
+      directSupported: true,
       nativeBuild: true,
+      state: 'unknown',
+      now: 30_000,
+      lastAttemptAt: null,
+      resumedFromHidden: true,
+    })).toBe(false);
+  });
+
+  it('never probes loopback from a production HTTPS page', () => {
+    expect(shouldProbeLocalCopierAgent({
+      directSupported: false,
+      nativeBuild: false,
       state: 'unknown',
       now: 30_000,
       lastAttemptAt: null,

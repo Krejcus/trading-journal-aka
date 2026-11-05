@@ -1,6 +1,7 @@
 export const LOCAL_COPIER_REPROBE_BACKOFF_MS = 20_000;
 
 export function shouldProbeLocalCopierAgent(input: {
+  directSupported: boolean;
   nativeBuild: boolean;
   state: 'unknown' | 'available' | 'unavailable';
   now: number;
@@ -8,6 +9,7 @@ export function shouldProbeLocalCopierAgent(input: {
   resumedFromHidden?: boolean;
   backoffMs?: number;
 }): boolean {
+  if (!input.directSupported) return false;
   if (input.nativeBuild) return false;
   if (input.state !== 'unavailable' || input.resumedFromHidden) return true;
   if (input.lastAttemptAt == null) return true;

@@ -324,6 +324,8 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
     context.displayFeed = makeDisplayFeed(context, Object.keys(accountSpecsByAccountId).map(Number));
     const broker = createTradovateBroker({
       environment: 'demo',
+      preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
+        && stringFlag('manual-only', false) === 'true',
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
@@ -385,6 +387,8 @@ async function runMultiConnectionAgent(): Promise<void> {
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
     const broker = createTradovateBroker({
       environment: 'demo',
+      preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
+        && stringFlag('manual-only', false) === 'true',
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
@@ -1689,6 +1693,12 @@ async function runLocalAgent(
           snapshotTestInFlight = false;
         });
       },
+      // Produkční HTTPS může loopbackem pouze probudit relay. Samotný příkaz
+      // dál přichází výhradně přes cloudovou admission/claim cestu.
+      onRelayWake: () => {
+        console.log(`${new Date().toISOString()} RELAY LOCAL WAKE`);
+        relay?.nudgeCommands();
+      },
       onDevicePaired: async deviceId => {
         const owner = contexts.find(candidate => candidate.device?.deviceId === deviceId);
         if (!owner?.onDevicePaired) throw new Error('Párované zařízení nemá vlastní OAuth pairing callback');
@@ -1950,6 +1960,33 @@ async function runLocalAgent(
             } finally {
               await client.realtime.disconnect();
             }
+          };
+        },
+        // F2a: potvrzenou expozici poslat už otevřeným WebSocketem. Dokud
+        // kanál není připojený, `false` nechá relay použít původní REST cestu.
+        createExposurePublisher: config => {
+          const client = createSupabaseClient(config.url, config.anonKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          });
+          const channel = client.channel(config.topic, { config: { broadcast: { self: false, ack: false } } });
+          let joined = false;
+          channel.subscribe(subscriptionState => {
+            joined = subscriptionState === 'SUBSCRIBED';
+            if (joined) console.log(`${new Date().toISOString()} LIVE EXPOSURE WS aktivní`);
+          });
+          return {
+            async publish(event, payload) {
+              if (!joined || !client.realtime.isConnected() || channel.state !== 'joined') return false;
+              return await channel.send({ type: 'broadcast', event, payload }) === 'ok';
+            },
+            async close() {
+              joined = false;
+              try {
+                await client.removeChannel(channel);
+              } finally {
+                client.realtime.disconnect();
+              }
+            },
           };
         },
         // Jen předání konfigurace kanálu ceny vláknu — relay na nic nečeká.

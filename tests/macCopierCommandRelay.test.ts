@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { startMacCopierCommandRelay } from '../server/macCopierCommandRelay';
-import { decryptCopierLiveExposure } from '../lib/copierLiveExposure';
+import { COPIER_LIVE_EXPOSURE_EVENT, decryptCopierLiveExposure } from '../lib/copierLiveExposure';
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 import {
   LocalCopierAgentCommandError,
@@ -596,7 +596,11 @@ describe('recoverable relay lane isolation', () => {
     const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
       if (String(url).endsWith('/realtime/v1/api/broadcast')) {
         const body = JSON.parse(String(init?.body));
-        nudges.push({ at: Date.now(), topic: body.messages[0].topic, auth: new Headers(init?.headers).get('authorization') });
+        // Nová pre-ACK expozice používá stejný Broadcast endpoint, ale není
+        // statusový budíček a do jeho rate-limit testu nepatří.
+        if (body.messages[0].event === 'status') {
+          nudges.push({ at: Date.now(), topic: body.messages[0].topic, auth: new Headers(init?.headers).get('authorization') });
+        }
         return new Response(null, { status: 202 });
       }
       const body = JSON.parse(String(init?.body));
@@ -628,19 +632,114 @@ describe('recoverable relay lane isolation', () => {
       await new Promise(resolve => setTimeout(resolve, 300));
       for (const listener of listeners) listener();
       await vi.waitFor(() => expect(nudges.length).toBe(2), { timeout: 800 });
-      expect(nudges[1].at - nudges[0].at).toBeGreaterThanOrEqual(250);
+      // Odstup se měří až v mocku fetch, po nastavení `lastNudgeAt`: rezerva proti zátěži.
+      expect(nudges[1].at - nudges[0].at).toBeGreaterThanOrEqual(240);
       // ACK příkazu (complete-v2 accepted) → budíček.
       await vi.waitFor(() => expect(commandSent).toBe(true), { timeout: 4_000 });
       await vi.waitFor(() => expect(nudges.length).toBeGreaterThanOrEqual(3), { timeout: 2_000 });
     } finally { await relay.close(); }
   });
 
+  it('kompaktní ACK: budíček LIVE až po potvrzeném heartbeatu; selhaný heartbeat budíček nespolkne', async () => {
+    const agent = { execute: vi.fn(async () => ({ ok: true })), status, subscribeLiveChange: () => () => undefined } as unknown as LocalCopierExecutionAgent;
+    const events: string[] = [];
+    let commandSent = false;
+    let failHeartbeat = false;
+    let ackDone = false;
+    let realtimeReady = false;
+    const realtime = { url: 'https://project.invalid', anonKey: 'anon-key', topic: 'copier-kick-x', nudgeTopic: 'copier-nudge-abcdefghijklmnopqrstuv' };
+    const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith('/realtime/v1/api/broadcast')) {
+        if (JSON.parse(String(init?.body)).messages[0].event === 'status') events.push('nudge');
+        return new Response(null, { status: 202 });
+      }
+      const body = JSON.parse(String(init?.body));
+      if (body.action === 'poll-v2') {
+        if (!commandSent && realtimeReady) {
+          commandSent = true;
+          return Response.json({ protocol: 2, realtime, serverNow: new Date().toISOString(), command: {
+            id: '22222222-2222-4222-8222-222222222222', status: 'claimed',
+            command: { type: 'copy-command', command: { type: 'place-leader-entry', side: 'Buy', quantity: 1, orderType: 'Market' } },
+            createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          } });
+        }
+        realtimeReady = true;
+        return Response.json({ protocol: 2, command: null, realtime });
+      }
+      if (body.action === 'complete-hot-v3') {
+        ackDone = true;
+        events.push('ack');
+        failHeartbeat = true;
+        return Response.json({ protocol: 3, accepted: true });
+      }
+      if (body.action === 'heartbeat-v2' && ackDone) {
+        if (failHeartbeat) {
+          failHeartbeat = false;
+          events.push('heartbeat-failed');
+          return Response.json({ error: 'copier-relay-heartbeat-failed' }, { status: 502 });
+        }
+        events.push('heartbeat');
+      }
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({ apiOrigin: 'https://offline.invalid', agent, authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => null, write: async () => undefined }, fetchImpl: fetchImpl as typeof fetch });
+    try {
+      await vi.waitFor(() => expect(events).toContain('nudge'), { timeout: 8_000 });
+      expect(events.slice(0, 4)).toEqual(['ack', 'heartbeat-failed', 'heartbeat', 'nudge']);
+    } finally { await relay.close(); }
+  }, 15_000);
+
+  it('uvízlý kompaktní ACK: po 3 s complete-v2 a brzda za příkazem se provede', async () => {
+    const executed: string[] = [];
+    const agent = { status, subscribeLiveChange: () => () => undefined,
+      execute: vi.fn(async (command: { type: string }) => { executed.push(command.type); return { ok: true }; }) } as unknown as LocalCopierExecutionAgent;
+    const row = (id: string, command: unknown) => ({ id, status: 'claimed', command,
+      expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    const queue = [
+      row('33333333-3333-4333-8333-333333333333', { type: 'copy-command', command: { type: 'place-leader-entry', side: 'Buy', quantity: 1, orderType: 'Market' } }),
+      row('44444444-4444-4444-8444-444444444444', { type: 'disarm' }),
+    ];
+    const acks: Array<{ action: string; at: number }> = [];
+    const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith('/realtime/v1/api/broadcast')) return new Response(null, { status: 202 });
+      const body = JSON.parse(String(init?.body));
+      // createdAt až při pollu: příkaz starší než session workeru by se neprovedl.
+      if (body.action === 'poll-v2') return Response.json({ protocol: 2, serverNow: new Date().toISOString(),
+        command: queue[0] ? { ...queue[0], createdAt: new Date().toISOString() } : null });
+      if (body.action === 'complete-hot-v3') {
+        acks.push({ action: body.action, at: Date.now() });
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        });
+      }
+      if (body.action === 'complete-v2') {
+        acks.push({ action: body.action, at: Date.now() });
+        queue.shift();
+      }
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({ apiOrigin: 'https://offline.invalid', agent, authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => null, write: async () => undefined }, fetchImpl: fetchImpl as typeof fetch });
+    try {
+      await vi.waitFor(() => expect(executed).toEqual(['copy-command', 'disarm']), { timeout: 8_000 });
+      expect(acks[0].action).toBe('complete-hot-v3');
+      expect(acks[1].action).toBe('complete-v2');
+      expect(acks[1].at - acks[0].at).toBeGreaterThanOrEqual(2_900);
+      expect(acks[1].at - acks[0].at).toBeLessThan(6_000);
+    } finally { await relay.close(); }
+  }, 15_000);
+
   it('expozice přímo do grafu (F2a): po změně zašifrovaná zpráva, klíč nedojde do onRealtimeConfig, bez klíče nic', async () => {
     const listeners = new Set<() => void>();
     let seq = 0;
     const exposure = { verifiedAt: 1, positions: [{ accountId: 1, symbol: 'MNQZ6', netQuantity: 1, avgPrice: 28_274.5 }], followers: [], orders: [] };
     const liveStatus = (): LocalCopierAgentStatus => ({ ...status(), displaySeq: ++seq, displayBuiltAt: 1_000 + seq,
-      controller: { ...status().controller, exposure, recentCopyEvents: [{ id: 'e-1', at: 1, kind: 'entry', side: 'Long', quantity: 1, symbol: 'MNQZ6', followers: 1 }] } } as LocalCopierAgentStatus);
+      controller: { ...status().controller, exposure,
+        recentCopyEvents: [{ id: 'e-1', at: 1, kind: 'entry', side: 'Long', quantity: 1, symbol: 'MNQZ6', followers: 1 }],
+        manualEntries: [{ operationId: 'entry:abcdefghijklmnopqrstuvwx', status: 'acknowledged', createdAt: 900, updatedAt: 1_000,
+          symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', timing: { ackAt: 950, fillAt: 970, positionAt: 990 } }],
+      } } as LocalCopierAgentStatus);
     const agent = {
       status: liveStatus, execute: vi.fn(async () => ({ ok: true })),
       subscribeLiveChange: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -674,12 +773,60 @@ describe('recoverable relay lane isolation', () => {
       expect(sent.topic).toBe(topic);
       expect(JSON.stringify(sent.payload)).not.toContain('MNQZ6');
       const decrypted = await decryptCopierLiveExposure(sent.payload, key, topic);
-      expect(decrypted).toMatchObject({ v: 1, startedAt: status().startedAt, exposure, events: [{ id: 'e-1' }] });
+      expect(decrypted).toMatchObject({ v: 1, startedAt: status().startedAt, exposure, events: [{ id: 'e-1' }],
+        manualEntries: [{ operationId: 'entry:abcdefghijklmnopqrstuvwx', timing: { fillAt: 970, positionAt: 990 } }] });
       expect(decrypted!.seq).toBeGreaterThan(0);
       // Dvě rychlé změny: nejvýš dvě zprávy (jedna hned, druhá po rozestupu), ne zahlcení.
       await new Promise(resolve => setTimeout(resolve, 400));
       expect(broadcasts.filter(item => item.event === 'exposure').length).toBeLessThanOrEqual(2);
     } finally { await relay.close(); }
+  });
+
+  it('expozice používá připojený WebSocket publisher a při úspěchu nedělá REST broadcast', async () => {
+    const listeners = new Set<() => void>();
+    let seq = 0;
+    const agent = {
+      status: () => ({ ...status(), displaySeq: ++seq, displayBuiltAt: 2_000 + seq }),
+      execute: vi.fn(async () => ({ ok: true })),
+      subscribeLiveChange: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    } as unknown as LocalCopierExecutionAgent;
+    const key = 'W'.repeat(43);
+    const topic = 'copier-nudge-websocketpublisher';
+    const restExposure: unknown[] = [];
+    const publish = vi.fn(async (..._args: unknown[]) => true);
+    const closePublisher = vi.fn(async () => undefined);
+    const configs: unknown[] = [];
+    const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith('/realtime/v1/api/broadcast')) {
+        const message = JSON.parse(String(init?.body)).messages[0];
+        if (message.event === COPIER_LIVE_EXPOSURE_EVENT) restExposure.push(message);
+        return new Response(null, { status: 202 });
+      }
+      const body = JSON.parse(String(init?.body));
+      if (body.action === 'poll-v2') return Response.json({ protocol: 2, command: null, realtime: {
+        url: 'https://project.invalid', anonKey: 'anon', topic: 'copier-kick-x', nudgeTopic: topic, nudgeKey: key,
+      } });
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://offline.invalid', agent, authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => null, write: async () => undefined }, fetchImpl: fetchImpl as typeof fetch,
+      createExposurePublisher: config => {
+        configs.push(config);
+        return { publish, close: closePublisher };
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(configs).toHaveLength(1));
+      expect(configs[0]).toMatchObject({ url: 'https://project.invalid', anonKey: 'anon', topic });
+      for (const listener of listeners) listener();
+      await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce(), { timeout: 1_000 });
+      expect(publish.mock.calls[0]?.[0]).toBe(COPIER_LIVE_EXPOSURE_EVENT);
+      expect(restExposure).toEqual([]);
+    } finally {
+      await relay.close();
+    }
+    expect(closePublisher).toHaveBeenCalledOnce();
   });
 
   it('bez nudgeTopic v realtime konfiguraci žádný budíček (starý server)', async () => {

@@ -4,7 +4,8 @@ import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierD
 import {
   admitCopierAutoResume,
   claimTradovateCopierCommandV2, completeTradovateCopierCommandV2,
-  claimTradovateCopierCommand, completeTradovateCopierCommand, enqueueTradovateCopierCommand,
+  claimTradovateCopierCommand, completeTradovateCopierCommand, completeTradovateCopierHotCommandV3,
+  enqueueTradovateCopierCommand,
   copierRelayValidationErrorStatus,
   heartbeatTradovateCopierDevice, readTradovateCopierCommand, readTradovateCopierDeviceRuntime,
   resolveCopierRelayConnectionId, verifyCopierRelayTargetHint,
@@ -106,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
       const action = String(req.body?.action ?? '');
       const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization,
-        ...(['poll-v2', 'complete-v2', 'live-bars'].includes(action) ? { touchLastUsed: false } : {}),
+        ...(['poll-v2', 'complete-v2', 'complete-hot-v3', 'live-bars'].includes(action) ? { touchLastUsed: false } : {}),
       });
       if (action === 'auto-resume-admit') {
         const since = Number(req.body?.since);
@@ -131,6 +132,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           || !req.body?.status || !Number.isFinite(Date.parse(req.body.status.startedAt))) {
           return res.status(400).json({ error: 'invalid-relay-heartbeat' });
         }
+      }
+      if (action === 'complete-hot-v3') {
+        const deliveryId = String(req.body?.deliveryId ?? '');
+        const commandId = String(req.body?.commandId ?? '');
+        const workerStartedAt = String(req.body?.workerStartedAt ?? '');
+        if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId) || !SNAPSHOT_TEST_REQUEST_ID.test(commandId)) {
+          return res.status(400).json({ error: 'invalid-delivery-id' });
+        }
+        if (!Number.isFinite(Date.parse(workerStartedAt))) {
+          return res.status(400).json({ error: 'invalid-hot-command-ack' });
+        }
+        const accepted = await completeTradovateCopierHotCommandV3({
+          db,
+          deviceId: device.id,
+          deliveryId,
+          commandId,
+          result: req.body?.result,
+          error: typeof req.body?.error === 'string' ? req.body.error : undefined,
+          workerStartedAt,
+        });
+        return res.status(accepted ? 200 : 409).json({ protocol: 3, accepted });
       }
       if (action === 'heartbeat-v2') {
         await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId,
@@ -488,13 +510,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: 'snapshot-test-use-dedicated-endpoint' });
       }
       // F1b′: nečinná delivery workeru se čte souběžně s admission (nikdy nevyhodí).
-      const relayIdle = readCopierRelayIdle({ db, userId, connectionId });
+      // Čerstvý hint už v jediném joinu načetl stejný runtime řádek. Znovu ho
+      // přes PostgREST nečteme; push tak po admission rovnou claimne delivery.
+      const relayIdle = verifiedDevice?.lastSeenAt
+        ? Promise.resolve({
+          deviceId: verifiedDevice.id,
+          relayIdle: verifiedDevice.status?.relayIdle ?? null,
+          lastSeenAt: verifiedDevice.lastSeenAt,
+        })
+        : readCopierRelayIdle({ db, userId, connectionId });
       const queued = await enqueueTradovateCopierCommand({
         db, userId, connectionId, command: req.body?.command,
         idempotencyKey: req.body?.idempotencyKey,
+        relayIdle,
         ...(verifiedDevice ? { verifiedDevice } : {}),
       });
       timing.mark('enqueue');
+      const { preclaimed, ...queuedResponse } = queued;
       // Budíček pro worker: bez něj příkaz čeká na další poll (~750 ms).
       // Kick je jen optimalizace — selhání nesmí shodit enqueue. Jeho HTTP
       // potvrzení ale nemusí blokovat první čtení výsledku: broadcast může
@@ -502,8 +534,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // F1b′: navázání k nečinné delivery + podepsaný push souběžně s long-pollem.
       // Nikdy nevyhodí, každý krok ≤ 1 s; výsledek nemění 202 ani nezdrží brzdu.
       const push = pushBoundCopierCommand({ db, deviceId: queued.deviceId, supabaseUrl: config.supabaseUrl,
-        serviceRoleKey: config.supabaseServiceRoleKey, prefetched: relayIdle }).then(outcome => { timing.mark(`push-${outcome}`); return outcome; });
+        serviceRoleKey: config.supabaseServiceRoleKey, prefetched: relayIdle, preclaimed }).then(outcome => { timing.mark(`push-${outcome}`); return outcome; });
+      const kickAbort = new AbortController();
       const sendKick = async () => {
+        const timeout = setTimeout(() => kickAbort.abort('copier-kick-timeout'), 1_500);
         try {
           await fetch(`${config.supabaseUrl}/realtime/v1/api/broadcast`, {
             method: 'POST',
@@ -513,10 +547,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
             },
             body: JSON.stringify({ messages: [{ topic: `copier-kick-${queued.deviceId}`, event: 'kick', payload: {} }] }),
-            signal: AbortSignal.timeout(1_500),
+            signal: kickAbort.signal,
           });
         } catch {
           // Poll fallback příkaz doručí i bez kicku.
+        } finally {
+          clearTimeout(timeout);
         }
       };
       // Vstup/náhled/posun z grafu: kick až po pokusu o push — jinak ho worker pollem předběhne
@@ -551,22 +587,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         return null;
       })();
-      // Odpověď stále čeká i na kick: serverless runtime ho nesmí ukončit
-      // uprostřed odesílání. Jen samotné čekání už nepřidává waterfall.
+      // Dokud výsledek není známý, push/kick smějí doběhnout jako záloha.
+      // Jakmile je výsledek durable, redundantní kick se ukončí a odpověď se nezdržuje.
       const resolution = await waitForResolution;
       settled = true;
-      // Kick i push typicky doběhnou dávno před výsledkem; visící krok odpověď zdrží nejvýš
-      // o 300 ms (nedoběhnutý kick/push = worker vezme příkaz pollem jako dřív).
-      await Promise.race([Promise.all([kick, push]), new Promise(resolve => setTimeout(resolve, 300))]);
+      if (resolution) {
+        // Výsledek je už durable a worker příkaz provedl: dobíhající záložní kick nemá co
+        // doručit. Jeho HTTP odpověď dřív držela hotový výsledek až dalších 300 ms.
+        kickAbort.abort('copier-command-resolved');
+      } else {
+        // Bez výsledku musí serverless runtime dát pushi/kicku krátké okno na dokončení;
+        // enqueue je durable a po 300 ms odpovíme queued jako dřív.
+        await Promise.race([Promise.all([kick, push]), new Promise(resolve => setTimeout(resolve, 300))]);
+      }
       timing.mark('kick');
       timing.mark(resolution ? 'longpoll-hit' : 'longpoll-miss');
-      return timed(202, { ...queued, ...(resolution ? { resolution } : {}) });
+      return timed(202, { ...queuedResponse, ...(resolution ? { resolution } : {}) });
     }
     return res.status(405).json({ error: 'method-not-allowed' });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('auth-token') || message === 'invalid-copier-device-auth') return res.status(401).json({ error: message });
     if (message.endsWith('not-found')) return res.status(404).json({ error: message });
+    if (message === 'copier-relay-hot-ack-unavailable') return res.status(503).json({ error: message });
     if (message === 'snapshot-too-large') return res.status(413).json({ error: message });
     if (message === 'invalid-snapshot-payload' || message === 'invalid-snapshot-png') {
       return res.status(400).json({ error: message });
