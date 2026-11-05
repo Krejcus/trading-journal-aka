@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-04 — LIVE latency: kompaktní ACK horkých příkazů dokončený lokálně (Claude po Codexovi, NENASAZENO)
+### 2026-11-04 — LIVE latency: kompaktní ACK horkých příkazů (Claude po Codexovi, NASAZENO 5. 11. ~05:15, přínos NEZMĚŘENÝ)
 
 - Codex skončil na limitu před celou sadou a oponenturou. Záměr: `place-leader-entry`
   a `manage-leader-order` nečekají po broker ACK 161–315 ms na zápis celého statusu
@@ -303,8 +303,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   zaplatí každý horký příkaz až 3 s navíc; souběh v2 za nepotvrzeným v3 na skutečných
   funkcích ověřený jen sondou na PGlite (jedno spojení), opakování v3 na Postgresu.
 - Testy: mutace 16/16 + SQL mutace, SQL 7/7 na dočasném Postgresu, celá sada, tsc, build.
-  Migrace `20261104164250` NENÍ aplikovaná, web ani worker nenasazené, přínos NENÍ změřený.
-  Pořadí: migrace, web, worker; před tím A/B na DEMO podle `docs/LIVE_HOT_PATH_PLAN.md` §20.
+- Nasazeno na Filipovo „Ano nasaď“: migrace `20261104164250` (CLI `db query --yes` + `migration repair`,
+  PostgREST funkci zná, anon 42501), web `e174e2dc` READY, worker reinstall z téhož SHA (brána čistá,
+  `--tradovate-ws-writes on` zachováno, reconcile `authoritativelyClean`). iPhone beze změny, klient se neměnil.
+- NEZMĚŘENO: žádný příkaz po nové cestě ještě neběžel. Základ v2 z logu workeru 3.–4. 11.: ACK horkých
+  příkazů n=31, p50 193 ms, p95 315 ms. Po vstupu/zrušení na DEMO hledat v logu `RELAY ACK … bytes=<~500`;
+  hláška `RELAY compact ACK → complete-v2` znamená, že v3 nejela.
 - Tento worktree se jmenuje `release-20261104-eb461e22`, ale je na větvi
   `codex/live-speed-20261104`; název neodpovídá obsahu.
 
