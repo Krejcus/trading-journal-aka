@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-05 — Posun SL/TP nevyplněného vstupu, TP blíž, téma napříč zařízeními, výdrž svíčky (Claude, větev claude/pending-legs-20261105, nenasazeno)
+### 2026-11-05 — Posun SL/TP nevyplněného vstupu, TP blíž, téma napříč zařízeními, výdrž svíčky (Claude, nasazeno aedc7adf: web a worker s `--pending-legs on`; iPhone čeká na připojení, build hotový)
 
 - Filip změnil pořadí: nejdřív nohy nevyplněného Limitu a TP blíž, pak telefon a téma. C2 a další položky čekají.
 - Tradovate Modify pozastavené nohy jen drží (OnHold, bez ExecutionReportu); proto status držel starou cenu. Adaptér ji teď projeví za bránou `promoteHeldModify`, výchozí vypnuto. Záznam `heldMove` se po aktivaci nohy ověří proti brokeru.
