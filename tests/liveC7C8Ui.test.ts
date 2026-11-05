@@ -19,20 +19,22 @@ import { createLiveManageRun } from '../hooks/useLiveManageRunner';
 import {
   LIVE_COMMAND_BUSY_TEXT, createLiveBareClosePanelClick, createLiveBareCloseRun, createLiveCancelPendingClick, createLiveCancelPendingRun, runWithCommandLock,
 } from '../hooks/liveCommandRuns';
-import { createLiveConfirmGate } from '../lib/liveConfirmGate';
+import { LIVE_ACTION_CHANGED_TEXT, createLiveClickGate, liveMoveClick, liveMoveKey, liveRepeatClick } from '../lib/liveClickGate';
+import { liveBareConfirmKey } from '../lib/liveBareEntry';
+import { dashboardRowCancelView } from '../lib/liveCancelPendingUi';
 import { livePhoneCancelPendingChipShown } from '../lib/livePhoneOrders';
 import { LIVE_DESK_NOT_FRESH, LIVE_DESK_ROUTE_CHANGED, createLiveDeskCommands } from '../lib/liveDeskCommands';
 import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 import type { LeaderOrderManageCommand } from '../lib/leaderOrderManage';
 import { livePositionChartLines } from '../lib/liveChartOrderLines';
 import type { LiveChartPositionSummary } from '../lib/liveChartPosition';
-import { LIVE_HOTKEY_BUSY_TEXT, createTwoStepGuard, liveHotkeyGuardSync, resolveLiveHotkey } from '../lib/liveHotkeys';
-import { cancelConfirmKey, orderLineConfirmKeys, orderLineConfirmStep, orderLineConfirmSync } from '../components/BacktestOrderLinesOverlay';
-import { BareCloseButton } from '../components/LiveOrderTicket';
+import { resolveLiveHotkey } from '../lib/liveHotkeys';
+import { LIVE_LINE_CLICK_INITIAL, cancelConfirmKey, liveLineClick, liveLineClickSync, orderLineConfirmKeys, orderLineConfirmStep, orderLineConfirmSync } from '../components/BacktestOrderLinesOverlay';
+import { BareCloseButton, liveDirectErrorLocks, liveDirectResultLocks } from '../components/LiveOrderTicket';
 import { DashboardOrderCancelButton, LiveCancelPendingBar, LiveCancelPendingBoundary, type LiveDashboardPendingCancel } from '../components/LivePendingCancel';
 import LiveSafetyControls from '../components/LiveSafetyControls';
 import { createFlattenGroupCoordinator } from '../lib/liveSafetyAction';
-import { LivePhoneCancelPendingChip, LivePhonePositionBar, livePhoneBarClick, livePhonePositionCloseKey } from '../components/day/LivePhoneLiveActions';
+import { LivePhoneCancelPendingChip, LivePhonePositionBar, createLivePhoneBarGuard } from '../components/day/LivePhoneLiveActions';
 
 const source = (file: string) => readFileSync(file, 'utf8');
 const between = (text: string, start: string, end: string) => {
@@ -185,14 +187,15 @@ describe('C8 UI: odeslání jde sdíleným zámkem jednoho příkazu, právě je
   });
 });
 
-describe('C8 UI: × na čáře PC a Shift+X — id cíle v klíči, vždy dvoukrokově', () => {
+describe('C8 UI: × na čáře PC a Shift+X — id cíle v klíči, jedním klikem', () => {
   const summary: LiveChartPositionSummary = {
     kind: 'position', side: 'long', quantity: 2, entry: 25_000.25, stop: null, target: null, openPnl: 4, mark: 25_001.25, entryType: 'Market',
   } as unknown as LiveChartPositionSummary;
 
-  it('holá pozice s nabídkou: × se dvoukrokem, bez BE; bez nabídky žádné ×', () => {
+  it('holá pozice s nabídkou: × bez BE; bez nabídky žádné ×', () => {
     const [line] = livePositionChartLines(summary, { manageable: false, entryAvg: null, pointValue: 2, bareClose: { entryOperationId: TRADE.entryOperationId } });
-    expect(line).toMatchObject({ id: liveBareLineId(TRADE.entryOperationId), cancellable: true, cancelAction: 'close-position', confirmCancel: true });
+    expect(line).toMatchObject({ id: liveBareLineId(TRADE.entryOperationId), cancellable: true, cancelAction: 'close-position' });
+    expect(line.confirmCancel).toBeUndefined();
     expect(line.actions).toBeUndefined();
     expect(liveBareLineEntryId(line.id)).toBe(TRADE.entryOperationId);
     expect(liveBareLineEntryId('live-position:entry')).toBeNull();
@@ -203,60 +206,16 @@ describe('C8 UI: × na čáře PC a Shift+X — id cíle v klíči, vždy dvoukr
     expect(cancelConfirmKey(other)).not.toBe(cancelConfirmKey(line));
   });
 
-  it('Shift+X míří na čáru holé pozice; klíč nese id cíle; potvrdí jen 2. stisk ≥ 350 ms od předchozího', () => {
+  it('Shift+X míří na čáru holé pozice prvním stiskem; dvojstisk nic; busy nic', () => {
     const lines = livePositionChartLines(summary, { manageable: false, entryAvg: null, pointValue: 2, bareClose: { entryOperationId: TRADE.entryOperationId } });
-    const guard = createTwoStepGuard();
+    const guard = { current: null };
     const state = { lines, breakEven: null, hasDraft: false, busy: false };
-    const first = resolveLiveHotkey({ kind: 'close-position' }, state, guard, 1_000);
-    expect(first).toMatchObject({ kind: 'prompt' });
-    expect((first as { key: string }).key).toContain(TRADE.entryOperationId);
-    expect(resolveLiveHotkey({ kind: 'close-position' }, state, guard, 1_200)).toMatchObject({ kind: 'prompt' });
-    expect(resolveLiveHotkey({ kind: 'close-position' }, state, guard, 1_450)).toMatchObject({ kind: 'prompt' });
-    expect(resolveLiveHotkey({ kind: 'close-position' }, state, guard, 1_850)).toMatchObject({ kind: 'run', line: { id: liveBareLineId(TRADE.entryOperationId) } });
+    expect(resolveLiveHotkey({ kind: 'close-position' }, state, guard, 1_000)).toMatchObject({ kind: 'run', line: { id: liveBareLineId(TRADE.entryOperationId) } });
+    expect(resolveLiveHotkey({ kind: 'close-position' }, state, guard, 1_200)).toMatchObject({ kind: 'none' });
     expect(resolveLiveHotkey({ kind: 'close-position' }, { ...state, busy: true }, guard, 2_500)).toMatchObject({ kind: 'blocked' });
   });
 
-  it('Shift+X: zablokovaná / zmizelá / změněná čára zahodí výzvu i bez stisku (liveHotkeyGuardSync, kolo 2)', () => {
-    const bareControls = { manageable: false, entryAvg: null, pointValue: 2, bareClose: { entryOperationId: TRADE.entryOperationId } };
-    const lines = livePositionChartLines(summary, bareControls);
-    const blocked = livePositionChartLines(summary, { manageable: false, entryAvg: null, pointValue: 2 });
-    const state = { lines, breakEven: null, hasDraft: false, busy: false };
-    // Bez rozjeté výzvy nic.
-    const idle = createTwoStepGuard();
-    expect(liveHotkeyGuardSync(idle, { lines: blocked, breakEven: null }, 1_000)).toBe(false);
-    // 1. Shift+X → status na chvíli zastaral (čára bez ×) → status zpět se STEJNÝM klíčem → 2. Shift+X jen znovu ptá.
-    const guard = createTwoStepGuard();
-    expect(resolveLiveHotkey({ kind: 'close-position' }, state, guard, 1_000)).toMatchObject({ kind: 'prompt' });
-    expect(liveHotkeyGuardSync(guard, { lines, breakEven: null }, 1_100)).toBe(false);
-    expect(guard.pending(1_100)).not.toBeNull();
-    expect(liveHotkeyGuardSync(guard, { lines: blocked, breakEven: null }, 1_400)).toBe(true);
-    expect(guard.pending(1_400)).toBeNull();
-    expect(liveHotkeyGuardSync(guard, { lines, breakEven: null }, 1_600)).toBe(false);
-    expect(resolveLiveHotkey({ kind: 'close-position' }, state, guard, 1_900)).toMatchObject({ kind: 'prompt' });
-    // Čára zmizela úplně / změnila cíl (jiný holý vstup) = zahozeno.
-    const gone = createTwoStepGuard();
-    resolveLiveHotkey({ kind: 'close-position' }, state, gone, 1_000);
-    expect(liveHotkeyGuardSync(gone, { lines: [], breakEven: null }, 1_200)).toBe(true);
-    const moved = createTwoStepGuard();
-    resolveLiveHotkey({ kind: 'close-position' }, state, moved, 1_000);
-    const other = livePositionChartLines(summary, { ...bareControls, bareClose: { entryOperationId: 'entry:other0000001' } });
-    expect(liveHotkeyGuardSync(moved, { lines: other, breakEven: null }, 1_200)).toBe(true);
-    // BE: zablokované BE (stav ze stejné funkce jako stisk) zahodí výzvu; BE beze změny ne.
-    const managedSummary = { ...summary, stop: 24_990, target: 25_020, mark: 25_010 } as LiveChartPositionSummary;
-    const managed = livePositionChartLines(managedSummary, { manageable: true, canClose: true, entryAvg: 25_000.25, pointValue: 2 });
-    const be = { price: 25_000.25, blocked: null };
-    const beGuard = createTwoStepGuard();
-    expect(resolveLiveHotkey({ kind: 'break-even' }, { lines: managed, breakEven: be, hasDraft: false, busy: false }, beGuard, 1_000)).toMatchObject({ kind: 'prompt' });
-    expect(liveHotkeyGuardSync(beGuard, { lines: managed, breakEven: be }, 1_200)).toBe(false);
-    expect(liveHotkeyGuardSync(beGuard, { lines: managed, breakEven: { price: 25_000.25, blocked: 'SL už je na BE.' } }, 1_300)).toBe(true);
-    // Zapojení: efekt obrazovky na čárách volá sync a maže jen text téže výzvy.
-    const screen = source('components/LiveTradingScreen.tsx');
-    expect(screen).toMatch(/if \(!liveHotkeyGuardSync\(guard, \{ lines: orderLines, breakEven \}, at\)\) return;/);
-    expect(screen).toMatch(/hotkeyPromptAtRef\.current = outcome\.kind === 'prompt' \? now : null;/);
-    expect(screen).toMatch(/\}, \[orderLines, summary, guardSummaryAt, manageEntryAvgPrice\]\);/);
-  });
-
-  it('dvoukrok čáry (`orderLineConfirmStep`): 2. klik ≥ 350 ms od PŘEDCHOZÍHO kliku, ≤ 4 s, stejný klíč', () => {
+  it('dvoukrok čáry backtestu (`orderLineConfirmStep`): 2. klik ≥ 350 ms od PŘEDCHOZÍHO kliku, ≤ 4 s, stejný klíč', () => {
     const key = 'live-position:entry:bare:entry:x:cancel:close-position:25000';
     let state = orderLineConfirmStep(null, key, true, 0);
     expect(state.fire).toBe(false);
@@ -291,18 +250,18 @@ describe('C8 UI: × na čáře PC a Shift+X — id cíle v klíči, vždy dvoukr
 
   it('panel: tlačítko × holé pozice — neaktivní s důvodem, text co se zavře', () => {
     const offer = liveBareCloseOffer(offerInput({ armed: false }))!;
-    const html = renderToStaticMarkup(React.createElement(BareCloseButton, { offer, asking: false, busy: false, notice: null, onClick: () => {} }));
+    const html = renderToStaticMarkup(React.createElement(BareCloseButton, { offer, busy: false, notice: null, onClick: () => {} }));
     expect(html).toContain('disabled=""');
     expect(html).toContain('Zavřít LONG 2 · bez SL/TP');
     expect(html).toMatch(/Flattenem/);
-    expect(liveBareCloseLabel(TRADE, true)).toBe('Opravdu zavřít LONG 2?');
+    expect(liveBareCloseLabel(TRADE)).toBe('Zavřít LONG 2 · bez SL/TP');
     // Napojení: klik pustí fokus a jde jen přes automat panelu (`createLiveBareClosePanelClick`).
     const ticket = source('components/LiveOrderTicket.tsx');
     const click = between(ticket, 'const clickBareClose = (event', 'const bareCloseView =');
     expect(click).toMatch(/event\.currentTarget\.blur\(\);/);
     expect(click).toMatch(/const sent = bareClosePanelClick\(bareCloseOffer\);\s*if \(!sent \|\| !target\) return;/);
     expect(click).not.toMatch(/onBareClose/);
-    expect(ticket).toMatch(/const \{ gate: bareCloseGate \} = useLiveConfirmGate\(\[bareCloseOffer\]\);/);
+    expect(ticket).toMatch(/const bareCloseGate = useLiveClickGate\(\[bareCloseOffer\]\);/);
     expect(ticket).toMatch(/busy: \(\) => lockRef\.current \|\| attachBusyRef\.current \|\| directBusyRef\.current,/);
   });
 });
@@ -330,18 +289,18 @@ describe('C8 UI: desk — tatáž cesta správy leadera, jen obchod, který uži
 describe('C8 UI: telefon — „Zavřít“ holé pozice vedle Flattenu', () => {
   const offer = liveBareCloseOffer(offerInput())!;
   const bar = (patch: Record<string, unknown> = {}) => renderToStaticMarkup(React.createElement(LivePhonePositionBar, {
+    guard: createLivePhoneBarGuard(), onSwallowed: () => {},
     side: 'long', quantity: 2, symbol: 'MNQZ6', unprotected: true, busy: false, onAttach: () => {}, onClose: () => {}, ...patch,
   }));
-  it('zdroj lišty: obě tlačítka pouští fokus a jdou přes JEDEN automat (livePhoneBarClick)', () => {
+  it('zdroj lišty: obě tlačítka pouští fokus, vibrace až po odeslání, pojistku vlastní rodič', () => {
     const actions = source('components/day/LivePhoneLiveActions.tsx');
-    const click = between(actions, 'data-live-bare-close', '>{bareConfirming');
-    expect(click).toMatch(/event\.currentTarget\.blur\(\);/);
-    expect(click).toMatch(/const action = livePhoneBarClick\(gate, 'bare', \{ flattenKey: actionKey, bare \}\);\s*if \(action === 'bare-close' \|\| action === 'bare-blocked'\) onBareClose!\(bare\.key\);/);
+    const click = between(actions, 'data-live-bare-close', '>Zavřít</button>');
+    expect(click).toMatch(/event\.currentTarget\.blur\(\);\s*const step = guard\.bare\(bare\);\s*if \(step === 'changed'\) \{ onSwallowed\(\); return; \}\s*if \(step === 'send'\) playNativeHapticIfAvailable/);
     const flatten = between(actions, 'data-live-bar-flatten', '>{pending ?');
-    expect(flatten).toMatch(/event\.currentTarget\.blur\(\);/);
-    expect(flatten).toMatch(/if \(livePhoneBarClick\(gate, 'flatten', \{ flattenKey: actionKey, bare \}\) === 'flatten'\) onClose\(\);/);
-    expect(actions).toMatch(/const \{ gate \} = useLiveConfirmGate\(\[\{ key: actionKey, enabled: true \}, bare\]\);/);
-    expect(actions.match(/useLiveConfirmGate\(/g)).toHaveLength(1);
+    expect(flatten).toMatch(/const step = guard\.flatten\(pending \? 'cancel' : 'flatten'\);\s*if \(step === 'changed'\) \{ onSwallowed\(\); return; \}\s*if \(step !== 'send'\) return;\s*playNativeHapticIfAvailable\('medium'\);\s*onClose\(\);/);
+    const phone = source('components/day/LivePhoneChart.tsx');
+    expect(phone).toMatch(/const barGuard = useLivePhoneBarGuard\(\s*position \? \(position\.pending \? 'cancel' : 'flatten'\) : null,/);
+    expect(phone).toContain('onSwallowed={() => say(LIVE_ACTION_CHANGED_TEXT)}');
   });
 
   it('s nabídkou: Zavřít (C8) i Flatten; holá pozice bez nabídky / v přehrávání = vždy „Flatten“', () => {
@@ -517,10 +476,10 @@ describe('C7 UI: PC lišta pod grafem vedle Flatten a telefon', () => {
     expect(desk).toMatch(/manageLockRef=\{liveCommandLockRef\}/);
     expect(desk).toMatch(/lockRef: liveCommandLockRef, cancel: cancelPendingEntries,/);
   });
-  it('dvoukrok C7 (lišta, telefon, Dashboard): hook jen napojí automat (`createLiveCancelPendingClick`)', () => {
+  it('C7 (lišta, telefon, Dashboard): hook jen napojí pojistku (`createLiveCancelPendingClick`)', () => {
     const pending = source('components/LivePendingCancel.tsx');
     const hook = between(pending, 'export function useLiveCancelPendingAction(', '/** Odkaz na deskový zámek');
-    expect(hook).toMatch(/const \{ gate \} = useLiveConfirmGate\(\[view\]\);/);
+    expect(hook).toMatch(/const gate = useLiveClickGate\(\[view\]\);/);
     expect(hook).toMatch(/event\?\.currentTarget\.blur\(\);\s*void click\(view\);/);
     expect(hook).toMatch(/run: createLiveCancelPendingRun\(\{ cancel: \(\) => cancelRef\.current, busyRef: input\.lockRef, setBusy, report \}\),/);
     expect(hook).not.toMatch(/liveConfirmClick|cancel\(|cancelRef\.current\(/);
@@ -571,59 +530,51 @@ const clock = (start = 0) => {
   return { now: () => at, set: (next: number) => { at = next; } };
 };
 
-describe('automat dvoukroku (createLiveConfirmGate): 350 ms od PŘEDCHOZÍHO kliku, blokace a zmizení zahodí', () => {
-  const target = (patch: Partial<{ key: string; enabled: boolean; reason: string | null }> = {}) => ({ key: 'k', enabled: true, reason: null, ...patch });
-  it('dva kliky v jednom snímku (stejný ms) ani trojklik nic nepotvrdí; 2. klik 350 ms – 4 s ano', () => {
+describe('pojistka kliku (createLiveClickGate)', () => {
+  const target = (patch = {}) => ({ key: 'k', enabled: true, reason: null, ...patch });
+  it('první klik send; dvojklik repeat; bušení kotvu posouvá; po pauze send', () => {
     const time = clock();
-    const gate = createLiveConfirmGate({ now: time.now });
-    expect(gate.click(target()).kind).toBe('asking');
-    expect(gate.click(target()).kind).toBe('asking'); // týž snímek
-    time.set(200); expect(gate.click(target()).kind).toBe('asking');
-    time.set(400); expect(gate.click(target()).kind).toBe('asking'); // 400 od prvního, 200 od předchozího
-    time.set(750); expect(gate.click(target()).kind).toBe('send');
-    expect(gate.current()).toBeNull();
-    time.set(1_000); expect(gate.click(target()).kind).toBe('asking');
-    time.set(5_000); expect(gate.click(target()).kind).toBe('asking'); // po 4 s znovu první krok
+    const gate = createLiveClickGate({ now: time.now });
+    expect(gate.click(target()).kind).toBe('send');
+    expect(gate.click(target()).kind).toBe('repeat');
+    time.set(300); expect(gate.click(target()).kind).toBe('repeat');
+    time.set(600); expect(gate.click(target()).kind).toBe('repeat');
+    time.set(1_100); expect(gate.click(target()).kind).toBe('send');
   });
-  it('sync: zablokovaný, změněný nebo zmizelý cíl zahodí „Opravdu?“ i bez kliku; jiný aktivní cíl ne', () => {
-    for (const next of [target({ enabled: false }), target({ key: 'k2' }), null]) {
-      const time = clock();
-      const gate = createLiveConfirmGate({ now: time.now });
-      gate.click(target());
-      gate.sync([next]);
-      expect(gate.current()).toBeNull();
-      time.set(500);
-      expect(gate.click(target()).kind).toBe('asking'); // odblokováno = znovu od prvního kliku
-    }
-    const gate = createLiveConfirmGate({ now: clock().now });
-    gate.click(target());
-    gate.sync([target({ key: 'other' }), target()]);
-    expect(gate.current()).not.toBeNull();
-  });
-  it('klik na zablokovaný cíl = blocked + zahozené potvrzení; busy = nic a potvrzení beze změny; expire po 4 s', () => {
+  it('jiný klíč není dvojklik; změna nabídky spolkne klik na 1 s', () => {
     const time = clock();
-    const changes: unknown[] = [];
-    const gate = createLiveConfirmGate({ now: time.now, onChange: state => changes.push(state) });
-    gate.click(target());
+    const gate = createLiveClickGate({ now: time.now });
+    gate.sync([target()]);
+    expect(gate.click(target()).kind).toBe('send');
+    expect(gate.click(target({ key: 'other' })).kind).toBe('send');
+    time.set(2_000);
+    gate.sync([target({ key: 'filled' })]);
+    time.set(2_999); expect(gate.click(target({ key: 'filled' })).kind).toBe('changed');
+    time.set(3_000); expect(gate.click(target({ key: 'filled' })).kind).toBe('send');
+  });
+  it('první sync nic nespolkne; zablokování se stejným klíčem není změna', () => {
+    const time = clock(5_000);
+    const gate = createLiveClickGate({ now: time.now });
+    gate.sync([target()]);
+    expect(gate.click(target()).kind).toBe('send');
+    time.set(6_000);
+    gate.sync([target({ enabled: false })]);
+    gate.sync([target()]);
+    expect(gate.click(target()).kind).toBe('send');
+  });
+  it('zablokováno, busy, zmizelo = nikdy send', () => {
+    const gate = createLiveClickGate({ now: clock().now });
     expect(gate.click(target({ enabled: false, reason: 'Zastaralý stav.' }))).toEqual({ kind: 'blocked', reason: 'Zastaralý stav.' });
-    expect(gate.current()).toBeNull();
-    gate.click(target());
-    time.set(500);
     expect(gate.click(target(), { busy: true }).kind).toBe('busy');
-    expect(gate.current()).toMatchObject({ key: 'k', at: 0 });
     expect(gate.click(undefined).kind).toBe('missing');
-    expect(gate.current()).toBeNull();
-    gate.click(target());
-    time.set(3_999); gate.expire(); expect(gate.current()).not.toBeNull();
-    time.set(4_500); gate.expire(); expect(gate.current()).toBeNull();
-    expect(changes.length).toBeGreaterThan(3);
+    expect(gate.click(target()).kind).toBe('send');
   });
 });
 
-describe('(a) „Zrušit čekající“ / Dashboard: klik → automat → běh se zámkem (bez Reactu)', () => {
+describe('(a) „Zrušit čekající“ / Dashboard: klik → pojistka → běh se zámkem (bez Reactu)', () => {
   const setup = (lock = false) => {
     const time = clock();
-    const gate = createLiveConfirmGate({ now: time.now });
+    const gate = createLiveClickGate({ now: time.now });
     const lockRef = { current: lock };
     const cancel = vi.fn(async (entries: readonly PendingOwnEntry[]) => entries.map(item => ({ entry: item, operationId: 'manage:000000000001', outcome: 'canceled' as const, text: 'Zrušeno.' })));
     const report = vi.fn();
@@ -633,75 +584,52 @@ describe('(a) „Zrušit čekající“ / Dashboard: klik → automat → běh s
   };
   const view = (patch: Partial<Parameters<typeof liveCancelPendingView>[0]> = {}) => liveCancelPendingView(viewInput(patch))!;
 
-  it('druhý klik 350 ms – 4 s pošle PRÁVĚ jednou sadu, kterou uživatel viděl', async () => {
+  it('první klik pošle PRÁVĚ jednou sadu, kterou uživatel viděl; dvojklik nic dalšího', async () => {
     const t = setup();
     const shown = view();
-    expect(t.click(shown)).toBeNull();
-    t.time.set(500);
     await t.click(shown);
+    expect(t.click(shown)).toBeNull();
     expect(t.cancel).toHaveBeenCalledTimes(1);
     expect(t.cancel).toHaveBeenCalledWith(shown.entries);
   });
-  it('dva kliky v jednom snímku nic nepošlou', () => {
+  it('sada se změní do 1 s před klikem: nic neodejde, text to řekne; pak odejde nová', async () => {
     const t = setup();
-    const shown = view();
-    expect(t.click(shown)).toBeNull();
-    expect(t.click(shown)).toBeNull();
+    t.gate.sync([view()]);
+    t.time.set(5_000);
+    const next = view({ entries: [entry('101')] });
+    t.gate.sync([next]);
+    t.time.set(5_500);
+    expect(t.click(next)).toBeNull();
+    expect(t.report.mock.calls.at(-1)?.[0].text).toBe(LIVE_ACTION_CHANGED_TEXT);
     expect(t.cancel).not.toHaveBeenCalled();
-  });
-  it('změna sady mezi kliky (vyplnění, nový vstup, jiná cena) nic nepošle', () => {
-    const t = setup();
-    t.click(view());
-    t.time.set(500);
-    expect(t.click(view({ entries: [entry('101')] }))).toBeNull();
-    t.time.set(1_000);
-    expect(t.click(view({ entries: [entry('101', { price: 24_995 }), entry('102', { price: 24_980 })] }))).toBeNull();
-    expect(t.cancel).not.toHaveBeenCalled();
-  });
-  it('blokace mezi kliky zahodí potvrzení i bez kliku (sync) — po odblokování nic, až nový dvoukrok', async () => {
-    const t = setup();
-    const shown = view();
-    t.click(shown);
-    t.gate.sync([view({ statusFresh: false })]);
-    t.time.set(500);
-    expect(t.click(shown)).toBeNull();
-    expect(t.cancel).not.toHaveBeenCalled();
-    t.time.set(1_000);
-    await t.click(shown);
-    expect(t.cancel).toHaveBeenCalledTimes(1);
+    t.time.set(6_100);
+    await t.click(next);
+    expect(t.cancel).toHaveBeenCalledWith(next.entries);
   });
   it('klik na zablokovaný pohled = jen důvod, nic se neodeslalo', () => {
     const t = setup();
-    t.click(view());
-    t.time.set(500);
     expect(t.click(view({ context: { ...CONTEXT, blockedReason: 'Nevyřešený ruční vstup.' } }))).toBeNull();
     expect(t.report.mock.calls.at(-1)?.[0].text).toBe('Nevyřešený ruční vstup. Nic se neodeslalo.');
     expect(t.cancel).not.toHaveBeenCalled();
   });
-  it('zámek drží jiný příkaz (× z čáry telefonu, posun SL) → druhý klik Dashboardu nic nepošle', async () => {
+  it('zámek drží jiný příkaz → klik Dashboardu nic nepošle', async () => {
     const t = setup(true);
-    const shown = view();
-    t.click(shown);
-    t.time.set(500);
-    expect(await t.click(shown)).toMatchObject({ called: false });
+    expect(await t.click(view())).toMatchObject({ called: false });
     expect(t.cancel).not.toHaveBeenCalled();
     expect(t.report.mock.calls.at(-1)?.[0].text).toBe(LIVE_COMMAND_BUSY_TEXT);
   });
-  it('(e) výsledek přijde až po zmizení nabídky (status dřív než ACK): ohlásí se, nic dalšího neodejde', async () => {
+  it('(e) výsledek přijde až po zmizení nabídky: ohlásí se, nic dalšího neodejde', async () => {
     const t = setup();
     let resolve!: (value: CancelPendingItemResult[]) => void;
     t.cancel.mockImplementation(() => new Promise<CancelPendingItemResult[]>(done => { resolve = done; }) as never);
     const shown = view();
-    t.click(shown);
-    t.time.set(500);
     const flight = t.click(shown)!;
     expect(t.lockRef.current).toBe(true);
-    t.gate.sync([null]); // status: nic čekajícího, tlačítko zmizelo
+    t.gate.sync([null]);
     t.time.set(900);
     expect(t.click(null)).toBeNull();
     resolve(shown.entries.map(item => ({ entry: item, operationId: 'manage:000000000001', outcome: 'canceled', text: 'Zrušeno.' })));
     expect((await flight).notice.text).toBe('Zrušeno 2 z 2.');
-    expect(t.report.mock.calls.at(-1)?.[0].text).toBe('Zrušeno 2 z 2.');
     expect(t.cancel).toHaveBeenCalledTimes(1);
     expect(t.lockRef.current).toBe(false);
   });
@@ -710,7 +638,7 @@ describe('(a) „Zrušit čekající“ / Dashboard: klik → automat → běh s
 describe('(b) × holé pozice v panelu PC (createLiveBareClosePanelClick)', () => {
   const setup = () => {
     const time = clock();
-    const gate = createLiveConfirmGate({ now: time.now });
+    const gate = createLiveClickGate({ now: time.now });
     const busy = { current: false };
     const close = vi.fn(async (_id: string) => ({ called: true, status: 'acknowledged' as const, notice: { tone: 'ok' as const, text: 'ok', at: 1 } }));
     const report = vi.fn();
@@ -719,26 +647,15 @@ describe('(b) × holé pozice v panelu PC (createLiveBareClosePanelClick)', () =
   };
   const offer = (patch: Partial<Parameters<typeof liveBareCloseOffer>[0]> = {}) => liveBareCloseOffer(offerInput(patch));
 
-  it('dvoukrok s klíčem nabídky → právě jedno close s id cíle', async () => {
+  it('první klik → právě jedno close s id cíle; dvojklik nic dalšího', async () => {
     const t = setup();
-    expect(t.click(offer())).toBeNull();
-    t.time.set(500);
     await t.click(offer());
+    expect(t.click(offer())).toBeNull();
     expect(t.close).toHaveBeenCalledTimes(1);
     expect(t.close).toHaveBeenCalledWith(TRADE.entryOperationId);
   });
-  it('blokace mezi kliky (stav zastaral) zahodí potvrzení — po návratu nabídky jeden klik nic nepošle', () => {
-    const t = setup();
-    t.click(offer());
-    t.gate.sync([offer({ statusFresh: false })]);
-    t.time.set(600);
-    expect(t.click(offer())).toBeNull();
-    expect(t.close).not.toHaveBeenCalled();
-  });
   it('klik na zablokovanou nabídku = důvod „Nic se neodeslalo“; zmizelá nabídka = nic', () => {
     const t = setup();
-    t.click(offer());
-    t.time.set(500);
     expect(t.click(offer({ armed: false }))).toBeNull();
     expect(t.report.mock.calls.at(-1)?.[1].text).toMatch(/Flattenem\. Nic se neodeslalo\.$/);
     expect(t.click(null)).toBeNull();
@@ -746,55 +663,76 @@ describe('(b) × holé pozice v panelu PC (createLiveBareClosePanelClick)', () =
   });
   it('attach / vstup / jiný příkaz pod sdíleným zámkem v letu = nic, text „Čeká se…“', () => {
     const t = setup();
-    t.click(offer());
     t.busy.current = true;
-    t.time.set(500);
     expect(t.click(offer())).toBeNull();
     expect(t.report.mock.calls.at(-1)?.[1]).toMatchObject({ tone: 'warn', text: LIVE_COMMAND_BUSY_TEXT });
     expect(t.close).not.toHaveBeenCalled();
   });
-  it('jiný holý vstup mezi kliky (jiné id cíle) nic nepošle', () => {
+  it('jiný holý vstup do 1 s před klikem (jiné id cíle) nic nepošle', () => {
     const t = setup();
-    t.click(offer());
-    t.time.set(500);
-    expect(t.click(offer({ trade: { ...TRADE, entryOperationId: 'entry:other0000001' }, position: LONG2 }))).toBeNull();
+    t.gate.sync([offer()]);
+    t.time.set(5_000);
+    const other = offer({ trade: { ...TRADE, entryOperationId: 'entry:other0000001' }, position: LONG2 });
+    t.gate.sync([other]);
+    t.time.set(5_500);
+    expect(t.click(other)).toBeNull();
+    expect(t.report.mock.calls.at(-1)?.[1]).toMatchObject({ tone: 'warn', text: LIVE_ACTION_CHANGED_TEXT });
     expect(t.close).not.toHaveBeenCalled();
   });
 });
 
-describe('(c) telefonní lišta: JEDEN automat pro Flatten i „Zavřít“ holé pozice', () => {
+describe('(c) telefonní lišta: Flatten i „Zavřít“ holé pozice', () => {
   const offer = liveBareCloseOffer(offerInput())!;
-  const flattenKey = livePhonePositionCloseKey({ side: 'long', quantity: 2, symbol: 'MNQZ6', pending: null });
-  it('Zavřít (C8) a pak Flatten nic nepošle — a naopak', () => {
-    const time = clock();
-    const gate = createLiveConfirmGate({ now: time.now });
-    expect(livePhoneBarClick(gate, 'bare', { flattenKey, bare: offer })).toBeNull();
-    time.set(500);
-    expect(livePhoneBarClick(gate, 'flatten', { flattenKey, bare: offer })).toBeNull();
-    time.set(1_000);
-    expect(livePhoneBarClick(gate, 'bare', { flattenKey, bare: offer })).toBeNull();
-    time.set(1_500);
-    expect(livePhoneBarClick(gate, 'bare', { flattenKey, bare: offer })).toBe('bare-close');
-    time.set(2_000);
-    expect(livePhoneBarClick(gate, 'flatten', { flattenKey, bare: offer })).toBeNull();
-    time.set(2_500);
-    expect(livePhoneBarClick(gate, 'flatten', { flattenKey, bare: offer })).toBe('flatten');
+  const setup = (start = 0) => {
+    const time = clock(start);
+    return { time, guard: createLivePhoneBarGuard({ now: time.now }) };
+  };
+  it('první klepnutí odesílá; dvojklepnutí jeden příkaz; druhé tlačítko je jiný příkaz', () => {
+    const { guard } = setup();
+    guard.sync('flatten', offer);
+    expect(guard.bare(offer)).toBe('send');
+    expect(guard.bare(offer)).toBe('none');
+    expect(guard.flatten('flatten')).toBe('send');
+    expect(guard.flatten('flatten')).toBe('repeat');
   });
-  it('zablokovaná nabídka = bare-blocked (rodič jen řekne důvod) a rozběhnuté potvrzení pryč', () => {
-    const time = clock();
-    const gate = createLiveConfirmGate({ now: time.now });
-    livePhoneBarClick(gate, 'bare', { flattenKey, bare: offer });
-    time.set(500);
-    const blocked = liveBareCloseOffer(offerInput({ killSwitch: true }))!;
-    expect(livePhoneBarClick(gate, 'bare', { flattenKey, bare: blocked })).toBe('bare-blocked');
-    expect(gate.current()).toBeNull();
-    // Sync s nabídkou, která zmizela: rozběhnuté „Zavřít“ pryč, Flatten se stejným klíčem zůstává.
-    livePhoneBarClick(gate, 'bare', { flattenKey, bare: offer });
-    gate.sync([{ key: flattenKey, enabled: true }, null]);
-    expect(gate.current()).toBeNull();
-    livePhoneBarClick(gate, 'flatten', { flattenKey, bare: offer });
-    gate.sync([{ key: flattenKey, enabled: true }, null]);
-    expect(gate.current()).toMatchObject({ key: flattenKey });
+  it('zablokovaná nabídka = blocked (rodič jen řekne důvod)', () => {
+    const { guard } = setup();
+    expect(guard.bare(liveBareCloseOffer(offerInput({ killSwitch: true }))!)).toBe('blocked');
+  });
+  it('Zrušit → Flatten: spolkne se 1 s, i přes stav bez pozice (složení pending → null → pozice)', () => {
+    const { time, guard } = setup();
+    guard.sync('cancel', null);
+    time.set(5_000);
+    guard.sync(null, null);
+    time.set(7_000);
+    guard.sync('flatten', null);
+    time.set(7_999);
+    expect(guard.flatten('flatten')).toBe('changed');
+    time.set(8_000);
+    expect(guard.flatten('flatten')).toBe('send');
+  });
+  it('pozice → pozice nikdy nespolkne: změna počtu, nová pozice, Flatten → Zrušit', () => {
+    const { time, guard } = setup();
+    guard.sync(null, null);
+    time.set(1_000);
+    guard.sync('flatten', null); // nová pozice po vstupu
+    expect(guard.flatten('flatten')).toBe('send');
+    time.set(2_000);
+    guard.sync('flatten', null); // změna počtu je týž význam
+    expect(guard.flatten('flatten')).toBe('send');
+    time.set(3_000);
+    guard.sync('cancel', null);
+    expect(guard.flatten('cancel')).toBe('send');
+  });
+  it('změna nabídky C8 Flatten nezdrží, ale „Zavřít“ spolkne', () => {
+    const { time, guard } = setup();
+    guard.sync('flatten', offer);
+    time.set(5_000);
+    const other = { ...offer, key: `${offer.key}:jina` };
+    guard.sync('flatten', other);
+    time.set(5_500);
+    expect(guard.bare(other)).toBe('changed');
+    expect(guard.flatten('flatten')).toBe('send');
   });
 });
 
@@ -894,192 +832,143 @@ describe('(d) deskové brány (createLiveDeskCommands): nic se neodešle, co už
   });
 });
 
-describe('(f) čáry grafu: přechod holá → spravovaná pozice mezi kliky nic nepotvrdí', () => {
+describe('(f) čáry grafu: první klik, dvojklik a změněná čára (liveLineClick)', () => {
   const summary = {
-    kind: 'position', side: 'long', quantity: 2, entry: 25_000.25, stop: null, target: null, openPnl: 4, mark: 25_001.25, entryType: 'Market',
+    kind: 'position', side: 'long', quantity: 2, entry: 25_000.25, stop: 24_990, target: 25_020, openPnl: 4, mark: 25_001.25, entryType: 'Market',
   } as unknown as LiveChartPositionSummary;
-  const [bareLine] = livePositionChartLines(summary, { manageable: false, entryAvg: null, pointValue: 2, bareClose: { entryOperationId: TRADE.entryOperationId } });
-  const managedLine = { ...bareLine, id: 'live-position:entry', confirmCancel: false };
-  it('1. klik × holé pozice, mezitím attach → spravovaný obchod (× jednoklik): potvrzovací klik NIC nepošle', () => {
-    const armed = orderLineConfirmStep(null, cancelConfirmKey(bareLine), true, 0);
-    expect(armed.fire).toBe(false);
-    const after = orderLineConfirmStep(armed.next, cancelConfirmKey(managedLine), false, 500);
-    // Spolknutý klik rozběhne aktivní 1. krok nového × („Opravdu?“), dvojklik nic.
-    expect(after).toEqual({ next: { key: cancelConfirmKey(managedLine), since: 500, until: 500 + 4_000 }, fire: false });
-    expect(orderLineConfirmStep(after.next, cancelConfirmKey(managedLine), false, 600).fire).toBe(false);
-    expect(orderLineConfirmStep(after.next, cancelConfirmKey(managedLine), false, 850).fire).toBe(true);
-    // Bez rozběhnutého potvrzení holé čáry je × spravovaného obchodu dál jednoklikové (Filip 30. 10.).
-    expect(orderLineConfirmStep(null, cancelConfirmKey(managedLine), false, 500).fire).toBe(true);
-    // Po 4 s už rozběhnuté potvrzení neplatí.
-    expect(orderLineConfirmStep(armed.next, cancelConfirmKey(managedLine), false, 4_001).fire).toBe(true);
+  const controls = { manageable: true, canClose: true, entryAvg: 25_000.25, pointValue: 2 };
+  const filled = livePositionChartLines(summary, controls);
+  const pending = livePositionChartLines({ ...summary, kind: 'pending', entryType: 'Limit' } as LiveChartPositionSummary, controls);
+  const bare = livePositionChartLines({ ...summary, stop: null, target: null } as LiveChartPositionSummary, { manageable: false, entryAvg: null, pointValue: 2, bareClose: { entryOperationId: TRADE.entryOperationId } });
+  const start = (lines: Parameters<typeof liveLineClickSync>[1], at = 0) => liveLineClickSync(LIVE_LINE_CLICK_INITIAL, lines, at);
+  const key = (lines: typeof filled) => cancelConfirmKey(lines[0]);
+
+  it('živé čáry nemají dvoukrok; první klik projde, dvojklik ne', () => {
+    const withAdd = livePositionChartLines(summary, { ...controls, pendingAdd: { price: 24_995, quantity: 1, orderType: 'Limit' } });
+    for (const lines of [filled, pending, bare, withAdd]) {
+      for (const line of lines) {
+        expect(line.confirmCancel).toBeUndefined();
+        expect(line.actions?.some(action => action.confirm)).not.toBe(true);
+      }
+    }
+    const state = start(filled);
+    const first = liveLineClick(state, filled[0], key(filled), 5_000);
+    expect(first.fire).toBe(true);
+    expect(liveLineClick(first.next, filled[0], key(filled), 5_200).fire).toBe(false);
+    expect(liveLineClick(first.next, filled[0], key(filled), 5_400).fire).toBe(true);
   });
-  it('nabízené klíče čar (orderLineConfirmKeys): zmizelá / zablokovaná / změněná čára klíč nenabízí', () => {
-    const keys = orderLineConfirmKeys([bareLine]);
-    expect(keys.has(cancelConfirmKey(bareLine))).toBe(true);
-    // Nabídka se zablokovala → livePositionChartLines čáru holé pozice bez × nekreslí.
-    const [plain] = livePositionChartLines(summary, { manageable: false, entryAvg: null, pointValue: 2 });
-    expect(orderLineConfirmKeys([plain]).has(cancelConfirmKey(bareLine))).toBe(false);
-    expect(orderLineConfirmKeys([managedLine]).has(cancelConfirmKey(bareLine))).toBe(false);
-    const withAction = { ...managedLine, actions: [{ id: 'break-even', label: 'BE', confirm: true, disabled: false }] };
-    expect(orderLineConfirmKeys([withAction]).has('live-position:entry:break-even')).toBe(true);
-    expect(orderLineConfirmKeys([{ ...withAction, actions: [{ ...withAction.actions[0], disabled: true }] }]).has('live-position:entry:break-even')).toBe(false);
+  it('čekající → vyplněno: klik do 1 s po změně se spolkne, pak projde', () => {
+    const state = liveLineClickSync(start(pending), filled, 3_000);
+    expect(liveLineClick(state, filled[0], key(filled), 3_999).fire).toBe(false);
+    expect(liveLineClick(state, filled[0], key(filled), 4_000).fire).toBe(true);
+  });
+  it('holá → spravovaná i změna přes stav bez čáry se spolknou', () => {
+    const managed = liveLineClickSync(start(bare), filled, 3_000);
+    expect(liveLineClick(managed, filled[0], key(filled), 3_500).fire).toBe(false);
+    const gone = liveLineClickSync(liveLineClickSync(start(pending), [], 3_000), filled, 3_200);
+    expect(liveLineClick(gone, filled[0], key(filled), 4_100).fire).toBe(false);
+    expect(liveLineClick(gone, filled[0], key(filled), 4_200).fire).toBe(true);
+  });
+  it('přikoupení zmizí a pod kurzor dojede × pozice: spolkne se', () => {
+    const withAdd = livePositionChartLines(summary, { ...controls, pendingAdd: { price: 24_995, quantity: 1, orderType: 'Limit' } });
+    const state = liveLineClickSync(start(withAdd), filled, 3_000);
+    expect(liveLineClick(state, filled[0], key(filled), 3_500).fire).toBe(false);
+  });
+  it('cena ani zablokování nejsou změna nabídky; první sync taky ne', () => {
+    const state = start(filled, 3_000);
+    expect(liveLineClick(state, filled[0], key(filled), 3_001).fire).toBe(true);
+    const moved = filled.map(line => ({ ...line, price: line.price + 1 }));
+    expect(liveLineClickSync(state, moved, 4_000)).toBe(state);
+    const noBe = filled.map(line => ({ ...line, actions: line.actions?.map(action => ({ ...action, disabled: true })) }));
+    expect(liveLineClickSync(state, noBe, 4_000)).toBe(state);
+  });
+  it('✎ a odesílaný posun (`pendingMove`) podpis nemění; změna nabídky je hlášená, dvojklik ne', () => {
+    const state = start(filled, 3_000);
+    const withPencil = filled.map(line => (line.kind === 'entry' ? line : { ...line, actions: [...(line.actions ?? []), { id: 'manage', label: '✎' }] }));
+    expect(liveLineClickSync(state, withPencil, 4_000)).toBe(state);
+    const sending = livePositionChartLines(summary, { ...controls, pending: { stopLoss: 24_995 } });
+    expect(liveLineClickSync(state, sending, 4_000)).toBe(state);
+    const changed = liveLineClickSync(start(pending), filled, 3_000);
+    expect(liveLineClick(changed, filled[0], key(filled), 3_100).changed).toBe(true);
+    const first = liveLineClick(state, filled[0], key(filled), 9_000);
+    expect(liveLineClick(first.next, filled[0], key(filled), 9_100).changed).toBeUndefined();
     const overlay = source('components/BacktestOrderLinesOverlay.tsx');
-    // Efekt na `lines` = čistá `orderLineConfirmSync` (neaktivní značka, nikdy jen null); „Opravdu?“ jen u aktivního.
-    expect(overlay).toMatch(/const next = orderLineConfirmSync\(current, lines\);\s*if \(next !== current\) \{ confirmingRef\.current = next; setConfirming\(next\); \}/);
-    expect(overlay).toMatch(/const asking = \(key: string\) => confirming\?\.key === key && !confirming\.stale;/);
-    expect(overlay).not.toMatch(/confirmingRef\.current = null; setConfirming\(null\); \}\s*\}, \[lines\]\)/);
+    expect(overlay).toMatch(/if \(live\.changed\) onClickSwallowed\?\.\(\);/);
+    expect(overlay).toMatch(/useLayoutEffect\(\(\) => \{ liveClickRef\.current = liveLineClickSync/);
+    expect(source('hooks/useLiveClickGate.ts')).toMatch(/useLayoutEffect\(\(\) => \{ gate\.sync\(targets\); \}/);
+    expect(source('components/LiveTradingScreen.tsx')).toContain("onOrderLineSwallowed: () => setLineNotice({ at: Date.now(), tone: 'warn', text: LIVE_ACTION_CHANGED_TEXT }),");
+    expect(source('components/day/LivePhoneOrderLines.tsx')).toContain('onClickSwallowed={() => onNotice(LIVE_ACTION_CHANGED_TEXT)}');
+    expect(source('components/AlphaTradeChartWorkspace.tsx')).toContain('onClickSwallowed={liveOrderEntry && orderLineSource === liveOrderEntry ? liveOrderEntry.onOrderLineSwallowed : undefined}');
+  });
+  it('overlay zůstává připojený i bez čar (složení pending → [] → position přežije)', () => {
+    expect(source('components/AlphaTradeChartWorkspace.tsx')).not.toContain('panelOrderLines.length > 0 && orderLineSource');
+    expect(source('components/day/LivePhoneOrderLines.tsx')).not.toContain('if (!lines.length) return null;');
+    let state = start(pending);
+    state = liveLineClickSync(state, [], 3_000);
+    state = liveLineClickSync(state, filled, 5_000);
+    expect(liveLineClick(state, filled[0], key(filled), 5_999).fire).toBe(false);
+    expect(liveLineClick(state, filled[0], key(filled), 6_000).fire).toBe(true);
+  });
+  it('panel: velké tlačítko po neznámém výsledku zamčené; dvojklik i po rychlém ACK jeden vstup', () => {
+    for (const status of ['acknowledged', 'rejected', 'blocked', 'abandoned'] as const) expect(liveDirectResultLocks({ status })).toBe(false);
+    expect(liveDirectResultLocks({ status: 'unknown' } as never)).toBe(true);
+    expect(liveDirectErrorLocks('relay timeout')).toBe(true);
+    expect(liveDirectErrorLocks('entry-busy')).toBe(false);
+    const ticket = source('components/LiveOrderTicket.tsx');
+    expect(ticket).toContain('const directLockKey = `${String(group?.armed)}|${directKey}`;');
+    expect(ticket).toContain('disabled={directBlocked != null || directBusy || directLocked}');
+    expect(ticket).toContain('if (directBlocked != null || directLocked) return;');
+    expect(ticket).toContain('if (liveDirectResultLocks(result)) setDirectLock(sentLockKey);');
+    expect(ticket).toContain('if (liveDirectErrorLocks(message)) setDirectLock(sentLockKey);');
+    const send = between(ticket, 'const sendDirect = async', 'directBusyRef.current = true;');
+    expect(send).toMatch(/liveRepeatClick\(directClickRef\.current, liveBareConfirmKey\(previewDraft\), Date\.now\(\)\);\s*directClickRef\.current = step\.next;\s*if \(!step\.send\) return;/);
+    const draft = { symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 25_000, stopLoss: 24_990, takeProfit: 25_020 } as const;
+    expect(liveBareConfirmKey({ ...draft })).toBe(liveBareConfirmKey({ ...draft, stopLoss: 24_991 }));
+    const first = liveRepeatClick(null, liveBareConfirmKey(draft), 1_000);
+    expect(first.send).toBe(true);
+    expect(liveRepeatClick(first.next, liveBareConfirmKey(draft), 1_150).send).toBe(false);
+  });
+  it('Posunout: odejde jen cena z tlačítka, změna průměru = hláška, nic', () => {
+    const time = clock();
+    const gate = createLiveClickGate({ now: time.now });
+    gate.sync([{ key: liveMoveKey('takeProfit', 25_015), enabled: true }]);
+    time.set(5_000);
+    expect(liveMoveClick(gate, 'takeProfit', 25_015, 25_017.5).kind).toBe('changed');
+    gate.sync([{ key: liveMoveKey('takeProfit', 25_017.5), enabled: true }]);
+    time.set(5_500);
+    expect(liveMoveClick(gate, 'takeProfit', 25_017.5, 25_017.5).kind).toBe('changed');
+    time.set(6_000);
+    expect(liveMoveClick(gate, 'takeProfit', 25_017.5, 25_017.5).kind).toBe('send');
+    expect(liveMoveClick(gate, 'takeProfit', 25_017.5, 25_017.5).kind).toBe('repeat');
+    const move = between(source('components/LiveOrderTicket.tsx'), 'const moveLeg = ', 'const runBreakEven = ');
+    expect(move).toMatch(/liveMoveClick\(moveGates\[leg\], leg, moveShownPrices\[leg\], plan\.intent\.newPrice\)/);
+    expect(move).toMatch(/if \(step\.kind === 'changed'\) \{ setManageNotice\(\{ tone: 'warn', text: LIVE_ACTION_CHANGED_TEXT, at \}\); return; \}\s*if \(step\.kind !== 'send'\) return;/);
+  });
+  it('Dashboard: klíč = id vstupu, cena klíč nemění; řádek musí být ten vstup', () => {
+    const own = entry('101');
+    const row = { accountId: 7, id: own.entryBrokerOrderId };
+    const view = dashboardRowCancelView(row, own, { leaderAccountId: 7, blocked: false });
+    expect(view).toMatchObject({ enabled: true, key: `dashboard-cancel:${own.entryOperationId}`, entries: [own] });
+    expect(dashboardRowCancelView(row, { ...own, price: own.price + 5 }, { leaderAccountId: 7, blocked: false }).key).toBe(view.key);
+    expect(dashboardRowCancelView({ ...row, id: 'jiny' }, own, { leaderAccountId: 7, blocked: false })).toMatchObject({ enabled: false, reason: expect.stringMatching(/neodpovídá/) });
+    expect(dashboardRowCancelView({ ...row, accountId: 8 }, own, { leaderAccountId: 7, blocked: false }).enabled).toBe(false);
+    expect(dashboardRowCancelView(row, own, { leaderAccountId: 7, blocked: true }).enabled).toBe(false);
+    expect(source('components/LivePendingCancel.tsx')).toContain('dashboardRowCancelView(order, pending.entry, { leaderAccountId: cancel?.leaderAccountId, blocked })');
+  });
+  it('čára mimo živou pozici (návrh, backtest) pojistku nemá', () => {
+    const state = liveLineClickSync(start(pending), filled, 3_000);
+    expect(liveLineClick(state, { id: 'live-draft:entry' }, 'k', 3_001)).toEqual({ fire: true, next: state });
+    expect(liveLineClick(state, { id: 'backtest:1' }, 'k', 3_001)).toEqual({ fire: true, next: state });
+  });
+  it('nabízené klíče čar a dvoukrok backtestu zůstávají', () => {
+    expect(orderLineConfirmKeys(filled).has(cancelConfirmKey(filled[0]))).toBe(true);
+    const armed = orderLineConfirmStep(null, 'b:cancel:cancel-order:1', true, 0);
+    expect(armed.fire).toBe(false);
+    expect(orderLineConfirmSync(armed.next, [])).toMatchObject({ stale: true });
+    const overlay = source('components/BacktestOrderLinesOverlay.tsx');
+    expect(overlay).toMatch(/const live = liveLineClick\(liveClickRef\.current, line, key, Date\.now\(\)\);\s*liveClickRef\.current = live\.next;\s*if \(!live\.fire\) \{/);
+    expect(overlay).toMatch(/liveClickRef\.current = liveLineClickSync\(liveClickRef\.current, lines, Date\.now\(\)\);/);
     expect(overlay.match(/event\.currentTarget\.blur\(\);/g)).toHaveLength(2);
-  });
-});
-
-/**
- * Složení tak, jak běží v overlayi (oponentura UI C7/C8 kolo 2, P2): klik → změna čar → EFEKT
- * (`orderLineConfirmSync`, React ho spustí před dalším klikem) → klik. Test jen poloviček
- * (krok bez efektu) dřív dával falešnou jistotu: s efektem, který potvrzení vynuloval, 2. klik odešel.
- */
-describe('(f2) čáry grafu: složení klik → efekt (sync čar) → klik', () => {
-  type Line = ReturnType<typeof livePositionChartLines>[number];
-  const click = (state: ReturnType<typeof orderLineConfirmStep>['next'], line: Line, at: number) => (
-    orderLineConfirmStep(state, cancelConfirmKey(line), line.confirmCancel, at)
-  );
-  const pendingSummary = {
-    kind: 'pending', side: 'long', quantity: 1, entry: 25_000, stop: 24_990, target: 25_020, openPnl: null, mark: null, entryType: 'Limit',
-  } as unknown as LiveChartPositionSummary;
-  const filledSummary = { ...pendingSummary, kind: 'position', openPnl: 2, mark: 25_001 } as unknown as LiveChartPositionSummary;
-  const pc = { manageable: true, canClose: true, entryAvg: 25_000, pointValue: 2 };
-  const [pendingLine] = livePositionChartLines(pendingSummary, pc);
-  const [filledLine] = livePositionChartLines(filledSummary, pc);
-  const bareSummary = {
-    kind: 'position', side: 'long', quantity: 2, entry: 25_000.25, stop: null, target: null, openPnl: 4, mark: 25_001.25, entryType: 'Market',
-  } as unknown as LiveChartPositionSummary;
-  const [bareLine] = livePositionChartLines(bareSummary, { manageable: false, entryAvg: null, pointValue: 2, bareClose: { entryOperationId: TRADE.entryOperationId } });
-  const [blockedLine] = livePositionChartLines(bareSummary, { manageable: false, entryAvg: null, pointValue: 2 });
-  const [managedLine] = livePositionChartLines({ ...bareSummary, stop: 24_990, target: 25_020 } as LiveChartPositionSummary, pc);
-
-  it('předpoklady: PC čekající × dvoukrok, vyplněná pozice × JEDNOKLIK (stejná čára), holá → spravovaná jednoklik', () => {
-    expect(pendingLine).toMatchObject({ id: 'live-position:entry', cancelAction: 'cancel-order', confirmCancel: true });
-    expect(filledLine).toMatchObject({ id: 'live-position:entry', cancelAction: 'close-position', confirmCancel: false });
-    expect(bareLine).toMatchObject({ id: liveBareLineId(TRADE.entryOperationId), confirmCancel: true });
-    expect(blockedLine).toMatchObject({ id: 'live-position:entry', cancellable: false });
-    expect(managedLine).toMatchObject({ id: 'live-position:entry', cancellable: true, cancelAction: 'close-position', confirmCancel: false });
-  });
-
-  it('PC čekající → vyplněno (starší ochrana 339c0fc5): klik po efektu NEZAVŘE právě otevřenou pozici', () => {
-    const armed = click(null, pendingLine, 0);
-    expect(armed.fire).toBe(false);
-    const synced = orderLineConfirmSync(armed.next, [filledLine]);
-    expect(synced).toMatchObject({ key: cancelConfirmKey(pendingLine), stale: true });
-    const second = click(synced, filledLine, 1_500);
-    expect(second).toEqual({ next: { key: cancelConfirmKey(filledLine), since: 1_500, until: 1_500 + 4_000 }, fire: false });
-    // Dvojklik (+100 ms) po spolknutém kliku nic; teprve klik ≥ 350 ms od předchozího zavře.
-    const dbl = click(second.next, filledLine, 1_600);
-    expect(dbl.fire).toBe(false);
-    expect(click(dbl.next, filledLine, 1_900).fire).toBe(false);
-    expect(click(second.next, filledLine, 1_850).fire).toBe(true);
-    // A bez efektu (klik dřív, než React efekt spustí) taky nic.
-    expect(click(armed.next, filledLine, 1_500).fire).toBe(false);
-  });
-
-  it('holá → spravovaná (C8): potvrzovací klik po efektu NEZAVŘE spravovaný obchod', () => {
-    const armed = click(null, bareLine, 0);
-    const synced = orderLineConfirmSync(armed.next, [managedLine]);
-    expect(synced?.stale).toBe(true);
-    const swallowed = click(synced, managedLine, 1_000);
-    expect(swallowed.fire).toBe(false);
-    expect(click(swallowed.next, managedLine, 1_100).fire).toBe(false);
-    expect(click(swallowed.next, managedLine, 1_350).fire).toBe(true);
-  });
-
-  it('holá → zablokováno → spravovaná, i čára na chvíli zmizí (vyplnění přes prázdný stav): nic', () => {
-    const armed = click(null, bareLine, 0);
-    let state = orderLineConfirmSync(armed.next, [blockedLine]);
-    state = orderLineConfirmSync(state, [managedLine]);
-    expect(click(state, managedLine, 1_200).fire).toBe(false);
-    const armedPending = click(null, pendingLine, 0);
-    let gone = orderLineConfirmSync(armedPending.next, []);
-    expect(gone?.stale).toBe(true);
-    gone = orderLineConfirmSync(gone, [filledLine]);
-    expect(click(gone, filledLine, 900).fire).toBe(false);
-  });
-
-  it('zablokováno → vráceno se STEJNÝM klíčem (kolo 1 #3): klik je jen 1. krok nového dvoukroku', () => {
-    const armed = click(null, bareLine, 0);
-    let state = orderLineConfirmSync(armed.next, [blockedLine]);
-    expect(state?.stale).toBe(true);
-    state = orderLineConfirmSync(state, [bareLine]);
-    // Vrácená nabídka značku neoživí.
-    expect(state?.stale).toBe(true);
-    const first = click(state, bareLine, 1_000);
-    expect(first.fire).toBe(false);
-    expect(first.next).toEqual({ key: cancelConfirmKey(bareLine), since: 1_000, until: 5_000 });
-    // Nový dvoukrok nad vrácenou nabídkou: 2. klik ≥ 350 ms od předchozího odešle.
-    expect(click(first.next, bareLine, 1_200).fire).toBe(false);
-    expect(click(click(first.next, bareLine, 1_200).next, bareLine, 1_600).fire).toBe(true);
-  });
-
-  it('nabízený klíč se nezmění = potvrzení dál aktivní (2. klik odešle); po 4 s značka nic nebrání', () => {
-    const armed = click(null, bareLine, 0);
-    const kept = orderLineConfirmSync(armed.next, [bareLine, managedLine]);
-    expect(kept).toBe(armed.next);
-    expect(click(kept, bareLine, 500).fire).toBe(true);
-    const stale = orderLineConfirmSync(click(null, pendingLine, 0).next, [filledLine]);
-    expect(click(stale, filledLine, 4_001).fire).toBe(true);
-    expect(orderLineConfirmSync(null, [filledLine])).toBeNull();
-  });
-
-  it('neaktivní značka NIKDY nespustí akci téhož klíče, ani kdyby byla bez potvrzení (× i tlačítko čáry)', () => {
-    const stale = { key: cancelConfirmKey(filledLine), since: 0, until: 4_000, stale: true as const };
-    expect(orderLineConfirmStep(stale, cancelConfirmKey(filledLine), false, 1_000)).toEqual({ next: { key: cancelConfirmKey(filledLine), since: 1_000, until: 5_000 }, fire: false });
-    const staleBe = { key: 'live-position:entry:break-even', since: 0, until: 4_000, stale: true as const };
-    expect(orderLineConfirmStep(staleBe, 'live-position:entry:break-even', false, 1_000)).toEqual({ next: { key: 'live-position:entry:break-even', since: 1_000, until: 5_000 }, fire: false });
-    expect(orderLineConfirmStep(staleBe, 'live-position:entry:break-even', true, 1_000)).toEqual({ next: { key: 'live-position:entry:break-even', since: 1_000, until: 5_000 }, fire: false });
-    // Jiná čára / jiné tlačítko bez potvrzení projde a značku nemění.
-    expect(orderLineConfirmStep(staleBe, 'other:cancel:close-position:1', false, 1_000)).toEqual({ next: staleBe, fire: true });
-  });
-
-  it('neaktivní značka jiné čáry nebrání: přikoupení a BE mají vlastní dvoukrok; zablokované BE po návratu nic nepotvrdí', () => {
-    const [, , , addLine] = livePositionChartLines(filledSummary, { ...pc, pendingAdd: { price: 24_980, quantity: 1, orderType: 'Limit' } });
-    expect(addLine).toMatchObject({ id: 'live-position:pending-add', confirmCancel: true });
-    const stale = orderLineConfirmSync(click(null, pendingLine, 0).next, [filledLine, addLine]);
-    const addFirst = click(stale, addLine, 600);
-    expect(addFirst.fire).toBe(false);
-    expect(click(addFirst.next, addLine, 1_000).fire).toBe(true);
-    // BE: zablokované tlačítko (disabled) zahodí potvrzení; po návratu je klik jen 1. krok.
-    const beKey = 'live-position:entry:break-even';
-    const beArmed = orderLineConfirmStep(null, beKey, true, 0);
-    const withBe = { ...filledLine, actions: [{ id: 'break-even', label: 'BE', confirm: true, disabled: false }] };
-    let beState = orderLineConfirmSync(beArmed.next, [{ ...withBe, actions: [{ ...withBe.actions[0], disabled: true }] }]);
-    beState = orderLineConfirmSync(beState, [withBe]);
-    expect(orderLineConfirmStep(beState, beKey, true, 800).fire).toBe(false);
-  });
-  // (f3) oponentura 4. 11.: přikoupení vyplněno → × pozice pod kurzorem; hranice času
-  it('× přikoupení „Opravdu?“, přikoupení se vyplní a čára zmizí: klik na × pozice (jednoklik) se spolkne, dvojklik nic', () => {
-    const [, , , addLine] = livePositionChartLines(filledSummary, { ...pc, pendingAdd: { price: 24_980, quantity: 1, orderType: 'Limit' } });
-    const armed = click(null, addLine, 0);
-    expect(armed.fire).toBe(false);
-    const synced = orderLineConfirmSync(armed.next, [filledLine]);
-    expect(synced).toMatchObject({ key: cancelConfirmKey(addLine), stale: true });
-    const swallowed = click(synced, filledLine, 500);
-    expect(swallowed).toEqual({ next: { key: cancelConfirmKey(filledLine), since: 500, until: 4_500 }, fire: false });
-    expect(click(swallowed.next, filledLine, 600).fire).toBe(false);
-    expect(click(swallowed.next, filledLine, 849).fire).toBe(false);
-    expect(click(swallowed.next, filledLine, 850).fire).toBe(true);
-    // Bez neaktivní značky (nic nebylo rozběhnuté) zůstává × pozice jednoklikové (Filip 30. 10.).
-    expect(click(null, filledLine, 500).fire).toBe(true);
-    // Aktivní (ne neaktivní) potvrzení přikoupení jednoklikové × pozice nespolkne — vědomý klik na jinou čáru.
-    expect(click(armed.next, filledLine, 500).fire).toBe(true);
-  });
-  it('po spolknutí změna průměru (nový klíč) = znovu neaktivní; vypršení až po 4 s (until ostře)', () => {
-    const armed = click(null, pendingLine, 0);
-    const swallowed = click(orderLineConfirmSync(armed.next, [filledLine]), filledLine, 500);
-    const moved = { ...filledLine, price: filledLine.price + 0.25 };
-    const resynced = orderLineConfirmSync(swallowed.next, [moved]);
-    expect(resynced?.stale).toBe(true);
-    expect(click(resynced, moved, 900).fire).toBe(false);
-    // Stejné čáry aktivní krok podrží.
-    expect(orderLineConfirmSync(swallowed.next, [filledLine])).toBe(swallowed.next);
-    // now === until: krok vypršel, jednoklik × projde.
-    expect(click(swallowed.next, filledLine, 4_500).fire).toBe(true);
   });
 });
 
@@ -1226,11 +1115,11 @@ describe('JEDEN zámek jednoho příkazu: panel PC, telefon a Dashboard', () => 
 });
 
 describe('jádro: cancelPendingConfirmStep (chyba trojkliku) žádný runtime soubor nepoužívá', () => {
-  it('UI používá jen liveConfirmClick / createLiveConfirmGate', () => {
+  it('UI ho nepoužívá', () => {
     for (const file of [
       'components/LivePendingCancel.tsx', 'components/LiveSafetyControls.tsx', 'components/LiveOrderTicket.tsx', 'components/LiveTradingScreen.tsx',
       'components/TradovateLiveDesk.tsx', 'components/LiveCopyTradeOverview.tsx', 'components/day/LivePhoneChart.tsx', 'components/day/LivePhoneLiveActions.tsx',
-      'hooks/liveCommandRuns.ts', 'hooks/useLiveConfirmGate.ts', 'lib/liveConfirmGate.ts', 'lib/liveCancelPendingUi.ts', 'lib/liveDeskCommands.ts', 'lib/liveBareCloseUi.ts',
+      'hooks/liveCommandRuns.ts', 'hooks/useLiveClickGate.ts', 'lib/liveClickGate.ts', 'lib/liveCancelPendingUi.ts', 'lib/liveDeskCommands.ts', 'lib/liveBareCloseUi.ts',
     ]) {
       expect(source(file), file).not.toMatch(/cancelPendingConfirmStep/);
     }

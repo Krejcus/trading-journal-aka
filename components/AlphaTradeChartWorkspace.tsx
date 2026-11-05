@@ -317,6 +317,8 @@ export interface LiveOrderEntryBridge {
   ) => void;
   /** Tlačítka ve štítku (BE u živé pozice). */
   onOrderLineAction?: (line: BacktestChartOrderLine, actionId: string) => void;
+  /** Klik na čáru spolkla právě změněná nabídka: obrazovka to řekne. */
+  onOrderLineSwallowed?: () => void;
   /** Id vlastníka čar živé pozice: kreslí se i bez přepínače „čáry příkazů“, jen na grafu exekučního instrumentu. */
   livePositionOwnerId?: string;
   /**
@@ -1265,7 +1267,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onChange={() => {}}
             />
           )}
-          {chartApi && panelOrderLines.length > 0 && orderLineSource?.onOrderLineChange && orderLineSource.onOrderLineCancel ? (
+          {/* Připojený i bez čar: pojistka změny nabídky musí přežít stav bez čáry (čekající → nic → pozice). */}
+          {chartApi && orderLineSource?.onOrderLineChange && orderLineSource.onOrderLineCancel ? (
             <BacktestOrderLinesOverlay
               api={chartApi}
               lines={panelOrderLines}
@@ -1276,6 +1279,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onCancel={orderLineSource.onOrderLineCancel}
               onAddBracket={orderLineSource.onOrderLineAddBracket}
               onAction={orderLineSource?.onOrderLineAction}
+              onClickSwallowed={liveOrderEntry && orderLineSource === liveOrderEntry ? liveOrderEntry.onOrderLineSwallowed : undefined}
             />
           ) : null}
           {chartApi && liveDisplayOrders && (liveDisplayOrders.lines.length > 0 || liveDisplayOrders.badges.length > 0) ? (

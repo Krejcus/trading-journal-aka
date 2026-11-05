@@ -1,3 +1,4 @@
+import { liveRepeatClick, type LiveClickState } from '../lib/liveClickGate';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { LeaderOrderManageAction, LeaderOrderManageResult, LeaderOrderManageStatus } from '../lib/leaderOrderManage';
@@ -13,8 +14,8 @@ import type { LiveManageIntent, LiveManageLeg } from '../lib/liveManagePrices';
  * (`manageLeaderEntry` → relay → brány workeru). Hook nic jiného neodesílá,
  * nic neopakuje (neznámý výsledek ani výjimka se znovu NEPOŠLE) a „co jsem
  * viděl“ (`expectPrice`) nepočítá — volající ho bere z read modelu brokera
- * (INV-UI-01). Jeden příkaz naráz; BE varianty dvoukrokově (druhý klik 350 ms
- * až 4 s po prvním, klíč nese akci i ceny — vzor `BacktestOrderLinesOverlay`).
+ * (INV-UI-01). Jeden příkaz naráz, první klik odesílá (Filip 5. 11. 2026, bez „Opravdu?“),
+ * dvojklik se spolkne (`liveRepeatClick`, klíč nese akci i ceny).
  */
 
 /** Stejný podpis jako `onManageEntry` desku a telefonní `LivePhoneManage`. */
@@ -49,7 +50,7 @@ export interface LiveManageOutcome {
 
 export interface LiveManageConfirm { key: string; since: number; until: number }
 
-/** Okno druhého kliku dvoukrokového potvrzení (jako × / BE na čarách grafu). */
+/** Dvoukrok čar BACKTESTU (`BacktestOrderLinesOverlay`); LIVE ho nepoužívá. */
 export const LIVE_MANAGE_CONFIRM_MS = 4_000;
 /** Dvojklik se nepočítá jako potvrzení: druhý klik nejdřív po 350 ms. */
 export const LIVE_MANAGE_CONFIRM_MIN_MS = 350;
@@ -157,7 +158,7 @@ export function createLiveManageRun(deps: LiveManageRunDeps) {
 }
 
 /**
- * Krok dvoukrokového potvrzení. První klik (nebo jiný klíč, nebo po 4 s) = „Opravdu?“;
+ * Krok dvoukrokového potvrzení čar backtestu. První klik (nebo jiný klíč, nebo po 4 s) = „Opravdu?“;
  * druhý klik se stejným klíčem 350 ms až 4 s po prvním = odeslat. Rychlejší
  * druhý klik (dvojklik) se nepočítá a okno se jím neprodlužuje.
  */
@@ -192,8 +193,8 @@ export interface UseLiveManageRunnerOptions {
 }
 
 export type LiveManageRequest =
-  | { step: 'asking' }
-  | { step: 'waiting' }
+  /** Druhý klik dvojkliku: nic se neodeslalo. */
+  | { step: 'repeat' }
   | { step: 'sent'; outcome: Promise<LiveManageOutcome> };
 
 export interface LiveManageRunner {
@@ -205,12 +206,8 @@ export interface LiveManageRunner {
   pendingMove: LiveManagePendingMove | null;
   /** Přímý běh se stejným podpisem jako dosavadní `runLiveManage` / telefonní `run`. */
   run: (action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: LiveManageLeg) => Promise<LiveManageOutcome>;
-  /** Záměr z `lib/liveManagePrices` — dvoukrokově, když `intent.confirm`. Záměr počítej při každém kliku znovu. */
+  /** Záměr z `lib/liveManagePrices`: první klik odesílá. Záměr počítej při každém kliku znovu. */
   request: (intent: LiveManageIntent) => LiveManageRequest;
-  /** Klíč čekající na druhý klik („Opravdu?“). */
-  confirming: LiveManageConfirm | null;
-  asking: (key: string) => boolean;
-  cancelConfirm: () => void;
 }
 
 export function useLiveManageRunner(options: UseLiveManageRunnerOptions): LiveManageRunner {
@@ -223,19 +220,8 @@ export function useLiveManageRunner(options: UseLiveManageRunnerOptions): LiveMa
   onNoticeRef.current = options.onNotice;
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<LiveManageNotice | null>(null);
-  const [confirming, setConfirming] = useState<LiveManageConfirm | null>(null);
   // Ref kvůli dvěma klikům v jednom snímku (stav by ještě nebyl překreslený).
-  const confirmingRef = useRef<LiveManageConfirm | null>(null);
-  const setConfirm = useCallback((next: LiveManageConfirm | null) => {
-    confirmingRef.current = next;
-    setConfirming(next);
-  }, []);
-
-  useEffect(() => {
-    if (!confirming) return undefined;
-    const timer = window.setTimeout(() => setConfirm(null), Math.max(0, confirming.until - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [confirming, setConfirm]);
+  const lastClickRef = useRef<LiveClickState | null>(null);
 
   const landedStop = options.landed?.stopLoss;
   const landedTarget = options.landed?.takeProfit;
@@ -261,27 +247,13 @@ export function useLiveManageRunner(options: UseLiveManageRunnerOptions): LiveMa
   }), [busyRef, setPendingMove]);
 
   const request = useCallback((intent: LiveManageIntent): LiveManageRequest => {
-    const send = () => run(intent.action, intent.expectPrice, intent.newPrice, intent.leg);
-    if (!intent.confirm) {
-      setConfirm(null);
-      return { step: 'sent', outcome: send() };
-    }
-    const now = Date.now();
-    const current = confirmingRef.current;
-    const step = liveManageConfirmStep(current, intent.confirmKey, now);
-    if (step.fire) {
-      setConfirm(null);
-      return { step: 'sent', outcome: send() };
-    }
-    // Dvojklik/trojklik (klik do 350 ms od předchozího): nic se neodešle, pauza běží znovu.
-    if (step.tooSoon) { setConfirm(step.next); return { step: 'waiting' }; }
-    setConfirm(step.next);
-    return { step: 'asking' };
-  }, [run, setConfirm]);
+    const step = liveRepeatClick(lastClickRef.current, intent.confirmKey, Date.now());
+    lastClickRef.current = step.next;
+    if (!step.send) return { step: 'repeat' };
+    return { step: 'sent', outcome: run(intent.action, intent.expectPrice, intent.newPrice, intent.leg) };
+  }, [run]);
 
-  const asking = useCallback((key: string) => confirming?.key === key, [confirming]);
-  const cancelConfirm = useCallback(() => setConfirm(null), [setConfirm]);
   const clearResult = useCallback(() => setResult(null), []);
 
-  return { busy, result, clearResult, pendingMove, run, request, confirming, asking, cancelConfirm };
+  return { busy, result, clearResult, pendingMove, run, request };
 }

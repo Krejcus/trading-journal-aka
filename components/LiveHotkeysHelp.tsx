@@ -17,7 +17,7 @@ import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
  * - zkratky jsou opt-in (výchozí VYPNUTO, volba jen na tomto zařízení);
  * - Shift+B/S jen předvyplní panel (jako ⚡), vstup odešle jen tlačítko panelu;
  * - BE / zavřít / zrušit čekající vedou na TUTÉŽ funkci jako tlačítko nebo × na čáře
- *   (`onOrderLineAction` / `onOrderLineCancel` v `LiveTradingScreen`), až po dvoukroku;
+ *   (`onOrderLineAction` / `onOrderLineCancel` v `LiveTradingScreen`), prvním stiskem;
  * - Shift+F jen požádá `LiveSafetyControls` o otevření dialogu Flatten All (INV-UI-02).
  */
 
@@ -127,7 +127,7 @@ export const LIVE_HOTKEY_FLATTEN_UNAVAILABLE = 'Dialog Flatten All teď nejde ot
 
 /**
  * Výsledek `resolveLiveHotkey` → funkce obrazovky. Příkaz může vzniknout jen z `run`
- * (druhý stisk dvoukroku) a jen přes funkci čáry; tvar čáry se ještě jednou ověří
+ * a jen přes funkci čáry; tvar čáry se ještě jednou ověří
  * (zavřít = × zavírající pozici, zrušit = × rušící příkaz), jinak nic.
  */
 export function dispatchLiveHotkeyOutcome(outcome: LiveHotkeyOutcome, handlers: LiveHotkeyHandlers): void {
@@ -150,9 +150,6 @@ export function dispatchLiveHotkeyOutcome(outcome: LiveHotkeyOutcome, handlers: 
       else handlers.notice({ tone: 'bad', text: 'Čára mezitím změnila význam — nic se neodeslalo.' });
       return;
     }
-    case 'prompt':
-      handlers.notice({ tone: 'warn', text: outcome.text, until: outcome.until });
-      return;
     case 'blocked':
       handlers.notice({ tone: 'bad', text: outcome.text });
       return;

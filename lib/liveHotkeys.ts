@@ -1,3 +1,4 @@
+import { liveRepeatClick, type LiveClickState } from './liveClickGate';
 import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
 import { LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER } from './liveChartOrderLines';
 import { newTicketDraft, type TicketDraft, type TicketInstrument, type TicketQuote, type TicketSide } from './liveOrderTicket';
@@ -10,11 +11,11 @@ import { newTicketDraft, type TicketDraft, type TicketInstrument, type TicketQuo
  * - Shift+B / Shift+S jen předvyplní panel objednávky (jako ⚡, pravidlo Filipa
  *   z 29. 10. „⚡ v live jen vyplní panel“). Odeslání zůstává jen na tlačítku
  *   panelu; globální Enter se nezavádí.
- * - Shift+E / Shift+X / Shift+C (BE, zavřít, zrušit čekající) jsou dvoukrokové
- *   (druhý stisk nejdřív za 350 ms, nejpozději do 4 s, klíč nese akci, čáru,
- *   její tvar i cenu) a smí jen to, co právě nabízí čára v grafu. Výsledkem je
+ * - Shift+E / Shift+X / Shift+C (BE, zavřít, zrušit čekající) odešlou prvním stiskem
+ *   (Filip 5. 11. 2026, bez výzvy) a smí jen to, co právě nabízí čára v grafu. Výsledkem je
  *   záměr `run` s TOUŽ čárou, kterou integrace předá stejné funkci jako klik
  *   myší (`onOrderLineAction` / `onOrderLineCancel` v `LiveTradingScreen`).
+ *   Držená klávesa a rychlý dvojstisk nic dalšího nepošlou.
  *   „Co jsem viděl“ dál bere desk z read modelu brokera a worker vše ověří znovu.
  * - Shift+F jen otevře existující dialog Flatten All z `LiveSafetyControls`
  *   (`lib/liveSafetyShortcut.ts`), potvrzuje se v dialogu (INV-UI-02).
@@ -31,33 +32,24 @@ export type LiveHotkeyIntent =
   | { kind: 'flatten-dialog' }
   | { kind: 'help' };
 
-/** Klávesy, které po dvoukroku spustí správu živé pozice (vstup mezi nimi NENÍ). */
+/** Klávesy, které spustí správu živé pozice (vstup mezi nimi NENÍ). */
 export type LiveHotkeyCommand = 'break-even' | 'close-position' | 'cancel-pending';
 export const LIVE_HOTKEY_COMMANDS: readonly LiveHotkeyCommand[] = ['break-even', 'close-position', 'cancel-pending'];
 
-/** Druhý stisk nejdřív za 350 ms (dvojitý stisk se nepočítá) a nejpozději do 4 s — vzor `BacktestOrderLinesOverlay`. */
-export const LIVE_HOTKEY_CONFIRM_MIN_MS = 350;
-export const LIVE_HOTKEY_CONFIRM_WINDOW_MS = 4_000;
 /** Shift+B/S předvyplní Market jen s cenou panelu starou nejvýš 3 s; jinak Limit ±10 b. */
 export const LIVE_HOTKEY_MARKET_QUOTE_MAX_AGE_MS = 3_000;
 export const LIVE_HOTKEY_LIMIT_OFFSET_POINTS = 10;
 /** Malý posun hodin mezi zdrojem ceny a `Date.now()`; cena „z budoucnosti“ víc = neznámé stáří. */
 const QUOTE_CLOCK_SKEW_MS = 1_000;
 
-const COMMAND_KEY: Record<LiveHotkeyCommand, string> = {
-  'break-even': 'Shift+E',
-  'close-position': 'Shift+X',
-  'cancel-pending': 'Shift+C',
-};
-
 /** Nápověda pod „?“ (`components/LiveHotkeysHelp.tsx`). */
 export const LIVE_HOTKEY_HELP: ReadonlyArray<{ keys: string; text: string }> = [
   { keys: 'Shift+B', text: 'Nový návrh Koupit v panelu — nic neodešle' },
   { keys: 'Shift+S', text: 'Nový návrh Prodat v panelu — nic neodešle' },
   { keys: 'Esc', text: 'Zahodit návrh (jen když kreslení v grafu nic nedělá)' },
-  { keys: 'Shift+E ×2', text: 'SL na BE — druhý stisk po chvilce, do 4 s' },
-  { keys: 'Shift+X ×2', text: 'Zavřít pozici (jen když ji nabízí × na čáře) — druhý stisk do 4 s' },
-  { keys: 'Shift+C ×2', text: 'Zrušit čekající vstup nebo přikoupení — druhý stisk do 4 s' },
+  { keys: 'Shift+E', text: 'SL na BE — odešle hned' },
+  { keys: 'Shift+X', text: 'Zavřít pozici (jen když ji nabízí × na čáře) — odešle hned' },
+  { keys: 'Shift+C', text: 'Zrušit čekající vstup nebo přikoupení — odešle hned' },
   { keys: 'Shift+F', text: 'Otevřít dialog Flatten All (potvrzuje se v dialogu)' },
   { keys: '?', text: 'Tato nápověda' },
 ];
@@ -174,7 +166,7 @@ export function liveHotkeyIntent(event: LiveHotkeyEvent): LiveHotkeyIntent | nul
  * Integrace volá `preventDefault()` jen u nenulového výsledku.
  */
 export function liveHotkeyAction(event: LiveHotkeyEvent, gate: LiveHotkeyGate): LiveHotkeyIntent | null {
-  // Držená klávesa nikdy: ani druhý krok potvrzení, ani další návrh.
+  // Držená klávesa nikdy: ani další příkaz, ani další návrh.
   if (event.repeat === true) return null;
   if (event.isComposing === true || event.key === 'Process' || event.key === 'Dead' || event.keyCode === 229) return null;
   if (event.metaKey === true || event.ctrlKey === true || event.altKey === true) return null;
@@ -194,60 +186,6 @@ export function liveHotkeyAction(event: LiveHotkeyEvent, gate: LiveHotkeyGate): 
 export function chartDrawingIdle(state: { activeTool: unknown; draft: unknown; selectedId: unknown }): boolean {
   const empty = (value: unknown) => value == null || value === '' || value === false;
   return empty(state.activeTool) && empty(state.draft) && empty(state.selectedId);
-}
-
-// ---------------------------------------------------------------------------
-// Dvoukrokové potvrzení
-// ---------------------------------------------------------------------------
-
-export type TwoStepPress =
-  | { status: 'armed'; until: number }
-  | { status: 'too-soon'; until: number }
-  | { status: 'confirmed' }
-  | { status: 'invalid' };
-
-export interface TwoStepGuard {
-  /**
-   * Stisk s klíčem potvrzení. První (nebo jiný klíč, nebo po vypršení) = `armed`;
-   * týž klíč dřív než za 350 ms = `too-soon` (kotva se posune na tento stisk, pauza
-   * 350 ms běží znovu — trojklik nepotvrdí); týž klíč za 350 ms
-   * až 4 s = `confirmed` a stav se vynuluje. Neplatný klíč/čas = `invalid` + reset.
-   */
-  press: (key: string, at?: number) => TwoStepPress;
-  /** Rozběhnutá výzva, nebo null (i po vypršení). */
-  pending: (at?: number) => { key: string; armedAt: number; until: number } | null;
-  reset: () => void;
-}
-
-/**
- * Dvoukrok s klíčem (akce + čára + tvar + cena). Změna klíče stav jen přepíše —
- * jiný klíč nikdy nepotvrdí: potvrzení zrušení vstupu tak nepotvrdí zavření
- * pozice, i když se vstup mezi stisky vyplní (oponentura 2. 11., `cancelConfirmKey`).
- */
-export function createTwoStepGuard(options: { minGapMs?: number; windowMs?: number; now?: () => number } = {}): TwoStepGuard {
-  const minGap = options.minGapMs ?? LIVE_HOTKEY_CONFIRM_MIN_MS;
-  const windowMs = options.windowMs ?? LIVE_HOTKEY_CONFIRM_WINDOW_MS;
-  const clock = options.now ?? Date.now;
-  let state: { key: string; armedAt: number; until: number } | null = null;
-  const live = (at: number) => (state && state.until > at ? state : null);
-  return {
-    press(key, at = clock()) {
-      if (typeof key !== 'string' || key === '' || !Number.isFinite(at)) { state = null; return { status: 'invalid' }; }
-      const current = live(at);
-      if (current && current.key === key) {
-        if (at - current.armedAt >= minGap) { state = null; return { status: 'confirmed' }; }
-        state = { key, armedAt: at, until: at + windowMs };
-        return { status: 'too-soon', until: state.until };
-      }
-      state = { key, armedAt: at, until: at + windowMs };
-      return { status: 'armed', until: state.until };
-    },
-    pending(at = clock()) {
-      const current = live(at);
-      return current ? { ...current } : null;
-    },
-    reset() { state = null; },
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +266,6 @@ export interface LiveHotkeyState {
 export type LiveHotkeyOutcome =
   | { kind: 'prefill-draft'; side: TicketSide }
   | { kind: 'discard-draft' }
-  | { kind: 'prompt'; command: LiveHotkeyCommand; key: string; text: string; until: number }
   | { kind: 'run'; command: LiveHotkeyCommand; line: BacktestChartOrderLine; price: number }
   | { kind: 'blocked'; command: LiveHotkeyCommand; text: string }
   | { kind: 'open-flatten' }
@@ -340,8 +277,7 @@ const price2 = (value: number) => value.toFixed(2);
 const lineShape = (line: BacktestChartOrderLine) => line.label.trim().split(/\s{2,}/)[0] ?? '';
 
 /**
- * Klíč potvrzení: příkaz + čára + akce × + tvar (strana, qty, typ) + cena.
- * Vyplnění, změna qty nebo posun ceny mezi stisky = jiný klíč = nic se nepotvrdí.
+ * Klíč proti dvojstisku: příkaz + čára + akce × + tvar (strana, qty, typ) + cena.
  */
 export const liveHotkeyConfirmKey = (command: LiveHotkeyCommand, line: BacktestChartOrderLine, price: number): string => (
   `${command}:${line.id}:${line.cancelAction ?? line.ownerType}:${lineShape(line)}:${price}`
@@ -385,67 +321,34 @@ function hotkeyTarget(command: LiveHotkeyCommand, state: LiveHotkeyState): Hotke
 }
 
 /**
- * Rozběhnutá výzva zkratky (Shift+E / Shift+X / Shift+C), jejíž cíl čáry grafu už nenabízejí —
- * čára zmizela, zablokovala se (nabídka × holé pozice, BE), změnila id / tvar / cenu / akci —, se
- * zahodí i BEZ stisku (jako čáry grafu, panel, telefon a C7; oponentura UI C7/C8 kolo 2, P3):
- * po návratu cíle je další stisk jen 1. krok. Cíl se počítá TOUŽ funkcí jako stisk
- * (`hotkeyTarget` + `liveHotkeyConfirmKey`). `true` = výzva zahozena (integrace smaže i její text).
+ * Záměr klávesy → co má integrace udělat. Jediný výsledek, který vede k příkazu, je `run`
+ * (BE / zavřít / zrušit čekající): první stisk, když to čára nabízí a nic jiného neběží. Rychlý
+ * dvojstisk téhož klíče (`repeat`, ref volajícího) nic dalšího nepošle.
+ * Vstup (`prefill-draft`) je vždy jen návrh do panelu.
  */
-export function liveHotkeyGuardSync(guard: TwoStepGuard, state: Pick<LiveHotkeyState, 'lines' | 'breakEven'>, now: number): boolean {
-  const pending = guard.pending(now);
-  if (!pending) return false;
-  const full: LiveHotkeyState = { lines: state.lines, breakEven: state.breakEven, hasDraft: false, busy: false };
-  const offered = LIVE_HOTKEY_COMMANDS.some(command => {
-    const target = hotkeyTarget(command, full);
-    return !('blocked' in target) && liveHotkeyConfirmKey(command, target.line, target.price) === pending.key;
-  });
-  if (offered) return false;
-  guard.reset();
-  return true;
-}
-
-/**
- * Záměr klávesy → co má integrace udělat. Jediný výsledek, který vede k příkazu,
- * je `run` (BE / zavřít / zrušit čekající) a vzniká jen druhým stiskem téhož
- * klíče v okně 350 ms–4 s. Vstup (`prefill-draft`) je vždy jen návrh do panelu.
- * Každá jiná zkratka rozběhnutou výzvu zahodí.
- */
-export function resolveLiveHotkey(intent: LiveHotkeyIntent, state: LiveHotkeyState, guard: TwoStepGuard, now: number): LiveHotkeyOutcome {
+export function resolveLiveHotkey(intent: LiveHotkeyIntent, state: LiveHotkeyState, repeat: { current: LiveClickState | null }, now: number): LiveHotkeyOutcome {
   switch (intent.kind) {
     case 'break-even':
     case 'close-position':
     case 'cancel-pending': {
       const command = intent.kind;
-      if (state.busy) {
-        guard.reset();
-        return { kind: 'blocked', command, text: LIVE_HOTKEY_BUSY_TEXT };
-      }
+      if (state.busy) return { kind: 'blocked', command, text: LIVE_HOTKEY_BUSY_TEXT };
       const target = hotkeyTarget(command, state);
-      if ('blocked' in target) {
-        guard.reset();
-        return { kind: 'blocked', command, text: target.blocked };
-      }
-      const key = liveHotkeyConfirmKey(command, target.line, target.price);
-      const press = guard.press(key, now);
-      if (press.status === 'confirmed') return { kind: 'run', command, line: target.line, price: target.price };
-      if (press.status === 'invalid') return { kind: 'blocked', command, text: 'Potvrzení nejde ověřit — nic se neodeslalo.' };
-      return { kind: 'prompt', command, key, text: `${target.text} ${COMMAND_KEY[command]} znovu`, until: press.until };
+      if ('blocked' in target) return { kind: 'blocked', command, text: target.blocked };
+      const step = liveRepeatClick(repeat.current, liveHotkeyConfirmKey(command, target.line, target.price), now);
+      repeat.current = step.next;
+      return step.send ? { kind: 'run', command, line: target.line, price: target.price } : { kind: 'none' };
     }
     case 'new-draft':
-      guard.reset();
       return { kind: 'prefill-draft', side: intent.side };
     case 'discard-draft':
-      guard.reset();
       return state.hasDraft ? { kind: 'discard-draft' } : { kind: 'none' };
     case 'flatten-dialog':
-      // Nouzová cesta: ani běžící akce ji neblokuje; jen otevře dialog lišty.
-      guard.reset();
+      // Nouzová cesta: ani běžící akce ji neblokuje; jen otevře dialog.
       return { kind: 'open-flatten' };
     case 'help':
-      guard.reset();
       return { kind: 'toggle-help' };
     default:
-      guard.reset();
       return { kind: 'none' };
   }
 }

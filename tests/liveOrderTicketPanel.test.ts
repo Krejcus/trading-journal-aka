@@ -157,9 +157,9 @@ describe('holý Market z PC panelu (U4)', () => {
     expect(sendButton(markup)).not.toContain('MARKET · BEZ SL/TP');
   });
 
-  it('zdroj: brána i dvoukrok v okamžiku kliku (liveBareSendClick), pak jediné onPlaceEntry (přes sdílený zámek)', () => {
+  it('zdroj: brána v okamžiku kliku (liveBareSendClick), pak jediné onPlaceEntry (přes sdílený zámek)', () => {
     const send = ticket.slice(ticket.indexOf('const sendDirect = async'), ticket.indexOf('const multiplier ='));
-    const step = send.indexOf('liveBareSendClick({ gate: bareGateAt(Date.now()), confirm: bareConfirmRef.current, draft: previewDraft })');
+    const step = send.indexOf('liveBareSendClick({ gate: bareGateAt(Date.now()), last: directClickRef.current, draft: previewDraft })');
     const place = send.indexOf('placeEntryLocked(previewDraft');
     expect(step).toBeGreaterThan(0);
     expect(send.slice(step, place)).toMatch(/if \(step\.blocked\) \{ setDirect\(.*\); return; \}/);
@@ -240,7 +240,7 @@ describe('správa pozice z panelu (U10)', () => {
   const runner: LiveManageRunner = {
     busy: false, result: null, clearResult: () => {}, pendingMove: null,
     run: async () => { throw new Error('test nic neodesílá'); },
-    request: () => ({ step: 'asking' }), confirming: null, asking: () => false, cancelConfirm: () => {},
+    request: () => ({ step: 'repeat' }),
   };
   const manage = (props: Record<string, unknown> = {}, position = summary()) => render({
     quote: { bid: 25_010, ask: 25_010.25 },
@@ -266,12 +266,12 @@ describe('správa pozice z panelu (U10)', () => {
     expect(manage({}, summary({ rows: [{ ...row, fees: null }] }))).not.toContain('BE + odhad poplatků');
   });
 
-  it('zdroj: jediná cesta je manageRunner.request se záměrem spočteným při kliku; BE i SL dál od trhu dvoukrokově', () => {
+  it('zdroj: jediná cesta je manageRunner.request se záměrem spočteným při kliku', () => {
     expect(ticket.match(/manageRunner\.request\(/g)).toHaveLength(1);
     expect(ticket.match(/onManageEntry\(/g)).toBeNull();
     const handlers = ticket.slice(ticket.indexOf('const moveLeg = '), ticket.indexOf('const manageButton = '));
     expect(handlers).toMatch(/manageMovePlan\(guardNow\(\), leg\)/);
     expect(handlers).toMatch(/planBreakEven\(guardNow\(\), manageBasis, variant\)/);
-    expect(ticket).toMatch(/plan\.intent\.leg === 'stopLoss' && plan\.intent\.direction === 'loosen'\) return \{ ok: true, intent: \{ \.\.\.plan\.intent, confirm: true \} \}/);
+    expect(ticket).not.toMatch(/Opravdu \$\{|intent\.confirm|moveShownRef/);
   });
 });

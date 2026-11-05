@@ -145,9 +145,9 @@ describe('oponentura 2. 11. — vrstvy, okna, ×, plusko, karty', () => {
     expect(phone).not.toMatch(/PositionPriceLines|createLivePriceLinesFeed/);
   });
 
-  it('× na telefonu vždy na dvě klepnutí; zámek a „odesílám“ v rodiči (přežijí odpojení vrstvy)', () => {
+  it('× na telefonu jedním klepnutím; zámek a „odesílám“ v rodiči (přežijí odpojení vrstvy)', () => {
     const lines = readFileSync('components/day/LivePhoneOrderLines.tsx', 'utf8');
-    expect(lines).toMatch(/\.map\(line => \(\{ \.\.\.line, confirmCancel: true \}\)\)/);
+    expect(lines).not.toMatch(/confirmCancel: true/);
     expect(lines).toMatch(/const \{ pendingMove, setPendingMove, busyRef \} = state;/);
     // Zámek drží rodič; s deskem je to tentýž ref (`trade.commandLockRef`, C7/C8 kolo 1).
     expect(readFileSync('components/day/LivePhoneChart.tsx', 'utf8')).toMatch(/const ownLineState = useLivePhoneLineState\(\);\s*const lineState = trade\?\.commandLockRef \? \{ \.\.\.ownLineState, busyRef: trade\.commandLockRef \} : ownLineState;/);

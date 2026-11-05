@@ -189,7 +189,7 @@ export function livePhonePosition(
  * (kontrakt, strana, počet, cena). Cokoli jiného — chybí `manage` (`ownManualEntry` null, starý
  * worker), dva čekající, jiný kontrakt / strana / počet / cena, neznámá cena — čip ukáže, aby
  * cílené C7 nechybělo právě tam, kde je jedinou cílenou cestou (oponentura UI C7/C8 kolo 2, P3).
- * Jen zobrazení: odeslání dál jde dvoukrokem, sdíleným zámkem a deskem (worker vše ověří znovu).
+ * Jen zobrazení: odeslání dál jde sdíleným zámkem a deskem (worker vše ověří znovu).
  */
 export function livePhoneCancelPendingChipShown(input: {
   cancelPending: LiveCancelPendingView | null | undefined;

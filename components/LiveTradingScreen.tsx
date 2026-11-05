@@ -55,8 +55,9 @@ import {
 } from '../lib/liveOrderTicket';
 import { liveTicketDraftBase, liveTicketInitialQuantity, readLiveTicketPrefs } from '../lib/liveTicketPrefs';
 import { defaultLiveBracketTemplate } from '../lib/liveBracketTemplates';
-import { createTwoStepGuard, liveHotkeyAction, liveHotkeyDraft, liveHotkeyGuardSync, resolveLiveHotkey, type TwoStepGuard } from '../lib/liveHotkeys';
+import { liveHotkeyAction, liveHotkeyDraft, resolveLiveHotkey } from '../lib/liveHotkeys';
 import { requestLiveSafetyConfirmation } from '../lib/liveSafetyShortcut';
+import { LIVE_ACTION_CHANGED_TEXT, type LiveClickState } from '../lib/liveClickGate';
 import { isLiveDisplayOnlyLine } from '../lib/liveWorkingOrderLines';
 import { useLiveManageRunner, useLiveManageRunnerState, type LiveManageOutcome } from '../hooks/useLiveManageRunner';
 import { createLiveBareCloseRun } from '../hooks/liveCommandRuns';
@@ -386,7 +387,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   const displayOpenPnl = useMemo(() => (summary ? liveDisplayOpenPnl(summary, position?.symbol ?? null,
     { source: quoteInfo.source, price: tick?.price ?? null, at: tick?.at ?? null, stale: quoteInfo.stale }, INSTRUMENT.pointValue, Date.now()) : null),
   [summary, position?.symbol, quoteInfo.source, quoteInfo.stale, tick]);
-  // Hláška nad grafem; `until` = výzva dvoukroku zkratky (zmizí s oknem potvrzení), jinak 8 s.
+  // Hláška nad grafem; `until` = vlastní konec, jinak 8 s.
   const [lineNotice, setLineNotice] = useState<{ tone: 'ok' | 'bad' | 'warn'; text: string; at: number; until?: number } | null>(null);
   // Správa obchodu leadera (U10): JEDEN runner a jeden zámek pro čáry grafu, zkratky i sekci
   // Správa v panelu — jediná cesta je `onManageEntry` desku (worker vše ověří znovu, nic se neopakuje).
@@ -403,7 +404,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   const pendingMove = manageRunner.pendingMove;
   const runLiveManage = manageRunner.run;
   // C8: × holé pozice (čára, Shift+X, panel) TÝMŽ zámkem jako správa; odejde jen nabídka, kterou
-  // uživatel viděl (id cíle je v id čáry i v klíči dvoukroku), a jen když ji worker teď nabízí.
+  // uživatel viděl (id cíle je v id čáry), a jen když ji worker teď nabízí.
   const bareOffer = bareClose && onBareClose ? bareClose : null;
   const bareOfferRef = useRef(bareOffer);
   bareOfferRef.current = bareOffer;
@@ -571,10 +572,8 @@ const LiveTradingScreen: React.FC<Props> = ({
     writeLiveHotkeysEnabled(liveHotkeysStorage(), on);
     setHotkeysOn(on);
   }, []);
-  const hotkeyGuardRef = useRef<TwoStepGuard | null>(null);
-  if (hotkeyGuardRef.current == null) hotkeyGuardRef.current = createTwoStepGuard();
-  // Čas textu rozběhnuté výzvy zkratky (`prompt`) — zahozená výzva smaže jen svůj text.
-  const hotkeyPromptAtRef = useRef<number | null>(null);
+  // Poslední stisk Shift+E/X/C: rychlý dvojstisk nepošle druhý příkaz.
+  const hotkeyRepeatRef = useRef<LiveClickState | null>(null);
   // Esc z grafu (most `onEscape`) i posluchač kláves volají vždy nejnovější obsluhu.
   const hotkeyHandlerRef = useRef<(event: KeyboardEvent, fromChartEscape: boolean) => void>(() => undefined);
 
@@ -657,6 +656,7 @@ const LiveTradingScreen: React.FC<Props> = ({
         return kind === 'stopLoss' ? { ...previous, stopLoss: snapped } : { ...previous, takeProfit: snapped };
       });
     },
+    onOrderLineSwallowed: () => setLineNotice({ at: Date.now(), tone: 'warn', text: LIVE_ACTION_CHANGED_TEXT }),
     onOrderLineCancel: line => {
       if (isLiveDisplayOnlyLine(line)) return;
       if (line.ownerId === LIVE_POSITION_OWNER && chartReplay) { replayNotice(); return; }
@@ -666,7 +666,7 @@ const LiveTradingScreen: React.FC<Props> = ({
         return;
       }
       if (line.ownerId === LIVE_POSITION_OWNER) {
-        // C8: × holé pozice (po dvoukroku čáry / Shift+X) — jen nabídka s týmž id cíle.
+        // C8: × holé pozice (z čáry / Shift+X) — jen nabídka s týmž id cíle.
         const bareEntryId = liveBareLineEntryId(line.id);
         if (bareEntryId != null) { void closeBare(bareEntryId); return; }
         if (line.kind === 'entry' && summary?.kind === 'pending') void runLiveManage('cancel-entry', summary.leader?.entry);
@@ -696,7 +696,7 @@ const LiveTradingScreen: React.FC<Props> = ({
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít
-   * a zrušit čekající jdou až po dvoukroku přes TYTÉŽ funkce čáry jako myš (most výše).
+   * a zrušit čekající jdou přes TYTÉŽ funkce čáry jako myš (most výše).
    * Nikdy `onPlaceEntry` ani odeslání panelu — vstup odešle jen tlačítko panelu.
    */
   const prefillFromHotkey = (side: TicketSide) => {
@@ -738,21 +738,18 @@ const LiveTradingScreen: React.FC<Props> = ({
       ...(fromChartEscape ? { drawingIdle: true } : {}),
     });
     if (!intent || (intent.kind === 'discard-draft' && !fromChartEscape)) return;
-    const guard = hotkeyGuardRef.current!;
     const now = Date.now();
     const replayText = liveHotkeyReplayBlocked(intent, chartReplay);
     if (replayText) {
       event.preventDefault();
-      guard.reset();
       setLineNotice({ at: now, tone: 'bad', text: replayText });
       return;
     }
     // BE stejnou funkcí jako tlačítko na čáře, spočítané v okamžiku stisku.
     const breakEven = summary ? liveBreakEven(guardSummaryAt(now) ?? summary, manageEntryAvgPrice ?? null) : null;
-    const outcome = resolveLiveHotkey(intent, { lines: orderLines, breakEven, hasDraft: draft != null, busy: liveBusyRef.current }, guard, now);
+    const outcome = resolveLiveHotkey(intent, { lines: orderLines, breakEven, hasDraft: draft != null, busy: liveBusyRef.current }, hotkeyRepeatRef, now);
     if (outcome.kind === 'none') return;
     event.preventDefault();
-    hotkeyPromptAtRef.current = outcome.kind === 'prompt' ? now : null;
     dispatchLiveHotkeyOutcome(outcome, {
       prefill: prefillFromHotkey,
       discard: () => updateDraft(null),
@@ -764,24 +761,11 @@ const LiveTradingScreen: React.FC<Props> = ({
       toggleHelp: () => setHotkeysHelp(open => !open),
     });
   };
-  // Zablokovaný / zmizelý / změněný cíl zkratky zahodí rozběhnutou výzvu i bez stisku (oponentura
-  // UI C7/C8 kolo 2): BE stejnou funkcí jako stisk; smaže se jen text téže výzvy, ne jiné hlášky.
   useEffect(() => {
-    const guard = hotkeyGuardRef.current;
-    if (!guard) return;
-    const at = Date.now();
-    const breakEven = summary ? liveBreakEven(guardSummaryAt(at) ?? summary, manageEntryAvgPrice ?? null) : null;
-    if (!liveHotkeyGuardSync(guard, { lines: orderLines, breakEven }, at)) return;
-    const promptAt = hotkeyPromptAtRef.current;
-    hotkeyPromptAtRef.current = null;
-    if (promptAt != null) setLineNotice(current => (current && current.at === promptAt && current.tone === 'warn' ? null : current));
-  }, [orderLines, summary, guardSummaryAt, manageEntryAvgPrice]);
-  useEffect(() => {
-    const guard = hotkeyGuardRef.current;
-    if (!hotkeysOn) { guard?.reset(); return undefined; }
+    if (!hotkeysOn) return undefined;
     const onKeyDown = (event: KeyboardEvent) => hotkeyHandlerRef.current(event, false);
     window.addEventListener('keydown', onKeyDown, true);
-    return () => { window.removeEventListener('keydown', onKeyDown, true); guard?.reset(); };
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [hotkeysOn]);
 
   const surface = isDark ? 'bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900';

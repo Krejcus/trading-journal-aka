@@ -33,7 +33,7 @@ export interface LivePositionLineControls {
   pendingAdd?: { price: number | null; quantity: number; orderType: string } | null;
   /**
    * C8 (4. 11. 2026): vlastní holý Market bez SL/TP, který worker umí zavřít (`liveBareCloseOffer`
-   * s `enabled`). Čára vstupu pak nese id cíle (`liveBareLineId`) a × je VŽDY dvoukrokové.
+   * s `enabled`). Čára vstupu pak nese id cíle (`liveBareLineId`).
    */
   bareClose?: { entryOperationId: string } | null;
   pointValue: number;
@@ -89,7 +89,7 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
   const entryLabel = position
     ? `${long ? 'LONG' : 'SHORT'} ${summary.quantity}${scope}  ${entry.toFixed(2)}${openPnl != null ? ` · ${signedUsd(openPnl)}` : ''}`
     : `${long ? 'BUY' : 'SELL'} ${summary.quantity} ${(summary.entryType ?? '').toUpperCase()}${scope}  ${entry.toFixed(2)}`;
-  // Holá pozice (C8): × jen s nabídkou workeru, id cíle v id čáry (klíč × i Shift+X), vždy dvoukrokově.
+  // Holá pozice (C8): × jen s nabídkou workeru, id cíle v id čáry (klíč × i Shift+X).
   const bare = position && controls.bareClose ? controls.bareClose : null;
   const lines: BacktestChartOrderLine[] = [{
     id: bare ? liveBareLineId(bare.entryOperationId) : `${LIVE_POSITION_OWNER}:entry`, ownerId: LIVE_POSITION_OWNER, ownerType: position ? 'position' : 'order', kind: 'entry',
@@ -100,11 +100,10 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: × = zavřít obchod (leader, kopírka zavře kopie).
     cancellable: bare != null || (controls.manageable && (!position || controls.canClose === true)),
     cancelAction: position ? 'close-position' : 'cancel-order',
-    // Zavření pozice jedním kliknutím (Filip 30. 10.); zrušení čekajícího vstupu i × holé pozice dvoukrokově.
-    confirmCancel: !position || bare != null,
+    // Všechno jedním kliknutím (Filip 5. 11.); dvojklik a změněnou čáru hlídá `liveLineClick` overlaye.
     ...(be && position ? {
       actions: [{
-        id: 'break-even', label: 'BE', confirm: true, disabled: be.blocked != null,
+        id: 'break-even', label: 'BE', disabled: be.blocked != null,
         title: be.blocked ?? `SL na BE leadera ${be.price?.toFixed(2)} (bez poplatků)`,
       }],
     } : {}),
@@ -132,8 +131,8 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
       price: add.price, color: long ? LONG_COLOR : SHORT_COLOR,
       label: `PŘIKOUPENÍ ${long ? 'BUY' : 'SELL'} ${add.quantity} ${add.orderType.toUpperCase()}  ${add.price.toFixed(2)} · čeká`,
       draggable: false,
-      // × = zrušit jen čekající přikoupení (dvoukrokově, jako čekající vstup).
-      cancellable: controls.manageable, cancelAction: 'cancel-order', confirmCancel: true,
+      // × = zrušit jen čekající přikoupení.
+      cancellable: controls.manageable, cancelAction: 'cancel-order',
     });
   }
   return lines;

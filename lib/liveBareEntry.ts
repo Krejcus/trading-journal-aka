@@ -1,3 +1,4 @@
+import { liveRepeatClick, type LiveClickState } from './liveClickGate';
 import type { LiveEntryPreviewDraft } from './leaderEntryPreview';
 import { livePhoneBareMarket, livePhoneSheetEntry, type LivePhoneQuote } from './livePhoneOrders';
 import { snapToTick, type TicketDraft, type TicketInstrument, type TicketSide } from './liveOrderTicket';
@@ -133,7 +134,7 @@ export function liveTicketBareEntry(draft: TicketDraft, instrument: TicketInstru
   return livePhoneSheetEntry(draft, instrument, quote);
 }
 
-// ── Dvoukrokové potvrzení (vzor BacktestOrderLinesOverlay) ──────────────────
+// ── Dvoukrok smazání šablony (obchodní příkazy jdou jedním klikem, `lib/liveClickGate`) ──────────────────
 
 /** Druhý klik nejdřív za 350 ms (dvojklik se nepočítá) a nejpozději do 4 s. */
 export const LIVE_CONFIRM_MIN_MS = 350;
@@ -162,11 +163,8 @@ export const liveConfirmAsking = (state: LiveConfirmState | null, key: string, n
 );
 
 /**
- * Klíč potvrzení holého Marketu: akce + kontrakt + strana + počet. Cena
- * (`referencePrice`, `quoteReceivedAt`) v klíči není — u Marketu jede s každým
- * tickem a potvrzení by nešlo dokončit; druhý klik pošle čerstvou cenu a worker
- * ji znovu porovná s IBKR (posun ≤ 8 ticků). Změna strany, počtu nebo kontraktu
- * mezi kliky = nové „Opravdu?“, nic se neodešle.
+ * Klíč holého Marketu proti dvojkliku: akce + kontrakt + strana + počet. Cena v klíči
+ * není, u Marketu jede s každým tickem; worker ji znovu porovná s IBKR (posun ≤ 8 ticků).
  */
 export function liveBareConfirmKey(draft: Pick<LiveEntryPreviewDraft, 'symbol' | 'side' | 'quantity' | 'orderType' | 'stopLoss' | 'takeProfit'>): string {
   const bare = draft.orderType === 'Market' && draft.stopLoss === undefined && draft.takeProfit === undefined;
@@ -174,8 +172,8 @@ export function liveBareConfirmKey(draft: Pick<LiveEntryPreviewDraft, 'symbol' |
 }
 
 /** Text výstražného tlačítka holého Marketu (PC panel). */
-export function liveBareMarketButtonLabel(side: TicketSide, quantity: number, asking: boolean): string {
-  return asking ? 'Opravdu bez ochrany? Klikni znovu' : `${side === 'buy' ? 'Koupit' : 'Prodat'} ${quantity} MARKET · BEZ SL/TP`;
+export function liveBareMarketButtonLabel(side: TicketSide, quantity: number): string {
+  return `${side === 'buy' ? 'Koupit' : 'Prodat'} ${quantity} MARKET · BEZ SL/TP`;
 }
 
 /** Návrh pro worker = holý Market (Market bez SL i TP)? Stejný výklad jako `liveBareConfirmKey`. */
@@ -201,34 +199,30 @@ export function liveTicketBarePosition(
 }
 
 /**
- * Klik na výstražné tlačítko holého Marketu (PC `sendDirect`). Brána se vyhodnotí
- * v okamžiku KAŽDÉHO kliku (kotace ≤ 3 s, flat, strop, brána desku) — zablokovaný
- * klik rozběhnuté „Opravdu?“ zahodí, takže po objevení pozice nebo obnoveném stavu
- * ani další klik nic neodešle bez nového dvoukroku. `send: true` jen pro druhý klik
- * se stejným klíčem 350 ms – 4 s po prvním.
+ * Klik na výstražné tlačítko holého Marketu (PC `sendDirect`). Brána se vyhodnotí v okamžiku
+ * kliku (kotace ≤ 3 s, flat, strop, brána desku); první klik odesílá, dvojklik se spolkne.
  */
 export function liveBareSendClick(input: {
   gate: LiveBareMarketGate;
-  confirm: LiveConfirmState | null;
+  last: LiveClickState | null;
   draft: Pick<LiveEntryPreviewDraft, 'symbol' | 'side' | 'quantity' | 'orderType' | 'stopLoss' | 'takeProfit'>;
-}): { send: boolean; next: LiveConfirmState | null; blocked: string | null } {
+}): { send: boolean; next: LiveClickState | null; blocked: string | null } {
   const blocked = liveBareMarketBlockReason(input.gate, input.draft.quantity);
-  if (blocked) return { send: false, next: null, blocked };
-  const step = liveConfirmClick(input.confirm, liveBareConfirmKey(input.draft), input.gate.now);
+  if (blocked) return { send: false, next: input.last, blocked };
+  const step = liveRepeatClick(input.last, liveBareConfirmKey(input.draft), input.gate.now);
   return { send: step.send, next: step.next, blocked: null };
 }
 
-export const LIVE_PREVIEW_PLACE_BARE = 'Holý Market (bez SL/TP) odešle jen velké tlačítko panelu — dvoukrokově.';
+export const LIVE_PREVIEW_PLACE_BARE = 'Holý Market (bez SL/TP) odešle jen velké tlačítko panelu.';
 
 /**
- * Klik „Odeslat“ v Náhledu (PC `PreviewSection`, oponentura vlny B P2): vždy dvoukrok
- * 350 ms – 4 s (dvojklik nic nepotvrdí) s klíčem = id odeslání náhledu + celý návrh
- * včetně ceny (`previewKey`). Holý Market odtud nikdy (jde jen přes `liveBareSendClick`).
- * Čerstvost náhledu a brána panelu se kontrolují v okamžiku kliku; blokace rozběhnuté
- * „Opravdu?“ zahodí. Worker při odeslání znovu projde všechny brány.
+ * Klik „Odeslat“ v Náhledu (PC `PreviewSection`): první klik odesílá, dvojklik se spolkne (klíč =
+ * id odeslání náhledu + celý návrh včetně ceny). Holý Market odtud nikdy (jde jen přes
+ * `liveBareSendClick`). Čerstvost náhledu a brána panelu se kontrolují v okamžiku kliku.
+ * Worker při odeslání znovu projde všechny brány.
  */
 export function livePreviewPlaceClick(input: {
-  confirm: LiveConfirmState | null;
+  last: LiveClickState | null;
   draft: Pick<LiveEntryPreviewDraft, 'orderType' | 'stopLoss' | 'takeProfit'>;
   operationId: string | null | undefined;
   previewKey: string;
@@ -236,13 +230,13 @@ export function livePreviewPlaceClick(input: {
   blockedReason: string | null;
   freshMs: number;
   now: number;
-}): { send: boolean; next: LiveConfirmState | null; reason: string | null } {
-  if (isBarePreviewDraft(input.draft)) return { send: false, next: null, reason: LIVE_PREVIEW_PLACE_BARE };
-  if (input.blockedReason) return { send: false, next: null, reason: input.blockedReason };
-  if (!input.operationId || !input.previewKey) return { send: false, next: null, reason: 'Náhled chybí — zkontroluj znovu.' };
+}): { send: boolean; next: LiveClickState | null; reason: string | null } {
+  if (isBarePreviewDraft(input.draft)) return { send: false, next: input.last, reason: LIVE_PREVIEW_PLACE_BARE };
+  if (input.blockedReason) return { send: false, next: input.last, reason: input.blockedReason };
+  if (!input.operationId || !input.previewKey) return { send: false, next: input.last, reason: 'Náhled chybí — zkontroluj znovu.' };
   const age = input.receivedAt == null ? Number.NaN : input.now - input.receivedAt;
-  if (!(age >= 0 && age <= input.freshMs)) return { send: false, next: null, reason: 'Náhled už není čerstvý — zkontroluj znovu.' };
-  const step = liveConfirmClick(input.confirm, `place:${input.operationId}:${input.previewKey}`, input.now);
+  if (!(age >= 0 && age <= input.freshMs)) return { send: false, next: input.last, reason: 'Náhled už není čerstvý — zkontroluj znovu.' };
+  const step = liveRepeatClick(input.last, `place:${input.operationId}:${input.previewKey}`, input.now);
   return { send: step.send, next: step.next, reason: null };
 }
 

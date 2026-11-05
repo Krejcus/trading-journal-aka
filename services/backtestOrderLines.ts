@@ -22,7 +22,7 @@ export interface BacktestChartOrderLine {
   dragDeadZonePx?: number;
   /** × se musí potvrdit druhým kliknutím (živé příkazy brokera). */
   confirmCancel?: boolean;
-  /** Další tlačítka ve štítku (např. „BE“ u živé pozice); `confirm` = dvoukrokově. */
+  /** Další tlačítka ve štítku (např. „BE“ u živé pozice); `confirm` = dvoukrokově (jen backtest). */
   actions?: Array<{ id: string; label: string; title?: string; disabled?: boolean; confirm?: boolean }>;
   filledLabel?: boolean;
   addableBrackets?: Array<Exclude<BacktestChartOrderLineKind, 'entry'>>;

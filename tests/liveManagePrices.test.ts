@@ -160,9 +160,9 @@ describe('číslo z pole → cena (U10)', () => {
 describe('posun zadaným číslem — předkontroly jako worker (U10)', () => {
   it('„co jsem viděl“ je cena nohy z read modelu, ne zadané číslo', () => {
     const plan = planManageMove(long(), 'stopLoss', 24_985);
-    expect(plan).toMatchObject({ ok: true, intent: { action: 'move-stop', leg: 'stopLoss', expectPrice: 24_990, newPrice: 24_985, direction: 'loosen', confirm: false } });
-    const tp = planManageMove(long(), 'takeProfit', 25_030, { confirm: true });
-    expect(tp).toMatchObject({ ok: true, intent: { action: 'move-target', expectPrice: 25_020, newPrice: 25_030, confirm: true } });
+    expect(plan).toMatchObject({ ok: true, intent: { action: 'move-stop', leg: 'stopLoss', expectPrice: 24_990, newPrice: 24_985, direction: 'loosen' } });
+    const tp = planManageMove(long(), 'takeProfit', 25_030);
+    expect(tp).toMatchObject({ ok: true, intent: { action: 'move-target', expectPrice: 25_020, newPrice: 25_030 } });
   });
 
   it('SL nejblíž 8 ticků od trhu: přesně 8 smí, o tick blíž ne (long i short)', () => {
@@ -196,10 +196,10 @@ describe('posun zadaným číslem — předkontroly jako worker (U10)', () => {
   });
 });
 
-describe('BE varianty — záměr move-stop, vždy dvoukrokově (U10)', () => {
-  it('BE, BE +2 t a BE + poplatky: cena, expect ze SL read modelu, potvrzení', () => {
+describe('BE varianty — záměr move-stop (U10)', () => {
+  it('BE, BE +2 t a BE + poplatky: cena, expect ze SL read modelu', () => {
     const summary = long({ mark: 25_010 });
-    expect(planBreakEven(summary, basis(), { kind: 'be' })).toMatchObject({ ok: true, intent: { id: 'be', action: 'move-stop', expectPrice: 24_990, newPrice: 25_000, confirm: true, direction: 'tighten' } });
+    expect(planBreakEven(summary, basis(), { kind: 'be' })).toMatchObject({ ok: true, intent: { id: 'be', action: 'move-stop', expectPrice: 24_990, newPrice: 25_000, direction: 'tighten' } });
     expect(planBreakEven(summary, basis(), { kind: 'be-plus', ticks: 2 })).toMatchObject({ ok: true, intent: { newPrice: 25_000.5, label: 'SL na BE +2 t 25000.50' } });
     expect(planBreakEven(summary, basis(), { kind: 'be-fees' })).toMatchObject({ ok: true, intent: { newPrice: 25_000.75, label: 'SL na BE + odhad poplatků 25000.75' } });
   });

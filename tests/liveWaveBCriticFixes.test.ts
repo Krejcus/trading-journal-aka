@@ -15,20 +15,16 @@ import {
   livePreviewPlaceClick,
   liveTicketBarePosition,
   type LiveBareMarketGate,
-  type LiveConfirmState,
 } from '../lib/liveBareEntry';
 import { LIVE_PREVIEW_FRESH_MS } from '../lib/livePreviewView';
 import {
-  LIVE_MANAGE_SEEN_MIN_MS,
-  liveManageSeenPriceProblem,
-  liveManageShownPrice,
   managePriceFromInput,
   planManageMove,
-  type LiveManageShownPrice,
 } from '../lib/liveManagePrices';
 import { NO_LIVE_CHART_POSITION, type LiveChartPositionSummary } from '../lib/liveChartPosition';
 import { livePositionChartLines } from '../lib/liveChartOrderLines';
-import { createTwoStepGuard, liveHotkeyAction, resolveLiveHotkey } from '../lib/liveHotkeys';
+import { liveHotkeyAction, resolveLiveHotkey } from '../lib/liveHotkeys';
+import type { LiveClickState } from '../lib/liveClickGate';
 import { createLiveSafetyShortcutBus } from '../lib/liveSafetyShortcut';
 import { createLiveManageRun } from '../hooks/useLiveManageRunner';
 import type { LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
@@ -58,74 +54,45 @@ const bareDraft: LiveEntryPreviewDraft = { symbol: 'MNQZ6', side: 'Buy', quantit
 // ---------------------------------------------------------------------------
 // P2: Náhled → Odeslat — dvoukrok 350 ms – 4 s, holý Market nikdy
 
-describe('P2: Odeslat v Náhledu = dvoukrok 350 ms – 4 s; holý Market jen velkým tlačítkem', () => {
-  /** Klikání tak, jak ho dělá `PreviewSection.send` (ref stavu potvrzení mezi kliky). */
+describe('Odeslat v Náhledu = první klik; holý Market jen velkým tlačítkem', () => {
+  /** Klikání tak, jak ho dělá `PreviewSection.send` (ref posledního kliku). */
   const clicker = (draft: LiveEntryPreviewDraft, patch: Partial<Parameters<typeof livePreviewPlaceClick>[0]> = {}) => {
-    let confirm: LiveConfirmState | null = null;
+    let last: LiveClickState | null = null;
     const place = vi.fn();
     const click = (now: number, over: Partial<Parameters<typeof livePreviewPlaceClick>[0]> = {}) => {
       const step = livePreviewPlaceClick({
-        confirm, draft, operationId: 'entry:abc', previewKey: `true|${JSON.stringify(draft)}`, receivedAt: 900,
+        last, draft, operationId: 'entry:abc', previewKey: `true|${JSON.stringify(draft)}`, receivedAt: 900,
         blockedReason: null, freshMs: LIVE_PREVIEW_FRESH_MS, now, ...patch, ...over,
       });
-      confirm = step.next;
+      last = step.next;
       if (step.send) place(draft);
       return step;
     };
     return { click, place };
   };
 
-  it('dvojklik (< 350 ms) nic neodešle; 349 ms ne, 350 ms ano — právě jednou', () => {
+  it('první klik odesílá; dvojklik jeden příkaz', () => {
     const fast = clicker(limitDraft);
-    fast.click(1_000);
-    fast.click(1_080);
-    expect(fast.place).not.toHaveBeenCalled();
-    const early = clicker(limitDraft);
-    early.click(1_000);
-    expect(early.click(1_349).send).toBe(false);
-    // Kotva se posunula na 1 349: 1 350 je 1 ms po předchozím kliku → nic (trojklik).
-    expect(early.click(1_350).send).toBe(false);
-    expect(early.place).not.toHaveBeenCalled();
-    const edge = clicker(limitDraft);
-    edge.click(1_000);
-    expect(edge.click(1_350).send).toBe(true);
-    expect(edge.place).toHaveBeenCalledTimes(1);
-    // Po odeslání se stav potvrzení zahodí: další klik jen znovu ptá.
-    expect(edge.click(1_800).send).toBe(false);
-    expect(edge.place).toHaveBeenCalledTimes(1);
+    expect(fast.click(1_000).send).toBe(true);
+    expect(fast.click(1_080).send).toBe(false);
+    expect(fast.place).toHaveBeenCalledTimes(1);
   });
 
-  it('po 4 s výzva vyprší; změna návrhu (jiná cena = jiný klíč) mezi kliky nic nepotvrdí', () => {
-    const late = clicker(limitDraft);
-    late.click(1_000);
-    expect(late.click(5_000).send).toBe(false);
-    expect(late.place).not.toHaveBeenCalled();
-    const changed = clicker(limitDraft);
-    changed.click(1_000);
-    expect(changed.click(1_500, { previewKey: `true|${JSON.stringify({ ...limitDraft, price: 25_000.25 })}` }).send).toBe(false);
-    expect(changed.place).not.toHaveBeenCalled();
-  });
-
-  it('holý Market z Náhledu nikdy — ani dvěma kliky v okně', () => {
+  it('holý Market z Náhledu nikdy', () => {
     const bare = clicker(bareDraft);
     expect(bare.click(1_000).reason).toBe(LIVE_PREVIEW_PLACE_BARE);
     expect(bare.click(1_500).send).toBe(false);
     expect(bare.place).not.toHaveBeenCalled();
   });
 
-  it('zastaralý náhled nebo brána panelu při DRUHÉM kliku = nic a výzva se zahodí', () => {
+  it('zastaralý náhled, brána panelu nebo chybějící id při kliku = nic', () => {
     const stale = clicker(limitDraft);
-    stale.click(1_000);
     const step = stale.click(900 + LIVE_PREVIEW_FRESH_MS + 1);
-    expect(step).toMatchObject({ send: false, next: null });
+    expect(step.send).toBe(false);
     expect(step.reason).toMatch(/není čerstvý/);
     const blocked = clicker(limitDraft);
-    blocked.click(1_000);
-    expect(blocked.click(1_500, { blockedReason: 'Cena grafu je zastaralá — náhled ani odeslání teď nejde.' })).toMatchObject({ send: false, next: null });
-    // Po odblokování znovu od prvního kliku (ne potvrzení starého).
-    expect(blocked.click(1_600).send).toBe(false);
+    expect(blocked.click(1_000, { blockedReason: 'Cena grafu je zastaralá — náhled ani odeslání teď nejde.' }).send).toBe(false);
     expect(blocked.place).not.toHaveBeenCalled();
-    // Bez id odeslání (náhled chybí) nikdy.
     expect(clicker(limitDraft).click(1_000, { operationId: null }).reason).toMatch(/Náhled chybí/);
   });
 
@@ -206,35 +173,35 @@ describe('P3: neověřená pozice není flat (holý Market z PC)', () => {
   });
 });
 
-describe('P3 (kontrolní seznam 25): druhý klik holého Marketu po změně stavu', () => {
+describe('holý Market z panelu: brána při každém kliku, jeden příkaz', () => {
   const okGate = (now: number, patch: Partial<LiveBareMarketGate> = {}): LiveBareMarketGate => ({
     blockedReason: null, marketSupported: true, bareSupported: true, maxContracts: 1,
     quote: { symbol: 'MNQZ6', bid: 25_000, ask: 25_000.25, at: now - 100 }, positionOpen: false, now, ...patch,
   });
   const run = (clicks: Array<{ at: number; gate?: Partial<LiveBareMarketGate> }>) => {
-    let confirm: LiveConfirmState | null = null;
+    let last: LiveClickState | null = null;
     let sent = 0;
     const blocked: string[] = [];
     for (const click of clicks) {
-      const step = liveBareSendClick({ gate: okGate(click.at, click.gate), confirm, draft: bareDraft });
-      confirm = step.next;
+      const step = liveBareSendClick({ gate: okGate(click.at, click.gate), last, draft: bareDraft });
+      last = step.next;
       if (step.blocked) blocked.push(step.blocked);
       if (step.send) sent += 1;
     }
     return { sent, blocked };
   };
 
-  it('pozice se objeví mezi kliky = druhý klik nic; po zmizení blokace zase od prvního kliku', () => {
-    expect(run([{ at: 1_000 }, { at: 1_500, gate: { positionOpen: true } }, { at: 1_900 }])).toEqual({ sent: 0, blocked: [expect.stringMatching(/V pozici holý Market nejde/)] });
+  it('jeden klik jeden příkaz; dvojklik jeden příkaz; po pauze znovu', () => {
+    expect(run([{ at: 1_000 }])).toEqual({ sent: 1, blocked: [] });
+    expect(run([{ at: 1_000 }, { at: 1_200 }])).toEqual({ sent: 1, blocked: [] });
+    expect(run([{ at: 1_000 }, { at: 1_200 }, { at: 1_400 }, { at: 1_600 }])).toEqual({ sent: 1, blocked: [] });
+    expect(run([{ at: 1_000 }, { at: 2_000 }])).toEqual({ sent: 2, blocked: [] });
   });
 
-  it('obnovený / nečerstvý stav desku nebo stará kotace při druhém kliku = nic', () => {
-    expect(run([{ at: 1_000 }, { at: 1_500, gate: { blockedReason: 'Stav kopírky není čerstvě ověřený.' } }]).sent).toBe(0);
-    expect(run([{ at: 1_000 }, { at: 1_500, gate: { quote: { symbol: 'MNQZ6', bid: 1, ask: 1.25, at: 1_500 - 3_001 } } }]).sent).toBe(0);
-    // Trojklik nic: pauza 350 ms se počítá od PŘEDCHOZÍHO kliku.
-    expect(run([{ at: 1_000 }, { at: 1_200 }, { at: 1_350 }])).toEqual({ sent: 0, blocked: [] });
-    expect(run([{ at: 1_000 }, { at: 1_200 }, { at: 1_400 }, { at: 1_600 }])).toEqual({ sent: 0, blocked: [] });
-    expect(run([{ at: 1_000 }, { at: 1_200 }, { at: 1_600 }])).toEqual({ sent: 1, blocked: [] });
+  it('zablokovaný stav nic: pozice, obnovený stav, stará kotace', () => {
+    expect(run([{ at: 1_000, gate: { positionOpen: true } }])).toEqual({ sent: 0, blocked: [expect.stringMatching(/V pozici holý Market nej/)] });
+    expect(run([{ at: 1_500, gate: { blockedReason: 'Stav kopírky není čerstvě ověřený.' } }]).sent).toBe(0);
+    expect(run([{ at: 1_500, gate: { quote: { symbol: 'MNQZ6', bid: 1, ask: 1.25, at: 1_500 - 3_001 } } }]).sent).toBe(0);
   });
 });
 
@@ -372,7 +339,7 @@ describe('P3: telefon — Zrušit z lišty pozice jde sdíleným zámkem (jeden 
 // ---------------------------------------------------------------------------
 // P3: „Posunout“ ukazuje cenu, která odejde; změna průměru těsně před klikem = nic
 
-describe('P3: Správa na PC — cena záměru na tlačítku a jen viděná cena odejde', () => {
+describe('Správa na PC — cena záměru na tlačítku', () => {
   const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositionSummary => ({
     kind: 'position', side: 'long', quantity: 1, entry: 25_000, entryType: 'Market', openPnl: 20, mark: 25_010,
     stop: 24_990, target: 25_012, protection: 'SL 1/1 · TP 1/1', accounts: 1, scopeLabel: null,
@@ -387,41 +354,16 @@ describe('P3: Správa na PC — cena záměru na tlačítku a jen viděná cena 
     return plan.intent.newPrice;
   };
 
-  it('cena musí na tlačítku viset aspoň 350 ms: 349 ms ne, 350 ms ano', () => {
-    const shown = liveManageShownPrice(null, 25_015, 1_000);
-    expect(liveManageSeenPriceProblem(shown, 25_015, 1_000 + LIVE_MANAGE_SEEN_MIN_MS - 1)).toMatch(/Nic se neodeslalo/);
-    expect(liveManageSeenPriceProblem(shown, 25_015, 1_000 + LIVE_MANAGE_SEEN_MIN_MS)).toBeNull();
-    // Stejná cena při dalším vykreslení `since` neposune.
-    expect(liveManageShownPrice(shown, 25_015, 5_000)).toBe(shown);
-    expect(liveManageShownPrice(shown, null, 5_000)).toBeNull();
-    expect(liveManageSeenPriceProblem(null, 25_015, 9_000)).toMatch(/Nic se neodeslalo/);
+  it('průměr se změní pollem: tlačítko ukáže novou cenu, klik odešle tu, kterou počítá znovu', () => {
+    expect(tpIntent(25_000)).toBe(25_015);
+    expect(tpIntent(25_002.5)).toBe(25_017.5);
   });
 
-  it('průměr se změní pollem (přikoupení) mezi zadáním a klikem → nová cena, klik těsně po změně nic, pak ano', () => {
-    const before = tpIntent(25_000);
-    expect(before).toBe(25_015);
-    let shown: LiveManageShownPrice | null = liveManageShownPrice(null, before, 1_000);
-    // Poll přinese nový průměr: tlačítko se překreslí na novou cenu.
-    const after = tpIntent(25_002.5);
-    expect(after).toBe(25_017.5);
-    shown = liveManageShownPrice(shown, after, 3_000);
-    expect(shown).toEqual({ price: 25_017.5, since: 3_000 });
-    // Klik 100 ms po změně: odeslala by se cena, kterou uživatel neviděl → nic.
-    expect(liveManageSeenPriceProblem(shown, after, 3_100)).toMatch(/změnila na 25017\.50/);
-    // Klik s cenou z doby před změnou (zastaralé „co jsem viděl“) se nikdy nepotvrdí.
-    expect(liveManageSeenPriceProblem(shown, before, 9_000)).not.toBeNull();
-    expect(liveManageSeenPriceProblem(shown, after, 3_400)).toBeNull();
-  });
-
-  it('zdroj: tlačítko „Posunout → cena“; klik kontroluje viděnou cenu před jediným runner.request', () => {
+  it('zdroj: tlačítko „Posunout → cena“; klik jde rovnou na jediný runner.request', () => {
     expect(ticket).toMatch(/const moveLabel = \(plan: LiveManagePlan\) => \('intent' in plan \? `Posunout → \$\{formatPrice\(plan\.intent\.newPrice\)\}` : 'Posunout'\);/);
     const move = between(ticket, 'const moveLeg = ', 'const runBreakEven = ');
-    const check = move.indexOf('liveManageSeenPriceProblem(moveShownRef.current[leg], plan.intent.newPrice, at)');
-    expect(check).toBeGreaterThan(0);
-    expect(move.slice(check)).toMatch(/if \(unseen\) \{[^\n]*return; \}\s*requestManage\(plan\.intent/);
-    const effect = between(ticket, 'useEffect(() => {\n    const at = Date.now();\n    moveShownRef.current = {', '}, [shownStopPrice, shownTargetPrice]);');
-    expect(effect).toMatch(/liveManageShownPrice\(moveShownRef\.current\.stopLoss, shownStopPrice, at\)/);
-    expect(effect).toMatch(/liveManageShownPrice\(moveShownRef\.current\.takeProfit, shownTargetPrice, at\)/);
+    expect(move).toMatch(/requestManage\(plan\.intent/);
+    expect(move).not.toMatch(/moveShownRef|liveManageSeenPriceProblem/);
     expect(ticket).toMatch(/stopLoss: manageButton\(movePlans\.stopLoss, moveLabel\(movePlans\.stopLoss\)\),/);
     expect(ticket).toMatch(/takeProfit: manageButton\(movePlans\.takeProfit, moveLabel\(movePlans\.takeProfit\)\),/);
   });
@@ -484,7 +426,7 @@ describe('kontrolní seznam 25: Shift+X přes celou cestu až k jedinému close-
   const screen = (dialogDoc: { querySelectorAll: (s: string) => ArrayLike<unknown> } | null) => {
     const manage = vi.fn(async () => ({ type: 'leader-order-managed', status: 'acknowledged', blockers: [] }) as unknown as LeaderOrderManageResult);
     const run = createLiveManageRun({ manage: () => manage, busyRef: { current: false }, setPendingMove: () => {}, report: () => {} });
-    const guard = createTwoStepGuard();
+    const guard: { current: LiveClickState | null } = { current: null };
     const press = (at: number, target: unknown = null) => {
       const intent = liveHotkeyAction(shiftX(target), { dialogOpen: liveHotkeyOverlayOpen(dialogDoc), leaving: false, hidden: false });
       if (!intent) return;
@@ -498,19 +440,13 @@ describe('kontrolní seznam 25: Shift+X přes celou cestu až k jedinému close-
   const noDialog = { querySelectorAll: () => [] };
   const openDialog = { querySelectorAll: () => [{ getClientRects: () => ({ length: 1 }) }] };
 
-  it('349 ms nic, 350 ms právě jedno close-position s expect = SL leadera', () => {
+  it('první stisk právě jedno close-position s expect = SL leadera; dvojstisk nic dalšího', () => {
     const { manage, press } = screen(noDialog);
     press(1_000);
-    press(1_349);
-    expect(manage).not.toHaveBeenCalled();
-    // Kotva se posunula na 1 349 ms a pak na 1 350 ms: potvrdí až stisk ≥ 350 ms po posledním.
-    press(1_350);
-    expect(manage).not.toHaveBeenCalled();
-    press(1_699);
-    expect(manage).not.toHaveBeenCalled();
-    press(2_049);
     expect(manage).toHaveBeenCalledTimes(1);
     expect(manage).toHaveBeenCalledWith('close-position', 20_990, undefined);
+    press(1_200);
+    expect(manage).toHaveBeenCalledTimes(1);
   });
 
   it('fokus v poli panelu nebo otevřený dialog (Flatten / OFF) = nic ani dvojím stiskem', () => {
@@ -571,19 +507,8 @@ describe('kontrolní seznam 25: attach z PC bez čerstvého stavu = „Neodeslá
 // Kolo 3: potvrzení se zahodí i bez kliku; Správa pouští fokus
 // ---------------------------------------------------------------------------
 
-describe('kolo 3: rozběhnuté „Opravdu?“ nepřežije blokaci ani změnu klíče', () => {
+describe('fokus po kliku', () => {
   const ticket = source('components/LiveOrderTicket.tsx');
-
-  it('holý Market: blokace i změna klíče (qty 1→2→1) potvrzení vynulují bez kliku', () => {
-    expect(ticket).toMatch(/useEffect\(\(\) => \{ bareConfirmRef\.current = null; setBareConfirm\(null\); \}, \[bareKey\]\);/);
-    expect(ticket).toMatch(/useEffect\(\(\) => \{ if \(directBlocked != null\) \{ bareConfirmRef\.current = null; setBareConfirm\(null\); \} \}, \[directBlocked\]\);/);
-    expect(ticket).toMatch(/if \(directBlocked != null\) \{ setBareConfirmState\(null\); return; \}/);
-  });
-
-  it('Náhled: nečerstvý/zablokovaný náhled nebo jiný návrh potvrzení vynuluje', () => {
-    expect(ticket).toMatch(/useEffect\(\(\) => \{ if \(!canSend\) \{ placeConfirmRef\.current = null; setPlaceConfirm\(null\); \} \}, \[canSend\]\);/);
-    expect(ticket).toMatch(/useEffect\(\(\) => \{ placeConfirmRef\.current = null; setPlaceConfirm\(null\); \}, \[key\]\);/);
-  });
 
   it('tlačítka Správy (Posunout, BE, BE+n, BE + poplatky) po kliku pouští fokus', () => {
     const manage = ticket.slice(ticket.indexOf('const action = (view: ManageButtonView'));

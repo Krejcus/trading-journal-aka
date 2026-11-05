@@ -1,7 +1,7 @@
 /**
  * C8 v UI (4. 11. 2026): × zavřít vlastní holý Market bez SL/TP v ručním DEMO.
  *
- * Jen výběr nabídky, klíč dvoukroku a pravdivé texty výsledku — nic tady neodesílá.
+ * Jen výběr nabídky, klíč tlačítka a pravdivé texty výsledku — nic tady neodesílá.
  * Status `bareLeaderTrade` je jen zobrazení (INV-UI-01/03): o zavření rozhoduje
  * worker (`lib/manualBareClose.ts` — sólo skupina, ARMED ∧ ¬shadow ∧ ¬kill, tvar
  * u brokera, lot deníku, na symbolu nic nepracuje). Odeslání jde výhradně deskovou
@@ -14,7 +14,7 @@ import type { BareLeaderTrade } from './manualBareClose';
 
 export interface LiveBareCloseNotice { tone: 'ok' | 'bad' | 'warn'; text: string; at: number }
 
-/** Nabídka × u holé pozice: co uživatel vidí (trade), klíč dvoukroku a zda teď smí. */
+/** Nabídka × u holé pozice: co uživatel vidí (trade), klíč tlačítka a zda teď smí. */
 export interface LiveBareCloseOffer {
   trade: BareLeaderTrade;
   /** Klíč potvrzení: akce + id cíle (`entryOperationId`) + tvar (kontrakt, strana, počet). */
@@ -24,7 +24,7 @@ export interface LiveBareCloseOffer {
   reason: string | null;
 }
 
-/** Klíč dvoukroku × holé pozice — jiný vstup, kontrakt, strana nebo počet = znovu od 1. kliku. */
+/** Klíč × holé pozice: jiný vstup, kontrakt, strana nebo počet = změněná nabídka (`lib/liveClickGate`). */
 export const liveBareCloseKey = (trade: Pick<BareLeaderTrade, 'entryOperationId' | 'symbol' | 'side' | 'quantity'>): string => (
   `close-bare:${trade.entryOperationId}:${trade.symbol}:${trade.side}:${trade.quantity}`
 );
@@ -89,9 +89,8 @@ export function liveBareCloseOffer(input: {
 }
 
 /** Text tlačítka (PC panel, telefon). */
-export function liveBareCloseLabel(trade: Pick<BareLeaderTrade, 'side' | 'quantity'>, asking: boolean): string {
-  const what = `${trade.side === 'Buy' ? 'LONG' : 'SHORT'} ${trade.quantity}`;
-  return asking ? `Opravdu zavřít ${what}?` : `Zavřít ${what} · bez SL/TP`;
+export function liveBareCloseLabel(trade: Pick<BareLeaderTrade, 'side' | 'quantity'>): string {
+  return `Zavřít ${trade.side === 'Buy' ? 'LONG' : 'SHORT'} ${trade.quantity} · bez SL/TP`;
 }
 
 const NOT_THIS_COMMAND = /ne tímto příkazem|příčina neověřena/;

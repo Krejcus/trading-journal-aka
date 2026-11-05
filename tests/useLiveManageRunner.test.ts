@@ -170,8 +170,40 @@ describe('hook se vykreslí bez odeslání', () => {
     let seen: ReturnType<typeof useLiveManageRunner> | null = null;
     const Probe = () => { seen = useLiveManageRunner({ manage, landed: { stopLoss: 24_990, takeProfit: 25_020 } }); return null; };
     renderToStaticMarkup(React.createElement(Probe));
-    expect(seen).toMatchObject({ busy: false, result: null, confirming: null, pendingMove: null });
+    expect(seen).toMatchObject({ busy: false, result: null, pendingMove: null });
     expect(manage).not.toHaveBeenCalled();
+  });
+});
+
+describe('jeden klik = jeden příkaz (Filip 5. 11. 2026, bez „Opravdu?“)', () => {
+  const intent = { id: 'be', action: 'move-stop', leg: 'stopLoss', expectPrice: 24_990, newPrice: 25_000, direction: 'tighten', label: 'SL na BE 25000.00', confirmKey: 'be:move-stop:24990:25000' } as const;
+  const runner = (manage: LiveManageCallback) => {
+    let seen: ReturnType<typeof useLiveManageRunner> | null = null;
+    const Probe = () => { seen = useLiveManageRunner({ manage }); return null; };
+    renderToStaticMarkup(React.createElement(Probe));
+    return seen!;
+  };
+  it('první klik odešle, dvojklik nepošle druhý příkaz', async () => {
+    const manage = vi.fn<LiveManageCallback>(async () => result());
+    const run = runner(manage);
+    const first = run.request(intent);
+    expect(first.step).toBe('sent');
+    expect(run.request(intent)).toEqual({ step: 'repeat' });
+    if (first.step === 'sent') await first.outcome;
+    expect(manage).toHaveBeenCalledTimes(1);
+    expect(manage).toHaveBeenCalledWith('move-stop', 24_990, 25_000);
+  });
+  it('jiná cena je jiný příkaz, ale běžící příkaz ho sdíleným zámkem nepustí', async () => {
+    let finish!: (value: ReturnType<typeof result>) => void;
+    const manage = vi.fn<LiveManageCallback>(() => new Promise(done => { finish = done; }));
+    const run = runner(manage);
+    const first = run.request(intent);
+    const second = run.request({ ...intent, newPrice: 25_001, confirmKey: 'be:move-stop:24990:25001' });
+    expect(second.step).toBe('sent');
+    if (second.step === 'sent') expect((await second.outcome).called).toBe(false);
+    expect(manage).toHaveBeenCalledTimes(1);
+    finish(result());
+    if (first.step === 'sent') await first.outcome;
   });
 });
 
@@ -179,7 +211,7 @@ describe('statika: runner posílá jen přes předaný onManageEntry (INV-UI-01)
   const source = readFileSync('hooks/useLiveManageRunner.ts', 'utf8');
   it('žádný relay, fetch ani služby; jediné volání je manage(action, expectPrice, newPrice)', () => {
     const imports = [...source.matchAll(/from '([^']+)'/g)].map(match => match[1]).sort();
-    expect(imports).toEqual(['../lib/leaderOrderManage', '../lib/liveManagePrices', 'react', 'react']);
+    expect(imports).toEqual(['../lib/leaderOrderManage', '../lib/liveClickGate', '../lib/liveManagePrices', 'react', 'react']);
     expect(source).toMatch(/import type \{[^}]+\} from '\.\.\/lib\/leaderOrderManage'/);
     expect(source).toMatch(/import type \{[^}]+\} from '\.\.\/lib\/liveManagePrices'/);
     expect(source).not.toMatch(/fetch\(|executeTradovate|services\/|buildLeaderOrderManageCommand|crypto\./);

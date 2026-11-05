@@ -54,7 +54,7 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(lines.every(line => line.ownerId === LIVE_POSITION_OWNER)).toBe(true);
     const [entry, stop, target] = lines;
     expect(entry).toMatchObject({ draggable: false, cancellable: false, label: expect.stringMatching(/^SHORT 4  28975\.50 · \+\$12\.00/) });
-    expect(entry.actions).toEqual([expect.objectContaining({ id: 'break-even', confirm: true, disabled: false })]);
+    expect(entry.actions).toEqual([expect.objectContaining({ id: 'break-even', disabled: false })]);
     expect(stop).toMatchObject({ draggable: true, dragDeadZonePx: 4, price: 28984.25, label: expect.stringMatching(/^SL  −\$70\.00 · 8\.75 b/) });
     expect(target).toMatchObject({ draggable: true, price: 28958 });
     // Nespravovatelný obchod (např. pohled followera): jen zobrazení.
@@ -62,9 +62,10 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(readOnly.some(line => line.draggable || line.cancellable || line.actions)).toBe(false);
   });
 
-  it('čekající vstup: × = zrušit (dvoukrokově), závorky jen zobrazení', () => {
+  it('čekající vstup: × = zrušit (jedním klikem), závorky jen zobrazení', () => {
     const lines = livePositionChartLines(summary({ kind: 'pending', entryType: 'Limit', openPnl: null, mark: null }), controls);
-    expect(lines[0]).toMatchObject({ kind: 'entry', cancellable: true, confirmCancel: true, label: expect.stringMatching(/^SELL 4 LIMIT  28975\.50/) });
+    expect(lines[0]).toMatchObject({ kind: 'entry', cancellable: true, label: expect.stringMatching(/^SELL 4 LIMIT  28975\.50/) });
+    expect(lines[0].confirmCancel).toBeUndefined();
     expect(lines[0].actions).toBeUndefined();
     expect(lines.slice(1).every(line => !line.draggable && /čeká na vstup/.test(line.label))).toBe(true);
   });
@@ -92,13 +93,10 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(liveBreakEven(summary(), null).blocked).toMatch(/není známý/);
   });
 
-  it('graf: × a BE jsou dvoukrokové v overlay; cenové čáry se nekreslí dvakrát', () => {
+  it('graf: × a BE jdou přes pojistku čáry (backtest dál přes dvoukrok); cenové čáry se nekreslí dvakrát', () => {
     const overlay = readFileSync('components/BacktestOrderLinesOverlay.tsx', 'utf8');
-    expect(overlay).toMatch(/confirmed\(cancelConfirmKey\(line\), line\.confirmCancel\)/);
-    // PC: vstup se během „Opravdu?“ vyplnil (× teď zavírá pozici jedním klikem) — klik nic neodešle.
-    // (C8, 4. 11. 2026: logika v čisté `orderLineConfirmStep`, chování hlídá tests/liveC7C8Ui.test.ts.)
-    // Čára holé pozice `…:entry:bare:<id>` je pro tuto ochranu tatáž čára jako `…:entry` (C8 kolo 1);
-    // změna čar mezi kliky nechá neaktivní značku `stale`, nikdy jen null (kolo 2 — složení v (f2)).
+    expect(overlay).toMatch(/confirmed\(line, cancelConfirmKey\(line\), line\.confirmCancel\)/);
+    // Backtest: dvoukrok a neaktivní značka v čisté `orderLineConfirmStep`; živé čáry hlídá tests/liveOneClick.test.ts.
     expect(overlay).toMatch(/sameCancelLine\(live\.key, key\)\s*\? live\.stale === true \|\| live\.key !== key\s*: live\.stale === true && \(live\.key === key \|\| sameLiveCancelOwner\(live\.key, key\)\)/);
     expect(overlay).toMatch(/const next = orderLineConfirmSync\(current, lines\);/);
     // Klíč potvrzení nese akci a cenu: potvrzené „zrušit příkaz“ nikdy nezavře pozici (ani jiný obchod).
@@ -143,7 +141,8 @@ describe('LIVE → Graf: × u pozice a Market (30. 10.)', () => {
   it('× u pozice jen se schopností workeru a za zapnuté kopírky; jinak pozice bez ×', () => {
     const closable = livePositionChartLines(summary(), { ...controls, canClose: true })[0];
     // Zavření jedním kliknutím (Filip 30. 10.).
-    expect(closable).toMatchObject({ cancellable: true, cancelAction: 'close-position', confirmCancel: false });
+    expect(closable).toMatchObject({ cancellable: true, cancelAction: 'close-position' });
+    expect(closable.confirmCancel).toBeUndefined();
     expect(livePositionChartLines(summary(), controls)[0].cancellable).toBe(false);
     const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
     expect(screen).toMatch(/canClose: manageCloseSupported && copier\.available && copier\.status\?\.armed === true && copier\.status\.shadowMode !== true/);

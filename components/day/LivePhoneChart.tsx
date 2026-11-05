@@ -12,7 +12,8 @@ import LivePhoneOrderSheet, { livePhoneSheetPayload } from './LivePhoneOrderShee
 import LivePhoneDraftBar from './LivePhoneDraftBar';
 import LivePhoneManageSheet from './LivePhoneManageSheet';
 import LivePhoneReplayLiveChip from './LivePhoneReplayLiveChip';
-import { LivePhoneAttachSheet, LivePhoneCancelPendingChip, LivePhonePositionBar, createLivePhoneBarClose } from './LivePhoneLiveActions';
+import { LivePhoneAttachSheet, LivePhoneCancelPendingChip, LivePhonePositionBar, createLivePhoneBarClose, useLivePhoneBarGuard } from './LivePhoneLiveActions';
+import { LIVE_ACTION_CHANGED_TEXT } from '../../lib/liveClickGate';
 import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/liveCommandRuns';
 import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../../hooks/useLiveFillAnnouncer';
@@ -278,6 +279,11 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     if (!offer.enabled) { say(`${offer.reason ?? 'Zavřít teď nejde.'} Nic se neodeslalo.`); return; }
     void barBareCloseRun(offer.trade);
   };
+  // Pojistka lišty: lišta se bez pozice odmontuje, přechod Zrušit → Flatten se zapomenout nesmí.
+  const barGuard = useLivePhoneBarGuard(
+    position ? (position.pending ? 'cancel' : 'flatten') : null,
+    position && !position.pending && trade?.closeBare ? trade.bareClose ?? null : null,
+  );
   // Typ příkazu a kontrola proti trhu z čerstvé kotace (≤ 3 s), jako PC — ne z close svíčky.
   const freshQuote = (): TicketQuote | null => (quote && Date.now() - quote.at <= PHONE_MARKET_QUOTE_MAX_AGE_MS ? { bid: quote.bid, ask: quote.ask } : null);
   // Orientační cena návrhu v grafu (stejná jako pro list); null = cena zatím není.
@@ -605,6 +611,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             // Flatten zůstává vedle (mimo zámek) a u holé pozice se VŽDY jmenuje „Flatten“.
             bareClose={!replay && trade?.closeBare ? trade.bareClose ?? null : null}
             onBareClose={barBareClose}
+            guard={barGuard}
+            onSwallowed={() => say(LIVE_ACTION_CHANGED_TEXT)}
           />}
           {/* Přehrávání (U3): štítek živého stavu a cesta zpět; obchodovat jde jen v živém grafu. */}
           {replay && <LivePhoneReplayLiveChip position={replayLive} pnl={chartPosition.summary?.openPnl ?? null} top={position ? BELOW_POSITION_BAR : 8} onExit={exitReplay} />}

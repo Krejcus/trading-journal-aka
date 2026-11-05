@@ -1,3 +1,4 @@
+import { LIVE_ACTION_CHANGED_TEXT } from '../../lib/liveClickGate';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import BacktestOrderLinesOverlay from '../BacktestOrderLinesOverlay';
@@ -174,8 +175,7 @@ export function LivePhoneOrderLines({
     return () => window.clearTimeout(timer);
   }, [pendingMove, setPendingMove, summary?.stop, summary?.target]);
 
-  // Telefon: × (zavřít pozici i zrušit vstup) vždy na dvě klepnutí — leží u osy hned
-  // vedle plusu crosshairu a jedno klepnutí by mohlo zavřít leadera omylem.
+  // Telefon: × (zavřít pozici i zrušit vstup) jedním klepnutím (Filip 5. 11.), jako na PC.
   const guardSummary = useMemo(() => (summary ? guardAt?.(Date.now()) ?? summary : null), [guardAt, summary]);
   const positionLines = useMemo(() => (guardSummary ? livePositionChartLines(guardSummary, {
     manageable: manage != null,
@@ -185,15 +185,14 @@ export function LivePhoneOrderLines({
     displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd,
-  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, displayOpenPnl, entryAvg, manage, pendingMove, guardSummary, pendingAdd]);
+  }) : []), [canClose, displayOpenPnl, entryAvg, manage, pendingMove, guardSummary, pendingAdd]);
   const lines = useMemo(() => [
     // ✎ jen u táhnutelné SL/TP (správa jde a nic se právě neodesílá); jen otevře list.
     ...(onManage ? positionLines.map(line => (line.ownerId === LIVE_POSITION_OWNER && line.kind !== 'entry' && line.draggable
       ? { ...line, actions: [...(line.actions ?? []), { ...LIVE_PHONE_MANAGE_ACTION }] } : line)) : positionLines),
     // Pracující příkazy: jen zobrazení — vynucené bez tahu, × a tlačítek, ať je pustí jen tato vrstva.
     ...(extraLines ?? []).map(line => ({ ...line, draggable: false, cancellable: false, actions: undefined, addableBrackets: undefined })),
-    // Návrh nahoře (poslední v DOM). × návrhu jedním klepnutím: jen zahodí návrh (u brokera nic,
-    // jako [×] lišty návrhu) a klíč potvrzení nese cenu, která u Marketu jede s každým tickem.
+    // Návrh nahoře (poslední v DOM). × návrhu jedním klepnutím: jen zahodí návrh (u brokera nic).
     ...(draftLines ?? []).map(line => ({ ...line, confirmCancel: false })),
   ], [draftLines, extraLines, onManage, positionLines]);
 
@@ -224,13 +223,14 @@ export function LivePhoneOrderLines({
     }
   }, [busyRef, manage, onNotice, setPendingMove]);
 
-  if (!lines.length) return null;
+  // Připojený i bez čar: pojistka změny nabídky musí přežít stav bez čáry (čekající → nic → pozice).
   return (
     <BacktestOrderLinesOverlay
       api={api}
       lines={lines}
       isDark={isDark}
       selectToDrag
+      onClickSwallowed={() => onNotice(LIVE_ACTION_CHANGED_TEXT)}
       onChange={(line, kind, price, startLine) => {
         // Pracující příkazy jsou jen zobrazení: žádný posun, žádný návrh (pojistka nad overlayem).
         if (isLiveDisplayOnlyLine(line)) return;
@@ -258,7 +258,7 @@ export function LivePhoneOrderLines({
       }}
       onAction={(line, actionId) => {
         if (isLiveDisplayOnlyLine(line) || line.ownerId !== LIVE_POSITION_OWNER || !summary) return;
-        // ✎ jen otevře list správy; příkaz odejde až dvoukrokovým tlačítkem v listu.
+        // ✎ jen otevře list správy; příkaz odejde až tlačítkem v listu.
         if (actionId === LIVE_PHONE_MANAGE_ACTION.id) { if (line.kind !== 'entry') onManage?.(line.kind); return; }
         if (actionId !== 'break-even') return;
         const be = liveBreakEven(guardAt?.(Date.now()) ?? summary, entryAvg);

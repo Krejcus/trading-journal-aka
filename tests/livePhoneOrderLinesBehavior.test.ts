@@ -34,10 +34,10 @@ const lineOf = (props: Record<string, any>, kind: string) => props.lines.find((l
 beforeEach(() => { captured.props = null; });
 
 describe('LIVE telefon: čáry obchodu a správa (napojení 2. 11.)', () => {
-  it('overlay dostane selectToDrag (výběr klepnutím, pak tah) a × vždy dvoukrokově', () => {
+  it('overlay dostane selectToDrag (výběr klepnutím, pak tah) a × jedním klepnutím', () => {
     const { props } = render({ manage: vi.fn() });
     expect(props.selectToDrag).toBe(true);
-    expect(props.lines.every((line: { confirmCancel?: boolean }) => line.confirmCancel === true)).toBe(true);
+    expect(props.lines.some((line: { confirmCancel?: boolean }) => line.confirmCancel === true)).toBe(false);
   });
 
   it('bez manage: žádné ×, BE ani tah — čáry jen zobrazují', () => {

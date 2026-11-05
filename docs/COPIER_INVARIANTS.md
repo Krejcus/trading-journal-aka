@@ -1519,6 +1519,22 @@ existující ochranu.
 
 ### INV-UI-01: Obnovený stav může krátce stabilizovat zobrazení, ale neautorizuje příkaz; po grace je stale/unknown neutrální
 
+- **Jedno kliknutí (rozhodnutí Filipa 5. 11. 2026, „jsem zvyklý z TradingView, že se nedoptává“):** dvoukrok
+  „Opravdu?“ je v LIVE obchodování zrušený. První klik, klepnutí nebo stisk rovnou odešle BE a jeho varianty, posun
+  SL/TP číslem, × vstupu, přikoupení a pozice (čára i panel), Odeslat z Náhledu, holý Market, Zrušit čekající,
+  Zrušit na Dashboardu, Shift+E/X/C a na telefonu lištu Zavřít / Zrušit / Flatten a list správy. Zůstává: dialog
+  Flatten All na Dashboardu a Shift+F, dialog ARM, dvoukrok mazání šablony (není to příkaz k brokerovi) a dvoukrok
+  čar backtestu (`confirmCancel` / `confirm`). Pojistky: sdílený zámek jednoho příkazu (`busyRef`, `placingRef`,
+  `directBusyRef`); dvojklik do 400 ms na týž klíč se spolkne, i když první příkaz doběhl (`lib/liveClickGate.ts`);
+  tlačítko, které do 1 s změnilo význam, klik spolkne, ať neodejde jiná akce než viděná (`createLiveClickGate`,
+  na čárách `BacktestOrderLinesOverlay:liveLineClick`: čekající → vyplněno, holá → spravovaná, zmizelé přikoupení;
+  overlay zůstává připojený i bez čar, podpis nebere ✎ ani ceny; spolknutí změnou napíše `LIVE_ACTION_CHANGED_TEXT`, dvojklik je tichý);
+  telefonní lišta má pojistku v rodiči (`useLivePhoneBarGuard`, přežije stav bez pozice) a spolkne jen Zrušit → Flatten,
+  pozice → pozice nikdy; velké tlačítko panelu je po neznámém výsledku zamčené do změny návrhu nebo stavu;
+  „Posunout → X“ pošle jen cenu z tlačítka (`liveMoveClick`); Dashboard „Zrušit“ klíčuje na id vstupu a ověří řádek;
+  všechny brány panelu a kontroly čerstvosti při kliku; fokus po kliku pryč z tlačítka. Worker se nemění a ověří
+  všechno znovu. Starší věty o dvoukroku níže platí jen tam, kde je to výslovně řečeno. Hlídá
+  `tests/liveC7C8Ui.test.ts`, `tests/useLiveManageRunner.test.ts`, `tests/liveHotkeys.test.ts`.
 - Proč: Prezentační cache přežívá worker a její kladná hodnota nesmí vytvořit
   execution autoritu. UI ale záměrně až 1,2 s zobrazuje obnovený status starý
   nejvýše 10 minut jako dostupný, aby při návratu na LIVE neproblikávalo;
@@ -1587,7 +1603,7 @@ existující ochranu.
 - „Zrušit čekající“ v liště vedle Flatten All (C7 UI, 4. 11. 2026; od 5. 11. je na PC vidět jen
   v nouzových stavech lišty, jinak ruší Dashboard „Zrušit“ a Shift+C) NENÍ safety akce: jen
   s capability a vlastními čekajícími vstupy, nad čerstvým neobnoveným statusem s relayem,
-  dvoukrokově a sdíleným zámkem jednoho příkazu desku (`liveCommandLockRef`). OFF, kill
+  jedním klikem a sdíleným zámkem jednoho příkazu desku (`liveCommandLockRef`). OFF, kill
   a Flatten All tím zámkem ani jeho `busy` zamčené nejsou a jejich cesta se nemění. Část C7
   se v liště vykresluje ve VLASTNÍ hranici chyb (`LiveCancelPendingBoundary`, fallback nic)
   a pohled `liveCancelPendingView` / `dashboardOrderCancelView` status workeru sanitizuje
@@ -1760,6 +1776,7 @@ existující ochranu.
 
 ### INV-MANUAL-01: Ruční vstup z appky jde jen přes worker na leadera; náhled (fáze 1a) nic nezapíše (29. 10. 2026)
 
+- Potvrzování: od 5. 11. 2026 bez dvoukroku, první klik odesílá (viz „Jedno kliknutí“ v INV-UI-01). Brány a worker beze změny.
 - Proč: Obchodování z grafu je první risk-zvyšující cesta z appky. Fáze 1a
   ověřuje brány naostro bez zápisu, aby „náhled OK“ nikdy nebylo zaměněno
   za odeslání.
@@ -1932,7 +1949,7 @@ existující ochranu.
 - **Graf (30. 10. 2026):** živá pozice leadera ve štítcích jako návrh
   (`lib/liveChartOrderLines.ts`). Tah SL/TP = okamžité `move-*` po puštění (mrtvá
   zóna 4 px), `expect` = cena při chycení čáry (změna během tahu = nic se nepošle);
-  BE a × čekajícího vstupu dvoukrokově (druhý klik po ≥ 350 ms, do 4 s). Jen jedna
+  BE a × čekajícího vstupu jedním klikem (od 5. 11., INV-UI-01). Jen jedna
   změna naráz; „odesílám“ drží do výsledku. Notifikace vlevo dole
   (`components/LiveTradeToasts.tsx`) jsou jen zobrazení `recentCopyEvents`; tečky
   nejsou důkaz kopie (zelené jen za zapnuté kopírky). Hlídá test:
@@ -1949,7 +1966,7 @@ existující ochranu.
   `acknowledged`; pozice bez SL/TP = incident bez auto-close (ve všech větvích i při
   dořešení); `already-flat` / flat při dořešení = `waived` (kauzalitu netvrdit).
   Brzda zavření zneplatní (relay supersede, agent `brake-after-request`), TTL 5 s.
-  UI: × u pozice jedním kliknutím (Filip 30. 10.); zrušení čekajícího vstupu a BE dvoukrokově.
+  UI: × u pozice, zrušení čekajícího vstupu i BE jedním kliknutím (Filip 30. 10. a 5. 11.).
   Market: SL/TP jedou s cenou (i SL z position boxu).
   Hlídá test: `tests/manualOrderManage.test.ts` (fáze 2d).
 - - **Vlastní OSO se nikdy nekopíruje bez nohou** (`flushStandaloneOsoEntry`):
@@ -2099,7 +2116,7 @@ existující ochranu.
     sedí s Marketem (kontrakt, strana, počet, ne čekající) — neznámá / nesedící pozice = žádné ×
     (unknown ≠ flat, zůstává Flatten). Neaktivní s důvodem nad zastaralým / obnoveným statusem,
     bez relaye a mimo ARMED ∧ ¬shadow ∧ ¬kill. PC: × na čáře vstupu (id čáry nese
-    `entryOperationId`, vždy dvoukrokově), Shift+X tutéž čáru a panel (sekce „Přidat SL/TP“)
+    `entryOperationId`), Shift+X tutéž čáru a panel (sekce „Přidat SL/TP“)
     TOUŽ funkcí obrazovky `closeBare`; telefon: „Zavřít“ v liště pozice vedle „Flatten“ (klíč
     akce + `entryOperationId`, jen mimo přehrávání; záložní tlačítko u holé pozice se VŽDY jmenuje
     „Flatten“, i bez nabídky a při přehrávání — „Zavřít“ znamená jen C8). JEDEN zámek jednoho
@@ -2113,25 +2130,13 @@ existující ochranu.
     Flatten (lišta pozice / Flatten All, mimo zámek, INV-UI-02) — text obsazeného zámku to říká
     („… Zavřít jde hned Flattenem“, `LIVE_MANAGE_BUSY_TEXT` / `LIVE_COMMAND_BUSY_TEXT`, Shift+E/X/C
     „… Flattenem (Shift+F)“). Zkrácení zámku C7 (uvolnit po prvním `unknown` / timeoutu) by byla
-    změna jádra `cancelOwnPendingEntries` — jen přes critic, zatím ne. Dvoukrok
-    (`lib/liveConfirmGate.ts:createLiveConfirmGate` nad `liveConfirmClick`) zahodí rozběhnuté
-    „Opravdu?“ i BEZ kliku, když nabídka zmizí, změní klíč nebo se zablokuje (panel, telefonní lišta;
-    zkratky Shift+E/X/C `lib/liveHotkeys.ts:liveHotkeyGuardSync` — efekt obrazovky na čárách, cíl
-    týmž `hotkeyTarget` + `liveHotkeyConfirmKey` jako stisk). Čáry grafu (PC i telefon,
-    `BacktestOrderLinesOverlay`): efekt na `lines` = čistá `orderLineConfirmSync` — klíč, který čáry
-    už nenabízejí (vyplnění, attach, blokace nabídky, zmizení čáry), udělá z potvrzení NEAKTIVNÍ
-    značku `stale` do `until`, NIKDY jen `null` (oponentura UI kolo 2, P2: s `null` React spustil
-    efekt před dalším klikem a jednoklikové × vyplněné / spravované pozice odešlo — ochrana „téže
-    čáry“ z 2. 11. i z kola 1 byla vyřazená). `orderLineConfirmStep`: klik na tutéž čáru (čára holé
-    pozice `live-position:entry:bare:<id>` = tatáž čára jako `live-position:entry`) do `until`
-    při `stale` nebo při jiné akci × nic neodešle (u dvoukrokové akce jen začne nový dvoukrok);
-    značka se po návratu nabídky neoživí a zůstane i když čára na chvíli zmizí. Přechod čekající →
-    vyplněno (PC jednoklik), holá → spravovaná i zablokováno → vráceno tak mezi kliky nic nepotvrdí; spolknutý klik
-    rozběhne aktivní výzvu nového × (text podle akce: „Zavřít?“ / „Zrušit?“ / „Odstranit?“), takže
-    ani dvojklik po přechodu nic nepošle (další klik ≥ 350 ms od předchozího); neaktivní značka × jedné
-    čáry živé pozice (`live-position:…`) spolkne i jednoklikové × jiné čáry téže pozice (vyplněné
-    přikoupení → pod kurzor dojede × pozice)
-    — hlídá test SLOŽENÍ klik → sync → klik (`tests/liveC7C8Ui.test.ts` (f2)).
+    změna jádra `cancelOwnPendingEntries` — jen přes critic, zatím ne. Od 5. 11. bez dvoukroku:
+    panel, telefonní lišta a C7 jdou přes `lib/liveClickGate.ts:createLiveClickGate` (dvojklik a právě
+    změněný klíč nabídky se spolknou, zablokováno = důvod), čáry grafu přes
+    `BacktestOrderLinesOverlay:liveLineClick` a `liveLineClickSync`: podpis čar živé pozice (id, akce ×,
+    tlačítka, bez ceny a zablokování) po změně spolkne klik na 1 s, i přes stav bez čáry; holá →
+    spravovaná, čekající → vyplněno i zmizelé přikoupení, po kterém pod kurzor dojede × pozice.
+    Spolknutí změnou nabídky to napíše (`onClickSwallowed`), jen dvojklik je tichý.
     Odeslání = deskový `closeBareLeader` (čistá továrna `lib/liveDeskCommands.ts`): čerstvý status
     + capability + `sameBareTrade` (odejde jen obchod, který uživatel viděl) →
     `buildLeaderOrderManageCommand({ …, ...bareCloseManageFields })` → jediné relay odeslání správy
@@ -2139,10 +2144,8 @@ existující ochranu.
     Texty `liveBareCloseResultNotice`: ověřeně flat = „zavřena — ověřeno stavem“; `waived` (worker
     hlásí `acknowledged` s „ne tímto příkazem“) = „Leader je flat — ne tímto příkazem“; `rejected`
     = „Broker zavření odmítl… zkontroluj, případně Flatten“; `unknown` i výjimka po odeslání =
-    „Neověřeno — zkontroluj Tradovate“, NIKDY „zavřeno“; nic se neopakuje. Dvoukrok čar grafu
-    (`BacktestOrderLinesOverlay:orderLineConfirmStep`, PC i telefon) od téhož dne počítá 350 ms od
-    PŘEDCHOZÍHO kliku (`liveManageConfirmStep`; dřív od prvního — trojklik potvrdil).
-    Hlídá test: `tests/liveC7C8Ui.test.ts` (behaviorálně přes čisté továrny a automat dvoukroku;
+    „Neověřeno — zkontroluj Tradovate“, NIKDY „zavřeno“; nic se neopakuje.
+    Hlídá test: `tests/liveC7C8Ui.test.ts` (behaviorálně přes čisté továrny a pojistku kliku;
     bezpečnostní větve mutačně ověřil stavitel v kolech oprav oponentury UI 1 a 2 skriptem mimo repo).
 - **„Zrušit vše“ = zrušit VLASTNÍ čekající vstupy, nikdy ochranu pozice (C7, 3. 11. 2026,
   `docs/reviews/trading-gaps-designs/safety.md`; oponentura copier-design-critic: návrh OK, diff
@@ -2239,9 +2242,8 @@ existující ochranu.
     `hooks/liveCommandRuns.ts:createLiveCancelPendingRun`):** tlačítko „Zrušit čekající (N)“ jen když
     `cancelPendingAvailability` říká `show` (PC lišta pod grafem vedle Flatten All, od 5. 11. jen v nouzových stavech lišty; telefon čip nad
     grafem); neaktivní s důvodem nad zastaralým / obnoveným statusem, bez relaye, při blokaci workeru
-    a během přehrávání. Dvoukrok `createLiveConfirmGate` nad `liveConfirmClick` (2. klik 350 ms – 4 s od
-    PŘEDCHOZÍHO kliku; klíč = `cancelPendingConfirmKey` přesně zobrazené sady — vyplnění / nový vstup
-    = znovu od 1. kliku a rozběhnuté „Opravdu?“ zmizí i bez kliku; dva kliky v jednom snímku nic).
+    a během přehrávání. První klik odesílá (od 5. 11.; klíč = `cancelPendingConfirmKey` přesně zobrazené
+    sady, vyplnění / nový vstup do 1 s před klikem = nic a hláška, dvojklik nic dalšího).
     `cancelPendingConfirmStep` jádra se v UI NEPOUŽÍVÁ (rychlý klik neposouvá kotvu — trojklik
     0/200/400 ms by potvrdil); test hlídá, že ho žádný runtime soubor neimportuje, sjednocení nebo
     odstranění exportu je samostatná změna jádra přes critic. Text potvrzení `cancelPendingConfirmText`
@@ -2263,7 +2265,7 @@ existující ochranu.
     trasu; výsledek po položkách `cancelPendingSummary` (fill nikdy „zrušeno“), ukáže se i když
     nabídka mezitím zmizela (status dřív než ACK). Dashboard: nefunkční `cancel-order` nahrazeno
     `dashboardOrderCancelView` → `dashboardCancelTarget` (jen vlastní čekající vstup leadera skupiny
-    workeru, dvoukrokově, týž zámek); `blockedReason` workeru zamkne i Dashboard (jako lištu); skupina,
+    workeru, jedním klikem, týž zámek); `blockedReason` workeru zamkne i Dashboard (jako lištu); skupina,
     kterou worker neřídí, má vlastní text („Zrušit jde jen u skupiny, kterou řídí worker“); starý
     worker bez capability, SL/TP noha, follower, cizí příkaz i neověřený stav = tlačítko zamčené
     s vysvětlením; přehled `cancel-order` už nikdy nesestaví. Hlídá test: `tests/liveC7C8Ui.test.ts`
@@ -2282,9 +2284,8 @@ existující ochranu.
   + jediný vlastní obchod; × jen za dostupného runtime, zapnuté kopírky a ne shadow; BE průměr
   jen ze stavu pollu). Pojistky utažení SL a BE berou souhrn s kotací IBKR (`guardAt` →
   `withIbkrTightenMark`, jako PC `guardSummaryAt`), vyhodnocený znovu v okamžiku akce.
-  Dvoukrokové × má klíč potvrzení včetně akce (`cancelConfirmKey`: `cancel-order` vs.
-  `close-position`) — čekající vstup vyplněný mezi klepnutími nikdy nepotvrdí zavření pozice
-  (PC i telefon). Testy: `tests/livePhoneOrderLinesBehavior.test.ts`, `tests/livePhoneOrders.test.ts`.
+  × jde prvním klepnutím; čekající vstup vyplněný do 1 s před klepnutím se spolkne (`liveLineClick`),
+  takže nezavře pozici místo zrušení vstupu (PC i telefon). Testy: `tests/livePhoneOrderLinesBehavior.test.ts`, `tests/livePhoneOrders.test.ts`.
 - **Šipky plnění v LIVE grafu (2. 11. 2026, jen zobrazení):** controller drží v paměti kruh
   plnění leadera aktuální epizody (`services/copierLeaderDisplayFills.ts`, max 40), plněný
   synchronně v try/catch hned po `preclassifyLeaderFillExposure` z jeho rozdělení vstup/výstup;
@@ -2303,7 +2304,7 @@ existující ochranu.
   (startLine = „co jsem viděl“, `liveLineMoveBlockReason`, `liveBreakEven`).
   Na telefonu se čára nejdřív klepnutím vybere a teprve vybraná jde táhnout,
   tah drží v ploše grafu (`selectToDrag`, PC beze změny); × (zavřít pozici
-  i zrušit vstup) je na telefonu vždy dvoukrokové (leží u osy vedle plusu).
+  i zrušit vstup) jde od 5. 11. i na telefonu prvním klepnutím (INV-UI-01).
   Akce jdou jen přes volitelné `LivePhoneTradeBridge.manage` = deskový
   `manageLeaderEntry`, předané jen za stejných podmínek jako PC
   (`supportsCopierManualOrderManage && ownManualEntry`); bez něj jsou čáry jen
@@ -2328,8 +2329,8 @@ existující ochranu.
   - **Klávesy PC (U1):** opt-in (výchozí vypnuto, `at:live:hotkeys`). Shift+B/S jen návrh
     v panelu jako ⚡ (Market jen s capability a kotací ≤ 3 s, jinak Limit ±10 b; SL/TP
     z výchozí šablony ★) a fokus pryč z panelu (`liveReleaseTicketFocus`); Esc zahodí
-    návrh jen při nečinném kreslení; Shift+E/X/C dvoukrokově (nový stisk ≥ 350 ms, do 4 s,
-    klíč akce + čára + cena, `createTwoStepGuard`) TOUŽ funkcí jako BE / × na čáře
+    návrh jen při nečinném kreslení; Shift+E/X/C prvním stiskem (od 5. 11.; rychlý dvojstisk s klíčem
+    akce + čára + cena nic dalšího nepošle) TOUŽ funkcí jako BE / × na čáře
     (Shift+X jen když × nabízí čára); Shift+F jen dialog Flatten All (INV-UI-02). Zkratky mlčí
     při `repeat`, IME, Meta/Ctrl/Alt, fokusu v poli / editoru / dialogu, otevřeném dialogu
     nebo menu, odchodu z grafu, skryté stránce a během přehrávání (kromě Flatten dialogu,
@@ -2338,16 +2339,13 @@ existující ochranu.
     Enter / mezerník po zkratce nepošle vyměněný návrh.
   - **Holý Market z PC panelu (U4):** jen s `manual-entry-bare-v1`, jen skupina (vstup na
     leadera), jen v kontraktech, kontrakt jen z kotace IBKR ≤ 3 s. Výstražné tlačítko
-    „MARKET · BEZ SL/TP“, dvoukrok 350 ms – 4 s s klíčem akce + kontrakt + strana + počet;
+    „MARKET · BEZ SL/TP“, první klik odesílá (od 5. 11.), dvojklik jeden příkaz;
     brána (`liveBareMarketBlockReason`: brána desku, capability, kotace, strop, pozice) se
-    vyhodnotí při KAŽDÉM kliku (`liveBareSendClick`); rozběhnuté potvrzení zahodí blokace
-    i bez kliku (tlačítko je disabled) a změna klíče (qty 1→2→1 = znovu od 1. kliku).
-    Klik dřív než 350 ms od PŘEDCHOZÍHO kliku kotvu posune, trojklik nepotvrdí (totéž
-    `liveManageConfirmStep` a `createTwoStepGuard`); tlačítka Správy po kliku pouští fokus.
+    vyhodnotí při KAŽDÉM kliku (`liveBareSendClick`); tlačítka Správy po kliku pouští fokus.
     Neověřené čtení pozice (`issue`) i chybějící data = ne flat (`liveTicketBarePosition`,
     unknown ≠ flat), autoritou zůstává worker (`account-not-flat`). Holý Market NIKDY přes
-    Náhled → Odeslat (Náhled ho jen zkontroluje); ostatní vstupy z Náhledu dvoukrokově
-    350 ms – 4 s s klíčem id náhledu + celý návrh včetně ceny, čerstvost náhledu (≤ 15 s)
+    Náhled → Odeslat (Náhled ho jen zkontroluje); ostatní vstupy z Náhledu prvním klikem,
+    čerstvost náhledu (≤ 15 s)
     a brána panelu při kliku (`livePreviewPlaceClick`). Velké tlačítko běžného vstupu
     zůstává jedním klikem (Filip 30. 10.).
   - **„Přidat SL/TP“ z PC (U4):** jen s capability, `onAttachBrackets` a vlastním holým
@@ -2360,11 +2358,10 @@ existující ochranu.
     sdílený runner (`useLiveManageRunner`, jeden zámek s čarami grafu; PC jen s runnerem
     a jen u leadera skupiny workeru, `leaderManageBasis`). SL/TP zadané v ceně / bodech /
     ticích / $ od průměru z pollu se převede na absolutní cenu záměru, která je vidět na
-    tlačítku („Posunout → X“); odejde jen cena, která na tlačítku visela ≥ 350 ms
-    (`liveManageSeenPriceProblem` — změna průměru pollem těsně před klikem = nic).
-    SL dál od trhu dvoukrokově, utažení SL a TP na PC jedním klikem (jako tah čáry),
-    na telefonu vše dvoukrokově. BE, BE + n (1–40 t) a BE + odhad poplatků jsou jen jiná
-    cena záměru `move-stop`, vždy dvoukrokově s cenou v klíči. **Poplatky jsou ODHAD**
+    tlačítku („Posunout → X“). Kontrola „cena viděná ≥ 350 ms“ od 5. 11. odpadla (rozhodnutí
+    Filipa): změna průměru pollem těsně před klikem odešle novou cenu z téhož tlačítka, „co jsem
+    viděl“ je dál cena nohy a worker ji porovná. Všechno jedním klikem na PC i telefonu.
+    BE, BE + n (1–40 t) a BE + odhad poplatků jsou jen jiná cena záměru `move-stop`. **Poplatky jsou ODHAD**
     z poslední sazby brokera (`lib/liveTradeCard.ts:tradeCardFeeRates`: průměrný poplatek
     za kontrakt z posledních ≤ 20 fillů účtu × kusy), ne skutečné poplatky pozice;
     neznámé = tlačítko se nenabízí.

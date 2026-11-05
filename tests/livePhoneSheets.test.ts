@@ -12,7 +12,7 @@ import LivePhoneOrderSheet, {
   livePhoneSheetStartDraft, livePhoneSheetSubmitDraft, livePhoneSheetUnits, type LivePhoneSheetTrade,
 } from '../components/day/LivePhoneOrderSheet';
 import LivePhoneDraftBar, { livePhoneDraftText } from '../components/day/LivePhoneDraftBar';
-import { LivePhonePositionBar, livePhoneAttachDefaults, livePhonePositionCloseKey } from '../components/day/LivePhoneLiveActions';
+import { LivePhonePositionBar, createLivePhoneBarGuard, livePhoneAttachDefaults } from '../components/day/LivePhoneLiveActions';
 import LivePhoneManageSheet, { livePhoneManagePlans } from '../components/day/LivePhoneManageSheet';
 
 const NOW = Date.UTC(2026, 10, 3, 15);
@@ -199,18 +199,8 @@ describe('U2 lišta návrhu', () => {
 });
 
 describe('lišta pozice: Zrušit / Zavřít dvoukrokově s klíčem akce, mimo sdílený zámek', () => {
-  it('klíč akce: čekající vstup → vyplněná pozice = jiný klíč (druhé klepnutí nepotvrdí jinou akci)', () => {
-    const pending = livePhonePositionCloseKey({ side: 'long', quantity: 1, symbol: 'MNQZ6', pending: { type: 'Limit', price: 24_990 } });
-    const filled = livePhonePositionCloseKey({ side: 'long', quantity: 1, symbol: 'MNQZ6', pending: null });
-    expect(pending).toMatch(/^cancel-entry:/);
-    expect(filled).toMatch(/^flatten:/);
-    expect(pending).not.toBe(filled);
-    expect(livePhonePositionCloseKey({ side: 'long', quantity: 2, symbol: 'MNQZ6', pending: null })).not.toBe(filled);
-    expect(livePhonePositionCloseKey({ side: 'long', quantity: 1, symbol: 'MNQZ6', pending: { type: 'Limit', price: 24_989.75 } })).not.toBe(pending);
-  });
-
   it('busy vypne jen „Přidat SL/TP“, Flatten / Zavřít nikdy; SL/TP správa jen u chráněné pozice', () => {
-    const base = { side: 'long' as const, quantity: 1, symbol: 'MNQZ6', busy: true, onAttach: vi.fn(), onClose: vi.fn(), onManage: vi.fn() };
+    const base = { side: 'long' as const, quantity: 1, symbol: 'MNQZ6', busy: true, onAttach: vi.fn(), onClose: vi.fn(), onManage: vi.fn(), guard: createLivePhoneBarGuard(), onSwallowed: vi.fn() };
     const bare = renderToStaticMarkup(React.createElement(LivePhonePositionBar, { ...base, unprotected: true }));
     expect(bare).toMatch(/<button[^>]*disabled=""[^>]*>Přidat SL\/TP<\/button>/);
     // Holá pozice: záložní tlačítko se vždy jmenuje „Flatten“ (C8 kolo 1 — „Zavřít“ jen pro cílené zavření).
@@ -243,22 +233,22 @@ describe('U10 list správy: záměry (číslo, BE, BE + n, BE s poplatky)', () =
     summary: summary(), leaderAccountId: 1, entryAvg: 25_000, leg: 'stopLoss', units: 'ticks', value: 30, plusTicks: 2, ...patch,
   });
 
-  it('SL 30 ticků od průměru: „co jsem viděl“ = SL z read modelu, vždy dvoukrokově', () => {
-    expect(plans().move).toEqual({ ok: true, intent: expect.objectContaining({ action: 'move-stop', expectPrice: 24_990, newPrice: 24_992.5, direction: 'tighten', confirm: true }) });
-    expect(plans({ value: 70 }).move).toMatchObject({ ok: true, intent: { newPrice: 24_982.5, direction: 'loosen', confirm: true } });
+  it('SL 30 ticků od průměru: „co jsem viděl“ = SL z read modelu', () => {
+    expect(plans().move).toEqual({ ok: true, intent: expect.objectContaining({ action: 'move-stop', expectPrice: 24_990, newPrice: 24_992.5, direction: 'tighten' }) });
+    expect(plans({ value: 70 }).move).toMatchObject({ ok: true, intent: { newPrice: 24_982.5, direction: 'loosen' } });
     expect(plans({ units: 'price', value: 25_009 }).move).toMatchObject({ ok: false, reason: expect.stringMatching(/8 ticků/) });
     expect(plans({ value: null }).move).toMatchObject({ ok: false, reason: 'Zadej číslo.' });
     expect(plans({ summary: null }).move).toMatchObject({ ok: false, reason: 'Pozice leadera není známá.' });
   });
 
   it('TP číslem jen dál od trhu', () => {
-    expect(plans({ leg: 'takeProfit', units: 'pts', value: 40 }).move).toMatchObject({ ok: true, intent: { action: 'move-target', expectPrice: 25_030, newPrice: 25_040, confirm: true } });
+    expect(plans({ leg: 'takeProfit', units: 'pts', value: 40 }).move).toMatchObject({ ok: true, intent: { action: 'move-target', expectPrice: 25_030, newPrice: 25_040 } });
     expect(plans({ leg: 'takeProfit', units: 'pts', value: 20 }).move).toMatchObject({ ok: false, reason: expect.stringMatching(/dál od trhu/) });
   });
 
   it('BE, BE + 2 t a BE s poplatky leadera; poplatky neznámé = nenabízet', () => {
     const p = plans();
-    expect(p.be).toMatchObject({ ok: true, intent: { action: 'move-stop', expectPrice: 24_990, newPrice: 25_000, confirm: true } });
+    expect(p.be).toMatchObject({ ok: true, intent: { action: 'move-stop', expectPrice: 24_990, newPrice: 25_000 } });
     expect(p.plus).toMatchObject({ ok: true, intent: { newPrice: 25_000.5, label: 'SL na BE +2 t 25000.50' } });
     expect(p.fees).toMatchObject({ ok: true, intent: { newPrice: 25_000.75 } });
     expect(plans({ summary: summary({ rows: [row({ fees: null })] }) }).fees).toBeNull();
@@ -317,12 +307,12 @@ describe('statika: listy a lišty nemají vlastní cestu k brokerovi (INV-UI-01)
     expect(sheet).toMatch(/useLiveManageRunner\(\{\s*manage,\s*state,/);
   });
 
-  it('lišta pozice: dvoukrok přes sdílený automat (liveConfirmClick) s klíčem akce, Zavřít bez busy', () => {
+  it('lišta pozice: první klepnutí přes pojistku rodiče, Zavřít bez busy', () => {
     const actions = source('LivePhoneLiveActions.tsx');
     expect(actions).not.toMatch(broker);
-    expect(actions).toMatch(/useLiveConfirmGate\(\[\{ key: actionKey, enabled: true \}, bare\]\)/);
-    expect(actions).toMatch(/if \(livePhoneBarClick\(gate, 'flatten', \{ flattenKey: actionKey, bare \}\) === 'flatten'\) onClose\(\);/);
-    expect(source('../../lib/liveConfirmGate.ts')).toMatch(/const step = liveConfirmClick\(state, target\.key, now\(\)\);/);
+    expect(actions).toContain('guard: LivePhoneBarGuard;');
+    expect(actions).toMatch(/const step = guard\.flatten\(pending \? 'cancel' : 'flatten'\);/);
+    expect(actions).not.toMatch(/Opravdu/);
     expect(actions).not.toMatch(/armedAt/);
     expect(actions).toMatch(/liveAttachProblem\(side, market, sl, tp, tickSize\)/);
   });

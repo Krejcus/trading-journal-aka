@@ -120,7 +120,7 @@ export function liveCancelPendingConfirmText(entries: readonly PendingOwnEntry[]
 /** Co lišta / telefon ukáže; `null` = tlačítko vůbec ne (starý worker, nic čekajícího). */
 export interface LiveCancelPendingView {
   entries: readonly PendingOwnEntry[];
-  /** Klíč dvoukroku = přesně ta sada, kterou uživatel vidí (id, cena, počet). */
+  /** Klíč tlačítka = přesně ta sada, kterou uživatel vidí (id, cena, počet). */
   key: string;
   label: string;
   /** Text potvrzení: kolik a čeho, co VĚDOMĚ zůstává. */
@@ -237,4 +237,22 @@ export function dashboardOrderCancelView(
   } catch {
     return { kind: 'locked', reason: DASHBOARD_CANCEL_UNREADABLE };
   }
+}
+
+/**
+ * Pohled tlačítka Dashboard „Zrušit“: klíč = id vstupu (cena nemění význam, desk ji porovná se
+ * statusem), aktivní jen když kliknutý řádek je opravdu tento vstup (účet leadera + id příkazu).
+ */
+export function dashboardRowCancelView(
+  order: { accountId: number | null; id: number | string },
+  entry: PendingOwnEntry,
+  input: { leaderAccountId: number | null | undefined; blocked: boolean },
+): LiveCancelPendingView {
+  const sameRow = order.accountId != null && order.accountId === input.leaderAccountId && String(order.id) === entry.entryBrokerOrderId;
+  return {
+    entries: [entry], key: `dashboard-cancel:${entry.entryOperationId}`, label: 'Zrušit',
+    enabled: sameRow && !input.blocked,
+    reason: !sameRow ? 'Řádek už neodpovídá čekajícímu vstupu — nic se neodeslalo.' : input.blocked ? 'Přehled právě posílá jiný příkaz — zrušení počká.' : null,
+    confirmText: cancelPendingConfirmText([entry], null),
+  };
 }

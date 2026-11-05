@@ -72,10 +72,8 @@ export interface LiveManageIntent {
   direction: 'tighten' | 'loosen';
   /** Text tlačítka / potvrzení s cenou, která odejde („SL na BE +2 t 25000.50“). */
   label: string;
-  /** Klíč dvoukrokového potvrzení: varianta + akce + co jsem viděl + nová cena. */
+  /** Klíč proti dvojkliku: varianta + akce + co jsem viděl + nová cena. */
   confirmKey: string;
-  /** BE varianty vždy dvoukrokově; posun zadaným číslem podle volby volajícího. */
-  confirm: boolean;
 }
 
 export type LiveManagePlan =
@@ -238,7 +236,7 @@ export function liveManageBasis(
 }
 
 const intentFor = (
-  summary: LiveChartPositionSummary, leg: LiveManageLeg, id: LiveManageIntent['id'], expectPrice: number, newPrice: number, label: string, confirm: boolean,
+  summary: LiveChartPositionSummary, leg: LiveManageLeg, id: LiveManageIntent['id'], expectPrice: number, newPrice: number, label: string,
 ): LiveManageIntent => {
   const action = leg === 'stopLoss' ? 'move-stop' : 'move-target';
   const dir = dirOf(summary.side);
@@ -246,7 +244,7 @@ const intentFor = (
   const tighten = leg === 'stopLoss' ? (newPrice - expectPrice) * dir > 0 : (newPrice - expectPrice) * dir < 0;
   return {
     id, action, leg, expectPrice, newPrice, direction: tighten ? 'tighten' : 'loosen', label,
-    confirmKey: `${id}:${action}:${expectPrice}:${newPrice}`, confirm,
+    confirmKey: `${id}:${action}:${expectPrice}:${newPrice}`,
   };
 };
 
@@ -260,7 +258,7 @@ export function planManageMove(
   summary: LiveChartPositionSummary | null | undefined,
   leg: LiveManageLeg,
   price: number,
-  options: { confirm?: boolean; tick?: number } = {},
+  options: { tick?: number } = {},
 ): LiveManagePlan {
   const tick = options.tick ?? MNQ_TICK;
   if (!summary) return blocked('Pozice leadera není známá.');
@@ -271,7 +269,7 @@ export function planManageMove(
   // liveLineMoveBlockReason už odmítla neznámou nohu; tady jen pro typy.
   if (current == null) return blocked(`${leg === 'stopLoss' ? 'SL' : 'TP'} leadera není známý.`, price);
   if (price === current) return blocked(`${leg === 'stopLoss' ? 'SL' : 'TP'} už je na ${priceText(price)}.`, price);
-  return { ok: true, intent: intentFor(summary, leg, 'move', current, price, `${leg === 'stopLoss' ? 'SL' : 'TP'} na ${priceText(price)}`, options.confirm === true) };
+  return { ok: true, intent: intentFor(summary, leg, 'move', current, price, `${leg === 'stopLoss' ? 'SL' : 'TP'} na ${priceText(price)}`) };
 }
 
 const variantLabel = (variant: LiveManageBreakEvenVariant) => (
@@ -279,7 +277,7 @@ const variantLabel = (variant: LiveManageBreakEvenVariant) => (
 );
 
 /**
- * SL na BE variantu (vždy dvoukrokově). Stejné bloky jako BE na štítku pozice
+ * SL na BE variantu. Stejné bloky jako BE na štítku pozice
  * (`liveBreakEven`) plus SL za TP — n ticků do zisku může TP přeskočit.
  */
 export function planBreakEven(
@@ -306,7 +304,7 @@ export function planBreakEven(
   if (price === summary.stop) return blocked(`SL už je na ${label} (${priceText(price)}).`, price);
   const reason = liveLineMoveBlockReason(summary, 'stopLoss', price);
   if (reason) return blocked(reason, price);
-  return { ok: true, intent: intentFor(summary, 'stopLoss', variant.kind, summary.stop, price, `SL na ${label} ${priceText(price)}`, true) };
+  return { ok: true, intent: intentFor(summary, 'stopLoss', variant.kind, summary.stop, price, `SL na ${label} ${priceText(price)}`) };
 }
 
 /**
@@ -323,29 +321,4 @@ export function liveManageBreakEvenOffers(
     plus: planBreakEven(summary, basis, { kind: 'be-plus', ticks: plusTicks }),
     fees: basis.feesUsd == null ? null : planBreakEven(summary, basis, { kind: 'be-fees' }),
   };
-}
-
-// ── Cena na tlačítku „Posunout“ (oponentura vlny B, INV-UI-03/04) ──────────
-
-/** Jak dlouho musí cena záměru viset na tlačítku, než ji klik smí odeslat (jako dvoukrok). */
-export const LIVE_MANAGE_SEEN_MIN_MS = 350;
-
-/** Cena záměru, kterou tlačítko právě ukazuje, a od kdy (změna ceny = nové `since`). */
-export interface LiveManageShownPrice { price: number; since: number }
-
-/** Další stav „co tlačítko ukazuje“: stejná cena drží původní `since`, jiná začíná znovu, žádná = null. */
-export function liveManageShownPrice(previous: LiveManageShownPrice | null, price: number | null, now: number): LiveManageShownPrice | null {
-  if (price == null || !finite(price)) return null;
-  return previous && previous.price === price ? previous : { price, since: now };
-}
-
-/**
- * Smí klik na „Posunout → X“ odeslat cenu `price`? Jen když přesně tahle cena visela
- * na tlačítku aspoň `LIVE_MANAGE_SEEN_MIN_MS` — změna průměru (poll po přikoupení),
- * jednotek nebo zadání těsně před klikem = nic se neodešle, uživatel vidí novou cenu
- * a klikne znovu. null = smí.
- */
-export function liveManageSeenPriceProblem(shown: LiveManageShownPrice | null | undefined, price: number, now: number): string | null {
-  if (shown && shown.price === price && now - shown.since >= LIVE_MANAGE_SEEN_MIN_MS) return null;
-  return `Cena se právě změnila na ${priceText(price)} — zkontroluj ji na tlačítku a klikni znovu. Nic se neodeslalo.`;
 }

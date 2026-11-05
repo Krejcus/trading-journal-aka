@@ -1,20 +1,18 @@
 import React, { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { LiveManageNotice } from '../hooks/useLiveManageRunner';
 import { createLiveCancelPendingClick, createLiveCancelPendingRun } from '../hooks/liveCommandRuns';
-import { useLiveConfirmGate } from '../hooks/useLiveConfirmGate';
+import { useLiveClickGate } from '../hooks/useLiveClickGate';
 import type { CancelPendingItemResult, PendingOwnEntry } from '../lib/liveCancelPending';
 import { cancelPendingConfirmText } from '../lib/liveCancelPending';
-import { dashboardOrderCancelView, type DashboardOrderCancelInput, type LiveCancelPendingView } from '../lib/liveCancelPendingUi';
+import { dashboardOrderCancelView, dashboardRowCancelView, type DashboardOrderCancelInput, type LiveCancelPendingView } from '../lib/liveCancelPendingUi';
 
 /** Deskový `cancelPendingEntries` — N× `cancel-entry` jádra (C7). */
 export type LiveCancelPendingCallback = (entries: readonly PendingOwnEntry[]) => Promise<CancelPendingItemResult[]>;
 
 /**
- * Ovládání „Zrušit čekající“ (C7, 4. 11. 2026): dvoukrok `createLiveConfirmGate` (2. klik 350 ms
- * – 4 s od PŘEDCHOZÍHO kliku, klíč = přesně sada, kterou uživatel vidí), sdílený zámek jednoho
- * příkazu (`lockRef` = zámek desku `liveCommandLockRef`) a výsledek po položkách. Nic se
- * neopakuje. Rozběhnuté „Opravdu?“ zmizí po 4 s, při zablokování i při změně sady (vyplnění,
- * nový vstup) — i bez kliku.
+ * Ovládání „Zrušit čekající“ (C7, 4. 11. 2026; od 5. 11. první klik odesílá, klíč = přesně sada,
+ * kterou uživatel vidí), sdílený zámek jednoho příkazu (`lockRef` = zámek desku
+ * `liveCommandLockRef`) a výsledek po položkách. Nic se neopakuje.
  */
 export function useLiveCancelPendingAction(input: {
   view: LiveCancelPendingView | null;
@@ -23,7 +21,7 @@ export function useLiveCancelPendingAction(input: {
   onNotice?: (notice: LiveManageNotice) => void;
 }) {
   const view = input.view;
-  const { gate } = useLiveConfirmGate([view]);
+  const gate = useLiveClickGate([view]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<LiveManageNotice | null>(null);
   const cancelRef = useRef(input.cancel);
@@ -43,9 +41,8 @@ export function useLiveCancelPendingAction(input: {
     const timer = window.setTimeout(() => setNotice(current => (current === notice ? null : current)), 15_000);
     return () => window.clearTimeout(timer);
   }, [notice]);
-  const asking = view != null && gate.asking(view.key);
   return {
-    asking, busy, notice,
+    busy, notice,
     click: (event?: { currentTarget: { blur: () => void } }) => {
       event?.currentTarget.blur();
       void click(view);
@@ -78,12 +75,10 @@ export function LiveCancelPendingBar({ input }: { input: LiveCancelPendingBarInp
     data-live-cancel-pending
     disabled={!view.enabled || action.busy}
     onClick={event => action.click(event)}
-    title={view.reason ?? `${view.confirmText} Potvrdíš druhým kliknutím (350 ms – 4 s).`}
-    className={`min-h-9 flex-1 rounded-lg border px-2 text-xs font-black disabled:opacity-45 ${action.asking ? 'border-amber-600 bg-amber-600 text-white' : 'border-amber-500/50 bg-[var(--bg-page)] text-amber-600'}`}
-  >{action.busy ? 'Ruším…' : action.asking ? 'Opravdu zrušit?' : view.label}</button> : null;
-  const status = view && action.asking
-    ? <p role="status" className="m-0 basis-full text-[10.5px] font-bold text-amber-600">{view.confirmText} Klikni znovu do 4 s.</p>
-    : view && !view.enabled && view.reason
+    title={view.reason ?? view.confirmText}
+    className={`min-h-9 flex-1 rounded-lg border px-2 text-xs font-black disabled:opacity-45 border-amber-500/50 bg-[var(--bg-page)] text-amber-600`}
+  >{action.busy ? 'Ruším…' : view.label}</button> : null;
+  const status = view && !view.enabled && view.reason
       ? <p className="m-0 basis-full text-[10px] text-[var(--text-secondary)]">Zrušit čekající: {view.reason}</p>
       : action.notice
         ? <p role="status" className={`m-0 basis-full text-[11px] font-bold ${noticeTone(action.notice)}`}>Zrušit čekající · {action.notice.text}</p>
@@ -128,7 +123,7 @@ export interface LiveDashboardPendingCancel extends DashboardOrderCancelInput {
 
 /**
  * Dashboard „Zrušit“ u příkazu (C7): jen vlastní čekající vstup leadera skupiny workeru
- * (`dashboardCancelTarget`), dvoukrokově přes deskový `cancel-entry`; jinak zamčené s vysvětlením
+ * (`dashboardCancelTarget`), jedním klikem přes deskový `cancel-entry`; jinak zamčené s vysvětlením
  * (starý worker, skupina mimo worker, blokace workeru, SL/TP pozice, cizí příkaz, neověřený stav).
  * Nepracující příkaz = jen výsledek posledního zrušení (pokud ještě je). Dřívější `cancel-order`
  * worker odmítá — tahle cesta ho už nikdy neposílá.
@@ -143,11 +138,7 @@ export function DashboardOrderCancelButton({ order, cancel, compact = false, blo
   const view = dashboardOrderCancelView(order, cancel);
   const pending = view.kind === 'cancel' ? view : null;
   const action = useLiveCancelPendingAction({
-    view: pending ? {
-      entries: [pending.entry], key: pending.key, label: 'Zrušit',
-      enabled: !blocked, reason: blocked ? 'Přehled právě posílá jiný příkaz — zrušení počká.' : null,
-      confirmText: cancelPendingConfirmText([pending.entry], null),
-    } : null,
+    view: pending ? dashboardRowCancelView(order, pending.entry, { leaderAccountId: cancel?.leaderAccountId, blocked }) : null,
     lockRef: cancel?.lockRef ?? FALLBACK_LOCK,
     cancel: cancel?.cancel,
   });
@@ -163,9 +154,9 @@ export function DashboardOrderCancelButton({ order, cancel, compact = false, blo
       data-dashboard-cancel-entry
       disabled={action.busy || blocked}
       onClick={event => action.click(event)}
-      title={`${cancelPendingConfirmText([view.entry], null)} Potvrdíš druhým kliknutím (350 ms – 4 s).`}
-      className={`${size} border font-bold disabled:opacity-35 ${action.asking ? 'border-rose-600 bg-rose-600 text-white' : 'border-rose-500/20 text-rose-500'}`}
-    >{action.busy ? 'Ruším…' : action.asking ? 'Opravdu?' : 'Zrušit'}</button>;
+      title={cancelPendingConfirmText([view.entry], null)}
+      className={`${size} border font-bold disabled:opacity-35 border-rose-500/20 text-rose-500`}
+    >{action.busy ? 'Ruším…' : 'Zrušit'}</button>;
   if (!notice) return button;
   return <span className="inline-grid justify-items-end gap-0.5">{button}{notice}</span>;
 }

@@ -100,7 +100,7 @@ describe('U2: čáry návrhu v grafu telefonu (návrh, ne odeslání)', () => {
     // × návrhu jedním klepnutím (jen zahodí návrh; klíč s cenou by u Marketu nešel potvrdit),
     // × pozice dál dvoukrokově.
     expect(draftLines.every(line => byId(props!, line.id).confirmCancel === false)).toBe(true);
-    expect(byId(props!, 'live-position:entry').confirmCancel).toBe(true);
+    expect(byId(props!, 'live-position:entry').confirmCancel).toBeUndefined();
   });
 
   it('+ SL / + TP z čáry pozice nic nepřidá (jen vstup návrhu)', () => {

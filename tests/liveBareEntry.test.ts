@@ -149,7 +149,7 @@ describe('PC panel: holý Market z návrhu', () => {
   });
 });
 
-describe('dvoukrokové potvrzení (350 ms – 4 s, klíč nese akci)', () => {
+describe('dvoukrok smazání šablony a klíč holého Marketu', () => {
   const KEY = 'bare-market:MNQZ6:Buy:1';
 
   it('první klik jen zeptá, nic neodešle', () => {
@@ -191,10 +191,9 @@ describe('dvoukrokové potvrzení (350 ms – 4 s, klíč nese akci)', () => {
     expect(liveBareConfirmKey({ ...a, stopLoss: 24_990, takeProfit: 25_020 })).not.toBe(liveBareConfirmKey(a));
   });
 
-  it('popisek tlačítka je výstražný a druhý krok říká „bez ochrany“', () => {
-    expect(liveBareMarketButtonLabel('buy', 1, false)).toBe('Koupit 1 MARKET · BEZ SL/TP');
-    expect(liveBareMarketButtonLabel('sell', 2, false)).toBe('Prodat 2 MARKET · BEZ SL/TP');
-    expect(liveBareMarketButtonLabel('buy', 1, true)).toBe('Opravdu bez ochrany? Klikni znovu');
+  it('popisek tlačítka je výstražný a nic se neptá', () => {
+    expect(liveBareMarketButtonLabel('buy', 1)).toBe('Koupit 1 MARKET · BEZ SL/TP');
+    expect(liveBareMarketButtonLabel('sell', 2)).toBe('Prodat 2 MARKET · BEZ SL/TP');
   });
 });
 
@@ -266,7 +265,7 @@ describe('statická pojistka: modul nic neodesílá (INV-UI-01/02)', () => {
   const source = readFileSync(new URL('../lib/liveBareEntry.ts', import.meta.url), 'utf8');
   it('importuje jen čisté moduly a nevolá relay, broker ani síť', () => {
     const imports = [...source.matchAll(/from '([^']+)'/g)].map(match => match[1]).sort();
-    expect(imports).toEqual(['./leaderEntryPreview', './liveOrderTicket', './livePhoneOrders']);
+    expect(imports).toEqual(['./leaderEntryPreview', './liveClickGate', './liveOrderTicket', './livePhoneOrders']);
     expect(source).not.toMatch(/fetch\(|executeTradovateCopierRelayCommand|\.place\(|\.attach\(|\.manage\(|localStorage/);
   });
 });

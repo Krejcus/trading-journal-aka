@@ -14,7 +14,7 @@ import {
 } from '../components/LiveHotkeysHelp';
 import { liveSafetyShortcutListener } from '../components/LiveSafetyControls';
 import { createLiveSafetyShortcutBus, type LiveSafetyShortcutView } from '../lib/liveSafetyShortcut';
-import { createTwoStepGuard, liveHotkeyAction, resolveLiveHotkey, type LiveHotkeyIntent } from '../lib/liveHotkeys';
+import { liveHotkeyAction, resolveLiveHotkey, type LiveHotkeyIntent } from '../lib/liveHotkeys';
 import { livePositionChartLines } from '../lib/liveChartOrderLines';
 import type { LiveChartPositionSummary } from '../lib/liveChartPosition';
 import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
@@ -22,8 +22,8 @@ import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
 /**
  * Vlna B3 (PC graf): zapojení U1 (zkratky), U3-PC (pojistka přehrávání), U4 (šipky
  * plnění), U5 (pracující příkazy jen pro zobrazení) a U7 (zvuk při fillu). Nic z toho
- * neautorizuje příkaz (INV-UI-01..04): klávesa jen vyplní panel, nebo po dvoukroku
- * spustí TUTÉŽ funkci jako čára; Shift+F jen otevře dialog nouzové lišty.
+ * neautorizuje příkaz (INV-UI-01..04): klávesa jen vyplní panel, nebo spustí TUTÉŽ
+ * funkci jako čára; Shift+F jen otevře dialog Flatten All.
  */
 
 const source = (path: string) => readFileSync(path, 'utf8');
@@ -93,7 +93,7 @@ describe('U1: přepínač zkratek je opt-in (výchozí vypnuto)', () => {
   it('obrazovka čte volbu při startu a posluchač kláves instaluje jen se zapnutými zkratkami', () => {
     const screen = source('components/LiveTradingScreen.tsx');
     expect(screen).toMatch(/useState\(\(\) => readLiveHotkeysEnabled\(liveHotkeysStorage\(\)\)\)/);
-    expect(screen).toMatch(/if \(!hotkeysOn\) \{ guard\?\.reset\(\); return undefined; \}/);
+    expect(screen).toMatch(/if \(!hotkeysOn\) return undefined;/);
     expect(screen).toMatch(/hotkeyHandlerRef\.current = \(event, fromChartEscape\) => \{\n\s*if \(!hotkeysOn\) return;/);
   });
 });
@@ -146,7 +146,7 @@ describe('U1: výsledek zkratky → funkce obrazovky', () => {
     expect(spy.prefill).toHaveBeenCalledWith('buy');
   });
 
-  it('BE po dvoukroku jen přes tlačítko BE čáry; čára bez BE = nic', () => {
+  it('BE jen přes tlačítko BE čáry; čára bez BE = nic', () => {
     const line = positionLines(false)[0];
     expect(line.actions?.[0]?.id).toBe('break-even');
     const spy = handlers();
@@ -189,11 +189,7 @@ describe('U1: výsledek zkratky → funkce obrazovky', () => {
     for (const name of ['prefill', 'discard', 'breakEven', 'cancelLine', 'toggleHelp'] as const) expect(lost[name]).not.toHaveBeenCalled();
   });
 
-  it('výzva a blokace jsou jen hláška; výzva zmizí s oknem potvrzení', () => {
-    const prompt = handlers();
-    dispatchLiveHotkeyOutcome({ kind: 'prompt', command: 'close-position', key: 'k', text: 'Zavřít?', until: 5_000 }, prompt);
-    calledOnly(prompt, 'notice');
-    expect(prompt.notice).toHaveBeenCalledWith({ tone: 'warn', text: 'Zavřít?', until: 5_000 });
+  it('blokace je jen hláška', () => {
     const blocked = handlers();
     dispatchLiveHotkeyOutcome({ kind: 'blocked', command: 'break-even', text: 'BE teď nejde.' }, blocked);
     calledOnly(blocked, 'notice');
@@ -202,9 +198,9 @@ describe('U1: výsledek zkratky → funkce obrazovky', () => {
     for (const fn of Object.values(none)) expect(fn).not.toHaveBeenCalled();
   });
 
-  it('celá cesta Shift+X: první stisk výzva, dvojstisk nic, druhý stisk po 350 ms × čáry; držená klávesa nic', () => {
+  it('celá cesta Shift+X: první stisk × čáry, dvojstisk nic, držená klávesa nic', () => {
     const lines: BacktestChartOrderLine[] = positionLines(true);
-    const guard = createTwoStepGuard();
+    const guard: { current: { key: string; at: number } | null } = { current: null };
     const gate = { dialogOpen: false, leaving: false, hidden: false };
     const state = { lines, breakEven: null, hasDraft: false, busy: false };
     const press = (at: number, repeat = false) => {
@@ -215,29 +211,21 @@ describe('U1: výsledek zkratky → funkce obrazovky', () => {
       return spy;
     };
     const first = press(1_000)!;
-    calledOnly(first, 'notice');
+    calledOnly(first, 'cancelLine');
+    expect(first.cancelLine).toHaveBeenCalledWith(lines[0]);
     expect(press(1_100, true)).toBeNull();
-    const quick = press(1_200)!;
-    calledOnly(quick, 'notice');
-    // Kotva se po rychlém stisku posunula na 1 200: 1 400 je jen 200 ms po něm → nic.
-    calledOnly(press(1_400)!, 'notice');
-    const second = press(1_750)!;
-    calledOnly(second, 'cancelLine');
-    expect(second.cancelLine).toHaveBeenCalledWith(lines[0]);
-    // Bez × na čáře (kopírka ne čerstvě zapnutá) se nic nespustí ani dvojím stiskem.
-    const noClose = { ...state, lines: positionLines(false) };
-    const guard2 = createTwoStepGuard();
+    for (const fn of Object.values(press(1_200)!)) expect(fn).not.toHaveBeenCalled();
+    // Bez × na čáře (kopírka ne čerstvě zapnutá) se nic nespustí.
     const intent = liveHotkeyAction(key({ key: 'X', shiftKey: true }), gate)!;
-    const a = handlers(); dispatchLiveHotkeyOutcome(resolveLiveHotkey(intent, noClose, guard2, 1_000), a);
-    const b = handlers(); dispatchLiveHotkeyOutcome(resolveLiveHotkey(intent, noClose, guard2, 1_500), b);
-    calledOnly(a, 'notice');
-    calledOnly(b, 'notice');
+    const blocked = handlers();
+    dispatchLiveHotkeyOutcome(resolveLiveHotkey(intent, { ...state, lines: positionLines(false) }, { current: null }, 1_000), blocked);
+    calledOnly(blocked, 'notice');
   });
 });
 
 describe('U1: obrazovka — zkratka nikdy neodešle vstup ani nic mimo funkce čar', () => {
   const screen = source('components/LiveTradingScreen.tsx');
-  const hotkeys = between(screen, 'const prefillFromHotkey = ', '  useEffect(() => {\n    const guard = hotkeyGuardRef.current;');
+  const hotkeys = between(screen, 'const prefillFromHotkey = ', '  useEffect(() => {\n    if (!hotkeysOn) return undefined;');
 
   it('obsluha kláves nevolá odeslání, náhled, attach ani správu napřímo', () => {
     expect(hotkeys).not.toMatch(/onPlaceEntry|onPreviewEntry|sendDirect|placeLeaderEntry|onAttachBrackets|onManageEntry|runLiveManage|manageRunner|executeAgent|runStaticSafetyAction/);

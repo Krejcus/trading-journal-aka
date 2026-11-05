@@ -61,7 +61,7 @@ interface Props {
   externalNotices?: ReadonlyArray<LiveSafetyNotice | null | undefined>;
   /**
    * C7 (4. 11. 2026): „Zrušit čekající“ vedle Flatten All (PC) — jen vlastní čekající vstupy,
-   * dvoukrokově, sdíleným zámkem desku. Chybí / null = tlačítko není. Flatten tím zamčený není.
+   * jedním klikem, sdíleným zámkem desku. Chybí / null = tlačítko není. Flatten tím zamčený není.
    * Vykresluje se ve vlastní hranici chyb: pád části C7 lištu OFF / Kill / Flatten nesundá.
    */
   cancelPending?: LiveCancelPendingBarInput | null;

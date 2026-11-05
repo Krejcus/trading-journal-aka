@@ -63,7 +63,7 @@ describe('čára čekajícího přikoupení', () => {
     const summary = { kind: 'position', side: 'long', quantity: 2, entry: 100, entryType: null, openPnl: 10, mark: 105, stop: 90, target: 130,
       protection: '', accounts: 1, scopeLabel: null, leader: { accountId: 1, quantity: 2, entry: 100 }, rows: [] } as never;
     const lines = livePositionChartLines(summary, { manageable: true, canClose: true, entryAvg: 100, pointValue: 2, pendingAdd: { price: 95, quantity: 1, orderType: 'Limit' } });
-    expect(lines.find(line => line.id === LIVE_PENDING_ADD_LINE_ID)).toMatchObject({ price: 95, cancellable: true, cancelAction: 'cancel-order', confirmCancel: true });
+    expect(lines.find(line => line.id === LIVE_PENDING_ADD_LINE_ID)).toMatchObject({ price: 95, cancellable: true, cancelAction: 'cancel-order' });
     expect(livePositionChartLines(summary, { manageable: true, entryAvg: 100, pointValue: 2 }).some(line => line.id === LIVE_PENDING_ADD_LINE_ID)).toBe(false);
   });
 });

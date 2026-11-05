@@ -545,7 +545,7 @@ interface Props {
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
   /**
    * C7 (4. 11. 2026): „Zrušit“ u příkazu = jen vlastní čekající vstup leadera (`dashboardCancelTarget`,
-   * `cancel-entry` přes desk, dvoukrokově, sdílený zámek). Chybí / bez capability = zamčeno s vysvětlením.
+   * `cancel-entry` přes desk, jedním klikem, sdílený zámek). Chybí / bez capability = zamčeno s vysvětlením.
    * Obecné `cancel-order` worker odmítá — z Dashboardu se už neposílá.
    */
   pendingEntryCancel?: LiveDashboardPendingCancel | null;

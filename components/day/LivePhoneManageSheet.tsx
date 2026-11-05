@@ -32,7 +32,7 @@ const formatValue = (value: number, units: TicketBracketUnits) => (units === 'ti
 
 export interface LivePhoneManagePlans {
   basis: LiveManageBasis;
-  /** Posun vybrané nohy na číslo z pole (vždy dvoukrokově). */
+  /** Posun vybrané nohy na číslo z pole. */
   move: LiveManagePlan;
   be: LiveManagePlan;
   plus: LiveManagePlan;
@@ -70,7 +70,7 @@ export function livePhoneManagePlans(input: {
       side: input.summary.side, leg: input.leg, units: input.units, value: input.value,
       entryAvg: basis.entryAvg, quantity: basis.quantity, pointValue: instrument.pointValue, tick,
     });
-    move = 'price' in priced ? planManageMove(input.summary, input.leg, priced.price, { confirm: true, tick }) : { ok: false, reason: priced.blocked, price: null };
+    move = 'price' in priced ? planManageMove(input.summary, input.leg, priced.price, { tick }) : { ok: false, reason: priced.blocked, price: null };
   }
   return { basis, move, ...liveManageBreakEvenOffers(input.summary, basis, input.plusTicks) };
 }
@@ -81,8 +81,8 @@ export function livePhoneManagePlans(input: {
  * ✎ na vybrané čáře nebo „SL/TP“ v liště pozice (rodič). Odesílá JEN sdílený runner
  * (`useLiveManageRunner` → `manage` = deskový `manageLeaderEntry`, u pozice z přikoupení
  * celá pozice) se zámkem `state` sdíleným s čarami grafu — jeden příkaz naráz, nic se
- * neopakuje. Každé tlačítko je dvoukrokové (druhé klepnutí 350 ms až 4 s, klíč nese akci
- * i ceny) a záměr se při klepnutí počítá znovu. Předkontroly jen blokují; rozhoduje worker.
+ * neopakuje. Každé tlačítko odešle prvním klepnutím (Filip 5. 11. 2026) a záměr se při
+ * klepnutí počítá znovu. Předkontroly jen blokují; rozhoduje worker.
  */
 export default function LivePhoneManageSheet({
   summary, guardAt, leg: initialLeg = 'stopLoss', manage, state, entryAvg, leaderAccountId, instrument = LIVE_PHONE_INSTRUMENT, onNotice, onClose,
@@ -133,16 +133,16 @@ export default function LivePhoneManageSheet({
   });
   const plans = plansAt(Date.now());
 
-  const setLeg = (next: LiveManageLeg) => { if (next === leg) return; playNativeHapticIfAvailable('selection'); setLegState(next); setText(null); setLocal(null); runner.cancelConfirm(); };
+  const setLeg = (next: LiveManageLeg) => { if (next === leg) return; playNativeHapticIfAvailable('selection'); setLegState(next); setText(null); setLocal(null); };
   const setUnits = (next: TicketBracketUnits) => {
     if (next === units) return;
     playNativeHapticIfAvailable('selection');
     setUnitsState(next);
     setText(null);
-    runner.cancelConfirm();
+   
     updateLiveTicketPrefs(livePhoneDeviceStorage(), { units: next });
   };
-  const setPlus = (next: number) => { setPlusTicks(Math.max(1, Math.min(MANAGE_BE_MAX_TICKS, Math.round(next)))); runner.cancelConfirm(); };
+  const setPlus = (next: number) => { setPlusTicks(Math.max(1, Math.min(MANAGE_BE_MAX_TICKS, Math.round(next)))); };
   const fire = (pick: (fresh: LivePhoneManagePlans) => LiveManagePlan | null) => {
     // Záměr znovu v okamžiku klepnutí (aktuální SL/TP, průměr a pojistka trhu).
     const plan = pick(plansAt(Date.now()));
@@ -150,7 +150,7 @@ export default function LivePhoneManageSheet({
     if ('reason' in plan) { setLocal(plan.reason); return; }
     setLocal(null);
     playNativeHapticIfAvailable('medium');
-    // Jediná cesta k brokerovi: sdílený runner (dvoukrokově, zámek, bez opakování).
+    // Jediná cesta k brokerovi: sdílený runner (zámek, bez opakování).
     runner.request(plan.intent);
   };
 
@@ -162,7 +162,6 @@ export default function LivePhoneManageSheet({
   const smallButton: React.CSSProperties = { width: 34, height: 34, borderRadius: 9, border: 0, background: 'var(--dj-chip)', color: 'var(--dj-text)', display: 'grid', placeItems: 'center', cursor: 'pointer', flex: 'none' };
   const action = (plan: LiveManagePlan, idle: string, pick: (fresh: LivePhoneManagePlans) => LiveManagePlan | null, tone: 'primary' | 'plain' = 'plain') => {
     const intent = 'intent' in plan ? plan.intent : null;
-    const asking = intent ? runner.asking(intent.confirmKey) : false;
     const disabled = !sendable || intent == null;
     return (
       <button
@@ -171,9 +170,9 @@ export default function LivePhoneManageSheet({
         disabled={disabled}
         title={'reason' in plan ? plan.reason : undefined}
         onClick={() => fire(pick)}
-        style={{ width: '100%', minHeight: 44, padding: '6px 12px', borderRadius: 12, cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1, textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, border: asking ? 0 : '1px solid var(--dj-line)', background: asking ? SELL : tone === 'primary' ? 'linear-gradient(180deg,#6366f1,#4f46e5)' : 'transparent', color: asking || tone === 'primary' ? '#fff' : 'var(--dj-text)', font: '800 13px Inter, sans-serif' }}
+        style={{ width: '100%', minHeight: 44, padding: '6px 12px', borderRadius: 12, cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1, textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, border: '1px solid var(--dj-line)', background: tone === 'primary' ? 'linear-gradient(180deg,#6366f1,#4f46e5)' : 'transparent', color: tone === 'primary' ? '#fff' : 'var(--dj-text)', font: '800 13px Inter, sans-serif' }}
       >
-        <span>{asking ? 'Opravdu? Klepni znovu' : idle}</span>
+        <span>{idle}</span>
         <span className="dj-mono" style={{ fontSize: 12, fontWeight: 700, opacity: 0.9 }}>{intent ? intent.label : 'price' in plan && plan.price != null ? plan.price.toFixed(2) : ''}</span>
       </button>
     );
@@ -215,9 +214,9 @@ export default function LivePhoneManageSheet({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 46, padding: '0 12px', borderRadius: 12, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)' }}>
           {leg === 'stopLoss' && units !== 'price' && (
             // iOS číselná klávesnice nemá mínus: záporné SL = zamčený zisk za průměrem.
-            <button type="button" className="dj-btn" aria-label="Změnit znaménko" onClick={() => { const value = parseNumber(shown); if (value != null) { setText(formatValue(-value, units)); runner.cancelConfirm(); } }} style={{ ...smallButton, width: 30, height: 30, font: '800 14px Inter, sans-serif' }}>±</button>
+            <button type="button" className="dj-btn" aria-label="Změnit znaménko" onClick={() => { const value = parseNumber(shown); if (value != null) { setText(formatValue(-value, units)); } }} style={{ ...smallButton, width: 30, height: 30, font: '800 14px Inter, sans-serif' }}>±</button>
           )}
-          <input aria-label={leg === 'stopLoss' ? 'Nový stop loss' : 'Nový take profit'} inputMode="decimal" value={shown} onChange={event => { setText(event.target.value); setLocal(null); runner.cancelConfirm(); }} style={{ flex: 1, minWidth: 0, height: '100%', border: 0, outline: 0, background: 'transparent', color: 'var(--dj-text)', font: '600 16px "JetBrains Mono", ui-monospace, monospace' }} />
+          <input aria-label={leg === 'stopLoss' ? 'Nový stop loss' : 'Nový take profit'} inputMode="decimal" value={shown} onChange={event => { setText(event.target.value); setLocal(null); }} style={{ flex: 1, minWidth: 0, height: '100%', border: 0, outline: 0, background: 'transparent', color: 'var(--dj-text)', font: '600 16px "JetBrains Mono", ui-monospace, monospace' }} />
           {UNIT_SUFFIX[units] && <span className="dj-mono" style={{ fontSize: 12, color: 'var(--dj-muted)' }}>{UNIT_SUFFIX[units]}</span>}
         </div>
         <div style={{ marginTop: 8 }}>
@@ -226,7 +225,7 @@ export default function LivePhoneManageSheet({
           {loosen && <p style={{ margin: '4px 2px 0', fontSize: 11.5, color: 'var(--dj-amber-text)' }}>SL dál od trhu = víc rizika; worker ho přepočítá.</p>}
         </div>
 
-        <div style={label}><span>Stop loss na break-even</span><span>dvě klepnutí</span></div>
+        <div style={label}><span>Stop loss na break-even</span></div>
         <div style={{ display: 'grid', gap: 6 }}>
           {action(plans.be, 'BE', fresh => fresh.be)}
           {reasonLine(plans.be)}

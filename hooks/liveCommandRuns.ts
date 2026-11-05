@@ -2,7 +2,7 @@ import type { LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import { liveBareCloseErrorNotice, liveBareCloseResultNotice, type LiveBareCloseOffer } from '../lib/liveBareCloseUi';
 import { CANCEL_PENDING_NOT_SENT_PATTERN, cancelPendingSummary, type CancelPendingItemResult, type PendingOwnEntry } from '../lib/liveCancelPending';
 import type { LiveCancelPendingView } from '../lib/liveCancelPendingUi';
-import type { LiveConfirmGate } from '../lib/liveConfirmGate';
+import { LIVE_ACTION_CHANGED_TEXT, type LiveClickGate } from '../lib/liveClickGate';
 import type { BareLeaderTrade } from '../lib/manualBareClose';
 import { LIVE_MANAGE_BUSY_TEXT, createLiveManageRun, type LiveManageNotice, type LiveManageOutcome, type LiveManageRunDeps } from './useLiveManageRunner';
 
@@ -103,12 +103,12 @@ export async function runWithCommandLock<T>(lockRef: { current: boolean }, send:
 }
 
 /**
- * Klik „Zrušit čekající“ / Dashboard „Zrušit“ (C7): krok dvoukroku přes `gate` (klíč = přesně
- * zobrazená sada), zablokovaný pohled = jen důvod a zahozené potvrzení, odeslání JEN při `send`
- * a jen sady z pohledu, na který uživatel klikl. Zámek a výsledek řeší `run`.
+ * Klik „Zrušit čekající“ / Dashboard „Zrušit“ (C7): první klik odesílá sadu z pohledu, na který
+ * uživatel klikl (`gate`: dvojklik a právě změněná sada se spolknou), zablokovaný pohled = jen důvod.
+ * Zámek a výsledek řeší `run`.
  */
 export function createLiveCancelPendingClick(deps: {
-  gate: LiveConfirmGate;
+  gate: LiveClickGate;
   run: (entries: readonly PendingOwnEntry[]) => Promise<LiveCancelPendingOutcome>;
   report: (notice: LiveManageNotice) => void;
   now?: () => number;
@@ -120,19 +120,23 @@ export function createLiveCancelPendingClick(deps: {
       deps.report({ tone: 'bad', text: `${step.reason ?? 'Zrušit teď nejde.'} Nic se neodeslalo.`, at: now() });
       return null;
     }
+    if (step.kind === 'changed') {
+      deps.report({ tone: 'warn', text: LIVE_ACTION_CHANGED_TEXT, at: now() });
+      return null;
+    }
     if (step.kind !== 'send' || !view) return null;
     return deps.run(view.entries);
   };
 }
 
 /**
- * Klik × holé pozice v panelu PC (C8): neaktivní nabídka = důvod a zahozené potvrzení; jiný
- * příkaz pod sdíleným zámkem (`busy`: zámek desku, vstup nebo attach panelu) = nic, potvrzení
- * beze změny; jinak dvoukrok s klíčem nabídky (akce + id cíle + tvar) a odeslání JEN při `send`
- * funkcí obrazovky `close` (tatáž jako × na čáře a Shift+X, sama drží sdílený zámek).
+ * Klik × holé pozice v panelu PC (C8): neaktivní nabídka = důvod; jiný příkaz pod sdíleným zámkem
+ * (`busy`: zámek desku, vstup nebo attach panelu) = nic; jinak první klik odesílá funkcí obrazovky
+ * `close` (tatáž jako × na čáře a Shift+X, sama drží sdílený zámek). Dvojklik a právě změněná
+ * nabídka se spolknou (`gate`).
  */
 export function createLiveBareClosePanelClick(deps: {
-  gate: LiveConfirmGate;
+  gate: LiveClickGate;
   busy: () => boolean;
   close: () => ((entryOperationId: string) => Promise<LiveManageOutcome | null>) | null | undefined;
   report: (entryOperationId: string, notice: LiveManageNotice) => void;
@@ -150,6 +154,10 @@ export function createLiveBareClosePanelClick(deps: {
     }
     if (step.kind === 'busy') {
       deps.report(target, { tone: 'warn', text: LIVE_COMMAND_BUSY_TEXT, at: now() });
+      return null;
+    }
+    if (step.kind === 'changed') {
+      deps.report(target, { tone: 'warn', text: LIVE_ACTION_CHANGED_TEXT, at: now() });
       return null;
     }
     if (step.kind !== 'send') return null;

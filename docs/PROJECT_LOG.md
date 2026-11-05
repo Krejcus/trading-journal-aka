@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-05 — LIVE: jedno kliknutí, žádné „Opravdu?“ (Claude, commit na větvi, nenasazeno)
+
+- Rozhodnutí Filipa: „jsem zvyklý z TradingView, že se nedoptává“. První klik, klepnutí nebo stisk rovnou odešle.
+- Zrušený dvoukrok: BE a jeho varianty, posun SL/TP číslem včetně kontroly „cena viděná ≥ 350 ms“, × vstupu, přikoupení a holého Marketu, Odeslat z Náhledu, holý Market z panelu, Zrušit čekající, Dashboard Zrušit, Shift+E/X/C, na telefonu × na čáře, lišta Zavřít / Zrušit / Flatten a list správy.
+- Zůstává: dialog Flatten All na Dashboardu a Shift+F, dialog ARM, dvoukrok mazání šablony SL/TP (není příkaz k brokerovi), dvoukrok čar backtestu.
+- Pojistky: sdílený zámek jednoho příkazu; dvojklik do 400 ms na týž klíč se spolkne i po rychlém ACK (`lib/liveClickGate.ts`); tlačítko, které do 1 s změnilo význam, klik spolkne a napíše to (čekající → vyplněno, holá → spravovaná, i přes stav bez čáry, proto overlay zůstává připojený). Telefonní lišta spolkne jen Zrušit → Flatten, pozice → pozice nikdy (INV-UI-02). Velké tlačítko panelu je po neznámém výsledku zamčené do změny návrhu nebo stavu. „Posunout → X“ pošle jen cenu z tlačítka. Brány při kliku a worker beze změny.
+- Oponentura critica našla 9 nálezů, všechny opravené; další kolo se podle koordinátora nekoná, takže hotový diff po opravách critic neviděl. Klikání v prohlížeči ani na telefonu neproběhlo.
+- Ověřeno: 7585 testů, build čistý, tsc bez chyb mimo `extension/` (40 starších).
+
 ### 2026-11-05 — LIVE: nouzová lišta se v běžném provozu nekreslí, brzdy jsou na Dashboardu (Claude, commit na větvi, nenasazeno)
 
 - Rozhodnutí Filipa: lišta OFF / Kill / Flatten v běžném provozu nikde není, brzdy používá na Dashboardu LIVE. Je to vědomě o klik dál než dřív.
