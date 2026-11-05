@@ -172,7 +172,7 @@ describe('C7 — výsledek zrušení jen stavem u brokera (čistě)', () => {
     const opposite = cancelEntryVerdict({ status: 'filled', quantity: 1, filledQuantity: 1 }, { opposite: true });
     expect(opposite).toMatchObject({ status: 'rejected', code: 'entry-filled', filled: 1 });
     expect(opposite?.reason).not.toContain('pozice je otevřená');
-    expect(opposite?.reason).toContain('zavřel nebo zmenšil');
+    expect(opposite?.reason).toContain('zmenšil, zavřel nebo otočil');
     const partial = cancelEntryOutcome({ status: 'working', quantity: 2, filledQuantity: 1 }, { settled: true, opposite: true });
     expect(partial?.reason).not.toContain('je otevřená');
     expect(cancelEntryVerdict({ status: 'canceled', quantity: 2, filledQuantity: 1 }, { opposite: true })?.reason).not.toContain('je otevřená');
@@ -1391,7 +1391,7 @@ describe('C7 — oponentura kolo 3: ověřeně flat, odmítnutí v záznamu, poz
     const result = await second.controller.manageLeaderOrder(command, { deadlineAt: second.clock.now + 15_000 });
     expect(result.status).toBe('blocked');
     expect(result.blockers.map(issue => issue.code)).toEqual(['not-entry']);
-    expect(result.blockers[0].text).toMatch(/zmenšil otevřenou pozici leadera \(-2\)/);
+    expect(result.blockers[0].text).toMatch(/Pozice leadera je na opačné straně \(-2\)/);
     expect(second.broker.cancelRequestCount('user-tp')).toBe(0);
     expect(brokerOrder(second, 'user-tp').status).toBe('working');
   });

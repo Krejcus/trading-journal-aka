@@ -331,7 +331,7 @@ export function scaleInPositionLossPoints(model: LeaderPositionModel, stopLoss: 
  * pozice (chybějící cache) není flat — nic se neruší, čeká se na sync.
  * C12 (4. 11. 2026): zobecněno na `pendingOwnEntryViolation` (i vstup z flat a denní pauza CME).
  */
-export function pendingAddViolation(input: Omit<PendingOwnEntryViolationInput, 'kind' | 'cmeHaltWindow' | 'entryFilled' | 'outsidePositionSettled'> & {
+export function pendingAddViolation(input: Omit<PendingOwnEntryViolationInput, 'kind' | 'cmeHaltWindow'> & {
   cmeHaltWindow?: boolean;
 }): string | null {
   return pendingOwnEntryViolation({ ...input, kind: 'add', cmeHaltWindow: input.cmeHaltWindow ?? false });

@@ -408,20 +408,26 @@ export interface CopierManualEntryRecord {
     legsCheckedAt?: number;
     /**
      * C12 (oponentura kolo 5, P2): vlastní vstup z flat se rušil proti pozici leadera na OPAČNÉ straně
-     * (z předčtení). Jeho fill pozici zavřel nebo zmenšil, neotevřel — jen pro pravdivé texty auditu
+     * (z předčtení). Jeho fill pozici zmenšil, zavřel nebo otočil — jen pro pravdivé texty auditu
      * (INV-UI-03); ochranu rozhoduje kontrola nohou a pozice. Nic neautorizuje.
      */
     opposite?: true;
   };
   /**
    * C12: incident k čekajícímu vstupu (dílčí fill se nezrušil, zrušení bez účinku / neověřené,
-   * restart se zrušením, follower brání zrušení) — každý druh (`pendingIncidentKinds`) jednou,
+   * restart se zrušením, follower brání zrušení; `outside-position` = jen upozornění bez fail-closed,
+   * pozice mimo appku za ARMED) — každý druh (`pendingIncidentKinds`) jednou,
    * přežije restart. `pendingIncidentAt` + `pendingIncidentText` = poslední incident (status →
    * per-záznamový push watchdogu nezávisle na globálním fail-closed a i za kill; jen zobrazení).
    */
   pendingIncidentAt?: number;
   pendingIncidentText?: string;
   pendingIncidentKinds?: string[];
+  /**
+   * Poslední `pendingIncident` je jen upozornění „vstup dál čeká“ (`outside-position`): status ho neposílá, jakmile
+   * vstup nečeká, má zrušení nebo kopírka není ARMED, aby si push neprotiřečil s výsledkem. Jen zobrazení.
+   */
+  pendingIncidentNoticeOnly?: true;
   waiver?: { at: number; reason: string };
 }
 
@@ -453,6 +459,8 @@ export interface CopierManualOrderActionRecord {
    * zrušený jinak během ustálení je pak `waived` „ne tímto příkazem“, nikdy „zrušení potvrzeno“.
    */
   brokerRejection?: string;
+  /** C12: ruční zrušení vlastního vstupu z flat proti pozici na opačné straně — jen pro pravdivé texty po fillu. */
+  entryOpposite?: true;
   waiver?: { at: number; reason: string };
 }
 

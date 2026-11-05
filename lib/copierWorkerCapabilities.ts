@@ -108,7 +108,7 @@ export const supportsCopierManualOrderCancelPending = (
 /**
  * Worker sám zruší vlastní čekající vstup z appky (z flat i přikoupení) jedním cíleným pokusem, když
  * nesmí dál existovat (vypnutí, kill, denní zámek / pauza, jen správa, konec okna, denní pauza CME
- * 15:55–17:00 CT, konec session, vypršení ARM, u vstupu z flat pozice mimo appku), výsledek ověří stavem
+ * 15:55–17:00 CT, konec session, vypršení ARM; pozice mimo appku jen upozorní), výsledek ověří stavem
  * u brokera a hlásí ho v `controller.manualEntries[]` (`cancelVerified`, `cancelReason`, `autoCancelAt`,
  * `autoCancelReason`) — C12, 4. 11. 2026. Bez ní UI netvrdí „zruší se sám v …“ a „zrušen“ (starý worker
  * přikoupení ruší, vstup z flat ne). Žádný nový příkaz ani payload; nic zobrazovacího nic neautorizuje.

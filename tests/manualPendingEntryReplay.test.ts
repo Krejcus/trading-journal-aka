@@ -45,6 +45,8 @@ async function setup(options: {
   store?: ReturnType<typeof createMemoryCopierStore>; broker?: MockBroker; arm?: boolean;
   /** Vlastní skupina (oponentura C12 kolo 2: vyřazený follower). */
   group?: CopyGroupConfig;
+  scaleIn?: boolean;
+  onError?: (error: Error) => void;
 } = {}) {
   const clock = { now: START };
   const group = options.group ?? (options.followers ? followerGroup() : soloGroup());
@@ -59,6 +61,8 @@ async function setup(options: {
     broker, store: options.store ?? createMemoryCopierStore(), group, clock: () => clock.now, osoCorrelationWindowMs: 50,
     manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, manage: 500, settle: options.settleMs ?? 50, verify: 100 },
     manualEntryQuote: () => ({ contract: SYM, last: REF, lastAt: clock.now - 100, bid: REF - 0.25, ask: REF, quoteAt: clock.now - 50 }),
+    ...(options.scaleIn ? { manualEntryScaleIn: true } : {}),
+    ...(options.onError ? { onError: options.onError } : {}),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
   active = controller;
@@ -112,6 +116,11 @@ function fillAtBroker(ctx: Ctx, entryId: string, filled: number, status: BrokerO
   ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: filled } });
 }
 const entryStatus = (ctx: Ctx, operationId: string) => ctx.controller.status().manualEntries?.find(item => item.operationId === operationId);
+/** 3. 11. 2026 16:10 CST: denní pauza CME — důvod zrušení, který kopírku nevypíná (ARM zůstane). */
+const toCmeHalt = async (ctx: Ctx) => {
+  ctx.clock.now = Date.UTC(2026, 10, 3, 22, 10);
+  await tick(ctx);
+};
 /** Kopie vstupu u followera se vyplní (stream: Order Filled + Fill + Position followera). */
 function fillCopy(ctx: Ctx, copy: BrokerOrder, filled = 1) {
   const order = brokerOrder(ctx, copy.brokerOrderId);
@@ -274,15 +283,57 @@ describe('C12 — oponentura P1: dílčí fill, „úspěch“ adaptéru u vypln
     expect(ctx.audits.some(line => line.includes('pozice mimo appku'))).toBe(false);
   });
 
-  it('pozice mimo appku ustálená ≥ 2 s a REST fill 0 → jedno zrušení vstupu z flat', async () => {
-    const ctx = await setup();
+  it('pozice mimo appku na stejné straně, ustálená ≥ 2 s, za ARMED → jen upozornění: nic se neruší ani nečte, ARM zůstane, push jednou', async () => {
+    let lookups = 0;
+    const store = createMemoryCopierStore();
+    const ctx = await setup({ store, patchBroker: broker => {
+      const real = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId, id) => { lookups += 1; return real(accountId, id); };
+    } });
     const placed = await placeEntry(ctx, 'c12out001');
+    lookups = 0;
     ctx.broker.setPosition(LEADER, SYM, 1);
     ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 1 } });
     await tick(ctx);
+    expect(entryStatus(ctx, 'entry:c12out001')?.pendingIncident).toBeUndefined();
     await tick(ctx, 2_100);
-    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
-    expect(ctx.audits.some(line => line.includes('čekající vstup: pozice mimo appku'))).toBe(true);
+    await sleep(20);
+    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(0);
+    expect(lookups).toBe(0);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    const notice = entryStatus(ctx, 'entry:c12out001')?.pendingIncident;
+    expect(notice?.text).toContain('dál čeká a na symbolu je pozice mimo appku (1)');
+    expect(notice?.text).toContain('vstup se neruší, kopírka zůstává zapnutá');
+    expect(notice?.text).toContain('pozici zvětší');
+    expect(entryStatus(ctx, 'entry:c12out001')?.cancel).toBeUndefined();
+    const durable = (await store.load()).safety?.manualEntries?.find(item => item.operationId === 'entry:c12out001');
+    expect(durable?.pendingIncidentKinds).toEqual(['outside-position']);
+    const manualEntries = ctx.controller.status().manualEntries ?? [];
+    const pushes = manualEntryNotifications(manualEntries, ctx.clock.now, { verifiedCancel: true });
+    expect(pushes.filter(push => push.title === 'Čekající vstup: zkontroluj leadera')).toHaveLength(1);
+    // Jednou za záznam: další kola revize nic nového nevyhlásí (stejný čas, stejný text, jeden audit).
+    await tick(ctx, 5_000);
+    await tick(ctx, 5_000);
+    await sleep(20);
+    expect(entryStatus(ctx, 'entry:c12out001')?.pendingIncident).toEqual(notice);
+    expect(ctx.audits.filter(line => line.includes('pozice mimo appku'))).toHaveLength(1);
+    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(0);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('pozice mimo appku kratší než ustálení (zavře se do 2 s) → žádné upozornění', async () => {
+    const ctx = await setup();
+    await placeEntry(ctx, 'c12out002');
+    ctx.broker.setPosition(LEADER, SYM, 1);
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 1 } });
+    await tick(ctx);
+    await tick(ctx, 1_000);
+    ctx.broker.setPosition(LEADER, SYM, 0);
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 0 } });
+    await tick(ctx, 500);
+    await tick(ctx, 3_000);
+    expect(entryStatus(ctx, 'entry:c12out002')?.pendingIncident).toBeUndefined();
+    expect(ctx.audits.some(line => line.includes('pozice mimo appku'))).toBe(false);
   });
 });
 
@@ -1421,7 +1472,7 @@ describe('C12 — oponentura kolo 3 (P2): TooLateToCancel rozhodne čtení po us
 });
 
 describe('C12 — oponentura kolo 3 (P2): followeři — blokuje jen pozice z TOHOTO vstupu', () => {
-  it('ARMED, ruční obchod v Tradovate zkopírovaný followerovi (pozice mimo appku), kopie vstupu má fill 0 → vstup leadera 1× a kopie 1× zrušené, ARM zůstane, žádný incident', async () => {
+  it('ARMED, ruční obchod v Tradovate zkopírovaný followerovi (pozice mimo appku), kopie vstupu má fill 0, denní pauza CME → vstup leadera 1× a kopie 1× zrušené, ARM zůstane, žádný incident', async () => {
     const ctx = await setup({ followers: true });
     const placed = await placeEntry(ctx, 'c12r3fol1');
     const copy = ctx.broker.orders().find(order => order.accountId === FOLLOWER && order.parentOrderId == null && order.orderType === 'Limit' && order.side === 'Buy')!;
@@ -1432,7 +1483,7 @@ describe('C12 — oponentura kolo 3 (P2): followeři — blokuje jen pozice z TO
     ctx.broker.setPosition(FOLLOWER, SYM, 1);
     ctx.broker.emitEvent({ type: 'position', position: { accountId: FOLLOWER, symbol: SYM, netQuantity: 1 } });
     await tick(ctx);
-    await tick(ctx, 2_100);
+    await toCmeHalt(ctx);
     await tick(ctx, 1_000);
     await tick(ctx, 500);
     expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
@@ -1839,8 +1890,17 @@ const manageCancel = (ctx: Ctx, shown: NonNullable<ReturnType<CopierRuntimeContr
   })), { deadlineAt: ctx.clock.now + 15_000 })
 );
 
-describe('C12 — oponentura kolo 4 (P2): vlastní vstup z flat proti pozici mimo appku na opačné straně', () => {
-  it('A1: ARMED + on-submit follower, čekající Limit SELL z appky, ruční BUY 1 v Tradovate zkopírovaný (leader i follower long 1) → SELL leadera 1× a kopie 1× zrušené, ARM zůstane, žádný incident', async () => {
+describe('C12 — rozhodnutí Filipa 5. 11. 2026: pozice mimo appku za ARMED = jen upozornění, po vypnutí se vstup ruší', () => {
+  const expectOnlyNotice = (ctx: Ctx, operationId: string, entryId: string) => {
+    const notice = entryStatus(ctx, operationId)?.pendingIncident;
+    expect(notice?.text).toContain('dál čeká a na symbolu je pozice mimo appku (1)');
+    expect(notice?.text).toContain('pozici zmenší, zavře nebo otočí a jeho SL/TP můžou pracovat bez pozice jako nové vstupy');
+    expect(ctx.broker.cancelRequestCount(entryId)).toBe(0);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(entryStatus(ctx, operationId)?.cancel).toBeUndefined();
+  };
+
+  it('A1: ARMED + on-submit follower, čekající Limit SELL z appky, ruční BUY 1 zkopírovaný (leader i follower long 1) → SELL ani kopie se neruší, ARM zůstane, upozornění jednou', async () => {
     const ctx = await setup({ followers: true });
     const placed = await placeSell(ctx, 'c12r4a1');
     const copy = followerCopy(ctx, 'Sell');
@@ -1851,27 +1911,643 @@ describe('C12 — oponentura kolo 4 (P2): vlastní vstup z flat proti pozici mim
     await tick(ctx, 2_100);
     await tick(ctx, 1_000);
     await tick(ctx, 500);
-    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
-    expect(ctx.broker.cancelRequestCount(copy.brokerOrderId)).toBe(1);
-    expect(brokerOrder(ctx, copy.brokerOrderId).status).toBe('canceled');
-    expect(ctx.controller.status().armed).toBe(true);
-    expect(ctx.controller.status().lastError).toBeNull();
-    expect(ctx.audits.some(line => line.includes('opačné straně'))).toBe(false);
-    expect(entryStatus(ctx, 'entry:c12r4a1')).toMatchObject({ cancelVerified: 'canceled' });
-    expect(entryStatus(ctx, 'entry:c12r4a1')?.pendingIncident).toBeUndefined();
+    await sleep(20);
+    expectOnlyNotice(ctx, 'entry:c12r4a1', placed.entryBrokerOrderId!);
+    expect(ctx.broker.cancelRequestCount(copy.brokerOrderId)).toBe(0);
+    expect(brokerOrder(ctx, copy.brokerOrderId).status).toBe('working');
+    expect(ctx.audits.filter(line => line.includes('pozice mimo appku'))).toHaveLength(1);
   });
 
-  it('A2: sólo skupina, čekající Limit SELL z appky, ruční BUY 1 v Tradovate → SELL 1× zrušený (ověřeno stavem), ARM zůstane, žádný incident', async () => {
+  it('A2: sólo skupina, čekající Limit SELL z appky, ruční BUY 1 → SELL se neruší, ARM zůstane, upozornění', async () => {
     const ctx = await setup();
     const placed = await placeSell(ctx, 'c12r4a2');
     setPositionEvent(ctx, LEADER, 1);
     await tick(ctx);
     await tick(ctx, 2_100);
     await tick(ctx, 1_000);
+    await sleep(20);
+    expectOnlyNotice(ctx, 'entry:c12r4a2', placed.entryBrokerOrderId!);
+  });
+
+  for (const shape of ['same', 'opposite'] as const) {
+    it(`po upozornění DISARM (${shape === 'same' ? 'stejná' : 'opačná'} strana) → vstup 1× zrušený z důvodu vypnutí, ověřeno stavem, žádný fail-closed`, async () => {
+      const ctx = await setup();
+      const id = `c12r7dis${shape}`;
+      const placed = shape === 'same' ? await placeEntry(ctx, id) : await placeSell(ctx, id);
+      setPositionEvent(ctx, LEADER, 1);
+      await tick(ctx);
+      await tick(ctx, 2_100);
+      await sleep(20);
+      expect(entryStatus(ctx, `entry:${id}`)?.pendingIncident?.text).toContain('pozice mimo appku');
+      expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(0);
+      ctx.controller.disarm('manual');
+      await tick(ctx);
+      await tick(ctx, 1_000);
+      await tick(ctx, 1_000);
+      expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
+      expect(entryStatus(ctx, `entry:${id}`)).toMatchObject({ cancelVerified: 'canceled', cancelReason: 'čekající vstup: kopírka je vypnutá' });
+      expect(ctx.controller.status().lastError).toBeNull();
+      for (const legId of [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!]) expect(ctx.broker.cancelRequestCount(legId)).toBe(0);
+    });
+  }
+
+  it('DISARM dřív než ustálení pozice → rovnou zrušení z důvodu vypnutí, žádné upozornění', async () => {
+    const ctx = await setup();
+    const placed = await placeSell(ctx, 'c12r7dis0');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    ctx.controller.disarm('manual');
+    await tick(ctx);
+    await tick(ctx, 1_000);
     expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
+    expect(entryStatus(ctx, 'entry:c12r7dis0')?.pendingIncident).toBeUndefined();
+    expect(ctx.audits.some(line => line.includes('dál čeká a na symbolu'))).toBe(false);
+  });
+
+  it('kill switch s pozicí mimo appku → zrušení (kill kopírku vypne), důvod má přednost před upozorněním', async () => {
+    const ctx = await setup();
+    const placed = await placeEntry(ctx, 'c12r7kill');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    ctx.controller.engageKillSwitch('test');
+    await tick(ctx, 2_100);
+    await tick(ctx, 1_000);
+    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
+    expect(entryStatus(ctx, 'entry:c12r7kill')).toMatchObject({ cancelVerified: 'canceled' });
+    expect(ctx.audits.some(line => line.includes('dál čeká a na symbolu'))).toBe(false);
+  });
+
+  it('denní pauza CME za ARMED s pozicí mimo appku na opačné straně → zrušení (ARM zůstane), bez upozornění', async () => {
+    const ctx = await setup();
+    const placed = await placeSell(ctx, 'c12r7cme');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await toCmeHalt(ctx);
+    await tick(ctx, 1_000);
+    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(entryStatus(ctx, 'entry:c12r7cme')?.cancelReason).toBe('čekající vstup: denní pauza CME (16:00–17:00 CT)');
+    expect(ctx.audits.some(line => line.includes('dál čeká a na symbolu'))).toBe(false);
+  });
+
+  it('skutečný incident po upozornění: DISARM a zrušení selže → fail-closed text přepíše upozornění, neprojde pod jeho značkou', async () => {
+    const ctx = await setup();
+    const placed = await placeEntry(ctx, 'c12r7fail');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    const notice = entryStatus(ctx, 'entry:c12r7fail')?.pendingIncident;
+    expect(notice?.text).toContain('pozice mimo appku');
+    ctx.broker.cancelOrder = async () => { throw new Error('network down'); };
+    ctx.controller.disarm('manual');
+    await tick(ctx);
+    await tick(ctx, 1_500);
+    await sleep(20);
+    expect(ctx.controller.status().lastError).toContain('nepodařilo zrušit');
+    const after = entryStatus(ctx, 'entry:c12r7fail')?.pendingIncident;
+    expect(after?.text).toContain('nepodařilo zrušit');
+    expect(after?.at).toBeGreaterThan(notice!.at);
+    expect(placed.entryBrokerOrderId).toBeTruthy();
+  });
+
+  it('restart po upozornění (durable značka) → po startu DISARMED se vstup zruší z důvodu vypnutí, upozornění se neopakuje', async () => {
+    const store = createMemoryCopierStore();
+    const first = await setup({ store });
+    const placed = await placeSell(first, 'c12r7rst');
+    setPositionEvent(first, LEADER, 1);
+    await tick(first);
+    await tick(first, 2_100);
+    await sleep(20);
+    expect(first.audits.filter(line => line.includes('dál čeká a na symbolu'))).toHaveLength(1);
+    first.controller.stop();
+    active = null;
+    const durable = (await store.load()).safety?.manualEntries?.find(item => item.operationId === 'entry:c12r7rst');
+    expect(durable?.pendingIncidentKinds).toContain('outside-position');
+    const second = await setup({ store, broker: first.broker, arm: false });
+    await tick(second);
+    await tick(second, 1_500);
+    expect(second.audits.some(line => line.includes('dál čeká a na symbolu'))).toBe(false);
+    expect(second.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
+    expect(entryStatus(second, 'entry:c12r7rst')).toMatchObject({ cancelVerified: 'canceled', cancelReason: 'čekající vstup: kopírka je vypnutá' });
+  });
+
+  /** Vstup (nebo kopie) se u brokera vyplní: Order(Filled), Fill, Position účtu. */
+  const fillAndPosition = (ctx: Ctx, id: string, accountId: number, net: number, seq: string) => {
+    const order = brokerOrder(ctx, id);
+    Object.assign(order, { status: 'filled', filledQuantity: order.quantity });
+    emitOrder(ctx, order, `9:${seq}:filled`);
+    ctx.broker.emitEvent({ type: 'fill', fill: { fillId: `f-${id}-${seq}`, tag: order.tag, brokerOrderId: id, accountId, symbol: SYM, side: order.side, quantity: order.quantity, price: order.limitPrice ?? order.stopPrice ?? REF, filledAt: ctx.clock.now } });
+    setPositionEvent(ctx, accountId, net);
+  };
+  const FILLED_NOTICE = 'se vyplnil a jeho SL/TP pracují bez pozice; zruš je v Tradovate nebo dej Flatten';
+
+  it('po upozornění se vstup vyplní proti pozici (net 0) za ARMED → po 5 s druhé upozornění jednou, nic se neposílá ani nečte, nohy se neruší, ARM zůstane', async () => {
+    let lookups = 0;
+    const ctx = await setup({ patchBroker: broker => {
+      const real = broker.findOrderById.bind(broker);
+      broker.findOrderById = async (accountId, id) => { lookups += 1; return real(accountId, id); };
+    } });
+    const placed = await placeSell(ctx, 'c12r7fill');
+    const entryId = placed.entryBrokerOrderId!;
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    expect(entryStatus(ctx, 'entry:c12r7fill')?.pendingIncident?.text).toContain('jeho SL/TP můžou pracovat bez pozice');
+    lookups = 0;
+    fillAndPosition(ctx, entryId, LEADER, 0, 'sell');
+    await tick(ctx, 1_000);
+    await sleep(20);
+    // Vstup už nečeká: první upozornění zmizí ze statusu, druhé zatím ne (ustálení 5 s).
+    expect(entryStatus(ctx, 'entry:c12r7fill')?.pendingIncident).toBeUndefined();
+    await tick(ctx, 3_000);
+    expect(ctx.audits.some(line => line.includes(FILLED_NOTICE))).toBe(false);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    const notice = entryStatus(ctx, 'entry:c12r7fill')?.pendingIncident;
+    expect(notice?.text).toContain(FILLED_NOTICE);
+    await tick(ctx, 5_000);
+    await tick(ctx, 5_100);
+    await sleep(20);
+    expect(entryStatus(ctx, 'entry:c12r7fill')?.pendingIncident).toEqual(notice);
+    expect(ctx.audits.filter(line => line.includes(FILLED_NOTICE))).toHaveLength(1);
+    expect(lookups).toBe(0);
+    expect(ctx.broker.cancelRequestCount(entryId)).toBe(0);
+    for (const legId of [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!]) {
+      expect(ctx.broker.cancelRequestCount(legId)).toBe(0);
+      expect(brokerOrder(ctx, legId).status).toBe('working');
+    }
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('fill proti pozici do 2 s (první upozornění nevzniklo) → druhé upozornění přijde samo', async () => {
+    const ctx = await setup();
+    const placed = await placeSell(ctx, 'c12r7fast');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 1_000);
+    fillAndPosition(ctx, placed.entryBrokerOrderId!, LEADER, 0, 'sell');
+    await tick(ctx, 200);
+    expect(ctx.audits.some(line => line.includes('dál čeká a na symbolu'))).toBe(false);
+    await tick(ctx, 5_100);
+    await tick(ctx, 100);
+    await sleep(20);
+    expect(entryStatus(ctx, 'entry:c12r7fast')?.pendingIncident?.text).toContain(FILLED_NOTICE);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('nohy přestanou nekrýt před koncem ustálení (přechod po fillu) → žádné druhé upozornění', async () => {
+    const ctx = await setup();
+    const placed = await placeSell(ctx, 'c12r7tran');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    fillAndPosition(ctx, placed.entryBrokerOrderId!, LEADER, 0, 'sell');
+    await tick(ctx, 1_000);
+    await tick(ctx, 2_000);
+    setPositionEvent(ctx, LEADER, -1);
+    await tick(ctx, 1_000);
+    await tick(ctx, 10_000);
+    await sleep(20);
+    expect(ctx.audits.some(line => line.includes('se vyplnil a jeho SL/TP'))).toBe(false);
+  });
+
+  it('vstup skončí bez fillu (zrušený v Tradovate) a nohy v cache chvíli pracují nad flat pozicí → žádné druhé upozornění', async () => {
+    const ctx = await setup();
+    const placed = await placeSell(ctx, 'c12r7ended');
+    const entry = brokerOrder(ctx, placed.entryBrokerOrderId!);
+    Object.assign(entry, { status: 'canceled' });
+    emitOrder(ctx, entry, '9:sell:canceled');
+    await tick(ctx, 1_000);
+    await tick(ctx, 6_000);
+    await sleep(20);
+    expect(ctx.audits.some(line => line.includes('se vyplnil a jeho SL/TP'))).toBe(false);
+  });
+
+  it('běžný obchod: vstup vyplněný, pozice ho kryje → žádné upozornění', async () => {
+    const ctx = await setup();
+    const placed = await placeEntry(ctx, 'c12r7norm');
+    fillAtBroker(ctx, placed.entryBrokerOrderId!, 1, 'filled');
+    await tick(ctx, 1_000);
+    await tick(ctx, 6_000);
+    await sleep(20);
+    expect(entryStatus(ctx, 'entry:c12r7norm')?.pendingIncident).toBeUndefined();
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('SELL 2 proti pozici +1 (otočení na −1): upozornění předem říká „otočí“, po fillu nohy kryjí víc než pozice', async () => {
+    const ctx = await setup();
+    const status = ctx.controller.status();
+    const preview = buildLeaderEntryPreviewCommand(
+      { symbol: SYM, side: 'Sell', quantity: 2, orderType: 'Limit', price: 25_020, stopLoss: 25_030, takeProfit: 24_990 },
+      { group: { ...ctx.group, leaderAccountId: LEADER }, armedAt: status.armedAt ?? 0, excludedFollowers: new Set(), participation: [], operationId: 'preview:c12r7flip' },
+    );
+    const placed = await ctx.controller.placeLeaderEntry(buildLeaderEntryPlaceCommand(preview, 'entry:c12r7flip'), { deadlineAt: ctx.clock.now + 15_000 });
+    expect(placed).toMatchObject({ status: 'acknowledged' });
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    expect(entryStatus(ctx, 'entry:c12r7flip')?.pendingIncident?.text).toContain('pozici zmenší, zavře nebo otočí');
+    fillAndPosition(ctx, placed.entryBrokerOrderId!, LEADER, -1, 'sell');
+    await tick(ctx, 1_000);
+    await tick(ctx, 5_100);
+    await tick(ctx, 100);
+    await sleep(20);
+    expect(entryStatus(ctx, 'entry:c12r7flip')?.pendingIncident?.text).toContain('se vyplnil a jeho SL/TP kryjí víc, než má pozice (-1); zruš je v Tradovate nebo dej Flatten');
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  /** Čekající Limit SELL dané velikosti (pozice proti němu se nastaví v testu). */
+  const placeSellSize = async (ctx: Ctx, id: string, quantity: number) => {
+    const status = ctx.controller.status();
+    const preview = buildLeaderEntryPreviewCommand(
+      { symbol: SYM, side: 'Sell', quantity, orderType: 'Limit', price: 25_020, stopLoss: 25_030, takeProfit: 24_990 },
+      { group: { ...ctx.group, leaderAccountId: LEADER }, armedAt: status.armedAt ?? 0, excludedFollowers: new Set(), participation: [], operationId: `preview:${id}` },
+    );
+    const placed = await ctx.controller.placeLeaderEntry(buildLeaderEntryPlaceCommand(preview, `entry:${id}`), { deadlineAt: ctx.clock.now + 15_000 });
+    expect(placed).toMatchObject({ status: 'acknowledged' });
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    return placed;
+  };
+  const AGAINST_NOTICE = 'SL/TP nechrání pozici (1), která je na opačné straně než vstup; zruš je v Tradovate nebo dej Flatten';
+
+  for (const fast of [false, true]) {
+    it(`SELL 1 proti +2 (fill jen zmenší na +1, nohy kryjí přesně)${fast ? ', fill do 2 s' : ''} → po 5 s upozornění, nic se neposílá, ARM zůstane`, async () => {
+      const ctx = await setup();
+      const id = `c12r8red${fast ? 'f' : 's'}`;
+      const placed = await placeSellSize(ctx, id, 1);
+      setPositionEvent(ctx, LEADER, 2);
+      await tick(ctx);
+      await tick(ctx, fast ? 1_000 : 2_100);
+      await sleep(20);
+      fillAndPosition(ctx, placed.entryBrokerOrderId!, LEADER, 1, 'sell');
+      await tick(ctx, 1_000);
+      await tick(ctx, 3_000);
+      await sleep(20);
+      expect(ctx.audits.some(line => line.includes(AGAINST_NOTICE))).toBe(false);
+      await tick(ctx, 2_100);
+      await sleep(20);
+      expect(entryStatus(ctx, `entry:${id}`)?.pendingIncident?.text).toContain(AGAINST_NOTICE);
+      await tick(ctx, 6_000);
+      await tick(ctx, 6_000);
+      await sleep(20);
+      expect(ctx.audits.filter(line => line.includes(AGAINST_NOTICE))).toHaveLength(1);
+      for (const legId of [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!]) expect(ctx.broker.cancelRequestCount(legId)).toBe(0);
+      expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    });
+  }
+
+  it('běžný SELL obchod: pozice na straně vstupu (short) → upozornění po fillu nevznikne', async () => {
+    const ctx = await setup();
+    const placed = await placeSellSize(ctx, 'c12r8nsel', 1);
+    fillAndPosition(ctx, placed.entryBrokerOrderId!, LEADER, -1, 'sell');
+    await tick(ctx, 1_000);
+    await tick(ctx, 6_000);
+    await tick(ctx, 100);
+    await sleep(20);
+    expect(ctx.audits.some(line => line.includes('se vyplnil a jeho'))).toBe(false);
+    expect(entryStatus(ctx, 'entry:c12r8nsel')?.pendingIncident).toBeUndefined();
+  });
+
+  it('po druhém upozornění výpadek spojení a stav trvá → automatické pokračování se odmítne bez ustálení, i za výpadku', async () => {
+    const ctx = await setup();
+    const placed = await placeSellSize(ctx, 'c12r8res', 1);
+    setPositionEvent(ctx, LEADER, 2);
+    await tick(ctx);
+    fillAndPosition(ctx, placed.entryBrokerOrderId!, LEADER, 1, 'sell');
+    await tick(ctx, 1_000);
+    await tick(ctx, 5_100);
+    await tick(ctx, 100);
+    await sleep(20);
+    expect(ctx.audits.some(line => line.includes(AGAINST_NOTICE))).toBe(true);
+    ctx.broker.setConnected(false);
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    for (let index = 0; index < 30 && ctx.controller.status().transportResume?.phase !== 'declined'; index += 1) {
+      ctx.clock.now += 100;
+      await sleep(50);
+    }
+    expect(ctx.controller.status().transportResume).toMatchObject({ phase: 'declined', reason: 'nohy vyplněného vstupu nekryjí pozici leadera' });
+    expect(ctx.controller.status().connected).toBe(false);
+  });
+
+  it('před prvním hlášením odklad (spojení dole) ustálení maže: nic se nevyhlásí', async () => {
+    const ctx = await setup();
+    const placed = await placeSellSize(ctx, 'c12r8def', 1);
+    setPositionEvent(ctx, LEADER, 2);
+    await tick(ctx);
+    fillAndPosition(ctx, placed.entryBrokerOrderId!, LEADER, 1, 'sell');
+    await tick(ctx, 1_000);
+    ctx.broker.setConnected(false);
+    await sleep(60);
+    await ctx.controller.waitForIdle();
+    await tick(ctx, 6_000);
+    await sleep(20);
+    expect(ctx.audits.some(line => line.includes('se vyplnil a jeho'))).toBe(false);
+  });
+
+  it('C7: už vyplněný vstup proti pozici (net 0, nohy pracují) → text fillu proti pozici, ne „pozice je otevřená“; bez tagu fill předběhne odmítnutí', async () => {
+    const ctx = await setup({ patchBroker: broker => {
+      const realList = broker.listOrders.bind(broker);
+      broker.listOrders = async (...args) => (await realList(...args)).map(order => (order.side === 'Sell' && order.orderType === 'Limit' && order.parentOrderId == null ? { ...order, tag: '' } : order));
+    } });
+    const placed = await placeSell(ctx, 'c12r8c7f');
+    const shown = (ctx.controller.status().pendingOwnEntries ?? []).find(item => item.entryOperationId === 'entry:c12r8c7f')!;
+    expect(shown).toBeTruthy();
+    // Pozice +1 v cache, u brokera už vyplněný SELL: bez tagu by stav `unproven` jinak odmítl jako „na opačné straně“.
+    setPositionEvent(ctx, LEADER, 1);
+    Object.assign(brokerOrder(ctx, placed.entryBrokerOrderId!), { status: 'filled', filledQuantity: 1 });
+    await tick(ctx);
+    const result = await manageCancel(ctx, shown, 'manage:c12r8c7f');
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(issue => issue.code)).toEqual(['entry-filled']);
+    expect(result.blockers[0].text).toContain('šel proti pozici leadera na opačné straně, takže ji zmenšil, zavřel nebo otočil');
+    expect(result.blockers[0].text).not.toContain('pozice je otevřená');
+    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(0);
+  });
+
+  it('C7: vyplněný vstup na stejné straně s pozicí, která ho kryje → dál „pozice je otevřená“', async () => {
+    const ctx = await setup();
+    const placed = await placeEntry(ctx, 'c12r8c7o');
+    const shown = (ctx.controller.status().pendingOwnEntries ?? []).find(item => item.entryOperationId === 'entry:c12r8c7o')!;
+    setPositionEvent(ctx, LEADER, 1);
+    Object.assign(brokerOrder(ctx, placed.entryBrokerOrderId!), { status: 'filled', filledQuantity: 1 });
+    await tick(ctx);
+    const result = await manageCancel(ctx, shown, 'manage:c12r8c7o');
+    expect(result.blockers.map(issue => issue.code)).toEqual(['entry-filled']);
+    expect(result.blockers[0].text).toContain('pozice je otevřená');
+  });
+
+  it('sólo DEMO se scale-in: druhé upozornění se neposílá, nadkrytí řeší `reviewScaleInCoverage` (fail-closed)', async () => {
+    const ctx = await setup({ scaleIn: true });
+    expect(ctx.controller.manualEntryScaleInEnabled?.()).toBe(true);
+    const placed = await placeSell(ctx, 'c12r7scal');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    fillAndPosition(ctx, placed.entryBrokerOrderId!, LEADER, 0, 'sell');
+    await tick(ctx, 1_000);
+    await tick(ctx, 5_100);
+    await tick(ctx, 100);
+    await sleep(20);
+    expect(ctx.audits.some(line => line.includes('se vyplnil a jeho SL/TP'))).toBe(false);
+    expect(ctx.controller.status().armed).toBe(false);
+    expect(ctx.controller.status().lastError ?? '').toContain('kryjí víc kontraktů');
+  });
+
+  it('skupina: fill proti pozici → nohy followera zrušené, nohy leadera pracují a druhé upozornění; nahá noha se vyplní → divergence fail-closed', async () => {
+    const ctx = await setup({ followers: true });
+    const placed = await placeSell(ctx, 'c12r7grp');
+    const entryId = placed.entryBrokerOrderId!;
+    const copy = followerCopy(ctx, 'Sell');
+    const followerLegs = ctx.broker.orders().filter(order => order.accountId === FOLLOWER && order.parentOrderId === copy.brokerOrderId);
+    expect(followerLegs).toHaveLength(2);
+    setPositionEvent(ctx, LEADER, 1);
+    setPositionEvent(ctx, FOLLOWER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await tick(ctx, 1_000);
+    await sleep(20);
+    fillAndPosition(ctx, entryId, LEADER, 0, 'sell');
+    await tick(ctx, 200);
+    fillAndPosition(ctx, copy.brokerOrderId, FOLLOWER, 0, 'copy');
+    for (let index = 0; index < 8; index += 1) {
+      await tick(ctx, 1_000);
+      await sleep(20);
+    }
+    for (const leg of followerLegs) {
+      expect(ctx.broker.cancelRequestCount(leg.brokerOrderId)).toBe(1);
+      expect(brokerOrder(ctx, leg.brokerOrderId).status).toBe('canceled');
+    }
+    for (const legId of [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!]) {
+      expect(ctx.broker.cancelRequestCount(legId)).toBe(0);
+      expect(brokerOrder(ctx, legId).status).toBe('working');
+    }
+    expect(entryStatus(ctx, 'entry:c12r7grp')?.pendingIncident?.text).toContain(FILLED_NOTICE);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    // Nahá noha leadera se vyplní jako nový vstup; follower nohy nemá, takže vznikne divergence.
+    fillAndPosition(ctx, placed.stopBrokerOrderId!, LEADER, 1, 'stop');
+    for (let index = 0; index < 60 && ctx.controller.status().armed; index += 1) {
+      await tick(ctx, 1_000);
+      await sleep(20);
+    }
+    expect(ctx.controller.status().armed).toBe(false);
+    expect(ctx.controller.status().lastError ?? '').toContain(`follower ${FOLLOWER} má autoritativně pozici 0 na ${SYM}, očekáváno 1 podle leadera 1 × 1`);
+  }, 60_000);
+
+  for (const brake of ['disarm', 'kill'] as const) {
+    it(`skupina: upozornění, pak ${brake} na opačné straně → vstup leadera i kopie 1× zrušené, nohy se neruší, upozornění ze statusu zmizí`, async () => {
+      const ctx = await setup({ followers: true });
+      const id = `c12r7g${brake}`;
+      const placed = await placeSell(ctx, id);
+      const copy = followerCopy(ctx, 'Sell');
+      setPositionEvent(ctx, LEADER, 1);
+      setPositionEvent(ctx, FOLLOWER, 1);
+      await tick(ctx);
+      await tick(ctx, 2_100);
+      await tick(ctx, 1_000);
+      await sleep(20);
+      expect(entryStatus(ctx, `entry:${id}`)?.pendingIncident?.text).toContain('pozice mimo appku');
+      if (brake === 'disarm') ctx.controller.disarm('manual');
+      else ctx.controller.engageKillSwitch('test');
+      await tick(ctx);
+      await tick(ctx, 1_000);
+      await tick(ctx, 1_000);
+      await sleep(20);
+      expect(ctx.controller.status().armed).toBe(false);
+      expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
+      expect(ctx.broker.cancelRequestCount(copy.brokerOrderId)).toBe(1);
+      expect(brokerOrder(ctx, copy.brokerOrderId).status).toBe('canceled');
+      expect(entryStatus(ctx, `entry:${id}`)).toMatchObject({ cancelVerified: 'canceled' });
+      expect(entryStatus(ctx, `entry:${id}`)?.pendingIncident).toBeUndefined();
+      for (const legId of [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!]) expect(ctx.broker.cancelRequestCount(legId)).toBe(0);
+    }, 20_000);
+  }
+
+  it('upozornění a výsledek v jednom průchodu watchdogu → jedna zpráva „zrušen“, bez textu „dál čeká“', async () => {
+    const ctx = await setup();
+    const placed = await placeSell(ctx, 'c12r7push');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    ctx.controller.disarm('manual');
+    await tick(ctx);
+    await tick(ctx, 1_000);
+    await sleep(20);
+    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
+    const pushes = manualEntryNotifications(ctx.controller.status().manualEntries ?? [], ctx.clock.now, { verifiedCancel: true });
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0].title).toBe('Čekající vstup zrušen');
+    expect(pushes[0].body).not.toContain('dál čeká');
+  });
+
+  it('upozornění, pak denní pauza CME za ARMED a zrušení běží (`cancel: sending`, vstup dál pracuje) → status upozornění neposílá', async () => {
+    let entryRef = '';
+    let hung = false;
+    const ctx = await setup({ patchBroker: broker => {
+      const real = broker.cancelOrder.bind(broker);
+      broker.cancelOrder = async (accountId, id) => {
+        if (id === entryRef) { hung = true; return new Promise<void>(() => {}); }
+        return real(accountId, id);
+      };
+    } });
+    const placed = await placeSell(ctx, 'c12r7hang');
+    entryRef = placed.entryBrokerOrderId!;
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    expect(entryStatus(ctx, 'entry:c12r7hang')?.pendingIncident?.text).toContain('pozice mimo appku');
+    ctx.clock.now = Date.UTC(2026, 10, 3, 22, 10);
+    ctx.broker.emitEvent({ type: 'heartbeat', at: ctx.clock.now });
+    for (let index = 0; index < 100 && !hung; index += 1) await sleep(20);
+    expect(hung).toBe(true);
     expect(ctx.controller.status().armed).toBe(true);
-    expect(ctx.controller.status().lastError).toBeNull();
-    expect(entryStatus(ctx, 'entry:c12r4a2')).toMatchObject({ cancelVerified: 'canceled' });
+    expect(brokerOrder(ctx, entryRef).status).toBe('working');
+    expect(entryStatus(ctx, 'entry:c12r7hang')).toMatchObject({ cancel: 'sending' });
+    expect(entryStatus(ctx, 'entry:c12r7hang')?.pendingIncident).toBeUndefined();
+  });
+
+  it('fill během rušení po DISARM (`cancel` je v záznamu) → incident `fill-unprotected`, druhé upozornění se k němu nepřidá', async () => {
+    let entryRef = '';
+    let ctxRef: Ctx | null = null;
+    const ctx = await setup({ patchBroker: broker => {
+      const real = broker.cancelOrder.bind(broker);
+      broker.cancelOrder = async (accountId, id) => {
+        if (id === entryRef && ctxRef) {
+          fillAndPosition(ctxRef, id, LEADER, 0, 'sell');
+          throw new Error('Order rejected: TooLateToCancel');
+        }
+        return real(accountId, id);
+      };
+    } });
+    ctxRef = ctx;
+    const placed = await placeSell(ctx, 'c12r7cnl');
+    entryRef = placed.entryBrokerOrderId!;
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    ctx.controller.disarm('manual');
+    await tick(ctx);
+    for (let index = 0; index < 6; index += 1) {
+      await tick(ctx, 2_000);
+      await sleep(30);
+    }
+    expect(entryStatus(ctx, 'entry:c12r7cnl')?.pendingIncident?.text).toContain('SL/TP pracují bez pozice');
+    expect(ctx.audits.some(line => line.includes('se vyplnil a jeho SL/TP'))).toBe(false);
+  });
+
+  it('upozornění a spojení bez ARM: status ho neposílá, jakmile kopírka není ARMED, ani když vstup ještě čeká', async () => {
+    const ctx = await setup();
+    await placeEntry(ctx, 'c12r7hide');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    expect(entryStatus(ctx, 'entry:c12r7hide')?.pendingIncident).toBeDefined();
+    ctx.controller.disarm('manual');
+    expect(entryStatus(ctx, 'entry:c12r7hide')?.pendingIncident).toBeUndefined();
+  });
+
+  it('selhaný commit značky upozornění → bez auditu, dedup se uvolní, další revize zapíše upozornění jednou', async () => {
+    const store = createMemoryCopierStore();
+    const realCommit = store.commit.bind(store);
+    let failing = false;
+    let failures = 0;
+    store.commit = async (snapshot, revision) => {
+      if (failing && snapshot.safety?.manualEntries?.some(item => item.pendingIncidentKinds?.includes('outside-position'))) {
+        failures += 1;
+        failing = false;
+        throw new Error('disk full');
+      }
+      return realCommit(snapshot, revision);
+    };
+    const errors: string[] = [];
+    const ctx = await setup({ store, onError: error => errors.push(error.message) });
+    await placeEntry(ctx, 'c12r7cmt');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    failing = true;
+    await tick(ctx, 2_100);
+    await sleep(30);
+    expect(failures).toBe(1);
+    expect(errors.some(text => text.includes('značku upozornění se nepodařilo uložit'))).toBe(true);
+    expect(ctx.audits.some(line => line.includes('pozice mimo appku'))).toBe(false);
+    expect(entryStatus(ctx, 'entry:c12r7cmt')?.pendingIncident).toBeUndefined();
+    await tick(ctx, 1_000);
+    await sleep(30);
+    await tick(ctx, 1_000);
+    await sleep(30);
+    expect(ctx.audits.filter(line => line.includes('pozice mimo appku'))).toHaveLength(1);
+    expect(entryStatus(ctx, 'entry:c12r7cmt')?.pendingIncident?.text).toContain('pozice mimo appku');
+    expect((await store.load()).safety?.manualEntries?.find(item => item.operationId === 'entry:c12r7cmt')?.pendingIncidentKinds).toEqual(['outside-position']);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('C7: ruční zrušení opačného vstupu po upozornění (vlastnictví z tagu) → 1× zrušeno za ARMED, nohy se neruší', async () => {
+    const ctx = await setup();
+    const placed = await placeSell(ctx, 'c12r7man');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    const shown = (ctx.controller.status().pendingOwnEntries ?? []).find(item => item.entryOperationId === 'entry:c12r7man')!;
+    expect(shown).toBeTruthy();
+    const result = await manageCancel(ctx, shown, 'manage:c12r7man');
+    expect(result).toMatchObject({ status: 'acknowledged' });
+    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
+    for (const legId of [placed.stopBrokerOrderId!, placed.targetBrokerOrderId!]) expect(ctx.broker.cancelRequestCount(legId)).toBe(0);
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+  });
+
+  it('C7: opačný vstup, cizí clOrdId v čtení → pravdivý text „na opačné straně“, nic se neodešle', async () => {
+    const ctx = await setup({ patchBroker: broker => {
+      const realList = broker.listOrders.bind(broker);
+      broker.listOrders = async (...args) => (await realList(...args)).map(order => (order.side === 'Sell' && order.orderType === 'Limit' && order.parentOrderId == null ? { ...order, tag: 'tvUser' } : order));
+    } });
+    const placed = await placeSell(ctx, 'c12r7mno');
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    const shown = (ctx.controller.status().pendingOwnEntries ?? []).find(item => item.entryOperationId === 'entry:c12r7mno')!;
+    const result = await manageCancel(ctx, shown, 'manage:c12r7mno');
+    expect(result).toMatchObject({ status: 'blocked' });
+    expect(JSON.stringify(result)).toContain('Pozice leadera je na opačné straně (1)');
+    expect(JSON.stringify(result)).not.toContain('je to ochrana');
+    expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(0);
+  });
+
+  it('C7: opačný vstup se při ručním zrušení vyplní → text bez „pozice je otevřená“, durable `entryOpposite`', async () => {
+    const store = createMemoryCopierStore();
+    let entryRef = '';
+    let ctxRef: Ctx | null = null;
+    const ctx = await setup({ store, patchBroker: broker => {
+      const real = broker.cancelOrder.bind(broker);
+      broker.cancelOrder = async (accountId, id) => {
+        if (id === entryRef && ctxRef) {
+          fillAndPosition(ctxRef, id, LEADER, 0, 'sell');
+          throw new Error('Order rejected: TooLateToCancel');
+        }
+        return real(accountId, id);
+      };
+    } });
+    ctxRef = ctx;
+    const placed = await placeSell(ctx, 'c12r7mfil');
+    entryRef = placed.entryBrokerOrderId!;
+    setPositionEvent(ctx, LEADER, 1);
+    await tick(ctx);
+    await tick(ctx, 2_100);
+    await sleep(20);
+    const shown = (ctx.controller.status().pendingOwnEntries ?? []).find(item => item.entryOperationId === 'entry:c12r7mfil')!;
+    const result = await manageCancel(ctx, shown, 'manage:c12r7mfil');
+    expect(result.status).toMatch(/rejected|unknown/);
+    expect(JSON.stringify(result)).not.toContain('pozice je otevřená');
+    const action = (await store.load()).safety?.manualOrderActions?.find(item => item.operationId === 'manage:c12r7mfil');
+    expect(action?.entryOpposite).toBe(true);
   });
 });
 
@@ -2162,7 +2838,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
   const expectNakedLegsIncident = async (ctx: Ctx, operationId: string, entryId: string, store?: ReturnType<typeof createMemoryCopierStore>) => {
     const status = entryStatus(ctx, operationId);
     expect(status?.cancelVerified).toBe('filled');
-    expect(status?.pendingIncident?.text).toContain('vstup zavřel nebo zmenšil pozici mimo appku a jeho SL/TP pracují bez pozice jako nové vstupy');
+    expect(status?.pendingIncident?.text).toContain('vstup zmenšil, zavřel nebo otočil pozici mimo appku a jeho SL/TP pracují bez pozice jako nové vstupy');
     expect(ctx.audits.some(line => line.includes(`cancel-entry ${entryId}`) && line.includes('pozice chráněná SL/TP'))).toBe(false);
     expect(ctx.audits.some(line => line.includes(`(${entryId})`) && line.includes('pozice je otevřená'))).toBe(false);
     expect(ctx.audits.some(line => line.includes('Vstup se vyplnil (1) dřív, než ho broker zrušil — šel proti pozici leadera na opačné straně'))).toBe(true);
@@ -2182,7 +2858,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
     }
   };
 
-  it('PC sólo: čekající SELL z appky, ruční BUY 1 → automatické zrušení; SELL se vyplní během cancelOrder (pozice 0) → incident `fill-unprotected`, nikdy „chráněná SL/TP“', async () => {
+  it('PC sólo: čekající SELL z appky, ruční BUY 1, DISARM → automatické zrušení; SELL se vyplní během cancelOrder (pozice 0) → incident `fill-unprotected`, nikdy „chráněná SL/TP“', async () => {
     const ref: Ref = { entryId: '', ctx: null, attempts: 0 };
     const store = createMemoryCopierStore();
     const ctx = await setup({ store, patchBroker: sellFillsDuringCancel(ref) });
@@ -2191,6 +2867,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
     ref.entryId = placed.entryBrokerOrderId!;
     setPositionEvent(ctx, LEADER, 1);
     await tick(ctx);
+    ctx.controller.disarm('manual');
     await tick(ctx, 2_100);
     await settle(ctx);
     expect(ref.attempts).toBe(1);
@@ -2198,7 +2875,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
   });
 
   for (const armed of [true, false]) {
-    it(`PC s on-submit followerem za ${armed ? 'ARMED' : 'DISARMED'}: SELL leadera se vyplní během zrušení → incident per záznam, nohy leadera se neruší`, async () => {
+    it(`PC s on-submit followerem za ${armed ? 'ARMED (denní pauza CME)' : 'DISARMED'}: SELL leadera se vyplní během zrušení → incident per záznam, nohy leadera se neruší`, async () => {
       const ref: Ref = { entryId: '', ctx: null, attempts: 0 };
       const ctx = await setup({ followers: true, patchBroker: sellFillsDuringCancel(ref) });
       ref.ctx = ctx;
@@ -2209,6 +2886,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
       setPositionEvent(ctx, FOLLOWER, 1);
       if (!armed) ctx.controller.disarm('manual');
       await tick(ctx);
+      if (armed) await toCmeHalt(ctx);
       await tick(ctx, 2_100);
       await settle(ctx);
       expect(ref.attempts).toBe(1);
@@ -2234,6 +2912,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
     entryIdRef = entryId;
     setPositionEvent(first, LEADER, 1);
     await tick(first);
+    first.controller.disarm('manual');
     first.clock.now += 2_100;
     first.broker.emitEvent({ type: 'heartbeat', at: first.clock.now });
     for (let index = 0; index < 100 && !hung; index += 1) await sleep(20);
@@ -2251,7 +2930,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
     await second.controller.waitForIdle();
     const status = entryStatus(second, 'entry:c12r5rst');
     expect(status).toMatchObject({ cancel: 'sending', cancelVerified: 'filled' });
-    expect(status?.pendingIncident?.text).toContain('vstup zavřel nebo zmenšil pozici mimo appku');
+    expect(status?.pendingIncident?.text).toContain('vstup zmenšil, zavřel nebo otočil pozici mimo appku');
     expect(second.audits.some(line => line.includes('po zrušení z předchozího běhu (sending) se vstup vyplnil (1) — šel proti pozici leadera na opačné straně'))).toBe(true);
     expect(second.audits.some(line => line.includes('pozice chráněná SL/TP'))).toBe(false);
     for (const leg of legsOf(second, entryId)) expect(second.broker.cancelRequestCount(leg.brokerOrderId)).toBe(0);
@@ -2273,6 +2952,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
     ref.entryId = placed.entryBrokerOrderId!;
     setPositionEvent(ctx, LEADER, 1);
     await tick(ctx);
+    ctx.controller.disarm('manual');
     await tick(ctx, 2_100);
     await sleep(450);
     await tick(ctx, 100);
@@ -2289,6 +2969,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
     const entryId = placed.entryBrokerOrderId!;
     setPositionEvent(ctx, LEADER, 1);
     await tick(ctx);
+    ctx.controller.disarm('manual');
     await tick(ctx, 2_100);
     await settle(ctx);
     expect(entryStatus(ctx, 'entry:c12r5late')).toMatchObject({ cancelVerified: 'canceled' });
@@ -2339,7 +3020,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
     ctx.controller.disarm('manual');
     await tick(ctx);
     await settle(ctx);
-    expect(entryStatus(ctx, 'entry:c12r5man')?.pendingIncident?.text).toContain('pozice leadera 0 nekryje fill BUY 1 — fill pozici zavřel nebo zmenšil (nebo ji mezitím zavřel jiný obchod)');
+    expect(entryStatus(ctx, 'entry:c12r5man')?.pendingIncident?.text).toContain('pozice leadera 0 nekryje fill BUY 1 — fill pozici zmenšil, zavřel nebo otočil (nebo ji mezitím zavřel jiný obchod)');
     expect(entryStatus(ctx, 'entry:c12r5man')?.pendingIncident?.text).not.toContain('mimo appku');
     expect(ctx.audits.some(line => line.includes('pozice chráněná SL/TP'))).toBe(false);
   });
@@ -2347,7 +3028,7 @@ describe('C12 — oponentura kolo 5 (P2): fill vstupu proti pozici na opačné s
 
 describe('C12 — oponentura kolo 5 (P3): skončená kopie vstupu u followera, ARMED hák, neznámý stav kopie', () => {
   for (const ending of ['canceled', 'rejected'] as const) {
-    it(`PB-${ending}: ARMED, kopie vstupu skončí (${ending}) s fillem 0, ruční BUY 1 zkopírovaný (leader i follower long 1) → vstup leadera 1× zrušen, ARM zůstane, žádný incident`, async () => {
+    it(`PB-${ending}: ARMED, kopie vstupu skončí (${ending}) s fillem 0, ruční BUY 1 zkopírovaný (leader i follower long 1), denní pauza CME → vstup leadera 1× zrušen, ARM zůstane, žádný incident`, async () => {
       const ctx = await setup({ followers: true });
       const placed = await placeEntry(ctx, `c12r5pb${ending}`);
       const copy = followerCopy(ctx);
@@ -2359,7 +3040,7 @@ describe('C12 — oponentura kolo 5 (P3): skončená kopie vstupu u followera, A
       setPositionEvent(ctx, LEADER, 1);
       setPositionEvent(ctx, FOLLOWER, 1);
       await tick(ctx);
-      await tick(ctx, 2_100);
+      await toCmeHalt(ctx);
       await tick(ctx, 1_000);
       await tick(ctx, 500);
       expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
@@ -2420,7 +3101,7 @@ describe('C12 — oponentura kolo 5 (P3): skončená kopie vstupu u followera, A
     expect(second.audits.some(line => line.includes('stav kopie tohoto vstupu nejde ověřit'))).toBe(false);
   });
 
-  it('X2: ARMED + follower (násobek 2), vstup leadera zrušen s fillem 0, lifecycle zrušení kopie ji zruší s dílčím fillem 1/2 → per-záznamový hák za ARMED mlčí; divergenci zachytí běžná ARMED cesta (autoritativní kontrola velikosti followera → fail-closed)', async () => {
+  it('X2: ARMED + follower (násobek 2), denní pauza CME, vstup leadera zrušen s fillem 0, lifecycle zrušení kopie ji zruší s dílčím fillem 1/2 → per-záznamový hák za ARMED mlčí; divergenci zachytí běžná ARMED cesta (autoritativní kontrola velikosti followera → fail-closed)', async () => {
     const ctx = await setup({ group: { ...followerGroup(), followers: [{ accountId: FOLLOWER, mode: 'on-submit', multiplier: 2 }] } });
     const placed = await placeEntry(ctx, 'c12r5x2');
     const copy = followerCopy(ctx);
@@ -2443,7 +3124,7 @@ describe('C12 — oponentura kolo 5 (P3): skončená kopie vstupu u followera, A
     setPositionEvent(ctx, LEADER, 1);
     setPositionEvent(ctx, FOLLOWER, 2);
     await tick(ctx);
-    await tick(ctx, 2_100);
+    await toCmeHalt(ctx);
     await tick(ctx, 1_000);
     await tick(ctx, 1_000);
     await tick(ctx, 2_000);
@@ -2550,14 +3231,14 @@ describe('C12 — oponentura kolo 5 (P3, A1): REST čtení vstupu bez clOrdId', 
       return lookup;
     };
   };
-  it('A1 bez clOrdId: ARMED + on-submit follower, čekající SELL, ruční BUY 1 zkopírovaný → vlastnictví z nohou (parent = vstup) → SELL 1× a kopie 1× zrušené, ARM zůstane', async () => {
+  it('bez clOrdId: ARMED + on-submit follower, čekající SELL, ruční BUY 1 zkopírovaný, denní pauza CME → vlastnictví z nohou (parent = vstup) → SELL 1× a kopie 1× zrušené, ARM zůstane', async () => {
     const ctx = await setup({ followers: true, patchBroker: stripTag() });
     const placed = await placeSell(ctx, 'c12r5a1t');
     const copy = followerCopy(ctx, 'Sell');
     setPositionEvent(ctx, LEADER, 1);
     setPositionEvent(ctx, FOLLOWER, 1);
     await tick(ctx);
-    await tick(ctx, 2_100);
+    await toCmeHalt(ctx);
     await tick(ctx, 1_000);
     await tick(ctx, 500);
     expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(1);
@@ -2571,6 +3252,7 @@ describe('C12 — oponentura kolo 5 (P3, A1): REST čtení vstupu bez clOrdId', 
     const placed = await placeSell(ctx, 'c12r5a1n');
     setPositionEvent(ctx, LEADER, 1);
     await tick(ctx);
+    ctx.controller.disarm('manual');
     await tick(ctx, 2_100);
     await tick(ctx, 1_000);
     expect(ctx.broker.cancelRequestCount(placed.entryBrokerOrderId!)).toBe(0);

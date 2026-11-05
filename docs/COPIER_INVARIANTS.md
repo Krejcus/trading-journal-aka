@@ -197,6 +197,8 @@ existující ochranu.
   durable `manualEntries[].pendingIncidentKinds` přežije restart (oponentura kolo 1, P3: dedup jen
   podle záznamu by pozdější jiný problém, např. „nejde přečíst“ → „zrušení bez účinku“, schoval pod
   starým textem), `failClosed` s `recordWhenDisarmed` (i historie vypnutí za DISARMED), bez auto-close.
+  Výjimka (rozhodnutí Filipa 5. 11. 2026, INV-BRAKE-01): druhy `outside-position` a `outside-position-filled` jsou
+  jen upozornění, `failClosed` ani `lastError` nezapisuje a vyhlásí se z cache streamu bez čtení; nic neautorizuje. Stejně jednou za (záznam, druh).
   Poslední incident (`pendingIncidentAt` + `pendingIncidentText`) jde do statusu
   `manualEntries[].pendingIncident` → per-záznamový push watchdogu (INV-WATCH-01) — obecný
   `fail-closed` se otevře jen jednou a za kill vůbec, takže by druhý incident C12 zapadl. Incident,
@@ -208,9 +210,10 @@ existující ochranu.
   Oponentura kolo 3 (P2): po odmítnutém / selhaném zrušení se incident „nepodařilo zrušit — vstup dál
   čeká“ / „nejde ověřit“ vyhlásí až podle čtení po ustálení (první REST po TooLateToCancel fill ještě
   neukazuje — incident by tvrdil čekající příkaz u otevřené pozice). Pozice followera, která z tohoto
-  vstupu pocházet nemůže, incident (a tím DISARM) nevyvolá (INV-BRAKE-01). Kolo 4 (P2): vlastní vstup
-  z flat proti pozici mimo appku na opačné straně (clOrdId = tag záznamu, záložně `parentOrderId` nohou —
-  obojí u `placeOSO` NEOVĚŘENO na brokeru) se zruší, incident nevznikne;
+  vstupu pocházet nemůže, incident (a tím DISARM) nevyvolá (INV-BRAKE-01). Rozhodnutí Filipa 5. 11. 2026: pozice
+  mimo appku za ARMED vstup neruší, jen upozorní (`outside-position`, bez `failClosed`); při rušení z ostatních
+  důvodů se vlastní vstup z flat proti pozici na opačné straně zruší (clOrdId = tag záznamu, záložně
+  `parentOrderId` nohou — obojí u `placeOSO` NEOVĚŘENO na brokeru), incident nevznikne;
   nové druhy `copy-filled` / `copy-cancel-failed` (kopie po zrušení vstupu leadera za DISARMED).
   Oponentura kolo 2 (P1): dílčí fill doručený streamem v okně pozdní kontroly těsně před `cancelOrder`
   (vstup dál pracuje) = incident `partial` „zbytek dál čeká“ podle čerstvého REST — dřív se pokus bral
@@ -324,9 +327,8 @@ existující ochranu.
   copier-design-critic):** vlastní čekající vstup z appky smí existovat jen pod živým ARM. DISARM
   (ruční, incident, transport — až po obnově spojení —, restart), shadow, kill, denní zámek (i
   čekající), pauza pravidlem dne, management-only, nezpůsobilý leader, konec obchodního okna
-  (i 5 min před), denní pauza CME `[16:00 − 5 min, 17:00)` CT, konec session, 5 min do vypršení ARM
-  a u vstupu z flat ustálená pozice mimo appku (≥ 2 s bez ingress) zruší **vlastní čekající vstupy
-  z appky** (z flat i přikoupení) jedním cíleným `cancelOrder` podle id z vlastního záznamu
+  (i 5 min před), denní pauza CME `[16:00 − 5 min, 17:00)` CT, konec session a 5 min do vypršení ARM
+  zruší **vlastní čekající vstupy z appky** (z flat i přikoupení) jedním cíleným `cancelOrder` podle id z vlastního záznamu
   (`services/copierRuntimeController.ts:reviewPendingOwnEntries` → `cancelOwnManualEntry` s
   `preRead`; čisté pravidlo `services/manualPendingEntries.ts:pendingOwnEntryViolation`). Není to
   zavření pozice ani account-wide akce; vyplněný či částečně vyplněný vstup a ochranné nohy se
@@ -349,10 +351,10 @@ existující ochranu.
   předběhnout Order/Fill kopie (sonda B3: dřív tichá divergence za DISARMED, B4: za ARMED fail-closed
   s auto-close). Stejná podmínka se synchronně vyhodnotí v pozdní kontrole těsně před `cancelOrder`
   (změna followera během předčtení / durable `sending` = nic neodejde, `cancel` zpět neodeslaný).
-  **Rozhodnutí oponentury kolo 3 (P2, 4. 11. 2026):** pozice followera
+  **Rozhodnutí oponentury kolo 3 (P2, 4. 11. 2026):** když vstup ruší některý z důvodů výš, pozice followera
   odjinud (ruční obchod v Tradovate zkopírovaný kopírkou za ARMED — „pozice mimo appku“ —, vlastní
   pozice followera, on-fill follower bez kopie, on-submit kopie s fillem 0) zrušení NEBLOKUJE: vstup
-  leadera se zruší a kopie followerů lifecycle `terminalCancel`, ARM zůstane. Dřív taková pozice
+  leadera se zruší a kopie followerů lifecycle `terminalCancel`, ARM zůstane (např. denní pauza CME). Dřív taková pozice
   vyvolala incident → `failClosed` → DISARM uprostřed živého kopírovaného obchodu (posuny SL/TP
   a dílčí výstupy leadera by se followerům přestaly zrcadlit, čekající vstup by za DISARMED dál žil).
   Stejná podmínka platí pro ruční C7 `cancel-entry` (`follower-has-position`). Kopie, která se vyplní
@@ -380,19 +382,44 @@ existující ochranu.
   frontě, cache nevidí. `cancelReason` je důvod platný v okamžiku zápisu. Zrušení po ACK
   (`kopírka se vypnula během odesílání`) okno nemá: stream za během ručního vstupu stojí, takže fill
   v okně cache nevidí — zrušení odejde a výsledek rozhodne stav (`partially-filled` + ověření nohou,
-  nikdy „zrušen“). **Rozhodnutí kolo 4 (P2, 4. 11. 2026 — navrženo, čeká na potvrzení Filipa;
-  varianta (a) oponentury):** vlastní vstup Z FLAT proti pozici leadera na opačné straně (pozice
-  vznikla až po něm mimo appku — vstup z flat jinak projít nemůže) se zruší stejně jako na stejné
-  straně, při KAŽDÉM důvodu (pozice mimo appku, DISARM, konec okna, pauza CME…): není to ochrana, je to
-  vlastní OSO, jehož nohy by po vyplnění (zavření pozice) začaly pracovat jako nahé vstupy. Vlastnictví
-  nedokazuje tvar (bez parentu, ne noha, strana i typ = záznam) — ten má i uživatelův ochranný příkaz
-  v poškozeném záznamu (C7 „nikdy ochrana“) —, ale clOrdId z REST předčtení = `tag` záznamu
+  nikdy „zrušen“).
+  **Rozhodnutí Filipa (5. 11. 2026), nahrazuje variantu (a) oponentury kola 4:** vlastní čekající vstup
+  z flat a pozice otevřená mimo appku (stejná i opačná strana) = **za ARMED jen upozornění**. Vstup se neruší,
+  žádný `failClosed` ani `lastError`, kopírka zůstane zapnutá, žádný zápis ani čtení u brokera. Podmínka
+  (`services/manualPendingEntries.ts:pendingOwnEntryOutsidePosition`): známá nenulová pozice, fill vstupu 0
+  a ustálení ≥ 2 s bez nezpracovaných eventů leadera. Výstup (`pendingEntryOutsidePositionNotice`): audit
+  a per-záznamový `pendingIncident` druhu `outside-position`, jednou za záznam (durable
+  `pendingIncidentKinds`), push přes watchdog. Pozdější skutečný incident téhož záznamu má jiný druh, text
+  přepíše a vlastní `failClosed` má. Text říká, co fill udělá: stejná strana pozici zvětší, opačná ji zmenší,
+  zavře nebo otočí a SL/TP vstupu můžou pracovat bez pozice jako nové vstupy. Status upozornění neposílá
+  (durable `pendingIncidentNoticeOnly`), jakmile má záznam `cancel`, vstup v cache nečeká nebo kopírka není
+  ARMED, aby si push neprotiřečil s výsledkem. Selhaný commit značky uvolní dedup a další revize to zkusí znovu;
+  audit a push vznikají až po uložení. Všechny ostatní důvody (OFF, kill,
+  day lock, konec okna, CME pauza, vypršení ARM, nezpůsobilý leader) mají přednost a vstup ruší dál, i když
+  je na symbolu pozice mimo appku; platí i po DISARM: jakmile kopírka není ARMED, zruší se čekající vstup
+  z důvodu vypnutí. **Vstup vyplněný proti pozici za ARMED (varianta A schválená Filipem, 5. 11. 2026):** nohy
+  leadera dál pracují bez pozice, nic se u leadera neruší ani nezavírá. Ve skupině běžná ARMED cesta zruší nohy
+  kopie u followera; když se pak nahá noha leadera vyplní, follower ji nemá a autoritativní kontrola velikosti to
+  vyhodnotí jako divergenci (`failClosed` bez auto-close; ověřeno jen v mocku). Pro tento stav je samostatná, jde
+  odebrat jedinou funkcí, `reviewFilledEntryLegsWithoutPosition`: READ-ONLY z paměti, bez REST, zápisu u brokera
+  a `failClosed`. Vstup z flat bez `cancel` už nepracuje, jeho noha je otevřená, bez ingress a s klidným spojením,
+  `positionOverCovered` nebo pozice na opačné straně než vstup (fill ji jen zmenšil: +2, SELL 1, net +1) trvá ≥ 5 s:
+  jednou za záznam druh `outside-position-filled` (audit, push „vstup se vyplnil a jeho SL/TP pracují bez pozice /
+  nechrání pozici; zruš je v Tradovate nebo dej Flatten“) a `declineTransportResume`. Po ohlášení se pokračování odmítá
+  bez ustálení, dokud stav trvá, i za výpadku; odklad a ustálení platí jen pro první hlášení. Nezávisí na
+  prvním upozornění, kryje i fill do 2 s. Při `scaleInOn()` se přeskočí, tam je incident `reviewScaleInCoverage`.
+  **Rušení vstupu z flat proti pozici na opačné straně (kolo 4, teď jen z ostatních důvodů):** není to
+  ochrana, je to vlastní OSO, jehož nohy by po vyplnění (zavření pozice) začaly pracovat jako nahé vstupy.
+  Vlastnictví nedokazuje tvar (bez parentu, ne noha, strana i typ = záznam) — ten má i uživatelův ochranný
+  příkaz v poškozeném záznamu (C7 „nikdy ochrana“) —, ale clOrdId z REST předčtení = `tag` záznamu
   (`pendingEntryPreReadDecision` s `kind: 'from-flat'` a `expected.tag`; **NEOVĚŘENO na brokeru**, že
   REST čtení nativního `placeOSO` parentu tag vrací — záložně `parentOrderId` nohou z kola 5, taky
   NEOVĚŘENO); tag chybí / nesedí, přikoupení
   (otočená pozice) = dál incident s vlastním textem „vstup by ji zmenšil nebo otočil“, nic se neruší.
-  Dřív: incident → `failClosed` → DISARM uprostřed živého kopírovaného obchodu (sonda A1/A2). Ruční C7
-  `cancel-entry` takový vstup dál odmítne jako ochranu (`not-entry`) — vědomě beze změny.
+  Ruční C7 `cancel-entry` (rozhodnutí 5. 11. 2026, vědomý klik) má stejnou podmínku (`pendingEntryOppositeState`); už vyplněný vstup proti pozici dostane text `OPPOSITE_FILL_SHAPE` dřív než odmítnutí bez tagu:
+  vstup z flat s clOrdId = `tag` záznamu se zruší (průběh čtení i texty po fillu přes durable `entryOpposite`);
+  neprokázané vlastnictví (bez clOrdId, cizí clOrdId, přikoupení) = `not-entry` s pravdivým textem, nic se neodešle.
+  Záložní důkaz z nohou má jen automatika. Na brokeru NEOVĚŘENO, zda stream a `listOrders` u `placeOSO` tag nesou.
   Ověření po zrušení (oponentura kolo 3, P2): „ustálené“ je jen druhé čtení po ustálení (jako C7) —
   ani po selhaném nebo odmítnutém zápisu („TooLateToCancel“ = vstup se vyplnil během rušení, REST fill
   ještě nemusí ukazovat) první čtení s vstupem, který dál pracuje (i s dílčím fillem) nebo nejde
@@ -415,8 +442,8 @@ existující ochranu.
   `{ kind: 'cancel', opposite: true }`) — texty výsledku a auditu (`cancelEntryOutcome` /
   `cancelEntryVerdict` s `opposite`, ověření po startu, pozdní fill, „stream doručil fill“) pak netvrdí
   „pozice je otevřená“ (INV-UI-03); předčtení s fillem píše neutrálně „pozici a SL/TP ověřuji čtením“.
-  Pozn.: závod vzniká jen při variantě (a) rozhodnutí kola 4 (rušení vstupu proti pozici na opačné
-  straně) — to dál **čeká na potvrzení Filipa**; při variantě (b) by se takový vstup nerušil.
+  Po rozhodnutí Filipa z 5. 11. 2026 závod vzniká jen při rušení z ostatních důvodů (typicky DISARM), proto
+  `cancel.opposite` a jeho texty zůstávají.
   **Kolo 5 (P3):** kopie vstupu u followera POZOROVANĚ skončená (`canceled` / `rejected`) s pozorovaným
   fillem 0 z tohoto vstupu pozici nemá (`followerCopyFromEntryState` → null; dřív `unreadable` →
   incident „nejde ověřit“ → DISARM uprostřed kopírovaného obchodu, sonda PB); konečný stav s fillem > 0
@@ -450,9 +477,10 @@ existující ochranu.
   jako revize (`pendingEntryConcernedFollowers`: vazba na vstup nebo zapojení) — vyřazený follower bez
   vazby (kopii nemá, INV-PART-03) ruční zrušení neblokuje ani bez načtených pozic. Text `copy-filled`
   je neutrální („pozice followera se změnila a leader ne“ — kopie mohla pozici followera i zavřít).
-  A1 / rozhodnutí kola 4: vlastnictví z tagu (clOrdId z REST čtení nativního `placeOSO` parentu) ani
-  záložně z `parentOrderId` nohou **není na brokeru ověřené** (NEOVĚŘENO; mock dodává obojí) — když
-  neplatí ani jedno, vstup se nezruší a je `not-entry` incident (`failClosed`).
+  Vlastnictví z tagu (clOrdId z REST čtení nativního `placeOSO` parentu) ani záložně z `parentOrderId` nohou
+  **není na brokeru ověřené** (NEOVĚŘENO; mock dodává obojí) — když neplatí ani jedno, vstup se při rušení
+  z ostatních důvodů nezruší a je `not-entry` incident (`failClosed`). Sama pozice mimo appku za ARMED na
+  tomto ověření nestojí, nic se tam nečte ani neruší.
   Hlídá test: `tests/manualPendingEntryReplay.test.ts`, `tests/manualPendingEntryReview.test.ts`,
   `tests/manualScaleInReplay.test.ts` (C12: výpadek, změna celé pozice), `tests/liveCancelPending.test.ts`
   (kolo 5: `fillPositionProblem`, texty `opposite`).
@@ -2724,7 +2752,8 @@ existující ochranu.
   - Oponentura kolo 4 (4. 11. 2026): (P1) ve worktree zůstala mutace M17 ze zabitého mutačního běhu —
     vráceno (sha = premut), mutace od kola 4 jen v paměti (Vite `transform`, worktree se nemění), diskový
     runner se zámkem, zálohou na disku a obnovou při signálu / startu; (P2) vlastní vstup z flat proti
-    pozici mimo appku na opačné straně se zruší (clOrdId = tag; rozhodnutí čeká na Filipa, INV-BRAKE-01);
+    pozici mimo appku na opačné straně se zruší (clOrdId = tag; za ARMED nahrazeno rozhodnutím Filipa
+    z 5. 11. 2026, INV-BRAKE-01);
     (P2) pozice followera „odjinud“ jen po ustálení a bez ingress followera (revize, C7, pozdní kontrola),
     Fill kopie před Position blokuje, kopie vyplněná / nezrušená po zrušení leadera za DISARMED = incident
     per záznam; (P3) fill ze streamu rozhodne výsledek zrušení i při REST pozadu po ustálení a opraví
@@ -2737,7 +2766,7 @@ existující ochranu.
     = `filled`, bez stavu `unreadable` (INV-BRAKE-01); (P3) nahrazení snímku pozic zneplatní ustálení
     followera (`AccountPositionsCache`, INV-TRAD-01); (P3) záložní důkaz vlastnictví z nohou bez
     clOrdId (A1; na brokeru NEOVĚŘENO, INV-TRAD-03); (P3) testy X2 (hák za ARMED mlčí) a X4 (follower
-    flat + neznámý stav kopie → zrušení projde). Rozhodnutí varianty (a) kola 4 dál čeká na Filipa.
+    flat + neznámý stav kopie → zrušení projde).
   - Oponentura kolo 6 (4. 11. 2026, jen P3): (A6) SL/TP vyplněné mezi čtením nohou a kontrolou pozice →
     `leaderVerifiedFlat` i ve větvi pozice = `flat` bez falešného incidentu (INV-UI-03, INV-DEFAULT-03);
     (C6) dílčí fill ze streamu a vstup v cache dál pracuje = `working` + incident „zbytek dál čeká“, cesta
@@ -2745,10 +2774,17 @@ existující ochranu.
     ruční zrušení (`unknown` ≠ flat, INV-DEFAULT-02) — jediná podmínka s revizí, C7 bere stejné followery
     jako revize; (X2) test drží ARMED cestu až do autoritativní kontroly velikosti (jen mock); text
     `copy-filled` neutrální. A1 (tag z REST čtení `placeOSO` parentu / `parentOrderId` nohou) dál
-    NEOVĚŘENO na brokeru. Rozhodnutí varianty (a) kola 4 dál čeká na Filipa; `tsc` NEOVĚŘENO.
-  Hlídá test: `tests/manualPendingEntryReplay.test.ts` (104, controller + mock), `tests/manualPendingEntryReview.test.ts`
+    NEOVĚŘENO na brokeru.
+  - Rozhodnutí Filipa (5. 11. 2026, nahrazuje variantu (a) kola 4): pozice mimo appku za ARMED = jen upozornění
+    (`outside-position`, bez `failClosed`), všechny ostatní důvody a DISARM vstup dál ruší; detail v INV-BRAKE-01.
+    `cancel.opposite` zůstává kvůli rušení z ostatních důvodů.
+  - Oponentura kolo 7 (5. 11. 2026, bez P1): ruční `cancel-entry` proti pozici s prokázaným vlastnictvím projde;
+    druhé upozornění po fillu (varianta A, `outside-position-filled`); status neposílá zastaralé upozornění;
+    texty „zmenší, zavře nebo otočí“; selhaný commit značky uvolní dedup.
+  Hlídá test: `tests/manualPendingEntryReplay.test.ts` (137, controller + mock), `tests/manualPendingEntryReview.test.ts`
   (čisté), `tests/manualEntryPreview.test.ts` (`cme-halt`), `tests/manualScaleInReplay.test.ts` (C12 ×4),
   `tests/copierIncidentWatchdog.test.ts` (C12 push, kolo 3), `tests/liveCancelPending.test.ts`;
+  rozhodnutí Filipa a kolo 7 v paměti (`c12r8fix/c12r8-mut.log`) ve scratchpadu;
   mutačně ověřeno: sada kola 2 (72) + kolo 3, plný běh v `c12r3-mut.log` ve scratchpadu; kolo 4 v paměti
   (sada kola 3 s aktualizovanými vzory + 21 nových), `c12r4-mut.log` ve scratchpadu; kolo 5 v paměti
   (34 mutací — nové + X1/X2/X4/X5/X6 oponentury, `c12r5fix/c12r5-mut.log`; R5-07/R5-24/R5-25 po úpravě

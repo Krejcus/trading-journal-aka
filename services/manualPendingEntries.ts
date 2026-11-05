@@ -7,6 +7,8 @@
  * - `pendingOwnEntryViolation` — tvrdé podmínky, za kterých čekající vlastní vstup smí
  *   existovat (jen pod živým ARM, mimo brzdy, v okně, mimo denní pauzu CME…). Přechodné
  *   brány (spojení, ingress, resync) sem nepatří — ty controller řeší ODKLADEM.
+ * - `pendingOwnEntryOutsidePosition` — pozice mimo appku u vstupu z flat: jen upozornění, nic se
+ *   neruší (rozhodnutí Filipa 5. 11. 2026, INV-BRAKE-01).
  * - `pendingEntryPreReadDecision` — čerstvé REST čtení vstupu těsně před zrušením
  *   (oponentura P1): zrušit jen vstup, který u brokera opravdu čeká s fillem 0; dílčí
  *   fill = NERUŠIT (zbytek by šel s nohami, kaskáda NEOVĚŘENÁ — stejně jako C16).
@@ -17,7 +19,7 @@ import type { OrderSide } from './brokerPort';
 
 export type PendingOwnEntryKind = 'add' | 'from-flat';
 
-/** Ustálení „pozice mimo appku“ (Position může předběhnout Fill — oponentura P1c). */
+/** Ustálení „pozice mimo appku“ před upozorněním (Position může předběhnout Fill — oponentura P1c). */
 export const PENDING_ENTRY_OUTSIDE_SETTLE_MS = 2_000;
 
 export interface PendingOwnEntryViolationInput {
@@ -44,10 +46,6 @@ export interface PendingOwnEntryViolationInput {
   side: OrderSide;
   /** Jen přikoupení: fill v jiné epizodě deníku než základ. */
   episodeMismatch: boolean;
-  /** Jen z flat: vyplněné množství vstupu v cache (dílčí fill vysvětluje pozici). */
-  entryFilled?: number;
-  /** Jen z flat: pozice mimo appku trvá ≥ ustálení bez nezpracovaných eventů leadera. */
-  outsidePositionSettled?: boolean;
 }
 
 /**
@@ -73,10 +71,26 @@ export function pendingOwnEntryViolation(input: PendingOwnEntryViolationInput): 
     if ((input.net > 0) !== (input.side === 'Buy')) return 'pozice je na druhé straně';
     return null;
   }
-  // Z flat: pozice na symbolu bez fillu vstupu = pozice mimo appku — až po ustálení.
-  if (input.net == null || input.net === 0) return null;
-  if ((input.entryFilled ?? 0) > 0) return null;
-  return input.outsidePositionSettled === true ? 'pozice mimo appku' : null;
+  // Z flat: pozice mimo appku není důvod ke zrušení (rozhodnutí Filipa 5. 11. 2026) — jen upozornění,
+  // `pendingOwnEntryOutsidePosition`. Vstup ruší až jiný důvod výš, včetně vypnutí kopírky.
+  return null;
+}
+
+/**
+ * Rozhodnutí Filipa (5. 11. 2026, INV-BRAKE-01): vlastní čekající vstup z flat a ustálená pozice na symbolu
+ * bez fillu vstupu (pozice mimo appku, stejná i opačná strana) = za ARMED JEN upozornění. Vstup se neruší,
+ * kopírka se nevypíná. Volá se jen tehdy, když `pendingOwnEntryViolation` nenašla jiný důvod.
+ */
+export function pendingOwnEntryOutsidePosition(input: {
+  kind: PendingOwnEntryKind;
+  /** Pozice leadera na symbolu ze streamu; null = neznámá (neznámá není pozice ani flat). */
+  net: number | null;
+  /** Vyplněné množství vstupu v cache (dílčí fill vysvětluje pozici). */
+  entryFilled: number;
+  /** Pozice trvá ≥ ustálení bez nezpracovaných eventů leadera. */
+  settled: boolean;
+}): boolean {
+  return input.kind === 'from-flat' && input.net != null && input.net !== 0 && input.entryFilled === 0 && input.settled;
 }
 
 /** Podmnožina `BrokerOrder` z autoritativního REST čtení vstupu. */
@@ -96,8 +110,8 @@ export interface PendingEntryReadOrder {
 export type PendingEntryPreRead =
   /**
    * Vstup u brokera čeká s fillem 0 a je to opravdu vstup — smí se zrušit (jeden pokus). `opposite` =
-   * vlastní vstup z flat proti pozici leadera na opačné straně (kolo 4, P2) — durable do `cancel.opposite`
-   * kvůli pravdivým textům po fillu během rušení (kolo 5, P2).
+   * vlastní vstup z flat proti pozici leadera na opačné straně (ruší se jen z jiného důvodu než ta pozice,
+   * např. po vypnutí kopírky) — durable do `cancel.opposite` kvůli pravdivým textům po fillu během rušení.
    */
   | { kind: 'cancel'; opposite?: true }
   /** Čtení nerozhodlo (nečitelné / neautoritativní) — nic se neruší, další ČTENÍ až po odstupu. */
@@ -114,6 +128,34 @@ export type PendingEntryPreRead =
 const OPEN = new Set(['working', 'pending']);
 
 /**
+ * Vlastní vstup Z FLAT proti pozici leadera na opačné straně (jediná podmínka pro automatické i ruční zrušení):
+ * `none` = tento tvar to není; `proven` = vlastnictví dokazuje clOrdId = tag záznamu, bez clOrdId záložně nohy
+ * (`legsProveOwnership`); `unproven` = nic se neruší (přikoupení, cizí tag, bez důkazu).
+ */
+export function pendingEntryOppositeState(input: {
+  order: Pick<PendingEntryReadOrder, 'brokerOrderId' | 'side' | 'orderType' | 'parentOrderId' | 'tag'>;
+  expected: { side: string; orderType: string; tag?: string };
+  legIds: ReadonlySet<string>;
+  leaderNet: number | null;
+  kind?: PendingOwnEntryKind;
+  legsProveOwnership?: boolean;
+}): 'none' | 'proven' | 'unproven' {
+  const { order } = input;
+  const net = input.leaderNet ?? 0;
+  const ownShape = order.parentOrderId == null && !input.legIds.has(order.brokerOrderId)
+    && order.side === input.expected.side && order.orderType === input.expected.orderType;
+  if (!ownShape || net === 0 || (order.side === 'Buy') === (net > 0)) return 'none';
+  const tagKnown = order.tag != null && order.tag !== '';
+  const provenOwn = tagKnown ? order.tag === input.expected.tag : input.legsProveOwnership === true;
+  return input.kind === 'from-flat' && provenOwn ? 'proven' : 'unproven';
+}
+
+/** Pravdivý text, když vlastnictví vstupu proti pozici na opačné straně není prokázané (nic se neruší). */
+export const pendingEntryOppositeProblem = (net: number | null) => (
+  `Pozice leadera je na opačné straně (${net ?? 0}) — vstup by ji zmenšil, zavřel nebo otočil; nic se nezrušilo, zruš ho v Tradovate.`
+);
+
+/**
  * Rozhodnutí z čerstvého REST čtení vstupu těsně před automatickým zrušením (oponentura C12 P1):
  * cache streamu může být pozadu (fill / Position před Fill), proto se ruší jen podle autoritativního
  * stavu. Stejná obrana „nikdy nohu, nikdy ochranu“ jako ruční `cancel-entry` (C7).
@@ -126,7 +168,7 @@ export function pendingEntryPreReadDecision(input: {
   leaderNet: number | null;
   /**
    * Druh vlastního záznamu. Jen `from-flat` smí zrušit vlastní vstup proti pozici na opačné straně
-   * (oponentura kolo 4, P2); bez údaje (a u přikoupení) platí konzervativní `not-entry`.
+   * (oponentura kolo 4, P2; jen z jiného důvodu než ta pozice); bez údaje (a u přikoupení) platí konzervativní `not-entry`.
    */
   kind?: PendingOwnEntryKind;
   /**
@@ -142,25 +184,17 @@ export function pendingEntryPreReadDecision(input: {
   if (order.symbol !== input.expected.symbol) return { kind: 'not-entry', problem: 'Cíl zrušení nesedí se vstupem (symbol) — nic se nezrušilo.' };
   // Oponentura C12 kolo 1 (P3): vlastní vstup (není noha, strana i typ = záznam) proti pozici leadera na
   // opačné straně (pozice mimo appku z flat, otočená pozice u přikoupení) není „ochrana“ — vlastní text.
-  const net = input.leaderNet ?? 0;
-  const ownShape = order.parentOrderId == null && !input.legIds.has(order.brokerOrderId)
-    && order.side === input.expected.side && order.orderType === input.expected.orderType;
-  const ownOpposite = ownShape && net !== 0 && (order.side === 'Buy') !== (net > 0);
+  const opposite = pendingEntryOppositeState({ order, expected: input.expected, legIds: input.legIds, leaderNet: input.leaderNet, kind: input.kind, legsProveOwnership: input.legsProveOwnership });
+  const ownOpposite = opposite !== 'none';
   // Oponentura C12 kolo 4 (P2, INV-BRAKE-01): vlastní vstup Z FLAT proti pozici na opačné straně (ta vznikla
   // až po něm mimo appku — vstup z flat jinak projít nemůže) není ochrana, je to vlastní OSO, jehož nohy
-  // by po zavření pozice otevřely novou pozici. Zruší se stejně jako na stejné straně (níž: jen čekající
+  // by po zavření pozice otevřely novou pozici. Když ho ruší jiný důvod (vypnutí, kill, konec okna…; sama
+  // pozice mimo appku ho od 5. 11. 2026 neruší), zruší se stejně jako na stejné straně (níž: jen čekající
   // s fillem 0; dílčí fill = incident). Tvar nestačí (poškozený záznam s id uživatelova ochranného příkazu
   // má stejný tvar — C7 „nikdy ochrana“): vlastnictví dokazuje clOrdId z REST čtení = tag záznamu; bez
   // clOrdId (kolo 5, P3) obě nohy záznamu s `parentOrderId` = vstup (`legsProveOwnership`). Tag, který
   // nesedí, se nohami nepřebíjí. Přikoupení (otočená pozice) a neprokázané vlastnictví = incident bez zrušení.
-  const tagKnown = order.tag != null && order.tag !== '';
-  const provenOwn = tagKnown ? order.tag === input.expected.tag : input.legsProveOwnership === true;
-  if (ownOpposite && !(input.kind === 'from-flat' && provenOwn)) {
-    return {
-      kind: 'not-entry',
-      problem: `Pozice leadera je na opačné straně (${net}) — vstup by ji zmenšil nebo otočil; nic se nezrušilo, zruš ho v Tradovate.`,
-    };
-  }
+  if (opposite === 'unproven') return { kind: 'not-entry', problem: pendingEntryOppositeProblem(input.leaderNet) };
   const problem = cancelEntryTargetProblem({
     order: { brokerOrderId: order.brokerOrderId, side: order.side, orderType: order.orderType, parentOrderId: order.parentOrderId ?? null },
     expected: { side: input.expected.side, orderType: input.expected.orderType },

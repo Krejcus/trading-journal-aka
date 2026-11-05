@@ -7,6 +7,7 @@ import {
   pendingEntryAutoCancelAt,
   pendingEntryNeedsLegOwnershipProof,
   pendingEntryPreReadDecision,
+  pendingOwnEntryOutsidePosition,
   pendingOwnEntryViolation,
   type PendingOwnEntryViolationInput,
 } from '../services/manualPendingEntries';
@@ -20,7 +21,7 @@ const base = (patch: Partial<PendingOwnEntryViolationInput> = {}): PendingOwnEnt
   kind: 'from-flat', armed: true, shadowMode: false, killSwitch: false, dayLockPending: false, dayLocked: false,
   pauseActive: false, managementOnly: false, leaderIneligible: false, windowNow: 'off', windowAfterReserve: 'off',
   cmeHaltWindow: false, now: NOW, sessionEndAt: NOW + 8 * 60 * MIN, armExpiresAt: NOW + 7 * 60 * MIN, reserveMs: RESERVE,
-  net: 0, side: 'Buy', episodeMismatch: false, entryFilled: 0, outsidePositionSettled: false, ...patch,
+  net: 0, side: 'Buy', episodeMismatch: false, ...patch,
 });
 const violation = (patch: Partial<PendingOwnEntryViolationInput> = {}) => pendingOwnEntryViolation(base(patch));
 
@@ -47,14 +48,22 @@ describe('C12 — stavová podmínka čekajícího vlastního vstupu (čistě)',
     expect(violation({ armExpiresAt: null })).toBeNull();
   });
 
-  it('z flat: neznámá pozice (null) není důvod; pozice mimo appku až po ustálení a jen bez fillu vstupu', () => {
-    expect(violation({ net: null })).toBeNull();
-    expect(violation({ net: 1 })).toBeNull(); // Position mohla předběhnout Fill — čeká se na ustálení
-    expect(violation({ net: 1, outsidePositionSettled: true })).toBe('pozice mimo appku');
-    expect(violation({ net: -2, outsidePositionSettled: true })).toBe('pozice mimo appku');
-    // Dílčí fill vlastního vstupu pozici vysvětluje (zbytek řeší controller incidentem, ne zrušením).
-    expect(violation({ net: 1, entryFilled: 1, outsidePositionSettled: true })).toBeNull();
-    expect(violation({ net: 0, outsidePositionSettled: true })).toBeNull();
+  it('z flat: pozice mimo appku ani neznámá pozice není důvod ke zrušení (rozhodnutí Filipa 5. 11. 2026), brzdy dál ruší i s pozicí', () => {
+    for (const net of [null, 0, 1, -2]) expect(violation({ net })).toBeNull();
+    expect(violation({ net: 1, armed: false })).toBe('kopírka je vypnutá');
+    expect(violation({ net: -2, killSwitch: true })).toBe('kill switch');
+    expect(violation({ net: -2, cmeHaltWindow: true })).toBe('denní pauza CME (16:00–17:00 CT)');
+  });
+
+  it('z flat: upozornění na pozici mimo appku jen po ustálení, bez fillu vstupu a u známé nenulové pozice; přikoupení nikdy', () => {
+    const outside = (patch: Partial<Parameters<typeof pendingOwnEntryOutsidePosition>[0]> = {}) => pendingOwnEntryOutsidePosition({ kind: 'from-flat', net: 1, entryFilled: 0, settled: true, ...patch });
+    expect(outside()).toBe(true);
+    expect(outside({ net: -2 })).toBe(true);
+    expect(outside({ settled: false })).toBe(false); // Position mohla předběhnout Fill
+    expect(outside({ entryFilled: 1 })).toBe(false); // dílčí fill vlastního vstupu pozici vysvětluje
+    expect(outside({ net: 0 })).toBe(false);
+    expect(outside({ net: null })).toBe(false);
+    expect(outside({ kind: 'add' })).toBe(false);
   });
 
   it('přikoupení: zavřená / opačná pozice a nová epizoda; neznámá pozice nic', () => {
@@ -62,12 +71,10 @@ describe('C12 — stavová podmínka čekajícího vlastního vstupu (čistě)',
     expect(violation({ kind: 'add', net: -1 })).toBe('pozice je na druhé straně');
     expect(violation({ kind: 'add', net: 1, episodeMismatch: true })).toBe('přikoupení otevřelo nový obchod');
     expect(violation({ kind: 'add', net: null })).toBeNull();
-    // „Pozice mimo appku“ platí jen pro vstup z flat.
-    expect(violation({ kind: 'add', net: 2, outsidePositionSettled: true })).toBeNull();
   });
 
   it('pendingAddViolation (přikoupení) deleguje beze změny a zná i pauzu CME', () => {
-    const { kind: _kind, entryFilled: _filled, outsidePositionSettled: _settled, cmeHaltWindow: _halt, ...add } = base({ net: 1 });
+    const { kind: _kind, cmeHaltWindow: _halt, ...add } = base({ net: 1 });
     expect(pendingAddViolation(add)).toBeNull();
     expect(pendingAddViolation({ ...add, net: 0 })).toBe('pozice je zavřená');
     expect(pendingAddViolation({ ...add, cmeHaltWindow: true })).toBe('denní pauza CME (16:00–17:00 CT)');
@@ -158,7 +165,7 @@ describe('C12 — předčtení vstupu před automatickým zrušením (oponentura
 
   it('oponentura kolo 1 (P3): vlastní vstup proti pozici na opačné straně = vlastní text, ne „ochrana“; nic se neruší', () => {
     const own = decide({}, { leaderNet: -1 });
-    expect(own).toEqual({ kind: 'not-entry', problem: expect.stringContaining('Pozice leadera je na opačné straně (-1) — vstup by ji zmenšil nebo otočil') });
+    expect(own).toEqual({ kind: 'not-entry', problem: expect.stringContaining('Pozice leadera je na opačné straně (-1) — vstup by ji zmenšil, zavřel nebo otočil') });
     expect(JSON.stringify(own)).not.toContain('ochrana');
     // Cizí tvar (jiná strana než záznam) zůstává obecná obrana „nikdy ochranu“.
     expect(decide({ side: 'Sell' }, { leaderNet: 1 })).toEqual({ kind: 'not-entry', problem: expect.stringContaining('nesedí se vstupem') });

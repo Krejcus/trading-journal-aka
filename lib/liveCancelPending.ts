@@ -8,7 +8,8 @@
  *   Ochranné nohy pozice, nohy čekajícího vstupu (odejdou s parentem), částečně
  *   vyplněný vstup a cizí příkazy z definice vypadnou — jen se spočítají pro text potvrzení.
  * - `cancelEntryVerdict` — výsledek zrušení JEN stavem u brokera (adaptér hlásí úspěch
- *   `cancelOrder` i u vyplněného příkazu; INV-TRAD-02: zrušení s cumQty > 0 je dílčí).
+ *   `cancelOrder` i u vyplněného příkazu; INV-TRAD-02: zrušení s cumQty > 0 je dílčí). Fill nemusel
+ *   pozici otevřít: tvar proti pozici na opačné straně má vlastní text (`opposite`).
  * - UI: dvoukrokové potvrzení s klíčem „co jsem viděl“, text potvrzení, sekvenční
  *   odeslání N× `manage-leader-order cancel-entry` (každý s vlastním `operationId`,
  *   nic se automaticky neopakuje) a výsledek po položkách; Dashboard „Zrušit příkaz“
@@ -231,12 +232,12 @@ export function cancelEntryFilledFlatReason(outcome: { code: 'entry-filled' | 'e
 /**
  * Oponentura C12 kolo 5 (P2, INV-UI-03): tvar zrušeného vstupu. `opposite` = vlastní vstup z flat se rušil
  * proti pozici leadera na OPAČNÉ straně (pozice mimo appku, durable `cancel.opposite` z předčtení) — jeho
- * fill pozici zavřel nebo zmenšil, neotevřel; text nesmí tvrdit „pozice je otevřená“. Jen text, ochranu
+ * fill pozici zmenšil, zavřel nebo otočil; text nesmí tvrdit „pozice je otevřená“. Jen text, ochranu
  * rozhoduje kontrola nohou a pozice (`legsProtectionProblem` + `fillPositionProblem`).
  */
 export type CancelEntryShape = { opposite?: boolean };
 /** Tvar fillu vstupu proti pozici na opačné straně (bez tvrzení „pozice je otevřená“). */
-export const OPPOSITE_FILL_SHAPE = 'šel proti pozici leadera na opačné straně, takže ji zavřel nebo zmenšil (neotevřel); jeho SL/TP mohou pracovat bez pozice jako nové vstupy';
+export const OPPOSITE_FILL_SHAPE = 'šel proti pozici leadera na opačné straně, takže ji zmenšil, zavřel nebo otočil; jeho SL/TP mohou pracovat bez pozice jako nové vstupy';
 const OPPOSITE_FILL_NOTE = `${OPPOSITE_FILL_SHAPE} — ověřuji čtením.`;
 
 /** Výsledek zrušení vstupu podle stavu u brokera (worker; INV-MODE-02 duch, INV-TRAD-02). */
