@@ -2357,6 +2357,9 @@ existující ochranu.
 - Proč: Filip 26. 10. povolil cenu z TV pro P&L zobrazené na obrazovce, nikdy
   pro risk, day lock, limity ani kopírku. Veřejný Realtime kanál je
   podvrhnutelný, proto se zprávy podepisují.
+- **Živé P&L na lince vstupu (Filip 5. 11. 2026):** `liveDisplayOpenPnl` smí do štítku linky
+  a tlačítka panelu, jen s cenou z IBKR téhož kontraktu ≤ 5 s; jinak se ukáže číslo brokera.
+  Stejně jako `LiveOpenPnlValue` nikdy do rizika, limitů, day locku ani příkazů.
 - **Nativní Market a IBKR v riziku ručního vstupu (Filip 1. 11. 2026 večer,
   výslovně schváleno: „jen IBKR pro risk“):** od 2. 11. 2026 Market z panelu
   posílá skutečný Market (`orderType: 'Market'`, bez ceny příkazu; výjimka

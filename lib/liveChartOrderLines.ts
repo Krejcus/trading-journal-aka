@@ -37,6 +37,8 @@ export interface LivePositionLineControls {
    */
   bareClose?: { entryOperationId: string } | null;
   pointValue: number;
+  /** Živé P&L jen do štítku (`liveDisplayOpenPnl`); null = číslo brokera. Nic nerozhoduje (INV-UI-04). */
+  displayOpenPnl?: number | null;
 }
 
 /** Proč posun nejde poslat (UI předkontrola; rozhoduje worker a broker). null = smí. */
@@ -83,15 +85,16 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     return `${kind === 'stopLoss' ? 'SL' : 'TP'}  ${signedUsd(pnl)} · ${Math.abs(at - entry).toFixed(2)} b${note ? ` · ${note}` : ''}`;
   };
   const be = controls.manageable ? liveBreakEven(summary, controls.entryAvg) : null;
+  const openPnl = controls.displayOpenPnl ?? summary.openPnl;
   const entryLabel = position
-    ? `${long ? 'LONG' : 'SHORT'} ${summary.quantity}${scope}  ${entry.toFixed(2)}${summary.openPnl != null ? ` · ${signedUsd(summary.openPnl)}` : ''}`
+    ? `${long ? 'LONG' : 'SHORT'} ${summary.quantity}${scope}  ${entry.toFixed(2)}${openPnl != null ? ` · ${signedUsd(openPnl)}` : ''}`
     : `${long ? 'BUY' : 'SELL'} ${summary.quantity} ${(summary.entryType ?? '').toUpperCase()}${scope}  ${entry.toFixed(2)}`;
   // Holá pozice (C8): × jen s nabídkou workeru, id cíle v id čáry (klíč × i Shift+X), vždy dvoukrokově.
   const bare = position && controls.bareClose ? controls.bareClose : null;
   const lines: BacktestChartOrderLine[] = [{
     id: bare ? liveBareLineId(bare.entryOperationId) : `${LIVE_POSITION_OWNER}:entry`, ownerId: LIVE_POSITION_OWNER, ownerType: position ? 'position' : 'order', kind: 'entry',
     price: entry,
-    color: position ? (summary.openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : summary.openPnl >= 0 ? '#059669' : SL_COLOR) : (long ? LONG_COLOR : SHORT_COLOR),
+    color: position ? (openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : openPnl >= 0 ? '#059669' : SL_COLOR) : (long ? LONG_COLOR : SHORT_COLOR),
     label: entryLabel,
     draggable: false,
     // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: × = zavřít obchod (leader, kopírka zavře kopie).

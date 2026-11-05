@@ -79,7 +79,7 @@ import {
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
 import { LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
-import { withIbkrTightenMark } from '../lib/liveChartPosition';
+import { liveDisplayOpenPnl, withIbkrTightenMark } from '../lib/liveChartPosition';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
 import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
@@ -382,6 +382,10 @@ const LiveTradingScreen: React.FC<Props> = ({
     ? withIbkrTightenMark(summary, position?.symbol ?? null, { source: quoteInfo.source, price: tick?.price ?? null, at: tick?.at ?? null, stale: quoteInfo.stale }, at)
     : null), [summary, position?.symbol, quoteInfo.source, quoteInfo.stale, tick]);
   const guardSummary = useMemo(() => guardSummaryAt(Date.now()), [guardSummaryAt]);
+  // Živé P&L jen do štítku (INV-UI-04); bez čerstvé ceny IBKR téhož kontraktu číslo brokera.
+  const displayOpenPnl = useMemo(() => (summary ? liveDisplayOpenPnl(summary, position?.symbol ?? null,
+    { source: quoteInfo.source, price: tick?.price ?? null, at: tick?.at ?? null, stale: quoteInfo.stale }, INSTRUMENT.pointValue, Date.now()) : null),
+  [summary, position?.symbol, quoteInfo.source, quoteInfo.stale, tick]);
   // Hláška nad grafem; `until` = výzva dvoukroku zkratky (zmizí s oknem potvrzení), jinak 8 s.
   const [lineNotice, setLineNotice] = useState<{ tone: 'ok' | 'bad' | 'warn'; text: string; at: number; until?: number } | null>(null);
   // Správa obchodu leadera (U10): JEDEN runner a jeden zámek pro čáry grafu, zkratky i sekci
@@ -434,10 +438,11 @@ const LiveTradingScreen: React.FC<Props> = ({
     canClose: manageCloseSupported && copier.available && copier.status?.armed === true && copier.status.shadowMode !== true,
     entryAvg: manageEntryAvgPrice ?? null,
     pointValue: INSTRUMENT.pointValue,
+    displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd: entryScaleIn?.pendingAdd ?? null,
     bareClose: bareOffer?.enabled ? { entryOperationId: bareOffer.trade.entryOperationId } : null,
-  }) : []), [copier.available, copier.status, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
+  }) : []), [copier.available, copier.status, displayOpenPnl, manageCloseSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
   // Cenové čáry pozice: workspace je vynechá v panelu, kde pozici kreslí štítky (jinak by byla dvakrát).
   const [positionLines] = useState(createLivePriceLinesFeed);
   useEffect(() => {
@@ -866,7 +871,7 @@ const LiveTradingScreen: React.FC<Props> = ({
         >{ticketOpen ? <><PanelRightClose size={13} />Skrýt objednávku</> : <><PanelRightOpen size={13} />Objednávka</>}
           {/* Se zavřeným panelem ukazuje tlačítko běžící pozici (jen zobrazení z brokera). */}
           {!ticketOpen && summary?.kind === 'position' && <span className="rounded-[5px] bg-white/[0.18] px-1.5 py-px font-mono text-[10px] font-extrabold">
-            {summary.side === 'long' ? 'LONG' : 'SHORT'} {summary.quantity}{summary.openPnl != null ? ` · ${formatUsd(summary.openPnl)}` : ''}
+            {summary.side === 'long' ? 'LONG' : 'SHORT'} {summary.quantity}{(displayOpenPnl ?? summary.openPnl) != null ? ` · ${formatUsd((displayOpenPnl ?? summary.openPnl)!)}` : ''}
           </span>}
         </button>
         <button

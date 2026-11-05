@@ -453,8 +453,8 @@ export function useLiveBracketTemplateLibrary(userId: string | null | undefined)
 
 /**
  * Nový návrh panelu (tlačítko strany, pravý klik, Shift+B/S): velikost z předvoleb
- * zařízení (do stropu skupiny), SL/TP z výchozí šablony (★; bez ní vestavěná
- * 12 b / 2R = přesně dosavadní `newTicketDraft`). Přikoupení šablonu ignoruje
+ * zařízení (do stropu skupiny). Otevře se vždy BEZ SL/TP (Filip 5. 11.: nohy si natáhne
+ * z „+ SL“ / „+ TP“ na lince nebo vybere šablonu v panelu). Přikoupení SL/TP nechá
  * (SL/TP pozice dosadí panel). `base` = výslovná velikost volajícího (např. počet
  * z menu grafu) — má přednost a šablona pak velikost nemění. Jen předvyplnění.
  */
@@ -487,7 +487,8 @@ export function liveTicketNewDraft(input: {
       // Výslovně zadaná velikost (menu grafu) se šablonou nepřepisuje.
       applySizing: explicit?.quantity == null && explicit?.sizing == null && explicit?.riskUsd == null,
     });
-  return { draft: result.draft, notes: result.notes };
+  if (input.scaleIn) return { draft: result.draft, notes: result.notes };
+  return { draft: { ...result.draft, stopLoss: null, takeProfit: null }, notes: result.notes };
 }
 
 /**

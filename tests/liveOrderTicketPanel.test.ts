@@ -51,12 +51,12 @@ describe('čáry „· přidat“ (U4): jen návrh nohou v panelu', () => {
 });
 
 describe('nový návrh panelu: předvolby + výchozí šablona (U4/U8)', () => {
-  it('bez předvoleb a s vestavěnou šablonou přesně dosavadní newTicketDraft', () => {
+  it('nový návrh se otevře bez SL/TP, jinak jako newTicketDraft (Filip 5. 11.)', () => {
     for (const side of ['buy', 'sell'] as const) {
       for (const type of ['limit', 'stop', 'market'] as const) {
         const price = side === 'buy' ? 95 : 105;
         expect(liveTicketNewDraft({ side, type, price, instrument: MNQ, quote, maxContracts: 1 }).draft)
-          .toEqual(newTicketDraft(side, type, price, MNQ, quote));
+          .toEqual({ ...newTicketDraft(side, type, price, MNQ, quote), stopLoss: null, takeProfit: null });
       }
     }
   });
@@ -68,13 +68,13 @@ describe('nový návrh panelu: předvolby + výchozí šablona (U4/U8)', () => {
     expect(liveTicketNewDraft({ side: 'buy', type: 'limit', price: 95, instrument: MNQ, quote, prefs, maxContracts: 5, base: { quantity: 1 } }).draft.quantity).toBe(1);
   });
 
-  it('výchozí šablona: ticky od plánovaného vstupu; velikost šablony jen do stropu a ne přes výslovný počet', () => {
+  it('výchozí šablona: SL/TP návrhu nedosadí; velikost šablony jen do stropu a ne přes výslovný počet', () => {
     const scalp = template({ name: 'Scalp', stopLoss: { unit: 'ticks', value: 20 }, takeProfit: { unit: 'ticks', value: 40 }, sizing: { mode: 'qty', quantity: 5 } });
     const result = liveTicketNewDraft({ side: 'buy', type: 'limit', price: 95, instrument: MNQ, quote, maxContracts: 2, template: scalp });
-    expect(result.draft).toMatchObject({ price: 95, stopLoss: 90, takeProfit: 105, quantity: 2 });
+    expect(result.draft).toMatchObject({ price: 95, stopLoss: null, takeProfit: null, quantity: 2 });
     expect(result.notes.join(' ')).toMatch(/účet dovolí 2/);
     const short = liveTicketNewDraft({ side: 'sell', type: 'limit', price: 105, instrument: MNQ, quote, maxContracts: 5, template: scalp, base: { quantity: 1 } });
-    expect(short.draft).toMatchObject({ stopLoss: 110, takeProfit: 95, quantity: 1 });
+    expect(short.draft).toMatchObject({ stopLoss: null, takeProfit: null, quantity: 1 });
   });
 
   it('přikoupení šablonu ignoruje (SL/TP pozice dosadí panel)', () => {

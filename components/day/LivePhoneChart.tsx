@@ -25,7 +25,7 @@ import {
 import type { LiveEntryPreviewDraft } from '../../lib/leaderEntryPreview';
 import type { LiveWorkingOrdersView } from '../../lib/liveWorkingOrderLines';
 import { LivePhoneAccountsSheet, LivePhoneGroupPnl } from './LivePhoneAccounts';
-import { withIbkrTightenMark, type LiveChartPosition } from '../../lib/liveChartPosition';
+import { liveDisplayOpenPnl, withIbkrTightenMark, type LiveChartPosition } from '../../lib/liveChartPosition';
 import LiveTradeToasts from '../LiveTradeToasts';
 import type { TradeToast } from '../../lib/liveTradeToasts';
 import {
@@ -246,6 +246,10 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     ? withIbkrTightenMark(chartPosition.summary, chartPosition.symbol ?? null,
       { source: ctl.chart.liveSource ?? null, price: tick?.price ?? null, at: tick?.at ?? null, stale: ctl.chart.liveStatus !== 'live' }, at)
     : null), [chartPosition.summary, chartPosition.symbol, ctl.chart.liveSource, ctl.chart.liveStatus, tick]);
+  // Živé P&L jen do štítku (INV-UI-04); bez čerstvé ceny IBKR téhož kontraktu číslo brokera.
+  const displayOpenPnl = useMemo(() => (chartPosition.summary ? liveDisplayOpenPnl(chartPosition.summary, chartPosition.symbol ?? null,
+    { source: ctl.chart.liveSource ?? null, price: tick?.price ?? null, at: tick?.at ?? null, stale: ctl.chart.liveStatus !== 'live' }, LIVE_PHONE_INSTRUMENT.pointValue, Date.now()) : null),
+  [chartPosition.summary, chartPosition.symbol, ctl.chart.liveSource, ctl.chart.liveStatus, tick]);
   // „Zavřít / Zrušit“ lišty pozice: zrušení čekajícího vstupu jde sdíleným zámkem čar (jeden příkaz naráz).
   const barTradeRef = useRef(trade);
   barTradeRef.current = trade;
@@ -420,8 +424,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
                 if (lastPrice == null) { say('Cena trhu zatím není — objednávku nejde připravit.'); return; }
                 // Stejný list a odeslání jako objednávka z position boxu (kontroly beze změny).
                 // V pozici na stejnou stranu = přikoupení: list převezme SL/TP pozice.
-                // Nový návrh z „+“: výchozí šablona SL/TP uživatele (U8), přikoupení ji ignoruje.
-                openOrder(livePhoneScaleInDraft(newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice), { sizing: 'qty', quantity: pill.qty, riskUsd: 200 }), trade?.scaleIn), true);
+                // Nový návrh z „+“ se otevře bez SL/TP (Filip 5. 11.); přikoupení je převezme z pozice.
+                openOrder(livePhoneScaleInDraft({ ...newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice), { sizing: 'qty', quantity: pill.qty, riskUsd: 200 }), stopLoss: null, takeProfit: null }, trade?.scaleIn), false);
               }}
               onAlert={() => {
                 const alert = newPriceAlert(plus, lastPrice, alertStore.getState().defaults);
@@ -539,6 +543,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             state={lineState}
             summary={chartPosition.summary}
             guardAt={guardAt}
+            displayOpenPnl={displayOpenPnl}
             manage={trade?.manage ?? null}
             canClose={trade?.closeSupported === true}
             entryAvg={trade?.entryAvg ?? null}

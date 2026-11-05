@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
-import type { LiveChartPositionSummary } from '../lib/liveChartPosition';
+import { liveDisplayOpenPnl, type LiveChartPositionSummary } from '../lib/liveChartPosition';
 
 const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositionSummary => ({
   kind: 'position', side: 'short', quantity: 4, entry: 28975.5, entryType: null, openPnl: 12, mark: 28960,
@@ -9,6 +9,43 @@ const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositi
   leader: { accountId: 1, quantity: 1, entry: 28975.5 }, rows: [], ...patch,
 });
 const controls = { manageable: true, entryAvg: 28975.5, pointValue: 2 };
+
+describe('živé P&L na lince vstupu (jen zobrazení)', () => {
+  const NOW = 1_000_000;
+  const row = (patch = {}) => ({ quantity: 2, entry: 100, fees: 3, ...patch });
+  const open = (rows: unknown[], side: 'long' | 'short' = 'long') => summary({ side, rows: rows as never });
+  const quote = (patch = {}) => ({ source: 'IBKR:MNQZ2026', price: 110, at: NOW - 100, stale: false, ...patch });
+  it('počítá z ceny IBKR téhož kontraktu po poplatcích, long i short, více účtů', () => {
+    expect(liveDisplayOpenPnl(open([row()]), 'MNQZ6', quote(), 2, NOW)).toBe(37);
+    expect(liveDisplayOpenPnl(open([row()], 'short'), 'MNQZ6', quote(), 2, NOW)).toBe(-43);
+    expect(liveDisplayOpenPnl(open([row(), row({ quantity: 1, entry: 105, fees: 1 })]), 'MNQZ6', quote(), 2, NOW)).toBe(46);
+  });
+  it('bez důvěryhodné ceny null = číslo brokera', () => {
+    const position = open([row()]);
+    expect(liveDisplayOpenPnl(position, 'MNQH7', quote(), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ source: 'TV:MNQ1!' }), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ stale: true }), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ price: null }), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ at: NOW - 5_001 }), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(position, 'MNQZ6', quote({ at: NOW - 5_000 }), 2, NOW)).toBe(37);
+    expect(liveDisplayOpenPnl(open([row({ entry: null })]), 'MNQZ6', quote(), 2, NOW)).toBeNull();
+    expect(liveDisplayOpenPnl(summary({ kind: 'pending', rows: [row()] as never }), 'MNQZ6', quote(), 2, NOW)).toBeNull();
+  });
+  it('štítek a barva berou živé číslo, bez něj číslo brokera; rozhodovací pole se nemění', () => {
+    const [live] = livePositionChartLines(summary({ openPnl: 12 }), { ...controls, displayOpenPnl: -30 });
+    expect(live.label).toContain('−$30');
+    expect(live.color).not.toBe('#059669');
+    const [broker] = livePositionChartLines(summary({ openPnl: 12 }), { ...controls, displayOpenPnl: null });
+    expect(broker.label).toContain('12');
+    expect(broker.color).toBe('#059669');
+  });
+  it('nepoužije se pro risk: štítek je jediné místo mimo panel', () => {
+    for (const path of ['lib/liveChartOrderLines.ts', 'lib/liveHotkeys.ts', 'lib/liveManagePrices.ts']) {
+      const source = readFileSync(path, 'utf8');
+      expect(source.match(/displayOpenPnl/g)?.length ?? 0).toBeLessThanOrEqual(path === 'lib/liveChartOrderLines.ts' ? 3 : 0);
+    }
+  });
+});
 
 describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
   it('pozice: vstup se štítkem a BE, SL/TP táhnutelné jen u spravovatelného obchodu', () => {

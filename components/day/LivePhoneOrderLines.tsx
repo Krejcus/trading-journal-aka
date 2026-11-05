@@ -129,7 +129,7 @@ export function livePhoneWorkingView(
  * nikdy nic nepošle) a ✎ na SL/TP, které jen otevře list správy (U10).
  */
 export function LivePhoneOrderLines({
-  api, state, summary, guardAt, manage, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
+  api, state, summary, guardAt, displayOpenPnl = null, manage, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
   extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage,
 }: {
   api: ChartViewApi;
@@ -141,6 +141,8 @@ export function LivePhoneOrderLines({
    * INV-UI-04); rozhoduje worker. Při akci se vyhodnotí znovu s aktuálním časem.
    */
   guardAt?: (at: number) => LiveChartPositionSummary | null;
+  /** Živé P&L jen do štítku vstupu (`liveDisplayOpenPnl`); null = číslo brokera. */
+  displayOpenPnl?: number | null;
   manage: LivePhoneManage | null;
   /** × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jako PC. */
   canClose: boolean;
@@ -180,9 +182,10 @@ export function LivePhoneOrderLines({
     canClose,
     entryAvg,
     pointValue: POINT_VALUE,
+    displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd,
-  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, entryAvg, manage, pendingMove, guardSummary, pendingAdd]);
+  }).map(line => ({ ...line, confirmCancel: true })) : []), [canClose, displayOpenPnl, entryAvg, manage, pendingMove, guardSummary, pendingAdd]);
   const lines = useMemo(() => [
     // ✎ jen u táhnutelné SL/TP (správa jde a nic se právě neodesílá); jen otevře list.
     ...(onManage ? positionLines.map(line => (line.ownerId === LIVE_POSITION_OWNER && line.kind !== 'entry' && line.draggable
