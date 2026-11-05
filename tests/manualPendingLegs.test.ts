@@ -131,14 +131,18 @@ describe('posun nohou nevyplněného vstupu', () => {
     expect(ctx.controller.status().manualOrderActions?.[0]).toMatchObject({ status: 'acknowledged' });
   });
 
-  it('strana vůči vstupu, jiná cena, než uživatel viděl, a víc kontraktů se blokují', async () => {
+  it('strana vůči vstupu a jiná cena, než uživatel viděl, se blokují', async () => {
     const ctx = await setup();
     expect(codes(await manage(ctx, 'move-stop', SL, 29_499.5, 'manage:pendside01'))).toContain('leg-side');
     expect(codes(await manage(ctx, 'move-target', TP, 29_500.5, 'manage:pendside02'))).toContain('leg-side');
     expect(codes(await manage(ctx, 'move-stop', SL + 1, 29_470, 'manage:pendexpect1'))).toContain('order-changed');
     expect(ctx.modified).toEqual([]);
-    const big = await setup({ quantity: 2 });
-    expect(codes(await manage(big, 'move-stop', SL, 29_470, 'manage:pendqty0001', 2))).toContain('pending-quantity');
+  });
+
+  it('víc kontraktů: projde a Modify nese počet nohy', async () => {
+    const big = await setup({ quantity: 3 });
+    expect((await manage(big, 'move-stop', SL, 29_470, 'manage:pendqty0001', 3)).status).toBe('acknowledged');
+    expect(big.modified).toMatchObject([{ stopPrice: 29_470, quantity: 3 }]);
   });
 
   it('fill během ukládání záznamu: nic neodejde (částečný fill by jinak vrátil plný počet na nohu)', async () => {

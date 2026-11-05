@@ -292,7 +292,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 - Filip změnil pořadí: nejdřív nohy nevyplněného Limitu a TP blíž, pak telefon a téma. C2 a další položky čekají.
 - Tradovate Modify pozastavené nohy jen drží (OnHold, bez ExecutionReportu); proto status držel starou cenu. Adaptér ji teď projeví za bránou `promoteHeldModify`, výchozí vypnuto. Záznam `heldMove` se po aktivaci nohy ověří proti brokeru.
-- Omezení v1 podle oponentury: jen 1 kontrakt (částečný fill by Modify vrátil plný počet na nohu), jen sólo DEMO s `--pending-legs on`.
+- Jen sólo DEMO s `--pending-legs on`. Oponentura chtěla jen 1 kontrakt (částečný fill by Modify vrátil plný počet na nohu); Filip rozhodl, že na DEMO platí i víc kontraktů, stačí reset účtu. Než to půjde mimo DEMO, musí se to vyřešit.
 - Critic: kolo 1 BLOKUJE (10 nálezů), kolo 2 OPRAVIT PŘED COMMITEM (6 nálezů); opravené. Třetí kolo podle Filipova pravidla není. Conformance z API chybí: Filip ověří z appky na DEMO; je potřeba dvojí Modify, aktivace, odmítnutí a stav `/command/list` po restartu.
 - Téma se do profilu ukládalo, ale nečetlo. Nově platí novější volba podle `themeUpdatedAt`, projeví se při návratu do appky. Opravený i zápis, který přepisoval cache preferencí účtu.
 - Svíčka: při 2 s bez ceny se graf hned vracel na minutový soubor (přeblikávání po návratu z pozadí). Nově 30 s výdrž, jen zobrazení (INV-UI-01). Příčina vyvozená z kódu, na telefonu neověřená.

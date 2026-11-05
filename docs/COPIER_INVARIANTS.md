@@ -2120,7 +2120,7 @@ existující ochranu.
 
 ### INV-MANUAL-01: Ruční vstup z appky jde jen přes worker na leadera; náhled (fáze 1a) nic nezapíše (29. 10. 2026)
 
-- Nohy nevyplněného vstupu a TP blíž k trhu (5. 11. 2026, `--pending-legs on`, sólo DEMO): SL/TP čekajícího Limit/Stop vstupu jde posunout jen u 1 kontraktu a jen na správnou stranu vstupu; TP blíž k trhu jen s čerstvou kotací IBKR a aspoň 8 ticků na ziskové straně. Conformance z API se dělá z appky na DEMO před zapnutím flagu.
+- Nohy nevyplněného vstupu a TP blíž k trhu (5. 11. 2026, `--pending-legs on`, sólo DEMO): SL/TP čekajícího Limit/Stop vstupu jde posunout jen na správnou stranu vstupu, i u víc kontraktů (rozhodnutí Filipa, jen DEMO: částečný fill během zápisu může nechat nohu na plný počet, oponentura to označila za P1); TP blíž k trhu jen s čerstvou kotací IBKR a aspoň 8 ticků na ziskové straně. Conformance z API se dělá z appky na DEMO před zapnutím flagu.
 - Potvrzování: od 5. 11. 2026 bez dvoukroku, první klik odesílá (viz „Jedno kliknutí“ v INV-UI-01). Brány a worker beze změny.
 - Proč: Obchodování z grafu je první risk-zvyšující cesta z appky. Fáze 1a
   ověřuje brány naostro bez zápisu, aby „náhled OK“ nikdy nebylo zaměněno

@@ -3589,8 +3589,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const MANUAL_ORDER_MANAGE_TIMEOUT_MS = options.manualEntryTimingsMs?.manage ?? 8_000;
   /** Utažení SL / BE: nový SL aspoň tolik ticků na ochranné straně čerstvé kotace IBKR (stejně jako UI pojistka). */
   const MANUAL_TIGHTEN_MIN_TICKS = 8;
-  /** Posun nohou nevyplněného vstupu: víc kontraktů brání částečný fill (Modify by vrátil plný počet). */
-  const MANUAL_PENDING_LEG_MAX_QUANTITY = 1;
   /** Po aktivaci nohy: jak dlouho čekat na potvrzení ceny drženého Modify, než je to incident. */
   const HELD_MOVE_CONFIRM_MS = options.manualEntryTimingsMs?.heldConfirm ?? 5_000;
   const heldMoveConfirmTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -6973,8 +6971,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const net = leaderPositions ? (leaderPositions.get(symbol) ?? 0) : null;
       const quantity = entryOrder.quantity;
       if (currentRuntime().state.safety.managementOnly) return manageBlocked(command, 'management-only', 'Kopírka je v režimu jen správa — nohy čekajícího vstupu teď nejde měnit.');
-      // Částečný fill mění qty nohy u brokera a Modify by ji vrátil na plný počet (past 27. 8., INV-TRAD-02).
-      if (quantity > MANUAL_PENDING_LEG_MAX_QUANTITY) return manageBlocked(command, 'pending-quantity', `Posun nohou čekajícího vstupu jde zatím jen u ${MANUAL_PENDING_LEG_MAX_QUANTITY} kontraktu.`);
       if (manualEntryCancelRunning.has(managed.key)) return manageBlocked(command, 'entry-canceling', 'Čekající vstup se právě ruší — nohy teď nejde měnit.');
       if ((entryOrder.orderType !== 'Limit' && entryOrder.orderType !== 'Stop') || currentEntryPrice == null
         || !target || !other || target.status !== 'pending' || other.status !== 'pending'
@@ -7013,6 +7009,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       const reach = manageReachBlockers(target.brokerOrderId, symbol, quantity);
       if (reach.length > 0) return manageResult(command, 'blocked', { blockers: reach.map(text => ({ code: 'reach', text })) });
+      // Rozhodnutí Filipa (5. 11. 2026, jen DEMO): i víc kontraktů. Částečný fill během zápisu může nechat
+      // nohu na plný počet (past 27. 8., INV-TRAD-02); kontrola před zápisem okno jen zmenšuje.
       pendingLegMove = true;
     } else {
       const target = command.action === 'move-stop' ? stopOrder : targetOrder;
