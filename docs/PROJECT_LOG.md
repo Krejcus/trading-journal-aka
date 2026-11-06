@@ -288,6 +288,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 večer — Limit bez SL/TP: rozhodnutí a skript pro DEMO (Claude, větev `claude/chart-position-ui-20261106`, nic nenasazeno)
+
+- Filip: SL a TP u Limitu jsou dobrovolné, jako znal z TradingView, riziko fillu bez SL přijal. Zaparkované nohy pro Limit odpadají. Návrh a nálezy v `docs/reviews/instant-legs-design-20261106.md`; stavět až po záznamu.
+- `scripts/copier/record-legs.ts`, 14 scénářů, spouští jen Filip. Přibyly kroky `place-exit`, `place-oco`, příznak `bare` v DSL záznamů. Critic: po opravách (tag jen jako příznak, dvě čisté kontroly po výjimce zápisu, kontrola nevyřešených při startu) skript nejdřív po krocích. Interpret ještě nikdy neběžel proti brokerovi, skript nedokazuje worker.
+
 ### 2026-11-06 večer — Posun SL u pozice s dokupy blokoval starý záznam (Claude, větev `claude/chart-position-ui-20261106`, oprava nenasazená)
 
 - Filip po nasazení: posun SL nejde, rychlé dokupy nejdou. Relay řádky: 8× `manage-unresolved` kvůli `attach-brackets` `unknown` z 5. 11. 15:30, kontrola celé pozice brala celý symbol a status ukazoval jen 10 akcí. Záznam po Filipově souhlasu označen `waived` při OFF a flat, k brokerovi nic.

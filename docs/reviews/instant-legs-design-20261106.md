@@ -46,3 +46,33 @@ nohu po zavření pozice nikdo nehlídá (Stop by otevřel short); Flatten běhe
 kontrol (× zavření, BE, krytí, status `bareLeaderTrade`) předpokládají obě nohy; relay má rozestup 2 s na obchod.
 Alternativa k oponentuře: „zaparkovaná noha“, první čára založí OCO s druhou nohou daleko, vše další je `modifyOrder`.
 Stavba až po záznamu na DEMO K1, K5–K8 (K12 pro parkování) a rozhodnutí Filipa.
+
+## Rozhodnutí Filipa (6. 11. 2026): SL a TP u Limitu jsou dobrovolné
+Limit jde zadat bez nohou a po vyplnění je bez SL a TP, jak znal z TradingView. Riziko nevědomého fillu bez stropu přijal.
+Zaparkované nohy tím nejsou cesta pro Limit, zůstávají jen jako možnost pro okamžité SL/TP.
+
+### Fáze 1: holý Limit, po záznamu na DEMO
+- Jen manual-only sólo DEMO bez followerů, capability `manual-entry-bare-limit-v1`, jen qty 1 (relay i worker), Limit, ne Stop.
+- Výjimky `bare === true` rozdělit na holý Market a holý čekající. Čekající jde celou C12 revizí, OFF, kill, day lock a ARM expiry ho ruší.
+- Korelátor: výjimka jen pro záznam `bare` s týmž tagem nebo id, ne shoda účet, symbol, qty. Cizí vstup fail-closed dál.
+- × před fillem = cancel-entry. Fill během rušení = pravdivý text „vyplněno BEZ SL“.
+- Neznámý výsledek odeslání = `failClosed` i pro holý čekající.
+- Po fillu holá pozice: chipy a attach beze změny, `reference = request.price ?? referencePrice`, status rozliší čekající a vyplněný.
+- Upozornění při fillu holého vstupu. Automatické zrušení po čase Filip nechce.
+
+### Fáze 2: chipy na čekajícím Limitu, podle záznamu
+Možnosti: zrušit a založit OSO (ztráta místa ve frontě, riziko fillu v díře), nebo nohy drží worker a pošle po fillu (krátce bez SL, závislost na workeru). Rozhodne `limit-replace` a `bare-limit-fill-oco`.
+
+### Fáze 3: SL a TP po jedné, × vrací čip
+Podle `lone-stop-*`, `oco-cancel-*`, `pending-leg-cancel`. Blokující nálezy kola 1 výše platí.
+
+### Záznam: `scripts/copier/record-legs.ts`
+`bare-limit-cancel`, `bare-limit-fill-oco`, `limit-replace`, `lone-stop-liquidate`, `lone-limit-liquidate`, `lone-stop-opposite-close`, `lone-stop-then-oco`, `oco-cancel-sl`, `oco-cancel-tp`, `pending-leg-cancel`. Měřit v RTH, DEMO nedokazuje chování Lucid a Tradeify.
+
+### Nálezy criticu k fázi 1 (kolo 2): OPRAVIT PŘED STAVBOU
+- Záznam: třetí durable stav pro zrušený holý Limit, ne jen čekající a vyplněný; `closedAt` se dnes ukládá jen pro `filled`, status by ukázal × u neexistující pozice.
+- Okno `sending`: bez důkazu tagu zůstává `maybe` a fail-closed, výjimka platí až po ACK. Shoda účet, symbol a qty nikdy nestačí.
+- „Bez zrušení po čase“ není GTC: C12 ruší podle denní pauzy CME, konce session, okna a ARM expiry. Když worker neběží, příkaz u brokera zůstane bez zrušení i upozornění. Zapsat do INV-MANUAL-01 a rozhodnout o TIF.
+- Fill během automatického zrušení (OFF, kill, day lock) má stejný pravdivý text jako u ×.
+- Doplnit: výjimka DLL mezi zadáním a fillem do INV-RISK-01, typ a cena místo natvrdo `Market` (`bare-not-market`), brána „jen DEMO“ ve workeru i relayi, test Flattenu s holým čekajícím.
+- Skript zapisuje přes REST, worker může přes WS: pořadí eventů a ACK se může lišit, skript nedokazuje worker. Po stavbě zvlášť ověření z appky na DEMO.
