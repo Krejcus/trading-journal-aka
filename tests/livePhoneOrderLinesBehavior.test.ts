@@ -18,13 +18,13 @@ const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositi
 });
 const ack = (): LeaderOrderManageResult => ({ type: 'leader-order-managed', operationId: 'manage:x', action: 'move-stop', status: 'acknowledged', checkedAt: 1, blockers: [] });
 
-const render = (opts: { summary?: LiveChartPositionSummary; manage?: ReturnType<typeof vi.fn> | null; canClose?: boolean; guardAt?: (at: number) => LiveChartPositionSummary | null; busy?: boolean }) => {
+const render = (opts: { moveLimit?: boolean; summary?: LiveChartPositionSummary; manage?: ReturnType<typeof vi.fn> | null; canClose?: boolean; guardAt?: (at: number) => LiveChartPositionSummary | null; busy?: boolean }) => {
   captured.props = null;
   const notices: string[] = [];
   const state = { pendingMove: null, setPendingMove: vi.fn(), busyRef: { current: opts.busy === true } };
   renderToStaticMarkup(React.createElement(LivePhoneOrderLines, {
     api: {} as never, state, summary: opts.summary ?? summary(), manage: (opts.manage ?? null) as never,
-    canClose: opts.canClose ?? true, entryAvg: 28975.5, isDark: true, onNotice: text => notices.push(text),
+    moveLimit: opts.moveLimit, canClose: opts.canClose ?? true, entryAvg: 28975.5, isDark: true, onNotice: text => notices.push(text),
     ...(opts.guardAt ? { guardAt: opts.guardAt } : {}),
   }));
   return { props: captured.props!, notices, state };
@@ -114,5 +114,38 @@ describe('dvoukrokové × nepotvrdí jinou akci (oponentura 2. 11.)', async () =
     const positionEntry = livePositionChartLines(summary(), controls)[0];
     expect(pendingEntry.id).toBe(positionEntry.id);
     expect(cancelConfirmKey(pendingEntry)).not.toBe(cancelConfirmKey(positionEntry));
+  });
+});
+
+
+describe('telefon: posun čekajícího limitu', () => {
+  const pending = () => summary({ kind: 'pending', entryType: 'Limit' });
+  it('po výběru čáry odešle move-limit původní cenou a stejným množstvím přes sdílenou správu', async () => {
+    const manage = vi.fn().mockResolvedValue({ ...ack(), action: 'move-limit' });
+    const { props, state } = render({ summary: pending(), moveLimit: true, manage });
+    const line = lineOf(props, 'entry');
+    expect(line.draggable).toBe(true);
+    props.onChange(line, 'entry', 28976, line);
+    await Promise.resolve();
+    expect(manage).toHaveBeenCalledExactlyOnceWith('move-limit', 28975.5, 28976);
+    expect(state.setPendingMove).toHaveBeenCalledWith({ kind: 'entry', price: 28976, until: Infinity });
+  });
+  it.each([false, true])('starý worker nebo vyplněná pozice nedovolí posun vstupu (%s)', async position => {
+    const manage = vi.fn();
+    const { props } = render({ summary: position ? summary() : pending(), moveLimit: position, manage });
+    const line = lineOf(props, 'entry');
+    expect(line.draggable).toBe(false);
+    props.onChange(line, 'entry', 28976, line);
+    expect(manage).not.toHaveBeenCalled();
+  });
+  it('změna ceny během tahu ani druhý tah během odesílání neodešlou příkaz', () => {
+    const manage = vi.fn();
+    const { props } = render({ summary: pending(), moveLimit: true, manage });
+    const line = lineOf(props, 'entry');
+    props.onChange(line, 'entry', 28976, { ...line, price: 28974 });
+    expect(manage).not.toHaveBeenCalled();
+    const busy = render({ summary: pending(), moveLimit: true, manage, busy: true }).props;
+    busy.onChange(lineOf(busy, 'entry'), 'entry', 28976, lineOf(busy, 'entry'));
+    expect(manage).not.toHaveBeenCalled();
   });
 });

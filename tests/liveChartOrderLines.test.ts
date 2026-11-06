@@ -194,3 +194,13 @@ describe('LIVE → Graf: × u pozice a Market (30. 10.)', () => {
     expect(ticket).toMatch(/`MKT · ~/);
   });
 });
+
+
+it('fill při posunu limitu okamžitě ukáže skutečnou cenu pozice, ne návrh posunu', () => {
+  const [entry] = livePositionChartLines(summary({ kind: 'position', entry: 28975.5 }), {
+    ...controls, moveLimit: true, pending: { entry: 28976 },
+  });
+  expect(entry.price).toBe(28975.5);
+  expect(entry.label).not.toContain('odesílám');
+  expect(entry.draggable).toBe(false);
+});

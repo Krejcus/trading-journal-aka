@@ -3373,3 +3373,19 @@ Dokumentace invariantů nenahrazuje testování. Podle rozsahu změny je minimem
 - samostatně uvést, zda proběhl jen lokální test, render UI, deployment,
   instalace workeru, čerstvý broker read nebo řízený trade conformance;
 - nikdy z úspěchu jedné vrstvy nedovozovat úspěch jiné.
+
+
+### INV-MANUAL-LIMIT-01: Posun existujícího limitu není nový vstup
+
+- `move-limit` je dostupný jen pro vlastní, nevyplněný MNQ Limit v lokální manual-only DEMO skupině bez followerů, s instalačním opt-inem pending-legs. Nová capability `manual-order-move-limit-v1` chrání staré workery. Pozice, Stop, přikoupení a sledované cizí příkazy se touto akcí nespravují.
+- Worker znovu ověřuje ARMED, shadow, kill, route/fence, reconciliation, busy, flat účet, přesnou očekávanou cenu/množství, obě pending ochranné nohy, jejich stranu a riziko do SL. Nová cena musí být na správné straně čerstvé kotace stejného kontraktu nejméně 8 ticků od trhu. Kontroly ceny, nohou, rizika a fillu se opakují po durable zápisu těsně před brokerem.
+- Zápis je jediný Modify původního brokerOrderId, se stejným množstvím. SL/TP zůstávají na svých cenách. Žádný cancel/recreate ani automatické opakování při neznámém výsledku. Částečný fill / terminální vstup není důkaz úspěšného posunu.
+- OFF/Kill superseduje `move-limit` pod stejným uživatelským zámkem jako admission (migrace `20261106125237`); záložní relay cesta i worker brake epoch jej také zastaví. SQL migrace musí předcházet zpřístupnění nové akce ve webu.
+- UI nejdřív vybere čáru, až další tah pošle záměr; původní cena z počátku tahu, společný zámek desku a stav odesílání brání dvojímu odeslání. UI nikdy samo nepotvrzuje brokerový výsledek.
+- Důkazy: `manualPendingLegs.test.ts`, `livePhoneOrderLinesBehavior.test.ts`, `tests/sql/copierManualAdmission.pg.mjs`, `tradovateCopierCommandRelay.test.ts`.
+
+### INV-TRAD-ACK-01: Transportní ACK nemění pořadí obchodních událostí
+
+- Korelovaná odpověď na WebSocket zápis se vyřídí nezávisle na semantic tailu. Frame obsahující pouze tuto odpověď nespotřebuje pořadové číslo sémantické fronty.
+- Díky tomu další skutečný OrderVersion může uvolnit čekající hydrataci bez čekání na REST. Jakákoli intervenující sémantická událost zůstává bariérou. Execution cache, zpracování fillů, watchdog i pravidla potvrzení změny zůstávají stejné.
+- Regrese s nerozhodnutým REST čtením: `tradovateBrokerWebSocketWrites.test.ts`; varianta s intervenujícím Order zůstává blokovaná. Test s ACK-only bez opravy selže.

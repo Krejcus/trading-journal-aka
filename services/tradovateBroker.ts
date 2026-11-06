@@ -2380,9 +2380,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       let messages: unknown[] = [];
       let parseError: unknown;
       let preparedOrderVersions: PreparedOrderVersions | undefined;
-      const semanticFrameId = typeof event.data === 'string' && event.data[0] === 'a'
-        ? ++semanticFrameSequence
-        : 0;
+      let semanticFrameId = 0;
       let stagedVersionsForFrame: Array<{ orderId: number; versionId: number; frameId: number }> = [];
       try {
         if (typeof event.data === 'string' && event.data[0] === 'a') {
@@ -2399,6 +2397,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
             );
           });
           if (messages.length === 0) return;
+          // Correlated write ACKs are transport-only. They must not create a
+          // hole between adjacent semantic frames: otherwise an available next
+          // OrderVersion cannot unblock hydration and fills wait for REST.
+          semanticFrameId = ++semanticFrameSequence;
           // REST requesty zacinaji pri prijeti ramce, ne az kdyz na nej prijde
           // rada v semantic tailu. Vysledky se ale do cache aplikuji a eventy
           // emituji porad striktne v poradi ramcu.
@@ -2420,7 +2422,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           }
           stagedVersionsForFrame = stageOrderVersions(messages, semanticFrameId);
         }
-      } catch (reason) { parseError = reason; }
+      } catch (reason) {
+        parseError = reason;
+        // Invalid data is still a semantic barrier and must close in order;
+        // only successfully correlated transport-only ACKs may be skipped.
+        if (semanticFrameId === 0 && typeof event.data === 'string' && event.data[0] === 'a') {
+          semanticFrameId = ++semanticFrameSequence;
+        }
+      }
 
       // `o` pouze zahájí autorizaci. Serial tail patří výhradně sémantickým
       // `a` zprávám, aby transportní provoz nebyl jejich backpressurem.

@@ -45,7 +45,7 @@ export function pendingLegSideProblem(
   return null;
 }
 
-export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position' | 'attach-brackets';
+export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets';
 
 export interface LeaderOrderManageCommand {
   type: 'manage-leader-order';
@@ -91,7 +91,7 @@ export interface LeaderOrderManageResult {
 const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
 const OPERATION_ID_PATTERN = /^manage:[a-zA-Z0-9_-]{8,100}$/;
 const ENTRY_OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
-const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry', 'close-position', 'attach-brackets'];
+const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'move-limit', 'cancel-entry', 'close-position', 'attach-brackets'];
 const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'stopLoss', 'takeProfit', 'scope', 'payloadHash'];
 const LEADER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 1e-9;
@@ -131,7 +131,8 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
   if (!expect || typeof expect !== 'object' || Object.keys(expect).some(key => key !== 'price' && key !== 'quantity')) fail();
   if (!price(expect!.price)) fail();
   if (typeof expect!.quantity !== 'number' || !Number.isSafeInteger(expect!.quantity) || expect!.quantity < 1 || expect!.quantity > 50) fail();
-  const moves = command.action === 'move-stop' || command.action === 'move-target';
+  const moves = command.action === 'move-stop' || command.action === 'move-target' || command.action === 'move-limit';
+  if (command.action === 'move-limit' && !own) fail();
   if (moves ? !price(command.newPrice) : command.newPrice !== undefined) fail();
   // Doplnění nohou: jen vlastní vstup, obě ceny; jinde nohy v příkazu být nesmí.
   const attach = command.action === 'attach-brackets';

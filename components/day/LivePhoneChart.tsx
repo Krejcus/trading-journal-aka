@@ -613,6 +613,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             displayOpenPnl={displayOpenPnl}
             manage={trade?.manage ?? null}
             attach={attachChipBridge}
+            moveLimit={trade?.moveLimit === true}
             pendingLegs={trade?.pendingLegs === true}
             canClose={trade?.closeSupported === true}
             entryAvg={trade?.entryAvg ?? null}

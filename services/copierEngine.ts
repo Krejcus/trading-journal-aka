@@ -435,7 +435,7 @@ export interface CopierManualOrderActionRecord {
   operationId: string;
   payloadHash: string;
   entryOperationId: string;
-  action: 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position' | 'attach-brackets';
+  action: 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets';
   status: 'sending' | 'acknowledged' | 'rejected' | 'unknown' | 'not-sent' | 'waived';
   /** Posun pozastavené nohy broker jen drží (OnHold): po aktivaci nohy se cena ověří proti `toPrice`. */
   heldMove?: boolean;

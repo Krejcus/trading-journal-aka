@@ -29,12 +29,13 @@ export interface LivePositionLineControls {
   /** Průměrný vstup leadera od workeru — podklad pro BE. */
   entryAvg: number | null;
   /** Odeslaný posun čekající na potvrzení: čára drží novou cenu se štítkem „odesílám“. */
-  pending?: { stopLoss?: number; takeProfit?: number };
+  pending?: { entry?: number; stopLoss?: number; takeProfit?: number };
   /**
    * Worker umí posunout SL/TP nevyplněného vstupu a TP blíž k trhu
    * (`manual-order-pending-legs-v1`). Bez něj dnešní chování.
    */
   pendingLegs?: boolean;
+  moveLimit?: boolean;
   /**
    * Štítky „+ SL“ / „+ TP“ u holé pozice (Market bez nohou): `missing` nohy se ještě dají vytáhnout,
    * `canSend` = obě jsou v návrhu a na čáře je tlačítko odeslání. Tah mění jen návrh, odchází až klik.
@@ -58,10 +59,16 @@ export const LIVE_ATTACH_SEND_ACTION = 'send-attach';
 /** Proč posun nejde poslat (UI předkontrola; rozhoduje worker a broker). null = smí. */
 export function liveLineMoveBlockReason(
   summary: LiveChartPositionSummary,
-  kind: 'stopLoss' | 'takeProfit',
+  kind: 'entry' | 'stopLoss' | 'takeProfit',
   price: number,
-  options: { pendingLegs?: boolean } = {},
+  options: { pendingLegs?: boolean; moveLimit?: boolean } = {},
 ): string | null {
+  if (kind === 'entry') {
+    if (!options.moveLimit || summary.kind !== 'pending' || summary.entryType?.toLowerCase() !== 'limit') return 'Posouvat jde jen čekající Limit podporovaný workerem.';
+    if (summary.stop == null || summary.target == null) return 'Ochranné ceny vstupu nejsou známé.';
+    return pendingLegSideProblem('stopLoss', summary.side, price, 'Limit', summary.stop)
+      ?? pendingLegSideProblem('takeProfit', summary.side, price, 'Limit', summary.target);
+  }
   if (summary.kind !== 'position') {
     if (!options.pendingLegs) return 'Posun jde až u vyplněné pozice.';
     const current = kind === 'stopLoss' ? summary.stop : summary.target;
@@ -115,17 +122,20 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
   };
   const be = controls.manageable ? liveBreakEven(summary, controls.entryAvg) : null;
   const openPnl = controls.displayOpenPnl ?? summary.openPnl;
+  // Fill wins immediately: a pending move must never overwrite the actual position entry.
+  const pendingEntry = position ? undefined : controls.pending?.entry;
+  const displayEntry = pendingEntry ?? entry;
   const entryLabel = position
     ? `${long ? 'LONG' : 'SHORT'} ${summary.quantity}${scope}  ${entry.toFixed(2)}${openPnl != null ? ` · ${signedUsd(openPnl)}` : ''}`
-    : `${long ? 'BUY' : 'SELL'} ${summary.quantity} ${(summary.entryType ?? '').toUpperCase()}${scope}  ${entry.toFixed(2)}`;
+    : `${long ? 'BUY' : 'SELL'} ${summary.quantity} ${(summary.entryType ?? '').toUpperCase()}${scope}  ${displayEntry.toFixed(2)}`;
   // Holá pozice (C8): × jen s nabídkou workeru, id cíle v id čáry (klíč × i Shift+X).
   const bare = position && controls.bareClose ? controls.bareClose : null;
   const lines: BacktestChartOrderLine[] = [{
     id: bare ? liveBareLineId(bare.entryOperationId) : `${LIVE_POSITION_OWNER}:entry`, ownerId: LIVE_POSITION_OWNER, ownerType: position ? 'position' : 'order', kind: 'entry',
-    price: entry,
+    price: displayEntry,
     color: position ? (openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : openPnl >= 0 ? '#059669' : SL_COLOR) : (long ? LONG_COLOR : SHORT_COLOR),
-    label: entryLabel,
-    draggable: false,
+    label: `${entryLabel}${pendingEntry != null ? ' · odesílám' : ''}`,
+    draggable: controls.manageable && controls.moveLimit === true && !position && summary.entryType?.toLowerCase() === 'limit' && pendingEntry == null,
     // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: × = zavřít obchod (leader, kopírka zavře kopie).
     cancellable: bare != null || (controls.manageable && (!position || controls.canClose === true)),
     cancelAction: position ? 'close-position' : 'cancel-order',

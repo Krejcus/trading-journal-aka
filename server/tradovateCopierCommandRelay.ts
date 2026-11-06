@@ -1057,7 +1057,7 @@ const expirePendingEntriesSupersededByBrake = async (options: {
   // Posun SL/TP i zavření obchodu brzda zneplatní (zavření slibuje „kopírka zavře
   // kopie“ — za vypnuté kopírky by zůstaly otevřené; oponentura 2d P2). Zrušení
   // čekajícího vstupu je risk-redukční a zůstává.
-  for (const action of ['move-stop', 'move-target', 'close-position']) {
+  for (const action of ['move-stop', 'move-target', 'move-limit', 'close-position']) {
     const { error: manageError } = await options.db.from('tradovate_copier_commands')
       .update({ status: 'expired', completed_at: options.brakeCreatedAt, error: 'superseded-by-brake' })
       .eq('device_id', options.deviceId)
