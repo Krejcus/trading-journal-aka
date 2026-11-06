@@ -45,6 +45,8 @@ export function pendingLegSideProblem(
   return null;
 }
 
+export const LEADER_ORDER_MOVE_LIMIT_CONTRACT = 2;
+
 export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets';
 
 export interface LeaderOrderManageCommand {
@@ -72,6 +74,12 @@ export interface LeaderOrderManageCommand {
    * Jen `move-stop` / `move-target` / `close-position`.
    */
   scope?: 'position';
+  /**
+   * Jen a povinně `move-limit`: klient počítá s tím, že broker posune i nohy OSO.
+   * Starý klient (přibalený bundle v iPhonu) pole nepošle a relay ho odmítne; starý worker
+   * neznámé pole odmítne sám. Tím je akce vypnutá do nasazení opravy všude, bez přepínače.
+   */
+  moveLimitContract?: typeof LEADER_ORDER_MOVE_LIMIT_CONTRACT;
   payloadHash: string;
 }
 
@@ -92,7 +100,7 @@ const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
 const OPERATION_ID_PATTERN = /^manage:[a-zA-Z0-9_-]{8,100}$/;
 const ENTRY_OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
 const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'move-limit', 'cancel-entry', 'close-position', 'attach-brackets'];
-const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'stopLoss', 'takeProfit', 'scope', 'payloadHash'];
+const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'stopLoss', 'takeProfit', 'scope', 'moveLimitContract', 'payloadHash'];
 const LEADER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 1e-9;
 const price = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
@@ -132,7 +140,8 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
   if (!price(expect!.price)) fail();
   if (typeof expect!.quantity !== 'number' || !Number.isSafeInteger(expect!.quantity) || expect!.quantity < 1 || expect!.quantity > 50) fail();
   const moves = command.action === 'move-stop' || command.action === 'move-target' || command.action === 'move-limit';
-  if (command.action === 'move-limit' && !own) fail();
+  if (command.action === 'move-limit' && (!own || command.moveLimitContract !== LEADER_ORDER_MOVE_LIMIT_CONTRACT)) fail();
+  if (command.action !== 'move-limit' && command.moveLimitContract !== undefined) fail();
   if (moves ? !price(command.newPrice) : command.newPrice !== undefined) fail();
   // Doplnění nohou: jen vlastní vstup, obě ceny; jinde nohy v příkazu být nesmí.
   const attach = command.action === 'attach-brackets';
@@ -149,6 +158,30 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
 export function buildLeaderOrderManageCommand(fields: Omit<LeaderOrderManageCommand, 'type' | 'payloadHash'>): LeaderOrderManageCommand {
   const base = { type: 'manage-leader-order' as const, ...fields };
   return { ...base, payloadHash: leaderOrderManagePayloadHash(base) };
+}
+
+/**
+ * Co posun limitu udělal s nohami OSO. Broker je při Modify vstupu posouvá sám o stejnou hodnotu
+ * (žurnál DEMO 6. 11. 2026, jeden vzorek); oba tvary se rozlišují až proti cenám před zápisem.
+ */
+export type MoveLimitLegsVerdict = 'shifted' | 'unchanged' | 'mismatch';
+export function moveLimitLegsVerdict(input: {
+  stopFrom: number; targetFrom: number; delta: number; stopPrice: number | null | undefined; targetPrice: number | null | undefined;
+}): MoveLimitLegsVerdict {
+  const near = (left: number, right: number) => Math.abs(left - right) < 1e-9;
+  if (input.stopPrice == null || input.targetPrice == null) return 'mismatch';
+  if (near(input.stopPrice, input.stopFrom + input.delta) && near(input.targetPrice, input.targetFrom + input.delta)) return 'shifted';
+  if (near(input.stopPrice, input.stopFrom) && near(input.targetPrice, input.targetFrom)) return 'unchanged';
+  return 'mismatch';
+}
+
+/**
+ * Vstup pro výpočet ztráty při posunu limitu: `|vstup − SL| + |posun|`. Platí bez ohledu na to, zda
+ * broker nohy posune a zda Modify vstupu přijme: kaskáda na nohy přichází dřív než přijetí vstupu.
+ */
+export function moveLimitRiskEntry(side: 'long' | 'short', entry: number, next: number, stop: number): number {
+  const distance = Math.abs(entry - stop) + Math.abs(next - entry);
+  return side === 'long' ? stop + distance : stop - distance;
 }
 
 export function isLeaderOrderManageCommand(command: unknown): boolean {

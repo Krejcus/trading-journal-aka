@@ -72,7 +72,7 @@ export function liveManageResultNotice(action: LeaderOrderManageAction, result: 
     if (result.reason && ACK_WARNING_PATTERN.test(result.reason)) return { tone: 'warn', text: result.reason, at };
     return {
       tone: 'ok', at,
-      text: action === 'move-limit' ? 'Limit posunut; SL a TP zůstaly na původních cenách.'
+      text: action === 'move-limit' ? 'Limit posunut; SL a TP ukazuje graf podle brokera.'
         : action === 'cancel-entry' ? 'Vstup zrušen; kopírka zruší kopie.'
         : action === 'close-position' ? 'Leader zavřen; kopírka zavírá kopie.'
           : action === 'attach-brackets' ? 'SL a TP doplněny u leadera; kopírka je doplní kopiím.'

@@ -463,6 +463,18 @@ export interface CopierManualOrderActionRecord {
   brokerRejection?: string;
   /** C12: ruční zrušení vlastního vstupu z flat proti pozici na opačné straně — jen pro pravdivé texty po fillu. */
   entryOpposite?: true;
+  /**
+   * `move-limit`: nohy OSO před zápisem a výsledek jejich kontroly. Broker je při Modify vstupu posouvá sám.
+   * `pending` je durable, aby se kontrola po restartu zopakovala; `heldLegIds` = nohy, jejichž cena se ověří po aktivaci.
+   */
+  moveLimitLegs?: {
+    stopId: string;
+    targetId: string;
+    stopFrom: number;
+    targetFrom: number;
+    check: 'pending' | 'shifted' | 'unchanged' | 'skipped' | 'incident';
+    heldLegIds?: string[];
+  };
   waiver?: { at: number; reason: string };
 }
 

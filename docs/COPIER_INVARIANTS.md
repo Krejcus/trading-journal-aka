@@ -3386,12 +3386,19 @@ Dokumentace invariantů nenahrazuje testování. Podle rozsahu změny je minimem
 
 ### INV-MANUAL-LIMIT-01: Posun existujícího limitu není nový vstup
 
-- `move-limit` je dostupný jen pro vlastní, nevyplněný MNQ Limit v lokální manual-only DEMO skupině bez followerů, s instalačním opt-inem pending-legs. Nová capability `manual-order-move-limit-v1` chrání staré workery. Pozice, Stop, přikoupení a sledované cizí příkazy se touto akcí nespravují.
+- `move-limit` je dostupný jen pro vlastní, nevyplněný MNQ Limit o 1 kontraktu v lokální manual-only DEMO skupině bez followerů, s instalačním opt-inem pending-legs. Capability `manual-order-move-limit-v2` a povinné pole příkazu `moveLimitContract: 2` chrání staré workery i starý bundle v iPhonu: starý klient neprojde validací v relayi, starý worker odmítne neznámé pole. Pozice, Stop, přikoupení a sledované cizí příkazy se touto akcí nespravují.
 - Worker znovu ověřuje ARMED, shadow, kill, route/fence, reconciliation, busy, flat účet, přesnou očekávanou cenu/množství, obě pending ochranné nohy, jejich stranu a riziko do SL. Nová cena musí být na správné straně čerstvé kotace stejného kontraktu nejméně 8 ticků od trhu. Kontroly ceny, nohou, rizika a fillu se opakují po durable zápisu těsně před brokerem.
-- Zápis je jediný Modify původního brokerOrderId, se stejným množstvím. SL/TP zůstávají na svých cenách. Žádný cancel/recreate ani automatické opakování při neznámém výsledku. Částečný fill / terminální vstup není důkaz úspěšného posunu.
-- OFF/Kill superseduje `move-limit` pod stejným uživatelským zámkem jako admission (migrace `20261106125237`); záložní relay cesta i worker brake epoch jej také zastaví. SQL migrace musí předcházet zpřístupnění nové akce ve webu.
+- Zápis je jediný Modify původního brokerOrderId, se stejným množstvím. Žádný cancel/recreate ani automatické opakování při neznámém výsledku. Částečný fill / terminální vstup není důkaz úspěšného posunu.
+- **Broker při Modify vstupu v OSO sám posune obě pozastavené nohy o stejnou hodnotu** (žurnál DEMO 6. 11. 2026, jeden vzorek: vstup 27000 → 27002.25, SL 26988 → 26990.25, TP 27024 → 27026.25). Kaskáda v žurnálu přichází dřív než přijetí Modify vstupu. Fill po posunu, odmítnutý Modify a posun ručně posunuté nohy nejsou u brokera ověřené. Worker proto nic nepředpokládá:
+  - Riziko se počítá z `|vstup − SL| + |posun|`, platí tedy pro posunuté i nezměněné nohy; při posunu od SL může falešně blokovat, to je fail-closed. Side kontrola vůči starým nohám zůstává zatím taky fail-closed.
+  - Kontrola nohou je durable (`moveLimitLegs.check`) a po restartu se opakuje. Potvrzený posun musí posunout obě nohy o stejnou hodnotu se stejným počtem a typem; odmítnutý je musí nechat být; u vyplněného nebo jinak skončeného vstupu platí oba tvary. Cokoli jiného, včetně „vstup posunut, nohy stojí“ po ustálení, je incident přes `failClosed` bez zavírání a bez obchodu. Po DISARM pak běžná pojistka C12 čekající vstup zruší: je to očekávané chování.
+  - Po aktivaci se cena nohy ověřuje stejně jako po drženém posunu (`verifyHeldMoves`) i bez předchozího ručního posunu; novější ruční posun nohy má přednost.
+  - Ručně posunutá noha (`heldMove`) nebo probíhající kontrola předchozího posunu další posun limitu blokuje.
+- Známý konec není trvalý `unknown`: fill, konec vstupu nebo po ustálení třetí cena končí `waived` s důvodem, aby se nezablokovala správa pozice a kontraktu. Nejistý posun neblokuje zrušení vstupu, protože to snižuje riziko. Co nejde rozhodnout ani čtením, zůstává `unknown` s ruční cestou ven (`manualEntryDisplayStuckOperations`), která nic neposílá.
+- UI netvrdí, kde SL a TP jsou: ceny ukazuje graf z read modelu brokera.
+- OFF/Kill superseduje `move-limit` pod stejným uživatelským zámkem jako admission (migrace `20261106132322`); záložní relay cesta i worker brake epoch jej také zastaví. SQL migrace musí předcházet zpřístupnění nové akce ve webu.
 - UI nejdřív vybere čáru, až další tah pošle záměr; původní cena z počátku tahu, společný zámek desku a stav odesílání brání dvojímu odeslání. UI nikdy samo nepotvrzuje brokerový výsledek.
-- Důkazy: `manualPendingLegs.test.ts`, `livePhoneOrderLinesBehavior.test.ts`, `tests/sql/copierManualAdmission.pg.mjs`, `tradovateCopierCommandRelay.test.ts`.
+- Důkazy: `manualPendingLegs.test.ts`, `tradovateBrokerMoveLimitCascade.test.ts`, `livePhoneOrderLinesBehavior.test.ts`, `tests/sql/copierManualAdmission.pg.mjs`, `tradovateCopierCommandRelay.test.ts`.
 
 ### INV-TRAD-ACK-01: Transportní ACK nemění pořadí obchodních událostí
 

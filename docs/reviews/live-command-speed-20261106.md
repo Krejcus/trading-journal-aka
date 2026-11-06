@@ -1,5 +1,7 @@
 # LIVE: posun limitu a fronta brokerových událostí — 6. 11. 2026
 
+> **Oprava po oponentuře:** tvrzení níže „SL/TP na původních cenách“ a „SL/TP beze změny“ neplatí. Broker nohy OSO při Modify vstupu posouvá; platný stav je v `INV-MANUAL-LIMIT-01`. Web, worker a iPhone byly nasazeny z `6bf590a1`.
+
 Stav: uživatel následně výslovně schválil „v tom případě to nasaď a změř“. Databázová migrace aplikována 6. 11. 2026 13:23 UTC po exportu původní funkce. Web, worker a iPhone čekají na dokončení release ověření; živé měření PO změně ještě neproběhlo.
 Pracovní větev `codex/live-command-speed-on-main`, izolovaný checkout `/private/tmp/alphatrade-speed-20261106`, základ `1986b1a6`, ověřený na vzdáleném main. Claudův51851a14 byl dočasně integračně otestovaný, ale není na main a není součástí tohoto vydání. Kanonický Documents checkout se nepřepisuje.
 

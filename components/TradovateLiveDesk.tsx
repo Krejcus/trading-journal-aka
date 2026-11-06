@@ -11,7 +11,7 @@ import { manualEntryDisplayStuckOperations } from '../lib/manualEntryDisplay';
 import { buildLeaderEntryPreviewCommand, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import { liveTicketScaleIn, withScaleInIntent } from '../lib/liveScaleIn';
 import { buildLeaderEntryPlaceCommand, type LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
-import { buildLeaderOrderManageCommand, type LeaderOrderManageAction, type LeaderOrderManageResult } from '../lib/leaderOrderManage';
+import { buildLeaderOrderManageCommand, LEADER_ORDER_MOVE_LIMIT_CONTRACT, type LeaderOrderManageAction, type LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import { liveBareCloseOffer } from '../lib/liveBareCloseUi';
 import { liveCancelPendingView } from '../lib/liveCancelPendingUi';
 import { createLiveDeskCommands } from '../lib/liveDeskCommands';
@@ -1214,6 +1214,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       symbol: entry.symbol,
       action, expect: { price: expectPrice, quantity }, ...(newPrice != null ? { newPrice } : {}),
       ...(entry.source === 'position' ? { scope: 'position' as const } : {}),
+      ...(action === 'move-limit' ? { moveLimitContract: LEADER_ORDER_MOVE_LIMIT_CONTRACT } : {}),
     });
     return sendLeaderManage(command, 'Výsledek změny chybí — zkontroluj leadera v Tradovate.');
   }, [chartData.position?.summary, sendLeaderManage]);

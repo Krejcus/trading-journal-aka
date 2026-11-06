@@ -27,7 +27,7 @@ import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS, MANUAL_ENTRY_SOLO_MARKET_MAX_QUOTE_DRIFT_TICKS, evaluateManualEntryPreview, manualEntryContractCap, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualEntryMarketQuoteBlockers, workerMarketPrice, manualStopLossUsd, realizedLossHeadroom, remainingLossHeadroom, type ManualEntryAccountInputs, type ManualEntryWorkerQuote } from './manualEntryPreview';
 import { runnerUnmappedReplaceAccounts } from './copierRunner';
 import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
-import { pendingLegSideProblem, type LeaderOrderManageCommand, type LeaderOrderManageResult } from '../lib/leaderOrderManage';
+import { moveLimitLegsVerdict, moveLimitRiskEntry, pendingLegSideProblem, type LeaderOrderManageCommand, type LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import {
   bareCloseLotBlockers,
   bareClosePreWriteBlocker,
@@ -5285,8 +5285,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         openOrders: leader == null ? [] : (liveOrdersByAccount.get(leader)?.values() ?? []),
         // PRÁVĚ běžící cílené zrušení workerem nebo nevyřešená změna obchodu (oponentura C12 kolo 1, P2:
         // po skončeném pokusu — i neúčinném — se vstup zase nabízí; ruční zrušení je nový výslovný záměr).
+        // Nejistý posun limitu vstup z výběru nevyřadí: vstup může dál pracovat a zrušení snižuje riziko.
         excluded: operationId => manualEntryCancelRunning.has(operationId)
-          || unresolvedManualOrderAction(operationId) != null,
+          || manualOrderActionRecords().some(record => UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status) && record.entryOperationId === operationId
+            && !(record.action === 'move-limit' && record.status === 'unknown')),
         blockedReason: unresolvedManualEntry() ? 'Ruční vstup má neznámý výsledek — nejdřív ho vyřeš na Live Dashboardu.' : null,
       });
       return { pendingOwnEntries: view.entries, pendingCancelContext: view.context };
@@ -5312,7 +5314,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return true;
       }),
     };
-  });
+  }).then(saved => { scheduleMoveLimitLegCheck(operationId); return saved; });
   /** Několik záznamů změny jedním durable zápisem (nohy správy po pozici, INV-OUTBOX-01). */
   const persistManualOrderActions = (records: readonly CopierManualOrderActionRecord[]) => persistSafety(current => {
     const ids = new Set(records.map(record => record.operationId));
@@ -5664,8 +5666,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const verdict = cancelEntryVerdict(order);
       return verdict ? { status: verdict.status, reason: verdict.reason } : null;
     }
-    if (action.action === 'move-limit' && (order.filledQuantity > 0 || !isOpenOrderStatus(order.status))) {
-      return { status: 'unknown', reason: 'Vstup se během posunu vyplnil nebo skončil — ověř stav pozice; posun se neopakuje.' };
+    if (action.action === 'move-limit') {
+      // Známý konec není neznámý výsledek: trvalý `unknown` by zablokoval správu pozice i celého kontraktu.
+      // Texty obsahují „vyplnil“ / „skončil“, aby je klient neukázal jako úspěšný posun. Nic se neopakuje.
+      if (order.filledQuantity > 0 || order.status === 'filled') {
+        return { status: 'waived', reason: 'Vstup se během posunu vyplnil — posun nepotvrzen, pozice je otevřená. Zkontroluj SL a TP.' };
+      }
+      if (!isOpenOrderStatus(order.status)) return { status: 'waived', reason: `Vstup během posunu skončil (${order.status}) — posun nepotvrzen.` };
+      if (order.limitPrice === action.toPrice) return { status: 'acknowledged', reason: 'potvrzeno čtením u brokera' };
+      if (!settled) return null;
+      if (order.limitPrice === action.fromPrice) return { status: 'rejected', reason: 'broker změnu neprovedl — cena se nezměnila' };
+      return { status: 'waived', reason: `Vstup pracuje na ceně ${order.limitPrice}, ne na ${action.toPrice} — skončil jinak, než se čekalo. Zkontroluj ho v Tradovate.` };
     }
     if (order.status === 'filled') {
       return { status: 'waived', reason: action.action === 'move-stop' ? 'SL se spustil — pozice zavřena stopem' : 'TP se vyplnil' };
@@ -6067,12 +6078,109 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * příkaz leadera má novou cenu → provedeno; zrušený vstup / ukončený příkaz
    * → vyřešeno, změna už nehraje roli.
    */
+  /** Noha ručně posunutá před fillem: posun limitu by ji posunul znovu a kontrola po fillu by hlásila falešný incident. */
+  const heldLegMoved = (stopId: string, targetId: string) => manualOrderActionRecords().some(record => record.heldMove === true && record.status === 'acknowledged'
+    && (record.targetBrokerOrderId === stopId || record.targetBrokerOrderId === targetId));
+  const moveLimitLegsBusy = (stopId: string, targetId: string) => heldLegMoved(stopId, targetId)
+    || manualOrderActionRecords().some(record => record.moveLimitLegs?.check === 'pending' && !UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status)
+      && (record.moveLimitLegs.stopId === stopId || record.moveLimitLegs.targetId === targetId));
+  const moveLimitLegChecksRunning = new Set<string>();
+  const setMoveLimitLegCheck = async (operationId: string, check: 'shifted' | 'unchanged' | 'skipped' | 'incident', heldLegIds?: string[]) => {
+    await persistManualOrderAction(operationId, current => (current?.moveLimitLegs
+      ? { ...current, moveLimitLegs: { ...current.moveLimitLegs, check, ...(heldLegIds ? { heldLegIds } : {}) }, updatedAt: clock() }
+      : current!));
+    // Noha mohla opustit pozastavení, než se výsledek uložil, a další událost už nemusí přijít: ověřit z aktuálního stavu.
+    const legs = manualOrderActionRecords().find(item => item.operationId === operationId)?.moveLimitLegs;
+    const leader = group.leaderAccountId;
+    if (!legs || leader == null || check === 'incident') return;
+    for (const id of [legs.stopId, legs.targetId]) {
+      const leg = liveOrdersByAccount.get(leader)?.get(id);
+      if (leg && leg.status !== 'pending') await verifyHeldMoves(leg);
+    }
+  };
+  /**
+   * Kontrola nohou po posunu limitu (INV-MANUAL-LIMIT-01). Jen čte: neshoda je incident, nikdy opravný obchod.
+   * Potvrzený posun musí posunout obě nohy o stejnou hodnotu; odmítnutý je musí nechat být; u vyplněného
+   * nebo jinak skončeného vstupu platí oba tvary, protože nevíme, co broker stihl. Přijatý tvar `unchanged`
+   * po potvrzeném posunu není doložený, takže po ustálení je taky incident.
+   * `final` = po ustálení, autoritativní čtení; jinak jen rychlý důkaz ze streamu.
+   */
+  const checkMoveLimitLegs = async (operationId: string, final: boolean, lastTry: boolean): Promise<void> => {
+    const record = manualOrderActionRecords().find(item => item.operationId === operationId);
+    const legs = record?.moveLimitLegs;
+    const leader = group.leaderAccountId;
+    if (!record || !legs || legs.check !== 'pending' || UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status)) return;
+    if (record.status === 'not-sent' || record.waiver || leader == null || record.toPrice == null || record.fromPrice == null) {
+      await setMoveLimitLegCheck(operationId, 'skipped');
+      return;
+    }
+    // Mezitím uživatel posunul nohu nebo limit znovu: cena už nepatří tomuto záznamu, po fillu rozhodne novější záznam.
+    const superseded = manualOrderActionRecords().some(item => item.createdAt > record.createdAt && item.status !== 'not-sent' && item.status !== 'rejected'
+      && (item.targetBrokerOrderId === legs.stopId || item.targetBrokerOrderId === legs.targetId || item.action === 'move-limit' && item.targetBrokerOrderId === record.targetBrokerOrderId));
+    if (superseded) { await setMoveLimitLegCheck(operationId, 'skipped'); return; }
+    const delta = record.toPrice - record.fromPrice;
+    const verdictOf = (stop: BrokerOrder, target: BrokerOrder) => moveLimitLegsVerdict({ stopFrom: legs.stopFrom, targetFrom: legs.targetFrom, delta, stopPrice: stop.stopPrice, targetPrice: target.limitPrice });
+    const shapeOk = (stop: BrokerOrder, target: BrokerOrder) => stop.quantity === record.quantity && target.quantity === record.quantity
+      && stop.orderType === 'Stop' && target.orderType === 'Limit' && stop.side === target.side;
+    const accept = (verdict: 'shifted' | 'unchanged') => setMoveLimitLegCheck(operationId, verdict, verdict === 'shifted' ? [legs.stopId, legs.targetId] : []);
+    if (!final) {
+      const stop = liveOrdersByAccount.get(leader)?.get(legs.stopId);
+      const target = liveOrdersByAccount.get(leader)?.get(legs.targetId);
+      if (record.status === 'acknowledged' && stop && target && isOpenOrderStatus(stop.status) && isOpenOrderStatus(target.status)
+        && shapeOk(stop, target) && verdictOf(stop, target) === 'shifted') await accept('shifted');
+      return;
+    }
+    const incident = async (text: string) => {
+      // Nejdřív incident: pád mezi kroky kontrolu zopakuje, naopak by incident zmizel.
+      await failClosed(new Error(`Copier fail-closed: posun limitu ${record.targetBrokerOrderId}: ${text} Zkontroluj SL a TP v Tradovate.`), { autoClose: false, recordWhenDisarmed: true });
+      await setMoveLimitLegCheck(operationId, 'incident');
+    };
+    const [stopRead, targetRead] = await Promise.all([boundedManagedOrderLookup(leader, legs.stopId), boundedManagedOrderLookup(leader, legs.targetId)]);
+    const stop = stopRead?.completeness === 'authoritative' ? stopRead.order : null;
+    const target = targetRead?.completeness === 'authoritative' ? targetRead.order : null;
+    if (!stop || !target) {
+      if (lastTry) await incident('nohy po posunu nejde ověřit čtením u brokera.');
+      return;
+    }
+    if (!isOpenOrderStatus(stop.status) || !isOpenOrderStatus(target.status)) {
+      // Nohy skončily: v pořádku jen bez pozice (vstup skončil, nebo obchod už zavřel SL či TP). Flat ověřit, ne předpokládat.
+      if (await leaderVerifiedFlat(leader, record.symbol ?? stop.symbol)) await setMoveLimitLegCheck(operationId, 'skipped');
+      else if (lastTry) await incident(`noha skončila (SL ${stop.status}, TP ${target.status}), ale pozice není ověřeně zavřená.`);
+      return;
+    }
+    if (!shapeOk(stop, target)) { await incident('nohy mají po posunu jiný počet nebo typ.'); return; }
+    const verdict = verdictOf(stop, target);
+    if (verdict === 'mismatch') { await incident(`nohy jsou na SL ${stop.stopPrice} a TP ${target.limitPrice}, čekalo se posunutí obou o ${delta}.`); return; }
+    if (record.status === 'acknowledged' && verdict !== 'shifted') { await incident('vstup se posunul, ale SL a TP zůstaly; tento tvar není u brokera doložený.'); return; }
+    if (record.status === 'rejected' && verdict !== 'unchanged') { await incident('broker posun odmítl, ale SL a TP se posunuly.'); return; }
+    await accept(verdict);
+  };
+  /** Bez čekání na výsledek zápisu: rychlý důkaz ze streamu, po ustálení čtení, naposledy po trojnásobku. */
+  const scheduleMoveLimitLegCheck = (operationId: string) => {
+    const record = manualOrderActionRecords().find(item => item.operationId === operationId);
+    if (record?.moveLimitLegs?.check !== 'pending' || UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status) || moveLimitLegChecksRunning.has(operationId)) return;
+    moveLimitLegChecksRunning.add(operationId);
+    const run = (final: boolean, lastTry: boolean) => checkMoveLimitLegs(operationId, final, lastTry).catch(error => failClosed(errorOf(error), { autoClose: false, recordWhenDisarmed: true }));
+    // Pokusy jdou po sobě, nikdy souběžně: pomalé uložení výsledku nesmí vyrobit druhou kontrolu.
+    let chain: Promise<unknown> = run(false, false);
+    const attempt = (delay: number, lastTry: boolean) => {
+      const timer = setTimeout(() => {
+        if (stopped) return;
+        chain = chain.then(() => run(true, lastTry));
+        if (lastTry) void chain.finally(() => moveLimitLegChecksRunning.delete(operationId));
+      }, delay);
+      (timer as { unref?: () => void }).unref?.();
+    };
+    attempt(MANUAL_ORDER_SETTLE_MS, false);
+    attempt(MANUAL_ORDER_SETTLE_MS * 3, true);
+  };
   /**
    * Držený posun nohy (OnHold) není provedený posun: když noha po fillu vstupu pracuje s jinou
    * cenou, ochrana není tam, kde ji uživatel viděl. Incident bez automatického zavírání.
    */
   const verifyHeldMoves = async (order: BrokerOrder): Promise<void> => {
-    const held = manualOrderActionRecords().filter(record => record.heldMove === true && record.status === 'acknowledged' && record.targetBrokerOrderId === order.brokerOrderId);
+    const held = manualOrderActionRecords().filter(record => (record.heldMove === true && record.status === 'acknowledged' && record.targetBrokerOrderId === order.brokerOrderId)
+      || record.moveLimitLegs?.heldLegIds?.includes(order.brokerOrderId) === true);
     if (held.length === 0) return;
     // Pending: rozhodne až aktivace nohy (i kdyby ji mezitím posunul někdo jiný, viz incident níže).
     if (order.status === 'pending') return;
@@ -6095,16 +6203,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     clearTimer();
     // Porovnat s posledním potvrzeným posunem nohy, ať byl držený, nebo ne.
+    // Novější posun limitu na stejných nohách ještě neví, kde noha je: rozhodne až jeho kontrola, ta ověření spustí znovu.
+    const onLeg = (record: CopierManualOrderActionRecord) => record.moveLimitLegs?.stopId === order.brokerOrderId || record.moveLimitLegs?.targetId === order.brokerOrderId;
+    if (manualOrderActionRecords().some(record => onLeg(record) && record.moveLimitLegs?.check === 'pending')) return;
+    // Posun limitu posouvá nohu taky: očekávaná cena je z něj, pokud je novější než ruční posun nohy.
+    // `shifted` je důkaz sám o sobě, i když vstup se mezitím vyplnil a záznam skončil `waived`.
     const latest = manualOrderActionRecords()
-      .filter(record => (record.action === 'move-stop' || record.action === 'move-target') && record.status === 'acknowledged' && record.targetBrokerOrderId === order.brokerOrderId)
+      .filter(record => (record.status === 'acknowledged' && (record.action === 'move-stop' || record.action === 'move-target') && record.targetBrokerOrderId === order.brokerOrderId)
+        || (record.moveLimitLegs?.check === 'shifted' && onLeg(record)))
       .reduce((newest, record) => (record.createdAt > newest.createdAt ? record : newest), held[0]);
-    const price = latest.action === 'move-stop' ? order.stopPrice : order.limitPrice;
-    const mismatch = order.status === 'working' && price !== latest.toPrice;
+    const stopLeg = latest.action === 'move-limit' ? latest.moveLimitLegs?.stopId === order.brokerOrderId : latest.action === 'move-stop';
+    const expected = latest.action !== 'move-limit' ? latest.toPrice
+      : latest.moveLimitLegs == null || latest.toPrice == null || latest.fromPrice == null ? null
+        : (stopLeg ? latest.moveLimitLegs.stopFrom : latest.moveLimitLegs.targetFrom) + (latest.toPrice - latest.fromPrice);
+    const price = stopLeg ? order.stopPrice : order.limitPrice;
+    const mismatch = order.status === 'working' && price !== expected;
     for (const record of held) {
-      await persistManualOrderAction(record.operationId, current => ({ ...(current ?? record), heldMove: false, updatedAt: clock() }));
+      await persistManualOrderAction(record.operationId, current => {
+        const base = current ?? record;
+        const legs = base.moveLimitLegs;
+        return { ...base, ...(base.heldMove === true && base.targetBrokerOrderId === order.brokerOrderId ? { heldMove: false } : {}),
+          ...(legs?.heldLegIds ? { moveLimitLegs: { ...legs, heldLegIds: legs.heldLegIds.filter(id => id !== order.brokerOrderId) } } : {}), updatedAt: clock() };
+      });
     }
     if (mismatch) {
-      await failClosed(new Error(`Noha ${order.brokerOrderId} po fillu pracuje na ${price}, ne na ${latest.toPrice} z posunu před fillem — zkontroluj SL/TP v Tradovate.`), { autoClose: false });
+      await failClosed(new Error(`Noha ${order.brokerOrderId} po fillu pracuje na ${price}, ne na ${expected} z posunu před fillem — zkontroluj SL/TP v Tradovate.`), { autoClose: false });
     }
   };
   const resolveManualOrderActionFromStream = async (order: BrokerOrder): Promise<void> => {
@@ -6876,7 +6999,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const unresolvedAction = unresolvedManualOrderAction(managed.key);
     if (unresolvedAction && !(command.action === 'cancel-entry' && pendingLegsOn()
       && manualOrderActionRecords().filter(record => UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status) && record.entryOperationId === managed.key)
-        .every(record => record.action === 'move-stop' || record.action === 'move-target'))) {
+        .every(record => record.action === 'move-stop' || record.action === 'move-target' || record.action === 'move-limit'))) {
       return manageBlocked(command, 'manage-unresolved', 'Předchozí změna tohoto obchodu má neznámý výsledek.');
     }
     if (unresolvedManualEntry()) return manageBlocked(command, 'manual-entry-unresolved', 'Ruční vstup má neznámý výsledek — nejdřív ho vyřeš.');
@@ -6995,9 +7118,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return manageBlocked(command, 'order-changed', 'Vstup se od zobrazení změnil — obnov panel.');
       }
     } else if (command.action === 'move-limit') {
-      // Only our untouched parent limit; never replace it with a new order. The
-      // existing SL/TP remain at their broker prices. A fill race is reconciled,
-      // never retried as a fresh entry.
+      // Only our untouched parent limit; never replace it with a new order. The broker shifts
+      // the OSO legs by itself, so their prices are checked after the write, never assumed.
+      // A fill race is reconciled, never retried as a fresh entry.
       const own = manualEntryRecords().find(record => record.operationId === managed.key);
       const positions = positionsByAccount.get(leader);
       const next = command.newPrice!;
@@ -7013,6 +7136,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return manageBlocked(command, 'shape', 'Posun vyžaduje vlastní nevyplněný Limit s oběma ochrannými nohami a flat účet.');
       }
       if (currentRuntime().state.safety.managementOnly) return manageBlocked(command, 'management-only', 'V režimu jen správa se čekající vstup neposouvá.');
+      // Kaskáda na nohy je ověřená na 1 kusu; po částečném fillu je neověřená (INV-TRAD-02).
+      if (entryOrder.quantity !== 1) return manageBlocked(command, 'move-limit-quantity', 'Posun limitu jde zatím jen u 1 kontraktu.');
+      if (moveLimitLegsBusy(stopOrder.brokerOrderId, targetOrder.brokerOrderId)) {
+        return manageBlocked(command, 'move-limit-legs', 'SL nebo TP je už ručně posunutý, nebo se předchozí posun limitu ještě ověřuje — limit teď nejde posunout.');
+      }
       if (currentEntryPrice !== command.expect.price || entryOrder.quantity !== command.expect.quantity) {
         return manageBlocked(command, 'order-changed', 'Vstup se od zobrazení změnil — obnov panel.');
       }
@@ -7030,7 +7158,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (riskRead && lastLeaderFillObservedAt != null && riskRead.verifiedAt <= lastLeaderFillObservedAt) {
         return manageBlocked(command, 'risk-unverified', 'Riziko po posledním fillu není ověřené.');
       }
-      const risk = moveStopRiskBlocked(command, leader, symbol, stopOrder.brokerOrderId, entryOrder.quantity, next, stopOrder.stopPrice);
+      const risk = moveStopRiskBlocked(command, leader, symbol, stopOrder.brokerOrderId, entryOrder.quantity,
+        moveLimitRiskEntry(long ? 'long' : 'short', currentEntryPrice, next, stopOrder.stopPrice), stopOrder.stopPrice);
       if (risk) return risk;
       const others = orders.filter(order => order.symbol === symbol && isOpenOrderStatus(order.status)
         && ![managed.entryId, managed.stopId, managed.targetId].includes(order.brokerOrderId));
@@ -7068,6 +7197,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const quantity = entryOrder.quantity;
       if (currentRuntime().state.safety.managementOnly) return manageBlocked(command, 'management-only', 'Kopírka je v režimu jen správa — nohy čekajícího vstupu teď nejde měnit.');
       if (manualEntryCancelRunning.has(managed.key)) return manageBlocked(command, 'entry-canceling', 'Čekající vstup se právě ruší — nohy teď nejde měnit.');
+      // Jen u nevyplněného vstupu: u otevřené pozice nesmí kontrola zdržet posun SL.
+      if (manualOrderActionRecords().some(record => record.moveLimitLegs?.check === 'pending' && record.entryOperationId === managed.key)) {
+        return manageBlocked(command, 'move-limit-legs', 'Posun limitu se ještě ověřuje — SL a TP zkus za chvíli.');
+      }
       if ((entryOrder.orderType !== 'Limit' && entryOrder.orderType !== 'Stop') || currentEntryPrice == null
         || !target || !other || target.status !== 'pending' || other.status !== 'pending'
         || target.filledQuantity !== 0 || other.filledQuantity !== 0
@@ -7209,6 +7342,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         action: command.action, status: 'sending', targetBrokerOrderId: targetOrderId, fromPrice, symbol,
         toPrice: command.newPrice ?? null, quantity: targetLive.quantity, createdAt, updatedAt: createdAt,
         ...(cancelEntryOpposite ? { entryOpposite: true as const } : {}),
+        ...(command.action === 'move-limit' && stopOrder?.stopPrice != null && targetOrder?.limitPrice != null ? { moveLimitLegs: {
+          stopId: managed.stopId, targetId: managed.targetId, stopFrom: stopOrder.stopPrice, targetFrom: targetOrder.limitPrice, check: 'pending' as const,
+        } } : {}),
       }));
     } catch (error) {
       manualCancelEntryInFlight.delete(managed.key);
@@ -7227,7 +7363,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (status === 'acknowledged' && command.action !== 'cancel-entry' && (generation !== safetyGeneration || !gate.armed)) {
           reason = `${reason ? `${reason}; ` : ''}kopírka se mezitím zastavila — ${command.action === 'close-position'
             ? 'kopie followerů mohly zůstat otevřené, použij Flatten'
-            : `followeři mají původní ${command.action === 'move-stop' ? 'SL' : 'TP'}`}`;
+            : command.action === 'move-limit' ? 'zkontroluj vstup, SL a TP v Tradovate'
+              : `followeři mají původní ${command.action === 'move-stop' ? 'SL' : 'TP'}`}`;
         }
         // Posun pozastavené nohy: i potvrzení čtením nebo streamem je jen držený Modify, po aktivaci se ověří.
         const heldMove = status === 'acknowledged' && pendingLegMove && liveOrdersByAccount.get(leader)?.get(targetOrderId)?.status !== 'working';
@@ -7326,7 +7463,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           || currentStop.orderType !== 'Stop' || currentTarget.orderType !== 'Limit'
           || currentStop.side !== stopOrder?.side || currentTarget.side !== targetOrder?.side
           || currentStop.stopPrice !== stopOrder?.stopPrice || currentTarget.limitPrice !== targetOrder?.limitPrice
-          || moveStopRiskBlocked(command, leader, symbol, managed.stopId, targetLive.quantity, command.newPrice!, currentStop.stopPrice!)) {
+          || targetLive.quantity !== 1 || heldLegMoved(managed.stopId, managed.targetId)
+          || moveStopRiskBlocked(command, leader, symbol, managed.stopId, targetLive.quantity,
+            moveLimitRiskEntry(long ? 'long' : 'short', command.expect.price, command.newPrice!, currentStop.stopPrice!), currentStop.stopPrice!)) {
           return finish('not-sent', 'Podmínky posunu limitu se mezitím změnily — nic se neodeslalo.');
         }
         const live = liveOrdersByAccount.get(leader)?.get(managed.entryId);
@@ -21651,6 +21790,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   }
   // Fáze 2c: neznámé změny po startu dořeší čtení u brokera (i bez nové kontroly pozic).
   for (const record of manualOrderActionRecords().filter(item => item.status === 'unknown')) scheduleManualOrderActionLookup(record.operationId);
+  // Kontrola nohou přerušená restartem (INV-MANUAL-LIMIT-01): jen čtení, opakuje se z durable značky.
+  for (const record of manualOrderActionRecords().filter(item => item.moveLimitLegs?.check === 'pending')) scheduleMoveLimitLegCheck(record.operationId);
   const restartedMarket = manualEntryRecords().find(record => record.status === 'sending' && record.request.orderType === 'Market');
   // Limit/Stop vstup rozpracovaný při pádu (přikoupení i vstup z flat — C12, oponentura P2): bez id
   // ho revize čekajících vstupů zrušit nemůže, u brokera ale může pracovat — trvalý incident jako
@@ -22243,6 +22384,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (!action || !UNRESOLVED_MANUAL_ORDER_ACTION.has(action.status) || (action.status === 'sending' && manualOrderActionJobs.size > 0)) {
           throw new Error('Změna vstupu už nečeká na vyřešení; kopírka zůstává beze změny');
         }
+        // Zápis po timeoutu pořád běží: vyřešení by odemklo druhý Modify vstupu a pozdní výsledek prvního by se ztratil.
+        if (action.action === 'move-limit' && manageWritesInFlight.has(operationId)) throw new Error('Zápis k brokerovi ještě běží — ruční vyřešení zkus po jeho skončení; kopírka zůstává beze změny');
         // Stav příkazu leadera je ze streamu známý; vypínat kopírku uprostřed
         // obchodu by zastavilo zrcadlení dalších posunů i exitu (oponentura 2a, bod 4).
         await persistManualOrderAction(operationId, current => ({
@@ -23324,7 +23467,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
           return out;
         })(),
-        manualOrderActions: manualOrderActionRecords().slice(-10).map(record => ({
+        // Starší nevyřešený záznam musí zůstat vidět, jinak zmizí i ruční cesta ven. Celkem nejvýš 10: víc expozice odmítne.
+        manualOrderActions: (() => {
+          const older = manualOrderActionRecords().slice(0, -10).filter(record => UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status)).slice(-10);
+          return [...older, ...manualOrderActionRecords().slice(-10).slice(older.length)];
+        })().map(record => ({
           ...(() => {
             const display = manualOrderDisplay.get(record.operationId);
             return display ? { displayAt: display.at, displayStage: display.stage } : {};

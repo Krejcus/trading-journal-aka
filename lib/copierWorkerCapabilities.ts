@@ -71,7 +71,7 @@ export const supportsCopierManualOrderManage = (
   && status.capabilities.includes(COPIER_MANUAL_ORDER_MANAGE_CAPABILITY);
 
 /** Worker umí posunout SL/TP nevyplněného vstupu a TP blíž k trhu (5. 11. 2026, sólo DEMO s `--pending-legs on`). */
-export const COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY = 'manual-order-move-limit-v1';
+export const COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY = 'manual-order-move-limit-v2';
 export const supportsCopierManualOrderMoveLimit = (status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined): boolean =>
   Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY);
 

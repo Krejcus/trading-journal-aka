@@ -204,3 +204,11 @@ it('fill při posunu limitu okamžitě ukáže skutečnou cenu pozice, ne návrh
   expect(entry.label).not.toContain('odesílám');
   expect(entry.draggable).toBe(false);
 });
+
+describe('posun limitu: jen 1 kontrakt', () => {
+  it('vícekusový vstup čára netáhne a předkontrola ho odmítne', () => {
+    const summary = { kind: 'pending', side: 'long', quantity: 2, entry: 29500, stop: 29480, target: 29560, entryType: 'Limit' } as unknown as LiveChartPositionSummary;
+    expect(liveLineMoveBlockReason(summary, 'entry', 29499, { moveLimit: true })).toMatch(/1 kontraktu/);
+    expect(liveLineMoveBlockReason({ ...summary, quantity: 1 }, 'entry', 29499, { moveLimit: true })).toBeNull();
+  });
+});

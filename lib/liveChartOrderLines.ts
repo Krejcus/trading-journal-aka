@@ -65,6 +65,7 @@ export function liveLineMoveBlockReason(
 ): string | null {
   if (kind === 'entry') {
     if (!options.moveLimit || summary.kind !== 'pending' || summary.entryType?.toLowerCase() !== 'limit') return 'Posouvat jde jen čekající Limit podporovaný workerem.';
+    if (summary.quantity !== 1) return 'Posun limitu jde zatím jen u 1 kontraktu.';
     if (summary.stop == null || summary.target == null) return 'Ochranné ceny vstupu nejsou známé.';
     return pendingLegSideProblem('stopLoss', summary.side, price, 'Limit', summary.stop)
       ?? pendingLegSideProblem('takeProfit', summary.side, price, 'Limit', summary.target);
@@ -135,7 +136,7 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     price: displayEntry,
     color: position ? (openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : openPnl >= 0 ? '#059669' : SL_COLOR) : (long ? LONG_COLOR : SHORT_COLOR),
     label: `${entryLabel}${pendingEntry != null ? ' · odesílám' : ''}`,
-    draggable: controls.manageable && controls.moveLimit === true && !position && summary.entryType?.toLowerCase() === 'limit' && pendingEntry == null,
+    draggable: controls.manageable && controls.moveLimit === true && !position && summary.quantity === 1 && summary.entryType?.toLowerCase() === 'limit' && pendingEntry == null,
     // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: × = zavřít obchod (leader, kopírka zavře kopie).
     cancellable: bare != null || (controls.manageable && (!position || controls.canClose === true)),
     cancelAction: position ? 'close-position' : 'cancel-order',

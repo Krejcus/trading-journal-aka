@@ -239,7 +239,7 @@ export function LivePhoneOrderLines({
       else setPendingMove(current => (current ? { ...current, until: Date.now() + 5_000 } : current));
       onNotice(result.status === 'acknowledged'
         ? (result.reason && /zastavila|spustil|vyplnil|skončil|ne tímto|Flatten/.test(result.reason) ? result.reason
-          : action === 'move-limit' ? 'Limit posunut; SL a TP zůstaly na původních cenách.'
+          : action === 'move-limit' ? 'Limit posunut; SL a TP ukazuje graf podle brokera.'
           : action === 'cancel-entry' ? 'Vstup zrušen; kopírka zruší kopie.'
             : action === 'close-position' ? 'Leader zavřen; kopírka zavírá kopie.' : 'Posunuto u leadera; kopírka posune kopie.')
         : result.status === 'blocked' ? `Neodesláno: ${result.blockers.map(issue => issue.text).join(' ')}`

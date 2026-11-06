@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 — Oprava `move-limit` po oponentuře `6bf590a1` (Claude + Codex, větev `claude/codex-speed-review-8a93c8`, NENASAZENO)
+
+- **Proč:** Tradovate při Modify vstupu v OSO sám posune obě pozastavené nohy; `6bf590a1` předpokládal opak (text, risk brána, mock, `INV-MANUAL-LIMIT-01`). Oprava starších zápisů: „SL/TP beze změny“ neplatí. Fill za letu navíc nechal trvalý `unknown`, který blokoval správu pozice a zrušení vstupu.
+- **Rozhodnutí:** místo přepínače povinné `moveLimitContract: 2` ve sdíleném validátoru a capability v2. Nasazení webu tím vypne akci i pro starý iPhone a starý worker, později se nic nemusí odstraňovat. Nohy se ověřují durable kontrolou, neshoda je incident bez obchodu. Riziko `|vstup − SL| + |posun|`, jen 1 kus. Známý konec = `waived`. Ruční vyřešení `manage:` čeká na konec zápisu.
+- **Oponentura:** `copier-design-critic` (OPRAVIT PŘED COMMITEM, nálezy opraveny) a Codex `gpt-5.6-sol` (ruční vyřešení při běžícím zápisu, souběh kontrol, záznam mimo status; opraveno). Test adaptéru napsal Codex `gpt-5.6-terra`. Výchozí `gpt-6.1-sol` z `~/.codex/config.toml` na ChatGPT účtu neběží.
+- **Neověřeno:** nic z toho neběželo u brokera. Před znovupovolením DEMO: posun a fill (přijde ExecutionReport pro kaskádní Modify? bez něj dá každý fill po posunu po 5 s falešný incident), dvojí posun, posun a posun SL, restart, OFF a C12. Fill za výpadku workeru nemusí vyvolat kontrolu nohou (stejné slabé místo jako `heldMove`). Zrychlení z `6bf590a1` dál není doložené.
+
 ### 2026-11-06 — Telefon: lišta pozice jen záložně, lišta obchodu podle tématu (Claude, větev claude/phone-bar-pill-20261106)
 
 - Filip: černá lišta nad grafem pryč. × je na čáře (holá pozice ho má nově i na telefonu), SL/TP přes ✎ a štítky. Lišta zůstává jen, když čára zavřít neumí (přehrávání, kopírka vypnutá, pozice mimo appku); Flatten All je na Dashboardu.
