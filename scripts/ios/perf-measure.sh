@@ -6,7 +6,7 @@
 # Kopírku NIKDY nezapíná — ON měří jen ruční klepnutí uživatele během běhu.
 set -euo pipefail
 APP="$1"; LABEL="$2"; RUNS="${3:-3}"
-UDID="${IPHONE_UDID:-00008110-0002098A1EDB801E}"
+UDID="${IPHONE_UDID:-00008160-000A7C613E900036}"
 OUT="${PERF_OUT:-$HOME/alphatrade-build/perf}/$LABEL"
 mkdir -p "$OUT"
 xcrun devicectl list devices | grep "$UDID" | grep -q "available (paired)" || { echo "iPhone není dostupný"; exit 1; }
