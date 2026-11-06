@@ -39,3 +39,43 @@ export function tvPriceChannelGrant(
     return null;
   }
 }
+
+/**
+ * Téma „stav workeru se změnil“ (30. 10. 2026, docs/LIVE_HOT_PATH_PLAN.md §5): worker
+ * po potvrzeném heartbeatu se změnou pošle prázdnou zprávu, otevřené LIVE si hned
+ * přečte status běžnou cestou. Bez dat a bez podpisu — podvržená zpráva umí jen
+ * vyvolat čtení navíc (klient je drží ≥ 250 ms od sebe). Nikdy nevyhodí; téma se neloguje.
+ */
+export function copierStatusNudgeTopic(
+  deviceId: unknown,
+  secret: string | undefined = process.env[TV_PRICE_CHANNEL_SECRET_ENV],
+): string | null {
+  try {
+    const value = secret?.trim();
+    if (!value || value.length < MIN_SECRET_LENGTH || typeof deviceId !== 'string' || !DEVICE_ID.test(deviceId)) return null;
+    const digest = createHmac('sha256', value).update(`copier-nudge-topic:${deviceId.toLowerCase()}`).digest('base64url');
+    return `copier-nudge-${digest.slice(0, 22)}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Klíč AES-256-GCM k tématu budíčku (F2a, docs/LIVE_HOT_PATH_PLAN.md §10): worker jím
+ * šifruje expozici pro otevřený LIVE graf. Deterministický jako klíč ceny — rotace =
+ * výměna tajemství; prohlížeč ho dostane jen s živým workerem, nikdy se neukládá ani
+ * neloguje. Kdo ho jednou dostal, umí zobrazení číst i podvrhnout (jen zobrazení;
+ * čerstvost a příkazy jdou z pollu, INV-RELAY-04). Nikdy nevyhodí.
+ */
+export function copierStatusNudgeKey(
+  deviceId: unknown,
+  secret: string | undefined = process.env[TV_PRICE_CHANNEL_SECRET_ENV],
+): string | null {
+  try {
+    const value = secret?.trim();
+    if (!value || value.length < MIN_SECRET_LENGTH || typeof deviceId !== 'string' || !DEVICE_ID.test(deviceId)) return null;
+    return createHmac('sha256', value).update(`copier-nudge-enc:${deviceId.toLowerCase()}`).digest('base64url');
+  } catch {
+    return null;
+  }
+}

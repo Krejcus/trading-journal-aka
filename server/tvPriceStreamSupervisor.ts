@@ -39,6 +39,31 @@ export interface TvStreamWorkerLike {
   unref(): void;
 }
 
+/** Kotace IBKR pro ruční vstup: časy jsou hodiny procesu (ms), bid/ask null = neplatné. */
+export interface TvPriceStreamQuote {
+  contract: string;
+  last: number;
+  lastAt: number;
+  bid: number | null;
+  ask: number | null;
+  quoteAt: number | null;
+}
+
+/**
+ * Obchody IBKR od minulé kotace pro hlídač upozornění na cenu (jen ze zdroje IBKR).
+ * `prev` null = nová výchozí cena (restart vlákna, jiný kontrakt, výpadek) — nic nespouští.
+ */
+export interface TvPriceStreamQuoteBatch {
+  /** Kontrakt ve formátu TV (`MNQZ2026`). */
+  contract: string;
+  prev: number | null;
+  min: number;
+  max: number;
+  last: number;
+  /** Přijetí na hlavním vlákně (hodiny procesu). */
+  at: number;
+}
+
 export interface TvPriceStreamSupervisor {
   update(config: TvPriceStreamConfig): void;
   stop(): void;
@@ -49,6 +74,12 @@ export interface TvPriceStreamSupervisor {
    * než 90 s. Synchronní, nikdy nevyhodí.
    */
   latestBars(root: string): TvBarsCapture | null;
+  /**
+   * Poslední kotace z IBKR pro root (`MNQ`) jako Tradovate kontrakt (`MNQZ6`),
+   * jen z běžícího vlákna se zdrojem IBKR a nejvýš 3 s stará; jinak `null`.
+   * Synchronní, nikdy nevyhodí. Ruční vstup jí ověřuje kontrakt a cenu Marketu.
+   */
+  latestQuote(root: string): TvPriceStreamQuote | null;
 }
 
 /**
@@ -103,6 +134,8 @@ export function createTvPriceStreamSupervisor(options: {
   log?: (line: string) => void;
   /** Výpadek / návrat IBKR (jen stav a krátké kódy) — oznámení na Macu. Nikdy nesmí vyhodit ven. */
   onPriceSourceAlert?: (alert: PriceSourceAlert) => void;
+  /** Dávka obchodů IBKR pro hlídač upozornění (jen vlákno se zdrojem IBKR); synchronně, výjimka se spolkne. */
+  onAlertBatch?: (batch: TvPriceStreamQuoteBatch) => void;
   now?: () => number;
   setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
   clearTimeoutImpl?: (timer: unknown) => void;
@@ -143,6 +176,7 @@ export function createTvPriceStreamSupervisor(options: {
   const preferredSource: TvPriceSourceName = options.priceSource === 'ibkr' ? 'ibkr' : 'tv';
   let workerSource: TvPriceSourceName | null = null;
   let latest: { worker: TvStreamWorkerLike; receivedAt: number; capture: TvBarsCapture } | null = null;
+  let latestQuote: { worker: TvStreamWorkerLike; root: string; quote: TvPriceStreamQuote } | null = null;
   let lastBarsAt = -Infinity;
 
   /** Ověří zprávu `bars` z vlákna: typ a délka v O(1) dřív než cokoli dalšího. */
@@ -227,6 +261,42 @@ export function createTvPriceStreamSupervisor(options: {
         acceptBars(created, message as Record<string, unknown>);
         return;
       }
+      if (type === 'quote') {
+        const row = message as { front?: unknown; last?: unknown; lastAt?: unknown; bid?: unknown; ask?: unknown; quoteAt?: unknown };
+        const match = typeof row.front === 'string' ? /^([A-Z]{1,4})([FGHJKMNQUVXZ])20(\d{2})$/.exec(row.front) : null;
+        const positive = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null);
+        const last = positive(row.last);
+        const lastAt = positive(row.lastAt);
+        if (!match || workerSource !== 'ibkr' || last == null || lastAt == null) return;
+        const bid = positive(row.bid);
+        const ask = positive(row.ask);
+        const quoteAt = positive(row.quoteAt);
+        const receivedAt = now();
+        // Časy nikdy dál než přijetí na hlavním vlákně (stejné hodiny procesu).
+        latestQuote = { worker: created, root: match[1], quote: {
+          contract: `${match[1]}${match[2]}${match[3].slice(-1)}`, last, lastAt: Math.min(lastAt, receivedAt),
+          bid: bid != null && ask != null && bid <= ask ? bid : null, ask: bid != null && ask != null && bid <= ask ? ask : null,
+          quoteAt: quoteAt != null && bid != null && ask != null && bid <= ask ? Math.min(quoteAt, receivedAt) : null,
+        } };
+        return;
+      }
+      if (type === 'alert-batch') {
+        // Vlastní zpráva, kotaci ručního Marketu se nedotýká. Jen vlákno se zdrojem IBKR (TV nikdy).
+        if (workerSource !== 'ibkr' || !options.onAlertBatch) return;
+        try {
+          const batch = message as { front?: unknown; prev?: unknown; min?: unknown; max?: unknown; last?: unknown };
+          const positive = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null);
+          const front = typeof batch.front === 'string' && /^[A-Z]{1,4}[FGHJKMNQUVXZ]20\d{2}$/.test(batch.front) ? batch.front : null;
+          const min = positive(batch.min);
+          const max = positive(batch.max);
+          const last = positive(batch.last);
+          const prev = batch.prev === null ? null : positive(batch.prev);
+          if (front && min != null && max != null && last != null && min <= last && last <= max && (batch.prev === null || prev != null)) {
+            options.onAlertBatch({ contract: front, prev, min, max, last, at: now() });
+          }
+        } catch { /* hlídač upozornění je jen doplněk */ }
+        return;
+      }
       if (type === 'price-source') {
         const row = message as { state?: unknown; ibkr?: unknown; code?: unknown };
         if (row.state !== 'down' && row.state !== 'up') return;
@@ -241,13 +311,14 @@ export function createTvPriceStreamSupervisor(options: {
       if (type === 'diag' && now() - lastDiagLog >= DIAG_LOG_INTERVAL_MS) {
         lastDiagLog = now();
         const diag = message as {
-          state?: unknown; reads?: unknown; sends?: unknown; errors?: unknown;
+          state?: unknown; reads?: unknown; sends?: unknown; errors?: unknown; skippedRateCap?: unknown;
           source?: unknown; ibkr?: unknown; ibkrCode?: unknown; ibkrTrades?: unknown;
         };
         const code = (value: unknown) => String(value ?? '-').replace(/[^a-z0-9-]/gi, '').slice(0, 16) || '-';
         // Jen čísla a krátké kódy — žádné téma, klíč, obsah zpráv ani text chyb Gateway.
         const ibkr = diag.source === undefined ? '' : ` zdroj=${code(diag.source)} ibkr=${code(diag.ibkr)} kód=${code(diag.ibkrCode)} obchody=${Number(diag.ibkrTrades) || 0}`;
-        log(`TV STREAM stav=${String(diag.state).slice(0, 16)} reads=${Number(diag.reads) || 0} sends=${Number(diag.sends) || 0} errors=${Number(diag.errors) || 0}${ibkr}`);
+        log(`TV STREAM stav=${String(diag.state).slice(0, 16)} reads=${Number(diag.reads) || 0} sends=${Number(diag.sends) || 0}`
+          + ` rate-cap=${Number(diag.skippedRateCap) || 0} errors=${Number(diag.errors) || 0}${ibkr}`);
       }
     } catch { /* výjimka v posluchači na hlavním vlákně by shodila proces kopírky */ } });
     created.on('error', error => { try { end(error instanceof Error ? error.name : 'error'); } catch { /* viz výše */ } });
@@ -314,6 +385,17 @@ export function createTvPriceStreamSupervisor(options: {
       } catch { /* best effort */ }
     },
     status: () => ({ running: worker !== null, tripped, crashes: crashes.length }),
+    latestQuote(root) {
+      try {
+        const current = latestQuote;
+        if (!current || stopped || tripped || !config?.enabled || worker === null || current.worker !== worker || workerSource !== 'ibkr') return null;
+        const seen = Math.max(current.quote.lastAt, current.quote.quoteAt ?? 0);
+        if (current.root !== root || now() - seen > 15_000) return null;
+        return { ...current.quote };
+      } catch {
+        return null;
+      }
+    },
     latestBars(root) {
       try {
         const current = latest;

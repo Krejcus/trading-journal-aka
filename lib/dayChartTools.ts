@@ -1,5 +1,5 @@
 import type { DrawingToolId } from '@getcandlekit/charts';
-import type { MarketTimeframe } from '../services/marketData';
+import { isMarketTimeframe, type MarketTimeframe } from '../services/marketData';
 import { CHART_WORKSPACE_LAYOUTS, type ChartWorkspaceLayoutId } from '../services/chartWorkspaceLayouts';
 
 /**
@@ -23,6 +23,14 @@ export function cycleDayChartTimeframe(current: MarketTimeframe, steps: number):
   return DAY_CHART_TIMEFRAMES[(((index + steps) % count) + count) % count];
 }
 
+/** Posun v kolečku přes zadaný seznam (oblíbené), dokola. Mimo seznam začne od prvního. */
+export function cycleTimeframeIn(list: readonly MarketTimeframe[], current: MarketTimeframe, steps: number): MarketTimeframe {
+  const count = list.length;
+  if (!count) return current;
+  const index = Math.max(0, list.indexOf(current));
+  return list[(((index + steps) % count) + count) % count];
+}
+
 /** Celé názvy pro velké kolečko uprostřed obrazovky. */
 export const DAY_CHART_TIMEFRAME_LABEL: Partial<Record<MarketTimeframe, string>> = { '1m': '1 minuta', '5m': '5 minut', '15m': '15 minut' };
 
@@ -31,7 +39,8 @@ type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 export function readStoredDayChartTimeframe(storage: StorageLike | null | undefined, fallback: MarketTimeframe = '5m'): MarketTimeframe {
   try {
     const value = storage?.getItem(DAY_CHART_TIMEFRAME_KEY);
-    return value && (DAY_CHART_TIMEFRAMES as readonly string[]).includes(value) ? value as MarketTimeframe : fallback;
+    // Libovolný platný interval z listu intervalů (svíčky se skládají z 1m).
+    return value && isMarketTimeframe(value) ? value : fallback;
   } catch {
     return fallback;
   }
@@ -170,7 +179,7 @@ export function readDayPaneTimeframes(storage: StorageLike | null | undefined): 
     const parsed: unknown = JSON.parse(storage?.getItem(DAY_CHART_PANE_TF_KEY) ?? 'null');
     if (Array.isArray(parsed)) {
       return DEFAULT_PANE_TIMEFRAMES.map((fallback, index) => (
-        (DAY_CHART_TIMEFRAMES as readonly unknown[]).includes(parsed[index]) ? parsed[index] as MarketTimeframe : fallback
+        isMarketTimeframe(parsed[index]) ? parsed[index] : fallback
       ));
     }
   } catch { /* výchozí */ }

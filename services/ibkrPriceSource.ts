@@ -103,6 +103,12 @@ export interface IbkrReading {
   bar: [number, number, number, number, number];
   bid: number | null;
   ask: number | null;
+  /**
+   * Kdy přišel poslední obchod a poslední bid/ask (hodiny procesu, ms). Ruční
+   * Market podle nich ověřuje čerstvost ceny (2. 11. 2026).
+   */
+  lastAt: number;
+  quoteAt: number | null;
   mode: 'streaming';
 }
 
@@ -125,6 +131,20 @@ export interface IbkrTrail {
 
 /** Strop bufferu cesty mezi dvěma čteními (čte se po ~25–250 ms). */
 const TRAIL_BUFFER_MAX = 256;
+
+/**
+ * Obchody od minulého odběru pro hlídání upozornění na cenu (2. 11. 2026): křížení úrovně
+ * mezi dvěma čteními po 250 ms nesmí utéct jen proto, že poslední cena už je zpátky.
+ * `prev` = poslední cena minulé dávky téhož kontraktu, `null` = nová výchozí cena
+ * (nový odběr, výpadek, jiný kontrakt) — z takové dávky se nikdy nespouští.
+ */
+export interface IbkrAlertBatch {
+  contract: string;
+  prev: number | null;
+  min: number;
+  max: number;
+  last: number;
+}
 
 export interface IbkrPriceSourceStats {
   state: 'stopped' | 'connecting' | 'subscribing' | 'live' | 'paused';
@@ -158,6 +178,11 @@ export interface IbkrPriceSource {
    */
   pendingClosedBar(): IbkrReading['bar'] | null;
   closedBarSent(minute: number): void;
+  /**
+   * Vezme dávku obchodů pro upozornění a vyprázdní ji. `valid=false` (neplatné čtení,
+   * zdroj TV, opožděná data) dávku zahodí a zapomene i výchozí cenu.
+   */
+  takeAlertBatch(valid: boolean): IbkrAlertBatch | null;
   stats(): IbkrPriceSourceStats;
 }
 
@@ -243,7 +268,10 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
   let quickArmed = false;
   /** Čas prvního vzorku od posledního obchodu. */
   let quickSinceTrade: number | null = null;
+  let quoteAt: number | null = null;
   let trail: IbkrTrail | null = null;
+  let alertBatch: IbkrAlertBatch | null = null;
+  let alertPrev: { contract: string; price: number } | null = null;
   let failures = 0;
   let contractReqId = CONTRACT_REQ_BASE;
   let rollTimer: unknown = null;
@@ -287,9 +315,12 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     closedBar = null;
     exactClosedBar = null;
     trail = null;
+    alertBatch = null;
+    alertPrev = null;
     bid = null;
     ask = null;
     forgetQuickLast();
+    quoteAt = null;
   };
 
   const freshQuickLast = () => (quickLast && now() - quickLast.at <= IBKR_QUICK_LAST_FRESH_MS ? quickLast : null);
@@ -579,6 +610,16 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
         if (trail.prices[trail.prices.length - 1] !== trade.price) trail.prices.push(trade.price);
         if (trail.prices.length > TRAIL_BUFFER_MAX) trail.prices.splice(0, trail.prices.length - TRAIL_BUFFER_MAX);
       }
+      // Neohlášené a mimolimitní obchody upozornění nespouští (výstřelky mimo trh).
+      if (frontTv && !trade.unreported && !trade.pastLimit) {
+        if (!alertBatch || alertBatch.contract !== frontTv) {
+          alertBatch = { contract: frontTv, prev: alertPrev?.contract === frontTv ? alertPrev.price : null, min: trade.price, max: trade.price, last: trade.price };
+        } else {
+          alertBatch.min = Math.min(alertBatch.min, trade.price);
+          alertBatch.max = Math.max(alertBatch.max, trade.price);
+          alertBatch.last = trade.price;
+        }
+      }
       try { deps.onTrade?.(); } catch { /* zdroj nikdy nevyhodí */ }
     },
     onBar: (reqId, bar) => {
@@ -598,6 +639,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
       if (reqId !== REQ.quote || !subscribed) return;
       const value = price > 0 ? price : null;
       if (side === 'bid') bid = value; else ask = value;
+      quoteAt = now();
     },
     onLast: (reqId, price) => {
       if (reqId !== REQ.quote || !subscribed || !quickArmed || lost || awaitingResubscribe || !(price > 0)) return;
@@ -683,6 +725,8 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
           bar: [fullBar.minute, fullBar.open, fullBar.high, fullBar.low, close],
           bid: quoteValid ? bid : null,
           ask: quoteValid ? ask : null,
+          lastAt: last.receivedAt,
+          quoteAt: quoteValid ? quoteAt : null,
           mode: 'streaming',
         };
       } catch {
@@ -723,6 +767,16 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     },
     closedBarSent(minute) {
       if (closedBar?.[0] === minute) closedBar = null;
+    },
+    takeAlertBatch(valid) {
+      const taken = alertBatch;
+      alertBatch = null;
+      if (!valid) {
+        alertPrev = null;
+        return null;
+      }
+      if (taken) alertPrev = { contract: taken.contract, price: taken.last };
+      return taken;
     },
     stats: () => ({ ...stats }),
   };

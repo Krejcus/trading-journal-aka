@@ -202,3 +202,65 @@ export function copierArmRejection(reason: unknown): string | null {
     ? `Zapnutí bylo odmítnuto pravidly dne: ${[...new Set(match[1].split(', ').map(copierRiskRuleName))].join(', ')}. Obnov stav a zkontroluj Risk.`
     : null;
 }
+
+/** Pojistka zapínání zastavila ARM dřív, než odešel. Stav workeru tím nic nepotvrzuje. */
+export class CopierArmCancelledError extends CopierArmBlockedError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CopierArmCancelledError';
+  }
+}
+
+const ARM_NOT_SENT = 'Tímto požadavkem se kopírka nezapnula, skutečný stav ukazuje přehled.';
+
+/**
+ * Pojistka zapínání: zachytí epochu brzd na začátku ARM. Po OFF, Kill, zámku dne nebo Flatten All
+ * (nová epocha, i když už doběhl) ani při běžícím Flatten All žádný příkaz zapínání nesmí odejít
+ * (INV-ARM-03, INV-BRAKE-01, INV-UI-02). Volá se synchronně těsně před každým odesláním.
+ * Už odeslaný příkaz tím odvolat nejde. Nové ON si vytvoří novou pojistku.
+ */
+export function createCopierArmGuard(deps: { cancelEpoch: () => number; flattenPending: () => boolean }): () => void {
+  const startEpoch = deps.cancelEpoch();
+  return () => {
+    if (deps.cancelEpoch() !== startEpoch) {
+      throw new CopierArmCancelledError(`Zapnutí zrušeno brzdou: mezitím přišlo OFF, Kill, zámek dne nebo Flatten All. ${ARM_NOT_SENT}`);
+    }
+    if (deps.flattenPending()) {
+      throw new CopierArmCancelledError(`Běží Flatten All, zapnutí se zrušilo. ${ARM_NOT_SENT}`);
+    }
+  };
+}
+
+/**
+ * Pořadí příkazů zapínání: ARM, případně vyřazení účtů staré skupiny a ARM znovu, vždy přes pojistku.
+ * `true` = worker ARM potvrdil, `false` = uživatel odmítl a nic se nezapnulo.
+ */
+export async function sendCopierArm<Retirement>(deps: {
+  guard: () => void;
+  arm: () => Promise<void>;
+  retirementFromError: (reason: unknown) => Retirement | null;
+  confirmRetirement: (retirement: Retirement) => Promise<boolean>;
+  activate: (retirement: Retirement) => Promise<void>;
+}): Promise<boolean> {
+  try {
+    deps.guard();
+    await deps.arm();
+    return true;
+  } catch (reason) {
+    const retirement = deps.retirementFromError(reason);
+    if (!retirement) throw reason;
+    if (!await deps.confirmRetirement(retirement)) return false;
+    deps.guard();
+    await deps.activate(retirement);
+    try {
+      deps.guard();
+      await deps.arm();
+      return true;
+    } catch (afterActivate) {
+      if (afterActivate instanceof CopierArmCancelledError) {
+        throw new CopierArmCancelledError('Zapnutí zrušeno brzdou. Skupina se mohla přepnout a účty vyřadit, ARM se neodeslal. Skutečný stav ukazuje přehled.');
+      }
+      throw afterActivate;
+    }
+  }
+}

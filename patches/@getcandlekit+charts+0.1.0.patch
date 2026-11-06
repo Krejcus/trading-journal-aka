@@ -1,8 +1,8 @@
 diff --git a/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs b/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
-index 773eea4..c8abfa7 100644
+index 773eea4..ec1f7ae 100644
 --- a/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
 +++ b/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
-@@ -800,8 +800,11 @@ var TOOL_POINTS = {
+@@ -800,11 +800,19 @@ var TOOL_POINTS = {
    Triangle: 3,
    ParallelChannel: 3,
    Arrow: 2,
@@ -12,9 +12,18 @@ index 773eea4..c8abfa7 100644
 +  LongPosition: 1,
 +  ShortPosition: 1,
    FibRetracement: 2,
-   FibExtension: 3
+-  FibExtension: 3
++  FibExtension: 3,
++  // Path: libovolný počet bodů, končí dvojklikem nebo Enterem.
++  Path: Infinity,
++  // Emoji: jeden znak v style.text, velikost ve style.fontSize.
++  Emoji: 1
  };
-@@ -813,6 +816,205 @@ var DEFAULT_STYLE = {
++var EMOJI_FONT = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+ var DEFAULT_STYLE = {
+   color: "#2962ff",
+   width: 2,
+@@ -813,6 +821,205 @@ var DEFAULT_STYLE = {
  };
  var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
  var FIB_EXT_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2, 2.618];
@@ -220,7 +229,7 @@ index 773eea4..c8abfa7 100644
  
  // src/drawing/geometry.ts
  function distToSegment(p, a, b) {
-@@ -933,6 +1135,7 @@ var DrawingEngine = class {
+@@ -933,6 +1140,7 @@ var DrawingEngine = class {
    }
    /** Commit the draft (or a complete one-point drawing) as a real drawing. */
    commit(drawing) {
@@ -228,7 +237,7 @@ index 773eea4..c8abfa7 100644
      this.drawings.push(drawing);
      this.draft = null;
      this.activeTool = null;
-@@ -955,7 +1158,9 @@ var DrawingEngine = class {
+@@ -955,7 +1163,9 @@ var DrawingEngine = class {
    setPoints(id, points) {
      const d = this.getById(id);
      if (!d) return;
@@ -239,7 +248,7 @@ index 773eea4..c8abfa7 100644
      this.emit();
    }
    setStyle(id, patch) {
-@@ -1043,8 +1248,9 @@ var DrawingEngine = class {
+@@ -1043,8 +1253,9 @@ var DrawingEngine = class {
  
  // src/drawing/DrawingPrimitive.ts
  var Renderer = class {
@@ -250,7 +259,7 @@ index 773eea4..c8abfa7 100644
    }
    draw(target) {
      target.useBitmapCoordinateSpace((scope) => {
-@@ -1054,6 +1260,8 @@ var Renderer = class {
+@@ -1054,6 +1265,8 @@ var Renderer = class {
        const BIG = (W + H) * 4;
        for (const s of this.shapes) {
          const { style, tool } = s.drawing;
@@ -259,7 +268,7 @@ index 773eea4..c8abfa7 100644
          const a = s.anchors[0];
          const b = s.anchors[1];
          const c = s.anchors[2];
-@@ -1068,42 +1276,54 @@ var Renderer = class {
+@@ -1068,42 +1281,54 @@ var Renderer = class {
          ctx.strokeStyle = style.color;
          ctx.fillStyle = style.fill ?? "transparent";
          ctx.lineWidth = Math.max(1, style.width) * hpr;
@@ -325,7 +334,45 @@ index 773eea4..c8abfa7 100644
              }
              break;
            case "Rectangle":
-@@ -1198,14 +1418,195 @@ var Renderer = class {
+@@ -1130,6 +1355,37 @@ var Renderer = class {
+               ctx.stroke();
+             }
+             break;
++          case "Emoji":
++            if (ax != null && ay != null) {
++              ctx.font = `${Math.max(12, style.fontSize || 28) * hpr}px ${EMOJI_FONT}`;
++              ctx.textAlign = "center";
++              ctx.textBaseline = "middle";
++              ctx.fillStyle = "#000";
++              ctx.fillText(style.text || "\u{1F642}", ax, ay);
++            }
++            break;
++          case "Path": {
++            const pathPts = s.anchors.filter((q) => q?.x != null && q?.y != null).map((q) => ({ x: q.x * hpr, y: q.y * vpr }));
++            if (pathPts.length >= 2) {
++              ctx.beginPath();
++              ctx.moveTo(pathPts[0].x, pathPts[0].y);
++              for (let i = 1; i < pathPts.length; i++) ctx.lineTo(pathPts[i].x, pathPts[i].y);
++              ctx.stroke();
++              const end = pathPts[pathPts.length - 1];
++              let from = null;
++              for (let i = pathPts.length - 2; i >= 0; i--) {
++                if (Math.hypot(pathPts[i].x - end.x, pathPts[i].y - end.y) > 0.5) {
++                  from = pathPts[i];
++                  break;
++                }
++              }
++              if (from && style.arrowEnd !== false) {
++                ctx.setLineDash([]);
++                arrowHead(ctx, from.x, from.y, end.x, end.y, 12 * hpr);
++              }
++            }
++            break;
++          }
+           case "Triangle":
+             if (ax != null && ay != null && bx != null && by != null && cx != null && cy != null) {
+               ctx.beginPath();
+@@ -1198,14 +1454,195 @@ var Renderer = class {
                }
              }
              break;
@@ -528,7 +575,7 @@ index 773eea4..c8abfa7 100644
                }
              }
              break;
-@@ -1225,17 +1626,103 @@ var Renderer = class {
+@@ -1225,17 +1662,103 @@ var Renderer = class {
            default:
              if (ax != null && ay != null && bx != null && by != null) line(ctx, ax, ay, bx, by);
          }
@@ -639,7 +686,7 @@ index 773eea4..c8abfa7 100644
              ctx.fill();
              ctx.stroke();
            }
-@@ -1251,6 +1738,91 @@ function line(ctx, x1, y1, x2, y2) {
+@@ -1251,6 +1774,91 @@ function line(ctx, x1, y1, x2, y2) {
    ctx.lineTo(x2, y2);
    ctx.stroke();
  }
@@ -731,7 +778,7 @@ index 773eea4..c8abfa7 100644
  function norm(dx, dy) {
    const len = Math.hypot(dx, dy) || 1;
    return { x: dx / len, y: dy / len };
-@@ -1267,24 +1839,52 @@ function arrowHead(ctx, x1, y1, x2, y2, size) {
+@@ -1267,24 +1875,52 @@ function arrowHead(ctx, x1, y1, x2, y2, size) {
    ctx.stroke();
  }
  var PaneView = class {
@@ -787,7 +834,7 @@ index 773eea4..c8abfa7 100644
    }
    attached(param) {
      this.chart = param.chart;
-@@ -1297,31 +1897,74 @@ var DrawingPrimitive = class {
+@@ -1297,31 +1933,74 @@ var DrawingPrimitive = class {
      this.requestUpdate = null;
    }
    paneViews() {
@@ -871,7 +918,7 @@ index 773eea4..c8abfa7 100644
      const y = this.series.priceToCoordinate(p.price);
      return { x: x == null ? null : x, y: y == null ? null : y };
    }
-@@ -1360,6 +2003,7 @@ var DrawingController = class {
+@@ -1360,11 +2039,25 @@ var DrawingController = class {
      this.el = null;
      this.primitive = null;
      this.drag = null;
@@ -879,12 +926,47 @@ index 773eea4..c8abfa7 100644
      this.cleanup = [];
      this.engine = opts.engine ?? new DrawingEngine();
      this.tol = opts.hitTolerance ?? 6;
-@@ -1383,13 +2027,16 @@ var DrawingController = class {
+     this.storageKey = opts.storageKey ?? null;
+     this.kv = opts.kv ?? localStorageKV;
++    this.pointerMode = "cross";
++    this.idleCursor = "default";
++    this.lastDraftClick = null;
++    this.swallowDblUntil = 0;
++    this.swallowContextUntil = 0;
++  }
++  setPointerMode(mode, cursor) {
++    this.pointerMode = mode;
++    this.idleCursor = cursor || "default";
++    if (!this.engine.getActiveTool() && !this.drag) this.setCursor(this.hover ? "move" : "default");
++  }
++  getPointerMode() {
++    return this.pointerMode;
+   }
+   init(ctx) {
+     this.chart = ctx.chart;
+@@ -1383,13 +2076,33 @@ var DrawingController = class {
      const down = (e) => this.onDown(e);
      const move = (e) => this.onMove(e);
      const up = () => this.onUp();
 +    const leave = () => this.onLeave();
      const key = (e) => this.onKey(e);
++    const dbl = (e) => {
++      if (this.finishOpenDraft() || Date.now() < this.swallowDblUntil) {
++        e.preventDefault();
++        e.stopPropagation();
++      }
++    };
++    const ctxMenu = (e) => {
++      // Pravé tlačítko ukončilo cestu — kontextové menu grafu se neotevře.
++      if (Date.now() < this.swallowContextUntil) {
++        e.preventDefault();
++        e.stopPropagation();
++      }
++    };
++    el.addEventListener("dblclick", dbl, true);
++    el.addEventListener("contextmenu", ctxMenu, true);
++    this.cleanup.push(() => el.removeEventListener("dblclick", dbl, true));
++    this.cleanup.push(() => el.removeEventListener("contextmenu", ctxMenu, true));
      el.addEventListener("mousedown", down, true);
      el.addEventListener("mousemove", move);
 +    el.addEventListener("mouseleave", leave);
@@ -896,7 +978,7 @@ index 773eea4..c8abfa7 100644
      this.cleanup.push(() => window.removeEventListener("mouseup", up));
      this.cleanup.push(() => window.removeEventListener("keydown", key));
    }
-@@ -1403,6 +2050,7 @@ var DrawingController = class {
+@@ -1403,6 +2116,7 @@ var DrawingController = class {
        }
      }
      this.engine.destroy();
@@ -904,7 +986,7 @@ index 773eea4..c8abfa7 100644
      this.chart = null;
      this.series = null;
      this.el = null;
-@@ -1410,10 +2058,13 @@ var DrawingController = class {
+@@ -1410,15 +2124,33 @@ var DrawingController = class {
    }
    // ── pointer / keyboard ───────────────────────────────────────────────────────
    onDown(e) {
@@ -920,10 +1002,40 @@ index 773eea4..c8abfa7 100644
        if (!dp) return;
        e.preventDefault();
        e.stopPropagation();
-@@ -1442,30 +2093,56 @@ var DrawingController = class {
+       this.suppressPan(true);
+       const need = this.engine.pointsNeeded(tool);
++      if (!Number.isFinite(need) && this.engine.getDraft()) {
++        // Cesta: pravé tlačítko ji ukončí; druhý klik do 400 ms v okruhu 8 px
++        // od posledního bodu je dvojklik — ukončí ji bez dalšího bodu.
++        const last = this.lastDraftClick;
++        const now = Date.now();
++        const isDouble = !!last && now - last.t <= 400 && Math.hypot(e.offsetX - last.x, e.offsetY - last.y) <= 8;
++        if (e.button === 2 || isDouble) {
++          if (e.button === 2) this.swallowContextUntil = now + 800;
++          this.swallowDblUntil = now + 600;
++          this.lastDraftClick = null;
++          this.finishOpenDraft();
++          return;
++        }
++      }
++      this.lastDraftClick = { t: Date.now(), x: e.offsetX, y: e.offsetY };
+       if (need === 1) {
+         this.engine.commit({
+           id: this.engine.newDrawingId(),
+@@ -1442,30 +2174,66 @@ var DrawingController = class {
        return;
      }
      const hit = this.hitTest(e.offsetX, e.offsetY);
++    if (this.pointerMode === "eraser") {
++      // Guma: klik na kresbu ji smaže, klik do prázdna graf normálně posouvá.
++      if (hit) {
++        e.preventDefault();
++        e.stopPropagation();
++        this.engine.remove(hit.id);
++        this.clearHover();
++      }
++      return;
++    }
 +    const dp = this.unproject(e.offsetX, e.offsetY, hit?.id);
      if (hit && dp) {
        e.preventDefault();
@@ -984,7 +1096,7 @@ index 773eea4..c8abfa7 100644
      } else {
        const dt = dp.time - this.drag.last.time;
        const dpr = dp.price - this.drag.last.price;
-@@ -1473,18 +2150,26 @@ var DrawingController = class {
+@@ -1473,39 +2241,121 @@ var DrawingController = class {
        this.engine.setPoints(this.drag.id, points);
      }
      this.drag.last = dp;
@@ -1009,15 +1121,48 @@ index 773eea4..c8abfa7 100644
          this.engine.removeSelected();
 +        this.clearHover();
        }
++    } else if (e.key === "Enter") {
++      if (this.finishOpenDraft()) e.preventDefault();
      } else if (e.key === "Escape") {
        if (this.engine.getActiveTool() || this.engine.getDraft()) this.engine.cancelDraft();
-@@ -1496,16 +2181,61 @@ var DrawingController = class {
+       else this.engine.select(null);
+       this.suppressPan(false);
+     }
+   }
++  /**
++   * Dokončí rozkreslený nástroj s volným počtem bodů (Path). Poslední bod
++   * draftu je jen náhled pod myší; dvojklik navíc položí stejný bod dvakrát,
++   * proto se po sobě jdoucí shodné body slučují.
++   */
++  finishOpenDraft() {
++    const draft = this.engine.getDraft();
++    if (!draft || Number.isFinite(this.engine.pointsNeeded(draft.tool))) return false;
++    const fixed = [];
++    let lastPx = null;
++    for (const q of draft.points.slice(0, -1)) {
++      const last = fixed[fixed.length - 1];
++      const px = this.project(q, draft);
++      const near = !!last && (last.time === q.time && last.price === q.price || !!px && !!lastPx && Math.hypot(px.x - lastPx.x, px.y - lastPx.y) <= 4);
++      if (!near) {
++        fixed.push(q);
++        lastPx = px;
++      }
++    }
++    this.lastDraftClick = null;
++    if (fixed.length >= 2) this.engine.commit({ ...draft, points: fixed });
++    else this.engine.cancelDraft();
++    this.suppressPan(false);
++    return true;
++  }
+   // ── geometry / projection ──────────────────────────────────────────────────────
    suppressPan(on) {
      this.chart?.applyOptions({ handleScroll: { pressedMouseMove: !on } });
    }
 -  unproject(x, y) {
 +  setCursor(cursor) {
 +    if (!this.el) return;
++    if (cursor === "default") cursor = this.idleCursor || "default";
++    else if (cursor === "move" && this.pointerMode === "eraser") cursor = this.idleCursor || "pointer";
 +    if (this.el.style.setProperty) this.el.style.setProperty("cursor", cursor, "important");
 +    else this.el.style.cursor = cursor;
 +    this.el.querySelectorAll?.("canvas").forEach((canvas) => canvas.style.setProperty("cursor", cursor, "important"));
@@ -1077,7 +1222,7 @@ index 773eea4..c8abfa7 100644
      const y = this.series.priceToCoordinate(p.price);
      if (x == null || y == null) return null;
      return { x, y };
-@@ -1514,27 +2244,54 @@ var DrawingController = class {
+@@ -1514,27 +2364,54 @@ var DrawingController = class {
      const p = { x: px, y: py };
      const list = this.engine.getDrawings();
      const selId = this.engine.getSelectedId();
@@ -1142,7 +1287,7 @@ index 773eea4..c8abfa7 100644
      const t = this.tol;
      switch (d.tool) {
        case "HorizontalLine":
-@@ -1548,6 +2305,13 @@ var DrawingController = class {
+@@ -1548,6 +2425,13 @@ var DrawingController = class {
        case "TrendLine":
        case "Arrow":
          return !!b && distToSegment(p, a, b) <= t;
@@ -1156,7 +1301,7 @@ index 773eea4..c8abfa7 100644
        case "Ray":
          return !!b && distToRay(p, a, b) <= t;
        case "ExtendedLine":
-@@ -1555,6 +2319,9 @@ var DrawingController = class {
+@@ -1555,10 +2439,27 @@ var DrawingController = class {
        case "Rectangle":
        case "PriceRange":
          return !!b && (distToRectEdges(p, a, b) <= t || pointInRect(p, a, b));
@@ -1166,7 +1311,25 @@ index 773eea4..c8abfa7 100644
        case "DateRange":
          return !!b && (Math.abs(p.x - a.x) <= t || Math.abs(p.x - b.x) <= t);
        case "Circle":
-@@ -1567,7 +2334,29 @@ var DrawingController = class {
+         return !!b && distToEllipse(p, a, b) <= t;
++      case "Emoji": {
++        const half = Math.max(12, d.style.fontSize || 28) * 0.6;
++        return Math.abs(p.x - a.x) <= half + t && Math.abs(p.y - a.y) <= half + t;
++      }
++      case "Path": {
++        let prev = a;
++        for (let i = 1; i < d.points.length; i++) {
++          const next = this.project(d.points[i], d);
++          if (!next) continue;
++          if (distToSegment(p, prev, next) <= t) return true;
++          prev = next;
++        }
++        return false;
++      }
+       case "Triangle":
+         return !!b && !!c && (distToSegment(p, a, b) <= t || distToSegment(p, b, c) <= t || distToSegment(p, c, a) <= t);
+       case "ParallelChannel": {
+@@ -1567,7 +2468,29 @@ var DrawingController = class {
          return distToSegment(p, a, b) <= t || distToSegment(p, c, c2) <= t;
        }
        case "FibRetracement":
@@ -1198,10 +1361,10 @@ index 773eea4..c8abfa7 100644
          return !!b && !!c && FIB_EXT_LEVELS.some((lvl) => Math.abs(p.y - (c.y + (b.y - a.y) * lvl)) <= t);
        default:
 diff --git a/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js b/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
-index e58972e..58a69f7 100644
+index e58972e..ac0e8c0 100644
 --- a/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
 +++ b/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
-@@ -799,8 +799,11 @@ var TOOL_POINTS = {
+@@ -799,11 +799,19 @@ var TOOL_POINTS = {
    Triangle: 3,
    ParallelChannel: 3,
    Arrow: 2,
@@ -1211,9 +1374,18 @@ index e58972e..58a69f7 100644
 +  LongPosition: 1,
 +  ShortPosition: 1,
    FibRetracement: 2,
-   FibExtension: 3
+-  FibExtension: 3
++  FibExtension: 3,
++  // Path: libovolný počet bodů, končí dvojklikem nebo Enterem.
++  Path: Infinity,
++  // Emoji: jeden znak v style.text, velikost ve style.fontSize.
++  Emoji: 1
  };
-@@ -812,6 +815,205 @@ var DEFAULT_STYLE = {
++var EMOJI_FONT = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+ var DEFAULT_STYLE = {
+   color: "#2962ff",
+   width: 2,
+@@ -812,6 +820,205 @@ var DEFAULT_STYLE = {
  };
  var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
  var FIB_EXT_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2, 2.618];
@@ -1419,7 +1591,7 @@ index e58972e..58a69f7 100644
  
  // src/drawing/geometry.ts
  function distToSegment(p, a, b) {
-@@ -932,6 +1134,7 @@ var DrawingEngine = class {
+@@ -932,6 +1139,7 @@ var DrawingEngine = class {
    }
    /** Commit the draft (or a complete one-point drawing) as a real drawing. */
    commit(drawing) {
@@ -1427,7 +1599,7 @@ index e58972e..58a69f7 100644
      this.drawings.push(drawing);
      this.draft = null;
      this.activeTool = null;
-@@ -954,7 +1157,9 @@ var DrawingEngine = class {
+@@ -954,7 +1162,9 @@ var DrawingEngine = class {
    setPoints(id, points) {
      const d = this.getById(id);
      if (!d) return;
@@ -1438,7 +1610,7 @@ index e58972e..58a69f7 100644
      this.emit();
    }
    setStyle(id, patch) {
-@@ -1042,8 +1247,9 @@ var DrawingEngine = class {
+@@ -1042,8 +1252,9 @@ var DrawingEngine = class {
  
  // src/drawing/DrawingPrimitive.ts
  var Renderer = class {
@@ -1449,7 +1621,7 @@ index e58972e..58a69f7 100644
    }
    draw(target) {
      target.useBitmapCoordinateSpace((scope) => {
-@@ -1053,6 +1259,8 @@ var Renderer = class {
+@@ -1053,6 +1264,8 @@ var Renderer = class {
        const BIG = (W + H) * 4;
        for (const s of this.shapes) {
          const { style, tool } = s.drawing;
@@ -1458,7 +1630,7 @@ index e58972e..58a69f7 100644
          const a = s.anchors[0];
          const b = s.anchors[1];
          const c = s.anchors[2];
-@@ -1067,42 +1275,54 @@ var Renderer = class {
+@@ -1067,42 +1280,54 @@ var Renderer = class {
          ctx.strokeStyle = style.color;
          ctx.fillStyle = style.fill ?? "transparent";
          ctx.lineWidth = Math.max(1, style.width) * hpr;
@@ -1524,7 +1696,45 @@ index e58972e..58a69f7 100644
              }
              break;
            case "Rectangle":
-@@ -1197,14 +1417,195 @@ var Renderer = class {
+@@ -1129,6 +1354,37 @@ var Renderer = class {
+               ctx.stroke();
+             }
+             break;
++          case "Emoji":
++            if (ax != null && ay != null) {
++              ctx.font = `${Math.max(12, style.fontSize || 28) * hpr}px ${EMOJI_FONT}`;
++              ctx.textAlign = "center";
++              ctx.textBaseline = "middle";
++              ctx.fillStyle = "#000";
++              ctx.fillText(style.text || "\u{1F642}", ax, ay);
++            }
++            break;
++          case "Path": {
++            const pathPts = s.anchors.filter((q) => q?.x != null && q?.y != null).map((q) => ({ x: q.x * hpr, y: q.y * vpr }));
++            if (pathPts.length >= 2) {
++              ctx.beginPath();
++              ctx.moveTo(pathPts[0].x, pathPts[0].y);
++              for (let i = 1; i < pathPts.length; i++) ctx.lineTo(pathPts[i].x, pathPts[i].y);
++              ctx.stroke();
++              const end = pathPts[pathPts.length - 1];
++              let from = null;
++              for (let i = pathPts.length - 2; i >= 0; i--) {
++                if (Math.hypot(pathPts[i].x - end.x, pathPts[i].y - end.y) > 0.5) {
++                  from = pathPts[i];
++                  break;
++                }
++              }
++              if (from && style.arrowEnd !== false) {
++                ctx.setLineDash([]);
++                arrowHead(ctx, from.x, from.y, end.x, end.y, 12 * hpr);
++              }
++            }
++            break;
++          }
+           case "Triangle":
+             if (ax != null && ay != null && bx != null && by != null && cx != null && cy != null) {
+               ctx.beginPath();
+@@ -1197,14 +1453,195 @@ var Renderer = class {
                }
              }
              break;
@@ -1727,7 +1937,7 @@ index e58972e..58a69f7 100644
                }
              }
              break;
-@@ -1224,17 +1625,103 @@ var Renderer = class {
+@@ -1224,17 +1661,103 @@ var Renderer = class {
            default:
              if (ax != null && ay != null && bx != null && by != null) line(ctx, ax, ay, bx, by);
          }
@@ -1838,7 +2048,7 @@ index e58972e..58a69f7 100644
              ctx.fill();
              ctx.stroke();
            }
-@@ -1250,6 +1737,91 @@ function line(ctx, x1, y1, x2, y2) {
+@@ -1250,6 +1773,91 @@ function line(ctx, x1, y1, x2, y2) {
    ctx.lineTo(x2, y2);
    ctx.stroke();
  }
@@ -1930,7 +2140,7 @@ index e58972e..58a69f7 100644
  function norm(dx, dy) {
    const len = Math.hypot(dx, dy) || 1;
    return { x: dx / len, y: dy / len };
-@@ -1266,24 +1838,52 @@ function arrowHead(ctx, x1, y1, x2, y2, size) {
+@@ -1266,24 +1874,52 @@ function arrowHead(ctx, x1, y1, x2, y2, size) {
    ctx.stroke();
  }
  var PaneView = class {
@@ -1986,7 +2196,7 @@ index e58972e..58a69f7 100644
    }
    attached(param) {
      this.chart = param.chart;
-@@ -1296,31 +1896,74 @@ var DrawingPrimitive = class {
+@@ -1296,31 +1932,74 @@ var DrawingPrimitive = class {
      this.requestUpdate = null;
    }
    paneViews() {
@@ -2070,7 +2280,7 @@ index e58972e..58a69f7 100644
      const y = this.series.priceToCoordinate(p.price);
      return { x: x == null ? null : x, y: y == null ? null : y };
    }
-@@ -1359,6 +2002,7 @@ var DrawingController = class {
+@@ -1359,11 +2038,25 @@ var DrawingController = class {
      this.el = null;
      this.primitive = null;
      this.drag = null;
@@ -2078,12 +2288,47 @@ index e58972e..58a69f7 100644
      this.cleanup = [];
      this.engine = opts.engine ?? new DrawingEngine();
      this.tol = opts.hitTolerance ?? 6;
-@@ -1382,13 +2026,16 @@ var DrawingController = class {
+     this.storageKey = opts.storageKey ?? null;
+     this.kv = opts.kv ?? localStorageKV;
++    this.pointerMode = "cross";
++    this.idleCursor = "default";
++    this.lastDraftClick = null;
++    this.swallowDblUntil = 0;
++    this.swallowContextUntil = 0;
++  }
++  setPointerMode(mode, cursor) {
++    this.pointerMode = mode;
++    this.idleCursor = cursor || "default";
++    if (!this.engine.getActiveTool() && !this.drag) this.setCursor(this.hover ? "move" : "default");
++  }
++  getPointerMode() {
++    return this.pointerMode;
+   }
+   init(ctx) {
+     this.chart = ctx.chart;
+@@ -1382,13 +2075,33 @@ var DrawingController = class {
      const down = (e) => this.onDown(e);
      const move = (e) => this.onMove(e);
      const up = () => this.onUp();
 +    const leave = () => this.onLeave();
      const key = (e) => this.onKey(e);
++    const dbl = (e) => {
++      if (this.finishOpenDraft() || Date.now() < this.swallowDblUntil) {
++        e.preventDefault();
++        e.stopPropagation();
++      }
++    };
++    const ctxMenu = (e) => {
++      // Pravé tlačítko ukončilo cestu — kontextové menu grafu se neotevře.
++      if (Date.now() < this.swallowContextUntil) {
++        e.preventDefault();
++        e.stopPropagation();
++      }
++    };
++    el.addEventListener("dblclick", dbl, true);
++    el.addEventListener("contextmenu", ctxMenu, true);
++    this.cleanup.push(() => el.removeEventListener("dblclick", dbl, true));
++    this.cleanup.push(() => el.removeEventListener("contextmenu", ctxMenu, true));
      el.addEventListener("mousedown", down, true);
      el.addEventListener("mousemove", move);
 +    el.addEventListener("mouseleave", leave);
@@ -2095,7 +2340,7 @@ index e58972e..58a69f7 100644
      this.cleanup.push(() => window.removeEventListener("mouseup", up));
      this.cleanup.push(() => window.removeEventListener("keydown", key));
    }
-@@ -1402,6 +2049,7 @@ var DrawingController = class {
+@@ -1402,6 +2115,7 @@ var DrawingController = class {
        }
      }
      this.engine.destroy();
@@ -2103,7 +2348,7 @@ index e58972e..58a69f7 100644
      this.chart = null;
      this.series = null;
      this.el = null;
-@@ -1409,10 +2057,13 @@ var DrawingController = class {
+@@ -1409,15 +2123,33 @@ var DrawingController = class {
    }
    // ── pointer / keyboard ───────────────────────────────────────────────────────
    onDown(e) {
@@ -2119,10 +2364,40 @@ index e58972e..58a69f7 100644
        if (!dp) return;
        e.preventDefault();
        e.stopPropagation();
-@@ -1441,30 +2092,56 @@ var DrawingController = class {
+       this.suppressPan(true);
+       const need = this.engine.pointsNeeded(tool);
++      if (!Number.isFinite(need) && this.engine.getDraft()) {
++        // Cesta: pravé tlačítko ji ukončí; druhý klik do 400 ms v okruhu 8 px
++        // od posledního bodu je dvojklik — ukončí ji bez dalšího bodu.
++        const last = this.lastDraftClick;
++        const now = Date.now();
++        const isDouble = !!last && now - last.t <= 400 && Math.hypot(e.offsetX - last.x, e.offsetY - last.y) <= 8;
++        if (e.button === 2 || isDouble) {
++          if (e.button === 2) this.swallowContextUntil = now + 800;
++          this.swallowDblUntil = now + 600;
++          this.lastDraftClick = null;
++          this.finishOpenDraft();
++          return;
++        }
++      }
++      this.lastDraftClick = { t: Date.now(), x: e.offsetX, y: e.offsetY };
+       if (need === 1) {
+         this.engine.commit({
+           id: this.engine.newDrawingId(),
+@@ -1441,30 +2173,66 @@ var DrawingController = class {
        return;
      }
      const hit = this.hitTest(e.offsetX, e.offsetY);
++    if (this.pointerMode === "eraser") {
++      // Guma: klik na kresbu ji smaže, klik do prázdna graf normálně posouvá.
++      if (hit) {
++        e.preventDefault();
++        e.stopPropagation();
++        this.engine.remove(hit.id);
++        this.clearHover();
++      }
++      return;
++    }
 +    const dp = this.unproject(e.offsetX, e.offsetY, hit?.id);
      if (hit && dp) {
        e.preventDefault();
@@ -2183,7 +2458,7 @@ index e58972e..58a69f7 100644
      } else {
        const dt = dp.time - this.drag.last.time;
        const dpr = dp.price - this.drag.last.price;
-@@ -1472,18 +2149,26 @@ var DrawingController = class {
+@@ -1472,39 +2240,121 @@ var DrawingController = class {
        this.engine.setPoints(this.drag.id, points);
      }
      this.drag.last = dp;
@@ -2208,15 +2483,48 @@ index e58972e..58a69f7 100644
          this.engine.removeSelected();
 +        this.clearHover();
        }
++    } else if (e.key === "Enter") {
++      if (this.finishOpenDraft()) e.preventDefault();
      } else if (e.key === "Escape") {
        if (this.engine.getActiveTool() || this.engine.getDraft()) this.engine.cancelDraft();
-@@ -1495,16 +2180,61 @@ var DrawingController = class {
+       else this.engine.select(null);
+       this.suppressPan(false);
+     }
+   }
++  /**
++   * Dokončí rozkreslený nástroj s volným počtem bodů (Path). Poslední bod
++   * draftu je jen náhled pod myší; dvojklik navíc položí stejný bod dvakrát,
++   * proto se po sobě jdoucí shodné body slučují.
++   */
++  finishOpenDraft() {
++    const draft = this.engine.getDraft();
++    if (!draft || Number.isFinite(this.engine.pointsNeeded(draft.tool))) return false;
++    const fixed = [];
++    let lastPx = null;
++    for (const q of draft.points.slice(0, -1)) {
++      const last = fixed[fixed.length - 1];
++      const px = this.project(q, draft);
++      const near = !!last && (last.time === q.time && last.price === q.price || !!px && !!lastPx && Math.hypot(px.x - lastPx.x, px.y - lastPx.y) <= 4);
++      if (!near) {
++        fixed.push(q);
++        lastPx = px;
++      }
++    }
++    this.lastDraftClick = null;
++    if (fixed.length >= 2) this.engine.commit({ ...draft, points: fixed });
++    else this.engine.cancelDraft();
++    this.suppressPan(false);
++    return true;
++  }
+   // ── geometry / projection ──────────────────────────────────────────────────────
    suppressPan(on) {
      this.chart?.applyOptions({ handleScroll: { pressedMouseMove: !on } });
    }
 -  unproject(x, y) {
 +  setCursor(cursor) {
 +    if (!this.el) return;
++    if (cursor === "default") cursor = this.idleCursor || "default";
++    else if (cursor === "move" && this.pointerMode === "eraser") cursor = this.idleCursor || "pointer";
 +    if (this.el.style.setProperty) this.el.style.setProperty("cursor", cursor, "important");
 +    else this.el.style.cursor = cursor;
 +    this.el.querySelectorAll?.("canvas").forEach((canvas) => canvas.style.setProperty("cursor", cursor, "important"));
@@ -2276,7 +2584,7 @@ index e58972e..58a69f7 100644
      const y = this.series.priceToCoordinate(p.price);
      if (x == null || y == null) return null;
      return { x, y };
-@@ -1513,27 +2243,54 @@ var DrawingController = class {
+@@ -1513,27 +2363,54 @@ var DrawingController = class {
      const p = { x: px, y: py };
      const list = this.engine.getDrawings();
      const selId = this.engine.getSelectedId();
@@ -2341,7 +2649,7 @@ index e58972e..58a69f7 100644
      const t = this.tol;
      switch (d.tool) {
        case "HorizontalLine":
-@@ -1547,6 +2304,13 @@ var DrawingController = class {
+@@ -1547,6 +2424,13 @@ var DrawingController = class {
        case "TrendLine":
        case "Arrow":
          return !!b && distToSegment(p, a, b) <= t;
@@ -2355,7 +2663,7 @@ index e58972e..58a69f7 100644
        case "Ray":
          return !!b && distToRay(p, a, b) <= t;
        case "ExtendedLine":
-@@ -1554,6 +2318,9 @@ var DrawingController = class {
+@@ -1554,10 +2438,27 @@ var DrawingController = class {
        case "Rectangle":
        case "PriceRange":
          return !!b && (distToRectEdges(p, a, b) <= t || pointInRect(p, a, b));
@@ -2365,7 +2673,25 @@ index e58972e..58a69f7 100644
        case "DateRange":
          return !!b && (Math.abs(p.x - a.x) <= t || Math.abs(p.x - b.x) <= t);
        case "Circle":
-@@ -1566,7 +2333,29 @@ var DrawingController = class {
+         return !!b && distToEllipse(p, a, b) <= t;
++      case "Emoji": {
++        const half = Math.max(12, d.style.fontSize || 28) * 0.6;
++        return Math.abs(p.x - a.x) <= half + t && Math.abs(p.y - a.y) <= half + t;
++      }
++      case "Path": {
++        let prev = a;
++        for (let i = 1; i < d.points.length; i++) {
++          const next = this.project(d.points[i], d);
++          if (!next) continue;
++          if (distToSegment(p, prev, next) <= t) return true;
++          prev = next;
++        }
++        return false;
++      }
+       case "Triangle":
+         return !!b && !!c && (distToSegment(p, a, b) <= t || distToSegment(p, b, c) <= t || distToSegment(p, c, a) <= t);
+       case "ParallelChannel": {
+@@ -1566,7 +2467,29 @@ var DrawingController = class {
          return distToSegment(p, a, b) <= t || distToSegment(p, c, c2) <= t;
        }
        case "FibRetracement":
@@ -2397,7 +2723,7 @@ index e58972e..58a69f7 100644
          return !!b && !!c && FIB_EXT_LEVELS.some((lvl) => Math.abs(p.y - (c.y + (b.y - a.y) * lvl)) <= t);
        default:
 diff --git a/node_modules/@getcandlekit/charts/dist/index.d.cts b/node_modules/@getcandlekit/charts/dist/index.d.cts
-index f9acbb7..031a84d 100644
+index f9acbb7..5560084 100644
 --- a/node_modules/@getcandlekit/charts/dist/index.d.cts
 +++ b/node_modules/@getcandlekit/charts/dist/index.d.cts
 @@ -654,7 +654,7 @@ interface PredictionOverlay {
@@ -2405,7 +2731,7 @@ index f9acbb7..031a84d 100644
   */
  /** Built-in tool ids. Open-ended so you can add custom tools. */
 -type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "PriceRange" | "DateRange" | "FibRetracement" | "FibExtension" | (string & {});
-+type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "Text" | "PriceRange" | "DateRange" | "LongPosition" | "ShortPosition" | "FibRetracement" | "FibExtension" | (string & {});
++type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "Text" | "PriceRange" | "DateRange" | "LongPosition" | "ShortPosition" | "FibRetracement" | "FibExtension" | "Path" | "Emoji" | (string & {});
  /** Number of anchor points each tool needs. */
  declare const TOOL_POINTS: Record<string, number>;
  /** An anchor in data space: `time` is the lightweight-charts time (epoch seconds). */
@@ -2431,8 +2757,21 @@ index f9acbb7..031a84d 100644
      /** Ask the chart to repaint (call after engine mutations). */
      redraw(): void;
      updateAllViews(): void;
+@@ -852,6 +860,12 @@ declare class DrawingController implements ChartPlugin {
+     private onMove;
+     private onUp;
+     private onKey;
++    /**
++     * Režim kurzoru jako v TradingView. `cursor` je CSS hodnota kurzoru mimo
++     * kreslení; `eraser` maže kresbu kliknutím.
++     */
++    setPointerMode(mode: "cross" | "dot" | "arrow" | "demonstration" | "eraser", cursor?: string): void;
++    getPointerMode(): "cross" | "dot" | "arrow" | "demonstration" | "eraser";
+     private suppressPan;
+     private unproject;
+     private project;
 diff --git a/node_modules/@getcandlekit/charts/dist/index.d.ts b/node_modules/@getcandlekit/charts/dist/index.d.ts
-index 6dcc3f6..d1332fb 100644
+index 6dcc3f6..28c2389 100644
 --- a/node_modules/@getcandlekit/charts/dist/index.d.ts
 +++ b/node_modules/@getcandlekit/charts/dist/index.d.ts
 @@ -654,7 +654,7 @@ interface PredictionOverlay {
@@ -2440,7 +2779,7 @@ index 6dcc3f6..d1332fb 100644
   */
  /** Built-in tool ids. Open-ended so you can add custom tools. */
 -type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "PriceRange" | "DateRange" | "FibRetracement" | "FibExtension" | (string & {});
-+type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "Text" | "PriceRange" | "DateRange" | "LongPosition" | "ShortPosition" | "FibRetracement" | "FibExtension" | (string & {});
++type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "Text" | "PriceRange" | "DateRange" | "LongPosition" | "ShortPosition" | "FibRetracement" | "FibExtension" | "Path" | "Emoji" | (string & {});
  /** Number of anchor points each tool needs. */
  declare const TOOL_POINTS: Record<string, number>;
  /** An anchor in data space: `time` is the lightweight-charts time (epoch seconds). */
@@ -2491,7 +2830,7 @@ index 6dcc3f6..d1332fb 100644
      private cleanup;
      private readonly tol;
      private readonly storageKey;
-@@ -851,8 +863,12 @@ declare class DrawingController implements ChartPlugin {
+@@ -851,8 +863,18 @@ declare class DrawingController implements ChartPlugin {
      private onDown;
      private onMove;
      private onUp;
@@ -2499,6 +2838,12 @@ index 6dcc3f6..d1332fb 100644
      private onKey;
      private suppressPan;
 +    private setCursor;
++    /**
++     * Režim kurzoru jako v TradingView. `cursor` je CSS hodnota kurzoru mimo
++     * kreslení; `eraser` maže kresbu kliknutím.
++     */
++    setPointerMode(mode: "cross" | "dot" | "arrow" | "demonstration" | "eraser", cursor?: string): void;
++    getPointerMode(): "cross" | "dot" | "arrow" | "demonstration" | "eraser";
 +    private clearHover;
 +    private updateHover;
      private unproject;

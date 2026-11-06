@@ -122,6 +122,19 @@ describe('Mac copier durable group install guard', () => {
     })).toMatchObject({ action: 'first-install', group: { id: 'fallback' } });
   });
 
+  it('first install zachová explicitní local manual-only skupinu', () => {
+    const manual: CopyGroupConfig = {
+      id: 'manual-demo-11', name: 'Ruční DEMO test', enabled: true,
+      leaderAccountId: 11, followers: [], localOnly: true, manualOnly: true,
+    };
+    expect(decideDurableGroupInstall({
+      durableGroup: null,
+      cliGroup: { leaderAccountId: 11, followers: [] },
+      fallbackGroup: manual,
+      strategy: 'require-match',
+    })).toMatchObject({ action: 'first-install', group: { manualOnly: true, followers: [] } });
+  });
+
   it('při rozdílu bez explicitního příznaku zastaví', () => {
     const cli = { ...matchingCli(), leaderAccountId: 44 };
     expect(() => decideDurableGroupInstall({

@@ -11,6 +11,30 @@ export const COPIER_COMMAND_ACK_RESERVE_MS = 10_000;
 export const COPIER_RELAY_CLOCK_SKEW_RESERVE_MS = 2_000;
 /** Kolik id příkazů zahájených v této session si relay pamatuje (pojistka proti druhé execution). */
 export const COPIER_RELAY_STARTED_MEMORY = 200;
+/** Push (F1b′) smí použít offset hodin jen z pollu ne staršího než tohle; jinak čeká na poll. */
+export const COPIER_RELAY_PUSH_CLOCK_MAX_AGE_MS = 60_000;
+
+/** Řádek navázaný serverem k nečinné delivery a doručený podepsaným pushem (už ověřený podpis). */
+export interface PushedCopierDelivery { deliveryId: string; command: unknown }
+
+/**
+ * Ruční vstup/správa používají z odpovědi jen konkrétní brokerový výsledek.
+ * Autoritativní status jde samostatně (complete-v2, nebo heartbeat po kompaktním
+ * complete-hot-v3) a stejný 20kB objekt uvnitř `result.status` by se jinak dvakrát
+ * přenesl, dvakrát zapsal do JSONB a znovu vrátil prohlížeči. Ostatní příkazy
+ * status v odpovědi používají, proto se kompaktují jen tyto dvě horké cesty.
+ */
+export function compactRecoverableCopierResult(command: LocalCopierAgentCommand, result: unknown): unknown {
+  if (!isLeaderEntryPlaceCommand(command) && !isLeaderOrderManageCommand(command)) return result;
+  if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true
+    || !Object.hasOwn(result, 'result')) return result;
+  return { ok: true, result: (result as { result: unknown }).result };
+}
+
+/** Server kompaktní ACK neumí (starý web, neaplikovaná migrace): chvíli rovnou complete-v2. */
+const COMPACT_ACK_UNAVAILABLE = /invalid-copier-relay-action|copier-relay-hot-ack-unavailable/;
+const COMPACT_ACK_RETRY_AFTER_MS = 5 * 60_000;
+
 /** Serial, durable transport recovery. Only HTTP delivery/ACK is retried;
  * once execution starts a trading or configuration command can NEVER be
  * executed by this relay again. Idempotent brakes (DISARM, kill switch, day
@@ -18,13 +42,24 @@ export const COPIER_RELAY_STARTED_MEMORY = 200;
  * restart or a failed checkpoint write, because it only tightens. */
 export function recoverableCopierDelivery(options: {
   store: RelayDeliveryStore; agent: LocalCopierExecutionAgent; request: Request;
-  nextRevision: () => number; onComplete: (id: string) => void;
+  nextRevision: () => number;
+  /** ACK přijat. `statusPending` = status možná není v DB (kompaktní ACK) a pošle ho volající. */
+  onComplete: (id: string, statusPending: boolean) => void;
+  /**
+   * Zobrazovací nudge po durable lokálním zápisu výsledku, ještě před vzdáleným
+   * ACK. Nesmí autorizovat další příkaz ani měnit delivery; jeho selhání se
+   * ignoruje a autoritativní complete-v2 pokračuje beze změny.
+   */
+  onDurableResult?: (id: string) => void;
   now?: () => number; isActive?: () => boolean;
 }) {
   const session = randomUUID();
   const now = options.now ?? Date.now;
   const startedAt = now();
   let loaded = false;
+  let compactAckPausedUntil = 0;
+  /** Delivery, u které kompaktní ACK selhal: další pokusy jdou rovnou přes complete-v2. */
+  let compactAckFailedFor: string | null = null;
   let checkpoint: RelayDelivery | null = null;
   /** Příkazy, jejichž execution tato session zahájila (zápis `executing`) nebo
    * jejichž výsledek se ztratil s osiřelou delivery. Ne-brzda z této množiny se
@@ -50,22 +85,52 @@ export function recoverableCopierDelivery(options: {
     checkpoint = next;
     await options.store.write(next);
   };
-  return async () => {
+  /** Offset hodin serveru z posledního pollu (push vlastní `serverNow` nemá — jednosměrná latence). */
+  let lastClock: { offsetMs: number; reserveMs: number; at: number } | null = null;
+  const freshPolling = () => ({ version: 1 as const, session, deliveryId: randomUUID(), phase: 'polling' as const });
+  /** Durable checkpoint, jehož id se smí ohlásit serveru (`relayIdle`): jen `polling` této session. */
+  let advertised: string | null = null;
+  const run = async (pushed?: PushedCopierDelivery | null) => {
     if (!loaded) { checkpoint = await options.store.read(); loaded = true; }
-    if (!checkpoint) await persist({ version: 1, session, deliveryId: randomUUID(), phase: 'polling' });
+    if (!checkpoint) await persist(freshPolling());
     let current = checkpoint!;
     await options.store.write(current);
+    advertised = current.phase === 'polling' && current.session === session ? current.deliveryId : null;
+    // Push se použije jen pro aktuální nečinnou delivery této session a s čerstvým offsetem
+    // hodin z pollu; jinak se zahodí a jde se běžným pollem (ten vrátí tentýž vázaný řádek).
+    const usePush = pushed != null && pushed.deliveryId === current.deliveryId && current.phase === 'polling'
+      && current.session === session && lastClock != null && now() - lastClock.at <= COPIER_RELAY_PUSH_CLOCK_MAX_AGE_MS;
     const pollStartedAt = now();
-    const response = await options.request({ action: 'poll-v2', deliveryId: current.deliveryId });
+    const response: Record<string, unknown> = usePush
+      ? { protocol: 2, command: pushed!.command, pushed: true }
+      : await options.request({ action: 'poll-v2', deliveryId: current.deliveryId });
     const pollReceivedAt = now();
     if (!Object.hasOwn(response, 'command')) throw new Error('relay-delivery-response-invalid');
     if (response.protocol !== 2) throw new Error('relay-delivery-protocol-unavailable');
+    if (!usePush) {
+      const serverNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
+      if (Number.isFinite(serverNow)) {
+        lastClock = {
+          offsetMs: serverNow - (pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2)),
+          reserveMs: Math.max(COPIER_RELAY_CLOCK_SKEW_RESERVE_MS, Math.ceil(Math.max(0, pollReceivedAt - pollStartedAt) / 2)),
+          at: pollReceivedAt,
+        };
+      }
+    }
     const remote = response.command as { id: string; command: LocalCopierAgentCommand; createdAt: string; expiresAt: string; status: string } | null;
+    if (usePush && (!remote || typeof remote.id !== 'string' || remote.status !== 'claimed' || !remote.command)) {
+      throw new Error('relay-delivery-push-invalid');
+    }
     if (!remote) {
       // DB delivery nezná a nic k ní nepřiřadila — checkpoint je osiřelý.
       if (current.phase !== 'polling') orphan(current, 'unknown-to-server');
-      await persist(null); return response;
+      // F1b′: nečinná delivery této session zůstává (server k ní smí navázat příkaz);
+      // cizí session nebo osiřelý checkpoint se vymění za nový.
+      if (current.phase !== 'polling' || current.session !== session) await persist(freshPolling());
+      advertised = checkpoint!.deliveryId;
+      return response;
     }
+    advertised = null;
     // Řádek s naší delivery zase `pending` (ruční zásah): mohl už běžet, takže
     // se zapamatuje jako zahájený a vezme se znovu pod novou delivery.
     if (remote.status === 'pending') {
@@ -86,6 +151,10 @@ export function recoverableCopierDelivery(options: {
       recovered = true;
     }
     if (remote.status === 'succeeded' || remote.status === 'rejected' || remote.status === 'expired') {
+      // ACK se zapsal, ztratila se jen odpověď: kompaktní ACK status nenesl, takže ho dorovnej.
+      if (remote.status !== 'expired' && current.phase === 'completed' && current.commandId === remote.id) {
+        options.onComplete(remote.id, true);
+      }
       await persist(null); return response;
     }
     if (remote.status !== 'claimed') throw new Error('relay-delivery-status-invalid');
@@ -113,10 +182,11 @@ export function recoverableCopierDelivery(options: {
       await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
         error: 'command-rejected-relay-delivery-recovered' });
     } else if (current.phase === 'polling' || idempotentBrake) {
-      const serverNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
-      const localMidpoint = pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2);
-      const serverClockOffsetMs = Number.isFinite(serverNow) ? serverNow - localMidpoint : 0;
-      const clockSkewReserveMs = Math.max(
+      // Offset hodin: u pollu z jeho vlastního měření, u pushe z posledního pollu (≤ 60 s).
+      const pollServerNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
+      const serverClockOffsetMs = usePush ? lastClock!.offsetMs
+        : Number.isFinite(pollServerNow) ? pollServerNow - (pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2)) : 0;
+      const clockSkewReserveMs = usePush ? lastClock!.reserveMs : Math.max(
         COPIER_RELAY_CLOCK_SKEW_RESERVE_MS,
         Math.ceil(Math.max(0, pollReceivedAt - pollStartedAt) / 2),
       );
@@ -140,7 +210,7 @@ export function recoverableCopierDelivery(options: {
         await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
           error: 'command-expired-or-predates-worker-session' });
       } else {
-        console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} id=${remote.id} queueMs=${Math.max(0, now() - created)}`);
+        console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} id=${remote.id} queueMs=${Math.max(0, now() - created)}${usePush ? ' via=push' : ''}`);
         rememberStarted(remote.id);
         await persist({ ...current, phase: 'executing', commandId: remote.id });
         const executionStarted = performance.now();
@@ -154,7 +224,7 @@ export function recoverableCopierDelivery(options: {
         // novějšího ARM je fail-safe — kopírka zůstane vypnutá a ukáže důvod.
         else {
           try {
-            result = await options.agent.execute(remote.command, {
+            result = compactRecoverableCopierResult(remote.command, await options.agent.execute(remote.command, {
               source: 'relay',
               createdAt: created,
               clockSkewReserveMs,
@@ -163,7 +233,7 @@ export function recoverableCopierDelivery(options: {
                 : {}),
               // Ruční vstup (fáze 1b): platnost do expiresAt bez ACK rezervy (§4).
               ...(isLeaderEntryPlaceCommand(remote.command) || isLeaderOrderManageCommand(remote.command) ? { deadlineAt: expires } : {}),
-            });
+            }));
           }
           catch (error) {
             executionError = error instanceof Error ? error.message : String(error);
@@ -176,14 +246,53 @@ export function recoverableCopierDelivery(options: {
       }
     }
     current = checkpoint!;
+    // Brokerův výsledek je už durable na disku workeru. Otevřený LIVE graf ho
+    // smí zobrazit hned přes šifrovanou display-only cestu; serverový ACK a
+    // audit dál proběhnou níže a nikdy se tímto nudgem neobcházejí.
+    try { options.onDurableResult?.(remote.id); } catch { /* display-only */ }
     const ackStarted = performance.now();
-    const ack = await options.request({ action: 'complete-v2', deliveryId: current.deliveryId,
-      commandId: remote.id, result: current.result ?? null, error: current.error ?? null,
-      status: options.agent.status(), revision: options.nextRevision() });
-    if (ack.protocol !== 2 || ack.accepted !== true) throw new Error('relay-delivery-ack-not-confirmed');
-    console.log(`${new Date().toISOString()} RELAY ACK id=${remote.id} durationMs=${Math.round(performance.now() - ackStarted)}`);
-    options.onComplete(remote.id);
-    await persist(null);
+    const ackFields = { deliveryId: current.deliveryId, commandId: remote.id,
+      result: current.result ?? null, error: current.error ?? null };
+    const compactAckFailedHere = compactAckFailedFor === current.deliveryId;
+    const tryCompactAck = (isLeaderEntryPlaceCommand(remote.command) || isLeaderOrderManageCommand(remote.command))
+      && !compactAckFailedHere && now() >= compactAckPausedUntil;
+    let ackBytes = 0;
+    let compactAccepted = false;
+    if (tryCompactAck) {
+      // Selhání kompaktního ACK nesmí zablokovat linku s brzdami za tímto příkazem
+      // (INV-BRAKE-03): v téže delivery následuje complete-v2. Opakuje se jen ACK,
+      // nikdy execution; po zapsaném v3 vrátí v2 jen shodu a nic nezmění.
+      try {
+        const body = { action: 'complete-hot-v3', ...ackFields, workerStartedAt: options.agent.status().startedAt };
+        ackBytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
+        const ack = await options.request(body);
+        compactAccepted = ack.protocol === 3 && ack.accepted === true;
+        if (!compactAccepted) compactAckFailedFor = current.deliveryId;
+      } catch (error) {
+        compactAckFailedFor = current.deliveryId;
+        const message = error instanceof Error ? error.message : String(error);
+        if (COMPACT_ACK_UNAVAILABLE.test(message)) compactAckPausedUntil = now() + COMPACT_ACK_RETRY_AFTER_MS;
+        console.warn(`${new Date().toISOString()} RELAY compact ACK → complete-v2 id=${remote.id}: ${message}`);
+      }
+    }
+    if (!compactAccepted) {
+      const body = { action: 'complete-v2', ...ackFields, status: options.agent.status(), revision: options.nextRevision() };
+      ackBytes += new TextEncoder().encode(JSON.stringify(body)).byteLength;
+      const ack = await options.request(body);
+      if (ack.protocol !== 2 || ack.accepted !== true) throw new Error('relay-delivery-ack-not-confirmed');
+    }
+    console.log(`${new Date().toISOString()} RELAY ACK id=${remote.id} bytes=${ackBytes}`
+      + ` durationMs=${Math.round(performance.now() - ackStarted)}`);
+    // Budíček UI dřív než zápis nové delivery — jeho selhání ho nesmí spolknout (oponentura P2-3).
+    // Po pokusu o v3 mohlo v2 vrátit jen shodu bez zápisu statusu, proto se status dorovná i tehdy.
+    options.onComplete(remote.id, tryCompactAck || compactAckFailedHere);
+    // Rovnou nová nečinná delivery (F1b′): server ji uvidí v nejbližším statusu.
+    await persist(freshPolling());
+    advertised = checkpoint!.deliveryId;
     return response;
   };
+  return Object.assign(run, {
+    /** `relayIdle` pro status: id durable nečinné delivery této session, jinak null. */
+    idleDeliveryId: (): string | null => advertised,
+  });
 }

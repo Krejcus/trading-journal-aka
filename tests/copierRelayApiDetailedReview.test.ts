@@ -1,22 +1,32 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { encryptTradovateSecret } from '../server/tradovateOAuth';
+
+const TOKEN_KEY = '11'.repeat(32);
 
 const mocks = vi.hoisted(() => ({
-  claimV2: vi.fn(), completeV2: vi.fn(), complete: vi.fn(), authorize: vi.fn(), heartbeat: vi.fn(), claim: vi.fn(), push: vi.fn(),
+  claimV2: vi.fn(), completeV2: vi.fn(), completeHotV3: vi.fn(), complete: vi.fn(), authorize: vi.fn(), heartbeat: vi.fn(), claim: vi.fn(), push: vi.fn(),
   requireUser: vi.fn(), enqueue: vi.fn(), read: vi.fn(), snapshots: vi.fn(), tick: vi.fn(),
+  verifyHint: vi.fn(), resolve: vi.fn(),
 }));
 vi.mock('../server/tradovateOAuthStore', () => ({
-  readTradovateServerConfig: () => ({ environment: 'demo', supabaseUrl: 'https://mock.invalid', supabaseAnonKey: 'mock-public' }),
-  createTradovateAdminClient: () => ({}), requireSupabaseUserId: mocks.requireUser,
+  readTradovateServerConfig: () => ({ environment: 'demo', supabaseUrl: 'https://mock.invalid', supabaseAnonKey: 'mock-public',
+    supabaseServiceRoleKey: 'mock-service', tokenEncryptionKey: '11'.repeat(32) }),
+  createTradovateAdminClient: () => ({}),
+  beginSupabaseUserIdVerification: async (...args: unknown[]) => ({
+    userId: await mocks.requireUser(...args), confirmed: Promise.resolve(),
+  }),
 }));
 vi.mock('../server/tradovateCopierDevice', () => ({ authorizeTradovateCopierDevice: mocks.authorize }));
 vi.mock('../server/tradovateCopierCommandRelay', () => ({
   claimTradovateCopierCommandV2: mocks.claimV2, completeTradovateCopierCommandV2: mocks.completeV2,
+  completeTradovateCopierHotCommandV3: mocks.completeHotV3,
   heartbeatTradovateCopierDevice: mocks.heartbeat, claimTradovateCopierCommand: mocks.claim,
   completeTradovateCopierCommand: mocks.complete,
   enqueueTradovateCopierCommand: mocks.enqueue, readTradovateCopierCommand: mocks.read,
   copierRelayValidationErrorStatus: () => null,
-  resolveCopierRelayConnectionId: async ({ connectionId }: { connectionId: string }) => connectionId,
+  resolveCopierRelayConnectionId: mocks.resolve,
+  verifyCopierRelayTargetHint: mocks.verifyHint,
 }));
 vi.mock('../server/nativeCopierStatePush', () => ({ sendImmediateCopyEventPushes: mocks.push }));
 vi.mock('../server/tvAlertNotifications', () => ({ loadPendingTvAlertSnapshotRequests: mocks.snapshots }));
@@ -41,6 +51,40 @@ describe('copier relay API fault review', () => {
     mocks.push.mockResolvedValue({ notifications: 0, sent: 0 });
     mocks.snapshots.mockResolvedValue([]);
     mocks.tick.mockResolvedValue({ sent: 0, skipped: 0, failed: 0, reason: 'not-armed' });
+    mocks.verifyHint.mockResolvedValue(null);
+    mocks.resolve.mockImplementation(async ({ connectionId }: { connectionId: string }) => connectionId);
+  });
+
+  it('uses a decrypted, freshly server-verified hint for a hot command and skips full owner resolution', async () => {
+    const startedAt = '2026-10-31T02:00:00.000Z';
+    const device = { id: '33333333-3333-4333-8333-333333333333', status: { startedAt }, lastSeenAt: new Date().toISOString() };
+    const clearHint = {
+      kind: 'copier-relay-target', v: 1, userId: 'user', deviceId: device.id,
+      connectionId: '22222222-2222-4222-8222-222222222222', startedAt, expiresAt: Date.now() + 8_000,
+    };
+    const relayTargetHint = encryptTradovateSecret(JSON.stringify(clearHint), TOKEN_KEY);
+    mocks.requireUser.mockResolvedValue('user');
+    mocks.verifyHint.mockResolvedValue({ connectionId: clearHint.connectionId, device });
+    mocks.enqueue.mockResolvedValue({ id: 'hot-command', deviceId: device.id, status: 'pending', expiresAt: new Date(Date.now() + 10_000).toISOString() });
+    mocks.read.mockResolvedValue({ id: 'hot-command', status: 'succeeded', result: { ok: true }, error: null });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true })));
+    const res = response();
+    try {
+      await handler({ method: 'POST', headers: { authorization: 'Bearer mock' }, body: {
+        connectionId: 'requested-connection', relayTargetHint,
+        command: { type: 'copy-command', command: { type: 'preview-leader-entry' } },
+        idempotencyKey: 'same-key',
+      } } as VercelRequest, res as unknown as VercelResponse);
+      expect(mocks.verifyHint).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user', hint: clearHint }));
+      expect(mocks.resolve).not.toHaveBeenCalled();
+      expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        connectionId: clearHint.connectionId,
+        verifiedDevice: device,
+      }));
+      expect(res.status).toHaveBeenCalledWith(202);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('delivers a queued control command before optional push notifications', async () => {
@@ -105,6 +149,57 @@ describe('copier relay API fault review', () => {
       expect(res.json).toHaveBeenCalledWith(queued);
     } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
   });
+
+  it('returns a durable result while the redundant realtime kick response is still in flight', async () => {
+    vi.useFakeTimers();
+    let finishKick: (response: Response) => void = () => undefined;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finishKick = resolve; })));
+    mocks.requireUser.mockResolvedValue('user');
+    const queued = { id: 'parallel-command', deviceId: 'device', status: 'pending', expiresAt: '2026-09-05T20:00:00Z' };
+    const resolution = { id: queued.id, status: 'succeeded', result: { ok: true }, error: null };
+    mocks.enqueue.mockResolvedValue(queued);
+    mocks.read.mockResolvedValue(resolution);
+    const res = response();
+    try {
+      const pending = handler({ method: 'POST', headers: { authorization: 'Bearer mock' }, body: {
+        connectionId: 'connection', command: { type: 'disarm' }, idempotencyKey: 'same-key',
+      } } as VercelRequest, res as unknown as VercelResponse);
+      await vi.advanceTimersByTimeAsync(30);
+      expect(mocks.read).toHaveBeenCalledOnce();
+      await pending;
+      expect(res.status).toHaveBeenCalledWith(202);
+      expect(res.json).toHaveBeenCalledWith({ ...queued, resolution });
+      // Pozdní síťová odpověď už hotový příkaz nedrží; dokončení stubu jen uklidí test.
+      finishKick(Response.json({ ok: true }));
+    } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
+  });
+
+  it('returns a durable result immediately and aborts a redundant in-flight kick', async () => {
+    vi.useFakeTimers();
+    let kickAborted = false;
+    vi.stubGlobal('fetch', vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        kickAborted = true;
+        reject(new DOMException('aborted', 'AbortError'));
+      }, { once: true });
+    })));
+    mocks.requireUser.mockResolvedValue('user');
+    const queued = { id: 'fast-result', deviceId: 'device', status: 'pending', expiresAt: '2026-09-05T20:00:00Z' };
+    const resolution = { id: queued.id, status: 'succeeded', result: { ok: true }, error: null };
+    mocks.enqueue.mockResolvedValue(queued);
+    mocks.read.mockResolvedValue(resolution);
+    const res = response();
+    try {
+      const pending = handler({ method: 'POST', headers: { authorization: 'Bearer mock' }, body: {
+        connectionId: 'connection', command: { type: 'disarm' }, idempotencyKey: 'same-key',
+      } } as VercelRequest, res as unknown as VercelResponse);
+      await vi.advanceTimersByTimeAsync(30);
+      await pending;
+      expect(kickAborted).toBe(true);
+      expect(res.status).toHaveBeenCalledWith(202);
+      expect(res.json).toHaveBeenCalledWith({ ...queued, resolution });
+    } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
+  });
 });
 
 
@@ -118,7 +213,7 @@ describe('v2 control lane', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.authorize.mockResolvedValue({ id: 'device', userId: 'user', connectionId: 'connection' });
-    mocks.claimV2.mockResolvedValue(null); mocks.completeV2.mockResolvedValue(true);
+    mocks.claimV2.mockResolvedValue(null); mocks.completeV2.mockResolvedValue(true); mocks.completeHotV3.mockResolvedValue(true);
   });
   it('authenticates freshly but skips the device touch and all background work on poll', async () => {
     const res = await invoke({ action: 'poll-v2', deliveryId });
@@ -142,6 +237,28 @@ describe('v2 control lane', () => {
     expect(mocks.completeV2).toHaveBeenCalledOnce(); expect(mocks.heartbeat).not.toHaveBeenCalled();
     expect(mocks.push).not.toHaveBeenCalled(); expect(res.json).toHaveBeenCalledWith({ protocol: 2, accepted: true });
   });
+  it('ACKs a hot command with its exact worker run and no runtime heartbeat', async () => {
+    const workerStartedAt = '2026-11-04T16:28:34.000Z';
+    const res = await invoke({ action: 'complete-hot-v3', deliveryId, commandId: deliveryId,
+      workerStartedAt, result: { ok: true } });
+    expect(mocks.authorize).toHaveBeenCalledWith(expect.objectContaining({ touchLastUsed: false }));
+    expect(mocks.completeHotV3).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'device', deliveryId, commandId: deliveryId, workerStartedAt,
+    }));
+    expect(mocks.heartbeat).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ protocol: 3, accepted: true });
+  });
+  it('tells the worker when the hot ACK function is missing, other RPC errors stay generic', async () => {
+    mocks.completeHotV3.mockRejectedValueOnce(new Error('copier-relay-hot-ack-unavailable'));
+    const missing = await invoke({ action: 'complete-hot-v3', deliveryId, commandId: deliveryId,
+      workerStartedAt: '2026-11-04T16:28:34.000Z', result: { ok: true } });
+    expect(missing.status).toHaveBeenCalledWith(503);
+    expect(missing.json).toHaveBeenCalledWith({ error: 'copier-relay-hot-ack-unavailable' });
+    mocks.completeHotV3.mockRejectedValueOnce(new Error('copier-relay-complete-failed: timeout'));
+    const failed = await invoke({ action: 'complete-hot-v3', deliveryId, commandId: deliveryId,
+      workerStartedAt: '2026-11-04T16:28:34.000Z', result: { ok: true } });
+    expect(failed.status).toHaveBeenCalledWith(502);
+  });
   it('keeps the fast heartbeat free of history and notifications', async () => {
     const res = await invoke({ action: 'heartbeat-v2', status: { startedAt: '2026-09-13T10:00:00Z' }, revision: 3 });
     expect(mocks.heartbeat).toHaveBeenCalledWith(expect.objectContaining({ runtimeOnly: true, revision: 3 }));
@@ -151,6 +268,8 @@ describe('v2 control lane', () => {
   it('rejects bad identifiers, missing revisions and revoked devices before claim/complete', async () => {
     expect((await invoke({ action: 'poll-v2', deliveryId: 'bad' })).status).toHaveBeenCalledWith(400);
     expect((await invoke({ action: 'complete-v2', deliveryId, commandId: deliveryId, status: {} })).status).toHaveBeenCalledWith(400);
+    expect((await invoke({ action: 'complete-hot-v3', deliveryId, commandId: deliveryId,
+      workerStartedAt: 'bad' })).status).toHaveBeenCalledWith(400);
     mocks.authorize.mockRejectedValueOnce(new Error('invalid-copier-device-auth'));
     expect((await invoke({ action: 'poll-v2', deliveryId })).status).toHaveBeenCalledWith(401);
     expect(mocks.claimV2).not.toHaveBeenCalled(); expect(mocks.completeV2).not.toHaveBeenCalled();

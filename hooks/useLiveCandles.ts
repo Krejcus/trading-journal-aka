@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { LIVE_CANDLES_STALE_MS, loadLiveCandles, type LiveCandles } from '../services/liveCandles';
+import { LIVE_CANDLES_STALE_MS, LiveCandlesReadError, loadLiveCandles, type LiveCandles } from '../services/liveCandles';
+import type { CandleFileProblem } from '../lib/candleSnapshotValidation';
+import { perfDuration } from '../lib/perfTrace';
 
 export const LIVE_CANDLES_POLL_MS = 60_000;
 /**
@@ -39,15 +41,20 @@ export type LiveCandlesStatus = 'loading' | 'live' | 'stale' | 'unavailable';
  * TradingView neběží (poslední čtení je starší než 3 min); `unavailable` =
  * žádné čtení zatím neexistuje. Jen zobrazení.
  */
-export function useLiveCandles(symbol: string | null, options: { enabled?: boolean; pollMs?: number } = {}) {
+export function useLiveCandles(
+  symbol: string | null,
+  options: { enabled?: boolean; pollMs?: number; perfScope?: 'live' | 'day' } = {},
+) {
   const enabled = options.enabled !== false && !!symbol;
   const pollMs = Math.max(15_000, options.pollMs ?? LIVE_CANDLES_POLL_MS);
+  const perfScope = options.perfScope;
   const [live, setLive] = useState<LiveCandles | null>(null);
   const [status, setStatus] = useState<LiveCandlesStatus>(enabled ? 'loading' : 'unavailable');
+  const [problem, setProblem] = useState<CandleFileProblem | null>(null);
   const generation = useRef(0);
 
   useEffect(() => {
-    if (!enabled || !symbol) { setLive(null); setStatus('unavailable'); return; }
+    if (!enabled || !symbol) { setLive(null); setStatus('unavailable'); setProblem(null); return; }
     const current = ++generation.current;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let catchUpTimer: ReturnType<typeof setTimeout> | null = null;
@@ -55,20 +62,32 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
     // Jiný symbol: data předchozího instrumentu se nesmí ukázat ani chvíli.
     setLive(null);
     setStatus('loading');
+    setProblem(null);
     const refresh = async () => {
       if (inFlight || document.visibilityState === 'hidden') return;
       inFlight = true;
+      const startedAt = performance.now();
       try {
         const next = await loadLiveCandles(symbol);
         if (generation.current !== current) return;
-        if (next) {
-          // Stejný soubor graf znovu nepřestavuje.
-          setLive(previous => (previous?.capturedAt === next.capturedAt ? previous : next));
-          setStatus(next.stale ? 'stale' : 'live');
+        if (perfScope) perfDuration(`${perfScope}:chart:live-snapshot-load`, performance.now() - startedAt);
+        // Stejný soubor graf znovu nepřestavuje.
+        const keepIfSame = (read: LiveCandles) => (previous: LiveCandles | null) => (previous?.capturedAt === read.capturedAt ? previous : read);
+        if (next) { setLive(keepIfSame(next)); setStatus(next.stale ? 'stale' : 'live'); setProblem(null); }
+        else { setProblem('download-failed'); setStatus(previous => (previous === 'loading' ? 'unavailable' : previous)); }
+        // Preload gives an immediate first view, never another minute of stale
+        // coverage. It is consumed once, so this is exactly one fresh read.
+        if (next?.fromWarmCache) {
+          const fresh = await loadLiveCandles(symbol);
+          if (generation.current !== current) return;
+          if (fresh) { setLive(keepIfSame(fresh)); setStatus(fresh.stale ? 'stale' : 'live'); setProblem(null); }
+          else setProblem('download-failed');
         }
-        else setStatus(previous => (previous === 'loading' ? 'unavailable' : previous));
-      } catch {
-        if (generation.current === current) setStatus(previous => (previous === 'loading' ? 'unavailable' : previous));
+      } catch (reason) {
+        if (generation.current === current) {
+          setProblem(reason instanceof LiveCandlesReadError ? reason.problem : 'download-failed');
+          setStatus(previous => (previous === 'loading' ? 'unavailable' : previous));
+        }
       } finally {
         inFlight = false;
       }
@@ -94,7 +113,7 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
       if (catchUpTimer) clearTimeout(catchUpTimer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [enabled, symbol, pollMs]);
+  }, [enabled, symbol, pollMs, perfScope]);
 
   // Čtení, které mezi obnovami zestárne, přepne stav i bez nového stažení.
   useEffect(() => {
@@ -104,5 +123,5 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
     return () => clearTimeout(timer);
   }, [live]);
 
-  return { live, status };
+  return { live, status, problem };
 }

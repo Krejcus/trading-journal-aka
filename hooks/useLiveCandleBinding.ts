@@ -4,15 +4,23 @@ import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { LIVE_CANDLE_MAX_GAP_SEC, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
 import { followLiveEdge, type LiveFollowMemory } from '../lib/liveChartFollow';
 import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../services/marketData';
+import { perfDuration } from '../lib/perfTrace';
 
 /**
  * Napojí živou svíčku na grafy: při každé změně zdroje (nejvýš 1× za snímek)
  * přepíše jejich poslední bar přímo v grafu — mimo React, bez překreslení
  * stránky. Jen zobrazení: data grafu (`rawCandles`) ani nic uloženého se
  * nemění; další obnova dat svíčku přepíše a hook ji hned vrátí. Když živá
- * cena zmizí (stojí, kanál vypnut), graf se vrátí přesně na svá data —
+ * cena zmizí (stojí, kanál vypnut), graf po krátké výdrži vrátí přesně svá data —
  * stará „živá“ svíčka nesmí zůstat nakreslená jako skutečná (INV-UI-01).
  */
+
+/**
+ * Výdrž živé svíčky bez ceny (INV-UI-01, stabilizace zobrazení; jen graf, nic neautorizuje).
+ * Soubor workeru je až o minutu starší: okamžitý návrat na něj při návratu appky z pozadí
+ * nebo při krátkém výpadku kanálu svíčku viditelně přehodil a pak znovu vrátil.
+ */
+export const LIVE_CANDLE_REVERT_GRACE_MS = 30_000;
 
 export interface LiveCandleTarget {
   api: ChartViewApi | null;
@@ -31,9 +39,18 @@ export interface LiveCandleDrawn {
   last: string | null;
   /** Naposled nakreslené živé bary podle času — pro přenos přes výměnu dat. */
   bars: Map<number, Bar>;
+  /** Kdy naposled přišla živá cena (nebo se appka vrátila z pozadí); odtud běží výdrž. */
+  lastLiveAt: number;
+  /** Trh nakreslených barů: výdrž se nikdy nepřenese na jiný symbol. */
+  root?: string;
 }
 
-const emptyDrawn = (): LiveCandleDrawn => ({ appended: new Set(), originals: new Map(), last: null, bars: new Map() });
+const emptyDrawn = (now = Date.now()): LiveCandleDrawn => ({ appended: new Set(), originals: new Map(), last: null, bars: new Map(), lastLiveAt: now });
+
+/** Návrat appky z pozadí: výdrž běží od teď, čas v pozadí se nepočítá. */
+export function restartLiveCandleGrace(drawnByController: Map<ChartController, LiveCandleDrawn>, now = Date.now()): void {
+  drawnByController.forEach(drawn => { drawn.lastLiveAt = now; });
+}
 
 /** Vrátí graf na jeho data (odebere připsané bary, obnoví přepsané). */
 export function revertLiveCandle(controller: ChartController, drawn: LiveCandleDrawn): void {
@@ -51,27 +68,37 @@ export function revertLiveCandle(controller: ChartController, drawn: LiveCandleD
   }
 }
 
-export function applyLiveCandle(feed: LiveCandleFeed, target: LiveCandleTarget, drawnByController: Map<ChartController, LiveCandleDrawn>): void {
+export function applyLiveCandle(
+  feed: LiveCandleFeed,
+  target: LiveCandleTarget,
+  drawnByController: Map<ChartController, LiveCandleDrawn>,
+  /** Jak dlouho držet nakreslenou svíčku bez živé ceny; 0 = hned zpět na data. */
+  revertGraceMs = 0,
+  now = Date.now(),
+): boolean {
   const api = target.api;
-  if (!api) return;
+  if (!api) return false;
   try {
     const controller = api.controller;
     const drawn = drawnByController.get(controller);
     const live = feed.current(target.root);
     if (!live) {
+      if (drawn && (drawn.root == null || drawn.root === target.root) && now - drawn.lastLiveAt < revertGraceMs) return false;
       if (drawn) {
         drawnByController.delete(controller);
         revertLiveCandle(controller, drawn);
       }
-      return;
+      return false;
     }
     const lastBar = controller.getBars().at(-1);
     const bar = planLiveCandleUpdate({ lastBar, live, timeframe: target.timeframe, rawCandles: target.rawCandles });
-    if (!bar || !lastBar) return;
+    if (!bar || !lastBar) return false;
     // Beze změny baru nic nepřekreslovat (emit storu jen s čítači, heartbeat).
     const signature = `${bar.time}:${bar.open}:${bar.high}:${bar.low}:${bar.close}:${bar.volume}`;
-    const state = drawn ?? emptyDrawn();
-    if (state.last === signature) return;
+    const state = drawn ?? emptyDrawn(now);
+    state.lastLiveAt = now;
+    state.root = target.root;
+    if (state.last === signature) return false;
     const ts = bar.time * 1_000;
     let written: Bar = { ts, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume };
     if (lastBar.ts === ts) {
@@ -91,8 +118,10 @@ export function applyLiveCandle(feed: LiveCandleFeed, target: LiveCandleTarget, 
     state.bars.set(ts, written);
     state.last = signature;
     drawnByController.set(controller, state);
+    return true;
   } catch {
     // Graf se právě přestavuje (jiný timeframe, nová data).
+    return false;
   }
 }
 
@@ -113,9 +142,12 @@ function carryFinishedLiveBars(
   controller: ChartController,
   previous: LiveCandleDrawn,
   drawnByController: Map<ChartController, LiveCandleDrawn>,
+  revertGraceMs = 0,
+  now = Date.now(),
 ): void {
   try {
-    if (!feed.current(target.root)) return;
+    // Ve výdrži (návrat z pozadí, krátký výpadek) bary zůstávají; po ní se graf vrátí na data.
+    if (!feed.current(target.root) && (now - previous.lastLiveAt >= revertGraceMs || previous.root !== target.root)) return;
     const dataLast = controller.getBars().at(-1);
     if (!dataLast) return;
     const minutes = timeframeMinutes(target.timeframe);
@@ -126,7 +158,8 @@ function carryFinishedLiveBars(
       .sort((a, b) => a.ts - b.ts);
     if (!carried.length) return;
     const maxStep = (minutes * 60 + LIVE_CANDLE_MAX_GAP_SEC) * 1_000;
-    const state = emptyDrawn();
+    const state = emptyDrawn(previous.lastLiveAt);
+    state.root = target.root;
     let lastTs = dataLast.ts;
     for (const bar of carried) {
       if (bar.ts === dataLast.ts) {
@@ -162,6 +195,7 @@ export function bindLiveCandleDataResets(
   drawnByController: Map<ChartController, LiveCandleDrawn>,
   active: () => boolean,
   afterReset?: () => void,
+  revertGraceMs = 0,
 ): () => void {
   const offs = targets().map(target => {
     const controller = target.api?.controller;
@@ -171,8 +205,8 @@ export function bindLiveCandleDataResets(
       drawnByController.delete(controller);
       if (!active()) return;
       const current = targets().find(item => item.api?.controller === controller) ?? target;
-      if (previous) carryFinishedLiveBars(feed, current, controller, previous, drawnByController);
-      applyLiveCandle(feed, current, drawnByController);
+      if (previous) carryFinishedLiveBars(feed, current, controller, previous, drawnByController, revertGraceMs);
+      applyLiveCandle(feed, current, drawnByController, revertGraceMs);
       afterReset?.();
     });
   });
@@ -247,8 +281,12 @@ export function useLiveCandleBinding(
   useEffect(() => {
     if (!feed) return;
     activeFeedRef.current = feed;
+    const drawnByController = drawnRef.current;
     let frame = 0;
     let followFrame = 0;
+    let metricFrame = 0;
+    let scheduledAt = 0;
+    let lastPaintMetricAt = -Infinity;
     let followMemory: LiveFollowMemory = new WeakMap();
     const held = (element: HTMLElement) => {
       const pressed = pressedRef.current;
@@ -269,26 +307,50 @@ export function useLiveCandleBinding(
     scheduleFollowRef.current = scheduleFollow;
     const apply = () => {
       frame = 0;
-      for (const target of targetsRef.current) applyLiveCandle(feed, target, drawnRef.current);
+      let updated = false;
+      for (const target of targetsRef.current) updated = applyLiveCandle(feed, target, drawnByController, LIVE_CANDLE_REVERT_GRACE_MS) || updated;
+      const appliedAt = performance.now();
+      if (updated && appliedAt - lastPaintMetricAt >= 500) {
+        lastPaintMetricAt = appliedAt;
+        const startedAt = scheduledAt;
+        metricFrame = window.requestAnimationFrame(() => {
+          metricFrame = 0;
+          perfDuration('live:chart:tick-to-paint', performance.now() - startedAt);
+        });
+      }
       scheduleFollow();
     };
     const schedule = () => {
-      if (!frame) frame = window.requestAnimationFrame(apply);
+      if (!frame) {
+        scheduledAt = performance.now();
+        frame = window.requestAnimationFrame(apply);
+      }
     };
     scheduleRef.current = schedule;
     const unsubscribe = feed.subscribe(schedule);
+    // Konec výdrže nemusí nic ohlásit (kanál mlčí), a návrat z pozadí ji začíná znovu.
+    const graceTimer = window.setInterval(schedule, 5_000);
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      restartLiveCandleGrace(drawnByController);
+      schedule();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     schedule();
     return () => {
       activeFeedRef.current = null;
       unsubscribe();
+      window.clearInterval(graceTimer);
+      document.removeEventListener('visibilitychange', onVisible);
       if (frame) window.cancelAnimationFrame(frame);
       if (followFrame) window.cancelAnimationFrame(followFrame);
+      if (metricFrame) window.cancelAnimationFrame(metricFrame);
       scheduleRef.current = () => undefined;
       scheduleFollowRef.current = () => undefined;
       followMemory = new WeakMap();
       // Feed vypnut (přehrávání, konec dne): grafy zpět na jejich data.
-      drawnRef.current.forEach((drawn, controller) => revertLiveCandle(controller, drawn));
-      drawnRef.current.clear();
+      drawnByController.forEach((drawn, controller) => revertLiveCandle(controller, drawn));
+      drawnByController.clear();
     };
   }, [feed]);
   // Nový graf nebo nová data: překreslit živou svíčku hned, ne až s další cenou.
@@ -309,6 +371,7 @@ export function useLiveCandleBinding(
       drawnRef.current,
       () => activeFeedRef.current === feed,
       () => scheduleFollowRef.current(),
+      LIVE_CANDLE_REVERT_GRACE_MS,
     );
   }, [feed, chartsKey]);
 }

@@ -60,6 +60,7 @@ const inputs = (patch: Partial<ManualEntryPreviewInputs> = {}): ManualEntryPrevi
   entryIneligible: new Map(),
   excludedFollowers: new Set(),
   frontSymbols: ['MNQZ6'],
+  workerQuote: { contract: 'MNQZ6', last: 29_500, lastAt: NOW - 500, bid: null, ask: null, quoteAt: null },
   ...patch,
 });
 const codes = (patch: Partial<ManualEntryPreviewInputs> = {}) => evaluateManualEntryPreview(inputs(patch)).blockers.map(issue => issue.code);
@@ -120,6 +121,43 @@ describe('fáze 1a: náhled ručního vstupu (čisté vyhodnocení)', () => {
     expect(paused.notes.map(note => note.code)).toContain('follower-sync-paused');
     expect(codes({ entryIneligible: new Map([[2, 'x'], [3, 'y']]) })).toContain('no-follower-would-copy');
     expect(codes({ entryIneligible: new Map([[1, 'breached']]) })).toContain('leader-ineligible');
+  });
+
+  it('explicitní local manual-only DEMO dovolí vstup pouze na leadera', () => {
+    const manualGroup = {
+      ...group,
+      id: 'manual-demo-1',
+      followers: [],
+      localOnly: true,
+      manualOnly: true,
+      safety: { ...group.safety, dailyLossLimitUsd: 250 },
+    };
+    const manualCommand = command({
+      groupId: manualGroup.id,
+      intent: {
+        armedAt: NOW - 600_000,
+        groupConfigHash: copyGroupConfigHash(manualGroup),
+        followerQuantities: [],
+      },
+    });
+    const result = evaluateManualEntryPreview(inputs({
+      group: manualGroup,
+      command: manualCommand,
+      accounts: new Map([[1, flat({ risk: risk({
+        netLiq: null, minNetLiq: null, dailyLossAutoLiq: null,
+      }) })]]),
+    }));
+    expect(result.blockers).toEqual([]);
+    expect(result.wouldPlace).toMatchObject({ leader: { accountId: 1, quantity: 1 }, followers: [] });
+
+    const oversizedLoss = evaluateManualEntryPreview(inputs({
+      group: manualGroup,
+      command: { ...manualCommand, stopLoss: 29_300 },
+      accounts: new Map([[1, flat({ risk: risk({
+        netLiq: null, minNetLiq: null, dailyLossAutoLiq: null,
+      }) })]]),
+    }));
+    expect(oversizedLoss.blockers.map(issue => issue.code)).toContain('risk-daily');
   });
 
   it('strop kontraktů followera nejhorším případem jako exposureCappedBroker', () => {
@@ -224,5 +262,22 @@ describe('fáze 1a: strážní pravidla', () => {
     expect(relay).toMatch(/if \(command\.type === 'preview-leader-entry'\) return validateLeaderEntryPreview\(value\)/);
     expect(relay).toMatch(/copier-relay-preview-busy/);
     expect(relay).toMatch(/PREVIEW_COMMAND_TTL_MS = 15_000/);
+  });
+});
+
+describe('C12: denní pauza CME v náhledu vstupu (oponentura P2)', () => {
+  // 3. 11. 2026 (CST, UTC−6) a 8. 3. 2026 (den přechodu na CDT, UTC−5).
+  const cst = (hour: number, minute: number) => Date.UTC(2026, 10, 3, hour + 6, minute);
+  it('nový vstup v 15:55–17:00 CT neprojde (i 16:10, kde stará rezerva „do 17:00“ nic nehlídala)', () => {
+    expect(codes({ now: cst(15, 54) })).not.toContain('cme-halt');
+    expect(codes({ now: cst(15, 55) })).toContain('cme-halt');
+    expect(codes({ now: cst(16, 10) })).toContain('cme-halt');
+    expect(codes({ now: cst(16, 59) })).toContain('cme-halt');
+    expect(codes({ now: cst(17, 0) })).not.toContain('cme-halt');
+  });
+  it('16:10 CT v den přechodu času (březen) i v listopadu', () => {
+    expect(codes({ now: Date.UTC(2026, 2, 8, 21, 10) })).toContain('cme-halt');
+    expect(codes({ now: Date.UTC(2026, 10, 1, 22, 10) })).toContain('cme-halt');
+    expect(codes({ now: Date.UTC(2026, 2, 8, 20, 10) })).not.toContain('cme-halt');
   });
 });

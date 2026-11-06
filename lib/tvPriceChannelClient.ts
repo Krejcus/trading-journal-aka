@@ -90,6 +90,11 @@ type PresenceMeta = { pnl: boolean; chart: boolean };
 export const TV_GRANT_GRACE_MS = 30_000;
 /** Konec zájmu nebo skrytí appky: presence se odhlásí po krátké prodlevě (alt-tab, remount řádků). */
 export const TV_UNTRACK_DELAY_MS = 10_000;
+/**
+ * Návrat z pozadí po aspoň takové době: kanál se otevře znovu hned. iOS během pozadí uspí JS i socket,
+ * starý kanál se může tvářit jako připojený a zpráva by nepřišla, dokud výpadek nepozná hlídání spojení.
+ */
+export const TV_RESUME_REOPEN_AFTER_MS = 3_000;
 /** … a kanál se zavře, když zájem nepřišel ani potom. */
 export const TV_CLOSE_DELAY_MS = 60_000;
 /** Víc čekajících ověření = zahodit (zahlcení veřejného kanálu cizím odesílatelem). */
@@ -136,6 +141,7 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
   /** Hlídač zavřel kanál: znovu otevřít až po prodlevě. */
   let watchdogHold = false;
   let unsubscribeForeground: (() => void) | null = null;
+  let hiddenAt: number | null = null;
 
   const safe = (action: () => unknown) => {
     try {
@@ -368,7 +374,14 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
     try {
       unsubscribeForeground = deps.subscribeForeground(next => {
         try {
+          if (foreground && !next) hiddenAt = deps.now();
+          const reopen = !foreground && next && channel !== null && hiddenAt !== null && deps.now() - hiddenAt >= TV_RESUME_REOPEN_AFTER_MS;
           foreground = next;
+          if (reopen) {
+            closeChannel('resume');
+            // Mrtvý socket by starý kanál odebíral dlouho a nový by na něj čekal.
+            if (grant) safe(() => deps.releaseTopic?.(grant!.topic));
+          }
           reconcile();
         } catch {
           // Nesmí zastavit ostatní posluchače popředí (obnova pollu LIVE).

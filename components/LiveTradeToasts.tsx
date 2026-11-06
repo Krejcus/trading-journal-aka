@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { CopierCopyEvent } from '../services/copierRuntimeController';
-import { TRADE_TOAST_MAX, TRADE_TOAST_MS, copyEventToast, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
+import { TRADE_TOAST_MS, copyEventToast, keepStickyToasts, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
 
 const TONE: Record<TradeToastTone, string> = {
   blue: '#3b82f6', violet: '#8b5cf6', red: '#f43f5e', teal: '#14b8a6', green: '#10b981', amber: '#f59e0b', muted: '#64748b',
@@ -19,9 +19,9 @@ const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boo
   const [hovered, setHovered] = useState(false);
   useEffect(() => {
     if (toast.sticky || hovered) return undefined;
-    const timer = window.setTimeout(onClose, TRADE_TOAST_MS);
+    const timer = window.setTimeout(onClose, toast.ms ?? TRADE_TOAST_MS);
     return () => window.clearTimeout(timer);
-  }, [hovered, onClose, toast.sticky]);
+  }, [hovered, onClose, toast.ms, toast.sticky]);
   return (
     <div
       role="status"
@@ -54,8 +54,23 @@ const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boo
   );
 };
 
-const LiveTradeToasts: React.FC<{ events: readonly CopierCopyEvent[] | undefined; copierArmed: boolean; isDark: boolean }> = ({ events, copierArmed, isDark }) => {
+const LiveTradeToasts: React.FC<{
+  events: readonly CopierCopyEvent[] | undefined;
+  copierArmed: boolean;
+  isDark: boolean;
+  /** Telefon: vlastní umístění (nad obchodní lištou); jinak vlevo dole v grafu PC. */
+  placement?: React.CSSProperties;
+  /** Karty, které nevznikly z událostí kopírky (upozornění na cenu, posun upozornění). */
+  extra?: readonly TradeToast[];
+}> = ({ events, copierArmed, isDark, placement, extra }) => {
   const [toasts, setToasts] = useState<TradeToast[]>([]);
+  const extraSeenRef = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh = (extra ?? []).filter(toast => !extraSeenRef.current.has(toast.id));
+    if (!fresh.length) return;
+    for (const toast of fresh) extraSeenRef.current.add(toast.id);
+    setToasts(current => keepStickyToasts([...current, ...fresh]));
+  }, [extra]);
   const seenRef = useRef<Set<string> | null>(null);
   useEffect(() => {
     if (!events) return;
@@ -65,13 +80,13 @@ const LiveTradeToasts: React.FC<{ events: readonly CopierCopyEvent[] | undefined
     if (fresh.length === 0) return;
     for (const event of fresh) seenRef.current.add(event.id);
     const added = fresh.map(copyEventToast).filter((toast): toast is TradeToast => toast != null);
-    if (added.length) setToasts(current => [...current, ...added].slice(-TRADE_TOAST_MAX));
+    if (added.length) setToasts(current => keepStickyToasts([...current, ...added]));
   }, [events]);
   // Stabilní: časovač karty se nesmí restartovat s každým pollem statusu.
   const dismiss = useCallback((id: string) => setToasts(current => current.filter(item => item.id !== id)), []);
   if (toasts.length === 0) return null;
   return (
-    <div className="pointer-events-none absolute bottom-9 left-2 z-[640] flex flex-col gap-2" aria-live="polite">
+    <div className={`pointer-events-none absolute ${placement ? '' : 'bottom-9 left-2 '}z-[640] flex flex-col gap-2`} style={placement} aria-live="polite">
       {toasts.map(toast => (
         <ToastCard key={toast.id} toast={toast} isDark={isDark} copierArmed={copierArmed} onDismiss={dismiss} />
       ))}

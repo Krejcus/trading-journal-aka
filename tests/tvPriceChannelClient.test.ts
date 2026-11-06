@@ -40,6 +40,7 @@ const setup = (options: {
   topicBusy?: (topic: string) => boolean;
   releaseTopic?: (topic: string) => void;
 } = {}) => {
+  const startedAt = Date.now();
   const channels: FakeChannel[] = [];
   let foreground = true;
   const foregroundListeners = new Set<(value: boolean) => void>();
@@ -69,7 +70,7 @@ const setup = (options: {
       foregroundListeners.add(listener);
       return () => foregroundListeners.delete(listener);
     },
-    now: () => T0 + 1_000,
+    now: () => T0 + 1_000 + (Date.now() - startedAt),
   });
   const setForeground = (value: boolean) => {
     foreground = value;
@@ -86,6 +87,25 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('klient kanálu ceny z TV (krok 3)', () => {
+  it('návrat z pozadí po 3 s a víc otevře kanál znovu hned; krátké přepnutí ne', () => {
+    const released: string[] = [];
+    const t = setup({ releaseTopic: topic => { released.push(topic); } });
+    const access = grant();
+    t.client.offerGrant('u1', access, true);
+    t.client.addChartInterest();
+    t.channels[0].status('SUBSCRIBED');
+    t.setForeground(false);
+    vi.advanceTimersByTime(2_000);
+    t.setForeground(true);
+    expect(t.channels).toHaveLength(1);
+    t.setForeground(false);
+    vi.advanceTimersByTime(3_000);
+    t.setForeground(true);
+    expect(released).toEqual([access.topic]);
+    expect(t.channels).toHaveLength(2);
+    expect(t.channels[1].topic).toBe(access.topic);
+  });
+
   it('kanál otevře až grant + listová komponenta s pozicí + viditelná appka; presence nese jen pnl', () => {
     const t = setup();
     const access = grant();

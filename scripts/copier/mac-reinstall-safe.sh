@@ -60,11 +60,13 @@ argv = plistlib.load(open(sys.argv[1], 'rb'))['ProgramArguments']
 def flag(name):
     return argv[argv.index(name) + 1] if name in argv else ""
 print(flag("--leader")); print(flag("--followers")); print(flag("--connections-manifest")); print(flag("--port") or "3211")
+print("1" if "--manual-only" in argv else "0"); print(flag("--manual-entry-max-contracts"))
 PY
 )}")
 LEADER="${ARGS[1]}"; FOLLOWERS="${ARGS[2]}"; MANIFEST="${ARGS[3]}"; AGENT_PORT="${ARGS[4]}"
-if [[ -z "$LEADER" || -z "$FOLLOWERS" || -z "$MANIFEST" ]]; then
-  echo "STOP: z běžícího agenta se nepodařilo přečíst --leader/--followers/--connections-manifest" >&2
+MANUAL_ONLY="${ARGS[5]}"; MANUAL_ENTRY_MAX_CONTRACTS="${ARGS[6]}"
+if [[ -z "$LEADER" || -z "$MANIFEST" || ( "$MANUAL_ONLY" != "1" && -z "$FOLLOWERS" ) ]]; then
+  echo "STOP: z běžícího agenta se nepodařilo přečíst skupinu nebo --connections-manifest" >&2
   exit 5
 fi
 
@@ -115,7 +117,7 @@ if [[ ${#ALLOW_DOWNGRADE_ARGS[@]} -gt 0 && ( -n "$DIRTY_TREE" || "$INSTALLED_DIR
   echo "VAROVÁNÍ: dirty provenance byla explicitně tolerována přes --allow-downgrade" >&2
 fi
 echo "Reinstall z ${REPO} @ ${COMMIT}"
-echo "leader=${LEADER} followers=${FOLLOWERS} port=${AGENT_PORT}"
+echo "leader=${LEADER} $([[ "$MANUAL_ONLY" == "1" ]] && print 'manual-only' || print "followers=${FOLLOWERS}") port=${AGENT_PORT}"
 echo "manifest=${MANIFEST}"
 
 cd "$REPO"
@@ -139,7 +141,41 @@ INSTALLED_PRICE_SOURCE="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariable
 if [[ "${COPIER_PRICE_SOURCE:-$INSTALLED_PRICE_SOURCE}" == "ibkr" ]]; then
   TV_STREAM_ARGS+=(--price-source ibkr)
 fi
-npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group "${DEV_ORIGIN_ARGS[@]}" "${ALLOW_DOWNGRADE_ARGS[@]}" "${TV_STREAM_ARGS[@]}"
+# Hlídání upozornění na cenu (jen se zdrojem IBKR) přežije reinstall stejně;
+# přepsat jde COPIER_PRICE_ALERTS=on|off scripts/copier/mac-reinstall-safe.sh
+INSTALLED_PRICE_ALERTS="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_PRICE_ALERTS' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_PRICE_ALERTS:-$INSTALLED_PRICE_ALERTS}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--price-alerts on)
+fi
+# Přikoupení do pozice (jen manual-only) přežije reinstall stejně;
+# přepsat jde COPIER_SCALE_IN=on|off scripts/copier/mac-reinstall-safe.sh
+INSTALLED_SCALE_IN="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_SCALE_IN' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_SCALE_IN:-$INSTALLED_SCALE_IN}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--scale-in on)
+fi
+# Posun SL/TP nevyplněného vstupu (jen manual-only) přežije reinstall stejně;
+# přepsat jde COPIER_PENDING_LEGS=on|off.
+INSTALLED_PENDING_LEGS="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_PENDING_LEGS' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_PENDING_LEGS:-$INSTALLED_PENDING_LEGS}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--pending-legs on)
+fi
+# Rychlá order write cesta přes autorizovaný Tradovate WebSocket. Výchozí je
+# vypnutá a installer ji dovolí jen pro manual-only DEMO. Reinstall zachová stav;
+# přepsat jde COPIER_TRADOVATE_WS_WRITES=on|off.
+INSTALLED_WS_WRITES="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_TRADOVATE_WS_WRITES' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_TRADOVATE_WS_WRITES:-$INSTALLED_WS_WRITES}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--tradovate-ws-writes on)
+fi
+GROUP_ARGS=()
+if [[ "$MANUAL_ONLY" == "1" ]]; then
+  GROUP_ARGS+=(--manual-only)
+  if [[ -n "$MANUAL_ENTRY_MAX_CONTRACTS" ]]; then
+    GROUP_ARGS+=(--manual-entry-max-contracts "$MANUAL_ENTRY_MAX_CONTRACTS")
+  fi
+else
+  GROUP_ARGS+=(--followers "$FOLLOWERS")
+fi
+npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" "${GROUP_ARGS[@]}" --port "$AGENT_PORT" --adopt-durable-group "${DEV_ORIGIN_ARGS[@]}" "${ALLOW_DOWNGRADE_ARGS[@]}" "${TV_STREAM_ARGS[@]}"
 
 BUNDLE="$HOME/Library/Application Support/AlphaTrade/copier/copier-agent.mjs"
 echo "bundle sha256: $(shasum -a 256 "$BUNDLE" | cut -c1-16)…  commit: ${COMMIT}"

@@ -18,7 +18,7 @@ import {
   type DurableGroupInstallStrategy,
   type DurableGroupReplacementStatus,
 } from '../../services/copierPilotGroup';
-import type { CopyFollowerConfig, CopyGroupConfig } from '../../services/liveCopyTrading';
+import { manualOnlyDemoSafety, type CopyFollowerConfig, type CopyGroupConfig } from '../../services/liveCopyTrading';
 import {
   assertMacCopierInstallNotDowngrade,
   loadMacCopierInstallManifest,
@@ -89,6 +89,7 @@ AlphaTrade Mac copier service
   npm run copier:mac -- install --connection-id UUID --leader ID --follower ID --lease /cesta/lease.json
   npm run copier:mac -- install --connections-manifest /cesta/connections.json --leader ID --followers "ID@MULT,ID@MULT@MAX"
     [--adopt-durable-group | --replace-durable-group] [--allow-full-dev-origins] [--allow-downgrade]
+  npm run copier:mac -- install --connections-manifest /cesta/connections.json --leader ID --manual-only
   npm run copier:mac -- status
   npm run copier:mac -- reconcile
   npm run copier:mac -- resolve-stuck --kind cancel-or-modify --key KEY --reason "DŮVOD" --approval POTVRZUJI_RUCNI_RESOLUTION_BEZ_BROKER_PRIKAZU
@@ -212,9 +213,15 @@ async function addConnection(): Promise<void> {
 
 async function install(): Promise<void> {
   const leader = positiveInteger('leader');
+  const manualOnly = flags.has('manual-only');
   const followers = flags.get('followers')?.trim() || '';
   let cliFollowers: CopyFollowerConfig[];
-  if (followers) {
+  if (manualOnly) {
+    if (followers || flags.has('follower') || flags.has('multiplier')) {
+      throw new Error('--manual-only se nesmí kombinovat s --follower, --followers ani --multiplier');
+    }
+    cliFollowers = [];
+  } else if (followers) {
     cliFollowers = parseCopierFollowersFlag(followers, leader);
   } else {
     const follower = Number(flags.get('follower')?.trim());
@@ -226,7 +233,22 @@ async function install(): Promise<void> {
     }
     cliFollowers = [{ accountId: follower, mode: 'on-submit', multiplier }];
   }
-  const follower = cliFollowers[0]!.accountId;
+  // Strop ručního vstupu manual-only skupiny (2. 11. 2026): 1–5, bez flagu 1.
+  const manualEntryCapRaw = flags.get('manual-entry-max-contracts')?.trim();
+  if (manualEntryCapRaw && !manualOnly) throw new Error('--manual-entry-max-contracts je povolený jen s --manual-only');
+  const manualEntryCap = manualEntryCapRaw ? Number(manualEntryCapRaw) : null;
+  if (manualEntryCap != null && (!Number.isSafeInteger(manualEntryCap) || manualEntryCap < 1 || manualEntryCap > 5)) {
+    throw new Error('--manual-entry-max-contracts musí být celé číslo 1–5');
+  }
+  const webSocketWritesFlag = flags.get('tradovate-ws-writes')?.trim().toLowerCase();
+  if (webSocketWritesFlag && webSocketWritesFlag !== 'on' && webSocketWritesFlag !== 'off') {
+    throw new Error('--tradovate-ws-writes musí být on nebo off');
+  }
+  if (webSocketWritesFlag === 'on' && !manualOnly) {
+    throw new Error('--tradovate-ws-writes on je povolený jen s --manual-only');
+  }
+  const webSocketWritesEnabled = manualOnly && webSocketWritesFlag === 'on';
+  const follower = cliFollowers[0]?.accountId ?? null;
   const sourceManifest = flags.get('connections-manifest')?.trim();
   const manifest = sourceManifest ? await loadMacCopierConnectionManifest(sourceManifest) : null;
   let candidateShaRaw: string;
@@ -295,12 +317,14 @@ async function install(): Promise<void> {
     : adoptDurableGroup ? 'adopt' : 'require-match';
   const cliGroup = { leaderAccountId: leader, followers: cliFollowers };
   const fallbackGroup: CopyGroupConfig = {
-    id: `agent-${leader}-${cliFollowers.map(item => item.accountId).join('-')}`,
-    name: 'Lokální DEMO agent',
+    id: manualOnly ? `manual-demo-${leader}` : `agent-${leader}-${cliFollowers.map(item => item.accountId).join('-')}`,
+    name: manualOnly ? 'Ruční DEMO test' : 'Lokální DEMO agent',
     enabled: true,
     leaderAccountId: leader,
     followers: cliFollowers,
     localOnly: true,
+    ...(manualOnly ? { manualOnly: true } : {}),
+    ...(manualOnly ? { safety: manualOnlyDemoSafety() } : {}),
   };
   const groupPath = copierPilotGroupPath(resolve(pilotRoot, '.copier-pilot'), connectionId, leader);
   const durableGroup = await createFileCopyGroupStore(groupPath).load();
@@ -402,7 +426,10 @@ async function install(): Promise<void> {
   // jeho selhání pak nenechá na disku nový runtime z napůl hotové instalace.
   const tvPriceStreamSource = resolve(projectRoot, 'scripts/copier/tvPriceStreamThread.ts');
   const tvPriceStreamPath = resolve(pilotRoot, 'tv-price-stream.mjs');
-  await Promise.all([access(esbuild), access(pilotSource), access(tvPriceStreamSource)]);
+  // Hlídač upozornění na cenu: vlastní bundle, staví se vždy (zapíná ho jen `--price-alerts on`).
+  const priceAlertWatchSource = resolve(projectRoot, 'scripts/copier/priceAlertWatchThread.ts');
+  const priceAlertWatchPath = resolve(pilotRoot, 'price-alert-watch.mjs');
+  await Promise.all([access(esbuild), access(pilotSource), access(tvPriceStreamSource), access(priceAlertWatchSource)]);
   await execFileAsync(esbuild, [
     tvPriceStreamSource,
     '--bundle',
@@ -414,6 +441,15 @@ async function install(): Promise<void> {
     `--outfile=${tvPriceStreamPath}`,
   ]);
   await chmod(tvPriceStreamPath, 0o700);
+  await execFileAsync(esbuild, [
+    priceAlertWatchSource,
+    '--bundle',
+    '--platform=node',
+    '--format=esm',
+    '--target=node20',
+    `--outfile=${priceAlertWatchPath}`,
+  ]);
+  await chmod(priceAlertWatchPath, 0o700);
   await execFileAsync(esbuild, [
     pilotSource,
     '--bundle',
@@ -432,11 +468,22 @@ async function install(): Promise<void> {
   const tvStreamEnabled = flags.get('tv-stream')?.trim().toLowerCase() === 'on';
   // Zdroj ceny vlákna: IBKR (IB Gateway, záloha TV) jen výslovně (`--price-source ibkr`).
   const priceSourceIbkr = tvStreamEnabled && flags.get('price-source')?.trim().toLowerCase() === 'ibkr';
+  // Hlídání upozornění na cenu jen s cenou z IBKR a jen výslovně (`--price-alerts on`); musí přežít reinstall.
+  const priceAlertsEnabled = priceSourceIbkr && flags.get('price-alerts')?.trim().toLowerCase() === 'on';
+  // Přikoupení do otevřené pozice (3. 11. 2026): jen manual-only skupina a jen výslovně (`--scale-in on`).
+  const scaleInFlag = flags.get('scale-in')?.trim().toLowerCase();
+  if (scaleInFlag === 'on' && !manualOnly) throw new Error('--scale-in on je povolený jen s --manual-only');
+  const scaleInEnabled = manualOnly && scaleInFlag === 'on';
+  // Posun SL/TP nevyplněného vstupu a TP blíž k trhu (5. 11. 2026): jen manual-only a jen výslovně (`--pending-legs on`).
+  const pendingLegsFlag = flags.get('pending-legs')?.trim().toLowerCase();
+  if (pendingLegsFlag === 'on' && !manualOnly) throw new Error('--pending-legs on je povolený jen s --manual-only');
+  const pendingLegsEnabled = manualOnly && pendingLegsFlag === 'on';
   const programArguments = [
     '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
-    '--follower', String(follower),
-    ...(followers ? ['--followers', followers] : ['--multiplier', flags.get('multiplier')?.trim() || '1']),
+    ...(manualOnly
+      ? ['--manual-only', 'true', ...(manualEntryCap != null ? ['--manual-entry-max-contracts', String(manualEntryCap)] : [])]
+      : ['--follower', String(follower), ...(followers ? ['--followers', followers] : ['--multiplier', flags.get('multiplier')?.trim() || '1'])]),
     '--minutes', '720',
     '--service-lifetime', 'persistent',
     '--install-manifest', installManifestPath,
@@ -465,6 +512,10 @@ async function install(): Promise<void> {
     : ''}
     ${tvStreamEnabled ? '<key>ALPHATRADE_TV_STREAM</key><string>on</string>' : ''}
     ${priceSourceIbkr ? '<key>ALPHATRADE_PRICE_SOURCE</key><string>ibkr</string>' : ''}
+    ${priceAlertsEnabled ? '<key>ALPHATRADE_PRICE_ALERTS</key><string>on</string>' : ''}
+    ${scaleInEnabled ? '<key>ALPHATRADE_SCALE_IN</key><string>on</string>' : ''}
+    ${pendingLegsEnabled ? '<key>ALPHATRADE_PENDING_LEGS</key><string>on</string>' : ''}
+    ${webSocketWritesEnabled ? '<key>ALPHATRADE_TRADOVATE_WS_WRITES</key><string>on</string>' : ''}
   </dict>
 </dict></plist>
 `;

@@ -41,6 +41,8 @@ const toolTitle = (tool: Drawing['tool']) => ({
   Rectangle: 'Rectangle',
   Circle: 'Circle',
   Triangle: 'Triangle',
+  Path: 'Path',
+  Emoji: 'Emoji',
   ParallelChannel: 'Parallel channel',
   Arrow: 'Arrow',
   Text: 'Text',

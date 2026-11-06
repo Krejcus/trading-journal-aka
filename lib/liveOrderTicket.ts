@@ -281,6 +281,57 @@ export const liveDraftChartLines = (
   return lines;
 };
 
+/**
+ * „Přidat SL/TP“ k vlastnímu holému Marketu (U4, 3. 11. 2026): rozpracované nohy
+ * v panelu PC (absolutní ceny zarovnané na tick). Jen návrh — odchází až tlačítkem
+ * „Odeslat SL a TP“ přes deskový `attachBrackets` (worker ověří vše znovu,
+ * INV-MANUAL-01). `entryOperationId` váže nohy k jednomu holému vstupu: jiný vstup
+ * = nové výchozí nohy, nikdy převzaté staré ceny.
+ */
+export interface LiveAttachLegs {
+  entryOperationId: string;
+  stopLoss: number | null;
+  takeProfit: number | null;
+}
+
+/** Vlastník čar „· přidat“ v grafu (LiveTradingScreen) — tah mění jen nohy v panelu. */
+export const LIVE_ATTACH_OWNER = 'live-attach';
+
+/**
+ * Čáry „· přidat“ rozpracovaných nohou holé pozice (tvar čar backtestu pro stejný
+ * overlay). Táhnout jde jen cenu nohy v panelu; × ani akce nemají — nic odsud
+ * neodchází k brokerovi. `reference` = cena, od které se počítá P&L štítku (průměr
+ * vstupu, jinak trh); null = štítek bez $.
+ */
+export const liveAttachChartLines = (
+  legs: LiveAttachLegs,
+  position: { side: 'long' | 'short'; quantity: number },
+  reference: number | null,
+  instrument: TicketInstrument,
+): BacktestChartOrderLine[] => {
+  const d = position.side === 'long' ? 1 : -1;
+  const label = (kind: 'stopLoss' | 'takeProfit', at: number) => {
+    const head = kind === 'stopLoss' ? 'SL' : 'TP';
+    if (reference == null || !Number.isFinite(reference)) return `${head}  ${at.toFixed(2)} · přidat`;
+    const points = (at - reference) * d;
+    return `${head}  ${signedUsd(points * Math.max(1, position.quantity) * instrument.pointValue)} · ${Math.abs(at - reference).toFixed(2)} b · přidat`;
+  };
+  const lines: BacktestChartOrderLine[] = [];
+  for (const kind of ['stopLoss', 'takeProfit'] as const) {
+    const value = kind === 'stopLoss' ? legs.stopLoss : legs.takeProfit;
+    if (value == null || !Number.isFinite(value)) continue;
+    lines.push({
+      id: `${LIVE_ATTACH_OWNER}:${kind}`, ownerId: LIVE_ATTACH_OWNER, ownerType: 'order', kind,
+      price: value, color: kind === 'stopLoss' ? SL_COLOR : TP_COLOR,
+      label: label(kind, value),
+      labelAt: next => label(kind, next),
+      // × jen vyhodí rozpracovanou nohu z návrhu; u brokera nic.
+      draggable: true, cancellable: true, cancelAction: 'remove-bracket',
+    });
+  }
+  return lines;
+};
+
 /** Výchozí vzdálenost nového SL/TP v bodech (TP = 2R). */
 export const DEFAULT_STOP_POINTS = 12;
 
@@ -297,6 +348,18 @@ export const withBracket = (
   const fallback = which === 'sl' ? entry - d * DEFAULT_STOP_POINTS : entry + d * DEFAULT_STOP_POINTS * 2;
   const price = snapToTick(requested != null && Number.isFinite(requested) ? requested : fallback, instrument.tickSize);
   return which === 'sl' ? { ...draft, stopLoss: price } : { ...draft, takeProfit: price };
+};
+
+/**
+ * Typ příkazu z kliknuté ceny proti ŽIVÉ kotaci panelu (2. 11. 2026): BUY pod
+ * trhem = Limit, nad trhem = Stop; SELL obráceně; na trhu = Market. Graf sám
+ * bere poslední viditelnou svíčku — po odscrollování do historie by typ obrátil.
+ */
+export const clickedOrderType = (side: TicketSide, price: number, quote: TicketQuote, tickSize: number): TicketOrderType => {
+  const market = marketPrice(side, quote);
+  if (Math.abs(price - market) < tickSize / 2) return 'market';
+  if (side === 'buy') return price < market ? 'limit' : 'stop';
+  return price > market ? 'limit' : 'stop';
 };
 
 /** Nový návrh na ceně (pravý klik do grafu, tlačítko strany) s výchozími závorkami. */

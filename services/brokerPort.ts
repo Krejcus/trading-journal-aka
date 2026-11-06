@@ -22,6 +22,18 @@ export type OrderSide = 'Buy' | 'Sell';
 
 export type OrderType = 'Market' | 'Limit' | 'Stop' | 'StopLimit';
 
+/**
+ * Typ pozorovaného příkazu u brokera. `Unsupported` = typ, který adaptér nezná (TrailingStop,
+ * MIT, TrailingStopLimit, …; surový název je v `BrokerOrder.brokerOrderType`). Čtecí cesta se
+ * kvůli němu nikdy nezastaví; takový příkaz je cizí aktivní příkaz — blokuje ARM, vstup i
+ * správu na svém účtu a nikdy se nekopíruje ani nemodifikuje (INV-TRAD-07). Zápisy
+ * (`BrokerOrderRequest`, modify) nesou jen `OrderType`, takže se k brokerovi dostat nemůže.
+ */
+export type ObservedOrderType = OrderType | 'Unsupported';
+
+export const isSupportedOrderType = (value: string): value is OrderType =>
+  value === 'Market' || value === 'Limit' || value === 'Stop' || value === 'StopLimit';
+
 export type OrderStatus = 'working' | 'pending' | 'filled' | 'canceled' | 'rejected';
 
 /** PendingNew/Suspended stále může přejít do Working nebo fillu. Pro risk,
@@ -53,7 +65,9 @@ export interface BrokerOrder {
   accountId: number;
   symbol: string;
   side: OrderSide;
-  orderType: OrderType;
+  orderType: ObservedOrderType;
+  /** Surový typ od brokera u `Unsupported` (jen audit a zobrazení, nejvýš 32 znaků). */
+  brokerOrderType?: string;
   quantity: number;
   filledQuantity: number;
   limitPrice?: number;
@@ -65,6 +79,8 @@ export interface BrokerOrder {
   status: OrderStatus;
   /** Stabilní revize zdrojové broker entity pro deduplikaci lifecycle eventů. */
   sourceVersion?: string;
+  /** Cena pochází z drženého Modify a broker ji po aktivaci nohy zatím nepotvrdil. */
+  heldPriceUnconfirmed?: boolean;
   /** Vyplněné jen u `rejected` — text od brokera, do auditu. */
   rejectReason?: string;
   updatedAt: number;
@@ -109,6 +125,8 @@ export interface BrokerAccountRiskSnapshot {
   at: number;
   /** Brokerem vykázané dnešní realized P&L včetně poplatků. */
   realizedPnlUsd: number | null;
+  /** Obchodní den (`YYYY-MM-DD`), ke kterému broker `realizedPnlUsd` vede; null = nevydal. */
+  realizedTradeDate?: string | null;
   /** Přímé otevřené P&L ze snapshotu; nikdy se neodvozuje z cash balance. */
   openPnlUsd?: number | null;
   /** Net liquidation value, jen pokud ji transport skutečně vydal; jinak null. */
@@ -178,7 +196,12 @@ export type BrokerEvent =
   /** `receivedAt` je čas přijetí zdrojového WS frame; legacy/mock emitery jej mohou vynechat. */
   | { type: 'order'; order: BrokerOrder; receivedAt?: number }
   | { type: 'fill'; fill: BrokerFill; receivedAt?: number }
-  | { type: 'position'; position: BrokerPosition }
+  /**
+   * `displayAveragePrice` = průměrný vstup brokera (Tradovate `netPrice`) k těmto
+   * kusům. Jen zobrazení: záměrně mimo `BrokerPosition`, který čte engine,
+   * reconcile i liquidation recovery.
+   */
+  | { type: 'position'; position: BrokerPosition; displayAveragePrice?: number }
   | { type: 'heartbeat'; at: number }
   | { type: 'error'; error: Error; at: number }
   /**
@@ -321,7 +344,14 @@ export interface BrokerOrderStatusLookup {
 
 /** Důkaz od adaptéru: Replaced report přesně odeslaného modify + otevřený příkaz v odeslaném tvaru. */
 export interface BrokerModifyConfirmation {
-  confirmedBy: 'stream-replaced';
+  /** `stream-held`: broker Modify pozastavené nohy přijal a drží (OnHold), potvrzení o provedení přijde až s fillem vstupu. */
+  confirmedBy: 'stream-replaced' | 'stream-held';
+  order: BrokerOrder;
+}
+
+/** Důkaz od adaptéru: terminální stav přesně rušeného příkazu z dohnaného streamu. */
+export interface BrokerCancelConfirmation {
+  confirmedBy: 'stream-terminal';
   order: BrokerOrder;
 }
 
@@ -356,7 +386,17 @@ export interface BrokerPort {
   placeOco?(request: BrokerOcoRequest): Promise<BrokerOcoAck>;
   /** Nativní atomický entry + bracket. Chybějící implementace znamená fail-closed. */
   placeOso?(request: BrokerOsoRequest): Promise<BrokerOsoAck>;
-  cancelOrder(accountId: number, brokerOrderId: string): Promise<void>;
+  /**
+   * Front kontrakt rootu podle brokera (2. 11. 2026, původ kontraktu ručního vstupu
+   * bez IBKR): právě jedna nearchivovaná splatnost s `isFront`, jinak null. Jen čtení.
+   */
+  frontContract?(root: string, accountId: number): Promise<{ contract: string; expiration: string | null } | null>;
+  /**
+   * `stream-terminal` je autoritativní výsledek konkrétního cancel commandu.
+   * `void` znamená, že stream nebyl synchronizovaný a volající musí výsledek
+   * ověřit čtením; nikdy z něj nesmí odvodit úspěch.
+   */
+  cancelOrder(accountId: number, brokerOrderId: string): Promise<void | BrokerCancelConfirmation>;
   /**
    * Vrací potvrzení jen tehdy, když adaptér viděl Replaced execution report
    * přesně tohoto modify commandu a otevřený příkaz v odeslaném tvaru.
@@ -379,7 +419,8 @@ export interface BrokerPort {
    * a bez vedlejších efektů. `null`, kdykoli stream není prokazatelně dohnaný
    * (bez syncu, obměna socketu, rozpracovaný rámec, ticho socketu, REST merge,
    * rate limit). Completeness eventual: jen předčtení posunu SL/TP leadera
-   * (INV-MANUAL-01) — nikdy ARM, reconcile, důkaz flat/no-working ani Flatten.
+   * a risk-redukujícího `cancel-entry` (INV-MANUAL-01) — nikdy ARM,
+   * reconcile, důkaz flat/no-working ani Flatten.
    */
   streamOrderSnapshot?(accountId: number): BrokerStreamOrderSnapshot | null;
   /**

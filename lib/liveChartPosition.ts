@@ -34,6 +34,34 @@ export interface LiveChartPositionSummary {
    * dá i followerovi), proto správa vždy porovná `accountId` s leaderem skupiny workeru.
    */
   leader: { accountId: number; quantity: number; entry: number | null } | null;
+  /** Účty v obchodu pro rozbalení karty pozice (jen zobrazení; leader první). */
+  rows: readonly LiveChartPositionAccountRow[];
+}
+
+export interface LiveChartPositionAccountRow {
+  accountId: number;
+  name: string;
+  /** Zobrazovací příznak — nikdy autorizace (viz `leader`). */
+  isLeader: boolean;
+  quantity: number;
+  entry: number | null;
+  /** Otevřené P&L účtu z brokera po poplatcích; null = neznámo. */
+  openPnl: number | null;
+  stop: number | null;
+  target: number | null;
+  /** SL i TP kryjí celou pozici účtu. */
+  protectedFully: boolean;
+  /** Výsledek na SL / TP v USD po poplatcích (jen při přesném krytí); null = neznámo. */
+  stopUsd: number | null;
+  targetUsd: number | null;
+  /** Poplatky celé pozice a čas kotvy P&L — podklad živého P&L s cenou trhu (jen zobrazení). */
+  fees: number | null;
+  openPnlAsOf: string | null;
+  /** Příkazy účtu ověřené; jinak SL/TP neznámé (nikdy „bez SL“). */
+  ordersVerified: boolean;
+  /** Kontrakty kryté SL / TP (víc cen = `stop`/`target` null, krytí > 0). */
+  stopCoverage: number;
+  targetCoverage: number;
 }
 
 export interface LiveChartPosition {
@@ -53,7 +81,7 @@ const leaderOf = (accounts: readonly { accountId: number; isLeader: boolean; qua
   return leader ? { accountId: leader.accountId, quantity: leader.quantity, entry: leader.entry } : null;
 };
 
-const MNQ_TICK = 0.25;
+export const MNQ_TICK = 0.25;
 /** Odstup SL od trhu (podle P&L brokera), pod kterým UI utažení nenabídne — kopie followerům by závodila s trhem. */
 export const TIGHTEN_MIN_TICKS = 8;
 
@@ -79,6 +107,61 @@ export function tightenBlockReason(
   const gap = side === 'long' ? mark - nextStop : nextStop - mark;
   if (gap < TIGHTEN_MIN_TICKS * tick - 1e-9) return `Nový SL je blíž než ${TIGHTEN_MIN_TICKS} ticků od trhu (nebo za ním) — kopírka by followerům posun nestihla.`;
   return null;
+}
+
+const ibkrContractOfSource = (source: string | null): string | null => {
+  const match = /^IBKR:(MNQ)([HMUZ])20(\d{2})$/.exec((source ?? '').trim().toUpperCase());
+  return match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
+};
+
+/** Nejstarší cena, ze které se ještě počítá živé P&L na lince vstupu. */
+export const LIVE_DISPLAY_PNL_MAX_AGE_MS = 5_000;
+
+/**
+ * Živé P&L na lince vstupu (Filip 5. 11.): cena z IBKR téhož kontraktu proti vstupu účtů,
+ * minus poplatky jako u brokera. **Jen zobrazení (INV-UI-04)**: nikdy risk, limity, day lock
+ * ani příkazy. null = cena chybí, je stará nebo jiný kontrakt → štítek ukáže číslo brokera.
+ */
+export function liveDisplayOpenPnl(
+  summary: Pick<LiveChartPositionSummary, 'kind' | 'side' | 'rows'>,
+  positionSymbol: string | null,
+  quote: { source: string | null; price: number | null; at: number | null; stale: boolean },
+  pointValue: number,
+  now: number,
+): number | null {
+  if (summary.kind !== 'position' || summary.rows.length === 0) return null;
+  const contract = ibkrContractOfSource(quote.source);
+  if (!contract || contract !== positionSymbol || quote.stale || quote.price == null || !Number.isFinite(quote.price)
+    || quote.at == null || now - quote.at > LIVE_DISPLAY_PNL_MAX_AGE_MS || quote.at > now + 2_000) return null;
+  const direction = summary.side === 'long' ? 1 : -1;
+  let total = 0;
+  for (const row of summary.rows) {
+    if (row.entry == null || !Number.isFinite(row.entry) || !(row.quantity > 0)) return null;
+    total += (quote.price - row.entry) * direction * row.quantity * pointValue - (row.fees ?? 0);
+  }
+  return total;
+}
+
+/** Nejstarší kotace IBKR, kterou smí pojistka utažení SL použít místo ceny z P&L brokera. */
+export const TIGHTEN_IBKR_MARK_MAX_AGE_MS = 3_000;
+
+/**
+ * Cena trhu pro pojistku utažení SL / BE (2. 11. 2026, Filip: „jen IBKR pro risk“):
+ * když cena z P&L brokera chybí (čerstvá pozice, REST zaostává), vezme se čerstvá
+ * kotace z IBKR pro STEJNÝ konkrétní kontrakt pozice. TradingView ani kontinuální
+ * řada nikdy. Jen blokuje — nic neautorizuje; SL přes trh odmítne broker.
+ */
+export function withIbkrTightenMark<T extends { mark: number | null }>(
+  summary: T,
+  positionSymbol: string | null,
+  quote: { source: string | null; price: number | null; at: number | null; stale: boolean },
+  now: number,
+): T {
+  if (summary.mark != null && Number.isFinite(summary.mark)) return summary;
+  const contract = ibkrContractOfSource(quote.source);
+  if (!contract || contract !== positionSymbol || quote.stale || quote.price == null || !Number.isFinite(quote.price)
+    || quote.at == null || now - quote.at > TIGHTEN_IBKR_MARK_MAX_AGE_MS || quote.at > now + 2_000) return summary;
+  return { ...summary, mark: quote.price };
 }
 
 /**
@@ -112,11 +195,34 @@ export function liveChartPosition(view: JournalLiveView, requested: JournalLiveT
     mark: model.kind === 'position' ? model.mark : null,
     stop: model.ladder.stop,
     target: model.ladder.target,
-    protection: `SL ${model.stopCovered}/${accounts} · TP ${model.targetCovered}/${accounts}`,
+    // Neověřené příkazy některého účtu: krytí neznámé, ne „0/n“ (PC panel i telefon).
+    protection: model.accounts.some(account => account.ordersVerified === false)
+      ? `SL ?/${accounts} · TP ?/${accounts}`
+      : `SL ${model.stopCovered}/${accounts} · TP ${model.targetCovered}/${accounts}`,
     accounts,
     scopeLabel: view.scopeLabel,
     leader: leaderOf(model.accounts),
+    rows: model.accounts.map(account => ({
+      accountId: account.accountId,
+      name: account.name,
+      isLeader: account.isLeader,
+      quantity: account.quantity,
+      entry: account.entry,
+      openPnl: model.kind === 'position' ? account.openPnl : null,
+      stop: account.stop?.price ?? null,
+      target: account.target?.price ?? null,
+      protectedFully: account.stop?.exact === true && account.target?.exact === true,
+      stopUsd: account.stop?.usd ?? null,
+      targetUsd: account.target?.usd ?? null,
+      fees: account.fees,
+      openPnlAsOf: model.kind === 'position' ? account.openPnlAsOf : null,
+      ordersVerified: account.ordersVerified,
+      stopCoverage: account.stop?.coverage ?? 0,
+      targetCoverage: account.target?.coverage ?? 0,
+    })),
   };
   const lines = journalLivePriceLines(model);
-  return { key: JSON.stringify([model.symbol, summary, lines.map(line => [line.id, line.price, line.title])]), symbol: model.symbol, lines, summary, issue: null };
+  // Klíč bez polí, která se mění každým tickem bez změny obrazu PC grafu (kotva P&L, poplatky, $ úrovní).
+  const keyRows = summary.rows.map(({ openPnlAsOf: _asOf, fees: _fees, stopUsd: _stopUsd, targetUsd: _targetUsd, ...row }) => row);
+  return { key: JSON.stringify([model.symbol, { ...summary, rows: keyRows }, lines.map(line => [line.id, line.price, line.title])]), symbol: model.symbol, lines, summary, issue: null };
 }

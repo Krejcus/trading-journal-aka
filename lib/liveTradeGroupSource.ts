@@ -57,6 +57,12 @@ export function liveChartDisarm(controller: Pick<CopierControllerStatus, 'armed'
   return { label: pendingResume ? 'Zrušit automatické pokračování' : 'Vypnout kopírku', unverified: !statusFresh };
 }
 
+/** Během zapínání na pozadí je OFF v grafu vidět i nad stavem „prokazatelně vypnuto“ (INV-UI-02). */
+export const LIVE_CHART_ARM_FLOW_DISARM: LiveChartDisarm = { label: 'Vypnout kopírku', unverified: false };
+export const liveChartDisarmDuringArm = (disarm: LiveChartDisarm | null | undefined, armFlowActive: boolean): LiveChartDisarm | null => (
+  disarm ?? (armFlowActive ? LIVE_CHART_ARM_FLOW_DISARM : null)
+);
+
 const money = (display: { value: number | null; stale: boolean }, note?: string | null): LiveTradeMoney => (
   { value: display.value, stale: display.value != null && display.stale, ...(note ? { note } : {}) }
 );

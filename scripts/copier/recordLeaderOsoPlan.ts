@@ -21,8 +21,11 @@ export interface RecordLeaderOsoPlan {
    * `cancel` = Limit daleko od trhu, zrušení bez fillu (první záznam).
    * `fill` = marketable Limit, vyplní se; zaznamená přechod nohou
    * Suspended → Working, pak leadera zavře (liquidate) a ověří flat.
+   * `stop-limit` (R11, `docs/reviews/trading-gaps-designs/safety.md` C11 bod 6): Market OSO,
+   * pak SL změnit na StopLimit a posouvat (dál, utažení, BE, limit na lepší straně, přes trh);
+   * jen DEMO8661118 v manual-only skupině bez followerů.
    */
-  scenario: 'cancel' | 'fill' | 'modify-through-market' | 'market';
+  scenario: 'cancel' | 'fill' | 'modify-through-market' | 'market' | 'stop-limit';
   /** Účet mimo skupinu workeru (např. Tradeify připojení) — nikdy follower skupiny. */
   allowNonGroupAccount: boolean;
 }
@@ -60,8 +63,16 @@ export function parseRecordLeaderOsoArgs(argv: readonly string[]): RecordLeaderO
   const holdMs = value('hold-ms') === undefined ? 4_000 : number('hold-ms');
   if (holdMs < 1_000 || holdMs > MAX_HOLD_MS) throw new Error(`--hold-ms musí být 1000–${MAX_HOLD_MS}`);
   const scenario = value('scenario') ?? 'cancel';
-  if (scenario !== 'cancel' && scenario !== 'fill' && scenario !== 'modify-through-market' && scenario !== 'market') {
-    throw new Error('--scenario musí být cancel, fill, modify-through-market nebo market');
+  if (scenario !== 'cancel' && scenario !== 'fill' && scenario !== 'modify-through-market' && scenario !== 'market' && scenario !== 'stop-limit') {
+    throw new Error('--scenario musí být cancel, fill, modify-through-market, market nebo stop-limit');
+  }
+  const allowNonGroupAccount = argv.includes('--non-group-account');
+  if (scenario === 'stop-limit') {
+    // R11: jen DEMO účet manual-only skupiny, jen front MNQ (ověří se u brokera), qty 1.
+    if (accountId !== RECORD_DEMO_ACCOUNT_ID) throw new Error(`--scenario stop-limit jen s --account ${RECORD_DEMO_ACCOUNT_ID} (${RECORD_DEMO_ACCOUNT_SPEC})`);
+    if (allowNonGroupAccount) throw new Error('--scenario stop-limit nejde s --non-group-account');
+    if ((value('environment') ?? 'demo') !== 'demo' || argv.includes('--live')) throw new Error('--scenario stop-limit jen na DEMO');
+    if (!/^MNQ[HMUZ]\d$/.test(symbol)) throw new Error('--scenario stop-limit jen čtvrtletní kontrakt MNQ (H/M/U/Z)');
   }
   return {
     accountId, symbol, side,
@@ -69,8 +80,19 @@ export function parseRecordLeaderOsoArgs(argv: readonly string[]): RecordLeaderO
     marketPrice: number('market-price'), holdMs,
     confirm: argv.includes('--confirm'),
     scenario,
-    allowNonGroupAccount: argv.includes('--non-group-account'),
+    allowNonGroupAccount,
   };
+}
+
+/** Jediný účet pro nové DEMO záznamy (R11, REC-TYPES): DEMO8661118. */
+export const RECORD_DEMO_ACCOUNT_ID = 61_038_658;
+export const RECORD_DEMO_ACCOUNT_SPEC = 'DEMO8661118';
+
+/** Symbol musí být front kontrakt podle brokera (`frontContract`); bez odpovědi se nic neposílá. */
+export function frontContractProblem(symbol: string, front: { contract: string } | null | undefined): string | null {
+  if (!front?.contract) return 'front kontrakt MNQ u brokera nejde ověřit — nic se neposlalo';
+  if (front.contract !== symbol.trim().toUpperCase()) return `${symbol} není front kontrakt MNQ (broker: ${front.contract}) — nic se neposlalo`;
+  return null;
 }
 
 const onTick = (price: number) => Math.abs(price / RECORD_TICK_SIZE - Math.round(price / RECORD_TICK_SIZE)) < 1e-9;
@@ -82,11 +104,20 @@ const onTick = (price: number) => Math.abs(price / RECORD_TICK_SIZE - Math.round
 export function recordLeaderOsoProblems(plan: RecordLeaderOsoPlan, status: unknown, now: number): string[] {
   const problems: string[] = [];
   const root = (status ?? {}) as {
+    environment?: unknown;
     controller?: Record<string, unknown>;
     marketPrices?: unknown[];
-    group?: { leaderAccountId?: unknown; followers?: Array<{ accountId?: unknown }> } | null;
+    group?: { leaderAccountId?: unknown; manualOnly?: unknown; localOnly?: unknown; followers?: Array<{ accountId?: unknown }> } | null;
   };
   const controller = root.controller ?? {};
+  if (plan.scenario === 'stop-limit') {
+    // R11: SL leadera se mění na typ, který kopírka followerům neposouvá — jen sólo DEMO skupina.
+    if (plan.accountId !== RECORD_DEMO_ACCOUNT_ID) problems.push(`stop-limit: jen účet ${RECORD_DEMO_ACCOUNT_ID} (${RECORD_DEMO_ACCOUNT_SPEC})`);
+    if (plan.allowNonGroupAccount) problems.push('stop-limit: --non-group-account nepovolen');
+    if (root.environment !== 'demo') problems.push('worker neběží na DEMO prostředí');
+    if (root.group?.manualOnly !== true || root.group?.localOnly !== true) problems.push('skupina workeru není manual-only + local-only');
+    if (!Array.isArray(root.group?.followers) || root.group.followers.length !== 0) problems.push('skupina workeru má followery');
+  }
   if (controller.armed !== false) problems.push('kopírka není prokazatelně DISARMED');
   if (controller.connected !== true) problems.push('worker není připojený');
   if (controller.killSwitch === true) problems.push('kill switch je aktivní');
@@ -119,7 +150,7 @@ export function recordLeaderOsoProblems(plan: RecordLeaderOsoPlan, status: unkno
   const market = anchor ?? plan.marketPrice;
   const distance = market * RECORD_MIN_DISTANCE_RATIO;
   // `market` (fáze 2e): OSO s Market vstupem — `--entry` = očekávaná cena (trh), brány jako u fill.
-  if (plan.scenario === 'fill' || plan.scenario === 'modify-through-market' || plan.scenario === 'market') {
+  if (plan.scenario === 'fill' || plan.scenario === 'modify-through-market' || plan.scenario === 'market' || plan.scenario === 'stop-limit') {
     const slip = market * RECORD_FILL_MAX_SLIP_RATIO;
     const slDistance = Math.abs(plan.entry - plan.stopLoss);
     if (plan.side === 'Buy') {
@@ -150,7 +181,11 @@ export function recordLeaderOsoProblems(plan: RecordLeaderOsoPlan, status: unkno
 
 export interface CleanupObservation {
   /** Nové příkazy leadera od začátku záznamu (před ním žádné otevřené nebyly). */
-  orders: Array<{ id: string; status: string; filledQuantity: number; side?: string; parentOrderId?: string }> | null;
+  orders: Array<{
+    id: string; status: string; filledQuantity: number; side?: string; parentOrderId?: string;
+    /** Jen do záznamu (tvar SL po modify); úklid je nečte. */
+    orderType?: string; limitPrice?: number; stopPrice?: number;
+  }> | null;
   /** Absolutní součet pozic leadera; `null` = čtení selhalo. */
   netPosition: number | null;
 }
@@ -224,6 +259,86 @@ export function throughMarketStopPrice(plan: Pick<RecordLeaderOsoPlan, 'side' | 
   return plan.side === 'Buy' ? plan.entry + RECORD_THROUGH_MARKET_POINTS : plan.entry - RECORD_THROUGH_MARKET_POINTS;
 }
 
+/**
+ * Scénář `stop-limit` (R11): kroky modify SL nohy na StopLimit v pořadí záznamu. Limit leží
+ * u „pravých“ kroků na horší straně (long: limit = stop − 2 t), krok `limit-better-side` ho
+ * záměrně dá na lepší stranu a `through-market` dá stop 20 b přes trh — oba zjišťují, co
+ * broker udělá. Utažení a BE jen s rezervou 16 t od ceny workeru (jinak přeskočit, nikdy
+ * nehádat); cena workeru tu jen ubírá kroky, nic neautorizuje.
+ */
+export const STOP_LIMIT_OFFSET_TICKS = 2;
+export const STOP_LIMIT_MOVE_TICKS = 8;
+export const STOP_LIMIT_MARGIN_TICKS = 16;
+export const STOP_LIMIT_MAX_OFFSET_TICKS = 40;
+export const STOP_LIMIT_STEP_ORDER = ['to-stoplimit', 'further', 'tighten', 'breakeven', 'limit-better-side', 'through-market'] as const;
+export type StopLimitStepName = typeof STOP_LIMIT_STEP_ORDER[number];
+export interface StopLimitStep {
+  name: StopLimitStepName;
+  stopPrice: number;
+  limitPrice: number;
+  /** Co krok ověřuje (do záznamu). */
+  checks: string;
+  /** Důvod přeskočení; pak se nic neposílá. */
+  skip?: string;
+}
+
+const toTick = (price: number) => Math.round(price / RECORD_TICK_SIZE) * RECORD_TICK_SIZE;
+
+export function stopLimitSteps(
+  plan: Pick<RecordLeaderOsoPlan, 'side' | 'entry' | 'stopLoss'>,
+  context: { entryFill: number | null; anchor: number | null },
+): StopLimitStep[] {
+  // Long SL = Sell stop pod trhem: „dál“ = dolů, horší limit = pod stopem.
+  const away = plan.side === 'Buy' ? -1 : 1;
+  const ticks = (count: number) => count * RECORD_TICK_SIZE;
+  const worse = (stop: number) => stop + away * ticks(STOP_LIMIT_OFFSET_TICKS);
+  const marginProblem = (stop: number) => {
+    if (context.anchor == null) return 'chybí čerstvá cena workeru';
+    const room = (context.anchor - stop) * -away;
+    return room >= ticks(STOP_LIMIT_MARGIN_TICKS) ? undefined : `trh je blíž než ${STOP_LIMIT_MARGIN_TICKS} t od nového stopu`;
+  };
+  const further = plan.stopLoss + away * ticks(STOP_LIMIT_MOVE_TICKS);
+  const tighten = plan.stopLoss - away * ticks(STOP_LIMIT_MOVE_TICKS);
+  const breakeven = context.entryFill == null ? null : toTick(context.entryFill);
+  const throughBase = context.anchor ?? context.entryFill ?? plan.entry;
+  const through = toTick(throughBase - away * RECORD_THROUGH_MARKET_POINTS);
+  return [
+    { name: 'to-stoplimit', stopPrice: plan.stopLoss, limitPrice: worse(plan.stopLoss), checks: 'změna typu Stop → StopLimit (limit 2 t na horší straně)' },
+    { name: 'further', stopPrice: further, limitPrice: worse(further), checks: 'posun dál od trhu se zachovaným odstupem' },
+    { name: 'tighten', stopPrice: tighten, limitPrice: worse(tighten), checks: 'utažení k trhu', skip: marginProblem(tighten) },
+    breakeven == null
+      ? { name: 'breakeven', stopPrice: 0, limitPrice: 0, checks: 'BE', skip: 'neznámá cena fillu vstupu' }
+      : { name: 'breakeven', stopPrice: breakeven, limitPrice: worse(breakeven), checks: 'BE (stop = fill vstupu)', skip: marginProblem(breakeven) },
+    { name: 'limit-better-side', stopPrice: plan.stopLoss, limitPrice: plan.stopLoss - away * ticks(STOP_LIMIT_OFFSET_TICKS), checks: 'limit na lepší straně stopu — odmítne ho broker?' },
+    { name: 'through-market', stopPrice: through, limitPrice: worse(through), checks: 'stop 20 b přes trh — odmítnutí, nebo okamžité spuštění?' },
+  ];
+}
+
+/** Pojistka každého kroku těsně před modify (kromě záměrně „špatných“ kroků platí vše). */
+export function stopLimitStepProblems(step: StopLimitStep, plan: Pick<RecordLeaderOsoPlan, 'side' | 'entry'>): string[] {
+  const problems: string[] = [];
+  for (const [name, price] of [['stop', step.stopPrice], ['limit', step.limitPrice]] as const) {
+    if (!(price > 0) || !onTick(price)) problems.push(`${step.name}: ${name} není kladná cena na tick`);
+    if (Math.abs(price - plan.entry) > plan.entry * 0.02) problems.push(`${step.name}: ${name} je dál než 2 % od vstupu`);
+  }
+  if (Math.abs(step.limitPrice - step.stopPrice) > STOP_LIMIT_MAX_OFFSET_TICKS * RECORD_TICK_SIZE) {
+    problems.push(`${step.name}: odstup limitu od stopu nad ${STOP_LIMIT_MAX_OFFSET_TICKS} t`);
+  }
+  return problems;
+}
+
+/** Průměrná cena fillů jednoho příkazu (fillId deduplikuje stream + snímek); null = žádný fill. */
+export function averageFillPrice(
+  fills: ReadonlyArray<{ fillId: string; brokerOrderId: string; quantity: number; price: number }>,
+  orderId: string,
+): number | null {
+  const unique = new Map(fills.filter(fill => fill.brokerOrderId === orderId && fill.quantity > 0 && Number.isFinite(fill.price))
+    .map(fill => [fill.fillId, fill]));
+  const quantity = [...unique.values()].reduce((sum, fill) => sum + fill.quantity, 0);
+  if (quantity <= 0) return null;
+  return [...unique.values()].reduce((sum, fill) => sum + fill.price * fill.quantity, 0) / quantity;
+}
+
 export type FillCleanupDecision =
   | { kind: 'unverified'; reason: string }
   /** Pozice je otevřená: zavřít ji (liquidate zruší i nohy). Nohy se nad pozicí nikdy neruší samostatně. */
@@ -255,7 +370,8 @@ export function decideFillCleanup(observation: CleanupObservation, placement: Re
 /** Přemapované id leadera v záznamu; ostatní účty připojení do záznamu nepatří. */
 export const LEADER_PLACEHOLDER_ID = 1001;
 
-const PRIVATE_KEYS = /^(userId|senderId|userSessionId|name|email|nickname|accountSpec|username|connectionId|tag|clOrdId)$/i;
+export const RECORD_PRIVATE_KEYS = /^(userId|senderId|userSessionId|name|email|nickname|accountSpec|username|connectionId|tag|clOrdId)$/i;
+const PRIVATE_KEYS = RECORD_PRIVATE_KEYS;
 
 /**
  * Anonymizace „povolené ponechat“: z rámce zůstanou jen `props` entity

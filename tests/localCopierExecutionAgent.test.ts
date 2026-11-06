@@ -1,4 +1,5 @@
 import { buildLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace';
+import { buildLeaderOrderManageCommand } from '../lib/leaderOrderManage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { request as httpRequest } from 'node:http';
 import {
@@ -95,6 +96,57 @@ describe('local copier execution agent', () => {
   afterEach(async () => {
     await running?.close();
     running = null;
+  });
+
+  it('relay wake pouze probudí poll; neumí spustit command a cizí origin ho nedostane', async () => {
+    const runtime = controller();
+    const onRelayWake = vi.fn();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, onRelayWake,
+    });
+
+    const accepted = await fetch(`${running.origin}/v1/relay-wake`, {
+      method: 'POST', headers: { Origin: origin },
+    });
+    expect(accepted.status).toBe(202);
+    expect(onRelayWake).toHaveBeenCalledTimes(1);
+
+    const foreign = await fetch(`${running.origin}/v1/relay-wake`, {
+      method: 'POST', headers: { Origin: 'https://evil.example' },
+    });
+    expect(foreign.status).toBe(403);
+    expect(onRelayWake).toHaveBeenCalledTimes(1);
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(runtime.flattenGroup).not.toHaveBeenCalled();
+  });
+
+  it('manual-only režim uzamkne jediný instalační účet proti vzdálené změně', async () => {
+    const runtime = controller();
+    const manualOnly: CopyGroupConfig = {
+      id: 'manual-demo-11', name: 'Ruční DEMO test', enabled: true,
+      leaderAccountId: 11, followers: [], localOnly: true, manualOnly: true,
+    };
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: manualOnly, port: 0,
+    });
+    const nonce = running.status().nonce;
+
+    const changedLeader = await post(running, nonce, {
+      type: 'copy-command',
+      command: { type: 'update-group', group: { ...manualOnly, leaderAccountId: 33 } },
+    });
+    const addedFollower = await post(running, nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'update-group',
+        group: { ...manualOnly, followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }] },
+      },
+    });
+
+    expect(changedLeader.status).toBe(409);
+    expect(addedFollower.status).toBe(409);
+    expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
+    expect(running.status().group).toMatchObject({ leaderAccountId: 11, followers: [], manualOnly: true });
   });
 
   it('přepne followera trvale bez DISARM a stale update-group jeho účast nepřepíše', async () => {
@@ -1985,6 +2037,49 @@ describe('fáze 1a: náhled ručního vstupu v agentu', () => {
   });
 });
 
+describe('brzda × ruční příkaz ve workeru: garantovaný výsledek (1. 11.)', () => {
+  // Relay může kvůli souběhu (brzda bez zámku, posun hodin) doručit ruční příkaz,
+  // jehož createdAt není novější než už provedená brzda. Worker ho pak NIKDY
+  // nepředá controlleru; novější příkaz jde dál a controller za DISARMED odmítne not-armed.
+  const entry = () => buildLeaderEntryPlaceCommand({
+    type: 'preview-leader-entry', groupId: group().id, operationId: 'preview:agentbrake01', leaderAccountId: 100,
+    symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 29_500, stopLoss: 29_480, takeProfit: 29_560,
+    intent: { armedAt: 0, groupConfigHash: 'abcdefgh12345678', followerQuantities: [] },
+  }, 'entry:agentbrake01');
+  const manage = (action: 'move-stop' | 'cancel-entry') => buildLeaderOrderManageCommand({
+    groupId: group().id, operationId: `manage:agentbrake-${action}`, leaderAccountId: 100, entryOperationId: 'entry:agentbrake01',
+    symbol: 'MNQZ6', action, expect: { price: 29_480, quantity: 1 }, ...(action === 'move-stop' ? { newPrice: 29_470 } : {}),
+  });
+
+  for (const brake of ['disarm', 'kill-switch'] as const) {
+    it(`${brake}: vstup a posun se stejným i starším createdAt = brake-after-request bez volání controlleru; zrušení vstupu projde`, async () => {
+      const runtime = controller();
+      const place = vi.fn(async () => ({ type: 'leader-entry-placed' as const, operationId: 'entry:agentbrake01', status: 'acknowledged' as const, checkedAt: 1, blockers: [] }));
+      const manageFn = vi.fn(async () => ({ type: 'leader-order-managed' as const, operationId: 'x', action: 'cancel-entry' as const, status: 'acknowledged' as const, checkedAt: 1, blockers: [] }));
+      Object.assign(runtime as object, { placeLeaderEntry: place, manageLeaderOrder: manageFn });
+      const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+      try {
+        const brakeAt = Date.now();
+        await agent.execute({ type: brake }, { createdAt: brakeAt });
+        for (const createdAt of [brakeAt, brakeAt - 1]) {
+          const late = await agent.execute({ type: 'copy-command', command: entry() }, { source: 'relay', createdAt, deadlineAt: Date.now() + 15_000 });
+          expect(JSON.stringify(late)).toContain('brake-after-request');
+          const move = await agent.execute({ type: 'copy-command', command: manage('move-stop') }, { source: 'relay', createdAt, deadlineAt: Date.now() + 15_000 });
+          expect(JSON.stringify(move)).toContain('brake-after-request');
+        }
+        expect(place).not.toHaveBeenCalled();
+        await agent.execute({ type: 'copy-command', command: manage('cancel-entry') }, { source: 'relay', createdAt: brakeAt - 1, deadlineAt: Date.now() + 15_000 });
+        expect(manageFn).toHaveBeenCalledTimes(1);
+        // Novější příkaz jde dál ke controlleru (ten za DISARMED vrátí not-armed — tests/manualEntryPlace.test.ts).
+        await agent.execute({ type: 'copy-command', command: entry() }, { source: 'relay', createdAt: brakeAt + 1, deadlineAt: Date.now() + 15_000 });
+        expect(place).toHaveBeenCalledTimes(1);
+      } finally {
+        await agent.close();
+      }
+    });
+  }
+});
+
 describe('fáze 1b: odeslání ručního vstupu v agentu', () => {
   const placeCommand = () => buildLeaderEntryPlaceCommand({
     type: 'preview-leader-entry', groupId: group().id, operationId: 'preview:agenttest0002', leaderAccountId: 100,
@@ -2015,6 +2110,60 @@ describe('fáze 1b: odeslání ručního vstupu v agentu', () => {
       // Změněný obsah se starým otiskem neprojde validací.
       await expect(agent.execute({ type: 'copy-command', command: { ...placeCommand(), price: 29_400 } }, { source: 'relay', createdAt: Date.now(), deadlineAt: Date.now() + 15_000 }))
         .rejects.toThrow('invalid-relay-command-payload');
+    } finally {
+      await agent.close();
+    }
+  });
+});
+
+describe('C8: capability × holé pozice (3. 11. 2026)', () => {
+  it('inzeruje manual-order-close-bare-v1 jen když controller umí správu a pro skupinu povolí holé zavření', async () => {
+    const manageFn = vi.fn(async () => ({ type: 'leader-order-managed' as const, operationId: 'x', action: 'close-position' as const, status: 'acknowledged' as const, checkedAt: 1, blockers: [] }));
+    for (const [enabled, withManage, expected] of [[true, true, true], [false, true, false], [undefined, true, false], [true, false, false]] as const) {
+      const runtime = controller();
+      Object.assign(runtime as object, {
+        ...(withManage ? { manageLeaderOrder: manageFn } : {}),
+        ...(enabled !== undefined ? { manualBareCloseEnabled: () => enabled } : {}),
+      });
+      const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+      try {
+        expect(agent.status().capabilities?.includes('manual-order-close-bare-v1')).toBe(expected);
+      } finally {
+        await agent.close();
+      }
+    }
+  });
+});
+
+describe('C7: „Zrušit čekající“ — capability a odmítnutí cancel-order (3. 11. 2026)', () => {
+  it('inzeruje manual-order-cancel-pending-v1 jen když controller umí správu (cancel-entry)', async () => {
+    const manageFn = vi.fn(async () => ({ type: 'leader-order-managed' as const, operationId: 'x', action: 'cancel-entry' as const, status: 'acknowledged' as const, checkedAt: 1, blockers: [] }));
+    for (const [withManage, expected] of [[true, true], [false, false]] as const) {
+      const runtime = controller();
+      if (withManage) Object.assign(runtime as object, { manageLeaderOrder: manageFn });
+      const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+      try {
+        expect(agent.status().capabilities?.includes('manual-order-cancel-pending-v1')).toBe(expected);
+      } finally {
+        await agent.close();
+      }
+    }
+  });
+
+  it('cancel-order (starý Dashboard) worker odmítne srozumitelně a nic neprovede — ani přes loopback, ani přes relay', async () => {
+    const runtime = controller({ armed: true, shadowMode: false });
+    const manageFn = vi.fn();
+    Object.assign(runtime as object, { manageLeaderOrder: manageFn });
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      for (const context of [{}, { source: 'relay' as const, createdAt: Date.now(), deadlineAt: Date.now() + 15_000 }]) {
+        await expect(agent.execute({ type: 'copy-command', command: { type: 'cancel-order', groupId: group().id, orderId: 123 } }, context))
+          .rejects.toThrow(/unsupported-copy-command:cancel-order.*Zrušit čekající/);
+      }
+      expect(manageFn).not.toHaveBeenCalled();
+      expect(runtime.flattenAccount).not.toHaveBeenCalled();
+      expect(runtime.flattenGroup).not.toHaveBeenCalled();
+      expect(runtime.disarm).not.toHaveBeenCalled();
     } finally {
       await agent.close();
     }

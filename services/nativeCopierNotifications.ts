@@ -1,4 +1,5 @@
 import { isNativeBuild } from '../utils/runtimeConfig';
+import { LIVE_OVERVIEW_ROUTE } from '../lib/liveOverviewRoute';
 import {
   cancelNativeNotification,
   listPendingNativeNotifications,
@@ -131,7 +132,8 @@ async function syncNow(
         title: planned.title,
         body: planned.body,
         delayMs: Math.max(1_000, planned.at - Date.now()),
-        route: 'live',
+        // Rizikové upozornění vede na přehled s OFF, Kill a Flatten (INV-UI-02), ne na graf.
+        route: LIVE_OVERVIEW_ROUTE,
         threadIdentifier: 'alphatrade-copier',
         actionType: 'risk',
       });
@@ -148,7 +150,7 @@ async function syncNow(
         title: immediate.title,
         body: immediate.body,
         delayMs: 1_000,
-        route: 'live',
+        route: risk ? LIVE_OVERVIEW_ROUTE : 'live',
         threadIdentifier: immediate.kind === 'trade' ? 'alphatrade-copier-trades' : 'alphatrade-copier',
         actionType: risk ? 'risk' : immediate.kind === 'trade' ? 'trade' : 'general',
         ...(silentWarning ? { interruptionLevel: 'passive' as const } : {}),

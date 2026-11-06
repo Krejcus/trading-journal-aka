@@ -54,6 +54,30 @@ Chceš-li plný přístup vývojových originů vypnout, spusť reinstall takto:
 COPIER_ALLOW_FULL_DEV_ORIGINS=0 scripts/copier/mac-reinstall-safe.sh
 ```
 
+### Pořadí nasazení: web před workerem s novou capability (C12, 4. 11. 2026)
+
+Worker s capability `manual-entry-auto-cancel-v1` (automatické zrušení čekajícího vstupu
+s ověřeným výsledkem `cancelVerified`) se reinstaluje **až po** nasazení webu:
+
+1. Push na `main` → Vercel nasadí web včetně watchdogu (`server/copierIncidentWatchdog.ts`).
+   Nový watchdog je bez capability zpětně kompatibilní (starý worker = staré texty).
+2. Na Vercelu ověřit, že produkční deploy obsahuje commit s novým `manualEntryNotifications`.
+3. Před reinstallem (oponentura C12 kolo 4, P3): v durable stavu dosavadního workeru projít
+   `safety.manualEntries` a najít záznamy s `cancel` BEZ `cancel.verified`, jejichž `cancel.at` je
+   mladší než 24 h (automatické zrušení přikoupení, zrušení po ACK „kopírka se vypnula během
+   odesílání“ — starý worker výsledek neověřoval). Nový worker je po startu jednou přečte
+   (`verifyRestartedOwnEntryCancels`); když adaptér starý zrušený příkaz autoritativně nepřečte
+   (NEOVĚŘENO pro hodiny staré příkazy), vznikne hned po reinstallu durable incident „výsledek
+   zrušení z předchozího běhu nejde po startu ověřit“ a ARM bude chtít Kontrolu pozic. Postup: když
+   takové záznamy existují, reinstall naplánovat až 24 h po posledním z nich (víkend), nebo s tímto
+   incidentem počítat — ověřit leadera v Tradovate (vstup opravdu nečeká, nohy odpovídají pozici)
+   a pak Kontrola pozic. Nic se automaticky neposílá.
+4. Teprve potom `scripts/copier/mac-reinstall-safe.sh` (podle politiky reinstallů — obchodní den
+   jen na výslovné „nasaď“, z čistého reconciled stavu).
+
+Opačné pořadí: starý watchdog capability nezná, čte jen `cancel: sent` a u vstupu, který se
+vyplnil během rušení, by poslal push „Vstup na leaderovi je zrušený“ (INV-MANUAL-01, INV-WATCH-01).
+
 ### Provenance a ochrana proti downgrade
 
 Instalátor ukládá plný git SHA, příznak `dirty` a čas instalace do

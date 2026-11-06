@@ -55,5 +55,9 @@ describe('copy group cloud library cache', () => {
       followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1.5 }],
       safety: DEFAULT_COPY_GROUP_SAFETY,
     });
+    expect(copyGroupForStorage({
+      id: 'manual-demo-11', name: 'Ruční DEMO test', enabled: true,
+      leaderAccountId: 11, followers: [], localOnly: true, manualOnly: true,
+    })).not.toHaveProperty('manualOnly');
   });
 });

@@ -12,6 +12,7 @@ interface NativeSharePlugin {
     text: string;
     url?: string;
   }): Promise<{ completed: boolean; activityType?: string }>;
+  saveImageToPhotos(options: { base64: string }): Promise<{ saved: boolean }>;
 }
 
 export async function shareTextNative(options: {
@@ -59,4 +60,10 @@ export async function shareTradeImageNative(options: {
     text: options.text,
     url: options.url,
   });
+}
+
+/** Snímek (PNG) rovnou do Fotek — jen v nativní appce. */
+export async function saveImageToPhotosNative(image: Blob): Promise<void> {
+  if (!isNativeBuild) throw new Error('Ukládání do Fotek je dostupné jen v nativní aplikaci.');
+  await AlphaTradeNative.saveImageToPhotos({ base64: await blobToBase64(image) });
 }

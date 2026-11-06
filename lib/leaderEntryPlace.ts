@@ -12,6 +12,12 @@ import {
  * a otisk payloadu proti tichému přepsání se stejným klíčem.
  */
 
+/**
+ * Nejmenší rozestup dvou ručních vstupů na uživatele. Sdílí ho relay (atomická
+ * admission) i worker (pojistka před `sending`), aby se nikdy nerozešly.
+ */
+export const MANUAL_ENTRY_MIN_INTERVAL_MS = 3_000;
+
 const OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
 const PAYLOAD_HASH_PATTERN = /^[a-z0-9]{8,64}$/;
 

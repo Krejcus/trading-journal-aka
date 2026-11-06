@@ -18,7 +18,7 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
   const fills = new Map<number, Row>();
   const positions = new Map<number, number>();
   const requests: { path: string; body: Record<string, unknown> }[] = [];
-  let modifyOutcome: 'confirmed' | 'ack-only' | 'rejected' = 'confirmed';
+  let modifyOutcome: 'confirmed' | 'ack-only' | 'rejected' | 'held' = 'confirmed';
   const setModifyOutcome = (value: typeof modifyOutcome) => { modifyOutcome = value; };
   const events: BrokerEvent[] = [];
   const socket: WebSocketLike = {
@@ -87,6 +87,17 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
     props({ entityType: 'command', entity: command }, ...(order === 'version-first' ? [versionItem, reportItem] : [reportItem, versionItem]));
     return commandId;
   };
+  const hold = (orderId: number, changes: Record<string, unknown>) => {
+    const commandId = nextId++;
+    const shape = { ...[...versions.values()].filter(row => row.orderId === orderId).at(-1)!, ...changes, id: commandId, orderId };
+    const command = { id: commandId, orderId, commandType: 'Modify', commandStatus: 'Pending' };
+    versions.set(commandId, shape); commands.set(commandId, command);
+    props({ entityType: 'command', entity: command }, { entityType: 'orderVersion', entity: shape });
+    const heldCommand = { ...command, commandStatus: 'OnHold' };
+    commands.set(commandId, heldCommand);
+    props({ entityType: 'command', entity: heldCommand });
+    return commandId;
+  };
   /** Volitelný háček GET požadavků: zdržení (REST merge v běhu) nebo vlastní odpověď (např. 429). */
   let restHook: ((path: string) => Promise<Response | null> | Response | null) | null = null;
   const setRestHook = (hook: typeof restHook) => { restHook = hook; };
@@ -103,6 +114,8 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
       if (path === '/order/placeorder') return Response.json({ orderId: place(body) });
       if (path === '/order/modifyorder') {
         if (modifyOutcome === 'confirmed') return Response.json({ commandId: replace(body.orderId, body), failureReason: 'Success' });
+        // Pozastavená noha OSO (žurnál 5. 11. 2026): Command Pending -> OrderVersion -> Command OnHold, žádný ExecutionReport.
+        if (modifyOutcome === 'held') return Response.json({ commandId: hold(body.orderId, body), failureReason: 'Success' });
         const commandId = nextId++;
         const command = { id: commandId, orderId: body.orderId, commandType: 'Modify' };
         const shape = { ...body, id: commandId };
@@ -146,11 +159,14 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
     if (['/cashBalance/deps', '/accountRiskStatus/deps', '/userAccountAutoLiq/deps', '/commandReport/deps'].includes(path)) return Response.json([]);
     throw new Error(`Unexpected offline GET ${path}`);
   };
+  let heldGate = false;
+  const setHeldGate = (value: boolean) => { heldGate = value; };
   const broker = createTradovateBroker({ environment: 'demo', accessToken: 'offline-fixture',
+    promoteHeldModify: () => heldGate,
     accountSpecsByAccountId: Object.fromEntries(accountIds.map(id => [id, `DEMO-${id}`])),
     fetchImpl, clock, webSocketFactory: () => socket, commandConfirmationTimeoutMs: 100 });
   const stop = broker.subscribe(event => events.push(event));
   const sync = () => socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
   const drain = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
-  return { broker, socket, events, orders, versions, commands, reports, fills, positions, requests, props, place, fill, replace, position, sync, drain, stop, clock, advance, setModifyOutcome, setPartialCancelAsFilled, cancelLikeTradovate, setRestHook };
+  return { broker, socket, events, orders, versions, commands, reports, fills, positions, requests, props, place, fill, replace, hold, setHeldGate, position, sync, drain, stop, clock, advance, setModifyOutcome, setPartialCancelAsFilled, cancelLikeTradovate, setRestHook };
 };

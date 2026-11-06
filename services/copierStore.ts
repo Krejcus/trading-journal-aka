@@ -199,8 +199,10 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
         manualEntries: base.manualEntries.map(entry => ({
           ...entry,
           request: { ...entry.request },
+          ...(entry.timing ? { timing: { ...entry.timing } } : {}),
           ...(entry.lateResult ? { lateResult: { ...entry.lateResult } } : {}),
           ...(entry.cancel ? { cancel: { ...entry.cancel } } : {}),
+          ...(entry.pendingIncidentKinds ? { pendingIncidentKinds: [...entry.pendingIncidentKinds] } : {}),
           ...(entry.waiver ? { waiver: { ...entry.waiver } } : {}),
         })),
       }

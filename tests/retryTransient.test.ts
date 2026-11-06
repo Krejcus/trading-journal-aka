@@ -42,3 +42,11 @@ describe('isTransientRemoteError', () => {
     expect(isTransientRemoteError(Object.assign(new Error('x'), { status: 404 }))).toBe(false);
   });
 });
+
+describe('výchozí čekání drží proces naživu (2. 11. 2026)', () => {
+  it('časovač retry se neodpojuje od event loopu', async () => {
+    const { readFileSync } = await import('node:fs');
+    const source = readFileSync('lib/retryTransient.ts', 'utf8');
+    expect(source).not.toMatch(/timer\.unref/);
+  });
+});

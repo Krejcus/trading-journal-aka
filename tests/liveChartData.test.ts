@@ -187,11 +187,19 @@ describe('LIVE → Graf: vypnutí a strážní pravidla', () => {
     expect(screen).toMatch(/if \(!onDisarm \|\| disarmBusy \|\| disarmInFlightRef\.current\) return;\n    disarmInFlightRef\.current = true;/);
   });
 
-  it('karta pozice je jen zobrazení: žádná tlačítka (správa je v sekci a ve štítcích grafu)', () => {
+  it('karta pozice je jen zobrazení: klik jen rozbalí účty, žádné akce (správa je ve štítcích grafu)', () => {
     const ticket = readFileSync('components/LiveOrderTicket.tsx', 'utf8');
     const card = ticket.slice(ticket.indexOf('const PositionCard'), ticket.indexOf('/** Jak dlouho výsledek náhledu platí'));
     expect(card).not.toMatch(/<button/);
-    expect(card).not.toMatch(/onClick/);
+    // Jediná interakce karty je rozbalení účtů — nic neodesílá.
+    expect(card.match(/onClick=\{[^\n]*\}/g)).toEqual(['onClick={() => canExpand && setExpanded(value => !value)}']);
+    expect(card).not.toMatch(/onManage|onPlace|onPreview|onDraft/);
+    // Správa SL/TP/BE z panelu zmizela 31. 10.; U10 (3. 11.) ji vrací jako samostatnou sekci
+    // pod kartou — jen přes sdílený runner správy (jeden zámek s čarami grafu), nikdy z karty.
+    const manage = ticket.slice(ticket.indexOf('const ManageSection'), ticket.indexOf('interface Props {'));
+    expect(manage).not.toMatch(/onManageEntry|onPlaceEntry|onAttachBrackets/);
+    expect(ticket).toMatch(/const step = manageRunner\.request\(intent\);/);
+    expect(ticket.match(/onManageEntry\(/g)).toBeNull();
   });
 });
 

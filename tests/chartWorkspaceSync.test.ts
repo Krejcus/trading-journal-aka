@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { installChartWorkspaceSync, syncedCrosshairCandle, syncedCrosshairTime } from '../services/chartWorkspaceSync';
+import { EXACT_CROSSHAIR_SYNC_EVENT, type ExactCrosshairSyncDetail } from '../services/chartCrosshairPrecision';
 
 const candle = (time: number, close: number) => ({
   time,
@@ -21,6 +22,7 @@ const fakeChartApi = (visibleRange = { from: 100, to: 200 }) => {
     subscribeVisibleTimeRangeChange: vi.fn((handler: (range: any) => void) => rangeHandlers.push(handler)),
     unsubscribeVisibleTimeRangeChange: vi.fn(),
   };
+  const chartElement = new EventTarget();
   const chart = {
     timeScale: vi.fn(() => timeScale),
     setCrosshairPosition: vi.fn(),
@@ -29,6 +31,7 @@ const fakeChartApi = (visibleRange = { from: 100, to: 200 }) => {
     unsubscribeCrosshairMove: vi.fn(),
     subscribeClick: vi.fn((handler: (param: any) => void) => clickHandlers.push(handler)),
     unsubscribeClick: vi.fn(),
+    chartElement: vi.fn(() => chartElement),
   };
   const series = {
     id: Symbol('series'),
@@ -40,13 +43,17 @@ const fakeChartApi = (visibleRange = { from: 100, to: 200 }) => {
       getSeries: () => series,
     },
   } as unknown as ChartViewApi;
-  return { api, chart, series, timeScale, crosshairHandlers, clickHandlers, rangeHandlers };
+  return { api, chart, chartElement, series, timeScale, crosshairHandlers, clickHandlers, rangeHandlers };
 };
 
 describe('chart workspace synchronization', () => {
   it('syncs crosshair, clicked time and date range to sibling charts', async () => {
     const left = fakeChartApi({ from: 0, to: 100 });
     const right = fakeChartApi({ from: 100, to: 200 });
+    const exactTargets: Array<{ time: number | null; price?: number | null }> = [];
+    right.chartElement.addEventListener(EXACT_CROSSHAIR_SYNC_EVENT, event => {
+      exactTargets.push((event as CustomEvent<ExactCrosshairSyncDetail>).detail);
+    });
     const cleanup = installChartWorkspaceSync(new Map([
       ['left', { chartApi: left.api, candles: [candle(120, 10), candle(180, 20)] }],
       ['right', { chartApi: right.api, candles: [candle(120, 30), candle(180, 40)] }],
@@ -58,6 +65,7 @@ describe('chart workspace synchronization', () => {
     await Promise.resolve();
     left.crosshairHandlers[0]({});
     expect(right.chart.clearCrosshairPosition).toHaveBeenCalledOnce();
+    expect(exactTargets).toEqual([{ time: 180, price: 10 }, { time: null }]);
 
     left.clickHandlers[0]({ time: 500 });
     expect(right.timeScale.setVisibleRange).toHaveBeenCalledWith({ from: 450, to: 550 });

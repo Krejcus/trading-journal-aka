@@ -110,7 +110,7 @@ export function createCopierRuntimeCommandAdapter(
         case 'delete-group':
           throw new Error('Běžící runtime podporuje právě jednu už vytvořenou skupinu');
         case 'cancel-order':
-          throw new Error('Ruční cancel z UI zatím není napojen na durable runtime');
+          throw new Error('unsupported-copy-command:cancel-order — obecné zrušení příkazu worker neprovádí, nic se neodeslalo. Vlastní čekající vstup zruš tlačítkem „Zrušit čekající“, ostatní příkazy v Tradovate nebo Flattenem.');
       }
     },
   };

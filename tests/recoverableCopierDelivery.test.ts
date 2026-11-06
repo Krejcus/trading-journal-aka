@@ -3,10 +3,18 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { recoverableCopierDelivery } from '../server/recoverableCopierDelivery';
+import { compactRecoverableCopierResult, recoverableCopierDelivery } from '../server/recoverableCopierDelivery';
+import { completeTradovateCopierHotCommandV3 } from '../server/tradovateCopierCommandRelay';
 import { fileRelayDeliveryStore, type RelayDelivery, type RelayDeliveryStore } from '../server/copierRelayDeliveryStore';
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 import type { LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol';
+
+/** F1b′: po dokončení/zahození zůstane nová nečinná delivery (ne null) — bez příkazu a výsledku. */
+const expectIdle = (saved: unknown) => {
+  expect(saved).toMatchObject({ version: 1, phase: 'polling' });
+  expect((saved as { commandId?: unknown }).commandId).toBeUndefined();
+};
+
 
 function fixture() {
   let saved: RelayDelivery | null = null;
@@ -18,11 +26,20 @@ function fixture() {
     createdAt: new Date(now + 1).toISOString(), expiresAt: new Date(now + 30_000).toISOString() };
   const agent = { execute: vi.fn(async () => ({ ok: true })), status: vi.fn(() => ({ startedAt: new Date(0).toISOString() })) } as unknown as LocalCopierExecutionAgent;
   const request = vi.fn(async (body: Record<string, unknown>): Promise<Record<string, unknown>> => body.action === 'poll-v2'
-    ? { protocol: 2, command: remote } : { protocol: 2, accepted: true });
-  const options = { store, agent, request, nextRevision: () => 1, onComplete: vi.fn(), now: () => now };
+    ? { protocol: 2, command: remote }
+    : { protocol: body.action === 'complete-hot-v3' ? 3 : 2, accepted: true });
+  const options = { store, agent, request, nextRevision: () => 1,
+    onDurableResult: vi.fn(), onComplete: vi.fn(), now: () => now };
   return { options, remote, get saved() { return saved; }, set saved(v) { saved = v; }, setNow: (v: number) => { now = v; } };
 }
 describe('recoverable copier delivery', () => {
+  it('z horkého vstupu odstraní duplicitní status, ale u bezpečnostního příkazu ho zachová', () => {
+    const status = { startedAt: '2026-11-04T00:00:00.000Z', controller: { large: 'x'.repeat(20_000) } };
+    const result = { ok: true, status, result: { type: 'leader-entry-placed', status: 'acknowledged' } };
+    const entry = { type: 'copy-command', command: { type: 'place-leader-entry' } } as LocalCopierAgentCommand;
+    expect(compactRecoverableCopierResult(entry, result)).toEqual({ ok: true, result: result.result });
+    expect(compactRecoverableCopierResult({ type: 'disarm' }, result)).toBe(result);
+  });
   it('persists delivery before claiming and execution intent before executing', async () => {
     const f = fixture(); const step = recoverableCopierDelivery(f.options);
     f.options.request.mockImplementation(async body => {
@@ -31,7 +48,188 @@ describe('recoverable copier delivery', () => {
       return body.action === 'poll-v2' ? { protocol: 2, command: f.remote } : { protocol: 2, accepted: true };
     });
     vi.mocked(f.options.agent.execute).mockImplementation(async () => { expect(f.saved?.phase).toBe('executing'); return { ok: true } as never; });
-    await step(); expect(f.options.agent.execute).toHaveBeenCalledTimes(1); expect(f.saved).toBeNull();
+    await step(); expect(f.options.agent.execute).toHaveBeenCalledTimes(1); expectIdle(f.saved);
+  });
+  it('zobrazovací callback běží po durable výsledku, ale před vzdáleným ACK', async () => {
+    const f = fixture();
+    f.options.onDurableResult.mockImplementation(() => {
+      expect(f.saved?.phase).toBe('completed');
+      expect(f.options.request.mock.calls.some(([body]) => body.action === 'complete-v2')).toBe(false);
+    });
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.onDurableResult).toHaveBeenCalledWith(f.remote.id);
+    expect(f.options.onComplete).toHaveBeenCalledWith(f.remote.id, false);
+  });
+  it('u vstupu potvrzuje jen kompaktní výsledek a worker run, bez velkého statusu', async () => {
+    const f = fixture();
+    f.remote.command = { type: 'copy-command', command: {
+      type: 'place-leader-entry', side: 'Buy', quantity: 1, orderType: 'Market',
+    } } as LocalCopierAgentCommand;
+    await recoverableCopierDelivery(f.options)();
+    const ack = f.options.request.mock.calls.find(([body]) => body.action === 'complete-hot-v3')?.[0];
+    expect(ack).toMatchObject({
+      action: 'complete-hot-v3', commandId: f.remote.id,
+      workerStartedAt: new Date(0).toISOString(),
+    });
+    expect(ack).not.toHaveProperty('status');
+    expect(ack).not.toHaveProperty('revision');
+    expect(f.options.onComplete).toHaveBeenCalledWith(f.remote.id, true);
+  });
+  const hotEntry = { type: 'copy-command', command: {
+    type: 'place-leader-entry', side: 'Buy', quantity: 1, orderType: 'Market',
+  } } as LocalCopierAgentCommand;
+  const ackActions = (f: ReturnType<typeof fixture>) => f.options.request.mock.calls
+    .map(([body]) => body.action).filter(action => action !== 'poll-v2');
+  it('v3 trvale nedostupné (starý web, chybí migrace): ACK přejde na v2 a brzda za příkazem se provede', async () => {
+    const f = fixture();
+    f.remote.command = hotEntry;
+    const disarm = { ...f.remote, id: randomUUID(), command: { type: 'disarm' } as LocalCopierAgentCommand };
+    let queue = [f.remote, disarm];
+    f.options.request.mockImplementation(async body => {
+      if (body.action === 'poll-v2') return { protocol: 2, command: queue[0] ?? null };
+      if (body.action === 'complete-hot-v3') throw new Error('invalid-copier-relay-action');
+      queue = queue.slice(1);
+      return { protocol: 2, accepted: true };
+    });
+    const step = recoverableCopierDelivery(f.options);
+    await step();
+    await step();
+    expect(vi.mocked(f.options.agent.execute).mock.calls.map(([command]) => command)).toEqual([hotEntry, { type: 'disarm' }]);
+    expect(ackActions(f)).toEqual(['complete-hot-v3', 'complete-v2', 'complete-v2']);
+    expect(f.options.onComplete).toHaveBeenNthCalledWith(1, f.remote.id, true);
+    expect(f.options.onComplete).toHaveBeenNthCalledWith(2, disarm.id, false);
+  });
+  it('server v3 neumí: 5 min rovnou v2, potom znovu zkusí v3; přechodná chyba pauzu nezapne', async () => {
+    const f = fixture();
+    f.remote.command = hotEntry;
+    let v3Error = 'copier-relay-request-timeout';
+    f.options.request.mockImplementation(async body => {
+      if (body.action === 'poll-v2') return { protocol: 2, command: { ...f.remote, id: randomUUID() } };
+      if (body.action === 'complete-hot-v3') throw new Error(v3Error);
+      return { protocol: 2, accepted: true };
+    });
+    const step = recoverableCopierDelivery(f.options);
+    await step();
+    expect(ackActions(f)).toEqual(['complete-hot-v3', 'complete-v2']);
+    f.options.request.mockClear();
+    v3Error = 'copier-relay-http-409';
+    await step();
+    expect(ackActions(f)).toEqual(['complete-hot-v3', 'complete-v2']);
+    f.options.request.mockClear();
+    v3Error = 'copier-relay-failed';
+    await step();
+    expect(ackActions(f)).toEqual(['complete-hot-v3', 'complete-v2']);
+    f.options.request.mockClear();
+    v3Error = 'copier-relay-hot-ack-unavailable';
+    await step();
+    expect(ackActions(f)).toEqual(['complete-hot-v3', 'complete-v2']);
+    f.options.request.mockClear();
+    await step();
+    expect(ackActions(f)).toEqual(['complete-v2']);
+    f.options.request.mockClear();
+    f.setNow(1_000 + 5 * 60_000);
+    await step();
+    expect(ackActions(f)).toEqual(['complete-hot-v3', 'complete-v2']);
+  });
+  it('v3 zapsané, odpověď ztracená: v2 potvrdí shodu, execution 1× a status se dorovná', async () => {
+    const f = fixture();
+    f.remote.command = hotEntry;
+    f.options.request.mockImplementation(async body => {
+      if (body.action === 'poll-v2') return { protocol: 2, command: f.remote };
+      if (body.action === 'complete-hot-v3') throw new Error('copier-relay-request-timeout');
+      return { protocol: 2, accepted: true };
+    });
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
+    expect(f.options.onComplete).toHaveBeenCalledWith(f.remote.id, true);
+    expectIdle(f.saved);
+  });
+  it('v3 i v2 selžou: opakuje se jen ACK; když poll vrátí terminální řádek, žádné další ACK ani execution', async () => {
+    const f = fixture();
+    f.remote.command = hotEntry;
+    let terminal = false;
+    f.options.request.mockImplementation(async body => {
+      if (body.action === 'poll-v2') return { protocol: 2, command: terminal
+        ? { ...f.remote, command: null, status: 'succeeded' } : f.remote };
+      throw new Error('copier-relay-request-timeout');
+    });
+    const step = recoverableCopierDelivery(f.options);
+    await expect(step()).rejects.toThrow('copier-relay-request-timeout');
+    expect(f.options.onComplete).not.toHaveBeenCalled();
+    f.options.request.mockClear();
+    await expect(step()).rejects.toThrow('copier-relay-request-timeout');
+    expect(ackActions(f)).toEqual(['complete-v2']);
+    terminal = true;
+    f.options.request.mockClear();
+    await step();
+    expect(ackActions(f)).toEqual([]);
+    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
+    expect(f.options.onComplete).toHaveBeenCalledOnce();
+    expect(f.options.onComplete).toHaveBeenCalledWith(f.remote.id, true);
+  });
+  it('terminální řádek bez našeho výsledku (expired, cizí příkaz) budíček nespustí', async () => {
+    const f = fixture();
+    f.options.request.mockResolvedValueOnce({ protocol: 2, command: { ...f.remote, command: null, status: 'expired' } });
+    await recoverableCopierDelivery(f.options)();
+    f.options.request.mockResolvedValueOnce({ protocol: 2, command: { ...f.remote, command: null, status: 'succeeded' } });
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.onComplete).not.toHaveBeenCalled();
+    f.saved = { version: 1, session: 'old-session', deliveryId: randomUUID(), phase: 'completed', commandId: f.remote.id, result: { ok: true } };
+    f.options.request.mockResolvedValueOnce({ protocol: 2, command: { ...f.remote, command: null, status: 'expired' } });
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.onComplete).not.toHaveBeenCalled();
+  });
+  it('po selhání v3 jdou další pokusy téže delivery jen přes v2 a status se dorovná i tehdy', async () => {
+    const f = fixture();
+    f.remote.command = hotEntry;
+    let v2Fails = true;
+    f.options.request.mockImplementation(async body => {
+      if (body.action === 'poll-v2') return { protocol: 2, command: f.remote };
+      if (body.action === 'complete-hot-v3') throw new Error('copier-relay-request-timeout');
+      if (v2Fails) throw new Error('copier-relay-request-timeout');
+      return { protocol: 2, accepted: true };
+    });
+    const step = recoverableCopierDelivery(f.options);
+    await expect(step()).rejects.toThrow('copier-relay-request-timeout');
+    v2Fails = false;
+    f.options.request.mockClear();
+    await step();
+    expect(ackActions(f)).toEqual(['complete-v2']);
+    expect(f.options.onComplete).toHaveBeenCalledWith(f.remote.id, true);
+  });
+  it('chybějící funkce v DB dá vlastní kód, jiná chyba RPC zůstane obecná', async () => {
+    const call = (code: string) => completeTradovateCopierHotCommandV3({
+      db: { rpc: async () => ({ data: null, error: { code, message: 'x' } }) } as never,
+      deviceId: 'd', deliveryId: 'del', commandId: 'c', workerStartedAt: 'w',
+    });
+    await expect(call('PGRST202')).rejects.toThrow('copier-relay-hot-ack-unavailable');
+    await expect(call('42883')).rejects.toThrow('copier-relay-hot-ack-unavailable');
+    await expect(call('55P03')).rejects.toThrow('copier-relay-complete-failed');
+  });
+  it('restart s completed checkpointem a starým started_at v DB: v3 409 → v2, execution 0×', async () => {
+    const f = fixture();
+    f.remote.command = hotEntry;
+    const deliveryId = randomUUID();
+    f.saved = { version: 1, session: 'old-session', deliveryId, phase: 'completed', commandId: f.remote.id, result: { ok: true } };
+    f.options.request.mockImplementation(async body => {
+      if (body.action === 'poll-v2') return { protocol: 2, command: f.remote };
+      if (body.action === 'complete-hot-v3') throw new Error('copier-relay-http-409');
+      return { protocol: 2, accepted: true };
+    });
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.agent.execute).not.toHaveBeenCalled();
+    const ack = f.options.request.mock.calls.find(([body]) => body.action === 'complete-v2')?.[0];
+    expect(ack).toMatchObject({ deliveryId, commandId: f.remote.id, result: { ok: true } });
+    expect(ack).toHaveProperty('status');
+  });
+  it('chyba horkého příkazu jde kompaktním ACK jako error, execution se neopakuje', async () => {
+    const f = fixture();
+    f.remote.command = hotEntry;
+    vi.mocked(f.options.agent.execute).mockRejectedValueOnce(new Error('broker-rejected'));
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.request.mock.calls.find(([body]) => body.action === 'complete-hot-v3')?.[0]).toMatchObject({ error: 'broker-rejected' });
+    expect(ackActions(f)).toEqual(['complete-hot-v3']);
+    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
   });
   it('předá ARM deadline s desetisekundovou rezervou na durable ACK a serverový createdAt', async () => {
     const f = fixture();

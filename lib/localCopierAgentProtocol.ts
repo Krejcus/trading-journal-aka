@@ -85,6 +85,19 @@ export interface LocalCopierAgentStatus {
   group: CopyGroupConfig;
   controller: CopierControllerStatus;
   startedAt: string;
+  /**
+   * F1b′ (2. 11. 2026): nečinná durable delivery relaye, ke které smí server navázat příkaz
+   * a poslat ho podepsaným pushem. Jen relay status workeru; prohlížeč ho nedostane.
+   */
+  relayIdle?: { deliveryId: string } | null;
+  /**
+   * Pořadí sestavení statusu v tomto běhu workeru (monotónní) a čas sestavení
+   * (hodiny workeru). Jen pro řazení zobrazení pozice v grafu (expozice z kanálu
+   * vs. poll, docs/LIVE_HOT_PATH_PLAN.md §10); nic neautorizují. Starší workery
+   * pole nemají.
+   */
+  displaySeq?: number;
+  displayBuiltAt?: number;
   /** Durable provenance instalačního bundle; starší workery pole nemají. */
   installation?: LocalCopierAgentInstallation;
   /** Primární relay zařízení; zachováno kvůli kompatibilitě starších UI. */
@@ -101,6 +114,11 @@ export interface LocalCopierAgentStatus {
    * rozhodování copieru; chybí, když TradingView neběží.
    */
   marketPrices?: CopierMarketPrice[];
+  /**
+   * Hlídač upozornění na cenu (2. 11. 2026): stav vlákna a stáří ceny/synchronizace v ms
+   * při sestavení statusu. Jen zobrazení „kdo hlídá“; starší workery pole nemají.
+   */
+  priceAlertWatch?: CopierPriceAlertWatchStatus | null;
   /** Read-only display snapshots; never authorize broker actions. */
   accountDisplay?: TradovateAccountDisplayFeedState[];
   /** Využití Tradovate API a stav session každého OAuth spojení workeru; jen zobrazení. */
@@ -110,6 +128,13 @@ export interface LocalCopierAgentStatus {
    * která worker načte po nejbližším bezpečném restartu. Jen zobrazení.
    */
   connectionDiscovery?: CopierConnectionDiscoveryStatus;
+}
+
+export interface CopierPriceAlertWatchStatus {
+  state: 'watching' | 'no-price' | 'no-sync' | 'off' | 'tripped';
+  alerts: number;
+  priceAgeMs: number | null;
+  syncAgeMs: number | null;
 }
 
 export interface CopierConnectionDiscoveryStatus {

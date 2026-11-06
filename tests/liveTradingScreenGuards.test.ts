@@ -57,20 +57,47 @@ describe('LIVE → Graf: DISARM je vždy dosažitelný (INV-UI-02)', () => {
     expect(screen).toMatch(/buildLiveStatusStrip\(\{ status: copier\.status, available: copier\.available, pending: copier\.pending, transport: copier\.transport, journalHealth: copier\.journalHealth \}\)/);
     const desk = source('components/TradovateLiveDesk.tsx');
     expect(desk).toMatch(/status: agentStatus\?\.controller \?\? null,\s*available: runtimeAvailable,\s*pending: !agentStatusResolved,/);
-    expect(desk).toMatch(/armFlowActiveRef\.current = true;\s*setArmFlowActive\(true\);\s*try \{\s*return await armLiveGroupFlow\(targetGroup\);\s*\} finally \{\s*armFlowActiveRef\.current = false;/);
+    // Expozice přímo z workeru (F2a) jen do grafu, karet a skrytí BE — nikdy do stavu kopírky ani příkazů.
+    const liveUses = desk.match(/chartLive\.[A-Za-z.?]+/g) ?? [];
+    expect(liveUses.sort()).toEqual([
+      'chartLive.exposureObservedAt',
+      'chartLive.status',
+      'chartLive.status',
+      'chartLive.status',
+      'chartLive.status?.controller.recentCopyEvents',
+      // Telefonní graf (2. 11.): stejné události jen do karet vlevo dole, za běžícího runtime.
+      'chartLive.status?.controller.recentCopyEvents',
+      // Telefon (2. 11. večer): průměr vstupu jen když graf ukazuje poll (jako PC manageEntryAvgPrice) + deps.
+      'chartLive.status',
+      'chartLive.status',
+      // Šipky plnění leadera jen do slotu grafu (memo + deps), nikdy do phoneTrade ani relaye.
+      'chartLive.status',
+      'chartLive.status?.controller',
+      'chartLive.exposureObservedAt',
+      'chartLive.exposureObservedAt',
+    ].sort());
+    expect(desk).toMatch(/chartShowsPoll: chartLive\.status === agentStatus,/);
+    expect(desk).toMatch(/controller: chartLive\.status\?\.controller, exposureObservedAt: chartLive\.exposureObservedAt,/);
+    expect(desk).toMatch(/copyEvents: runtimeAvailable \? chartLive\.status\?\.controller\.recentCopyEvents : undefined,/);
+    expect(desk).toMatch(/agentStatus: chartLive\.status,/);
+    expect(desk).toMatch(/copyEvents=\{chartLive\.status\?\.controller\.recentCopyEvents\}/);
+    expect(desk).toMatch(/manageEntryAvgPrice=\{chartLive\.status === agentStatus \? /);
+    expect(desk).toMatch(/armFlowActiveRef\.current = true;\s*setArmFlowActive\(true\);\s*try \{\s*return await armLiveGroupFlow\(targetGroup, armGuard\);\s*\} finally \{\s*armFlowActiveRef\.current = false;/);
     // Deep link jde stejnou bránou; graf během zapínání se zahodí.
     expect(desk).toMatch(/if \(requestedTab === 'chart' && armFlowActiveRef\.current\) \{ onRequestedTabHandled\?\.\(\); return; \}\s*if \(!liveTabNavigationAllowed\(tab, requestedTab,/);
   });
 
   it('načítání i pád grafu mají cestu na přehled a pád se nezopakuje po reloadu', () => {
     const slot = source('components/LiveTradingScreenSlot.tsx');
-    expect(slot).toMatch(/<ErrorBoundary name="LiveTradingScreen" onError=\{rememberLiveChartCrash\} fallback=\{<FallbackLayer [^>]*failed leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
+    expect(slot).toMatch(/<ErrorBoundary name="LiveTradingScreen" onError=\{\(\) => \{ rememberLiveChartCrash\(\); onCrash\?\.\(\); \}\} fallback=\{<FallbackLayer [^>]*failed leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
     expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer [^>]*failed=\{false\} leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
     expect(slot).toMatch(/onClick=\{\(\) => onNavigate\('overview'\)\}/);
     // Odchodová animace nesmí držet kliky: přehled je pod vrstvou dostupný hned.
     expect(source('index.css')).toMatch(/\.live-chart-leave \{ animation: live-chart-fold [^}]*pointer-events: none; \}/);
     expect(source('components/LiveTradingScreen.tsx')).toMatch(/\$\{leaving \? 'live-chart-leave' : 'live-chart-enter'\}/);
-    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/chartAvailable: liveChartAvailableNow\(\) && !liveChartCrashedThisSession\(\)/);
+    // Graf na PC i na telefonu (phoneChart): po pádu v relaci se LIVE otevře na přehledu.
+    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/chartAvailable: \(liveChartAvailableNow\(\) \|\| Boolean\(phoneChart\)\) && !liveChartCrashedThisSession\(\)/);
+    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/<ErrorBoundary name="LivePhoneChart" onError=\{\(\) => \{ rememberLiveChartCrash\(\); noteChartCrash\(\); \}\}/);
     expect(source('components/ErrorBoundary.tsx')).toMatch(/this\.props\.onError\?\.\(error\);/);
   });
 
@@ -101,7 +128,7 @@ describe('LIVE → Graf je jen UI', () => {
     const ticket = source('components/LiveOrderTicket.tsx');
     const submit = ticket.slice(ticket.indexOf('<button', ticket.indexOf('problems.length > 0')));
     // Zamčené, dokud náhled nejde (Market, SL/TP, chyby panelu, zastaralá cena, worker bez odeslání).
-    expect(submit.slice(0, 200)).toMatch(/disabled=\{directBlocked != null \|\| directBusy\}/);
+    expect(submit.slice(0, 200)).toMatch(/disabled=\{directBlocked != null \|\| directBusy \|\| directLocked\}/);
     expect(ticket).not.toMatch(/onSubmit|executeAgent|placeOrder/);
   });
 
@@ -130,11 +157,45 @@ describe('LIVE → Graf je jen UI', () => {
     expect(workspace).toMatch(/positionQuickOrderLabel=\{context\.liveOrderEntry \? 'Propsat box do objednávky' : undefined\}/);
     // Nová svíčka vpravo LIVE graf nepřestaví (jinak se každou minutu vrátil na kotvu).
     expect(workspace).toMatch(/liveSeries=\{Boolean\(context\.liveOrderEntry\)\}/);
-    // Objednávky z pravého menu jen vyplní panel — v textu je to vidět.
-    expect(workspace).toMatch(/chartOrderLabelSuffix=\{context\.liveOrderEntry \? ' · návrh' : undefined\}/);
+    // Objednávky z pravého menu jen vyplní panel (LIVE i backtest) — v textu je to vidět.
+    expect(workspace).toMatch(/chartOrderLabelSuffix=\{context\.liveOrderEntry \|\| context\.backtestSession \? ' · návrh' : undefined\}/);
     const chart = source('components/CandleKitTradeChart.tsx');
-    expect(chart).toMatch(/: liveSeries \? \{ start: candleWindow\.start, end: candles\.length \} : candleWindow,/);
-    expect(chart).toMatch(/\? `overlay-v2:\$\{trade\.id\}:\$\{timeframe\}:\$\{renderedCandleWindow\.start\}:live`/);
+    expect(chart).toMatch(/renderableCandleWindow\(liveSeries \? \{ start: candleWindow\.start, end: candles\.length \} : candleWindow, initialWindow, candles\.length\)/);
+    // LIVE drží stejný controller i při změně timeframe; instrument zůstává
+    // hranicí série. Deník/history si dál nechává timeframe v klíči.
+    expect(chart).toMatch(/\? `overlay-v3:\$\{trade\.id\}:\$\{resolvedInstrumentRoot\}:live`/);
+    expect(chart).not.toMatch(/overlay-v3:\$\{trade\.id\}:\$\{timeframe\}:live/);
+    expect(chart).toMatch(/: `overlay-v2:\$\{trade\.id\}:\$\{timeframe\}:history`/);
+  });
+
+  it('stabilní LIVE graf při posunu překreslí VWAP podle aktuálního stavu přepínače', () => {
+    const chart = source('components/CandleKitTradeChart.tsx');
+    // Listener přežívá přepnutí indikátoru, proto nesmí držet hodnotu
+    // visibleLevels zachycenou při prvním onReady.
+    expect(chart).toMatch(/visibleLevelsRef\.current = visibleLevels;/);
+    expect(chart).toMatch(/if \(visibleLevelsRef\.current\) \{[\s\S]*?levelsPrimitiveRequestUpdateRef\.current\?\.\(\);/);
+    expect(chart).toMatch(/if \(visibleLevelsRef\.current && !replayActive\)/);
+    expect(chart).not.toMatch(/if \(visibleLevels && !replayActive\)/);
+  });
+
+  it('křížek i hlavní vypínač odstraní levely bez přestavby grafu', () => {
+    const chart = source('components/CandleKitTradeChart.tsx');
+    // Skrytá stabilní vrstva nesmí znovu nakreslit geometrii, která zůstala
+    // v posledním canvas snímku. Price-axis štítky platí totéž.
+    expect(chart).toMatch(/if \(!visibleLevelsRef\.current\) return;/);
+    expect(chart).toMatch(/if \(!visibleLevelsRef\.current\) return \[\];/);
+    // Opožděný detach staré vrstvy nesmí vymazat callback nově připojené.
+    expect(chart).toMatch(/createPrimitiveUpdateBinding\(levelsPrimitiveRequestUpdateRef\)/);
+    // Druhý paint v dalším snímku kryje výměnu callbacku v témže React commitu.
+    expect(chart).toMatch(/indicatorVisibilityPaintFrameRef\.current = window\.requestAnimationFrame/);
+  });
+
+  it('přesný DOM crosshair zachová touch long-press, téma a obnovu po zoomu', () => {
+    const chart = source('components/CandleKitTradeChart.tsx');
+    expect(chart).toMatch(/if \(event\.pointerType === 'touch'\) \{[\s\S]*?hideExactCrosshair\(\);/);
+    expect(chart).toMatch(/refreshExactCrosshairRef\.current\?\.\(\);/);
+    expect(chart).toMatch(/backgroundColor: isDark \? '#131722' : '#ffffff'/);
+    expect(chart).toMatch(/const visibleCandleLookup = useMemo\(\(\) => \{/);
   });
 
   it('výpočty panelu nikdo z cest příkazů nepoužívá', () => {

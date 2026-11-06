@@ -188,6 +188,26 @@ html.native-shell .native-fixed-above-tab-bar {
   bottom: calc(var(--native-shell-tab-bar-height) + 1rem);
 }
 
+/* Safety controls stay above the chart, but never cover a confirmation or
+   another modal. The dialog itself remains interactive and owns the screen. */
+body:has([role="dialog"]) :is([data-live-safety-controls], [data-live-safety-notices]) {
+  visibility: hidden;
+}
+
+/* Odsazení fixních prvků LIVE od spodku, když není nouzová lišta: nad BottomNav (úzký web),
+   nad nativní lištou v appce. S lištou platí --live-safety-height. */
+:root {
+  --live-bottom-clear: calc(env(safe-area-inset-bottom, 0px) + 5.75rem);
+}
+@media (min-width: 1024px) {
+  :root {
+    --live-bottom-clear: 12px;
+  }
+}
+html.native-shell {
+  --live-bottom-clear: calc(var(--native-shell-tab-bar-height) + 1rem);
+}
+
 /* Every full-screen flex dialog in the shared React app gets a safe interactive
    viewport on iOS. The backdrop still paints edge-to-edge because backgrounds
    cover padding and absolute inset backdrops use the full padding box. */
@@ -1897,6 +1917,12 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
   border: 1px solid #d1d4dc;
   border-radius: 6px;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
+}
+
+.alphatrade-chart-tool-menu.is-emoji {
+  width: 292px;
+  max-height: min(520px, calc(100vh - 12px));
+  overflow-y: auto;
 }
 
 .alphatrade-chart-tool-menu.is-dark {
@@ -5270,13 +5296,11 @@ html.boot-pre [data-boot] { opacity: 0; }
 }
 .live-chart-enter { animation: live-chart-unfold 520ms cubic-bezier(.22, .61, .36, 1) both; }
 .live-chart-enter .live-chart-header { animation: live-chart-header-in 420ms 90ms cubic-bezier(.22, .61, .36, 1) both; }
-.live-chart-enter .live-chart-ticket { animation: live-chart-ticket-in 520ms 140ms cubic-bezier(.22, .61, .36, 1) both; }
 .live-chart-leave { animation: live-chart-fold 280ms cubic-bezier(.4, 0, .2, 1) both; pointer-events: none; }
 /* Notifikace obchodů v LIVE grafu (karta B, vlevo dole). */
 .live-trade-toast { animation: live-trade-toast-in 240ms cubic-bezier(.2, .8, .2, 1) both; }
 @keyframes live-trade-toast-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .live-trade-toast { animation: none; } }
-.live-chart-leave .live-chart-ticket { animation: live-chart-ticket-out 220ms cubic-bezier(.4, 0, 1, 1) both; }
 .live-chart-aurora {
   position: absolute; inset: 0; z-index: 900; pointer-events: none;
   background:
@@ -5293,7 +5317,101 @@ html.boot-pre [data-boot] { opacity: 0; }
 }
 .live-tab-arrive { animation: live-tab-arrive 380ms cubic-bezier(.22, .61, .36, 1) backwards; }
 @media (prefers-reduced-motion: reduce) {
-  .live-chart-enter, .live-chart-enter .live-chart-header, .live-chart-enter .live-chart-ticket,
-  .live-chart-leave, .live-chart-leave .live-chart-ticket, .live-tab-arrive { animation: none; }
+  .live-chart-enter, .live-chart-enter .live-chart-header,
+  .live-chart-leave, .live-tab-arrive { animation: none; }
   .live-chart-aurora { display: none; }
+}
+
+/* Kurzor „Prezentace“: kruh v místě kliknutí, který se rozběhne a zmizí. */
+.alphatrade-chart-demo-ripple {
+  position: absolute;
+  z-index: 40;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 9999px;
+  border: 2px solid rgba(255, 152, 0, 0.9);
+  background: rgba(255, 152, 0, 0.25);
+  pointer-events: none;
+  animation: alphatrade-chart-demo-ripple 650ms ease-out forwards;
+}
+@keyframes alphatrade-chart-demo-ripple {
+  to { transform: scale(4.5); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .alphatrade-chart-demo-ripple { animation-duration: 1ms; }
+}
+
+/* Panel Objednávka v LIVE: přilepený k pravé hraně grafu, otevírá se do strany. */
+.live-chart-ticket-dock {
+  flex: none;
+  width: 0;
+  overflow: hidden;
+  transition: width 420ms cubic-bezier(.22, 1, .36, 1);
+}
+.live-chart-ticket-dock.is-open { width: 304px; }
+.live-chart-ticket-dock > .live-chart-ticket {
+  transform: translateX(28px);
+  opacity: 0;
+  transition: transform 420ms cubic-bezier(.22, 1, .36, 1), opacity 260ms ease;
+}
+.live-chart-ticket-dock.is-open > .live-chart-ticket { transform: none; opacity: 1; }
+/* Obsah naskakuje postupně odshora. */
+.live-ticket-stagger > * {
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 300ms ease, transform 400ms cubic-bezier(.22, 1, .36, 1);
+}
+.live-chart-ticket-dock.is-open .live-ticket-stagger > * { opacity: 1; transform: none; }
+.live-chart-ticket-dock.is-open .live-ticket-stagger > *:nth-child(1) { transition-delay: 60ms; }
+.live-chart-ticket-dock.is-open .live-ticket-stagger > *:nth-child(2) { transition-delay: 90ms; }
+.live-chart-ticket-dock.is-open .live-ticket-stagger > *:nth-child(3) { transition-delay: 120ms; }
+.live-chart-ticket-dock.is-open .live-ticket-stagger > *:nth-child(4) { transition-delay: 150ms; }
+.live-chart-ticket-dock.is-open .live-ticket-stagger > *:nth-child(5) { transition-delay: 180ms; }
+.live-chart-ticket-dock.is-open .live-ticket-stagger > *:nth-child(n+6) { transition-delay: 210ms; }
+
+/* Koupit / Prodat: výběr strany krátce pruží. */
+.live-ticket-side { transition: transform 180ms cubic-bezier(.34, 1.56, .64, 1), background-color 200ms, border-color 200ms, color 200ms, box-shadow 250ms; }
+.live-ticket-side:active { transform: scale(.96); }
+.live-ticket-side.is-on { animation: live-ticket-pop 380ms cubic-bezier(.34, 1.56, .64, 1); }
+@keyframes live-ticket-pop { 0% { transform: scale(.94); } 60% { transform: scale(1.03); } 100% { transform: scale(1); } }
+
+/* Odeslání: stisk, průběh (pruh světla), přijetí (zelená, fajfka, kruh). */
+.live-ticket-send {
+  position: relative;
+  overflow: hidden;
+  transition: transform 160ms cubic-bezier(.34, 1.56, .64, 1), filter 200ms, box-shadow 250ms, background 350ms;
+}
+.live-ticket-send:not(:disabled):hover { filter: brightness(1.07); transform: translateY(-1px); }
+.live-ticket-send:not(:disabled):active { transform: scale(.97); }
+.live-ticket-send.is-sending::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .28) 50%, transparent 80%);
+  animation: live-ticket-sweep 1s linear infinite;
+}
+@keyframes live-ticket-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+.live-ticket-send.is-ok { background: linear-gradient(180deg, #22c55e, #059669) !important; box-shadow: 0 0 0 4px rgba(16, 185, 129, .25); }
+.live-ticket-send .live-ticket-ring {
+  position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; border-radius: 9999px;
+  border: 2px solid rgba(255, 255, 255, .8); transform: translate(-50%, -50%);
+  animation: live-ticket-ring 700ms cubic-bezier(.22, 1, .36, 1) forwards; pointer-events: none;
+}
+@keyframes live-ticket-ring { to { width: 320px; height: 320px; opacity: 0; } }
+.live-ticket-check path { stroke-dasharray: 24; stroke-dashoffset: 24; animation: live-ticket-draw 450ms 100ms cubic-bezier(.22, 1, .36, 1) forwards; }
+@keyframes live-ticket-draw { to { stroke-dashoffset: 0; } }
+.live-ticket-spinner { width: 13px; height: 13px; border-radius: 9999px; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; animation: live-ticket-spin 700ms linear infinite; }
+@keyframes live-ticket-spin { to { transform: rotate(360deg); } }
+
+/* Účty pozice: rozbalení karty. */
+.live-ticket-accounts { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 350ms cubic-bezier(.22, 1, .36, 1); }
+.live-ticket-accounts.is-open { grid-template-rows: 1fr; }
+.live-ticket-accounts > div { overflow: hidden; min-height: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .live-chart-ticket-dock, .live-chart-ticket-dock > .live-chart-ticket, .live-ticket-stagger > *,
+  .live-ticket-side, .live-ticket-send, .live-ticket-accounts { transition: none; }
+  .live-ticket-side.is-on, .live-ticket-send.is-sending::after, .live-ticket-send .live-ticket-ring, .live-ticket-check path { animation: none; }
+  .live-ticket-check path { stroke-dashoffset: 0; }
 }

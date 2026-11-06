@@ -65,6 +65,7 @@ interface FakeMouseEvent {
 
 const TAP_TOLERANCE_PX = 8;
 const DOUBLE_TAP_MS = 350;
+const LONG_PRESS_MS = 480;
 const DOUBLE_TAP_PX = 24;
 
 const fakeEvent = (offsetX: number, offsetY: number): FakeMouseEvent => {
@@ -76,7 +77,7 @@ const fakeEvent = (offsetX: number, offsetY: number): FakeMouseEvent => {
   return event;
 };
 
-export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pathActive = false, pathStyle, onPathEnd, onDrawingDoubleTap }: {
+export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pathActive = false, pathStyle, onPathEnd, onDrawingDoubleTap, onDrawingLongPress }: {
   chartApi: ChartViewApi | null;
   containerRef: React.RefObject<HTMLDivElement | null>;
   /** Jen v režimu kreslení; mimo něj se dotyky grafu nedotýkají. */
@@ -89,10 +90,14 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
   onPathEnd?: () => void;
   /** Dvojklep na hotovou kresbu (jako dvojklik na PC) — otevře nastavení. */
   onDrawingDoubleTap?: (id: string) => void;
+  /** Podržení prstu na hotové kresbě (jako v TradingView) — kontextové menu. `true` = menu se otevřelo. */
+  onDrawingLongPress?: (id: string) => boolean;
 }) {
   // Ref: změna callbacku nesmí přeinstalovat dotykové posluchače (rozdělaná kresba).
   const doubleTapRef = useRef(onDrawingDoubleTap);
   doubleTapRef.current = onDrawingDoubleTap;
+  const longPressRef = useRef(onDrawingLongPress);
+  longPressRef.current = onDrawingLongPress;
   const [crosshair, setCrosshair] = useState<{ x: number; y: number; price: string | null } | null>(null);
 
   useEffect(() => {
@@ -101,9 +106,11 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     if (!controller || typeof controller.onDown !== 'function') return;
     const { engine } = controller;
     let element: HTMLElement;
+    let chart: ReturnType<ChartViewApi['controller']['getChart']>;
     let series: { coordinateToPrice: (y: number) => number | null } | null = null;
     try {
-      element = chartApi.controller.getChart().chartElement();
+      chart = chartApi.controller.getChart();
+      element = chart.chartElement();
       series = chartApi.controller.getSeries();
     } catch { return; }
 
@@ -147,6 +154,13 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     };
     const block = (event: TouchEvent) => { event.preventDefault(); event.stopPropagation(); };
     const drawingMode = () => pathActive || Boolean(engine.getActiveTool());
+    /** Cenová / časová osa: vždy patří grafu (roztažení), i když pod ní vede kresba. */
+    const onAxis = (point: { x: number; y: number }) => {
+      try {
+        const rect = element.getBoundingClientRect();
+        return point.x >= rect.width - chart.priceScale('right').width() || point.y >= rect.height - chart.timeScale().height();
+      } catch { return false; }
+    };
 
     // ── Cesta ────────────────────────────────────────────────────────────
     const segmentStyle = (): DrawingStyle => ({ ...engine.getDefaultStyle(), color: pathStyle?.color ?? engine.getDefaultStyle().color, width: pathStyle?.width ?? 2, fill: null });
@@ -217,6 +231,15 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     /** Kresba pod prstem a poslední klepnutí na kresbu (dvojklep = nastavení). */
     let dragHitId: string | null = null;
     let lastDrawingTap: { id: string; at: number } | null = null;
+    /** Podržení: časovač a příznak, že dotyk už patří menu (konec není klepnutí). */
+    let longTimer = 0;
+    let longPressed = false;
+    /**
+     * Dotyk na kresbě, která ještě není vybraná: patří grafu (posun), klepnutí
+     * ji jen vybere — táhnout jde až vybranou (jako TradingView; Filip 2. 11.:
+     * posun grafu chytal position box).
+     */
+    let pendingSelect: string | null = null;
     const segmentIndex = (id: string) => Number(id.split(':')[2]);
     const startDrag = (point: { x: number; y: number }, event: TouchEvent) => {
       const hit = typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
@@ -231,6 +254,19 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
         pathDrag = { id: hit.id, group, index: segmentIndex(hit.id), kind: hit.kind, anchorIndex: hit.anchorIndex ?? 0, before: drawing.points.map(item => ({ ...item })) };
       }
       if (captured) block(event);
+      if (captured && dragHitId && longPressRef.current) {
+        const id = dragHitId;
+        longTimer = window.setTimeout(() => {
+          if (!touching || moved || !dragging) return;
+          // Menu má jen část kreseb (rodič rozhodne); jinak tah pokračuje.
+          if (!longPressRef.current?.(id)) return;
+          // Kresba se nepohnula: tah ukončíme beze změny, konec dotyku už není klepnutí.
+          controller.onUp();
+          controller.onLeave?.();
+          dragging = false; pathDrag = null; lastDrawingTap = null;
+          longPressed = true;
+        }, LONG_PRESS_MS);
+      }
       return captured;
     };
     const syncPathDrag = () => {
@@ -284,7 +320,9 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       }
       if (engine.isLocked()) return;
       const point = offset(event.touches[0]);
+      if (onAxis(point)) { touching = false; captured = false; dragging = false; return; }
       touching = true; touchStart = point; touchLast = point; moved = false; dragging = false;
+      window.clearTimeout(longTimer); longPressed = false;
 
       if (drawingMode()) {
         // S crosshairem nic nevybíráme: dotyk jen posouvá crosshair (jako TV).
@@ -294,13 +332,22 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
         block(event);
         return;
       }
+      const hit = typeof controller.hitTest === 'function' ? controller.hitTest(point.x, point.y) : null;
+      if (hit && hit.id !== engine.getSelectedId?.()) { pendingSelect = hit.id; captured = false; return; }
+      pendingSelect = null;
       startDrag(point, event);
     };
 
     const onTouchMove = (event: TouchEvent) => {
+      if (pendingSelect && touching && event.touches.length === 1 && touchStart) {
+        const point = offset(event.touches[0]);
+        if (Math.hypot(point.x - touchStart.x, point.y - touchStart.y) > TAP_TOLERANCE_PX) { moved = true; pendingSelect = null; }
+        return;
+      }
       if (!touching || event.touches.length !== 1 || !captured) return;
+      if (longPressed) { block(event); return; }
       const point = offset(event.touches[0]);
-      if (touchStart && Math.hypot(point.x - touchStart.x, point.y - touchStart.y) > TAP_TOLERANCE_PX) moved = true;
+      if (touchStart && Math.hypot(point.x - touchStart.x, point.y - touchStart.y) > TAP_TOLERANCE_PX) { moved = true; window.clearTimeout(longTimer); }
       if (dragging) {
         controller.onMove(fakeEvent(point.x, point.y));
         syncPathDrag();
@@ -316,8 +363,23 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     const onTouchEnd = (event: TouchEvent) => {
       if (!touching) return;
       touching = false;
+      window.clearTimeout(longTimer);
+      if (pendingSelect) {
+        // Klepnutí na nevybranou kresbu: jen výběr (úchyty, lišta kresby). Dvojklep dál otevře nastavení.
+        const id = pendingSelect;
+        pendingSelect = null;
+        if (moved) return;
+        engine.select(id);
+        const now = Date.now();
+        if (lastDrawingTap && lastDrawingTap.id === id && now - lastDrawingTap.at < DOUBLE_TAP_MS * 1.3) {
+          lastDrawingTap = null;
+          doubleTapRef.current?.(id);
+        } else lastDrawingTap = { id, at: now };
+        return;
+      }
       if (!captured) return;
       block(event);
+      if (longPressed) { longPressed = false; captured = false; return; }
       if (dragging) {
         controller.onUp();
         // Myš by hover zrušila odjetím; prst neodjíždí, úchyty by zůstaly svítit.
@@ -346,6 +408,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     };
 
     const onTouchCancel = () => {
+      window.clearTimeout(longTimer); longPressed = false; pendingSelect = null;
       if (!touching) return;
       if (dragging) controller.onUp();
       touching = false; captured = false; dragging = false;
@@ -358,6 +421,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     element.addEventListener('touchcancel', onTouchCancel, options);
     return () => {
       offEngine();
+      window.clearTimeout(longTimer);
       element.removeEventListener('touchstart', onTouchStart, options);
       element.removeEventListener('touchmove', onTouchMove, options);
       element.removeEventListener('touchend', onTouchEnd, options);

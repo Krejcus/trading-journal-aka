@@ -14,6 +14,13 @@ describe('mobile LIVE position presentation', () => {
     expect(view.mark).toBe(20962); expect(view.stop.distance).toBe(27); expect(view.stop.pnl).toBe(-30);
     expect(view.target.distance).toBe(18); expect(view.target.pnl).toBe(60);
   });
+  it('P&L z doby před pozicí od workeru (REST pozadu) se neukáže ani nedopočítá cenu', () => {
+    const a = { ...account(2), unrealizedPnlBehindPosition: true };
+    const view = mobilePosition(a, a.positions[0], orders(1, 2), now);
+    expect(view.openPnl).toBeNull(); expect(view.mark).toBeNull(); expect(view.stop.distance).toBeNull();
+    expect(view.stop.pnl).toBe(-60);
+    expect(mobileGroupOpenPnl([a, account(1, 2)])).toBeNull();
+  });
   it('sums leader plus followers and actual quantities, not multiplier assumptions', () => {
     const accounts = [account(1, 1), account(2, 2)];
     const view = mobileGroupPosition(accounts, [...orders(1), ...orders(2, 2)], now)!;

@@ -16,6 +16,12 @@ export interface LiveCandleFeed {
    * Ne `close`: ten bývá mezistav přehrání a na přelomu minuty close minulé minuty.
    */
   lastPrice(root: string): number | null;
+  /**
+   * Táž svíčka z poslední přijaté zprávy BEZ přehrání ticků (2. 11. 2026): pro cenu panelu
+   * objednávky a hlídač BE. Animace grafu se při netikajícím `requestAnimationFrame`
+   * (karta na pozadí) zasekne a `current` by vracel starší cenu jako čerstvou.
+   */
+  final?(root: string): MarketCandle | null;
 }
 
 /**

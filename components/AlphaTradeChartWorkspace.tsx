@@ -49,10 +49,9 @@ import {
   X,
 } from 'lucide-react';
 import { Trade } from '../types';
-import { useHtfHistory, useResetViewOnHtfHistory } from '../hooks/useHtfHistory';
+import { useHtfHistory } from '../hooks/useHtfHistory';
 import { aggregateWithHtfHistory, withHtfHistory } from '../services/htfHistory';
 import {
-  aggregateCandles,
   isMarketTimeframe,
   timeframeMinutes,
   loadTradeMarketCandles,
@@ -69,6 +68,7 @@ import CandleKitTradeChart, {
   WorkspaceIndicatorMenu,
   type CandleKitDrawingEngine,
 } from './CandleKitTradeChart';
+import IndicatorTemplateFavorites from './IndicatorTemplateFavorites';
 import ChartTimeframePicker from './ChartTimeframePicker';
 import ChartLayoutPicker, {
   CurrentChartLayoutGlyph,
@@ -100,11 +100,16 @@ import PositionDrawingSettingsDialog, { PositionDrawingFloatingToolbar } from '.
 import { isPositionDrawing, type PositionDrawing } from '../services/chartPositionDrawing';
 import { countChartIndicators } from '../services/chartContextMenu';
 import { useResetViewOnOpen } from '../hooks/useResetViewOnOpen';
+import { captureChartViewport, type AnchoredChartViewport } from '../services/chartViewportContinuity';
 import BacktestOrderLinesOverlay from './BacktestOrderLinesOverlay';
 import BacktestTradeExecutionsOverlay from './BacktestTradeExecutionsOverlay';
 import BacktestTradeReviewDialog from './BacktestTradeReviewDialog';
 import type { BacktestClosedTrade, BacktestFill, BacktestOrderSide, BacktestOrderType } from '../services/backtestTypes';
-import type { BacktestChartOrderLine, BacktestChartOrderLineKind } from '../services/backtestOrderLines';
+import { orderLineLabelParts, type BacktestChartOrderLine, type BacktestChartOrderLineKind } from '../services/backtestOrderLines';
+import type { LiveFillMarker } from '../lib/liveFillMarkers';
+import type { LiveWorkingOrdersView } from '../lib/liveWorkingOrderLines';
+import { chartDrawingIdle } from '../lib/liveHotkeys';
+import { useLiveFillArrows } from './day/useLiveFillArrows';
 import type { BacktestManagedPositionBox } from '../services/backtestManagedPosition';
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import {
@@ -272,11 +277,21 @@ export interface BacktestChartSessionBridge {
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
     price?: number,
   ) => void;
+  /** Tlačítka ve štítku (BE u pozice), stejně jako v LIVE. */
+  onOrderLineAction?: (line: BacktestChartOrderLine, actionId: string) => void;
   renderTradingPanel?: (context: {
     replay: ChartReplayState;
     candle: MarketCandle | null;
     instrument: MarketRoot;
   }) => React.ReactNode;
+  /** Panel Objednávka přilepený k pravé hraně grafu (jako LIVE). */
+  renderTradingDock?: (context: {
+    replay: ChartReplayState;
+    candle: MarketCandle | null;
+    instrument: MarketRoot;
+  }) => React.ReactNode;
+  /** Vrstva nad grafy (karty obchodů vlevo dole, hlášky štítků). */
+  renderChartOverlay?: () => React.ReactNode;
 }
 
 /**
@@ -302,9 +317,181 @@ export interface LiveOrderEntryBridge {
   ) => void;
   /** Tlačítka ve štítku (BE u živé pozice). */
   onOrderLineAction?: (line: BacktestChartOrderLine, actionId: string) => void;
+  /** Klik na čáru spolkla právě změněná nabídka: obrazovka to řekne. */
+  onOrderLineSwallowed?: () => void;
   /** Id vlastníka čar živé pozice: kreslí se i bez přepínače „čáry příkazů“, jen na grafu exekučního instrumentu. */
   livePositionOwnerId?: string;
+  /**
+   * U1 (11/2026): Esc v grafu — volá se ve fázi capture JEN při nečinném kreslení ve všech
+   * panelech (žádný nástroj, rozkreslená kresba ani výběr; stav čtený dřív, než ho candlekit
+   * na Esc změní). První Esc tak patří kreslení, teprve další smí zahodit návrh panelu.
+   */
+  onEscape?: (event: KeyboardEvent) => void;
+  /**
+   * U3-PC pojistka: přehrávání v grafu začalo / skončilo. Během přehrávání graf kreslí
+   * živé čáry jen pro čtení (bez tahu, ×, BE), návrh ani „· přidat“ nekreslí a pravý klik
+   * ani ⚡ návrh nevytvoří; obrazovka podle toho vypne panel a zkratky.
+   */
+  onReplayActiveChange?: (active: boolean) => void;
+  /** U4: šipky plnění leadera (jen kontrakt grafu, jen zobrazení — nikdy do příkazů). */
+  liveFills?: { key: string; fills: readonly LiveFillMarker[]; open: boolean | undefined } | null;
+  /**
+   * U5: pracující příkazy mimo spravovaný obchod a rozjeté nohy SL/TP — JEN ZOBRAZENÍ.
+   * Kreslí je vlastní vrstva bez jakéhokoli ovládání (tečkovaně, s tooltipem); do overlaye
+   * čar s handlery (tah, ×, BE) se nikdy nedostanou.
+   */
+  liveDisplayOrders?: Pick<LiveWorkingOrdersView, 'key' | 'lines' | 'badges'> | null;
 }
+
+/**
+ * U3-PC pojistka: živé čáry během přehrávání jen pro čtení. Zůstanou jen čáry živé pozice
+ * (bez tahu, ×, BE, přidání SL/TP a popisku tahu); návrh, „· přidat“ a cokoli jiného zmizí.
+ * Bez vlastníka živé pozice = nic.
+ */
+export function liveOrderLinesDuringReplay(lines: readonly BacktestChartOrderLine[], livePositionOwnerId: string | undefined): BacktestChartOrderLine[] {
+  if (!livePositionOwnerId) return [];
+  return lines.filter(line => line.ownerId === livePositionOwnerId).map(line => ({
+    ...line,
+    draggable: false,
+    cancellable: false,
+    confirmCancel: undefined,
+    cancelAction: undefined,
+    actions: undefined,
+    addableBrackets: undefined,
+    labelAt: undefined,
+    bracketLabelAt: undefined,
+  }));
+}
+
+/** Kreslicí jádro panelu, jak ho čte pojistka Esc (podmnožina enginu candlekitu). */
+interface LiveEscapeDrawingEngine {
+  getActiveTool: () => unknown;
+  getDraft: () => unknown;
+  getSelectedId: () => unknown;
+}
+
+/** Kreslení nic nedělá v ŽÁDNÉM panelu (candlekit reaguje na Esc ve všech). Chyba čtení = činné. */
+export function liveDrawingIdle(engines: readonly LiveEscapeDrawingEngine[]): boolean {
+  return engines.every(engine => {
+    try {
+      return chartDrawingIdle({ activeTool: engine.getActiveTool(), draft: engine.getDraft(), selectedId: engine.getSelectedId() });
+    } catch {
+      return false;
+    }
+  });
+}
+
+const sameLineCoordinates = (left: Record<string, number>, right: Record<string, number>) => {
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every(key => left[key] === right[key]);
+};
+
+/**
+ * Pracující příkazy jako čáry (U5) — JEN ZOBRAZENÍ, žádný handler: nejde je táhnout,
+ * zrušit, ani z nich nic poslat (jádro správu cizích a rozjetých příkazů nemá).
+ * Tlumeně a tečkovaně, tooltip „Spravuj v Tradovate…“; štítky nepodporovaných typů
+ * a „+N dalších“ vpravo nahoře. Pod overlayem čar pozice (ten má přednost při překryvu).
+ * Sklo s vlastní výplní (Chrome nekreslí backdrop blur).
+ */
+const LiveDisplayOrderLinesLayer: React.FC<{
+  api: ChartViewApi;
+  orders: Pick<LiveWorkingOrdersView, 'key' | 'lines' | 'badges'>;
+  isDark: boolean;
+  showPriceLabels: boolean;
+}> = ({ api, orders, isDark, showPriceLabels }) => {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const linesRef = useRef(orders.lines);
+  linesRef.current = orders.lines;
+  const refreshRef = useRef<(() => void) | null>(null);
+  const [coordinates, setCoordinates] = useState<Record<string, number>>({});
+  const [priceScaleWidth, setPriceScaleWidth] = useState(64);
+  useEffect(() => {
+    let frame = 0;
+    const chart = api.controller.getChart();
+    const series = api.controller.getSeries();
+    const update = () => {
+      frame = 0;
+      const next: Record<string, number> = {};
+      try {
+        linesRef.current.forEach(line => {
+          const coordinate = series.priceToCoordinate(line.price);
+          if (coordinate !== null && Number.isFinite(coordinate)) next[line.id] = Math.round(coordinate * 2) / 2;
+        });
+        const width = Math.max(54, chart.priceScale('right').width());
+        setPriceScaleWidth(current => (current === width ? current : width));
+      } catch { /* graf se právě ruší */ }
+      setCoordinates(current => (sameLineCoordinates(current, next) ? current : next));
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+    refreshRef.current = schedule;
+    chart.timeScale().subscribeVisibleLogicalRangeChange(schedule);
+    const observer = new ResizeObserver(schedule);
+    if (rootRef.current?.parentElement) observer.observe(rootRef.current.parentElement);
+    window.addEventListener('pointermove', schedule, true);
+    window.addEventListener('wheel', schedule, true);
+    // Cenová osa se posouvá i sama (živá svíčka, autoscale) — dorovnání jednou za sekundu.
+    const timer = window.setInterval(schedule, 1_000);
+    update();
+    return () => {
+      refreshRef.current = null;
+      if (frame) window.cancelAnimationFrame(frame);
+      window.clearInterval(timer);
+      observer.disconnect();
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(schedule);
+      window.removeEventListener('pointermove', schedule, true);
+      window.removeEventListener('wheel', schedule, true);
+    };
+  }, [api]);
+  useEffect(() => { refreshRef.current?.(); }, [orders.key]);
+
+  const muted = isDark ? '#8391a7' : '#64748b';
+  const glass = isDark ? 'rgba(13, 18, 26, 0.86)' : 'rgba(255, 255, 255, 0.9)';
+  return (
+    <div ref={rootRef} className="pointer-events-none absolute inset-0 z-[114] overflow-hidden" data-live-display-order-lines>
+      {orders.lines.map(line => {
+        const top = coordinates[line.id];
+        if (!Number.isFinite(top)) return null;
+        const parts = orderLineLabelParts(line.label);
+        return (
+          <div key={line.id} className="absolute left-0 h-0" style={{ right: priceScaleWidth, top }} data-live-display-line={line.id}>
+            <div className="absolute inset-x-0 top-0 border-t border-dotted opacity-70" style={{ borderColor: line.color }} />
+            <div
+              title={line.title}
+              className="pointer-events-auto absolute right-1 top-0 flex h-[17px] -translate-y-1/2 cursor-help items-center gap-[6px] whitespace-nowrap rounded-[4px] border border-dotted px-[6px] text-[10px] font-medium opacity-90"
+              style={{ borderColor: `${line.color}99`, backgroundColor: glass, color: muted }}
+            >
+              <span className="font-semibold tracking-[0.02em]" style={{ color: line.color }}>{parts.key}</span>
+              {parts.price && <span className="font-mono">{parts.price}</span>}
+              {parts.pnl && <span className="font-mono" style={{ color: line.color }}>{parts.pnl}</span>}
+              {parts.points && <span className="font-mono">{parts.points}</span>}
+              {parts.note && <span>{parts.note}</span>}
+            </div>
+            {showPriceLabels && (
+              <div
+                className="absolute top-0 flex h-[18px] -translate-y-1/2 items-center justify-center px-1 text-[9px] font-bold text-white opacity-75"
+                style={{ left: '100%', width: priceScaleWidth, backgroundColor: line.color }}
+              >{line.price.toFixed(2)}</div>
+            )}
+          </div>
+        );
+      })}
+      {orders.badges.length > 0 && (
+        <div className="absolute top-9 flex flex-col items-end gap-1" style={{ right: priceScaleWidth + 6 }}>
+          {orders.badges.map(badge => (
+            <div
+              key={badge.id}
+              title={badge.title}
+              className="pointer-events-auto flex h-[18px] cursor-help items-center whitespace-nowrap rounded-[4px] border border-dotted px-[6px] text-[10px] font-semibold"
+              style={{ borderColor: `${badge.color}99`, backgroundColor: glass, color: badge.color }}
+            >{badge.text}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface AlphaTradeChartWorkspaceProps {
   trade: Trade;
@@ -316,8 +503,9 @@ interface AlphaTradeChartWorkspaceProps {
   onClose: () => void;
   backtestSession?: BacktestChartSessionBridge;
   /**
-   * Fullscreen obchodu (mimo backtest): indikátory sdílené s detailem —
-   * panely s nimi startují a každé zapnutí/vypnutí se propíše zpět.
+   * Fullscreen obchodu: indikátory sdílené s detailem — panely s nimi startují
+   * a každé zapnutí/vypnutí se propíše zpět. Backtest je dostane jen jako start
+   * nových panelů (uložená session má svůj stav a nic se nepropisuje).
    */
   tradeIndicators?: TradeChartIndicators;
   onTradeIndicatorsChange?: (next: TradeChartIndicators) => void;
@@ -350,6 +538,8 @@ interface AlphaTradeChartWorkspaceProps {
   defaultLayoutId?: ChartWorkspaceLayoutId;
   /** LIVE → Graf: panel objednávky (jen návrh, nic se neodesílá). V backtestu se ignoruje. */
   liveOrderEntry?: LiveOrderEntryBridge;
+  /** Doplňkové ovládání na konci horní lišty (LIVE: motiv obrazovky). */
+  toolbarEnd?: React.ReactNode;
 }
 
 export interface WorkspaceReviewSlots {
@@ -638,6 +828,7 @@ class ResilientWorkspacePanel extends React.Component<WorkspacePanelProps, Resil
 }
 
 const EMPTY_SESSION_HISTORY: MarketCandle[] = [];
+const NO_LIVE_FILLS: readonly LiveFillMarker[] = [];
 
 const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, updateConfig }) => {
   const context = useContext(WorkspaceDataContext);
@@ -672,17 +863,23 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   const orderLineSource = config.root === backtestSession?.executionInstrument ? backtestSession : liveOrderEntry;
   // Čáry živé pozice kopírky kreslí overlay vždy (dřív cenové čáry bez přepínače);
   // návrh a backtest dál podle přepínače „čáry příkazů“. `liveOrderEntry` je jen v panelu trhu exekuce.
+  // U3-PC pojistka: LIVE graf přehrávání nenabízí, ale kdyby běželo (nebo se vybíral start),
+  // ovládací čáry ani návrh nad historií nikdy — jen živá pozice pro čtení.
+  const liveReplayLocked = Boolean(liveOrderEntry) && context.replay.phase !== 'off';
   const panelOrderLines = useMemo(() => {
     const all = orderLineSource?.orderLines ?? [];
-    if (context.tradingSettings.orderLines) return all;
     const liveOwner = orderLineSource === liveOrderEntry ? liveOrderEntry?.livePositionOwnerId : undefined;
+    if (orderLineSource === liveOrderEntry && liveReplayLocked) return liveOrderLinesDuringReplay(all, liveOwner);
+    if (context.tradingSettings.orderLines) return all;
     return liveOwner ? all.filter(line => line.ownerId === liveOwner) : [];
-  }, [context.tradingSettings.orderLines, liveOrderEntry, orderLineSource]);
-  const liveOnChartOrder = liveOrderEntry?.onChartOrder;
+  }, [context.tradingSettings.orderLines, liveOrderEntry, liveReplayLocked, orderLineSource]);
+  const liveOnChartOrder = liveReplayLocked ? undefined : liveOrderEntry?.onChartOrder;
   const liveChartOrder = useMemo(
     () => (liveOnChartOrder ? (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number }) => liveOnChartOrder(input) : undefined),
     [liveOnChartOrder],
   );
+  // U5: pracující příkazy jen pro zobrazení — vlastní vrstva mimo overlay s handlery.
+  const liveDisplayOrders = liveOrderEntry?.liveDisplayOrders ?? null;
   const sessionCandles = backtestSession?.candlesByRoot[config.root]
     ?? (config.root === context.initialRoot ? context.initialCandles : undefined);
   const historySchema = marketDataSchemaForTimeframe(config.timeframe);
@@ -698,19 +895,23 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState(0);
   const [chartApi, setChartApi] = useState<ChartViewApi | null>(null);
+  const latestChartApiRef = useRef<ChartViewApi | null>(null);
+  const timeframeViewport = useRef<AnchoredChartViewport | null>(null);
   const [activeLibraryIndicators, setActiveLibraryIndicators] = useState<string[]>([]);
   const indicatorController = useMemo(
     () => new IndicatorController(createBuiltinRegistry(), { onChange: setActiveLibraryIndicators }),
     [],
   );
   const focusTrade = useCallback(() => setFocusRequest(value => value + 1), []);
-  const handleChartApiReady = useCallback((api: ChartViewApi | null) => setChartApi(api), []);
+  const handleChartApiReady = useCallback((api: ChartViewApi | null) => { latestChartApiRef.current = api; setChartApi(api); }, []);
   const updatePanelConfig = useCallback((next: Partial<WorkspacePanelConfig>, options?: { fromProfile?: boolean }) => {
-    // Nový timeframe / trh graf přestaví — místo probliknutí se starý prolne do nového.
+    // Změna trhu graf opravdu přestaví. LIVE změna timeframe drží stejný
+    // controller a nepotřebuje snímek přes už hotový nový obraz.
     if ((next.timeframe !== undefined && next.timeframe !== config.timeframe) || (next.root !== undefined && next.root !== config.root)) {
-      crossfadeChart(chartAreaRef.current, chartApi, { holdMs: 140 });
+      if (next.timeframe !== undefined && (next.root === undefined || next.root === config.root)) timeframeViewport.current = captureChartViewport(latestChartApiRef.current) ?? timeframeViewport.current;
+      if (next.root !== undefined || !context.liveOrderEntry) crossfadeChart(chartAreaRef.current, chartApi, { holdMs: 140 });
     }
-    if (next.root !== undefined || next.timeframe !== undefined) setChartApi(null);
+    if (next.root !== undefined) setChartApi(null);
     updateConfig(next);
     if (!options?.fromProfile && context.onTradeIndicatorsChange && (next.showFvg !== undefined || next.showLevels !== undefined || next.showStructure !== undefined)) {
       context.onTradeIndicatorsChange({
@@ -719,7 +920,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
         structure: next.showStructure ?? config.showStructure,
       });
     }
-  }, [chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.onTradeIndicatorsChange, updateConfig]);
+  }, [chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.liveOrderEntry, context.onTradeIndicatorsChange, updateConfig]);
   const getIndicatorState = useCallback((): WorkspaceIndicatorState => ({
     custom: {
       fvg: config.showFvg,
@@ -794,24 +995,30 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     if (sessionHistoryCandles.length > 0) setHistoryError(null);
   }, [sessionHistoryCandles.length]);
 
+  const htf = useHtfHistory(config.root, backtestSession ? [] : [config.timeframe], rawCandles[0]?.time, context.trade.symbol);
+  const loadOlderRead = htf.loadOlder;
+  const htfHistory = historySchema === 'ohlcv-1h' ? htf.candles : EMPTY_SESSION_HISTORY;
+  const extendedMinutes = useMemo(() => {
+    const prefix = historySchema === 'ohlcv-1m' ? htf.candles : htf.minuteBridge;
+    if (backtestSession || !prefix.length || !rawCandles.length) return rawCandles;
+    return [...prefix.filter(c => c.time < rawCandles[0].time), ...rawCandles];
+  }, [backtestSession, historySchema, htf.candles, htf.minuteBridge, rawCandles]);
   const replayRevealedCount = useMemo(() => {
     if (!backtestSession) return context.replay.phase === 'active'
-      ? replayCandleCountAt(rawCandles, context.replay.cursorTime)
-      : rawCandles.length;
+      ? replayCandleCountAt(extendedMinutes, context.replay.cursorTime)
+      : extendedMinutes.length;
     const sessionStartSeconds = Math.floor(backtestSession.startMs / 1_000);
     return replayCandleCountAt(rawCandles, context.replay.cursorTime ?? sessionStartSeconds);
-  }, [backtestSession?.startMs, context.replay.cursorTime, context.replay.phase, rawCandles]);
+  }, [backtestSession, context.replay.cursorTime, context.replay.phase, rawCandles, extendedMinutes]);
   const replayRawCandles = useMemo(
-    () => sharedRevealedCandles(rawCandles, replayRevealedCount),
-    [rawCandles, replayRevealedCount],
+    () => sharedRevealedCandles(backtestSession ? rawCandles : extendedMinutes, replayRevealedCount),
+    [backtestSession, extendedMinutes, rawCandles, replayRevealedCount],
   );
   const replayAnalysisAccumulatorRef = useRef<ReplayAnalysisAccumulator | null>(null);
   // Deník: na timeframu z hodin (1h+, D, W, M) hodinová historie Databento před 1m daty grafu.
-  const htf = useHtfHistory(config.root, backtestSession ? [] : [config.timeframe], rawCandles[0]?.time);
-  const htfHistory = htf.candles;
   const liveRawCandles = useMemo(
-    () => (backtestSession ? rawCandles : withHtfHistory(rawCandles, htfHistory, config.timeframe)),
-    [backtestSession, config.timeframe, htfHistory, rawCandles],
+    () => (backtestSession ? rawCandles : withHtfHistory(extendedMinutes, htfHistory, config.timeframe)),
+    [backtestSession, config.timeframe, htfHistory, rawCandles, extendedMinutes],
   );
   const candles = useMemo(() => {
     if (!backtestSession) {
@@ -827,15 +1034,17 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     });
     replayAnalysisAccumulatorRef.current = next;
     return next.candles;
-  }, [backtestSession?.startMs, config.timeframe, htfHistory, rawCandles, replayRawCandles, replayRevealedCount, sessionHistoryCandles]);
-  useResetViewOnHtfHistory(backtestSession ? null : chartApi, htf, config.timeframe, context.replay.phase !== 'active');
+  }, [backtestSession, config.timeframe, htfHistory, rawCandles, replayRawCandles, replayRevealedCount, sessionHistoryCandles]);
+  const handleIntervalViewportRestored = useCallback(() => { timeframeViewport.current = null; }, []);
   const requestOlderHistory = useCallback((oldestTime: number) => {
-    if (!requestSessionHistory) return;
     setHistoryError(null);
-    void requestSessionHistory(config.root, historySchema, oldestTime * 1_000).catch(reason => {
+    const read = backtestSession
+      ? requestSessionHistory?.(config.root, historySchema, oldestTime * 1_000)
+      : loadOlderRead(oldestTime);
+    return read?.catch(reason => {
       setHistoryError(reason instanceof Error ? reason.message : 'Starší historii se nepodařilo načíst.');
     });
-  }, [config.root, historySchema, requestSessionHistory]);
+  }, [backtestSession, config.root, historySchema, requestSessionHistory, loadOlderRead]);
   const candlesRef = useRef(candles);
   candlesRef.current = candles;
   const getCandles = useCallback(() => candlesRef.current, []);
@@ -859,6 +1068,19 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       applyIndicatorState,
     });
   }, [activeLibraryIndicators, applyIndicatorState, chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.registerPanel, focusTrade, getCandles, getIndicatorState, indicatorController, instance.id, liveRawCandles, rawCandles, updatePanelConfig]);
+
+  // U4: šipky plnění leadera v PC LIVE grafu (stejná primitiva jako telefon a deník) —
+  // jen panel trhu exekuce, jen kontrakt grafu (filtruje obrazovka), ne v přehrávání.
+  const liveFills = liveOrderEntry?.liveFills ?? null;
+  useLiveFillArrows({
+    api: chartApi,
+    fills: liveFills?.fills ?? NO_LIVE_FILLS,
+    open: liveFills?.open === true,
+    candles,
+    intervalSeconds: timeframeMinutes(config.timeframe) * 60,
+    enabled: Boolean(liveFills && liveFills.open !== undefined && liveFills.fills.length > 0) && context.replay.phase === 'off',
+    isDark: context.isDark,
+  });
 
   const isActive = context.activePanelId === instance.id;
   // Fullscreen obchodu i review týdne: v replayi se obchody kreslí jen do
@@ -927,7 +1149,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       ref={paneRef}
       className={`group/pane absolute inset-0 flex flex-col alphatrade-workspace-panel ${isActive ? 'is-active' : ''} ${context.isDark ? 'is-dark bg-[#090d12]' : 'bg-white'}`}
       data-left-edge={atLeftEdge || undefined}
-      onPointerDownCapture={() => context.activatePanel(instance.id)}
+      onPointerDownCapture={() => { timeframeViewport.current = null; context.activatePanel(instance.id); }}
+      onWheelCapture={() => { timeframeViewport.current = null; }}
       data-panel-id={instance.id}
       data-active-panel={isActive || undefined}
       data-panel-root={config.root}
@@ -988,15 +1211,19 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               : undefined}
             showManagedPositionBoxes={context.tradingSettings.positionBoxes}
             chartOrderQuantity={context.backtestSession?.chartOrderQuantity ?? context.liveOrderEntry?.chartOrderQuantity}
-            onPositionQuickOrder={context.tradingSettings.quickOrderButton ? context.onPositionQuickOrder : undefined}
+            // LIVE: propsání boxu jen pravým klikem, vždy (⚡ v liště boxu tam není).
+            onPositionQuickOrder={context.tradingSettings.quickOrderButton || context.liveOrderEntry ? context.onPositionQuickOrder : undefined}
             positionQuickOrderLabel={context.liveOrderEntry ? 'Propsat box do objednávky' : undefined}
             liveSeries={Boolean(context.liveOrderEntry)}
-            chartOrderLabelSuffix={context.liveOrderEntry ? ' · návrh' : undefined}
+            // Pravý klik do grafu jen vyplní panel Objednávka (LIVE i backtest).
+            chartOrderLabelSuffix={context.liveOrderEntry || context.backtestSession ? ' · návrh' : undefined}
             onChartOrder={config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.onChartOrder
               : liveChartOrder}
-            onNeedOlderHistory={backtestSession ? requestOlderHistory : undefined}
-            olderHistoryLoading={sessionHistoryLoading}
+            onNeedOlderHistory={requestOlderHistory}
+            olderHistoryLoading={backtestSession ? sessionHistoryLoading : htf.loading}
+            initialViewport={timeframeViewport.current ?? undefined}
+            onInitialViewportRestored={handleIntervalViewportRestored}
             onReplaySelectionTimeChange={context.setReplaySelectionTime}
             onReplayStart={context.selectReplayStart}
             onChartApiReady={handleChartApiReady}
@@ -1040,7 +1267,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onChange={() => {}}
             />
           )}
-          {chartApi && panelOrderLines.length > 0 && orderLineSource?.onOrderLineChange && orderLineSource.onOrderLineCancel ? (
+          {/* Připojený i bez čar: pojistka změny nabídky musí přežít stav bez čáry (čekající → nic → pozice). */}
+          {chartApi && orderLineSource?.onOrderLineChange && orderLineSource.onOrderLineCancel ? (
             <BacktestOrderLinesOverlay
               api={chartApi}
               lines={panelOrderLines}
@@ -1050,7 +1278,16 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onChange={orderLineSource.onOrderLineChange}
               onCancel={orderLineSource.onOrderLineCancel}
               onAddBracket={orderLineSource.onOrderLineAddBracket}
-              onAction={orderLineSource === liveOrderEntry ? liveOrderEntry?.onOrderLineAction : undefined}
+              onAction={orderLineSource?.onOrderLineAction}
+              onClickSwallowed={liveOrderEntry && orderLineSource === liveOrderEntry ? liveOrderEntry.onOrderLineSwallowed : undefined}
+            />
+          ) : null}
+          {chartApi && liveDisplayOrders && (liveDisplayOrders.lines.length > 0 || liveDisplayOrders.badges.length > 0) ? (
+            <LiveDisplayOrderLinesLayer
+              api={chartApi}
+              orders={liveDisplayOrders}
+              isDark={context.isDark}
+              showPriceLabels={showOrderPriceLabels}
             />
           ) : null}
           {(context.tradingSettings.tradeLines || context.tradingSettings.executionMarkers) && chartApi && config.root === context.backtestSession?.executionInstrument && (context.backtestSession.fills?.length || context.backtestSession.closedTrades?.length) ? (
@@ -1067,14 +1304,24 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
           ) : null}
           </>
         )}
-        {sessionHistoryLoading ? (
+        {(backtestSession ? sessionHistoryLoading : htf.loading) ? (
           <div style={{ left: 'calc(var(--chart-left-inset, 8px) + 4px)' }} className="pointer-events-none absolute top-3 z-[650] flex items-center gap-1.5 rounded-md border border-slate-700/60 bg-slate-950/80 px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-slate-300">
             <Loader2 size={11} className="animate-spin" /> Načítám starší historii
           </div>
         ) : null}
-        {historyError ? (
+        {(historyError || (!backtestSession && htf.error)) ? (
           <div style={{ left: 'calc(var(--chart-left-inset, 8px) + 4px)' }} className="pointer-events-none absolute bottom-3 z-[650] max-w-[360px] rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-[9px] font-semibold text-amber-100">
-            Starší historie není dostupná: {historyError}
+            Starší historie není dostupná: {historyError ?? htf.error}. Dosavadní svíčky zůstávají zobrazené; dalším posunem načtení zopakuješ.
+          </div>
+        ) : null}
+        {!backtestSession && historySchema === 'ohlcv-1h' && htfHistory.length > 0 && liveRawCandles.length === extendedMinutes.length ? (
+          <div role="status" className="absolute bottom-3 left-3 z-[650] max-w-[420px] rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-[10px] text-amber-100">
+            Starší řadu nelze bezpečně cenově napojit. Může jít o jiný kontrakt nebo skutečnou mezeru; načtenou historii jsme nespojili odhadem.
+          </div>
+        ) : null}
+        {timeframeViewport.current && candles.length > 0 && timeframeViewport.current.centerMs < candles[0].time * 1000 ? (
+          <div role="status" className="absolute bottom-3 left-3 z-[650] max-w-[420px] rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-[10px] text-amber-100">
+            Zvolený čas v tomto intervalu zatím není načtený. Starší data doplníš posunem doleva.
           </div>
         ) : null}
         {loading && (
@@ -1112,14 +1359,16 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   resetViewOnOpen = false,
   livePriceLines = null,
   liveOrderEntry,
+  toolbarEnd,
 }) => {
   const layoutStorageKey = layoutScope ? `${WORKSPACE_LAYOUT_STORAGE_KEY}:${layoutScope}` : WORKSPACE_LAYOUT_STORAGE_KEY;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceShellRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
   const replayToolbarRef = useRef<HTMLDivElement>(null);
-  // Jen fullscreen obchodu; backtest má vlastní uložený stav panelů.
-  const indicatorDefaults = backtestSession ? undefined : tradeIndicators;
+  // Výchozí indikátory nových panelů. Backtest: jen start nové session nebo
+  // nového panelu — uložené panely session mají vlastní stav (importLayout).
+  const indicatorDefaults = tradeIndicators;
   const savedLayoutId = backtestSession?.workspaceState?.layoutId as ChartWorkspaceLayoutId | undefined;
   const initialLayoutIdRef = useRef<ChartWorkspaceLayoutId>(
     savedLayoutId && getChartWorkspaceLayout(savedLayoutId).id === savedLayoutId ? savedLayoutId : loadLayoutId(layoutStorageKey, defaultLayoutId),
@@ -2155,6 +2404,34 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     dev.__atOpenTradeReview = openBacktestTradeReview;
     dev.__atBacktestTrades = backtestSession?.closedTrades?.map(closed => ({ id: closed.id, entry: closed.entryTime, exit: closed.exitTime }));
   }
+  // U1: Esc v LIVE grafu — návrh panelu smí zahodit až při nečinném kreslení ve všech
+  // panelech. Capture fáze = stav se čte dřív, než ho candlekit na Esc změní.
+  const liveEscape = backtestSession ? undefined : liveOrderEntry?.onEscape;
+  const liveEscapeRef = useRef(liveEscape);
+  liveEscapeRef.current = liveEscape;
+  const drawingEnginesRef = useRef(drawingEngines);
+  drawingEnginesRef.current = drawingEngines;
+  const liveEscapeOn = Boolean(liveEscape);
+  useEffect(() => {
+    if (!liveEscapeOn) return undefined;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' && event.key !== 'Esc') return;
+      const onEscape = liveEscapeRef.current;
+      if (!onEscape || !liveDrawingIdle(drawingEnginesRef.current)) return;
+      onEscape(event);
+    };
+    window.addEventListener('keydown', handleEscape, true);
+    return () => window.removeEventListener('keydown', handleEscape, true);
+  }, [liveEscapeOn]);
+  // U3-PC pojistka: obrazovka LIVE ví, kdy graf přehrává (vypne panel a zkratky).
+  const liveReplayChange = backtestSession ? undefined : liveOrderEntry?.onReplayActiveChange;
+  const liveReplayChangeRef = useRef(liveReplayChange);
+  liveReplayChangeRef.current = liveReplayChange;
+  const liveReplayActive = liveTradingChart && replay.phase !== 'off';
+  useEffect(() => {
+    liveReplayChangeRef.current?.(liveReplayActive);
+  }, [liveReplayActive]);
+  useEffect(() => () => liveReplayChangeRef.current?.(false), []);
   const [workspaceHistoryState, setWorkspaceHistoryState] = useState<ChartWorkspaceHistoryState>({ canUndo: false, canRedo: false });
   const [selectedFib, setSelectedFib] = useState<{ engine: CandleKitDrawingEngine; drawing: FibDrawing } | null>(null);
   const [selectedPosition, setSelectedPosition] = useState<{ engine: CandleKitDrawingEngine; drawing: PositionDrawing } | null>(null);
@@ -2918,12 +3195,16 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     return found;
   }, [replaySource, replay.cursorTime]);
   const tradingPanel = backtestSession?.renderTradingPanel?.({ replay, candle: replayCandle, instrument: backtestSession.executionInstrument });
+  const tradingDock = backtestSession?.renderTradingDock?.({ replay, candle: replayCandle, instrument: backtestSession.executionInstrument });
   const selectedPositionInstrument = activeControl?.config.root ?? initialRoot;
   const liveQuickOrder = backtestSession ? undefined : liveOrderEntry;
   const quickOrderDisabledReason = liveQuickOrder
-    ? selectedPositionInstrument !== liveQuickOrder.executionInstrument
-      ? `Objednávku lze zadat jen z ${liveQuickOrder.executionInstrument} grafu`
-      : null
+    ? replay.phase !== 'off'
+      // U3-PC pojistka: návrh z boxu nad přehrávanou historií nikdy.
+      ? 'Přehrávání v grafu — obchoduj v živém grafu.'
+      : selectedPositionInstrument !== liveQuickOrder.executionInstrument
+        ? `Objednávku lze zadat jen z ${liveQuickOrder.executionInstrument} grafu`
+        : null
     : !replayCandle
       ? 'Quick Order není dostupný bez aktuální replay ceny'
       : backtestSession && selectedPositionInstrument !== backtestSession.executionInstrument
@@ -3020,6 +3301,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           timeframe={activeControl.config.timeframe}
           isDark={isDark}
           inline
+          templates={{
+            getState: activeControl.getIndicatorState,
+            applyState: activeControl.applyIndicatorState,
+          }}
           custom={{
             showFvg: activeControl.config.showFvg,
             showLevels: activeControl.config.showLevels,
@@ -3028,6 +3313,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             onToggleLevels: () => activeControl.updateConfig({ showLevels: !activeControl.config.showLevels }),
             onToggleStructure: () => activeControl.updateConfig({ showStructure: !activeControl.config.showStructure }),
           }}
+        />}
+        {activeControl && <IndicatorTemplateFavorites
+          isDark={isDark}
+          onApply={activeControl.applyIndicatorState}
         />}
         {!liveTradingChart && <button
           type="button"
@@ -3126,6 +3415,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           title={workspaceHistoryState.redoLabel ? `Dopředu: ${workspaceHistoryState.redoLabel} (Shift+⌘/Ctrl+Z)` : 'Dopředu (Shift+⌘/Ctrl+Z)'}
           aria-label="Opakovat poslední změnu workspace"
         ><Redo2 size={15} /></button>
+        {toolbarEnd}
         <span className="hidden 2xl:block text-[8px] font-bold uppercase tracking-wider text-slate-600">{status}</span>
           </div>
           {toolbarOffset < toolbarMaxOffset && (
@@ -3161,6 +3451,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               ? isDark ? 'border-emerald-500/30 bg-[#10251d] text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700'
               : isDark ? 'border-rose-500/30 bg-[#2a1519] text-rose-300' : 'border-rose-200 bg-rose-50 text-rose-700'}`}
           >{quickOrderFeedback.message}</div>}
+          {backtestSession?.renderChartOverlay?.()}
           {selectedFib && <FibDrawingFloatingToolbar
             engine={selectedFib.engine}
             drawing={selectedFib.drawing}
@@ -3173,7 +3464,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             onClose={() => setPositionSettingsOpen(false)}
             onOpenSettings={() => setPositionSettingsOpen(true)}
             isDark={isDark}
-            onQuickOrder={chartTradingSettings.quickOrderButton && (backtestSession?.onQuickOrder || liveQuickOrder) ? submitSelectedPositionQuickOrder : undefined}
+            onQuickOrder={chartTradingSettings.quickOrderButton && backtestSession?.onQuickOrder ? submitSelectedPositionQuickOrder : undefined}
             quickOrderDisabled={Boolean(quickOrderDisabledReason)}
             quickOrderTitle={quickOrderDisabledReason ?? (liveQuickOrder
               ? 'Propsat box do objednávky — vstup, SL, TP a kontrakty z rizika (nic se neodesílá)'
@@ -3373,6 +3664,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           />}
         </div>
       </WorkspaceDataContext.Provider>
+      {tradingDock}
       {review && <div ref={reviewSideRef} className="shrink-0 flex min-h-0" />}
       </div>
       {review && <div ref={reviewBottomRef} className="shrink-0" />}

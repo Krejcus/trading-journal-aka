@@ -87,6 +87,11 @@
             "regions": [
                 "arn1"
             ]
+        },
+        "api/price-alerts/watch.ts": {
+            "regions": [
+                "arn1"
+            ]
         }
     }
 }

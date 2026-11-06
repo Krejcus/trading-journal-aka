@@ -1,8 +1,9 @@
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
+import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import { createPortal } from 'react-dom';
 import { ErrorBoundary } from './ErrorBoundary';
 import { QuantumSpinner } from './QuantumLoader';
-import type { LiveTradingCopierState, LiveTradingTab } from './LiveTradingScreen';
+import type { LiveTradingCopierState, LiveTradingCopyEvent, LiveTradingTab } from './LiveTradingScreen';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 import type { LiveTradeGroup, LiveTradeTarget } from '../lib/liveTradeTarget';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
@@ -10,6 +11,17 @@ import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
 import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
+import type { LiveAttachInput, LiveBareEntryRecord } from '../lib/liveBareEntry';
+import type { LivePhonePosition } from '../lib/livePhoneOrders';
+import type { LiveBareCloseOffer } from '../lib/liveBareCloseUi';
+import type { BareLeaderTrade } from '../lib/manualBareClose';
+import type { LiveChartFills, LiveChartWorkingOrders } from '../hooks/useLiveChartData';
+import type { LiveCommandTraceStage, LiveCommandWorkerTiming } from '../lib/liveCommandPerformance';
+import {
+  getLiveScreenThemePreference,
+  resolveLiveScreenDark,
+  subscribeLiveScreenThemePreference,
+} from '../services/liveScreenTheme';
 
 /**
  * Obálka LIVE → Graf pro desk. Graf s workspace je těžký, a tak se načítá
@@ -21,7 +33,36 @@ import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/le
  * INV-UI-02). Pád si zapamatuje session, aby po reloadu LIVE neotevřelo
  * znovu graf a nespadlo do kola.
  */
-const LiveTradingScreen = React.lazy(() => import('./LiveTradingScreen'));
+type LiveTradingScreenModule = typeof import('./LiveTradingScreen');
+let liveTradingScreenPromise: Promise<LiveTradingScreenModule> | null = null;
+
+const loadLiveTradingScreen = (): Promise<LiveTradingScreenModule> => {
+  if (!liveTradingScreenPromise) {
+    liveTradingScreenPromise = import('./LiveTradingScreen').catch(reason => {
+      // Přechodná síťová chyba při spekulativním preloadu nesmí otrávit
+      // pozdější výslovné otevření grafu — další pokus dostane nový import.
+      liveTradingScreenPromise = null;
+      throw reason;
+    });
+  }
+  return liveTradingScreenPromise;
+};
+
+/** Samostatný import dovolí začít číst snapshot souběžně se stahováním grafu. */
+const preloadLiveTradingCandles = (): Promise<void> => import('../services/liveCandles')
+  .then(module => module.preloadLiveCandles('MNQ'));
+
+/**
+ * Zahřeje JS grafu a jednorázový snapshot svíček bez mountu nebo živých
+ * odběrů. Datové čtení je po přihlášeném uživateli a graf ho po mountu
+ * spotřebuje; při chybě pozdější otevření zkusí standardní cestu znovu.
+ */
+export const preloadLiveTradingScreen = (): Promise<void> => Promise.all([
+  loadLiveTradingScreen(),
+  preloadLiveTradingCandles(),
+]).then(() => undefined);
+
+const LiveTradingScreen = React.lazy(loadLiveTradingScreen);
 
 export const LIVE_CHART_CRASH_KEY = 'at:live-chart-crashed';
 
@@ -29,7 +70,8 @@ export const liveChartCrashedThisSession = (): boolean => {
   try { return typeof window !== 'undefined' && window.sessionStorage.getItem(LIVE_CHART_CRASH_KEY) === '1'; } catch { return false; }
 };
 
-const rememberLiveChartCrash = () => {
+/** Pád LIVE grafu (PC i telefon): do konce relace se LIVE otevírá na přehledu, ne na grafu. */
+export const rememberLiveChartCrash = () => {
   try { window.sessionStorage.setItem(LIVE_CHART_CRASH_KEY, '1'); } catch { /* bez úložiště jen bez paměti */ }
 };
 
@@ -46,6 +88,16 @@ interface Props {
   onNavigate: (tab: TradovateLiveTab) => void;
   navigationBlocked?: boolean;
   copier: LiveTradingCopierState;
+  /** Události kopírky pro karty obchodů (poll ∪ expozice přímo z workeru, F2a) — jen zobrazení. */
+  copyEvents?: readonly LiveTradingCopyEvent[];
+  /** Měření poslední rychlé expozice; nepoužívá se pro stav ani příkazy. */
+  liveExposurePaint?: {
+    id: string;
+    receivedPerformanceAt: number;
+    operationId?: string;
+    stage?: LiveCommandTraceStage;
+    workerTiming?: LiveCommandWorkerTiming;
+  } | null;
   /** Skupina a účty ze stavu workeru; null = žádná skupina (bez čipu a výběru účtu). */
   group?: LiveTradeGroup | null;
   /** Obsahový klíč skupiny (porovnání bez překreslování po každém tiku desku). */
@@ -61,6 +113,45 @@ interface Props {
   onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
   manageEntryAvgPrice?: number | null;
   manageCloseSupported?: boolean;
+  managePendingLegsSupported?: boolean;
+  /** Worker umí nativní Market ručního vstupu. */
+  entryMarketSupported?: boolean;
+  /** Strop kontraktů ručního vstupu skupiny workeru. */
+  entryMaxContracts?: number;
+  /** Front kontrakt podle brokera (jen Limit/Stop bez IBKR). */
+  entryFrontContract?: string | null;
+  /** Přikoupení do otevřené pozice (SL/TP pozice a stav pro panel). */
+  entryScaleIn?: LiveTicketScaleIn | null;
+  // ── U4/U5/U8/U10 (3. 11. 2026): jen podklady panelu a grafu, výchozí = dnešní chování ──
+  /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); chybí = false. */
+  entryBareSupported?: boolean;
+  /** Vlastní přijatý holý Market bez nohou (jen v pohledu leadera skupiny workeru); chybí = null. */
+  entryBareEntry?: LiveBareEntryRecord | null;
+  /** Pozice leadera skupiny workeru na symbolu grafu (vstup `liveAttachIntent.position`); chybí = null. */
+  entryLeaderPosition?: LivePhonePosition | null;
+  /** Doplnění SL/TP k holému vstupu = deskový `attachBrackets`; chybí = worker attach neumí. */
+  onAttachBrackets?: (input: LiveAttachInput) => Promise<LeaderOrderManageResult>;
+  /** Brána odeslání z desku (tatáž jako telefonní lišta); null/chybí = desk nic navíc neblokuje. */
+  entryBlockedReason?: string | null;
+  /** Leader execution skupiny workeru — podklad `liveManageBasis` (BE+n, BE s poplatky); chybí = null. */
+  manageLeaderAccountId?: number | null;
+  /** Pracující příkazy jako čáry jen pro zobrazení (`live-working`); chybí = žádné. */
+  workingOrders?: LiveChartWorkingOrders | null;
+  /** Šipky plnění leadera (jen zobrazení); chybí = žádné. */
+  liveFills?: LiveChartFills | null;
+  /** Přihlášený uživatel — jen klíč knihovny šablon SL/TP na zařízení; chybí = jen vestavěná šablona. */
+  userId?: string | null;
+  // ── C7/C8 (4. 11. 2026) ──
+  /** Nabídka × u vlastní holé pozice (`liveBareCloseOffer`, jen zobrazení); chybí = žádná. */
+  bareClose?: LiveBareCloseOffer | null;
+  /** Deskový `closeBareLeader` (jen s capability C8); chybí = × holé pozice se nenabídne. */
+  onBareClose?: (seen: BareLeaderTrade) => Promise<LeaderOrderManageResult>;
+  /** Sdílený zámek jednoho příkazu desku (lišta „Zrušit čekající“, Dashboard); chybí = vlastní. */
+  manageLockRef?: React.MutableRefObject<boolean> | null;
+  /** Graf hlásí přehrávání (U3-PC pojistka) — desk pak lištu „Zrušit čekající“ zamkne. */
+  onReplayChange?: (active: boolean) => void;
+  /** Pád grafu: desk nad FallbackLayer vrátí nouzovou lištu (`liveSafetyBarNeed`). */
+  onCrash?: () => void;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -93,7 +184,15 @@ const sameCopier = (left: LiveTradingCopierState, right: LiveTradingCopierState)
   && left.journalHealth === right.journalHealth
 );
 
-const LiveTradingScreenSlot: React.FC<Props> = ({ open, ...props }) => {
+const LiveTradingScreenSlot: React.FC<Props> = ({ open, isDark: appIsDark, onCrash, ...rest }) => {
+  // LIVE má vlastní motiv (přepínač v liště grafu); „Podle aplikace“ = beze změny.
+  const [themePreference, setThemePreference] = useState(getLiveScreenThemePreference);
+  useEffect(() => subscribeLiveScreenThemePreference(setThemePreference), []);
+  const props = { ...rest, isDark: resolveLiveScreenDark(themePreference, appIsDark), themePreference };
+  const previousOpenRef = useRef(open);
+  const openPerformanceAtRef = useRef(open ? performance.now() : 0);
+  if (open && !previousOpenRef.current) openPerformanceAtRef.current = performance.now();
+  previousOpenRef.current = open;
   // Odchod z grafu: vrstva ještě 280 ms dohraje „složení“, ale kliky už
   // nebere (`.live-chart-leave`) — přehled s DISARM je pod ní dostupný hned.
   const [present, setPresent] = useState(open);
@@ -108,9 +207,9 @@ const LiveTradingScreenSlot: React.FC<Props> = ({ open, ...props }) => {
   if (!open && !present) return null;
   const closing = !open || leaving;
   return (
-    <ErrorBoundary name="LiveTradingScreen" onError={rememberLiveChartCrash} fallback={<FallbackLayer isDark={props.isDark} failed leaving={closing} onNavigate={props.onNavigate} />}>
+    <ErrorBoundary name="LiveTradingScreen" onError={() => { rememberLiveChartCrash(); onCrash?.(); }} fallback={<FallbackLayer isDark={props.isDark} failed leaving={closing} onNavigate={props.onNavigate} />}>
       <Suspense fallback={<FallbackLayer isDark={props.isDark} failed={false} leaving={closing} onNavigate={props.onNavigate} />}>
-        <LiveTradingScreen {...props} leaving={closing} />
+        <LiveTradingScreen {...props} chartOpenPerformanceAt={openPerformanceAtRef.current} leaving={closing} />
       </Suspense>
     </ErrorBoundary>
   );
@@ -121,6 +220,8 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   left.open === right.open && left.isDark === right.isDark && left.onNavigate === right.onNavigate
   && left.navigationBlocked === right.navigationBlocked
   && sameTabs(left.tabs, right.tabs) && sameCopier(left.copier, right.copier)
+  && left.copyEvents === right.copyEvents
+  && left.liveExposurePaint?.id === right.liveExposurePaint?.id
   && (left.groupKey ?? '') === (right.groupKey ?? '') && (left.position?.key ?? '') === (right.position?.key ?? '')
   && left.disarm?.label === right.disarm?.label && left.disarm?.unverified === right.disarm?.unverified
   && left.onDisarm === right.onDisarm && left.onTargetChange === right.onTargetChange
@@ -129,4 +230,23 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && left.onManageEntry === right.onManageEntry
   && (left.manageEntryAvgPrice ?? null) === (right.manageEntryAvgPrice ?? null)
   && Boolean(left.manageCloseSupported) === Boolean(right.manageCloseSupported)
+  && Boolean(left.managePendingLegsSupported) === Boolean(right.managePendingLegsSupported)
+  && Boolean(left.entryMarketSupported) === Boolean(right.entryMarketSupported)
+  && (left.entryMaxContracts ?? 1) === (right.entryMaxContracts ?? 1)
+  && (left.entryFrontContract ?? null) === (right.entryFrontContract ?? null)
+  && JSON.stringify(left.entryScaleIn ?? null) === JSON.stringify(right.entryScaleIn ?? null)
+  && Boolean(left.entryBareSupported) === Boolean(right.entryBareSupported)
+  && JSON.stringify(left.entryBareEntry ?? null) === JSON.stringify(right.entryBareEntry ?? null)
+  && JSON.stringify(left.entryLeaderPosition ?? null) === JSON.stringify(right.entryLeaderPosition ?? null)
+  && left.onAttachBrackets === right.onAttachBrackets
+  && (left.entryBlockedReason ?? null) === (right.entryBlockedReason ?? null)
+  && (left.manageLeaderAccountId ?? null) === (right.manageLeaderAccountId ?? null)
+  && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')
+  && (left.liveFills?.key ?? 'none') === (right.liveFills?.key ?? 'none')
+  && (left.userId ?? null) === (right.userId ?? null)
+  && JSON.stringify(left.bareClose ?? null) === JSON.stringify(right.bareClose ?? null)
+  && left.onBareClose === right.onBareClose
+  && left.manageLockRef === right.manageLockRef
+  && left.onReplayChange === right.onReplayChange
+  && left.onCrash === right.onCrash
 ));

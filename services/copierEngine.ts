@@ -1,4 +1,4 @@
-import type { BrokerOrder, BrokerOrderRequest, BrokerPosition, OrderSide, OrderType } from './brokerPort';
+import { isSupportedOrderType, type BrokerOrder, type BrokerOrderRequest, type BrokerPosition, type ObservedOrderType, type OrderSide, type OrderType } from './brokerPort';
 import { brokerTag, replicationKey } from './copierKeys';
 import type { LeaderFlatEpoch } from './copierLeaderFlatGuard';
 import type { CopyGroupConfig, CopyReplicationMode, DayLockTrigger } from './liveCopyTrading';
@@ -34,7 +34,8 @@ export interface LeaderEvent {
   symbol: string;
   side: OrderSide;
   quantity: number;
-  orderType: OrderType;
+  /** `Unsupported` se do plánů nikdy nedostane — controller ho zachytí na vstupu (INV-TRAD-07). */
+  orderType: ObservedOrderType;
   limitPrice?: number;
   stopPrice?: number;
   /**
@@ -68,7 +69,8 @@ export type SkipReason =
   | 'mode-mismatch'
   | 'already-replicated'
   | 'stale-cumulative-fill'
-  | 'zero-quantity';
+  | 'zero-quantity'
+  | 'unsupported-order-type';
 
 export interface SkippedReplication {
   followerAccountId: number;
@@ -350,19 +352,82 @@ export interface CopierManualEntryRecord {
     symbol: string;
     side: OrderSide;
     quantity: number;
-    orderType: 'Limit' | 'Stop';
-    price: number;
-    stopLoss: number;
-    takeProfit: number;
+    orderType: 'Limit' | 'Stop' | 'Market';
+    /** Cena Limit/Stop; u Marketu chybí (broker dostal Market bez ceny). */
+    price?: number;
+    /** Cena, kterou uživatel viděl (u Marketu povinná) — jen odhad rizika a audit. */
+    referencePrice?: number;
+    /** Kdy klient kotaci přijal (epoch ms). */
+    quoteReceivedAt?: number;
+    /** Obě chybí = holý Market (bez nohou, `bare`). */
+    stopLoss?: number;
+    takeProfit?: number;
   };
+  /** Holý Market bez SL/TP (telefonní lišta); nohy doplní `attach-brackets`. */
+  bare?: true;
+  /**
+   * Přikoupení do otevřené pozice (3. 11. 2026, návrh v4): vlastní OSO se SL/TP
+   * rovným společnému SL/TP pozice. `baseEpisodeId` = epizoda deníku (lot) pozice
+   * v okamžiku odeslání — fill v jiné epizodě = přikoupení otevřelo nový obchod.
+   */
+  scaleIn?: true;
+  baseEpisodeId?: string;
+  /** Incident „přikoupení otevřelo nový obchod“ už vyhlášený (jednou, přežije restart). */
+  episodeIncidentAt?: number;
+  /** Kdy leader na symbolu po fillu holého vstupu zplochl — attach už nepatří k tomuto záznamu. */
+  closedAt?: number;
+  /**
+   * Časy cesty jednoho operationId ve workeru (2. 11. 2026, jen měření):
+   * zařazení do fronty, start ve frontě, odeslání POSTu, odpověď brokera.
+   */
+  timing?: { queuedAt?: number; startedAt?: number; dispatchAt?: number; ackAt?: number };
+  /** Broker odmítl SL/TP nohu přijatého vstupu — incident už byl vyhlášen (jednou). */
+  legRejectedAt?: number;
   entryBrokerOrderId?: string;
   stopBrokerOrderId?: string;
   targetBrokerOrderId?: string;
   reason?: string;
   /** Pozdní výsledek POSTu po timeoutu (jen audit; stav zůstává `unknown`). */
   lateResult?: { at: number; entryBrokerOrderId?: string; accepted: boolean };
-  /** Jediný pokus o cílené zrušení vlastního vstupu leadera. */
-  cancel?: { status: 'sending' | 'sent' | 'failed'; at: number; reason: string; error?: string };
+  /**
+   * Jediný pokus o cílené zrušení vlastního vstupu leadera. `verified` (C12, 4. 11. 2026) = výsledek
+   * ověřený stavem vstupu u brokera po zrušení (adaptér hlásí úspěch i u vyplněného příkazu).
+   */
+  cancel?: {
+    status: 'sending' | 'sent' | 'failed';
+    at: number;
+    reason: string;
+    error?: string;
+    verified?: 'canceled' | 'ended' | 'filled' | 'partially-filled' | 'working' | 'unverified';
+    /**
+     * C12 (oponentura kolo 3, P3): u `verified` = fill množství, pro které se ověřují SL/TP nohy,
+     * a kdy kontrola nohou doběhla. Fill bez `legsCheckedAt` = nohy NEOVĚŘENÉ (pád mezi) → po startu
+     * je `verifyRestartedOwnEntryCancels` ověří znovu. Jen pojistka dohledu, nic neautorizuje.
+     */
+    fillQty?: number;
+    legsCheckedAt?: number;
+    /**
+     * C12 (oponentura kolo 5, P2): vlastní vstup z flat se rušil proti pozici leadera na OPAČNÉ straně
+     * (z předčtení). Jeho fill pozici zmenšil, zavřel nebo otočil — jen pro pravdivé texty auditu
+     * (INV-UI-03); ochranu rozhoduje kontrola nohou a pozice. Nic neautorizuje.
+     */
+    opposite?: true;
+  };
+  /**
+   * C12: incident k čekajícímu vstupu (dílčí fill se nezrušil, zrušení bez účinku / neověřené,
+   * restart se zrušením, follower brání zrušení; `outside-position` = jen upozornění bez fail-closed,
+   * pozice mimo appku za ARMED) — každý druh (`pendingIncidentKinds`) jednou,
+   * přežije restart. `pendingIncidentAt` + `pendingIncidentText` = poslední incident (status →
+   * per-záznamový push watchdogu nezávisle na globálním fail-closed a i za kill; jen zobrazení).
+   */
+  pendingIncidentAt?: number;
+  pendingIncidentText?: string;
+  pendingIncidentKinds?: string[];
+  /**
+   * Poslední `pendingIncident` je jen upozornění „vstup dál čeká“ (`outside-position`): status ho neposílá, jakmile
+   * vstup nečeká, má zrušení nebo kopírka není ARMED, aby si push neprotiřečil s výsledkem. Jen zobrazení.
+   */
+  pendingIncidentNoticeOnly?: true;
   waiver?: { at: number; reason: string };
 }
 
@@ -370,8 +435,10 @@ export interface CopierManualOrderActionRecord {
   operationId: string;
   payloadHash: string;
   entryOperationId: string;
-  action: 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position';
+  action: 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position' | 'attach-brackets';
   status: 'sending' | 'acknowledged' | 'rejected' | 'unknown' | 'not-sent' | 'waived';
+  /** Posun pozastavené nohy broker jen drží (OnHold): po aktivaci nohy se cena ověří proti `toPrice`. */
+  heldMove?: boolean;
   /** Symbol obchodu (dořešení zavření po restartu nezávisle na outboxech). Volitelné kvůli starším záznamům. */
   symbol?: string;
   targetBrokerOrderId: string;
@@ -381,6 +448,21 @@ export interface CopierManualOrderActionRecord {
   createdAt: number;
   updatedAt: number;
   reason?: string;
+  /**
+   * C7: kód výsledku `cancel-entry`, když se vstup při rušení vyplnil (pozice je otevřená) — idempotentní
+   * replay stejného `operationId` ho vrátí v `blockers`, aby UI ukázalo „pozice je otevřená“, ne „odmítnuto“.
+   * `canceled-elsewhere` / `entry-ended` = `waived` ověřený stavem (vstup bez fillu skončil) — jen s nimi
+   * replay mapuje `waived` na „zrušeno“; ruční waiver kód nemá (oponentura C7 kolo 2).
+   */
+  resultCode?: 'entry-filled' | 'entry-partially-filled' | 'canceled-elsewhere' | 'entry-ended';
+  /**
+   * C7 kolo 3: definitivní odmítnutí `cancel-entry` brokerem (zkrácený text), když se rozhodnutí odkládá
+   * (`unknown` „zatím pracuje“ / nečitelné). Dořešení čtením ho předá do `cancelEntryOutcome` — vstup
+   * zrušený jinak během ustálení je pak `waived` „ne tímto příkazem“, nikdy „zrušení potvrzeno“.
+   */
+  brokerRejection?: string;
+  /** C12: ruční zrušení vlastního vstupu z flat proti pozici na opačné straně — jen pro pravdivé texty po fillu. */
+  entryOpposite?: true;
   waiver?: { at: number; reason: string };
 }
 
@@ -636,6 +718,10 @@ export function planModify(
   group: CopyGroupConfig,
 ): ModifyCommand[] {
   if (event.kind !== 'replaced') return [];
+  // Typ, který adaptér nezná, se followerům nikdy nemodifikuje (INV-TRAD-07); controller ho
+  // zachytí už na vstupu, tohle je druhá pojistka.
+  const orderType = event.orderType;
+  if (!isSupportedOrderType(orderType)) return [];
   const links = state.links.get(event.orderId) ?? [];
   return links.flatMap(link => {
     const follower = group.followers.find(item => item.accountId === link.accountId);
@@ -658,7 +744,7 @@ export function planModify(
       accountId: link.accountId,
       brokerOrderId: link.brokerOrderId,
       quantity,
-      orderType: event.orderType,
+      orderType,
       ...(event.limitPrice != null ? { limitPrice: event.limitPrice } : {}),
       ...(event.stopPrice != null ? { stopPrice: event.stopPrice } : {}),
       ...(link.nativeOsoRole ? { nativeOsoRole: link.nativeOsoRole } : {}),
@@ -761,6 +847,10 @@ export function planReplication(
     return plan;
   }
 
+  // Typ, který adaptér nezná, se nikdy nekopíruje (INV-TRAD-07); controller ho zachytí už na
+  // vstupu, tohle je druhá pojistka (až za `modeAccepts`, ať zrušení nehlásí falešný důvod).
+  const orderType = isSupportedOrderType(event.orderType) ? event.orderType : null;
+
   for (const follower of group.followers) {
     const skip = (reason: SkipReason) =>
       plan.skipped.push({ followerAccountId: follower.accountId, reason });
@@ -775,6 +865,10 @@ export function planReplication(
     }
     if (!modeAccepts(follower.mode, event.kind)) {
       skip('mode-mismatch');
+      continue;
+    }
+    if (orderType == null) {
+      skip('unsupported-order-type');
       continue;
     }
 
@@ -811,7 +905,7 @@ export function planReplication(
         symbol: event.symbol,
         side: event.side,
         quantity,
-        orderType: event.orderType,
+        orderType,
         ...(event.limitPrice != null ? { limitPrice: event.limitPrice } : {}),
         ...(event.stopPrice != null ? { stopPrice: event.stopPrice } : {}),
       },

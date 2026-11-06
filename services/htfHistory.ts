@@ -1,4 +1,5 @@
-import { aggregateCandles, marketDataSchemaForTimeframe, timeframeMinutes, type MarketCandle, type MarketTimeframe } from './marketDataCalculations';
+import { marketDataSchemaForTimeframe, timeframeMinutes, type MarketCandle, type MarketTimeframe } from './marketDataCalculations';
+import { aggregateVerifiedCandles } from './verifiedCandleAggregation';
 
 /**
  * Hlubší historie pro vyšší timeframy v grafech deníku (fáze 5). Graf dne má
@@ -77,25 +78,17 @@ export function withHtfHistory(raw: MarketCandle[], hourly: readonly MarketCandl
   return before.length ? [...before, ...raw] : raw;
 }
 
-const aggregatedCache = new WeakMap<MarketCandle[], Map<MarketTimeframe, MarketCandle[]>>();
-
 /**
  * Svíčky timeframu z historie + 1m dat. Historie se agreguje jednou (memo), při
  * každém kroku přehrávání nebo obnově dat jen 1m část; svíčka na hranici (týden,
  * měsíc začatý v historii) se sloučí.
  */
 export function aggregateWithHtfHistory(raw: MarketCandle[], hourly: readonly MarketCandle[], timeframe: MarketTimeframe): MarketCandle[] {
-  const recent = aggregateCandles(raw, timeframe);
+  const recent = aggregateVerifiedCandles(raw, timeframe);
   if (!htfHistoryDays(timeframe)) return recent;
   const before = htfHistoryBefore(raw, hourly);
   if (!before.length) return recent;
-  let byTimeframe = aggregatedCache.get(before);
-  let history = byTimeframe?.get(timeframe);
-  if (!history) {
-    history = aggregateCandles(before, timeframe);
-    if (!byTimeframe) { byTimeframe = new Map(); aggregatedCache.set(before, byTimeframe); }
-    byTimeframe.set(timeframe, history);
-  }
+  const history = aggregateVerifiedCandles(before, timeframe);
   if (!history.length) return recent;
   if (!recent.length) return history;
   const tail = history[history.length - 1];

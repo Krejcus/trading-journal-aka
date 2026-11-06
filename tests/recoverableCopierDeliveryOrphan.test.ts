@@ -5,6 +5,13 @@ import type { RelayDelivery, RelayDeliveryStore } from '../server/copierRelayDel
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 import type { LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol';
 
+/** F1b′: po dokončení/zahození zůstane nová nečinná delivery (ne null) — bez příkazu a výsledku. */
+const expectIdle = (saved: unknown) => {
+  expect(saved).toMatchObject({ version: 1, phase: 'polling' });
+  expect((saved as { commandId?: unknown }).commandId).toBeUndefined();
+};
+
+
 /**
  * Checkpoint s delivery, kterou DB nezná nebo svázala s jiným příkazem
  * (obnova DB, ruční zásah) — relay se nesmí zaseknout a nic nesmí provést
@@ -75,7 +82,7 @@ describe('relay: osiřelá delivery (DB ji nezná)', () => {
     const orphanDelivery = h.saved.deliveryId;
     const step = recoverableCopierDelivery(h.options);
     await expect(step()).resolves.toMatchObject({ command: null });
-    expect(h.saved).toBeNull();
+    expectIdle(h.saved);
     expect(h.acks()).toHaveLength(0);
     // Další příkaz jde pod novou delivery standardní cestou.
     const disarm = h.enqueue({ type: 'disarm' });
@@ -93,7 +100,7 @@ describe('relay: osiřelá delivery (DB ji nezná)', () => {
     expect(disarm.status).toBe('succeeded');
     expect(h.acks()).toHaveLength(1);
     expect(h.acks()[0]).toMatchObject({ commandId: disarm.id, result: { ok: 'disarm' }, error: null });
-    expect(h.saved).toBeNull();
+    expectIdle(h.saved);
   });
 
   it.each([
@@ -105,7 +112,7 @@ describe('relay: osiřelá delivery (DB ji nezná)', () => {
     expect(h.executed).toEqual([]);
     expect(row.status).toBe('rejected');
     expect(h.acks()[0]).toMatchObject({ commandId: row.id, result: null, error: 'command-rejected-relay-delivery-recovered' });
-    expect(h.saved).toBeNull();
+    expectIdle(h.saved);
   });
 
   it('svázaný příkaz už terminální: checkpoint se zahodí bez execution a ACK', async () => {
@@ -173,7 +180,7 @@ describe('relay: druhá execution po vrácení DB ve stejné session', () => {
     expect(h.executed).toEqual(['reconcile', 'reconcile']);
     expect(p.status).toBe('rejected');
     expect(p.error).toBe('command-outcome-unknown-already-started-this-session');
-    expect(h.saved).toBeNull();
+    expectIdle(h.saved);
   });
 });
 
@@ -208,7 +215,7 @@ describe('relay: zotavení a chyby disku', () => {
     await recoverableCopierDelivery(h.options)();
     expect(h.executed).toEqual([]);
     expect(row.status).toBe('rejected');
-    expect(h.saved).toBeNull();
+    expectIdle(h.saved);
   });
 
   it('ne-brzda v zotavení: selže zápis výsledku ve stejné session → další krok ji pořád odmítne', async () => {
@@ -279,12 +286,14 @@ describe('relay: zotavení a chyby disku', () => {
   it('osiřelý executing checkpoint z předchozí session: nový příkaz po restartu jde standardní cestou', async () => {
     const h = harness(); h.saved = orphanCheckpoint('executing');
     await recoverableCopierDelivery(h.options)();
-    expect(h.saved).toBeNull();
+    expectIdle(h.saved);
     const old = h.enqueue({ type: 'reconcile' }, 5_000);
     const fresh = h.enqueue({ type: 'reconcile' });
     const step = recoverableCopierDelivery(h.options);
     await step(); await step();
-    expect(old.error).toBe('command-expired-or-predates-worker-session');
+    // F1b′: nečinný checkpoint předchozí session restart přežije → vázaný starý příkaz jde
+    // konzervativní větví „session se změnila“ (neprovede se), nový jde standardně.
+    expect(old.error).toBe('command-outcome-unknown-worker-session-changed');
     expect(fresh.status).toBe('succeeded');
     expect(h.executed).toEqual(['reconcile']);
   });

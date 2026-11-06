@@ -359,7 +359,7 @@ infrastruktuře, takže 1b a 1c splývají; strop zůstává `MANUAL_ENTRY_MAX_C
 Relay: v `remoteCopyCommands`, striktní validace na enqueue i claim,
 `idempotencyKey = operationId` (stejný klíč + jiný `payloadHash` = 409
 `copier-relay-entry-conflict`), TTL 15 s, nejvýš jeden čekající/claimed vstup na
-zařízení, min. 3 s odstup, denní strop 30 vstupů na uživatele; brzda
+zařízení, min. 3 s odstup, denní strop 100 vstupů na uživatele (do 30. 10. 2026 30); brzda
 (`disarm`/`kill`/`lock`) čekající vstupy zneplatní stejně jako ARM
 (`expirePendingArmsSupersededByBrake` rozšířit). Výsledek
 `{ type: 'leader-entry-placed', operationId, status: 'blocked' | 'rejected' |

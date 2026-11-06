@@ -18,6 +18,7 @@ import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { useCopierPowerDisplay } from '../hooks/useCopierPowerDisplay';
 import { copierPowerDisplayKey } from '../lib/copierPowerDisplay';
 import { isCopierBrakeQueuedError } from '../lib/copierBrakeDelivery';
+import { armBlockExclusionOutcome, armErrorYieldsToDialog, armOutcomeNeedsDeskNotice, armTransitionConfirmed, createFlattenGroupCoordinator, dashboardCommandLock, dashboardDialogBusy, flattenRearmAllowed, liveSafetyFailureMessage, liveTopMenuBrakes, type FlattenGroupCoordinator, type LiveSafetyTarget } from '../lib/liveSafetyAction';
 import { useFlipReorder, useIsomorphicLayoutEffect } from '../hooks/useFlipReorder';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
@@ -70,6 +71,8 @@ import { stabilizeCopyGroups } from '../lib/stabilizeCopyGroups';
 import { copierCommandAllowedWithoutFreshStatus } from '../lib/copierSafetyControls';
 import type { CopierConnectionDiscoveryStatus } from '../lib/localCopierAgentProtocol';
 import { useCompactViewport } from '../utils/useCompactViewport';
+import { DashboardOrderCancelButton, type LiveDashboardPendingCancel } from './LivePendingCancel';
+import { dashboardPendingCancelForGroup } from '../lib/liveCancelPendingUi';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
   adoptRuntimeCopyGroup,
@@ -479,9 +482,20 @@ interface Props {
   apiConnections?: TradovateConnectionUsageInput['connections'];
   workerConnectionUsage?: TradovateConnectionUsageInput['workerUsage'];
   /** Atomicky vybere čistou skupinu, provede reconciliation a ARM LIVE. */
-  onSwitchAndArm?: (group: CopyGroupConfig) => Promise<void> | void;
-  onArmLive?: () => Promise<void> | void;
+  /** `true` = worker ARM potvrdil; cokoli jiného (odmítnutý dialog) není potvrzené zapnutí. */
+  onSwitchAndArm?: (group: CopyGroupConfig) => Promise<boolean | void> | boolean | void;
+  onArmLive?: () => Promise<boolean | void> | boolean | void;
   onDisarm?: () => Promise<void> | void;
+  /** Čerstvý neobnovený stav říká prokazatelně vypnuto: OFF v menu ⋮ se nenabídne. Chybí = nabídne se. */
+  copierOffVerified?: boolean;
+  /** Stav je čerstvý a neobnovený. `false` = Kill v menu ⋮ nezamkne „aktivní“ ze starého statusu. */
+  copierStatusVerified?: boolean;
+  /** Cíl Flatten All podle workeru; dialog si ho uloží při otevření (`assertSameSafetyTarget`). */
+  safetyTarget?: LiveSafetyTarget | null;
+  /** Sdílený zámek Flattenu desku: běžící Flatten vidí i po remountu a z lišty nebo Shift+F. */
+  flattenCoordinator?: FlattenGroupCoordinator;
+  /** Výsledek, který by v přehledu zmizel: ukáže ho `LiveSafetyControls` desku. */
+  onSafetyNotice?: (text: string) => void;
   onEmergencyStop?: () => Promise<void> | void;
   onDayLock?: () => Promise<void> | void;
   dayLockUntil?: number;
@@ -529,6 +543,12 @@ interface Props {
   /** Výslovný souhlas: Mac smí načítat všechny propfirmy vlastníka. */
   onGrantWorkerOwnerScope?: () => Promise<void>;
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
+  /**
+   * C7 (4. 11. 2026): „Zrušit“ u příkazu = jen vlastní čekající vstup leadera (`dashboardCancelTarget`,
+   * `cancel-entry` přes desk, jedním klikem, sdílený zámek). Chybí / bez capability = zamčeno s vysvětlením.
+   * Obecné `cancel-order` worker odmítá — z Dashboardu se už neposílá.
+   */
+  pendingEntryCancel?: LiveDashboardPendingCancel | null;
 }
 
 interface PendingAction {
@@ -549,7 +569,18 @@ interface PendingAction {
   proceed?: () => void;
   /** Flatten All skupiny — na telefonu se potvrzuje listem s výčtem. */
   flattenGroupId?: string;
+  /** Brzda: cizí běžící příkaz potvrzení nezamyká (INV-UI-02). */
+  busyExempt?: boolean;
+  /** Cíl workeru v okamžiku otevření dialogu Flatten All. */
+  confirmedTarget?: LiveSafetyTarget | null;
 }
+
+const NO_FLATTEN_COORDINATOR = createFlattenGroupCoordinator();
+
+/** Dialog běžícího příkazu jde zavřít, aby nekryl brzdy (INV-UI-02). Nic se tím neruší ani neopakuje. */
+const BUSY_CLOSE_LABEL = 'Zavřít, běží dál';
+
+const UNVERIFIED_DISARM_DETAIL = 'Aktuální stav kopírky ani pozic se teď nepodařilo ověřit. Vypnutí je bezpečné ve flat stavu; uprostřed obchodu by followeři přestali dostávat posuny SL a výstupy. Pozice nezavírá — k tomu slouží Flatten All, k úplnému zastavení brokerových akcí Kill switch.';
 
 type ActiveFollowerCut = NonNullable<CopierControllerStatus['followerCuts']>[number];
 type FollowerParticipation = NonNullable<CopierControllerStatus['followerParticipation']>[number];
@@ -841,6 +872,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onSwitchAndArm,
   onArmLive,
   onDisarm,
+  copierOffVerified = false,
+  copierStatusVerified,
+  safetyTarget = null,
+  flattenCoordinator = NO_FLATTEN_COORDINATOR,
+  onSafetyNotice,
   onEmergencyStop,
   onDayLock,
   dayLockUntil = 0,
@@ -872,6 +908,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onGrantWorkerOwnerScope,
   marketPrices = [],
   onGroupsChange,
+  pendingEntryCancel = null,
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
   const copierStateVerifying = copierStatusPending || !runtimeAvailable;
@@ -949,13 +986,29 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const groupSaveInFlight = useRef(false);
   const pendingCloudGroupSaves = useRef(new Map<string, { owner: string; group: CopyGroupConfig }>());
   const [editorGroup, setEditorGroup] = useState<CopyGroupConfig | null>(null);
+  // Aktuální hodnoty pro rearm po Flattenu: dialog vzniká po dlouhém čekání na worker.
+  const rearmDepsRef = useRef({ confirm: false, onArmLive, killSwitch: copierKillSwitch });
+  // Dialog zavřený během běhu chybu uložení nezobrazí: ta pak přijde toastem.
+  const editorGroupRef = useRef(editorGroup);
+  editorGroupRef.current = editorGroup;
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [pendingUnavailableFollowerRemoval, setPendingUnavailableFollowerRemoval] = useState<PendingUnavailableFollowerRemoval | null>(null);
+  const pendingUnavailableRemovalRef = useRef(pendingUnavailableFollowerRemoval);
+  pendingUnavailableRemovalRef.current = pendingUnavailableFollowerRemoval;
   /** Bod 5b: zapnutí zablokované otevřenou pozicí/příkazem ve skupině. */
   const [pendingArmBlockGroupId, setPendingArmBlockGroupId] = useState<string | null>(null);
   const [excludingAccountId, setExcludingAccountId] = useState<number | null>(null);
   // Po potvrzení (nebo zrušení) zavření účtu se průvodce vrátí s čerstvým výčtem.
   const reopenArmBlockRef = useRef<string | null>(null);
+  // Záměr „vyřadit a zapnout“: zavření průvodce ho ruší, ARM po zavření nikdy.
+  const armAfterExclusionRef = useRef<string | null>(null);
+  const pendingArmBlockRef = useRef(pendingArmBlockGroupId);
+  pendingArmBlockRef.current = pendingArmBlockGroupId;
+  const overviewMountedRef = useRef(true);
+  useEffect(() => {
+    overviewMountedRef.current = true;
+    return () => { overviewMountedRef.current = false; };
+  }, []);
   const [helpOpen, setHelpOpen] = useState(false);
   const [tableSettingsOpen, setTableSettingsOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -965,6 +1018,18 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [confirmRearmAfterFlatten, setConfirmRearmAfterFlatten] = useState(initialViewSettings.confirmRearmAfterFlatten);
   const [templates, setTemplates] = useState<CopyGroupTemplate[]>(loadTemplates);
   const [busyCommand, setBusyCommandState] = useState<string | null>(null);
+  // Flatten All běží mimo zámek běžných příkazů (`dashboardCommandLock`), proto vlastní stav.
+  const [localFlattenRunning, setFlattenRunningState] = useState(false);
+  const flattenElsewhere = useSyncExternalStore(flattenCoordinator.subscribe, flattenCoordinator.anyPending, () => false);
+  const flattenRunning = localFlattenRunning || flattenElsewhere;
+  // Pro tlačítka a dialogy: během Flattenu nezačne nic jiného, ani když Flatten zámek nedrží.
+  const commandBusy = busyCommand ?? (flattenRunning ? 'flatten-group' : null);
+  const flattenRunningRef = useRef(false);
+  const flattenRunningNow = () => flattenRunningRef.current || flattenCoordinator.anyPending();
+  const setFlattenRunning = useCallback((running: boolean) => {
+    flattenRunningRef.current = running;
+    setFlattenRunningState(running);
+  }, []);
   // Živá hodnota pro async smyčky (opakování přepnutí followera): stav
   // `busyCommand` se v jejich uzávěru zastará a blokoval by navždy.
   const busyCommandRef = useRef<string | null>(null);
@@ -978,6 +1043,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const copierTransitionRef = useRef<'connecting' | 'disconnecting' | null>(null);
   const [transitionGroupId, setTransitionGroupId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: 'success' | 'info' | 'error'; text: string; accountIds?: number[] } | null>(null);
+  const pendingActionRef = useRef<PendingAction | null>(null);
+  pendingActionRef.current = pendingAction;
+  rearmDepsRef.current = { confirm: confirmRearmAfterFlatten, onArmLive, killSwitch: copierKillSwitch };
   const groupLibraryFence = useRef(new CopyGroupLibraryRequestFence(userId)).current;
   groupLibraryFence.setOwner(userId);
   const runtimeGroupRef = useRef(runtimeGroup);
@@ -1343,7 +1411,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const runCopierTransition = async (
     groupId: string,
     connecting: boolean,
-    action: () => Promise<void> | void,
+    action: () => Promise<boolean | void> | boolean | void,
   ) => {
     if (copierTransitionRef.current && (connecting || copierTransitionRef.current === 'disconnecting')) return;
     const request = ++copierTransitionRequest.current;
@@ -1352,8 +1420,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     setTransitionGroupId(groupId);
     setCopierTransition(connecting ? 'connecting' : 'disconnecting');
     try {
-      await action();
+      const outcome = await action();
       if (request !== copierTransitionRequest.current) return;
+      // Zrušený dialog nic nezapnul: toast „připojený“ jen po potvrzeném ARM.
+      if (connecting && !armTransitionConfirmed(outcome)) return;
       // Ručně vypnutý follower se snadno zapomene — při zapnutí to řekneme.
       const armedGroup = groups.find(group => group.id === groupId)
         ?? (runtimeGroup?.id === groupId ? runtimeGroup : null);
@@ -1389,6 +1459,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           setPendingArmBlockGroupId(affectedGroup.id);
           return;
         }
+      }
+      const outcomeText = rejected ?? `${connecting ? 'Zapnutí' : 'Vypnutí'} kopírky není potvrzené: ${detail}`;
+      const yieldsToDialog = armErrorYieldsToDialog(pendingActionRef.current);
+      if (armOutcomeNeedsDeskNotice({ rejected: !!rejected, yieldsToDialog, mounted: overviewMountedRef.current })) onSafetyNotice?.(outcomeText);
+      if (yieldsToDialog) {
+        setToast({ tone: 'error', text: outcomeText });
+        return;
       }
       setPendingAction({
         title: rejected ? 'Zapnutí kopírky je zablokované' : connecting ? 'Zapnutí kopírky není potvrzené' : 'Vypnutí kopírky není potvrzené',
@@ -1490,9 +1567,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       }
       setPendingAction({
         title: 'Vypnout kopírku bez ověřeného stavu?',
-        detail: 'Aktuální stav kopírky ani pozic se teď nepodařilo ověřit. Vypnutí je bezpečné ve flat stavu; uprostřed obchodu by followeři přestali dostávat posuny SL a výstupy. Pozice nezavírá — k tomu slouží Flatten All, k úplnému zastavení brokerových akcí Kill switch.',
+        detail: UNVERIFIED_DISARM_DETAIL,
         confirmLabel: 'Přesto vypnout',
         danger: true,
+        busyExempt: true,
         proceed: () => { void runCopierTransition(candidate.id, false, onDisarm); },
       });
       return;
@@ -1578,6 +1656,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       return;
     }
 
+    if (flattenRunningNow()) {
+      setToast({ tone: 'info', text: 'Běží Flatten All, kopírka se teď nezapne.' });
+      return;
+    }
     const armAction = onSwitchAndArm ?? (candidate.id === executionGroupId ? onArmLive : undefined);
     if (!armAction) {
       setPendingAction({
@@ -1656,8 +1738,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       // Jiný příkaz kopírky (Flatten, násobek…) má přednost; počkáme na něj.
       const idleBy = Date.now() + 20_000;
-      while (busyCommandRef.current && Date.now() < idleBy) await sleep(150);
-      if (busyCommandRef.current) {
+      while ((busyCommandRef.current || flattenRunningNow()) && Date.now() < idleBy) await sleep(150);
+      if (busyCommandRef.current || flattenRunningNow()) {
         report('Kopírka ještě zpracovává jiný příkaz — přepnutí se neodeslalo. Zkus to za chvíli znovu.');
         return false;
       }
@@ -1704,6 +1786,35 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }
   } : undefined;
 
+  const triggerDisarm = onDisarm ? async () => {
+    try {
+      await onDisarm();
+      setToast({ tone: 'info', text: 'Worker příkaz OFF přijal. Pozice to nezavírá.' });
+    } catch (reason) {
+      setToast({
+        tone: isCopierBrakeQueuedError(reason) ? 'info' : 'error',
+        text: reason instanceof Error ? reason.message : 'Vypnutí kopírky se nepodařilo potvrdit.',
+      });
+    }
+  } : undefined;
+  // OFF z menu ⋮ bez vazby na skupinu; neověřený stav potvrdí stejným textem jako přepínač skupiny.
+  const requestMenuDisarm = triggerDisarm ? () => {
+    // Zapínání běží v tomto přehledu: stejná cesta jako přepínač. Neodeslané zapnutí zruší `armCancelEpochRef` v desku.
+    if (copierTransitionRef.current === 'connecting' && transitionGroupId && onDisarm) {
+      void runCopierTransition(transitionGroupId, false, onDisarm);
+      return;
+    }
+    if (!copierStatusPending) { void triggerDisarm(); return; }
+    setPendingAction({
+      title: 'Vypnout kopírku bez ověřeného stavu?',
+      detail: UNVERIFIED_DISARM_DETAIL,
+      confirmLabel: 'Přesto vypnout',
+      danger: true,
+      busyExempt: true,
+      proceed: () => { void triggerDisarm(); },
+    });
+  } : undefined;
+
   const triggerDayLock = onDayLock ? async () => {
     try {
       await onDayLock();
@@ -1726,8 +1837,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   };
   const runCommand = async (
     command: LiveCopyTradingCommand,
-    update?: () => void | Promise<void>,
+    update?: (result?: LiveCopyTradingCommandResult | void) => void | Promise<void>,
     onError?: (message: string) => void,
+    context?: { confirmedTarget?: LiveSafetyTarget | null },
   ): Promise<boolean> => {
     const key = command.type === 'flatten-account' || command.type === 'flatten-follower-trade' || command.type === 'set-replication' || command.type === 'set-multiplier' || command.type === 'set-follower-enabled'
       ? `${command.type}-${command.accountId}`
@@ -1738,8 +1850,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       ? command.group.id
       : 'groupId' in command ? command.groupId : null;
     const targetsExecutionRuntime = commandGroupId != null && commandGroupId === executionGroupId;
-    if (busyCommandRef.current) return false;
-    setBusyCommand(key);
+    // Flatten All neprochází zámkem běžných příkazů (INV-UI-02); bez držení zámek ani neuvolní.
+    const lock = dashboardCommandLock(command.type, { busy: busyCommandRef.current, flattenRunning: flattenRunningNow() });
+    if (lock === 'blocked') return false;
+    const groupFlatten = command.type === 'flatten-group';
+    if (lock === 'acquire') setBusyCommand(key);
+    if (groupFlatten) setFlattenRunning(true);
     try {
       if (brokerWrite && copierKillSwitch && commandBlockedByCopierKillSwitch(command)) {
         setToast({ tone: 'error', text: 'Kill switch je aktivní. Brokerový příkaz byl zablokován.' });
@@ -1751,11 +1867,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         return true;
       }
       const result = commandAdapter && targetsExecutionRuntime
-        ? await commandAdapter.execute(command)
+        ? await commandAdapter.execute(command, context)
         : undefined;
       if (result && result.type === 'flatten' && result.pending) {
         // B1: worker cut přijal a zavírá na pozadí; výsledek ukáže řádek účtu.
-        await update?.();
+        await update?.(result);
         setToast({
           tone: 'info',
           text: 'Follower se zavírá na pozadí a čeká na další obchod. Když se zavření nepovede, ukáže se to u účtu i hláškou; ostatní účty i kopírka pokračují.',
@@ -1768,7 +1884,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       if (result && result.type === 'flatten' && !result.flat) {
         throw new Error(manualFlattenFailureMessage(result));
       }
-      await update?.();
+      await update?.(result);
       // Přepínač followera potvrzuje sám animací v řádku; toast by jen rušil.
       if (command.type === 'set-follower-enabled' && commandAdapter && targetsExecutionRuntime) return true;
       const successText = result && result.type === 'flatten'
@@ -1790,7 +1906,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       });
       return true;
     } catch (reason) {
-      const message = formatCopierCommandError(reason, accountName);
+      const formatted = formatCopierCommandError(reason, accountName);
+      const message = command.type === 'flatten-group' ? liveSafetyFailureMessage(new Error(formatted)) : formatted;
       if (onError) onError(message);
       else {
         setToast({
@@ -1803,7 +1920,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       }
       return false;
     } finally {
-      setBusyCommand(null);
+      if (lock === 'acquire') setBusyCommand(null);
+      if (groupFlatten) setFlattenRunning(false);
     }
   };
 
@@ -1812,6 +1930,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     onError?: (message: string) => void,
     waiveUnverifiableFollowerOwnership = false,
   ): Promise<boolean> => {
+    const editorAtSave = editorGroupRef.current;
     if (copierStateVerifying) {
       const message = 'Stav se ověřuje. Uložení skupiny je dostupné až po potvrzení čerstvého stavu workeru.';
       if (onError) onError(message); else setToast({ tone: 'error', text: message });
@@ -1907,7 +2026,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             pendingCloudGroupSaves.current.delete(group.id);
             setGroupLibraryState('ready');
             setGroupLibraryError(null);
-            setEditorGroup(null);
+            // Editor zavřený během ukládání a znovu otevřený se sám nezavře.
+            setEditorGroup(current => (current === editorAtSave ? null : current));
           }
         } catch (reason) {
           if (groupLibraryFence.canAcceptWrite(write)) {
@@ -2008,7 +2128,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     });
 
   const confirmUnavailableFollowerRemoval = async (plan: UnavailableFollowerRemovalPlan) => {
-    if (busyCommand) return;
+    if (commandBusy) return;
     if (plan.ownershipWarnings.length > 0 && !pendingUnavailableFollowerRemoval?.ownershipWaiverStep) {
       setPendingUnavailableFollowerRemoval(current => current ? {
         ...current,
@@ -2020,6 +2140,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     setPendingUnavailableFollowerRemoval(current => current ? { ...current, error: null } : current);
     const saved = await saveGroup(plan.group, message => {
       setPendingUnavailableFollowerRemoval(current => current ? { ...current, error: message } : current);
+      if (!pendingUnavailableRemovalRef.current) setToast({ tone: 'error', text: message });
     }, plan.ownershipWarnings.length > 0);
     if (saved) {
       setPendingUnavailableFollowerRemoval(current => current ? {
@@ -2063,10 +2184,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    if (pendingAction || busyCommand != null || reopenArmBlockRef.current == null) return;
+    if (pendingAction || commandBusy != null || reopenArmBlockRef.current == null) return;
     setPendingArmBlockGroupId(reopenArmBlockRef.current);
     reopenArmBlockRef.current = null;
-  }, [pendingAction, busyCommand]);
+  }, [pendingAction, commandBusy]);
 
   // Výčet pro potvrzení Flatten All na telefonu se počítá z živých dat při
   // každém renderu, takže se list sám aktualizuje, když se mezitím něco zavře.
@@ -2082,7 +2203,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const compactGroupActions = (group: CopyGroupConfig) => ({
     onFlatten: () => setPendingAction({
       title: 'Flatten All?', detail: `Připraví uzavření všech otevřených pozic ve skupině ${group.name}.`,
-      confirmLabel: 'Flatten All', danger: true, flattenGroupId: group.id, command: {
+      confirmLabel: 'Flatten All', danger: true, flattenGroupId: group.id, confirmedTarget: safetyTarget, command: {
         type: 'flatten-group', groupId: group.id, operationId: manualOperationId(),
       },
     }),
@@ -2124,10 +2245,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       confirmArmedGroupChange(group, () => { void saveGroup(updated); });
     },
     onFlattenAccount: (accountId: number) => requestAccountFlatten(group, accountId),
-    onCancelOrder: (orderId: number) => setPendingAction({
-      title: 'Zrušit příkaz?', detail: 'Připraví zrušení tohoto pracovního příkazu.',
-      confirmLabel: 'Zrušit příkaz', danger: true, command: { type: 'cancel-order', groupId: group.id, orderId },
-    }),
+    // C7: jen vlastní čekající vstup leadera skupiny workeru (jiná skupina = zamčeno s vlastním textem).
+    pendingEntryCancel: dashboardPendingCancelForGroup(pendingEntryCancel, group.id, executionGroupId),
     onRemoveUnavailableFollower: () => requestUnavailableFollowerRemoval(group, group, null, 'row'),
   });
 
@@ -2180,7 +2299,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       {stuckOperations.length > 0 && commandAdapter ? (
         <StuckOperationsPanel
           operations={stuckOperations}
-          busy={busyCommand != null}
+          busy={commandBusy != null}
           onResolve={operation => void runCommand({
             type: 'resolve-stuck-operation',
             groupId: executionGroupId ?? '',
@@ -2257,6 +2376,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               onTemplates={() => setTemplatesOpen(true)}
               redactNames={compact ? redactNames : undefined}
               onToggleRedact={compact ? () => setRedactNames(value => !value) : undefined}
+              onDisarm={requestMenuDisarm}
+              copierOffVerified={copierOffVerified}
+              stateVerifying={copierStateVerifying || copierStatusVerified === false}
               onKillSwitch={triggerKillSwitch}
               onDayLock={triggerDayLock}
               killSwitchActive={copierKillSwitch}
@@ -2306,7 +2428,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   statusPending={copierStateVerifying}
                   runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
                   transition={transitionGroupId === group.id ? copierTransition : null}
-                  connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
+                  connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive || flattenRunning}
                   powerDisplayKey={copierPowerDisplayKey(userId, group.id)}
                   dailyPnlPending={dailyPnlPending}
                   eligibility={group.followers
@@ -2321,7 +2443,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   orders={orders}
                   isLive={isLive}
                   onAccount={onAccount}
-                  busyCommand={busyCommand}
+                  busyCommand={commandBusy}
                   onVerifyEligibility={verifyAccountEligibility}
                   verifyingAccountId={verifyingAccountId}
                   onConnectionToggle={() => requestGroupPower(group)}
@@ -2404,7 +2526,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         statusPending={copierStateVerifying}
                         runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
                         transition={transitionGroupId === group.id ? copierTransition : null}
-                        connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
+                        connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive || flattenRunning}
                         onConnectionToggle={() => requestGroupPower(group)}
                         powerDisplayKey={copierPowerDisplayKey(userId, group.id)}
                         open={expanded.has(group.id)}
@@ -2453,7 +2575,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         onToggleEnabled={() => requestGroupPower(group)}
                         onFlatten={() => setPendingAction({
                           title: 'Flatten All?', detail: `Připraví uzavření všech otevřených pozic ve skupině ${group.name}.`,
-                          confirmLabel: 'Flatten All', danger: true, command: {
+                          confirmLabel: 'Flatten All', danger: true, confirmedTarget: safetyTarget, command: {
                             type: 'flatten-group', groupId: group.id, operationId: manualOperationId(),
                           },
                         })}
@@ -2491,7 +2613,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                                 : undefined}
                               onVerifyEligibility={verifyAccountEligibility}
                               verifyingAccountId={verifyingAccountId}
-                              busyCommand={busyCommand}
+                              busyCommand={commandBusy}
                               onRefreshOrders={onRefreshOrders}
                               onFlattenAccount={accountId => requestAccountFlatten(group, accountId)}
                               onRemoveUnavailableFollower={() => requestUnavailableFollowerRemoval(
@@ -2500,10 +2622,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                                 null,
                                 'row',
                               )}
-                              onCancelOrder={orderId => setPendingAction({
-                                title: 'Zrušit příkaz?', detail: 'Připraví zrušení tohoto pracovního příkazu.',
-                                confirmLabel: 'Zrušit příkaz', danger: true, command: { type: 'cancel-order', groupId: group.id, orderId },
-                              })}
+                              pendingEntryCancel={dashboardPendingCancelForGroup(pendingEntryCancel, group.id, executionGroupId)}
                               onTab={t => setGroupTab(prev => ({ ...prev, [group.id]: t }))}
                               redactNames={redactNames}
                               redaction={redaction}
@@ -2571,8 +2690,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           workerDiscovery={workerDiscovery}
           onGrantWorkerOwnerScope={onGrantWorkerOwnerScope}
           accountLabel={(accountId, role) => accountLabel(accountId, editorGroup.id, role)}
-          onClose={() => setEditorGroup(null)}
-          onSave={(group, onError) => saveGroup(group, message => onError(copyGroupLibraryErrorMessage(new Error(message))))}
+          onClose={() => setEditorGroup(current => (current === editorGroup ? null : current))}
+          onSave={(group, onError) => saveGroup(group, message => {
+            const text = copyGroupLibraryErrorMessage(new Error(message));
+            onError(text);
+            if (editorGroupRef.current !== editorGroup) setToast({ tone: 'error', text });
+          })}
           libraryState={groupLibraryState === 'needs-import' && pendingCloudGroupSaves.current.get(editorGroup.id)?.owner === userId ? 'error' : groupLibraryState}
           libraryError={groupLibraryError}
           onRemoveUnavailableFollowers={draft => requestUnavailableFollowerRemoval(
@@ -2585,7 +2708,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             setEditorGroup(null);
             requestGroupDelete(editorGroup);
           } : undefined}
-          saving={busyCommand != null || groupSaveBusy}
+          saving={commandBusy != null || groupSaveBusy}
         />
       )}
       {/* Když se skupina mezitím zapnula (jiné zařízení), průvodce už neplatí. */}
@@ -2623,6 +2746,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             onExcludeAccount={followerExclusionSupported && commandAdapter && blockGroup.id === executionGroupId
               ? accountId => {
                 if (excludingAccountId != null) return;
+                armAfterExclusionRef.current = blockGroup.id;
                 setExcludingAccountId(accountId);
                 void toggleFollower(blockGroup.id, accountId, false, message => {
                   setToast({
@@ -2635,6 +2759,18 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 }, { allowOwnExposure: true }).then(ok => {
                   setExcludingAccountId(null);
                   if (!ok) return;
+                  const outcome = armBlockExclusionOutcome({
+                    mounted: overviewMountedRef.current,
+                    intentGroupId: armAfterExclusionRef.current,
+                    openGroupId: pendingArmBlockRef.current,
+                    dialogCovered: pendingActionRef.current != null,
+                    groupId: blockGroup.id,
+                  });
+                  armAfterExclusionRef.current = null;
+                  if (outcome !== 'arm') {
+                    setToast({ tone: 'info', text: 'Účet vyřazen, kopírka zůstává vypnutá.' });
+                    return;
+                  }
                   // Zapnutí projde celou kontrolou u workeru znovu; když něco
                   // dál blokuje, průvodce se ukáže s aktuálním výčtem.
                   setPendingArmBlockGroupId(null);
@@ -2647,8 +2783,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 });
               }
               : undefined}
-            busy={busyCommand != null}
-            onClose={() => setPendingArmBlockGroupId(null)}
+            busy={commandBusy != null}
+            onClose={() => {
+              armAfterExclusionRef.current = null;
+              setPendingArmBlockGroupId(null);
+            }}
             onCloseAccount={accountId => {
               reopenArmBlockRef.current = blockGroup.id;
               setPendingArmBlockGroupId(null);
@@ -2671,7 +2810,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             pendingUnavailableFollowerRemoval.saved.id,
             role,
           )}
-          busy={busyCommand != null}
+          busy={commandBusy != null}
           onClose={() => setPendingUnavailableFollowerRemoval(null)}
           onEdit={() => {
             const editGroup = structuredClone(pendingUnavailableFollowerRemoval.editGroup);
@@ -2697,7 +2836,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             ...pendingAction,
             detail: renderAccountMessage(pendingAction.detail, pendingAction.accountIds ?? knownAccountIds),
           }}
-          busy={busyCommand != null}
+          busy={dashboardDialogBusy({ commandType: pendingAction.command?.type, busyExempt: pendingAction.busyExempt }, { busy: busyCommand, flattenRunning })}
           apiReady={pendingAction.command
             ? confirmActionReachesWorker({
               command: pendingAction.command,
@@ -2709,7 +2848,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             : runtimeAvailable}
           stateUnverified={!runtimeAvailable}
           flattenPreview={compact && pendingAction.flattenGroupId ? flattenPreviewFor(pendingAction.flattenGroupId) : null}
-          onClose={() => setPendingAction(null)}
+          onClose={() => {
+            // Běžící příkaz po zavření průvodce zapnutí znovu neotevře.
+            if (commandBusy != null) reopenArmBlockRef.current = null;
+            setPendingAction(null);
+          }}
           onConfirm={() => {
             const action = pendingAction;
             if (action.blocked) {
@@ -2722,11 +2865,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               return;
             }
             if (action.run) {
-              if (busyCommandRef.current) return;
+              if (busyCommandRef.current || flattenRunningNow()) return;
               setBusyCommand('confirmed-runtime-action');
               void action.run()
                 .then(() => {
-                  setPendingAction(null);
+                  setPendingAction(current => (current === action ? null : current));
                   setToast({
                     tone: 'success',
                     text: action.successText ?? 'Potvrzená runtime akce byla úspěšně dokončena.',
@@ -2749,7 +2892,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               return;
             }
             const write = command.type === 'delete-group' ? groupLibraryFence.beginWrite() : null;
-            void runCommand(command, async () => {
+            void runCommand(command, async result => {
               if (write && !groupLibraryFence.canAcceptWrite(write)) return;
               if (command.type === 'set-group-enabled') {
                 const { groupId, enabled } = command;
@@ -2773,18 +2916,29 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 }
                 if (write && !groupLibraryFence.canAcceptWrite(write)) return;
               }
-              if (command.type === 'flatten-group' && confirmRearmAfterFlatten && onArmLive && !copierKillSwitch) {
-                setPendingAction({
+              const rearm = rearmDepsRef.current;
+              if (command.type === 'flatten-group' && flattenRearmAllowed(result) && rearm.confirm && rearm.onArmLive && !rearm.killSwitch) {
+                const { groupId } = command;
+                setPendingAction(current => (current === action ? {
                   title: 'Pokračovat v kopírování?',
                   detail: 'Flatten je potvrzen: všechny účty jsou flat. Zapnutí spustí novou kontrolu pozic a kopírování pojede dál.',
                   confirmLabel: 'Zapnout a pokračovat',
-                  run: async () => { await onArmLive(); },
-                  successText: 'Copier je znovu zapnutý — kopírování pokračuje.',
-                });
+                  // Přes přepínač: po cestu zapínání je vidět OFF a výsledek hlásí týž kód.
+                  proceed: () => {
+                    const latest = rearmDepsRef.current;
+                    if (!latest.onArmLive || latest.killSwitch) {
+                      setToast({ tone: 'info', text: 'Kopírka se nezapnula: Kill switch je aktivní nebo worker není dostupný.' });
+                      return;
+                    }
+                    const arm = latest.onArmLive;
+                    void runCopierTransition(groupId, true, () => arm());
+                  },
+                } : current));
               } else {
-                setPendingAction(null);
+                // Souběžný Flatten: doběhnuvší příkaz nesmí zavřít cizí otevřený dialog.
+                setPendingAction(current => (current === action ? null : current));
               }
-            }).finally(() => { if (write) groupLibraryFence.endWrite(write); });
+            }, undefined, { confirmedTarget: action.confirmedTarget }).finally(() => { if (write) groupLibraryFence.endWrite(write); });
           }}
         />
       )}
@@ -3157,7 +3311,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
     : !runtimeReady
       ? 'Execution runtime není pro tuto skupinu dostupný.'
       : !connected && connectBlocked
-        ? 'Zapnutí blokuje kill switch, denní zámek, cooldown nebo pauza pravidel dne.'
+        ? 'Zapnutí blokuje kill switch, denní zámek, cooldown, pauza pravidel dne nebo běžící Flatten All.'
         : connected ? 'Kliknutím bezpečně vypnout copier.' : 'Kliknutím zapnout copier naostro.';
 
   // Dokud stav neznáme, nesmí přepínač tvrdit OFF — armovaný copier by se
@@ -3992,7 +4146,7 @@ const CompactAccountSectionHead = ({ columns, indent = false }: { columns: 'mark
   </div>
 );
 
-const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, powerDisplayKey = '', dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
+const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, powerDisplayKey = '', dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, pendingEntryCancel = null, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
   group: CopyGroupConfig;
   /** Fáze ze stavového ostrova. Karta je jeden box, takže tu rám obepne
    *  celou skupinu včetně účtů — na rozdíl od tabulkového rozložení. */
@@ -4027,7 +4181,7 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
   onToggleEnabled: () => void;
   onFlatten: () => void;
   onFlattenAccount: (accountId: number) => void;
-  onCancelOrder: (orderId: number) => void;
+  pendingEntryCancel?: LiveDashboardPendingCancel | null;
   onRefreshOrders?: () => Promise<void> | void;
   onRemoveUnavailableFollower: (accountId: number) => void;
   onApplyTemplate: (template: CopyGroupTemplate) => void;
@@ -4326,14 +4480,7 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
                     <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${order.working ? 'bg-blue-500/10 text-blue-500' : 'bg-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>{order.status}</span>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  disabled={!order.working || busyCommand != null}
-                  onClick={() => onCancelOrder(order.id)}
-                  className="h-9 rounded-lg border border-rose-500/20 px-3 font-bold text-rose-500 disabled:opacity-35"
-                >
-                  Zrušit
-                </button>
+                <DashboardOrderCancelButton order={order} cancel={pendingEntryCancel} blocked={busyCommand != null} compact />
               </li>
             ))}
           </ul>
@@ -4374,7 +4521,7 @@ const CompactSheet = ({ label, busy = false, onClose, children }: {
   return createPortal(
     <div className="fixed inset-0 z-[160]" role="dialog" aria-modal="true" aria-label={label}>
       <button type="button" aria-label="Zavřít" className="compact-sheet-scrim absolute inset-0 cursor-default bg-slate-950/50" onClick={() => { if (!busy) onClose(); }} />
-      <section className="compact-sheet absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-2xl border-t border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 pt-2 shadow-2xl">
+      <section className="compact-sheet absolute inset-x-0 max-h-[88vh] overflow-y-auto rounded-t-2xl border-t border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 pt-2 shadow-2xl" style={{ bottom: 'var(--live-safety-height, 0px)' }}>
         <div aria-hidden="true" className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-[var(--border-subtle)]" />
         {children}
       </section>
@@ -4423,17 +4570,22 @@ export const GroupActionMenu = ({ active, onToggleEnabled, onEdit, onDelete, tem
   </div>;
 };
 
-const TopActionsMenu = ({ onTemplates, onKillSwitch, onDayLock, killSwitchActive, dayLockActive, runtimeReady, redactNames, onToggleRedact }: {
+const TopActionsMenu = ({ onTemplates, onDisarm, copierOffVerified, stateVerifying, onKillSwitch, onDayLock, killSwitchActive, dayLockActive, runtimeReady, redactNames, onToggleRedact }: {
   onTemplates: () => void;
   /** Telefon: skrytí jmen účtů (na desktopu je to ikona oka v hlavičce). */
   redactNames?: boolean;
   onToggleRedact?: () => void;
+  /** OFF bez vazby na skupinu (INV-UI-02). */
+  onDisarm?: () => void;
+  copierOffVerified: boolean;
+  stateVerifying: boolean;
   onKillSwitch?: () => Promise<void> | void;
   onDayLock?: () => Promise<void> | void;
   killSwitchActive: boolean;
   dayLockActive: boolean;
   runtimeReady: boolean;
 }) => {
+  const brakes = liveTopMenuBrakes({ hasDisarm: !!onDisarm, hasKill: !!onKillSwitch, provablyOff: copierOffVerified, killActive: killSwitchActive, stateVerifying });
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -4467,13 +4619,22 @@ const TopActionsMenu = ({ onTemplates, onKillSwitch, onDayLock, killSwitchActive
         >
           <ShieldAlert size={13} />{dayLockActive ? 'Den je zamčený' : 'Zamknout den'}
         </button>
+        {brakes.offerDisarm ? (
+          <button
+            onClick={() => { setOpen(false); onDisarm?.(); }}
+            className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)]"
+          >
+            <Power size={13} />OFF
+          </button>
+        ) : null}
         <button
-          // Kill switch je jednosměrná brzda: nesmí čekat na ověřený stav runtime.
-          disabled={!onKillSwitch || killSwitchActive}
+          // Kill switch je jednosměrná brzda: nesmí čekat na ověřený stav runtime
+          // a nezamkne ho ani „aktivní“ ze starého statusu.
+          disabled={brakes.killDisabled}
           onClick={() => { setOpen(false); void onKillSwitch?.(); }}
           className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-rose-600 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <AlertTriangle size={13} />{killSwitchActive ? 'Kill switch aktivní' : 'Kill switch'}
+          <AlertTriangle size={13} />{brakes.killShownActive ? 'Kill switch aktivní' : 'Kill switch'}
         </button>
       </div>
     </>, document.body) : null}
@@ -5201,7 +5362,7 @@ export const AccountEligibilityPill = ({ accountId = null, eligibility, live, un
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, tradeCard = null, orders, eligibilityByAccount, tradeCutsByAccount, participationByAccount, onFollowerEnabled, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, orderColumns }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, tradeCard = null, orders, eligibilityByAccount, tradeCutsByAccount, participationByAccount, onFollowerEnabled, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onFlattenAccount, onRemoveUnavailableFollower, pendingEntryCancel = null, redactNames, redaction, orderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -5222,7 +5383,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, tradeCard =
   dailyPnlPending: boolean;
   onFlattenAccount: (accountId: number) => void;
   onRemoveUnavailableFollower: (accountId: number) => void;
-  onCancelOrder: (orderId: number) => void;
+  pendingEntryCancel?: LiveDashboardPendingCancel | null;
   redactNames: boolean;
   redaction: RedactionSettings;
   orderColumns: Array<{ key: OrderColumnKey; label: string }>;
@@ -5389,7 +5550,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, tradeCard =
                   };
                   return orderColumns.map(column => <React.Fragment key={column.key}>{cells[column.key]}</React.Fragment>);
                 })()}
-                <td className="px-3 py-1.5 text-right"><button disabled={!order.working || busyCommand != null} onClick={() => onCancelOrder(order.id)} className="h-6 rounded-md border border-rose-500/20 px-2 text-[10px] font-bold text-rose-500 disabled:opacity-35">Cancel</button></td>
+                <td className="px-3 py-1.5 text-right"><DashboardOrderCancelButton order={order} cancel={pendingEntryCancel} blocked={busyCommand != null} /></td>
               </tr>
             ))}</tbody>
           </table>
@@ -6267,7 +6428,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLockRea
               </>
             )}
             {view.kind === 'main' ? (
-              <button onClick={onClose} disabled={saving} aria-label="Zavřít" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] disabled:opacity-40"><X size={17} /></button>
+              <button onClick={onClose} aria-label="Zavřít" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] disabled:opacity-40"><X size={17} /></button>
             ) : null}
           </header>
 
@@ -6480,7 +6641,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLockRea
           {workerDiscoveryNotice}
           {libraryNotice}
           <footer className="flex gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
-            <button onClick={onClose} disabled={saving} className="h-11 w-24 shrink-0 rounded-xl border border-[var(--border-subtle)] text-[13px] font-bold text-[var(--text-secondary)]">Zrušit</button>
+            <button onClick={onClose} className="h-11 min-w-24 shrink-0 whitespace-nowrap rounded-xl border border-[var(--border-subtle)] px-2 text-[13px] font-bold text-[var(--text-secondary)]">{saving ? BUSY_CLOSE_LABEL : 'Zrušit'}</button>
             <button onClick={submit} disabled={saving || libraryState === 'needs-import'} className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 text-[13px] font-black text-white disabled:opacity-50"><Save size={15} /> {saveLabel}</button>
           </footer>
         </section>
@@ -6533,7 +6694,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLockRea
               ) : null}
             </div>
           </div>
-          <button onClick={onClose} disabled={saving} aria-label="Zavřít" className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] disabled:opacity-40"><X size={17} /></button>
+          <button onClick={onClose} aria-label="Zavřít" className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] disabled:opacity-40"><X size={17} /></button>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -6692,7 +6853,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLockRea
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] px-5 py-3.5">
           <div>{onDelete ? <button onClick={onDelete} disabled={saving} className="flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10"><Trash2 size={14} /> Smazat skupinu</button> : null}</div>
           <div className="flex gap-2">
-            <button onClick={onClose} disabled={saving} className="h-9 rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zrušit</button>
+            <button onClick={onClose} className="h-9 rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">{saving ? BUSY_CLOSE_LABEL : 'Zrušit'}</button>
             <button onClick={submit} disabled={saving || libraryState === 'needs-import'} className="flex h-9 items-center gap-1.5 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50"><Save size={14} /> {saving ? (libraryState === 'ready' ? 'Ukládám…' : 'Obnovuji a ukládám…') : libraryState === 'error' || libraryState === 'loading' ? 'Znovu načíst a uložit' : isNew ? 'Vytvořit skupinu' : 'Uložit změny'}</button>
           </div>
         </footer>
@@ -7076,12 +7237,12 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
       <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-3">
         {state.savedSuccessfully ? (
           <>
-            <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zavřít</button>
+            <button type="button" onClick={onClose} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">{busy ? BUSY_CLOSE_LABEL : 'Zavřít'}</button>
             {onArm ? <button type="button" onClick={onArm} disabled={busy} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white hover:bg-emerald-500 disabled:opacity-50">Zapnout</button> : null}
           </>
         ) : (
           <>
-            <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zavřít</button>
+            <button type="button" onClick={onClose} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">{busy ? BUSY_CLOSE_LABEL : 'Zavřít'}</button>
             <button type="button" onClick={onEdit} disabled={busy} className="h-10 rounded-xl border border-indigo-500/25 px-4 text-xs font-black text-indigo-600 hover:bg-indigo-500/[0.06] disabled:opacity-50">Otevřít Edit group</button>
             {state.plan ? <button type="button" onClick={() => onConfirm(state.plan as UnavailableFollowerRemovalPlan)} disabled={busy} className={`h-10 rounded-xl px-4 text-xs font-black text-white disabled:opacity-50 ${state.ownershipWaiverStep ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>{busy ? 'Ukládám…' : state.ownershipWaiverStep ? 'Přebírám odpovědnost a odebírám' : 'Odebrat nedostupné účty a uložit'}</button> : null}
           </>
@@ -7265,7 +7426,7 @@ export const ArmPositionBlockDialog = ({ groupName, accounts, unverifiedNames = 
         ) : null}
       </div>
       <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--border-subtle)] px-5 py-3">
-        <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Nechat vypnuté</button>
+        <button type="button" onClick={onClose} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">{excludingAccountId != null ? 'Zavřít, účet se vyřadí, kopírka se nezapne' : busy ? BUSY_CLOSE_LABEL : 'Nechat vypnuté'}</button>
         {clear && onArm ? <button type="button" onClick={onArm} disabled={busy} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white hover:bg-emerald-500 disabled:opacity-50">{unverified ? 'Zkusit zapnout' : 'Zapnout'}</button> : null}
       </div>
     </section>
@@ -7398,8 +7559,8 @@ const CompactFlattenSheet = ({ preview, busy, apiReady, stateUnverified = false,
       <button type="button" disabled={busy} onClick={onConfirm} className="h-12 w-full rounded-xl bg-rose-600 text-sm font-black text-white disabled:opacity-50">
         {busy ? 'Připravuji…' : confirmLabel}
       </button>
-      <button type="button" disabled={busy} onClick={onClose} className="mt-2 h-11 w-full rounded-xl border border-[var(--border-subtle)] text-[13px] font-bold text-[var(--text-secondary)]">
-        Zrušit
+      <button type="button" onClick={onClose} className="mt-2 h-11 w-full rounded-xl border border-[var(--border-subtle)] text-[13px] font-bold text-[var(--text-secondary)]">
+        {busy ? BUSY_CLOSE_LABEL : 'Zrušit'}
       </button>
     </CompactSheet>
   );
@@ -7432,8 +7593,8 @@ export const ConfirmActionDialog = ({ action, busy, apiReady, stateUnverified = 
         </div>
       ) : null}
       <div className="flex justify-end gap-2 mt-5">
-        {!action.blocked ? <button onClick={onClose} disabled={busy} className="h-10 px-4 rounded-xl border border-[var(--border-subtle)] text-xs font-bold text-[var(--text-secondary)]">Zrušit</button> : null}
-        <button onClick={onConfirm} disabled={busy} className={`h-10 px-4 rounded-xl text-white text-xs font-bold disabled:opacity-50 ${action.danger ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>{busy ? 'Připravuji…' : action.confirmLabel}</button>
+        {!action.blocked ? <button onClick={onClose} className="h-10 px-4 rounded-xl border border-[var(--border-subtle)] text-xs font-bold text-[var(--text-secondary)]">{busy ? BUSY_CLOSE_LABEL : 'Zrušit'}</button> : null}
+        <button onClick={onConfirm} disabled={busy && !action.blocked} className={`h-10 px-4 rounded-xl text-white text-xs font-bold disabled:opacity-50 ${action.danger ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>{busy && !action.blocked ? 'Připravuji…' : action.confirmLabel}</button>
       </div>
     </section>
   </div>, document.body,
@@ -7452,7 +7613,7 @@ const CopyTradingHelpDialog = ({ onClose, apiReady }: { onClose: () => void; api
 );
 
 const StatusToast = ({ tone, text }: { tone: 'success' | 'info' | 'error'; text: string }) => createPortal(
-  <div role="status" className={`native-fixed-above-tab-bar fixed z-[180] right-5 bottom-5 max-w-sm rounded-lg border bg-[var(--bg-card)] shadow-xl px-4 py-3 flex items-start gap-2.5 ${tone === 'error' ? 'border-rose-500/30' : tone === 'success' ? 'border-emerald-500/30' : 'border-blue-500/30'}`}>
+  <div role="status" className={`fixed z-[180] right-5 max-w-sm rounded-lg border bg-[var(--bg-card)] shadow-xl px-4 py-3 flex items-start gap-2.5 ${tone === 'error' ? 'border-rose-500/30' : tone === 'success' ? 'border-emerald-500/30' : 'border-blue-500/30'}`} style={{ bottom: 'calc(var(--live-safety-height, var(--live-bottom-clear)) + 1.25rem)' }}>
     {tone === 'error' ? <AlertTriangle size={17} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={17} className={tone === 'success' ? 'text-emerald-500 shrink-0' : 'text-blue-500 shrink-0'} />}<span className="text-xs font-bold text-[var(--text-primary)] leading-relaxed">{text}</span>
   </div>, document.body,
 );

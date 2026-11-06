@@ -9,7 +9,16 @@ import { stableHash64 } from '../services/copierKeys.js';
 
 export const LEADER_ENTRY_TICK = 0.25;
 export const LEADER_ENTRY_MAX_QUANTITY = 50;
-const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
+/** Ruční vstup jen na MNQ (2. 11. 2026): NQ, kontinuální řada ani jiný root neprojdou. */
+export const LEADER_ENTRY_SYMBOL_PATTERN = /^MNQ[HMUZ]\d$/;
+const SYMBOL_PATTERN = LEADER_ENTRY_SYMBOL_PATTERN;
+/**
+ * Market (2. 11. 2026): nejstarší kotace, ze které smí uživatel Market poslat
+ * (stáří v okamžiku vyhodnocení ve workeru, včetně cesty relayí), a tolerance
+ * hodin klienta do budoucna.
+ */
+export const LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS = 5_000;
+export const LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS = 2_000;
 /** Vlastní jmenný prostor — náhled se nikdy nesmí plést s id skutečného odeslání. */
 const OPERATION_ID_PATTERN = /^preview:[a-zA-Z0-9_-]{8,100}$/;
 
@@ -22,10 +31,30 @@ export interface LeaderEntryPreviewCommand {
   symbol: string;
   side: 'Buy' | 'Sell';
   quantity: number;
-  orderType: 'Limit' | 'Stop';
-  price: number;
-  stopLoss: number;
-  takeProfit: number;
+  /** `Market` = skutečný Market u brokera (bez `price`), nikdy převod na Limit. */
+  orderType: LeaderEntryOrderType;
+  /** Cena Limit/Stop; u Marketu chybí. */
+  price?: number;
+  /**
+   * Cena, kterou uživatel viděl (Buy = ask, Sell = bid). U Marketu povinná —
+   * jen odhad rizika a zobrazení, nikdy cena příkazu.
+   */
+  referencePrice?: number;
+  /** Kdy klient kotaci přijal (epoch ms); u Marketu povinné. */
+  quoteReceivedAt?: number;
+  /**
+   * SL a TP; obě chybí jen u holého Marketu z telefonní lišty (Filip 1. 11. 2026:
+   * „market ihned bez SL/TP“) — pozice je pak vědomě bez ochrany, nohy se
+   * doplní `attach-brackets`.
+   */
+  stopLoss?: number;
+  takeProfit?: number;
+  /**
+   * Přikoupení do otevřené pozice (3. 11. 2026, návrh v4): pozice, kterou uživatel
+   * viděl. Chybí = vstup jen z flat (dnešní brána `account-not-flat`). Worker při
+   * jakékoli neshodě s čerstvým stavem vrátí `intent-position-changed`.
+   */
+  position?: LeaderEntryPositionIntent;
   /** Co uživatel viděl v náhledu panelu; worker musí přepočtem dojít ke stejnému. */
   intent: {
     armedAt: number;
@@ -34,16 +63,30 @@ export interface LeaderEntryPreviewCommand {
   };
 }
 
+export type LeaderEntryOrderType = 'Limit' | 'Stop' | 'Market';
+
+export interface LeaderEntryPositionIntent {
+  mode: 'add';
+  /** Strana pozice (= strana přikoupení). */
+  side: 'Buy' | 'Sell';
+  /** |pozice| leadera, kterou uživatel viděl. */
+  quantity: number;
+  /** Id vstupů vlastních lístků pozice ze statusu workeru (seřazená). */
+  ticketEntryIds: string[];
+}
+
 export interface LeaderEntryPreviewIssue { code: string; text: string }
 
 export interface LeaderEntryPreviewOrder {
   accountId: number;
   side: 'Buy' | 'Sell';
   quantity: number;
-  orderType: 'Limit' | 'Stop';
+  orderType: LeaderEntryOrderType;
+  /** U Marketu cena, kterou uživatel viděl (odhad), ne cena příkazu. */
   price: number;
-  stopLoss: number;
-  takeProfit: number;
+  /** null = holý Market bez nohou. */
+  stopLoss: number | null;
+  takeProfit: number | null;
 }
 
 export interface LeaderEntryPreviewResult {
@@ -63,7 +106,10 @@ const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 
 const price = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
 const accountId = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const quantity = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= LEADER_ENTRY_MAX_QUANTITY;
-const COMMAND_KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'symbol', 'side', 'quantity', 'orderType', 'price', 'stopLoss', 'takeProfit', 'intent'];
+const COMMAND_KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'symbol', 'side', 'quantity', 'orderType', 'price', 'referencePrice', 'quoteReceivedAt', 'stopLoss', 'takeProfit', 'position', 'intent'];
+const POSITION_KEYS = ['mode', 'side', 'quantity', 'ticketEntryIds'];
+const BROKER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
+const epochMs = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value > 1_500_000_000_000 && value < 4_000_000_000_000;
 const INTENT_KEYS = ['armedAt', 'groupConfigHash', 'followerQuantities'];
 
 /** Striktní validace náhledu (whitelist klíčů, typy, tick); vyhodí `invalid-relay-command-payload`. */
@@ -79,8 +125,27 @@ export function validateLeaderEntryPreview(value: unknown): LeaderEntryPreviewCo
   if (typeof command.symbol !== 'string' || !SYMBOL_PATTERN.test(command.symbol)) fail();
   if (command.side !== 'Buy' && command.side !== 'Sell') fail();
   if (!quantity(command.quantity)) fail();
-  if (command.orderType !== 'Limit' && command.orderType !== 'Stop') fail();
-  if (!price(command.price) || !price(command.stopLoss) || !price(command.takeProfit)) fail();
+  if (command.orderType !== 'Limit' && command.orderType !== 'Stop' && command.orderType !== 'Market') fail();
+  if (command.orderType === 'Market') {
+    // Market nemá cenu příkazu; cena, kterou uživatel viděl, a čas kotace jsou povinné.
+    if (command.price !== undefined || !price(command.referencePrice) || !epochMs(command.quoteReceivedAt)) fail();
+  } else {
+    if (!price(command.price)) fail();
+    if (command.referencePrice !== undefined && !price(command.referencePrice)) fail();
+    if (command.quoteReceivedAt !== undefined && !epochMs(command.quoteReceivedAt)) fail();
+  }
+  // Holý Market: SL i TP chybí oba (nikdy jen jedna noha).
+  const bare = command.stopLoss === undefined && command.takeProfit === undefined;
+  if (bare ? command.orderType !== 'Market' : (!price(command.stopLoss) || !price(command.takeProfit))) fail();
+  if (command.position !== undefined) {
+    // Přikoupení: vždy se SL i TP (holé přikoupení nikdy), strana = strana pozice.
+    const position = command.position as Record<string, unknown> | null;
+    if (!position || typeof position !== 'object' || Array.isArray(position) || Object.keys(position).some(key => !POSITION_KEYS.includes(key))) fail();
+    if (position!.mode !== 'add' || position!.side !== command.side || !quantity(position!.quantity) || bare) fail();
+    const ids = position!.ticketEntryIds;
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > LEADER_ENTRY_MAX_QUANTITY
+      || ids.some(id => typeof id !== 'string' || !BROKER_ORDER_ID_PATTERN.test(id)) || new Set(ids).size !== ids.length) fail();
+  }
   const intent = command.intent as Record<string, unknown> | null;
   if (!intent || typeof intent !== 'object' || Object.keys(intent).some(key => !INTENT_KEYS.includes(key))) fail();
   if (typeof intent!.armedAt !== 'number' || !Number.isSafeInteger(intent!.armedAt) || intent!.armedAt < 0) fail();
@@ -121,10 +186,23 @@ export interface LiveEntryPreviewDraft {
   symbol: string;
   side: 'Buy' | 'Sell';
   quantity: number;
-  orderType: 'Limit' | 'Stop';
-  price: number;
-  stopLoss: number;
-  takeProfit: number;
+  orderType: LeaderEntryOrderType;
+  price?: number;
+  referencePrice?: number;
+  quoteReceivedAt?: number;
+  /** Obě chybí = holý Market. */
+  stopLoss?: number;
+  takeProfit?: number;
+  /** Přikoupení do otevřené pozice (jen s capability `manual-entry-scale-in-v1`). */
+  position?: LeaderEntryPositionIntent;
+}
+
+/** Holý Market (bez SL i TP)? */
+export const isBareLeaderEntry = (command: { stopLoss?: number; takeProfit?: number }): boolean => command.stopLoss === undefined && command.takeProfit === undefined;
+
+/** Cena vstupu pro odhad rizika a strany SL/TP: Limit/Stop cena příkazu, Market cena, kterou uživatel viděl. */
+export function leaderEntryRiskPrice(command: { orderType: LeaderEntryOrderType; price?: number; referencePrice?: number }): number {
+  return command.orderType === 'Market' ? command.referencePrice! : command.price!;
 }
 
 /**
@@ -164,6 +242,6 @@ export function previewSymbolFromChartSource(source: string | null | undefined):
   const trimmed = (source ?? '').trim().toUpperCase();
   const prefix = trimmed.includes(':') ? trimmed.slice(0, trimmed.indexOf(':')) : null;
   if (prefix != null && prefix !== 'IBKR') return null;
-  const match = /(?:^|[:\s])(MNQ|NQ)([HMUZ])(?:20)?(\d{1,2})$/.exec((source ?? '').trim().toUpperCase());
+  const match = /(?:^|[:\s])(MNQ)([HMUZ])(?:20)?(\d{1,2})$/.exec((source ?? '').trim().toUpperCase());
   return match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
 }

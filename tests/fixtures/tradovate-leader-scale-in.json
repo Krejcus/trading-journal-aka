@@ -1,0 +1,2489 @@
+{
+ "version": 3,
+ "recordedAt": "2026-11-03T06:27:29.543Z",
+ "scenario": "scale-in",
+ "symbol": "MNQZ6",
+ "side": "Buy",
+ "prices": {
+  "market": 28087.5,
+  "stopLoss": 27937.5,
+  "takeProfit": 28537.5,
+  "loosened": {
+   "stopLoss": 27936.5,
+   "takeProfit": 28538.5
+  },
+  "addLimit": 28027.5
+ },
+ "acks": [
+  {
+   "entryBrokerOrderId": "611860531131",
+   "firstBrokerOrderId": "611860531132",
+   "secondBrokerOrderId": "611860531133",
+   "accepted": true,
+   "definitive": true
+  },
+  {
+   "entryBrokerOrderId": "611860531152",
+   "firstBrokerOrderId": "611860531153",
+   "secondBrokerOrderId": "611860531154",
+   "accepted": true,
+   "definitive": true
+  },
+  {
+   "entryBrokerOrderId": "611860531189",
+   "firstBrokerOrderId": "611860531190",
+   "secondBrokerOrderId": "611860531191",
+   "accepted": true,
+   "definitive": true
+  }
+ ],
+ "outcome": {
+  "kind": "clean"
+ },
+ "steps": [
+  {
+   "t": 1696,
+   "step": "OSO základ (Market)"
+  },
+  {
+   "t": 1875,
+   "step": "OSO základ (Market) ack",
+   "detail": {
+    "entryBrokerOrderId": "611860531131",
+    "firstBrokerOrderId": "611860531132",
+    "secondBrokerOrderId": "611860531133",
+    "accepted": true,
+    "definitive": true
+   }
+  },
+  {
+   "t": 2144,
+   "step": "základ vyplněn",
+   "detail": {
+    "net": 1
+   }
+  },
+  {
+   "t": 2313,
+   "step": "tvar po základu",
+   "detail": {
+    "netPosition": 1,
+    "orders": 3
+   }
+  },
+  {
+   "t": 2313,
+   "step": "OSO přikoupení (Market)"
+  },
+  {
+   "t": 2522,
+   "step": "OSO přikoupení (Market) ack",
+   "detail": {
+    "entryBrokerOrderId": "611860531152",
+    "firstBrokerOrderId": "611860531153",
+    "secondBrokerOrderId": "611860531154",
+    "accepted": true,
+    "definitive": true
+   }
+  },
+  {
+   "t": 2675,
+   "step": "přikoupení vyplněno",
+   "detail": {
+    "net": 2
+   }
+  },
+  {
+   "t": 3857,
+   "step": "tvar po přikoupení",
+   "detail": {
+    "netPosition": 2,
+    "orders": 6
+   }
+  },
+  {
+   "t": 3857,
+   "step": "modify SL souběžně",
+   "detail": {
+    "ids": [
+     "611860531132",
+     "611860531153"
+    ],
+    "change": {
+     "quantity": 1,
+     "orderType": "Stop",
+     "stopPrice": 27936.5
+    }
+   }
+  },
+  {
+   "t": 4022,
+   "step": "modify SL výsledky",
+   "detail": [
+    {
+     "id": "611860531132",
+     "ms": 154,
+     "confirmedBy": "stream-replaced"
+    },
+    {
+     "id": "611860531153",
+     "ms": 165,
+     "confirmedBy": "stream-replaced"
+    }
+   ]
+  },
+  {
+   "t": 4022,
+   "step": "modify TP souběžně",
+   "detail": {
+    "ids": [
+     "611860531133",
+     "611860531154"
+    ],
+    "change": {
+     "quantity": 1,
+     "orderType": "Limit",
+     "limitPrice": 28538.5
+    }
+   }
+  },
+  {
+   "t": 4175,
+   "step": "modify TP výsledky",
+   "detail": [
+    {
+     "id": "611860531133",
+     "ms": 152,
+     "confirmedBy": "stream-replaced"
+    },
+    {
+     "id": "611860531154",
+     "ms": 153,
+     "confirmedBy": "stream-replaced"
+    }
+   ]
+  },
+  {
+   "t": 5364,
+   "step": "tvar po posunu",
+   "detail": {
+    "netPosition": 2,
+    "orders": 6
+   }
+  },
+  {
+   "t": 5365,
+   "step": "OSO čekající přikoupení (Limit)"
+  },
+  {
+   "t": 5541,
+   "step": "OSO čekající přikoupení (Limit) ack",
+   "detail": {
+    "entryBrokerOrderId": "611860531189",
+    "firstBrokerOrderId": "611860531190",
+    "secondBrokerOrderId": "611860531191",
+    "accepted": true,
+    "definitive": true
+   }
+  },
+  {
+   "t": 7221,
+   "step": "tvar s čekajícím přikoupením",
+   "detail": {
+    "netPosition": 2,
+    "orders": 9
+   }
+  },
+  {
+   "t": 7222,
+   "step": "liquidate (test)"
+  },
+  {
+   "t": 7524,
+   "step": "liquidate výsledek",
+   "detail": {
+    "status": "submitted"
+   }
+  },
+  {
+   "t": 8348,
+   "step": "pozice zavřena",
+   "detail": {
+    "net": 0
+   }
+  },
+  {
+   "t": 9252,
+   "step": "tvar po liquidate (+500 ms)",
+   "detail": {
+    "netPosition": 0,
+    "orders": 10
+   }
+  },
+  {
+   "t": 11446,
+   "step": "tvar po liquidate (+2000 ms)",
+   "detail": {
+    "netPosition": 0,
+    "orders": 10
+   }
+  },
+  {
+   "t": 15788,
+   "step": "tvar po liquidate (+4000 ms)",
+   "detail": {
+    "netPosition": 0,
+    "orders": 10
+   }
+  },
+  {
+   "t": 15953,
+   "step": "stav leadera (úklid)",
+   "detail": {
+    "netPosition": 0,
+    "orders": 10
+   }
+  }
+ ],
+ "events": [
+  {
+   "t": 1999,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531131:PendingNew"
+    },
+    "receivedAt": 1793687251393
+   }
+  },
+  {
+   "t": 1999,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531131:PendingNew"
+    },
+    "receivedAt": 1793687251395
+   }
+  },
+  {
+   "t": 1999,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531132:PendingNew"
+    },
+    "receivedAt": 1793687251395
+   }
+  },
+  {
+   "t": 1999,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531132:PendingNew"
+    },
+    "receivedAt": 1793687251395
+   }
+  },
+  {
+   "t": 2000,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531131:PendingNew"
+    },
+    "receivedAt": 1793687251410
+   }
+  },
+  {
+   "t": 2032,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531133:PendingNew"
+    },
+    "receivedAt": 1793687251410
+   }
+  },
+  {
+   "t": 2032,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531133:PendingNew"
+    },
+    "receivedAt": 1793687251410
+   }
+  },
+  {
+   "t": 2032,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531132:PendingNew"
+    },
+    "receivedAt": 1793687251410
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531131:PendingNew"
+    },
+    "receivedAt": 1793687251410
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531132:PendingNew"
+    },
+    "receivedAt": 1793687251412
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531132:Suspended"
+    },
+    "receivedAt": 1793687251412
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531133:PendingNew"
+    },
+    "receivedAt": 1793687251414
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531133:Suspended"
+    },
+    "receivedAt": 1793687251414
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531131:PendingNew"
+    },
+    "receivedAt": 1793687251415
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531131:PendingNew"
+    },
+    "receivedAt": 1793687251415
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531132",
+     "status": "working",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531131:Working"
+    },
+    "receivedAt": 1793687251415
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531132",
+     "status": "working",
+     "updatedAt": 1793687251378,
+     "sourceVersion": "611860531131:Working"
+    },
+    "receivedAt": 1793687251416
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531132",
+     "status": "filled",
+     "updatedAt": 1793687251378,
+     "sourceVersion": "611860531131:Filled"
+    },
+    "receivedAt": 1793687251417
+   }
+  },
+  {
+   "t": 2033,
+   "event": {
+    "type": "fill",
+    "fill": {
+     "fillId": "611860531138",
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "quantity": 1,
+     "price": 28083.75,
+     "filledAt": 1793687251378
+    },
+    "receivedAt": 1793687251417
+   }
+  },
+  {
+   "t": 2034,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 1,
+     "linkedOrderId": "611860531132",
+     "status": "filled",
+     "updatedAt": 1793687251378,
+     "sourceVersion": "611860531131:Filled"
+    },
+    "receivedAt": 1793687251417
+   }
+  },
+  {
+   "t": 2034,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531131",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 1,
+     "linkedOrderId": "611860531132",
+     "status": "filled",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531131:Filled"
+    },
+    "receivedAt": 1793687251420
+   }
+  },
+  {
+   "t": 2034,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531132:PendingNew"
+    },
+    "receivedAt": 1793687251426
+   }
+  },
+  {
+   "t": 2034,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531133:PendingNew"
+    },
+    "receivedAt": 1793687251427
+   }
+  },
+  {
+   "t": 2034,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531132:PendingNew"
+    },
+    "receivedAt": 1793687251428
+   }
+  },
+  {
+   "t": 2034,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531133:PendingNew"
+    },
+    "receivedAt": 1793687251428
+   }
+  },
+  {
+   "t": 2034,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531132:PendingNew"
+    },
+    "receivedAt": 1793687251429
+   }
+  },
+  {
+   "t": 2034,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "working",
+     "updatedAt": 1793687251383,
+     "sourceVersion": "611860531145:Working"
+    },
+    "receivedAt": 1793687251438
+   }
+  },
+  {
+   "t": 2034,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "working",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531145:Working"
+    },
+    "receivedAt": 1793687251439
+   }
+  },
+  {
+   "t": 2035,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531132",
+     "status": "pending",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531133:PendingNew"
+    },
+    "receivedAt": 1793687251440
+   }
+  },
+  {
+   "t": 2035,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531132",
+     "status": "working",
+     "updatedAt": 1793687251384,
+     "sourceVersion": "611860531144:Working"
+    },
+    "receivedAt": 1793687251440
+   }
+  },
+  {
+   "t": 2035,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531132",
+     "status": "working",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531144:Working"
+    },
+    "receivedAt": 1793687251441
+   }
+  },
+  {
+   "t": 2037,
+   "event": {
+    "type": "position",
+    "position": {
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "netQuantity": 1
+    },
+    "receivedAt": 1793687251580
+   },
+   "synthetic": "z WS rámce position (+160 ms zpoždění emitu)"
+  },
+  {
+   "t": 2622,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531152:PendingNew"
+    },
+    "receivedAt": 1793687252006
+   }
+  },
+  {
+   "t": 2622,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531152:PendingNew"
+    },
+    "receivedAt": 1793687252006
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531153:PendingNew"
+    },
+    "receivedAt": 1793687252006
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531153:PendingNew"
+    },
+    "receivedAt": 1793687252009
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531152:PendingNew"
+    },
+    "receivedAt": 1793687252011
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531154:PendingNew"
+    },
+    "receivedAt": 1793687252013
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531154:PendingNew"
+    },
+    "receivedAt": 1793687252013
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531153:PendingNew"
+    },
+    "receivedAt": 1793687252014
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531152:PendingNew"
+    },
+    "receivedAt": 1793687252015
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531153:PendingNew"
+    },
+    "receivedAt": 1793687252016
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531153:Suspended"
+    },
+    "receivedAt": 1793687252016
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531154:PendingNew"
+    },
+    "receivedAt": 1793687252016
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531154:Suspended"
+    },
+    "receivedAt": 1793687252017
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531152:PendingNew"
+    },
+    "receivedAt": 1793687252019
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531152:PendingNew"
+    },
+    "receivedAt": 1793687252024
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531153",
+     "status": "working",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531152:Working"
+    },
+    "receivedAt": 1793687252025
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531153",
+     "status": "working",
+     "updatedAt": 1793687251987,
+     "sourceVersion": "611860531152:Working"
+    },
+    "receivedAt": 1793687252025
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "linkedOrderId": "611860531153",
+     "status": "filled",
+     "updatedAt": 1793687251987,
+     "sourceVersion": "611860531152:Filled"
+    },
+    "receivedAt": 1793687252060
+   }
+  },
+  {
+   "t": 2637,
+   "event": {
+    "type": "fill",
+    "fill": {
+     "fillId": "611860531159",
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "quantity": 1,
+     "price": 28083.5,
+     "filledAt": 1793687251987
+    },
+    "receivedAt": 1793687252060
+   }
+  },
+  {
+   "t": 2671,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 1,
+     "linkedOrderId": "611860531153",
+     "status": "filled",
+     "updatedAt": 1793687251987,
+     "sourceVersion": "611860531152:Filled"
+    },
+    "receivedAt": 1793687252060
+   }
+  },
+  {
+   "t": 2671,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531152",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Market",
+     "quantity": 1,
+     "filledQuantity": 1,
+     "linkedOrderId": "611860531153",
+     "status": "filled",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531152:Filled"
+    },
+    "receivedAt": 1793687252064
+   }
+  },
+  {
+   "t": 2671,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531153:PendingNew"
+    },
+    "receivedAt": 1793687252068
+   }
+  },
+  {
+   "t": 2671,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531154:PendingNew"
+    },
+    "receivedAt": 1793687252068
+   }
+  },
+  {
+   "t": 2671,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531153:PendingNew"
+    },
+    "receivedAt": 1793687252068
+   }
+  },
+  {
+   "t": 2672,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531154:PendingNew"
+    },
+    "receivedAt": 1793687252068
+   }
+  },
+  {
+   "t": 2672,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531153:PendingNew"
+    },
+    "receivedAt": 1793687252069
+   }
+  },
+  {
+   "t": 2672,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "working",
+     "updatedAt": 1793687251992,
+     "sourceVersion": "611860531166:Working"
+    },
+    "receivedAt": 1793687252069
+   }
+  },
+  {
+   "t": 2672,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27937.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "working",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531166:Working"
+    },
+    "receivedAt": 1793687252069
+   }
+  },
+  {
+   "t": 2672,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531153",
+     "status": "pending",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531154:PendingNew"
+    },
+    "receivedAt": 1793687252070
+   }
+  },
+  {
+   "t": 2672,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531153",
+     "status": "working",
+     "updatedAt": 1793687251992,
+     "sourceVersion": "611860531165:Working"
+    },
+    "receivedAt": 1793687252070
+   }
+  },
+  {
+   "t": 2672,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28537.5,
+     "ocoId": "611860531153",
+     "status": "working",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531165:Working"
+    },
+    "receivedAt": 1793687252070
+   }
+  },
+  {
+   "t": 2681,
+   "event": {
+    "type": "position",
+    "position": {
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "netQuantity": 2
+    },
+    "receivedAt": 1793687252224
+   },
+   "synthetic": "z WS rámce position (+160 ms zpoždění emitu)"
+  },
+  {
+   "t": 4011,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "working",
+     "updatedAt": 1793687253529,
+     "sourceVersion": "611860531173:Working"
+    },
+    "receivedAt": 1793687253554
+   }
+  },
+  {
+   "t": 4022,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "working",
+     "updatedAt": 1793687253537,
+     "sourceVersion": "611860531177:Working"
+    },
+    "receivedAt": 1793687253565
+   }
+  },
+  {
+   "t": 4174,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531132",
+     "status": "working",
+     "updatedAt": 1793687253694,
+     "sourceVersion": "611860531181:Working"
+    },
+    "receivedAt": 1793687253717
+   }
+  },
+  {
+   "t": 4175,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531153",
+     "status": "working",
+     "updatedAt": 1793687253696,
+     "sourceVersion": "611860531183:Working"
+    },
+    "receivedAt": 1793687253718
+   }
+  },
+  {
+   "t": 5690,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531189:PendingNew"
+    },
+    "receivedAt": 1793687255077
+   }
+  },
+  {
+   "t": 5690,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531189:PendingNew"
+    },
+    "receivedAt": 1793687255077
+   }
+  },
+  {
+   "t": 5698,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531190",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531189",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531190:PendingNew"
+    },
+    "receivedAt": 1793687255077
+   }
+  },
+  {
+   "t": 5698,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531190",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531189",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531190:PendingNew"
+    },
+    "receivedAt": 1793687255079
+   }
+  },
+  {
+   "t": 5698,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "linkedOrderId": "611860531190",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531189:PendingNew"
+    },
+    "receivedAt": 1793687255079
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531191",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531190",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531191:PendingNew"
+    },
+    "receivedAt": 1793687255079
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531191",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531190",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531191:PendingNew"
+    },
+    "receivedAt": 1793687255079
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531190",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531189",
+     "ocoId": "611860531191",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531190:PendingNew"
+    },
+    "receivedAt": 1793687255079
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "linkedOrderId": "611860531190",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531189:PendingNew"
+    },
+    "receivedAt": 1793687255081
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531190",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531189",
+     "ocoId": "611860531191",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531190:PendingNew"
+    },
+    "receivedAt": 1793687255082
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531190",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531189",
+     "ocoId": "611860531191",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531190:Suspended"
+    },
+    "receivedAt": 1793687255082
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531191",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531190",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531191:PendingNew"
+    },
+    "receivedAt": 1793687255082
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531191",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531190",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531191:Suspended"
+    },
+    "receivedAt": 1793687255082
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "linkedOrderId": "611860531190",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531189:PendingNew"
+    },
+    "receivedAt": 1793687255083
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "linkedOrderId": "611860531190",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531189:PendingNew"
+    },
+    "receivedAt": 1793687255083
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "linkedOrderId": "611860531190",
+     "status": "working",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531189:Working"
+    },
+    "receivedAt": 1793687255083
+   }
+  },
+  {
+   "t": 5712,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "linkedOrderId": "611860531190",
+     "status": "working",
+     "updatedAt": 1793687255055,
+     "sourceVersion": "611860531189:Working"
+    },
+    "receivedAt": 1793687255083
+   }
+  },
+  {
+   "t": 7529,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531153",
+     "status": "canceled",
+     "updatedAt": 1793687257043,
+     "sourceVersion": "611860531183:Canceled"
+    },
+    "receivedAt": 1793687257072
+   }
+  },
+  {
+   "t": 7529,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531154",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531153",
+     "status": "canceled",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531183:Canceled"
+    },
+    "receivedAt": 1793687257072
+   }
+  },
+  {
+   "t": 7559,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "canceled",
+     "updatedAt": 1793687257043,
+     "sourceVersion": "611860531173:Canceled"
+    },
+    "receivedAt": 1793687257101
+   }
+  },
+  {
+   "t": 7559,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531132",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531131",
+     "ocoId": "611860531133",
+     "status": "canceled",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531173:Canceled"
+    },
+    "receivedAt": 1793687257102
+   }
+  },
+  {
+   "t": 7559,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "linkedOrderId": "611860531190",
+     "status": "working",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531189:Working"
+    },
+    "receivedAt": 1793687257102
+   }
+  },
+  {
+   "t": 7559,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "linkedOrderId": "611860531190",
+     "status": "canceled",
+     "updatedAt": 1793687257043,
+     "sourceVersion": "611860531189:Canceled"
+    },
+    "receivedAt": 1793687257102
+   }
+  },
+  {
+   "t": 7560,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531189",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Buy",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28027.5,
+     "linkedOrderId": "611860531190",
+     "status": "canceled",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531189:Canceled"
+    },
+    "receivedAt": 1793687257102
+   }
+  },
+  {
+   "t": 7560,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531132",
+     "status": "canceled",
+     "updatedAt": 1793687257043,
+     "sourceVersion": "611860531181:Canceled"
+    },
+    "receivedAt": 1793687257103
+   }
+  },
+  {
+   "t": 7560,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531133",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531132",
+     "status": "canceled",
+     "updatedAt": 1793687251373,
+     "sourceVersion": "611860531181:Canceled"
+    },
+    "receivedAt": 1793687257103
+   }
+  },
+  {
+   "t": 7561,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "canceled",
+     "updatedAt": 1793687257043,
+     "sourceVersion": "611860531177:Canceled"
+    },
+    "receivedAt": 1793687257103
+   }
+  },
+  {
+   "t": 7561,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531153",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531152",
+     "ocoId": "611860531154",
+     "status": "canceled",
+     "updatedAt": 1793687251982,
+     "sourceVersion": "611860531177:Canceled"
+    },
+    "receivedAt": 1793687257104
+   }
+  },
+  {
+   "t": 7561,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531190",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531189",
+     "ocoId": "611860531191",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531190:Suspended"
+    },
+    "receivedAt": 1793687257104
+   }
+  },
+  {
+   "t": 7561,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531190",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Stop",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "stopPrice": 27936.5,
+     "parentOrderId": "611860531189",
+     "ocoId": "611860531191",
+     "status": "canceled",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531190:Canceled"
+    },
+    "receivedAt": 1793687257104
+   }
+  },
+  {
+   "t": 7561,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531191",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531190",
+     "status": "pending",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531191:Suspended"
+    },
+    "receivedAt": 1793687257104
+   }
+  },
+  {
+   "t": 7562,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531191",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Limit",
+     "quantity": 1,
+     "filledQuantity": 0,
+     "limitPrice": 28538.5,
+     "ocoId": "611860531190",
+     "status": "canceled",
+     "updatedAt": 1793687255052,
+     "sourceVersion": "611860531191:Canceled"
+    },
+    "receivedAt": 1793687257104
+   }
+  },
+  {
+   "t": 7940,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531217",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Market",
+     "quantity": 2,
+     "filledQuantity": 0,
+     "status": "pending",
+     "updatedAt": 1793687257303,
+     "sourceVersion": "611860531217:PendingNew"
+    },
+    "receivedAt": 1793687257329
+   }
+  },
+  {
+   "t": 7940,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531217",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Market",
+     "quantity": 2,
+     "filledQuantity": 0,
+     "status": "pending",
+     "updatedAt": 1793687257303,
+     "sourceVersion": "611860531217:PendingNew"
+    },
+    "receivedAt": 1793687257381
+   }
+  },
+  {
+   "t": 7940,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531217",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Market",
+     "quantity": 2,
+     "filledQuantity": 0,
+     "status": "working",
+     "updatedAt": 1793687257303,
+     "sourceVersion": "611860531217:Working"
+    },
+    "receivedAt": 1793687257385
+   }
+  },
+  {
+   "t": 7940,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531217",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Market",
+     "quantity": 2,
+     "filledQuantity": 0,
+     "status": "working",
+     "updatedAt": 1793687257306,
+     "sourceVersion": "611860531217:Working"
+    },
+    "receivedAt": 1793687257385
+   }
+  },
+  {
+   "t": 7940,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531217",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Market",
+     "quantity": 2,
+     "filledQuantity": 0,
+     "status": "filled",
+     "updatedAt": 1793687257306,
+     "sourceVersion": "611860531217:Filled"
+    },
+    "receivedAt": 1793687257385
+   }
+  },
+  {
+   "t": 7940,
+   "event": {
+    "type": "fill",
+    "fill": {
+     "fillId": "611860531220",
+     "brokerOrderId": "611860531217",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "quantity": 2,
+     "price": 28081,
+     "filledAt": 1793687257306
+    },
+    "receivedAt": 1793687257385
+   }
+  },
+  {
+   "t": 7940,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531217",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Market",
+     "quantity": 2,
+     "filledQuantity": 2,
+     "status": "filled",
+     "updatedAt": 1793687257306,
+     "sourceVersion": "611860531217:Filled"
+    },
+    "receivedAt": 1793687257385
+   }
+  },
+  {
+   "t": 7940,
+   "event": {
+    "type": "order",
+    "order": {
+     "brokerOrderId": "611860531217",
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "side": "Sell",
+     "orderType": "Market",
+     "quantity": 2,
+     "filledQuantity": 2,
+     "status": "filled",
+     "updatedAt": 1793687257303,
+     "sourceVersion": "611860531217:Filled"
+    },
+    "receivedAt": 1793687257397
+   }
+  },
+  {
+   "t": 8009,
+   "event": {
+    "type": "position",
+    "position": {
+     "accountId": 1001,
+     "symbol": "MNQZ6",
+     "netQuantity": 0
+    },
+    "receivedAt": 1793687257552
+   },
+   "synthetic": "z WS rámce position (+160 ms zpoždění emitu)"
+  }
+ ],
+ "note": "Fáze 0 dokupování 3. 11. 2026 (DEMO, MNQZ6): základ Market OSO → přikoupení Market OSO → souběžný posun 2× SL a 2× TP → čekající přikoupení Limit → liquidate. Position eventy doplněné z WS rámců."
+}

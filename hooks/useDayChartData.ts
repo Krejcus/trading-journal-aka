@@ -8,6 +8,8 @@ import { storageService } from '../services/storageService';
 import { tradeChartTiming } from '../services/tradeChartData';
 import { useLiveCandles } from './useLiveCandles';
 import { useTvLiveCandleFeed } from './useTvLiveCandleFeed';
+import { perfDuration } from '../lib/perfTrace';
+import { chartDataQuality } from '../lib/chartDataQuality';
 
 /**
  * Data grafu dne: obchody dne s historií plnění (šipky, SL/TP) a svíčky
@@ -15,7 +17,14 @@ import { useTvLiveCandleFeed } from './useTvLiveCandleFeed';
  * `liveFeed`: rozpracovaná poslední svíčka z kanálu ceny (jen překreslení
  * v grafu, do `candles` se nikdy nepřidává).
  */
-export function useDayChartData(day: string, dayTrades: readonly Trade[], allTrades: readonly Trade[], now: number) {
+export function useDayChartData(
+  day: string,
+  dayTrades: readonly Trade[],
+  allTrades: readonly Trade[],
+  now: number,
+  options: { perfScope?: 'live' | 'day' } = {},
+) {
+  const perfScope = options.perfScope;
   // Detaily (historie plnění) jedním dotazem; sloučené karty berou svůj zdroj.
   const sources = useMemo(() => dayTrades.map(trade => tradeDetailSource(trade, allTrades) ?? trade), [allTrades, dayTrades]);
   const detailKey = sources.filter(isEvidenceJournalTrade).map(trade => String(trade.id)).join(',');
@@ -60,8 +69,10 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
         setHistorical(previous => (previous?.day === day && previous.candles.length && tail.capKey !== capKey ? previous : stored));
         if (tail.capKey === capKey) return;
       }
+      const startedAt = performance.now();
       const { response } = await loadDayHistoricalCandles({ day, anchor, now: capKey ? capKey + HISTORICAL_LAG_MS : undefined });
       if (cancelled) return;
+      if (perfScope) perfDuration(`${perfScope}:chart:historical-load`, performance.now() - startedAt);
       setHistorical({ day, key: historicalKey, candles: response?.candles ?? [], symbol: response?.symbol ?? 'MNQ' });
       if (useTail && response) void writeDayTail({ day, anchorKey, capKey, symbol: response.symbol, candles: response.candles }, response.end);
     };
@@ -70,14 +81,17 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
         if (cancelled) return;
         // Neúspěšné obnovení stejného dne nechá dosavadní svíčky na místě.
         setHistorical(previous => previous?.day === day && previous.candles.length
-          ? { ...previous, key: historicalKey }
+          ? { ...previous, key: historicalKey, error: reason instanceof Error ? reason.message : 'Tržní data se nepodařilo obnovit.' }
           : { day, key: historicalKey, candles: [], symbol: 'MNQ', error: reason instanceof Error ? reason.message : 'Tržní data se nepodařilo načíst.' });
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- klíč pokrývá den, kotvu i hranici historie
-  }, [historicalKey, detailsReady]);
+  }, [historicalKey, detailsReady, perfScope]);
 
-  const { live, status: liveStatus } = useLiveCandles('MNQ', { enabled: candleWindow.needsLive });
+  const { live, status: liveStatus, problem: liveProblem } = useLiveCandles('MNQ', {
+    enabled: candleWindow.needsLive,
+    perfScope,
+  });
   // Během obnovení (posun hranice, ověřený kontrakt) zůstávají svíčky téhož dne —
   // graf se neodpojí ani neztratí záběr.
   const sameDay = historyReadyForChart(historical?.day === day ? historical : null, candleWindow.needsLive, liveStatus === 'loading');
@@ -86,10 +100,18 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
     [candleWindow, live, sameDay],
   );
   const loading = !sameDay || (candleWindow.needsLive && liveStatus === 'loading');
+  const qualityMinute = Math.floor(now / 60_000) * 60_000;
+  const quality = useMemo(() => chartDataQuality({
+    candles, dayStart: candleWindow.dayStart, dayEnd: candleWindow.dayEnd, now: qualityMinute,
+    needsLive: candleWindow.needsLive, liveStatus, liveCapturedAt: live?.capturedAt ?? null,
+    liveSource: live?.response.sourceSymbol ?? null, liveProblem, validation: live?.validation,
+    historicalError: sameDay?.error, historicalLoading: !sameDay || sameDay.key !== historicalKey,
+  }), [candles, candleWindow, qualityMinute, liveStatus, live, liveProblem, sameDay, historicalKey]);
   // Jen dokud den běží (včerejšek v živém okně ani sobota už živou svíčku nemají).
   const liveFeed = useTvLiveCandleFeed(candleWindow.needsLive && now < candleWindow.dayEnd, candleWindow.dayEnd);
   return {
     candles,
+    quality,
     chartTrades,
     window: candleWindow,
     loading,

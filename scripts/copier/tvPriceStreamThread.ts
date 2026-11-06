@@ -305,6 +305,29 @@ port.on('message', message => {
 });
 
 setInterval(() => port.postMessage({ type: 'alive' }), 2_000);
+// Kotace pro ruční vstup (2. 11. 2026): jen když je IBKR aktivní zdroj, konkrétní
+// kontrakt a časy posledního obchodu / bid-ask. Hlavní vlákno z ní ověřuje původ
+// kontraktu a čerstvost ceny Marketu; z TV se nikdy neposílá.
+setInterval(() => {
+  try {
+    const ibkrReading = priceSource === 'ibkr' ? ibkr?.reading() ?? null : null;
+    // Upozornění na cenu: platnost podle čtení IBKR samotného, ne podle zdroje zobrazení —
+    // ten se přepíná jen při čtení pro diváka, takže bez otevřeného LIVE by po restartu vlákna
+    // žádná dávka nevznikla. Bez platného čtení IBKR se dávka zahodí i s výchozí cenou;
+    // TradingView upozornění nikdy nespouští.
+    try {
+      const batch = ibkr?.takeAlertBatch(ibkrReading != null) ?? null;
+      if (batch && ibkrReading && batch.contract === ibkrReading.front) {
+        port.postMessage({ type: 'alert-batch', front: batch.contract, prev: batch.prev, min: batch.min, max: batch.max, last: batch.last });
+      }
+    } catch { /* upozornění jsou jen doplněk */ }
+    if (priceSource !== 'ibkr' || sourceSwitch.active !== 'ibkr' || !ibkrReading) return;
+    port.postMessage({
+      type: 'quote', front: ibkrReading.front, last: ibkrReading.last, lastAt: ibkrReading.lastAt,
+      bid: ibkrReading.bid, ask: ibkrReading.ask, quoteAt: ibkrReading.quoteAt,
+    });
+  } catch { /* best effort */ }
+}, 250);
 // Výpadek IBKR (Gateway neběží, přihlášení jinde, ztráta spojení): cena tiše jede ze zálohy TV,
 // proto se ohlásí — jen stav a krátký kód, nikdy text chyb Gateway (může nést účet).
 let ibkrAlert = initialIbkrAlertState();
@@ -372,6 +395,7 @@ setInterval(() => {
   const ib = ibkr?.stats();
   port.postMessage({
     type: 'diag', state: stats?.state ?? 'off', reads: stats?.reads ?? 0, sends: stats?.sends ?? 0, errors: stats?.errors ?? 0,
+    skippedRateCap: stats?.skippedRateCap ?? 0,
     // Zdroj a stav IBKR jen jako krátké kódy (nikdy text chyb Gateway).
     source: sourceSwitch.active, ibkr: ib?.state ?? null, ibkrCode: ib?.lastCode ?? null, ibkrTrades: ib?.trades ?? 0,
   });

@@ -6,6 +6,10 @@ import type { TradovateAccountDataAccount, TradovateAccountDataResult } from '..
 import {
   WORKER_POSITION_DIVERGENT_DETAIL, WORKER_POSITION_MISMATCH_DETAIL, WORKER_POSITION_UNKNOWN_DETAIL, overlayWorkerExposure, WORKER_EXPOSURE_MAX_AGE_MS,
 } from '../lib/tradovateWorkerExposureOverlay';
+import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
+import { buildTradeCard } from '../lib/liveTradeCard';
+import { liveChartPosition } from '../lib/liveChartPosition';
+import { liveBreakEven, liveLineMoveBlockReason } from '../lib/liveChartOrderLines';
 
 const NOW = Date.UTC(2026, 8, 18, 9, 0, 0);
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -106,6 +110,87 @@ describe('worker exposure overlay', () => {
       positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -9 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: -7 }],
     }), NOW - 1_000, NOW)!;
     expect(added.accounts.find(item => item.id === 100)!.positions[0]).toMatchObject({ netPosition: -9, averagePrice: null });
+  });
+
+  it('čerstvý vstup: REST pozici ještě nezná → průměr z fillů workeru a P&L karta neukáže (30. 10.)', () => {
+    const before = data();
+    before.accounts[0] = { ...before.accounts[0], positions: [], netPositionCount: 0 };
+    const out = overlayWorkerExposure(before, status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: 2, avgPrice: 28_768.5 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: 2, avgPrice: 28_769 }],
+    }), NOW - 1_000, NOW)!;
+    const leader = out.accounts.find(item => item.id === 100)!;
+    expect(leader.positions[0]).toMatchObject({ netPosition: 2, averagePrice: 28_768.5 });
+    expect(leader.balance.openPnlBehindPosition).toBe(true);
+    // Zdroj P&L pro ostatní (denní limit účtu) zůstává.
+    expect(leader.balance.openPnlSource).toBeUndefined();
+    expect(out.accounts.find(item => item.id === 200)!.positions[0]).toMatchObject({ averagePrice: 28_769 });
+    const snapshot = tradovateCopyTradeSnapshot(out, []);
+    const card = buildTradeCard([
+      { account: snapshot.accounts.find(item => item.id === 100), accountId: 100, name: 'L', isLeader: true },
+    ], tradovateCopyTradeOrders(out), new Map(), NOW);
+    expect(card).toMatchObject({ kind: 'position', entry: 28_768.5, openPnl: null, mark: null });
+  });
+
+  it('tutéž pozici zná REST → jeho průměr i P&L platí, průměr workeru se nepoužije', () => {
+    const out = overlayWorkerExposure(data(), status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7, avgPrice: 1 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: -7 }],
+    }), NOW - 1_000, NOW)!;
+    const leader = out.accounts.find(item => item.id === 100)!;
+    expect(leader.positions[0]).toMatchObject({ averagePrice: 29_730.75 });
+    expect(leader.balance.openPnlBehindPosition).toBeUndefined();
+  });
+
+  it('přikoupení a otočení: průměr workeru, P&L pozadu; částečné zavření bez průměru workeru = neznámo', () => {
+    const added = overlayWorkerExposure(data(), status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -9, avgPrice: 29_731.5 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: -7 }],
+    }), NOW - 1_000, NOW)!.accounts.find(item => item.id === 100)!;
+    expect(added.positions[0]).toMatchObject({ netPosition: -9, averagePrice: 29_731.5 });
+    expect(added.balance.openPnlBehindPosition).toBe(true);
+    const flipped = overlayWorkerExposure(data(), status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: 2, avgPrice: 29_700 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: 2 }],
+    }), NOW - 1_000, NOW)!.accounts.find(item => item.id === 100)!;
+    expect(flipped.positions[0]).toMatchObject({ netPosition: 2, averagePrice: 29_700 });
+    expect(flipped.balance.openPnlBehindPosition).toBe(true);
+    const reduced = overlayWorkerExposure(data(), status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -3 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: -3 }],
+    }), NOW - 1_000, NOW)!.accounts.find(item => item.id === 100)!;
+    expect(reduced.positions[0]).toMatchObject({ netPosition: -3, averagePrice: null });
+    expect(reduced.balance.openPnlBehindPosition).toBe(true);
+  });
+
+  it('REST drží symbol, o kterém worker neví (nebo řádek bez symbolu) → P&L pozadu', () => {
+    const flat = overlayWorkerExposure(data(), status({}, { positions: [{ accountId: 200, symbol: 'MNQZ6', netQuantity: 0 }] }), NOW - 1_000, NOW)!;
+    expect(flat.accounts.find(item => item.id === 100)!.balance.openPnlBehindPosition).toBe(true);
+    const before = data();
+    before.accounts[0] = { ...before.accounts[0], positions: [{ ...before.accounts[0].positions[0], symbol: null }] };
+    const unnamed = overlayWorkerExposure(before, status(), NOW - 1_000, NOW)!;
+    expect(unnamed.accounts.find(item => item.id === 100)!.balance.openPnlBehindPosition).toBe(true);
+  });
+
+  it('karta s P&L pozadu: utažení SL k trhu i BE blokované, posun od trhu smí', () => {
+    const before = data();
+    before.accounts[0] = { ...before.accounts[0], positions: [], netPositionCount: 0,
+      orders: [{ id: 9, contractId: 7, symbol: 'MNQZ6', timestamp: null, action: 'Sell', orderType: 'Stop', quantity: 2, price: null, stopPrice: 28_740, status: 'Working', admin: null, ocoId: null, parentId: null, linkedId: null }] };
+    const out = overlayWorkerExposure(before, status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: 2, avgPrice: 28_768.5 }],
+      orders: [{ accountId: 100, brokerOrderId: '9', symbol: 'MNQZ6', side: 'Sell', orderType: 'Stop', quantity: 2, filledQuantity: 0, limitPrice: null, stopPrice: 28_740, status: 'working', updatedAt: NOW - 2_000 }],
+    }), NOW - 1_000, NOW)!;
+    const snapshot = tradovateCopyTradeSnapshot(out, []);
+    const card = buildTradeCard([{ account: snapshot.accounts.find(item => item.id === 100), accountId: 100, name: 'L', isLeader: true }],
+      tradovateCopyTradeOrders(out), new Map(), NOW)!;
+    const summary = liveChartPosition({ model: card, options: [], target: 100, verified: true, issue: null, readAgeMs: 0,
+      divergenceCandidate: false, copierOff: false, scopeLabel: null }, 100).summary!;
+    expect(summary).toMatchObject({ kind: 'position', entry: 28_768.5, stop: 28_740, mark: null });
+    expect(liveLineMoveBlockReason(summary, 'stopLoss', 28_750)).toContain('není známá');
+    expect(liveLineMoveBlockReason(summary, 'stopLoss', 28_730)).toBeNull();
+    expect(liveBreakEven(summary, 28_768.5).blocked).toContain('není známá');
+  });
+
+  it.each([0, -5, Number.NaN, '28768'])('neplatný průměr workeru (%s) = neznámý vstup', avgPrice => {
+    const out = overlayWorkerExposure(data(), status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: 3, avgPrice }, { accountId: 200, symbol: 'MNQZ6', netQuantity: 3 }],
+    }), NOW - 1_000, NOW)!;
+    expect(out.accounts.find(item => item.id === 100)!.positions[0]).toMatchObject({ netPosition: 3, averagePrice: null });
   });
 
   it('follower, jehož pozici worker nezná, není ověřeně flat — zůstane mu REST čtení', () => {

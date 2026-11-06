@@ -93,6 +93,11 @@ const sideOf = (action: string): 1 | -1 | null => {
 const quantityOf = (order: LiveOrder) => finite(order.quantity) ? Math.abs(order.quantity) : 0;
 /** Tradovate drží SL/TP nativního bracketu jako Suspended, dokud se vstup nevyplní. */
 const isSuspended = (order: LiveOrder) => order.status.trim().toLowerCase() === 'suspended';
+/**
+ * Noha čekajícího vstupu: REST ji hlásí Suspended, heartbeat workeru ji dává jako `pending`
+ * → `PendingNew` (`lib/tradovateWorkerExposureOverlay.ts`). Jen pro kartu čekajícího vstupu.
+ */
+const isAwaitingEntryFill = (order: LiveOrder) => isSuspended(order) || order.status.trim().toLowerCase() === 'pendingnew';
 
 /** Klíč sazby poplatku: účet + kořen kontraktu (MNQ, NQ…). */
 export const feeRateKey = (accountId: number, symbol: string) => `${accountId}|${futuresSymbolRoot(symbol)}`;
@@ -204,7 +209,7 @@ export function buildTradeCard(rows: readonly TradeCardRowInput[], orders: reado
         && symbolKey(order.symbol) === symbolKey(symbol)
         && sideOf(order.action) === -direction) : [];
       const soleOpen = row.account.positions.filter(p => p.netPosition !== 0).length === 1;
-      const gross = positionsVerified && soleOpen && row.account.unrealizedPnlSource !== 'stale'
+      const gross = positionsVerified && soleOpen && row.account.unrealizedPnlSource !== 'stale' && !row.account.unrealizedPnlBehindPosition
         && finite(row.account.unrealizedPnl) ? row.account.unrealizedPnl : null;
       return {
         accountId: row.accountId,
@@ -247,7 +252,7 @@ export function buildTradeCard(rows: readonly TradeCardRowInput[], orders: reado
     const fees = feesKnown ? feeRates.get(feeRateKey(row.accountId, symbol))! * quantity * 2 : null;
     const legs = ordersVerified ? orders.filter(order => order.id !== entry.id
       && order.accountId === row.accountId
-      && (order.working || isSuspended(order))
+      && (order.working || isAwaitingEntryFill(order))
       && symbolKey(order.symbol) === symbolKey(symbol)
       && sideOf(order.action) === -direction) : [];
     return {

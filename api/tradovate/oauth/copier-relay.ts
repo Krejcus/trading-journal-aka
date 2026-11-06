@@ -4,12 +4,14 @@ import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierD
 import {
   admitCopierAutoResume,
   claimTradovateCopierCommandV2, completeTradovateCopierCommandV2,
-  claimTradovateCopierCommand, completeTradovateCopierCommand, enqueueTradovateCopierCommand,
+  claimTradovateCopierCommand, completeTradovateCopierCommand, completeTradovateCopierHotCommandV3,
+  enqueueTradovateCopierCommand,
   copierRelayValidationErrorStatus,
   heartbeatTradovateCopierDevice, readTradovateCopierCommand, readTradovateCopierDeviceRuntime,
-  resolveCopierRelayConnectionId,
+  resolveCopierRelayConnectionId, verifyCopierRelayTargetHint,
 } from '../../../server/tradovateCopierCommandRelay.js';
-import { createTradovateAdminClient, readTradovateServerConfig, requireSupabaseUserId } from '../../../server/tradovateOAuthStore.js';
+import { beginSupabaseUserIdVerification, createTradovateAdminClient, readTradovateServerConfig } from '../../../server/tradovateOAuthStore.js';
+import { decryptTradovateSecret, encryptTradovateSecret } from '../../../server/tradovateOAuth.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 import { sendImmediateCopierArmPush, sendImmediateCopyEventPushes, type CopierArmTransition } from '../../../server/nativeCopierStatePush.js';
 import { tickNativeLiveActivitiesWithinBudget } from '../../../server/nativeLiveActivityTick.js';
@@ -31,12 +33,35 @@ import {
 } from '../../../server/snapshotImagePush.js';
 import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '../../../server/tvAlertNotifications.js';
 import { validateTvBarsCapture } from '../../../lib/tradingViewBars.js';
-import { tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
+import { copierStatusNudgeKey, copierStatusNudgeTopic, tvPriceChannelGrant } from '../../../server/tvPriceChannel.js';
+import { copierCommandPushGrant } from '../../../server/copierCommandPush.js';
+import { priceAlertWatchGrant } from '../../../server/priceAlertWatchKey.js';
+import { copierKickWaitsForPush, pushBoundCopierCommand, readCopierRelayIdle, scheduleCopierKickAfterPush } from '../../../server/copierCommandPushRelay.js';
 
-/** Téma a klíč kanálu ceny pro worker; bez tajemství pole chybí (nikdy 502). */
-const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string } => {
+/** Téma a klíč kanálu ceny + téma budíčku statusu pro worker; bez tajemství pole chybí (nikdy 502). */
+const tvPriceRealtimeFields = (deviceId: string): { priceTopic?: string; priceKey?: string; nudgeTopic?: string; nudgeKey?: string } => {
   const grant = tvPriceChannelGrant(deviceId);
-  return grant ? { priceTopic: grant.topic, priceKey: grant.key } : {};
+  const nudgeTopic = copierStatusNudgeTopic(deviceId);
+  // Klíč expozice jen spolu s tématem (F2a); obě funkce nikdy nevyhodí (INV-BRAKE-03).
+  const nudgeKey = nudgeTopic ? copierStatusNudgeKey(deviceId) : null;
+  return {
+    ...(grant ? { priceTopic: grant.topic, priceKey: grant.key } : {}),
+    ...(nudgeTopic ? { nudgeTopic } : {}),
+    ...(nudgeTopic && nudgeKey ? { nudgeKey } : {}),
+  };
+};
+
+/**
+ * Klíč hlídače upozornění na cenu — JEN poll-v2 (autentizovaný worker), nikdy ve sdílené
+ * `tvPriceRealtimeFields` (tu čte i background-v2 a odpověď prohlížeči). Nikdy nevyhodí.
+ */
+const priceAlertRealtimeFields = (deviceId: string): { priceAlert?: { key: string; deviceId: string } } => {
+  try {
+    const grant = priceAlertWatchGrant(deviceId);
+    return grant ? { priceAlert: grant } : {};
+  } catch {
+    return {};
+  }
 };
 
 const snapshotRateLimiter = new CopierSnapshotRateLimiter();
@@ -45,6 +70,28 @@ const snapshotRateLimiter = new CopierSnapshotRateLimiter();
 const liveBarsRateLimiter = new CopierSnapshotRateLimiter(4, 60_000);
 const LIVE_BARS_MAX_AGE_MS = 2 * 60_000;
 const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const HOT_RELAY_COMMANDS = new Set(['preview-leader-entry', 'place-leader-entry', 'manage-leader-order']);
+const isHotRelayCommand = (command: unknown): boolean => {
+  const candidate = command as { type?: unknown; command?: { type?: unknown } } | null;
+  return candidate?.type === 'copy-command'
+    && typeof candidate.command?.type === 'string'
+    && HOT_RELAY_COMMANDS.has(candidate.command.type);
+};
+const openRelayTargetHint = (value: unknown, encryptionKey: string): unknown => {
+  if (typeof value !== 'string' || value.length < 20 || value.length > 2_000) return null;
+  try {
+    return JSON.parse(decryptTradovateSecret(value, encryptionKey)) as unknown;
+  } catch {
+    return null;
+  }
+};
+const sealRelayTargetHint = (value: Record<string, unknown>, encryptionKey: string): string | null => {
+  try {
+    return encryptTradovateSecret(JSON.stringify(value), encryptionKey);
+  } catch {
+    return null;
+  }
+};
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
@@ -60,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
       const action = String(req.body?.action ?? '');
       const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization,
-        ...(['poll-v2', 'complete-v2', 'live-bars'].includes(action) ? { touchLastUsed: false } : {}),
+        ...(['poll-v2', 'complete-v2', 'complete-hot-v3', 'live-bars'].includes(action) ? { touchLastUsed: false } : {}),
       });
       if (action === 'auto-resume-admit') {
         const since = Number(req.body?.since);
@@ -71,9 +118,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const deliveryId = String(req.body?.deliveryId ?? '');
         if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId)) return res.status(400).json({ error: 'invalid-delivery-id' });
         const command = await claimTradovateCopierCommandV2({ db, deviceId: device.id, deliveryId });
+        // F1b′: téma a jen VEŘEJNÝ klíč podepsaných pushů (+ id zařízení k ověření těla).
+        const pushGrant = copierCommandPushGrant(device.id);
         return res.status(200).json({ protocol: 2, command, serverNow: new Date().toISOString(), realtime: {
           url: config.supabaseUrl, anonKey: config.supabaseAnonKey, topic: `copier-kick-${device.id}`,
           ...tvPriceRealtimeFields(device.id),
+          ...priceAlertRealtimeFields(device.id),
+          ...(pushGrant ? { pushTopic: pushGrant.topic, pushKey: pushGrant.publicKey, pushDeviceId: device.id.toLowerCase() } : {}),
         } });
       }
       if (action === 'complete-v2' || action === 'heartbeat-v2' || action === 'background-v2') {
@@ -81,6 +132,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           || !req.body?.status || !Number.isFinite(Date.parse(req.body.status.startedAt))) {
           return res.status(400).json({ error: 'invalid-relay-heartbeat' });
         }
+      }
+      if (action === 'complete-hot-v3') {
+        const deliveryId = String(req.body?.deliveryId ?? '');
+        const commandId = String(req.body?.commandId ?? '');
+        const workerStartedAt = String(req.body?.workerStartedAt ?? '');
+        if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId) || !SNAPSHOT_TEST_REQUEST_ID.test(commandId)) {
+          return res.status(400).json({ error: 'invalid-delivery-id' });
+        }
+        if (!Number.isFinite(Date.parse(workerStartedAt))) {
+          return res.status(400).json({ error: 'invalid-hot-command-ack' });
+        }
+        const accepted = await completeTradovateCopierHotCommandV3({
+          db,
+          deviceId: device.id,
+          deliveryId,
+          commandId,
+          result: req.body?.result,
+          error: typeof req.body?.error === 'string' ? req.body.error : undefined,
+          workerStartedAt,
+        });
+        return res.status(accepted ? 200 : 409).json({ protocol: 3, accepted });
       }
       if (action === 'heartbeat-v2') {
         await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId,
@@ -354,12 +426,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       res.setHeader('Server-Timing', timing.header());
       return res.status(status).json(body);
     };
-    const userId = await requireSupabaseUserId(req.headers.authorization, config);
+    const verification = await beginSupabaseUserIdVerification(req.headers.authorization, config);
+    const { userId } = verification;
     timing.mark('auth');
     const requestedConnectionId = String(req.method === 'GET' ? req.query.connectionId ?? '' : req.body?.connectionId ?? '').trim();
-    if (!requestedConnectionId) return res.status(400).json({ error: 'missing-connection-id' });
-    // Libovolné připojení uživatele najde jeho Mac worker (owner scope).
-    const connectionId = await resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId });
+    if (!requestedConnectionId) {
+      await verification.confirmed;
+      return res.status(400).json({ error: 'missing-connection-id' });
+    }
+    // Horký příkaz může použít krátkodobý hint z posledního status pollu.
+    // Server ho znovu ověří; neplatný hint jen spadne na plný owner lookup.
+    const hintVerification = req.method === 'POST' && isHotRelayCommand(req.body?.command)
+      ? verifyCopierRelayTargetHint({
+        db,
+        userId,
+        hint: openRelayTargetHint(req.body?.relayTargetHint, config.tokenEncryptionKey),
+      })
+      : null;
+    let connectionId: string;
+    let verifiedDevice: Awaited<ReturnType<typeof verifyCopierRelayTargetHint>>['device'] | undefined;
+    if (hintVerification) {
+      const [, hinted] = await Promise.all([verification.confirmed, hintVerification]);
+      if (hinted) {
+        connectionId = hinted.connectionId;
+        verifiedDevice = hinted.device;
+      } else {
+        connectionId = await resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId });
+      }
+    } else {
+      // Libovolné připojení uživatele najde jeho Mac worker (owner scope).
+      [, connectionId] = await Promise.all([
+        verification.confirmed,
+        resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId }),
+      ]);
+    }
     timing.mark('resolve');
     if (req.method === 'GET') {
       const commandId = typeof req.query.commandId === 'string' ? req.query.commandId : '';
@@ -374,64 +474,142 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Kanál ceny z TV patří VEDLE statusu, ne do něj — status se ukládá
       // (obnovený stav LIVE) a téma ani klíč se ukládat nemají.
       const { deviceId, ...visible } = runtime;
+      // `relayIdle` (F1b′) patří jen relayi — prohlížeči se nevydává.
+      if (visible.status && typeof visible.status === 'object' && 'relayIdle' in visible.status) {
+        const { relayIdle: _relayIdle, ...status } = visible.status;
+        visible.status = status;
+      }
       // Jen živé zařízení: heartbeat mladší 10 s vyžaduje platnou autentizaci
       // zařízení, takže revokovaný Mac kanál (deterministický klíč) do 10 s ztratí.
       const priceChannel = runtime.connected === true ? tvPriceChannelGrant(deviceId) : null;
-      return timed(200, priceChannel ? { ...visible, priceChannel } : visible);
+      // Budíček statusu (jen podnět ke čtení, bez dat) — stejně vedle statusu, ne v něm.
+      const nudgeTopic = runtime.connected === true ? copierStatusNudgeTopic(deviceId) : null;
+      const nudgeKey = nudgeTopic ? copierStatusNudgeKey(deviceId) : null;
+      const relayTargetHint = runtime.connected === true && typeof runtime.status?.startedAt === 'string'
+        && Number.isFinite(Date.parse(runtime.status.startedAt))
+        ? sealRelayTargetHint({
+          kind: 'copier-relay-target',
+          v: 1,
+          userId,
+          deviceId,
+          connectionId,
+          startedAt: runtime.status.startedAt,
+          expiresAt: Date.now() + 8_000,
+        }, config.tokenEncryptionKey)
+        : null;
+      return timed(200, {
+        ...visible,
+        ...(relayTargetHint ? { relayTargetHint } : {}),
+        ...(priceChannel ? { priceChannel } : {}),
+        ...(nudgeTopic ? { nudgeTopic } : {}),
+        ...(nudgeTopic && nudgeKey ? { nudgeKey } : {}),
+      });
     }
     if (req.method === 'POST') {
       if (req.body?.command?.type === 'snapshot-test' && req.body?.command?.repairCamera !== true) {
         return res.status(400).json({ error: 'snapshot-test-use-dedicated-endpoint' });
       }
-      const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: req.body?.command, idempotencyKey: req.body?.idempotencyKey });
+      // F1b′: nečinná delivery workeru se čte souběžně s admission (nikdy nevyhodí).
+      // Čerstvý hint už v jediném joinu načetl stejný runtime řádek. Znovu ho
+      // přes PostgREST nečteme; push tak po admission rovnou claimne delivery.
+      const relayIdle = verifiedDevice?.lastSeenAt
+        ? Promise.resolve({
+          deviceId: verifiedDevice.id,
+          relayIdle: verifiedDevice.status?.relayIdle ?? null,
+          lastSeenAt: verifiedDevice.lastSeenAt,
+        })
+        : readCopierRelayIdle({ db, userId, connectionId });
+      const queued = await enqueueTradovateCopierCommand({
+        db, userId, connectionId, command: req.body?.command,
+        idempotencyKey: req.body?.idempotencyKey,
+        relayIdle,
+        ...(verifiedDevice ? { verifiedDevice } : {}),
+      });
       timing.mark('enqueue');
+      const { preclaimed, ...queuedResponse } = queued;
       // Budíček pro worker: bez něj příkaz čeká na další poll (~750 ms).
-      // Kick je jen optimalizace — selhání nesmí shodit enqueue.
-      try {
-        await fetch(`${config.supabaseUrl}/realtime/v1/api/broadcast`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: config.supabaseServiceRoleKey,
-            Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
-          },
-          body: JSON.stringify({ messages: [{ topic: `copier-kick-${queued.deviceId}`, event: 'kick', payload: {} }] }),
-          signal: AbortSignal.timeout(1_500),
-        });
-      } catch {
-        // Poll fallback příkaz doručí i bez kicku.
-      }
-      timing.mark('kick');
+      // Kick je jen optimalizace — selhání nesmí shodit enqueue. Jeho HTTP
+      // potvrzení ale nemusí blokovat první čtení výsledku: broadcast může
+      // worker doručit dřív, než se jeho response vrátí do této funkce.
+      // F1b′: navázání k nečinné delivery + podepsaný push souběžně s long-pollem.
+      // Nikdy nevyhodí, každý krok ≤ 1 s; výsledek nemění 202 ani nezdrží brzdu.
+      const push = pushBoundCopierCommand({ db, deviceId: queued.deviceId, supabaseUrl: config.supabaseUrl,
+        serviceRoleKey: config.supabaseServiceRoleKey, prefetched: relayIdle, preclaimed }).then(outcome => { timing.mark(`push-${outcome}`); return outcome; });
+      const kickAbort = new AbortController();
+      const sendKick = async () => {
+        const timeout = setTimeout(() => kickAbort.abort('copier-kick-timeout'), 1_500);
+        try {
+          await fetch(`${config.supabaseUrl}/realtime/v1/api/broadcast`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: config.supabaseServiceRoleKey,
+              Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
+            },
+            body: JSON.stringify({ messages: [{ topic: `copier-kick-${queued.deviceId}`, event: 'kick', payload: {} }] }),
+            signal: kickAbort.signal,
+          });
+        } catch {
+          // Poll fallback příkaz doručí i bez kicku.
+        } finally {
+          clearTimeout(timeout);
+        }
+      };
+      // Vstup/náhled/posun z grafu: kick až po pokusu o push — jinak ho worker pollem předběhne
+      // a push zahodí (DEMO 2. 11.: 2 ze 4). Po pushi +250 ms, při neúspěchu hned, nejpozději
+      // 400 ms; s výsledkem se už neposílá. Brzdy, Flatten, ARM a risk-redukční správa: hned.
+      let settled = false;
+      const kick = copierKickWaitsForPush(req.body?.command)
+        ? scheduleCopierKickAfterPush({ push, sendKick, settled: () => settled })
+        : sendKick();
+
       // Long-poll: worker s kickem vyřídí příkaz typicky do ~1,5 s — když
       // výsledek stihneme, UI ušetří celé polling kolečko (další RTT).
       // POZOR: enqueue už durable proběhl — selhání long-pollu se MUSÍ
       // degradovat na obyčejné `202 queued`. Chyba (502) by klienta svedla
       // k novému pokusu s novým idempotencyKey = duplicitní příkaz.
       // (Nález GPT cross-review, 2026-08-21.)
-      let resolution: Awaited<ReturnType<typeof readTradovateCopierCommand>> | null = null;
-      try {
-        // 30. 10.: 6 s místo 2,2 s — správa z grafu (posun, vstup) trvá ve workeru
-        // 1–3 s; miss znamenal klientský polling s dalšími RTT (měřeno 1,5–2,5 s celkem).
-        const longPollDeadline = Date.now() + 6_000;
-        while (Date.now() < longPollDeadline) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          const current = await readTradovateCopierCommand({ db, userId, commandId: queued.id });
-          if (current.status === 'succeeded' || current.status === 'rejected' || current.status === 'expired') {
-            resolution = current;
-            break;
+      const waitForResolution = (async (): Promise<Awaited<ReturnType<typeof readTradovateCopierCommand>> | null> => {
+        try {
+          // 30. 10.: 6 s místo 2,2 s — správa z grafu (posun, vstup) trvá ve workeru
+          // 1–3 s; miss znamenal klientský polling s dalšími RTT (měřeno 1,5–2,5 s celkem).
+          const longPollStartedAt = Date.now();
+          const longPollDeadline = longPollStartedAt + 6_000;
+          while (Date.now() < longPollDeadline) {
+            // 30. 10.: prvních 1,5 s krok 25 ms (výsledek v průměru o ~40 ms dřív), pak
+            // zpět 100 ms — levné čtení podle id, jen po dobu čekání na tento příkaz.
+            await new Promise(resolve => setTimeout(resolve, Date.now() - longPollStartedAt < 1_500 ? 25 : 100));
+            const current = await readTradovateCopierCommand({ db, userId, commandId: queued.id });
+            if (current.status === 'succeeded' || current.status === 'rejected' || current.status === 'expired') return current;
           }
+        } catch {
+          // UI si výsledek vyzvedne klasickým pollingem.
         }
-      } catch {
-        // UI si výsledek vyzvedne klasickým pollingem.
+        return null;
+      })();
+      // Dokud výsledek není známý, push/kick smějí doběhnout jako záloha.
+      // Jakmile je výsledek durable, redundantní kick se ukončí a odpověď se nezdržuje.
+      const resolution = await waitForResolution;
+      settled = true;
+      if (resolution) {
+        // Výsledek je už durable a worker příkaz provedl: dobíhající záložní kick nemá co
+        // doručit. Jeho HTTP odpověď dřív držela hotový výsledek až dalších 300 ms.
+        kickAbort.abort('copier-command-resolved');
+      } else {
+        // Bez výsledku musí serverless runtime dát pushi/kicku krátké okno na dokončení;
+        // enqueue je durable a po 300 ms odpovíme queued jako dřív.
+        await Promise.race([Promise.all([kick, push]), new Promise(resolve => setTimeout(resolve, 300))]);
       }
+      timing.mark('kick');
       timing.mark(resolution ? 'longpoll-hit' : 'longpoll-miss');
-      return timed(202, { ...queued, ...(resolution ? { resolution } : {}) });
+      return timed(202, { ...queuedResponse, ...(resolution ? { resolution } : {}) });
     }
     return res.status(405).json({ error: 'method-not-allowed' });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('auth-token') || message === 'invalid-copier-device-auth') return res.status(401).json({ error: message });
     if (message.endsWith('not-found')) return res.status(404).json({ error: message });
+    if (message === 'copier-relay-hot-ack-unavailable') return res.status(503).json({ error: message });
     if (message === 'snapshot-too-large') return res.status(413).json({ error: message });
     if (message === 'invalid-snapshot-payload' || message === 'invalid-snapshot-png') {
       return res.status(400).json({ error: message });

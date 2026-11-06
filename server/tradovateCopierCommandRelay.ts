@@ -1,5 +1,5 @@
 import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview.js';
-import { validateLeaderEntryPlace } from '../lib/leaderEntryPlace.js';
+import { MANUAL_ENTRY_MIN_INTERVAL_MS, validateLeaderEntryPlace } from '../lib/leaderEntryPlace.js';
 import { validateLeaderOrderManage } from '../lib/leaderOrderManage.js';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -13,6 +13,28 @@ export interface CopierRelayCommand {
   command: LocalCopierAgentCommand;
   createdAt?: string;
   expiresAt: string;
+}
+
+/** Čerstvá nečinná durable delivery předčtená souběžně s výběrem cíle. */
+export interface CopierRelayIdleCandidate {
+  deviceId: string;
+  relayIdle: { deliveryId?: unknown } | null;
+  lastSeenAt: string;
+}
+
+/** Nový řádek, který admission v téže transakci už navázala na worker delivery. */
+export interface PreclaimedCopierRelayCommand {
+  deliveryId: string;
+  command: CopierRelayCommand & { status: 'claimed' };
+}
+
+export interface EnqueuedCopierCommand {
+  id: string;
+  status: string;
+  expiresAt: string;
+  deviceId: string;
+  /** Interní optimalizace serveru; handler ji nikdy nevrací prohlížeči. */
+  preclaimed?: PreclaimedCopierRelayCommand;
 }
 
 interface CommandRow {
@@ -102,6 +124,9 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   // ON (arm-live), incident maže jen s výslovným potvrzením. Produkční DB
   // check `reconcile` stejně nikdy nepustil, takže se nic neztrácí.
 ]);
+const RELAY_TARGET_HINT_COMMAND_TYPES = new Set(['preview-leader-entry', 'place-leader-entry', 'manage-leader-order']);
+const commandMayUseRelayTargetHint = (command: LocalCopierAgentCommand): boolean => command.type === 'copy-command'
+  && RELAY_TARGET_HINT_COMMAND_TYPES.has(String((command.command as { type?: unknown }).type ?? ''));
 
 const BRAKE_COMMAND_TYPES = ['disarm', 'kill-switch', 'lock-until-session-end'] as const;
 const BRAKE_COMMAND_TTL_MS = 10 * 60_000;
@@ -116,13 +141,20 @@ const isLeaderTradeClose = (command: unknown): boolean => {
   const inner = (command as { type?: unknown; command?: { type?: unknown; action?: unknown } } | null);
   return inner?.type === 'copy-command' && inner.command?.type === 'manage-leader-order' && inner.command.action === 'close-position';
 };
-const ENTRY_MIN_INTERVAL_MS = 3_000;
-const ENTRY_DAILY_CAP = 30;
+const ENTRY_MIN_INTERVAL_MS = MANUAL_ENTRY_MIN_INTERVAL_MS;
+// Filip 30. 10. 2026: 30 nestačilo na aktivní den (26 vstupů do 15:00) → 100 jako u správy.
+// Proti smyčce chrání dál rozestup 3 s a „jeden čekající na uživatele“ (P7; od 1. 11. atomicky v DB).
+const ENTRY_DAILY_CAP = 100;
 /** Správa vlastního vstupu (fáze 2a): rozestup 2 s na vstup, 100 za 24 h na uživatele (INV-TRAD-04). */
 const MANAGE_MIN_INTERVAL_MS = 2_000;
 const MANAGE_DAILY_CAP = 100;
 const STANDARD_COMMAND_TTL_MS = 30_000;
 const WORKER_CONNECTED_MAX_AGE_MS = 10_000;
+/** Musí zůstat shodné s čerstvostí push runtime v copierCommandPushRelay. */
+const ADMISSION_BOUND_DELIVERY_MAX_AGE_MS = 4_000;
+/** Předčtení běží souběžně; na pomalé DB nečekáme a použijeme původní claim fallback. */
+const ADMISSION_RELAY_IDLE_WAIT_MS = 25;
+const DELIVERY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const isTradovateCopierBrakeCommand = (command: LocalCopierAgentCommand): boolean =>
   BRAKE_COMMAND_TYPES.includes(command.type as (typeof BRAKE_COMMAND_TYPES)[number]);
@@ -136,7 +168,11 @@ export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | n
     || message === 'copier-relay-preview-busy'
     || message === 'copier-relay-entry-busy'
     || message === 'copier-relay-entry-conflict'
-    || message === 'copier-relay-entry-daily-cap') return 409;
+    || message === 'copier-relay-entry-daily-cap'
+    || message === 'copier-relay-entry-superseded'
+    || message === 'copier-relay-idempotency-conflict'
+    || message === 'copier-brake-idempotency-conflict'
+    || message.startsWith('copier-relay-entry-not-admitted:')) return 409;
   if (message === 'unsupported-command'
     || message === 'unsupported-relay-command'
     || message === 'unsupported-remote-copy-command'
@@ -144,10 +180,20 @@ export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | n
   return null;
 };
 
-interface RelayDeviceTarget {
+export interface RelayDeviceTarget {
   id: string;
   status?: LocalCopierAgentStatus;
   lastSeenAt?: string;
+}
+
+export interface CopierRelayTargetHint {
+  kind: 'copier-relay-target';
+  v: 1;
+  userId: string;
+  deviceId: string;
+  connectionId: string;
+  startedAt: string;
+  expiresAt: number;
 }
 
 /**
@@ -245,6 +291,77 @@ const selectRelayDeviceTarget = async (options: {
 
   return { id: runtime.device_id, status: runtime.status, lastSeenAt: runtime.last_seen_at };
 };
+
+const RELAY_HINT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+type RelayHintRuntime = {
+  status: LocalCopierAgentStatus;
+  last_seen_at: string;
+};
+
+/**
+ * Cílený hint zná zařízení i připojení. Zařízení + jeho 1:1 runtime proto
+ * ověříme jedním PostgREST joinem místo dvou sériových HTTP kol. FK a PK na
+ * runtime.device_id zachovávají stejnou vazbu; parent filtry dál vynucují
+ * vlastníka, připojení a neodvolané zařízení.
+ */
+const selectRelayHintTarget = async (options: {
+  db: SupabaseClient;
+  userId: string;
+  connectionId: string;
+  deviceId: string;
+}): Promise<RelayDeviceTarget | null> => {
+  const { data, error } = await options.db.from('tradovate_copier_devices')
+    .select('id,runtime:tradovate_copier_device_runtime!inner(status,last_seen_at)')
+    .eq('id', options.deviceId)
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId)
+    .is('revoked_at', null)
+    .limit(1)
+    .maybeSingle<{
+      id: string;
+      runtime: RelayHintRuntime | RelayHintRuntime[] | null;
+    }>();
+  if (error) throw new Error(`copier-relay-target-hint-lookup-failed: ${error.message}`);
+  const runtime = Array.isArray(data?.runtime) ? data.runtime[0] : data?.runtime;
+  if (!data || !runtime) return null;
+  return { id: data.id, status: runtime.status, lastSeenAt: runtime.last_seen_at };
+};
+
+/**
+ * Krátkodobý hint z posledního GET statusu pouze zkrátí výběr cíle. Není to
+ * oprávnění: zařízení se znovu ověří proti user_id, connection_id, revokaci,
+ * instanci workeru a čerstvému heartbeatu. Neplatný/stárnoucí hint = fallback.
+ */
+export async function verifyCopierRelayTargetHint(options: {
+  db: SupabaseClient;
+  userId: string;
+  hint: unknown;
+  now?: number;
+}): Promise<{ connectionId: string; device: RelayDeviceTarget } | null> {
+  const hint = options.hint as Partial<CopierRelayTargetHint> | null;
+  const now = options.now ?? Date.now();
+  if (!hint || hint.v !== 1
+    || hint.kind !== 'copier-relay-target'
+    || hint.userId !== options.userId
+    || typeof hint.deviceId !== 'string' || !RELAY_HINT_UUID.test(hint.deviceId)
+    || typeof hint.connectionId !== 'string' || !RELAY_HINT_UUID.test(hint.connectionId)
+    || typeof hint.startedAt !== 'string' || !Number.isFinite(Date.parse(hint.startedAt))
+    || typeof hint.expiresAt !== 'number' || !Number.isFinite(hint.expiresAt)
+    || hint.expiresAt < now || hint.expiresAt > now + WORKER_CONNECTED_MAX_AGE_MS) return null;
+  const device = await selectRelayHintTarget({
+    db: options.db,
+    userId: options.userId,
+    connectionId: hint.connectionId,
+    deviceId: hint.deviceId,
+  });
+  if (!device) return null;
+  const lastSeenAt = device.lastSeenAt ? Date.parse(device.lastSeenAt) : NaN;
+  if (device.status?.startedAt !== hint.startedAt
+    || !Number.isFinite(lastSeenAt)
+    || now - lastSeenAt >= WORKER_CONNECTED_MAX_AGE_MS) return null;
+  return { connectionId: hint.connectionId, device };
+}
 
 /**
  * Důvod denního locku přichází z nevalidovaného JSON. Přenáší se do
@@ -675,6 +792,28 @@ const enforceRelayTightenOnly = async (options: {
   }
 };
 
+/**
+ * Vezme delivery jen tehdy, když už ji souběžné předčtení téměř dokončilo.
+ * Pomalé/chybné čtení nesmí admission zdržet: v2 RPC dostane null a původní
+ * claim_v2 + poll/push cesta zůstane autoritativní záloha.
+ */
+const admissionDeliveryId = async (options: {
+  candidate?: Promise<CopierRelayIdleCandidate | null>;
+  deviceId: string;
+  now: number;
+}): Promise<string | null> => {
+  if (!options.candidate) return null;
+  const timeout = new Promise<null>(resolve => setTimeout(resolve, ADMISSION_RELAY_IDLE_WAIT_MS, null));
+  const candidate = await Promise.race([options.candidate.catch(() => null), timeout]);
+  if (!candidate || candidate.deviceId.toLowerCase() !== options.deviceId.toLowerCase()) return null;
+  const deliveryId = candidate.relayIdle?.deliveryId;
+  const lastSeenAt = Date.parse(candidate.lastSeenAt);
+  if (typeof deliveryId !== 'string' || !DELIVERY_ID.test(deliveryId)
+    || !Number.isFinite(lastSeenAt)
+    || options.now - lastSeenAt > ADMISSION_BOUND_DELIVERY_MAX_AGE_MS) return null;
+  return deliveryId;
+};
+
 export async function enqueueTradovateCopierCommand(options: {
   db: SupabaseClient;
   userId: string;
@@ -682,21 +821,29 @@ export async function enqueueTradovateCopierCommand(options: {
   command: LocalCopierAgentCommand;
   /** Volitelně připne neobchodní požadavek na už ověřený aktivní worker. */
   deviceId?: string;
+  /** Serverem znovu ověřený krátkodobý hint; nikdy nebrat přímo z requestu. */
+  verifiedDevice?: RelayDeviceTarget;
+  /** Předčtená nečinná delivery; používá se jen pro atomickou admission v2. */
+  relayIdle?: Promise<CopierRelayIdleCandidate | null>;
   idempotencyKey?: string;
   now?: number;
-}): Promise<{ id: string; status: string; expiresAt: string; deviceId: string }> {
+}): Promise<EnqueuedCopierCommand> {
   const now = options.now ?? Date.now();
   // Ruční vstup: klíč idempotence JE operationId (dvojklik / opakovaný POST
   // = tentýž řádek, nikdy druhý vstup).
   const entryOperationId = leaderEntryPlaceOperationId(options.command);
   const idempotencyKey = entryOperationId ?? (options.idempotencyKey?.trim() || randomUUID());
   const payload = commandPayload(options.command);
-  const device = await selectRelayDeviceTarget({
-    db: options.db,
-    userId: options.userId,
-    connectionId: options.connectionId,
-    ...(options.deviceId ? { deviceId: options.deviceId } : {}),
-  });
+  // Obrana do hloubky: ani interní volající nesmí hintem zkrátit ARM, brzdy,
+  // Flatten nebo změny konfigurace. Ty vždy znovu projdou plným výběrem cíle.
+  const device = (options.verifiedDevice && commandMayUseRelayTargetHint(options.command))
+    ? options.verifiedDevice
+    : await selectRelayDeviceTarget({
+      db: options.db,
+      userId: options.userId,
+      connectionId: options.connectionId,
+      ...(options.deviceId ? { deviceId: options.deviceId } : {}),
+    });
   if (options.command.type === 'arm-live' && (
     !device.status?.controller?.connected
     || !device.lastSeenAt
@@ -726,17 +873,19 @@ export async function enqueueTradovateCopierCommand(options: {
 
   await assertPreviewAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, command: options.command, now });
   if (entryOperationId) {
-    const existing = await findEntryByOperationId({ db: options.db, userId: options.userId, operationId: entryOperationId });
-    if (existing) {
-      // Stejný klíč s jiným obsahem = nikdy tiše nepřepsat ani neposlat znovu.
-      if (existing.payloadHash !== (options.command as { command?: { payloadHash?: unknown } }).command?.payloadHash) {
-        throw new Error('copier-relay-entry-conflict');
-      }
-      return { id: existing.id, status: existing.status, expiresAt: existing.expiresAt, deviceId: device.id };
-    }
-    const manageEntry = manageEntryOperationId(options.command);
-    if (manageEntry) await assertManageAdmissible({ db: options.db, userId: options.userId, trade: manageEntry, now });
-    else await assertEntryAdmissible({ db: options.db, userId: options.userId, deviceId: device.id, now });
+    // Hodiny až těsně před RPC: výběr zařízení může trvat a DB odmítá p_now starší než 2 s.
+    const admissionNow = options.now ?? Date.now();
+    const deliveryId = await admissionDeliveryId({
+      candidate: options.relayIdle,
+      deviceId: device.id,
+      now: admissionNow,
+    });
+    return admitManualCommand({
+      db: options.db, userId: options.userId, deviceId: device.id, connectionId: options.connectionId,
+      operationId: entryOperationId, payload, now: admissionNow,
+      expiresAt: admissionNow + (isLeaderTradeClose(options.command) ? CLOSE_COMMAND_TTL_MS : ENTRY_COMMAND_TTL_MS),
+      deliveryId,
+    });
   }
 
   const inFlightArm = await findInFlightArm({
@@ -745,12 +894,21 @@ export async function enqueueTradovateCopierCommand(options: {
   });
   if (inFlightArm) return { ...inFlightArm, deviceId: device.id };
 
+  if (isTradovateCopierBrakeCommand(options.command)) {
+    const atomic = await enqueueBrakeAtomically({
+      db: options.db, userId: options.userId, deviceId: device.id, connectionId: options.connectionId,
+      commandType: options.command.type, payload, idempotencyKey, now,
+    });
+    if (atomic) return atomic;
+    // Záloha níž (dřívější cesta): upsert + nezamčený supersede per zařízení.
+    // Stejný idempotency key → případně už vložená brzda se jen dohledá.
+  }
+
   const createdAt = new Date(now).toISOString();
   const expiresAt = new Date(now + (isTradovateCopierBrakeCommand(options.command)
     ? BRAKE_COMMAND_TTL_MS
     : isLeaderEntryPreview(options.command) ? PREVIEW_COMMAND_TTL_MS
-      : isLeaderTradeClose(options.command) ? CLOSE_COMMAND_TTL_MS
-        : entryOperationId ? ENTRY_COMMAND_TTL_MS : STANDARD_COMMAND_TTL_MS)).toISOString();
+      : STANDARD_COMMAND_TTL_MS)).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands').upsert({
     user_id: options.userId,
     device_id: device.id,
@@ -800,16 +958,15 @@ export async function enqueueTradovateCopierCommand(options: {
   }
   const { data: existing, error: existingError } = await options.db
     .from('tradovate_copier_commands')
-    .select('id,status,expires_at,payload')
+    .select('id,status,expires_at,command_type,payload')
     .eq('user_id', options.userId)
     .eq('device_id', device.id)
     .eq('idempotency_key', idempotencyKey)
-    .single<{ id: string; status: string; expires_at: string; payload?: { command?: { payloadHash?: unknown } } | null }>();
+    .single<{ id: string; status: string; expires_at: string; command_type: string; payload?: { command?: { payloadHash?: unknown } } | null }>();
   if (existingError || !existing) throw new Error(`copier-relay-idempotency-lookup-failed: ${existingError?.message ?? 'missing'}`);
-  // Souběžný enqueue téhož vstupu s jiným obsahem: vítěz zůstává, druhý je konflikt.
-  if (entryOperationId && existing.payload?.command?.payloadHash !== (payload.command as { payloadHash?: unknown } | undefined)?.payloadHash) {
-    throw new Error('copier-relay-entry-conflict');
-  }
+  // Recyklovaný klíč s jiným typem příkazu nesmí projít jako úspěch: u brzdy
+  // by klient viděl „zařazeno", ale brzda by neexistovala a nic by nesupersedla.
+  if (existing.command_type !== options.command.type) throw new Error('copier-relay-idempotency-conflict');
   return { id: existing.id, status: existing.status, expiresAt: existing.expires_at, deviceId: device.id };
 }
 
@@ -829,6 +986,51 @@ const expirePendingArmsSupersededByBrake = async (options: {
     .in('command_type', ['arm-live', 'shadow'])
     .lte('created_at', options.brakeCreatedAt);
   if (error) throw new Error(`copier-relay-brake-supersede-failed: ${error.message}`);
+};
+
+/**
+ * Brzda jedním RPC (1. 11., INV-RELAY-03): insert nebo idempotentní dohledání
+ * a supersede čekajících ARM/SHADOW i ručních příkazů v TÉŽE transakci pod
+ * zámkem admission — claim_v2 nikdy neuvidí brzdu bez jejího supersede.
+ * Brzda nesmí selhat: chyba RPC (lock timeout 500 ms, chybí migrace, síť)
+ * vrátí null a volající jde dřívější cestou se stejným idempotency key.
+ * Výjimka: `copier-brake-idempotency-conflict` se propaguje — fallback by ho
+ * zamaskoval vrácením staršího řádku jiného typu jako úspěšné brzdy.
+ */
+const enqueueBrakeAtomically = async (options: {
+  db: SupabaseClient; userId: string; deviceId: string; connectionId: string;
+  commandType: LocalCopierAgentCommand['type']; payload: Record<string, unknown>; idempotencyKey: string; now: number;
+}): Promise<{ id: string; status: string; expiresAt: string; deviceId: string } | null> => {
+  try {
+    const { data, error } = await options.db.rpc('enqueue_tradovate_copier_brake', {
+      p_user_id: options.userId,
+      p_device_id: options.deviceId,
+      p_connection_id: options.connectionId,
+      p_command_type: options.commandType,
+      p_payload: options.payload,
+      p_idempotency_key: options.idempotencyKey,
+      p_now: new Date(options.now).toISOString(),
+      p_expires_at: new Date(options.now + BRAKE_COMMAND_TTL_MS).toISOString(),
+    });
+    if (error) throw new Error(error.message);
+    const row = (Array.isArray(data) && data.length === 1 ? data[0] : null) as {
+      result_code?: unknown; id?: unknown; status?: unknown; expires_at?: unknown; device_id?: unknown;
+    } | null;
+    if ((row?.result_code !== 'inserted' && row?.result_code !== 'existing')
+      || typeof row.id !== 'string' || typeof row.status !== 'string'
+      || typeof row.expires_at !== 'string' || typeof row.device_id !== 'string') {
+      throw new Error('invalid-brake-response');
+    }
+    return { id: row.id, status: row.status, expiresAt: row.expires_at, deviceId: row.device_id };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Konflikt idempotence je chyba klienta (tentýž klíč, jiný typ), ne výpadek:
+    // fallback by starý řádek vrátil jako úspěšnou brzdu, která nikdy nevznikla.
+    // Rovnost, ne includes — transportní chyba s tímto textem v těle musí do zálohy.
+    if (message === 'copier-brake-idempotency-conflict') throw error;
+    console.error(`COPIER RELAY atomic brake enqueue failed, falling back: ${message}`);
+    return null;
+  }
 };
 
 /**
@@ -1049,84 +1251,96 @@ const leaderEntryPlaceOperationId = (command: LocalCopierAgentCommand): string |
   return (inner?.type === 'place-leader-entry' || inner?.type === 'manage-leader-order') && typeof inner.operationId === 'string'
     ? inner.operationId : null;
 };
-/** Spravovaný obchod: vlastní vstup (`entryOperationId`) nebo sledovaný obchod (`leaderEntryOrderId`). */
-const manageEntryOperationId = (command: LocalCopierAgentCommand): Record<string, string> | null => {
-  const inner = (command as { command?: { type?: unknown; entryOperationId?: unknown; leaderEntryOrderId?: unknown } }).command;
-  if (inner?.type !== 'manage-leader-order') return null;
-  if (typeof inner.entryOperationId === 'string') return { entryOperationId: inner.entryOperationId };
-  if (typeof inner.leaderEntryOrderId === 'string') return { leaderEntryOrderId: inner.leaderEntryOrderId };
+const MANUAL_ADMISSION_ERRORS: Record<string, string> = {
+  'entry-conflict': 'copier-relay-entry-conflict',
+  'entry-busy': 'copier-relay-entry-busy',
+  'entry-daily-cap': 'copier-relay-entry-daily-cap',
+  'superseded-by-brake': 'copier-relay-entry-superseded',
+};
+
+/**
+ * Chyby, u kterých se prokazatelně nic nevložilo: RAISE z admission (validace
+ * před zámkem i insertem), lock / statement timeout (celá RPC transakce se
+ * vrátí) a chybějící funkce (nic se nezavolalo). UI je ukáže jako „Neodesláno“.
+ * Cokoli jiného (síť, odpověď po commitu) zůstává neznámý výsledek → 502.
+ */
+const manualAdmissionRejectedBeforeInsert = (error: { code?: string; message?: string }): string | null => {
+  const message = error.message ?? '';
+  if (error.code === 'P0001' && /^copier-admission-[a-z-]+$/.test(message)) return message;
+  if (error.code === '55P03') return 'lock-timeout';
+  if (error.code === '57014') return 'statement-timeout';
+  if (error.code === 'PGRST202') return 'admission-unavailable';
   return null;
 };
 
-/** Správa vstupu: jeden rozpracovaný na uživatele a vstup, 2 s rozestup, denní strop. */
-async function assertManageAdmissible(options: {
-  db: SupabaseClient; userId: string; trade: Record<string, string>; now: number;
-}): Promise<void> {
-  const nowIso = new Date(options.now).toISOString();
-  const { data: busy, error: busyError } = await options.db.from('tradovate_copier_commands')
-    .select('id')
-    .eq('user_id', options.userId)
-    .eq('command_type', 'copy-command')
-    .contains('payload', { command: { type: 'manage-leader-order', ...options.trade } })
-    .or(`created_at.gt.${new Date(options.now - MANAGE_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
-    .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
-    .limit(1)
-    .maybeSingle<{ id: string }>();
-  if (busyError) throw new Error(`copier-relay-entry-lookup-failed: ${busyError.message}`);
-  if (busy) throw new Error('copier-relay-entry-busy');
-  const { count, error: countError } = await options.db.from('tradovate_copier_commands')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', options.userId)
-    .eq('command_type', 'copy-command')
-    .contains('payload', { command: { type: 'manage-leader-order' } })
-    .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString());
-  if (countError) throw new Error(`copier-relay-entry-lookup-failed: ${countError.message}`);
-  if ((count ?? 0) >= MANAGE_DAILY_CAP) throw new Error('copier-relay-entry-daily-cap');
-}
-
-/** Per uživatel, ne per zařízení: tentýž vstup nesmí projít podruhé ani přes jiný worker. */
-async function findEntryByOperationId(options: {
-  db: SupabaseClient; userId: string; operationId: string;
-}): Promise<{ id: string; status: string; expiresAt: string; payloadHash: unknown } | null> {
-  const { data, error } = await options.db.from('tradovate_copier_commands')
-    .select('id,status,expires_at,payload')
-    .eq('user_id', options.userId)
-    .eq('idempotency_key', options.operationId)
-    .limit(1)
-    .maybeSingle<{ id: string; status: string; expires_at: string; payload: { command?: { payloadHash?: unknown } } | null }>();
-  if (error) throw new Error(`copier-relay-entry-lookup-failed: ${error.message}`);
-  return data ? { id: data.id, status: data.status, expiresAt: data.expires_at, payloadHash: data.payload?.command?.payloadHash } : null;
-}
-
 /**
- * Ruční vstup: nejvýš jeden čekající nebo vykonávaný na zařízení, nový
- * nejdřív 3 s po předchozím a nejvýš 30 za 24 h na uživatele (P7). Jinak 409.
+ * Ruční vstup a správa z grafu (1. 11., INV-RELAY-01): existující operace, brzda,
+ * busy/rozestup, denní strop i insert v JEDNÉ transakci pod zámkem uživatele —
+ * PC + telefon ani dvě záložky už nepropadnou mezi čtením a zápisem. Pořadí
+ * kontrol a kódy chyb zůstávají. Chyba RPC = `copier-relay-enqueue-failed` (5xx)
+ * bez jakéhokoli fallbacku na starou nezamčenou cestu.
  */
-async function assertEntryAdmissible(options: {
-  db: SupabaseClient; userId: string; deviceId: string; now: number;
-}): Promise<void> {
-  const nowIso = new Date(options.now).toISOString();
-  const { data: busy, error: busyError } = await options.db.from('tradovate_copier_commands')
-    .select('id')
-    .eq('user_id', options.userId)
-    .eq('device_id', options.deviceId)
-    .eq('command_type', 'copy-command')
-    .contains('payload', { command: { type: 'place-leader-entry' } })
-    .or(`created_at.gt.${new Date(options.now - ENTRY_MIN_INTERVAL_MS).toISOString()},status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
-    // Visící `claimed` starší než 2 min nesmí trvale blokovat (worker už má výsledek nebo spadl).
-    .gte('created_at', new Date(options.now - 2 * 60_000).toISOString())
-    .limit(1)
-    .maybeSingle<{ id: string }>();
-  if (busyError) throw new Error(`copier-relay-entry-lookup-failed: ${busyError.message}`);
-  if (busy) throw new Error('copier-relay-entry-busy');
-  const { count, error: countError } = await options.db.from('tradovate_copier_commands')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', options.userId)
-    .eq('command_type', 'copy-command')
-    .contains('payload', { command: { type: 'place-leader-entry' } })
-    .gte('created_at', new Date(options.now - 24 * 60 * 60_000).toISOString());
-  if (countError) throw new Error(`copier-relay-entry-lookup-failed: ${countError.message}`);
-  if ((count ?? 0) >= ENTRY_DAILY_CAP) throw new Error('copier-relay-entry-daily-cap');
+async function admitManualCommand(options: {
+  db: SupabaseClient; userId: string; deviceId: string; connectionId: string;
+  operationId: string; payload: Record<string, unknown>; now: number; expiresAt: number;
+  deliveryId: string | null;
+}): Promise<EnqueuedCopierCommand> {
+  const { data, error } = await options.db.rpc('admit_tradovate_copier_manual_command_v2', {
+    p_user_id: options.userId,
+    p_device_id: options.deviceId,
+    p_connection_id: options.connectionId,
+    p_operation_id: options.operationId,
+    p_payload: options.payload,
+    p_now: new Date(options.now).toISOString(),
+    p_expires_at: new Date(options.expiresAt).toISOString(),
+    p_entry_min_interval_ms: ENTRY_MIN_INTERVAL_MS,
+    p_manage_min_interval_ms: MANAGE_MIN_INTERVAL_MS,
+    p_entry_cap: ENTRY_DAILY_CAP,
+    p_manage_cap: MANAGE_DAILY_CAP,
+    p_delivery_id: options.deliveryId,
+  });
+  if (error) {
+    const notAdmitted = manualAdmissionRejectedBeforeInsert(error);
+    throw new Error(notAdmitted
+      ? `copier-relay-entry-not-admitted: ${notAdmitted}`
+      : `copier-relay-enqueue-failed: ${error.message}`);
+  }
+  const row = (Array.isArray(data) && data.length === 1 ? data[0] : null) as {
+    result_code?: unknown; id?: unknown; status?: unknown; expires_at?: unknown; device_id?: unknown;
+    delivery_id?: unknown; created_at?: unknown;
+  } | null;
+  const code = typeof row?.result_code === 'string' ? row.result_code : '';
+  if (MANUAL_ADMISSION_ERRORS[code]) throw new Error(MANUAL_ADMISSION_ERRORS[code]);
+  if ((code !== 'inserted' && code !== 'inserted-claimed' && code !== 'existing')
+    || typeof row?.id !== 'string' || typeof row.status !== 'string'
+    || typeof row.expires_at !== 'string' || typeof row.device_id !== 'string') {
+    throw new Error('copier-relay-enqueue-failed: invalid-admission-response');
+  }
+  // Kick patří zařízení, které řádek drží (u `existing` i jinému než vybranému).
+  const queued: EnqueuedCopierCommand = {
+    id: row.id,
+    status: row.status,
+    expiresAt: row.expires_at,
+    deviceId: row.device_id,
+  };
+  if (code === 'inserted-claimed') {
+    if (row.status !== 'claimed'
+      || typeof row.delivery_id !== 'string' || !DELIVERY_ID.test(row.delivery_id)
+      || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at))) {
+      throw new Error('copier-relay-enqueue-failed: invalid-admission-response');
+    }
+    queued.preclaimed = {
+      deliveryId: row.delivery_id,
+      command: {
+        id: row.id,
+        status: 'claimed',
+        command: { type: 'copy-command', command: options.payload.command as never },
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+      },
+    };
+  }
+  return queued;
 }
 
 /** Čekající (neexpirovaný) nebo právě vykonávaný Flatten stejného cíle, k němuž se nový požadavek přichytí. */
@@ -1181,10 +1395,11 @@ export async function claimTradovateCopierCommand(options: { db: SupabaseClient;
   } : null;
 }
 
-export async function claimTradovateCopierCommandV2(options: { db: SupabaseClient; deviceId: string; deliveryId: string }) {
-  const { data, error } = await options.db.rpc('claim_tradovate_copier_command_v2', {
+export async function claimTradovateCopierCommandV2(options: { db: SupabaseClient; deviceId: string; deliveryId: string; signal?: AbortSignal }) {
+  const call = options.db.rpc('claim_tradovate_copier_command_v2', {
     target_device_id: options.deviceId, target_delivery_id: options.deliveryId,
   });
+  const { data, error } = await (options.signal ? call.abortSignal(options.signal) : call);
   if (error) throw new Error(`copier-relay-claim-failed: ${error.message}`);
   if (!Array.isArray(data) || data.length > 1) throw new Error('copier-relay-claim-invalid-response');
   const row = data[0] as (CommandRow & { created_at: string }) | undefined;
@@ -1201,6 +1416,30 @@ export async function completeTradovateCopierCommandV2(options: {
     command_result: options.result ?? null, command_error: options.error?.slice(0, 500) || null,
     snapshot: { ...options.status, nonce: '' }, revision: options.revision,
   });
+  if (error) throw new Error(`copier-relay-complete-failed: ${error.message}`);
+  return data === true;
+}
+
+/**
+ * Compact durable ACK for the two hot manual command families. The command row
+ * and delivery binding stay authoritative, while the large runtime snapshot is
+ * sent by the immediately scheduled heartbeat after this ACK. Exact startedAt
+ * equality fences a superseded worker before the command can become terminal.
+ */
+export async function completeTradovateCopierHotCommandV3(options: {
+  db: SupabaseClient; deviceId: string; deliveryId: string; commandId: string;
+  result?: unknown; error?: string; workerStartedAt: string;
+}): Promise<boolean> {
+  const { data, error } = await options.db.rpc('complete_tradovate_copier_hot_command_v3', {
+    target_device_id: options.deviceId,
+    target_delivery_id: options.deliveryId,
+    target_command_id: options.commandId,
+    command_result: options.result ?? null,
+    command_error: options.error?.slice(0, 500) || null,
+    worker_started_at: options.workerStartedAt,
+  });
+  // Funkce v DB není (neaplikovaná migrace, stará schema cache): worker přejde na complete-v2.
+  if (error?.code === 'PGRST202' || error?.code === '42883') throw new Error('copier-relay-hot-ack-unavailable');
   if (error) throw new Error(`copier-relay-complete-failed: ${error.message}`);
   return data === true;
 }

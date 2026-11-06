@@ -1,3 +1,4 @@
+import type { LiveSafetyTarget } from '../lib/liveSafetyAction';
 import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceCommand, LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageCommand, LeaderOrderManageResult } from '../lib/leaderOrderManage';
@@ -215,6 +216,16 @@ export const DEFAULT_COPY_GROUP_SAFETY: CopyGroupSafetySettings = {
   dayRuleActions: cloneDayRuleActions(DEFAULT_DAY_RULE_ACTIONS),
 };
 
+/** Konzervativní lokální limity pro řízené testy na jednom DEMO účtu. */
+export const manualOnlyDemoSafety = (): CopyGroupSafetySettings => ({
+  ...DEFAULT_COPY_GROUP_SAFETY,
+  armExpiryFlatten: 'group',
+  dailyLossLimitUsd: 250,
+  dailyMaxTrades: 40,
+  tradingWindow: { ...DEFAULT_COPY_GROUP_SAFETY.tradingWindow },
+  dayRuleActions: cloneDayRuleActions(DEFAULT_COPY_GROUP_SAFETY.dayRuleActions),
+});
+
 export interface CopyGroupConfig {
   id: string;
   name: string;
@@ -224,6 +235,17 @@ export interface CopyGroupConfig {
   color?: string;
   safety?: CopyGroupSafetySettings;
   localOnly?: boolean;
+  /**
+   * Úzce omezený lokální DEMO režim bez followerů. Slouží jen pro ruční
+   * vstupy/správu leader účtu z LIVE; běžná copy group musí mít followera.
+   */
+  manualOnly?: boolean;
+  /**
+   * Strop kontraktů ručního vstupu (2. 11. 2026). Smí ho mít jen manual-only
+   * local-only skupina a nastavuje ho výhradně installer (`--manual-entry-max-contracts`);
+   * bez něj platí 1. Vzdálená změna skupiny ho nepřepíše.
+   */
+  manualEntryMaxContracts?: number;
 }
 
 export type LiveCopyTradingCommand =
@@ -291,7 +313,8 @@ export type LiveCopyTradingCommandResult =
   };
 
 export interface LiveCopyTradingAdapter {
-  execute(command: LiveCopyTradingCommand): Promise<LiveCopyTradingCommandResult | void>;
+  /** `confirmedTarget`: cíl z dialogu Flatten All Dashboardu (`routeDashboardCommand`). */
+  execute(command: LiveCopyTradingCommand, context?: { confirmedTarget?: LiveSafetyTarget | null }): Promise<LiveCopyTradingCommandResult | void>;
 }
 
 export interface CopyGroupValidation {
@@ -306,6 +329,8 @@ export type CopyGroupValidationIssueCode =
   | 'leader-required'
   | 'leader-unavailable'
   | 'followers-required'
+  | 'manual-only-must-be-local'
+  | 'manual-only-has-followers'
   | 'follower-unavailable'
   | 'leader-is-follower'
   | 'duplicate-follower'
@@ -472,7 +497,14 @@ export function validateCopyGroup(
       message: 'Vybraný leader účet není dostupný.',
     });
   }
-  if (group.followers.length === 0) add({ code: 'followers-required', message: 'Vyber alespoň jeden follower účet.' });
+  const manualOnly = group.manualOnly === true;
+  if (manualOnly && group.localOnly !== true) {
+    add({ code: 'manual-only-must-be-local', message: 'Režim jednoho účtu je povolený jen pro lokální DEMO skupinu.' });
+  }
+  if (manualOnly && group.followers.length > 0) {
+    add({ code: 'manual-only-has-followers', message: 'Režim jednoho účtu nesmí obsahovat followery.' });
+  }
+  if (!manualOnly && group.followers.length === 0) add({ code: 'followers-required', message: 'Vyber alespoň jeden follower účet.' });
   const seen = new Set<number>();
   for (const follower of group.followers) {
     if (!available.has(follower.accountId)) {
@@ -607,6 +639,11 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
     if (typeof raw.id !== 'string' || typeof raw.name !== 'string' || typeof raw.enabled !== 'boolean') return null;
     if (raw.leaderAccountId !== null && typeof raw.leaderAccountId !== 'number') return null;
     if (!Array.isArray(raw.followers)) return null;
+    if (raw.manualOnly != null && typeof raw.manualOnly !== 'boolean') return null;
+    // Neplatný strop se zahodí (= výchozí 1), skupina zůstává — žádný crash loop.
+    const manualEntryMaxContracts = raw.manualOnly === true && raw.localOnly === true
+      && Number.isSafeInteger(raw.manualEntryMaxContracts) && raw.manualEntryMaxContracts! >= 1 && raw.manualEntryMaxContracts! <= 5
+      ? raw.manualEntryMaxContracts : undefined;
     const followers: CopyFollowerConfig[] = [];
     for (const followerCandidate of raw.followers) {
       if (!followerCandidate || typeof followerCandidate !== 'object') return null;
@@ -631,6 +668,8 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
         ...(onCut != null ? { onCut } : {}),
       });
     }
+    const manualOnly = raw.manualOnly === true;
+    if (manualOnly && (raw.localOnly !== true || followers.length !== 0)) return null;
     const safety = sanitizeSafety(raw.safety);
     if (!safety) return null;
     groups.push({
@@ -642,6 +681,8 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
       ...(typeof raw.color === 'string' ? { color: raw.color } : {}),
       safety,
       ...(raw.localOnly === true ? { localOnly: true } : {}),
+      ...(manualOnly ? { manualOnly: true } : {}),
+      ...(manualOnly && manualEntryMaxContracts != null ? { manualEntryMaxContracts } : {}),
     });
   }
   return groups;

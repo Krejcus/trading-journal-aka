@@ -956,6 +956,102 @@ describe('fáze 1b: push o zrušení vlastního vstupu', () => {
   });
 });
 
+describe('C12 (oponentura kolo 1): push o zrušení vlastního vstupu podle ověřeného výsledku a incidentu záznamu', () => {
+  const C12 = ['manual-entry-auto-cancel-v1'];
+  const entry = (patch: Record<string, unknown> = {}) => ({
+    operationId: 'entry:v1', status: 'acknowledged', createdAt: NOW - 5_000, updatedAt: NOW - 4_000,
+    symbol: 'MNQZ6', side: 'Buy', quantity: 2, cancel: 'sent', cancelReason: 'čekající vstup: kopírka je vypnutá', ...patch,
+  });
+  const controller = (patch: Record<string, unknown>) => ({ armed: false, shadowMode: true, connected: true, killSwitch: false, stuckOutbox: false, lastError: null, ...patch });
+  const run = (entries: unknown[], options: { controllerPatch?: Record<string, unknown>; capabilities?: string[]; alerts?: CopierAlertStateRow[] } = {}) => {
+    const result = evaluate([runtime({ status: { capabilities: options.capabilities ?? C12, controller: controller({ ...(options.controllerPatch ?? {}), manualEntries: entries }) } })], options.alerts ?? []);
+    return { all: result, manual: result.notifications.filter(item => item.incidentKey.startsWith('manual-entry:')) };
+  };
+  const seen = (detail: string): CopierAlertStateRow => ({ ...state('manual-entry:entry:v1', false), detail } as CopierAlertStateRow);
+
+  it('P1: adaptér hlásí úspěch, ale vstup se vyplnil (`cancelVerified: filled`) → „vyplnil se během rušení — zkontroluj pozici a SL/TP“, nikdy „zrušený“', () => {
+    for (const verified of ['filled', 'partially-filled']) {
+      const [push] = run([entry({ cancelVerified: verified })]).manual;
+      expect(push).toMatchObject({ kind: 'opened', title: 'Vstup se vyplnil během rušení' });
+      // Oponentura C12 kolo 5 (P2): fill vstupu proti pozici na opačné straně ji zavřel — dovětek netvrdí „otevřená“.
+      expect(push.body).toContain('zkontroluj pozici a její SL/TP');
+      expect(push.body).not.toContain('pozice je otevřená');
+      expect(push.body).toContain('SL/TP');
+      expect(push.body).not.toContain('zrušený');
+      expect(push.body).not.toContain('followeři vstup nedostali');
+    }
+  });
+
+  it('P1: bez `cancelVerified` se čeká (jako `sending`); po 60 s bez výsledku poctivé „nejde ověřit“, nikdy „zrušený“', () => {
+    expect(run([entry()]).manual).toEqual([]);
+    expect(run([entry({ cancel: 'failed' })]).manual).toEqual([]);
+    expect(run([entry({ cancel: 'sending' })]).manual).toEqual([]);
+    const late = run([entry({ updatedAt: NOW - 61_000 })]).manual[0];
+    expect(late).toMatchObject({ kind: 'opened', title: 'Ruční vstup: zrušení nejde ověřit' });
+    expect(late.body).toContain('vstup může dál čekat');
+    expect(late.body).not.toContain('zrušený');
+    expect(run([entry({ cancel: 'sending', updatedAt: NOW - 120_000 })]).manual).toEqual([]);
+  });
+
+  it('P1: ověřené zrušení je jen informace bez věty „followeři vstup nedostali“; selhání / neověřené = výstraha „vstup může dál čekat“', () => {
+    const canceled = run([entry({ cancelVerified: 'canceled' })]).manual[0];
+    expect(canceled).toMatchObject({ kind: 'resolved', title: 'Čekající vstup zrušen' });
+    expect(canceled.body).toContain('zrušený (ověřeno u brokera)');
+    expect(canceled.body).toContain('kopírka je vypnutá');
+    expect(canceled.body).not.toContain('followeři vstup nedostali');
+    expect(run([entry({ cancelVerified: 'ended' })]).manual[0]).toMatchObject({ kind: 'resolved', title: 'Čekající vstup už nečeká' });
+    const working = run([entry({ cancel: 'failed', cancelVerified: 'working' })]).manual[0];
+    expect(working).toMatchObject({ kind: 'opened', title: 'Ruční vstup: zrušení selhalo' });
+    expect(working.body).toContain('vstup může dál čekat');
+    expect(run([entry({ cancelVerified: 'unverified' })]).manual[0]).toMatchObject({ kind: 'opened', title: 'Ruční vstup: zrušení nejde ověřit' });
+    // Bez `cancelReason` (nemá nastat) zůstává původní věta o followerech.
+    expect(run([entry({ cancelReason: undefined, cancelVerified: 'canceled' })]).manual[0].body).toContain('followeři vstup nedostali');
+  });
+
+  it('P1: pravdivý výsledek dorazí i po dřívějším `sent` / `canceled` (detail nese `cancelVerified`); stejný výsledek se neopakuje', () => {
+    const later = run([entry({ cancelVerified: 'filled' })], { alerts: [seen('acknowledged:sent:canceled')] }).manual;
+    expect(later).toHaveLength(1);
+    expect(later[0].title).toBe('Vstup se vyplnil během rušení');
+    expect(run([entry({ cancelVerified: 'filled' })], { alerts: [seen('acknowledged:sent:filled')] }).manual).toEqual([]);
+    expect(run([entry({ cancelVerified: 'filled' })], { alerts: [seen('acknowledged:sent')] }).manual).toHaveLength(1);
+  });
+
+  it('starý worker bez capability: původní texty beze změny (kompatibilita nasazení)', () => {
+    const [push] = run([entry()], { capabilities: [] }).manual;
+    expect(push).toMatchObject({ title: 'Ruční vstup zrušen', kind: 'opened' });
+    expect(push.body).toContain('Vstup na leaderovi je zrušený.');
+  });
+
+  it('P2: incident záznamu při už otevřeném fail-closed → vlastní push (globální fail-closed se znovu neotevře)', () => {
+    const incident = { at: NOW - 3_000, text: 'Čekající vstup Buy 2 Limit 24980 MNQZ6 (mo-3) je z části vyplněný (1/2) a zbytek dál čeká — automaticky se neruší' };
+    const { all, manual } = run([entry({ cancel: undefined, cancelReason: undefined, pendingIncident: incident })], {
+      controllerPatch: { lastError: 'Copier fail-closed: jiný incident X' }, alerts: [state('fail-closed', true), seen('acknowledged')],
+    });
+    expect(all.notifications.filter(item => item.incidentKey === 'fail-closed')).toEqual([]);
+    expect(manual).toEqual([expect.objectContaining({ incidentKey: 'manual-entry:entry:v1', kind: 'opened', title: 'Čekající vstup: zkontroluj leadera' })]);
+    expect(manual[0].body).toContain('zbytek dál čeká');
+    expect(all.upserts).toContainEqual(expect.objectContaining({ incidentKey: 'manual-entry:entry:v1', detail: `acknowledged|incident:${incident.at}` }));
+    // Týž incident podruhé nic; nový incident (jiný čas) znovu.
+    expect(run([entry({ cancel: undefined, cancelReason: undefined, pendingIncident: incident })], { alerts: [seen(`acknowledged|incident:${incident.at}`)] }).manual).toEqual([]);
+    expect(run([entry({ cancel: undefined, cancelReason: undefined, pendingIncident: { ...incident, at: NOW - 1_000 } })], { alerts: [seen(`acknowledged|incident:${incident.at}`)] }).manual).toHaveLength(1);
+  });
+
+  it('P2: kill switch + zrušení bez účinku → push záznamu přijde i za kill (`fail-closed` za kill neexistuje)', () => {
+    const incident = { at: NOW - 2_000, text: 'Čekající vstup Buy 2 Limit 24980 MNQZ6 (mo-3) se nepodařilo zrušit — zrušení se neprojevilo' };
+    const { all, manual } = run([entry({ cancel: 'failed', cancelVerified: 'working', pendingIncident: incident })], {
+      controllerPatch: { killSwitch: true, lastError: 'Copier fail-closed: kill' }, alerts: [state('kill-switch', true)],
+    });
+    expect(all.notifications.filter(item => item.incidentKey === 'fail-closed' || item.incidentKey === 'kill-switch')).toEqual([]);
+    expect(manual).toEqual([expect.objectContaining({ kind: 'opened', title: 'Čekající vstup: zkontroluj leadera' })]);
+    expect(manual[0].body).toContain('se nepodařilo zrušit');
+    // Detail zapíše i výsledek → pozdější stejný výsledek se už neposílá, jiný ano.
+    expect(all.upserts).toContainEqual(expect.objectContaining({ detail: `acknowledged:failed:working|incident:${incident.at}` }));
+    expect(run([entry({ cancel: 'failed', cancelVerified: 'working', pendingIncident: incident })], { alerts: [seen(`acknowledged:failed:working|incident:${incident.at}`)] }).manual).toEqual([]);
+    expect(run([entry({ cancel: 'failed', cancelVerified: 'filled', pendingIncident: incident })], { alerts: [seen(`acknowledged:failed:working|incident:${incident.at}`)] }).manual[0].title)
+      .toBe('Vstup se vyplnil během rušení');
+  });
+});
+
 describe('fáze 2a: push o neúspěšné změně ručního vstupu', () => {
   const action = (patch: Record<string, unknown> = {}) => ({
     operationId: 'manage:m1', entryOperationId: 'entry:e1', action: 'move-stop', status: 'rejected',
@@ -966,8 +1062,102 @@ describe('fáze 2a: push o neúspěšné změně ručního vstupu', () => {
 
   it('odmítnutí a neznámý výsledek se hlásí, úspěch ne', () => {
     expect(run([action()])[0]).toMatchObject({ title: 'Posun SL odmítnut', kind: 'opened' });
-    expect(run([action({ status: 'unknown', action: 'cancel-entry' })])[0].title).toBe('Zrušení vstupu: výsledek neznámý');
+    expect(run([action({ status: 'unknown', action: 'cancel-entry', updatedAt: NOW - 30_000 })])[0].title).toBe('Zrušení vstupu: výsledek neznámý');
     expect(run([action({ status: 'acknowledged' })])).toEqual([]);
     expect(run([action({ updatedAt: NOW - 11 * 60_000 })])).toEqual([]);
+  });
+
+  it('C7: zrušení, během kterého se vstup vyplnil, netvrdí „vstup dál čeká“ — pozice je otevřená', () => {
+    const filled = run([action({ action: 'cancel-entry', resultCode: 'entry-filled', reason: 'Vstup se vyplnil (2) dřív, než ho broker zrušil — pozice je otevřená; zavři ji × nebo Flattenem.' })])[0];
+    expect(filled).toMatchObject({ title: 'Vstup se vyplnil během rušení', kind: 'opened' });
+    expect(filled.body).toContain('pozice je otevřená');
+    expect(filled.body).not.toContain('dál čeká');
+    expect(run([action({ action: 'cancel-entry', resultCode: 'entry-partially-filled' })])[0].title).toBe('Vstup se vyplnil během rušení');
+    // Bez kódu (zrušení odmítnuté / bez účinku) zůstává „vstup dál čeká“.
+    expect(run([action({ action: 'cancel-entry', reason: 'Broker zrušení odmítl — vstup dál čeká' })])[0].body).toContain('Vstup dál čeká');
+  });
+
+  it('C7 kolo 3: mladé `unknown` zrušení vstupu (odmítnutí, čeká na ustálení) se zatím nehlásí — jiné akce ano', () => {
+    expect(run([action({ status: 'unknown', action: 'cancel-entry', updatedAt: NOW - 4_000 })])).toEqual([]);
+    expect(run([action({ status: 'unknown', action: 'cancel-entry', updatedAt: NOW - 25_000 })])[0].title).toBe('Zrušení vstupu: výsledek neznámý');
+    expect(run([action({ status: 'unknown', action: 'move-stop', updatedAt: NOW - 4_000 })])[0].title).toBe('Posun SL: výsledek neznámý');
+    expect(run([action({ status: 'rejected', action: 'cancel-entry', updatedAt: NOW - 4_000 })])[0].title).toBe('Zrušení vstupu odmítnut');
+  });
+
+  it('C7 kolo 3: vyplněno a obchod už skončil (flat) → push „Ověř v Tradovate“, ne „Zkontroluj SL/TP“; jinak beze změny', () => {
+    const flat = run([action({ action: 'cancel-entry', resultCode: 'entry-filled',
+      reason: 'Vstup se vyplnil (2) dřív, než ho broker zrušil — pozice už je zavřená a nic nepracuje (ověřeno čtením; příčina neověřena).' })])[0];
+    expect(flat.body).toContain('pozice už je zavřená');
+    expect(flat.body).toContain('Ověř v Tradovate.');
+    expect(flat.body).not.toContain('SL/TP v Tradovate');
+    expect(flat.body).not.toContain('..');
+    const open = run([action({ action: 'cancel-entry', resultCode: 'entry-filled', reason: 'Vstup se vyplnil (2) dřív, než ho broker zrušil — pozice je otevřená; zavři ji × nebo Flattenem.' })])[0];
+    expect(open.body).toContain('Zkontroluj SL/TP v Tradovate.');
+    expect(open.body).not.toContain('..');
+  });
+
+  it('C8 kolo 3: důvod s koncovou tečkou → push bez dvojité tečky', () => {
+    const bare = run([action({ action: 'close-position',
+      reason: 'Holá pozice leadera 2 (bez SL/TP) trvá — zavření nepotvrzeno (zavření odmítnuto: Market closed); zavři ji v Tradovate nebo Flattenem.' })])[0];
+    expect(bare.title).toBe('Zavření obchodu odmítnut');
+    expect(bare.body).toContain('Flattenem. Zkontroluj leadera');
+    expect(bare.body).not.toContain('..');
+    expect(run([action()])[0].body).toBe('Broker změnu odmítl. Leader i followeři mají původní cenu.');
+  });
+});
+
+describe('C12 (oponentura kolo 3): incident a výsledek zrušení v jednom okně watchdogu, starší záznamy', () => {
+  const C12 = ['manual-entry-auto-cancel-v1'];
+  const entry = (patch: Record<string, unknown> = {}) => ({
+    operationId: 'entry:r3', status: 'acknowledged', createdAt: NOW - 30_000, updatedAt: NOW - 4_000,
+    symbol: 'MNQZ6', side: 'Buy', quantity: 1, cancel: 'failed', cancelReason: 'čekající vstup: kopírka je vypnutá', ...patch,
+  });
+  const controller = (patch: Record<string, unknown>) => ({ armed: false, shadowMode: true, connected: true, killSwitch: false, stuckOutbox: false, lastError: null, ...patch });
+  const run = (entries: unknown[], alerts: CopierAlertStateRow[] = []) => {
+    const result = evaluate([runtime({ status: { capabilities: C12, controller: controller({ manualEntries: entries }) } })], alerts);
+    return { all: result, manual: result.notifications.filter(item => item.incidentKey.startsWith('manual-entry:')) };
+  };
+  const seen = (key: string, detail: string): CopierAlertStateRow => ({ ...state(key, false), detail } as CopierAlertStateRow);
+  const incident = { at: NOW - 6_000, text: 'Čekající vstup Buy 1 Limit 24980 MNQZ6 (mo-1): vstup se při rušení vyplnil (1) a SL/TP pozice nejsou potvrzené u brokera — zkontroluj leadera v Tradovate' };
+
+  it('P2: nový incident a souběžný nový výsledek `filled` → jeden push, který nese i „vyplnil se během rušení“; výsledek se pak neopakuje', () => {
+    const { all, manual } = run([entry({ cancelVerified: 'filled', pendingIncident: incident })]);
+    expect(manual).toHaveLength(1);
+    expect(manual[0]).toMatchObject({ kind: 'opened', title: 'Čekající vstup: zkontroluj leadera' });
+    expect(manual[0].body).toContain('SL/TP pozice nejsou potvrzené');
+    expect(manual[0].body).toContain('Vstup se vyplnil během rušení — zkontroluj pozici a její SL/TP');
+    expect(manual[0].body).not.toContain('pozice je otevřená');
+    const detail = `acknowledged:failed:filled|incident:${incident.at}`;
+    expect(all.upserts).toContainEqual(expect.objectContaining({ incidentKey: 'manual-entry:entry:r3', detail }));
+    expect(run([entry({ cancelVerified: 'filled', pendingIncident: incident })], [seen('manual-entry:entry:r3', detail)]).manual).toEqual([]);
+  });
+
+  it('P2: incident a výsledek, který už odešel dřív → push nese jen incident (žádné opakování výsledku)', () => {
+    const { manual } = run([entry({ cancelVerified: 'filled', pendingIncident: incident })], [seen('manual-entry:entry:r3', 'acknowledged:failed:filled')]);
+    expect(manual).toHaveLength(1);
+    expect(manual[0].body).not.toContain('Vstup se vyplnil během rušení');
+  });
+
+  it('P2: nový incident a souběžný nový výsledek bez krátkého textu → výsledek se nezapíše jako doručený a odejde vlastní zprávou v dalším průchodu', () => {
+    const plain = entry({ cancel: undefined, cancelReason: undefined, pendingIncident: incident });
+    const first = run([plain]);
+    expect(first.manual).toHaveLength(1);
+    expect(first.manual[0].title).toBe('Čekající vstup: zkontroluj leadera');
+    const detail = `|incident:${incident.at}`;
+    expect(first.all.upserts).toContainEqual(expect.objectContaining({ incidentKey: 'manual-entry:entry:r3', detail }));
+    const second = run([plain], [seen('manual-entry:entry:r3', detail)]).manual;
+    expect(second).toHaveLength(1);
+    expect(second[0].title).toBe('Ruční vstup přijat');
+  });
+
+  it('P3: status s 11 záznamy (starší s incidentem první) → push i pro nejstarší záznam', () => {
+    const newer = Array.from({ length: 10 }, (_, index) => ({
+      operationId: `entry:n${index}`, status: 'acknowledged', createdAt: NOW - 20_000 + index, updatedAt: NOW - 20 * 60_000,
+      symbol: 'MNQZ6', side: 'Buy', quantity: 1,
+    }));
+    const oldest = entry({ operationId: 'entry:old', createdAt: NOW - 3 * 60 * 60_000, cancelVerified: 'working', pendingIncident: incident });
+    const { manual } = run([oldest, ...newer]);
+    expect(manual.map(item => item.incidentKey)).toEqual(['manual-entry:entry:old']);
+    expect(manual[0].body).toContain('SL/TP pozice nejsou potvrzené');
   });
 });

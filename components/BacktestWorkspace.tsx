@@ -5,9 +5,40 @@ import { type BacktestAnalyticsRefreshCandidate } from '../services/backtestAnal
 import { buildBacktestTradeRecalculationUpdates } from '../services/backtestTradeRecalculation';
 import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { Loader2, PanelRightClose, PanelRightOpen, X } from 'lucide-react';
 import type { Trade } from '../types';
 import AlphaTradeChartWorkspace, { type BacktestChartSessionBridge, type MarketRoot } from './AlphaTradeChartWorkspace';
+import BacktestOrderTicket, { type BacktestTicketSubmitResult } from './BacktestOrderTicket';
+import LiveTradeToasts from './LiveTradeToasts';
+import { formatUsd } from './LiveOrderTicket';
+import {
+  LIVE_DRAFT_ID,
+  clickedOrderType,
+  liveDraftChartLines,
+  newTicketDraft,
+  snapToTick,
+  ticketQuantity,
+  withBracket,
+  withEntryPrice,
+  type TicketBracketUnits,
+  type TicketDraft,
+  type TicketSide,
+} from '../lib/liveOrderTicket';
+import {
+  BACKTEST_BREAK_EVEN_ACTION,
+  backtestBreakEven,
+  backtestPositionSummary,
+  backtestRuntimeToasts,
+  backtestSubmitDraft,
+  backtestTicketInstrument,
+  backtestTicketQuote,
+  seedBacktestToastSeen,
+  shiftDraftBrackets,
+  withBacktestLineControls,
+  type BacktestPositionSummary,
+} from '../lib/backtestChartTrading';
+import type { TradeToast } from '../lib/liveTradeToasts';
+import { readTradeChartIndicators } from '../services/detailIndicators';
 import {
   type MarketCandle,
   type MarketDataSchema,
@@ -56,14 +87,15 @@ import type { PositionDrawing } from '../services/chartPositionDrawing';
 import {
   pendingOrderChartLines,
   positionChartLines,
-  TICKET_DRAFT_ID,
-  ticketDraftChartLines,
-  ticketDraftOrder,
-  ticketDraftWithBracket,
-  type BacktestTicketDraft,
   type BacktestChartOrderLine,
   type BacktestChartOrderLineKind,
 } from '../services/backtestOrderLines';
+
+/** Panel Objednávka otevřený / zavřený — pamatuje si ho prohlížeč (jen pohodlí). */
+const TICKET_OPEN_KEY = 'alphatrade:backtest-ticket-open';
+const readTicketOpen = () => {
+  try { return window.localStorage.getItem(TICKET_OPEN_KEY) === '1'; } catch { return false; }
+};
 
 // Keep the replay timeline progressive. Loading two weeks of 1m MNQ + NQ in
 // both workspace panels at once can exhaust Chromium's renderer before the
@@ -616,22 +648,75 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     updateRun(current => ({ ...current, workspaceState, updatedAt: Date.now() }));
   }, [updateRun]);
 
-  // Množství drží workspace, ne jen obchodní panel: objednávka z pravého kliku
-  // do grafu musí použít přesně to číslo, které uživatel vidí vedle typu.
-  const [orderQuantity, setOrderQuantity] = useState(run.config.defaultQuantity || 1);
-  // Obchodní lišta: typ příkazu a návrh limit/stop čáry v grafu (jen v paměti,
-  // do enginu jde až po Buy/Sell — viz ticketDraftChartLines).
-  const [ticketType, setTicketType] = useState<BacktestOrderType>('market');
-  const [ticketDraft, setTicketDraft] = useState<BacktestTicketDraft | null>(null);
-  const ticketDraftRef = useRef(ticketDraft);
-  ticketDraftRef.current = ticketDraft;
-  /** Poslední odkrytá cena exekučního trhu (pro stranu návrhu). */
-  const executionPrice = useCallback((): number | undefined => {
+  // Panel Objednávka jako v LIVE: návrh (vstup, SL, TP) žije jen v paměti a do
+  // enginu jde až velkým tlačítkem. Pravý klik do grafu ho jen vyplní.
+  const instrument = useMemo(() => backtestTicketInstrument(run.executionSymbol), [run.executionSymbol]);
+  // Indikátory jako LIVE a deník (FVG, levely vč. VWAP, struktura) — jen start
+  // nové session / nového panelu; uložené panely session si drží svůj stav.
+  const [startIndicators] = useState(readTradeChartIndicators);
+  const [ticketOpen, setTicketOpenState] = useState(readTicketOpen);
+  const setTicketOpen = useCallback((open: boolean) => {
+    setTicketOpenState(open);
+    try { window.localStorage.setItem(TICKET_OPEN_KEY, open ? '1' : '0'); } catch { /* jen pohodlí */ }
+  }, []);
+  const [draft, setDraft] = useState<TicketDraft | null>(null);
+  const [units, setUnits] = useState<TicketBracketUnits>('pts');
+  // Velikost dalšího návrhu (pravý klik, Koupit/Prodat) = poslední použitá.
+  const sizingRef = useRef<Pick<TicketDraft, 'sizing' | 'quantity' | 'riskUsd'>>({ sizing: 'qty', quantity: run.config.defaultQuantity || 1, riskUsd: 200 });
+  useEffect(() => {
+    if (draft) sizingRef.current = { sizing: draft.sizing, quantity: draft.quantity, riskUsd: draft.riskUsd };
+  }, [draft]);
+  /** Svíčka exekučního trhu pod kurzorem replaye (čerstvá i mezi překresleními). */
+  const executionCandle = useCallback((): MarketCandle | null => {
     const current = runRef.current;
     const cursor = current.runtimeState.replay.cursorTime;
-    if (cursor === null) return undefined;
-    return [...(candlesByRoot[current.executionSymbol] ?? [])].reverse().find(candle => candle.time <= cursor)?.close;
+    if (cursor === null) return null;
+    const candles = candlesByRoot[current.executionSymbol] ?? [];
+    const index = candleIndexAfter(candles, cursor) - 1;
+    return index >= 0 ? candles[index] : null;
   }, [candlesByRoot]);
+  /** Poslední odkrytá svíčka exekučního trhu (panel, návrh, štítky, BE). */
+  const markCandle = useMemo(() => {
+    const cursor = run.runtimeState.replay.cursorTime;
+    if (cursor === null) return null;
+    const candles = candlesByRoot[run.executionSymbol] ?? [];
+    const index = candleIndexAfter(candles, cursor) - 1;
+    return index >= 0 ? candles[index] : null;
+  }, [candlesByRoot, run.executionSymbol, run.runtimeState.replay.cursorTime]);
+  const markPrice = markCandle?.close ?? null;
+  const quote = useMemo(() => backtestTicketQuote(markPrice), [markPrice]);
+  const quoteRef = useRef(quote);
+  quoteRef.current = quote;
+  // Market: SL a TP jedou s cenou replaye (drží nastavenou vzdálenost od vstupu).
+  const marketEntryRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!quote || draft?.type !== 'market') { marketEntryRef.current = null; return; }
+    const previous = marketEntryRef.current;
+    marketEntryRef.current = quote.ask;
+    if (previous == null || previous === quote.ask) return;
+    const delta = quote.ask - previous;
+    setDraft(current => (current && current.type === 'market' && (current.stopLoss != null || current.takeProfit != null)
+      ? shiftDraftBrackets(current, delta, instrument.tickSize)
+      : current));
+  }, [draft?.type, instrument.tickSize, quote]);
+  // Nový start replaye: návrh na staré absolutní ceně by tam nedával smysl.
+  const replayStartTime = run.runtimeState.replay.startTime;
+  useEffect(() => { setDraft(null); }, [replayStartTime]);
+  // Hlášky štítků (BE nejde, …) nahoře nad grafem jako v LIVE.
+  const [lineNotice, setLineNotice] = useState<{ tone: 'ok' | 'bad'; text: string; at: number } | null>(null);
+  useEffect(() => {
+    if (!lineNotice) return undefined;
+    const timer = window.setTimeout(() => setLineNotice(null), 6_000);
+    return () => window.clearTimeout(timer);
+  }, [lineNotice]);
+  // Karty obchodů vlevo dole: nové události enginu od otevření session.
+  const [toastSeen] = useState(() => seedBacktestToastSeen(initialRun.runtimeState));
+  const [toasts, setToasts] = useState<TradeToast[]>([]);
+  const { orders: runtimeOrders, fills: runtimeFills, closedTrades: runtimeClosedTrades } = run.runtimeState;
+  useEffect(() => {
+    const fresh = backtestRuntimeToasts({ orders: runtimeOrders, fills: runtimeFills, closedTrades: runtimeClosedTrades }, toastSeen);
+    if (fresh.length) setToasts(fresh);
+  }, [runtimeOrders, runtimeFills, runtimeClosedTrades, toastSeen]);
 
   const executeOrder = useCallback((input: {
     side: 'buy' | 'sell'; type: BacktestOrderType; quantity: number; price?: number; stopLoss?: number; takeProfit?: number; reduceOnly?: boolean;
@@ -678,34 +763,14 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     updateRun(current => ({ ...current, runtimeState: cancelBacktestOrder(current.runtimeState, id, candle?.time ?? Math.floor(Date.now() / 1_000), Date.now()), updatedAt: Date.now() }));
   }, [updateRun]);
 
-  const changeBracket = useCallback((stopLoss?: number, takeProfit?: number) => {
-    updateRun(current => ({
-      ...current,
-      runtimeState: updatePositionBracket(
-        current.runtimeState,
-        current.executionSymbol,
-        stopLoss,
-        takeProfit,
-        current.runtimeState.replay.cursorTime ?? undefined,
-        Date.now(),
-      ),
-      updatedAt: Date.now(),
-    }));
-  }, [updateRun]);
-
   const changeOrderLine = useCallback((line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number) => {
-    if (line.ownerId === TICKET_DRAFT_ID) {
-      // Posun vstupu návrhu bere SL/TP s sebou (drží jejich vzdálenost).
-      setTicketDraft(draft => {
-        if (!draft) return draft;
-        if (kind !== 'entry') return ticketDraftWithBracket(draft, kind, executionPrice(), price);
-        const delta = price - draft.price;
-        return {
-          ...draft,
-          price,
-          stopLoss: draft.stopLoss === undefined ? undefined : draft.stopLoss + delta,
-          takeProfit: draft.takeProfit === undefined ? undefined : draft.takeProfit + delta,
-        };
+    if (line.ownerId === LIVE_DRAFT_ID) {
+      // Návrh panelu stejně jako v LIVE: vstup se posouvá sám, SL/TP na tick.
+      setDraft(previous => {
+        if (!previous) return previous;
+        if (kind === 'entry') return withEntryPrice(previous, price, instrument);
+        const snapped = snapToTick(price, instrument.tickSize);
+        return kind === 'stopLoss' ? { ...previous, stopLoss: snapped } : { ...previous, takeProfit: snapped };
       });
       return;
     }
@@ -739,17 +804,12 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         updatedAt: Date.now(),
       };
     });
-  }, [executionPrice, updateRun]);
+  }, [instrument, updateRun]);
 
   const cancelOrderLine = useCallback((line: BacktestChartOrderLine) => {
-    if (line.ownerId === TICKET_DRAFT_ID) {
-      if (line.kind === 'entry') {
-        setTicketDraft(null);
-        setTicketType('market');
-      } else {
-        const field = line.kind;
-        setTicketDraft(draft => draft && { ...draft, [field]: undefined });
-      }
+    if (line.ownerId === LIVE_DRAFT_ID) {
+      if (line.kind === 'entry') setDraft(null);
+      else setDraft(previous => (previous ? (line.kind === 'stopLoss' ? { ...previous, stopLoss: null } : { ...previous, takeProfit: null }) : previous));
       return;
     }
     if (line.ownerType === 'position') {
@@ -812,8 +872,9 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
     draggedPrice?: number,
   ) => {
-    if (line.ownerId === TICKET_DRAFT_ID) {
-      setTicketDraft(draft => draft && ticketDraftWithBracket(draft, kind, executionPrice(), draggedPrice));
+    if (line.ownerId === LIVE_DRAFT_ID) {
+      const current = quoteRef.current;
+      if (current) setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', instrument, current, draggedPrice) : previous));
       return;
     }
     updateRun(current => {
@@ -888,15 +949,12 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         updatedAt: Date.now(),
       };
     });
-  }, [executionPrice, updateRun]);
+  }, [instrument, updateRun]);
 
   const orderLines = useMemo(() => {
     const runtime = run.runtimeState;
-    const cursor = runtime.replay.cursorTime;
-    const currentPrice = cursor === null
-      ? undefined
-      : [...(candlesByRoot[run.executionSymbol] ?? [])].reverse().find(candle => candle.time <= cursor)?.close;
-    return [
+    const currentPrice = markPrice ?? undefined;
+    const engineLines = [
       ...runtime.orders.flatMap(pendingOrderChartLines),
       ...runtime.positions
         .filter(position => position.instrument === run.executionSymbol)
@@ -908,32 +966,92 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
           });
           return positionChartLines(position, currentPrice, enteredByMarketOrder);
         }),
-      ...(ticketDraft ? ticketDraftChartLines(ticketDraft, run.executionSymbol, orderQuantity, currentPrice) : []),
     ];
-  }, [candlesByRoot, orderQuantity, run.executionSymbol, run.runtimeState, ticketDraft]);
+    return [
+      ...withBacktestLineControls(engineLines, runtime.positions, markPrice, LIVE_DRAFT_ID),
+      // Návrh jen s otevřeným panelem (jako LIVE) — schovaný panel nenechá v grafu fialové čáry.
+      ...(draft && quote && ticketOpen ? liveDraftChartLines(draft, instrument, quote) : []),
+    ];
+  }, [draft, instrument, markPrice, quote, run.executionSymbol, run.runtimeState, ticketOpen]);
 
-  /** Typ v liště: limit/stop založí návrh čáry na poslední ceně, market ho zahodí. */
-  const changeTicketType = useCallback((type: BacktestOrderType, candle: MarketCandle | null) => {
-    setTicketType(type);
-    if (type === 'market') { setTicketDraft(null); return; }
-    setTicketDraft(draft => {
-      if (draft) return { ...draft, type };
-      const base = candle?.close ?? executionPrice();
-      return Number.isFinite(base) ? { type, price: Math.round(Number(base) * 4) / 4 } : null;
-    });
-  }, [executionPrice]);
+  const positionSummary = useMemo(() => {
+    const position = run.runtimeState.positions.find(item => item.instrument === run.executionSymbol);
+    return position ? backtestPositionSummary(position, markPrice) : null;
+  }, [markPrice, run.executionSymbol, run.runtimeState.positions]);
+  // Pravý klik do grafu ukazuje stejný počet kontraktů jako návrh v panelu.
+  const chartOrderQuantity = draft && quote ? Math.max(1, ticketQuantity(draft, instrument, quote)) : sizingRef.current.quantity;
 
-  const submitTicket = useCallback((side: 'buy' | 'sell', candle: MarketCandle | null) => {
-    if (ticketType === 'market') return executeOrder({ side, type: 'market', quantity: orderQuantity }, candle);
-    const draft = ticketDraftRef.current;
-    if (!draft) return null;
-    const order = executeOrder({ ...ticketDraftOrder(draft, side, executionPrice()), quantity: orderQuantity }, candle);
-    if (order) {
-      setTicketDraft(null);
-      setTicketType('market');
+  /** BE ve štítku pozice: SL na průměrný vstup, jen když už je cena za ním. */
+  const orderLineAction = useCallback((line: BacktestChartOrderLine, actionId: string) => {
+    if (actionId !== BACKTEST_BREAK_EVEN_ACTION || line.ownerType !== 'position') return;
+    const current = runRef.current;
+    const position = current.runtimeState.positions.find(item => item.instrument === line.ownerId);
+    if (!position) return;
+    const be = backtestBreakEven(position, executionCandle()?.close, instrument.tickSize);
+    if (be.blocked || be.price == null) { setLineNotice({ at: Date.now(), tone: 'bad', text: be.blocked ?? 'BE teď nejde.' }); return; }
+    const price = be.price;
+    updateRun(runState => ({
+      ...runState,
+      runtimeState: updatePositionBracket(
+        runState.runtimeState,
+        position.instrument,
+        price,
+        position.takeProfit,
+        runState.runtimeState.replay.cursorTime ?? Math.floor(Date.now() / 1_000),
+        Date.now(),
+      ),
+      updatedAt: Date.now(),
+    }));
+    const at = (current.runtimeState.replay.cursorTime ?? Math.floor(Date.now() / 1_000)) * 1_000;
+    setToasts([{ id: `be:${position.instrument}:${Date.now()}`, at, tone: 'amber', badge: 'BE', title: 'SL na break-even', line: `SL → ${price.toFixed(2)}`, pnl: null, accounts: 0, sticky: false }]);
+  }, [executionCandle, instrument.tickSize, updateRun]);
+
+  /** Velké tlačítko panelu: návrh do enginu (Market hned za závěr svíčky, Limit/Stop čekají). */
+  const submitTicket = useCallback((next: TicketDraft): BacktestTicketSubmitResult => {
+    const candle = executionCandle();
+    const current = backtestTicketQuote(candle?.close);
+    if (!candle || !current) return { ok: false, text: 'Neodesláno: replay nemá cenu — spusť přehrávání.' };
+    // Panel ukazuje cenu posledního překreslení; engine plní za čerstvý závěr svíčky.
+    const prepared = backtestSubmitDraft(next, quoteRef.current, current, instrument);
+    if (prepared.blocked) return { ok: false, text: `Neodesláno: ${prepared.blocked}` };
+    const { quantity } = prepared;
+    if (quantity < 1) return { ok: false, text: 'Neodesláno: riziko nestačí ani na 1 kontrakt.' };
+    let orderId: string;
+    try {
+      const order = executeOrder({
+        side: next.side,
+        type: next.type,
+        quantity,
+        price: next.type === 'market' ? undefined : next.price,
+        stopLoss: prepared.draft.stopLoss ?? undefined,
+        takeProfit: prepared.draft.takeProfit ?? undefined,
+      }, candle);
+      if (!order) return { ok: false, text: 'Neodesláno: obchodovat jde až od začátku replay session.' };
+      orderId = order.id;
+    } catch (reason) {
+      return { ok: false, text: `Neodesláno: ${reason instanceof Error ? reason.message : 'příkaz se nepodařilo vytvořit.'}` };
     }
-    return order;
-  }, [executeOrder, executionPrice, orderQuantity, ticketType]);
+    // Engine Market v čase flat session (konec dne) zruší — „Vyplněno“ jen po skutečném plnění.
+    const status = runRef.current.runtimeState.orders.find(order => order.id === orderId)?.status;
+    if (next.type === 'market' && status !== 'filled') return { ok: false, text: 'Nevyplněno: v tomhle čase session obchod neotevře (flat / konec dne).' };
+    const action = `${next.side === 'buy' ? 'Koupit' : 'Prodat'} ${quantity} ${instrument.symbol}`;
+    return { ok: true, text: next.type === 'market' ? `Vyplněno · ${action}` : `Zadáno · ${action} ${next.type === 'limit' ? 'LMT' : 'STP'}` };
+  }, [executeOrder, executionCandle, instrument]);
+
+  /** Nový návrh (Koupit/Prodat v panelu, pravý klik do grafu) s poslední velikostí. */
+  const startDraft = useCallback((side: TicketSide, type: TicketDraft['type'], price: number | undefined, quantity?: number) => {
+    const current = quoteRef.current;
+    if (!current) return;
+    // Typ podle ceny replaye, ne podle viditelné svíčky (odscrollovaná historie).
+    const resolved = price != null ? clickedOrderType(side, snapToTick(price, instrument.tickSize), current, instrument.tickSize) : type;
+    const base = sizingRef.current;
+    setDraft(newTicketDraft(side, resolved, price ?? (side === 'buy' ? current.ask - 10 : current.bid + 10), instrument, current, {
+      sizing: base.sizing,
+      quantity: quantity ?? base.quantity,
+      riskUsd: base.riskUsd,
+    }));
+    setTicketOpen(true);
+  }, [instrument, setTicketOpen]);
 
   const executeQuickOrder = useCallback((drawing: PositionDrawing, candle: MarketCandle | null, instrument: MarketRoot) => {
     if (instrument !== runRef.current.executionSymbol) {
@@ -990,7 +1108,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
       updatedAt: Date.now(),
     }));
     lastProcessedCursorRef.current = plan.targetTime;
-    setTicketDraft(null);
+    setDraft(null);
     const removedIds = plan.removedTrades.map(trade => trade.id);
     if (removedIds.length && onTradesDiscarded) {
       void onTradesDiscarded(removedIds).catch(reason => {
@@ -1038,10 +1156,9 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     pauseReplayForDialog: evidenceOpen || sessionInfoOpen || rewindRequest !== null,
     onSaveWorkspace: async () => ({ localSaved: await flush({ cloud: true }), cloudSaved: !cloudDirtyRef.current && !conflictRef.current }),
     onQuickOrder: ({ drawing, candle, instrument }) => executeQuickOrder(drawing, candle, instrument),
-    chartOrderQuantity: orderQuantity,
-    onChartOrder: (input, candle) => {
-      executeOrder({ side: input.side, type: input.type, quantity: input.quantity, price: input.price }, candle);
-    },
+    chartOrderQuantity,
+    // Pravý klik do grafu jen vyplní panel Objednávka (jako LIVE); odeslání je tlačítkem panelu.
+    onChartOrder: input => startDraft(input.side, input.type, input.price, input.quantity),
     orderLines,
     managedPositionBoxes: managedBoxes,
     fills: run.runtimeState.fills.filter(fill => fill.instrument === run.executionSymbol),
@@ -1056,28 +1173,59 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     onOrderLineChange: changeOrderLine,
     onOrderLineCancel: cancelOrderLine,
     onOrderLineAddBracket: addPositionBracketLine,
+    onOrderLineAction: orderLineAction,
     onRequestRewind: onTradesDiscarded ? requestRewind : undefined,
     renderTradingPanel: ({ candle }) => (
       <BacktestTradingPanel
         run={runRef.current}
         candle={candle}
         isDark={isDark}
-        quantity={orderQuantity}
-        onQuantityChange={setOrderQuantity}
-        type={ticketType}
-        draftPrice={ticketDraft?.price}
-        onTypeChange={changeTicketType}
-        onSubmit={submitTicket}
+        ticketOpen={ticketOpen}
+        onToggleTicket={() => setTicketOpen(!ticketOpen)}
+        position={positionSummary}
         onCancel={cancelOrder}
         onClosePosition={closePosition}
-        onChangeBracket={changeBracket}
         onOpenSessionInfo={() => {
           updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } } }));
           setSessionInfoOpen(true);
         }}
       />
     ),
-  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, registerWorkspaceCheckpoint, changeTicketType, submitTicket, ticketDraft, ticketType, onTradesDiscarded, requestRewind, evidenceOpen, sessionInfoOpen, rewindRequest, updateRun, run.config.instruments, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
+    // Zavřený panel zůstává připojený (bez šířky, inert) kvůli plynulé animaci — jako LIVE.
+    renderTradingDock: () => (
+      <div className={`live-chart-ticket-dock ${ticketOpen ? 'is-open' : ''}`} inert={!ticketOpen} aria-hidden={!ticketOpen || undefined}>
+        <aside className="live-chart-ticket h-full w-[304px]">
+          <BacktestOrderTicket
+            isDark={isDark}
+            instrument={instrument}
+            quote={quote}
+            quoteTime={markCandle?.time ?? null}
+            timeZone={run.config.timezone || 'Europe/Prague'}
+            draft={draft}
+            onDraft={setDraft}
+            units={units}
+            onUnits={setUnits}
+            sessionName={run.name}
+            balance={run.runtimeState.balance}
+            equity={run.runtimeState.equity}
+            position={positionSummary}
+            onSubmit={submitTicket}
+            onNewDraft={side => startDraft(side, 'limit', quote ? (side === 'buy' ? quote.ask - 10 : quote.bid + 10) : undefined)}
+            onClose={() => setTicketOpen(false)}
+          />
+        </aside>
+      </div>
+    ),
+    renderChartOverlay: () => (
+      <>
+        {lineNotice && <div role="status" className={`pointer-events-none absolute left-1/2 top-11 z-[700] max-w-[440px] -translate-x-1/2 rounded-lg border px-3 py-1.5 text-[11.5px] font-bold shadow-lg ${lineNotice.tone === 'ok'
+          ? 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200'
+          : 'border-rose-500/40 bg-rose-950/90 text-rose-200'}`}>{lineNotice.text}</div>}
+        {/* Nad lištou stavu a obchodní lištou, vpravo od lišty kreslení. */}
+        <LiveTradeToasts events={undefined} copierArmed={false} isDark={isDark} extra={toasts} placement={{ left: 68, bottom: 84 }} />
+      </>
+    ),
+  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeOrderLine, chartOrderQuantity, closePosition, draft, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, instrument, isDark, lineNotice, markCandle?.time, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLineAction, orderLines, positionSummary, quote, recalculateTrade, registerWorkspaceCheckpoint, setTicketOpen, startDraft, submitTicket, ticketOpen, toasts, units, onTradesDiscarded, requestRewind, evidenceOpen, sessionInfoOpen, rewindRequest, updateRun, run.config.instruments, run.config.timezone, run.endAt, run.executionSymbol, run.id, run.name, run.runtimeState, run.startAt, run.workspaceState]);
 
   const syntheticTrade = useMemo<Trade>(() => ({
     id: `backtest-${run.id}`,
@@ -1186,6 +1334,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         isDark={isDark}
         onClose={() => void closeWorkspace()}
         backtestSession={bridge}
+        tradeIndicators={startIndicators}
       />
       {/* Selhání dalšího segmentu se dřív jen zapsalo do stavu a nikde
           neukázalo — chart už svíčky měl, takže chybová obrazovka výš se
@@ -1261,40 +1410,25 @@ interface TradingPanelProps {
   run: BacktestRun;
   candle: MarketCandle | null;
   isDark: boolean;
-  quantity: number;
-  onQuantityChange: (quantity: number) => void;
-  type: BacktestOrderType;
-  /** Cena návrhu limit/stop čáry v grafu. */
-  draftPrice?: number;
-  onTypeChange: (type: BacktestOrderType, candle: MarketCandle | null) => void;
-  onSubmit: (side: 'buy' | 'sell', candle: MarketCandle | null) => unknown;
+  ticketOpen: boolean;
+  onToggleTicket: () => void;
+  position: BacktestPositionSummary | null;
   onCancel: (id: string, candle: MarketCandle | null) => void;
   onClosePosition: (quantity: number, candle: MarketCandle | null) => void;
-  onChangeBracket: (stopLoss?: number, takeProfit?: number) => void;
   onOpenSessionInfo: () => void;
 }
 
-const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark, quantity, onQuantityChange, type, draftPrice, onTypeChange, onSubmit, onCancel, onClosePosition, onOpenSessionInfo }) => {
-  const [orderError, setOrderError] = useState<string | null>(null);
+/**
+ * Spodní lišta session: tlačítko panelu Objednávka (jako v hlavičce LIVE),
+ * účet, pozice a čekající příkazy. Zadávání příkazů je v panelu.
+ */
+const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark, ticketOpen, onToggleTicket, position, onCancel, onClosePosition, onOpenSessionInfo }) => {
   const runtime = run.runtimeState;
-  const position = runtime.positions.find(item => item.instrument === run.executionSymbol);
   const pending = runtime.orders.filter(order => order.status === 'pending');
   const field = `h-7 rounded-md border px-2 text-[11px] tabular-nums outline-none transition-colors focus:border-blue-500/70 ${isDark
     ? 'border-white/10 bg-white/[0.04] text-white placeholder:text-slate-500 hover:border-white/20'
     : 'border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400 hover:border-slate-300'}`;
   const divider = `h-6 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
-  const submit = (side: 'buy' | 'sell') => {
-    if (!Number.isFinite(quantity) || quantity < 1) {
-      setOrderError('Zadej platný počet kontraktů.');
-      return;
-    }
-    if (type !== 'market' && draftPrice === undefined) {
-      setOrderError('Nejdřív umísti čáru příkazu v grafu.');
-      return;
-    }
-    setOrderError(null);
-    onSubmit(side, candle);
-  };
   const money = (value: number, signed = false) => `${signed && value >= 0.005 ? '+' : value <= -0.005 ? '−' : ''}$${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const priceText = (value: number | undefined) => value === undefined ? '—' : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pnlTone = (value: number) => value > 0 ? 'text-emerald-500' : value < 0 ? 'text-rose-500' : '';
@@ -1305,56 +1439,23 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
     </div>
   );
   const typeLabels: Record<BacktestOrderType, string> = { market: 'Mkt', limit: 'Lmt', stop: 'Stp' };
-  // Zadání příkazu: pole se štítkem uvnitř jednoho rámečku (jako ticket v platformě).
-  const group = `flex h-7 items-center overflow-hidden rounded-md border transition-colors focus-within:border-blue-500/70 ${isDark
-    ? 'border-white/10 bg-white/[0.04] hover:border-white/20'
-    : 'border-slate-200 bg-slate-50 hover:border-slate-300'}`;
-  const bare = `h-full bg-transparent px-1.5 text-[11px] tabular-nums outline-none ${isDark ? 'text-white placeholder:text-slate-600' : 'text-slate-900 placeholder:text-slate-400'}`;
-  const stepButton = `flex h-full w-6 items-center justify-center text-[13px] font-bold transition-colors disabled:opacity-30 ${isDark ? 'text-slate-400 hover:bg-white/[0.07] hover:text-white' : 'text-slate-500 hover:bg-slate-200 hover:text-slate-900'}`;
-  const sideButton = 'flex h-7 min-w-[92px] items-center justify-center gap-1.5 rounded-md px-2.5 text-[11px] font-black uppercase tracking-wide text-white transition hover:brightness-110 active:translate-y-px active:brightness-95 disabled:opacity-40';
-  // Market se plní za poslední cenu; limit/stop za zadanou.
-  const ticketPrice = type === 'market' ? priceText(candle?.close) : priceText(draftPrice);
   return (
-    // Jeden řádek (44 px) — víc místa pro graf. Pořadí: zadání příkazu → účet → pozice → čekající příkazy.
+    // Jeden řádek (44 px) — víc místa pro graf. Pořadí: Objednávka → účet → pozice → čekající příkazy.
     <div className="relative flex h-full items-center gap-3 px-3 text-[11px]">
-      {orderError && <span role="alert" className="pointer-events-none absolute bottom-full left-3 mb-1.5 rounded-md bg-rose-600 px-2 py-1 text-[10.5px] font-bold text-white shadow-lg">{orderError}</span>}
       <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:thin]">
-      <div className={`flex shrink-0 items-center rounded-lg p-0.5 ${isDark ? 'bg-white/[0.05] ring-1 ring-inset ring-white/[0.06]' : 'bg-slate-100 ring-1 ring-inset ring-slate-200'}`} role="radiogroup" aria-label="Typ objednávky">
-        {(['market', 'limit', 'stop'] as const).map(option => (
-          <button
-            key={option}
-            type="button"
-            role="radio"
-            aria-checked={type === option}
-            onClick={() => { setOrderError(null); onTypeChange(option, candle); }}
-            title={option === 'market' ? 'Market' : option === 'limit' ? 'Limit' : 'Stop'}
-            className={`h-6 rounded-md px-2.5 text-[10.5px] font-bold transition-colors ${type === option
-              ? isDark ? 'bg-white/[0.14] text-white shadow-[0_1px_2px_rgba(0,0,0,.35)]' : 'bg-white text-slate-900 shadow-sm'
-              : isDark ? 'text-slate-500 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
-          >{typeLabels[option]}</button>
-        ))}
-      </div>
-      {/* Počet kontraktů: − / číslo / + v jednom poli. */}
-      <div className={`${group} shrink-0`} title="Počet kontraktů — použije se i pro objednávku z pravého kliku do grafu">
-        <button type="button" onClick={() => onQuantityChange(Math.max(1, quantity - 1))} disabled={quantity <= 1} className={stepButton} aria-label="Ubrat kontrakt">−</button>
-        <input type="number" min={1} value={quantity} onChange={event => onQuantityChange(Math.max(1, Number(event.target.value) || 1))} className={`${bare} w-8 text-center font-bold [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`} aria-label="Počet kontraktů" />
-        <button type="button" onClick={() => onQuantityChange(quantity + 1)} className={stepButton} aria-label="Přidat kontrakt">+</button>
-      </div>
-      {type !== 'market' && (
-        <span className="shrink-0 text-[10px] font-semibold text-violet-400" title="Návrh příkazu je fialová čára v grafu — posuň ji na cenu, SL/TP přidáš tlačítky na ní">
-          Posuň čáru v grafu{draftPrice !== undefined ? ` · ${priceText(draftPrice)}` : ''}
-        </span>
-      )}
-      <div className="flex shrink-0 items-center gap-1">
-        <button type="button" onClick={() => submit('buy')} disabled={!candle} className={`${sideButton} bg-gradient-to-b from-emerald-500 to-emerald-600 shadow-[0_1px_0_rgba(255,255,255,.2)_inset,0_6px_16px_-8px_rgba(16,185,129,.8)]`}>
-          <span>Buy</span>
-          <span className="font-mono text-[10px] font-semibold opacity-80">{ticketPrice}</span>
-        </button>
-        <button type="button" onClick={() => submit('sell')} disabled={!candle} className={`${sideButton} bg-gradient-to-b from-rose-500 to-rose-600 shadow-[0_1px_0_rgba(255,255,255,.2)_inset,0_6px_16px_-8px_rgba(244,63,94,.8)]`}>
-          <span>Sell</span>
-          <span className="font-mono text-[10px] font-semibold opacity-80">{ticketPrice}</span>
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={onToggleTicket}
+        aria-expanded={ticketOpen}
+        className={`flex h-[30px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-[11px] font-extrabold ${ticketOpen
+          ? isDark ? 'bg-white/10 text-white' : 'bg-slate-900/[0.06] text-slate-900'
+          : 'bg-gradient-to-b from-blue-500 to-blue-600 text-white shadow-[0_6px_16px_-8px_#2563eb]'}`}
+      >{ticketOpen ? <><PanelRightClose size={13} />Skrýt objednávku</> : <><PanelRightOpen size={13} />Objednávka</>}
+        {/* Se zavřeným panelem ukazuje tlačítko běžící pozici (jako LIVE). */}
+        {!ticketOpen && position && <span className="rounded-[5px] bg-white/[0.18] px-1.5 py-px font-mono text-[10px] font-extrabold">
+          {position.side === 'long' ? 'LONG' : 'SHORT'} {position.quantity}{position.openPnl != null ? ` · ${formatUsd(position.openPnl)}` : ''}
+        </span>}
+      </button>
       <div className={divider} />
       <div className="flex shrink-0 items-center gap-4">
         {stat('Balance', money(runtime.balance))}
@@ -1366,7 +1467,7 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
         <div className={divider} />
         <div className="flex shrink-0 items-center gap-1.5">
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-black ${position.side === 'long' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{position.side === 'long' ? 'LONG' : 'SHORT'} {position.quantity}×</span>
-          <span className="font-mono tabular-nums text-slate-400">@ {priceText(position.averagePrice)}</span>
+          <span className="font-mono tabular-nums text-slate-400">@ {priceText(position.entry)}</span>
           {position.quantity > 1 && <button type="button" onClick={() => onClosePosition(Math.floor(position.quantity / 2), candle)} className={`${field} font-bold`} title="Zavřít polovinu pozice">½</button>}
           <button type="button" onClick={() => onClosePosition(position.quantity, candle)} className={`h-7 rounded-md px-2.5 text-[10.5px] font-black transition-colors ${isDark ? 'bg-white/10 text-white hover:bg-white/15' : 'bg-slate-800 text-white hover:bg-slate-700'}`}>Zavřít</button>
         </div>

@@ -33,6 +33,13 @@ describe('dotažení starší historie v grafu backtestu', () => {
     expect(olderHistoryDue(gate, atEdge())).toBe(false);
     armOlderHistory(gate, FIRST);
     expect(olderHistoryDue(gate, atEdge())).toBe(false);
+    // Data can arrive before the old request's finally callback. Neither a
+    // changed first bar nor viewport restoration may queue another page.
+    armOlderHistory(gate, FIRST - 86_400);
+    settleOlderHistory(gate);
+    expect(olderHistoryDue(gate, atEdge({ firstTime: FIRST - 86_400 }))).toBe(false);
+    armOlderHistory(gate, FIRST - 86_400);
+    expect(olderHistoryDue(gate, atEdge({ firstTime: FIRST - 86_400 }))).toBe(true);
   });
 
   it('po dotažení se smí ptát dál — s novou první svíčkou hned po dalším gestu', () => {

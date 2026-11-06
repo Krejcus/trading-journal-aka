@@ -73,7 +73,8 @@ export const snapshotHealthMessage = (health: CopierSnapshotHealth): string => {
   return `Layout „${health.layoutName}“ je připravený pro ENTRY/EXIT.`;
 };
 
-const copierValue = (current: CopierControllerStatus, now: number): { value: string; tone: LiveStatusTone; title?: string } => {
+/** Stav kopírky z čerstvého stavu workeru (stavová lišta i čip v hlavičce telefonu). */
+export const copierValue = (current: CopierControllerStatus, now: number): { value: string; tone: LiveStatusTone; title?: string } => {
   if (current.killSwitch) return { value: 'Nouzově zastavená', tone: 'danger' };
   if ((current.dayLockUntil ?? 0) > now) return { value: 'Zámek dne', tone: 'warn' };
   if (current.managementOnly) {

@@ -54,6 +54,7 @@ async function setup(options: {
   const controller = await bootstrapCopierRuntime({
     broker, store, group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
     manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, ...options.timings },
+    manualEntryQuote: () => ({ contract: 'MNQZ6', last: 29_500, lastAt: clock.now, bid: 29_499.75, ask: 29_500, quoteAt: clock.now }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
   });
   active = controller;
@@ -109,6 +110,45 @@ describe('fáze 1b: odeslání ručního vstupu na leadera', () => {
     expect(stored[0]).toMatchObject({ operationId: 'entry:manualtest01', status: 'acknowledged', entryBrokerOrderId: result.entryBrokerOrderId });
   });
 
+  it('broker ACK probudí LIVE ihned i bez následné stream události', async () => {
+    const ctx = await setup({
+      patchBroker: broker => {
+        broker.placeOso = async (request: BrokerOsoRequest) => ({
+          entryBrokerOrderId: `ack-${request.accountId}-entry`,
+          firstBrokerOrderId: `ack-${request.accountId}-stop`,
+          secondBrokerOrderId: `ack-${request.accountId}-target`,
+          accepted: true,
+          definitive: true,
+        });
+      },
+    });
+    let calls = 0;
+    const off = ctx.controller.subscribeLiveChange!(() => { calls += 1; });
+    try {
+      const result = await ctx.place(ctx.command());
+      expect(result).toMatchObject({
+        status: 'acknowledged',
+        entryBrokerOrderId: 'ack-100-entry',
+        stopBrokerOrderId: 'ack-100-stop',
+        targetBrokerOrderId: 'ack-100-target',
+      });
+      expect(calls).toBe(1);
+      expect(ctx.controller.status().manualEntries?.at(-1)).toMatchObject({
+        operationId: 'entry:manualtest01',
+        status: 'acknowledged',
+        entryBrokerOrderId: 'ack-100-entry',
+        timing: {
+          ackAt: expect.any(Number),
+          committedAt: expect.any(Number),
+        },
+      });
+      const timing = ctx.controller.status().manualEntries?.at(-1)?.timing;
+      expect(timing!.committedAt).toBeGreaterThanOrEqual(timing!.ackAt!);
+    } finally {
+      off();
+    }
+  });
+
   it('stejné operationId se nikdy nepošle znovu; jiný obsah se stejným id = blocked', async () => {
     const ctx = await setup();
     const first = await ctx.place(ctx.command());
@@ -127,7 +167,8 @@ describe('fáze 1b: odeslání ručního vstupu na leadera', () => {
     const second = await ctx.place(ctx.command({ operationId: 'entry:manualtest02' }));
     expect(second.status).toBe('blocked');
     await ctx.controller.waitForIdle();
-    // Po zpracování: příkazy leadera a followera jsou živé → brána klidu skupiny.
+    // Po zpracování (a za pojistkou rozestupu 3 s): příkazy leadera a followera jsou živé → brána klidu skupiny.
+    ctx.clock.now += 3_000;
     const third = await ctx.place(ctx.command({ operationId: 'entry:manualtest03' }));
     expect(third.status).toBe('blocked');
     expect(third.blockers.map(issue => issue.code)).toContain('account-not-flat');
@@ -332,6 +373,7 @@ describe('fáze 1b: oprava po oponentuře diffu (M1–M3)', () => {
     expect(result.status).toBe('acknowledged');
     expect(result.reason).toMatch(/nepodařilo uložit/);
     expect(ctx.controller.status().armed).toBe(false);
+    expect(ctx.controller.status().manualEntries?.at(-1)?.timing?.committedAt).toBeUndefined();
   });
 
   it('M2: abandoned se zrušením i když uložení výsledku selže', async () => {
@@ -460,6 +502,124 @@ describe('fáze 1b: oprava po oponentuře diffu (M1–M3)', () => {
     await ctx.controller.waitForIdle();
     expect(followerOso(ctx.broker)).toEqual([]);
     expect(ctx.broker.cancelRequestCount(result.entryBrokerOrderId!)).toBe(1);
+  });
+
+  describe('pojistka rozestupu 3 s před `sending` (1. 11., za atomickou admission relaye)', () => {
+    it('přijatý vstup: další do 3 s neodejde ani po zrušení jeho příkazů, po 3 s už pojistka neblokuje', async () => {
+      const ctx = await setup();
+      const first = await ctx.place(ctx.command());
+      expect(first.status).toBe('acknowledged');
+      await sleep(30);
+      await ctx.controller.waitForIdle();
+      // Příkazy vstupu zmizí (zrušené u brokera) → brána klidu by další vstup pustila.
+      ctx.controller.disarm('manual');
+      for (const id of [first.entryBrokerOrderId!, first.stopBrokerOrderId!, first.targetBrokerOrderId!]) {
+        await ctx.broker.cancelOrder(LEADER, id);
+      }
+      for (const order of await ctx.broker.listOrders(FOLLOWER)) await ctx.broker.cancelOrder(FOLLOWER, order.brokerOrderId);
+      await sleep(30);
+      await ctx.controller.waitForIdle();
+      await ctx.controller.reconcile();
+      ctx.controller.arm();
+      await ctx.controller.waitForIdle();
+      ctx.clock.now = START + 1_000 + 2_900;
+      const tooSoon = await ctx.place(ctx.command({ operationId: 'entry:manualtest02' }));
+      expect(tooSoon.status).toBe('blocked');
+      expect(tooSoon.blockers.map(issue => issue.code)).toEqual(['manual-entry-too-soon']);
+      expect(leaderOso(ctx.broker)).toHaveLength(1);
+      ctx.clock.now = START + 1_000 + 3_000;
+      const later = await ctx.place(ctx.command({ operationId: 'entry:manualtest03' }));
+      expect(later.blockers.map(issue => issue.code)).not.toContain('manual-entry-too-soon');
+    });
+
+    it('REST snímek rozběhnutý před POSTem a aplikovaný po ACK (eventy OSO ještě nedorazily) nesmaže id z ACK', async () => {
+      // Reálný souběh: vypnutí followera za ARMED čte REST mimo eventTail, aplikace
+      // čeká za rozběhnutým vstupem. ACK zvyšuje verzi pozorování leadera → snímek neprojde.
+      let releaseAck!: () => void;
+      const ackGate = new Promise<void>(resolve => { releaseAck = resolve; });
+      const held: Array<() => void> = [];
+      let holdEvents = false;
+      let leaderReads = 0;
+      const ctx = await setup({
+        patchBroker: broker => {
+          const real = broker.placeOso!.bind(broker);
+          let first = true;
+          broker.placeOso = async (request: BrokerOsoRequest) => {
+            if (request.accountId === LEADER && first) { first = false; await ackGate; holdEvents = true; }
+            return real(request);
+          };
+          const listOrders = broker.listOrders.bind(broker);
+          broker.listOrders = async (accountId: number) => {
+            const orders = await listOrders(accountId);
+            if (accountId === LEADER) leaderReads += 1;
+            return orders;
+          };
+          const subscribe = broker.subscribe.bind(broker);
+          broker.subscribe = listener => subscribe(event => {
+            if (holdEvents) held.push(() => listener(event)); else listener(event);
+          });
+        },
+      });
+      const placing = ctx.place(ctx.command());
+      await sleep(20);
+      const readsBeforeToggle = leaderReads;
+      const toggling = ctx.controller.setFollowerEnabled(FOLLOWER, false, async () => undefined).then(
+        () => 'applied', (error: unknown) => (error instanceof Error ? error.message : String(error)));
+      // Obě REST čtení přepnutí doběhnou PŘED ACK (leader flat, žádné příkazy).
+      for (let waited = 0; leaderReads < readsBeforeToggle + 2 && waited < 2_000; waited += 5) await sleep(5);
+      expect(leaderReads).toBeGreaterThanOrEqual(readsBeforeToggle + 2);
+      releaseAck();
+      expect((await placing).status).toBe('acknowledged');
+      expect(await toggling).toMatch(/Stav se během ověření změnil/);
+      expect(held.length).toBeGreaterThan(0); // eventy OSO pořád nedorazily
+      ctx.clock.now += 3_100;
+      const second = await ctx.place(ctx.command({ operationId: 'entry:manualtest02' }));
+      expect(second.status).toBe('blocked');
+      expect(second.blockers.map(issue => issue.code)).toContain('account-not-flat');
+      expect(leaderOso(ctx.broker)).toHaveLength(1);
+      holdEvents = false;
+      for (const deliver of held.splice(0)) deliver();
+    });
+
+    it('odmítnutý vstup se do rozestupu nepočítá: další projde hned', async () => {
+      let calls = 0;
+      const ctx = await setup({
+        patchBroker: broker => {
+          const real = broker.placeOso!.bind(broker);
+          broker.placeOso = async (request: BrokerOsoRequest) => (request.accountId === LEADER && calls++ === 0
+            ? { entryBrokerOrderId: '', firstBrokerOrderId: '', secondBrokerOrderId: '', accepted: false, definitive: true, rejectReason: 'Price outside limits' }
+            : real(request));
+        },
+      });
+      expect((await ctx.place(ctx.command())).status).toBe('rejected');
+      const next = await ctx.place(ctx.command({ operationId: 'entry:manualtest02' }));
+      expect(next.status).toBe('acknowledged');
+    });
+
+    it('waived (výsledek ručně vyřešený) se počítá: po znovuzapnutí do 3 s nic neodejde', async () => {
+      const ctx = await setup({
+        patchBroker: broker => {
+          const real = broker.placeOso!.bind(broker);
+          let first = true;
+          broker.placeOso = async (request: BrokerOsoRequest) => {
+            if (request.accountId === LEADER && first) { first = false; return new Promise<BrokerOsoAck>(() => undefined); }
+            return real(request);
+          };
+        },
+      });
+      expect((await ctx.place(ctx.command())).status).toBe('unknown');
+      ctx.controller.disarm('manual');
+      await ctx.controller.waiveManualEntry({ operationId: 'entry:manualtest01', reason: 'ověřeno v Tradovate, nic nevzniklo' });
+      await ctx.controller.reconcile();
+      ctx.controller.arm();
+      await ctx.controller.waitForIdle();
+      ctx.clock.now = START + 1_000 + 1_000;
+      const tooSoon = await ctx.place(ctx.command({ operationId: 'entry:manualtest02' }));
+      expect(tooSoon.blockers.map(issue => issue.code)).toEqual(['manual-entry-too-soon']);
+      expect(leaderOso(ctx.broker)).toHaveLength(0);
+      ctx.clock.now = START + 1_000 + 3_500;
+      expect((await ctx.place(ctx.command({ operationId: 'entry:manualtest03' }))).status).toBe('acknowledged');
+    });
   });
 
   it('nevyřešený ruční vstup se v LIVE ukáže jako položka k ručnímu vyřešení', async () => {

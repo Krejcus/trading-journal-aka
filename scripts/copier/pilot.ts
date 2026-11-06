@@ -54,6 +54,7 @@ import {
 } from '../../services/copierRunner';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
+  manualOnlyDemoSafety,
   validateStoredCopyGroupForStartup,
   type CopyFollowerConfig,
   type CopyGroupConfig,
@@ -109,6 +110,8 @@ import { createHostSleepDetector } from '../../lib/hostSleepDetector';
  */
 // Tradovate dnes (17. 9. 2026) potřeboval na syncrequest i /order/list přes
 // 15 s z obou sítí; kratší limit reconnect jen roztočil.
+/** Brána držených Modify (posun nohou nevyplněného vstupu): výchozí vypnuto, naváže ji controller. */
+const pendingLegsGate: { current: (accountId: number) => boolean } = { current: () => false };
 const WS_SYNC_TIMEOUT_MS = 45_000;
 /** Startup reads retry in-process for up to 10 minutes instead of exiting into a launchd crash loop. */
 const STARTUP_RETRY: RetryTransientOptions = { deadlineMs: 10 * 60_000, initialDelayMs: 5_000, maxDelayMs: 60_000 };
@@ -119,6 +122,7 @@ const leaseRetry = (connectionId: string): RetryTransientOptions => ({
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
 import { createTvPriceStreamSupervisor, tvPriceStreamConfigFromRealtime, type TvPriceStreamSupervisor } from '../../server/tvPriceStreamSupervisor';
+import { createPriceAlertWatchSupervisor, type PriceAlertWatchSupervisor } from '../../server/priceAlertWatchSupervisor';
 import { createPriceSourceNotifier } from '../../server/priceSourceNotifier';
 import { readTradingViewBars, scheduleTradingViewBarsCapture, startTradingViewLiveBars, TV_LIVE_BARS_EARLY_PHASE_MS, TV_LIVE_BARS_PHASE_MS, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
 import { barsContractConflicts, barsContractMatchesSymbol, tvSymbolRoot } from '../../lib/tradingViewBars';
@@ -231,6 +235,11 @@ const sessionSuspectHandler = (context: PilotContext, label: string) => (info: T
   );
 };
 const logControllerError = (error: Error) => {
+  // Chyba jen zobrazovací vrstvy (šipky plnění) není fail-closed — prostý log, ať neplete diagnostiku.
+  if (error.message.startsWith('Šipky plnění (jen zobrazení)')) {
+    console.warn(`${new Date().toISOString()} DISPLAY ${error.message}`);
+    return;
+  }
   const connection = error.message.includes('connection=') ? '' : 'connection=aggregate ';
   const phase = error.message.includes('phase=') ? '' : 'phase=controller ';
   console.error(`${new Date().toISOString()} FAIL-CLOSED ${connection}${phase}${error.message}`);
@@ -317,6 +326,9 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
     context.displayFeed = makeDisplayFeed(context, Object.keys(accountSpecsByAccountId).map(Number));
     const broker = createTradovateBroker({
       environment: 'demo',
+      promoteHeldModify: accountId => pendingLegsGate.current(accountId),
+      preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
+        && stringFlag('manual-only', false) === 'true',
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
@@ -378,6 +390,9 @@ async function runMultiConnectionAgent(): Promise<void> {
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
     const broker = createTradovateBroker({
       environment: 'demo',
+      promoteHeldModify: accountId => pendingLegsGate.current(accountId),
+      preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
+        && stringFlag('manual-only', false) === 'true',
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
@@ -465,7 +480,8 @@ async function runMultiConnectionAgent(): Promise<void> {
     throw reason instanceof Error ? reason : new Error('Žádné OAuth připojení workeru nejde načíst');
   }
   const leaderId = integerFlag('leader');
-  const followerId = integerFlag('follower');
+  const manualOnly = stringFlag('manual-only', false) === 'true';
+  const followerId = manualOnly ? null : integerFlag('follower');
   const routingFor = (items: typeof loaded) => ({
     connections: items.map((item): DynamicOAuthConnection => ({
       connectionId: item.context.connectionId,
@@ -707,7 +723,7 @@ function makeDisplayFeed(context: PilotContext, accountIds: number[]) {
 async function runLocalAgent(
   contexts: PilotContext[],
   leaderId: number,
-  followerId: number,
+  followerId: number | null,
   accounts: ExecutionAccount[],
   baseBroker: BrokerPort,
   renewableBrokers: ReadonlyArray<{ broker: TradovateBrokerPort; label: string; connectionId: string }> = [],
@@ -754,10 +770,23 @@ async function runLocalAgent(
   }
   // `--followers` rozšiřuje agenta na víc účtů s vlastními parametry;
   // bez něj platí původní dvojice `--follower/--multiplier` (mac-install).
+  const manualOnly = stringFlag('manual-only', false) === 'true';
   const followersFlag = stringFlag('followers', false);
-  const followers: CopyFollowerConfig[] = followersFlag
-    ? parseCopierFollowersFlag(followersFlag, leaderId)
-    : [{ accountId: followerId, mode: 'on-submit', multiplier: Number(multiplierValue) }];
+  if (manualOnly && (followersFlag || followerId != null || stringFlag('multiplier', false))) {
+    throw new Error('--manual-only se nesmí kombinovat s follower konfigurací');
+  }
+  // Strop ručního vstupu (2. 11. 2026): jen manual-only, 1–5, vždy z instalace.
+  const manualEntryCapFlag = stringFlag('manual-entry-max-contracts', false);
+  if (manualEntryCapFlag && !manualOnly) throw new Error('--manual-entry-max-contracts je povolený jen s --manual-only');
+  const manualEntryMaxContracts = manualEntryCapFlag ? Number(manualEntryCapFlag) : null;
+  if (manualEntryMaxContracts != null && (!Number.isSafeInteger(manualEntryMaxContracts) || manualEntryMaxContracts < 1 || manualEntryMaxContracts > 5)) {
+    throw new Error('--manual-entry-max-contracts musí být celé číslo 1–5');
+  }
+  const followers: CopyFollowerConfig[] = manualOnly
+    ? []
+    : followersFlag
+      ? parseCopierFollowersFlag(followersFlag, leaderId)
+      : [{ accountId: followerId!, mode: 'on-submit', multiplier: Number(multiplierValue) }];
   for (const candidate of contexts) {
     if (!candidate.renewable && candidate.expiresAt) {
       // Nespárovaný device má jednorázový bootstrap token, ale po schválení
@@ -804,8 +833,8 @@ async function runLocalAgent(
     throw new Error('--cooldown-min musí být v rozsahu 0–720');
   }
   const fallbackGroup: CopyGroupConfig = {
-    id: `agent-${leaderId}-${followerIdsKey}`,
-    name: 'Lokální DEMO agent',
+    id: manualOnly ? `manual-demo-${leaderId}` : `agent-${leaderId}-${followerIdsKey}`,
+    name: manualOnly ? 'Ruční DEMO test' : 'Lokální DEMO agent',
     enabled: true,
     leaderAccountId: leaderId,
     followers,
@@ -813,12 +842,24 @@ async function runLocalAgent(
       safety: { ...DEFAULT_COPY_GROUP_SAFETY, entryCooldownMinutes: Math.floor(cooldownMinutes) },
     } : {}),
     localOnly: true,
+    ...(manualOnly ? { manualOnly: true } : {}),
+    ...(manualOnly ? { safety: manualOnlyDemoSafety() } : {}),
   };
   const persistedGroup = await groupStore.load();
   // CLI leader určuje jen stabilní instalační slot/soubor. Po první bezpečné
   // změně z UI je autoritativní uložená skupina, takže reinstall nepřepíše
   // leadera zpět na původní hodnotu.
-  const group = persistedGroup ?? fallbackGroup;
+  const storedGroup = persistedGroup ?? fallbackGroup;
+  // Strop ručního vstupu nese výhradně instalace: uložená hodnota se nahradí argumentem
+  // (chybí = výchozí 1), takže reinstall bez flagu strop vždy vrátí na 1.
+  const { manualEntryMaxContracts: _storedCap, ...storedWithoutCap } = storedGroup;
+  const group: CopyGroupConfig = storedGroup.manualOnly === true
+    ? { ...storedWithoutCap, ...(manualEntryMaxContracts != null ? { manualEntryMaxContracts } : {}) }
+    : storedWithoutCap;
+  if (manualEntryMaxContracts != null && group.manualOnly !== true) {
+    throw new Error('--manual-entry-max-contracts: uložená skupina není manual-only');
+  }
+  if (group.manualOnly === true) console.log(`${new Date().toISOString()} MANUAL ENTRY strop ${group.manualEntryMaxContracts ?? 1} kontrakt(y) (instalace).`);
   // Controller topologii pri editaci nahradi vlastnim snapshotem. Tuto
   // referenci aktualizuje durable callback agenta, aby getter dispatch limitu
   // cetl prave aktualni skupinu, ne pocet followeru pri startu procesu.
@@ -959,11 +1000,37 @@ async function runLocalAgent(
       },
     })
     : null;
+  // Hlídač upozornění na cenu (2. 11. 2026): vlastní vlákno a bundle, jen s cenou z IBKR
+  // vlákna ceny, výchozí VYPNUTO (`--price-alerts on`). Dostane jen klíč upozornění, nikdy
+  // token zařízení ani přístup k příkazům; `env: {}` (INV-WORKER-04, INV-WATCH-01).
+  const priceAlertWatchBundle = fileURLToPath(new URL('./price-alert-watch.mjs', import.meta.url));
+  const priceAlertWatch: PriceAlertWatchSupervisor | null = snapshotsEnabled
+    && tvPriceSource === 'ibkr'
+    && process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() === 'on'
+    && process.env.ALPHATRADE_PRICE_ALERTS?.trim().toLowerCase() === 'on'
+    && existsSync(tvPriceStreamBundle) && existsSync(priceAlertWatchBundle)
+    ? createPriceAlertWatchSupervisor({
+      createWorker: () => {
+        const thread = new Worker(priceAlertWatchBundle, {
+          env: {},
+          stdout: true, stderr: true,
+          resourceLimits: { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 8 },
+        });
+        thread.stdout.resume();
+        thread.stderr.resume();
+        return thread;
+      },
+      log: line => console.log(`${new Date().toISOString()} ${line}`),
+    })
+    : null;
+  if (priceAlertWatch) console.log(`${new Date().toISOString()} PRICE ALERTS hlídání upozornění na cenu povoleno (vlastní vlákno, cena z IBKR, nic neobchoduje).`);
   const tvPriceStream: TvPriceStreamSupervisor | null = snapshotsEnabled
     && process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() === 'on'
     && existsSync(tvPriceStreamBundle)
     ? createTvPriceStreamSupervisor({
       priceSource: tvPriceSource,
+      // Dávky obchodů IBKR jen předá vláknu hlídače (synchronně, bez čekání).
+      onAlertBatch: batch => priceAlertWatch?.onBatch(batch),
       createWorker: priceSource => {
         // Výstup vlákna se nepřeposílá do logu workeru (šel by přes event loop
         // hlavního vlákna); stav hlásí jen omezená diagnostika.
@@ -1177,6 +1244,7 @@ async function runLocalAgent(
     void snapshotDelivery?.close().catch(() => {});
     marketPriceFeed?.stop();
     tvPriceStream?.stop();
+    priceAlertWatch?.stop();
     contexts.forEach(item => item.displayFeed?.close());
     const cancelShutdownWatchdog = startAgentShutdownWatchdog({
       timeoutMs: 20_000,
@@ -1333,6 +1401,14 @@ async function runLocalAgent(
     }
     controller = await bootstrapCopierRuntime({
       broker,
+      // Ruční vstup (2. 11. 2026): kontrakt a cena Marketu jen z kotace IBKR vlákna ceny.
+      manualEntryQuote: root => tvPriceStream?.latestQuote(root) ?? null,
+      // Přikoupení do pozice (3. 11. 2026): jen instalační opt-in; controller ho navíc pustí jen
+      // pro manual-only local-only DEMO skupinu bez followerů.
+      manualEntryScaleIn: process.env.ALPHATRADE_SCALE_IN?.trim().toLowerCase() === 'on',
+      // Posun SL/TP nevyplněného vstupu a TP blíž k trhu: stejná pravidla jako přikoupení.
+      manualPendingLegs: process.env.ALPHATRADE_PENDING_LEGS?.trim().toLowerCase() === 'on',
+      bindPendingLegsGate: gate => { pendingLegsGate.current = gate; },
       store: {
         load: () => runtimeStore.load(),
         async commit(snapshot, expectedRevision) {
@@ -1529,6 +1605,7 @@ async function runLocalAgent(
         };
       }),
       marketPrices: () => marketPriceFeed?.current() ?? [],
+      priceAlertWatch: () => priceAlertWatch?.status() ?? null,
       accountDisplay: () => contexts.flatMap(item => item.displayFeed ? [item.displayFeed.state()] : []),
       ...(connectionWatch ? {
         connectionDiscovery: () => ({
@@ -1628,6 +1705,12 @@ async function runLocalAgent(
         }).finally(() => {
           snapshotTestInFlight = false;
         });
+      },
+      // Produkční HTTPS může loopbackem pouze probudit relay. Samotný příkaz
+      // dál přichází výhradně přes cloudovou admission/claim cestu.
+      onRelayWake: () => {
+        console.log(`${new Date().toISOString()} RELAY LOCAL WAKE`);
+        relay?.nudgeCommands();
       },
       onDevicePaired: async deviceId => {
         const owner = contexts.find(candidate => candidate.device?.deviceId === deviceId);
@@ -1873,10 +1956,58 @@ async function runLocalAgent(
             }
           };
         },
+        // F1b′: podepsaný push navázaného příkazu (ověření a použití řeší relay smyčka).
+        createPushSubscription: (config, onMessage) => {
+          const client = createSupabaseClient(config.url, config.anonKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          });
+          const channel = client.channel(config.topic);
+          channel.on('broadcast', { event: 'cmd' }, message => {
+            onMessage((message as { payload?: unknown }).payload);
+          }).subscribe(subscriptionState => {
+            if (subscriptionState === 'SUBSCRIBED') console.log(`${new Date().toISOString()} RELAY PUSH aktivní`);
+          });
+          return async () => {
+            try {
+              await client.removeChannel(channel);
+            } finally {
+              await client.realtime.disconnect();
+            }
+          };
+        },
+        // F2a: potvrzenou expozici poslat už otevřeným WebSocketem. Dokud
+        // kanál není připojený, `false` nechá relay použít původní REST cestu.
+        createExposurePublisher: config => {
+          const client = createSupabaseClient(config.url, config.anonKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          });
+          const channel = client.channel(config.topic, { config: { broadcast: { self: false, ack: false } } });
+          let joined = false;
+          channel.subscribe(subscriptionState => {
+            joined = subscriptionState === 'SUBSCRIBED';
+            if (joined) console.log(`${new Date().toISOString()} LIVE EXPOSURE WS aktivní`);
+          });
+          return {
+            async publish(event, payload) {
+              if (!joined || !client.realtime.isConnected() || channel.state !== 'joined') return false;
+              return await channel.send({ type: 'broadcast', event, payload }) === 'ok';
+            },
+            async close() {
+              joined = false;
+              try {
+                await client.removeChannel(channel);
+              } finally {
+                client.realtime.disconnect();
+              }
+            },
+          };
+        },
         // Jen předání konfigurace kanálu ceny vláknu — relay na nic nečeká.
         onRealtimeConfig: realtime => tvPriceStream?.update(tvPriceStreamConfigFromRealtime(realtime, {
           targetId: dedicatedChartRef.targetId, chartId: dedicatedChartRef.chartId,
         })),
+        // Klíč upozornění jen vláknu hlídače (relay ho do onRealtimeConfig nepředává).
+        onPriceAlertConfig: config => priceAlertWatch?.update(config),
         onSnapshotRequests: requests => {
           console.log(`${new Date().toISOString()} SNAPSHOT požadavky: ${requests.map(r => `${r.id.slice(0, 8)}/${r.symbol}`).join(', ')}`);
           if (!snapshotsEnabled || !relay) return;
@@ -2547,6 +2678,7 @@ Ranní Tradovate copier pilot (vždy DEMO)
   npm run copier:pilot -- agent --leader ID --follower ID --lease LEASE_JSON --device-config .copier-pilot/mac-device.json --minutes 480
   npm run copier:pilot -- agent --leader ID --follower ID --followers "ID@MULT,ID@MULT@MAXKONTRAKTU" ... (vice followeru; --followers ma prednost)
   npm run copier:pilot -- agent --connections-manifest /cesta/connections.json --leader ID --follower ID --followers "ID@MULT,..."
+  npm run copier:pilot -- agent --connections-manifest /cesta/connections.json --leader ID --manual-only true
 
 Volitelné: --connection-id UUID, --account-spec USERNAME
 Lokální lease: --lease /cesta/k/pilot-lease.json [--private-key /cesta/pilot-private.pem]

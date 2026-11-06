@@ -111,8 +111,10 @@ describe('hlídač vlákna kanálu ceny (hlavní vlákno workeru)', () => {
   it('diagnostika z vlákna se loguje jen jako čísla, nikdy téma ani klíč', () => {
     const t = setup();
     t.supervisor.update(ON);
-    t.workers[0].emit('message', { type: 'diag', state: 'streaming', reads: 10, sends: 4, errors: 0, topic: ON.topic, key: ON.key });
-    expect(t.logs()).toContain('reads=10 sends=4');
+    t.workers[0].emit('message', {
+      type: 'diag', state: 'streaming', reads: 10, sends: 4, skippedRateCap: 3, errors: 0, topic: ON.topic, key: ON.key,
+    });
+    expect(t.logs()).toContain('reads=10 sends=4 rate-cap=3');
     expect(t.logs()).not.toContain(ON.topic!);
     expect(t.logs()).not.toContain(ON.key!);
     t.supervisor.stop();
@@ -278,5 +280,88 @@ describe('hlídač vlákna kanálu ceny (hlavní vlákno workeru)', () => {
       t.supervisor.stop();
       expect(t.supervisor.latestBars('MNQ')).toBeNull();
     });
+  });
+});
+
+describe('kotace IBKR pro ruční vstup (zpráva quote, 2. 11. 2026)', () => {
+  const ibkrSetup = (priceSource: 'ibkr' | 'tv' = 'ibkr') => {
+    const workers: FakeWorker[] = [];
+    const supervisor = createTvPriceStreamSupervisor({
+      priceSource,
+      createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
+    });
+    supervisor.update(ON);
+    return { supervisor, workers };
+  };
+  const quote = (patch: Record<string, unknown> = {}) => ({
+    type: 'quote', front: 'MNQZ2026', last: 25_000, lastAt: Date.now(), bid: 24_999.75, ask: 25_000, quoteAt: Date.now(), ...patch,
+  });
+
+  it('převede kontrakt na Tradovate tvar a drží časy; jiný root ani po 15 s nic', () => {
+    const t = ibkrSetup();
+    t.workers[0].emit('message', quote());
+    expect(t.supervisor.latestQuote('MNQ')).toMatchObject({ contract: 'MNQZ6', last: 25_000, bid: 24_999.75, ask: 25_000 });
+    expect(t.supervisor.latestQuote('NQ')).toBeNull();
+    vi.advanceTimersByTime(15_001);
+    expect(t.supervisor.latestQuote('MNQ')).toBeNull();
+    t.supervisor.stop();
+  });
+
+  it('zdroj TV, neplatný tvar a bid > ask: z TV nic, bid/ask zahozené', () => {
+    const tv = ibkrSetup('tv');
+    tv.workers[0].emit('message', quote());
+    expect(tv.supervisor.latestQuote('MNQ')).toBeNull();
+    tv.supervisor.stop();
+    const t = ibkrSetup();
+    t.workers[0].emit('message', quote({ front: 'MNQ1!' }));
+    expect(t.supervisor.latestQuote('MNQ')).toBeNull();
+    t.workers[0].emit('message', quote({ bid: 25_001, ask: 25_000 }));
+    expect(t.supervisor.latestQuote('MNQ')).toMatchObject({ bid: null, ask: null, quoteAt: null, last: 25_000 });
+    // Čas z budoucnosti se ořízne na přijetí.
+    t.workers[0].emit('message', quote({ lastAt: Date.now() + 60_000 }));
+    expect(t.supervisor.latestQuote('MNQ')!.lastAt).toBeLessThanOrEqual(Date.now());
+    t.supervisor.stop();
+  });
+
+  it('výměna vlákna zahodí kotaci starého', async () => {
+    const t = ibkrSetup();
+    t.workers[0].emit('message', quote());
+    t.workers[0].emit('error', new Error('boom'));
+    expect(t.supervisor.latestQuote('MNQ')).toBeNull();
+    t.supervisor.stop();
+  });
+});
+
+describe('dávky obchodů IBKR pro hlídač upozornění (zpráva alert-batch, 2. 11. 2026)', () => {
+  const setupWith = (priceSource: 'ibkr' | 'tv', onAlertBatch: (batch: unknown) => void) => {
+    const workers: FakeWorker[] = [];
+    const supervisor = createTvPriceStreamSupervisor({
+      priceSource, onAlertBatch,
+      createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
+    });
+    supervisor.update(ON);
+    return { supervisor, workers };
+  };
+  const batch = (patch: Record<string, unknown> = {}) => ({ type: 'alert-batch', front: 'MNQZ2026', prev: 25_000, min: 24_999, max: 25_002, last: 25_001, ...patch });
+
+  it('jen z vlákna se zdrojem IBKR, ověřená čísla; kotaci ručního Marketu se nedotkne; výjimka posluchače se spolkne', () => {
+    const seen: unknown[] = [];
+    const t = setupWith('ibkr', value => seen.push(value));
+    t.workers[0].emit('message', batch());
+    expect(seen).toEqual([expect.objectContaining({ contract: 'MNQZ2026', prev: 25_000, min: 24_999, max: 25_002, last: 25_001 })]);
+    expect(t.supervisor.latestQuote('MNQ')).toBeNull();
+    t.workers[0].emit('message', batch({ prev: null }));
+    expect(seen.at(-1)).toMatchObject({ prev: null });
+    for (const bad of [{ front: 'MNQ1!' }, { min: 25_003 }, { last: -1 }, { prev: 'x' }]) t.workers[0].emit('message', batch(bad));
+    expect(seen).toHaveLength(2);
+    t.supervisor.stop();
+    const tv: unknown[] = [];
+    const fromTv = setupWith('tv', value => tv.push(value));
+    fromTv.workers[0].emit('message', batch());
+    expect(tv).toEqual([]);
+    fromTv.supervisor.stop();
+    const throwing = setupWith('ibkr', () => { throw new Error('hlídač spadl'); });
+    expect(() => throwing.workers[0].emit('message', batch())).not.toThrow();
+    throwing.supervisor.stop();
   });
 });

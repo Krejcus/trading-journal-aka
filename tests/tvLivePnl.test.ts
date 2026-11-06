@@ -155,6 +155,8 @@ describe('nohy pro živé P&L z read modelu (beze změny read modelu)', () => {
     expect(liveAccountTvLegs(account(1, 2, 21000, 40), true)).toEqual([leg()]);
     expect(liveAccountTvLegs(account(1, 2, 21000, 40), false)).toBeNull();
     expect(liveAccountTvLegs(account(1, 2, 21000, 40, { unrealizedPnlSource: 'stale' }), true)).toBeNull();
+    // Worker zná novou pozici dřív než REST: kotva P&L by byla z jiné pozice.
+    expect(liveAccountTvLegs(account(1, 2, 21000, 40, { unrealizedPnlBehindPosition: true }), true)).toBeNull();
     expect(liveAccountTvLegs(account(1, 0, 21000, 0), true)).toBeNull();
     const two = account(1, 2, 21000, 40);
     two.positions = [...two.positions, { ...two.positions[0], symbol: 'NQZ6' }];

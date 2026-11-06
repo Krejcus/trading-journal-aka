@@ -27,7 +27,7 @@ async function setup() {
   const clock = { now: START };
   const broker = createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(LEADER, START + 500), risk(FOLLOWER, START + 500)] });
   const controller = await bootstrapCopierRuntime({
-    broker, store: createMemoryCopierStore(), group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
+    broker, store: createMemoryCopierStore(), group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50, manualEntryQuote: () => ({ contract: 'MNQZ6', last: 29_500, lastAt: clock.now, bid: 29_499.75, ask: 29_500, quoteAt: clock.now }),
     manualEntryTimingsMs: { post: 500, start: 500, legWait: 300 },
   });
   active = controller;
@@ -106,6 +106,19 @@ describe('fáze 2b: správa obchodu, který kopírka sleduje', () => {
     await sleep(30);
     await ctx.controller.waitForIdle();
     expect(ctx.broker.orders().find(order => order.accountId === FOLLOWER && order.side === 'Buy')?.status).toBe('canceled');
+  });
+
+  it('sledovaný vstup na opačné straně než pozice leadera = ochrana: zrušení se odmítne, nic k brokerovi (C12)', async () => {
+    const ctx = await setup();
+    ctx.broker.setPosition(LEADER, SYMBOL, -1);
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYMBOL, netQuantity: -1 } });
+    await sleep(30);
+    await ctx.controller.waitForIdle();
+    const result = await manage(ctx, 'cancel-entry', 29_500, undefined, 'manage:tracked009');
+    expect(result.status).toBe('blocked');
+    expect(result.blockers.map(issue => issue.code)).toEqual(['not-entry']);
+    expect(result.blockers[0].text).toContain('je to ochrana');
+    expect(ctx.broker.orders().find(order => order.accountId === LEADER && order.side === 'Buy')?.status).toBe('working');
   });
 
   it.each([

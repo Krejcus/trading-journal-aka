@@ -110,7 +110,7 @@ describe('zdroj ceny z IBKR', () => {
     const minute = Math.floor(h.now() / 60_000) * 60;
     expect(h.source.reading()).toEqual({
       chart: 'IBKR:MNQZ2026', front: 'MNQZ2026', last: 29950.25, bar: [minute, 29950.25, 29950.25, 29950.25, 29950.25],
-      bid: 29950, ask: 29950.5, mode: 'streaming',
+      bid: 29950, ask: 29950.5, lastAt: expect.any(Number), quoteAt: expect.any(Number), mode: 'streaming',
     });
   });
 

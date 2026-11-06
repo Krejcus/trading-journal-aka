@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Bar } from '@getcandlekit/charts';
-import { applyLiveCandle, bindLiveCandleDataResets, refreshLiveCandleTargets, type LiveCandleDrawn } from '../hooks/useLiveCandleBinding';
+import { LIVE_CANDLE_REVERT_GRACE_MS, applyLiveCandle, bindLiveCandleDataResets, refreshLiveCandleTargets, restartLiveCandleGrace, type LiveCandleDrawn } from '../hooks/useLiveCandleBinding';
 import { LIVE_CANDLE_MAX_GAP_SEC, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
 import { tvLiveCandle } from '../lib/tvLiveCandle';
 import type { TvPricePayload } from '../lib/tvPriceMessage';
@@ -269,5 +269,39 @@ describe('napojení živé svíčky na graf', () => {
     current = null;
     applyLiveCandle(source, target, drawn);
     expect(chart.bars()).toEqual(dataBars);
+  });
+});
+
+describe('výdrž živé svíčky bez ceny', () => {
+  const rawCandles = [candle(MINUTE - 60, 29180, 71)];
+  const original: Bar[] = rawCandles.map(item => ({ ts: item.time * 1_000, open: item.open, high: item.high, low: item.low, close: item.close, volume: item.volume }));
+  const liveBar: MarketCandle = { time: MINUTE, open: 29181, high: 29190, low: 29179, close: 29188, volume: 0 };
+  const setup = () => {
+    let current: MarketCandle | null = liveBar;
+    const source: LiveCandleFeed = { subscribe: () => () => undefined, current: () => current };
+    const chart = fakeChart(original);
+    const drawn = new Map<unknown, LiveCandleDrawn>() as Map<never, LiveCandleDrawn>;
+    const target = { api: chart.api, root: 'MNQ', timeframe: '1m' as const, rawCandles };
+    return { chart, drawn, target, source, stop: () => { current = null; } };
+  };
+
+  it('krátký výpadek svíčku nepřehodí, po výdrži se graf vrátí přesně na data', () => {
+    const { chart, drawn, target, source, stop } = setup();
+    applyLiveCandle(source, target, drawn, LIVE_CANDLE_REVERT_GRACE_MS, 1_000);
+    stop();
+    applyLiveCandle(source, target, drawn, LIVE_CANDLE_REVERT_GRACE_MS, 1_000 + LIVE_CANDLE_REVERT_GRACE_MS - 1);
+    expect(chart.bars().at(-1)).toMatchObject({ ts: MINUTE * 1_000, close: 29188 });
+    applyLiveCandle(source, target, drawn, LIVE_CANDLE_REVERT_GRACE_MS, 1_000 + LIVE_CANDLE_REVERT_GRACE_MS);
+    expect(chart.bars()).toEqual(original);
+    expect(drawn.size).toBe(0);
+  });
+
+  it('návrat z pozadí začíná výdrž znovu: čas v pozadí se nepočítá', () => {
+    const { chart, drawn, target, source, stop } = setup();
+    applyLiveCandle(source, target, drawn, LIVE_CANDLE_REVERT_GRACE_MS, 1_000);
+    stop();
+    restartLiveCandleGrace(drawn, 600_000);
+    applyLiveCandle(source, target, drawn, LIVE_CANDLE_REVERT_GRACE_MS, 600_001);
+    expect(chart.bars().at(-1)).toMatchObject({ ts: MINUTE * 1_000, close: 29188 });
   });
 });

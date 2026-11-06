@@ -1,23 +1,28 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TV_PRICE_CHANNEL_SECRET_ENV, tvPriceChannelGrant } from '../server/tvPriceChannel';
+import { TV_PRICE_CHANNEL_SECRET_ENV, copierStatusNudgeKey, copierStatusNudgeTopic, tvPriceChannelGrant } from '../server/tvPriceChannel';
 
 const DEVICE = '0b9d1c64-1f0a-4c55-9d21-6a3f7e2b8c11';
 const SECRET = 's'.repeat(48);
+const STARTED_AT = '2026-10-31T02:00:00.000Z';
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(), claimV2: vi.fn(), claim: vi.fn(), heartbeat: vi.fn(), requireUser: vi.fn(), runtime: vi.fn(),
   push: vi.fn(), snapshots: vi.fn(), tick: vi.fn(),
 }));
 vi.mock('../server/tradovateOAuthStore', () => ({
-  readTradovateServerConfig: () => ({ environment: 'demo', supabaseUrl: 'https://mock.invalid', supabaseAnonKey: 'mock-public' }),
-  createTradovateAdminClient: () => ({}), requireSupabaseUserId: mocks.requireUser,
+  readTradovateServerConfig: () => ({ environment: 'demo', supabaseUrl: 'https://mock.invalid', supabaseAnonKey: 'mock-public', tokenEncryptionKey: '11'.repeat(32) }),
+  createTradovateAdminClient: () => ({}),
+  beginSupabaseUserIdVerification: async (...args: unknown[]) => ({
+    userId: await mocks.requireUser(...args), confirmed: Promise.resolve(),
+  }),
 }));
 vi.mock('../server/tradovateCopierDevice', () => ({ authorizeTradovateCopierDevice: mocks.authorize }));
 vi.mock('../server/tradovateCopierCommandRelay', () => ({
   claimTradovateCopierCommandV2: mocks.claimV2, claimTradovateCopierCommand: mocks.claim,
   heartbeatTradovateCopierDevice: mocks.heartbeat, readTradovateCopierDeviceRuntime: mocks.runtime,
   completeTradovateCopierCommandV2: vi.fn(), completeTradovateCopierCommand: vi.fn(),
+  completeTradovateCopierHotCommandV3: vi.fn(),
   enqueueTradovateCopierCommand: vi.fn(), readTradovateCopierCommand: vi.fn(),
   copierRelayValidationErrorStatus: () => null,
   resolveCopierRelayConnectionId: async ({ connectionId }: { connectionId: string }) => connectionId,
@@ -27,6 +32,8 @@ vi.mock('../server/tvAlertNotifications', () => ({ loadPendingTvAlertSnapshotReq
 vi.mock('../server/nativeCors', () => ({ handleNativeCors: () => false }));
 vi.mock('../server/nativeLiveActivityTick', () => ({ tickNativeLiveActivitiesWithinBudget: mocks.tick }));
 import handler from '../api/tradovate/oauth/copier-relay';
+import { copierCommandPushGrant } from '../server/copierCommandPush';
+import { priceAlertWatchGrant } from '../server/priceAlertWatchKey';
 
 const response = () => {
   const res = { setHeader: vi.fn(), status: vi.fn(), json: vi.fn() };
@@ -53,7 +60,7 @@ describe('relay: kanál ceny z TV (krok 1)', () => {
     mocks.snapshots.mockResolvedValue([]);
     mocks.tick.mockResolvedValue({ sent: 0, skipped: 0, failed: 0, reason: 'not-armed' });
     mocks.requireUser.mockResolvedValue('user');
-    mocks.runtime.mockResolvedValue({ deviceId: DEVICE, status: { startedAt: 'x' }, lastSeenAt: 'now', ageMs: 1, connected: true });
+    mocks.runtime.mockResolvedValue({ deviceId: DEVICE, status: { startedAt: STARTED_AT }, lastSeenAt: 'now', ageMs: 1, connected: true });
   });
   afterEach(() => { delete process.env[TV_PRICE_CHANNEL_SECRET_ENV]; });
 
@@ -63,7 +70,17 @@ describe('relay: kanál ceny z TV (krok 1)', () => {
     const grant = tvPriceChannelGrant(DEVICE, SECRET)!;
     expect(status).toBe(200);
     expect(body.realtime).toEqual({ url: 'https://mock.invalid', anonKey: 'mock-public', topic: `copier-kick-${DEVICE}`,
-      priceTopic: grant.topic, priceKey: grant.key });
+      priceTopic: grant.topic, priceKey: grant.key, nudgeTopic: copierStatusNudgeTopic(DEVICE, SECRET), nudgeKey: copierStatusNudgeKey(DEVICE, SECRET),
+      // F1b′: téma pushů a jen VEŘEJNÝ Ed25519 klíč (32 B) — podepisovat jím nejde.
+      pushTopic: copierCommandPushGrant(DEVICE, SECRET)!.topic, pushKey: copierCommandPushGrant(DEVICE, SECRET)!.publicKey, pushDeviceId: DEVICE,
+      // Klíč hlídače upozornění na cenu jen workeru v poll-v2 (nikdy prohlížeči ani background-v2).
+      priceAlert: priceAlertWatchGrant(DEVICE, SECRET) });
+    expect(Buffer.from(body.realtime.pushKey, 'base64url')).toHaveLength(32);
+    // Legacy poll / background-v2 sdílí `tvPriceRealtimeFields` — klíč upozornění tam nikdy není.
+    const legacy = await call(devicePost({ action: 'poll', status: {} }));
+    expect(legacy.status).toBe(200);
+    expect(legacy.body.realtime).toMatchObject({ priceTopic: grant.topic });
+    expect(legacy.body.realtime).not.toHaveProperty('priceAlert');
   });
 
   it('bez tajemství poll-v2 i legacy poll odpoví normálně, jen bez polí ceny (brzdy dál procházejí)', async () => {
@@ -89,22 +106,38 @@ describe('relay: kanál ceny z TV (krok 1)', () => {
     const { status, body } = await call(userGet());
     const grant = tvPriceChannelGrant(DEVICE, SECRET)!;
     expect(status).toBe(200);
-    expect(body).toEqual({ status: { startedAt: 'x' }, lastSeenAt: 'now', ageMs: 1, connected: true, priceChannel: grant });
+    expect(body).toEqual({ status: { startedAt: STARTED_AT }, lastSeenAt: 'now', ageMs: 1, connected: true, priceChannel: grant,
+      relayTargetHint: expect.stringMatching(/^v1\./),
+      nudgeTopic: copierStatusNudgeTopic(DEVICE, SECRET), nudgeKey: copierStatusNudgeKey(DEVICE, SECRET) });
     expect(body.status).not.toHaveProperty('priceChannel');
+    expect(body.status).not.toHaveProperty('nudgeTopic');
+    expect(body.status).not.toHaveProperty('nudgeKey');
     expect(body).not.toHaveProperty('deviceId');
+    expect(body.relayTargetHint).not.toContain(DEVICE);
+  });
+
+  it('GET pro prohlížeč nikdy nevydá relayIdle (F1b′ — nečinná delivery patří jen relayi)', async () => {
+    process.env[TV_PRICE_CHANNEL_SECRET_ENV] = SECRET;
+    mocks.runtime.mockResolvedValue({ deviceId: DEVICE, status: { startedAt: STARTED_AT, relayIdle: { deliveryId: '6f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f607' } },
+      lastSeenAt: 'now', ageMs: 1, connected: true });
+    const { status, body } = await call(userGet());
+    expect(status).toBe(200);
+    expect(body.status).toEqual({ startedAt: STARTED_AT });
+    expect(JSON.stringify(body)).not.toContain('6f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f607');
   });
 
   it('GET se zastaralým runtime (revokované nebo mrtvé zařízení) vrátí status, ale bez kanálu ceny', async () => {
     process.env[TV_PRICE_CHANNEL_SECRET_ENV] = SECRET;
-    mocks.runtime.mockResolvedValue({ deviceId: DEVICE, status: { startedAt: 'x' }, lastSeenAt: 'old', ageMs: 60_000, connected: false });
+    mocks.runtime.mockResolvedValue({ deviceId: DEVICE, status: { startedAt: STARTED_AT }, lastSeenAt: 'old', ageMs: 60_000, connected: false });
     const { status, body } = await call(userGet());
     expect(status).toBe(200);
-    expect(body).toEqual({ status: { startedAt: 'x' }, lastSeenAt: 'old', ageMs: 60_000, connected: false });
+    expect(body).toEqual({ status: { startedAt: STARTED_AT }, lastSeenAt: 'old', ageMs: 60_000, connected: false });
   });
 
   it('GET bez tajemství nebo bez runtime funguje jako dřív', async () => {
     const without = await call(userGet());
-    expect(without.body).toEqual({ status: { startedAt: 'x' }, lastSeenAt: 'now', ageMs: 1, connected: true });
+    expect(without.body).toEqual({ status: { startedAt: STARTED_AT }, lastSeenAt: 'now', ageMs: 1, connected: true,
+      relayTargetHint: expect.stringMatching(/^v1\./) });
     mocks.runtime.mockResolvedValue(null);
     process.env[TV_PRICE_CHANNEL_SECRET_ENV] = SECRET;
     expect((await call(userGet())).body).toBeNull();

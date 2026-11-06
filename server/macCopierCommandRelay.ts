@@ -1,8 +1,10 @@
 import { isLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace.js';
 import { isLeaderOrderManageCommand } from '../lib/leaderOrderManage.js';
 import type { TvBarsCapture } from '../lib/tradingViewBars.js';
-import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery } from './recoverableCopierDelivery.js';
+import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery, type PushedCopierDelivery } from './recoverableCopierDelivery.js';
+import { verifyCopierCommandPush } from './copierCommandPush.js';
 import type { RelayDeliveryStore } from './copierRelayDeliveryStore.js';
+import { COPIER_LIVE_EXPOSURE_EVENT, COPIER_LIVE_EXPOSURE_EVENTS, encryptCopierLiveExposure } from '../lib/copierLiveExposure.js';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
 import {
   localCopierAgentErrorDetails,
@@ -18,8 +20,15 @@ import {
  */
 const RELAY_STATUS_TIMEOUT_MS = 20_000;
 const RELAY_COMMAND_TIMEOUT_MS = 30_000;
+/** Kompaktní ACK je jen optimalizace: uvíznutý nesmí zdržet brzdu za příkazem (INV-BRAKE-03). */
+const RELAY_COMPACT_ACK_TIMEOUT_MS = 3_000;
 
 export interface MacCopierCommandRelay {
+  /**
+   * Lokální budíček doručovací smyčky. Nenese příkaz ani oprávnění k exekuci:
+   * worker dál musí příkaz atomicky claimnout přes autentizovaný cloud relay.
+   */
+  nudgeCommands(): void;
   /** Okamžitě probudí poll s příznakem nových trade eventů — server pošle
    *  push hned místo čekání na minutový cron. */
   nudgeCopyEvents(): void;
@@ -65,6 +74,12 @@ export interface MacCopierRealtimeKickConfig {
   topic: string;
 }
 
+export interface MacCopierRealtimePublisher {
+  /** `true` jen když zpráva odešla už připojeným WebSocketem; `false` = použít REST fallback. */
+  publish(event: string, payload: unknown): Promise<boolean>;
+  close(): Promise<void> | void;
+}
+
 export interface MacTvAlertSnapshotRequest {
   id: string;
   symbol: string;
@@ -89,6 +104,21 @@ export function startMacCopierCommandRelay(options: {
     config: MacCopierRealtimeKickConfig,
     onKick: () => void,
   ) => () => Promise<void> | void;
+  /**
+   * F1b′: přihlášení k tématu podepsaných pushů navázaných příkazů. Zprávu relay ověří
+   * (Ed25519, zařízení, verze) a jen uloží do schránky + probudí smyčku; o použití
+   * rozhoduje doručovací automat (shoda nečinné delivery). Selhání = poll jako dřív.
+   */
+  createPushSubscription?: (
+    config: MacCopierRealtimeKickConfig,
+    onMessage: (payload: unknown) => void,
+  ) => () => Promise<void> | void;
+  /**
+   * F2a fast path: dlouho žijící Realtime kanál pro display-only expozici.
+   * Nepřipojený/porouchaný publisher vrátí `false` a relay použije původní
+   * HTTP broadcast. Exekuce ani potvrzení příkazu na této cestě nečekají.
+   */
+  createExposurePublisher?: (config: MacCopierRealtimeKickConfig) => MacCopierRealtimePublisher;
   /** Fire-and-forget handoff; the relay poll never awaits chart capture. */
   onSnapshotRequests?: (requests: readonly MacTvAlertSnapshotRequest[]) => void;
   /**
@@ -97,6 +127,12 @@ export function startMacCopierCommandRelay(options: {
    * poll smyčka a brzdy na nic z toho nečekají (INV-RELAY-04).
    */
   onRealtimeConfig?: (realtime: unknown) => void;
+  /**
+   * Klíč hlídače upozornění na cenu z poll-v2 (`realtime.priceAlert`) — jen pro vlákno
+   * hlídače, nikdy do `onRealtimeConfig`. `null` = server klíč nevydal (hlídání vypnout).
+   * Synchronní, výjimka se spolkne (INV-WORKER-04).
+   */
+  onPriceAlertConfig?: (config: { apiOrigin: string; deviceId: string; key: string } | null) => void;
 }): MacCopierCommandRelay {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const pollMs = Math.max(500, options.pollMs ?? 750);
@@ -110,6 +146,19 @@ export function startMacCopierCommandRelay(options: {
   let acknowledgedCopyEventsRevision = 0;
   let unsubscribeKick: (() => Promise<void> | void) | null = null;
   let kickTopic: string | null = null;
+  let unsubscribePush: (() => Promise<void> | void) | null = null;
+  let pushTopic: string | null = null;
+  /** Poslední přijatá (zatím neověřená) push zpráva + čím ji ověřit; ověřuje až smyčka a jen
+   *  nejnovější — záplava podvrhů na tématu tak nepřidá víc ověření než otočení smyčky. */
+  let pushMailbox: { payload: unknown; key: string; deviceId: string } | null = null;
+  /** Právě běžící poll-v2 (F1b′): ověřený push pro tutéž nečinnou delivery ho smí přerušit. */
+  let pollAbort: AbortController | null = null;
+  /** Nejvýš jedno ověření podpisu za běžící poll — záplava zpráv nepřidá práci ani přerušení. */
+  let pollPushChecked = false;
+  /** Delivery, pro kterou už push jednou poll přerušil — přehrání téže zprávy (útok s tématem)
+   *  nesmí přerušovat další polly a tím zastavit obnovu hodin i doručení brzd (oponentura P2). */
+  let pollAbortedFor: string | null = null;
+  const POLL_SUPERSEDED_BY_PUSH = 'relay-poll-superseded-by-push';
   const loopAbort = new AbortController();
 
   const sleep = (ms: number) => new Promise<void>(resolve => {
@@ -135,13 +184,215 @@ export function startMacCopierCommandRelay(options: {
     kickTopic = null;
     if (unsubscribe) await unsubscribe();
   };
+  const clearPushSubscription = async () => {
+    const unsubscribe = unsubscribePush;
+    unsubscribePush = null;
+    pushTopic = null;
+    if (unsubscribe) await unsubscribe();
+  };
+  const maybeSubscribePush = async (realtime: unknown) => {
+    if (!options.createPushSubscription || stopped || !options.deliveryStore) return;
+    const config = realtime as { url?: unknown; anonKey?: unknown; pushTopic?: unknown; pushKey?: unknown; pushDeviceId?: unknown } | null | undefined;
+    const topic = typeof config?.pushTopic === 'string' && config.pushTopic.startsWith('copier-push-') ? config.pushTopic : null;
+    const key = typeof config?.pushKey === 'string' ? config.pushKey : null;
+    const deviceId = typeof config?.pushDeviceId === 'string' ? config.pushDeviceId : null;
+    if (!topic || !key || !deviceId || typeof config?.url !== 'string' || typeof config.anonKey !== 'string') {
+      if (pushTopic) await clearPushSubscription();
+      return;
+    }
+    if (topic === pushTopic) return;
+    await clearPushSubscription();
+    pushTopic = topic;
+    unsubscribePush = options.createPushSubscription({ url: config.url, anonKey: config.anonKey, topic }, payload => {
+      if (stopped) return;
+      pushMailbox = { payload, key, deviceId };
+      kickPending = true;
+      wake?.();
+      // Push dorazil během pollu: poll by vrátil tentýž řádek až po svém RTT. Přerušit jen po
+      // OVĚŘENÉM podpisu a jen pro aktuální nečinnou delivery — podvrh ani starý push poll nezastaví.
+      if (pollAbort && !pollPushChecked) {
+        pollPushChecked = true;
+        const verified = verifyCopierCommandPush(payload, key, deviceId);
+        if (verified && verified.deliveryId === delivery?.idleDeliveryId() && verified.deliveryId !== pollAbortedFor) {
+          pollAbortedFor = verified.deliveryId;
+          pollAbort.abort(new Error(POLL_SUPERSEDED_BY_PUSH));
+        }
+      }
+    });
+  };
+  /** Status pro relay (heartbeat/background): + nečinná delivery pro F1b′. */
+  const relayStatus = () => {
+    const idle = delivery?.idleDeliveryId() ?? null;
+    return { ...options.agent.status(), relayIdle: idle ? { deliveryId: idle } : null };
+  };
 
-  const notifyRealtimeConfig = (realtime: unknown) => {
+  /**
+   * Budíček statusu (docs/LIVE_HOT_PATH_PLAN.md §5): po potvrzeném heartbeatu se
+   * změnou nebo po ACK příkazu prázdná zpráva na téma ze serveru → otevřené LIVE si
+   * hned přečte status běžnou cestou. Fire-and-forget, nejvýš 1× za 250 ms; nic na
+   * ni nečeká (INV-WORKER-04) a nenese data (INV-RELAY-04).
+   */
+  let nudgeConfig: { url: string; anonKey: string; topic: string; key: string | null } | null = null;
+  let exposurePublisher: MacCopierRealtimePublisher | null = null;
+  let exposurePublisherKey: string | null = null;
+  const clearExposurePublisher = async () => {
+    const current = exposurePublisher;
+    exposurePublisher = null;
+    exposurePublisherKey = null;
+    if (current) {
+      try { await current.close(); } catch { /* display-only publisher */ }
+    }
+  };
+  let lastNudgeAt = 0;
+  let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+  const NUDGE_MIN_SPACING_MS = 250;
+  const sendNudgeNow = () => {
+    const config = nudgeConfig;
+    if (stopped || !config) return;
+    lastNudgeAt = Date.now();
     try {
-      options.onRealtimeConfig?.(realtime);
+      void fetchImpl(`${config.url}/realtime/v1/api/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: config.anonKey, Authorization: `Bearer ${config.anonKey}` },
+        body: JSON.stringify({ messages: [{ topic: config.topic, event: 'status', payload: {} }] }),
+        signal: AbortSignal.timeout(1_500),
+      }).catch(() => undefined);
+    } catch {
+      // Budíček je jen optimalizace zobrazení.
+    }
+  };
+  const sendStatusNudge = () => {
+    if (stopped || !nudgeConfig || nudgeTimer) return;
+    const wait = lastNudgeAt + NUDGE_MIN_SPACING_MS - Date.now();
+    if (wait <= 0) { sendNudgeNow(); return; }
+    // Platformní timer smí kvůli zaokrouhlení probudit o 1 ms dřív. Po probuzení
+    // proto podmínku znovu vyhodnotit, neporušit deklarovaný minimální rozestup.
+    nudgeTimer = setTimeout(() => { nudgeTimer = null; sendStatusNudge(); }, wait);
+    nudgeTimer.unref?.();
+  };
+  const updateExposurePublisher = (next: typeof nudgeConfig) => {
+    const nextPublisherKey = next?.key ? `${next.url}\n${next.anonKey}\n${next.topic}` : null;
+    if (nextPublisherKey === exposurePublisherKey) return;
+    const previous = exposurePublisher;
+    exposurePublisher = null;
+    exposurePublisherKey = null;
+    if (previous) void Promise.resolve(previous.close()).catch(() => undefined);
+    if (nextPublisherKey && next && options.createExposurePublisher) {
+      try {
+        exposurePublisher = options.createExposurePublisher({ url: next.url, anonKey: next.anonKey, topic: next.topic });
+        exposurePublisherKey = nextPublisherKey;
+      } catch {
+        // HTTP broadcast zůstává autoritativní fallback zobrazovací cesty.
+      }
+    }
+  };
+  const notifyRealtimeConfig = (realtime: unknown) => {
+    const config = realtime as { url?: unknown; anonKey?: unknown; nudgeTopic?: unknown; nudgeKey?: unknown } | null | undefined;
+    const next = typeof config?.url === 'string' && typeof config.anonKey === 'string'
+      && typeof config.nudgeTopic === 'string' && config.nudgeTopic.startsWith('copier-nudge-')
+      ? { url: config.url, anonKey: config.anonKey, topic: config.nudgeTopic,
+        key: typeof config.nudgeKey === 'string' && /^[A-Za-z0-9_-]{43}$/.test(config.nudgeKey) ? config.nudgeKey : null }
+      : null;
+    nudgeConfig = next;
+    try {
+      // Klíč expozice patří jen sem: zobrazovací doplňky (vlákno ceny) ho nedostanou;
+      // klíč hlídače upozornění jde zvlášť jen jeho vláknu.
+      const { nudgeKey: _omit, priceAlert: _alert, ...rest } = (realtime && typeof realtime === 'object' ? realtime : {}) as Record<string, unknown>;
+      options.onRealtimeConfig?.(realtime && typeof realtime === 'object' ? rest : realtime);
     } catch {
       // Zobrazovací doplněk nesmí ovlivnit doručení příkazu.
     }
+    try {
+      if (options.onPriceAlertConfig) {
+        const grant = (realtime as { priceAlert?: { key?: unknown; deviceId?: unknown } } | null | undefined)?.priceAlert;
+        options.onPriceAlertConfig(typeof grant?.key === 'string' && /^[A-Za-z0-9_-]{43}$/.test(grant.key)
+          && typeof grant.deviceId === 'string' && /^[0-9a-f-]{36}$/.test(grant.deviceId)
+          ? { apiOrigin: options.apiOrigin, deviceId: grant.deviceId, key: grant.key }
+          : null);
+      }
+    } catch {
+      // Hlídač upozornění nesmí ovlivnit doručení příkazu.
+    }
+    updateExposurePublisher(next);
+  };
+
+  /**
+   * Expozice přímo do otevřeného LIVE grafu (F2a, docs/LIVE_HOT_PATH_PLAN.md §10):
+   * po změně u brokera — posluchač běží uvnitř eventTail, proto jen naplánuje — se
+   * mimo něj sestaví status, zašifruje (AES-GCM, AAD = téma) a pošle na téma budíčku.
+   * Nejvýš jeden požadavek najednou, další změna = nejnovější stav po jeho dokončení,
+   * rozestup ≥ 16 ms (jeden obrazový snímek). Fire-and-forget; nic na něj
+   * nečeká (INV-WORKER-04).
+   */
+  const EXPOSURE_MIN_SPACING_MS = 16;
+  let exposureWanted = false;
+  let exposureTimer: ReturnType<typeof setTimeout> | null = null;
+  let exposureInFlight = false;
+  let lastExposureAt = 0;
+  const sendExposureNow = async () => {
+    exposureTimer = null;
+    const config = nudgeConfig;
+    if (stopped || exposureInFlight || !config?.key) return;
+    exposureWanted = false;
+    exposureInFlight = true;
+    lastExposureAt = Date.now();
+    let seq: number | null = null;
+    const totalStartedAt = performance.now();
+    try {
+      const status = options.agent.status();
+      if (typeof status.displaySeq !== 'number' || typeof status.displayBuiltAt !== 'number') return;
+      seq = status.displaySeq;
+      const encryptStartedAt = performance.now();
+      const envelope = await encryptCopierLiveExposure({
+        v: 1, startedAt: status.startedAt, seq: status.displaySeq, builtAt: status.displayBuiltAt,
+        exposure: status.controller.exposure ?? null,
+        events: (status.controller.recentCopyEvents ?? []).slice(-COPIER_LIVE_EXPOSURE_EVENTS),
+        // Jen posledních 10 zobrazovacích záznamů; operationId spojí konkrétní klik
+        // s brokerovým fill/position časem a následným paintem grafu.
+        manualEntries: (status.controller.manualEntries ?? []).slice(-10),
+        manualOrderActions: (status.controller.manualOrderActions ?? []).slice(-10),
+      }, config.key, config.topic);
+      if (!envelope || stopped) return;
+      const encryptMs = performance.now() - encryptStartedAt;
+      const body = JSON.stringify({ messages: [{ topic: config.topic, event: COPIER_LIVE_EXPOSURE_EVENT, payload: envelope }] });
+      const publishStartedAt = performance.now();
+      let transport = 'rest';
+      let publishStatus: string | number = 'fallback';
+      try {
+        if (await exposurePublisher?.publish(COPIER_LIVE_EXPOSURE_EVENT, envelope)) {
+          transport = 'ws';
+          publishStatus = 'ok';
+        }
+      } catch {
+        // Připojený kanál je pouze optimalizace; níže vždy zůstává REST fallback.
+      }
+      if (transport === 'rest') {
+        const response = await fetchImpl(`${config.url}/realtime/v1/api/broadcast`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: config.anonKey, Authorization: `Bearer ${config.anonKey}` },
+          body,
+          signal: AbortSignal.timeout(1_500),
+        });
+        publishStatus = response.status;
+      }
+      console.log(`${new Date().toISOString()} LIVE EXPOSURE seq=${status.displaySeq} bytes=${body.length}`
+        + ` encryptMs=${Math.round(encryptMs)} publishMs=${Math.round(performance.now() - publishStartedAt)}`
+        + ` totalMs=${Math.round(performance.now() - totalStartedAt)} transport=${transport} status=${publishStatus}`);
+    } catch {
+      console.log(`${new Date().toISOString()} LIVE EXPOSURE seq=${seq ?? '?'} failed totalMs=${Math.round(performance.now() - totalStartedAt)}`);
+      // Jen zrychlení zobrazení; poll a heartbeat jedou dál.
+    } finally {
+      exposureInFlight = false;
+      if (exposureWanted) scheduleExposureSend();
+    }
+  };
+  const scheduleExposureSend = () => {
+    if (stopped || !nudgeConfig?.key) return;
+    exposureWanted = true;
+    if (exposureTimer || exposureInFlight) return;
+    const wait = Math.max(0, lastExposureAt + EXPOSURE_MIN_SPACING_MS - Date.now());
+    exposureTimer = setTimeout(() => { void sendExposureNow(); }, wait);
+    exposureTimer.unref?.();
   };
 
   const maybeSubscribeKick = async (realtime: unknown) => {
@@ -230,7 +481,7 @@ export function startMacCopierCommandRelay(options: {
     const ids = [...completedNotifications].slice(0, 20);
     background = (async () => {
       try {
-        const response = await request({ action: 'background-v2', status: options.agent.status(), revision: ++statusRevision,
+        const response = await request({ action: 'background-v2', status: relayStatus(), revision: ++statusRevision,
           ...(sentRevision !== acknowledgedCopyEventsRevision ? { copyEvents: true } : {}), completedCommandIds: ids,
         }, RELAY_COMMAND_TIMEOUT_MS, loopAbort.signal);
         if (response.protocol !== 2) throw new Error('relay-delivery-protocol-unavailable');
@@ -252,8 +503,12 @@ export function startMacCopierCommandRelay(options: {
   const STATUS_CHANGE_MIN_SPACING_MS = 250;
   let lastStatusStartedAt = 0;
   let statusChangePending = false;
-  const publishStatusSoon = () => {
+  /** Heartbeat vyvolaný změnou u brokera → po potvrzení budíček pro LIVE. */
+  let statusNudgeWanted = false;
+  const publishStatusSoon = (nudge = true) => {
     if (stopped || !options.deliveryStore) return;
+    // Ohlášení nové nečinné delivery (F1b′) jen pro server — žádný budíček LIVE.
+    if (nudge) statusNudgeWanted = true;
     if (statusHeartbeat) { statusChangePending = true; return; }
     const wait = Math.max(0, lastStatusStartedAt + STATUS_CHANGE_MIN_SPACING_MS - Date.now());
     if (statusTimer) clearTimeout(statusTimer);
@@ -263,27 +518,59 @@ export function startMacCopierCommandRelay(options: {
     if (stopped || statusHeartbeat || !options.deliveryStore) return;
     lastStatusStartedAt = Date.now();
     statusChangePending = false;
+    const nudge = statusNudgeWanted;
+    statusNudgeWanted = false;
     statusHeartbeat = (async () => {
       try {
-        const response = await request({ action: 'heartbeat-v2', status: options.agent.status(), revision: ++statusRevision }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
+        const response = await request({ action: 'heartbeat-v2', status: relayStatus(), revision: ++statusRevision }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
         if (response.protocol !== 2 || response.accepted !== true) throw new Error('relay-heartbeat-not-confirmed');
+        if (nudge) sendStatusNudge();
       } catch (error) {
+        // Neodeslaná změna: budíček až s dalším potvrzeným heartbeatem.
+        if (nudge) statusNudgeWanted = true;
         if (!stopped) console.warn(`COPIER RELAY status: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         statusHeartbeat = null;
         if (!stopped) {
           statusTimer = setTimeout(publishStatus, 2_000);
-          if (statusChangePending) publishStatusSoon();
+          // Budíček odložené změny už nese `statusNudgeWanted` z jejího volání.
+          if (statusChangePending) publishStatusSoon(false);
         }
       }
     })();
   };
+  /** poll-v2 s vlastním přerušením (F1b′); ostatní požadavky doručení jako dřív. */
+  const deliveryRequest = async (body: Record<string, unknown>) => {
+    if (body.action === 'complete-hot-v3') return request(body, RELAY_COMPACT_ACK_TIMEOUT_MS, loopAbort.signal);
+    if (body.action !== 'poll-v2') return request(body, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
+    const controller = new AbortController();
+    const forward = () => controller.abort(loopAbort.signal.reason);
+    if (loopAbort.signal.aborted) forward(); else loopAbort.signal.addEventListener('abort', forward, { once: true });
+    pollAbort = controller;
+    pollPushChecked = false;
+    try {
+      return await request(body, RELAY_STATUS_TIMEOUT_MS, controller.signal);
+    } finally {
+      pollAbort = null;
+      loopAbort.signal.removeEventListener('abort', forward);
+    }
+  };
   const delivery = options.deliveryStore ? recoverableCopierDelivery({
     store: options.deliveryStore, agent: options.agent,
-    request: body => request(body, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal),
+    request: deliveryRequest,
     nextRevision: () => ++statusRevision,
     isActive: () => !stopped,
-    onComplete: id => { completedNotifications.add(id); publishBackground(); },
+    // Po broker ACK + fsync ukaž výsledek v grafu hned. Serverový ACK, audit,
+    // background heartbeat i budíček zůstávají v onComplete níže.
+    onDurableResult: () => scheduleExposureSend(),
+    // ACK uložil výsledek → budíček pro otevřené LIVE, až když je v DB i status:
+    // po complete-v2 hned, po kompaktním ACK až po potvrzeném heartbeatu.
+    onComplete: (id, statusPending) => {
+      completedNotifications.add(id);
+      publishBackground();
+      if (statusPending) publishStatusSoon(true);
+      else sendStatusNudge();
+    },
   }) : null;
   let deliveryBusy = false;
   /** Důkaz prázdné fronty pro údržbový restart; maže se začátkem každého pollu. */
@@ -300,14 +587,25 @@ export function startMacCopierCommandRelay(options: {
           idleProofSince = null;
           deliveryBusy = true;
           let response: Awaited<ReturnType<typeof delivery>>;
+          const idleBefore = delivery.idleDeliveryId();
+          const raw = pushMailbox;
+          pushMailbox = null;
+          const verified = raw ? verifyCopierCommandPush(raw.payload, raw.key, raw.deviceId) : null;
+          const pushed: PushedCopierDelivery | null = verified ? { deliveryId: verified.deliveryId, command: verified.command } : null;
           try {
-            response = await delivery();
+            response = await delivery(pushed);
           } finally {
             deliveryBusy = false;
           }
           if (response.command == null) idleProofSince = pollStartedAt;
-          notifyRealtimeConfig(response.realtime);
-          await maybeSubscribeKick(response.realtime);
+          // Odpověď z pushe realtime konfiguraci nenese — stávající kanály zůstávají.
+          if (response.realtime !== undefined) {
+            notifyRealtimeConfig(response.realtime);
+            await maybeSubscribeKick(response.realtime);
+            await maybeSubscribePush(response.realtime);
+          }
+          // Nová nečinná delivery → server ji musí znát co nejdřív (F1b′).
+          if (delivery.idleDeliveryId() !== idleBefore && delivery.idleDeliveryId() != null) publishStatusSoon(false);
           failures = 0;
           if (response.command == null) lastEmptyPollStartedAt = pollStartedAt;
         } else {
@@ -382,6 +680,8 @@ export function startMacCopierCommandRelay(options: {
         }
       } catch (error) {
         if (stopped && loopAbort.signal.aborted) break;
+        // Poll přerušený ověřeným pushem není selhání: hned další kolo vezme push ze schránky.
+        if (error instanceof Error && error.message === POLL_SUPERSEDED_BY_PUSH) continue;
         failures += 1;
         if (failures === 1 || failures % 20 === 0) {
           console.error(`${new Date().toISOString()} COPIER RELAY (${failures}. selhání v řadě) ${error instanceof Error ? error.message : String(error)}`);
@@ -394,7 +694,11 @@ export function startMacCopierCommandRelay(options: {
   running = loop();
   publishBackground();
   publishStatus();
-  const unsubscribeLiveChange = options.agent.subscribeLiveChange?.(publishStatusSoon) ?? (() => undefined);
+  // Změna u brokera: status na relay (heartbeat) i expozice přímo do grafu — obojí jen naplánovat.
+  const unsubscribeLiveChange = options.agent.subscribeLiveChange?.(() => {
+    publishStatusSoon();
+    scheduleExposureSend();
+  }) ?? (() => undefined);
   return {
     commandQueueIdleSince: () => (deliveryBusy || !delivery ? null : idleProofSince),
     lastEmptyPollStartedAt: () => lastEmptyPollStartedAt,
@@ -408,6 +712,10 @@ export function startMacCopierCommandRelay(options: {
     nudgeCopyEvents() {
       copyEventsRevision += 1;
       publishBackground();
+      kickPending = true;
+      wake?.();
+    },
+    nudgeCommands() {
       kickPending = true;
       wake?.();
     },
@@ -468,8 +776,12 @@ export function startMacCopierCommandRelay(options: {
       wake?.();
       if (backgroundTimer) clearTimeout(backgroundTimer);
       if (statusTimer) clearTimeout(statusTimer);
+      if (exposureTimer) clearTimeout(exposureTimer);
+      if (nudgeTimer) clearTimeout(nudgeTimer);
       await Promise.all([running, background, statusHeartbeat]);
       await clearKickSubscription();
+      await clearPushSubscription();
+      await clearExposurePublisher();
     },
   };
 }

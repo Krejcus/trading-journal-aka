@@ -22,7 +22,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_AUTO_CANCEL_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY, COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -136,6 +136,8 @@ interface LocalCopierExecutionAgentOptions {
   journalHealth?: () => NonNullable<LocalCopierAgentStatus['journalHealth']>;
   /** Ceny z TradingView jen pro zobrazení; prázdné pole = žádná čerstvá cena. */
   marketPrices?: () => NonNullable<LocalCopierAgentStatus['marketPrices']>;
+  /** Stav hlídače upozornění na cenu; jen zobrazení, výjimka = pole chybí. */
+  priceAlertWatch?: () => LocalCopierAgentStatus['priceAlertWatch'];
   accountDisplay?: () => NonNullable<LocalCopierAgentStatus['accountDisplay']>;
   /** Využití Tradovate API a stav session po spojení; jen zobrazení. */
   connectionUsage?: () => NonNullable<LocalCopierAgentStatus['connectionUsage']>;
@@ -143,6 +145,11 @@ interface LocalCopierExecutionAgentOptions {
   connectionDiscovery?: () => LocalCopierAgentStatus['connectionDiscovery'];
   /** Naplánuje observability test mimo broker dispatch a okamžitě se vrátí. */
   onSnapshotTest?: (requestId: string, options: { repairCamera: boolean }) => void;
+  /**
+   * Probudí cloud relay bez předání příkazu. Produkční UI tím může zkrátit
+   * čekání na Realtime push; admission, claim i execution zůstávají beze změny.
+   */
+  onRelayWake?: () => void;
   onDevicePaired?: (deviceId: string) => Promise<void>;
   /** Requests a restart after pairing; the pilot performs the final safe-state gate. */
   onDevicePairingRestart?: (deviceId: string) => void;
@@ -398,11 +405,28 @@ export async function startLocalCopierExecutionAgent(
     return { missingOptional, inactiveOptional };
   };
 
+  /** Monotónní pořadí sestavení statusu (řazení zobrazení pozice, F2a); nic neautorizuje. */
+  let displaySeq = 0;
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
     capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY,
       ...(typeof options.controller.placeLeaderEntry === 'function' ? [COPIER_MANUAL_ENTRY_CAPABILITY] : []),
+      // Nativní Market jen pro instalační manual-only skupinu bez followerů (oponentura 2. 11.).
+      ...(typeof options.controller.placeLeaderEntry === 'function' && group.manualOnly === true && group.localOnly === true && group.followers.length === 0
+        ? [COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ENTRY_BARE_CAPABILITY] : [])] : []),
       ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY] : []),
+      // Přikoupení do pozice (3. 11. 2026): jen když ho controller opravdu povoluje (opt-in + manual-only DEMO).
+      ...(typeof options.controller.manageLeaderOrder === 'function' && options.controller.manualEntryScaleInEnabled?.() === true
+        ? [COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY] : []),
+      ...(typeof options.controller.manageLeaderOrder === 'function' && options.controller.manualPendingLegsEnabled?.() === true
+        ? [COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY] : []),
+      // × holé pozice (C8, 3. 11. 2026): jen když to controller pro tuto skupinu umí (sólo manual-only DEMO).
+      ...(typeof options.controller.manageLeaderOrder === 'function' && options.controller.manualBareCloseEnabled?.() === true
+        ? [COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY] : []),
+      // „Zrušit čekající“ (C7, 3. 11. 2026): status vlastních čekajících vstupů + ověřený výsledek cancel-entry.
+      ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY] : []),
+      // Automatické zrušení vlastního čekajícího vstupu + ověřený výsledek ve statusu (C12, 4. 11. 2026).
+      ...(typeof options.controller.placeLeaderEntry === 'function' ? [COPIER_MANUAL_ENTRY_AUTO_CANCEL_CAPABILITY] : []),
       ...(options.autoRearmAfterTransport === true && autoResumeAdmission ? [COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY] : []),
       ...(typeof options.controller.retireGroup === 'function' && options.previewGroupAccounts
         ? [COPIER_GROUP_DELETE_CAPABILITY]
@@ -414,6 +438,8 @@ export async function startLocalCopierExecutionAgent(
     group: structuredClone(group),
     controller: options.controller.status(),
     startedAt,
+    displaySeq: ++displaySeq,
+    displayBuiltAt: Date.now(),
     ...(options.installation ? { installation: structuredClone(options.installation) } : {}),
     ...(devices[0] ? { device: structuredClone(devices[0]) } : {}),
     ...(devices.length > 0 ? { devices: structuredClone(devices) } : {}),
@@ -431,6 +457,14 @@ export async function startLocalCopierExecutionAgent(
     ...(() => {
       const marketPrices = options.marketPrices?.() ?? [];
       return marketPrices.length > 0 ? { marketPrices: structuredClone(marketPrices) } : {};
+    })(),
+    ...(() => {
+      try {
+        const watch = options.priceAlertWatch?.();
+        return watch ? { priceAlertWatch: { state: watch.state, alerts: watch.alerts, priceAgeMs: watch.priceAgeMs, syncAgeMs: watch.syncAgeMs } } : {};
+      } catch {
+        return {};
+      }
     })(),
   });
 
@@ -452,6 +486,20 @@ export async function startLocalCopierExecutionAgent(
       allowStartupRepair?: true;
     } = {},
   ): Promise<LiveCopyTradingCommandResult> => {
+    // Manual-only je instalační bezpečnostní hranice, ne vzdáleně volitelný
+    // typ skupiny. UI smí měnit jen její název/risk metadata; nikdy leadera,
+    // přidat followera ani převést běžnou skupinu na single-account režim.
+    if (group.manualOnly === true) {
+      if (next.manualOnly !== true || next.localOnly !== true
+        || next.leaderAccountId !== group.leaderAccountId || next.followers.length !== 0) {
+        throw new Error('Manual-only DEMO skupina má instalačně uzamčený jediný účet');
+      }
+      // Strop ručního vstupu je instalační hodnota: UI ho neposílá ani nemění (2. 11. 2026).
+      const { manualEntryMaxContracts: _remoteCap, ...rest } = next;
+      next = { ...rest, ...(group.manualEntryMaxContracts != null ? { manualEntryMaxContracts: group.manualEntryMaxContracts } : {}) };
+    } else if (next.manualOnly === true || next.manualEntryMaxContracts != null) {
+      throw new Error('Manual-only DEMO skupinu lze vytvořit jen lokálním installerem');
+    }
     // Smazaná skupina (11. 10. 2026): jedinou změnou je čerstvá aktivace
     // celé skupiny. Stará topologie neexistuje, nic se z ní nevyřazuje ani
     // nepřebírá (ani účast followerů) a routuje se jen nová skupina.
@@ -890,7 +938,10 @@ export async function startLocalCopierExecutionAgent(
         });
         return { type: 'configuration', group };
       case 'cancel-order':
-        throw new Error('Ruční cancel z UI zatím není napojen na durable runtime');
+        // C7 (3. 11. 2026): obecné zrušení libovolného příkazu worker NIKDY neprovede (mohl by to být
+        // SL otevřené pozice nebo cizí příkaz). Odmítnutí bez jakéhokoli zápisu; starý Dashboard ho
+        // dál posílá. Vlastní čekající vstup = `manage-leader-order` `cancel-entry` přes relay.
+        throw new Error('unsupported-copy-command:cancel-order — obecné zrušení příkazu worker neprovádí, nic se neodeslalo. Vlastní čekající vstup zruš tlačítkem „Zrušit čekající“, ostatní příkazy v Tradovate nebo Flattenem.');
       case 'preview-leader-entry': {
         // Fáze 1a: jen náhled — controller sebere stav bez IO a vyhodnotí
         // čistou funkcí; k brokerovi nic nejde. Brzda zadaná po náhledu ho
@@ -933,7 +984,8 @@ export async function startLocalCopierExecutionAgent(
           return { type: 'leader-order-managed', operationId: manage.operationId, action: manage.action, status: 'blocked', checkedAt: Date.now(),
             blockers: [{ code: 'no-deadline', text: 'Příkaz nemá platnost — nic se neodeslalo.' }] };
         }
-        if (manage.action !== 'cancel-entry' && context.createdAt != null
+        // Doplnění SL/TP k holému Marketu riziko snižuje stejně jako zrušení vstupu (2. 11.).
+        if (manage.action !== 'cancel-entry' && manage.action !== 'attach-brackets' && context.createdAt != null
           && context.createdAt <= lastBrakeCreatedAt + Math.max(0, context.clockSkewReserveMs ?? 0)) {
           return { type: 'leader-order-managed', operationId: manage.operationId, action: manage.action, status: 'blocked', checkedAt: Date.now(),
             blockers: [{ code: 'brake-after-request', text: 'Po zadání změny přišlo vypnutí kopírky nebo zámek.' }] };
@@ -1416,6 +1468,17 @@ export async function startLocalCopierExecutionAgent(
     if (request.method === 'GET' && url.pathname === '/v1/status') {
       options.controller.noteArmPreparationInterest?.();
       json(response, 200, status());
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/relay-wake') {
+      if (shuttingDown) {
+        json(response, 503, { error: shutdownError().message });
+        return;
+      }
+      // Endpoint nemá command body ani execution capability. Origin je ověřen
+      // výše; i podvržený lokální request může nanejvýš vyvolat prázdný poll.
+      try { options.onRelayWake?.(); } catch { /* poll fallback běží dál */ }
+      json(response, 202, { accepted: true });
       return;
     }
     if (request.method !== 'POST' || url.pathname !== '/v1/command') {

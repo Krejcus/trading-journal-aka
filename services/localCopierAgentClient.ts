@@ -14,6 +14,36 @@ export interface LocalCopierAgentClient {
   adapter(): LiveCopyTradingAdapter;
 }
 
+/** Produkční origin smí loopback použít jen jako neautorizující budíček relay. */
+export function canUseLocalCopierRelayWake(location: Pick<Location, 'protocol' | 'hostname'>): boolean {
+  return canUseDirectLocalCopierAgent(location)
+    || (location.protocol === 'https:' && location.hostname === 'alphatrade-mentor-15.vercel.app');
+}
+
+/**
+ * Best-effort lokální budíček. Nečeká se na něj a jeho chyba nikdy nemění
+ * výsledek příkazu; endpoint nepřijímá command ani brokerová data.
+ */
+export async function nudgeLocalCopierRelay(
+  baseUrl = LOCAL_COPIER_AGENT_BASE_URL,
+  timeoutMs = 250,
+): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${baseUrl}/v1/relay-wake`, {
+      method: 'POST',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    return response.status === 202;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /**
  * Přímé HTTP spojení na loopback používáme jen z lokálně servírovaného UI.
  * Produkční HTTPS stránka musí použít zabezpečený relay; běžné prohlížeče

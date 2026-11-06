@@ -25,11 +25,56 @@ describe('studený start LIVE: nic v přehledu nesmí suspendovat stránku', () 
     }
   });
 
+  it('desktopový graf netahá skryté LIVE panely; každý má vlastní retry-safe hranici', () => {
+    const desk = source('components/TradovateLiveDesk.tsx');
+    const slot = source('components/LiveCopyTradeOverviewSlot.tsx');
+    for (const component of [
+      'LiveCopyTradeOverview',
+      'LiveMobileAccountDetail',
+      'LiveRiskTab',
+      'CopierEventsPanel',
+      'MacCompanionSettings',
+      'TradovateAccountProfileSetup',
+      'TradovateAddConnectionModal',
+    ]) expect(desk).not.toMatch(new RegExp(`from '\\./${component}';`));
+    expect(desk).toMatch(/from '\.\/LiveCopyTradeOverviewSlot';/);
+    for (const component of [
+      'LiveCopyTradeOverview',
+      'LiveMobileAccountDetail',
+      'LiveRiskTab',
+      'CopierEventsPanel',
+      'MacCompanionSettings',
+      'TradovateAccountProfileSetup',
+      'TradovateAddConnectionModal',
+    ]) expect(slot).toContain(`import('./${component}')`);
+    expect(desk).toContain('preloadLiveDeferredTab(item.id)');
+    expect(slot).toContain('state.pending = null;');
+    expect(slot).toContain('Zkusit znovu');
+  });
+
+  it('produkční LIVE bundle odřízne vývojové fixture už na call site', () => {
+    const desk = source('components/TradovateLiveDesk.tsx');
+    expect(desk).toContain('if (import.meta.env.DEV && devLiveTradeMockEnabled()) {');
+    expect(desk).toContain('if (import.meta.env.DEV && devLiveCopyFixtureEnabled()) {');
+  });
+
   it('LIVE → Graf se načítá líně jen za vlastní hranicí Suspense, ne v desku', () => {
     const slot = source('components/LiveTradingScreenSlot.tsx');
-    expect(slot).toMatch(/React\.lazy\(\(\) => import\('\.\/LiveTradingScreen'\)\)/);
-    expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer[^>]*\/>\}>\s*<LiveTradingScreen \{\.\.\.props\} leaving=\{closing\} \/>\s*<\/Suspense>/);
-    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/import LiveTradingScreenSlot, \{ liveChartCrashedThisSession \} from '\.\/LiveTradingScreenSlot';/);
+    expect(slot).toMatch(/liveTradingScreenPromise = import\('\.\/LiveTradingScreen'\)/);
+    expect(slot).toContain('const LiveTradingScreen = React.lazy(loadLiveTradingScreen);');
+    expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer[^>]*\/>\}>\s*<LiveTradingScreen \{\.\.\.props\} chartOpenPerformanceAt=\{openPerformanceAtRef\.current\} leaving=\{closing\} \/>\s*<\/Suspense>/);
+    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/import LiveTradingScreenSlot, \{ liveChartCrashedThisSession, preloadLiveTradingScreen, rememberLiveChartCrash \} from '\.\/LiveTradingScreenSlot';/);
+  });
+
+  it('bundle a první snapshot grafu se zahřejí až po úplném LIVE přehledu a explicitně z navigace', () => {
+    const desk = source('components/TradovateLiveDesk.tsx');
+    const slot = source('components/LiveTradingScreenSlot.tsx');
+    expect(desk).toContain('if (!chartAvailable || !livePriorityReleasable || liveChartCrashedThisSession()) return undefined;');
+    expect(desk).toContain("connection?.effectiveType === 'slow-2g'");
+    expect(desk).toContain("const warmTab = item.id === 'chart'");
+    expect(desk).toContain("item.id === 'overview'");
+    expect(desk).toContain('onPointerEnter={warmTab} onFocus={warmTab}');
+    expect(slot).toMatch(/Promise\.all\(\[\s*loadLiveTradingScreen\(\),\s*preloadLiveTradingCandles\(\),\s*\]\)/);
   });
 
   it('přednačtený LIVE desk se vykreslí bez Suspense a volba typu se během připojení nemění', () => {

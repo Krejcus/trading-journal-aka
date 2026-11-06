@@ -9,7 +9,43 @@ import { stableHash64 } from '../services/copierKeys.js';
  */
 
 /** `close-position` (fáze 2d): zavřít obchod leadera (liquidate), kopírka zavře kopie. */
-export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position';
+/**
+ * `attach-brackets` (2. 11. 2026): k holému Marketu (vlastní vstup bez nohou)
+ * doplnit SL + TP jako OCO na celou pozici.
+ */
+/** SL i TP nevyplněného vstupu: nejmenší vzdálenost od ceny vstupu. */
+export const PENDING_LEG_MIN_TICKS = 4;
+/** Stop vstup se může vyplnit se skluzem: TP má rezervu navíc, jinak by se po fillu hned vyplnil. */
+export const PENDING_LEG_STOP_ENTRY_TARGET_RESERVE_TICKS = 4;
+const PENDING_LEG_TICK = 0.25;
+
+/**
+ * Pravidlo ceny nohy nevyplněného vstupu (stejně v grafu i ve workeru). `null` = smí.
+ * Noha čeká pozastavená, takže trh ji nespustí: rozhoduje jen strana vůči ceně vstupu.
+ */
+export function pendingLegSideProblem(
+  kind: 'stopLoss' | 'takeProfit',
+  side: 'long' | 'short',
+  entryPrice: number,
+  entryType: string | null,
+  price: number,
+): string | null {
+  const dir = side === 'long' ? 1 : -1;
+  const stopEntry = (entryType ?? '').toLowerCase() === 'stop';
+  if (kind === 'stopLoss') {
+    if ((entryPrice - price) * dir < PENDING_LEG_MIN_TICKS * PENDING_LEG_TICK - 1e-9) {
+      return `SL musí být aspoň ${PENDING_LEG_MIN_TICKS} ticky ${side === 'long' ? 'pod' : 'nad'} vstupem.`;
+    }
+    return null;
+  }
+  const minTicks = PENDING_LEG_MIN_TICKS + (stopEntry ? PENDING_LEG_STOP_ENTRY_TARGET_RESERVE_TICKS : 0);
+  if ((price - entryPrice) * dir < minTicks * PENDING_LEG_TICK - 1e-9) {
+    return `TP musí být aspoň ${minTicks} ticků ${side === 'long' ? 'nad' : 'pod'} vstupem.`;
+  }
+  return null;
+}
+
+export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position' | 'attach-brackets';
 
 export interface LeaderOrderManageCommand {
   type: 'manage-leader-order';
@@ -26,6 +62,16 @@ export interface LeaderOrderManageCommand {
   expect: { price: number; quantity: number };
   /** Jen `move-*`. */
   newPrice?: number;
+  /** Jen `attach-brackets` (obě povinné): ceny nových nohou. U attach je `expect.price` cena trhu, kterou uživatel viděl. */
+  stopLoss?: number;
+  takeProfit?: number;
+  /**
+   * Správa celé pozice (přikoupení, 3. 11. 2026): `entryOperationId` je pak nejstarší
+   * lístek pozice (klíč busy v relayi — PC i telefon posílají stejný), worker změní
+   * všechny nohy pozice najednou. `expect` = nejochrannější SL / nejbližší TP a |pozice|.
+   * Jen `move-stop` / `move-target` / `close-position`.
+   */
+  scope?: 'position';
   payloadHash: string;
 }
 
@@ -45,8 +91,8 @@ export interface LeaderOrderManageResult {
 const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
 const OPERATION_ID_PATTERN = /^manage:[a-zA-Z0-9_-]{8,100}$/;
 const ENTRY_OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
-const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry', 'close-position'];
-const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'payloadHash'];
+const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'cancel-entry', 'close-position', 'attach-brackets'];
+const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'stopLoss', 'takeProfit', 'scope', 'payloadHash'];
 const LEADER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 1e-9;
 const price = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
@@ -87,6 +133,12 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
   if (typeof expect!.quantity !== 'number' || !Number.isSafeInteger(expect!.quantity) || expect!.quantity < 1 || expect!.quantity > 50) fail();
   const moves = command.action === 'move-stop' || command.action === 'move-target';
   if (moves ? !price(command.newPrice) : command.newPrice !== undefined) fail();
+  // Doplnění nohou: jen vlastní vstup, obě ceny; jinde nohy v příkazu být nesmí.
+  const attach = command.action === 'attach-brackets';
+  if (attach ? (!own || !price(command.stopLoss) || !price(command.takeProfit) || command.stopLoss === command.takeProfit)
+    : (command.stopLoss !== undefined || command.takeProfit !== undefined)) fail();
+  if (command.scope !== undefined && (command.scope !== 'position' || !own
+    || !(command.action === 'move-stop' || command.action === 'move-target' || command.action === 'close-position'))) fail();
   if (typeof command.payloadHash !== 'string' || !/^[a-z0-9]{8,64}$/.test(command.payloadHash)) fail();
   const typed = command as unknown as LeaderOrderManageCommand;
   if (leaderOrderManagePayloadHash(typed) !== typed.payloadHash) fail();

@@ -81,6 +81,8 @@ export interface LiveAccount {
   unrealizedPnl: number;
   unrealizedPnlSource?: 'broker' | 'estimated' | 'stale';
   unrealizedPnlUpdatedAt?: string | null;
+  /** Pozice (z workeru) je novější než čtení P&L — karta obchodu P&L neukáže. */
+  unrealizedPnlBehindPosition?: boolean;
   positionsAvailability?: 'available' | 'partial' | 'empty' | 'denied' | 'unavailable';
   ordersAvailability?: 'available' | 'partial' | 'empty' | 'denied' | 'unavailable';
   cashAvailability?: 'available' | 'partial' | 'empty' | 'denied' | 'unavailable';

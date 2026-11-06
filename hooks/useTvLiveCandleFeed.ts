@@ -37,6 +37,8 @@ export function useTvLiveCandleFeed(enabled: boolean, dayEndMs: number): LiveCan
       // Svíčku čte jen napojení na graf (`useLiveCandleBinding`); tady se jen předává.
       current: root => feed.current(root),
       lastPrice: root => feed.lastPrice(root),
+      // Cena panelu objednávky bez přehrání ticků (nesmí ji zaseknout animace grafu).
+      final: root => feed.final(root),
     };
   }, [enabled, dayEndMs]);
 }

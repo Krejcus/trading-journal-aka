@@ -18,6 +18,12 @@ export interface ConfirmActionOptions {
   cancelLabel?: string;
   /** `danger` pro jednosměrné/rizikové akce (kill switch, day-lock). */
   tone?: 'primary' | 'danger';
+  /**
+   * Které tlačítko dostane fokus při otevření (výchozí `confirm` = dosavadní chování).
+   * Dialog otevřený klávesovou zkratkou (Shift+F → Flatten All) má fokus na Zrušit:
+   * reflexní Enter / mezerník hned po zkratce destruktivní akci nepotvrdí (INV-UI-02).
+   */
+  initialFocus?: 'confirm' | 'cancel';
 }
 
 interface ConfirmActionDialogProps extends ConfirmActionOptions {
@@ -30,6 +36,7 @@ export default function ConfirmActionDialog({
   confirmLabel = 'Potvrdit',
   cancelLabel = 'Zrušit',
   tone = 'primary',
+  initialFocus = 'confirm',
   onResolve,
 }: ConfirmActionDialogProps) {
   useEffect(() => {
@@ -61,6 +68,7 @@ export default function ConfirmActionDialog({
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
+            autoFocus={initialFocus === 'cancel'}
             onClick={() => onResolve(false)}
             className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] px-4 py-2 text-xs font-black text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
           >
@@ -68,7 +76,7 @@ export default function ConfirmActionDialog({
           </button>
           <button
             type="button"
-            autoFocus
+            autoFocus={initialFocus !== 'cancel'}
             onClick={() => onResolve(true)}
             className={`rounded-lg px-4 py-2 text-xs font-black text-white ${tone === 'danger' ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}
           >

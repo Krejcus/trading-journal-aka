@@ -96,6 +96,18 @@ describe('karta obchodu', () => {
     expect(buildTradeCard([row(account(1, 2, 21482.25, 0), true), row(account(2, -2, 21482.25, 0))], [], new Map(), now)).toBeNull();
   });
 
+  it('čekající limit vidí SL/TP i z heartbeatu workeru (PendingNew), pozice je jako ochranu nebere', () => {
+    const pending = buildTradeCard([row(account(1, 0, 0, 0), true)], [
+      order(1, { action: 'Buy', orderType: 'Limit', price: 21470, quantity: 2 }),
+      ...bracket(1, 21450, 21510, 2, 'PendingNew'),
+    ], new Map(), now)!;
+    expect(pending.kind).toBe('pending');
+    expect(pending.ladder).toEqual({ stop: 21450, target: 21510 });
+    const open = buildTradeCard([row(account(1, 2, 21482.25, 0), true)], bracket(1, 21462.25, 21522.25, 2, 'PendingNew'), new Map(), now)!;
+    expect(open.kind).toBe('position');
+    expect(open.ladder).toEqual({ stop: null, target: null });
+  });
+
   it('čekající limit počítá SL/TP ze Suspended bracketu', () => {
     const leader = account(1, 0, 0, 0);
     const follower = account(2, 0, 0, 0);

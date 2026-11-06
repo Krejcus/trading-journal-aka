@@ -99,10 +99,11 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
   it('hodnotu s pohybem z TV vykreslují jen listové komponenty v LIVE a štítek živé pozice v deníku', () => {
     expect(importersOf('components/LiveOpenPnlValue.tsx')).toEqual([
       'components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx', 'components/day/DayLivePositionChip.tsx',
+      'components/day/LivePhoneAccounts.tsx',
     ]);
     expect(importersOf('lib/tvLivePnl.ts')).toEqual([
       'components/LiveCopyTradeOverview.tsx', 'components/LiveOpenPnlValue.tsx', 'components/LiveTradeCard.tsx',
-      'components/day/DayLivePositionChip.tsx', 'lib/tvLiveCandle.ts',
+      'components/day/DayLivePositionChip.tsx', 'components/day/LivePhoneAccounts.tsx', 'lib/tvLiveCandle.ts',
     ]);
   });
 
@@ -172,7 +173,7 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
   });
 
   it('hodnota s pohybem z TV se v render-propu jen formátuje (žádné předání ven, žádné limity)', () => {
-    const files = ['components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx', 'components/day/DayLivePositionChip.tsx'];
+    const files = ['components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx', 'components/day/DayLivePositionChip.tsx', 'components/day/LivePhoneAccounts.tsx'];
     const blocks = files.flatMap(file => {
       const text = readFileSync(join(root, file), 'utf8');
       // Každý výskyt musí být celý blok s inline funkcí uvnitř — žádné `children=`
@@ -182,10 +183,12 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       expect(text, file).not.toMatch(/<LiveOpenPnlValue\b[^>]*children\s*=/);
       return [...text.matchAll(/<LiveOpenPnlValue\b[\s\S]*?<\/LiveOpenPnlValue>/g)].map(match => ({ file, block: match[0] }));
     });
-    // Řádek účtu (počítač, telefon), řádek skupiny, souhrn skupiny na telefonu, karta obchodu, štítek pozice v deníku.
+    // Řádek účtu (počítač, telefon), řádek skupiny, souhrn skupiny na telefonu, karta obchodu, štítek pozice v deníku,
+    // LIVE graf telefonu: P&L skupiny v hlavičce, celkem a řádek účtu v listu.
     expect(blocks.map(item => item.file)).toEqual([
       'components/LiveCopyTradeOverview.tsx', 'components/LiveCopyTradeOverview.tsx', 'components/LiveCopyTradeOverview.tsx',
       'components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx', 'components/day/DayLivePositionChip.tsx',
+      'components/day/LivePhoneAccounts.tsx', 'components/day/LivePhoneAccounts.tsx', 'components/day/LivePhoneAccounts.tsx',
     ]);
     for (const { file, block } of blocks) {
       expect(block, file).not.toMatch(/\bset[A-Z]\w*\(|\bon[A-Z]\w*\(|Ref\.current|\.current\(|publish|window\.|dispatch|dll|Dll|DLL|risk|limit|Limit|drawdown|cushion|eligib|write|persist|storage/);
@@ -211,6 +214,9 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
         ? /useTvLiveCandleFeed\(|^liveFeed,$|liveFeed`: rozpracovaná/
         : file === 'components/LiveTradingScreen.tsx'
           ? /^liveCandles=\{chart\.liveFeed\}$|^const tick = useLiveTicketQuote\(chart\.liveFeed, ROOT, candleClose\);$/
+          // Telefon (2. 11. 2026): stejná výjimka pro lištu a list objednávky (cena, kterou uživatel vidí).
+          : file === 'components/day/LivePhoneChart.tsx'
+            ? /^const tick = useLiveTicketQuote\(ctl\.chart\.liveFeed, 'MNQ', candleClose\);$|liveCandles=\{ctl\.chart\.liveFeed\}/
           : /liveCandles=\{ctl\.chart\.liveFeed\}|useLiveCandleBinding\(/;
       expect(line, file).toMatch(allowed);
     }
@@ -237,7 +243,11 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
     expect(priceReaders).toEqual(['hooks/useLiveTicketQuote.ts', 'hooks/useTvLiveCandleFeed.ts']);
     const ticketQuote = readFileSync(join(root, 'hooks/useLiveTicketQuote.ts'), 'utf8').split('\n').filter(line => /\.(current|lastPrice)\(/.test(line)).map(line => line.trim());
     expect(ticketQuote).toEqual(['const price = feed.lastPrice(root);']);
-    expect(importersOf('hooks/useLiveTicketQuote.ts')).toEqual(['components/LiveTradingScreen.tsx']);
+    // Svíčku bez přehrání dnes nikdo nečte, jen ji předává obal feedu.
+    const finalReaders = allSources.filter(file => /\b(?:feed|liveFeed|liveCandles)\.final\(/.test(readFileSync(join(root, file), 'utf8')));
+    expect(finalReaders).toEqual(['hooks/useTvLiveCandleFeed.ts']);
+    // Telefon (2. 11. 2026): lišta a list objednávky na telefonním grafu — stejná výjimka.
+    expect(importersOf('hooks/useLiveTicketQuote.ts')).toEqual(['components/LiveTradingScreen.tsx', 'components/day/LivePhoneChart.tsx']);
     const hook = readFileSync(join(root, 'hooks/useTvLiveCandleFeed.ts'), 'utf8').split('\n').filter(line => /\.(current|lastPrice)\(/.test(line)).map(line => line.trim());
     expect(hook).toEqual(['current: root => feed.current(root),', 'lastPrice: root => feed.lastPrice(root),']);
     const dayData = readFileSync(join(root, 'hooks/useDayChartData.ts'), 'utf8');

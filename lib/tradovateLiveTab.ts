@@ -30,16 +30,16 @@ export const tradovateLiveTabHref = (currentHref: string, tab: TradovateLiveTab)
 
 /**
  * Smí se teď přepnout záložka LIVE? Při čekající změně konfigurace desk
- * záložky drží — kromě odchodu z grafu na přehled: DISARM a kill musí být
- * dosažitelné vždy (INV-UI-02). Do grafu se nevstupuje během zapínání
- * kopírky, jeho vrstva by zakryla potvrzovací dialogy i přehled.
+ * záložky drží — kromě cesty na přehled z libovolné záložky: OFF, Kill a Flatten
+ * jsou na Dashboardu a musí být dosažitelné vždy (INV-UI-02). Do grafu se
+ * nevstupuje během zapínání kopírky, jeho vrstva by zakryla potvrzovací dialogy i přehled.
  */
 export const liveTabNavigationAllowed = (
   current: TradovateLiveTab,
   next: TradovateLiveTab,
   state: { configMutationPending: boolean; armFlowActive: boolean },
 ): boolean => {
-  if (current === 'chart' && next === 'overview') return true;
+  if (next === 'overview') return true;
   if (next === 'chart' && (state.armFlowActive || state.configMutationPending)) return false;
   return !state.configMutationPending;
 };
