@@ -1,4 +1,5 @@
 import { runWithCommandLock } from '../hooks/liveCommandRuns';
+import { liveManageErrorNotice } from '../hooks/useLiveManageRunner';
 import type { LeaderOrderManageCommand, LeaderOrderManageResult } from './leaderOrderManage';
 import type { BareLeaderTrade } from './manualBareClose';
 import type { ManualLeg } from './manualSingleLeg';
@@ -47,7 +48,7 @@ export async function runLiveBareLeg(input: {
     const result = await runWithCommandLock(input.busyRef, input.send);
     input.report(liveBareLegNotice(input.intent, result));
   } catch (reason) {
-    const message = reason instanceof Error ? reason.message : 'chyba';
-    input.report({ tone: 'warn', text: /nic se neodeslalo|Chybí cesta|není čerstvě ověřený/.test(message) ? `Neodesláno: ${message.slice(0, 140)}` : `Výsledek neznámý (${message.slice(0, 100)}) — zkontroluj pozici.` });
+    const notice = liveManageErrorNotice(reason, Date.now());
+    input.report({ tone: notice.tone, text: notice.text });
   }
 }

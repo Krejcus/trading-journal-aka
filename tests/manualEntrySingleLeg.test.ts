@@ -30,8 +30,10 @@ async function setup(initial?: Parameters<typeof createMemoryCopierStore>[0]) {
   const broker = createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(START + 500)] });
   const audits: string[] = [];
   const memory = createMemoryCopierStore(initial);
+  const failNext = { on: false };
   const onCommit: { fn: (() => void) | null } = { fn: null };
   const store = { load: () => memory.load(), commit: async (...args: Parameters<typeof memory.commit>) => {
+    if (failNext.on) { failNext.on = false; throw new Error('test: disk'); }
     const saved = await memory.commit(...args);
     const hook = onCommit.fn;
     onCommit.fn = null;
@@ -61,7 +63,7 @@ async function setup(initial?: Parameters<typeof createMemoryCopierStore>[0]) {
     );
     return buildLeaderEntryPlaceCommand(preview, 'entry:baretest001');
   };
-  return { onCommit, broker, controller, audits, clock, quote, bare };
+  return { onCommit, broker, controller, audits, clock, quote, bare, failNextCommit: () => { failNext.on = true; } };
 }
 
 const fillMarket = (broker: MockBroker, entryId: string, quantity: number) => {
@@ -236,6 +238,90 @@ describe('SL a TP po jedné', () => {
     expect(ctx.controller.status().lastError).toContain('DVA SL');
   });
 
+  it('SL → TP: nové nohy odmítnuté ve streamu před ACK nechají starý SL běžet, incident', async () => {
+    const ctx = await setup();
+    await settled(ctx);
+    await addStop(ctx, 24_990);
+    await next(ctx);
+    const oldStop = openType(ctx.broker, 'Stop')[0].brokerOrderId;
+    const original = ctx.broker.placeOco!.bind(ctx.broker);
+    ctx.broker.placeOco = async request => {
+      const ack = await original(request);
+      const leg = ctx.broker.orders().find(order => order.brokerOrderId === ack.firstBrokerOrderId)!;
+      leg.status = 'rejected';
+      ctx.broker.emitEvent({ type: 'order', order: { ...leg, sourceVersion: '9:Rejected' } });
+      await sleep(10);
+      return ack;
+    };
+    const result = await addTarget(ctx, 25_020, 24_990);
+    expect(result.status).toBe('unknown');
+    expect(ctx.broker.cancelRequestCount(oldStop)).toBe(0);
+    expect(ctx.controller.status().lastError).toContain('starý SL');
+  });
+
+  it('SL → TP: starý SL se během výměny vyplnil: nové nohy se zruší, incident', async () => {
+    const ctx = await setup();
+    await settled(ctx);
+    await addStop(ctx, 24_990);
+    await next(ctx);
+    const oldStop = openType(ctx.broker, 'Stop')[0];
+    const originalCancel = ctx.broker.cancelOrder.bind(ctx.broker);
+    ctx.broker.cancelOrder = async (accountId, id) => {
+      if (id !== oldStop.brokerOrderId) return originalCancel(accountId, id);
+      oldStop.status = 'filled';
+      oldStop.filledQuantity = 1;
+      ctx.broker.setPosition(LEADER, SYM, 0);
+      throw new Error('TooLate');
+    };
+    expect((await addTarget(ctx, 25_020, 24_990)).status).toBe('unknown');
+    const oco = ctx.broker.orders().filter(order => order.brokerOrderId !== oldStop.brokerOrderId && (order.orderType === 'Stop' || order.orderType === 'Limit'));
+    expect(oco).toHaveLength(2);
+    for (const leg of oco) expect(ctx.broker.cancelRequestCount(leg.brokerOrderId)).toBe(1);
+    expect(ctx.controller.status().lastError).toContain('flat účet');
+  });
+
+  it('posun jediné nohy: odmítnutí = rejected, prázdná odpověď se ověří čtením; neznámé add-leg stream nevyřeší', async () => {
+    const ctx = await setup();
+    await settled(ctx);
+    await addStop(ctx, 24_990);
+    await next(ctx);
+    const original = ctx.broker.modifyOrder.bind(ctx.broker);
+    ctx.broker.modifyOrder = async () => { throw new Error('modifyOrder rejected: InvalidPrice'); };
+    expect((await manage(ctx, { action: 'move-stop', expect: { price: 24_990, quantity: 1 }, newPrice: 24_985 })).status).toBe('rejected');
+    await next(ctx);
+    ctx.broker.modifyOrder = async () => undefined;
+    expect((await manage(ctx, { action: 'move-stop', expect: { price: 24_990, quantity: 1 }, newPrice: 24_985 })).status).toBe('unknown');
+    ctx.broker.modifyOrder = original;
+    expect(ctx.controller.status().unresolvedManualOrderActions).toHaveLength(1);
+  });
+
+  it('neznámé přidání nohy: konec staré nohy ve streamu akci nevyřeší', async () => {
+    const ctx = await setup();
+    await settled(ctx);
+    await addStop(ctx, 24_990);
+    await next(ctx);
+    const stop = openType(ctx.broker, 'Stop')[0];
+    ctx.broker.placeOco = async () => { throw new Error('test: timeout'); };
+    expect((await addTarget(ctx, 25_020, 24_990)).status).toBe('unknown');
+    stop.status = 'canceled';
+    ctx.broker.emitEvent({ type: 'order', order: { ...stop, sourceVersion: '9:Canceled' } });
+    await sleep(20);
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status().unresolvedManualOrderActions).toEqual([expect.objectContaining({ action: 'add-leg', status: 'unknown' })]);
+  });
+
+  it('přidání nohy se nepodaří uložit: incident a výsledek neznámý', async () => {
+    const ctx = await setup();
+    await settled(ctx);
+    let fail = false;
+    ctx.onCommit.fn = null;
+    const original = ctx.broker.placeOrder.bind(ctx.broker);
+    ctx.broker.placeOrder = async request => { const ack = await original(request); fail = true; ctx.failNextCommit(); return ack; };
+    expect(fail).toBe(false);
+    expect((await addStop(ctx, 24_990)).status).toBe('unknown');
+    expect(ctx.controller.status().lastError).toContain('nepodařilo se je uložit');
+  });
+
   it('TP → SL: odmítnuté OCO po zrušení TP říká pravdu', async () => {
     const ctx = await setup();
     await settled(ctx);
@@ -283,7 +369,7 @@ describe('SL a TP po jedné', () => {
       operationId: 'manage:restart0001', payloadHash: 'x', entryOperationId: ENTRY, action: 'add-leg', leg: 'takeProfit', phase: 'oco-acked', oldLegId: '77', status: 'sending',
       targetBrokerOrderId: '77', fromPrice: null, toPrice: 25_020, quantity: 1, symbol: SYM, createdAt: 1, updatedAt: 1,
     }] } });
-    expect(ctx.controller.status().lastError ?? ctx.audits.join(' ')).toBeTruthy();
+    expect(ctx.controller.status().lastError).toContain('MOŽNÉ DVA SL');
     expect(ctx.controller.status().unresolvedManualOrderActions).toEqual([expect.objectContaining({ operationId: 'manage:restart0001', status: 'unknown' })]);
     expect(ctx.broker.cancelRequestCount('77')).toBe(0);
   });

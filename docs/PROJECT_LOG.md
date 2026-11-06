@@ -288,6 +288,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude, větev `claude/chart-position-ui-20261106`, NENASAZENO)
+
+- Filip: natáhnu nohu a je u brokera, × ji zruší a vrátí čip. Podklad: `docs/reviews/instant-legs-design-20261106.md`, DEMO `record-legs.ts`. Capability `manual-order-single-leg-v1`, jen sólo manual-only DEMO a vlastní holý Market; Limit bez nohou a čekající vstupy zatím ne.
+- Filip přijal: × na SL nechá pozici bez stropu. Obchoduje jen z appky, proto noha na flat účtu = jen incident, bez automatického zrušení.
+- Critic: návrh kolo 1 BLOKUJE, diff kolo 2 OPRAVIT, nálezy P1 a P2-5 až P2-8 zapracované, další kolo už neproběhlo.
+- Vědomá odchylka: během surového zápisu Flatten leadera vynechá a vrátí `flat:false` s incidentem, stejně jako dnes u attach a ×. Krátké čekání je následná úprava.
+- Neověřeno: nic z toho nešlo přes worker na DEMO; migrace `20261106210000` neaplikovaná a její SQL test neběžel (lokálně není Postgres); Flatten v mezeře výměny není testovaný; TIF samostatného Stopu neznámý. Pořadí nasazení: migrace, web a relay, worker, iPhone.
+
 ### 2026-11-06 večer — Limit bez SL/TP: rozhodnutí a skript pro DEMO (Claude, větev `claude/chart-position-ui-20261106`, nic nenasazeno)
 
 - Filip: SL a TP u Limitu jsou dobrovolné, jako znal z TradingView, riziko fillu bez SL přijal. Zaparkované nohy pro Limit odpadají. Návrh a nálezy v `docs/reviews/instant-legs-design-20261106.md`; stavět až po záznamu.

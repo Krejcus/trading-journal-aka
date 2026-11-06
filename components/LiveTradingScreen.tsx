@@ -774,8 +774,9 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (line.ownerId === LIVE_POSITION_OWNER && actionId === LIVE_ATTACH_SEND_ACTION) { void sendChartAttachRef.current(); return; }
       if (line.ownerId !== LIVE_POSITION_OWNER || actionId !== 'break-even' || !summary) return;
       if (chartReplay) { replayNotice(); return; }
-      const be = liveBreakEven(guardSummaryAt(Date.now()) ?? summary, manageEntryAvgPrice ?? null);
+      const be = liveBreakEven(guardSummaryAt(Date.now()) ?? summary, manageEntryAvgPrice ?? (sendBareLegRef.current ? summary.entry : null));
       if (be.blocked || be.price == null) { setLineNotice({ at: Date.now(), tone: 'bad', text: be.blocked ?? 'BE teď nejde.' }); return; }
+      if (sendBareLegRef.current && summary.stop != null) { sendBareLegRef.current({ kind: 'move', leg: 'stopLoss', price: be.price, current: summary.stop }); return; }
       void runLiveManage('move-stop', summary.stop, be.price, 'stopLoss');
     },
     onOrderLineAddBracket: (line, kind, price) => {

@@ -127,7 +127,7 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     return `${kind === 'stopLoss' ? 'SL' : 'TP'}  ${signedUsd(pnl)} · ${Math.abs(at - entry).toFixed(2)} b${note ? ` · ${note}` : ''}`;
   };
   // Holá pozice bez SL nemá co posouvat na BE.
-  const be = controls.manageable || (legsLive && summary.stop != null) ? liveBreakEven(summary, controls.entryAvg) : null;
+  const be = controls.manageable || (legsLive && summary.stop != null) ? liveBreakEven(summary, controls.entryAvg ?? (legsLive ? entry : null)) : null;
   const openPnl = liveShownOpenPnl(summary, controls.displayOpenPnl);
   // Fill wins immediately: a pending move must never overwrite the actual position entry.
   const pendingEntry = position ? undefined : controls.pending?.entry;

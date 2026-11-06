@@ -3649,7 +3649,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const reportedRejectedManualLegs = new Set<string>();
   const reportRejectedManualLeg = (record: CopierManualEntryRecord, brokerOrderId: string, rejectReason?: string) => {
     // Paměť chrání před souběhem ingress + commit ACK, než se durable značka zapíše.
-    if (record.legRejectedAt != null || reportedRejectedManualLegs.has(brokerOrderId)) return;
+    // Holý záznam nese nohy postupně: značka na záznamu by další odmítnutí utišila.
+    if ((record.legRejectedAt != null && record.bare !== true) || reportedRejectedManualLegs.has(brokerOrderId)) return;
     reportedRejectedManualLegs.add(brokerOrderId);
     const leg = record.stopBrokerOrderId === brokerOrderId ? 'SL' : 'TP';
     manualEntryAudit(record.operationId, 'unknown', `broker odmítl ${leg} nohu ${brokerOrderId}${rejectReason ? `: ${rejectReason.slice(0, 120)}` : ''}`, brokerOrderId);
@@ -4927,7 +4928,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
         if (now - since < BARE_LEG_FLAT_SETTLE_MS) continue;
         bareLegFlatReported.add(legId);
-        failClosed(new Error(`Noha ${legId} leadera na ${record.request.symbol} dál pracuje, i když je účet flat: může otevřít novou pozici — zruš ji v Tradovate nebo dej Flatten`), { autoClose: false });
+        failClosed(new Error(`Noha ${legId} leadera na ${record.request.symbol} dál pracuje, i když je účet flat: může otevřít novou pozici — zruš ji v Tradovate nebo dej Flatten`), { autoClose: false, recordWhenDisarmed: true });
       }
     }
   };
@@ -6173,7 +6174,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     await verifyHeldMoves(order);
     const action = manualOrderActionRecords().find(record => record.status === 'unknown' && record.targetBrokerOrderId === order.brokerOrderId);
     // Zavření obchodu (2d) se dořeší jen stavem pozice čtením, ne koncem příkazu (P4).
-    if (!action || action.action === 'close-position' || action.action === 'attach-brackets') return;
+    // SL a TP po jedné: konec staré nohy nic neříká o novém OCO, řeší se jen auditovaným waiverem.
+    if (!action || action.action === 'close-position' || action.action === 'attach-brackets' || action.action === 'add-leg' || action.action === 'remove-leg') return;
     if (action.action === 'cancel-entry') {
       // C7: konec vstupu ve streamu jen spustí autoritativní čtení (fill může dorazit až po
       // Order(Canceled), INV-TRAD-02) — mimo frontu událostí, nic se neposílá.
@@ -6688,18 +6690,41 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const verifyPosition = async (placedIds: readonly string[], ok: () => Promise<LeaderOrderManageResult>): Promise<LeaderOrderManageResult> => {
         const state = await readLeaderSymbolState(leader, symbol);
         if (!state) {
-          failClosed(new Error(`Ruční vstup ${entryId}: po změně SL/TP nejde ověřit pozici leadera — zkontroluj ji v Tradovate`), { autoClose: false });
+          failClosed(new Error(`Ruční vstup ${entryId}: po změně SL/TP nejde ověřit pozici leadera — zkontroluj ji v Tradovate`), { autoClose: false, recordWhenDisarmed: true });
           return finish('unknown', 'Změna přijata, ale pozici nejde ověřit — zkontroluj leadera.');
         }
-        if (state.net === expectedNet) return ok();
+        if (state.net === expectedNet) {
+          // Přijatý příkaz ještě nepracuje: broker ho mohl odmítnout dřív, než jsme znali id.
+          for (const legId of placedIds) {
+            const read = await boundedManagedOrderLookup(leader, legId);
+            if (read?.completeness !== 'authoritative' || !read.order || !isOpenOrderStatus(read.order.status) || read.order.quantity !== quantity) {
+              failClosed(new Error(`Ruční vstup ${entryId}: nová noha ${legId} nepracuje nebo nejde ověřit — pozice může být bez ochrany, zkontroluj ji v Tradovate`), { autoClose: false, recordWhenDisarmed: true });
+              return finish('unknown', 'Nová noha nepracuje nebo nejde ověřit — zkontroluj pozici.');
+            }
+          }
+          return ok();
+        }
         if (state.net === 0) {
           await Promise.all(placedIds.map(legId => options.broker.cancelOrder(leader, legId).catch(error => options.onError?.(errorOf(error)))));
-          failClosed(new Error(`Ruční vstup ${entryId}: nohy založené na už flat účet — rušíme je, zkontroluj leadera v Tradovate`), { autoClose: false });
+          failClosed(new Error(`Ruční vstup ${entryId}: nohy založené na už flat účet — rušíme je, zkontroluj leadera v Tradovate`), { autoClose: false, recordWhenDisarmed: true });
           return finish('unknown', 'Pozice se mezitím zavřela — nové nohy se ruší, zkontroluj leadera.');
         }
-        failClosed(new Error(`Ruční vstup ${entryId}: pozice leadera ${state.net} po změně SL/TP nesedí s očekávanou ${expectedNet} — zkontroluj ji, případně Flatten`), { autoClose: false });
+        failClosed(new Error(`Ruční vstup ${entryId}: pozice leadera ${state.net} po změně SL/TP nesedí s očekávanou ${expectedNet} — zkontroluj ji, případně Flatten`), { autoClose: false, recordWhenDisarmed: true });
         return finish('unknown', 'Pozice po změně nesedí — zkontroluj leadera.');
       };
+      /** Broker nohu odmítl už ve streamu, dřív než přišel ACK. */
+      const rejectedOnIngress = (legId: string) => terminalLeaderOrdersOnIngress.get(`${leader}:${legId}`) === 'rejected';
+      /** Uložení po přijatém zápisu: selhání = incident, id nohy jinak nikde není. */
+      const persisted = async (save: () => Promise<unknown>): Promise<boolean> => {
+        try {
+          await save();
+          return true;
+        } catch (error) {
+          failClosed(new Error(`Ruční vstup ${entryId}: nohy u brokera vznikly, ale nepodařilo se je uložit (${errorOf(error).message}) — zkontroluj pozici`), { autoClose: false, recordWhenDisarmed: true });
+          return false;
+        }
+      };
+      const notSaved = 'Nohy nejdou uložit — zkontroluj pozici v Tradovate.';
       const tag = `${entry.tag}${command.operationId.slice(-4)}`;
       if (clock() >= deadlineAt) return finish('not-sent', 'Platnost příkazu vypršela — nic se neodeslalo.');
       const late = manualEntryQueueFence() !== queuedFence ? 'Mezitím se změnil stav leadera — nic se neodeslalo.' : lateBlock();
@@ -6712,8 +6737,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         });
         trackManageWrite(command.operationId, raw);
         const outcome = await write(raw);
-        if (outcome === 'timeout' || outcome instanceof Error) return finish('unknown', 'Broker posun nepotvrdil — zkontroluj nohu v Tradovate.', currentLegId!);
-        await saveLegs({ stopId, targetId, stop: leg === 'stopLoss' ? newPrice : stopPrice, target: leg === 'takeProfit' ? newPrice : targetPrice });
+        if (outcome instanceof Error && definitiveBrokerRejection(outcome)) {
+          return finish('rejected', `Broker posun odmítl (${outcome.message.slice(0, 120)}). Noha se nezměnila.`, currentLegId!);
+        }
+        // Prázdná odpověď nic nedokazuje: cena se ověří čtením, jinak se dořeší jako běžný posun.
+        const read = outcome === 'timeout' || outcome instanceof Error ? null : await boundedManagedOrderLookup(leader, currentLegId!);
+        const readPrice = read?.completeness === 'authoritative' && read.order ? (leg === 'stopLoss' ? read.order.stopPrice : read.order.limitPrice) : null;
+        if (readPrice !== newPrice) {
+          const result = await finish('unknown', 'Broker posun nepotvrdil — ověřuji čtením, zkontroluj nohu v Tradovate.', currentLegId!);
+          scheduleManualOrderActionLookup(command.operationId);
+          return result;
+        }
+        if (!await persisted(() => saveLegs({ stopId, targetId, stop: leg === 'stopLoss' ? newPrice : stopPrice, target: leg === 'takeProfit' ? newPrice : targetPrice }))) return finish('unknown', notSaved, currentLegId!);
         return finish('acknowledged', undefined, currentLegId!);
       }
 
@@ -6723,15 +6758,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const verdict = await cancelVerdict(currentLegId!);
         if (verdict === 'filled') return finish('rejected', `${leg === 'stopLoss' ? 'SL' : 'TP'} se mezitím vyplnil.`, currentLegId!);
         if (verdict !== 'canceled') {
-          failClosed(new Error(`Ruční vstup ${entryId}: zrušení ${leg === 'stopLoss' ? 'SL' : 'TP'} bez jednoznačného výsledku — zkontroluj nohy leadera`), { autoClose: false });
+          failClosed(new Error(`Ruční vstup ${entryId}: zrušení ${leg === 'stopLoss' ? 'SL' : 'TP'} bez jednoznačného výsledku — zkontroluj nohy leadera`), { autoClose: false, recordWhenDisarmed: true });
           return finish('unknown', outcome instanceof Error ? `Zrušení selhalo (${outcome.message.slice(0, 120)}) — zkontroluj nohu.` : 'Broker zrušení nepotvrdil — zkontroluj nohu.', currentLegId!);
         }
         const otherId = leg === 'stopLoss' ? targetId : stopId;
-        await saveLegs({ stopId: leg === 'stopLoss' ? null : stopId, targetId: leg === 'takeProfit' ? null : targetId, stop: leg === 'stopLoss' ? null : stopPrice, target: leg === 'takeProfit' ? null : targetPrice });
+        if (!await persisted(() => saveLegs({ stopId: leg === 'stopLoss' ? null : stopId, targetId: leg === 'takeProfit' ? null : targetId, stop: leg === 'stopLoss' ? null : stopPrice, target: leg === 'takeProfit' ? null : targetPrice }))) return finish('unknown', notSaved, currentLegId!);
         if (otherId) {
           const partner = await boundedManagedOrderLookup(leader, otherId);
           if (partner?.completeness !== 'authoritative' || !partner.order || !isOpenOrderStatus(partner.order.status)) {
-            failClosed(new Error(`Ruční vstup ${entryId}: po zrušení jedné nohy druhá nepracuje nebo nejde ověřit — zkontroluj pozici, může být bez ochrany`), { autoClose: false });
+            failClosed(new Error(`Ruční vstup ${entryId}: po zrušení jedné nohy druhá nepracuje nebo nejde ověřit — zkontroluj pozici, může být bez ochrany`), { autoClose: false, recordWhenDisarmed: true });
             return finish('unknown', 'Druhá noha nepracuje nebo nejde ověřit — zkontroluj pozici.', currentLegId!);
           }
         }
@@ -6745,17 +6780,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ...(leg === 'stopLoss' ? { orderType: 'Stop' as const, stopPrice: newPrice! } : { orderType: 'Limit' as const, limitPrice: newPrice! }),
         }));
         if (outcome === 'timeout' || outcome instanceof Error) {
-          failClosed(new Error(`Ruční vstup ${entryId}: přidání ${leg === 'stopLoss' ? 'SL' : 'TP'} bez jednoznačného výsledku — zkontroluj nohy leadera`), { autoClose: false });
+          failClosed(new Error(`Ruční vstup ${entryId}: přidání ${leg === 'stopLoss' ? 'SL' : 'TP'} bez jednoznačného výsledku — zkontroluj nohy leadera`), { autoClose: false, recordWhenDisarmed: true });
           return finish('unknown', 'Broker přidání nepotvrdil — zkontroluj pozici v Tradovate.');
         }
         if (!outcome.accepted && outcome.definitive) return finish('rejected', `Broker nohu odmítl${outcome.rejectReason ? `: ${outcome.rejectReason.slice(0, 160)}` : ''}.`);
         if (!outcome.accepted || !outcome.brokerOrderId) {
-          failClosed(new Error(`Ruční vstup ${entryId}: přidání nohy bez jednoznačného výsledku — zkontroluj nohy leadera`), { autoClose: false });
+          failClosed(new Error(`Ruční vstup ${entryId}: přidání nohy bez jednoznačného výsledku — zkontroluj nohy leadera`), { autoClose: false, recordWhenDisarmed: true });
           return finish('unknown', 'Broker přidání nepotvrdil — zkontroluj pozici v Tradovate.');
         }
         const placedId = outcome.brokerOrderId;
+        if (rejectedOnIngress(placedId)) return finish('rejected', `Broker ${leg === 'stopLoss' ? 'SL' : 'TP'} odmítl. Pozice je bez něj.`);
         rememberLeg(placedId, leg === 'stopLoss' ? 'stop' : 'target', newPrice!, tag);
-        await saveLegs({ stopId: leg === 'stopLoss' ? placedId : null, targetId: leg === 'takeProfit' ? placedId : null, stop: leg === 'stopLoss' ? newPrice : null, target: leg === 'takeProfit' ? newPrice : null });
+        if (!await persisted(() => saveLegs({ stopId: leg === 'stopLoss' ? placedId : null, targetId: leg === 'takeProfit' ? placedId : null, stop: leg === 'stopLoss' ? newPrice : null, target: leg === 'takeProfit' ? newPrice : null }))) return finish('unknown', notSaved, placedId);
         return verifyPosition([placedId], () => finish('acknowledged', undefined, placedId));
       }
 
@@ -6774,20 +6810,32 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // Jen SL → SL + TP: OCO, potom zrušit starý SL. Krátce dva SL (brána ≥ 8 ticků), nikdy bez SL.
         const outcome = await placeOco();
         if (outcome === 'timeout' || outcome instanceof Error || (!outcome.accepted && !outcome.definitive)) {
-          failClosed(new Error(`Ruční vstup ${entryId}: přidání TP bez jednoznačného výsledku — možné dva SL, zkontroluj nohy leadera`), { autoClose: false });
+          failClosed(new Error(`Ruční vstup ${entryId}: přidání TP bez jednoznačného výsledku — možné dva SL, zkontroluj nohy leadera`), { autoClose: false, recordWhenDisarmed: true });
           return finish('unknown', 'Broker přidání nepotvrdil — možné dva SL, zkontroluj pozici.');
         }
         if (!outcome.accepted) return finish('rejected', `Broker TP odmítl${outcome.rejectReason ? `: ${outcome.rejectReason.slice(0, 160)}` : ''}. SL dál běží.`);
         const ids = { stopId: outcome.firstBrokerOrderId, targetId: outcome.secondBrokerOrderId };
+        // Nový SL odmítnutý ve streamu: starý SL zůstává, jinak by pozice zůstala bez ochrany.
+        if (rejectedOnIngress(ids.stopId) || rejectedOnIngress(ids.targetId)) {
+          await Promise.all([ids.stopId, ids.targetId].filter(legId => !rejectedOnIngress(legId))
+            .map(legId => options.broker.cancelOrder(leader, legId).catch(error => options.onError?.(errorOf(error)))));
+          failClosed(new Error(`Ruční vstup ${entryId}: broker odmítl nové OCO, starý SL ${stopId} zůstává — zkontroluj nohy leadera`), { autoClose: false, recordWhenDisarmed: true });
+          return finish('unknown', 'Broker nové nohy odmítl, starý SL zůstává — zkontroluj pozici.');
+        }
         rememberLeg(ids.stopId, 'stop', finalStop, `${tag}s`);
         rememberLeg(ids.targetId, 'target', finalTarget, `${tag}t`);
         ownBareLegIds.add(stopId);
-        await saveLegs({ ...ids, stop: finalStop, target: finalTarget }, 'oco-acked', { newStopId: ids.stopId, newTargetId: ids.targetId });
+        const saved = await persisted(() => saveLegs({ ...ids, stop: finalStop, target: finalTarget }, 'oco-acked', { newStopId: ids.stopId, newTargetId: ids.targetId }));
         // Starý SL se ruší vždy: i na flat a po brzdě by jinak zůstal viset a mohl otevřít pozici.
         const canceled = await write(options.broker.cancelOrder(leader, stopId));
         const verdict = await cancelVerdict(stopId);
+        if (!saved) return finish('unknown', notSaved, ids.stopId);
+        if (verdict === 'filled') {
+          // Starý SL se vyplnil: pozice je zavřená nebo otočená, nové nohy nesmí zůstat viset.
+          return verifyPosition([ids.stopId, ids.targetId], () => finish('acknowledged', 'Starý SL se vyplnil, zkontroluj pozici.', ids.stopId));
+        }
         if (verdict !== 'canceled') {
-          failClosed(new Error(`Ruční vstup ${entryId}: starý SL ${stopId} se nepodařilo zrušit (${canceled instanceof Error ? canceled.message.slice(0, 120) : verdict}) — DVA SL, možné otočení pozice, zkontroluj leadera, případně Flatten`), { autoClose: false });
+          failClosed(new Error(`Ruční vstup ${entryId}: starý SL ${stopId} se nepodařilo zrušit (${canceled instanceof Error ? canceled.message.slice(0, 120) : verdict}) — DVA SL, možné otočení pozice, zkontroluj leadera, případně Flatten`), { autoClose: false, recordWhenDisarmed: true });
           return finish('unknown', 'Starý SL se nepodařilo zrušit — běží dva SL, zkontroluj pozici.', ids.stopId);
         }
         return verifyPosition([ids.stopId, ids.targetId], () => finish('acknowledged', undefined, ids.stopId));
@@ -6797,23 +6845,28 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const verdict = await cancelVerdict(targetId!);
       if (verdict === 'filled') return finish('rejected', 'TP se mezitím vyplnil.', targetId!);
       if (verdict !== 'canceled') {
-        failClosed(new Error(`Ruční vstup ${entryId}: zrušení TP před přidáním SL bez výsledku (${canceled instanceof Error ? canceled.message.slice(0, 120) : verdict}) — zkontroluj nohy leadera`), { autoClose: false });
+        failClosed(new Error(`Ruční vstup ${entryId}: zrušení TP před přidáním SL bez výsledku (${canceled instanceof Error ? canceled.message.slice(0, 120) : verdict}) — zkontroluj nohy leadera`), { autoClose: false, recordWhenDisarmed: true });
         return finish('unknown', 'Broker zrušení TP nepotvrdil — SL se nepřidal, zkontroluj pozici.', targetId!);
       }
-      await saveLegs({ stopId: null, targetId: null, stop: null, target: null }, 'target-canceled');
+      if (!await persisted(() => saveLegs({ stopId: null, targetId: null, stop: null, target: null }, 'target-canceled'))) return finish('unknown', 'TP je zrušený, záznam nejde uložit — zkontroluj pozici.');
       // Krok 2 bez frontové fence: vlastní Canceled ji posouvá.
       const secondLate = lateBlock();
       if (secondLate) return finish('rejected', `TP je zrušený a SL se nepřidal: ${secondLate}`);
       const outcome = await placeOco();
       if (outcome === 'timeout' || outcome instanceof Error || (!outcome.accepted && !outcome.definitive)) {
-        failClosed(new Error(`Ruční vstup ${entryId}: TP je zrušený a přidání SL + TP nemá jednoznačný výsledek — zkontroluj pozici, může být bez ochrany`), { autoClose: false });
+        failClosed(new Error(`Ruční vstup ${entryId}: TP je zrušený a přidání SL + TP nemá jednoznačný výsledek — zkontroluj pozici, může být bez ochrany`), { autoClose: false, recordWhenDisarmed: true });
         return finish('unknown', 'TP je zrušený a nový SL + TP není jistý — zkontroluj pozici.');
       }
       if (!outcome.accepted) return finish('rejected', `TP je zrušený a broker nový SL + TP odmítl${outcome.rejectReason ? `: ${outcome.rejectReason.slice(0, 160)}` : ''}. Pozice je bez nohou.`);
       const ids = { stopId: outcome.firstBrokerOrderId, targetId: outcome.secondBrokerOrderId };
+      if (rejectedOnIngress(ids.stopId) || rejectedOnIngress(ids.targetId)) {
+        await Promise.all([ids.stopId, ids.targetId].filter(legId => !rejectedOnIngress(legId))
+          .map(legId => options.broker.cancelOrder(leader, legId).catch(error => options.onError?.(errorOf(error)))));
+        return finish('rejected', 'TP je zrušený a broker nový SL + TP odmítl. Pozice je bez nohou.');
+      }
       rememberLeg(ids.stopId, 'stop', finalStop, `${tag}s`);
       rememberLeg(ids.targetId, 'target', finalTarget, `${tag}t`);
-      await saveLegs({ ...ids, stop: finalStop, target: finalTarget }, undefined, { newStopId: ids.stopId, newTargetId: ids.targetId });
+      if (!await persisted(() => saveLegs({ ...ids, stop: finalStop, target: finalTarget }, undefined, { newStopId: ids.stopId, newTargetId: ids.targetId }))) return finish('unknown', notSaved, ids.stopId);
       return verifyPosition([ids.stopId, ids.targetId], () => finish('acknowledged', undefined, ids.stopId));
     };
   };
@@ -22076,11 +22129,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         : record)),
     }));
   }
+  for (const record of manualEntryRecords()) {
+    if (record.bare !== true) continue;
+    if (record.stopBrokerOrderId) ownBareLegIds.add(record.stopBrokerOrderId);
+    if (record.targetBrokerOrderId) ownBareLegIds.add(record.targetBrokerOrderId);
+  }
   for (const record of restartedSingleLeg) {
     const text = record.phase === 'oco-acked' ? `MOŽNÉ DVA SL (starý ${record.oldLegId ?? '?'}): zkontroluj leadera, případně Flatten`
       : record.phase === 'target-canceled' ? 'TP je zrušený, nový SL a TP nevznikl nebo není jistý: zkontroluj leadera'
         : 'zkontroluj nohy leadera, výsledek neznámý';
-    failClosed(new Error(`Změna SL/TP ${record.entryOperationId}: worker se restartoval během zápisu — ${text}`), { autoClose: false });
+    failClosed(new Error(`Změna SL/TP ${record.entryOperationId}: worker se restartoval během zápisu — ${text}`), { autoClose: false, recordWhenDisarmed: true });
   }
   if (restartedAttach) {
     failClosed(new Error(`Doplnění SL/TP ${restartedAttach.entryOperationId}: worker se restartoval během zápisu — zkontroluj leadera, výsledek neznámý`), { autoClose: false, recordWhenDisarmed: true });

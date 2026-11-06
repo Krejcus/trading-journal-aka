@@ -322,8 +322,9 @@ export function LivePhoneOrderLines({
         // ✎ jen otevře list správy; příkaz odejde až tlačítkem v listu.
         if (actionId === LIVE_PHONE_MANAGE_ACTION.id) { if (line.kind !== 'entry') onManage?.(line.kind); return; }
         if (actionId !== 'break-even') return;
-        const be = liveBreakEven(guardAt?.(Date.now()) ?? summary, entryAvg);
+        const be = liveBreakEven(guardAt?.(Date.now()) ?? summary, entryAvg ?? (bareLeg ? summary.entry : null));
         if (be.blocked || be.price == null) { onNotice(be.blocked ?? 'BE teď nejde.'); return; }
+        if (bareLeg && summary.stop != null) { sendLeg({ kind: 'move', leg: 'stopLoss', price: be.price, current: summary.stop }); return; }
         void run('move-stop', summary.stop, be.price, 'stopLoss');
       }}
       onAddBracket={(line, kind, price) => {
