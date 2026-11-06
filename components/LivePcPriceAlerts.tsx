@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { AudioLines, Bell, Check, ChevronDown, Monitor, Smartphone, Trash2, Upload, VolumeX, X } from 'lucide-react';
+import { AudioLines, Bell, Check, ChevronDown, Monitor, Smartphone, Trash2, Upload, Volume2, VolumeX, X } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import './day/dayJournal.css';
 import TradingViewColorPicker from './TradingViewColorPicker';
@@ -12,7 +12,7 @@ import {
 import type { TradeToast } from '../lib/liveTradeToasts';
 import { alertVoiceText, speakAlertText } from '../services/alertVoice';
 import { liveFillAudio } from '../services/liveFillAudio';
-import { addCustomAlertSound, listCustomAlertSounds, playAlertTone, removeCustomAlertSound, type CustomAlertSound } from '../services/priceAlertSounds';
+import { addCustomAlertSound, getAlertSoundVolume, listCustomAlertSounds, playAlertTone, removeCustomAlertSound, setAlertSoundVolume, type CustomAlertSound } from '../services/priceAlertSounds';
 import { ALERT_TONE_GROUPS, DEFAULT_ALERT_TONE, alertToneName, customToneId, customToneValue } from '../lib/priceAlertTones';
 import { useFreshPriceAlertEvents, usePriceAlertStore } from '../services/priceAlertStoreHook';
 
@@ -327,6 +327,7 @@ function SoundPicker({ isDark, sound, tone, onChange }: {
   const [open, setOpen] = useState(false);
   const [customs, setCustoms] = useState<CustomAlertSound[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
+  const [volume, setVolume] = useState(getAlertSoundVolume);
   const [position, setPosition] = useState({ left: 0, top: 0, maxHeight: 320 });
   const buttonRef = useRef<HTMLButtonElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -403,6 +404,13 @@ function SoundPicker({ isDark, sound, tone, onChange }: {
         <button type="button" role="option" aria-selected={!sound} onClick={() => { setProblem(null); onChange(false, tone); }} className={`${row} ${selected(!sound)}`}>
           <VolumeX size={13} aria-hidden />Vypnuto{!sound && <Check size={13} className="ml-auto" aria-hidden />}
         </button>
+        <label className={`flex h-7 items-center gap-2 px-2 text-[12px] font-medium ${muted(isDark)}`} title="Hlasitost všech zvuků upozornění na tomto zařízení">
+          <Volume2 size={13} className="shrink-0" aria-hidden />
+          <input type="range" min={0} max={100} step={5} value={volume} aria-label="Hlasitost zvuků upozornění" className="h-1 min-w-0 flex-1 accent-indigo-500"
+            onChange={event => { const next = Number(event.target.value); setVolume(next); setAlertSoundVolume(next); }}
+            onPointerUp={() => { if (sound) { liveFillAudio.unlock(); void playAlertTone(tone); } }} />
+          <span className="w-8 shrink-0 text-right font-mono text-[10.5px] tabular-nums">{volume} %</span>
+        </label>
         <button type="button" onClick={() => fileRef.current?.click()} className={`${row} ${selected(false)}`}>
           <Upload size={13} aria-hidden />Nahrát vlastní zvuk…
         </button>

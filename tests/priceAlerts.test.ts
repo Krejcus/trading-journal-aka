@@ -1,10 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, alertTagInk, alertConditionFor, alertLineCss, alertTitle,
   createLocalPriceAlertStore, movedAlert, newPriceAlert, freshPriceAlertEvents, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus, readPriceAlertState,
 } from '../lib/priceAlerts';
-import { ALERT_TONE_GROUPS, CUSTOM_SOUND_MAX_BYTES, CUSTOM_SOUND_MAX_COUNT, alertToneNotes, customSoundProblem, isAlertTone } from '../lib/priceAlertTones';
+import { ALERT_SOUNDS_BASE, ALERT_SOUND_VOLUME_DEFAULT, ALERT_TONE_GROUPS, CUSTOM_SOUND_MAX_BYTES, CUSTOM_SOUND_MAX_COUNT, DEFAULT_ALERT_TONE, alertToneNotes, alertToneUrl, clampAlertSoundVolume, customSoundProblem, isAlertTone } from '../lib/priceAlertTones';
 import { LIVE_FILL_CUE_PATTERNS } from '../services/liveFillAudio';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../lib/liveFillMarkers';
 import { EXTRA_TOAST_MAX, TRADE_TOAST_MAX, capExtraToasts, keepStickyToasts } from '../lib/liveTradeToasts';
@@ -238,30 +238,35 @@ describe('upozornění na cenu na PC', () => {
 
   it('tón upozornění je vlastní, nepůjčuje si tón z pozice', () => {
     const tones = ALERT_TONE_GROUPS.flatMap(group => group.tones);
-    expect(tones.length).toBeGreaterThanOrEqual(37);
-    // Hlasitost má strop, jen agresivní skupina je hlasitější.
-    for (const group of ALERT_TONE_GROUPS) {
-      for (const tone of group.tones) {
-        if (group.name === 'Agresivní') expect(tone.volume, tone.id).toBeLessThanOrEqual(0.35);
-        else expect(tone.volume, tone.id).toBeUndefined();
-      }
-    }
+    expect(tones.length).toBeGreaterThanOrEqual(40);
     expect(new Set(tones.map(tone => tone.id)).size).toBe(tones.length);
     const fills = Object.values(LIVE_FILL_CUE_PATTERNS).map(pattern => JSON.stringify(pattern));
     for (const tone of tones) {
-      expect(tone.notes.length).toBeGreaterThan(0);
-      expect(tone.notes.reduce((sum, note) => sum + note.ms, 0), tone.id).toBeLessThanOrEqual(1_500);
-      expect(fills, tone.id).not.toContain(JSON.stringify(tone.notes.map(({ hz, ms }) => ({ hz, ms }))));
+      expect(Boolean(tone.file) !== Boolean(tone.notes), tone.id).toBe(true);
+      // Nahrávka musí být v public a balík nese svou licenci.
+      if (tone.file) expect(existsSync(`public/sounds/alerts/${tone.file}`), tone.file).toBe(true);
+      if (tone.notes) {
+        expect(tone.notes.reduce((sum, note) => sum + note.ms, 0), tone.id).toBeLessThanOrEqual(1_500);
+        expect(fills, tone.id).not.toContain(JSON.stringify(tone.notes.map(({ hz, ms }) => ({ hz, ms }))));
+        expect(tone.volume, tone.id).toBeLessThanOrEqual(0.35);
+      }
     }
+    expect(read('public/sounds/alerts/License.txt')).toContain('Creative Commons Zero');
     expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/if \(actions\.sound\) void playAlertTone\(alert\?\.channels\.tone\)/);
   });
 
   it('neznámý nebo chybějící zvuk spadne na výchozí; vlastní soubor se ověří', () => {
-    expect(alertToneNotes('neznamy')).toEqual(alertToneNotes('double'));
-    expect(alertToneNotes(null)).toEqual(alertToneNotes('double'));
+    expect(alertToneUrl('neznamy')).toBe(`${ALERT_SOUNDS_BASE}${DEFAULT_ALERT_TONE}.ogg`);
+    expect(alertToneUrl(null)).toBe(`${ALERT_SOUNDS_BASE}${DEFAULT_ALERT_TONE}.ogg`);
+    expect(alertToneUrl('panic')).toBeNull();
+    expect(alertToneUrl('custom:abc-1')).toBeNull();
+    expect(alertToneNotes('custom:abc-1').length).toBeGreaterThan(0);
+    expect(alertToneNotes('confirmation_001').length).toBeGreaterThan(0);
+    expect(clampAlertSoundVolume('140')).toBe(100);
+    expect(clampAlertSoundVolume('x')).toBe(ALERT_SOUND_VOLUME_DEFAULT);
     expect(isAlertTone('custom:abc-1')).toBe(true);
     expect(isAlertTone('custom:../x')).toBe(false);
-    expect(isAlertTone('siren')).toBe(true);
+    expect(isAlertTone('panic')).toBe(true);
     const file = { name: 'a.mp3', type: 'audio/mpeg', size: 1000 };
     expect(customSoundProblem(file, 0)).toBeNull();
     expect(customSoundProblem({ ...file, name: 'a.pdf', type: 'application/pdf' }, 0)).toMatch(/zvukový/);
@@ -274,13 +279,13 @@ describe('upozornění na cenu na PC', () => {
   it('barva z palety a tón přežijí čištění; nesmysl spadne na výchozí', () => {
     const storage = memory({
       [PRICE_ALERTS_STORAGE_KEY]: JSON.stringify([
-        { id: 'a', price: 100, condition: 'up', line: { color: '#E91E63' }, channels: { tone: 'urgent' } },
+        { id: 'a', price: 100, condition: 'up', line: { color: '#E91E63' }, channels: { tone: 'panic' } },
         { id: 'b', price: 100, condition: 'up', line: { color: 'red; x' }, channels: { tone: 'hlasite' } },
       ]),
     });
     const [good, bad] = readPriceAlertState(storage).alerts;
     expect(good.line.color).toBe('#e91e63');
-    expect(good.channels.tone).toBe('urgent');
+    expect(good.channels.tone).toBe('panic');
     expect(bad.line.color).toBe(DEFAULT_PRICE_ALERT.line.color);
     expect(bad.channels.tone).toBeUndefined();
   });

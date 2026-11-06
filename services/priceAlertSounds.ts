@@ -1,5 +1,5 @@
 import { del, get, set } from 'idb-keyval';
-import { CUSTOM_SOUND_MAX_SECONDS, alertToneNotes, alertToneVolume, customSoundProblem, customToneId } from '../lib/priceAlertTones';
+import { ALERT_SOUND_VOLUME_DEFAULT, CUSTOM_SOUND_MAX_SECONDS, alertToneNotes, alertToneUrl, alertToneVolume, clampAlertSoundVolume, customSoundProblem, customToneId } from '../lib/priceAlertTones';
 import { liveFillAudio } from './liveFillAudio';
 
 /**
@@ -12,7 +12,6 @@ export interface CustomAlertSound { id: string; name: string }
 
 const INDEX_KEY = 'alphatrade:alert-sounds:v1';
 const blobKey = (id: string) => `alphatrade:alert-sound:${id}`;
-const VOLUME = 0.8;
 
 export async function listCustomAlertSounds(): Promise<CustomAlertSound[]> {
   try {
@@ -61,31 +60,51 @@ export async function removeCustomAlertSound(id: string): Promise<void> {
   } catch { /* zůstane v seznamu, smazání jde zopakovat */ }
 }
 
+const VOLUME_KEY = 'alphatrade:alert-sound-volume:v1';
+
+/** Hlasitost zvuků upozornění v % (na zařízení, platí pro všechny alerty). */
+export function getAlertSoundVolume(): number {
+  try {
+    const raw = window.localStorage.getItem(VOLUME_KEY);
+    return raw == null ? ALERT_SOUND_VOLUME_DEFAULT : clampAlertSoundVolume(raw);
+  } catch {
+    return ALERT_SOUND_VOLUME_DEFAULT;
+  }
+}
+
+export function setAlertSoundVolume(volume: number): void {
+  try { window.localStorage.setItem(VOLUME_KEY, String(clampAlertSoundVolume(volume))); } catch { /* zůstane výchozí */ }
+}
+
 let playing: HTMLAudioElement | null = null;
 
-const playFile = async (id: string): Promise<boolean> => {
+const playSource = async (source: string | Blob): Promise<boolean> => {
+  const url = typeof source === 'string' ? source : URL.createObjectURL(source);
+  const release = () => { if (typeof source !== 'string') URL.revokeObjectURL(url); };
   try {
-    const blob = await get<Blob>(blobKey(id));
-    if (!blob) return false;
     playing?.pause();
-    const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
-    audio.volume = VOLUME;
-    const release = () => URL.revokeObjectURL(url);
+    audio.volume = getAlertSoundVolume() / 100;
     audio.onended = release;
     audio.onerror = release;
     playing = audio;
     await audio.play();
     return true;
   } catch {
+    release();
     return false;
   }
 };
 
-/** Přehraje vestavěný tón nebo vlastní soubor; když soubor chybí nebo nejde pustit, výchozí tón. */
+const customBlob = async (id: string): Promise<Blob | null> => {
+  try { return (await get<Blob>(blobKey(id))) ?? null; } catch { return null; }
+};
+
+/** Přehraje nahrávku, vlastní soubor nebo složený tón; když soubor nejde pustit, zálohu. */
 export async function playAlertTone(tone: string | null | undefined): Promise<void> {
   const customId = customToneId(tone);
-  if (customId && await playFile(customId)) return;
-  const builtin = customId ? null : tone;
-  liveFillAudio.playNotes(alertToneNotes(builtin), alertToneVolume(builtin));
+  const source = customId ? await customBlob(customId) : alertToneUrl(tone);
+  if (source && await playSource(source)) return;
+  // Výchozí hlasitost tónů je tichá (0,12 / 0,32): posuvník ji škáluje kolem výchozích 80 %.
+  liveFillAudio.playNotes(alertToneNotes(tone), alertToneVolume(tone) * getAlertSoundVolume() / ALERT_SOUND_VOLUME_DEFAULT);
 }
