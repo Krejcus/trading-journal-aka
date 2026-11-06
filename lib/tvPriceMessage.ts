@@ -10,6 +10,8 @@
  */
 
 export const TV_PRICE_EVENT = 'price';
+/** Klient se právě připojil: ať worker hned posílá, zpráva o presence dorazí se zpožděním. Bez obsahu, nic nespouští mimo vlákno ceny. */
+export const TV_PRICE_WAKE_EVENT = 'wake';
 /** Strop velikosti `p`: zpráva nese jen poslední svíčku a kotaci. */
 export const TV_PRICE_MAX_PAYLOAD_CHARS = 2_048;
 

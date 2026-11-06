@@ -1219,6 +1219,8 @@ existující ochranu.
   `server/macCopierCommandRelay.ts` (konfigurace kanálu se předá bez
   čekání), `lib/tvPriceChannelClient.ts` (podpis, přehrání, strop fronty
   ověřování).
+  Kanál ceny nese od 6. 11. 2026 i událost `wake` klient → worker: není to příkaz, nic neautorizuje
+  a účinek má jen ve vlákně ceny, stejný jako presence (INV-WORKER-04).
 - Hlídá test: `tests/copierRelayPriceChannel.test.ts`,
   `tests/tvPriceStreamWiring.test.ts`, `tests/tvPriceChannelClient.test.ts`.
 - Budíček statusu (30. 10. 2026, `docs/LIVE_HOT_PATH_PLAN.md` §5): téma
@@ -1620,7 +1622,10 @@ existující ochranu.
   korekce v 10. s. Do 5 s může toto čtení vzít i `tv-bars`, opraví ho pozdější. Po výpadku
   IBKR nahraje totéž ještě běh ve 40. s, jen s posledním uploadem starším než 45 s
   (nejvýš 3 zápisy/min na kořen, běžně 2). Začátek poslechu (presence) vlákno probudí `wake()`,
-  čte jen kanál ceny; pořád se nic nespouští podle zpráv hlídači. Okamžité posílání (28. 10. 2026): obchod
+  a klient hned po připojení pošle událost `wake` bez obsahu, protože presence dorazí se
+  zpožděním (hypotéza z 6. 11.): stream pak nejvýš 5 s posílá i bez presence. Má stejné účinky
+  jako presence (čtení zdroje včetně přepnutí zdroje, tedy i dostupnost kotace pro Market přes
+  výběr zdroje), žádnou novou schopnost nepřidává, payload se nečte a obsah kotace je dál jen z IBKR. Okamžité posílání (28. 10. 2026): obchod
   z IBKR (`onTrade`) jen naplánuje čtení (`stream.nudge()`, 25 ms spojení
   dávky, rozestup 200 ms, po chybě prodleva 1 s); cesta ceny pro přehrání
   v grafu (`takeTrail`, strop 256 ve zdroji, 64 ve streamu, maže se při

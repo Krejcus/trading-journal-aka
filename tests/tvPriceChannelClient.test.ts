@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -25,6 +27,7 @@ const payload = (seq: number, last = 21010, patch: Partial<TvPricePayload> = {})
 });
 
 interface FakeChannel {
+  wakes?: number;
   topic: string;
   message(envelope: unknown): void;
   status(status: TvPriceChannelStatus): void;
@@ -39,6 +42,10 @@ const setup = (options: {
   verifyTrail?: (envelope: unknown, key: string, payload: TvPricePayload) => Promise<number[] | null>;
   topicBusy?: (topic: string) => boolean;
   releaseTopic?: (topic: string) => void;
+  /** Jako produkční `services/tvPriceChannel.ts`, který hodiny nepředává. */
+  withoutNow?: boolean;
+  wakeThrows?: boolean;
+  onResumeStep?: (step: 'reopen' | 'joined' | 'first-message', value: number) => void;
 } = {}) => {
   const startedAt = Date.now();
   const channels: FakeChannel[] = [];
@@ -58,6 +65,7 @@ const setup = (options: {
         track: async meta => { channel.tracks.push(meta); },
         untrack: async () => { channel.untracks += 1; },
         close: async () => { channel.closed += 1; },
+        wake: () => { channel.wakes = (channel.wakes ?? 0) + 1; if (options.wakeThrows) throw new Error('wake'); },
       };
     },
     verify,
@@ -70,7 +78,8 @@ const setup = (options: {
       foregroundListeners.add(listener);
       return () => foregroundListeners.delete(listener);
     },
-    now: () => T0 + 1_000 + (Date.now() - startedAt),
+    onResumeStep: options.onResumeStep,
+    ...(options.withoutNow ? {} : { now: () => T0 + 1_000 + (Date.now() - startedAt) }),
   });
   const setForeground = (value: boolean) => {
     foreground = value;
@@ -104,6 +113,84 @@ describe('klient kanálu ceny z TV (krok 3)', () => {
     expect(released).toEqual([access.topic]);
     expect(t.channels).toHaveLength(2);
     expect(t.channels[1].topic).toBe(access.topic);
+  });
+
+  it('bez předaných hodin jako v produkci návrat z pozadí kanál otevře znovu a změří kroky (5.–6. 11. to tiše padalo)', () => {
+    const steps: Array<[string, number]> = [];
+    const t = setup({ withoutNow: true, releaseTopic: () => undefined, onResumeStep: (step, value) => { steps.push([step, value]); } });
+    t.client.offerGrant('u1', grant(), true);
+    t.client.addChartInterest();
+    t.channels[0].status('SUBSCRIBED');
+    t.setForeground(false);
+    expect(t.channels[0].untracks).toBe(1);
+    vi.advanceTimersByTime(5_000);
+    t.setForeground(true);
+    expect(t.channels[0].closed).toBe(1);
+    expect(t.channels).toHaveLength(2);
+    vi.advanceTimersByTime(300);
+    t.channels[1].status('SUBSCRIBED');
+    vi.advanceTimersByTime(200);
+    t.channels[1].message({ payload: null });
+    expect(steps).toEqual([['reopen', 1], ['joined', 300], ['first-message', 500]]);
+  });
+
+  it('po připojení pošle worker jedno probuzení; v pozadí, bez zájmu ani ze starého kanálu ne', () => {
+    const t = setup();
+    t.client.offerGrant('u1', grant(), true);
+    t.client.addChartInterest();
+    t.channels[0].status('SUBSCRIBED');
+    expect(t.channels[0].wakes).toBe(1);
+    t.channels[0].status('TIMED_OUT');
+    t.channels[0].status('SUBSCRIBED');
+    expect(t.channels[0].wakes).toBe(2);
+    t.setForeground(false);
+    t.channels[0].status('TIMED_OUT');
+    t.channels[0].status('SUBSCRIBED');
+    expect(t.channels[0].wakes).toBe(2);
+    vi.advanceTimersByTime(5_000);
+    t.setForeground(true);
+    t.channels[0].status('SUBSCRIBED');
+    expect(t.channels[0].wakes).toBe(2);
+    t.channels[1].status('SUBSCRIBED');
+    expect(t.channels[1].wakes).toBe(1);
+  });
+
+  it('chyba probuzení neshodí připojení ani presence', () => {
+    const t = setup({ wakeThrows: true });
+    t.client.offerGrant('u1', grant(), true);
+    t.client.addChartInterest();
+    expect(() => t.channels[0].status('SUBSCRIBED')).not.toThrow();
+    expect(t.channels[0].tracks).toHaveLength(1);
+  });
+
+  it('hlídač doběhl v pozadí: návrat nečeká na jeho pauzu', () => {
+    const steps: Array<[string, number]> = [];
+    const t = setup({ withoutNow: true, onResumeStep: (step, value) => { steps.push([step, value]); } });
+    t.client.offerGrant('u1', grant(), true);
+    t.client.addChartInterest();
+    t.channels[0].status('CHANNEL_ERROR');
+    t.setForeground(false);
+    vi.advanceTimersByTime(TV_SUBSCRIBE_WATCHDOG_MS + 1);
+    expect(t.channels).toHaveLength(1);
+    t.setForeground(true);
+    expect(t.channels).toHaveLength(2);
+    expect(steps).toEqual([['reopen', 0]]);
+  });
+
+  it('návrat bez zájmu o kanál nezapíše měření', () => {
+    const steps: string[] = [];
+    const t = setup({ withoutNow: true, onResumeStep: step => { steps.push(step); } });
+    t.client.offerGrant('u1', grant(), true);
+    t.setForeground(false);
+    vi.advanceTimersByTime(5_000);
+    t.setForeground(true);
+    expect(steps).toEqual([]);
+  });
+
+  it('produkce hodiny nepředává: klient nesmí volat `deps.now` přímo', () => {
+    const client = readFileSync(join(process.cwd(), 'lib/tvPriceChannelClient.ts'), 'utf8');
+    expect(client.match(/deps\.now/g)).toEqual(['deps.now']);
+    expect(client).toContain('const now = deps.now ?? Date.now;');
   });
 
   it('kanál otevře až grant + listová komponenta s pozicí + viditelná appka; presence nese jen pnl', () => {

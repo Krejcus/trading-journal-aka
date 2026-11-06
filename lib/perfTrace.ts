@@ -11,6 +11,7 @@ import { alphaTradeNativePlugin } from '../services/alphaTradeNativePlugin';
  */
 const NAME = /^[a-z0-9:._-]{1,80}$/;
 const MAX_ENTRIES = 400;
+const MAX_RESUME_ENTRIES = 200;
 
 type PerfEntry = { name: string; ms: number; kind: 'mark' | 'dur' };
 declare global {
@@ -35,7 +36,10 @@ const send = (name: string, ms: number) => {
 const record = (entry: PerfEntry) => {
   if (typeof window === 'undefined') return;
   const list = (window.__atPerf ??= []);
-  if (list.length >= MAX_ENTRIES) return;
+  // Běžné dotazy strop vyčerpají za pár minut (6. 11.). Návrat z pozadí se měří dál, je vzácný;
+  // ostatní značky po stropu nejdou nikam, ať appka v produkci nezatěžuje most a log.
+  const resume = entry.name.startsWith('live:resume:');
+  if (list.length >= MAX_ENTRIES && !(resume && list.length < MAX_ENTRIES + MAX_RESUME_ENTRIES)) return;
   list.push(entry);
   if (!originSent) {
     originSent = true;

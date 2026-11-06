@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 — Návrat z pozadí: spadlá obsluha popředí a probuzení workeru (Claude, větev `claude/live-resume-fix-20261106`, nenasazeno)
+
+- **Příčina:** od `6b666ba4` volala obsluha popředí `deps.now()`, ale `services/tvPriceChannel.ts` hodiny nepředává. `TypeError` spolkl `catch`, takže klient nikdy nepřešel do pozadí: bez `untrack`, bez zavření a bez znovuotevření kanálu. Testy to nevidělo, protože hodiny předávaly. Oprava zapíná v produkci poprvé `untrack` při skrytí, zavření po 60 s a reopen při návratu, i na webu.
+- **iPhone 18 Pro Max, první živá cena po návratu:** předtím 3016 a 5826 ms, po opravě 446, 306, 3275 a 3184 ms; kanál připojený za 224–287 ms (malý vzorek, mimo RTH).
+- **Událost `wake` klient → worker:** skupina kolem 3,2 s nezávisí na délce pauzy a podle hypotézy čeká na presence ve workeru. Klient po připojení pošle `wake` bez obsahu a stream drží nejvýš 5 s. Je to **neověřené**: ukáže to až měření s novým workerem, a pokud skupina kolem 3,2 s zůstane, `wake` se má odstranit.
+- `perfTrace` po 400 značkách pouští do logu jen `live:resume:*` (strop 200). Otevřené ověřit po nasazení: web, návrat po 3 s a 60 s.
+
 ### 2026-11-06 ráno — LIVE po výpadku IBKR a návratu z pozadí (Claude, web + worker NASAZENY `c6272563`, iPhone čeká)
 
 - **Podklad:** Filipova videa z iPhonu v 06:30 a 06:33. IBKR hlásilo 1100 v 06:28:41–06:31:26 (i den předtím v 06:28:25, pravděpodobně noční restart, ze dvou případů nejisté), záloha z TV nedala svíčky (`no-1m-chart`), soubor stál do 06:32:03.

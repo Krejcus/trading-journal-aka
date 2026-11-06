@@ -19,6 +19,17 @@ describe('perfTrace (měření na iPhonu)', () => {
     expect(sent.every(entry => Number.isInteger(entry.ms) && /^[a-z0-9:._-]{1,80}$/.test(entry.name))).toBe(true);
   });
 
+  it('po stropu běžné značky nejdou nikam, návrat z pozadí se měří dál a má vlastní strop', async () => {
+    vi.resetModules();
+    const { perfDuration } = await import('../lib/perfTrace');
+    for (let index = 0; index < 500; index += 1) perfDuration('net:x:fetch', 1);
+    plugin.perfTrace.mockClear();
+    perfDuration('net:x:fetch', 1);
+    expect(plugin.perfTrace).not.toHaveBeenCalled();
+    for (let index = 0; index < 300; index += 1) perfDuration('live:resume:joined', 1);
+    expect(plugin.perfTrace).toHaveBeenCalledTimes(200);
+  });
+
   it('URL zkrátí na bezpečný slug bez parametrů', async () => {
     const { perfSlug } = await import('../lib/perfTrace');
     expect(perfSlug('/api/tradovate/oauth/copier-relay?connectionId=abc&commandId=x')).toBe('tradovate-oauth-copier-relay');

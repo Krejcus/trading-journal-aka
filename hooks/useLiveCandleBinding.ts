@@ -6,6 +6,7 @@ import { followLiveEdge, type LiveFollowMemory } from '../lib/liveChartFollow';
 import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../services/marketData';
 import { perfDuration } from '../lib/perfTrace';
 import { notifyLiveLegend } from '../lib/liveLegend';
+import { subscribeAppForeground } from '../lib/appForeground';
 
 /**
  * Napojí živou svíčku na grafy: při každé změně zdroje (nejvýš 1× za snímek)
@@ -343,11 +344,18 @@ export function useLiveCandleBinding(
       schedule();
     };
     document.addEventListener('visibilitychange', onVisible);
+    // WKWebView `visibilitychange` po návratu nemusí poslat (`lib/appForeground.ts`).
+    const offForeground = subscribeAppForeground(foreground => {
+      if (!foreground) return;
+      restartLiveCandleGrace(drawnByController);
+      schedule();
+    });
     schedule();
     return () => {
       activeFeedRef.current = null;
       unsubscribe();
       window.clearInterval(graceTimer);
+      offForeground();
       document.removeEventListener('visibilitychange', onVisible);
       if (frame) window.cancelAnimationFrame(frame);
       if (followFrame) window.cancelAnimationFrame(followFrame);

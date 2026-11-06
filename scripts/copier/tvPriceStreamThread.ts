@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { parentPort, workerData } from 'node:worker_threads';
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
-import { signTvPricePayload, signTvPriceTrail, TV_PRICE_EVENT, type TvPriceEnvelope } from '../../lib/tvPriceMessage';
+import { TV_PRICE_WAKE_EVENT, signTvPricePayload, signTvPriceTrail, TV_PRICE_EVENT, type TvPriceEnvelope } from '../../lib/tvPriceMessage';
 import {
   listTradingViewChartTargets,
   TradingViewCdpSession,
@@ -10,7 +10,7 @@ import {
 } from '../../services/tradingViewCdpSession';
 import { createIbkrPriceSource, initialPriceSourceSwitch, nextPriceSource, type IbkrPriceSource } from '../../services/ibkrPriceSource';
 import { ibkrAlertNeedsTvCheck, ibkrConnectionProblem, initialIbkrAlertState, nextIbkrAlert } from '../../services/ibkrAlertState';
-import { createTvPriceStream, realtimeChannelCanPush, type TvPriceStream, type TvStreamMeta, type TvStreamReading } from '../../services/tradingViewPriceStream';
+import { TV_STREAM_WAKE_HOLD_MS, tvStreamWanted, createTvPriceStream, realtimeChannelCanPush, type TvPriceStream, type TvStreamMeta, type TvStreamReading } from '../../services/tradingViewPriceStream';
 
 /**
  * Vstup vlákna kanálu ceny z TradingView (samostatný bundle
@@ -62,6 +62,7 @@ let channel: RealtimeChannel | null = null;
 let joined = false;
 let synced = false;
 let demand = false;
+let wakeUntil = 0;
 let session: TradingViewCdpSession | null = null;
 let pane = -1;
 let meta: TvStreamMeta = { front: null, switchAt: null };
@@ -206,6 +207,7 @@ const computeDemand = () => {
 const closeChannel = async () => {
   const currentClient = client;
   const currentChannel = channel;
+  wakeUntil = 0;
   client = null;
   channel = null;
   joined = false;
@@ -231,6 +233,13 @@ const openChannel = (cfg: Required<Pick<StreamConfig, 'url' | 'anonKey' | 'topic
     synced = true;
     computeDemand();
   });
+  // Klient se připojil: poslat hned, presence může dorazit se zpožděním (hypotéza z měření 6. 11.). Má stejné
+  // účinky jako presence (čtení zdroje včetně přepnutí zdroje), žádnou novou schopnost nepřidává.
+  createdChannel.on('broadcast', { event: TV_PRICE_WAKE_EVENT }, () => {
+    if (channel !== createdChannel) return;
+    wakeUntil = Date.now() + TV_STREAM_WAKE_HOLD_MS;
+    stream?.wake();
+  });
   createdChannel.subscribe(status => {
     if (channel !== createdChannel) return;
     joined = status === 'SUBSCRIBED';
@@ -251,7 +260,7 @@ const stopAll = async () => {
 const createStream = () => createTvPriceStream({
   read,
   meta: () => (sourceSwitch.active === 'ibkr' ? ibkrMeta : meta),
-  demand: () => demand,
+  demand: () => tvStreamWanted(demand, wakeUntil, Date.now()),
   ready: () => joined && synced,
   // Klíč se čte z aktuální konfigurace — změna tajemství na serveru přijde bez restartu.
   sign: payload => config?.key ? signTvPricePayload(payload, config.key) : Promise.resolve(null),

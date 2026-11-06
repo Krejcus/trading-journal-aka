@@ -12,7 +12,7 @@ import type { TvPriceStore } from './tvPriceStore';
  *   kvůli grantu (status z něj se nepřijímá). Změna tématu = odhlásit kanál
  *   a vyprázdnit store.
  * - Presence `{ pnl: true }` hlásí jen viditelná appka s připojenou listovou
- *   komponentou otevřeného P&L — bez ní worker nestreamuje vůbec. Při
+ *   komponentou otevřeného P&L — bez ní worker nestreamuje (kromě krátké výdrže po `wake`). Při
  *   přechodu appky do pozadí se odhlásí hned (iOS JS brzy uspí).
  * - Ověření má strop času a frontu každého kanálu zvlášť: visící ověření
  *   nezablokuje nové téma.
@@ -42,6 +42,8 @@ export interface TvPriceChannelHandle {
   track(meta: { pnl: boolean; chart: boolean }): Promise<unknown>;
   untrack(): Promise<unknown>;
   close(): Promise<unknown>;
+  /** Ať worker začne posílat hned po připojení. */
+  wake?(): unknown;
 }
 
 export interface TvPriceChannelClientDeps {
@@ -64,8 +66,8 @@ export interface TvPriceChannelClientDeps {
   hasWebCrypto(): boolean;
   isForeground(): boolean;
   subscribeForeground(listener: (foreground: boolean) => void): () => void;
-  /** Měření: od návratu z pozadí po připojení kanálu. */
-  onResumeJoined?(ms: number): void;
+  /** Měření návratu z pozadí: `reopen` 1/0 (kanál se otevírá znovu), `joined` a `first-message` v ms od návratu. */
+  onResumeStep?(step: 'reopen' | 'joined' | 'first-message', value: number): void;
   now?: () => number;
   setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
   clearTimeoutImpl?: (timer: unknown) => void;
@@ -232,6 +234,11 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
 
   const onMessage = (owner: number, envelope: unknown) => {
     if (owner !== generation || !grant) return;
+    if (resumedAt !== null) {
+      const ms = now() - resumedAt;
+      resumedAt = null;
+      safe(() => deps.onResumeStep?.('first-message', ms));
+    }
     store.noteReceived();
     const current = queue;
     if (current.pending >= TV_VERIFY_QUEUE_MAX) {
@@ -278,14 +285,17 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
       watchdogTimer = null;
       joined = true;
       if (resumedAt !== null) {
-        const ms = deps.now() - resumedAt;
-        resumedAt = null;
-        safe(() => deps.onResumeJoined?.(ms));
+        const ms = now() - resumedAt;
+        safe(() => deps.onResumeStep?.('joined', ms));
       }
       // Po (re)joinu server presence nezná — ohlásit znovu.
       trackedMeta = null;
       store.setLink('joined');
       track();
+      if (wanted() && channel) {
+        const current = channel;
+        safe(() => current.wake?.());
+      }
       return;
     }
     joined = false;
@@ -383,13 +393,19 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
       unsubscribeForeground = deps.subscribeForeground(next => {
         try {
           if (foreground && !next) {
-            hiddenAt = deps.now();
+            hiddenAt = now();
             resumedAt = null;
           }
-          const reopen = !foreground && next && channel !== null && hiddenAt !== null && deps.now() - hiddenAt >= TV_RESUME_REOPEN_AFTER_MS;
+          const longHidden = !foreground && next && hiddenAt !== null && now() - hiddenAt >= TV_RESUME_REOPEN_AFTER_MS;
+          const reopen = longHidden && channel !== null;
+          // Hlídač mohl doběhnout v pozadí; jeho pauza by zbytečně zdržela návrat.
+          if (longHidden) watchdogHold = false;
           foreground = next;
+          if (longHidden && wanted()) {
+            resumedAt = now();
+            safe(() => deps.onResumeStep?.('reopen', reopen ? 1 : 0));
+          }
           if (reopen) {
-            resumedAt = deps.now();
             closeChannel('resume');
             // Mrtvý socket by starý kanál odebíral dlouho a nový by na něj čekal.
             if (grant) safe(() => deps.releaseTopic?.(grant!.topic));

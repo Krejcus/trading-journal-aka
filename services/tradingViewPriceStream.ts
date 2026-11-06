@@ -3,7 +3,7 @@ import { TV_PRICE_TRAIL_MAX, type TvPriceEnvelope, type TvPricePayload, type TvP
 /**
  * Jádro kanálu ceny z TradingView (běží ve vlákně workeru, INV-WORKER-04).
  * Čte poslední svíčku a kotaci vybraného panelu a posílá podepsané zprávy
- * jen když se dívá klient (presence `pnl`/`chart`) a kanál je připojený.
+ * jen když se dívá klient (presence `pnl`/`chart`, krátce i po `wake`) a kanál je připojený.
  * Jen zobrazení — nic odsud nevstupuje do kopírky ani do rozhodování
  * (pravidlo v `lib/tradingViewBars.ts`, INV-UI-04).
  *
@@ -12,6 +12,15 @@ import { TV_PRICE_TRAIL_MAX, type TvPriceEnvelope, type TvPricePayload, type TvP
  */
 
 export const TV_STREAM_FAST_MS = 250;
+/** Událost `wake` od klienta drží stream jen krátce: mezitím dorazí presence. */
+export const TV_STREAM_WAKE_HOLD_MS = 5_000;
+
+/** Má stream číst a posílat: někdo poslouchá, nebo klient právě ohlásil připojení. Skok hodin výdrž neprodlouží. */
+export function tvStreamWanted(demand: boolean, wakeUntil: number, now: number): boolean {
+  if (demand) return true;
+  const left = wakeUntil - now;
+  return left > 0 && left <= TV_STREAM_WAKE_HOLD_MS;
+}
 export const TV_STREAM_IDLE_CHECK_MS = 1_000;
 /** I beze změny ceny aspoň 1 zpráva/s — ticho až ~3 s nesmí vypadat jako výpadek. */
 export const TV_STREAM_HEARTBEAT_MS = 1_000;
@@ -60,7 +69,7 @@ export interface TvPriceStreamDeps {
   /** Jedno read-only čtení vybraného panelu; `null` = panel teď není k dispozici. */
   read: () => Promise<TvStreamReading | null>;
   meta: () => TvStreamMeta;
-  /** Presence: některý viditelný klient zobrazuje P&L nebo živý graf. */
+  /** Presence nebo krátká výdrž po `wake`: některý viditelný klient zobrazuje P&L nebo živý graf. */
   demand: () => boolean;
   /** Kanál je `joined` a po (re)joinu přišel presence `sync`. */
   ready: () => boolean;
@@ -260,6 +269,8 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
     wake() {
       try {
         if (stopped || stats.state !== 'idle' || inFlight || now() < backoffUntil) return;
+        // Tick už je na řadě: další `wake` ho nesmí odsouvat.
+        if (timer !== null && timerDue <= now()) return;
         if (timer !== null) cancel(timer);
         timer = null;
         next(0);

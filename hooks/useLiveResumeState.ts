@@ -20,6 +20,8 @@ export function useLiveResumeState(enabled: boolean, tickAt: number | null): boo
     if (!enabled) return undefined;
     let timer: ReturnType<typeof setTimeout> | null = null;
     if (!isAppForeground()) stateRef.current = liveResumeOnForeground(LIVE_RESUME_IDLE, false, Date.now());
+    // Značka běžela už před zapnutím (`enabled` mezitím spadlo): pojistka 10 s musí platit dál.
+    if (stateRef.current.resuming) timer = setTimeout(() => apply(liveResumeOnTick(stateRef.current, Date.now(), tickAtRef.current)), LIVE_RESUME_MAX_MS + 50);
     const offForeground = subscribeAppForeground(foreground => {
       apply(liveResumeOnForeground(stateRef.current, foreground, Date.now()));
       if (timer) clearTimeout(timer);

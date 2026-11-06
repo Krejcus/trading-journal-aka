@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTvPriceStream, type TvPriceStreamDeps, type TvStreamReading } from '../services/tradingViewPriceStream';
+import { TV_STREAM_WAKE_HOLD_MS, tvStreamWanted, createTvPriceStream, type TvPriceStreamDeps, type TvStreamReading } from '../services/tradingViewPriceStream';
 import type { TvPriceEnvelope, TvPricePayload } from '../lib/tvPriceMessage';
 
 const reading = (close: number, overrides: Partial<TvStreamReading> = {}): TvStreamReading => ({
@@ -174,6 +174,35 @@ describe('jádro kanálu ceny z TV (vlákno workeru)', () => {
     t.stream.wake();
     await vi.advanceTimersByTimeAsync(5);
     expect(t.published).toHaveLength(1);
+    t.stream.stop();
+  });
+
+  it('výdrž po probuzení je krátká, skok hodin ji neprodlouží a presence platí dál', () => {
+    expect(tvStreamWanted(true, 0, 1_000)).toBe(true);
+    expect(tvStreamWanted(false, 0, 1_000)).toBe(false);
+    expect(tvStreamWanted(false, 1_000 + TV_STREAM_WAKE_HOLD_MS, 1_000)).toBe(true);
+    expect(tvStreamWanted(false, 1_000, 1_000)).toBe(false);
+    expect(tvStreamWanted(false, 1_000 + TV_STREAM_WAKE_HOLD_MS + 1, 1_000)).toBe(false);
+  });
+
+  it('probuzení bez `ready` neposílá a opakované nepřekročí strop zpráv', async () => {
+    let isReady = false;
+    const t = setup({ ready: () => isReady, demand: () => true });
+    t.stream.start();
+    await vi.advanceTimersByTimeAsync(10);
+    t.stream.wake();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(t.published).toHaveLength(0);
+    isReady = true;
+    t.stream.wake();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(t.published).toHaveLength(1);
+    for (let index = 0; index < 50; index += 1) {
+      t.stream.wake();
+      t.setReading(reading(29_150 + index));
+      await vi.advanceTimersByTimeAsync(20);
+    }
+    expect(t.published.length).toBeLessThanOrEqual(6);
     t.stream.stop();
   });
 
