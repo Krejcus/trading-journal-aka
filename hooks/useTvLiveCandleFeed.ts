@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import type { LiveCandleFeed } from '../lib/liveCandleFeed';
+import { useMemo, useRef } from 'react';
+import { contractMatchesData, type LiveCandleFeed } from '../lib/liveCandleFeed';
 import { createReplayingLiveCandleFeed } from '../lib/tvLiveCandleReplay';
 import { loadChartSettings } from '../services/chartSettings';
 import { tvPriceChannel, tvPriceStore } from '../services/tvPriceChannel';
@@ -13,7 +13,11 @@ import { acquireTvPriceGrantRefresh } from '../services/tvPriceGrant';
  * živého okna). Volba grafu „Přehrávat ticky z dávky“ (`scales.liveTickReplay`)
  * nechá svíčku projít skutečnými cenami dávky (`lib/tvLiveCandleReplay.ts`).
  */
-export function useTvLiveCandleFeed(enabled: boolean, dayEndMs: number): LiveCandleFeed | null {
+export function useTvLiveCandleFeed(enabled: boolean, dayEndMs: number, requestData?: () => void, dataSource?: string | null): LiveCandleFeed | null {
+  const requestDataRef = useRef(requestData);
+  requestDataRef.current = requestData;
+  const dataSourceRef = useRef(dataSource);
+  dataSourceRef.current = dataSource;
   return useMemo<LiveCandleFeed | null>(() => {
     if (!enabled) return null;
     const feed = createReplayingLiveCandleFeed({
@@ -37,6 +41,8 @@ export function useTvLiveCandleFeed(enabled: boolean, dayEndMs: number): LiveCan
       // Svíčku čte jen napojení na graf (`useLiveCandleBinding`); tady se jen předává.
       current: root => feed.current(root),
       lastPrice: root => feed.lastPrice(root),
+      requestData: () => requestDataRef.current?.(),
+      contractMatchesData: () => contractMatchesData(feed.front?.(), dataSourceRef.current),
       // Svíčka poslední zprávy bez přehrání ticků; panel objednávky dnes bere `lastPrice`.
       final: root => feed.final(root),
     };

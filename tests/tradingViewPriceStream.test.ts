@@ -158,6 +158,25 @@ describe('jádro kanálu ceny z TV (vlákno workeru)', () => {
     t.stream.stop();
   });
 
+  it('wake pošle první cenu hned po začátku poslechu, ne až po kontrole v klidu', async () => {
+    let wanted = false;
+    const t = setup({ demand: () => wanted });
+    t.stream.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(t.stream.stats().state).toBe('idle');
+    t.stream.nudge();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(t.published).toHaveLength(0);
+    wanted = true;
+    t.stream.wake();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(t.published).toHaveLength(1);
+    t.stream.wake();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(t.published).toHaveLength(1);
+    t.stream.stop();
+  });
+
   it('nudge drží rozestup 200 ms od poslední zprávy', async () => {
     const t = setup();
     t.stream.start();

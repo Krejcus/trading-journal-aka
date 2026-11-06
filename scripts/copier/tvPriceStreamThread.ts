@@ -197,8 +197,10 @@ const publish = async (envelope: TvPriceEnvelope): Promise<boolean> => {
 
 const computeDemand = () => {
   const state = channel?.presenceState() ?? {};
+  const before = demand;
   demand = Object.values(state).some(entries => (entries as Array<{ pnl?: unknown; chart?: unknown }>)
     .some(entry => entry?.pnl === true || entry?.chart === true));
+  if (demand && !before) stream?.wake();
 };
 
 const closeChannel = async () => {

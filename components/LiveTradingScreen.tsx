@@ -336,7 +336,8 @@ const LiveTradingScreen: React.FC<Props> = ({
   // jen zobrazení panelu a strop ceny příkazu uživatele), jinak close poslední svíčky.
   // Rychlá cena = čáry návrhu a Market jdou s trhem (dřív svíčka stará i desítky sekund).
   const candleClose = chart.candles.at(-1)?.close ?? null;
-  const tick = useLiveTicketQuote(chart.liveFeed, ROOT, candleClose);
+  const candleEnd = chart.candles.at(-1)?.time;
+  const tick = useLiveTicketQuote(chart.liveFeed, ROOT, candleClose, candleEnd == null ? null : (candleEnd + 60) * 1_000);
   const lastPrice = tick?.price ?? candleClose;
   const quoteInfo = {
     source: chart.liveSource,

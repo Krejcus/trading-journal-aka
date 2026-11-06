@@ -93,6 +93,11 @@ export interface TvPriceStream {
    * streamování nic nedělá. Nikdy nevyhodí.
    */
   nudge(): void;
+  /**
+   * Někdo začal poslouchat: přečíst hned, ne až po kontrole v klidu (`TV_STREAM_IDLE_CHECK_MS`),
+   * ať první cena po návratu appky nečeká zbytečně až sekundu. Nikdy nevyhodí.
+   */
+  wake(): void;
   stats(): TvPriceStreamStats;
 }
 
@@ -251,6 +256,16 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
       stats.state = 'stopped';
       if (timer !== null) cancel(timer);
       timer = null;
+    },
+    wake() {
+      try {
+        if (stopped || stats.state !== 'idle' || inFlight || now() < backoffUntil) return;
+        if (timer !== null) cancel(timer);
+        timer = null;
+        next(0);
+      } catch {
+        stats.errors += 1;
+      }
     },
     nudge() {
       try {

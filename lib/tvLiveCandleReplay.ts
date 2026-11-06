@@ -184,6 +184,9 @@ export function createReplayingLiveCandleFeed(deps: ReplayingLiveCandleFeedDeps)
       const before = active.before && active.before.minute === final.time ? active.before : null;
       return replayedLiveCandle(final, active.trail, before, (now() - active.startedAt) / TV_TRAIL_REPLAY_MS);
     },
+    front() {
+      return deps.view().latest?.front ?? null;
+    },
     lastPrice(root) {
       const view = deps.view();
       return tvLiveCandle(view, root, deps.dayEndMs) ? view.latest?.last ?? null : null;

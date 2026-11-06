@@ -173,7 +173,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const trade = slots.trade ?? null;
   // Živá cena jako panel na PC: kanál ceny grafu, kontrakt jen ze zdroje IBKR (INV-UI-04).
   const candleClose = ctl.chart.candles.at(-1)?.close ?? null;
-  const tick = useLiveTicketQuote(ctl.chart.liveFeed, 'MNQ', candleClose);
+  const candleEnd = ctl.chart.candles.at(-1)?.time;
+  const tick = useLiveTicketQuote(ctl.chart.liveFeed, 'MNQ', candleClose, candleEnd == null ? null : (candleEnd + 60) * 1_000);
   // Po návratu z pozadí je na obrazovce starý stav: musí to být vidět, dokud nepřijde živá cena.
   const resuming = useLiveResumeState(tick != null || ctl.chart.liveStatus === 'live', tick?.at ?? null);
   const contract = previewSymbolFromChartSource(ctl.chart.liveSource);
@@ -209,7 +210,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   };
   const sendBlocked = (market: boolean): string | null => (
     !trade ? 'Odesílání z telefonu tu není dostupné.'
-      : trade.blockedReason ?? (market && !trade.marketSupported ? 'Worker zatím neumí Market.'
+      : trade.blockedReason ?? (resuming ? 'Čekám na živou cenu — nic se neodeslalo.' : market && !trade.marketSupported ? 'Worker zatím neumí Market.'
         : !quote || Date.now() - quote.at > PHONE_MARKET_QUOTE_MAX_AGE_MS ? liveQuoteStaleText(quote?.at ?? null, Date.now())
           : !(quote.symbol ?? (market ? null : trade.frontContract)) ? 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' : null)
   );
@@ -693,7 +694,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             />
           )}
           {/* Při přehrávání je graf historický: lišta by poslala živý Market nad starými svíčkami (N1, 3. 11.). */}
-          {!replay && <LiveTradePill prefs={pill} onPrefs={savePill} bid={quote?.bid ?? lastPrice} ask={quote?.ask ?? lastPrice} onQty={() => setQtySheet(true)} onSide={side => onSide(side, replay)} />}
+          {!replay && <LiveTradePill prefs={pill} onPrefs={savePill} bid={resuming ? null : quote?.bid ?? null} ask={resuming ? null : quote?.ask ?? null} onQty={() => setQtySheet(true)} onSide={side => onSide(side, replay)} />}
           {notice && <LiveChartNotice key={notice.key} text={notice.text} onDone={clearNotice} />}
         </>,
         // Menu ⋯: zvuk / hlas při fillu (U7) — opt-in, výchozí Vypnuto.

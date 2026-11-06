@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { LIVE_CANDLE_MAX_JUMP_RATIO, type LiveCandleFeed } from '../lib/liveCandleFeed';
+import { livePriceWithinBand, type LiveCandleFeed } from '../lib/liveCandleFeed';
 
 /**
  * Živá cena pro panel objednávky LIVE → Graf (výjimka INV-UI-04 schválená
@@ -8,12 +8,14 @@ import { LIVE_CANDLE_MAX_JUMP_RATIO, type LiveCandleFeed } from '../lib/liveCand
  * příkazu uživatele — nikdy do rizika, read modelu
  * ani rozhodnutí kopírky. `at` = kdy cena naposledy přišla (čerstvost Marketu).
  */
-export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, reference: number | null): { price: number; at: number } | null {
+export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, reference: number | null, referenceAt: number | null = null): { price: number; at: number } | null {
   const [quote, setQuote] = useState<{ price: number; at: number } | null>(null);
   // Kontrola kontraktu jako u grafu: tick daleko od svíčky grafu (jiný měsíc v rollu,
   // jiný trh v TradingView) se nepoužije — panel pak bere close svíčky.
   const referenceRef = useRef(reference);
   referenceRef.current = reference;
+  const referenceAtRef = useRef(referenceAt);
+  referenceAtRef.current = referenceAt;
   useEffect(() => {
     if (!feed) { setQuote(null); return undefined; }
     let timer: number | null = null;
@@ -27,7 +29,7 @@ export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, re
       // Poslední cena zprávy bez přehrání ticků: animace grafu se umí zaseknout (2. 11.) a close na přelomu minuty nese minulou minutu.
       const price = feed.lastPrice(root);
       const ref = referenceRef.current;
-      if (price == null || !Number.isFinite(price) || ref == null || Math.abs(price - ref) > Math.abs(ref) * LIVE_CANDLE_MAX_JUMP_RATIO) {
+      if (price == null || !Number.isFinite(price) || ref == null || !livePriceWithinBand(price, ref, referenceAtRef.current, feed.contractMatchesData?.() === true, Date.now())) {
         setQuote(null);
         return;
       }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { LIVE_CANDLES_STALE_MS, LiveCandlesReadError, loadLiveCandles, type LiveCandles } from '../services/liveCandles';
 import type { CandleFileProblem } from '../lib/candleSnapshotValidation';
 import { perfDuration } from '../lib/perfTrace';
@@ -18,6 +18,14 @@ export const LIVE_CANDLES_POLL_PHASE_MS = 20_000;
 export const LIVE_CANDLES_CATCH_UP_MS = 14_000;
 /** Dřívější dohnání: worker nahrává soubor s hotovou předchozí svíčkou už ve 3. s (`TV_LIVE_BARS_EARLY_PHASE_MS`). */
 export const LIVE_CANDLES_EARLY_CATCH_UP_MS = 6_000;
+/** Díra mezi soubory a živou svíčkou: jak často zkoušet soubor a jak dlouho (výpadek IBKR trvá ~3 min). */
+export const LIVE_CANDLES_GAP_RETRY_MS = 10_000;
+export const LIVE_CANDLES_GAP_RETRY_FOR_MS = 5 * 60_000;
+
+/** Soubor už má aspoň předchozí minutu, takže díra je pryč. */
+export function liveCandlesCoverNow(lastBarSec: number | undefined, nowMs: number): boolean {
+  return lastBarSec != null && lastBarSec * 1_000 >= Math.floor(nowMs / 60_000) * 60_000 - 60_000;
+}
 
 /** Prodleva do doháněcího načtení po načtení mimo fázi; `null` = není potřeba. */
 export function liveCandlesCatchUpDelay(nowMs: number): number | null {
@@ -52,6 +60,9 @@ export function useLiveCandles(
   const [status, setStatus] = useState<LiveCandlesStatus>(enabled ? 'loading' : 'unavailable');
   const [problem, setProblem] = useState<CandleFileProblem | null>(null);
   const generation = useRef(0);
+  const requestDataRef = useRef<() => void>(() => undefined);
+  const latestBarSec = useRef<number | undefined>(undefined);
+  const requestDataStable = useCallback(() => requestDataRef.current(), []);
 
   useEffect(() => {
     if (!enabled || !symbol) { setLive(null); setStatus('unavailable'); setProblem(null); return; }
@@ -59,6 +70,9 @@ export function useLiveCandles(
     let timer: ReturnType<typeof setTimeout> | null = null;
     let catchUpTimer: ReturnType<typeof setTimeout> | null = null;
     let inFlight = false;
+    let gapTimer: ReturnType<typeof setTimeout> | null = null;
+    let gapUntil = 0;
+    let gapCooldownUntil = 0;
     // Jiný symbol: data předchozího instrumentu se nesmí ukázat ani chvíli.
     setLive(null);
     setStatus('loading');
@@ -72,6 +86,8 @@ export function useLiveCandles(
         if (generation.current !== current) return;
         if (perfScope) perfDuration(`${perfScope}:chart:live-snapshot-load`, performance.now() - startedAt);
         // Stejný soubor graf znovu nepřestavuje.
+        const noteLatest = (read: LiveCandles | null) => { if (read) latestBarSec.current = read.response.candles.at(-1)?.time; };
+        noteLatest(next);
         const keepIfSame = (read: LiveCandles) => (previous: LiveCandles | null) => (previous?.capturedAt === read.capturedAt ? previous : read);
         if (next) { setLive(keepIfSame(next)); setStatus(next.stale ? 'stale' : 'live'); setProblem(null); }
         else { setProblem('download-failed'); setStatus(previous => (previous === 'loading' ? 'unavailable' : previous)); }
@@ -80,6 +96,7 @@ export function useLiveCandles(
         if (next?.fromWarmCache) {
           const fresh = await loadLiveCandles(symbol);
           if (generation.current !== current) return;
+          noteLatest(fresh);
           if (fresh) { setLive(keepIfSame(fresh)); setStatus(fresh.stale ? 'stale' : 'live'); setProblem(null); }
           else setProblem('download-failed');
         }
@@ -94,6 +111,25 @@ export function useLiveCandles(
     };
     const schedule = () => {
       timer = setTimeout(async () => { await refresh(); if (generation.current === current) schedule(); }, nextLiveCandlesPollDelay(Date.now(), pollMs));
+    };
+    // Živá svíčka předběhla data: zkoušet soubor, dokud díru nedoplní (po výpadku IBKR nahraje worker nový).
+    const retryGap = () => {
+      gapTimer = null;
+      if (generation.current !== current || Date.now() >= gapUntil) return;
+      void refresh().finally(() => {
+        if (generation.current !== current || gapTimer !== null) return;
+        if (liveCandlesCoverNow(latestBarSec.current, Date.now())) { gapUntil = 0; gapCooldownUntil = 0; return; }
+        gapTimer = setTimeout(retryGap, LIVE_CANDLES_GAP_RETRY_MS);
+      });
+    };
+    requestDataRef.current = () => {
+      // Bez stropu by díra na delší výpadek stahovala soubor pořád; běžné čtení ve :20 běží dál.
+      // Soubor díru mezitím doplnil (běžné čtení): pauza pro další výpadek neplatí.
+      if (liveCandlesCoverNow(latestBarSec.current, Date.now())) { gapCooldownUntil = 0; return; }
+      if (gapTimer !== null || Date.now() < gapUntil || Date.now() < gapCooldownUntil) return;
+      gapUntil = Date.now() + LIVE_CANDLES_GAP_RETRY_FOR_MS;
+      gapCooldownUntil = gapUntil + LIVE_CANDLES_GAP_RETRY_FOR_MS;
+      gapTimer = setTimeout(retryGap, 0);
     };
     // Načtení mimo fázi (otevření, návrat do appky): v :00–:12 ještě jedno hned po nahrání souboru.
     const refreshOffPhase = () => {
@@ -111,6 +147,8 @@ export function useLiveCandles(
       generation.current += 1;
       if (timer) clearTimeout(timer);
       if (catchUpTimer) clearTimeout(catchUpTimer);
+      if (gapTimer) clearTimeout(gapTimer);
+      requestDataRef.current = () => undefined;
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [enabled, symbol, pollMs, perfScope]);
@@ -123,5 +161,5 @@ export function useLiveCandles(
     return () => clearTimeout(timer);
   }, [live]);
 
-  return { live, status, problem };
+  return { live, status, problem, requestData: requestDataStable };
 }

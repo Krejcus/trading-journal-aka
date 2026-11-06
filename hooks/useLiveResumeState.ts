@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
 import { LIVE_RESUME_IDLE, LIVE_RESUME_MAX_MS, liveResumeOnForeground, liveResumeOnTick } from '../lib/liveResumeState';
+import { perfDuration } from '../lib/perfTrace';
 
 /**
  * `true` od návratu z pozadí do první nové živé ceny (nejvýš `LIVE_RESUME_MAX_MS`). Jen zobrazení.
@@ -31,7 +32,12 @@ export function useLiveResumeState(enabled: boolean, tickAt: number | null): boo
     };
   }, [enabled]);
   useEffect(() => {
-    if (enabled) apply(liveResumeOnTick(stateRef.current, Date.now(), tickAt));
+    if (!enabled) return;
+    const before = stateRef.current.resuming;
+    const next = liveResumeOnTick(stateRef.current, Date.now(), tickAt);
+    // Měření návratu z pozadí na iPhonu (nativní build trasuje vždy): od popředí k první nové ceně.
+    if (before && !next.resuming && tickAt != null) perfDuration('live:resume:first-tick', tickAt - before.since);
+    apply(next);
   }, [enabled, tickAt]);
   return enabled && resuming;
 }

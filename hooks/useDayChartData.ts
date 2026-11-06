@@ -88,7 +88,7 @@ export function useDayChartData(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- klíč pokrývá den, kotvu i hranici historie
   }, [historicalKey, detailsReady, perfScope]);
 
-  const { live, status: liveStatus, problem: liveProblem } = useLiveCandles('MNQ', {
+  const { live, status: liveStatus, problem: liveProblem, requestData } = useLiveCandles('MNQ', {
     enabled: candleWindow.needsLive,
     perfScope,
   });
@@ -108,7 +108,7 @@ export function useDayChartData(
     historicalError: sameDay?.error, historicalLoading: !sameDay || sameDay.key !== historicalKey,
   }), [candles, candleWindow, qualityMinute, liveStatus, live, liveProblem, sameDay, historicalKey]);
   // Jen dokud den běží (včerejšek v živém okně ani sobota už živou svíčku nemají).
-  const liveFeed = useTvLiveCandleFeed(candleWindow.needsLive && now < candleWindow.dayEnd, candleWindow.dayEnd);
+  const liveFeed = useTvLiveCandleFeed(candleWindow.needsLive && now < candleWindow.dayEnd, candleWindow.dayEnd, requestData, live?.response.sourceSymbol ?? null);
   return {
     candles,
     quality,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { tvLiveBarsStoragePath, type TvBar, type TvBarsCapture } from '../lib/tradingViewBars';
-import { startTradingViewLiveBars, TV_LIVE_BARS_EARLY_PHASE_MS, TV_LIVE_BARS_PHASE_MS } from '../services/tradingViewBars';
-import { LIVE_CANDLES_CATCH_UP_MS, LIVE_CANDLES_POLL_PHASE_MS, liveCandlesCatchUpDelay, nextLiveCandlesPollDelay } from '../hooks/useLiveCandles';
+import { startTradingViewLiveBars, TV_LIVE_BARS_EARLY_PHASE_MS, TV_LIVE_BARS_PHASE_MS, TV_LIVE_BARS_RECOVERY_MIN_AGE_MS, TV_LIVE_BARS_RECOVERY_PHASE_MS } from '../services/tradingViewBars';
+import { LIVE_CANDLES_CATCH_UP_MS, LIVE_CANDLES_POLL_PHASE_MS, liveCandlesCatchUpDelay, liveCandlesCoverNow, nextLiveCandlesPollDelay } from '../hooks/useLiveCandles';
 
 vi.mock('../services/supabase', () => ({ supabase: {} }));
 import { LIVE_CANDLES_STALE_MS, parseLiveCandlesFile, stitchLiveCandles } from '../services/liveCandles';
@@ -144,6 +144,36 @@ describe('dřívější soubor svíček ve 3. s', () => {
     expect(cleared).toHaveBeenCalledTimes(2);
   });
 
+  it('záchranný běh ve 40. s nahraje jen po výpadku, běžně nic nepošle', async () => {
+    let clockNow = minuteStart + 1_000;
+    const t = timers(() => clockNow);
+    let value = 31_420;
+    const earlyRead = vi.fn(async () => capture([bar(-1), bar(0, value)]));
+    const upload = vi.fn(async (_capture: TvBarsCapture) => {});
+    startTradingViewLiveBars({
+      roots: ['MNQ'], read: vi.fn(async () => null), earlyRead, upload, phaseMs: TV_LIVE_BARS_PHASE_MS, earlyPhaseMs: TV_LIVE_BARS_EARLY_PHASE_MS,
+      recoveryPhaseMs: TV_LIVE_BARS_RECOVERY_PHASE_MS, now: () => clockNow, setTimeoutImpl: t.setTimeoutImpl,
+    });
+    await flush();
+    const fire = async (at: number) => {
+      clockNow = at;
+      const index = t.pending.findIndex(item => item.due === at);
+      t.pending.splice(index, 1)[0].fn();
+      await flush();
+    };
+    await fire(minuteStart + TV_LIVE_BARS_EARLY_PHASE_MS);
+    expect(upload).toHaveBeenCalledOnce();
+    value += 1;
+    earlyRead.mockClear();
+    await fire(minuteStart + TV_LIVE_BARS_RECOVERY_PHASE_MS);
+    expect(earlyRead).not.toHaveBeenCalled();
+    expect(upload).toHaveBeenCalledOnce();
+    // Další minutu spadne upload ve 3. s (výpadek): ve 40. s je poslední upload starý a pošle se.
+    expect(TV_LIVE_BARS_RECOVERY_MIN_AGE_MS).toBeGreaterThan(TV_LIVE_BARS_RECOVERY_PHASE_MS - TV_LIVE_BARS_EARLY_PHASE_MS);
+    await fire(minuteStart + 60_000 + TV_LIVE_BARS_RECOVERY_PHASE_MS);
+    expect(upload).toHaveBeenCalledTimes(2);
+  });
+
   it('korekce se nahraje, i když se u předchozí svíčky změnil jen high, low nebo objem', async () => {
     const clock = manualInterval();
     const reads = [capture([bar(-1), bar(0)]), capture([[bar(-1)[0], 31_420, 31_425, 31_418, 31_420, 10], bar(0)]), capture([[bar(-1)[0], 31_420, 31_425, 31_418, 31_420, 99], bar(0)])];
@@ -277,6 +307,14 @@ describe('zarovnání na minutu (předposlední svíčka grafu dne, 28. 10. 2026
     // Těsně před 20. s nečekat 1 s, ale celou další minutu.
     expect(nextLiveCandlesPollDelay(minuteStart + 18_000, 60_000)).toBe(62_000);
     expect(nextLiveCandlesPollDelay(minuteStart + 18_000, 30_000)).toBe(30_000);
+  });
+
+  it('díra je pryč, až soubor nese aspoň předchozí minutu', () => {
+    const minuteStart = Date.UTC(2026, 9, 28, 13, 41, 0);
+    expect(liveCandlesCoverNow(undefined, minuteStart + 5_000)).toBe(false);
+    expect(liveCandlesCoverNow(minuteStart / 1_000 - 120, minuteStart + 5_000)).toBe(false);
+    expect(liveCandlesCoverNow(minuteStart / 1_000 - 60, minuteStart + 5_000)).toBe(true);
+    expect(liveCandlesCoverNow(minuteStart / 1_000, minuteStart + 5_000)).toBe(true);
   });
 
   it('načtení mimo fázi v :00–:14 se dožene hned po uploadu (předposlední svíčka nečeká do :20)', () => {

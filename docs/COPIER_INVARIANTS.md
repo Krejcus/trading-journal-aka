@@ -1617,7 +1617,10 @@ existující ochranu.
   svíčky i ve 2. s minuty s dokončenou minutou z obchodů a pilot je podle hodin
   nahraje ve 3. s (`earlyRead` jen IBKR, nikdy graf TV); podle zprávy vlákna se
   nic nespouští, zápisy jsou pevně 2/min a v 7. s je přepíše běžné čtení, po něm
-  korekce v 10. s. Do 5 s může toto čtení vzít i `tv-bars`, opraví ho pozdější. Okamžité posílání (28. 10. 2026): obchod
+  korekce v 10. s. Do 5 s může toto čtení vzít i `tv-bars`, opraví ho pozdější. Po výpadku
+  IBKR nahraje totéž ještě běh ve 40. s, jen s posledním uploadem starším než 45 s
+  (nejvýš 3 zápisy/min na kořen, běžně 2). Začátek poslechu (presence) vlákno probudí `wake()`,
+  čte jen kanál ceny; pořád se nic nespouští podle zpráv hlídači. Okamžité posílání (28. 10. 2026): obchod
   z IBKR (`onTrade`) jen naplánuje čtení (`stream.nudge()`, 25 ms spojení
   dávky, rozestup 200 ms, po chybě prodleva 1 s); cesta ceny pro přehrání
   v grafu (`takeTrail`, strop 256 ve zdroji, 64 ve streamu, maže se při
@@ -2948,6 +2951,9 @@ existující ochranu.
   grafu dne); grafy dostávají jen neutrální `LiveCandleFeed`
   (`lib/liveCandleFeed.ts`, `hooks/useLiveCandleBinding.ts`) a svíčku jen
   překreslí (`updateBar`) — do dat grafu, cache dne ani storage nejde.
+  Pilulka telefonu bez živé ceny ukazuje „—“, nikdy close svíčky. Pojistka skoku roste se
+  stářím reference (0,2 % + 0,2 %/min, strop 0,6 %), jen když zpráva i soubor mají potvrzeně týž
+  kontrakt (`contractMatchesData`); bez důkazu platí 0,2 %. Pásmo samo kontrakt nerozezná.
   Historie grafu dne v IndexedDB (`readDayTail`, 6. 11. 2026) nese jen odpověď
   Databenta (`response.candles`), nikdy živé svíčky ani výstup `composeDayCandles`;
   do grafu a panelu jde až se živým čtením (`historyReadyForChart`), jinak by

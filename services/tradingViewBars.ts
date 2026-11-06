@@ -76,6 +76,9 @@ export const TV_LIVE_BARS_PHASE_MS = 10_000;
  * otevřená hned po přelomu neviděla předchozí svíčku ze stavu po 7 s. Upload v 10. s zůstává jako korekce.
  */
 export const TV_LIVE_BARS_EARLY_PHASE_MS = 3_000;
+/** Po výpadku IBKR: čerstvé svíčky vlákno posílá i ve 37. s, díra se tak nedrží do další minuty. */
+export const TV_LIVE_BARS_RECOVERY_PHASE_MS = 40_000;
+export const TV_LIVE_BARS_RECOVERY_MIN_AGE_MS = 45_000;
 /** Víc cenových rodin worker nečte — limit serveru je 4 zápisy/min. */
 export const TV_LIVE_BARS_MAX_ROOTS = 2;
 
@@ -103,6 +106,11 @@ export function startTradingViewLiveBars(options: {
   /** Druhý běh v minutě; `earlyRead` nikdy nesmí číst graf TV, bez dat se jen přeskočí. */
   earlyPhaseMs?: number;
   earlyRead?: (root: string) => Promise<TvBarsCapture | null>;
+  /**
+   * Třetí běh v minutě, také jen přes `earlyRead`: nahraje jen, když poslední upload je starší
+   * než `TV_LIVE_BARS_RECOVERY_MIN_AGE_MS` (typicky konec výpadku IBKR, také po chybě uploadu nebo klidné minutě).
+   */
+  recoveryPhaseMs?: number;
   now?: () => number;
   setIntervalImpl?: typeof setInterval;
   clearIntervalImpl?: typeof clearInterval;
@@ -133,13 +141,15 @@ export function startTradingViewLiveBars(options: {
   };
   let inFlight = false;
   let stopped = false;
-  const tick = async (reader = read, quiet = false) => {
+  const tick = async (reader = read, quiet = false, minUploadAgeMs = 0) => {
     if (inFlight || stopped || !ready()) return;
     inFlight = true;
     try {
       for (const root of roots) {
         if (stopped) return;
         try {
+          const lastUpload = sent.get(root);
+          if (minUploadAgeMs > 0 && lastUpload && now() - lastUpload.at < minUploadAgeMs) continue;
           const capture = await reader(root);
           if (stopped) return;
           if (!capture) {
@@ -163,7 +173,7 @@ export function startTradingViewLiveBars(options: {
   };
   let timer: ReturnType<typeof setInterval> | null = null;
   let alignTimer: ReturnType<typeof setTimeout> | null = null;
-  let earlyTimer: ReturnType<typeof setTimeout> | null = null;
+  const extraTimers = new Set<ReturnType<typeof setTimeout>>();
   if (options.phaseMs === undefined) {
     timer = (options.setIntervalImpl ?? setInterval)(() => { void tick(); }, intervalMs);
     (timer as { unref?: () => void }).unref?.();
@@ -181,27 +191,31 @@ export function startTradingViewLiveBars(options: {
     };
     scheduleNext();
     const earlyRead = options.earlyRead;
-    if (earlyRead && options.earlyPhaseMs !== undefined) {
-      const earlyPhase = Math.min(59_000, Math.max(0, options.earlyPhaseMs));
-      const scheduleEarly = () => {
+    const everyMinuteAt = (rawPhase: number, minUploadAgeMs: number) => {
+      if (!earlyRead) return;
+      const extraPhase = Math.min(59_000, Math.max(0, rawPhase));
+      const scheduleExtra = () => {
         if (stopped) return;
-        const raw = (60_000 + earlyPhase - (now() % 60_000)) % 60_000;
-        earlyTimer = (options.setTimeoutImpl ?? setTimeout)(() => {
-          earlyTimer = null;
-          tick(earlyRead, true).catch(() => {});
-          scheduleEarly();
+        const raw = (60_000 + extraPhase - (now() % 60_000)) % 60_000;
+        const handle = (options.setTimeoutImpl ?? setTimeout)(() => {
+          extraTimers.delete(handle);
+          tick(earlyRead, true, minUploadAgeMs).catch(() => {});
+          scheduleExtra();
         }, raw < 1_000 ? raw + 60_000 : raw);
-        (earlyTimer as { unref?: () => void }).unref?.();
+        extraTimers.add(handle);
+        (handle as { unref?: () => void }).unref?.();
       };
-      scheduleEarly();
-    }
+      scheduleExtra();
+    };
+    if (options.earlyPhaseMs !== undefined) everyMinuteAt(options.earlyPhaseMs, 0);
+    if (options.recoveryPhaseMs !== undefined) everyMinuteAt(options.recoveryPhaseMs, TV_LIVE_BARS_RECOVERY_MIN_AGE_MS);
   }
   void tick();
   return {
     stop: () => {
       stopped = true;
       if (alignTimer !== null) (options.clearTimeoutImpl ?? clearTimeout)(alignTimer);
-      if (earlyTimer !== null) (options.clearTimeoutImpl ?? clearTimeout)(earlyTimer);
+      for (const handle of extraTimers) (options.clearTimeoutImpl ?? clearTimeout)(handle);
       if (timer !== null) (options.clearIntervalImpl ?? clearInterval)(timer);
     },
   };

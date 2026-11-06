@@ -5,6 +5,7 @@ import { LIVE_CANDLE_MAX_GAP_SEC, planLiveCandleUpdate, type LiveCandleFeed } fr
 import { followLiveEdge, type LiveFollowMemory } from '../lib/liveChartFollow';
 import { timeframeMinutes, type MarketCandle, type MarketTimeframe } from '../services/marketData';
 import { perfDuration } from '../lib/perfTrace';
+import { notifyLiveLegend } from '../lib/liveLegend';
 
 /**
  * Napojí živou svíčku na grafy: při každé změně zdroje (nejvýš 1× za snímek)
@@ -62,6 +63,7 @@ export function revertLiveCandle(controller: ChartController, drawn: LiveCandleD
     const timeScale = controller.getChart().timeScale();
     const range = timeScale.getVisibleLogicalRange();
     controller.setData(bars);
+    notifyLiveLegend(controller);
     if (range) timeScale.setVisibleLogicalRange({ from: range.from, to: range.to });
   } catch {
     // Graf už neexistuje.
@@ -90,8 +92,12 @@ export function applyLiveCandle(
       }
       return false;
     }
+    // Data grafu končí víc než minutu před živou svíčkou: dotáhnout soubor hned, ne až v další fázi.
+    // Před plánem a z 1m dat: plán umí svíčku odmítnout a `lastBar` po připsání živé díru nepozná.
+    const lastDataTime = target.rawCandles.at(-1)?.time;
+    if (lastDataTime != null && live.time - lastDataTime > 60) feed.requestData?.();
     const lastBar = controller.getBars().at(-1);
-    const bar = planLiveCandleUpdate({ lastBar, live, timeframe: target.timeframe, rawCandles: target.rawCandles });
+    const bar = planLiveCandleUpdate({ lastBar, live, timeframe: target.timeframe, rawCandles: target.rawCandles, widenJump: feed.contractMatchesData?.() === true });
     if (!bar || !lastBar) return false;
     // Beze změny baru nic nepřekreslovat (emit storu jen s čítači, heartbeat).
     const signature = `${bar.time}:${bar.open}:${bar.high}:${bar.low}:${bar.close}:${bar.volume}`;
@@ -115,6 +121,7 @@ export function applyLiveCandle(
       state.appended.add(ts);
     }
     controller.updateBar(written);
+    notifyLiveLegend(controller);
     state.bars.set(ts, written);
     state.last = signature;
     drawnByController.set(controller, state);

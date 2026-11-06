@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Bar } from '@getcandlekit/charts';
 import { LIVE_CANDLE_REVERT_GRACE_MS, applyLiveCandle, bindLiveCandleDataResets, refreshLiveCandleTargets, restartLiveCandleGrace, type LiveCandleDrawn } from '../hooks/useLiveCandleBinding';
-import { LIVE_CANDLE_MAX_GAP_SEC, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
+import { LIVE_CANDLE_MAX_GAP_SEC, LIVE_CANDLE_MAX_STALE_JUMP_RATIO, contractMatchesData, liveCandleJumpRatio, livePriceWithinBand, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
 import { tvLiveCandle } from '../lib/tvLiveCandle';
 import type { TvPricePayload } from '../lib/tvPriceMessage';
 import type { TvPriceFeedView } from '../lib/tvPriceStore';
@@ -303,5 +303,90 @@ describe('výdrž živé svíčky bez ceny', () => {
     restartLiveCandleGrace(drawn, 600_000);
     applyLiveCandle(source, target, drawn, LIVE_CANDLE_REVERT_GRACE_MS, 600_001);
     expect(chart.bars().at(-1)).toMatchObject({ ts: MINUTE * 1_000, close: 29188 });
+  });
+});
+
+describe('pojistka skoku u starých dat', () => {
+  it('čerstvá data 0,2 %, s každou minutou víc, nejvýš strop pod rozdílem kontraktů v rollu', () => {
+    expect(liveCandleJumpRatio(0)).toBeCloseTo(0.002);
+    expect(liveCandleJumpRatio(-5_000)).toBeCloseTo(0.002);
+    expect(liveCandleJumpRatio(60_000)).toBeCloseTo(0.004);
+    expect(liveCandleJumpRatio(3 * 60_000)).toBe(LIVE_CANDLE_MAX_STALE_JUMP_RATIO);
+    expect(liveCandleJumpRatio(Number.NaN)).toBeCloseTo(0.002);
+  });
+
+  it('kontrakt potvrdí jen shoda měsíce souboru a zprávy', () => {
+    expect(contractMatchesData('MNQZ2026', 'IBKR:MNQZ2026')).toBe(true);
+    expect(contractMatchesData('MNQH2027', 'IBKR:MNQZ2026')).toBe(false);
+    expect(contractMatchesData('MNQZ2026', 'CME_MINI:MNQ1!')).toBe(false);
+    expect(contractMatchesData(null, 'IBKR:MNQZ2026')).toBe(false);
+    expect(contractMatchesData('MNQZ2026', null)).toBe(false);
+  });
+
+  it('panel: skok 0,5 % u 3 minuty staré reference projde jen se shodou kontraktu', () => {
+    const now = 1_000_000_000;
+    const old = now - 3 * 60_000;
+    expect(livePriceWithinBand(26_865, 27_000, old, true, now)).toBe(true);
+    expect(livePriceWithinBand(26_865, 27_000, old, false, now)).toBe(false);
+    expect(livePriceWithinBand(26_865, 27_000, null, true, now)).toBe(false);
+    expect(livePriceWithinBand(26_865, 27_000, now, true, now)).toBe(false);
+    expect(livePriceWithinBand(26_800, 27_000, old, true, now)).toBe(false);
+  });
+
+  const liveSetup = (timeframe: '1m' | '5m', dataEnd: number, matches: boolean) => {
+    let current: MarketCandle = { time: dataEnd + 180, open: 26_920, high: 26_925, low: 26_915, close: 26_920, volume: 0 };
+    const requestData = vi.fn();
+    const raw = [candle(dataEnd, 27_000, 10)];
+    const chart = fakeChart(raw.map(item => ({ ts: item.time * 1_000, open: item.open, high: item.high, low: item.low, close: item.close, volume: item.volume })));
+    const source: LiveCandleFeed = { subscribe: () => () => undefined, current: () => current, lastPrice: () => current.close, requestData, contractMatchesData: () => matches };
+    const drawn = new Map<unknown, LiveCandleDrawn>() as Map<never, LiveCandleDrawn>;
+    const target = { api: chart.api, root: 'MNQ', timeframe, rawCandles: raw };
+    return { chart, source, drawn, target, requestData, set: (next: Partial<MarketCandle>) => { current = { ...current, ...next }; } };
+  };
+
+  it('živá svíčka za dírou se dál hýbe i další ticky a další minutu a chce doplnit data', () => {
+    const t = liveSetup('1m', MINUTE, true);
+    applyLiveCandle(t.source, t.target, t.drawn);
+    expect(t.chart.bars().at(-1)).toMatchObject({ ts: (MINUTE + 180) * 1_000, close: 26_920 });
+    t.set({ close: 26_910, low: 26_905 });
+    applyLiveCandle(t.source, t.target, t.drawn);
+    expect(t.chart.bars().at(-1)).toMatchObject({ ts: (MINUTE + 180) * 1_000, close: 26_910 });
+    t.set({ time: MINUTE + 240, open: 26_910, close: 26_900, high: 26_912, low: 26_899 });
+    applyLiveCandle(t.source, t.target, t.drawn);
+    expect(t.chart.bars().at(-1)).toMatchObject({ ts: (MINUTE + 240) * 1_000, close: 26_900 });
+    expect(t.requestData).toHaveBeenCalledTimes(3);
+  });
+
+  it('bez potvrzené shody kontraktu pojistka nezesílí a svíčka se nekreslí, data se stejně vyžádají', () => {
+    const t = liveSetup('1m', MINUTE, false);
+    applyLiveCandle(t.source, t.target, t.drawn);
+    expect(t.chart.bars()).toHaveLength(1);
+    expect(t.requestData).toHaveBeenCalledOnce();
+  });
+
+  it('běžná minuta hned za daty data nevyžádá', () => {
+    const t = liveSetup('1m', MINUTE, true);
+    t.set({ time: MINUTE + 60, open: 26_999, close: 26_999, high: 27_000, low: 26_998 });
+    applyLiveCandle(t.source, t.target, t.drawn);
+    expect(t.requestData).not.toHaveBeenCalled();
+  });
+
+  it('na 5m pozná díru v minutách uvnitř baru', () => {
+    const t = liveSetup('5m', MINUTE, true);
+    applyLiveCandle(t.source, t.target, t.drawn);
+    expect(t.requestData).toHaveBeenCalledOnce();
+  });
+
+  it('svíčka za dírou po výpadku projde jen s potvrzeným kontraktem, jiný kontrakt ne', () => {
+    const lastTime = 1_793_930_000 - (1_793_930_000 % 60);
+    const plan = (open: number) => planLiveCandleUpdate({
+      lastBar: { ts: lastTime * 1_000, close: 27_000 },
+      live: { time: lastTime + 180, open, high: open + 1, low: open - 1, close: open, volume: 0 },
+      timeframe: '1m',
+      rawCandles: [],
+      widenJump: true,
+    });
+    expect(plan(26_920)).not.toBeNull(); // 80 bodů za 3 min (6. 11.)
+    expect(plan(27_000 * 1.01)).toBeNull();
   });
 });

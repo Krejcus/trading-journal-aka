@@ -64,6 +64,8 @@ export interface TvPriceChannelClientDeps {
   hasWebCrypto(): boolean;
   isForeground(): boolean;
   subscribeForeground(listener: (foreground: boolean) => void): () => void;
+  /** Měření: od návratu z pozadí po připojení kanálu. */
+  onResumeJoined?(ms: number): void;
   now?: () => number;
   setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
   clearTimeoutImpl?: (timer: unknown) => void;
@@ -142,6 +144,7 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
   let watchdogHold = false;
   let unsubscribeForeground: (() => void) | null = null;
   let hiddenAt: number | null = null;
+  let resumedAt: number | null = null;
 
   const safe = (action: () => unknown) => {
     try {
@@ -274,6 +277,11 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
       clearTimer(watchdogTimer);
       watchdogTimer = null;
       joined = true;
+      if (resumedAt !== null) {
+        const ms = deps.now() - resumedAt;
+        resumedAt = null;
+        safe(() => deps.onResumeJoined?.(ms));
+      }
       // Po (re)joinu server presence nezná — ohlásit znovu.
       trackedMeta = null;
       store.setLink('joined');
@@ -374,10 +382,14 @@ export function createTvPriceChannelClient(deps: TvPriceChannelClientDeps): TvPr
     try {
       unsubscribeForeground = deps.subscribeForeground(next => {
         try {
-          if (foreground && !next) hiddenAt = deps.now();
+          if (foreground && !next) {
+            hiddenAt = deps.now();
+            resumedAt = null;
+          }
           const reopen = !foreground && next && channel !== null && hiddenAt !== null && deps.now() - hiddenAt >= TV_RESUME_REOPEN_AFTER_MS;
           foreground = next;
           if (reopen) {
+            resumedAt = deps.now();
             closeChannel('resume');
             // Mrtvý socket by starý kanál odebíral dlouho a nový by na něj čekal.
             if (grant) safe(() => deps.releaseTopic?.(grant!.topic));

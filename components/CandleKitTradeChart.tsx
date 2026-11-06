@@ -77,6 +77,7 @@ import {
   resolveNasdaqFuturesRoot,
   type NasdaqFuturesRoot,
 } from '../services/chartInstrumentLegend';
+import { registerLiveLegend } from '../lib/liveLegend';
 import { thinPriceAxisLabels } from '../services/chartPriceAxisLabels';
 import { useKeepInViewport } from '../hooks/useKeepInViewport';
 import { announceChartProfileChange, dismissChartProfileToast } from '../services/chartProfileToast';
@@ -2288,6 +2289,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   }>({ api: null, lines: [], primitives: [] });
   const ohlcValuesRef = useRef<HTMLSpanElement>(null);
   const ohlcChangeRef = useRef<HTMLSpanElement>(null);
+  const legendFollowsCrosshairRef = useRef(false);
   const volumeValueRef = useRef<HTMLSpanElement>(null);
   const pendingVisibleRangeRef = useRef<{ from: Time; to: Time } | null>(null);
   const expandingWindowRef = useRef(false);
@@ -4179,6 +4181,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     positionProgressUnsubscribeRef.current = null;
     positionProgressPrimitiveRequestUpdateRef.current = null;
     apiRef.current = api;
+    if (chartChanged) legendFollowsCrosshairRef.current = false;
     onChartApiReady?.(api);
     const chart = api.controller.getChart();
     const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
@@ -4245,7 +4248,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     };
     const latest = visibleCandles[visibleCandles.length - 1];
     const latestPreviousClose = visibleCandles[visibleCandles.length - 2]?.close;
-    if (latest) updateOhlcLegend(latest, latestPreviousClose);
+    // Poslední svíčka grafu i s tou živou (`updateBar`), kterou React data neznají.
+    const showLatestBarInLegend = () => {
+      const bars = api.controller.getBars();
+      const bar = bars.at(-1);
+      if (!bar) return false;
+      updateOhlcLegend({ time: Math.floor(bar.ts / 1_000), open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume ?? 0 }, bars.at(-2)?.close);
+      return true;
+    };
+    if (!showLatestBarInLegend() && latest) updateOhlcLegend(latest, latestPreviousClose);
+    registerLiveLegend(api.controller, () => { if (!legendFollowsCrosshairRef.current) showLatestBarInLegend(); });
     unsubscribeCrosshairSafely(crosshairSubscriptionRef.current);
     exactCrosshairSyncCleanupRef.current?.();
     const hideExactCrosshair = () => {
@@ -4343,8 +4355,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         }
       }
       const selected = param.time === undefined ? undefined : visibleCandleLookupRef.current.get(Number(param.time));
+      legendFollowsCrosshairRef.current = !!selected;
       if (selected) updateOhlcLegend(selected.candle, selected.previousClose);
-      else {
+      else if (!showLatestBarInLegend()) {
         const current = visibleCandlesRef.current;
         const currentLatest = current.at(-1);
         if (currentLatest) updateOhlcLegend(currentLatest, current.at(-2)?.close);

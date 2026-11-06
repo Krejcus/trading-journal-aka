@@ -103,6 +103,7 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     expect(thread).toContain('schedulePostBars();');
     expect(thread).toContain('postBars(true); scheduleExactClosedPost();');
     expect(thread).toContain('const IBKR_BARS_EXACT_POST_PHASE_MS = 2_000;');
+    expect(thread).toContain('if (demand && !before) stream?.wake();');
     expect(thread).not.toMatch(/setInterval\(postBars/);
     expect(source('scripts/copier/pilot.ts')).toContain('phaseMs: TV_LIVE_BARS_PHASE_MS,');
     const pilot = source('scripts/copier/pilot.ts');

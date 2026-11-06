@@ -2,6 +2,7 @@ import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
 import { createTvPriceChannelClient, type TvPriceChannelStatus } from '../lib/tvPriceChannelClient';
 import { TV_PRICE_EVENT, verifyTvPriceEnvelope, verifyTvPriceTrail } from '../lib/tvPriceMessage';
 import { createTvPriceStore } from '../lib/tvPriceStore';
+import { perfDuration } from '../lib/perfTrace';
 import { supabase } from './supabase';
 
 /**
@@ -23,6 +24,7 @@ const presenceKey = () => {
 
 export const tvPriceChannel = createTvPriceChannelClient({
   store: tvPriceStore,
+  onResumeJoined: ms => perfDuration('live:resume:joined', ms),
   openChannel(topic, handlers) {
     const channel = supabase.channel(topic, {
       // Presence nese jen „dívám se na P&L“ — bez osobních údajů.
