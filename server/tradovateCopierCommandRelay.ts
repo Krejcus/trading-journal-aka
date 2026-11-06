@@ -139,7 +139,7 @@ const ENTRY_COMMAND_TTL_MS = 15_000;
 const CLOSE_COMMAND_TTL_MS = 5_000;
 const isLeaderTradeClose = (command: unknown): boolean => {
   const inner = (command as { type?: unknown; command?: { type?: unknown; action?: unknown } } | null);
-  return inner?.type === 'copy-command' && inner.command?.type === 'manage-leader-order' && inner.command.action === 'close-position';
+  return inner?.type === 'copy-command' && inner.command?.type === 'manage-leader-order' && (inner.command.action === 'close-position' || inner.command.action === 'remove-leg');
 };
 const ENTRY_MIN_INTERVAL_MS = MANUAL_ENTRY_MIN_INTERVAL_MS;
 // Filip 30. 10. 2026: 30 nestačilo na aktivní den (26 vstupů do 15:00) → 100 jako u správy.
@@ -1066,6 +1066,17 @@ const expirePendingEntriesSupersededByBrake = async (options: {
       .contains('payload', { command: { type: 'manage-leader-order', action } })
       .lte('created_at', options.brakeCreatedAt);
     if (manageError) throw new Error(`copier-relay-brake-supersede-failed: ${manageError.message}`);
+  }
+  // SL a TP po jedné: brzda zneplatní odebrání nohy a přidání TP (ruší ochrannou nohu); přidání SL zůstává.
+  for (const fields of [{ action: 'remove-leg' }, { action: 'add-leg', leg: 'takeProfit' }]) {
+    const { error: legError } = await options.db.from('tradovate_copier_commands')
+      .update({ status: 'expired', completed_at: options.brakeCreatedAt, error: 'superseded-by-brake' })
+      .eq('device_id', options.deviceId)
+      .eq('status', 'pending')
+      .eq('command_type', 'copy-command')
+      .contains('payload', { command: { type: 'manage-leader-order', ...fields } })
+      .lte('created_at', options.brakeCreatedAt);
+    if (legError) throw new Error(`copier-relay-brake-supersede-failed: ${legError.message}`);
   }
 };
 

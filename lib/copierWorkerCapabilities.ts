@@ -75,6 +75,12 @@ export const COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY = 'manual-order-move-limi
 export const supportsCopierManualOrderMoveLimit = (status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined): boolean =>
   Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY);
 
+/** SL a TP po jedné u vlastní holé pozice: `add-leg`, `remove-leg` (6. 11. 2026). */
+export const COPIER_MANUAL_ORDER_SINGLE_LEG_CAPABILITY = 'manual-order-single-leg-v1';
+
+export const supportsCopierManualOrderSingleLeg = (status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined): boolean =>
+  Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_MANUAL_ORDER_SINGLE_LEG_CAPABILITY);
+
 export const COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY = 'manual-order-pending-legs-v1';
 
 export const supportsCopierManualOrderPendingLegs = (

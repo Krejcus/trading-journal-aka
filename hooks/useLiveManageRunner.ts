@@ -76,6 +76,8 @@ export function liveManageResultNotice(action: LeaderOrderManageAction, result: 
         : action === 'cancel-entry' ? 'Vstup zrušen; kopírka zruší kopie.'
         : action === 'close-position' ? 'Leader zavřen; kopírka zavírá kopie.'
           : action === 'attach-brackets' ? 'SL a TP doplněny u leadera; kopírka je doplní kopiím.'
+          : action === 'add-leg' ? 'Přidáno u leadera.'
+          : action === 'remove-leg' ? 'Zrušeno u leadera.'
             : 'Posunuto u leadera; kopírka posune kopie.',
     };
   }

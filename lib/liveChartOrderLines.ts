@@ -41,6 +41,11 @@ export interface LivePositionLineControls {
    * `canSend` = obě jsou v návrhu a na čáře je tlačítko odeslání. Tah mění jen návrh, odchází až klik.
    */
   attachChips?: { missing: ReadonlyArray<'stopLoss' | 'takeProfit'>; canSend: boolean } | null;
+  /**
+   * SL a TP po jedné (worker `manual-order-single-leg-v1`): čip chybějící nohy, tah i × na čáře jdou hned k brokerovi.
+   * `attachChips` se pak nepoužívá.
+   */
+  bareLegs?: boolean;
   /** Čekající přikoupení do pozice (worker `leaderPositions`) — vlastní čára s × (zrušit). */
   pendingAdd?: { price: number | null; quantity: number; orderType: string } | null;
   /**
@@ -114,13 +119,15 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
   const long = summary.side === 'long';
   const dir = long ? 1 : -1;
   const position = summary.kind === 'position';
-  const canMove = controls.manageable && (position || controls.pendingLegs === true);
+  const legsLive = position && controls.bareLegs === true;
+  const canMove = legsLive || (controls.manageable && (position || controls.pendingLegs === true));
   const scope = summary.scopeLabel ? ` ${summary.scopeLabel}` : '';
   const levelLabel = (kind: 'stopLoss' | 'takeProfit', at: number, note?: string) => {
     const pnl = (at - entry) * dir * summary.quantity * controls.pointValue;
     return `${kind === 'stopLoss' ? 'SL' : 'TP'}  ${signedUsd(pnl)} · ${Math.abs(at - entry).toFixed(2)} b${note ? ` · ${note}` : ''}`;
   };
-  const be = controls.manageable ? liveBreakEven(summary, controls.entryAvg) : null;
+  // Holá pozice bez SL nemá co posouvat na BE.
+  const be = controls.manageable || (legsLive && summary.stop != null) ? liveBreakEven(summary, controls.entryAvg) : null;
   const openPnl = liveShownOpenPnl(summary, controls.displayOpenPnl);
   // Fill wins immediately: a pending move must never overwrite the actual position entry.
   const pendingEntry = position ? undefined : controls.pending?.entry;
@@ -146,7 +153,10 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
         title: be.blocked ?? `SL na BE leadera ${be.price?.toFixed(2)} (bez poplatků)`,
       }],
     } : {}),
-    ...(position && controls.attachChips ? {
+    ...(legsLive && (summary.stop == null || summary.target == null) ? {
+      addableBrackets: [...(summary.stop == null ? ['stopLoss' as const] : []), ...(summary.target == null ? ['takeProfit' as const] : [])],
+    } : {}),
+    ...(position && !legsLive && controls.attachChips ? {
       ...(controls.attachChips.missing.length > 0 ? { addableBrackets: [...controls.attachChips.missing] } : {}),
       ...(controls.attachChips.canSend ? { actions: [{ id: LIVE_ATTACH_SEND_ACTION, label: 'Odeslat SL a TP', title: 'Odešle obě nohy k brokerovi' }] } : {}),
     } : {}),
@@ -165,6 +175,7 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
       draggable: canMove && pendingPrice == null,
       // Chvění při kliknutí nesmí poslat skutečný posun.
       dragDeadZonePx: 4,
+      ...(legsLive && pendingPrice == null ? { cancellable: true, cancelAction: 'remove-bracket' as const } : {}),
     });
   }
   const add = controls.pendingAdd;

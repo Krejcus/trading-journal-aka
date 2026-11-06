@@ -2393,6 +2393,14 @@ existující ochranu.
   skončila bez fillu a až potom dvojí ověření flat (`leaderVerifiedFlat`); nohy se ruší hned,
   důkaz má společný limit a po tu dobu je registrovaný jako rozpracovaný zápis. Štítky „+ SL“ / „+ TP“
   na čáře holé pozice jen připravují návrh; příkaz je týž `attach-brackets` po kliku přes `liveAttachIntent`.
+  **SL a TP po jedné (6. 11. 2026, capability `manual-order-single-leg-v1`, `docs/reviews/instant-legs-design-20261106.md`):**
+  se starým workerem platí věta výše. Nový worker v sólo skupině: záznam `bare: true` s 0, 1 nebo 2 id; `add-leg`, `remove-leg`
+  a posun jediné nohy odejdou hned po puštění čipu nebo čáry. Filip vědomě přijal, že × na SL nechá pozici bez stropu ztráty.
+  SL → SL + TP: nejdřív OCO se stejným SL, potom zrušit starý SL (krátce dva SL, starý ≥ 8 ticků od trhu; zrušení proběhne vždy,
+  i na flat a po brzdě). TP → SL + TP: nejdřív zrušit TP, potom OCO (při flat, Flattenu a změně kopírky se OCO neposílá).
+  Za brzdy jde jen přidání SL k pozici bez nohou; `remove-leg` a `add-leg` TP supersede brzda a zastaví je i worker (výjimka v INV-BRAKE-02 není).
+  Do okna korelátoru po fillu vrací `fill-settling`. Vlastní noha na flat účtu (zavření mimo appku) = jen incident po 3 s, bez zrušení, a jen za běžícího
+  workeru: Filip obchoduje jen z appky a riziko přijal. Přikoupení k pozici s jednou nohou zůstává blokované.
   Výsledek přijato / neznámo nabídku na 30 s schová (panel, čára i telefon).
   Attach jen k NEJNOVĚJŠÍMU ručnímu vstupu, dokud leader na symbolu od jeho
   fillu nezplochl (`closedAt`, status `open`) — starý záznam nesmí „adoptovat“

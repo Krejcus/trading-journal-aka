@@ -22,7 +22,7 @@ import {
   isMetadataOnlyGroupChange,
   isWeakerRiskConfig,
 } from '../lib/copierRiskConfig.js';
-import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY, COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_AUTO_CANCEL_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY, COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
+import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY, COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_AUTO_CANCEL_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY, COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY, COPIER_MANUAL_ORDER_SINGLE_LEG_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -422,7 +422,7 @@ export async function startLocalCopierExecutionAgent(
         ? [COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY, COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY] : []),
       // × holé pozice (C8, 3. 11. 2026): jen když to controller pro tuto skupinu umí (sólo manual-only DEMO).
       ...(typeof options.controller.manageLeaderOrder === 'function' && options.controller.manualBareCloseEnabled?.() === true
-        ? [COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY] : []),
+        ? [COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY, COPIER_MANUAL_ORDER_SINGLE_LEG_CAPABILITY] : []),
       // „Zrušit čekající“ (C7, 3. 11. 2026): status vlastních čekajících vstupů + ověřený výsledek cancel-entry.
       ...(typeof options.controller.manageLeaderOrder === 'function' ? [COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY] : []),
       // Automatické zrušení vlastního čekajícího vstupu + ověřený výsledek ve statusu (C12, 4. 11. 2026).
@@ -985,7 +985,8 @@ export async function startLocalCopierExecutionAgent(
             blockers: [{ code: 'no-deadline', text: 'Příkaz nemá platnost — nic se neodeslalo.' }] };
         }
         // Doplnění SL/TP k holému Marketu riziko snižuje stejně jako zrušení vstupu (2. 11.).
-        if (manage.action !== 'cancel-entry' && manage.action !== 'attach-brackets' && context.createdAt != null
+        // SL po jedné: po brzdě jen přidání SL (worker navíc ověří, že pozice nemá žádnou nohu).
+        if (manage.action !== 'cancel-entry' && manage.action !== 'attach-brackets' && !(manage.action === 'add-leg' && manage.leg === 'stopLoss') && context.createdAt != null
           && context.createdAt <= lastBrakeCreatedAt + Math.max(0, context.clockSkewReserveMs ?? 0)) {
           return { type: 'leader-order-managed', operationId: manage.operationId, action: manage.action, status: 'blocked', checkedAt: Date.now(),
             blockers: [{ code: 'brake-after-request', text: 'Po zadání změny přišlo vypnutí kopírky nebo zámek.' }] };

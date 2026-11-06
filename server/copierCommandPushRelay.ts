@@ -116,7 +116,7 @@ export async function pushBoundCopierCommand(options: {
 }
 
 /** Risk-redukční správa dostane kick hned — prohraný závod u ní stojí jen optimalizaci (oponentura P2). */
-const IMMEDIATE_KICK_MANAGE_ACTIONS = new Set(['close-position', 'cancel-entry', 'attach-brackets']);
+const IMMEDIATE_KICK_MANAGE_ACTIONS = new Set(['close-position', 'cancel-entry', 'attach-brackets', 'add-leg', 'remove-leg']);
 
 /**
  * Kick až po pokusu o push jen pro vstup, náhled a posuny SL/TP z grafu (DEMO 2. 11.: jinak kick

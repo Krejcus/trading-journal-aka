@@ -769,7 +769,7 @@ export function manualEntryNotifications(
   return out;
 }
 
-const MANAGE_ACTION_LABEL: Record<string, string> = { 'move-stop': 'Posun SL', 'move-target': 'Posun TP', 'cancel-entry': 'Zrušení vstupu', 'close-position': 'Zavření obchodu' };
+const MANAGE_ACTION_LABEL: Record<string, string> = { 'move-stop': 'Posun SL', 'move-target': 'Posun TP', 'add-leg': 'Přidání SL/TP', 'remove-leg': 'Zrušení SL/TP', 'cancel-entry': 'Zrušení vstupu', 'close-position': 'Zavření obchodu' };
 /**
  * C7 kolo 3 (P3): `cancel-entry` po odmítnutí brokerem je ~10 s `unknown` „zatím pracuje — ověřuji“,
  * než čtení po ustálení (worker `settle` 10 s + ohraničené čtení) rozhodne. Push „výsledek neznámý“ by

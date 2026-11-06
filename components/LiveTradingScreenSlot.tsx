@@ -15,6 +15,7 @@ import type { LiveAttachInput, LiveBareEntryRecord } from '../lib/liveBareEntry'
 import type { LivePhonePosition } from '../lib/livePhoneOrders';
 import type { LiveBareCloseOffer } from '../lib/liveBareCloseUi';
 import type { BareLeaderTrade } from '../lib/manualBareClose';
+import type { LiveBareLegIntent } from '../lib/liveBareLeg';
 import type { LiveChartFills, LiveChartWorkingOrders } from '../hooks/useLiveChartData';
 import type { LiveCommandTraceStage, LiveCommandWorkerTiming } from '../lib/liveCommandPerformance';
 import {
@@ -145,6 +146,8 @@ interface Props {
   // ── C7/C8 (4. 11. 2026) ──
   /** Nabídka × u vlastní holé pozice (`liveBareCloseOffer`, jen zobrazení); chybí = žádná. */
   bareClose?: LiveBareCloseOffer | null;
+  bareLegTrade?: BareLeaderTrade | null;
+  onBareLeg?: (seen: BareLeaderTrade, intent: LiveBareLegIntent) => Promise<LeaderOrderManageResult>;
   /** Deskový `closeBareLeader` (jen s capability C8); chybí = × holé pozice se nenabídne. */
   onBareClose?: (seen: BareLeaderTrade) => Promise<LeaderOrderManageResult>;
   /** Sdílený zámek jednoho příkazu desku (lišta „Zrušit čekající“, Dashboard); chybí = vlastní. */
@@ -248,6 +251,8 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.userId ?? null) === (right.userId ?? null)
   && JSON.stringify(left.bareClose ?? null) === JSON.stringify(right.bareClose ?? null)
   && left.onBareClose === right.onBareClose
+  && JSON.stringify(left.bareLegTrade ?? null) === JSON.stringify(right.bareLegTrade ?? null)
+  && left.onBareLeg === right.onBareLeg
   && left.manageLockRef === right.manageLockRef
   && left.onReplayChange === right.onReplayChange
   && left.onCrash === right.onCrash

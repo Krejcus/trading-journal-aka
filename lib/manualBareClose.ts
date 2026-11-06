@@ -60,6 +60,11 @@ export function isBareEntryWithoutLegs(record: BareCloseEntryRecord | null | und
   return record?.bare === true && !record.stopBrokerOrderId && !record.targetBrokerOrderId;
 }
 
+/** Holý záznam s nejvýš jednou nohou (SL a TP po jedné): zavírá se a spravuje vlastní cestou, ne jako obchod se dvěma nohami. */
+export function isBareEntryAtMostOneLeg(record: BareCloseEntryRecord | null | undefined): boolean {
+  return record?.bare === true && !(record.stopBrokerOrderId && record.targetBrokerOrderId);
+}
+
 /** Nejnovější ruční vstup (podle `createdAt`) — jen ten smí „vlastnit“ holou pozici. */
 export function newestManualEntry<T extends { createdAt: number }>(records: readonly T[]): T | null {
   return records.reduce<T | null>((latest, record) => (!latest || record.createdAt > latest.createdAt ? record : latest), null);
@@ -73,6 +78,9 @@ export interface BareLeaderTrade {
   quantity: number;
   /** Cena, kterou uživatel viděl při holém Marketu — `expect.price` příkazu zavření. */
   referencePrice: number;
+  /** Která noha už je u brokera (SL a TP po jedné). Jen zobrazení. */
+  hasStop?: boolean;
+  hasTarget?: boolean;
 }
 
 /**
@@ -86,13 +94,33 @@ export function selectBareLeaderTrade(
 ): BareLeaderTrade | null {
   if (!context.solo || context.leaderAccountId == null) return null;
   const newest = newestManualEntry(records);
-  if (!newest || newest.status !== 'acknowledged' || !isBareEntryWithoutLegs(newest) || newest.closedAt != null
+  if (!newest || newest.status !== 'acknowledged' || !isBareEntryAtMostOneLeg(newest) || newest.closedAt != null
     || !newest.entryBrokerOrderId || newest.request.accountId !== context.leaderAccountId) return null;
   const reference = newest.request.referencePrice;
   if (typeof reference !== 'number' || !Number.isFinite(reference) || reference <= 0) return null;
   return {
     entryOperationId: newest.operationId, symbol: newest.request.symbol, side: newest.request.side,
     quantity: newest.request.quantity, referencePrice: reference,
+    ...(newest.stopBrokerOrderId ? { hasStop: true } : {}), ...(newest.targetBrokerOrderId ? { hasTarget: true } : {}),
+  };
+}
+
+/**
+ * Obchod pro SL a TP po jedné: nejnovější otevřený holý záznam s 0 až 2 nohami. Na rozdíl od
+ * `selectBareLeaderTrade` ho UI dostane i se dvěma nohami, aby šla jedna z nich zrušit. Jen zobrazení.
+ */
+export function selectBareLegTrade(
+  records: readonly BareCloseEntryRecord[],
+  context: { solo: boolean; leaderAccountId: number | null },
+): BareLeaderTrade | null {
+  if (!context.solo || context.leaderAccountId == null) return null;
+  const newest = newestManualEntry(records);
+  const reference = newest?.request.referencePrice;
+  if (!newest || newest.status !== 'acknowledged' || newest.bare !== true || newest.closedAt != null || !newest.entryBrokerOrderId
+    || newest.request.accountId !== context.leaderAccountId || typeof reference !== 'number' || !Number.isFinite(reference) || reference <= 0) return null;
+  return {
+    entryOperationId: newest.operationId, symbol: newest.request.symbol, side: newest.request.side, quantity: newest.request.quantity, referencePrice: reference,
+    ...(newest.stopBrokerOrderId ? { hasStop: true } : {}), ...(newest.targetBrokerOrderId ? { hasTarget: true } : {}),
   };
 }
 
@@ -123,7 +151,7 @@ export function bareCloseRecordBlockers(input: {
   command: { groupId: string; leaderAccountId: number; symbol: string; expect: { price: number; quantity: number } };
 }): BareCloseIssue[] {
   const { record, command } = input;
-  if (!record || record.status !== 'acknowledged' || !isBareEntryWithoutLegs(record) || !record.entryBrokerOrderId
+  if (!record || record.status !== 'acknowledged' || !isBareEntryAtMostOneLeg(record) || !record.entryBrokerOrderId
     || input.leaderAccountId == null || record.request.accountId !== input.leaderAccountId) {
     return [{ code: 'not-bare-entry', text: 'Zavřít jde jen vlastní přijatý Market bez SL/TP.' }];
   }

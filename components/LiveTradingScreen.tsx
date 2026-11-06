@@ -92,6 +92,7 @@ import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 import type { LiveScreenThemePreference } from '../services/liveScreenTheme';
 import LiveThemeToggle from './LiveThemeToggle';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
+import { runLiveBareLeg, type LiveBareLegIntent } from '../lib/liveBareLeg';
 
 /**
  * LIVE → Graf: živý graf MNQ přes celou obrazovku s panelem objednávky vpravo
@@ -209,6 +210,9 @@ interface Props {
   // ── C7/C8 (4. 11. 2026): výchozí hodnoty = dnešní chování ──
   /** Nabídka × u vlastní holé pozice (desk `liveBareCloseOffer`, jen zobrazení); výchozí null. */
   bareClose?: LiveBareCloseOffer | null;
+  /** SL a TP po jedné: obchod ze statusu (jen zobrazení) a deskový příkaz; chybí = dnešní „Odeslat SL a TP“. */
+  bareLegTrade?: BareLeaderTrade | null;
+  onBareLeg?: (seen: BareLeaderTrade, intent: LiveBareLegIntent) => Promise<LeaderOrderManageResult>;
   /** Deskový `closeBareLeader` (jen s capability C8); chybí = × holé pozice se nenabídne. */
   onBareClose?: (seen: BareLeaderTrade) => Promise<LeaderOrderManageResult>;
   /** Sdílený zámek jednoho příkazu desku (lišta „Zrušit čekající“, Dashboard); chybí = vlastní zámek obrazovky. */
@@ -255,7 +259,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveLimitSupported, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null,
-  bareClose = null, onBareClose, manageLockRef = null, onReplayChange,
+  bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -549,11 +553,24 @@ const LiveTradingScreen: React.FC<Props> = ({
     const timer = window.setTimeout(() => setAttachSentFor(null), LIVE_ATTACH_SENT_HOLD_MS);
     return () => window.clearTimeout(timer);
   }, [attachSentFor]);
+  // SL a TP po jedné: tah a × na čáře jdou rovnou k brokerovi přes worker, tímtéž zámkem.
+  const legTrade = onBareLeg && bareLegTrade && !chartReplay ? bareLegTrade : null;
+  const sendBareLegRef = useRef<((intent: LiveBareLegIntent) => void) | null>(null);
+  sendBareLegRef.current = legTrade && onBareLeg ? intent => {
+    if (intent.kind === 'move') manageState.setPendingMove({ kind: intent.leg, price: intent.price, until: Number.POSITIVE_INFINITY });
+    void runLiveBareLeg({
+      busyRef: manageState.busyRef, send: () => onBareLeg(legTrade, intent), intent, busyText: LIVE_COMMAND_BUSY_TEXT,
+      report: notice => {
+        if (intent.kind === 'move') manageState.setPendingMove(current => (notice.tone === 'ok' && current ? { ...current, until: Date.now() + 5_000 } : null));
+        setLineNotice({ at: Date.now(), ...notice });
+      },
+    });
+  } : null;
   const attachChips = useMemo(() => {
-    if (!attachOperationId || !attachSide || chartReplay || attachSent || summary?.kind !== 'position') return null;
+    if (legTrade || !attachOperationId || !attachSide || chartReplay || attachSent || summary?.kind !== 'position') return null;
     const missing = ([['stopLoss', attachChipLegs?.stopLoss], ['takeProfit', attachChipLegs?.takeProfit]] as const).filter(([, value]) => value == null).map(([kind]) => kind);
     return { missing, canSend: missing.length === 0 };
-  }, [attachChipLegs?.stopLoss, attachChipLegs?.takeProfit, attachOperationId, attachSent, attachSide, chartReplay, summary?.kind]);
+  }, [attachChipLegs?.stopLoss, attachChipLegs?.takeProfit, attachOperationId, attachSent, attachSide, chartReplay, legTrade, summary?.kind]);
   const addChartAttachLegRef = useRef<(kind: 'stopLoss' | 'takeProfit', price?: number) => void>(() => undefined);
   addChartAttachLegRef.current = (kind, price) => {
     if (!attachOperationId || !attachSide) return;
@@ -597,6 +614,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     pendingLegs: managePendingLegsSupported === true,
     moveLimit: manageMoveLimitSupported === true,
     attachChips,
+    bareLegs: legTrade != null,
     // × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jinak by kopie zůstaly otevřené (Flatten na přehledu).
     canClose: manageCloseSupported && copier.available && copier.status?.armed === true && copier.status.shadowMode !== true,
     entryAvg: manageEntryAvgPrice ?? null,
@@ -694,8 +712,9 @@ const LiveTradingScreen: React.FC<Props> = ({
           return;
         }
         if (snapped === current) return;
-        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped, { pendingLegs: managePendingLegsSupported === true, moveLimit: manageMoveLimitSupported === true });
+        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped, { pendingLegs: managePendingLegsSupported === true || sendBareLegRef.current != null, moveLimit: manageMoveLimitSupported === true });
         if (blocked) { setLineNotice({ at: Date.now(), tone: 'bad', text: blocked }); return; }
+        if (kind !== 'entry' && sendBareLegRef.current && current != null) { sendBareLegRef.current({ kind: 'move', leg: kind, price: snapped, current }); return; }
         void runLiveManage(kind === 'entry' ? 'move-limit' : kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
         return;
       }
@@ -729,6 +748,11 @@ const LiveTradingScreen: React.FC<Props> = ({
         // C8: × holé pozice (z čáry / Shift+X) — jen nabídka s týmž id cíle.
         const bareEntryId = liveBareLineEntryId(line.id);
         if (bareEntryId != null) { void closeBare(bareEntryId); return; }
+        // × na SL nebo TP: zrušit jen tu nohu, čip se vrátí na vstup.
+        if (line.kind !== 'entry' && sendBareLegRef.current && summary) {
+          sendBareLegRef.current({ kind: 'remove', leg: line.kind, stop: summary.stop, target: summary.target });
+          return;
+        }
         if (line.kind === 'entry' && summary?.kind === 'pending') void runLiveManage('cancel-entry', summary.leader?.entry);
         // Zavřít obchod: „co jsem viděl“ = SL leadera (+ qty leadera v desku); worker ověří tvar u brokera.
         // Pozice z přikoupení s rozjetými SL: „co jsem viděl“ = nejochrannější SL od workeru (worker ho porovná znovu).
@@ -756,6 +780,12 @@ const LiveTradingScreen: React.FC<Props> = ({
     },
     onOrderLineAddBracket: (line, kind, price) => {
       // „+ SL“ / „+ TP“ u holé pozice: jen návrh nohy, odchází až tlačítkem na čáře.
+      if (line.ownerId === LIVE_POSITION_OWNER && sendBareLegRef.current) {
+        // Odchází jen puštění čipu na cenu; samotný klik nic neposílá.
+        if (price == null || !summary) { setLineNotice({ at: Date.now(), tone: 'warn', text: 'Čip táhni na cenu, kde chceš mít nohu.' }); return; }
+        sendBareLegRef.current({ kind: 'add', leg: kind, price: snapToTick(price, INSTRUMENT.tickSize), stop: summary.stop, target: summary.target });
+        return;
+      }
       if (line.ownerId === LIVE_POSITION_OWNER) { addChartAttachLegRef.current(kind, price); return; }
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
