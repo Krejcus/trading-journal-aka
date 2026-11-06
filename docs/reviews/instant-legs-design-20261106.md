@@ -76,3 +76,21 @@ Podle `lone-stop-*`, `oco-cancel-*`, `pending-leg-cancel`. Blokující nálezy k
 - Fill během automatického zrušení (OFF, kill, day lock) má stejný pravdivý text jako u ×.
 - Doplnit: výjimka DLL mezi zadáním a fillem do INV-RISK-01, typ a cena místo natvrdo `Market` (`bare-not-market`), brána „jen DEMO“ ve workeru i relayi, test Flattenu s holým čekajícím.
 - Skript zapisuje přes REST, worker může přes WS: pořadí eventů a ACK se může lišit, skript nedokazuje worker. Po stavbě zvlášť ověření z appky na DEMO.
+
+## Výsledky záznamu na DEMO (6. 11. 2026, 20:29–20:36 CET, DEMO8661118, 14 scénářů, každý jednou, přes REST, kopírka vypnutá)
+Záznamy: `~/Library/Application Support/AlphaTrade/copier/recordings/leader-legs-*`. Všechny skončily čistě, worker bez chyby. DEMO nedokazuje Lucid ani Tradeify a skript nedokazuje worker.
+
+| Otázka | Výsledek |
+|---|---|
+| Holý Limit | Vznikne, ACK ~150 ms; první událost ze streamu o 7 ms před ACK. Události vlastních příkazů nesou vlastní tag, události z liquidate ne. |
+| Zrušení holého Limitu | 230 ms. Marketable Limit a okamžité zrušení: `TooLate`, příkaz vyplněný, pozice 1. |
+| Holý Limit po fillu + OCO | OCO přijato, ACK 206 ms. |
+| Zrušení jedné nohy OCO z `placeoco` (K1) | Partner dál běží, u SL i TP, kontrolováno 4 s. Není potřeba zrušit a založit znovu. |
+| Zrušení TP čekajícího OSO (K3) | SL i vstup dál pracují; zrušení vstupu pak zruší i SL. Neměřeno: zrušení SL čekajícího vstupu, fill po zrušení nohy, zrušení nohy OSO u vyplněné pozice. |
+| Liquidate se samostatnou nohou (K4) | Stop i Limit zruší. Stop zrušen asi 270 ms před uzavíracím příkazem. |
+| Opačný Market se samostatným Stopem | **Stop zůstane pracovat i na flat účtu**, kontrolováno 2 s. Tohle je riziko SL bez OCO při zavření mimo appku. |
+| OCO vedle pracujícího Stopu (K2) | Přijato. Dvojí SL asi 330 ms (OCO + zrušení, ve skriptu). |
+| Zrušit nohu a založit OCO | Mezi potvrzením zrušení a ACK OCO ~510 ms včetně režie skriptu; samotné příkazy zhruba 190 + 190 ms. |
+| Jeden vzorek | K6 (N ≥ 20) splněné není. K7–K12 neměřeny. TIF ve výpisu vidět není. |
+
+Důsledek: × na noze je prosté `cancelOrder` a zaparkované nohy nejsou potřeba. Přidání druhé nohy zůstává výměna se dvěma možnými pořadími. Blokující nálezy kola 1 (brzdy u × SL, hlídání samostatné nohy, Flatten během výměny, kontroly počítající s oběma nohami, relay rozestup 2 s) dál platí.

@@ -291,7 +291,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 ### 2026-11-06 večer — Limit bez SL/TP: rozhodnutí a skript pro DEMO (Claude, větev `claude/chart-position-ui-20261106`, nic nenasazeno)
 
 - Filip: SL a TP u Limitu jsou dobrovolné, jako znal z TradingView, riziko fillu bez SL přijal. Zaparkované nohy pro Limit odpadají. Návrh a nálezy v `docs/reviews/instant-legs-design-20261106.md`; stavět až po záznamu.
-- `scripts/copier/record-legs.ts`, 14 scénářů, spouští jen Filip. Přibyly kroky `place-exit`, `place-oco`, příznak `bare` v DSL záznamů. Critic: po opravách (tag jen jako příznak, dvě čisté kontroly po výjimce zápisu, kontrola nevyřešených při startu) skript nejdřív po krocích. Interpret ještě nikdy neběžel proti brokerovi, skript nedokazuje worker.
+- Filip 6. 11. večer spustil všech 14 scénářů, účet čistý; výsledky v návrhu: zrušení jedné nohy OCO partnera nechá, liquidate samostatnou nohu zruší, opačný Market ne. `scripts/copier/record-legs.ts`, 14 scénářů, spouští jen Filip. Přibyly kroky `place-exit`, `place-oco`, příznak `bare` v DSL záznamů. Critic: po opravách (tag jen jako příznak, dvě čisté kontroly po výjimce zápisu, kontrola nevyřešených při startu) skript nejdřív po krocích. Interpret ještě nikdy neběžel proti brokerovi, skript nedokazuje worker.
 
 ### 2026-11-06 večer — Posun SL u pozice s dokupy blokoval starý záznam (Claude, větev `claude/chart-position-ui-20261106`, oprava nenasazená)
 
