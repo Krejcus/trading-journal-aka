@@ -34,7 +34,7 @@ export interface LivePcAlertBridge {
   move: (id: string, price: number) => void;
   remove: (id: string) => void;
   /** Vrstva čar pro panel; přes most, ať se kód upozornění netáhne do backtestu a detailu obchodu. */
-  renderLines: (api: ChartViewApi) => React.ReactNode;
+  renderLines: (api: ChartViewApi, isDark: boolean) => React.ReactNode;
 }
 
 function createFlashStore() {
@@ -123,7 +123,7 @@ export function useLivePcPriceAlerts({ conditionMarket, watching }: { conditionM
       store.remove(id);
       card(toast('muted', 'Zrušeno', 'Upozornění zrušeno', ''));
     },
-    renderLines: api => <LivePcAlertLines api={api} bridge={value} />,
+    renderLines: (api, isDark) => <LivePcAlertLines api={api} bridge={value} isDark={isDark} />,
     };
     return value;
   }, [card, flash, store]);
@@ -138,7 +138,7 @@ export function useLivePcPriceAlerts({ conditionMarket, watching }: { conditionM
 export type LivePcPriceAlerts = ReturnType<typeof useLivePcPriceAlerts>;
 
 /** Čáry v panelu grafu exekučního instrumentu. Leží POD čarami příkazů, ty mají přednost. */
-function LivePcAlertLines({ api, bridge }: { api: ChartViewApi; bridge: LivePcAlertBridge }) {
+function LivePcAlertLines({ api, bridge, isDark }: { api: ChartViewApi; bridge: LivePcAlertBridge; isDark: boolean }) {
   const state = useSyncExternalStore(bridge.store.subscribe, bridge.store.getState, bridge.store.getState);
   const flashIds = useSyncExternalStore(bridge.flash.subscribe, bridge.flash.get, bridge.flash.get);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -149,6 +149,7 @@ function LivePcAlertLines({ api, bridge }: { api: ChartViewApi; bridge: LivePcAl
       selectedId={selectedId}
       flashIds={flashIds}
       mouse
+      isDark={isDark}
       onSelect={setSelectedId}
       onEdit={bridge.openEdit}
       onMove={bridge.move}

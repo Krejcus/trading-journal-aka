@@ -302,7 +302,7 @@ describe('upozornění na cenu na PC', () => {
     const workspace = read('components/AlphaTradeChartWorkspace.tsx');
     expect(workspace).toMatch(/onQuickPriceAlert=\{liveReplayLocked \? undefined : liveOrderEntry\?\.priceAlerts\?\.quickAdd\}/);
     expect(workspace).toMatch(/liveOrderEntry\?\.priceAlerts && !liveReplayLocked/);
-    expect(workspace.indexOf('priceAlerts.renderLines(chartApi)')).toBeLessThan(workspace.indexOf('<BacktestOrderLinesOverlay'));
+    expect(workspace.indexOf('priceAlerts.renderLines(chartApi, context.isDark)')).toBeLessThan(workspace.indexOf('<BacktestOrderLinesOverlay'));
     expect(read('components/day/LivePhoneAlerts.tsx')).toMatch(/overflow: 'hidden', zIndex: 14/);
     expect(read('components/BacktestOrderLinesOverlay.tsx')).toMatch(/absolute inset-0 z-\[115\]/);
     // Kód upozornění se netáhne do backtestu a detailu obchodu.

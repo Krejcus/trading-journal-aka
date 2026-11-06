@@ -61,7 +61,7 @@ function usePaneTracking(api: ChartViewApi | null, prices: readonly number[]) {
   return layout;
 }
 
-export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse = false, onSelect, onEdit, onMove, onRemove }: {
+export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse = false, isDark = true, onSelect, onEdit, onMove, onRemove }: {
   api: ChartViewApi | null;
   alerts: readonly PriceAlert[];
   selectedId: string | null;
@@ -69,12 +69,15 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
   flashIds: ReadonlySet<string>;
   /** PC: myš bere celou čáru — tah posouvá hned, bez předchozího výběru; jen levé tlačítko. */
   mouse?: boolean;
+  /** PC: motiv LIVE pro podklad štítku na ose. */
+  isDark?: boolean;
   onSelect: (id: string | null) => void;
   onEdit: (id: string) => void;
   onMove: (id: string, price: number) => void;
   onRemove: (id: string) => void;
 }) {
   const [drag, setDrag] = useState<{ id: string; price: number } | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
   // Při tažení se kreslí cena pod prstem; uložená cena (`alert.price`) zůstává do puštění.
   const shownPrice = (alert: PriceAlert) => (drag?.id === alert.id ? drag.price : alert.price);
   const { ys, paneWidth, paneHeight, scaleWidth } = usePaneTracking(api, alerts.map(shownPrice));
@@ -119,7 +122,7 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
         const css = alertLineCss(alert.line, selected);
         const showLine = alert.line.width !== 'none' || selected;
         return (
-          <div key={alert.id} data-alert-line={alert.id} data-alert-spent={spent ? '' : undefined} style={{ position: 'absolute', left: 0, top: y, width: paneWidth, height: 0, opacity: spent && !selected && !flash ? 0.4 : 1 }}>
+          <div key={alert.id} data-alert-line={alert.id} data-alert-spent={spent ? '' : undefined} onPointerEnter={mouse ? () => setHoverId(alert.id) : undefined} onPointerLeave={mouse ? () => setHoverId(current => (current === alert.id ? null : current)) : undefined} style={{ position: 'absolute', left: 0, top: y, width: paneWidth, height: 0, opacity: spent && !selected && !flash ? 0.4 : 1 }}>
             {showLine && <div style={{
               position: 'absolute', left: 0, right: mouse ? 0 : selected ? 52 : 22, top: 0, transform: 'translateY(-50%)',
               // PC: krytí z palety; telefon beze změny.
@@ -127,8 +130,12 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
               animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
             }} />}
             {/* PC: místo zvonečku přes čáru štítek na cenové ose; celou dobu ukazuje cenu a jde za něj táhnout. */}
-            {mouse && <span aria-hidden data-alert-tag style={{ userSelect: 'none', position: 'absolute', left: paneWidth + 2, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 4, height: 17, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, background: rgba(color, selected || flash ? 1 : 0.88), color: alertTagInk(color), fontSize: 9.5, fontWeight: 800, fontVariantNumeric: 'tabular-nums', animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
-              <Bell size={9} strokeWidth={2.6} />{formatLivePrice(shownPrice(alert))}
+            {mouse && <span aria-hidden data-alert-tag style={{ userSelect: 'none', position: 'absolute', left: paneWidth + 3, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 6, height: 16, borderRadius: 4, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 9.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
+              // Klidně: průsvitná barva na vlastním podkladu (schová číslo osy), plná jen při výběru a spuštění.
+              ...(selected || flash
+                ? { background: color, color: alertTagInk(color), border: `1px solid ${color}` }
+                : { background: `linear-gradient(${rgba(color, 0.16)}, ${rgba(color, 0.16)}), ${isDark ? '#0d1219' : '#ffffff'}`, color: `color-mix(in srgb, ${color} ${isDark ? '80%, white' : '62%, black'})`, border: `1px solid ${rgba(color, 0.4)}` }) }}>
+              <Bell size={9} strokeWidth={2.2} />{formatLivePrice(shownPrice(alert))}
             </span>}
             {!mouse && <span aria-hidden style={{ position: 'absolute', right: 6, top: 0, transform: 'translateY(-50%)', width: 16, height: 16, borderRadius: 8, display: 'grid', placeItems: 'center', color: rgba(color, flash || selected ? 1 : 0.45), background: selected ? 'rgba(20,22,36,.72)' : 'transparent', boxShadow: selected ? `0 0 0 1px ${rgba(color, 0.55)}` : undefined, animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
               <Bell size={10} strokeWidth={2.2} />
@@ -179,11 +186,13 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
               }}
               onPointerCancel={() => { pressRef.current = null; setDrag(null); }}
             />
-            {selected && <>
-              <button type="button" className="dj-btn" aria-label="Zrušit upozornění" onPointerDown={event => event.stopPropagation()} onClick={() => onRemove(alert.id)}
-                style={{ position: 'absolute', right: mouse ? 6 : 28, top: 0, transform: 'translateY(-50%)', width: 18, height: 18, borderRadius: 9, border: '1px solid rgba(251,113,133,.5)', background: 'rgba(239,70,85,.28)', color: '#fecaca', display: 'grid', placeItems: 'center', padding: 0, pointerEvents: 'auto', cursor: 'pointer' }}>
+            {(selected || (mouse && hoverId === alert.id && !drag)) && (
+              <button type="button" className="dj-btn" title="Smazat upozornění" aria-label="Zrušit upozornění" onPointerDown={event => event.stopPropagation()} onClick={() => onRemove(alert.id)}
+                style={{ position: 'absolute', right: mouse ? 4 : 28, top: 0, transform: 'translateY(-50%)', width: mouse ? 16 : 18, height: mouse ? 16 : 18, borderRadius: 9, border: '1px solid rgba(251,113,133,.5)', background: 'rgba(239,70,85,.28)', color: '#fecaca', display: 'grid', placeItems: 'center', padding: 0, pointerEvents: 'auto', cursor: 'pointer' }}>
                 <X size={11} />
               </button>
+            )}
+            {selected && <>
               {!mouse && <span style={{ position: 'absolute', left: paneWidth + 2, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 4, height: 18, borderRadius: 4, display: 'grid', placeItems: 'center', background: rgba(color, 0.8), color: '#fff', fontSize: 9.5, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
                 {formatLivePrice(shownPrice(alert))}
               </span>}

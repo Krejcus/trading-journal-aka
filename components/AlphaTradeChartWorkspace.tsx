@@ -1273,7 +1273,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             />
           )}
           {chartApi && liveOrderEntry?.priceAlerts && !liveReplayLocked ? (
-            liveOrderEntry.priceAlerts.renderLines(chartApi)
+            liveOrderEntry.priceAlerts.renderLines(chartApi, context.isDark)
           ) : null}
           {/* Připojený i bez čar: pojistka změny nabídky musí přežít stav bez čáry (čekající → nic → pozice). */}
           {chartApi && orderLineSource?.onOrderLineChange && orderLineSource.onOrderLineCancel ? (
