@@ -94,3 +94,38 @@ Záznamy: `~/Library/Application Support/AlphaTrade/copier/recordings/leader-leg
 | Jeden vzorek | K6 (N ≥ 20) splněné není. K7–K12 neměřeny. TIF ve výpisu vidět není. |
 
 Důsledek: × na noze je prosté `cancelOrder` a zaparkované nohy nejsou potřeba. Přidání druhé nohy zůstává výměna se dvěma možnými pořadími. Blokující nálezy kola 1 (brzdy u × SL, hlídání samostatné nohy, Flatten během výměny, kontroly počítající s oběma nohami, relay rozestup 2 s) dál platí.
+
+## Návrh v2: SL a TP po jedné u vyplněné holé pozice (po záznamu, 6. 11. 2026)
+Filip: stavět jako první. Dotčená pravidla: INV-MANUAL-01, INV-OUTBOX-01/02/03, INV-BRAKE-01/02/03, INV-RISK-01, INV-UI-01/02/03, INV-RELAY-01/03, INV-DIVERGENCE-01, INV-DEFAULT-02/03, INV-TRAD-02/08, INV-RECON-02.
+
+**Rozsah:** jen sólo manual-only DEMO bez followerů, capability `manual-order-single-leg-v1`, jen vlastní vyplněný záznam `bare: true`, jeden lístek, plný fill, nejnovější vstup, `closedAt == null`. Čekající Limit, OSO z panelu a pozice s dokupy se nemění. Přikoupení k pozici s jednou nohou zůstává blokované.
+
+**Stav:** `bare: true` + 0, 1 nebo 2 id nohou. 0 = holá, 1 = částečná (nové), 2 = spravovaná jako po attach dnes.
+
+**Příkazy** (nové akce `add-leg` a `remove-leg`, `leg: 'stopLoss' | 'takeProfit'`; `add-leg` nese `newPrice`):
+| Z | Akce | Zápisy |
+|---|---|---|
+| 0 nohou | add-leg | `placeOrder` Stop nebo Limit na celou pozici |
+| jen SL | add-leg TP | `placeOco` SL (stejná cena) + TP, po ACK zrušit starý SL. Krátce dvojí SL, deklarovaný přechod. |
+| jen TP | add-leg SL | zrušit TP, po potvrzení `placeOco`. Pozice SL před tím neměla, ztrácí se jen TP. |
+| 2 nohy | remove-leg | `cancelOrder` jedné nohy, partner běží (DEMO, jen OCO z `placeoco`); nová kontrola id. |
+| 1 noha | remove-leg | `cancelOrder`, zpět na 0 |
+| 1 noha | `move-stop` / `move-target` | worker pozná částečný záznam, `modifyOrder` téže nohy, posun SL dál od trhu přes `moveStopRiskBlocked` |
+
+**Brány:** jako attach (nejnovější záznam, fresh čtení, fence, Flatten, in-flight, ingress, tvar pozice, ≥ 8 ticků od čerstvé IBKR ceny na správné straně), povolené otevřené příkazy jsou jen vlastní nohy. `add-leg` SL k pozici bez SL smí za brzdy jako attach. Vše ostatní (`remove-leg`, `add-leg` TP, posun) jen ARMED ∧ ¬shadow ∧ ¬kill. Odebrání SL se nikdy nepustí po brzdě a je v supersede relaye.
+
+**Sekvence dvou kroků:** durable fáze před každým zápisem, stará id ze záznamu mizí až po ověřeném zrušení. Krok 2 nepoužívá frontovou fence, kontroluje jen Flatten, abort a flat ze streamu. Celá sekvence je registrovaná jako rozpracovaný zápis a Flatten nastaví abort před krokem 2.
+- Selhání OCO při SL → SL+TP: starý SL dál chrání, `rejected`, bez incidentu. Neznámý ACK: `unknown` + incident.
+- Selhání zrušení starého SL: dvojí SL, incident `recordWhenDisarmed` s textem, bez opakování.
+- Selhání OCO po zrušení TP: pozice je bez nohou jako před tím, `rejected`, bez incidentu.
+- Restart v `sending`: `unknown` + incident jako u attach, po startu jen čtení.
+
+**Korelátor:** do `inferenceWindowMs` po fillu `add-leg` vrátí `busy` s textem „za chvíli“: lone leg by jinak udělal `incomplete-bracket-pair`. Vlastní jedna noha nesmí vyvolat `oso-lone-leg`; nové id se zapíše do vlastních nohou hned po ACK.
+
+**Zavření mimo appku:** samostatný Stop na flat účtu dál pracuje (DEMO). Návrh: při dvojím ověření flat (`leaderVerifiedFlat`) cílené zrušení vlastní nohy podle id jedním pokusem, jinak incident. Vyžaduje Filipův souhlas a výjimku v INV-DIVERGENCE-01.
+
+**× zavření:** částečný záznam jde cestou holého zavření, liquidate; povolené otevřené příkazy jsou vlastní nohy.
+
+**Relay:** validace nových akcí, rozestup 2 s na obchod zůstává; rychlý druhý tah vrátí `entry-busy` a UI to řekne. Denní strop beze změny.
+
+**UI (PC i telefon):** chip `+ SL` / `+ TP` podle nohy, kterou pozice nemá; puštění chipu odešle `add-leg`, klik bez tahu nic. × na čáře SL/TP = `remove-leg`. „Odeslat SL a TP“ pryč. Starý worker bez capability: dnešní chování.
