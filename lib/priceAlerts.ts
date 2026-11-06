@@ -10,12 +10,13 @@
  * `PriceAlertStore` je pro obě stejné.
  */
 
+import { isAlertTone } from './priceAlertTones';
+
 export type PriceAlertCondition = 'cross' | 'up' | 'down';
 export type PriceAlertFrequency = 'once' | 'every';
 export type PriceAlertExpiry = 'session' | 'gtc';
 export type PriceAlertLineWidth = 'thin' | 'thick' | 'none';
 export type PriceAlertLineStyle = 'solid' | 'dashed' | 'dotted';
-export type PriceAlertTone = 'double' | 'chime' | 'rise' | 'fall' | 'urgent';
 
 export interface PriceAlertChannels {
   /** Běžná notifikace iOS (APNs), i při zamčeném telefonu. */
@@ -25,8 +26,8 @@ export interface PriceAlertChannels {
   /** PC: karta vlevo dole jako u obchodů, push v prohlížeči. */
   pc: boolean;
   sound: boolean;
-  /** Který tón přehraje PC (výchozí `double`); telefon má systémový zvuk notifikace. */
-  tone?: PriceAlertTone;
+  /** Který zvuk přehraje PC (`lib/priceAlertTones.ts`, vlastní `custom:<id>`); telefon má systémový. */
+  tone?: string;
 }
 
 export interface PriceAlertStyle {
@@ -86,10 +87,6 @@ export const DEFAULT_PRICE_ALERT: PriceAlertDefaults = {
 
 /** Výchozí krytí čáry na PC (%). */
 export const PRICE_ALERT_PC_OPACITY = 70;
-
-export const PRICE_ALERT_TONES: ReadonlyArray<[PriceAlertTone, string]> = [
-  ['double', 'Dvojitý'], ['chime', 'Zvonek'], ['rise', 'Stoupá'], ['fall', 'Klesá'], ['urgent', 'Naléhavý'],
-];
 
 export const PRICE_ALERTS_STORAGE_KEY = 'alphatrade:price-alerts:v1';
 export const PRICE_ALERT_DEFAULTS_KEY = 'alphatrade:price-alert-defaults:v1';
@@ -164,8 +161,8 @@ function sanitizeDefaults(raw: unknown): PriceAlertDefaults {
       voice: bool(channels.voice, base.channels.voice),
       pc: bool(channels.pc, base.channels.pc),
       sound: bool(channels.sound, base.channels.sound),
-      // Bez platného tónu pole chybí; přehrání a UI berou výchozí `double`.
-      ...(PRICE_ALERT_TONES.some(([tone]) => tone === channels.tone) ? { tone: channels.tone as PriceAlertTone } : {}),
+      // Bez platného tónu pole chybí; přehrání a UI berou výchozí.
+      ...(isAlertTone(channels.tone) ? { tone: channels.tone } : {}),
     },
   };
 }

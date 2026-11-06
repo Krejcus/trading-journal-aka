@@ -1,16 +1,19 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AudioLines, Bell, Monitor, Smartphone, Trash2, X } from 'lucide-react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
+import { AudioLines, Bell, Check, ChevronDown, Monitor, Smartphone, Trash2, Upload, VolumeX, X } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import './day/dayJournal.css';
 import TradingViewColorPicker from './TradingViewColorPicker';
 import { LivePhoneAlertLines } from './day/LivePhoneAlerts';
 import {
-  PRICE_ALERT_PC_OPACITY, PRICE_ALERT_TONES, alertConditionText, alertTitle, movedAlert, newPriceAlert, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus,
-  type PriceAlert, type PriceAlertLineStyle, type PriceAlertLineWidth, type PriceAlertStore, type PriceAlertTone,
+  PRICE_ALERT_PC_OPACITY, alertConditionText, alertTitle, movedAlert, newPriceAlert, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus,
+  type PriceAlert, type PriceAlertLineStyle, type PriceAlertLineWidth, type PriceAlertStore,
 } from '../lib/priceAlerts';
 import type { TradeToast } from '../lib/liveTradeToasts';
 import { alertVoiceText, speakAlertText } from '../services/alertVoice';
 import { liveFillAudio } from '../services/liveFillAudio';
+import { addCustomAlertSound, listCustomAlertSounds, playAlertTone, removeCustomAlertSound, type CustomAlertSound } from '../services/priceAlertSounds';
+import { ALERT_TONE_GROUPS, DEFAULT_ALERT_TONE, alertToneName, customToneId, customToneValue } from '../lib/priceAlertTones';
 import { useFreshPriceAlertEvents, usePriceAlertStore } from '../services/priceAlertStoreHook';
 
 /**
@@ -79,7 +82,7 @@ export function useLivePcPriceAlerts({ conditionMarket, watching }: { conditionM
     const title = priceAlertEventTitle(alert, event.price);
     const actions = pcAlertFiredActions(alert);
     if (actions.card) card(toast('amber', 'Upoz.', title, alert?.note ? alert.note : 'Upozornění na cenu', 8_000));
-    if (actions.sound) liveFillAudio.playCue(`alert-${alert?.channels.tone ?? 'double'}`);
+    if (actions.sound) void playAlertTone(alert?.channels.tone);
     if (actions.voice) speakAlertText(alertVoiceText(title, alert?.note));
   });
   // Trvale odmítnuté uložení (např. strop 50): čára zmizí, takže to musí být vidět hned, ne až v seznamu.
@@ -182,6 +185,8 @@ function AlertWindow({ label, isDark, width, onClose, children }: { label: strin
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      // Otevřená nabídka zvuků zavře Esc jen sebe.
+      if (document.querySelector('[data-alert-sound-menu]')) return;
       event.preventDefault();
       event.stopPropagation();
       onClose();
@@ -308,6 +313,134 @@ const CHANNELS: ReadonlyArray<{ key: 'phone' | 'pc' | 'voice'; text: string; tit
   { key: 'voice', text: 'Hlas', title: 'Telefon i PC přečtou upozornění nahlas', Icon: AudioLines },
 ];
 
+/**
+ * Rozbalovací nabídka zvuků. Klik vybere a hned přehraje a nabídka zůstane otevřená, ať jde
+ * rychle zkoušet. Portál na body: okno dialogu ořezává přetečení.
+ */
+function SoundPicker({ isDark, sound, tone, onChange }: {
+  isDark: boolean;
+  sound: boolean;
+  tone: string;
+  onChange: (sound: boolean, tone: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [customs, setCustoms] = useState<CustomAlertSound[]>([]);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [position, setPosition] = useState({ left: 0, top: 0, maxHeight: 320 });
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { void listCustomAlertSounds().then(setCustoms); }, []);
+  useLayoutEffect(() => {
+    if (!open || !buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - 12;
+    const above = rect.top - 12;
+    const maxHeight = Math.min(340, Math.max(below, above));
+    setPosition({ left: Math.max(8, rect.right - 250), top: below >= above || below >= 340 ? rect.bottom + 4 : rect.top - 4 - maxHeight, maxHeight });
+  }, [open]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (!target?.closest?.('[data-alert-sound-menu]') && !buttonRef.current?.contains(target)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey, true); };
+  }, [open]);
+
+  // Vybraný zvuk je po otevření hned vidět, i když je v delším seznamu níž.
+  useEffect(() => {
+    if (open) document.querySelector('[data-alert-sound-menu] [aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [open]);
+
+  const choose = (next: string) => {
+    setProblem(null);
+    onChange(true, next);
+    liveFillAudio.unlock();
+    void playAlertTone(next);
+  };
+  const upload = async (file: File | undefined) => {
+    if (!file) return;
+    const result = await addCustomAlertSound(file);
+    if ('error' in result) { setProblem(result.error); return; }
+    setCustoms(await listCustomAlertSounds());
+    choose(customToneValue(result.sound.id));
+  };
+  const remove = async (id: string) => {
+    await removeCustomAlertSound(id);
+    setCustoms(await listCustomAlertSounds());
+    if (customToneId(tone) === id) onChange(sound, DEFAULT_ALERT_TONE);
+  };
+  const customName = customs.find(item => item.id === customToneId(tone))?.name;
+  const label = !sound ? 'Vypnuto' : alertToneName(tone) ?? customName ?? 'Vlastní zvuk';
+  const row = `flex h-7 w-full items-center gap-2 rounded-[5px] px-2 text-left text-[12px] font-medium transition-colors`;
+  const selected = (on: boolean) => pressable(isDark, on);
+  const heading = (text: string) => <div className={`px-2 pb-0.5 pt-2 text-[10.5px] font-semibold ${muted(isDark)}`}>{text}</div>;
+  return <>
+    <button ref={buttonRef} type="button" aria-haspopup="listbox" aria-expanded={open} aria-label={`Zvuk: ${label}`} onClick={() => setOpen(value => !value)}
+      className={`inline-flex h-7 w-[190px] shrink-0 items-center justify-between gap-2 rounded-md border px-2 text-[12px] font-semibold transition-colors ${open ? 'border-indigo-400/60' : isDark ? 'border-white/[0.12] hover:border-white/25' : 'border-slate-900/[0.12] hover:border-slate-900/25'}`}>
+      <span className="truncate">{label}</span>
+      <ChevronDown size={13} className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''} ${muted(isDark)}`} aria-hidden />
+    </button>
+    {open && createPortal(
+      <div
+        data-alert-sound-menu
+        role="listbox"
+        aria-label="Zvuk upozornění"
+        className={`fixed z-[10100] w-[250px] overflow-y-auto rounded-lg border p-1 ${isDark
+          ? 'border-white/[0.12] bg-[#101720]/[0.98] text-slate-100 shadow-[0_24px_50px_-20px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)]'
+          : 'border-white/90 bg-white/[0.98] text-slate-900 shadow-[0_24px_50px_-20px_rgba(15,23,42,0.45),0_0_0_1px_rgba(15,23,42,0.07)]'}`}
+        style={{ left: position.left, top: position.top, maxHeight: position.maxHeight }}
+      >
+        <button type="button" role="option" aria-selected={!sound} onClick={() => { setProblem(null); onChange(false, tone); }} className={`${row} ${selected(!sound)}`}>
+          <VolumeX size={13} aria-hidden />Vypnuto{!sound && <Check size={13} className="ml-auto" aria-hidden />}
+        </button>
+        <button type="button" onClick={() => fileRef.current?.click()} className={`${row} ${selected(false)}`}>
+          <Upload size={13} aria-hidden />Nahrát vlastní zvuk…
+        </button>
+        <input ref={fileRef} type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" className="hidden" aria-label="Soubor se zvukem" onChange={event => { void upload(event.target.files?.[0]); event.target.value = ''; }} />
+        {problem && <div role="alert" className="px-2 py-1 text-[11px] text-rose-400">{problem}</div>}
+        {customs.length > 0 && <>
+          {heading('Moje zvuky')}
+          {customs.map(item => {
+            const value = customToneValue(item.id);
+            const on = sound && tone === value;
+            return (
+              <div key={item.id} className="group flex items-center gap-0.5">
+                <button type="button" role="option" aria-selected={on} onClick={() => choose(value)} className={`${row} min-w-0 flex-1 ${selected(on)}`}>
+                  <span className="truncate">{item.name}</span>{on && <Check size={13} className="ml-auto shrink-0" aria-hidden />}
+                </button>
+                <button type="button" aria-label={`Smazat zvuk ${item.name}`} onClick={() => void remove(item.id)} className="grid h-7 w-7 shrink-0 place-items-center rounded-[5px] text-rose-400 opacity-50 transition hover:bg-rose-500/10 hover:opacity-100"><Trash2 size={12} /></button>
+              </div>
+            );
+          })}
+        </>}
+        {ALERT_TONE_GROUPS.map(group => (
+          <div key={group.name}>
+            {heading(group.name)}
+            {group.tones.map(item => {
+              const on = sound && tone === item.id;
+              return (
+                <button key={item.id} type="button" role="option" aria-selected={on} onClick={() => choose(item.id)} className={`${row} ${selected(on)}`}>
+                  {item.name}{on && <Check size={13} className="ml-auto" aria-hidden />}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>,
+      document.body,
+    )}
+  </>;
+}
+
 /** Nastavení jednoho upozornění: „popisek vlevo, ovládání vpravo“ jako v Nastavení aplikace. */
 function AlertSettingsWindow({ alert, market, isDark, onSave, onDelete, onClose }: {
   alert: PriceAlert;
@@ -370,17 +503,11 @@ function AlertSettingsWindow({ alert, market, isDark, onSave, onDelete, onClose 
           </div>
         </Row>
         <Row label="Zvuk" isDark={isDark}>
-          <Seg<PriceAlertTone | 'off'>
-            value={draft.channels.sound ? draft.channels.tone ?? 'double' : 'off'}
+          <SoundPicker
             isDark={isDark}
-            options={[['off', 'Vyp'], ...PRICE_ALERT_TONES]}
-            onChange={choice => {
-              // Klik je zároveň ukázka tónu.
-              if (choice === 'off') { set({ channels: { ...draft.channels, sound: false } }); return; }
-              set({ channels: { ...draft.channels, sound: true, tone: choice } });
-              liveFillAudio.unlock();
-              liveFillAudio.playCue(`alert-${choice}`);
-            }}
+            sound={draft.channels.sound}
+            tone={draft.channels.tone ?? DEFAULT_ALERT_TONE}
+            onChange={(sound, tone) => set({ channels: { ...draft.channels, sound, tone } })}
           />
         </Row>
         <Row label="Poznámka" isDark={isDark}>

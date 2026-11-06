@@ -1,6 +1,5 @@
 import type { CopierCopyEvent } from '../services/copierRuntimeController';
 import type { LiveFillMarker } from './liveFillMarkers';
-import type { PriceAlertTone } from './priceAlerts';
 
 /**
  * Zvuk/hlas při fillu v LIVE grafu (U7, 3. 11. 2026) — JEN zobrazení (INV-UI-01/03).
@@ -43,7 +42,7 @@ export const LIVE_FILL_ANNOUNCE_PAIR_MS = 5_000;
 const SEEN_MAX = 500;
 const DEFAULT_ROOT = 'MNQ';
 
-export type LiveFillCue = 'buy' | 'sell' | 'win' | 'loss' | 'flat' | `alert-${PriceAlertTone}`;
+export type LiveFillCue = 'buy' | 'sell' | 'win' | 'loss' | 'flat';
 export type LiveFillSource = 'event' | 'fill';
 type OrderSide = 'Buy' | 'Sell';
 type FillKind = 'fill' | 'entry' | 'scale-in' | 'scale-out' | 'exit' | 'flip';

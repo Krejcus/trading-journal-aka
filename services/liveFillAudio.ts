@@ -34,6 +34,8 @@ export interface LiveFillUnlockTarget {
   removeEventListener(type: string, listener: () => void, options?: EventListenerOptions | boolean): void;
 }
 
+export interface LiveFillNote { hz: number; ms: number; wave?: 'sine' | 'triangle' | 'square' }
+
 export interface LiveFillAudioOutput {
   /** Odemkne zvuk (volat z gesta uživatele). Nikdy nevyhodí. */
   unlock(): void;
@@ -44,6 +46,8 @@ export interface LiveFillAudioOutput {
   /** Ukázka po přepnutí režimu (z kliknutí, takže zároveň odemkne zvuk). */
   preview(mode: LiveFillAnnounceMode): void;
   playCue(cue: LiveFillCue): void;
+  /** Libovolná řada tónů (zvuky upozornění na cenu); stejné odemčení i hlasitost jako `playCue`. */
+  playNotes(notes: readonly LiveFillNote[]): void;
   speak(text: string): void;
 }
 
@@ -54,12 +58,6 @@ export const LIVE_FILL_CUE_PATTERNS: Readonly<Record<LiveFillCue, readonly { hz:
   win: [{ hz: 660, ms: 60 }, { hz: 880, ms: 60 }, { hz: 1175, ms: 110 }],
   loss: [{ hz: 494, ms: 90 }, { hz: 370, ms: 140 }],
   flat: [{ hz: 740, ms: 110 }],
-  // Upozornění na cenu: vlastní rodina, nesmí znít jako pohyb v pozici.
-  'alert-double': [{ hz: 1319, ms: 80 }, { hz: 1319, ms: 80 }],
-  'alert-chime': [{ hz: 1568, ms: 70 }, { hz: 2093, ms: 180 }],
-  'alert-rise': [{ hz: 1047, ms: 70 }, { hz: 1319, ms: 70 }, { hz: 1760, ms: 110 }],
-  'alert-fall': [{ hz: 1760, ms: 70 }, { hz: 1319, ms: 70 }, { hz: 1047, ms: 110 }],
-  'alert-urgent': [{ hz: 1568, ms: 70 }, { hz: 1568, ms: 70 }, { hz: 1568, ms: 70 }, { hz: 1568, ms: 70 }],
 };
 /** Hlasitost pípnutí (0–1) — tiché, ať nepřehluší hlas Coache ani video. */
 export const LIVE_FILL_TONE_VOLUME = 0.12;
@@ -106,17 +104,17 @@ export function createLiveFillAudio(deps: {
     return context;
   };
 
-  const schedule = (ctx: LiveFillAudioContextLike, cue: LiveFillCue) => {
+  const schedule = (ctx: LiveFillAudioContextLike, notes: readonly LiveFillNote[]) => {
     try {
       const master = ctx.createGain();
       master.gain.value = LIVE_FILL_TONE_VOLUME;
       master.connect(ctx.destination);
       let at = ctx.currentTime + 0.01;
-      for (const note of LIVE_FILL_CUE_PATTERNS[cue] ?? LIVE_FILL_CUE_PATTERNS.flat) {
+      for (const note of notes) {
         const length = note.ms / 1000;
         const oscillator = ctx.createOscillator();
         const gain = ctx.createGain();
-        oscillator.type = 'sine';
+        oscillator.type = note.wave ?? 'sine';
         oscillator.frequency.setValueAtTime(note.hz, at);
         // Náběh i doběh přes exponenciálu = bez lupnutí.
         gain.gain.setValueAtTime(0.0001, at);
@@ -141,20 +139,21 @@ export function createLiveFillAudio(deps: {
     }
   };
 
-  const playCue = (cue: LiveFillCue) => {
+  const playNotes = (notes: readonly LiveFillNote[]) => {
     try {
       const ctx = ensureContext();
       if (!ctx || ctx.state === 'closed') return;
-      if (ctx.state === 'running') { schedule(ctx, cue); return; }
+      if (ctx.state === 'running') { schedule(ctx, notes); return; }
       // Zamčený (suspended/interrupted): zkusit odemknout; pípnout jen když se to povede hned.
       const requestedAt = now();
       void resume(ctx)?.then(() => {
-        if (ctx.state === 'running' && now() - requestedAt <= RESUME_MAX_MS) schedule(ctx, cue);
+        if (ctx.state === 'running' && now() - requestedAt <= RESUME_MAX_MS) schedule(ctx, notes);
       }).catch(() => undefined);
     } catch {
       // Zvuk je jen doplněk.
     }
   };
+  const playCue = (cue: LiveFillCue) => playNotes(LIVE_FILL_CUE_PATTERNS[cue] ?? LIVE_FILL_CUE_PATTERNS.flat);
 
   const speak = (text: string) => {
     try {
@@ -213,6 +212,7 @@ export function createLiveFillAudio(deps: {
       announce({ cue: 'buy', speech: PREVIEW_SPEECH }, mode);
     },
     playCue,
+    playNotes,
     speak,
   };
 }

@@ -17,6 +17,7 @@ const fakeOutput = () => ({
   announce: vi.fn(),
   preview: vi.fn(),
   playCue: vi.fn(),
+  playNotes: vi.fn(),
   speak: vi.fn(),
 }) satisfies LiveFillAudioOutput;
 

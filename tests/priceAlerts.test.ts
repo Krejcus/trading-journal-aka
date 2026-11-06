@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, PRICE_ALERT_TONES, alertTagInk, alertConditionFor, alertLineCss, alertTitle,
+  DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, alertTagInk, alertConditionFor, alertLineCss, alertTitle,
   createLocalPriceAlertStore, movedAlert, newPriceAlert, freshPriceAlertEvents, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus, readPriceAlertState,
 } from '../lib/priceAlerts';
+import { ALERT_TONE_GROUPS, CUSTOM_SOUND_MAX_BYTES, CUSTOM_SOUND_MAX_COUNT, alertToneNotes, customSoundProblem, isAlertTone } from '../lib/priceAlertTones';
+import { LIVE_FILL_CUE_PATTERNS } from '../services/liveFillAudio';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../lib/liveFillMarkers';
 import { EXTRA_TOAST_MAX, TRADE_TOAST_MAX, capExtraToasts, keepStickyToasts } from '../lib/liveTradeToasts';
 
@@ -235,8 +237,31 @@ describe('upozornění na cenu na PC', () => {
   });
 
   it('tón upozornění je vlastní, nepůjčuje si tón z pozice', () => {
-    for (const [tone] of PRICE_ALERT_TONES) expect(read('services/liveFillAudio.ts')).toContain(`'alert-${tone}': [`);
-    expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/playCue\(`alert-\$\{alert\?\.channels\.tone \?\? 'double'\}`\)/);
+    const tones = ALERT_TONE_GROUPS.flatMap(group => group.tones);
+    expect(tones.length).toBeGreaterThanOrEqual(24);
+    expect(new Set(tones.map(tone => tone.id)).size).toBe(tones.length);
+    const fills = Object.values(LIVE_FILL_CUE_PATTERNS).map(pattern => JSON.stringify(pattern));
+    for (const tone of tones) {
+      expect(tone.notes.length).toBeGreaterThan(0);
+      expect(tone.notes.reduce((sum, note) => sum + note.ms, 0), tone.id).toBeLessThanOrEqual(1_000);
+      expect(fills, tone.id).not.toContain(JSON.stringify(tone.notes.map(({ hz, ms }) => ({ hz, ms }))));
+    }
+    expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/if \(actions\.sound\) void playAlertTone\(alert\?\.channels\.tone\)/);
+  });
+
+  it('neznámý nebo chybějící zvuk spadne na výchozí; vlastní soubor se ověří', () => {
+    expect(alertToneNotes('neznamy')).toEqual(alertToneNotes('double'));
+    expect(alertToneNotes(null)).toEqual(alertToneNotes('double'));
+    expect(isAlertTone('custom:abc-1')).toBe(true);
+    expect(isAlertTone('custom:../x')).toBe(false);
+    expect(isAlertTone('siren')).toBe(true);
+    const file = { name: 'a.mp3', type: 'audio/mpeg', size: 1000 };
+    expect(customSoundProblem(file, 0)).toBeNull();
+    expect(customSoundProblem({ ...file, name: 'a.pdf', type: 'application/pdf' }, 0)).toMatch(/zvukový/);
+    expect(customSoundProblem({ ...file, size: CUSTOM_SOUND_MAX_BYTES + 1 }, 0)).toMatch(/1 MB/);
+    expect(customSoundProblem(file, CUSTOM_SOUND_MAX_COUNT)).toMatch(/Nejvýš/);
+    // Soubory jsou jen v zařízení: žádný upload na server.
+    expect(read('services/priceAlertSounds.ts')).not.toMatch(/supabase|fetch\(/);
   });
 
   it('barva z palety a tón přežijí čištění; nesmysl spadne na výchozí', () => {
@@ -280,7 +305,9 @@ describe('upozornění na cenu na PC', () => {
   it('dialog leží pod hlavičkou LIVE, OFF zůstává klikatelné', () => {
     const alerts = read('components/LivePcPriceAlerts.tsx');
     expect(alerts).toMatch(/fixed inset-x-0 bottom-0 top-11 z-\[700\]/);
-    expect(alerts).not.toMatch(/createPortal/);
+    // Okno bez portálu, jen nabídka zvuků jde přes body (okno by ji ořízlo).
+    expect(alerts).toMatch(/return \(\n    <div className="fixed inset-x-0 bottom-0 top-11/);
+    expect(alerts.match(/createPortal\(/g)).toHaveLength(1);
     expect(read('components/LiveTradingScreen.tsx')).toMatch(/live-chart-header relative z-\[800\] flex h-11/);
   });
 
