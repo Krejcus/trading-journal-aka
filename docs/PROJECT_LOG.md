@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 večer — Posun SL u pozice s dokupy blokoval starý záznam (Claude, větev `claude/chart-position-ui-20261106`, oprava nenasazená)
+
+- Filip po nasazení: posun SL nejde, rychlé dokupy nejdou. Relay řádky: 8× `manage-unresolved` kvůli `attach-brackets` `unknown` z 5. 11. 15:30, kontrola celé pozice brala celý symbol a status ukazoval jen 10 akcí. Záznam po Filipově souhlasu označen `waived` při OFF a flat, k brokerovi nic.
+- Oprava: `positionActionUnresolved` (klíč pozice, lístky, stejný symbol od nejstaršího lístku), nad modelem po čtení; `unresolvedManualOrderActions` jde do panelu; waiver odmítne, dokud běží zápis. Critic 2 kola, nálezy zapracovány. Vyžaduje reinstalaci workeru.
+- Dokupy: po eventu leadera čeká přikoupení 5 s, relay a worker 3 s, po fillu REST risk. Návrh B critic vrátil, chce náhradu okna a záznam na DEMO; nestavěno.
+- Limit bez SL/TP: holý Limit critic v navržené podobě odmítl (korelátor, OFF/kill, dílčí fill), holý Stop blokuje. Čeká na volbu Filipa mezi zaparkovanými nohami a holým Limitem.
+
 ### 2026-11-06 — Jedno živé P&L, přikoupení z lišty telefonu, okamžité SL/TP v návrhu (Claude, větev `claude/chart-position-ui-20261106`)
 
 - **P&L:** čip odečítal poplatky (odtud centy) a po 5 s bez obchodu přepínal na číslo brokera a zpět (přeskakování). Hlavička telefonu počítala jinak přes `tvLivePnl`, takže nález „P&L neopraveno“ ze zápisu o prvním Openu se týká už jen ostatních míst s `LiveOpenPnlValue`. Teď všude v grafu `liveShownOpenPnl`: IBKR bez poplatků, jinak broker s vrácenými poplatky. Seznam účtů a uzavřený obchod zůstávají po poplatcích, takže se od čipu mohou lišit. Jen zobrazení (INV-UI-04).

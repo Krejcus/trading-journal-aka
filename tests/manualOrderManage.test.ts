@@ -221,11 +221,12 @@ describe('fáze 2a: správa vlastního ručního vstupu', () => {
 
   it('visící posun: neznámý výsledek, vyřešení kopírku nevypne a Flatten All zavře i leadera', async () => {
     const hang = { on: false };
+    let release: () => void = () => undefined;
     const ctx = await setup({
       patchBroker: broker => {
         const real = broker.modifyOrder.bind(broker);
         broker.modifyOrder = async (accountId, brokerOrderId, changes) => (hang.on && accountId === LEADER
-          ? new Promise<void>(() => undefined)
+          ? new Promise<void>(resolve => { release = resolve; })
           : real(accountId, brokerOrderId, changes));
       },
     });
@@ -233,7 +234,11 @@ describe('fáze 2a: správa vlastního ručního vstupu', () => {
     hang.on = true;
     const result = await manage(ctx, 'move-stop', SL, 29_470, 'manage:hanging01');
     expect(result.status).toBe('unknown');
-    await ctx.controller.waiveManualEntry({ operationId: 'manage:hanging01', reason: 'ověřeno v Tradovate' });
+    // Zápis ještě běží: vyřešení by pustilo nový posun a starý modify by mohl dosednout po něm.
+    await expect(ctx.controller.waiveManualEntry({ operationId: 'manage:hanging01', reason: 'ověřeno v Tradovate' })).rejects.toThrow('ještě běží');
+    release();
+    await sleep(50);
+    await ctx.controller.waiveManualEntry({ operationId: 'manage:hanging01', reason: 'ověřeno v Tradovate' }).catch(() => undefined);
     expect(ctx.controller.status().armed).toBe(true);
     // Mock market nikdy nevyplní, Flatten pak čeká na potvrzení — stačí, že leader dostal exit.
     void ctx.controller.flattenGroup('flatten:managetest01').catch(() => undefined);

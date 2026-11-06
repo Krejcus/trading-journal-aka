@@ -1,3 +1,4 @@
+import { isStuckManageChange, stuckResolvedText } from '../lib/manualEntryDisplay';
 import { perfMark } from '../lib/perfTrace';
 import { LiveRiskValue } from './LiveRiskValue';
 import { ColumnOrderList, type ColumnOrderItem } from './ColumnOrderList';
@@ -1894,7 +1895,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         : command.type === 'delete-group'
           ? 'Skupina je smazaná. Kopírka zůstává vypnutá a nemá žádnou skupinu — až budeš chtít kopírovat, zapni jinou.'
         : command.type === 'resolve-stuck-operation'
-          ? 'Operace označena za vyřešenou. Runtime je VYPNUTO; před zapnutím proběhne nová kontrola pozic.'
+          ? stuckResolvedText(command.key)
           : command.type === 'set-multiplier'
           ? `Násobek ${normalizeMultiplier(command.multiplier)} byl potvrzen lokálním execution runtime. Runtime zůstává VYPNUTO do nového zapnutí.`
           : 'Změna byla potvrzena přes execution adaptér.';
@@ -3157,12 +3158,12 @@ const StuckOperationsPanel = ({ operations, busy, onResolve }: {
       <div className="flex items-center gap-2">
         <ShieldAlert size={15} className="shrink-0 text-amber-600" />
         <b className="text-xs text-[var(--text-primary)]">Operace čekající na ruční kontrolu ({operations.length})</b>
-        <span className="hidden text-[10px] text-[var(--text-secondary)] sm:block">Blokují zapnutí. Ověř stav v Tradovate a teprve pak označ za vyřešené.</span>
+        <span className="hidden text-[10px] text-[var(--text-secondary)] sm:block">{operations.every(operation => isStuckManageChange(operation.key)) ? 'Blokují další změny obchodu.' : 'Blokují zapnutí.'} Ověř stav v Tradovate a teprve pak označ za vyřešené.</span>
       </div>
       <div className="mt-2 divide-y divide-amber-500/15">
         {operations.map(operation => (
           <div key={`${operation.kind}:${operation.key}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
-            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700">{STUCK_KIND_LABEL[operation.kind]}</span>
+            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700">{isStuckManageChange(operation.key) ? 'změna obchodu' : STUCK_KIND_LABEL[operation.kind]}</span>
             <span className="rounded bg-[var(--bg-page)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--text-secondary)]">{operation.status}</span>
             {operation.accountId != null ? <span className="text-[10px] font-bold text-[var(--text-secondary)]">účet {operation.accountId}</span> : null}
             <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--text-primary)]" title={operation.reason}>{operation.reason ?? operation.key}</span>

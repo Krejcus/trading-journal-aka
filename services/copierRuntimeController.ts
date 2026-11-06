@@ -177,6 +177,7 @@ import { replacedOrderIncreasesExposure,
   overCoverStep,
   trimManualEntryRecords,
   type OverCoverState,
+  positionActionUnresolved,
   type LeaderPositionModel,
   type ScaleInRecord,
 } from './manualScaleIn';
@@ -316,6 +317,15 @@ export interface CopierControllerStatus {
     addBlockedReason?: string;
     canManage: boolean;
     manageBlockedReason?: string;
+  }>;
+  /** Všechny nevyřešené změny ručních vstupů, i starší než posledních 10 — jen zobrazení. */
+  unresolvedManualOrderActions?: Array<{
+    operationId: string;
+    action: string;
+    status: 'sending' | 'unknown';
+    updatedAt: number;
+    symbol?: string;
+    reason?: string;
   }>;
   /** Poslední změny ručních vstupů z grafu (fáze 2a) — jen zobrazení. */
   manualOrderActions?: Array<{
@@ -3768,6 +3778,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
   /** Klíč správy pozice (nevyřešená změna, busy): stejný pro PC i telefon. */
   const positionManageKey = (symbol: string) => `position:${group.leaderAccountId}:${symbol}`;
+  /** Jedna definice pro přikoupení i posun celé pozice: starý neznámý záznam jiného obchodu je neblokuje. */
+  const thisPositionActionUnresolved = (symbol: string, model: Pick<LeaderPositionModel, 'tickets'>) => {
+    const ticketOperationIds = new Set(model.tickets.map(ticket => ticket.operationId));
+    const created = manualEntryRecords().filter(record => ticketOperationIds.has(record.operationId)).map(record => record.createdAt);
+    return positionActionUnresolved(manualOrderActionRecords(), {
+      key: positionManageKey(symbol), symbol, ticketOperationIds,
+      oldestTicketCreatedAt: created.length === ticketOperationIds.size && created.length > 0 ? Math.min(...created) : null,
+    });
+  };
   /** Nedokončené epochy expozice leadera skupiny (stejný výběr jako klid skupiny). */
   const unfinishedLeaderEpochs = () => (currentRuntime().state.safety.leaderExposureEpochs ?? []).filter(epoch => (
     epoch.groupId === group.id && epoch.leaderAccountId === group.leaderAccountId
@@ -3794,9 +3813,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const otherSymbolExposure = [...(positions ?? new Map<string, number>()).entries()].some(([symbol, net]) => symbol !== command.symbol && net !== 0)
       || [...(liveOrdersByAccount.get(leader)?.values() ?? [])].some(order => order.symbol !== command.symbol && isOpenOrderStatus(order.status));
     const lot = (currentDailyStats(now).openLots ?? []).find(item => item.symbol === command.symbol) ?? null;
-    const ticketOperations = new Set(model.tickets.map(ticket => ticket.operationId));
-    const manageBusy = manualOrderActionJobs.size > 0 || manualOrderActionRecords().some(record => UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status)
-      && (record.entryOperationId === positionManageKey(command.symbol) || ticketOperations.has(record.entryOperationId)));
+    const manageBusy = manualOrderActionJobs.size > 0 || thisPositionActionUnresolved(command.symbol, model);
     const blockers = scaleInAddBlockers({
       enabled: scaleInOn(),
       command: { symbol: command.symbol, side: command.side, quantity: command.quantity, orderType: command.orderType, stopLoss: command.stopLoss, takeProfit: command.takeProfit, position: command.position },
@@ -6565,10 +6582,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if ((manualOrderActionJobs.size > 0 || positionActionsInFlight.size > 0) && command.action !== 'close-position') {
       return manageBlocked(command, 'busy', 'Běží jiná změna pozice — počkej na její výsledek.');
     }
-    if (manualOrderActionRecords().some(record => UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status) && (record.entryOperationId === key || record.symbol === symbol))
-      && command.action !== 'close-position') {
-      return manageBlocked(command, 'manage-unresolved', 'Předchozí změna pozice má neznámý výsledek — počkej na ověření.');
-    }
     if ((pendingTradeIngressByAccount.get(leader) ?? 0) > 0) return manageBlocked(command, 'busy', 'Kopírka ještě zpracovává události leadera — zkus to znovu.');
     const cached = leaderPosition(symbol);
     const baseTicket = cached?.tickets[0];
@@ -6614,6 +6627,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     });
     if (command.action !== 'move-stop' && command.action !== 'move-target' && command.action !== 'close-position') {
       return manageBlocked(command, 'action', 'Pro celou pozici jde jen posun SL/TP a zavření.');
+    }
+    // Nad modelem z právě přečtených příkazů (ne před čtením); zavření nečeká (INV-UI-02).
+    if (command.action !== 'close-position' && thisPositionActionUnresolved(symbol, model)) {
+      return manageBlocked(command, 'manage-unresolved', 'Předchozí změna pozice má neznámý výsledek — počkej na ověření.');
     }
     const issues = positionManageBlockers({ action: command.action, model, expect: command.expect, unresolvedEntry: unresolvedManualEntry() != null });
     if (issues.length > 0) return manageResult(command, 'blocked', { blockers: issues });
@@ -22240,9 +22257,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // Správa vstupu s neznámým výsledkem: nic se neposílá; skutečný stav
         // příkazu leadera ukáže stream / kontrola pozic.
         const action = manualOrderActionRecords().find(item => item.operationId === operationId);
-        if (!action || !UNRESOLVED_MANUAL_ORDER_ACTION.has(action.status) || (action.status === 'sending' && manualOrderActionJobs.size > 0)) {
+        if (!action || !UNRESOLVED_MANUAL_ORDER_ACTION.has(action.status) || (action.status === 'sending' && (manualOrderActionJobs.size > 0 || positionActionsInFlight.size > 0))) {
           throw new Error('Změna vstupu už nečeká na vyřešení; kopírka zůstává beze změny');
         }
+        // Visící zápis po timeoutu: starý modify by mohl dosednout až po novém posunu (INV-OUTBOX-01).
+        if (manageWritesInFlight.has(operationId)) throw new Error('Zápis u brokera ještě běží — vyřešit to půjde po jeho konci; kopírka zůstává beze změny');
         // Stav příkazu leadera je ze streamu známý; vypínat kopírku uprostřed
         // obchodu by zastavilo zrcadlení dalších posunů i exitu (oponentura 2a, bod 4).
         await persistManualOrderAction(operationId, current => ({
@@ -23324,6 +23343,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
           return out;
         })(),
+        // Nevyřešené zvlášť: v posledních 10 by starý záznam zmizel a nešel by ani vidět, ani vyřešit.
+        unresolvedManualOrderActions: manualOrderActionRecords().filter(record => UNRESOLVED_MANUAL_ORDER_ACTION.has(record.status)).map(record => ({
+          operationId: record.operationId, action: record.action, status: record.status as 'sending' | 'unknown',
+          updatedAt: record.updatedAt, ...(record.symbol ? { symbol: record.symbol } : {}), ...(record.reason ? { reason: record.reason } : {}),
+        })),
         manualOrderActions: manualOrderActionRecords().slice(-10).map(record => ({
           ...(() => {
             const display = manualOrderDisplay.get(record.operationId);
