@@ -81,6 +81,16 @@ export function newCopyEvents(events: readonly CopierCopyEvent[] | undefined, se
   return (events ?? []).filter(event => !seen.has(event.id));
 }
 
+/** Nejvýš tolik karet mimo kopírku (upozornění), ať nevytlačí kartu plnění nebo rizika. */
+export const EXTRA_TOAST_MAX = 2;
+
+/** Ze seznamu nechá jen posledních `EXTRA_TOAST_MAX` karet mimo kopírku, ostatních se nedotkne. */
+export function capExtraToasts<T extends { id: string }>(all: readonly T[], isExtra: (toast: T) => boolean): T[] {
+  const extras = all.filter(isExtra);
+  const drop = new Set(extras.slice(0, Math.max(0, extras.length - EXTRA_TOAST_MAX)));
+  return all.filter(toast => !drop.has(toast));
+}
+
 /**
  * Nejvýš TRADE_TOAST_MAX karet; problém (sticky, např. odpojený follower) nikdy
  * nevytlačí běžná karta ani lokální karta (upozornění na cenu).

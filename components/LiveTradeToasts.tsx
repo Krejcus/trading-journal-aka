@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { CopierCopyEvent } from '../services/copierRuntimeController';
-import { TRADE_TOAST_MS, copyEventToast, keepStickyToasts, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
+import { TRADE_TOAST_MS, capExtraToasts, copyEventToast, keepStickyToasts, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
 
 const TONE: Record<TradeToastTone, string> = {
   blue: '#3b82f6', violet: '#8b5cf6', red: '#f43f5e', teal: '#14b8a6', green: '#10b981', amber: '#f59e0b', muted: '#64748b',
@@ -62,15 +62,20 @@ const LiveTradeToasts: React.FC<{
   placement?: React.CSSProperties;
   /** Karty, které nevznikly z událostí kopírky (upozornění na cenu, posun upozornění). */
   extra?: readonly TradeToast[];
-}> = ({ events, copierArmed, isDark, placement, extra }) => {
+  /** LIVE: `extra` jsou upozornění, strop 2 karty (`capExtraToasts`). Backtest jimi posílá vše, bez stropu. */
+  capExtra?: boolean;
+}> = ({ events, copierArmed, isDark, placement, extra, capExtra = false }) => {
   const [toasts, setToasts] = useState<TradeToast[]>([]);
   const extraSeenRef = useRef(new Set<string>());
   useEffect(() => {
     const fresh = (extra ?? []).filter(toast => !extraSeenRef.current.has(toast.id));
     if (!fresh.length) return;
     for (const toast of fresh) extraSeenRef.current.add(toast.id);
-    setToasts(current => keepStickyToasts([...current, ...fresh]));
-  }, [extra]);
+    setToasts(current => {
+      const all = [...current, ...fresh];
+      return keepStickyToasts(capExtra ? capExtraToasts(all, toast => extraSeenRef.current.has(toast.id)) : all);
+    });
+  }, [capExtra, extra]);
   const seenRef = useRef<Set<string> | null>(null);
   useEffect(() => {
     if (!events) return;

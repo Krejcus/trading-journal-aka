@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { createLocalPriceAlertStore, type PriceAlertStore } from '../lib/priceAlerts';
+import { useEffect, useRef, useState } from 'react';
+import { createLocalPriceAlertStore, freshPriceAlertEvents, type PriceAlert, type PriceAlertStore } from '../lib/priceAlerts';
 import { createServerPriceAlertStore } from './priceAlertServerStore';
 import { supabase } from './supabase';
 
@@ -51,4 +51,29 @@ export function usePriceAlertStore(): PriceAlertStore {
     return () => { listeners.delete(setStore); };
   }, []);
   return store;
+}
+
+/** Spuštění pro kartu a hlas (úroveň uživatele, nikdy cena trhu). */
+export interface PriceAlertFiredEvent { id: string; alertId: string; at: number; price: number }
+
+/**
+ * Nově příchozí a čerstvá spuštění (telefon i PC). První načtení a výměna úložiště
+ * (přihlášení) = staré události, jen si je zapamatuje.
+ */
+export function useFreshPriceAlertEvents(
+  store: PriceAlertStore,
+  events: readonly PriceAlertFiredEvent[],
+  onFresh: (event: PriceAlertFiredEvent, alert: PriceAlert | null) => void,
+): void {
+  const seen = useRef<{ store: unknown; ids: Set<string> } | null>(null);
+  const onFreshRef = useRef(onFresh);
+  onFreshRef.current = onFresh;
+  useEffect(() => {
+    const known = seen.current?.store === store ? seen.current.ids : null;
+    const { seen: ids, fresh } = freshPriceAlertEvents(known, events, Date.now());
+    seen.current = { store, ids };
+    for (const event of fresh) {
+      onFreshRef.current(event, store.getState().alerts.find(item => item.id === event.alertId) ?? null);
+    }
+  }, [store, events]);
 }

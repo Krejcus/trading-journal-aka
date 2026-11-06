@@ -255,6 +255,52 @@ export function alertTitle(alert: Pick<PriceAlert, 'symbol' | 'condition' | 'pri
   return `${alert.symbol} ${alertConditionText(alert.condition).toLowerCase()} ${price}`;
 }
 
+/** Karta a hlas jen u čerstvého spuštění; pozdě doručená stará událost jen zmizí v seznamu. */
+export const PRICE_ALERT_EVENT_FRESH_MS = 30_000;
+
+/** Text spuštění: automaticky odvozený směr hlídač přepočítal z IBKR, tvrdí se jen „překročí“. */
+export function priceAlertEventTitle(alert: PriceAlert | null | undefined, level: number): string {
+  if (!alert) return `MNQ překročí ${level.toFixed(2)}`;
+  return alertTitle({ ...alert, price: level, condition: alert.conditionAuto ? 'cross' : alert.condition });
+}
+
+/**
+ * Stav čerstvě založeného upozornění na kartě (krátký text, řádek karty se ořezává).
+ * „Hlídá“ jen když je uložené na serveru a Mac hlídá; jinak `warn` = delší a výraznější karta.
+ */
+export function quickAlertCardStatus(sync: PriceAlertState['sync'], watching: string | null): { line: string; warn: boolean } {
+  if (!sync) return { line: 'Jen v tomto zařízení, nepřihlášeno', warn: true };
+  if (sync === 'offline') return { line: 'NEULOŽENO, server nedostupný', warn: true };
+  // Hned po založení je online vždy `syncing`, hlídání se proto musí hlásit i tehdy.
+  if (!watching) return { line: 'Mac ho teď NEHLÍDÁ', warn: true };
+  return { line: sync === 'synced' ? 'Hlídá Mac · dvojklik = nastavení' : 'Ukládám · Mac hlídá', warn: false };
+}
+
+/** Co udělá PC při spuštění: každý kanál zvlášť, jak píše nastavení. Bez upozornění jen karta. */
+export function pcAlertFiredActions(alert: Pick<PriceAlert, 'channels'> | null | undefined): { card: boolean; voice: boolean; sound: boolean } {
+  if (!alert) return { card: true, voice: false, sound: false };
+  return { card: alert.channels.pc, voice: alert.channels.voice, sound: alert.channels.sound };
+}
+
+/**
+ * Nové a čerstvé události; `seen` doplní. `seen === null` = první načtení nebo výměna úložiště:
+ * staré události, nic se nehlásí (volající si drží vrácenou množinu).
+ */
+export function freshPriceAlertEvents<T extends { id: string; at: number }>(
+  seen: Set<string> | null,
+  events: readonly T[],
+  now: number,
+): { seen: Set<string>; fresh: T[] } {
+  if (!seen) return { seen: new Set(events.map(event => event.id)), fresh: [] };
+  const fresh: T[] = [];
+  for (const event of events) {
+    if (seen.has(event.id)) continue;
+    seen.add(event.id);
+    if (now - event.at <= PRICE_ALERT_EVENT_FRESH_MS) fresh.push(event);
+  }
+  return { seen, fresh };
+}
+
 /** Vzor čáry v grafu (CSS border-style) a tloušťka v px. */
 export function alertLineCss(line: PriceAlertStyle, selected: boolean): { width: number; style: 'solid' | 'dashed' | 'dotted' } {
   const base = line.width === 'thick' ? 2.5 : line.style === 'dotted' ? 2 : 1;

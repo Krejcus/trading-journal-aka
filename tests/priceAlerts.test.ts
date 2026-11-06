@@ -2,10 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, alertConditionFor, alertLineCss, alertTitle,
-  createLocalPriceAlertStore, movedAlert, newPriceAlert, readPriceAlertState,
+  createLocalPriceAlertStore, movedAlert, newPriceAlert, freshPriceAlertEvents, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus, readPriceAlertState,
 } from '../lib/priceAlerts';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../lib/liveFillMarkers';
-import { TRADE_TOAST_MAX, keepStickyToasts } from '../lib/liveTradeToasts';
+import { EXTRA_TOAST_MAX, TRADE_TOAST_MAX, capExtraToasts, keepStickyToasts } from '../lib/liveTradeToasts';
 
 const memory = (initial: Record<string, string> = {}) => {
   const data = { ...initial };
@@ -175,5 +175,96 @@ describe('oponentura 2. 11., 2. kolo', () => {
     const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
     expect(phone).toMatch(/sticky: false, ms \}/);
     expect(phone).toMatch(/draftFromPositionBox\(drawing, LIVE_PHONE_INSTRUMENT, freshQuote\(\) \?\? quoteOf\(lastPrice\)\)/);
+  });
+});
+
+describe('upozornění na cenu na PC', () => {
+  const read = (file: string) => readFileSync(file, 'utf8');
+
+  it('text spuštění: automatický směr tvrdí jen překročení, bez upozornění zůstane úroveň', () => {
+    const alert = newPriceAlert(21480, 21400, DEFAULT_PRICE_ALERT);
+    expect(priceAlertEventTitle(alert, 21480)).toBe(`MNQ překročí ${(21480).toLocaleString('cs-CZ', { minimumFractionDigits: 2 })}`);
+    expect(priceAlertEventTitle({ ...alert, conditionAuto: false }, 21480)).toContain('nahoru přes');
+    expect(priceAlertEventTitle(null, 21480)).toBe('MNQ překročí 21480.00');
+  });
+
+  it('karta rychlého alertu tvrdí „hlídá“ jen když je uložený a Mac hlídá', () => {
+    expect(quickAlertCardStatus(undefined, 'Hlídá')).toMatchObject({ warn: true, line: expect.stringContaining('nepřihlášeno') });
+    expect(quickAlertCardStatus('offline', 'Hlídá')).toMatchObject({ warn: true, line: expect.stringContaining('NEULOŽENO') });
+    expect(quickAlertCardStatus('syncing', 'Hlídá')).toEqual({ warn: false, line: 'Ukládám · Mac hlídá' });
+    expect(quickAlertCardStatus('syncing', null)).toMatchObject({ warn: true, line: expect.stringContaining('NEHLÍDÁ') });
+    expect(quickAlertCardStatus('synced', 'Hlídá')).toMatchObject({ warn: false, line: expect.stringContaining('Hlídá Mac') });
+    expect(quickAlertCardStatus('synced', null)).toMatchObject({ warn: true, line: expect.stringContaining('NEHLÍDÁ') });
+    // Řádek karty se ořezává kolem 42 znaků: stav se musí vejít celý.
+    for (const sync of [undefined, 'offline', 'syncing', 'synced'] as const) {
+      for (const watching of ['Hlídá', null]) expect(quickAlertCardStatus(sync, watching).line.length).toBeLessThanOrEqual(36);
+    }
+  });
+
+  it('kanály na PC jdou každý zvlášť', () => {
+    for (const pc of [true, false]) for (const voice of [true, false]) for (const sound of [true, false]) {
+      expect(pcAlertFiredActions({ channels: { phone: true, pc, voice, sound } })).toEqual({ card: pc, voice, sound });
+    }
+    expect(pcAlertFiredActions(null)).toEqual({ card: true, voice: false, sound: false });
+  });
+
+  it('nové události: první načtení mlčí, stará ani opakovaná se nehlásí', () => {
+    const now = 1_000_000;
+    const old = { id: 'old', at: now - 60_000 };
+    const first = freshPriceAlertEvents(null, [old], now);
+    expect(first.fresh).toEqual([]);
+    const fresh = { id: 'new', at: now - 1_000 };
+    const late = { id: 'late', at: now - 31_000 };
+    const second = freshPriceAlertEvents(first.seen, [old, late, fresh], now);
+    expect(second.fresh).toEqual([fresh]);
+    expect(freshPriceAlertEvents(second.seen, [old, late, fresh], now).fresh).toEqual([]);
+    // Výměna úložiště (přihlášení): volající předá null, staré se znovu nehlásí.
+    expect(freshPriceAlertEvents(null, [fresh], now).fresh).toEqual([]);
+  });
+
+  it('karty upozornění nevytlačí kartu plnění', () => {
+    const fill = { id: 'fill', sticky: false };
+    const extras = Array.from({ length: 5 }, (_, i) => ({ id: `x${i}`, sticky: false }));
+    expect(read('components/LiveTradingScreen.tsx')).toMatch(/extra=\{priceAlerts\.cards\} capExtra/);
+    expect(read('components/day/LivePhoneChart.tsx')).toMatch(/extra=\{cards\} capExtra/);
+    expect(read('components/BacktestWorkspace.tsx')).not.toMatch(/capExtra/);
+    const capped = capExtraToasts([fill, ...extras], toast => toast.id.startsWith('x'));
+    expect(capped.filter(toast => toast.id.startsWith('x'))).toHaveLength(EXTRA_TOAST_MAX);
+    expect(capped.at(-1)?.id).toBe('x4');
+    expect(keepStickyToasts(capped).map(toast => toast.id)).toContain('fill');
+  });
+
+  it('tón upozornění je vlastní, nepůjčuje si tón z pozice', () => {
+    expect(read('services/liveFillAudio.ts')).toMatch(/alert: \[\{ hz: 1319/);
+    expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/playCue\('alert'\)/);
+  });
+
+  it('nic neobchoduje a nesahá na kopírku ani příkazy', () => {
+    const source = read('components/LivePcPriceAlerts.tsx');
+    expect(source).not.toMatch(/from ['"][^'"]*(tradovate|copier|relay|broker|leaderOrderManage|livePhoneOrders)[^'"]*['"]/i);
+    expect(source).not.toMatch(/fetch\(|supabase|invoke\(/);
+  });
+
+  it('jen živý panel exekuce, za přehrávání nic; čáry leží pod čarami příkazů', () => {
+    const workspace = read('components/AlphaTradeChartWorkspace.tsx');
+    expect(workspace).toMatch(/onQuickPriceAlert=\{liveReplayLocked \? undefined : liveOrderEntry\?\.priceAlerts\?\.quickAdd\}/);
+    expect(workspace).toMatch(/liveOrderEntry\?\.priceAlerts && !liveReplayLocked/);
+    expect(workspace.indexOf('priceAlerts.renderLines(chartApi)')).toBeLessThan(workspace.indexOf('<BacktestOrderLinesOverlay'));
+    expect(read('components/day/LivePhoneAlerts.tsx')).toMatch(/overflow: 'hidden', zIndex: 14/);
+    expect(read('components/BacktestOrderLinesOverlay.tsx')).toMatch(/absolute inset-0 z-\[115\]/);
+    // Kód upozornění se netáhne do backtestu a detailu obchodu.
+    expect(workspace).toMatch(/import type \{ LivePcAlertBridge \}/);
+  });
+
+  it('dialog leží pod hlavičkou LIVE, OFF zůstává klikatelné', () => {
+    const alerts = read('components/day/LivePhoneAlerts.tsx');
+    expect(alerts).toMatch(/position: 'fixed', inset: 0, zIndex: 700/);
+    expect(alerts).not.toMatch(/createPortal/);
+    expect(read('components/LiveTradingScreen.tsx')).toMatch(/live-chart-header relative z-\[800\]/);
+  });
+
+  it('dialog ztiší klávesové zkratky; dvojklik na čáru neotevře nastavení vybrané kresby', () => {
+    expect(read('components/day/LivePhoneAlerts.tsx')).toMatch(/role="dialog" aria-modal="true"/);
+    expect(read('components/AlphaTradeChartWorkspace.tsx')).toMatch(/closest\?\.\('\[data-alert-line\]'\)\) return;/);
   });
 });

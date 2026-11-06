@@ -54,6 +54,8 @@ export const LIVE_FILL_CUE_PATTERNS: Readonly<Record<LiveFillCue, readonly { hz:
   win: [{ hz: 660, ms: 60 }, { hz: 880, ms: 60 }, { hz: 1175, ms: 110 }],
   loss: [{ hz: 494, ms: 90 }, { hz: 370, ms: 140 }],
   flat: [{ hz: 740, ms: 110 }],
+  // Upozornění na cenu: dvě stejné vysoké, nesmí znít jako pohyb v pozici.
+  alert: [{ hz: 1319, ms: 80 }, { hz: 1319, ms: 80 }],
 };
 /** Hlasitost pípnutí (0–1) — tiché, ať nepřehluší hlas Coache ani video. */
 export const LIVE_FILL_TONE_VOLUME = 0.12;

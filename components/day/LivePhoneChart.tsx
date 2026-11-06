@@ -37,8 +37,8 @@ import {
   livePhoneMarketDraftFollow, livePhoneWorkingView, useLivePhoneLineState,
 } from './LivePhoneOrderLines';
 import { LivePhoneAlertLines, LivePhoneAlertList, LivePhoneAlertSheet, LivePhoneAlertsButton, LivePhoneCrosshairPlus, LivePhonePlusSheet } from './LivePhoneAlerts';
-import { alertTitle, movedAlert, newPriceAlert, type PriceAlert } from '../../lib/priceAlerts';
-import { usePriceAlertStore } from '../../services/priceAlertStoreHook';
+import { alertTitle, movedAlert, newPriceAlert, priceAlertEventTitle, type PriceAlert } from '../../lib/priceAlerts';
+import { useFreshPriceAlertEvents, usePriceAlertStore } from '../../services/priceAlertStoreHook';
 import { alertVoiceText, speakAlertText } from '../../services/alertVoice';
 import { useLiveFillArrows } from './useLiveFillArrows';
 import { liveFillsNotInJournal } from '../../lib/liveFillMarkers';
@@ -91,8 +91,7 @@ export interface LivePhoneChartSlots {
 }
 
 const NO_FILLS: readonly LiveFillMarker[] = [];
-/** Karta a hlas jen pro spuštění mladší než tohle (pozdní doručení po spánku = jen seznam). */
-const ALERT_EVENT_FRESH_MS = 30_000;
+/** Nejvýš tolik karet upozornění najednou, ať nevytlačí kartu rizika. */
 const ALERT_CARDS_MAX = 2;
 /** Přehrávání ukazuje historii: z lišty, plusu, listu ani lišty návrhu se nic neodešle (N1, U3). */
 const REPLAY_NO_TRADE = 'Přehrávání — obchoduj v živém grafu. Nic se neodeslalo.';
@@ -396,35 +395,19 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [alertList, setAlertList] = useState(false);
   const [plus, setPlus] = useState<number | null>(null);
   const [flashIds, setFlashIds] = useState<ReadonlySet<string>>(() => new Set());
-  const seenAlertEvents = useRef<{ store: unknown; ids: Set<string> } | null>(null);
-  useEffect(() => {
-    const events = alertEvents;
-    // První načtení i výměna úložiště (přihlášení) = staré události, jen si je zapamatovat.
-    if (!seenAlertEvents.current || seenAlertEvents.current.store !== alertStore) {
-      seenAlertEvents.current = { store: alertStore, ids: new Set(events.map(event => event.id)) };
-      return;
-    }
-    const seen = seenAlertEvents.current.ids;
-    const fresh = events.filter(event => !seen.has(event.id));
-    for (const event of fresh) {
-      seen.add(event.id);
-      // Karta a hlas jen u čerstvého spuštění (pozdě doručená stará událost jen zmizí v seznamu).
-      if (Date.now() - event.at > ALERT_EVENT_FRESH_MS) continue;
-      const alert = alertStore.getState().alerts.find(item => item.id === event.alertId);
-      // Automaticky odvozený směr hlídač přepočítal z IBKR — karta tvrdí jen „překročí“.
-      const title = alert ? alertTitle({ ...alert, price: event.price, condition: alert.conditionAuto ? 'cross' : alert.condition }) : `MNQ překročí ${event.price.toFixed(2)}`;
-      // Nejvýš 2 karty upozornění najednou, ať nevytlačí kartu rizika.
-      setCards(current => {
-        const alerts = current.filter(item => item.badge === 'Upoz.');
-        return alerts.length >= ALERT_CARDS_MAX ? current.filter(item => item !== alerts[0]) : current;
-      });
-      card('amber', 'Upoz.', title, alert?.note ? alert.note : 'Upozornění na cenu', 8_000);
-      if (alert?.channels.voice) speakAlertText(alertVoiceText(title, alert.note));
-      if (!alert) continue;
-      setFlashIds(current => new Set(current).add(alert.id));
-      window.setTimeout(() => setFlashIds(current => { const next = new Set(current); next.delete(alert.id); return next; }), 2_400);
-    }
-  }, [alertStore, card, alertEvents]);
+  useFreshPriceAlertEvents(alertStore, alertEvents, (event, alert) => {
+    const title = priceAlertEventTitle(alert, event.price);
+    // Nejvýš 2 karty upozornění najednou, ať nevytlačí kartu rizika.
+    setCards(current => {
+      const alerts = current.filter(item => item.badge === 'Upoz.');
+      return alerts.length >= ALERT_CARDS_MAX ? current.filter(item => item !== alerts[0]) : current;
+    });
+    card('amber', 'Upoz.', title, alert?.note ? alert.note : 'Upozornění na cenu', 8_000);
+    if (alert?.channels.voice) speakAlertText(alertVoiceText(title, alert.note));
+    if (!alert) return;
+    setFlashIds(current => new Set(current).add(alert.id));
+    window.setTimeout(() => setFlashIds(current => { const next = new Set(current); next.delete(alert.id); return next; }), 2_400);
+  });
   const market = ctl.chart.candles.at(-1)?.close ?? null;
   const editing = editAlert ? alertState.alerts.find(alert => alert.id === editAlert) ?? null : null;
   const moveAlert = (id: string, price: number) => {
@@ -676,7 +659,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             top={positionBarShown(replay) ? BELOW_POSITION_BAR : 8}
             onNotice={say}
           />}
-          <LiveTradeToasts events={slots.copyEvents} copierArmed={slots.copierArmed ?? false} isDark={isDark} placement={{ left: 8, bottom: chartDraft && !replay ? draftBarBottom + 72 : 84 }} extra={cards} />
+          <LiveTradeToasts events={slots.copyEvents} copierArmed={slots.copierArmed ?? false} isDark={isDark} placement={{ left: 8, bottom: chartDraft && !replay ? draftBarBottom + 72 : 84 }} extra={cards} capExtra />
           {positionBarShown(replay) && position && <LivePhonePositionBar
             side={position.side} quantity={position.quantity} symbol={position.symbol} pending={position.pending}
             unprotected={position.bareEntryOperationId != null} busy={busy}

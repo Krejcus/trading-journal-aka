@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, newPriceAlert } from '../lib/priceAlerts';
+import { DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, newPriceAlert, quickAlertCardStatus } from '../lib/priceAlerts';
 import { createServerPriceAlertStore, priceAlertToRow } from '../services/priceAlertServerStore';
 import { priceAlertWatchLabel } from '../lib/priceAlertWatchLabel';
 
@@ -221,6 +221,50 @@ describe('serverový store: fronta a chyby (revize 2. 11.)', () => {
     await settle();
     expect(fake.rows.has(a.id)).toBe(true);
     expect(fake.rows.has(b.id)).toBe(true);
+    alerts.dispose();
+  });
+
+  it('karta rychlého alertu se skutečným store: online hned po založení hlásí, že Mac nehlídá', async () => {
+    const fake = fakeClient();
+    const alerts = store(fake);
+    await settle();
+    alerts.add(newPriceAlert(21480, 21467.5, DEFAULT_PRICE_ALERT, 40_000));
+    expect(alerts.getState().sync).toBe('syncing');
+    expect(quickAlertCardStatus(alerts.getState().sync, null)).toMatchObject({ warn: true, line: expect.stringContaining('NEHLÍDÁ') });
+    expect(quickAlertCardStatus(alerts.getState().sync, 'Hlídá').line).toBe('Ukládám · Mac hlídá');
+    await settle();
+    expect(quickAlertCardStatus(alerts.getState().sync, 'Hlídá').line).toContain('Hlídá Mac');
+    alerts.dispose();
+  });
+
+  it('výpadek serveru po založení přejde na offline (podklad karty NEULOŽENO)', async () => {
+    const fake = fakeClient();
+    const alerts = store(fake);
+    await settle();
+    fake.setOffline(true);
+    alerts.add(newPriceAlert(21480, 21467.5, DEFAULT_PRICE_ALERT, 40_000));
+    expect(alerts.getState().sync).toBe('syncing');
+    await settle();
+    expect(alerts.getState().sync).toBe('offline');
+    alerts.dispose();
+  });
+
+  it('dvě odmítnutí po sobě: chyba se mezi nimi vynuluje, takže druhá jde znovu ukázat', async () => {
+    const fake = fakeClient();
+    const alerts = store(fake);
+    await settle();
+    const seenErrors: (string | null | undefined)[] = [];
+    alerts.subscribe(() => seenErrors.push(alerts.getState().error));
+    for (const at of [40_000, 40_001]) {
+      const over = newPriceAlert(21480, 21467.5, DEFAULT_PRICE_ALERT, at);
+      fake.rejectIds.set(over.id, { code: '23514', message: 'price-alerts-limit' });
+      alerts.add(over);
+      expect(alerts.getState().error ?? null).toBeNull();
+      await settle();
+      expect(alerts.getState().error).toMatch(/víc než 50/);
+    }
+    const changes = seenErrors.map(value => value ?? null).filter((value, index, all) => index === 0 || value !== all[index - 1]);
+    expect(changes.filter(value => value != null)).toHaveLength(2);
     alerts.dispose();
   });
 

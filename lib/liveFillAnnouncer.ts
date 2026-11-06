@@ -42,7 +42,7 @@ export const LIVE_FILL_ANNOUNCE_PAIR_MS = 5_000;
 const SEEN_MAX = 500;
 const DEFAULT_ROOT = 'MNQ';
 
-export type LiveFillCue = 'buy' | 'sell' | 'win' | 'loss' | 'flat';
+export type LiveFillCue = 'buy' | 'sell' | 'win' | 'loss' | 'flat' | 'alert';
 export type LiveFillSource = 'event' | 'fill';
 type OrderSide = 'Buy' | 'Sell';
 type FillKind = 'fill' | 'entry' | 'scale-in' | 'scale-out' | 'exit' | 'flip';

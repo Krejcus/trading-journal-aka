@@ -288,6 +288,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 — Upozornění na cenu na PC (Claude, větev `claude/pc-price-alerts-20261106`, NEnasazeno)
+
+- **Zadání (Filip):** pravý klik do grafu = rychlý alert, dvojklik = otevřít a upravit. Data a hlídání se nemění, jsou společné s telefonem (Mac worker z IBKR, bez TradingView).
+- **Stavba:** `components/LivePcPriceAlerts.tsx` (hook, čáry, zvoneček, dialogy). Znovupoužívá `LivePhoneAlerts` s přepínači `mouse` a `pc`; most přes `LiveOrderEntryBridge.priceAlerts`, ať se kód netáhne do backtestu. Jen panel exekuce (MNQ) a mimo přehrávání.
+- **Proč takhle:** čáry alertů leží pod čarami příkazů (z 14 pod z-115), dialog pod hlavičkou LIVE (z-700 pod z-800), takže OFF je klikatelné; `aria-modal` ztiší zkratky. Karta hlásí stav hlídání už při ukládání (online je hned po založení vždy `syncing`, „Hlídá“ bez „Ukládám“ jen po uložení), trvalé odmítnutí i výpadek serveru dávají vlastní kartu, nová úprava maže starou chybu ve store (i telefon). Kanály PC jsou nezávislé (karta, hlas, zvuk), alert má vlastní tón. Karty upozornění mají v LIVE a na telefonu strop 2 (`capExtra`), backtest beze změny. Uložený směr bere close svíčky jako telefon (INV-UI-04). Tah spuštěného alertu až po výběru, protože tah ho znovu zapne.
+- **Sdílené s telefonem:** `useFreshPriceAlertEvents`, `priceAlertEventTitle`; na iPhone až s dalším buildem.
+- **Ověřeno:** critic kola 1 a 2 = OPRAVIT PŘED COMMITEM, nálezy opraveny; třetí kolo se podle pravidla nekoná. QA náhled se skutečným grafem, syntetickými svíčkami a bez přihlášení: založení, dvojklik, cena, barva, tah (simulované události s mezikroky), výběr, ×, seznam, Esc, OFF nad dialogem, kolečko, strop karet, tmavý i světlý motiv. Spuštění jen s nasimulovanou událostí.
+- **Neověřeno:** přihlášený účet (server, stav „Hlídá Mac“, skutečné překročení ceny a web push), slyšitelný tón.
+- **Známé limity:** karta a hlas jen s otevřeným LIVE grafem; hlas alertu může o větu zdržet hlášení plnění (vědomě přijato); nad čárou (10 px) nejde crosshair.
+
 ### 2026-11-06 — Jedno živé P&L, přikoupení z lišty telefonu, okamžité SL/TP v návrhu (Claude, větev `claude/chart-position-ui-20261106`)
 
 - **P&L:** čip odečítal poplatky (odtud centy) a po 5 s bez obchodu přepínal na číslo brokera a zpět (přeskakování). Hlavička telefonu počítala jinak přes `tvLivePnl`, takže nález „P&L neopraveno“ ze zápisu o prvním Openu se týká už jen ostatních míst s `LiveOpenPnlValue`. Teď všude v grafu `liveShownOpenPnl`: IBKR bez poplatků, jinak broker s vrácenými poplatky. Seznam účtů a uzavřený obchod zůstávají po poplatcích, takže se od čipu mohou lišit. Jen zobrazení (INV-UI-04).
