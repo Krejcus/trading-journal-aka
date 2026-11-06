@@ -288,7 +288,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-06 — Příprava provozu bez TradingView (Claude, větev `claude/tv-exit-core-20261106`, nenasazeno)
+### 2026-11-06 — Provoz bez TradingView (Claude, web + worker `8d4bccd4` NASAZENY s `--tv off`, iPhone 18 Pro Max nainstalovaný, Filip „Vypnuto, nasaď“)
+
+- **Ověřeno po nasazení 15:01:** `ALPHATRADE_TV=off`, stream `zdroj=ibkr` (sends 48, errors 0), `TV LIVE uploading source=IBKR:MNQZ2026`, aplikace TV neběží a worker nemá spojení na 9222, stav DISARMED a flat. **Neověřeno:** hlavní seance, výpadek IBKR bez zálohy a telefon s touto verzí (byl zamčený, appka se nespustila). Měření z Openu 6. 11. se nedokončilo.
 
 - **Proč:** Filip ruší TradingView kolem 25. 11. Worker se při výchozím nastavení nemění; nový přepínač `--tv off` (přežije reinstall, přepis `COPIER_TV`) je samostatný krok ke zkušebnímu týdnu. Telefon ale ukáže nápis „Živá cena teď nechodí“ i s TV (po 5 s bez ceny v otevřené seanci, i o svátku, kdy CME neobchoduje).
 - **Smazaná aplikace už nesmí shodit worker:** `spawn` měl chybu bez posluchače. `ALPHATRADE_SNAPSHOTS=off` už nevypíná cenu, upozornění ani svíčky.
