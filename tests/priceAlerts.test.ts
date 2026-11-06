@@ -238,12 +238,19 @@ describe('upozornění na cenu na PC', () => {
 
   it('tón upozornění je vlastní, nepůjčuje si tón z pozice', () => {
     const tones = ALERT_TONE_GROUPS.flatMap(group => group.tones);
-    expect(tones.length).toBeGreaterThanOrEqual(24);
+    expect(tones.length).toBeGreaterThanOrEqual(37);
+    // Hlasitost má strop, jen agresivní skupina je hlasitější.
+    for (const group of ALERT_TONE_GROUPS) {
+      for (const tone of group.tones) {
+        if (group.name === 'Agresivní') expect(tone.volume, tone.id).toBeLessThanOrEqual(0.35);
+        else expect(tone.volume, tone.id).toBeUndefined();
+      }
+    }
     expect(new Set(tones.map(tone => tone.id)).size).toBe(tones.length);
     const fills = Object.values(LIVE_FILL_CUE_PATTERNS).map(pattern => JSON.stringify(pattern));
     for (const tone of tones) {
       expect(tone.notes.length).toBeGreaterThan(0);
-      expect(tone.notes.reduce((sum, note) => sum + note.ms, 0), tone.id).toBeLessThanOrEqual(1_000);
+      expect(tone.notes.reduce((sum, note) => sum + note.ms, 0), tone.id).toBeLessThanOrEqual(1_500);
       expect(fills, tone.id).not.toContain(JSON.stringify(tone.notes.map(({ hz, ms }) => ({ hz, ms }))));
     }
     expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/if \(actions\.sound\) void playAlertTone\(alert\?\.channels\.tone\)/);

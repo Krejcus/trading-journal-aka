@@ -34,7 +34,7 @@ export interface LiveFillUnlockTarget {
   removeEventListener(type: string, listener: () => void, options?: EventListenerOptions | boolean): void;
 }
 
-export interface LiveFillNote { hz: number; ms: number; wave?: 'sine' | 'triangle' | 'square' }
+export interface LiveFillNote { hz: number; ms: number; wave?: 'sine' | 'triangle' | 'square' | 'sawtooth' }
 
 export interface LiveFillAudioOutput {
   /** Odemkne zvuk (volat z gesta uživatele). Nikdy nevyhodí. */
@@ -47,7 +47,7 @@ export interface LiveFillAudioOutput {
   preview(mode: LiveFillAnnounceMode): void;
   playCue(cue: LiveFillCue): void;
   /** Libovolná řada tónů (zvuky upozornění na cenu); stejné odemčení i hlasitost jako `playCue`. */
-  playNotes(notes: readonly LiveFillNote[]): void;
+  playNotes(notes: readonly LiveFillNote[], volume?: number): void;
   speak(text: string): void;
 }
 
@@ -104,10 +104,10 @@ export function createLiveFillAudio(deps: {
     return context;
   };
 
-  const schedule = (ctx: LiveFillAudioContextLike, notes: readonly LiveFillNote[]) => {
+  const schedule = (ctx: LiveFillAudioContextLike, notes: readonly LiveFillNote[], volume = LIVE_FILL_TONE_VOLUME) => {
     try {
       const master = ctx.createGain();
-      master.gain.value = LIVE_FILL_TONE_VOLUME;
+      master.gain.value = volume;
       master.connect(ctx.destination);
       let at = ctx.currentTime + 0.01;
       for (const note of notes) {
@@ -139,15 +139,15 @@ export function createLiveFillAudio(deps: {
     }
   };
 
-  const playNotes = (notes: readonly LiveFillNote[]) => {
+  const playNotes = (notes: readonly LiveFillNote[], volume?: number) => {
     try {
       const ctx = ensureContext();
       if (!ctx || ctx.state === 'closed') return;
-      if (ctx.state === 'running') { schedule(ctx, notes); return; }
+      if (ctx.state === 'running') { schedule(ctx, notes, volume); return; }
       // Zamčený (suspended/interrupted): zkusit odemknout; pípnout jen když se to povede hned.
       const requestedAt = now();
       void resume(ctx)?.then(() => {
-        if (ctx.state === 'running' && now() - requestedAt <= RESUME_MAX_MS) schedule(ctx, notes);
+        if (ctx.state === 'running' && now() - requestedAt <= RESUME_MAX_MS) schedule(ctx, notes, volume);
       }).catch(() => undefined);
     } catch {
       // Zvuk je jen doplněk.

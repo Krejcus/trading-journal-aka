@@ -1,5 +1,5 @@
 import { del, get, set } from 'idb-keyval';
-import { CUSTOM_SOUND_MAX_SECONDS, alertToneNotes, customSoundProblem, customToneId } from '../lib/priceAlertTones';
+import { CUSTOM_SOUND_MAX_SECONDS, alertToneNotes, alertToneVolume, customSoundProblem, customToneId } from '../lib/priceAlertTones';
 import { liveFillAudio } from './liveFillAudio';
 
 /**
@@ -86,5 +86,6 @@ const playFile = async (id: string): Promise<boolean> => {
 export async function playAlertTone(tone: string | null | undefined): Promise<void> {
   const customId = customToneId(tone);
   if (customId && await playFile(customId)) return;
-  liveFillAudio.playNotes(alertToneNotes(customId ? null : tone));
+  const builtin = customId ? null : tone;
+  liveFillAudio.playNotes(alertToneNotes(builtin), alertToneVolume(builtin));
 }

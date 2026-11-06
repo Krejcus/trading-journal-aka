@@ -4,12 +4,16 @@
  * (`services/priceAlertSounds.ts`). Záměrně nezní jako hlášení plnění (`LIVE_FILL_CUE_PATTERNS`).
  */
 
-export type AlertToneWave = 'sine' | 'triangle' | 'square';
+export type AlertToneWave = 'sine' | 'triangle' | 'square' | 'sawtooth';
 export interface AlertToneNote { hz: number; ms: number; wave?: AlertToneWave }
-export interface AlertTone { id: string; name: string; notes: readonly AlertToneNote[] }
+/** `volume` = hlasitost 0–1 místo tichého výchozího tónu (agresivní zvuky). */
+export interface AlertTone { id: string; name: string; notes: readonly AlertToneNote[]; volume?: number }
 export interface AlertToneGroup { name: string; tones: readonly AlertTone[] }
 
 export const DEFAULT_ALERT_TONE = 'double';
+
+/** Agresivní zvuky: znatelně hlasitější než výchozích 0,12, ale pořád bez lekání a ořezu. */
+const LOUD = 0.32;
 
 const n = (hz: number, ms: number, wave?: AlertToneWave): AlertToneNote => (wave ? { hz, ms, wave } : { hz, ms });
 const repeat = (notes: readonly AlertToneNote[], times: number) => Array.from({ length: times }, () => notes).flat();
@@ -50,6 +54,18 @@ export const ALERT_TONE_GROUPS: readonly AlertToneGroup[] = [
     { id: 'digital', name: 'Digitální', notes: repeat([n(2093, 35, 'square')], 3) },
     { id: 'buzzer', name: 'Bzučák', notes: repeat([n(247, 130, 'square')], 2) },
   ] },
+  { name: 'Agresivní', tones: [
+    { id: 'panic', name: 'Poplach', volume: LOUD, notes: repeat([n(1760, 90, 'sawtooth'), n(1175, 90, 'sawtooth')], 4) },
+    { id: 'horn', name: 'Klakson', volume: LOUD, notes: repeat([n(392, 240, 'sawtooth')], 2) },
+    { id: 'redalert', name: 'Červený alarm', volume: LOUD, notes: repeat([n(880, 60, 'square')], 7) },
+    { id: 'hammer', name: 'Kladivo', volume: LOUD, notes: repeat([n(110, 90, 'square')], 5) },
+    { id: 'heavybuzz', name: 'Silný bzučák', volume: LOUD, notes: repeat([n(165, 220, 'square')], 3) },
+    { id: 'warning', name: 'Výstraha', volume: LOUD, notes: repeat([n(1047, 150, 'sawtooth'), n(784, 150, 'sawtooth')], 3) },
+    { id: 'tornado', name: 'Tornádo', volume: LOUD, notes: [600, 760, 950, 1200, 1500, 1900, 2400, 3000].map(hz => n(hz, 55, 'sawtooth')) },
+    { id: 'crash', name: 'Pád', volume: LOUD, notes: [3000, 2400, 1900, 1500, 1200, 950, 760, 600].map(hz => n(hz, 55, 'sawtooth')) },
+    { id: 'strobe', name: 'Stroboskop', volume: LOUD, notes: repeat([n(2349, 35, 'square')], 10) },
+    { id: 'dive', name: 'Ponorka', volume: LOUD, notes: repeat([n(440, 70, 'square'), n(660, 70, 'square'), n(880, 130, 'square')], 2) },
+  ] },
 ];
 
 const BY_ID = new Map(ALERT_TONE_GROUPS.flatMap(group => group.tones).map(tone => [tone.id, tone]));
@@ -67,6 +83,8 @@ export const isAlertTone = (value: unknown): value is string => typeof value ===
 export const alertToneNotes = (tone: string | null | undefined): readonly AlertToneNote[] => (
   BY_ID.get(tone ?? '') ?? BY_ID.get(DEFAULT_ALERT_TONE)!
 ).notes;
+
+export const alertToneVolume = (tone: string | null | undefined): number | undefined => BY_ID.get(tone ?? '')?.volume;
 
 export const alertToneName = (tone: string | null | undefined): string | null => BY_ID.get(tone ?? '')?.name ?? null;
 
