@@ -130,7 +130,7 @@ export default function DayCompactChart({ ctl, isDark, height, range, focusKeyPr
           />
         ) : (
           <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 16, textAlign: 'center' }}>
-            {ctl.chart.loading ? <QuantumSpinner /> : <p style={{ margin: 0, fontSize: 12, color: 'var(--dj-text-2)' }}>{ctl.chart.error ?? 'Svíčky pro tenhle den zatím nejsou. Živé čtení z TradingView chybí.'}</p>}
+            {ctl.chart.loading ? <QuantumSpinner /> : <p style={{ margin: 0, fontSize: 12, color: 'var(--dj-text-2)' }}>{ctl.chart.error ?? 'Svíčky pro tenhle den zatím nejsou. Zkontroluj worker a IB Gateway.'}</p>}
           </div>
         )}
         {htf.error && candles.length > 0 ? <div role="status" className="pointer-events-none absolute right-2 top-2 z-20 max-w-[70%] rounded-md border border-amber-500/35 bg-[var(--dj-bg)]/95 px-2 py-1 text-[10px] font-bold text-amber-500 shadow-sm">
