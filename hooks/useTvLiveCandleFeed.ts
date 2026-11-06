@@ -36,6 +36,7 @@ export function useTvLiveCandleFeed(enabled: boolean, dayEndMs: number): LiveCan
       },
       // Svíčku čte jen napojení na graf (`useLiveCandleBinding`); tady se jen předává.
       current: root => feed.current(root),
+      lastPrice: root => feed.lastPrice(root),
     };
   }, [enabled, dayEndMs]);
 }

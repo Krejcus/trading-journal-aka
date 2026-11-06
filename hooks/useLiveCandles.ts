@@ -14,10 +14,13 @@ export const LIVE_CANDLES_POLL_PHASE_MS = 20_000;
  * souboru (:10 + rezerva na hodiny zařízení) se proto načte ještě jednou — ne až ve :20.
  */
 export const LIVE_CANDLES_CATCH_UP_MS = 14_000;
+/** Dřívější dohnání: worker nahrává soubor s hotovou předchozí svíčkou už ve 3. s (`TV_LIVE_BARS_EARLY_PHASE_MS`). */
+export const LIVE_CANDLES_EARLY_CATCH_UP_MS = 6_000;
 
 /** Prodleva do doháněcího načtení po načtení mimo fázi; `null` = není potřeba. */
 export function liveCandlesCatchUpDelay(nowMs: number): number | null {
   const second = nowMs % 60_000;
+  if (second < LIVE_CANDLES_EARLY_CATCH_UP_MS) return LIVE_CANDLES_EARLY_CATCH_UP_MS - second;
   return second < LIVE_CANDLES_CATCH_UP_MS ? LIVE_CANDLES_CATCH_UP_MS - second : null;
 }
 
@@ -58,7 +61,11 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
       try {
         const next = await loadLiveCandles(symbol);
         if (generation.current !== current) return;
-        if (next) { setLive(next); setStatus(next.stale ? 'stale' : 'live'); }
+        if (next) {
+          // Stejný soubor graf znovu nepřestavuje.
+          setLive(previous => (previous?.capturedAt === next.capturedAt ? previous : next));
+          setStatus(next.stale ? 'stale' : 'live');
+        }
         else setStatus(previous => (previous === 'loading' ? 'unavailable' : previous));
       } catch {
         if (generation.current === current) setStatus(previous => (previous === 'loading' ? 'unavailable' : previous));
@@ -75,7 +82,7 @@ export function useLiveCandles(symbol: string | null, options: { enabled?: boole
       const delay = liveCandlesCatchUpDelay(Date.now());
       if (delay === null || pollMs !== 60_000) return;
       if (catchUpTimer) clearTimeout(catchUpTimer);
-      catchUpTimer = setTimeout(() => { catchUpTimer = null; if (generation.current === current) void refresh(); }, delay);
+      catchUpTimer = setTimeout(() => { catchUpTimer = null; if (generation.current === current) refreshOffPhase(); }, delay);
     };
     const onVisible = () => { if (document.visibilityState === 'visible') refreshOffPhase(); };
     refreshOffPhase();

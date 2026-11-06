@@ -1084,16 +1084,34 @@ existující ochranu.
   (`services/ibkrPriceSource.ts`, záloha TV, přepnutí zdroje = nový `runId`);
   bundle vlákna má hlavičku s `require` pro CommonJS knihovnu `@stoqey/ib`.
   Fáze 4 (28. 10. 2026): vlákno posílá hlídači i svíčky dne (`bars`,
-  Float64Array předaný bez kopírování, max 1 700 × 6, max 1×/10 s); hlídač
+  Float64Array předaný bez kopírování, max 1 700 × 6, max 1×/3 s); hlídač
   ověří typ a délku v O(1), pak `sanitizeTvBars`, a drží je jen v paměti pro
   `latestBars` (≤ 90 s, jen živé vlákno a zapnutý kanál). Čte je jen
   `pilot.ts` pro graf dne a hodnocení (hlídá `tests/tvPriceStreamWiring.test.ts`);
-  podle nich se nic nespouští. Okamžité posílání (28. 10. 2026): obchod
+  podle nich se nic nespouští. Dřívější soubor (6. 11. 2026): vlákno posílá
+  svíčky i ve 2. s minuty s dokončenou minutou z obchodů a pilot je podle hodin
+  nahraje ve 3. s (`earlyRead` jen IBKR, nikdy graf TV); podle zprávy vlákna se
+  nic nespouští, zápisy jsou pevně 2/min a v 7. s je přepíše běžné čtení, po něm
+  korekce v 10. s. Do 5 s může toto čtení vzít i `tv-bars`, opraví ho pozdější. Okamžité posílání (28. 10. 2026): obchod
   z IBKR (`onTrade`) jen naplánuje čtení (`stream.nudge()`, 25 ms spojení
   dávky, rozestup 200 ms, po chybě prodleva 1 s); cesta ceny pro přehrání
   v grafu (`takeTrail`, strop 256 ve zdroji, 64 ve streamu, maže se při
   změně minuty, po odeslání a po nečinnosti) je jen v paměti vlákna.
-- Hlídá test: `tests/tvPriceStreamSupervisor.test.ts`,
+  Rychlá cena (5. 11. 2026): i vzorek posledního obchodu z `reqMktData`
+  (tick type 4, ~130 ms, odběr běžel už kvůli bid/ask) volá `onTrade`. Platí jen
+  po prvním obchodu z tick-by-tick odběru od odběru nebo výpadku (vzorek nemá čas
+  burzy, starou hodnotu by nešlo poznat) a jen do 1 s stáří; vzorky bez obchodu
+  déle než 3 s = žádné čtení (mrtvý odběr obchodů, záloha TV). Zůstává jen v paměti
+  vlákna, do `history` ani `minuteBars` nejde. Odběr je `Last`, ne `AllLast`: AllLast
+  na MNQZ6 chodí o přesně 1,25 níž než svíčky IBKR a TradingView, `Last` s nimi sedí.
+  Přelom minuty (6. 11. 2026): vzorek v prvních 500 ms minuty do její svíčky nejde
+  (může být ještě z minulé) a vlákno první zprávou po přelomu pošle dokončenou minutu
+  jen z obchodů (`pendingClosedBar`, drží se do potvrzení odeslání, nejvýš 5 s po
+  přelomu, minuta s výpadkem dat ne), aby svíčka v grafu po příchodu hotových svíček
+  neposkočila. Taková zpráva má `bar` minulé minuty a `last` už nové. Je to best
+  effort: dvě zprávy v jednom snímku grafu ji přeskočí a opraví ji až obnova dat.
+- Hlídá test: `tests/ibkrPriceSource.test.ts`, `tests/ibkrMarketDataTicks.test.ts`,
+  `tests/tvPriceStreamSupervisor.test.ts`,
   `tests/tvPriceStreamWiring.test.ts` (allowlist importů vlákna, pořadí
   buildu, relay hook), `tests/tradingViewPriceStream.test.ts`.
 - Nikdy: Spouštět bundle workeru jako vlákno, přidávat globální
@@ -1466,10 +1484,12 @@ existující ochranu.
 - **Výjimka Market (Filip 30. 10. 2026, výslovně schváleno):** Market z panelu
   posílá Limit o `MARKET_GUARD_POINTS` (2 b) přes ask/bid grafu. Cena grafu smí
   být JEN strop ceny příkazu uživatele (Buy se vyplní za ni nebo lépe), a jen
-  mladší než 3 s; nikdy nevstupuje do read modelu, rizika, day locku ani rozhodnutí
-  kopírky (worker počítá riziko z ceny příkazu jako z nejhoršího vstupu).
+  se zprávou mladší než 3 s; nikdy nevstupuje do read modelu, rizika, day locku ani
+  rozhodnutí kopírky (worker počítá riziko z ceny příkazu jako z nejhoršího vstupu).
+  Pozor: 3 s hlídá příjezd zprávy, ne stáří ceny. Heartbeat 1/s posílá poslední cenu
+  dál, takže cena samotná může být stará až `IBKR_STALE_MS` (15 s).
   Cenu panelu objednávky (zobrazení + strop Marketu) bere `hooks/useLiveTicketQuote.ts`
-  přímo z kanálu ceny (`close` rozpracované svíčky, ≤ 10×/s) — jediný čtenář feedu
+  přímo z kanálu ceny (`last` zprávy, ≤ 10×/s; do 6. 11. 2026 `close`, který na přelomu minuty nese close minulé minuty) — jediný čtenář feedu
   mimo graf; hlídá `tests/tvPriceClientGuards.test.ts`.
 - Vynucuje: `lib/tvPriceMessage.ts` (HMAC nad surovým řetězcem, přísný
   tvar), `lib/tvPriceStore.ts` (jen paměť, ochrana proti přehrání
@@ -1485,6 +1505,10 @@ existující ochranu.
   grafu dne); grafy dostávají jen neutrální `LiveCandleFeed`
   (`lib/liveCandleFeed.ts`, `hooks/useLiveCandleBinding.ts`) a svíčku jen
   překreslí (`updateBar`) — do dat grafu, cache dne ani storage nejde.
+  Historie grafu dne v IndexedDB (`readDayTail`, 6. 11. 2026) nese jen odpověď
+  Databenta (`response.candles`), nikdy živé svíčky ani výstup `composeDayCandles`;
+  do grafu a panelu jde až se živým čtením (`historyReadyForChart`), jinak by
+  panel vzal ~24 h starou cenu, a jen s rozdílem hranic do 2 h kvůli díře v řadě.
   Od 28. 10. 2026 se tvořící se bar řady (živá svíčka, přehrávaná svíčka)
   bere i do kreslení FVG (`fairValueGapsWithFormingBars`, posluchač
   `subscribeDataChanged` v `CandleKitTradeChart`): zaplnění a tvořící se FVG
@@ -1519,7 +1543,10 @@ existující ochranu.
   jimi projde za 100 ms a skončí přesně na baru zprávy; na přelomu minuty
   během přehrání se stará minuta nejdřív dokreslí celá. P&L, `samples` ani
   nic jiného cestu nečte. Volba grafu `scales.liveTickReplay` (výchozí
-  zapnuto).
+  zapnuto). Od rychlé ceny (5. 11. 2026, INV-WORKER-04) se při čerstvém vzorku
+  cesta z IBKR neposílá, protože by vracela cenu zpět: u IBKR je tedy přehrání
+  prakticky vypnuté a volba platí hlavně bez vzorků. `close`, `last` a high/low
+  mohou být ze vzorku; minuta a open jen z obchodů.
 - Hlídá test: `tests/tvPriceTrail.test.ts` (podpis, vazba, kompatibilita,
   sběr ve workeru, přehrání), `tests/tvPriceClientGuards.test.ts` (kdo smí moduly
   importovat vč. aliasu `@/`, rozhodovací/ukládací/sdílené cesty kanál

@@ -116,7 +116,7 @@ describe('napojení živé svíčky na graf', () => {
   const rawCandles = [candle(MINUTE - 120, 29170), candle(MINUTE - 60, 29180, 71)];
   const original: Bar[] = rawCandles.map(item => ({ ts: item.time * 1_000, open: item.open, high: item.high, low: item.low, close: item.close, volume: item.volume }));
   let current: MarketCandle | null = null;
-  const source: LiveCandleFeed = { subscribe: () => () => undefined, current: () => current };
+  const source: LiveCandleFeed = { subscribe: () => () => undefined, current: () => current, lastPrice: () => current?.close ?? null };
 
   it('připíše minutu, beze změny nepřekresluje a po výpadku ceny vrátí přesně data grafu', () => {
     const chart = fakeChart(original);

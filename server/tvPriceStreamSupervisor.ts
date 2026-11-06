@@ -18,8 +18,8 @@ import { normalizeBarsContract, sanitizeTvBars, tvPriceFamily, tvSymbolRoot, TV_
 
 /** Svíčky z vlákna starší než tohle se pro graf dne nepoužijí (vlákno posílá po 30 s). */
 export const IBKR_BARS_FRESH_MS = 90_000;
-/** Zprávy `bars` častější než tohle se zahodí. */
-const BARS_MIN_INTERVAL_MS = 10_000;
+/** Zprávy `bars` častější než tohle se zahodí (vlákno posílá ve 2., 7. a 37. s). */
+export const BARS_MIN_INTERVAL_MS = 3_000;
 
 export interface TvPriceStreamConfig {
   enabled: boolean;

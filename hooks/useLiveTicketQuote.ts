@@ -3,7 +3,7 @@ import { LIVE_CANDLE_MAX_JUMP_RATIO, type LiveCandleFeed } from '../lib/liveCand
 
 /**
  * Živá cena pro panel objednávky LIVE → Graf (výjimka INV-UI-04 schválená
- * Filipem 30. 10. 2026): poslední cena rozpracované svíčky z kanálu ceny,
+ * Filipem 30. 10. 2026): poslední cena zprávy z kanálu ceny (ne `close` svíčky),
  * nejvýš 10× za sekundu. Smí jen do zobrazení panelu a jako strop ceny
  * příkazu uživatele (Market = Limit přes trh) — nikdy do rizika, read modelu
  * ani rozhodnutí kopírky. `at` = kdy cena naposledy přišla (čerstvost Marketu).
@@ -22,7 +22,7 @@ export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, re
       timer = null;
       if (!pending) return;
       pending = false;
-      const price = feed.current(root)?.close;
+      const price = feed.lastPrice(root);
       const ref = referenceRef.current;
       if (price == null || !Number.isFinite(price) || ref == null || Math.abs(price - ref) > Math.abs(ref) * LIVE_CANDLE_MAX_JUMP_RATIO) {
         setQuote(null);

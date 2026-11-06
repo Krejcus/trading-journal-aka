@@ -71,6 +71,11 @@ export const TV_LIVE_BARS_KEEPALIVE_MS = 2 * 60_000;
  * předposlední svíčku stavem z poloviny minuty (graf dne, 28. 10. 2026).
  */
 export const TV_LIVE_BARS_PHASE_MS = 10_000;
+/**
+ * Dřívější upload jen ze svíček IBKR (nese minutu dokončenou z obchodů), aby aplikace
+ * otevřená hned po přelomu neviděla předchozí svíčku ze stavu po 7 s. Upload v 10. s zůstává jako korekce.
+ */
+export const TV_LIVE_BARS_EARLY_PHASE_MS = 3_000;
 /** Víc cenových rodin worker nečte — limit serveru je 4 zápisy/min. */
 export const TV_LIVE_BARS_MAX_ROOTS = 2;
 
@@ -95,6 +100,9 @@ export function startTradingViewLiveBars(options: {
   intervalMs?: number;
   /** Čtení zarovnat na tuto ms po začátku minuty (`undefined` = hned a pak po intervalu). */
   phaseMs?: number;
+  /** Druhý běh v minutě; `earlyRead` nikdy nesmí číst graf TV, bez dat se jen přeskočí. */
+  earlyPhaseMs?: number;
+  earlyRead?: (root: string) => Promise<TvBarsCapture | null>;
   now?: () => number;
   setIntervalImpl?: typeof setInterval;
   clearIntervalImpl?: typeof clearInterval;
@@ -113,7 +121,8 @@ export function startTradingViewLiveBars(options: {
   const read = options.read ?? (root => readTradingViewBars(root));
   const log = options.log ?? (() => {});
   const intervalMs = Math.max(15_000, options.intervalMs ?? TV_LIVE_BARS_INTERVAL_MS);
-  // Podpis posledního odeslaného čtení na kořen: čas, close a počet svíček.
+  // Podpis posledního odeslaného čtení na kořen: posledních dvou svíček celých a jejich počet
+  // (korekce předchozí minuty se nesmí přeskočit, když se mění jen její high, low nebo objem).
   const sent = new Map<string, { signature: string; at: number }>();
   // Poslední zalogovaný stav na kořen, aby log nehlásil totéž každou minutu.
   const reported = new Map<string, string>();
@@ -124,18 +133,20 @@ export function startTradingViewLiveBars(options: {
   };
   let inFlight = false;
   let stopped = false;
-  const tick = async () => {
+  const tick = async (reader = read, quiet = false) => {
     if (inFlight || stopped || !ready()) return;
     inFlight = true;
     try {
       for (const root of roots) {
         if (stopped) return;
         try {
-          const capture = await read(root);
+          const capture = await reader(root);
           if (stopped) return;
-          if (!capture) { report(root, 'no-chart', `TV LIVE skip root=${root} reason=no-1m-chart`); continue; }
-          const last = capture.bars[capture.bars.length - 1];
-          const signature = `${last[0]}:${last[4]}:${capture.bars.length}`;
+          if (!capture) {
+            if (!quiet) report(root, 'no-chart', `TV LIVE skip root=${root} reason=no-1m-chart`);
+            continue;
+          }
+          const signature = `${JSON.stringify(capture.bars.slice(-2))}:${capture.bars.length}`;
           const previous = sent.get(root);
           if (previous?.signature === signature && now() - previous.at < TV_LIVE_BARS_KEEPALIVE_MS) continue;
           await options.upload(capture);
@@ -152,6 +163,7 @@ export function startTradingViewLiveBars(options: {
   };
   let timer: ReturnType<typeof setInterval> | null = null;
   let alignTimer: ReturnType<typeof setTimeout> | null = null;
+  let earlyTimer: ReturnType<typeof setTimeout> | null = null;
   if (options.phaseMs === undefined) {
     timer = (options.setIntervalImpl ?? setInterval)(() => { void tick(); }, intervalMs);
     (timer as { unref?: () => void }).unref?.();
@@ -168,12 +180,28 @@ export function startTradingViewLiveBars(options: {
       (alignTimer as { unref?: () => void }).unref?.();
     };
     scheduleNext();
+    const earlyRead = options.earlyRead;
+    if (earlyRead && options.earlyPhaseMs !== undefined) {
+      const earlyPhase = Math.min(59_000, Math.max(0, options.earlyPhaseMs));
+      const scheduleEarly = () => {
+        if (stopped) return;
+        const raw = (60_000 + earlyPhase - (now() % 60_000)) % 60_000;
+        earlyTimer = (options.setTimeoutImpl ?? setTimeout)(() => {
+          earlyTimer = null;
+          tick(earlyRead, true).catch(() => {});
+          scheduleEarly();
+        }, raw < 1_000 ? raw + 60_000 : raw);
+        (earlyTimer as { unref?: () => void }).unref?.();
+      };
+      scheduleEarly();
+    }
   }
   void tick();
   return {
     stop: () => {
       stopped = true;
       if (alignTimer !== null) (options.clearTimeoutImpl ?? clearTimeout)(alignTimer);
+      if (earlyTimer !== null) (options.clearTimeoutImpl ?? clearTimeout)(earlyTimer);
       if (timer !== null) (options.clearIntervalImpl ?? clearInterval)(timer);
     },
   };

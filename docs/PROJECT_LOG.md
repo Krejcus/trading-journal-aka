@@ -285,6 +285,51 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 — IBKR cena: `Last` místo `AllLast`, přesná dokončená minuta (Claude, větev `claude/ibkr-quick-last-20261105`, nenasazeno)
+
+- **Proč:** Filipovi vadí, že se svíčky mění. Měření na MNQZ6 mimo RTH našlo dvě
+  příčiny: `AllLast` byl přesně −1,25 proti 1m svíčkám IBKR (ty se shodují s TV
+  včetně objemu), `Last` 0 rozdílů. A Close minuty držel poslední vzorek ceny,
+  ne poslední obchod, protože přelom minuty často padl do jedné dávky obchodů.
+- **Rozhodnutí:** rychlá cena (`reqMktData` last, ~130 ms) se smí pohybovat, ale
+  nesmí rozhodovat o hotové svíčce. Tick-by-tick chodí po dávkách ~0,5 s, proto
+  zůstává zdrojem OHLC. Prvních 500 ms minuty rychlá cena svíčku neovlivní. Po
+  přelomu worker pošle dokončenou minutu z obchodů (`pendingClosedBar`) a drží ji
+  až do potvrzeného doručení (`onDelivered`), nejdéle 5 s. Minuta s výpadkem nebo
+  bez začátku (`gap`) se tak neposílá; opraví ji soubor `tv-live`.
+- **Panel:** cena lístku bere `lastPrice` (poslední `latest.last`), ne `close`.
+  Critic našel, že jinak by po přelomu strop Marketu vycházel z Close minulé minuty.
+- **Měření přes skutečný zdroj a skutečný `createTvPriceStream` (mimo RTH):**
+  před opravou Close špatně v 83 ze 117 minut (max 4,75); po opravě 87/87 minut
+  přesně na O/H/L/C, 4,08 zprávy/s, `skippedRateCap` 0, 0 reconnectů. Běh proběhl
+  před opravou N7 (`restoredAt`), výpadek v něm nenastal, větve `gap` ověřují jen
+  unit testy. Porovnává se poslední odeslaná zpráva, ne příjem v prohlížeči.
+- **Otevření grafu (změřeno na produkci, počítač):** svíčky 0,33 s, první živá
+  cena 0,55 s, historie z Databenta 3,9–4,9 s + přestavba grafu. Soubor `tv-live`
+  se nahrával jen v 10. s, takže otevření v :00–:14 ukázalo předchozí svíčku ze
+  stavu po 7 s (objem 289 proti 2853). Rozhodnutí: druhý upload ve 3. s jen podle
+  hodin (post vlákna ve 2. s, `earlyRead` jen IBKR, nikdy graf TV), protože živá
+  zpráva starší bar neumí (`planLiveCandleUpdate`) a trigger zprávou by porušil
+  INV-WORKER-04. Upload v 10. s zůstává jako korekce; klient dohání v 6. a 14. s a
+  stejný soubor nepřestavuje. Daň: +1 zápis/min (~1 440/den), zkontrolovat kvóty.
+- **Historie v zařízení:** nedokončený den se v denních kbelících neukládá, proto se
+  čekalo na Databento při každém otevření. `readDayTail` drží poslední odpověď; do
+  grafu jde až se živým čtením a jen s rozdílem hranic do 2 h (critic: jinak graf
+  na včerejšku, ~24 h stará cena v panelu, díra v řadě). Plný užitek jen při shodě
+  hranice (do 15 min), jinak se historie doplní a graf se přestaví dál.
+- **Zbývá:** RTH měření (AllLast vs Last, pořadí vzorek/dávka); Market Buy/Sell
+  na DEMO provede Filip (dnes jsou limity o 1,25 mimo: Buy +2,25, Sell −2,00
+  proti pravé ceně); po nasazení kontrola kvóty Realtime (hrubý odhad ~9,5 mil./
+  měs. proti 5 mil., brzda `TV_STREAM_MAX_PER_SECOND`). Pořadí nasazení: web před
+  workerem; iPhone má bundlovaný web, `lastPrice` dostane až novým buildem.
+- **Přijaté limity:** dokončená minuta je best effort (dvě zprávy v jednom snímku
+  klienta může spojit; pak ji srovná `tv-live`). `liveTickReplay` s IBKR skoro nic
+  nedělá, cena chodí po celých vzorcích. Strop Marketu z bid/ask je samostatný
+  návrh přes critic. Otevřené N8 (critic, nízká závažnost): `subscribe()` shodí
+  `lost`, takže výpadek farmy hlášený těsně před odběrem nenastaví `restoredAt` a
+  neúplná minuta může odejít jako dokončená; jen zobrazení, opraví ji `tv-live`,
+  jak často nastane, je neověřené. Oprava mění i `reading()`, patří do vlastní změny.
+
 ### 2026-10-30 odpoledne — LIVE graf: živé štítky, tažení SL/TP, BE, karty obchodů, odeslání jedním klikem (Claude, nasazeno @ 92dfb252 + 60052239)
 
 - **Štítky pozice v grafu** jako u návrhu (`lib/liveChartOrderLines.ts`, overlay

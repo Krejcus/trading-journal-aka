@@ -3,10 +3,14 @@ import type { ContractDetails } from '@stoqey/ib';
 import type { ReadOnlyIbClient, ReadOnlyIbHandlers } from '../services/ibkrMarketData';
 import { isTvPricePayload, type TvPricePayload } from '../lib/tvPriceMessage';
 import { tvLiveCandle } from '../lib/tvLiveCandle';
-import { tvLivePnlDelta } from '../lib/tvLivePnl';
+import { TV_PNL_PREVIOUS_BAR_GRACE_MS, tvLivePnlDelta } from '../lib/tvLivePnl';
 import {
   createIbkrPriceSource,
+  IBKR_CLOSED_BAR_MAX_LATE_MS,
   IBKR_FALLBACK_AFTER_MS,
+  IBKR_QUICK_MINUTE_GUARD_MS,
+  IBKR_QUICK_LAST_FRESH_MS,
+  IBKR_QUICK_WITHOUT_TRADES_MS,
   IBKR_RETURN_AFTER_MS,
   IBKR_STALE_MS,
   ibkrFrontToTv,
@@ -152,6 +156,363 @@ describe('zdroj ceny z IBKR', () => {
     h.current().handlers.onTick?.(99, { time: Math.floor(h.now() / 1_000), price: 1, size: 1, receivedAt: h.now(), pastLimit: false, unreported: false });
     expect(onTrade).toHaveBeenCalledTimes(2);
     h.source.stop();
+  });
+
+  describe('rychlá cena z reqMktData (vzorek ~130 ms) nad dávkami obchodů', () => {
+    const live = (onTrade?: () => void) => {
+      const h = harness(onTrade);
+      h.goLive();
+      h.fullMinute(100);
+      h.advance(IBKR_QUICK_MINUTE_GUARD_MS);
+      return h;
+    };
+
+    const quick = (h: ReturnType<typeof harness>, price: number, reqId = 3) => h.current().handlers.onLast?.(reqId, price);
+
+    it('poslední cena a close jdou z rychlého vzorku, knot se rozšíří a open zůstává z obchodů', () => {
+      const onTrade = vi.fn();
+      const h = live(onTrade);
+      onTrade.mockClear();
+      quick(h, 101);
+      const minute = Math.floor(h.now() / 60_000) * 60;
+      expect(onTrade).toHaveBeenCalledTimes(1);
+      expect(h.source.reading()).toMatchObject({ last: 101, bar: [minute, 100, 101, 100, 101] });
+    });
+
+    it('starší dávka obchodů cenu nevrátí zpět, knot z dávky se ale započítá', () => {
+      const h = live();
+      h.advance(100);
+      quick(h, 103);
+      h.advance(100);
+      h.trade(99);
+      h.trade(102);
+      const reading = h.source.reading()!;
+      expect(reading.last).toBe(103);
+      expect(reading.bar).toEqual([reading.bar[0], 100, 103, 99, 103]);
+    });
+
+    it('když vzorek zestárne, platí poslední obchod', () => {
+      const h = live();
+      quick(h, 103);
+      h.advance(IBKR_QUICK_LAST_FRESH_MS + 1);
+      h.trade(102);
+      const reading = h.source.reading()!;
+      expect(reading.last).toBe(102);
+      expect(reading.bar[4]).toBe(102);
+      expect(reading.bar[2]).toBe(103);
+    });
+
+    it('vzorek z nové minuty nesáhne do staré svíčky; po ochranném okně patří do nové', () => {
+      const h = live();
+      const oldMinute = Math.floor(h.now() / 60_000) * 60;
+      h.advance(59_000);
+      h.trade(100);
+      h.advance(60_000 - (h.now() % 60_000) + IBKR_QUICK_MINUTE_GUARD_MS);
+      quick(h, 105);
+      const before = h.source.reading()!;
+      expect(before.last).toBe(105);
+      expect(before.bar).toEqual([oldMinute, 100, 100, 100, 100]);
+      h.trade(104);
+      const after = h.source.reading()!;
+      expect(after.bar).toEqual([oldMinute + 60, 104, 105, 104, 105]);
+    });
+
+    it('vzorek těsně po přelomu minuty do nové svíčky nejde, poslední cena ano', () => {
+      const h = live();
+      const oldMinute = Math.floor(h.now() / 60_000) * 60;
+      h.advance(60_000 - (h.now() % 60_000) + IBKR_QUICK_MINUTE_GUARD_MS - 1);
+      quick(h, 96); // ještě obchod minulé minuty
+      h.trade(104);
+      const reading = h.source.reading()!;
+      expect(reading.last).toBe(96);
+      expect(reading.bar).toEqual([oldMinute + 60, 104, 104, 104, 104]);
+    });
+
+    it('dokončená minuta je přesně z obchodů bez vzorků a drží se do potvrzení odeslání', () => {
+      const h = live();
+      const minute = Math.floor(h.now() / 60_000) * 60;
+      h.advance(1_000);
+      quick(h, 103); // vzorek: knot i close zobrazené svíčky
+      h.trade(101);
+      expect(h.source.reading()!.bar).toEqual([minute, 100, 103, 100, 103]);
+      expect(h.source.pendingClosedBar()).toBeNull();
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      h.trade(102);
+      expect(h.source.pendingClosedBar()).toEqual([minute, 100, 101, 100, 101]);
+      expect(h.source.reading()!.bar[0]).toBe(minute + 60);
+      h.source.closedBarSent(minute - 60); // cizí potvrzení nic nesmaže
+      expect(h.source.pendingClosedBar()).not.toBeNull();
+      h.source.closedBarSent(minute);
+      expect(h.source.pendingClosedBar()).toBeNull();
+    });
+
+    it('dokončená minuta se po pozdním prvním obchodu nepošle (klient by ji odmítl)', () => {
+      expect(IBKR_CLOSED_BAR_MAX_LATE_MS).toBeLessThan(TV_PNL_PREVIOUS_BAR_GRACE_MS);
+      const h = live();
+      h.advance(60_000 - (h.now() % 60_000) + IBKR_CLOSED_BAR_MAX_LATE_MS + 1);
+      h.trade(102);
+      expect(h.source.pendingClosedBar()).toBeNull();
+    });
+
+    it('nepotvrzená dokončená minuta po limitu vyprší', () => {
+      const h = live();
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      h.trade(102);
+      expect(h.source.pendingClosedBar()).not.toBeNull();
+      h.advance(IBKR_CLOSED_BAR_MAX_LATE_MS);
+      expect(h.source.pendingClosedBar()).toBeNull();
+    });
+
+    it.each([[2103, 2104], [1100, 1102]])('výpadek %i → %i přes přelom: minuta s dírou se jako dokončená nepošle', (down, up) => {
+      const h = live();
+      h.current().handlers.onInfo?.(down, '');
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      h.current().handlers.onInfo?.(up, '');
+      h.trade(102); // minuta bez začátku
+      expect(h.source.pendingClosedBar()).toBeNull();
+      h.advance(60_000);
+      h.trade(103);
+      expect(h.source.pendingClosedBar()).toBeNull();
+      h.advance(60_000);
+      h.trade(104);
+      expect(h.source.pendingClosedBar()).toMatchObject([expect.any(Number), 103, 103, 103, 103]);
+    });
+
+    it('běžné 2104 bez výpadku dokončenou minutu nepotlačí', () => {
+      const h = live();
+      const minute = Math.floor(h.now() / 60_000) * 60;
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      h.current().handlers.onInfo?.(2104, ''); // před prvním obchodem nové minuty
+      h.trade(102);
+      expect(h.source.pendingClosedBar()).toEqual([minute, 100, 100, 100, 100]);
+      h.advance(60_000);
+      h.trade(103);
+      expect(h.source.pendingClosedBar()).toEqual([minute + 60, 102, 102, 102, 102]);
+    });
+
+    it('výpadek uvnitř běžící minuty: ta se nepošle, další minuta po obnově ano', () => {
+      const h = live();
+      const minute = Math.floor(h.now() / 60_000) * 60;
+      h.current().handlers.onInfo?.(2103, '');
+      h.advance(1_000);
+      h.current().handlers.onInfo?.(2104, '');
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      h.trade(102);
+      expect(h.source.pendingClosedBar()).toBeNull();
+      h.advance(60_000);
+      h.trade(103);
+      expect(h.source.pendingClosedBar()).toEqual([minute + 60, 102, 102, 102, 102]);
+    });
+
+    it('obnova přesně na začátku minuty ji označí, o 1 ms dřív ne', () => {
+      const atStart = live();
+      atStart.current().handlers.onInfo?.(2103, '');
+      atStart.advance(60_000 - (atStart.now() % 60_000));
+      atStart.current().handlers.onInfo?.(2104, '');
+      atStart.trade(102);
+      atStart.advance(60_000);
+      atStart.trade(103);
+      expect(atStart.source.pendingClosedBar()).toBeNull();
+
+      const justBefore = live();
+      const minute = Math.floor(justBefore.now() / 60_000) * 60;
+      justBefore.current().handlers.onInfo?.(2103, '');
+      justBefore.advance(60_000 - (justBefore.now() % 60_000) - 1);
+      justBefore.current().handlers.onInfo?.(2104, '');
+      justBefore.advance(1);
+      justBefore.trade(102);
+      justBefore.advance(60_000);
+      justBefore.trade(103);
+      expect(justBefore.source.pendingClosedBar()).toEqual([minute + 60, 102, 102, 102, 102]);
+    });
+
+    it('rozpracovaná minuta z doby odběru se jako dokončená nepošle a výpadek ji zapomene', () => {
+      const h = harness();
+      h.goLive();
+      h.trade(100);
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      h.trade(101);
+      expect(h.source.pendingClosedBar()).toBeNull();
+      h.advance(60_000);
+      h.trade(102);
+      h.current().handlers.onError?.(354, 2, '');
+      expect(h.source.pendingClosedBar()).toBeNull();
+    });
+
+    it('zpráva s dokončenou minutou projde kontrolou klienta a svíčka se v grafu přijme', () => {
+      const h = live();
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      h.trade(102);
+      const closed = h.source.pendingClosedBar()!;
+      const reading = h.source.reading()!;
+      const payload: TvPricePayload = {
+        v: 1, seq: 1, runId: 'r', chart: reading.chart, interval: '1', pane: 0, front: reading.front, switchAt: null,
+        mode: 'streaming', bar: closed, last: reading.last, bid: null, ask: null, at: h.now(),
+      };
+      expect(isTvPricePayload(payload)).toBe(true);
+      const candle = tvLiveCandle({ fresh: true, latest: payload } as Parameters<typeof tvLiveCandle>[0], 'MNQ', h.now() + 3_600_000);
+      expect(candle).toMatchObject({ time: closed[0], close: closed[4] });
+    });
+
+    it('vzorek na přelomu minuty: close staré svíčky se nevrací na starší obchod', () => {
+      const h = live();
+      const minute = Math.floor(h.now() / 60_000) * 60;
+      h.advance(59_000);
+      h.trade(102);
+      h.advance(100);
+      quick(h, 103);
+      h.advance(60_000 - (h.now() % 60_000) + 20);
+      quick(h, 103.25);
+      const reading = h.source.reading()!;
+      expect(reading.last).toBe(103.25);
+      expect(reading.bar).toEqual([minute, 100, 103, 100, 103]);
+    });
+
+    it('vzorek po posledním obchodu a pak ticho: čtení platí až do limitu 15 s', () => {
+      const h = live();
+      h.trade(100.25);
+      quick(h, 100.25);
+      h.advance(IBKR_QUICK_WITHOUT_TRADES_MS + 2_000);
+      expect(h.source.reading()?.last).toBe(100.25);
+      h.advance(IBKR_STALE_MS - IBKR_QUICK_WITHOUT_TRADES_MS - 1_000);
+      expect(h.source.reading()).toBeNull();
+    });
+
+    it('osamělý vzorek, ticho a další vzorek před dávkou čtení nevypnou', () => {
+      const h = live();
+      quick(h, 100.25);
+      h.advance(10_000);
+      quick(h, 100.5);
+      expect(h.source.reading()?.last).toBe(100.5);
+    });
+
+    it('čas burzy před hodinami Macu: close zůstává uvnitř svíčky', () => {
+      const h = live();
+      h.advance(59_900);
+      quick(h, 120);
+      h.trade(100, 200); // obchod už z další minuty, vzorek do ní nepatří
+      h.advance(150);
+      const reading = h.source.reading()!;
+      expect(reading.bar).toEqual([reading.bar[0], 100, 100, 100, 100]);
+      expect(reading.last).toBe(120);
+    });
+
+    it('obchod během výpadku vzorky neodemkne', () => {
+      const h = harness();
+      h.goLive();
+      h.current().handlers.onInfo?.(2103, '');
+      h.fullMinute(100);
+      h.current().handlers.onInfo?.(2104, '');
+      quick(h, 150);
+      expect(h.source.reading()).toMatchObject({ last: 100, bar: [expect.any(Number), 100, 100, 100, 100] });
+    });
+
+    it('sám vzorek zdroj živý neudrží: bez obchodů se čtení po 3 s vypne', () => {
+      const h = live();
+      quick(h, 100.25);
+      h.advance(IBKR_QUICK_WITHOUT_TRADES_MS - 100);
+      quick(h, 100.5);
+      expect(h.source.reading()?.last).toBe(100.5);
+      h.advance(200);
+      quick(h, 100.75);
+      expect(h.source.reading()).toBeNull();
+    });
+
+    it('obchod odpočet mrtvého odběru vynuluje a v tichém trhu se nic nevypíná', () => {
+      const h = live();
+      for (let i = 0; i < 20; i++) { h.advance(600); quick(h, 100.25); h.advance(400); h.trade(100.25); }
+      expect(h.source.reading()?.last).toBe(100.25);
+      h.advance(10_000);
+      expect(h.source.reading()?.last).toBe(100.25);
+    });
+
+    it('cached vzorek po odběru před prvním obchodem se zahodí', () => {
+      const h = harness();
+      h.goLive();
+      quick(h, 150);
+      h.fullMinute(100);
+      expect(h.source.reading()).toMatchObject({ last: 100, bar: [expect.any(Number), 100, 100, 100, 100] });
+    });
+
+    it.each([[2103, 2104], [1100, 1102]])('výpadek %i → %i: vzorek nezmění cenu ani knot před prvním obchodem', (down, up) => {
+      const h = live();
+      h.current().handlers.onInfo?.(down, '');
+      quick(h, 150);
+      h.current().handlers.onInfo?.(up, '');
+      quick(h, 150);
+      expect(h.source.reading()).toMatchObject({ last: 100, bar: [expect.any(Number), 100, 100, 100, 100] });
+      h.trade(100.25);
+      quick(h, 100.5);
+      expect(h.source.reading()?.last).toBe(100.5);
+    });
+
+    it('1101: vzorky čekající na nový odběr nic nedělají a nepřežijí ho', () => {
+      const h = live();
+      h.current().handlers.onInfo?.(1101, '');
+      quick(h, 150);
+      expect(h.source.reading()).toBeNull();
+      h.advance(16_000);
+      h.current().handlers.onMarketDataType?.(3, 1);
+      quick(h, 150);
+      h.fullMinute(100);
+      expect(h.source.reading()).toMatchObject({ last: 100, bar: [expect.any(Number), 100, 100, 100, 100] });
+    });
+
+    it('nové spojení nedědí starý vzorek ani jeho knot', () => {
+      const h = live();
+      quick(h, 150);
+      h.current().handlers.onDisconnected?.();
+      h.advance(5_000);
+      h.current().handlers.onConnected?.();
+      h.answerContracts();
+      h.current().handlers.onMarketDataType?.(3, 1);
+      h.advance(16_000);
+      h.fullMinute(100);
+      expect(h.source.reading()).toMatchObject({ last: 100, bar: [expect.any(Number), 100, 100, 100, 100] });
+    });
+
+    it('jakékoli prokládání vzorků a obchodů dává platnou zprávu s close uvnitř svíčky', () => {
+      const h = live();
+      let seed = 7;
+      const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      for (let i = 0; i < 2_000; i++) {
+        const price = 100 + Math.round(random() * 40) / 4;
+        const action = random();
+        if (action < 0.45) quick(h, price);
+        else if (action < 0.9) h.trade(price);
+        h.advance(Math.round(random() * 400));
+        h.trade(price);
+        const reading = h.source.reading();
+        if (!reading) continue;
+        const [, open, high, low, close] = reading.bar;
+        expect(low).toBeLessThanOrEqual(Math.min(open, close));
+        expect(high).toBeGreaterThanOrEqual(Math.max(open, close));
+        const payload: TvPricePayload = {
+          v: 1, seq: i, runId: 'run', chart: reading.chart, interval: '1', pane: 0, front: reading.front, switchAt: null,
+          mode: reading.mode, bar: reading.bar, last: reading.last, bid: reading.bid, ask: reading.ask, at: h.now(),
+        };
+        expect(isTvPricePayload(payload)).toBe(true);
+      }
+    });
+
+    it('čerstvý vzorek zahodí cestu pro přehrání, bez něj cesta zůstává', () => {
+      const h = live();
+      h.source.takeTrail();
+      h.trade(100.25);
+      h.trade(100.5);
+      expect(h.source.takeTrail()?.prices).toEqual([100.25, 100.5]);
+      h.trade(100.75);
+      quick(h, 101);
+      expect(h.source.takeTrail()).toBeNull();
+    });
+
+    it('jiný reqId, nula a záporná cena se ignorují', () => {
+      const h = live();
+      quick(h, 111, 99);
+      quick(h, 0);
+      quick(h, -1);
+      expect(h.source.reading()?.last).toBe(100);
+    });
   });
 
   it('překřížený bid/ask se nepošle', () => {
@@ -361,6 +722,71 @@ describe('svíčky dne z IBKR (fáze 4)', () => {
     const bars = h.source.minuteBars()!;
     expect(bars).toMatchObject({ root: 'MNQ', source: 'IBKR:MNQZ2026', contract: 'MNQZ2026' });
     expect(flat(bars.bars)).toEqual([[m - 120, 100, 100.5, 99.5, 100, 5], [m - 60, 101, 101.5, 100.5, 101, 5], [m, 103, 103.5, 102.5, 103, 9]]);
+  });
+
+  describe('dokončená minuta z obchodů v souboru svíček', () => {
+    const closedMinute = () => {
+      const h = harness();
+      h.goLive();
+      const { reqId } = h.current().barRequests[0];
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      const m = Math.floor(h.now() / 60_000) * 60;
+      h.trade(100);
+      h.advance(1_000);
+      h.trade(105);
+      h.trade(99);
+      h.trade(101);
+      h.current().handlers.onBar?.(reqId, ib(m - 60, 90));
+      h.current().handlers.onBar?.(reqId, ib(m, 103, 7));
+      h.current().handlers.onBarsEnd?.(reqId);
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      h.trade(102);
+      return { h, m };
+    };
+    const row = (h: ReturnType<typeof harness>, m: number, exactClosed: boolean) =>
+      flat(h.source.minuteBars({ exactClosed })!.bars).find(item => item[0] === m);
+
+    it('přepíše jen O/H/L/C kopie, objem i další čtení zůstanou z IBKR', () => {
+      const { h, m } = closedMinute();
+      expect(row(h, m, true)).toEqual([m, 100, 105, 99, 101, 7]);
+      expect(row(h, m, false)).toEqual([m, 103, 103.5, 102.5, 103, 7]);
+      expect(flat(h.source.minuteBars()!.bars).find(item => item[0] === m)).toEqual([m, 103, 103.5, 102.5, 103, 7]);
+    });
+
+    it('potvrzení zprávy ji nesmaže, starší minuta se nepoužije', () => {
+      const { h, m } = closedMinute();
+      h.source.closedBarSent(m);
+      expect(h.source.pendingClosedBar()).toBeNull();
+      expect(row(h, m, true)).toEqual([m, 100, 105, 99, 101, 7]);
+      h.advance(60_000);
+      expect(h.source.minuteBars({ exactClosed: true })).not.toBeNull();
+      expect(row(h, m, true)).toEqual([m, 103, 103.5, 102.5, 103, 7]);
+    });
+
+    it('chybějící řádek minuty se nepřipojí a výpadek vrátí null', () => {
+      const { h, m } = closedMinute();
+      const { reqId } = h.current().barRequests[0];
+      h.current().handlers.onBarUpdate?.(reqId, ib(m + 60, 110));
+      h.current().handlers.onInfo?.(2103, '');
+      expect(h.source.minuteBars({ exactClosed: true })).toBeNull();
+    });
+
+    it('minuta s dírou se nepřepíše', () => {
+      const h = harness();
+      h.goLive();
+      const { reqId } = h.current().barRequests[0];
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      const m = Math.floor(h.now() / 60_000) * 60;
+      h.trade(100);
+      h.current().handlers.onBar?.(reqId, ib(m, 103, 7));
+      h.current().handlers.onBarsEnd?.(reqId);
+      h.current().handlers.onInfo?.(2103, '');
+      h.advance(1_000);
+      h.current().handlers.onInfo?.(2104, '');
+      h.advance(60_000 - (h.now() % 60_000) + 100);
+      h.trade(102);
+      expect(flat(h.source.minuteBars({ exactClosed: true })!.bars).find(item => item[0] === m)).toEqual([m, 103, 103.5, 102.5, 103, 7]);
+    });
   });
 
   it('svíčky starší než 27 h odpadnou; odpovědi starých žádostí se zahodí', () => {

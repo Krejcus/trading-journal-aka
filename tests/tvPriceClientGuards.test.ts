@@ -229,15 +229,17 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       "useLiveCandleBinding(!backtestSession && replay.phase !== 'active' ? liveCandles : null, liveCandleTargets, {",
     ]);
     // Svíčku ze zdroje čte jen napojení na graf.
-    const readers = allSources.filter(file => /\b(?:feed|liveFeed|liveCandles)\.current\(/.test(readFileSync(join(root, file), 'utf8')));
+    const candleReaders = allSources.filter(file => /\b(?:feed|liveFeed|liveCandles)\.current\(/.test(readFileSync(join(root, file), 'utf8')));
     // Hook grafu dne čtení jen předává (přehrání ticků zabalené ve feedu).
-    // + cena panelu objednávky (výjimka INV-UI-04): jen `close`, jen zobrazení a strop ceny příkazu.
-    expect(readers).toEqual(['hooks/useLiveCandleBinding.ts', 'hooks/useLiveTicketQuote.ts', 'hooks/useTvLiveCandleFeed.ts']);
-    const ticketQuote = readFileSync(join(root, 'hooks/useLiveTicketQuote.ts'), 'utf8').split('\n').filter(line => /\.current\(/.test(line)).map(line => line.trim());
-    expect(ticketQuote).toEqual(['const price = feed.current(root)?.close;']);
+    // + cena panelu objednávky (výjimka INV-UI-04): jen poslední cena, jen zobrazení a strop ceny příkazu.
+    expect(candleReaders).toEqual(['hooks/useLiveCandleBinding.ts', 'hooks/useTvLiveCandleFeed.ts']);
+    const priceReaders = allSources.filter(file => /\b(?:feed|liveFeed|liveCandles)\.lastPrice\(/.test(readFileSync(join(root, file), 'utf8')));
+    expect(priceReaders).toEqual(['hooks/useLiveTicketQuote.ts', 'hooks/useTvLiveCandleFeed.ts']);
+    const ticketQuote = readFileSync(join(root, 'hooks/useLiveTicketQuote.ts'), 'utf8').split('\n').filter(line => /\.(current|lastPrice)\(/.test(line)).map(line => line.trim());
+    expect(ticketQuote).toEqual(['const price = feed.lastPrice(root);']);
     expect(importersOf('hooks/useLiveTicketQuote.ts')).toEqual(['components/LiveTradingScreen.tsx']);
-    const hook = readFileSync(join(root, 'hooks/useTvLiveCandleFeed.ts'), 'utf8').split('\n').filter(line => /\.current\(/.test(line)).map(line => line.trim());
-    expect(hook).toEqual(['current: root => feed.current(root),']);
+    const hook = readFileSync(join(root, 'hooks/useTvLiveCandleFeed.ts'), 'utf8').split('\n').filter(line => /\.(current|lastPrice)\(/.test(line)).map(line => line.trim());
+    expect(hook).toEqual(['current: root => feed.current(root),', 'lastPrice: root => feed.lastPrice(root),']);
     const dayData = readFileSync(join(root, 'hooks/useDayChartData.ts'), 'utf8');
     expect(dayData).toMatch(/composeDayCandles\(candleWindow, sameDay\?\.candles \?\? \[\], live\?\.response\.candles \?\? null\)/);
   });

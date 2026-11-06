@@ -79,6 +79,11 @@ describe('IBKR — jen čtení', () => {
     expect(client.isConnected()).toBe(false);
   });
 
+  it('obchody z odběru Last: AllLast má na MNQ posunuté ceny proti svíčkám IBKR', () => {
+    expect(MARKET_DATA_SOURCE).toContain('TickByTickDataType.Last,');
+    expect(MARKET_DATA_SOURCE).not.toContain('TickByTickDataType.AllLast');
+  });
+
   it('z hlášek maže čísla účtů', () => {
     expect(redactAccountIds('Account U1234567 and DU7654321 ok')).toBe('Account [account] and [account] ok');
     expect(redactAccountIds('MNQZ6 conId 730283085')).toBe('MNQZ6 conId 730283085');

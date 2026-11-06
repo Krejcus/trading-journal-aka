@@ -43,9 +43,10 @@ type FastChart = {
 type MetaChart = { interval?: unknown; frontContract?: unknown; frontContractSwitchTime?: unknown } | null;
 
 const META_REFRESH_MS = 60_000;
-/** Jak často vlákno posílá svíčky dne z IBKR hlavnímu vláknu (hlídač drží max 1×/10 s). */
+/** Jak často vlákno posílá svíčky dne z IBKR hlavnímu vláknu (hlídač drží max 1×/3 s). */
 const IBKR_BARS_POST_MS = 30_000;
 const IBKR_BARS_POST_PHASE_MS = 7_000;
+const IBKR_BARS_EXACT_POST_PHASE_MS = 2_000;
 const READ_TIMEOUT_MS = 1_000;
 /** Jak často vlákno vyhodnotí výpadek / návrat IBKR (`services/ibkrAlertState.ts`). */
 const IBKR_ALERT_CHECK_MS = 5_000;
@@ -175,11 +176,15 @@ const read = async (): Promise<TvStreamReading | null> => {
   if (sourceSwitch.active === 'tv') return readTv();
   if (!reading) return null;
   ibkrMeta = { front: reading.front, switchAt: null };
+  // Přelom minuty: nejdřív přesná dokončená svíčka, nová minuta hned další zprávou.
+  const closed = source.pendingClosedBar();
+  if (closed) stream?.nudge();
   return {
-    chart: reading.chart, interval: '1', pane: 0, bar: reading.bar,
+    chart: reading.chart, interval: '1', pane: 0, bar: closed ?? reading.bar,
     last: reading.last, bid: reading.bid, ask: reading.ask, mode: reading.mode,
     // Cesta ceny pro přehrání v grafu; čte se ve stejném synchronním kroku jako čtení.
-    trail: source.takeTrail(),
+    trail: closed ? null : source.takeTrail(),
+    onDelivered: closed ? () => source.closedBarSent(closed[0]) : undefined,
   };
 };
 
@@ -340,8 +345,8 @@ setInterval(() => {
 }, IBKR_ALERT_CHECK_MS);
 // Svíčky dne z IBKR pro graf dne a hodnocení (fáze 4): jen hotová čísla, buffer se
 // předá bez kopírování; hlavní vlákno je jen ověří a nechá v paměti pro upload.
-const postBars = () => {
-  const bars = ibkr?.minuteBars() ?? null;
+const postBars = (exactClosed = false) => {
+  const bars = ibkr?.minuteBars({ exactClosed }) ?? null;
   if (!bars) return;
   port.postMessage({ type: 'bars', root: bars.root, source: bars.source, contract: bars.contract, at: bars.at, bars: bars.bars }, [bars.bars.buffer]);
 };
@@ -354,6 +359,13 @@ const schedulePostBars = () => {
   setTimeout(() => { postBars(); schedulePostBars(); }, raw < 1_000 ? raw + IBKR_BARS_POST_MS : raw);
 };
 schedulePostBars();
+// Ve 2. sekundě minuty svíčky s právě dokončenou minutou z obchodů: upload ve 3. s (pilot)
+// ji dá do souboru dřív, než se aplikace otevře. Nezávisí na tom, jestli se někdo dívá.
+const scheduleExactClosedPost = () => {
+  const raw = (60_000 + IBKR_BARS_EXACT_POST_PHASE_MS - (Date.now() % 60_000)) % 60_000;
+  setTimeout(() => { postBars(true); scheduleExactClosedPost(); }, raw < 1_000 ? raw + 60_000 : raw);
+};
+scheduleExactClosedPost();
 setInterval(() => {
   const stats = stream?.stats();
   // Jen čísla a stav; téma, klíč ani obsah zpráv nikdy.

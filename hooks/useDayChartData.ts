@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Trade } from '../types';
 import { isEvidenceJournalTrade } from '../lib/journalTradeFacts';
 import { tradeDetailSource } from '../lib/tradeHistoryPresentation';
-import { HISTORICAL_LAG_MS, composeDayCandles, dayCandleWindow, loadDayHistoricalCandles, type DayCandleAnchor } from '../services/dayCandles';
+import { HISTORICAL_LAG_MS, composeDayCandles, dayCandleWindow, loadDayHistoricalCandles, historyReadyForChart, readDayTail, writeDayTail, type DayCandleAnchor } from '../services/dayCandles';
 import type { MarketCandle } from '../services/marketData';
 import { storageService } from '../services/storageService';
 import { tradeChartTiming } from '../services/tradeChartData';
@@ -45,13 +45,27 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
   const capKey = probe.historicalEnd?.getTime() ?? 0;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- okno určuje den a hranice historie
   const candleWindow = useMemo(() => probe, [day, capKey]);
-  const [historical, setHistorical] = useState<{ day: string; key: string; candles: MarketCandle[]; symbol: string; error?: string } | null>(null);
+  const [historical, setHistorical] = useState<{ day: string; key: string; candles: MarketCandle[]; symbol: string; error?: string; fromDevice?: boolean } | null>(null);
   const historicalKey = `${day}|${anchorKey}|${capKey}`;
   useEffect(() => {
     if (!detailsReady) return;
     let cancelled = false;
-    loadDayHistoricalCandles({ day, anchor, now: capKey ? capKey + HISTORICAL_LAG_MS : undefined })
-      .then(({ response }) => { if (!cancelled) setHistorical({ day, key: historicalKey, candles: response?.candles ?? [], symbol: response?.symbol ?? 'MNQ' }); })
+    const load = async () => {
+      // Běžící den: nejdřív historie uložená v zařízení, ať se graf při otevření nepřestavuje.
+      const useTail = capKey > 0 && candleWindow.needsLive;
+      const tail = useTail ? await readDayTail(day, anchorKey, capKey) : null;
+      if (cancelled) return;
+      if (tail) {
+        const stored = { day, key: historicalKey, candles: tail.candles, symbol: tail.symbol, fromDevice: true };
+        setHistorical(previous => (previous?.day === day && previous.candles.length && tail.capKey !== capKey ? previous : stored));
+        if (tail.capKey === capKey) return;
+      }
+      const { response } = await loadDayHistoricalCandles({ day, anchor, now: capKey ? capKey + HISTORICAL_LAG_MS : undefined });
+      if (cancelled) return;
+      setHistorical({ day, key: historicalKey, candles: response?.candles ?? [], symbol: response?.symbol ?? 'MNQ' });
+      if (useTail && response) void writeDayTail({ day, anchorKey, capKey, symbol: response.symbol, candles: response.candles }, response.end);
+    };
+    load()
       .catch(reason => {
         if (cancelled) return;
         // Neúspěšné obnovení stejného dne nechá dosavadní svíčky na místě.
@@ -66,7 +80,7 @@ export function useDayChartData(day: string, dayTrades: readonly Trade[], allTra
   const { live, status: liveStatus } = useLiveCandles('MNQ', { enabled: candleWindow.needsLive });
   // Během obnovení (posun hranice, ověřený kontrakt) zůstávají svíčky téhož dne —
   // graf se neodpojí ani neztratí záběr.
-  const sameDay = historical?.day === day ? historical : null;
+  const sameDay = historyReadyForChart(historical?.day === day ? historical : null, candleWindow.needsLive, liveStatus === 'loading');
   const candles = useMemo(
     () => composeDayCandles(candleWindow, sameDay?.candles ?? [], live?.response.candles ?? null),
     [candleWindow, live, sameDay],

@@ -266,6 +266,48 @@ describe('jádro kanálu ceny z TV (vlákno workeru)', () => {
     t.stream.stop();
   });
 
+  describe('onDelivered (dokončená minuta se nesmí ztratit)', () => {
+    const flows = (overrides: Partial<TvPriceStreamDeps>) => {
+      const onDelivered = vi.fn();
+      const t = setup(overrides);
+      t.setReading(reading(29_145, { onDelivered }));
+      return { t, onDelivered };
+    };
+
+    it('po odeslání se potvrdí', async () => {
+      const { t, onDelivered } = flows({});
+      t.stream.start();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(t.published).toHaveLength(1);
+      expect(onDelivered).toHaveBeenCalled();
+      t.stream.stop();
+    });
+
+    it.each([
+      ['odeslání selže', { publish: vi.fn(async () => false) }],
+      ['podpis selže', { sign: vi.fn(async () => null) }],
+    ] as [string, Partial<TvPriceStreamDeps>][])('%s: nepotvrdí se', async (_name, overrides) => {
+      const { t, onDelivered } = flows(overrides);
+      t.stream.start();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(onDelivered).not.toHaveBeenCalled();
+      t.stream.stop();
+    });
+
+    it('stejný stav jako minulá zpráva se potvrdí bez odeslání, nová minuta tak nečeká', async () => {
+      const t = setup();
+      t.stream.start();
+      await vi.advanceTimersByTimeAsync(10);
+      const sent = t.published.length;
+      const onDelivered = vi.fn();
+      t.setReading(reading(29_145, { onDelivered }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(onDelivered).toHaveBeenCalled();
+      expect(t.published).toHaveLength(sent);
+      t.stream.stop();
+    });
+  });
+
   it('stop zastaví čtení i odesílání', async () => {
     const t = setup();
     t.stream.start();

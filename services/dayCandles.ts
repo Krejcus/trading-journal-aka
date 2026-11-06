@@ -1,3 +1,4 @@
+import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { chartMarketDay, pragueWallTime } from '../lib/dayJournal';
 import {
   loadMarketCandles,
@@ -27,6 +28,56 @@ const nextDay = (day: string) => {
   const [y, m, d] = day.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 };
+
+/**
+ * Poslední historie grafu dne v zařízení. Nedokončený den se v denních kbelících
+ * `marketData` neukládá, takže každé otevření čekalo ~4 s na Databento a pak graf
+ * přestavělo (měřeno 6. 11.). Data z `market-candles` jsou starší než 24 h a už se
+ * nemění, živé svíčky se sem nikdy neukládají (INV-UI-04).
+ */
+const DAY_TAIL_KEY = 'day-candles-tail-v1';
+
+export interface DayCandlesTail {
+  day: string;
+  anchorKey: string;
+  /** Hranice historie (ms), kterou uložené svíčky pokrývají. */
+  capKey: number;
+  symbol: string;
+  candles: MarketCandle[];
+}
+
+/**
+ * Starší historie jen do tohoto rozdílu hranic: živý soubor sahá 27 h zpět a hranice je
+ * now−24 h 20 min, takže delší rozdíl by v řadě nechal díru, kterou logická osa skryje.
+ */
+export const DAY_TAIL_MAX_CAP_GAP_MS = 2 * 60 * 60_000;
+
+/** Historii ze zařízení do grafu až se živým čtením: jinak by se graf otevřel na včerejšku a panel vzal ~24 h starou cenu. */
+export function historyReadyForChart<T extends { fromDevice?: boolean }>(history: T | null, needsLive: boolean, liveLoading: boolean): T | null {
+  return history?.fromDevice && needsLive && liveLoading ? null : history;
+}
+
+export async function readDayTail(day: string, anchorKey: string, capKey: number): Promise<DayCandlesTail | null> {
+  try {
+    const tail = await idbGet<DayCandlesTail>(DAY_TAIL_KEY);
+    if (!tail || tail.day !== day || tail.anchorKey !== anchorKey) return null;
+    if (!Number.isFinite(tail.capKey) || !Array.isArray(tail.candles) || !tail.candles.length) return null;
+    if (tail.capKey > capKey || capKey - tail.capKey > DAY_TAIL_MAX_CAP_GAP_MS) return null;
+    return tail;
+  } catch {
+    return null;
+  }
+}
+
+/** Uloží jen odpověď, která hranici opravdu pokryla; jinak by ji další otevření vzalo za úplnou. */
+export async function writeDayTail(tail: DayCandlesTail, coveredThrough: string | undefined): Promise<void> {
+  if (!tail.capKey || !tail.candles.length || !(Date.parse(coveredThrough ?? '') >= tail.capKey)) return;
+  try {
+    await idbSet(DAY_TAIL_KEY, tail);
+  } catch {
+    // Plná nebo blokovaná cache nesmí graf rozbít.
+  }
+}
 
 export interface DayCandleWindow {
   /** Začátek kontextu (14 dní před dnem, pražská půlnoc). */

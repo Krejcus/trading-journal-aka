@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTvPriceStreamSupervisor, IBKR_BARS_FRESH_MS, IBKR_CRASH_FALLBACK_MS, type TvPriceSourceName, type TvPriceStreamConfig } from '../server/tvPriceStreamSupervisor';
+import { BARS_MIN_INTERVAL_MS, createTvPriceStreamSupervisor, IBKR_BARS_FRESH_MS, IBKR_CRASH_FALLBACK_MS, type TvPriceSourceName, type TvPriceStreamConfig } from '../server/tvPriceStreamSupervisor';
 
 class FakeWorker extends EventEmitter {
   messages: unknown[] = [];
@@ -256,7 +256,8 @@ describe('hlídač vlákna kanálu ceny (hlavní vlákno workeru)', () => {
       t.workers[0].emit('message', barsMessage(at, 2));
       t.workers[0].emit('message', barsMessage(at, 3));
       expect(t.supervisor.latestBars('MNQ')!.bars).toHaveLength(2);
-      vi.advanceTimersByTime(10_000);
+      // Vlákno posílá ve 2. a 7. s: běžné čtení po dřívějším se nesmí zahodit.
+      vi.advanceTimersByTime(BARS_MIN_INTERVAL_MS);
       t.workers[0].emit('message', barsMessage(Date.now(), 3));
       expect(t.supervisor.latestBars('MNQ')!.bars).toHaveLength(3);
       t.supervisor.stop();

@@ -101,10 +101,13 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     expect(thread).toContain("port.postMessage({ type: 'bars', root: bars.root, source: bars.source, contract: bars.contract, at: bars.at, bars: bars.bars }, [bars.bars.buffer]);");
     expect(thread).toContain('const IBKR_BARS_POST_PHASE_MS = 7_000;');
     expect(thread).toContain('schedulePostBars();');
+    expect(thread).toContain('postBars(true); scheduleExactClosedPost();');
+    expect(thread).toContain('const IBKR_BARS_EXACT_POST_PHASE_MS = 2_000;');
     expect(thread).not.toMatch(/setInterval\(postBars/);
     expect(source('scripts/copier/pilot.ts')).toContain('phaseMs: TV_LIVE_BARS_PHASE_MS,');
     const pilot = source('scripts/copier/pilot.ts');
-    expect(pilot.match(/latestBars\(/g)).toHaveLength(2);
+    expect(pilot.match(/latestBars\(/g)).toHaveLength(3);
+    expect(pilot).toContain('return ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000 ? ibkr : null;');
     expect(pilot).toContain('return ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000 ? ibkr : readTradingViewBars(root);');
     expect(pilot).toContain('if (ibkr && barsContractMatchesSymbol(ibkr.contract, symbol)) return ibkr;');
     expect(pilot).toContain('return tv && !barsContractConflicts(tv.contract, symbol) ? tv : null;');
@@ -210,5 +213,13 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     const relay = source('server/macCopierCommandRelay.ts');
     expect(relay.match(/notifyRealtimeConfig\(response\.realtime\);\s*await maybeSubscribeKick\(response\.realtime\);/g)).toHaveLength(2);
     expect(relay).not.toMatch(/await\s+notifyRealtimeConfig|await\s+options\.onRealtimeConfig/);
+  });
+
+  it('dokončená minuta z IBKR se drží do potvrzení odeslání a nese se místo baru bez cesty', () => {
+    const thread = readFileSync(join(process.cwd(), 'scripts/copier/tvPriceStreamThread.ts'), 'utf8');
+    expect(thread).toContain('const closed = source.pendingClosedBar();');
+    expect(thread).toContain('bar: closed ?? reading.bar');
+    expect(thread).toContain('trail: closed ? null : source.takeTrail()');
+    expect(thread).toContain('onDelivered: closed ? () => source.closedBarSent(closed[0]) : undefined');
   });
 });

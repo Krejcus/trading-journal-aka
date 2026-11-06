@@ -120,7 +120,7 @@ import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../se
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
 import { createTvPriceStreamSupervisor, tvPriceStreamConfigFromRealtime, type TvPriceStreamSupervisor } from '../../server/tvPriceStreamSupervisor';
 import { createPriceSourceNotifier } from '../../server/priceSourceNotifier';
-import { readTradingViewBars, scheduleTradingViewBarsCapture, startTradingViewLiveBars, TV_LIVE_BARS_PHASE_MS, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
+import { readTradingViewBars, scheduleTradingViewBarsCapture, startTradingViewLiveBars, TV_LIVE_BARS_EARLY_PHASE_MS, TV_LIVE_BARS_PHASE_MS, type TradingViewLiveBarsFeed } from '../../services/tradingViewBars';
 import { barsContractConflicts, barsContractMatchesSymbol, tvSymbolRoot } from '../../lib/tradingViewBars';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
@@ -1132,6 +1132,12 @@ async function runLocalAgent(
       },
       // Až po uzavření minuty: soubor nese hotovou předchozí svíčku.
       phaseMs: TV_LIVE_BARS_PHASE_MS,
+      // Dřívější soubor jen z IBKR: bez čerstvých svíček se přeskočí, graf TV se tady nikdy nečte.
+      earlyPhaseMs: TV_LIVE_BARS_EARLY_PHASE_MS,
+      earlyRead: async root => {
+        const ibkr = tvPriceStream?.latestBars(root) ?? null;
+        return ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000 ? ibkr : null;
+      },
       upload: async capture => {
         if (!relay?.uploadLiveBars) throw new Error('relay-unavailable');
         await relay.uploadLiveBars(capture);

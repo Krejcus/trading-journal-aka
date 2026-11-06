@@ -16,8 +16,9 @@ import {
  * cena míří jen do podepsané zprávy kanálu, nikdy do kopírky ani úložišť.
  *
  * Drží spojení na Gateway, přední kontrakt (kontrola rollu jednou za hodinu),
- * odběr všech obchodů (`AllLast`) a kotaci (bid/ask, typ dat). `reading()`
- * vrací poslední cenu a 1m svíčku poskládanou z obchodů, nebo `null`, když
+ * odběr obchodů (tick-by-tick `Last`) a kotaci (bid/ask, poslední obchod, typ dat).
+ * `reading()` vrací poslední cenu (čerstvý vzorek `reqMktData`, jinak poslední
+ * obchod) a 1m svíčku z obchodů s koncem podle vzorku, nebo `null`, když
  * zdroji nejde věřit (bez spojení, výpadek, zpožděná data, dlouhé ticho) —
  * vlákno pak čte TradingView. Nikdy nevyhodí.
  */
@@ -27,6 +28,25 @@ export const IBKR_STREAM_PORT = 4001;
 export const IBKR_STREAM_CLIENT_ID = 92;
 /** Bez obchodu déle než tohle = zdroj se nepoužije (TV jako záloha). */
 export const IBKR_STALE_MS = 15_000;
+/**
+ * Rychlá cena: tick-by-tick nese každý obchod, ale chodí v dávkách ~0,5 s; poslední
+ * obchod z `reqMktData` je vzorek ~130 ms a podle měření 5. 11. předbíhá dávky
+ * o ~150 ms. Takže otevření a minuta svíčky jdou z obchodů, poslední cena
+ * z rychlého vzorku, dokud je takhle čerstvý (dávka by cenu vracela zpět).
+ */
+export const IBKR_QUICK_LAST_FRESH_MS = 1_000;
+/** Vzorky chodí, ale od prvního z nich žádný obchod: odběr obchodů je mrtvý, zdroji nevěřit (TV jako záloha). */
+export const IBKR_QUICK_WITHOUT_TRADES_MS = 3_000;
+/**
+ * Vzorek bez času burzy těsně po přelomu minuty může být ještě obchod z minulé
+ * minuty (5.–6. 11.: knot o 1,25 mimo hotovou svíčku), do nové svíčky proto nejde.
+ */
+export const IBKR_QUICK_MINUTE_GUARD_MS = 500;
+/**
+ * Přesná dokončená minuta se pošle jen krátce po přelomu: klient bere svíčku předchozí
+ * minuty nejvýš `TV_PNL_PREVIOUS_BAR_GRACE_MS` (10 s), jinak by se graf vrátil na data.
+ */
+export const IBKR_CLOSED_BAR_MAX_LATE_MS = 5_000;
 /** Vlákno smí jen na IB Gateway (live/paper), ne na TWS — tam Read-Only API nemusí být zapnuté. */
 const GATEWAY_PORTS = [4001, 4002];
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -79,7 +99,7 @@ export interface IbkrReading {
   /** Kontrakt ve formátu TV (`MNQZ2026`). */
   front: string;
   last: number;
-  /** [začátek minuty s, open, high, low, close] — vždy celá minuta z obchodů. */
+  /** [začátek minuty s, open, high, low, close] — minuta a open z obchodů; high/low a close i z rychlého vzorku. */
   bar: [number, number, number, number, number];
   bid: number | null;
   ask: number | null;
@@ -118,13 +138,26 @@ export interface IbkrPriceSource {
   start(): void;
   stop(): void;
   reading(): IbkrReading | null;
-  /** Úplné 1m svíčky dne předního kontraktu, nebo `null` (neúplné, výpadek, jiný kontrakt). */
-  minuteBars(): IbkrMinuteBars | null;
+  /**
+   * Úplné 1m svíčky dne předního kontraktu, nebo `null` (neúplné, výpadek, jiný kontrakt).
+   * `exactClosed`: právě dokončená minuta má O/H/L/C jen z obchodů (objem zůstává z IBKR),
+   * aby soubor svíček nesl hotovou svíčku hned po přelomu, ne až po 10. s.
+   */
+  minuteBars(options?: { exactClosed?: boolean }): IbkrMinuteBars | null;
   /**
    * Ceny obchodů rozpracované minuty od minulého volání (sousední shodné
    * sloučené) a vyprázdní je. Jen pro přehrání v grafu (INV-UI-04).
    */
   takeTrail(): IbkrTrail | null;
+  /**
+   * Právě dokončená minuta jen z obchodů, nebo `null`. Vlákno ji pošle před první
+   * zprávou nové minuty a drží ji, dokud `closedBarSent` nepotvrdí odeslání: jinak by
+   * svíčka v grafu držela poslední vzorek a po příchodu hotových svíček poskočila
+   * (e2e 5.–6. 11.: close v 83 ze 117 minut, až 4,75 bodu). Minuta s výpadkem
+   * dat se neposílá, chyběly by jí obchody.
+   */
+  pendingClosedBar(): IbkrReading['bar'] | null;
+  closedBarSent(minute: number): void;
   stats(): IbkrPriceSourceStats;
 }
 
@@ -133,7 +166,7 @@ export interface IbkrPriceSourceDeps {
   port?: number;
   clientId?: number;
   createClient?: (handlers: ReadOnlyIbHandlers) => ReadOnlyIbClient;
-  /** Po každém přijatém obchodu (vlákno podle toho pošle cenu hned, ne až v dalším kole). */
+  /** Po každém obchodu i rychlém vzorku ceny (vlákno podle toho pošle cenu hned, ne až v dalším kole). */
   onTrade?: () => void;
   now?: () => number;
   setTimeoutImpl?: (callback: () => void, ms: number) => unknown;
@@ -150,7 +183,20 @@ export function ibkrFrontToTv(symbol: string, candidate: Pick<FrontContractCandi
   return `${root}${month}${year}`;
 }
 
-interface MinuteBar { minute: number; open: number; high: number; low: number; close: number }
+interface MinuteBar {
+  minute: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  /** Extrémy jen z obchodů; `high`/`low` navíc obsahují rychlé vzorky pro zobrazení. */
+  tradeHigh: number;
+  tradeLow: number;
+  /** Minutu zasáhl výpadek dat: nemá všechny obchody. */
+  gap: boolean;
+  /** Poslední rychlý vzorek téhle minuty: na přelomu minuty se close nevrací na starší obchod. */
+  quickClose: number | null;
+}
 
 export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPriceSource {
   const symbol = (deps.symbol ?? 'MNQ').toUpperCase();
@@ -182,8 +228,21 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
   let lastTradesRequestAt: number | null = null;
   let last: IbTrade | null = null;
   let bar: MinuteBar | null = null;
+  let closedBar: IbkrReading['bar'] | null = null;
+  /** Poslední dokončená minuta z obchodů pro soubor svíček; potvrzení zprávy (`closedBarSent`) ji nemaže. */
+  let exactClosedBar: IbkrReading['bar'] | null = null;
+  /** Kdy skončil poslední výpadek dat: minuta, která začala nejpozději v tomhle čase, nemá celý začátek. */
+  let restoredAt = -Infinity;
   let bid: number | null = null;
   let ask: number | null = null;
+  let quickLast: { price: number; at: number } | null = null;
+  /**
+   * Vzorek nemá čas burzy a `at` je čas příjezdu, takže po odběru nebo výpadku může
+   * Gateway doručit starou hodnotu jako novou. Vzorky platí až po prvním obchodu.
+   */
+  let quickArmed = false;
+  /** Čas prvního vzorku od posledního obchodu. */
+  let quickSinceTrade: number | null = null;
   let trail: IbkrTrail | null = null;
   let failures = 0;
   let contractReqId = CONTRACT_REQ_BASE;
@@ -215,14 +274,32 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     timers.clear();
   };
 
+  const forgetQuickLast = () => {
+    quickLast = null;
+    quickArmed = false;
+    quickSinceTrade = null;
+  };
+
   const forgetData = () => {
     marketDataType = null;
     last = null;
     bar = null;
+    closedBar = null;
+    exactClosedBar = null;
     trail = null;
     bid = null;
     ask = null;
+    forgetQuickLast();
   };
+
+  const freshQuickLast = () => (quickLast && now() - quickLast.at <= IBKR_QUICK_LAST_FRESH_MS ? quickLast : null);
+
+  /** Rychlá cena patří do svíčky jen ve stejné minutě; o nové minutě rozhodne až obchod s časem burzy. */
+  const quickInBar = (quick: { at: number } | null, target: MinuteBar | null) =>
+    !!quick && !!target && Math.floor(quick.at / 60_000) * 60 === target.minute && quick.at % 60_000 >= IBKR_QUICK_MINUTE_GUARD_MS;
+
+  /** Čtení až s první celou minutou po odběru: dřív svíčka nemá skutečné open/high/low. */
+  const isFullBar = (target: MinuteBar) => target.minute >= Math.ceil(subscribedAtSec / 60) * 60;
 
   const contract = (candidate: FrontContractCandidate) => ({ conId: candidate.conId, exchange: 'CME' });
 
@@ -306,6 +383,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     const target = front;
     stats.lastCode = null;
     lastTradesRequestAt = now();
+    forgetQuickLast();
     subscribedAtSec = Math.floor(now() / 1_000);
     subscribed = target;
     lost = false;
@@ -385,16 +463,20 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     if (code === CONNECTIVITY_LOST || code === SERVER_LINK_BROKEN || code === DATA_FARM_BROKEN) {
       stats.lastCode = code;
       lost = true;
+      if (bar) bar.gap = true;
+      forgetQuickLast();
       return;
     }
     if (code === CONNECTIVITY_RESTORED_DATA_LOST) {
       // Data mezitím chyběla: stará cena se nesmí tvářit živě až do nového odběru.
       stats.lastCode = code;
       awaitingResubscribe = true;
+      forgetQuickLast();
       subscribe();
       return;
     }
     if (code === CONNECTIVITY_RESTORED || code === DATA_FARM_OK) {
+      if (lost) restoredAt = now();
       lost = false;
       // Kód výpadku po obnově neplatí (jinak by hlášení dalšího výpadku uvedlo starý důvod).
       if (stats.lastCode === CONNECTIVITY_LOST || stats.lastCode === SERVER_LINK_BROKEN || stats.lastCode === DATA_FARM_BROKEN) stats.lastCode = null;
@@ -470,13 +552,26 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
       stats.trades += 1;
       stats.state = 'live';
       last = trade;
+      // Opožděný obchod z výpadku vzorky neodemkne.
+      if (!lost && !awaitingResubscribe) quickArmed = true;
+      quickSinceTrade = null;
       const minute = Math.floor(trade.time / 60) * 60;
       if (!bar || minute > bar.minute) {
-        bar = { minute, open: trade.price, high: trade.price, low: trade.price, close: trade.price };
+        closedBar = bar && isFullBar(bar) && !bar.gap ? [bar.minute, bar.open, bar.tradeHigh, bar.tradeLow, bar.close] : null;
+        exactClosedBar = closedBar;
+        bar = { minute, open: trade.price, high: trade.price, low: trade.price, close: trade.price, tradeHigh: trade.price, tradeLow: trade.price, gap: lost || restoredAt >= minute * 1_000, quickClose: null };
       } else if (minute === bar.minute) {
         bar.high = Math.max(bar.high, trade.price);
         bar.low = Math.min(bar.low, trade.price);
+        bar.tradeHigh = Math.max(bar.tradeHigh, trade.price);
+        bar.tradeLow = Math.min(bar.tradeLow, trade.price);
         bar.close = trade.price;
+      }
+      // Rychlý vzorek téhle minuty mohl přijít dřív než první obchod z dávky: svíčka ho musí obsahovat.
+      if (quickLast && quickInBar(quickLast, bar)) {
+        bar.high = Math.max(bar.high, quickLast.price);
+        bar.low = Math.min(bar.low, quickLast.price);
+        bar.quickClose = quickLast.price;
       }
       // Cesta jen rozpracované minuty: nová minuta začíná prázdná, opožděný obchod do ní nepatří.
       if (minute === bar.minute) {
@@ -504,6 +599,20 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
       const value = price > 0 ? price : null;
       if (side === 'bid') bid = value; else ask = value;
     },
+    onLast: (reqId, price) => {
+      if (reqId !== REQ.quote || !subscribed || !quickArmed || lost || awaitingResubscribe || !(price > 0)) return;
+      const at = now();
+      // Odpočet mrtvého odběru měří souvislý proud vzorků; osamělý vzorek v tichém trhu ho nezakládá.
+      if (quickSinceTrade === null || !quickLast || at - quickLast.at > IBKR_QUICK_WITHOUT_TRADES_MS) quickSinceTrade = at;
+      quickLast = { price, at };
+      // Skutečný obchod: knot zůstane, i kdyby ho dávka obchodů ještě nedonesla.
+      if (bar && quickInBar(quickLast, bar)) {
+        bar.high = Math.max(bar.high, price);
+        bar.low = Math.min(bar.low, price);
+        bar.quickClose = price;
+      }
+      try { deps.onTrade?.(); } catch { /* zdroj nikdy nevyhodí */ }
+    },
   };
 
   function connect() {
@@ -524,6 +633,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
       onContractDetailsEnd: current(handlers.onContractDetailsEnd),
       onTick: current(handlers.onTick),
       onQuote: current(handlers.onQuote),
+      onLast: current(handlers.onLast),
       onBar: current(handlers.onBar),
       onBarsEnd: current(handlers.onBarsEnd),
       onBarUpdate: current(handlers.onBarUpdate),
@@ -559,16 +669,18 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
         if (!running || !connected || lost || awaitingResubscribe || !subscribed || !last || !frontTv || marketDataType !== 1) return null;
         if (subscribed.conId !== front?.conId) return null;
         if (now() - last.receivedAt > IBKR_STALE_MS) return null;
-        // Čtení až s první celou minutou po odběru — dřív by svíčka neměla skutečné
-        // open/high/low a klient by P&L i svíčku stejně zahodil (vlákno zatím čte TV).
-        const fullBar = bar && bar.minute >= Math.ceil(subscribedAtSec / 60) * 60 ? bar : null;
+        if (quickSinceTrade !== null && freshQuickLast() && now() - quickSinceTrade > IBKR_QUICK_WITHOUT_TRADES_MS) return null;
+        // Dřív než s celou minutou by klient P&L i svíčku stejně zahodil (vlákno zatím čte TV).
+        const fullBar = bar && isFullBar(bar) ? bar : null;
         if (!fullBar) return null;
         const quoteValid = bid !== null && ask !== null && bid <= ask;
+        const quick = freshQuickLast();
+        const close = !quick ? fullBar.close : quickInBar(quick, fullBar) ? quick.price : fullBar.quickClose ?? fullBar.close;
         return {
           chart: `IBKR:${frontTv}`,
           front: frontTv,
-          last: last.price,
-          bar: [fullBar.minute, fullBar.open, fullBar.high, fullBar.low, fullBar.close],
+          last: quick?.price ?? last.price,
+          bar: [fullBar.minute, fullBar.open, fullBar.high, fullBar.low, close],
           bid: quoteValid ? bid : null,
           ask: quoteValid ? ask : null,
           mode: 'streaming',
@@ -577,7 +689,7 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
         return null;
       }
     },
-    minuteBars() {
+    minuteBars(options) {
       try {
         if (!running || !connected || lost || awaitingResubscribe || hmdsBroken || !barsComplete || !frontTv) return null;
         if (barsConId === null || barsConId !== front?.conId) return null;
@@ -587,6 +699,12 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
         if (!rows.length) return null;
         const bars = new Float64Array(rows.length * 6);
         rows.forEach((row, index) => bars.set(row, index * 6));
+        const exact = options?.exactClosed ? exactClosedBar : null;
+        // Jen minuta těsně před aktuální a jen stejný kontrakt; zapisuje se do kopie, `history` zůstává z IBKR.
+        if (exact && exact[0] === Math.floor(at / 60_000) * 60 - 60 && subscribed?.conId === barsConId) {
+          const index = rows.findIndex(row => row[0] === exact[0]);
+          if (index >= 0) bars.set(exact, index * 6);
+        }
         return { root: symbol, source: `IBKR:${frontTv}`, contract: frontTv, at, bars };
       } catch {
         return null;
@@ -595,7 +713,16 @@ export function createIbkrPriceSource(deps: IbkrPriceSourceDeps = {}): IbkrPrice
     takeTrail() {
       const taken = trail;
       trail = null;
+      // Přehrání dávky by vracelo cenu zpět za rychlý vzorek.
+      if (freshQuickLast()) return null;
       return taken && taken.prices.length ? taken : null;
+    },
+    pendingClosedBar() {
+      if (closedBar && now() - (closedBar[0] + 60) * 1_000 > IBKR_CLOSED_BAR_MAX_LATE_MS) closedBar = null;
+      return closedBar;
+    },
+    closedBarSent(minute) {
+      if (closedBar?.[0] === minute) closedBar = null;
     },
     stats: () => ({ ...stats }),
   };

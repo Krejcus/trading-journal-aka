@@ -11,6 +11,11 @@ export interface LiveCandleFeed {
   subscribe(listener: () => void): () => void;
   /** Rozpracovaná 1m svíčka pro kořen panelu, nebo `null` (stojí, jiný trh, mimo den). */
   current(root: string): MarketCandle | null;
+  /**
+   * Poslední cena zprávy se stejnými kontrolami jako `current`, pro panel objednávky.
+   * Ne `close`: ten bývá mezistav přehrání a na přelomu minuty close minulé minuty.
+   */
+  lastPrice(root: string): number | null;
 }
 
 /**

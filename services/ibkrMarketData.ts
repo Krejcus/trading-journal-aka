@@ -33,6 +33,7 @@ export const TICK_BY_TICK_REQUEST_GAP_MS = 15_000;
 const VOLUME_TICK_TYPE = 8;
 const BID_TICK_TYPE = 1;
 const ASK_TICK_TYPE = 2;
+const LAST_TICK_TYPE = 4;
 
 export interface IbTrade {
   /** Čas obchodu od IBKR, epoch sekundy (IBKR dává jen celé sekundy). */
@@ -68,6 +69,8 @@ export interface ReadOnlyIbHandlers {
   onVolume?: (reqId: number, volume: number, receivedAt: number) => void;
   /** Nejlepší bid/ask z `reqMktData` (tick type 1/2). */
   onQuote?: (reqId: number, side: 'bid' | 'ask', price: number) => void;
+  /** Poslední obchod z `reqMktData` (tick type 4): vzorek ~130 ms, ne každý obchod. */
+  onLast?: (reqId: number, price: number) => void;
   onBar?: (reqId: number, bar: IbMinuteBar) => void;
   onBarsEnd?: (reqId: number) => void;
   /** Průběžná aktualizace poslední svíčky odběru s `keepUpToDate`. */
@@ -149,6 +152,7 @@ export function createReadOnlyIbClient(
     if (typeof value !== 'number' || !Number.isFinite(value)) return;
     if (field === BID_TICK_TYPE) handlers.onQuote?.(reqId, 'bid', value);
     else if (field === ASK_TICK_TYPE) handlers.onQuote?.(reqId, 'ask', value);
+    else if (field === LAST_TICK_TYPE) handlers.onLast?.(reqId, value);
   });
   api.on(EventName.historicalData, (reqId, time, open, high, low, close, volume, count) => {
     if (String(time).startsWith('finished')) {
@@ -172,8 +176,9 @@ export function createReadOnlyIbClient(
     isConnected: () => api.isConnected,
     requestRealtimeData: () => void api.reqMarketDataType(MarketDataType.REALTIME),
     requestContractDetails: (reqId: number, contract: Contract) => void api.reqContractDetails(reqId, contract),
+    // `Last`, ne `AllLast`: AllLast na MNQZ6 chodí o přesně 1,25 níž než svíčky IBKR i TradingView (měřeno 5.–6. 11. 2026).
     subscribeTrades: (reqId: number, contract: Contract) =>
-      void api.reqTickByTickData(reqId, contract, TickByTickDataType.AllLast, 0, false),
+      void api.reqTickByTickData(reqId, contract, TickByTickDataType.Last, 0, false),
     cancelTrades: (reqId: number) => void api.cancelTickByTickData(reqId),
     // Kotace (bid/ask, denní objem a typ dat); bez snapshotu, bez regulatorního snapshotu.
     subscribeVolume: (reqId: number, contract: Contract) => void api.reqMktData(reqId, contract, '', false, false),

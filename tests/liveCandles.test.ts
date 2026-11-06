@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { tvLiveBarsStoragePath, type TvBar, type TvBarsCapture } from '../lib/tradingViewBars';
-import { startTradingViewLiveBars, TV_LIVE_BARS_PHASE_MS } from '../services/tradingViewBars';
+import { startTradingViewLiveBars, TV_LIVE_BARS_EARLY_PHASE_MS, TV_LIVE_BARS_PHASE_MS } from '../services/tradingViewBars';
 import { LIVE_CANDLES_CATCH_UP_MS, LIVE_CANDLES_POLL_PHASE_MS, liveCandlesCatchUpDelay, nextLiveCandlesPollDelay } from '../hooks/useLiveCandles';
 
 vi.mock('../services/supabase', () => ({ supabase: {} }));
@@ -89,6 +89,70 @@ describe('startTradingViewLiveBars', () => {
     feed.stop();
     clock.tick(); await flush();
     expect(read).toHaveBeenCalledOnce();
+  });
+});
+
+describe('dřívější soubor svíček ve 3. s', () => {
+  const minuteStart = Date.UTC(2026, 9, 28, 13, 41, 0);
+  const timers = (at: () => number) => {
+    const pending: { due: number; fn: () => void }[] = [];
+    const setTimeoutImpl = ((fn: () => void, ms: number) => { pending.push({ due: at() + ms, fn }); return { unref() {} }; }) as unknown as typeof setTimeout;
+    return { pending, setTimeoutImpl };
+  };
+
+  it('běží jen z earlyRead: bez dat nic nenahraje, graf TV nečte a korekce v 10. s zůstává', async () => {
+    let clockNow = minuteStart + 1_000;
+    const t = timers(() => clockNow);
+    const read = vi.fn(async () => null);
+    const earlyRead = vi.fn(async () => null);
+    const upload = vi.fn(async () => {});
+    const log = vi.fn();
+    startTradingViewLiveBars({ roots: ['MNQ'], read, earlyRead, upload, log, phaseMs: TV_LIVE_BARS_PHASE_MS, earlyPhaseMs: TV_LIVE_BARS_EARLY_PHASE_MS, now: () => clockNow, setTimeoutImpl: t.setTimeoutImpl });
+    await flush();
+    expect(read).toHaveBeenCalledOnce();
+    expect(t.pending.map(item => item.due - minuteStart).sort((a, b) => a - b)).toEqual([TV_LIVE_BARS_EARLY_PHASE_MS, TV_LIVE_BARS_PHASE_MS]);
+    log.mockClear();
+    clockNow = minuteStart + TV_LIVE_BARS_EARLY_PHASE_MS;
+    t.pending.find(item => item.due === clockNow)!.fn();
+    await flush();
+    expect(earlyRead).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledOnce();
+    expect(upload).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('nahraje čtení z earlyRead a korekci; stop zruší oba časovače', async () => {
+    let clockNow = minuteStart + 1_000;
+    const t = timers(() => clockNow);
+    const cleared = vi.fn();
+    const upload = vi.fn(async (_capture: TvBarsCapture) => {});
+    const feed = startTradingViewLiveBars({
+      roots: ['MNQ'], read: vi.fn(async () => capture([bar(-1, 31_430), bar(0)])), earlyRead: vi.fn(async () => capture([bar(-1), bar(0)])), upload,
+      phaseMs: TV_LIVE_BARS_PHASE_MS, earlyPhaseMs: TV_LIVE_BARS_EARLY_PHASE_MS, now: () => clockNow, setTimeoutImpl: t.setTimeoutImpl, clearTimeoutImpl: cleared as unknown as typeof clearTimeout,
+    });
+    await flush();
+    expect(upload).toHaveBeenCalledOnce();
+    clockNow = minuteStart + TV_LIVE_BARS_EARLY_PHASE_MS;
+    t.pending.find(item => item.due === clockNow)!.fn();
+    await flush();
+    expect(upload).toHaveBeenCalledTimes(2);
+    clockNow = minuteStart + TV_LIVE_BARS_PHASE_MS;
+    t.pending.find(item => item.due === clockNow)!.fn();
+    await flush();
+    expect(upload).toHaveBeenCalledTimes(3);
+    feed.stop();
+    expect(cleared).toHaveBeenCalledTimes(2);
+  });
+
+  it('korekce se nahraje, i když se u předchozí svíčky změnil jen high, low nebo objem', async () => {
+    const clock = manualInterval();
+    const reads = [capture([bar(-1), bar(0)]), capture([[bar(-1)[0], 31_420, 31_425, 31_418, 31_420, 10], bar(0)]), capture([[bar(-1)[0], 31_420, 31_425, 31_418, 31_420, 99], bar(0)])];
+    const upload = vi.fn(async (_capture: TvBarsCapture) => {});
+    startTradingViewLiveBars({ roots: ['MNQ'], read: vi.fn(async () => reads.shift() ?? null), upload, ...clock });
+    await flush();
+    clock.tick(); await flush();
+    clock.tick(); await flush();
+    expect(upload).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -219,7 +283,9 @@ describe('zarovnání na minutu (předposlední svíčka grafu dne, 28. 10. 2026
     const minuteStart = Date.UTC(2026, 9, 28, 13, 41, 0);
     expect(LIVE_CANDLES_CATCH_UP_MS).toBeGreaterThan(TV_LIVE_BARS_PHASE_MS);
     expect(LIVE_CANDLES_CATCH_UP_MS).toBeLessThan(LIVE_CANDLES_POLL_PHASE_MS);
-    expect(liveCandlesCatchUpDelay(minuteStart + 3_000)).toBe(11_000);
+    expect(liveCandlesCatchUpDelay(minuteStart + 1_000)).toBe(5_000);
+    expect(liveCandlesCatchUpDelay(minuteStart + 5_999)).toBe(1);
+    expect(liveCandlesCatchUpDelay(minuteStart + 6_000)).toBe(8_000);
     expect(liveCandlesCatchUpDelay(minuteStart + 13_999)).toBe(1);
     expect(liveCandlesCatchUpDelay(minuteStart + 14_000)).toBeNull();
     expect(liveCandlesCatchUpDelay(minuteStart + 45_000)).toBeNull();

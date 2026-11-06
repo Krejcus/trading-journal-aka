@@ -48,7 +48,7 @@ export type ProbeBar = IbMinuteBar;
  * - čísla účtů, která Gateway pošle po připojení, neposlouchá, a z textů chyb
  *   je vymaže.
  *
- * Měří tok obchodů (`reqTickByTickData` AllLast), úplnost proti dennímu objemu
+ * Měří tok obchodů (`reqTickByTickData` Last; do 6. 11. 2026 AllLast), úplnost proti dennímu objemu
  * IBKR a proti jejich 1m svíčkám (objem i počet obchodů za minutu), zpoždění
  * (čas obchodu má jen sekundy) a stabilitu spojení. `--raw-ticks` uloží
  * jednotlivé obchody pro pozdější porovnání s Databentem.

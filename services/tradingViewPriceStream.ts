@@ -47,6 +47,8 @@ export interface TvStreamReading {
   mode: string | null;
   /** Nové ceny obchodů rozpracované minuty od minulého čtení (jen IBKR). */
   trail?: { minute: number; prices: number[] } | null;
+  /** Klient tenhle stav má (odesláno, nebo totožný s minulou zprávou). Zdroj pak může pokračovat dalším. */
+  onDelivered?: () => void;
 }
 
 export interface TvStreamMeta {
@@ -201,7 +203,7 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
       const at = now();
       const current = signature(reading);
       const heartbeatDue = stats.lastSendAt === null || at - stats.lastSendAt >= TV_STREAM_HEARTBEAT_MS;
-      if (current === lastSignature && !heartbeatDue) return;
+      if (current === lastSignature && !heartbeatDue) { reading.onDelivered?.(); return; }
       if (!withinRateCap(at)) { stats.skippedRateCap += 1; return; }
       const meta = deps.meta();
       const payload: TvPricePayload = {
@@ -221,6 +223,7 @@ export function createTvPriceStream(deps: TvPriceStreamDeps): TvPriceStream {
         stats.sends += 1;
         stats.lastSendAt = at;
         lastSignature = current;
+        reading.onDelivered?.();
       }
     } catch {
       stats.errors += 1;

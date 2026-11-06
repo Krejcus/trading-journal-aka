@@ -237,6 +237,21 @@ describe('přehrání v živé svíčce', () => {
     return { feed, push, runFrame, frames, setClock: (value: number) => { clock = value; } };
   };
 
+  it('cena panelu je poslední cena zprávy: ne mezistav přehrání ani close minulé minuty', () => {
+    const t = feedSetup();
+    t.feed.subscribe(vi.fn());
+    t.push(view(1, [102, 103, 99, 101], [MINUTE, 100, 103, 99, 101]));
+    expect(t.feed.current('MNQ')?.close).toBe(102);
+    expect(t.feed.lastPrice('MNQ')).toBe(101);
+    const closed = view(2, null, [MINUTE, 100, 103, 99, 101]);
+    t.push({ ...closed, latest: { ...closed.latest!, last: 104 } });
+    expect(t.feed.current('MNQ')?.close).toBe(101);
+    expect(t.feed.lastPrice('MNQ')).toBe(104);
+    t.push({ ...closed, fresh: false });
+    expect(t.feed.lastPrice('MNQ')).toBeNull();
+    expect(t.feed.lastPrice('ES')).toBeNull();
+  });
+
   it('nová zpráva s cestou: graf dostává změnu každý snímek, pak zůstane na baru zprávy', () => {
     const t = feedSetup();
     const listener = vi.fn();
