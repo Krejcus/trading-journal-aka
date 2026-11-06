@@ -114,13 +114,18 @@ const ibkrContractOfSource = (source: string | null): string | null => {
   return match ? `${match[1]}${match[2]}${match[3].slice(-1)}` : null;
 };
 
-/** Nejstarší cena, ze které se ještě počítá živé P&L na lince vstupu. */
-export const LIVE_DISPLAY_PNL_MAX_AGE_MS = 5_000;
+/**
+ * Nejstarší cena, ze které se ještě počítá živé P&L. Bez obchodů cena prostě nepřichází: kratší
+ * limit (dřív 5 s) v klidném trhu přepínal číslo na zpožděné číslo brokera a zpět, proto přeskakovalo.
+ * Výpadek kanálu hlídá `stale`.
+ */
+export const LIVE_DISPLAY_PNL_MAX_AGE_MS = 60_000;
 
 /**
- * Živé P&L na lince vstupu (Filip 5. 11.): cena z IBKR téhož kontraktu proti vstupu účtů,
- * minus poplatky jako u brokera. **Jen zobrazení (INV-UI-04)**: nikdy risk, limity, day lock
- * ani příkazy. null = cena chybí, je stará nebo jiný kontrakt → štítek ukáže číslo brokera.
+ * Živé P&L na obrazovce (Filip 5. a 6. 11.): cena z IBKR téhož kontraktu proti vstupu účtů, BEZ
+ * poplatků, takže jde po celých ticích jako v Tradovate a sedí se štítky SL/TP. **Jen zobrazení
+ * (INV-UI-04)**: nikdy risk, limity, day lock ani příkazy. null = cena chybí, je stará nebo jiný
+ * kontrakt → `liveShownOpenPnl` vezme číslo brokera ve stejné definici.
  */
 export function liveDisplayOpenPnl(
   summary: Pick<LiveChartPositionSummary, 'kind' | 'side' | 'rows'>,
@@ -137,9 +142,24 @@ export function liveDisplayOpenPnl(
   let total = 0;
   for (const row of summary.rows) {
     if (row.entry == null || !Number.isFinite(row.entry) || !(row.quantity > 0)) return null;
-    total += (quote.price - row.entry) * direction * row.quantity * pointValue - (row.fees ?? 0);
+    total += (quote.price - row.entry) * direction * row.quantity * pointValue;
   }
   return total;
+}
+
+/**
+ * Jediné otevřené P&L na obrazovce (čip u vstupu, hlavička telefonu, panel PC): živé z IBKR, jinak
+ * číslo brokera s vrácenými poplatky, aby výměna zdroje nedělala skok o poplatky. Neznámé poplatky
+ * nebo P&L účtu = číslo brokera tak, jak je. Jen zobrazení (INV-UI-04).
+ */
+export function liveShownOpenPnl(
+  summary: Pick<LiveChartPositionSummary, 'openPnl' | 'rows'>,
+  live: number | null | undefined,
+): number | null {
+  if (live != null) return live;
+  if (summary.openPnl == null) return null;
+  const known = summary.rows.length > 0 && summary.rows.every(row => row.openPnl != null && row.fees != null);
+  return known ? summary.rows.reduce((total, row) => total + row.openPnl! + row.fees!, 0) : summary.openPnl;
 }
 
 /** Nejstarší kotace IBKR, kterou smí pojistka utažení SL použít místo ceny z P&L brokera. */

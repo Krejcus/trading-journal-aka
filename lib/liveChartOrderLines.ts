@@ -1,5 +1,5 @@
 import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
-import { MNQ_TICK, TIGHTEN_MIN_TICKS, breakEvenStop, tightenBlockReason, type LiveChartPositionSummary } from './liveChartPosition';
+import { MNQ_TICK, TIGHTEN_MIN_TICKS, breakEvenStop, liveShownOpenPnl, tightenBlockReason, type LiveChartPositionSummary } from './liveChartPosition';
 import { pendingLegSideProblem } from './leaderOrderManage';
 import { liveBareLineId } from './liveBareCloseUi';
 
@@ -49,7 +49,7 @@ export interface LivePositionLineControls {
    */
   bareClose?: { entryOperationId: string } | null;
   pointValue: number;
-  /** Živé P&L jen do štítku (`liveDisplayOpenPnl`); null = číslo brokera. Nic nerozhoduje (INV-UI-04). */
+  /** Živé P&L jen do štítku (`liveDisplayOpenPnl`); null = číslo brokera bez poplatků. Nic nerozhoduje (INV-UI-04). */
   displayOpenPnl?: number | null;
 }
 
@@ -121,7 +121,7 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     return `${kind === 'stopLoss' ? 'SL' : 'TP'}  ${signedUsd(pnl)} · ${Math.abs(at - entry).toFixed(2)} b${note ? ` · ${note}` : ''}`;
   };
   const be = controls.manageable ? liveBreakEven(summary, controls.entryAvg) : null;
-  const openPnl = controls.displayOpenPnl ?? summary.openPnl;
+  const openPnl = liveShownOpenPnl(summary, controls.displayOpenPnl);
   // Fill wins immediately: a pending move must never overwrite the actual position entry.
   const pendingEntry = position ? undefined : controls.pending?.entry;
   const displayEntry = pendingEntry ?? entry;

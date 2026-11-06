@@ -226,6 +226,32 @@ export function livePhoneBareMarket(side: 'buy' | 'sell', quantity: number, quot
   };
 }
 
+/**
+ * Koupit / Prodat z lišty v otevřené pozici (C18e, Filip 6. 11.): Market přikoupení se SL/TP pozice,
+ * pojistky stejné jako list (`livePhoneScaleInBlocked`), záměr pozice připojí deskový `place`.
+ * Opravdu holé přikoupení je zakázané (INV-MANUAL-01): část pozice by zůstala bez ochrany.
+ */
+export function livePhonePillScaleIn(
+  side: 'buy' | 'sell',
+  quantity: number,
+  quote: LivePhoneQuote,
+  scaleIn: LiveTicketScaleIn,
+  maxContracts: number,
+): LiveEntryPreviewDraft | { error: string } {
+  if (!quote.symbol) return { error: 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' };
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return { error: 'Neplatný počet kontraktů.' };
+  if (side === scaleIn.side && (scaleIn.stopLoss == null || scaleIn.targetPrice == null)) {
+    return { error: 'Přikoupit jde jen k pozici se SL i TP — nejdřív je nastav, nic se neodeslalo.' };
+  }
+  const blocked = livePhoneScaleInBlocked({ side, type: 'market', stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice } as TicketDraft, quantity, scaleIn, maxContracts);
+  if (blocked) return { error: blocked };
+  return {
+    symbol: quote.symbol, side: side === 'buy' ? 'Buy' : 'Sell', quantity, orderType: 'Market',
+    referencePrice: side === 'buy' ? quote.ask : quote.bid, quoteReceivedAt: Math.round(quote.at),
+    stopLoss: scaleIn.stopLoss!, takeProfit: scaleIn.targetPrice!,
+  };
+}
+
 /** List objednávky: Limit/Stop/Market se SL+TP; Market smí i bez obou (holý). */
 export function livePhoneSheetEntry(draft: TicketDraft, instrument: TicketInstrument, quote: LivePhoneQuote): LiveEntryPreviewDraft | { error: string } {
   if (!quote.symbol) return { error: 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' };

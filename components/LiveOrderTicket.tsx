@@ -144,7 +144,7 @@ const UNIT_SUFFIX: Record<TicketBracketUnits, string> = { pts: 'b', ticks: 't', 
  * Živá pozice cíle panelu (jen zobrazení). Otevřené P&L je z brokera, ne
  * z ceny grafu. Správa (SL/TP, BE) je v sekci pod kartou a ve štítcích grafu.
  */
-const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummary; muted: string; ink: string; field: string }> = ({ isDark, summary, muted, ink, field }) => {
+const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummary; shownOpenPnl: number | null; muted: string; ink: string; field: string }> = ({ isDark, summary, shownOpenPnl, muted, ink, field }) => {
   const [expanded, setExpanded] = useState(false);
   const long = summary.side === 'long';
   const price = (value: number | null) => (value == null ? '—' : formatPrice(value));
@@ -177,8 +177,8 @@ const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummar
       {canExpand && <ChevronDown size={12} className={`${muted} transition-transform duration-300 ${expanded ? 'rotate-180' : ''}`} />}
     </div>
     {summary.kind === 'position' && <div className="flex items-baseline gap-2">
-      <b className={`font-mono text-[22px] font-black leading-none ${summary.openPnl == null ? muted : summary.openPnl < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(summary.openPnl)}</b>
-      <span className={`text-[9.5px] font-bold ${muted}`} title="Otevřené P&L z brokera (ne z ceny grafu)">z brokera</span>
+      <b className={`font-mono text-[22px] font-black leading-none ${shownOpenPnl == null ? muted : shownOpenPnl < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(shownOpenPnl)}</b>
+      <span className={`text-[9.5px] font-bold ${muted}`} title="Otevřené P&L z živé ceny, bez poplatků. Jen zobrazení.">bez poplatků</span>
     </div>}
     {progress != null && <div className={`relative flex h-1.5 overflow-hidden rounded-full ${isDark ? 'bg-white/[0.06]' : 'bg-slate-900/[0.06]'}`} title="Cena mezi SL a TP">
       <i className="block h-full bg-rose-500/45" style={{ width: `${(entryAt ?? 0) * 100}%` }} />
@@ -749,6 +749,8 @@ const ManageSection: React.FC<{
 };
 
 interface Props {
+  /** Otevřené P&L jako čip u vstupu (`liveShownOpenPnl`); jen zobrazení. */
+  shownOpenPnl?: number | null;
   isDark: boolean;
   instrument: TicketInstrument;
   quote: TicketQuote | null;
@@ -867,7 +869,7 @@ export const NumberField: React.FC<{
 };
 
 const LiveOrderTicket: React.FC<Props> = ({
-  isDark, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
+  isDark, shownOpenPnl, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
   group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice = null,
   entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
@@ -1531,7 +1533,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     </div>
 
     <div className="live-ticket-stagger -mx-2.5 flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto px-2.5 pb-0.5">
-      {position?.summary && <PositionCard isDark={isDark} summary={position.summary} muted={tone.muted} ink={tone.ink} field={tone.field} />}
+      {position?.summary && <PositionCard isDark={isDark} summary={position.summary} shownOpenPnl={shownOpenPnl ?? null} muted={tone.muted} ink={tone.ink} field={tone.field} />}
       {attachEntry && attachSide && <AttachSection
         muted={tone.muted}
         field={tone.field}
