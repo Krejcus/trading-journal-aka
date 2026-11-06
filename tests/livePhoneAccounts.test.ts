@@ -33,7 +33,7 @@ const bracket = (id: number) => [order(id, { orderType: 'Stop', stopPrice: 21470
 const position = (input: Parameters<typeof buildJournalLiveView>[0]) => liveChartPosition(buildJournalLiveView(input), 'group');
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 const sheet = (p: LiveChartPosition) => text(renderToStaticMarkup(createElement(LivePhoneAccountsSheet, { position: p, onClose: () => {} })));
-const header = (p: LiveChartPosition) => renderToStaticMarkup(createElement(LivePhoneGroupPnl, { position: p, onOpen: () => {} }));
+const header = (p: LiveChartPosition) => renderToStaticMarkup(createElement(LivePhoneGroupPnl, { position: p, openPnl: p.summary?.openPnl ?? null, onOpen: () => {} }));
 
 describe('LIVE graf telefonu: P&L skupiny a list účtů', () => {
   it('řádek účtu se starou kotvou P&L ukáže „—“, ne poslední známé číslo (jako souhrn)', () => {

@@ -1,7 +1,9 @@
 import React from 'react';
 import { ChevronDown, X } from 'lucide-react';
+import { LiveOpenPnlValue, LiveTvMark, TV_LIVE_PNL_TITLE } from '../LiveOpenPnlValue';
 import type { LiveChartPosition, LiveChartPositionAccountRow } from '../../lib/liveChartPosition';
 import { contractRoot, livePhoneGroupLine } from '../../lib/livePhoneTrade';
+import { liveChartPositionTvLegs } from '../../lib/tvLivePnl';
 import { formatLivePrice } from './LivePhoneTrade';
 import SheetGrip from './SheetGrip';
 
