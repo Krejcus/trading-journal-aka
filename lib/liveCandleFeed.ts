@@ -43,26 +43,20 @@ export const LIVE_CANDLE_MAX_GAP_SEC = 180;
  */
 export const LIVE_CANDLE_MAX_JUMP_RATIO = 0.002;
 /**
- * Strop pojistky u starých dat. Trh se za minuty pohne víc než 0,2 % a pojistka by jinak
- * odmítla živou cenu jen proto, že stojí soubor svíček (6. 11.: 54 bodů za 3 min). Pásmo
- * samo jiný kontrakt nerozezná, proto platí jen s potvrzenou shodou (`contractMatchesData`).
+ * Pásmo s potvrzeně stejným kontraktem (`contractMatchesData`): skok je trh, ne jiný měsíc. Reference je soubor
+ * svíček, starý až minutu. Při Openu 6. 11. byl rozdíl 63–97 b a pásmo 0,2 % na přelomu 15:37 zastavilo novou
+ * svíčku do dalšího načtení (asi 20 s). Zůstává jen pojistka proti nesmyslné hodnotě.
  */
-export const LIVE_CANDLE_MAX_STALE_JUMP_RATIO = 0.006;
-
-/** Povolený skok proti referenci, která je `staleMs` stará: 0,2 % + 0,2 % za každou minutu, nejvýš strop. */
-export function liveCandleJumpRatio(staleMs: number): number {
-  const minutes = Number.isFinite(staleMs) ? Math.max(0, staleMs) / 60_000 : 0;
-  return Math.min(LIVE_CANDLE_MAX_STALE_JUMP_RATIO, LIVE_CANDLE_MAX_JUMP_RATIO * (1 + minutes));
-}
+export const LIVE_CANDLE_MATCHED_JUMP_RATIO = 0.01;
 
 /** Zdroj souboru `IBKR:MNQZ2026` a kontrakt zprávy `MNQZ2026`; kontinuální `CME_MINI:MNQ1!` nic nepotvrdí. */
 export function contractMatchesData(front: string | null | undefined, source: string | null | undefined): boolean {
   return !!front && !!source && source.slice(source.indexOf(':') + 1) === front;
 }
 
-/** Živá cena panelu proti referenci: pásmo roste se stářím dat jen s potvrzeným kontraktem. */
-export function livePriceWithinBand(price: number, reference: number, referenceAt: number | null, contractMatches: boolean, now: number): boolean {
-  const ratio = contractMatches && referenceAt != null ? liveCandleJumpRatio(now - referenceAt) : LIVE_CANDLE_MAX_JUMP_RATIO;
+/** Živá cena panelu proti referenci: širší pásmo jen s potvrzeným kontraktem. */
+export function livePriceWithinBand(price: number, reference: number, contractMatches: boolean): boolean {
+  const ratio = contractMatches ? LIVE_CANDLE_MATCHED_JUMP_RATIO : LIVE_CANDLE_MAX_JUMP_RATIO;
   return Math.abs(price - reference) <= Math.abs(reference) * ratio;
 }
 
@@ -85,7 +79,7 @@ export function planLiveCandleUpdate(input: {
   live: MarketCandle;
   timeframe: MarketTimeframe;
   rawCandles: readonly MarketCandle[];
-  /** Kontrakt ceny a dat je potvrzený stejný: pojistka smí růst se stářím dat. */
+  /** Kontrakt ceny a dat je potvrzený stejný: širší pojistka. */
   widenJump?: boolean;
 }): MarketCandle | null {
   const { lastBar, live, timeframe, rawCandles } = input;
@@ -95,8 +89,7 @@ export function planLiveCandleUpdate(input: {
   const lastTime = Math.floor(lastBar.ts / 1_000);
   const prior = previousCandle(rawCandles, live.time);
   const reference = prior?.close ?? lastBar.close ?? null;
-  // Stáří z dat, ne z `lastBar`: ten po připsání živé svíčky mladý je, reference ale zůstává stará.
-  const jumpRatio = input.widenJump ? liveCandleJumpRatio((live.time - (prior?.time ?? lastTime) - 60) * 1_000) : LIVE_CANDLE_MAX_JUMP_RATIO;
+  const jumpRatio = input.widenJump ? LIVE_CANDLE_MATCHED_JUMP_RATIO : LIVE_CANDLE_MAX_JUMP_RATIO;
   if (reference == null || !Number.isFinite(reference) || Math.abs(live.open - reference) > Math.abs(reference) * jumpRatio) return null;
   const bar = minutes === 1
     ? live

@@ -2965,9 +2965,8 @@ existující ochranu.
   překreslí (`updateBar`) — do dat grafu, cache dne ani storage nejde.
   Telefon po 5 s bez ceny v otevřené seanci ukáže „Živá cena teď nechodí“ (jen text, mimo
   blokace i dotyky; INV-UI-01, seance z `lib/cmeSession.ts`, svátky nezná).
-  Pilulka telefonu bez živé ceny ukazuje „—“, nikdy close svíčky. Pojistka skoku roste se
-  stářím reference (0,2 % + 0,2 %/min, strop 0,6 %), jen když zpráva i soubor mají potvrzeně týž
-  kontrakt (`contractMatchesData`); bez důkazu platí 0,2 %. Pásmo samo kontrakt nerozezná.
+  Pilulka telefonu bez živé ceny ukazuje „—“, nikdy close svíčky. Pojistka skoku (cena panelu i svíčka): s potvrzeně stejným
+  kontraktem (`contractMatchesData`) 1 %, bez důkazu 0,2 %. Pásmo samo kontrakt nerozezná.
   Historie grafu dne v IndexedDB (`readDayTail`, 6. 11. 2026) nese jen odpověď
   Databenta (`response.candles`), nikdy živé svíčky ani výstup `composeDayCandles`;
   do grafu a panelu jde až se živým čtením (`historyReadyForChart`), jinak by

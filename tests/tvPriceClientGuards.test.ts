@@ -213,10 +213,10 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       const allowed = file === 'hooks/useDayChartData.ts'
         ? /useTvLiveCandleFeed\(|^liveFeed,$|liveFeed`: rozpracovaná/
         : file === 'components/LiveTradingScreen.tsx'
-          ? /^liveCandles=\{chart\.liveFeed\}$|^const tick = useLiveTicketQuote\(chart\.liveFeed, ROOT, candleClose, candleEnd == null \? null : \(candleEnd \+ 60\) \* 1_000\);$/
+          ? /^liveCandles=\{chart\.liveFeed\}$|^const tick = useLiveTicketQuote\(chart\.liveFeed, ROOT, candleClose\);$/
           // Telefon (2. 11. 2026): stejná výjimka pro lištu a list objednávky (cena, kterou uživatel vidí).
           : file === 'components/day/LivePhoneChart.tsx'
-            ? /^const tick = useLiveTicketQuote\(ctl\.chart\.liveFeed, 'MNQ', candleClose, candleEnd == null \? null : \(candleEnd \+ 60\) \* 1_000\);$|liveCandles=\{ctl\.chart\.liveFeed\}/
+            ? /^const tick = useLiveTicketQuote\(ctl\.chart\.liveFeed, 'MNQ', candleClose\);$|liveCandles=\{ctl\.chart\.liveFeed\}/
           : /liveCandles=\{ctl\.chart\.liveFeed\}|useLiveCandleBinding\(/;
       expect(line, file).toMatch(allowed);
     }

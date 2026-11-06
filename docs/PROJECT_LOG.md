@@ -288,6 +288,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 — První Open bez TradingView: svíčka a P&L se zastavily (Claude, větev `claude/tv-exit-rest-20261106`, nenasazeno)
+
+- Filip kolem 15:37 v pozici viděl stát svíčku a P&L, nová svíčka nepřišla. IBKR i worker bez mezery (záznam a log). **Pravděpodobná příčina, z modelu nad záznamem, ne z měření v appce:** pojistka skoku 0,2 % porovnává novou minutu se souborem starým až minutu; na přelomu 15:37:00 byl rozdíl 63,5 b, takže se svíčka nekreslila do načtení v :20. Oprava: s potvrzeným kontraktem pásmo 1 %.
+- **P&L neopraveno:** `lib/tvLivePnl.ts` při rozsahu nad 2 b v okně kotvy (`anchor-window-wide`) nebo velkém pohybu (`move-cap`) přejde na číslo brokera; při Openu je to pravděpodobné, zatím neověřené.
+
 ### 2026-11-06 — „Do fillu“ z IBKR a texty bez TradingView (Claude, větev `claude/tv-exit-rest-20261106`, nenasazeno)
 
 - `marketPrices` při `--tv off` z kotace IBKR (`copierMarketPricesFromQuote`), jen zobrazení. Čip dne bez tlačítka restartu TV, texty míří na worker a IB Gateway. Menu bar Macu a dialogy snímků zatím beze změny.

@@ -173,8 +173,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const trade = slots.trade ?? null;
   // Živá cena jako panel na PC: kanál ceny grafu, kontrakt jen ze zdroje IBKR (INV-UI-04).
   const candleClose = ctl.chart.candles.at(-1)?.close ?? null;
-  const candleEnd = ctl.chart.candles.at(-1)?.time;
-  const tick = useLiveTicketQuote(ctl.chart.liveFeed, 'MNQ', candleClose, candleEnd == null ? null : (candleEnd + 60) * 1_000);
+  const tick = useLiveTicketQuote(ctl.chart.liveFeed, 'MNQ', candleClose);
   // Po návratu z pozadí je na obrazovce starý stav: musí to být vidět, dokud nepřijde živá cena.
   const resuming = useLiveResumeState(tick != null || ctl.chart.liveStatus === 'live', tick?.at ?? null);
   const noPriceNotice = useLiveNoPriceNotice(true, tick?.at ?? null, resuming);
