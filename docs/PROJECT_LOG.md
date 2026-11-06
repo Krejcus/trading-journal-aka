@@ -288,6 +288,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 — Telefon: lišta pozice jen záložně, lišta obchodu podle tématu (Claude, větev claude/phone-bar-pill-20261106)
+
+- Filip: černá lišta nad grafem pryč. × je na čáře (holá pozice ho má nově i na telefonu), SL/TP přes ✎ a štítky. Lišta zůstává jen, když čára zavřít neumí (přehrávání, kopírka vypnutá, pozice mimo appku); Flatten All je na Dashboardu.
+- Lišta KOUPIT/PRODAT měla ve světlém tématu natvrdo tmavý podklad, teď se řídí tématem. Část větve claude/phone-resume-20261105 o návratu dat se nepřenesla, `main` to řeší jinak.
+
 ### 2026-11-06 — Provoz bez TradingView (Claude, web + worker `8d4bccd4` NASAZENY s `--tv off`, iPhone 18 Pro Max nainstalovaný, Filip „Vypnuto, nasaď“)
 
 - **Ověřeno po nasazení 15:01:** `ALPHATRADE_TV=off`, stream `zdroj=ibkr` (sends 48, errors 0), `TV LIVE uploading source=IBKR:MNQZ2026`, aplikace TV neběží a worker nemá spojení na 9222, stav DISARMED a flat. **Neověřeno:** hlavní seance, výpadek IBKR bez zálohy a telefon s touto verzí (byl zamčený, appka se nespustila). Měření z Openu 6. 11. se nedokončilo.

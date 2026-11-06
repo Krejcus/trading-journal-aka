@@ -108,6 +108,23 @@ export function createLivePhoneBarClose(deps: {
 }
 
 /**
+ * Je lišta pozice potřeba? Jen když čára v grafu pozici neumí zavřít ani zrušit (× na čáře, jako PC).
+ */
+export function livePhonePositionBarShown(input: {
+  position: { pending?: unknown; bareEntryOperationId?: string | null } | null;
+  replay: boolean;
+  manage: boolean;
+  closeSupported: boolean;
+  bareCloseEnabled: boolean;
+}): boolean {
+  if (!input.position) return false;
+  if (input.replay) return true;
+  if (input.position.pending) return !input.manage;
+  if (input.position.bareEntryOperationId != null) return !input.bareCloseEnabled;
+  return !(input.manage && input.closeSupported);
+}
+
+/**
  * Pozice leadera nad telefonním grafem (2. 11. 2026): strana, počet, varování
  * „bez SL/TP“ u holého Marketu, doplnění nohou a zavření Flattenem (jediný DEMO
  * účet manual-only skupiny). „Zrušit“ u čekajícího vstupu = cancel-entry jen toho

@@ -9,6 +9,7 @@ import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../../lib
 import { LIVE_ATTACH_OWNER, LIVE_DRAFT_ID, liveAttachChartLines, liveDraftChartLines, snapToTick, type LiveAttachLegs, withBracket, withEntryPrice, type TicketDraft, type TicketInstrument, type TicketQuote } from '../../lib/liveOrderTicket';
 import type { LiveTicketScaleIn } from '../../lib/liveScaleIn';
 import { LIVE_MANAGE_BUSY_TEXT } from '../../hooks/useLiveManageRunner';
+import { liveBareLineEntryId } from '../../lib/liveBareCloseUi';
 import { isLiveDisplayOnlyLine, type LiveWorkingOrderBadge, type LiveWorkingOrdersView } from '../../lib/liveWorkingOrderLines';
 
 const TICK = 0.25;
@@ -130,7 +131,7 @@ export function livePhoneWorkingView(
  * nikdy nic nepošle) a ✎ na SL/TP, které jen otevře list správy (U10).
  */
 export function LivePhoneOrderLines({
-  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, attach = null, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
+  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, attach = null, bareClose = null, onBareClose, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
   extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage,
 }: {
   api: ChartViewApi;
@@ -148,6 +149,9 @@ export function LivePhoneOrderLines({
   /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu. */
   pendingLegs?: boolean;
   moveLimit?: boolean;
+  /** Holá pozice: × na čáře (jen s nabídkou workeru); id cíle je v id čáry, klíč jde rodiči. */
+  bareClose?: { entryOperationId: string; key: string } | null;
+  onBareClose?: (key: string) => void;
   /** Holá pozice: nohy vytažené ze štítků „+ SL“ / „+ TP“; tah mění jen návrh, odchází až tlačítkem na čáře. */
   attach?: {
     legs: LiveAttachLegs | null;
@@ -190,6 +194,7 @@ export function LivePhoneOrderLines({
   // Telefon: × (zavřít pozici i zrušit vstup) jedním klepnutím (Filip 5. 11.), jako na PC.
   const guardSummary = useMemo(() => (summary ? guardAt?.(Date.now()) ?? summary : null), [guardAt, summary]);
   // Most z rodiče je každý render nový objekt: čáry se přepočítají jen při změně nohou (tah nesmí poskočit).
+  const bareEntryId = bareClose?.entryOperationId ?? null;
   const attachOn = attach != null;
   const attachLegs = attach?.legs ?? null;
   const attachSide = attach?.side;
@@ -198,6 +203,7 @@ export function LivePhoneOrderLines({
   const positionLines = useMemo(() => (guardSummary ? livePositionChartLines(guardSummary, {
     manageable: manage != null,
     pendingLegs: pendingLegs === true,
+    bareClose: bareEntryId ? { entryOperationId: bareEntryId } : null,
     moveLimit,
     attachChips: attachOn && guardSummary.kind === 'position' ? {
       missing: ([['stopLoss', attachLegs?.stopLoss], ['takeProfit', attachLegs?.takeProfit]] as const).filter(([, value]) => value == null).map(([kind]) => kind),
@@ -209,7 +215,7 @@ export function LivePhoneOrderLines({
     displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd,
-  }) : []), [attachOn, attachLegs, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, pendingMove, guardSummary, pendingAdd]);
+  }) : []), [attachOn, attachLegs, bareEntryId, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, pendingMove, guardSummary, pendingAdd]);
   const lines = useMemo(() => [
     // ✎ jen u táhnutelné SL/TP (správa jde a nic se právě neodesílá); jen otevře list.
     ...(onManage ? positionLines.map(line => (line.ownerId === LIVE_POSITION_OWNER && line.kind !== 'entry' && line.draggable && guardSummary?.kind === 'position'
@@ -276,6 +282,9 @@ export function LivePhoneOrderLines({
         if (isLiveDisplayOnlyLine(line)) return;
         if (line.ownerId === LIVE_DRAFT_ID) { onDraftRemove?.(line.kind); return; }
         if (line.ownerId === LIVE_ATTACH_OWNER) { if (line.kind !== 'entry') attach?.onLeg(line.kind, null); return; }
+        // × holé pozice: jen nabídka se stejným cílem, jako je v id čáry.
+        const bareLineEntry = liveBareLineEntryId(line.id);
+        if (bareLineEntry != null) { if (bareClose?.entryOperationId === bareLineEntry) onBareClose?.(bareClose.key); return; }
         if (line.id === LIVE_PENDING_ADD_LINE_ID) {
           if (pendingAdd?.price != null) void run('cancel-entry', pendingAdd.price);
           return;
