@@ -940,7 +940,9 @@ async function runLocalAgent(
   let controller: CopierRuntimeController | null = null;
   let agent: Awaited<ReturnType<typeof startLocalCopierExecutionAgent>> | null = null;
   let relay: MacCopierCommandRelay | null = null;
-  const snapshotsEnabled = process.env.ALPHATRADE_SNAPSHOTS?.trim().toLowerCase() !== 'off';
+  // Bez TradingView (`--tv off`): žádné spouštění, čtení ani kamera. Cena a svíčky jedou dál z IBKR.
+  const tvEnabled = process.env.ALPHATRADE_TV?.trim().toLowerCase() !== 'off';
+  const snapshotsEnabled = tvEnabled && process.env.ALPHATRADE_SNAPSHOTS?.trim().toLowerCase() !== 'off';
   let dedicatedChartRef: TradingViewDedicatedChartRef = {};
   if (snapshotsEnabled) {
     try {
@@ -951,7 +953,7 @@ async function runLocalAgent(
   }
   let snapshotHealth: CopierSnapshotHealth = {
     enabled: snapshotsEnabled,
-    repairSupported: true,
+    repairSupported: snapshotsEnabled,
     state: snapshotsEnabled ? 'checking' : 'disabled',
     layoutName: 'AlphaTrade Snapshoty',
     chartIdConfigured: Boolean(dedicatedChartRef.chartId),
@@ -961,7 +963,7 @@ async function runLocalAgent(
     lastAttemptAt: null,
     lastSuccessAt: null,
   };
-  if (snapshotsEnabled) {
+  if (tvEnabled) {
     const lifecycle = await ensureTradingViewCdp(
       process.env.ALPHATRADE_TV_AUTO_LAUNCH?.trim().toLowerCase() === 'on',
     );
@@ -992,6 +994,7 @@ async function runLocalAgent(
   // osascriptu, ne do skriptu — žádné skládání AppleScriptu z dat. Asynchronně, bez čekání.
   const priceSourceNotifier = tvPriceSource === 'ibkr'
     ? createPriceSourceNotifier({
+      tvEnabled,
       notify: (title, body) => {
         execFile('/usr/bin/osascript', [
           '-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv) sound name "Glass"', '-e', 'end run',
@@ -1004,8 +1007,7 @@ async function runLocalAgent(
   // vlákna ceny, výchozí VYPNUTO (`--price-alerts on`). Dostane jen klíč upozornění, nikdy
   // token zařízení ani přístup k příkazům; `env: {}` (INV-WORKER-04, INV-WATCH-01).
   const priceAlertWatchBundle = fileURLToPath(new URL('./price-alert-watch.mjs', import.meta.url));
-  const priceAlertWatch: PriceAlertWatchSupervisor | null = snapshotsEnabled
-    && tvPriceSource === 'ibkr'
+  const priceAlertWatch: PriceAlertWatchSupervisor | null = tvPriceSource === 'ibkr'
     && process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() === 'on'
     && process.env.ALPHATRADE_PRICE_ALERTS?.trim().toLowerCase() === 'on'
     && existsSync(tvPriceStreamBundle) && existsSync(priceAlertWatchBundle)
@@ -1024,18 +1026,22 @@ async function runLocalAgent(
     })
     : null;
   if (priceAlertWatch) console.log(`${new Date().toISOString()} PRICE ALERTS hlídání upozornění na cenu povoleno (vlastní vlákno, cena z IBKR, nic neobchoduje).`);
-  const tvPriceStream: TvPriceStreamSupervisor | null = snapshotsEnabled
+  if (!tvEnabled && (tvPriceSource !== 'ibkr' || process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() !== 'on')) {
+    console.warn(`${new Date().toISOString()} TV STREAM POZOR: TradingView vypnutý bez kanálu ceny z IBKR, živá cena nepůjde.`);
+  }
+  const tvPriceStream: TvPriceStreamSupervisor | null = (tvEnabled || tvPriceSource === 'ibkr')
     && process.env.ALPHATRADE_TV_STREAM?.trim().toLowerCase() === 'on'
     && existsSync(tvPriceStreamBundle)
     ? createTvPriceStreamSupervisor({
       priceSource: tvPriceSource,
+      tvEnabled,
       // Dávky obchodů IBKR jen předá vláknu hlídače (synchronně, bez čekání).
       onAlertBatch: batch => priceAlertWatch?.onBatch(batch),
       createWorker: priceSource => {
         // Výstup vlákna se nepřeposílá do logu workeru (šel by přes event loop
         // hlavního vlákna); stav hlásí jen omezená diagnostika.
         const thread = new Worker(tvPriceStreamBundle, {
-          workerData: { priceSource },
+          workerData: { priceSource, tvEnabled },
           stdout: true, stderr: true,
           resourceLimits: { maxOldGenerationSizeMb: 96, maxYoungGenerationSizeMb: 16 },
         });
@@ -1047,7 +1053,7 @@ async function runLocalAgent(
       onPriceSourceAlert: alert => priceSourceNotifier?.onAlert(alert),
     })
     : null;
-  if (tvPriceStream) console.log(`${new Date().toISOString()} TV STREAM kanál ceny povolen (vlastní vlákno, jen zobrazení, zdroj ${tvPriceSource === 'ibkr' ? 'IBKR, záloha TradingView' : 'TradingView'}).`);
+  if (tvPriceStream) console.log(`${new Date().toISOString()} TV STREAM kanál ceny povolen (vlastní vlákno, jen zobrazení, zdroj ${tvPriceSource === 'ibkr' ? (tvEnabled ? 'IBKR, záloha TradingView' : 'jen IBKR') : 'TradingView'}).`);
   const persistResolvedChart = (resolved: TradingViewDedicatedChartRef) => {
     dedicatedChartRef = { ...dedicatedChartRef, ...resolved };
     snapshotHealth = {
@@ -1170,6 +1176,7 @@ async function runLocalAgent(
       read: async root => {
         const ibkr = tvPriceStream?.latestBars(root) ?? null;
         if (ibkr && barsContractMatchesSymbol(ibkr.contract, symbol)) return ibkr;
+        if (!tvEnabled) return null;
         const tv = await readTradingViewBars(root);
         // Graf TV jiného kontraktu (týden rollu) se k obchodu neukládá; neznámý kontrakt = dnešní chování.
         return tv && !barsContractConflicts(tv.contract, symbol) ? tv : null;
@@ -1184,8 +1191,7 @@ async function runLocalAgent(
   // Živé 1m svíčky pro přípravu a pohled dne (1×/min, jen zobrazení, nikdy do
   // copieru). Potřebuje TradingView s CDP stejně jako snímky; vypíná se
   // ALPHATRADE_TV_LIVE_BARS=off, kořeny mění ALPHATRADE_TV_LIVE_ROOTS (výchozí MNQ).
-  const tvLiveBarsFeed: TradingViewLiveBarsFeed | null = snapshotsEnabled
-    && process.env.ALPHATRADE_TV_LIVE_BARS?.trim().toLowerCase() !== 'off'
+  const tvLiveBarsFeed: TradingViewLiveBarsFeed | null = process.env.ALPHATRADE_TV_LIVE_BARS?.trim().toLowerCase() !== 'off'
     ? startTradingViewLiveBars({
       roots: (process.env.ALPHATRADE_TV_LIVE_ROOTS?.trim() || 'MNQ').split(',').map(root => root.trim()).filter(Boolean),
       ready: () => relay?.uploadLiveBars != null,
@@ -1195,7 +1201,8 @@ async function runLocalAgent(
         // Jen čtení z IBKR z aktuální minuty (zarovnané v 7. s) — starší nese předchozí
         // minutu rozpracovanou; pak raději graf TV.
         const ibkr = tvPriceStream?.latestBars(root) ?? null;
-        return ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000 ? ibkr : readTradingViewBars(root);
+        if (ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000) return ibkr;
+        return tvEnabled ? readTradingViewBars(root) : null;
       },
       // Až po uzavření minuty: soubor nese hotovou předchozí svíčku.
       phaseMs: TV_LIVE_BARS_PHASE_MS,
@@ -1213,7 +1220,7 @@ async function runLocalAgent(
       log: message => console.log(`${new Date().toISOString()} ${message}`),
     })
     : null;
-  if (tvLiveBarsFeed) console.log(`${new Date().toISOString()} TV LIVE čtení 1m svíček z TradingView zapnuto (1 min, jen zobrazení).`);
+  if (tvLiveBarsFeed) console.log(`${new Date().toISOString()} TV LIVE čtení 1m svíček ${tvEnabled ? 'z IBKR, záloha TradingView' : 'jen z IBKR'} zapnuto (1 min, jen zobrazení).`);
   let snapshotTestInFlight = false;
   let stopPromise: Promise<void> | null = null;
   let pairingProbeTimer: ReturnType<typeof setInterval> | null = null;
@@ -1493,8 +1500,8 @@ async function runLocalAgent(
       // Trade event -> okamžitý poll s příznakem -> server pushne hned.
       onCopyEvent: event => {
         relay?.nudgeCopyEvents();
-        if (!snapshotsEnabled) return;
         if (event.kind === 'exit' && tvBarsEnabled) scheduleTvBars(event.symbol, event.at);
+        if (!snapshotsEnabled) return;
         // Jen vstup a výstup (rozhodnutí uživatele 2026-08-22): posun SL je
         // vlastní akce — notifikace stačí textová a snímek by byl jen šum.
         if (event.kind !== 'entry' && event.kind !== 'exit') return;
@@ -2010,8 +2017,8 @@ async function runLocalAgent(
         // Klíč upozornění jen vláknu hlídače (relay ho do onRealtimeConfig nepředává).
         onPriceAlertConfig: config => priceAlertWatch?.update(config),
         onSnapshotRequests: requests => {
-          console.log(`${new Date().toISOString()} SNAPSHOT požadavky: ${requests.map(r => `${r.id.slice(0, 8)}/${r.symbol}`).join(', ')}`);
           if (!snapshotsEnabled || !relay) return;
+          console.log(`${new Date().toISOString()} SNAPSHOT požadavky: ${requests.map(r => `${r.id.slice(0, 8)}/${r.symbol}`).join(', ')}`);
           const now = Date.now();
           for (const [id, until] of tvSnapshotHandledUntil) {
             if (until <= now) tvSnapshotHandledUntil.delete(id);

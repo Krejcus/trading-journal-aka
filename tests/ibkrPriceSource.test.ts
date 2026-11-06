@@ -715,6 +715,28 @@ describe('celá cesta: čtení IBKR → zpráva kanálu → živé P&L a svíčk
   });
 });
 
+describe('přepínání zdroje bez TradingView', () => {
+  it('začíná na IBKR, po výpadku „žádný zdroj“ s novým během a návrat až po hysterezi', () => {
+    let state = initialPriceSourceSwitch(false);
+    expect(state.active).toBe('ibkr');
+    let next = nextPriceSource(state, false, 1_000);
+    state = next.state;
+    expect(next.changed).toBe(false);
+    next = nextPriceSource(state, false, 1_000 + IBKR_FALLBACK_AFTER_MS);
+    state = next.state;
+    expect(next).toMatchObject({ changed: true, state: { active: 'tv' } });
+    next = nextPriceSource(state, true, 10_000);
+    state = next.state;
+    expect(next.changed).toBe(false);
+    next = nextPriceSource(state, false, 11_000);
+    state = next.state;
+    next = nextPriceSource(state, true, 12_000);
+    state = next.state;
+    expect(nextPriceSource(state, true, 12_000 + IBKR_RETURN_AFTER_MS - 1).changed).toBe(false);
+    expect(nextPriceSource(state, true, 12_000 + IBKR_RETURN_AFTER_MS)).toMatchObject({ changed: true, state: { active: 'ibkr' } });
+  });
+});
+
 describe('svíčky dne z IBKR (fáze 4)', () => {
   const ib = (time: number, close: number, volume = 5) => ({ time, open: close, high: close + 0.5, low: close - 0.5, close, volume, count: 1 });
   const flat = (bars: Float64Array) => Array.from({ length: bars.length / 6 }, (_, index) => Array.from(bars.slice(index * 6, index * 6 + 6)));

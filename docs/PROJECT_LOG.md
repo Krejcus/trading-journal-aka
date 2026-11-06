@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 — Příprava provozu bez TradingView (Claude, větev `claude/tv-exit-core-20261106`, nenasazeno)
+
+- **Proč:** Filip ruší TradingView kolem 25. 11. Worker se při výchozím nastavení nemění; nový přepínač `--tv off` (přežije reinstall, přepis `COPIER_TV`) je samostatný krok ke zkušebnímu týdnu. Telefon ale ukáže nápis „Živá cena teď nechodí“ i s TV (po 5 s bez ceny v otevřené seanci, i o svátku, kdy CME neobchoduje).
+- **Smazaná aplikace už nesmí shodit worker:** `spawn` měl chybu bez posluchače. `ALPHATRADE_SNAPSHOTS=off` už nevypíná cenu, upozornění ani svíčky.
+- **Bez TV:** po pádu vlákna dál IBKR místo 30 min TV, jistič se znovu zapne po 30 min, tichý výpadek z 120 s ticha v otevřené seanci, oznámení netvrdí zálohu, telefon po 5 s ukáže „Živá cena teď nechodí“.
+- **Známé limity:** odhlášení IB Gateway nejde bez člověka obnovit a do přihlášení není cena; svátky mohou dát falešné oznámení; menu bar Macu ukazuje žlutou sekci snímků a „Do fillu“ zmizí. Bez TV navíc: po startu vlákna není cena do první celé minuty, po tichu nad 15 s plus 5 s hystereze asi 20 s bez ceny (Market blokovaný), při `hmdsBroken` stojí soubor svíček a graf se může po 180 s zastavit (neověřeno). Zbývá `marketPrices` z IBKR, úklid UI, vlastní snímky a týden zkoušky.
+
 ### 2026-11-06 — Návrat z pozadí: spadlá obsluha popředí a probuzení workeru (Claude, web + worker + iPhone 18 Pro Max NASAZENY `fe8aa016`)
 
 - **Příčina:** od `6b666ba4` volala obsluha popředí `deps.now()`, ale `services/tvPriceChannel.ts` hodiny nepředává. `TypeError` spolkl `catch`, takže klient nikdy nepřešel do pozadí: bez `untrack`, bez zavření a bez znovuotevření kanálu. Testy to nevidělo, protože hodiny předávaly. Oprava zapíná v produkci poprvé `untrack` při skrytí, zavření po 60 s a reopen při návratu, i na webu.

@@ -31,6 +31,7 @@ const importGraph = (entry: string): Set<string> => {
 describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
   it('vlákno importuje jen svůj allowlist — nic z kopírky, brokera, tajemství ani workeru', () => {
     expect([...importGraph('scripts/copier/tvPriceStreamThread.ts')].sort()).toEqual([
+      'lib/cmeSession.ts',
       'lib/tvPriceMessage.ts',
       'scripts/copier/tvPriceStreamThread.ts',
       'services/ibkrAlertState.ts',
@@ -65,9 +66,10 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
         join(root, 'scripts/copier/tvPriceStreamThread.ts'),
         '--bundle', '--platform=node', '--format=esm', '--target=node20', `--banner:js=${banner}`, `--outfile=${outfile}`, '--log-level=error',
       ]);
-      for (const priceSource of ['tv', 'ibkr']) {
+      for (const data of [{ priceSource: 'tv' }, { priceSource: 'ibkr' }, { priceSource: 'ibkr', tvEnabled: false }]) {
+        const { priceSource } = data;
         const thread = new Worker(outfile, {
-          workerData: { priceSource }, stdout: true, stderr: true,
+          workerData: data, stdout: true, stderr: true,
           resourceLimits: { maxOldGenerationSizeMb: 96, maxYoungGenerationSizeMb: 16 },
         });
         thread.stdout.resume();
@@ -110,7 +112,8 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     const pilot = source('scripts/copier/pilot.ts');
     expect(pilot.match(/latestBars\(/g)).toHaveLength(3);
     expect(pilot).toContain('return ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000 ? ibkr : null;');
-    expect(pilot).toContain('return ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000 ? ibkr : readTradingViewBars(root);');
+    expect(pilot).toContain('if (ibkr && ibkr.at >= Math.floor(Date.now() / 60_000) * 60_000) return ibkr;');
+    expect(pilot).toContain('return tvEnabled ? readTradingViewBars(root) : null;');
     expect(pilot).toContain('if (ibkr && barsContractMatchesSymbol(ibkr.contract, symbol)) return ibkr;');
     expect(pilot).toContain('return tv && !barsContractConflicts(tv.contract, symbol) ? tv : null;');
     // Mimo pilot (a hlídač, který ho poskytuje) nikdo svíčky z vlákna nečte.
@@ -123,7 +126,7 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     const pilot = source('scripts/copier/pilot.ts');
     expect(pilot).toContain("process.env.ALPHATRADE_PRICE_SOURCE?.trim().toLowerCase() === 'ibkr' ? 'ibkr' : 'tv'");
     expect(pilot).toContain('priceSource: tvPriceSource,');
-    expect(pilot).toContain('workerData: { priceSource },');
+    expect(pilot).toContain('workerData: { priceSource, tvEnabled },');
     const thread = source('scripts/copier/tvPriceStreamThread.ts');
     expect(thread).toContain("(workerData as { priceSource?: unknown } | null)?.priceSource === 'ibkr' ? 'ibkr' : 'tv'");
     const installer = source('scripts/copier/mac-install.ts');
@@ -162,6 +165,33 @@ describe('kanál ceny z TV — zapojení do workeru (krok 2)', () => {
     const reinstall = source('scripts/copier/mac-reinstall-safe.sh');
     expect(reinstall).toContain('Print :EnvironmentVariables:ALPHATRADE_TV_STREAM');
     expect(reinstall).toContain('"${TV_STREAM_ARGS[@]}"');
+  });
+
+  it('provoz bez TradingView: nic ho nečte ani nespouští a vypnuté snímky neshodí cenu z IBKR', () => {
+    const pilot = source('scripts/copier/pilot.ts');
+    const thread = source('scripts/copier/tvPriceStreamThread.ts');
+    expect(pilot).toContain("const snapshotsEnabled = tvEnabled && process.env.ALPHATRADE_SNAPSHOTS?.trim().toLowerCase() !== 'off';");
+    expect(pilot).toContain('if (tvEnabled) {\n    const lifecycle = await ensureTradingViewCdp(');
+    expect(pilot).toContain('const tvPriceStream: TvPriceStreamSupervisor | null = (tvEnabled || tvPriceSource === \'ibkr\')');
+    expect(pilot).toContain("const priceAlertWatch: PriceAlertWatchSupervisor | null = tvPriceSource === 'ibkr'");
+    expect(pilot).toContain('const tvLiveBarsFeed: TradingViewLiveBarsFeed | null = process.env.ALPHATRADE_TV_LIVE_BARS');
+    expect(pilot.match(/readTradingViewBars\(root\)/g)).toHaveLength(2);
+    expect(pilot).toContain('if (!tvEnabled) return null;\n        const tv = await readTradingViewBars(root);');
+    expect(pilot.indexOf("event.kind === 'exit' && tvBarsEnabled")).toBeLessThan(pilot.indexOf('if (!snapshotsEnabled) return;\n        // Jen vstup'));
+    expect(pilot).toContain('const marketPriceFeedEnabled = snapshotsEnabled');
+    expect(thread).toContain('(workerData as { tvEnabled?: unknown } | null)?.tvEnabled !== false');
+    expect(thread).toContain('if (!tvEnabled) return null;\n  const cfg = config;');
+    expect(thread.match(/initialPriceSourceSwitch\(tvEnabled\)/g)).toHaveLength(2);
+  });
+
+  it('instalátor: --tv off jen s cenou z IBKR, bez auto-spouštění, přežije reinstall', () => {
+    const installer = source('scripts/copier/mac-install.ts');
+    expect(installer).toContain("throw new Error('--tv off vyžaduje --tv-stream on a --price-source ibkr');");
+    expect(installer.indexOf('--tv off vyžaduje')).toBeLessThan(installer.indexOf('await writeFile(connectionsManifestPath'));
+    expect(installer).toContain("${tvOff ? '<key>ALPHATRADE_TV</key><string>off</string>' : '<key>ALPHATRADE_TV_AUTO_LAUNCH</key><string>on</string>'}");
+    const reinstall = source('scripts/copier/mac-reinstall-safe.sh');
+    expect(reinstall).toContain('Print :EnvironmentVariables:ALPHATRADE_TV\'');
+    expect(reinstall).toContain('TV_STREAM_ARGS+=(--tv off)');
   });
 
   it('worker spouští hlídač jen při ALPHATRADE_TV_STREAM=on a s existujícím bundlem, při ukončení ho zastaví', () => {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
-import { LIVE_RESUME_IDLE, LIVE_RESUME_MAX_MS, liveResumeOnForeground, liveResumeOnTick } from '../lib/liveResumeState';
+import { LIVE_NO_PRICE_NOTICE_MS, liveNoPriceNotice, LIVE_RESUME_IDLE, LIVE_RESUME_MAX_MS, liveResumeOnForeground, liveResumeOnTick } from '../lib/liveResumeState';
+import { cmeFuturesSessionOpen } from '../lib/cmeSession';
 import { perfDuration } from '../lib/perfTrace';
 
 /**
@@ -42,4 +43,25 @@ export function useLiveResumeState(enabled: boolean, tickAt: number | null): boo
     apply(next);
   }, [enabled, tickAt]);
   return enabled && resuming;
+}
+
+/** Nápis bez živé ceny: vlastní časovač, protože ztichlý kanál nic nepřekreslí. Výstup je jen text. */
+export function useLiveNoPriceNotice(enabled: boolean, tickAt: number | null, resuming: boolean): boolean {
+  const [notice, setNotice] = useState(false);
+  const lastRef = useRef(Date.now());
+  if (tickAt != null && tickAt > lastRef.current) lastRef.current = tickAt;
+  const resumingRef = useRef(resuming);
+  resumingRef.current = resuming;
+  useEffect(() => {
+    if (!enabled) { setNotice(false); return undefined; }
+    lastRef.current = Math.max(lastRef.current, Date.now());
+    const timer = setInterval(() => {
+      if (!isAppForeground()) { setNotice(false); return; }
+      const now = Date.now();
+      const stale = now - lastRef.current >= LIVE_NO_PRICE_NOTICE_MS;
+      setNotice(stale && liveNoPriceNotice({ lastPriceAt: lastRef.current, now, resuming: resumingRef.current, sessionOpen: cmeFuturesSessionOpen(now) }));
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [enabled]);
+  return enabled && notice && !resuming;
 }

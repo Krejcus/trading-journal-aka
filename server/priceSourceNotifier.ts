@@ -37,18 +37,18 @@ export function priceSourceNotifyWindowOpen(at: number): boolean {
 }
 
 /** Text oznámení podle stavu a kódu Gateway (nikdy text chyb Gateway). */
-export function priceSourceAlertText(alert: PriceSourceAlert): { title: string; body: string } {
+export function priceSourceAlertText(alert: PriceSourceAlert, tvEnabled = true): { title: string; body: string } {
   if (alert.state === 'up') return { title: 'IBKR zpět', body: 'Živá cena znovu jde z IBKR.' };
   // Pořadí: aktuální stav spojení má přednost před (možná starším) kódem.
-  const reason = alert.ibkr === 'crash' ? 'vlákno ceny s IBKR spadlo, 30 min jen TradingView'
+  const reason = alert.ibkr === 'crash' ? (tvEnabled ? 'vlákno ceny s IBKR spadlo, 30 min jen TradingView' : 'vlákno ceny s IBKR spadlo, zkouší se znovu')
     : alert.code === COMPETING_SESSION ? 'IBKR je přihlášené jinde (mobil nebo web) — Gateway odpojena'
       : alert.ibkr === 'connecting' || alert.ibkr === 'off' || alert.ibkr === 'stopped' ? 'IB Gateway neběží nebo není přihlášená'
         : alert.code !== null && CONNECTIVITY_LOST.has(alert.code) ? 'IB Gateway ztratila spojení s IBKR'
           : alert.code === DATA_FARM_BROKEN ? 'výpadek datové farmy IBKR'
             : alert.code === CONNECTIVITY_RESTORED_DATA_LOST ? 'spojení obnoveno, čeká se na nový odběr dat'
               : alert.ibkr === 'paused' ? `IBKR odmítlo odběr dat${alert.code !== null ? ` (kód ${alert.code})` : ''}`
-                : 'IBKR neposílá obchody, TradingView ano';
-  return { title: 'IBKR nedostupné — cena z TradingView', body: `Důvod: ${reason}.` };
+                : tvEnabled ? 'IBKR neposílá obchody, TradingView ano' : 'IBKR neposílá obchody, i když má být trh otevřený';
+  return { title: tvEnabled ? 'IBKR nedostupné — cena z TradingView' : 'IBKR nedostupné — živá cena nejde', body: `Důvod: ${reason}.` };
 }
 
 export interface PriceSourceNotifier {
@@ -58,6 +58,8 @@ export interface PriceSourceNotifier {
 
 export function createPriceSourceNotifier(deps: {
   notify: (title: string, body: string) => void;
+  /** `false` = bez zálohy TradingView (text oznámení nesmí tvrdit, že cena běží). */
+  tvEnabled?: boolean;
   now?: () => number;
   setIntervalImpl?: (callback: () => void, ms: number) => unknown;
   clearIntervalImpl?: (timer: unknown) => void;
@@ -72,7 +74,7 @@ export function createPriceSourceNotifier(deps: {
   /** Výpadek odškrtnutý bez oznámení (cukání) — jeho návrat se taky neoznamuje. */
   let silent = false;
   const send = (alert: PriceSourceAlert) => {
-    const { title, body } = priceSourceAlertText(alert);
+    const { title, body } = priceSourceAlertText(alert, deps.tvEnabled !== false);
     try { deps.notify(title, body); } catch { /* oznámení je best effort */ }
   };
   const check = () => {

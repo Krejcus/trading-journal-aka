@@ -6,7 +6,8 @@
  * - nikdy nevyhodí a na vlákno nikdy nečeká (`update`/`stop` jsou synchronní,
  *   ukončení vlákna doběhne na pozadí),
  * - pád = restart s prodlevou; 3 pády za 10 min = jistič vypne stream do
- *   restartu workeru (nikdy nerestartuje worker sám),
+ *   restartu workeru (nikdy nerestartuje worker sám); bez TV (`tvEnabled: false`)
+ *   se jistič po 30 min znovu zapne, jinak by nebyla cena až do restartu,
  * - pády a ticho do 60 s po probuzení Macu se do jističe nepočítají,
  * - zprávy z vlákna jsou jen `alive`, omezená diagnostika a svíčky dne z IBKR
  *   (`bars`, jen čísla, ověřené a omezené velikostí i četností); podle nich se
@@ -131,6 +132,8 @@ export function createTvPriceStreamSupervisor(options: {
   createWorker: (priceSource: TvPriceSourceName) => TvStreamWorkerLike;
   /** Požadovaný zdroj; výchozí `tv`. */
   priceSource?: TvPriceSourceName;
+  /** `false` = TradingView není: po pádu se dál zkouší IBKR, žádný režim „jen TV“. Výchozí `true`. */
+  tvEnabled?: boolean;
   log?: (line: string) => void;
   /** Výpadek / návrat IBKR (jen stav a krátké kódy) — oznámení na Macu. Nikdy nesmí vyhodit ven. */
   onPriceSourceAlert?: (alert: PriceSourceAlert) => void;
@@ -154,6 +157,8 @@ export function createTvPriceStreamSupervisor(options: {
   let config: TvPriceStreamConfig | null = null;
   let worker: TvStreamWorkerLike | null = null;
   let tripped = false;
+  let trippedAt = -Infinity;
+  const tvEnabled = options.tvEnabled !== false;
   let stopped = false;
   let crashes: number[] = [];
   let restartTimer: unknown = null;
@@ -206,8 +211,8 @@ export function createTvPriceStreamSupervisor(options: {
     const at = now();
     if (workerSource === 'ibkr') {
       // Pád s IBKR (i po probuzení): další vlákna jen s TV, ať záloha nepadá s IBKR do jističe.
-      ibkrPausedUntil = at + IBKR_CRASH_FALLBACK_MS;
-      log('TV STREAM vlákno se zdrojem IBKR skončilo — 30 min jen TradingView');
+      if (tvEnabled) ibkrPausedUntil = at + IBKR_CRASH_FALLBACK_MS;
+      log(tvEnabled ? 'TV STREAM vlákno se zdrojem IBKR skončilo — 30 min jen TradingView' : 'TV STREAM vlákno se zdrojem IBKR skončilo — zkouší se znovu');
       alert({ state: 'down', ibkr: 'crash', code: null });
     }
     if (at - lastWake < WAKE_GRACE_MS) {
@@ -216,7 +221,8 @@ export function createTvPriceStreamSupervisor(options: {
       crashes = [...crashes.filter(time => at - time < CRASH_WINDOW_MS), at];
       if (crashes.length >= CRASH_LIMIT) {
         tripped = true;
-        log(`TV STREAM jistič: ${crashes.length} pády za 10 min (${reason}) — stream vypnut do restartu workeru`);
+        trippedAt = at;
+        log(`TV STREAM jistič: ${crashes.length} pády za 10 min (${reason}) — stream vypnut ${tvEnabled ? 'do restartu workeru' : 'na 30 min'}`);
         return;
       }
       log(`TV STREAM vlákno skončilo (${reason}) — restart`);
@@ -303,7 +309,7 @@ export function createTvPriceStreamSupervisor(options: {
         const ibkr = typeof row.ibkr === 'string' ? row.ibkr.replace(/[^a-z-]/gi, '').slice(0, 16) || null : null;
         const code = Number.isSafeInteger(row.code) ? row.code as number : null;
         log(row.state === 'down'
-          ? `TV STREAM IBKR nedostupné (ibkr=${ibkr ?? '-'} kód=${code ?? '-'}) — cena ze zálohy TradingView`
+          ? `TV STREAM IBKR nedostupné (ibkr=${ibkr ?? '-'} kód=${code ?? '-'}) — ${tvEnabled ? 'cena ze zálohy TradingView' : 'živá cena nejde'}`
           : 'TV STREAM IBKR zpět — cena znovu z IBKR');
         alert({ state: row.state, ibkr, code });
         return;
@@ -339,6 +345,13 @@ export function createTvPriceStreamSupervisor(options: {
         lastAlive = at;
       }
       lastTick = at;
+      if (!tvEnabled && tripped && !stopped && at - trippedAt >= IBKR_CRASH_FALLBACK_MS) {
+        tripped = false;
+        crashes = [];
+        consecutiveRestarts = 0;
+        log('TV STREAM jistič: po 30 min se zkouší IBKR znovu');
+        ensure();
+      }
       if (worker && at - lastAlive > LIVENESS_TIMEOUT_MS && at - lastWake > LIVENESS_TIMEOUT_MS) {
         const stuck = worker;
         worker = null;

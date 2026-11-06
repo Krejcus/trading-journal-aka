@@ -9,7 +9,8 @@ import {
   TV_FAST_PRICE_EXPRESSION,
 } from '../../services/tradingViewCdpSession';
 import { createIbkrPriceSource, initialPriceSourceSwitch, nextPriceSource, type IbkrPriceSource } from '../../services/ibkrPriceSource';
-import { ibkrAlertNeedsTvCheck, ibkrConnectionProblem, initialIbkrAlertState, nextIbkrAlert } from '../../services/ibkrAlertState';
+import { initialIbkrQuiet, nextIbkrQuiet, ibkrAlertNeedsTvCheck, ibkrConnectionProblem, initialIbkrAlertState, nextIbkrAlert } from '../../services/ibkrAlertState';
+import { cmeFuturesSessionOpen } from '../../lib/cmeSession';
 import { TV_STREAM_WAKE_HOLD_MS, tvStreamWanted, createTvPriceStream, realtimeChannelCanPush, type TvPriceStream, type TvStreamMeta, type TvStreamReading } from '../../services/tradingViewPriceStream';
 
 /**
@@ -55,6 +56,8 @@ const port = parentPort;
 if (!port) throw new Error('tv-price-stream-thread-only');
 
 const priceSource: 'tv' | 'ibkr' = (workerData as { priceSource?: unknown } | null)?.priceSource === 'ibkr' ? 'ibkr' : 'tv';
+// Výchozí zapnuto: chybějící hodnota nesmí tiše vypnout zálohu.
+const tvEnabled = (workerData as { tvEnabled?: unknown } | null)?.tvEnabled !== false;
 let config: StreamConfig | null = null;
 let stream: TvPriceStream | null = null;
 let client: SupabaseClient | null = null;
@@ -71,7 +74,7 @@ let discovering = false;
 let discoveryFailures = 0;
 let nextDiscoveryAt = 0;
 let ibkr: IbkrPriceSource | null = null;
-let sourceSwitch = initialPriceSourceSwitch();
+let sourceSwitch = initialPriceSourceSwitch(tvEnabled);
 let ibkrMeta: TvStreamMeta = { front: null, switchAt: null };
 
 const finite = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -131,6 +134,8 @@ const refreshMeta = async (current: TradingViewCdpSession, index: number) => {
 };
 
 const readTv = async (): Promise<TvStreamReading | null> => {
+  // Bez TradingView nic nečte ani nehledá: `discover` se volá jen odsud.
+  if (!tvEnabled) return null;
   const cfg = config;
   if (!cfg) return null;
   const current = session;
@@ -252,7 +257,7 @@ const stopAll = async () => {
   stream = null;
   ibkr?.stop();
   ibkr = null;
-  sourceSwitch = initialPriceSourceSwitch();
+  sourceSwitch = initialPriceSourceSwitch(tvEnabled);
   closeSession();
   await closeChannel();
 };
@@ -343,6 +348,7 @@ setInterval(() => {
 // proto se ohlásí — jen stav a krátký kód, nikdy text chyb Gateway (může nést účet).
 let ibkrAlert = initialIbkrAlertState();
 let ibkrAlertChecking = false;
+let ibkrQuiet = initialIbkrQuiet();
 /** Čtení TV kvůli hlášení nejvýš 1× za minutu (při zavřeném trhu by jinak běželo každých 5 s). */
 const IBKR_ALERT_TV_CHECK_MS = 60_000;
 let ibkrAlertTvCheckedAt = -Infinity;
@@ -360,7 +366,11 @@ setInterval(() => {
       const connectionProblem = ibkrConnectionProblem(stats?.state ?? 'off', stats?.lastCode ?? null);
       // IBKR mlčí bez problému spojení: výpadek jen když TV živou cenu má (jinak je trh zavřený).
       let tvLive: boolean | null = null;
-      if (ibkrAlertNeedsTvCheck(ibkrAlert, available, connectionProblem, at) && at - ibkrAlertTvCheckedAt >= IBKR_ALERT_TV_CHECK_MS) {
+      if (!tvEnabled) {
+        const quiet = nextIbkrQuiet(ibkrQuiet, { available, connectionProblem, sessionOpen: cmeFuturesSessionOpen(at), at });
+        ibkrQuiet = quiet.quiet;
+        tvLive = quiet.quietDown;
+      } else if (ibkrAlertNeedsTvCheck(ibkrAlert, available, connectionProblem, at) && at - ibkrAlertTvCheckedAt >= IBKR_ALERT_TV_CHECK_MS) {
         ibkrAlertTvCheckedAt = at;
         const tv = await readTv().catch(() => null);
         const minute = Math.floor(Date.now() / 60_000) * 60;

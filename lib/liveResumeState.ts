@@ -26,3 +26,10 @@ export function liveResumeOnTick(state: LiveResumeState, now: number, tickAt: nu
   if ((tickAt != null && tickAt >= state.resuming.since) || now - state.resuming.since >= LIVE_RESUME_MAX_MS) return { ...state, resuming: null };
   return state;
 }
+
+/** Jak dlouho bez nové ceny v otevřené seanci ukázat „Živá cena teď nechodí“. Jen text, nic neautorizuje. */
+export const LIVE_NO_PRICE_NOTICE_MS = 5_000;
+
+export function liveNoPriceNotice(input: { lastPriceAt: number; now: number; resuming: boolean; sessionOpen: boolean }): boolean {
+  return !input.resuming && input.sessionOpen && input.now - input.lastPriceAt >= LIVE_NO_PRICE_NOTICE_MS;
+}

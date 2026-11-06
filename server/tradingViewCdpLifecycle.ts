@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -16,6 +17,7 @@ interface TradingViewCdpLifecycleDeps {
   fetchImpl?: typeof fetch;
   processRunning?: () => Promise<boolean>;
   launch?: () => Promise<void> | void;
+  binaryAvailable?: () => boolean;
   quit?: () => Promise<void> | void;
   sleep?: (milliseconds: number) => Promise<void>;
   quitTimeoutMs?: number;
@@ -43,13 +45,21 @@ const tradingViewRunning = async (): Promise<boolean> => {
   }
 };
 
-const launchTradingViewWithCdp = (): void => {
-  const child = spawn(TRADINGVIEW_BINARY, [
+/**
+ * Spuštění aplikace. Chyba `spawn` přijde asynchronně a bez posluchače by ukončila celý worker
+ * (smazaná aplikace = smyčka pádů přes launchd), proto posluchač zůstává i po úspěchu.
+ */
+export const launchTradingViewWithCdp = (binary: string = TRADINGVIEW_BINARY): Promise<void> => new Promise((resolve, reject) => {
+  const child = spawn(binary, [
     '--remote-debugging-address=127.0.0.1',
     '--remote-debugging-port=9222',
   ], { detached: true, stdio: 'ignore' });
-  child.unref();
-};
+  child.on('error', reject);
+  child.once('spawn', () => {
+    child.unref();
+    resolve();
+  });
+});
 
 const quitTradingView = async (): Promise<void> => {
   await execFileAsync('/usr/bin/osascript', [
@@ -118,6 +128,8 @@ export async function restartTradingViewWithCdp(
   const wait = deps.sleep ?? sleep;
   const pollIntervalMs = Math.max(10, deps.pollIntervalMs ?? 250);
   if (await cdpReachable(fetchImpl)) return 'ready';
+  // Bez binárky by se běžící TV ukončila a nový by se nespustil.
+  if (!(deps.binaryAvailable ?? (() => !!deps.launch || existsSync(TRADINGVIEW_BINARY)))()) return 'launch-failed';
 
   if (await processRunning()) {
     try {

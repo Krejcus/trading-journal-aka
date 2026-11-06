@@ -212,6 +212,13 @@ async function addConnection(): Promise<void> {
 }
 
 async function install(): Promise<void> {
+  // Provoz bez TradingView (`--tv off`): cena musí jít z IBKR, jinak by tiše žádná nebyla. Kontrola před zápisem čehokoli.
+  const tvFlag = flags.get('tv')?.trim().toLowerCase();
+  if (tvFlag !== undefined && tvFlag !== 'on' && tvFlag !== 'off') throw new Error('--tv musí být on nebo off');
+  const tvOff = tvFlag === 'off';
+  if (tvOff && (flags.get('tv-stream')?.trim().toLowerCase() !== 'on' || flags.get('price-source')?.trim().toLowerCase() !== 'ibkr')) {
+    throw new Error('--tv off vyžaduje --tv-stream on a --price-source ibkr');
+  }
   const leader = positiveInteger('leader');
   const manualOnly = flags.has('manual-only');
   const followers = flags.get('followers')?.trim() || '';
@@ -506,7 +513,7 @@ async function install(): Promise<void> {
   <key>ProcessType</key><string>Interactive</string>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-    <key>ALPHATRADE_TV_AUTO_LAUNCH</key><string>on</string>
+    ${tvOff ? '<key>ALPHATRADE_TV</key><string>off</string>' : '<key>ALPHATRADE_TV_AUTO_LAUNCH</key><string>on</string>'}
     ${allowFullDevelopmentOrigins
     ? '<key>ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS</key><string>1</string>'
     : ''}

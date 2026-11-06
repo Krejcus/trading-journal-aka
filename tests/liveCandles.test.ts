@@ -85,7 +85,7 @@ describe('startTradingViewLiveBars', () => {
     await flush();
     expect(read).toHaveBeenCalledOnce();
     expect(upload).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('reason=no-1m-chart'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('reason=no-bars'));
     feed.stop();
     clock.tick(); await flush();
     expect(read).toHaveBeenCalledOnce();

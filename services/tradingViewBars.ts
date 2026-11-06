@@ -153,7 +153,7 @@ export function startTradingViewLiveBars(options: {
           const capture = await reader(root);
           if (stopped) return;
           if (!capture) {
-            if (!quiet) report(root, 'no-chart', `TV LIVE skip root=${root} reason=no-1m-chart`);
+            if (!quiet) report(root, 'no-chart', `TV LIVE skip root=${root} reason=no-bars`);
             continue;
           }
           const signature = `${JSON.stringify(capture.bars.slice(-2))}:${capture.bars.length}`;

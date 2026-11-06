@@ -1,7 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../server/tradingViewCdpLifecycle';
+import { ensureTradingViewCdp, launchTradingViewWithCdp, restartTradingViewWithCdp } from '../server/tradingViewCdpLifecycle';
 
 describe('TradingView CDP lifecycle', () => {
+  it('chybějící aplikace je odmítnutí, ne nezachycená chyba, která by shodila worker', async () => {
+    await expect(launchTradingViewWithCdp('/neexistuje/TradingView')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(ensureTradingViewCdp(true, {
+      fetchImpl: vi.fn(async () => { throw new Error('off'); }) as typeof fetch,
+      processRunning: vi.fn(async () => false),
+      launch: () => launchTradingViewWithCdp('/neexistuje/TradingView'),
+    })).resolves.toBe('launch-failed');
+  });
+
+  it('restart bez aplikace běžící TradingView neukončí', async () => {
+    const quit = vi.fn();
+    await expect(restartTradingViewWithCdp({
+      fetchImpl: vi.fn(async () => { throw new Error('off'); }) as typeof fetch,
+      binaryAvailable: () => false,
+      processRunning: vi.fn(async () => true),
+      quit,
+    })).resolves.toBe('launch-failed');
+    expect(quit).not.toHaveBeenCalled();
+  });
+
   it('nedělá nic, když už CDP odpovídá', async () => {
     const processRunning = vi.fn(async () => false);
     const launch = vi.fn();

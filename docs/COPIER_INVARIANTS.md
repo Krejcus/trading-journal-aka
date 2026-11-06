@@ -1643,6 +1643,13 @@ existující ochranu.
   přelomu, minuta s výpadkem dat ne), aby svíčka v grafu po příchodu hotových svíček
   neposkočila. Taková zpráva má `bar` minulé minuty a `last` už nové. Je to best
   effort: dvě zprávy v jednom snímku grafu ji přeskočí a opraví ji až obnova dat.
+  Provoz bez TradingView (`--tv off`, `ALPHATRADE_TV=off`, 6. 11. 2026; instalátor ho
+  dovolí jen s `--tv-stream on --price-source ibkr`): nic TV nespouští ani nečte, kamera a
+  snímky jsou vypnuté, po pádu vlákna se dál zkouší IBKR a jistič se po 30 min znovu zapne
+  (liveness tick, nikdy restart procesu). `active: 'tv'` pak znamená „žádný zdroj“: hystereze
+  a nový `runId` po výpadku platí dál, kotace nejde a Market zůstává blokovaný. Tichý výpadek
+  se pozná z 120 s ticha v otevřené CME seanci (`lib/cmeSession.ts`, jen zobrazení; svátky
+  mohou dát falešné oznámení). `ALPHATRADE_SNAPSHOTS=off` už cenu, upozornění ani svíčky nevypíná.
   Hlídač upozornění na cenu (2. 11. 2026): druhé vlákno `price-alert-watch.mjs`
   (`scripts/copier/priceAlertWatchThread.ts`, `env: {}`, 48 MB), jen se zdrojem
   IBKR a `ALPHATRADE_PRICE_ALERTS=on` (`--price-alerts on`, přežije reinstall).
@@ -2956,6 +2963,8 @@ existující ochranu.
   grafu dne); grafy dostávají jen neutrální `LiveCandleFeed`
   (`lib/liveCandleFeed.ts`, `hooks/useLiveCandleBinding.ts`) a svíčku jen
   překreslí (`updateBar`) — do dat grafu, cache dne ani storage nejde.
+  Telefon po 5 s bez ceny v otevřené seanci ukáže „Živá cena teď nechodí“ (jen text, mimo
+  blokace i dotyky; INV-UI-01, seance z `lib/cmeSession.ts`, svátky nezná).
   Pilulka telefonu bez živé ceny ukazuje „—“, nikdy close svíčky. Pojistka skoku roste se
   stářím reference (0,2 % + 0,2 %/min, strop 0,6 %), jen když zpráva i soubor mají potvrzeně týž
   kontrakt (`contractMatchesData`); bez důkazu platí 0,2 %. Pásmo samo kontrakt nerozezná.

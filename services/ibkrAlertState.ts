@@ -48,3 +48,33 @@ export function nextIbkrAlert(state: IbkrAlertState, input: {
 /** Vlákno potřebuje vědět, zda má TV živou cenu, jen když výpadek trvá a nejde o spojení. */
 export const ibkrAlertNeedsTvCheck = (state: IbkrAlertState, available: boolean, connectionProblem: boolean, at: number): boolean =>
   !available && !connectionProblem && state.reported !== 'down' && state.downSince !== null && at - state.downSince >= IBKR_ALERT_AFTER_MS;
+
+/** Bez TV: IBKR tak dlouho mlčí bez problému spojení při otevřené CME seanci = výpadek. */
+export const IBKR_QUIET_DOWN_MS = 120_000;
+/** Mezera mezi kontrolami (spánek Macu) začíná počítání znovu. */
+export const IBKR_QUIET_GAP_RESET_MS = 30_000;
+
+export interface IbkrQuiet {
+  since: number | null;
+  lastAt: number | null;
+}
+
+export const initialIbkrQuiet = (): IbkrQuiet => ({ since: null, lastAt: null });
+
+/**
+ * Náhrada dotazu „má TV živou cenu“ bez TradingView: `quietDown` jde do `nextIbkrAlert` jako `tvLive`.
+ * Vlastní počítadlo: `downSince` běží i přes zavřený trh a otevření seance by hned hlásilo výpadek.
+ */
+export function nextIbkrQuiet(quiet: IbkrQuiet, input: {
+  available: boolean;
+  connectionProblem: boolean;
+  sessionOpen: boolean;
+  at: number;
+}): { quiet: IbkrQuiet; quietDown: boolean } {
+  if (input.available || input.connectionProblem || !input.sessionOpen) {
+    return { quiet: { since: null, lastAt: input.at }, quietDown: false };
+  }
+  const gap = quiet.lastAt !== null && input.at - quiet.lastAt > IBKR_QUIET_GAP_RESET_MS;
+  const since = quiet.since === null || gap ? input.at : quiet.since;
+  return { quiet: { since, lastAt: input.at }, quietDown: input.at - since >= IBKR_QUIET_DOWN_MS };
+}

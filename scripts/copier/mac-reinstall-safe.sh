@@ -141,6 +141,11 @@ INSTALLED_PRICE_SOURCE="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariable
 if [[ "${COPIER_PRICE_SOURCE:-$INSTALLED_PRICE_SOURCE}" == "ibkr" ]]; then
   TV_STREAM_ARGS+=(--price-source ibkr)
 fi
+# Provoz bez TradingView přežije reinstall stejně; přepsat jde COPIER_TV=on|off.
+INSTALLED_TV="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_TV' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_TV:-$INSTALLED_TV}" == "off" ]]; then
+  TV_STREAM_ARGS+=(--tv off)
+fi
 # Hlídání upozornění na cenu (jen se zdrojem IBKR) přežije reinstall stejně;
 # přepsat jde COPIER_PRICE_ALERTS=on|off scripts/copier/mac-reinstall-safe.sh
 INSTALLED_PRICE_ALERTS="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_PRICE_ALERTS' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"

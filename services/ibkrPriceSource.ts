@@ -793,7 +793,8 @@ export interface PriceSourceSwitch {
   missingSince: number | null;
 }
 
-export const initialPriceSourceSwitch = (): PriceSourceSwitch => ({ active: 'tv', okSince: null, missingSince: null });
+/** Bez TV (`tvEnabled` false) začíná na IBKR; `tv` pak při výpadku znamená „žádný zdroj“ a hystereze platí dál. */
+export const initialPriceSourceSwitch = (tvEnabled = true): PriceSourceSwitch => ({ active: tvEnabled ? 'tv' : 'ibkr', okSince: null, missingSince: null });
 
 /**
  * Výběr zdroje ve vlákně podle toho, zda má IBKR platné čtení. Start vždy na

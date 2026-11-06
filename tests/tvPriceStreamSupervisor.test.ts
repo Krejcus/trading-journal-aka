@@ -13,14 +13,16 @@ class FakeWorker extends EventEmitter {
 
 const ON: TvPriceStreamConfig = { enabled: true, url: 'https://x.supabase.co', anonKey: 'anon', topic: 'tv-price-abc', key: 'secret-key' };
 
-const setup = () => {
+const setup = (extra: { priceSource?: TvPriceSourceName; tvEnabled?: boolean } = {}) => {
   const workers: FakeWorker[] = [];
+  const sources: TvPriceSourceName[] = [];
   const log = vi.fn();
   const supervisor = createTvPriceStreamSupervisor({
-    createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
+    createWorker: source => { sources.push(source); const worker = new FakeWorker(); workers.push(worker); return worker; },
     log,
+    ...extra,
   });
-  return { supervisor, workers, log, logs: () => log.mock.calls.map(call => String(call[0])).join('\n') };
+  return { supervisor, workers, sources, log, logs: () => log.mock.calls.map(call => String(call[0])).join('\n') };
 };
 
 beforeEach(() => vi.useFakeTimers());
@@ -85,6 +87,44 @@ describe('hlídač vlákna kanálu ceny (hlavní vlákno workeru)', () => {
       await vi.advanceTimersByTimeAsync(4_000);
     }
     expect(t.workers[0].terminated).toBe(0);
+    t.supervisor.stop();
+  });
+
+  it('bez TV: po pádu se dál zkouší IBKR, jistič se po 30 min znovu zapne a stop nic nespustí', async () => {
+    const t = setup({ priceSource: 'ibkr', tvEnabled: false });
+    t.supervisor.update(ON);
+    t.workers[0].emit('error', new Error('boom'));
+    await vi.advanceTimersByTimeAsync(2_000);
+    t.workers[1].emit('exit', 1);
+    await vi.advanceTimersByTimeAsync(4_000);
+    t.workers[2].emit('error', new Error('boom'));
+    expect(t.supervisor.status().tripped).toBe(true);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(t.workers).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(21 * 60_000);
+    // Falešné vlákno neposílá `alive`, takže po zapnutí hlídač dál restartuje: důležité je, že vlákno vzniká.
+    expect(t.workers.length).toBeGreaterThan(3);
+    expect(new Set(t.sources)).toEqual(new Set(['ibkr']));
+    expect(t.logs()).toContain('po 30 min se zkouší IBKR znovu');
+    expect(t.logs()).not.toContain('jen TradingView');
+    t.supervisor.stop();
+    const count = t.workers.length;
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    expect(t.workers).toHaveLength(count);
+  });
+
+  it('s TV zůstává jistič do restartu workeru a po pádu IBKR 30 min jen TV', async () => {
+    const t = setup({ priceSource: 'ibkr' });
+    t.supervisor.update(ON);
+    t.workers[0].emit('error', new Error('boom'));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(t.sources).toEqual(['ibkr', 'tv']);
+    t.workers[1].emit('exit', 1);
+    await vi.advanceTimersByTimeAsync(4_000);
+    t.workers[2].emit('error', new Error('boom'));
+    expect(t.supervisor.status().tripped).toBe(true);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    expect(t.supervisor.status().tripped).toBe(true);
     t.supervisor.stop();
   });
 

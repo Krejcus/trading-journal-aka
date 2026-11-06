@@ -20,6 +20,12 @@ describe('hlavička O/H/L/C a pilulka bez živé ceny', () => {
     expect(phone).toContain('bid={resuming ? null : quote?.bid ?? null} ask={resuming ? null : quote?.ask ?? null}');
   });
 
+  it('nápis bez ceny je jen text: nejde do blokace ani ceny a nezachytává dotyky', () => {
+    const phone = readFileSync(join(process.cwd(), 'components/day/LivePhoneChart.tsx'), 'utf8');
+    expect(phone.match(/noPriceNotice/g)).toHaveLength(2);
+    expect(phone).toContain("{noPriceNotice && (\n            <div aria-live=\"polite\" style={{ position: 'absolute', top: 12, left: 0, right: 0, zIndex: 6, pointerEvents: 'none'");
+  });
+
   it('čekání na cenu po návratu brzdí jen nový vstup, nikdy správu pozice (INV-UI-02)', () => {
     const phone = readFileSync(join(process.cwd(), 'components/day/LivePhoneChart.tsx'), 'utf8');
     const start = phone.indexOf('const sendBlocked = ');

@@ -92,3 +92,14 @@ describe('oznámení výpadku IBKR na Macu', () => {
     expect(t.notify).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('oznámení bez TradingView', () => {
+  it('netvrdí, že cena jede ze zálohy', () => {
+    for (const alert of [{ state: 'down', ibkr: 'crash', code: null }, { state: 'down', ibkr: 'live', code: null }, { state: 'down', ibkr: 'connecting', code: 1100 }] as const) {
+      const text = priceSourceAlertText(alert, false);
+      expect(`${text.title} ${text.body}`).not.toContain('TradingView');
+      expect(text.title).toBe('IBKR nedostupné — živá cena nejde');
+    }
+    expect(priceSourceAlertText({ state: 'down', ibkr: 'crash', code: null }).title).toContain('TradingView');
+  });
+});

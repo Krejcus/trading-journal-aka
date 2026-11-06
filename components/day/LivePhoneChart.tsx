@@ -18,7 +18,7 @@ import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/live
 import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../../hooks/useLiveFillAnnouncer';
 import { previewSymbolFromChartSource } from '../../lib/leaderEntryPreview';
-import { useLiveResumeState } from '../../hooks/useLiveResumeState';
+import { useLiveNoPriceNotice, useLiveResumeState } from '../../hooks/useLiveResumeState';
 import { LIVE_ATTACH_SENT_HOLD_MS, LIVE_BARE_QUOTE_MAX_AGE_MS, liveAttachDefaults, liveAttachIntent, liveQuoteStaleText } from '../../lib/liveBareEntry';
 import type { LiveAttachLegs } from '../../lib/liveOrderTicket';
 import { snapToTick } from '../../lib/liveOrderTicket';
@@ -177,6 +177,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const tick = useLiveTicketQuote(ctl.chart.liveFeed, 'MNQ', candleClose, candleEnd == null ? null : (candleEnd + 60) * 1_000);
   // Po návratu z pozadí je na obrazovce starý stav: musí to být vidět, dokud nepřijde živá cena.
   const resuming = useLiveResumeState(tick != null || ctl.chart.liveStatus === 'live', tick?.at ?? null);
+  const noPriceNotice = useLiveNoPriceNotice(true, tick?.at ?? null, resuming);
   const contract = previewSymbolFromChartSource(ctl.chart.liveSource);
   const quote = useMemo<LivePhoneQuote | null>(() => {
     if (!tick || ctl.chart.liveStatus !== 'live') return null;
@@ -595,6 +596,13 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         // pracující příkazy (U5) a ✎ správy (U10) v měřítku toho okna; zámek jednoho příkazu
         // (`lineState`) je společný. Za přehrávání nic — graf je historický (INV-UI-01).
         paneLayer: ({ api, replay, active, lastPrice }) => (api && !replay ? <>
+          {noPriceNotice && (
+            <div aria-live="polite" style={{ position: 'absolute', top: 12, left: 0, right: 0, zIndex: 6, pointerEvents: 'none', display: 'flex', justifyContent: 'center' }}>
+              <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, background: isDark ? '#1e293b' : '#fff', color: isDark ? '#e2e8f0' : '#0f172a', boxShadow: '0 1px 4px rgba(0,0,0,.25)' }}>
+                Živá cena teď nechodí
+              </span>
+            </div>
+          )}
           {resuming && (
             <div
               aria-live="polite"
