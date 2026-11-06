@@ -129,3 +129,24 @@ Filip: stavět jako první. Dotčená pravidla: INV-MANUAL-01, INV-OUTBOX-01/02/
 **Relay:** validace nových akcí, rozestup 2 s na obchod zůstává; rychlý druhý tah vrátí `entry-busy` a UI to řekne. Denní strop beze změny.
 
 **UI (PC i telefon):** chip `+ SL` / `+ TP` podle nohy, kterou pozice nemá; puštění chipu odešle `add-leg`, klik bez tahu nic. × na čáře SL/TP = `remove-leg`. „Odeslat SL a TP“ pryč. Starý worker bez capability: dnešní chování.
+
+## Oponentura návrhu v2 (6. 11. 2026): BLOKUJE v tomto znění, směr správný. Podklad pro stavbu v3
+P1, opravit před stavbou:
+- Flatten: registrovat jen surové zápisy, ne mezery. Flatten nastaví abort a krátce počká na konec surového zápisu, leader se nesmí vynechat (`settleFollowerCutBackgroundAccounts`, `emergencyFlatten`).
+- Samostatná noha na flat: `leaderVerifiedFlat` s pracující nohou nikdy neprojde. Nová `reviewBareEntryLegs` a `leaderVerifiedFlatExcept(ids)`: dvě čtení net 0, otevřené jsou jen vlastní nohy, čtení nohy, durable `sending`, jeden pokus, raw `cancelOrder`, i za DISARMED a kill. Pozice není flat, cizí příkaz, první běh po restartu: jen incident. Revize nefiltruje `closedAt`. Pokrýt i 2 nohy po attach.
+- Vlastnictví: `ownManualLegOrderIds` nerozšiřovat (vypnulo by `standaloneReduction`), oddělená `ownBareLegIds`, tag operace durable před zápisem, `LeaderEvent` tag z ingressu. Vlastní noha se do `bracketCorrelator.observe` neposílá.
+- Durable model: na akci `phase`, `oldLegId`, `newStopId`, `newTargetId`, entry a akce jedním `persistSafety`, tag unikátní na operaci, restart v každé fázi jen čtení a incident (`restartedAttach` rozšířit).
+- Dvojí SL: starý SL ≥ 8 ticků od IBKR ceny (`sl-too-close`), synchronně pracuje, prostý Stop, bez fillu, stejná cena; po sekvenci vždy autoritativní čtení, jinak incident.
+- Krok 2: fence bez `tradeObservationVersionByAccount` leadera, plus route epoch, stopped, reconnect, config, generace. Zrušení starého SL se NEzastavuje na flat ani abortu a jde raw i po brzdě. OCO po zrušení TP se při flat, abortu a Flattenu neposílá.
+- Korelátor: brána = pozorovaný fill vstupu a okno + 250 ms, bez důkazu fillu `busy`.
+
+P2:
+- Migrace nutná: `enqueue_tradovate_copier_brake` a záloha v relayi supersede `remove-leg` a `add-leg` TP. Agent výjimka jen `add-leg` SL. Migrace před webem, TTL `remove-leg` 5 s. Pod brzdou jen `add-leg` SL z 0 nohou (INV-BRAKE-02).
+- Selhání: neznámé zrušení TP = incident bez OCO, `TooLate` = bez OCO, „zrušeno“ jen `canceled` s nulovým fillem z autoritativního čtení, po `remove-leg` přečíst partnera. Text po selhání OCO říká, že TP zmizel. Modify nohy zbylé z OCO neměřen.
+- Noha zrušená v Tradovate: autoritativní konec s nulovým fillem vymaže id a oznámí to. TIF samostatného Stopu neznámý.
+- `expect` nese i nohy, které uživatel viděl (druhé zařízení).
+- `MANUAL_ACTIONS` v `lib/copierLiveExposure.ts` ve stejném commitu.
+
+Kontrolní seznam čtenářů: `lib/manualBareClose.ts` (60, 89, 126, 128, 169, 221), controller 5507, 5598, 5738, 6131, 6142, 5687, 6870, 6351, 3689, 4930, 21739, 21661, 21683, 23287, 23372; `resolveManagedTrade` neuvolňovat, vlastní `prepareSingleLeg*` před 6876; `components/TradovateLiveDesk.tsx:1277`, `lib/liveBareEntry.ts:67`, `lib/leaderOrderManage.ts`, `services/copierEngine.ts:438`, `lib/copierWorkerCapabilities.ts`, agent 422 a 988, relay 1060, `server/copierCommandPushRelay.ts:119`, `server/copierIncidentWatchdog.ts:772`, `hooks/useLiveManageRunner.ts`, `components/day/LivePhoneOrderLines.tsx`.
+
+Rozhodnutí Filipa: automatické zrušení vlastní nohy na flat s rizikem, že bez běžícího workeru ji nikdo nehlídá; × SL nechá pozici bez stropu.
