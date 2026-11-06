@@ -320,7 +320,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   grafu jde až se živým čtením a jen s rozdílem hranic do 2 h (critic: jinak graf
   na včerejšku, ~24 h stará cena v panelu, díra v řadě). Plný užitek jen při shodě
   hranice (do 15 min), jinak se historie doplní a graf se přestaví dál.
-- **Zbývá:** RTH měření (AllLast vs Last, pořadí vzorek/dávka); po nasazení kontrola kvóty Realtime (hrubý odhad ~9,5 mil./
+- **Zbývá:** RTH měření (AllLast vs Last, pořadí vzorek/dávka); Market na DEMO provede
+  Filip (hláška nese čísla driftu, první důkaz, že se `Last` projevil); po nasazení kontrola kvóty Realtime (hrubý odhad ~9,5 mil./
   měs. proti 5 mil., brzda `TV_STREAM_MAX_PER_SECOND`). Pořadí nasazení: web před
   workerem; iPhone má bundlovaný web, `lastPrice` dostane až novým buildem.
 - **Přijaté limity:** dokončená minuta je best effort (dvě zprávy v jednom snímku
@@ -330,6 +331,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `lost`, takže výpadek farmy hlášený těsně před odběrem nenastaví `restoredAt` a
   neúplná minuta může odejít jako dokončená; jen zobrazení, opraví ji `tv-live`,
   jak často nastane, je neověřené. Oprava mění i `reading()`, patří do vlastní změny.
+
 ### 2026-11-05 — Market na Openu a návrat appky z pozadí (Claude, větev claude/market-open-20261105, nenasazeno)
 
 - 5. 11. zablokoval limit 8 ticků 9 z 15 Marketů. Sólo DEMO má limit 40 ticků a hláška nese čísla; s nohami zůstává pozdní kontrola 4 ticky kvůli spočítanému riziku. Velikosti driftů těch 9 pokusů neznáme, čísla přinese až nová hláška.

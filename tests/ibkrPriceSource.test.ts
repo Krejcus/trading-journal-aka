@@ -278,6 +278,17 @@ describe('zdroj ceny z IBKR', () => {
       expect(h.source.pendingClosedBar()).toMatchObject([expect.any(Number), 103, 103, 103, 103]);
     });
 
+    it('vzorek změní jen poslední cenu, čerstvost obchodu a kotace pro Market ne', () => {
+      const h = live();
+      const before = h.source.reading()!;
+      h.advance(200);
+      quick(h, 103);
+      const after = h.source.reading()!;
+      expect(after.last).toBe(103);
+      expect(after.lastAt).toBe(before.lastAt);
+      expect(after.quoteAt).toBe(before.quoteAt);
+    });
+
     it('běžné 2104 bez výpadku dokončenou minutu nepotlačí', () => {
       const h = live();
       const minute = Math.floor(h.now() / 60_000) * 60;

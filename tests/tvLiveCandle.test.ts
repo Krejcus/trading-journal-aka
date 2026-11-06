@@ -278,7 +278,7 @@ describe('výdrž živé svíčky bez ceny', () => {
   const liveBar: MarketCandle = { time: MINUTE, open: 29181, high: 29190, low: 29179, close: 29188, volume: 0 };
   const setup = () => {
     let current: MarketCandle | null = liveBar;
-    const source: LiveCandleFeed = { subscribe: () => () => undefined, current: () => current };
+    const source: LiveCandleFeed = { subscribe: () => () => undefined, current: () => current, lastPrice: () => current?.close ?? null };
     const chart = fakeChart(original);
     const drawn = new Map<unknown, LiveCandleDrawn>() as Map<never, LiveCandleDrawn>;
     const target = { api: chart.api, root: 'MNQ', timeframe: '1m' as const, rawCandles };

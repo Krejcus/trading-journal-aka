@@ -2926,7 +2926,7 @@ existující ochranu.
   být JEN strop ceny příkazu uživatele (Buy se vyplní za ni nebo lépe), a jen
   se zprávou mladší než 3 s; nikdy nevstupuje do read modelu, rizika, day locku ani
   rozhodnutí kopírky (worker počítá riziko z ceny příkazu jako z nejhoršího vstupu).
-  Pozor: 3 s hlídá příjezd zprávy, ne stáří ceny. Heartbeat 1/s posílá poslední cenu
+  Pozor: brána (5 s, zkratky 3 s, od 5. 11. 2026) hlídá příjezd zprávy, ne stáří ceny. Heartbeat 1/s posílá poslední cenu
   dál, takže cena samotná může být stará až `IBKR_STALE_MS` (15 s).
   Cenu panelu objednávky (zobrazení + strop Marketu) bere `hooks/useLiveTicketQuote.ts`
   přímo z kanálu ceny (`last` poslední zprávy, ≤ 10×/s; do 6. 11. 2026 `close`, který na přelomu minuty nese close minulé minuty) — jediný čtenář feedu

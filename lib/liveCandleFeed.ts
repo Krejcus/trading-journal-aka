@@ -17,8 +17,7 @@ export interface LiveCandleFeed {
    */
   lastPrice(root: string): number | null;
   /**
-   * Táž svíčka z poslední přijaté zprávy BEZ přehrání ticků (2. 11. 2026): pro cenu panelu
-   * objednávky a hlídač BE. Animace grafu se při netikajícím `requestAnimationFrame`
+   * Táž svíčka z poslední přijaté zprávy BEZ přehrání ticků (2. 11. 2026). Animace grafu se při netikajícím `requestAnimationFrame`
    * (karta na pozadí) zasekne a `current` by vracel starší cenu jako čerstvou.
    */
   final?(root: string): MarketCandle | null;

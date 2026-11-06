@@ -5,7 +5,7 @@ import { LIVE_CANDLE_MAX_JUMP_RATIO, type LiveCandleFeed } from '../lib/liveCand
  * Živá cena pro panel objednávky LIVE → Graf (výjimka INV-UI-04 schválená
  * Filipem 30. 10. 2026): poslední cena zprávy z kanálu ceny (ne `close` svíčky),
  * nejvýš 10× za sekundu. Smí jen do zobrazení panelu a jako strop ceny
- * příkazu uživatele (Market = Limit přes trh) — nikdy do rizika, read modelu
+ * příkazu uživatele — nikdy do rizika, read modelu
  * ani rozhodnutí kopírky. `at` = kdy cena naposledy přišla (čerstvost Marketu).
  */
 export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, reference: number | null): { price: number; at: number } | null {
