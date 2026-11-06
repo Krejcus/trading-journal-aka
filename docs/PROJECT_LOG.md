@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-06 — Jedno živé P&L, přikoupení z lišty telefonu, okamžité SL/TP v návrhu (Claude, větev `claude/chart-position-ui-20261106`)
+
+- **P&L:** čip odečítal poplatky (odtud centy) a po 5 s bez obchodu přepínal na číslo brokera a zpět (přeskakování). Hlavička telefonu počítala jinak přes `tvLivePnl`, takže nález „P&L neopraveno“ ze zápisu o prvním Openu se týká už jen ostatních míst s `LiveOpenPnlValue`. Teď všude v grafu `liveShownOpenPnl`: IBKR bez poplatků, jinak broker s vrácenými poplatky. Seznam účtů a uzavřený obchod zůstávají po poplatcích, takže se od čipu mohou lišit. Jen zobrazení (INV-UI-04).
+- **Přikoupení:** KOUPIT/PRODAT v pozici posílalo holý Market, který worker zastaví. Teď C18e: Market se SL/TP pozice, worker beze změny. Bez SL i TP jen hláška. Filip hlásil selhání bez textu chyby a v logu workeru pokus není, příčina je z kódu.
+- **Okamžité SL/TP (jedna noha, × vrátí čip):** `docs/reviews/instant-legs-design-20261106.md`, critic kolo 1 BLOKUJE. Nestavět bez záznamu na DEMO; Filip chce varianty ještě rozvinout.
+- `move-limit` worker inzeruje, čára Limitu se tedy dá táhnout, přestože je v oponentuře v jiné konverzaci.
+
 ### 2026-11-06 — První Open bez TradingView: svíčka a P&L se zastavily (Claude, větev `claude/tv-exit-rest-20261106`, nenasazeno)
 
 - Filip kolem 15:37 v pozici viděl stát svíčku a P&L, nová svíčka nepřišla. IBKR i worker bez mezery (záznam a log). **Pravděpodobná příčina, z modelu nad záznamem, ne z měření v appce:** pojistka skoku 0,2 % porovnává novou minutu se souborem starým až minutu; na přelomu 15:37:00 byl rozdíl 63,5 b, takže se svíčka nekreslila do načtení v :20. Oprava: s potvrzeným kontraktem pásmo 1 %.

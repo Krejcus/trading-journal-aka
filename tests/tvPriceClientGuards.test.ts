@@ -184,11 +184,11 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       return [...text.matchAll(/<LiveOpenPnlValue\b[\s\S]*?<\/LiveOpenPnlValue>/g)].map(match => ({ file, block: match[0] }));
     });
     // Řádek účtu (počítač, telefon), řádek skupiny, souhrn skupiny na telefonu, karta obchodu, štítek pozice v deníku,
-    // LIVE graf telefonu: P&L skupiny v hlavičce, celkem a řádek účtu v listu.
+    // LIVE graf telefonu: celkem a řádek účtu v listu (hlavička bere `liveShownOpenPnl` jako čip).
     expect(blocks.map(item => item.file)).toEqual([
       'components/LiveCopyTradeOverview.tsx', 'components/LiveCopyTradeOverview.tsx', 'components/LiveCopyTradeOverview.tsx',
       'components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx', 'components/day/DayLivePositionChip.tsx',
-      'components/day/LivePhoneAccounts.tsx', 'components/day/LivePhoneAccounts.tsx', 'components/day/LivePhoneAccounts.tsx',
+      'components/day/LivePhoneAccounts.tsx', 'components/day/LivePhoneAccounts.tsx',
     ]);
     for (const { file, block } of blocks) {
       expect(block, file).not.toMatch(/\bset[A-Z]\w*\(|\bon[A-Z]\w*\(|Ref\.current|\.current\(|publish|window\.|dispatch|dll|Dll|DLL|risk|limit|Limit|drawdown|cushion|eligib|write|persist|storage/);

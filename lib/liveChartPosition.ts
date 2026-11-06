@@ -158,8 +158,9 @@ export function liveShownOpenPnl(
 ): number | null {
   if (live != null) return live;
   if (summary.openPnl == null) return null;
-  const known = summary.rows.length > 0 && summary.rows.every(row => row.openPnl != null && row.fees != null);
-  return known ? summary.rows.reduce((total, row) => total + row.openPnl! + row.fees!, 0) : summary.openPnl;
+  const rows = summary.rows ?? [];
+  const known = rows.length > 0 && rows.every(row => row.openPnl != null && row.fees != null);
+  return known ? rows.reduce((total, row) => total + row.openPnl! + row.fees!, 0) : summary.openPnl;
 }
 
 /** Nejstarší kotace IBKR, kterou smí pojistka utažení SL použít místo ceny z P&L brokera. */

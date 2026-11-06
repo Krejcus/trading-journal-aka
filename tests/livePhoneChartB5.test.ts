@@ -255,7 +255,7 @@ describe('statika B5: odeslání jen tlačítkem, přehrávání nic, zobrazení
     // Dvě odesílací místa vstupu: lišta Koupit/Prodat a submitSheetDraft (stejný příkaz jako náhled).
     expect(phone.match(/void send\(/g)).toHaveLength(2);
     expect(phone).toMatch(/void send\(livePhoneSheetPayload\(draft, LIVE_PHONE_INSTRUMENT, quote, trade\?\.frontContract \?\? null\)\);/);
-    expect(phone).toMatch(/void send\(livePhoneBareMarket\(side, pill\.qty, quote!\)\);/);
+    expect(phone).toMatch(/void send\(scaleIn \? livePhonePillScaleIn\(side, pill\.qty, quote!, scaleIn, trade!\.maxContracts\) : livePhoneBareMarket\(side, pill\.qty, quote!\)\);/);
   });
 
   it('přehrávání: odeslání listu/lišty i lišta Koupit/Prodat nejdřív kontrolují replay; lišta, návrh a vrstva čar schované', () => {
