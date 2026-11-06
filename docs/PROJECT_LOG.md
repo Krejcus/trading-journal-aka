@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-06 ráno — LIVE po výpadku IBKR a návratu z pozadí (Claude, větev `claude/live-open-fixes-20261106`, nenasazeno)
+### 2026-11-06 ráno — LIVE po výpadku IBKR a návratu z pozadí (Claude, web + worker NASAZENY `c6272563`, iPhone čeká)
 
 - **Podklad:** Filipova videa z iPhonu v 06:30 a 06:33. IBKR hlásilo 1100 v 06:28:41–06:31:26 (i den předtím v 06:28:25, pravděpodobně noční restart, ze dvou případů nejisté), záloha z TV nedala svíčky (`no-1m-chart`), soubor stál do 06:32:03.
 - **Panel telefonu ukazoval close svíčky jako cenu** (26 969,25 při trhu 26 915): pojistka 0,2 % porovnávala živou cenu se starou svíčkou. Pilulka teď bez živé ceny a při návratu z pozadí ukáže „—“; pojistka roste se stářím dat 0,2 % za minutu, nejvýš 0,6 %, ale jen s potvrzenou shodou kontraktu zprávy a souboru (critic: pásmo samo jiný měsíc nepozná). Stejná pojistka u svíčky za dírou. Panel na PC dál padá na close svíčky s údajem o stáří.
@@ -296,7 +296,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Hlavička O/H/L/C** stála na svíčce ze souboru, živá svíčka ji nikdy neobnovila (`lib/liveLegend.ts`).
 - **Návrat z pozadí ~2,4 s z videa:** stream bez posluchače se budil jen kontrolou 1×/s, `nudge` v klidu nic nedělá. Nově `wake()` při začátku poslechu. Zbytek je podle kódu nové připojení kanálu; přesné rozdělení ukáže `live:resume:joined` a `live:resume:first-tick` na iPhonu, zatím nezměřeno.
 
-### 2026-11-06 — IBKR cena: `Last` místo `AllLast`, přesná dokončená minuta, otevření grafu (Claude)
+### 2026-11-06 — IBKR cena: `Last` místo `AllLast`, přesná dokončená minuta, otevření grafu (Claude, web + worker `88b52ce1`, iPhone 18 Pro Max `bea98e92`)
+
+- **Přesná svíčka proti IBKR (120 min mimo RTH):** ve 2., 7. a 37. s po přelomu 108/108 minut shodných s konečnou hodnotou, HMDS je hotové už ve 2. s. RTH zatím neověřeno.
+- **Otevřené po nasazení:** iPhone neběží na `c6272563` (Filip kolem 12:00), iPhone 13 Pro Max nedostupný, měření z Openu 15:32, kontrola kvót Realtime a Storage.
 
 - **Proč:** Filipovi vadí, že se svíčky mění. Měření na MNQZ6 mimo RTH našlo dvě
   příčiny: `AllLast` byl přesně −1,25 proti 1m svíčkám IBKR (ty se shodují s TV
