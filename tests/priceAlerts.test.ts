@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, PRICE_ALERT_TONES, alertConditionFor, alertLineCss, alertTitle,
+  DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, PRICE_ALERT_TONES, alertTagInk, alertConditionFor, alertLineCss, alertTitle,
   createLocalPriceAlertStore, movedAlert, newPriceAlert, freshPriceAlertEvents, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus, readPriceAlertState,
 } from '../lib/priceAlerts';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../lib/liveFillMarkers';
@@ -251,6 +251,13 @@ describe('upozornění na cenu na PC', () => {
     expect(good.channels.tone).toBe('urgent');
     expect(bad.line.color).toBe(DEFAULT_PRICE_ALERT.line.color);
     expect(bad.channels.tone).toBeUndefined();
+  });
+
+  it('štítek na ose má čitelný text na světlé i tmavé barvě', () => {
+    expect(alertTagInk('#ffffff')).toBe('#0f172a');
+    expect(alertTagInk('#f5b53d')).toBe('#0f172a');
+    expect(alertTagInk('#2962ff')).toBe('#ffffff');
+    expect(alertTagInk('#000000')).toBe('#ffffff');
   });
 
   it('nic neobchoduje a nesahá na kopírku ani příkazy', () => {

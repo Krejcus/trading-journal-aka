@@ -300,7 +300,7 @@ function PriceField({ price, isDark, onChange }: { price: number; isDark: boolea
   );
 }
 
-const WIDTHS: ReadonlyArray<[PriceAlertLineWidth, string]> = [['thin', 'Tenká'], ['thick', 'Tlustá'], ['none', 'Jen zvoneček']];
+const WIDTHS: ReadonlyArray<[PriceAlertLineWidth, string]> = [['thin', 'Tenká'], ['thick', 'Tlustá'], ['none', 'Jen štítek na ose']];
 const STYLES: ReadonlyArray<[PriceAlertLineStyle, string]> = [['solid', 'Plná'], ['dashed', 'Čárkovaná'], ['dotted', 'Tečkovaná']];
 const CHANNELS: ReadonlyArray<{ key: 'phone' | 'pc' | 'voice'; text: string; title: string; Icon: typeof Bell }> = [
   { key: 'phone', text: 'iPhone', title: 'Běžná notifikace, i při zamčeném telefonu', Icon: Smartphone },

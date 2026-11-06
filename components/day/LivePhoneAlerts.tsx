@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bell, X } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import {
-  PRICE_ALERT_COLORS, PRICE_ALERT_COLOR_NAMES, PRICE_ALERT_PC_OPACITY, alertConditionText, alertLineCss,
+  PRICE_ALERT_COLORS, PRICE_ALERT_COLOR_NAMES, PRICE_ALERT_PC_OPACITY, alertTagInk, alertConditionText, alertLineCss,
   type PriceAlert, type PriceAlertCondition, type PriceAlertExpiry, type PriceAlertFrequency,
   type PriceAlertLineStyle, type PriceAlertLineWidth,
 } from '../../lib/priceAlerts';
@@ -126,15 +126,19 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
               borderTop: `${css.width}px ${css.style} ${rgba(color, mouse ? Math.min(1, (alert.line.opacity ?? PRICE_ALERT_PC_OPACITY) / 100 + (selected ? 0.25 : 0)) : selected ? 0.9 : 0.55)}`,
               animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
             }} />}
-            <span aria-hidden style={{ position: 'absolute', right: 6, top: 0, transform: 'translateY(-50%)', width: 16, height: 16, borderRadius: 8, display: 'grid', placeItems: 'center', color: rgba(color, flash || selected ? 1 : 0.45), background: selected ? 'rgba(20,22,36,.72)' : 'transparent', boxShadow: selected ? `0 0 0 1px ${rgba(color, 0.55)}` : undefined, animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
+            {/* PC: místo zvonečku přes čáru štítek na cenové ose; celou dobu ukazuje cenu a jde za něj táhnout. */}
+            {mouse && <span aria-hidden data-alert-tag style={{ userSelect: 'none', position: 'absolute', left: paneWidth + 2, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 4, height: 17, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, background: rgba(color, selected || flash ? 1 : 0.88), color: alertTagInk(color), fontSize: 9.5, fontWeight: 800, fontVariantNumeric: 'tabular-nums', animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
+              <Bell size={9} strokeWidth={2.6} />{formatLivePrice(shownPrice(alert))}
+            </span>}
+            {!mouse && <span aria-hidden style={{ position: 'absolute', right: 6, top: 0, transform: 'translateY(-50%)', width: 16, height: 16, borderRadius: 8, display: 'grid', placeItems: 'center', color: rgba(color, flash || selected ? 1 : 0.45), background: selected ? 'rgba(20,22,36,.72)' : 'transparent', boxShadow: selected ? `0 0 0 1px ${rgba(color, 0.55)}` : undefined, animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
               <Bell size={10} strokeWidth={2.2} />
-            </span>
+            </span>}
             {/* Nevybrané upozornění bere dotyk jen na zvonečku (přes čáru jde graf posouvat,
                 jako u kreseb); vybrané celou čárou (tah). */}
             <div
               role="button"
               aria-label={`Upozornění ${alertConditionText(alert.condition).toLowerCase()} ${formatLivePrice(alert.price)}${spent ? ' (spuštěno)' : ''}`}
-              style={{ position: 'absolute', left: wholeLine ? 0 : undefined, right: 0, width: wholeLine ? undefined : 30, top: mouse ? -5 : selected ? -9 : -12, height: mouse ? 10 : selected ? 18 : 24, pointerEvents: 'auto', touchAction: 'none', cursor: wholeLine ? 'ns-resize' : 'pointer' }}
+              style={{ position: 'absolute', left: wholeLine ? 0 : undefined, userSelect: 'none', right: mouse ? -scaleWidth : 0, width: wholeLine ? undefined : 30, top: mouse ? -5 : selected ? -9 : -12, height: mouse ? 10 : selected ? 18 : 24, pointerEvents: 'auto', touchAction: 'none', cursor: wholeLine ? 'ns-resize' : 'pointer' }}
               // Kolečko nad čárou patří grafu (vrstva je jeho sourozenec, sama by ho nepředala).
               onWheel={mouse ? event => {
                 const canvas = document.elementsFromPoint(event.clientX, event.clientY).find(element => element.tagName === 'CANVAS');
@@ -177,12 +181,12 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
             />
             {selected && <>
               <button type="button" className="dj-btn" aria-label="Zrušit upozornění" onPointerDown={event => event.stopPropagation()} onClick={() => onRemove(alert.id)}
-                style={{ position: 'absolute', right: 28, top: 0, transform: 'translateY(-50%)', width: 18, height: 18, borderRadius: 9, border: '1px solid rgba(251,113,133,.5)', background: 'rgba(239,70,85,.28)', color: '#fecaca', display: 'grid', placeItems: 'center', padding: 0, pointerEvents: 'auto', cursor: 'pointer' }}>
+                style={{ position: 'absolute', right: mouse ? 6 : 28, top: 0, transform: 'translateY(-50%)', width: 18, height: 18, borderRadius: 9, border: '1px solid rgba(251,113,133,.5)', background: 'rgba(239,70,85,.28)', color: '#fecaca', display: 'grid', placeItems: 'center', padding: 0, pointerEvents: 'auto', cursor: 'pointer' }}>
                 <X size={11} />
               </button>
-              <span style={{ position: 'absolute', left: paneWidth + 2, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 4, height: 18, borderRadius: 4, display: 'grid', placeItems: 'center', background: rgba(color, 0.8), color: '#fff', fontSize: 9.5, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+              {!mouse && <span style={{ position: 'absolute', left: paneWidth + 2, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 4, height: 18, borderRadius: 4, display: 'grid', placeItems: 'center', background: rgba(color, 0.8), color: '#fff', fontSize: 9.5, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
                 {formatLivePrice(shownPrice(alert))}
-              </span>
+              </span>}
             </>}
           </div>
         );
