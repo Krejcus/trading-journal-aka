@@ -291,6 +291,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 ### 2026-11-06 — „Do fillu“ z IBKR a texty bez TradingView (Claude, větev `claude/tv-exit-rest-20261106`, nenasazeno)
 
 - `marketPrices` při `--tv off` z kotace IBKR (`copierMarketPricesFromQuote`), jen zobrazení. Čip dne bez tlačítka restartu TV, texty míří na worker a IB Gateway. Menu bar Macu a dialogy snímků zatím beze změny.
+### 2026-11-06 — Telefon: lišta pozice jen záložně, lišta obchodu podle tématu (Claude, větev claude/phone-bar-pill-20261106)
+
+- Filip: černá lišta nad grafem pryč. × je na čáře (holá pozice ho má nově i na telefonu), SL/TP přes ✎ a štítky. Lišta zůstává jen, když čára zavřít neumí (přehrávání, kopírka vypnutá, pozice mimo appku); Flatten All je na Dashboardu.
+- Lišta KOUPIT/PRODAT měla ve světlém tématu natvrdo tmavý podklad, teď se řídí tématem. Část větve claude/phone-resume-20261105 o návratu dat se nepřenesla, `main` to řeší jinak.
 
 ### 2026-11-06 — Provoz bez TradingView (Claude, web + worker `8d4bccd4` NASAZENY s `--tv off`, iPhone 18 Pro Max nainstalovaný, Filip „Vypnuto, nasaď“)
 

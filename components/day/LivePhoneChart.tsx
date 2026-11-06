@@ -12,7 +12,7 @@ import LivePhoneOrderSheet, { livePhoneSheetPayload } from './LivePhoneOrderShee
 import LivePhoneDraftBar from './LivePhoneDraftBar';
 import LivePhoneManageSheet from './LivePhoneManageSheet';
 import LivePhoneReplayLiveChip from './LivePhoneReplayLiveChip';
-import { LivePhoneAttachSheet, LivePhoneCancelPendingChip, LivePhonePositionBar, createLivePhoneBarClose, useLivePhoneBarGuard } from './LivePhoneLiveActions';
+import { LivePhoneAttachSheet, LivePhoneCancelPendingChip, LivePhonePositionBar, livePhonePositionBarShown, createLivePhoneBarClose, useLivePhoneBarGuard } from './LivePhoneLiveActions';
 import { LIVE_ACTION_CHANGED_TEXT } from '../../lib/liveClickGate';
 import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/liveCommandRuns';
 import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
@@ -332,6 +332,11 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const cancelPendingChip = livePhoneCancelPendingChipShown({
     cancelPending: trade?.cancelPending, canCancel: trade?.cancelPendingEntries != null, barManage: trade?.manage != null, position,
   });
+  // Lišta nad grafem se v běžném provozu nekreslí (Filip 5. 11.): × je na čáře, SL/TP na ✎ a štítcích.
+  // Zůstává jen, když čára zavřít neumí (přehrávání, kopírka vypnutá, pozice mimo appku): bez ní by v grafu nebyla cesta ven.
+  const positionBarShown = (replay: boolean) => livePhonePositionBarShown({
+    position, replay, manage: trade?.manage != null, closeSupported: trade?.closeSupported === true, bareCloseEnabled: trade?.bareClose?.enabled === true && trade.closeBare != null,
+  });
   const barBareClose = (key: string) => {
     const offer = barTradeRef.current?.bareClose ?? null;
     if (!offer || offer.key !== key) { say('Holá pozice se mezitím změnila — nic se neodeslalo.'); return; }
@@ -620,6 +625,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             guardAt={guardAt}
             displayOpenPnl={displayOpenPnl}
             manage={trade?.manage ?? null}
+            bareClose={trade?.closeBare && trade.bareClose?.enabled ? { entryOperationId: trade.bareClose.trade.entryOperationId, key: trade.bareClose.key } : null}
+            onBareClose={barBareClose}
             attach={attachChipBridge}
             moveLimit={trade?.moveLimit === true}
             pendingLegs={trade?.pendingLegs === true}
@@ -658,17 +665,17 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
         chartLayer: ({ lastPrice, api, candles, intervalSeconds, replay, exitReplay }) => <>
           <LiveFillArrows api={api} fills={shownFills} open={slots.fillsOpen === true} candles={candles} intervalSeconds={intervalSeconds} enabled={!replay && slots.fillsOpen != null && shownFills.length > 0} isDark={isDark} />
-          {!replay && <LivePhoneWorkingBadges badges={working.badges} top={(position ? BELOW_POSITION_BAR : 8) + (cancelPendingChip ? CANCEL_PENDING_CHIP_SPACE : 0)} />}
+          {!replay && <LivePhoneWorkingBadges badges={working.badges} top={(positionBarShown(replay) ? BELOW_POSITION_BAR : 8) + (cancelPendingChip ? CANCEL_PENDING_CHIP_SPACE : 0)} />}
           {/* C7: „Zrušit čekající“ jen s pohledem desku a mimo přehrávání; sdílený zámek čar. */}
           {!replay && cancelPendingChip && trade?.cancelPending && trade.cancelPendingEntries && <LivePhoneCancelPendingChip
             view={trade.cancelPending}
             lockRef={lineState.busyRef}
             cancel={trade.cancelPendingEntries}
-            top={position ? BELOW_POSITION_BAR : 8}
+            top={positionBarShown(replay) ? BELOW_POSITION_BAR : 8}
             onNotice={say}
           />}
           <LiveTradeToasts events={slots.copyEvents} copierArmed={slots.copierArmed ?? false} isDark={isDark} placement={{ left: 8, bottom: chartDraft && !replay ? draftBarBottom + 72 : 84 }} extra={cards} />
-          {position && <LivePhonePositionBar
+          {positionBarShown(replay) && position && <LivePhonePositionBar
             side={position.side} quantity={position.quantity} symbol={position.symbol} pending={position.pending}
             unprotected={position.bareEntryOperationId != null} busy={busy}
             onAttach={() => { if (marketNow == null) say('Cena není čerstvá — SL/TP teď nejde připravit.'); else setAttachOpen(true); }}
@@ -687,7 +694,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             onSwallowed={() => say(LIVE_ACTION_CHANGED_TEXT)}
           />}
           {/* Přehrávání (U3): štítek živého stavu a cesta zpět; obchodovat jde jen v živém grafu. */}
-          {replay && <LivePhoneReplayLiveChip position={replayLive} pnl={chartPosition.summary?.openPnl ?? null} top={position ? BELOW_POSITION_BAR : 8} onExit={exitReplay} />}
+          {replay && <LivePhoneReplayLiveChip position={replayLive} pnl={chartPosition.summary?.openPnl ?? null} top={positionBarShown(replay) ? BELOW_POSITION_BAR : 8} onExit={exitReplay} />}
           {/* Lišta návrhu (U2): [Odeslat] = stejná cesta jako tlačítko listu (submitSheetDraft). */}
           {chartDraft && !replay && lastPrice != null && (
             <LivePhoneDraftBar
@@ -703,7 +710,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             />
           )}
           {/* Při přehrávání je graf historický: lišta by poslala živý Market nad starými svíčkami (N1, 3. 11.). */}
-          {!replay && <LiveTradePill prefs={pill} onPrefs={savePill} bid={resuming ? null : quote?.bid ?? null} ask={resuming ? null : quote?.ask ?? null} onQty={() => setQtySheet(true)} onSide={side => onSide(side, replay)} />}
+          {!replay && <LiveTradePill isDark={isDark} prefs={pill} onPrefs={savePill} bid={resuming ? null : quote?.bid ?? null} ask={resuming ? null : quote?.ask ?? null} onQty={() => setQtySheet(true)} onSide={side => onSide(side, replay)} />}
           {notice && <LiveChartNotice key={notice.key} text={notice.text} onDone={clearNotice} />}
         </>,
         // Menu ⋯: zvuk / hlas při fillu (U7) — opt-in, výchozí Vypnuto.

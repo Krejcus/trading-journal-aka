@@ -22,7 +22,9 @@ export const formatLivePrice = (price: number | null) => (
  * Za mřížku jde posunout (poloha se pamatuje), ⇅ ve spodní liště ji schová.
  * Jen zobrazení: Prodat / Koupit volají `onSide` a sama nic neodesílá.
  */
-export function LiveTradePill({ prefs, onPrefs, bid, ask, onQty, onSide }: {
+export function LiveTradePill({ isDark = true, prefs, onPrefs, bid, ask, onQty, onSide }: {
+  /** Podklad lišty podle tématu (světlé téma dřív mělo tmavou lištu a nečitelný počet). */
+  isDark?: boolean;
   prefs: LivePillPrefs;
   onPrefs: (next: LivePillPrefs) => void;
   bid: number | null;
@@ -64,9 +66,9 @@ export function LiveTradePill({ prefs, onPrefs, bid, ask, onQty, onSide }: {
         top: `calc(6px + (100% - ${PILL_HEIGHT}px - 34px) * ${pos.y})`,
         display: 'flex', alignItems: 'stretch', padding: 3, borderRadius: 12,
         border: `1px solid ${dragging ? 'rgba(157,183,255,.6)' : 'var(--dj-line)'}`,
-        background: 'var(--dj-glass, rgba(13,18,27,.92))',
+        background: isDark ? 'rgba(13,18,27,.92)' : 'rgba(255,255,255,.92)',
         backdropFilter: 'blur(24px) saturate(180%)', WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-        boxShadow: '0 14px 34px -16px rgba(0,0,0,.75)',
+        boxShadow: isDark ? '0 14px 34px -16px rgba(0,0,0,.75)' : '0 10px 24px -14px rgba(15,23,42,.35)',
         opacity: prefs.on ? 1 : 0,
         pointerEvents: prefs.on ? 'auto' : 'none',
         transform: !prefs.on ? 'translateY(14px) scale(.96)' : dragging ? 'scale(1.04)' : 'none',
