@@ -150,7 +150,7 @@ import {
 } from '../lib/tradovateLiveTab';
 import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
-import { supportsCopierManualOrderPendingLegs } from '../lib/copierWorkerCapabilities';
+import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit } from '../lib/copierWorkerCapabilities';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
@@ -1206,6 +1206,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (entry.source === 'position' && action !== 'move-stop' && action !== 'move-target' && action !== 'close-position') {
       throw new Error('U pozice s přikoupením jde z čar jen posun SL/TP, zavření a zrušení čekajícího přikoupení.');
     }
+    if (action === 'move-limit' && (entry.source !== 'own' || !supportsCopierManualOrderMoveLimit(current.status))) throw new Error('Worker posun limitu nepodporuje — nic se neodeslalo.');
     const command = buildLeaderOrderManageCommand({
       groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
       leaderAccountId: executionGroup.leaderAccountId,
@@ -1326,6 +1327,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       // Správa z čar = PŘESNĚ deskový `manageLeaderEntry` a za stejné podmínky jako PC graf
       // (`onManageEntry`); × u pozice jako PC `canClose`; BE průměr jen ze stavu pollu (jako PC).
       pendingLegs: supportsCopierManualOrderPendingLegs(agentStatus),
+      moveLimit: supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own',
       ...livePhoneManageFields({
         manageSupported: supportsCopierManualOrderManage(agentStatus), closeCapability: supportsCopierManualOrderClose(agentStatus),
         ownEntry: ownManualEntry, manage: manageLeaderEntry, runtimeAvailable,
@@ -2031,6 +2033,7 @@ acceptAgentStatus((await executeAgent({
           manageEntryAvgPrice={chartLive.status === agentStatus ? ownManualEntry?.entryAvgPrice ?? null : null}
           manageCloseSupported={supportsCopierManualOrderClose(agentStatus)}
           managePendingLegsSupported={supportsCopierManualOrderPendingLegs(agentStatus)}
+          manageMoveLimitSupported={supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own'}
           entryMarketSupported={supportsCopierManualEntryMarket(agentStatus)}
           entryMaxContracts={manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null)}
           entryFrontContract={entryFrontContract}

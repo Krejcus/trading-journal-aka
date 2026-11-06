@@ -294,6 +294,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Smazaná aplikace už nesmí shodit worker:** `spawn` měl chybu bez posluchače. `ALPHATRADE_SNAPSHOTS=off` už nevypíná cenu, upozornění ani svíčky.
 - **Bez TV:** po pádu vlákna dál IBKR místo 30 min TV, jistič se znovu zapne po 30 min, tichý výpadek z 120 s ticha v otevřené seanci, oznámení netvrdí zálohu, telefon po 5 s ukáže „Živá cena teď nechodí“.
 - **Známé limity:** odhlášení IB Gateway nejde bez člověka obnovit a do přihlášení není cena; svátky mohou dát falešné oznámení; menu bar Macu ukazuje žlutou sekci snímků a „Do fillu“ zmizí. Bez TV navíc: po startu vlákna není cena do první celé minuty, po tichu nad 15 s plus 5 s hystereze asi 20 s bez ceny (Market blokovaný), při `hmdsBroken` stojí soubor svíček a graf se může po 180 s zastavit (neověřeno). Zbývá `marketPrices` z IBKR, úklid UI, vlastní snímky a týden zkoušky.
+### 2026-11-06 (Codex, schválené nasazení LIVE speed)
+Uživatel po předchozím odkladu výslovně požádal „v tom případě to nasaď a změř“. Produkční migrace 20261106132322_copier_move_limit_brake aplikována po samostatné záloze funkce; nová akce pod stejnou brzdovou transakcí, oprávnění anon/authenticated zůstala vypnutá. Web/worker/iPhone a skutečné měření po změně zatím čekají na finální release. Starší zápis o pouze lokálním stavu platil před tímto pokynem.
+
+### 2026-11-06 — Codex: lokální move-limit + oprava ACK bariéry, čeká nasazení a přeměření
+
+- Izolovaný checkout `/private/tmp/alphatrade-speed-20261106`, větev `codex/live-command-speed-on-main`, základ1986b1a6 ověřený přes ls-remote. Dočasně prověřený51851a14 je jen v Claudově větvi; do vydání NENÍ zahrnut. Documents kód zůstává nedotčený; tato položka je předávka, ne tvrzení o produkci.
+- `move-limit`: telefon i PC přes společný relay/controller, vlastní nevyplněný MNQ Limit, manual-only local-only DEMO bez followerů s pending-legs opt-inem; nová capability. Jeden Modify stejného ID a qty, SL/TP beze změny. Očekávaná cena, čerstvá kotace stejného kontraktu,8tick rezerva mimo trh, flat, risk a ochranné nohy ověřené před i po durable sending. Fill/změna nohou/OFF při ukládání nic neodešle. Unknown se neopakuje.
+- Oprava rychlosti: čistý WS write ACK už nevytváří díru v semanticFrameSequence, která zbytečně bránila použití následující OrderVersion místo čekání na REST. Skutečné/poškozené sémantické zprávy zůstávají bariérou, pořadí fillů se nemění. Regrese bez opravy selhala; žádné tvrzení o živém zrychlení zatím.
+- Nová lokální migrace20261106125237 přidává move-limit do supersede OFF/Kill; fallback relaye také. Produkční funkce jen přečtena, shodná s původní migrací; definice+grants zálohovány `/private/tmp/at-speed-brake-backup-20261106.sql`. Nic v DB nezměněno.
+- Ověření: celá sada při integrační kontrole s51851a14:7920 zelených/1todo; finální sada na produkčním základu1986b1a6 se opakuje; první běh měl jeden fail v deferred follower fill, samostatně18/18 a finální celé opakování čisté. Poslední dotčené regrese51/51, skutečný dočasný Postgres18:26/26 (zastaven). TypeScript, finální web build a3 worker bundly PASS. npm ci se nespouštělo přes symlink sdílených závislostí.
+- V browseru skutečný telefonní overlay390px s fake cenami/manage: výběr a tah29500→29498 vytvořil1 volání, SL29480/TP29560 stejné; bez capability entry netáhnutelná. Syntetická UI kontrola, nikoli fyzický telefon/brokerové měření. Při fillu se kreslí skutečná cena pozice, ne čekající cena posunu.
+- Podrobná předávka: `docs/reviews/live-command-speed-20261106.md` v izolovaném checkoutu. Zatím bez commitu/pushe/deploye/reinstalu/iOS instalace a bez dalších brokerových příkazů. Uživatel odpověděl „Zatím ponechat pouze lokálně“: nasazení je odložené, žádná další akce směrem k produkci či brokerovi bez nového pokynu. Měření PO na PC a fyzickém telefonu je povinný nedokončený krok. Telefon nelze dálkově ovládat, bude potřeba ruční klepání uživatele jako při baseline.
+
+
+
 
 ### 2026-11-06 — Návrat z pozadí: spadlá obsluha popředí a probuzení workeru (Claude, web + worker + iPhone 18 Pro Max NASAZENY `fe8aa016`)
 

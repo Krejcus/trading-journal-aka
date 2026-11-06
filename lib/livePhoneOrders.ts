@@ -39,6 +39,7 @@ export interface LivePhoneTradeBridge {
    */
   /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu (`manual-order-pending-legs-v1`). */
   pendingLegs?: boolean;
+  moveLimit?: boolean;
   manage?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
   /** × u pozice: worker umí zavřít a kopírka je čerstvě zapnutá (ne shadow) — jako PC. */
   closeSupported?: boolean;

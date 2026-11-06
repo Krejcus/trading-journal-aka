@@ -22,7 +22,7 @@ import type { LiveManageIntent, LiveManageLeg } from '../lib/liveManagePrices';
 export type LiveManageCallback = (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
 
 /** Odeslaný posun čekající na potvrzení: čára drží novou cenu se štítkem „odesílám“. */
-export interface LiveManagePendingMove { kind: LiveManageLeg; price: number; until: number }
+export interface LiveManagePendingMove { kind: LiveManageLeg | 'entry'; price: number; until: number }
 
 /**
  * Zámek „jeden příkaz naráz“ a „odesílám“. Tvarem shodné s `LivePhoneLineState`
@@ -72,7 +72,8 @@ export function liveManageResultNotice(action: LeaderOrderManageAction, result: 
     if (result.reason && ACK_WARNING_PATTERN.test(result.reason)) return { tone: 'warn', text: result.reason, at };
     return {
       tone: 'ok', at,
-      text: action === 'cancel-entry' ? 'Vstup zrušen; kopírka zruší kopie.'
+      text: action === 'move-limit' ? 'Limit posunut; SL a TP zůstaly na původních cenách.'
+        : action === 'cancel-entry' ? 'Vstup zrušen; kopírka zruší kopie.'
         : action === 'close-position' ? 'Leader zavřen; kopírka zavírá kopie.'
           : action === 'attach-brackets' ? 'SL a TP doplněny u leadera; kopírka je doplní kopiím.'
             : 'Posunuto u leadera; kopírka posune kopie.',
@@ -128,7 +129,7 @@ export function createLiveManageRun(deps: LiveManageRunDeps) {
     return { called, status, notice };
   };
   return async (
-    action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: LiveManageLeg,
+    action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: LiveManageLeg | 'entry',
   ): Promise<LiveManageOutcome> => {
     const manage = deps.manage();
     if (!manage) return finish({ tone: 'bad', text: 'Správa obchodu z appky teď nejde — nic se neodeslalo.', at: now() }, false, 'not-sent');
@@ -189,7 +190,7 @@ export interface UseLiveManageRunnerOptions {
    * Současné SL / TP z read modelu brokera: „odesílám“ zmizí, jakmile cena dosedne
    * (nebo po `LIVE_MANAGE_PENDING_HOLD_MS` od potvrzení). Bez něj to hlídá volající.
    */
-  landed?: { stopLoss: number | null | undefined; takeProfit: number | null | undefined };
+  landed?: { entry?: number | null; stopLoss: number | null | undefined; takeProfit: number | null | undefined };
 }
 
 export type LiveManageRequest =
@@ -205,7 +206,7 @@ export interface LiveManageRunner {
   clearResult: () => void;
   pendingMove: LiveManagePendingMove | null;
   /** Přímý běh se stejným podpisem jako dosavadní `runLiveManage` / telefonní `run`. */
-  run: (action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: LiveManageLeg) => Promise<LiveManageOutcome>;
+  run: (action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: LiveManageLeg | 'entry') => Promise<LiveManageOutcome>;
   /** Záměr z `lib/liveManagePrices`: první klik odesílá. Záměr počítej při každém kliku znovu. */
   request: (intent: LiveManageIntent) => LiveManageRequest;
 }
@@ -223,17 +224,18 @@ export function useLiveManageRunner(options: UseLiveManageRunnerOptions): LiveMa
   // Ref kvůli dvěma klikům v jednom snímku (stav by ještě nebyl překreslený).
   const lastClickRef = useRef<LiveClickState | null>(null);
 
+  const landedEntry = options.landed?.entry;
   const landedStop = options.landed?.stopLoss;
   const landedTarget = options.landed?.takeProfit;
   const watchLanding = options.landed != null;
   useEffect(() => {
     if (!watchLanding || !pendingMove) return undefined;
-    const landed = pendingMove.kind === 'stopLoss' ? landedStop : landedTarget;
+    const landed = pendingMove.kind === 'entry' ? landedEntry : pendingMove.kind === 'stopLoss' ? landedStop : landedTarget;
     if (landed === pendingMove.price) { setPendingMove(null); return undefined; }
     if (!Number.isFinite(pendingMove.until)) return undefined;
     const timer = window.setTimeout(() => setPendingMove(null), Math.max(0, pendingMove.until - Date.now()));
     return () => window.clearTimeout(timer);
-  }, [watchLanding, pendingMove, landedStop, landedTarget, setPendingMove]);
+  }, [watchLanding, pendingMove, landedEntry, landedStop, landedTarget, setPendingMove]);
 
   const run = useMemo(() => createLiveManageRun({
     manage: () => manageRef.current,

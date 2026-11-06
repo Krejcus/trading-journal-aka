@@ -263,3 +263,76 @@ describe('klasifikace replaced vlastní nohy', () => {
     expect(replacedOrderIncreasesExposure({ ...base, ownLegQuantity: null })).toBe(true);
   });
 });
+
+
+describe('posun vlastního čekajícího limitu', () => {
+  it('mění jen cenu původního vstupu, zachová id, množství a ochranné nohy; replay nezapisuje podruhé', async () => {
+    const ctx = await setup();
+    const entry = ctx.broker.orders().find(o => o.side === 'Buy')!;
+    const before = ctx.broker.orders().map(o => ({ ...o }));
+    const result = await manage(ctx, 'move-limit', ENTRY, ENTRY - 1, 'manage:limitmove01');
+    expect(result.status).toBe('acknowledged');
+    expect(ctx.modified).toEqual([{ id: entry.brokerOrderId, quantity: 1, limitPrice: ENTRY - 1, stopPrice: undefined }]);
+    expect(ctx.broker.orders().filter(o => o.side === 'Sell')).toEqual(before.filter(o => o.side === 'Sell'));
+    expect((await manage(ctx, 'move-limit', ENTRY, ENTRY - 1, 'manage:limitmove01')).status).toBe('acknowledged');
+    expect(ctx.modified).toHaveLength(1);
+  });
+  it('bez instalačního opt-inu neodešle nic', async () => {
+    const ctx = await setup({ on: false });
+    expect(codes(await manage(ctx, 'move-limit', ENTRY, ENTRY - 1, 'manage:limitoff001'))).toContain('unsupported');
+    expect(ctx.modified).toEqual([]);
+  });
+  it('neodešle změnu proti staré ceně', async () => {
+    const ctx = await setup();
+    expect(codes(await manage(ctx, 'move-limit', ENTRY - 1, ENTRY - 2, 'manage:limitstale1'))).toContain('order-changed');
+    expect(ctx.modified).toEqual([]);
+  });
+  it('bez čerstvé kotace neodešle nic', async () => {
+    const ctx = await setup(); ctx.noQuote.value = true;
+    expect(codes(await manage(ctx, 'move-limit', ENTRY, ENTRY - 1, 'manage:limitquote1'))).toContain('limit-too-close');
+    expect(ctx.modified).toEqual([]);
+  });
+  it('neposune limit přes trh ani přes ochranný SL', async () => {
+    const ctx = await setup();
+    expect(codes(await manage(ctx, 'move-limit', ENTRY, 29510, 'manage:limitcross1'))).toContain('limit-too-close');
+    expect(codes(await manage(ctx, 'move-limit', ENTRY, SL, 'manage:limitcross2'))).toContain('leg-side');
+    expect(ctx.modified).toEqual([]);
+  });
+  it('fill během ukládání záměru zastaví zápis', async () => {
+    const ctx = await setup();
+    ctx.onCommit.fn = () => {
+      ctx.onCommit.fn = null;
+      const entry = ctx.broker.orders().find(o => o.side === 'Buy')!;
+      entry.status = 'filled'; entry.filledQuantity = 1;
+      ctx.broker.emitEvent({ type: 'order', order: { ...entry } });
+      ctx.broker.setPosition(LEADER, SYMBOL, 1);
+      ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYMBOL, netQuantity: 1 } });
+    };
+    expect((await manage(ctx, 'move-limit', ENTRY, ENTRY - 1, 'manage:limitrace01')).status).toBe('blocked');
+    expect(ctx.modified).toEqual([]);
+  });
+});
+
+
+describe('posun limitu: změna pojistek při ukládání', () => {
+  it.each(['off', 'stale-quote', 'changed-stop'])('%s nepustí změnu po uložení sending', async change => {
+    const ctx = await setup();
+    ctx.onCommit.fn = () => {
+      ctx.onCommit.fn = null;
+      if (change === 'off') ctx.controller.disarm();
+      else if (change === 'stale-quote') ctx.noQuote.value = true;
+      else {
+        const stop = leg(ctx.broker, 'Stop'); stop.stopPrice = ENTRY - 0.25;
+        ctx.broker.emitEvent({ type: 'order', order: { ...stop } });
+      }
+    };
+    const result = await manage(ctx, 'move-limit', ENTRY, ENTRY - 1, `manage:limitguard${change.replaceAll('-', '')}`);
+    expect(result.status).toBe('blocked');
+    expect(ctx.modified).toEqual([]);
+  });
+  it('neshodné množství neposune', async () => {
+    const ctx = await setup();
+    expect(codes(await manage(ctx, 'move-limit', ENTRY, ENTRY - 1, 'manage:limitqty001', 2))).toContain('order-changed');
+    expect(ctx.modified).toEqual([]);
+  });
+});

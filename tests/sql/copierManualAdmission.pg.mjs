@@ -13,6 +13,8 @@ const url = process.env.PG_URL ?? 'postgres://postgres@127.0.0.1:54329/postgres'
 const migration = await readFile(new URL('../../supabase/migrations/20261101090849_copier_manual_admission.sql', import.meta.url), 'utf8');
 const boundDeliveryMigration = await readFile(new URL('../../supabase/migrations/20261104115354_copier_manual_admission_bound_delivery.sql', import.meta.url), 'utf8');
 
+const moveLimitMigration = await readFile(new URL('../../supabase/migrations/20261106132322_copier_move_limit_brake.sql', import.meta.url), 'utf8');
+
 const USER = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const DEV1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
@@ -95,6 +97,7 @@ before(async () => {
   `);
   await admin.query(migration);
   await admin.query(boundDeliveryMigration);
+  await admin.query(moveLimitMigration);
 });
 
 after(async () => {
@@ -521,12 +524,14 @@ test('brzda: superseduje ARM/SHADOW téhož zařízení a ruční příkazy cel�
   const ids = {};
   ids.entry = (await admit(client, entry(), { device: DEV2 })).id;
   ids.cancel = (await admit(client, manage({ entryOperationId: 'entry:t-trade-sup1' }, 'cancel-entry'))).id;
+  ids.limit = (await admit(client, manage({ entryOperationId: 'entry:t-trade-limit1' }, 'move-limit'))).id;
   ids.close = (await admit(client, manage({ entryOperationId: 'entry:t-trade-sup2' }, 'close-position'))).id;
   await seed([{ user_id: OTHER, device_id: FOREIGN, command_type: 'copy-command', payload: entry(), idempotency_key: opId(),
     status: 'pending', created_at: ago(100), expires_at: new Date(Date.now() + 14_000).toISOString() }]);
   const row = await brake(client, 'disarm', randomUUID(), new Date(Date.now() + 5));
   assert.equal(row.superseded_arms, 2);
-  assert.equal(row.superseded_manual, 2);
+  assert.equal(row.superseded_manual, 3);
+  assert.equal((await statusOf(ids.limit)).status, 'expired');
   assert.equal((await statusOf(ids.entry)).status, 'expired');
   assert.equal((await statusOf(ids.close)).status, 'expired');
   assert.equal((await statusOf(ids.cancel)).status, 'pending');

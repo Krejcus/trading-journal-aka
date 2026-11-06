@@ -113,6 +113,49 @@ describe('Tradovate DEMO order writes over the authenticated WebSocket', () => {
     unsubscribe();
   });
 
+  it.each([false, true])('ACK-only frame does not block adjacent metadata; semantic barrier=%s', async semanticBarrier => {
+    let resolveVersions!: (value: Response) => void;
+    const slowVersions = new Promise<Response>(resolve => { resolveVersions = resolve; });
+    const socket = new FakeSocket();
+    const events: Array<{ type: string }> = [];
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'token', accountSpec: 'DEMO8661118',
+      preferWebSocketOrderWrites: true, webSocketFactory: () => socket,
+      fetchImpl: (async input => {
+        const url = String(input);
+        if (url.includes('/orderVersion/deps?masterid=41')) return slowVersions;
+        if (url.includes('/contract/items')) return response([{ id: 7, name: 'MNQZ6' }]);
+        return response([]);
+      }) as typeof fetch,
+    });
+    const unsubscribe = broker.subscribe(event => events.push(event));
+    await completeHandshake(socket);
+    const rawOrder = { id: 41, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working' };
+    socket.deliver([{ e: 'props', d: [{ entityType: 'Order', entity: rawOrder }] }]);
+    await flush();
+    const write = broker.placeOrder(orderRequest);
+    const requestId = Number(socket.sent.at(-1)!.split('\n')[1]);
+    socket.deliver([{ i: requestId, s: 200, d: { orderId: 50, failureReason: 'Success' } }]);
+    await write;
+    if (semanticBarrier) socket.deliver([{ e: 'props', d: [{ entityType: 'Order', entity: { ...rawOrder, ordStatus: 'Filled' } }] }]);
+    socket.deliver([{ e: 'props', d: [{ entityType: 'OrderVersion', entity: { id: 41, orderId: 41, orderQty: 1, orderType: 'Market' } }] }]);
+    try {
+      if (semanticBarrier) {
+        await flush();
+        expect(events.some(event => event.type === 'order')).toBe(false);
+      } else {
+        // No REST response yet: broker metadata already delivered in the next semantic frame suffices.
+        await flush();
+        await flush();
+        expect(events.some(event => event.type === 'order')).toBe(true);
+      }
+    } finally {
+      resolveVersions(response([{ id: 41, orderId: 41, orderQty: 1, orderType: 'Market' }]));
+      await flush();
+      unsubscribe();
+    }
+  });
+
   it('falls back to REST only when no synchronized socket exists before sending', async () => {
     const calls: string[] = [];
     const broker = createTradovateBroker({

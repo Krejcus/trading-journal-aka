@@ -321,7 +321,7 @@ export interface CopierControllerStatus {
   manualOrderActions?: Array<{
     operationId: string;
     entryOperationId: string;
-    action: 'move-stop' | 'move-target' | 'cancel-entry' | 'close-position' | 'attach-brackets';
+    action: 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets';
     status: CopierManualOrderActionRecord['status'];
     createdAt: number;
     updatedAt: number;
@@ -5664,6 +5664,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const verdict = cancelEntryVerdict(order);
       return verdict ? { status: verdict.status, reason: verdict.reason } : null;
     }
+    if (action.action === 'move-limit' && (order.filledQuantity > 0 || !isOpenOrderStatus(order.status))) {
+      return { status: 'unknown', reason: 'Vstup se během posunu vyplnil nebo skončil — ověř stav pozice; posun se neopakuje.' };
+    }
     if (order.status === 'filled') {
       return { status: 'waived', reason: action.action === 'move-stop' ? 'SL se spustil — pozice zavřena stopem' : 'TP se vyplnil' };
     }
@@ -6113,6 +6116,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // C7: konec vstupu ve streamu jen spustí autoritativní čtení (fill může dorazit až po
       // Order(Canceled), INV-TRAD-02) — mimo frontu událostí, nic se neposílá.
       if (!isOpenOrderStatus(order.status)) void resolveManualOrderActionByLookup(action.operationId).catch(error => failClosed(errorOf(error), { autoClose: false }));
+      return;
+    }
+    if (action.action === 'move-limit' && (order.filledQuantity > 0 || !isOpenOrderStatus(order.status))) {
+      void resolveManualOrderActionByLookup(action.operationId).catch(error => failClosed(errorOf(error), { autoClose: false }));
       return;
     }
     const price = action.action === 'move-stop' ? order.stopPrice : order.limitPrice;
@@ -6848,6 +6855,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return prepareBareClose(command, deadlineAt, queuedFence);
     }
     if (command.scope === 'position') return preparePositionAction(command, deadlineAt, queuedFence);
+    if (command.action === 'move-limit' && !pendingLegsOn()) return manageBlocked(command, 'unsupported', 'Posun limitu vyžaduje povolený sólo DEMO režim.');
     const managed = resolveManagedTrade(command);
     if ('code' in managed) return manageBlocked(command, managed.code, managed.text);
     // Pozice s víc lístky (přikoupení) se spravuje jen jako celek; starý tvar příkazu (např.
@@ -6894,7 +6902,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const snapshotRouteEpoch = leaderRouteEpoch(leader);
     let snapshot: BrokerStreamOrderSnapshot | null = null;
     // Bez route epochy (broker bez routeru) by kontrola před zápisem nic nehlídala → REST.
-    if ((command.action === 'move-stop' || command.action === 'move-target'
+    if ((command.action === 'move-stop' || command.action === 'move-target' || command.action === 'move-limit'
       || command.action === 'close-position' || command.action === 'cancel-entry')
       && snapshotRouteEpoch !== undefined) {
       try {
@@ -6986,6 +6994,49 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (currentEntryPrice == null || command.expect.price !== currentEntryPrice || command.expect.quantity !== entryOrder.quantity) {
         return manageBlocked(command, 'order-changed', 'Vstup se od zobrazení změnil — obnov panel.');
       }
+    } else if (command.action === 'move-limit') {
+      // Only our untouched parent limit; never replace it with a new order. The
+      // existing SL/TP remain at their broker prices. A fill race is reconciled,
+      // never retried as a fresh entry.
+      const own = manualEntryRecords().find(record => record.operationId === managed.key);
+      const positions = positionsByAccount.get(leader);
+      const next = command.newPrice!;
+      if (!own || own.scaleIn || !/^MNQ[HMUZ]\d$/.test(symbol) || entryOrder.side !== own.request.side || entryOrder.orderType !== 'Limit' || entryOrder.status !== 'working'
+        || entryOrder.filledQuantity !== 0 || !positions || (positions.get(symbol) ?? 0) !== 0
+        || !stopOrder || !targetOrder || stopOrder.status !== 'pending' || targetOrder.status !== 'pending'
+        || stopOrder.orderType !== 'Stop' || targetOrder.orderType !== 'Limit'
+        || stopOrder.side !== (long ? 'Sell' : 'Buy') || targetOrder.side !== (long ? 'Sell' : 'Buy')
+        || stopOrder.symbol !== symbol || targetOrder.symbol !== symbol
+        || stopOrder.filledQuantity !== 0 || targetOrder.filledQuantity !== 0
+        || stopOrder.quantity !== entryOrder.quantity || targetOrder.quantity !== entryOrder.quantity
+        || stopOrder.stopPrice == null || targetOrder.limitPrice == null) {
+        return manageBlocked(command, 'shape', 'Posun vyžaduje vlastní nevyplněný Limit s oběma ochrannými nohami a flat účet.');
+      }
+      if (currentRuntime().state.safety.managementOnly) return manageBlocked(command, 'management-only', 'V režimu jen správa se čekající vstup neposouvá.');
+      if (currentEntryPrice !== command.expect.price || entryOrder.quantity !== command.expect.quantity) {
+        return manageBlocked(command, 'order-changed', 'Vstup se od zobrazení změnil — obnov panel.');
+      }
+      if (next === currentEntryPrice) return manageBlocked(command, 'no-change', 'Nová cena je stejná.');
+      const sideProblem = pendingLegSideProblem('stopLoss', long ? 'long' : 'short', next, 'Limit', stopOrder.stopPrice)
+        ?? pendingLegSideProblem('takeProfit', long ? 'long' : 'short', next, 'Limit', targetOrder.limitPrice);
+      if (sideProblem) return manageBlocked(command, 'leg-side', sideProblem);
+      let quote: ManualEntryWorkerQuote | null = null;
+      try { quote = options.manualEntryQuote?.('MNQ') ?? null; } catch { /* fail closed */ }
+      const market = quote?.contract === symbol ? workerMarketPrice(quote, long ? 'Buy' : 'Sell', clock()) : null;
+      if (market == null || (long ? market - next : next - market) < MANUAL_TIGHTEN_MIN_TICKS * 0.25) {
+        return manageBlocked(command, 'limit-too-close', 'Posun vyžaduje čerstvou cenu stejného kontraktu a Limit aspoň 8 ticků mimo trh.');
+      }
+      const riskRead = accountRisk.get(leader);
+      if (riskRead && lastLeaderFillObservedAt != null && riskRead.verifiedAt <= lastLeaderFillObservedAt) {
+        return manageBlocked(command, 'risk-unverified', 'Riziko po posledním fillu není ověřené.');
+      }
+      const risk = moveStopRiskBlocked(command, leader, symbol, stopOrder.brokerOrderId, entryOrder.quantity, next, stopOrder.stopPrice);
+      if (risk) return risk;
+      const others = orders.filter(order => order.symbol === symbol && isOpenOrderStatus(order.status)
+        && ![managed.entryId, managed.stopId, managed.targetId].includes(order.brokerOrderId));
+      if (others.length) return manageBlocked(command, 'other-orders', 'Na symbolu je další pracující příkaz.');
+      const reach = manageReachBlockers(managed.entryId, symbol, entryOrder.quantity);
+      if (reach.length) return manageResult(command, 'blocked', { blockers: reach.map(text => ({ code: 'reach', text })) });
     } else if (command.action === 'close-position') {
       // Fáze 2d: zavřít obchod leadera (liquidate), kopírka zrcadlí zrušení nohou a exit.
       // Jen čistý tvar spravovaného obchodu (jednoznačný cíl; liquidate ruší vše na kontraktu).
@@ -7132,11 +7183,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const reach = manageReachBlockers(target.brokerOrderId, symbol, quantity);
       if (reach.length > 0) return manageResult(command, 'blocked', { blockers: reach.map(text => ({ code: 'reach', text })) });
     }
-    const targetOrderId = command.action === 'cancel-entry' || command.action === 'close-position' ? managed.entryId
+    const targetOrderId = command.action === 'cancel-entry' || command.action === 'close-position' || command.action === 'move-limit' ? managed.entryId
       : command.action === 'move-stop' ? managed.stopId : managed.targetId;
     const targetLive = byId.get(targetOrderId)!;
     const createdAt = clock();
-    const fromPrice = command.action === 'cancel-entry' ? currentEntryPrice
+    const fromPrice = command.action === 'cancel-entry' || command.action === 'move-limit' ? currentEntryPrice
       : command.action === 'close-position' ? (stopOrder?.stopPrice ?? null)
         : command.action === 'move-stop' ? (targetLive.stopPrice ?? null) : (targetLive.limitPrice ?? null);
     // C12: vlastní čekající vstup PRÁVĚ ruší kopírka sama (automatické zrušení běží) — druhé zrušení
@@ -7261,6 +7312,32 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return finish('not-sent', 'Mezitím se změnilo spojení leadera — nic se neodeslalo.');
       }
       if (command.action === 'close-position') return executeClose(command, finish, { leader, symbol, managed, quantity: targetLive.quantity, generation, queuedFence, timing });
+      if (command.action === 'move-limit') {
+        let quote: ManualEntryWorkerQuote | null = null;
+        try { quote = options.manualEntryQuote?.('MNQ') ?? null; } catch { /* fail closed */ }
+        const market = quote?.contract === symbol ? workerMarketPrice(quote, long ? 'Buy' : 'Sell', clock()) : null;
+        const currentStop = liveOrdersByAccount.get(leader)?.get(managed.stopId);
+        const currentTarget = liveOrdersByAccount.get(leader)?.get(managed.targetId);
+        if (!pendingLegsOn() || currentRuntime().state.safety.managementOnly || market == null
+          || (long ? market - command.newPrice! : command.newPrice! - market) < MANUAL_TIGHTEN_MIN_TICKS * 0.25
+          || currentStop?.status !== 'pending' || currentTarget?.status !== 'pending'
+          || currentStop.quantity !== targetLive.quantity || currentTarget.quantity !== targetLive.quantity
+          || currentStop.filledQuantity !== 0 || currentTarget.filledQuantity !== 0
+          || currentStop.orderType !== 'Stop' || currentTarget.orderType !== 'Limit'
+          || currentStop.side !== stopOrder?.side || currentTarget.side !== targetOrder?.side
+          || currentStop.stopPrice !== stopOrder?.stopPrice || currentTarget.limitPrice !== targetOrder?.limitPrice
+          || moveStopRiskBlocked(command, leader, symbol, managed.stopId, targetLive.quantity, command.newPrice!, currentStop.stopPrice!)) {
+          return finish('not-sent', 'Podmínky posunu limitu se mezitím změnily — nic se neodeslalo.');
+        }
+        const live = liveOrdersByAccount.get(leader)?.get(managed.entryId);
+        if (!live || live.status !== 'working' || live.filledQuantity !== 0
+          || live.orderType !== 'Limit' || live.side !== entryOrder.side || live.symbol !== symbol
+          || live.limitPrice !== command.expect.price || live.quantity !== command.expect.quantity
+          || !positionsByAccount.has(leader) || (positionsByAccount.get(leader)?.get(symbol) ?? 0) !== 0
+          || (pendingTradeIngressByAccount.get(leader) ?? 0) > 0 || manualEntryCancelRunning.has(managed.key)) {
+          return finish('not-sent', 'Čekající vstup se mezitím změnil — nic se neodeslalo.');
+        }
+      }
       if (pendingLegMove) {
         // Synchronně těsně před zápisem: během ukládání záznamu mohl přijít fill nebo zrušení (INV-TRAD-02, C12).
         const liveEntry = liveOrdersByAccount.get(leader)?.get(managed.entryId);
@@ -7348,7 +7425,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // ani read modelu se nezapisuje, zrcadlení followerům jde dál přes eventTail.
         const heldConfirmation = outcome.confirmation?.confirmedBy === 'stream-held';
         const confirmed = outcome.confirmation?.confirmedBy === 'stream-replaced' || (heldConfirmation && pendingLegMove) ? (outcome.confirmation as BrokerModifyConfirmation).order : null;
-        if (confirmed && confirmed.brokerOrderId === targetOrderId && confirmed.accountId === leader
+        if (confirmed && (command.action !== 'move-limit' || confirmed.filledQuantity === 0) && confirmed.brokerOrderId === targetOrderId && confirmed.accountId === leader
           && isOpenOrderStatus(confirmed.status) && confirmed.orderType === targetLive.orderType
           && confirmed.quantity === targetLive.quantity
           && (command.action === 'move-stop' ? confirmed.stopPrice : confirmed.limitPrice) === command.newPrice) {
@@ -7361,7 +7438,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // REST čtení (~0,3–0,8 s) jen když ji stream ještě nemá.
         const streamed = liveOrdersByAccount.get(leader)?.get(targetOrderId);
         // Jen řádek, který stream doručil PO zápisu (ne syntetický ACK, ne starý řádek se shodnou cenou).
-        if (streamed && isOpenOrderStatus(streamed.status) && preWritePrice !== command.newPrice
+        if (streamed && (command.action !== 'move-limit' || streamed.filledQuantity === 0) && isOpenOrderStatus(streamed.status) && preWritePrice !== command.newPrice
           && (streamed as { sourceVersion?: string }).sourceVersion !== 'manual-entry-ack'
           && (command.action === 'move-stop' ? streamed.stopPrice : streamed.limitPrice) === command.newPrice) {
           timing.verify = 'stream';
