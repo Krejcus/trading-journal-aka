@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bell, X } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import {
-  PRICE_ALERT_COLORS, PRICE_ALERT_COLOR_NAMES, alertConditionText, alertLineCss,
+  PRICE_ALERT_COLORS, PRICE_ALERT_COLOR_NAMES, PRICE_ALERT_PC_OPACITY, alertConditionText, alertLineCss,
   type PriceAlert, type PriceAlertCondition, type PriceAlertExpiry, type PriceAlertFrequency,
   type PriceAlertLineStyle, type PriceAlertLineWidth,
 } from '../../lib/priceAlerts';
@@ -121,8 +121,9 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
         return (
           <div key={alert.id} data-alert-line={alert.id} data-alert-spent={spent ? '' : undefined} style={{ position: 'absolute', left: 0, top: y, width: paneWidth, height: 0, opacity: spent && !selected && !flash ? 0.4 : 1 }}>
             {showLine && <div style={{
-              position: 'absolute', left: 0, right: selected ? 52 : 22, top: 0, transform: 'translateY(-50%)',
-              borderTop: `${css.width}px ${css.style} ${rgba(color, selected ? 0.9 : 0.55)}`,
+              position: 'absolute', left: 0, right: mouse ? 0 : selected ? 52 : 22, top: 0, transform: 'translateY(-50%)',
+              // PC: krytí z palety; telefon beze změny.
+              borderTop: `${css.width}px ${css.style} ${rgba(color, mouse ? Math.min(1, (alert.line.opacity ?? PRICE_ALERT_PC_OPACITY) / 100 + (selected ? 0.25 : 0)) : selected ? 0.9 : 0.55)}`,
               animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
             }} />}
             <span aria-hidden style={{ position: 'absolute', right: 6, top: 0, transform: 'translateY(-50%)', width: 16, height: 16, borderRadius: 8, display: 'grid', placeItems: 'center', color: rgba(color, flash || selected ? 1 : 0.45), background: selected ? 'rgba(20,22,36,.72)' : 'transparent', boxShadow: selected ? `0 0 0 1px ${rgba(color, 0.55)}` : undefined, animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
@@ -223,56 +224,7 @@ export function LivePhoneCrosshairPlus({ api, onPlus }: { api: ChartViewApi | nu
 
 const sheetSection: React.CSSProperties = { position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '88%', overflowY: 'auto', borderRadius: '20px 20px 0 0', background: 'var(--dj-sheet, var(--dj-card))', borderTop: '1px solid var(--dj-line)', padding: '8px 0 calc(16px + var(--dj-safe-bottom, env(safe-area-inset-bottom, 0px)))', animation: 'dj-sheet .26s cubic-bezier(.2,.9,.25,1) both' };
 
-/**
- * PC: střed obrazovky místo spodního listu, POD hlavičkou LIVE (z-800): OFF zůstává klikatelné
- * i s otevřeným dialogem (INV-UI-02). `role="dialog"` + `aria-modal` ztiší klávesové zkratky
- * obchodování (`LIVE_HOTKEY_DIALOG_SELECTOR`), fokus zůstává v dialogu, Esc zavře.
- */
-function PcDialog({ label, isDark, onClose, children }: { label: string; isDark: boolean; onClose: () => void; children: React.ReactNode }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
-  const sectionRef = useRef<HTMLElement>(null);
-  useEffect(() => { sectionRef.current?.focus(); }, []);
-  const keepFocus = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.key !== 'Tab') return;
-    const section = sectionRef.current;
-    const items = section ? [...section.querySelectorAll<HTMLElement>('button:not(:disabled), input')] : [];
-    if (!section || items.length === 0) { event.preventDefault(); return; }
-    const first = items[0];
-    const last = items[items.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey ? (active === first || active === section) : active === last) {
-      event.preventDefault();
-      (event.shiftKey ? last : first).focus();
-    }
-  };
-  // LIVE má vlastní motiv nezávislý na aplikaci, `.light-theme .dj` by ho přebil: barvy přímo.
-  const theme = (isDark
-    ? { '--dj-card': '#0a0f1d', '--dj-sheet': '#0a0f1d', '--dj-line': 'rgba(255,255,255,.08)', '--dj-text': '#f1f5f9', '--dj-muted': '#8391a7' }
-    : { '--dj-card': '#ffffff', '--dj-sheet': '#ffffff', '--dj-line': '#e2e8f0', '--dj-text': '#0f172a', '--dj-muted': '#64748b' }) as React.CSSProperties;
-  return (
-    <div className="dj" style={{ ...theme, position: 'fixed', inset: 0, zIndex: 700, display: 'grid', placeItems: 'center', padding: 16 }}>
-      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
-      <section ref={sectionRef} tabIndex={-1} onKeyDown={keepFocus} role="dialog" aria-modal="true" aria-label={label} className="dj-scroll" style={{ outline: 'none', position: 'relative', width: 'min(420px, 100%)', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto', boxSizing: 'border-box', borderRadius: 16, background: 'var(--dj-sheet, var(--dj-card))', border: '1px solid var(--dj-line)', color: 'var(--dj-text)', padding: '14px 0 16px', boxShadow: '0 24px 60px -24px rgba(0,0,0,.7)' }}>
-        {children}
-      </section>
-    </div>
-  );
-}
-
-/** Kde se list ukáže: bez `pc` spodní list telefonu, s `pc` dialog na PC. */
-type AlertSurface = { pc?: { isDark: boolean } };
-
-function Sheet({ label, onClose, pc, children }: { label: string; onClose: () => void; children: React.ReactNode } & AlertSurface) {
-  if (pc) return <PcDialog label={label} isDark={pc.isDark} onClose={onClose}>{children}</PcDialog>;
+function Sheet({ label, onClose, children }: { label: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 46 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'dj-fade .18s ease both' }} />
@@ -314,33 +266,8 @@ function Toggle({ on, label, sub, onChange }: { on: boolean; label: string; sub:
   );
 }
 
-/** PC: cena se dá přepsat rukou; platná až po potvrzení, zaokrouhlená na tick. */
-function PriceInput({ price, onChange }: { price: number; onChange: (price: number) => void }) {
-  const [text, setText] = useState<string | null>(null);
-  const commit = () => {
-    if (text == null) return;
-    // „21 480,5“ i „21,480.5“: s tečkou je čárka oddělovač tisíců, jinak desetinná.
-    const clean = text.replace(/\s/g, '');
-    const value = Number(clean.includes('.') ? clean.replace(/,/g, '') : clean.replace(',', '.'));
-    setText(null);
-    if (Number.isFinite(value) && value > 0) onChange(Math.round(value / TICK) * TICK);
-  };
-  return (
-    <input
-      className="dj-mono"
-      inputMode="decimal"
-      aria-label="Cena upozornění"
-      value={text ?? price.toFixed(2)}
-      onChange={event => setText(event.target.value)}
-      onBlur={commit}
-      onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commit(); } }}
-      style={{ height: 38, width: '100%', boxSizing: 'border-box', borderRadius: 10, border: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text)', textAlign: 'center', fontSize: 16, fontWeight: 700 }}
-    />
-  );
-}
-
 /** Nastavení upozornění (dvojklep na čáru). Uložené nastavení dostanou i další nová upozornění. */
-export function LivePhoneAlertSheet({ alert, market, pc, onSave, onDelete, onClose }: AlertSurface & {
+export function LivePhoneAlertSheet({ alert, market, onSave, onDelete, onClose }: {
   alert: PriceAlert;
   market: number | null;
   onSave: (alert: PriceAlert) => void;
@@ -352,7 +279,7 @@ export function LivePhoneAlertSheet({ alert, market, pc, onSave, onDelete, onClo
   const distance = market == null ? null : draft.price - market;
   const anyChannel = draft.channels.phone || draft.channels.voice || draft.channels.pc;
   return (
-    <Sheet label="Upozornění" onClose={onClose} pc={pc}>
+    <Sheet label="Upozornění" onClose={onClose}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', padding: '2px 16px 6px' }}>
         <b style={{ fontSize: 16 }}>Upozornění</b>
         <span style={{ fontSize: 12, color: 'var(--dj-muted)' }}>{draft.symbol}</span>
@@ -360,7 +287,7 @@ export function LivePhoneAlertSheet({ alert, market, pc, onSave, onDelete, onClo
       <Field label="Cena">
         <div style={{ display: 'grid', gridTemplateColumns: '42px minmax(0,1fr) 42px', gap: 6 }}>
           <button type="button" className="dj-btn" aria-label="O tick níž" onClick={() => set({ price: draft.price - TICK })} style={{ height: 38, borderRadius: 10, border: 0, background: 'rgba(255,255,255,.07)', color: 'var(--dj-text)', fontSize: 18, cursor: 'pointer' }}>−</button>
-          {pc ? <PriceInput price={draft.price} onChange={price => set({ price })} /> : <output className="dj-mono" style={{ height: 38, borderRadius: 10, border: '1px solid var(--dj-line)', display: 'grid', placeItems: 'center', fontSize: 16, fontWeight: 700 }}>{formatLivePrice(draft.price)}</output>}
+          <output className="dj-mono" style={{ height: 38, borderRadius: 10, border: '1px solid var(--dj-line)', display: 'grid', placeItems: 'center', fontSize: 16, fontWeight: 700 }}>{formatLivePrice(draft.price)}</output>
           <button type="button" className="dj-btn" aria-label="O tick výš" onClick={() => set({ price: draft.price + TICK })} style={{ height: 38, borderRadius: 10, border: 0, background: 'rgba(255,255,255,.07)', color: 'var(--dj-text)', fontSize: 18, cursor: 'pointer' }}>+</button>
         </div>
         {distance != null && <span className="dj-mono" style={{ fontSize: 11.5, color: 'var(--dj-muted)' }}>{Math.abs(distance) < TICK / 2 ? 'na trhu' : `${Math.abs(distance).toFixed(2)} b ${distance > 0 ? 'nad' : 'pod'} trhem`}</span>}
@@ -400,7 +327,7 @@ export function LivePhoneAlertSheet({ alert, market, pc, onSave, onDelete, onClo
 }
 
 /** Seznam upozornění (zvonek ve spodní liště). */
-export function LivePhoneAlertList({ alerts, watching, error, pc, onEdit, onRemove, onClose }: AlertSurface & {
+export function LivePhoneAlertList({ alerts, watching, error, onEdit, onRemove, onClose }: {
   alerts: readonly PriceAlert[];
   /** Poslední trvalá chyba uložení na server (operace zahozená). */
   error?: string | null;
@@ -412,17 +339,17 @@ export function LivePhoneAlertList({ alerts, watching, error, pc, onEdit, onRemo
 }) {
   const activeCount = alerts.filter(alert => alert.status !== 'triggered').length;
   return (
-    <Sheet label="Upozornění" onClose={onClose} pc={pc}>
+    <Sheet label="Upozornění" onClose={onClose}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', padding: '2px 16px 10px' }}>
         <b style={{ fontSize: 16 }}>Upozornění</b>
         <span style={{ fontSize: 12, color: 'var(--dj-muted)' }}>{activeCount} {activeCount === 1 ? 'aktivní' : 'aktivních'}</span>
       </div>
-      <div style={{ margin: '0 16px 10px', padding: '9px 11px', borderRadius: 11, fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', background: watching ? 'rgba(34,197,94,.1)' : 'rgba(242,166,35,.12)', color: pc && !pc.isDark ? (watching ? '#15803d' : '#92400e') : watching ? '#86efac' : '#fcd34d' }}>
+      <div style={{ margin: '0 16px 10px', padding: '9px 11px', borderRadius: 11, fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', background: watching ? 'rgba(34,197,94,.1)' : 'rgba(242,166,35,.12)', color: watching ? '#86efac' : '#fcd34d' }}>
         <i style={{ width: 7, height: 7, borderRadius: 4, flex: 'none', background: watching ? '#22c55e' : '#f2a623' }} />
         {watching ?? 'Upozornění teď nikdo nehlídá — Mac worker neběží nebo nemá cenu z IBKR. Křížení mezitím se nedoženou.'}
       </div>
       {error && <div role="alert" style={{ margin: '0 16px 10px', padding: '9px 11px', borderRadius: 11, fontSize: 12, background: 'rgba(239,70,85,.12)', color: '#fda4af' }}>{error}</div>}
-      {alerts.length === 0 && <p style={{ margin: 0, padding: '6px 16px 0', fontSize: 13, color: 'var(--dj-muted)' }}>{pc ? 'Žádné upozornění. Klikni pravým do grafu a vyber Rychlý alert.' : 'Žádné upozornění. Podrž prst na grafu a klepni na +.'}</p>}
+      {alerts.length === 0 && <p style={{ margin: 0, padding: '6px 16px 0', fontSize: 13, color: 'var(--dj-muted)' }}>Žádné upozornění. Podrž prst na grafu a klepni na +.</p>}
       {alerts.map(alert => {
         const channels = [alert.channels.phone && 'iPhone', alert.channels.voice && 'hlas', alert.channels.pc && 'PC'].filter(Boolean).join(' + ');
         const spent = alert.status === 'triggered';

@@ -15,6 +15,7 @@ export type PriceAlertFrequency = 'once' | 'every';
 export type PriceAlertExpiry = 'session' | 'gtc';
 export type PriceAlertLineWidth = 'thin' | 'thick' | 'none';
 export type PriceAlertLineStyle = 'solid' | 'dashed' | 'dotted';
+export type PriceAlertTone = 'double' | 'chime' | 'rise' | 'fall' | 'urgent';
 
 export interface PriceAlertChannels {
   /** Běžná notifikace iOS (APNs), i při zamčeném telefonu. */
@@ -24,12 +25,16 @@ export interface PriceAlertChannels {
   /** PC: karta vlevo dole jako u obchodů, push v prohlížeči. */
   pc: boolean;
   sound: boolean;
+  /** Který tón přehraje PC (výchozí `double`); telefon má systémový zvuk notifikace. */
+  tone?: PriceAlertTone;
 }
 
 export interface PriceAlertStyle {
   width: PriceAlertLineWidth;
   style: PriceAlertLineStyle;
   color: string;
+  /** Krytí čáry v % z palety (PC); bez něj výchozí vzhled. */
+  opacity?: number;
 }
 
 export interface PriceAlert {
@@ -78,6 +83,13 @@ export const DEFAULT_PRICE_ALERT: PriceAlertDefaults = {
   line: { width: 'thin', style: 'dashed', color: PRICE_ALERT_COLORS[0] },
   channels: { phone: true, voice: true, pc: true, sound: true },
 };
+
+/** Výchozí krytí čáry na PC (%). */
+export const PRICE_ALERT_PC_OPACITY = 70;
+
+export const PRICE_ALERT_TONES: ReadonlyArray<[PriceAlertTone, string]> = [
+  ['double', 'Dvojitý'], ['chime', 'Zvonek'], ['rise', 'Stoupá'], ['fall', 'Klesá'], ['urgent', 'Naléhavý'],
+];
 
 export const PRICE_ALERTS_STORAGE_KEY = 'alphatrade:price-alerts:v1';
 export const PRICE_ALERT_DEFAULTS_KEY = 'alphatrade:price-alert-defaults:v1';
@@ -143,13 +155,17 @@ function sanitizeDefaults(raw: unknown): PriceAlertDefaults {
     line: {
       width: oneOf(line.width, ['thin', 'thick', 'none'], base.line.width),
       style: oneOf(line.style, ['solid', 'dashed', 'dotted'], base.line.style),
-      color: oneOf(line.color, PRICE_ALERT_COLORS, base.line.color),
+      // Libovolná barva z palety, jen ve tvaru #rrggbb (čáru kreslí `rgba` z téhož tvaru).
+      color: typeof line.color === 'string' && /^#[0-9a-f]{6}$/i.test(line.color) ? line.color.toLowerCase() : base.line.color,
+      ...(Number.isFinite(line.opacity) && (line.opacity as number) >= 0 && (line.opacity as number) <= 100 ? { opacity: Math.round(line.opacity as number) } : {}),
     },
     channels: {
       phone: bool(channels.phone, base.channels.phone),
       voice: bool(channels.voice, base.channels.voice),
       pc: bool(channels.pc, base.channels.pc),
       sound: bool(channels.sound, base.channels.sound),
+      // Bez platného tónu pole chybí; přehrání a UI berou výchozí `double`.
+      ...(PRICE_ALERT_TONES.some(([tone]) => tone === channels.tone) ? { tone: channels.tone as PriceAlertTone } : {}),
     },
   };
 }

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, alertConditionFor, alertLineCss, alertTitle,
+  DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, PRICE_ALERT_TONES, alertConditionFor, alertLineCss, alertTitle,
   createLocalPriceAlertStore, movedAlert, newPriceAlert, freshPriceAlertEvents, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus, readPriceAlertState,
 } from '../lib/priceAlerts';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../lib/liveFillMarkers';
@@ -44,7 +44,7 @@ describe('upozornění na cenu (telefon, 2. 11.)', () => {
     expect(readPriceAlertState(storage).alerts).toHaveLength(0);
 
     const broken = readPriceAlertState(memory({
-      [PRICE_ALERTS_STORAGE_KEY]: JSON.stringify([{ id: 'x', price: -5 }, { id: 'ok', price: 21480.1, line: { color: '#ff0000', width: 'huge' } }, 'junk']),
+      [PRICE_ALERTS_STORAGE_KEY]: JSON.stringify([{ id: 'x', price: -5 }, { id: 'ok', price: 21480.1, line: { color: 'ne-barva', width: 'huge' } }, 'junk']),
       [PRICE_ALERT_DEFAULTS_KEY]: '{',
     }));
     expect(broken.alerts.map(item => item.id)).toEqual(['ok']);
@@ -235,8 +235,22 @@ describe('upozornění na cenu na PC', () => {
   });
 
   it('tón upozornění je vlastní, nepůjčuje si tón z pozice', () => {
-    expect(read('services/liveFillAudio.ts')).toMatch(/alert: \[\{ hz: 1319/);
-    expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/playCue\('alert'\)/);
+    for (const [tone] of PRICE_ALERT_TONES) expect(read('services/liveFillAudio.ts')).toContain(`'alert-${tone}': [`);
+    expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/playCue\(`alert-\$\{alert\?\.channels\.tone \?\? 'double'\}`\)/);
+  });
+
+  it('barva z palety a tón přežijí čištění; nesmysl spadne na výchozí', () => {
+    const storage = memory({
+      [PRICE_ALERTS_STORAGE_KEY]: JSON.stringify([
+        { id: 'a', price: 100, condition: 'up', line: { color: '#E91E63' }, channels: { tone: 'urgent' } },
+        { id: 'b', price: 100, condition: 'up', line: { color: 'red; x' }, channels: { tone: 'hlasite' } },
+      ]),
+    });
+    const [good, bad] = readPriceAlertState(storage).alerts;
+    expect(good.line.color).toBe('#e91e63');
+    expect(good.channels.tone).toBe('urgent');
+    expect(bad.line.color).toBe(DEFAULT_PRICE_ALERT.line.color);
+    expect(bad.channels.tone).toBeUndefined();
   });
 
   it('nic neobchoduje a nesahá na kopírku ani příkazy', () => {
@@ -257,14 +271,14 @@ describe('upozornění na cenu na PC', () => {
   });
 
   it('dialog leží pod hlavičkou LIVE, OFF zůstává klikatelné', () => {
-    const alerts = read('components/day/LivePhoneAlerts.tsx');
-    expect(alerts).toMatch(/position: 'fixed', inset: 0, zIndex: 700/);
+    const alerts = read('components/LivePcPriceAlerts.tsx');
+    expect(alerts).toMatch(/fixed inset-x-0 bottom-0 top-11 z-\[700\]/);
     expect(alerts).not.toMatch(/createPortal/);
-    expect(read('components/LiveTradingScreen.tsx')).toMatch(/live-chart-header relative z-\[800\]/);
+    expect(read('components/LiveTradingScreen.tsx')).toMatch(/live-chart-header relative z-\[800\] flex h-11/);
   });
 
   it('dialog ztiší klávesové zkratky; dvojklik na čáru neotevře nastavení vybrané kresby', () => {
-    expect(read('components/day/LivePhoneAlerts.tsx')).toMatch(/role="dialog" aria-modal="true"/);
+    expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/role="dialog"\s+aria-modal="true"/);
     expect(read('components/AlphaTradeChartWorkspace.tsx')).toMatch(/closest\?\.\('\[data-alert-line\]'\)\) return;/);
   });
 });
