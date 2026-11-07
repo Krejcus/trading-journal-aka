@@ -292,6 +292,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 - Tah čipu ho roztáhne do štítku a čáry, ghost drží místo do příchodu nohy, × ji složí zpět. Jen zobrazení v `BacktestOrderLinesOverlay`, tedy i v backtestu; worker beze změny. Pohyb posoudil Filip v náhledu `tests/qa/live-legs.tsx`.
 
+### 2026-11-06 — Slepé hodnocení v Backtestu (Claude, větev claude/blind-review-20261106)
+
+Filip chce kalibrovat automatický backtest ve svém Backtestu, ne na samostatné stránce. Každý případ je dočasná session
+(`scratch` v `BacktestWorkspace`): skutečný graf a indikátory, ale žádný zápis do `backtest_runs` ani deníku. Jedna session
+přes všechny dny nejde, svíčky z měsíců by zahltily prohlížeč. Replay zastavuje `replayStopAt` v setteru grafu, takže ho
+neobejde žádná cesta kurzoru; bez něj je setter průchozí. Odpověď se ukáže až po potvrzeném zápisu do nové tabulky
+`backtest_blind_reviews` a pak je zamčená; sadu vkládá Claude přes CLI, klient smí měnit jen `answers` a `marks`.
+Jádra kopírky se změna nedotýká. Nasazeno 7. 11. na Filipovo „nasaď“.
+
 ### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude; 7. 11. NASAZENO z `ad55ef07`: migrace, web, worker `--tv off`, iPhone 18 Pro Max, Filip „nasad market“)
 
 - Filip: natáhnu nohu a je u brokera, × ji zruší a vrátí čip. Podklad: `docs/reviews/instant-legs-design-20261106.md`, DEMO `record-legs.ts`. Capability `manual-order-single-leg-v1`, jen sólo manual-only DEMO a vlastní holý Market; Limit bez nohou a čekající vstupy zatím ne.

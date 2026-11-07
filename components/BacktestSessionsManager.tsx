@@ -1,6 +1,8 @@
 import { bindResearchRule, type BacktestResearchBinding } from '../services/backtestResearchCases';
 import { useWorkspaceLibrary } from '../hooks/useWorkspaceLibrary';
 import { workspaceTemplateForNewSession } from '../services/chartWorkspaceLibrary';
+import { blindReviewProgress, type BlindReviewDoc } from '../services/backtestBlindReview';
+import { loadBlindReview } from '../services/backtestBlindReviewStore';
 import { chartAppearanceUserId } from '../services/chartAppearanceScope';
 import { summarizeWorkspaceDocument } from '../services/chartWorkspaceDocument';
 import { buildBacktestAiExport } from '../services/backtestAiExport';
@@ -48,6 +50,7 @@ interface Props {
   onDelete?: (id: string) => void;
   /** `origin` = karta, ze které se graf rozvine (BacktestRunTransition). */
   onOpenRun: (run: BacktestRun, origin?: TransitionRect | null) => void;
+  onOpenBlindReview?: (doc: BlindReviewDoc) => void;
 }
 
 const downloadJSON = (filename: string, data: any) => {
@@ -58,7 +61,15 @@ const downloadJSON = (filename: string, data: any) => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
-const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onUpdate, onOpenRun }) => {
+const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onUpdate, onOpenRun, onOpenBlindReview }) => {
+  const [blindReview, setBlindReview] = useState<BlindReviewDoc | null>(null);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => void loadBlindReview().then(doc => { if (active) setBlindReview(doc); }).catch(() => { if (active) setBlindReview(null); });
+    refresh();
+    window.addEventListener('alphatrade:blind-review-closed', refresh);
+    return () => { active = false; window.removeEventListener('alphatrade:blind-review-closed', refresh); };
+  }, []);
   const isDark = theme !== 'light';
   const [name, setName] = useState('');
   const [size, setSize] = useState('50000');
@@ -296,6 +307,21 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
           </button>
         </div>
       </div>
+
+      {blindReview && onOpenBlindReview && (() => {
+        const progress = blindReviewProgress(blindReview);
+        return (
+          <div className={`mb-6 flex items-center gap-3 rounded-lg border p-4 ${isDark ? 'border-violet-500/30 bg-violet-500/10' : 'border-violet-200 bg-violet-50'}`}>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold">{blindReview.name}</p>
+              <p className="text-[11px] font-semibold text-slate-500">Odpovězeno {progress.answered} z {progress.total}. Nic se odtud neukládá do deníku ani statistik.</p>
+            </div>
+            <button onClick={() => onOpenBlindReview(blindReview)} className="rounded-lg bg-violet-600 px-3 py-2 text-[11px] font-black text-white transition-colors hover:bg-violet-500">
+              {progress.answered ? 'Pokračovat' : 'Začít'}
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Nová obnovitelná session */}
       {showCreateForm && <div className="theme-card p-4 rounded-lg mb-6 animate-in fade-in slide-in-from-top-2 duration-200">

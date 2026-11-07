@@ -18,6 +18,13 @@ export interface ChartReplayState {
   stepMinutes?: ChartReplayStepMinutes;
 }
 
+/** Zastavení replaye: kurzor nesmí za `stopTime` a na něm se přehrávání vypne. */
+export const clampReplayToStop = (state: ChartReplayState, stopTime: number | null | undefined): ChartReplayState => {
+  if (stopTime == null || state.phase !== 'active' || state.cursorTime === null || state.cursorTime < stopTime) return state;
+  if (state.cursorTime === stopTime && !state.playing) return state;
+  return { ...state, cursorTime: stopTime, playing: false };
+};
+
 export const DEFAULT_CHART_REPLAY_STATE: ChartReplayState = {
   phase: 'off',
   cursorTime: null,
