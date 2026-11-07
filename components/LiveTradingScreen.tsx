@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AudioLines, PanelRightClose, PanelRightOpen, Power, Volume2, VolumeX, X } from 'lucide-react';
+import { AudioLines, SlidersHorizontal, PanelRightClose, PanelRightOpen, Power, Volume2, VolumeX, X } from 'lucide-react';
 import type { Trade } from '../types';
 import AlphaTradeChartWorkspace, { type LiveOrderEntryBridge } from './AlphaTradeChartWorkspace';
 import LiveOrderTicket, {
@@ -66,6 +66,8 @@ import { createLiveBareCloseRun } from '../hooks/liveCommandRuns';
 import { liveBareLineEntryId, type LiveBareCloseOffer } from '../lib/liveBareCloseUi';
 import type { BareLeaderTrade } from '../lib/manualBareClose';
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../hooks/useLiveFillAnnouncer';
+import { useLivePositionBoxFollow } from '../hooks/useLivePositionBoxFollow';
+import LiveChartAutomationSettings, { LiveBoxFollowPane } from './LiveChartAutomationSettings';
 import { LIVE_FILL_ANNOUNCE_LABELS, LIVE_FILL_ANNOUNCE_MODES } from '../lib/liveFillAnnouncer';
 import { previewSymbolFromChartSource } from '../lib/leaderEntryPreview';
 import { LIVE_ATTACH_SENT_HOLD_MS, liveAttachDefaults, liveAttachIntent, liveAttachMarket, type LiveAttachInput, type LiveBareEntryRecord } from '../lib/liveBareEntry';
@@ -227,6 +229,33 @@ interface Props {
 
 /** Text pojistky U3-PC u tlačítka Objednávka během přehrávání v grafu. */
 const REPLAY_TICKET_TEXT = 'Přehrávání v grafu — panel objednávky je vypnutý. Flatten All je na Live Dashboardu.';
+
+/** Automatika grafu na PC: box s pozicí a zvuky SL/TP. Jen zobrazení. */
+const LiveAutomationButton: React.FC<{ isDark: boolean }> = ({ isDark }) => {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event: MouseEvent) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+  return <div ref={rootRef} className="relative shrink-0">
+    <button
+      type="button"
+      onClick={() => setOpen(value => !value)}
+      title="Automatika grafu"
+      aria-label="Automatika grafu"
+      aria-expanded={open}
+      className={`grid h-8 w-8 place-items-center rounded-md ${isDark ? 'text-slate-300 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
+    >
+      <SlidersHorizontal size={15} />
+    </button>
+    {open && <div className={`absolute right-0 top-9 z-[10000] w-[340px] rounded-lg border p-3 shadow-xl ${isDark ? 'border-white/10 bg-[#101720] text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+      <LiveChartAutomationSettings isDark={isDark} />
+    </div>}
+  </div>;
+};
 
 /**
  * Volba zvuku/hlasu při fillu (U7) v liště grafu — výchozí Vypnuto, klik přepne
@@ -666,7 +695,20 @@ const LiveTradingScreen: React.FC<Props> = ({
   );
 
   const priceAlerts = useLivePcPriceAlerts({ conditionMarket: candleClose, watching: alertWatch });
-  const priceAlertBridge = priceAlerts.bridge;
+  const registerBoxFollow = useLivePositionBoxFollow({
+    position,
+    target: String(targetKey),
+    events: copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined,
+  });
+  // Vrstva okna grafu je jediné místo, které zná `api` každého okna.
+  const basePriceAlertBridge = priceAlerts.bridge;
+  const priceAlertBridge = useMemo(() => ({
+    ...basePriceAlertBridge,
+    renderLines: (api: Parameters<typeof basePriceAlertBridge.renderLines>[0], dark: boolean) => <>
+      <LiveBoxFollowPane api={api} register={registerBoxFollow} />
+      {basePriceAlertBridge.renderLines(api, dark)}
+    </>,
+  }), [basePriceAlertBridge, registerBoxFollow]);
   const liveOrderEntry = useMemo<LiveOrderEntryBridge>(() => ({
     executionInstrument: ROOT,
     priceAlerts: priceAlertBridge,
@@ -995,6 +1037,7 @@ const LiveTradingScreen: React.FC<Props> = ({
               toolbarEnd={<>
                 <LivePcAlertsButton alerts={priceAlerts} isDark={isDark} />
                 <LiveFillAnnounceToggle isDark={isDark} />
+                <LiveAutomationButton isDark={isDark} />
                 <LiveHotkeysHelp isDark={isDark} enabled={hotkeysOn} onEnabledChange={changeHotkeys} open={hotkeysHelp} onOpenChange={setHotkeysHelp} />
                 <LiveThemeToggle isDark={isDark} preference={themePreference} />
               </>}

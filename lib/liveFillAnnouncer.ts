@@ -64,6 +64,8 @@ export interface LiveFillAnnouncement {
   priority: number;
   /** Cena z plnění brokera (VWAP dílčích plnění); bez spárovaného plnění null. */
   price: number | null;
+  /** Důvod výstupu z události workeru; plnění bez události ho nezná. */
+  exitReason?: 'sl' | 'tp' | 'manual';
 }
 
 export interface LiveFillAnnouncerInput {
@@ -270,6 +272,7 @@ function describe(candidate: Candidate): LiveFillAnnouncement {
     speech,
     priority: PRIORITY[kind],
     price,
+    ...(candidate.exitReason ? { exitReason: candidate.exitReason } : {}),
   };
 }
 

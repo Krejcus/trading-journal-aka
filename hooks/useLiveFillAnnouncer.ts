@@ -9,7 +9,10 @@ import {
   type LiveFillAnnouncer,
   type LiveFillAnnouncerInput,
 } from '../lib/liveFillAnnouncer';
+import { createLiveExitAlertDetector, type LiveExitAlertDetector, type LiveExitAlertEvent } from '../lib/liveExitAlerts';
+import { getLiveChartAutomation, subscribeLiveChartAutomation } from '../services/liveChartAutomation';
 import { liveFillAudio, type LiveFillAudioOutput } from '../services/liveFillAudio';
+import { playAlertTone } from '../services/priceAlertSounds';
 
 /**
  * Zvuk/hlas při fillu v LIVE grafu (U7, 3. 11. 2026) — napojení čisté logiky
@@ -137,8 +140,24 @@ export function useLiveFillAnnouncer(options: UseLiveFillAnnouncerOptions): Live
   announcerRef.current ??= createLiveFillAnnouncer();
   const [tick, setTick] = useState(0);
 
+  const automation = useSyncExternalStore(subscribeLiveChartAutomation, getLiveChartAutomation, getLiveChartAutomation);
+  const exitTones = Boolean(automation.slTone || automation.tpTone);
+  const exitDetectorRef = useRef<LiveExitAlertDetector | null>(null);
+  exitDetectorRef.current ??= createLiveExitAlertDetector();
+
   // Safari/iOS: zvuk až po gestu — první dotyk/klávesa ho odemkne (jen když je hlášení zapnuté).
-  useEffect(() => (mode === 'off' ? undefined : output.installUnlock()), [mode, output]);
+  useEffect(() => (mode === 'off' && !exitTones ? undefined : output.installUnlock()), [exitTones, mode, output]);
+
+  // Vlastní zvuk SL/TP: hraje i v okně bez fokusu, alert se nesmí ztratit za jinou appkou.
+  useEffect(() => {
+    const kind = exitDetectorRef.current!.step({
+      now: Date.now(),
+      active: exitTones && available && enabled && foreground,
+      events: events as readonly LiveExitAlertEvent[] | null | undefined,
+    });
+    const tone = kind === 'sl' ? automation.slTone : kind === 'tp' ? automation.tpTone : null;
+    if (tone) void playAlertTone(tone);
+  }, [automation.slTone, automation.tpTone, available, enabled, events, exitTones, foreground]);
 
   useEffect(() => {
     const now = Date.now();
@@ -147,13 +166,17 @@ export function useLiveFillAnnouncer(options: UseLiveFillAnnouncerOptions): Live
       events, fills, fillsSymbol,
     });
     if (result.announcement) {
-      try { output.announce(result.announcement, mode); } catch { /* zvuk je jen doplněk */ }
+      const reason = result.announcement.exitReason;
+      const ownTone = reason === 'sl' ? automation.slTone : reason === 'tp' ? automation.tpTone : null;
+      if (!ownTone) {
+        try { output.announce(result.announcement, mode); } catch { /* zvuk je jen doplněk */ }
+      }
     }
     if (result.retryAt == null) return undefined;
     // Zadržené hlášení: znovu po uplynutí limitu (nový krok ho ohlásí, je-li stále čerstvé).
     const timer = setTimeout(() => setTick(value => value + 1), Math.max(0, result.retryAt - now));
     return () => clearTimeout(timer);
-  }, [events, fills, fillsSymbol, available, enabled, foreground, focused, requireFocus, mode, output, tick]);
+  }, [automation.slTone, automation.tpTone, events, fills, fillsSymbol, available, enabled, foreground, focused, requireFocus, mode, output, tick]);
 
   return mode;
 }
