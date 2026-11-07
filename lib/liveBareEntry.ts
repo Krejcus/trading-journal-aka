@@ -122,14 +122,15 @@ export const isBarePendingTicketDraft = (draft: Pick<TicketDraft, 'type' | 'stop
 );
 
 /**
- * Proč holý Limit/Stop teď nejde (null = UI ho pustí k tlačítku). Jen 1 kontrakt, jen z flat a s čerstvou
+ * Proč holý Limit/Stop teď nejde (null = UI ho pustí k tlačítku). Jen do stropu skupiny, jen z flat a s čerstvou
  * cenou IBKR. Přes trh a vzdálenost Stopu rozhodne worker podle své kotace těsně před odesláním.
  */
 export function liveBarePendingBlockReason(gate: LiveBareMarketGate, quantity: number): string | null {
   if (gate.blockedReason) return gate.blockedReason;
   if (!gate.quote || !(gate.now - gate.quote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS)) return liveQuoteStaleText(gate.quote?.at ?? null, gate.now);
   if (!gate.quote.symbol) return 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.';
-  if (quantity !== 1) return 'Limit a Stop bez SL/TP jdou zatím jen po 1 kontraktu.';
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return 'Neplatný počet kontraktů.';
+  if (quantity > gate.maxContracts) return `Strop ručního vstupu je ${gate.maxContracts} ${contractsWord(gate.maxContracts)}.`;
   if (gate.positionOpen) return 'V pozici Limit ani Stop bez SL/TP nejdou — jen z flat.';
   return null;
 }
@@ -150,6 +151,21 @@ export function liveTicketLegsProblem(draft: Pick<TicketDraft, 'type' | 'stopLos
   if (hasStop) return null;
   if (draft.type !== 'market') return barePendingSupported ? null : 'Limit a Stop potřebují SL i TP.';
   return bareSupported ? null : 'Worker zatím neumí Market bez SL/TP — doplň SL i TP.';
+}
+
+/**
+ * Okamžitý holý Limit/Stop z menu pravého tlačítka: stejná brána a tvar jako tlačítko panelu.
+ * Worker při odeslání znovu projde všechny brány.
+ */
+export function liveInstantBareOrder(input: {
+  side: TicketSide; type: 'limit' | 'stop'; price: number; quantity: number;
+  instrument: TicketInstrument; gate: LiveBareMarketGate;
+}): LiveEntryPreviewDraft | { error: string } {
+  const blocked = liveBarePendingBlockReason(input.gate, input.quantity);
+  if (blocked) return { error: blocked };
+  return livePhoneSheetEntry({
+    side: input.side, type: input.type, price: input.price, sizing: 'qty', quantity: input.quantity, riskUsd: 0, stopLoss: null, takeProfit: null,
+  }, input.instrument, input.gate.quote!);
 }
 
 /**

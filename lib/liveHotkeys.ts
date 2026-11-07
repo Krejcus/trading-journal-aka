@@ -316,7 +316,7 @@ function hotkeyTarget(command: LiveHotkeyCommand, state: LiveHotkeyState): Hotke
     'Není co zrušit — žádný čekající vstup ani přikoupení.',
   );
   if ('blocked' in picked) return picked;
-  const what = picked.id === LIVE_PENDING_ADD_LINE_ID ? 'čekající přikoupení' : `čekající vstup ${lineShape(picked)}`;
+  const what = picked.id === LIVE_PENDING_ADD_LINE_ID ? (picked.label.startsWith('ZBYTEK') ? 'zbytek vstupu' : 'čekající přikoupení') : `čekající vstup ${lineShape(picked)}`;
   return { line: picked, price: picked.price, text: `Zrušit ${what} @ ${price2(picked.price)}?` };
 }
 

@@ -54,6 +54,9 @@ import { perfDuration } from '../../lib/perfTrace';
 import { markLiveCommandPaint, type LiveCommandTraceStage, type LiveCommandWorkerTiming } from '../../lib/liveCommandPerformance';
 import './dayJournal.css';
 
+/** Dotyk mladší než tohle po otevření menu plusu se ignoruje (stejná hranice jako druhý klik čar). */
+const LIVE_PLUS_GHOST_TAP_MS = 350;
+
 export interface LivePhoneChartSlots {
   /** LIVE hlavička nad grafem (LIVE ▾, skupina, stav kopírky); `group` = P&L skupiny místo názvu. */
   header: (group?: React.ReactNode) => React.ReactNode;
@@ -406,6 +409,9 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [editAlert, setEditAlert] = useState<string | null>(null);
   const [alertList, setAlertList] = useState(false);
   const [plus, setPlus] = useState<number | null>(null);
+  const plusOpenedAt = useRef(0);
+  /** Plus odešle holý Limit/Stop hned jen na ověřeně flat účtu a bez rozpracovaného návrhu (ten by zahodil). */
+  const plusInstant = trade?.barePendingSupported === true && order == null && chartPosition.summary == null && chartPosition.issue == null;
   const [flashIds, setFlashIds] = useState<ReadonlySet<string>>(() => new Set());
   useFreshPriceAlertEvents(alertStore, alertEvents, (event, alert) => {
     const title = priceAlertEventTitle(alert, event.price);
@@ -483,8 +489,11 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
               market={lastPrice}
               quote={freshQuote()}
               quantity={pill.qty}
+              instantBare={plusInstant}
               onClose={() => setPlus(null)}
               onOrder={(side, type) => {
+                // Okamžité odeslání: stejný dotyk, který otevřel menu, nesmí trefit položku pod prstem.
+                if (Date.now() - plusOpenedAt.current < LIVE_PLUS_GHOST_TAP_MS) return;
                 const price = plus;
                 setPlus(null);
                 if (replay) { say(REPLAY_NO_TRADE); return; }
@@ -492,7 +501,10 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
                 // Stejný list a odeslání jako objednávka z position boxu (kontroly beze změny).
                 // V pozici na stejnou stranu = přikoupení: list převezme SL/TP pozice.
                 // Nový návrh z „+“ se otevře bez SL/TP (Filip 5. 11.); přikoupení je převezme z pozice.
-                openOrder(livePhoneScaleInDraft({ ...newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice), { sizing: 'qty', quantity: pill.qty, riskUsd: 200 }), stopLoss: null, takeProfit: null }, trade?.scaleIn), false);
+                const plusDraft = { ...newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice), { sizing: 'qty' as const, quantity: pill.qty, riskUsd: 200 }), stopLoss: null, takeProfit: null };
+                // Filip 7. 11.: na flat účtu odešle Limit/Stop bez SL/TP hned, počet z lišty. Jinak list jako dřív.
+                if (plusInstant && type !== 'market') { submitSheetDraft(plusDraft, replay); return; }
+                openOrder(livePhoneScaleInDraft(plusDraft, trade?.scaleIn), false);
               }}
               onAlert={() => {
                 const alert = newPriceAlert(plus, lastPrice, alertStore.getState().defaults);
@@ -631,7 +643,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             pendingLegs={trade?.pendingLegs === true}
             canClose={trade?.closeSupported === true}
             entryAvg={trade?.entryAvg ?? null}
-            pendingAdd={trade?.scaleIn?.pendingAdd ?? null}
+            pendingAdd={trade?.scaleIn?.pendingAdd ?? trade?.barePartial ?? null}
             closeExpect={trade?.scaleIn?.stopLoss ?? null}
             isDark={isDark}
             onNotice={say}
@@ -659,7 +671,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             onRemove={removeAlert}
           />
           {/* Plusko u kříže jen v aktivním okně (ve dvou oknech by se ukázalo dvakrát). */}
-          {active && <LivePhoneCrosshairPlus api={api} onPlus={setPlus} />}
+          {active && <LivePhoneCrosshairPlus api={api} onPlus={price => { plusOpenedAt.current = Date.now(); setPlus(price); }} />}
         </> : null),
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
         chartLayer: ({ lastPrice, api, candles, intervalSeconds, replay, exitReplay }) => <>

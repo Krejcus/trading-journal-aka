@@ -47,7 +47,7 @@ export interface LivePositionLineControls {
    */
   bareLegs?: boolean;
   /** Čekající přikoupení do pozice (worker `leaderPositions`) — vlastní čára s × (zrušit). */
-  pendingAdd?: { price: number | null; quantity: number; orderType: string } | null;
+  pendingAdd?: { price: number | null; quantity: number; orderType: string; label?: string } | null;
   /**
    * C8 (4. 11. 2026): vlastní holý Market bez SL/TP, který worker umí zavřít (`liveBareCloseOffer`
    * s `enabled`). Čára vstupu pak nese id cíle (`liveBareLineId`).
@@ -183,7 +183,7 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     lines.push({
       id: LIVE_PENDING_ADD_LINE_ID, ownerId: LIVE_POSITION_OWNER, ownerType: 'order', kind: 'entry',
       price: add.price, color: long ? LONG_COLOR : SHORT_COLOR,
-      label: `PŘIKOUPENÍ ${long ? 'BUY' : 'SELL'} ${add.quantity} ${add.orderType.toUpperCase()}  ${add.price.toFixed(2)} · čeká`,
+      label: `${add.label ?? 'PŘIKOUPENÍ'} ${long ? 'BUY' : 'SELL'} ${add.quantity} ${add.orderType.toUpperCase()}  ${add.price.toFixed(2)} · čeká`,
       draggable: false,
       // × = zrušit jen čekající přikoupení.
       cancellable: controls.manageable, cancelAction: 'cancel-order',

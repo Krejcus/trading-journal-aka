@@ -6,7 +6,6 @@ import type { BrokerOrderRequest } from './brokerPort';
 import {
   copyGroupConfigHash,
   isBareLeaderEntry,
-  LEADER_ENTRY_BARE_PENDING_QUANTITY,
   leaderEntryRiskPrice,
   LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS,
   LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS,
@@ -83,13 +82,10 @@ export const MANUAL_ENTRY_BARE_STOP_MIN_TICKS = 8;
  * Kontrola náhledu i poslední kontrola těsně před odesláním.
  */
 export function manualEntryBarePendingBlockers(
-  command: Pick<LeaderEntryPreviewCommand, 'side' | 'orderType' | 'price' | 'quantity' | 'symbol'>,
+  command: Pick<LeaderEntryPreviewCommand, 'side' | 'orderType' | 'price' | 'symbol'>,
   quote: ManualEntryWorkerQuote | null,
   now: number,
 ): LeaderEntryPreviewIssue[] {
-  if (command.quantity !== LEADER_ENTRY_BARE_PENDING_QUANTITY) {
-    return [blocker('bare-pending-quantity', 'Limit a Stop bez SL/TP jdou zatím jen po 1 kontraktu.')];
-  }
   const market = workerMarketPrice(quote, command.side, now);
   if (market == null || quote?.contract !== command.symbol) {
     return [blocker('bare-pending-quote', 'Limit a Stop bez SL/TP potřebují čerstvou cenu stejného kontraktu z IBKR — teď nejdou.')];

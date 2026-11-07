@@ -141,10 +141,10 @@ describe('PC panel: holý Market z návrhu', () => {
     expect(() => valid(draft)).not.toThrow();
   });
 
-  it('jen v kontraktech, jen Market bez nohou, jen s IBKR kontraktem', () => {
+  it('jen v kontraktech, jen bez obou nohou, jen s IBKR kontraktem', () => {
     expect(liveTicketBareEntry({ ...market, sizing: 'risk' }, instrument, quote)).toHaveProperty('error');
     expect(liveTicketBareEntry({ ...market, stopLoss: 24_990 }, instrument, quote)).toHaveProperty('error');
-    expect(liveTicketBareEntry({ ...market, type: 'limit' }, instrument, quote)).toHaveProperty('error');
+    expect(liveTicketBareEntry({ ...market, type: 'limit' }, instrument, quote)).toMatchObject({ orderType: 'Limit' });
     expect(liveTicketBareEntry(market, instrument, { ...quote, symbol: null })).toHaveProperty('error');
   });
 });

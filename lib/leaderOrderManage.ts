@@ -63,6 +63,8 @@ export interface LeaderOrderManageCommand {
     price: number; quantity: number;
     /** Jen `add-leg` a `remove-leg`: SL a TP, které uživatel viděl (null = žádná). Druhé zařízení mohlo nohu mezitím změnit. */
     stop?: number | null; target?: number | null;
+    /** Jen `cancel-entry` zbytku holého Limit/Stop: kolik kontraktů uživatel viděl vyplněných. */
+    filledQuantity?: number;
   };
   /** `move-*` a `add-leg` (cena nové nohy). */
   newPrice?: number;
@@ -138,7 +140,10 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
   const legPrice = (value: unknown) => value === null || price(value);
   if (!expect || typeof expect !== 'object') fail();
   if (singleLeg ? (Object.keys(expect!).some(key => !['price', 'quantity', 'stop', 'target'].includes(key)) || !legPrice(expect!.stop) || !legPrice(expect!.target))
-    : Object.keys(expect!).some(key => key !== 'price' && key !== 'quantity')) fail();
+    : Object.keys(expect!).some(key => key !== 'price' && key !== 'quantity' && !(key === 'filledQuantity' && command.action === 'cancel-entry'))) fail();
+  // Zrušení zbytku holého Limit/Stop: kolik uživatel viděl vyplněné. Bez toho by se dílčí fill nedal odlišit od závodu.
+  if (expect!.filledQuantity !== undefined
+    && (typeof expect!.filledQuantity !== 'number' || !Number.isSafeInteger(expect!.filledQuantity) || expect!.filledQuantity < 1 || expect!.filledQuantity > 50)) fail();
   if (!price(expect!.price)) fail();
   if (typeof expect!.quantity !== 'number' || !Number.isSafeInteger(expect!.quantity) || expect!.quantity < 1 || expect!.quantity > 50) fail();
   const moves = command.action === 'move-stop' || command.action === 'move-target' || command.action === 'move-limit';

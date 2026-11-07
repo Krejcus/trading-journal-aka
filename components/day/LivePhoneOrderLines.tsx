@@ -169,7 +169,7 @@ export function LivePhoneOrderLines({
   /** Průměrný vstup leadera od workeru (BE). */
   entryAvg: number | null;
   /** Čekající přikoupení do pozice (čára s × = zrušit jen přikoupení). */
-  pendingAdd?: { price: number | null; quantity: number; orderType: string } | null;
+  pendingAdd?: { price: number | null; quantity: number; orderType: string; label?: string } | null;
   /** Pozice z přikoupení: nejochrannější SL od workeru — „co jsem viděl“ pro × při rozjetých SL. */
   closeExpect?: number | null;
   isDark: boolean;

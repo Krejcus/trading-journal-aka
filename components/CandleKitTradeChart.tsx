@@ -392,7 +392,7 @@ interface CandleKitTradeChartProps {
   /** LIVE: pravý klik → rychlý alert na ceně pod kurzorem. Jen upozornění, nic neobchoduje. */
   onQuickPriceAlert?: (price: number) => void;
   onChartOrder?: (
-    input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number },
+    input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number; viaPointer?: boolean },
     candle: MarketCandle | null,
   ) => void;
   onNeedOlderHistory?: (oldestTime: number) => void | Promise<void>;
@@ -5781,10 +5781,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     });
   }, [chartOrderQuantity, contextMenu?.price, contextOrderCandle, onChartOrder, resolvedInstrumentRoot]);
 
-  const submitContextOrder = useCallback((option: ChartClickOrderOption) => {
+  const submitContextOrder = useCallback((option: ChartClickOrderOption, viaPointer: boolean) => {
     setContextMenu(null);
     onChartOrder?.(
-      { side: option.side, type: option.type, quantity: option.quantity, price: option.price },
+      { side: option.side, type: option.type, quantity: option.quantity, price: option.price, viaPointer },
       contextOrderCandle,
     );
   }, [contextOrderCandle, onChartOrder]);
@@ -6729,8 +6729,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
                 key={`${option.side}-${option.type}`}
                 type="button"
                 role="menuitem"
-                className={`flex h-9 w-full items-center px-2 text-left outline-none transition-colors ${isDark ? 'hover:bg-[#2a2e39] focus-visible:bg-[#2a2e39]' : 'hover:bg-[#f0f3fa] focus-visible:bg-[#f0f3fa]'}`}
-                onClick={() => submitContextOrder(option)}
+                className={`flex min-h-9 w-full py-1 items-center px-2 text-left outline-none transition-colors ${isDark ? 'hover:bg-[#2a2e39] focus-visible:bg-[#2a2e39]' : 'hover:bg-[#f0f3fa] focus-visible:bg-[#f0f3fa]'}`}
+                // Enter nebo mezerník mají `detail` 0: klávesa nikdy neodešle (`viaPointer`).
+                onClick={event => submitContextOrder(option, event.detail > 0)}
               >
                 <span
                   className={`mr-2 h-6 w-1 shrink-0 rounded-full ${option.side === 'buy' ? 'bg-emerald-500' : 'bg-rose-500'}`}

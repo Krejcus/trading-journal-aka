@@ -19,8 +19,6 @@ const SYMBOL_PATTERN = LEADER_ENTRY_SYMBOL_PATTERN;
  */
 export const LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS = 5_000;
 export const LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS = 2_000;
-/** Holý Limit/Stop jde jen po jednom kontraktu; platí v relayi i ve workeru. */
-export const LEADER_ENTRY_BARE_PENDING_QUANTITY = 1;
 /** Vlastní jmenný prostor — náhled se nikdy nesmí plést s id skutečného odeslání. */
 const OPERATION_ID_PATTERN = /^preview:[a-zA-Z0-9_-]{8,100}$/;
 
@@ -46,7 +44,7 @@ export interface LeaderEntryPreviewCommand {
   quoteReceivedAt?: number;
   /**
    * SL a TP; obě chybí u holého Marketu z telefonní lišty (Filip 1. 11. 2026:
-   * „market ihned bez SL/TP“) a u holého Limit/Stop po jednom kontraktu (7. 11. 2026) —
+   * „market ihned bez SL/TP“) a u holého Limit/Stop (7. 11. 2026) —
    * pozice je pak vědomě bez ochrany, dokud SL/TP nedoplní uživatel.
    */
   stopLoss?: number;
@@ -138,8 +136,8 @@ export function validateLeaderEntryPreview(value: unknown): LeaderEntryPreviewCo
   }
   // Holý Market: SL i TP chybí oba (nikdy jen jedna noha).
   const bare = command.stopLoss === undefined && command.takeProfit === undefined;
-  // Holý Limit/Stop (7. 11. 2026): u brokera opravdu bez nohou, jen po 1 kontraktu (dílčí fill zbytku bez ochrany neřešíme).
-  if (bare ? (command.orderType !== 'Market' && command.quantity !== LEADER_ENTRY_BARE_PENDING_QUANTITY) : (!price(command.stopLoss) || !price(command.takeProfit))) fail();
+  // Holý vstup má obě nohy prázdné (nikdy jen jednu). Strop počtu hlídá worker (`manual-cap`).
+  if (!bare && (!price(command.stopLoss) || !price(command.takeProfit))) fail();
   if (command.position !== undefined) {
     // Přikoupení: vždy se SL i TP (holé přikoupení nikdy), strana = strana pozice.
     const position = command.position as Record<string, unknown> | null;

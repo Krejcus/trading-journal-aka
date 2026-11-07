@@ -1767,7 +1767,7 @@ const LiveOrderTicket: React.FC<Props> = ({
       {bareSend && <div className={`text-[10px] font-bold ${tone.muted}`}>
         {draft.type === 'market'
           ? 'Market bez SL/TP: odešle se hned, ztráta nemá strop. SL a TP pak doplníš „Přidat SL/TP“.'
-          : `${draft.type === 'stop' ? 'Stop' : 'Limit'} bez SL/TP: po vyplnění ztráta nemá strop, dokud SL nenatáhneš. Jen 1 kontrakt.`}
+          : `${draft.type === 'stop' ? 'Stop' : 'Limit'} bez SL/TP: po vyplnění ztráta nemá strop, dokud SL nenatáhneš.`}
       </div>}
       {shownDirect &&<div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${shownDirect.view.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : shownDirect.view.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{shownDirect.view.text}</div>}
     </div>}

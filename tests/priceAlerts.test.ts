@@ -143,7 +143,7 @@ describe('oponentura 2. 11. — vrstvy, okna, ×, plusko, karty', () => {
     expect(chart).toMatch(/live\.paneLayer\(\{ \.\.\.liveInfo, api: paneApi\(index\), candles: list, intervalSeconds: timeframeMinutes\(paneTf\) \* 60, paneIndex: index, active: !split \|\| isActive \}\)/);
     const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
     expect(phone).toMatch(/paneLayer: \(\{ api, replay, active, lastPrice \}\) => \(api && !replay \? <>/);
-    expect(phone).toMatch(/\{active && <LivePhoneCrosshairPlus api=\{api\} onPlus=\{setPlus\} \/>\}/);
+    expect(phone).toMatch(/\{active && <LivePhoneCrosshairPlus api=\{api\} onPlus=\{price => \{ plusOpenedAt\.current = Date\.now\(\); setPlus\(price\); \}\} \/>\}/);
     // Cenové čáry pozice (náhrada štítků ve dvou oknech) už nejsou potřeba — štítky by byly dvakrát.
     expect(phone).not.toMatch(/PositionPriceLines|createLivePriceLinesFeed/);
   });

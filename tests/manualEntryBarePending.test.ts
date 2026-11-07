@@ -1,4 +1,4 @@
-// Limit a Stop opravdu bez SL/TP u brokera (7. 11. 2026): sólo DEMO, 1 kontrakt, po fillu správa jako u holého Marketu.
+// Limit a Stop opravdu bez SL/TP u brokera (7. 11. 2026): sólo DEMO, i víc kontraktů, po fillu správa jako u holého Marketu.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BrokerAccountRiskSnapshot } from '../services/brokerPort';
 import { bootstrapCopierRuntime, type CopierRuntimeController } from '../services/copierRuntimeController';
@@ -47,10 +47,10 @@ async function setup() {
   clock.now = START + 1_000;
   await sleep(20);
   await controller.waitForIdle();
-  const place = (orderType: 'Limit' | 'Stop', price: number, side: 'Buy' | 'Sell' = 'Buy') => {
+  const place = (orderType: 'Limit' | 'Stop', price: number, side: 'Buy' | 'Sell' = 'Buy', quantity = 1) => {
     const status = controller.status();
     const preview = buildLeaderEntryPreviewCommand(
-      { symbol: SYM, side, quantity: 1, orderType, price },
+      { symbol: SYM, side, quantity, orderType, price },
       { group: { ...group(), leaderAccountId: LEADER }, armedAt: status.armedAt ?? 0, excludedFollowers: new Set(), participation: [], operationId: 'preview:barepend001' },
     );
     return controller.placeLeaderEntry(buildLeaderEntryPlaceCommand(preview, 'entry:barepend001'), { deadlineAt: clock.now + 15_000 });
@@ -70,23 +70,32 @@ const fill = (ctx: Ctx, entryId: string) => {
   ctx.broker.setPosition(LEADER, SYM, 1);
   ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 1 } });
 };
+/** Dílčí fill: příkaz dál pracuje. */
+const partial = (ctx: Ctx, entryId: string, filled: number) => {
+  const entry = ctx.broker.orders().find(order => order.brokerOrderId === entryId)!;
+  entry.filledQuantity = filled;
+  ctx.broker.emitEvent({ type: 'order', order: { ...entry, sourceVersion: `3:Partial${filled}` } });
+  ctx.broker.emitEvent({ type: 'fill', fill: { fillId: `p-${entryId}-${filled}`, tag: entry.tag, brokerOrderId: entryId, accountId: LEADER, symbol: SYM, side: entry.side, quantity: filled, price: entry.limitPrice ?? 0, at: ctx.clock.now } as never });
+  ctx.broker.setPosition(LEADER, SYM, filled);
+  ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: filled } });
+};
 const open = (ctx: Ctx) => ctx.broker.orders().filter(order => order.status === 'pending' || order.status === 'working');
 const recordOf = (ctx: Ctx) => ctx.controller.status().manualEntries?.find(item => item.operationId === 'entry:barepend001');
 
 describe('validace', () => {
   const base = { type: 'preview-leader-entry', groupId: group().id, operationId: 'preview:barepend002', leaderAccountId: LEADER, symbol: SYM, side: 'Buy', orderType: 'Limit', price: 24_990,
     intent: { armedAt: 0, groupConfigHash: 'abcdefgh', followerQuantities: [] } };
-  it('Limit bez nohou jen po 1 kontraktu, nikdy jedna noha', () => {
+  it('Limit bez nohou i víc kontraktů, nikdy jedna noha', () => {
     expect(() => validateLeaderEntryPreview({ ...base, quantity: 1 })).not.toThrow();
-    expect(() => validateLeaderEntryPreview({ ...base, quantity: 2 })).toThrow();
+    expect(() => validateLeaderEntryPreview({ ...base, quantity: 3 })).not.toThrow();
     expect(() => validateLeaderEntryPreview({ ...base, quantity: 1, stopLoss: 24_980 })).toThrow();
   });
 });
 
 describe('brány ceny', () => {
   const quote = { contract: SYM, last: 25_000, lastAt: START - 100, bid: 24_999.75, ask: 25_000, quoteAt: START - 50 };
-  const check = (orderType: 'Limit' | 'Stop', side: 'Buy' | 'Sell', price: number, q: typeof quote | null = quote, quantity = 1) => (
-    manualEntryBarePendingBlockers({ side, orderType, price, quantity, symbol: SYM }, q, START)[0]?.code ?? null
+  const check = (orderType: 'Limit' | 'Stop', side: 'Buy' | 'Sell', price: number, q: typeof quote | null = quote) => (
+    manualEntryBarePendingBlockers({ side, orderType, price, symbol: SYM }, q, START)[0]?.code ?? null
   );
   it('Limit přes trh ne, pod trhem ano', () => {
     expect(check('Limit', 'Buy', 24_999.75)).toBeNull();
@@ -101,10 +110,9 @@ describe('brány ceny', () => {
     expect(check('Stop', 'Sell', 24_997.75)).toBeNull();
     expect(check('Stop', 'Sell', 24_998)).toBe('bare-stop-too-close');
   });
-  it('bez čerstvé ceny stejného kontraktu nic, víc kontraktů nic', () => {
+  it('bez čerstvé ceny stejného kontraktu nic', () => {
     expect(check('Limit', 'Buy', 24_990, null)).toBe('bare-pending-quote');
     expect(check('Limit', 'Buy', 24_990, { ...quote, contract: 'MNQH7' })).toBe('bare-pending-quote');
-    expect(check('Limit', 'Buy', 24_990, quote, 2)).toBe('bare-pending-quantity');
   });
 });
 
@@ -128,7 +136,7 @@ describe('výběr pro UI', () => {
     expect(bareCloseRecordBlockers({ ...input, record: record() })[0]?.code).toBe('entry-not-filled');
     expect(bareCloseRecordBlockers({ ...input, record: record({ filledAt: 5 }) })).toEqual([]);
   });
-  it('panel: bez capability Limit nohy potřebuje, 2 kontrakty a pozice neprojdou', () => {
+  it('panel: bez capability Limit nohy potřebuje, nad strop a v pozici neprojde', () => {
     const draft = { type: 'limit' as const, stopLoss: null, takeProfit: null };
     expect(liveTicketLegsProblem(draft, true)).toBe('Limit a Stop potřebují SL i TP.');
     expect(liveTicketLegsProblem(draft, true, true)).toBeNull();
@@ -136,7 +144,8 @@ describe('výběr pro UI', () => {
     const gate: LiveBareMarketGate = { blockedReason: null, marketSupported: true, bareSupported: true, maxContracts: 5, positionOpen: false, now: 100,
       quote: { symbol: SYM, bid: 1, ask: 2, at: 99 } };
     expect(liveBarePendingBlockReason(gate, 1)).toBeNull();
-    expect(liveBarePendingBlockReason(gate, 2)).toContain('1 kontraktu');
+    expect(liveBarePendingBlockReason(gate, 5)).toBeNull();
+    expect(liveBarePendingBlockReason(gate, 6)).toContain('Strop');
     expect(liveBarePendingBlockReason({ ...gate, positionOpen: true }, 1)).toContain('flat');
   });
 });
@@ -237,9 +246,11 @@ describe('worker', () => {
     ctx.controller.disarm();
     fill(ctx, placed.entryBrokerOrderId!);
     await settle(ctx);
+    await sleep(2_100);
+    await ctx.controller.waitForIdle();
     expect(ctx.controller.status().lastError ?? '').toContain('BEZ SL/TP');
     expect(ctx.controller.status().armed).toBe(false);
-  });
+  }, 10_000);
 
   it('odpověď bez id a bez důvodu: incident, žádné opakování', async () => {
     const ctx = await setup();
@@ -331,6 +342,189 @@ describe('worker', () => {
   });
 });
 
+describe('víc kontraktů a dílčí fill', () => {
+  const cancelRemainder = (ctx: Ctx, operationId: string, filledQuantity?: number) => ctx.controller.manageLeaderOrder(buildLeaderOrderManageCommand({
+    groupId: group().id, operationId, leaderAccountId: LEADER, entryOperationId: 'entry:barepend001', symbol: SYM,
+    action: 'cancel-entry', expect: { price: 24_990, quantity: 3, ...(filledQuantity != null ? { filledQuantity } : {}) },
+  }), { deadlineAt: ctx.clock.now + 15_000 });
+  const placed3 = async (ctx: Ctx) => {
+    const placed = await ctx.place('Limit', 24_990, 'Buy', 3);
+    expect(placed.status).toBe('acknowledged');
+    expect(open(ctx).map(order => order.quantity)).toEqual([3]);
+    await settle(ctx, 120);
+    return placed.entryBrokerOrderId!;
+  };
+
+  it('dílčí fill: žádné čipy ani × pozice, zpráva a čára zbytku', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    partial(ctx, entryId, 1);
+    await settle(ctx);
+    const status = ctx.controller.status();
+    expect(status.armed).toBe(true);
+    expect(status.bareLegTrade ?? null).toBeNull();
+    expect(status.bareLeaderTrade ?? null).toBeNull();
+    expect(status.barePartial).toMatchObject({ quantity: 3, filledQuantity: 1, price: 24_990 });
+    expect(recordOf(ctx)?.pendingIncident?.text ?? '').toContain('z části');
+  });
+
+  it('× zbytku: kdo fill viděl, zruší ho bez incidentu a pozice má správný počet', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    partial(ctx, entryId, 1);
+    await settle(ctx);
+    const result = await cancelRemainder(ctx, 'manage:barepart0001', 1);
+    expect(result.status).toBe('acknowledged');
+    expect(open(ctx)).toHaveLength(0);
+    await review(ctx);
+    const status = ctx.controller.status();
+    expect(status.armed).toBe(true);
+    expect(status.lastError ?? null).toBeNull();
+    expect(status.barePartial ?? null).toBeNull();
+    expect(status.bareLegTrade?.quantity).toBe(1);
+    expect(status.bareLeaderTrade?.quantity).toBe(1);
+  });
+
+  it('× bez znalosti fillu: nic se neruší, text říká pravdu', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    partial(ctx, entryId, 2);
+    await settle(ctx);
+    const blind = await cancelRemainder(ctx, 'manage:barepart0002');
+    expect(blind.status).toBe('blocked');
+    const stale = await cancelRemainder(ctx, 'manage:barepart0003', 1);
+    expect(stale.status).toBe('blocked');
+    expect(stale.blockers?.[0]?.text ?? '').toContain('BEZ SL/TP');
+    expect(open(ctx)).toHaveLength(1);
+  });
+
+  it('raw Filled s menším fillem není plný fill', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    const entry = ctx.broker.orders().find(order => order.brokerOrderId === entryId)!;
+    entry.status = 'filled';
+    entry.filledQuantity = 1;
+    ctx.broker.setPosition(LEADER, SYM, 1);
+    ctx.broker.emitEvent({ type: 'order', order: { ...entry, sourceVersion: '4:RawFilled' } });
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 1 } });
+    await settle(ctx);
+    // Nejednoznačné: zbylé filly ještě mohou dorazit, čipy zatím ne.
+    expect(ctx.controller.status().bareLegTrade ?? null).toBeNull();
+    ctx.clock.now += 6_000;
+    await review(ctx);
+    ctx.clock.now += 60_000;
+    await review(ctx);
+    expect(ctx.controller.status().bareLegTrade?.quantity).toBe(1);
+  }, 10_000);
+
+  it('postupné vyplnění do plna: čipy na celý počet', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    partial(ctx, entryId, 1);
+    await settle(ctx);
+    expect(ctx.controller.status().bareLegTrade ?? null).toBeNull();
+    const entry = ctx.broker.orders().find(order => order.brokerOrderId === entryId)!;
+    entry.status = 'filled';
+    entry.filledQuantity = 3;
+    ctx.broker.setPosition(LEADER, SYM, 3);
+    ctx.broker.emitEvent({ type: 'order', order: { ...entry, sourceVersion: '5:Filled' } });
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 3 } });
+    await settle(ctx);
+    expect(ctx.controller.status().bareLegTrade?.quantity).toBe(3);
+    expect(recordOf(ctx)?.pendingIncident?.text ?? '').not.toContain('z části');
+  });
+
+  it('vypnutí kopírky zbytek zruší a ohlásí pozici BEZ SL/TP', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    partial(ctx, entryId, 1);
+    await settle(ctx);
+    ctx.controller.disarm();
+    await review(ctx);
+    await sleep(200);
+    await ctx.controller.waitForIdle();
+    expect(open(ctx)).toHaveLength(0);
+    const status = ctx.controller.status();
+    expect(`${status.lastError ?? ''} ${recordOf(ctx)?.pendingIncident?.text ?? ''}`).toContain('BEZ SL/TP');
+    expect(status.bareLegTrade?.quantity).toBe(1);
+  });
+
+  it('× a raw Filled s menším fillem: „zrušený“ se netvrdí, výsledek zůstává neznámý', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    partial(ctx, entryId, 1);
+    await settle(ctx);
+    const cancel = ctx.broker.cancelOrder.bind(ctx.broker);
+    ctx.broker.cancelOrder = (async () => {
+      const entry = ctx.broker.orders().find(order => order.brokerOrderId === entryId)!;
+      entry.status = 'filled';
+      ctx.broker.emitEvent({ type: 'order', order: { ...entry, sourceVersion: '6:RawFilled' } });
+    }) as typeof ctx.broker.cancelOrder;
+    const result = await cancelRemainder(ctx, 'manage:barepart0005', 1);
+    ctx.broker.cancelOrder = cancel;
+    expect(result.status).toBe('unknown');
+    expect(result.reason ?? '').not.toContain('zrušený');
+  });
+
+  it('dílčí pozice se SL a TP: posun SL jde na skutečný počet', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    partial(ctx, entryId, 1);
+    await settle(ctx);
+    await cancelRemainder(ctx, 'manage:barepart0006', 1);
+    await review(ctx);
+    ctx.clock.now += 5_000;
+    const leg = (operationId: string, action: 'add-leg' | 'move-stop', extra: Record<string, unknown>) => ctx.controller.manageLeaderOrder(buildLeaderOrderManageCommand({
+      groupId: group().id, operationId, leaderAccountId: LEADER, entryOperationId: 'entry:barepend001', symbol: SYM, action, ...extra,
+    } as never), { deadlineAt: ctx.clock.now + 15_000 });
+    const stop = await leg('manage:barepart0007', 'add-leg', { leg: 'stopLoss', newPrice: 24_900, expect: { price: 24_990, quantity: 1, stop: null, target: null } });
+    expect(stop.blockers ?? []).toEqual([]);
+    expect(stop.status).toBe('acknowledged');
+    await settle(ctx);
+    ctx.clock.now += 3_000;
+    const target = await leg('manage:barepart0008', 'add-leg', { leg: 'takeProfit', newPrice: 25_100, expect: { price: 24_990, quantity: 1, stop: 24_900, target: null } });
+    expect(target.status).toBe('acknowledged');
+    await settle(ctx);
+    ctx.clock.now += 3_000;
+    const moved = await leg('manage:barepart0009', 'move-stop', { newPrice: 24_950, expect: { price: 24_900, quantity: 1 } });
+    expect(moved.blockers?.[0]?.code).not.toBe('shape');
+  }, 15_000);
+
+  it('Order(Filled) bez fillů: po ustálení nikdy ticho', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    const entry = ctx.broker.orders().find(order => order.brokerOrderId === entryId)!;
+    entry.status = 'filled';
+    ctx.broker.setPosition(LEADER, SYM, 3);
+    ctx.broker.emitEvent({ type: 'order', order: { ...entry, sourceVersion: '7:Filled0' } });
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 3 } });
+    await settle(ctx);
+    ctx.clock.now += 6_000;
+    await review(ctx);
+    ctx.clock.now += 60_000;
+    await review(ctx);
+    expect(ctx.controller.status().bareLegTrade?.quantity).toBe(3);
+    expect(recordOf(ctx)?.pendingIncident?.text ?? '').toContain('BEZ SL/TP');
+  }, 10_000);
+
+  it('po zavření dílčí pozice se starý vstup neujme cizí pozice', async () => {
+    const ctx = await setup();
+    const entryId = await placed3(ctx);
+    partial(ctx, entryId, 1);
+    await settle(ctx);
+    await cancelRemainder(ctx, 'manage:barepart0004', 1);
+    await review(ctx);
+    ctx.broker.setPosition(LEADER, SYM, 0);
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 0 } });
+    await settle(ctx);
+    expect(ctx.controller.status().bareLegTrade ?? null).toBeNull();
+    ctx.broker.setPosition(LEADER, SYM, 1);
+    ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 1 } });
+    await settle(ctx);
+    expect(ctx.controller.status().bareLegTrade ?? null).toBeNull();
+  });
+});
+
 describe('restart', () => {
   async function restarted(failReads: number) {
     const store = createMemoryCopierStore();
@@ -387,6 +581,8 @@ describe('restart', () => {
   it('fill za výpadku a čtení vyjde: incident BEZ SL/TP a čipy', async () => {
     const ctx = await restarted(0);
     await turn(ctx, 1_000);
+    await sleep(2_100);
+    await ctx.second.waitForIdle();
     expect(ctx.second.status().lastError ?? '').toContain('BEZ SL/TP');
     expect(ctx.second.status().bareLegTrade?.referencePrice).toBe(24_990);
   }, 10_000);

@@ -428,8 +428,10 @@ export interface CopierManualEntryRecord {
    * vstup nečeká, má zrušení nebo kopírka není ARMED, aby si push neprotiřečil s výsledkem. Jen zobrazení.
    */
   pendingIncidentNoticeOnly?: true;
-  /** Holý Limit/Stop: kdy se vstup vyplnil. Teprve od té chvíle je to pozice se správou SL/TP a ×. */
+  /** Holý Limit/Stop: kdy příkaz s fillem skončil. Teprve od té chvíle je to pozice se správou SL/TP a ×; zbytek už nepracuje. */
   filledAt?: number;
+  /** Holý Limit/Stop: největší známý fill z `order.filledQuantity`. Nikdy se nesnižuje (REST může být pozadu). */
+  filledQuantity?: number;
   waiver?: { at: number; reason: string };
 }
 
@@ -473,6 +475,8 @@ export interface CopierManualOrderActionRecord {
   brokerRejection?: string;
   /** C12: ruční zrušení vlastního vstupu z flat proti pozici na opačné straně — jen pro pravdivé texty po fillu. */
   entryOpposite?: true;
+  /** `cancel-entry` zbytku holého Limit/Stop: fill, o kterém uživatel při × věděl. Jen ten je bez incidentu. */
+  barePartialFilled?: number;
   waiver?: { at: number; reason: string };
 }
 

@@ -173,6 +173,8 @@ export function selectOwnPendingEntries(input: {
     }
     const ownEntry = ownEntryIds.get(order.brokerOrderId);
     if (ownEntry) {
+      // Zbytek holého Limit/Stop se ruší vlastní čarou s ×, ne touto cestou, a není to zákaz rušení.
+      if (ownEntry.bare === true && order.filledQuantity > 0) continue;
       if (order.filledQuantity > 0) context.partialEntries += 1;
       else context.otherOwnOrders += 1;
       continue;

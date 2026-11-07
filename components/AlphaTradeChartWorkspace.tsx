@@ -313,7 +313,9 @@ export interface LiveOrderEntryBridge {
   /** Počet kontraktů pro pravý klik do grafu (stejné číslo jako v panelu). */
   chartOrderQuantity?: number;
   /** Pravý klik do grafu na ceně → návrh v panelu. */
-  onChartOrder?: (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number }) => void;
+  /** Položka menu grafu odešle holý Limit/Stop hned (jen štítek, rozhoduje `onChartOrder`). */
+  chartOrderInstant?: boolean;
+  onChartOrder?: (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number; viaPointer?: boolean }) => void;
   orderLines: BacktestChartOrderLine[];
   onOrderLineChange: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number, startLine?: BacktestChartOrderLine) => void;
   onOrderLineCancel: (line: BacktestChartOrderLine) => void;
@@ -882,7 +884,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   }, [context.tradingSettings.orderLines, liveOrderEntry, liveReplayLocked, orderLineSource]);
   const liveOnChartOrder = liveReplayLocked ? undefined : liveOrderEntry?.onChartOrder;
   const liveChartOrder = useMemo(
-    () => (liveOnChartOrder ? (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number }) => liveOnChartOrder(input) : undefined),
+    () => (liveOnChartOrder ? (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number; viaPointer?: boolean }) => liveOnChartOrder(input) : undefined),
     [liveOnChartOrder],
   );
   // U5: pracující příkazy jen pro zobrazení — vlastní vrstva mimo overlay s handlery.
@@ -1222,8 +1224,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             onPositionQuickOrder={context.tradingSettings.quickOrderButton || context.liveOrderEntry ? context.onPositionQuickOrder : undefined}
             positionQuickOrderLabel={context.liveOrderEntry ? 'Propsat box do objednávky' : undefined}
             liveSeries={Boolean(context.liveOrderEntry)}
-            // Pravý klik do grafu jen vyplní panel Objednávka (LIVE i backtest).
-            chartOrderLabelSuffix={context.liveOrderEntry || context.backtestSession ? ' · návrh' : undefined}
+            // Pravý klik do grafu vyplní panel Objednávka; v sólo DEMO na flat účtu odešle Limit/Stop bez SL/TP hned.
+            chartOrderLabelSuffix={context.liveOrderEntry?.chartOrderInstant ? ' · hned BEZ SL/TP' : context.liveOrderEntry || context.backtestSession ? ' · návrh' : undefined}
             // Za přehrávání je cena pod kurzorem historická: alert jen v živém panelu exekuce.
             onQuickPriceAlert={liveReplayLocked ? undefined : liveOrderEntry?.priceAlerts?.quickAdd}
             onChartOrder={config.root === context.backtestSession?.executionInstrument

@@ -394,7 +394,7 @@ export function LivePhoneAlertList({ alerts, watching, error, onEdit, onRemove, 
 }
 
 /** Menu plusu u crosshairu: limit/stop na ceně, upozornění, vodorovná čára. */
-export function LivePhonePlusSheet({ price, market, quote, quantity, onOrder, onAlert, onLine, onClose }: {
+export function LivePhonePlusSheet({ price, market, quote, quantity, onOrder, onAlert, onLine, onClose, instantBare = false }: {
   price: number;
   market: number | null;
   /** Čerstvá kotace (≤ 3 s); typ příkazu podle ní jako na PC. null = příkaz z plusu teď nejde. */
@@ -404,13 +404,15 @@ export function LivePhonePlusSheet({ price, market, quote, quantity, onOrder, on
   onAlert: () => void;
   onLine: () => void;
   onClose: () => void;
+  /** Limit a Stop odejdou hned bez SL/TP. Market z tohohle menu dál otevírá list. */
+  instantBare?: boolean;
 }) {
   const above = market != null && price > market;
   const distance = market == null ? null : Math.abs(price - market);
   const buyType = quote ? clickedOrderType('buy', price, quote, TICK) : null;
   const sellType = quote ? clickedOrderType('sell', price, quote, TICK) : null;
   const typeHint = (side: 'buy' | 'sell', type: string | null) => (type == null ? 'cena trhu není čerstvá — příkaz teď nejde'
-    : type === 'market' ? 'na trhu' : type === 'limit' ? (side === 'buy' ? 'vstup long pod trhem' : 'vstup short nad trhem')
+    : type === 'market' ? 'na trhu' : instantBare ? 'odešle se hned, BEZ SL/TP' : type === 'limit' ? (side === 'buy' ? 'vstup long pod trhem' : 'vstup short nad trhem')
       : side === 'buy' ? 'vstup long při průrazu nahoru' : 'vstup short při průrazu dolů');
   const row = (key: string, icon: React.ReactNode, iconStyle: React.CSSProperties, title: string, sub: string, onClick: () => void) => (
     <button key={key} type="button" className="dj-btn" onClick={onClick} style={{ width: '100%', display: 'grid', gridTemplateColumns: '32px minmax(0,1fr) auto', gap: 10, alignItems: 'center', padding: '11px 16px', border: 0, borderBottom: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text)', textAlign: 'left', cursor: 'pointer' }}>

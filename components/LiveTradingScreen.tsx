@@ -70,8 +70,8 @@ import { useLivePositionBoxFollow } from '../hooks/useLivePositionBoxFollow';
 import LiveChartAutomationSettings, { LiveBoxFollowPane } from './LiveChartAutomationSettings';
 import { LIVE_FILL_ANNOUNCE_LABELS, LIVE_FILL_ANNOUNCE_MODES } from '../lib/liveFillAnnouncer';
 import { previewSymbolFromChartSource } from '../lib/leaderEntryPreview';
-import { LIVE_ATTACH_SENT_HOLD_MS, liveAttachDefaults, liveAttachIntent, liveAttachMarket, type LiveAttachInput, type LiveBareEntryRecord } from '../lib/liveBareEntry';
-import type { LivePhonePosition } from '../lib/livePhoneOrders';
+import { LIVE_ATTACH_SENT_HOLD_MS, liveAttachDefaults, liveAttachIntent, liveAttachMarket, liveInstantBareOrder, liveTicketBarePosition, type LiveAttachInput, type LiveBareEntryRecord } from '../lib/liveBareEntry';
+import { livePhonePlacedText, type LivePhonePosition } from '../lib/livePhoneOrders';
 import type { LiveChartFills, LiveChartWorkingOrders } from '../hooks/useLiveChartData';
 import {
   GROUP_TARGET,
@@ -195,6 +195,8 @@ interface Props {
   /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); výchozí false. */
   entryBareSupported?: boolean;
   entryBarePendingSupported?: boolean;
+  /** Dílčí fill holého Limit/Stop: zbytek pracuje a kreslí se čarou s × jako čekající přikoupení. */
+  entryBarePartial?: { price: number | null; quantity: number; orderType: string; label?: string } | null;
   /** Vlastní přijatý holý Market bez nohou (desk `newestOpenBareEntry`); výchozí null. */
   entryBareEntry?: LiveBareEntryRecord | null;
   /** Pozice leadera skupiny workeru na symbolu grafu (`liveAttachIntent.position`); výchozí null. */
@@ -290,7 +292,7 @@ function useMinuteNow() {
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveLimitSupported, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
-  entryBareSupported = false, entryBarePendingSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
+  entryBareSupported = false, entryBarePendingSupported = false, entryBarePartial = null, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null, alertWatch = null,
   bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange,
 }) => {
@@ -654,9 +656,9 @@ const LiveTradingScreen: React.FC<Props> = ({
     pointValue: INSTRUMENT.pointValue,
     displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
-    pendingAdd: entryScaleIn?.pendingAdd ?? null,
+    pendingAdd: entryScaleIn?.pendingAdd ?? entryBarePartial,
     bareClose: bareOffer?.enabled ? { entryOperationId: bareOffer.trade.entryOperationId } : null,
-  }) : []), [attachChips, copier.available, copier.status, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
+  }) : []), [entryBarePartial, attachChips, copier.available, copier.status, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
   // U4/U5: kontrakt grafu — IBKR zdroj nese měsíc, jinak pozice, jinak front podle brokera.
   // Jiný kontrakt (týden rollu) nebo neznámý = šipky ani pracující příkazy se nekreslí.
   const chartContract = previewSymbolFromChartSource(quoteInfo.source) ?? position?.symbol ?? entryFrontContract ?? null;
@@ -694,6 +696,31 @@ const LiveTradingScreen: React.FC<Props> = ({
     [attachLines, draft, liveLines, picked?.short, quote, ticketOpen],
   );
 
+  // Pravé tlačítko = okamžitý holý Limit/Stop (Filip 7. 11.): sólo DEMO (capability), bez pozice, čekajícího vstupu a návrhu.
+  const instantBarePosition = liveTicketBarePosition(position, entryLeaderPosition);
+  const instantBareReady = entryBarePendingSupported && onPlaceEntry != null && !chartReplay && draft == null && !instantBarePosition.open && summary == null;
+  const sendInstantBareRef = useRef<(side: TicketSide, type: 'limit' | 'stop', price: number, quantity: number) => Promise<void>>(async () => undefined);
+  sendInstantBareRef.current = async (side, type, price, quantity) => {
+    if (!onPlaceEntry) return;
+    if (manageState.busyRef.current) { setLineNotice({ at: Date.now(), tone: 'warn', text: LIVE_COMMAND_BUSY_TEXT }); return; }
+    const entry = liveInstantBareOrder({
+      side, type, price, quantity, instrument: INSTRUMENT,
+      gate: {
+        blockedReason: quoteInfo.stale ? 'Cena grafu je zastaralá — příkaz bez SL/TP teď nejde.' : entryBlockedReason ?? instantBarePosition.reason,
+        marketSupported: true, bareSupported: true, maxContracts: entryMaxContracts, positionOpen: instantBarePosition.open, now: Date.now(),
+        quote: quote && quoteInfo.capturedAt != null ? { symbol: previewSymbolFromChartSource(quoteInfo.source), bid: quote.bid, ask: quote.ask, at: quoteInfo.capturedAt } : null,
+      },
+    });
+    if ('error' in entry) { setLineNotice({ at: Date.now(), tone: 'bad', text: `Neodesláno: ${entry.error}` }); return; }
+    const operationId = `entry:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+    try {
+      const result = await runWithCommandLock(manageState.busyRef, () => onPlaceEntry(entry, operationId));
+      setLineNotice({ at: Date.now(), tone: result.status === 'acknowledged' ? 'ok' : result.status === 'unknown' ? 'warn' : 'bad', text: livePhonePlacedText(result) });
+    } catch (reason) {
+      setLineNotice({ at: Date.now(), tone: 'warn', text: `Výsledek je neznámý (${reason instanceof Error ? reason.message.slice(0, 120) : 'chyba'}) — zkontroluj leadera, nic neopakuj.` });
+    }
+  };
+
   const priceAlerts = useLivePcPriceAlerts({ conditionMarket: candleClose, watching: alertWatch });
   const registerBoxFollow = useLivePositionBoxFollow({
     position,
@@ -713,6 +740,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     executionInstrument: ROOT,
     priceAlerts: priceAlertBridge,
     chartOrderQuantity: draft && quote ? Math.max(1, ticketQuantity(draft, INSTRUMENT, quote)) : liveTicketInitialQuantity(ticketPrefs, entryMaxContracts),
+    chartOrderInstant: instantBareReady,
     orderLines,
     onEscape: event => hotkeyHandlerRef.current(event, true),
     onReplayActiveChange: setChartReplay,
@@ -739,6 +767,11 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote || chartReplay) return;
       // Typ podle živé kotace, ne podle viditelné svíčky grafu (historie po odscrollování).
       const type = input.price != null ? clickedOrderType(input.side, snapToTick(input.price, INSTRUMENT.tickSize), quote, INSTRUMENT.tickSize) : input.type;
+      // Okamžitý holý Limit/Stop jen kliknutím a jen s typem, který menu ukazovalo (menu počítá ze svíčky, typ z kotace).
+      if (instantBareReady && input.viaPointer === true && input.price != null && type !== 'market' && type === input.type) {
+        void sendInstantBareRef.current(input.side, type, snapToTick(input.price, INSTRUMENT.tickSize), input.quantity);
+        return;
+      }
       // Počet z menu grafu je výslovná volba (šablona ho nepřepíše); velikost podle rizika z návrhu, jinak z předvoleb.
       const next = newDraft(input.side, type, input.price ?? quote.ask, { sizing: draft?.sizing, quantity: input.quantity, riskUsd: draft?.riskUsd });
       if (!next) return;
@@ -790,7 +823,8 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (line.ownerId === LIVE_POSITION_OWNER && chartReplay) { replayNotice(); return; }
       // Čekající přikoupení: zrušit jen jeho vstup (desk pošle `cancel-entry` jeho lístku s jeho qty).
       if (line.id === LIVE_PENDING_ADD_LINE_ID) {
-        if (entryScaleIn?.pendingAdd?.price != null) void runLiveManage('cancel-entry', entryScaleIn.pendingAdd.price);
+        const pendingAddPrice = entryScaleIn?.pendingAdd?.price ?? entryBarePartial?.price;
+        if (pendingAddPrice != null) void runLiveManage('cancel-entry', pendingAddPrice);
         return;
       }
       if (line.ownerId === LIVE_POSITION_OWNER) {
@@ -840,7 +874,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
+  }), [instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít

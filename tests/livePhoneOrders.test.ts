@@ -25,7 +25,8 @@ describe('telefon: lišta a list objednávky → stejný příkaz jako PC', () =
     expect(limit).toMatchObject({ orderType: 'Limit', price: 24_980, quantity: 3, stopLoss: 24_970, takeProfit: 25_010 });
     expect(() => valid(limit)).not.toThrow();
     expect(livePhoneSheetEntry({ ...base, takeProfit: null }, instrument, quote)).toHaveProperty('error');
-    expect(livePhoneSheetEntry({ ...base, stopLoss: null, takeProfit: null }, instrument, quote)).toHaveProperty('error');
+    // Limit bez obou nohou tvar má; zda ho worker umí, hlídá `liveTicketLegsProblem`.
+    expect(livePhoneSheetEntry({ ...base, stopLoss: null, takeProfit: null }, instrument, quote)).toMatchObject({ orderType: 'Limit' });
     const bare = livePhoneSheetEntry({ ...base, type: 'market', stopLoss: null, takeProfit: null }, instrument, quote);
     expect(bare).toMatchObject({ orderType: 'Market', referencePrice: 25_000 });
     expect(bare).not.toHaveProperty('stopLoss');

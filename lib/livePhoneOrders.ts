@@ -27,6 +27,8 @@ export interface LivePhoneTradeBridge {
   bareSupported: boolean;
   /** Limit a Stop bez SL/TP (capability `manual-entry-bare-pending-v1`). */
   barePendingSupported?: boolean;
+  /** Dílčí fill holého Limit/Stop: zbytek pracuje, má vlastní čáru s ×. */
+  barePartial?: { price: number | null; quantity: number; orderType: string; label?: string } | null;
   maxContracts: number;
   /** Front kontrakt podle brokera (čerstvý) — jen pro Limit/Stop z listu, když cena není z IBKR. */
   frontContract: string | null;
@@ -266,7 +268,6 @@ export function livePhoneSheetEntry(draft: TicketDraft, instrument: TicketInstru
   const hasStop = draft.stopLoss != null;
   const hasTarget = draft.takeProfit != null;
   if (hasStop !== hasTarget) return { error: 'Vyplň SL i TP (nebo u Marketu ani jedno).' };
-  if (!hasStop && draft.type !== 'market' && quantity !== 1) return { error: 'Limit a Stop bez SL/TP jdou zatím jen po 1 kontraktu.' };
   const side = draft.side === 'buy' ? 'Buy' as const : 'Sell' as const;
   const legs = hasStop ? { stopLoss: snapToTick(draft.stopLoss!, instrument.tickSize), takeProfit: snapToTick(draft.takeProfit!, instrument.tickSize) } : {};
   return draft.type === 'market'

@@ -158,7 +158,7 @@ describe('LIVE → Graf je jen UI', () => {
     // Nová svíčka vpravo LIVE graf nepřestaví (jinak se každou minutu vrátil na kotvu).
     expect(workspace).toMatch(/liveSeries=\{Boolean\(context\.liveOrderEntry\)\}/);
     // Objednávky z pravého menu jen vyplní panel (LIVE i backtest) — v textu je to vidět.
-    expect(workspace).toMatch(/chartOrderLabelSuffix=\{context\.liveOrderEntry \|\| context\.backtestSession \? ' · návrh' : undefined\}/);
+    expect(workspace).toMatch(/chartOrderLabelSuffix=\{context\.liveOrderEntry\?\.chartOrderInstant \? ' · hned BEZ SL\/TP' : context\.liveOrderEntry \|\| context\.backtestSession \? ' · návrh' : undefined\}/);
     const chart = source('components/CandleKitTradeChart.tsx');
     expect(chart).toMatch(/renderableCandleWindow\(liveSeries \? \{ start: candleWindow\.start, end: candles\.length \} : candleWindow, initialWindow, candles\.length\)/);
     // LIVE drží stejný controller i při změně timeframe; instrument zůstává

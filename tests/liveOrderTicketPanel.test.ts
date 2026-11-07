@@ -131,7 +131,7 @@ describe('holý Market z PC panelu (U4)', () => {
     expect(button).not.toMatch(/disabled=""/);
   });
 
-  it('Limit a Stop bez SL/TP jen s vlastní capability a jen po 1 kontraktu', () => {
+  it('Limit a Stop bez SL/TP jen s vlastní capability, i víc kontraktů', () => {
     const limit = bare({ type: 'limit', price: 95 });
     const on = sendButton(render({ draft: limit, entryBareSupported: true, entryBarePendingSupported: true }));
     expect(on).toContain('Koupit 1 LIMIT · BEZ SL/TP');
@@ -140,7 +140,7 @@ describe('holý Market z PC panelu (U4)', () => {
     const off = sendButton(render({ draft: limit, entryBareSupported: true }));
     expect(off).toMatch(/disabled=""/);
     expect(off).toContain('Limit a Stop potřebují SL i TP.');
-    expect(sendButton(render({ draft: { ...limit, quantity: 2 }, entryBarePendingSupported: true, entryMaxContracts: 5 }))).toContain('jen po 1 kontraktu');
+    expect(sendButton(render({ draft: { ...limit, quantity: 2 }, entryBarePendingSupported: true, entryMaxContracts: 5 }))).toContain('Koupit 2 LIMIT · BEZ SL/TP');
   });
 
   it('bez capability Market bez SL/TP nenabídne a nepustí', () => {

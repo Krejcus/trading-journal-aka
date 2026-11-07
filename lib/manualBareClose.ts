@@ -42,8 +42,10 @@ export interface BareCloseEntryRecord {
   createdAt: number;
   bare?: true;
   closedAt?: number;
-  /** Holý Limit/Stop: durable značka fillu. U Marketu chybí, ten je vyplněný hned. */
+  /** Holý Limit/Stop: durable značka konce příkazu s fillem. U Marketu chybí, ten je vyplněný hned. */
   filledAt?: number;
+  /** Holý Limit/Stop: kolik se opravdu vyplnilo. Starý záznam bez něj = `request.quantity`. */
+  filledQuantity?: number;
   entryBrokerOrderId?: string;
   stopBrokerOrderId?: string;
   targetBrokerOrderId?: string;
@@ -66,6 +68,19 @@ export function isBarePendingEntry(record: Pick<BareCloseEntryRecord, 'bare' | '
 /** Už je z holého záznamu pozice? Market hned, Limit a Stop až s durable značkou fillu. */
 export function bareEntryFilled(record: Pick<BareCloseEntryRecord, 'bare' | 'request' | 'filledAt'>): boolean {
   return !isBarePendingEntry(record) || record.filledAt != null;
+}
+
+/** Velikost pozice ze vstupu: u dílčího fillu to, co se opravdu vyplnilo. */
+export function bareEntryOpenQuantity(record: Pick<BareCloseEntryRecord, 'request' | 'filledQuantity'>): number {
+  return record.filledQuantity ?? record.request.quantity;
+}
+
+/**
+ * Příkaz u brokera skončil a vyplnil se přesně na `quantity`. Stav `filled` nestačí: Tradovate hlásí raw Filled
+ * i u dílčího fillu se zrušeným zbytkem, rozhoduje `filledQuantity`.
+ */
+export function bareEntryOrderSettled(order: { status: string; filledQuantity: number } | null | undefined, quantity: number): boolean {
+  return order != null && order.status !== 'pending' && order.status !== 'working' && order.filledQuantity === quantity;
 }
 
 /** Cena, kterou uživatel viděl: cena Limit/Stop, jinak kotace u Marketu. Konstanta záznamu, jen konzistence payloadu. */
@@ -118,7 +133,7 @@ export function selectBareLeaderTrade(
   if (typeof reference !== 'number' || !Number.isFinite(reference) || reference <= 0) return null;
   return {
     entryOperationId: newest.operationId, symbol: newest.request.symbol, side: newest.request.side,
-    quantity: newest.request.quantity, referencePrice: reference,
+    quantity: bareEntryOpenQuantity(newest), referencePrice: reference,
     ...(newest.stopBrokerOrderId ? { hasStop: true } : {}), ...(newest.targetBrokerOrderId ? { hasTarget: true } : {}),
   };
 }
@@ -137,7 +152,7 @@ export function selectBareLegTrade(
   if (!newest || newest.status !== 'acknowledged' || newest.bare !== true || newest.closedAt != null || !bareEntryFilled(newest) || !newest.entryBrokerOrderId
     || newest.request.accountId !== context.leaderAccountId || typeof reference !== 'number' || !Number.isFinite(reference) || reference <= 0) return null;
   return {
-    entryOperationId: newest.operationId, symbol: newest.request.symbol, side: newest.request.side, quantity: newest.request.quantity, referencePrice: reference,
+    entryOperationId: newest.operationId, symbol: newest.request.symbol, side: newest.request.side, quantity: bareEntryOpenQuantity(newest), referencePrice: reference,
     ...(newest.stopBrokerOrderId ? { hasStop: true } : {}), ...(newest.targetBrokerOrderId ? { hasTarget: true } : {}),
   };
 }
@@ -192,7 +207,7 @@ export function bareCloseRecordBlockers(input: {
     return [{ code: 'not-armed', text: 'Zavření jde jen za zapnuté kopírky (ne shadow, ne kill) — holou pozici zavři Flattenem na Live Dashboardu.' }];
   }
   // „Co jsem viděl“ = počet kontraktů; referencePrice je konstanta záznamu (P3), jen konzistence payloadu.
-  if (command.expect.quantity !== record.request.quantity || bareEntryReferencePrice(record) == null
+  if (command.expect.quantity !== bareEntryOpenQuantity(record) || bareEntryReferencePrice(record) == null
     || command.expect.price !== bareEntryReferencePrice(record)) {
     return [{ code: 'order-changed', text: 'Pozice se od zobrazení změnila — obnov panel.' }];
   }
@@ -212,7 +227,7 @@ export function bareCloseShapeBlockers(input: {
   openOrdersOnSymbol: number;
 }): BareCloseIssue[] {
   const long = input.side === 'Buy';
-  if (!input.entryOrder || input.entryOrder.status !== 'filled' || input.entryOrder.filledQuantity !== input.quantity
+  if (!bareEntryOrderSettled(input.entryOrder, input.quantity)
     || Math.abs(input.net) !== input.quantity || (long ? input.net <= 0 : input.net >= 0)) {
     return [{ code: 'shape', text: 'Pozice nesedí s Marketem (jiný počet, částečné vyplnění, jiná strana nebo je zavřená) — zavři ji Flattenem.' }];
   }
@@ -239,7 +254,7 @@ export function bareCloseLotBlockers(input: {
 }): BareCloseIssue[] {
   const lot = input.lots.find(item => item.symbol === input.symbol && (item.entryOrderIds ?? []).includes(input.entryBrokerOrderId));
   if (!lot || lot.netQuantity !== input.expectedNet) {
-    return [{ code: 'entry-not-open', text: 'Pozice už není ta z tohoto Marketu (mezitím se otočila nebo ji deník dne nezná) — zavři ji Flattenem.' }];
+    return [{ code: 'entry-not-open', text: 'Pozice už není ta z tohoto vstupu (mezitím se otočila nebo ji deník dne nezná) — zavři ji Flattenem.' }];
   }
   return [];
 }
