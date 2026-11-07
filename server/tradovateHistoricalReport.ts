@@ -1,3 +1,4 @@
+import type { TradovateApiHosts } from '../lib/tradovateApiHosts.js';
 import { tradovateReportBaseUrl } from './tradovateHistoricalProbe.js';
 
 export type TradovateHistoricalReportStatus =
@@ -88,6 +89,7 @@ const blank = (options: {
 /** Generates only the read-only Performance CSV report. */
 export async function requestTradovatePerformanceReport(options: {
   environment: 'demo' | 'live';
+  apiHosts?: TradovateApiHosts | null;
   accessToken: string;
   accountId: number;
   accountSpec: string;
@@ -100,7 +102,7 @@ export async function requestTradovatePerformanceReport(options: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? REPORT_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(`${tradovateReportBaseUrl(options.environment)}/reports/requestReport`, {
+    const response = await fetchImpl(`${tradovateReportBaseUrl(options.environment, options.apiHosts)}/reports/requestReport`, {
       method: 'POST',
       headers: {
         Accept: 'text/csv, application/json;q=0.9, */*;q=0.8',
@@ -117,6 +119,7 @@ export async function requestTradovatePerformanceReport(options: {
           { name: 'account', value: options.accountSpec },
         ],
       }),
+      redirect: 'manual',
       signal: controller.signal,
     });
     const contentType = response.headers.get('content-type');

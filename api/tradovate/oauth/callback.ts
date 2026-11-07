@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
-import { probeTradovateHosts } from '../../../server/tradovateHostProbe.js';
+import { tradovateRestBaseUrl, type TradovateApiHosts } from '../../../lib/tradovateApiHosts.js';
 import {
   clearTradovateStateCookie,
   exchangeTradovateAuthorizationCode,
@@ -20,13 +20,26 @@ import {
 const queryValue = (value: string | string[] | undefined): string =>
   Array.isArray(value) ? value[0] ?? '' : value ?? '';
 
-const loadOAuthIdentity = async (accessToken: string, environment: 'demo' | 'live') => {
-  const response = await fetch(`${tradovateApiBaseUrl(environment)}/auth/me`, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!response.ok) throw new Error(`oauth-identity-failed-${response.status}`);
-  return normalizeTradovateOAuthIdentity(await response.json());
+/**
+ * `/auth/me` patří na live host (Lucid ho na svém demo hostu odmítá, sdílený demo host přesměruje 307).
+ * Přesměrování se nenásleduje: token jde jen na hosty z odpovědi autentizace nebo na výchozí.
+ */
+const loadOAuthIdentity = async (accessToken: string, environment: 'demo' | 'live', apiHosts: TradovateApiHosts | null) => {
+  const bases = [...new Set([tradovateRestBaseUrl('live', apiHosts), tradovateApiBaseUrl(environment, apiHosts)])];
+  let lastStatus = 0;
+  for (const base of bases) {
+    const response = await fetch(`${base}/auth/me`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
+    });
+    lastStatus = response.status;
+    if (!response.ok) continue;
+    const body = await response.json() as Record<string, unknown>;
+    if (typeof body?.errorText === 'string') { lastStatus = 422; continue; }
+    return normalizeTradovateOAuthIdentity(body);
+  }
+  throw new Error(`oauth-identity-failed-${lastStatus}`);
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -49,12 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       redirectUri: config.redirectUri,
       environment: config.environment,
     });
-    const identity = await loadOAuthIdentity(token.accessToken, config.environment).catch(async (error: unknown) => {
-      // Dočasná sonda: kam Tradovate tento login posílá. Token se po selhání stejně zahodí.
-      const steps = await probeTradovateHosts({ baseHost: new URL(tradovateApiBaseUrl(config.environment)).hostname, accessToken: token.accessToken }).catch(() => []);
-      console.error('[tradovate-oauth-host-probe] identity-failed', JSON.stringify(steps));
-      throw error;
-    });
+    const identity = await loadOAuthIdentity(token.accessToken, config.environment, token.apiHosts ?? null);
     await saveTradovateConnection({
       db: createTradovateAdminClient(config),
       config,

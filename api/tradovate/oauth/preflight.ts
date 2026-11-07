@@ -57,7 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Studený start ho vynechá a zeptá se zvlášť (mode 'historical-probe').
     const skipProbe = !bootstrap && req.body?.historicalProbe === false;
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
-    const { accessToken } = await getValidTradovateAccessToken({
+    const { accessToken, apiHosts } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
       config,
       userId,
@@ -67,11 +67,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const historicalSync = await coalescePreflight(
         `${userId}:${connectionId}:historical-probe`,
         Date.now(),
-        () => probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
+        () => probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts }),
       );
       return res.status(200).json({ connectionId, environment: config.environment, historicalSync });
     }
-    const baseUrl = tradovateApiBaseUrl(config.environment);
+    const baseUrl = tradovateApiBaseUrl(config.environment, apiHosts);
     const fullKey = `${userId}:${connectionId}:full`;
     // Úplné čtení s probe je nadmnožina čtení bez něj: běžící nebo čerstvé
     // `full` se sdílí, ať starší klient (iPhone) a nový studený start
@@ -93,7 +93,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
         : skipProbe
           ? Promise.resolve(notCheckedTradovateHistoricalSync({ environment: config.environment }))
-          : probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
+          : probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts }),
     ]);
     const [result, historicalSync] = await (sharedFull ?? coalescePreflight(
       `${userId}:${connectionId}:${bootstrap ? 'bootstrap' : skipProbe ? 'full-no-probe' : 'full'}`,

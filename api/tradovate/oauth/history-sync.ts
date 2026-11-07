@@ -51,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'invalid-history-sync-request' });
     }
 
-    const { accessToken } = await getValidTradovateAccessToken({
+    const { accessToken, apiHosts } = await getValidTradovateAccessToken({
       db,
       config,
       userId,
@@ -68,7 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let accountCreatedAt = existing.sync?.accountCreatedAt ?? null;
     if (!accountCreatedAt) {
       const identity = await loadTradovateAccountIdentity({
-        baseUrl: tradovateApiBaseUrl(config.environment),
+        baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
         accessToken,
         accountId,
       });
@@ -83,6 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       connectionId,
       environment: config.environment,
       accessToken,
+      apiHosts,
       accountId,
       accountName,
       accountCreatedAt,

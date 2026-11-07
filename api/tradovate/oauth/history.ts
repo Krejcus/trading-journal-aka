@@ -28,14 +28,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!connectionId || !Number.isSafeInteger(accountId) || !datePattern.test(startDate) || !datePattern.test(endDate)) {
       return res.status(400).json({ error: 'invalid-history-request' });
     }
-    const { accessToken } = await getValidTradovateAccessToken({
+    const { accessToken, apiHosts } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
       config,
       userId,
       connectionId,
     });
     const accounts = await loadTradovateAccountData({
-      baseUrl: tradovateApiBaseUrl(config.environment),
+      baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
       accessToken,
     });
     const account = accounts.accounts.find(candidate => candidate.id === accountId);
@@ -44,6 +44,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const result = await requestTradovatePerformanceReport({
       environment: config.environment,
+      apiHosts,
       accessToken,
       accountId,
       accountSpec: account.name,

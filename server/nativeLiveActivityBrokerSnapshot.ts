@@ -136,6 +136,7 @@ async function requestJson<T>(options: {
       ...(options.body == null ? {} : { 'Content-Type': 'application/json' }),
     },
     ...(options.body == null ? {} : { body: JSON.stringify(options.body) }),
+    redirect: 'manual',
     signal: AbortSignal.timeout(8_000),
   });
   const payload = await response.json().catch(() => null) as T | null;
@@ -352,6 +353,8 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
   baseUrl: string;
   accessToken?: string;
   accessTokens?: readonly string[];
+  /** Každé připojení s vlastním základem (prop firmy mají vlastní hosty); má přednost před `accessTokens`. */
+  connections?: ReadonlyArray<{ accessToken: string; baseUrl: string }>;
   /** Null načte všechny účty vrácené stejnými broker listy. */
   accountIds: readonly number[] | null;
   leaderAccountId?: number | null;
@@ -360,16 +363,18 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
 }): Promise<NativeLiveActivityBrokerSnapshot> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const accessTokens = [...new Set([
+    ...(options.connections ?? []).map(connection => connection.accessToken),
     ...(options.accessTokens ?? []),
     ...(options.accessToken ? [options.accessToken] : []),
   ])].filter(token => token.trim() !== '');
   if (accessTokens.length === 0) throw new Error('tradovate-live-activity-missing-token');
+  const baseUrlByToken = new Map((options.connections ?? []).map(connection => [connection.accessToken, connection.baseUrl]));
   const leaderAccountId = options.leaderAccountId
     ?? options.accountIds?.find(Number.isSafeInteger)
     ?? null;
 
   const bundles = await Promise.all(accessTokens.map(accessToken => loadBrokerRawBundle({
-    baseUrl: options.baseUrl,
+    baseUrl: baseUrlByToken.get(accessToken) ?? options.baseUrl,
     accessToken,
     accountIds: options.accountIds,
     leaderAccountId,

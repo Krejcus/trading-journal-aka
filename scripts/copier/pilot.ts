@@ -1,3 +1,4 @@
+import { sanitizeTradovateApiHosts, type TradovateApiHosts } from '../../lib/tradovateApiHosts';
 import { fileRelayDeliveryStore } from '../../server/copierRelayDeliveryStore.js';
 import { createCopierSnapshotDelivery, snapshotDeliveryId } from '../../server/copierSnapshotDelivery';
 import { captureTimelyCopierSnapshot } from '../../services/copierSnapshotCapture';
@@ -167,6 +168,8 @@ interface PilotContext {
   expiresAt: string | null;
   renewable: boolean;
   getAccessToken: () => Promise<string>;
+  /** Hosty organizace připojení z posledního lease nebo tokenu; null = výchozí hosty. */
+  getApiHosts?: () => TradovateApiHosts | null;
   /** Vynutí nový access token (novou Tradovate session) přes pilot-lease; jen párované zařízení. */
   forceTokenRenewal?: () => Promise<void>;
   device?: NonNullable<Parameters<typeof startLocalCopierExecutionAgent>[0]['device']>;
@@ -296,7 +299,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
   const context = await pilotContext();
   const accessToken = await context.getAccessToken();
   const accountResult = await loadTradovateAccountData({
-    baseUrl: tradovateApiBaseUrl(context.environment),
+    baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()),
     accessToken,
   });
   const accounts = accountResult.accounts;
@@ -334,6 +337,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
       getAccessToken: context.getAccessToken,
+      resolveApiHosts: context.getApiHosts,
       connectionLabel: connectionLabel(context.connectionId),
       onReconnectDiagnostic: logReconnectDiagnostic,
       onSessionSuspect: sessionSuspectHandler(context, connectionLabel(context.connectionId)),
@@ -366,7 +370,7 @@ async function runMultiConnectionAgent(): Promise<void> {
     // it; a group account that lived there is reported missing by the
     // routing/preflight and ARM stays blocked until it is visible again.
     const data = await retryTransient(() => (async () => loadTradovateAccountData({
-      baseUrl: tradovateApiBaseUrl(context.environment),
+      baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()),
       accessToken: await context.getAccessToken(),
     }))(), {
       ...STARTUP_RETRY,
@@ -398,6 +402,7 @@ async function runMultiConnectionAgent(): Promise<void> {
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
       getAccessToken: context.getAccessToken,
+      resolveApiHosts: context.getApiHosts,
       // Do chybových hlášek: bez štítku nejde z logu poznat, které OAuth
       // spojení (propfirma) vypadlo.
       connectionLabel: connectionLabel(connectionId),
@@ -704,6 +709,7 @@ async function discoveredPilotContext(device: MacCopierDeviceConfig, connectionI
     expiresAt: payload.expiresAt,
     renewable: true,
     getAccessToken: provider.getAccessToken,
+    getApiHosts: provider.getApiHosts,
     forceTokenRenewal: async () => { await provider.refresh({ forceRenewal: true }); },
     // Jen pro upload evidence obchodů této propfirmy (owner-scope device);
     // command relay běží dál výhradně přes primární připojení.
@@ -716,7 +722,7 @@ function makeDisplayFeed(context: PilotContext, accountIds: number[]) {
   return createTradovateAccountDisplayFeed({
     connectionId: context.connectionId, environment: context.environment, accountIds: () => accountIds,
     read: async (accountId, signal) => readTradovateAccountDisplay({
-      baseUrl: tradovateApiBaseUrl(context.environment), accessToken: await context.getAccessToken(), accountId, signal,
+      baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()), accessToken: await context.getAccessToken(), accountId, signal,
     }),
   });
 }
@@ -1781,9 +1787,12 @@ async function runLocalAgent(
       const readAccountListIds = async (
         getAccessToken: () => Promise<string>,
         environment: PilotContext['environment'],
+        getApiHosts?: () => TradovateApiHosts | null,
       ): Promise<number[]> => {
-        const response = await fetch(`${tradovateApiBaseUrl(environment)}/account/list`, {
-          headers: { Authorization: `Bearer ${await getAccessToken()}`, Accept: 'application/json' },
+        const authorization = `Bearer ${await getAccessToken()}`;
+        const response = await fetch(`${tradovateApiBaseUrl(environment, getApiHosts?.())}/account/list`, {
+          headers: { Authorization: authorization, Accept: 'application/json' },
+          redirect: 'manual',
           signal: AbortSignal.timeout(15_000),
         });
         if (!response.ok) throw new Error(`account/list HTTP ${response.status}`);
@@ -1796,7 +1805,7 @@ async function runLocalAgent(
       const probeEmptyDirectoryConnection = async (connectionId: string): Promise<boolean> => {
         try {
           const probe = await discoveredPilotContext(connectionWatch.device, connectionId);
-          const accountIds = await readAccountListIds(probe.getAccessToken, probe.environment);
+          const accountIds = await readAccountListIds(probe.getAccessToken, probe.environment, probe.getApiHosts);
           if (accountIds.length === 0) throw new Error(EMPTY_DIRECTORY_ERROR);
           connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, connectionId);
           console.log(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(connectionId)} má znovu účty (${accountIds.length}); restart, až bude kopírka vypnutá`);
@@ -2181,6 +2190,7 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
       expiresAt: payload.expiresAt,
       renewable: true,
       getAccessToken: provider.getAccessToken,
+      getApiHosts: provider.getApiHosts,
       forceTokenRenewal: async () => { await provider.refresh({ forceRenewal: true }); },
       relay: { apiOrigin: deviceConfig.apiOrigin, authorizationHeader: provider.authorizationHeader },
       device: {
@@ -2225,6 +2235,7 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
       expiresAt: payload.expiresAt,
       renewable: false,
       getAccessToken,
+      getApiHosts: () => (paired && provider ? provider.getApiHosts() : sanitizeTradovateApiHosts(payload.apiHosts)),
       ...(pairing ? {
         device: {
           state: 'pairing-required' as const,
@@ -2272,13 +2283,14 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
   const accountSpec = options.accountSpec
     ?? (stringFlag('account-spec', false) || connection.tradovate_email?.trim() || '');
   if (!accountSpec) throw new Error('Chybí Tradovate accountSpec; použij --account-spec');
-  const getAccessToken = async () => (await getValidTradovateAccessToken({
-    db,
-    config,
-    userId: connection.user_id,
-    connectionId: connection.id,
-  })).accessToken;
-  return { environment: 'demo', connectionId: connection.id, accountSpec, expiresAt: null, renewable: true, getAccessToken };
+  let apiHosts: TradovateApiHosts | null = null;
+  const getAccessToken = async () => {
+    const token = await getValidTradovateAccessToken({ db, config, userId: connection.user_id, connectionId: connection.id });
+    apiHosts = token.apiHosts;
+    return token.accessToken;
+  };
+  await getAccessToken();
+  return { environment: 'demo', connectionId: connection.id, accountSpec, expiresAt: null, renewable: true, getAccessToken, getApiHosts: () => apiHosts };
 }
 
 function validatePair<T extends ExecutionAccount>(
@@ -2315,6 +2327,7 @@ async function runPreflight(
     accountSpec: context.accountSpec,
     accountSpecsByAccountId,
     getAccessToken: context.getAccessToken,
+    resolveApiHosts: context.getApiHosts,
     connectionLabel: connectionLabel(context.connectionId),
     onReconnectDiagnostic: logReconnectDiagnostic,
   });
@@ -2406,6 +2419,7 @@ async function runRuntime(
     accountSpec: context.accountSpec,
     accountSpecsByAccountId,
     getAccessToken: context.getAccessToken,
+    resolveApiHosts: context.getApiHosts,
     connectionLabel: connectionLabel(context.connectionId),
     onReconnectDiagnostic: logReconnectDiagnostic,
   });

@@ -1,4 +1,4 @@
-import { describeTokenShape } from './tradovateHostProbe.js';
+import { sanitizeTradovateApiHosts, tradovateRestBaseUrl, type TradovateApiHosts } from '../lib/tradovateApiHosts.js';
 import {
   createCipheriv,
   createDecipheriv,
@@ -13,8 +13,9 @@ export const TRADOVATE_OAUTH_STATE_TTL_SECONDS = 10 * 60;
 
 export type TradovateEnvironment = 'demo' | 'live';
 
-export const tradovateApiBaseUrl = (environment: TradovateEnvironment): string =>
-  `https://${environment}.tradovateapi.com/v1`;
+/** REST základ připojení: hosty z autentizace (`apiHosts`), jinak výchozí sdílený host. */
+export const tradovateApiBaseUrl = (environment: TradovateEnvironment, apiHosts?: TradovateApiHosts | null): string =>
+  tradovateRestBaseUrl(environment, apiHosts);
 
 export const tradovateOAuthTokenUrl = (environment: TradovateEnvironment): string =>
   `${tradovateApiBaseUrl(environment)}/auth/oauthtoken`;
@@ -43,6 +44,8 @@ export interface TradovateTokenResponse {
   refreshExpiresIn?: number;
   tokenType: string;
   scope: string | null;
+  /** Hosty organizace z odpovědi autentizace; null = výchozí hosty. */
+  apiHosts?: TradovateApiHosts | null;
 }
 
 export interface TradovateOAuthIdentity {
@@ -258,6 +261,8 @@ function normalizeTokenResponse(value: unknown): TradovateTokenResponse {
       ? { refreshExpiresIn: Math.floor(Number(body.refresh_token_expires_in)) } : {}),
     tokenType: typeof body.token_type === 'string' && body.token_type.trim() ? body.token_type.trim() : 'Bearer',
     scope: typeof body.scope === 'string' && body.scope.trim() ? body.scope.trim() : null,
+    // Hosty organizace (prop firmy mají vlastní demo host); chybí při chybě nebo MFA.
+    apiHosts: sanitizeTradovateApiHosts(body.apiHosts),
   };
 }
 
@@ -270,12 +275,12 @@ async function requestToken(
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(fields).toString(),
+    // Přesměrování by zopakovalo POST s client_secret a refresh tokenem na host z Location.
+    redirect: 'error',
     signal: AbortSignal.timeout(10_000),
   });
   const text = await response.text();
   const body = text ? parseJson<unknown>(text, 'invalid-token-response') : null;
-  // Dočasně: vrací OAuth `apiHosts`? Jen názvy polí a hostname, žádné tokeny.
-  if (response.ok) console.error('[tradovate-oauth-host-probe] token-response', JSON.stringify(describeTokenShape(body)));
   if (!response.ok) {
     const detail = body && typeof body === 'object' && !Array.isArray(body)
       ? String((body as Record<string, unknown>).error_description ?? (body as Record<string, unknown>).error ?? response.status)

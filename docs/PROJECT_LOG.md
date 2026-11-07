@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-07 — Prop účty od 30. 10. nejdou kvůli napevno zadaným hostům Tradovate (Claude, větev `claude/codex-speed-review-8a93c8`)
+
+- **Příčina (ověřeno sondou v produkci 09:09Z):** NinjaTrader (mail pro aplikaci CID 16009) přesunul prop organizace na vlastní hosty a aplikace mají číst `apiHosts` z odpovědi autentizace. Lucid má `demo-api.lucid.ninjatrader.com`; odpověď `oauthtoken` hosty nese. Náš kód měl `demo.tradovateapi.com` napevno: WebSocket 421 „older version of an app“, REST 307 a fetch zahodil Authorization → 404 na `/auth/me`. Podpora Lucidu odpověděla obecně, že API neposkytuje; skutečný stav je, že API s hosty organizace funguje.
+- **Oprava:** hosty k připojení (migrace `20261107100000_tradovate_oauth_api_hosts`, nullable `api_hosts`), web routy, lease a worker; `INV-TRAD-HOSTS-01`. Critic: návrh OPRAVIT, nálezy opraveny (tajemství s přesměrováním, 3xx jako falešné „neexistuje“, změna hostu při obnově, atomičnost tokenu a hostů, demo/live křížení).
+- **Pořadí nasazení:** migrace → web → ověřit lease Lucidu s hosty → worker. Bez sloupce by selhal každý callback i obnova tokenu.
+- Dočasná sonda `6b61cf58` je odstraněná. Oprava `move-limit` běží od `6b61cf58` (web + worker), iPhone čeká.
+
 ### 2026-11-06 — Oprava `move-limit` po oponentuře `6bf590a1` (Claude + Codex, větev `claude/codex-speed-review-8a93c8`, NENASAZENO)
 
 - **Proč:** Tradovate při Modify vstupu v OSO sám posune obě pozastavené nohy; `6bf590a1` předpokládal opak (text, risk brána, mock, `INV-MANUAL-LIMIT-01`). Oprava starších zápisů: „SL/TP beze změny“ neplatí. Fill za letu navíc nechal trvalý `unknown`, který blokoval správu pozice a zrušení vstupu.

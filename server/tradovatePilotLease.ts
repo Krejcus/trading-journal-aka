@@ -19,6 +19,8 @@ export interface TradovatePilotLeasePayload {
   accessToken: string;
   expiresAt: string;
   issuedAt: string;
+  /** Hosty organizace připojení (dynamické hosty Tradovate). Starý worker pole ignoruje. */
+  apiHosts?: Readonly<Record<string, string>> | null;
 }
 
 export interface TradovatePilotLeaseEnvelope {

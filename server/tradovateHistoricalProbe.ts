@@ -1,3 +1,4 @@
+import { tradovateReportingBaseUrl, type TradovateApiHosts } from '../lib/tradovateApiHosts.js';
 export type TradovateHistoricalSyncStatus =
   /** Tento preflight probe záměrně vynechal; výsledek dorazí samostatně. */
   | 'not-checked'
@@ -50,10 +51,8 @@ interface RawReportDefinition {
 
 const REPORT_TIMEOUT_MS = 8_000;
 
-export const tradovateReportBaseUrl = (environment: 'demo' | 'live') =>
-  environment === 'live'
-    ? 'https://rpt-live.tradovateapi.com/v1'
-    : 'https://rpt-demo.tradovateapi.com/v1';
+export const tradovateReportBaseUrl = (environment: 'demo' | 'live', apiHosts?: TradovateApiHosts | null) =>
+  tradovateReportingBaseUrl(environment, apiHosts);
 
 const normalizeName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -160,12 +159,13 @@ export const notCheckedTradovateHistoricalSync = (options: {
 export async function probeTradovateHistoricalSync(options: {
   environment: 'demo' | 'live';
   accessToken: string;
+  apiHosts?: TradovateApiHosts | null;
   fetchImpl?: typeof fetch;
   now?: number;
   timeoutMs?: number;
 }): Promise<TradovateHistoricalSyncCapability> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const reportBaseUrl = tradovateReportBaseUrl(options.environment);
+  const reportBaseUrl = tradovateReportBaseUrl(options.environment, options.apiHosts);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? REPORT_TIMEOUT_MS);
   try {
@@ -175,6 +175,7 @@ export async function probeTradovateHistoricalSync(options: {
         Accept: 'application/json',
         Authorization: `Bearer ${options.accessToken}`,
       },
+      redirect: 'manual',
       signal: controller.signal,
     });
     if (!response.ok) {

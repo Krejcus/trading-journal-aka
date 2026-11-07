@@ -1,3 +1,4 @@
+import { sanitizeTradovateApiHosts } from '../lib/tradovateApiHosts.js';
 import { execFile } from 'node:child_process';
 import { hostname } from 'node:os';
 import { promisify } from 'node:util';
@@ -273,6 +274,8 @@ export function createMacCopierDeviceTokenProvider(options: {
 
   return {
     refresh,
+    /** Hosty organizace z posledního lease; null = výchozí hosty. */
+    getApiHosts: () => sanitizeTradovateApiHosts(payload?.apiHosts),
     async authorizationHeader(): Promise<string> {
       try {
         const secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);

@@ -389,6 +389,7 @@ const request = async <T>(options: {
         ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+      redirect: 'manual',
       signal: AbortSignal.timeout(10_000),
     });
     const parsed = await response.json().then(value => ({ ok: true as const, value }), () => ({ ok: false as const, value: null }));

@@ -88,6 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       accessToken: token.accessToken,
       expiresAt: token.expiresAt,
       issuedAt,
+      ...(token.apiHosts ? { apiHosts: token.apiHosts } : {}),
     }, publicKey);
     return res.status(200).json({ envelope, expiresAt: token.expiresAt, issuedAt });
   } catch (error) {

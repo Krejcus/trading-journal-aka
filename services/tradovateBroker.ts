@@ -1,3 +1,4 @@
+import { tradovateRestBaseUrl, tradovateWebSocketUrl, type TradovateApiHosts } from '../lib/tradovateApiHosts';
 import { explicitTradovateTradeDate } from '../lib/tradovateDisplayDay';
 import { createJournalBackfillPlan, validateJournalBackfillScope } from '../lib/journalBackfillPlan';
 import { createTradovateUsageMeter, type TradovateUsageWindow } from '../lib/tradovateUsageMeter';
@@ -185,6 +186,11 @@ export interface TradovateBrokerConfig {
   environment: BrokerEnvironment;
   accessToken?: string;
   getAccessToken?: () => Promise<string>;
+  /**
+   * Hosty organizace připojení (dynamické hosty Tradovate). Čtou se při každém připojení WebSocketu
+   * a REST té session používá stejný pár; změna se projeví až dalším připojením. Null = výchozí.
+   */
+  resolveApiHosts?: () => TradovateApiHosts | null | undefined;
   /** Legacy fallback for single-account connections. */
   accountSpec?: string;
   /** Exact Tradovate Account.name keyed by Account.id for multi-account connections. */
@@ -351,7 +357,17 @@ export interface TradovateVisibleAccount extends BrokerAccountCapability {
 }
 
 export function createTradovateBroker(config: TradovateBrokerConfig): TradovateBrokerPort {
-  const hosts = TRADOVATE_HOSTS[config.environment];
+  const hostsFor = (): { rest: string; websocket: string } => {
+    let resolved: TradovateApiHosts | null | undefined = null;
+    try { resolved = config.resolveApiHosts?.(); } catch (reason) {
+      resolved = null;
+      config.onReconnectDiagnostic?.(`${new Date(clock()).toISOString()} WS HOSTS nečitelné (${reason instanceof Error ? reason.message : String(reason)}) — výchozí host`);
+    }
+    return resolved
+      ? { rest: tradovateRestBaseUrl(config.environment, resolved), websocket: tradovateWebSocketUrl(config.environment, resolved) }
+      : TRADOVATE_HOSTS[config.environment];
+  };
+  let hosts = hostsFor();
   const fetchImpl = config.fetchImpl ?? globalThis.fetch;
   const clock = config.clock ?? Date.now;
   const intervals = config.setIntervalImpl ?? setInterval;
@@ -671,6 +687,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       try {
         response = await fetchImpl(`${hosts.rest}${path}`, {
           ...init,
+          // Přesměrování (host organizace) se nenásleduje: zahozený Authorization by z 404 udělal „neexistuje“.
+          redirect: 'manual',
           signal: abort.signal,
           headers: {
             Accept: 'application/json',
@@ -681,6 +699,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         });
       } catch (reason) {
         throw timedOut(reason);
+      }
+      if ((response.status >= 300 && response.status < 400) || response.type === 'opaqueredirect') {
+        void response.body?.cancel().catch(() => {});
+        throw new TradovateTransportError(`Tradovate ${path} redirected (${response.status}) — wrong API host for this organization`);
       }
       if (allowNotFound && response.status === 404) return null;
       if (response.status === 423 || response.status === 429) {
@@ -2135,6 +2157,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     if (raw === 'o') {
       socketState = 'authorizing';
       const accessToken = await token();
+      // Obnova tokenu mohla přinést jiné hosty: token nového lease nesmí jít na host starého.
+      if (hostsFor().websocket !== hosts.websocket) {
+        diagnostic('WS HOST se změnil během autorizace — nové připojení');
+        if (isCurrent()) socket?.close();
+        return;
+      }
       if (isCurrent()) socket?.send(`authorize\n0\n\n${accessToken}`);
       return;
     }
@@ -2297,6 +2325,18 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return new WebSocket(url) as unknown as WebSocketLike;
     });
     socketState = 'connecting';
+    const nextHosts = hostsFor();
+    if (nextHosts.websocket !== hosts.websocket) {
+      diagnostic(`WS HOST změna ${new URL(hosts.websocket).hostname} -> ${new URL(nextHosts.websocket).hostname}`);
+      // Jiný backend není plánovaná obměna: výpadek poctivě, aby controller udělal běžný resync (INV-RECON-01/04).
+      if (renewalInProgress) {
+        const held = renewalHeldEvents;
+        finishRenewal();
+        for (const heldEvent of held) emit(heldEvent);
+        emit({ type: 'connection', connected: false, at: clock() });
+      }
+    }
+    hosts = nextHosts;
     diagnostic(`WS CONNECT attempt=${reconnectFailures + 1} reason=${reason}`);
     let candidate: WebSocketLike;
     try {

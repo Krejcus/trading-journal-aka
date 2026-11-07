@@ -471,7 +471,7 @@ export function createNativeBrokerSnapshotLoader(options: {
         })));
         return loadNativeLiveActivityBrokerSnapshot({
           baseUrl: tradovateApiBaseUrl(options.config.environment),
-          accessTokens: tokens.map(token => token.accessToken),
+          connections: tokens.map(token => ({ accessToken: token.accessToken, baseUrl: tradovateApiBaseUrl(options.config.environment, token.apiHosts) })),
           accountIds,
           leaderAccountId: runtimeAccountIds[0] ?? null,
           fetchImpl: options.fetchImpl,

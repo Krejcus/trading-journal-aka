@@ -56,7 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const connectionId = typeof req.body?.connectionId === 'string' ? req.body.connectionId : '';
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
     const contractCursor = typeof req.body?.contractCursor === 'number' ? req.body.contractCursor : 0;
-    const { accessToken } = await getValidTradovateAccessToken({
+    const { accessToken, apiHosts } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
       config,
       userId,
@@ -67,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!Number.isSafeInteger(accountId) || accountId <= 0) return res.status(400).json({ error: 'invalid-account-id' });
       const requestedAt = new Date().toISOString();
       const pending = coalesce(`cash:${userId}:${connectionId}:${accountId}`, CASH_COALESCE_MS, Date.now(), () => readTradovateAccountDisplay({
-        baseUrl: tradovateApiBaseUrl(config.environment), accessToken, accountId, signal: AbortSignal.timeout(8_000),
+        baseUrl: tradovateApiBaseUrl(config.environment, apiHosts), accessToken, accountId, signal: AbortSignal.timeout(8_000),
       }));
       const fields = await pending;
       // readTradovateAccountDisplay = 3 Tradovate volání (snapshot, deps, currency/list).
@@ -85,7 +85,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: 'invalid-contract-id' });
       }
       const anchor = await loadTradovateLivePnlAnchor({
-        baseUrl: tradovateApiBaseUrl(config.environment),
+        baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
         accessToken,
         connectionId,
         environment: config.environment,
@@ -95,7 +95,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(anchor);
     }
     const pendingTick = coalesce(`tick:${userId}:${connectionId}:${contractCursor}`, TICK_COALESCE_MS, Date.now(), () => loadTradovateLivePnlTick({
-      baseUrl: tradovateApiBaseUrl(config.environment),
+      baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
       accessToken,
       connectionId,
       environment: config.environment,

@@ -1,3 +1,4 @@
+import { sanitizeTradovateApiHosts, type TradovateApiHosts } from '../lib/tradovateApiHosts.js';
 import { randomUUID } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -57,6 +58,8 @@ interface ConnectionRow {
   disconnected_at: string | null;
   disconnect_reason: string | null;
   archived_at?: string | null;
+  /** Hosty organizace z poslední autentizace (dynamické hosty Tradovate); null = výchozí. */
+  api_hosts?: unknown;
 }
 
 const required = (name: string): string => {
@@ -177,6 +180,7 @@ export async function saveTradovateConnection(options: {
     scope: options.token.scope,
     tradovate_user_id: options.tradovateUserId ?? null,
     tradovate_email: options.tradovateEmail ?? null,
+    api_hosts: options.token.apiHosts ?? null,
     organization_name: options.organizationName ?? null,
     connection_status: 'connected',
     disconnected_at: null,
@@ -279,7 +283,7 @@ export async function getValidTradovateAccessToken(options: {
   connectionId?: string;
   /** Refresh early when a caller needs the token to survive a bounded operation. */
   minimumValidityMs?: number;
-}): Promise<{ accessToken: string; expiresAt: string }> {
+}): Promise<{ accessToken: string; expiresAt: string; apiHosts: TradovateApiHosts | null }> {
   const now = options.now ?? Date.now();
   const minimumValidityMs = Math.max(120_000, options.minimumValidityMs ?? 120_000);
   const row = await connectionRow(options.db, options.userId, options.connectionId);
@@ -295,6 +299,7 @@ export async function getValidTradovateAccessToken(options: {
     return {
       accessToken: decryptTradovateSecret(row.encrypted_access_token, options.config.tokenEncryptionKey),
       expiresAt: row.access_token_expires_at,
+      apiHosts: sanitizeTradovateApiHosts(row.api_hosts),
     };
   }
   if (!row.encrypted_refresh_token) throw new Error('tradovate-reauthorization-required');
@@ -322,6 +327,7 @@ export async function getValidTradovateAccessToken(options: {
       return {
         accessToken: decryptTradovateSecret(latest.encrypted_access_token, options.config.tokenEncryptionKey),
         expiresAt: latest.access_token_expires_at,
+        apiHosts: sanitizeTradovateApiHosts(latest.api_hosts),
       };
     }
     // Classify only definitive refresh rejection, after checking for a newer
@@ -347,6 +353,8 @@ export async function getValidTradovateAccessToken(options: {
     access_token_expires_at: nextExpiresAt,
     token_type: refreshed.tokenType,
     scope: refreshed.scope ?? row.scope,
+    // Hosty se při každé obnově nahradí; bez nich v odpovědi zůstávají poslední známé.
+    ...(refreshed.apiHosts ? { api_hosts: refreshed.apiHosts } : {}),
     refreshed_at: timestamp,
     updated_at: timestamp,
   }).eq('id', row.id).eq('user_id', options.userId).eq('connection_status', 'connected').eq('updated_at', row.updated_at).select('user_id').maybeSingle<{ user_id: string }>();
@@ -364,12 +372,14 @@ export async function getValidTradovateAccessToken(options: {
     return {
       accessToken: decryptTradovateSecret(latest.encrypted_access_token, options.config.tokenEncryptionKey),
       expiresAt: latest.access_token_expires_at,
+      apiHosts: sanitizeTradovateApiHosts(latest.api_hosts),
     };
   }
 
   console.info('[tradovate-refresh]', { ...refreshContext, phase: 'saved', expiresAt: nextExpiresAt,
+    apiHosts: refreshed.apiHosts ? (refreshed.apiHosts.demo ?? 'present') : 'absent',
     refreshExpiresAt: refreshed.refreshExpiresIn ? new Date(now + refreshed.refreshExpiresIn * 1000).toISOString() : null });
-  return { accessToken: refreshed.accessToken, expiresAt: nextExpiresAt };
+  return { accessToken: refreshed.accessToken, expiresAt: nextExpiresAt, apiHosts: refreshed.apiHosts ?? sanitizeTradovateApiHosts(row.api_hosts) };
 }
 
 export async function disconnectTradovateConnection(

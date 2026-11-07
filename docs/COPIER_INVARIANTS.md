@@ -3423,3 +3423,13 @@ Dokumentace invariantů nenahrazuje testování. Podle rozsahu změny je minimem
 - Korelovaná odpověď na WebSocket zápis se vyřídí nezávisle na semantic tailu. Frame obsahující pouze tuto odpověď nespotřebuje pořadové číslo sémantické fronty.
 - Díky tomu další skutečný OrderVersion může uvolnit čekající hydrataci bez čekání na REST. Jakákoli intervenující sémantická událost zůstává bariérou. Execution cache, zpracování fillů, watchdog i pravidla potvrzení změny zůstávají stejné.
 - Regrese s nerozhodnutým REST čtením: `tradovateBrokerWebSocketWrites.test.ts`; varianta s intervenujícím Order zůstává blokovaná. Test s ACK-only bez opravy selže.
+
+### INV-TRAD-HOSTS-01: API host patří připojení (organizaci), ne prostředí
+
+- Proč: NinjaTrader přesunul prop organizace na vlastní hosty (docs.ninjatrader.com/api/dynamic-api-hosts). Lucid od 30. 10. 2026: WebSocket na `demo.tradovateapi.com` = 421, REST = 307 na `demo-api.lucid.ninjatrader.com`; `/auth/me` patří na `live`. Ověřeno sondou 7. 11. 2026.
+- Hosty (`apiHosts`) se berou z každé odpovědi autentizace a obnovy a ukládají k připojení (`tradovate_oauth_connections.api_hosts`); bez nich zůstávají poslední známé, a když nejsou žádné, platí výchozí sdílené hosty. Lease je nese workeru.
+- Token jde jen na hosty z povoleného seznamu (`lib/tradovateApiHosts.ts`); demo klíč nesmí mířit na live host a naopak. Přesměrování se nenásleduje: `oauthtoken` `redirect: 'error'`, REST `redirect: 'manual'` a 3xx je chyba přenosu, nikdy „příkaz neexistuje“.
+- Worker volí hosty při každém připojení WebSocketu, REST té session jede na stejném páru. Změna hostu není plánovaná obměna: výpadek a běžný resync (INV-RECON-01/04). Když obnova tokenu během autorizace přinese jiné hosty, socket se zavře a token nového lease na starý host nejde.
+- Každé připojení má vlastní hosty (INV-TRAD-06); Vercel snapshot páruje základ URL s tokenem.
+- Neověřeno: konformance Lucidu ve workeru (WS, sync, zápis) a zda obnova přes `demo.tradovateapi.com/v1/auth/oauthtoken` hosty vrací. Operátorské skripty (`inspectCommandReports`, `record-types`, `riskLimitAccessProbe`, `tradovateDryRun`, `latencyProbe`) mají host dál napevno a na prop organizacích selžou bez zápisu.
+- Testy: `tradovateApiHosts.test.ts`.

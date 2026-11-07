@@ -1,3 +1,4 @@
+import type { TradovateApiHosts } from '../lib/tradovateApiHosts.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
@@ -463,6 +464,8 @@ export async function runTradovatePerformanceBackfillStep(options: {
   now?: number;
   fetchImpl?: typeof fetch;
   requestReport?: typeof requestTradovatePerformanceReport;
+  /** Hosty organizace připojení; reporting jde na její `reportingDemo`. */
+  apiHosts?: TradovateApiHosts | null;
 }): Promise<TradovateHistorySyncResult> {
   const now = options.now ?? Date.now();
   const endDate = options.endDate ?? new Date(now).toISOString().slice(0, 10);
@@ -484,6 +487,7 @@ export async function runTradovatePerformanceBackfillStep(options: {
   row = claim.row;
   const report = await (options.requestReport ?? requestTradovatePerformanceReport)({
     environment: options.environment,
+    apiHosts: options.apiHosts ?? null,
     accessToken: options.accessToken,
     accountId: options.accountId,
     accountSpec: options.accountName,
