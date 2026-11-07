@@ -934,6 +934,8 @@ private func liveActivityPriceAlertVisible(_ state: AlphaTradeLiveActivityAttrib
 private struct LiveActivityPriceAlertRow: View {
     let state: AlphaTradeLiveActivityAttributes.ContentState
     let muted: Color
+    /// Karta s pozicí je plná: jen jeden řádek, ať nevytlačí P&L ani SL/TP.
+    var showNote = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -949,7 +951,7 @@ private struct LiveActivityPriceAlertRow: View {
                     Text(liveActivityClock(at)).font(.system(size: 10).monospacedDigit()).foregroundStyle(muted)
                 }
             }
-            if let note = state.priceAlertNote, !note.isEmpty {
+            if showNote, let note = state.priceAlertNote, !note.isEmpty {
                 Text(note).font(.system(size: 11)).lineLimit(1).privacySensitive()
             }
         }
@@ -1102,8 +1104,8 @@ private struct AlphaTradeLiveActivityLockScreen: View {
             }
             content
             if liveActivityPriceAlertVisible(state, isStale: context.isStale), layout != .critical, layout != .locked {
-                Divider().overlay(muted.opacity(0.3))
-                LiveActivityPriceAlertRow(state: state, muted: muted)
+                if layout != .position { Divider().overlay(muted.opacity(0.3)) }
+                LiveActivityPriceAlertRow(state: state, muted: muted, showNote: layout != .position)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

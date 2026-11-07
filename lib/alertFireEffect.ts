@@ -131,9 +131,8 @@ export function drawAlertFire(ctx: AlertFireCanvas, frame: AlertFireFrame): void
   const rgb = alertFireRgb(frame.color);
   const point = alertFirePoint(frame.pointX, frame.width);
   const startX = point ?? frame.width;
-  if (!frame.reduced) {
-    drawWave(ctx, startX, frame.y, frame.ms, rgb);
-    drawToAxis(ctx, startX, frame.width, frame.y, frame.ms, rgb);
-  }
+  if (!frame.reduced) drawWave(ctx, startX, frame.y, frame.ms, rgb);
+  // Omezené animace na telefonu: bez prstenu by jinak nezbylo nic, čára k ceně se jen rozsvítí.
+  if (!frame.reduced || frame.noRing) drawToAxis(ctx, startX, frame.width, frame.y, frame.ms, rgb);
   if (point != null && !frame.noRing) drawRing(ctx, point, frame.y, frame.ms, rgb, frame.reduced === true);
 }

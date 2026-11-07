@@ -40,7 +40,8 @@ import {
 } from './LivePhoneOrderLines';
 import { LivePhoneAlertLines, LivePhoneAlertList, LivePhoneAlertSheet, LivePhoneAlertsButton, LivePhoneCrosshairPlus, LivePhonePlusSheet } from './LivePhoneAlerts';
 import { alertTitle, movedAlert, newPriceAlert, priceAlertEventTitle, type PriceAlert } from '../../lib/priceAlerts';
-import { useFreshPriceAlertEvents, usePriceAlertStore } from '../../services/priceAlertStoreHook';
+import { PRICE_ALERT_REARM_EVENT, useFreshPriceAlertEvents, usePriceAlertStore } from '../../services/priceAlertStoreHook';
+import { isNativeBuild } from '../../utils/runtimeConfig';
 import { alertVoiceText, speakAlertText } from '../../services/alertVoice';
 import { playAlertTone } from '../../services/priceAlertSounds';
 import { ALERT_FIRE_MS } from '../../lib/alertFireEffect';
@@ -405,6 +406,15 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [alertList, setAlertList] = useState(false);
   const [plus, setPlus] = useState<number | null>(null);
   const [flashIds, setFlashIds] = useState<ReadonlySet<string>>(() => new Set());
+  // „Zapnout znovu“ z notifikace: výsledek musí být vidět, jinak by člověk věřil, že alert hlídá.
+  useEffect(() => {
+    const onRearm = (event: Event) => {
+      const ok = (event as CustomEvent<{ ok?: boolean }>).detail?.ok === true;
+      card(ok ? 'amber' : 'red', 'Upoz.', ok ? 'Upozornění znovu zapnuto' : 'Upozornění se NEZAPNULO', ok ? 'Mac ho zase hlídá, jakmile má cenu' : 'Už běží, je smazané, nebo se znovu spustilo. Zkontroluj seznam.', 8_000);
+    };
+    window.addEventListener(PRICE_ALERT_REARM_EVENT, onRearm);
+    return () => window.removeEventListener(PRICE_ALERT_REARM_EVENT, onRearm);
+  }, [card]);
   useFreshPriceAlertEvents(alertStore, alertEvents, (event, alert) => {
     const title = priceAlertEventTitle(alert, event.price);
     // Nejvýš 2 karty upozornění najednou, ať nevytlačí kartu rizika.
@@ -414,7 +424,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     });
     // Karta s číselníkem a majákem: cena nahoře, směr, pod ním zpráva.
     card('amber', 'Upoz.', title.replace(/\s[\d\s\u00A0.,]+$/, ''), alert?.note ?? '', 8_000, { alertBeacon: { price: event.price }, ...(alert ? { alertColor: alert.line.color } : {}) });
-    if (alert?.channels.sound !== false) void playAlertTone(alert?.channels.tone);
+    // Nativně v popředí hraje zvuk už notifikace; tón jen když notifikace nepřijde.
+    if (alert?.channels.sound !== false && (!isNativeBuild || alert?.channels.phone === false)) void playAlertTone(alert?.channels.tone);
     if (alert?.channels.voice) speakAlertText(alertVoiceText(title, alert.note));
     if (!alert) return;
     setFlashIds(current => new Set(current).add(alert.id));

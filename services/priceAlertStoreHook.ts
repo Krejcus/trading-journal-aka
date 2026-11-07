@@ -42,23 +42,26 @@ function start(): void {
   window.addEventListener('focus', refresh);
 }
 
+/** Výsledek „Zapnout znovu“ pro kartu v grafu. */
+export const PRICE_ALERT_REARM_EVENT = 'alphatrade:price-alert-rearm';
+
 /**
- * „Zapnout znovu“ z notifikace: appka se právě otevřela, úložiště se teprve načítá, takže
- * počká, až upozornění dorazí ze serveru. Když mezitím nedorazí, nic se nestane.
+ * „Zapnout znovu“ z notifikace: appka se právě vrátila z pozadí a v paměti může mít starý stav
+ * (realtime v pozadí nic nedoručí), takže nejdřív načte čerstvý ze serveru. Výsledek ohlásí
+ * událostí, ať se uživatel nemylně nespolehne na hlídání.
  */
-export function rearmPriceAlertFromNotification(alertId: string, timeoutMs = 8_000): Promise<boolean> {
+export async function rearmPriceAlertFromNotification(alertId: string, timeoutMs = 8_000, wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))): Promise<boolean> {
   start();
-  return new Promise(resolve => {
-    const startedAt = Date.now();
-    const attempt = () => {
-      const store = shared?.store;
-      const known = store?.getState().alerts.some(alert => alert.id === alertId);
-      if (store && known) { resolve(store.rearm?.(alertId) === true); return; }
-      if (Date.now() - startedAt >= timeoutMs) { resolve(false); return; }
-      window.setTimeout(attempt, 250);
-    };
-    attempt();
-  });
+  const startedAt = Date.now();
+  while (!shared && Date.now() - startedAt < timeoutMs) await wait(250);
+  let done = false;
+  const store = shared?.store;
+  if (store) {
+    await Promise.race([store.refresh().catch(() => undefined), wait(Math.max(0, timeoutMs - (Date.now() - startedAt)))]);
+    done = store.rearm(alertId);
+  }
+  window.dispatchEvent(new CustomEvent(PRICE_ALERT_REARM_EVENT, { detail: { ok: done } }));
+  return done;
 }
 
 export function usePriceAlertStore(): PriceAlertStore {

@@ -27,7 +27,7 @@ const broker: NativeLiveActivityBrokerSnapshot = {
 };
 
 import { buildApnsLiveActivityPayload } from '../server/apns';
-import { loadRecentPriceAlert, priceAlertExpandAlert, priceAlertStateFields } from '../server/priceAlertLiveActivity';
+import { loadRecentPriceAlert, priceAlertExpandAlert, priceAlertStateFields, withoutPriceAlert } from '../server/priceAlertLiveActivity';
 
 const alert = { symbol: 'MNQ', level: 21482, condition: 'up', note: 'Retest dHigh', at: now - 3_000 };
 const runtimeWith = (controller: Record<string, unknown>) => ({ ...runtime, status: { ...(runtime as { status: Record<string, unknown> }).status, controller: { ...((runtime as { status: { controller?: Record<string, unknown> } }).status.controller ?? {}), ...controller } } });
@@ -52,17 +52,27 @@ describe('upozornění na cenu v Live Activity', () => {
     const offline = planNativeLiveActivityUpdate({ runtime: { ...runtime, last_seen_at: new Date(now - 200_000).toISOString() }, broker, now, priceAlert: alert });
     expect(offline.update.state.status).toBe('WORKER OFFLINE');
     expect(offline.priceAlertShown).toBe(false);
-    const ended = planNativeLiveActivityUpdate({ runtime: runtimeWith({ armed: false, dayLockUntil: 0, entryCooldownUntil: 0 }), broker: { ...broker, positions: [], workingOrders: [] } as typeof broker, now, priceAlert: alert });
-    if (ended.shouldEnd) {
-      expect(ended.priceAlertShown).toBe(false);
-      expect(ended.update.state.priceAlertLevelText).toBeUndefined();
+    const ended = planNativeLiveActivityUpdate({ runtime: runtimeWith({ armed: false, dayLockUntil: 0, entryCooldownUntil: 0 }), broker: { ...broker, positions: [], workingOrderCount: 0 }, now, priceAlert: alert });
+    expect(ended.shouldEnd).toBe(true);
+    expect(ended.priceAlertShown).toBe(false);
+    expect(ended.update.state.priceAlertLevelText).toBeUndefined();
+    for (const controller of [{ connected: false }]) {
+      const brokerOffline = planNativeLiveActivityUpdate({ runtime: runtimeWith(controller), broker, now, priceAlert: alert });
+      expect(brokerOffline.update.state.status).toBe('BROKER OFFLINE');
+      expect(brokerOffline.priceAlertShown).toBe(false);
     }
+    // Bez snapshotu brokera: žádný alert nad starým P&L.
+    expect(planNativeLiveActivityUpdate({ runtime, broker: null, now, priceAlert: alert }).priceAlertShown).toBe(false);
   });
 
   it('Island se rozbalí jen při prvním odeslání po spuštění a bez zvuku; end alert nenese', () => {
-    expect(priceAlertExpandAlert(alert, now - 10_000)?.title.replace(/\s/g, ' ')).toBe('🚨 MNQ 21 482,00');
-    expect(priceAlertExpandAlert(alert, now - 1_000)).toBeUndefined();
-    expect(priceAlertExpandAlert(null, 0)).toBeUndefined();
+    expect(priceAlertExpandAlert(alert, now - 10_000, now)?.title.replace(/\s/g, ' ')).toBe('🚨 MNQ 21 482,00');
+    expect(priceAlertExpandAlert(alert, now - 1_000, now)).toBeUndefined();
+    expect(priceAlertExpandAlert(null, 0, now)).toBeUndefined();
+    // Událost novější než čas tiku se rozbalí až příště, stará vůbec.
+    expect(priceAlertExpandAlert({ ...alert, at: now + 500 }, now - 5_000, now)).toBeUndefined();
+    expect(priceAlertExpandAlert({ ...alert, at: now - 31_000 }, 0, now)).toBeUndefined();
+    expect(withoutPriceAlert({ status: 'x', priceAlertAt: 1, priceAlertLevelText: 'a' })).toEqual({ status: 'x' });
     const state = planNativeLiveActivityUpdate({ runtime, broker, now }).update.state;
     const payload = buildApnsLiveActivityPayload({ state, alert: { title: 'a', body: 'b' } }) as { aps: { alert?: Record<string, unknown> } };
     expect(payload.aps.alert).toEqual({ title: 'a', body: 'b' });
@@ -74,6 +84,10 @@ describe('upozornění na cenu v Live Activity', () => {
   it('zpráva je zkrácená; čtení nikdy nevyhodí a respektuje vypnutý iPhone', async () => {
     expect(priceAlertStateFields({ ...alert, note: 'x'.repeat(80) }).priceAlertNote).toHaveLength(40);
     expect(priceAlertStateFields({ ...alert, note: '' })).not.toHaveProperty('priceAlertNote');
+    // Emoji na hranici: nesmí zůstat osamělá polovina znaku.
+    const cut = priceAlertStateFields({ ...alert, note: `${'x'.repeat(39)}🚀🚀` }).priceAlertNote!;
+    expect(cut).toBe(`${'x'.repeat(39)}🚀`);
+    expect(() => encodeURIComponent(cut)).not.toThrow();
     await expect(loadRecentPriceAlert({ from: () => { throw new Error('boom'); } } as never, 'u', now)).resolves.toBeNull();
     const chain = (data: unknown) => {
       const api: Record<string, unknown> = {};

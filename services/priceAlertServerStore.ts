@@ -295,9 +295,12 @@ export function createServerPriceAlertStore(deps: {
       enqueue({ kind: 'upsert', alert, ...(pendingRearm != null ? { rearm: pendingRearm } : spent && changed ? { rearm: previous!.triggerCount ?? 0 } : {}) });
     },
     rearm: id => {
-      const alert = server.get(id);
-      if (!alert || (alert.status !== 'triggered' && alert.status !== 'expired')) return false;
-      enqueue({ kind: 'upsert', alert, rearm: alert.triggerCount ?? 0 });
+      // Čekající úprava má přednost, ať ji znovuzapnutí nepřepíše; stav spouštění je ze serveru.
+      const current = server.get(id);
+      if (!current || (current.status !== 'triggered' && current.status !== 'expired')) return false;
+      const pending = queue.get(id);
+      if (pending?.kind === 'delete') return false;
+      enqueue({ kind: 'upsert', alert: pending?.alert ?? current, rearm: current.triggerCount ?? 0 });
       return true;
     },
     remove: id => {

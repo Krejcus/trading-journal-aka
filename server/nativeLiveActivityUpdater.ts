@@ -334,7 +334,8 @@ export function planNativeLiveActivityUpdate(options: {
     && finite(controller.dayLockUntil) <= options.now
     && finite(controller.entryCooldownUntil) <= options.now
     && !bool(controller.killSwitch);
-  const priceAlertShown = options.priceAlert != null && !shouldEnd
+  // Bez snapshotu brokera by Island ukázal starý P&L a „0 pozic“.
+  const priceAlertShown = options.priceAlert != null && options.broker != null && !shouldEnd
     && !CRITICAL_STATUSES.has(status.status) && status.status !== 'WORKER OFFLINE' && status.status !== 'BROKER OFFLINE';
   const headline = position.headline
     ?? (bool(controller.armed) ? `ARM · ${followerCount} followerů` : status.detail);
@@ -514,7 +515,7 @@ export async function updateNativeLiveActivities(options: {
     return pending;
   };
   const withExpand = (alert: LiveActivityPriceAlert | null, lastAt: number) => {
-    const expand = priceAlertExpandAlert(alert, lastAt);
+    const expand = priceAlertExpandAlert(alert, lastAt, now);
     return expand ? { alert: expand } : {};
   };
   let sent = 0;

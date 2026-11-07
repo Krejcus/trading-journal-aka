@@ -11,6 +11,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export const PRICE_ALERT_LIVE_ACTIVITY_WINDOW_MS = 90_000;
 const NOTE_MAX = 40;
 const READ_TIMEOUT_MS = 300;
+/** Starší spuštění Island nerozbalí, řádek na kartě ale zůstane. */
+const EXPAND_MAX_AGE_MS = 30_000;
+/** Bez rozseknutí emoji: osamělá polovina znaku by v iOS mohla shodit celou aktualizaci. */
+const shortNote = (note: string) => Array.from(note).slice(0, NOTE_MAX).join('');
 
 export interface LiveActivityPriceAlert {
   symbol: string;
@@ -30,15 +34,22 @@ export function priceAlertStateFields(alert: LiveActivityPriceAlert) {
     priceAlertSymbol: alert.symbol,
     priceAlertLevelText: levelText(alert.level),
     priceAlertDirection: directionText(alert.condition),
-    ...(alert.note ? { priceAlertNote: alert.note.slice(0, NOTE_MAX) } : {}),
+    ...(alert.note ? { priceAlertNote: shortNote(alert.note) } : {}),
     priceAlertAt: alert.at / 1_000,
   };
 }
 
+/** Stav bez alertu: `end` ho nikdy nenese. */
+export function withoutPriceAlert<T extends object>(state: T): T {
+  const { priceAlertSymbol: _s, priceAlertLevelText: _l, priceAlertDirection: _d, priceAlertNote: _n, priceAlertAt: _a, ...rest } = state as T & Record<string, unknown>;
+  return rest as unknown as T;
+}
+
 /** Rozbalení Islandu: jen první aktualizace po spuštění; bez zvuku, ten má běžná notifikace. */
-export function priceAlertExpandAlert(alert: LiveActivityPriceAlert | null | undefined, lastPayloadAtMs: number): { title: string; body: string } | undefined {
-  if (!alert || !(alert.at > lastPayloadAtMs)) return undefined;
-  return { title: `🚨 ${alert.symbol} ${levelText(alert.level)}`, body: alert.note ? `${directionText(alert.condition)} · ${alert.note.slice(0, NOTE_MAX)}` : directionText(alert.condition) };
+export function priceAlertExpandAlert(alert: LiveActivityPriceAlert | null | undefined, lastPayloadAtMs: number, now: number): { title: string; body: string } | undefined {
+  // `last_payload_at` se zapisuje jako `now` z tiku, takže pozdější spuštění se porovná až příště.
+  if (!alert || alert.at <= lastPayloadAtMs || alert.at > now || now - alert.at > EXPAND_MAX_AGE_MS) return undefined;
+  return { title: `🚨 ${alert.symbol} ${levelText(alert.level)}`, body: alert.note ? `${directionText(alert.condition)} · ${shortNote(alert.note)}` : directionText(alert.condition) };
 }
 
 /**

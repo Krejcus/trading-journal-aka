@@ -25,7 +25,7 @@ import {
   type NativeLiveActivitySubscriptionRow,
 } from './nativeLiveActivityUpdater.js';
 import { startNativeLiveActivities } from './nativeLiveActivityStarter.js';
-import { loadRecentPriceAlert, priceAlertExpandAlert } from './priceAlertLiveActivity.js';
+import { loadRecentPriceAlert, priceAlertExpandAlert, withoutPriceAlert } from './priceAlertLiveActivity.js';
 import type { TradovateServerConfig } from './tradovateOAuthStore.js';
 
 /** Nejkratší rozestup mezi dvěma pokusy o tik (a tedy i Tradovate snapshoty). */
@@ -190,7 +190,7 @@ export async function tickNativeLiveActivities(options: {
       deviceToken: duplicate.push_token,
       environment: duplicate.environment,
       bundleId: duplicate.bundle_id,
-    } as ApnsDevice, { state: plan.update.state, event: 'end', staleAt: now / 1_000 + 60, dismissalAt: now / 1_000 + 2 });
+    } as ApnsDevice, { state: withoutPriceAlert(plan.update.state), event: 'end', staleAt: now / 1_000 + 60, dismissalAt: now / 1_000 + 2 });
     await options.db.from('native_live_activity_subscriptions').update({
       expires_at: nowIso,
       last_error: `ended-duplicate:${result.status}`,
@@ -211,7 +211,7 @@ export async function tickNativeLiveActivities(options: {
       environment: subscription.environment,
       bundleId: subscription.bundle_id,
     } as ApnsDevice, plan.priceAlertShown
-      ? (() => { const alert = priceAlertExpandAlert(priceAlert, finiteDate(subscription.last_payload_at)); return alert ? { ...update, alert } : update; })()
+      ? (() => { const alert = priceAlertExpandAlert(priceAlert, finiteDate(subscription.last_payload_at), now); return alert ? { ...update, alert } : update; })()
       : update);
     if (result.status === 'sent') {
       sent++;

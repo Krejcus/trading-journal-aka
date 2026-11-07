@@ -349,6 +349,15 @@ describe('upozornění na cenu na PC', () => {
     expect(read('capacitor-ios/App/App/App.entitlements')).toContain('usernotifications.time-sensitive');
   });
 
+  it('riziková notifikace dál vede na přehled, graf jen z tlačítka u upozornění (INV-UI-02)', () => {
+    const native = read('services/nativeNotifications.ts');
+    expect(native).toMatch(/navigateNativeShell\(route === 'live' \? LIVE_OVERVIEW_ROUTE : route\)/);
+    expect(native.match(/navigateNativeShell\(LIVE_CHART_ROUTE\)/g)).toHaveLength(2);
+    expect(native).toMatch(/action\.actionId === NATIVE_NOTIFICATION_ACTIONS\.openChart/);
+    const risk = native.slice(native.indexOf('id: ACTION_TYPE_RISK'));
+    expect(risk.slice(0, 300)).not.toMatch(/openChart|rearmPriceAlert/);
+  });
+
   it('nic neobchoduje a nesahá na kopírku ani příkazy', () => {
     const source = read('components/LivePcPriceAlerts.tsx');
     expect(source).not.toMatch(/from ['"][^'"]*(tradovate|copier|relay|broker|leaderOrderManage|livePhoneOrders)[^'"]*['"]/i);
