@@ -208,7 +208,7 @@ import { isSupabaseConfigured, supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
 import { playNativeHapticIfAvailable } from './services/nativeCapabilities';
-import { LIVE_OVERVIEW_ROUTE } from './lib/liveOverviewRoute';
+import { LIVE_CHART_ROUTE, LIVE_OVERVIEW_ROUTE } from './lib/liveOverviewRoute';
 import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage, reportNativeShellReview, reportNativeShellReviewCount, type NativeReviewRequest } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 import {
@@ -1567,6 +1567,11 @@ const App: React.FC = () => {
           // lištou, ne na telefonním grafu (INV-UI-02).
           if (page === LIVE_OVERVIEW_ROUTE) {
             setRequestedLiveTab('overview');
+            nativeActions.current.navigate('live');
+            return;
+          }
+          if (page === LIVE_CHART_ROUTE) {
+            setRequestedLiveTab('chart');
             nativeActions.current.navigate('live');
             return;
           }

@@ -26,6 +26,10 @@ export interface ApnsNotification {
   timeoutMs?: number;
   /** Bez zvuku (upozornění na cenu s vypnutým zvukem); výchozí je `default`. */
   silent?: boolean;
+  /** Soubor zvuku v balíčku appky (např. `alert_panic.wav`); výchozí je `default`. */
+  sound?: string;
+  /** Doplňková data pro akce notifikace (např. id upozornění). */
+  data?: Record<string, string>;
   /**
    * `apns-expiration` v sekundách od teď; 0 = APNs notifikaci neuloží (doručí jen hned).
    * Výchozí 1 h. Upozornění na cenu posílá 0: uložená by vytlačila uloženou rizikovou
@@ -160,7 +164,7 @@ export function buildApnsPayload(notification: ApnsNotification): Record<string,
   return {
     aps: {
       alert: { title: notification.title, body: notification.body },
-      ...(notification.silent ? {} : { sound: 'default' }),
+      ...(notification.silent ? {} : { sound: notification.sound ?? 'default' }),
       ...(notification.badge == null ? {} : { badge: Math.max(0, Math.floor(notification.badge)) }),
       ...(notification.threadId ? { 'thread-id': notification.threadId } : {}),
       ...(notification.category ? { category: notification.category } : {}),
@@ -169,6 +173,7 @@ export function buildApnsPayload(notification: ApnsNotification): Record<string,
     },
     route: notification.route ?? 'dashboard',
     ...(notification.imageUrl ? { imageUrl: notification.imageUrl } : {}),
+    ...(notification.data ?? {}),
   };
 }
 

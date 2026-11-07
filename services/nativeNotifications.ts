@@ -1,5 +1,6 @@
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { LIVE_OVERVIEW_ROUTE } from '../lib/liveOverviewRoute';
+import { LIVE_CHART_ROUTE, LIVE_OVERVIEW_ROUTE } from '../lib/liveOverviewRoute';
+import { rearmPriceAlertFromNotification } from './priceAlertStoreHook';
 import type { PermissionState } from '@capacitor/core';
 
 import { isNativeBuild } from '../utils/runtimeConfig';
@@ -7,6 +8,8 @@ import { navigateNativeShell, openNativeReview } from '../utils/nativeShell';
 import { clearNativeBadgeCount, setNativeBadgeCount } from './nativeCapabilities';
 
 export const NATIVE_NOTIFICATION_ACTIONS = {
+  openChart: 'OPEN_CHART',
+  rearmPriceAlert: 'REARM_PRICE_ALERT',
   openLive: 'OPEN_LIVE',
   openJournal: 'OPEN_JOURNAL',
   openCoach: 'OPEN_COACH',
@@ -18,6 +21,7 @@ export const NATIVE_NOTIFICATION_ACTIONS = {
 const ACTION_TYPE_GENERAL = 'ALPHATRADE_GENERAL';
 const ACTION_TYPE_TRADE = 'ALPHATRADE_TRADE';
 const ACTION_TYPE_RISK = 'ALPHATRADE_RISK';
+const ACTION_TYPE_PRICE_ALERT = 'ALPHATRADE_PRICE_ALERT';
 let notificationGeneration = 0;
 
 export type NativeNotificationSource = 'test' | 'app' | 'copierTimer' | 'sessionReminder';
@@ -313,6 +317,14 @@ export async function registerNativeNotificationActions(): Promise<() => void> {
         ],
       },
       {
+        id: ACTION_TYPE_PRICE_ALERT,
+        iosCustomDismissAction: true,
+        actions: [
+          { id: NATIVE_NOTIFICATION_ACTIONS.openChart, title: 'Otevřít graf', foreground: true },
+          { id: NATIVE_NOTIFICATION_ACTIONS.rearmPriceAlert, title: 'Zapnout znovu', foreground: true },
+        ],
+      },
+      {
         id: ACTION_TYPE_RISK,
         iosCustomDismissAction: true,
         actions: [
@@ -352,6 +364,16 @@ export function dispatchNativeNotificationAction(action: {
   if (action.actionId === NATIVE_NOTIFICATION_ACTIONS.addNote) {
     const note = action.inputValue?.trim();
     openNativeReview({ ...(tradeId ? { tradeId } : {}), ...(note ? { note } : {}) });
+    return;
+  }
+  // Upozornění na cenu: graf je cíl jen z tohoto tlačítka, klepnutí na notifikaci dál vede na přehled.
+  if (action.actionId === NATIVE_NOTIFICATION_ACTIONS.openChart) {
+    navigateNativeShell(LIVE_CHART_ROUTE);
+    return;
+  }
+  if (action.actionId === NATIVE_NOTIFICATION_ACTIONS.rearmPriceAlert) {
+    if (typeof data.alertId === 'string' && data.alertId) void rearmPriceAlertFromNotification(data.alertId);
+    navigateNativeShell(LIVE_CHART_ROUTE);
     return;
   }
   const actionRoutes: Record<string, string> = {

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendApnsNotification, type ApnsNotification, type ApnsResult } from './apns.js';
 import { sendWebPushNotification, type WebPushTarget } from './webPush.js';
+import { alertToneApnsSound } from '../lib/priceAlertTones.js';
 
 /**
  * Doručení upozornění na cenu (2. 11. 2026). Vlastní fronta `price_alert_outbox`, kterou
@@ -27,11 +28,14 @@ interface EventRow { id: string; alert_id: string; symbol: string; level: number
 
 const levelText = (level: number) => new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(level);
 
-/** „MNQ nahoru přes 21 480,00“ — úroveň uživatele a podmínka, žádná cena trhu. */
+/** Kategorie iOS s tlačítky Otevřít graf a Zapnout znovu (`services/nativeNotifications.ts`). */
+export const PRICE_ALERT_APNS_CATEGORY = 'ALPHATRADE_PRICE_ALERT';
+
+/** „🚨 MNQ 21 480,00“, pod tím směr a zpráva: úroveň uživatele a podmínka, žádná cena trhu. */
 export function priceAlertNotificationText(input: { symbol: string; condition: string; level: number; note?: string | null }): { title: string; body: string } {
-  const verb = input.condition === 'up' ? 'nahoru přes' : input.condition === 'down' ? 'dolů přes' : 'přes';
+  const verb = input.condition === 'up' ? 'Nahoru přes' : input.condition === 'down' ? 'Dolů přes' : 'Překročí';
   const note = (input.note ?? '').trim().slice(0, 80);
-  return { title: `${input.symbol} ${verb} ${levelText(input.level)}`, body: note || 'Upozornění na cenu' };
+  return { title: `🚨 ${input.symbol} ${levelText(input.level)}`, body: note ? `${verb}\n${note}` : verb };
 }
 
 /** Sbalení v iOS/prohlížeči podle upozornění (APNs collapse-id ≤ 64 B). */
@@ -97,7 +101,9 @@ export async function drainPriceAlertOutbox(options: {
         else if (row.channel === 'apns') {
           result = await sendApns({ id: device.data.id, deviceToken: device.data.device_token,
             environment: device.data.environment, bundleId: device.data.bundle_id }, {
-            ...content, route: 'live', threadId: 'alphatrade-price-alerts', interruptionLevel: 'active',
+            ...content, route: 'live', threadId: 'alphatrade-price-alerts', interruptionLevel: 'time-sensitive',
+            category: PRICE_ALERT_APNS_CATEGORY, data: { alertId: event.data.alert_id },
+            sound: alertToneApnsSound(typeof alert.data?.channels?.tone === 'string' ? alert.data.channels.tone : null),
             collapseId, silent: alert.data?.channels?.sound === false, timeoutMs: options.timeoutMs ?? 7_000,
             // Neukládat u Applu: nevytlačí rizikovou notifikaci kopírky a nepřijde pozdě (INV-WATCH-01).
             expirationSeconds: 0,

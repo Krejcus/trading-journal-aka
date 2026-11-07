@@ -294,6 +294,12 @@ export function createServerPriceAlertStore(deps: {
       const pendingRearm = (queue.get(alert.id) as { rearm?: number } | undefined)?.rearm;
       enqueue({ kind: 'upsert', alert, ...(pendingRearm != null ? { rearm: pendingRearm } : spent && changed ? { rearm: previous!.triggerCount ?? 0 } : {}) });
     },
+    rearm: id => {
+      const alert = server.get(id);
+      if (!alert || (alert.status !== 'triggered' && alert.status !== 'expired')) return false;
+      enqueue({ kind: 'upsert', alert, rearm: alert.triggerCount ?? 0 });
+      return true;
+    },
     remove: id => {
       const alert = queue.get(id)?.alert ?? server.get(id);
       if (!alert) return;

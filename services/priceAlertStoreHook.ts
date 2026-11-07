@@ -42,6 +42,25 @@ function start(): void {
   window.addEventListener('focus', refresh);
 }
 
+/**
+ * „Zapnout znovu“ z notifikace: appka se právě otevřela, úložiště se teprve načítá, takže
+ * počká, až upozornění dorazí ze serveru. Když mezitím nedorazí, nic se nestane.
+ */
+export function rearmPriceAlertFromNotification(alertId: string, timeoutMs = 8_000): Promise<boolean> {
+  start();
+  return new Promise(resolve => {
+    const startedAt = Date.now();
+    const attempt = () => {
+      const store = shared?.store;
+      const known = store?.getState().alerts.some(alert => alert.id === alertId);
+      if (store && known) { resolve(store.rearm?.(alertId) === true); return; }
+      if (Date.now() - startedAt >= timeoutMs) { resolve(false); return; }
+      window.setTimeout(attempt, 250);
+    };
+    attempt();
+  });
+}
+
 export function usePriceAlertStore(): PriceAlertStore {
   const [store, setStore] = useState<PriceAlertStore>(currentStore);
   useEffect(() => {

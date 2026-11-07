@@ -22,6 +22,8 @@ export interface AlertFireFrame {
   color: string;
   /** Omezené animace: bez pohybu, jen klidný prsten. */
   reduced?: boolean;
+  /** Telefon: jen vlna a čára k ceně, prsten nekreslí. */
+  noRing?: boolean;
 }
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
@@ -133,5 +135,5 @@ export function drawAlertFire(ctx: AlertFireCanvas, frame: AlertFireFrame): void
     drawWave(ctx, startX, frame.y, frame.ms, rgb);
     drawToAxis(ctx, startX, frame.width, frame.y, frame.ms, rgb);
   }
-  if (point != null) drawRing(ctx, point, frame.y, frame.ms, rgb, frame.reduced === true);
+  if (point != null && !frame.noRing) drawRing(ctx, point, frame.y, frame.ms, rgb, frame.reduced === true);
 }
