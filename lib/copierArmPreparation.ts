@@ -59,6 +59,10 @@ export function prepareCopierArmGroup(
       case 'safety.dailyMaxLosingTrades': next.dailyMaxLosingTrades = previous.dailyMaxLosingTrades; break;
       case 'safety.dailyMaxTrades': next.dailyMaxTrades = previous.dailyMaxTrades; break;
       case 'safety.armExpiryFlatten': next.armExpiryFlatten = previous.armExpiryFlatten; break;
+      case 'safety.leaderMaxContracts':
+        if (previous.leaderMaxContracts) next.leaderMaxContracts = structuredClone(previous.leaderMaxContracts);
+        else delete next.leaderMaxContracts;
+        break;
       default: {
         if (field.startsWith('safety.tradingWindow.')) {
           next.tradingWindow = structuredClone(previous.tradingWindow);

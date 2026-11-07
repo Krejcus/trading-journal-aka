@@ -1429,6 +1429,7 @@ existující ochranu.
 
 ### INV-RISK-01: Quantity, DLL/MLL a per-follower risk se vynucují čerstvými worker důkazy, ne jen UI hodnotou při ARM
 
+- Strop ručního vstupu podle propky (7. 11. 2026): `safety.leaderMaxContracts = { accountId, contracts }` (1–50) v pravidlech skupiny, platí jen pro ten účet leadera (`leaderEntryContractCap`), jinak dnešní strop (manual-only DEMO instalační, jinak 1). Vynucuje ho náhled, který worker znovu vyhodnotí při odeslání, i přikoupení. Follower bez vlastního `maxContracts` ho přebírá jen pro ruční vstup z grafu (hot path kopírky beze změny). Zvýšit, zrušit nebo převést na jiný účet = zmírnění (`isWeakerRiskConfig`, karta Pravidla dne), během session jen snížit. Limit propky z brokera nejde přečíst, zadává ho uživatel; přetažení se bere jako porušení pravidel.
 - Výjimka (7. 11. 2026): Market, Limit a Stop bez SL/TP nemají spočítaný strop ztráty pro DLL/MLL. Platí jen v sólo DEMO skupině, do stropu skupiny (INV-MANUAL-01).
 - Proč: Stav i cena se mohou změnit po ARM; `maxContracts`, daily loss
   auto-liquidation (DLL), trailing/max-loss drawdown floor (MLL), eligibility,

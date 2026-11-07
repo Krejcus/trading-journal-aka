@@ -10,6 +10,7 @@ import {
   sanitizeDayRuleActions,
   type CopierRuleAction,
   type CopyGroupSafetySettings,
+  LEADER_MAX_CONTRACTS_LIMIT,
 } from '../services/liveCopyTrading';
 
 /**
@@ -69,6 +70,9 @@ export interface DailyRulesDraft {
   maxTradesAtMinutes: string;
   windowEndAction: CopierRuleAction['kind'] | null;
   windowEndMinutes: string;
+  /** Strop kontraktů z grafu podle propky (účet leadera). */
+  leaderCapEnabled: boolean;
+  leaderMaxContracts: string;
 }
 
 export interface DailyRulesValidationResult {
@@ -81,7 +85,10 @@ const actionMinutes = (action: CopierRuleAction | null, fallback: number): strin
   String(action?.kind === 'pause' ? action.minutes : fallback)
 );
 
-export const dailyRulesDraftFromSafety = (safety: CopyGroupSafetySettings): DailyRulesDraft => ({
+export const dailyRulesDraftFromSafety = (safety: CopyGroupSafetySettings, leaderAccountId: number | null = null): DailyRulesDraft => ({
+  // Strop jiného (dřívějšího) leadera se nepřenáší: nový účet ho dostane jen výslovným zapnutím.
+  leaderCapEnabled: safety.leaderMaxContracts != null && safety.leaderMaxContracts.accountId === leaderAccountId,
+  leaderMaxContracts: String(safety.leaderMaxContracts != null && safety.leaderMaxContracts.accountId === leaderAccountId ? safety.leaderMaxContracts.contracts : 4),
   losingTradesEnabled: safety.dailyMaxLosingTrades > 0,
   dailyMaxLosingTrades: String(safety.dailyMaxLosingTrades || 2),
   lossLimitEnabled: safety.dailyLossLimitUsd > 0,
@@ -172,7 +179,12 @@ export const isWeakerDailyRulesSafety = (
     group: 2,
   };
 
-  return upperBoundWeakened(previous.dailyMaxLosingTrades, next.dailyMaxLosingTrades)
+  const previousCap = previous.leaderMaxContracts ?? null;
+  const nextCap = next.leaderMaxContracts ?? null;
+  const capWeakened = (previousCap != null && nextCap == null)
+    || (nextCap != null && (previousCap == null || previousCap.accountId !== nextCap.accountId || nextCap.contracts > previousCap.contracts));
+  return capWeakened
+    || upperBoundWeakened(previous.dailyMaxLosingTrades, next.dailyMaxLosingTrades)
     || upperBoundWeakened(previous.dailyLossLimitUsd, next.dailyLossLimitUsd)
     || upperBoundWeakened(previous.dailyMaxTrades, next.dailyMaxTrades)
     || next.entryCooldownMinutes < previous.entryCooldownMinutes
@@ -193,8 +205,13 @@ export const isWeakerDailyRulesSafety = (
 export function validateDailyRulesDraft(
   draft: DailyRulesDraft,
   baseSafety: CopyGroupSafetySettings,
+  /** Účet leadera skupiny; strop kontraktů patří jemu. */
+  leaderAccountId: number | null = null,
 ): DailyRulesValidationResult {
   const errors: string[] = [];
+  const leaderMaxContracts = draft.leaderCapEnabled ? integerInRange(draft.leaderMaxContracts, 1, LEADER_MAX_CONTRACTS_LIMIT) : null;
+  if (draft.leaderCapEnabled && leaderMaxContracts == null) errors.push(`Max kontraktů z grafu musí být celé číslo od 1 do ${LEADER_MAX_CONTRACTS_LIMIT}.`);
+  if (draft.leaderCapEnabled && leaderAccountId == null) errors.push('Leader skupiny není známý — strop kontraktů teď nejde uložit.');
   const dailyMaxLosingTrades = draft.losingTradesEnabled
     ? integerInRange(draft.dailyMaxLosingTrades, 1, 50)
     : 0;
@@ -272,9 +289,14 @@ export function validateDailyRulesDraft(
     return { safety: null, errors };
   }
 
+  const { leaderMaxContracts: previousCap, ...baseWithoutCap } = baseSafety;
+  // Vypnuto: strop jiného účtu nic neomezuje a zůstává, jak je (jeho smazání by za session bylo „zmírnění“).
+  const keptCap = !draft.leaderCapEnabled && previousCap != null && previousCap.accountId !== leaderAccountId ? previousCap : null;
   return {
     safety: {
-      ...baseSafety,
+      ...baseWithoutCap,
+      ...(draft.leaderCapEnabled && leaderMaxContracts != null && leaderAccountId != null
+        ? { leaderMaxContracts: { accountId: leaderAccountId, contracts: leaderMaxContracts } } : keptCap ? { leaderMaxContracts: keptCap } : {}),
       dailyMaxLosingTrades,
       dailyLossLimitUsd,
       dailyMaxTrades,
@@ -587,6 +609,8 @@ export interface LiveDayRulesCardProps {
   runtimeAvailable?: boolean;
   riskConfigSupported?: boolean;
   disabled?: boolean;
+  /** Účet leadera: strop kontraktů z grafu se váže na něj. */
+  leaderAccountId?: number | null;
   onSave?: (safety: CopyGroupSafetySettings) => Promise<void> | void;
 }
 
@@ -606,6 +630,7 @@ export const LiveDayRulesCard = ({
   runtimeAvailable = false,
   riskConfigSupported = false,
   disabled = false,
+  leaderAccountId = null,
   onSave,
 }: LiveDayRulesCardProps) => {
   const effectiveSafety = useMemo(() => withDayRuleActions(safety ?? DEFAULT_COPY_GROUP_SAFETY), [safety]);
@@ -616,7 +641,7 @@ export const LiveDayRulesCard = ({
   const safetyKey = JSON.stringify([groupId ?? null, effectiveSafety]);
   const appliedSafetyKey = useRef(safetyKey);
   const appliedTightenOnly = useRef(tightenOnly);
-  const [draft, setDraft] = useState(() => dailyRulesDraftFromSafety(effectiveSafety));
+  const [draft, setDraft] = useState(() => dailyRulesDraftFromSafety(effectiveSafety, leaderAccountId));
   const [now, setNow] = useState(() => Date.now());
   const [saving, setSaving] = useState(false);
   const [saveErrors, setSaveErrors] = useState<string[]>([]);
@@ -628,7 +653,7 @@ export const LiveDayRulesCard = ({
     appliedTightenOnly.current = tightenOnly;
     if (appliedSafetyKey.current === safetyKey && !enteredTightenOnly) return;
     appliedSafetyKey.current = safetyKey;
-    setDraft(dailyRulesDraftFromSafety(effectiveSafety));
+    setDraft(dailyRulesDraftFromSafety(effectiveSafety, leaderAccountId));
     setSaveErrors([]);
     setNotice(null);
   }, [safetyKey, effectiveSafety, tightenOnly]);
@@ -654,7 +679,7 @@ export const LiveDayRulesCard = ({
     draft.tradingWindowEnabled ? draft.windowEndAction : null,
   ].filter(kind => kind === 'lock').length;
   const warnedRules = useMemo(() => new Set(dailyStats?.warnedRules?.map(warning => warning.rule) ?? []), [dailyStats?.warnedRules]);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(dailyRulesDraftFromSafety(effectiveSafety));
+  const dirty = JSON.stringify(draft) !== JSON.stringify(dailyRulesDraftFromSafety(effectiveSafety, leaderAccountId));
 
   const dailyStatsKnown = runtimeAvailable && dailyStats != null;
   const losingCurrent = dailyStatsKnown ? dailyStats.losingTrades : null;
@@ -790,7 +815,7 @@ export const LiveDayRulesCard = ({
   };
   const save = async () => {
     if (disabled || !runtimeAvailable || !riskConfigSupported || saving) return;
-    const validated = validateDailyRulesDraft(draft, effectiveSafety);
+    const validated = validateDailyRulesDraft(draft, effectiveSafety, leaderAccountId);
     if (!validated.safety) {
       setSaveErrors(validated.errors);
       setNotice(null);
@@ -991,6 +1016,35 @@ export const LiveDayRulesCard = ({
                   <span className={unitClass}>min</span>
                 </>}
                 action={<FixedAction label="Po obchodu" text={`Pauza ${draft.entryCooldownMinutes} min`} tone="amber" />}
+              />
+
+              <Rule
+                title="Max kontraktů z grafu"
+                detail="Kolik kontraktů smí leader poslat z grafu najednou podle pravidel propky (u Lucidu podle velikosti účtu, u funded podle škálovacího plánu). Followeři bez vlastního stropu ho přebírají. Platí jen pro tenhle účet leadera; během dne jde jen snížit."
+                enabled={draft.leaderCapEnabled}
+                triggered={false}
+                tightenOnly={tightenOnly}
+                toggleDisabled={tightenOnly && effectiveSafety.leaderMaxContracts?.accountId === leaderAccountId}
+                onToggle={checked => set('leaderCapEnabled', checked)}
+                status={draft.leaderCapEnabled ? `nejvýš ${draft.leaderMaxContracts}` : 'vypnuto · 1 kontrakt'}
+                statusTone={draft.leaderCapEnabled ? 'emerald' : 'muted'}
+                progress={null}
+                progressTone="muted"
+                progressLabel="Strop kontraktů"
+                control={<>
+                  <input aria-label="Max kontraktů z grafu" type="number" min="1"
+                    max={tightenOnly && effectiveSafety.leaderMaxContracts != null ? effectiveSafety.leaderMaxContracts.contracts : LEADER_MAX_CONTRACTS_LIMIT}
+                    step="1" disabled={!draft.leaderCapEnabled || disabled} value={draft.leaderMaxContracts}
+                    onChange={event => {
+                      const parsed = Number(event.target.value);
+                      const base = effectiveSafety.leaderMaxContracts?.contracts;
+                      if (tightenOnly && base != null && Number.isFinite(parsed) && parsed > base) return;
+                      set('leaderMaxContracts', event.target.value);
+                    }}
+                    className="w-14 rounded border border-slate-300 bg-transparent px-1 text-right text-[11px] dark:border-white/15" />
+                  <span className={unitClass}>ks</span>
+                </>}
+                action={<FixedAction label="Nad strop" text="Neodešle se" tone="amber" />}
               />
 
               <Rule

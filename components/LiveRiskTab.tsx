@@ -148,6 +148,7 @@ export const LiveRiskTab = ({
       <LiveDayRulesCard
         groupId={group?.id}
         groupName={group?.name}
+        leaderAccountId={group?.leaderAccountId ?? null}
         safety={group?.safety}
         dailyStats={status?.dailyStats ?? null}
         dayLockUntil={dayLockUntil}

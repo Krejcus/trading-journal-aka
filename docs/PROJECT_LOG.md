@@ -288,6 +288,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-07 — Strop kontraktů z grafu podle propky (Claude, větev `claude/limit-stop-legs-20261107`, NENASAZENO)
+
+- **Proč:** Filip chce posílat z grafu tolik, kolik dovolí propka, i ve skupině s followery. Limit z Tradovate nejde přečíst, proto ho zadává v kartě Pravidla dne („Max kontraktů z grafu“). U Lucidu podle velikosti účtu (50K = 4 mini / 40 mikro podle veřejných přehledů), u funded podle škálovacího plánu.
+- **Pravidla (oponentura návrhu `docs/reviews/group-trading-design-20261107.md`):** strop patří účtu leadera, během session jde jen snížit, followeři bez vlastního stropu ho přebírají, nad strop se nic neodešle (Filip: přetažení brát jako porušení). Limit a Stop se SL a TP ve skupině tím jdou na víc kontraktů (B1).
+- **Další kroky:** SL a TP po jedné ve skupině, Market pro followery a vstupy bez SL na prop účtech až po záznamech na Lucid účtech (Filip nemá DEMO followery). Follower po fillu bez SL = incident, nic se nezavírá (Filip).
+
 ### 2026-11-07 — Posun čekajícího Limitu bez SL/TP tažením (Claude, větev `claude/limit-stop-legs-20261107`, NENASAZENO)
 
 - **Proč:** jako v TradingView (Modify drží id, Filipův test 5. 11.). Akce `move-limit` se znovu použila, takže relay ani SQL admission se nemění.

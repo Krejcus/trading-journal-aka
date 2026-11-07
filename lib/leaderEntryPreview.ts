@@ -172,13 +172,17 @@ export interface PreviewGroupShape {
   enabled: boolean;
   leaderAccountId: number | null;
   followers: ReadonlyArray<{ accountId: number; mode: string; multiplier: number; enabled?: boolean; maxContracts?: number | null }>;
+  /** Čte se z něj jen `leaderMaxContracts`. */
+  safety?: object | null;
 }
 
 export function copyGroupConfigHash(group: PreviewGroupShape): string {
   const followers = [...group.followers]
     .sort((left, right) => left.accountId - right.accountId)
     .map(follower => [follower.accountId, follower.mode, follower.multiplier, follower.enabled !== false, follower.maxContracts ?? null]);
-  return stableHash64(JSON.stringify([group.id, group.enabled, group.leaderAccountId, followers]));
+  // Strop leadera mění, co smí odejít: náhled se změnou stropu přestane platit. Bez stropu hash beze změny.
+  const cap = (group.safety as { leaderMaxContracts?: { accountId: number; contracts: number } } | null | undefined)?.leaderMaxContracts;
+  return stableHash64(JSON.stringify([group.id, group.enabled, group.leaderAccountId, followers, ...(cap ? [[cap.accountId, cap.contracts]] : [])]));
 }
 
 /** Co pošle panel objednávky (zbytek doplní desk ze stavu workeru). */

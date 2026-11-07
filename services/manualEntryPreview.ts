@@ -8,6 +8,7 @@ import {
   isBareLeaderEntry,
   leaderEntryRiskPrice,
   LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS,
+  LEADER_ENTRY_MAX_QUANTITY,
   LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS,
   type LeaderEntryPreviewCommand,
   type LeaderEntryPreviewIssue,
@@ -31,11 +32,30 @@ import {
  */
 export const MANUAL_ENTRY_MAX_CONTRACTS = 1;
 export const MANUAL_ENTRY_GROUP_CAP_MAX = 5;
-/** Platný strop ručního vstupu skupiny: instalační hodnota jen u manual-only, jinak 1. */
-export function manualEntryContractCap(group: { manualOnly?: boolean; localOnly?: boolean; manualEntryMaxContracts?: number } | null | undefined): number {
+/** Strop leadera z pravidel skupiny, jen když patří současnému leaderovi (jinak null). */
+export function leaderEntryContractCap(group: {
+  leaderAccountId?: number | null; safety?: { leaderMaxContracts?: { accountId: number; contracts: number } } | null;
+} | null | undefined): number | null {
+  const own = group?.safety?.leaderMaxContracts;
+  if (!own || group?.leaderAccountId == null || own.accountId !== group.leaderAccountId) return null;
+  return Number.isSafeInteger(own.contracts) && own.contracts >= 1 && own.contracts <= LEADER_ENTRY_MAX_QUANTITY ? own.contracts : null;
+}
+
+/**
+ * Platný strop ručního vstupu skupiny: strop leadera z pravidel (podle propky, 7. 11. 2026),
+ * jinak instalační hodnota manual-only DEMO, jinak 1. U manual-only DEMO nese strop dál instalace
+ * (lokálně na Macu): pravidla ho smí jen snížit, nikdy zvednout nad instalační hodnotu.
+ */
+export function manualEntryContractCap(group: {
+  manualOnly?: boolean; localOnly?: boolean; manualEntryMaxContracts?: number;
+  leaderAccountId?: number | null; safety?: { leaderMaxContracts?: { accountId: number; contracts: number } } | null;
+} | null | undefined): number {
+  const own = leaderEntryContractCap(group);
   const raw = group?.manualEntryMaxContracts;
-  if (group?.manualOnly !== true || group.localOnly !== true || raw == null) return MANUAL_ENTRY_MAX_CONTRACTS;
-  return Number.isSafeInteger(raw) && raw >= 1 && raw <= MANUAL_ENTRY_GROUP_CAP_MAX ? raw : MANUAL_ENTRY_MAX_CONTRACTS;
+  const installed = group?.manualOnly !== true || group.localOnly !== true || raw == null ? MANUAL_ENTRY_MAX_CONTRACTS
+    : Number.isSafeInteger(raw) && raw >= 1 && raw <= MANUAL_ENTRY_GROUP_CAP_MAX ? raw : MANUAL_ENTRY_MAX_CONTRACTS;
+  if (group?.manualOnly === true) return own != null ? Math.min(own, installed) : installed;
+  return own ?? installed;
 }
 /** Market: kotace workeru z IBKR nejvýš tak stará a nejvýš tolik ticků od ceny, kterou viděl uživatel. */
 export const MANUAL_ENTRY_MARKET_WORKER_QUOTE_MAX_AGE_MS = 3_000;
@@ -191,7 +211,7 @@ export interface ManualEntryPreviewInputs {
     manualEntryMaxContracts?: number;
     leaderAccountId: number | null;
     followers: ReadonlyArray<{ accountId: number; mode: string; multiplier: number; enabled?: boolean; maxContracts?: number | null; dailyLossCutUsd?: number | null }>;
-    safety?: { dailyLossLimitUsd?: number; dailyMaxLosingTrades?: number; dailyMaxTrades?: number } | null;
+    safety?: { dailyLossLimitUsd?: number; dailyMaxLosingTrades?: number; dailyMaxTrades?: number; leaderMaxContracts?: { accountId: number; contracts: number } } | null;
   } | null;
   /** Kontext risk gate PŘESNĚ jako dispatch (sequenceBroken a stuckOutbox už složené). */
   riskGate: RiskGateContext;
@@ -480,8 +500,12 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
     if (quantity <= 0) { blockers.push(blocker('scaled-quantity-zero', `${label}: po násobku vychází 0 kontraktů.`)); continue; }
     const account = input.accounts.get(follower.accountId);
     if (account?.syncPaused) { notes.push(blocker('follower-sync-paused', `${label} nedostane kopii: účet je mimo synchron.`)); continue; }
-    if (follower.maxContracts != null && account && exceedsMaxContracts(account, command.symbol, command.side, quantity, follower.maxContracts)) {
-      blockers.push(blocker('max-contracts', `${label}: překročil by strop ${follower.maxContracts} kontraktů.`));
+    // Follower bez vlastního stropu přebírá strop leadera z pravidel (stejná propka); bez něj platí jen jeho vlastní.
+    const followerCap = follower.maxContracts ?? leaderEntryContractCap(group);
+    if (followerCap != null && account && exceedsMaxContracts(account, command.symbol, command.side, quantity, followerCap)) {
+      blockers.push(blocker('max-contracts', `${label}: překročil by strop ${followerCap} kontraktů${follower.maxContracts == null ? ' (strop leadera)' : ''}.`));
+    } else if (followerCap != null && !account && quantity > followerCap) {
+      blockers.push(blocker('max-contracts', `${label}: překročil by strop ${followerCap} kontraktů.`));
     }
     if (follower.maxContracts != null) notes.push(blocker('max-contracts-fallback', `${label}: má strop kontraktů — při rozpadu OSO korelace by obchod vynechal.`));
     checkAccount(follower.accountId, label, quantity, follower.dailyLossCutUsd ?? null);

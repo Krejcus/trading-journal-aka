@@ -859,8 +859,9 @@ async function runLocalAgent(
   // změně z UI je autoritativní uložená skupina, takže reinstall nepřepíše
   // leadera zpět na původní hodnotu.
   const storedGroup = persistedGroup ?? fallbackGroup;
-  // Strop ručního vstupu nese výhradně instalace: uložená hodnota se nahradí argumentem
-  // (chybí = výchozí 1), takže reinstall bez flagu strop vždy vrátí na 1.
+  // Strop ručního vstupu manual-only DEMO nese instalace: uložená hodnota se nahradí argumentem
+  // (chybí = výchozí 1), takže reinstall bez flagu strop vždy vrátí na 1. Strop z pravidel skupiny
+  // (`safety.leaderMaxContracts`, 7. 11. 2026) ho u manual-only smí jen snížit.
   const { manualEntryMaxContracts: _storedCap, ...storedWithoutCap } = storedGroup;
   const group: CopyGroupConfig = storedGroup.manualOnly === true
     ? { ...storedWithoutCap, ...(manualEntryMaxContracts != null ? { manualEntryMaxContracts } : {}) }

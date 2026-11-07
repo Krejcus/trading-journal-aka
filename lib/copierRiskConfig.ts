@@ -146,6 +146,12 @@ export function isWeakerRiskConfig(
     }
   };
 
+  // Strop ručního vstupu (7. 11. 2026): zvýšit nebo převést na jiný účet = zmírnění. Zrušit = návrat na 1
+  // (u manual-only DEMO na instalační strop), proto taky jen mimo session.
+  const previousCap = previousSafety.leaderMaxContracts ?? null;
+  const nextCap = nextSafety.leaderMaxContracts ?? null;
+  if ((nextCap && (!previousCap || previousCap.accountId !== nextCap.accountId || nextCap.contracts > previousCap.contracts))
+    || (previousCap && !nextCap)) add('safety.leaderMaxContracts');
   comparePositiveSafetyLimit('dailyMaxLosingTrades');
   comparePositiveSafetyLimit('dailyMaxTrades');
   comparePositiveSafetyLimit('dailyLossLimitUsd');

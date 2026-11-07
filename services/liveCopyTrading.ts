@@ -135,7 +135,23 @@ export interface CopyGroupSafetySettings {
   tradingWindow: CopyGroupTradingWindow;
   /** Akce jednotlivých pravidel dne (pauza / zámek). Staré skupiny dostanou DEFAULT. */
   dayRuleActions: CopyGroupDayRuleActions;
+  /**
+   * Strop ručního vstupu z grafu podle pravidel propky (7. 11. 2026). Patří účtu leadera: po změně leadera
+   * neplatí (strop 1). Followeři bez vlastního `maxContracts` ho přebírají. Během session jen zpřísnit.
+   */
+  leaderMaxContracts?: CopyGroupLeaderMaxContracts;
 }
+
+/** Strop ručního vstupu vázaný na konkrétní účet leadera. */
+export interface CopyGroupLeaderMaxContracts { accountId: number; contracts: number }
+/** Horní mez stropu (stejná jako protokol `LEADER_ENTRY_MAX_QUANTITY`). */
+export const LEADER_MAX_CONTRACTS_LIMIT = 50;
+export const validLeaderMaxContracts = (value: unknown): value is CopyGroupLeaderMaxContracts => {
+  const raw = value as Partial<CopyGroupLeaderMaxContracts> | null;
+  return raw != null && typeof raw === 'object' && !Array.isArray(raw)
+    && Number.isSafeInteger(raw.accountId) && (raw.accountId as number) > 0
+    && Number.isSafeInteger(raw.contracts) && (raw.contracts as number) >= 1 && (raw.contracts as number) <= LEADER_MAX_CONTRACTS_LIMIT;
+};
 
 export const DEFAULT_DAY_RULE_ACTIONS: CopyGroupDayRuleActions = {
   losingTrades: { beforeLimit: { kind: 'pause', minutes: 20 }, atLimit: { kind: 'lock' } },
@@ -721,6 +737,10 @@ export function sanitizeCopyGroupSafety(value: unknown): CopyGroupSafetySettings
   const raw = value as Partial<CopyGroupSafetySettings>;
   const dayRuleActions = sanitizeDayRuleActions(raw.dayRuleActions);
   if (!dayRuleActions) return null;
+  // Neplatný strop = neplatná pravidla (fail-closed), nikdy tiché vynechání.
+  if (raw.leaderMaxContracts !== undefined && !validLeaderMaxContracts(raw.leaderMaxContracts)) return null;
+  const leaderMaxContracts = raw.leaderMaxContracts
+    ? { accountId: raw.leaderMaxContracts.accountId, contracts: raw.leaderMaxContracts.contracts } : undefined;
   const dailyMaxTrades = raw.dailyMaxTrades == null
     ? DEFAULT_COPY_GROUP_SAFETY.dailyMaxTrades
     : raw.dailyMaxTrades;
@@ -799,6 +819,7 @@ export function sanitizeCopyGroupSafety(value: unknown): CopyGroupSafetySettings
     dailyMaxTrades,
     tradingWindow,
     dayRuleActions,
+    ...(leaderMaxContracts ? { leaderMaxContracts } : {}),
   };
 }
 
