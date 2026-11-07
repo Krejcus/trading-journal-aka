@@ -128,6 +128,7 @@ async function tradovateRequest<T>(options: {
 }): Promise<T> {
   const response = await options.fetchImpl(`${options.baseUrl}${options.path}`, {
     method: options.method ?? 'GET',
+    redirect: 'manual',
     headers: {
       Accept: 'application/json',
       Authorization: `Bearer ${options.accessToken}`,

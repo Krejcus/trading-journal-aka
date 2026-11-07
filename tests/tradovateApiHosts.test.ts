@@ -166,3 +166,34 @@ describe('dynamické hosty: plánovaná obnova', () => {
     unsubscribe();
   });
 });
+
+describe('dynamické hosty: REST po obnově tokenu se změnou hostu', () => {
+  it('nový token nejde na starý host; živá session se zavře a nic se neodešle', async () => {
+    const sockets: FakeSocket[] = [];
+    const urls: string[] = [];
+    let hosts: Record<string, string> = LUCID;
+    let tokens = 0;
+    const broker = createTradovateBroker({
+      environment: 'demo', accountSpec: 'L1',
+      resolveApiHosts: () => sanitizeTradovateApiHosts(hosts),
+      getAccessToken: async () => { tokens += 1; return `token-${tokens}`; },
+      webSocketFactory: url => { const socket = new FakeSocket(url); sockets.push(socket); return socket; },
+      fetchImpl: (async (url: string) => { urls.push(url); return Response.json([]); }) as unknown as typeof fetch,
+    });
+    const unsubscribe = broker.subscribe(() => undefined);
+    sockets[0].open();
+    sockets[0].onmessage?.({ data: 'o' });
+    await flush();
+    sockets[0].onmessage?.({ data: `a${JSON.stringify([{ i: 0, s: 200, d: {} }])}` });
+    await flush();
+    sockets[0].onmessage?.({ data: `a${JSON.stringify([{ i: 1, s: 200, d: [] }])}` });
+    await flush();
+    urls.length = 0;
+    hosts = { demo: 'demo-api.other.ninjatrader.com' };
+    await expect(broker.findOrderById(1, '42')).rejects.toThrow(/host changed/);
+    // Nic s novým tokenem na starý host; souběžná čtení po zavření session už jdou na nový host.
+    expect(urls.filter(url => url.includes('demo-api.lucid'))).toEqual([]);
+    expect(sockets[0].closeCalls).toBeGreaterThan(0);
+    unsubscribe();
+  });
+});

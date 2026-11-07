@@ -721,9 +721,11 @@ async function discoveredPilotContext(device: MacCopierDeviceConfig, connectionI
 function makeDisplayFeed(context: PilotContext, accountIds: number[]) {
   return createTradovateAccountDisplayFeed({
     connectionId: context.connectionId, environment: context.environment, accountIds: () => accountIds,
-    read: async (accountId, signal) => readTradovateAccountDisplay({
-      baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()), accessToken: await context.getAccessToken(), accountId, signal,
-    }),
+    read: async (accountId, signal) => {
+      // Token dřív než host: obnova tokenu může hosty změnit.
+      const accessToken = await context.getAccessToken();
+      return readTradovateAccountDisplay({ baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()), accessToken, accountId, signal });
+    },
   });
 }
 

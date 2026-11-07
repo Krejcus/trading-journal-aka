@@ -180,7 +180,8 @@ export async function saveTradovateConnection(options: {
     scope: options.token.scope,
     tradovate_user_id: options.tradovateUserId ?? null,
     tradovate_email: options.tradovateEmail ?? null,
-    api_hosts: options.token.apiHosts ?? null,
+    // Odpověď bez hostů (chyba, MFA) nesmí smazat poslední známé hosty připojení.
+    ...(options.token.apiHosts ? { api_hosts: options.token.apiHosts } : {}),
     organization_name: options.organizationName ?? null,
     connection_status: 'connected',
     disconnected_at: null,

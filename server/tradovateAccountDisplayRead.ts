@@ -9,7 +9,7 @@ export async function readTradovateAccountDisplay(options: {
   const request = async (path: string, method: 'POST' | 'GET' = 'GET') => {
   const response = await (options.fetchImpl ?? fetch)(`${options.baseUrl}${path}`, {
     method, headers: { Authorization: `Bearer ${options.accessToken}`, 'Content-Type': 'application/json' },
-    ...(method === 'POST' ? {body: JSON.stringify({ accountId: options.accountId })} : {}), signal: options.signal,
+    ...(method === 'POST' ? {body: JSON.stringify({ accountId: options.accountId })} : {}), redirect: 'manual', signal: options.signal,
   });
   if (!response.ok) {
     const retry = response.headers.get('retry-after');

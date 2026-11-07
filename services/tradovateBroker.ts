@@ -674,6 +674,16 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     assertNotRateLimited();
     const accessToken = await token();
     init.signal?.throwIfAborted();
+    // Obnova tokenu přinesla jiné hosty: nový token nesmí jít na starý host a živá session se musí poctivě přepojit.
+    const currentHosts = hostsFor();
+    if (currentHosts.rest !== hosts.rest) {
+      diagnostic(`REST HOST změna ${new URL(hosts.rest).hostname} -> ${new URL(currentHosts.rest).hostname}`);
+      if (socket) {
+        closeSocket(socket, 'api-host-change');
+        throw new TradovateTransportError(`Tradovate API host changed for this organization; reconnecting before ${path}`);
+      }
+      hosts = currentHosts;
+    }
     // Jeden deadline na celé volání včetně čtení těla. Hung REST nikdy nesmí
     // držet eventTail (risk poll, recovery, Flatten) déle než tento limit.
     const abort = new AbortController();
