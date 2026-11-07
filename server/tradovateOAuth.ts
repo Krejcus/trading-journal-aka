@@ -1,3 +1,4 @@
+import { describeTokenShape } from './tradovateHostProbe.js';
 import {
   createCipheriv,
   createDecipheriv,
@@ -273,6 +274,8 @@ async function requestToken(
   });
   const text = await response.text();
   const body = text ? parseJson<unknown>(text, 'invalid-token-response') : null;
+  // Dočasně: vrací OAuth `apiHosts`? Jen názvy polí a hostname, žádné tokeny.
+  if (response.ok) console.error('[tradovate-oauth-host-probe] token-response', JSON.stringify(describeTokenShape(body)));
   if (!response.ok) {
     const detail = body && typeof body === 'object' && !Array.isArray(body)
       ? String((body as Record<string, unknown>).error_description ?? (body as Record<string, unknown>).error ?? response.status)

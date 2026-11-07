@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
+import { probeTradovateHosts } from '../../../server/tradovateHostProbe.js';
 import {
   clearTradovateStateCookie,
   exchangeTradovateAuthorizationCode,
@@ -48,7 +49,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       redirectUri: config.redirectUri,
       environment: config.environment,
     });
-    const identity = await loadOAuthIdentity(token.accessToken, config.environment);
+    const identity = await loadOAuthIdentity(token.accessToken, config.environment).catch(async (error: unknown) => {
+      // Dočasná sonda: kam Tradovate tento login posílá. Token se po selhání stejně zahodí.
+      const steps = await probeTradovateHosts({ baseHost: new URL(tradovateApiBaseUrl(config.environment)).hostname, accessToken: token.accessToken }).catch(() => []);
+      console.error('[tradovate-oauth-host-probe] identity-failed', JSON.stringify(steps));
+      throw error;
+    });
     await saveTradovateConnection({
       db: createTradovateAdminClient(config),
       config,
