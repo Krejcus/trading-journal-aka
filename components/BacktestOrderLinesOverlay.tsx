@@ -282,6 +282,42 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
   // znamenala překreslení všech panelů na každý pohyb myši.
   const [dragOverride, setDragOverride] = useState<{ lineId: string; top: number; price: number } | null>(null);
   linesRef.current = lines;
+  /**
+   * Animace čip ↔ čára (jen zobrazení, nic nerozhoduje ani neposílá). Tah: čip se roztáhne do štítku a
+   * čáry. Po puštění ghost drží místo, dokud nepřijde skutečná noha. Zrušení: noha se složí zpět do čipu.
+   */
+  const chipOriginRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [landing, setLanding] = useState<{ anchorLineId: string; ownerId: string; kind: Exclude<BacktestChartOrderLineKind, 'entry'>; price: number; label: string; color: string; until: number } | null>(null);
+  const [flights, setFlights] = useState<Array<{ key: string; anchorLineId: string; kind: Exclude<BacktestChartOrderLineKind, 'entry'>; label: string; color: string; price: number }>>([]);
+  const flightSeq = useRef(0);
+  const previousLinesRef = useRef(lines);
+  useLayoutEffect(() => {
+    const previous = previousLinesRef.current;
+    previousLinesRef.current = lines;
+    setLanding(current => (current && lines.some(item => item.ownerId === current.ownerId && item.kind === current.kind) ? null : current));
+    const added = previous.flatMap(old => {
+      if (old.kind === 'entry' || lines.some(item => item.id === old.id)) return [];
+      const kind = old.kind as Exclude<BacktestChartOrderLineKind, 'entry'>;
+      const anchor = lines.find(item => item.ownerId === old.ownerId && item.kind === 'entry' && item.addableBrackets?.includes(kind));
+      if (!anchor) return [];
+      flightSeq.current += 1;
+      return [{ key: `flight-${flightSeq.current}`, anchorLineId: anchor.id, kind, label: old.label, color: old.color, price: old.price }];
+    });
+    if (added.length > 0) setFlights(current => [...current, ...added]);
+  }, [lines]);
+  useEffect(() => {
+    if (!landing) return undefined;
+    const timer = window.setTimeout(() => {
+      // Noha nepřišla (odmítnuto, brána): složí se zpátky do čipu.
+      flightSeq.current += 1;
+      const key = `flight-${flightSeq.current}`;
+      setFlights(current => [...current, { key, anchorLineId: landing.anchorLineId, kind: landing.kind, label: landing.label, color: landing.color, price: landing.price }]);
+      setLanding(null);
+    }, Math.max(0, landing.until - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [landing]);
+  const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+  const chipElement = (anchorLineId: string, kind: string) => rootRef.current?.querySelector<HTMLElement>(`[data-order-line-wrap="${CSS.escape(anchorLineId)}"] [data-order-chip="${kind}"]`) ?? null;
 
   useEffect(() => {
     let frame = 0;
@@ -378,6 +414,12 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
       if (!line) return;
       if (dragging.bracketKind) {
         suppressBracketClickRef.current = dragging.bracketKind;
+        // Ghost drží místo do příchodu skutečné nohy; odmítnutá se složí zpět do čipu.
+        setLanding({
+          anchorLineId: line.id, ownerId: line.ownerId, kind: dragging.bracketKind, price: dragging.lastPrice,
+          label: line.bracketLabelAt?.(dragging.bracketKind, dragging.lastPrice) ?? `${dragging.bracketKind === 'stopLoss' ? 'SL' : 'TP'}  ${dragging.lastPrice.toFixed(2)}`,
+          color: dragging.bracketKind === 'stopLoss' ? '#ef4444' : '#0f9f8f', until: Date.now() + 1_500,
+        });
         onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice);
       } else {
         onChange(line, line.kind, dragging.lastPrice, dragging.startLine);
@@ -419,9 +461,29 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
           ?? `${bracketDragPreview.kind === 'stopLoss' ? 'SL' : 'TP'}  ${bracketDragPreview.price.toFixed(2)}`;
         return (
           <div className="pointer-events-none absolute left-0 h-0" style={{ right: priceScaleWidth, top: bracketDragPreview.top }} data-backtest-bracket-ghost>
-            <div className="absolute inset-x-0 top-0 border-t border-dashed" style={{ borderColor: color }} />
+            <div
+              className="absolute inset-x-0 top-0 border-t border-dashed" style={{ borderColor: color }}
+              ref={element => {
+                const from = chipOriginRef.current;
+                if (!element || !from || reduceMotion()) return;
+                const box = element.getBoundingClientRect();
+                element.animate([{ transformOrigin: `${from.left + from.width / 2 - box.left}px 0`, transform: 'scaleX(0)' }, { transformOrigin: `${from.left + from.width / 2 - box.left}px 0`, transform: 'scaleX(1)' }], { duration: 260, easing: 'cubic-bezier(.2,.9,.25,1)' });
+              }}
+            />
             <div className="absolute right-1 top-0 -translate-y-1/2">
-              <OrderLineBadge label={label} kind={bracketDragPreview.kind} color={color} isDark={isDark} labelMode={labelMode} />
+              <div ref={element => {
+                const from = chipOriginRef.current;
+                if (!element || !from) return;
+                chipOriginRef.current = null;
+                if (reduceMotion()) return;
+                const box = element.getBoundingClientRect();
+                element.animate([
+                  { transformOrigin: 'left top', transform: `translate(${from.left - box.left}px, ${from.top - box.top}px) scale(${from.width / box.width}, ${from.height / box.height})`, opacity: 0.75 },
+                  { transformOrigin: 'left top', transform: 'translate(0, 0) scale(1, 1)', opacity: 1 },
+                ], { duration: 260, easing: 'cubic-bezier(.2,.9,.25,1.15)' });
+              }}>
+                <OrderLineBadge label={label} kind={bracketDragPreview.kind} color={color} isDark={isDark} labelMode={labelMode} />
+              </div>
             </div>
             {showPriceLabels && (
               <div className="absolute top-0 flex h-[20px] -translate-y-1/2 items-center justify-center px-1 text-[9px] font-black text-white" style={{ left: '100%', width: priceScaleWidth, backgroundColor: color }}>
@@ -431,6 +493,61 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
           </div>
         );
       })()}
+      {landing && !bracketDragPreview && (() => {
+        const landingTop = api.controller.getSeries().priceToCoordinate(landing.price);
+        if (landingTop === null) return null;
+        return (
+          <div className="pointer-events-none absolute left-0 h-0" style={{ right: priceScaleWidth, top: landingTop }} data-order-leg-landing>
+            <div className="absolute inset-x-0 top-0 border-t border-dashed" style={{ borderColor: landing.color }} />
+            <div className="absolute right-1 top-0 -translate-y-1/2">
+              <OrderLineBadge label={landing.label} kind={landing.kind} color={landing.color} isDark={isDark} labelMode={labelMode} />
+            </div>
+          </div>
+        );
+      })()}
+      {flights.map(flight => {
+        const flightTop = api.controller.getSeries().priceToCoordinate(flight.price);
+        const done = () => {
+          setFlights(current => current.filter(item => item.key !== flight.key));
+          window.requestAnimationFrame(() => chipElement(flight.anchorLineId, flight.kind)?.animate?.([{ transform: 'scale(.6)' }, { transform: 'scale(1.12)' }, { transform: 'scale(1)' }], { duration: 200, easing: 'ease-out' }));
+        };
+        return (
+          <div key={flight.key} className="pointer-events-none absolute left-0 h-0" style={{ right: priceScaleWidth, top: flightTop ?? 0 }} data-order-leg-flight>
+            <div
+              className="absolute inset-x-0 top-0 border-t border-dashed" style={{ borderColor: flight.color }}
+              ref={element => {
+                if (!element || element.dataset.flown) return;
+                element.dataset.flown = '1';
+                const chip = chipElement(flight.anchorLineId, flight.kind)?.getBoundingClientRect();
+                const box = element.getBoundingClientRect();
+                const origin = `${(chip ? chip.left + chip.width / 2 : box.right) - box.left}px 0`;
+                element.animate([{ transformOrigin: origin, transform: 'scaleX(1)', opacity: 1 }, { transformOrigin: origin, transform: 'scaleX(0)', opacity: 0.4 }], { duration: reduceMotion() ? 1 : 260, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
+              }}
+            />
+            <div className="absolute right-1 top-0 -translate-y-1/2">
+              <div ref={element => {
+                if (!element || element.dataset.flown) return;
+                element.dataset.flown = '1';
+                const chip = chipElement(flight.anchorLineId, flight.kind)?.getBoundingClientRect();
+                const box = element.getBoundingClientRect();
+                const end = chip
+                  ? `translate(${chip.left - box.left}px, ${chip.top - box.top}px) scale(${chip.width / box.width}, ${chip.height / box.height})`
+                  : 'scale(.6)';
+                const animation = element.animate([
+                  { transformOrigin: 'left top', transform: 'translate(0, 0) scale(1, 1)', opacity: 1 },
+                  { transformOrigin: 'left top', transform: end, opacity: 0.8 },
+                ], { duration: reduceMotion() ? 1 : 260, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
+                animation.onfinish = done;
+                animation.oncancel = done;
+                // Skrytá stránka animaci nedohraje: čip nesmí zůstat schovaný.
+                window.setTimeout(done, 450);
+              }}>
+                <OrderLineBadge label={flight.label} kind={flight.kind} color={flight.color} isDark={isDark} labelMode={labelMode} />
+              </div>
+            </div>
+          </div>
+        );
+      })}
       {lines.map(line => {
         const dragged = dragOverride?.lineId === line.id;
         const top = dragged ? dragOverride.top : coordinates[line.id];
@@ -471,15 +588,22 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                   key={kind}
                   type="button"
                   data-order-line-control
+                  data-order-chip={kind}
                   className={`flex h-full cursor-ns-resize items-center justify-center whitespace-nowrap rounded-[4px] border border-dashed px-[6px] text-[9.5px] font-semibold ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-900/5'}`}
                   style={{
                     color: kind === 'stopLoss' ? '#ef4444' : '#0f9f8f',
                     borderColor: kind === 'stopLoss' ? '#ef4444' : '#0f9f8f',
                     backgroundColor: isDark ? 'rgba(13, 18, 26, 0.86)' : 'rgba(255, 255, 255, 0.9)',
+                    // Čip se při tahu „stal“ čárou; při návratu se zase objeví až po doletu.
+                    visibility: (bracketDragPreview?.price !== undefined && bracketDragPreview.kind === kind && bracketDragPreview.anchorLineId === line.id)
+                      || (landing?.kind === kind && landing.anchorLineId === line.id)
+                      || flights.some(flight => flight.kind === kind && flight.anchorLineId === line.id) ? 'hidden' : undefined,
                   }}
                   onPointerDown={event => {
                     event.preventDefault();
                     event.stopPropagation();
+                    const chipBox = event.currentTarget.getBoundingClientRect();
+                    chipOriginRef.current = { left: chipBox.left, top: chipBox.top, width: chipBox.width, height: chipBox.height };
                     suppressBracketClickRef.current = null;
                     dragRef.current = { id: line.id, bracketKind: kind, moved: false };
                     setBracketDragPreview({ anchorLineId: line.id, kind, top });

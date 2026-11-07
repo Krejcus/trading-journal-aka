@@ -299,6 +299,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Ověřeno:** critic kola 1 a 2 = OPRAVIT PŘED COMMITEM, nálezy opraveny; třetí kolo se podle pravidla nekoná. QA náhled se skutečným grafem, syntetickými svíčkami a bez přihlášení: založení, dvojklik, cena, barva, tah (simulované události s mezikroky), výběr, ×, seznam, Esc, OFF nad dialogem, kolečko, strop karet, tmavý i světlý motiv. Spuštění jen s nasimulovanou událostí.
 - **Neověřeno:** přihlášený účet (server, stav „Hlídá Mac“, skutečné překročení ceny a web push), slyšitelný tón.
 - **Známé limity:** karta a hlas jen s otevřeným LIVE grafem; hlas alertu může o větu zdržet hlášení plnění (vědomě přijato); nad čárou (10 px) nejde crosshair.
+### 2026-11-07 — Animace čip ↔ čára (Claude, web + iPhone, Filip „Sedí, nasaď“)
+
+- Tah čipu ho roztáhne do štítku a čáry, ghost drží místo do příchodu nohy, × ji složí zpět. Jen zobrazení v `BacktestOrderLinesOverlay`, tedy i v backtestu; worker beze změny. Pohyb posoudil Filip v náhledu `tests/qa/live-legs.tsx`.
+
 ### 2026-11-06 — Slepé hodnocení v Backtestu (Claude, větev claude/blind-review-20261106)
 
 Filip chce kalibrovat automatický backtest ve svém Backtestu, ne na samostatné stránce. Každý případ je dočasná session
@@ -308,13 +312,14 @@ neobejde žádná cesta kurzoru; bez něj je setter průchozí. Odpověď se uk�
 `backtest_blind_reviews` a pak je zamčená; sadu vkládá Claude přes CLI, klient smí měnit jen `answers` a `marks`.
 Jádra kopírky se změna nedotýká. Nasazeno 7. 11. na Filipovo „nasaď“.
 
-### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude, větev `claude/chart-position-ui-20261106`, NENASAZENO)
+### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude; 7. 11. NASAZENO z `ad55ef07`: migrace, web, worker `--tv off`, iPhone 18 Pro Max, Filip „nasad market“)
 
 - Filip: natáhnu nohu a je u brokera, × ji zruší a vrátí čip. Podklad: `docs/reviews/instant-legs-design-20261106.md`, DEMO `record-legs.ts`. Capability `manual-order-single-leg-v1`, jen sólo manual-only DEMO a vlastní holý Market; Limit bez nohou a čekající vstupy zatím ne.
 - Filip přijal: × na SL nechá pozici bez stropu. Obchoduje jen z appky, proto noha na flat účtu = jen incident, bez automatického zrušení.
 - Critic: návrh kolo 1 BLOKUJE, diff kolo 2 OPRAVIT, nálezy P1 a P2-5 až P2-8 zapracované, další kolo už neproběhlo.
 - Vědomá odchylka: během surového zápisu Flatten leadera vynechá a vrátí `flat:false` s incidentem, stejně jako dnes u attach a ×. Krátké čekání je následná úprava.
-- Neověřeno: nic z toho nešlo přes worker na DEMO; migrace `20261106210000` neaplikovaná a její SQL test neběžel (lokálně není Postgres); Flatten v mezeře výměny není testovaný; TIF samostatného Stopu neznámý. Pořadí nasazení: migrace, web a relay, worker, iPhone.
+- Neověřeno: nic z toho zatím neběželo přes worker na DEMO (trh zavřený, přidání nohy chce čerstvou cenu); SQL test migrace neběžel (lokálně není Postgres), v produkci ověřena jen přítomnost `remove-leg`; Flatten v mezeře výměny netestovaný; TIF samostatného Stopu neznámý.
+- Limit a Stop bez nohou: nepostaveno. Filip chce počítat s víc účty, proto nový návrh; dnešní verze je jen sólo DEMO.
 
 ### 2026-11-06 večer — Limit bez SL/TP: rozhodnutí a skript pro DEMO (Claude, větev `claude/chart-position-ui-20261106`, nic nenasazeno)
 
