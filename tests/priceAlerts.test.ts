@@ -4,7 +4,7 @@ import {
   DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, alertTagInk, alertConditionFor, alertLineCss, alertTitle,
   createLocalPriceAlertStore, movedAlert, newPriceAlert, freshPriceAlertEvents, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus, readPriceAlertState,
 } from '../lib/priceAlerts';
-import { ALERT_SOUNDS_BASE, ALERT_SOUND_VOLUME_DEFAULT, ALERT_TONE_GROUPS, CUSTOM_SOUND_MAX_BYTES, CUSTOM_SOUND_MAX_COUNT, DEFAULT_ALERT_TONE, alertToneNotes, alertToneUrl, clampAlertSoundVolume, customSoundProblem, isAlertTone } from '../lib/priceAlertTones';
+import { ALERT_SOUNDS_BASE, ALERT_SOUND_VOLUME_DEFAULT, ALERT_TONE_GROUPS, CUSTOM_SOUND_MAX_BYTES, CUSTOM_SOUND_MAX_COUNT, DEFAULT_ALERT_TONE, alertToneApnsSound, alertToneNotes, alertToneUrl, clampAlertSoundVolume, customSoundProblem, isAlertTone } from '../lib/priceAlertTones';
 import { ALERT_FIRE_MS, alertFirePoint, alertFireRgb, alertWaveFront, drawAlertFire } from '../lib/alertFireEffect';
 import { LIVE_FILL_CUE_PATTERNS } from '../services/liveFillAudio';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../lib/liveFillMarkers';
@@ -176,7 +176,7 @@ describe('oponentura 2. 11., 2. kolo', () => {
   });
   it('lokální karty (upozornění) nejsou sticky; position box bere čerstvou kotaci', () => {
     const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
-    expect(phone).toMatch(/sticky: false, ms \}/);
+    expect(phone).toMatch(/sticky: false, ms, \.\.\.extra \}/);
     expect(phone).toMatch(/draftFromPositionBox\(drawing, LIVE_PHONE_INSTRUMENT, freshQuote\(\) \?\? quoteOf\(lastPrice\)\)/);
   });
 });
@@ -257,8 +257,8 @@ describe('upozornění na cenu na PC', () => {
   });
 
   it('neznámý nebo chybějící zvuk spadne na výchozí; vlastní soubor se ověří', () => {
-    expect(alertToneUrl('neznamy')).toBe(`${ALERT_SOUNDS_BASE}${DEFAULT_ALERT_TONE}.ogg`);
-    expect(alertToneUrl(null)).toBe(`${ALERT_SOUNDS_BASE}${DEFAULT_ALERT_TONE}.ogg`);
+    expect(alertToneUrl('neznamy')).toBe(`${ALERT_SOUNDS_BASE}${DEFAULT_ALERT_TONE}.wav`);
+    expect(alertToneUrl(null)).toBe(`${ALERT_SOUNDS_BASE}${DEFAULT_ALERT_TONE}.wav`);
     expect(alertToneUrl('panic')).toBeNull();
     expect(alertToneUrl('custom:abc-1')).toBeNull();
     expect(alertToneNotes('custom:abc-1').length).toBeGreaterThan(0);
@@ -335,6 +335,27 @@ describe('upozornění na cenu na PC', () => {
     // Omezené animace: jen klidný prsten.
     drawAlertFire(ctx, { width: 600, y: 100, pointX: 500, ms: 500, color: '#f5b53d', reduced: true });
     expect(calls.filter(call => call === 'arc')).toHaveLength(2);
+  });
+
+  it('zvuk v notifikaci iPhonu: soubor z balíčku, vlastní soubor z PC hraje výchozí', () => {
+    expect(alertToneApnsSound('panic')).toBe('alert_panic.wav');
+    expect(alertToneApnsSound('neznamy')).toBe(`alert_${DEFAULT_ALERT_TONE}.wav`);
+    expect(alertToneApnsSound(null)).toBe(`alert_${DEFAULT_ALERT_TONE}.wav`);
+    expect(alertToneApnsSound('custom:abc-1')).toBe('default');
+    for (const tone of ALERT_TONE_GROUPS.flatMap(group => group.tones)) {
+      expect(existsSync(`capacitor-ios/App/App/AlertSounds/alert_${tone.id}.wav`), tone.id).toBe(true);
+      expect(read('capacitor-ios/App/App.xcodeproj/project.pbxproj')).toContain(`alert_${tone.id}.wav in Resources */,`);
+    }
+    expect(read('capacitor-ios/App/App/App.entitlements')).toContain('usernotifications.time-sensitive');
+  });
+
+  it('riziková notifikace dál vede na přehled, graf jen z tlačítka u upozornění (INV-UI-02)', () => {
+    const native = read('services/nativeNotifications.ts');
+    expect(native).toMatch(/navigateNativeShell\(route === 'live' \? LIVE_OVERVIEW_ROUTE : route\)/);
+    expect(native.match(/navigateNativeShell\(LIVE_CHART_ROUTE\)/g)).toHaveLength(2);
+    expect(native).toMatch(/action\.actionId === NATIVE_NOTIFICATION_ACTIONS\.openChart/);
+    const risk = native.slice(native.indexOf('id: ACTION_TYPE_RISK'));
+    expect(risk.slice(0, 300)).not.toMatch(/openChart|rearmPriceAlert/);
   });
 
   it('nic neobchoduje a nesahá na kopírku ani příkazy', () => {

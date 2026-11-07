@@ -10,6 +10,8 @@ import { formatLivePrice } from './LivePhoneTrade';
 import { clickedOrderType } from '../../lib/liveOrderTicket';
 import SheetGrip from './SheetGrip';
 import AlertFireEffect from '../AlertFireEffect';
+import { ALERT_TONE_GROUPS, DEFAULT_ALERT_TONE } from '../../lib/priceAlertTones';
+import { playAlertTone } from '../../services/priceAlertSounds';
 
 /**
  * Upozornění na cenu v LIVE grafu telefonu (náhled EkQateEvNCynqk8rLyQUrr):
@@ -109,9 +111,9 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
 
   return (
     <div ref={rootRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 14 }} data-price-alert-lines>
-      {/* PC, spuštění: prsten na poslední svíčce, vlna doleva a čára k ceně (kreslí se na plátno). */}
-      {mouse && alerts.filter(alert => flashIds.has(alert.id)).map(alert => (
-        <AlertFireEffect key={alert.id} api={api} price={alert.price} color={alert.line.color} width={paneWidth} height={paneHeight} />
+      {/* Spuštění: vlna doleva a čára k ceně, na PC navíc prsten na poslední svíčce (kreslí se na plátno). */}
+      {alerts.filter(alert => flashIds.has(alert.id)).map(alert => (
+        <AlertFireEffect key={alert.id} api={api} price={alert.price} color={alert.line.color} width={paneWidth} height={paneHeight} noRing={!mouse} />
       ))}
       {alerts.map((alert, index) => {
         const y = ys[index];
@@ -132,7 +134,6 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
               position: 'absolute', left: 0, right: mouse ? 0 : selected ? 52 : 22, top: 0, transform: 'translateY(-50%)',
               // PC: krytí z palety; telefon beze změny.
               borderTop: `${css.width}px ${css.style} ${rgba(color, mouse ? Math.min(1, (alert.line.opacity ?? PRICE_ALERT_PC_OPACITY) / 100 + (selected ? 0.25 : 0)) : selected ? 0.9 : 0.55)}`,
-              animation: flash && !mouse ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
             }} />}
             {/* PC: místo zvonečku přes čáru štítek na cenové ose; celou dobu ukazuje cenu a jde za něj táhnout. */}
             {mouse && <span aria-hidden data-alert-tag style={{ userSelect: 'none', position: 'absolute', left: paneWidth + 3, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 6, height: 16, borderRadius: 4, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 9.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
@@ -327,10 +328,20 @@ export function LivePhoneAlertSheet({ alert, market, onSave, onDelete, onClose }
       <Field label="Platnost"><Seg<PriceAlertExpiry> value={draft.expiry} onChange={expiry => set({ expiry })} options={[['session', 'Do konce seance'], ['gtc', 'Do zrušení']]} /></Field>
       <Field label="Kam poslat">
         <div>
-          <Toggle on={draft.channels.phone} label="Notifikace do iPhonu" sub="běžná notifikace, i při zamčeném telefonu" onChange={phone => set({ channels: { ...draft.channels, phone } })} />
+          <Toggle on={draft.channels.phone} label="Notifikace do iPhonu" sub="naléhavá, i při zamčeném telefonu" onChange={phone => set({ channels: { ...draft.channels, phone } })} />
           <Toggle on={draft.channels.voice} label="Hlasem" sub="telefon i PC přečtou upozornění nahlas" onChange={voice => set({ channels: { ...draft.channels, voice } })} />
           <Toggle on={draft.channels.pc} label="Na PC" sub="karta vlevo dole jako u obchodů" onChange={pc => set({ channels: { ...draft.channels, pc } })} />
           <Toggle on={draft.channels.sound} label="Zvuk" sub="telefon i PC" onChange={sound => set({ channels: { ...draft.channels, sound } })} />
+          {draft.channels.sound && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--dj-line)', fontSize: 13.5 }}>
+              <div>Který zvuk<small style={{ display: 'block', fontSize: 11, color: 'var(--dj-muted)' }}>výběr ho rovnou přehraje</small></div>
+              <select aria-label="Zvuk upozornění" value={draft.channels.tone ?? DEFAULT_ALERT_TONE}
+                onChange={event => { set({ channels: { ...draft.channels, tone: event.target.value } }); void playAlertTone(event.target.value); }}
+                style={{ flex: 'none', maxWidth: 170, height: 34, borderRadius: 9, border: '1px solid var(--dj-line)', background: 'rgba(255,255,255,.06)', color: 'var(--dj-text)', padding: '0 8px', fontSize: 13 }}>
+                {ALERT_TONE_GROUPS.map(group => <optgroup key={group.name} label={group.name}>{group.tones.map(tone => <option key={tone.id} value={tone.id}>{tone.name}</option>)}</optgroup>)}
+              </select>
+            </div>
+          )}
         </div>
       </Field>
       <Field label="Poznámka">

@@ -13,14 +13,15 @@ import {
   type CustomAlertSound,
 } from '../services/priceAlertSounds';
 
-const FILL_SOUND = '';
+type ToneKey = 'fillTone' | 'slTone' | 'tpTone';
+const NO_TONE = '';
 
 /** Automatika LIVE grafu: box s pozicí a vlastní zvuky SL/TP. Telefon i PC, jen zobrazení. */
 const LiveChartAutomationSettings: React.FC<{ isDark: boolean }> = ({ isDark }) => {
   const settings = useSyncExternalStore(subscribeLiveChartAutomation, getLiveChartAutomation, getLiveChartAutomation);
   const [customs, setCustoms] = useState<CustomAlertSound[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
-  const uploadFor = useRef<'slTone' | 'tpTone'>('slTone');
+  const uploadFor = useRef<ToneKey>('fillTone');
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -34,10 +35,10 @@ const LiveChartAutomationSettings: React.FC<{ isDark: boolean }> = ({ isDark }) 
   const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, minHeight: 40 };
   const label: React.CSSProperties = { flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600 };
 
-  const choose = (key: 'slTone' | 'tpTone', value: string) => {
+  const choose = (key: ToneKey, value: string) => {
     setProblem(null);
-    setLiveChartAutomation({ [key]: value === FILL_SOUND ? null : value });
-    if (value !== FILL_SOUND) {
+    setLiveChartAutomation({ [key]: value === NO_TONE ? null : value });
+    if (value !== NO_TONE) {
       liveFillAudio.unlock();
       void playAlertTone(value);
     }
@@ -49,18 +50,18 @@ const LiveChartAutomationSettings: React.FC<{ isDark: boolean }> = ({ isDark }) 
     setCustoms(await listCustomAlertSounds());
     choose(uploadFor.current, customToneValue(result.sound.id));
   };
-  const toneRow = (key: 'slTone' | 'tpTone', text: string) => {
+  const toneRow = (key: ToneKey, text: string) => {
     const value = settings[key];
     return (
       <div style={row}>
         <span style={label}>{text}</span>
         <select
           aria-label={`Zvuk: ${text}`}
-          value={value ?? FILL_SOUND}
+          value={value ?? NO_TONE}
           onChange={event => choose(key, event.target.value)}
           style={{ width: 150, height: 32, borderRadius: 8, border: `1px solid ${line}`, background: 'transparent', color: 'inherit', fontSize: 12.5, padding: '0 6px' }}
         >
-          <option value={FILL_SOUND}>Jako zvuk při fillu</option>
+          <option value={NO_TONE}>{key === 'fillTone' ? 'Podle Zvuku při fillu' : 'Jako vyplnění'}</option>
           {customs.length > 0 && (
             <optgroup label="Vlastní">
               {customs.map(item => <option key={item.id} value={customToneValue(item.id)}>{item.name}</option>)}
@@ -100,10 +101,11 @@ const LiveChartAutomationSettings: React.FC<{ isDark: boolean }> = ({ isDark }) 
       <p style={{ margin: '0 0 8px', fontSize: 11.5, color: muted }}>
         Box se stejným směrem, ve kterém leží vstup pozice, roste s obchodem a skončí s jeho zavřením.
       </p>
+      {toneRow('fillTone', 'Vyplnění')}
       {toneRow('slTone', 'Zásah SL')}
       {toneRow('tpTone', 'Zásah TP')}
       <p style={{ margin: '2px 0 0', fontSize: 11.5, color: problem ? '#ef4444' : muted }}>
-        {problem ?? 'Podle plnění u brokera, jen s otevřeným grafem. Vlastní zvuky jsou jen v tomto zařízení.'}
+        {problem ?? 'Podle plnění u brokera, jen s otevřeným grafem. Vybraný zvuk nahradí Tón i Hlas. Vlastní zvuky jsou jen v tomto zařízení.'}
       </p>
       <input
         ref={fileRef}

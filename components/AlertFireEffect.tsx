@@ -7,12 +7,13 @@ import { ALERT_FIRE_MS, drawAlertFire, type AlertFireCanvas } from '../lib/alert
  * mockups/alert-fire-breakout.html): na poslední svíčce prsten, doleva světelná vlna, k ceně
  * rozsvícená čára. Jen kreslení nad grafem, bere polohu z grafu po snímcích, nic neovládá.
  */
-export default function AlertFireEffect({ api, price, color, width, height }: {
+export default function AlertFireEffect({ api, price, color, width, height, noRing = false }: {
   api: ChartViewApi;
   price: number;
   color: string;
   width: number;
   height: number;
+  noRing?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -41,13 +42,13 @@ export default function AlertFireEffect({ api, price, color, width, height }: {
       try {
         const y = api.controller.getSeries().priceToCoordinate(price);
         const x = lastTime == null ? null : api.controller.getChart().timeScale().timeToCoordinate(lastTime as never);
-        if (y != null) drawAlertFire(ctx as AlertFireCanvas, { width, y, pointX: x, ms, color, reduced });
+        if (y != null) drawAlertFire(ctx as AlertFireCanvas, { width, y, pointX: x, ms, color, reduced, noRing });
       } catch { /* graf se přepíná */ }
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
     // Jedno spuštění = jeden běh; při změně velikosti panelu se plátno přizpůsobí znovu.
-  }, [api, color, height, price, width]);
+  }, [api, color, height, noRing, price, width]);
   return <canvas ref={canvasRef} aria-hidden data-alert-fire style={{ position: 'absolute', left: 0, top: 0, width, height, pointerEvents: 'none' }} />;
 }

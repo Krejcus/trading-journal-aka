@@ -19,7 +19,7 @@ const FALLBACK_NOTES: readonly AlertToneNote[] = [{ hz: 1319, ms: 80 }, { hz: 13
 /** Agresivní zvuky: hlasitější než výchozích 0,12, ale pořád bez ořezu. */
 const LOUD = 0.32;
 
-const file = (stem: string, name: string): AlertTone => ({ id: stem, name, file: `${stem}.ogg` });
+const file = (stem: string, name: string): AlertTone => ({ id: stem, name, file: `${stem}.wav` });
 const n = (hz: number, ms: number, wave?: AlertToneWave): AlertToneNote => (wave ? { hz, ms, wave } : { hz, ms });
 const repeat = (notes: readonly AlertToneNote[], times: number) => Array.from({ length: times }, () => notes).flat();
 
@@ -76,6 +76,12 @@ export const alertToneUrl = (tone: string | null | undefined): string | null => 
 
 /** Tóny k přehrání: složený zvuk, jinak záloha (nahrávka ani soubor nejdou pustit). */
 export const alertToneNotes = (tone: string | null | undefined): readonly AlertToneNote[] => BY_ID.get(tone ?? '')?.notes ?? FALLBACK_NOTES;
+
+/** Soubor zvuku v balíčku iOS appky; vlastní soubor z PC tam není, hraje výchozí zvuk systému. */
+export const alertToneApnsSound = (tone: string | null | undefined): string => {
+  if (customToneId(tone)) return 'default';
+  return `alert_${BY_ID.has(tone ?? '') ? tone : DEFAULT_ALERT_TONE}.wav`;
+};
 
 export const alertToneVolume = (tone: string | null | undefined): number => BY_ID.get(tone ?? '')?.volume ?? 0.12;
 

@@ -142,11 +142,12 @@ export function useLiveFillAnnouncer(options: UseLiveFillAnnouncerOptions): Live
 
   const automation = useSyncExternalStore(subscribeLiveChartAutomation, getLiveChartAutomation, getLiveChartAutomation);
   const exitTones = Boolean(automation.slTone || automation.tpTone);
+  const fillTone = automation.fillTone;
   const exitDetectorRef = useRef<LiveExitAlertDetector | null>(null);
   exitDetectorRef.current ??= createLiveExitAlertDetector();
 
   // Safari/iOS: zvuk až po gestu — první dotyk/klávesa ho odemkne (jen když je hlášení zapnuté).
-  useEffect(() => (mode === 'off' && !exitTones ? undefined : output.installUnlock()), [exitTones, mode, output]);
+  useEffect(() => (mode === 'off' && !exitTones && !fillTone ? undefined : output.installUnlock()), [exitTones, fillTone, mode, output]);
 
   // Vlastní zvuk SL/TP: hraje i v okně bez fokusu, alert se nesmí ztratit za jinou appkou.
   useEffect(() => {
@@ -162,21 +163,25 @@ export function useLiveFillAnnouncer(options: UseLiveFillAnnouncerOptions): Live
   useEffect(() => {
     const now = Date.now();
     const result = announcerRef.current!.step({
-      now, mode, available, visible: enabled && foreground, focused: !requireFocus || focused,
+      // Vlastní zvuk vyplnění platí i s volbou Vypnuto, hlášení proto musí běžet.
+      now, mode: fillTone && mode === 'off' ? 'tone' : mode, available, visible: enabled && foreground, focused: !requireFocus || focused,
       events, fills, fillsSymbol,
     });
     if (result.announcement) {
       const reason = result.announcement.exitReason;
       const ownTone = reason === 'sl' ? automation.slTone : reason === 'tp' ? automation.tpTone : null;
       if (!ownTone) {
-        try { output.announce(result.announcement, mode); } catch { /* zvuk je jen doplněk */ }
+        if (fillTone) void playAlertTone(fillTone);
+        else {
+          try { output.announce(result.announcement, mode); } catch { /* zvuk je jen doplněk */ }
+        }
       }
     }
     if (result.retryAt == null) return undefined;
     // Zadržené hlášení: znovu po uplynutí limitu (nový krok ho ohlásí, je-li stále čerstvé).
     const timer = setTimeout(() => setTick(value => value + 1), Math.max(0, result.retryAt - now));
     return () => clearTimeout(timer);
-  }, [automation.slTone, automation.tpTone, events, fills, fillsSymbol, available, enabled, foreground, focused, requireFocus, mode, output, tick]);
+  }, [automation.slTone, automation.tpTone, fillTone, events, fills, fillsSymbol, available, enabled, foreground, focused, requireFocus, mode, output, tick]);
 
   return mode;
 }

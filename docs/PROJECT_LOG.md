@@ -293,6 +293,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Proč:** Filip chce jako v TradingView kliknout na cenu a mít příkaz hned u brokera, s počtem z lišty. Pravé tlačítko (PC) a plus (telefon) proto u flat účtu odesílají hned. Mění to pravidlo z 29. 10. „nic z grafu bez potvrzení“; Filip to výslovně chce, klávesa dál nikdy neodešle.
 - **Dílčí fill:** bez čipů a × pozice, zbytek má vlastní čáru s ×. Automatika zbytek ruší (výjimka INV-TRAD-02, nejsou nohy). Stav `filled` s menším fillem je u Tradovate nejednoznačný, čeká se na další událost nebo čtení po ustálení.
 - **Neověřeno:** jen mock. Pořadí zpráv při dílčím fillu, zrušení zbytku a Flattenu čeká na DEMO.
+### 2026-11-07 — Upozornění na cenu na telefonu (Claude, větev `claude/phone-price-alerts-20261107`, web a iPhone nasazeny 7. 11. po Filipově „nasaď“, worker beze změny)
+
+- **Zadání (Filip, z náhledů):** číselník a maják 🚨 s obíhajícím světlem. Notifikace `time-sensitive` s textem „🚨 MNQ 21 482,00 / směr / zpráva“, tlačítka Otevřít graf a Zapnout znovu, vlastní zvuk z nabídky (45 wav v balíčku appky, stejné nahrávky i na webu místo ogg).
+- **V appce:** vlna po čáře, karta s číselníkem a majákem, výběr zvuku v nastavení. Nativně v popředí hraje zvuk jen notifikace, aby nezněl dvakrát.
+- **Island a karta na zámku:** critic zamítl přehrávání uloženého stavu (stará pozice by vypadala čerstvě, novější rizikový update by se zahodil, sloupec by dostal P&L do DB) i vlastní spuštění aktivity bez pozice (rozbije start karty při ARM). Hotová varianta: alert jede v běžné aktualizaci z plánu v tiku a cronu, ne v `end`, rizikovém ani offline stavu, jednou rozbalí Island bez zvuku. Bez migrace. Zpoždění ≤ 5 s při ARM, jinak ≤ 60 s; okamžitá je notifikace. **Island bez běžící aktivity (flat, bez ARM) se nestaví, zůstává notifikace.**
+- **Zapnout znovu:** nejdřív čerstvý stav ze serveru, výsledek ukáže kartu. Riziková notifikace dál vede na přehled (INV-UI-02).
+- **Ověřeno:** critic 2 kola, nálezy opraveny; iOS překlad s oprávněním podepsaný. **Neověřeno:** vše na iPhonu: naléhavost, zvuk v notifikaci, výška karty s pozicí, rozbalení Islandu.
+- **K rozhodnutí:** entitlement poprvé zapíná průchod Focusem i u pushů o obchodech a snímcích.
 
 ### 2026-11-07 — Zobáček do současnosti, position box s pozicí, zvuky SL/TP (Claude, web + iPhone, Filip „Ano, začni“)
 
@@ -300,6 +308,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Box s pozicí (`lib/livePositionBox.ts`, výchozí zapnuto):** vybere se box stejného směru, ve kterém leží vstup pozice (ne starší než 4 h, ne už ukončený). Okraj roste po minutách, po ověřeném „bez pozice“ se nastaví na čas zavření a dostane `style.liveEndedAt`. Neověřený stav ani přepnutí účtu v pohledu box neukončí. Mimo historii Zpět/Vpřed (`withoutChartHistory`).
 - **Zvuky SL/TP (`lib/liveExitAlerts.ts`, výchozí „jako zvuk při fillu“):** z `exitReason` událostí workeru, nikdy z ceny. Pozice může skončit dřív, než worker pozná nohu, událost pak přijde jako `manual` a stejné id se opraví, proto detektor `manual` dál sleduje. Pak může zaznít nejdřív běžný zvuk fillu a po opravě vlastní zvuk.
 - **Dotčená pravidla:** INV-UI-01, INV-UI-03, INV-UI-04: jen zobrazení, nic neautorizuje, neověřený stav je neutrální, důvod z brokera. ⚡ čte z boxu jen ceny a ty se nemění. Jádro kopírky beze změny, proto bez `copier-design-critic`.
+- **Zvuk vyplnění a lišta telefonu (dodatek téhož dne):** `fillTone` nahradí Tón i Hlas a hraje i s volbou Vypnuto; SL/TP bez vlastního zvuku berou zvuk vyplnění. Den/London/New York je v menu `⋯` (Rozsah dne, tečka na `⋯` mimo celý den), timeframe má šířku 80.
 - **Neověřeno:** protažení boxu a zvuky na skutečné pozici (trh zavřený, jen testy s náhradou motoru a náhled nastavení); zvuk na iPhonu bez gesta a s tichým režimem; zobáček dotykem. Vlastní zvuk hraje jen s otevřeným grafem, v pozadí zůstává push.
 ### 2026-11-07 — Limit a Stop opravdu bez SL/TP (Claude, NASAZENO 7. 11. z `eaa40d5d`: web, worker, iPhone, Filip „Nasaď“)
 

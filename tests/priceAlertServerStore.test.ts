@@ -268,6 +268,26 @@ describe('serverový store: fronta a chyby (revize 2. 11.)', () => {
     alerts.dispose();
   });
 
+  it('Zapnout znovu: jen spuštěné, po přečtení ze serveru a s očekávaným počtem spuštění', async () => {
+    const fake = fakeClient();
+    const alerts = store(fake);
+    await settle();
+    const item = newPriceAlert(21480, 21467.5, DEFAULT_PRICE_ALERT, 40_000);
+    alerts.add(item);
+    await settle();
+    expect(alerts.rearm(item.id)).toBe(false);
+    expect(alerts.rearm('pa-neexistuje')).toBe(false);
+    // Server mezitím spustil, v paměti je pořád „aktivní“: bez obnovení by se nic nestalo.
+    Object.assign(fake.rows.get(item.id)!, { status: 'triggered', trigger_count: 3 });
+    expect(alerts.rearm(item.id)).toBe(false);
+    await alerts.refresh();
+    await settle();
+    expect(alerts.rearm(item.id)).toBe(true);
+    await settle();
+    expect(fake.rpcs.find(call => call.name === 'rearm_price_alert')?.args).toMatchObject({ p_alert: item.id, p_expected_trigger_count: 3 });
+    alerts.dispose();
+  });
+
   it('trvalá chyba (strop 50) frontu nezablokuje: zbytek odejde, chyba se ukáže', async () => {
     const fake = fakeClient();
     const alerts = store(fake);

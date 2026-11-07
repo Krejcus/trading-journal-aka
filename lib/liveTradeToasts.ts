@@ -30,6 +30,8 @@ export interface TradeToast {
   ms?: number;
   /** Upozornění na cenu: karta v barvě alertu, rozhoupaný zvoneček a ubíhající čas. */
   alertColor?: string;
+  /** Telefon: karta s číselníkem ceny a majákem s obíhajícím světlem. */
+  alertBeacon?: { price: number };
 }
 
 const price = (value: number | undefined) => (value == null ? '—' : value.toFixed(2));

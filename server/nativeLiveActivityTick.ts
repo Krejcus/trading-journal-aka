@@ -25,6 +25,7 @@ import {
   type NativeLiveActivitySubscriptionRow,
 } from './nativeLiveActivityUpdater.js';
 import { startNativeLiveActivities } from './nativeLiveActivityStarter.js';
+import { loadRecentPriceAlert, priceAlertExpandAlert, withoutPriceAlert } from './priceAlertLiveActivity.js';
 import type { TradovateServerConfig } from './tradovateOAuthStore.js';
 
 /** Nejkratší rozestup mezi dvěma pokusy o tik (a tedy i Tradovate snapshoty). */
@@ -161,7 +162,8 @@ export async function tickNativeLiveActivities(options: {
     return { sent: 0, skipped: subscriptions.length, failed: 0, reason: 'throttled' };
   }
 
-  const broker = await loader(runtime);
+  // Až za throttlingem a souběžně se snapshotem; čtení má vlastní strop a nikdy nevyhodí.
+  const [broker, priceAlert] = await Promise.all([loader(runtime), loadRecentPriceAlert(options.db, options.userId, now)]);
   if (!broker) {
     // Bez snapshotu nic neposíláme; zapíšeme pokus, ať se hned neopakuje.
     for (const subscription of subscriptions) {
@@ -171,7 +173,7 @@ export async function tickNativeLiveActivities(options: {
     return { sent: 0, skipped: subscriptions.length, failed: 0, reason: 'no-broker' };
   }
   const positionsOpen = broker.positions.length > 0;
-  const plan = planNativeLiveActivityUpdate({ runtime, broker, now });
+  const plan = planNativeLiveActivityUpdate({ runtime, broker, now, priceAlert });
   const update: ApnsLiveActivityUpdate = { ...plan.update, staleAt: liveActivityTickStaleAt(now, positionsOpen) };
   const send = options.send ?? sendApnsLiveActivityUpdate;
 
@@ -188,7 +190,7 @@ export async function tickNativeLiveActivities(options: {
       deviceToken: duplicate.push_token,
       environment: duplicate.environment,
       bundleId: duplicate.bundle_id,
-    } as ApnsDevice, { state: plan.update.state, event: 'end', staleAt: now / 1_000 + 60, dismissalAt: now / 1_000 + 2 });
+    } as ApnsDevice, { state: withoutPriceAlert(plan.update.state), event: 'end', staleAt: now / 1_000 + 60, dismissalAt: now / 1_000 + 2 });
     await options.db.from('native_live_activity_subscriptions').update({
       expires_at: nowIso,
       last_error: `ended-duplicate:${result.status}`,
@@ -208,7 +210,9 @@ export async function tickNativeLiveActivities(options: {
       deviceToken: subscription.push_token,
       environment: subscription.environment,
       bundleId: subscription.bundle_id,
-    } as ApnsDevice, update);
+    } as ApnsDevice, plan.priceAlertShown
+      ? (() => { const alert = priceAlertExpandAlert(priceAlert, finiteDate(subscription.last_payload_at), now); return alert ? { ...update, alert } : update; })()
+      : update);
     if (result.status === 'sent') {
       sent++;
       await options.db.from('native_live_activity_subscriptions').update({

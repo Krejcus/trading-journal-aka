@@ -924,6 +924,41 @@ struct LockLiveWidget: Widget {
     }
 }
 
+/// Řádek se spuštěným upozorněním na cenu. Ukazuje čas, protože iOS bez aktualizace nepřekresluje.
+/// Rizikový a offline stav ho nikdy nezobrazí, server mu v takovém stavu pole ani nepošle.
+private func liveActivityPriceAlertVisible(_ state: AlphaTradeLiveActivityAttributes.ContentState, isStale: Bool) -> Bool {
+    guard !isStale, state.mode != "summary", state.priceAlertLevelText != nil else { return false }
+    return !["DIVERGENCE", "KILL SWITCH", "STUCK OUTBOX", "WORKER OFFLINE", "BROKER OFFLINE"].contains(state.status)
+}
+
+private struct LiveActivityPriceAlertRow: View {
+    let state: AlphaTradeLiveActivityAttributes.ContentState
+    let muted: Color
+    /// Karta s pozicí je plná: jen jeden řádek, ať nevytlačí P&L ani SL/TP.
+    var showNote = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text("🚨").font(.system(size: 12))
+                Text(state.priceAlertLevelText ?? "")
+                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    .contentTransition(.numericText())
+                Text("\(state.priceAlertSymbol ?? "") \((state.priceAlertDirection ?? "").lowercased())")
+                    .font(.system(size: 11)).foregroundStyle(muted).lineLimit(1)
+                Spacer(minLength: 0)
+                if let at = state.priceAlertAt {
+                    Text(liveActivityClock(at)).font(.system(size: 10).monospacedDigit()).foregroundStyle(muted)
+                }
+            }
+            if showNote, let note = state.priceAlertNote, !note.isEmpty {
+                Text(note).font(.system(size: 11)).lineLimit(1).privacySensitive()
+            }
+        }
+        .transition(.opacity)
+    }
+}
+
 struct AlphaTradeLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AlphaTradeLiveActivityAttributes.self) { context in
@@ -950,6 +985,9 @@ struct AlphaTradeLiveActivityWidget: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 7) {
+                        if liveActivityPriceAlertVisible(context.state, isStale: context.isStale) {
+                            LiveActivityPriceAlertRow(state: context.state, muted: .secondary)
+                        }
                         if context.isStale {
                             Text("Data jsou zastaralá. Otevři LIVE pro ověření.").font(.caption)
                         } else if context.state.mode == "position", context.state.slTpProgress != nil {
@@ -1065,6 +1103,10 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                 .frame(maxWidth: 132, alignment: .trailing)
             }
             content
+            if liveActivityPriceAlertVisible(state, isStale: context.isStale), layout != .critical, layout != .locked {
+                if layout != .position { Divider().overlay(muted.opacity(0.3)) }
+                LiveActivityPriceAlertRow(state: state, muted: muted, showNote: layout != .position)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
