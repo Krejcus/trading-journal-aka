@@ -61,7 +61,7 @@ export interface LiveCopierIslandInput {
   /** Počet uzavřených obchodů dne a případný strop. */
   tradesToday?: number | null;
   maxTradesPerDay?: number | null;
-  /** `marketPrices` z workeru (TradingView). Jen pro zobrazení, nikdy do rozhodování. */
+  /** `marketPrices` z workeru (IBKR). Jen pro zobrazení, nikdy do rozhodování. */
   marketPrices?: readonly unknown[];
   /** Poplatek za kontrakt a stranu (`feeRateKey`) z fillů; bez něj se SL/TP počítá hrubě. */
   feeRates?: ReadonlyMap<string, number>;

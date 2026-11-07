@@ -295,9 +295,9 @@ describe('supervisor vlákna hlídače', () => {
 
 describe('text notifikace', () => {
   it('úroveň uživatele, česky; automatický směr = „přes“; collapse-id ≤ 64 B', () => {
-    expect(priceAlertNotificationText({ symbol: 'MNQ', condition: 'up', level: 21480, note: '' }).title).toMatch(/^MNQ nahoru přes 21\s480,00$/);
-    expect(priceAlertNotificationText({ symbol: 'MNQ', condition: 'cross', level: 21480.25, note: ' VWAP ' })).toMatchObject({ body: 'VWAP' });
-    expect(priceAlertNotificationText({ symbol: 'NQ', condition: 'cross', level: 1, note: null }).body).toBe('Upozornění na cenu');
+    expect(priceAlertNotificationText({ symbol: 'MNQ', condition: 'up', level: 21480, note: '' }).title).toMatch(/^🚨 MNQ 21\s480,00$/);
+    expect(priceAlertNotificationText({ symbol: 'MNQ', condition: 'cross', level: 21480.25, note: ' VWAP ' })).toMatchObject({ body: 'Překročí\nVWAP' });
+    expect(priceAlertNotificationText({ symbol: 'NQ', condition: 'cross', level: 1, note: null }).body).toBe('Překročí');
     expect(Buffer.byteLength(priceAlertCollapseId(`pa-${'x'.repeat(61)}`))).toBeLessThanOrEqual(64);
   });
 });

@@ -43,7 +43,7 @@ const UNITS: readonly TicketBracketUnits[] = ['price', 'pts', 'ticks', 'usd'];
  * a náhled. Odesílací cesty (`place`, `attach`, `flatten`, `manage`) list nikdy nedostane:
  * odeslání jde dál jen přes `onSubmit` rodiče (INV-UI-01, „⚡ jen vyplní“).
  */
-export type LivePhoneSheetTrade = Pick<LivePhoneTradeBridge, 'blockedReason' | 'marketSupported' | 'bareSupported' | 'maxContracts' | 'frontContract' | 'scaleIn' | 'preview'>;
+export type LivePhoneSheetTrade = Pick<LivePhoneTradeBridge, 'blockedReason' | 'marketSupported' | 'bareSupported' | 'barePendingSupported' | 'maxContracts' | 'frontContract' | 'scaleIn' | 'preview'>;
 
 type PrefsStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -119,7 +119,7 @@ export function livePhoneSheetProblems(
   if (tooClose) problems.push(tooClose);
   if (!trade) return problems;
   const quantity = ticketQuantity(draft, instrument, quote);
-  const legs = liveTicketLegsProblem(draft, trade.bareSupported);
+  const legs = liveTicketLegsProblem(draft, trade.bareSupported, trade.barePendingSupported === true);
   if (legs) problems.push({ level: 'error', text: legs });
   if (draft.type === 'market' && !trade.marketSupported) problems.push({ level: 'error', text: 'Worker zatím neumí Market — použij Limit.' });
   const scale = livePhoneScaleInBlocked({ ...draft, sizing: 'qty', quantity }, quantity, trade.scaleIn, trade.maxContracts);
@@ -617,7 +617,7 @@ export default function LivePhoneOrderSheet({
           <button type="button" className="dj-btn" onClick={onClose} style={{ height: 48, borderRadius: 12, border: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text)', font: '700 14px Inter, sans-serif', cursor: 'pointer' }}>Zahodit</button>
           {onEditInChart && <button type="button" className="dj-btn" onClick={() => { playNativeHapticIfAvailable('selection'); onEditInChart(draft); }} style={{ height: 48, borderRadius: 12, border: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text)', font: '700 13px Inter, sans-serif', cursor: 'pointer' }}>Upravit v grafu</button>}
           <button type="button" className="dj-btn" disabled={blocked} onClick={() => { playNativeHapticIfAvailable('medium'); onSubmit(submitDraft); }} style={{ height: 48, borderRadius: 12, border: 0, color: '#fff', background: sell ? SELL : BUY, opacity: blocked ? 0.4 : 1, font: '800 14px Inter, sans-serif', cursor: blocked ? 'not-allowed' : 'pointer' }}>
-            {sell ? 'Prodat' : 'Koupit'} {m.quantity} {market ? 'market' : draft.type === 'limit' ? 'limit' : 'stop'}
+            {sell ? 'Prodat' : 'Koupit'} {m.quantity} {market ? 'market' : draft.type === 'limit' ? 'limit' : 'stop'}{draft.stopLoss == null && draft.takeProfit == null ? ' · bez SL/TP' : ''}
           </button>
         </div>
       </section>

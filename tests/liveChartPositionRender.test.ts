@@ -57,12 +57,12 @@ describe('LIVE → Graf: otevřená pozice skupiny až do panelu', () => {
       units: 'pts', onUnits: () => {}, scope: 'account', onScope: () => {},
       group: null, target: { kind: 'group' }, onTarget: () => {},
       quoteInfo: { source: 'IBKR', capturedAt: now, stale: false },
-      position,
+      position, shownOpenPnl: 58,
       onNewDraft: () => {}, onClose: () => {},
     }));
     expect(markup).toContain('Long 3');
     expect(markup).toContain('+$58.00');
-    expect(markup).toContain('z brokera');
+    expect(markup).toContain('bez poplatků');
     expect(markup).toContain('SL 2/2 · TP 2/2');
     expect(markup).not.toContain('SL na BE');
     expect(markup).not.toContain('Zavřít pozici');

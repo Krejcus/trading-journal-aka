@@ -428,6 +428,10 @@ export interface CopierManualEntryRecord {
    * vstup nečeká, má zrušení nebo kopírka není ARMED, aby si push neprotiřečil s výsledkem. Jen zobrazení.
    */
   pendingIncidentNoticeOnly?: true;
+  /** Holý Limit/Stop: kdy příkaz s fillem skončil. Teprve od té chvíle je to pozice se správou SL/TP a ×; zbytek už nepracuje. */
+  filledAt?: number;
+  /** Holý Limit/Stop: největší známý fill z `order.filledQuantity`. Nikdy se nesnižuje (REST může být pozadu). */
+  filledQuantity?: number;
   waiver?: { at: number; reason: string };
 }
 
@@ -435,7 +439,15 @@ export interface CopierManualOrderActionRecord {
   operationId: string;
   payloadHash: string;
   entryOperationId: string;
-  action: 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets';
+  action: 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets' | 'add-leg' | 'remove-leg';
+  /** SL a TP po jedné: které noze akce patří, fáze sekvence, stará a nová id (dohledání po restartu). */
+  leg?: 'stopLoss' | 'takeProfit';
+  phase?: 'write-sending' | 'oco-acked' | 'target-canceled';
+  oldLegId?: string;
+  newStopId?: string;
+  newTargetId?: string;
+  /** Zavření holé pozice s nejvýš jednou nohou: klasifikace nezávislá na pozdější změně nohou. */
+  bareClose?: boolean;
   status: 'sending' | 'acknowledged' | 'rejected' | 'unknown' | 'not-sent' | 'waived';
   /** Posun pozastavené nohy broker jen drží (OnHold): po aktivaci nohy se cena ověří proti `toPrice`. */
   heldMove?: boolean;
@@ -475,6 +487,8 @@ export interface CopierManualOrderActionRecord {
     check: 'pending' | 'shifted' | 'unchanged' | 'skipped' | 'incident';
     heldLegIds?: string[];
   };
+  /** `cancel-entry` zbytku holého Limit/Stop: fill, o kterém uživatel při × věděl. Jen ten je bez incidentu. */
+  barePartialFilled?: number;
   waiver?: { at: number; reason: string };
 }
 

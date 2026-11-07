@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Bar } from '@getcandlekit/charts';
 import { LIVE_CANDLE_REVERT_GRACE_MS, applyLiveCandle, bindLiveCandleDataResets, refreshLiveCandleTargets, restartLiveCandleGrace, type LiveCandleDrawn } from '../hooks/useLiveCandleBinding';
-import { LIVE_CANDLE_MAX_GAP_SEC, LIVE_CANDLE_MAX_STALE_JUMP_RATIO, contractMatchesData, liveCandleJumpRatio, livePriceWithinBand, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
+import { LIVE_CANDLE_MAX_GAP_SEC, LIVE_CANDLE_MATCHED_JUMP_RATIO, contractMatchesData, livePriceWithinBand, planLiveCandleUpdate, type LiveCandleFeed } from '../lib/liveCandleFeed';
 import { tvLiveCandle } from '../lib/tvLiveCandle';
 import type { TvPricePayload } from '../lib/tvPriceMessage';
 import type { TvPriceFeedView } from '../lib/tvPriceStore';
@@ -307,14 +307,6 @@ describe('výdrž živé svíčky bez ceny', () => {
 });
 
 describe('pojistka skoku u starých dat', () => {
-  it('čerstvá data 0,2 %, s každou minutou víc, nejvýš strop pod rozdílem kontraktů v rollu', () => {
-    expect(liveCandleJumpRatio(0)).toBeCloseTo(0.002);
-    expect(liveCandleJumpRatio(-5_000)).toBeCloseTo(0.002);
-    expect(liveCandleJumpRatio(60_000)).toBeCloseTo(0.004);
-    expect(liveCandleJumpRatio(3 * 60_000)).toBe(LIVE_CANDLE_MAX_STALE_JUMP_RATIO);
-    expect(liveCandleJumpRatio(Number.NaN)).toBeCloseTo(0.002);
-  });
-
   it('kontrakt potvrdí jen shoda měsíce souboru a zprávy', () => {
     expect(contractMatchesData('MNQZ2026', 'IBKR:MNQZ2026')).toBe(true);
     expect(contractMatchesData('MNQH2027', 'IBKR:MNQZ2026')).toBe(false);
@@ -323,14 +315,13 @@ describe('pojistka skoku u starých dat', () => {
     expect(contractMatchesData('MNQZ2026', null)).toBe(false);
   });
 
-  it('panel: skok 0,5 % u 3 minuty staré reference projde jen se shodou kontraktu', () => {
-    const now = 1_000_000_000;
-    const old = now - 3 * 60_000;
-    expect(livePriceWithinBand(26_865, 27_000, old, true, now)).toBe(true);
-    expect(livePriceWithinBand(26_865, 27_000, old, false, now)).toBe(false);
-    expect(livePriceWithinBand(26_865, 27_000, null, true, now)).toBe(false);
-    expect(livePriceWithinBand(26_865, 27_000, now, true, now)).toBe(false);
-    expect(livePriceWithinBand(26_800, 27_000, old, true, now)).toBe(false);
+  it('panel: skok do 1 % projde jen se shodou kontraktu', () => {
+    expect(livePriceWithinBand(26_865, 27_000, true)).toBe(true);
+    expect(livePriceWithinBand(26_865, 27_000, false)).toBe(false);
+    // Pohyb 97 b za minutu při Openu 6. 11.: s čerstvou referencí a potvrzeným kontraktem cena platí.
+    expect(livePriceWithinBand(26_903, 27_000, true)).toBe(true);
+    expect(livePriceWithinBand(26_903, 27_000, true)).toBe(true);
+    expect(livePriceWithinBand(27_000 * (1 - LIVE_CANDLE_MATCHED_JUMP_RATIO) - 1, 27_000, true)).toBe(false);
   });
 
   const liveSetup = (timeframe: '1m' | '5m', dataEnd: number, matches: boolean) => {
@@ -364,6 +355,13 @@ describe('pojistka skoku u starých dat', () => {
     expect(t.requestData).toHaveBeenCalledOnce();
   });
 
+  it('rychlý trh na přelomu minuty: nová svíčka se kreslí i o 97 b od souboru (Open 6. 11.)', () => {
+    const t = liveSetup('1m', MINUTE, true);
+    t.set({ time: MINUTE + 60, open: 26_903, close: 26_900, high: 26_905, low: 26_899 });
+    applyLiveCandle(t.source, t.target, t.drawn);
+    expect(t.chart.bars().at(-1)).toMatchObject({ ts: (MINUTE + 60) * 1_000, close: 26_900 });
+  });
+
   it('běžná minuta hned za daty data nevyžádá', () => {
     const t = liveSetup('1m', MINUTE, true);
     t.set({ time: MINUTE + 60, open: 26_999, close: 26_999, high: 27_000, low: 26_998 });
@@ -377,7 +375,7 @@ describe('pojistka skoku u starých dat', () => {
     expect(t.requestData).toHaveBeenCalledOnce();
   });
 
-  it('svíčka za dírou po výpadku projde jen s potvrzeným kontraktem, jiný kontrakt ne', () => {
+  it('svíčka za dírou projde jen s potvrzeným kontraktem a bez nesmyslného skoku', () => {
     const lastTime = 1_793_930_000 - (1_793_930_000 % 60);
     const plan = (open: number) => planLiveCandleUpdate({
       lastBar: { ts: lastTime * 1_000, close: 27_000 },
@@ -387,6 +385,6 @@ describe('pojistka skoku u starých dat', () => {
       widenJump: true,
     });
     expect(plan(26_920)).not.toBeNull(); // 80 bodů za 3 min (6. 11.)
-    expect(plan(27_000 * 1.01)).toBeNull();
+    expect(plan(27_000 * 1.011)).toBeNull();
   });
 });

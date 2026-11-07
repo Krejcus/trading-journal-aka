@@ -276,6 +276,8 @@ export function createServerPriceAlertStore(deps: {
   void pull();
 
   const enqueue = (op: PendingOp) => {
+    // Nová úprava: stará chyba už neplatí. Stejná chyba znovu se musí zase ukázat.
+    error = null;
     queue.set(op.alert.id, op);
     rebuild();
     void flush();
@@ -291,6 +293,15 @@ export function createServerPriceAlertStore(deps: {
       const spent = previous?.status === 'triggered' || previous?.status === 'expired';
       const pendingRearm = (queue.get(alert.id) as { rearm?: number } | undefined)?.rearm;
       enqueue({ kind: 'upsert', alert, ...(pendingRearm != null ? { rearm: pendingRearm } : spent && changed ? { rearm: previous!.triggerCount ?? 0 } : {}) });
+    },
+    rearm: id => {
+      // Čekající úprava má přednost, ať ji znovuzapnutí nepřepíše; stav spouštění je ze serveru.
+      const current = server.get(id);
+      if (!current || (current.status !== 'triggered' && current.status !== 'expired')) return false;
+      const pending = queue.get(id);
+      if (pending?.kind === 'delete') return false;
+      enqueue({ kind: 'upsert', alert: pending?.alert ?? current, rearm: current.triggerCount ?? 0 });
+      return true;
     },
     remove: id => {
       const alert = queue.get(id)?.alert ?? server.get(id);

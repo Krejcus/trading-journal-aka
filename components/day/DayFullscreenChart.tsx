@@ -5,6 +5,7 @@ import type { Drawing, DrawingToolId } from '@getcandlekit/charts';
 import { Camera, Check, ChevronDown, ClipboardCheck, Scissors, ChevronLeft, Redo2, MoreHorizontal, Settings, SlidersHorizontal, Expand, GripVertical, Lock, Shrink, Undo2, Magnet, Maximize2, Mic, Minimize2, Pause, PenLine, Play, SkipForward, StepBack, StepForward, Star, StickyNote, Trash2, Unlock, X } from 'lucide-react';
 import type { Trade } from '../../types';
 import CandleKitTradeChart, { ALPHATRADE_DRAWING_TOOLS } from '../CandleKitTradeChart';
+import ChartJumpToNow from './ChartJumpToNow';
 import GenericDrawingSettingsDialog from '../GenericDrawingSettingsDialog';
 import GenericDrawingFloatingToolbar from '../GenericDrawingFloatingToolbar';
 import FibDrawingSettingsDialog, { FibDrawingFloatingToolbar } from '../FibDrawingSettingsDialog';
@@ -38,6 +39,8 @@ import {
   effectiveDayChartLayout, readDayChartLayout, readDayChartSync, readDayPaneTimeframes, writeDayChartLayout, writeDayChartSync, writeDayPaneTimeframes,
   type DayChartLayout, type DayChartSync, type DayDrawColorId, type DayDrawPanel,
 } from '../../lib/dayChartTools';
+import { rememberPhoneChartView } from '../../lib/chartView';
+import { CHART_PROFILE_APPLIED_EVENT } from '../../services/chartProfile';
 import ChartNotesLayer from '../ChartNotesLayer';
 import { chartNotesOfTrades, type ChartNote } from '../../lib/chartNotes';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
@@ -64,7 +67,7 @@ const toolIcon = (tool: string) => (tool === DAY_PATH_TOOL ? TOOL_BY_ID.get('Arr
 const toolTitle = (tool: string | null) => (tool === DAY_PATH_TOOL ? 'Šipka' : tool === 'Arrow' ? 'Rovná šipka' : tool ? DAY_DRAW_TOOLS.find(item => item.id === tool)?.label ?? TOOL_BY_ID.get(tool)?.title ?? tool : '');
 const SCOPE_LABEL: Record<'day' | 'london' | 'ny', string> = { day: 'Celý den', london: 'London', ny: 'New York' };
 /** Krátké popisky čipu v LIVE liště (na úzkém telefonu musí být vidět i •••). */
-const SCOPE_SHORT: Record<'day' | 'london' | 'ny', string> = { day: 'Den', london: 'LDN', ny: 'NY' };
+const SCOPE_COLOR: Record<'day' | 'london' | 'ny', string> = { day: '#94a3b8', london: '#3b82f6', ny: '#f97316' };
 
 /**
  * Graf dne přes celou obrazovku telefonu (docs/DAY_CHART_PHONE_FULLSCREEN.md,
@@ -278,12 +281,21 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const [hubOpen, setHubOpen] = useState(false);
   const [chartReq, setChartReq] = useState<{ pane: number; n: number } | null>(null);
   const [indicatorReq, setIndicatorReq] = useState<{ pane: number; id: 'fvg' | 'levels' | 'structure'; n: number } | null>(null);
-  const setLayout = (next: DayChartLayout) => { setLayoutState(next); writeDayChartLayout(window.localStorage, next); setMaximized(false); };
+  const setLayout = (next: DayChartLayout) => { setLayoutState(next); writeDayChartLayout(window.localStorage, next); rememberPhoneChartView(); setMaximized(false); };
   const [sync, setSyncState] = useState<DayChartSync>(() => readDayChartSync(window.localStorage));
   const setSync = (next: DayChartSync) => { setSyncState(next); writeDayChartSync(window.localStorage, next); };
   // Okno 1 má rámec sdílený s malým grafem (`timeframe`), okna 2–4 vlastní.
   const [paneTimeframes, setPaneTimeframesState] = useState<MarketTimeframe[]>(() => readDayPaneTimeframes(window.localStorage));
-  const setPaneTimeframes = (next: MarketTimeframe[]) => { setPaneTimeframesState(next); writeDayPaneTimeframes(window.localStorage, next); };
+  const setPaneTimeframes = (next: MarketTimeframe[]) => { setPaneTimeframesState(next); writeDayPaneTimeframes(window.localStorage, next); rememberPhoneChartView(); };
+  // Převzetí z jiného zařízení.
+  useEffect(() => {
+    const reload = () => {
+      setLayoutState(readDayChartLayout(window.localStorage));
+      setPaneTimeframesState(readDayPaneTimeframes(window.localStorage));
+    };
+    window.addEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+    return () => window.removeEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+  }, []);
   const paneTimeframe = (index: number): MarketTimeframe => (index === 0 ? timeframe : paneTimeframes[index - 1] ?? '5m');
   const setPaneTimeframe = (index: number, next: MarketTimeframe) => {
     // „Interval“ v synchronizaci: rámec se mění ve všech oknech.
@@ -446,7 +458,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const liveCandleTargets: LiveCandleTarget[] = Array.from({ length: paneCount }, (_, index) => ({
     api: paneApi(index), root: 'MNQ', timeframe: paneTimeframe(index), rawCandles: paneLiveRaw[index] ?? raw,
   }));
-  useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets);
+  // LIVE: graf jde za poslední svíčkou jako na PC, i když se po návratu z pozadí naráz doplní víc svíček.
+  useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets, { followEdge: Boolean(live) });
   useLivePriceLinesBinding(live?.priceLines && !replayOn ? live.priceLines : null, liveCandleTargets.map(target => ({ api: target.api, root: 'MNQ' })));
   // Přehrávání: rozpracovaný bar vyššího timeframu i s historií (z celé řady — mění se jen s daty).
   const fullRawWithHistory = useMemo(
@@ -767,7 +780,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const aurora = Boolean(live) && isDark;
   // LIVE lišta má navíc fotoaparát a ⇅ — užší ikony, ať se na 390 pt vejde i •••.
   const stripIcon: React.CSSProperties = live ? { ...iconButton, width: 36 } : iconButton;
-  const hubButton = <button type="button" className="dj-btn" aria-label="Další volby grafu" aria-expanded={hubOpen} onClick={() => { cancelTool(); setHubOpen(true); }} style={{ ...stripIcon, ...(hubOpen ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><MoreHorizontal size={19} /></button>;
+  const hubButton = <button type="button" className="dj-btn" aria-label="Další volby grafu" aria-expanded={hubOpen} onClick={() => { cancelTool(); setHubOpen(true); }} style={{ ...stripIcon, position: 'relative', ...(hubOpen ? { color: 'var(--dj-indigo-text)', background: 'var(--dj-indigo-bg-soft)' } : {}) }}><MoreHorizontal size={19} />{ctl && ctl.scope !== 'day' && <span aria-hidden="true" style={{ position: 'absolute', top: 7, right: 6, width: 7, height: 7, borderRadius: 9, background: SCOPE_COLOR[ctl.scope] }} />}</button>;
 
   return createPortal(
     <div ref={rootRef} className={`dj${live ? ' dj-live' : ''}${aurora ? ' dj-aurora' : ''}`} role="dialog" aria-label="Graf dne na celou obrazovku" style={{ position: 'fixed', inset: 0, zIndex: 880, display: 'flex', flexDirection: 'column', background: 'var(--dj-bg)', color: 'var(--dj-text)', paddingTop: chromeHidden ? 0 : 'env(safe-area-inset-top, 0px)', paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', animation: 'dj-fade .18s ease both' }}>
@@ -891,6 +904,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
                 {live.paneLayer({ ...liveInfo, api: paneApi(index), candles: list, intervalSeconds: timeframeMinutes(paneTf) * 60, paneIndex: index, active: !split || isActive })}
               </div>
             )}
+            {visible && replayPhase === 'off' && <ChartJumpToNow api={paneApi(index)} barCount={list.length} liftPx={live ? 52 : 0} />}
           </div>
         );
       })}
@@ -1018,13 +1032,6 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           <TimeframeWheel key={split ? `pane${activePane}` : 'pane0'} value={paneTimeframe(split ? activePane : 0)} options={wheelOptions(paneTimeframe(split ? activePane : 0))} onChange={item => setPaneTimeframe(split ? activePane : 0, item)} onTap={() => setIntervalSheet(true)} />
           <span style={{ ...divider, margin: '0 4px 0 0' }} />
           <div className="dj-scroll" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 2, overflowX: 'auto', scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
-            {ctl && (<>
-            {/* Rozsah dne jako jeden čip (Den → LDN → NY). */}
-            <button type="button" className="dj-btn" aria-label={`Rozsah: ${SCOPE_LABEL[ctl.scope]}, další`} onClick={() => pickScope(ctl.scope === 'day' ? 'london' : ctl.scope === 'london' ? 'ny' : 'day')} style={{ ...chip, height: 34, padding: live ? '0 8px' : '0 10px', gap: 6, fontWeight: 800, flex: 'none', margin: '0 2px' }}>
-              <span style={{ width: 8, height: 8, borderRadius: 9, background: ctl.scope === 'london' ? '#3b82f6' : ctl.scope === 'ny' ? '#f97316' : '#94a3b8' }} />{live ? SCOPE_SHORT[ctl.scope] : SCOPE_LABEL[ctl.scope]}
-            </button>
-            </>)}
-            <span style={divider} />
             <button type="button" className="dj-btn" aria-label="Nástroje kreslení" aria-pressed={drawingNow} onClick={() => (drawingNow ? cancelTool() : setToolsOpen(true))} style={{ ...stripIcon, ...(drawingNow ? { color: '#fff', background: 'linear-gradient(180deg,#6366f1,#4f46e5)' } : {}) }}>{drawingNow ? <X size={18} /> : <PenLine size={18} />}</button>
             <button type="button" className="dj-btn" aria-label={historyState.undoLabel ? `Zpět: ${historyState.undoLabel}` : 'Zpět'} disabled={!historyState.canUndo || drawingNow} onClick={() => history.undo()} style={{ ...stripIcon, opacity: historyState.canUndo && !drawingNow ? 1 : 0.35 }}><Undo2 size={18} /></button>
             <button type="button" className="dj-btn" aria-label={historyState.redoLabel ? `Vpřed: ${historyState.redoLabel}` : 'Vpřed'} disabled={!historyState.canRedo || drawingNow} onClick={() => history.redo()} style={{ ...stripIcon, opacity: historyState.canRedo && !drawingNow ? 1 : 0.35 }}><Redo2 size={18} /></button>
@@ -1081,6 +1088,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           onChartSettings={() => { setHubOpen(false); setChartReq({ pane: split ? activePane : 0, n: Date.now() }); }}
           onReplay={() => { setHubOpen(false); startReplay(); }}
           extra={live?.hubExtra}
+          scope={ctl ? { value: ctl.scope, onPick: next => { setHubOpen(false); pickScope(next); } } : null}
           onClose={() => setHubOpen(false)}
         />
       )}
@@ -1367,11 +1375,11 @@ function TimeframeWheel({ value, options, onChange, onTap }: {
           else finish();
         }}
         onPointerCancel={() => { dragRef.current = null; finish(); }}
-        style={{ width: 50, height: 46, flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', touchAction: 'none', cursor: 'ns-resize', userSelect: 'none' }}
+        style={{ width: 80, height: 56, flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', touchAction: 'none', cursor: 'ns-resize', userSelect: 'none' }}
       >
-        <span style={{ height: 11, fontSize: 9.5, fontWeight: 700, lineHeight: '11px', color: 'var(--dj-muted)', opacity: 0.6 }}>{around(-1)}</span>
-        <span style={{ fontSize: 16, fontWeight: 800, lineHeight: '20px', color: 'var(--dj-text)' }}>{shown}</span>
-        <span style={{ height: 11, fontSize: 9.5, fontWeight: 700, lineHeight: '11px', color: 'var(--dj-muted)', opacity: 0.6 }}>{around(1)}</span>
+        <span style={{ height: 14, fontSize: 11, fontWeight: 700, lineHeight: '14px', color: 'var(--dj-muted)', opacity: 0.6 }}>{around(-1)}</span>
+        <span style={{ fontSize: 18, fontWeight: 800, lineHeight: '24px', color: 'var(--dj-text)' }}>{shown}</span>
+        <span style={{ height: 14, fontSize: 11, fontWeight: 700, lineHeight: '14px', color: 'var(--dj-muted)', opacity: 0.6 }}>{around(1)}</span>
       </div>
       {pos != null && createPortal(
         <div aria-hidden="true" className={`dj dj-wheel-card${closing ? ' is-closing' : ''}`}>
@@ -1485,7 +1493,9 @@ function LayoutSheet({ layout, activeId, sync, onSync, onPick, onClose }: {
 const MAGNET_LABEL: Record<'off' | 'weak' | 'strong', string> = { off: 'vyp.', weak: 'slabý', strong: 'silný' };
 
 /** Menu ⋯ grafu dne (TradingView „Analysis hub“): vše, co se nevešlo do spodní lišty. */
-function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet, locked, onLock, onToggleIndicator, onIndicatorSettings, onLayout, onChartSettings, onReplay, extra = null, onClose }: {
+function AnalysisHub({ scope, layoutCells, indicators, canReplay, magnetMode, onMagnet, locked, onLock, onToggleIndicator, onIndicatorSettings, onLayout, onChartSettings, onReplay, extra = null, onClose }: {
+  /** Rozsah dne (Den / London / New York); bez dne null. */
+  scope: { value: 'day' | 'london' | 'ny'; onPick: (next: 'day' | 'london' | 'ny') => void } | null;
   layoutCells: Parameters<typeof ChartLayoutGlyph>[0]['cells'];
   indicators: { levels: boolean; fvg: boolean; structure: boolean };
   canReplay: boolean;
@@ -1539,6 +1549,16 @@ function AnalysisHub({ layoutCells, indicators, canReplay, magnetMode, onMagnet,
               <button type="button" className="dj-btn" onClick={onChartSettings} style={tile}><Settings size={22} />Nastavení grafu</button>
               <button type="button" className="dj-btn" disabled={!canReplay} onClick={onReplay} style={{ ...tile, opacity: canReplay ? 1 : 0.4 }}><Play size={22} />Přehrávání</button>
             </div>
+            {scope && <>
+              <p style={{ ...sheetLabel, margin: '18px 0 6px' }}>Rozsah dne</p>
+              <div role="radiogroup" aria-label="Rozsah dne" style={{ display: 'flex', gap: 2, padding: 2, borderRadius: 10, background: 'var(--dj-chip)' }}>
+                {(['day', 'london', 'ny'] as const).map(item => (
+                  <button key={item} type="button" role="radio" aria-checked={scope.value === item} className="dj-btn" onClick={() => scope.onPick(item)} style={{ flex: 1, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 8, border: 0, cursor: 'pointer', font: '700 13px Inter, system-ui, sans-serif', background: scope.value === item ? 'var(--dj-seg-on)' : 'transparent', color: scope.value === item ? 'var(--dj-seg-on-ink)' : 'var(--dj-text-2)' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 9, background: SCOPE_COLOR[item] }} />{SCOPE_LABEL[item]}
+                  </button>
+                ))}
+              </div>
+            </>}
             <p style={{ ...sheetLabel, margin: '18px 0 6px' }}>Kreslení</p>
             <div style={{ borderRadius: 14, border: '1px solid var(--dj-line)', overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 10px 10px 12px' }}>

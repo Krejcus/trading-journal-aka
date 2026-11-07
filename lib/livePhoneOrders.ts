@@ -8,6 +8,7 @@ import type { LiveBareCloseOffer } from './liveBareCloseUi';
 import type { LiveCancelPendingView } from './liveCancelPendingUi';
 import type { CancelPendingItemResult, PendingOwnEntry } from './liveCancelPending';
 import type { BareLeaderTrade } from './manualBareClose';
+import type { LiveBareLegIntent } from './liveBareLeg';
 
 /**
  * LIVE obchodování z telefonu (2. 11. 2026): převod lišty Koupit/Prodat a listu
@@ -24,6 +25,10 @@ export interface LivePhoneTradeBridge {
   blockedReason: string | null;
   marketSupported: boolean;
   bareSupported: boolean;
+  /** Limit a Stop bez SL/TP (capability `manual-entry-bare-pending-v1`). */
+  barePendingSupported?: boolean;
+  /** Dílčí fill holého Limit/Stop: zbytek pracuje, má vlastní čáru s ×. */
+  barePartial?: { price: number | null; quantity: number; orderType: string; label?: string } | null;
   maxContracts: number;
   /** Front kontrakt podle brokera (čerstvý) — jen pro Limit/Stop z listu, když cena není z IBKR. */
   frontContract: string | null;
@@ -77,6 +82,9 @@ export interface LivePhoneTradeBridge {
    */
   bareClose?: LiveBareCloseOffer | null;
   closeBare?: (seen: BareLeaderTrade) => Promise<LeaderOrderManageResult>;
+  /** SL a TP po jedné, jen s capability `manual-order-single-leg-v1`. */
+  bareLegTrade?: BareLeaderTrade | null;
+  bareLeg?: (seen: BareLeaderTrade, intent: LiveBareLegIntent) => Promise<LeaderOrderManageResult>;
   /**
    * C7 (4. 11. 2026): „Zrušit čekající“ — pohled (`liveCancelPendingView`, null = tlačítko není)
    * a deskový `cancelPendingEntries` (N× `cancel-entry`); jen s capability `manual-order-cancel-pending-v1`.
@@ -226,7 +234,33 @@ export function livePhoneBareMarket(side: 'buy' | 'sell', quantity: number, quot
   };
 }
 
-/** List objednávky: Limit/Stop/Market se SL+TP; Market smí i bez obou (holý). */
+/**
+ * Koupit / Prodat z lišty v otevřené pozici (C18e, Filip 6. 11.): Market přikoupení se SL/TP pozice,
+ * pojistky stejné jako list (`livePhoneScaleInBlocked`), záměr pozice připojí deskový `place`.
+ * Opravdu holé přikoupení je zakázané (INV-MANUAL-01): část pozice by zůstala bez ochrany.
+ */
+export function livePhonePillScaleIn(
+  side: 'buy' | 'sell',
+  quantity: number,
+  quote: LivePhoneQuote,
+  scaleIn: LiveTicketScaleIn,
+  maxContracts: number,
+): LiveEntryPreviewDraft | { error: string } {
+  if (!quote.symbol) return { error: 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' };
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return { error: 'Neplatný počet kontraktů.' };
+  if (side === scaleIn.side && (scaleIn.stopLoss == null || scaleIn.targetPrice == null)) {
+    return { error: 'Přikoupit jde jen k pozici se SL i TP — nejdřív je nastav, nic se neodeslalo.' };
+  }
+  const blocked = livePhoneScaleInBlocked({ side, type: 'market', stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice } as TicketDraft, quantity, scaleIn, maxContracts);
+  if (blocked) return { error: blocked };
+  return {
+    symbol: quote.symbol, side: side === 'buy' ? 'Buy' : 'Sell', quantity, orderType: 'Market',
+    referencePrice: side === 'buy' ? quote.ask : quote.bid, quoteReceivedAt: Math.round(quote.at),
+    stopLoss: scaleIn.stopLoss!, takeProfit: scaleIn.targetPrice!,
+  };
+}
+
+/** List objednávky: Limit/Stop/Market se SL+TP, nebo bez obou (holý). Zda to worker umí, hlídá `liveTicketLegsProblem`. */
 export function livePhoneSheetEntry(draft: TicketDraft, instrument: TicketInstrument, quote: LivePhoneQuote): LiveEntryPreviewDraft | { error: string } {
   if (!quote.symbol) return { error: 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' };
   const quantity = ticketQuantity(draft, instrument, { bid: quote.bid, ask: quote.ask });
@@ -234,7 +268,6 @@ export function livePhoneSheetEntry(draft: TicketDraft, instrument: TicketInstru
   const hasStop = draft.stopLoss != null;
   const hasTarget = draft.takeProfit != null;
   if (hasStop !== hasTarget) return { error: 'Vyplň SL i TP (nebo u Marketu ani jedno).' };
-  if (!hasStop && draft.type !== 'market') return { error: 'Limit a Stop potřebují SL i TP.' };
   const side = draft.side === 'buy' ? 'Buy' as const : 'Sell' as const;
   const legs = hasStop ? { stopLoss: snapToTick(draft.stopLoss!, instrument.tickSize), takeProfit: snapToTick(draft.takeProfit!, instrument.tickSize) } : {};
   return draft.type === 'market'

@@ -1,7 +1,7 @@
 // Přikoupení v UI (3. 11. 2026): záměr pozice a SL/TP pozice do příkazu, hlášky listu telefonu.
 import { describe, expect, it } from 'vitest';
 import { liveTicketScaleIn, withScaleInIntent, type LiveLeaderPosition } from '../lib/liveScaleIn';
-import { livePhoneScaleInBlocked, livePhoneScaleInDraft } from '../lib/livePhoneOrders';
+import { livePhonePillScaleIn, livePhoneScaleInBlocked, livePhoneScaleInDraft } from '../lib/livePhoneOrders';
 import { COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY } from '../lib/copierWorkerCapabilities';
 import type { TicketDraft } from '../lib/liveOrderTicket';
 
@@ -65,5 +65,20 @@ describe('čára čekajícího přikoupení', () => {
     const lines = livePositionChartLines(summary, { manageable: true, canClose: true, entryAvg: 100, pointValue: 2, pendingAdd: { price: 95, quantity: 1, orderType: 'Limit' } });
     expect(lines.find(line => line.id === LIVE_PENDING_ADD_LINE_ID)).toMatchObject({ price: 95, cancellable: true, cancelAction: 'cancel-order' });
     expect(livePositionChartLines(summary, { manageable: true, entryAvg: 100, pointValue: 2 }).some(line => line.id === LIVE_PENDING_ADD_LINE_ID)).toBe(false);
+  });
+});
+
+describe('telefon: Koupit / Prodat z lišty v pozici', () => {
+  const quote = { symbol: 'MNQZ6', bid: 100, ask: 100.25, at: 1_000.4 };
+  it('na stranu pozice odejde Market se SL/TP pozice a desk připojí záměr přikoupení', () => {
+    const draft = livePhonePillScaleIn('buy', 1, quote, liveTicketScaleIn(position()), 5);
+    expect(draft).toEqual({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100.25, quoteReceivedAt: 1000, stopLoss: 90, takeProfit: 130 });
+    expect(withScaleInIntent(draft as never, status([position()]))).toMatchObject({ position: { mode: 'add', quantity: 2 } });
+  });
+  it('nikdy holý Market v pozici: bez SL/TP, opačná strana, strop i čekající přikoupení jen důvod', () => {
+    expect(livePhonePillScaleIn('buy', 1, quote, liveTicketScaleIn(position({ stopPrice: null })), 5)).toEqual({ error: expect.stringContaining('se SL i TP') });
+    expect(livePhonePillScaleIn('sell', 1, quote, liveTicketScaleIn(position()), 5)).toEqual({ error: expect.stringContaining('jen přikoupit') });
+    expect(livePhonePillScaleIn('buy', 4, quote, liveTicketScaleIn(position()), 5)).toEqual({ error: expect.stringContaining('strop účtu') });
+    expect(livePhonePillScaleIn('buy', 1, quote, liveTicketScaleIn(position({ canAdd: false, addBlockedReason: 'Ne teď.' })), 5)).toEqual({ error: 'Ne teď.' });
   });
 });

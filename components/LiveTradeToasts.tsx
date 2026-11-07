@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Bell } from 'lucide-react';
+import './day/dayJournal.css';
 import type { CopierCopyEvent } from '../services/copierRuntimeController';
-import { TRADE_TOAST_MS, copyEventToast, keepStickyToasts, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
+import { TRADE_TOAST_MS, capExtraToasts, copyEventToast, keepStickyToasts, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
 
 const TONE: Record<TradeToastTone, string> = {
   blue: '#3b82f6', violet: '#8b5cf6', red: '#f43f5e', teal: '#14b8a6', green: '#10b981', amber: '#f59e0b', muted: '#64748b',
@@ -13,15 +15,50 @@ const time = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2
  * grafu: typ + název + P&L, pod tím čísla a tečky kopií. Mizí po 2 s, najetí
  * myší ji podrží; problémy (sticky) zůstanou do zavření. Jen zobrazení.
  */
+/** Číselník: číslice se protočí a zastaví na ceně. */
+export const RollingPrice: React.FC<{ price: number }> = ({ price }) => {
+  const text = price.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (
+    <span className="dj-roll" aria-label={text}>
+      {[...text].map((char, index) => (/\d/.test(char)
+        ? <span key={index} className="dj-roll-digit" aria-hidden style={{ '--d': `${index * 45}ms` } as React.CSSProperties}>
+            <span className="dj-roll-reel">
+              {Array.from({ length: 7 }, (_, step) => <i key={step}>{(Number(char) + 3 + step) % 10}</i>)}
+              <i>{char}</i>
+            </span>
+          </span>
+        : <span key={index} aria-hidden style={{ whiteSpace: 'pre' }}>{char}</span>))}
+    </span>
+  );
+};
+
+const BeaconToast: React.FC<{ toast: TradeToast; isDark: boolean; onClose: () => void }> = ({ toast, isDark, onClose }) => (
+  <div className="live-trade-toast pointer-events-auto relative flex w-[300px] items-center gap-[10px] overflow-hidden rounded-[12px] border py-[9px] pl-[11px] pr-[9px]" role="status"
+    style={{ borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.10)', background: isDark ? 'rgba(22,26,36,0.96)' : 'rgba(255,255,255,0.97)', boxShadow: '0 14px 30px -16px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.08)' }}>
+    <span className="dj-beacon" aria-hidden><b>🚨</b></span>
+    <div className="min-w-0 flex-1">
+      <div className={`flex items-center gap-2 text-[18px] font-semibold tracking-[-0.02em] ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
+        <RollingPrice price={toast.alertBeacon!.price} />
+        <span className="ml-auto text-[10px] font-normal tracking-normal text-slate-500">{time(toast.at)}</span>
+        <button type="button" onClick={onClose} aria-label="Zavřít" className="px-0.5 text-[13px] leading-none text-slate-500">×</button>
+      </div>
+      <div className="truncate text-[10.5px] text-slate-500">{toast.title}</div>
+      {toast.line && <div className={`truncate text-[12px] ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{toast.line}</div>}
+    </div>
+    <span aria-hidden className="dj-alert-time absolute inset-x-0 bottom-0 h-[2px]" style={{ background: toast.alertColor ?? '#f5b53d', animationDuration: `${toast.ms ?? TRADE_TOAST_MS}ms` }} />
+  </div>
+);
+
 const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boolean; onDismiss: (id: string) => void }> = ({ toast, isDark, copierArmed, onDismiss }) => {
   const onClose = useCallback(() => onDismiss(toast.id), [onDismiss, toast.id]);
-  const color = TONE[toast.tone];
+  const color = toast.alertColor ?? TONE[toast.tone];
   const [hovered, setHovered] = useState(false);
   useEffect(() => {
     if (toast.sticky || hovered) return undefined;
     const timer = window.setTimeout(onClose, toast.ms ?? TRADE_TOAST_MS);
     return () => window.clearTimeout(timer);
   }, [hovered, onClose, toast.ms, toast.sticky]);
+  if (toast.alertBeacon) return <BeaconToast toast={toast} isDark={isDark} onClose={onClose} />;
   return (
     <div
       role="status"
@@ -35,8 +72,11 @@ const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boo
         boxShadow: '0 14px 32px -20px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.05)',
       }}
     >
+      {toast.alertColor && <span aria-hidden className="dj-alert-time absolute inset-x-0 bottom-0 h-[2px]" style={{ background: color, animationDuration: `${toast.ms ?? TRADE_TOAST_MS}ms`, animationPlayState: hovered ? 'paused' : 'running' }} />}
       <div className="flex min-w-0 items-center gap-[7px]">
-        <span className="shrink-0 rounded-[4px] px-[5px] py-[2px] text-[8.5px] font-black uppercase tracking-[0.08em] text-white" style={{ background: color }}>{toast.badge}</span>
+        {toast.alertColor && <span aria-hidden className="dj-alert-ring shrink-0" style={{ color }}><Bell size={13} strokeWidth={2.4} /></span>}
+        {/* Upozornění: štítek nahrazuje zvoneček, titulek s cenou se musí vejít. */}
+        {!toast.alertColor && <span className="shrink-0 rounded-[4px] px-[5px] py-[2px] text-[8.5px] font-black uppercase tracking-[0.08em] text-white" style={{ background: color }}>{toast.badge}</span>}
         <span className={`truncate text-[12px] font-extrabold ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{toast.title}</span>
         {toast.pnl != null && <span className="ml-auto font-mono text-[12px] font-extrabold" style={{ color: toast.pnl >= 0 ? TONE.green : TONE.red }}>{usd(toast.pnl)}</span>}
         <span className={`${toast.pnl != null ? 'ml-1.5' : 'ml-auto'} font-mono text-[10px] font-semibold text-slate-500`}>{time(toast.at)}</span>
@@ -62,15 +102,20 @@ const LiveTradeToasts: React.FC<{
   placement?: React.CSSProperties;
   /** Karty, které nevznikly z událostí kopírky (upozornění na cenu, posun upozornění). */
   extra?: readonly TradeToast[];
-}> = ({ events, copierArmed, isDark, placement, extra }) => {
+  /** LIVE: `extra` jsou upozornění, strop 2 karty (`capExtraToasts`). Backtest jimi posílá vše, bez stropu. */
+  capExtra?: boolean;
+}> = ({ events, copierArmed, isDark, placement, extra, capExtra = false }) => {
   const [toasts, setToasts] = useState<TradeToast[]>([]);
   const extraSeenRef = useRef(new Set<string>());
   useEffect(() => {
     const fresh = (extra ?? []).filter(toast => !extraSeenRef.current.has(toast.id));
     if (!fresh.length) return;
     for (const toast of fresh) extraSeenRef.current.add(toast.id);
-    setToasts(current => keepStickyToasts([...current, ...fresh]));
-  }, [extra]);
+    setToasts(current => {
+      const all = [...current, ...fresh];
+      return keepStickyToasts(capExtra ? capExtraToasts(all, toast => extraSeenRef.current.has(toast.id)) : all);
+    });
+  }, [capExtra, extra]);
   const seenRef = useRef<Set<string> | null>(null);
   useEffect(() => {
     if (!events) return;

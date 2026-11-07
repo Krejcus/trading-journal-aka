@@ -121,6 +121,7 @@ const leaseRetry = (connectionId: string): RetryTransientOptions => ({
 });
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
+import { copierMarketPricesFromQuote } from '../../lib/copierMarketPrice';
 import { createTvPriceStreamSupervisor, tvPriceStreamConfigFromRealtime, type TvPriceStreamSupervisor } from '../../server/tvPriceStreamSupervisor';
 import { createPriceAlertWatchSupervisor, type PriceAlertWatchSupervisor } from '../../server/priceAlertWatchSupervisor';
 import { createPriceSourceNotifier } from '../../server/priceSourceNotifier';
@@ -1612,7 +1613,8 @@ async function runLocalAgent(
           lastPersistedAt: health.lastPersistedAt, lastUploadedAt: health.lastUploadedAt, error: health.error,
         };
       }),
-      marketPrices: () => marketPriceFeed?.current() ?? [],
+      // Jen zobrazení („Do fillu“, Live Activity), nikdy do rozhodování (INV-UI-04).
+      marketPrices: () => (tvEnabled ? marketPriceFeed?.current() ?? [] : copierMarketPricesFromQuote(tvPriceStream?.latestQuote('MNQ') ?? null)),
       priceAlertWatch: () => priceAlertWatch?.status() ?? null,
       accountDisplay: () => contexts.flatMap(item => item.displayFeed ? [item.displayFeed.state()] : []),
       ...(connectionWatch ? {

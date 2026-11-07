@@ -42,6 +42,10 @@ export interface BareCloseEntryRecord {
   createdAt: number;
   bare?: true;
   closedAt?: number;
+  /** Holý Limit/Stop: durable značka konce příkazu s fillem. U Marketu chybí, ten je vyplněný hned. */
+  filledAt?: number;
+  /** Holý Limit/Stop: kolik se opravdu vyplnilo. Starý záznam bez něj = `request.quantity`. */
+  filledQuantity?: number;
   entryBrokerOrderId?: string;
   stopBrokerOrderId?: string;
   targetBrokerOrderId?: string;
@@ -51,13 +55,47 @@ export interface BareCloseEntryRecord {
     side: BareCloseSide;
     quantity: number;
     orderType?: string;
+    price?: number;
     referencePrice?: number;
   };
+}
+
+/** Holý Limit nebo Stop (vstup bez nohou, který čeká na vyplnění). */
+export function isBarePendingEntry(record: Pick<BareCloseEntryRecord, 'bare' | 'request'> | null | undefined): boolean {
+  return record?.bare === true && record.request.orderType != null && record.request.orderType !== 'Market';
+}
+
+/** Už je z holého záznamu pozice? Market hned, Limit a Stop až s durable značkou fillu. */
+export function bareEntryFilled(record: Pick<BareCloseEntryRecord, 'bare' | 'request' | 'filledAt'>): boolean {
+  return !isBarePendingEntry(record) || record.filledAt != null;
+}
+
+/** Velikost pozice ze vstupu: u dílčího fillu to, co se opravdu vyplnilo. */
+export function bareEntryOpenQuantity(record: Pick<BareCloseEntryRecord, 'request' | 'filledQuantity'>): number {
+  return record.filledQuantity ?? record.request.quantity;
+}
+
+/**
+ * Příkaz u brokera skončil a vyplnil se přesně na `quantity`. Stav `filled` nestačí: Tradovate hlásí raw Filled
+ * i u dílčího fillu se zrušeným zbytkem, rozhoduje `filledQuantity`.
+ */
+export function bareEntryOrderSettled(order: { status: string; filledQuantity: number } | null | undefined, quantity: number): boolean {
+  return order != null && order.status !== 'pending' && order.status !== 'working' && order.filledQuantity === quantity;
+}
+
+/** Cena, kterou uživatel viděl: cena Limit/Stop, jinak kotace u Marketu. Konstanta záznamu, jen konzistence payloadu. */
+export function bareEntryReferencePrice(record: Pick<BareCloseEntryRecord, 'request'>): number | undefined {
+  return record.request.price ?? record.request.referencePrice;
 }
 
 /** Holý záznam bez nohou (bez ohledu na stav) — rozhoduje, zda `close-position` jde cestou C8. */
 export function isBareEntryWithoutLegs(record: BareCloseEntryRecord | null | undefined): boolean {
   return record?.bare === true && !record.stopBrokerOrderId && !record.targetBrokerOrderId;
+}
+
+/** Holý záznam s nejvýš jednou nohou (SL a TP po jedné): zavírá se a spravuje vlastní cestou, ne jako obchod se dvěma nohami. */
+export function isBareEntryAtMostOneLeg(record: BareCloseEntryRecord | null | undefined): boolean {
+  return record?.bare === true && !(record.stopBrokerOrderId && record.targetBrokerOrderId);
 }
 
 /** Nejnovější ruční vstup (podle `createdAt`) — jen ten smí „vlastnit“ holou pozici. */
@@ -73,6 +111,9 @@ export interface BareLeaderTrade {
   quantity: number;
   /** Cena, kterou uživatel viděl při holém Marketu — `expect.price` příkazu zavření. */
   referencePrice: number;
+  /** Která noha už je u brokera (SL a TP po jedné). Jen zobrazení. */
+  hasStop?: boolean;
+  hasTarget?: boolean;
 }
 
 /**
@@ -86,13 +127,33 @@ export function selectBareLeaderTrade(
 ): BareLeaderTrade | null {
   if (!context.solo || context.leaderAccountId == null) return null;
   const newest = newestManualEntry(records);
-  if (!newest || newest.status !== 'acknowledged' || !isBareEntryWithoutLegs(newest) || newest.closedAt != null
+  if (!newest || newest.status !== 'acknowledged' || !isBareEntryAtMostOneLeg(newest) || newest.closedAt != null || !bareEntryFilled(newest)
     || !newest.entryBrokerOrderId || newest.request.accountId !== context.leaderAccountId) return null;
-  const reference = newest.request.referencePrice;
+  const reference = bareEntryReferencePrice(newest);
   if (typeof reference !== 'number' || !Number.isFinite(reference) || reference <= 0) return null;
   return {
     entryOperationId: newest.operationId, symbol: newest.request.symbol, side: newest.request.side,
-    quantity: newest.request.quantity, referencePrice: reference,
+    quantity: bareEntryOpenQuantity(newest), referencePrice: reference,
+    ...(newest.stopBrokerOrderId ? { hasStop: true } : {}), ...(newest.targetBrokerOrderId ? { hasTarget: true } : {}),
+  };
+}
+
+/**
+ * Obchod pro SL a TP po jedné: nejnovější otevřený holý záznam s 0 až 2 nohami. Na rozdíl od
+ * `selectBareLeaderTrade` ho UI dostane i se dvěma nohami, aby šla jedna z nich zrušit. Jen zobrazení.
+ */
+export function selectBareLegTrade(
+  records: readonly BareCloseEntryRecord[],
+  context: { solo: boolean; leaderAccountId: number | null },
+): BareLeaderTrade | null {
+  if (!context.solo || context.leaderAccountId == null) return null;
+  const newest = newestManualEntry(records);
+  const reference = newest ? bareEntryReferencePrice(newest) : undefined;
+  if (!newest || newest.status !== 'acknowledged' || newest.bare !== true || newest.closedAt != null || !bareEntryFilled(newest) || !newest.entryBrokerOrderId
+    || newest.request.accountId !== context.leaderAccountId || typeof reference !== 'number' || !Number.isFinite(reference) || reference <= 0) return null;
+  return {
+    entryOperationId: newest.operationId, symbol: newest.request.symbol, side: newest.request.side, quantity: bareEntryOpenQuantity(newest), referencePrice: reference,
+    ...(newest.stopBrokerOrderId ? { hasStop: true } : {}), ...(newest.targetBrokerOrderId ? { hasTarget: true } : {}),
   };
 }
 
@@ -123,9 +184,13 @@ export function bareCloseRecordBlockers(input: {
   command: { groupId: string; leaderAccountId: number; symbol: string; expect: { price: number; quantity: number } };
 }): BareCloseIssue[] {
   const { record, command } = input;
-  if (!record || record.status !== 'acknowledged' || !isBareEntryWithoutLegs(record) || !record.entryBrokerOrderId
+  if (!record || record.status !== 'acknowledged' || !isBareEntryAtMostOneLeg(record) || !record.entryBrokerOrderId
     || input.leaderAccountId == null || record.request.accountId !== input.leaderAccountId) {
     return [{ code: 'not-bare-entry', text: 'Zavřít jde jen vlastní přijatý Market bez SL/TP.' }];
+  }
+  // Holý Limit/Stop před fillem žádnou pozici nemá: ruší se jako čekající vstup, ne zavírá.
+  if (!bareEntryFilled(record)) {
+    return [{ code: 'entry-not-filled', text: 'Vstup ještě čeká na vyplnění — zruš ho, pozice zatím žádná není.' }];
   }
   if (!input.solo) {
     return [{ code: 'not-solo', text: 'Holou pozici jde z appky zavřít jen na ručním DEMO účtu bez followerů — zavři ji Flattenem.' }];
@@ -142,8 +207,8 @@ export function bareCloseRecordBlockers(input: {
     return [{ code: 'not-armed', text: 'Zavření jde jen za zapnuté kopírky (ne shadow, ne kill) — holou pozici zavři Flattenem na Live Dashboardu.' }];
   }
   // „Co jsem viděl“ = počet kontraktů; referencePrice je konstanta záznamu (P3), jen konzistence payloadu.
-  if (command.expect.quantity !== record.request.quantity || record.request.referencePrice == null
-    || command.expect.price !== record.request.referencePrice) {
+  if (command.expect.quantity !== bareEntryOpenQuantity(record) || bareEntryReferencePrice(record) == null
+    || command.expect.price !== bareEntryReferencePrice(record)) {
     return [{ code: 'order-changed', text: 'Pozice se od zobrazení změnila — obnov panel.' }];
   }
   return [];
@@ -162,7 +227,7 @@ export function bareCloseShapeBlockers(input: {
   openOrdersOnSymbol: number;
 }): BareCloseIssue[] {
   const long = input.side === 'Buy';
-  if (!input.entryOrder || input.entryOrder.status !== 'filled' || input.entryOrder.filledQuantity !== input.quantity
+  if (!bareEntryOrderSettled(input.entryOrder, input.quantity)
     || Math.abs(input.net) !== input.quantity || (long ? input.net <= 0 : input.net >= 0)) {
     return [{ code: 'shape', text: 'Pozice nesedí s Marketem (jiný počet, částečné vyplnění, jiná strana nebo je zavřená) — zavři ji Flattenem.' }];
   }
@@ -189,7 +254,7 @@ export function bareCloseLotBlockers(input: {
 }): BareCloseIssue[] {
   const lot = input.lots.find(item => item.symbol === input.symbol && (item.entryOrderIds ?? []).includes(input.entryBrokerOrderId));
   if (!lot || lot.netQuantity !== input.expectedNet) {
-    return [{ code: 'entry-not-open', text: 'Pozice už není ta z tohoto Marketu (mezitím se otočila nebo ji deník dne nezná) — zavři ji Flattenem.' }];
+    return [{ code: 'entry-not-open', text: 'Pozice už není ta z tohoto vstupu (mezitím se otočila nebo ji deník dne nezná) — zavři ji Flattenem.' }];
   }
   return [];
 }

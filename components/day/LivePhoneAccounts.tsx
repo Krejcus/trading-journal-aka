@@ -20,7 +20,12 @@ const usd = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}$${Ma
 const tone = (value: number) => (value > 0 ? '#34d399' : value < 0 ? '#fb7185' : 'var(--dj-muted)');
 
 /** Tlačítko do hlavičky. `null` = bez pozice a bez příkazu (hlavička ukáže název skupiny). */
-export function LivePhoneGroupPnl({ position, onOpen }: { position: LiveChartPosition; onOpen: () => void }) {
+export function LivePhoneGroupPnl({ position, openPnl, onOpen }: {
+  position: LiveChartPosition;
+  /** Totéž číslo jako čip u vstupu (`liveShownOpenPnl`), ať se hlavička a čára neliší. */
+  openPnl: number | null;
+  onOpen: () => void;
+}) {
   const summary = position.summary;
   if (!summary && !position.issue) return null;
   const box: React.CSSProperties = {
@@ -43,11 +48,9 @@ export function LivePhoneGroupPnl({ position, onOpen }: { position: LiveChartPos
       <span className="dj-mono" style={bottom}>
         {summary.kind === 'pending'
           ? <span style={{ color: 'var(--dj-muted)', fontSize: 12.5 }}>čeká na fill{summary.entry != null ? ` · ${formatLivePrice(summary.entry)}` : ''}</span>
-          : summary.openPnl == null
+          : openPnl == null
             ? <span style={{ color: 'var(--dj-muted)' }}>P&amp;L —</span>
-            : <LiveOpenPnlValue anchor={summary.openPnl} legs={liveChartPositionTvLegs(position)}>
-              {(value, live) => <span title={live ? TV_LIVE_PNL_TITLE : undefined} style={{ color: tone(value) }}>{usd(value)}{live ? <LiveTvMark /> : null}</span>}
-            </LiveOpenPnlValue>}
+            : <span style={{ color: tone(openPnl) }}>{usd(openPnl)}</span>}
       </span>
       <ChevronDown size={14} color="var(--dj-muted)" style={{ gridColumn: 2, gridRow: '1 / span 2', alignSelf: 'center' }} />
     </button>

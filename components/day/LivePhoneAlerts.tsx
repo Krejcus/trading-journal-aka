@@ -2,13 +2,16 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bell, X } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import {
-  PRICE_ALERT_COLORS, PRICE_ALERT_COLOR_NAMES, alertConditionText, alertLineCss,
+  PRICE_ALERT_COLORS, PRICE_ALERT_COLOR_NAMES, PRICE_ALERT_PC_OPACITY, alertTagInk, alertConditionText, alertLineCss,
   type PriceAlert, type PriceAlertCondition, type PriceAlertExpiry, type PriceAlertFrequency,
   type PriceAlertLineStyle, type PriceAlertLineWidth,
 } from '../../lib/priceAlerts';
 import { formatLivePrice } from './LivePhoneTrade';
 import { clickedOrderType } from '../../lib/liveOrderTicket';
 import SheetGrip from './SheetGrip';
+import AlertFireEffect from '../AlertFireEffect';
+import { ALERT_TONE_GROUPS, DEFAULT_ALERT_TONE } from '../../lib/priceAlertTones';
+import { playAlertTone } from '../../services/priceAlertSounds';
 
 /**
  * Upozornění na cenu v LIVE grafu telefonu (náhled EkQateEvNCynqk8rLyQUrr):
@@ -32,8 +35,10 @@ function usePaneTracking(api: ChartViewApi | null, prices: readonly number[]) {
   const [layout, setLayout] = useState<{ ys: (number | null)[]; paneWidth: number; paneHeight: number; scaleWidth: number }>({ ys: [], paneWidth: 0, paneHeight: 0, scaleWidth: 64 });
   const pricesRef = useRef(prices);
   pricesRef.current = prices;
+  // Bez upozornění žádná smyčka po snímcích (na PC je vrstva připojená pořád).
+  const anyPrice = prices.length > 0;
   useEffect(() => {
-    if (!api) return undefined;
+    if (!api || !anyPrice) return undefined;
     let frame = 0;
     let last = '';
     const tick = () => {
@@ -55,22 +60,27 @@ function usePaneTracking(api: ChartViewApi | null, prices: readonly number[]) {
     };
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, [api]);
+  }, [anyPrice, api]);
   return layout;
 }
 
-export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelect, onEdit, onMove, onRemove }: {
+export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse = false, isDark = true, onSelect, onEdit, onMove, onRemove }: {
   api: ChartViewApi | null;
   alerts: readonly PriceAlert[];
   selectedId: string | null;
   /** Právě spuštěná upozornění: čára a zvoneček krátce zablikají. */
   flashIds: ReadonlySet<string>;
+  /** PC: myš bere celou čáru — tah posouvá hned, bez předchozího výběru; jen levé tlačítko. */
+  mouse?: boolean;
+  /** PC: motiv LIVE pro podklad štítku na ose. */
+  isDark?: boolean;
   onSelect: (id: string | null) => void;
   onEdit: (id: string) => void;
   onMove: (id: string, price: number) => void;
   onRemove: (id: string) => void;
 }) {
   const [drag, setDrag] = useState<{ id: string; price: number } | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
   // Při tažení se kreslí cena pod prstem; uložená cena (`alert.price`) zůstává do puštění.
   const shownPrice = (alert: PriceAlert) => (drag?.id === alert.id ? drag.price : alert.price);
   const { ys, paneWidth, paneHeight, scaleWidth } = usePaneTracking(api, alerts.map(shownPrice));
@@ -101,10 +111,17 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
 
   return (
     <div ref={rootRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 14 }} data-price-alert-lines>
+      {/* Spuštění: vlna doleva a čára k ceně, na PC navíc prsten na poslední svíčce (kreslí se na plátno). */}
+      {alerts.filter(alert => flashIds.has(alert.id)).map(alert => (
+        <AlertFireEffect key={alert.id} api={api} price={alert.price} color={alert.line.color} width={paneWidth} height={paneHeight} noRing={!mouse} />
+      ))}
       {alerts.map((alert, index) => {
         const y = ys[index];
         if (y == null || y < 0 || y > paneHeight) return null;
         const selected = selectedId === alert.id;
+        // Spuštěné „jednou“ tah znovu zapne: na PC taky až po výběru, ne omylem při posunu grafu.
+        const dragNow = selected || (mouse && alert.status !== 'triggered');
+        const wholeLine = selected || mouse;
         const flash = flashIds.has(alert.id);
         // Spuštěné „jednou“ už nehlídá nikdo: tlumeně, ať čára netvrdí, že hlídá (posun ho znovu zapne).
         const spent = alert.status === 'triggered';
@@ -112,22 +129,40 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
         const css = alertLineCss(alert.line, selected);
         const showLine = alert.line.width !== 'none' || selected;
         return (
-          <div key={alert.id} data-alert-line={alert.id} data-alert-spent={spent ? '' : undefined} style={{ position: 'absolute', left: 0, top: y, width: paneWidth, height: 0, opacity: spent && !selected && !flash ? 0.4 : 1 }}>
+          <div key={alert.id} data-alert-line={alert.id} data-alert-spent={spent ? '' : undefined} onPointerEnter={mouse ? () => setHoverId(alert.id) : undefined} onPointerLeave={mouse ? () => setHoverId(current => (current === alert.id ? null : current)) : undefined} style={{ position: 'absolute', left: 0, top: y, width: paneWidth, height: 0, opacity: spent && !selected && !flash ? 0.4 : 1 }}>
             {showLine && <div style={{
-              position: 'absolute', left: 0, right: selected ? 52 : 22, top: 0, transform: 'translateY(-50%)',
-              borderTop: `${css.width}px ${css.style} ${rgba(color, selected ? 0.9 : 0.55)}`,
-              animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
+              position: 'absolute', left: 0, right: mouse ? 0 : selected ? 52 : 22, top: 0, transform: 'translateY(-50%)',
+              // PC: krytí z palety; telefon beze změny.
+              borderTop: `${css.width}px ${css.style} ${rgba(color, mouse ? Math.min(1, (alert.line.opacity ?? PRICE_ALERT_PC_OPACITY) / 100 + (selected ? 0.25 : 0)) : selected ? 0.9 : 0.55)}`,
             }} />}
-            <span aria-hidden style={{ position: 'absolute', right: 6, top: 0, transform: 'translateY(-50%)', width: 16, height: 16, borderRadius: 8, display: 'grid', placeItems: 'center', color: rgba(color, flash || selected ? 1 : 0.45), background: selected ? 'rgba(20,22,36,.72)' : 'transparent', boxShadow: selected ? `0 0 0 1px ${rgba(color, 0.55)}` : undefined, animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
+            {/* PC: místo zvonečku přes čáru štítek na cenové ose; celou dobu ukazuje cenu a jde za něj táhnout. */}
+            {mouse && <span aria-hidden data-alert-tag style={{ userSelect: 'none', position: 'absolute', left: paneWidth + 3, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 6, height: 16, borderRadius: 4, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 9.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+              transition: 'box-shadow .5s, border-color .5s',
+              // Klidně: průsvitná barva na vlastním podkladu (schová číslo osy), plná jen při výběru; při spuštění září.
+              ...(selected
+                ? { background: color, color: alertTagInk(color), border: `1px solid ${color}` }
+                : { background: `linear-gradient(${rgba(color, 0.16)}, ${rgba(color, 0.16)}), ${isDark ? '#0d1219' : '#ffffff'}`, color: `color-mix(in srgb, ${color} ${isDark ? '80%, white' : '62%, black'})`, border: `1px solid ${rgba(color, flash ? 0.95 : 0.4)}`, boxShadow: flash ? `0 0 14px ${rgba(color, 0.45)}` : undefined }) }}>
+              <Bell size={9} strokeWidth={2.2} />{formatLivePrice(shownPrice(alert))}
+            </span>}
+            {!mouse && <span aria-hidden style={{ position: 'absolute', right: 6, top: 0, transform: 'translateY(-50%)', width: 16, height: 16, borderRadius: 8, display: 'grid', placeItems: 'center', color: rgba(color, flash || selected ? 1 : 0.45), background: selected ? 'rgba(20,22,36,.72)' : 'transparent', boxShadow: selected ? `0 0 0 1px ${rgba(color, 0.55)}` : undefined, animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
               <Bell size={10} strokeWidth={2.2} />
-            </span>
+            </span>}
             {/* Nevybrané upozornění bere dotyk jen na zvonečku (přes čáru jde graf posouvat,
                 jako u kreseb); vybrané celou čárou (tah). */}
             <div
               role="button"
               aria-label={`Upozornění ${alertConditionText(alert.condition).toLowerCase()} ${formatLivePrice(alert.price)}${spent ? ' (spuštěno)' : ''}`}
-              style={{ position: 'absolute', left: selected ? 0 : undefined, right: 0, width: selected ? undefined : 30, top: selected ? -9 : -12, height: selected ? 18 : 24, pointerEvents: 'auto', touchAction: 'none', cursor: selected ? 'ns-resize' : 'pointer' }}
+              style={{ position: 'absolute', left: wholeLine ? 0 : undefined, userSelect: 'none', right: mouse ? -scaleWidth : 0, width: wholeLine ? undefined : 30, top: mouse ? -5 : selected ? -9 : -12, height: mouse ? 10 : selected ? 18 : 24, pointerEvents: 'auto', touchAction: 'none', // PC: nad čárou běžný kurzor, svislá šipka až při tažení.
+              cursor: mouse ? (drag?.id === alert.id ? 'ns-resize' : 'default') : wholeLine ? 'ns-resize' : 'pointer' }}
+              // Kolečko nad čárou patří grafu (vrstva je jeho sourozenec, sama by ho nepředala).
+              onWheel={mouse ? event => {
+                const canvas = document.elementsFromPoint(event.clientX, event.clientY).find(element => element.tagName === 'CANVAS');
+                canvas?.dispatchEvent(new WheelEvent('wheel', { deltaX: event.deltaX, deltaY: event.deltaY, deltaMode: event.deltaMode, clientX: event.clientX, clientY: event.clientY, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, metaKey: event.metaKey, bubbles: true, cancelable: true }));
+              } : undefined}
+              // PC: pravé tlačítko na čáře jen vybere (× a cena na ose), systémové menu ne.
+              onContextMenu={mouse ? event => { event.preventDefault(); event.stopPropagation(); onSelect(alert.id); } : undefined}
               onPointerDown={event => {
+                if (mouse && event.button !== 0) return;
                 event.stopPropagation();
                 pressRef.current = { id: alert.id, y0: event.clientY, moved: false };
                 try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* syntetická událost */ }
@@ -136,7 +171,7 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
                 const press = pressRef.current;
                 if (!press || press.id !== alert.id) return;
                 if (Math.abs(event.clientY - press.y0) > DRAG_PX) press.moved = true;
-                if (!press.moved || selectedId !== alert.id) return;
+                if (!press.moved || !dragNow) return;
                 const price = priceAt(event.clientY);
                 if (price != null) setDrag({ id: alert.id, price });
               }}
@@ -159,14 +194,16 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, onSelec
               }}
               onPointerCancel={() => { pressRef.current = null; setDrag(null); }}
             />
-            {selected && <>
-              <button type="button" className="dj-btn" aria-label="Zrušit upozornění" onPointerDown={event => event.stopPropagation()} onClick={() => onRemove(alert.id)}
-                style={{ position: 'absolute', right: 28, top: 0, transform: 'translateY(-50%)', width: 18, height: 18, borderRadius: 9, border: '1px solid rgba(251,113,133,.5)', background: 'rgba(239,70,85,.28)', color: '#fecaca', display: 'grid', placeItems: 'center', padding: 0, pointerEvents: 'auto', cursor: 'pointer' }}>
+            {(selected || (mouse && hoverId === alert.id && !drag)) && (
+              <button type="button" className="dj-btn" title="Smazat upozornění" aria-label="Zrušit upozornění" onPointerDown={event => event.stopPropagation()} onClick={() => onRemove(alert.id)}
+                style={{ position: 'absolute', right: mouse ? 4 : 28, top: 0, transform: 'translateY(-50%)', width: mouse ? 16 : 18, height: mouse ? 16 : 18, borderRadius: 9, border: mouse && !isDark ? '1px solid rgba(225,29,72,.45)' : '1px solid rgba(251,113,133,.5)', background: mouse && !isDark ? '#ffffff' : 'rgba(239,70,85,.28)', color: mouse && !isDark ? '#e11d48' : '#fecaca', display: 'grid', placeItems: 'center', padding: 0, pointerEvents: 'auto', cursor: 'pointer' }}>
                 <X size={11} />
               </button>
-              <span style={{ position: 'absolute', left: paneWidth + 2, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 4, height: 18, borderRadius: 4, display: 'grid', placeItems: 'center', background: rgba(color, 0.8), color: '#fff', fontSize: 9.5, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+            )}
+            {selected && <>
+              {!mouse && <span style={{ position: 'absolute', left: paneWidth + 2, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 4, height: 18, borderRadius: 4, display: 'grid', placeItems: 'center', background: rgba(color, 0.8), color: '#fff', fontSize: 9.5, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
                 {formatLivePrice(shownPrice(alert))}
-              </span>
+              </span>}
             </>}
           </div>
         );
@@ -291,10 +328,20 @@ export function LivePhoneAlertSheet({ alert, market, onSave, onDelete, onClose }
       <Field label="Platnost"><Seg<PriceAlertExpiry> value={draft.expiry} onChange={expiry => set({ expiry })} options={[['session', 'Do konce seance'], ['gtc', 'Do zrušení']]} /></Field>
       <Field label="Kam poslat">
         <div>
-          <Toggle on={draft.channels.phone} label="Notifikace do iPhonu" sub="běžná notifikace, i při zamčeném telefonu" onChange={phone => set({ channels: { ...draft.channels, phone } })} />
+          <Toggle on={draft.channels.phone} label="Notifikace do iPhonu" sub="naléhavá, i při zamčeném telefonu" onChange={phone => set({ channels: { ...draft.channels, phone } })} />
           <Toggle on={draft.channels.voice} label="Hlasem" sub="telefon i PC přečtou upozornění nahlas" onChange={voice => set({ channels: { ...draft.channels, voice } })} />
           <Toggle on={draft.channels.pc} label="Na PC" sub="karta vlevo dole jako u obchodů" onChange={pc => set({ channels: { ...draft.channels, pc } })} />
           <Toggle on={draft.channels.sound} label="Zvuk" sub="telefon i PC" onChange={sound => set({ channels: { ...draft.channels, sound } })} />
+          {draft.channels.sound && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--dj-line)', fontSize: 13.5 }}>
+              <div>Který zvuk<small style={{ display: 'block', fontSize: 11, color: 'var(--dj-muted)' }}>výběr ho rovnou přehraje</small></div>
+              <select aria-label="Zvuk upozornění" value={draft.channels.tone ?? DEFAULT_ALERT_TONE}
+                onChange={event => { set({ channels: { ...draft.channels, tone: event.target.value } }); void playAlertTone(event.target.value); }}
+                style={{ flex: 'none', maxWidth: 170, height: 34, borderRadius: 9, border: '1px solid var(--dj-line)', background: 'rgba(255,255,255,.06)', color: 'var(--dj-text)', padding: '0 8px', fontSize: 13 }}>
+                {ALERT_TONE_GROUPS.map(group => <optgroup key={group.name} label={group.name}>{group.tones.map(tone => <option key={tone.id} value={tone.id}>{tone.name}</option>)}</optgroup>)}
+              </select>
+            </div>
+          )}
         </div>
       </Field>
       <Field label="Poznámka">
@@ -358,7 +405,7 @@ export function LivePhoneAlertList({ alerts, watching, error, onEdit, onRemove, 
 }
 
 /** Menu plusu u crosshairu: limit/stop na ceně, upozornění, vodorovná čára. */
-export function LivePhonePlusSheet({ price, market, quote, quantity, onOrder, onAlert, onLine, onClose }: {
+export function LivePhonePlusSheet({ price, market, quote, quantity, onOrder, onAlert, onLine, onClose, instantBare = false }: {
   price: number;
   market: number | null;
   /** Čerstvá kotace (≤ 3 s); typ příkazu podle ní jako na PC. null = příkaz z plusu teď nejde. */
@@ -368,13 +415,15 @@ export function LivePhonePlusSheet({ price, market, quote, quantity, onOrder, on
   onAlert: () => void;
   onLine: () => void;
   onClose: () => void;
+  /** Limit a Stop odejdou hned bez SL/TP. Market z tohohle menu dál otevírá list. */
+  instantBare?: boolean;
 }) {
   const above = market != null && price > market;
   const distance = market == null ? null : Math.abs(price - market);
   const buyType = quote ? clickedOrderType('buy', price, quote, TICK) : null;
   const sellType = quote ? clickedOrderType('sell', price, quote, TICK) : null;
   const typeHint = (side: 'buy' | 'sell', type: string | null) => (type == null ? 'cena trhu není čerstvá — příkaz teď nejde'
-    : type === 'market' ? 'na trhu' : type === 'limit' ? (side === 'buy' ? 'vstup long pod trhem' : 'vstup short nad trhem')
+    : type === 'market' ? 'na trhu' : instantBare ? 'odešle se hned, BEZ SL/TP' : type === 'limit' ? (side === 'buy' ? 'vstup long pod trhem' : 'vstup short nad trhem')
       : side === 'buy' ? 'vstup long při průrazu nahoru' : 'vstup short při průrazu dolů');
   const row = (key: string, icon: React.ReactNode, iconStyle: React.CSSProperties, title: string, sub: string, onClick: () => void) => (
     <button key={key} type="button" className="dj-btn" onClick={onClick} style={{ width: '100%', display: 'grid', gridTemplateColumns: '32px minmax(0,1fr) auto', gap: 10, alignItems: 'center', padding: '11px 16px', border: 0, borderBottom: '1px solid var(--dj-line)', background: 'transparent', color: 'var(--dj-text)', textAlign: 'left', cursor: 'pointer' }}>

@@ -43,9 +43,9 @@ export interface LeaderEntryPreviewCommand {
   /** Kdy klient kotaci přijal (epoch ms); u Marketu povinné. */
   quoteReceivedAt?: number;
   /**
-   * SL a TP; obě chybí jen u holého Marketu z telefonní lišty (Filip 1. 11. 2026:
-   * „market ihned bez SL/TP“) — pozice je pak vědomě bez ochrany, nohy se
-   * doplní `attach-brackets`.
+   * SL a TP; obě chybí u holého Marketu z telefonní lišty (Filip 1. 11. 2026:
+   * „market ihned bez SL/TP“) a u holého Limit/Stop (7. 11. 2026) —
+   * pozice je pak vědomě bez ochrany, dokud SL/TP nedoplní uživatel.
    */
   stopLoss?: number;
   takeProfit?: number;
@@ -136,7 +136,8 @@ export function validateLeaderEntryPreview(value: unknown): LeaderEntryPreviewCo
   }
   // Holý Market: SL i TP chybí oba (nikdy jen jedna noha).
   const bare = command.stopLoss === undefined && command.takeProfit === undefined;
-  if (bare ? command.orderType !== 'Market' : (!price(command.stopLoss) || !price(command.takeProfit))) fail();
+  // Holý vstup má obě nohy prázdné (nikdy jen jednu). Strop počtu hlídá worker (`manual-cap`).
+  if (!bare && (!price(command.stopLoss) || !price(command.takeProfit))) fail();
   if (command.position !== undefined) {
     // Přikoupení: vždy se SL i TP (holé přikoupení nikdy), strana = strana pozice.
     const position = command.position as Record<string, unknown> | null;

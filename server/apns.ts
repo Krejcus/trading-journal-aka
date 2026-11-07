@@ -26,6 +26,10 @@ export interface ApnsNotification {
   timeoutMs?: number;
   /** Bez zvuku (upozornění na cenu s vypnutým zvukem); výchozí je `default`. */
   silent?: boolean;
+  /** Soubor zvuku v balíčku appky (např. `alert_panic.wav`); výchozí je `default`. */
+  sound?: string;
+  /** Doplňková data pro akce notifikace (např. id upozornění). */
+  data?: Record<string, string>;
   /**
    * `apns-expiration` v sekundách od teď; 0 = APNs notifikaci neuloží (doručí jen hned).
    * Výchozí 1 h. Upozornění na cenu posílá 0: uložená by vytlačila uloženou rizikovou
@@ -35,6 +39,12 @@ export interface ApnsNotification {
 }
 
 export interface ApnsLiveActivityContentState {
+  /** Upozornění na cenu (`server/priceAlertLiveActivity.ts`); jen zobrazení, úroveň uživatele. */
+  priceAlertSymbol?: string;
+  priceAlertLevelText?: string;
+  priceAlertDirection?: string;
+  priceAlertNote?: string;
+  priceAlertAt?: number;
   status: string;
   headline: string;
   detail: string;
@@ -80,6 +90,8 @@ export interface ApnsLiveActivityContentState {
 export interface ApnsLiveActivityUpdate {
   state: ApnsLiveActivityContentState;
   event?: 'update' | 'end';
+  /** Rozbalí Island (upozornění na cenu); bez zvuku, ten má běžná notifikace. */
+  alert?: { title: string; body: string };
   staleAt?: number;
   dismissalAt?: number;
 }
@@ -160,7 +172,7 @@ export function buildApnsPayload(notification: ApnsNotification): Record<string,
   return {
     aps: {
       alert: { title: notification.title, body: notification.body },
-      ...(notification.silent ? {} : { sound: 'default' }),
+      ...(notification.silent ? {} : { sound: notification.sound ?? 'default' }),
       ...(notification.badge == null ? {} : { badge: Math.max(0, Math.floor(notification.badge)) }),
       ...(notification.threadId ? { 'thread-id': notification.threadId } : {}),
       ...(notification.category ? { category: notification.category } : {}),
@@ -169,6 +181,7 @@ export function buildApnsPayload(notification: ApnsNotification): Record<string,
     },
     route: notification.route ?? 'dashboard',
     ...(notification.imageUrl ? { imageUrl: notification.imageUrl } : {}),
+    ...(notification.data ?? {}),
   };
 }
 
@@ -184,6 +197,7 @@ export function buildApnsLiveActivityPayload(update: ApnsLiveActivityUpdate): Re
         progress: Math.min(1, Math.max(0, update.state.progress)),
       },
       ...(update.staleAt == null ? {} : { 'stale-date': Math.max(0, Math.floor(update.staleAt)) }),
+      ...(update.alert && event !== 'end' ? { alert: { title: update.alert.title, body: update.alert.body } } : {}),
       ...(event !== 'end' || update.dismissalAt == null
         ? {}
         : { 'dismissal-date': Math.max(0, Math.floor(update.dismissalAt)) }),

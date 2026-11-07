@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { createLocalPriceAlertStore, type PriceAlertStore } from '../lib/priceAlerts';
+import { useEffect, useRef, useState } from 'react';
+import { createLocalPriceAlertStore, freshPriceAlertEvents, type PriceAlert, type PriceAlertStore } from '../lib/priceAlerts';
 import { createServerPriceAlertStore } from './priceAlertServerStore';
 import { supabase } from './supabase';
 
@@ -42,6 +42,28 @@ function start(): void {
   window.addEventListener('focus', refresh);
 }
 
+/** Výsledek „Zapnout znovu“ pro kartu v grafu. */
+export const PRICE_ALERT_REARM_EVENT = 'alphatrade:price-alert-rearm';
+
+/**
+ * „Zapnout znovu“ z notifikace: appka se právě vrátila z pozadí a v paměti může mít starý stav
+ * (realtime v pozadí nic nedoručí), takže nejdřív načte čerstvý ze serveru. Výsledek ohlásí
+ * událostí, ať se uživatel nemylně nespolehne na hlídání.
+ */
+export async function rearmPriceAlertFromNotification(alertId: string, timeoutMs = 8_000, wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))): Promise<boolean> {
+  start();
+  const startedAt = Date.now();
+  while (!shared && Date.now() - startedAt < timeoutMs) await wait(250);
+  let done = false;
+  const store = shared?.store;
+  if (store) {
+    await Promise.race([store.refresh().catch(() => undefined), wait(Math.max(0, timeoutMs - (Date.now() - startedAt)))]);
+    done = store.rearm(alertId);
+  }
+  window.dispatchEvent(new CustomEvent(PRICE_ALERT_REARM_EVENT, { detail: { ok: done } }));
+  return done;
+}
+
 export function usePriceAlertStore(): PriceAlertStore {
   const [store, setStore] = useState<PriceAlertStore>(currentStore);
   useEffect(() => {
@@ -51,4 +73,29 @@ export function usePriceAlertStore(): PriceAlertStore {
     return () => { listeners.delete(setStore); };
   }, []);
   return store;
+}
+
+/** Spuštění pro kartu a hlas (úroveň uživatele, nikdy cena trhu). */
+export interface PriceAlertFiredEvent { id: string; alertId: string; at: number; price: number }
+
+/**
+ * Nově příchozí a čerstvá spuštění (telefon i PC). První načtení a výměna úložiště
+ * (přihlášení) = staré události, jen si je zapamatuje.
+ */
+export function useFreshPriceAlertEvents(
+  store: PriceAlertStore,
+  events: readonly PriceAlertFiredEvent[],
+  onFresh: (event: PriceAlertFiredEvent, alert: PriceAlert | null) => void,
+): void {
+  const seen = useRef<{ store: unknown; ids: Set<string> } | null>(null);
+  const onFreshRef = useRef(onFresh);
+  onFreshRef.current = onFresh;
+  useEffect(() => {
+    const known = seen.current?.store === store ? seen.current.ids : null;
+    const { seen: ids, fresh } = freshPriceAlertEvents(known, events, Date.now());
+    seen.current = { store, ids };
+    for (const event of fresh) {
+      onFreshRef.current(event, store.getState().alerts.find(item => item.id === event.alertId) ?? null);
+    }
+  }, [store, events]);
 }

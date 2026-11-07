@@ -99,6 +99,7 @@ import GenericDrawingSettingsDialog from './GenericDrawingSettingsDialog';
 import PositionDrawingSettingsDialog, { PositionDrawingFloatingToolbar } from './PositionDrawingSettingsDialog';
 import { isPositionDrawing, type PositionDrawing } from '../services/chartPositionDrawing';
 import { countChartIndicators } from '../services/chartContextMenu';
+import type { LivePcAlertBridge } from './LivePcPriceAlerts';
 import { useResetViewOnOpen } from '../hooks/useResetViewOnOpen';
 import { captureChartViewport, type AnchoredChartViewport } from '../services/chartViewportContinuity';
 import BacktestOrderLinesOverlay from './BacktestOrderLinesOverlay';
@@ -114,6 +115,7 @@ import type { BacktestManagedPositionBox } from '../services/backtestManagedPosi
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import {
   advanceReplayTimeByInterval,
+  clampReplayToStop,
   rewindReplayTimeByInterval,
   chartReplayDelayMs,
   chartReplayShortcut,
@@ -150,6 +152,7 @@ import { CHART_APPEARANCE_SLOTS, chartAppearanceSnapshot, chartAppearanceUserId,
 import { panelSettingsTargetMatches, type PanelSettingsTarget } from '../services/chartPanelSettings';
 import type { LiveCandleFeed } from '../lib/liveCandleFeed';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../hooks/useLiveCandleBinding';
+import { rememberWorkspaceChartView } from '../lib/chartView';
 import { useLivePriceLinesBinding } from '../hooks/useLivePriceLinesBinding';
 import type { LivePriceLinesFeed } from '../lib/livePriceLinesFeed';
 import { installDevDragProfiler, recordDragProfilerCommit } from '../services/devDragProfiler';
@@ -230,6 +233,8 @@ export interface BacktestChartSessionBridge {
   allowedRoots: MarketRoot[];
   executionInstrument: MarketRoot;
   initialReplay: ChartReplayState;
+  /** Unix s: replay se tady zastaví a dál nepustí (slepé hodnocení). */
+  replayStopAt?: number;
   workspaceState?: {
     layout?: unknown;
     panels?: WorkspaceSnapshot;
@@ -301,12 +306,16 @@ export interface BacktestChartSessionBridge {
  */
 export interface LiveOrderEntryBridge {
   executionInstrument: MarketRoot;
+  /** Upozornění na cenu (rychlý alert z pravého kliku, čáry). Nic neobchoduje. */
+  priceAlerts?: LivePcAlertBridge;
   /** ⚡ z vybraného position boxu → návrh v panelu; box v grafu zůstává. */
   onQuickOrder: (context: { drawing: PositionDrawing; instrument: MarketRoot }) => { ok: boolean; message: string };
   /** Počet kontraktů pro pravý klik do grafu (stejné číslo jako v panelu). */
   chartOrderQuantity?: number;
   /** Pravý klik do grafu na ceně → návrh v panelu. */
-  onChartOrder?: (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number }) => void;
+  /** Položka menu grafu odešle holý Limit/Stop hned (jen štítek, rozhoduje `onChartOrder`). */
+  chartOrderInstant?: boolean;
+  onChartOrder?: (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number; viaPointer?: boolean }) => void;
   orderLines: BacktestChartOrderLine[];
   onOrderLineChange: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number, startLine?: BacktestChartOrderLine) => void;
   onOrderLineCancel: (line: BacktestChartOrderLine) => void;
@@ -875,7 +884,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   }, [context.tradingSettings.orderLines, liveOrderEntry, liveReplayLocked, orderLineSource]);
   const liveOnChartOrder = liveReplayLocked ? undefined : liveOrderEntry?.onChartOrder;
   const liveChartOrder = useMemo(
-    () => (liveOnChartOrder ? (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number }) => liveOnChartOrder(input) : undefined),
+    () => (liveOnChartOrder ? (input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number; viaPointer?: boolean }) => liveOnChartOrder(input) : undefined),
     [liveOnChartOrder],
   );
   // U5: pracující příkazy jen pro zobrazení — vlastní vrstva mimo overlay s handlery.
@@ -1215,8 +1224,10 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             onPositionQuickOrder={context.tradingSettings.quickOrderButton || context.liveOrderEntry ? context.onPositionQuickOrder : undefined}
             positionQuickOrderLabel={context.liveOrderEntry ? 'Propsat box do objednávky' : undefined}
             liveSeries={Boolean(context.liveOrderEntry)}
-            // Pravý klik do grafu jen vyplní panel Objednávka (LIVE i backtest).
-            chartOrderLabelSuffix={context.liveOrderEntry || context.backtestSession ? ' · návrh' : undefined}
+            // Pravý klik do grafu vyplní panel Objednávka; v sólo DEMO na flat účtu odešle Limit/Stop bez SL/TP hned.
+            chartOrderLabelSuffix={context.liveOrderEntry?.chartOrderInstant ? ' · hned BEZ SL/TP' : context.liveOrderEntry || context.backtestSession ? ' · návrh' : undefined}
+            // Za přehrávání je cena pod kurzorem historická: alert jen v živém panelu exekuce.
+            onQuickPriceAlert={liveReplayLocked ? undefined : liveOrderEntry?.priceAlerts?.quickAdd}
             onChartOrder={config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.onChartOrder
               : liveChartOrder}
@@ -1267,6 +1278,9 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onChange={() => {}}
             />
           )}
+          {chartApi && liveOrderEntry?.priceAlerts && !liveReplayLocked ? (
+            liveOrderEntry.priceAlerts.renderLines(chartApi, context.isDark)
+          ) : null}
           {/* Připojený i bez čar: pojistka změny nabídky musí přežít stav bez čáry (čekající → nic → pozice). */}
           {chartApi && orderLineSource?.onOrderLineChange && orderLineSource.onOrderLineCancel ? (
             <BacktestOrderLinesOverlay
@@ -1381,7 +1395,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
 
   const [activePanelId, setActivePanelId] = useState(backtestSession?.workspaceState?.activePanelId || 'alphatrade-chart-1');
   const [reviewTradeId, setReviewTradeId] = useState<string | null>(null);
-  const [replay, setReplay] = useState<ChartReplayState>(backtestSession?.initialReplay ?? DEFAULT_CHART_REPLAY_STATE);
+  const [replay, setReplayRaw] = useState<ChartReplayState>(backtestSession?.initialReplay ?? DEFAULT_CHART_REPLAY_STATE);
+  const replayStopAt = backtestSession?.replayStopAt;
+  const replayStopAtRef = useRef(replayStopAt);
+  replayStopAtRef.current = replayStopAt;
+  // Všechny cesty kurzoru (přehrávání, šipky, výběr startu) jdou přes tenhle setter.
+  const setReplay = useCallback<React.Dispatch<React.SetStateAction<ChartReplayState>>>(action => {
+    setReplayRaw(current => clampReplayToStop(typeof action === 'function' ? action(current) : action, replayStopAtRef.current));
+  }, []);
+  useEffect(() => { if (replayStopAt !== undefined) setReplay(current => current); }, [replayStopAt, setReplay]);
   const [replaySelectionTime, setReplaySelectionTime] = useState<number | null>(null);
   const [replayDataLoading, setReplayDataLoading] = useState(false);
   // Krátká hláška uprostřed workspace (rychlá objednávka, odmítnutý návrat
@@ -1448,6 +1470,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   );
   const [replayToolbarPosition, setReplayToolbarPosition] = useState<ReplayToolbarPosition | null>(loadReplayToolbarPosition);
   const [layoutId, setLayoutId] = useState<ChartWorkspaceLayoutId>(initialLayoutIdRef.current);
+  const layoutIdRef = useRef(layoutId);
+  layoutIdRef.current = layoutId;
+  const chartViewBaselineRef = useRef<string | null>(null);
   const [layoutPickerOpen, setLayoutPickerOpen] = useState(false);
   const [syncSettings, setSyncSettings] = useState<ChartWorkspaceSyncSettings>(() => ({
     ...loadSyncSettings(),
@@ -2106,6 +2131,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       });
       updates.forEach(update => model.doAction(FlexLayoutActions.updateNodeAttributes(update.id, { enableTabStrip: update.enableTabStrip })));
       if (!backtestSession && timeframes.length === count && count > 0) savePanelTimeframes(layoutStorageKey, timeframes);
+      // LIVE a graf dne se sdílejí napříč zařízeními (`lib/chartView.ts`). Jen skutečná změna tady: otevřený graf
+      // se po převzetí z jiného zařízení nepřestavuje a jeho starý stav nesmí novější přepsat.
+      if (!backtestSession && layoutScope && timeframes.length === count && count > 0) {
+        const mounted = `${layoutIdRef.current}|${timeframes.join(',')}`;
+        if (chartViewBaselineRef.current !== null && chartViewBaselineRef.current !== mounted) {
+          rememberWorkspaceChartView(layoutIdRef.current, timeframes);
+        }
+        chartViewBaselineRef.current = mounted;
+      }
       setPaneLayout(current => current.count === count && current.maximizedPanelId === maximizedPanelId
         ? current
         : { count, maximizedPanelId });
@@ -2123,7 +2157,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       if (frame !== null) window.cancelAnimationFrame(frame);
       if (retry !== null) window.clearTimeout(retry);
     };
-  }, [backtestSession, getLiveModel, layoutStorageKey, workspace, workspaceMountVersion]);
+  }, [backtestSession, getLiveModel, layoutScope, layoutStorageKey, workspace, workspaceMountVersion]);
   const findTabset = useCallback((model: FlexLayoutModel, panelId: string) => {
     let tabsetId: string | null = null;
     model.visitNodes(node => {
@@ -3012,6 +3046,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     };
     const handleDoubleClick = (event: MouseEvent) => {
       const target = event.target as Element;
+      // Dvojklik na čáru upozornění otevře nastavení upozornění, ne vybrané kresby.
+      if (target.closest?.('[data-alert-line]')) return;
       const splitter = target.closest?.('.flexlayout__splitter') as HTMLElement | null;
       const viaOverlay = !splitter
         && lastSplitter != null

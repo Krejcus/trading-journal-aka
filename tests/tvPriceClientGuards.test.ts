@@ -184,11 +184,11 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       return [...text.matchAll(/<LiveOpenPnlValue\b[\s\S]*?<\/LiveOpenPnlValue>/g)].map(match => ({ file, block: match[0] }));
     });
     // Řádek účtu (počítač, telefon), řádek skupiny, souhrn skupiny na telefonu, karta obchodu, štítek pozice v deníku,
-    // LIVE graf telefonu: P&L skupiny v hlavičce, celkem a řádek účtu v listu.
+    // LIVE graf telefonu: celkem a řádek účtu v listu (hlavička bere `liveShownOpenPnl` jako čip).
     expect(blocks.map(item => item.file)).toEqual([
       'components/LiveCopyTradeOverview.tsx', 'components/LiveCopyTradeOverview.tsx', 'components/LiveCopyTradeOverview.tsx',
       'components/LiveCopyTradeOverview.tsx', 'components/LiveTradeCard.tsx', 'components/day/DayLivePositionChip.tsx',
-      'components/day/LivePhoneAccounts.tsx', 'components/day/LivePhoneAccounts.tsx', 'components/day/LivePhoneAccounts.tsx',
+      'components/day/LivePhoneAccounts.tsx', 'components/day/LivePhoneAccounts.tsx',
     ]);
     for (const { file, block } of blocks) {
       expect(block, file).not.toMatch(/\bset[A-Z]\w*\(|\bon[A-Z]\w*\(|Ref\.current|\.current\(|publish|window\.|dispatch|dll|Dll|DLL|risk|limit|Limit|drawdown|cushion|eligib|write|persist|storage/);
@@ -213,10 +213,10 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       const allowed = file === 'hooks/useDayChartData.ts'
         ? /useTvLiveCandleFeed\(|^liveFeed,$|liveFeed`: rozpracovaná/
         : file === 'components/LiveTradingScreen.tsx'
-          ? /^liveCandles=\{chart\.liveFeed\}$|^const tick = useLiveTicketQuote\(chart\.liveFeed, ROOT, candleClose, candleEnd == null \? null : \(candleEnd \+ 60\) \* 1_000\);$/
+          ? /^liveCandles=\{chart\.liveFeed\}$|^const tick = useLiveTicketQuote\(chart\.liveFeed, ROOT, candleClose\);$/
           // Telefon (2. 11. 2026): stejná výjimka pro lištu a list objednávky (cena, kterou uživatel vidí).
           : file === 'components/day/LivePhoneChart.tsx'
-            ? /^const tick = useLiveTicketQuote\(ctl\.chart\.liveFeed, 'MNQ', candleClose, candleEnd == null \? null : \(candleEnd \+ 60\) \* 1_000\);$|liveCandles=\{ctl\.chart\.liveFeed\}/
+            ? /^const tick = useLiveTicketQuote\(ctl\.chart\.liveFeed, 'MNQ', candleClose\);$|liveCandles=\{ctl\.chart\.liveFeed\}/
           : /liveCandles=\{ctl\.chart\.liveFeed\}|useLiveCandleBinding\(/;
       expect(line, file).toMatch(allowed);
     }

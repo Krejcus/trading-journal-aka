@@ -116,6 +116,25 @@ export function liveBareMarketIntent(gate: LiveBareMarketGate, side: TicketSide,
   return livePhoneBareMarket(side, quantity, gate.quote!);
 }
 
+/** Návrh panelu = holý Limit nebo Stop (bez SL i TP)? */
+export const isBarePendingTicketDraft = (draft: Pick<TicketDraft, 'type' | 'stopLoss' | 'takeProfit'>): boolean => (
+  draft.type !== 'market' && draft.stopLoss == null && draft.takeProfit == null
+);
+
+/**
+ * Proč holý Limit/Stop teď nejde (null = UI ho pustí k tlačítku). Jen do stropu skupiny, jen z flat a s čerstvou
+ * cenou IBKR. Přes trh a vzdálenost Stopu rozhodne worker podle své kotace těsně před odesláním.
+ */
+export function liveBarePendingBlockReason(gate: LiveBareMarketGate, quantity: number): string | null {
+  if (gate.blockedReason) return gate.blockedReason;
+  if (!gate.quote || !(gate.now - gate.quote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS)) return liveQuoteStaleText(gate.quote?.at ?? null, gate.now);
+  if (!gate.quote.symbol) return 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.';
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return 'Neplatný počet kontraktů.';
+  if (quantity > gate.maxContracts) return `Strop ručního vstupu je ${gate.maxContracts} ${contractsWord(gate.maxContracts)}.`;
+  if (gate.positionOpen) return 'V pozici Limit ani Stop bez SL/TP nejdou — jen z flat.';
+  return null;
+}
+
 /** Návrh panelu = holý Market (Market bez SL i TP)? */
 export const isBareTicketDraft = (draft: Pick<TicketDraft, 'type' | 'stopLoss' | 'takeProfit'>): boolean => (
   draft.type === 'market' && draft.stopLoss == null && draft.takeProfit == null
@@ -123,15 +142,30 @@ export const isBareTicketDraft = (draft: Pick<TicketDraft, 'type' | 'stopLoss' |
 
 /**
  * Nohy návrhu panelu: jedna noha nikdy (payload by worker odmítl), Limit/Stop
- * vždy obě, Market bez obou jen s capability. Null = nohy jsou v pořádku.
+ * obě, nebo s capability ani jednu, Market bez obou jen s capability. Null = nohy jsou v pořádku.
  */
-export function liveTicketLegsProblem(draft: Pick<TicketDraft, 'type' | 'stopLoss' | 'takeProfit'>, bareSupported: boolean): string | null {
+export function liveTicketLegsProblem(draft: Pick<TicketDraft, 'type' | 'stopLoss' | 'takeProfit'>, bareSupported: boolean, barePendingSupported = false): string | null {
   const hasStop = draft.stopLoss != null;
   const hasTarget = draft.takeProfit != null;
   if (hasStop !== hasTarget) return 'Vyplň SL i TP, nebo u Marketu ani jedno.';
   if (hasStop) return null;
-  if (draft.type !== 'market') return 'Limit a Stop potřebují SL i TP.';
+  if (draft.type !== 'market') return barePendingSupported ? null : 'Limit a Stop potřebují SL i TP.';
   return bareSupported ? null : 'Worker zatím neumí Market bez SL/TP — doplň SL i TP.';
+}
+
+/**
+ * Okamžitý holý Limit/Stop z menu pravého tlačítka: stejná brána a tvar jako tlačítko panelu.
+ * Worker při odeslání znovu projde všechny brány.
+ */
+export function liveInstantBareOrder(input: {
+  side: TicketSide; type: 'limit' | 'stop'; price: number; quantity: number;
+  instrument: TicketInstrument; gate: LiveBareMarketGate;
+}): LiveEntryPreviewDraft | { error: string } {
+  const blocked = liveBarePendingBlockReason(input.gate, input.quantity);
+  if (blocked) return { error: blocked };
+  return livePhoneSheetEntry({
+    side: input.side, type: input.type, price: input.price, sizing: 'qty', quantity: input.quantity, riskUsd: 0, stopLoss: null, takeProfit: null,
+  }, input.instrument, input.gate.quote!);
 }
 
 /**
@@ -140,8 +174,8 @@ export function liveTicketLegsProblem(draft: Pick<TicketDraft, 'type' | 'stopLos
  * bez SL nejde velikost podle rizika (ticketQuantity by dala 0).
  */
 export function liveTicketBareEntry(draft: TicketDraft, instrument: TicketInstrument, quote: LiveBareQuote): LiveEntryPreviewDraft | { error: string } {
-  if (!isBareTicketDraft(draft)) return { error: 'Holý Market je jen Market bez SL i TP.' };
-  if (draft.sizing !== 'qty') return { error: 'Holý Market jen v kontraktech — bez SL nejde velikost podle rizika.' };
+  if (!isBareTicketDraft(draft) && !isBarePendingTicketDraft(draft)) return { error: 'Bez SL/TP je jen návrh bez SL i TP.' };
+  if (draft.sizing !== 'qty') return { error: 'Bez SL/TP jen v kontraktech — bez SL nejde velikost podle rizika.' };
   return livePhoneSheetEntry(draft, instrument, quote);
 }
 
@@ -177,19 +211,20 @@ export const liveConfirmAsking = (state: LiveConfirmState | null, key: string, n
  * Klíč holého Marketu proti dvojkliku: akce + kontrakt + strana + počet. Cena v klíči
  * není, u Marketu jede s každým tickem; worker ji znovu porovná s IBKR (posun ≤ 8 ticků).
  */
-export function liveBareConfirmKey(draft: Pick<LiveEntryPreviewDraft, 'symbol' | 'side' | 'quantity' | 'orderType' | 'stopLoss' | 'takeProfit'>): string {
-  const bare = draft.orderType === 'Market' && draft.stopLoss === undefined && draft.takeProfit === undefined;
+export function liveBareConfirmKey(draft: Pick<LiveEntryPreviewDraft, 'symbol' | 'side' | 'quantity' | 'orderType' | 'stopLoss' | 'takeProfit'> & { price?: number }): string {
+  const bare = draft.stopLoss === undefined && draft.takeProfit === undefined;
+  if (bare && draft.orderType !== 'Market') return `bare-pending:${draft.orderType}:${draft.symbol}:${draft.side}:${draft.quantity}:${draft.price}`;
   return `${bare ? 'bare-market' : 'entry'}:${draft.symbol}:${draft.side}:${draft.quantity}`;
 }
 
 /** Text výstražného tlačítka holého Marketu (PC panel). */
-export function liveBareMarketButtonLabel(side: TicketSide, quantity: number): string {
-  return `${side === 'buy' ? 'Koupit' : 'Prodat'} ${quantity} MARKET · BEZ SL/TP`;
+export function liveBareMarketButtonLabel(side: TicketSide, quantity: number, type: 'MARKET' | 'LIMIT' | 'STOP' = 'MARKET'): string {
+  return `${side === 'buy' ? 'Koupit' : 'Prodat'} ${quantity} ${type} · BEZ SL/TP`;
 }
 
-/** Návrh pro worker = holý Market (Market bez SL i TP)? Stejný výklad jako `liveBareConfirmKey`. */
-export const isBarePreviewDraft = (draft: Pick<LiveEntryPreviewDraft, 'orderType' | 'stopLoss' | 'takeProfit'>): boolean => (
-  draft.orderType === 'Market' && draft.stopLoss == null && draft.takeProfit == null
+/** Návrh pro worker = holý vstup (bez SL i TP)? Stejný výklad jako `liveBareConfirmKey`. */
+export const isBarePreviewDraft = (draft: Pick<LiveEntryPreviewDraft, 'stopLoss' | 'takeProfit'>): boolean => (
+  draft.stopLoss == null && draft.takeProfit == null
 );
 
 export const LIVE_BARE_POSITION_UNVERIFIED = 'Pozice není ověřená — holý Market teď nejde.';
@@ -216,15 +251,17 @@ export function liveTicketBarePosition(
 export function liveBareSendClick(input: {
   gate: LiveBareMarketGate;
   last: LiveClickState | null;
-  draft: Pick<LiveEntryPreviewDraft, 'symbol' | 'side' | 'quantity' | 'orderType' | 'stopLoss' | 'takeProfit'>;
+  draft: Pick<LiveEntryPreviewDraft, 'symbol' | 'side' | 'quantity' | 'orderType' | 'stopLoss' | 'takeProfit'> & { price?: number };
 }): { send: boolean; next: LiveClickState | null; blocked: string | null } {
-  const blocked = liveBareMarketBlockReason(input.gate, input.draft.quantity);
+  const blocked = input.draft.orderType === 'Market'
+    ? liveBareMarketBlockReason(input.gate, input.draft.quantity)
+    : liveBarePendingBlockReason(input.gate, input.draft.quantity);
   if (blocked) return { send: false, next: input.last, blocked };
   const step = liveRepeatClick(input.last, liveBareConfirmKey(input.draft), input.gate.now);
   return { send: step.send, next: step.next, blocked: null };
 }
 
-export const LIVE_PREVIEW_PLACE_BARE = 'Holý Market (bez SL/TP) odešle jen velké tlačítko panelu.';
+export const LIVE_PREVIEW_PLACE_BARE = 'Vstup bez SL/TP odešle jen velké tlačítko panelu.';
 
 /**
  * Klik „Odeslat“ v Náhledu (PC `PreviewSection`): první klik odesílá, dvojklik se spolkne (klíč =
@@ -234,7 +271,7 @@ export const LIVE_PREVIEW_PLACE_BARE = 'Holý Market (bez SL/TP) odešle jen vel
  */
 export function livePreviewPlaceClick(input: {
   last: LiveClickState | null;
-  draft: Pick<LiveEntryPreviewDraft, 'orderType' | 'stopLoss' | 'takeProfit'>;
+  draft: Pick<LiveEntryPreviewDraft, 'stopLoss' | 'takeProfit'>;
   operationId: string | null | undefined;
   previewKey: string;
   receivedAt: number | null | undefined;

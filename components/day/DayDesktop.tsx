@@ -279,7 +279,7 @@ export default function DayDesktop({ ctl, isDark, streak, onOpenTrade, onOpenLeg
           {loading ? <QuantumSpinner /> : (
             <div style={{ maxWidth: 420 }}>
               <p style={{ margin: 0, fontSize: 14, fontWeight: 800 }}>Svíčky pro tenhle den nejsou</p>
-              <p style={{ margin: '6px 0 0', fontSize: 12.5, color: 'var(--dj-text-2)' }}>{error ?? 'Databento dnešek ještě nemá a živé čtení z TradingView chybí. Spusť worker s otevřeným 1m grafem MNQ.'}</p>
+              <p style={{ margin: '6px 0 0', fontSize: 12.5, color: 'var(--dj-text-2)' }}>{error ?? 'Databento dnešek ještě nemá a živé svíčky chybí. Zkontroluj worker a IB Gateway.'}</p>
             </div>
           )}
         </div>

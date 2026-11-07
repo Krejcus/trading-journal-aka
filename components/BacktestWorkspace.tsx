@@ -144,6 +144,15 @@ interface Props {
   onTradeReviewSave?: (tradeId: string, updates: Partial<Trade>, snapshotDataUrl?: string, expected?: Partial<Trade>) => Promise<void>;
   /** Návrat replaye smazal tyto obchody — pryč z deníku i z front. */
   onTradesDiscarded?: (tradeIds: string[]) => Promise<void>;
+  /**
+   * Dočasná session (slepé hodnocení): vložený graf, nic se neukládá ani nejde do
+   * deníku. `replayStopAt` zastaví replay, callbacky hlásí kurzor a rozložení.
+   */
+  scratch?: {
+    replayStopAt?: number;
+    onReplay?: (replay: ChartReplayState) => void;
+    onWorkspaceState?: (state: BacktestWorkspaceState) => void;
+  };
 }
 
 const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRun) => void }> = ({
@@ -160,7 +169,10 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   tagSuggestions,
   onTradeReviewSave,
   onTradesDiscarded,
+  scratch,
 }) => {
+  const scratchRef = useRef(scratch);
+  scratchRef.current = scratch;
   const [appearanceSession] = useState(() => createChartAppearanceSession(
     `backtest:${initialRun.id}`, initialRun.workspaceState?.appearance, inheritGlobalAppearance,
   ));
@@ -279,6 +291,11 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     catch (reason) {
       setLocalSaveError(reason instanceof Error ? reason.message : 'Zachycení rozložení selhalo.');
       return Promise.resolve(false);
+    }
+    if (scratchRef.current) {
+      dirtyRef.current = false;
+      cloudDirtyRef.current = false;
+      return Promise.resolve(true);
     }
     const wantsCloud = cloudDirtyRef.current && !conflictRef.current
       && (options?.cloud === true || (Date.now() - lastCloudSyncRef.current >= CLOUD_SYNC_INTERVAL_MS
@@ -576,6 +593,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
 
   const handleReplayChange = useCallback((replay: ChartReplayState) => {
     if (restoringRef.current) return;
+    scratchRef.current?.onReplay?.(replay);
     const currentRuntime = runRef.current.runtimeState;
     const hasExecution = currentRuntime.orders.length || currentRuntime.fills.length || currentRuntime.positions.length || currentRuntime.closedTrades.length;
     if (hasExecution && replay.cursorTime !== null && currentRuntime.replay.cursorTime !== null && replay.cursorTime < currentRuntime.replay.cursorTime) {
@@ -646,6 +664,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
 
   const handleWorkspaceChange = useCallback((workspaceState: BacktestWorkspaceState) => {
     updateRun(current => ({ ...current, workspaceState, updatedAt: Date.now() }));
+    scratchRef.current?.onWorkspaceState?.(workspaceState);
   }, [updateRun]);
 
   // Panel Objednávka jako v LIVE: návrh (vstup, SL, TP) žije jen v paměti a do
@@ -1150,6 +1169,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     initialReplay: run.runtimeState.replay,
     workspaceState: run.workspaceState,
     onReplayChange: handleReplayChange,
+    replayStopAt: scratch?.replayStopAt,
     onWorkspaceChange: handleWorkspaceChange,
     registerWorkspaceCheckpoint,
     maxRevealedTime: run.runtimeState.maxRevealedTime,
@@ -1225,7 +1245,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         <LiveTradeToasts events={undefined} copierArmed={false} isDark={isDark} extra={toasts} placement={{ left: 68, bottom: 84 }} />
       </>
     ),
-  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeOrderLine, chartOrderQuantity, closePosition, draft, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, instrument, isDark, lineNotice, markCandle?.time, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLineAction, orderLines, positionSummary, quote, recalculateTrade, registerWorkspaceCheckpoint, setTicketOpen, startDraft, submitTicket, ticketOpen, toasts, units, onTradesDiscarded, requestRewind, evidenceOpen, sessionInfoOpen, rewindRequest, updateRun, run.config.instruments, run.config.timezone, run.endAt, run.executionSymbol, run.id, run.name, run.runtimeState, run.startAt, run.workspaceState]);
+  }), [scratch?.replayStopAt, addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeOrderLine, chartOrderQuantity, closePosition, draft, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, instrument, isDark, lineNotice, markCandle?.time, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLineAction, orderLines, positionSummary, quote, recalculateTrade, registerWorkspaceCheckpoint, setTicketOpen, startDraft, submitTicket, ticketOpen, toasts, units, onTradesDiscarded, requestRewind, evidenceOpen, sessionInfoOpen, rewindRequest, updateRun, run.config.instruments, run.config.timezone, run.endAt, run.executionSymbol, run.id, run.name, run.runtimeState, run.startAt, run.workspaceState]);
 
   const syntheticTrade = useMemo<Trade>(() => ({
     id: `backtest-${run.id}`,
@@ -1335,6 +1355,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         onClose={() => void closeWorkspace()}
         backtestSession={bridge}
         tradeIndicators={startIndicators}
+        embedded={Boolean(scratch)}
       />
       {/* Selhání dalšího segmentu se dřív jen zapsalo do stavu a nikde
           neukázalo — chart už svíčky měl, takže chybová obrazovka výš se

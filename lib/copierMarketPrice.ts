@@ -1,7 +1,7 @@
 import { marketSymbolRoot } from '../services/futuresContractSpecs.js';
 
 /**
- * Cena z grafů TradingView, kterou worker vystavuje v `marketPrices`.
+ * Cena, kterou worker vystavuje v `marketPrices` (z IBKR, bez TV; dřív z grafů TradingView).
  *
  * Sdílené mezi serverem (Live Activity) a UI (stavový ostrov), aby obě strany
  * používaly stejné pravidlo čerstvosti i stejný výběr kontraktu. Cena je jen
@@ -14,6 +14,12 @@ const object = (value: unknown): Record<string, unknown> =>
 
 const optionalFinite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+/** Řádek `marketPrices` z kotace IBKR; čas je poslední obchod, ať stará cena vyprší pravidlem níž. */
+export function copierMarketPricesFromQuote(quote: { contract: string; last: number; lastAt: number } | null): Array<{ symbol: string; price: number; at: number; continuous: boolean }> {
+  if (!quote || !Number.isFinite(quote.last) || quote.last <= 0 || !Number.isFinite(quote.lastAt)) return [];
+  return [{ symbol: quote.contract, price: quote.last, at: quote.lastAt, continuous: false }];
+}
 
 /**
  * Stejný kořen kontraktu jako vstup leadera a čerstvá; přesný kontrakt

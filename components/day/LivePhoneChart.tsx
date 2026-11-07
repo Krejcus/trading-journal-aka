@@ -4,6 +4,8 @@ import DayFullscreenChart from './DayFullscreenChart';
 import { useDayController } from './useDayController';
 import { focusRange } from './dayFocus';
 import { readStoredDayChartTimeframe, writeStoredDayChartTimeframe } from '../../lib/dayChartTools';
+import { rememberPhoneChartView } from '../../lib/chartView';
+import { CHART_PROFILE_APPLIED_EVENT } from '../../services/chartProfile';
 import type { MarketTimeframe } from '../../services/marketData';
 import { LIVE_PHONE_INSTRUMENT, draftSummary, readLivePillPrefs, writeLivePillPrefs, type LivePillPrefs } from '../../lib/livePhoneTrade';
 import { draftFromPositionBox, type TicketDraft } from '../../lib/liveOrderTicket';
@@ -17,19 +19,21 @@ import { LIVE_ACTION_CHANGED_TEXT } from '../../lib/liveClickGate';
 import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/liveCommandRuns';
 import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../../hooks/useLiveFillAnnouncer';
+import { useLivePositionBoxFollow } from '../../hooks/useLivePositionBoxFollow';
+import LiveChartAutomationSettings, { LiveBoxFollowPane } from '../LiveChartAutomationSettings';
 import { previewSymbolFromChartSource } from '../../lib/leaderEntryPreview';
 import { useLiveNoPriceNotice, useLiveResumeState } from '../../hooks/useLiveResumeState';
 import { LIVE_ATTACH_SENT_HOLD_MS, LIVE_BARE_QUOTE_MAX_AGE_MS, liveAttachDefaults, liveAttachIntent, liveQuoteStaleText } from '../../lib/liveBareEntry';
 import type { LiveAttachLegs } from '../../lib/liveOrderTicket';
 import { snapToTick } from '../../lib/liveOrderTicket';
 import {
-  livePhoneBareMarket, livePhoneCancelPendingChipShown, livePhoneOperationId, livePhonePlacedText, livePhoneScaleInBlocked, livePhoneScaleInDraft,
+  livePhoneBareMarket, livePhonePillScaleIn, livePhoneCancelPendingChipShown, livePhoneOperationId, livePhonePlacedText, livePhoneScaleInBlocked, livePhoneScaleInDraft,
   type LivePhoneQuote, type LivePhoneTradeBridge,
 } from '../../lib/livePhoneOrders';
 import type { LiveEntryPreviewDraft } from '../../lib/leaderEntryPreview';
 import type { LiveWorkingOrdersView } from '../../lib/liveWorkingOrderLines';
 import { LivePhoneAccountsSheet, LivePhoneGroupPnl } from './LivePhoneAccounts';
-import { liveDisplayOpenPnl, withIbkrTightenMark, type LiveChartPosition } from '../../lib/liveChartPosition';
+import { liveDisplayOpenPnl, liveShownOpenPnl, withIbkrTightenMark, type LiveChartPosition } from '../../lib/liveChartPosition';
 import LiveTradeToasts from '../LiveTradeToasts';
 import type { TradeToast } from '../../lib/liveTradeToasts';
 import {
@@ -37,9 +41,12 @@ import {
   livePhoneMarketDraftFollow, livePhoneWorkingView, useLivePhoneLineState,
 } from './LivePhoneOrderLines';
 import { LivePhoneAlertLines, LivePhoneAlertList, LivePhoneAlertSheet, LivePhoneAlertsButton, LivePhoneCrosshairPlus, LivePhonePlusSheet } from './LivePhoneAlerts';
-import { alertTitle, movedAlert, newPriceAlert, type PriceAlert } from '../../lib/priceAlerts';
-import { usePriceAlertStore } from '../../services/priceAlertStoreHook';
+import { alertTitle, movedAlert, newPriceAlert, priceAlertEventTitle, type PriceAlert } from '../../lib/priceAlerts';
+import { PRICE_ALERT_REARM_EVENT, useFreshPriceAlertEvents, usePriceAlertStore } from '../../services/priceAlertStoreHook';
+import { isNativeBuild } from '../../utils/runtimeConfig';
 import { alertVoiceText, speakAlertText } from '../../services/alertVoice';
+import { playAlertTone } from '../../services/priceAlertSounds';
+import { ALERT_FIRE_MS } from '../../lib/alertFireEffect';
 import { useLiveFillArrows } from './useLiveFillArrows';
 import { liveFillsNotInJournal } from '../../lib/liveFillMarkers';
 import type { LiveFillMarker } from '../../lib/liveFillMarkers';
@@ -49,6 +56,9 @@ import type { MarketCandle } from '../../services/marketData';
 import { perfDuration } from '../../lib/perfTrace';
 import { markLiveCommandPaint, type LiveCommandTraceStage, type LiveCommandWorkerTiming } from '../../lib/liveCommandPerformance';
 import './dayJournal.css';
+
+/** Dotyk mladší než tohle po otevření menu plusu se ignoruje (stejná hranice jako druhý klik čar). */
+const LIVE_PLUS_GHOST_TAP_MS = 350;
 
 export interface LivePhoneChartSlots {
   /** LIVE hlavička nad grafem (LIVE ▾, skupina, stav kopírky); `group` = P&L skupiny místo názvu. */
@@ -91,8 +101,7 @@ export interface LivePhoneChartSlots {
 }
 
 const NO_FILLS: readonly LiveFillMarker[] = [];
-/** Karta a hlas jen pro spuštění mladší než tohle (pozdní doručení po spánku = jen seznam). */
-const ALERT_EVENT_FRESH_MS = 30_000;
+/** Nejvýš tolik karet upozornění najednou, ať nevytlačí kartu rizika. */
 const ALERT_CARDS_MAX = 2;
 /** Přehrávání ukazuje historii: z lišty, plusu, listu ani lišty návrhu se nic neodešle (N1, U3). */
 const REPLAY_NO_TRADE = 'Přehrávání — obchoduj v živém grafu. Nic se neodeslalo.';
@@ -163,7 +172,13 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     exposurePaintFrames.current.add(firstFrame);
   }, [slots.liveExposurePaint]);
   const [timeframe, setTimeframeState] = useState<MarketTimeframe>(() => readStoredDayChartTimeframe(typeof window === 'undefined' ? null : window.localStorage));
-  const setTimeframe = (next: MarketTimeframe) => { setTimeframeState(next); writeStoredDayChartTimeframe(window.localStorage, next); };
+  const setTimeframe = (next: MarketTimeframe) => { setTimeframeState(next); writeStoredDayChartTimeframe(window.localStorage, next); rememberPhoneChartView(); };
+  // Převzetí z jiného zařízení.
+  useEffect(() => {
+    const reload = () => setTimeframeState(readStoredDayChartTimeframe(window.localStorage));
+    window.addEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+    return () => window.removeEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+  }, []);
   const range = focusRange({ mode: 'day', session: 'ny', scope: ctl.scope, windows: ctl.chartWindows, now: ctl.now, isToday: ctl.isToday });
   const [pill, setPill] = useState<LivePillPrefs>(() => readLivePillPrefs(typeof window === 'undefined' ? null : window.localStorage));
   const savePill = (next: LivePillPrefs) => { setPill(next); writeLivePillPrefs(window.localStorage, next); };
@@ -173,8 +188,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const trade = slots.trade ?? null;
   // Živá cena jako panel na PC: kanál ceny grafu, kontrakt jen ze zdroje IBKR (INV-UI-04).
   const candleClose = ctl.chart.candles.at(-1)?.close ?? null;
-  const candleEnd = ctl.chart.candles.at(-1)?.time;
-  const tick = useLiveTicketQuote(ctl.chart.liveFeed, 'MNQ', candleClose, candleEnd == null ? null : (candleEnd + 60) * 1_000);
+  const tick = useLiveTicketQuote(ctl.chart.liveFeed, 'MNQ', candleClose);
   // Po návratu z pozadí je na obrazovce starý stav: musí to být vidět, dokud nepřijde živá cena.
   const resuming = useLiveResumeState(tick != null || ctl.chart.liveStatus === 'live', tick?.at ?? null);
   const noPriceNotice = useLiveNoPriceNotice(true, tick?.at ?? null, resuming);
@@ -215,14 +229,16 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         : !quote || Date.now() - quote.at > PHONE_MARKET_QUOTE_MAX_AGE_MS ? liveQuoteStaleText(quote?.at ?? null, Date.now())
           : !(quote.symbol ?? (market ? null : trade.frontContract)) ? 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' : null)
   );
-  // Lišta: Koupit / Prodat = holý Market hned (Filip 1. 11.), SL/TP doplní „Přidat SL/TP“.
+  // Lišta: Koupit / Prodat = holý Market hned (Filip 1. 11.), SL/TP se doplní z čáry; v pozici přikoupení.
   // Přehrávání: graf ukazuje historii — živý Market z lišty nikdy (N1, 3. 11.; lišta je navíc schovaná).
   const onSide = (side: 'buy' | 'sell', replay: boolean) => {
     if (replay) { say(REPLAY_NO_TRADE); return; }
-    const blocked = sendBlocked(true) ?? (!trade!.bareSupported ? 'Worker zatím neumí Market bez SL/TP.'
+    const scaleIn = trade?.scaleIn ?? null;
+    const blocked = sendBlocked(true) ?? (scaleIn ? null : !trade!.bareSupported ? 'Worker zatím neumí Market bez SL/TP.'
       : pill.qty > trade!.maxContracts ? `Strop ručního vstupu je ${trade!.maxContracts} kontraktů.` : null);
     if (blocked) { say(blocked); return; }
-    void send(livePhoneBareMarket(side, pill.qty, quote!));
+    // V pozici jde lišta jako přikoupení se SL/TP pozice (holý Market by worker v pozici zastavil).
+    void send(scaleIn ? livePhonePillScaleIn(side, pill.qty, quote!, scaleIn, trade!.maxContracts) : livePhoneBareMarket(side, pill.qty, quote!));
   };
   const [attachOpen, setAttachOpen] = useState(false);
   const position = trade?.position ?? null;
@@ -293,6 +309,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   // Pozice v grafu: čáry vstupu a SL/TP z read modelu (jen zobrazení, neověřené = žádné čáry).
   // Pozici kreslí štítky jako na PC (LivePhoneOrderLines) v každém okně grafu (U3).
   const chartPosition = slots.position;
+  // Telefon nemá výběr účtu, pohled je pro zařízení vždy tentýž.
+  const registerBoxFollow = useLivePositionBoxFollow({ position: chartPosition, target: 'phone', events: slots.copyEvents });
   // Šipky plnění: jen dnešní den a jen plnění, která deník ještě nekreslí (stejné id plnění u brokera).
   const journalFillIds = useMemo(() => new Set(ctl.chart.chartTrades.flatMap(trade => trade.executionHistory?.fills.map(fill => String(fill.id)) ?? [])), [ctl.chart.chartTrades]);
   // Kontrakt grafu: IBKR zdroj nese konkrétní měsíc; souvislá řada TV = front od brokera; jinak pozice.
@@ -310,6 +328,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const displayOpenPnl = useMemo(() => (chartPosition.summary ? liveDisplayOpenPnl(chartPosition.summary, chartPosition.symbol ?? null,
     { source: ctl.chart.liveSource ?? null, price: tick?.price ?? null, at: tick?.at ?? null, stale: ctl.chart.liveStatus !== 'live' }, LIVE_PHONE_INSTRUMENT.pointValue, Date.now()) : null),
   [chartPosition.summary, chartPosition.symbol, ctl.chart.liveSource, ctl.chart.liveStatus, tick]);
+  const shownOpenPnl = chartPosition.summary ? liveShownOpenPnl(chartPosition.summary, displayOpenPnl) : null;
   // „Zavřít / Zrušit“ lišty pozice: zrušení čekajícího vstupu jde sdíleným zámkem čar (jeden příkaz naráz).
   const barTradeRef = useRef(trade);
   barTradeRef.current = trade;
@@ -379,9 +398,9 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   // Karty vlevo dole, které nevznikly z událostí kopírky (upozornění).
   const [cards, setCards] = useState<TradeToast[]>([]);
   // Lokální karty nikdy nejsou sticky (nesmí se hromadit nad lištou ani vytlačit kartu rizika).
-  const card = useCallback((tone: TradeToast['tone'], badge: string, title: string, line: string, ms?: number) => {
+  const card = useCallback((tone: TradeToast['tone'], badge: string, title: string, line: string, ms?: number, extra?: Pick<TradeToast, 'alertColor' | 'alertBeacon'>) => {
     const at = Date.now();
-    setCards(current => [...current.slice(-5), { id: `local-${at}-${Math.random().toString(36).slice(2, 6)}`, at, tone, badge, title, line, pnl: null, accounts: 0, sticky: false, ms }]);
+    setCards(current => [...current.slice(-5), { id: `local-${at}-${Math.random().toString(36).slice(2, 6)}`, at, tone, badge, title, line, pnl: null, accounts: 0, sticky: false, ms, ...extra }]);
   }, []);
   // Upozornění na cenu: přihlášený = server (sdílené s PC, hlídá Mac worker z IBKR), jinak jen zařízení.
   const alertStore = usePriceAlertStore();
@@ -393,36 +412,35 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [editAlert, setEditAlert] = useState<string | null>(null);
   const [alertList, setAlertList] = useState(false);
   const [plus, setPlus] = useState<number | null>(null);
+  const plusOpenedAt = useRef(0);
+  /** Plus odešle holý Limit/Stop hned jen na ověřeně flat účtu a bez rozpracovaného návrhu (ten by zahodil). */
+  const plusInstant = trade?.barePendingSupported === true && order == null && chartPosition.summary == null && chartPosition.issue == null;
   const [flashIds, setFlashIds] = useState<ReadonlySet<string>>(() => new Set());
-  const seenAlertEvents = useRef<{ store: unknown; ids: Set<string> } | null>(null);
+  // „Zapnout znovu“ z notifikace: výsledek musí být vidět, jinak by člověk věřil, že alert hlídá.
   useEffect(() => {
-    const events = alertEvents;
-    // První načtení i výměna úložiště (přihlášení) = staré události, jen si je zapamatovat.
-    if (!seenAlertEvents.current || seenAlertEvents.current.store !== alertStore) {
-      seenAlertEvents.current = { store: alertStore, ids: new Set(events.map(event => event.id)) };
-      return;
-    }
-    const seen = seenAlertEvents.current.ids;
-    const fresh = events.filter(event => !seen.has(event.id));
-    for (const event of fresh) {
-      seen.add(event.id);
-      // Karta a hlas jen u čerstvého spuštění (pozdě doručená stará událost jen zmizí v seznamu).
-      if (Date.now() - event.at > ALERT_EVENT_FRESH_MS) continue;
-      const alert = alertStore.getState().alerts.find(item => item.id === event.alertId);
-      // Automaticky odvozený směr hlídač přepočítal z IBKR — karta tvrdí jen „překročí“.
-      const title = alert ? alertTitle({ ...alert, price: event.price, condition: alert.conditionAuto ? 'cross' : alert.condition }) : `MNQ překročí ${event.price.toFixed(2)}`;
-      // Nejvýš 2 karty upozornění najednou, ať nevytlačí kartu rizika.
-      setCards(current => {
-        const alerts = current.filter(item => item.badge === 'Upoz.');
-        return alerts.length >= ALERT_CARDS_MAX ? current.filter(item => item !== alerts[0]) : current;
-      });
-      card('amber', 'Upoz.', title, alert?.note ? alert.note : 'Upozornění na cenu', 8_000);
-      if (alert?.channels.voice) speakAlertText(alertVoiceText(title, alert.note));
-      if (!alert) continue;
-      setFlashIds(current => new Set(current).add(alert.id));
-      window.setTimeout(() => setFlashIds(current => { const next = new Set(current); next.delete(alert.id); return next; }), 2_400);
-    }
-  }, [alertStore, card, alertEvents]);
+    const onRearm = (event: Event) => {
+      const ok = (event as CustomEvent<{ ok?: boolean }>).detail?.ok === true;
+      card(ok ? 'amber' : 'red', 'Upoz.', ok ? 'Upozornění znovu zapnuto' : 'Upozornění se NEZAPNULO', ok ? 'Mac ho zase hlídá, jakmile má cenu' : 'Už běží, je smazané, nebo se znovu spustilo. Zkontroluj seznam.', 8_000);
+    };
+    window.addEventListener(PRICE_ALERT_REARM_EVENT, onRearm);
+    return () => window.removeEventListener(PRICE_ALERT_REARM_EVENT, onRearm);
+  }, [card]);
+  useFreshPriceAlertEvents(alertStore, alertEvents, (event, alert) => {
+    const title = priceAlertEventTitle(alert, event.price);
+    // Nejvýš 2 karty upozornění najednou, ať nevytlačí kartu rizika.
+    setCards(current => {
+      const alerts = current.filter(item => item.badge === 'Upoz.');
+      return alerts.length >= ALERT_CARDS_MAX ? current.filter(item => item !== alerts[0]) : current;
+    });
+    // Karta s číselníkem a majákem: cena nahoře, směr, pod ním zpráva.
+    card('amber', 'Upoz.', title.replace(/\s[\d\s\u00A0.,]+$/, ''), alert?.note ?? '', 8_000, { alertBeacon: { price: event.price }, ...(alert ? { alertColor: alert.line.color } : {}) });
+    // Nativně v popředí hraje zvuk už notifikace; tón jen když notifikace nepřijde.
+    if (alert?.channels.sound !== false && (!isNativeBuild || alert?.channels.phone === false)) void playAlertTone(alert?.channels.tone);
+    if (alert?.channels.voice) speakAlertText(alertVoiceText(title, alert.note));
+    if (!alert) return;
+    setFlashIds(current => new Set(current).add(alert.id));
+    window.setTimeout(() => setFlashIds(current => { const next = new Set(current); next.delete(alert.id); return next; }), ALERT_FIRE_MS);
+  });
   const market = ctl.chart.candles.at(-1)?.close ?? null;
   const editing = editAlert ? alertState.alerts.find(alert => alert.id === editAlert) ?? null : null;
   const moveAlert = (id: string, price: number) => {
@@ -476,7 +494,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       selectedTrade={null}
       onClose={onLeave}
       live={{
-        header: slots.header(showGroup ? <LivePhoneGroupPnl position={chartPosition} onOpen={() => setAccountsOpen(true)} /> : undefined),
+        header: slots.header(showGroup ? <LivePhoneGroupPnl position={chartPosition} openPnl={shownOpenPnl} onOpen={() => setAccountsOpen(true)} /> : undefined),
         overlay: ({ lastPrice, api, candles, replay }) => <>
           {slots.overlay}
           {accountsOpen && chartPosition.summary && <LivePhoneAccountsSheet position={chartPosition} onClose={() => setAccountsOpen(false)} />}
@@ -486,8 +504,11 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
               market={lastPrice}
               quote={freshQuote()}
               quantity={pill.qty}
+              instantBare={plusInstant}
               onClose={() => setPlus(null)}
               onOrder={(side, type) => {
+                // Okamžité odeslání: stejný dotyk, který otevřel menu, nesmí trefit položku pod prstem.
+                if (Date.now() - plusOpenedAt.current < LIVE_PLUS_GHOST_TAP_MS) return;
                 const price = plus;
                 setPlus(null);
                 if (replay) { say(REPLAY_NO_TRADE); return; }
@@ -495,7 +516,10 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
                 // Stejný list a odeslání jako objednávka z position boxu (kontroly beze změny).
                 // V pozici na stejnou stranu = přikoupení: list převezme SL/TP pozice.
                 // Nový návrh z „+“ se otevře bez SL/TP (Filip 5. 11.); přikoupení je převezme z pozice.
-                openOrder(livePhoneScaleInDraft({ ...newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice), { sizing: 'qty', quantity: pill.qty, riskUsd: 200 }), stopLoss: null, takeProfit: null }, trade?.scaleIn), false);
+                const plusDraft = { ...newTicketDraft(side, type, price, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice), { sizing: 'qty' as const, quantity: pill.qty, riskUsd: 200 }), stopLoss: null, takeProfit: null };
+                // Filip 7. 11.: na flat účtu odešle Limit/Stop bez SL/TP hned, počet z lišty. Jinak list jako dřív.
+                if (plusInstant && type !== 'market') { submitSheetDraft(plusDraft, replay); return; }
+                openOrder(livePhoneScaleInDraft(plusDraft, trade?.scaleIn), false);
               }}
               onAlert={() => {
                 const alert = newPriceAlert(plus, lastPrice, alertStore.getState().defaults);
@@ -601,6 +625,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         // pracující příkazy (U5) a ✎ správy (U10) v měřítku toho okna; zámek jednoho příkazu
         // (`lineState`) je společný. Za přehrávání nic — graf je historický (INV-UI-01).
         paneLayer: ({ api, replay, active, lastPrice }) => (api && !replay ? <>
+          <LiveBoxFollowPane api={api} register={registerBoxFollow} />
           {noPriceNotice && (
             <div aria-live="polite" style={{ position: 'absolute', top: 12, left: 0, right: 0, zIndex: 6, pointerEvents: 'none', display: 'flex', justifyContent: 'center' }}>
               <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, background: isDark ? '#1e293b' : '#fff', color: isDark ? '#e2e8f0' : '#0f172a', boxShadow: '0 1px 4px rgba(0,0,0,.25)' }}>
@@ -627,12 +652,13 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             manage={trade?.manage ?? null}
             bareClose={trade?.closeBare && trade.bareClose?.enabled ? { entryOperationId: trade.bareClose.trade.entryOperationId, key: trade.bareClose.key } : null}
             onBareClose={barBareClose}
-            attach={attachChipBridge}
+            attach={trade?.bareLeg && trade.bareLegTrade ? null : attachChipBridge}
+            bareLeg={trade?.bareLeg && trade.bareLegTrade ? intent => trade.bareLeg!(trade.bareLegTrade!, intent) : null}
             moveLimit={trade?.moveLimit === true}
             pendingLegs={trade?.pendingLegs === true}
             canClose={trade?.closeSupported === true}
             entryAvg={trade?.entryAvg ?? null}
-            pendingAdd={trade?.scaleIn?.pendingAdd ?? null}
+            pendingAdd={trade?.scaleIn?.pendingAdd ?? trade?.barePartial ?? null}
             closeExpect={trade?.scaleIn?.stopLoss ?? null}
             isDark={isDark}
             onNotice={say}
@@ -660,7 +686,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             onRemove={removeAlert}
           />
           {/* Plusko u kříže jen v aktivním okně (ve dvou oknech by se ukázalo dvakrát). */}
-          {active && <LivePhoneCrosshairPlus api={api} onPlus={setPlus} />}
+          {active && <LivePhoneCrosshairPlus api={api} onPlus={price => { plusOpenedAt.current = Date.now(); setPlus(price); }} />}
         </> : null),
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
         chartLayer: ({ lastPrice, api, candles, intervalSeconds, replay, exitReplay }) => <>
@@ -674,7 +700,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             top={positionBarShown(replay) ? BELOW_POSITION_BAR : 8}
             onNotice={say}
           />}
-          <LiveTradeToasts events={slots.copyEvents} copierArmed={slots.copierArmed ?? false} isDark={isDark} placement={{ left: 8, bottom: chartDraft && !replay ? draftBarBottom + 72 : 84 }} extra={cards} />
+          <LiveTradeToasts events={slots.copyEvents} copierArmed={slots.copierArmed ?? false} isDark={isDark} placement={{ left: 8, bottom: chartDraft && !replay ? draftBarBottom + 72 : 84 }} extra={cards} capExtra />
           {positionBarShown(replay) && position && <LivePhonePositionBar
             side={position.side} quantity={position.quantity} symbol={position.symbol} pending={position.pending}
             unprotected={position.bareEntryOperationId != null} busy={busy}
@@ -694,7 +720,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             onSwallowed={() => say(LIVE_ACTION_CHANGED_TEXT)}
           />}
           {/* Přehrávání (U3): štítek živého stavu a cesta zpět; obchodovat jde jen v živém grafu. */}
-          {replay && <LivePhoneReplayLiveChip position={replayLive} pnl={chartPosition.summary?.openPnl ?? null} top={positionBarShown(replay) ? BELOW_POSITION_BAR : 8} onExit={exitReplay} />}
+          {replay && <LivePhoneReplayLiveChip position={replayLive} pnl={shownOpenPnl} top={positionBarShown(replay) ? BELOW_POSITION_BAR : 8} onExit={exitReplay} />}
           {/* Lišta návrhu (U2): [Odeslat] = stejná cesta jako tlačítko listu (submitSheetDraft). */}
           {chartDraft && !replay && lastPrice != null && (
             <LivePhoneDraftBar
@@ -714,7 +740,13 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
           {notice && <LiveChartNotice key={notice.key} text={notice.text} onDone={clearNotice} />}
         </>,
         // Menu ⋯: zvuk / hlas při fillu (U7) — opt-in, výchozí Vypnuto.
-        hubExtra: <LiveFillAnnounceSetting mode={fillMode} onMode={setFillMode} />,
+        hubExtra: <>
+          <LiveFillAnnounceSetting mode={fillMode} onMode={setFillMode} />
+          <p style={{ margin: '18px 0 6px', fontSize: 10.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dj-muted)' }}>Automatika</p>
+          <div style={{ borderRadius: 14, border: '1px solid var(--dj-line)', padding: '6px 12px 10px' }}>
+            <LiveChartAutomationSettings isDark={isDark} />
+          </div>
+        </>,
         symbol: LIVE_PHONE_INSTRUMENT.symbol,
         toolbar: <>
           <LivePhoneAlertsButton count={alertState.alerts.filter(alert => alert.status !== 'triggered').length} onClick={() => setAlertList(true)} />

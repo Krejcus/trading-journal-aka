@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { followLiveEdge, LIVE_FOLLOW_GAP_BARS, liveFollowShift, type LiveFollowMemory } from '../lib/liveChartFollow';
+import { followLiveEdge, jumpToNowShift, LIVE_FOLLOW_GAP_BARS, liveFollowShift, type LiveFollowMemory } from '../lib/liveChartFollow';
 
 describe('liveFollowShift', () => {
   it('svíčka dojíždí, dokud je od okraje aspoň 10 svíček', () => {
@@ -227,5 +229,36 @@ describe('followLiveEdge', () => {
       expect(chart.gap()).toBe(LIVE_FOLLOW_GAP_BARS);
       expect(chart.element.listeners()).toBe(0);
     });
+  });
+});
+
+describe('sledování posledního okraje v LIVE na telefonu', () => {
+  it('celoobrazovkový LIVE graf ho má zapnuté, graf dne ne', () => {
+    const source = readFileSync(join(process.cwd(), 'components/day/DayFullscreenChart.tsx'), 'utf8');
+    expect(source).toContain('liveCandleTargets, { followEdge: Boolean(live) });');
+  });
+
+  it('po návratu z pozadí graf dojede i za 40 doplněných svíček; kdo se dívá do historie, zůstane', () => {
+    expect(liveFollowShift({ previousLastIndex: 100, lastIndex: 140, range: { from: 60, to: 110 } })).toBe(LIVE_FOLLOW_GAP_BARS + 30);
+    expect(liveFollowShift({ previousLastIndex: 100, lastIndex: 140, range: { from: 20, to: 70 } })).toBe(0);
+  });
+});
+
+describe('jumpToNowShift', () => {
+  it('poslední svíčka v záběru: není kam skákat', () => {
+    expect(jumpToNowShift({ lastIndex: 100, range: { from: 20, to: 115 } })).toBe(0);
+    expect(jumpToNowShift({ lastIndex: 115.4, range: { from: 20, to: 115 } })).toBe(0);
+  });
+
+  it('z historie vrací poslední svíčku na odstup od pravého okraje', () => {
+    expect(jumpToNowShift({ lastIndex: 500, range: { from: 20, to: 115 } })).toBe(500 + LIVE_FOLLOW_GAP_BARS - 115);
+  });
+
+  it('z prázdné osy budoucnosti jde zpátky', () => {
+    expect(jumpToNowShift({ lastIndex: 100, range: { from: 200, to: 300 } })).toBe(100 + LIVE_FOLLOW_GAP_BARS - 300);
+  });
+
+  it('v přiblíženém grafu je odstup nejvýš 40 % šířky', () => {
+    expect(jumpToNowShift({ lastIndex: 100, range: { from: 10, to: 20 } })).toBe(100 + 4 - 20);
   });
 });

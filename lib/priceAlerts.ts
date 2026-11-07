@@ -10,6 +10,8 @@
  * `PriceAlertStore` je pro obě stejné.
  */
 
+import { isAlertTone } from './priceAlertTones';
+
 export type PriceAlertCondition = 'cross' | 'up' | 'down';
 export type PriceAlertFrequency = 'once' | 'every';
 export type PriceAlertExpiry = 'session' | 'gtc';
@@ -24,12 +26,16 @@ export interface PriceAlertChannels {
   /** PC: karta vlevo dole jako u obchodů, push v prohlížeči. */
   pc: boolean;
   sound: boolean;
+  /** Který zvuk přehraje PC (`lib/priceAlertTones.ts`, vlastní `custom:<id>`); telefon má systémový. */
+  tone?: string;
 }
 
 export interface PriceAlertStyle {
   width: PriceAlertLineWidth;
   style: PriceAlertLineStyle;
   color: string;
+  /** Krytí čáry v % z palety (PC); bez něj výchozí vzhled. */
+  opacity?: number;
 }
 
 export interface PriceAlert {
@@ -78,6 +84,9 @@ export const DEFAULT_PRICE_ALERT: PriceAlertDefaults = {
   line: { width: 'thin', style: 'dashed', color: PRICE_ALERT_COLORS[0] },
   channels: { phone: true, voice: true, pc: true, sound: true },
 };
+
+/** Výchozí krytí čáry na PC (%). */
+export const PRICE_ALERT_PC_OPACITY = 70;
 
 export const PRICE_ALERTS_STORAGE_KEY = 'alphatrade:price-alerts:v1';
 export const PRICE_ALERT_DEFAULTS_KEY = 'alphatrade:price-alert-defaults:v1';
@@ -143,13 +152,17 @@ function sanitizeDefaults(raw: unknown): PriceAlertDefaults {
     line: {
       width: oneOf(line.width, ['thin', 'thick', 'none'], base.line.width),
       style: oneOf(line.style, ['solid', 'dashed', 'dotted'], base.line.style),
-      color: oneOf(line.color, PRICE_ALERT_COLORS, base.line.color),
+      // Libovolná barva z palety, jen ve tvaru #rrggbb (čáru kreslí `rgba` z téhož tvaru).
+      color: typeof line.color === 'string' && /^#[0-9a-f]{6}$/i.test(line.color) ? line.color.toLowerCase() : base.line.color,
+      ...(Number.isFinite(line.opacity) && (line.opacity as number) >= 0 && (line.opacity as number) <= 100 ? { opacity: Math.round(line.opacity as number) } : {}),
     },
     channels: {
       phone: bool(channels.phone, base.channels.phone),
       voice: bool(channels.voice, base.channels.voice),
       pc: bool(channels.pc, base.channels.pc),
       sound: bool(channels.sound, base.channels.sound),
+      // Bez platného tónu pole chybí; přehrání a UI berou výchozí.
+      ...(isAlertTone(channels.tone) ? { tone: channels.tone } : {}),
     },
   };
 }
@@ -197,6 +210,8 @@ export interface PriceAlertStore {
   update(alert: PriceAlert): void;
   remove(id: string): void;
   setDefaults(defaults: PriceAlertDefaults): void;
+  /** Znovu zapne spuštěné upozornění beze změny (jen server). */
+  rearm?(id: string): boolean;
 }
 
 /** Řádek ze serveru / cache → upozornění pro UI (stejné čištění jako v zařízení). */
@@ -253,6 +268,60 @@ export function createLocalPriceAlertStore(storage: StorageLike | null | undefin
 export function alertTitle(alert: Pick<PriceAlert, 'symbol' | 'condition' | 'price'>): string {
   const price = alert.price.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return `${alert.symbol} ${alertConditionText(alert.condition).toLowerCase()} ${price}`;
+}
+
+/** Karta a hlas jen u čerstvého spuštění; pozdě doručená stará událost jen zmizí v seznamu. */
+export const PRICE_ALERT_EVENT_FRESH_MS = 30_000;
+
+/** Text spuštění: automaticky odvozený směr hlídač přepočítal z IBKR, tvrdí se jen „překročí“. */
+export function priceAlertEventTitle(alert: PriceAlert | null | undefined, level: number): string {
+  if (!alert) return `MNQ překročí ${level.toFixed(2)}`;
+  return alertTitle({ ...alert, price: level, condition: alert.conditionAuto ? 'cross' : alert.condition });
+}
+
+/**
+ * Stav čerstvě založeného upozornění na kartě (krátký text, řádek karty se ořezává).
+ * „Hlídá“ jen když je uložené na serveru a Mac hlídá; jinak `warn` = delší a výraznější karta.
+ */
+export function quickAlertCardStatus(sync: PriceAlertState['sync'], watching: string | null): { line: string; warn: boolean } {
+  if (!sync) return { line: 'Jen v tomto zařízení, nepřihlášeno', warn: true };
+  if (sync === 'offline') return { line: 'NEULOŽENO, server nedostupný', warn: true };
+  // Hned po založení je online vždy `syncing`, hlídání se proto musí hlásit i tehdy.
+  if (!watching) return { line: 'Mac ho teď NEHLÍDÁ', warn: true };
+  return { line: sync === 'synced' ? 'Hlídá Mac · dvojklik = nastavení' : 'Ukládám · Mac hlídá', warn: false };
+}
+
+/** Co udělá PC při spuštění: každý kanál zvlášť, jak píše nastavení. Bez upozornění jen karta. */
+export function pcAlertFiredActions(alert: Pick<PriceAlert, 'channels'> | null | undefined): { card: boolean; voice: boolean; sound: boolean } {
+  if (!alert) return { card: true, voice: false, sound: false };
+  return { card: alert.channels.pc, voice: alert.channels.voice, sound: alert.channels.sound };
+}
+
+/**
+ * Nové a čerstvé události; `seen` doplní. `seen === null` = první načtení nebo výměna úložiště:
+ * staré události, nic se nehlásí (volající si drží vrácenou množinu).
+ */
+export function freshPriceAlertEvents<T extends { id: string; at: number }>(
+  seen: Set<string> | null,
+  events: readonly T[],
+  now: number,
+): { seen: Set<string>; fresh: T[] } {
+  if (!seen) return { seen: new Set(events.map(event => event.id)), fresh: [] };
+  const fresh: T[] = [];
+  for (const event of events) {
+    if (seen.has(event.id)) continue;
+    seen.add(event.id);
+    if (now - event.at <= PRICE_ALERT_EVENT_FRESH_MS) fresh.push(event);
+  }
+  return { seen, fresh };
+}
+
+/** Barva textu na štítku v barvě upozornění: na světlé tmavý, na tmavé bílý. */
+export function alertTagInk(color: string): string {
+  const n = Number.parseInt(color.slice(1), 16);
+  if (!Number.isFinite(n)) return '#ffffff';
+  const luminance = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return luminance > 0.6 ? '#0f172a' : '#ffffff';
 }
 
 /** Vzor čáry v grafu (CSS border-style) a tloušťka v px. */

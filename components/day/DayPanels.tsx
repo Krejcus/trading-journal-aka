@@ -34,50 +34,7 @@ const planLabel = (choice: PlanChoice) => PLAN_OPTIONS.find(option => option.id 
 const label11: React.CSSProperties = { margin: 0, fontSize: 11, fontWeight: 600, color: 'var(--dj-muted)' };
 const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 12.5, fontWeight: 700 };
 
-/**
- * Restart TradingView s CDP přímo od čipu „TV stojí“ — stejný příkaz jako
- * „Obnovit TradingView snímky“ v LIVE, funguje i z telefonu přes relay.
- * Worker ho pustí jen při vypnuté kopírce bez pozic; UI nic neautorizuje.
- */
-function TvRestartControl({ compact }: { compact: boolean }) {
-  const [phase, setPhase] = useState<'idle' | 'confirm' | 'busy' | 'done' | 'error'>('idle');
-  const [message, setMessage] = useState<string | null>(null);
-  useEffect(() => {
-    if (phase !== 'done' && phase !== 'error') return;
-    const timer = window.setTimeout(() => { setPhase('idle'); setMessage(null); }, phase === 'done' ? 90_000 : 12_000);
-    return () => window.clearTimeout(timer);
-  }, [phase]);
-  const run = async () => {
-    setPhase('busy'); setMessage(null);
-    const restart = await import('../../services/tradingViewRestart');
-    try {
-      const outcome = restart.tradingViewRestartOutcomeText(await restart.restartTradingView());
-      setMessage(outcome.text);
-      setPhase(outcome.ok ? 'done' : 'error');
-    } catch (reason) {
-      setMessage(restart.tradingViewRestartErrorText(reason));
-      setPhase('error');
-    }
-  };
-  const small: React.CSSProperties = { height: 20, padding: '0 7px', borderRadius: 6, border: 0, cursor: 'pointer', font: '700 10.5px Inter, sans-serif', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 4 };
-  if (phase === 'confirm') return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} title="Worker TradingView ukončí a spustí znovu s připojením. Neuložené změny v TradingView se můžou ztratit.">
-      <span style={{ color: 'var(--dj-text-2)', fontWeight: 600 }}>{compact ? 'Zavřít a spustit TV? Neuložené změny se ztratí.' : 'Zavřít a znovu spustit TradingView? Neuložené změny v něm se můžou ztratit.'}</span>
-      <button type="button" className="dj-btn" onClick={() => void run()} style={{ ...small, color: '#1c1203', background: '#f59e0b' }}>Ano</button>
-      <button type="button" className="dj-btn" onClick={() => setPhase('idle')} style={{ ...small, color: 'var(--dj-text-2)', background: 'var(--dj-chip)' }}>Ne</button>
-    </span>
-  );
-  if (phase === 'busy') return <span style={{ color: 'var(--dj-text-2)', fontWeight: 600 }}>Restartuji TradingView…</span>;
-  if (phase === 'done') return <span style={{ color: 'var(--dj-green-text)', fontWeight: 600 }}>{message}</span>;
-  if (phase === 'error') return <span role="alert" title={message ?? ''} style={{ color: 'var(--dj-rose)', fontWeight: 600, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }}>{message}</span>;
-  return (
-    <button type="button" className="dj-btn" onClick={() => setPhase('confirm')} title="Restartovat TradingView s připojením pro worker (jde i z telefonu). Jen při vypnuté kopírce bez pozic." style={{ ...small, color: 'var(--dj-amber-text)', background: 'rgba(245,158,11,0.16)' }}>
-      <RotateCcw size={11} strokeWidth={2.6} />{compact ? 'Restart' : 'Restartovat TV'}
-    </button>
-  );
-}
-
-export function LiveChip({ status, capturedAt, source = null, weekendMarketDay, compact = false, restartable = false }: { status: DayController['chart']['liveStatus']; capturedAt: number | null; source?: string | null; weekendMarketDay?: string | null; compact?: boolean; restartable?: boolean }) {
+export function LiveChip({ status, capturedAt, source = null, weekendMarketDay, compact = false }: { status: DayController['chart']['liveStatus']; capturedAt: number | null; source?: string | null; weekendMarketDay?: string | null; compact?: boolean; restartable?: boolean }) {
   // O víkendu je trh zavřený — „TradingView stojí“ by jen strašilo.
   if (weekendMarketDay) {
     const full = `Víkend · graf ukazuje ${dayTitle(weekendMarketDay).toLowerCase()}`;
@@ -94,12 +51,11 @@ export function LiveChip({ status, capturedAt, source = null, weekendMarketDay, 
   const text = status === 'live' ? `${compact ? (ibkr ? 'Živě · IBKR' : 'Živě') : ibkr ? 'Živě z IBKR' : 'Živě z TradingView'}${capturedAt ? ` · ${clock(capturedAt)}` : ''}`
     : status === 'loading' ? (compact ? 'Načítám…' : 'Načítám živé svíčky…')
       : status === 'stale' ? `${ibkr ? (compact ? 'IBKR stojí' : 'Svíčky z IBKR stojí') : compact ? 'TV stojí' : 'TradingView stojí'}${capturedAt ? ` od ${clock(capturedAt)}` : ''}`
-        : compact ? 'Bez živých svíček' : 'Živé svíčky nejsou — spusť worker s TradingView';
+        : compact ? 'Bez živých svíček' : 'Živé svíčky nejsou — zkontroluj worker a IB Gateway';
   return (
     <span title={ibkr ? 'Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z IBKR (jen zobrazení).' : 'Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z grafu TradingView (jen zobrazení).'} style={{ flex: 'none', height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: live ? 'var(--dj-green-text)' : 'var(--dj-amber-text)', background: live ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)' }}>
       <span style={{ width: 6, height: 6, borderRadius: 9, background: live ? '#10b981' : '#f59e0b', animation: live ? 'dj-blink 2s ease-in-out infinite' : undefined }} />
       {text}
-      {restartable && (status === 'stale' || status === 'unavailable') && <TvRestartControl compact={compact} />}
     </span>
   );
 }
@@ -280,7 +236,7 @@ export function DayHeaderBar({ ctl, onDictate, onOpenLegacy, onOpenWeek, onOpenA
   return (
     <header ref={headerRef} className="dj" style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: 8, padding: '8px 14px', overflowX: 'auto', scrollbarWidth: 'none', whiteSpace: 'nowrap', borderBottom: '1px solid var(--dj-line)', background: 'radial-gradient(40% 180% at 0% 0%, rgba(16,185,129,0.10), transparent 70%), var(--dj-card)' }}>
       <DayNav ctl={ctl} />
-      <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} source={ctl.chart.liveSource} weekendMarketDay={ctl.weekendMarketDay} compact restartable />
+      <LiveChip status={ctl.chart.liveStatus} capturedAt={ctl.chart.liveCapturedAt} source={ctl.chart.liveSource} weekendMarketDay={ctl.weekendMarketDay} compact />
       {ctl.journalStatus === 'error' && <span role="alert" style={{ fontSize: 11.5, color: 'var(--dj-rose)' }}>Deník se nenačetl · <button type="button" onClick={ctl.reload} style={{ border: 0, background: 'none', color: 'var(--dj-rose-text)', textDecoration: 'underline', cursor: 'pointer', padding: 0, font: 'inherit' }}>zkusit znovu</button></span>}
       {!ctl.weekend && <ScopeSwitch ctl={ctl} compact />}
       <span style={{ flex: '1 1 8px' }} />

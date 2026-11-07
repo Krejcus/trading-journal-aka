@@ -45,6 +45,11 @@ export const supportsCopierManualEntryMarket = (
  * (`attach-brackets`), 2. 11. 2026 — jen manual-only DEMO skupina.
  */
 export const COPIER_MANUAL_ENTRY_BARE_CAPABILITY = 'manual-entry-bare-v1';
+/** Limit a Stop bez SL/TP (sólo DEMO). Worker ze 7. 11. ráno větší počet než 1 odmítne vlastní validací. */
+export const COPIER_MANUAL_ENTRY_BARE_PENDING_CAPABILITY = 'manual-entry-bare-pending-v1';
+export const supportsCopierManualEntryBarePending = (
+  status: { capabilities?: readonly string[] } | null | undefined,
+): boolean => Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_MANUAL_ENTRY_BARE_PENDING_CAPABILITY);
 
 export const supportsCopierManualEntryBare = (
   status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,
@@ -74,6 +79,12 @@ export const supportsCopierManualOrderManage = (
 export const COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY = 'manual-order-move-limit-v2';
 export const supportsCopierManualOrderMoveLimit = (status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined): boolean =>
   Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY);
+
+/** SL a TP po jedné u vlastní holé pozice: `add-leg`, `remove-leg` (6. 11. 2026). */
+export const COPIER_MANUAL_ORDER_SINGLE_LEG_CAPABILITY = 'manual-order-single-leg-v1';
+
+export const supportsCopierManualOrderSingleLeg = (status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined): boolean =>
+  Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_MANUAL_ORDER_SINGLE_LEG_CAPABILITY);
 
 export const COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY = 'manual-order-pending-legs-v1';
 

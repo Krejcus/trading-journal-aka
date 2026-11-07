@@ -1429,6 +1429,7 @@ existující ochranu.
 
 ### INV-RISK-01: Quantity, DLL/MLL a per-follower risk se vynucují čerstvými worker důkazy, ne jen UI hodnotou při ARM
 
+- Výjimka (7. 11. 2026): Market, Limit a Stop bez SL/TP nemají spočítaný strop ztráty pro DLL/MLL. Platí jen v sólo DEMO skupině, do stropu skupiny (INV-MANUAL-01).
 - Proč: Stav i cena se mohou změnit po ARM; `maxContracts`, daily loss
   auto-liquidation (DLL), trailing/max-loss drawdown floor (MLL), eligibility,
   divergence a environment fence musí platit i v hot path.
@@ -1699,6 +1700,7 @@ existující ochranu.
 
 ### INV-TRAD-02: Pending/Suspended stav je aktivní riziko, ale jeho venue-managed quantity není automaticky uživatelský replace
 
+- Výjimka (7. 11. 2026): zbytek holého Limit/Stop (záznam `bare`, žádné nohy, žádná kaskáda) se při dílčím fillu automaticky ruší jako čekající vstup, jeden pokus a výsledek jen stavem. Vstupy s nohami dál ne (INV-MANUAL-01).
 - Držený Modify (5. 11. 2026): Modify pozastavené nohy broker jen drží (Command OnHold, bez ExecutionReportu). Projeví se jen s bránou adaptéru `promoteHeldModify` (`--pending-legs on`, sólo DEMO, jen leader) a jen se stejnou qty. Není to provedený posun: záznam nese `heldMove`, po aktivaci nohy se cena ověří, nepotvrzená nebo jiná cena je incident bez automatického zavírání. Bez brány beze změny, s followery se držený Modify nezrcadlí.
 - Proč: Tradovate při partial fillu OSO přechodně mění child quantity; slepé
   kopírování této hodnoty v minulosti zrušilo správnou ochranu followerů.
@@ -2048,6 +2050,13 @@ existující ochranu.
   (`tests/livePhoneTrade.test.ts`). Odesílání z telefonu je nová cesta do
   jádra a půjde přes INV-* a critic.
 
+- **Upozornění na cenu na PC (6. 11. 2026):** čáry alertů leží pod čarami příkazů (z 14 pod z-115), dialog a seznam pod
+  hlavičkou LIVE (z-700 pod z-800), takže OFF zůstává klikatelné. Otevřený dialog (`role="dialog"`, `aria-modal`) ztiší
+  klávesové zkratky včetně Shift+F, jako ostatní dialogy; Esc nebo klik vedle ho zavře. Alert nemá cestu k příkazu.
+
+- **Naléhavost upozornění na cenu (7. 11. 2026, INV-WATCH-01):** notifikace alertu je `time-sensitive`, má vlastní vlákno i collapse-id, `apns-expiration: 0` a rozpočet 20 za 10 minut, takže rizikovou nevytlačí. Pozor: přepínač Time Sensitive je v iOS společný pro celou appku. Když ho uživatel vypne kvůli alertům, přijdou o průchod Focusem i rizikové pushe. Entitlement zároveň poprvé opravdu zapíná průchod Focusem u všech pushů, které `time-sensitive` už posílají (riziko, obchody, snímky).
+- **Upozornění na cenu v Live Activity (7. 11. 2026):** tik a cron čtou `price_alert_events` jen pro zobrazení (strop 300 ms, nikdy nevyhodí) a přidají úroveň uživatele do běžné aktualizace ze skutečného plánu. Žádné přehrávání uloženého stavu ani vlastní aktivita. Do `end`, rizikového a offline stavu se alert nepřidá; `aps.alert` je bez zvuku a jen při prvním odeslání po spuštění. Běžná notifikace je na tom nezávislá.
+
 ### INV-UI-03: Retained risk, „rozhodnutí dne“ a poslední worker status jsou pouze zobrazení
 
 - Proč: Udržení hodnoty při krátkém výpadku zlepšuje čitelnost, ale její stáří
@@ -2153,6 +2162,7 @@ existující ochranu.
 
 ### INV-MANUAL-01: Ruční vstup z appky jde jen přes worker na leadera; náhled (fáze 1a) nic nezapíše (29. 10. 2026)
 
+- Limit a Stop opravdu bez SL/TP (7. 11. 2026, capability `manual-entry-bare-pending-v1`, rozhodnutí Filipa „opravdu bez“ a „víc kontraktů“): u brokera jediný příkaz bez nohou, jen sólo manual-only DEMO skupina bez followerů, do stropu skupiny, jen z flat, čerstvá kotace IBKR stejného kontraktu. Limit nesmí být přes trh, Stop musí být aspoň 8 ticků na straně průrazu; kontrola v náhledu i synchronně těsně před POSTem. Výjimka z „vlastní vstup se nekopíruje bez nohou“ (`flushStandaloneOsoEntry`) platí jen pro id z ACK se záznamem `bare`; před ACK a při neznámém výsledku zůstává `maybe`, nic se nepřiřazuje podle účtu, symbolu ani počtu. Neznámý výsledek POST = `failClosed`, nikdy opakování. Čekající holý vstup je pro C12 a C7 běžný čekající vstup: OFF, kill, day lock, konec session, CME pauza a konec ARM ho zruší, × ho zruší (`resolveManagedTrade` jen pro `cancel-entry`). Počet fillu jen z `order.filledQuantity`, durable `filledQuantity` jen roste (`noteBareEntryOrder`). `filled` s menším fillem je nejednoznačný (zbylé filly, nebo raw Filled se zrušeným zbytkem): rozhodne další událost, nebo čtení po ustálení. Správa SL/TP a × pozice až po durable `filledAt` (`bareEntryFilled`) a na skutečný počet (`bareEntryOpenQuantity`). Zrušený nebo odmítnutý bez fillu = `closedAt`, pozdní fill ho vrací; fill po uzavření obchodu nebo po `filledAt` = incident `bare-late-fill`, záznam se nevrací. Dílčí fill se zbytkem: čipy ani × pozice nejsou, status `barePartial` kreslí zbytek čarou s ×; ruční × projde jen s `expect.filledQuantity` shodným s čerstvým stavem a je bez incidentu, větší fill během rušení jde běžnou cestou. Fill při rušení nebo za vypnuté kopírky = incident „BEZ SL/TP“ (na ověřeně flat účtu jen audit), za ARMED zpráva `bare-filled`. Starý vstup nepřevezme cizí pozici: `closedAt` na flat a kontrola lotu deníku. Okamžité odeslání: položka menu pravého tlačítka (jen kliknutí, `event.detail > 0`, a jen když typ z menu sedí s typem z kotace, jinak panel) a menu plusu v telefonu (dotyk do 350 ms po otevření se ignoruje), jen s capability, bez pozice a bez návrhu; klávesa nikdy. Vědomě přijaté riziko (Filip): fill bez dozoru nemá strop ztráty a při výpadku workeru se vstup nezruší ani nepřijde zpráva. Posun ceny holého vstupu a čipy před fillem nejsou.
 - Nohy nevyplněného vstupu a TP blíž k trhu (5. 11. 2026, `--pending-legs on`, sólo DEMO): SL/TP čekajícího Limit/Stop vstupu jde posunout jen na správnou stranu vstupu, i u víc kontraktů (rozhodnutí Filipa, jen DEMO: částečný fill během zápisu může nechat nohu na plný počet, oponentura to označila za P1); TP blíž k trhu jen s čerstvou kotací IBKR a aspoň 8 ticků na ziskové straně. Conformance z API se dělá z appky na DEMO před zapnutím flagu.
 - Potvrzování: od 5. 11. 2026 bez dvoukroku, první klik odesílá (viz „Jedno kliknutí“ v INV-UI-01). Brány a worker beze změny.
 - Proč: Obchodování z grafu je první risk-zvyšující cesta z appky. Fáze 1a
@@ -2393,6 +2403,14 @@ existující ochranu.
   skončila bez fillu a až potom dvojí ověření flat (`leaderVerifiedFlat`); nohy se ruší hned,
   důkaz má společný limit a po tu dobu je registrovaný jako rozpracovaný zápis. Štítky „+ SL“ / „+ TP“
   na čáře holé pozice jen připravují návrh; příkaz je týž `attach-brackets` po kliku přes `liveAttachIntent`.
+  **SL a TP po jedné (6. 11. 2026, capability `manual-order-single-leg-v1`, `docs/reviews/instant-legs-design-20261106.md`):**
+  se starým workerem platí věta výše. Nový worker v sólo skupině: záznam `bare: true` s 0, 1 nebo 2 id; `add-leg`, `remove-leg`
+  a posun jediné nohy odejdou hned po puštění čipu nebo čáry. Filip vědomě přijal, že × na SL nechá pozici bez stropu ztráty.
+  SL → SL + TP: nejdřív OCO se stejným SL, potom zrušit starý SL (krátce dva SL, starý ≥ 8 ticků od trhu; zrušení proběhne vždy,
+  i na flat a po brzdě). TP → SL + TP: nejdřív zrušit TP, potom OCO (při flat, Flattenu a změně kopírky se OCO neposílá).
+  Za brzdy jde jen přidání SL k pozici bez nohou; `remove-leg` a `add-leg` TP supersede brzda a zastaví je i worker (výjimka v INV-BRAKE-02 není).
+  Do okna korelátoru po fillu vrací `fill-settling`. Vlastní noha na flat účtu (zavření mimo appku) = jen incident po 3 s, bez zrušení, a jen za běžícího
+  workeru: Filip obchoduje jen z appky a riziko přijal. Přikoupení k pozici s jednou nohou zůstává blokované.
   Výsledek přijato / neznámo nabídku na 30 s schová (panel, čára i telefon).
   Attach jen k NEJNOVĚJŠÍMU ručnímu vstupu, dokud leader na symbolu od jeho
   fillu nezplochl (`closedAt`, status `open`) — starý záznam nesmí „adoptovat“
@@ -2895,8 +2913,9 @@ existující ochranu.
 - Proč: Filip 26. 10. povolil cenu z TV pro P&L zobrazené na obrazovce, nikdy
   pro risk, day lock, limity ani kopírku. Veřejný Realtime kanál je
   podvrhnutelný, proto se zprávy podepisují.
-- **Živé P&L na lince vstupu (Filip 5. 11. 2026):** `liveDisplayOpenPnl` smí do štítku linky
-  a tlačítka panelu, jen s cenou z IBKR téhož kontraktu ≤ 5 s; jinak se ukáže číslo brokera.
+- **Živé P&L na obrazovce (Filip 5. a 6. 11. 2026):** `liveDisplayOpenPnl` smí do štítku linky,
+  hlavičky telefonu a panelu, bez poplatků, jen s cenou z IBKR téhož kontraktu ≤ 60 s a bez `stale`;
+  jinak `liveShownOpenPnl` ukáže číslo brokera s vrácenými poplatky.
   Stejně jako `LiveOpenPnlValue` nikdy do rizika, limitů, day locku ani příkazů.
 - **Nativní Market a IBKR v riziku ručního vstupu (Filip 1. 11. 2026 večer,
   výslovně schváleno: „jen IBKR pro risk“):** od 2. 11. 2026 Market z panelu
@@ -2965,9 +2984,8 @@ existující ochranu.
   překreslí (`updateBar`) — do dat grafu, cache dne ani storage nejde.
   Telefon po 5 s bez ceny v otevřené seanci ukáže „Živá cena teď nechodí“ (jen text, mimo
   blokace i dotyky; INV-UI-01, seance z `lib/cmeSession.ts`, svátky nezná).
-  Pilulka telefonu bez živé ceny ukazuje „—“, nikdy close svíčky. Pojistka skoku roste se
-  stářím reference (0,2 % + 0,2 %/min, strop 0,6 %), jen když zpráva i soubor mají potvrzeně týž
-  kontrakt (`contractMatchesData`); bez důkazu platí 0,2 %. Pásmo samo kontrakt nerozezná.
+  Pilulka telefonu bez živé ceny ukazuje „—“, nikdy close svíčky. Pojistka skoku (cena panelu i svíčka): s potvrzeně stejným
+  kontraktem (`contractMatchesData`) 1 %, bez důkazu 0,2 %. Pásmo samo kontrakt nerozezná.
   Historie grafu dne v IndexedDB (`readDayTail`, 6. 11. 2026) nese jen odpověď
   Databenta (`response.candles`), nikdy živé svíčky ani výstup `composeDayCandles`;
   do grafu a panelu jde až se živým čtením (`historyReadyForChart`), jinak by

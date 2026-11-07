@@ -295,6 +295,101 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Oponentura:** `copier-design-critic` (OPRAVIT PŘED COMMITEM, nálezy opraveny) a Codex `gpt-5.6-sol` (ruční vyřešení při běžícím zápisu, souběh kontrol, záznam mimo status; opraveno). Test adaptéru napsal Codex `gpt-5.6-terra`. Výchozí `gpt-6.1-sol` z `~/.codex/config.toml` na ChatGPT účtu neběží.
 - **Neověřeno:** nic z toho neběželo u brokera. Před znovupovolením DEMO: posun a fill (přijde ExecutionReport pro kaskádní Modify? bez něj dá každý fill po posunu po 5 s falešný incident), dvojí posun, posun a posun SL, restart, OFF a C12. Fill za výpadku workeru nemusí vyvolat kontrolu nohou (stejné slabé místo jako `heldMove`). Zrychlení z `6bf590a1` dál není doložené.
 
+### 2026-11-07 — Limit a Stop bez SL/TP: víc kontraktů a okamžité odeslání (Claude, NASAZENO 7. 11. z `759fdba3`: web, worker, iPhone, Filip „Nasaď“)
+
+- **Proč:** Filip chce jako v TradingView kliknout na cenu a mít příkaz hned u brokera, s počtem z lišty. Pravé tlačítko (PC) a plus (telefon) proto u flat účtu odesílají hned. Mění to pravidlo z 29. 10. „nic z grafu bez potvrzení“; Filip to výslovně chce, klávesa dál nikdy neodešle.
+- **Dílčí fill:** bez čipů a × pozice, zbytek má vlastní čáru s ×. Automatika zbytek ruší (výjimka INV-TRAD-02, nejsou nohy). Stav `filled` s menším fillem je u Tradovate nejednoznačný, čeká se na další událost nebo čtení po ustálení.
+- **Neověřeno:** jen mock. Pořadí zpráv při dílčím fillu, zrušení zbytku a Flattenu čeká na DEMO.
+### 2026-11-07 — Upozornění na cenu na telefonu (Claude, větev `claude/phone-price-alerts-20261107`, web a iPhone nasazeny 7. 11. po Filipově „nasaď“, worker beze změny)
+
+- **Zadání (Filip, z náhledů):** číselník a maják 🚨 s obíhajícím světlem. Notifikace `time-sensitive` s textem „🚨 MNQ 21 482,00 / směr / zpráva“, tlačítka Otevřít graf a Zapnout znovu, vlastní zvuk z nabídky (45 wav v balíčku appky, stejné nahrávky i na webu místo ogg).
+- **V appce:** vlna po čáře, karta s číselníkem a majákem, výběr zvuku v nastavení. Nativně v popředí hraje zvuk jen notifikace, aby nezněl dvakrát.
+- **Island a karta na zámku:** critic zamítl přehrávání uloženého stavu (stará pozice by vypadala čerstvě, novější rizikový update by se zahodil, sloupec by dostal P&L do DB) i vlastní spuštění aktivity bez pozice (rozbije start karty při ARM). Hotová varianta: alert jede v běžné aktualizaci z plánu v tiku a cronu, ne v `end`, rizikovém ani offline stavu, jednou rozbalí Island bez zvuku. Bez migrace. Zpoždění ≤ 5 s při ARM, jinak ≤ 60 s; okamžitá je notifikace. **Island bez běžící aktivity (flat, bez ARM) se nestaví, zůstává notifikace.**
+- **Zapnout znovu:** nejdřív čerstvý stav ze serveru, výsledek ukáže kartu. Riziková notifikace dál vede na přehled (INV-UI-02).
+- **Ověřeno:** critic 2 kola, nálezy opraveny; iOS překlad s oprávněním podepsaný. **Neověřeno:** vše na iPhonu: naléhavost, zvuk v notifikaci, výška karty s pozicí, rozbalení Islandu.
+- **K rozhodnutí:** entitlement poprvé zapíná průchod Focusem i u pushů o obchodech a snímcích.
+
+### 2026-11-07 — Zobáček do současnosti, position box s pozicí, zvuky SL/TP (Claude, web + iPhone, Filip „Ano, začni“)
+
+- **Zobáček (`components/day/ChartJumpToNow.tsx`, jen telefonní graf):** podle TradingView; vidět jen s poslední svíčkou mimo záběr. `scrollToRealTime` nejde, skončil by na prázdné ose budoucnosti, proto `jumpToNow` v `lib/liveChartFollow.ts`.
+- **Box s pozicí (`lib/livePositionBox.ts`, výchozí zapnuto):** vybere se box stejného směru, ve kterém leží vstup pozice (ne starší než 4 h, ne už ukončený). Okraj roste po minutách, po ověřeném „bez pozice“ se nastaví na čas zavření a dostane `style.liveEndedAt`. Neověřený stav ani přepnutí účtu v pohledu box neukončí. Mimo historii Zpět/Vpřed (`withoutChartHistory`).
+- **Zvuky SL/TP (`lib/liveExitAlerts.ts`, výchozí „jako zvuk při fillu“):** z `exitReason` událostí workeru, nikdy z ceny. Pozice může skončit dřív, než worker pozná nohu, událost pak přijde jako `manual` a stejné id se opraví, proto detektor `manual` dál sleduje. Pak může zaznít nejdřív běžný zvuk fillu a po opravě vlastní zvuk.
+- **Dotčená pravidla:** INV-UI-01, INV-UI-03, INV-UI-04: jen zobrazení, nic neautorizuje, neověřený stav je neutrální, důvod z brokera. ⚡ čte z boxu jen ceny a ty se nemění. Jádro kopírky beze změny, proto bez `copier-design-critic`.
+- **Zvuk vyplnění a lišta telefonu (dodatek téhož dne):** `fillTone` nahradí Tón i Hlas a hraje i s volbou Vypnuto; SL/TP bez vlastního zvuku berou zvuk vyplnění. Den/London/New York je v menu `⋯` (Rozsah dne, tečka na `⋯` mimo celý den), timeframe má šířku 80.
+- **Neověřeno:** protažení boxu a zvuky na skutečné pozici (trh zavřený, jen testy s náhradou motoru a náhled nastavení); zvuk na iPhonu bez gesta a s tichým režimem; zobáček dotykem. Vlastní zvuk hraje jen s otevřeným grafem, v pozadí zůstává push.
+### 2026-11-07 — Limit a Stop opravdu bez SL/TP (Claude, NASAZENO 7. 11. z `eaa40d5d`: web, worker, iPhone, Filip „Nasaď“)
+
+- **Proč:** Filip chce Limit a Stop jako v TradingView, po vyplnění bez SL a TP, dokud je nenatáhne. Na otázku, jestli smí jít o vzdálený SL: „Ne, opravdu bez.“ Parkované nohy z návrhu v4 se proto nestaví.
+- **Rozsah:** sólo manual-only DEMO skupina, 1 kontrakt, z flat, capability `manual-entry-bare-pending-v1`. Limit nesmí být přes trh, Stop aspoň 8 ticků na straně průrazu, vždy s čerstvou cenou IBKR. Před fillem jde jen ×, posun ceny a čipy ne; po fillu čipy a × jako u holého Marketu.
+- **Bezpečnost:** čekající holý vstup zruší OFF, kill, day lock, konec session a konec ARM stejně jako každý čekající. Neznámý výsledek POST je incident. Po restartu se konec vstupu dočte s odstupem a nerozhodnutý stav končí incidentem. Fill při rušení nebo za vypnuté kopírky je incident „BEZ SL/TP“. Vědomě přijato: fill bez dozoru nemá strop ztráty a při výpadku workeru se nic nezruší (INV-MANUAL-01, INV-RISK-01).
+- **Oponentura:** `copier-design-critic` OPRAVIT PŘED COMMITEM, nálezy opraveny (P1 tichá díra po restartu, P2 neznámé ACK, riziko posunu SL od ceny vstupu, testy závodů). Hypotéza P3-2 (zastaralá Position(0) po fillu uzavře záznam) neřešena, stejná slabina je u Marketu.
+- **Neověřeno:** jen testy s mockem. Samostatný Stop bez nohou přes `placeOrder`, skutečné pořadí Order/Fill/Position a × při „too late“ čekají na DEMO za otevřeného trhu. Víc účtů je další krok.
+
+### 2026-11-07 — Společné rozložení a timeframe grafů (Claude, větev `claude/chart-view-sync-20261107`, web + iPhone 7. 11., Filip „než nasadíš…“)
+
+- **Proč:** telefon po každé čisté instalaci začínal na 5m a nastavení se drželo jen v zařízení. Filip chce synchronizaci. `lib/chartView.ts` jde na server v profilu grafů (`user_chart_profiles`, `view`), poslední změna platí všude a přežije reinstalaci.
+- **Návrat z pozadí na telefonu:** graf LIVE neměl zapnuté sledování okraje (`followEdge`), proto po doplnění svíček zůstal stát. Zapnuto jako na PC; kdo se dívá do historie, tomu se záběr nehýbe.
+- **Pravidla:** telefon přebírá hned; otevřený graf na PC se nepřestavuje, nové nastavení vezme při dalším otevření, a nezapisuje zpět nic, dokud v něm uživatel něco nezmění (jinak by starý stav přepsal novější). Backtest je mimo. Telefonní `auto` je na PC jeden graf. Neověřeno v živém provozu mezi dvěma zařízeními.
+### 2026-11-06 — Upozornění na cenu na PC (Claude, větev `claude/pc-price-alerts-20261106`, web nasazen 7. 11. po Filipově „nasaď“, worker beze změny)
+
+- **Zadání (Filip):** pravý klik do grafu = rychlý alert, dvojklik = otevřít a upravit. Data a hlídání se nemění, jsou společné s telefonem (Mac worker z IBKR, bez TradingView).
+- **Stavba:** `components/LivePcPriceAlerts.tsx` (hook, čáry, zvoneček, dialogy). Znovupoužívá `LivePhoneAlerts` s přepínači `mouse` a `pc`; most přes `LiveOrderEntryBridge.priceAlerts`, ať se kód netáhne do backtestu. Jen panel exekuce (MNQ) a mimo přehrávání.
+- **Proč takhle:** čáry alertů leží pod čarami příkazů (z 14 pod z-115), dialog pod hlavičkou LIVE (z-700 pod z-800), takže OFF je klikatelné; `aria-modal` ztiší zkratky. Karta hlásí stav hlídání už při ukládání (online je hned po založení vždy `syncing`, „Hlídá“ bez „Ukládám“ jen po uložení), trvalé odmítnutí i výpadek serveru dávají vlastní kartu, nová úprava maže starou chybu ve store (i telefon). Kanály PC jsou nezávislé (karta, hlas, zvuk), alert má vlastní tón. Karty upozornění mají v LIVE a na telefonu strop 2 (`capExtra`), backtest beze změny. Uložený směr bere close svíčky jako telefon (INV-UI-04). Tah spuštěného alertu až po výběru, protože tah ho znovu zapne.
+- **Vzhled (Filip):** okno na PC je vlastní kompaktní skleněná karta Aurora (řádky popisek vlevo, ovládání vpravo; `AlertWindow` v `LivePcPriceAlerts.tsx`), list telefonu je beze změny. Barva z palety `TradingViewColorPicker` včetně krytí (`line.color` #rrggbb, `line.opacity`), zvuk z rozbalovací nabídky s ukázkou a posuvníkem hlasitosti: 35 nahrávek z Kenney Interface Sounds (CC0, `public/sounds/alerts`, soubory TradingView jsme nepřevzali kvůli autorským právům), 10 složených Agresivní (`lib/priceAlertTones.ts`) nebo vlastní soubor do 1 MB a 10 s, uložený jen v tomto prohlížeči v IndexedDB (`services/priceAlertSounds.ts`), chybějící spadne na výchozí tón (`channels.tone`, jen PC; bez migrace, jsonb). Čára na PC jde až k cenové ose a končí klidným průsvitným štítkem se zvonečkem a cenou (jde za něj táhnout, plná barva jen při výběru a spuštění), po najetí je u ceny křížek na smazání. Stavěno po 2. kole criticu, jen vzhled; z-700 pod hlavičkou a `aria-modal` zachovány.
+- **Spuštění na PC (Filip vybral z náhledů):** na poslední svíčce prsten, doleva světelná vlna, čára k ceně a klidná záře štítku (`lib/alertFireEffect.ts` + `AlertFireEffect`, plátno pod čarami příkazů), karta vlevo dole se zvonečkem a ubíhajícím časem. „Vyzkoušet“ ukáže totéž jen v zařízení, nezapisuje událost. Prsten se kreslí jen se svíčkou ve výřezu, omezené animace = klidný prsten.
+- **Sdílené s telefonem:** `useFreshPriceAlertEvents`, `priceAlertEventTitle`; na iPhone až s dalším buildem.
+- **Ověřeno:** critic kola 1 a 2 = OPRAVIT PŘED COMMITEM, nálezy opraveny; třetí kolo se podle pravidla nekoná. QA náhled se skutečným grafem, syntetickými svíčkami a bez přihlášení: založení, dvojklik, cena, barva, tah (simulované události s mezikroky), výběr, ×, seznam, Esc, OFF nad dialogem, kolečko, strop karet, tmavý i světlý motiv. Spuštění jen s nasimulovanou událostí.
+- **Neověřeno:** přihlášený účet (server, stav „Hlídá Mac“, skutečné překročení ceny a web push), slyšitelný tón.
+- **Známé limity:** karta a hlas jen s otevřeným LIVE grafem; hlas alertu může o větu zdržet hlášení plnění (vědomě přijato); nad čárou (10 px) nejde crosshair.
+### 2026-11-07 — Animace čip ↔ čára (Claude, web + iPhone, Filip „Sedí, nasaď“)
+
+- Tah čipu ho roztáhne do štítku a čáry, ghost drží místo do příchodu nohy, × ji složí zpět. Jen zobrazení v `BacktestOrderLinesOverlay`, tedy i v backtestu; worker beze změny. Pohyb posoudil Filip v náhledu `tests/qa/live-legs.tsx`.
+
+### 2026-11-06 — Slepé hodnocení v Backtestu (Claude, větev claude/blind-review-20261106)
+
+Filip chce kalibrovat automatický backtest ve svém Backtestu, ne na samostatné stránce. Každý případ je dočasná session
+(`scratch` v `BacktestWorkspace`): skutečný graf a indikátory, ale žádný zápis do `backtest_runs` ani deníku. Jedna session
+přes všechny dny nejde, svíčky z měsíců by zahltily prohlížeč. Replay zastavuje `replayStopAt` v setteru grafu, takže ho
+neobejde žádná cesta kurzoru; bez něj je setter průchozí. Odpověď se ukáže až po potvrzeném zápisu do nové tabulky
+`backtest_blind_reviews` a pak je zamčená; sadu vkládá Claude přes CLI, klient smí měnit jen `answers` a `marks`.
+Jádra kopírky se změna nedotýká. Nasazeno 7. 11. na Filipovo „nasaď“.
+
+### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude; 7. 11. NASAZENO z `ad55ef07`: migrace, web, worker `--tv off`, iPhone 18 Pro Max, Filip „nasad market“)
+
+- Filip: natáhnu nohu a je u brokera, × ji zruší a vrátí čip. Podklad: `docs/reviews/instant-legs-design-20261106.md`, DEMO `record-legs.ts`. Capability `manual-order-single-leg-v1`, jen sólo manual-only DEMO a vlastní holý Market; Limit bez nohou a čekající vstupy zatím ne.
+- Filip přijal: × na SL nechá pozici bez stropu. Obchoduje jen z appky, proto noha na flat účtu = jen incident, bez automatického zrušení.
+- Critic: návrh kolo 1 BLOKUJE, diff kolo 2 OPRAVIT, nálezy P1 a P2-5 až P2-8 zapracované, další kolo už neproběhlo.
+- Vědomá odchylka: během surového zápisu Flatten leadera vynechá a vrátí `flat:false` s incidentem, stejně jako dnes u attach a ×. Krátké čekání je následná úprava.
+- Neověřeno: nic z toho zatím neběželo přes worker na DEMO (trh zavřený, přidání nohy chce čerstvou cenu); SQL test migrace neběžel (lokálně není Postgres), v produkci ověřena jen přítomnost `remove-leg`; Flatten v mezeře výměny netestovaný; TIF samostatného Stopu neznámý.
+- Limit a Stop bez nohou: nepostaveno. Filip chce počítat s víc účty, proto nový návrh; dnešní verze je jen sólo DEMO.
+
+### 2026-11-06 večer — Limit bez SL/TP: rozhodnutí a skript pro DEMO (Claude, větev `claude/chart-position-ui-20261106`, nic nenasazeno)
+
+- Filip: SL a TP u Limitu jsou dobrovolné, jako znal z TradingView, riziko fillu bez SL přijal. Zaparkované nohy pro Limit odpadají. Návrh a nálezy v `docs/reviews/instant-legs-design-20261106.md`; stavět až po záznamu.
+- Filip 6. 11. večer spustil všech 14 scénářů, účet čistý; výsledky v návrhu: zrušení jedné nohy OCO partnera nechá, liquidate samostatnou nohu zruší, opačný Market ne. `scripts/copier/record-legs.ts`, 14 scénářů, spouští jen Filip. Přibyly kroky `place-exit`, `place-oco`, příznak `bare` v DSL záznamů. Critic: po opravách (tag jen jako příznak, dvě čisté kontroly po výjimce zápisu, kontrola nevyřešených při startu) skript nejdřív po krocích. Interpret ještě nikdy neběžel proti brokerovi, skript nedokazuje worker.
+
+### 2026-11-06 večer — Posun SL u pozice s dokupy blokoval starý záznam (Claude, větev `claude/chart-position-ui-20261106`, oprava nenasazená)
+
+- Filip po nasazení: posun SL nejde, rychlé dokupy nejdou. Relay řádky: 8× `manage-unresolved` kvůli `attach-brackets` `unknown` z 5. 11. 15:30, kontrola celé pozice brala celý symbol a status ukazoval jen 10 akcí. Záznam po Filipově souhlasu označen `waived` při OFF a flat, k brokerovi nic.
+- Oprava: `positionActionUnresolved` (klíč pozice, lístky, stejný symbol od nejstaršího lístku), nad modelem po čtení; `unresolvedManualOrderActions` jde do panelu; waiver odmítne, dokud běží zápis. Critic 2 kola, nálezy zapracovány. Vyžaduje reinstalaci workeru.
+- Dokupy: po eventu leadera čeká přikoupení 5 s, relay a worker 3 s, po fillu REST risk. Návrh B critic vrátil, chce náhradu okna a záznam na DEMO; nestavěno.
+- Limit bez SL/TP: holý Limit critic v navržené podobě odmítl (korelátor, OFF/kill, dílčí fill), holý Stop blokuje. Čeká na volbu Filipa mezi zaparkovanými nohami a holým Limitem.
+
+### 2026-11-06 — Jedno živé P&L, přikoupení z lišty telefonu, okamžité SL/TP v návrhu (Claude, větev `claude/chart-position-ui-20261106`)
+
+- **P&L:** čip odečítal poplatky (odtud centy) a po 5 s bez obchodu přepínal na číslo brokera a zpět (přeskakování). Hlavička telefonu počítala jinak přes `tvLivePnl`, takže nález „P&L neopraveno“ ze zápisu o prvním Openu se týká už jen ostatních míst s `LiveOpenPnlValue`. Teď všude v grafu `liveShownOpenPnl`: IBKR bez poplatků, jinak broker s vrácenými poplatky. Seznam účtů a uzavřený obchod zůstávají po poplatcích, takže se od čipu mohou lišit. Jen zobrazení (INV-UI-04).
+- **Přikoupení:** KOUPIT/PRODAT v pozici posílalo holý Market, který worker zastaví. Teď C18e: Market se SL/TP pozice, worker beze změny. Bez SL i TP jen hláška. Filip hlásil selhání bez textu chyby a v logu workeru pokus není, příčina je z kódu.
+- **Okamžité SL/TP (jedna noha, × vrátí čip):** `docs/reviews/instant-legs-design-20261106.md`, critic kolo 1 BLOKUJE. Nestavět bez záznamu na DEMO; Filip chce varianty ještě rozvinout.
+- `move-limit` worker inzeruje, čára Limitu se tedy dá táhnout, přestože je v oponentuře v jiné konverzaci.
+
+### 2026-11-06 — První Open bez TradingView: svíčka a P&L se zastavily (Claude, větev `claude/tv-exit-rest-20261106`, nasazeno `f23713a7`)
+
+- Filip kolem 15:37 v pozici viděl stát svíčku a P&L, nová svíčka nepřišla. IBKR i worker bez mezery (záznam a log). **Pravděpodobná příčina, z modelu nad záznamem, ne z měření v appce:** pojistka skoku 0,2 % porovnává novou minutu se souborem starým až minutu; na přelomu 15:37:00 byl rozdíl 63,5 b, takže se svíčka nekreslila do načtení v :20. Oprava: s potvrzeným kontraktem pásmo 1 %.
+- **P&L neopraveno:** `lib/tvLivePnl.ts` při rozsahu nad 2 b v okně kotvy (`anchor-window-wide`) nebo velkém pohybu (`move-cap`) přejde na číslo brokera; při Openu je to pravděpodobné, zatím neověřené.
+
+### 2026-11-06 — „Do fillu“ z IBKR a texty bez TradingView (Claude, větev `claude/tv-exit-rest-20261106`, nasazeno `f23713a7`)
+
+- `marketPrices` při `--tv off` z kotace IBKR (`copierMarketPricesFromQuote`), jen zobrazení. Čip dne bez tlačítka restartu TV, texty míří na worker a IB Gateway. Menu bar Macu a dialogy snímků zatím beze změny.
 ### 2026-11-06 — Telefon: lišta pozice jen záložně, lišta obchodu podle tématu (Claude, větev claude/phone-bar-pill-20261106)
 
 - Filip: černá lišta nad grafem pryč. × je na čáře (holá pozice ho má nově i na telefonu), SL/TP přes ✎ a štítky. Lišta zůstává jen, když čára zavřít neumí (přehrávání, kopírka vypnutá, pozice mimo appku); Flatten All je na Dashboardu.

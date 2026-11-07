@@ -86,7 +86,7 @@ describe('B1: holý vstup a pozice leadera (U4)', () => {
     expect(desk).toMatch(/livePhonePosition\(chartData\.position\?\.summary \?\? null, chartLeaderBasis, chartPositionSymbol, chartBareEntry\?\.operationId \?\? null\)/);
     // PC: Přidat SL/TP = deskový attachBrackets, jen když worker inzeruje manual-entry-bare-v1.
     expect(desk.match(/onAttachBrackets/g)).toHaveLength(1);
-    expect(desk).toContain('{...(supportsCopierManualEntryBare(agentStatus) ? { onAttachBrackets: attachBrackets } : {})}');
+    expect(desk).toContain('{...(supportsCopierManualEntryBare(agentStatus) && !supportsCopierManualOrderSingleLeg(agentStatus) ? { onAttachBrackets: attachBrackets } : {})}');
     // Telefon: náhled = deskový previewLeaderEntry jen s capability ručního vstupu.
     expect(desk.match(/preview: previewLeaderEntry/g)).toHaveLength(1);
     expect(desk).toContain('...(supportsCopierManualEntry(agentStatus) ? { preview: previewLeaderEntry } : {}),');

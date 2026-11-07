@@ -151,7 +151,7 @@ import {
 import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
 import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit } from '../lib/copierWorkerCapabilities';
-import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryBarePending, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
@@ -1146,7 +1146,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (!chartLeaderBasis) return null;
     // Pozice s víc lístky nebo s čekajícím přikoupením se spravuje jen celá (worker `scope: 'position'`).
     if (scaleInPosition && (scaleInPosition.tickets > 1 || scaleInPosition.pendingAdd)) {
-      return { source: 'position' as const, entryOperationId: scaleInPosition.baseEntryOperationId, leaderEntryOrderId: scaleInPosition.ticketEntryIds[0],
+      return { source: 'position' as const, bare: false, entryOperationId: scaleInPosition.baseEntryOperationId, leaderEntryOrderId: scaleInPosition.ticketEntryIds[0],
         symbol: scaleInPosition.symbol, side: scaleInPosition.side, entryAvgPrice: scaleInPosition.avgPrice };
     }
     const trades = (agentStatus?.controller.manageableLeaderTrades ?? []).filter(trade => (
@@ -1187,6 +1187,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const entry = ownManualEntryRef.current;
     // Worker porovnává s příkazem leadera — součet skupiny by vždy neseděl.
     const quantity = leaderManageBasis(chartData.position?.summary, executionGroup?.leaderAccountId)?.quantity ?? null;
+    const barePartial = entry?.bare === true ? current.status?.controller.barePartial ?? null : null;
     if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !entry || quantity == null) {
       throw new Error('Stav kopírky není čerstvě ověřený nebo chybí spravovatelný obchod — nic se neodeslalo.');
     }
@@ -1212,7 +1213,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       leaderAccountId: executionGroup.leaderAccountId,
       ...((entry.source === 'own' || entry.source === 'position') && entry.entryOperationId ? { entryOperationId: entry.entryOperationId } : { leaderEntryOrderId: entry.leaderEntryOrderId }),
       symbol: entry.symbol,
-      action, expect: { price: expectPrice, quantity }, ...(newPrice != null ? { newPrice } : {}),
+      action,
+      // Zbytek holého Limit/Stop: počet příkazu a kolik uživatel viděl vyplněné (worker porovná s čerstvým stavem).
+      expect: barePartial && action === 'cancel-entry'
+        ? { price: expectPrice, quantity: barePartial.quantity, filledQuantity: barePartial.filledQuantity }
+        : { price: expectPrice, quantity },
+      ...(newPrice != null ? { newPrice } : {}),
       ...(entry.source === 'position' ? { scope: 'position' as const } : {}),
       ...(action === 'move-limit' ? { moveLimitContract: LEADER_ORDER_MOVE_LIMIT_CONTRACT } : {}),
     });
@@ -1238,6 +1244,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // uživatel viděl, a jen když ji čerstvý status hlásí beze změny; C7 drží jednu trasu relaye pro
   // celou sekvenci. Worker vše ověří znovu (sólo skupina, ARMED, tvar u brokera, lot deníku).
   const closeBareLeader = deskCommands.closeBareLeader;
+  const manageBareLeg = deskCommands.manageBareLeg;
   const cancelPendingEntries = deskCommands.cancelPendingEntries;
   // Sdílený zámek jednoho příkazu desku (PC: čáry, panel — vstup, Přidat SL/TP, × holé pozice —,
   // Shift+E/X/C, lišta „Zrušit čekající“; telefon: lišta, čáry, list správy, vstup, attach, čip C7;
@@ -1295,7 +1302,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const cancelPendingBarView = liveCancelPendingView({ ...cancelPendingInput, replay: chartReplayActive && tab === 'chart' });
   // U5: pracující příkazy jako čáry JEN PRO ZOBRAZENÍ (PC i telefon); čekající přikoupení už kreslí
   // čára pozice s × (stejný `pendingAdd` jako `entryScaleIn`). Nikdy do příkazů ani do „co jsem viděl“.
-  const scaleInPendingAdd = scaleInPosition?.pendingAdd ?? null;
+  const barePartial = agentStatus?.controller.barePartial ?? null;
+  const barePartialLine = useMemo(() => (barePartial
+    ? { price: barePartial.price, quantity: barePartial.quantity - barePartial.filledQuantity, orderType: barePartial.orderType, label: 'ZBYTEK' } : null),
+  [barePartial?.price, barePartial?.quantity, barePartial?.filledQuantity, barePartial?.orderType]); // eslint-disable-line react-hooks/exhaustive-deps
+  const scaleInPendingAdd = scaleInPosition?.pendingAdd ?? barePartialLine;
   const chartWorkingView = useMemo(() => liveChartWorkingOrders(chartData.working, {
     pendingAdd: scaleInPendingAdd ? { price: scaleInPendingAdd.price, orderType: scaleInPendingAdd.orderType } : null,
     frontContract: entryFrontContract,
@@ -1309,6 +1320,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       blockedReason: entryBlockedReason,
       marketSupported: supportsCopierManualEntryMarket(agentStatus),
       bareSupported: supportsCopierManualEntryBare(agentStatus),
+      barePendingSupported: supportsCopierManualEntryBarePending(agentStatus),
+      barePartial: barePartialLine,
       maxContracts: manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null),
       frontContract: entryFrontContract,
       place: placeLeaderEntry,
@@ -1324,13 +1337,15 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       commandLockRef: liveCommandLockRef,
       // C8/C7 (4. 11. 2026): × holé pozice a „Zrušit čekající“ = deskové callbacky, jen s capability.
       ...(supportsCopierManualOrderCloseBare(agentStatus) ? { bareClose: bareCloseOffer, closeBare: closeBareLeader } : {}),
+      ...(supportsCopierManualOrderSingleLeg(agentStatus) ? { bareLegTrade: agentStatus?.controller.bareLegTrade ?? null, bareLeg: manageBareLeg } : {}),
       ...(supportsCopierManualOrderCancelPending(agentStatus) ? { cancelPending: cancelPendingView, cancelPendingEntries } : {}),
       // Správa z čar = PŘESNĚ deskový `manageLeaderEntry` a za stejné podmínky jako PC graf
       // (`onManageEntry`); × u pozice jako PC `canClose`; BE průměr jen ze stavu pollu (jako PC).
       pendingLegs: supportsCopierManualOrderPendingLegs(agentStatus),
-      moveLimit: supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own',
+      moveLimit: supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare !== true,
       ...livePhoneManageFields({
-        manageSupported: supportsCopierManualOrderManage(agentStatus), closeCapability: supportsCopierManualOrderClose(agentStatus),
+        // Dílčí fill holého Limit/Stop: × je na zbytku, pozici jde zavřít až po jeho konci (nebo Flatten).
+        manageSupported: supportsCopierManualOrderManage(agentStatus), closeCapability: supportsCopierManualOrderClose(agentStatus) && ownManualEntry?.bare !== true,
         ownEntry: ownManualEntry, manage: manageLeaderEntry, runtimeAvailable,
         armed: controller?.armed === true, shadowMode: controller?.shadowMode === true, chartShowsPoll: chartLive.status === agentStatus,
       }),
@@ -1993,6 +2008,8 @@ acceptAgentStatus((await executeAgent({
   const selectedLiveAccount = (displaySnapshot ?? copyTradeSnapshot)?.accounts.find(a => a.id === selectedAccountId);
   const selectedMembership = copyGroups.find(g => g.leaderAccountId === selectedAccountId || g.followers.some(f => f.accountId === selectedAccountId));
 
+  const priceAlertWatch = priceAlertWatchLabel({ fresh: agentStatusFresh && !agentStatusRestored, watch: agentStatus?.priceAlertWatch,
+    statusAgeMs: agentStatusObservedAt == null ? null : freshnessNow - agentStatusObservedAt });
   return (
     <div className={`mx-auto max-w-[1500px] space-y-4 ${arrivingFromChart ? 'live-tab-arrive' : ''}`} style={{ paddingBottom: 'var(--live-safety-height, 0px)' }}>
       {/* Běžně se lišta nekreslí (Filip 5. 11.), jediná instance drží dialog Shift+F a hlášky. */}
@@ -2032,9 +2049,9 @@ acceptAgentStatus((await executeAgent({
           // BE jen když graf ukazuje stav pollu: když expozice z kanálu (F2a) předbíhá, průměr
           // z pollu nemusí patřit ke kusům v grafu (přikoupení) — BE počká na poll.
           manageEntryAvgPrice={chartLive.status === agentStatus ? ownManualEntry?.entryAvgPrice ?? null : null}
-          manageCloseSupported={supportsCopierManualOrderClose(agentStatus)}
+          manageCloseSupported={supportsCopierManualOrderClose(agentStatus) && ownManualEntry?.bare !== true}
           managePendingLegsSupported={supportsCopierManualOrderPendingLegs(agentStatus)}
-          manageMoveLimitSupported={supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own'}
+          manageMoveLimitSupported={supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare !== true}
           entryMarketSupported={supportsCopierManualEntryMarket(agentStatus)}
           entryMaxContracts={manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null)}
           entryFrontContract={entryFrontContract}
@@ -2042,9 +2059,12 @@ acceptAgentStatus((await executeAgent({
           // U4/U5/U8/U10 (3. 11. 2026): podklady panelu a grafu — jen zobrazení a předvyplnění,
           // příkazy dál jen přes callbacky desku (worker vše ověří znovu, INV-UI-01).
           entryBareSupported={supportsCopierManualEntryBare(agentStatus)}
+          entryBarePendingSupported={supportsCopierManualEntryBarePending(agentStatus)}
+          entryBarePartial={barePartialLine}
           entryBareEntry={chartBareEntry}
           entryLeaderPosition={chartLeaderPosition}
-          {...(supportsCopierManualEntryBare(agentStatus) ? { onAttachBrackets: attachBrackets } : {})}
+          {...(supportsCopierManualEntryBare(agentStatus) && !supportsCopierManualOrderSingleLeg(agentStatus) ? { onAttachBrackets: attachBrackets } : {})}
+          {...(supportsCopierManualOrderSingleLeg(agentStatus) ? { bareLegTrade: agentStatus?.controller.bareLegTrade ?? null, onBareLeg: manageBareLeg } : {})}
           entryBlockedReason={entryBlockedReason}
           manageLeaderAccountId={workerGroup?.leaderAccountId ?? null}
           // C8: × holé pozice (čára, Shift+X, panel) — jen s capability; jeden zámek s lištou a Dashboardem.
@@ -2055,6 +2075,7 @@ acceptAgentStatus((await executeAgent({
           workingOrders={chartWorkingOrders}
           liveFills={pcFills}
           userId={userId}
+          alertWatch={priceAlertWatch}
           />
         </ErrorBoundary>
       ) : phoneChartAvailable && tab === 'chart' && phoneChart ? (
@@ -2093,8 +2114,7 @@ acceptAgentStatus((await executeAgent({
             fillsOpen: phoneFills.open,
             fillsSymbol: phoneFills.symbol,
             // Kdo hlídá upozornění na cenu: jen čerstvý neobnovený status s cenou z IBKR (jen text).
-            alertWatch: priceAlertWatchLabel({ fresh: agentStatusFresh && !agentStatusRestored, watch: agentStatus?.priceAlertWatch,
-              statusAgeMs: agentStatusObservedAt == null ? null : freshnessNow - agentStatusObservedAt }),
+            alertWatch: priceAlertWatch,
             // U5: pracující příkazy leadera jen jako čáry pro zobrazení (ověřené čtení příkazů).
             workingOrders: chartWorkingOrders,
             // U8: jen klíč knihovny šablon SL/TP na zařízení (nic neautorizuje).

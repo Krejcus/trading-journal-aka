@@ -96,14 +96,24 @@ export type DemoStep =
   | ({ kind: 'place-oso'; label: string; tickets: DemoOsoTicket[]; reverseAfter?: string } & DemoAfter)
   | ({
       kind: 'place-order'; label: string; ref: string; side: 'position' | 'opposite';
-      orderType: 'Market' | 'Limit'; price?: DemoPriceRef; quantity: number;
+      orderType: 'Market' | 'Limit' | 'Stop'; price?: DemoPriceRef; quantity: number;
       /** Redukce pozice: qty ≤ |net|, nikdy přes nulu. */
       reducing?: true;
+      /** Vědomě holý vstup bez nohou (návrh SL/TP po jedné): Market, marketable Limit, nebo Limit daleko. */
+      bare?: true;
       /** Pošle se jen, když obě nohy lístku mají pozorovaně tuto qty (C2: Market až po potvrzení nohou). */
       onlyIfLegsQuantity?: { ticket: string; quantity: number };
     } & DemoAfter)
+  /** Samostatná výstupní noha k vyplněné pozici: bez OCO, opačná strana, vždy aspoň `DEMO_MIN_BRACKET_POINTS` od trhu. */
+  | ({ kind: 'place-exit'; label: string; ref: string; leg: 'stop' | 'limit'; points: number; quantity: number } & DemoAfter)
+  /** Nohy SL + TP spojené OCO k vyplněné pozici (jako `attach-brackets`). Lístek má jen `sl` a `tp`. */
+  | ({
+      kind: 'place-oco'; label: string; ticket: string; slPoints: number; tpPoints: number; quantity: number;
+      /** Vědomě vedle pracující nohy (měření pořadí „OCO, pak zrušit“): krátce dvojí SL. */
+      overlapExit?: true;
+    } & DemoAfter)
   | ({ kind: 'modify'; label: string; changes: DemoModify[] } & DemoAfter)
-  | ({ kind: 'cancel'; label: string; targets: DemoOrderRef[]; onlyIfOpen?: true } & DemoAfter)
+  | ({ kind: 'cancel'; label: string; targets: DemoOrderRef[]; onlyIfOpen?: true; abortIfFailed?: true } & DemoAfter)
   | ({ kind: 'liquidate'; label: string; ref: string } & DemoAfter)
   | { kind: 'wait-net'; label: string; net: number; timeoutMs: number; optional?: true }
   | { kind: 'wait-fill'; label: string; ticket: string; timeoutMs: number }
@@ -255,6 +265,9 @@ export function demoStartProblems(plan: Pick<DemoRecordPlan, 'accountId' | 'symb
   if (controller.reconciliationRequired !== false) problems.push('worker čeká na kontrolu pozic (po minulém záznamu: npm run copier:mac -- reconcile)');
   if (Array.isArray(controller.divergentAccounts) && controller.divergentAccounts.length) problems.push('skupina má divergenci');
   if (Array.isArray(controller.workingOrderAccounts) && controller.workingOrderAccounts.length) problems.push('ve skupině jsou working orders');
+  // Nevyřešený ruční vstup: holý Limit ze záznamu by worker vzal za svůj možný a vypnul by kopírku.
+  const unresolved = (items: unknown) => Array.isArray(items) && items.some(item => ['sending', 'unknown'].includes((item as { status?: unknown })?.status as string));
+  if (unresolved(controller.manualEntries) || unresolved(controller.unresolvedManualOrderActions)) problems.push('worker má nevyřešený ruční vstup nebo změnu obchodu');
   const anchor = demoAnchor(status, plan.symbol, now);
   if (anchor == null) problems.push('worker nemá čerstvou cenu MNQ (IBKR / TradingView)');
   else if (Math.abs(anchor - plan.marketPrice) > anchor * RECORD_MAX_ANCHOR_DIFF_RATIO) {
@@ -310,9 +323,18 @@ export function scenarioStructureProblems(scenario: DemoScenario): string[] {
       if (step.reverseAfter && !liquidations.has(step.reverseAfter)) problems.push(`${step.label}: neznámé liquidate ${step.reverseAfter}`);
     } else if (step.kind === 'place-order') {
       if (!quantityOk(step.quantity)) problems.push(`${step.label}: qty ${step.quantity} mimo 1–${DEMO_RECORD_MAX_QUANTITY}`);
-      if (step.orderType === 'Market' && !step.reducing) problems.push(`${step.label}: holý Market jen jako redukce`);
-      if (step.orderType === 'Limit' && !step.price) problems.push(`${step.label}: Limit bez ceny`);
+      if (step.orderType === 'Market' && !step.reducing && !step.bare) problems.push(`${step.label}: holý Market jen jako redukce`);
+      if (step.orderType !== 'Market' && !step.price) problems.push(`${step.label}: ${step.orderType} bez ceny`);
       plain.add(step.ref);
+    } else if (step.kind === 'place-exit') {
+      if (!quantityOk(step.quantity)) problems.push(`${step.label}: qty ${step.quantity} mimo 1–${DEMO_RECORD_MAX_QUANTITY}`);
+      if (!(step.points >= DEMO_MIN_BRACKET_POINTS)) problems.push(`${step.label}: noha blíž než ${DEMO_MIN_BRACKET_POINTS} b`);
+      plain.add(step.ref);
+    } else if (step.kind === 'place-oco') {
+      if (tickets.has(step.ticket)) problems.push(`lístek ${step.ticket} zadán dvakrát`);
+      if (!quantityOk(step.quantity)) problems.push(`${step.label}: qty ${step.quantity} mimo 1–${DEMO_RECORD_MAX_QUANTITY}`);
+      if (!(step.slPoints >= DEMO_MIN_BRACKET_POINTS) || !(step.tpPoints >= DEMO_MIN_BRACKET_POINTS)) problems.push(`${step.label}: noha blíž než ${DEMO_MIN_BRACKET_POINTS} b`);
+      tickets.add(step.ticket);
     } else if (step.kind === 'modify') {
       for (const change of step.changes) {
         if (!refOk(change.target)) problems.push(`${step.label}: neznámý cíl`);
@@ -475,12 +497,26 @@ export function osoPlacementProblems(oso: ResolvedOso, anchor: number): string[]
 
 /** Holý příkaz: jen redukce Marketem (qty ≤ |net|), nebo pasivní Limit daleko od trhu. */
 export function plainOrderProblems(input: {
-  side: DemoSide; orderType: 'Market' | 'Limit'; price: number | null; quantity: number; reducing: boolean; anchor: number | null;
+  side: DemoSide; orderType: 'Market' | 'Limit' | 'Stop'; price: number | null; quantity: number; reducing: boolean; anchor: number | null;
+  /** Vědomě holý vstup (krok `bare`): Market smí, Limit smí i marketable. */
+  bare?: boolean; marketable?: boolean;
 }): string[] {
   const problems: string[] = [];
   if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > DEMO_RECORD_MAX_QUANTITY) problems.push(`qty ${input.quantity} mimo 1–${DEMO_RECORD_MAX_QUANTITY}`);
   if (input.orderType === 'Market') {
-    if (!input.reducing) problems.push('holý Market jen jako redukce');
+    if (!input.reducing && !input.bare) problems.push('holý Market jen jako redukce');
+    return problems;
+  }
+  // Holý Stop jen daleko na straně průrazu: u trhu by se hned vyplnil bez ochrany.
+  if (input.orderType === 'Stop') {
+    if (!input.bare) problems.push('Stop jen jako vědomě holý vstup');
+    if (input.price == null || !(input.price > 0) || !onDemoTick(input.price)) problems.push('Stop bez platné ceny na tick');
+    else if (input.anchor == null) problems.push('chybí čerstvá cena workeru');
+    else if (!((input.side === 'Buy' ? input.price - input.anchor : input.anchor - input.price) >= input.anchor * DEMO_FAR_RATIO - RECORD_TICK_SIZE)) problems.push('holý Stop musí být daleko na straně průrazu');
+    return problems;
+  }
+  if (input.bare && input.marketable) {
+    if (input.price == null || !(input.price > 0) || !onDemoTick(input.price)) problems.push('Limit bez platné ceny na tick');
     return problems;
   }
   if (input.price == null || !(input.price > 0) || !onDemoTick(input.price)) problems.push('Limit bez platné ceny na tick');
@@ -489,6 +525,21 @@ export function plainOrderProblems(input: {
     const passive = input.side === 'Buy' ? input.anchor - input.price : input.price - input.anchor;
     if (!(passive >= input.anchor * DEMO_FAR_RATIO - RECORD_TICK_SIZE)) problems.push(`holý Limit musí být aspoň ${(input.anchor * DEMO_FAR_RATIO).toFixed(0)} b na pasivní straně trhu`);
   }
+  return problems;
+}
+
+/**
+ * Pojistka samostatné výstupní nohy: jen na ochranné nebo ziskové straně trhu, aspoň
+ * `DEMO_MIN_BRACKET_POINTS` od čerstvé ceny, aby se při záznamu sama nespustila.
+ */
+export function exitOrderProblems(input: { side: DemoSide; leg: 'stop' | 'limit'; price: number | null; quantity: number; anchor: number | null }): string[] {
+  const problems: string[] = [];
+  if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > DEMO_RECORD_MAX_QUANTITY) problems.push(`qty ${input.quantity} mimo 1–${DEMO_RECORD_MAX_QUANTITY}`);
+  if (input.anchor == null) return [...problems, 'chybí čerstvá cena workeru'];
+  if (input.price == null || !(input.price > 0) || !onDemoTick(input.price)) return [...problems, 'noha bez platné ceny na tick'];
+  const dir = input.side === 'Buy' ? 1 : -1;
+  const gain = (input.price - input.anchor) * dir;
+  if (input.leg === 'stop' ? gain > -DEMO_MIN_BRACKET_POINTS : gain < DEMO_MIN_BRACKET_POINTS) problems.push(`noha musí být aspoň ${DEMO_MIN_BRACKET_POINTS} b od trhu na správné straně`);
   return problems;
 }
 
@@ -613,9 +664,23 @@ export function dryRunScenario(scenario: DemoScenario, side: DemoSide, anchor: n
       } else if (step.kind === 'place-order') {
         const orderSide = sideOf(step.side);
         const price = step.price ? resolveDemoPrice(step.price, { anchor, dir: orderSide === 'Buy' ? 1 : -1, ticketPrice }) : null;
-        for (const problem of plainOrderProblems({ side: orderSide, orderType: step.orderType, price, quantity: step.quantity, reducing: step.reducing === true, anchor })) {
+        for (const problem of plainOrderProblems({ side: orderSide, orderType: step.orderType, price, quantity: step.quantity, reducing: step.reducing === true, anchor, bare: step.bare === true, marketable: isMarketableRef(step.price) })) {
           problems.push(`${step.label}: ${problem}`);
         }
+      } else if (step.kind === 'place-exit') {
+        const dir = side === 'Buy' ? 1 : -1;
+        const price = roundDemoTick(anchor + dir * (step.leg === 'stop' ? -step.points : step.points));
+        for (const problem of exitOrderProblems({ side, leg: step.leg, price, quantity: step.quantity, anchor })) problems.push(`${step.label}: ${problem}`);
+      } else if (step.kind === 'place-oco') {
+        const dir: 1 | -1 = side === 'Buy' ? 1 : -1;
+        const prices = { sl: roundDemoTick(anchor - dir * step.slPoints), tp: roundDemoTick(anchor + dir * step.tpPoints) };
+        for (const [leg, price] of [['stop', prices.sl], ['limit', prices.tp]] as const) {
+          for (const problem of exitOrderProblems({ side, leg, price, quantity: step.quantity, anchor })) problems.push(`${step.label}: ${problem}`);
+        }
+        tickets.set(step.ticket, {
+          side, dir, entryType: 'Market', prices: { entry: anchor, ...prices }, entryStatus: 'filled', legStatus: 'working',
+          quantities: { entry: step.quantity, sl: step.quantity, tp: step.quantity },
+        });
       } else if (step.kind === 'modify') {
         for (const change of step.changes) {
           if ('plain' in change.target) continue;
@@ -1035,6 +1100,10 @@ export function describeDemoStep(step: DemoStep): string {
         ticket.entry.orderType}${'price' in ticket.entry ? ` @ ${refText(ticket.entry.price)}` : ''}, SL ${refText(ticket.stopLoss)}, TP ${refText(ticket.takeProfit)}`).join(' | ')}`;
     case 'place-order':
       return `${step.label}: ${step.ref} ${step.side === 'opposite' ? 'opačná strana' : 'strana pozice'} ${step.quantity}× ${step.orderType}${step.price ? ` @ ${refText(step.price)}` : ''}${step.reducing ? ' (redukce)' : ''}`;
+    case 'place-exit':
+      return `${step.label}: ${step.ref} samostatný ${step.leg === 'stop' ? 'Stop' : 'Limit'} ${step.quantity}× ${step.points} b od trhu`;
+    case 'place-oco':
+      return `${step.label}: ${step.ticket} OCO ${step.quantity}×, SL ${step.slPoints} b, TP ${step.tpPoints} b od trhu`;
     case 'modify':
       return `${step.label}: ${step.changes.map(change => `${targetText(change.target)}${change.price ? ` → ${refText(change.price)}` : ''}${change.quantity ? ` qty ${change.quantity}` : ''}${change.orderType ? ' → Market' : ''}${change.throughMarket ? ' (přes trh)' : ''}`).join(', ')}`;
     case 'cancel':
