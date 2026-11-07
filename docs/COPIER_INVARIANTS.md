@@ -2048,6 +2048,10 @@ existující ochranu.
   (`tests/livePhoneTrade.test.ts`). Odesílání z telefonu je nová cesta do
   jádra a půjde přes INV-* a critic.
 
+- **Upozornění na cenu na PC (6. 11. 2026):** čáry alertů leží pod čarami příkazů (z 14 pod z-115), dialog a seznam pod
+  hlavičkou LIVE (z-700 pod z-800), takže OFF zůstává klikatelné. Otevřený dialog (`role="dialog"`, `aria-modal`) ztiší
+  klávesové zkratky včetně Shift+F, jako ostatní dialogy; Esc nebo klik vedle ho zavře. Alert nemá cestu k příkazu.
+
 ### INV-UI-03: Retained risk, „rozhodnutí dne“ a poslední worker status jsou pouze zobrazení
 
 - Proč: Udržení hodnoty při krátkém výpadku zlepšuje čitelnost, ale její stáří

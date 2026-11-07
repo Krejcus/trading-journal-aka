@@ -143,6 +143,8 @@ interface Props {
   liveFills?: LiveChartFills | null;
   /** Přihlášený uživatel — jen klíč knihovny šablon SL/TP na zařízení; chybí = jen vestavěná šablona. */
   userId?: string | null;
+  /** Kdo hlídá upozornění na cenu (jen text); null = teď nikdo. */
+  alertWatch?: string | null;
   // ── C7/C8 (4. 11. 2026) ──
   /** Nabídka × u vlastní holé pozice (`liveBareCloseOffer`, jen zobrazení); chybí = žádná. */
   bareClose?: LiveBareCloseOffer | null;
@@ -249,6 +251,7 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')
   && (left.liveFills?.key ?? 'none') === (right.liveFills?.key ?? 'none')
   && (left.userId ?? null) === (right.userId ?? null)
+  && (left.alertWatch ?? null) === (right.alertWatch ?? null)
   && JSON.stringify(left.bareClose ?? null) === JSON.stringify(right.bareClose ?? null)
   && left.onBareClose === right.onBareClose
   && JSON.stringify(left.bareLegTrade ?? null) === JSON.stringify(right.bareLegTrade ?? null)

@@ -28,6 +28,8 @@ export interface TradeToast {
   sticky: boolean;
   /** Jak dlouho karta vydrží (ms); jinak TRADE_TOAST_MS. Upozornění na cenu 8 s. */
   ms?: number;
+  /** Upozornění na cenu: karta v barvě alertu, rozhoupaný zvoneček a ubíhající čas. */
+  alertColor?: string;
 }
 
 const price = (value: number | undefined) => (value == null ? '—' : value.toFixed(2));
@@ -79,6 +81,16 @@ export function copyEventToast(event: CopierCopyEvent): TradeToast | null {
 /** Nové události od posledního zobrazení (první načtení si komponenta jen zapamatuje). */
 export function newCopyEvents(events: readonly CopierCopyEvent[] | undefined, seen: ReadonlySet<string>): CopierCopyEvent[] {
   return (events ?? []).filter(event => !seen.has(event.id));
+}
+
+/** Nejvýš tolik karet mimo kopírku (upozornění), ať nevytlačí kartu plnění nebo rizika. */
+export const EXTRA_TOAST_MAX = 2;
+
+/** Ze seznamu nechá jen posledních `EXTRA_TOAST_MAX` karet mimo kopírku, ostatních se nedotkne. */
+export function capExtraToasts<T extends { id: string }>(all: readonly T[], isExtra: (toast: T) => boolean): T[] {
+  const extras = all.filter(isExtra);
+  const drop = new Set(extras.slice(0, Math.max(0, extras.length - EXTRA_TOAST_MAX)));
+  return all.filter(toast => !drop.has(toast));
 }
 
 /**

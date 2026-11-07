@@ -61,6 +61,7 @@ import {
   Trash2,
   Unlock,
   Zap,
+  Bell,
 } from 'lucide-react';
 import { Trade } from '../types';
 import { DAY_ANCHOR_ACCOUNT_ID } from '../lib/dayJournal';
@@ -388,6 +389,8 @@ interface CandleKitTradeChartProps {
   liveSeries?: boolean;
   /** Přípona položek objednávky v pravém menu (LIVE: „· návrh“ — jen vyplní panel). */
   chartOrderLabelSuffix?: string;
+  /** LIVE: pravý klik → rychlý alert na ceně pod kurzorem. Jen upozornění, nic neobchoduje. */
+  onQuickPriceAlert?: (price: number) => void;
   onChartOrder?: (
     input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number },
     candle: MarketCandle | null,
@@ -2241,6 +2244,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   managedPositionBoxes = [],
   showManagedPositionBoxes = true,
   chartOrderQuantity,
+  onQuickPriceAlert,
   onChartOrder,
   onPositionQuickOrder,
   positionQuickOrderDisabledReason,
@@ -2611,7 +2615,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const menuWidth = 236;
     // Dvě položky s objednávkami menu prodlouží — bez toho by se u spodního
     // okraje ořízlo.
-    const menuHeight = onChartOrder ? 240 : 160;
+    const menuHeight = (onChartOrder ? 240 : 160) + (onQuickPriceAlert ? 37 : 0);
     setContextMenu({
       left: Math.max(6, Math.min(event.clientX, window.innerWidth - menuWidth - 6)),
       top: Math.max(6, Math.min(event.clientY, window.innerHeight - menuHeight - 6)),
@@ -2624,7 +2628,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       clientX: event.clientX,
       clientY: event.clientY,
     });
-  }, [onChartOrder, priceAtClientY]);
+  }, [onChartOrder, onQuickPriceAlert, priceAtClientY]);
 
   const removeDrawings = useCallback(() => {
     removeManualChartDrawings(apiRef.current?.drawing?.engine);
@@ -6671,6 +6675,21 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             <kbd className="ml-auto text-[10px] font-normal text-[#787b86]">⌥ R</kbd>
           </button>
           <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
+          {onQuickPriceAlert && contextMenu.price != null && <>
+            <button
+              type="button"
+              role="menuitem"
+              className={`flex h-9 w-full items-center px-2 text-left outline-none transition-colors ${isDark ? 'hover:bg-[#2a2e39] focus-visible:bg-[#2a2e39]' : 'hover:bg-[#f0f3fa] focus-visible:bg-[#f0f3fa]'}`}
+              onClick={() => { const { price } = contextMenu; setContextMenu(null); if (price != null) onQuickPriceAlert(price); }}
+            >
+              <span className="mr-2 flex h-6 w-6 shrink-0 items-center justify-center" aria-hidden="true">
+                <Bell size={15} strokeWidth={1.55} />
+              </span>
+              Rychlý alert
+              <span className="ml-auto font-mono text-[10px] font-normal text-[#787b86]">{(Math.round(contextMenu.price / positionDefaultsForRoot(resolvedInstrumentRoot).tickSize) * positionDefaultsForRoot(resolvedInstrumentRoot).tickSize).toFixed(2)}</span>
+            </button>
+            <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
+          </>}
           {onAddChartNote && <>
             <button
               type="button"

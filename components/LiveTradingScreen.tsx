@@ -23,6 +23,7 @@ import LiveHotkeysHelp, {
 } from './LiveHotkeysHelp';
 import LiveGroupChip from './LiveGroupChip';
 import LiveTradeToasts from './LiveTradeToasts';
+import { LivePcAlertDialogs, LivePcAlertsButton, useLivePcPriceAlerts } from './LivePcPriceAlerts';
 import { QuantumSpinner } from './QuantumLoader';
 import ChartDataStatus from './ChartDataStatus';
 import { useDayChartData } from '../hooks/useDayChartData';
@@ -207,6 +208,8 @@ interface Props {
   liveFills?: LiveChartFills | null;
   /** Přihlášený uživatel — jen klíč knihovny šablon SL/TP na zařízení (U8); výchozí null. */
   userId?: string | null;
+  /** Kdo hlídá upozornění na cenu (jen text); null = teď nikdo. */
+  alertWatch?: string | null;
   // ── C7/C8 (4. 11. 2026): výchozí hodnoty = dnešní chování ──
   /** Nabídka × u vlastní holé pozice (desk `liveBareCloseOffer`, jen zobrazení); výchozí null. */
   bareClose?: LiveBareCloseOffer | null;
@@ -258,7 +261,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveLimitSupported, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
-  workingOrders = null, liveFills = null, userId = null,
+  workingOrders = null, liveFills = null, userId = null, alertWatch = null,
   bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange,
 }) => {
   const now = useMinuteNow();
@@ -661,8 +664,11 @@ const LiveTradingScreen: React.FC<Props> = ({
     [attachLines, draft, liveLines, picked?.short, quote, ticketOpen],
   );
 
+  const priceAlerts = useLivePcPriceAlerts({ conditionMarket: candleClose, watching: alertWatch });
+  const priceAlertBridge = priceAlerts.bridge;
   const liveOrderEntry = useMemo<LiveOrderEntryBridge>(() => ({
     executionInstrument: ROOT,
+    priceAlerts: priceAlertBridge,
     chartOrderQuantity: draft && quote ? Math.max(1, ticketQuantity(draft, INSTRUMENT, quote)) : liveTicketInitialQuantity(ticketPrefs, entryMaxContracts),
     orderLines,
     onEscape: event => hotkeyHandlerRef.current(event, true),
@@ -791,7 +797,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
+  }), [priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít
@@ -972,7 +978,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           {lineNotice && <div role="status" className={`absolute left-1/2 top-2 z-[700] max-w-[440px] -translate-x-1/2 rounded-lg border px-3 py-1.5 text-[11.5px] font-bold shadow-lg ${lineNotice.tone === 'ok'
             ? 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200'
             : lineNotice.tone === 'bad' ? 'border-rose-500/40 bg-rose-950/90 text-rose-200' : 'border-amber-500/40 bg-amber-950/90 text-amber-100'}`}>{lineNotice.text}</div>}
-          <LiveTradeToasts events={copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined} copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} />
+          <LiveTradeToasts events={copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined} extra={priceAlerts.cards} capExtra copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} />
           {chart.candles.length > 0 ? (
             <AlphaTradeChartWorkspace
               key={day}
@@ -986,6 +992,7 @@ const LiveTradingScreen: React.FC<Props> = ({
               initialCandles={chart.candles}
               isDark={isDark}
               toolbarEnd={<>
+                <LivePcAlertsButton alerts={priceAlerts} isDark={isDark} />
                 <LiveFillAnnounceToggle isDark={isDark} />
                 <LiveHotkeysHelp isDark={isDark} enabled={hotkeysOn} onEnabledChange={changeHotkeys} open={hotkeysHelp} onOpenChange={setHotkeysHelp} />
                 <LiveThemeToggle isDark={isDark} preference={themePreference} />
@@ -1070,6 +1077,7 @@ const LiveTradingScreen: React.FC<Props> = ({
         </aside>
         </div>
       </div>
+      <LivePcAlertDialogs alerts={priceAlerts} lastPrice={lastPrice} conditionMarket={candleClose} watching={alertWatch} isDark={isDark} />
     </div>
   );
   return createPortal(screen, document.body);

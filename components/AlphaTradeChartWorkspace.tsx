@@ -99,6 +99,7 @@ import GenericDrawingSettingsDialog from './GenericDrawingSettingsDialog';
 import PositionDrawingSettingsDialog, { PositionDrawingFloatingToolbar } from './PositionDrawingSettingsDialog';
 import { isPositionDrawing, type PositionDrawing } from '../services/chartPositionDrawing';
 import { countChartIndicators } from '../services/chartContextMenu';
+import type { LivePcAlertBridge } from './LivePcPriceAlerts';
 import { useResetViewOnOpen } from '../hooks/useResetViewOnOpen';
 import { captureChartViewport, type AnchoredChartViewport } from '../services/chartViewportContinuity';
 import BacktestOrderLinesOverlay from './BacktestOrderLinesOverlay';
@@ -305,6 +306,8 @@ export interface BacktestChartSessionBridge {
  */
 export interface LiveOrderEntryBridge {
   executionInstrument: MarketRoot;
+  /** Upozornění na cenu (rychlý alert z pravého kliku, čáry). Nic neobchoduje. */
+  priceAlerts?: LivePcAlertBridge;
   /** ⚡ z vybraného position boxu → návrh v panelu; box v grafu zůstává. */
   onQuickOrder: (context: { drawing: PositionDrawing; instrument: MarketRoot }) => { ok: boolean; message: string };
   /** Počet kontraktů pro pravý klik do grafu (stejné číslo jako v panelu). */
@@ -1221,6 +1224,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             liveSeries={Boolean(context.liveOrderEntry)}
             // Pravý klik do grafu jen vyplní panel Objednávka (LIVE i backtest).
             chartOrderLabelSuffix={context.liveOrderEntry || context.backtestSession ? ' · návrh' : undefined}
+            // Za přehrávání je cena pod kurzorem historická: alert jen v živém panelu exekuce.
+            onQuickPriceAlert={liveReplayLocked ? undefined : liveOrderEntry?.priceAlerts?.quickAdd}
             onChartOrder={config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.onChartOrder
               : liveChartOrder}
@@ -1271,6 +1276,9 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onChange={() => {}}
             />
           )}
+          {chartApi && liveOrderEntry?.priceAlerts && !liveReplayLocked ? (
+            liveOrderEntry.priceAlerts.renderLines(chartApi, context.isDark)
+          ) : null}
           {/* Připojený i bez čar: pojistka změny nabídky musí přežít stav bez čáry (čekající → nic → pozice). */}
           {chartApi && orderLineSource?.onOrderLineChange && orderLineSource.onOrderLineCancel ? (
             <BacktestOrderLinesOverlay
@@ -3036,6 +3044,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     };
     const handleDoubleClick = (event: MouseEvent) => {
       const target = event.target as Element;
+      // Dvojklik na čáru upozornění otevře nastavení upozornění, ne vybrané kresby.
+      if (target.closest?.('[data-alert-line]')) return;
       const splitter = target.closest?.('.flexlayout__splitter') as HTMLElement | null;
       const viaOverlay = !splitter
         && lastSplitter != null

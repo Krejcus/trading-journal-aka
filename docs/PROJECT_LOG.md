@@ -293,6 +293,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Proč:** telefon po každé čisté instalaci začínal na 5m a nastavení se drželo jen v zařízení. Filip chce synchronizaci. `lib/chartView.ts` jde na server v profilu grafů (`user_chart_profiles`, `view`), poslední změna platí všude a přežije reinstalaci.
 - **Návrat z pozadí na telefonu:** graf LIVE neměl zapnuté sledování okraje (`followEdge`), proto po doplnění svíček zůstal stát. Zapnuto jako na PC; kdo se dívá do historie, tomu se záběr nehýbe.
 - **Pravidla:** telefon přebírá hned; otevřený graf na PC se nepřestavuje, nové nastavení vezme při dalším otevření, a nezapisuje zpět nic, dokud v něm uživatel něco nezmění (jinak by starý stav přepsal novější). Backtest je mimo. Telefonní `auto` je na PC jeden graf. Neověřeno v živém provozu mezi dvěma zařízeními.
+### 2026-11-06 — Upozornění na cenu na PC (Claude, větev `claude/pc-price-alerts-20261106`, web nasazen 7. 11. po Filipově „nasaď“, worker beze změny)
+
+- **Zadání (Filip):** pravý klik do grafu = rychlý alert, dvojklik = otevřít a upravit. Data a hlídání se nemění, jsou společné s telefonem (Mac worker z IBKR, bez TradingView).
+- **Stavba:** `components/LivePcPriceAlerts.tsx` (hook, čáry, zvoneček, dialogy). Znovupoužívá `LivePhoneAlerts` s přepínači `mouse` a `pc`; most přes `LiveOrderEntryBridge.priceAlerts`, ať se kód netáhne do backtestu. Jen panel exekuce (MNQ) a mimo přehrávání.
+- **Proč takhle:** čáry alertů leží pod čarami příkazů (z 14 pod z-115), dialog pod hlavičkou LIVE (z-700 pod z-800), takže OFF je klikatelné; `aria-modal` ztiší zkratky. Karta hlásí stav hlídání už při ukládání (online je hned po založení vždy `syncing`, „Hlídá“ bez „Ukládám“ jen po uložení), trvalé odmítnutí i výpadek serveru dávají vlastní kartu, nová úprava maže starou chybu ve store (i telefon). Kanály PC jsou nezávislé (karta, hlas, zvuk), alert má vlastní tón. Karty upozornění mají v LIVE a na telefonu strop 2 (`capExtra`), backtest beze změny. Uložený směr bere close svíčky jako telefon (INV-UI-04). Tah spuštěného alertu až po výběru, protože tah ho znovu zapne.
+- **Vzhled (Filip):** okno na PC je vlastní kompaktní skleněná karta Aurora (řádky popisek vlevo, ovládání vpravo; `AlertWindow` v `LivePcPriceAlerts.tsx`), list telefonu je beze změny. Barva z palety `TradingViewColorPicker` včetně krytí (`line.color` #rrggbb, `line.opacity`), zvuk z rozbalovací nabídky s ukázkou a posuvníkem hlasitosti: 35 nahrávek z Kenney Interface Sounds (CC0, `public/sounds/alerts`, soubory TradingView jsme nepřevzali kvůli autorským právům), 10 složených Agresivní (`lib/priceAlertTones.ts`) nebo vlastní soubor do 1 MB a 10 s, uložený jen v tomto prohlížeči v IndexedDB (`services/priceAlertSounds.ts`), chybějící spadne na výchozí tón (`channels.tone`, jen PC; bez migrace, jsonb). Čára na PC jde až k cenové ose a končí klidným průsvitným štítkem se zvonečkem a cenou (jde za něj táhnout, plná barva jen při výběru a spuštění), po najetí je u ceny křížek na smazání. Stavěno po 2. kole criticu, jen vzhled; z-700 pod hlavičkou a `aria-modal` zachovány.
+- **Spuštění na PC (Filip vybral z náhledů):** na poslední svíčce prsten, doleva světelná vlna, čára k ceně a klidná záře štítku (`lib/alertFireEffect.ts` + `AlertFireEffect`, plátno pod čarami příkazů), karta vlevo dole se zvonečkem a ubíhajícím časem. „Vyzkoušet“ ukáže totéž jen v zařízení, nezapisuje událost. Prsten se kreslí jen se svíčkou ve výřezu, omezené animace = klidný prsten.
+- **Sdílené s telefonem:** `useFreshPriceAlertEvents`, `priceAlertEventTitle`; na iPhone až s dalším buildem.
+- **Ověřeno:** critic kola 1 a 2 = OPRAVIT PŘED COMMITEM, nálezy opraveny; třetí kolo se podle pravidla nekoná. QA náhled se skutečným grafem, syntetickými svíčkami a bez přihlášení: založení, dvojklik, cena, barva, tah (simulované události s mezikroky), výběr, ×, seznam, Esc, OFF nad dialogem, kolečko, strop karet, tmavý i světlý motiv. Spuštění jen s nasimulovanou událostí.
+- **Neověřeno:** přihlášený účet (server, stav „Hlídá Mac“, skutečné překročení ceny a web push), slyšitelný tón.
+- **Známé limity:** karta a hlas jen s otevřeným LIVE grafem; hlas alertu může o větu zdržet hlášení plnění (vědomě přijato); nad čárou (10 px) nejde crosshair.
+### 2026-11-07 — Animace čip ↔ čára (Claude, web + iPhone, Filip „Sedí, nasaď“)
+
+- Tah čipu ho roztáhne do štítku a čáry, ghost drží místo do příchodu nohy, × ji složí zpět. Jen zobrazení v `BacktestOrderLinesOverlay`, tedy i v backtestu; worker beze změny. Pohyb posoudil Filip v náhledu `tests/qa/live-legs.tsx`.
+
 ### 2026-11-06 — Slepé hodnocení v Backtestu (Claude, větev claude/blind-review-20261106)
 
 Filip chce kalibrovat automatický backtest ve svém Backtestu, ne na samostatné stránce. Každý případ je dočasná session
@@ -302,13 +317,14 @@ neobejde žádná cesta kurzoru; bez něj je setter průchozí. Odpověď se uk�
 `backtest_blind_reviews` a pak je zamčená; sadu vkládá Claude přes CLI, klient smí měnit jen `answers` a `marks`.
 Jádra kopírky se změna nedotýká. Nasazeno 7. 11. na Filipovo „nasaď“.
 
-### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude, větev `claude/chart-position-ui-20261106`, NENASAZENO)
+### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude; 7. 11. NASAZENO z `ad55ef07`: migrace, web, worker `--tv off`, iPhone 18 Pro Max, Filip „nasad market“)
 
 - Filip: natáhnu nohu a je u brokera, × ji zruší a vrátí čip. Podklad: `docs/reviews/instant-legs-design-20261106.md`, DEMO `record-legs.ts`. Capability `manual-order-single-leg-v1`, jen sólo manual-only DEMO a vlastní holý Market; Limit bez nohou a čekající vstupy zatím ne.
 - Filip přijal: × na SL nechá pozici bez stropu. Obchoduje jen z appky, proto noha na flat účtu = jen incident, bez automatického zrušení.
 - Critic: návrh kolo 1 BLOKUJE, diff kolo 2 OPRAVIT, nálezy P1 a P2-5 až P2-8 zapracované, další kolo už neproběhlo.
 - Vědomá odchylka: během surového zápisu Flatten leadera vynechá a vrátí `flat:false` s incidentem, stejně jako dnes u attach a ×. Krátké čekání je následná úprava.
-- Neověřeno: nic z toho nešlo přes worker na DEMO; migrace `20261106210000` neaplikovaná a její SQL test neběžel (lokálně není Postgres); Flatten v mezeře výměny není testovaný; TIF samostatného Stopu neznámý. Pořadí nasazení: migrace, web a relay, worker, iPhone.
+- Neověřeno: nic z toho zatím neběželo přes worker na DEMO (trh zavřený, přidání nohy chce čerstvou cenu); SQL test migrace neběžel (lokálně není Postgres), v produkci ověřena jen přítomnost `remove-leg`; Flatten v mezeře výměny netestovaný; TIF samostatného Stopu neznámý.
+- Limit a Stop bez nohou: nepostaveno. Filip chce počítat s víc účty, proto nový návrh; dnešní verze je jen sólo DEMO.
 
 ### 2026-11-06 večer — Limit bez SL/TP: rozhodnutí a skript pro DEMO (Claude, větev `claude/chart-position-ui-20261106`, nic nenasazeno)
 

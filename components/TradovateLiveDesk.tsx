@@ -1994,6 +1994,8 @@ acceptAgentStatus((await executeAgent({
   const selectedLiveAccount = (displaySnapshot ?? copyTradeSnapshot)?.accounts.find(a => a.id === selectedAccountId);
   const selectedMembership = copyGroups.find(g => g.leaderAccountId === selectedAccountId || g.followers.some(f => f.accountId === selectedAccountId));
 
+  const priceAlertWatch = priceAlertWatchLabel({ fresh: agentStatusFresh && !agentStatusRestored, watch: agentStatus?.priceAlertWatch,
+    statusAgeMs: agentStatusObservedAt == null ? null : freshnessNow - agentStatusObservedAt });
   return (
     <div className={`mx-auto max-w-[1500px] space-y-4 ${arrivingFromChart ? 'live-tab-arrive' : ''}`} style={{ paddingBottom: 'var(--live-safety-height, 0px)' }}>
       {/* Běžně se lišta nekreslí (Filip 5. 11.), jediná instance drží dialog Shift+F a hlášky. */}
@@ -2057,6 +2059,7 @@ acceptAgentStatus((await executeAgent({
           workingOrders={chartWorkingOrders}
           liveFills={pcFills}
           userId={userId}
+          alertWatch={priceAlertWatch}
           />
         </ErrorBoundary>
       ) : phoneChartAvailable && tab === 'chart' && phoneChart ? (
@@ -2095,8 +2098,7 @@ acceptAgentStatus((await executeAgent({
             fillsOpen: phoneFills.open,
             fillsSymbol: phoneFills.symbol,
             // Kdo hlídá upozornění na cenu: jen čerstvý neobnovený status s cenou z IBKR (jen text).
-            alertWatch: priceAlertWatchLabel({ fresh: agentStatusFresh && !agentStatusRestored, watch: agentStatus?.priceAlertWatch,
-              statusAgeMs: agentStatusObservedAt == null ? null : freshnessNow - agentStatusObservedAt }),
+            alertWatch: priceAlertWatch,
             // U5: pracující příkazy leadera jen jako čáry pro zobrazení (ověřené čtení příkazů).
             workingOrders: chartWorkingOrders,
             // U8: jen klíč knihovny šablon SL/TP na zařízení (nic neautorizuje).

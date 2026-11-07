@@ -242,3 +242,12 @@ html:not(.light-theme) .dj-wheel-card {
 
 
 @keyframes dj-alert-flash { 0%, 100% { opacity: 1; filter: none; } 50% { opacity: .35; filter: brightness(1.8) drop-shadow(0 0 4px currentColor); } }
+
+/* Spuštění upozornění na PC: karta (grafický efekt kreslí lib/alertFireEffect.ts). */
+.dj-alert-ring { display: inline-block; transform-origin: 50% 10%; animation: dj-alert-ring .9s ease-in-out 3; }
+@keyframes dj-alert-ring { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(18deg); } 45% { transform: rotate(-15deg); } 70% { transform: rotate(9deg); } 85% { transform: rotate(-5deg); } }
+.dj-alert-time { transform-origin: left; animation: dj-alert-time linear both; }
+@keyframes dj-alert-time { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .dj-alert-ring { animation: none; }
+}

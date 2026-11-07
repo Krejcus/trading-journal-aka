@@ -1,11 +1,14 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, alertConditionFor, alertLineCss, alertTitle,
-  createLocalPriceAlertStore, movedAlert, newPriceAlert, readPriceAlertState,
+  DEFAULT_PRICE_ALERT, PRICE_ALERTS_STORAGE_KEY, PRICE_ALERT_DEFAULTS_KEY, alertTagInk, alertConditionFor, alertLineCss, alertTitle,
+  createLocalPriceAlertStore, movedAlert, newPriceAlert, freshPriceAlertEvents, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus, readPriceAlertState,
 } from '../lib/priceAlerts';
+import { ALERT_SOUNDS_BASE, ALERT_SOUND_VOLUME_DEFAULT, ALERT_TONE_GROUPS, CUSTOM_SOUND_MAX_BYTES, CUSTOM_SOUND_MAX_COUNT, DEFAULT_ALERT_TONE, alertToneNotes, alertToneUrl, clampAlertSoundVolume, customSoundProblem, isAlertTone } from '../lib/priceAlertTones';
+import { ALERT_FIRE_MS, alertFirePoint, alertFireRgb, alertWaveFront, drawAlertFire } from '../lib/alertFireEffect';
+import { LIVE_FILL_CUE_PATTERNS } from '../services/liveFillAudio';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../lib/liveFillMarkers';
-import { TRADE_TOAST_MAX, keepStickyToasts } from '../lib/liveTradeToasts';
+import { EXTRA_TOAST_MAX, TRADE_TOAST_MAX, capExtraToasts, keepStickyToasts } from '../lib/liveTradeToasts';
 
 const memory = (initial: Record<string, string> = {}) => {
   const data = { ...initial };
@@ -44,7 +47,7 @@ describe('upozornění na cenu (telefon, 2. 11.)', () => {
     expect(readPriceAlertState(storage).alerts).toHaveLength(0);
 
     const broken = readPriceAlertState(memory({
-      [PRICE_ALERTS_STORAGE_KEY]: JSON.stringify([{ id: 'x', price: -5 }, { id: 'ok', price: 21480.1, line: { color: '#ff0000', width: 'huge' } }, 'junk']),
+      [PRICE_ALERTS_STORAGE_KEY]: JSON.stringify([{ id: 'x', price: -5 }, { id: 'ok', price: 21480.1, line: { color: 'ne-barva', width: 'huge' } }, 'junk']),
       [PRICE_ALERT_DEFAULTS_KEY]: '{',
     }));
     expect(broken.alerts.map(item => item.id)).toEqual(['ok']);
@@ -175,5 +178,193 @@ describe('oponentura 2. 11., 2. kolo', () => {
     const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
     expect(phone).toMatch(/sticky: false, ms \}/);
     expect(phone).toMatch(/draftFromPositionBox\(drawing, LIVE_PHONE_INSTRUMENT, freshQuote\(\) \?\? quoteOf\(lastPrice\)\)/);
+  });
+});
+
+describe('upozornění na cenu na PC', () => {
+  const read = (file: string) => readFileSync(file, 'utf8');
+
+  it('text spuštění: automatický směr tvrdí jen překročení, bez upozornění zůstane úroveň', () => {
+    const alert = newPriceAlert(21480, 21400, DEFAULT_PRICE_ALERT);
+    expect(priceAlertEventTitle(alert, 21480)).toBe(`MNQ překročí ${(21480).toLocaleString('cs-CZ', { minimumFractionDigits: 2 })}`);
+    expect(priceAlertEventTitle({ ...alert, conditionAuto: false }, 21480)).toContain('nahoru přes');
+    expect(priceAlertEventTitle(null, 21480)).toBe('MNQ překročí 21480.00');
+  });
+
+  it('karta rychlého alertu tvrdí „hlídá“ jen když je uložený a Mac hlídá', () => {
+    expect(quickAlertCardStatus(undefined, 'Hlídá')).toMatchObject({ warn: true, line: expect.stringContaining('nepřihlášeno') });
+    expect(quickAlertCardStatus('offline', 'Hlídá')).toMatchObject({ warn: true, line: expect.stringContaining('NEULOŽENO') });
+    expect(quickAlertCardStatus('syncing', 'Hlídá')).toEqual({ warn: false, line: 'Ukládám · Mac hlídá' });
+    expect(quickAlertCardStatus('syncing', null)).toMatchObject({ warn: true, line: expect.stringContaining('NEHLÍDÁ') });
+    expect(quickAlertCardStatus('synced', 'Hlídá')).toMatchObject({ warn: false, line: expect.stringContaining('Hlídá Mac') });
+    expect(quickAlertCardStatus('synced', null)).toMatchObject({ warn: true, line: expect.stringContaining('NEHLÍDÁ') });
+    // Řádek karty se ořezává kolem 42 znaků: stav se musí vejít celý.
+    for (const sync of [undefined, 'offline', 'syncing', 'synced'] as const) {
+      for (const watching of ['Hlídá', null]) expect(quickAlertCardStatus(sync, watching).line.length).toBeLessThanOrEqual(36);
+    }
+  });
+
+  it('kanály na PC jdou každý zvlášť', () => {
+    for (const pc of [true, false]) for (const voice of [true, false]) for (const sound of [true, false]) {
+      expect(pcAlertFiredActions({ channels: { phone: true, pc, voice, sound } })).toEqual({ card: pc, voice, sound });
+    }
+    expect(pcAlertFiredActions(null)).toEqual({ card: true, voice: false, sound: false });
+  });
+
+  it('nové události: první načtení mlčí, stará ani opakovaná se nehlásí', () => {
+    const now = 1_000_000;
+    const old = { id: 'old', at: now - 60_000 };
+    const first = freshPriceAlertEvents(null, [old], now);
+    expect(first.fresh).toEqual([]);
+    const fresh = { id: 'new', at: now - 1_000 };
+    const late = { id: 'late', at: now - 31_000 };
+    const second = freshPriceAlertEvents(first.seen, [old, late, fresh], now);
+    expect(second.fresh).toEqual([fresh]);
+    expect(freshPriceAlertEvents(second.seen, [old, late, fresh], now).fresh).toEqual([]);
+    // Výměna úložiště (přihlášení): volající předá null, staré se znovu nehlásí.
+    expect(freshPriceAlertEvents(null, [fresh], now).fresh).toEqual([]);
+  });
+
+  it('karty upozornění nevytlačí kartu plnění', () => {
+    const fill = { id: 'fill', sticky: false };
+    const extras = Array.from({ length: 5 }, (_, i) => ({ id: `x${i}`, sticky: false }));
+    expect(read('components/LiveTradingScreen.tsx')).toMatch(/extra=\{priceAlerts\.cards\} capExtra/);
+    expect(read('components/day/LivePhoneChart.tsx')).toMatch(/extra=\{cards\} capExtra/);
+    expect(read('components/BacktestWorkspace.tsx')).not.toMatch(/capExtra/);
+    const capped = capExtraToasts([fill, ...extras], toast => toast.id.startsWith('x'));
+    expect(capped.filter(toast => toast.id.startsWith('x'))).toHaveLength(EXTRA_TOAST_MAX);
+    expect(capped.at(-1)?.id).toBe('x4');
+    expect(keepStickyToasts(capped).map(toast => toast.id)).toContain('fill');
+  });
+
+  it('tón upozornění je vlastní, nepůjčuje si tón z pozice', () => {
+    const tones = ALERT_TONE_GROUPS.flatMap(group => group.tones);
+    expect(tones.length).toBeGreaterThanOrEqual(40);
+    expect(new Set(tones.map(tone => tone.id)).size).toBe(tones.length);
+    const fills = Object.values(LIVE_FILL_CUE_PATTERNS).map(pattern => JSON.stringify(pattern));
+    for (const tone of tones) {
+      expect(Boolean(tone.file) !== Boolean(tone.notes), tone.id).toBe(true);
+      // Nahrávka musí být v public a balík nese svou licenci.
+      if (tone.file) expect(existsSync(`public/sounds/alerts/${tone.file}`), tone.file).toBe(true);
+      if (tone.notes) {
+        expect(tone.notes.reduce((sum, note) => sum + note.ms, 0), tone.id).toBeLessThanOrEqual(1_500);
+        expect(fills, tone.id).not.toContain(JSON.stringify(tone.notes.map(({ hz, ms }) => ({ hz, ms }))));
+        expect(tone.volume, tone.id).toBeLessThanOrEqual(0.35);
+      }
+    }
+    expect(read('public/sounds/alerts/License.txt')).toContain('Creative Commons Zero');
+    expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/if \(actions\.sound\) void playAlertTone\(alert\?\.channels\.tone\)/);
+  });
+
+  it('neznámý nebo chybějící zvuk spadne na výchozí; vlastní soubor se ověří', () => {
+    expect(alertToneUrl('neznamy')).toBe(`${ALERT_SOUNDS_BASE}${DEFAULT_ALERT_TONE}.ogg`);
+    expect(alertToneUrl(null)).toBe(`${ALERT_SOUNDS_BASE}${DEFAULT_ALERT_TONE}.ogg`);
+    expect(alertToneUrl('panic')).toBeNull();
+    expect(alertToneUrl('custom:abc-1')).toBeNull();
+    expect(alertToneNotes('custom:abc-1').length).toBeGreaterThan(0);
+    expect(alertToneNotes('confirmation_001').length).toBeGreaterThan(0);
+    expect(clampAlertSoundVolume('140')).toBe(100);
+    expect(clampAlertSoundVolume('x')).toBe(ALERT_SOUND_VOLUME_DEFAULT);
+    expect(isAlertTone('custom:abc-1')).toBe(true);
+    expect(isAlertTone('custom:../x')).toBe(false);
+    expect(isAlertTone('panic')).toBe(true);
+    const file = { name: 'a.mp3', type: 'audio/mpeg', size: 1000 };
+    expect(customSoundProblem(file, 0)).toBeNull();
+    expect(customSoundProblem({ ...file, name: 'a.pdf', type: 'application/pdf' }, 0)).toMatch(/zvukový/);
+    expect(customSoundProblem({ ...file, size: CUSTOM_SOUND_MAX_BYTES + 1 }, 0)).toMatch(/1 MB/);
+    expect(customSoundProblem(file, CUSTOM_SOUND_MAX_COUNT)).toMatch(/Nejvýš/);
+    // Soubory jsou jen v zařízení: žádný upload na server.
+    expect(read('services/priceAlertSounds.ts')).not.toMatch(/supabase|fetch\(/);
+  });
+
+  it('barva z palety a tón přežijí čištění; nesmysl spadne na výchozí', () => {
+    const storage = memory({
+      [PRICE_ALERTS_STORAGE_KEY]: JSON.stringify([
+        { id: 'a', price: 100, condition: 'up', line: { color: '#E91E63' }, channels: { tone: 'panic' } },
+        { id: 'b', price: 100, condition: 'up', line: { color: 'red; x' }, channels: { tone: 'hlasite' } },
+      ]),
+    });
+    const [good, bad] = readPriceAlertState(storage).alerts;
+    expect(good.line.color).toBe('#e91e63');
+    expect(good.channels.tone).toBe('panic');
+    expect(bad.line.color).toBe(DEFAULT_PRICE_ALERT.line.color);
+    expect(bad.channels.tone).toBeUndefined();
+  });
+
+  it('štítek na ose má čitelný text na světlé i tmavé barvě', () => {
+    expect(alertTagInk('#ffffff')).toBe('#0f172a');
+    expect(alertTagInk('#f5b53d')).toBe('#0f172a');
+    expect(alertTagInk('#2962ff')).toBe('#ffffff');
+    expect(alertTagInk('#000000')).toBe('#ffffff');
+  });
+
+  it('Vyzkoušet jen ukáže spuštění v zařízení: žádná událost ani hlídač; vypnutá animace má klid', () => {
+    const source = read('components/LivePcPriceAlerts.tsx');
+    const preview = source.slice(source.indexOf('const preview = useCallback'), source.indexOf('// Trvale odmítnuté uložení'));
+    expect(preview).toMatch(/presentRef\.current\(alert, alert\.price\)/);
+    expect(preview).not.toMatch(/rpc|trigger|store\./);
+  });
+
+  it('spuštění v grafu: vlna doběhne doleva, prsten jen na svíčce ve výřezu; chyba barvy nic neshodí', () => {
+    const fronts = [0, 0.25, 0.5, 0.75, 1].map(t => alertWaveFront(t, 500));
+    expect(fronts[0]).toBeGreaterThan(500);
+    for (let i = 1; i < fronts.length; i += 1) expect(fronts[i]).toBeLessThan(fronts[i - 1]);
+    expect(fronts.at(-1)).toBeLessThan(0);
+    expect(alertFirePoint(300, 600)).toBe(300);
+    expect(alertFirePoint(700, 600)).toBeNull();
+    expect(alertFirePoint(-1, 600)).toBeNull();
+    expect(alertFirePoint(null, 600)).toBeNull();
+    expect(alertFireRgb('#e91e63')).toBe('233,30,99');
+    expect(alertFireRgb('nesmysl')).toBe('245,181,61');
+    const calls: string[] = [];
+    const gradient = { addColorStop: () => undefined };
+    const ctx = new Proxy({}, {
+      get: (_target, key) => (key === 'createLinearGradient' || key === 'createRadialGradient' ? () => gradient : () => { calls.push(String(key)); }),
+      set: () => true,
+    }) as never;
+    // Svíčka mimo výřez: vlna ano, prsten (arc) ne. Ve výřezu i prsten. Po konci nic.
+    drawAlertFire(ctx, { width: 600, y: 100, pointX: 900, ms: 500, color: '#f5b53d' });
+    expect(calls).not.toContain('arc');
+    expect(calls).toContain('stroke');
+    calls.length = 0;
+    drawAlertFire(ctx, { width: 600, y: 100, pointX: 500, ms: 500, color: '#f5b53d' });
+    expect(calls).toContain('arc');
+    calls.length = 0;
+    drawAlertFire(ctx, { width: 600, y: 100, pointX: 500, ms: ALERT_FIRE_MS, color: '#f5b53d' });
+    expect(calls).toEqual([]);
+    // Omezené animace: jen klidný prsten.
+    drawAlertFire(ctx, { width: 600, y: 100, pointX: 500, ms: 500, color: '#f5b53d', reduced: true });
+    expect(calls.filter(call => call === 'arc')).toHaveLength(2);
+  });
+
+  it('nic neobchoduje a nesahá na kopírku ani příkazy', () => {
+    const source = read('components/LivePcPriceAlerts.tsx');
+    expect(source).not.toMatch(/from ['"][^'"]*(tradovate|copier|relay|broker|leaderOrderManage|livePhoneOrders)[^'"]*['"]/i);
+    expect(source).not.toMatch(/fetch\(|supabase|invoke\(/);
+  });
+
+  it('jen živý panel exekuce, za přehrávání nic; čáry leží pod čarami příkazů', () => {
+    const workspace = read('components/AlphaTradeChartWorkspace.tsx');
+    expect(workspace).toMatch(/onQuickPriceAlert=\{liveReplayLocked \? undefined : liveOrderEntry\?\.priceAlerts\?\.quickAdd\}/);
+    expect(workspace).toMatch(/liveOrderEntry\?\.priceAlerts && !liveReplayLocked/);
+    expect(workspace.indexOf('priceAlerts.renderLines(chartApi, context.isDark)')).toBeLessThan(workspace.indexOf('<BacktestOrderLinesOverlay'));
+    expect(read('components/day/LivePhoneAlerts.tsx')).toMatch(/overflow: 'hidden', zIndex: 14/);
+    expect(read('components/BacktestOrderLinesOverlay.tsx')).toMatch(/absolute inset-0 z-\[115\]/);
+    // Kód upozornění se netáhne do backtestu a detailu obchodu.
+    expect(workspace).toMatch(/import type \{ LivePcAlertBridge \}/);
+  });
+
+  it('dialog leží pod hlavičkou LIVE, OFF zůstává klikatelné', () => {
+    const alerts = read('components/LivePcPriceAlerts.tsx');
+    expect(alerts).toMatch(/fixed inset-x-0 bottom-0 top-11 z-\[700\]/);
+    // Okno bez portálu, jen nabídka zvuků jde přes body (okno by ji ořízlo).
+    expect(alerts).toMatch(/return \(\n    <div className="fixed inset-x-0 bottom-0 top-11/);
+    expect(alerts.match(/createPortal\(/g)).toHaveLength(1);
+    expect(read('components/LiveTradingScreen.tsx')).toMatch(/live-chart-header relative z-\[800\] flex h-11/);
+  });
+
+  it('dialog ztiší klávesové zkratky; dvojklik na čáru neotevře nastavení vybrané kresby', () => {
+    expect(read('components/LivePcPriceAlerts.tsx')).toMatch(/role="dialog"\s+aria-modal="true"/);
+    expect(read('components/AlphaTradeChartWorkspace.tsx')).toMatch(/closest\?\.\('\[data-alert-line\]'\)\) return;/);
   });
 });

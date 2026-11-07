@@ -276,6 +276,8 @@ export function createServerPriceAlertStore(deps: {
   void pull();
 
   const enqueue = (op: PendingOp) => {
+    // Nová úprava: stará chyba už neplatí. Stejná chyba znovu se musí zase ukázat.
+    error = null;
     queue.set(op.alert.id, op);
     rebuild();
     void flush();
