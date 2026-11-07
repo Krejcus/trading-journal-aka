@@ -19,6 +19,8 @@ import { LIVE_ACTION_CHANGED_TEXT } from '../../lib/liveClickGate';
 import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/liveCommandRuns';
 import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../../hooks/useLiveFillAnnouncer';
+import { useLivePositionBoxFollow } from '../../hooks/useLivePositionBoxFollow';
+import LiveChartAutomationSettings, { LiveBoxFollowPane } from '../LiveChartAutomationSettings';
 import { previewSymbolFromChartSource } from '../../lib/leaderEntryPreview';
 import { useLiveNoPriceNotice, useLiveResumeState } from '../../hooks/useLiveResumeState';
 import { LIVE_ATTACH_SENT_HOLD_MS, LIVE_BARE_QUOTE_MAX_AGE_MS, liveAttachDefaults, liveAttachIntent, liveQuoteStaleText } from '../../lib/liveBareEntry';
@@ -301,6 +303,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   // Pozice v grafu: čáry vstupu a SL/TP z read modelu (jen zobrazení, neověřené = žádné čáry).
   // Pozici kreslí štítky jako na PC (LivePhoneOrderLines) v každém okně grafu (U3).
   const chartPosition = slots.position;
+  // Telefon nemá výběr účtu, pohled je pro zařízení vždy tentýž.
+  const registerBoxFollow = useLivePositionBoxFollow({ position: chartPosition, target: 'phone', events: slots.copyEvents });
   // Šipky plnění: jen dnešní den a jen plnění, která deník ještě nekreslí (stejné id plnění u brokera).
   const journalFillIds = useMemo(() => new Set(ctl.chart.chartTrades.flatMap(trade => trade.executionHistory?.fills.map(fill => String(fill.id)) ?? [])), [ctl.chart.chartTrades]);
   // Kontrakt grafu: IBKR zdroj nese konkrétní měsíc; souvislá řada TV = front od brokera; jinak pozice.
@@ -594,6 +598,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         // pracující příkazy (U5) a ✎ správy (U10) v měřítku toho okna; zámek jednoho příkazu
         // (`lineState`) je společný. Za přehrávání nic — graf je historický (INV-UI-01).
         paneLayer: ({ api, replay, active, lastPrice }) => (api && !replay ? <>
+          <LiveBoxFollowPane api={api} register={registerBoxFollow} />
           {noPriceNotice && (
             <div aria-live="polite" style={{ position: 'absolute', top: 12, left: 0, right: 0, zIndex: 6, pointerEvents: 'none', display: 'flex', justifyContent: 'center' }}>
               <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, background: isDark ? '#1e293b' : '#fff', color: isDark ? '#e2e8f0' : '#0f172a', boxShadow: '0 1px 4px rgba(0,0,0,.25)' }}>
@@ -708,7 +713,13 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
           {notice && <LiveChartNotice key={notice.key} text={notice.text} onDone={clearNotice} />}
         </>,
         // Menu ⋯: zvuk / hlas při fillu (U7) — opt-in, výchozí Vypnuto.
-        hubExtra: <LiveFillAnnounceSetting mode={fillMode} onMode={setFillMode} />,
+        hubExtra: <>
+          <LiveFillAnnounceSetting mode={fillMode} onMode={setFillMode} />
+          <p style={{ margin: '18px 0 6px', fontSize: 10.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dj-muted)' }}>Automatika</p>
+          <div style={{ borderRadius: 14, border: '1px solid var(--dj-line)', padding: '6px 12px 10px' }}>
+            <LiveChartAutomationSettings isDark={isDark} />
+          </div>
+        </>,
         symbol: LIVE_PHONE_INSTRUMENT.symbol,
         toolbar: <>
           <LivePhoneAlertsButton count={alertState.alerts.filter(alert => alert.status !== 'triggered').length} onClick={() => setAlertList(true)} />
