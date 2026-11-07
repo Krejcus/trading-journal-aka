@@ -58,6 +58,13 @@ struct AlphaTradeLiveActivityAttributes: ActivityAttributes {
         var armExpiresAt: Double? = nil
         var followersTotal: Int? = nil
         var followersOk: Int? = nil
+        /// Upozornění na cenu, jen zobrazení. Plochá pole: špatný typ ve vnořeném
+        /// objektu by zahodil celý stav včetně rizika.
+        var priceAlertSymbol: String? = nil
+        var priceAlertLevelText: String? = nil
+        var priceAlertDirection: String? = nil
+        var priceAlertNote: String? = nil
+        var priceAlertAt: Double? = nil
         /// Kolik stojí zásah stopu napříč všemi účty skupiny. Server ho počítá
         /// z hodnoty bodu kontraktu, kterou widget nezná.
         var riskAtStopText: String? = nil

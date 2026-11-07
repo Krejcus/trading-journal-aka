@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-07 — Upozornění na cenu na telefonu (Claude, větev `claude/phone-price-alerts-20261107`, web a iPhone nasazeny 7. 11. po Filipově „nasaď“, worker beze změny)
+
+- **Zadání (Filip, z náhledů):** číselník a maják 🚨 s obíhajícím světlem. Notifikace `time-sensitive` s textem „🚨 MNQ 21 482,00 / směr / zpráva“, tlačítka Otevřít graf a Zapnout znovu, vlastní zvuk z nabídky (45 wav v balíčku appky, stejné nahrávky i na webu místo ogg).
+- **V appce:** vlna po čáře, karta s číselníkem a majákem, výběr zvuku v nastavení. Nativně v popředí hraje zvuk jen notifikace, aby nezněl dvakrát.
+- **Island a karta na zámku:** critic zamítl přehrávání uloženého stavu (stará pozice by vypadala čerstvě, novější rizikový update by se zahodil, sloupec by dostal P&L do DB) i vlastní spuštění aktivity bez pozice (rozbije start karty při ARM). Hotová varianta: alert jede v běžné aktualizaci z plánu v tiku a cronu, ne v `end`, rizikovém ani offline stavu, jednou rozbalí Island bez zvuku. Bez migrace. Zpoždění ≤ 5 s při ARM, jinak ≤ 60 s; okamžitá je notifikace. **Island bez běžící aktivity (flat, bez ARM) se nestaví, zůstává notifikace.**
+- **Zapnout znovu:** nejdřív čerstvý stav ze serveru, výsledek ukáže kartu. Riziková notifikace dál vede na přehled (INV-UI-02).
+- **Ověřeno:** critic 2 kola, nálezy opraveny; iOS překlad s oprávněním podepsaný. **Neověřeno:** vše na iPhonu: naléhavost, zvuk v notifikaci, výška karty s pozicí, rozbalení Islandu.
+- **K rozhodnutí:** entitlement poprvé zapíná průchod Focusem i u pushů o obchodech a snímcích.
+
 ### 2026-11-07 — Zobáček do současnosti, position box s pozicí, zvuky SL/TP (Claude, web + iPhone, Filip „Ano, začni“)
 
 - **Zobáček (`components/day/ChartJumpToNow.tsx`, jen telefonní graf):** podle TradingView; vidět jen s poslední svíčkou mimo záběr. `scrollToRealTime` nejde, skončil by na prázdné ose budoucnosti, proto `jumpToNow` v `lib/liveChartFollow.ts`.

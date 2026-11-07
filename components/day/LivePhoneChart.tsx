@@ -42,8 +42,11 @@ import {
 } from './LivePhoneOrderLines';
 import { LivePhoneAlertLines, LivePhoneAlertList, LivePhoneAlertSheet, LivePhoneAlertsButton, LivePhoneCrosshairPlus, LivePhonePlusSheet } from './LivePhoneAlerts';
 import { alertTitle, movedAlert, newPriceAlert, priceAlertEventTitle, type PriceAlert } from '../../lib/priceAlerts';
-import { useFreshPriceAlertEvents, usePriceAlertStore } from '../../services/priceAlertStoreHook';
+import { PRICE_ALERT_REARM_EVENT, useFreshPriceAlertEvents, usePriceAlertStore } from '../../services/priceAlertStoreHook';
+import { isNativeBuild } from '../../utils/runtimeConfig';
 import { alertVoiceText, speakAlertText } from '../../services/alertVoice';
+import { playAlertTone } from '../../services/priceAlertSounds';
+import { ALERT_FIRE_MS } from '../../lib/alertFireEffect';
 import { useLiveFillArrows } from './useLiveFillArrows';
 import { liveFillsNotInJournal } from '../../lib/liveFillMarkers';
 import type { LiveFillMarker } from '../../lib/liveFillMarkers';
@@ -392,9 +395,9 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   // Karty vlevo dole, které nevznikly z událostí kopírky (upozornění).
   const [cards, setCards] = useState<TradeToast[]>([]);
   // Lokální karty nikdy nejsou sticky (nesmí se hromadit nad lištou ani vytlačit kartu rizika).
-  const card = useCallback((tone: TradeToast['tone'], badge: string, title: string, line: string, ms?: number) => {
+  const card = useCallback((tone: TradeToast['tone'], badge: string, title: string, line: string, ms?: number, extra?: Pick<TradeToast, 'alertColor' | 'alertBeacon'>) => {
     const at = Date.now();
-    setCards(current => [...current.slice(-5), { id: `local-${at}-${Math.random().toString(36).slice(2, 6)}`, at, tone, badge, title, line, pnl: null, accounts: 0, sticky: false, ms }]);
+    setCards(current => [...current.slice(-5), { id: `local-${at}-${Math.random().toString(36).slice(2, 6)}`, at, tone, badge, title, line, pnl: null, accounts: 0, sticky: false, ms, ...extra }]);
   }, []);
   // Upozornění na cenu: přihlášený = server (sdílené s PC, hlídá Mac worker z IBKR), jinak jen zařízení.
   const alertStore = usePriceAlertStore();
@@ -407,6 +410,15 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [alertList, setAlertList] = useState(false);
   const [plus, setPlus] = useState<number | null>(null);
   const [flashIds, setFlashIds] = useState<ReadonlySet<string>>(() => new Set());
+  // „Zapnout znovu“ z notifikace: výsledek musí být vidět, jinak by člověk věřil, že alert hlídá.
+  useEffect(() => {
+    const onRearm = (event: Event) => {
+      const ok = (event as CustomEvent<{ ok?: boolean }>).detail?.ok === true;
+      card(ok ? 'amber' : 'red', 'Upoz.', ok ? 'Upozornění znovu zapnuto' : 'Upozornění se NEZAPNULO', ok ? 'Mac ho zase hlídá, jakmile má cenu' : 'Už běží, je smazané, nebo se znovu spustilo. Zkontroluj seznam.', 8_000);
+    };
+    window.addEventListener(PRICE_ALERT_REARM_EVENT, onRearm);
+    return () => window.removeEventListener(PRICE_ALERT_REARM_EVENT, onRearm);
+  }, [card]);
   useFreshPriceAlertEvents(alertStore, alertEvents, (event, alert) => {
     const title = priceAlertEventTitle(alert, event.price);
     // Nejvýš 2 karty upozornění najednou, ať nevytlačí kartu rizika.
@@ -414,11 +426,14 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       const alerts = current.filter(item => item.badge === 'Upoz.');
       return alerts.length >= ALERT_CARDS_MAX ? current.filter(item => item !== alerts[0]) : current;
     });
-    card('amber', 'Upoz.', title, alert?.note ? alert.note : 'Upozornění na cenu', 8_000);
+    // Karta s číselníkem a majákem: cena nahoře, směr, pod ním zpráva.
+    card('amber', 'Upoz.', title.replace(/\s[\d\s\u00A0.,]+$/, ''), alert?.note ?? '', 8_000, { alertBeacon: { price: event.price }, ...(alert ? { alertColor: alert.line.color } : {}) });
+    // Nativně v popředí hraje zvuk už notifikace; tón jen když notifikace nepřijde.
+    if (alert?.channels.sound !== false && (!isNativeBuild || alert?.channels.phone === false)) void playAlertTone(alert?.channels.tone);
     if (alert?.channels.voice) speakAlertText(alertVoiceText(title, alert.note));
     if (!alert) return;
     setFlashIds(current => new Set(current).add(alert.id));
-    window.setTimeout(() => setFlashIds(current => { const next = new Set(current); next.delete(alert.id); return next; }), 2_400);
+    window.setTimeout(() => setFlashIds(current => { const next = new Set(current); next.delete(alert.id); return next; }), ALERT_FIRE_MS);
   });
   const market = ctl.chart.candles.at(-1)?.close ?? null;
   const editing = editAlert ? alertState.alerts.find(alert => alert.id === editAlert) ?? null : null;

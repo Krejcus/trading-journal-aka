@@ -210,6 +210,8 @@ export interface PriceAlertStore {
   update(alert: PriceAlert): void;
   remove(id: string): void;
   setDefaults(defaults: PriceAlertDefaults): void;
+  /** Znovu zapne spuštěné upozornění beze změny (jen server). */
+  rearm?(id: string): boolean;
 }
 
 /** Řádek ze serveru / cache → upozornění pro UI (stejné čištění jako v zařízení). */
