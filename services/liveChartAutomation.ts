@@ -2,16 +2,18 @@ import { isAlertTone } from '../lib/priceAlertTones';
 
 /**
  * Předvolby automatiky LIVE grafu, jedna pro zařízení (vlastní zvuky jsou také
- * jen v zařízení). Tón null = zvuk řídí běžná volba „Zvuk při fillu“.
+ * jen v zařízení). `fillTone` null = zvuk řídí volba Vypnuto/Tón/Hlas; `slTone`
+ * a `tpTone` null = stejný zvuk jako při vyplnění.
  */
 export interface LiveChartAutomation {
   boxFollow: boolean;
+  fillTone: string | null;
   slTone: string | null;
   tpTone: string | null;
 }
 
 export const LIVE_CHART_AUTOMATION_KEY = 'at:live:chart-automation';
-const DEFAULTS: LiveChartAutomation = { boxFollow: true, slTone: null, tpTone: null };
+const DEFAULTS: LiveChartAutomation = { boxFollow: true, fillTone: null, slTone: null, tpTone: null };
 
 export function parseLiveChartAutomation(raw: string | null | undefined): LiveChartAutomation {
   if (!raw) return DEFAULTS;
@@ -19,6 +21,7 @@ export function parseLiveChartAutomation(raw: string | null | undefined): LiveCh
     const value = JSON.parse(raw) as Partial<LiveChartAutomation> | null;
     return {
       boxFollow: value?.boxFollow !== false,
+      fillTone: isAlertTone(value?.fillTone) ? value.fillTone : null,
       slTone: isAlertTone(value?.slTone) ? value.slTone : null,
       tpTone: isAlertTone(value?.tpTone) ? value.tpTone : null,
     };

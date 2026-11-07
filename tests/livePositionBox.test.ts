@@ -76,12 +76,12 @@ describe('createLiveExitAlertDetector', () => {
 
 describe('parseLiveChartAutomation', () => {
   it('výchozí stav a poškozená data', () => {
-    expect(parseLiveChartAutomation(null)).toEqual({ boxFollow: true, slTone: null, tpTone: null });
-    expect(parseLiveChartAutomation('{')).toEqual({ boxFollow: true, slTone: null, tpTone: null });
+    expect(parseLiveChartAutomation(null)).toEqual({ boxFollow: true, fillTone: null, slTone: null, tpTone: null });
+    expect(parseLiveChartAutomation('{')).toEqual({ boxFollow: true, fillTone: null, slTone: null, tpTone: null });
   });
   it('neznámý tón zahodí, známý a vlastní nechá', () => {
-    expect(parseLiveChartAutomation(JSON.stringify({ boxFollow: false, slTone: 'nic', tpTone: 'confirmation_001' })))
-      .toEqual({ boxFollow: false, slTone: null, tpTone: 'confirmation_001' });
+    expect(parseLiveChartAutomation(JSON.stringify({ boxFollow: false, fillTone: 'confirmation_002', slTone: 'nic', tpTone: 'confirmation_001' })))
+      .toEqual({ boxFollow: false, fillTone: 'confirmation_002', slTone: null, tpTone: 'confirmation_001' });
     expect(parseLiveChartAutomation(JSON.stringify({ slTone: 'custom:abc' })).slTone).toBe('custom:abc');
   });
 });
