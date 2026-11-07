@@ -151,7 +151,8 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
             <div
               role="button"
               aria-label={`Upozornění ${alertConditionText(alert.condition).toLowerCase()} ${formatLivePrice(alert.price)}${spent ? ' (spuštěno)' : ''}`}
-              style={{ position: 'absolute', left: wholeLine ? 0 : undefined, userSelect: 'none', right: mouse ? -scaleWidth : 0, width: wholeLine ? undefined : 30, top: mouse ? -5 : selected ? -9 : -12, height: mouse ? 10 : selected ? 18 : 24, pointerEvents: 'auto', touchAction: 'none', cursor: wholeLine ? 'ns-resize' : 'pointer' }}
+              style={{ position: 'absolute', left: wholeLine ? 0 : undefined, userSelect: 'none', right: mouse ? -scaleWidth : 0, width: wholeLine ? undefined : 30, top: mouse ? -5 : selected ? -9 : -12, height: mouse ? 10 : selected ? 18 : 24, pointerEvents: 'auto', touchAction: 'none', // PC: nad čárou běžný kurzor, svislá šipka až při tažení.
+              cursor: mouse ? (drag?.id === alert.id ? 'ns-resize' : 'default') : wholeLine ? 'ns-resize' : 'pointer' }}
               // Kolečko nad čárou patří grafu (vrstva je jeho sourozenec, sama by ho nepředala).
               onWheel={mouse ? event => {
                 const canvas = document.elementsFromPoint(event.clientX, event.clientY).find(element => element.tagName === 'CANVAS');
@@ -194,7 +195,7 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
             />
             {(selected || (mouse && hoverId === alert.id && !drag)) && (
               <button type="button" className="dj-btn" title="Smazat upozornění" aria-label="Zrušit upozornění" onPointerDown={event => event.stopPropagation()} onClick={() => onRemove(alert.id)}
-                style={{ position: 'absolute', right: mouse ? 4 : 28, top: 0, transform: 'translateY(-50%)', width: mouse ? 16 : 18, height: mouse ? 16 : 18, borderRadius: 9, border: '1px solid rgba(251,113,133,.5)', background: 'rgba(239,70,85,.28)', color: '#fecaca', display: 'grid', placeItems: 'center', padding: 0, pointerEvents: 'auto', cursor: 'pointer' }}>
+                style={{ position: 'absolute', right: mouse ? 4 : 28, top: 0, transform: 'translateY(-50%)', width: mouse ? 16 : 18, height: mouse ? 16 : 18, borderRadius: 9, border: mouse && !isDark ? '1px solid rgba(225,29,72,.45)' : '1px solid rgba(251,113,133,.5)', background: mouse && !isDark ? '#ffffff' : 'rgba(239,70,85,.28)', color: mouse && !isDark ? '#e11d48' : '#fecaca', display: 'grid', placeItems: 'center', padding: 0, pointerEvents: 'auto', cursor: 'pointer' }}>
                 <X size={11} />
               </button>
             )}
