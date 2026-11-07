@@ -293,6 +293,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Proč:** telefon po každé čisté instalaci začínal na 5m a nastavení se drželo jen v zařízení. Filip chce synchronizaci. `lib/chartView.ts` jde na server v profilu grafů (`user_chart_profiles`, `view`), poslední změna platí všude a přežije reinstalaci.
 - **Návrat z pozadí na telefonu:** graf LIVE neměl zapnuté sledování okraje (`followEdge`), proto po doplnění svíček zůstal stát. Zapnuto jako na PC; kdo se dívá do historie, tomu se záběr nehýbe.
 - **Pravidla:** telefon přebírá hned; otevřený graf na PC se nepřestavuje, nové nastavení vezme při dalším otevření, a nezapisuje zpět nic, dokud v něm uživatel něco nezmění (jinak by starý stav přepsal novější). Backtest je mimo. Telefonní `auto` je na PC jeden graf. Neověřeno v živém provozu mezi dvěma zařízeními.
+### 2026-11-06 — Slepé hodnocení v Backtestu (Claude, větev claude/blind-review-20261106)
+
+Filip chce kalibrovat automatický backtest ve svém Backtestu, ne na samostatné stránce. Každý případ je dočasná session
+(`scratch` v `BacktestWorkspace`): skutečný graf a indikátory, ale žádný zápis do `backtest_runs` ani deníku. Jedna session
+přes všechny dny nejde, svíčky z měsíců by zahltily prohlížeč. Replay zastavuje `replayStopAt` v setteru grafu, takže ho
+neobejde žádná cesta kurzoru; bez něj je setter průchozí. Odpověď se ukáže až po potvrzeném zápisu do nové tabulky
+`backtest_blind_reviews` a pak je zamčená; sadu vkládá Claude přes CLI, klient smí měnit jen `answers` a `marks`.
+Jádra kopírky se změna nedotýká. Nasazeno 7. 11. na Filipovo „nasaď“.
 
 ### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude, větev `claude/chart-position-ui-20261106`, NENASAZENO)
 
