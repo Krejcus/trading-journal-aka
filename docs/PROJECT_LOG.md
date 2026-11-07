@@ -288,6 +288,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-07 — Společné rozložení a timeframe grafů (Claude, větev `claude/chart-view-sync-20261107`, web + iPhone 7. 11., Filip „než nasadíš…“)
+
+- **Proč:** telefon po každé čisté instalaci začínal na 5m a nastavení se drželo jen v zařízení. Filip chce synchronizaci. `lib/chartView.ts` jde na server v profilu grafů (`user_chart_profiles`, `view`), poslední změna platí všude a přežije reinstalaci.
+- **Návrat z pozadí na telefonu:** graf LIVE neměl zapnuté sledování okraje (`followEdge`), proto po doplnění svíček zůstal stát. Zapnuto jako na PC; kdo se dívá do historie, tomu se záběr nehýbe.
+- **Pravidla:** telefon přebírá hned; otevřený graf na PC se nepřestavuje, nové nastavení vezme při dalším otevření, a nezapisuje zpět nic, dokud v něm uživatel něco nezmění (jinak by starý stav přepsal novější). Backtest je mimo. Telefonní `auto` je na PC jeden graf. Neověřeno v živém provozu mezi dvěma zařízeními.
 ### 2026-11-06 — Upozornění na cenu na PC (Claude, větev `claude/pc-price-alerts-20261106`, web nasazen 7. 11. po Filipově „nasaď“, worker beze změny)
 
 - **Zadání (Filip):** pravý klik do grafu = rychlý alert, dvojklik = otevřít a upravit. Data a hlídání se nemění, jsou společné s telefonem (Mac worker z IBKR, bez TradingView).
@@ -340,12 +345,12 @@ Jádra kopírky se změna nedotýká. Nasazeno 7. 11. na Filipovo „nasaď“.
 - **Okamžité SL/TP (jedna noha, × vrátí čip):** `docs/reviews/instant-legs-design-20261106.md`, critic kolo 1 BLOKUJE. Nestavět bez záznamu na DEMO; Filip chce varianty ještě rozvinout.
 - `move-limit` worker inzeruje, čára Limitu se tedy dá táhnout, přestože je v oponentuře v jiné konverzaci.
 
-### 2026-11-06 — První Open bez TradingView: svíčka a P&L se zastavily (Claude, větev `claude/tv-exit-rest-20261106`, nenasazeno)
+### 2026-11-06 — První Open bez TradingView: svíčka a P&L se zastavily (Claude, větev `claude/tv-exit-rest-20261106`, nasazeno `f23713a7`)
 
 - Filip kolem 15:37 v pozici viděl stát svíčku a P&L, nová svíčka nepřišla. IBKR i worker bez mezery (záznam a log). **Pravděpodobná příčina, z modelu nad záznamem, ne z měření v appce:** pojistka skoku 0,2 % porovnává novou minutu se souborem starým až minutu; na přelomu 15:37:00 byl rozdíl 63,5 b, takže se svíčka nekreslila do načtení v :20. Oprava: s potvrzeným kontraktem pásmo 1 %.
 - **P&L neopraveno:** `lib/tvLivePnl.ts` při rozsahu nad 2 b v okně kotvy (`anchor-window-wide`) nebo velkém pohybu (`move-cap`) přejde na číslo brokera; při Openu je to pravděpodobné, zatím neověřené.
 
-### 2026-11-06 — „Do fillu“ z IBKR a texty bez TradingView (Claude, větev `claude/tv-exit-rest-20261106`, nenasazeno)
+### 2026-11-06 — „Do fillu“ z IBKR a texty bez TradingView (Claude, větev `claude/tv-exit-rest-20261106`, nasazeno `f23713a7`)
 
 - `marketPrices` při `--tv off` z kotace IBKR (`copierMarketPricesFromQuote`), jen zobrazení. Čip dne bez tlačítka restartu TV, texty míří na worker a IB Gateway. Menu bar Macu a dialogy snímků zatím beze změny.
 ### 2026-11-06 — Telefon: lišta pozice jen záložně, lišta obchodu podle tématu (Claude, větev claude/phone-bar-pill-20261106)

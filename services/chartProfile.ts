@@ -11,6 +11,8 @@ import {
   type TradeChartIndicators,
 } from './detailIndicators';
 
+import { applyChartView, parseChartView, readChartView, type ChartView } from '../lib/chartView';
+
 /**
  * Profil grafu uživatele na serveru (`user_chart_profiles`): které indikátory
  * má graf obchodu, jejich styl a nastavení grafu (barvy, osy, mřížka).
@@ -30,16 +32,20 @@ export interface ChartProfile {
   chartSettings: unknown;
   /** Výchozí styly kreslicích nástrojů; chybí u profilu ze starší verze appky. */
   drawingStyleDefaults?: unknown;
+  /** Rozložení a timeframy grafů; chybí u profilu ze starší verze appky. */
+  view?: ChartView;
 }
 
 /** Profil z tohoto prohlížeče. Vlastník vzhledu musí být už známý. */
 export function currentChartProfile(): ChartProfile {
+  const view = readChartView();
   return {
     version: CHART_PROFILE_VERSION,
     indicators: readTradeChartIndicators(),
     indicatorStyle: detailIndicatorStyleSnapshot(),
     chartSettings: inheritGlobalAppearance('chartSettings') ?? null,
     drawingStyleDefaults: inheritGlobalAppearance('drawingStyleDefaults') ?? null,
+    ...(view ? { view } : {}),
   };
 }
 
@@ -59,6 +65,7 @@ export function parseChartProfile(value: unknown): ChartProfile | null {
     indicatorStyle: mergeIndicatorSettings(JSON.stringify(value.indicatorStyle)),
     chartSettings: value.chartSettings ?? null,
     ...(isRecord(value.drawingStyleDefaults) ? { drawingStyleDefaults: value.drawingStyleDefaults } : {}),
+    ...(parseChartView(value.view) ? { view: parseChartView(value.view)! } : {}),
   };
 }
 
@@ -67,7 +74,8 @@ export function hasLocalChartCustomization(): boolean {
   const user = chartAppearanceUserId();
   if (!user) return false;
   try {
-    return hasLatestIndicatorSettings()
+    return readChartView() !== null
+      || hasLatestIndicatorSettings()
       || hasSavedTradeChartIndicators()
       || window.localStorage.getItem(chartAppearanceUserStorageKey('chartSettings', user)) != null
       || window.localStorage.getItem(CHART_APPEARANCE_STORAGE_KEYS.chartSettings) != null;
@@ -92,6 +100,7 @@ export function applyChartProfile(profile: ChartProfile): void {
   if (profile.chartSettings !== null) writeGlobalChartAppearance('chartSettings', profile.chartSettings);
   if (profile.drawingStyleDefaults) writeGlobalChartAppearance('drawingStyleDefaults', profile.drawingStyleDefaults);
   writeTradeChartIndicators(profile.indicators);
+  if (profile.view) applyChartView(profile.view);
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(CHART_PROFILE_APPLIED_EVENT));
 }
 

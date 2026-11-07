@@ -4,6 +4,8 @@ import DayFullscreenChart from './DayFullscreenChart';
 import { useDayController } from './useDayController';
 import { focusRange } from './dayFocus';
 import { readStoredDayChartTimeframe, writeStoredDayChartTimeframe } from '../../lib/dayChartTools';
+import { rememberPhoneChartView } from '../../lib/chartView';
+import { CHART_PROFILE_APPLIED_EVENT } from '../../services/chartProfile';
 import type { MarketTimeframe } from '../../services/marketData';
 import { LIVE_PHONE_INSTRUMENT, draftSummary, readLivePillPrefs, writeLivePillPrefs, type LivePillPrefs } from '../../lib/livePhoneTrade';
 import { draftFromPositionBox, type TicketDraft } from '../../lib/liveOrderTicket';
@@ -162,7 +164,13 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     exposurePaintFrames.current.add(firstFrame);
   }, [slots.liveExposurePaint]);
   const [timeframe, setTimeframeState] = useState<MarketTimeframe>(() => readStoredDayChartTimeframe(typeof window === 'undefined' ? null : window.localStorage));
-  const setTimeframe = (next: MarketTimeframe) => { setTimeframeState(next); writeStoredDayChartTimeframe(window.localStorage, next); };
+  const setTimeframe = (next: MarketTimeframe) => { setTimeframeState(next); writeStoredDayChartTimeframe(window.localStorage, next); rememberPhoneChartView(); };
+  // Převzetí z jiného zařízení.
+  useEffect(() => {
+    const reload = () => setTimeframeState(readStoredDayChartTimeframe(window.localStorage));
+    window.addEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+    return () => window.removeEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+  }, []);
   const range = focusRange({ mode: 'day', session: 'ny', scope: ctl.scope, windows: ctl.chartWindows, now: ctl.now, isToday: ctl.isToday });
   const [pill, setPill] = useState<LivePillPrefs>(() => readLivePillPrefs(typeof window === 'undefined' ? null : window.localStorage));
   const savePill = (next: LivePillPrefs) => { setPill(next); writeLivePillPrefs(window.localStorage, next); };

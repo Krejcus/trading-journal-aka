@@ -19,6 +19,8 @@ import type { DayController } from './useDayController';
 import DayFullscreenChart from './DayFullscreenChart';
 import type { MarketTimeframe } from '../../services/marketData';
 import { readStoredDayChartTimeframe, writeStoredDayChartTimeframe } from '../../lib/dayChartTools';
+import { rememberPhoneChartView } from '../../lib/chartView';
+import { CHART_PROFILE_APPLIED_EVENT } from '../../services/chartProfile';
 import { playNativeHapticIfAvailable } from '../../services/nativeCapabilities';
 
 const clock = (ms: number) => pragueClock(ms);
@@ -166,7 +168,13 @@ export default function DayPhone({ ctl, isDark, streak, onOpenTrade, onOpenWeek,
   const { mode, modeSession: session } = ctl;
   // Timeframe sdílí kompaktní i celoobrazovkový graf a přežije reload.
   const [timeframe, setTimeframeState] = useState<MarketTimeframe>(() => readStoredDayChartTimeframe(typeof window === 'undefined' ? null : window.localStorage));
-  const setTimeframe = (next: MarketTimeframe) => { setTimeframeState(next); writeStoredDayChartTimeframe(window.localStorage, next); };
+  const setTimeframe = (next: MarketTimeframe) => { setTimeframeState(next); writeStoredDayChartTimeframe(window.localStorage, next); rememberPhoneChartView(); };
+  // Převzetí z jiného zařízení.
+  useEffect(() => {
+    const reload = () => setTimeframeState(readStoredDayChartTimeframe(window.localStorage));
+    window.addEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+    return () => window.removeEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+  }, []);
   const [fullscreen, setFullscreen] = useState(false);
   // Otočení na šířku otevře celou obrazovku; zpět na výšku ji nezavře
   // (rozdělaná kresba nebo poznámka by se ztratila) — zavírá tlačítko.

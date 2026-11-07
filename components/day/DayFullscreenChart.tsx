@@ -38,6 +38,8 @@ import {
   effectiveDayChartLayout, readDayChartLayout, readDayChartSync, readDayPaneTimeframes, writeDayChartLayout, writeDayChartSync, writeDayPaneTimeframes,
   type DayChartLayout, type DayChartSync, type DayDrawColorId, type DayDrawPanel,
 } from '../../lib/dayChartTools';
+import { rememberPhoneChartView } from '../../lib/chartView';
+import { CHART_PROFILE_APPLIED_EVENT } from '../../services/chartProfile';
 import ChartNotesLayer from '../ChartNotesLayer';
 import { chartNotesOfTrades, type ChartNote } from '../../lib/chartNotes';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
@@ -278,12 +280,21 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const [hubOpen, setHubOpen] = useState(false);
   const [chartReq, setChartReq] = useState<{ pane: number; n: number } | null>(null);
   const [indicatorReq, setIndicatorReq] = useState<{ pane: number; id: 'fvg' | 'levels' | 'structure'; n: number } | null>(null);
-  const setLayout = (next: DayChartLayout) => { setLayoutState(next); writeDayChartLayout(window.localStorage, next); setMaximized(false); };
+  const setLayout = (next: DayChartLayout) => { setLayoutState(next); writeDayChartLayout(window.localStorage, next); rememberPhoneChartView(); setMaximized(false); };
   const [sync, setSyncState] = useState<DayChartSync>(() => readDayChartSync(window.localStorage));
   const setSync = (next: DayChartSync) => { setSyncState(next); writeDayChartSync(window.localStorage, next); };
   // Okno 1 má rámec sdílený s malým grafem (`timeframe`), okna 2–4 vlastní.
   const [paneTimeframes, setPaneTimeframesState] = useState<MarketTimeframe[]>(() => readDayPaneTimeframes(window.localStorage));
-  const setPaneTimeframes = (next: MarketTimeframe[]) => { setPaneTimeframesState(next); writeDayPaneTimeframes(window.localStorage, next); };
+  const setPaneTimeframes = (next: MarketTimeframe[]) => { setPaneTimeframesState(next); writeDayPaneTimeframes(window.localStorage, next); rememberPhoneChartView(); };
+  // Převzetí z jiného zařízení.
+  useEffect(() => {
+    const reload = () => {
+      setLayoutState(readDayChartLayout(window.localStorage));
+      setPaneTimeframesState(readDayPaneTimeframes(window.localStorage));
+    };
+    window.addEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+    return () => window.removeEventListener(CHART_PROFILE_APPLIED_EVENT, reload);
+  }, []);
   const paneTimeframe = (index: number): MarketTimeframe => (index === 0 ? timeframe : paneTimeframes[index - 1] ?? '5m');
   const setPaneTimeframe = (index: number, next: MarketTimeframe) => {
     // „Interval“ v synchronizaci: rámec se mění ve všech oknech.
@@ -446,7 +457,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const liveCandleTargets: LiveCandleTarget[] = Array.from({ length: paneCount }, (_, index) => ({
     api: paneApi(index), root: 'MNQ', timeframe: paneTimeframe(index), rawCandles: paneLiveRaw[index] ?? raw,
   }));
-  useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets);
+  // LIVE: graf jde za poslední svíčkou jako na PC, i když se po návratu z pozadí naráz doplní víc svíček.
+  useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets, { followEdge: Boolean(live) });
   useLivePriceLinesBinding(live?.priceLines && !replayOn ? live.priceLines : null, liveCandleTargets.map(target => ({ api: target.api, root: 'MNQ' })));
   // Přehrávání: rozpracovaný bar vyššího timeframu i s historií (z celé řady — mění se jen s daty).
   const fullRawWithHistory = useMemo(
