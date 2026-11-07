@@ -297,6 +297,14 @@ describe('upozornění na cenu na PC', () => {
     expect(alertTagInk('#000000')).toBe('#ffffff');
   });
 
+  it('Vyzkoušet jen ukáže spuštění v zařízení: žádná událost ani hlídač; vypnutá animace má klid', () => {
+    const source = read('components/LivePcPriceAlerts.tsx');
+    const preview = source.slice(source.indexOf('const preview = useCallback'), source.indexOf('// Trvale odmítnuté uložení'));
+    expect(preview).toMatch(/presentRef\.current\(alert, alert\.price\)/);
+    expect(preview).not.toMatch(/rpc|trigger|store\./);
+    expect(read('components/day/dayJournal.css')).toMatch(/prefers-reduced-motion: reduce\) \{\n {2}\.dj-alert-sweep/);
+  });
+
   it('nic neobchoduje a nesahá na kopírku ani příkazy', () => {
     const source = read('components/LivePcPriceAlerts.tsx');
     expect(source).not.toMatch(/from ['"][^'"]*(tradovate|copier|relay|broker|leaderOrderManage|livePhoneOrders)[^'"]*['"]/i);

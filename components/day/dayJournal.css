@@ -242,3 +242,24 @@ html:not(.light-theme) .dj-wheel-card {
 
 
 @keyframes dj-alert-flash { 0%, 100% { opacity: 1; filter: none; } 50% { opacity: .35; filter: brightness(1.8) drop-shadow(0 0 4px currentColor); } }
+
+/* Spuštění upozornění na PC: světlo po čáře k ceně, záře, pulz štítku a okraj grafu (~2,4 s). */
+.dj-alert-sweep { animation: dj-alert-sweep 1.15s cubic-bezier(.3, .1, .4, 1) 2; }
+@keyframes dj-alert-sweep { from { transform: translateX(-110%); } to { transform: translateX(340%); } }
+.dj-alert-band { animation: dj-alert-band 2.4s ease-out both; }
+@keyframes dj-alert-band { 0% { opacity: 0; } 12% { opacity: 1; } 70% { opacity: .7; } 100% { opacity: 0; } }
+.dj-alert-edge { animation: dj-alert-edge 2.4s ease-out both; }
+@keyframes dj-alert-edge { 0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; } }
+.dj-alert-ping { animation: dj-alert-ping 1s ease-out 3; }
+@keyframes dj-alert-ping { from { opacity: .9; transform: scale(1); } to { opacity: 0; transform: scale(1.35, 1.9); } }
+.dj-alert-pop { animation: dj-alert-pop .5s cubic-bezier(.2, 1.6, .4, 1) both; }
+@keyframes dj-alert-pop { from { transform: translateY(-50%) scale(.82); } to { transform: translateY(-50%) scale(1); } }
+.dj-alert-ring { display: inline-block; transform-origin: 50% 10%; animation: dj-alert-ring .9s ease-in-out 3; }
+@keyframes dj-alert-ring { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(18deg); } 45% { transform: rotate(-15deg); } 70% { transform: rotate(9deg); } 85% { transform: rotate(-5deg); } }
+.dj-alert-time { transform-origin: left; animation: dj-alert-time linear both; }
+@keyframes dj-alert-time { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .dj-alert-sweep, .dj-alert-ping, .dj-alert-ring { animation: none; opacity: 0; }
+  .dj-alert-ring { opacity: 1; }
+  .dj-alert-pop { animation: none; }
+}

@@ -28,6 +28,8 @@ export interface TradeToast {
   sticky: boolean;
   /** Jak dlouho karta vydrží (ms); jinak TRADE_TOAST_MS. Upozornění na cenu 8 s. */
   ms?: number;
+  /** Upozornění na cenu: karta v barvě alertu, rozhoupaný zvoneček a ubíhající čas. */
+  alertColor?: string;
 }
 
 const price = (value: number | undefined) => (value == null ? '—' : value.toFixed(2));

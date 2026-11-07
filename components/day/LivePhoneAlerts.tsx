@@ -108,6 +108,10 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
 
   return (
     <div ref={rootRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 14 }} data-price-alert-lines>
+      {/* PC, spuštění: okraj grafu krátce zazáří v barvě upozornění. */}
+      {mouse && alerts.filter(alert => flashIds.has(alert.id)).slice(-1).map(alert => (
+        <div key={alert.id} className="dj-alert-edge" style={{ position: 'absolute', left: 0, top: 0, width: paneWidth, height: paneHeight, boxShadow: `inset 0 0 70px ${rgba(alert.line.color, 0.32)}, inset 0 0 0 1px ${rgba(alert.line.color, 0.45)}` }} />
+      ))}
       {alerts.map((alert, index) => {
         const y = ys[index];
         if (y == null || y < 0 || y > paneHeight) return null;
@@ -127,10 +131,18 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
               position: 'absolute', left: 0, right: mouse ? 0 : selected ? 52 : 22, top: 0, transform: 'translateY(-50%)',
               // PC: krytí z palety; telefon beze změny.
               borderTop: `${css.width}px ${css.style} ${rgba(color, mouse ? Math.min(1, (alert.line.opacity ?? PRICE_ALERT_PC_OPACITY) / 100 + (selected ? 0.25 : 0)) : selected ? 0.9 : 0.55)}`,
-              animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
+              animation: flash && !mouse ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
             }} />}
+            {/* PC, spuštění: záře kolem čáry a světlo, které doběhne k ceně. */}
+            {mouse && flash && <>
+              <div className="dj-alert-band" style={{ position: 'absolute', left: 0, right: 0, top: -16, height: 32, background: `linear-gradient(to bottom, transparent, ${rgba(color, 0.3)}, transparent)` }} />
+              <div style={{ position: 'absolute', left: 0, right: 0, top: -2, height: 4, overflow: 'hidden' }}>
+                <div className="dj-alert-sweep" style={{ width: '30%', height: '100%', background: `linear-gradient(90deg, transparent, ${color}, #ffffff, ${color}, transparent)` }} />
+              </div>
+            </>}
             {/* PC: místo zvonečku přes čáru štítek na cenové ose; celou dobu ukazuje cenu a jde za něj táhnout. */}
-            {mouse && <span aria-hidden data-alert-tag style={{ userSelect: 'none', position: 'absolute', left: paneWidth + 3, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 6, height: 16, borderRadius: 4, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 9.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
+            {mouse && flash && <span aria-hidden className="dj-alert-ping" style={{ position: 'absolute', left: paneWidth + 3, top: -8, width: scaleWidth - 6, height: 16, borderRadius: 4, boxSizing: 'border-box', border: `1.5px solid ${color}`, boxShadow: `0 0 10px ${rgba(color, 0.6)}` }} />}
+            {mouse && <span aria-hidden data-alert-tag className={flash ? 'dj-alert-pop' : undefined} style={{ userSelect: 'none', position: 'absolute', left: paneWidth + 3, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 6, height: 16, borderRadius: 4, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 9.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
               // Klidně: průsvitná barva na vlastním podkladu (schová číslo osy), plná jen při výběru a spuštění.
               ...(selected || flash
                 ? { background: color, color: alertTagInk(color), border: `1px solid ${color}` }

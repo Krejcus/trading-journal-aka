@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Bell } from 'lucide-react';
+import './day/dayJournal.css';
 import type { CopierCopyEvent } from '../services/copierRuntimeController';
 import { TRADE_TOAST_MS, capExtraToasts, copyEventToast, keepStickyToasts, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
 
@@ -15,7 +17,7 @@ const time = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2
  */
 const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boolean; onDismiss: (id: string) => void }> = ({ toast, isDark, copierArmed, onDismiss }) => {
   const onClose = useCallback(() => onDismiss(toast.id), [onDismiss, toast.id]);
-  const color = TONE[toast.tone];
+  const color = toast.alertColor ?? TONE[toast.tone];
   const [hovered, setHovered] = useState(false);
   useEffect(() => {
     if (toast.sticky || hovered) return undefined;
@@ -35,8 +37,11 @@ const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boo
         boxShadow: '0 14px 32px -20px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.05)',
       }}
     >
+      {toast.alertColor && <span aria-hidden className="dj-alert-time absolute inset-x-0 bottom-0 h-[2px]" style={{ background: color, animationDuration: `${toast.ms ?? TRADE_TOAST_MS}ms`, animationPlayState: hovered ? 'paused' : 'running' }} />}
       <div className="flex min-w-0 items-center gap-[7px]">
-        <span className="shrink-0 rounded-[4px] px-[5px] py-[2px] text-[8.5px] font-black uppercase tracking-[0.08em] text-white" style={{ background: color }}>{toast.badge}</span>
+        {toast.alertColor && <span aria-hidden className="dj-alert-ring shrink-0" style={{ color }}><Bell size={13} strokeWidth={2.4} /></span>}
+        {/* Upozornění: štítek nahrazuje zvoneček, titulek s cenou se musí vejít. */}
+        {!toast.alertColor && <span className="shrink-0 rounded-[4px] px-[5px] py-[2px] text-[8.5px] font-black uppercase tracking-[0.08em] text-white" style={{ background: color }}>{toast.badge}</span>}
         <span className={`truncate text-[12px] font-extrabold ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{toast.title}</span>
         {toast.pnl != null && <span className="ml-auto font-mono text-[12px] font-extrabold" style={{ color: toast.pnl >= 0 ? TONE.green : TONE.red }}>{usd(toast.pnl)}</span>}
         <span className={`${toast.pnl != null ? 'ml-1.5' : 'ml-auto'} font-mono text-[10px] font-semibold text-slate-500`}>{time(toast.at)}</span>

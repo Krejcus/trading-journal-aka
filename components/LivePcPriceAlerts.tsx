@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { AudioLines, Bell, Check, ChevronDown, Monitor, Smartphone, Trash2, Upload, Volume2, VolumeX, X } from 'lucide-react';
+import { AudioLines, Bell, Check, ChevronDown, Monitor, Play, Smartphone, Trash2, Upload, Volume2, VolumeX, X } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import './day/dayJournal.css';
 import TradingViewColorPicker from './TradingViewColorPicker';
@@ -23,6 +23,7 @@ import { useFreshPriceAlertEvents, usePriceAlertStore } from '../services/priceA
  * nesahá na příkazy ani kopírku (INV-UI-01).
  */
 
+/** Musí sedět na animace `.dj-alert-*` v dayJournal.css. */
 const FLASH_MS = 2_400;
 
 /** Stabilní most do panelu grafu: změna upozornění nepřekresluje graf, čáry si stav čtou samy. */
@@ -77,14 +78,20 @@ export function useLivePcPriceAlerts({ conditionMarket, watching }: { conditionM
 
   const events = useMemo(() => (state.events ?? []).filter(event => !event.suppressed)
     .map(event => ({ id: event.id, alertId: event.alertId, at: event.at, price: event.level })), [state.events]);
-  useFreshPriceAlertEvents(store, events, (event, alert) => {
+  // Jedno místo pro spuštění: skutečná událost i „Vyzkoušet“ vypadají a znějí stejně.
+  const present = (alert: PriceAlert | null, level: number) => {
     if (alert) flash.fire(alert.id);
-    const title = priceAlertEventTitle(alert, event.price);
+    const title = priceAlertEventTitle(alert, level);
     const actions = pcAlertFiredActions(alert);
-    if (actions.card) card(toast('amber', 'Upoz.', title, alert?.note ? alert.note : 'Upozornění na cenu', 8_000));
+    if (actions.card) card({ ...toast('amber', 'Upoz.', title, alert?.note ? alert.note : 'Upozornění na cenu', 8_000), ...(alert ? { alertColor: alert.line.color } : {}) });
     if (actions.sound) void playAlertTone(alert?.channels.tone);
     if (actions.voice) speakAlertText(alertVoiceText(title, alert?.note));
-  });
+  };
+  const presentRef = useRef(present);
+  presentRef.current = present;
+  useFreshPriceAlertEvents(store, events, (event, alert) => present(alert, event.price));
+  /** Jen ukázka v tomto zařízení: nezapisuje událost a nic nikam neposílá. */
+  const preview = useCallback((alert: PriceAlert) => presentRef.current(alert, alert.price), []);
   // Trvale odmítnuté uložení (např. strop 50): čára zmizí, takže to musí být vidět hned, ne až v seznamu.
   const lastErrorRef = useRef(state.error ?? null);
   useEffect(() => {
@@ -132,7 +139,7 @@ export function useLivePcPriceAlerts({ conditionMarket, watching }: { conditionM
   const activeCount = state.alerts.filter(alert => alert.status !== 'triggered').length;
   const closeEdit = useCallback(() => setEditId(null), []);
   const closeList = useCallback(() => setListOpen(false), []);
-  return { bridge, cards, state, editing, activeCount, listOpen, setListOpen, closeEdit, closeList, setEditId };
+  return { bridge, cards, state, editing, activeCount, listOpen, setListOpen, closeEdit, closeList, setEditId, preview };
 }
 
 export type LivePcPriceAlerts = ReturnType<typeof useLivePcPriceAlerts>;
@@ -451,11 +458,12 @@ function SoundPicker({ isDark, sound, tone, onChange }: {
 }
 
 /** Nastavení jednoho upozornění: „popisek vlevo, ovládání vpravo“ jako v Nastavení aplikace. */
-function AlertSettingsWindow({ alert, market, isDark, onSave, onDelete, onClose }: {
+function AlertSettingsWindow({ alert, market, isDark, onSave, onTest, onDelete, onClose }: {
   alert: PriceAlert;
   market: number | null;
   isDark: boolean;
   onSave: (alert: PriceAlert) => void;
+  onTest: (alert: PriceAlert) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }) {
@@ -527,7 +535,8 @@ function AlertSettingsWindow({ alert, market, isDark, onSave, onDelete, onClose 
       {!anyChannel && <p className="m-0 px-4 pt-2 text-[11.5px] text-amber-500">Zapni aspoň iPhone, PC, nebo hlas.</p>}
       <footer className="flex shrink-0 items-center gap-2 px-4 py-2.5">
         <button type="button" onClick={() => onDelete(alert.id)} className={`inline-flex h-[30px] items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-rose-400 transition-colors ${isDark ? 'hover:bg-rose-500/10' : 'hover:bg-rose-500/10'}`}><Trash2 size={13} aria-hidden />Smazat</button>
-        <button type="button" onClick={onClose} className={`ml-auto h-[30px] rounded-md px-3 text-xs font-semibold transition-colors ${pressable(isDark, false)}`}>Zrušit</button>
+        <button type="button" disabled={!anyChannel} title="Uloží změny a ukáže, jak spuštění vypadá a zní. Jen tady, nic se neposílá." onClick={() => onTest(draft)} className={`ml-auto inline-flex h-[30px] items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors disabled:opacity-50 ${pressable(isDark, false)}`}><Play size={12} aria-hidden />Vyzkoušet</button>
+        <button type="button" onClick={onClose} className={`h-[30px] rounded-md px-3 text-xs font-semibold transition-colors ${pressable(isDark, false)}`}>Zrušit</button>
         <button type="button" disabled={!anyChannel} onClick={() => onSave(draft)} className="h-[30px] rounded-md bg-indigo-500 px-4 text-xs font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] transition-colors hover:bg-indigo-400 disabled:opacity-50">Uložit</button>
       </footer>
     </AlertWindow>
@@ -535,12 +544,13 @@ function AlertSettingsWindow({ alert, market, isDark, onSave, onDelete, onClose 
 }
 
 /** Seznam upozornění pod zvonečkem. */
-function AlertListWindow({ alerts, watching, error, isDark, onEdit, onRemove, onClose }: {
+function AlertListWindow({ alerts, watching, error, isDark, onEdit, onTest, onRemove, onClose }: {
   alerts: readonly PriceAlert[];
   watching: string | null;
   error: string | null;
   isDark: boolean;
   onEdit: (id: string) => void;
+  onTest: (alert: PriceAlert) => void;
   onRemove: (id: string) => void;
   onClose: () => void;
 }) {
@@ -571,6 +581,7 @@ function AlertListWindow({ alerts, watching, error, isDark, onEdit, onRemove, on
                   {alert.frequency === 'once' ? 'jednou' : 'pokaždé'} · {alert.expiry === 'session' ? 'do konce seance' : 'do zrušení'} · {channels || 'bez kanálu'}{alert.note ? ` · ${alert.note}` : ''}
                 </div>
               </button>
+              <button type="button" aria-label={`Vyzkoušet upozornění ${price2(alert.price)}`} title="Ukáže, jak spuštění vypadá a zní. Jen tady, nic se neposílá." onClick={() => onTest(alert)} className={`grid h-7 w-7 shrink-0 place-items-center rounded-md transition-colors ${pressable(isDark, false)}`}><Play size={12} /></button>
               <button type="button" aria-label={`Smazat upozornění ${price2(alert.price)}`} onClick={() => onRemove(alert.id)} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-rose-400 opacity-60 transition hover:bg-rose-500/10 hover:opacity-100 focus-visible:opacity-100"><Trash2 size={13} /></button>
             </div>
           );
@@ -591,6 +602,15 @@ export function LivePcAlertDialogs({ alerts, lastPrice, conditionMarket, watchin
   isDark: boolean;
 }) {
   const { bridge, editing, closeEdit, closeList, setEditId } = alerts;
+  const save = (next: PriceAlert): PriceAlert => {
+    // Ruční přepsání ceny: automaticky odvozený směr se přepočítá jako při tahu čáry.
+    const moved = next.conditionAuto && editing && next.price !== editing.price ? movedAlert(next, next.price, conditionMarket) : next;
+    const saved = { ...moved, updatedAt: Date.now() };
+    bridge.store.update(saved);
+    // Co uložíš, dostanou i další nová upozornění (stejně jako na telefonu).
+    bridge.store.setDefaults({ frequency: next.frequency, expiry: next.expiry, line: next.line, channels: next.channels });
+    return saved;
+  };
   return <>
     {alerts.listOpen && (
       <AlertListWindow
@@ -600,6 +620,7 @@ export function LivePcAlertDialogs({ alerts, lastPrice, conditionMarket, watchin
         error={alerts.state.error ?? null}
         onClose={closeList}
         onEdit={id => { closeList(); setEditId(id); }}
+        onTest={alert => { closeList(); alerts.preview(alert); }}
         onRemove={bridge.remove}
       />
     )}
@@ -611,14 +632,8 @@ export function LivePcAlertDialogs({ alerts, lastPrice, conditionMarket, watchin
         market={lastPrice}
         onClose={closeEdit}
         onDelete={id => { closeEdit(); bridge.remove(id); }}
-        onSave={(next: PriceAlert) => {
-          // Ruční přepsání ceny: automaticky odvozený směr se přepočítá jako při tahu čáry.
-          const moved = next.conditionAuto && next.price !== editing.price ? movedAlert(next, next.price, conditionMarket) : next;
-          bridge.store.update({ ...moved, updatedAt: Date.now() });
-          // Co uložíš, dostanou i další nová upozornění (stejně jako na telefonu).
-          bridge.store.setDefaults({ frequency: next.frequency, expiry: next.expiry, line: next.line, channels: next.channels });
-          closeEdit();
-        }}
+        onSave={next => { save(next); closeEdit(); }}
+        onTest={next => { const saved = save(next); closeEdit(); alerts.preview(saved); }}
       />
     )}
   </>;
