@@ -45,6 +45,11 @@ export const supportsCopierManualEntryMarket = (
  * (`attach-brackets`), 2. 11. 2026 — jen manual-only DEMO skupina.
  */
 export const COPIER_MANUAL_ENTRY_BARE_CAPABILITY = 'manual-entry-bare-v1';
+/** Limit a Stop bez SL/TP po jednom kontraktu (sólo DEMO). Starý worker je odmítne `bare-not-market`. */
+export const COPIER_MANUAL_ENTRY_BARE_PENDING_CAPABILITY = 'manual-entry-bare-pending-v1';
+export const supportsCopierManualEntryBarePending = (
+  status: { capabilities?: readonly string[] } | null | undefined,
+): boolean => Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_MANUAL_ENTRY_BARE_PENDING_CAPABILITY);
 
 export const supportsCopierManualEntryBare = (
   status: Pick<LocalCopierAgentStatus, 'capabilities'> | null | undefined,

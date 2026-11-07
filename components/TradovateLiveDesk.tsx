@@ -151,7 +151,7 @@ import {
 import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
 import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit } from '../lib/copierWorkerCapabilities';
-import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryBarePending, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
@@ -1309,6 +1309,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       blockedReason: entryBlockedReason,
       marketSupported: supportsCopierManualEntryMarket(agentStatus),
       bareSupported: supportsCopierManualEntryBare(agentStatus),
+      barePendingSupported: supportsCopierManualEntryBarePending(agentStatus),
       maxContracts: manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null),
       frontContract: entryFrontContract,
       place: placeLeaderEntry,
@@ -1329,7 +1330,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       // Správa z čar = PŘESNĚ deskový `manageLeaderEntry` a za stejné podmínky jako PC graf
       // (`onManageEntry`); × u pozice jako PC `canClose`; BE průměr jen ze stavu pollu (jako PC).
       pendingLegs: supportsCopierManualOrderPendingLegs(agentStatus),
-      moveLimit: supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own',
+      moveLimit: supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare !== true,
       ...livePhoneManageFields({
         manageSupported: supportsCopierManualOrderManage(agentStatus), closeCapability: supportsCopierManualOrderClose(agentStatus),
         ownEntry: ownManualEntry, manage: manageLeaderEntry, runtimeAvailable,
@@ -2037,7 +2038,7 @@ acceptAgentStatus((await executeAgent({
           manageEntryAvgPrice={chartLive.status === agentStatus ? ownManualEntry?.entryAvgPrice ?? null : null}
           manageCloseSupported={supportsCopierManualOrderClose(agentStatus)}
           managePendingLegsSupported={supportsCopierManualOrderPendingLegs(agentStatus)}
-          manageMoveLimitSupported={supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own'}
+          manageMoveLimitSupported={supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare !== true}
           entryMarketSupported={supportsCopierManualEntryMarket(agentStatus)}
           entryMaxContracts={manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null)}
           entryFrontContract={entryFrontContract}
@@ -2045,6 +2046,7 @@ acceptAgentStatus((await executeAgent({
           // U4/U5/U8/U10 (3. 11. 2026): podklady panelu a grafu — jen zobrazení a předvyplnění,
           // příkazy dál jen přes callbacky desku (worker vše ověří znovu, INV-UI-01).
           entryBareSupported={supportsCopierManualEntryBare(agentStatus)}
+          entryBarePendingSupported={supportsCopierManualEntryBarePending(agentStatus)}
           entryBareEntry={chartBareEntry}
           entryLeaderPosition={chartLeaderPosition}
           {...(supportsCopierManualEntryBare(agentStatus) && !supportsCopierManualOrderSingleLeg(agentStatus) ? { onAttachBrackets: attachBrackets } : {})}

@@ -183,3 +183,8 @@ Filip: Limit i Stop mají být komplet a má se počítat s více účty. „Zru
 - Pořadí: DEMO a krátký test na reálném účtu kvůli pásmům cen; sólo qty 1 Limit i Stop; sólo qty > 1 po měření částečného fillu; followeři zvlášť.
 - `write-burst` odstraněn: na Suspended noze nic neměří, lokální jistič se u některých odpovědí nezapne a token sdílí s workerem. Limity API se měří zvlášť na Working příkazech se stopem po prvním omezení.
 - Stavba musí pokrýt fill během modify, ztracený ACK, restart s parkováním, posun v Tradovate, druhé zařízení, zúženou rezervu, kill při ×, Flatten s parkovanými nohami.
+
+## Rozhodnutí Filipa (7. 11. 2026): Limit a Stop opravdu bez, návrh v4 s parkováním neplatí
+Filip na otázku, jestli „bez SL“ smí znamenat vzdálený SL: „Ne, opravdu bez.“ Parkované nohy se proto nestaví. Postaveno:
+holý Limit a Stop v sólo DEMO skupině po 1 kontraktu, po fillu čipy jako u Marketu (pravidla v INV-MANUAL-01). Čipy před
+fillem a víc účtů jsou další krok. Scénáře `parked-*` ve `scripts/copier/record-legs.ts` zůstávají, nic na nich nestojí.

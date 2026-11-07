@@ -24,9 +24,10 @@ import {
 import { cmeDailyHaltWindow, msUntilTradovateSessionEnd, sameTradovateSession } from './copierArmSession';
 import { createLeaderDisplayFills, type CopierLeaderDisplayFills } from './copierLeaderDisplayFills';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
-import { MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS, MANUAL_ENTRY_SOLO_MARKET_MAX_QUOTE_DRIFT_TICKS, evaluateManualEntryPreview, manualEntryContractCap, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualEntryMarketQuoteBlockers, workerMarketPrice, manualStopLossUsd, realizedLossHeadroom, remainingLossHeadroom, type ManualEntryAccountInputs, type ManualEntryWorkerQuote } from './manualEntryPreview';
+import { MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS, MANUAL_ENTRY_SOLO_MARKET_MAX_QUOTE_DRIFT_TICKS, evaluateManualEntryPreview, manualEntryContractCap, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualEntryBarePendingBlockers,
+  manualEntryMarketQuoteBlockers, workerMarketPrice, manualStopLossUsd, realizedLossHeadroom, remainingLossHeadroom, type ManualEntryAccountInputs, type ManualEntryWorkerQuote } from './manualEntryPreview';
 import { runnerUnmappedReplaceAccounts } from './copierRunner';
-import type { LeaderEntryPreviewCommand, LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
+import { LEADER_ENTRY_BARE_PENDING_QUANTITY, type LeaderEntryPreviewCommand, type LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
 import { pendingLegSideProblem, type LeaderOrderManageCommand, type LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import {
   bareCloseLotBlockers,
@@ -36,6 +37,9 @@ import {
   bareCloseShapeBlockers,
   bareCloseSignedNet,
   bareCloseSuperseded,
+  bareEntryFilled,
+  bareEntryReferencePrice,
+  isBarePendingEntry,
   isBareEntryWithoutLegs,
   newestManualEntry,
   selectBareLeaderTrade,
@@ -268,6 +272,8 @@ export interface CopierControllerStatus {
    */
   manageableLeaderTrades?: Array<{
     source: 'own' | 'tracked';
+    /** Čekající Limit/Stop bez nohou: jde jen zrušit, cenu z čáry posunout nejde. */
+    bare?: boolean;
     entryOperationId?: string;
     leaderEntryOrderId: string;
     symbol: string;
@@ -3658,6 +3664,28 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     void persistManualEntry(record.operationId, current => ({ ...(current ?? record), legRejectedAt: clock(), updatedAt: clock() }))
       .catch(error => options.onError?.(new Error(`Ruční vstup: značku odmítnuté nohy se nepodařilo uložit (${errorOf(error).message})`)));
   };
+  /**
+   * Holý Limit/Stop se vyplnil: od teď je to pozice se správou SL/TP a ×. Bez ochrany, proto hned zpráva;
+   * za vypnuté kopírky incident (uživatel může čekat, že vstup je zrušený). Pozdní fill po dřívějším
+   * „skončil bez vyplnění“ uzavření vrací. Jen značka a hlášení, k brokerovi nic nejde.
+   */
+  const noteBarePendingFilled = (operationId: string, at: number) => {
+    const record = manualEntryRecords().find(item => item.operationId === operationId);
+    if (!record || !isBarePendingEntry(record) || record.filledAt != null) return;
+    const entryId = record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId ?? '';
+    const { side, quantity, orderType, price, symbol } = record.request;
+    const label = `${side} ${quantity} ${orderType} ${price} ${symbol}`;
+    void persistManualEntry(operationId, current => {
+      if (current?.filledAt != null) return current;
+      const { closedAt: _closed, ...rest } = current ?? record;
+      return { ...rest, filledAt: at, updatedAt: clock() };
+    }).catch(error => options.onError?.(new Error(`Vstup bez SL/TP: značku vyplnění se nepodařilo uložit (${errorOf(error).message})`)));
+    if (!gate.armed || gate.shadowMode || gate.killSwitch) {
+      pendingEntryIncident(operationId, 'fill-unprotected', `${label} se vyplnil za vypnuté kopírky — pozice je BEZ SL/TP, zkontroluj ji (doplň SL nebo Flatten)`, entryId);
+    } else {
+      pendingEntryNotice(operationId, 'bare-filled', `${label} se vyplnil — pozice je BEZ SL/TP, dokud je nedoplníš`, entryId);
+    }
+  };
   const observeOwnManualEntryStream = (event: BrokerEvent, at: number) => {
     if (event.type === 'order') {
       const order = event.order;
@@ -3666,7 +3694,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (operationId) {
         const times = manualEntryStreamTime(operationId);
         times.orderAt ??= at;
-        if (order.status === 'filled') times.filledOrderAt ??= at;
+        if (order.status === 'filled') {
+          times.filledOrderAt ??= at;
+          // Značka hned s Order(Filled): pozdní Fill po Position(0) už uzavřený záznam nevrátí.
+          noteBarePendingFilled(operationId, at);
+        }
       }
       if (order.status === 'rejected') {
         const record = manualEntryRecords().find(item => item.status === 'acknowledged'
@@ -3684,6 +3716,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const qty = (times.fillQty ?? 0) + event.fill.quantity;
       times.fillAvg = qty > 0 ? (((times.fillAvg ?? 0) * (times.fillQty ?? 0)) + event.fill.price * event.fill.quantity) / qty : times.fillAvg;
       times.fillQty = qty;
+      noteBarePendingFilled(operationId, at);
       return;
     }
     if (event.type === 'position' && event.position.accountId === group.leaderAccountId && event.position.netQuantity !== 0) {
@@ -3739,7 +3772,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     || ((cancel.verified === 'filled' || cancel.verified === 'partially-filled') && cancel.legsCheckedAt == null)
   );
   const restartUnverifiedCancels = new Set((runtime.state.safety.manualEntries ?? [])
-    .filter(record => record.cancel != null && cancelNeedsRestartVerify(record.cancel) && record.bare !== true
+    .filter(record => record.cancel != null && cancelNeedsRestartVerify(record.cancel) && (record.bare !== true || isBarePendingEntry(record))
       && (record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId) != null
       && clock() - record.cancel.at <= RESTART_CANCEL_VERIFY_MAX_AGE_MS)
     .map(record => record.operationId));
@@ -3879,7 +3912,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    */
   type PendingEntryIncidentKind = 'partial' | 'unreadable' | 'not-entry' | 'cancel-working' | 'cancel-unverified'
     | 'restart-cancel' | 'prior-manual' | 'position-action' | 'follower-position' | 'follower-unknown' | 'uncovered'
-    | 'fill-unprotected' | 'copy-filled' | 'copy-cancel-failed' | 'outside-position' | 'outside-position-filled';
+    | 'fill-unprotected' | 'copy-filled' | 'copy-cancel-failed' | 'outside-position' | 'outside-position-filled' | 'bare-filled';
   const reportedPendingEntryIncidents = new Set<string>();
   const pendingEntryIncidentReported = (operationId: string, kind: PendingEntryIncidentKind) => (
     reportedPendingEntryIncidents.has(`${operationId}:${kind}`)
@@ -3911,7 +3944,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * Jen upozornění k záznamu (bez `failClosed`, `lastError` a zápisu u brokera): audit a push až po durable značce.
    * Selhaný commit odebere dedup klíč, takže další revize to zkusí znovu (žádné upozornění se neztratí potichu).
    */
-  const pendingEntryNotice = (operationId: string, kind: 'outside-position' | 'outside-position-filled', text: string, entryId: string) => {
+  const pendingEntryNotice = (operationId: string, kind: 'outside-position' | 'outside-position-filled' | 'bare-filled', text: string, entryId: string) => {
     if (pendingEntryIncidentReported(operationId, kind)) return;
     const key = `${operationId}:${kind}`;
     reportedPendingEntryIncidents.add(key);
@@ -3932,7 +3965,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const sameSide = (net > 0) === (record.request.side === 'Buy');
     const text = `${pendingEntryLabel(record, entryId)} dál čeká a na symbolu je pozice mimo appku (${net}) — vstup se neruší, kopírka zůstává zapnutá. ${sameSide
       ? 'Když se vyplní, pozici zvětší'
-      : 'Když se vyplní, pozici zmenší, zavře nebo otočí a jeho SL/TP můžou pracovat bez pozice jako nové vstupy'}; zkontroluj ho v Tradovate`;
+      : record.bare === true ? 'Když se vyplní, pozici zmenší, zavře nebo otočí'
+        : 'Když se vyplní, pozici zmenší, zavře nebo otočí a jeho SL/TP můžou pracovat bez pozice jako nové vstupy'}; zkontroluj ho v Tradovate`;
     pendingEntryNotice(record.operationId, 'outside-position', text, entryId);
   };
   /** C12: výsledek zrušení ověřený stavem do durable záznamu (status `cancelVerified`, jen zobrazení). */
@@ -4215,7 +4249,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const live = liveOrdersByAccount.get(accountId)?.get(entryId);
     if ((live?.filledQuantity ?? 0) > 0 || observedOrderStatusesByAccount.get(accountId)?.get(entryId) === 'filled') {
-      manualEntryAudit(operationId, 'blocked', `vlastní vstup je už vyplněný — nechávám ochranné nohy (${reason})`, entryId);
+      manualEntryAudit(operationId, 'blocked', `vlastní vstup je už vyplněný — ${record?.bare === true ? 'pozice je BEZ SL/TP' : 'nechávám ochranné nohy'} (${reason})`, entryId);
       return;
     }
     manualEntryCancelRequested.add(operationId);
@@ -4715,6 +4749,50 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     pendingEntryNotice(operationId, 'outside-position-filled', `Vstup ${side} ${quantity} ${symbol} (${entryId}) se vyplnil a jeho ${legsText}`, entryId);
     declineTransportResume(declineReason);
   };
+  /** Čtení u brokera s odstupem: po restartu stream o konci vstupu nemusí nic vědět a nerozhodnuto nesmí skončit potichu. */
+  const barePendingReads = new Map<string, { failures: number; nextAt: number; running: boolean }>();
+  /**
+   * Holý Limit/Stop už nečeká: vyplněný = pozice (`filledAt`), zrušený nebo odmítnutý bez fillu = záznam
+   * se uzavře, aby stav nenabízel × neexistující pozice. Neznámý konec (restart) rozhodne jedno čtení.
+   */
+  const reviewBarePendingEnded = (record: CopierManualEntryRecord, entryId: string, deferred: boolean) => {
+    const leader = group.leaderAccountId;
+    if (leader == null || deferred || record.status !== 'acknowledged' || record.closedAt != null || record.filledAt != null) return;
+    const settle = (status: string | undefined, filled: number) => {
+      if (status === 'filled' || filled > 0) { noteBarePendingFilled(record.operationId, clock()); return true; }
+      if (status === 'canceled' || status === 'rejected') {
+        void persistManualEntry(record.operationId, current => {
+          if (current?.filledAt != null) return current;
+          return { ...(current ?? record), closedAt: clock(), updatedAt: clock() };
+        }).catch(error => options.onError?.(new Error(`Vstup bez SL/TP: uzavření se nepodařilo uložit (${errorOf(error).message})`)));
+        return true;
+      }
+      return false;
+    };
+    if (settle(observedOrderStatusesByAccount.get(leader)?.get(entryId), observedOrderFilledByAccount.get(leader)?.get(entryId) ?? 0)) return;
+    const read = barePendingReads.get(record.operationId) ?? { failures: 0, nextAt: 0, running: false };
+    barePendingReads.set(record.operationId, read);
+    if (read.running || clock() < read.nextAt) return;
+    read.running = true;
+    const unreadable = () => {
+      read.failures += 1;
+      read.nextAt = clock() + pendingEntryReadBackoffMs(read.failures);
+      if (read.failures >= PENDING_ENTRY_READ_MAX_FAILURES) {
+        // Čte se dál s odstupem; incident jen říká, že stav není známý a může to být pozice bez ochrany.
+        pendingEntryIncident(record.operationId, 'unreadable', `${pendingEntryLabel(record, entryId)}: stav u brokera nejde přečíst — může to být pozice BEZ SL/TP, zkontroluj leadera`, entryId);
+      }
+    };
+    void boundedManagedOrderLookup(leader, entryId).then(lookup => {
+      if (lookup?.completeness !== 'authoritative' || !lookup.order) { unreadable(); return; }
+      if (settle(lookup.order.status, lookup.order.filledQuantity)) return;
+      // Podle brokera dál čeká, ale stream o něm neví: zkusit znovu, jeho konec by se jinak nikdo nedozvěděl.
+      read.failures = 0;
+      read.nextAt = clock() + pendingEntryReadBackoffMs(1);
+    }, error => {
+      options.onError?.(new Error(`Vstup bez SL/TP: stav nejde přečíst (${errorOf(error).message})`));
+      unreadable();
+    }).finally(() => { read.running = false; });
+  };
   const reviewPendingOwnEntries = () => {
     const leader = group.leaderAccountId;
     if (stopped || leader == null) return;
@@ -4729,7 +4807,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const halt = cmeDailyHaltWindow(now, MANUAL_ENTRY_END_RESERVE_MS);
     const positions = positionsByAccount.get(leader);
     for (const record of manualEntryRecords()) {
-      if (record.request.accountId !== leader || record.bare === true) continue;
+      // Holý Market je vyplněný hned. Holý Limit/Stop čeká jako každý čekající vstup a platí pro něj stejné zrušení (C12).
+      if (record.request.accountId !== leader || (record.bare === true && !isBarePendingEntry(record))) continue;
       const entryId = record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId;
       if (!entryId) continue;
       const kind = record.scaleIn === true ? 'add' as const : 'from-flat' as const;
@@ -4748,7 +4827,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const live = liveOrdersByAccount.get(leader)?.get(entryId);
       if (!live || !isOpenOrderStatus(live.status)) {
         pendingEntryOutsideSince.delete(record.operationId);
-        reviewFilledEntryLegsWithoutPosition(record, entryId, kind, deferred, now);
+        if (record.bare === true) reviewBarePendingEnded(record, entryId, deferred);
+        else reviewFilledEntryLegsWithoutPosition(record, entryId, kind, deferred, now);
         continue;
       }
       filledEntryLegsOverSince.delete(record.operationId);
@@ -4883,7 +4963,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const pendingEntryAutoCancelStatus = (record: CopierManualEntryRecord): { autoCancelAt?: number; autoCancelReason?: 'cme-halt' | 'arm-expiry' } => {
     try {
       const entryId = record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId;
-      if (!entryId || record.request.orderType === 'Market' || record.bare === true || record.cancel) return {};
+      if (!entryId || record.request.orderType === 'Market' || record.cancel) return {};
       const live = liveOrdersByAccount.get(record.request.accountId)?.get(entryId);
       if (!live || !isOpenOrderStatus(live.status) || live.filledQuantity > 0) return {};
       const now = clock();
@@ -5082,7 +5162,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ...(leader.stopLoss != null && leader.takeProfit != null ? { stopLoss: leader.stopLoss, takeProfit: leader.takeProfit } : {}),
     };
     const bare = request.stopLoss == null && request.takeProfit == null;
-    if (bare && request.orderType !== 'Market') return blocked([{ code: 'bare-not-market', text: 'Bez SL/TP jde jen Market.' }]);
+    // Holý Limit/Stop jen v sólo DEMO skupině a po 1 kontraktu. Kopie followerům by šla bez ochrany.
+    if (bare && request.orderType !== 'Market' && (!soloGroupOn() || request.quantity !== LEADER_ENTRY_BARE_PENDING_QUANTITY)) {
+      return blocked([{ code: 'bare-not-market', text: 'Limit a Stop bez SL/TP jdou jen po 1 kontraktu na ručním DEMO účtu bez followerů.' }]);
+    }
     // Přikoupení: epizoda deníku pozice, do které se přikupuje (fill v jiné = nový obchod = incident).
     const scaleInBase = command.position ? scaleInGate(command, createdAt) : null;
     if (command.position && (bare || !scaleInBase)) return blocked([{ code: 'scale-in-off', text: 'Přikoupení teď nejde ověřit — nic se neodeslalo.' }]);
@@ -5122,6 +5205,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (late.length > 0) return notSent(late[0].code, `${late[0].text}`);
     }
+    if (bare && request.orderType !== 'Market') {
+      // Mezi vyhodnocením a POSTem běžel durable zápis: bez nohou nesmí vstup odejít přes trh nebo moc blízko.
+      let quoteNow: ManualEntryWorkerQuote | null = null;
+      try { quoteNow = options.manualEntryQuote?.('MNQ') ?? null; } catch { quoteNow = null; }
+      const late = manualEntryBarePendingBlockers(command, quoteNow, clock());
+      if (late.length > 0) return notSent(late[0].code, late[0].text);
+    }
     if (command.position) {
       // Druhá pojistka přikoupení synchronně z paměti těsně před POSTem (návrh v4 §3.4, N1):
       // brána i strop celé pozice znovu — nikdy REST, nikdy čekání.
@@ -5141,10 +5231,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       second: { side: exitSide, orderType: 'Limit', limitPrice: request.takeProfit },
     };
     const dispatchAt = clock();
-    manualEntryAudit(operationId, 'dispatched', `ruční ${bare ? 'Market BEZ SL/TP' : 'OSO'} ${request.side} ${request.quantity} ${request.symbol} ${request.orderType === 'Market' ? `MKT (viděno ${request.referencePrice})` : `${request.orderType === 'Limit' ? 'LMT' : 'STP'} ${request.price}`}${bare ? '' : ` SL ${request.stopLoss} TP ${request.takeProfit}`} [fronta ${timing.queuedAt != null ? timing.startedAt - timing.queuedAt : '?'} ms · příprava ${dispatchAt - timing.startedAt} ms]`);
-    // Holý Market (telefonní lišta): jediný Market příkaz, bez nohou — výsledek ve tvaru ACK OSO bez id nohou.
+    manualEntryAudit(operationId, 'dispatched', `ruční ${bare ? `${request.orderType} BEZ SL/TP` : 'OSO'} ${request.side} ${request.quantity} ${request.symbol} ${request.orderType === 'Market' ? `MKT (viděno ${request.referencePrice})` : `${request.orderType === 'Limit' ? 'LMT' : 'STP'} ${request.price}`}${bare ? '' : ` SL ${request.stopLoss} TP ${request.takeProfit}`} [fronta ${timing.queuedAt != null ? timing.startedAt - timing.queuedAt : '?'} ms · příprava ${dispatchAt - timing.startedAt} ms]`);
+    // Holý vstup: jediný příkaz bez nohou (Market, nebo Limit/Stop s cenou) — výsledek ve tvaru ACK OSO bez id nohou.
     const post: Promise<BrokerOsoAck> = bare
-      ? fenced.placeOrder({ tag, accountId: request.accountId, symbol: request.symbol, side: request.side, quantity: request.quantity, orderType: 'Market' })
+      ? fenced.placeOrder({ tag, accountId: request.accountId, symbol: request.symbol, side: request.side, quantity: request.quantity, orderType: request.orderType,
+        ...(request.orderType === 'Limit' ? { limitPrice: request.price } : request.orderType === 'Stop' ? { stopPrice: request.price } : {}) })
         .then(ack => ({
           entryBrokerOrderId: ack.accepted ? ack.brokerOrderId : '', firstBrokerOrderId: '', secondBrokerOrderId: '',
           accepted: ack.accepted, definitive: ack.definitive, ...(ack.rejectReason ? { rejectReason: ack.rejectReason } : {}),
@@ -5176,6 +5267,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // Market se u brokera vyplní hned: neznámý výsledek může být otevřená pozice.
         // Incident (DISARM, lastError přežije restart), nikdy opakování (P2-11).
         failClosed(new Error(`Ruční Market ${request.side} ${request.quantity} ${request.symbol}: výsledek neznámý — zkontroluj pozici leadera, žádné opakování`), { autoClose: false });
+      } else if (bare) {
+        // Holý Limit/Stop s neznámým výsledkem může u brokera pracovat bez ochrany a hlídání bez id ho nevidí.
+        // Incident, nikdy opakování; pozdní ACK za vypnuté kopírky ho níže cíleně zruší.
+        failClosed(new Error(`Ruční ${request.orderType} BEZ SL/TP ${request.side} ${request.quantity} ${request.symbol}: výsledek neznámý — zkontroluj leadera v Tradovate, žádné opakování`), { autoClose: false });
       } else if (command.position) {
         // Přikoupení s neznámým výsledkem: bez id ho hlídání čekajících nevidí — incident (DISARM);
         // pozdní ACK za vypnuté kopírky ho pak cíleně zruší (níže).
@@ -5254,7 +5349,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     // Ochranné kroky nezávisle na commitu (M2): vlastnictví už je v paměti.
     let resultReason = reason;
-    if (status === 'abandoned') {
+    if (status === 'unknown' && bare) {
+      // Holý příkaz bez potvrzeného výsledku může u brokera pracovat bez ochrany a bez id. Nikdy opakování.
+      failClosed(new Error(`Ruční ${request.orderType} BEZ SL/TP ${request.side} ${request.quantity} ${request.symbol}: broker výsledek nepotvrdil — zkontroluj leadera v Tradovate, žádné opakování`), { autoClose: false });
+    } else if (status === 'abandoned') {
       failClosed(new Error(`Ruční vstup ${entryId}: broker vrátil vstup bez ochranných nohou; vstup leadera se ruší`), { autoClose: false });
       cancelOwnManualEntry(operationId, 'vstup bez ochranných nohou', { entryId: entryId!, accountId: request.accountId });
     } else if (status === 'acknowledged' && (!gate.armed || gate.shadowMode) && request.orderType === 'Market') {
@@ -5293,7 +5391,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
     manualEntryAudit(operationId, status === 'acknowledged' ? 'recovered' : status === 'rejected' ? 'rejected' : status === 'abandoned' ? 'abandoned' : 'unknown',
-      status === 'acknowledged' ? (bare ? `ruční Market BEZ SL/TP přijat: vstup ${entryId} [POST ${ackAt - dispatchAt} ms]` : `ruční OSO přijato: vstup ${entryId}, SL ${stopId}, TP ${targetId} [POST ${ackAt - dispatchAt} ms]`) : reason!, entryId);
+      status === 'acknowledged' ? (bare ? `ruční ${request.orderType} BEZ SL/TP přijat: vstup ${entryId} [POST ${ackAt - dispatchAt} ms]` : `ruční OSO přijato: vstup ${entryId}, SL ${stopId}, TP ${targetId} [POST ${ackAt - dispatchAt} ms]`) : reason!, entryId);
     // ACK už je autoritativní brokerová odpověď a výše jsme z něj sestavili
     // zobrazovací liveOrders i durable manualEntry. Probuď LIVE hned teď:
     // čekat na následný order event stejného OSO přidávalo stovky ms, přestože
@@ -6020,6 +6118,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     return { problem: fillPositionProblem({ net, filled, side }) ?? 'pozice leadera nejde ověřit', mismatch: net != null };
   };
+  /** Záznam zná fill i tehdy, když ho doručilo čtení, ne stream. Jen značka: o incidentu rozhoduje volající. */
+  const noteBarePendingFilledDuringCancel = (operationId: string) => {
+    const record = manualEntryRecords().find(item => item.operationId === operationId);
+    if (!record || !isBarePendingEntry(record) || record.filledAt != null) return;
+    void persistManualEntry(operationId, current => {
+      if (current?.filledAt != null) return current;
+      const { closedAt: _closed, ...rest } = current ?? record;
+      return { ...rest, filledAt: clock(), updatedAt: clock() };
+    }).catch(error => options.onError?.(new Error(`Vstup bez SL/TP: značku vyplnění se nepodařilo uložit (${errorOf(error).message})`)));
+  };
   const checkCancelEntryFillProtection = (
     operationId: string, key: string, entryId: string, filled: number, entry: { side: string; symbol: string } | null,
   ): Promise<'protected' | 'flat' | 'incident'> => {
@@ -6060,6 +6168,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         manualEntryAudit(operationId, 'blocked', `cancel-entry ${entryId}: vstup se při rušení vyplnil (${filled}), pozice je už zavřená a nic nepracuje (ověřeno čtením; příčina neověřena)`, entryId);
         return true;
       };
+      // Holý Limit/Stop nohy nikdy neměl: fill během rušení je vědomě nechráněná pozice, ne ztracené nohy.
+      if (record?.bare === true && !legs) {
+        noteBarePendingFilledDuringCancel(key);
+        if (await verifiedFlatNow()) return 'flat';
+        return report(`vstup ${entryId} se při rušení vyplnil (${filled}) — pozice je otevřená BEZ SL/TP, nikdy je neměl; doplň SL, nebo ji zavři Flattenem`);
+      }
       if (problem == null) {
         // Oponentura C12 kolo 5 (P2): nohy kryjí fill jen nad pozicí, kterou fill OTEVŘEL / zvětšil (znaménko
         // strany vstupu, |net| ≥ fill). Fill vstupu proti pozici na opačné straně ji zavřel / zmenšil a nohy
@@ -6211,6 +6325,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     | { code: string; text: string } => {
     if (command.entryOperationId) {
       const entry = manualEntryRecords().find(record => record.operationId === command.entryOperationId);
+      // Holý Limit/Stop bez nohou jde spravovat jen zrušením: nohy prázdné, `byId` je nenajde.
+      if (command.action === 'cancel-entry' && entry?.status === 'acknowledged' && isBarePendingEntry(entry) && entry.entryBrokerOrderId
+        && !entry.stopBrokerOrderId && !entry.targetBrokerOrderId && entry.request.accountId === group.leaderAccountId) {
+        return { key: entry.operationId, entryId: entry.entryBrokerOrderId, stopId: '', targetId: '', symbol: entry.request.symbol,
+          intentPrice: entry.request.price ?? null, entryExpect: { side: entry.request.side, orderType: entry.request.orderType } };
+      }
       if (!entry || entry.status !== 'acknowledged' || !entry.entryBrokerOrderId || !entry.stopBrokerOrderId || !entry.targetBrokerOrderId
         || entry.request.accountId !== group.leaderAccountId) {
         return { code: 'not-own-entry', text: 'Spravovat jde jen vlastní přijatý ruční vstup z grafu.' };
@@ -6272,8 +6392,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const leader = group.leaderAccountId;
     if (!entry || entry.status !== 'acknowledged' || entry.bare !== true || !entry.entryBrokerOrderId
       || leader == null || entry.request.accountId !== leader) {
-      return manageBlocked(command, 'not-bare-entry', 'Nohy jde doplnit jen k vlastnímu přijatému Marketu bez SL/TP.');
+      return manageBlocked(command, 'not-bare-entry', 'Nohy jde doplnit jen k vlastnímu přijatému vstupu bez SL/TP.');
     }
+    if (!bareEntryFilled(entry)) return manageBlocked(command, 'entry-not-filled', 'Vstup ještě čeká na vyplnění — SL a TP jdou až k pozici.');
     if (entry.stopBrokerOrderId || entry.targetBrokerOrderId) return manageBlocked(command, 'already-protected', 'Obchod už SL/TP má.');
     // Starý holý záznam nesmí „adoptovat“ pozici jiného vstupu (oponentura P1-3): jen nejnovější
     // ruční vstup a jen dokud leader na symbolu od jeho fillu nezplochl.
@@ -6494,10 +6615,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (!soloGroupOn()) return manageBlocked(command, 'not-solo', 'SL a TP po jedné jdou jen na ručním DEMO účtu bez followerů.');
     if (!entry || entry.status !== 'acknowledged' || entry.bare !== true || !entry.entryBrokerOrderId || leader == null
       || entry.request.accountId !== leader || entry.closedAt != null) {
-      return manageBlocked(command, 'not-bare-entry', 'SL a TP po jedné jdou jen u vlastní otevřené pozice z Marketu bez nohou.');
+      return manageBlocked(command, 'not-bare-entry', 'SL a TP po jedné jdou jen u vlastní otevřené pozice ze vstupu bez nohou.');
     }
+    if (!bareEntryFilled(entry)) return manageBlocked(command, 'entry-not-filled', 'Vstup ještě čeká na vyplnění — SL a TP jdou až k pozici.');
     if (newestManualEntry(manualEntryRecords())?.operationId !== entry.operationId) {
-      return manageBlocked(command, 'entry-closed', 'Tenhle Market nahradil novější vstup — nohy nastav v Tradovate.');
+      return manageBlocked(command, 'entry-closed', 'Tenhle vstup nahradil novější — nohy nastav v Tradovate.');
     }
     if (group.id !== command.groupId || command.leaderAccountId !== leader || entry.request.symbol !== command.symbol) {
       return manageBlocked(command, 'not-leader', 'Obchod nepatří leaderovi této skupiny.');
@@ -6521,7 +6643,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (manualOrderActionJobs.size > 0 || positionActionsInFlight.size > 0 || (pendingTradeIngressByAccount.get(leader) ?? 0) > 0) {
       return manageBlocked(command, 'busy', 'Kopírka ještě dokončuje jinou změnu — zkus to za chvíli.');
     }
-    if (!singleLegFillSettled({ now: clock(), fillAt: manualEntryStreamTimes.get(entry.operationId)?.fillAt ?? null, createdAt: entry.createdAt, windowMs: bracketCorrelator.pendingTimeoutMs() })) {
+    if (!singleLegFillSettled({ now: clock(), fillAt: manualEntryStreamTimes.get(entry.operationId)?.fillAt ?? entry.filledAt ?? null, createdAt: entry.createdAt, windowMs: bracketCorrelator.pendingTimeoutMs() })) {
       return manageBlocked(command, 'fill-settling', 'Vstup se právě vyplnil — zkus to za chvíli.');
     }
     let orders: BrokerOrder[];
@@ -6545,7 +6667,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const long = side === 'Buy';
     const expectedNet = long ? quantity : -quantity;
     if (!entryOrder || entryOrder.status !== 'filled' || entryOrder.filledQuantity !== quantity || net !== expectedNet) {
-      return manageBlocked(command, 'shape', 'Pozice nesedí s Marketem (jiný počet, částečné vyplnění nebo je zavřená) — nohy nastav v Tradovate nebo zavři Flattenem.');
+      return manageBlocked(command, 'shape', 'Pozice nesedí se vstupem (jiný počet, částečné vyplnění nebo je zavřená) — nohy nastav v Tradovate nebo zavři Flattenem.');
     }
     const openOnSymbol = orders.filter(order => order.symbol === symbol && isOpenOrderStatus(order.status));
     if (openOnSymbol.some(order => order.brokerOrderId !== stopId && order.brokerOrderId !== targetId)) {
@@ -6611,7 +6733,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
     if (action === 'move-stop' && (long ? newPrice! < stopPrice! : newPrice! > stopPrice!)) {
-      const blocked = moveStopRiskBlocked(command, leader, symbol, stopId!, quantity, entry.request.referencePrice ?? stopPrice!, newPrice!);
+      const blocked = moveStopRiskBlocked(command, leader, symbol, stopId!, quantity, bareEntryReferencePrice(entry) ?? stopPrice!, newPrice!);
       if (blocked) return blocked;
     }
     if (clock() >= deadlineAt) return manageBlocked(command, 'expired', 'Platnost příkazu vypršela — nic se neodeslalo.');
@@ -6950,7 +7072,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // INV-OUTBOX-01: záznam je durable dřív, než cokoli odejde k brokerovi.
     await persistManualOrderAction(command.operationId, () => ({
       operationId: command.operationId, payloadHash: command.payloadHash, entryOperationId: entry.operationId,
-      action: 'close-position', status: 'sending', targetBrokerOrderId: entryId, fromPrice: entry.request.referencePrice ?? null, symbol,
+      action: 'close-position', status: 'sending', targetBrokerOrderId: entryId, fromPrice: bareEntryReferencePrice(entry) ?? null, symbol,
       toPrice: null, quantity, createdAt, updatedAt: createdAt, bareClose: true,
     }));
     const generation = safetyGeneration;
@@ -7429,8 +7551,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (filledAgainst) {
           return manageBlocked(command, full ? 'entry-filled' : 'entry-partially-filled', `Vstup se mezitím ${full ? `vyplnil (${filledQuantity})` : `z části vyplnil (${filledQuantity}/${entryOrder.quantity}) a skončil`} — ${OPPOSITE_FILL_SHAPE}; nic se nezrušilo, zkontroluj leadera v Tradovate nebo dej Flatten.`);
         }
+        if (ownEntryRecord?.bare === true) noteBarePendingFilled(ownEntryRecord.operationId, clock());
         return manageBlocked(command, full ? 'entry-filled' : 'entry-partially-filled', full
-          ? `Vstup se mezitím vyplnil (${filledQuantity}) — pozice je otevřená; nic se nezrušilo, zavři ji × nebo Flattenem.`
+          ? `Vstup se mezitím vyplnil (${filledQuantity}) — pozice je otevřená${ownEntryRecord?.bare === true ? ' BEZ SL/TP' : ''}; nic se nezrušilo, zavři ji × nebo Flattenem.`
           : `Vstup se mezitím z části vyplnil (${entryOrder.filledQuantity}/${entryOrder.quantity}) a skončil — pozice je otevřená; nic se nezrušilo, ${PARTIAL_CLOSE_HINT}`);
       }
       if (opposite === 'unproven') return manageBlocked(command, 'not-entry', pendingEntryOppositeProblem(leaderNetNow));
@@ -15004,7 +15127,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // Zrušený/odmítnutý vlastní vstup nečeká na nohy: nic se nezkopírovalo a není co rušit.
     const manualEntryTerminal = group.leaderAccountId != null
       && terminalLeaderOrdersOnIngress.has(`${group.leaderAccountId}:${entryOrderId}`);
-    if (manualOwnership && !manualEntryTerminal) {
+    // Holý Limit/Stop (id z ACK, záznam `bare`) nohy nemá a mít nebude: nečeká se a nic se nekopíruje (jen sólo skupina).
+    // Před ACK nebo s neznámým výsledkem zůstává `maybe`: nic se nepřiřazuje podle účtu, symbolu ani počtu.
+    const ownBarePending = manualOwnership === 'own'
+      && isBarePendingEntry(manualEntryRecords().find(record => record.operationId === ownManualEntryOrderIds.get(entryOrderId)));
+    if (manualOwnership && !manualEntryTerminal && !ownBarePending) {
       const firstAt = manualEntryLegWaitStartedAt.get(entryOrderId) ?? clock();
       manualEntryLegWaitStartedAt.set(entryOrderId, firstAt);
       if (clock() - firstAt < MANUAL_ENTRY_LEG_WAIT_MS && !stopped) {
@@ -15031,6 +15158,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     if (entryWasBlocked) {
+      settleOsoFlush(entryOrderId);
+      return;
+    }
+    if (ownBarePending && !manualEntryTerminal) {
+      options.onAudit?.([{ at: clock(), leaderEventId: pending.id, kind: 'skipped', reason: `ruční vstup ${entryOrderId} je vědomě bez SL/TP — nic se nekopíruje` }]);
       settleOsoFlush(entryOrderId);
       return;
     }
@@ -22196,7 +22328,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   pendingEntryReviewReady = true;
   const scaleInReviewTimer = setInterval(() => {
     const leader = group.leaderAccountId;
-    if (manualEntryRecords().some(record => record.scaleIn === true || (record.request.orderType !== 'Market' && record.bare !== true && (() => {
+    if (manualEntryRecords().some(record => record.scaleIn === true
+      // Holý Limit/Stop se dívá i po konci příkazu, dokud se nerozhodne, zda je z něj pozice.
+      || (isBarePendingEntry(record) && record.status === 'acknowledged' && record.filledAt == null && record.closedAt == null)
+      || (record.request.orderType !== 'Market' && (() => {
       const entryId = record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId;
       const live = entryId && leader != null ? liveOrdersByAccount.get(leader)?.get(entryId) : undefined;
       return live != null && isOpenOrderStatus(live.status);
@@ -23032,6 +23167,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // Čistá kontrola s leaderem flat na symbolu: otevřené holé vstupy jsou uzavřené (P2, 2. 11.).
         for (const record of manualEntryRecords()) {
           if (record.bare !== true || record.closedAt != null || record.status !== 'acknowledged' || record.createdAt > reconcileStartedAt) continue;
+          // Čekající holý Limit/Stop není uzavřený obchod: flat je u něj normální stav.
+          const entryLive = record.entryBrokerOrderId ? liveOrdersByAccount.get(group.leaderAccountId)?.get(record.entryBrokerOrderId) : undefined;
+          if (isBarePendingEntry(record) && entryLive && isOpenOrderStatus(entryLive.status)) continue;
           if ((positionsByAccount.get(group.leaderAccountId)?.get(record.request.symbol) ?? null) !== 0) continue;
           const closedAt = clock();
           await persistManualEntry(record.operationId, current => ({ ...(current ?? record), closedAt, updatedAt: closedAt }));
@@ -23744,6 +23882,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           const out: NonNullable<CopierControllerStatus['manageableLeaderTrades']> = [];
           const seen = new Set<string>();
           for (const record of manualEntryRecords()) {
+            // Čekající holý Limit/Stop: jen × (zrušení). Po fillu ho spravuje `bareLegTrade`.
+            if (record.status === 'acknowledged' && isBarePendingEntry(record) && record.entryBrokerOrderId && record.filledAt == null && record.closedAt == null
+              && !record.stopBrokerOrderId && !record.targetBrokerOrderId && isOpenOrderStatus(leaderOrders?.get(record.entryBrokerOrderId)?.status ?? 'canceled')) {
+              seen.add(record.entryBrokerOrderId);
+              out.push({ source: 'own', bare: true, entryOperationId: record.operationId, leaderEntryOrderId: record.entryBrokerOrderId, symbol: record.request.symbol, side: record.request.side,
+                entryAvgPrice: null });
+              continue;
+            }
             if (record.status !== 'acknowledged' || !record.entryBrokerOrderId || !record.stopBrokerOrderId || !record.targetBrokerOrderId) continue;
             if (!(live(record.stopBrokerOrderId) || live(record.targetBrokerOrderId) || leaderOrders?.has(record.entryBrokerOrderId))) continue;
             seen.add(record.entryBrokerOrderId);

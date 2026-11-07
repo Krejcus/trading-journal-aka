@@ -192,6 +192,7 @@ interface Props {
   // ── U1/U3/U4/U5/U7/U8/U10 (3. 11. 2026): výchozí hodnoty = dnešní chování ──
   /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); výchozí false. */
   entryBareSupported?: boolean;
+  entryBarePendingSupported?: boolean;
   /** Vlastní přijatý holý Market bez nohou (desk `newestOpenBareEntry`); výchozí null. */
   entryBareEntry?: LiveBareEntryRecord | null;
   /** Pozice leadera skupiny workeru na symbolu grafu (`liveAttachIntent.position`); výchozí null. */
@@ -260,7 +261,7 @@ function useMinuteNow() {
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveLimitSupported, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
-  entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
+  entryBareSupported = false, entryBarePendingSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null, alertWatch = null,
   bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange,
 }) => {
@@ -1048,6 +1049,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             entryFrontContract={entryFrontContract}
             // U4/U8/U10 (3. 11. 2026): jen podklady panelu; příkazy dál jen přes callbacky desku.
             entryBareSupported={entryBareSupported}
+            entryBarePendingSupported={entryBarePendingSupported}
             entryBareEntry={entryBareEntry}
             entryLeaderPosition={entryLeaderPosition}
             {...(onAttachBrackets ? { onAttachBrackets } : {})}

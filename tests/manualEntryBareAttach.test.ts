@@ -76,12 +76,14 @@ const fillMarket = (broker: MockBroker, entryId: string, quantity: number) => {
 };
 
 describe('holý Market a doplnění SL/TP (manual-only DEMO)', () => {
-  it('validace: holý jen Market a jen bez obou nohou', () => {
+  it('validace: holý vstup jen bez obou nohou, Limit jen po 1 kontraktu', () => {
     const base = { type: 'preview-leader-entry', groupId: 'g', operationId: 'preview:abcdefgh1', leaderAccountId: 1, symbol: SYM, side: 'Buy', quantity: 1,
       intent: { armedAt: 1, groupConfigHash: 'abcdefgh', followerQuantities: [] } };
     expect(() => validateLeaderEntryPreview({ ...base, orderType: 'Market', referencePrice: 25_000, quoteReceivedAt: START })).not.toThrow();
     expect(() => validateLeaderEntryPreview({ ...base, orderType: 'Market', referencePrice: 25_000, quoteReceivedAt: START, stopLoss: 24_990 })).toThrow();
-    expect(() => validateLeaderEntryPreview({ ...base, orderType: 'Limit', price: 24_990 })).toThrow();
+    // Holý Limit od 7. 11. 2026 jen po 1 kontraktu.
+    expect(() => validateLeaderEntryPreview({ ...base, orderType: 'Limit', price: 24_990 })).not.toThrow();
+    expect(() => validateLeaderEntryPreview({ ...base, quantity: 2, orderType: 'Limit', price: 24_990 })).toThrow();
     const manage = { groupId: 'g', operationId: 'manage:abcdefgh1', leaderAccountId: 1, entryOperationId: 'entry:abcdefgh1', symbol: SYM,
       action: 'attach-brackets' as const, expect: { price: 25_000, quantity: 1 } };
     expect(() => validateLeaderOrderManage(buildLeaderOrderManageCommand({ ...manage, stopLoss: 24_990, takeProfit: 25_020 }))).not.toThrow();

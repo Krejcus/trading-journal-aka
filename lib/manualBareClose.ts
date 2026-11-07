@@ -42,6 +42,8 @@ export interface BareCloseEntryRecord {
   createdAt: number;
   bare?: true;
   closedAt?: number;
+  /** Holý Limit/Stop: durable značka fillu. U Marketu chybí, ten je vyplněný hned. */
+  filledAt?: number;
   entryBrokerOrderId?: string;
   stopBrokerOrderId?: string;
   targetBrokerOrderId?: string;
@@ -51,8 +53,24 @@ export interface BareCloseEntryRecord {
     side: BareCloseSide;
     quantity: number;
     orderType?: string;
+    price?: number;
     referencePrice?: number;
   };
+}
+
+/** Holý Limit nebo Stop (vstup bez nohou, který čeká na vyplnění). */
+export function isBarePendingEntry(record: Pick<BareCloseEntryRecord, 'bare' | 'request'> | null | undefined): boolean {
+  return record?.bare === true && record.request.orderType != null && record.request.orderType !== 'Market';
+}
+
+/** Už je z holého záznamu pozice? Market hned, Limit a Stop až s durable značkou fillu. */
+export function bareEntryFilled(record: Pick<BareCloseEntryRecord, 'bare' | 'request' | 'filledAt'>): boolean {
+  return !isBarePendingEntry(record) || record.filledAt != null;
+}
+
+/** Cena, kterou uživatel viděl: cena Limit/Stop, jinak kotace u Marketu. Konstanta záznamu, jen konzistence payloadu. */
+export function bareEntryReferencePrice(record: Pick<BareCloseEntryRecord, 'request'>): number | undefined {
+  return record.request.price ?? record.request.referencePrice;
 }
 
 /** Holý záznam bez nohou (bez ohledu na stav) — rozhoduje, zda `close-position` jde cestou C8. */
@@ -94,9 +112,9 @@ export function selectBareLeaderTrade(
 ): BareLeaderTrade | null {
   if (!context.solo || context.leaderAccountId == null) return null;
   const newest = newestManualEntry(records);
-  if (!newest || newest.status !== 'acknowledged' || !isBareEntryAtMostOneLeg(newest) || newest.closedAt != null
+  if (!newest || newest.status !== 'acknowledged' || !isBareEntryAtMostOneLeg(newest) || newest.closedAt != null || !bareEntryFilled(newest)
     || !newest.entryBrokerOrderId || newest.request.accountId !== context.leaderAccountId) return null;
-  const reference = newest.request.referencePrice;
+  const reference = bareEntryReferencePrice(newest);
   if (typeof reference !== 'number' || !Number.isFinite(reference) || reference <= 0) return null;
   return {
     entryOperationId: newest.operationId, symbol: newest.request.symbol, side: newest.request.side,
@@ -115,8 +133,8 @@ export function selectBareLegTrade(
 ): BareLeaderTrade | null {
   if (!context.solo || context.leaderAccountId == null) return null;
   const newest = newestManualEntry(records);
-  const reference = newest?.request.referencePrice;
-  if (!newest || newest.status !== 'acknowledged' || newest.bare !== true || newest.closedAt != null || !newest.entryBrokerOrderId
+  const reference = newest ? bareEntryReferencePrice(newest) : undefined;
+  if (!newest || newest.status !== 'acknowledged' || newest.bare !== true || newest.closedAt != null || !bareEntryFilled(newest) || !newest.entryBrokerOrderId
     || newest.request.accountId !== context.leaderAccountId || typeof reference !== 'number' || !Number.isFinite(reference) || reference <= 0) return null;
   return {
     entryOperationId: newest.operationId, symbol: newest.request.symbol, side: newest.request.side, quantity: newest.request.quantity, referencePrice: reference,
@@ -155,6 +173,10 @@ export function bareCloseRecordBlockers(input: {
     || input.leaderAccountId == null || record.request.accountId !== input.leaderAccountId) {
     return [{ code: 'not-bare-entry', text: 'Zavřít jde jen vlastní přijatý Market bez SL/TP.' }];
   }
+  // Holý Limit/Stop před fillem žádnou pozici nemá: ruší se jako čekající vstup, ne zavírá.
+  if (!bareEntryFilled(record)) {
+    return [{ code: 'entry-not-filled', text: 'Vstup ještě čeká na vyplnění — zruš ho, pozice zatím žádná není.' }];
+  }
   if (!input.solo) {
     return [{ code: 'not-solo', text: 'Holou pozici jde z appky zavřít jen na ručním DEMO účtu bez followerů — zavři ji Flattenem.' }];
   }
@@ -170,8 +192,8 @@ export function bareCloseRecordBlockers(input: {
     return [{ code: 'not-armed', text: 'Zavření jde jen za zapnuté kopírky (ne shadow, ne kill) — holou pozici zavři Flattenem na Live Dashboardu.' }];
   }
   // „Co jsem viděl“ = počet kontraktů; referencePrice je konstanta záznamu (P3), jen konzistence payloadu.
-  if (command.expect.quantity !== record.request.quantity || record.request.referencePrice == null
-    || command.expect.price !== record.request.referencePrice) {
+  if (command.expect.quantity !== record.request.quantity || bareEntryReferencePrice(record) == null
+    || command.expect.price !== bareEntryReferencePrice(record)) {
     return [{ code: 'order-changed', text: 'Pozice se od zobrazení změnila — obnov panel.' }];
   }
   return [];
