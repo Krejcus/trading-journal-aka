@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-07 — Zobáček do současnosti, position box s pozicí, zvuky SL/TP (Claude, web + iPhone, Filip „Ano, začni“)
+
+- **Zobáček (`components/day/ChartJumpToNow.tsx`, jen telefonní graf):** podle TradingView; vidět jen s poslední svíčkou mimo záběr. `scrollToRealTime` nejde, skončil by na prázdné ose budoucnosti, proto `jumpToNow` v `lib/liveChartFollow.ts`.
+- **Box s pozicí (`lib/livePositionBox.ts`, výchozí zapnuto):** vybere se box stejného směru, ve kterém leží vstup pozice (ne starší než 4 h, ne už ukončený). Okraj roste po minutách, po ověřeném „bez pozice“ se nastaví na čas zavření a dostane `style.liveEndedAt`. Neověřený stav ani přepnutí účtu v pohledu box neukončí. Mimo historii Zpět/Vpřed (`withoutChartHistory`).
+- **Zvuky SL/TP (`lib/liveExitAlerts.ts`, výchozí „jako zvuk při fillu“):** z `exitReason` událostí workeru, nikdy z ceny. Pozice může skončit dřív, než worker pozná nohu, událost pak přijde jako `manual` a stejné id se opraví, proto detektor `manual` dál sleduje. Pak může zaznít nejdřív běžný zvuk fillu a po opravě vlastní zvuk.
+- **Dotčená pravidla:** INV-UI-01, INV-UI-03, INV-UI-04: jen zobrazení, nic neautorizuje, neověřený stav je neutrální, důvod z brokera. ⚡ čte z boxu jen ceny a ty se nemění. Jádro kopírky beze změny, proto bez `copier-design-critic`.
+- **Neověřeno:** protažení boxu a zvuky na skutečné pozici (trh zavřený, jen testy s náhradou motoru a náhled nastavení); zvuk na iPhonu bez gesta a s tichým režimem; zobáček dotykem. Vlastní zvuk hraje jen s otevřeným grafem, v pozadí zůstává push.
 ### 2026-11-07 — Limit a Stop opravdu bez SL/TP (Claude, NASAZENO 7. 11. z `eaa40d5d`: web, worker, iPhone, Filip „Nasaď“)
 
 - **Proč:** Filip chce Limit a Stop jako v TradingView, po vyplnění bez SL a TP, dokud je nenatáhne. Na otázku, jestli smí jít o vzdálený SL: „Ne, opravdu bez.“ Parkované nohy z návrhu v4 se proto nestaví.

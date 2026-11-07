@@ -91,6 +91,21 @@ const normalizeRange = <T extends LogicalRangeLike | PriceRangeLike>(range: T | 
   to: normalizeNumber(range.to),
 } as T) : null;
 
+let programmaticDepth = 0;
+
+/**
+ * Změna kresby, kterou neudělal uživatel (box protažený s pozicí): nesmí zabrat
+ * krok Zpět ani smazat Vpřed. Vyžaduje synchronní `onChange` motoru kreseb.
+ */
+export function withoutChartHistory(change: () => void): void {
+  programmaticDepth += 1;
+  try {
+    change();
+  } finally {
+    programmaticDepth -= 1;
+  }
+}
+
 const cloneDrawings = (drawings: readonly Drawing[]): Drawing[] => drawings.map(drawing => ({
   ...drawing,
   points: drawing.points.map(point => ({ ...point })),
@@ -262,7 +277,13 @@ export class ChartWorkspaceHistory {
     this.panels.forEach((panel, id) => {
       const cleanups: Array<() => void> = [];
       if (panel.drawingEngine) {
-        cleanups.push(panel.drawingEngine.onChange(() => this.capture('změnu kresby')));
+        cleanups.push(panel.drawingEngine.onChange(() => {
+          if (programmaticDepth > 0) {
+            if (this.pending === null) this.current = this.snapshot();
+            return;
+          }
+          this.capture('změnu kresby');
+        }));
       }
       if (panel.chartApi) {
         const timeScale = panel.chartApi.controller.getChart().timeScale();

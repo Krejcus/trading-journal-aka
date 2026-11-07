@@ -292,7 +292,7 @@ describe('statika B5: odeslání jen tlačítkem, přehrávání nic, zobrazení
 
   it('zvuk při fillu: stejné události jako karty, brána dostupnosti, žádná cesta k brokerovi', () => {
     expect(phone).toMatch(/useLiveFillAnnouncer\(\{ events: slots\.copyEvents, fills: slots\.fills, fillsSymbol: slots\.fillsSymbol, available: slots\.copyEvents != null, requireFocus: false \}\);/);
-    expect(phone).toMatch(/hubExtra: <LiveFillAnnounceSetting mode=\{fillMode\} onMode=\{setFillMode\} \/>/);
+    expect(phone).toMatch(/hubExtra: <>\s*<LiveFillAnnounceSetting mode=\{fillMode\} onMode=\{setFillMode\} \/>/);
     expect(chart).toMatch(/extra=\{live\?\.hubExtra\}/);
   });
 

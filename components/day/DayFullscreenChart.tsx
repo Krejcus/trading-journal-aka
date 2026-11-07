@@ -5,6 +5,7 @@ import type { Drawing, DrawingToolId } from '@getcandlekit/charts';
 import { Camera, Check, ChevronDown, ClipboardCheck, Scissors, ChevronLeft, Redo2, MoreHorizontal, Settings, SlidersHorizontal, Expand, GripVertical, Lock, Shrink, Undo2, Magnet, Maximize2, Mic, Minimize2, Pause, PenLine, Play, SkipForward, StepBack, StepForward, Star, StickyNote, Trash2, Unlock, X } from 'lucide-react';
 import type { Trade } from '../../types';
 import CandleKitTradeChart, { ALPHATRADE_DRAWING_TOOLS } from '../CandleKitTradeChart';
+import ChartJumpToNow from './ChartJumpToNow';
 import GenericDrawingSettingsDialog from '../GenericDrawingSettingsDialog';
 import GenericDrawingFloatingToolbar from '../GenericDrawingFloatingToolbar';
 import FibDrawingSettingsDialog, { FibDrawingFloatingToolbar } from '../FibDrawingSettingsDialog';
@@ -903,6 +904,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
                 {live.paneLayer({ ...liveInfo, api: paneApi(index), candles: list, intervalSeconds: timeframeMinutes(paneTf) * 60, paneIndex: index, active: !split || isActive })}
               </div>
             )}
+            {visible && replayPhase === 'off' && <ChartJumpToNow api={paneApi(index)} barCount={list.length} liftPx={live ? 52 : 0} />}
           </div>
         );
       })}

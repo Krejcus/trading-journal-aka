@@ -146,3 +146,61 @@ export function followLiveEdge(
     // Graf se právě přestavuje.
   }
 }
+
+/**
+ * O kolik barů posunout záběr, aby poslední svíčka stála `gapBars` od pravého
+ * okraje. 0 = poslední svíčka je v záběru, není kam skákat. Skok jde do obou
+ * stran: za poslední svíčkou leží prázdná osa budoucnosti, kam se dá odjet.
+ */
+export function jumpToNowShift(input: { lastIndex: number; range: LogicalRangeLike; gapBars?: number }): number {
+  const { lastIndex, range } = input;
+  const tolerance = 0.5;
+  if (lastIndex >= range.from - tolerance && lastIndex <= range.to + tolerance) return 0;
+  const gapBars = Math.min(input.gapBars ?? LIVE_FOLLOW_GAP_BARS, (range.to - range.from) * MAX_GAP_SHARE);
+  return lastIndex + gapBars - range.to;
+}
+
+function jumpShiftOf(api: ChartViewApi): number {
+  const last = api.controller.getBars().at(-1);
+  if (!last) return 0;
+  const timeScale = api.controller.getChart().timeScale();
+  const range = timeScale.getVisibleLogicalRange();
+  const lastIndex = timeScale.timeToIndex((last.ts / 1_000) as never, true);
+  return !range || lastIndex === null ? 0 : jumpToNowShift({ lastIndex, range });
+}
+
+/** Je poslední svíčka mimo záběr? Graf, který se přestavuje, odpovídá ne. */
+export function isAwayFromNow(api: ChartViewApi | null): boolean {
+  if (!api) return false;
+  try {
+    return jumpShiftOf(api) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Plynulý návrat na poslední svíčku (`scrollToRealTime` nejde: skončil by na
+ * konci prázdné osy budoucnosti). Ručně nastavené měřítko ceny zůstává; zapne
+ * se automatické, jen když by aktuální cena byla mimo obraz. Jen zobrazení.
+ */
+export function jumpToNow(api: ChartViewApi | null): void {
+  if (!api) return;
+  try {
+    const shift = jumpShiftOf(api);
+    if (shift === 0) return;
+    const chart = api.controller.getChart();
+    stopGlide(chart);
+    const close = api.controller.getBars().at(-1)?.close;
+    const y = close == null ? null : api.controller.getSeries()?.priceToCoordinate(close) ?? null;
+    if (y === null || y < 0 || y > chart.chartElement().clientHeight) {
+      (['right', 'left'] as const).forEach(scaleId => {
+        try { chart.priceScale(scaleId).setAutoScale(true); } catch { /* osa nemusí existovat */ }
+      });
+    }
+    const timeScale = chart.timeScale();
+    timeScale.scrollToPosition(timeScale.scrollPosition() + shift, !reducedMotion());
+  } catch {
+    // Graf se právě přestavuje.
+  }
+}
