@@ -17,7 +17,7 @@ describe('record-legs: scénáře', () => {
   });
   it('scénáře bez fillu se opravdu nevyplní', () => {
     expect(scenarioFills(legsScenario('bare-limit-cancel-race', options).steps)).toBe(true);
-    for (const name of ['bare-limit-cancel', 'limit-replace', 'pending-leg-cancel'] as const) expect(scenarioFills(legsScenario(name, options).steps), name).toBe(false);
+    for (const name of ['bare-limit-cancel', 'limit-replace', 'pending-leg-cancel', 'parked-pending-modify', 'pending-sl-cancel', 'bare-stop-cancel', 'write-burst'] as const) expect(scenarioFills(legsScenario(name, options).steps), name).toBe(false);
     expect(scenarioFills(legsScenario('oco-cancel-sl', options).steps)).toBe(true);
   });
   it('--scenario all a odmítnutí blízkých nohou', () => {
@@ -47,6 +47,13 @@ describe('record-legs: pojistky nohou', () => {
     expect(exitOrderProblems({ ...stop, side: 'Sell', price: 28_040 })).toEqual([]);
     expect(exitOrderProblems({ ...stop, anchor: null, price: 27_960 })).toHaveLength(1);
     expect(exitOrderProblems({ ...stop, quantity: 3, price: 27_960 })).toHaveLength(1);
+  });
+  it('holý Stop jen daleko na straně průrazu', () => {
+    const stop = { side: 'Buy' as const, orderType: 'Stop' as const, quantity: 1, reducing: false, anchor: 28_000, bare: true };
+    expect(plainOrderProblems({ ...stop, price: 28_500 })).toEqual([]);
+    expect(plainOrderProblems({ ...stop, price: 28_010 })).toHaveLength(1);
+    expect(plainOrderProblems({ ...stop, price: 27_500 })).toHaveLength(1);
+    expect(plainOrderProblems({ ...stop, bare: false, price: 28_500 })).toHaveLength(1);
   });
   it('holý Market a blízký Limit jen s příznakem `bare`', () => {
     const market = { side: 'Buy' as const, orderType: 'Market' as const, price: null, quantity: 1, reducing: false, anchor: 28_000 };

@@ -507,7 +507,7 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
       note(step.label, { side, orderType: step.orderType, quantity: step.quantity, price, anchor });
       const ack = await track(broker.placeOrder({
         tag: newTag(), accountId: plan.accountId, symbol: plan.symbol, side, quantity: step.quantity, orderType: step.orderType,
-        ...(price != null ? { limitPrice: price } : {}),
+        ...(price != null ? (step.orderType === 'Stop' ? { stopPrice: price } : { limitPrice: price }) : {}),
       }));
       acks.push({ ref: step.ref, ack });
       note(`${step.ref} ack (${elapsed() - sentT} ms)`, ack);

@@ -150,3 +150,28 @@ P2:
 Kontrolní seznam čtenářů: `lib/manualBareClose.ts` (60, 89, 126, 128, 169, 221), controller 5507, 5598, 5738, 6131, 6142, 5687, 6870, 6351, 3689, 4930, 21739, 21661, 21683, 23287, 23372; `resolveManagedTrade` neuvolňovat, vlastní `prepareSingleLeg*` před 6876; `components/TradovateLiveDesk.tsx:1277`, `lib/liveBareEntry.ts:67`, `lib/leaderOrderManage.ts`, `services/copierEngine.ts:438`, `lib/copierWorkerCapabilities.ts`, agent 422 a 988, relay 1060, `server/copierCommandPushRelay.ts:119`, `server/copierIncidentWatchdog.ts:772`, `hooks/useLiveManageRunner.ts`, `components/day/LivePhoneOrderLines.tsx`.
 
 Rozhodnutí Filipa: automatické zrušení vlastní nohy na flat s rizikem, že bez běžícího workeru ji nikdo nehlídá; × SL nechá pozici bez stropu.
+
+## Návrh v4: Limit a Stop s volitelnými SL a TP, počítá s více účty (7. 11. 2026)
+Filip: Limit i Stop mají být komplet a má se počítat s více účty. „Zrušit a založit“ stojí 2 zápisy na účet a jeden tah čipu by na 5 followerech znamenal asi 12 zápisů, kopírka by to navíc viděla jako nový vstup. Odpadá.
+
+**Doporučení: vždy OSO se zaparkovanými nohami.** Vstup odejde jako dnešní OSO (`placeOso`), chybějící noha leží daleko a v grafu je místo ní čip. Čip i × jsou jen `modifyOrder` nohy, který kopírka umí zrcadlit followerům: 1 zápis na účet. Pozice ani čekající vstup nikdy nezůstanou u brokera bez OCO a po zavření nic nevisí.
+
+| | Zaparkované | Worker pošle nohy po fillu | Zrušit a založit |
+|---|---|---|---|
+| Zápisy na účet za čip | 1 | 0, pak 1 při fillu | 2 |
+| Místo ve frontě | drží | drží | ztráta |
+| Worker neběží | SL u brokera | pozice bez SL | SL u brokera |
+| Followeři | zrcadlení modify | nová cesta | vypadá jako nový vstup |
+| U brokera je vidět | daleké nohy | jen vstup | plán |
+
+**Cena volby:** „bez SL“ v appce znamená daleký SL v Tradovate, cena SL musí být na hranici povoleného rizika (`risk-daily`), a parkovaný TP potřebuje výjimku v `risk-drawdown`. To je odchylka od Filipovy věty „po vyplnění bez SL a TP“, musí ji odsouhlasit.
+
+**Stav:** durable `parkedStop`, `parkedTarget` na záznamu vstupu, nikdy se neodvozuje z ceny; ruší ho až potvrzený modify. UI ukáže čip, přikoupení je blokované, deník a R neberou parkovanou cenu jako plán.
+
+**Stop:** totéž. ≥ 8 ticků na straně průrazu, jen IBKR.
+
+**Market:** dnešní sólo verze zůstává; kopírování Marketu na followery je zvlášť a mohlo by přejít na stejný model.
+
+**Musí změřit DEMO (`record-legs.ts`, nové scénáře):** `parked-pending-modify`, `parked-filled-modify`, `pending-sl-cancel`, `pending-tp-cancel-fill`, `bare-stop-cancel`, `write-burst`. Filipův doplněk: pásma cen brokera u daleké nohy.
+
+**Zbývá pro followery:** násobek a floor qty nohou, pravidla propek a jejich limity, ověření zrcadlení modify u Suspended nohy.
