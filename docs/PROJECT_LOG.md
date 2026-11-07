@@ -288,13 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-07 — Limit a Stop opravdu bez SL/TP (Claude, větev `claude/limit-stop-legs-20261107`, NENASAZENO)
+### 2026-11-07 — Limit a Stop opravdu bez SL/TP (Claude, NASAZENO 7. 11. z `eaa40d5d`: web, worker, iPhone, Filip „Nasaď“)
 
 - **Proč:** Filip chce Limit a Stop jako v TradingView, po vyplnění bez SL a TP, dokud je nenatáhne. Na otázku, jestli smí jít o vzdálený SL: „Ne, opravdu bez.“ Parkované nohy z návrhu v4 se proto nestaví.
 - **Rozsah:** sólo manual-only DEMO skupina, 1 kontrakt, z flat, capability `manual-entry-bare-pending-v1`. Limit nesmí být přes trh, Stop aspoň 8 ticků na straně průrazu, vždy s čerstvou cenou IBKR. Před fillem jde jen ×, posun ceny a čipy ne; po fillu čipy a × jako u holého Marketu.
 - **Bezpečnost:** čekající holý vstup zruší OFF, kill, day lock, konec session a konec ARM stejně jako každý čekající. Neznámý výsledek POST je incident. Po restartu se konec vstupu dočte s odstupem a nerozhodnutý stav končí incidentem. Fill při rušení nebo za vypnuté kopírky je incident „BEZ SL/TP“. Vědomě přijato: fill bez dozoru nemá strop ztráty a při výpadku workeru se nic nezruší (INV-MANUAL-01, INV-RISK-01).
 - **Oponentura:** `copier-design-critic` OPRAVIT PŘED COMMITEM, nálezy opraveny (P1 tichá díra po restartu, P2 neznámé ACK, riziko posunu SL od ceny vstupu, testy závodů). Hypotéza P3-2 (zastaralá Position(0) po fillu uzavře záznam) neřešena, stejná slabina je u Marketu.
-- **Neověřeno:** jen testy s mockem. Samostatný Stop bez nohou přes `placeOrder`, skutečné pořadí Order/Fill/Position a × při „too late“ čekají na DEMO za otevřeného trhu. Pořadí nasazení: web a relay, pak worker, pak iPhone. Víc účtů je další krok.
+- **Neověřeno:** jen testy s mockem. Samostatný Stop bez nohou přes `placeOrder`, skutečné pořadí Order/Fill/Position a × při „too late“ čekají na DEMO za otevřeného trhu. Víc účtů je další krok.
 
 ### 2026-11-07 — Společné rozložení a timeframe grafů (Claude, větev `claude/chart-view-sync-20261107`, web + iPhone 7. 11., Filip „než nasadíš…“)
 
