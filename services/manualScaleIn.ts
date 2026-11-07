@@ -392,6 +392,23 @@ export function positionManageBlockers(input: {
 }
 
 /**
+ * Nevyřešená změna, která se týká TÉTO pozice (6. 11. 2026): klíč pozice, lístek pozice, nebo stejný
+ * symbol a vznik až od nejstaršího lístku (akce na vstupu, který do modelu ještě nevstoupil nebo z něj
+ * vypadl). Starší záznam jiného obchodu pozici neblokuje: vstup z flat prokázal nulu pracujících
+ * příkazů a případnou živou nohu zachytí `foreignOrders`. Zavření tudy nejde (INV-UI-02).
+ */
+export function positionActionUnresolved(
+  records: ReadonlyArray<{ status: string; entryOperationId: string; symbol?: string; createdAt: number }>,
+  input: { key: string; symbol: string; ticketOperationIds: ReadonlySet<string>; oldestTicketCreatedAt: number | null },
+): boolean {
+  return records.some(record => (record.status === 'sending' || record.status === 'unknown') && (
+    record.entryOperationId === input.key
+    || input.ticketOperationIds.has(record.entryOperationId)
+    || (record.symbol === input.symbol && (input.oldestTicketCreatedAt == null || record.createdAt >= input.oldestTicketCreatedAt))
+  ));
+}
+
+/**
  * Ořez durable záznamů ručních vstupů (nejstarší první, `records` seřazené podle vzniku):
  * odstraní jen nechráněné, dokud jich je víc než `keep`. Chráněné = nevyřešené nebo lístek
  * otevřené pozice se živým vstupem či nohou (správa po pozici je potřebuje, P2-7).

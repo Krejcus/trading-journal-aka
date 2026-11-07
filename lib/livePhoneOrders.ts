@@ -8,6 +8,7 @@ import type { LiveBareCloseOffer } from './liveBareCloseUi';
 import type { LiveCancelPendingView } from './liveCancelPendingUi';
 import type { CancelPendingItemResult, PendingOwnEntry } from './liveCancelPending';
 import type { BareLeaderTrade } from './manualBareClose';
+import type { LiveBareLegIntent } from './liveBareLeg';
 
 /**
  * LIVE obchodování z telefonu (2. 11. 2026): převod lišty Koupit/Prodat a listu
@@ -77,6 +78,9 @@ export interface LivePhoneTradeBridge {
    */
   bareClose?: LiveBareCloseOffer | null;
   closeBare?: (seen: BareLeaderTrade) => Promise<LeaderOrderManageResult>;
+  /** SL a TP po jedné, jen s capability `manual-order-single-leg-v1`. */
+  bareLegTrade?: BareLeaderTrade | null;
+  bareLeg?: (seen: BareLeaderTrade, intent: LiveBareLegIntent) => Promise<LeaderOrderManageResult>;
   /**
    * C7 (4. 11. 2026): „Zrušit čekající“ — pohled (`liveCancelPendingView`, null = tlačítko není)
    * a deskový `cancelPendingEntries` (N× `cancel-entry`); jen s capability `manual-order-cancel-pending-v1`.

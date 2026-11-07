@@ -509,7 +509,7 @@ describe('Tradovate copier command relay', () => {
       const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: { type: 'disarm' }, idempotencyKey: 'brake-key-000000002', now: Date.parse('2026-08-21T12:00:00.000Z') });
       expect(queued).toMatchObject({ id: 'command-id' });
       expect(upsert.mock.calls[0][0]).toMatchObject({ idempotency_key: 'brake-key-000000002', command_type: 'disarm' });
-      expect(updates).toHaveLength(6);
+      expect(updates).toHaveLength(8);
     }
   });
 
@@ -568,10 +568,11 @@ describe('Tradovate copier command relay', () => {
       now: Date.parse('2026-08-21T12:00:00.000Z'),
     });
     // ARM/SHADOW + čekající ruční vstupy (1b) + posuny SL/TP (2a) + zavření obchodu (2d); zrušení vstupu brzda neruší.
-    expect(updates).toHaveLength(6);
+    expect(updates).toHaveLength(8);
     expect(updates.slice(2).map(update => update.calls.find(([method]) => method === 'contains')?.[1][1]))
       .toEqual([{ command: { type: 'manage-leader-order', action: 'move-stop' } }, { command: { type: 'manage-leader-order', action: 'move-target' } },
-        { command: { type: 'manage-leader-order', action: 'move-limit' } }, { command: { type: 'manage-leader-order', action: 'close-position' } }]);
+        { command: { type: 'manage-leader-order', action: 'move-limit' } }, { command: { type: 'manage-leader-order', action: 'close-position' } },
+        { command: { type: 'manage-leader-order', action: 'remove-leg' } }, { command: { type: 'manage-leader-order', action: 'add-leg', leg: 'takeProfit' } }]);
     expect(updates[0].value).toEqual(expect.objectContaining({
       status: 'expired', error: 'superseded-by-brake',
     }));

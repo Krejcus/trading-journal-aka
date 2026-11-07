@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-06 — Upozornění na cenu na PC (Claude, větev `claude/pc-price-alerts-20261106`, NEnasazeno)
+### 2026-11-06 — Upozornění na cenu na PC (Claude, větev `claude/pc-price-alerts-20261106`, web nasazen 7. 11. po Filipově „nasaď“, worker beze změny)
 
 - **Zadání (Filip):** pravý klik do grafu = rychlý alert, dvojklik = otevřít a upravit. Data a hlídání se nemění, jsou společné s telefonem (Mac worker z IBKR, bez TradingView).
 - **Stavba:** `components/LivePcPriceAlerts.tsx` (hook, čáry, zvoneček, dialogy). Znovupoužívá `LivePhoneAlerts` s přepínači `mouse` a `pc`; most přes `LiveOrderEntryBridge.priceAlerts`, ať se kód netáhne do backtestu. Jen panel exekuce (MNQ) a mimo přehrávání.
@@ -299,6 +299,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Ověřeno:** critic kola 1 a 2 = OPRAVIT PŘED COMMITEM, nálezy opraveny; třetí kolo se podle pravidla nekoná. QA náhled se skutečným grafem, syntetickými svíčkami a bez přihlášení: založení, dvojklik, cena, barva, tah (simulované události s mezikroky), výběr, ×, seznam, Esc, OFF nad dialogem, kolečko, strop karet, tmavý i světlý motiv. Spuštění jen s nasimulovanou událostí.
 - **Neověřeno:** přihlášený účet (server, stav „Hlídá Mac“, skutečné překročení ceny a web push), slyšitelný tón.
 - **Známé limity:** karta a hlas jen s otevřeným LIVE grafem; hlas alertu může o větu zdržet hlášení plnění (vědomě přijato); nad čárou (10 px) nejde crosshair.
+### 2026-11-06 — Slepé hodnocení v Backtestu (Claude, větev claude/blind-review-20261106)
+
+Filip chce kalibrovat automatický backtest ve svém Backtestu, ne na samostatné stránce. Každý případ je dočasná session
+(`scratch` v `BacktestWorkspace`): skutečný graf a indikátory, ale žádný zápis do `backtest_runs` ani deníku. Jedna session
+přes všechny dny nejde, svíčky z měsíců by zahltily prohlížeč. Replay zastavuje `replayStopAt` v setteru grafu, takže ho
+neobejde žádná cesta kurzoru; bez něj je setter průchozí. Odpověď se ukáže až po potvrzeném zápisu do nové tabulky
+`backtest_blind_reviews` a pak je zamčená; sadu vkládá Claude přes CLI, klient smí měnit jen `answers` a `marks`.
+Jádra kopírky se změna nedotýká. Nasazeno 7. 11. na Filipovo „nasaď“.
+
+### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude, větev `claude/chart-position-ui-20261106`, NENASAZENO)
+
+- Filip: natáhnu nohu a je u brokera, × ji zruší a vrátí čip. Podklad: `docs/reviews/instant-legs-design-20261106.md`, DEMO `record-legs.ts`. Capability `manual-order-single-leg-v1`, jen sólo manual-only DEMO a vlastní holý Market; Limit bez nohou a čekající vstupy zatím ne.
+- Filip přijal: × na SL nechá pozici bez stropu. Obchoduje jen z appky, proto noha na flat účtu = jen incident, bez automatického zrušení.
+- Critic: návrh kolo 1 BLOKUJE, diff kolo 2 OPRAVIT, nálezy P1 a P2-5 až P2-8 zapracované, další kolo už neproběhlo.
+- Vědomá odchylka: během surového zápisu Flatten leadera vynechá a vrátí `flat:false` s incidentem, stejně jako dnes u attach a ×. Krátké čekání je následná úprava.
+- Neověřeno: nic z toho nešlo přes worker na DEMO; migrace `20261106210000` neaplikovaná a její SQL test neběžel (lokálně není Postgres); Flatten v mezeře výměny není testovaný; TIF samostatného Stopu neznámý. Pořadí nasazení: migrace, web a relay, worker, iPhone.
+
+### 2026-11-06 večer — Limit bez SL/TP: rozhodnutí a skript pro DEMO (Claude, větev `claude/chart-position-ui-20261106`, nic nenasazeno)
+
+- Filip: SL a TP u Limitu jsou dobrovolné, jako znal z TradingView, riziko fillu bez SL přijal. Zaparkované nohy pro Limit odpadají. Návrh a nálezy v `docs/reviews/instant-legs-design-20261106.md`; stavět až po záznamu.
+- Filip 6. 11. večer spustil všech 14 scénářů, účet čistý; výsledky v návrhu: zrušení jedné nohy OCO partnera nechá, liquidate samostatnou nohu zruší, opačný Market ne. `scripts/copier/record-legs.ts`, 14 scénářů, spouští jen Filip. Přibyly kroky `place-exit`, `place-oco`, příznak `bare` v DSL záznamů. Critic: po opravách (tag jen jako příznak, dvě čisté kontroly po výjimce zápisu, kontrola nevyřešených při startu) skript nejdřív po krocích. Interpret ještě nikdy neběžel proti brokerovi, skript nedokazuje worker.
+
+### 2026-11-06 večer — Posun SL u pozice s dokupy blokoval starý záznam (Claude, větev `claude/chart-position-ui-20261106`, oprava nenasazená)
+
+- Filip po nasazení: posun SL nejde, rychlé dokupy nejdou. Relay řádky: 8× `manage-unresolved` kvůli `attach-brackets` `unknown` z 5. 11. 15:30, kontrola celé pozice brala celý symbol a status ukazoval jen 10 akcí. Záznam po Filipově souhlasu označen `waived` při OFF a flat, k brokerovi nic.
+- Oprava: `positionActionUnresolved` (klíč pozice, lístky, stejný symbol od nejstaršího lístku), nad modelem po čtení; `unresolvedManualOrderActions` jde do panelu; waiver odmítne, dokud běží zápis. Critic 2 kola, nálezy zapracovány. Vyžaduje reinstalaci workeru.
+- Dokupy: po eventu leadera čeká přikoupení 5 s, relay a worker 3 s, po fillu REST risk. Návrh B critic vrátil, chce náhradu okna a záznam na DEMO; nestavěno.
+- Limit bez SL/TP: holý Limit critic v navržené podobě odmítl (korelátor, OFF/kill, dílčí fill), holý Stop blokuje. Čeká na volbu Filipa mezi zaparkovanými nohami a holým Limitem.
 
 ### 2026-11-06 — Jedno živé P&L, přikoupení z lišty telefonu, okamžité SL/TP v návrhu (Claude, větev `claude/chart-position-ui-20261106`)
 

@@ -629,6 +629,19 @@ describe('fáze 1b: oprava po oponentuře diffu (M1–M3)', () => {
       { operationId: 'entry:b', status: 'acknowledged', createdAt: 1, updatedAt: 2, symbol: 'MNQZ6', side: 'Buy', quantity: 1 },
     ] })).toEqual([expect.objectContaining({ kind: 'manual-entry', key: 'entry:a', status: 'unknown' })]);
   });
+
+  it('změna obchodu s neznámým výsledkem jde vidět a vyřešit i mimo posledních 10 akcí', async () => {
+    const { manualEntryDisplayStuckOperations, stuckResolvedText } = await import('../lib/manualEntryDisplay');
+    // Změna obchodu kopírku nevypíná: text nesmí tvrdit opak (INV-UI-03).
+    expect(stuckResolvedText('manage:a')).toContain('zůstává ve svém stavu');
+    expect(stuckResolvedText('entry:a')).toContain('VYPNUTO');
+    const now = Date.now();
+    expect(manualEntryDisplayStuckOperations({ unresolvedManualOrderActions: [
+      { operationId: 'manage:a', action: 'attach-brackets', status: 'unknown', updatedAt: now, symbol: 'MNQZ6', reason: 'pozice se zavřela' },
+      { operationId: 'manage:b', action: 'move-stop', status: 'sending', updatedAt: now },
+      { operationId: 'manage:c', action: 'move-stop', status: 'sending', updatedAt: now - 61_000 },
+    ] }).map(item => item.key)).toEqual(['manage:a', 'manage:c']);
+  });
 });
 
 describe('OSO okno: zdržená fronta controlleru nesmí nohy předběhnout časovačem (oponentura 1b, P1)', () => {

@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BrokerAccountRiskSnapshot, BrokerOrder, BrokerOsoAck, BrokerOsoRequest } from '../services/brokerPort';
 import { bootstrapCopierRuntime, type CopierRuntimeController } from '../services/copierRuntimeController';
-import { createMemoryCopierStore } from '../services/copierStore';
+import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
 import { manualOnlyDemoSafety, type CopyGroupConfig } from '../services/liveCopyTrading';
 import { createMockBroker } from '../services/mockBroker';
 import { buildLeaderEntryPreviewCommand, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
@@ -511,6 +511,20 @@ describe('přikoupení do pozice: replay záznamu z DEMO (3. 11. 2026)', { timeo
       await ctx.settle();
       return `entry:scalebase${id}`;
     }
+
+    it('starý neznámý attach jiného obchodu neblokuje posun pozice a v statusu je vidět i mimo posledních 10 (incident 6. 11.)', async () => {
+      const empty = emptySnapshot();
+      const store = createMemoryCopierStore({ ...empty, safety: { ...empty.safety, manualOrderActions: [{
+        operationId: 'manage:stale0001', payloadHash: 'stale', entryOperationId: 'entry:stale0001', action: 'attach-brackets', status: 'unknown',
+        targetBrokerOrderId: 'attach:1', fromPrice: null, toPrice: 27_000, quantity: 1, symbol: SYM, createdAt: 1, updatedAt: 1,
+      }] } });
+      const ctx = await setup({ store });
+      const base = await twoTickets(ctx, '0112');
+      expect(ctx.controller.status().unresolvedManualOrderActions).toEqual([expect.objectContaining({ operationId: 'manage:stale0001', status: 'unknown' })]);
+      const result = await ctx.manage('posstale112', { action: 'move-stop', price: recording.prices.stopLoss, quantity: 2, newPrice: 27_930, entryOperationId: base, scope: 'position' });
+      expect(result.blockers).toEqual([]);
+      expect(result.status).toBe('acknowledged');
+    });
 
     it('posun SL obou lístků najednou: dva modify s qty 1, potvrzeno; status ukáže pozici 2 se společným SL', async () => {
       const ctx = await setup();

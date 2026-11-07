@@ -435,7 +435,15 @@ export interface CopierManualOrderActionRecord {
   operationId: string;
   payloadHash: string;
   entryOperationId: string;
-  action: 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets';
+  action: 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets' | 'add-leg' | 'remove-leg';
+  /** SL a TP po jedné: které noze akce patří, fáze sekvence, stará a nová id (dohledání po restartu). */
+  leg?: 'stopLoss' | 'takeProfit';
+  phase?: 'write-sending' | 'oco-acked' | 'target-canceled';
+  oldLegId?: string;
+  newStopId?: string;
+  newTargetId?: string;
+  /** Zavření holé pozice s nejvýš jednou nohou: klasifikace nezávislá na pozdější změně nohou. */
+  bareClose?: boolean;
   status: 'sending' | 'acknowledged' | 'rejected' | 'unknown' | 'not-sent' | 'waived';
   /** Posun pozastavené nohy broker jen drží (OnHold): po aktivaci nohy se cena ověří proti `toPrice`. */
   heldMove?: boolean;

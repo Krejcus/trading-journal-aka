@@ -35,6 +35,7 @@ import {
   demoStartProblems,
   describeDemoPlan,
   dryRunScenario,
+  exitOrderProblems,
   exposureProblem,
   leaderExtraEntities,
   legsQuantityMatch,
@@ -45,6 +46,7 @@ import {
   redactDemoText,
   resolveDemoPrice,
   reverseOrdering,
+  roundDemoTick,
   scenarioFills,
   type DemoClassify,
   type DemoFinding,
@@ -101,7 +103,7 @@ interface TicketState {
   quantities: Record<DemoLegName, number>;
 }
 
-interface PlainState { id: string; side: DemoSide; orderType: 'Market' | 'Limit'; price: number | null; quantity: number; reducing: boolean }
+interface PlainState { id: string; side: DemoSide; orderType: 'Market' | 'Limit' | 'Stop'; price: number | null; quantity: number; reducing: boolean }
 
 export async function runDemoRecording(plan: DemoRecordPlan, options: DemoRunOptions): Promise<number> {
   for (const line of describeDemoPlan(plan)) console.log(line);
@@ -220,7 +222,21 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
     });
   }
 
-  const newTag = () => `${options.tagPrefix.slice(0, 3)}${randomUUID().replace(/-/g, '').slice(0, 18)}`;
+  // Tvrdá chyba procesu bez úklidu: nikdy se netvářit, že je účet čistý.
+  for (const signal of ['uncaughtException', 'unhandledRejection'] as const) {
+    process.on(signal, reason => {
+      console.error(`NEČEKANÁ CHYBA (${errorText(reason)}): úklid neproběhl, účet NEověřen. Zkontroluj Tradovate.`);
+      process.exit(4);
+    });
+  }
+
+  // Tag jde do záznamu jen jako příznak: nese událost před ACK vlastní tag? (návrh, okno `sending`).
+  const ownTags = new Set<string>();
+  const newTag = () => {
+    const tag = `${options.tagPrefix.slice(0, 3)}${randomUUID().replace(/-/g, '').slice(0, 18)}`;
+    ownTags.add(tag);
+    return tag;
+  };
   const sideOf = (which: 'position' | 'opposite' | undefined): DemoSide =>
     which === 'opposite' ? (plan.side === 'Buy' ? 'Sell' : 'Buy') : plan.side;
   const exitSide = (side: DemoSide): DemoSide => (side === 'Buy' ? 'Sell' : 'Buy');
@@ -320,7 +336,11 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
     };
     const findOrder = (observation: DemoObservation | null, id: string | undefined) =>
       id == null ? undefined : observation?.orders?.find(order => order.id === id);
-    const legIds = () => new Set([...tickets.values()].flatMap(ticket => [ticket.ids.sl, ticket.ids.tp]).filter((id): id is string => id != null));
+    // Samostatné výstupní nohy (`place-exit`) jsou redukce: do možné pozice se nepočítají.
+    const legIds = () => new Set([
+      ...[...tickets.values()].flatMap(ticket => [ticket.ids.sl, ticket.ids.tp]),
+      ...[...plain.values()].filter(order => order.reducing).map(order => order.id),
+    ].filter((id): id is string => id != null));
     const ticketPrice = (name: string, order: DemoLegName) => tickets.get(name)?.current[order] ?? null;
     const idsRecord = () => Object.fromEntries([...tickets].map(([name, ticket]) => [name, ticket.ids]));
     const plainRecord = () => Object.fromEntries([...plain].map(([name, order]) => [name, order.id]));
@@ -358,9 +378,18 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
       }
       return observation;
     };
+    let writeUncertain = false;
     const track = async <T>(request: Promise<T>): Promise<T> => {
       inFlight.add(request);
-      try { return await request; } finally { inFlight.delete(request); }
+      try {
+        return await request;
+      } catch (reason) {
+        // Výjimka zápisu neříká, že příkaz nevznikl: úklid pak chce dvě čisté kontroly.
+        writeUncertain = true;
+        throw reason;
+      } finally {
+        inFlight.delete(request);
+      }
     };
 
     const after = async (
@@ -462,11 +491,14 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
           return;
         }
       }
-      const anchor = await gate(step.label);
+      const gated = await gate(step.label);
+      // Holý vstup jen s čerstvou cenou: jinak by se vyplnil a krok s nohou by až potom skončil.
+      const anchor = step.bare ? requireAnchor(gated, step.label) : gated;
       const side = sideOf(step.side);
       const dir: 1 | -1 = side === 'Buy' ? 1 : -1;
       const price = step.price ? resolveDemoPrice(step.price, { anchor, dir, ticketPrice }) : null;
-      const problems = plainOrderProblems({ side, orderType: step.orderType, price, quantity: step.quantity, reducing: step.reducing === true, anchor });
+      const marketable = step.price?.from === 'market' && step.price.marketable === true;
+      const problems = plainOrderProblems({ side, orderType: step.orderType, price, quantity: step.quantity, reducing: step.reducing === true, anchor, bare: step.bare === true, marketable });
       if (problems.length) throw new StepAbort(`${step.label}: ${problems.join('; ')}`);
       await exposureCheck(step.quantity, step.reducing === true, side);
       checkAbort();
@@ -486,6 +518,77 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
         if (!step.reducing) entryIds.add(id);
       }
       if (!ack.accepted || !id) throw new StepAbort(`${step.label}: nepřijato (${ack.rejectReason ?? 'bez id'})`);
+      await after(step, {});
+    };
+
+    /** Pracující výstupní nohy nesmí krýt víc než pozici; dvojí SL jen výslovně v kroku `overlapExit`. */
+    const exitCoverCheck = (observation: DemoObservation, quantity: number, label: string) => {
+      const legs = legIds();
+      const working = (observation.orders ?? []).filter(order => OPEN.has(order.status) && legs.has(order.id))
+        .reduce((sum, order) => sum + order.quantity, 0);
+      if (working > 0 && working + quantity > (observation.netPosition ?? 0)) throw new StepAbort(`${label}: už pracuje noha ${working} ks, další by kryla víc než pozici`);
+    };
+
+    const placeExitStep = async (step: Extract<DemoStep, { kind: 'place-exit' }>) => {
+      const anchor = requireAnchor(await gate(step.label), step.label);
+      const side = sideOf('position');
+      const dir: 1 | -1 = side === 'Buy' ? 1 : -1;
+      const price = roundDemoTick(anchor + dir * (step.leg === 'stop' ? -step.points : step.points));
+      const problems = exitOrderProblems({ side, leg: step.leg, price, quantity: step.quantity, anchor });
+      if (problems.length) throw new StepAbort(`${step.label}: ${problems.join('; ')}`);
+      exitCoverCheck(await exposureCheck(step.quantity, true, exitSide(side)), step.quantity, step.label);
+      checkAbort();
+      sentAnything = true;
+      const sentT = elapsed();
+      note(step.label, { leg: step.leg, price, quantity: step.quantity, anchor });
+      const ack = await track(broker.placeOrder({
+        tag: newTag(), accountId: plan.accountId, symbol: plan.symbol, side: exitSide(side), quantity: step.quantity,
+        ...(step.leg === 'stop' ? { orderType: 'Stop' as const, stopPrice: price } : { orderType: 'Limit' as const, limitPrice: price }),
+      }));
+      acks.push({ ref: step.ref, ack });
+      note(`${step.ref} ack (${elapsed() - sentT} ms)`, ack);
+      const id = positive(ack.brokerOrderId);
+      if (id) {
+        ownIds.add(Number(id));
+        plain.set(step.ref, { id, side: exitSide(side), orderType: step.leg === 'stop' ? 'Stop' : 'Limit', price, quantity: step.quantity, reducing: true });
+      }
+      if (!ack.accepted || !id) throw new StepAbort(`${step.label}: nepřijato (${ack.rejectReason ?? 'bez id'})`);
+      await after(step, {});
+    };
+
+    const placeOcoStep = async (step: Extract<DemoStep, { kind: 'place-oco' }>) => {
+      const anchor = requireAnchor(await gate(step.label), step.label);
+      const side = sideOf('position');
+      const dir: 1 | -1 = side === 'Buy' ? 1 : -1;
+      const stopLoss = roundDemoTick(anchor - dir * step.slPoints);
+      const takeProfit = roundDemoTick(anchor + dir * step.tpPoints);
+      const problems = [
+        ...exitOrderProblems({ side, leg: 'stop', price: stopLoss, quantity: step.quantity, anchor }),
+        ...exitOrderProblems({ side, leg: 'limit', price: takeProfit, quantity: step.quantity, anchor }),
+      ];
+      if (problems.length) throw new StepAbort(`${step.label}: ${problems.join('; ')}`);
+      if (!broker.placeOco) throw new StepAbort(`${step.label}: broker neumí OCO`);
+      const exposure = await exposureCheck(step.quantity, true, exitSide(side));
+      if (!step.overlapExit) exitCoverCheck(exposure, step.quantity, step.label);
+      checkAbort();
+      sentAnything = true;
+      const sentT = elapsed();
+      note(step.label, { stopLoss, takeProfit, quantity: step.quantity, anchor });
+      const ack = await track(broker.placeOco({
+        tag: newTag(), accountId: plan.accountId, symbol: plan.symbol, quantity: step.quantity,
+        first: { side: exitSide(side), orderType: 'Stop', stopPrice: stopLoss },
+        second: { side: exitSide(side), orderType: 'Limit', limitPrice: takeProfit },
+      }));
+      acks.push({ ticket: step.ticket, ack });
+      note(`${step.ticket} ack (${elapsed() - sentT} ms)`, ack);
+      const ids: DemoTicketIds = { sl: positive(ack.firstBrokerOrderId), tp: positive(ack.secondBrokerOrderId) };
+      for (const id of [ids.sl, ids.tp]) if (id) ownIds.add(Number(id));
+      const prices: DemoTicketPrices = { entry: anchor, sl: stopLoss, tp: takeProfit };
+      tickets.set(step.ticket, {
+        side, dir, entryType: 'Market', ids, placed: { ...prices }, current: { ...prices },
+        quantities: { entry: step.quantity, sl: step.quantity, tp: step.quantity },
+      });
+      if (!ack.accepted || !ids.sl || !ids.tp) throw new StepAbort(`${step.label}: nepřijato (${ack.rejectReason ?? 'bez id'})`);
       await after(step, {});
     };
 
@@ -594,6 +697,7 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
           .catch(reason => results.push({ id: target.id!, ok: false, error: errorText(reason), ms: elapsed() - sentAt }));
       }
       note(`${step.label} výsledky`, results);
+      if (step.abortIfFailed && results.some(result => !result.ok)) throw new StepAbort(`${step.label}: zrušení nepotvrzené, další krok by nic nedokázal`);
       await after(step, { before, results });
     };
 
@@ -617,6 +721,8 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
       switch (step.kind) {
         case 'place-oso': return placeOsoStep(step);
         case 'place-order': return placeOrderStep(step);
+        case 'place-exit': return placeExitStep(step);
+        case 'place-oco': return placeOcoStep(step);
         case 'modify': return modifyStep(step);
         case 'cancel': return cancelStep(step);
         case 'liquidate': return liquidateStep(step);
@@ -678,18 +784,27 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
       if (inFlight.size) {
         note('čekám na dokončení rozpracovaných zápisů');
         await Promise.race([Promise.allSettled([...inFlight]), sleep(50_000)]);
+        if (inFlight.size) return { kind: 'unverified', reason: 'zápis po 50 s pořád běží — zkontroluj Tradovate' };
       }
       let liquidated = 0;
       let lastNet: number | null = null;
+      let cleanSeen = false;
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const observation = await observe();
         note('stav (úklid)', observation);
         const decision = decideScaleInCleanup(observation, entryIds);
-        if (decision.kind === 'clean') return decision;
+        if (decision.kind === 'clean') {
+          if (!writeUncertain || cleanSeen) return decision;
+          cleanSeen = true;
+          note('zápis skončil výjimkou — čekám 5 s na druhou kontrolu');
+          await sleep(5_000);
+          continue;
+        }
+        cleanSeen = false;
         // Liquidate jen po novém pozorování pozice (např. se mezitím vyplnil vstup) — nejvýš 2×, nikdy slepě.
-        if (decision.kind === 'liquidate' && liquidated < 2 && observation.netPosition !== lastNet) {
+        if (decision.kind === 'liquidate' && liquidated < 2 && observation.signedNet !== lastNet) {
           liquidated += 1;
-          lastNet = observation.netPosition;
+          lastNet = observation.signedNet;
           note('liquidate (úklid)');
           await broker.liquidatePosition!({ tag: `${newTag()}x`, accountId: plan.accountId, symbol: plan.symbol })
             .then(result => {
@@ -750,8 +865,15 @@ async function runConfirmed(plan: DemoRecordPlan, options: DemoRunOptions, initi
       .filter(item => (item.event.type === 'order' && result.ownIds.has(Number(item.event.order.brokerOrderId)))
         || (item.event.type === 'fill' && result.ownIds.has(Number(item.event.fill.brokerOrderId)))
         || (item.event.type === 'position' && item.event.position.accountId === plan.accountId))
-      .map(item => ({ t: item.t, event: JSON.parse(JSON.stringify(item.event, (key, value) =>
-        key === 'tag' ? undefined : key === 'accountId' ? (accountMap.get(Number(value)) ?? 0) : value)) }));
+      .map(item => {
+        const tag = item.event.type === 'order' ? item.event.order.tag : item.event.type === 'fill' ? item.event.fill.tag : undefined;
+        return {
+          t: item.t,
+          ...(item.event.type === 'position' ? {} : { tagMatchesOwn: typeof tag === 'string' && [...ownTags].some(own => tag.startsWith(own)) }),
+          event: JSON.parse(JSON.stringify(item.event, (key, value) =>
+            key === 'tag' ? undefined : key === 'accountId' ? (accountMap.get(Number(value)) ?? 0) : value)),
+        };
+      });
     const recording = {
       version: 4,
       script: options.script,

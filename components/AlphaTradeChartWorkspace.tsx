@@ -115,6 +115,7 @@ import type { BacktestManagedPositionBox } from '../services/backtestManagedPosi
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import {
   advanceReplayTimeByInterval,
+  clampReplayToStop,
   rewindReplayTimeByInterval,
   chartReplayDelayMs,
   chartReplayShortcut,
@@ -231,6 +232,8 @@ export interface BacktestChartSessionBridge {
   allowedRoots: MarketRoot[];
   executionInstrument: MarketRoot;
   initialReplay: ChartReplayState;
+  /** Unix s: replay se tady zastaví a dál nepustí (slepé hodnocení). */
+  replayStopAt?: number;
   workspaceState?: {
     layout?: unknown;
     panels?: WorkspaceSnapshot;
@@ -1389,7 +1392,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
 
   const [activePanelId, setActivePanelId] = useState(backtestSession?.workspaceState?.activePanelId || 'alphatrade-chart-1');
   const [reviewTradeId, setReviewTradeId] = useState<string | null>(null);
-  const [replay, setReplay] = useState<ChartReplayState>(backtestSession?.initialReplay ?? DEFAULT_CHART_REPLAY_STATE);
+  const [replay, setReplayRaw] = useState<ChartReplayState>(backtestSession?.initialReplay ?? DEFAULT_CHART_REPLAY_STATE);
+  const replayStopAt = backtestSession?.replayStopAt;
+  const replayStopAtRef = useRef(replayStopAt);
+  replayStopAtRef.current = replayStopAt;
+  // Všechny cesty kurzoru (přehrávání, šipky, výběr startu) jdou přes tenhle setter.
+  const setReplay = useCallback<React.Dispatch<React.SetStateAction<ChartReplayState>>>(action => {
+    setReplayRaw(current => clampReplayToStop(typeof action === 'function' ? action(current) : action, replayStopAtRef.current));
+  }, []);
+  useEffect(() => { if (replayStopAt !== undefined) setReplay(current => current); }, [replayStopAt, setReplay]);
   const [replaySelectionTime, setReplaySelectionTime] = useState<number | null>(null);
   const [replayDataLoading, setReplayDataLoading] = useState(false);
   // Krátká hláška uprostřed workspace (rychlá objednávka, odmítnutý návrat

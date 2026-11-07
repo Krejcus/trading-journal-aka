@@ -15,8 +15,9 @@
  */
 import { buildLeaderOrderManageCommand, type LeaderOrderManageCommand, type LeaderOrderManageResult } from './leaderOrderManage';
 import { bareCloseManageFields, type BareLeaderTrade } from './manualBareClose';
+import { liveBareLegFields, type LiveBareLegIntent } from './liveBareLeg';
 import { cancelOwnPendingEntries, type CancelPendingItemResult, type PendingOwnEntry } from './liveCancelPending';
-import { copierWorkerExecutionGroup, supportsCopierManualOrderCancelPending, supportsCopierManualOrderCloseBare } from './copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierManualOrderCancelPending, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg } from './copierWorkerCapabilities';
 import type { LocalCopierAgentStatus } from './localCopierAgentProtocol';
 import { sameBareTrade } from './liveBareCloseUi';
 import { cancelPendingSeenProblem } from './liveCancelPendingUi';
@@ -66,6 +67,23 @@ export function createLiveDeskCommands(deps: LiveDeskCommandDeps) {
     return sendLeaderManage(command, 'Výsledek zavření chybí — zkontroluj leadera v Tradovate.', relayId);
   };
 
+  /** SL a TP po jedné: `seen` = obchod a nohy, které uživatel viděl. Rozhoduje worker. */
+  const manageBareLeg = async (seen: BareLeaderTrade, intent: LiveBareLegIntent): Promise<LeaderOrderManageResult> => {
+    const current = deps.status();
+    const executionGroup = copierWorkerExecutionGroup(current.status);
+    if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !supportsCopierManualOrderSingleLeg(current.status)) {
+      throw new Error(LIVE_DESK_NOT_FRESH);
+    }
+    if (!sameBareTrade(current.status?.controller.bareLegTrade ?? null, seen)) throw new Error('Pozice se mezitím změnila — nic se neodeslalo.');
+    const relayId = deps.relayId();
+    if (!relayId) throw new Error('Změna jde jen přes relay — chybí připojení k workeru, nic se neodeslalo.');
+    const command = buildLeaderOrderManageCommand({
+      groupId: executionGroup.id, operationId: deps.newOperationId(), leaderAccountId: executionGroup.leaderAccountId,
+      entryOperationId: seen.entryOperationId, symbol: seen.symbol, ...liveBareLegFields(seen, intent),
+    });
+    return sendLeaderManage(command, 'Výsledek změny chybí — zkontroluj leadera v Tradovate.', relayId);
+  };
+
   const cancelPendingEntries = async (seen: readonly PendingOwnEntry[]): Promise<CancelPendingItemResult[]> => {
     const current = deps.status();
     const executionGroup = copierWorkerExecutionGroup(current.status);
@@ -86,5 +104,5 @@ export function createLiveDeskCommands(deps: LiveDeskCommandDeps) {
     });
   };
 
-  return { sendLeaderManage, closeBareLeader, cancelPendingEntries };
+  return { sendLeaderManage, closeBareLeader, manageBareLeg, cancelPendingEntries };
 }

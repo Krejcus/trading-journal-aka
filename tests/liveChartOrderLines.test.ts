@@ -214,3 +214,28 @@ it('fill při posunu limitu okamžitě ukáže skutečnou cenu pozice, ne návrh
   expect(entry.label).not.toContain('odesílám');
   expect(entry.draggable).toBe(false);
 });
+
+describe('SL a TP po jedné na čarách', () => {
+  const position = (patch = {}) => summary({ side: 'long', quantity: 1, entry: 100, stop: null, target: null, ...patch });
+  const lines = (input: ReturnType<typeof position>, bareLegs = true) => livePositionChartLines(input, { manageable: false, entryAvg: 100, pointValue: 2, bareLegs });
+  it('čip jen pro chybějící nohu, „Odeslat“ se nenabízí', () => {
+    const none = lines(position())[0];
+    expect(none.addableBrackets).toEqual(['stopLoss', 'takeProfit']);
+    expect(none.actions).toBeUndefined();
+    expect(lines(position({ stop: 90 }))[0].addableBrackets).toEqual(['takeProfit']);
+    expect(lines(position({ stop: 90, target: 120 }))[0].addableBrackets).toBeUndefined();
+  });
+  it('noha jde táhnout i zrušit ×; bez capability ne', () => {
+    const stop = lines(position({ stop: 90 })).find(line => line.kind === 'stopLoss')!;
+    expect(stop).toMatchObject({ draggable: true, cancellable: true, cancelAction: 'remove-bracket' });
+    const old = lines(position({ stop: 90 }), false).find(line => line.kind === 'stopLoss')!;
+    expect(old.draggable).toBe(false);
+    expect(old.cancellable).toBeUndefined();
+  });
+  it('BE až s SL; čekající vstup se nemění', () => {
+    expect(lines(position())[0].actions).toBeUndefined();
+    expect(lines(position({ stop: 90 }))[0].actions?.[0].id).toBe('break-even');
+    expect(lines(position({ kind: 'pending', entryType: 'Limit' }))[0].addableBrackets).toBeUndefined();
+  });
+});
+

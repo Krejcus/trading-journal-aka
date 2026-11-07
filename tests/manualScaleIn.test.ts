@@ -6,6 +6,7 @@ import {
   pendingAddViolation,
   positionOverCovered,
   scaleInPositionLossPoints,
+  positionActionUnresolved,
   positionManageBlockers,
   scaleInAddBlockers,
   scaleInEnabled,
@@ -409,5 +410,24 @@ describe('holý Market z lišty telefonu s doplněnými nohami (3. 11.)', () => 
     const naked = model([record('a1', { bare: true, stopId: undefined, targetId: undefined })], [], 1);
     expect(naked.tickets).toEqual([]);
     expect(gate(naked)).toContain('scale-in-foreign-position');
+  });
+});
+
+describe('scale-in: nevyřešená změna blokuje jen tuto pozici (6. 11. 2026)', () => {
+  const input = { key: 'position:1:MNQZ6', symbol: 'MNQZ6', ticketOperationIds: new Set(['entry:a']), oldestTicketCreatedAt: 1_000 };
+  const record = (patch = {}) => ({ status: 'unknown', entryOperationId: 'entry:old', symbol: 'MNQZ6', createdAt: 500, ...patch });
+  it('starý záznam jiného obchodu pozici neblokuje', () => {
+    expect(positionActionUnresolved([record()], input)).toBe(false);
+  });
+  it('klíč pozice, lístek a stejný symbol vzniklý během pozice blokují', () => {
+    expect(positionActionUnresolved([record({ entryOperationId: input.key })], input)).toBe(true);
+    expect(positionActionUnresolved([record({ entryOperationId: 'entry:a' })], input)).toBe(true);
+    expect(positionActionUnresolved([record({ createdAt: 1_000 })], input)).toBe(true);
+    expect(positionActionUnresolved([record({ status: 'sending', createdAt: 2_000 })], input)).toBe(true);
+  });
+  it('neznámé stáří lístků = konzervativně celý symbol; vyřešené a jiný symbol nic', () => {
+    expect(positionActionUnresolved([record()], { ...input, oldestTicketCreatedAt: null })).toBe(true);
+    expect(positionActionUnresolved([record({ status: 'waived', createdAt: 2_000 })], input)).toBe(false);
+    expect(positionActionUnresolved([record({ symbol: 'MNQH7', createdAt: 2_000 })], input)).toBe(false);
   });
 });
