@@ -20,7 +20,7 @@ export const LEGS_SCENARIOS = [
   'bare-limit-cancel', 'bare-limit-cancel-race', 'bare-limit-fill-oco', 'bare-market-liquidate', 'limit-replace',
   'lone-stop-liquidate', 'lone-limit-liquidate', 'lone-stop-opposite-close', 'lone-stop-then-oco', 'lone-stop-cancel-then-oco',
   'lone-limit-cancel-then-oco', 'oco-cancel-sl', 'oco-cancel-tp', 'pending-leg-cancel',
-  'parked-pending-modify', 'parked-filled-modify', 'pending-sl-cancel', 'pending-tp-cancel-fill', 'bare-stop-cancel', 'write-burst',
+  'parked-pending-modify', 'parked-filled-modify', 'parked-modified-fill', 'pending-sl-cancel', 'pending-tp-cancel-fill', 'bare-stop-cancel',
 ] as const;
 export type LegsScenarioName = typeof LEGS_SCENARIOS[number];
 
@@ -196,6 +196,20 @@ export function legsScenario(name: LegsScenarioName, options: RecordLegsOptions)
           { kind: 'require-flat', label: 'flat bez příkazů' },
         ],
       };
+    case 'parked-modified-fill':
+      return {
+        name,
+        purpose: 'Hlavní otázka: nohy čekajícího vstupu posunuté blíž (broker je jen drží), po fillu nesou nové ceny? Skript nemá povýšení drženého posunu workeru, výsledek číst z nohou po fillu.',
+        steps: [
+          parkedOso(FAR),
+          { kind: 'modify', label: 'SL blíž', changes: [{ target: { ticket: 't1', order: 'sl' }, price: near(-slPoints) }], observeMs: [300, 1_500] },
+          { kind: 'modify', label: 'TP blíž', changes: [{ target: { ticket: 't1', order: 'tp' }, price: near(tpPoints) }], observeMs: [300, 1_500] },
+          { kind: 'modify', label: 'Limit na trh, vyplní se', changes: [{ target: { ticket: 't1', order: 'entry' }, price: { from: 'market', points: 2, marketable: true } }] },
+          filled,
+          { kind: 'observe', label: 'ceny nohou po fillu', observeMs: [300, 1_500, 4_000], classify: { name: 'fill-with-modified-legs', ticket: 't1' } },
+          liquidate(),
+        ],
+      };
     case 'parked-filled-modify':
       return {
         name,
@@ -242,18 +256,6 @@ export function legsScenario(name: LegsScenarioName, options: RecordLegsOptions)
         steps: [
           { kind: 'place-order', label: 'holý Stop 1 daleko', ref: 'stp', side: 'position', orderType: 'Stop', price: { from: 'market', ratio: DEMO_FAR_RATIO }, quantity: 1, bare: true, observeMs: [0, 300, 1_500, 6_000] },
           { kind: 'cancel', label: 'zrušit Stop', targets: [{ plain: 'stp' }], observeMs: [300, 1_500] },
-          { kind: 'require-flat', label: 'flat bez příkazů' },
-        ],
-      };
-    case 'write-burst':
-      return {
-        name,
-        purpose: 'Limity API: 10 posunů za sebou bez pauzy, jako čipy na 5 účtech. Přijde p-ticket nebo odmítnutí? DEMO nemusí platit pro propky.',
-        steps: [
-          parkedOso(FAR),
-          ...Array.from({ length: 10 }, (_, index): DemoStep => ({ kind: 'modify', label: `posun ${index + 1}/10`, changes: [{ target: { ticket: 't1', order: 'sl' }, price: near(-(PARKED_POINTS - index - 1)) }] })),
-          { kind: 'observe', label: 'stav po sérii', observeMs: [500, 2_000] },
-          { kind: 'cancel', label: 'zrušit vstup', targets: [{ ticket: 't1', order: 'entry' }], observeMs: [500, 2_000], classify: { name: 'cascade', ticket: 't1' } },
           { kind: 'require-flat', label: 'flat bez příkazů' },
         ],
       };

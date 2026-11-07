@@ -17,7 +17,7 @@ describe('record-legs: scénáře', () => {
   });
   it('scénáře bez fillu se opravdu nevyplní', () => {
     expect(scenarioFills(legsScenario('bare-limit-cancel-race', options).steps)).toBe(true);
-    for (const name of ['bare-limit-cancel', 'limit-replace', 'pending-leg-cancel', 'parked-pending-modify', 'pending-sl-cancel', 'bare-stop-cancel', 'write-burst'] as const) expect(scenarioFills(legsScenario(name, options).steps), name).toBe(false);
+    for (const name of ['bare-limit-cancel', 'limit-replace', 'pending-leg-cancel', 'parked-pending-modify', 'pending-sl-cancel', 'bare-stop-cancel'] as const) expect(scenarioFills(legsScenario(name, options).steps), name).toBe(false);
     expect(scenarioFills(legsScenario('oco-cancel-sl', options).steps)).toBe(true);
   });
   it('--scenario all a odmítnutí blízkých nohou', () => {

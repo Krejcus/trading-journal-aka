@@ -172,6 +172,14 @@ Filip: Limit i Stop mají být komplet a má se počítat s více účty. „Zru
 
 **Market:** dnešní sólo verze zůstává; kopírování Marketu na followery je zvlášť a mohlo by přejít na stejný model.
 
-**Musí změřit DEMO (`record-legs.ts`, nové scénáře):** `parked-pending-modify`, `parked-filled-modify`, `pending-sl-cancel`, `pending-tp-cancel-fill`, `bare-stop-cancel`, `write-burst`. Filipův doplněk: pásma cen brokera u daleké nohy.
+**Musí změřit DEMO (`record-legs.ts`, nové scénáře):** `parked-pending-modify`, `parked-filled-modify`, `pending-sl-cancel`, `pending-tp-cancel-fill`, `parked-modified-fill`, `bare-stop-cancel`. Měření limitů API samostatně, viz oponentura.
 
 **Zbývá pro followery:** násobek a floor qty nohou, pravidla propek a jejich limity, ověření zrcadlení modify u Suspended nohy.
+
+### Oponentura v4 (7. 11. 2026): OPRAVIT PŘED STAVBOU, směr parkování správný
+- Followeři: modify Suspended nohy broker jen drží a followerům se nezrcadlí (INV-TRAD). Hybrid: broker drží parkované OSO, u followerů je čip před fillem durable plán, po aktivaci nohy jeden modify. Stavět až po měření.
+- Parkování počítá worker: jedna absolutní cena, minimum přes účty. SL ≤ denní rezerva a cut včetně poplatků a skluzu. TP bez výjimky v `risk-drawdown`, rozpětí musí projít. Pod minimem `parking-no-room`, nikdy tiché přiblížení. Malá rezerva znamená blízký „parkovaný“ SL.
+- Stav = durable příznak a cena u brokera přesně rovná uložené; posun v Tradovate je skutečná čára. Parkovaná cena se někde ukáže.
+- Pořadí: DEMO a krátký test na reálném účtu kvůli pásmům cen; sólo qty 1 Limit i Stop; sólo qty > 1 po měření částečného fillu; followeři zvlášť.
+- `write-burst` odstraněn: na Suspended noze nic neměří, lokální jistič se u některých odpovědí nezapne a token sdílí s workerem. Limity API se měří zvlášť na Working příkazech se stopem po prvním omezení.
+- Stavba musí pokrýt fill během modify, ztracený ACK, restart s parkováním, posun v Tradovate, druhé zařízení, zúženou rezervu, kill při ×, Flatten s parkovanými nohami.
