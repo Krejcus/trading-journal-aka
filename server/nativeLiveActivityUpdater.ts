@@ -1,3 +1,4 @@
+import { loadRecentPriceAlert, priceAlertExpandAlert, priceAlertStateFields, type LiveActivityPriceAlert } from './priceAlertLiveActivity.js';
 import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -49,6 +50,7 @@ export interface NativeLiveActivityPlan {
   update: ApnsLiveActivityUpdate;
   payloadHash: string;
   shouldEnd: boolean;
+  priceAlertShown: boolean;
   symbol: string;
 }
 
@@ -156,6 +158,8 @@ export function planNativeLiveActivityUpdate(options: {
   runtime: NativeLiveActivityRuntimeRow;
   broker: NativeLiveActivityBrokerSnapshot | null;
   now: number;
+  /** Nedávné upozornění na cenu; jen zobrazení, rizikový a offline stav ho vždy přebije. */
+  priceAlert?: LiveActivityPriceAlert | null;
 }): NativeLiveActivityPlan {
   const controller = controllerOf(options.runtime);
   const status = statusText(options.runtime, options.now);
@@ -330,6 +334,8 @@ export function planNativeLiveActivityUpdate(options: {
     && finite(controller.dayLockUntil) <= options.now
     && finite(controller.entryCooldownUntil) <= options.now
     && !bool(controller.killSwitch);
+  const priceAlertShown = options.priceAlert != null && !shouldEnd
+    && !CRITICAL_STATUSES.has(status.status) && status.status !== 'WORKER OFFLINE' && status.status !== 'BROKER OFFLINE';
   const headline = position.headline
     ?? (bool(controller.armed) ? `ARM · ${followerCount} followerů` : status.detail);
   const pnlLabel = openPositionCount > 0 && options.broker?.completeOpenPnl === true
@@ -368,6 +374,8 @@ export function planNativeLiveActivityUpdate(options: {
     ...(pnlAtTarget != null ? { targetPnlText: signedWhole(pnlAtTarget) } : {}),
     pnlCompactText: pnlAvailable ? signedWhole(pnl) : '—',
     ...daySummary,
+    // Do shrnutí (end) ani do rizikového a offline stavu alert nepatří: rozbalil by zavádějící pohled.
+    ...(priceAlertShown ? priceAlertStateFields(options.priceAlert!) : {}),
   };
   const fingerprint = {
     event: shouldEnd ? 'end' : 'update',
@@ -383,6 +391,7 @@ export function planNativeLiveActivityUpdate(options: {
     },
     payloadHash: createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex'),
     shouldEnd,
+    priceAlertShown,
     symbol: (position.symbol ?? fallbackSymbol).toUpperCase().startsWith('MNQ') ? 'MNQ' : 'NQ',
   };
 }
@@ -498,6 +507,16 @@ export async function updateNativeLiveActivities(options: {
     now,
     fetchImpl: options.fetchImpl,
   });
+  const priceAlerts = new Map<string, Promise<LiveActivityPriceAlert | null>>();
+  const recentPriceAlert = (userId: string) => {
+    let pending = priceAlerts.get(userId);
+    if (!pending) { pending = loadRecentPriceAlert(options.db, userId, now); priceAlerts.set(userId, pending); }
+    return pending;
+  };
+  const withExpand = (alert: LiveActivityPriceAlert | null, lastAt: number) => {
+    const expand = priceAlertExpandAlert(alert, lastAt);
+    return expand ? { alert: expand } : {};
+  };
   let sent = 0;
   let ended = 0;
   let skipped = 0;
@@ -509,10 +528,12 @@ export async function updateNativeLiveActivities(options: {
       skipped++;
       continue;
     }
+    const priceAlert = await recentPriceAlert(subscription.user_id);
     const plan = planNativeLiveActivityUpdate({
       runtime,
       broker: await brokerSnapshot(runtime),
       now,
+      priceAlert,
     });
     const lastPayloadAt = Date.parse(subscription.last_payload_at ?? '');
     const heartbeatDue = !Number.isFinite(lastPayloadAt) || now - lastPayloadAt >= 110_000;
@@ -525,7 +546,10 @@ export async function updateNativeLiveActivities(options: {
       deviceToken: subscription.push_token,
       environment: subscription.environment,
       bundleId: subscription.bundle_id,
-    } as ApnsDevice, plan.update);
+    } as ApnsDevice, {
+      ...plan.update,
+      ...(plan.priceAlertShown ? withExpand(priceAlert, Number.isFinite(lastPayloadAt) ? lastPayloadAt : 0) : {}),
+    });
     const nowIso = new Date(now).toISOString();
     if (result.status === 'sent') {
       sent++;

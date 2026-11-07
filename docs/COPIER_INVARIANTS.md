@@ -2053,6 +2053,8 @@ existující ochranu.
   hlavičkou LIVE (z-700 pod z-800), takže OFF zůstává klikatelné. Otevřený dialog (`role="dialog"`, `aria-modal`) ztiší
   klávesové zkratky včetně Shift+F, jako ostatní dialogy; Esc nebo klik vedle ho zavře. Alert nemá cestu k příkazu.
 
+- **Upozornění na cenu v Live Activity (7. 11. 2026):** tik a cron čtou `price_alert_events` jen pro zobrazení (strop 300 ms, nikdy nevyhodí) a přidají úroveň uživatele do běžné aktualizace ze skutečného plánu. Žádné přehrávání uloženého stavu ani vlastní aktivita. Do `end`, rizikového a offline stavu se alert nepřidá; `aps.alert` je bez zvuku a jen při prvním odeslání po spuštění. Běžná notifikace je na tom nezávislá.
+
 ### INV-UI-03: Retained risk, „rozhodnutí dne“ a poslední worker status jsou pouze zobrazení
 
 - Proč: Udržení hodnoty při krátkém výpadku zlepšuje čitelnost, ale její stáří

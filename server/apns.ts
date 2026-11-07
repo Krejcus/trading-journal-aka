@@ -39,6 +39,12 @@ export interface ApnsNotification {
 }
 
 export interface ApnsLiveActivityContentState {
+  /** Upozornění na cenu (`server/priceAlertLiveActivity.ts`); jen zobrazení, úroveň uživatele. */
+  priceAlertSymbol?: string;
+  priceAlertLevelText?: string;
+  priceAlertDirection?: string;
+  priceAlertNote?: string;
+  priceAlertAt?: number;
   status: string;
   headline: string;
   detail: string;
@@ -84,6 +90,8 @@ export interface ApnsLiveActivityContentState {
 export interface ApnsLiveActivityUpdate {
   state: ApnsLiveActivityContentState;
   event?: 'update' | 'end';
+  /** Rozbalí Island (upozornění na cenu); bez zvuku, ten má běžná notifikace. */
+  alert?: { title: string; body: string };
   staleAt?: number;
   dismissalAt?: number;
 }
@@ -189,6 +197,7 @@ export function buildApnsLiveActivityPayload(update: ApnsLiveActivityUpdate): Re
         progress: Math.min(1, Math.max(0, update.state.progress)),
       },
       ...(update.staleAt == null ? {} : { 'stale-date': Math.max(0, Math.floor(update.staleAt)) }),
+      ...(update.alert && event !== 'end' ? { alert: { title: update.alert.title, body: update.alert.body } } : {}),
       ...(event !== 'end' || update.dismissalAt == null
         ? {}
         : { 'dismissal-date': Math.max(0, Math.floor(update.dismissalAt)) }),
