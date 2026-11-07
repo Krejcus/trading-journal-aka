@@ -31,6 +31,7 @@ import { hasActiveLiveCommandTrace, markLiveCommandPaint, startLiveCommandTrace 
 import {
   LIVE_PREVIEW_PLACE_BARE,
   isBarePreviewDraft,
+  isBarePendingTicketDraft,
   isBareTicketDraft,
   liveAttachDefaults,
   liveAttachIntent,
@@ -38,6 +39,7 @@ import {
   liveAttachProblem,
     liveBareMarketBlockReason,
   liveBareMarketButtonLabel,
+  liveBarePendingBlockReason,
   liveBareConfirmKey,
   liveBareSendClick,
   liveConfirmAsking,
@@ -792,6 +794,7 @@ interface Props {
   // ── U4/U8/U10 (3. 11. 2026): výchozí hodnoty = dnešní chování panelu ──
   /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); výchozí false = holý Market se nenabídne. */
   entryBareSupported?: boolean;
+  entryBarePendingSupported?: boolean;
   /** Vlastní přijatý holý Market bez nohou (desk `newestOpenBareEntry`); výchozí null = „Přidat SL/TP“ se neukáže. */
   entryBareEntry?: LiveBareEntryRecord | null;
   /** Pozice leadera skupiny workeru na symbolu grafu (`liveAttachIntent.position`); výchozí null. */
@@ -872,7 +875,7 @@ const LiveOrderTicket: React.FC<Props> = ({
   isDark, shownOpenPnl, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
   group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice = null,
   entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
-  entryBareSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
+  entryBareSupported = false, entryBarePendingSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
   attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, managePendingLegs = false, attachPanelOpen = true, attachSent = false, onAttachSent, userId = null,
   bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose,
 }) => {
@@ -946,7 +949,9 @@ const LiveOrderTicket: React.FC<Props> = ({
   const marketReference = draft && quote && draft.type === 'market' ? (draft.side === 'buy' ? quote.ask : quote.bid) : null;
   // Holý Market (U4, 3. 11. 2026): Market bez SL i TP jen s capability `manual-entry-bare-v1`
   // (manual-only DEMO). Stejný payload jako list a lišta telefonu; kontrakt jen z IBKR.
-  const bareDraft = draft != null && entryBareSupported && isBareTicketDraft(draft);
+  // Holý Limit/Stop (7. 11. 2026): opravdu bez nohou u brokera, jen 1 kontrakt, capability `manual-entry-bare-pending-v1`.
+  const barePendingDraft = draft != null && entryBarePendingSupported && isBarePendingTicketDraft(draft);
+  const bareDraft = barePendingDraft || (draft != null && entryBareSupported && isBareTicketDraft(draft));
   const bareQuote: LiveBareQuote | null = quote && quoteInfo.capturedAt != null
     ? { symbol: previewSymbolFromChartSource(quoteInfo.source), bid: quote.bid, ask: quote.ask, at: quoteInfo.capturedAt }
     : null;
@@ -996,9 +1001,10 @@ const LiveOrderTicket: React.FC<Props> = ({
     : scaleIn && !scaleIn.canAdd ? scaleIn.reason ?? 'Přikoupení teď nejde.'
     : m && m.quantity > entryMaxContracts ? `Ruční vstup je omezený na ${entryMaxContracts} ${entryMaxContracts === 1 ? 'kontrakt' : entryMaxContracts < 5 ? 'kontrakty' : 'kontraktů'} (strop skupiny).`
       // Jedna noha nikdy; Limit/Stop obě; Market bez obou jen s capability (U4).
-      : liveTicketLegsProblem(draft, entryBareSupported) ?? (bareDraft
-        ? (draft.sizing !== 'qty' ? 'Holý Market jen v kontraktech — bez SL nejde velikost podle rizika.'
-          : liveBareMarketBlockReason(bareGateAt(Date.now()), m?.quantity ?? 0))
+      : liveTicketLegsProblem(draft, entryBareSupported, entryBarePendingSupported) ?? (bareDraft
+        ? (draft.sizing !== 'qty' ? 'Bez SL/TP jen v kontraktech — bez SL nejde velikost podle rizika.'
+          : barePendingDraft ? liveBarePendingBlockReason(bareGateAt(Date.now()), m?.quantity ?? 0)
+            : liveBareMarketBlockReason(bareGateAt(Date.now()), m?.quantity ?? 0))
         : null) ?? (single ? 'Náhled zatím jen pro skupinu (vstup na leadera).'
           : problems.some(problem => problem.level === 'error') ? 'Nejdřív oprav chyby v panelu.' : null);
   // Přímé odeslání velkým tlačítkem (Filip 30. 10.: jedním kliknutím, bez náhledu).
@@ -1749,7 +1755,7 @@ const LiveOrderTicket: React.FC<Props> = ({
         style={{ background: `linear-gradient(180deg, color-mix(in srgb, ${sideColor} 82%, #fff), ${sideColor})`, boxShadow: `0 10px 22px -12px ${sideColor}` }}
       >
         <span className="inline-flex items-center justify-center gap-1.5">{directBlocked != null && <Lock size={11} />}{directBusy ? <><span className="live-ticket-spinner" aria-hidden="true" />Odesílám…</> : bareSend
-          ? liveBareMarketButtonLabel(draft.side, m.quantity)
+          ? liveBareMarketButtonLabel(draft.side, m.quantity, draft.type === 'stop' ? 'STOP' : draft.type === 'limit' ? 'LIMIT' : 'MARKET')
           : `${draft.side === 'buy' ? 'Koupit' : 'Prodat'} ${m.quantity} ${instrument.symbol}`}</span>
         <small className="font-mono text-[10px] font-semibold opacity-85">
           {draft.type === 'market' ? `MKT · ~${marketReference != null ? formatPrice(marketReference) : '—'}` : `${draft.type === 'stop' ? 'STP' : 'LMT'} @ ${formatPrice(draft.price)}`}{previewSymbol ? ` · ${previewSymbol}` : ''}
@@ -1759,7 +1765,9 @@ const LiveOrderTicket: React.FC<Props> = ({
         </small>
       </button>
       {bareSend && <div className={`text-[10px] font-bold ${tone.muted}`}>
-        Market bez SL/TP: odešle se hned, ztráta nemá strop. SL a TP pak doplníš „Přidat SL/TP“.
+        {draft.type === 'market'
+          ? 'Market bez SL/TP: odešle se hned, ztráta nemá strop. SL a TP pak doplníš „Přidat SL/TP“.'
+          : `${draft.type === 'stop' ? 'Stop' : 'Limit'} bez SL/TP: po vyplnění ztráta nemá strop, dokud SL nenatáhneš. Jen 1 kontrakt.`}
       </div>}
       {shownDirect &&<div className={`rounded-[7px] px-2 py-1.5 text-[10.5px] font-bold ${shownDirect.view.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-600' : shownDirect.view.tone === 'bad' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-600'}`}>{shownDirect.view.text}</div>}
     </div>}

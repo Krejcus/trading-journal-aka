@@ -6,6 +6,7 @@ import type { BrokerOrderRequest } from './brokerPort';
 import {
   copyGroupConfigHash,
   isBareLeaderEntry,
+  LEADER_ENTRY_BARE_PENDING_QUANTITY,
   leaderEntryRiskPrice,
   LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS,
   LEADER_ENTRY_MARKET_QUOTE_MAX_SKEW_MS,
@@ -73,6 +74,41 @@ export function workerMarketPrice(quote: ManualEntryWorkerQuote | null, side: 'B
  * Brány Marketu nad kotacemi (čisté; stejně v náhledu i synchronně těsně před POSTem):
  * stáří ceny klienta, čerstvá cena workeru z IBKR, posun trhu a vzdálenost nohou.
  */
+/** Holý Stop musí být aspoň tolik ticků od trhu na straně průrazu (po fillu nemá žádnou ochranu). */
+export const MANUAL_ENTRY_BARE_STOP_MIN_TICKS = 8;
+
+/**
+ * Holý Limit/Stop (7. 11. 2026): bez nohou je důležité, aby se nevyplnil hned omylem. Limit nesmí být
+ * přes trh, Stop musí být na straně průrazu aspoň 8 ticků od trhu. Vždy jen s čerstvou cenou z IBKR.
+ * Kontrola náhledu i poslední kontrola těsně před odesláním.
+ */
+export function manualEntryBarePendingBlockers(
+  command: Pick<LeaderEntryPreviewCommand, 'side' | 'orderType' | 'price' | 'quantity' | 'symbol'>,
+  quote: ManualEntryWorkerQuote | null,
+  now: number,
+): LeaderEntryPreviewIssue[] {
+  if (command.quantity !== LEADER_ENTRY_BARE_PENDING_QUANTITY) {
+    return [blocker('bare-pending-quantity', 'Limit a Stop bez SL/TP jdou zatím jen po 1 kontraktu.')];
+  }
+  const market = workerMarketPrice(quote, command.side, now);
+  if (market == null || quote?.contract !== command.symbol) {
+    return [blocker('bare-pending-quote', 'Limit a Stop bez SL/TP potřebují čerstvou cenu stejného kontraktu z IBKR — teď nejdou.')];
+  }
+  const long = command.side === 'Buy';
+  const price = command.price!;
+  if (command.orderType === 'Limit') {
+    if (long ? price >= market : price <= market) {
+      return [blocker('bare-limit-marketable', 'Limit bez SL/TP je přes trh a vyplnil by se hned — použij Market, nebo cenu posuň.')];
+    }
+    return [];
+  }
+  const distance = long ? price - market : market - price;
+  if (distance < MANUAL_ENTRY_BARE_STOP_MIN_TICKS * TICK - 1e-9) {
+    return [blocker('bare-stop-too-close', `Stop bez SL/TP musí být aspoň ${MANUAL_ENTRY_BARE_STOP_MIN_TICKS} ticků od trhu na straně průrazu.`)];
+  }
+  return [];
+}
+
 export function manualEntryMarketQuoteBlockers(
   command: Pick<LeaderEntryPreviewCommand, 'side' | 'referencePrice' | 'quoteReceivedAt' | 'stopLoss' | 'takeProfit'>,
   quote: ManualEntryWorkerQuote | null,
@@ -331,7 +367,15 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
   // Holý Market (telefonní lišta, Filip 1. 11.): bez nohou, vědomě bez ochrany; SL/TP doplní attach-brackets.
   const bare = isBareLeaderEntry(command);
   if (bare) {
-    notes.push(blocker('bare-unprotected', 'Market bez SL/TP — pozice je bez ochrany, dokud nohy nedoplníš.'));
+    notes.push(blocker('bare-unprotected', market
+      ? 'Market bez SL/TP — pozice je bez ochrany, dokud nohy nedoplníš.'
+      : `${command.orderType} bez SL/TP — po vyplnění je pozice bez ochrany, dokud nohy nedoplníš.`));
+    if (!market) {
+      if (!(group.manualOnly === true && group.localOnly === true && group.followers.length === 0 && input.riskGate.brokerEnvironment === 'demo')) {
+        blockers.push(blocker('bare-pending-manual-only', 'Limit a Stop bez SL/TP jsou zatím jen pro ruční DEMO účet bez followerů.'));
+      }
+      blockers.push(...manualEntryBarePendingBlockers(command, input.workerQuote, now));
+    }
   } else {
     if (long ? !(command.stopLoss! < entryPrice) : !(command.stopLoss! > entryPrice)) blockers.push(blocker('stop-side', 'SL je na špatné straně vstupu.'));
     if (long ? !(command.takeProfit! > entryPrice) : !(command.takeProfit! < entryPrice)) blockers.push(blocker('target-side', 'TP je na špatné straně vstupu.'));

@@ -20,6 +20,7 @@ export const LEGS_SCENARIOS = [
   'bare-limit-cancel', 'bare-limit-cancel-race', 'bare-limit-fill-oco', 'bare-market-liquidate', 'limit-replace',
   'lone-stop-liquidate', 'lone-limit-liquidate', 'lone-stop-opposite-close', 'lone-stop-then-oco', 'lone-stop-cancel-then-oco',
   'lone-limit-cancel-then-oco', 'oco-cancel-sl', 'oco-cancel-tp', 'pending-leg-cancel',
+  'parked-pending-modify', 'parked-filled-modify', 'parked-modified-fill', 'pending-sl-cancel', 'pending-tp-cancel-fill', 'bare-stop-cancel',
 ] as const;
 export type LegsScenarioName = typeof LEGS_SCENARIOS[number];
 
@@ -44,6 +45,14 @@ export function parseRecordLegsArgs(argv: readonly string[]): DemoRecordPlan & {
 const FAR: DemoPriceRef = { from: 'market', ratio: -DEMO_FAR_RATIO };
 const bareMarket: DemoStep = { kind: 'place-order', label: 'holý Market 1', ref: 'bare', side: 'position', orderType: 'Market', quantity: 1, bare: true };
 const filled: DemoStep = { kind: 'wait-net', label: 'pozice 1', net: 1, timeoutMs: 10_000 };
+/** Zaparkovaná noha: daleko od vstupu, přitom v pojistkách záznamu (SL do 1 % ceny). */
+const PARKED_POINTS = 250;
+const near = (points: number): DemoPriceRef => ({ from: 'entry', points });
+const parkedOso = (entry: DemoPriceRef): DemoStep => ({
+  kind: 'place-oso', label: 'OSO se zaparkovanými nohami',
+  tickets: [{ ticket: 't1', quantity: 1, entry: { orderType: 'Limit', price: entry }, stopLoss: near(-PARKED_POINTS), takeProfit: near(PARKED_POINTS) }],
+  observeMs: [500],
+});
 const liquidate = (ref = 'liq'): DemoStep => ({ kind: 'liquidate', label: 'liquidate', ref, observeMs: [500, 2_000], classify: { name: 'liquidate-cancels-all' } });
 
 export function legsScenario(name: LegsScenarioName, options: RecordLegsOptions): DemoScenario {
@@ -174,6 +183,82 @@ export function legsScenario(name: LegsScenarioName, options: RecordLegsOptions)
         ],
       };
     }
+    case 'parked-pending-modify':
+      return {
+        name,
+        purpose: 'Víc účtů: čip na čekajícím Limitu jako jeden modify. Přijme broker posun zaparkované nohy blíž a zpět? Počet zápisů 1 na akci.',
+        steps: [
+          parkedOso(FAR),
+          { kind: 'modify', label: 'SL ze zaparkované ceny na plán', changes: [{ target: { ticket: 't1', order: 'sl' }, price: near(-slPoints) }], observeMs: [300, 1_500], classify: { name: 'suspended-modify', ticket: 't1', order: 'sl' } },
+          { kind: 'modify', label: 'TP ze zaparkované ceny na plán', changes: [{ target: { ticket: 't1', order: 'tp' }, price: near(tpPoints) }], observeMs: [300, 1_500], classify: { name: 'suspended-modify', ticket: 't1', order: 'tp' } },
+          { kind: 'modify', label: 'TP zpět na zaparkovanou', changes: [{ target: { ticket: 't1', order: 'tp' }, price: near(PARKED_POINTS) }], observeMs: [300, 1_500] },
+          { kind: 'cancel', label: 'zrušit vstup', targets: [{ ticket: 't1', order: 'entry' }], observeMs: [500, 2_000], classify: { name: 'cascade', ticket: 't1' } },
+          { kind: 'require-flat', label: 'flat bez příkazů' },
+        ],
+      };
+    case 'parked-modified-fill':
+      return {
+        name,
+        purpose: 'Hlavní otázka: nohy čekajícího vstupu posunuté blíž (broker je jen drží), po fillu nesou nové ceny? Skript nemá povýšení drženého posunu workeru, výsledek číst z nohou po fillu.',
+        steps: [
+          parkedOso(FAR),
+          { kind: 'modify', label: 'SL blíž', changes: [{ target: { ticket: 't1', order: 'sl' }, price: near(-slPoints) }], observeMs: [300, 1_500] },
+          { kind: 'modify', label: 'TP blíž', changes: [{ target: { ticket: 't1', order: 'tp' }, price: near(tpPoints) }], observeMs: [300, 1_500] },
+          { kind: 'modify', label: 'Limit na trh, vyplní se', changes: [{ target: { ticket: 't1', order: 'entry' }, price: { from: 'market', points: 2, marketable: true } }] },
+          filled,
+          { kind: 'observe', label: 'ceny nohou po fillu', observeMs: [300, 1_500, 4_000], classify: { name: 'fill-with-modified-legs', ticket: 't1' } },
+          liquidate(),
+        ],
+      };
+    case 'parked-filled-modify':
+      return {
+        name,
+        purpose: 'Zaparkované nohy po vyplnění: jdou posunout blíž a zpět? Drží OCO partner? Zavření.',
+        steps: [
+          parkedOso({ from: 'market', points: 2, marketable: true }),
+          filled,
+          { kind: 'observe', label: 'nohy po fillu', observeMs: [300, 1_000] },
+          { kind: 'modify', label: 'SL blíž', changes: [{ target: { ticket: 't1', order: 'sl' }, price: { from: 'market', points: -slPoints } }], observeMs: [300, 1_500] },
+          { kind: 'modify', label: 'TP blíž', changes: [{ target: { ticket: 't1', order: 'tp' }, price: { from: 'market', points: tpPoints } }], observeMs: [300, 1_500] },
+          { kind: 'modify', label: 'SL zpět daleko', changes: [{ target: { ticket: 't1', order: 'sl' }, price: near(-PARKED_POINTS) }], observeMs: [300, 1_500] },
+          liquidate(),
+        ],
+      };
+    case 'pending-sl-cancel':
+      return {
+        name,
+        purpose: '× na SL čekajícího Limitu: co se stane se vstupem a TP? (doplňuje pending-leg-cancel)',
+        steps: [
+          parkedOso(FAR),
+          { kind: 'cancel', label: 'zrušit jen SL čekajícího vstupu', targets: [{ ticket: 't1', order: 'sl' }], observeMs: [300, 1_500, 4_000], classify: { name: 'oco-partner-after-cancel', ticket: 't1', order: 'sl' } },
+          { kind: 'cancel', label: 'zrušit vstup', targets: [{ ticket: 't1', order: 'entry' }], onlyIfOpen: true, observeMs: [500, 2_000] },
+          { kind: 'cancel', label: 'zrušit zbylý TP', targets: [{ ticket: 't1', order: 'tp' }], onlyIfOpen: true, observeMs: [500] },
+          { kind: 'require-flat', label: 'flat bez příkazů' },
+        ],
+      };
+    case 'pending-tp-cancel-fill':
+      return {
+        name,
+        purpose: 'Vstup se vyplní po zrušení jedné nohy: aktivuje se zbylá noha? Jinak by pozice zůstala bez SL.',
+        steps: [
+          parkedOso(FAR),
+          { kind: 'cancel', label: 'zrušit jen TP', targets: [{ ticket: 't1', order: 'tp' }], observeMs: [500] },
+          { kind: 'modify', label: 'Limit na trh, vyplní se', changes: [{ target: { ticket: 't1', order: 'entry' }, price: { from: 'market', points: 2, marketable: true } }] },
+          filled,
+          { kind: 'observe', label: 'stav SL po fillu', observeMs: [300, 1_500, 4_000] },
+          liquidate(),
+        ],
+      };
+    case 'bare-stop-cancel':
+      return {
+        name,
+        purpose: 'Holý Stop: tvar eventů proti ACK a zrušení před spuštěním.',
+        steps: [
+          { kind: 'place-order', label: 'holý Stop 1 daleko', ref: 'stp', side: 'position', orderType: 'Stop', price: { from: 'market', ratio: DEMO_FAR_RATIO }, quantity: 1, bare: true, observeMs: [0, 300, 1_500, 6_000] },
+          { kind: 'cancel', label: 'zrušit Stop', targets: [{ plain: 'stp' }], observeMs: [300, 1_500] },
+          { kind: 'require-flat', label: 'flat bez příkazů' },
+        ],
+      };
     case 'pending-leg-cancel':
       return {
         name,

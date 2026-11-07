@@ -1429,6 +1429,7 @@ existující ochranu.
 
 ### INV-RISK-01: Quantity, DLL/MLL a per-follower risk se vynucují čerstvými worker důkazy, ne jen UI hodnotou při ARM
 
+- Výjimka (7. 11. 2026): Market, Limit a Stop bez SL/TP nemají spočítaný strop ztráty pro DLL/MLL. Platí jen v sólo DEMO skupině, Limit a Stop po 1 kontraktu (INV-MANUAL-01).
 - Proč: Stav i cena se mohou změnit po ARM; `maxContracts`, daily loss
   auto-liquidation (DLL), trailing/max-loss drawdown floor (MLL), eligibility,
   divergence a environment fence musí platit i v hot path.
@@ -2157,6 +2158,7 @@ existující ochranu.
 
 ### INV-MANUAL-01: Ruční vstup z appky jde jen přes worker na leadera; náhled (fáze 1a) nic nezapíše (29. 10. 2026)
 
+- Limit a Stop opravdu bez SL/TP (7. 11. 2026, capability `manual-entry-bare-pending-v1`, rozhodnutí Filipa „opravdu bez“): u brokera jediný příkaz bez nohou, jen sólo manual-only DEMO skupina bez followerů, 1 kontrakt (`validateLeaderEntryPreview` v relayi i workeru), jen z flat, čerstvá kotace IBKR stejného kontraktu. Limit nesmí být přes trh, Stop musí být aspoň 8 ticků na straně průrazu; kontrola v náhledu i synchronně těsně před POSTem. Výjimka z „vlastní vstup se nekopíruje bez nohou“ (`flushStandaloneOsoEntry`) platí jen pro id z ACK se záznamem `bare`; před ACK a při neznámém výsledku zůstává `maybe`, nic se nepřiřazuje podle účtu, symbolu ani počtu. Čekající holý vstup je pro C12 a C7 běžný čekající vstup: OFF, kill, day lock, konec session, CME pauza a konec ARM ho zruší, × ho zruší (`resolveManagedTrade` jen pro `cancel-entry`). Neznámý výsledek POST = `failClosed`, nikdy opakování. Správa SL/TP a × pozice až po durable `filledAt` (`bareEntryFilled`); zrušený nebo odmítnutý bez fillu = `closedAt`, pozdní fill ho vrací. Fill při rušení nebo za vypnuté kopírky = incident „BEZ SL/TP“, za ARMED zpráva `bare-filled`. Vědomě přijaté riziko (Filip): fill bez dozoru nemá strop ztráty a při výpadku workeru se vstup nezruší ani nepřijde zpráva. Posun ceny holého vstupu a čipy před fillem nejsou.
 - Nohy nevyplněného vstupu a TP blíž k trhu (5. 11. 2026, `--pending-legs on`, sólo DEMO): SL/TP čekajícího Limit/Stop vstupu jde posunout jen na správnou stranu vstupu, i u víc kontraktů (rozhodnutí Filipa, jen DEMO: částečný fill během zápisu může nechat nohu na plný počet, oponentura to označila za P1); TP blíž k trhu jen s čerstvou kotací IBKR a aspoň 8 ticků na ziskové straně. Conformance z API se dělá z appky na DEMO před zapnutím flagu.
 - Potvrzování: od 5. 11. 2026 bez dvoukroku, první klik odesílá (viz „Jedno kliknutí“ v INV-UI-01). Brány a worker beze změny.
 - Proč: Obchodování z grafu je první risk-zvyšující cesta z appky. Fáze 1a

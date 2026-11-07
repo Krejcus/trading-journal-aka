@@ -127,6 +127,7 @@ interface Props {
   // ── U4/U5/U8/U10 (3. 11. 2026): jen podklady panelu a grafu, výchozí = dnešní chování ──
   /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); chybí = false. */
   entryBareSupported?: boolean;
+  entryBarePendingSupported?: boolean;
   /** Vlastní přijatý holý Market bez nohou (jen v pohledu leadera skupiny workeru); chybí = null. */
   entryBareEntry?: LiveBareEntryRecord | null;
   /** Pozice leadera skupiny workeru na symbolu grafu (vstup `liveAttachIntent.position`); chybí = null. */
@@ -243,6 +244,7 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.entryFrontContract ?? null) === (right.entryFrontContract ?? null)
   && JSON.stringify(left.entryScaleIn ?? null) === JSON.stringify(right.entryScaleIn ?? null)
   && Boolean(left.entryBareSupported) === Boolean(right.entryBareSupported)
+  && Boolean(left.entryBarePendingSupported) === Boolean(right.entryBarePendingSupported)
   && JSON.stringify(left.entryBareEntry ?? null) === JSON.stringify(right.entryBareEntry ?? null)
   && JSON.stringify(left.entryLeaderPosition ?? null) === JSON.stringify(right.entryLeaderPosition ?? null)
   && left.onAttachBrackets === right.onAttachBrackets

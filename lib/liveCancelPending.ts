@@ -139,10 +139,12 @@ export function selectOwnPendingEntries(input: {
     const type = record.request.orderType;
     const price = type === 'Limit' ? order.limitPrice : type === 'Stop' ? order.stopPrice : undefined;
     const eligible = record.status === 'acknowledged'
-      && record.bare !== true
       && (type === 'Limit' || type === 'Stop')
       && record.entryBrokerOrderId === order.brokerOrderId
-      && !!record.stopBrokerOrderId && !!record.targetBrokerOrderId
+      // Holý Limit/Stop nemá nohy žádné, běžný vstup vždy obě.
+      && (record.bare === true
+        ? !record.stopBrokerOrderId && !record.targetBrokerOrderId
+        : !!record.stopBrokerOrderId && !!record.targetBrokerOrderId)
       && record.stopBrokerOrderId !== order.brokerOrderId && record.targetBrokerOrderId !== order.brokerOrderId
       // Nikdy noha: ani vazba na parent, ani id některé vlastní nohy.
       && order.parentOrderId == null && !ownLegParent.has(order.brokerOrderId)

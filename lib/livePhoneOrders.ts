@@ -25,6 +25,8 @@ export interface LivePhoneTradeBridge {
   blockedReason: string | null;
   marketSupported: boolean;
   bareSupported: boolean;
+  /** Limit a Stop bez SL/TP (capability `manual-entry-bare-pending-v1`). */
+  barePendingSupported?: boolean;
   maxContracts: number;
   /** Front kontrakt podle brokera (čerstvý) — jen pro Limit/Stop z listu, když cena není z IBKR. */
   frontContract: string | null;
@@ -256,7 +258,7 @@ export function livePhonePillScaleIn(
   };
 }
 
-/** List objednávky: Limit/Stop/Market se SL+TP; Market smí i bez obou (holý). */
+/** List objednávky: Limit/Stop/Market se SL+TP, nebo bez obou (holý). Zda to worker umí, hlídá `liveTicketLegsProblem`. */
 export function livePhoneSheetEntry(draft: TicketDraft, instrument: TicketInstrument, quote: LivePhoneQuote): LiveEntryPreviewDraft | { error: string } {
   if (!quote.symbol) return { error: 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' };
   const quantity = ticketQuantity(draft, instrument, { bid: quote.bid, ask: quote.ask });
@@ -264,7 +266,7 @@ export function livePhoneSheetEntry(draft: TicketDraft, instrument: TicketInstru
   const hasStop = draft.stopLoss != null;
   const hasTarget = draft.takeProfit != null;
   if (hasStop !== hasTarget) return { error: 'Vyplň SL i TP (nebo u Marketu ani jedno).' };
-  if (!hasStop && draft.type !== 'market') return { error: 'Limit a Stop potřebují SL i TP.' };
+  if (!hasStop && draft.type !== 'market' && quantity !== 1) return { error: 'Limit a Stop bez SL/TP jdou zatím jen po 1 kontraktu.' };
   const side = draft.side === 'buy' ? 'Buy' as const : 'Sell' as const;
   const legs = hasStop ? { stopLoss: snapToTick(draft.stopLoss!, instrument.tickSize), takeProfit: snapToTick(draft.takeProfit!, instrument.tickSize) } : {};
   return draft.type === 'market'

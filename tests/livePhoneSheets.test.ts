@@ -296,7 +296,7 @@ describe('statika: listy a lišty nemají vlastní cestu k brokerovi (INV-UI-01)
     expect(sheet.match(/onSubmit\(/g)).toHaveLength(1);
     expect(sheet).toMatch(/onSubmit\(submitDraft\)/);
     expect(sheet.match(/\.preview\(/g)).toHaveLength(1);
-    expect(sheet).toMatch(/'blockedReason' \| 'marketSupported' \| 'bareSupported' \| 'maxContracts' \| 'frontContract' \| 'scaleIn' \| 'preview'/);
+    expect(sheet).toMatch(/'blockedReason' \| 'marketSupported' \| 'bareSupported' \| 'barePendingSupported' \| 'maxContracts' \| 'frontContract' \| 'scaleIn' \| 'preview'/);
   });
 
   it('list správy: jen sdílený runner (request = dvoukrok), nikdy přímé manage() ani run()', () => {

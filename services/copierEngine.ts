@@ -428,6 +428,8 @@ export interface CopierManualEntryRecord {
    * vstup nečeká, má zrušení nebo kopírka není ARMED, aby si push neprotiřečil s výsledkem. Jen zobrazení.
    */
   pendingIncidentNoticeOnly?: true;
+  /** Holý Limit/Stop: kdy se vstup vyplnil. Teprve od té chvíle je to pozice se správou SL/TP a ×. */
+  filledAt?: number;
   waiver?: { at: number; reason: string };
 }
 

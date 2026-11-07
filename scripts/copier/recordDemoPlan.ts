@@ -96,7 +96,7 @@ export type DemoStep =
   | ({ kind: 'place-oso'; label: string; tickets: DemoOsoTicket[]; reverseAfter?: string } & DemoAfter)
   | ({
       kind: 'place-order'; label: string; ref: string; side: 'position' | 'opposite';
-      orderType: 'Market' | 'Limit'; price?: DemoPriceRef; quantity: number;
+      orderType: 'Market' | 'Limit' | 'Stop'; price?: DemoPriceRef; quantity: number;
       /** Redukce pozice: qty ≤ |net|, nikdy přes nulu. */
       reducing?: true;
       /** Vědomě holý vstup bez nohou (návrh SL/TP po jedné): Market, marketable Limit, nebo Limit daleko. */
@@ -324,7 +324,7 @@ export function scenarioStructureProblems(scenario: DemoScenario): string[] {
     } else if (step.kind === 'place-order') {
       if (!quantityOk(step.quantity)) problems.push(`${step.label}: qty ${step.quantity} mimo 1–${DEMO_RECORD_MAX_QUANTITY}`);
       if (step.orderType === 'Market' && !step.reducing && !step.bare) problems.push(`${step.label}: holý Market jen jako redukce`);
-      if (step.orderType === 'Limit' && !step.price) problems.push(`${step.label}: Limit bez ceny`);
+      if (step.orderType !== 'Market' && !step.price) problems.push(`${step.label}: ${step.orderType} bez ceny`);
       plain.add(step.ref);
     } else if (step.kind === 'place-exit') {
       if (!quantityOk(step.quantity)) problems.push(`${step.label}: qty ${step.quantity} mimo 1–${DEMO_RECORD_MAX_QUANTITY}`);
@@ -497,7 +497,7 @@ export function osoPlacementProblems(oso: ResolvedOso, anchor: number): string[]
 
 /** Holý příkaz: jen redukce Marketem (qty ≤ |net|), nebo pasivní Limit daleko od trhu. */
 export function plainOrderProblems(input: {
-  side: DemoSide; orderType: 'Market' | 'Limit'; price: number | null; quantity: number; reducing: boolean; anchor: number | null;
+  side: DemoSide; orderType: 'Market' | 'Limit' | 'Stop'; price: number | null; quantity: number; reducing: boolean; anchor: number | null;
   /** Vědomě holý vstup (krok `bare`): Market smí, Limit smí i marketable. */
   bare?: boolean; marketable?: boolean;
 }): string[] {
@@ -505,6 +505,14 @@ export function plainOrderProblems(input: {
   if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > DEMO_RECORD_MAX_QUANTITY) problems.push(`qty ${input.quantity} mimo 1–${DEMO_RECORD_MAX_QUANTITY}`);
   if (input.orderType === 'Market') {
     if (!input.reducing && !input.bare) problems.push('holý Market jen jako redukce');
+    return problems;
+  }
+  // Holý Stop jen daleko na straně průrazu: u trhu by se hned vyplnil bez ochrany.
+  if (input.orderType === 'Stop') {
+    if (!input.bare) problems.push('Stop jen jako vědomě holý vstup');
+    if (input.price == null || !(input.price > 0) || !onDemoTick(input.price)) problems.push('Stop bez platné ceny na tick');
+    else if (input.anchor == null) problems.push('chybí čerstvá cena workeru');
+    else if (!((input.side === 'Buy' ? input.price - input.anchor : input.anchor - input.price) >= input.anchor * DEMO_FAR_RATIO - RECORD_TICK_SIZE)) problems.push('holý Stop musí být daleko na straně průrazu');
     return problems;
   }
   if (input.bare && input.marketable) {

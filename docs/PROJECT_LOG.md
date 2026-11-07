@@ -295,6 +295,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Zvuky SL/TP (`lib/liveExitAlerts.ts`, výchozí „jako zvuk při fillu“):** z `exitReason` událostí workeru, nikdy z ceny. Pozice může skončit dřív, než worker pozná nohu, událost pak přijde jako `manual` a stejné id se opraví, proto detektor `manual` dál sleduje. Pak může zaznít nejdřív běžný zvuk fillu a po opravě vlastní zvuk.
 - **Dotčená pravidla:** INV-UI-01, INV-UI-03, INV-UI-04: jen zobrazení, nic neautorizuje, neověřený stav je neutrální, důvod z brokera. ⚡ čte z boxu jen ceny a ty se nemění. Jádro kopírky beze změny, proto bez `copier-design-critic`.
 - **Neověřeno:** protažení boxu a zvuky na skutečné pozici (trh zavřený, jen testy s náhradou motoru a náhled nastavení); zvuk na iPhonu bez gesta a s tichým režimem; zobáček dotykem. Vlastní zvuk hraje jen s otevřeným grafem, v pozadí zůstává push.
+### 2026-11-07 — Limit a Stop opravdu bez SL/TP (Claude, NASAZENO 7. 11. z `eaa40d5d`: web, worker, iPhone, Filip „Nasaď“)
+
+- **Proč:** Filip chce Limit a Stop jako v TradingView, po vyplnění bez SL a TP, dokud je nenatáhne. Na otázku, jestli smí jít o vzdálený SL: „Ne, opravdu bez.“ Parkované nohy z návrhu v4 se proto nestaví.
+- **Rozsah:** sólo manual-only DEMO skupina, 1 kontrakt, z flat, capability `manual-entry-bare-pending-v1`. Limit nesmí být přes trh, Stop aspoň 8 ticků na straně průrazu, vždy s čerstvou cenou IBKR. Před fillem jde jen ×, posun ceny a čipy ne; po fillu čipy a × jako u holého Marketu.
+- **Bezpečnost:** čekající holý vstup zruší OFF, kill, day lock, konec session a konec ARM stejně jako každý čekající. Neznámý výsledek POST je incident. Po restartu se konec vstupu dočte s odstupem a nerozhodnutý stav končí incidentem. Fill při rušení nebo za vypnuté kopírky je incident „BEZ SL/TP“. Vědomě přijato: fill bez dozoru nemá strop ztráty a při výpadku workeru se nic nezruší (INV-MANUAL-01, INV-RISK-01).
+- **Oponentura:** `copier-design-critic` OPRAVIT PŘED COMMITEM, nálezy opraveny (P1 tichá díra po restartu, P2 neznámé ACK, riziko posunu SL od ceny vstupu, testy závodů). Hypotéza P3-2 (zastaralá Position(0) po fillu uzavře záznam) neřešena, stejná slabina je u Marketu.
+- **Neověřeno:** jen testy s mockem. Samostatný Stop bez nohou přes `placeOrder`, skutečné pořadí Order/Fill/Position a × při „too late“ čekají na DEMO za otevřeného trhu. Víc účtů je další krok.
 
 ### 2026-11-07 — Společné rozložení a timeframe grafů (Claude, větev `claude/chart-view-sync-20261107`, web + iPhone 7. 11., Filip „než nasadíš…“)
 
