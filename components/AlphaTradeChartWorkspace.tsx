@@ -150,6 +150,7 @@ import { CHART_APPEARANCE_SLOTS, chartAppearanceSnapshot, chartAppearanceUserId,
 import { panelSettingsTargetMatches, type PanelSettingsTarget } from '../services/chartPanelSettings';
 import type { LiveCandleFeed } from '../lib/liveCandleFeed';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../hooks/useLiveCandleBinding';
+import { rememberWorkspaceChartView } from '../lib/chartView';
 import { useLivePriceLinesBinding } from '../hooks/useLivePriceLinesBinding';
 import type { LivePriceLinesFeed } from '../lib/livePriceLinesFeed';
 import { installDevDragProfiler, recordDragProfilerCommit } from '../services/devDragProfiler';
@@ -1448,6 +1449,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   );
   const [replayToolbarPosition, setReplayToolbarPosition] = useState<ReplayToolbarPosition | null>(loadReplayToolbarPosition);
   const [layoutId, setLayoutId] = useState<ChartWorkspaceLayoutId>(initialLayoutIdRef.current);
+  const layoutIdRef = useRef(layoutId);
+  layoutIdRef.current = layoutId;
+  const chartViewBaselineRef = useRef<string | null>(null);
   const [layoutPickerOpen, setLayoutPickerOpen] = useState(false);
   const [syncSettings, setSyncSettings] = useState<ChartWorkspaceSyncSettings>(() => ({
     ...loadSyncSettings(),
@@ -2106,6 +2110,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       });
       updates.forEach(update => model.doAction(FlexLayoutActions.updateNodeAttributes(update.id, { enableTabStrip: update.enableTabStrip })));
       if (!backtestSession && timeframes.length === count && count > 0) savePanelTimeframes(layoutStorageKey, timeframes);
+      // LIVE a graf dne se sdílejí napříč zařízeními (`lib/chartView.ts`). Jen skutečná změna tady: otevřený graf
+      // se po převzetí z jiného zařízení nepřestavuje a jeho starý stav nesmí novější přepsat.
+      if (!backtestSession && layoutScope && timeframes.length === count && count > 0) {
+        const mounted = `${layoutIdRef.current}|${timeframes.join(',')}`;
+        if (chartViewBaselineRef.current !== null && chartViewBaselineRef.current !== mounted) {
+          rememberWorkspaceChartView(layoutIdRef.current, timeframes);
+        }
+        chartViewBaselineRef.current = mounted;
+      }
       setPaneLayout(current => current.count === count && current.maximizedPanelId === maximizedPanelId
         ? current
         : { count, maximizedPanelId });
@@ -2123,7 +2136,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       if (frame !== null) window.cancelAnimationFrame(frame);
       if (retry !== null) window.clearTimeout(retry);
     };
-  }, [backtestSession, getLiveModel, layoutStorageKey, workspace, workspaceMountVersion]);
+  }, [backtestSession, getLiveModel, layoutScope, layoutStorageKey, workspace, workspaceMountVersion]);
   const findTabset = useCallback((model: FlexLayoutModel, panelId: string) => {
     let tabsetId: string | null = null;
     model.visitNodes(node => {
