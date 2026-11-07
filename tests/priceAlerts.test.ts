@@ -5,6 +5,7 @@ import {
   createLocalPriceAlertStore, movedAlert, newPriceAlert, freshPriceAlertEvents, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus, readPriceAlertState,
 } from '../lib/priceAlerts';
 import { ALERT_SOUNDS_BASE, ALERT_SOUND_VOLUME_DEFAULT, ALERT_TONE_GROUPS, CUSTOM_SOUND_MAX_BYTES, CUSTOM_SOUND_MAX_COUNT, DEFAULT_ALERT_TONE, alertToneNotes, alertToneUrl, clampAlertSoundVolume, customSoundProblem, isAlertTone } from '../lib/priceAlertTones';
+import { ALERT_FIRE_MS, alertFirePoint, alertFireRgb, alertWaveFront, drawAlertFire } from '../lib/alertFireEffect';
 import { LIVE_FILL_CUE_PATTERNS } from '../services/liveFillAudio';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../lib/liveFillMarkers';
 import { EXTRA_TOAST_MAX, TRADE_TOAST_MAX, capExtraToasts, keepStickyToasts } from '../lib/liveTradeToasts';
@@ -302,7 +303,38 @@ describe('upozornění na cenu na PC', () => {
     const preview = source.slice(source.indexOf('const preview = useCallback'), source.indexOf('// Trvale odmítnuté uložení'));
     expect(preview).toMatch(/presentRef\.current\(alert, alert\.price\)/);
     expect(preview).not.toMatch(/rpc|trigger|store\./);
-    expect(read('components/day/dayJournal.css')).toMatch(/prefers-reduced-motion: reduce\) \{\n {2}\.dj-alert-sweep/);
+  });
+
+  it('spuštění v grafu: vlna doběhne doleva, prsten jen na svíčce ve výřezu; chyba barvy nic neshodí', () => {
+    const fronts = [0, 0.25, 0.5, 0.75, 1].map(t => alertWaveFront(t, 500));
+    expect(fronts[0]).toBeGreaterThan(500);
+    for (let i = 1; i < fronts.length; i += 1) expect(fronts[i]).toBeLessThan(fronts[i - 1]);
+    expect(fronts.at(-1)).toBeLessThan(0);
+    expect(alertFirePoint(300, 600)).toBe(300);
+    expect(alertFirePoint(700, 600)).toBeNull();
+    expect(alertFirePoint(-1, 600)).toBeNull();
+    expect(alertFirePoint(null, 600)).toBeNull();
+    expect(alertFireRgb('#e91e63')).toBe('233,30,99');
+    expect(alertFireRgb('nesmysl')).toBe('245,181,61');
+    const calls: string[] = [];
+    const gradient = { addColorStop: () => undefined };
+    const ctx = new Proxy({}, {
+      get: (_target, key) => (key === 'createLinearGradient' || key === 'createRadialGradient' ? () => gradient : () => { calls.push(String(key)); }),
+      set: () => true,
+    }) as never;
+    // Svíčka mimo výřez: vlna ano, prsten (arc) ne. Ve výřezu i prsten. Po konci nic.
+    drawAlertFire(ctx, { width: 600, y: 100, pointX: 900, ms: 500, color: '#f5b53d' });
+    expect(calls).not.toContain('arc');
+    expect(calls).toContain('stroke');
+    calls.length = 0;
+    drawAlertFire(ctx, { width: 600, y: 100, pointX: 500, ms: 500, color: '#f5b53d' });
+    expect(calls).toContain('arc');
+    calls.length = 0;
+    drawAlertFire(ctx, { width: 600, y: 100, pointX: 500, ms: ALERT_FIRE_MS, color: '#f5b53d' });
+    expect(calls).toEqual([]);
+    // Omezené animace: jen klidný prsten.
+    drawAlertFire(ctx, { width: 600, y: 100, pointX: 500, ms: 500, color: '#f5b53d', reduced: true });
+    expect(calls.filter(call => call === 'arc')).toHaveLength(2);
   });
 
   it('nic neobchoduje a nesahá na kopírku ani příkazy', () => {

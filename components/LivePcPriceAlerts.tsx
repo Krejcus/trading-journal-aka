@@ -10,6 +10,7 @@ import {
   type PriceAlert, type PriceAlertLineStyle, type PriceAlertLineWidth, type PriceAlertStore,
 } from '../lib/priceAlerts';
 import type { TradeToast } from '../lib/liveTradeToasts';
+import { ALERT_FIRE_MS } from '../lib/alertFireEffect';
 import { alertVoiceText, speakAlertText } from '../services/alertVoice';
 import { liveFillAudio } from '../services/liveFillAudio';
 import { addCustomAlertSound, getAlertSoundVolume, listCustomAlertSounds, playAlertTone, removeCustomAlertSound, setAlertSoundVolume, type CustomAlertSound } from '../services/priceAlertSounds';
@@ -23,8 +24,8 @@ import { useFreshPriceAlertEvents, usePriceAlertStore } from '../services/priceA
  * nesahá na příkazy ani kopírku (INV-UI-01).
  */
 
-/** Musí sedět na animace `.dj-alert-*` v dayJournal.css. */
-const FLASH_MS = 2_400;
+/** Jak dlouho běží efekt v grafu (`lib/alertFireEffect.ts`). */
+const FLASH_MS = ALERT_FIRE_MS;
 
 /** Stabilní most do panelu grafu: změna upozornění nepřekresluje graf, čáry si stav čtou samy. */
 export interface LivePcAlertBridge {

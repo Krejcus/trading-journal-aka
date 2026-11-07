@@ -9,6 +9,7 @@ import {
 import { formatLivePrice } from './LivePhoneTrade';
 import { clickedOrderType } from '../../lib/liveOrderTicket';
 import SheetGrip from './SheetGrip';
+import AlertFireEffect from '../AlertFireEffect';
 
 /**
  * Upozornění na cenu v LIVE grafu telefonu (náhled EkQateEvNCynqk8rLyQUrr):
@@ -108,9 +109,9 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
 
   return (
     <div ref={rootRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 14 }} data-price-alert-lines>
-      {/* PC, spuštění: okraj grafu krátce zazáří v barvě upozornění. */}
-      {mouse && alerts.filter(alert => flashIds.has(alert.id)).slice(-1).map(alert => (
-        <div key={alert.id} className="dj-alert-edge" style={{ position: 'absolute', left: 0, top: 0, width: paneWidth, height: paneHeight, boxShadow: `inset 0 0 70px ${rgba(alert.line.color, 0.32)}, inset 0 0 0 1px ${rgba(alert.line.color, 0.45)}` }} />
+      {/* PC, spuštění: prsten na poslední svíčce, vlna doleva a čára k ceně (kreslí se na plátno). */}
+      {mouse && alerts.filter(alert => flashIds.has(alert.id)).map(alert => (
+        <AlertFireEffect key={alert.id} api={api} price={alert.price} color={alert.line.color} width={paneWidth} height={paneHeight} />
       ))}
       {alerts.map((alert, index) => {
         const y = ys[index];
@@ -133,20 +134,13 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
               borderTop: `${css.width}px ${css.style} ${rgba(color, mouse ? Math.min(1, (alert.line.opacity ?? PRICE_ALERT_PC_OPACITY) / 100 + (selected ? 0.25 : 0)) : selected ? 0.9 : 0.55)}`,
               animation: flash && !mouse ? 'dj-alert-flash .45s ease-in-out 5' : undefined,
             }} />}
-            {/* PC, spuštění: záře kolem čáry a světlo, které doběhne k ceně. */}
-            {mouse && flash && <>
-              <div className="dj-alert-band" style={{ position: 'absolute', left: 0, right: 0, top: -16, height: 32, background: `linear-gradient(to bottom, transparent, ${rgba(color, 0.3)}, transparent)` }} />
-              <div style={{ position: 'absolute', left: 0, right: 0, top: -2, height: 4, overflow: 'hidden' }}>
-                <div className="dj-alert-sweep" style={{ width: '30%', height: '100%', background: `linear-gradient(90deg, transparent, ${color}, #ffffff, ${color}, transparent)` }} />
-              </div>
-            </>}
             {/* PC: místo zvonečku přes čáru štítek na cenové ose; celou dobu ukazuje cenu a jde za něj táhnout. */}
-            {mouse && flash && <span aria-hidden className="dj-alert-ping" style={{ position: 'absolute', left: paneWidth + 3, top: -8, width: scaleWidth - 6, height: 16, borderRadius: 4, boxSizing: 'border-box', border: `1.5px solid ${color}`, boxShadow: `0 0 10px ${rgba(color, 0.6)}` }} />}
-            {mouse && <span aria-hidden data-alert-tag className={flash ? 'dj-alert-pop' : undefined} style={{ userSelect: 'none', position: 'absolute', left: paneWidth + 3, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 6, height: 16, borderRadius: 4, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 9.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-              // Klidně: průsvitná barva na vlastním podkladu (schová číslo osy), plná jen při výběru a spuštění.
-              ...(selected || flash
+            {mouse && <span aria-hidden data-alert-tag style={{ userSelect: 'none', position: 'absolute', left: paneWidth + 3, top: 0, transform: 'translateY(-50%)', width: scaleWidth - 6, height: 16, borderRadius: 4, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 9.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+              transition: 'box-shadow .5s, border-color .5s',
+              // Klidně: průsvitná barva na vlastním podkladu (schová číslo osy), plná jen při výběru; při spuštění září.
+              ...(selected
                 ? { background: color, color: alertTagInk(color), border: `1px solid ${color}` }
-                : { background: `linear-gradient(${rgba(color, 0.16)}, ${rgba(color, 0.16)}), ${isDark ? '#0d1219' : '#ffffff'}`, color: `color-mix(in srgb, ${color} ${isDark ? '80%, white' : '62%, black'})`, border: `1px solid ${rgba(color, 0.4)}` }) }}>
+                : { background: `linear-gradient(${rgba(color, 0.16)}, ${rgba(color, 0.16)}), ${isDark ? '#0d1219' : '#ffffff'}`, color: `color-mix(in srgb, ${color} ${isDark ? '80%, white' : '62%, black'})`, border: `1px solid ${rgba(color, flash ? 0.95 : 0.4)}`, boxShadow: flash ? `0 0 14px ${rgba(color, 0.45)}` : undefined }) }}>
               <Bell size={9} strokeWidth={2.2} />{formatLivePrice(shownPrice(alert))}
             </span>}
             {!mouse && <span aria-hidden style={{ position: 'absolute', right: 6, top: 0, transform: 'translateY(-50%)', width: 16, height: 16, borderRadius: 8, display: 'grid', placeItems: 'center', color: rgba(color, flash || selected ? 1 : 0.45), background: selected ? 'rgba(20,22,36,.72)' : 'transparent', boxShadow: selected ? `0 0 0 1px ${rgba(color, 0.55)}` : undefined, animation: flash ? 'dj-alert-flash .45s ease-in-out 5' : undefined }}>
