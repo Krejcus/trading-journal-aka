@@ -291,6 +291,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 ### 2026-11-07 — Společné rozložení a timeframe grafů (Claude, větev `claude/chart-view-sync-20261107`, nenasazeno)
 
 - **Proč:** telefon po každé čisté instalaci začínal na 5m a nastavení se drželo jen v zařízení. Filip chce synchronizaci. `lib/chartView.ts` jde na server v profilu grafů (`user_chart_profiles`, `view`), poslední změna platí všude a přežije reinstalaci.
+- **Návrat z pozadí na telefonu:** graf LIVE neměl zapnuté sledování okraje (`followEdge`), proto po doplnění svíček zůstal stát. Zapnuto jako na PC; kdo se dívá do historie, tomu se záběr nehýbe.
 - **Pravidla:** telefon přebírá hned; otevřený graf na PC se nepřestavuje, nové nastavení vezme při dalším otevření, a nezapisuje zpět nic, dokud v něm uživatel něco nezmění (jinak by starý stav přepsal novější). Backtest je mimo. Telefonní `auto` je na PC jeden graf. Neověřeno v živém provozu mezi dvěma zařízeními.
 
 ### 2026-11-06 noc — SL a TP po jedné u holé pozice (Claude, větev `claude/chart-position-ui-20261106`, NENASAZENO)

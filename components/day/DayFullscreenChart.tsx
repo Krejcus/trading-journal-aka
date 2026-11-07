@@ -457,7 +457,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const liveCandleTargets: LiveCandleTarget[] = Array.from({ length: paneCount }, (_, index) => ({
     api: paneApi(index), root: 'MNQ', timeframe: paneTimeframe(index), rawCandles: paneLiveRaw[index] ?? raw,
   }));
-  useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets);
+  // LIVE: graf jde za poslední svíčkou jako na PC, i když se po návratu z pozadí naráz doplní víc svíček.
+  useLiveCandleBinding(ctl && !replayOn ? ctl.chart.liveFeed : null, liveCandleTargets, { followEdge: Boolean(live) });
   useLivePriceLinesBinding(live?.priceLines && !replayOn ? live.priceLines : null, liveCandleTargets.map(target => ({ api: target.api, root: 'MNQ' })));
   // Přehrávání: rozpracovaný bar vyššího timeframu i s historií (z celé řady — mění se jen s daty).
   const fullRawWithHistory = useMemo(
