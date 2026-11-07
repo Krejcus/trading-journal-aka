@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-07 — Limit a Stop bez SL/TP: víc kontraktů a okamžité odeslání (Claude, větev `claude/limit-stop-legs-20261107`, NENASAZENO)
+### 2026-11-07 — Limit a Stop bez SL/TP: víc kontraktů a okamžité odeslání (Claude, NASAZENO 7. 11. z `759fdba3`: web, worker, iPhone, Filip „Nasaď“)
 
 - **Proč:** Filip chce jako v TradingView kliknout na cenu a mít příkaz hned u brokera, s počtem z lišty. Pravé tlačítko (PC) a plus (telefon) proto u flat účtu odesílají hned. Mění to pravidlo z 29. 10. „nic z grafu bez potvrzení“; Filip to výslovně chce, klávesa dál nikdy neodešle.
 - **Dílčí fill:** bez čipů a × pozice, zbytek má vlastní čáru s ×. Automatika zbytek ruší (výjimka INV-TRAD-02, nejsou nohy). Stav `filled` s menším fillem je u Tradovate nejednoznačný, čeká se na další událost nebo čtení po ustálení.
