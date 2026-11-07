@@ -197,3 +197,36 @@ describe('dynamické hosty: REST po obnově tokenu se změnou hostu', () => {
     unsubscribe();
   });
 });
+
+describe('dynamické hosty: nevyřízený WS zápis', () => {
+  it('změna hostu v REST nezavře socket s čekajícím zápisem a zápis nezamítne', async () => {
+    const sockets: FakeSocket[] = [];
+    let hosts: Record<string, string> = LUCID;
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'token', accountSpec: 'DEMO8661118', preferWebSocketOrderWrites: true,
+      resolveApiHosts: () => sanitizeTradovateApiHosts(hosts),
+      webSocketFactory: url => { const socket = new FakeSocket(url); sockets.push(socket); return socket; },
+      fetchImpl: (async () => Response.json([])) as unknown as typeof fetch,
+    });
+    const unsubscribe = broker.subscribe(() => undefined);
+    sockets[0].open();
+    sockets[0].onmessage?.({ data: 'o' });
+    await flush();
+    sockets[0].onmessage?.({ data: `a${JSON.stringify([{ i: 0, s: 200, d: {} }])}` });
+    await flush();
+    sockets[0].onmessage?.({ data: `a${JSON.stringify([{ i: 1, s: 200, d: [] }])}` });
+    await flush();
+    let settled = false;
+    const write = broker.placeOrder({ tag: 'ws-1', accountId: 200, symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market' })
+      .then(() => { settled = true; }, () => { settled = true; });
+    await flush();
+    expect(sockets[0].sent.some(message => message.startsWith('order/placeorder'))).toBe(true);
+    hosts = { demo: 'demo-api.other.ninjatrader.com' };
+    await expect(broker.findOrderById(1, '42')).rejects.toThrow(/host changed/);
+    await flush();
+    expect(sockets[0].closeCalls).toBe(0);
+    expect(settled).toBe(false);
+    unsubscribe();
+    void write;
+  });
+});

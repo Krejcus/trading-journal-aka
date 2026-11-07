@@ -679,7 +679,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     if (currentHosts.rest !== hosts.rest) {
       diagnostic(`REST HOST změna ${new URL(hosts.rest).hostname} -> ${new URL(currentHosts.rest).hostname}`);
       if (socket) {
-        closeSocket(socket, 'api-host-change');
+        // Nevyřízený WS zápis se nikdy nepřeruší (INV-TRAD-08): přepojení počká na další požadavek.
+        if (pendingSocketWrites.size === 0 && socketState !== 'closing') closeSocket(socket, 'api-host-change');
         throw new TradovateTransportError(`Tradovate API host changed for this organization; reconnecting before ${path}`);
       }
       hosts = currentHosts;
