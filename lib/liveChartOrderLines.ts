@@ -36,6 +36,8 @@ export interface LivePositionLineControls {
    */
   pendingLegs?: boolean;
   moveLimit?: boolean;
+  /** Čekající Limit/Stop bez SL/TP jde táhnout (capability `manual-order-move-bare-entry-v1`). */
+  moveBareEntry?: boolean;
   /**
    * Štítky „+ SL“ / „+ TP“ u holé pozice (Market bez nohou): `missing` nohy se ještě dají vytáhnout,
    * `canSend` = obě jsou v návrhu a na čáře je tlačítko odeslání. Tah mění jen návrh, odchází až klik.
@@ -66,8 +68,12 @@ export function liveLineMoveBlockReason(
   summary: LiveChartPositionSummary,
   kind: 'entry' | 'stopLoss' | 'takeProfit',
   price: number,
-  options: { pendingLegs?: boolean; moveLimit?: boolean } = {},
+  options: { pendingLegs?: boolean; moveLimit?: boolean; moveBareEntry?: boolean } = {},
 ): string | null {
+  // Holý Limit/Stop: nohy nejsou; jestli by se nová cena vyplnila hned, rozhodne worker podle své kotace.
+  if (kind === 'entry' && options.moveBareEntry && summary.kind === 'pending' && summary.stop == null && summary.target == null) {
+    return summary.entryType?.toLowerCase() === 'limit' ? null : 'Posun Stopu bez SL/TP zatím nejde — zruš ho × a zadej znovu.';
+  }
   if (kind === 'entry') {
     if (!options.moveLimit || summary.kind !== 'pending' || summary.entryType?.toLowerCase() !== 'limit') return 'Posouvat jde jen čekající Limit podporovaný workerem.';
     if (summary.quantity !== 1) return 'Posun limitu jde zatím jen u 1 kontraktu.';
@@ -143,7 +149,10 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     price: displayEntry,
     color: position ? (openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : openPnl >= 0 ? '#059669' : SL_COLOR) : (long ? LONG_COLOR : SHORT_COLOR),
     label: `${entryLabel}${pendingEntry != null ? ' · odesílám' : ''}`,
-    draggable: controls.manageable && controls.moveLimit === true && !position && summary.quantity === 1 && summary.entryType?.toLowerCase() === 'limit' && pendingEntry == null,
+    draggable: controls.manageable && !position && pendingEntry == null && (controls.moveBareEntry === true && summary.stop == null && summary.target == null
+      // Stop až po ověření na DEMO (worker `BARE_STOP_MOVE_VERIFIED`).
+      ? summary.entryType?.toLowerCase() === 'limit'
+      : controls.moveLimit === true && summary.quantity === 1 && summary.entryType?.toLowerCase() === 'limit') && pendingEntry == null,
     // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: × = zavřít obchod (leader, kopírka zavře kopie).
     cancellable: bare != null || (controls.manageable && (!position || controls.canClose === true)),
     cancelAction: position ? 'close-position' : 'cancel-order',

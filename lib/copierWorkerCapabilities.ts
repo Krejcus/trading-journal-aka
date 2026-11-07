@@ -47,6 +47,11 @@ export const supportsCopierManualEntryMarket = (
 export const COPIER_MANUAL_ENTRY_BARE_CAPABILITY = 'manual-entry-bare-v1';
 /** Limit a Stop bez SL/TP (sólo DEMO). Worker ze 7. 11. ráno větší počet než 1 odmítne vlastní validací. */
 export const COPIER_MANUAL_ENTRY_BARE_PENDING_CAPABILITY = 'manual-entry-bare-pending-v1';
+/** Posun čekajícího Limit/Stop bez SL/TP tažením (`move-limit` na holý záznam). */
+export const COPIER_MANUAL_ORDER_MOVE_BARE_ENTRY_CAPABILITY = 'manual-order-move-bare-entry-v1';
+export const supportsCopierManualOrderMoveBareEntry = (
+  status: { capabilities?: readonly string[] } | null | undefined,
+): boolean => Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_MANUAL_ORDER_MOVE_BARE_ENTRY_CAPABILITY);
 export const supportsCopierManualEntryBarePending = (
   status: { capabilities?: readonly string[] } | null | undefined,
 ): boolean => Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_MANUAL_ENTRY_BARE_PENDING_CAPABILITY);

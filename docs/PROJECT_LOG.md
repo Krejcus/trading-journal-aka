@@ -288,6 +288,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-07 — Posun čekajícího Limitu bez SL/TP tažením (Claude, větev `claude/limit-stop-legs-20261107`, NENASAZENO)
+
+- **Proč:** jako v TradingView (Modify drží id, Filipův test 5. 11.). Akce `move-limit` se znovu použila, takže relay ani SQL admission se nemění.
+- **Stop zatím ne:** oponentura (P1) — u Stopu není ověřené, že Modify drží id; kdyby broker vytvořil nový příkaz, pracoval by bez dozoru. Záznam `record-legs --scenario bare-stop-move` je připravený, po něm stačí přepnout `BARE_STOP_MOVE_VERIFIED`.
+- **Další na řadě podle Filipa:** neomezený počet kontraktů (do limitu propky) a kopírování na skupiny.
+
 ### 2026-11-07 — Prop účty od 30. 10. nejdou kvůli napevno zadaným hostům Tradovate (Claude, větev `claude/codex-speed-review-8a93c8`)
 
 - **Příčina (ověřeno sondou v produkci 09:09Z):** NinjaTrader (mail pro aplikaci CID 16009) přesunul prop organizace na vlastní hosty a aplikace mají číst `apiHosts` z odpovědi autentizace. Lucid má `demo-api.lucid.ninjatrader.com`; odpověď `oauthtoken` hosty nese. Náš kód měl `demo.tradovateapi.com` napevno: WebSocket 421 „older version of an app“, REST 307 a fetch zahodil Authorization → 404 na `/auth/me`. Podpora Lucidu odpověděla obecně, že API neposkytuje; skutečný stav je, že API s hosty organizace funguje.

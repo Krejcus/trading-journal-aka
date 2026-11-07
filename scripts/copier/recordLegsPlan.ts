@@ -20,7 +20,7 @@ export const LEGS_SCENARIOS = [
   'bare-limit-cancel', 'bare-limit-cancel-race', 'bare-limit-fill-oco', 'bare-market-liquidate', 'limit-replace',
   'lone-stop-liquidate', 'lone-limit-liquidate', 'lone-stop-opposite-close', 'lone-stop-then-oco', 'lone-stop-cancel-then-oco',
   'lone-limit-cancel-then-oco', 'oco-cancel-sl', 'oco-cancel-tp', 'pending-leg-cancel',
-  'parked-pending-modify', 'parked-filled-modify', 'parked-modified-fill', 'pending-sl-cancel', 'pending-tp-cancel-fill', 'bare-stop-cancel',
+  'parked-pending-modify', 'parked-filled-modify', 'parked-modified-fill', 'pending-sl-cancel', 'pending-tp-cancel-fill', 'bare-stop-cancel', 'bare-stop-move',
 ] as const;
 export type LegsScenarioName = typeof LEGS_SCENARIOS[number];
 
@@ -255,6 +255,17 @@ export function legsScenario(name: LegsScenarioName, options: RecordLegsOptions)
         purpose: 'Holý Stop: tvar eventů proti ACK a zrušení před spuštěním.',
         steps: [
           { kind: 'place-order', label: 'holý Stop 1 daleko', ref: 'stp', side: 'position', orderType: 'Stop', price: { from: 'market', ratio: DEMO_FAR_RATIO }, quantity: 1, bare: true, observeMs: [0, 300, 1_500, 6_000] },
+          { kind: 'cancel', label: 'zrušit Stop', targets: [{ plain: 'stp' }], observeMs: [300, 1_500] },
+          { kind: 'require-flat', label: 'flat bez příkazů' },
+        ],
+      };
+    case 'bare-stop-move':
+      return {
+        name,
+        purpose: 'Holý Stop: drží Modify ceny id příkazu (jako Limit), nebo ho broker nahradí novým?',
+        steps: [
+          { kind: 'place-order', label: 'holý Stop 1 daleko', ref: 'stp', side: 'position', orderType: 'Stop', price: { from: 'market', ratio: DEMO_FAR_RATIO }, quantity: 1, bare: true, observeMs: [0, 500] },
+          { kind: 'modify', label: 'Stop o 10 b dál od trhu', changes: [{ target: { plain: 'stp' }, price: { from: 'current', points: 10 } }], observeMs: [0, 300, 1_500] },
           { kind: 'cancel', label: 'zrušit Stop', targets: [{ plain: 'stp' }], observeMs: [300, 1_500] },
           { kind: 'require-flat', label: 'flat bez příkazů' },
         ],

@@ -655,6 +655,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             attach={trade?.bareLeg && trade.bareLegTrade ? null : attachChipBridge}
             bareLeg={trade?.bareLeg && trade.bareLegTrade ? intent => trade.bareLeg!(trade.bareLegTrade!, intent) : null}
             moveLimit={trade?.moveLimit === true}
+            moveBareEntry={trade?.moveBareEntry === true}
             pendingLegs={trade?.pendingLegs === true}
             canClose={trade?.closeSupported === true}
             entryAvg={trade?.entryAvg ?? null}

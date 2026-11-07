@@ -151,7 +151,7 @@ import {
 import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
 import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit } from '../lib/copierWorkerCapabilities';
-import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryBarePending, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
@@ -1343,6 +1343,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       // (`onManageEntry`); × u pozice jako PC `canClose`; BE průměr jen ze stavu pollu (jako PC).
       pendingLegs: supportsCopierManualOrderPendingLegs(agentStatus),
       moveLimit: supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare !== true,
+      moveBareEntry: supportsCopierManualOrderMoveLimit(agentStatus) && supportsCopierManualOrderMoveBareEntry(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare === true,
       ...livePhoneManageFields({
         // Dílčí fill holého Limit/Stop: × je na zbytku, pozici jde zavřít až po jeho konci (nebo Flatten).
         manageSupported: supportsCopierManualOrderManage(agentStatus), closeCapability: supportsCopierManualOrderClose(agentStatus) && ownManualEntry?.bare !== true,
@@ -2052,6 +2053,7 @@ acceptAgentStatus((await executeAgent({
           manageCloseSupported={supportsCopierManualOrderClose(agentStatus) && ownManualEntry?.bare !== true}
           managePendingLegsSupported={supportsCopierManualOrderPendingLegs(agentStatus)}
           manageMoveLimitSupported={supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare !== true}
+          manageMoveBareEntrySupported={supportsCopierManualOrderMoveLimit(agentStatus) && supportsCopierManualOrderMoveBareEntry(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare === true}
           entryMarketSupported={supportsCopierManualEntryMarket(agentStatus)}
           entryMaxContracts={manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null)}
           entryFrontContract={entryFrontContract}

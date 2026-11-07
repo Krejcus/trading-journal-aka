@@ -7,10 +7,12 @@ import { manualOnlyDemoSafety, type CopyGroupConfig } from '../services/liveCopy
 import { createMockBroker } from '../services/mockBroker';
 import { buildLeaderEntryPreviewCommand, validateLeaderEntryPreview } from '../lib/leaderEntryPreview';
 import { buildLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace';
-import { buildLeaderOrderManageCommand } from '../lib/leaderOrderManage';
+import { buildLeaderOrderManageCommand, LEADER_ORDER_MOVE_LIMIT_CONTRACT } from '../lib/leaderOrderManage';
 import { manualEntryBarePendingBlockers } from '../services/manualEntryPreview';
 import { bareCloseRecordBlockers, selectBareLegTrade, type BareCloseEntryRecord } from '../lib/manualBareClose';
 import { liveBarePendingBlockReason, liveTicketLegsProblem, type LiveBareMarketGate } from '../lib/liveBareEntry';
+import { liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
+import type { LiveChartPositionSummary } from '../lib/liveChartPosition';
 
 const LEADER = 61038658;
 const SYM = 'MNQZ6';
@@ -26,14 +28,14 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let active: CopierRuntimeController | null = null;
 afterEach(() => { active?.stop(); active = null; });
 
-async function setup() {
+async function setup(extra: { manualPendingLegs?: boolean } = {}) {
   const clock = { now: START };
   const quote = { last: 25_000, bid: 24_999.75, ask: 25_000 };
   const broker = createMockBroker({ behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [risk(START + 500)] });
   const audits: string[] = [];
   const memory = createMemoryCopierStore();
   const controller = await bootstrapCopierRuntime({
-    broker, store: memory, group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50,
+    broker, store: memory, group: group(), clock: () => clock.now, osoCorrelationWindowMs: 50, ...extra,
     manualEntryTimingsMs: { post: 300, start: 500, legWait: 120, manage: 500, settle: 50, verify: 100 },
     manualEntryQuote: () => ({ contract: SYM, last: quote.last, lastAt: clock.now - 100, bid: quote.bid, ask: quote.ask, quoteAt: clock.now - 50 }),
     onAudit: entries => { for (const entry of entries) audits.push(`${entry.kind}:${entry.reason ?? ''}`); },
@@ -147,6 +149,23 @@ describe('výběr pro UI', () => {
     expect(liveBarePendingBlockReason(gate, 5)).toBeNull();
     expect(liveBarePendingBlockReason(gate, 6)).toContain('Strop');
     expect(liveBarePendingBlockReason({ ...gate, positionOpen: true }, 1)).toContain('flat');
+  });
+});
+
+describe('čára čekajícího vstupu bez nohou', () => {
+  const pending = (entryType: string, legs = false): LiveChartPositionSummary => ({
+    kind: 'pending', side: 'long', quantity: 3, entry: 24_990, entryType, openPnl: null, mark: 25_000,
+    stop: legs ? 24_980 : null, target: legs ? 25_010 : null, protection: '', accounts: 1, scopeLabel: null, leader: null, rows: [],
+  });
+  const entryLine = (summary: LiveChartPositionSummary, controls: Record<string, unknown>) => livePositionChartLines(summary, { manageable: true, pointValue: 2, ...controls } as Parameters<typeof livePositionChartLines>[1])[0];
+  it('táhne se Limit na víc kontraktů, jen s capability; Stop až po ověření', () => {
+    expect(entryLine(pending('Limit'), { moveBareEntry: true }).draggable).toBe(true);
+    expect(entryLine(pending('Stop'), { moveBareEntry: true }).draggable).toBe(false);
+    expect(entryLine(pending('Limit'), {}).draggable).toBe(false);
+    expect(entryLine(pending('Limit', true), { moveBareEntry: true }).draggable).toBe(false);
+    expect(liveLineMoveBlockReason(pending('Limit'), 'entry', 24_985, { moveBareEntry: true })).toBeNull();
+    expect(liveLineMoveBlockReason(pending('Stop'), 'entry', 25_010, { moveBareEntry: true })).toContain('zatím');
+    expect(liveLineMoveBlockReason(pending('Stop'), 'entry', 25_010, {})).not.toBeNull();
   });
 });
 
@@ -522,6 +541,123 @@ describe('víc kontraktů a dílčí fill', () => {
     ctx.broker.emitEvent({ type: 'position', position: { accountId: LEADER, symbol: SYM, netQuantity: 1 } });
     await settle(ctx);
     expect(ctx.controller.status().bareLegTrade ?? null).toBeNull();
+  });
+});
+
+describe('posun čekajícího vstupu tažením', () => {
+  let counter = 0;
+  const move = (ctx: Ctx, from: number, to: number, quantity = 1) => {
+    counter += 1;
+    return ctx.controller.manageLeaderOrder(buildLeaderOrderManageCommand({
+      groupId: group().id, operationId: `manage:baremove${String(counter).padStart(3, '0')}`, leaderAccountId: LEADER, entryOperationId: 'entry:barepend001', symbol: SYM,
+      action: 'move-limit', newPrice: to, expect: { price: from, quantity }, moveLimitContract: LEADER_ORDER_MOVE_LIMIT_CONTRACT,
+    }), { deadlineAt: ctx.clock.now + 15_000 });
+  };
+
+  it('Limit se posune, příkaz drží id a × pak ruší novou cenu', async () => {
+    const ctx = await setup({ manualPendingLegs: true });
+    const placed = await ctx.place('Limit', 24_990, 'Buy', 2);
+    await settle(ctx, 120);
+    const result = await move(ctx, 24_990, 24_985, 2);
+    expect(result.blockers ?? []).toEqual([]);
+    expect(result.status).toBe('acknowledged');
+    expect(open(ctx).map(order => [order.brokerOrderId, order.limitPrice])).toEqual([[placed.entryBrokerOrderId, 24_985]]);
+    await settle(ctx);
+    const cancel = await ctx.controller.manageLeaderOrder(buildLeaderOrderManageCommand({
+      groupId: group().id, operationId: 'manage:baremovex01', leaderAccountId: LEADER, entryOperationId: 'entry:barepend001', symbol: SYM,
+      action: 'cancel-entry', expect: { price: 24_985, quantity: 2 },
+    }), { deadlineAt: ctx.clock.now + 15_000 });
+    expect(cancel.status).toBe('acknowledged');
+    expect(open(ctx)).toHaveLength(0);
+  });
+
+  it('Stop se zatím neposouvá, dokud DEMO neověří, že Modify drží id', async () => {
+    const ctx = await setup({ manualPendingLegs: true });
+    await ctx.place('Stop', 25_005);
+    await settle(ctx, 120);
+    const result = await move(ctx, 25_005, 25_010);
+    expect(result.blockers?.[0]?.code).toBe('stop-move-unverified');
+    expect(open(ctx).map(order => [order.orderType, order.stopPrice])).toEqual([['Stop', 25_005]]);
+  });
+
+  it('přes trh nebo moc blízko nic neodejde', async () => {
+    const ctx = await setup({ manualPendingLegs: true });
+    await ctx.place('Limit', 24_990);
+    await settle(ctx, 120);
+    const limit = await move(ctx, 24_990, 25_000);
+    expect(limit.blockers?.[0]?.code).toBe('bare-limit-marketable');
+    expect(open(ctx).map(order => order.limitPrice)).toEqual([24_990]);
+  });
+
+
+  it('z části vyplněný vstup se neposouvá', async () => {
+    const ctx = await setup({ manualPendingLegs: true });
+    const placed = await ctx.place('Limit', 24_990, 'Buy', 3);
+    await settle(ctx, 120);
+    partial(ctx, placed.entryBrokerOrderId!, 1);
+    await settle(ctx);
+    const result = await move(ctx, 24_990, 24_985, 3);
+    expect(result.status).toBe('blocked');
+    expect(open(ctx).map(order => order.limitPrice)).toEqual([24_990]);
+  });
+
+  it('fill během posunu: výsledek říká BEZ SL/TP, nic se neopakuje', async () => {
+    const ctx = await setup({ manualPendingLegs: true });
+    const placed = await ctx.place('Limit', 24_990);
+    await settle(ctx, 120);
+    const modify = ctx.broker.modifyOrder.bind(ctx.broker);
+    let calls = 0;
+    ctx.broker.modifyOrder = (async () => { calls += 1; fill(ctx, placed.entryBrokerOrderId!); throw new Error('TooLate: order already filled'); }) as typeof ctx.broker.modifyOrder;
+    const result = await move(ctx, 24_990, 24_985);
+    ctx.broker.modifyOrder = modify;
+    await settle(ctx, 200);
+    expect(calls).toBe(1);
+    // `waived` jde klientovi jako přijaté s textem „vyplnil“, nikdy jako potvrzený posun.
+    expect(result.reason ?? '').toContain('BEZ SL/TP');
+    expect(ctx.controller.status().bareLegTrade?.quantity).toBe(1);
+  });
+
+  it('× během nedořešeného posunu: zrušení bez falešného incidentu', async () => {
+    const ctx = await setup({ manualPendingLegs: true });
+    await ctx.place('Limit', 24_990);
+    await settle(ctx, 120);
+    const modify = ctx.broker.modifyOrder.bind(ctx.broker);
+    ctx.broker.modifyOrder = (() => new Promise(() => undefined)) as typeof ctx.broker.modifyOrder;
+    const moved = await move(ctx, 24_990, 24_985);
+    ctx.broker.modifyOrder = modify;
+    expect(moved.status).toBe('unknown');
+    const cancel = await ctx.controller.manageLeaderOrder(buildLeaderOrderManageCommand({
+      groupId: group().id, operationId: 'manage:baremovex02', leaderAccountId: LEADER, entryOperationId: 'entry:barepend001', symbol: SYM,
+      action: 'cancel-entry', expect: { price: 24_990, quantity: 1 },
+    }), { deadlineAt: ctx.clock.now + 15_000 });
+    expect(cancel.status).toBe('acknowledged');
+    await review(ctx);
+    expect(ctx.controller.status().lastError ?? null).toBeNull();
+    expect(ctx.controller.status().armed).toBe(true);
+  });
+
+  it('cizí konec vstupu během nedořešeného posunu je incident', async () => {
+    const ctx = await setup({ manualPendingLegs: true });
+    const placed = await ctx.place('Limit', 24_990);
+    await settle(ctx, 120);
+    const modify = ctx.broker.modifyOrder.bind(ctx.broker);
+    ctx.broker.modifyOrder = (() => new Promise(() => undefined)) as typeof ctx.broker.modifyOrder;
+    await move(ctx, 24_990, 24_985);
+    ctx.broker.modifyOrder = modify;
+    const entry = ctx.broker.orders().find(order => order.brokerOrderId === placed.entryBrokerOrderId)!;
+    entry.status = 'canceled';
+    ctx.broker.emitEvent({ type: 'order', order: { ...entry, sourceVersion: '9:Canceled' } });
+    await settle(ctx, 200);
+    await review(ctx);
+    expect(ctx.controller.status().lastError ?? '').toContain('BEZ SL/TP');
+  });
+
+  it('jiná cena, než uživatel viděl, nic neodešle', async () => {
+    const ctx = await setup({ manualPendingLegs: true });
+    await ctx.place('Limit', 24_990);
+    await settle(ctx, 120);
+    const result = await move(ctx, 24_980, 24_985);
+    expect(result.blockers?.[0]?.code).toBe('order-changed');
   });
 });
 

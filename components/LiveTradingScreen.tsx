@@ -183,6 +183,8 @@ interface Props {
   /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu (`manual-order-pending-legs-v1`). */
   managePendingLegsSupported?: boolean;
   manageMoveLimitSupported?: boolean;
+  /** Čekající Limit/Stop bez SL/TP jde táhnout (capability `manual-order-move-bare-entry-v1`). */
+  manageMoveBareEntrySupported?: boolean;
   /** Worker umí nativní Market ručního vstupu (`manual-entry-market-v1`). */
   entryMarketSupported?: boolean;
   /** Strop kontraktů ručního vstupu skupiny workeru. */
@@ -291,7 +293,7 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveLimitSupported, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveBareEntrySupported, manageMoveLimitSupported, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBarePendingSupported = false, entryBarePartial = null, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null, alertWatch = null,
   bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange,
@@ -648,6 +650,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     manageable: Boolean(onManageEntry),
     pendingLegs: managePendingLegsSupported === true,
     moveLimit: manageMoveLimitSupported === true,
+    moveBareEntry: manageMoveBareEntrySupported === true,
     attachChips,
     bareLegs: legTrade != null,
     // × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jinak by kopie zůstaly otevřené (Flatten na přehledu).
@@ -658,7 +661,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd: entryScaleIn?.pendingAdd ?? entryBarePartial,
     bareClose: bareOffer?.enabled ? { entryOperationId: bareOffer.trade.entryOperationId } : null,
-  }) : []), [entryBarePartial, attachChips, copier.available, copier.status, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
+  }) : []), [manageMoveBareEntrySupported, entryBarePartial, attachChips, copier.available, copier.status, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
   // U4/U5: kontrakt grafu — IBKR zdroj nese měsíc, jinak pozice, jinak front podle brokera.
   // Jiný kontrakt (týden rollu) nebo neznámý = šipky ani pracující příkazy se nekreslí.
   const chartContract = previewSymbolFromChartSource(quoteInfo.source) ?? position?.symbol ?? entryFrontContract ?? null;
@@ -794,7 +797,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           return;
         }
         if (snapped === current) return;
-        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped, { pendingLegs: managePendingLegsSupported === true || sendBareLegRef.current != null, moveLimit: manageMoveLimitSupported === true });
+        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped, { pendingLegs: managePendingLegsSupported === true || sendBareLegRef.current != null, moveLimit: manageMoveLimitSupported === true, moveBareEntry: manageMoveBareEntrySupported === true });
         if (blocked) { setLineNotice({ at: Date.now(), tone: 'bad', text: blocked }); return; }
         if (kind !== 'entry' && sendBareLegRef.current && current != null) { sendBareLegRef.current({ kind: 'move', leg: kind, price: snapped, current }); return; }
         void runLiveManage(kind === 'entry' ? 'move-limit' : kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
@@ -874,7 +877,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
+  }), [manageMoveBareEntrySupported, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít

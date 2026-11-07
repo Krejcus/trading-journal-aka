@@ -132,7 +132,7 @@ export function livePhoneWorkingView(
  * nikdy nic nepošle) a ✎ na SL/TP, které jen otevře list správy (U10).
  */
 export function LivePhoneOrderLines({
-  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, attach = null, bareClose = null, bareLeg = null, onBareClose, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
+  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, moveBareEntry = false, attach = null, bareClose = null, bareLeg = null, onBareClose, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
   extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage,
 }: {
   api: ChartViewApi;
@@ -150,6 +150,7 @@ export function LivePhoneOrderLines({
   /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu. */
   pendingLegs?: boolean;
   moveLimit?: boolean;
+  moveBareEntry?: boolean;
   /** Holá pozice: × na čáře (jen s nabídkou workeru); id cíle je v id čáry, klíč jde rodiči. */
   bareClose?: { entryOperationId: string; key: string } | null;
   /** SL a TP po jedné: tah, × a čip na čáře jdou hned; chybí = návrh přes `attach`. */
@@ -209,6 +210,7 @@ export function LivePhoneOrderLines({
     pendingLegs: pendingLegs === true,
     bareClose: bareEntryId ? { entryOperationId: bareEntryId } : null,
     moveLimit,
+    moveBareEntry,
     bareLegs: bareLegOn,
     attachChips: attachOn && guardSummary.kind === 'position' ? {
       missing: ([['stopLoss', attachLegs?.stopLoss], ['takeProfit', attachLegs?.takeProfit]] as const).filter(([, value]) => value == null).map(([kind]) => kind),
@@ -220,7 +222,7 @@ export function LivePhoneOrderLines({
     displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd,
-  }) : []), [attachOn, attachLegs, bareEntryId, bareLegOn, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, pendingMove, guardSummary, pendingAdd]);
+  }) : []), [attachOn, attachLegs, bareEntryId, bareLegOn, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, moveBareEntry, pendingMove, guardSummary, pendingAdd]);
   const lines = useMemo(() => [
     // ✎ jen u táhnutelné SL/TP (správa jde a nic se právě neodesílá); jen otevře list.
     ...(onManage ? positionLines.map(line => (line.ownerId === LIVE_POSITION_OWNER && line.kind !== 'entry' && line.draggable && guardSummary?.kind === 'position'
@@ -291,7 +293,7 @@ export function LivePhoneOrderLines({
         const current = kind === 'entry' ? summary.entry : kind === 'stopLoss' ? summary.stop : summary.target;
         if (startLine && startLine.price !== current) { onNotice(`${kind === 'entry' ? 'Limit' : kind === 'stopLoss' ? 'SL' : 'TP'} se během tažení změnil — nic se neodeslalo.`); return; }
         if (snapped === current) return;
-        const blocked = liveLineMoveBlockReason(guardAt?.(Date.now()) ?? summary, kind, snapped, { pendingLegs: pendingLegs === true || bareLeg != null, moveLimit });
+        const blocked = liveLineMoveBlockReason(guardAt?.(Date.now()) ?? summary, kind, snapped, { pendingLegs: pendingLegs === true || bareLeg != null, moveLimit, moveBareEntry });
         if (blocked) { onNotice(blocked); return; }
         if (bareLeg && kind !== 'entry' && current != null) { sendLeg({ kind: 'move', leg: kind, price: snapped, current }); return; }
         void run(kind === 'entry' ? 'move-limit' : kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
