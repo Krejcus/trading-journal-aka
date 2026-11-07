@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
 import { tradovateRestBaseUrl, type TradovateApiHosts } from '../../../lib/tradovateApiHosts.js';
+import { probeTradovateCapabilities } from '../../../server/tradovateCapabilityProbe.js';
 import {
   clearTradovateStateCookie,
   exchangeTradovateAuthorizationCode,
@@ -73,6 +74,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       tradovateEmail: identity.email ?? identity.name ?? null,
       organizationName: identity.organizationName ?? null,
     });
+    // DOČASNÁ read-only sonda možností prop organizace (7. 11. 2026); selhání nic neovlivní.
+    try {
+      const steps = await probeTradovateCapabilities(token.accessToken, token.apiHosts ?? null);
+      console.error('[tradovate-capability-probe]', JSON.stringify(steps).slice(0, 12_000));
+    } catch { /* jen diagnostika */ }
     return res.redirect(302, tradovateOAuthResultLocation('connected'));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
